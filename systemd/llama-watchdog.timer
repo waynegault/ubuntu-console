@@ -1,0 +1,11 @@
+[Unit]
+Description=Llama Server Health Watchdog Timer
+Requires=llama-watchdog.service
+
+[Timer]
+# Run every 60 seconds
+OnUnitActiveSec=60s
+OnBootSec=120s
+
+[Install]
+WantedBy=timers.target

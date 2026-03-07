@@ -1,0 +1,10 @@
+# OS / Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Secrets — never commit
+*.credentials
+*.secret

@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# oc-quick-diag — Quick diagnostic snapshot (standalone, no .bashrc dependency)
+# Reads /dev/shm caches + queries llama-server and OpenClaw health.
+set -euo pipefail
+
+LLM_PORT="${LLM_PORT:-8081}"
+OC_PORT="${OC_PORT:-18789}"
+ACTIVE_LLM_FILE="/dev/shm/active_llm"
+LLM_TPS_CACHE="/dev/shm/last_tps"
+LLM_LOG_FILE="/dev/shm/llama-server.log"
+
+RST=$'\e[0m'; GRN=$'\e[32m'; RED=$'\e[31m'; YEL=$'\e[33m'; DIM=$'\e[90m'; CYN=$'\e[36m'
+
+echo "${CYN}=== Quick Diagnostics ===${RST}"
+echo ""
+
+# 1. LLM status
+echo "${CYN}[1/4] LLM Server${RST}"
+if [[ -f "$ACTIVE_LLM_FILE" ]]; then
+    IFS='|' read -r prof name size proc < "$ACTIVE_LLM_FILE"
+    echo "  Model: $name ($size) [$proc]"
+else
+    echo "  Model: ${DIM}(none registered)${RST}"
+fi
+
+if curl -sf "http://127.0.0.1:${LLM_PORT}/health" >/dev/null 2>&1; then
+    echo "  API:   ${GRN}ONLINE${RST} (port $LLM_PORT)"
+else
+    echo "  API:   ${RED}OFFLINE${RST}"
+fi
+
+if [[ -f "$LLM_TPS_CACHE" ]]; then
+    echo "  TPS:   $(< "$LLM_TPS_CACHE")"
+fi
+echo ""
+
+# 2. OpenClaw status
+echo "${CYN}[2/4] OpenClaw Gateway${RST}"
+if curl -sf "http://127.0.0.1:${OC_PORT}/api/health" -o /dev/null 2>&1; then
+    echo "  Status: ${GRN}ONLINE${RST} (port $OC_PORT)"
+else
+    echo "  Status: ${RED}OFFLINE${RST}"
+fi
+
+if systemctl --user is-active openclaw.service >/dev/null 2>&1; then
+    echo "  Service: ${GRN}active${RST}"
+else
+    echo "  Service: ${YEL}inactive${RST}"
+fi
+echo ""
+
+# 3. GPU
+echo "${CYN}[3/4] GPU${RST}"
+local_smi="/usr/lib/wsl/lib/nvidia-smi"
+if [[ -x "$local_smi" ]]; then
+    "$local_smi" --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu \
+        --format=csv,noheader 2>/dev/null | while IFS=, read -r gname gutil gmem gtot gtemp; do
+        echo "  $gname: ${gutil// /} util, ${gmem// /}/${gtot// /}, ${gtemp// /}°C"
+    done
+else
+    echo "  ${DIM}nvidia-smi not found${RST}"
+fi
+echo ""
+
+# 4. Recent llama-server logs
+echo "${CYN}[4/4] Recent Server Logs${RST}"
+if [[ -f "$LLM_LOG_FILE" ]]; then
+    tail -n 5 "$LLM_LOG_FILE" | sed 's/^/  /'
+else
+    echo "  ${DIM}(no log at $LLM_LOG_FILE)${RST}"
+fi

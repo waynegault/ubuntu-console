@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# oc-gpu-status - Quick NVIDIA GPU stats (standalone, no .bashrc dependency)
+# Designed for agent use from OpenClaw sandbox.
+set -euo pipefail
+
+RST=$'\e[0m'; GRN=$'\e[32m'; RED=$'\e[31m'; YEL=$'\e[33m'; CYN=$'\e[36m'
+
+smi="/usr/lib/wsl/lib/nvidia-smi"
+if [[ ! -x "$smi" ]]; then
+    smi=$(command -v nvidia-smi 2>/dev/null || true)
+fi
+
+if [[ -z "$smi" || ! -x "$smi" ]]; then
+    echo "${RED}nvidia-smi not found${RST}"
+    exit 1
+fi
+
+echo "${CYN}=== GPU Status ===${RST}"
+
+"$smi" --query-gpu=name,utilization.gpu,memory.used,memory.total,memory.free,temperature.gpu,power.draw,power.limit \
+    --format=csv,noheader 2>/dev/null | while IFS=, read -r gname gutil gmused gmtotal gmfree gtemp gpwr gplim; do
+    gutil="${gutil// /}"; gmused="${gmused// /}"; gmtotal="${gmtotal// /}"
+    gmfree="${gmfree// /}"; gtemp="${gtemp// /}"; gpwr="${gpwr// /}"; gplim="${gplim// /}"
+
+    util_n="${gutil%\%}"
+    if ! [[ "$util_n" =~ ^[0-9]+$ ]]; then util_n=0; fi
+    color="$GRN"
+    if (( util_n > 90 )); then color="$RED"
+    elif (( util_n > 75 )); then color="$YEL"; fi
+
+    echo "  GPU:    ${gname}"
+    echo "  Util:   ${color}${gutil}${RST}"
+    echo "  VRAM:   ${gmused} / ${gmtotal} (${gmfree} free)"
+    echo "  Temp:   ${gtemp} C"
+    echo "  Power:  ${gpwr} / ${gplim}"
+done
+
+pm=$("$smi" --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+if [[ "$pm" == "Enabled" ]]; then
+    echo "  Persist: ${GRN}ON${RST}"
+else
+    echo "  Persist: ${YEL}OFF${RST} (run wake to enable)"
+fi

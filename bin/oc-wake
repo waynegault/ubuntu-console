@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# oc-wake — Enable NVIDIA GPU persistence mode (standalone, no .bashrc dependency)
+# Designed for agent use from OpenClaw sandbox.
+# Requires sudoers NOPASSWD entry for the nvidia-smi -pm command.
+set -euo pipefail
+
+RST=$'\e[0m'; GRN=$'\e[32m'; RED=$'\e[31m'; DIM=$'\e[90m'
+
+smi="/usr/lib/wsl/lib/nvidia-smi"
+if [[ ! -x "$smi" ]]; then
+    smi=$(command -v nvidia-smi 2>/dev/null || true)
+fi
+
+if [[ -z "$smi" || ! -x "$smi" ]]; then
+    echo "${RED}nvidia-smi not found${RST}"
+    exit 1
+fi
+
+# Enable persistence mode
+if sudo "$smi" -pm 1 >/dev/null 2>&1; then
+    stat=$("$smi" --query-gpu=name,persistence_mode,utilization.gpu,memory.used,memory.total,temperature.gpu \
+        --format=csv,noheader 2>/dev/null || echo "query failed")
+    echo "${GRN}GPU persistence mode enabled${RST}"
+    echo "  ${stat}"
+    echo "${DIM}Note: does not survive WSL restarts.${RST}"
+else
+    echo "${RED}Failed to set persistence mode${RST} (sudo required)"
+    exit 1
+fi
