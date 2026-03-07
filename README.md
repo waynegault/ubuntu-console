@@ -1,6 +1,7 @@
 # Tactical Console Profile v2.12 — Comprehensive Reference
 
 > **File:** `~/.bashrc` (~3,250 lines, 111 functions, 19 aliases)
+> **Repo:** [`waynegault/ubuntu-console`](https://github.com/waynegault/ubuntu-console)
 > **Environment:** WSL2 Ubuntu 24.04 on Windows 11 Pro
 > **Hardware:** Intel i9 / Intel Iris Xe (GPU0) / RTX 3050 Ti 4 GB VRAM (GPU1) / Laptop
 > **Author:** Wayne
@@ -19,6 +20,7 @@
 7. [Command Reference](#7-command-reference)
 8. [Dependencies & Requirements](#8-dependencies--requirements)
 9. [Troubleshooting](#9-troubleshooting)
+10. [Repository Layout](#10-repository-layout)
 
 ---
 
@@ -927,6 +929,74 @@ Each maintenance step has a cooldown (APT index: 24h, APT upgrade and others:
 The only potentially slow operation at startup is `__bridge_windows_api_keys`
 (calls `pwsh.exe` with 5s timeout). The key cache lasts 1 hour, so this only
 runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
+
+---
+
+## 10. Repository Layout
+
+All project files live in a single Git repository at
+`~/ubuntu-console/` (remote: `github.com/waynegault/ubuntu-console`).
+The system-expected paths (`~/.bashrc`, `~/.llm/models.conf`, etc.) are
+symlinks pointing into the repo.
+
+### Directory Structure
+
+```
+~/ubuntu-console/
+├── .bashrc                    # Main profile (symlinked from ~/.bashrc)
+├── README.md                  # This file (symlinked from ~/.bashrc_readme.md)
+├── .gitignore
+├── install.sh                 # Symlink installer for new machines
+├── llm/
+│   └── models.conf            # 8-field model registry (← ~/.llm/models.conf)
+├── bin/
+│   ├── oc-model-status        # Agent-accessible model query
+│   ├── oc-model-switch        # Agent-accessible hot-swap
+│   ├── oc-quick-diag          # Agent-accessible diagnostics
+│   ├── oc-gpu-status          # Agent-accessible NVIDIA summary
+│   ├── oc-wake                # GPU persistence mode lock
+│   ├── llama-watchdog.sh      # Watchdog health-check script
+│   └── tac_hostmetrics.sh     # Windows host CPU + dual GPU via typeperf.exe
+└── systemd/
+    ├── llama-watchdog.service # systemd unit for watchdog
+    └── llama-watchdog.timer   # systemd timer (runs every 60s)
+```
+
+### Symlink Map
+
+| System Path | Repo Path |
+|---|---|
+| `~/.bashrc` | `.bashrc` |
+| `~/.bashrc_readme.md` | `README.md` |
+| `~/.llm/models.conf` | `llm/models.conf` |
+| `~/.local/bin/oc-model-status` | `bin/oc-model-status` |
+| `~/.local/bin/oc-model-switch` | `bin/oc-model-switch` |
+| `~/.local/bin/oc-quick-diag` | `bin/oc-quick-diag` |
+| `~/.local/bin/oc-gpu-status` | `bin/oc-gpu-status` |
+| `~/.local/bin/oc-wake` | `bin/oc-wake` |
+| `~/.local/bin/llama-watchdog.sh` | `bin/llama-watchdog.sh` |
+| `~/.local/bin/tac_hostmetrics.sh` | `bin/tac_hostmetrics.sh` |
+| `~/.config/systemd/user/llama-watchdog.service` | `systemd/llama-watchdog.service` |
+| `~/.config/systemd/user/llama-watchdog.timer` | `systemd/llama-watchdog.timer` |
+
+### Setup on a New Machine
+
+```bash
+git clone https://github.com/waynegault/ubuntu-console.git ~/ubuntu-console
+cd ~/ubuntu-console
+./install.sh     # creates all symlinks
+exec bash        # reload profile
+```
+
+### Workflow
+
+Edit files directly in `~/ubuntu-console/` (or via the symlinks — both
+modify the same file). Commit and push:
+
+```bash
+cd ~/ubuntu-console
+git add -A && git commit -m "description" && git push
+```
 
 ---
 
