@@ -20,9 +20,11 @@ esac
 # @depends: none
 #
 # AI INSTRUCTION: Increment version on significant changes.
-export TACTICAL_PROFILE_VERSION="2.12"
+export TACTICAL_PROFILE_VERSION="2.13"
 
 # CHANGELOG:
+# 2.13 (2026-03-07) — Added GitHub Copilot CLI integration: COPILOT_CLI_DIR
+#        constant, PATH entry, `cop`/`??`/`cop-ask`/`cop-init` aliases.
 # 2.12 (2026-03-07) — Final review tidy: defensive-quoted all 15 __test_port
 #        call sites ("$LLM_PORT"/"$OC_PORT"). Moved __require_llm from §6 to §11
 #        (co-located with its 7 call sites). model bench renders as single open
@@ -214,6 +216,9 @@ __resolve_vscode_bin() {
 
 export WSL_NVIDIA_SMI="/usr/lib/wsl/lib/nvidia-smi"
 
+# ---- GitHub Copilot CLI ----
+export COPILOT_CLI_DIR="$HOME/.vscode-server/data/User/globalStorage/github.copilot-chat/copilotCli"
+
 # ---- Network & API ----
 export LLM_PORT=8081
 export OC_PORT=18789
@@ -242,6 +247,7 @@ export LAST_TPS="Untested"
 # Guard against PATH duplication on re-source (e.g., source ~/.bashrc)
 [[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && export PATH="$HOME/.local/bin:$PATH"
 [[ ":$PATH:" != *":$HOME/.npm-global/bin:"* ]] && export PATH="$HOME/.npm-global/bin:$PATH"
+[[ -d "$COPILOT_CLI_DIR" && ":$PATH:" != *":$COPILOT_CLI_DIR:"* ]] && export PATH="$COPILOT_CLI_DIR:$PATH"
 
 export HISTCONTROL=ignoreboth
 export HISTTIMEFORMAT="%Y-%m-%d %H:%M:%S  "
@@ -272,7 +278,7 @@ trap '__tac_last_err=$?; (( __tac_last_err > 1 )) && echo "$(date +"%Y-%m-%d %H:
 # @modular-section: aliases
 # @depends: constants
 # @exports: code, oedit, llmconf, oclogs, le, lo, occonf, os, oa, ocstat,
-#   ocgs, ocv, mem-index, status, ocms (plus standard shell aliases)
+#   ocgs, ocv, mem-index, status, ocms, cop, cop-ask, cop-init (plus standard shell aliases)
 
 # Core OS
 alias ls='ls --color=auto'
@@ -314,6 +320,12 @@ ocv()        { openclaw --version; }
 mem-index()  { openclaw memory index; }
 status()     { openclaw status; }
 ocms()       { openclaw models status --probe; }
+
+# GitHub Copilot CLI
+alias '??'='copilot -p'
+alias cop='copilot'
+cop-init() { copilot init; }
+cop-ask()  { copilot -p "$*"; }
 
 # LLM & Inference
 alias chat:='local_chat'
@@ -1447,6 +1459,23 @@ function oc-backup() {
         local human_sz=$(( sz / 1024 ))
         __tac_info "Snapshot Archive" "[CREATED — ${human_sz}KB]" "$C_Success"
         echo -e "  ${C_Dim}Path: $zipPath${C_Reset}"
+
+        # Prune old snapshots — keep the 10 most recent
+        local -a all_snaps=()
+        local _s
+        while IFS= read -r _s; do
+            all_snaps+=("$_s")
+        done < <(ls -1t "$OC_BACKUPS"/snapshot_*.zip 2>/dev/null)
+        local keep=10
+        if (( ${#all_snaps[@]} > keep )); then
+            local pruned=0
+            local i
+            for (( i=keep; i<${#all_snaps[@]}; i++ )); do
+                rm -f "${all_snaps[$i]}"
+                (( pruned++ ))
+            done
+            __tac_info "Pruned Old Snapshots" "[$pruned removed, keeping $keep]" "$C_Dim"
+        fi
     else
         __tac_info "Target Directories" "[NOT FOUND]" "$C_Error"
     fi
@@ -3165,6 +3194,10 @@ function tactical_help() {
     __hRow "commit: <m>" "Git add, commit with your message, push and deploy"
     __hRow "commit" "Git add + commit (LLM auto-message) + push + deploy"
     __hRow "deploy" "Rsync ~/console directory to OpenClaw_Prod"
+    __hRow "cop" "Launch interactive GitHub Copilot CLI session"
+    __hRow "?? <prompt>" "One-shot Copilot prompt (e.g. ?? find large files)"
+    __hRow "cop-ask <msg>" "Non-interactive Copilot prompt (spelled-out alias)"
+    __hRow "cop-init" "Generate copilot-instructions.md for a project"
 
     __tac_footer
 }
@@ -3247,3 +3280,6 @@ unset _tac_prev_exit_trap
 
 # ==============================================================================
 # end of file
+
+# OpenClaw Completion
+source "/home/wayne/.openclaw/completions/openclaw.bash"
