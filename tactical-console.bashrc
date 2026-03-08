@@ -63,173 +63,10 @@ esac
 # ==============================================================================
 # @modular-section: ai-instructions
 # @depends: none
+# @exports: TACTICAL_PROFILE_VERSION
 #
 # AI INSTRUCTION: Increment version on significant changes.
 export TACTICAL_PROFILE_VERSION="2.21"
-
-# CHANGELOG:
-# 2.21 (2026-03-08) — Quant enforcement, dashboard clarity, thread tuning.
-#        model scan: reads quant-guide.conf and auto-archives discouraged quants
-#        (Q6_K, Q8_0, F16, etc.) from active/ to archive/ — skips currently
-#        running model. Registry renumbered after archival. Dashboard: GPU0→iGPU
-#        (Intel Iris Xe / typeperf 3D), GPU1→CUDA (NVIDIA / nvidia-smi compute)
-#        to clarify that LLM utilisation reads from CUDA engine, not Task Manager
-#        3D. GPU detail row label simplified to "GPU".
-#        __calc_threads: dynamic via nproc (80% CPU-only, 70% partial, 50% full
-#        offload) replaces hardcoded 16/14/8. --prio 2 added to model use and
-#        watchdog for higher process priority on hybrid CPU systems.
-# 2.20 (2026-03-08) — GPU optimisation + audit fix implementation.
-#        GPU: -ngl 999 (max offload) replaces fixed gpu_layers in model use and
-#        watchdog. Batch size tuning: -b 4096/-ub 1024 for GPU models, -b 512
-#        for CPU-only. --flash-attn on for all GPU launches (reduces VRAM
-#        bandwidth pressure on 4GB cards). __calc_gpu_layers returns 999/0
-#        instead of fixed layer count. Actual offload count shown from server
-#        log after boot. Quantization guide: ~/ubuntu-console/quant-guide.conf
-#        with rating system (recommended/acceptable/discouraged); model download
-#        warns on discouraged quants (Q6_K, Q8_0, F16). Watchdog: fixed stale
-#        active_llm_file format (was reading pipe-delimited, now reads model
-#        number), added flock concurrency guard, -ngl 999, --flash-attn on,
-#        --jinja, batch size tuning. Audit: tac_hostmetrics.sh strict mode
-#        (set -euo pipefail), install.sh shebang (#!/usr/bin/env bash), 3 curl
-#        calls given --max-time, 2 UUOC battery reads replaced with $(< file),
-#        QUANT_GUIDE constant added to §1.
-# 2.19 (2026-03-08) — 71-item deep audit implementation. Errors: commit:→commitd,
-#        chat:→chatl, wtf:→wtf aliases (colon-free naming), LAST_TPS comment,
-#        serve <profile>→serve N in help, loopback regex anchored with trailing /.
-#        Security: chmod 777→755 hint, pkill -u "$USER" on all 3 llama-server
-#        kill sites (user-scoped process termination). Safety: logtrim tmp-file
-#        non-empty guard (-s check before mv), hours_left="" init (was 0).
-#        Logic: cd venv activate error check, __get_host_metrics sentinel "–|–|–"
-#        instead of "0|0|0", model boot progress dots during health wait.
-#        Redundancy: __vsc_open helper (deduplicates VS Code wrappers),
-#        __save_nullglob/__restore_nullglob, __require_openclaw, __usage.
-#        __strip_ansi varname validation added. Quality: bare returns→explicit
-#        return 0/1 on all error+cancel paths, [[ -gt ]]→(( )) in dashboard.
-#        Non-bash: 68 echo -e→printf '%s\n' conversions (design tokens are
-#        ANSI-C quoted, echo -e unnecessary). Style: owk/ologs/ocroot doc
-#        headers, __set_cooldown one-liner expanded, PROMPT_COMMAND block
-#        expanded with comments, g_util cleanup split to commented multi-line,
-#        deploy alias sub-banner, LLM alias comments. Comments: OPENCLAW_ROOT
-#        deprecation doc, VENV_DIR scope doc, drive detection fallback warning,
-#        PATH guards expanded to if/then/fi. Dashboard: help entries updated for
-#        renamed aliases (commitd, chatl, wtf), command bar updated.
-# 2.18 (2026-03-08) — Comprehensive 53-item quality audit. Errors: pkill -f→-x
-#        in oc-restore, strip trailing % from g_util_n, trailing newline guard,
-#        architecture map line numbers updated. Security: ZIP permission validation
-#        (setuid/setgid/world-writable), sudo -n guard in wake(), _sync_hash
-#        cleanup on all paths, bridge newline validation. Safety: atomic .bak swap
-#        in oc-restore, loopback addr precision check. Logic: hours_left dual-use
-#        documented, per-PID stale process count, drive recheck at download time,
-#        dynamic scoping doc for __send_chat_msg, cd venv activation doc. Dead
-#        code: documented alert alias and LAST_TPS default. Redundancy: extracted
-#        __renumber_registry and __threshold_color helpers. Quality: ERR trap
-#        extracted to __tac_err_handler, consistent return 1 in mkproj, printf
-#        safety documented, __require_llm explicit return 0, fgrep/egrep replaced.
-#        Style: all one-liner functions expanded to multi-line, shopt commands
-#        split, alias section sub-banners. Comments: regex explanation on
-#        __strip_ansi, magic-number breakdown in __fRow, model() case branch
-#        descriptions, commit_auto UX flow, HISTCONTROL/HISTIGNORE explained,
-#        EXIT cleanup lifecycle, __quant_label ggml.h cite, @depended-on-by
-#        cross-refs on §1/§4/§5, 2>/dev/null risk comments on oc-llm-sync source.
-#        Non-bash: raw ANSI in init→design tokens, echo -e→printf in sysinfo.
-#        Efficiency: __get_tokens perf note, du blocking note, git diff intentional
-#        double-call documented. Organisation: __save_tps ordering doc,
-#        @extractable marker on model(), alias sub-banners. Absorbed serve.sh
-#        features: prlimit/memlock, --jinja, adaptive batch sizes, --no-context-
-#        shift for Qwen3.
-# 2.17 (2026-03-08) — Style standardisation: all 120 function declarations now
-#        use `function name()` form. Added LLAMA_ARCHIVE_DIR constant (NTFS move
-#        prep). Removed ext4 references, Drive M: label derived from variable.
-#        Stale UIWidth comments updated. All interactive read -p prompts use
-#        design tokens. Numeric validation added to model info/delete/archive.
-#        GGUF parser handles uint64 (vt=10) for block_count/context_length.
-# 2.16 (2026-03-08) — Security & quality audit: removed hardcoded HF_TOKEN
-#        (moved to ~/.config/huggingface/token), refused unsigned oc-llm-sync.sh
-#        source, eliminated post-EOF code. Replaced python3 GGUF parser with
-#        pure bash+awk (dd|od|awk), removed WAYNE_HOME dead alias, made
-#        OC_ROOT canonical (OPENCLAW_ROOT now compat alias). Dynamic drive size
-#        detection via df. Fixed pkill -f→-x (3 sites) + model boot grace
-#        period in up(). Hardened API key bridge tmpfile (umask 077). Added
-#        model use numeric validation, bench restores prior model. Cached
-#        du -sb in model list (30s TTL). Fixed help duplicate + indentation.
-#        Replaced shift 2>/dev/null with guarded shift.
-# 2.15 (2026-03-08) — Monolithic consolidation: absorbed standalone scripts into
-#        .bashrc functions. oc-model-download → model download subcommand with
-#        HF_HOME/HF_TOKEN awareness and full format validation. oc-gpu-status →
-#        gpu-status function with box-drawn UI. oc-model-status, oc-model-switch,
-#        oc-quick-diag, oc-wake already existed as model status, model use,
-#        oc-diag, wake — removed redundant bin/ scripts. Only llama-watchdog.sh
-#        and tac_hostmetrics.sh remain in bin/ (systemd/subprocess dependency).
-#        Updated backup/restore to exclude retired scripts. Help index updated.
-# 2.14 (2026-03-07) — Model manager v3: replaced profile-based system (fast/
-#        think/experi) with auto-scan numbered registry. `model scan` reads GGUF
-#        metadata via python3, calculates optimal GPU layers/ctx/threads for 4GB
-#        VRAM. `model use N` replaces `model start <profile>`. Removed assign,
-#        swap, download commands. Models consolidated to /mnt/m/active/. Quant
-#        detection from file_type + filename fallback. Dashboard and oc-local-llm
-#        updated for new format (active file stores model number not pipe string).
-#        Fixed --flash-attn flag for newer llama.cpp (requires on/off/auto arg).
-#        Help section updated to match new commands.
-# 2.13 (2026-03-07) — Added GitHub Copilot CLI integration: COPILOT_CLI_DIR
-#        constant, PATH entry, `cop`/`??`/`cop-ask`/`cop-init` aliases.
-# 2.12 (2026-03-07) — Final review tidy: defensive-quoted all 15 __test_port
-#        call sites ("$LLM_PORT"/"$OC_PORT"). Moved __require_llm from §6 to §11
-#        (co-located with its 7 call sites). model bench renders as single open
-#        box with __tac_divider (was closed banner + nested header). Fixed PS3
-#        leak in second model assign select. Architecture map line numbers
-#        updated to match actual section positions.
-# 2.11 (2026-03-07) — Full audit implementation: fixed model bench box rendering
-#        ("open" style), oc-diag box rendering, oc-restore validation accepts
-#        config-only backups, __get_tokens jq null guard, commit_auto PID-based
-#        llama-server verification. Dashboard /slots query moved to async cache
-#        (__get_llm_slots). __get_oc_metrics split into 60s sessions + 24h
-#        version caches. Added __require_llm helper (deduplicates jq+port
-#        checks). Replaced eval nullglob restore with flag pattern (3 sites).
-#        __fRow dead-code safety-net commented. __TAC_BG_PIDS reset per
-#        dashboard render. model bench persists results to ~/.llm/bench_*.tsv.
-#        EXIT trap chains with existing traps. Section comments in dashboard.
-#        up() step 2 inline logic comments. CHANGELOG dates added.
-# 2.10 (2026-03-07) — Hal analysis round 2: llama.cpp perf flags (--batch-size 512,
-#        --ubatch-size 512, --cont-batching, --flash-attn GPU-only) in model
-#        start, oc-model-switch, llama-watchdog.sh. model swap calls oc-local-llm
-#        to update OpenClaw provider. so() warns if provider targets offline local
-#        LLM. oc-backup/oc-restore expanded to cover .bashrc, standalone scripts,
-#        systemd units. apt upgrade uses --no-install-recommends; split APT
-#        cooldown (apt_index 24h / apt 7d). models.conf extended to 8-field
-#        format with per-model gpu_layers, ctx_size, threads. New standalone
-#        script: oc-gpu-status (agent-accessible NVIDIA GPU summary).
-# 2.09 (2026-03-06) — Audit + Hal cross-ref: 25-item implementation covering P0-P3 fixes.
-#        Atomic vscode_path write, __check_cooldown per-key support, defensive
-#        guards across dashboard, model, and OpenClaw integration functions.
-# 2.08 (2026-03-05) — Audit implementation: P0 fixed &&/|| color chain in dashboard (emitted
-#        two values), removed duplicate unguarded completions source. P1 so()
-#        API key injection uses indirect expansion (${!_key}) instead of raw
-#        =‑splitting %q-quoted strings, commit_deploy gates on commit exit code,
-#        model start/info use awk instead of unanchored grep. P2 design tokens
-#        switched to ANSI-C $'\e[…]' quoting — eliminates ~60 forks per render,
-#        removed echo -e subshells in __tac_info/__tac_line/__fRow, oc-cache-
-#        clear nullglob guard, dead model pull code removed, GPU sleep retry
-#        in up() removed, dashboard GPU parsed once (was twice), TPS read from
-#        cache file. Docker Desktop mounts filtered from disk audit.
-# 2.07 (2026-03-04) — Full audit pass: P0 find -delete OR-precedence bug, model pull alias
-#        (spaces illegal in bash aliases → case branch). P1 deploy gated on
-#        push success, model list UIWidth-derived, chat REPL now has multi-turn
-#        conversation history, oc-llm-sync.sh SHA256 integrity check. P2 pure-
-#        bash __strip_ansi (zero forks), sysinfo single free call, __cleanup_temps
-#        restricted to safe dirs, atomic cache writes, openclaw doctor in up().
-#        New functions: chat-pipe, model swap, oc-diag, oc-failover. oc-local-llm
-#        reads actual model name. mkproj checks for python3/git. Improved bridge
-#        regex specificity. Modularisation notes on cross-cutting state.
-# 2.06 — Tuned constants: UIWidth 78→80 (overridable), cooldown 24h→7d with
-#        d/h display, colour thresholds 33/66→75/90 (industry standard),
-#        diff head 200→500, token scan 10→25 files. Windows API key bridge:
-#        __bridge_windows_api_keys auto-imports API_KEY/TOKEN/SECRET vars from
-#        Windows User env into WSL on shell start (1h cache). oc-refresh-keys.
-# 2.05 — Audit fixes: __get_tokens pipe bug, __strip_ansi helper, UIWidth-derived
-#        layout constants, HOURS_LEFT refactor, localhost guard on commit_auto,
-#        re-source guard for clear_tactical, background job cleanup trap, new
-#        utility functions (oc-env, oc-cache-clear, chat-context, model pull).
-# 2.04 — Pure bash SSE streaming; removed Python dependency.
 
 # AI INSTRUCTION: Follow these terminal formatting rules strictly:
 # 1. A blank line must exist between the bottom of any UI border and the command prompt.
@@ -283,6 +120,7 @@ export TACTICAL_PROFILE_VERSION="2.21"
 # - __tac_last_hist_num: written by custom_prompt_command (§6) → read by same, safe within section
 # - VSCODE_BIN: lazy-init by __resolve_vscode_bin (§1) → used by aliases (§3)
 # - __TAC_INITIALIZED: set by init (§13) → guards re-source idempotency
+# - __LLAMA_DRIVE_MOUNTED: set in constants (§1) → read by model scan/download (§11)
 #
 # MODULARISATION GUIDE:
 #   Split order must match section numbering (§0–§13).  Each module sources
@@ -317,7 +155,7 @@ export AI_STORAGE_ROOT="$HOME"
 export OC_ROOT="$AI_STORAGE_ROOT/.openclaw"
 # DEPRECATION: OPENCLAW_ROOT is the old name. OC_ROOT is canonical.
 # If no external scripts reference OPENCLAW_ROOT, this line can be removed.
-# Used by: oc-env display (§9), __sync_bashrc_tracked (§8).
+# Used by: oc-env display (§9).
 export OPENCLAW_ROOT="$OC_ROOT"
 export OC_WORKSPACE="$OC_ROOT/workspace"
 export OC_AGENTS="$OC_ROOT/agents"
@@ -338,6 +176,11 @@ export QUANT_GUIDE="$HOME/ubuntu-console/quant-guide.conf"
 # Detect drive size at startup; falls back to 200 GB if df unavailable.
 # WARNING: If the drive is not mounted, all capacity calculations will use
 # the 200GB fallback, which may over- or under-estimate available space.
+# Check mountpoint first to prevent model downloads writing to the WSL rootfs.
+__LLAMA_DRIVE_MOUNTED=1
+if ! mountpoint -q "$LLAMA_DRIVE_ROOT" 2>/dev/null; then
+    __LLAMA_DRIVE_MOUNTED=0
+fi
 LLAMA_DRIVE_SIZE=$(df -B1 --output=size "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk 'NR==2{print $1+0}')
 if [[ -z "$LLAMA_DRIVE_SIZE" || "$LLAMA_DRIVE_SIZE" == "0" ]]; then
     LLAMA_DRIVE_SIZE=$((200 * 1024 * 1024 * 1024))
@@ -476,6 +319,7 @@ function __tac_err_handler() {
         echo "$(date +"%Y-%m-%d %H:%M:%S") [EXIT $__tac_last_err] $BASH_COMMAND" >> "$ErrorLogPath" 2>/dev/null
     fi
 }
+set -E
 trap '__tac_err_handler' ERR
 
 # ==============================================================================
@@ -497,10 +341,6 @@ alias egrep='grep -E --color=auto'
 alias ll='ls -alF'
 alias la='ls -A'
 alias l='ls -CF'
-# Ubuntu default alert alias — kept for script compatibility even though
-# notify-send may not work under WSL. Triggers a desktop notification on
-# the exit status of the previous command.
-alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
 
 # ---- Tactical UI & Navigation ----
 alias h='tactical_help'
@@ -510,7 +350,9 @@ alias m='tactical_dashboard'
 alias cpwd='copy_path'
 
 # ---- Dev Tools & VS Code Wrappers (lazy-resolved — no pwsh hit at shell start) ----
-# All VS Code wrappers use __vsc_open (defined in §5) for deduplication.
+# Path resolution is centralised in __resolve_vscode_bin (§1).
+# Single-file wrappers (oedit, llmconf, etc.) use __vsc_open (§5).
+# code() passes raw args and skips __vsc_open to support multi-arg/folder usage.
 function code() {
     __resolve_vscode_bin
     "$VSCODE_BIN" "$@"
@@ -620,6 +462,16 @@ if [[ -z "${C_Reset:-}" ]]; then
     readonly C_Info=$'\e[34m'          # Blue
 fi
 
+# __require_design_tokens — Assert design tokens are loaded.
+# Call at the top of any module that uses C_* tokens after modularisation.
+# In the monolith this is a no-op (tokens are always above), but when sections
+# become separate files it catches missing source-order dependencies early.
+function __require_design_tokens() {
+    [[ -n "${C_Reset:-}" ]] && return 0
+    printf '%s\n' "[Tactical Profile] FATAL: design tokens not loaded. Source 04-design-tokens.sh before this module." >&2
+    return 1
+}
+
 # ==============================================================================
 # 5. UI HELPER ENGINE
 # ==============================================================================
@@ -637,7 +489,7 @@ fi
 # UI primitives in one section. They are prefixed with __ to signal "internal".
 #
 # DIVIDER STYLES (intentional distinction):
-#   ╠═══╣  Major section break (double-line) — used in dashboard between blocks
+#   ╠═══╣  Frame-level break (double-line) — __tac_header open, dashboard blocks
 #   ╟───╢  Within-section divider (single-line) — __tac_divider(), used in up()
 
 # ---------------------------------------------------------------------------
@@ -749,8 +601,10 @@ function __strip_ansi() {
 }
 
 # ---------------------------------------------------------------------------
-# __tac_header — Render a box header with centred title.
+# __tac_header — Render a 3-row box header: ╔═╗ / ║ title ║ / ╚═╝ or ╠═╣.
 # Usage: __tac_header "TITLE" [open|closed] [version]
+#   open   → bottom is ╠═╣ (more content follows inside the box)
+#   closed → bottom is ╚═╝ (standalone header)
 # ---------------------------------------------------------------------------
 function __tac_header() {
     local title="$1"
@@ -758,36 +612,32 @@ function __tac_header() {
     local version="$3"
 
     local inner_width=$((UIWidth - 2))
+    local line
+    printf -v line '%*s' "$inner_width" ''
+    line="${line// /═}"
 
-    # Embed title (and optional version) directly in the ═ border line.
-    # This avoids font-width misalignment between ═ and space characters.
-    local left_label=" ${title}"
-    local right_label=" "
+    # Build the display text for the title row.
+    local display_text
     if [[ -n "$version" ]]; then
-        right_label=" (v${version}) "
-    fi
-    local label_len=$(( ${#left_label} + ${#right_label} ))
-    local left_eqs=$(( (inner_width - label_len) / 2 ))
-    local right_eqs=$(( inner_width - label_len - left_eqs ))
-
-    local left_line; printf -v left_line '%*s' "$left_eqs" ''; left_line="${left_line// /═}"
-    local right_line; printf -v right_line '%*s' "$right_eqs" ''; right_line="${right_line// /═}"
-
-    if [[ -n "$version" ]]; then
-        printf "${C_BoxBg}╔%s${C_Reset}${C_Highlight}%s${C_Reset}${C_Dim}%s${C_Reset}${C_BoxBg}%s╗${C_Reset}\n" \
-            "$left_line" "$left_label" "$right_label" "$right_line"
+        display_text="- ${title} v${version} -"
     else
-        printf "${C_BoxBg}╔%s${C_Reset}${C_Highlight}%s${C_Reset}${C_BoxBg}%s╗${C_Reset}\n" \
-            "$left_line" "${left_label}${right_label}" "$right_line"
+        display_text="- ${title} -"
     fi
 
-    # Use thin-line (─) dividers to avoid width mismatch with ═/space title line.
-    local thin_line; printf -v thin_line '%*s' "$inner_width" ''; thin_line="${thin_line// /─}"
+    local pad_left=$(( (inner_width - ${#display_text}) / 2 ))
+    local pad_right=$(( inner_width - ${#display_text} - pad_left ))
+    local lpad="" rpad=""
+    (( pad_left  > 0 )) && printf -v lpad  '%*s' "$pad_left"  ""
+    (( pad_right > 0 )) && printf -v rpad '%*s' "$pad_right" ""
+
+    printf "${C_BoxBg}╔${line}╗${C_Reset}\n"
+    printf "${C_BoxBg}║${C_Reset}%s${C_Highlight}%s${C_Reset}%s${C_BoxBg}║${C_Reset}\n" \
+        "$lpad" "$display_text" "$rpad"
 
     if [[ "$style" == "open" ]]; then
-        printf "${C_BoxBg}╟${thin_line}╢${C_Reset}\n"
+        printf "${C_BoxBg}╠${line}╣${C_Reset}\n"
     elif [[ "$style" == "closed" ]]; then
-        printf "${C_BoxBg}╙${thin_line}╜${C_Reset}\n"
+        printf "${C_BoxBg}╚${line}╝${C_Reset}\n"
     fi
 }
 
@@ -796,8 +646,8 @@ function __tac_header() {
 # ---------------------------------------------------------------------------
 function __tac_footer() {
     local inner_width=$((UIWidth - 2))
-    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /─}"
-    printf "${C_BoxBg}╙${line}╜${C_Reset}\n"
+    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /═}"
+    printf "${C_BoxBg}╚${line}╝${C_Reset}\n"
 }
 
 # ---------------------------------------------------------------------------
@@ -979,8 +829,10 @@ function cd() {
 
     # Auto-deactivate if we left the project root
     if [[ -n "$VIRTUAL_ENV" ]]; then
-        local venv_root; venv_root=$(dirname "$VIRTUAL_ENV")
-        local current_wd; current_wd=$(pwd -P)
+        local venv_root
+        venv_root=$(dirname "$VIRTUAL_ENV")
+        local current_wd
+        current_wd=$(pwd -P)
         if [[ "$current_wd" != "$venv_root" && "$current_wd" != "$venv_root/"* ]]; then
             type deactivate >/dev/null 2>&1 && deactivate
         fi
@@ -1075,8 +927,10 @@ function __get_uptime() {
 # ---------------------------------------------------------------------------
 function __get_disk() {
     local __unit_fix='s/\([0-9.]\)G/\1 Gb/;s/\([0-9.]\)M/\1 Mb/;s/\([0-9.]\)T/\1 Tb/'
-    local c_drive; c_drive=$(df -h /mnt/c 2>/dev/null | awk 'NR==2 {print $4" free"}' | sed "$__unit_fix")
-    local wsl_drive; wsl_drive=$(df -h / | awk 'NR==2 {print $4" free"}' | sed "$__unit_fix")
+    local c_drive
+    c_drive=$(df -h /mnt/c 2>/dev/null | awk 'NR==2 {print $4" free"}' | sed "$__unit_fix")
+    local wsl_drive
+    wsl_drive=$(df -h / | awk 'NR==2 {print $4" free"}' | sed "$__unit_fix")
     if [[ -n "$c_drive" ]]; then
         echo "C: $c_drive | WSL: $wsl_drive"
     else
@@ -1118,7 +972,8 @@ function __get_gpu() {
         local smi_cmd="$WSL_NVIDIA_SMI"
         [[ ! -f "$smi_cmd" ]] && smi_cmd=$(command -v nvidia-smi 2>/dev/null)
         if [[ -n "$smi_cmd" && -x "$smi_cmd" ]]; then
-            local raw; raw=$("$smi_cmd" --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null)
+            local raw
+            raw=$("$smi_cmd" --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null)
             [[ -n "$raw" ]] && printf '%s' "${raw//NVIDIA GeForce /}" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
         else
             echo "N/A" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
@@ -1144,8 +999,10 @@ function __get_battery() {
     fi
     (
         if (( __TAC_HAS_BATTERY == 1 )); then
-            local cap; cap=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || echo "100")
-            local bstat; bstat=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo "Unknown")
+            local cap
+            cap=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || echo "100")
+            local bstat
+            bstat=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo "Unknown")
             echo "${cap}% (${bstat})" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
         else
             echo "A/C POWERED" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
@@ -1165,7 +1022,8 @@ function __get_battery() {
 # ---------------------------------------------------------------------------
 function __get_git() {
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        local branch; branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+        local branch
+        branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
         local dirty
         if [[ -n $(git status --porcelain) ]]; then
             dirty="BREACHED"
@@ -1181,35 +1039,39 @@ function __get_git() {
 # Scans agents/*/sessions/sessions.json for the newest session with totalTokens.
 # Returns "used|limit" or "N/A|0".
 # ---------------------------------------------------------------------------
-# Performance note (I2): This function runs jq over up to 10 session files on
-# every dashboard refresh (when cache is stale). The background subshell ensures
-# the dashboard itself never blocks, but jq parsing still costs CPU. If this
-# becomes a bottleneck, consider indexing largest-session only or switching to awk.
+# Performance note (I2): Uses `jq -s` (slurp) to process all session files
+# in a single jq invocation, avoiding the previous N+1 pattern (one jq per file).
+# The background subshell ensures the dashboard never blocks.
 function __get_tokens() {
     local cache="$TAC_CACHE_DIR/tac_tokens"
     if __cache_fresh "$cache" 30; then
         cat "$cache"; return
     fi
     (
-        local found=0
+        local files=()
         while IFS= read -r f; do
-            local result
-            result=$(jq -r '
-                [ to_entries[].value
+            files+=("$f")
+        done < <(find "$OC_AGENTS" -name "sessions.json" -type f \
+            -printf '%T@ %p\n' 2>/dev/null | \
+            sort -n -r | head -n 10 | cut -d' ' -f2-)
+
+        local result=""
+        if (( ${#files[@]} > 0 )); then
+            result=$(jq -s -r '
+                [ .[]
+                  | to_entries[].value
                   | select(.totalTokens != null and .totalTokens > 0
                           and .contextTokens != null and .contextTokens > 0) ]
                 | sort_by(.updatedAt) | last
                 | "\(.totalTokens)|\(.contextTokens)"
-            ' "$f" 2>/dev/null)
-            if [[ -n "$result" && "$result" != "null|null" ]]; then
-                echo "$result" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
-                found=1
-                break
-            fi
-        done < <(find "$OC_AGENTS" -name "sessions.json" -type f \
-            -printf '%T@ %p\n' 2>/dev/null | \
-            sort -n -r | head -n 10 | cut -d' ' -f2-)
-        (( found == 0 )) && echo "N/A|0" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+            ' "${files[@]}" 2>/dev/null)
+        fi
+
+        if [[ -n "$result" && "$result" != "null|null" ]]; then
+            echo "$result" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+        else
+            echo "N/A|0" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+        fi
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
     if [[ -f "$cache" ]]; then
@@ -1248,7 +1110,8 @@ function __get_oc_version() {
 # Combines the session count and cached version into "count|version".
 # ---------------------------------------------------------------------------
 function __get_oc_metrics() {
-    local ver; ver=$(__get_oc_version)
+    local ver
+    ver=$(__get_oc_version)
     local cache="$TAC_CACHE_DIR/tac_ocmetrics"
     if __cache_fresh "$cache" 60; then
         cat "$cache"; return
@@ -1294,7 +1157,7 @@ function __get_llm_slots() {
 # @modular-section: maintenance
 # @depends: constants, design-tokens, ui-engine, telemetry
 # @exports: __cleanup_temps, __check_cooldown, __set_cooldown, get-ip, up, cl,
-#   __sync_bashrc_tracked, copy_path, sysinfo, logtrim
+#   copy_path, sysinfo, logtrim
 
 # ---------------------------------------------------------------------------
 # __cleanup_temps — Remove temp files from known safe locations only.
@@ -1317,13 +1180,15 @@ function __cleanup_temps() {
 
 # ---------------------------------------------------------------------------
 # __check_cooldown — Check if a maintenance task's 7-day cooldown has expired.
-# Usage: time_left=$(__check_cooldown <key> <now_timestamp>)
+# Usage: __check_cooldown <key> <now_timestamp> <result_var>
 # Returns 0 if cooldown has expired (task should run), 1 if still active.
-# On return 1, prints remaining time (e.g. "6d 12h") to stdout.
+# On return 1, sets result_var to remaining time (e.g. "6d 12h").
+# Uses nameref to avoid subshell overhead (called 5+ times per `up` run).
 # Dependencies: $CooldownDB must be set and touchable.
 # ---------------------------------------------------------------------------
 function __check_cooldown() {
     local key="$1" now="$2"
+    local -n __cd_result="${3:-_cd_sink}"
     # Per-key cooldown periods (default 7 days)
     local cooldown
     case "$key" in
@@ -1331,7 +1196,8 @@ function __check_cooldown() {
         apt)        cooldown=604800 ;;  # 7 days  — package upgrades
         *)          cooldown=604800 ;;  # 7 days  — everything else
     esac
-    local last_run; last_run=$(grep "^${key}=" "$CooldownDB" 2>/dev/null | tail -n 1 | cut -d= -f2)
+    local last_run
+    last_run=$(grep "^${key}=" "$CooldownDB" 2>/dev/null | tail -n 1 | cut -d= -f2)
     last_run=${last_run:-0}
     local diff=$(( now - last_run ))
     if (( diff < cooldown )); then
@@ -1339,12 +1205,13 @@ function __check_cooldown() {
         local days=$(( remaining / 86400 ))
         local hours=$(( (remaining % 86400) / 3600 ))
         if (( days > 0 )); then
-            echo "${days}d ${hours}h"
+            __cd_result="${days}d ${hours}h"
         else
-            echo "${hours}h"
+            __cd_result="${hours}h"
         fi
         return 1
     fi
+    __cd_result=""
     return 0
 }
 
@@ -1367,11 +1234,13 @@ function __set_cooldown() {
 # Renamed from ip() to avoid shadowing /usr/bin/ip (used by WSL loopback fix).
 # ---------------------------------------------------------------------------
 function get-ip() {
-    local wslIp; wslIp=$(hostname -I | awk '{print $1}')
+    local wslIp
+    wslIp=$(hostname -I | awk '{print $1}')
     [[ -z "$wslIp" ]] && wslIp="UNKNOWN"
     __tac_info "WSL Ubuntu IP" "[$wslIp]" "$C_Success"
 
-    local extIp; extIp=$(curl -s --connect-timeout 2 https://api.ipify.org)
+    local extIp
+    extIp=$(curl -s --connect-timeout 2 https://api.ipify.org)
     [[ -z "$extIp" ]] && extIp="TIMEOUT / UNAVAILABLE"
     local wan_color=$C_Warning
     if [[ $extIp == TIMEOUT* ]]; then
@@ -1389,13 +1258,13 @@ function up() {
     command clear
     __tac_header "SYSTEM MAINTENANCE" "open"
     local errCount=0
-    local now; now=$(date +%s)
-    # hours_left is re-used by each __check_cooldown call as a capture variable.
+    local now
+    now=$(date +%s)
+    # hours_left is set by __check_cooldown via nameref (no subshell needed).
     # When __check_cooldown returns 1 (still cooling down), hours_left holds
-    # the remaining time string (e.g. "6d 12h"). The `if` construct exploits
-    # the fact that command substitution in the condition captures stdout while
-    # the return code controls the branch.
+    # the remaining time string (e.g. "6d 12h").
     local hours_left=""
+    local _cd_sink=""  # sink for nameref when no result var is needed
     touch "$CooldownDB" 2>/dev/null
 
     # [1/10] Connectivity
@@ -1413,13 +1282,13 @@ function up() {
     #   3. If only index was refreshed → show that
     #   4. If both cached → show "CACHED"
     local apt_did_update=0
-    if hours_left=$(__check_cooldown "apt_index" "$now"); then
+    if __check_cooldown "apt_index" "$now" hours_left; then
         if sudo apt-get update >/dev/null 2>&1; then
             apt_did_update=1
             __set_cooldown "apt_index" "$now"
         fi
     fi
-    if hours_left=$(__check_cooldown "apt" "$now"); then
+    if __check_cooldown "apt" "$now" hours_left; then
         (( apt_did_update )) || sudo apt-get update >/dev/null 2>&1
         sudo apt-get upgrade -y --no-install-recommends >/dev/null 2>&1
         local apt_rc=$?
@@ -1440,7 +1309,7 @@ function up() {
     fi
 
     # [3/10] NPM / Cargo
-    if hours_left=$(__check_cooldown "npm_cargo" "$now"); then
+    if __check_cooldown "npm_cargo" "$now" hours_left; then
         local pkg_err=0
         command -v npm >/dev/null && { npm update -g --quiet >/dev/null 2>&1 || pkg_err=1; }
         command -v cargo >/dev/null && { cargo install-update -a >/dev/null 2>&1 || pkg_err=1; }
@@ -1457,7 +1326,7 @@ function up() {
     fi
 
     # [4/10] OpenClaw verification — runs 'openclaw doctor' for real health check
-    if hours_left=$(__check_cooldown "openclaw" "$now"); then
+    if __check_cooldown "openclaw" "$now" hours_left; then
         if command -v openclaw >/dev/null; then
             local doc_rc
             openclaw doctor >/dev/null 2>&1
@@ -1485,7 +1354,7 @@ function up() {
     fi
 
     # [6/10] Python Fleet
-    if hours_left=$(__check_cooldown "pyfleet" "$now"); then
+    if __check_cooldown "pyfleet" "$now" hours_left; then
         local py_versions=()
         local _py
         for _py in /usr/bin/python3.[0-9]*; do
@@ -1507,7 +1376,8 @@ function up() {
     fi
 
     # [7/10] GPU Checks
-    local gpu; gpu=$(__get_gpu)
+    local gpu
+    gpu=$(__get_gpu)
 
     if [[ "$gpu" != "N/A" && "$gpu" != "Querying..." && "$gpu" != *"OFFLINE"* ]]; then
         __tac_line "[7/10] RTX 3050 Ti" "[READY]" "$C_Success"
@@ -1541,7 +1411,8 @@ function up() {
     # [10/10] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).
     # Per-PID check: only kill processes that are NOT listening on LLM_PORT.
-    local stale_pids; stale_pids=$(pgrep -x llama-server 2>/dev/null)
+    local stale_pids
+    stale_pids=$(pgrep -x llama-server 2>/dev/null)
     local stale_count=0
     if [[ -n "$stale_pids" ]] && ! __test_port "$LLM_PORT"; then
         stale_count=$(echo "$stale_pids" | wc -l)
@@ -1571,18 +1442,10 @@ function up() {
 # cl — Quick cleanup without the full maintenance run.
 # ---------------------------------------------------------------------------
 function cl() {
-    local count; count=$(__cleanup_temps)
+    local count
+    count=$(__cleanup_temps)
     __tac_info "Sanitation..." "[$count artifacts removed]" "$C_Success"
 }
-
-# ---------------------------------------------------------------------------
-# __sync_bashrc_tracked — RETIRED (v2.20).
-# Previously copied ~/.bashrc to .openclaw/bashrc.tracked.
-# No longer needed: the canonical source is now version-controlled directly at
-# ~/ubuntu-console/tactical-console.bashrc. ~/.bashrc is a thin loader.
-# Kept as a no-op stub so existing 'reload' muscle-memory doesn't error.
-# ---------------------------------------------------------------------------
-function __sync_bashrc_tracked() { :; }
 
 # ---------------------------------------------------------------------------
 # copy_path — Copy the current working directory to the Windows clipboard.
@@ -1597,7 +1460,8 @@ function copy_path() {
 # Usage: sysinfo
 # ---------------------------------------------------------------------------
 function sysinfo() {
-    local host_raw; host_raw=$(__get_host_metrics)
+    local host_raw
+    host_raw=$(__get_host_metrics)
     local cpu gpu0 gpu1
     IFS='|' read -r cpu gpu0 gpu1 <<< "$host_raw"
     # Ensure numeric values for arithmetic (guard against stale/malformed cache)
@@ -1606,8 +1470,10 @@ function sysinfo() {
     [[ "$gpu1" =~ ^[0-9]+$ ]] || gpu1=0
     local mem_used mem_total mem_pct
     read -r mem_used mem_total mem_pct <<< "$(free -m | awk 'NR==2{printf "%.1f %.1f %d", $3/1024, $2/1024, $3*100/$2}')"
-    local disk; disk=$(df -h / | awk 'NR==2{print $4}' | sed 's/\([0-9.]\)G/\1 Gb/;s/\([0-9.]\)M/\1 Mb/')
-    local gpu_raw; gpu_raw=$(__get_gpu)
+    local disk
+    disk=$(df -h / | awk 'NR==2{print $4}' | sed 's/\([0-9.]\)G/\1 Gb/;s/\([0-9.]\)M/\1 Mb/')
+    local gpu_raw
+    gpu_raw=$(__get_gpu)
     local gpu_info="N/A" gpu_color=$C_Dim
     if [[ "$gpu_raw" != "N/A" && "$gpu_raw" != "Querying..." ]]; then
         local _g_name g_temp g_util _g_mu _g_mt
@@ -1693,7 +1559,8 @@ function so() {
     done < <(grep '^export ' "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null)
 
     # If provider is configured for local LLM, warn if it's not running
-    local _prov_url; _prov_url=$(openclaw config get provider.baseUrl 2>/dev/null)
+    local _prov_url
+    _prov_url=$(openclaw config get provider.baseUrl 2>/dev/null)
     if [[ "$_prov_url" == *"127.0.0.1:${LLM_PORT}"* ]] && ! __test_port "$LLM_PORT"; then
         __tac_info "Local LLM" "[OFFLINE — provider points to localhost:$LLM_PORT]" "$C_Warning"
         printf '%s\n' "  ${C_Dim}Run 'serve <profile>' to start the LLM before gateway.${C_Reset}"
@@ -1850,7 +1717,10 @@ function __bridge_windows_api_keys() {
         ForEach-Object { "$($_.Key)=$($_.Value)" }
     ' 2>/dev/null | tr -d '\r')
 
-    [[ -z "$raw" ]] && return 1
+    if [[ -z "$raw" ]]; then
+        echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] __bridge_windows_api_keys: pwsh.exe returned no data (timeout or not installed)" >> "$ErrorLogPath" 2>/dev/null
+        return 1
+    fi
 
     # Build a sourceable cache file, skipping vars with invalid names
     local tmpfile="${cache}.tmp"
@@ -1874,7 +1744,8 @@ function oc-refresh-keys() {
     rm -f "$TAC_CACHE_DIR/tac_win_api_keys"
     __bridge_windows_api_keys
     if [[ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]]; then
-        local count; count=$(wc -l < "$TAC_CACHE_DIR/tac_win_api_keys")
+        local count
+        count=$(wc -l < "$TAC_CACHE_DIR/tac_win_api_keys")
         __tac_info "Windows API Keys" "[$count variable(s) imported]" "$C_Success"
     else
         __tac_info "Windows API Keys" "[BRIDGE FAILED - pwsh timeout?]" "$C_Warning"
@@ -1892,7 +1763,8 @@ function oc-backup() {
         return 1
     fi
 
-    local stamp; stamp=$(date +"%Y%m%d_%H%M%S")
+    local stamp
+    stamp=$(date +"%Y%m%d_%H%M%S")
     mkdir -p "$OC_BACKUPS"
     local zipPath="$OC_BACKUPS/snapshot_$stamp.zip"
 
@@ -1932,7 +1804,8 @@ function oc-backup() {
     fi
 
     if [[ -f "$zipPath" ]]; then
-        local sz; sz=$(stat -c%s "$zipPath" 2>/dev/null || echo "0")
+        local sz
+        sz=$(stat -c%s "$zipPath" 2>/dev/null || echo "0")
         local human_sz=$(( sz / 1024 ))
         __tac_info "Snapshot Archive" "[CREATED — ${human_sz}KB]" "$C_Success"
         printf '%s\n' "  ${C_Dim}Path: $zipPath${C_Reset}"
@@ -1968,7 +1841,8 @@ function oc-restore() {
     if [[ -e "${snaps[0]}" ]]; then
         local f newest="" newest_t=0
         for f in "${snaps[@]}"; do
-            local t; t=$(stat -c %Y "$f" 2>/dev/null) || continue
+            local t
+            t=$(stat -c %Y "$f" 2>/dev/null) || continue
             (( t > newest_t )) && newest_t=$t && newest="$f"
         done
         latest="$newest"
@@ -1981,7 +1855,9 @@ function oc-restore() {
     printf '%s\n' "${C_Warning}WARNING: This will DESTROY the current workspace and agents.${C_Reset}"
     printf '%s\n' "${C_Dim}Restoring from: $(basename "$latest")${C_Reset}"
     read -r -p "${C_Warning}Continue? [y/N]: ${C_Reset}" confirm
-    [[ "${confirm,,}" != "y" ]] && { __tac_info "Restore" "[CANCELLED]" "$C_Dim"; return 0; }
+    if [[ "${confirm,,}" != "y" ]]; then
+        __tac_info "Restore" "[CANCELLED]" "$C_Dim"; return 0
+    fi
 
     # Stop gateway inline (avoid calling xo which prints its own UI)
     openclaw gateway stop >/dev/null 2>&1
@@ -1992,7 +1868,8 @@ function oc-restore() {
 
     # Extract to a temp directory first, validate, then swap — protects
     # against corrupt ZIPs destroying current state with nothing to replace it.
-    local tmp_restore; tmp_restore=$(mktemp -d "${OC_BACKUPS}/restore_XXXXXX")
+    local tmp_restore
+    tmp_restore=$(mktemp -d "${OC_BACKUPS}/restore_XXXXXX")
     __tac_info "Extracting to staging area..." "[WORKING]" "$C_Dim"
     if ! unzip -q "$latest" -d "$tmp_restore"; then
         __tac_info "State Rollback" "[FAILED — ZIP ERROR, current state preserved]" "$C_Error"
@@ -2101,7 +1978,8 @@ function oc-update() {
         return 1
     fi
     __tac_info "Checking for updates..." "[WORKING]" "$C_Dim"
-    local out; out=$(openclaw update 2>&1)
+    local out
+    out=$(openclaw update 2>&1)
     local rc=$?
     if (( rc == 0 )); then
         __tac_info "Update" "[COMPLETE]" "$C_Success"
@@ -2127,7 +2005,8 @@ function oc-health() {
         __tac_info "Gateway Port $OC_PORT" "[NOT LISTENING]" "$C_Error"
         return 1
     fi
-    local health_out; health_out=$(openclaw health --json 2>/dev/null)
+    local health_out
+    health_out=$(openclaw health --json 2>/dev/null)
     if [[ -n "$health_out" ]]; then
         local hstatus
         hstatus=$(jq -r '.status // "unknown"' <<< "$health_out" 2>/dev/null)
@@ -2273,9 +2152,11 @@ function oc-local-llm() {
     # Read the active model's name and GGUF filename from the registry
     local model_name="local" model_file=""
     if [[ -f "$ACTIVE_LLM_FILE" ]]; then
-        local _anum; _anum=$(< "$ACTIVE_LLM_FILE")
+        local _anum
+        _anum=$(< "$ACTIVE_LLM_FILE")
         if [[ -n "$_anum" && -f "$LLM_REGISTRY" ]]; then
-            local _entry; _entry=$(awk -F'|' -v n="$_anum" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            local _entry
+            _entry=$(awk -F'|' -v n="$_anum" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
             IFS='|' read -r _ _name _file _ <<< "$_entry"
             [[ -n "$_name" ]] && model_name="$_name"
             [[ -n "$_file" ]] && model_file="$_file"
@@ -2467,7 +2348,8 @@ function oc-failover() {
                 return 1
             fi
             # Verify the fallback model list is configured before enabling
-            local fb_models; fb_models=$(openclaw config get llm.fallback.models 2>/dev/null)
+            local fb_models
+            fb_models=$(openclaw config get llm.fallback.models 2>/dev/null)
             if [[ -z "$fb_models" || "$fb_models" == "null" ]]; then
                 __tac_info "Failover" "[No fallback models configured — set llm.fallback.models first]" "$C_Warning"
             fi
@@ -2479,10 +2361,12 @@ function oc-failover() {
             __tac_info "Failover" "[Cloud fallback DISABLED]" "$C_Warning"
             ;;
         status)
-            local val; val=$(openclaw config get llm.fallback.enabled 2>/dev/null || echo "unknown")
+            local val
+            val=$(openclaw config get llm.fallback.enabled 2>/dev/null || echo "unknown")
             __tac_info "Failover" "[llm.fallback.enabled = $val]" "$C_Info"
             # Show the actual fallback chain so the user knows what will activate
-            local chain; chain=$(openclaw config get llm.fallback.models 2>/dev/null)
+            local chain
+            chain=$(openclaw config get llm.fallback.models 2>/dev/null)
             if [[ -n "$chain" && "$chain" != "null" ]]; then
                 __tac_info "Chain" "$chain" "$C_Dim"
             else
@@ -2627,7 +2511,8 @@ function commit_deploy() {
 
     __tac_header "VERSION CONTROL" "open"
 
-    local modCount; modCount=$(git status --porcelain | wc -l)
+    local modCount
+    modCount=$(git status --porcelain | wc -l)
     __tac_line "Staging $modCount file(s)..." "[WORKING]" "$C_Dim"
     git add .
 
@@ -2683,7 +2568,8 @@ function commit_auto() {
         return 1
     fi
     # Verify the process listening on $LLM_PORT is actually llama-server
-    local _llm_pid; _llm_pid=$(ss -tlnp "sport = :$LLM_PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+')
+    local _llm_pid
+    _llm_pid=$(ss -tlnp "sport = :$LLM_PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+')
     if [[ -z "$_llm_pid" ]] || ! grep -q llama-server "/proc/$_llm_pid/cmdline" 2>/dev/null; then
         __tac_info "SECURITY" "[BLOCKED: port $LLM_PORT is not llama-server]" "$C_Error"
         return 1
@@ -2701,11 +2587,23 @@ function commit_auto() {
     # Note (I4): Two separate `git diff --cached` calls are intentional — --stat
     # produces a columnar summary while the raw diff gives line-level context.
     # Both read the same index snapshot so there is no consistency issue.
-    local diff_stat; diff_stat=$(git diff --cached --stat 2>/dev/null)
-    local diff_body; diff_body=$(git diff --cached 2>/dev/null | head -500)
+    local diff_stat
+    diff_stat=$(git diff --cached --stat 2>/dev/null)
+    local diff_body
+    diff_body=$(git diff --cached 2>/dev/null | head -500)
     local diff="${diff_stat}
 ---
 ${diff_body}"
+
+    # Guard: refuse to send diffs containing secret-like patterns to the LLM.
+    # Even though LOCAL_LLM_URL is localhost, a misconfigured proxy could route
+    # the request externally. Fail safe by scanning the diff body.
+    local __secret_pat='(sk-[a-zA-Z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[a-zA-Z0-9]{36}|API[_-]?KEY[[:space:]]*=[[:space:]]*['"'"'"]?[a-zA-Z0-9])'
+    if [[ "$diff_body" =~ $__secret_pat ]]; then
+        __tac_info "SECURITY" "[BLOCKED: diff appears to contain a secret/API key]" "$C_Error"
+        git reset HEAD >/dev/null 2>&1
+        return 1
+    fi
 
     __tac_info "Generating commit message..." "[LLM]" "$C_Dim"
 
@@ -2742,7 +2640,11 @@ ${diff_body}"
                 ;;
             e|edit)
                 read -r -e -p "${C_Highlight}Message: ${C_Reset}" -i "$msg" msg
-                [[ -z "$msg" ]] && { __tac_info "Commit" "[CANCELLED]" "$C_Dim"; git reset HEAD >/dev/null 2>&1; return 0; }
+                if [[ -z "$msg" ]]; then
+                    __tac_info "Commit" "[CANCELLED]" "$C_Dim"
+                    git reset HEAD >/dev/null 2>&1
+                    return 0
+                fi
                 break
                 ;;
             *) echo "Please enter y, n, or e." ;;
@@ -2769,11 +2671,9 @@ ${diff_body}"
 #   __llm_sse_core, __llm_stream, __llm_chat_send, local_chat, chat-context,
 #   __gguf_metadata, __calc_gpu_layers, __calc_ctx_size, __calc_threads,
 #   __quant_label, __require_llm
+# @state-out: LAST_TPS, __LAST_LLM_RESPONSE, ACTIVE_LLM_FILE
+# @state-in: __LLAMA_DRIVE_MOUNTED (§1), C_* design tokens (§4)
 
-# ---------------------------------------------------------------------------
-# __save_tps — Write measured TPS to the active model's registry entry.
-# Called after every inference (chat, burn). Updates column 11 in models.conf.
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # __save_tps — Persist TPS measurement to the registry's tps column.
 # Called after burn / llm_stream benchmarks so the dashboard and model list
@@ -2784,7 +2684,8 @@ ${diff_body}"
 function __save_tps() {
     local tps_val="$1"
     [[ -z "$tps_val" || ! -f "$ACTIVE_LLM_FILE" || ! -f "$LLM_REGISTRY" ]] && return
-    local active_num; active_num=$(< "$ACTIVE_LLM_FILE")
+    local active_num
+    active_num=$(< "$ACTIVE_LLM_FILE")
     [[ -z "$active_num" ]] && return
     awk -F'|' -v n="$active_num" -v t="$tps_val" 'BEGIN{OFS="|"} $1 == n {$11 = t} {print}' \
         "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" \
@@ -2876,7 +2777,8 @@ function gpu-status() {
         __tac_info "Power" "${gpwr} / ${gplim}" "$C_Text"
     done
 
-    local pm; pm=$("$smi" --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+    local pm
+    pm=$("$smi" --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
     if [[ "$pm" == "Enabled" ]]; then
         __tac_info "Persist" "ON" "$C_Success"
     else
@@ -2966,65 +2868,118 @@ function __gguf_metadata() {
     fname=$(basename "$fpath" .gguf)
     dd if="$fpath" bs=262144 count=1 2>/dev/null | od -A n -t u1 -v | \
     awk -v fname="$fname" '
-    { for (i=1; i<=NF; i++) b[n++] = $i+0 }
+    #-------------------------------------------------------------------
+    # GGUF binary parser (pure awk).
+    # Input: unsigned byte stream from od -t u1.
+    # GGUF layout: 4-byte magic "GGUF" (71,71,85,70), version (u32),
+    #   tensor_count (u64), metadata_kv_count (u64), then KV pairs.
+    # Each KV: key_len (u64), key (utf8), value_type (u32), value.
+    # We extract 5 fields: name, architecture, block_count, ctx, ftype.
+    #-------------------------------------------------------------------
+
+    # Helper: read a little-endian u32 from byte array at offset p.
+    function u32(p) {
+        return b[p] + b[p+1]*256 + b[p+2]*65536 + b[p+3]*16777216
+    }
+
+    # Phase 1: Load all bytes into array b[0..n-1].
+    { for (i = 1; i <= NF; i++) b[n++] = $i + 0 }
+
     END {
-        if (n<24 || b[0]!=71||b[1]!=71||b[2]!=85||b[3]!=70) {
-            print fname"|unknown|0|4096|0"; exit
+        # --- Validate GGUF magic bytes ---
+        if (n < 24 || b[0] != 71 || b[1] != 71 || b[2] != 85 || b[3] != 70) {
+            print fname "|unknown|0|4096|0"
+            exit
         }
-        nkv = b[16]+b[17]*256+b[18]*65536+b[19]*16777216
-        name=fname; arch="unknown"; blocks=0; ctx=4096; ftype=0; found=0
-        off=24
-        for (kv=0; kv<nkv && off<n-8; kv++) {
-            klen=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=8
-            if (off+klen>n) break
-            key=""
-            for(i=0;i<klen;i++) key=key sprintf("%c",b[off+i])
-            off+=klen
-            if (off+4>n) break
-            vt=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=4
-            if(vt==8) {
-                if (off+8>n) break
-                vlen=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=8
-                if (off+vlen>n) break
-                val=""
-                for(i=0;i<vlen;i++) val=val sprintf("%c",b[off+i])
-                off+=vlen
-                if(key=="general.architecture") { arch=val; found++ }
-                if(key=="general.name")         { name=val; found++ }
-            } else if(vt==4||vt==5) {
-                if (off+4>n) break
-                val=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=4
-                if(key=="general.file_type")  { ftype=val; found++ }
-                if(key~/block_count/)         { blocks=val; found++ }
-                if(key~/context_length/)      { ctx=val; found++ }
-            } else if(vt==10||vt==11||vt==12) {
-                if (off+8>n) break
-                val=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=8
-                if(key=="general.file_type")  { ftype=val; found++ }
-                if(key~/block_count/)         { blocks=val; found++ }
-                if(key~/context_length/)      { ctx=val; found++ }
+
+        # --- Read metadata KV count (u64, but only lower 32 bits matter) ---
+        nkv = u32(16)
+
+        # --- Defaults (overwritten if keys are found) ---
+        name   = fname
+        arch   = "unknown"
+        blocks = 0
+        ctx    = 4096
+        ftype  = 0
+        found  = 0
+
+        # --- Walk KV pairs ---
+        # Offset starts after the 24-byte header (magic + version + counts).
+        off = 24
+        for (kv = 0; kv < nkv && off < n - 8; kv++) {
+
+            # -- Read key: length (u64, lower 32) then UTF-8 bytes --
+            klen = u32(off); off += 8
+            if (off + klen > n) break
+            key = ""
+            for (i = 0; i < klen; i++)
+                key = key sprintf("%c", b[off + i])
+            off += klen
+
+            # -- Read value type (u32) --
+            if (off + 4 > n) break
+            vt = u32(off); off += 4
+
+            # -- Type 8: STRING (u64 length + UTF-8 bytes) --
+            if (vt == 8) {
+                if (off + 8 > n) break
+                vlen = u32(off); off += 8
+                if (off + vlen > n) break
+                val = ""
+                for (i = 0; i < vlen; i++)
+                    val = val sprintf("%c", b[off + i])
+                off += vlen
+                if (key == "general.architecture") { arch = val; found++ }
+                if (key == "general.name")         { name = val; found++ }
             }
-            else if(vt==6)                    { off+=4 }
-            else if(vt==0||vt==1||vt==7)      { off+=1 }
-            else if(vt==2||vt==3)             { off+=2 }
-            else if(vt==9) {
-                if (off+12>n) break
-                at=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=4
-                al=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=8
-                if(at==0||at==1||at==7) off+=al
-                else if(at==2||at==3) off+=al*2
-                else if(at==4||at==5||at==6) off+=al*4
-                else if(at==10||at==11||at==12) off+=al*8
-                else if(at==8) {
-                    for(a=0;a<al&&off<n;a++){
-                        sl=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216
-                        off+=8+sl
+            # -- Types 4,5: UINT32, INT32 (4 bytes) --
+            else if (vt == 4 || vt == 5) {
+                if (off + 4 > n) break
+                val = u32(off); off += 4
+                if (key == "general.file_type")  { ftype  = val; found++ }
+                if (key ~ /block_count/)         { blocks = val; found++ }
+                if (key ~ /context_length/)      { ctx    = val; found++ }
+            }
+            # -- Types 10,11,12: UINT64, INT64, FLOAT64 (8 bytes) --
+            else if (vt == 10 || vt == 11 || vt == 12) {
+                if (off + 8 > n) break
+                val = u32(off); off += 8
+                if (key == "general.file_type")  { ftype  = val; found++ }
+                if (key ~ /block_count/)         { blocks = val; found++ }
+                if (key ~ /context_length/)      { ctx    = val; found++ }
+            }
+            # -- Type 6: FLOAT32 (4 bytes) --
+            else if (vt == 6) { off += 4 }
+            # -- Types 0,1,7: UINT8, INT8, BOOL (1 byte) --
+            else if (vt == 0 || vt == 1 || vt == 7) { off += 1 }
+            # -- Types 2,3: UINT16, INT16 (2 bytes) --
+            else if (vt == 2 || vt == 3) { off += 2 }
+            # -- Type 9: ARRAY (element_type u32, count u64, then elements) --
+            else if (vt == 9) {
+                if (off + 12 > n) break
+                at = u32(off); off += 4              # element type
+                al = u32(off); off += 8              # array length (lower 32)
+                # Skip array contents based on element type
+                if      (at == 0 || at == 1 || at == 7)          off += al
+                else if (at == 2 || at == 3)                     off += al * 2
+                else if (at == 4 || at == 5 || at == 6)          off += al * 4
+                else if (at == 10 || at == 11 || at == 12)       off += al * 8
+                else if (at == 8) {
+                    # Array of strings: each has u64 len + bytes
+                    for (a = 0; a < al && off < n; a++) {
+                        sl = u32(off)
+                        off += 8 + sl
                     }
-                } else break
-            } else break
-            if(found>=5) break
+                }
+                else break  # unknown element type — bail
+            }
+            else break  # unknown value type — bail
+
+            # Early exit once all 5 target keys are found.
+            if (found >= 5) break
         }
-        print name"|"arch"|"blocks"|"ctx"|"ftype
+
+        print name "|" arch "|" blocks "|" ctx "|" ftype
     }'
 }
 
@@ -3132,7 +3087,8 @@ function __quant_label() {
     esac
     # If unknown/F32(0), try to extract from filename
     if [[ -z "$label" || "$ftype" == "0" ]] && [[ -n "$fname" ]]; then
-        local extracted; extracted=$(echo "$fname" | grep -oiE '(IQ[0-9]_[A-Z]+|Q[0-9]+_K_[SML]|Q[0-9]+_K|Q[0-9]+_[0-9]+|Q[0-9]+|F16|F32|BF16)' | head -1 | tr '[:lower:]' '[:upper:]')
+        local extracted
+        extracted=$(echo "$fname" | grep -oiE '(IQ[0-9]_[A-Z]+|Q[0-9]+_K_[SML]|Q[0-9]+_K|Q[0-9]+_[0-9]+|Q[0-9]+|F16|F32|BF16)' | head -1 | tr '[:lower:]' '[:upper:]')
         [[ -n "$extracted" ]] && label="$extracted"
     fi
     echo "${label:-unknown}"
@@ -3170,6 +3126,10 @@ function model() {
         scan)
             # Scan LLAMA_MODEL_DIR for .gguf files, read metadata, calculate params,
             # and regenerate models.conf. Skips vocab/test files (<500MB).
+            if (( ! __LLAMA_DRIVE_MOUNTED )); then
+                __tac_info "Error" "[Model drive $LLAMA_DRIVE_ROOT is not mounted — run: sudo mount -t drvfs M: $LLAMA_DRIVE_ROOT]" "$C_Error"
+                return 1
+            fi
             __tac_info "Scanning" "$LLAMA_MODEL_DIR" "$C_Highlight"
             local tmpconf="${LLM_REGISTRY}.tmp"
             echo "#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps" > "$tmpconf"
@@ -3177,20 +3137,28 @@ function model() {
             local num=0
             for gguf in "$LLAMA_MODEL_DIR"/*.gguf; do
                 [[ ! -f "$gguf" ]] && continue
-                local fname; fname=$(basename "$gguf")
-                local fbytes; fbytes=$(stat --format=%s "$gguf" 2>/dev/null || stat -f%z "$gguf" 2>/dev/null)
+                local fname
+                fname=$(basename "$gguf")
+                local fbytes
+                fbytes=$(stat --format=%s "$gguf" 2>/dev/null || stat -f%z "$gguf" 2>/dev/null)
                 # Skip small files (vocab, test, corrupt)
                 (( fbytes < 500000000 )) && continue
 
                 __tac_info "Reading" "$fname" "$C_Dim"
-                local meta; meta=$(__gguf_metadata "$gguf")
+                local meta
+                meta=$(__gguf_metadata "$gguf")
                 IFS='|' read -r mname march mblocks mctx mftype <<< "$meta"
 
-                local size_gb; size_gb=$(awk "BEGIN{printf \"%.1f\", $fbytes/1024/1024/1024}")
-                local quant; quant=$(__quant_label "$mftype" "$fname")
-                local gpu_layers; gpu_layers=$(__calc_gpu_layers "$fbytes" "$mblocks" "$march")
-                local ctx; ctx=$(__calc_ctx_size "$fbytes" "$mctx" "$march")
-                local threads; threads=$(__calc_threads "$gpu_layers" "$mblocks")
+                local size_gb
+                size_gb=$(awk "BEGIN{printf \"%.1f\", $fbytes/1024/1024/1024}")
+                local quant
+                quant=$(__quant_label "$mftype" "$fname")
+                local gpu_layers
+                gpu_layers=$(__calc_gpu_layers "$fbytes" "$mblocks" "$march")
+                local ctx
+                ctx=$(__calc_ctx_size "$fbytes" "$mctx" "$march")
+                local threads
+                threads=$(__calc_threads "$gpu_layers" "$mblocks")
 
                 ((num++))
                 # Preserve existing TPS from previous registry if same file
@@ -3214,7 +3182,8 @@ function model() {
 
             # Quant enforcement: archive discouraged models (skip active model)
             if [[ -f "$QUANT_GUIDE" ]]; then
-                local active_num; active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+                local active_num
+                active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
                 local archived=0
                 local to_archive=()
                 while IFS='|' read -r _qnum _qname _qfile _qsize _qarch _qqnt _rest; do
@@ -3277,9 +3246,10 @@ function model() {
             local active_num=""
             [[ -f "$ACTIVE_LLM_FILE" ]] && active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
 
-            printf "\n${C_Dim}  %-4s %-30s %-7s %-8s %-6s %-4s %-5s %-4s %s${C_Reset}\n" \
+            printf "\n${C_Dim}  %-4s %-30s %-7s %-8s %-9s %-4s %-5s %-4s %s${C_Reset}\n" \
                 "#" "MODEL" "SIZE" "QUANT" "ARCH" "GPU" "CTX" "THR" "TPS"
-            printf "${C_Dim}  ──────────────────────────────────────────────────────────────────────────────${C_Reset}\n"
+            local _list_rule; printf -v _list_rule '%*s' $((UIWidth - 4)) ''; _list_rule="${_list_rule// /─}"
+            printf "${C_Dim}  %s${C_Reset}\n" "$_list_rule"
 
             while IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps; do
                 [[ "$num" == "#" || -z "$num" ]] && continue
@@ -3289,23 +3259,15 @@ function model() {
                     marker="▶ "
                     color="$C_Success"
                 fi
-                printf "${color}${marker}%-4s %-30s %-7s %-8s %-6s %-4s %-5s %-4s %s${C_Reset}\n" \
-                    "$num" "${name:0:30}" "$size" "$quant" "$arch" "$gpu_layers" "$ctx" "$threads" "${tps:--}"
+                printf "${color}${marker}%-4s %-30s %-7s %-8s %-9s %-4s %-5s %-4s %s${C_Reset}\n" \
+                    "$num" "${name:0:30}" "$size" "$quant" "${arch:0:9}" "$gpu_layers" "$ctx" "$threads" "${tps:--}"
             done < "$LLM_REGISTRY"
 
-            # Drive space summary (du-based, 30s cache)
-            # Note (I3): `du -sb` walks the entire model directory tree, which can
-            # block for several seconds on large or networked NTFS mounts. The 30s
-            # cache mitigates this, but consider replacing with `df` if latency is
-            # noticeable (du gives accurate per-dir usage; df gives volume-level).
+            # Drive space summary (df-based, instant — no tree walk)
+            # Uses df to get volume-level usage instead of du -sb which walks
+            # the entire directory tree and blocks on drvfs/NTFS mounts.
             local d_used_bytes d_total_bytes d_avail_bytes d_pct_n
-            local _du_cache="$TAC_CACHE_DIR/tac_drive_du"
-            if __cache_fresh "$_du_cache" 30; then
-                d_used_bytes=$(< "$_du_cache")
-            else
-                d_used_bytes=$(du -sb "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk '{print $1}')
-                [[ -n "$d_used_bytes" ]] && echo "$d_used_bytes" > "${_du_cache}.tmp" && mv "${_du_cache}.tmp" "$_du_cache"
-            fi
+            d_used_bytes=$(df -B1 --output=used "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk 'NR==2{print $1+0}')
             d_used_bytes=${d_used_bytes:-0}
             d_total_bytes=$LLAMA_DRIVE_SIZE
             d_avail_bytes=$(( d_total_bytes - d_used_bytes ))
@@ -3316,7 +3278,8 @@ function model() {
             local d_color="$C_Success"
             (( d_pct_n >= 90 )) && d_color="$C_Error"
             (( d_pct_n >= 75 && d_pct_n < 90 )) && d_color="$C_Warning"
-            local d_label; d_label=$(basename "$LLAMA_DRIVE_ROOT")
+            local d_label
+            d_label=$(basename "$LLAMA_DRIVE_ROOT")
             printf "\n${C_Dim}  Drive ${d_label^^}: ${d_color}${d_avail_h}G free${C_Reset}${C_Dim} of ${d_total_h}G (${d_pct_n}%% used)${C_Reset}\n"
 
             printf "\n${C_Dim}  model use N  │  model stop  │  model info N  │  model scan  │  model bench  │  model archive N${C_Reset}\n"
@@ -3324,16 +3287,27 @@ function model() {
 
         use)
             # Load and start model #N with VRAM-optimised layer split and context size.
-            [[ -z "$target" ]] && { __tac_info "Usage" "[model use <number>]" "$C_Error"; return 1; }
-            [[ ! "$target" =~ ^[0-9]+$ ]] && { __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1; }
-            local entry; entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
-            [[ -z "$entry" ]] && { __tac_info "Error" "[Model #$target not in registry — run 'model scan']" "$C_Error"; return 1; }
+            if [[ -z "$target" ]]; then
+                __tac_info "Usage" "[model use <number>]" "$C_Error"; return 1
+            fi
+            if [[ ! "$target" =~ ^[0-9]+$ ]]; then
+                __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1
+            fi
+            local entry
+            entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            if [[ -z "$entry" ]]; then
+                __tac_info "Error" "[Model #$target not in registry — run 'model scan']" "$C_Error"; return 1
+            fi
 
             IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps <<< "$entry"
             local model_path="$LLAMA_MODEL_DIR/$file"
 
-            [[ ! -f "$model_path" ]] && { __tac_info "Error" "[File $file missing from $LLAMA_MODEL_DIR]" "$C_Error"; return 1; }
-            [[ ! -x "$LLAMA_SERVER_BIN" ]] && { __tac_info "Error" "[Server binary not found: $LLAMA_SERVER_BIN]" "$C_Error"; return 1; }
+            if [[ ! -f "$model_path" ]]; then
+                __tac_info "Error" "[File $file missing from $LLAMA_MODEL_DIR]" "$C_Error"; return 1
+            fi
+            if [[ ! -x "$LLAMA_SERVER_BIN" ]]; then
+                __tac_info "Error" "[Server binary not found: $LLAMA_SERVER_BIN]" "$C_Error"; return 1
+            fi
 
             # Stop existing
             pkill -u "$USER" -x llama-server 2>/dev/null
@@ -3429,10 +3403,13 @@ function model() {
                 __tac_info "Warning" "[Could not save state]" "$C_Warning"
             fi
 
-            # Wait for ready (up to 30s with progress dots)
+            # Wait for ready — CPU-only models over drvfs (9p) can take 60-90s
+            # to mmap a 4GB+ file, so use a longer timeout for them.
+            local health_timeout=30
+            (( gpu_layers == 0 )) && health_timeout=90
             local ready=0
             printf '%s' "${C_Dim}Waiting for health endpoint"
-            for _ in {1..30}; do
+            for (( _hw=0; _hw < health_timeout; _hw++ )); do
                 if __test_port "$LLM_PORT" && curl -sf --max-time 3 "http://127.0.0.1:$LLM_PORT/health" >/dev/null; then ready=1; break; fi
                 printf '.'
                 sleep 1
@@ -3462,17 +3439,21 @@ function model() {
         status)
             # Show what model is running (or not) and its TPS if available.
             if pgrep -x llama-server >/dev/null 2>&1 && __test_port "$LLM_PORT"; then
-                local active_num; active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+                local active_num
+                active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
                 if [[ -n "$active_num" && -f "$LLM_REGISTRY" ]]; then
-                    local entry; entry=$(awk -F'|' -v n="$active_num" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+                    local entry
+                    entry=$(awk -F'|' -v n="$active_num" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
                     IFS='|' read -r _n name file size _rest <<< "$entry"
                     __tac_info "Active" "#${active_num} ${name} (${size})" "$C_Success"
                 else
                     __tac_info "Active" "[Running but unknown model]" "$C_Warning"
                 fi
-                local health; health=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+                local health
+                health=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
                 __tac_info "Health" "${health:-OK}" "$C_Success"
-                local tps; tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
+                local tps
+                tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
                 [[ -n "$tps" ]] && __tac_info "Last TPS" "$tps" "$C_Dim"
             else
                 __tac_info "Status" "[OFFLINE]" "$C_Dim"
@@ -3481,10 +3462,17 @@ function model() {
 
         info)
             # Print detailed metadata for model #N from the registry.
-            [[ -z "$target" ]] && { __tac_info "Usage" "[model info <number>]" "$C_Error"; return 1; }
-            [[ ! "$target" =~ ^[0-9]+$ ]] && { __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1; }
-            local entry; entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
-            [[ -z "$entry" ]] && { __tac_info "Error" "[Model #$target not found]" "$C_Error"; return 1; }
+            if [[ -z "$target" ]]; then
+                __tac_info "Usage" "[model info <number>]" "$C_Error"; return 1
+            fi
+            if [[ ! "$target" =~ ^[0-9]+$ ]]; then
+                __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1
+            fi
+            local entry
+            entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            if [[ -z "$entry" ]]; then
+                __tac_info "Error" "[Model #$target not found]" "$C_Error"; return 1
+            fi
             IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps <<< "$entry"
             __tac_info "#" "$num" "$C_Highlight"
             __tac_info "Model" "$name" "$C_Success"
@@ -3504,7 +3492,9 @@ function model() {
             ;;
 
         bench)
-            [[ ! -f "$LLM_REGISTRY" ]] && { __tac_info "Registry" "[Not found — run 'model scan']" "$C_Error"; return 1; }
+            if [[ ! -f "$LLM_REGISTRY" ]]; then
+                __tac_info "Registry" "[Not found — run 'model scan']" "$C_Error"; return 1
+            fi
             __tac_header "MODEL BENCHMARK" "open"
 
             # Save the currently active model to restore after benchmarking
@@ -3521,20 +3511,25 @@ function model() {
             (( ${#b_num[@]} == 0 )) && { __tac_info "Bench" "[No on-disk models]" "$C_Warning"; return 1; }
             printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} model(s)...${C_Reset}"
 
+            local __BENCH_MODE=1
             for i in "${!b_num[@]}"; do
                 printf '%s\n' "${C_Highlight}[$(( i+1 ))/${#b_num[@]}] ${b_name[$i]} (${b_size[$i]})${C_Reset}"
-                model use "${b_num[$i]}" 2>/dev/null
-                sleep 2
-                burn 2>/dev/null
+                rm -f "$LLM_TPS_CACHE"  # Clear stale TPS before each model
+                model use "${b_num[$i]}"
+                if __test_port "$LLM_PORT" && curl -sf --max-time 3 "http://127.0.0.1:$LLM_PORT/health" >/dev/null; then
+                    burn
+                fi
                 local tps="FAIL"; [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")
                 b_tps+=("$tps")
                 model stop 2>/dev/null
                 sleep 1
             done
+            unset __BENCH_MODE
 
             echo ""
             printf "${C_Dim}  %-4s %-30s %-7s %s${C_Reset}\n" "#" "MODEL" "SIZE" "TPS"
-            printf "${C_Dim}  ──────────────────────────────────────────────────${C_Reset}\n"
+            local _bench_rule; printf -v _bench_rule '%*s' $((UIWidth - 4)) ''; _bench_rule="${_bench_rule// /─}"
+            printf "${C_Dim}  %s${C_Reset}\n" "$_bench_rule"
             for i in "${!b_num[@]}"; do
                 printf "  %-4s %-30s %-7s %s\n" "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}"
             done
@@ -3556,24 +3551,35 @@ function model() {
 
         delete)
             # Delete model #N from disk (with confirmation) and renumber the registry.
-            [[ -z "$target" ]] && { __tac_info "Usage" "[model delete <number>]" "$C_Error"; return 1; }
-            [[ ! "$target" =~ ^[0-9]+$ ]] && { __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1; }
-            local entry; entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
-            [[ -z "$entry" ]] && { __tac_info "Error" "[Model #$target not found]" "$C_Error"; return 1; }
+            if [[ -z "$target" ]]; then
+                __tac_info "Usage" "[model delete <number>]" "$C_Error"; return 1
+            fi
+            if [[ ! "$target" =~ ^[0-9]+$ ]]; then
+                __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1
+            fi
+            local entry
+            entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            if [[ -z "$entry" ]]; then
+                __tac_info "Error" "[Model #$target not found]" "$C_Error"; return 1
+            fi
             IFS='|' read -r _n name file _rest <<< "$entry"
             local fpath="$LLAMA_MODEL_DIR/$file"
 
             __tac_info "Delete" "#${target} ${name}" "$C_Warning"
             __tac_info "File" "$fpath" "$C_Dim"
             if [[ -f "$fpath" ]]; then
-                local fsize; fsize=$(du -h "$fpath" | cut -f1)
+                local fsize
+                fsize=$(du -h "$fpath" | cut -f1)
                 __tac_info "Size" "$fsize" "$C_Dim"
             fi
             read -r -p "${C_Warning}Permanently delete this model? [y/N]: ${C_Reset}" confirm
-            [[ "${confirm,,}" != "y" ]] && { __tac_info "Delete" "[CANCELLED]" "$C_Dim"; return 0; }
+            if [[ "${confirm,,}" != "y" ]]; then
+                __tac_info "Delete" "[CANCELLED]" "$C_Dim"; return 0
+            fi
 
             # Stop if it's the active model
-            local active_num; active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+            local active_num
+            active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
             if [[ "$target" == "$active_num" ]]; then
                 model stop
             fi
@@ -3596,6 +3602,10 @@ function model() {
 
         download)
             # Download one or more GGUF models from Hugging Face and auto-scan into registry.
+            if (( ! __LLAMA_DRIVE_MOUNTED )); then
+                __tac_info "Error" "[Model drive $LLAMA_DRIVE_ROOT is not mounted — run: sudo mount -t drvfs M: $LLAMA_DRIVE_ROOT]" "$C_Error"
+                return 1
+            fi
             if [[ $# -eq 0 ]]; then
                 printf '%s\n' "${C_Error}Error:${C_Reset} No models specified."
                 echo ""
@@ -3739,10 +3749,17 @@ function model() {
 
         archive)
             # Move model #N to the archive directory and renumber the registry.
-            [[ -z "$target" ]] && { __tac_info "Usage" "[model archive <number>]" "$C_Error"; return 1; }
-            [[ ! "$target" =~ ^[0-9]+$ ]] && { __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1; }
-            local entry; entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
-            [[ -z "$entry" ]] && { __tac_info "Error" "[Model #$target not found]" "$C_Error"; return 1; }
+            if [[ -z "$target" ]]; then
+                __tac_info "Usage" "[model archive <number>]" "$C_Error"; return 1
+            fi
+            if [[ ! "$target" =~ ^[0-9]+$ ]]; then
+                __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1
+            fi
+            local entry
+            entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            if [[ -z "$entry" ]]; then
+                __tac_info "Error" "[Model #$target not found]" "$C_Error"; return 1
+            fi
             IFS='|' read -r _n name file _rest <<< "$entry"
             local fpath="$LLAMA_MODEL_DIR/$file"
             local archive_dir="$LLAMA_ARCHIVE_DIR"
@@ -3751,10 +3768,13 @@ function model() {
             __tac_info "From" "$fpath" "$C_Dim"
             __tac_info "To" "$archive_dir/$file" "$C_Dim"
             read -r -p "${C_Warning}Archive this model? [y/N]: ${C_Reset}" confirm
-            [[ "${confirm,,}" != "y" ]] && { __tac_info "Archive" "[CANCELLED]" "$C_Dim"; return 0; }
+            if [[ "${confirm,,}" != "y" ]]; then
+                __tac_info "Archive" "[CANCELLED]" "$C_Dim"; return 0
+            fi
 
             # Stop if active
-            local active_num; active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+            local active_num
+            active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
             if [[ "$target" == "$active_num" ]]; then
                 model stop
             fi
@@ -3815,8 +3835,30 @@ function mlogs() {
 # ---------------------------------------------------------------------------
 function burn() {
     __require_llm || return 1
-    [[ -t 1 ]] && command clear
-    __tac_header "HARDWARE BURN-IN STRESS TEST"
+    if [[ -z "${__BENCH_MODE:-}" ]]; then
+        [[ -t 1 ]] && command clear
+        __tac_header "HARDWARE BURN-IN STRESS TEST"
+    fi
+
+    # Wait for the model to finish loading before sending the completion request.
+    # The port may be open (passes __require_llm) but the server returns 503
+    # "Loading model" while mmap-ing large files over drvfs (up to 90s for CPU).
+    local _health
+    _health=$(curl -sf --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+    if [[ "$_health" != *'"ok"'* ]]; then
+        printf '%s' "${C_Dim}Waiting for model to finish loading"
+        for (( _bw=0; _bw < 90; _bw++ )); do
+            _health=$(curl -sf --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+            [[ "$_health" == *'"ok"'* ]] && break
+            printf '.'
+            sleep 1
+        done
+        printf '%s\n' "$C_Reset"
+        if [[ "$_health" != *'"ok"'* ]]; then
+            __tac_info "Status" "Model failed to become healthy — check: tail $LLM_LOG_FILE" "$C_Error"
+            return 1
+        fi
+    fi
 
     printf '%s\n' "${C_Dim}Testing: ~1300 token synthetic physics response...${C_Reset}"
     printf '%s\n' "${C_Highlight}Processing ....${C_Reset}"
@@ -3827,23 +3869,15 @@ function burn() {
     local payload
     payload=$(jq -n --arg p "$prompt" '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')
 
-    local max_retries=5 attempt=0 response="" start_ns end_ns
-    while (( attempt < max_retries )); do
-        start_ns=$(date +%s%N)
-        response=$(curl -s --max-time 120 "$LOCAL_LLM_URL" \
-            -H "Content-Type: application/json" \
-            -d "$payload" 2>/dev/null)
-        end_ns=$(date +%s%N)
-        [[ -n "$response" ]] && break
-        (( attempt++ ))
-        if (( attempt < max_retries )); then
-            printf '%s\n' "${C_Warning}[Waiting]${C_Reset} Model not ready — retry ${attempt}/${max_retries} in 5s..."
-            sleep 5
-        fi
-    done
+    local start_ns end_ns response
+    start_ns=$(date +%s%N)
+    response=$(curl -s --max-time 120 "$LOCAL_LLM_URL" \
+        -H "Content-Type: application/json" \
+        -d "$payload" 2>/dev/null)
+    end_ns=$(date +%s%N)
 
     if [[ -z "$response" ]]; then
-        printf '%s\n' "${C_Error}[API Error]${C_Reset} No response after ${max_retries} attempts — model may not be loaded."
+        printf '%s\n' "${C_Error}[API Error]${C_Reset} No response — model may have crashed during inference."
         return 1
     fi
 
@@ -3873,7 +3907,9 @@ function burn() {
         tps_dec=$(( tps_x10 % 10 ))
     fi
 
-    printf '%s\n' "${C_Dim}Hint: If inference was slow, first run \"wake\" to lock WDDM state.${C_Reset}"
+    if [[ -z "${__BENCH_MODE:-}" ]]; then
+        printf '%s\n' "${C_Dim}Hint: If inference was slow, first run \"wake\" to lock WDDM state.${C_Reset}"
+    fi
     printf '%s\n' "${C_Success}Burn complete: ${tps_int}.${tps_dec} tps (${tokens} tokens in ${elapsed_s}.${elapsed_dec}s)${C_Reset}"
     echo "${tps_int}.${tps_dec} tps" > "${LLM_TPS_CACHE}.tmp" && mv "${LLM_TPS_CACHE}.tmp" "$LLM_TPS_CACHE"
     __save_tps "${tps_int}.${tps_dec}"
@@ -3886,7 +3922,8 @@ function burn() {
 # Uses `fc -ln -2 -2` instead of history parsing for reliability with HISTCONTROL.
 # ---------------------------------------------------------------------------
 function explain() {
-    local last_cmd; last_cmd=$(fc -ln -2 -2 2>/dev/null | sed 's/^\s*//')
+    local last_cmd
+    last_cmd=$(fc -ln -2 -2 2>/dev/null | sed 's/^\s*//')
     if [[ -z "$last_cmd" ]]; then
         __tac_line "Explain" "[NO PREVIOUS COMMAND FOUND]" "$C_Warning"
         return 1
@@ -3934,7 +3971,8 @@ function __llm_sse_core() {
     local payload="$1"
     __LAST_LLM_RESPONSE=""
 
-    local start_ns; start_ns=$(date +%s%N)
+    local start_ns
+    start_ns=$(date +%s%N)
     local chunk_count=0
     local server_tokens=0
     local response_text=""
@@ -3959,7 +3997,8 @@ function __llm_sse_core() {
         -H "Content-Type: application/json" \
         -d "$payload" 2>/dev/null | tr -d '\r')
 
-    local end_ns; end_ns=$(date +%s%N)
+    local end_ns
+    end_ns=$(date +%s%N)
     local elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
     local tokens=$server_tokens
     if (( tokens == 0 )); then tokens=$chunk_count; fi
@@ -4100,7 +4139,8 @@ function chat-context() {
     __require_llm || return 1
     # Cap file content to stay within context window (configurable via env)
     local max_chars="${CHAT_CONTEXT_MAX:-16000}"
-    local content; content=$(head -c "$max_chars" "$file")
+    local content
+    content=$(head -c "$max_chars" "$file")
     local prompt="Here is the content of '$file':\n\n\`\`\`\n${content}\n\`\`\`\n\n${question:-Explain this file.}"
     __llm_stream "$prompt"
 }
@@ -4111,7 +4151,8 @@ function chat-context() {
 # ---------------------------------------------------------------------------
 function chat-pipe() {
     __require_llm || return 1
-    local ctx; ctx=$(cat)
+    local ctx
+    ctx=$(cat)
     if [[ -z "$ctx" ]]; then
         __tac_info "stdin" "[EMPTY — pipe some content]" "$C_Error"
         return 1
@@ -4138,18 +4179,24 @@ function tactical_dashboard() {
     __tac_header "TACTICAL DASHBOARD" "open" "$TACTICAL_PROFILE_VERSION"
 
     # --- System metrics block ---
-    local systime; systime=$(date +"%A %H:%M %d/%m/%Y")
-    local uptime; uptime=$(__get_uptime)
-    local batt; batt=$(__get_battery)
-    local host_raw; host_raw=$(__get_host_metrics)
+    local systime
+    systime=$(date +"%A %H:%M %d/%m/%Y")
+    local uptime
+    uptime=$(__get_uptime)
+    local batt
+    batt=$(__get_battery)
+    local host_raw
+    host_raw=$(__get_host_metrics)
     local cpu gpu0 gpu1
     IFS='|' read -r cpu gpu0 gpu1 <<< "$host_raw"
     # Ensure numeric values for arithmetic (guard against stale/malformed cache)
     [[ "$cpu"  =~ ^[0-9]+$ ]] || cpu=0
     [[ "$gpu0" =~ ^[0-9]+$ ]] || gpu0=0
     [[ "$gpu1" =~ ^[0-9]+$ ]] || gpu1=0
-    local disk; disk=$(__get_disk)
-    local _mem_raw; _mem_raw=$(free -m | awk 'NR==2{printf "%.2f / %.2f Gb|%d", $3/1024, $2/1024, $3*100/$2}')
+    local disk
+    disk=$(__get_disk)
+    local _mem_raw
+    _mem_raw=$(free -m | awk 'NR==2{printf "%.2f / %.2f Gb|%d", $3/1024, $2/1024, $3*100/$2}')
     local mem="${_mem_raw%|*}"
     local mem_pct="${_mem_raw##*|}"
 
@@ -4168,7 +4215,8 @@ function tactical_dashboard() {
     fi
     __fRow "BATTERY" "$batt" "$batt_color"
 
-    local gpu_raw; gpu_raw=$(__get_gpu)
+    local gpu_raw
+    gpu_raw=$(__get_gpu)
 
     # CPU/GPU colour: >90% red, >75% yellow, else green
     local cpu_gpu_color
@@ -4203,17 +4251,21 @@ function tactical_dashboard() {
 
     if __test_port "$LLM_PORT"; then
         local act_mod="ONLINE"
-        local _anum; _anum=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+        local _anum
+        _anum=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
         if [[ -n "$_anum" && -f "$LLM_REGISTRY" ]]; then
-            local _entry; _entry=$(awk -F'|' -v n="$_anum" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            local _entry
+            _entry=$(awk -F'|' -v n="$_anum" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
             IFS='|' read -r _ _aname _ <<< "$_entry"
             [[ -n "$_aname" ]] && act_mod="#${_anum} ${_aname}"
         fi
-        local tps; tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
+        local tps
+        tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
         __fRow "LOCAL LLM" "ACTIVE $act_mod | ${tps:-$LAST_TPS}" "$C_Success"
 
         # LLM context utilisation via async-cached /slots query
-        local slots_json; slots_json=$(__get_llm_slots)
+        local slots_json
+        slots_json=$(__get_llm_slots)
         if [[ -n "$slots_json" ]]; then
             local ctx_used ctx_total
             ctx_used=$(printf '%s' "$slots_json" | jq -r '.[0].n_past // 0' 2>/dev/null)
@@ -4238,7 +4290,8 @@ function tactical_dashboard() {
     local oc_active=0
     __test_port "$OC_PORT" && { oc_stat="ONLINE"; oc_active=1; }
 
-    local metrics; metrics=$(__get_oc_metrics)
+    local metrics
+    metrics=$(__get_oc_metrics)
     local m_sess m_ver
     IFS='|' read -r m_sess m_ver <<< "$metrics"
     m_sess=${m_sess%$'\r'}; m_ver=${m_ver%$'\r'}
@@ -4255,7 +4308,8 @@ function tactical_dashboard() {
     fi
     __fRow "SESSIONS" "$m_sess Active" "$sess_color"
 
-    local tokens; tokens=$(__get_tokens)
+    local tokens
+    tokens=$(__get_tokens)
     if [[ "$tokens" == "Querying..."* || "$tokens" == "N/A"* ]]; then
         __fRow "CONTEXT USED" "No data" "$C_Dim"
     else
@@ -4278,7 +4332,8 @@ function tactical_dashboard() {
         __fRow "CLOAKING" "ACTIVE ($(basename "$VIRTUAL_ENV"))" "$C_Success"
     fi
 
-    local gitStat; gitStat=$(__get_git)
+    local gitStat
+    gitStat=$(__get_git)
     if [[ -n "$gitStat" ]]; then
         printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
         local gBranch gSec
@@ -4323,7 +4378,7 @@ function bashrc_diagnose() {
     echo "Bash version    : ${BASH_VERSION}"
     echo "Shell           : $SHELL"
     echo "Term            : ${TERM:-unset}"
-    echo "Interactive     : $(case $- in *i*) echo yes;; *) echo no;; esac)"
+    echo "Interactive     : $(case $- in (*i*) echo yes;; (*) echo no;; esac)"
     echo "Login shell     : $(shopt -q login_shell && echo yes || echo no)"
     echo ""
     echo "=== Key Paths ==="

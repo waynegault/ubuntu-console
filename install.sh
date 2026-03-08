@@ -2,6 +2,9 @@
 # install.sh — Set up the Tactical Console Profile on a new machine.
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
+# AI INSTRUCTION: Increment version on significant changes.
+# shellcheck disable=SC2034
+VERSION="1.0"
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"

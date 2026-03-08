@@ -4,6 +4,9 @@
 # Runs bash -n syntax checks and shellcheck on all shell files.
 # Usage: ./scripts/lint.sh
 # ==============================================================================
+# AI INSTRUCTION: Increment version on significant changes.
+# shellcheck disable=SC2034
+VERSION="1.0"
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,6 +15,7 @@ rc=0
 echo "=== Bash Syntax Check (bash -n) ==="
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
+         "$REPO_ROOT"/scripts/*.sh \
          "$REPO_ROOT"/bin/*.sh; do
     if bash -n "$f" 2>&1; then
         echo "  PASS  ${f#"$REPO_ROOT"/}"
@@ -30,6 +34,7 @@ fi
 
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
+         "$REPO_ROOT"/scripts/*.sh \
          "$REPO_ROOT"/bin/*.sh; do
     local_rc=0
     shellcheck -s bash "$f" 2>&1 || local_rc=$?
@@ -45,6 +50,7 @@ echo ""
 echo "=== Unicode Safety (non-ASCII in executable code) ==="
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
+         "$REPO_ROOT"/scripts/*.sh \
          "$REPO_ROOT"/bin/*.sh; do
     # Find non-ASCII on non-comment lines (excludes lines starting with #)
     hits=$(grep -Pn '[^\x00-\x7F]' "$f" 2>/dev/null | grep -v '^\s*#\|^[0-9]*:\s*#' || true)

@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # llama-watchdog.sh — Check llama-server health; restart from active profile if down.
 # Called by systemd user timer. Reads /dev/shm state to know which model to restart.
+# AI: Do not add streaming, partial-offload, or auto-download logic to this script.
+# AI INSTRUCTION: Increment version on significant changes.
+# shellcheck disable=SC2034
+VERSION="1.1"
 set -euo pipefail
 
-# Prevent concurrent runs (timer could fire while a slow restart is in progress)
-exec 200>/tmp/llama-watchdog.lock
+# Prevent concurrent runs (timer could fire while a slow restart is in progress).
+# Lock in /dev/shm (tmpfs) — cleared on reboot, no stale lock persistence.
+exec 200>/dev/shm/llama-watchdog.lock
 flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance running — skipping"; exit 0; }
 
 LLM_PORT="${LLM_PORT:-8081}"
@@ -80,8 +85,10 @@ fi
 
 nohup "${cmd[@]}" >> "$LLM_LOG_FILE" 2>&1 &
 
-# Wait for health
-for _ in {1..30}; do
+# Wait for health — CPU-only models over drvfs (9p) can take 60-90s to mmap
+health_timeout=30
+(( use_gpu == 0 )) && health_timeout=90
+for (( _hw=0; _hw < health_timeout; _hw++ )); do
     if curl -sf --max-time 2 "http://127.0.0.1:${LLM_PORT}/health" >/dev/null 2>&1; then
         log "Restart successful: $name ($size)"
         exit 0
@@ -89,5 +96,5 @@ for _ in {1..30}; do
     sleep 1
 done
 
-log "Restart failed: server did not become healthy in 30s"
+log "Restart failed: server did not become healthy in ${health_timeout}s"
 exit 1
