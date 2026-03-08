@@ -1,11 +1,11 @@
-# Tactical Console Profile v2.19 — Comprehensive Reference
+# Tactical Console Profile v2.21 — Comprehensive Reference
 
 > **File:** `~/ubuntu-console/tactical-console.bashrc` (sourced via thin `~/.bashrc` loader)
 > **Repo:** [`waynegault/ubuntu-console`](https://github.com/waynegault/ubuntu-console)
 > **Environment:** WSL2 Ubuntu 24.04 on Windows 11 Pro
-> **Hardware:** Intel i9 / Intel Iris Xe (GPU0) / RTX 3050 Ti 4 GB VRAM (GPU1) / Laptop
+> **Hardware:** Intel i9 / Intel Iris Xe (iGPU) / RTX 3050 Ti 4 GB VRAM (CUDA) / Laptop
 > **Author:** Wayne
-> **Last Major Audit:** March 2026 (v2.09–v2.12: four audit rounds; v2.17–v2.19: 71-item audit + file layout restructuring)
+> **Last Major Audit:** March 2026 (v2.09–v2.12: four audit rounds; v2.17–v2.21: 71-item audit + GPU optimisation + quant enforcement)
 
 ---
 
@@ -29,9 +29,9 @@
 The **Tactical Console Profile** is a monolithic Bash environment that turns a
 WSL2 Ubuntu shell into a unified command-and-control console. It manages:
 
-- **System telemetry** — CPU, dual GPU (Intel Iris + NVIDIA RTX via
-  `typeperf.exe`), memory, disk, battery, all rendered in a 78-column
-  box-drawn dashboard.
+- **System telemetry** — CPU, dual GPU (Intel Iris iGPU via `typeperf.exe` +
+  NVIDIA RTX CUDA via `nvidia-smi`), memory, disk, battery, all rendered in
+  a 78-column box-drawn dashboard.
 - **Local LLM inference** — Full lifecycle management of `llama-server`
   (llama.cpp) with model registry, GPU/CPU offloading, and streaming chat.
 - **OpenClaw agent framework** — Gateway lifecycle, agent orchestration,
@@ -49,7 +49,7 @@ WSL2 Ubuntu shell into a unified command-and-control console. It manages:
 | **Zero Dependencies Beyond Coreutils** | All LLM streaming is pure `bash + curl + jq`. No Python, Ruby, or Node is used in the shell layer itself. |
 | **Instant UI** | Telemetry uses `/dev/shm` caching with background subshell refresh. The dashboard renders stale-but-instant data while new data fetches asynchronously. |
 | **Security First** | LLM binds to `127.0.0.1` only. API key cache is `chmod 600` on `tmpfs`. Git diff is blocked from cloud LLM endpoints. ERR trap logs all failures for post-mortem. |
-| **Hardware Awareness** | GPU layer count, CPU thread allocation, and persistence mode are all tuned to the specific RTX 3050 Ti 4 GB VRAM ceiling. |
+| **Hardware Awareness** | `-ngl 999` auto-offloads maximum GPU layers at runtime, CPU threads scale dynamically via `nproc`, and `--flash-attn` + `--prio 2` are tuned for the RTX 3050 Ti 4 GB VRAM ceiling. |
 
 ---
 
@@ -79,11 +79,11 @@ Type `m` at any prompt to render the full-screen Tactical Dashboard:
 ║  SYSTEM TIME  :: Saturday 03:04 07/03/2026                                   ║
 ║  UPTIME       :: 0d 0h 24m                                                   ║
 ║  BATTERY      :: A/C POWERED                                                 ║
-║  CPU / GPU    :: CPU 3% | GPU0 2% | GPU1 0%                                  ║
+║  CPU / GPU    :: CPU 3% | iGPU 2% | CUDA 0%                                 ║
 ║  MEMORY       :: 2.77 / 47.04 Gb                                             ║
 ║  STORAGE      :: C: 995 Gb free | WSL: 877 Gb free                           ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
-║  GPU COMPUTE  :: RTX 3050 Ti | 0% Load | 62°C | 3897 / 4096 Mb               ║
+║  GPU          :: RTX 3050 Ti | 0% Load | 62°C | 3897 / 4096 Mb               ║
 ║  LOCAL LLM    :: ACTIVE Phi-4-mini-Q6_K | 14.2 t/s                           ║
 ║  WSL          :: ACTIVE  Ubuntu-24.04  (6.6.87.2-microsoft-standard-WSL2)    ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -139,7 +139,7 @@ cooldown. The cooldown uses Unix timestamps and shows remaining time
 | `reload` | `exec bash` — full profile reload |
 | `cpwd` | Copy current directory path to Windows clipboard |
 | `cl` | Quick cleanup of `python-*.exe` and `.pytest_cache` in `$PWD` |
-| `sysinfo` | One-line: `CPU: 12% RAM: 5.2/15.4 Gb Disk: 142 Gb GPU: 3%/47°C` |
+| `sysinfo` | One-line: `CPU: 12% RAM: 5.2/15.4 Gb Disk: 142 Gb iGPU: 3%/47°C CUDA: 12%` |
 | `get-ip` | Show WSL IP and external WAN IP |
 | `logtrim` | Trim any log file > 1 MB to its last 1000 lines |
 | `oedit` | Open `tactical-console.bashrc` in VS Code |
@@ -330,7 +330,7 @@ bridged API keys.
 | `~/.config/systemd/user/llama-watchdog.service` | Watchdog systemd unit |
 | `~/.config/systemd/user/llama-watchdog.timer` | Watchdog timer |
 | `/dev/shm/tac_win_api_keys` | Bridged API key cache (tmpfs) |
-| `~/.local/bin/tac_hostmetrics.sh` | Windows host CPU + dual GPU query via `typeperf.exe` |
+| `~/.local/bin/tac_hostmetrics.sh` | Host CPU + iGPU (typeperf 3D) + CUDA (nvidia-smi compute) |
 | `~/.local/bin/llama-watchdog.sh` | Watchdog: auto-restart llama-server |
 
 ---
@@ -364,33 +364,51 @@ column is populated by `model bench`.
 
 ### Hardware Tuning
 
-| Parameter | Default | Rationale |
+| Parameter | Value | Rationale |
 |---|---|---|
-| `LLAMA_GPU_LAYERS` | 33 | Full offload for 3–8B parameter models on 4 GB VRAM (per-model override via `models.conf` field 6) |
-| `LLAMA_CPU_THREADS` | 12 | Leaves headroom for Windows/WSL overhead on the i9 (per-model override via field 8) |
-| `LLAMA_CTX_SIZE` | 4096 | Default context window (per-model override via field 7) |
-| `--batch-size` | 512 | Prompt processing batch size for throughput |
-| `--ubatch-size` | 512 | Micro-batch size for continuous batching |
-| `--cont-batching` | on | Enables continuous batching for concurrent requests |
-| `--flash-attn` | GPU only | Flash Attention for reduced VRAM usage on GPU models |
-| `--mlock` | on | Locks model in memory to prevent swapping |
-| Bind address | `127.0.0.1` | Prevents LAN exposure — loopback only |
-| Health poll | 30 × 1s | Waits up to 30 seconds for model boot |
+| `-ngl 999` | max offload | Tells llama.cpp to offload the maximum layers that fit in VRAM at runtime. More accurate than pre-calculating a fixed count, since available VRAM varies at launch time. |
+| `-t` (threads) | dynamic via `nproc` | CPU-only: 80%, partial offload: 70%, full GPU: 50% of available threads. Scales automatically to the host CPU. |
+| `--batch-size` | 4096 (GPU) / 512 (CPU) | Larger batches improve prompt eval speed when GPU is active. CPU-only uses smaller batches to avoid memory pressure. |
+| `--ubatch-size` | 1024 (GPU) / 512 (CPU) | Micro-batch size for continuous batching. |
+| `--flash-attn on` | GPU only | Reduces VRAM bandwidth pressure, critical for 4 GB GPUs. Improves throughput without quality loss. |
+| `--prio 2` | always | Elevates llama-server process priority on hybrid CPU systems. |
+| `--mlock` | always | Locks model weights in memory to prevent swapping. |
+| `--cont-batching` | always | Enables continuous batching for concurrent requests. |
+| `--jinja` | always | Enables Jinja2 chat template processing from GGUF metadata (Qwen3, Phi-4, Gemma3). |
+| Bind address | `127.0.0.1` | Prevents LAN exposure — loopback only. |
+| Health poll | 30 × 1s | Waits up to 30 seconds for model boot. |
+
+### Quantization Guide
+
+The file `~/ubuntu-console/quant-guide.conf` is a manually editable
+configuration that rates GGUF quantizations for the RTX 3050 Ti (4 GB VRAM):
+
+| Rating | Quants | Meaning |
+|---|---|---|
+| **recommended** | Q4_K_M, Q4_K_S | Best balance of speed, quality, and GPU fit. |
+| **acceptable** | Q3_K_M/L/S, Q5_K_M/S, Q2_K, IQ variants | Works but may reduce GPU offload or be slower. |
+| **discouraged** | Q6_K, Q8_0, F16, F32, BF16 | Too large for 4 GB VRAM — most layers stay on CPU. |
+
+**Integration points:**
+- `model download` reads the guide and **warns** (does not block) when downloading a discouraged quant. The user can override interactively.
+- `model scan` reads the guide and **auto-archives** discouraged quants from `/mnt/m/active/` to `/mnt/m/archive/`, skipping the currently running model. The registry is renumbered after archival.
+
+Edit `quant-guide.conf` directly to adjust ratings as hardware or advice changes.
 
 ### Model Lifecycle Commands
 
 | Command | What It Does |
 |---|---|
-| `model scan` | Scan `$LLM_HOME` for GGUF files, read metadata, auto-calculate optimal gpu_layers/ctx/threads, and rebuild the registry. |
+| `model scan` | Scan `$LLAMA_MODEL_DIR` for GGUF files, read metadata, auto-calculate optimal gpu_layers/ctx/threads, rebuild registry, and auto-archive discouraged quants via `quant-guide.conf`. |
 | `model list` | Show numbered model registry with name, file, size, arch, quant, layers, TPS. Active model marked with ▶. |
-| `model use N` | Start model #N with calculated GPU/ctx/thread settings. Kills any existing instance first. GPU models get `--flash-attn`, all models get `--batch-size 512`, `--ubatch-size 512`, `--cont-batching`, `--mlock`. Polls `/health` for up to 30s. |
+| `model use N` | Start model #N with `-ngl 999`, dynamic threads, `--flash-attn on`, `--prio 2`, `--mlock`, `--jinja`. Batch sizes: 4096/1024 for GPU, 512/512 for CPU-only. Reports actual GPU offload count after boot. Polls `/health` for up to 30s. |
 | `model stop` | `pkill` the llama-server process, remove state file |
 | `model status` | Show currently running model details |
 | `model info N` | Display full details for model #N including on-disk status |
 | `model bench` | Benchmark all on-disk models: starts each, runs burn-in, records TPS. Results persist to `~/.llm/bench_*.tsv`. |
 | `model delete N` | Permanently delete model #N from disk and deregister |
 | `model archive N` | Move model #N to `/mnt/m/archive/` and deregister |
-| `model download` | Download GGUF models from Hugging Face Hub (repo:file format) |
+| `model download` | Download GGUF models from Hugging Face Hub (`repo:file` format). Checks `quant-guide.conf` and warns on discouraged quants. Validates disk space before downloading. |
 | `serve N` | Convenience alias for `model use N` |
 | `halt` | Convenience alias for `model stop` |
 | `wake` | Lock GPU persistence mode (`nvidia-smi -pm 1`) to prevent WDDM sleep |
@@ -398,15 +416,12 @@ column is populated by `model bench`.
 
 ### State File
 
-When `model use N` starts a model, the active state is written atomically
-(`.tmp` → `mv`) to `/dev/shm/active_llm` as:
+When `model use N` starts a model, the **model number** (integer) is written
+atomically (`.tmp` → `mv`) to `/dev/shm/active_llm`. The dashboard and
+watchdog look up the full registry entry by this number.
 
-```
-name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps
-```
-
-This is read by the dashboard (to show the active model name) and by
-`oc-local-llm` (to configure the OpenClaw provider with the real model name).
+After boot, the actual GPU layer offload count is extracted from the
+llama-server log and displayed (e.g., `GPU Offload: [offloading 24 layers to GPU]`).
 
 ### Chat & Inference Commands
 
@@ -457,11 +472,13 @@ displayed in a box-drawn summary table.
 | Path | Purpose |
 |---|---|
 | `~/llama.cpp/` | llama.cpp installation root (`$LLAMA_ROOT`) |
-| `~/llama.cpp/models/` | GGUF model files (`$LLAMA_MODEL_DIR`) |
+| `/mnt/m/active/` | Active GGUF model files (`$LLAMA_MODEL_DIR`) |
+| `/mnt/m/archive/` | Archived/discouraged models (`$LLAMA_ARCHIVE_DIR`) |
 | `~/llama.cpp/build/bin/llama-server` | Server binary (`$LLAMA_SERVER_BIN`) |
 | `~/.llm/models.conf` | Model registry — 11-field format (`$LLM_REGISTRY`) |
 | `~/.llm/bench_*.tsv` | Benchmark history from `model bench` |
-| `/dev/shm/active_llm` | Active model state file |
+| `~/ubuntu-console/quant-guide.conf` | Quantization priority ratings (`$QUANT_GUIDE`) |
+| `/dev/shm/active_llm` | Active model number (integer) |
 | `/dev/shm/llama-server.log` | Server stdout/stderr log |
 | `/dev/shm/last_tps` | Last measured tokens/sec |
 | `/dev/shm/tac_llm_slots` | Async-cached `/slots` endpoint data (5s TTL) |
@@ -578,7 +595,7 @@ Cache TTLs per metric:
 
 | Metric | TTL | Rationale |
 |---|---|---|
-| Host Metrics (CPU + GPU0 + GPU1) | 10s | Uses `typeperf.exe` via `tac_hostmetrics.sh` (~4s) |
+| Host Metrics (CPU + iGPU + CUDA) | 10s | iGPU from `typeperf.exe` 3D engine, CUDA from `nvidia-smi` compute engine |
 | GPU (NVIDIA detail) | 10s | nvidia-smi is slow (~1.2s) |
 | Battery | 120s | Changes slowly |
 | Context Used | 30s | Scans `agents/*/sessions/sessions.json` for token usage via `jq` |
@@ -821,8 +838,8 @@ Files are numbered `00–12` to enforce source order. The dependency graph
 | `grep` / `awk` / `sed` | Telemetry parsing, text processing | Pre-installed |
 | `find` | Token scanning, temp cleanup, session counting | Pre-installed |
 | `systemctl` / `journalctl` | OpenClaw gateway lifecycle, logs | Pre-installed (systemd) |
-| `typeperf.exe` | Host CPU + dual GPU telemetry (`tac_hostmetrics.sh`) | Windows built-in (WSL interop) |
-| `nvidia-smi` | GPU detail telemetry (NVIDIA only) | WSL NVIDIA driver (`/usr/lib/wsl/lib/nvidia-smi`) |
+| `typeperf.exe` | Host CPU + iGPU (Intel Iris 3D engine) telemetry | Windows built-in (WSL interop) |
+| `nvidia-smi` | CUDA/compute GPU telemetry (NVIDIA RTX) — captures LLM/ML workloads that typeperf's 3D engine misses | WSL NVIDIA driver (`/usr/lib/wsl/lib/nvidia-smi`) |
 | `git` | Deployment, commit, sec status | `sudo apt install git` |
 | `rsync` | Deploy sync | `sudo apt install rsync` |
 | `zip` / `unzip` | `oc-backup` / `oc-restore` | `sudo apt install zip unzip` |
@@ -936,12 +953,16 @@ that sources it.
 ```
 ~/ubuntu-console/
 ├── tactical-console.bashrc    # Main profile (sourced by ~/.bashrc thin loader)
+├── quant-guide.conf           # Quantization priority ratings (editable)
 ├── README.md                  # This file
+├── inspection.md              # Audit checklist
 ├── .gitignore
 ├── install.sh                 # Installer for new machines
 ├── bin/
-│   ├── llama-watchdog.sh      # Watchdog health-check script
-│   └── tac_hostmetrics.sh     # Windows host CPU + dual GPU via typeperf.exe
+│   ├── llama-watchdog.sh      # Watchdog: auto-restart with -ngl 999, --prio 2
+│   └── tac_hostmetrics.sh     # Host CPU + iGPU (typeperf) + CUDA (nvidia-smi)
+├── scripts/
+│   └── lint.sh                # ShellCheck + bash -n linter for all scripts
 └── systemd/
     ├── llama-watchdog.service # systemd unit for watchdog
     └── llama-watchdog.timer   # systemd timer (runs every 60s)
@@ -982,4 +1003,24 @@ git add -A && git commit -m "description" && git push
 
 ---
 
-**Tactical Console Profile v2.19 :: WSL2 Ubuntu 24.04 :: Designed for Determinism**
+### GPU Utilisation: CUDA vs Task Manager
+
+Windows Task Manager defaults to showing the **3D** engine for GPU utilisation.
+CUDA workloads (what llama.cpp uses) run on a different engine — **Compute_0**
+or **CUDA**. If Task Manager shows 0% GPU while the LLM is running, change
+the graph label from "3D" to "CUDA" or "Compute_0".
+
+The Tactical Console avoids this problem entirely:
+- **iGPU** (Intel Iris Xe) is read from `typeperf.exe` (3D engine — correct
+  for integrated graphics).
+- **CUDA** (NVIDIA RTX) is read from `nvidia-smi --query-gpu=utilization.gpu`,
+  which reports the **compute** engine directly. This is the real LLM
+  utilisation metric.
+
+Even when measured correctly, LLM inference shows a GPU → CPU → GPU → CPU
+bursty pattern (autoregressive sampling). This is normal — not a sign of
+misconfiguration. High VRAM usage with bursty GPU utilisation is expected.
+
+---
+
+**Tactical Console Profile v2.21 :: WSL2 Ubuntu 24.04 :: Designed for Determinism**

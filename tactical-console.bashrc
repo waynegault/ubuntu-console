@@ -74,7 +74,7 @@ export TACTICAL_PROFILE_VERSION="2.21"
 #        running model. Registry renumbered after archival. Dashboard: GPU0→iGPU
 #        (Intel Iris Xe / typeperf 3D), GPU1→CUDA (NVIDIA / nvidia-smi compute)
 #        to clarify that LLM utilisation reads from CUDA engine, not Task Manager
-#        3D. GPU COMPUTE row labelled "(nvidia-smi)" for source clarity.
+#        3D. GPU detail row label simplified to "GPU".
 #        __calc_threads: dynamic via nproc (80% CPU-only, 70% partial, 50% full
 #        offload) replaces hardcoded 16/14/8. --prio 2 added to model use and
 #        watchdog for higher process priority on hybrid CPU systems.
@@ -4187,7 +4187,7 @@ function tactical_dashboard() {
         g_util_n=${g_util_n%\%}  # Strip trailing % for numeric comparison
         gpu_color=$(__threshold_color "$g_util_n")
     fi
-    __fRow "GPU (nvidia-smi)" "$gpu_display" "$gpu_color"
+    __fRow "GPU" "$gpu_display" "$gpu_color"
 
     if __test_port "$LLM_PORT"; then
         local act_mod="ONLINE"
