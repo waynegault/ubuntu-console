@@ -1034,12 +1034,11 @@ function __get_host_metrics() {
         __TAC_BG_PIDS+=("$!")
     fi
     # Return stale cache data while background refresh runs.
-    # Use "–|–|–" sentinel (not "0|0|0") so the dashboard can distinguish
-    # "metrics not yet available" from "genuinely zero utilisation".
+    # Fall back to zeros when cache doesn't exist yet (first boot).
     if [[ -f "$cache" ]]; then
         cat "$cache"
     else
-        echo "–|–|–"
+        echo "0|0|0"
     fi
 }
 
@@ -1538,7 +1537,10 @@ function sysinfo() {
     local host_raw; host_raw=$(__get_host_metrics)
     local cpu gpu0 gpu1
     IFS='|' read -r cpu gpu0 gpu1 <<< "$host_raw"
-    cpu=${cpu:-0}; gpu0=${gpu0:-0}; gpu1=${gpu1:-0}
+    # Ensure numeric values for arithmetic (guard against stale/malformed cache)
+    [[ "$cpu"  =~ ^[0-9]+$ ]] || cpu=0
+    [[ "$gpu0" =~ ^[0-9]+$ ]] || gpu0=0
+    [[ "$gpu1" =~ ^[0-9]+$ ]] || gpu1=0
     local mem_used mem_total mem_pct
     read -r mem_used mem_total mem_pct <<< "$(free -m | awk 'NR==2{printf "%.1f %.1f %d", $3/1024, $2/1024, $3*100/$2}')"
     local disk; disk=$(df -h / | awk 'NR==2{print $4}' | sed 's/\([0-9.]\)G/\1 Gb/;s/\([0-9.]\)M/\1 Mb/')
@@ -3866,7 +3868,10 @@ function tactical_dashboard() {
     local host_raw; host_raw=$(__get_host_metrics)
     local cpu gpu0 gpu1
     IFS='|' read -r cpu gpu0 gpu1 <<< "$host_raw"
-    cpu=${cpu:-0}; gpu0=${gpu0:-0}; gpu1=${gpu1:-0}
+    # Ensure numeric values for arithmetic (guard against stale/malformed cache)
+    [[ "$cpu"  =~ ^[0-9]+$ ]] || cpu=0
+    [[ "$gpu0" =~ ^[0-9]+$ ]] || gpu0=0
+    [[ "$gpu1" =~ ^[0-9]+$ ]] || gpu1=0
     local disk; disk=$(__get_disk)
     local _mem_raw; _mem_raw=$(free -m | awk 'NR==2{printf "%.2f / %.2f Gb|%d", $3/1024, $2/1024, $3*100/$2}')
     local mem="${_mem_raw%|*}"
