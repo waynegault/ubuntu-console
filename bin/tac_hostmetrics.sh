@@ -5,6 +5,7 @@
 # GPU1 = NVIDIA GeForce RTX (via nvidia-smi — captures CUDA/compute workloads)
 # Requires: typeperf.exe (ships with Windows), gawk, nvidia-smi (optional)
 # Typical runtime: ~5s from WSL
+set -euo pipefail
 
 raw=$(typeperf.exe "\Processor(_Total)\% Processor Time" \
       "\GPU Engine(*engtype_3D)\Utilization Percentage" \

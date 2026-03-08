@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # install.sh — Set up the Tactical Console Profile on a new machine.
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.

@@ -65,9 +65,34 @@ esac
 # @depends: none
 #
 # AI INSTRUCTION: Increment version on significant changes.
-export TACTICAL_PROFILE_VERSION="2.19"
+export TACTICAL_PROFILE_VERSION="2.21"
 
 # CHANGELOG:
+# 2.21 (2026-03-08) — Quant enforcement, dashboard clarity, thread tuning.
+#        model scan: reads quant-guide.conf and auto-archives discouraged quants
+#        (Q6_K, Q8_0, F16, etc.) from active/ to archive/ — skips currently
+#        running model. Registry renumbered after archival. Dashboard: GPU0→iGPU
+#        (Intel Iris Xe / typeperf 3D), GPU1→CUDA (NVIDIA / nvidia-smi compute)
+#        to clarify that LLM utilisation reads from CUDA engine, not Task Manager
+#        3D. GPU COMPUTE row labelled "(nvidia-smi)" for source clarity.
+#        __calc_threads: dynamic via nproc (80% CPU-only, 70% partial, 50% full
+#        offload) replaces hardcoded 16/14/8. --prio 2 added to model use and
+#        watchdog for higher process priority on hybrid CPU systems.
+# 2.20 (2026-03-08) — GPU optimisation + audit fix implementation.
+#        GPU: -ngl 999 (max offload) replaces fixed gpu_layers in model use and
+#        watchdog. Batch size tuning: -b 4096/-ub 1024 for GPU models, -b 512
+#        for CPU-only. --flash-attn on for all GPU launches (reduces VRAM
+#        bandwidth pressure on 4GB cards). __calc_gpu_layers returns 999/0
+#        instead of fixed layer count. Actual offload count shown from server
+#        log after boot. Quantization guide: ~/ubuntu-console/quant-guide.conf
+#        with rating system (recommended/acceptable/discouraged); model download
+#        warns on discouraged quants (Q6_K, Q8_0, F16). Watchdog: fixed stale
+#        active_llm_file format (was reading pipe-delimited, now reads model
+#        number), added flock concurrency guard, -ngl 999, --flash-attn on,
+#        --jinja, batch size tuning. Audit: tac_hostmetrics.sh strict mode
+#        (set -euo pipefail), install.sh shebang (#!/usr/bin/env bash), 3 curl
+#        calls given --max-time, 2 UUOC battery reads replaced with $(< file),
+#        QUANT_GUIDE constant added to §1.
 # 2.19 (2026-03-08) — 71-item deep audit implementation. Errors: commit:→commitd,
 #        chat:→chatl, wtf:→wtf aliases (colon-free naming), LAST_TPS comment,
 #        serve <profile>→serve N in help, loopback regex anchored with trailing /.
@@ -280,7 +305,7 @@ export TACTICAL_PROFILE_VERSION="2.19"
 #   OC_ROOT, OPENCLAW_ROOT, OC_WORKSPACE, OC_AGENTS, OC_LOGS, OC_BACKUPS,
 #   CooldownDB, ErrorLogPath, OC_TMP_LOG, LLAMA_ROOT,
 #   LLAMA_MODEL_DIR, LLAMA_DRIVE_ROOT, LLAMA_ARCHIVE_DIR, LLAMA_SERVER_BIN,
-#   LLM_REGISTRY, ACTIVE_LLM_FILE,
+#   LLM_REGISTRY, ACTIVE_LLM_FILE, QUANT_GUIDE,
 #   LLM_LOG_FILE, LLM_TPS_CACHE, TAC_CACHE_DIR, VENV_DIR, UIWidth, LAST_TPS,
 #   LLM_PORT, OC_PORT, LOCAL_LLM_URL, __TAC_HAS_BATTERY, __resolve_vscode_bin,
 #   VSCODE_BIN, WSL_NVIDIA_SMI, PATH, HISTCONTROL
@@ -307,6 +332,9 @@ export LLAMA_ROOT="$AI_STORAGE_ROOT/llama.cpp"
 export LLAMA_MODEL_DIR="/mnt/m/active"
 export LLAMA_ARCHIVE_DIR="/mnt/m/archive"
 export LLAMA_DRIVE_ROOT="/mnt/m"                # Root of the model drive
+# Quantization priority guide — editable config controlling download warnings.
+# See ~/ubuntu-console/quant-guide.conf for rating/description of each quant.
+export QUANT_GUIDE="$HOME/ubuntu-console/quant-guide.conf"
 # Detect drive size at startup; falls back to 200 GB if df unavailable.
 # WARNING: If the drive is not mounted, all capacity calculations will use
 # the 200GB fallback, which may over- or under-estimate available space.
@@ -514,6 +542,16 @@ alias commit='commit_auto'
 alias oc-agent-turn='ocstart'
 
 # ---- OpenClaw Shortcuts (functions defined in §9) ----
+# Wrapper: strip the leading blank line that openclaw always prints.
+# Skip filtering for interactive/redirected commands to avoid breaking TTY.
+function openclaw() {
+    if [[ -t 1 ]] && [[ "$1" != "tui" && "$1" != "logs" ]]; then
+        command openclaw "$@" | sed '1{/^$/d}'
+    else
+        command openclaw "$@"
+    fi
+}
+
 function os() {
     openclaw sessions
 }
@@ -550,9 +588,9 @@ function cop-ask() {
 }
 
 # ---- LLM & Inference ----
-# chatl      — interactive multi-turn chat with local LLM (end-chat to exit)
+# chat:      — interactive multi-turn chat with local LLM (end-chat to exit)
 # wtf <topic>— ask the local LLM to explain a tool or concept (REPL mode)
-alias chatl='local_chat'
+alias chat:='local_chat'
 alias wtf='wtf_repl'
 
 # ==============================================================================
@@ -720,31 +758,36 @@ function __tac_header() {
     local version="$3"
 
     local inner_width=$((UIWidth - 2))
-    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /═}"
 
-    local pad_left=$(( (inner_width - ${#title}) / 2 ))
-    local pad_right=$(( inner_width - ${#title} - pad_left ))
+    # Embed title (and optional version) directly in the ═ border line.
+    # This avoids font-width misalignment between ═ and space characters.
+    local left_label=" ${title}"
+    local right_label=" "
+    if [[ -n "$version" ]]; then
+        right_label=" (v${version}) "
+    fi
+    local label_len=$(( ${#left_label} + ${#right_label} ))
+    local left_eqs=$(( (inner_width - label_len) / 2 ))
+    local right_eqs=$(( inner_width - label_len - left_eqs ))
 
-    local left_space=""; (( pad_left  > 0 )) && printf -v left_space  '%*s' "$pad_left"  ""
-    local right_space=""; (( pad_right > 0 )) && printf -v right_space '%*s' "$pad_right" ""
-
-    local base_str="${left_space}${title}${right_space}"
-
-    printf "${C_BoxBg}╔${line}╗${C_Reset}\n"
+    local left_line; printf -v left_line '%*s' "$left_eqs" ''; left_line="${left_line// /═}"
+    local right_line; printf -v right_line '%*s' "$right_eqs" ''; right_line="${right_line// /═}"
 
     if [[ -n "$version" ]]; then
-        local ver_str="(ver.: $version)"
-        local ver_len=${#ver_str}
-        local left_part="${base_str:0:$((inner_width - ver_len))}"
-        printf "${C_BoxBg}║${C_Reset}${C_Highlight}%s${C_Reset}${C_Dim}%s${C_Reset}${C_BoxBg}║${C_Reset}\n" "$left_part" "$ver_str"
+        printf "${C_BoxBg}╔%s${C_Reset}${C_Highlight}%s${C_Reset}${C_Dim}%s${C_Reset}${C_BoxBg}%s╗${C_Reset}\n" \
+            "$left_line" "$left_label" "$right_label" "$right_line"
     else
-        printf "${C_BoxBg}║${C_Reset}${C_Highlight}%s${C_Reset}${C_BoxBg}║${C_Reset}\n" "$base_str"
+        printf "${C_BoxBg}╔%s${C_Reset}${C_Highlight}%s${C_Reset}${C_BoxBg}%s╗${C_Reset}\n" \
+            "$left_line" "${left_label}${right_label}" "$right_line"
     fi
 
+    # Use thin-line (─) dividers to avoid width mismatch with ═/space title line.
+    local thin_line; printf -v thin_line '%*s' "$inner_width" ''; thin_line="${thin_line// /─}"
+
     if [[ "$style" == "open" ]]; then
-        printf "${C_BoxBg}╠${line}╣${C_Reset}\n"
+        printf "${C_BoxBg}╟${thin_line}╢${C_Reset}\n"
     elif [[ "$style" == "closed" ]]; then
-        printf "${C_BoxBg}╚${line}╝${C_Reset}\n"
+        printf "${C_BoxBg}╙${thin_line}╜${C_Reset}\n"
     fi
 }
 
@@ -753,8 +796,8 @@ function __tac_header() {
 # ---------------------------------------------------------------------------
 function __tac_footer() {
     local inner_width=$((UIWidth - 2))
-    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /═}"
-    printf "${C_BoxBg}╚${line}╝${C_Reset}\n"
+    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /─}"
+    printf "${C_BoxBg}╙${line}╜${C_Reset}\n"
 }
 
 # ---------------------------------------------------------------------------
@@ -879,7 +922,24 @@ function __hRow() {
 # __show_header — Display the oneliner startup banner.
 # ---------------------------------------------------------------------------
 function __show_header() {
-    __tac_header "Bash v${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]} :: 'm' for Dashboard, 'h' for Help." "closed" "$TACTICAL_PROFILE_VERSION"
+    local inner_width=$((UIWidth - 2))
+    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /═}"
+
+    local left_text=" Bash v${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"
+    local center_text="- Wayne's Ubuntu Terminal v${TACTICAL_PROFILE_VERSION} -"
+    local right_text="'h' help "
+
+    local center_start=$(( (inner_width - ${#center_text}) / 2 ))
+    local gap1=$(( center_start - ${#left_text} ))
+    local gap2=$(( inner_width - center_start - ${#center_text} - ${#right_text} ))
+
+    local pad1=""; (( gap1 > 0 )) && printf -v pad1 '%*s' "$gap1" ""
+    local pad2=""; (( gap2 > 0 )) && printf -v pad2 '%*s' "$gap2" ""
+
+    printf "${C_BoxBg}╔${line}╗${C_Reset}\n"
+    printf "${C_BoxBg}║${C_Reset}${C_Dim}%s${C_Reset}%s${C_Highlight}%s${C_Reset}%s${C_Dim}%s${C_Reset}${C_BoxBg}║${C_Reset}\n" \
+        "$left_text" "$pad1" "$center_text" "$pad2" "$right_text"
+    printf "${C_BoxBg}╚${line}╝${C_Reset}\n"
 }
 
 # ---------------------------------------------------------------------------
@@ -1572,7 +1632,7 @@ function sysinfo() {
     gpu1_color=$(__threshold_color "$gpu1")
     # Design tokens are already ANSI-C quoted ($'\e[…]'), so echo -e is
     # unnecessary. Using printf avoids any accidental backslash interpretation.
-    printf '%s\n' "${C_Dim}CPU:${C_Reset} ${cpu_color}${cpu}%${C_Reset} ${C_Dim}RAM:${C_Reset} ${mem_color}${mem_used} / ${mem_total} Gb${C_Reset} ${C_Dim}Disk:${C_Reset} ${disk} ${C_Dim}GPU0:${C_Reset} ${gpu_color}${gpu_info}${C_Reset} ${C_Dim}GPU1:${C_Reset} ${gpu1_color}${gpu1}%${C_Reset}"
+    printf '%s\n' "${C_Dim}CPU:${C_Reset} ${cpu_color}${cpu}%${C_Reset} ${C_Dim}RAM:${C_Reset} ${mem_color}${mem_used} / ${mem_total} Gb${C_Reset} ${C_Dim}Disk:${C_Reset} ${disk} ${C_Dim}iGPU:${C_Reset} ${gpu_color}${gpu_info}${C_Reset} ${C_Dim}CUDA:${C_Reset} ${gpu1_color}${gpu1}%${C_Reset}"
 }
 
 # ---------------------------------------------------------------------------
@@ -2206,19 +2266,39 @@ function oc-local-llm() {
         __tac_info "Local LLM" "[OFFLINE - Start a model first]" "$C_Error"
         return 1
     fi
-    # Read the actual model name from the active LLM state file
-    local model_name="local"
+    # Read the active model's name and GGUF filename from the registry
+    local model_name="local" model_file=""
     if [[ -f "$ACTIVE_LLM_FILE" ]]; then
         local _anum; _anum=$(< "$ACTIVE_LLM_FILE")
         if [[ -n "$_anum" && -f "$LLM_REGISTRY" ]]; then
             local _entry; _entry=$(awk -F'|' -v n="$_anum" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
-            IFS='|' read -r _ _name _ <<< "$_entry"
+            IFS='|' read -r _ _name _file _ <<< "$_entry"
             [[ -n "$_name" ]] && model_name="$_name"
+            [[ -n "$_file" ]] && model_file="$_file"
         fi
     fi
-    openclaw config set provider.name "openai-compatible"
-    openclaw config set provider.baseUrl "http://127.0.0.1:${LLM_PORT}/v1"
-    openclaw config set provider.model "$model_name"
+
+    # Update the local-llama provider in models.providers (the correct config path).
+    # Build the provider JSON with jq and write it in a single config set call.
+    local provider_json
+    provider_json=$(jq -n \
+        --arg url "http://127.0.0.1:${LLM_PORT}/v1" \
+        --arg id "${model_file:-local}" \
+        --arg name "${model_name} (Local RTX 3050 Ti)" \
+        '{
+            baseUrl: $url,
+            api: "openai-completions",
+            models: [{
+                id: $id,
+                name: $name,
+                api: "openai-completions",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+            }]
+        }')
+    openclaw config set models.providers.local-llama "$provider_json" 2>/dev/null
+
     openclaw gateway restart 2>/dev/null
     # Verify the gateway actually came back up after reconfiguration
     sleep 2
@@ -2344,7 +2424,7 @@ function oc-diag() {
     echo ""
 
     printf '%s\n' "${C_Highlight}[2/5] Gateway Status${C_Reset}"
-    if curl -sf "http://127.0.0.1:${OC_PORT:-18789}/api/health" -o /dev/null 2>/dev/null; then
+    if curl -sf --max-time 5 "http://127.0.0.1:${OC_PORT:-18789}/api/health" -o /dev/null 2>/dev/null; then
         printf '%s\n' "  ${C_Success}● Gateway reachable on port ${OC_PORT:-18789}${C_Reset}"
     else
         printf '%s\n' "  ${C_Error}● Gateway NOT reachable on port ${OC_PORT:-18789}${C_Reset}"
@@ -2740,10 +2820,20 @@ function wake() {
     # Requires passwordless sudo; harmless failure if denied
     if ! sudo -n "$smi_cmd" -pm 1 >/dev/null 2>&1; then
         __tac_info "GPU Persistence" "[FAILED — sudo denied or nvidia-smi error]" "$C_Warning"
+        return 1
     fi
+    __tac_info "GPU Persistence" "[ENABLED]" "$C_Success"
 
-    local stat; stat=$("$smi_cmd" --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader 2>/dev/null || echo "ERROR")
-    __tac_info "GPU Persistence" "[$stat]" "$C_Success"
+    local stat
+    stat=$("$smi_cmd" --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits 2>/dev/null || echo "")
+    if [[ -n "$stat" ]]; then
+        local g_util g_used g_total g_temp
+        IFS=',' read -r g_util g_used g_total g_temp <<< "$stat"
+        g_util="${g_util// /}"; g_used="${g_used// /}"; g_total="${g_total// /}"; g_temp="${g_temp// /}"
+        __tac_info "GPU Util" "${g_util}%" "$C_Text"
+        __tac_info "VRAM" "${g_used} MiB / ${g_total} MiB" "$C_Text"
+        __tac_info "Temp" "${g_temp}°C" "$C_Text"
+    fi
     printf '%s\n' "${C_Dim}Note: -pm 1 does not survive WSL restarts. Re-run 'wake' after reboot.${C_Reset}"
 }
 
@@ -2788,6 +2878,68 @@ function gpu-status() {
     else
         __tac_info "Persist" "OFF (run 'wake' to enable)" "$C_Warning"
     fi
+    __tac_footer
+}
+
+# ---------------------------------------------------------------------------
+# gpu-check — Quick 5-second CUDA verification.
+# Confirms nvidia-smi is reachable, the GPU is visible, and (if a model is
+# running) that llama-server is actually offloading layers to the GPU.
+# ---------------------------------------------------------------------------
+function gpu-check() {
+    local smi="$WSL_NVIDIA_SMI"
+    [[ ! -x "$smi" ]] && smi=$(command -v nvidia-smi 2>/dev/null || true)
+
+    __tac_header "CUDA / GPU CHECK" "open"
+
+    # 1. nvidia-smi reachable?
+    if [[ -z "$smi" || ! -x "$smi" ]]; then
+        __tac_info "nvidia-smi" "NOT FOUND — GPU passthrough broken" "$C_Error"
+        __tac_info "Tip" "In WSL run: nvidia-smi  (if this fails, CUDA is unavailable)" "$C_Dim"
+        __tac_footer; return 1
+    fi
+    __tac_info "nvidia-smi" "OK" "$C_Success"
+
+    # 2. CUDA device visible?
+    local gpu_name
+    gpu_name=$("$smi" --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    if [[ -z "$gpu_name" ]]; then
+        __tac_info "CUDA Device" "NONE DETECTED" "$C_Error"
+        __tac_footer; return 1
+    fi
+    __tac_info "CUDA Device" "$gpu_name" "$C_Success"
+
+    # 3. VRAM status
+    local vram
+    vram=$("$smi" --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | head -1)
+    if [[ -n "$vram" ]]; then
+        local used total
+        IFS=',' read -r used total <<< "$vram"
+        used="${used// /}"; total="${total// /}"
+        __tac_info "VRAM" "${used} MiB / ${total} MiB" "$C_Text"
+    fi
+
+    # 4. llama-server CUDA offload (check the runtime log)
+    if pgrep -x llama-server >/dev/null 2>&1 && [[ -f "$LLM_LOG_FILE" ]]; then
+        local offload_line
+        offload_line=$(grep -i 'offload.*layers to GPU\|offloading.*layers to GPU' "$LLM_LOG_FILE" 2>/dev/null | tail -1)
+        local cuda_line
+        cuda_line=$(grep -i 'ggml_cuda.*found.*CUDA' "$LLM_LOG_FILE" 2>/dev/null | tail -1)
+
+        if [[ -n "$cuda_line" ]]; then
+            __tac_info "CUDA Init" "${cuda_line##*: }" "$C_Success"
+        fi
+        if [[ -n "$offload_line" ]]; then
+            __tac_info "Offload" "${offload_line##*: }" "$C_Success"
+        elif [[ -n "$cuda_line" ]]; then
+            __tac_info "Offload" "No offload line found (check -ngl setting)" "$C_Warning"
+        else
+            __tac_info "Offload" "No CUDA references in log — may be CPU-only build" "$C_Error"
+        fi
+    else
+        __tac_info "Server" "Not running — start a model to verify offloading" "$C_Dim"
+    fi
+
     __tac_footer
 }
 
@@ -2873,12 +3025,16 @@ function __gguf_metadata() {
 }
 
 # __calc_gpu_layers — Calculate optimal GPU layer count for available VRAM.
+# Strategy: use -ngl 999 at launch to let llama.cpp offload the maximum
+# layers that fit in VRAM. This scan-time function determines the launch
+# MODE (gpu vs cpu-only) and stores a hint for display/logging. The actual
+# offload count is decided by the runtime, not by this calculation.
 # Args: file_size_bytes total_layers [arch]
-# Returns: recommended gpu_layers count
+# Returns: 999 (max offload), total_layers (MoE), or 0 (CPU-only)
 function __calc_gpu_layers() {
     local file_bytes=$1 total_layers=$2 arch="${3:-}"
     local vram_bytes=$((4 * 1024 * 1024 * 1024))  # 4GB
-    local usable_bytes=$((vram_bytes * 85 / 100))  # 85% usable (driver/KV overhead)
+    local usable_bytes=$((vram_bytes * 95 / 100))  # 95% usable (driver overhead)
 
     # MoE models: with --cpu-moe, expert weights stay on CPU.
     # Only attention/dense layers load to GPU, so we can offload all layers.
@@ -2888,21 +3044,23 @@ function __calc_gpu_layers() {
     fi
 
     if (( file_bytes <= usable_bytes )); then
-        echo "$total_layers"  # full offload
+        # Model fits in VRAM — use 999 to offload everything the runtime can.
+        echo 999
     else
-        local ratio=$(( usable_bytes * 100 / file_bytes ))
-        local layers=$(( total_layers * ratio / 100 ))
-        (( layers < 1 )) && layers=1
-        echo "$layers"
+        # Model exceeds VRAM — run CPU-only. Partial offload spills into
+        # shared GPU memory which is ~10-15x slower than dedicated VRAM;
+        # pure CPU inference with --mlock is faster than the hybrid path.
+        echo 0
     fi
 }
 
 # __calc_ctx_size — Pick a practical context size.
 # Must account for KV cache VRAM: larger ctx = more VRAM consumed beyond model weights.
-# Partially-offloaded models need smaller ctx to avoid OOM.
+# CPU-only models (>4GB) have no VRAM constraint so can use larger ctx.
 function __calc_ctx_size() {
     local file_bytes=$1 native_ctx=$2 arch="${3:-}"
     local file_gb=$(( file_bytes / 1024 / 1024 / 1024 ))
+    local vram_limit_gb=$(( 4 * 85 / 100 ))  # 3GB usable VRAM threshold
 
     # MoE models: expert weights on CPU, only attention on GPU.
     # Active params ~3B, so treat like a small model for ctx sizing.
@@ -2911,10 +3069,15 @@ function __calc_ctx_size() {
         return
     fi
 
-    if (( file_gb >= 5 )); then
-        echo 2048
-    elif (( file_gb >= 4 )); then
-        echo 4096
+    if (( file_gb > vram_limit_gb )); then
+        # CPU-only: no VRAM pressure, limited by RAM instead.
+        # Use generous ctx but cap at 8192 to keep RAM usage reasonable.
+        local cap=8192
+        if (( native_ctx < cap )); then
+            echo "$native_ctx"
+        else
+            echo "$cap"
+        fi
     elif (( file_gb >= 3 )); then
         echo 8192
     else
@@ -2928,13 +3091,24 @@ function __calc_ctx_size() {
 }
 
 # __calc_threads — CPU threads based on how much spills to CPU.
+# Uses nproc to detect available threads, then scales:
+#   CPU-only  → 80% (all layers on CPU, maximise parallelism)
+#   Partial   → 70% (CPU handles remaining layers + KV-cache)
+#   Full GPU  → 50% (CPU only does prompt processing + sampling)
 function __calc_threads() {
     local gpu_layers=$1 total_layers=$2
-    if (( gpu_layers >= total_layers )); then
-        echo 8   # fully offloaded — threads only for prompt processing
+    local ncpu
+    ncpu=$(nproc 2>/dev/null || echo 16)
+    local threads
+    if (( gpu_layers == 0 )); then
+        threads=$(( ncpu * 80 / 100 ))
+    elif (( gpu_layers >= total_layers )); then
+        threads=$(( ncpu * 50 / 100 ))
     else
-        echo 14  # partial offload — more CPU work
+        threads=$(( ncpu * 70 / 100 ))
     fi
+    (( threads < 1 )) && threads=1
+    echo "$threads"
 }
 
 # __quant_label — Map GGUF file_type int to human-readable quant label.
@@ -3033,6 +3207,58 @@ function model() {
 
             mv "$tmpconf" "$LLM_REGISTRY"
             __tac_info "Registry" "[${num} models written to $LLM_REGISTRY]" "$C_Success"
+
+            # Quant enforcement: archive discouraged models (skip active model)
+            if [[ -f "$QUANT_GUIDE" ]]; then
+                local active_num; active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+                local archived=0
+                local to_archive=()
+                while IFS='|' read -r _qnum _qname _qfile _qsize _qarch _qqnt _rest; do
+                    [[ "$_qnum" == "#"* || -z "$_qfile" ]] && continue
+                    [[ "$_qnum" == "$active_num" ]] && continue
+                    local _qrating=""
+                    while IFS='|' read -r _r _pat _d; do
+                        [[ -z "$_pat" || "$_r" == "#"* ]] && continue
+                        if [[ "${_qfile^^}" == *"${_pat^^}"* ]]; then
+                            _qrating="$_r"; break
+                        fi
+                    done < "$QUANT_GUIDE"
+                    if [[ "$_qrating" == "discouraged" ]]; then
+                        to_archive+=("${_qnum}|${_qname}|${_qfile}|${_qqnt}")
+                    fi
+                done < "$LLM_REGISTRY"
+
+                for _ae in "${to_archive[@]}"; do
+                    IFS='|' read -r _anum _aname _afile _aqunt <<< "$_ae"
+                    local src="$LLAMA_MODEL_DIR/$_afile"
+                    if [[ -f "$src" ]]; then
+                        mkdir -p "$LLAMA_ARCHIVE_DIR"
+                        if mv "$src" "$LLAMA_ARCHIVE_DIR/"; then
+                            __tac_info "Archived" "#${_anum} ${_aname} (${_aqunt} — discouraged)" "$C_Warning"
+                            ((archived++))
+                        fi
+                    fi
+                done
+
+                if (( archived > 0 )); then
+                    __tac_info "Enforcement" "[$archived discouraged model(s) moved to archive]" "$C_Warning"
+                    # Rebuild registry without archived files
+                    local clean_tmp="${LLM_REGISTRY}.tmp"
+                    local new_num=0
+                    echo "#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps" > "$clean_tmp"
+                    while IFS= read -r _cline; do
+                        [[ "$_cline" == "#"* || -z "$_cline" ]] && continue
+                        local _cfile
+                        _cfile=$(cut -d'|' -f3 <<< "$_cline")
+                        [[ -f "$LLAMA_MODEL_DIR/$_cfile" ]] || continue
+                        ((new_num++))
+                        echo "${new_num}|$(cut -d'|' -f2- <<< "$_cline")" >> "$clean_tmp"
+                    done < "$LLM_REGISTRY"
+                    mv "$clean_tmp" "$LLM_REGISTRY"
+                    __tac_info "Registry" "[Renumbered — ${new_num} models remain]" "$C_Success"
+                fi
+            fi
+
             model list
             ;;
 
@@ -3089,7 +3315,7 @@ function model() {
             local d_label; d_label=$(basename "$LLAMA_DRIVE_ROOT")
             printf "\n${C_Dim}  Drive ${d_label^^}: ${d_color}${d_avail_h}G free${C_Reset}${C_Dim} of ${d_total_h}G (${d_pct_n}%% used)${C_Reset}\n"
 
-            printf "\n${C_Dim}  model use N  │  model stop  │  model info N  │  model scan  │  model bench  │  model archive N${C_Reset}\n\n"
+            printf "\n${C_Dim}  model use N  │  model stop  │  model info N  │  model scan  │  model bench  │  model archive N${C_Reset}\n"
             ;;
 
         use)
@@ -3115,31 +3341,46 @@ function model() {
             sudo -n prlimit --memlock=unlimited:unlimited --pid $$ 2>/dev/null
 
             # Choose batch sizes based on offload level:
-            # Fully-offloaded models benefit from larger batches (faster prompt eval).
-            # Partially-offloaded models need smaller batches to avoid VRAM pressure.
+            # Larger batches dramatically improve prompt eval speed (~30-50%) when
+            # the GPU is doing the work. CPU-only uses moderate batches.
             local batch_size=512
             local ubatch_size=512
-            if (( gpu_layers >= layers )); then
+            if (( gpu_layers > 0 )); then
+                # GPU active: larger batches fill the GPU pipeline more efficiently.
+                # -b 4096 / -ub 1024 is safe with 64GB system RAM + 4GB VRAM.
                 batch_size=4096
                 ubatch_size=1024
             fi
 
             # Build command
             local cmd=("$LLAMA_SERVER_BIN" "-m" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
-            cmd+=("--ctx-size" "$ctx" "--mlock" "--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size" "--cont-batching" "--parallel" "1")
+            cmd+=("--ctx-size" "$ctx" "--mlock" "--prio" "2" "--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size" "--cont-batching" "--parallel" "1")
             # --jinja: enable Jinja2 chat template processing from GGUF metadata.
             # Newer models (Qwen3, Phi-4, Gemma3) embed their chat templates;
             # without this flag the server may apply a wrong or hardcoded format.
             cmd+=("--jinja")
-            # q8_0 KV cache: huge win for partially-offloaded models (frees VRAM for layers)
-            # but can push fully-offloaded models OVER VRAM limit at high ctx. Only apply
-            # when not fully offloaded, or for architectures that specifically benefit.
-            if (( gpu_layers < layers )) || [[ "$arch" == "gemma"* ]] || [[ "$arch" == *"moe"* ]]; then
+
+            if (( gpu_layers == 0 )); then
+                # CPU-only mode: model too large for VRAM. Use q8_0 KV cache
+                # (saves RAM), skip GPU flags entirely.
                 cmd+=("--cache-type-k" "q8_0" "--cache-type-v" "q8_0")
+                cmd+=("--n-gpu-layers" "0" "--threads" "$threads")
+                __tac_info "Note" "CPU-only mode (model exceeds 4GB VRAM)" "$C_Dim"
+            else
+                # -ngl 999: tell llama.cpp to offload the maximum layers that fit
+                # in VRAM. The runtime calculates the actual count based on available
+                # memory. This is more accurate than pre-calculating a fixed number,
+                # especially since available VRAM varies at launch time.
+                #
+                # q8_0 KV cache: huge win for partially-offloaded models (frees VRAM
+                # for layers). For architectures that benefit from it, always enable.
+                if [[ "$arch" == "gemma"* ]] || [[ "$arch" == *"moe"* ]]; then
+                    cmd+=("--cache-type-k" "q8_0" "--cache-type-v" "q8_0")
+                fi
+                # --flash-attn on: reduces VRAM bandwidth pressure, critical for
+                # small GPUs (4GB). Improves throughput without quality loss.
+                cmd+=("--n-gpu-layers" "999" "--flash-attn" "on" "--threads" "$threads")
             fi
-            cmd+=("--n-gpu-layers" "$gpu_layers" "--flash-attn" "on" "--threads" "$threads")
-            # Reduce VRAM safety margin from default 1024MiB — we're on 4GB with single-slot
-            cmd+=("--fit-target" "256")
 
             # Per-architecture sampling and launch overrides
             if [[ "$arch" == "gemma"* ]]; then
@@ -3170,7 +3411,9 @@ function model() {
                 __tac_info "Note" "MoE: expert layers on CPU (--cpu-moe)" "$C_Dim"
             fi
 
-            __tac_info "Starting" "#${num} ${name} (${size}, ${gpu_layers}GPU/${layers}L, ctx ${ctx})" "$C_Highlight"
+            local ngl_label
+            ngl_label=$( (( gpu_layers > 0 )) && echo "ngl=999" || echo "CPU-only" )
+            __tac_info "Starting" "#${num} ${name} (${size}, ${ngl_label}, ctx ${ctx}, batch ${batch_size})" "$C_Highlight"
 
             (nohup "${cmd[@]}" > "$LLM_LOG_FILE" 2>&1 &)
 
@@ -3186,13 +3429,20 @@ function model() {
             local ready=0
             printf '%s' "${C_Dim}Waiting for health endpoint"
             for _ in {1..30}; do
-                if __test_port "$LLM_PORT" && curl -sf "http://127.0.0.1:$LLM_PORT/health" >/dev/null; then ready=1; break; fi
+                if __test_port "$LLM_PORT" && curl -sf --max-time 3 "http://127.0.0.1:$LLM_PORT/health" >/dev/null; then ready=1; break; fi
                 printf '.'
                 sleep 1
             done
             printf '%s\n' "$C_Reset"
             if (( ready )); then
                 __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
+                # Report actual GPU layer offload from the server log.
+                # llama.cpp prints "offloading N layers to GPU" during startup.
+                local offload_info
+                offload_info=$(grep -oiE 'offload(ing|ed) [0-9]+ .* layers' "$LLM_LOG_FILE" 2>/dev/null | tail -1)
+                if [[ -n "$offload_info" ]]; then
+                    __tac_info "GPU Offload" "[$offload_info]" "$C_Dim"
+                fi
             else
                 __tac_info "Status" "FAILED OR TIMEOUT — check: tail $LLM_LOG_FILE" "$C_Error"
             fi
@@ -3402,6 +3652,32 @@ function model() {
 
                 local dest="$LLAMA_MODEL_DIR/$dl_file"
                 local archive_dest="$LLAMA_ARCHIVE_DIR/$dl_file"
+
+                # Check quantization against the guide config (warn, don't block)
+                if [[ -f "$QUANT_GUIDE" ]]; then
+                    local _qrating=""
+                    local _qdesc=""
+                    while IFS='|' read -r _r _pat _d; do
+                        [[ -z "$_pat" || "$_r" == "#"* ]] && continue
+                        if [[ "${dl_file^^}" == *"${_pat^^}"* ]]; then
+                            _qrating="$_r"; _qdesc="$_d"; break
+                        fi
+                    done < "$QUANT_GUIDE"
+                    if [[ "$_qrating" == "discouraged" ]]; then
+                        printf '%s\n' "${C_Warning}Warning:${C_Reset} ${_pat} is discouraged for 4GB VRAM — ${_qdesc}"
+                        read -r -p "${C_Warning}Download anyway? [y/N]: ${C_Reset}" _qconfirm
+                        if [[ "${_qconfirm,,}" != "y" ]]; then
+                            __tac_info "Skip" "$dl_file (discouraged quant)" "$C_Dim"
+                            ((fail++))
+                            continue
+                        fi
+                    elif [[ "$_qrating" == "recommended" ]]; then
+                        printf '%s\n' "${C_Success}✓${C_Reset} ${_pat} — ${_qdesc}"
+                    elif [[ "$_qrating" == "acceptable" ]]; then
+                        printf '%s\n' "${C_Dim}● ${_pat} — ${_qdesc}${C_Reset}"
+                    fi
+                fi
+
                 if [[ -f "$dest" ]]; then
                     __tac_info "Skip" "$dl_file already exists (active)" "$C_Warning"
                     ((ok++))
@@ -3427,7 +3703,7 @@ function model() {
                 if [[ "$d_avail_bytes" =~ ^[0-9]+$ ]]; then
                     # Query HF API for file size
                     local remote_size
-                    remote_size=$(curl -sfI "https://huggingface.co/${dl_repo}/resolve/main/${dl_file}" 2>/dev/null \
+                    remote_size=$(curl -sfI --max-time 10 "https://huggingface.co/${dl_repo}/resolve/main/${dl_file}" 2>/dev/null \
                         | grep -i '^content-length:' | awk '{print $2}' | tr -d '\r')
                     if [[ "$remote_size" =~ ^[0-9]+$ ]] && (( remote_size > 0 )); then
                         if (( remote_size > d_avail_bytes )); then
@@ -3886,7 +4162,7 @@ function tactical_dashboard() {
     local cpu_gpu_color
     local max_gpu=$(( gpu0 > gpu1 ? gpu0 : gpu1 ))
     cpu_gpu_color=$(__threshold_color $(( cpu > max_gpu ? cpu : max_gpu )))
-    __fRow "CPU / GPU" "CPU ${cpu}% | GPU0 ${gpu0}% | GPU1 ${gpu1}%" "$cpu_gpu_color"
+    __fRow "CPU / GPU" "CPU ${cpu}% | iGPU ${gpu0}% | CUDA ${gpu1}%" "$cpu_gpu_color"
 
     # Memory colour: <75% used=green, 75-90%=yellow, >90%=red
     local mem_color
@@ -3911,7 +4187,7 @@ function tactical_dashboard() {
         g_util_n=${g_util_n%\%}  # Strip trailing % for numeric comparison
         gpu_color=$(__threshold_color "$g_util_n")
     fi
-    __fRow "GPU COMPUTE" "$gpu_display" "$gpu_color"
+    __fRow "GPU (nvidia-smi)" "$gpu_display" "$gpu_color"
 
     if __test_port "$LLM_PORT"; then
         local act_mod="ONLINE"
@@ -4011,7 +4287,7 @@ function tactical_dashboard() {
     else
         cmds_toggle="so"
     fi
-    local cmds="up | ${cmds_toggle} | serve <n> | halt | chatl | commit | h"
+    local cmds="up | ${cmds_toggle} | serve <n> | halt | chat: | commit | h"
     local totalPad=$(( UIWidth - 2 - ${#cmds} ))
     local leftPad=$(( totalPad / 2 ))
     local rightPad=$(( totalPad - leftPad ))
@@ -4169,6 +4445,7 @@ function tactical_help() {
     __hSection "LLM — MODEL MANAGEMENT"
     __hRow "wake" "Lock NVIDIA GPU persistence mode and WDDM state"
     __hRow "gpu-status" "Detailed NVIDIA GPU stats: util, VRAM, temp, power"
+    __hRow "gpu-check" "Quick CUDA verification: device, VRAM, layer offload"
     __hRow "llmconf" "Open the models.conf registry file in VS Code"
     __hRow "model scan" "Scan model dir, read GGUF metadata, auto-calculate params"
     __hRow "model list" "Show numbered model registry (▶ = active)"
@@ -4186,7 +4463,7 @@ function tactical_help() {
     __hRow "burn" "Run ~1300 token stress test and measure live TPS"
 
     __hSection "LLM — CHAT & EXPLAIN"
-    __hRow "chatl [msg]" "Interactive LLM chat session (end-chat to exit)"
+    __hRow "chat: [msg]" "Interactive LLM chat session (end-chat to exit)"
     __hRow "  save" "Inside chat: save conversation history to ~/chat_*.json"
     __hRow "chat-context" "Load a file as context then ask questions about it"
     __hRow "chat-pipe" "Pipe stdout from another command as LLM context"

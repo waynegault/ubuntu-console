@@ -3,13 +3,16 @@
 # Called by systemd user timer. Reads /dev/shm state to know which model to restart.
 set -euo pipefail
 
+# Prevent concurrent runs (timer could fire while a slow restart is in progress)
+exec 200>/tmp/llama-watchdog.lock
+flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance running — skipping"; exit 0; }
+
 LLM_PORT="${LLM_PORT:-8081}"
 ACTIVE_LLM_FILE="/dev/shm/active_llm"
 LLM_LOG_FILE="/dev/shm/llama-server.log"
 LLM_REGISTRY="${LLM_REGISTRY:-/home/wayne/.llm/models.conf}"
-LLAMA_MODEL_DIR="${LLAMA_MODEL_DIR:-/mnt/m/Active}"
+LLAMA_MODEL_DIR="${LLAMA_MODEL_DIR:-/mnt/m/active}"
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-/home/wayne/llama.cpp/build/bin/llama-server}"
-LLAMA_GPU_LAYERS="${LLAMA_GPU_LAYERS:-33}"
 LLAMA_CPU_THREADS="${LLAMA_CPU_THREADS:-12}"
 LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-4096}"
 
@@ -27,20 +30,22 @@ fi
 
 log "Health check failed. Attempting restart..."
 
-IFS='|' read -r prof name size _proc < "$ACTIVE_LLM_FILE"
-if [[ -z "$prof" ]]; then
-    log "No profile in active state file."
+# Active LLM file stores model number (matches registry $1 field)
+active_num=$(< "$ACTIVE_LLM_FILE")
+if [[ -z "$active_num" || ! "$active_num" =~ ^[0-9]+$ ]]; then
+    log "Invalid or empty model number in active state file."
     exit 1
 fi
 
-# Look up model file from registry
-entry=$(awk -F'|' -v p="$prof" '$1 == p' "$LLM_REGISTRY" 2>/dev/null)
+# Look up model from registry by number
+# Registry format: num|name|file|size|arch|quant|layers|gpu_layers|ctx|threads|tps
+entry=$(awk -F'|' -v n="$active_num" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
 if [[ -z "$entry" ]]; then
-    log "Profile '$prof' not found in registry."
+    log "Model #$active_num not found in registry."
     exit 1
 fi
 
-IFS='|' read -r _p _n _s _proc file m_gpu m_ctx m_threads <<< "$entry"
+IFS='|' read -r _num name file size _arch _quant layers gpu_layers ctx threads _tps <<< "$entry"
 model_path="$LLAMA_MODEL_DIR/$file"
 
 if [[ ! -f "$model_path" ]]; then
@@ -48,21 +53,29 @@ if [[ ! -f "$model_path" ]]; then
     exit 1
 fi
 
-use_gpu="${m_gpu:-$LLAMA_GPU_LAYERS}"
-use_ctx="${m_ctx:-$LLAMA_CTX_SIZE}"
-use_threads="${m_threads:-$LLAMA_CPU_THREADS}"
+use_gpu="${gpu_layers:-0}"
+use_ctx="${ctx:-$LLAMA_CTX_SIZE}"
+use_threads="${threads:-$LLAMA_CPU_THREADS}"
 
 # Kill any zombie process (exact match avoids hitting unrelated processes)
 pkill -x llama-server 2>/dev/null || true
 sleep 1
 
 cmd=("$LLAMA_SERVER_BIN" "-m" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
-cmd+=("--ctx-size" "$use_ctx" "--mlock")
-cmd+=("--batch-size" "512" "--ubatch-size" "512" "--cont-batching")
-if [[ "$_proc" == "gpu" ]]; then
-    cmd+=("--n-gpu-layers" "$use_gpu" "--flash-attn")
+cmd+=("--ctx-size" "$use_ctx" "--mlock" "--prio" "2" "--cont-batching" "--parallel" "1" "--jinja")
+if (( use_gpu > 0 )); then
+    # Use -ngl 999 to let llama.cpp offload the maximum layers that fit in VRAM.
+    # Larger batches improve prompt eval speed when GPU is active.
+    batch_size=512; ubatch_size=512
+    if (( use_gpu >= ${layers:-0} )); then
+        batch_size=4096; ubatch_size=1024
+    fi
+    cmd+=("--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size")
+    cmd+=("--n-gpu-layers" "999" "--flash-attn" "on" "--threads" "$use_threads")
 else
-    cmd+=("--threads" "$use_threads")
+    cmd+=("--batch-size" "512" "--ubatch-size" "512")
+    cmd+=("--n-gpu-layers" "0" "--threads" "$use_threads")
+    cmd+=("--cache-type-k" "q8_0" "--cache-type-v" "q8_0")
 fi
 
 nohup "${cmd[@]}" >> "$LLM_LOG_FILE" 2>&1 &
