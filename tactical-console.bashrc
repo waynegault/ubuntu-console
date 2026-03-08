@@ -329,9 +329,9 @@ export OC_TMP_LOG="/tmp/openclaw/openclaw.log"
 
 # ---- LLM / llama.cpp ----
 export LLAMA_ROOT="$AI_STORAGE_ROOT/llama.cpp"
-export LLAMA_MODEL_DIR="/mnt/m/active"
-export LLAMA_ARCHIVE_DIR="/mnt/m/archive"
 export LLAMA_DRIVE_ROOT="/mnt/m"                # Root of the model drive
+export LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active"
+export LLAMA_ARCHIVE_DIR="$LLAMA_DRIVE_ROOT/archive"
 # Quantization priority guide — editable config controlling download warnings.
 # See ~/ubuntu-console/quant-guide.conf for rating/description of each quant.
 export QUANT_GUIDE="$HOME/ubuntu-console/quant-guide.conf"
@@ -344,7 +344,7 @@ if [[ -z "$LLAMA_DRIVE_SIZE" || "$LLAMA_DRIVE_SIZE" == "0" ]]; then
 fi
 export LLAMA_DRIVE_SIZE
 export LLAMA_SERVER_BIN="$LLAMA_ROOT/build/bin/llama-server"
-export LLM_REGISTRY="$AI_STORAGE_ROOT/.llm/models.conf"
+export LLM_REGISTRY="$LLAMA_DRIVE_ROOT/.llm/models.conf"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"
 export LLM_LOG_FILE="/dev/shm/llama-server.log"
 export LLM_TPS_CACHE="/dev/shm/last_tps"
@@ -1906,7 +1906,6 @@ function oc-backup() {
         [[ -d ".openclaw/agents" ]]    && targets+=(".openclaw/agents")
         [[ -f ".openclaw/openclaw.json" ]] && targets+=(".openclaw/openclaw.json")
         [[ -f ".openclaw/auth.json" ]]     && targets+=(".openclaw/auth.json")
-        [[ -f ".llm/models.conf" ]]        && targets+=(".llm/models.conf")
         # Shell profile and standalone scripts
         # Canonical profile is in the ubuntu-console repo; back up both the
         # thin loader (~/.bashrc) and the full profile.
@@ -1926,6 +1925,11 @@ function oc-backup() {
             zip -r -q "$zipPath" "${targets[@]}"
         fi
     )
+
+    # Model registry (on M drive, stored as .llm/models.conf in archive)
+    if [[ -f "$LLM_REGISTRY" ]]; then
+        (cd "$LLAMA_DRIVE_ROOT" && zip -q "$zipPath" ".llm/models.conf")
+    fi
 
     if [[ -f "$zipPath" ]]; then
         local sz; sz=$(stat -c%s "$zipPath" 2>/dev/null || echo "0")
@@ -3536,7 +3540,7 @@ function model() {
             done
 
             local bench_file
-            bench_file="$AI_STORAGE_ROOT/.llm/bench_$(date +%Y%m%d_%H%M%S).tsv"
+            bench_file="$LLAMA_DRIVE_ROOT/.llm/bench_$(date +%Y%m%d_%H%M%S).tsv"
             { printf "#\tmodel\tsize\ttps\n"
               for i in "${!b_num[@]}"; do printf "%s\t%s\t%s\t%s\n" "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}"; done
             } > "$bench_file"
@@ -4502,7 +4506,7 @@ function tactical_help() {
 # @exports: (none — runs startup side-effects only)
 
 # Create required directories
-mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" "$AI_STORAGE_ROOT/.llm"
+mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" "$LLAMA_DRIVE_ROOT/.llm"
 
 # Check for required dependencies
 if ! command -v jq >/dev/null 2>&1; then

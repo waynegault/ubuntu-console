@@ -10,7 +10,7 @@ flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance
 LLM_PORT="${LLM_PORT:-8081}"
 ACTIVE_LLM_FILE="/dev/shm/active_llm"
 LLM_LOG_FILE="/dev/shm/llama-server.log"
-LLM_REGISTRY="${LLM_REGISTRY:-/home/wayne/.llm/models.conf}"
+LLM_REGISTRY="${LLM_REGISTRY:-/mnt/m/.llm/models.conf}"
 LLAMA_MODEL_DIR="${LLAMA_MODEL_DIR:-/mnt/m/active}"
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-/home/wayne/llama.cpp/build/bin/llama-server}"
 LLAMA_CPU_THREADS="${LLAMA_CPU_THREADS:-12}"
