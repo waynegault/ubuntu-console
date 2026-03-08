@@ -276,7 +276,7 @@ export TACTICAL_PROFILE_VERSION="2.19"
 # @depended-on-by: aliases (§3), design-tokens (§4), ui-engine (§5), hooks (§6),
 #   telemetry (§7), maintenance (§8), openclaw (§9), deployment (§10),
 #   llm-manager (§11), dashboard (§12), init (§13)
-# @exports: AI_STORAGE_ROOT, TacticalRoot, OpenClawWorkspace,
+# @exports: AI_STORAGE_ROOT,
 #   OC_ROOT, OPENCLAW_ROOT, OC_WORKSPACE, OC_AGENTS, OC_LOGS, OC_BACKUPS,
 #   CooldownDB, ErrorLogPath, OC_TMP_LOG, LLAMA_ROOT,
 #   LLAMA_MODEL_DIR, LLAMA_DRIVE_ROOT, LLAMA_ARCHIVE_DIR, LLAMA_SERVER_BIN,
@@ -287,10 +287,6 @@ export TACTICAL_PROFILE_VERSION="2.19"
 
 # ---- Storage Roots ----
 export AI_STORAGE_ROOT="$HOME"
-
-# ---- Workspace Roots ----
-export TacticalRoot="$AI_STORAGE_ROOT/console"
-export OpenClawWorkspace="$AI_STORAGE_ROOT/OpenClaw_Prod"
 
 # ---- OpenClaw ----
 export OC_ROOT="$AI_STORAGE_ROOT/.openclaw"
@@ -510,11 +506,9 @@ function occonf() {
     __vsc_open "$OC_ROOT/openclaw.json"
 }
 
-# ---- Deployment & Git Shortcuts ----
-# deploy     — rsync ~/console to OpenClaw production workspace
-# commitd    — git add + commit with YOUR message + push + deploy
-# commit     — git add + commit with LLM-generated message + push + deploy
-alias deploy='deploy_sync'
+# ---- Git Shortcuts ----
+# commitd    — git add + commit with YOUR message + push
+# commit     — git add + commit with LLM-generated message + push
 alias commitd='commit_deploy'
 alias commit='commit_auto'
 alias oc-agent-turn='ocstart'
@@ -942,6 +936,7 @@ fi
 # custom_prompt_command — PROMPT_COMMAND handler: updates PS1, history, error badge.
 function custom_prompt_command() {
     local lastExit=$?
+    __tac_preexec_fired=0
     history -a
 
     # If history number hasn't changed, user pressed Enter with no command —
@@ -970,6 +965,14 @@ function custom_prompt_command() {
 if [[ "$PROMPT_COMMAND" != *"custom_prompt_command"* ]]; then
     PROMPT_COMMAND="custom_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 fi
+
+# Print a blank line before every command's output so there is visual breathing
+# room between the prompt and the result.  The __tac_preexec_fired guard ensures
+# the newline prints only once per interactive command (not again for each
+# pipeline segment, PROMPT_COMMAND, or subshell).
+__tac_preexec_fired=0
+trap '[[ "$BASH_COMMAND" == "$PROMPT_COMMAND" || "$BASH_COMMAND" == custom_prompt_command ]] || \
+      (( __tac_preexec_fired )) || { __tac_preexec_fired=1; echo; }' DEBUG
 
 # ---------------------------------------------------------------------------
 # __test_port — Instant port check via kernel socket table (returns 0 if listening).
@@ -1637,17 +1640,26 @@ function so() {
     fi
 
     openclaw gateway start >/dev/null 2>&1
-    sleep 3
 
-    if __test_port "$OC_PORT"; then
-        __tac_info "Supervisor Process" "[DISPATCHED AND ONLINE]" "$C_Success"
+    # Wait up to 15 seconds for the gateway to become responsive
+    local ready=0
+    printf '%s' "${C_Dim}Waiting for gateway"
+    for _ in {1..15}; do
+        if __test_port "$OC_PORT"; then ready=1; break; fi
+        printf '.'
+        sleep 1
+    done
+    printf '%s\n' "${C_Reset}"
+
+    if (( ready )); then
+        __tac_info "Supervisor Process" "[ONLINE]" "$C_Success"
     else
         if systemctl --user is-active --quiet openclaw-gateway.service 2>/dev/null; then
-            __tac_info "Supervisor Process" "[BOOTING]" "$C_Warning"
+            __tac_info "Supervisor Process" "[FAILED TO START IN TIME]" "$C_Error"
         else
             __tac_info "Supervisor Process" "[CRASHED - CHECK LOGS]" "$C_Error"
-            printf '%s\n' "  ${C_Dim}Run 'le' to view the startup errors.${C_Reset}"
         fi
+        printf '%s\n' "  ${C_Dim}Run 'le' to view the startup errors.${C_Reset}"
     fi
 }
 
@@ -2404,7 +2416,7 @@ function oc-failover() {
 # ==============================================================================
 # @modular-section: deployment
 # @depends: constants, design-tokens, ui-engine, hooks
-# @exports: mkproj, deploy_sync, commit_deploy, commit_auto
+# @exports: mkproj, commit_deploy, commit_auto
 
 # ---------------------------------------------------------------------------
 # mkproj — Scaffold a new Python project with PEP-8 main.py, tests, venv, git.
@@ -2504,29 +2516,7 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# deploy_sync — Rsync ~/console to the OpenClaw production workspace.
-# ---------------------------------------------------------------------------
-function deploy_sync() {
-    if [[ ! -d "$OpenClawWorkspace" ]]; then
-        mkdir -p "$OpenClawWorkspace"
-        __tac_info "Created target" "$OpenClawWorkspace"
-    fi
-
-    __tac_header "DEPLOYMENT MANAGER" "open"
-    __tac_line "Syncing ~/console -> OpenClaw Workspace..." "[WORKING]" "$C_Dim"
-
-    rsync -a --delete --exclude ".git" --exclude "__pycache__" --exclude ".venv" "$TacticalRoot/" "$OpenClawWorkspace/" >/dev/null 2>&1
-    local rc=$?
-    if (( rc == 0 )); then
-        __tac_line "Folder Parity" "[ACHIEVED]" "$C_Success"
-    else
-        __tac_line "Folder Parity" "[SYNC FAILED]" "$C_Error"
-    fi
-    __tac_footer
-}
-
-# ---------------------------------------------------------------------------
-# commit_deploy — Stage, commit with a given message, push, then deploy.
+# commit_deploy — Stage, commit with a given message, then push.
 # ---------------------------------------------------------------------------
 function commit_deploy() {
     local msg="$*"
@@ -2575,7 +2565,6 @@ function commit_deploy() {
     fi
 
     __tac_footer
-    (( push_rc == 0 )) && deploy_sync
 }
 
 # ---------------------------------------------------------------------------
@@ -2685,7 +2674,6 @@ ${diff_body}"
     else
         __tac_info "Repository Sync" "[REMOTE PUSH FAILED]" "$C_Error"
     fi
-    (( push_rc == 0 )) && deploy_sync
 }
 
 # ==============================================================================
@@ -3751,7 +3739,7 @@ function __llm_chat_send() {
 # Accumulates user and assistant messages so the LLM has context of the full
 # conversation. First argument (if any) becomes the opening message.
 # Type 'end-chat' or press Ctrl-C to return to the shell.
-# Aliased as 'chat:' in section 3.
+# Aliased as 'chatl' in section 3.
 # ---------------------------------------------------------------------------
 function local_chat() {
     __require_llm || return 1
@@ -4023,7 +4011,7 @@ function tactical_dashboard() {
     else
         cmds_toggle="so"
     fi
-    local cmds="up | ${cmds_toggle} | serve | halt | chatl | commit | status | h"
+    local cmds="up | ${cmds_toggle} | serve <n> | halt | chatl | commit | h"
     local totalPad=$(( UIWidth - 2 - ${#cmds} ))
     local leftPad=$(( totalPad / 2 ))
     local rightPad=$(( totalPad - leftPad ))
@@ -4052,7 +4040,6 @@ function bashrc_diagnose() {
     echo ""
     echo "=== Key Paths ==="
     echo "AI_STORAGE_ROOT : ${AI_STORAGE_ROOT:-unset}"
-    echo "TacticalRoot    : ${TacticalRoot:-unset}"
     echo "OC_ROOT         : ${OC_ROOT:-unset}"
     echo "LLM_HOME        : ${LLM_HOME:-unset}"
     echo "LLM_REGISTRY    : ${LLM_REGISTRY:-unset}"
@@ -4135,7 +4122,6 @@ function tactical_help() {
     __hRow "ocv" "Print installed OpenClaw CLI version string"
     __hRow "oc-update" "Update the OpenClaw CLI binary to latest release"
     __hRow "oc-tui" "Launch the OpenClaw interactive terminal UI"
-    __hRow "status" "Quick overview of session health and recipients"
 
     __hSection "OPENCLAW — AGENTS & SESSIONS"
     __hRow "os / oa" "List all active sessions / Show registered agents"
@@ -4209,9 +4195,8 @@ function tactical_help() {
 
     __hSection "GIT & PROJECTS"
     __hRow "mkproj <n>" "Scaffold project: PEP-8 main.py, .venv, git init"
-    __hRow "commitd <m>" "Git add, commit with your message, push and deploy"
-    __hRow "commit" "Git add + commit (LLM auto-message) + push + deploy"
-    __hRow "deploy" "Rsync ~/console directory to OpenClaw_Prod"
+    __hRow "commitd <msg>" "Git add, commit with your message, and push"
+    __hRow "commit" "Git add + commit (LLM auto-message) + push"
     __hRow "cop" "Launch interactive GitHub Copilot CLI session"
     __hRow "?? <prompt>" "One-shot Copilot prompt (e.g. ?? find large files)"
     __hRow "cop-ask <msg>" "Non-interactive Copilot prompt (spelled-out alias)"
@@ -4232,7 +4217,7 @@ function tactical_help() {
 # @exports: (none — runs startup side-effects only)
 
 # Create required directories
-mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" "$TacticalRoot" "$AI_STORAGE_ROOT/.llm"
+mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" "$AI_STORAGE_ROOT/.llm"
 
 # Check for required dependencies
 if ! command -v jq >/dev/null 2>&1; then
