@@ -3823,15 +3823,23 @@ function burn() {
     local payload
     payload=$(jq -n --arg p "$prompt" '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')
 
-    local start_ns; start_ns=$(date +%s%N)
-    local response
-    response=$(curl -s --max-time 120 "$LOCAL_LLM_URL" \
-        -H "Content-Type: application/json" \
-        -d "$payload" 2>/dev/null)
-    local end_ns; end_ns=$(date +%s%N)
+    local max_retries=5 attempt=0 response="" start_ns end_ns
+    while (( attempt < max_retries )); do
+        start_ns=$(date +%s%N)
+        response=$(curl -s --max-time 120 "$LOCAL_LLM_URL" \
+            -H "Content-Type: application/json" \
+            -d "$payload" 2>/dev/null)
+        end_ns=$(date +%s%N)
+        [[ -n "$response" ]] && break
+        (( attempt++ ))
+        if (( attempt < max_retries )); then
+            printf '%s\n' "${C_Warning}[Waiting]${C_Reset} Model not ready — retry ${attempt}/${max_retries} in 5s..."
+            sleep 5
+        fi
+    done
 
     if [[ -z "$response" ]]; then
-        printf '%s\n' "${C_Error}[API Error]${C_Reset} No response — model may still be booting. Retry in 5s."
+        printf '%s\n' "${C_Error}[API Error]${C_Reset} No response after ${max_retries} attempts — model may not be loaded."
         return 1
     fi
 
