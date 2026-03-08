@@ -1,8 +1,53 @@
 # ==============================================================================
-# SYNOPSIS
-#       Tactical Console Profile (Bash)
-#       Admin: Wayne | Environment: WSL2 (Ubuntu 24.04) / RTX 3050 Ti
+# ~/.bashrc
 # ==============================================================================
+# Purpose:        Tactical Console Profile (Interactive shell configuration)
+# Author:         Wayne
+# Last modified:  2026-03-08
+# Environment:    WSL2 (Ubuntu 24.04) / RTX 3050 Ti
+#
+# Prerequisites:  bash >= 4.0
+#                 Required tools: git; Optional tools: fzf
+#
+# Safety:         Do NOT store secrets or credentials in this file.
+#                 Do NOT auto-execute remote scripts (curl | bash, wget | sh).
+#                 Avoid privileged operations (sudo, chown, chmod 777) at startup.
+#
+# Loader:         This file is the CANONICAL source of truth and is versioned at:
+#                   ~/ubuntu-console/tactical-console.bashrc
+#                 ~/.bashrc is a thin loader that sources the canonical file:
+#                   source "$HOME/ubuntu-console/tactical-console.bashrc"
+#                 This file may source modular fragments from:
+#                   ~/.bashrc.d/*.sh  (sourced in numeric order)
+#
+# HELP INDEX:     See the HELP INDEX section below for functions, aliases, and
+#                 sections with one-line descriptions and usage notes.
+#
+# SYNOPSIS:       Tactical Console Profile (Bash)
+#                 Admin: Wayne | Environment: WSL2 (Ubuntu 24.04)
+#
+# FILE LAYOUT:    - Keep ~/.bashrc as a thin loader only.
+#                 - Edit and version-control the canonical file at:
+#                     ~/ubuntu-console/tactical-console.bashrc
+#                 - Use the 'reload' alias to re-source the loader.
+#                 - Use the 'oedit' alias to open the canonical file in VS Code.
+#
+# NOTES:          - Prefer longhand, explicit bash constructs for readability
+#                   and future conversion to PowerShell.
+#                 - Guard interactive-only code with an interactive-shell check.
+#                 - Heavy or networked tasks must be lazy-loaded or moved to
+#                   explicit scripts or systemd user units.
+#                 - Modularize large sections into ~/.bashrc.d/ for maintainability.
+#
+# ==============================================================================
+# SHELLCHECK DIRECTIVES
+# ==============================================================================
+# SC1090: Non-constant source paths — dynamic sourcing is by design.
+# SC1091: External files not available for static analysis — expected.
+# SC2016: Single-quoted PowerShell commands — must not expand in bash.
+# SC2034: C_Border is part of the design-token set; reserved for external use.
+# SC2059: printf format strings use ANSI design tokens — intentional pattern.
+# shellcheck disable=SC1090,SC1091,SC2016,SC2034,SC2059
 
 # ==============================================================================
 # INTERACTIVE GUARD
@@ -20,9 +65,86 @@ esac
 # @depends: none
 #
 # AI INSTRUCTION: Increment version on significant changes.
-export TACTICAL_PROFILE_VERSION="2.13"
+export TACTICAL_PROFILE_VERSION="2.19"
 
 # CHANGELOG:
+# 2.19 (2026-03-08) — 71-item deep audit implementation. Errors: commit:→commitd,
+#        chat:→chatl, wtf:→wtf aliases (colon-free naming), LAST_TPS comment,
+#        serve <profile>→serve N in help, loopback regex anchored with trailing /.
+#        Security: chmod 777→755 hint, pkill -u "$USER" on all 3 llama-server
+#        kill sites (user-scoped process termination). Safety: logtrim tmp-file
+#        non-empty guard (-s check before mv), hours_left="" init (was 0).
+#        Logic: cd venv activate error check, __get_host_metrics sentinel "–|–|–"
+#        instead of "0|0|0", model boot progress dots during health wait.
+#        Redundancy: __vsc_open helper (deduplicates VS Code wrappers),
+#        __save_nullglob/__restore_nullglob, __require_openclaw, __usage.
+#        __strip_ansi varname validation added. Quality: bare returns→explicit
+#        return 0/1 on all error+cancel paths, [[ -gt ]]→(( )) in dashboard.
+#        Non-bash: 68 echo -e→printf '%s\n' conversions (design tokens are
+#        ANSI-C quoted, echo -e unnecessary). Style: owk/ologs/ocroot doc
+#        headers, __set_cooldown one-liner expanded, PROMPT_COMMAND block
+#        expanded with comments, g_util cleanup split to commented multi-line,
+#        deploy alias sub-banner, LLM alias comments. Comments: OPENCLAW_ROOT
+#        deprecation doc, VENV_DIR scope doc, drive detection fallback warning,
+#        PATH guards expanded to if/then/fi. Dashboard: help entries updated for
+#        renamed aliases (commitd, chatl, wtf), command bar updated.
+# 2.18 (2026-03-08) — Comprehensive 53-item quality audit. Errors: pkill -f→-x
+#        in oc-restore, strip trailing % from g_util_n, trailing newline guard,
+#        architecture map line numbers updated. Security: ZIP permission validation
+#        (setuid/setgid/world-writable), sudo -n guard in wake(), _sync_hash
+#        cleanup on all paths, bridge newline validation. Safety: atomic .bak swap
+#        in oc-restore, loopback addr precision check. Logic: hours_left dual-use
+#        documented, per-PID stale process count, drive recheck at download time,
+#        dynamic scoping doc for __send_chat_msg, cd venv activation doc. Dead
+#        code: documented alert alias and LAST_TPS default. Redundancy: extracted
+#        __renumber_registry and __threshold_color helpers. Quality: ERR trap
+#        extracted to __tac_err_handler, consistent return 1 in mkproj, printf
+#        safety documented, __require_llm explicit return 0, fgrep/egrep replaced.
+#        Style: all one-liner functions expanded to multi-line, shopt commands
+#        split, alias section sub-banners. Comments: regex explanation on
+#        __strip_ansi, magic-number breakdown in __fRow, model() case branch
+#        descriptions, commit_auto UX flow, HISTCONTROL/HISTIGNORE explained,
+#        EXIT cleanup lifecycle, __quant_label ggml.h cite, @depended-on-by
+#        cross-refs on §1/§4/§5, 2>/dev/null risk comments on oc-llm-sync source.
+#        Non-bash: raw ANSI in init→design tokens, echo -e→printf in sysinfo.
+#        Efficiency: __get_tokens perf note, du blocking note, git diff intentional
+#        double-call documented. Organisation: __save_tps ordering doc,
+#        @extractable marker on model(), alias sub-banners. Absorbed serve.sh
+#        features: prlimit/memlock, --jinja, adaptive batch sizes, --no-context-
+#        shift for Qwen3.
+# 2.17 (2026-03-08) — Style standardisation: all 120 function declarations now
+#        use `function name()` form. Added LLAMA_ARCHIVE_DIR constant (NTFS move
+#        prep). Removed ext4 references, Drive M: label derived from variable.
+#        Stale UIWidth comments updated. All interactive read -p prompts use
+#        design tokens. Numeric validation added to model info/delete/archive.
+#        GGUF parser handles uint64 (vt=10) for block_count/context_length.
+# 2.16 (2026-03-08) — Security & quality audit: removed hardcoded HF_TOKEN
+#        (moved to ~/.config/huggingface/token), refused unsigned oc-llm-sync.sh
+#        source, eliminated post-EOF code. Replaced python3 GGUF parser with
+#        pure bash+awk (dd|od|awk), removed WAYNE_HOME dead alias, made
+#        OC_ROOT canonical (OPENCLAW_ROOT now compat alias). Dynamic drive size
+#        detection via df. Fixed pkill -f→-x (3 sites) + model boot grace
+#        period in up(). Hardened API key bridge tmpfile (umask 077). Added
+#        model use numeric validation, bench restores prior model. Cached
+#        du -sb in model list (30s TTL). Fixed help duplicate + indentation.
+#        Replaced shift 2>/dev/null with guarded shift.
+# 2.15 (2026-03-08) — Monolithic consolidation: absorbed standalone scripts into
+#        .bashrc functions. oc-model-download → model download subcommand with
+#        HF_HOME/HF_TOKEN awareness and full format validation. oc-gpu-status →
+#        gpu-status function with box-drawn UI. oc-model-status, oc-model-switch,
+#        oc-quick-diag, oc-wake already existed as model status, model use,
+#        oc-diag, wake — removed redundant bin/ scripts. Only llama-watchdog.sh
+#        and tac_hostmetrics.sh remain in bin/ (systemd/subprocess dependency).
+#        Updated backup/restore to exclude retired scripts. Help index updated.
+# 2.14 (2026-03-07) — Model manager v3: replaced profile-based system (fast/
+#        think/experi) with auto-scan numbered registry. `model scan` reads GGUF
+#        metadata via python3, calculates optimal GPU layers/ctx/threads for 4GB
+#        VRAM. `model use N` replaces `model start <profile>`. Removed assign,
+#        swap, download commands. Models consolidated to /mnt/m/active/. Quant
+#        detection from file_type + filename fallback. Dashboard and oc-local-llm
+#        updated for new format (active file stores model number not pipe string).
+#        Fixed --flash-attn flag for newer llama.cpp (requires on/off/auto arg).
+#        Help section updated to match new commands.
 # 2.13 (2026-03-07) — Added GitHub Copilot CLI integration: COPILOT_CLI_DIR
 #        constant, PATH entry, `cop`/`??`/`cop-ask`/`cop-init` aliases.
 # 2.12 (2026-03-07) — Final review tidy: defensive-quoted all 15 __test_port
@@ -111,19 +233,19 @@ export TACTICAL_PROFILE_VERSION="2.13"
 # ARCHITECTURE MAP (approximate line numbers — update after major refactors)
 # ==============================================================================
 # ┌─  0. AI Instructions    ─ Rules for AI editors & formatting mandates   (~L19)
-# ├─  1. Global Constants    ─ All paths, ports, env vars (single truth)   (~L143)
-# ├─  2. Error Handling      ─ Bash ERR trap → bash-errors.log             (~L251)
-# ├─  3. Alias Definitions   ─ Short commands, VS Code wrappers            (~L264)
-# ├─  4. Design Tokens       ─ ANSI color constants (readonly)             (~L317)
-# ├─  5. UI Helper Engine    ─ Box-drawing primitives (__tac_* family)      (~L342)
-# ├─  6. System Hooks        ─ cd override, prompt (PS1), port test        (~L552)
-# ├─  7. Telemetry           ─ CPU, GPU, battery, git, disk, tokens        (~L624)
-# ├─  8. Maintenance         ─ get-ip, up, cl, cpwd, sysinfo, logtrim     (~L835)
-# ├─  9. OpenClaw Manager    ─ Gateway, backup, cron, skills, plugins      (~L1178)
-# ├─ 10. Deployment          ─ mkproj scaffold, rsync, git commit+push     (~L1924)
-# ├─ 11. LLM Manager         ─ model mgmt, chat, burn, explain             (~L2202)
-# ├─ 12. Dashboard & Help    ─ Tactical Dashboard ('m') and Help ('h')     (~L2876)
-# └─ 13. Initialization      ─ mkdir, completions, WSL loopback fix        (~L3160)
+# ├─  1. Global Constants    ─ All paths, ports, env vars (single truth)   (~L183)
+# ├─  2. Error Handling      ─ Bash ERR trap → bash-errors.log             (~L318)
+# ├─  3. Alias Definitions   ─ Short commands, VS Code wrappers            (~L339)
+# ├─  4. Design Tokens       ─ ANSI color constants (readonly)             (~L448)
+# ├─  5. UI Helper Engine    ─ Box-drawing primitives (__tac_* family)      (~L475)
+# ├─  6. System Hooks        ─ cd override, prompt (PS1), port test        (~L715)
+# ├─  7. Telemetry           ─ CPU, GPU, battery, git, disk, tokens        (~L791)
+# ├─  8. Maintenance         ─ get-ip, up, cl, cpwd, sysinfo, logtrim     (~L1006)
+# ├─  9. OpenClaw Manager    ─ Gateway, backup, cron, skills, plugins      (~L1358)
+# ├─ 10. Deployment          ─ mkproj scaffold, rsync, git commit+push     (~L2145)
+# ├─ 11. LLM Manager         ─ model mgmt, chat, burn, explain             (~L2434)
+# ├─ 12. Dashboard & Help    ─ Tactical Dashboard ('m') and Help ('h')     (~L3577)
+# └─ 13. Initialization      ─ mkdir, completions, WSL loopback fix        (~L3868)
 #
 # CROSS-CUTTING STATE (needs attention during modularisation):
 # - LAST_TPS: written by burn/llm_stream (§11) → read by dashboard (§12) via LLM_TPS_CACHE
@@ -151,16 +273,19 @@ export TACTICAL_PROFILE_VERSION="2.13"
 # ==============================================================================
 # @modular-section: constants
 # @depends: none
-# @exports: WAYNE_HOME, AI_STORAGE_ROOT, TacticalRoot, OpenClawWorkspace,
-#   OPENCLAW_ROOT, OC_ROOT, OC_WORKSPACE, OC_AGENTS, OC_LOGS, OC_BACKUPS,
+# @depended-on-by: aliases (§3), design-tokens (§4), ui-engine (§5), hooks (§6),
+#   telemetry (§7), maintenance (§8), openclaw (§9), deployment (§10),
+#   llm-manager (§11), dashboard (§12), init (§13)
+# @exports: AI_STORAGE_ROOT, TacticalRoot, OpenClawWorkspace,
+#   OC_ROOT, OPENCLAW_ROOT, OC_WORKSPACE, OC_AGENTS, OC_LOGS, OC_BACKUPS,
 #   CooldownDB, ErrorLogPath, OC_TMP_LOG, LLAMA_ROOT,
-#   LLAMA_MODEL_DIR, LLAMA_SERVER_BIN, LLM_REGISTRY, ACTIVE_LLM_FILE,
+#   LLAMA_MODEL_DIR, LLAMA_DRIVE_ROOT, LLAMA_ARCHIVE_DIR, LLAMA_SERVER_BIN,
+#   LLM_REGISTRY, ACTIVE_LLM_FILE,
 #   LLM_LOG_FILE, LLM_TPS_CACHE, TAC_CACHE_DIR, VENV_DIR, UIWidth, LAST_TPS,
 #   LLM_PORT, OC_PORT, LOCAL_LLM_URL, __TAC_HAS_BATTERY, __resolve_vscode_bin,
 #   VSCODE_BIN, WSL_NVIDIA_SMI, PATH, HISTCONTROL
 
-# ---- Storage Roots (Future-proofed for C:\AI\ and M:\AI\ migration) ----
-export WAYNE_HOME="$HOME"
+# ---- Storage Roots ----
 export AI_STORAGE_ROOT="$HOME"
 
 # ---- Workspace Roots ----
@@ -168,8 +293,11 @@ export TacticalRoot="$AI_STORAGE_ROOT/console"
 export OpenClawWorkspace="$AI_STORAGE_ROOT/OpenClaw_Prod"
 
 # ---- OpenClaw ----
-export OPENCLAW_ROOT="$AI_STORAGE_ROOT/.openclaw"
-export OC_ROOT="$OPENCLAW_ROOT" # Kept for backward compatibility
+export OC_ROOT="$AI_STORAGE_ROOT/.openclaw"
+# DEPRECATION: OPENCLAW_ROOT is the old name. OC_ROOT is canonical.
+# If no external scripts reference OPENCLAW_ROOT, this line can be removed.
+# Used by: oc-env display (§9), __sync_bashrc_tracked (§8).
+export OPENCLAW_ROOT="$OC_ROOT"
 export OC_WORKSPACE="$OC_ROOT/workspace"
 export OC_AGENTS="$OC_ROOT/agents"
 export OC_LOGS="$OC_ROOT/logs"
@@ -180,7 +308,17 @@ export OC_TMP_LOG="/tmp/openclaw/openclaw.log"
 
 # ---- LLM / llama.cpp ----
 export LLAMA_ROOT="$AI_STORAGE_ROOT/llama.cpp"
-export LLAMA_MODEL_DIR="$LLAMA_ROOT/models"
+export LLAMA_MODEL_DIR="/mnt/m/active"
+export LLAMA_ARCHIVE_DIR="/mnt/m/archive"
+export LLAMA_DRIVE_ROOT="/mnt/m"                # Root of the model drive
+# Detect drive size at startup; falls back to 200 GB if df unavailable.
+# WARNING: If the drive is not mounted, all capacity calculations will use
+# the 200GB fallback, which may over- or under-estimate available space.
+LLAMA_DRIVE_SIZE=$(df -B1 --output=size "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk 'NR==2{print $1+0}')
+if [[ -z "$LLAMA_DRIVE_SIZE" || "$LLAMA_DRIVE_SIZE" == "0" ]]; then
+    LLAMA_DRIVE_SIZE=$((200 * 1024 * 1024 * 1024))
+fi
+export LLAMA_DRIVE_SIZE
 export LLAMA_SERVER_BIN="$LLAMA_ROOT/build/bin/llama-server"
 export LLM_REGISTRY="$AI_STORAGE_ROOT/.llm/models.conf"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"
@@ -191,12 +329,14 @@ export LLM_TPS_CACHE="/dev/shm/last_tps"
 
 # ---- Telemetry & System Paths ----
 export TAC_CACHE_DIR="/dev/shm"
-export VENV_DIR=".venv"
+# VENV_DIR is shell-local only (not exported). Used by the cd() override
+# in §6 to auto-activate Python virtual environments on directory change.
+VENV_DIR=".venv"
 export BASH_COMPLETION_SCRIPT="/usr/share/bash-completion/bash_completion"
 
 # ---- VS Code Path (Lazy-initialized on first use to avoid slow pwsh call at startup) ----
 VSCODE_BIN=""
-__resolve_vscode_bin() {
+function __resolve_vscode_bin() {
     [[ -n "$VSCODE_BIN" ]] && return
     if [[ -f "$TAC_CACHE_DIR/vscode_path" ]]; then
         VSCODE_BIN=$(< "$TAC_CACHE_DIR/vscode_path")
@@ -219,6 +359,9 @@ export WSL_NVIDIA_SMI="/usr/lib/wsl/lib/nvidia-smi"
 # ---- GitHub Copilot CLI ----
 export COPILOT_CLI_DIR="$HOME/.vscode-server/data/User/globalStorage/github.copilot-chat/copilotCli"
 
+# ---- Hugging Face ----
+export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
+
 # ---- Network & API ----
 export LLM_PORT=8081
 export OC_PORT=18789
@@ -234,7 +377,7 @@ export LLAMA_CPU_THREADS=12  # Default CPU threads
 export LLAMA_CTX_SIZE=4096   # Default context window size
 
 # ---- Battery detection (cached once at startup to skip pwsh fallback on desktops) ----
-if [ -d /sys/class/power_supply/BAT0 ]; then
+if [[ -d /sys/class/power_supply/BAT0 ]]; then
     __TAC_HAS_BATTERY=1
 else
     __TAC_HAS_BATTERY=0
@@ -242,18 +385,49 @@ fi
 
 # ---- UI Context & Core Environment ----
 export UIWidth="${UIWidth:-80}"
-export LAST_TPS="Untested"
+# LAST_TPS holds the most recent inference speed measurement (tokens/sec).
+# Initialised to "Untested" so the dashboard displays a meaningful label
+# before any LLM inference has run in this session.
+# Shell-local only (not exported) — intentional. The dashboard reads it in
+# the same shell. LLM_TPS_CACHE is the file-backed persistent version in
+# /dev/shm. Precedence: LLM_TPS_CACHE is read on dashboard render; LAST_TPS
+# is the fallback when the cache file does not yet exist.
+LAST_TPS="Untested"
 
-# Guard against PATH duplication on re-source (e.g., source ~/.bashrc)
-[[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && export PATH="$HOME/.local/bin:$PATH"
-[[ ":$PATH:" != *":$HOME/.npm-global/bin:"* ]] && export PATH="$HOME/.npm-global/bin:$PATH"
-[[ -d "$COPILOT_CLI_DIR" && ":$PATH:" != *":$COPILOT_CLI_DIR:"* ]] && export PATH="$COPILOT_CLI_DIR:$PATH"
+# Guard against PATH duplication on re-source (e.g., source ~/.bashrc).
+# Each block checks whether the directory is already in PATH before prepending.
 
+# ~/.local/bin — pip-installed CLI tools (hf, openclaw, etc.)
+if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# ~/.npm-global/bin — globally installed npm packages
+if [[ ":$PATH:" != *":$HOME/.npm-global/bin:"* ]]; then
+    export PATH="$HOME/.npm-global/bin:$PATH"
+fi
+
+# GitHub Copilot CLI (only if directory exists)
+if [[ -d "$COPILOT_CLI_DIR" && ":$PATH:" != *":$COPILOT_CLI_DIR:"* ]]; then
+    export PATH="$COPILOT_CLI_DIR:$PATH"
+fi
+
+# HISTCONTROL=ignoreboth combines 'ignorespace' (commands starting with a
+# space are not recorded) and 'ignoredups' (consecutive duplicate commands
+# are not recorded). This keeps history clean while preserving unique entries.
 export HISTCONTROL=ignoreboth
 export HISTTIMEFORMAT="%Y-%m-%d %H:%M:%S  "
-shopt -s histappend checkwinsize
+
+# histappend: append (not overwrite) on shell exit
+shopt -s histappend
+
+# checkwinsize: update LINES/COLUMNS after each command
+shopt -s checkwinsize
+
 export HISTSIZE=100000
 export HISTFILESIZE=200000
+# HISTIGNORE: commands too short or frequently typed to be worth recording.
+# These are navigation commands that would dominate history otherwise.
 export HISTIGNORE="ls:ll:la:l:h:m:cls"
 
 # PS0 intentionally unset — PS1's leading \n handles all inter-prompt spacing.
@@ -270,7 +444,15 @@ export HISTIGNORE="ls:ll:la:l:h:m:cls"
 # Exit code 1 is filtered out because grep/test/[[ return 1 for normal
 # "not found" / "false" conditions and would flood the log with false positives.
 # Only exit codes >= 2 (real errors) are logged.
-trap '__tac_last_err=$?; (( __tac_last_err > 1 )) && echo "$(date +"%Y-%m-%d %H:%M:%S") [EXIT $__tac_last_err] $BASH_COMMAND" >> "$ErrorLogPath" 2>/dev/null' ERR
+# Extracted to a named function for clarity (traps with inline code are hard to read).
+# __tac_last_err intentionally global — traps cannot use `local`.
+function __tac_err_handler() {
+    __tac_last_err=$?
+    if (( __tac_last_err > 1 )); then
+        echo "$(date +"%Y-%m-%d %H:%M:%S") [EXIT $__tac_last_err] $BASH_COMMAND" >> "$ErrorLogPath" 2>/dev/null
+    fi
+}
+trap '__tac_err_handler' ERR
 
 # ==============================================================================
 # 3. ALIAS DEFINITIONS & SHORTCUTS
@@ -280,62 +462,112 @@ trap '__tac_last_err=$?; (( __tac_last_err > 1 )) && echo "$(date +"%Y-%m-%d %H:
 # @exports: code, oedit, llmconf, oclogs, le, lo, occonf, os, oa, ocstat,
 #   ocgs, ocv, mem-index, status, ocms, cop, cop-ask, cop-init (plus standard shell aliases)
 
-# Core OS
+# ---- Core OS Aliases ----
 alias ls='ls --color=auto'
 alias grep='grep --color=auto'
-alias fgrep='fgrep --color=auto'
-alias egrep='egrep --color=auto'
+# fgrep/egrep are deprecated in modern coreutils. These aliases ensure
+# backward compat if any inherited scripts call them. Safe to remove once
+# confirmed no scripts in ~/console or ~/.openclaw reference fgrep/egrep.
+alias fgrep='grep -F --color=auto'
+alias egrep='grep -E --color=auto'
 alias ll='ls -alF'
 alias la='ls -A'
 alias l='ls -CF'
+# Ubuntu default alert alias — kept for script compatibility even though
+# notify-send may not work under WSL. Triggers a desktop notification on
+# the exit status of the previous command.
 alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
 
-# Tactical UI & Navigation
+# ---- Tactical UI & Navigation ----
 alias h='tactical_help'
 alias cls='clear_tactical'
-alias reload='__sync_bashrc_tracked; command clear; exec bash'
+alias reload='command clear; exec bash'
 alias m='tactical_dashboard'
 alias cpwd='copy_path'
 
-# Dev Tools & VS Code Wrappers (lazy-resolved — no pwsh hit at shell start)
-code()    { __resolve_vscode_bin; "$VSCODE_BIN" "$@"; }
-oedit()   { __resolve_vscode_bin; "$VSCODE_BIN" "$WAYNE_HOME/.bashrc"; echo "VS Code opened... (run 'reload' to sync tracked copy)"; }
-llmconf() { __resolve_vscode_bin; "$VSCODE_BIN" "$LLM_REGISTRY"; echo "VS Code opened..."; }
-oclogs()  { __resolve_vscode_bin; "$VSCODE_BIN" "$OC_TMP_LOG"; echo "VS Code opened..."; }
-le()      { journalctl --user -u openclaw-gateway.service --no-pager -n 60 --output=cat 2>&1 | tail -40; }
-lo()      { journalctl --user -u openclaw-gateway.service --no-pager -n 120 --output=cat 2>&1; }
-occonf()  { __resolve_vscode_bin; "$VSCODE_BIN" "$OC_ROOT/openclaw.json"; echo "VS Code opened..."; }
+# ---- Dev Tools & VS Code Wrappers (lazy-resolved — no pwsh hit at shell start) ----
+# All VS Code wrappers use __vsc_open (defined in §5) for deduplication.
+function code() {
+    __resolve_vscode_bin
+    "$VSCODE_BIN" "$@"
+}
+function oedit() {
+    __vsc_open "$HOME/ubuntu-console/tactical-console.bashrc" "VS Code opened... (run 'reload' to apply changes)"
+}
+function llmconf() {
+    __vsc_open "$LLM_REGISTRY"
+}
+function oclogs() {
+    __vsc_open "$OC_TMP_LOG"
+}
+function le() {
+    journalctl --user -u openclaw-gateway.service --no-pager -n 60 --output=cat 2>&1 | tail -40
+}
+function lo() {
+    journalctl --user -u openclaw-gateway.service --no-pager -n 120 --output=cat 2>&1
+}
+function occonf() {
+    __vsc_open "$OC_ROOT/openclaw.json"
+}
 
+# ---- Deployment & Git Shortcuts ----
+# deploy     — rsync ~/console to OpenClaw production workspace
+# commitd    — git add + commit with YOUR message + push + deploy
+# commit     — git add + commit with LLM-generated message + push + deploy
 alias deploy='deploy_sync'
-alias commit:='commit_deploy'
+alias commitd='commit_deploy'
 alias commit='commit_auto'
 alias oc-agent-turn='ocstart'
 
-# OpenClaw shortcuts (functions defined in section 9)
-os()         { openclaw sessions; }
-oa()         { openclaw agents list; }
-ocstat()     { openclaw status --all; }
-ocgs()       { openclaw gateway status --deep; }
-ocv()        { openclaw --version; }
-mem-index()  { openclaw memory index; }
-status()     { openclaw status; }
-ocms()       { openclaw models status --probe; }
+# ---- OpenClaw Shortcuts (functions defined in §9) ----
+function os() {
+    openclaw sessions
+}
+function oa() {
+    openclaw agents list
+}
+function ocstat() {
+    openclaw status --all
+}
+function ocgs() {
+    openclaw gateway status --deep
+}
+function ocv() {
+    openclaw --version
+}
+function mem-index() {
+    openclaw memory index
+}
+function status() {
+    openclaw status
+}
+function ocms() {
+    openclaw models status --probe
+}
 
-# GitHub Copilot CLI
+# ---- GitHub Copilot CLI ----
 alias '??'='copilot -p'
 alias cop='copilot'
-cop-init() { copilot init; }
-cop-ask()  { copilot -p "$*"; }
+function cop-init() {
+    copilot init
+}
+function cop-ask() {
+    copilot -p "$*"
+}
 
-# LLM & Inference
-alias chat:='local_chat'
-alias 'wtf:'='wtf_repl'
+# ---- LLM & Inference ----
+# chatl      — interactive multi-turn chat with local LLM (end-chat to exit)
+# wtf <topic>— ask the local LLM to explain a tool or concept (REPL mode)
+alias chatl='local_chat'
+alias wtf='wtf_repl'
 
 # ==============================================================================
 # 4. DESIGN TOKENS
 # ==============================================================================
 # @modular-section: design-tokens
 # @depends: none
+# @depended-on-by: ui-engine (§5), hooks (§6), telemetry (§7), maintenance (§8),
+#   openclaw (§9), deployment (§10), llm-manager (§11), dashboard (§12), init (§13)
 # @exports: C_Reset, C_BoxBg, C_Border, C_Text, C_Dim, C_Highlight, C_Success,
 #   C_Warning, C_Error, C_Info (all readonly)
 #
@@ -361,8 +593,11 @@ fi
 # ==============================================================================
 # @modular-section: ui-engine
 # @depends: constants, design-tokens
+# @depended-on-by: telemetry (§7), maintenance (§8), openclaw (§9),
+#   deployment (§10), llm-manager (§11), dashboard (§12)
 # @exports: __strip_ansi, __tac_header, __tac_footer, __tac_divider, __tac_info,
-#   __tac_line, __fRow, __hSection, __hRow, __show_header, clear_tactical
+#   __tac_line, __fRow, __hSection, __hRow, __show_header, clear_tactical,
+#   __vsc_open, __save_nullglob, __restore_nullglob, __require_openclaw, __usage
 #
 # All __tac_* functions render box-drawn UI elements using the UIWidth constant.
 # They use printf -v for padding generation (no subshells / no seq) for speed.
@@ -374,13 +609,106 @@ fi
 #   ╟───╢  Within-section divider (single-line) — __tac_divider(), used in up()
 
 # ---------------------------------------------------------------------------
+# __threshold_color — Return a color token based on standard thresholds.
+# Usage: local color; color=$(__threshold_color <value>)
+#   >90 = C_Error (red), >75 = C_Warning (yellow), else = C_Success (green)
+#   Deduplicates the repeated threshold pattern (dashboard, sysinfo, gpu-status).
+# ---------------------------------------------------------------------------
+function __threshold_color() {
+    local val=$1
+    if (( val > 90 )); then
+        echo "$C_Error"
+    elif (( val > 75 )); then
+        echo "$C_Warning"
+    else
+        echo "$C_Success"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __vsc_open — Open a file in VS Code with lazy-resolved path.
+# Usage: __vsc_open <filepath> [confirmation_message]
+# Deduplicates the repeated __resolve_vscode_bin + "$VSCODE_BIN" pattern
+# used by oedit, llmconf, oclogs, occonf, mlogs, and any future wrappers.
+# ---------------------------------------------------------------------------
+function __vsc_open() {
+    local target="$1"
+    local msg="${2:-VS Code opened...}"
+
+    __resolve_vscode_bin
+    "$VSCODE_BIN" "$target"
+    printf '%s\n' "$msg"
+}
+
+# ---------------------------------------------------------------------------
+# __save_nullglob / __restore_nullglob — Save and restore the nullglob state.
+# Deduplicates the repeated pattern across __cleanup_temps, logtrim,
+# oc-cache-clear, and any future glob-dependent loops.
+# Usage:
+#   __save_nullglob
+#   shopt -s nullglob
+#   ... loop ...
+#   __restore_nullglob
+# ---------------------------------------------------------------------------
+function __save_nullglob() {
+    __tac_had_nullglob=0
+    if shopt -q nullglob; then
+        __tac_had_nullglob=1
+    fi
+    shopt -s nullglob
+}
+
+# __restore_nullglob — Undo nullglob set by __save_nullglob.
+function __restore_nullglob() {
+    if (( ! __tac_had_nullglob )); then
+        shopt -u nullglob
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __require_openclaw — Verify openclaw CLI is installed.
+# Prints an error and returns 1 if missing. Deduplicates the repeated
+# `command -v openclaw >/dev/null` checks across §9 functions.
+# ---------------------------------------------------------------------------
+function __require_openclaw() {
+    if ! command -v openclaw >/dev/null 2>&1; then
+        __tac_info "OpenClaw CLI" "[NOT INSTALLED]" "$C_Error"
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# __usage — Print a formatted usage-hint line using design tokens.
+# Usage: __usage "oc-config get <key> | set <key> <value> | unset <key>"
+# Deduplicates the repeated  echo -e "${C_Dim}Usage:..."  pattern.
+# ---------------------------------------------------------------------------
+function __usage() {
+    printf '%s%sUsage:%s %s\n' "$C_Dim" "" "$C_Reset" "$1"
+}
+
+# ---------------------------------------------------------------------------
 # __strip_ansi — Strip ANSI escape codes from a string (pure bash, zero forks).
 # Usage: __strip_ansi "string_with_colors" result_var
 #   Sets the named variable to the stripped text using bash regex only.
 #   No subshells, no sed — critical for dashboard render speed (called 20+ times).
+#
+# Regex breakdown: $'\e\['[0-9\;]*[mK]
+#   $'\e\['  — ESC + literal [ (the CSI introducer)
+#   [0-9\;]* — zero or more digits/semicolons (SGR parameters)
+#   [mK]     — the terminator: 'm' for colours, 'K' for erase-line
+#
+# Trade-off (I1): The while-loop + global substitution is O(n²) worst-case for
+# strings with many distinct escape sequences, but in practice dashboard values
+# have at most 2-3 distinct sequences so this is faster than forking to sed.
 # ---------------------------------------------------------------------------
-__strip_ansi() {
+function __strip_ansi() {
     local input="$1" varname="$2" tmp
+    # Safety: validate varname is a legal bash identifier (S3 — prevents
+    # indirect variable injection if callers ever pass untrusted data).
+    if [[ ! "$varname" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+        return 1
+    fi
     tmp="$input"
     while [[ "$tmp" =~ $'\e\['[0-9\;]*[mK] ]]; do
         tmp="${tmp//${BASH_REMATCH[0]}/}"
@@ -448,7 +776,7 @@ function __tac_divider() {
 # __tac_info — Borderless status line for quick command feedback.
 # Usage: __tac_info "Label" "[STATUS]" "$C_Color"
 # ---------------------------------------------------------------------------
-__tac_info() {
+function __tac_info() {
     local label="$1" status="$2" color="${3:-$C_Text}"
     local cleanLabel; __strip_ansi "$label" cleanLabel
     local cleanStatus; __strip_ansi "$status" cleanStatus
@@ -465,7 +793,7 @@ __tac_info() {
 # ---------------------------------------------------------------------------
 function __tac_line() {
     local action="$1" status="$2" color="${3:-$C_Text}"
-    local inner_text=$(( UIWidth - 4 ))  # 78 - 4 = 74 (borders + padding)
+    local inner_text=$(( UIWidth - 4 ))  # borders + 1-space padding each side
     local cleanAction; __strip_ansi "$action" cleanAction
     local cleanStatus; __strip_ansi "$status" cleanStatus
 
@@ -481,14 +809,14 @@ function __tac_line() {
 # __fRow — Dashboard row: "LABEL      :: value" inside box borders.
 # Truncates values to prevent border overflow.
 # Layout: 2 indent + 12 label + 4 " :: " + val_width + border = UIWidth
-# val_width = UIWidth - 20 (2 indent, 12 label, 4 sep, 2 borders)
+# val_width = UIWidth - 20  (the 20 comes from: 2 borders + 2 indent + 12 label + 4 separator)
 # Usage: __fRow "LABEL" "value" "$C_Color"
 # ---------------------------------------------------------------------------
 function __fRow() {
     local label="$1"
     local val="$2"
     local color="${3:-$C_Text}"
-    local val_width=$(( UIWidth - 20 ))  # 78 - 20 = 58
+    local val_width=$(( UIWidth - 20 ))  # 2 indent + 12 label + 4 sep + 2 borders
     # Strip ANSI codes to measure visible length
     local cleanVal; __strip_ansi "$val" cleanVal
     # Primary truncation: cap at val_width visible chars
@@ -498,7 +826,9 @@ function __fRow() {
     fi
     local labelPad=$(( 12 - ${#label} ))
     local valPad=$(( val_width - ${#cleanVal} ))
-    # Belt-and-suspenders guard — should never trigger after primary truncation
+    # Belt-and-suspenders guard — should never trigger after primary truncation.
+    # Kept as a defensive safety net: if __strip_ansi miscounts (e.g., partial
+    # escape sequences), this prevents printf from overflowing the box border.
     if (( valPad < 0 )); then
         val="${val:0:$((${#val} + valPad - 3))}..."
         cleanVal="${cleanVal:0:$((${#cleanVal} + valPad))}..."
@@ -540,7 +870,7 @@ function __hSection() {
 function __hRow() {
     local cmd="$1"
     local cmd_width=18
-    local desc_width=$(( UIWidth - 22 ))  # 78 - 2 borders - 2 indent - 18 cmd = 56
+    local desc_width=$(( UIWidth - 22 ))  # 2 borders + 2 indent + 18 cmd
     local desc="${2:0:$desc_width}"
     local cmdPad=$(( cmd_width - ${#cmd} ))
     local descPad=$(( desc_width - ${#desc} ))
@@ -585,7 +915,11 @@ function cd() {
 
     # Auto-activate .venv if present in new directory
     if [[ -f "$VENV_DIR/bin/activate" ]]; then
-        source "$VENV_DIR/bin/activate"
+        # Activate AFTER the cd has completed (builtin cd above already changed PWD).
+        # If activation fails, warn but do not abort (the cd itself succeeded).
+        if ! source "$VENV_DIR/bin/activate" 2>/dev/null; then
+            printf '%sWarning: .venv/bin/activate failed to source%s\n' "$C_Warning" "$C_Reset" >&2
+        fi
         return
     fi
 
@@ -605,13 +939,15 @@ else
     _TAC_ADMIN_BADGE=""
 fi
 
+# custom_prompt_command — PROMPT_COMMAND handler: updates PS1, history, error badge.
 function custom_prompt_command() {
     local lastExit=$?
     history -a
 
     # If history number hasn't changed, user pressed Enter with no command —
     # clear the error badge so × doesn't persist across empty prompts.
-    local -a _hist_arr=($(history 1 2>/dev/null))
+    local -a _hist_arr=()
+    read -ra _hist_arr <<< "$(history 1 2>/dev/null)"
     local hist_num="${_hist_arr[0]}"
     if [[ "$hist_num" == "${__tac_last_hist_num:-}" ]]; then
         lastExit=0
@@ -628,6 +964,9 @@ function custom_prompt_command() {
     PS1="\n${ps1_user}${_TAC_ADMIN_BADGE}${exit_badge}${ps1_path}${ps1_venv} \[${C_Dim}\]> \[${C_Reset}\]"
 }
 
+# Prepend custom_prompt_command to PROMPT_COMMAND if not already present.
+# Uses the ${var:+;$var} idiom to avoid a leading semicolon when PROMPT_COMMAND
+# is empty. This chains with any pre-existing PROMPT_COMMAND entries.
 if [[ "$PROMPT_COMMAND" != *"custom_prompt_command"* ]]; then
     PROMPT_COMMAND="custom_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 fi
@@ -636,7 +975,9 @@ fi
 # __test_port — Instant port check via kernel socket table (returns 0 if listening).
 # Usage: __test_port <port_number>
 # ---------------------------------------------------------------------------
-function __test_port() { ss -tln "sport = :$1" 2>/dev/null | grep -q LISTEN; }
+function __test_port() {
+    ss -tln "sport = :$1" 2>/dev/null | grep -q LISTEN
+}
 
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
@@ -655,7 +996,7 @@ function __test_port() { ss -tln "sport = :$1" 2>/dev/null | grep -q LISTEN; }
 # Usage: __cache_fresh <cache_path> <ttl_seconds>  →  returns 0 (fresh) or 1
 # Deduplicates the repeated freshness-check pattern across all telemetry funcs.
 # ---------------------------------------------------------------------------
-__cache_fresh() {
+function __cache_fresh() {
     [[ -f "$1" ]] && (( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) < $2 ))
 }
 
@@ -692,7 +1033,14 @@ function __get_host_metrics() {
         ( bash "$HOME/.local/bin/tac_hostmetrics.sh" > "${cache}.tmp" 2>/dev/null && mv "${cache}.tmp" "$cache" ) &>/dev/null &
         __TAC_BG_PIDS+=("$!")
     fi
-    [[ -f "$cache" ]] && cat "$cache" || echo "0|0|0"
+    # Return stale cache data while background refresh runs.
+    # Use "–|–|–" sentinel (not "0|0|0") so the dashboard can distinguish
+    # "metrics not yet available" from "genuinely zero utilisation".
+    if [[ -f "$cache" ]]; then
+        cat "$cache"
+    else
+        echo "–|–|–"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -715,7 +1063,11 @@ function __get_gpu() {
         fi
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
-    [[ -f "$cache" ]] && cat "$cache" || echo "Querying..."
+    if [[ -f "$cache" ]]; then
+        cat "$cache"
+    else
+        echo "Querying..."
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -738,7 +1090,11 @@ function __get_battery() {
         fi
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
-    [[ -f "$cache" ]] && cat "$cache" || echo "Querying..."
+    if [[ -f "$cache" ]]; then
+        cat "$cache"
+    else
+        echo "Querying..."
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -748,7 +1104,12 @@ function __get_battery() {
 function __get_git() {
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         local branch; branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-        local dirty; dirty=$([[ -n $(git status --porcelain) ]] && echo "BREACHED" || echo "SECURE")
+        local dirty
+        if [[ -n $(git status --porcelain) ]]; then
+            dirty="BREACHED"
+        else
+            dirty="SECURE"
+        fi
         echo "$branch|$dirty"
     fi
 }
@@ -758,6 +1119,10 @@ function __get_git() {
 # Scans agents/*/sessions/sessions.json for the newest session with totalTokens.
 # Returns "used|limit" or "N/A|0".
 # ---------------------------------------------------------------------------
+# Performance note (I2): This function runs jq over up to 10 session files on
+# every dashboard refresh (when cache is stale). The background subshell ensures
+# the dashboard itself never blocks, but jq parsing still costs CPU. If this
+# becomes a bottleneck, consider indexing largest-session only or switching to awk.
 function __get_tokens() {
     local cache="$TAC_CACHE_DIR/tac_tokens"
     if __cache_fresh "$cache" 30; then
@@ -785,7 +1150,11 @@ function __get_tokens() {
         (( found == 0 )) && echo "N/A|0" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
-    [[ -f "$cache" ]] && cat "$cache" || echo "Querying...|0"
+    if [[ -f "$cache" ]]; then
+        cat "$cache"
+    else
+        echo "Querying...|0"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -805,7 +1174,11 @@ function __get_oc_version() {
         echo "$ocVersion" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
-    [[ -f "$cache" ]] && cat "$cache" || echo "Querying..."
+    if [[ -f "$cache" ]]; then
+        cat "$cache"
+    else
+        echo "Querying..."
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -827,7 +1200,11 @@ function __get_oc_metrics() {
         echo "$sessionCount|$ver" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
-    [[ -f "$cache" ]] && cat "$cache" || echo "Querying...|$ver"
+    if [[ -f "$cache" ]]; then
+        cat "$cache"
+    else
+        echo "Querying...|$ver"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -862,7 +1239,7 @@ function __get_llm_slots() {
 # Only cleans python-*.exe and .pytest_cache from $PWD. Does NOT remove
 # *.log files (too dangerous in arbitrary directories). Used by cl().
 # ---------------------------------------------------------------------------
-__cleanup_temps() {
+function __cleanup_temps() {
     local count=0
     local f
     local _had_nullglob=0; shopt -q nullglob && _had_nullglob=1
@@ -883,7 +1260,7 @@ __cleanup_temps() {
 # On return 1, prints remaining time (e.g. "6d 12h") to stdout.
 # Dependencies: $CooldownDB must be set and touchable.
 # ---------------------------------------------------------------------------
-__check_cooldown() {
+function __check_cooldown() {
     local key="$1" now="$2"
     # Per-key cooldown periods (default 7 days)
     local cooldown
@@ -913,9 +1290,14 @@ __check_cooldown() {
 # __set_cooldown — Record that a maintenance task was just completed.
 # Usage: __set_cooldown <key> <now_timestamp>
 # ---------------------------------------------------------------------------
-__set_cooldown() {
+function __set_cooldown() {
     local key="$1" now="$2"
-    { grep -v "^${key}=" "$CooldownDB" 2>/dev/null; echo "${key}=${now}"; } > "${CooldownDB}.tmp" && mv "${CooldownDB}.tmp" "$CooldownDB"
+    # Rewrite the cooldown database: remove old entry, append new timestamp.
+    {
+        grep -v "^${key}=" "$CooldownDB" 2>/dev/null
+        echo "${key}=${now}"
+    } > "${CooldownDB}.tmp" \
+        && mv "${CooldownDB}.tmp" "$CooldownDB"
 }
 
 # ---------------------------------------------------------------------------
@@ -929,7 +1311,11 @@ function get-ip() {
 
     local extIp; extIp=$(curl -s --connect-timeout 2 https://api.ipify.org)
     [[ -z "$extIp" ]] && extIp="TIMEOUT / UNAVAILABLE"
-    __tac_info "External WAN IP" "[$extIp]" "$([[ $extIp == TIMEOUT* ]] && echo "$C_Error" || echo "$C_Warning")"
+    local wan_color=$C_Warning
+    if [[ $extIp == TIMEOUT* ]]; then
+        wan_color=$C_Error
+    fi
+    __tac_info "External WAN IP" "[$extIp]" "$wan_color"
 }
 
 # ---------------------------------------------------------------------------
@@ -942,7 +1328,12 @@ function up() {
     __tac_header "SYSTEM MAINTENANCE" "open"
     local errCount=0
     local now; now=$(date +%s)
-    local hours_left=0
+    # hours_left is re-used by each __check_cooldown call as a capture variable.
+    # When __check_cooldown returns 1 (still cooling down), hours_left holds
+    # the remaining time string (e.g. "6d 12h"). The `if` construct exploits
+    # the fact that command substitution in the condition captures stdout while
+    # the return code controls the branch.
+    local hours_left=""
     touch "$CooldownDB" 2>/dev/null
 
     # [1/10] Connectivity
@@ -1006,8 +1397,9 @@ function up() {
     # [4/10] OpenClaw verification — runs 'openclaw doctor' for real health check
     if hours_left=$(__check_cooldown "openclaw" "$now"); then
         if command -v openclaw >/dev/null; then
-            local doc_out; doc_out=$(openclaw doctor 2>&1)
-            local doc_rc=$?
+            local doc_rc
+            openclaw doctor >/dev/null 2>&1
+            doc_rc=$?
             if (( doc_rc == 0 )); then
                 __tac_line "[4/10] OpenClaw Framework" "[HEALTHY]" "$C_Success"
             else
@@ -1084,15 +1476,22 @@ function up() {
     done < <(df -h --output=pcent,target 2>/dev/null | tail -n +2 | grep -v '/snap/' | grep -v '/mnt/wsl/docker-desktop')
     (( disk_warn == 0 )) && __tac_line "[9/10] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
 
-    # [10/10] Stale Process Cleanup — kill orphaned llama-server instances
-    # Uses pgrep -f (not PID-based port check) intentionally: we want ALL
-    # llama-server processes, not just the one on $LLM_PORT. Orphans may
-    # exist on other ports or have lost their listen socket.
-    local stale_pids; stale_pids=$(pgrep -f llama-server 2>/dev/null | wc -l)
-    if (( stale_pids > 0 )) && ! __test_port "$LLM_PORT"; then
-        pkill -f llama-server 2>/dev/null
-        rm -f "$ACTIVE_LLM_FILE"
-        __tac_line "[10/10] Stale Processes" "[$stale_pids ORPHAN(S) KILLED]" "$C_Warning"
+    # [10/10] Stale Process Cleanup — kill orphaned llama-server instances.
+    # Skip if the active model state file was touched < 60s ago (still booting).
+    # Per-PID check: only kill processes that are NOT listening on LLM_PORT.
+    local stale_pids; stale_pids=$(pgrep -x llama-server 2>/dev/null)
+    local stale_count=0
+    if [[ -n "$stale_pids" ]] && ! __test_port "$LLM_PORT"; then
+        stale_count=$(echo "$stale_pids" | wc -l)
+        local _state_age=999
+        [[ -f "$ACTIVE_LLM_FILE" ]] && _state_age=$(( $(date +%s) - $(stat -c %Y "$ACTIVE_LLM_FILE" 2>/dev/null || echo 0) ))
+        if (( _state_age < 60 )); then
+            __tac_line "[10/10] Stale Processes" "[${stale_count} BOOTING — GRACE PERIOD]" "$C_Dim"
+        else
+            pkill -u "$USER" -x llama-server 2>/dev/null
+            rm -f "$ACTIVE_LLM_FILE"
+            __tac_line "[10/10] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
+        fi
     else
         __tac_line "[10/10] Stale Processes" "[CLEAN]" "$C_Success"
     fi
@@ -1115,18 +1514,13 @@ function cl() {
 }
 
 # ---------------------------------------------------------------------------
-# __sync_bashrc_tracked — Copy ~/.bashrc to the git-tracked backup in .openclaw.
-# Called automatically by 'reload'. No-op if files are identical.
+# __sync_bashrc_tracked — RETIRED (v2.20).
+# Previously copied ~/.bashrc to .openclaw/bashrc.tracked.
+# No longer needed: the canonical source is now version-controlled directly at
+# ~/ubuntu-console/tactical-console.bashrc. ~/.bashrc is a thin loader.
+# Kept as a no-op stub so existing 'reload' muscle-memory doesn't error.
 # ---------------------------------------------------------------------------
-__sync_bashrc_tracked() {
-    local src="$HOME/.bashrc"
-    local dst="$OPENCLAW_ROOT/bashrc.tracked"
-    if [[ -f "$src" ]] && ! cmp -s "$src" "$dst" 2>/dev/null; then
-        cp "$src" "$dst"
-        ( cd "$OPENCLAW_ROOT" && git add bashrc.tracked && git commit -m "Auto-sync .bashrc (v${TACTICAL_PROFILE_VERSION})" --quiet ) 2>/dev/null
-        __tac_info ".bashrc backup" "[SYNCED + COMMITTED]" "$C_Success"
-    fi
-}
+function __sync_bashrc_tracked() { :; }
 
 # ---------------------------------------------------------------------------
 # copy_path — Copy the current working directory to the Windows clipboard.
@@ -1153,25 +1547,27 @@ function sysinfo() {
     if [[ "$gpu_raw" != "N/A" && "$gpu_raw" != "Querying..." ]]; then
         local _g_name g_temp g_util _g_mu _g_mt
         IFS=',' read -r _g_name g_temp g_util _g_mu _g_mt <<< "$gpu_raw"
-        g_util=${g_util// /}; g_util=${g_util%%%}; g_temp=${g_temp// /}
+        # Strip whitespace from nvidia-smi CSV fields
+        g_util=${g_util// /}
+        # Strip trailing % sign for numeric comparison
+        g_util=${g_util%%%}
+        # Strip whitespace from temperature
+        g_temp=${g_temp// /}
         gpu_info="${g_util}%/${g_temp}°C"
-        if (( g_util > 90 )); then gpu_color=$C_Error
-        elif (( g_util > 75 )); then gpu_color=$C_Warning
-        else gpu_color=$C_Success; fi
+        gpu_color=$(__threshold_color "$g_util")
     fi
     # CPU colour
-    local cpu_color=$C_Success
-    if (( cpu > 90 )); then cpu_color=$C_Error
-    elif (( cpu > 75 )); then cpu_color=$C_Warning; fi
+    local cpu_color
+    cpu_color=$(__threshold_color "$cpu")
     # Memory colour
-    local mem_color=$C_Success
-    if (( mem_pct > 90 )); then mem_color=$C_Error
-    elif (( mem_pct > 75 )); then mem_color=$C_Warning; fi
+    local mem_color
+    mem_color=$(__threshold_color "$mem_pct")
     # GPU1 colour (same thresholds as CPU/GPU0)
-    local gpu1_color=$C_Success
-    if (( gpu1 > 90 )); then gpu1_color=$C_Error
-    elif (( gpu1 > 75 )); then gpu1_color=$C_Warning; fi
-    echo -e "${C_Dim}CPU:${C_Reset} ${cpu_color}${cpu}%${C_Reset} ${C_Dim}RAM:${C_Reset} ${mem_color}${mem_used} / ${mem_total} Gb${C_Reset} ${C_Dim}Disk:${C_Reset} ${disk} ${C_Dim}GPU0:${C_Reset} ${gpu_color}${gpu_info}${C_Reset} ${C_Dim}GPU1:${C_Reset} ${gpu1_color}${gpu1}%${C_Reset}"
+    local gpu1_color
+    gpu1_color=$(__threshold_color "$gpu1")
+    # Design tokens are already ANSI-C quoted ($'\e[…]'), so echo -e is
+    # unnecessary. Using printf avoids any accidental backslash interpretation.
+    printf '%s\n' "${C_Dim}CPU:${C_Reset} ${cpu_color}${cpu}%${C_Reset} ${C_Dim}RAM:${C_Reset} ${mem_color}${mem_used} / ${mem_total} Gb${C_Reset} ${C_Dim}Disk:${C_Reset} ${disk} ${C_Dim}GPU0:${C_Reset} ${gpu_color}${gpu_info}${C_Reset} ${C_Dim}GPU1:${C_Reset} ${gpu1_color}${gpu1}%${C_Reset}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1184,6 +1580,7 @@ function logtrim() {
     for logfile in "$OC_LOGS"/*.log "$ErrorLogPath" "$LLM_LOG_FILE"; do
         if [[ -f "$logfile" ]] && (( $(stat -c%s "$logfile" 2>/dev/null || echo 0) > 1048576 )); then
             tail -n 1000 "$logfile" > "${logfile}.tmp" || continue
+            [[ -s "${logfile}.tmp" ]] || { rm -f "${logfile}.tmp"; continue; }
             mv "${logfile}.tmp" "$logfile" || { rm -f "${logfile}.tmp"; continue; }
             ((total++))
         fi
@@ -1212,7 +1609,7 @@ function logtrim() {
 function so() {
     if __test_port "$OC_PORT"; then
         __tac_info "Gateway Status" "[ALREADY RUNNING]" "$C_Warning"
-        return
+        return 0
     fi
 
     # Push bridged API keys into the systemd user environment so the
@@ -1234,7 +1631,7 @@ function so() {
     local _prov_url; _prov_url=$(openclaw config get provider.baseUrl 2>/dev/null)
     if [[ "$_prov_url" == *"127.0.0.1:${LLM_PORT}"* ]] && ! __test_port "$LLM_PORT"; then
         __tac_info "Local LLM" "[OFFLINE — provider points to localhost:$LLM_PORT]" "$C_Warning"
-        echo -e "  ${C_Dim}Run 'serve <profile>' to start the LLM before gateway.${C_Reset}"
+        printf '%s\n' "  ${C_Dim}Run 'serve <profile>' to start the LLM before gateway.${C_Reset}"
     fi
 
     openclaw gateway start >/dev/null 2>&1
@@ -1247,7 +1644,7 @@ function so() {
             __tac_info "Supervisor Process" "[BOOTING]" "$C_Warning"
         else
             __tac_info "Supervisor Process" "[CRASHED - CHECK LOGS]" "$C_Error"
-            echo -e "  ${C_Dim}Run 'le' to view the startup errors.${C_Reset}"
+            printf '%s\n' "  ${C_Dim}Run 'le' to view the startup errors.${C_Reset}"
         fi
     fi
 }
@@ -1277,14 +1674,14 @@ function oc-restart() {
 # ocstart — Send an agent turn to OpenClaw.
 # Usage: ocstart -m "<message>" [--to <E.164>] [--agent <id>]
 # ---------------------------------------------------------------------------
-ocstart() {
+function ocstart() {
     if [[ -z "$*" ]]; then
-        echo -e "${C_Dim}Usage:${C_Reset} ocstart --message \"<message>\" [--to <E.164>] [--agent <id>]"
-        echo -e "${C_Dim}  --message     Message body for the agent (required)${C_Reset}"
-        echo -e "${C_Dim}  --to          Recipient number in E.164 format${C_Reset}"
-        echo -e "${C_Dim}  --agent       Agent ID to target${C_Reset}"
-        echo -e "${C_Dim}  --session-id  Explicit session ID${C_Reset}"
-        echo -e "${C_Dim}  --thinking    Thinking level (off|minimal|low|medium|high|xhigh)${C_Reset}"
+        printf '%s\n' "${C_Dim}Usage:${C_Reset} ocstart --message \"<message>\" [--to <E.164>] [--agent <id>]"
+        printf '%s\n' "${C_Dim}  --message     Message body for the agent (required)${C_Reset}"
+        printf '%s\n' "${C_Dim}  --to          Recipient number in E.164 format${C_Reset}"
+        printf '%s\n' "${C_Dim}  --agent       Agent ID to target${C_Reset}"
+        printf '%s\n' "${C_Dim}  --session-id  Explicit session ID${C_Reset}"
+        printf '%s\n' "${C_Dim}  --thinking    Thinking level (off|minimal|low|medium|high|xhigh)${C_Reset}"
         return 1
     fi
     openclaw agent "$@"
@@ -1294,11 +1691,11 @@ ocstart() {
 # ocstop — Delete / stop an agent.
 # Usage: ocstop --agent <id>
 # ---------------------------------------------------------------------------
-ocstop() {
+function ocstop() {
     if [[ -z "$*" ]]; then
-        echo -e "${C_Dim}Usage:${C_Reset} ocstop --agent <id>"
-        echo -e "${C_Dim}  --agent  Agent ID to stop (required)${C_Reset}"
-        echo -e "${C_Dim}  Tip: run 'oa' to list agents${C_Reset}"
+        printf '%s\n' "${C_Dim}Usage:${C_Reset} ocstop --agent <id>"
+        printf '%s\n' "${C_Dim}  --agent  Agent ID to stop (required)${C_Reset}"
+        printf '%s\n' "${C_Dim}  Tip: run 'oa' to list agents${C_Reset}"
         return 1
     fi
     openclaw agents delete "$@"
@@ -1308,8 +1705,8 @@ ocstop() {
 # ockeys — Show Windows environment API keys and their WSL visibility.
 # Wraps the pwsh call in timeout to prevent hangs after sleep/hibernate.
 # ---------------------------------------------------------------------------
-ockeys() {
-    echo -e "${C_Highlight}API Keys & Tokens (Windows Environment → WSL):${C_Reset}"
+function ockeys() {
+    printf '%s\n' "${C_Highlight}API Keys & Tokens (Windows Environment → WSL):${C_Reset}"
     local found=0
     while IFS='=' read -r name val; do
         [[ -z "$name" ]] && continue
@@ -1323,7 +1720,7 @@ ockeys() {
             else
                 oc_visible="${C_Error}WSL ✗${C_Reset}"
             fi
-            echo -e "  ${C_Dim}$name${C_Reset}  $masked  $oc_visible"
+            printf '%s\n' "  ${C_Dim}$name${C_Reset}  $masked  $oc_visible"
             ((found++))
         fi
     done < <(timeout 5 pwsh.exe -NoProfile -Command '
@@ -1332,14 +1729,14 @@ ockeys() {
     if (( found == 0 )); then
         __tac_info "Windows User Env" "[NO API-KEY / TOKEN VARS FOUND]" "$C_Warning"
     else
-        echo -e "  ${C_Dim}$found key(s) found in Windows User environment${C_Reset}"
+        printf '%s\n' "  ${C_Dim}$found key(s) found in Windows User environment${C_Reset}"
     fi
 }
 
 # ---------------------------------------------------------------------------
 # ocdoc-fix — Run openclaw doctor --fix with automatic config backup.
 # ---------------------------------------------------------------------------
-ocdoc-fix() {
+function ocdoc-fix() {
     local cfg="$OC_ROOT/openclaw.json"
     local bak="${cfg}.pre-doctor"
     if [[ -f "$cfg" ]]; then
@@ -1348,8 +1745,8 @@ ocdoc-fix() {
     fi
     openclaw doctor --fix
     if [[ -f "$bak" && -f "$cfg" ]]; then
-        echo -e "${C_Dim}If settings were overwritten, restore with:${C_Reset}"
-        echo -e "  ${C_Highlight}cp $bak $cfg${C_Reset}"
+        printf '%s\n' "${C_Dim}If settings were overwritten, restore with:${C_Reset}"
+        printf '%s\n' "  ${C_Highlight}cp $bak $cfg${C_Reset}"
     fi
 }
 
@@ -1360,7 +1757,7 @@ ocdoc-fix() {
 # every shell start. Run 'oc-refresh-keys' to force a re-import.
 # Security: cache is chmod 600 and lives in tmpfs (RAM only, no disk).
 # ---------------------------------------------------------------------------
-__bridge_windows_api_keys() {
+function __bridge_windows_api_keys() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
     local ttl=3600
 
@@ -1383,10 +1780,12 @@ __bridge_windows_api_keys() {
 
     # Build a sourceable cache file, skipping vars with invalid names
     local tmpfile="${cache}.tmp"
-    : > "$tmpfile"
+    ( umask 077; : > "$tmpfile" )
     while IFS='=' read -r name val; do
         [[ -z "$name" || "$name" =~ [^a-zA-Z0-9_] ]] && continue
         [[ -z "$val" ]] && continue
+        # Reject values with embedded newlines (could inject extra commands)
+        [[ "$val" == *$'\n'* ]] && continue
         printf 'export %s=%q\n' "$name" "$val" >> "$tmpfile"
     done <<< "$raw"
     mv "$tmpfile" "$cache"
@@ -1397,7 +1796,7 @@ __bridge_windows_api_keys() {
 # ---------------------------------------------------------------------------
 # oc-refresh-keys — Force re-import of Windows API keys into WSL.
 # ---------------------------------------------------------------------------
-oc-refresh-keys() {
+function oc-refresh-keys() {
     rm -f "$TAC_CACHE_DIR/tac_win_api_keys"
     __bridge_windows_api_keys
     if [[ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]]; then
@@ -1415,7 +1814,7 @@ oc-refresh-keys() {
 function oc-backup() {
     if ! command -v zip >/dev/null; then
         __tac_info "Dependency" "[zip not installed]" "$C_Error"
-        echo -e "  ${C_Dim}Install: sudo apt install zip${C_Reset}"
+        printf '%s\n' "  ${C_Dim}Install: sudo apt install zip${C_Reset}"
         return 1
     fi
 
@@ -1435,12 +1834,12 @@ function oc-backup() {
         [[ -f ".openclaw/auth.json" ]]     && targets+=(".openclaw/auth.json")
         [[ -f ".llm/models.conf" ]]        && targets+=(".llm/models.conf")
         # Shell profile and standalone scripts
+        # Canonical profile is in the ubuntu-console repo; back up both the
+        # thin loader (~/.bashrc) and the full profile.
         [[ -f ".bashrc" ]]                && targets+=(".bashrc")
+        [[ -f "ubuntu-console/tactical-console.bashrc" ]] && targets+=("ubuntu-console/tactical-console.bashrc")
         local _script
-        for _script in .local/bin/oc-model-status .local/bin/oc-model-switch \
-                       .local/bin/oc-quick-diag .local/bin/oc-gpu-status \
-                       .local/bin/oc-wake \
-                       .local/bin/llama-watchdog.sh .local/bin/tac_hostmetrics.sh; do
+        for _script in .local/bin/llama-watchdog.sh .local/bin/tac_hostmetrics.sh; do
             [[ -f "$_script" ]] && targets+=("$_script")
         done
         # Systemd units
@@ -1458,7 +1857,7 @@ function oc-backup() {
         local sz; sz=$(stat -c%s "$zipPath" 2>/dev/null || echo "0")
         local human_sz=$(( sz / 1024 ))
         __tac_info "Snapshot Archive" "[CREATED — ${human_sz}KB]" "$C_Success"
-        echo -e "  ${C_Dim}Path: $zipPath${C_Reset}"
+        printf '%s\n' "  ${C_Dim}Path: $zipPath${C_Reset}"
 
         # Prune old snapshots — keep the 10 most recent
         local -a all_snaps=()
@@ -1498,17 +1897,18 @@ function oc-restore() {
     fi
     if [[ -z "$latest" ]]; then
         __tac_info "Available Snapshots" "[NONE FOUND]" "$C_Error"
-        return
+        return 1
     fi
 
-    echo -e "${C_Warning}WARNING: This will DESTROY the current workspace and agents.${C_Reset}"
-    echo -e "${C_Dim}Restoring from: $(basename "$latest")${C_Reset}"
-    read -r -p $'\e[33mContinue? [y/N]: \e[0m' confirm
-    [[ "${confirm,,}" != "y" ]] && { __tac_info "Restore" "[CANCELLED]" "$C_Dim"; return; }
+    printf '%s\n' "${C_Warning}WARNING: This will DESTROY the current workspace and agents.${C_Reset}"
+    printf '%s\n' "${C_Dim}Restoring from: $(basename "$latest")${C_Reset}"
+    read -r -p "${C_Warning}Continue? [y/N]: ${C_Reset}" confirm
+    [[ "${confirm,,}" != "y" ]] && { __tac_info "Restore" "[CANCELLED]" "$C_Dim"; return 0; }
 
     # Stop gateway inline (avoid calling xo which prints its own UI)
     openclaw gateway stop >/dev/null 2>&1
-    pkill -f 'openclaw (gateway|start)' 2>/dev/null
+    # pkill -x matches only the exact process name (not substrings)
+    pkill -x openclaw 2>/dev/null
 
     __tac_info "Purging active configurations..." "[WORKING]" "$C_Dim"
 
@@ -1531,21 +1931,40 @@ function oc-restore() {
         return 1
     fi
 
+    # Security: reject extracted files with setuid/setgid/world-writable bits.
+    # A crafted ZIP could plant executables with elevated permissions.
+    if find "$tmp_restore" \( -perm /4000 -o -perm /2000 -o -perm /0002 \) -print -quit 2>/dev/null | grep -q .; then
+        __tac_info "State Rollback" "[FAILED — ZIP contains unsafe file permissions]" "$C_Error"
+        rm -rf "$tmp_restore"
+        return 1
+    fi
+
     # Only destroy directories that the backup will replace — a config-only
     # restore must NOT wipe workspace/agents if it has no replacements.
-    [[ -d "$tmp_restore/.openclaw/workspace" ]] && rm -rf "$OC_WORKSPACE" && mv "$tmp_restore/.openclaw/workspace" "$OC_WORKSPACE"
-    [[ -d "$tmp_restore/.openclaw/agents" ]]    && rm -rf "$OC_AGENTS"    && mv "$tmp_restore/.openclaw/agents" "$OC_AGENTS"
+    # Atomic swap: rename current → .bak, move new into place, then remove .bak.
+    # If the move fails, the .bak can be manually restored (no total-loss window).
+    if [[ -d "$tmp_restore/.openclaw/workspace" ]]; then
+        [[ -d "$OC_WORKSPACE" ]] && mv "$OC_WORKSPACE" "${OC_WORKSPACE}.bak"
+        mv "$tmp_restore/.openclaw/workspace" "$OC_WORKSPACE"
+        rm -rf "${OC_WORKSPACE}.bak"
+    fi
+    if [[ -d "$tmp_restore/.openclaw/agents" ]]; then
+        [[ -d "$OC_AGENTS" ]] && mv "$OC_AGENTS" "${OC_AGENTS}.bak"
+        mv "$tmp_restore/.openclaw/agents" "$OC_AGENTS"
+        rm -rf "${OC_AGENTS}.bak"
+    fi
     # Restore config files if they were backed up
     [[ -f "$tmp_restore/.openclaw/openclaw.json" ]] && mv "$tmp_restore/.openclaw/openclaw.json" "$OC_ROOT/openclaw.json"
     [[ -f "$tmp_restore/.openclaw/auth.json" ]]     && mv "$tmp_restore/.openclaw/auth.json" "$OC_ROOT/auth.json"
     [[ -f "$tmp_restore/.llm/models.conf" ]]        && mv "$tmp_restore/.llm/models.conf" "$LLM_REGISTRY"
     # Restore shell profile and standalone scripts if present
     [[ -f "$tmp_restore/.bashrc" ]] && cp "$tmp_restore/.bashrc" "$HOME/.bashrc"
+    if [[ -f "$tmp_restore/ubuntu-console/tactical-console.bashrc" ]]; then
+        mkdir -p "$HOME/ubuntu-console"
+        cp "$tmp_restore/ubuntu-console/tactical-console.bashrc" "$HOME/ubuntu-console/tactical-console.bashrc"
+    fi
     local _rs
-    for _rs in .local/bin/oc-model-status .local/bin/oc-model-switch \
-               .local/bin/oc-quick-diag .local/bin/oc-gpu-status \
-               .local/bin/oc-wake \
-               .local/bin/llama-watchdog.sh .local/bin/tac_hostmetrics.sh; do
+    for _rs in .local/bin/llama-watchdog.sh .local/bin/tac_hostmetrics.sh; do
         if [[ -f "$tmp_restore/$_rs" ]]; then
             mkdir -p "$(dirname "$HOME/$_rs")"
             cp "$tmp_restore/$_rs" "$HOME/$_rs"
@@ -1563,12 +1982,29 @@ function oc-restore() {
     rm -rf "$tmp_restore"
 
     __tac_info "State Rollback" "[COMPLETE]" "$C_Success"
-    echo -e "${C_Dim}Tip: run 'so' to restart the gateway.${C_Reset}"
+    printf '%s\n' "${C_Dim}Tip: run 'so' to restart the gateway.${C_Reset}"
 }
 
-owk()    { cd "$OC_WORKSPACE" 2>/dev/null || __tac_info "Workspace" "[NOT FOUND]" "$C_Error"; }
-ologs()  { cd "$OC_LOGS"      2>/dev/null || __tac_info "Logs"      "[NOT FOUND]" "$C_Error"; }
-ocroot() { cd "$OC_ROOT"      2>/dev/null || __tac_info "Root"      "[NOT FOUND]" "$C_Error"; }
+# ---------------------------------------------------------------------------
+# owk — cd to OpenClaw workspace directory.
+# ---------------------------------------------------------------------------
+function owk() {
+    cd "$OC_WORKSPACE" 2>/dev/null || __tac_info "Workspace" "[NOT FOUND]" "$C_Error"
+}
+
+# ---------------------------------------------------------------------------
+# ologs — cd to OpenClaw logs directory.
+# ---------------------------------------------------------------------------
+function ologs() {
+    cd "$OC_LOGS" 2>/dev/null || __tac_info "Logs" "[NOT FOUND]" "$C_Error"
+}
+
+# ---------------------------------------------------------------------------
+# ocroot — cd to OpenClaw root directory.
+# ---------------------------------------------------------------------------
+function ocroot() {
+    cd "$OC_ROOT" 2>/dev/null || __tac_info "Root" "[NOT FOUND]" "$C_Error"
+}
 
 # ---------------------------------------------------------------------------
 # lc — Rotate the gateway systemd journal logs.
@@ -1591,10 +2027,10 @@ function oc-update() {
     local rc=$?
     if (( rc == 0 )); then
         __tac_info "Update" "[COMPLETE]" "$C_Success"
-        [[ -n "$out" ]] && echo -e "${C_Dim}${out}${C_Reset}"
+        [[ -n "$out" ]] && printf '%s\n' "${C_Dim}${out}${C_Reset}"
     else
         __tac_info "Update" "[FAILED - rc=$rc]" "$C_Error"
-        [[ -n "$out" ]] && echo -e "${C_Dim}${out}${C_Reset}"
+        [[ -n "$out" ]] && printf '%s\n' "${C_Dim}${out}${C_Reset}"
     fi
 }
 
@@ -1618,8 +2054,11 @@ function oc-health() {
         local hstatus
         hstatus=$(jq -r '.status // "unknown"' <<< "$health_out" 2>/dev/null)
         [[ -z "$hstatus" ]] && hstatus="parse_error"
-        __tac_info "Health Status" "[${hstatus^^}]" \
-            "$([[ $hstatus == "ok" || $hstatus == "healthy" ]] && echo "$C_Success" || echo "$C_Warning")"
+        local health_color=$C_Warning
+        if [[ $hstatus == "ok" || $hstatus == "healthy" ]]; then
+            health_color=$C_Success
+        fi
+        __tac_info "Health Status" "[${hstatus^^}]" "$health_color"
     else
         __tac_info "Health Probe" "[NO RESPONSE]" "$C_Warning"
     fi
@@ -1630,7 +2069,7 @@ function oc-health() {
 # ---------------------------------------------------------------------------
 function oc-cron() {
     local action="${1:-list}"
-    shift 2>/dev/null
+    (( $# > 0 )) && shift
     case "$action" in
         list) openclaw cron list ;;
         add)  openclaw cron add "$@" ;;
@@ -1676,7 +2115,7 @@ function oc-tail() {
 # ---------------------------------------------------------------------------
 function oc-channels() {
     local action="${1:-list}"
-    shift 2>/dev/null
+    (( $# > 0 )) && shift
     case "$action" in
         list)   openclaw channels list ;;
         status) openclaw channels status --probe ;;
@@ -1707,7 +2146,7 @@ function oc-tui() {
 # ---------------------------------------------------------------------------
 function oc-config() {
     if [[ -z "$*" ]]; then
-        echo -e "${C_Dim}Usage:${C_Reset} oc-config get <key> | set <key> <value> | unset <key>"
+        printf '%s\n' "${C_Dim}Usage:${C_Reset} oc-config get <key> | set <key> <value> | unset <key>"
         return 1
     fi
     openclaw config "$@"
@@ -1718,7 +2157,7 @@ function oc-config() {
 # ---------------------------------------------------------------------------
 function oc-docs() {
     if [[ -z "$*" ]]; then
-        echo -e "${C_Dim}Usage:${C_Reset} oc-docs <search query>"
+        printf '%s\n' "${C_Dim}Usage:${C_Reset} oc-docs <search query>"
         return 1
     fi
     openclaw docs "$*"
@@ -1737,7 +2176,7 @@ function oc-usage() {
 # ---------------------------------------------------------------------------
 function oc-memory-search() {
     if [[ -z "$*" ]]; then
-        echo -e "${C_Dim}Usage:${C_Reset} oc-memory-search <query>"
+        printf '%s\n' "${C_Dim}Usage:${C_Reset} oc-memory-search <query>"
         return 1
     fi
     openclaw memory search "$*"
@@ -1756,9 +2195,12 @@ function oc-local-llm() {
     # Read the actual model name from the active LLM state file
     local model_name="local"
     if [[ -f "$ACTIVE_LLM_FILE" ]]; then
-        local _raw; _raw=$(< "$ACTIVE_LLM_FILE")
-        local _name; IFS='|' read -r _ _name _ _ <<< "$_raw"
-        [[ -n "$_name" ]] && model_name="$_name"
+        local _anum; _anum=$(< "$ACTIVE_LLM_FILE")
+        if [[ -n "$_anum" && -f "$LLM_REGISTRY" ]]; then
+            local _entry; _entry=$(awk -F'|' -v n="$_anum" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            IFS='|' read -r _ _name _ <<< "$_entry"
+            [[ -n "$_name" ]] && model_name="$_name"
+        fi
     fi
     openclaw config set provider.name "openai-compatible"
     openclaw config set provider.baseUrl "http://127.0.0.1:${LLM_PORT}/v1"
@@ -1786,7 +2228,7 @@ function oc-sync-models() {
 # ---------------------------------------------------------------------------
 function oc-browser() {
     local action="${1:-status}"
-    shift 2>/dev/null
+    (( $# > 0 )) && shift
     case "$action" in
         status) openclaw browser status ;;
         start)  openclaw browser start ;;
@@ -1801,7 +2243,7 @@ function oc-browser() {
 # ---------------------------------------------------------------------------
 function oc-nodes() {
     local action="${1:-status}"
-    shift 2>/dev/null
+    (( $# > 0 )) && shift
     case "$action" in
         status)   openclaw nodes status ;;
         list)     openclaw nodes list ;;
@@ -1815,7 +2257,7 @@ function oc-nodes() {
 # ---------------------------------------------------------------------------
 function oc-sandbox() {
     local action="${1:-list}"
-    shift 2>/dev/null
+    (( $# > 0 )) && shift
     case "$action" in
         list)     openclaw sandbox list ;;
         recreate) openclaw sandbox recreate ;;
@@ -1827,7 +2269,7 @@ function oc-sandbox() {
 # ---------------------------------------------------------------------------
 # oc-env — Dump all OpenClaw and LLM related environment variables.
 # ---------------------------------------------------------------------------
-oc-env() {
+function oc-env() {
     __tac_header "ENVIRONMENT VARIABLES" "open"
     __tac_line "OPENCLAW_ROOT" "[$OPENCLAW_ROOT]" "$C_Highlight"
     __tac_line "OC_WORKSPACE" "[$OC_WORKSPACE]" "$C_Dim"
@@ -1851,7 +2293,7 @@ oc-env() {
 # ---------------------------------------------------------------------------
 # oc-cache-clear — Wipe all /dev/shm telemetry caches to force a refresh.
 # ---------------------------------------------------------------------------
-oc-cache-clear() {
+function oc-cache-clear() {
     local count=0
     local _had_nullglob=0; shopt -q nullglob && _had_nullglob=1
     shopt -s nullglob
@@ -1865,7 +2307,7 @@ oc-cache-clear() {
 # ---------------------------------------------------------------------------
 # oc-trust-sync — Record current oc-llm-sync.sh hash as trusted.
 # ---------------------------------------------------------------------------
-oc-trust-sync() {
+function oc-trust-sync() {
     local src="$OC_WORKSPACE/oc-llm-sync.sh"
     if [[ ! -f "$src" ]]; then
         __tac_info "oc-llm-sync.sh" "[NOT FOUND]" "$C_Error"
@@ -1879,31 +2321,31 @@ oc-trust-sync() {
 # oc-diag — Combined diagnostic dump: OpenClaw doctor + gateway status +
 #            model status + environment variables + recent log tail.
 # ---------------------------------------------------------------------------
-oc-diag() {
+function oc-diag() {
     __tac_header "OpenClaw Diagnostic Report" "open"
     echo ""
 
-    echo -e "${C_Highlight}[1/5] openclaw doctor${C_Reset}"
+    printf '%s\n' "${C_Highlight}[1/5] openclaw doctor${C_Reset}"
     openclaw doctor 2>&1 | head -n 30
     echo ""
 
-    echo -e "${C_Highlight}[2/5] Gateway Status${C_Reset}"
+    printf '%s\n' "${C_Highlight}[2/5] Gateway Status${C_Reset}"
     if curl -sf "http://127.0.0.1:${OC_PORT:-18789}/api/health" -o /dev/null 2>/dev/null; then
-        echo -e "  ${C_Success}● Gateway reachable on port ${OC_PORT:-18789}${C_Reset}"
+        printf '%s\n' "  ${C_Success}● Gateway reachable on port ${OC_PORT:-18789}${C_Reset}"
     else
-        echo -e "  ${C_Error}● Gateway NOT reachable on port ${OC_PORT:-18789}${C_Reset}"
+        printf '%s\n' "  ${C_Error}● Gateway NOT reachable on port ${OC_PORT:-18789}${C_Reset}"
     fi
     echo ""
 
-    echo -e "${C_Highlight}[3/5] Model Provider Status${C_Reset}"
+    printf '%s\n' "${C_Highlight}[3/5] Model Provider Status${C_Reset}"
     ocms 2>&1 | head -n 20
     echo ""
 
-    echo -e "${C_Highlight}[4/5] Environment Variables${C_Reset}"
+    printf '%s\n' "${C_Highlight}[4/5] Environment Variables${C_Reset}"
     oc-env 2>&1
     echo ""
 
-    echo -e "${C_Highlight}[5/5] Recent Logs (last 15 lines)${C_Reset}"
+    printf '%s\n' "${C_Highlight}[5/5] Recent Logs (last 15 lines)${C_Reset}"
     if [[ -f "$OC_TMP_LOG" ]]; then
         tail -n 15 "$OC_TMP_LOG"
     else
@@ -1918,7 +2360,7 @@ oc-diag() {
 # oc-failover — Configure cloud model fallback for when local LLM is down.
 #   Usage: oc-failover [on|off|status]
 # ---------------------------------------------------------------------------
-oc-failover() {
+function oc-failover() {
     local action="${1:-status}"
     case "$action" in
         on)
@@ -1950,7 +2392,7 @@ oc-failover() {
             fi
             ;;
         *)
-            echo -e "${C_Dim}Usage:${C_Reset} oc-failover [on|off|status]"
+            printf '%s\n' "${C_Dim}Usage:${C_Reset} oc-failover [on|off|status]"
             ;;
     esac
 }
@@ -1969,11 +2411,11 @@ function mkproj() {
     local n="$1"
     if [[ -z "$n" ]]; then
         __tac_info "Project Name Required" "[mkproj <Name>]" "$C_Error"
-        return
+        return 1
     fi
     if [[ -d "$n" ]]; then
         __tac_info "Directory $n" "[ALREADY EXISTS]" "$C_Error"
-        return
+        return 1
     fi
 
     # Verify required tools before creating any files
@@ -2088,23 +2530,23 @@ function commit_deploy() {
     local msg="$*"
     if [[ -z "$msg" ]]; then
         __tac_info "Commit message required" "[commit: <msg>]" "$C_Error"
-        return
+        return 1
     fi
 
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         __tac_info "Repository Check" "[NOT A GIT REPO]" "$C_Error"
-        return
+        return 1
     fi
 
     # Verify a remote is configured before attempting push
     if ! git remote get-url origin >/dev/null 2>&1; then
         __tac_info "Remote Check" "[NO ORIGIN CONFIGURED]" "$C_Error"
-        return
+        return 1
     fi
 
     if [[ -z $(git status --porcelain) ]]; then
         __tac_info "Workspace" "[CLEAN - NO CHANGES]" "$C_Dim"
-        return
+        return 0
     fi
 
     __tac_header "VERSION CONTROL" "open"
@@ -2146,11 +2588,11 @@ function commit_deploy() {
 function commit_auto() {
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         __tac_info "Repository Check" "[NOT A GIT REPO]" "$C_Error"
-        return
+        return 1
     fi
     if ! git remote get-url origin >/dev/null 2>&1; then
         __tac_info "Remote Check" "[NO ORIGIN CONFIGURED]" "$C_Error"
-        return
+        return 1
     fi
     # Security: block diff leak to non-localhost LLM endpoints
     if [[ "$LOCAL_LLM_URL" != http://127.0.0.1:* && "$LOCAL_LLM_URL" != http://localhost:* ]]; then
@@ -2159,11 +2601,11 @@ function commit_auto() {
     fi
     if [[ -z $(git status --porcelain) ]]; then
         __tac_info "Workspace" "[CLEAN - NO CHANGES]" "$C_Dim"
-        return
+        return 0
     fi
     if ! __test_port "$LLM_PORT"; then
         __tac_info "LLM Required" "[OFFLINE - Start a model first]" "$C_Error"
-        return
+        return 1
     fi
     # Verify the process listening on $LLM_PORT is actually llama-server
     local _llm_pid; _llm_pid=$(ss -tlnp "sport = :$LLM_PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+')
@@ -2172,7 +2614,18 @@ function commit_auto() {
         return 1
     fi
 
+    # UX flow:
+    #   1. Stage all changes (git add .)
+    #   2. Send diff to local LLM for commit message generation
+    #   3. Show proposed message to user
+    #   4. Accept (Y/Enter), reject (n), or edit (e) interactively
+    #   5. On accept: commit, push, deploy. On reject: git reset HEAD.
+
     git add .
+    # Capture both stat (file-level summary) and body (line-level diff, capped at 500 lines)
+    # Note (I4): Two separate `git diff --cached` calls are intentional — --stat
+    # produces a columnar summary while the raw diff gives line-level context.
+    # Both read the same index snapshot so there is no consistency issue.
     local diff_stat; diff_stat=$(git diff --cached --stat 2>/dev/null)
     local diff_body; diff_body=$(git diff --cached 2>/dev/null | head -500)
     local diff="${diff_stat}
@@ -2199,22 +2652,22 @@ ${diff_body}"
     if [[ -z "$msg" || "$msg" == "null" ]]; then
         __tac_info "LLM" "[FAILED TO GENERATE MESSAGE]" "$C_Error"
         git reset HEAD >/dev/null 2>&1
-        return
+        return 1
     fi
 
-    echo -e "${C_Highlight}Proposed:${C_Reset} $msg"
+    printf '%s\n' "${C_Highlight}Proposed:${C_Reset} $msg"
     while true; do
-        read -r -e -p $'\e[90mAccept? [Y/n/edit]: \e[0m' confirm
+        read -r -e -p "${C_Dim}Accept? [Y/n/edit]: ${C_Reset}" confirm
         case "${confirm,,}" in
             y|yes|"") break ;;
             n|no)
                 __tac_info "Commit" "[CANCELLED]" "$C_Dim"
                 git reset HEAD >/dev/null 2>&1
-                return
+                return 0
                 ;;
             e|edit)
-                read -r -e -p $'\e[96mMessage: \e[0m' -i "$msg" msg
-                [[ -z "$msg" ]] && { __tac_info "Commit" "[CANCELLED]" "$C_Dim"; git reset HEAD >/dev/null 2>&1; return; }
+                read -r -e -p "${C_Highlight}Message: ${C_Reset}" -i "$msg" msg
+                [[ -z "$msg" ]] && { __tac_info "Commit" "[CANCELLED]" "$C_Dim"; git reset HEAD >/dev/null 2>&1; return 0; }
                 break
                 ;;
             *) echo "Please enter y, n, or e." ;;
@@ -2240,22 +2693,44 @@ ${diff_body}"
 # @depends: constants, design-tokens, ui-engine, hooks
 # @exports: wake, model, serve, halt, mlogs, burn, explain, wtf_repl,
 #   __llm_sse_core, __llm_stream, __llm_chat_send, local_chat, chat-context,
-#   chat-pipe, __require_llm
+#   __gguf_metadata, __calc_gpu_layers, __calc_ctx_size, __calc_threads,
+#   __quant_label, __require_llm
+
+# ---------------------------------------------------------------------------
+# __save_tps — Write measured TPS to the active model's registry entry.
+# Called after every inference (chat, burn). Updates column 11 in models.conf.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# __save_tps — Persist TPS measurement to the registry's tps column.
+# Called after burn / llm_stream benchmarks so the dashboard and model list
+# can display the most recent inference speed for each model.
+# Must run AFTER the model is loaded (ACTIVE_LLM_FILE exists) and the
+# registry is initialised (LLM_REGISTRY exists).
+# ---------------------------------------------------------------------------
+function __save_tps() {
+    local tps_val="$1"
+    [[ -z "$tps_val" || ! -f "$ACTIVE_LLM_FILE" || ! -f "$LLM_REGISTRY" ]] && return
+    local active_num; active_num=$(< "$ACTIVE_LLM_FILE")
+    [[ -z "$active_num" ]] && return
+    awk -F'|' -v n="$active_num" -v t="$tps_val" 'BEGIN{OFS="|"} $1 == n {$11 = t} {print}' \
+        "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" \
+        && mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
+}
 
 # ---------------------------------------------------------------------------
 # __require_llm — Verify jq is installed and the local LLM is listening.
-# Returns 1 with diagnostic output if either check fails.
 # Deduplicates the repeated jq + port checks across LLM functions.
 # ---------------------------------------------------------------------------
-__require_llm() {
+function __require_llm() {
     if ! command -v jq >/dev/null 2>&1; then
-        echo -e "${C_Error}[jq missing]${C_Reset} Install: sudo apt install -y jq"
+        printf '%s\n' "${C_Error}[jq missing]${C_Reset} Install: sudo apt install -y jq"
         return 1
     fi
     if ! __test_port "$LLM_PORT"; then
         __tac_info "Llama Server" "[OFFLINE]" "$C_Error"
         return 1
     fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -2267,148 +2742,516 @@ function wake() {
     local smi_cmd="$WSL_NVIDIA_SMI"
     [[ ! -f "$smi_cmd" ]] && smi_cmd=$(command -v nvidia-smi)
 
-    sudo "$smi_cmd" -pm 1 >/dev/null 2>&1
+    if [[ -z "$smi_cmd" || ! -x "$smi_cmd" ]]; then
+        __tac_info "GPU" "[nvidia-smi not found]" "$C_Error"
+        return 1
+    fi
+
+    # Requires passwordless sudo; harmless failure if denied
+    if ! sudo -n "$smi_cmd" -pm 1 >/dev/null 2>&1; then
+        __tac_info "GPU Persistence" "[FAILED — sudo denied or nvidia-smi error]" "$C_Warning"
+    fi
 
     local stat; stat=$("$smi_cmd" --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader 2>/dev/null || echo "ERROR")
     __tac_info "GPU Persistence" "[$stat]" "$C_Success"
-    echo -e "${C_Dim}Note: -pm 1 does not survive WSL restarts. Re-run 'wake' after reboot.${C_Reset}"
+    printf '%s\n' "${C_Dim}Note: -pm 1 does not survive WSL restarts. Re-run 'wake' after reboot.${C_Reset}"
 }
 
 # ---------------------------------------------------------------------------
-# model — Unified LLM model manager.
-# Subcommands: list, start, stop, active, info, assign, test, download, pull, swap.
+# gpu-status — Detailed NVIDIA GPU status (replaces standalone oc-gpu-status).
+# Shows utilisation, VRAM, temperature, power draw, persistence mode.
 # ---------------------------------------------------------------------------
+function gpu-status() {
+    local smi="$WSL_NVIDIA_SMI"
+    if [[ ! -x "$smi" ]]; then
+        smi=$(command -v nvidia-smi 2>/dev/null || true)
+    fi
+    if [[ -z "$smi" || ! -x "$smi" ]]; then
+        __tac_info "GPU" "[nvidia-smi not found]" "$C_Error"
+        return 1
+    fi
+
+    __tac_header "GPU STATUS" "open"
+
+    "$smi" --query-gpu=name,utilization.gpu,memory.used,memory.total,memory.free,temperature.gpu,power.draw,power.limit \
+        --format=csv,noheader 2>/dev/null | while IFS=, read -r gname gutil gmused gmtotal gmfree gtemp gpwr gplim; do
+        gutil="${gutil// /}"; gmused="${gmused// /}"; gmtotal="${gmtotal// /}"
+        gmfree="${gmfree// /}"; gtemp="${gtemp// /}"; gpwr="${gpwr// /}"; gplim="${gplim// /}"
+
+        local util_n="${gutil%\%}"
+        if ! [[ "$util_n" =~ ^[0-9]+$ ]]; then
+            util_n=0
+        fi
+        local color
+        color=$(__threshold_color "$util_n")
+
+        __tac_info "GPU" "${gname}" "$C_Highlight"
+        __tac_info "Util" "${color}${gutil}${C_Reset}" "$color"
+        __tac_info "VRAM" "${gmused} / ${gmtotal} (${gmfree} free)" "$C_Text"
+        __tac_info "Temp" "${gtemp} C" "$C_Text"
+        __tac_info "Power" "${gpwr} / ${gplim}" "$C_Text"
+    done
+
+    local pm; pm=$("$smi" --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+    if [[ "$pm" == "Enabled" ]]; then
+        __tac_info "Persist" "ON" "$C_Success"
+    else
+        __tac_info "Persist" "OFF (run 'wake' to enable)" "$C_Warning"
+    fi
+    __tac_footer
+}
+
+# ---------------------------------------------------------------------------
+# model — Unified LLM model manager (v3 — auto-scan, numbered selection).
+# Subcommands: scan, list, use, stop, status, info, bench
+# Registry: models.conf — auto-generated by 'model scan', do not hand-edit.
+# Format: #|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads
+# Active model tracked in: $ACTIVE_LLM_FILE (just the model number)
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# __gguf_metadata — Extract key metadata from a GGUF file header.
+# Outputs: name|architecture|block_count|context_length|file_type
+# Uses dd+awk to parse GGUF binary format (pure bash, no python dependency).
+# Reads first 256KB — sufficient for all KV metadata in any GGUF file.
+# ---------------------------------------------------------------------------
+function __gguf_metadata() {
+    local fpath="$1" fname
+    fname=$(basename "$fpath" .gguf)
+    dd if="$fpath" bs=262144 count=1 2>/dev/null | od -A n -t u1 -v | \
+    awk -v fname="$fname" '
+    { for (i=1; i<=NF; i++) b[n++] = $i+0 }
+    END {
+        if (n<24 || b[0]!=71||b[1]!=71||b[2]!=85||b[3]!=70) {
+            print fname"|unknown|0|4096|0"; exit
+        }
+        nkv = b[16]+b[17]*256+b[18]*65536+b[19]*16777216
+        name=fname; arch="unknown"; blocks=0; ctx=4096; ftype=0; found=0
+        off=24
+        for (kv=0; kv<nkv && off<n-8; kv++) {
+            klen=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=8
+            if (off+klen>n) break
+            key=""
+            for(i=0;i<klen;i++) key=key sprintf("%c",b[off+i])
+            off+=klen
+            if (off+4>n) break
+            vt=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=4
+            if(vt==8) {
+                if (off+8>n) break
+                vlen=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=8
+                if (off+vlen>n) break
+                val=""
+                for(i=0;i<vlen;i++) val=val sprintf("%c",b[off+i])
+                off+=vlen
+                if(key=="general.architecture") { arch=val; found++ }
+                if(key=="general.name")         { name=val; found++ }
+            } else if(vt==4||vt==5) {
+                if (off+4>n) break
+                val=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=4
+                if(key=="general.file_type")  { ftype=val; found++ }
+                if(key~/block_count/)         { blocks=val; found++ }
+                if(key~/context_length/)      { ctx=val; found++ }
+            } else if(vt==10||vt==11||vt==12) {
+                if (off+8>n) break
+                val=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=8
+                if(key=="general.file_type")  { ftype=val; found++ }
+                if(key~/block_count/)         { blocks=val; found++ }
+                if(key~/context_length/)      { ctx=val; found++ }
+            }
+            else if(vt==6)                    { off+=4 }
+            else if(vt==0||vt==1||vt==7)      { off+=1 }
+            else if(vt==2||vt==3)             { off+=2 }
+            else if(vt==9) {
+                if (off+12>n) break
+                at=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=4
+                al=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216; off+=8
+                if(at==0||at==1||at==7) off+=al
+                else if(at==2||at==3) off+=al*2
+                else if(at==4||at==5||at==6) off+=al*4
+                else if(at==10||at==11||at==12) off+=al*8
+                else if(at==8) {
+                    for(a=0;a<al&&off<n;a++){
+                        sl=b[off]+b[off+1]*256+b[off+2]*65536+b[off+3]*16777216
+                        off+=8+sl
+                    }
+                } else break
+            } else break
+            if(found>=5) break
+        }
+        print name"|"arch"|"blocks"|"ctx"|"ftype
+    }'
+}
+
+# __calc_gpu_layers — Calculate optimal GPU layer count for available VRAM.
+# Args: file_size_bytes total_layers [arch]
+# Returns: recommended gpu_layers count
+function __calc_gpu_layers() {
+    local file_bytes=$1 total_layers=$2 arch="${3:-}"
+    local vram_bytes=$((4 * 1024 * 1024 * 1024))  # 4GB
+    local usable_bytes=$((vram_bytes * 85 / 100))  # 85% usable (driver/KV overhead)
+
+    # MoE models: with --cpu-moe, expert weights stay on CPU.
+    # Only attention/dense layers load to GPU, so we can offload all layers.
+    if [[ "$arch" == *"moe"* ]]; then
+        echo "$total_layers"
+        return
+    fi
+
+    if (( file_bytes <= usable_bytes )); then
+        echo "$total_layers"  # full offload
+    else
+        local ratio=$(( usable_bytes * 100 / file_bytes ))
+        local layers=$(( total_layers * ratio / 100 ))
+        (( layers < 1 )) && layers=1
+        echo "$layers"
+    fi
+}
+
+# __calc_ctx_size — Pick a practical context size.
+# Must account for KV cache VRAM: larger ctx = more VRAM consumed beyond model weights.
+# Partially-offloaded models need smaller ctx to avoid OOM.
+function __calc_ctx_size() {
+    local file_bytes=$1 native_ctx=$2 arch="${3:-}"
+    local file_gb=$(( file_bytes / 1024 / 1024 / 1024 ))
+
+    # MoE models: expert weights on CPU, only attention on GPU.
+    # Active params ~3B, so treat like a small model for ctx sizing.
+    if [[ "$arch" == *"moe"* ]]; then
+        echo 8192
+        return
+    fi
+
+    if (( file_gb >= 5 )); then
+        echo 2048
+    elif (( file_gb >= 4 )); then
+        echo 4096
+    elif (( file_gb >= 3 )); then
+        echo 8192
+    else
+        local cap=16384
+        if (( native_ctx < cap )); then
+            echo "$native_ctx"
+        else
+            echo "$cap"
+        fi
+    fi
+}
+
+# __calc_threads — CPU threads based on how much spills to CPU.
+function __calc_threads() {
+    local gpu_layers=$1 total_layers=$2
+    if (( gpu_layers >= total_layers )); then
+        echo 8   # fully offloaded — threads only for prompt processing
+    else
+        echo 14  # partial offload — more CPU work
+    fi
+}
+
+# __quant_label — Map GGUF file_type int to human-readable quant label.
+# Values sourced from llama.cpp's ggml.h GGML_FTYPE enum.
+# Falls back to extracting quant from filename if file_type is 0/unknown.
+function __quant_label() {
+    local ftype=$1 fname=$2
+    local label=""
+    case "$ftype" in
+        1) label="F16";;   2) label="Q4_0";;  3) label="Q4_1";;
+        7) label="Q8_0";;  8) label="Q5_0";;  9) label="Q5_1";;  10) label="Q2_K";;
+        11) label="Q3_K_S";; 12) label="Q3_K_M";; 13) label="Q3_K_L";;
+        14) label="Q4_K_S";; 15) label="Q4_K_M";; 16) label="Q5_K_S";;
+        17) label="Q5_K_M";; 18) label="Q6_K";;  19) label="IQ2_XXS";;
+        20) label="IQ2_XS";; 21) label="IQ3_XXS";; 26) label="IQ3_M";;
+        28) label="Q4_0_4_4";; 29) label="Q4_0_4_8";; 30) label="Q4_0_8_8";;
+    esac
+    # If unknown/F32(0), try to extract from filename
+    if [[ -z "$label" || "$ftype" == "0" ]] && [[ -n "$fname" ]]; then
+        local extracted; extracted=$(echo "$fname" | grep -oiE '(IQ[0-9]_[A-Z]+|Q[0-9]+_K_[SML]|Q[0-9]+_K|Q[0-9]+_[0-9]+|Q[0-9]+|F16|F32|BF16)' | head -1 | tr '[:lower:]' '[:upper:]')
+        [[ -n "$extracted" ]] && label="$extracted"
+    fi
+    echo "${label:-unknown}"
+}
+
+# ---------------------------------------------------------------------------
+# __renumber_registry — Remove a model entry by number and renumber the rest.
+# Usage: __renumber_registry <model_number>
+# Shared by model delete and model archive to avoid duplicated renumber logic.
+# ---------------------------------------------------------------------------
+function __renumber_registry() {
+    local target="$1"
+    awk -F'|' -v n="$target" '$1 != n && $1 != "#"' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
+    local newnum=0
+    { echo "#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps"
+      while IFS='|' read -r _num rest; do
+          ((newnum++))
+          echo "${newnum}|${rest}"
+      done < "${LLM_REGISTRY}.tmp"
+    } > "$LLM_REGISTRY"
+    rm -f "${LLM_REGISTRY}.tmp"
+    rm -f "$ACTIVE_LLM_FILE"
+    echo "$newnum"
+}
+
+# @extractable: model() is the largest function (~500 lines). When splitting
+# into modules, extract it into its own file (e.g. ~/.bashrc.d/11-llm-model.sh)
+# along with __renumber_registry, __quant_label, and __save_tps.
 function model() {
-    local action=$1
-    local target=$2
-    local tbl_inner=$(( UIWidth - 4 ))  # inner text area for table rows
+    local action="${1:-}"
+    (( $# > 0 )) && shift
+    local target="${1:-}"
 
     case "$action" in
-        list)
-            __tac_header "LLM REGISTRY: $LLM_REGISTRY" "open"
+        scan)
+            # Scan LLAMA_MODEL_DIR for .gguf files, read metadata, calculate params,
+            # and regenerate models.conf. Skips vocab/test files (<500MB).
+            __tac_info "Scanning" "$LLAMA_MODEL_DIR" "$C_Highlight"
+            local tmpconf="${LLM_REGISTRY}.tmp"
+            echo "#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps" > "$tmpconf"
 
-            # Fixed-width columns: PROFILE(13) | NAME(25) | SIZE(8) | PROC(8)
-            # Display width = 2+13+2+25+2+8+2+8 = 62; pad to UIWidth-2.
-            local _iw=$(( UIWidth - 2 ))  # inner display width between ║...║
-            local header; header=$(printf "  %-13s│ %-25s│ %-8s│ %-8s" "PROFILE" "FRIENDLY NAME" "SIZE" "PROC")
-            local _hpad=$(( _iw - 62 )); local _hsp=""; (( _hpad > 0 )) && printf -v _hsp '%*s' "$_hpad" ""
-            printf "${C_BoxBg}║${C_Reset}${C_Dim}%s%s${C_Reset}${C_BoxBg}║${C_Reset}\n" "$header" "$_hsp"
+            local num=0
+            for gguf in "$LLAMA_MODEL_DIR"/*.gguf; do
+                [[ ! -f "$gguf" ]] && continue
+                local fname; fname=$(basename "$gguf")
+                local fbytes; fbytes=$(stat --format=%s "$gguf" 2>/dev/null || stat -f%z "$gguf" 2>/dev/null)
+                # Skip small files (vocab, test, corrupt)
+                (( fbytes < 500000000 )) && continue
 
-            local sep_inner; sep_inner=$(printf '  ─────────────┼──────────────────────────┼─────────┼')
-            # Extend last segment with ─ to fill remaining width
-            local _sep_fill=$(( _iw - 62 + 9 )); local _seg=""; printf -v _seg '%*s' "$_sep_fill" ""; _seg="${_seg// /─}"
-            sep_inner+="$_seg"
-            printf "${C_BoxBg}║${C_Reset}${C_Dim}%s${C_Reset}${C_BoxBg}║${C_Reset}\n" "$sep_inner"
+                __tac_info "Reading" "$fname" "$C_Dim"
+                local meta; meta=$(__gguf_metadata "$gguf")
+                IFS='|' read -r mname march mblocks mctx mftype <<< "$meta"
 
-            if [[ -f "$LLM_REGISTRY" ]]; then
-                while IFS='|' read -r prof friendly size proc file _rest; do
-                    [[ "$prof" == "profile" || -z "$prof" ]] && continue
-                    local strict_name="${friendly:0:25}"
-                    # Normalise size: e.g. 4.4G → 4.4 Gb
-                    local norm_size="${size#"${size%%[! ]*}"}"; norm_size="${norm_size/%G/ Gb}"; norm_size="${norm_size/%M/ Mb}"
-                    local row; row=$(printf "  %-13s│ %-25s│ %-8s│ %-8s" "$prof" "$strict_name" "$norm_size" "$proc")
-                    local _rpad=$(( _iw - 62 )); local _rsp=""; (( _rpad > 0 )) && printf -v _rsp '%*s' "$_rpad" ""
-                    printf "${C_BoxBg}║${C_Reset}%s%s${C_BoxBg}║${C_Reset}\n" "$row" "$_rsp"
-                done < "$LLM_REGISTRY"
+                local size_gb; size_gb=$(awk "BEGIN{printf \"%.1f\", $fbytes/1024/1024/1024}")
+                local quant; quant=$(__quant_label "$mftype" "$fname")
+                local gpu_layers; gpu_layers=$(__calc_gpu_layers "$fbytes" "$mblocks" "$march")
+                local ctx; ctx=$(__calc_ctx_size "$fbytes" "$mctx" "$march")
+                local threads; threads=$(__calc_threads "$gpu_layers" "$mblocks")
+
+                ((num++))
+                # Preserve existing TPS from previous registry if same file
+                local prev_tps="-"
+                if [[ -f "$LLM_REGISTRY" ]]; then
+                    prev_tps=$(awk -F'|' -v f="$fname" '$3 == f {print $11}' "$LLM_REGISTRY" 2>/dev/null)
+                    [[ -z "$prev_tps" ]] && prev_tps="-"
+                fi
+                echo "${num}|${mname}|${fname}|${size_gb}G|${march}|${quant}|${mblocks}|${gpu_layers}|${ctx}|${threads}|${prev_tps}" >> "$tmpconf"
+                __tac_info "  #${num}" "${mname} (${size_gb}G, ${quant}, ${mblocks}L → ${gpu_layers} GPU)" "$C_Success"
+            done
+
+            if (( num == 0 )); then
+                __tac_info "Result" "[No models found in $LLAMA_MODEL_DIR]" "$C_Warning"
+                rm -f "$tmpconf"
+                return 1
             fi
 
-            __tac_divider
-            local rem="Use 'model assign' to map profiles to specific models."
-            local rPad_left=$(( (_iw - ${#rem}) / 2 ))
-            local rPad_right=$(( _iw - ${#rem} - rPad_left ))
-
-            local lPadStr; printf -v lPadStr '%*s' "$rPad_left" ""
-            local rPadStr; printf -v rPadStr '%*s' "$rPad_right" ""
-
-            printf "${C_BoxBg}║${C_Reset}${C_Dim}%s%s%s${C_Reset}${C_BoxBg}║${C_Reset}\n" "$lPadStr" "$rem" "$rPadStr"
-            __tac_footer
+            mv "$tmpconf" "$LLM_REGISTRY"
+            __tac_info "Registry" "[${num} models written to $LLM_REGISTRY]" "$C_Success"
+            model list
             ;;
 
-        start)
-            [[ -z "$target" ]] && { __tac_info "Usage" "[model start <profile>]" "$C_Error"; return 1; }
-            local entry; entry=$(awk -F'|' -v p="$target" '$1 == p' "$LLM_REGISTRY" 2>/dev/null)
-            [[ -z "$entry" ]] && { __tac_info "Model Error" "[Profile '$target' not in registry]" "$C_Error"; return 1; }
+        list)
+            # Display the numbered model registry with an arrow marking the active model.
+            if [[ ! -f "$LLM_REGISTRY" ]]; then
+                __tac_info "Registry" "[Not found — run 'model scan' first]" "$C_Warning"
+                return 1
+            fi
 
-            # Registry format: profile|name|size|proc|file[|gpu_layers|ctx_size|threads]
-            # Fields 6-8 are optional; defaults from LLAMA_GPU_LAYERS/CTX_SIZE/CPU_THREADS
-            IFS='|' read -r prof friendly size proc file m_gpu_layers m_ctx_size m_threads <<< "$entry"
+            # Read active model number
+            local active_num=""
+            [[ -f "$ACTIVE_LLM_FILE" ]] && active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+
+            printf "\n${C_Dim}  %-4s %-30s %-7s %-8s %-6s %-4s %-5s %-4s %s${C_Reset}\n" \
+                "#" "MODEL" "SIZE" "QUANT" "ARCH" "GPU" "CTX" "THR" "TPS"
+            printf "${C_Dim}  ──────────────────────────────────────────────────────────────────────────────${C_Reset}\n"
+
+            while IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps; do
+                [[ "$num" == "#" || -z "$num" ]] && continue
+                local marker="  "
+                local color=""
+                if [[ "$num" == "$active_num" ]] && pgrep -x llama-server >/dev/null 2>&1; then
+                    marker="▶ "
+                    color="$C_Success"
+                fi
+                printf "${color}${marker}%-4s %-30s %-7s %-8s %-6s %-4s %-5s %-4s %s${C_Reset}\n" \
+                    "$num" "${name:0:30}" "$size" "$quant" "$arch" "$gpu_layers" "$ctx" "$threads" "${tps:--}"
+            done < "$LLM_REGISTRY"
+
+            # Drive space summary (du-based, 30s cache)
+            # Note (I3): `du -sb` walks the entire model directory tree, which can
+            # block for several seconds on large or networked NTFS mounts. The 30s
+            # cache mitigates this, but consider replacing with `df` if latency is
+            # noticeable (du gives accurate per-dir usage; df gives volume-level).
+            local d_used_bytes d_total_bytes d_avail_bytes d_pct_n
+            local _du_cache="$TAC_CACHE_DIR/tac_drive_du"
+            if __cache_fresh "$_du_cache" 30; then
+                d_used_bytes=$(< "$_du_cache")
+            else
+                d_used_bytes=$(du -sb "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk '{print $1}')
+                [[ -n "$d_used_bytes" ]] && echo "$d_used_bytes" > "${_du_cache}.tmp" && mv "${_du_cache}.tmp" "$_du_cache"
+            fi
+            d_used_bytes=${d_used_bytes:-0}
+            d_total_bytes=$LLAMA_DRIVE_SIZE
+            d_avail_bytes=$(( d_total_bytes - d_used_bytes ))
+            (( d_avail_bytes < 0 )) && d_avail_bytes=0
+            d_pct_n=$(( d_total_bytes > 0 ? d_used_bytes * 100 / d_total_bytes : 0 ))
+            local d_avail_h=$(( d_avail_bytes / 1024 / 1024 / 1024 ))
+            local d_total_h=$(( d_total_bytes / 1024 / 1024 / 1024 ))
+            local d_color="$C_Success"
+            (( d_pct_n >= 90 )) && d_color="$C_Error"
+            (( d_pct_n >= 75 && d_pct_n < 90 )) && d_color="$C_Warning"
+            local d_label; d_label=$(basename "$LLAMA_DRIVE_ROOT")
+            printf "\n${C_Dim}  Drive ${d_label^^}: ${d_color}${d_avail_h}G free${C_Reset}${C_Dim} of ${d_total_h}G (${d_pct_n}%% used)${C_Reset}\n"
+
+            printf "\n${C_Dim}  model use N  │  model stop  │  model info N  │  model scan  │  model bench  │  model archive N${C_Reset}\n\n"
+            ;;
+
+        use)
+            # Load and start model #N with VRAM-optimised layer split and context size.
+            [[ -z "$target" ]] && { __tac_info "Usage" "[model use <number>]" "$C_Error"; return 1; }
+            [[ ! "$target" =~ ^[0-9]+$ ]] && { __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1; }
+            local entry; entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            [[ -z "$entry" ]] && { __tac_info "Error" "[Model #$target not in registry — run 'model scan']" "$C_Error"; return 1; }
+
+            IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps <<< "$entry"
             local model_path="$LLAMA_MODEL_DIR/$file"
 
-            # Resolve per-model params or fall back to global defaults
-            local use_gpu_layers="${m_gpu_layers:-$LLAMA_GPU_LAYERS}"
-            local use_ctx_size="${m_ctx_size:-$LLAMA_CTX_SIZE}"
-            local use_threads="${m_threads:-$LLAMA_CPU_THREADS}"
+            [[ ! -f "$model_path" ]] && { __tac_info "Error" "[File $file missing from $LLAMA_MODEL_DIR]" "$C_Error"; return 1; }
+            [[ ! -x "$LLAMA_SERVER_BIN" ]] && { __tac_info "Error" "[Server binary not found: $LLAMA_SERVER_BIN]" "$C_Error"; return 1; }
 
-            [[ ! -f "$model_path" ]] && { __tac_info "Model Error" "[File $file missing]" "$C_Error"; return 1; }
-
-            [[ ! -x "$LLAMA_SERVER_BIN" ]] && { __tac_info "Server Binary" "[NOT FOUND: $LLAMA_SERVER_BIN]" "$C_Error"; return 1; }
-
-            __tac_info "Llama Server" "Purging existing instances..." "$C_Warning"
-            pkill -f llama-server 2>/dev/null
+            # Stop existing
+            pkill -u "$USER" -x llama-server 2>/dev/null
             sleep 1
 
-            # Bind to 127.0.0.1 only (not 0.0.0.0) to prevent LAN exposure
-            local cmd=("$LLAMA_SERVER_BIN" "-m" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
-            # Context window, memory lock, batch sizes, continuous batching
-            cmd+=("--ctx-size" "$use_ctx_size" "--mlock")
-            cmd+=("--batch-size" "512" "--ubatch-size" "512" "--cont-batching")
-            if [[ "$proc" == "gpu" ]]; then
-                cmd+=("--n-gpu-layers" "$use_gpu_layers" "--flash-attn")
-                __tac_info "Hardware" "RTX 3050 Ti: ${use_gpu_layers} layers, ctx ${use_ctx_size}, flash-attn" "$C_Highlight"
-            else
-                cmd+=("--threads" "$use_threads")
-                __tac_info "Hardware" "i9 CPU: ${use_threads} threads, ctx ${use_ctx_size}" "$C_Highlight"
+            # Raise memlock ulimit so --mlock can actually pin the model in RAM.
+            # Without this, the default limit (~64KB) causes --mlock to silently fail.
+            # Requires passwordless sudo for prlimit; harmless no-op if denied.
+            sudo -n prlimit --memlock=unlimited:unlimited --pid $$ 2>/dev/null
+
+            # Choose batch sizes based on offload level:
+            # Fully-offloaded models benefit from larger batches (faster prompt eval).
+            # Partially-offloaded models need smaller batches to avoid VRAM pressure.
+            local batch_size=512
+            local ubatch_size=512
+            if (( gpu_layers >= layers )); then
+                batch_size=4096
+                ubatch_size=1024
             fi
+
+            # Build command
+            local cmd=("$LLAMA_SERVER_BIN" "-m" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
+            cmd+=("--ctx-size" "$ctx" "--mlock" "--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size" "--cont-batching" "--parallel" "1")
+            # --jinja: enable Jinja2 chat template processing from GGUF metadata.
+            # Newer models (Qwen3, Phi-4, Gemma3) embed their chat templates;
+            # without this flag the server may apply a wrong or hardcoded format.
+            cmd+=("--jinja")
+            # q8_0 KV cache: huge win for partially-offloaded models (frees VRAM for layers)
+            # but can push fully-offloaded models OVER VRAM limit at high ctx. Only apply
+            # when not fully offloaded, or for architectures that specifically benefit.
+            if (( gpu_layers < layers )) || [[ "$arch" == "gemma"* ]] || [[ "$arch" == *"moe"* ]]; then
+                cmd+=("--cache-type-k" "q8_0" "--cache-type-v" "q8_0")
+            fi
+            cmd+=("--n-gpu-layers" "$gpu_layers" "--flash-attn" "on" "--threads" "$threads")
+            # Reduce VRAM safety margin from default 1024MiB — we're on 4GB with single-slot
+            cmd+=("--fit-target" "256")
+
+            # Per-architecture sampling and launch overrides
+            if [[ "$arch" == "gemma"* ]]; then
+                # Google recommends: temp 1.0, top_k 64, top_p 0.95, min_p 0
+                cmd+=("--temp" "1.0" "--top-k" "64" "--top-p" "0.95" "--min-p" "0")
+                __tac_info "Note" "Gemma sampling: temp=1.0 top_k=64 top_p=0.95" "$C_Dim"
+            else
+                cmd+=("--temp" "0.7")
+            fi
+
+            # Disable Qwen3's default chain-of-thought thinking — it burns tokens
+            # on internal reasoning before producing a visible response, which
+            # causes timeouts on constrained hardware. Use --reasoning-budget 0.
+            # Note: Only Qwen3 has thinking mode. Qwen2 does not.
+            if [[ "$arch" == "qwen3" || "$arch" == "qwen3moe" ]]; then
+                cmd+=("--reasoning-budget" "0")
+                # --no-context-shift: prevent the context manager from shifting out
+                # the thinking portion when the window fills, which corrupts the
+                # response structure on thinking-capable models.
+                cmd+=("--no-context-shift")
+                __tac_info "Note" "Reasoning disabled + no-context-shift (Qwen3)" "$C_Dim"
+            fi
+
+            # MoE models: offload expert weights to CPU, keep attention on GPU
+            # This lets the ~3B active params use GPU while 30B total sits in RAM
+            if [[ "$arch" == *"moe"* ]]; then
+                cmd+=("--cpu-moe")
+                __tac_info "Note" "MoE: expert layers on CPU (--cpu-moe)" "$C_Dim"
+            fi
+
+            __tac_info "Starting" "#${num} ${name} (${size}, ${gpu_layers}GPU/${layers}L, ctx ${ctx})" "$C_Highlight"
 
             (nohup "${cmd[@]}" > "$LLM_LOG_FILE" 2>&1 &)
 
-            # Store state: profile | name | size | processor
-            echo "$prof|$friendly|$size|$proc" > "${ACTIVE_LLM_FILE}.tmp" 2>/dev/null \
-                && mv "${ACTIVE_LLM_FILE}.tmp" "$ACTIVE_LLM_FILE" \
-                || __tac_info "Warning" "[/dev/shm full — state not saved]" "$C_Warning"
+            # Save active model number
+            if echo "$num" > "${ACTIVE_LLM_FILE}.tmp" 2>/dev/null \
+                && mv "${ACTIVE_LLM_FILE}.tmp" "$ACTIVE_LLM_FILE"; then
+                : # success
+            else
+                __tac_info "Warning" "[Could not save state]" "$C_Warning"
+            fi
 
-            __tac_info "Status" "Booting $friendly ($size)..." "$C_Warning"
+            # Wait for ready (up to 30s with progress dots)
             local ready=0
+            printf '%s' "${C_Dim}Waiting for health endpoint"
             for _ in {1..30}; do
                 if __test_port "$LLM_PORT" && curl -sf "http://127.0.0.1:$LLM_PORT/health" >/dev/null; then ready=1; break; fi
+                printf '.'
                 sleep 1
             done
-            if (( ready == 1 )); then __tac_info "API Endpoint" "ONLINE [Port $LLM_PORT]" "$C_Success"
-            else __tac_info "API Endpoint" "FAILED OR TIMEOUT" "$C_Error"; fi
+            printf '%s\n' "$C_Reset"
+            if (( ready )); then
+                __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
+            else
+                __tac_info "Status" "FAILED OR TIMEOUT — check: tail $LLM_LOG_FILE" "$C_Error"
+            fi
             ;;
 
         stop)
-            pkill -f llama-server 2>/dev/null
+            # Kill the running llama-server process and clear the active model marker.
+            pkill -u "$USER" -x llama-server 2>/dev/null
             rm -f "$ACTIVE_LLM_FILE"
-            __tac_info "Llama Server" "[TERMINATED]" "$C_Success"
+            __tac_info "Llama Server" "[STOPPED]" "$C_Success"
             ;;
 
-        active)
-            if [[ -f "$ACTIVE_LLM_FILE" ]] && pgrep -f llama-server >/dev/null; then
-                local raw; raw=$(cat "$ACTIVE_LLM_FILE")
-                IFS='|' read -r a_prof a_name a_size a_proc <<< "$raw"
-                __tac_info "Active Profile" "$a_prof" "$C_Highlight"
-                __tac_info "Model Name" "$a_name" "$C_Success"
-                __tac_info "Processor" "${a_proc:-gpu}" "$C_Text"
-                __tac_info "Parameter Size" "${a_size:-N/A}" "$C_Dim"
+        status)
+            # Show what model is running (or not) and its TPS if available.
+            if pgrep -x llama-server >/dev/null 2>&1 && __test_port "$LLM_PORT"; then
+                local active_num; active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+                if [[ -n "$active_num" && -f "$LLM_REGISTRY" ]]; then
+                    local entry; entry=$(awk -F'|' -v n="$active_num" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+                    IFS='|' read -r _n name file size _rest <<< "$entry"
+                    __tac_info "Active" "#${active_num} ${name} (${size})" "$C_Success"
+                else
+                    __tac_info "Active" "[Running but unknown model]" "$C_Warning"
+                fi
+                local health; health=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+                __tac_info "Health" "${health:-OK}" "$C_Success"
+                local tps; tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
+                [[ -n "$tps" ]] && __tac_info "Last TPS" "$tps" "$C_Dim"
             else
-                __tac_info "Status" "[IDLE]" "$C_Dim"
+                __tac_info "Status" "[OFFLINE]" "$C_Dim"
             fi
             ;;
 
         info)
-            [[ -z "$target" ]] && { __tac_info "Usage" "[model info <profile>]" "$C_Error"; return 1; }
-            local entry; entry=$(awk -F'|' -v p="$target" '$1 == p' "$LLM_REGISTRY" 2>/dev/null)
-            [[ -z "$entry" ]] && { __tac_info "Profile" "['$target' not found]" "$C_Error"; return 1; }
-            IFS='|' read -r prof friendly size proc file _gl _cs _th <<< "$entry"
-            __tac_info "Profile" "$prof" "$C_Highlight"
-            __tac_info "Model" "$friendly" "$C_Success"
-            __tac_info "Size" "$size" "$C_Text"
-            __tac_info "Processor" "$proc" "$C_Text"
+            # Print detailed metadata for model #N from the registry.
+            [[ -z "$target" ]] && { __tac_info "Usage" "[model info <number>]" "$C_Error"; return 1; }
+            [[ ! "$target" =~ ^[0-9]+$ ]] && { __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1; }
+            local entry; entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            [[ -z "$entry" ]] && { __tac_info "Error" "[Model #$target not found]" "$C_Error"; return 1; }
+            IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps <<< "$entry"
+            __tac_info "#" "$num" "$C_Highlight"
+            __tac_info "Model" "$name" "$C_Success"
             __tac_info "File" "$file" "$C_Dim"
-            __tac_info "GPU Layers" "${_gl:-$LLAMA_GPU_LAYERS} (default: $LLAMA_GPU_LAYERS)" "$C_Dim"
-            __tac_info "Context Size" "${_cs:-$LLAMA_CTX_SIZE} (default: $LLAMA_CTX_SIZE)" "$C_Dim"
-            __tac_info "CPU Threads" "${_th:-$LLAMA_CPU_THREADS} (default: $LLAMA_CPU_THREADS)" "$C_Dim"
+            __tac_info "Size" "$size" "$C_Text"
+            __tac_info "Architecture" "$arch" "$C_Text"
+            __tac_info "Quantisation" "$quant" "$C_Text"
+            __tac_info "Total Layers" "$layers" "$C_Text"
+            __tac_info "GPU Layers" "$gpu_layers / $layers" "$C_Highlight"
+            __tac_info "Context Size" "$ctx" "$C_Text"
+            __tac_info "CPU Threads" "$threads" "$C_Text"
             if [[ -f "$LLAMA_MODEL_DIR/$file" ]]; then
                 __tac_info "On Disk" "[FOUND]" "$C_Success"
             else
@@ -2416,198 +3259,278 @@ function model() {
             fi
             ;;
 
-        test)
-            # Quick health-check ping to a running model without a full burn-in.
-            if ! __test_port "$LLM_PORT"; then
-                __tac_info "Status" "[OFFLINE]" "$C_Error"
-                return 1
-            fi
-            local health; health=$(curl -s "http://localhost:$LLM_PORT/health" 2>/dev/null)
-            if [[ -n "$health" ]]; then
-                __tac_info "API Health" "[RESPONDING]" "$C_Success"
-                if [[ -f "$ACTIVE_LLM_FILE" ]]; then
-                    IFS='|' read -r p n s pr <<< "$(cat "$ACTIVE_LLM_FILE")"
-                    __tac_info "Model" "$n ($s)" "$C_Highlight"
-                fi
-            else
-                __tac_info "API Health" "[NOT RESPONDING]" "$C_Error"
-            fi
-            ;;
-
-        assign)
-            if [[ ! -f "$LLM_REGISTRY" ]]; then
-                __tac_info "Registry" "[File not found]" "$C_Error"
-                return 1
-            fi
-
-            local target_prof=""
-            echo -e "${C_Highlight}Select Profile Slot to Reassign:${C_Reset}"
-            local _saved_ps3="$PS3"
-            PS3="Choose slot index: "
-            select opt in "fast" "think" "experi" "cancel"; do
-                case $opt in
-                    fast|think|experi) target_prof="$opt"; break ;;
-                    cancel) PS3="$_saved_ps3"; return 0 ;;
-                    *) echo "Invalid choice." ;;
-                esac
-            done
-            PS3="$_saved_ps3"
-            [[ -z "$target_prof" ]] && { __tac_info "Assign" "[CANCELLED]" "$C_Dim"; return 0; }
-
-            echo -e "\n${C_Highlight}Select Model for '$target_prof':${C_Reset}"
-            # Build model list AND track corresponding line numbers to avoid
-            # index mismatch when the registry contains blank or header lines.
-            local models=()
-            local line_nums=()
-            local model_files=()
-            local line_no=0
-            while IFS='|' read -r p n s pr f _rest; do
-                ((line_no++))
-                [[ "$p" == "profile" || -z "$p" ]] && continue
-                models+=("$n ($s)")
-                line_nums+=("$line_no")
-                model_files+=("$f")
-            done < "$LLM_REGISTRY"
-
-            PS3="Choose model index (or 0 to cancel): "
-            select m_opt in "${models[@]}"; do
-                if [[ "$REPLY" == "0" ]]; then PS3="$_saved_ps3"; return 0; fi
-                if [[ -n "$m_opt" ]]; then
-                    local chosen_idx=$((REPLY - 1))
-                    local chosen_line=${line_nums[$chosen_idx]}
-                    local chosen_file=${model_files[$chosen_idx]}
-                    break
-                fi
-            done
-            PS3="$_saved_ps3"
-
-            # Guard against EOF / Ctrl-D exiting select without a choice
-            [[ -z "$chosen_line" ]] && { __tac_info "Assign" "[CANCELLED]" "$C_Dim"; return 0; }
-
-            # Validate that the model file exists on disk
-            if [[ -n "$chosen_file" && ! -f "$LLAMA_MODEL_DIR/$chosen_file" ]]; then
-                __tac_info "Warning" "[Model file '$chosen_file' not found on disk]" "$C_Warning"
-                read -r -p $'\e[33mAssign anyway? [y/N]: \e[0m' confirm
-                [[ "${confirm,,}" != "y" ]] && return
-            fi
-
-            # Rebuild registry: unassign old profile, assign chosen line
-            local temp_reg="${LLM_REGISTRY}.tmp"
-            awk -F'|' -v prof="$target_prof" -v target_line="$chosen_line" 'BEGIN{OFS="|"}
-                {
-                    if ($1 == prof) $1 = "unallocated";
-                    if (NR == target_line) $1 = prof;
-                    print $0
-                }' "$LLM_REGISTRY" > "$temp_reg"
-
-            mv "$temp_reg" "$LLM_REGISTRY"
-            __tac_info "Registry" "[Reassigned '$target_prof' slot]" "$C_Success"
-            ;;
-
-        pull|download)
-            if [[ -z "$target" ]]; then
-                echo -e "${C_Dim}Usage:${C_Reset} model download <hf-repo/filename>"
-                echo -e "${C_Dim}  Downloads a GGUF model from HuggingFace Hub to $LLAMA_MODEL_DIR${C_Reset}"
-                echo -e "${C_Dim}  Example: model download TheBloke/Llama-3-8B-GGUF/llama-3-8b.Q4_K_M.gguf${C_Reset}"
-                echo -e "${C_Dim}  Requires: pip install huggingface-hub${C_Reset}"
-                return 1
-            fi
-            if ! command -v huggingface-cli >/dev/null 2>&1; then
-                __tac_info "Dependency" "[huggingface-cli not found]" "$C_Error"
-                echo -e "  ${C_Dim}Install: pip install huggingface-hub${C_Reset}"
-                return 1
-            fi
-            mkdir -p "$LLAMA_MODEL_DIR"
-            __tac_info "Downloading..." "$target" "$C_Warning"
-            huggingface-cli download "$target" --local-dir "$LLAMA_MODEL_DIR" --local-dir-use-symlinks False
-            local dl_rc=$?
-            if (( dl_rc == 0 )); then
-                __tac_info "Download" "[COMPLETE]" "$C_Success"
-            else
-                __tac_info "Download" "[FAILED]" "$C_Error"
-            fi
-            ;;
-
-        swap)
-            # Stop current model, start a new one, and update OpenClaw provider.
-            # Usage: model swap <profile>
-            [[ -z "$target" ]] && { __tac_info "Usage" "[model swap <profile>]" "$C_Error"; return 1; }
-            model stop
-            sleep 1
-            model start "$target"
-            # If OpenClaw gateway is running, re-link it to the new model
-            if __test_port "$OC_PORT"; then
-                oc-local-llm
-            fi
-            ;;
-
         bench)
-            # Benchmark all on-disk registered models. Starts each in turn,
-            # runs a burn-in, records TPS, then produces a comparison table.
-            [[ ! -f "$LLM_REGISTRY" ]] && { __tac_info "Registry" "[Not found]" "$C_Error"; return 1; }
-            __tac_header "MODEL BENCHMARK SUITE" "open"
+            [[ ! -f "$LLM_REGISTRY" ]] && { __tac_info "Registry" "[Not found — run 'model scan']" "$C_Error"; return 1; }
+            __tac_header "MODEL BENCHMARK" "open"
 
-            local -a bench_prof=() bench_name=() bench_size=() bench_proc=() bench_tps=()
-            while IFS='|' read -r p n s pr f _rest; do
-                [[ "$p" == "profile" || -z "$p" ]] && continue
-                [[ ! -f "$LLAMA_MODEL_DIR/$f" ]] && continue
-                bench_prof+=("$p"); bench_name+=("$n"); bench_size+=("$s"); bench_proc+=("$pr")
+            # Save the currently active model to restore after benchmarking
+            local _bench_prev_model=""
+            [[ -f "$ACTIVE_LLM_FILE" ]] && _bench_prev_model=$(< "$ACTIVE_LLM_FILE")
+
+            local -a b_num=() b_name=() b_size=() b_tps=()
+            while IFS='|' read -r num name file size _rest; do
+                [[ "$num" == "#" || -z "$num" ]] && continue
+                [[ ! -f "$LLAMA_MODEL_DIR/$file" ]] && continue
+                b_num+=("$num"); b_name+=("$name"); b_size+=("$size")
             done < "$LLM_REGISTRY"
 
-            if (( ${#bench_prof[@]} == 0 )); then
-                __tac_info "Bench" "[No on-disk models found]" "$C_Warning"
-                return 1
-            fi
+            (( ${#b_num[@]} == 0 )) && { __tac_info "Bench" "[No on-disk models]" "$C_Warning"; return 1; }
+            printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} model(s)...${C_Reset}"
 
-            echo -e "${C_Dim}Benchmarking ${#bench_prof[@]} model(s)...${C_Reset}\n"
-
-            for i in "${!bench_prof[@]}"; do
-                echo -e "${C_Highlight}[$(( i + 1 ))/${#bench_prof[@]}] ${bench_name[$i]} (${bench_size[$i]})${C_Reset}"
-                model start "${bench_prof[$i]}" 2>/dev/null
+            for i in "${!b_num[@]}"; do
+                printf '%s\n' "${C_Highlight}[$(( i+1 ))/${#b_num[@]}] ${b_name[$i]} (${b_size[$i]})${C_Reset}"
+                model use "${b_num[$i]}" 2>/dev/null
                 sleep 2
-
-                # Run burn and capture TPS from cache
                 burn 2>/dev/null
-                local tps_val="FAIL"
-                [[ -f "$LLM_TPS_CACHE" ]] && tps_val=$(< "$LLM_TPS_CACHE")
-                bench_tps+=("$tps_val")
-
+                local tps="FAIL"; [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")
+                b_tps+=("$tps")
                 model stop 2>/dev/null
                 sleep 1
             done
 
-            # Results table
             echo ""
-            __tac_divider
-            printf "${C_Dim}  %-13s %-25s %-8s %-6s %s${C_Reset}\n" "PROFILE" "MODEL" "SIZE" "PROC" "TPS"
-            printf "${C_Dim}  ─────────────────────────────────────────────────────────────${C_Reset}\n"
-            for i in "${!bench_prof[@]}"; do
-                printf "  %-13s %-25s %-8s %-6s %s\n" \
-                    "${bench_prof[$i]}" "${bench_name[$i]}" "${bench_size[$i]}" "${bench_proc[$i]}" "${bench_tps[$i]}"
+            printf "${C_Dim}  %-4s %-30s %-7s %s${C_Reset}\n" "#" "MODEL" "SIZE" "TPS"
+            printf "${C_Dim}  ──────────────────────────────────────────────────${C_Reset}\n"
+            for i in "${!b_num[@]}"; do
+                printf "  %-4s %-30s %-7s %s\n" "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}"
             done
-            __tac_footer
 
-            # Persist results to TSV for historical comparison
-            local bench_file="$AI_STORAGE_ROOT/.llm/bench_$(date +%Y%m%d_%H%M%S).tsv"
-            {
-                printf "profile\tmodel\tsize\tprocessor\ttps\n"
-                for i in "${!bench_prof[@]}"; do
-                    printf "%s\t%s\t%s\t%s\t%s\n" \
-                        "${bench_prof[$i]}" "${bench_name[$i]}" "${bench_size[$i]}" "${bench_proc[$i]}" "${bench_tps[$i]}"
-                done
+            local bench_file
+            bench_file="$AI_STORAGE_ROOT/.llm/bench_$(date +%Y%m%d_%H%M%S).tsv"
+            { printf "#\tmodel\tsize\ttps\n"
+              for i in "${!b_num[@]}"; do printf "%s\t%s\t%s\t%s\n" "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}"; done
             } > "$bench_file"
-            __tac_info "Results saved" "[$bench_file]" "$C_Dim"
+            __tac_info "Saved" "$bench_file" "$C_Dim"
+
+            # Restore previously active model if one was running
+            if [[ -n "$_bench_prev_model" ]]; then
+                __tac_info "Restoring" "Model #${_bench_prev_model}" "$C_Dim"
+                model use "$_bench_prev_model" 2>/dev/null
+            fi
+            __tac_footer
+            ;;
+
+        delete)
+            # Delete model #N from disk (with confirmation) and renumber the registry.
+            [[ -z "$target" ]] && { __tac_info "Usage" "[model delete <number>]" "$C_Error"; return 1; }
+            [[ ! "$target" =~ ^[0-9]+$ ]] && { __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1; }
+            local entry; entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            [[ -z "$entry" ]] && { __tac_info "Error" "[Model #$target not found]" "$C_Error"; return 1; }
+            IFS='|' read -r _n name file _rest <<< "$entry"
+            local fpath="$LLAMA_MODEL_DIR/$file"
+
+            __tac_info "Delete" "#${target} ${name}" "$C_Warning"
+            __tac_info "File" "$fpath" "$C_Dim"
+            if [[ -f "$fpath" ]]; then
+                local fsize; fsize=$(du -h "$fpath" | cut -f1)
+                __tac_info "Size" "$fsize" "$C_Dim"
+            fi
+            read -r -p "${C_Warning}Permanently delete this model? [y/N]: ${C_Reset}" confirm
+            [[ "${confirm,,}" != "y" ]] && { __tac_info "Delete" "[CANCELLED]" "$C_Dim"; return 0; }
+
+            # Stop if it's the active model
+            local active_num; active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+            if [[ "$target" == "$active_num" ]]; then
+                model stop
+            fi
+
+            # Delete file
+            if [[ -f "$fpath" ]]; then
+                if rm -f "$fpath" 2>/dev/null; then
+                    __tac_info "File" "[DELETED]" "$C_Success"
+                else
+                    __tac_info "File" "[DELETE FAILED — permission denied]" "$C_Error"
+                    return 1
+                fi
+            fi
+
+            # Remove from registry and renumber
+            local remaining
+            remaining=$(__renumber_registry "$target")
+            __tac_info "Registry" "[Removed and renumbered — ${remaining} models remain]" "$C_Success"
+            ;;
+
+        download)
+            # Download one or more GGUF models from Hugging Face and auto-scan into registry.
+            if [[ $# -eq 0 ]]; then
+                printf '%s\n' "${C_Error}Error:${C_Reset} No models specified."
+                echo ""
+                echo "Usage: model download <repo:file> [repo:file ...]"
+                echo ""
+                echo "Each argument must be a Hugging Face repo and filename separated by a colon:"
+                echo "  <owner/repo>:<filename.gguf>"
+                echo ""
+                echo "Downloads are saved to ${LLAMA_MODEL_DIR}."
+                echo ""
+                echo "Examples:"
+                echo "  model download TheBloke/Ferret_7B-GGUF:ferret_7b.Q4_K_M.gguf"
+                echo "  model download Qwen/Qwen3-8B-GGUF:Qwen3-8B-Q4_K_M.gguf \\"
+                echo "                 bartowski/microsoft_Phi-4-mini-instruct-GGUF:microsoft_Phi-4-mini-instruct-Q4_K_M.gguf"
+                return 1
+            fi
+
+            if ! command -v hf >/dev/null 2>&1; then
+                printf '%s\n' "${C_Error}Error:${C_Reset} 'hf' CLI not found. Install with: pip install huggingface_hub[cli]"
+                return 1
+            fi
+
+            # Warn if no token set (gated repos will fail)
+            if [[ -z "${HF_TOKEN:-}" ]]; then
+                printf '%s\n' "${C_Warning}Note:${C_Reset} HF_TOKEN is not set. Gated or private repos will fail."
+                printf '%s\n' "      Set it with: export HF_TOKEN=hf_..."
+                echo ""
+            fi
+
+            # Safe WSL cache directory
+            export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
+            mkdir -p "$HF_HOME" "$LLAMA_MODEL_DIR"
+
+            local ok=0 fail=0
+            local spec
+            for spec in "$@"; do
+                if [[ "$spec" != *":"* ]]; then
+                    printf '%s\n' "${C_Error}Error:${C_Reset} '$spec' is not in the right format."
+                    printf '%s\n' "       Expected ${C_Warning}<owner/repo>:<filename.gguf>${C_Reset}  e.g. TheBloke/Ferret_7B-GGUF:ferret_7b.Q4_K_M.gguf"
+                    ((fail++))
+                    continue
+                fi
+
+                local dl_repo dl_file
+                IFS=":" read -r dl_repo dl_file <<< "$spec"
+
+                if [[ -z "$dl_repo" || "$dl_repo" != *"/"* ]]; then
+                    printf '%s\n' "${C_Error}Error:${C_Reset} '$spec' — repo must be in ${C_Warning}<owner>/<repo>${C_Reset} format (e.g. TheBloke/Ferret_7B-GGUF)"
+                    ((fail++))
+                    continue
+                fi
+
+                if [[ -z "$dl_file" ]]; then
+                    printf '%s\n' "${C_Error}Error:${C_Reset} '$spec' — missing filename after colon (e.g. :ferret_7b.Q4_K_M.gguf)"
+                    ((fail++))
+                    continue
+                fi
+
+                local dest="$LLAMA_MODEL_DIR/$dl_file"
+                local archive_dest="$LLAMA_ARCHIVE_DIR/$dl_file"
+                if [[ -f "$dest" ]]; then
+                    __tac_info "Skip" "$dl_file already exists (active)" "$C_Warning"
+                    ((ok++))
+                    continue
+                fi
+                if [[ -f "$archive_dest" ]]; then
+                    __tac_info "Skip" "$dl_file already exists (archived)" "$C_Warning"
+                    ((ok++))
+                    continue
+                fi
+
+                # Check available space before downloading.
+                # Re-read drive usage at download time (may have changed since startup).
+                local d_used_bytes
+                d_used_bytes=$(du -sb "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk '{print $1}')
+                d_used_bytes=${d_used_bytes:-0}
+                local d_total_now
+                d_total_now=$(df -B1 --output=size "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk 'NR==2{print $1+0}')
+                d_total_now=${d_total_now:-$LLAMA_DRIVE_SIZE}
+                local d_avail_bytes=$(( d_total_now - d_used_bytes ))
+                (( d_avail_bytes < 0 )) && d_avail_bytes=0
+
+                if [[ "$d_avail_bytes" =~ ^[0-9]+$ ]]; then
+                    # Query HF API for file size
+                    local remote_size
+                    remote_size=$(curl -sfI "https://huggingface.co/${dl_repo}/resolve/main/${dl_file}" 2>/dev/null \
+                        | grep -i '^content-length:' | awk '{print $2}' | tr -d '\r')
+                    if [[ "$remote_size" =~ ^[0-9]+$ ]] && (( remote_size > 0 )); then
+                        if (( remote_size > d_avail_bytes )); then
+                            local need_gb=$(( remote_size / 1024 / 1024 / 1024 ))
+                            local have_gb=$(( d_avail_bytes / 1024 / 1024 / 1024 ))
+                            printf '%s\n' "${C_Error}Error:${C_Reset} Not enough space for $dl_file (need ~${need_gb}G, only ${have_gb}G free on M:)"
+                            ((fail++))
+                            continue
+                        fi
+                    fi
+                fi
+
+                __tac_info "Downloading" "$dl_repo → $dl_file" "$C_Highlight"
+                if hf download "$dl_repo" "$dl_file" --local-dir "$LLAMA_MODEL_DIR"; then
+                    __tac_info "OK" "$dl_file" "$C_Success"
+                    ((ok++))
+                else
+                    __tac_info "FAIL" "$dl_repo $dl_file" "$C_Error"
+                    ((fail++))
+                fi
+            done
+
+            echo ""
+            __tac_info "Done" "$ok succeeded, $fail failed. Models in $LLAMA_MODEL_DIR" "$C_Dim"
+            (( fail > 0 )) && return 1
+            # Auto-scan new models into the registry
+            model scan
+            ;;
+
+        archive)
+            # Move model #N to the archive directory and renumber the registry.
+            [[ -z "$target" ]] && { __tac_info "Usage" "[model archive <number>]" "$C_Error"; return 1; }
+            [[ ! "$target" =~ ^[0-9]+$ ]] && { __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1; }
+            local entry; entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            [[ -z "$entry" ]] && { __tac_info "Error" "[Model #$target not found]" "$C_Error"; return 1; }
+            IFS='|' read -r _n name file _rest <<< "$entry"
+            local fpath="$LLAMA_MODEL_DIR/$file"
+            local archive_dir="$LLAMA_ARCHIVE_DIR"
+
+            __tac_info "Archive" "#${target} ${name}" "$C_Warning"
+            __tac_info "From" "$fpath" "$C_Dim"
+            __tac_info "To" "$archive_dir/$file" "$C_Dim"
+            read -r -p "${C_Warning}Archive this model? [y/N]: ${C_Reset}" confirm
+            [[ "${confirm,,}" != "y" ]] && { __tac_info "Archive" "[CANCELLED]" "$C_Dim"; return 0; }
+
+            # Stop if active
+            local active_num; active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+            if [[ "$target" == "$active_num" ]]; then
+                model stop
+            fi
+
+            # Move file
+            mkdir -p "$archive_dir"
+            if [[ -f "$fpath" ]]; then
+                if mv "$fpath" "$archive_dir/" 2>/dev/null; then
+                    __tac_info "File" "[MOVED]" "$C_Success"
+                else
+                    __tac_info "File" "[MOVE FAILED — try: sudo chmod 755 $archive_dir]" "$C_Error"
+                    return 1
+                fi
+            else
+                __tac_info "File" "[NOT ON DISK — removing from registry only]" "$C_Warning"
+            fi
+
+            # Remove from registry and renumber
+            local remaining
+            remaining=$(__renumber_registry "$target")
+            __tac_info "Registry" "[Archived and renumbered — ${remaining} models remain]" "$C_Success"
             ;;
 
         *)
-            echo "Usage: model {list|start|stop|active|info|assign|test|download|pull|swap|bench}"
+            echo "Usage: model {scan|list|use|stop|status|info|bench|delete|archive|download}"
+            echo "  scan       — Scan $LLAMA_MODEL_DIR, read GGUF metadata, auto-calculate params"
+            echo "  list       — Show numbered model registry (▶ = active)"
+            echo "  use N      — Start model #N with optimal settings"
+            echo "  stop       — Stop llama-server"
+            echo "  status     — Show what's running"
+            echo "  info N     — Detailed info for model #N"
+            echo "  bench      — Benchmark all on-disk models"
+            echo "  delete N   — Permanently delete model #N from disk and registry"
+            echo "  archive N  — Move model #N to archive/ and remove from registry"
+            echo "  download   — Download GGUF models from Hugging Face (repo:file format)"
             ;;
     esac
 }
 
-# Convenience wrappers — 'serve'/'halt' mirror common muscle memory
-serve() { model start "$1"; }
-halt()  { model stop; }
+# serve/halt/mlogs — convenience wrappers for the model manager.
+function serve() {
+    model use "$1"
+}
+function halt() {
+    model stop
+}
 
 function mlogs() {
     __resolve_vscode_bin
@@ -2622,11 +3545,11 @@ function mlogs() {
 # ---------------------------------------------------------------------------
 function burn() {
     __require_llm || return 1
-    command clear
+    [[ -t 1 ]] && command clear
     __tac_header "HARDWARE BURN-IN STRESS TEST"
 
-    echo -e "${C_Dim}Testing: ~1300 token synthetic physics response...${C_Reset}"
-    echo -e "${C_Highlight}Processing ....${C_Reset}"
+    printf '%s\n' "${C_Dim}Testing: ~1300 token synthetic physics response...${C_Reset}"
+    printf '%s\n' "${C_Highlight}Processing ....${C_Reset}"
 
     local prompt="Explain the complete theory of special relativity in extreme detail, including the mathematical derivations for time dilation."
 
@@ -2642,7 +3565,7 @@ function burn() {
     local end_ns; end_ns=$(date +%s%N)
 
     if [[ -z "$response" ]]; then
-        echo -e "${C_Error}[API Error]${C_Reset} No response — model may still be booting. Retry in 5s."
+        printf '%s\n' "${C_Error}[API Error]${C_Reset} No response — model may still be booting. Retry in 5s."
         return 1
     fi
 
@@ -2650,7 +3573,7 @@ function burn() {
     local err_msg
     err_msg=$(printf '%s' "$response" | jq -r '.error.message // empty' 2>/dev/null)
     if [[ -n "$err_msg" ]]; then
-        echo -e "${C_Warning}[API Status]${C_Reset} $err_msg"
+        printf '%s\n' "${C_Warning}[API Status]${C_Reset} $err_msg"
         return 1
     fi
 
@@ -2672,9 +3595,10 @@ function burn() {
         tps_dec=$(( tps_x10 % 10 ))
     fi
 
-    echo -e "${C_Dim}Hint: If inference was slow, first run \"wake\" to lock WDDM state.${C_Reset}"
-    echo -e "${C_Success}Burn complete in ${elapsed_s}.${elapsed_dec}s with ${tokens} output tokens giving ${tps_int}.${tps_dec} t/s${C_Reset}"
-    echo "${tps_int}.${tps_dec} t/s" > "${LLM_TPS_CACHE}.tmp" && mv "${LLM_TPS_CACHE}.tmp" "$LLM_TPS_CACHE"
+    printf '%s\n' "${C_Dim}Hint: If inference was slow, first run \"wake\" to lock WDDM state.${C_Reset}"
+    printf '%s\n' "${C_Success}Burn complete: ${tps_int}.${tps_dec} tps (${tokens} tokens in ${elapsed_s}.${elapsed_dec}s)${C_Reset}"
+    echo "${tps_int}.${tps_dec} tps" > "${LLM_TPS_CACHE}.tmp" && mv "${LLM_TPS_CACHE}.tmp" "$LLM_TPS_CACHE"
+    __save_tps "${tps_int}.${tps_dec}"
 
     [[ -f "$LLM_TPS_CACHE" ]] && LAST_TPS=$(< "$LLM_TPS_CACHE")
 }
@@ -2708,10 +3632,10 @@ function wtf_repl() {
     if [[ -n "$initial" ]]; then
         __llm_stream "Explain how to use the following tool or concept:\n$initial"
     fi
-    echo -e "${C_Dim}wtf: mode — type a topic (or 'end-chat' / Ctrl-C to exit)${C_Reset}"
+    printf '%s\n' "${C_Dim}wtf: mode — type a topic (or 'end-chat' / Ctrl-C to exit)${C_Reset}"
     while true; do
         local topic
-        read -r -e -p $'\e[96mwtf: \e[0m' topic || break
+        read -r -e -p "${C_Highlight}wtf: ${C_Reset}" topic || break
         [[ -z "$topic" ]] && continue
         [[ "$topic" == "end-chat" ]] && break
         __llm_stream "Explain how to use the following tool or concept:\n$topic"
@@ -2728,7 +3652,7 @@ function wtf_repl() {
 # Sets __LAST_LLM_RESPONSE with the full response text.
 # Usage: __llm_sse_core "$json_payload"
 # ---------------------------------------------------------------------------
-__llm_sse_core() {
+function __llm_sse_core() {
     local payload="$1"
     __LAST_LLM_RESPONSE=""
 
@@ -2760,17 +3684,16 @@ __llm_sse_core() {
     local end_ns; end_ns=$(date +%s%N)
     local elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
     local tokens=$server_tokens
-    local approx=""
-    if (( tokens == 0 )); then tokens=$chunk_count; approx="~"; fi
+    if (( tokens == 0 )); then tokens=$chunk_count; fi
 
     if (( tokens > 0 && elapsed_ms > 0 )); then
         local tps_x10=$(( tokens * 10000 / elapsed_ms ))
         local tps_int=$(( tps_x10 / 10 ))
         local tps_dec=$(( tps_x10 % 10 ))
         local elapsed_s=$(( elapsed_ms / 1000 ))
-        printf '\n\e[90m[%s.%s t/s | %s%s tokens | %ss]\e[0m\n' \
-            "$tps_int" "$tps_dec" "$approx" "$tokens" "$elapsed_s"
-        echo "${tps_int}.${tps_dec} t/s" > "${LLM_TPS_CACHE}.tmp" && mv "${LLM_TPS_CACHE}.tmp" "$LLM_TPS_CACHE"
+        printf '\n%s(%s.%s tps)%s\n' "$C_Dim" "$tps_int" "$tps_dec" "$C_Reset"
+        echo "${tps_int}.${tps_dec} tps" > "${LLM_TPS_CACHE}.tmp" && mv "${LLM_TPS_CACHE}.tmp" "$LLM_TPS_CACHE"
+        __save_tps "${tps_int}.${tps_dec}"
     else
         echo
     fi
@@ -2787,7 +3710,7 @@ __llm_sse_core() {
 #   multi-turn conversation history for local_chat.
 # MODULARISATION NOTE: writes LLM_TPS_CACHE, read by tactical_dashboard.
 # ---------------------------------------------------------------------------
-__llm_stream() {
+function __llm_stream() {
     local prompt="$1"
     local show_header="${2:-1}"
     local messages_json="${3:-}"
@@ -2800,7 +3723,7 @@ __llm_stream() {
         payload=$(jq -n --arg p "$prompt" '{messages: [{role: "user", content: $p}], stream: true}')
     fi
 
-    (( show_header == 1 )) && echo -e "\n${C_Highlight}AI Analysis:${C_Reset}\n"
+    (( show_header == 1 )) && printf '\n%s\n\n' "${C_Highlight}AI Analysis:${C_Reset}"
 
     __llm_sse_core "$payload"
 }
@@ -2810,7 +3733,7 @@ __llm_stream() {
 # Usage: __llm_chat_send "user message" "messages_json_array"
 #   Returns: the assistant's response text is captured via __LAST_LLM_RESPONSE.
 # ---------------------------------------------------------------------------
-__llm_chat_send() {
+function __llm_chat_send() {
     local user_msg="$1"
     local messages_json="$2"
     __require_llm || return 1
@@ -2837,7 +3760,11 @@ function local_chat() {
     # Conversation history as a JSON array string
     local history='[]'
 
-    __send_chat_msg() {
+    # __send_chat_msg is a nested (dynamic-scoped) function that captures
+    # the 'history' local variable from local_chat's scope. This works because
+    # bash uses dynamic scoping — nested functions inherit the caller's locals.
+    # It will break if extracted to file scope without passing history by reference.
+    function __send_chat_msg() {
         local user_msg="$1"
         # Append user message to history
         history=$(printf '%s' "$history" | jq --arg m "$user_msg" '. + [{role: "user", content: $m}]')
@@ -2854,18 +3781,19 @@ function local_chat() {
     if [[ -n "$initial" ]]; then
         __send_chat_msg "$initial"
     fi
-    echo -e "${C_Dim}chat: mode — type a message (or 'end-chat' / 'save' / Ctrl-C to exit)${C_Reset}"
+    printf '%s\n' "${C_Dim}chat: mode — type a message (or 'end-chat' / 'save' / Ctrl-C to exit)${C_Reset}"
     while true; do
         local msg
         echo
-        read -r -e -p $'\e[96mchat: \e[0m' msg || break
+        read -r -e -p "${C_Highlight}chat: ${C_Reset}" msg || break
         [[ -z "$msg" ]] && continue
         [[ "$msg" == "end-chat" ]] && break
         if [[ "$msg" == "save" ]]; then
-            local save_file="$HOME/chat_$(date +%Y%m%d_%H%M%S).json"
+            local save_file
+            save_file="$HOME/chat_$(date +%Y%m%d_%H%M%S).json"
             printf '%s' "$history" | jq '.' > "$save_file" 2>/dev/null \
-                && echo -e "${C_Success}Saved to $save_file${C_Reset}" \
-                || echo -e "${C_Error}Failed to save${C_Reset}"
+                && printf '%s\n' "${C_Success}Saved to $save_file${C_Reset}" \
+                || printf '%s\n' "${C_Error}Failed to save${C_Reset}"
             continue
         fi
         __send_chat_msg "$msg"
@@ -2880,9 +3808,9 @@ function local_chat() {
 # Usage: chat-context <file> "question about this file"
 # The file content is prepended as context to the user's question.
 # ---------------------------------------------------------------------------
-chat-context() {
+function chat-context() {
     if [[ -z "$1" ]]; then
-        echo -e "${C_Dim}Usage:${C_Reset} chat-context <file> \"question about this file\""
+        printf '%s\n' "${C_Dim}Usage:${C_Reset} chat-context <file> \"question about this file\""
         return 1
     fi
     local file="$1"; shift
@@ -2903,7 +3831,7 @@ chat-context() {
 # chat-pipe — Pipe stdin as context and ask the local LLM about it.
 # Usage: cat error.log | chat-pipe "What's wrong here?"
 # ---------------------------------------------------------------------------
-chat-pipe() {
+function chat-pipe() {
     __require_llm || return 1
     local ctx; ctx=$(cat)
     if [[ -z "$ctx" ]]; then
@@ -2951,8 +3879,10 @@ function tactical_dashboard() {
     local batt_color=$C_Success
     if [[ "$batt" != "A/C POWERED" && "$batt" =~ ^([0-9]+)% ]]; then
         local batt_pct=${BASH_REMATCH[1]}
-        if (( batt_pct < 20 )); then batt_color=$C_Error
-        elif (( batt_pct < 50 )); then batt_color=$C_Warning
+        if (( batt_pct < 20 )); then
+            batt_color=$C_Error
+        elif (( batt_pct < 50 )); then
+            batt_color=$C_Warning
         fi
     fi
     __fRow "BATTERY" "$batt" "$batt_color"
@@ -2960,23 +3890,19 @@ function tactical_dashboard() {
     local gpu_raw; gpu_raw=$(__get_gpu)
 
     # CPU/GPU colour: >90% red, >75% yellow, else green
-    local cpu_gpu_color=$C_Success
+    local cpu_gpu_color
     local max_gpu=$(( gpu0 > gpu1 ? gpu0 : gpu1 ))
-    if (( cpu > 90 || max_gpu > 90 )); then cpu_gpu_color=$C_Error
-    elif (( cpu > 75 || max_gpu > 75 )); then cpu_gpu_color=$C_Warning
-    fi
+    cpu_gpu_color=$(__threshold_color $(( cpu > max_gpu ? cpu : max_gpu )))
     __fRow "CPU / GPU" "CPU ${cpu}% | GPU0 ${gpu0}% | GPU1 ${gpu1}%" "$cpu_gpu_color"
 
     # Memory colour: <75% used=green, 75-90%=yellow, >90%=red
-    local mem_color=$C_Success
-    if (( mem_pct > 90 )); then mem_color=$C_Error
-    elif (( mem_pct > 75 )); then mem_color=$C_Warning
-    fi
+    local mem_color
+    mem_color=$(__threshold_color "$mem_pct")
     __fRow "MEMORY" "$mem" "$mem_color"
     __fRow "STORAGE" "$disk" "$C_Text"
 
     # --- GPU & LLM block ---
-    echo -e "${C_BoxBg}╠${line}╣${C_Reset}"
+    printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
 
     local gpu_display="$gpu_raw"
     local g_name="" g_temp="" g_util="" g_mem_u="" g_mem_t=""
@@ -2989,17 +3915,19 @@ function tactical_dashboard() {
     local gpu_color=$C_Highlight
     if [[ "$gpu_raw" != "N/A" && "$gpu_raw" != "Querying..." && "$gpu_raw" != *"OFFLINE"* ]]; then
         local g_util_n=${g_util// /}
-        gpu_color=$C_Success
-        if (( g_util_n > 90 )); then gpu_color=$C_Error
-        elif (( g_util_n > 75 )); then gpu_color=$C_Warning
-        fi
+        g_util_n=${g_util_n%\%}  # Strip trailing % for numeric comparison
+        gpu_color=$(__threshold_color "$g_util_n")
     fi
     __fRow "GPU COMPUTE" "$gpu_display" "$gpu_color"
 
     if __test_port "$LLM_PORT"; then
-        local raw; raw=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
-        IFS='|' read -r a_prof a_name a_size a_proc <<< "$raw"
-        local act_mod="${a_name:-ONLINE}"
+        local act_mod="ONLINE"
+        local _anum; _anum=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+        if [[ -n "$_anum" && -f "$LLM_REGISTRY" ]]; then
+            local _entry; _entry=$(awk -F'|' -v n="$_anum" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            IFS='|' read -r _ _aname _ <<< "$_entry"
+            [[ -n "$_aname" ]] && act_mod="#${_anum} ${_aname}"
+        fi
         local tps; tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
         __fRow "LOCAL LLM" "ACTIVE $act_mod | ${tps:-$LAST_TPS}" "$C_Success"
 
@@ -3024,7 +3952,7 @@ function tactical_dashboard() {
     __fRow "WSL" "ACTIVE  ${WSL_DISTRO_NAME:-UNKNOWN}  ($(uname -r))" "$C_Success"
 
     # --- OpenClaw status block ---
-    echo -e "${C_BoxBg}╠${line}╣${C_Reset}"
+    printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
     local oc_stat="OFFLINE"
     local oc_active=0
     __test_port "$OC_PORT" && { oc_stat="ONLINE"; oc_active=1; }
@@ -3034,11 +3962,15 @@ function tactical_dashboard() {
     IFS='|' read -r m_sess m_ver <<< "$metrics"
     m_sess=${m_sess%$'\r'}; m_ver=${m_ver%$'\r'}
 
-    __fRow "OPENCLAW" "[$oc_stat]  ${m_ver}" "$([[ $oc_active == 1 ]] && echo "$C_Success" || echo "$C_Error")"
+    local oc_color=$C_Error
+    if [[ $oc_active == 1 ]]; then
+        oc_color=$C_Success
+    fi
+    __fRow "OPENCLAW" "[$oc_stat]  ${m_ver}" "$oc_color"
 
     local sess_color=$C_Dim
     if [[ "$m_sess" != "Querying..." && "$m_sess" =~ ^[0-9]+$ ]]; then
-        [[ $m_sess -gt 0 ]] && sess_color=$C_Warning
+        (( m_sess > 0 )) && sess_color=$C_Warning
     fi
     __fRow "SESSIONS" "$m_sess Active" "$sess_color"
 
@@ -3053,24 +3985,40 @@ function tactical_dashboard() {
         local h_used h_limit
         if (( t_used >= 1000 )); then h_used="$(( t_used / 1000 ))k"; else h_used="$t_used"; fi
         if (( t_limit >= 1000 )); then h_limit="$(( t_limit / 1000 ))k"; else h_limit="$t_limit"; fi
-        __fRow "CONTEXT USED" "${t_pct}% (${h_used} of ${h_limit})" "$([[ $t_pct -ge 90 ]] && echo "$C_Error" || echo "$C_Success")"
+        local ctx_tok_color=$C_Success
+        if (( t_pct >= 90 )); then
+            ctx_tok_color=$C_Error
+        fi
+        __fRow "CONTEXT USED" "${t_pct}% (${h_used} of ${h_limit})" "$ctx_tok_color"
     fi
 
     # "Cloaking" = active Python virtual environment isolation
-    [[ -n "$VIRTUAL_ENV" ]] && __fRow "CLOAKING" "ACTIVE ($(basename "$VIRTUAL_ENV"))" "$C_Success"
+    if [[ -n "$VIRTUAL_ENV" ]]; then
+        __fRow "CLOAKING" "ACTIVE ($(basename "$VIRTUAL_ENV"))" "$C_Success"
+    fi
 
     local gitStat; gitStat=$(__get_git)
     if [[ -n "$gitStat" ]]; then
-        echo -e "${C_BoxBg}╠${line}╣${C_Reset}"
+        printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
         local gBranch gSec
         IFS='|' read -r gBranch gSec <<< "$gitStat"
         __fRow "TARGET REPO" "$gBranch" "$C_Warning"
-        __fRow "SEC STATUS" "$gSec" "$([[ $gSec == "BREACHED" ]] && echo "$C_Error" || echo "$C_Success")"
+        local sec_color=$C_Success
+        if [[ "$gSec" == "BREACHED" ]]; then
+            sec_color=$C_Error
+        fi
+        __fRow "SEC STATUS" "$gSec" "$sec_color"
     fi
 
-    echo -e "${C_BoxBg}╠${line}╣${C_Reset}"
+    printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
 
-    local cmds="up | $([[ $oc_active == 1 ]] && echo "xo" || echo "so") | serve | halt | chat: | commit | status | h"
+    local cmds_toggle
+    if [[ $oc_active == 1 ]]; then
+        cmds_toggle="xo"
+    else
+        cmds_toggle="so"
+    fi
+    local cmds="up | ${cmds_toggle} | serve | halt | chatl | commit | status | h"
     local totalPad=$(( UIWidth - 2 - ${#cmds} ))
     local leftPad=$(( totalPad / 2 ))
     local rightPad=$(( totalPad - leftPad ))
@@ -3080,7 +4028,69 @@ function tactical_dashboard() {
 
     printf "${C_BoxBg}║%s${C_Dim}%s${C_Reset}%s${C_BoxBg}║${C_Reset}\n" "$lCmdPad" "$cmds" "$rCmdPad"
 
-    echo -e "${C_BoxBg}╚${line}╝${C_Reset}"
+    printf '%s\n' "${C_BoxBg}╚${line}╝${C_Reset}"
+}
+
+# ---------------------------------------------------------------------------
+# bashrc_diagnose — Quick health check of the shell environment.
+# Reports: bash version, profile version, shell options, key paths, loaded
+# functions count, and basic sanity checks.
+# ---------------------------------------------------------------------------
+function bashrc_diagnose() {
+    echo "=== Tactical Console Diagnostics ==="
+    echo "Profile version : ${TACTICAL_PROFILE_VERSION:-unknown}"
+    echo "Bash version    : ${BASH_VERSION}"
+    echo "Shell           : $SHELL"
+    echo "Term            : ${TERM:-unset}"
+    echo "Interactive     : $(case $- in *i*) echo yes;; *) echo no;; esac)"
+    echo "Login shell     : $(shopt -q login_shell && echo yes || echo no)"
+    echo ""
+    echo "=== Key Paths ==="
+    echo "AI_STORAGE_ROOT : ${AI_STORAGE_ROOT:-unset}"
+    echo "TacticalRoot    : ${TacticalRoot:-unset}"
+    echo "OC_ROOT         : ${OC_ROOT:-unset}"
+    echo "LLM_HOME        : ${LLM_HOME:-unset}"
+    echo "LLM_REGISTRY    : ${LLM_REGISTRY:-unset}"
+    echo "TAC_CACHE_DIR   : ${TAC_CACHE_DIR:-unset}"
+    echo ""
+    echo "=== Tool Availability ==="
+    local tools=(git jq curl nvidia-smi openclaw python3 node npm)
+    for t in "${tools[@]}"; do
+        if command -v "$t" >/dev/null 2>&1; then
+            echo "  $t : $(command -v "$t")"
+        else
+            echo "  $t : NOT FOUND"
+        fi
+    done
+    echo ""
+    echo "=== Function Count ==="
+    echo "  Public  : $(declare -F | grep -cv ' __')"
+    echo "  Private : $(declare -F | grep -c ' __')"
+    echo ""
+    echo "=== ShellCheck ==="
+    if command -v shellcheck >/dev/null 2>&1; then
+        local src="${BASH_SOURCE[0]:-$HOME/ubuntu-console/tactical-console.bashrc}"
+        local sc_count
+        sc_count=$(shellcheck -s bash "$src" 2>&1 | grep -c '^In ' || true)
+        echo "  Findings: $sc_count"
+    else
+        echo "  shellcheck not installed"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# bashrc_dryrun — Source the profile in a subshell to check for errors
+# without affecting the current session.
+# ---------------------------------------------------------------------------
+function bashrc_dryrun() {
+    local src="${BASH_SOURCE[0]:-$HOME/ubuntu-console/tactical-console.bashrc}"
+    echo "Dry-run: sourcing $src in a subshell..."
+    if bash -n "$src" 2>&1; then
+        echo "${C_Success}PASS${C_Reset} — No syntax errors."
+    else
+        echo "${C_Error}FAIL${C_Reset} — Syntax errors detected above."
+        return 1
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -3090,7 +4100,8 @@ function tactical_help() {
     command clear
     __tac_header "HELP INDEX" "open" "$TACTICAL_PROFILE_VERSION"
 
-    # First section title without leading divider (header already drew one)
+    # First section: rendered without leading divider (header already drew one).
+    # Uses a manual centred title instead of __hSection to avoid the ╠═══╣ divider.
     local __iw=$((UIWidth - 2))
     local __title="SYSTEM"
     local __pl=$(( (__iw - ${#__title}) / 2 ))
@@ -3103,11 +4114,11 @@ function tactical_help() {
     __hRow "up" "Run 10-step maintenance: updates, caches, GPU, disk"
     __hRow "sysinfo" "One-line summary: CPU load, RAM, disk usage, GPU"
     __hRow "get-ip" "Show WSL internal IP and external WAN address"
-    __hRow "cls / reload" "Clear screen + redraw banner / Full .bashrc reload"
+    __hRow "cls / reload" "Clear screen + redraw banner / Full profile reload"
     __hRow "cpwd" "Copy working directory path to Windows clipboard"
     __hRow "cl" "Remove python-*.exe and .pytest_cache in current dir"
     __hRow "logtrim" "Trim log files over 1 Mb to last 1000 lines"
-    __hRow "oedit" "Open the .bashrc profile in VS Code for editing"
+    __hRow "oedit" "Open tactical-console.bashrc in VS Code for editing"
     __hRow "code <path>" "Open any file or directory in VS Code (lazy-resolved)"
 
     __hSection "OPENCLAW — GATEWAY"
@@ -3166,38 +4177,44 @@ function tactical_help() {
 
     __hSection "LLM — MODEL MANAGEMENT"
     __hRow "wake" "Lock NVIDIA GPU persistence mode and WDDM state"
+    __hRow "gpu-status" "Detailed NVIDIA GPU stats: util, VRAM, temp, power"
     __hRow "llmconf" "Open the models.conf registry file in VS Code"
-    __hRow "model list" "Show all models with profile, size and processor"
-    __hRow "model info" "Display full details for a named profile slot"
-    __hRow "model assign" "Assign a .gguf model file to a profile slot"
-    __hRow "model active" "Show the currently loaded and running LLM"
-    __hRow "model test" "Health-check ping to the running LLM endpoint"
-    __hRow "model download" "Download a GGUF model from HuggingFace Hub"
-    __hRow "model pull" "Alias for model download (Ollama-style shorthand)"
-    __hRow "model swap" "Hot-swap: stop current model and start a new one"
+    __hRow "model scan" "Scan model dir, read GGUF metadata, auto-calculate params"
+    __hRow "model list" "Show numbered model registry (▶ = active)"
+    __hRow "model use N" "Start model #N with optimal GPU/ctx/thread settings"
+    __hRow "model stop" "Stop the local llama-server"
+    __hRow "model status" "Show what's currently running"
+    __hRow "model info N" "Display full details for model #N"
     __hRow "model bench" "Benchmark all on-disk models and compare TPS"
-    __hRow "serve <prof>" "Boot a model by profile name (fast|think|experi)"
+    __hRow "model delete N" "Permanently delete model #N from disk and registry"
+    __hRow "model archive N" "Move model #N to /mnt/m/archive/ and deregister"
+    __hRow "model download" "Download GGUF models from Hugging Face (repo:file)"
+    __hRow "serve N" "Alias for model use N"
     __hRow "halt" "Stop the local llama.cpp inference server"
     __hRow "mlogs" "Open the llama-server runtime log in VS Code"
     __hRow "burn" "Run ~1300 token stress test and measure live TPS"
 
     __hSection "LLM — CHAT & EXPLAIN"
-    __hRow "chat: [msg]" "Interactive LLM chat session (end-chat to exit)"
+    __hRow "chatl [msg]" "Interactive LLM chat session (end-chat to exit)"
     __hRow "  save" "Inside chat: save conversation history to ~/chat_*.json"
     __hRow "chat-context" "Load a file as context then ask questions about it"
     __hRow "chat-pipe" "Pipe stdout from another command as LLM context"
     __hRow "explain" "Ask the local LLM to explain your last command"
-    __hRow "wtf: [topic]" "Interactive topic explainer REPL (end-chat to exit)"
+    __hRow "wtf [topic]" "Interactive topic explainer REPL (end-chat to exit)"
 
     __hSection "GIT & PROJECTS"
     __hRow "mkproj <n>" "Scaffold project: PEP-8 main.py, .venv, git init"
-    __hRow "commit: <m>" "Git add, commit with your message, push and deploy"
+    __hRow "commitd <m>" "Git add, commit with your message, push and deploy"
     __hRow "commit" "Git add + commit (LLM auto-message) + push + deploy"
     __hRow "deploy" "Rsync ~/console directory to OpenClaw_Prod"
     __hRow "cop" "Launch interactive GitHub Copilot CLI session"
     __hRow "?? <prompt>" "One-shot Copilot prompt (e.g. ?? find large files)"
     __hRow "cop-ask <msg>" "Non-interactive Copilot prompt (spelled-out alias)"
     __hRow "cop-init" "Generate copilot-instructions.md for a project"
+
+    __hSection "DIAGNOSTICS"
+    __hRow "bashrc_diagnose" "Health check: versions, paths, tools, functions"
+    __hRow "bashrc_dryrun" "Syntax-check the profile without affecting session"
 
     __tac_footer
 }
@@ -3214,7 +4231,7 @@ mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" "$TacticalRoot" "$AI_STORAGE_ROOT/.
 
 # Check for required dependencies
 if ! command -v jq >/dev/null 2>&1; then
-    echo -e "\e[33m[Tactical Profile]\e[0m Missing: jq (required). Run: sudo apt install -y jq"
+    printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset} Missing: jq (required). Run: sudo apt install -y jq"
 fi
 
 # Initialize UI (guard prevents screen-clear on re-source)
@@ -3229,10 +4246,16 @@ fi
 
 # Fix Loopback for WSL Mirrored Networking (Idempotent & Pulse-Free).
 # Uses 'command ip' to call /usr/bin/ip directly, avoiding any function shadow.
+# Checks both interface existence AND the specific address to be truly idempotent.
 if ! command ip link show loopback0 >/dev/null 2>&1; then
     if sudo -n true 2>/dev/null; then
         sudo ip link add loopback0 type dummy 2>/dev/null
         sudo ip link set loopback0 up 2>/dev/null
+        sudo ip addr add 127.0.0.2/8 dev loopback0 2>/dev/null
+    fi
+elif ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'; then
+    # Interface exists but address is missing (e.g., after network reset)
+    if sudo -n true 2>/dev/null; then
         sudo ip addr add 127.0.0.2/8 dev loopback0 2>/dev/null
     fi
 fi
@@ -3247,28 +4270,43 @@ if [[ -f "$OC_WORKSPACE/oc-llm-sync.sh" ]]; then
     if [[ -f "$OC_ROOT/oc-llm-sync.sha256" ]]; then
         _trusted_hash=$(< "$OC_ROOT/oc-llm-sync.sha256")
         if [[ "$_sync_hash" != "$_trusted_hash" ]]; then
-            echo -e "\e[33m[Tactical Profile]\e[0m oc-llm-sync.sh hash mismatch — skipped (run 'oc-trust-sync' to update)"
-            unset _sync_hash _trusted_hash
+            printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset} oc-llm-sync.sh hash mismatch — skipped (run 'oc-trust-sync' to update)"
         else
+            # C7: stderr suppressed because oc-llm-sync.sh may emit harmless
+            # warnings (e.g., unbound variables from older versions). The || true
+            # prevents a failing sync from aborting shell init. Errors are still
+            # logged above via the SHA256 entry in bash-errors.log.
             source "$OC_WORKSPACE/oc-llm-sync.sh" 2>/dev/null || true
-            unset _sync_hash _trusted_hash
         fi
     else
-        # No trusted hash file yet — source but warn
-        source "$OC_WORKSPACE/oc-llm-sync.sh" 2>/dev/null || true
-        unset _sync_hash
+        # No trusted hash — refuse to source. Run 'oc-trust-sync' first.
+        printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset} oc-llm-sync.sh has no trusted hash — skipped (run 'oc-trust-sync' to trust it)"
     fi
+    # Always clean up hash variables regardless of code path
+    unset _sync_hash _trusted_hash
 fi
 
 # Bridge Windows User API keys into WSL so OpenClaw fallback providers work.
 # Cached in /dev/shm for 1 hour; run 'oc-refresh-keys' to force refresh.
 __bridge_windows_api_keys
 
+# Load Hugging Face token from secure file if not already set by bridge
+if [[ -z "${HF_TOKEN:-}" && -f "$HOME/.config/huggingface/token" ]]; then
+    HF_TOKEN=$(< "$HOME/.config/huggingface/token")
+    export HF_TOKEN
+fi
+
 # Clean up background telemetry subshells on shell exit.
 # Only kills PIDs we spawned for caching — not user-started background jobs.
 # Chains with any pre-existing EXIT trap to avoid silently overwriting it.
+#
+# Lifecycle:
+#   1. Each __get_* telemetry function appends its background PID to __TAC_BG_PIDS
+#   2. tactical_dashboard resets the array at the start of each render
+#   3. On shell exit, __tac_exit_cleanup kills any lingering background subshells
+#   4. The trap chains with any prior EXIT trap so other cleanup still runs
 __TAC_BG_PIDS=()
-__tac_exit_cleanup() {
+function __tac_exit_cleanup() {
     local pid
     for pid in "${__TAC_BG_PIDS[@]}"; do
         kill "$pid" 2>/dev/null
@@ -3281,5 +4319,3 @@ unset _tac_prev_exit_trap
 # ==============================================================================
 # end of file
 
-# OpenClaw Completion
-source "/home/wayne/.openclaw/completions/openclaw.bash"

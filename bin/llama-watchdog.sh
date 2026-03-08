@@ -7,7 +7,7 @@ LLM_PORT="${LLM_PORT:-8081}"
 ACTIVE_LLM_FILE="/dev/shm/active_llm"
 LLM_LOG_FILE="/dev/shm/llama-server.log"
 LLM_REGISTRY="${LLM_REGISTRY:-/home/wayne/.llm/models.conf}"
-LLAMA_MODEL_DIR="${LLAMA_MODEL_DIR:-/home/wayne/llama.cpp/models}"
+LLAMA_MODEL_DIR="${LLAMA_MODEL_DIR:-/mnt/m/Active}"
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-/home/wayne/llama.cpp/build/bin/llama-server}"
 LLAMA_GPU_LAYERS="${LLAMA_GPU_LAYERS:-33}"
 LLAMA_CPU_THREADS="${LLAMA_CPU_THREADS:-12}"
@@ -27,7 +27,7 @@ fi
 
 log "Health check failed. Attempting restart..."
 
-IFS='|' read -r prof name size proc < "$ACTIVE_LLM_FILE"
+IFS='|' read -r prof name size _proc < "$ACTIVE_LLM_FILE"
 if [[ -z "$prof" ]]; then
     log "No profile in active state file."
     exit 1
@@ -52,8 +52,8 @@ use_gpu="${m_gpu:-$LLAMA_GPU_LAYERS}"
 use_ctx="${m_ctx:-$LLAMA_CTX_SIZE}"
 use_threads="${m_threads:-$LLAMA_CPU_THREADS}"
 
-# Kill any zombie process
-pkill -f llama-server 2>/dev/null || true
+# Kill any zombie process (exact match avoids hitting unrelated processes)
+pkill -x llama-server 2>/dev/null || true
 sleep 1
 
 cmd=("$LLAMA_SERVER_BIN" "-m" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
