@@ -42,6 +42,21 @@ for f in "$REPO_ROOT"/tactical-console.bashrc \
 done
 
 echo ""
+echo "=== Unicode Safety (non-ASCII in executable code) ==="
+for f in "$REPO_ROOT"/tactical-console.bashrc \
+         "$REPO_ROOT"/install.sh \
+         "$REPO_ROOT"/bin/*.sh; do
+    # Find non-ASCII on non-comment lines (excludes lines starting with #)
+    hits=$(grep -Pn '[^\x00-\x7F]' "$f" 2>/dev/null | grep -v '^\s*#\|^[0-9]*:\s*#' || true)
+    if [[ -z "$hits" ]]; then
+        echo "  PASS  ${f#"$REPO_ROOT"/}"
+    else
+        echo "  WARN  ${f#"$REPO_ROOT"/}  — non-ASCII on executable lines:"
+        echo "$hits" | head -5
+    fi
+done
+
+echo ""
 if (( rc == 0 )); then
     echo "All checks passed."
 else

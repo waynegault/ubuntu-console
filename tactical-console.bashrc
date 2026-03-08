@@ -885,7 +885,7 @@ function __hRow() {
 # __show_header — Display the oneliner startup banner.
 # ---------------------------------------------------------------------------
 function __show_header() {
-    __tac_header "Bash v${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]} :: 'm' for Dashboard, 'h' for Help."
+    __tac_header "Bash v${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]} :: 'm' for Dashboard, 'h' for Help." "closed" "$TACTICAL_PROFILE_VERSION"
 }
 
 # ---------------------------------------------------------------------------

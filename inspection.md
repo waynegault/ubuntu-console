@@ -160,6 +160,23 @@ Logic errors that cause wrong behaviour.
 | 4.4.2 | 🔧 Glob patterns intentional | `shellcheck` SC2035, SC2144 | `*.txt` used only where globbing is intended |
 | 4.4.3 | 🔍 IFS manipulation restored | `grep -n 'IFS=' <file>` | IFS saved/restored or used in subshell |
 
+### 4.5 Unicode & Encoding
+
+Non-ASCII characters in executable code cause silent runtime failures that pass
+all static analysis (`bash -n`, ShellCheck). They are invisible in most editors
+and catastrophic inside arithmetic `(( ))`, `[[ ]]`, or variable assignments.
+
+| # | Check | Command | Expected |
+|---|-------|---------|----------|
+| 4.5.1 | 🔧 No non-ASCII in executable code | `grep -Pn '[^\x00-\x7F]' <file> \| grep -v '^\s*#\|^[0-9]*:\s*#'` | Zero matches outside comments / here-docs / deliberate display strings |
+| 4.5.2 | 🔧 No Unicode look-alikes (homoglyphs) | `grep -Pn '[\x{2010}-\x{2015}\x{2018}-\x{201F}\x{2026}\x{00A0}]' <file>` | Zero matches — catches en-dash, em-dash, smart quotes, ellipsis, NBSP |
+| 4.5.3 | 🔍 Sentinel / fallback values are ASCII-safe | Inspect all `echo "..."|printf` fallback strings | Values consumed by arithmetic / conditionals contain only `[0-9A-Za-z_/.-]` |
+
+**Why:** Unicode en-dashes (`–`, U+2013), smart quotes, and non-breaking spaces
+are visually identical to their ASCII counterparts in most terminals and editors,
+but break bash arithmetic, comparisons, and pattern matching. This class of bug
+passes `bash -n`, ShellCheck, and manual review — only manifesting at runtime.
+
 ---
 
 ## 5. Robustness — High
