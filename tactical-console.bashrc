@@ -1538,19 +1538,66 @@ function logtrim() {
 # Injects bridged API keys into the systemd user session before starting.
 # ---------------------------------------------------------------------------
 function so() {
+    local _svc="openclaw-gateway.service"
+
+    # Already healthy — nothing to do.
     if __test_port "$OC_PORT"; then
-        __tac_info "Gateway Status" "[ALREADY RUNNING]" "$C_Warning"
+        __tac_info "Gateway" "[ALREADY RUNNING]" "$C_Warning"
         return 0
     fi
 
-    # Push bridged API keys into the systemd user environment so the
-    # openclaw-gateway.service can see them. Systemd user services do NOT
-    # inherit the interactive shell's exported vars (they run in an
-    # isolated activation context). We must push each key explicitly via
-    # 'systemctl --user set-environment' so the service's ExecStart can
-    # read them. The cache file uses printf %q quoting, so we read key
-    # names from the file and use indirect expansion (${!_key}) to get
-    # the properly evaluated values that were already sourced at startup.
+    # ── Pre-flight: clear stale service state ──────────────────────────
+    # If systemd already has the service in a failed or auto-restart
+    # state (e.g. crash loop from a previous run), stop it cleanly and
+    # reset the failure counter before attempting a fresh start.
+    local _pre_state
+    _pre_state=$(systemctl --user show -p SubState --value "$_svc" 2>/dev/null)
+    if [[ "$_pre_state" == "auto-restart" || "$_pre_state" == "failed" ]]; then
+        __tac_info "Gateway" "[STALE — clearing ${_pre_state} state]" "$C_Warning"
+        systemctl --user stop "$_svc" 2>/dev/null
+        systemctl --user reset-failed "$_svc" 2>/dev/null
+        sleep 1
+    fi
+
+    # ── Pre-flight: detect port held by orphan process ─────────────────
+    if __test_port "$OC_PORT"; then
+        __tac_info "Gateway" "[PORT $OC_PORT HELD — freeing]" "$C_Warning"
+        openclaw gateway stop >/dev/null 2>&1
+        systemctl --user stop "$_svc" 2>/dev/null
+        sleep 1
+        if __test_port "$OC_PORT"; then
+            __tac_info "Gateway" "[PORT $OC_PORT BLOCKED]" "$C_Error"
+            __so_check_win_port "$OC_PORT"
+            return 1
+        fi
+    fi
+
+    # ── Pre-flight: Windows-side port conflict (WSL only) ──────────────
+    # WSL shares the Windows network stack. A Windows process binding the
+    # port is invisible to ss/lsof but blocks bind() inside WSL. Check
+    # proactively so the user gets a clear message instead of a crash loop.
+    if ! __test_port "$OC_PORT" && __so_check_win_port "$OC_PORT" --block; then
+        return 1
+    fi
+
+    # ── Pre-flight: Tailscale Serve port conflict ──────────────────────
+    # Tailscale Serve binds a userspace socket that is invisible to ss/lsof
+    # but blocks Node's bind(). If Serve is proxying to our port and the
+    # gateway isn't running, we must cycle Serve around the startup.
+    local _ts_serve_active=0
+    if command -v tailscale &>/dev/null; then
+        if tailscale serve status 2>/dev/null | grep -q ":$OC_PORT\b"; then
+            _ts_serve_active=1
+            __tac_info "Tailscale Serve" "[CYCLING — port $OC_PORT proxy]" "$C_Dim"
+            sudo tailscale serve off 2>/dev/null
+            rm -f /tmp/openclaw-1000/gateway.*.lock 2>/dev/null
+            sleep 1
+        fi
+    fi
+
+    # ── Push API keys into the systemd user environment ────────────────
+    # Systemd user services don't inherit interactive shell exports.
+    # Read key names from the cache file and push via set-environment.
     local _key
     while IFS= read -r _line; do
         _key="${_line#export }"
@@ -1562,32 +1609,123 @@ function so() {
     local _prov_url
     _prov_url=$(openclaw config get provider.baseUrl 2>/dev/null)
     if [[ "$_prov_url" == *"127.0.0.1:${LLM_PORT}"* ]] && ! __test_port "$LLM_PORT"; then
-        __tac_info "Local LLM" "[OFFLINE — provider points to localhost:$LLM_PORT]" "$C_Warning"
-        printf '%s\n' "  ${C_Dim}Run 'serve <profile>' to start the LLM before gateway.${C_Reset}"
+        __tac_info "Local LLM" "[OFFLINE — localhost:$LLM_PORT]" "$C_Warning"
+        printf '%s\n' "  ${C_Dim}Start the LLM first: serve <profile>${C_Reset}"
     fi
 
+    # ── Start and wait ─────────────────────────────────────────────────
     openclaw gateway start >/dev/null 2>&1
 
-    # Wait up to 15 seconds for the gateway to become responsive
-    local ready=0
-    printf '%s' "${C_Dim}Waiting for gateway"
-    for _ in {1..15}; do
-        if __test_port "$OC_PORT"; then ready=1; break; fi
-        printf '.'
-        sleep 1
-    done
-    printf '%s\n' "${C_Reset}"
+    local ready=0 elapsed=0 max_wait=20
+    local _restarts_before _spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    _restarts_before=$(systemctl --user show -p NRestarts --value "$_svc" 2>/dev/null || echo 0)
 
-    if (( ready )); then
-        __tac_info "Supervisor Process" "[ONLINE]" "$C_Success"
-    else
-        if systemctl --user is-active --quiet openclaw-gateway.service 2>/dev/null; then
-            __tac_info "Supervisor Process" "[FAILED TO START IN TIME]" "$C_Error"
-        else
-            __tac_info "Supervisor Process" "[CRASHED - CHECK LOGS]" "$C_Error"
+    while (( elapsed < max_wait )); do
+        if __test_port "$OC_PORT"; then ready=1; break; fi
+
+        # Spinner with elapsed time — single overwritten line
+        printf '\r%s' "  ${C_Dim}${_spin_chars:elapsed%10:1} Starting gateway (${elapsed}s)${C_Reset}  "
+
+        # Every 5s, check for crash loops or hard failure
+        if (( elapsed > 0 && elapsed % 5 == 0 )); then
+            local _restarts_now _sub_state
+            _restarts_now=$(systemctl --user show -p NRestarts --value "$_svc" 2>/dev/null || echo 0)
+            _sub_state=$(systemctl --user show -p SubState --value "$_svc" 2>/dev/null)
+
+            if (( _restarts_now > _restarts_before + 1 )); then
+                printf '\r%s\n' "$(printf '%*s' 40 '')"
+                __tac_info "Gateway" "[CRASH LOOP]" "$C_Error"
+                __so_show_errors "$_svc"
+                __so_check_win_port "$OC_PORT"
+                printf '%s\n' "  ${C_Dim}Run 'xo' then 'so' to retry.${C_Reset}"
+                return 1
+            fi
+            if [[ "$_sub_state" == "failed" ]]; then
+                printf '\r%s\n' "$(printf '%*s' 40 '')"
+                __tac_info "Gateway" "[FAILED]" "$C_Error"
+                __so_show_errors "$_svc"
+                return 1
+            fi
         fi
-        printf '%s\n' "  ${C_Dim}Run 'le' to view the startup errors.${C_Reset}"
+
+        sleep 1
+        (( elapsed++ ))
+
+        # After initial window, extend if service is still alive
+        if (( elapsed == 15 && !ready )); then
+            systemctl --user is-active --quiet "$_svc" 2>/dev/null && max_wait=30
+        fi
+    done
+    # Clear spinner line
+    printf '\r%s\r' "$(printf '%*s' 40 '')"
+
+    # ── Result ─────────────────────────────────────────────────────────
+    if (( ready )); then
+        __tac_info "Gateway" "[ONLINE] (${elapsed}s)" "$C_Success"
+    elif systemctl --user is-active --quiet "$_svc" 2>/dev/null; then
+        __tac_info "Gateway" "[STARTING — port not ready]" "$C_Warning"
+        printf '%s\n' "  ${C_Dim}Service active after ${elapsed}s but port $OC_PORT not responding.${C_Reset}"
+        printf '%s\n' "  ${C_Dim}Retry in a moment or run 'le' for logs.${C_Reset}"
+    else
+        __tac_info "Gateway" "[FAILED]" "$C_Error"
+        __so_show_errors "$_svc"
+        printf '%s\n' "  ${C_Dim}Run 'xo' then 'so' to retry, or 'le' for logs.${C_Reset}"
     fi
+
+    # ── Post: restore Tailscale Serve if we cycled it ──────────────────
+    if (( _ts_serve_active )); then
+        sudo tailscale serve --bg "http://127.0.0.1:$OC_PORT" >/dev/null 2>&1 \
+            && __tac_info "Tailscale Serve" "[RESTORED]" "$C_Dim"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __so_show_errors — Extract and display the most recent gateway errors.
+# Pulls the last 30 log lines and shows up to 5 matching error patterns.
+# ---------------------------------------------------------------------------
+function __so_show_errors() {
+    local _svc="$1" _errors
+    _errors=$(journalctl --user -u "$_svc" --no-pager -n 30 --output=cat 2>&1 \
+        | grep -iE 'fail|error|port.*in use|already listening|exited|refused' | tail -5)
+    if [[ -n "$_errors" ]]; then
+        printf '%s\n' "  ${C_Dim}Recent errors:${C_Reset}"
+        while IFS= read -r _line; do
+            printf '%s\n' "    ${C_Dim}${_line}${C_Reset}"
+        done <<< "$_errors"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __so_check_win_port — Detect a Windows-side process holding a port (WSL).
+# WSL shares the host network stack, so a Windows process binding a port is
+# invisible to ss/lsof inside WSL but blocks bind().
+# Usage: __so_check_win_port <port> [--block]
+#   --block: if a Windows holder is found, print error and return 0 (= caller
+#            should abort).  Without --block, just prints an advisory hint.
+# Returns 0 if a Windows holder was found (and reported), 1 otherwise.
+# ---------------------------------------------------------------------------
+function __so_check_win_port() {
+    local _port="$1" _block="${2:-}"
+    # Only meaningful under WSL with access to PowerShell
+    command -v powershell.exe &>/dev/null || return 1
+
+    local _win_holder
+    _win_holder=$(timeout 5 powershell.exe -NoProfile -NonInteractive -Command "
+        \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue
+        if (\$c) {
+            \$p = Get-Process -Id \$c.OwningProcess -ErrorAction SilentlyContinue
+            '{0} (PID {1})' -f \$p.ProcessName, \$c.OwningProcess
+        }
+    " 2>/dev/null | tr -d '\r')
+
+    [[ -z "$_win_holder" ]] && return 1
+
+    if [[ "$_block" == "--block" ]]; then
+        __tac_info "Gateway" "[PORT $OC_PORT BLOCKED — Windows]" "$C_Error"
+    fi
+    printf '%s\n' "  ${C_Warning}Windows process holding port ${_port}: ${_win_holder}${C_Reset}"
+    printf '%s\n' "  ${C_Dim}Kill it from Windows: taskkill /PID ${_win_holder##*PID } /F${C_Reset}"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
