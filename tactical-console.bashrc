@@ -1779,7 +1779,10 @@ function __so_check_win_port() {
         __tac_info "Gateway" "[PORT $OC_PORT BLOCKED — Windows]" "$C_Error"
     fi
     printf '%s\n' "  ${C_Warning}Windows process holding port ${_port}: ${_win_holder}${C_Reset}"
-    printf '%s\n' "  ${C_Dim}Kill it from Windows: taskkill /PID ${_win_holder##*PID } /F${C_Reset}"
+    local _pid_only
+    _pid_only="${_win_holder##*PID }"
+    _pid_only="${_pid_only%%)*}"
+    printf '%s\n' "  ${C_Dim}Kill it from Windows: taskkill /PID ${_pid_only} /F${C_Reset}"
     return 0
 }
 
