@@ -187,6 +187,8 @@ if [[ -z "$LLAMA_DRIVE_SIZE" || "$LLAMA_DRIVE_SIZE" == "0" ]]; then
 fi
 export LLAMA_DRIVE_SIZE
 export LLAMA_SERVER_BIN="$LLAMA_ROOT/build/bin/llama-server"
+export LLAMA_BUILD_VERSION
+LLAMA_BUILD_VERSION=$(git -C "$LLAMA_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 export LLM_REGISTRY="$LLAMA_DRIVE_ROOT/.llm/models.conf"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"
 export LLM_LOG_FILE="/dev/shm/llama-server.log"
@@ -203,6 +205,7 @@ export BASH_COMPLETION_SCRIPT="/usr/share/bash-completion/bash_completion"
 
 # ---- VS Code Path (Lazy-initialized on first use to avoid slow pwsh call at startup) ----
 VSCODE_BIN=""
+# Resolve the VS Code binary path, caching the result for subsequent calls.
 function __resolve_vscode_bin() {
     [[ -n "$VSCODE_BIN" ]] && return
     if [[ -f "$TAC_CACHE_DIR/vscode_path" ]]; then
@@ -242,6 +245,16 @@ export LOCAL_LLM_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
 export LLAMA_GPU_LAYERS=33   # Default GPU layers (full offload for small models)
 export LLAMA_CPU_THREADS=12  # Default CPU threads
 export LLAMA_CTX_SIZE=4096   # Default context window size
+
+# ---- Named Constants (avoid magic numbers scattered through functions) ----
+declare -ri VRAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024))  # 4 GB RTX 3050 Ti
+declare -ri VRAM_USABLE_PCT=95       # Percentage usable after driver overhead
+declare -ri VRAM_THRESHOLD_PCT=85    # Threshold for "fits in VRAM" decisions
+declare -ri COOLDOWN_DAILY=86400     # 24 hours in seconds
+declare -ri COOLDOWN_WEEKLY=604800   # 7 days in seconds
+declare -ri LOG_MAX_BYTES=1048576    # 1 MB — logtrim threshold
+declare -ri MOE_DEFAULT_CTX=8192     # Default context size for MoE models
+declare -ri LLAMA_DRIVE_FALLBACK_BYTES=$((200 * 1024 * 1024 * 1024))  # 200 GB
 
 # ---- Battery detection (cached once at startup to skip pwsh fallback on desktops) ----
 if [[ -d /sys/class/power_supply/BAT0 ]]; then
@@ -348,6 +361,7 @@ alias cls='clear_tactical'
 alias reload='command clear; exec bash'
 alias m='tactical_dashboard'
 alias cpwd='copy_path'
+alias unittest='~/ubuntu-console/scripts/run-tests.sh'
 
 # ---- Dev Tools & VS Code Wrappers (lazy-resolved — no pwsh hit at shell start) ----
 # Path resolution is centralised in __resolve_vscode_bin (§1).
@@ -357,21 +371,27 @@ function code() {
     __resolve_vscode_bin
     "$VSCODE_BIN" "$@"
 }
+# oedit — Open tactical-console.bashrc in VS Code for editing.
 function oedit() {
     __vsc_open "$HOME/ubuntu-console/tactical-console.bashrc" "VS Code opened... (run 'reload' to apply changes)"
 }
+# llmconf — Open the LLM model registry config in VS Code.
 function llmconf() {
     __vsc_open "$LLM_REGISTRY"
 }
+# oclogs — Open the OpenClaw temporary log file in VS Code.
 function oclogs() {
     __vsc_open "$OC_TMP_LOG"
 }
+# le — Show the last 40 lines of the OpenClaw gateway journal.
 function le() {
     journalctl --user -u openclaw-gateway.service --no-pager -n 60 --output=cat 2>&1 | tail -40
 }
+# lo — Show the last 120 lines of the OpenClaw gateway journal.
 function lo() {
     journalctl --user -u openclaw-gateway.service --no-pager -n 120 --output=cat 2>&1
 }
+# occonf — Open the OpenClaw config (openclaw.json) in VS Code.
 function occonf() {
     __vsc_open "$OC_ROOT/openclaw.json"
 }
@@ -394,27 +414,35 @@ function openclaw() {
     fi
 }
 
+# os — List OpenClaw sessions.
 function os() {
     openclaw sessions
 }
+# oa — List OpenClaw agents.
 function oa() {
     openclaw agents list
 }
+# ocstat — Show detailed OpenClaw status (--all).
 function ocstat() {
     openclaw status --all
 }
+# ocgs — Show OpenClaw gateway status with deep probe.
 function ocgs() {
     openclaw gateway status --deep
 }
+# ocv — Print the OpenClaw version.
 function ocv() {
     openclaw --version
 }
+# mem-index — Trigger OpenClaw memory indexing.
 function mem-index() {
     openclaw memory index
 }
+# status — Show basic OpenClaw status.
 function status() {
     openclaw status
 }
+# ocms — Show OpenClaw model status with live probe.
 function ocms() {
     openclaw models status --probe
 }
@@ -422,9 +450,11 @@ function ocms() {
 # ---- GitHub Copilot CLI ----
 alias '??'='copilot -p'
 alias cop='copilot'
+# cop-init — Initialize GitHub Copilot CLI.
 function cop-init() {
     copilot init
 }
+# cop-ask — Ask GitHub Copilot CLI a question.
 function cop-ask() {
     copilot -p "$*"
 }
@@ -593,8 +623,11 @@ function __strip_ansi() {
     if [[ ! "$varname" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
         return 1
     fi
+    # Regex stored in a variable to avoid bash 5.x $'...' serialisation quirk
+    # where declare -f adds a spurious backslash before '[' in the ANSI token.
+    local _ansi_re=$'\e\[[0-9;]*[mK]'
     tmp="$input"
-    while [[ "$tmp" =~ $'\e\['[0-9\;]*[mK] ]]; do
+    while [[ "$tmp" =~ $_ansi_re ]]; do
         tmp="${tmp//${BASH_REMATCH[0]}/}"
     done
     printf -v "$varname" '%s' "$tmp"
@@ -960,6 +993,18 @@ function __get_host_metrics() {
 }
 
 # ---------------------------------------------------------------------------
+# __resolve_smi — Locate the nvidia-smi binary (WSL path first, then PATH).
+# Returns the path on stdout; returns 1 if not found.
+# ---------------------------------------------------------------------------
+function __resolve_smi() {
+    local smi="$WSL_NVIDIA_SMI"
+    [[ -x "$smi" ]] && { echo "$smi"; return 0; }
+    smi=$(command -v nvidia-smi 2>/dev/null || true)
+    [[ -n "$smi" && -x "$smi" ]] && { echo "$smi"; return 0; }
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # __get_gpu — Return CSV: name,temp,utilization,mem_used,mem_total (10s TTL).
 # NVIDIA-only detail for the GPU COMPUTE dashboard row.
 # ---------------------------------------------------------------------------
@@ -969,9 +1014,9 @@ function __get_gpu() {
         cat "$cache"; return
     fi
     (
-        local smi_cmd="$WSL_NVIDIA_SMI"
-        [[ ! -f "$smi_cmd" ]] && smi_cmd=$(command -v nvidia-smi 2>/dev/null)
-        if [[ -n "$smi_cmd" && -x "$smi_cmd" ]]; then
+        local smi_cmd
+        smi_cmd=$(__resolve_smi)
+        if [[ -n "$smi_cmd" ]]; then
             local raw
             raw=$("$smi_cmd" --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null)
             [[ -n "$raw" ]] && printf '%s' "${raw//NVIDIA GeForce /}" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
@@ -1086,7 +1131,7 @@ function __get_tokens() {
 # ---------------------------------------------------------------------------
 function __get_oc_version() {
     local cache="$TAC_CACHE_DIR/tac_ocversion"
-    if __cache_fresh "$cache" 86400; then
+    if __cache_fresh "$cache" $COOLDOWN_DAILY; then
         cat "$cache"; return
     fi
     (
@@ -1192,9 +1237,9 @@ function __check_cooldown() {
     # Per-key cooldown periods (default 7 days)
     local cooldown
     case "$key" in
-        apt_index)  cooldown=86400  ;;  # 24 hours — security index
-        apt)        cooldown=604800 ;;  # 7 days  — package upgrades
-        *)          cooldown=604800 ;;  # 7 days  — everything else
+        apt_index)  cooldown=$COOLDOWN_DAILY  ;;  # 24 hours — security index
+        apt)        cooldown=$COOLDOWN_WEEKLY ;;  # 7 days  — package upgrades
+        *)          cooldown=$COOLDOWN_WEEKLY ;;  # 7 days  — everything else
     esac
     local last_run
     last_run=$(grep "^${key}=" "$CooldownDB" 2>/dev/null | tail -n 1 | cut -d= -f2)
@@ -1498,7 +1543,14 @@ function sysinfo() {
     gpu1_color=$(__threshold_color "$gpu1")
     # Design tokens are already ANSI-C quoted ($'\e[…]'), so echo -e is
     # unnecessary. Using printf avoids any accidental backslash interpretation.
-    printf '%s\n' "${C_Dim}CPU:${C_Reset} ${cpu_color}${cpu}%${C_Reset} ${C_Dim}RAM:${C_Reset} ${mem_color}${mem_used} / ${mem_total} Gb${C_Reset} ${C_Dim}Disk:${C_Reset} ${disk} ${C_Dim}iGPU:${C_Reset} ${gpu_color}${gpu_info}${C_Reset} ${C_Dim}CUDA:${C_Reset} ${gpu1_color}${gpu1}%${C_Reset}"
+    # Build the sysinfo line in segments for readability.
+    local _sysline=""
+    _sysline+="${C_Dim}CPU:${C_Reset} ${cpu_color}${cpu}%${C_Reset} "
+    _sysline+="${C_Dim}RAM:${C_Reset} ${mem_color}${mem_used} / ${mem_total} Gb${C_Reset} "
+    _sysline+="${C_Dim}Disk:${C_Reset} ${disk} "
+    _sysline+="${C_Dim}iGPU:${C_Reset} ${gpu_color}${gpu_info}${C_Reset} "
+    _sysline+="${C_Dim}CUDA:${C_Reset} ${gpu1_color}${gpu1}%${C_Reset}"
+    printf '%s\n' "$_sysline"
 }
 
 # ---------------------------------------------------------------------------
@@ -1509,7 +1561,7 @@ function logtrim() {
     local _had_nullglob=0; shopt -q nullglob && _had_nullglob=1
     shopt -s nullglob
     for logfile in "$OC_LOGS"/*.log "$ErrorLogPath" "$LLM_LOG_FILE"; do
-        if [[ -f "$logfile" ]] && (( $(stat -c%s "$logfile" 2>/dev/null || echo 0) > 1048576 )); then
+        if [[ -f "$logfile" ]] && (( $(stat -c%s "$logfile" 2>/dev/null || echo 0) > LOG_MAX_BYTES )); then
             tail -n 1000 "$logfile" > "${logfile}.tmp" || continue
             [[ -s "${logfile}.tmp" ]] || { rm -f "${logfile}.tmp"; continue; }
             mv "${logfile}.tmp" "$logfile" || { rm -f "${logfile}.tmp"; continue; }
@@ -1621,7 +1673,10 @@ function so() {
     _restarts_before=$(systemctl --user show -p NRestarts --value "$_svc" 2>/dev/null || echo 0)
 
     while (( elapsed < max_wait )); do
-        if __test_port "$OC_PORT"; then ready=1; break; fi
+        if __test_port "$OC_PORT"; then
+            ready=1
+            break
+        fi
 
         # Spinner with elapsed time — single overwritten line
         printf '\r%s' "  ${C_Dim}${_spin_chars:elapsed%10:1} Starting gateway (${elapsed}s)${C_Reset}  "
@@ -2000,7 +2055,7 @@ function oc-restore() {
     # Stop gateway inline (avoid calling xo which prints its own UI)
     openclaw gateway stop >/dev/null 2>&1
     # pkill -x matches only the exact process name (not substrings)
-    pkill -x openclaw 2>/dev/null
+    pkill -u "$USER" -x openclaw 2>/dev/null
 
     __tac_info "Purging active configurations..." "[WORKING]" "$C_Dim"
 
@@ -2082,21 +2137,21 @@ function oc-restore() {
 # owk — cd to OpenClaw workspace directory.
 # ---------------------------------------------------------------------------
 function owk() {
-    cd "$OC_WORKSPACE" 2>/dev/null || __tac_info "Workspace" "[NOT FOUND]" "$C_Error"
+    cd "$OC_WORKSPACE" 2>/dev/null || { __tac_info "Workspace" "[NOT FOUND]" "$C_Error"; return 1; }
 }
 
 # ---------------------------------------------------------------------------
 # ologs — cd to OpenClaw logs directory.
 # ---------------------------------------------------------------------------
 function ologs() {
-    cd "$OC_LOGS" 2>/dev/null || __tac_info "Logs" "[NOT FOUND]" "$C_Error"
+    cd "$OC_LOGS" 2>/dev/null || { __tac_info "Logs" "[NOT FOUND]" "$C_Error"; return 1; }
 }
 
 # ---------------------------------------------------------------------------
 # ocroot — cd to OpenClaw root directory.
 # ---------------------------------------------------------------------------
 function ocroot() {
-    cd "$OC_ROOT" 2>/dev/null || __tac_info "Root" "[NOT FOUND]" "$C_Error"
+    cd "$OC_ROOT" 2>/dev/null || { __tac_info "Root" "[NOT FOUND]" "$C_Error"; return 1; }
 }
 
 # ---------------------------------------------------------------------------
@@ -2388,7 +2443,8 @@ function oc-sandbox() {
 # ---------------------------------------------------------------------------
 function oc-env() {
     __tac_header "ENVIRONMENT VARIABLES" "open"
-    __tac_line "OPENCLAW_ROOT" "[$OPENCLAW_ROOT]" "$C_Highlight"
+    __tac_line "OC_ROOT" "[$OC_ROOT]" "$C_Highlight"
+    __tac_line "OPENCLAW_ROOT" "[$OPENCLAW_ROOT] (deprecated → OC_ROOT)" "$C_Dim"
     __tac_line "OC_WORKSPACE" "[$OC_WORKSPACE]" "$C_Dim"
     __tac_line "OC_AGENTS" "[$OC_AGENTS]" "$C_Dim"
     __tac_line "OC_LOGS" "[$OC_LOGS]" "$C_Dim"
@@ -2745,7 +2801,9 @@ ${diff_body}"
 
     __tac_info "Generating commit message..." "[LLM]" "$C_Dim"
 
-    local prompt="Write a concise git commit message (one line, max 72 chars, imperative mood) for the following diff. Return ONLY the message, no quotes or explanation."
+    local prompt="Write a concise git commit message (one line, max 72 chars,"
+    prompt+=" imperative mood) for the following diff."
+    prompt+=" Return ONLY the message, no quotes or explanation."
     local payload
     payload=$(jq -n \
         --arg prompt "$prompt" \
@@ -2852,13 +2910,11 @@ function __require_llm() {
 # WSL restarts. You must re-run 'wake' after each 'wsl --shutdown'.
 # ---------------------------------------------------------------------------
 function wake() {
-    local smi_cmd="$WSL_NVIDIA_SMI"
-    [[ ! -f "$smi_cmd" ]] && smi_cmd=$(command -v nvidia-smi)
-
-    if [[ -z "$smi_cmd" || ! -x "$smi_cmd" ]]; then
+    local smi_cmd
+    smi_cmd=$(__resolve_smi) || {
         __tac_info "GPU" "[nvidia-smi not found]" "$C_Error"
         return 1
-    fi
+    }
 
     # Requires passwordless sudo; harmless failure if denied
     if ! sudo -n "$smi_cmd" -pm 1 >/dev/null 2>&1; then
@@ -2885,14 +2941,11 @@ function wake() {
 # Shows utilisation, VRAM, temperature, power draw, persistence mode.
 # ---------------------------------------------------------------------------
 function gpu-status() {
-    local smi="$WSL_NVIDIA_SMI"
-    if [[ ! -x "$smi" ]]; then
-        smi=$(command -v nvidia-smi 2>/dev/null || true)
-    fi
-    if [[ -z "$smi" || ! -x "$smi" ]]; then
+    local smi
+    smi=$(__resolve_smi) || {
         __tac_info "GPU" "[nvidia-smi not found]" "$C_Error"
         return 1
-    fi
+    }
 
     __tac_header "GPU STATUS" "open"
 
@@ -2931,13 +2984,13 @@ function gpu-status() {
 # running) that llama-server is actually offloading layers to the GPU.
 # ---------------------------------------------------------------------------
 function gpu-check() {
-    local smi="$WSL_NVIDIA_SMI"
-    [[ ! -x "$smi" ]] && smi=$(command -v nvidia-smi 2>/dev/null || true)
+    local smi
+    smi=$(__resolve_smi) || true
 
     __tac_header "CUDA / GPU CHECK" "open"
 
     # 1. nvidia-smi reachable?
-    if [[ -z "$smi" || ! -x "$smi" ]]; then
+    if [[ -z "$smi" ]]; then
         __tac_info "nvidia-smi" "NOT FOUND — GPU passthrough broken" "$C_Error"
         __tac_info "Tip" "In WSL run: nvidia-smi  (if this fails, CUDA is unavailable)" "$C_Dim"
         __tac_footer; return 1
@@ -3130,8 +3183,8 @@ function __gguf_metadata() {
 # Returns: 999 (max offload), total_layers (MoE), or 0 (CPU-only)
 function __calc_gpu_layers() {
     local file_bytes=$1 total_layers=$2 arch="${3:-}"
-    local vram_bytes=$((4 * 1024 * 1024 * 1024))  # 4GB
-    local usable_bytes=$((vram_bytes * 95 / 100))  # 95% usable (driver overhead)
+    local vram_bytes=$VRAM_TOTAL_BYTES
+    local usable_bytes=$((vram_bytes * VRAM_USABLE_PCT / 100))
 
     # MoE models: with --cpu-moe, expert weights stay on CPU.
     # Only attention/dense layers load to GPU, so we can offload all layers.
@@ -3157,26 +3210,26 @@ function __calc_gpu_layers() {
 function __calc_ctx_size() {
     local file_bytes=$1 native_ctx=$2 arch="${3:-}"
     local file_gb=$(( file_bytes / 1024 / 1024 / 1024 ))
-    local vram_limit_gb=$(( 4 * 85 / 100 ))  # 3GB usable VRAM threshold
+    local vram_limit_gb=$(( VRAM_TOTAL_BYTES / 1024 / 1024 / 1024 * VRAM_THRESHOLD_PCT / 100 ))
 
     # MoE models: expert weights on CPU, only attention on GPU.
     # Active params ~3B, so treat like a small model for ctx sizing.
     if [[ "$arch" == *"moe"* ]]; then
-        echo 8192
+        echo $MOE_DEFAULT_CTX
         return
     fi
 
     if (( file_gb > vram_limit_gb )); then
         # CPU-only: no VRAM pressure, limited by RAM instead.
-        # Use generous ctx but cap at 8192 to keep RAM usage reasonable.
-        local cap=8192
+        # Use generous ctx but cap at MOE_DEFAULT_CTX to keep RAM usage reasonable.
+        local cap=$MOE_DEFAULT_CTX
         if (( native_ctx < cap )); then
             echo "$native_ctx"
         else
             echo "$cap"
         fi
     elif (( file_gb >= 3 )); then
-        echo 8192
+        echo $MOE_DEFAULT_CTX
     else
         local cap=16384
         if (( native_ctx < cap )); then
@@ -3223,10 +3276,16 @@ function __quant_label() {
         20) label="IQ2_XS";; 21) label="IQ3_XXS";; 26) label="IQ3_M";;
         28) label="Q4_0_4_4";; 29) label="Q4_0_4_8";; 30) label="Q4_0_8_8";;
     esac
-    # If unknown/F32(0), try to extract from filename
+    # Regex matches GGUF quantization naming patterns:
+    #   IQ variants (IQ2_XXS, IQ3_M, etc.), standard K-quants (Q4_K_S, Q5_K_M),
+    #   base quants (Q4_0, Q8_0), split formats (Q4_0_4_4), and float types (F16, BF16).
     if [[ -z "$label" || "$ftype" == "0" ]] && [[ -n "$fname" ]]; then
+        local quant_pat='(IQ[0-9]_[A-Z]+|Q[0-9]+_K_[SML]'
+        quant_pat+='|Q[0-9]+_K|Q[0-9]+_[0-9]+|Q[0-9]+|F16|F32|BF16)'
         local extracted
-        extracted=$(echo "$fname" | grep -oiE '(IQ[0-9]_[A-Z]+|Q[0-9]+_K_[SML]|Q[0-9]+_K|Q[0-9]+_[0-9]+|Q[0-9]+|F16|F32|BF16)' | head -1 | tr '[:lower:]' '[:upper:]')
+        extracted=$(echo "$fname" \
+            | grep -oiE "$quant_pat" | head -1 \
+            | tr '[:lower:]' '[:upper:]')
         [[ -n "$extracted" ]] && label="$extracted"
     fi
     echo "${label:-unknown}"
@@ -3272,6 +3331,7 @@ function model() {
             local tmpconf="${LLM_REGISTRY}.tmp"
             echo "#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps" > "$tmpconf"
 
+            # ── Phase 1: Iterate .gguf files, read metadata, calculate params ──
             local num=0
             for gguf in "$LLAMA_MODEL_DIR"/*.gguf; do
                 [[ ! -f "$gguf" ]] && continue
@@ -3318,6 +3378,7 @@ function model() {
             mv "$tmpconf" "$LLM_REGISTRY"
             __tac_info "Registry" "[${num} models written to $LLM_REGISTRY]" "$C_Success"
 
+            # ── Phase 2: Quant enforcement — archive discouraged models ──────
             # Quant enforcement: archive discouraged models (skip active model)
             if [[ -f "$QUANT_GUIDE" ]]; then
                 local active_num
@@ -3425,6 +3486,7 @@ function model() {
 
         use)
             # Load and start model #N with VRAM-optimised layer split and context size.
+            # ── Validation ──────────────────────────────────────────────────
             if [[ -z "$target" ]]; then
                 __tac_info "Usage" "[model use <number>]" "$C_Error"; return 1
             fi
@@ -3447,7 +3509,7 @@ function model() {
                 __tac_info "Error" "[Server binary not found: $LLAMA_SERVER_BIN]" "$C_Error"; return 1
             fi
 
-            # Stop existing
+            # ── Stop existing & raise limits ──────────────────────────────
             pkill -u "$USER" -x llama-server 2>/dev/null
             sleep 1
 
@@ -3456,6 +3518,7 @@ function model() {
             # Requires passwordless sudo for prlimit; harmless no-op if denied.
             sudo -n prlimit --memlock=unlimited:unlimited --pid $$ 2>/dev/null
 
+            # ── Build server command ────────────────────────────────────
             # Choose batch sizes based on offload level:
             # Larger batches dramatically improve prompt eval speed (~30-50%) when
             # the GPU is doing the work. CPU-only uses moderate batches.
@@ -3469,6 +3532,9 @@ function model() {
             fi
 
             # Build command
+            # Recovery: if model loading hangs (known llama.cpp mmap issue with
+            # some GGUFs over drvfs), manually add --no-mmap to the command and
+            # restart. This forces read() instead of mmap(), slower but reliable.
             local cmd=("$LLAMA_SERVER_BIN" "-m" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
             cmd+=("--ctx-size" "$ctx" "--mlock" "--prio" "2" "--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size" "--cont-batching" "--parallel" "1")
             # --jinja: enable Jinja2 chat template processing from GGUF metadata.
@@ -3498,6 +3564,7 @@ function model() {
                 cmd+=("--n-gpu-layers" "999" "--flash-attn" "on" "--threads" "$threads")
             fi
 
+            # ── Per-architecture overrides ──────────────────────────────
             # Per-architecture sampling and launch overrides
             if [[ "$arch" == "gemma"* ]]; then
                 # Google recommends: temp 1.0, top_k 64, top_p 0.95, min_p 0
@@ -3527,6 +3594,7 @@ function model() {
                 __tac_info "Note" "MoE: expert layers on CPU (--cpu-moe)" "$C_Dim"
             fi
 
+            # ── Launch & health wait ────────────────────────────────────
             local ngl_label
             ngl_label=$( (( gpu_layers > 0 )) && echo "ngl=999" || echo "CPU-only" )
             __tac_info "Starting" "#${num} ${name} (${size}, ${ngl_label}, ctx ${ctx}, batch ${batch_size})" "$C_Highlight"
@@ -3548,7 +3616,16 @@ function model() {
             local ready=0
             printf '%s' "${C_Dim}Waiting for health endpoint"
             for (( _hw=0; _hw < health_timeout; _hw++ )); do
-                if __test_port "$LLM_PORT" && curl -sf --max-time 3 "http://127.0.0.1:$LLM_PORT/health" >/dev/null; then ready=1; break; fi
+                if __test_port "$LLM_PORT"; then
+                    local _hbody
+                    _hbody=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+                    # llama-server returns {"status":"ok"} when ready, but may
+                    # return 200 with {"status":"loading model"} while warming up.
+                    if [[ "$_hbody" == *'"ok"'* ]]; then
+                        ready=1
+                        break
+                    fi
+                fi
                 printf '.'
                 sleep 1
             done
@@ -3593,6 +3670,7 @@ function model() {
                 local tps
                 tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
                 [[ -n "$tps" ]] && __tac_info "Last TPS" "$tps" "$C_Dim"
+                __tac_info "Build" "$LLAMA_BUILD_VERSION" "$C_Dim"
             else
                 __tac_info "Status" "[OFFLINE]" "$C_Dim"
             fi
@@ -3675,7 +3753,10 @@ function model() {
             local bench_file
             bench_file="$LLAMA_DRIVE_ROOT/.llm/bench_$(date +%Y%m%d_%H%M%S).tsv"
             { printf "#\tmodel\tsize\ttps\n"
-              for i in "${!b_num[@]}"; do printf "%s\t%s\t%s\t%s\n" "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}"; done
+              for i in "${!b_num[@]}"; do
+                  printf "%s\t%s\t%s\t%s\n" \
+                      "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}"
+              done
             } > "$bench_file"
             __tac_info "Saved" "$bench_file" "$C_Dim"
 
@@ -3761,6 +3842,7 @@ function model() {
                 return 1
             fi
 
+            # ── Preflight checks ────────────────────────────────────────
             if ! command -v hf >/dev/null 2>&1; then
                 printf '%s\n' "${C_Error}Error:${C_Reset} 'hf' CLI not found. Install with: pip install huggingface_hub[cli]"
                 return 1
@@ -3777,6 +3859,7 @@ function model() {
             export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
             mkdir -p "$HF_HOME" "$LLAMA_MODEL_DIR"
 
+            # ── Download loop ───────────────────────────────────────────
             local ok=0 fail=0
             local spec
             for spec in "$@"; do
@@ -3843,8 +3926,10 @@ function model() {
 
                 # Check available space before downloading.
                 # Re-read drive usage at download time (may have changed since startup).
+                # Use df instead of du -sb — du walks the entire directory tree which
+                # is extremely slow on drvfs (Windows 9p) mounts with large GGUF files.
                 local d_used_bytes
-                d_used_bytes=$(du -sb "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk '{print $1}')
+                d_used_bytes=$(df -B1 --output=used "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk 'NR==2{print $1+0}')
                 d_used_bytes=${d_used_bytes:-0}
                 local d_total_now
                 d_total_now=$(df -B1 --output=size "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk 'NR==2{print $1+0}')
@@ -3956,10 +4041,12 @@ function model() {
 function serve() {
     model use "$1"
 }
+# halt — Stop the currently running LLM model.
 function halt() {
     model stop
 }
 
+# mlogs — Open the llama-server log file in VS Code.
 function mlogs() {
     __resolve_vscode_bin
     "$VSCODE_BIN" "$LLM_LOG_FILE"
@@ -4139,7 +4226,9 @@ function __llm_sse_core() {
     end_ns=$(date +%s%N)
     local elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
     local tokens=$server_tokens
-    if (( tokens == 0 )); then tokens=$chunk_count; fi
+    if (( tokens == 0 )); then
+        tokens=$chunk_count
+    fi
 
     if (( tokens > 0 && elapsed_ms > 0 )); then
         local tps_x10=$(( tokens * 10000 / elapsed_ms ))
@@ -4456,8 +4545,16 @@ function tactical_dashboard() {
         t_used=${t_used%$'\r'}; t_limit=${t_limit%$'\r'}
         local t_pct=$(( t_limit > 0 ? t_used * 100 / t_limit : 0 ))
         local h_used h_limit
-        if (( t_used >= 1000 )); then h_used="$(( t_used / 1000 ))k"; else h_used="$t_used"; fi
-        if (( t_limit >= 1000 )); then h_limit="$(( t_limit / 1000 ))k"; else h_limit="$t_limit"; fi
+        if (( t_used >= 1000 )); then
+            h_used="$(( t_used / 1000 ))k"
+        else
+            h_used="$t_used"
+        fi
+        if (( t_limit >= 1000 )); then
+            h_limit="$(( t_limit / 1000 ))k"
+        else
+            h_limit="$t_limit"
+        fi
         local ctx_tok_color=$C_Success
         if (( t_pct >= 90 )); then
             ctx_tok_color=$C_Error
@@ -4522,7 +4619,7 @@ function bashrc_diagnose() {
     echo "=== Key Paths ==="
     echo "AI_STORAGE_ROOT : ${AI_STORAGE_ROOT:-unset}"
     echo "OC_ROOT         : ${OC_ROOT:-unset}"
-    echo "LLM_HOME        : ${LLM_HOME:-unset}"
+    echo "LLAMA_ROOT      : ${LLAMA_ROOT:-unset}"
     echo "LLM_REGISTRY    : ${LLM_REGISTRY:-unset}"
     echo "TAC_CACHE_DIR   : ${TAC_CACHE_DIR:-unset}"
     echo ""
@@ -4778,6 +4875,7 @@ fi
 #   3. On shell exit, __tac_exit_cleanup kills any lingering background subshells
 #   4. The trap chains with any prior EXIT trap so other cleanup still runs
 __TAC_BG_PIDS=()
+# Clean up background telemetry subshells on shell exit.
 function __tac_exit_cleanup() {
     local pid
     for pid in "${__TAC_BG_PIDS[@]}"; do

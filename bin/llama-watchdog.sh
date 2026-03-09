@@ -3,7 +3,7 @@
 # Called by systemd user timer. Reads /dev/shm state to know which model to restart.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# shellcheck disable=SC2034
+# shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
 VERSION="1.1"
 set -euo pipefail
 
@@ -12,6 +12,9 @@ set -euo pipefail
 exec 200>/dev/shm/llama-watchdog.lock
 flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance running — skipping"; exit 0; }
 
+# ── Shared constants (canonical values live in tactical-console.bashrc §1) ──
+# These defaults MUST stay in sync with bashrc. If an env var is exported by
+# the interactive shell, ${VAR:-default} picks it up automatically.
 LLM_PORT="${LLM_PORT:-8081}"
 ACTIVE_LLM_FILE="/dev/shm/active_llm"
 LLM_LOG_FILE="/dev/shm/llama-server.log"
@@ -62,7 +65,8 @@ use_gpu="${gpu_layers:-0}"
 use_ctx="${ctx:-$LLAMA_CTX_SIZE}"
 use_threads="${threads:-$LLAMA_CPU_THREADS}"
 
-# Kill any zombie process (exact match avoids hitting unrelated processes)
+# Kill any zombie process (exact match avoids hitting unrelated processes).
+# NOTE: No -u scoping here — watchdog runs as the same user who started the model.
 pkill -x llama-server 2>/dev/null || true
 sleep 1
 

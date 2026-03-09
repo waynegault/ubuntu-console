@@ -7,7 +7,7 @@
 # Typical runtime: ~5s from WSL
 # AI: Output format is a contract — callers split on '|'. Do not change it.
 # AI INSTRUCTION: Increment version on significant changes.
-# shellcheck disable=SC2034
+# shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
 VERSION="1.0"
 set -euo pipefail
 
