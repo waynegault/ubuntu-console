@@ -1,0 +1,7 @@
+{
+  "name": "m",
+  "description": "Shows the tactical dashboard.",
+  "input": [],
+  "output": { "type": "text", "description": "Dashboard output." },
+  "handler": "m.sh"
+}

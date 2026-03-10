@@ -1,0 +1,23 @@
+#!/bin/bash
+# Check LLM server status
+# Usage: oc-model-status
+
+if curl -s http://127.0.0.1:8081/health 2>/dev/null | grep -q '"status":"ok"'; then
+    echo "Status: ONLINE"
+    
+    # Try to get slots info
+    SLOTS=$(curl -s http://127.0.0.1:8081/slots 2>/dev/null)
+    if [[ -n "$SLOTS" ]]; then
+        echo "Slots: $SLOTS"
+    fi
+    
+    # Show recent log
+    if [[ -f /tmp/llama-server.log ]]; then
+        echo ""
+        echo "Recent log:"
+        tail -5 /tmp/llama-server.log
+    fi
+else
+    echo "Status: OFFLINE"
+    echo "No server responding on port 8081"
+fi

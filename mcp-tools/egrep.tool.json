@@ -1,0 +1,10 @@
+{
+  "name": "egrep",
+  "description": "Searches for extended regex patterns in files with color.",
+  "input": [
+    { "name": "pattern", "type": "string", "description": "Pattern to search for." },
+    { "name": "file", "type": "string", "description": "File to search in." }
+  ],
+  "output": { "type": "text", "description": "Search results." },
+  "handler": "egrep.sh"
+}

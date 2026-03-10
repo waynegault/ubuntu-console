@@ -1,0 +1,7 @@
+{
+  "name": "oedit",
+  "description": "Opens tactical-console.bashrc in VS Code for editing.",
+  "input": [],
+  "output": { "type": "text", "description": "VS Code opened message." },
+  "handler": "oedit.sh"
+}

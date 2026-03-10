@@ -1,0 +1,16 @@
+{
+  "name": "oc-chat",
+  "description": "Sends a chat message and returns a response.",
+  "input": [
+    {
+      "name": "message",
+      "type": "string",
+      "description": "The chat message to send."
+    }
+  ],
+  "output": {
+    "type": "text",
+    "description": "Chat response."
+  },
+  "handler": "oc-chat.sh"
+}

@@ -1,0 +1,9 @@
+{
+  "name": "tac_hostmetrics",
+  "description": "Runs the tac_hostmetrics script.",
+  "input": [
+    { "name": "args", "type": "string", "description": "Arguments for tac_hostmetrics (optional)." }
+  ],
+  "output": { "type": "text", "description": "Host metrics output." },
+  "handler": "tac_hostmetrics.sh"
+}

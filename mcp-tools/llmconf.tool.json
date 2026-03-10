@@ -1,0 +1,7 @@
+{
+  "name": "llmconf",
+  "description": "Opens the LLM model registry config in VS Code.",
+  "input": [],
+  "output": { "type": "text", "description": "VS Code opened message." },
+  "handler": "llmconf.sh"
+}

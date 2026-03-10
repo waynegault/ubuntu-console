@@ -1,0 +1,10 @@
+{
+  "name": "oc-model-stop",
+  "description": "Stops the tactical-console model server.",
+  "input": [],
+  "output": {
+    "type": "text",
+    "description": "Status message."
+  },
+  "handler": "oc-model-stop.sh"
+}

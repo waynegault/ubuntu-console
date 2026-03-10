@@ -1,0 +1,7 @@
+{
+  "name": "oa",
+  "description": "Lists OpenClaw agents.",
+  "input": [],
+  "output": { "type": "text", "description": "Agent list." },
+  "handler": "oa.sh"
+}

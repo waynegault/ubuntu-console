@@ -1,0 +1,7 @@
+{
+  "name": "oc-agent-turn",
+  "description": "Starts an OpenClaw agent turn.",
+  "input": [],
+  "output": { "type": "text", "description": "Agent turn started message." },
+  "handler": "oc-agent-turn.sh"
+}

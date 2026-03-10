@@ -1,0 +1,7 @@
+{
+  "name": "h",
+  "description": "Shows tactical-console help.",
+  "input": [],
+  "output": { "type": "text", "description": "Help output." },
+  "handler": "h.sh"
+}

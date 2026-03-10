@@ -1,0 +1,9 @@
+{
+  "name": "commitd",
+  "description": "Deploys with a user-provided commit message.",
+  "input": [
+    { "name": "message", "type": "string", "description": "Commit message." }
+  ],
+  "output": { "type": "text", "description": "Commit result." },
+  "handler": "commitd.sh"
+}

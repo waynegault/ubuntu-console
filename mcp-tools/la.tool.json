@@ -1,0 +1,9 @@
+{
+  "name": "la",
+  "description": "Lists all files except . and .. in long format.",
+  "input": [
+    { "name": "args", "type": "string", "description": "Arguments for la (optional)." }
+  ],
+  "output": { "type": "text", "description": "Directory listing." },
+  "handler": "la.sh"
+}

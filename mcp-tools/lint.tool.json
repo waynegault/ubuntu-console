@@ -1,0 +1,7 @@
+{
+  "name": "lint",
+  "description": "Runs the lint script.",
+  "input": [],
+  "output": { "type": "text", "description": "Lint output." },
+  "handler": "lint.sh"
+}

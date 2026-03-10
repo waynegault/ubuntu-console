@@ -1,0 +1,9 @@
+{
+  "name": "ls",
+  "description": "Lists directory contents with color.",
+  "input": [
+    { "name": "args", "type": "string", "description": "Arguments for ls (optional)." }
+  ],
+  "output": { "type": "text", "description": "Directory listing." },
+  "handler": "ls.sh"
+}

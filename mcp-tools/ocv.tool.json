@@ -1,0 +1,7 @@
+{
+  "name": "ocv",
+  "description": "Prints the OpenClaw version.",
+  "input": [],
+  "output": { "type": "text", "description": "Version output." },
+  "handler": "ocv.sh"
+}

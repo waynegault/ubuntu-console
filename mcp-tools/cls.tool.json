@@ -1,0 +1,7 @@
+{
+  "name": "cls",
+  "description": "Clears the tactical-console screen.",
+  "input": [],
+  "output": { "type": "text", "description": "Screen cleared message." },
+  "handler": "cls.sh"
+}

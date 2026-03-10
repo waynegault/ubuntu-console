@@ -1,0 +1,7 @@
+{
+  "name": "ocms",
+  "description": "Shows OpenClaw model status with live probe.",
+  "input": [],
+  "output": { "type": "text", "description": "Model status output." },
+  "handler": "ocms.sh"
+}

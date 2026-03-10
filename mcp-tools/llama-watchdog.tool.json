@@ -1,0 +1,7 @@
+{
+  "name": "llama-watchdog",
+  "description": "Runs the llama-watchdog script.",
+  "input": [],
+  "output": { "type": "text", "description": "Watchdog output." },
+  "handler": "llama-watchdog.sh"
+}

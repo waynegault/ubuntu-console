@@ -1,0 +1,7 @@
+{
+  "name": "oclogs",
+  "description": "Opens the OpenClaw temporary log file in VS Code.",
+  "input": [],
+  "output": { "type": "text", "description": "VS Code opened message." },
+  "handler": "oclogs.sh"
+}

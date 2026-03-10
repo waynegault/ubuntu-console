@@ -1,0 +1,7 @@
+{
+  "name": "lo",
+  "description": "Shows the last 120 lines of the OpenClaw gateway journal.",
+  "input": [],
+  "output": { "type": "text", "description": "Journal output." },
+  "handler": "lo.sh"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "occonf",
+  "description": "Opens the OpenClaw config (openclaw.json) in VS Code.",
+  "input": [],
+  "output": { "type": "text", "description": "VS Code opened message." },
+  "handler": "occonf.sh"
+}

@@ -1,0 +1,9 @@
+{
+  "name": "ll",
+  "description": "Lists all files in long format.",
+  "input": [
+    { "name": "args", "type": "string", "description": "Arguments for ll (optional)." }
+  ],
+  "output": { "type": "text", "description": "Directory listing." },
+  "handler": "ll.sh"
+}

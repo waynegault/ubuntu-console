@@ -1,0 +1,7 @@
+{
+  "name": "reload",
+  "description": "Reloads the tactical-console shell.",
+  "input": [],
+  "output": { "type": "text", "description": "Shell reloaded message." },
+  "handler": "reload.sh"
+}

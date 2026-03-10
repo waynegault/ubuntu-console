@@ -1,0 +1,7 @@
+{
+  "name": "mem-index",
+  "description": "Triggers OpenClaw memory indexing.",
+  "input": [],
+  "output": { "type": "text", "description": "Indexing result." },
+  "handler": "mem-index.sh"
+}

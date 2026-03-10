@@ -1,0 +1,9 @@
+{
+  "name": "l",
+  "description": "Lists files in column format.",
+  "input": [
+    { "name": "args", "type": "string", "description": "Arguments for l (optional)." }
+  ],
+  "output": { "type": "text", "description": "Directory listing." },
+  "handler": "l.sh"
+}

@@ -1,0 +1,9 @@
+{
+  "name": "llama-watchdog-service",
+  "description": "Manages the llama-watchdog systemd service.",
+  "input": [
+    { "name": "action", "type": "string", "description": "Action to perform: start, stop, status, restart." }
+  ],
+  "output": { "type": "text", "description": "Service status output." },
+  "handler": "llama-watchdog-service.sh"
+}

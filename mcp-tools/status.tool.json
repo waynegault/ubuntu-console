@@ -1,0 +1,7 @@
+{
+  "name": "status",
+  "description": "Shows basic OpenClaw status.",
+  "input": [],
+  "output": { "type": "text", "description": "Status output." },
+  "handler": "status.sh"
+}

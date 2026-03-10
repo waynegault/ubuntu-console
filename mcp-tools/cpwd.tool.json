@@ -1,0 +1,7 @@
+{
+  "name": "cpwd",
+  "description": "Copies the current path.",
+  "input": [],
+  "output": { "type": "text", "description": "Path copied message." },
+  "handler": "cpwd.sh"
+}

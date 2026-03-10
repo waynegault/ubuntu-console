@@ -1660,10 +1660,25 @@ function so() {
     # If provider is configured for local LLM, warn if it's not running
     local _prov_url
     _prov_url=$(openclaw config get provider.baseUrl 2>/dev/null)
-    if [[ "$_prov_url" == *"127.0.0.1:${LLM_PORT}"* ]] && ! __test_port "$LLM_PORT"; then
-        __tac_info "Local LLM" "[OFFLINE — localhost:$LLM_PORT]" "$C_Warning"
-        printf '%s\n' "  ${C_Dim}Start the LLM first: serve <profile>${C_Reset}"
-    fi
+        if [[ "$_prov_url" == *"127.0.0.1:${LLM_PORT}"* ]] && ! __test_port "$LLM_PORT"; then
+            __tac_info "Local LLM" "[OFFLINE — localhost:$LLM_PORT]" "$C_Warning"
+            printf '%s\n' "  ${C_Dim}Auto-starting default LLM...${C_Reset}"
+            serve || { __tac_info "Local LLM" "[FAILED TO START]" "$C_Error"; return 1; }
+            # Wait briefly for LLM to start listening
+            local llm_wait=0 llm_max_wait=10
+            while (( llm_wait < llm_max_wait )); do
+                if __test_port "$LLM_PORT"; then
+                    __tac_info "Local LLM" "[ONLINE]" "$C_Success"
+                    break
+                fi
+                sleep 1
+                ((llm_wait++))
+            done
+            if ! __test_port "$LLM_PORT"; then
+                __tac_info "Local LLM" "[STILL OFFLINE]" "$C_Error"
+                return 1
+            fi
+        fi
 
     # ── Start and wait ─────────────────────────────────────────────────
     openclaw gateway start >/dev/null 2>&1
@@ -4042,7 +4057,11 @@ function model() {
 
 # serve/halt/mlogs — convenience wrappers for the model manager.
 function serve() {
-    model use "$1"
+    if [[ -n "$1" ]]; then
+        model use "$1"
+    else
+        model use 2  # Llama 3.2 3B Instruct
+    fi
 }
 # halt — Stop the currently running LLM model.
 function halt() {
