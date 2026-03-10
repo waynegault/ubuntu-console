@@ -47,18 +47,30 @@ _source_profile() {
     # Already sourced in this shell?
     [[ -n "${__TAC_PROFILE_SOURCED:-}" ]] && return 0
 
-    # Create a patched copy that skips the interactive guard, preexec
+    # Create patched copies that skip the interactive guard, preexec
     # DEBUG trap, and ERR trap / set -E — all of which conflict with BATS's
-    # own trap machinery.
+    # own trap machinery.  Patches apply to both the loader and modules.
     local patched="$TAC_TEST_TMPDIR/profile_patched.bash"
+    local patched_scripts="$TAC_TEST_TMPDIR/scripts"
     if [[ ! -f "$patched" ]]; then
-        sed -e '/^case \$- in$/,/^esac$/d' \
-            -e '/^set -E$/d' \
-            -e "/^trap '__tac_err_handler' ERR$/d" \
-            -e '/^__tac_preexec_fired=/d' \
-            -e '/^trap .*custom_prompt_command/,/DEBUG$/d' \
-            -e 's/^declare -ri //' \
+        local _sed_args=(
+            -e '/^case \$- in$/,/^esac$/d'
+            -e '/^set -E$/d'
+            -e "/^trap '__tac_err_handler' ERR$/d"
+            -e '/^__tac_preexec_fired=/d'
+            -e '/^trap .*custom_prompt_command/,/DEBUG$/d'
+            -e 's/^declare -ri //'
+        )
+        # Patch the loader — rewrite module dir to the patched copy
+        sed "${_sed_args[@]}" \
+            -e "s|_tac_module_dir=.*|_tac_module_dir=\"$patched_scripts\"|" \
             "$PROFILE_PATH" > "$patched"
+        # Patch module files with the same transforms
+        mkdir -p "$patched_scripts"
+        for _f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+            [[ -f "$_f" ]] || continue
+            sed "${_sed_args[@]}" "$_f" > "$patched_scripts/$(basename "$_f")"
+        done
     fi
 
     # Suppress any output from sourcing (dashboard, clear, etc.)
@@ -102,17 +114,56 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
-@test "shellcheck: tactical-console.bashrc has no errors (severity=error)" {
+@test "shellcheck: tactical-console.bashrc has no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    run shellcheck -s bash -S error "$PROFILE_PATH"
+    run shellcheck -s bash "$PROFILE_PATH"
     [ "$status" -eq 0 ]
 }
 
-@test "shellcheck: companion scripts have no errors (severity=error)" {
+@test "shellcheck: companion scripts have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
         [[ -f "$f" ]] || continue
-        run shellcheck -s bash -S error "$f"
+        run shellcheck -s bash "$f"
+        [ "$status" -eq 0 ]
+    done
+}
+
+@test "bash -n: all mcp-tools/*.sh scripts parse without syntax errors" {
+    for f in "$REPO_ROOT"/mcp-tools/*.sh; do
+        [[ -f "$f" ]] || continue
+        run bash -n "$f"
+        [ "$status" -eq 0 ]
+    done
+}
+
+@test "shellcheck: tactical-console.bashrc passes at all severities" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    run shellcheck -s bash "$PROFILE_PATH"
+    [ "$status" -eq 0 ]
+}
+
+@test "shellcheck: companion scripts pass at all severities" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
+        [[ -f "$f" ]] || continue
+        run shellcheck -s bash "$f"
+        [ "$status" -eq 0 ]
+    done
+}
+
+@test "shellcheck: install.sh passes at all severities" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    [[ -f "$REPO_ROOT/install.sh" ]] || skip "install.sh not found"
+    run shellcheck -s bash "$REPO_ROOT/install.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "shellcheck: mcp-tools/*.sh pass at all severities" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    for f in "$REPO_ROOT"/mcp-tools/*.sh; do
+        [[ -f "$f" ]] || continue
+        run shellcheck -s bash "$f"
         [ "$status" -eq 0 ]
     done
 }
@@ -131,7 +182,7 @@ setup() {
 
 @test "structure: has section headers 1 through 13" {
     for i in $(seq 1 13); do
-        grep -qE "^# ${i}\." "$PROFILE_PATH"
+        grep -rqE "^# ${i}\." "$PROFILE_PATH" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     done
 }
 
@@ -143,7 +194,7 @@ setup() {
 
 @test "structure: @modular-section tags present for each section" {
     local count
-    count=$(grep -c '@modular-section:' "$PROFILE_PATH")
+    count=$(grep -rc '@modular-section:' "$PROFILE_PATH" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh | awk -F: '{s+=$NF} END{print s}')
     [[ "$count" -ge 10 ]]
 }
 
@@ -833,4 +884,126 @@ setup() {
         [[ -f "$f" ]] || continue
         grep -q 'AI INSTRUCTION' "$f"
     done
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 17. CODE HYGIENE
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "hygiene: all scripts end with '# end of file' marker" {
+    for f in "$PROFILE_PATH" \
+             "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/bin/*.sh \
+             "$REPO_ROOT"/install.sh \
+             "$REPO_ROOT"/scripts/lint.sh \
+             "$REPO_ROOT"/scripts/run-tests.sh; do
+        [[ -f "$f" ]] || continue
+        local last
+        last=$(grep -v '^[[:space:]]*$' "$f" | tail -1)
+        echo "$last" | grep -qi 'end of file'
+    done
+}
+
+@test "hygiene: mcp-tools scripts end with '# end of file' marker" {
+    for f in "$REPO_ROOT"/mcp-tools/*.sh; do
+        [[ -f "$f" ]] || continue
+        local last
+        last=$(grep -v '^[[:space:]]*$' "$f" | tail -1)
+        echo "$last" | grep -qi 'end of file'
+    done
+}
+
+@test "hygiene: no carriage returns in any script" {
+    for f in "$PROFILE_PATH" \
+             "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/bin/*.sh \
+             "$REPO_ROOT"/install.sh \
+             "$REPO_ROOT"/mcp-tools/*.sh; do
+        [[ -f "$f" ]] || continue
+        local count
+        count=$(grep -Pc '\r' "$f" || true)
+        [[ "$count" -eq 0 ]]
+    done
+}
+
+@test "hygiene: no trailing whitespace in core scripts" {
+    for f in "$PROFILE_PATH" \
+             "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/bin/*.sh \
+             "$REPO_ROOT"/install.sh; do
+        [[ -f "$f" ]] || continue
+        local count
+        count=$(grep -Pc ' +$' "$f" || true)
+        [[ "$count" -eq 0 ]]
+    done
+}
+
+@test "hygiene: no tabs in core scripts" {
+    for f in "$PROFILE_PATH" \
+             "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/bin/*.sh \
+             "$REPO_ROOT"/install.sh; do
+        [[ -f "$f" ]] || continue
+        local count
+        count=$(grep -Pc '\t' "$f" || true)
+        [[ "$count" -eq 0 ]]
+    done
+}
+
+@test "hygiene: no lines exceed 120 characters in core scripts" {
+    for f in "$PROFILE_PATH" \
+             "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/bin/*.sh \
+             "$REPO_ROOT"/install.sh \
+             "$REPO_ROOT"/scripts/lint.sh \
+             "$REPO_ROOT"/scripts/run-tests.sh; do
+        [[ -f "$f" ]] || continue
+        local long
+        long=$(awk 'length > 120' "$f" | wc -l)
+        [[ "$long" -eq 0 ]]
+    done
+}
+
+@test "hygiene: no UTF-8 BOM in any script" {
+    for f in "$PROFILE_PATH" \
+             "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/bin/*.sh \
+             "$REPO_ROOT"/install.sh \
+             "$REPO_ROOT"/mcp-tools/*.sh; do
+        [[ -f "$f" ]] || continue
+        local desc
+        desc=$(file "$f")
+        [[ "$desc" != *"BOM"* ]]
+    done
+}
+
+@test "hygiene: each module has '# shellcheck shell=bash' at line 1" {
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+        [[ -f "$f" ]] || continue
+        local line1
+        line1=$(head -1 "$f")
+        [[ "$line1" == "# shellcheck shell=bash" ]]
+    done
+}
+
+@test "hygiene: module version names are unique" {
+    local count
+    count=$(grep -h '_TAC_[A-Z_]*_VERSION=' \
+        "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+        | sort -u | wc -l)
+    [[ "$count" -eq 13 ]]
+}
+
+@test "hygiene: module versions follow _TAC_<NAME>_VERSION pattern" {
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+        [[ -f "$f" ]] || continue
+        grep -qP '_TAC_[A-Z_]+_VERSION=' "$f"
+    done
+}
+
+@test "cross-script: watchdog ACTIVE_LLM_FILE matches bashrc constant" {
+    local wd_file
+    wd_file=$(grep -oP 'ACTIVE_LLM_FILE="\K[^"]+' \
+        "$REPO_ROOT/bin/llama-watchdog.sh")
+    [[ "$wd_file" == "$ACTIVE_LLM_FILE" ]]
 }

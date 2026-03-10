@@ -44,8 +44,12 @@ END {
 WSL_NVIDIA_SMI="/usr/lib/wsl/lib/nvidia-smi"
 smi_cmd="$WSL_NVIDIA_SMI"
 [[ ! -x "$smi_cmd" ]] && smi_cmd=$(command -v nvidia-smi 2>/dev/null)
-if [[ -n "$smi_cmd" && -x "$smi_cmd" ]]; then
-    gpu1=$("$smi_cmd" --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | awk '{printf "%d", $1+0.5}')
+if [[ -n "$smi_cmd" && -x "$smi_cmd" ]]
+then
+    gpu1=$("$smi_cmd" \
+        --query-gpu=utilization.gpu \
+        --format=csv,noheader,nounits 2>/dev/null \
+        | awk '{printf "%d", $1+0.5}')
 else
     # Fallback: take highest LUID from typeperf (3D engine only)
     gpu1=$(echo "$raw" | gawk -F',' '
@@ -69,3 +73,5 @@ END {
 fi
 
 echo "${cpu:-0}|${gpu0:-0}|${gpu1:-0}"
+
+# end of file

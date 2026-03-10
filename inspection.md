@@ -1,8 +1,27 @@
 Bash Script Inspection, Improvement & Validation Audit
 
-A comprehensive, repeatable checklist for auditing any Bash script or shell
-profile. Derived from real-world production audits. Each item includes the
-rationale, a concrete test command, and the expected outcome.
+A comprehensive, repeatable checklist for auditing the Tactical Console Profile
+and its modular architecture. Covers the thin loader (tactical-console.bashrc),
+13 numbered modules under scripts/ (01-constants through 13-init), standalone
+scripts in bin/, and companion files. Derived from real-world production audits.
+Each item includes the rationale, a concrete test command, and the expected outcome.
+
+Scope
+
+The following file classes are in-scope for every audit pass:
+
+- `tactical-console.bashrc` — thin loader
+- `scripts/[0-9][0-9]-*.sh` — 13 numbered modules (01-constants through 13-init)
+- `bin/*.sh` — standalone helper scripts
+- `install.sh` — installer
+- `scripts/lint.sh`, `scripts/run-tests.sh` — CI helper scripts
+- `mcp-tools/*.sh` — MCP tool wrapper scripts (lightweight, 2–8 lines each)
+- `tests/*.bats` — BATS test files
+- `systemd/*` — systemd unit files
+
+Files excluded by `.gitignore` are out of scope. Companion config files
+(`quant-guide.conf`, `*.json`) are reviewed for correctness but not subject
+to shell-specific checks.
 
 Usage: Work through each section top-to-bottom. Mark items [x] as you
 go. Items marked 🔧 require code changes; items marked 🔍 are read-only checks.
@@ -61,17 +80,17 @@ Note baseline
 
 🔧 Mandatory version variable
 
-grep 'VERSION=' <file>
+Loader: `grep 'TACTICAL_PROFILE_VERSION=' <file>`. Modules: `grep -P '_TAC_[A-Z_]+_VERSION=' <file>`.
 
-$VERSION="x.x" exists near the top
+For the loader: `TACTICAL_PROFILE_VERSION="x.y"` near the top. For each module in scripts/: `_TAC_<NAME>_VERSION="x.y.z"` near the top (e.g., `_TAC_CONSTANTS_VERSION`). All version variables must contain the substring `VERSION=` to satisfy cross-script tests.
 
 1.3
 
 🔧 Mandatory AI instruction
 
-grep 'AI INSTRUCTION: Increment version' <file>
+grep 'AI INSTRUCTION' <file>
 
-Exact comment # AI INSTRUCTION: Increment version on significant changes. sits directly above the version variable
+For the loader: `# AI INSTRUCTION: Increment version on significant changes.` above the version variable. For each module: a multi-line AI instruction block stating (a) increment the module's `_TAC_*_VERSION`, and (b) always also increment `TACTICAL_PROFILE_VERSION` in `tactical-console.bashrc`.
 
 1.4
 
@@ -95,7 +114,7 @@ Backup exists
 
 head -1 <file>
 
-#!/usr/bin/env bash or #!/bin/bash
+`#!/usr/bin/env bash` or `#!/bin/bash` for standalone scripts. Sourced modules use `# shellcheck shell=bash` instead of a shebang.
 
 1.7
 
@@ -133,9 +152,9 @@ Last byte is 0x0a (newline)
 
 🔧 Mandatory end-of-file comment
 
-tail -5 <file>
+grep -v '^[[:space:]]*$' <file> | tail -1
 
-Contains "# end of file" as final non-blank line
+Last non-blank line is `# end of file`
 
 1.12
 
@@ -472,11 +491,16 @@ bg processes only inside explicit user-invoked functions
 
 3.3
 
-🔍 Strict Mode enabled
+🔍 Strict Mode (scope-dependent)
 
 head -10 <file>
 
-set -euo pipefail is present. For Bash 4.4+, shopt -s inherit_errexit is included
+Strict mode requirements vary by file type:
+- **Loader + sourced modules** (`tactical-console.bashrc`, `scripts/[0-9][0-9]-*.sh`): MUST NOT use `set -euo pipefail` (breaks interactive shell — see 3.8).
+- **`install.sh`**: SHOULD use `set -euo pipefail`.
+- **`bin/*.sh`** (sourced into environment via `install.sh` symlinks): MUST NOT use `set -e`.
+- **`scripts/lint.sh`, `scripts/run-tests.sh`**: Document intentional omission with a comment if `set -e` is absent (e.g., bare `(( ))` operators return exit 1 on zero).
+- **`mcp-tools/*.sh`**: Lightweight wrappers; strict mode not required.
 
 3.4
 
@@ -588,11 +612,11 @@ Exit code 0, no output
 
 4.1.2
 
-🔍 ShellCheck passes
+🔍 ShellCheck passes (all severities)
 
-shellcheck -s bash <file>
+shellcheck -s bash <file> (no `-S` severity filter)
 
-Zero findings (or all suppressed with rationale)
+Zero findings at all severity levels (error, warning, info, style), or each suppressed with a rationale comment
 
 4.1.3
 
@@ -1178,7 +1202,7 @@ Avoid cmd && success || failure pattern; use explicit if/then/else for clarity
 
 awk 'length > 120' <file>
 
-Lines under 120 characters; long strings broken with backslash continuation
+Lines under 120 characters; long strings broken with backslash continuation. No exemptions — URLs must be extracted to variables; heredoc content must be wrapped or refactored.
 
 8.1.9
 
@@ -1284,11 +1308,43 @@ Difficult regex, file-descriptor manipulation, or Bash-specific tricks have comm
 
 9.4
 
-🔧 Preparation for Modularisation
+� Modular Architecture
 
-Scan for section headers
+ls scripts/[0-9][0-9]-*.sh
 
-File uses prominent visual dividers (e.g., # === NETWORK FUNCTIONS ===) to group functions logically for easy extraction later.
+13 numbered module files exist under scripts/ (01-constants through 13-init). The loader (tactical-console.bashrc) sources them in numeric order. Each module has `@modular-section`, `@depends`, and `@exports` annotations below its header.
+
+9.4.1
+
+🔍 Module load order matches dependencies
+
+Inspect @depends annotations
+
+Every module's @depends lists only modules with a lower numeric prefix. No circular dependencies.
+
+9.4.2
+
+🔧 Module version tracks changes
+
+grep '_TAC_.*_VERSION=' scripts/[0-9][0-9]-*.sh
+
+Each module has a unique `_TAC_<NAME>_VERSION` variable. When a module is modified, its version is incremented AND `TACTICAL_PROFILE_VERSION` in the loader is also incremented.
+
+9.4.3
+
+🔍 Loader sources all modules
+
+grep 'for _tac_f in' tactical-console.bashrc
+
+The loader uses a glob `[0-9][0-9]-*.sh` to source all modules. Adding a new module only requires creating a file with the right numeric prefix — no loader edits needed.
+
+9.4.4
+
+🔍 No executable code in loader
+
+Inspect tactical-console.bashrc
+
+The loader contains only: header comments, interactive guard, TACTICAL_PROFILE_VERSION, the sourcing loop, and `unset` cleanup. All logic lives in modules.
 
 9.5
 
@@ -1344,7 +1400,7 @@ A CHANGELOG section or external file tracks significant changes with dates
 
 Inspect §0 or file header
 
-Key architectural choices (monolithic design, /dev/shm caching, WSL interop strategy) documented for future maintainers
+Key architectural choices (modular loader + 13 numbered modules, /dev/shm caching, WSL interop strategy, dual-version scheme) documented for future maintainers
 
 10. Refactor & Maintainability — Low
 
@@ -1724,7 +1780,7 @@ Active connections drained or errored cleanly before server restart with new mod
 
 13. Cross-Script Consistency — Medium
 
-Verify that constants, patterns, and conventions are consistent across all scripts in the repository.
+Verify that constants, patterns, and conventions are consistent across all scripts in the repository. With the modular architecture, this includes consistency between the loader, the 13 modules in scripts/, standalone scripts in bin/, and companion files.
 
 13.1 Shared Constants
 
@@ -1740,23 +1796,23 @@ Expected
 
 🔍 LLM_PORT consistent
 
-grep -rn 'LLM_PORT\|8081' *.sh *.bashrc
+grep -rn 'LLM_PORT\|8081' scripts/ bin/ tactical-console.bashrc
 
-Port number defined in one place or sourced from a shared constant; not hardcoded differently in multiple files
+Port number defined once in 01-constants.sh; other files reference the variable, never hardcode the literal
 
 13.1.2
 
 🔍 ACTIVE_LLM_FILE consistent
 
-grep -rn 'ACTIVE_LLM_FILE\|active_model' *.sh *.bashrc
+grep -rn 'ACTIVE_LLM_FILE\|active_model' scripts/ bin/ tactical-console.bashrc
 
-File path identical across tactical-console.bashrc and llama-watchdog.sh
+File path identical across 01-constants.sh and llama-watchdog.sh
 
 13.1.3
 
 🔍 LLAMA_BIN path consistent
 
-grep -rn 'LLAMA_BIN\|llama-server' *.sh *.bashrc
+grep -rn 'LLAMA_BIN\|llama-server' scripts/ bin/ tactical-console.bashrc
 
 Binary path resolved identically; not hardcoded to different locations
 
@@ -1764,15 +1820,15 @@ Binary path resolved identically; not hardcoded to different locations
 
 🔍 Health endpoint URL consistent
 
-grep -rn '/health\|/v1/models' *.sh *.bashrc
+grep -rn '/health\|/v1/models' scripts/ bin/ tactical-console.bashrc
 
-Same health check URL and parsing logic used in bashrc and watchdog
+Same health check URL and parsing logic used in modules and watchdog
 
 13.1.5
 
 🔍 /dev/shm paths consistent
 
-grep -rn '/dev/shm/' *.sh *.bashrc
+grep -rn '/dev/shm/' scripts/ bin/ tactical-console.bashrc
 
 Cache file paths match between scripts that write and read them
 
@@ -1790,7 +1846,7 @@ Expected
 
 🔍 Error output format consistent
 
-grep -rn 'echo.*error\|printf.*error' *.sh *.bashrc
+grep -rn 'echo.*error\|printf.*error' scripts/ bin/
 
 Error messages use the same format/prefix across all scripts (e.g., [tac], [watchdog])
 
@@ -1824,9 +1880,9 @@ Expected
 
 🔍 ShellCheck directives aligned
 
-grep -rn 'shellcheck' *.sh *.bashrc
+grep -rn 'shellcheck' scripts/ bin/ tactical-console.bashrc
 
-Same SC codes disabled across files for the same reasons; no contradictory directives
+Each module has `# shellcheck shell=bash` at line 1. SC disable codes are minimal and per-file (only the codes that file actually triggers). No blanket disables covering unrelated issues.
 
 13.3.2
 
@@ -1852,6 +1908,108 @@ Inspect install.sh
 
 install.sh creates/updates symlinks for all scripts in bin/ and systemd/; no manual steps required
 
+13.5 MCP Tool Wrappers
+
+Lightweight shell scripts in `mcp-tools/*.sh` (typically 2–8 lines) are in-scope for baseline hygiene.
+
+#
+
+Check
+
+Command
+
+Expected
+
+13.5.1
+
+🔍 bash -n passes
+
+for f in mcp-tools/*.sh; do bash -n "$f"; done
+
+All mcp-tools scripts parse without syntax errors
+
+13.5.2
+
+🔍 ShellCheck passes
+
+shellcheck -s bash mcp-tools/*.sh
+
+Zero findings (or all suppressed with rationale)
+
+13.5.3
+
+🔍 end-of-file marker present
+
+for f in mcp-tools/*.sh; do grep -v '^[[:space:]]*$' "$f" | tail -1 | grep -qi 'end of file' || echo "MISSING: $f"; done
+
+All files end with `# end of file` as last non-blank line
+
+13.5.4
+
+🔍 No carriage returns
+
+grep -Plrn '\r' mcp-tools/*.sh
+
+Zero matches
+
+13.5.5
+
+🔍 Files end with newline
+
+for f in mcp-tools/*.sh; do [[ $(tail -c 1 "$f" | xxd | grep -c '0a') -eq 0 ]] && echo "MISSING: $f"; done
+
+All files end with a trailing newline
+
+13.4 Module Versioning
+
+#
+
+Check
+
+Command
+
+Expected
+
+13.4.1
+
+🔍 All modules have version variable
+
+for f in scripts/[0-9][0-9]-*.sh; do grep -q 'VERSION=' "$f" || echo "MISSING: $f"; done
+
+Zero output — every module contains a `_TAC_*_VERSION=` variable
+
+13.4.2
+
+🔍 All modules have AI instruction
+
+for f in scripts/[0-9][0-9]-*.sh; do grep -q 'AI INSTRUCTION' "$f" || echo "MISSING: $f"; done
+
+Zero output — every module contains the AI instruction to bump both module and profile versions
+
+13.4.3
+
+🔍 Module version names are unique
+
+grep -h '_TAC_.*_VERSION=' scripts/[0-9][0-9]-*.sh | sort
+
+13 unique variable names, one per module, all following `_TAC_<SECTION>_VERSION` pattern
+
+13.4.4
+
+🔍 Profile version >= all module versions
+
+Compare TACTICAL_PROFILE_VERSION with module versions
+
+TACTICAL_PROFILE_VERSION major.minor is >= every module version major.minor — indicates profile was bumped when modules changed
+
+13.4.5
+
+🔍 Module headers follow standard format
+
+head -8 scripts/[0-9][0-9]-*.sh
+
+Each module starts with: `# shellcheck shell=bash`, shellcheck disable line, `# ─── Module: <name>` divider, AI instruction block (3 lines), version variable
+
 14. Final Validation
 
 #
@@ -1866,31 +2024,31 @@ Expected
 
 🔍 bash -n passes on all files
 
-find . -name '*.sh' -o -name '*.bashrc' | xargs -I{} bash -n {}
+bash -n tactical-console.bashrc && for f in scripts/[0-9][0-9]-*.sh bin/*.sh; do bash -n "$f"; done
 
-Exit 0
+Exit 0 for the loader and all 13 modules plus bin/ scripts
 
 14.2
 
 🔍 ShellCheck passes
 
-find . -name '*.sh' | xargs shellcheck -s bash
+shellcheck tactical-console.bashrc scripts/[0-9][0-9]-*.sh
 
-Zero findings (or all remaining findings have documented disable directives)
+Zero findings (all SC codes either clean or suppressed with documented directives)
 
 14.3
 
 🔍 Sourcing works
 
-bash -ic 'source <file>; exit'
+bash -ic 'source ~/ubuntu-console/tactical-console.bashrc; exit'
 
-Exit 0
+Exit 0 — loader sources all 13 modules without error
 
 14.4
 
 🔍 No regressions in key functions
 
-Manually test 3-5 core commands (e.g., model, tac, oc)
+Manually test 3-5 core commands (e.g., model, m, h, oc)
 
 Commands produce expected output; no errors on stderr
 
@@ -1906,11 +2064,27 @@ Timer is active and last trigger time is recent
 
 🔍 Clean environment source test
 
-env -i HOME="$HOME" bash --noprofile --norc -c 'source <file>'
+env -i HOME="$HOME" bash --noprofile --norc -c 'source ~/ubuntu-console/tactical-console.bashrc'
 
 Sourcing in a minimal environment doesn't fail due to missing dependencies
 
 14.7
+
+🔍 BATS test suite passes
+
+bats tests/tactical-console.bats
+
+All BATS tests pass (0 failures). Verify count matches `grep -c '^@test' tests/tactical-console.bats`. Tests cover syntax, shellcheck, structure, constants, function availability, cross-script consistency, and code hygiene (EOF markers, line length, whitespace, carriage returns).
+
+14.8
+
+🔍 Module count matches expectations
+
+ls scripts/[0-9][0-9]-*.sh | wc -l
+
+13 modules present. If a module was added or removed, update the architecture map in the loader and the BATS structure tests.
+
+14.9
 
 🔍 Audit findings logged
 

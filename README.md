@@ -1,11 +1,11 @@
-# Tactical Console Profile v2.21 — Comprehensive Reference
+# Tactical Console Profile v3.1 — Comprehensive Reference
 
-> **File:** `~/ubuntu-console/tactical-console.bashrc` (sourced via thin `~/.bashrc` loader)
+> **File:** `~/ubuntu-console/tactical-console.bashrc` (thin loader) + `scripts/01–13-*.sh` (modules)
 > **Repo:** [`waynegault/ubuntu-console`](https://github.com/waynegault/ubuntu-console)
 > **Environment:** WSL2 Ubuntu 24.04 on Windows 11 Pro
 > **Hardware:** Intel i9 / Intel Iris Xe (iGPU) / RTX 3050 Ti 4 GB VRAM (CUDA) / Laptop
 > **Author:** Wayne
-> **Last Major Audit:** March 2026 (v2.09–v2.12: four audit rounds; v2.17–v2.21: 71-item audit + GPU optimisation + quant enforcement)
+> **Last Major Audit:** March 2026 (v3.0: modularisation from monolith; v3.1: full inspection-audit + UI header refresh + `up` performance fix)
 
 ---
 
@@ -15,8 +15,8 @@
 2. [Getting Started — Usage Guide](#2-getting-started--usage-guide)
 3. [OpenClaw Integration](#3-openclaw-integration)
 4. [Local LLM System](#4-local-llm-system)
-5. [Developer Guide — How the File Works](#5-developer-guide--how-the-file-works)
-6. [Modularisation Plan](#6-modularisation-plan)
+5. [Developer Guide — How the Profile Works](#5-developer-guide--how-the-profile-works)
+6. [Modular Architecture (Completed)](#6-modular-architecture-completed)
 7. [Command Reference](#7-command-reference)
 8. [Dependencies & Requirements](#8-dependencies--requirements)
 9. [Troubleshooting](#9-troubleshooting)
@@ -26,8 +26,10 @@
 
 ## 1. Purpose & Philosophy
 
-The **Tactical Console Profile** is a monolithic Bash environment that turns a
-WSL2 Ubuntu shell into a unified command-and-control console. It manages:
+The **Tactical Console Profile** is a modular Bash environment that turns a
+WSL2 Ubuntu shell into a unified command-and-control console. A thin loader
+(`tactical-console.bashrc`) sources 13 numbered modules from `scripts/` in
+dependency order. It manages:
 
 - **System telemetry** — CPU, dual GPU (Intel Iris iGPU via `typeperf.exe` +
   NVIDIA RTX CUDA via `nvidia-smi`), memory, disk, battery, all rendered in
@@ -197,7 +199,9 @@ Profile wraps the entire OpenClaw CLI with ergonomic shell commands.
 │  │  ┌─ ~/.bashrc (thin loader) ────────────────┐  │  │
 │  │  │  source tactical-console.bashrc           │  │  │
 │  │  │  ┌─ tactical-console.bashrc ───────────┐  │  │  │
-│  │  │  │  __bridge_windows_api_keys()        │  │  │  │
+│  │  │  │  sources scripts/01..13-*.sh        │  │  │  │
+│  │  │  │  ┌─ 09-openclaw.sh ──────────────┐  │  │  │  │
+│  │  │  │  │  __bridge_windows_api_keys()  │  │  │  │  │
 │  │  │  │       │                             │  │  │  │
 │  │  │  │       ▼                             │  │  │  │
 │  │  │  │  /dev/shm/tac_win_api_keys (cache)  │  │  │  │
@@ -485,12 +489,13 @@ displayed in a box-drawn summary table.
 
 ---
 
-## 5. Developer Guide — How the File Works
+## 5. Developer Guide — How the Profile Works
 
-### Section Architecture
+### Modular Architecture
 
-The file is divided into 14 numbered sections (§0–§13). Each section has a
-metadata block documenting its dependencies and exports:
+The profile is split into a thin loader (`tactical-console.bashrc`, ~147 lines)
+and 13 numbered modules under `scripts/`. Each module has a metadata block
+documenting its dependencies and exports:
 
 ```bash
 # @modular-section: <name>
@@ -498,40 +503,47 @@ metadata block documenting its dependencies and exports:
 # @exports: <public functions/variables>
 ```
 
-| Section | Name | Lines | Purpose |
+The loader sources every `scripts/[0-9][0-9]-*.sh` file in numeric order.
+Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
+`13-init.sh` loads last.
+
+> **Monolith backup:** The pre-modularisation single-file version is preserved
+> as `tactical-console.bashrc.monolith` (5,184 lines) for reference and
+> rollback.
+
+| Module | File | Lines | Purpose |
 |---|---|---|---|
-| §0 | `ai-instructions` | ~L19 | Version, changelog, AI editor rules, formatting mandates, architecture map |
-| §1 | `constants` | ~L150 | All paths, ports, env vars. Single source of truth. |
-| §2 | `error-handling` | ~L259 | ERR trap → `bash-errors.log` (exit codes ≥ 2 only) |
-| §3 | `aliases` | ~L272 | Short commands, VS Code wrappers, tactical shortcuts |
-| §4 | `design-tokens` | ~L325 | ANSI colour constants (`readonly`, re-source safe) |
-| §5 | `ui-engine` | ~L350 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, etc. |
-| §6 | `hooks` | ~L560 | `cd` override, prompt (`PS1`), `__test_port` |
-| §7 | `telemetry` | ~L632 | Host metrics (CPU + dual GPU via typeperf), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` |
-| §8 | `maintenance` | ~L843 | `up`, `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system (split APT) |
-| §9 | `openclaw` | ~L1186 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-trust-sync`, `oc-failover`, etc.) |
-| §10 | `deployment` | ~L1932 | `mkproj`, `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified) |
-| §11 | `llm-manager` | ~L2210 | `__require_llm`, model management, streaming chat, burn, bench, explain |
-| §12 | `dashboard-help` | ~L2891 | `tactical_dashboard` and `tactical_help` renderers |
-| §13 | `init` | ~L3175 | `mkdir -p`, completions, loopback fix, bridge call, exit trap (chained) |
+| §0 | `tactical-console.bashrc` | 147 | Version, AI editor rules, architecture map, module loader |
+| §1 | `scripts/01-constants.sh` | 202 | All paths, ports, env vars. Single source of truth. |
+| §2 | `scripts/02-error-handling.sh` | 32 | ERR trap → `bash-errors.log` (exit codes ≥ 2 only) |
+| §3 | `scripts/03-design-tokens.sh` | 49 | ANSI colour constants (`readonly`, re-source safe) |
+| §4 | `scripts/04-aliases.sh` | 140 | Short commands, VS Code wrappers, tactical shortcuts |
+| §5 | `scripts/05-ui-engine.sh` | 371 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, etc. |
+| §6 | `scripts/06-hooks.sh` | 110 | `cd` override, prompt (`PS1`), `__test_port` |
+| §7 | `scripts/07-telemetry.sh` | 305 | Host metrics (CPU + dual GPU via typeperf), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` |
+| §8 | `scripts/08-maintenance.sh` | 427 | `up`, `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system (split APT) |
+| §9 | `scripts/09-openclaw.sh` | 1285 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-trust-sync`, `oc-failover`, etc.) |
+| §10 | `scripts/10-deployment.sh` | 321 | `mkproj`, `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified) |
+| §11 | `scripts/11-llm-manager.sh` | 1848 | `__require_llm`, model management, streaming chat, burn, bench, explain |
+| §12 | `scripts/12-dashboard-help.sh` | 439 | `tactical_dashboard` and `tactical_help` renderers |
+| §13 | `scripts/13-init.sh` | 125 | `mkdir -p`, completions, loopback fix, bridge call, exit trap (chained) |
 
 ### Dependency Graph
 
 ```
-§0 AI Instructions
-§1 Constants ──────────────────────────────────────────────┐
-§2 Error Handling ← §1                                     │
-§3 Aliases ← §1                                            │
-§4 Design Tokens (standalone)                               │
-§5 UI Engine ← §1, §4                                      │
-§6 Hooks ← §1, §4                                          │
-§7 Telemetry ← §1, §4, §5                                  │
-§8 Maintenance ← §1, §4, §5, §7                            │
-§9 OpenClaw ← §1, §4, §5, §6                               │
-§10 Deployment ← §1, §4, §5, §6                            │
-§11 LLM Manager ← §1, §4, §5, §6                          │
-§12 Dashboard & Help ← §1, §4, §5, §7, §6, §9, §11        │
-§13 Init ← all above ─────────────────────────────────────┘
+01-constants.sh ────────────────────────────────────────────┐
+02-error-handling.sh       ← 01                             │
+03-design-tokens.sh        (standalone)                     │
+04-aliases.sh              ← 01                             │
+05-ui-engine.sh            ← 01, 03                         │
+06-hooks.sh                ← 01, 03                         │
+07-telemetry.sh            ← 01, 03, 05                     │
+08-maintenance.sh          ← 01, 03, 05, 07                 │
+09-openclaw.sh             ← 01, 03, 05, 06                 │
+10-deployment.sh           ← 01, 03, 05, 06                 │
+11-llm-manager.sh          ← 01, 03, 05, 06                 │
+12-dashboard-help.sh       ← 01, 03, 05, 07, 06, 09, 11    │
+13-init.sh                 ← all above ────────────────────┘
 ```
 
 ### Naming Conventions
@@ -648,104 +660,95 @@ for normal "not found" / "false" conditions. Only exit codes ≥ 2 are logged.
 
 ---
 
-## 6. Modularisation Plan
+## 6. Modular Architecture (Completed)
 
-### Current State
+### Overview
 
-The file is ~4,150 lines in `~/ubuntu-console/tactical-console.bashrc`
-(sourced by a thin `~/.bashrc` loader). While it works correctly,
-this monolithic structure has clear drawbacks:
+As of v3.0, the profile has been fully modularised. The original monolithic
+single file (~5,184 lines) was split into a thin loader and 13 numbered
+modules under `scripts/`. The pre-modularisation file is preserved as
+`tactical-console.bashrc.monolith` for reference and emergency rollback.
 
-- **Cognitive load** — Difficult to find specific functions without the
-  architecture map or `grep`.
-- **Merge conflicts** — Any edit risks colliding with unrelated sections.
-- **Testing** — Cannot source individual sections in isolation.
-- **Selective loading** — All 128 functions load on every shell start, even
-  if only basic commands are needed.
-
-### Target Structure
-
-Split into `~/.bashrc.d/` with one file per section, loaded by the thin
-`~/.bashrc` orchestrator (which currently just sources the monolith):
+### Structure
 
 ```
-~/.bashrc                          # Thin loader (< 20 lines)
-~/.bashrc.d/
-├── 00-constants.sh                # §1 Global constants
-├── 01-error-handling.sh           # §2 ERR trap
-├── 02-aliases.sh                  # §3 Short commands
-├── 03-design-tokens.sh            # §4 ANSI colours
-├── 04-ui-engine.sh                # §5 Box-drawing primitives
-├── 05-hooks.sh                    # §6 cd override, prompt, port test
-├── 06-telemetry.sh                # §7 CPU, GPU, battery, etc.
-├── 07-maintenance.sh              # §8 up, cl, sysinfo, logtrim
-├── 08-openclaw.sh                 # §9 Full OpenClaw wrapper suite
-├── 09-deployment.sh               # §10 mkproj, deploy, commit
-├── 10-llm-manager.sh              # §11 Model mgmt, chat, burn
-├── 11-dashboard-help.sh           # §12 Dashboard and help renderers
-└── 12-init.sh                     # §13 Startup side-effects
+~/ubuntu-console/
+├── tactical-console.bashrc            # Thin loader (~147 lines) — version,
+│                                      #   AI instructions, architecture map,
+│                                      #   module sourcing loop
+├── tactical-console.bashrc.monolith   # Pre-modularisation backup (5,184 lines)
+└── scripts/
+    ├── 01-constants.sh                # All paths, ports, env vars
+    ├── 02-error-handling.sh           # ERR trap → bash-errors.log
+    ├── 03-design-tokens.sh            # ANSI colour constants (readonly)
+    ├── 04-aliases.sh                  # Short commands, VS Code wrappers
+    ├── 05-ui-engine.sh                # Box-drawing primitives
+    ├── 06-hooks.sh                    # cd override, prompt (PS1), port test
+    ├── 07-telemetry.sh                # CPU, GPU, battery, git, disk, tokens
+    ├── 08-maintenance.sh              # up, cl, get-ip, sysinfo, logtrim
+    ├── 09-openclaw.sh                 # Full OpenClaw wrapper suite
+    ├── 10-deployment.sh               # mkproj, git commit+push, deploy
+    ├── 11-llm-manager.sh              # Model mgmt, chat, burn, bench
+    ├── 12-dashboard-help.sh           # Dashboard ('m') and Help ('h')
+    └── 13-init.sh                     # mkdir, completions, WSL loopback, exit trap
 ```
 
 ### The Loader
 
+The thin loader in `tactical-console.bashrc` contains the interactive guard,
+version constant, AI editor instructions, and a simple sourcing loop:
+
 ```bash
-# ~/.bashrc — Tactical Console Profile Loader
-case $- in *i*) ;; *) return ;; esac
+_tac_module_dir="$HOME/ubuntu-console/scripts"
 
-TAC_DIR="$HOME/ubuntu-console"
-for _tac_module in "$TAC_DIR"/.bashrc.d/[0-9][0-9]-*.sh; do
-    [[ -f "$_tac_module" ]] && source "$_tac_module"
+for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh
+do
+    [[ -f "$_tac_f" ]] && source "$_tac_f"
 done
-unset _tac_module
+
+unset _tac_f _tac_module_dir
 ```
-
-### How to Execute the Split
-
-1. **Create the directory:** `mkdir -p ~/.bashrc.d`
-2. **Extract sections** — The `@modular-section` annotations already mark
-   exact boundaries. Use `sed` or a script to split on the `# ====` section
-   dividers.
-3. **Add guards to design-tokens** — Wrap `readonly` declarations with
-   `[[ -z "${C_Reset:-}" ]]` (already done in the current file).
-4. **Resolve cross-cutting state** — All cross-module communication already
-   goes through `/dev/shm` files or exported variables (documented in
-   §5 above). No code changes needed — just ensure `00-constants.sh` is
-   sourced first.
-5. **Test incrementally** — After extracting each module, run `bash -n` on
-   both the module and the loader. Verify `m`, `h`, `so`, `serve`, and `up`
-   still work.
-6. **Update the loader** — Change `~/.bashrc` to source the `.bashrc.d/`
-   modules instead of the monolith.
 
 ### Ordering Rules
 
-Files are numbered `00–12` to enforce source order. The dependency graph
+Files are numbered `01–13` to enforce source order. The dependency graph
 (§5 above) dictates that:
 
-- `00-constants.sh` must be first (everything depends on it).
-- `03-design-tokens.sh` must precede `04-ui-engine.sh`.
-- `12-init.sh` must be last (runs startup side-effects).
+- `01-constants.sh` must be first (everything depends on it).
+- `03-design-tokens.sh` must precede `05-ui-engine.sh`.
+- `13-init.sh` must be last (runs startup side-effects).
 - All other modules can be reordered as long as their `@depends` are
   satisfied.
 
-### Benefits
+### Benefits Realised
 
 | Benefit | Detail |
 |---|---|
-| **Faster iteration** | Edit `10-llm-manager.sh` without scrolling past 1900 lines of unrelated code. |
-| **Targeted testing** | `bash -n ~/.bashrc.d/08-openclaw.sh` checks only OpenClaw functions. |
-| **Selective loading** | On a server with no GPU, skip `10-llm-manager.sh`. On a headless box, skip `11-dashboard-help.sh`. |
-| **Reduced merge conflicts** | Two developers editing OpenClaw and LLM code never touch the same file. |
-| **Git blame clarity** | `git log 08-openclaw.sh` shows only OpenClaw changes, not unrelated telemetry fixes. |
-| **Easier onboarding** | A new developer reads one 200-line module instead of a 4,150-line monolith. |
+| **Faster iteration** | Edit `11-llm-manager.sh` without scrolling past 1,200 lines of unrelated OpenClaw code. |
+| **Targeted testing** | `bash -n scripts/09-openclaw.sh` checks only OpenClaw functions. |
+| **Selective loading** | On a server with no GPU, skip `11-llm-manager.sh`. On a headless box, skip `12-dashboard-help.sh`. |
+| **Reduced merge conflicts** | Edits to OpenClaw and LLM code never touch the same file. |
+| **Git blame clarity** | `git log scripts/09-openclaw.sh` shows only OpenClaw changes. |
+| **Easier onboarding** | A new developer reads one 200-line module instead of a 5,184-line monolith. |
+
+### Monolith Backup
+
+The file `tactical-console.bashrc.monolith` is the last pre-split version of
+the profile. It is kept in the repository for:
+
+- **Reference** — comparing behaviour before and after modularisation.
+- **Emergency rollback** — if the modular loader breaks, `~/.bashrc` can be
+  pointed back at the monolith to restore a working shell immediately.
+
+Do not edit the monolith — it is a frozen snapshot.
 
 ### Risks & Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Source order bugs | Numeric prefixes enforce deterministic ordering. Test with `bash -n` after every change. |
+| Source order bugs | Numeric prefixes enforce deterministic ordering. `bash -n` runs on every module in CI. |
 | `readonly` collisions on re-source | Already guarded with `[[ -z "${C_Reset:-}" ]]`. |
-| Missing module breaks shell | The loader's `[[ -f ]]` guard skips missing files gracefully. Add an `echo` warning for missing expected modules. |
+| Missing module breaks shell | The loader's `[[ -f ]]` guard skips missing files gracefully. |
 | Performance regression (many `source` calls) | 13 `source` calls add < 5ms total. Measured on this hardware. |
 
 ---
@@ -945,27 +948,49 @@ runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
 
 All project files live in a single Git repository at
 `~/ubuntu-console/` (remote: `github.com/waynegault/ubuntu-console`).
-The canonical profile lives in the repo; `~/.bashrc` is a thin loader
-that sources it.
+`~/.bashrc` is a thin loader that sources `tactical-console.bashrc`, which in
+turn sources the 13 numbered modules from `scripts/`.
 
 ### Directory Structure
 
 ```
 ~/ubuntu-console/
-├── tactical-console.bashrc    # Main profile (sourced by ~/.bashrc thin loader)
-├── quant-guide.conf           # Quantization priority ratings (editable)
-├── README.md                  # This file
-├── inspection.md              # Audit checklist
-├── .gitignore
-├── install.sh                 # Installer for new machines
+├── tactical-console.bashrc            # Thin loader + version + module sourcing loop
+├── tactical-console.bashrc.monolith   # Pre-modularisation backup (frozen snapshot)
+├── quant-guide.conf                   # Quantization priority ratings (editable)
+├── README.md                          # This file
+├── inspection.md                      # Audit checklist
+├── install.sh                         # Installer for new machines
 ├── bin/
-│   ├── llama-watchdog.sh      # Watchdog: auto-restart with -ngl 999, --prio 2
-│   └── tac_hostmetrics.sh     # Host CPU + iGPU (typeperf) + CUDA (nvidia-smi)
-├── scripts/
-│   └── lint.sh                # ShellCheck + bash -n linter for all scripts
+│   ├── llama-watchdog.sh              # Watchdog: auto-restart with -ngl 999, --prio 2
+│   └── tac_hostmetrics.sh             # Host CPU + iGPU (typeperf) + CUDA (nvidia-smi)
+├── config/
+│   └── mcporter.json                  # MCP tool exporter configuration
+├── mcp-tools/                         # 46 MCP tool wrappers (paired .sh + .tool.json)
+│   ├── tactical_dashboard.sh          #   Example: runs the tactical dashboard
+│   ├── tactical_dashboard.tool.json   #   Example: MCP tool definition
+│   └── ...                            #   (commit, grep, status, llm tools, etc.)
+├── scripts/                           # 13 numbered profile modules (sourced in order)
+│   ├── 01-constants.sh                #   All paths, ports, env vars
+│   ├── 02-error-handling.sh           #   ERR trap
+│   ├── 03-design-tokens.sh            #   ANSI colour constants
+│   ├── 04-aliases.sh                  #   Short commands, VS Code wrappers
+│   ├── 05-ui-engine.sh                #   Box-drawing primitives
+│   ├── 06-hooks.sh                    #   cd override, prompt, port test
+│   ├── 07-telemetry.sh                #   CPU, GPU, battery, git, disk, tokens
+│   ├── 08-maintenance.sh              #   up, cl, get-ip, sysinfo, logtrim
+│   ├── 09-openclaw.sh                 #   Gateway, backup, cron, skills, plugins
+│   ├── 10-deployment.sh               #   mkproj, git commit+push, deploy
+│   ├── 11-llm-manager.sh              #   Model mgmt, chat, burn, bench
+│   ├── 12-dashboard-help.sh           #   Dashboard ('m') and Help ('h')
+│   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
+│   ├── lint.sh                        #   ShellCheck + bash -n linter
+│   └── run-tests.sh                   #   BATS test runner
+├── tests/
+│   └── tactical-console.bats          # 238 BATS unit tests (1,009 lines)
 └── systemd/
-    ├── llama-watchdog.service # systemd unit for watchdog
-    └── llama-watchdog.timer   # systemd timer (runs every 60s)
+    ├── llama-watchdog.service         # systemd unit for watchdog
+    └── llama-watchdog.timer           # systemd timer (runs every 60s)
 ```
 
 ### Symlink Map
@@ -991,8 +1016,9 @@ exec bash        # reload profile
 ### Workflow
 
 Use `oedit` to open the profile in VS Code. After saving changes, run
-`reload` to apply. All edits go in `~/ubuntu-console/tactical-console.bashrc`
-(or associated repo files) — never edit `~/.bashrc` directly.
+`reload` to apply. All edits go in `~/ubuntu-console/scripts/*.sh`
+(or `tactical-console.bashrc` for version/loader changes) — never edit
+`~/.bashrc` directly.
 
 Commit and push:
 
@@ -1023,4 +1049,4 @@ misconfiguration. High VRAM usage with bursty GPU utilisation is expected.
 
 ---
 
-**Tactical Console Profile v2.21 :: WSL2 Ubuntu 24.04 :: Designed for Determinism**
+**Tactical Console Profile v3.1 :: WSL2 Ubuntu 24.04 :: Designed for Determinism**

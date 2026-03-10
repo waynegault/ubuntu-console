@@ -6,3 +6,5 @@ MESSAGE="$1"
 # Replace this with actual chat backend integration as needed
 
 echo "Chat received: $MESSAGE"
+
+# end of file

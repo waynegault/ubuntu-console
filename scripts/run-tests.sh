@@ -10,9 +10,12 @@
 #   scripts/run-tests.sh --filter "calc"   # pass extra args to bats
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# shellcheck disable=SC2034
+# shellcheck disable=SC2034,SC2317
 VERSION="1.0"
 
+# NOTE: set -e intentionally omitted — bare (( )) post-increment operators
+# (e.g. ((grand_fail++)) when value is 0) return exit code 1, which would
+# cause premature script termination under errexit.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -52,7 +55,8 @@ section_header() {
     local label="$1" passed="$2" total="$3"
     local colour="$C_BoldGreen"
     local symbol="✓"
-    if (( passed < total )); then
+    if (( passed < total ))
+    then
         colour="$C_BoldRed"
         symbol="✗"
     fi
@@ -101,21 +105,25 @@ declare -a T_DIAG=()     # diagnostic lines (# comments after a failure)
 
 total=0
 diag_buf=""
-while IFS= read -r line; do
+while IFS= read -r line
+do
     # TAP plan line
-    [[ "$line" =~ ^1\.\. ]] && continue
+    [[ "$line" =~ ^1\.\.  ]] && continue
 
     # Diagnostic comment
-    if [[ "$line" =~ ^#\  ]]; then
+    if [[ "$line" =~ ^#\  ]]
+    then
         diag_buf+="${line}"$'\n'
         continue
     fi
 
     # Test result line
-    if [[ "$line" =~ ^(ok|not\ ok)\ [0-9]+\ (.+)$ ]]; then
+    if [[ "$line" =~ ^(ok|not\ ok)\ [0-9]+\ (.+)$ ]]
+    then
         # Flush previous diag buffer
-        if (( total > 0 )); then
-            T_DIAG[$((total - 1))]="$diag_buf"
+        if (( total > 0 ))
+        then
+            T_DIAG[total - 1]="$diag_buf"
         fi
         diag_buf=""
 
@@ -132,8 +140,9 @@ while IFS= read -r line; do
 done <<< "$tap_output"
 
 # Flush final diag
-if (( total > 0 )); then
-    T_DIAG[$((total - 1))]="$diag_buf"
+if (( total > 0 ))
+then
+    T_DIAG[total - 1]="$diag_buf"
 fi
 
 # ── Render ───────────────────────────────────────────────────────────────────
@@ -144,9 +153,11 @@ declare -A SEC_PASS=()
 declare -A SEC_TOTAL=()
 declare -a SEC_SEEN_ORDER=()   # maintains first-seen order of prefixes
 
-for (( i = 0; i < total; i++ )); do
+for (( i = 0; i < total; i++ ))
+do
     p="${T_PREFIX[$i]}"
-    if [[ -z "${SEC_TOTAL[$p]+x}" ]]; then
+    if [[ -z "${SEC_TOTAL[$p]+x}" ]]
+    then
         SEC_TOTAL[$p]=0
         SEC_PASS[$p]=0
         SEC_SEEN_ORDER+=("$p")
@@ -163,7 +174,8 @@ row "${C_Bold}  TACTICAL CONSOLE — Unit Test Report${C_Reset}"
 row "${C_Dim}  $(date '+%Y-%m-%d %H:%M:%S')   bats $(bats --version 2>/dev/null || echo '?')${C_Reset}"
 
 # Pass 2 — render each section
-for p in "${SEC_SEEN_ORDER[@]}"; do
+for p in "${SEC_SEEN_ORDER[@]}"
+do
     local_pass=${SEC_PASS[$p]}
     local_total=${SEC_TOTAL[$p]}
     display="${SECTION_NAMES[$p]:-$p}"
@@ -172,25 +184,30 @@ for p in "${SEC_SEEN_ORDER[@]}"; do
     section_header "$display" "$local_pass" "$local_total"
 
     # Collapsed sections: fn-avail, cross-script — header only
-    if [[ "$p" == "fn-avail" || "$p" == "cross-script" ]]; then
+    if [[ "$p" == "fn-avail" || "$p" == "cross-script" ]]
+    then
         (( grand_pass += local_pass ))
         (( grand_fail += local_total - local_pass ))
         continue
     fi
 
     # Print individual test rows for this section
-    for (( i = 0; i < total; i++ )); do
+    for (( i = 0; i < total; i++ ))
+    do
         [[ "${T_PREFIX[$i]}" != "$p" ]] && continue
 
-        if [[ "${T_STATUS[$i]}" == "ok" ]]; then
+        if [[ "${T_STATUS[$i]}" == "ok" ]]
+        then
             (( grand_pass++ ))
             row "  ${C_Green}✓${C_Reset} ${T_NAME[$i]#*: }"
         else
             (( grand_fail++ ))
             row "  ${C_Red}✗${C_Reset} ${T_NAME[$i]#*: }"
             # Print diagnostic lines indented
-            if [[ -n "${T_DIAG[$i]:-}" ]]; then
-                while IFS= read -r dline; do
+            if [[ -n "${T_DIAG[$i]:-}" ]]
+            then
+                while IFS= read -r dline
+                do
                     [[ -z "$dline" ]] && continue
                     row "    ${C_Dim}${dline}${C_Reset}"
                 done <<< "${T_DIAG[$i]}"
@@ -203,10 +220,15 @@ done
 border_mid
 grand_total=$(( grand_pass + grand_fail ))
 
-if (( grand_fail == 0 )); then
+if (( grand_fail == 0 ))
+then
     row "  ${C_BoldGreen}ALL ${grand_total} TESTS PASSED${C_Reset}"
 else
-    row "  ${C_BoldRed}${grand_fail} FAILED${C_Reset}  ${C_Dim}|${C_Reset}  ${C_Green}${grand_pass} passed${C_Reset}  ${C_Dim}|${C_Reset}  ${grand_total} total"
+    _summary="${C_BoldRed}${grand_fail} FAILED${C_Reset}"
+    _summary+="  ${C_Dim}|${C_Reset}  "
+    _summary+="${C_Green}${grand_pass} passed${C_Reset}"
+    _summary+="  ${C_Dim}|${C_Reset}  ${grand_total} total"
+    row "  $_summary"
 fi
 
 border_bot

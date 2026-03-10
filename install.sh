@@ -20,7 +20,8 @@ echo "Installing Tactical Console from $REPO ..."
 echo ""
 
 # Thin ~/.bashrc loader (written, not symlinked — the loader is not in the repo)
-if [[ ! -f "$HOME/.bashrc" ]] || ! grep -q 'tactical-console.bashrc' "$HOME/.bashrc" 2>/dev/null; then
+if [[ ! -f "$HOME/.bashrc" ]] || ! grep -q 'tactical-console.bashrc' "$HOME/.bashrc" 2>/dev/null
+then
     cat > "$HOME/.bashrc" << 'LOADER'
 # ==============================================================================
 # ~/.bashrc — Thin Loader (DO NOT EDIT)
@@ -82,7 +83,8 @@ case $- in
 esac
 
 # Source the canonical Tactical Console Profile from the git-tracked repo
-if [[ -f "$HOME/ubuntu-console/tactical-console.bashrc" ]]; then
+if [[ -f "$HOME/ubuntu-console/tactical-console.bashrc" ]]
+then
     source "$HOME/ubuntu-console/tactical-console.bashrc"
 else
     echo "[WARNING] Tactical Console Profile not found at ~/ubuntu-console/tactical-console.bashrc"
@@ -94,16 +96,20 @@ else
 fi
 
 # Standalone scripts → ~/.local/bin/
-for f in "$REPO"/bin/*; do
+for f in "$REPO"/bin/*
+do
     [[ -f "$f" ]] || continue
     link "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")"
 done
 
 # Systemd units
-for f in "$REPO"/systemd/*; do
+for f in "$REPO"/systemd/*
+do
     [[ -f "$f" ]] || continue
     link "systemd/$(basename "$f")" "$HOME/.config/systemd/user/$(basename "$f")"
 done
 
 echo ""
 echo "Done. Run 'exec bash' to reload the profile."
+
+# end of file

@@ -16,8 +16,10 @@ echo "=== Bash Syntax Check (bash -n) ==="
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
          "$REPO_ROOT"/scripts/*.sh \
-         "$REPO_ROOT"/bin/*.sh; do
-    if bash -n "$f" 2>&1; then
+         "$REPO_ROOT"/bin/*.sh
+do
+    if bash -n "$f" 2>&1
+    then
         echo "  PASS  ${f#"$REPO_ROOT"/}"
     else
         echo "  FAIL  ${f#"$REPO_ROOT"/}"
@@ -27,7 +29,8 @@ done
 
 echo ""
 echo "=== ShellCheck ==="
-if ! command -v shellcheck >/dev/null 2>&1; then
+if ! command -v shellcheck >/dev/null 2>&1
+then
     echo "  shellcheck not installed — skipping (sudo apt install shellcheck)"
     exit "$rc"
 fi
@@ -35,10 +38,12 @@ fi
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
          "$REPO_ROOT"/scripts/*.sh \
-         "$REPO_ROOT"/bin/*.sh; do
+         "$REPO_ROOT"/bin/*.sh
+do
     local_rc=0
     shellcheck -s bash "$f" 2>&1 || local_rc=$?
-    if (( local_rc == 0 )); then
+    if (( local_rc == 0 ))
+    then
         echo "  PASS  ${f#"$REPO_ROOT"/}"
     else
         echo "  FAIL  ${f#"$REPO_ROOT"/}"
@@ -51,10 +56,12 @@ echo "=== Unicode Safety (non-ASCII in executable code) ==="
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
          "$REPO_ROOT"/scripts/*.sh \
-         "$REPO_ROOT"/bin/*.sh; do
+         "$REPO_ROOT"/bin/*.sh
+do
     # Find non-ASCII on non-comment lines (excludes lines starting with #)
     hits=$(grep -Pn '[^\x00-\x7F]' "$f" 2>/dev/null | grep -v '^\s*#\|^[0-9]*:\s*#' || true)
-    if [[ -z "$hits" ]]; then
+    if [[ -z "$hits" ]]
+    then
         echo "  PASS  ${f#"$REPO_ROOT"/}"
     else
         echo "  WARN  ${f#"$REPO_ROOT"/}  — non-ASCII on executable lines:"
@@ -63,9 +70,12 @@ for f in "$REPO_ROOT"/tactical-console.bashrc \
 done
 
 echo ""
-if (( rc == 0 )); then
+if (( rc == 0 ))
+then
     echo "All checks passed."
 else
     echo "Some checks failed — see above."
 fi
 exit "$rc"
+
+# end of file
