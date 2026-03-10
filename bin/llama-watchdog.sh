@@ -66,8 +66,7 @@ use_ctx="${ctx:-$LLAMA_CTX_SIZE}"
 use_threads="${threads:-$LLAMA_CPU_THREADS}"
 
 # Kill any zombie process (exact match avoids hitting unrelated processes).
-# NOTE: No -u scoping here — watchdog runs as the same user who started the model.
-pkill -x llama-server 2>/dev/null || true
+pkill -u "$(id -un)" -x llama-server 2>/dev/null || true
 sleep 1
 
 cmd=("$LLAMA_SERVER_BIN" "-m" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")

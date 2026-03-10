@@ -1131,7 +1131,7 @@ function __get_tokens() {
 # ---------------------------------------------------------------------------
 function __get_oc_version() {
     local cache="$TAC_CACHE_DIR/tac_ocversion"
-    if __cache_fresh "$cache" $COOLDOWN_DAILY; then
+    if __cache_fresh "$cache" "$COOLDOWN_DAILY"; then
         cat "$cache"; return
     fi
     (
@@ -1594,6 +1594,11 @@ function so() {
 
     # Already healthy — nothing to do.
     if __test_port "$OC_PORT"; then
+        if pgrep -x llama-server >/dev/null 2>&1 && __test_port "$LLM_PORT"; then
+            __tac_info "Local LLM" "[RUNNING]" "$C_Success"
+        else
+            __tac_info "Local LLM" "[OFFLINE]" "$C_Warning"
+        fi
         __tac_info "Gateway" "[ALREADY RUNNING]" "$C_Warning"
         return 0
     fi
@@ -1657,30 +1662,69 @@ function so() {
         [[ -n "$_key" && -n "${!_key:-}" ]] && systemctl --user set-environment "${_key}=${!_key}" 2>/dev/null
     done < <(grep '^export ' "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null)
 
-    # If provider is configured for local LLM, warn if it's not running
-    local _prov_url
-    _prov_url=$(openclaw config get provider.baseUrl 2>/dev/null)
-        if [[ "$_prov_url" == *"127.0.0.1:${LLM_PORT}"* ]] && ! __test_port "$LLM_PORT"; then
-            __tac_info "Local LLM" "[OFFLINE — localhost:$LLM_PORT]" "$C_Warning"
-            printf '%s\n' "  ${C_Dim}Auto-starting default LLM...${C_Reset}"
-            serve || { __tac_info "Local LLM" "[FAILED TO START]" "$C_Error"; return 1; }
-            # Wait briefly for LLM to start listening
-            local llm_wait=0 llm_max_wait=10
-            while (( llm_wait < llm_max_wait )); do
-                if __test_port "$LLM_PORT"; then
-                    __tac_info "Local LLM" "[ONLINE]" "$C_Success"
-                    break
-                fi
-                sleep 1
-                ((llm_wait++))
-            done
-            if ! __test_port "$LLM_PORT"; then
-                __tac_info "Local LLM" "[STILL OFFLINE]" "$C_Error"
+    # ── Step 1: Ensure local LLM is running ──────────────────────────
+    if pgrep -x llama-server >/dev/null 2>&1 && __test_port "$LLM_PORT"; then
+        # LLM is already running — show which model
+        local _so_active_num=""
+        [[ -f "$ACTIVE_LLM_FILE" ]] && _so_active_num=$(< "$ACTIVE_LLM_FILE")
+        if [[ -n "$_so_active_num" && -f "$LLM_REGISTRY" ]]; then
+            local _so_entry
+            _so_entry=$(awk -F'|' -v n="$_so_active_num" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            local _so_mname
+            IFS='|' read -r _ _so_mname _ <<< "$_so_entry"
+            __tac_info "Local LLM" "[RUNNING] #${_so_active_num} ${_so_mname}" "$C_Success"
+        else
+            __tac_info "Local LLM" "[RUNNING]" "$C_Success"
+        fi
+    else
+        # LLM not running — resolve default and start it
+        local _so_def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
+        local _so_def_file=""
+        [[ -f "$_so_def_conf" ]] && _so_def_file=$(< "$_so_def_conf")
+        if [[ -z "$_so_def_file" ]]; then
+            __tac_info "Error" "[Local LLM offline and no default set. Run 'model default <N>' to configure.]" "$C_Error"
+            return 1
+        fi
+        # Look up human-readable model name from registry
+        local _so_model_name
+        _so_model_name=$(awk -F'|' -v f="$_so_def_file" '$3 == f {print $2}' "$LLM_REGISTRY" 2>/dev/null)
+        : "${_so_model_name:=$_so_def_file}"
+        __tac_info "Local LLM" "[OFFLINE]" "$C_Warning"
+        # Start the default LLM in background; show a compact spinner
+        serve &>/dev/null &
+        local _serve_pid=$!
+        local _spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+        local _sw=0 _sw_max=90
+        while kill -0 "$_serve_pid" 2>/dev/null && (( _sw < _sw_max )); do
+            printf '\r  %s' "${C_Dim}${_spin_chars:_sw%10:1} Starting ${_so_model_name} (${_sw}s)${C_Reset}  "
+            # Poll health for early exit once server has had time to launch
+            if (( _sw > 3 )) && __test_port "$LLM_PORT"; then
+                local _hb
+                _hb=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+                [[ "$_hb" == *'"ok"'* ]] && break
+            fi
+            sleep 1
+            ((_sw++))
+        done
+        printf '\r%s\r' "$(printf '%*s' 60 '')"   # clear spinner line
+        wait "$_serve_pid" 2>/dev/null
+        # Verify LLM is actually healthy
+        if __test_port "$LLM_PORT"; then
+            local _final_health
+            _final_health=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+            if [[ "$_final_health" == *'"ok"'* ]]; then
+                __tac_info "Local LLM" "[ONLINE] ${_so_model_name} (${_sw}s)" "$C_Success"
+            else
+                __tac_info "Local LLM" "[NOT HEALTHY — check: tail $LLM_LOG_FILE]" "$C_Error"
                 return 1
             fi
+        else
+            __tac_info "Local LLM" "[FAILED TO START — check: tail $LLM_LOG_FILE]" "$C_Error"
+            return 1
         fi
+    fi
 
-    # ── Start and wait ─────────────────────────────────────────────────
+    # ── Step 2: Start gateway ──────────────────────────────────────────
     openclaw gateway start >/dev/null 2>&1
 
     local ready=0 elapsed=0 max_wait=20
@@ -2876,6 +2920,8 @@ ${diff_body}"
     fi
 }
 
+
+
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -2887,6 +2933,9 @@ ${diff_body}"
 #   __quant_label, __require_llm
 # @state-out: LAST_TPS, __LAST_LLM_RESPONSE, ACTIVE_LLM_FILE
 # @state-in: __LLAMA_DRIVE_MOUNTED (§1), C_* design tokens (§4)
+
+# Ensure LLM_DEFAULT_FILE is defined even if Section 1 wasn't updated
+export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$LLAMA_DRIVE_ROOT/.llm/default_model.conf}"
 
 # ---------------------------------------------------------------------------
 # __save_tps — Persist TPS measurement to the registry's tps column.
@@ -3060,7 +3109,7 @@ function gpu-check() {
 
 # ---------------------------------------------------------------------------
 # model — Unified LLM model manager (v3 — auto-scan, numbered selection).
-# Subcommands: scan, list, use, stop, status, info, bench
+# Subcommands: scan, list, use, stop, status, info, bench, default
 # Registry: models.conf — auto-generated by 'model scan', do not hand-edit.
 # Format: #|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads
 # Active model tracked in: $ACTIVE_LLM_FILE (just the model number)
@@ -3228,12 +3277,12 @@ function __calc_gpu_layers() {
 function __calc_ctx_size() {
     local file_bytes=$1 native_ctx=$2 arch="${3:-}"
     local file_gb=$(( file_bytes / 1024 / 1024 / 1024 ))
-    local vram_limit_gb=$(( VRAM_TOTAL_BYTES / 1024 / 1024 / 1024 * VRAM_THRESHOLD_PCT / 100 ))
+    local vram_limit_gb=$(( VRAM_TOTAL_BYTES * VRAM_THRESHOLD_PCT / 100 / 1024 / 1024 / 1024 ))
 
     # MoE models: expert weights on CPU, only attention on GPU.
     # Active params ~3B, so treat like a small model for ctx sizing.
     if [[ "$arch" == *"moe"* ]]; then
-        echo $MOE_DEFAULT_CTX
+        echo "$MOE_DEFAULT_CTX"
         return
     fi
 
@@ -3247,7 +3296,7 @@ function __calc_ctx_size() {
             echo "$cap"
         fi
     elif (( file_gb >= 3 )); then
-        echo $MOE_DEFAULT_CTX
+        echo "$MOE_DEFAULT_CTX"
     else
         local cap=16384
         if (( native_ctx < cap )); then
@@ -3459,9 +3508,12 @@ function model() {
                 return 1
             fi
 
-            # Read active model number
+            # Read active and default model info
             local active_num=""
             [[ -f "$ACTIVE_LLM_FILE" ]] && active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+            local def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
+            local default_file=""
+            [[ -f "$def_conf" ]] && default_file=$(cat "$def_conf" 2>/dev/null)
 
             printf "\n${C_Dim}  %-4s %-30s %-7s %-8s %-9s %-4s %-5s %-4s %s${C_Reset}\n" \
                 "#" "MODEL" "SIZE" "QUANT" "ARCH" "GPU" "CTX" "THR" "TPS"
@@ -3475,6 +3527,9 @@ function model() {
                 if [[ "$num" == "$active_num" ]] && pgrep -x llama-server >/dev/null 2>&1; then
                     marker="▶ "
                     color="$C_Success"
+                elif [[ "$file" == "$default_file" ]]; then
+                    marker="* "
+                    color="$C_Highlight"
                 fi
                 printf "${color}${marker}%-4s %-30s %-7s %-8s %-9s %-4s %-5s %-4s %s${C_Reset}\n" \
                     "$num" "${name:0:30}" "$size" "$quant" "${arch:0:9}" "$gpu_layers" "$ctx" "$threads" "${tps:--}"
@@ -3499,14 +3554,66 @@ function model() {
             d_label=$(basename "$LLAMA_DRIVE_ROOT")
             printf "\n${C_Dim}  Drive ${d_label^^}: ${d_color}${d_avail_h}G free${C_Reset}${C_Dim} of ${d_total_h}G (${d_pct_n}%% used)${C_Reset}\n"
 
-            printf "\n${C_Dim}  model use N  │  model stop  │  model info N  │  model scan  │  model bench  │  model archive N${C_Reset}\n"
+            printf "\n${C_Dim}  model use N  │  model stop  │  model info N  │  model default N  │  model scan  │  model bench${C_Reset}\n"
+            ;;
+
+        default)
+            local def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
+            # View or set the default LLM
+            if [[ -z "$target" ]]; then
+                # Show current default
+                if [[ -f "$def_conf" ]]; then
+                    local def_file
+                    def_file=$(< "$def_conf")
+                    local entry
+                    entry=$(awk -F'|' -v f="$def_file" '$3 == f {print $0}' "$LLM_REGISTRY" 2>/dev/null)
+                    if [[ -n "$entry" ]]; then
+                        IFS='|' read -r num name _rest <<< "$entry"
+                        __tac_info "Default Model" "#${num} ${name}" "$C_Success"
+                    else
+                        __tac_info "Default Model" "[$def_file (Not found in registry)]" "$C_Warning"
+                    fi
+                else
+                    __tac_info "Default Model" "[NONE SET]" "$C_Dim"
+                    printf '%s\n' "  ${C_Dim}Run 'model default <N>' to set one.${C_Reset}"
+                fi
+                return 0
+            fi
+
+            if [[ ! "$target" =~ ^[0-9]+$ ]]; then
+                __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1
+            fi
+
+            local entry
+            entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            if [[ -z "$entry" ]]; then
+                __tac_info "Error" "[Model #$target not found in registry]" "$C_Error"; return 1
+            fi
+
+            IFS='|' read -r _n name file _rest <<< "$entry"
+            mkdir -p "$(dirname "$def_conf")" 2>/dev/null
+            echo "$file" > "$def_conf"
+            __tac_info "Default Model" "[SET TO: $name]" "$C_Success"
             ;;
 
         use)
             # Load and start model #N with VRAM-optimised layer split and context size.
             # ── Validation ──────────────────────────────────────────────────
             if [[ -z "$target" ]]; then
-                __tac_info "Usage" "[model use <number>]" "$C_Error"; return 1
+                # No model number given — fall through to default
+                local _use_def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
+                local _use_def_file=""
+                [[ -f "$_use_def_conf" ]] && _use_def_file=$(< "$_use_def_conf")
+                if [[ -z "$_use_def_file" ]]; then
+                    __tac_info "Error" "[No model specified and no default set. Run 'model default <N>' to configure.]" "$C_Error"
+                    return 1
+                fi
+                target=$(awk -F'|' -v f="$_use_def_file" '$3 == f {print $1}' "$LLM_REGISTRY" 2>/dev/null | head -n1)
+                if [[ -z "$target" ]]; then
+                    __tac_info "Error" "[Default file not found in registry: $_use_def_file — run 'model scan']" "$C_Error"
+                    return 1
+                fi
+                __tac_info "Default" "[Using default model #${target}]" "$C_Dim"
             fi
             if [[ ! "$target" =~ ^[0-9]+$ ]]; then
                 __tac_info "Error" "[Not a number: '$target']" "$C_Error"; return 1
@@ -3802,11 +3909,22 @@ function model() {
             IFS='|' read -r _n name file _rest <<< "$entry"
             local fpath="$LLAMA_MODEL_DIR/$file"
 
+            # Guard: prevent deleting the default model
+            local _del_def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
+            local _del_def_file=""
+            [[ -f "$_del_def_conf" ]] && _del_def_file=$(< "$_del_def_conf")
+            if [[ -n "$_del_def_file" && "$file" == "$_del_def_file" ]]; then
+                __tac_info "Error" "[#${target} ${name} is the default LLM — change the default first ('model default <N>')]" "$C_Error"
+                return 1
+            fi
+
             __tac_info "Delete" "#${target} ${name}" "$C_Warning"
             __tac_info "File" "$fpath" "$C_Dim"
             if [[ -f "$fpath" ]]; then
+                local fsize_bytes
+                fsize_bytes=$(stat --format=%s "$fpath" 2>/dev/null || echo 0)
                 local fsize
-                fsize=$(du -h "$fpath" | cut -f1)
+                fsize=$(awk "BEGIN{printf \"%.1fG\", $fsize_bytes/1024/1024/1024}")
                 __tac_info "Size" "$fsize" "$C_Dim"
             fi
             read -r -p "${C_Warning}Permanently delete this model? [y/N]: ${C_Reset}" confirm
@@ -4005,6 +4123,15 @@ function model() {
             local fpath="$LLAMA_MODEL_DIR/$file"
             local archive_dir="$LLAMA_ARCHIVE_DIR"
 
+            # Guard: prevent archiving the default model
+            local _arc_def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
+            local _arc_def_file=""
+            [[ -f "$_arc_def_conf" ]] && _arc_def_file=$(< "$_arc_def_conf")
+            if [[ -n "$_arc_def_file" && "$file" == "$_arc_def_file" ]]; then
+                __tac_info "Error" "[#${target} ${name} is the default LLM — change the default first ('model default <N>')]" "$C_Error"
+                return 1
+            fi
+
             __tac_info "Archive" "#${target} ${name}" "$C_Warning"
             __tac_info "From" "$fpath" "$C_Dim"
             __tac_info "To" "$archive_dir/$file" "$C_Dim"
@@ -4040,9 +4167,10 @@ function model() {
             ;;
 
         *)
-            echo "Usage: model {scan|list|use|stop|status|info|bench|delete|archive|download}"
+            echo "Usage: model {scan|list|default|use|stop|status|info|bench|delete|archive|download}"
             echo "  scan       — Scan $LLAMA_MODEL_DIR, read GGUF metadata, auto-calculate params"
-            echo "  list       — Show numbered model registry (▶ = active)"
+            echo "  list       — Show numbered model registry (▶ = active, * = default)"
+            echo "  default [N]— Show current default LLM, or set it to model #N"
             echo "  use N      — Start model #N with optimal settings"
             echo "  stop       — Stop llama-server"
             echo "  status     — Show what's running"
@@ -4050,17 +4178,35 @@ function model() {
             echo "  bench      — Benchmark all on-disk models"
             echo "  delete N   — Permanently delete model #N from disk and registry"
             echo "  archive N  — Move model #N to archive/ and remove from registry"
-            echo "  download   — Download GGUF models from Hugging Face (repo:file format)"
+            echo "  download   — Download GGUF models from Hugging Face (repo:file)"
             ;;
     esac
 }
 
 # serve/halt/mlogs — convenience wrappers for the model manager.
+# shellcheck disable=SC2120  # serve is called with args from command line (serve N)
 function serve() {
-    if [[ -n "$1" ]]; then
+    local def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
+    if [[ -n "${1:-}" ]]; then
         model use "$1"
     else
-        model use 2  # Llama 3.2 3B Instruct
+        # Start the default LLM
+        if [[ -f "$def_conf" ]]; then
+            local def_file
+            def_file=$(< "$def_conf")
+            local def_num
+            def_num=$(awk -F'|' -v f="$def_file" '$3 == f {print $1}' "$LLM_REGISTRY" 2>/dev/null | head -n1)
+            if [[ -n "$def_num" ]]; then
+                model use "$def_num"
+            else
+                __tac_info "Local LLM" "[Default file not found in registry: $def_file]" "$C_Error"
+                return 1
+            fi
+        else
+            __tac_info "Local LLM" "[NO DEFAULT SET]" "$C_Error"
+            printf '%s\n' "  ${C_Dim}Run 'model default <N>' to configure one.${C_Reset}"
+            return 1
+        fi
     fi
 }
 # halt — Stop the currently running LLM model.
@@ -4409,6 +4555,11 @@ function chat-pipe() {
     local question="${*:-Explain this.}"
     __llm_stream "${ctx}\n\n${question}"
 }
+# end of file
+
+
+
+
 
 # ==============================================================================
 # 12. DASHBOARD & HELP
