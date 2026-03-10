@@ -342,6 +342,7 @@ trap '__tac_err_handler' ERR
 # @depends: constants
 # @exports: code, oedit, llmconf, oclogs, le, lo, occonf, os, oa, ocstat,
 #   ocgs, ocv, mem-index, status, ocms, cop, cop-ask, cop-init (plus standard shell aliases)
+#   Note: owk → 'oc wk', ologs → 'oc log-dir', mem-index → 'oc mem-index'
 
 # ---- Core OS Aliases ----
 alias ls='ls --color=auto'
@@ -397,11 +398,10 @@ function occonf() {
 }
 
 # ---- Git Shortcuts ----
-# commitd    — git add + commit with YOUR message + push
-# commit     — git add + commit with LLM-generated message + push
-alias commitd='commit_deploy'
+# commit: <msg> — git add + commit with YOUR message + push
+# commit        — git add + commit with LLM-generated message + push
+alias 'commit:'='commit_deploy'
 alias commit='commit_auto'
-alias oc-agent-turn='ocstart'
 
 # ---- OpenClaw Shortcuts (functions defined in §9) ----
 # Wrapper: strip the leading blank line that openclaw always prints.
@@ -1379,7 +1379,7 @@ function up() {
             if (( doc_rc == 0 )); then
                 __tac_line "[4/10] OpenClaw Framework" "[HEALTHY]" "$C_Success"
             else
-                __tac_line "[4/10] OpenClaw Framework" "[ISSUES FOUND - run ocdoc-fix]" "$C_Warning"
+                __tac_line "[4/10] OpenClaw Framework" "[ISSUES FOUND - run oc doc-fix]" "$C_Warning"
                 ((errCount++))
             fi
             __set_cooldown "openclaw" "$now"
@@ -1579,7 +1579,7 @@ function logtrim() {
 # @depends: constants, design-tokens, ui-engine, hooks
 # @exports: so, xo, oc-restart, ocstart, ocstop, ockeys, ocdoc-fix,
 #   __bridge_windows_api_keys, oc-refresh-keys, oc-backup, oc-restore,
-#   owk, ologs, ocroot, lc, oc-update, oc-health, oc-cron, oc-skills,
+#   owk, ologs, ocroot, oc, lc, oc-update, oc-health, oc-cron, oc-skills,
 #   oc-plugins, oc-tail, oc-channels, oc-sec, oc-tui, oc-config,
 #   oc-docs, oc-usage, oc-memory-search, oc-local-llm, oc-sync-models,
 #   oc-browser, oc-nodes, oc-sandbox, oc-env, oc-cache-clear, oc-trust-sync,
@@ -1646,7 +1646,7 @@ function so() {
         if tailscale serve status 2>/dev/null | grep -q ":$OC_PORT\b"; then
             _ts_serve_active=1
             __tac_info "Tailscale Serve" "[CYCLING — port $OC_PORT proxy]" "$C_Dim"
-            sudo tailscale serve off 2>/dev/null
+            sudo -n tailscale serve off 2>/dev/null
             rm -f /tmp/openclaw-1000/gateway.*.lock 2>/dev/null
             sleep 1
         fi
@@ -1788,7 +1788,7 @@ function so() {
 
     # ── Post: restore Tailscale Serve if we cycled it ──────────────────
     if (( _ts_serve_active )); then
-        sudo tailscale serve --bg "http://127.0.0.1:$OC_PORT" >/dev/null 2>&1 \
+        sudo -n tailscale serve --bg "http://127.0.0.1:$OC_PORT" >/dev/null 2>&1 \
             && __tac_info "Tailscale Serve" "[RESTORED]" "$C_Dim"
     fi
 }
@@ -1858,6 +1858,126 @@ function xo() {
 }
 
 # ---------------------------------------------------------------------------
+# oc — Unified OpenClaw command dispatcher.
+# Usage: oc <subcommand> [args...]
+# With no arguments, prints available subcommands.
+# ---------------------------------------------------------------------------
+function oc() {
+    local sub="${1:-}"
+    if [[ -z "$sub" ]]; then
+        printf '%s\n' "${C_Highlight}oc — OpenClaw Command Reference${C_Reset}"
+        printf '%s\n' ""
+        printf '%s\n' "${C_Highlight}Gateway${C_Reset}"
+        printf '  %-20s %s\n' "restart"      "Full gateway restart: stop, wait, start"
+        printf '  %-20s %s\n' "gs"           "Gateway deep health probe"
+        printf '  %-20s %s\n' "stat"         "Show detailed status (--all)"
+        printf '  %-20s %s\n' "health"       "Ping gateway HTTP /api/health"
+        printf '  %-20s %s\n' "tail"         "Live-tail gateway logs (Ctrl-C to stop)"
+        printf '  %-20s %s\n' "v"            "Print OpenClaw CLI version"
+        printf '  %-20s %s\n' "update"       "Update OpenClaw CLI to latest"
+        printf '  %-20s %s\n' "tui"          "Launch the interactive terminal UI"
+        printf '%s\n' ""
+        printf '%s\n' "${C_Highlight}Agents & Sessions${C_Reset}"
+        printf '  %-20s %s\n' "start"        "Dispatch an agent turn (-m '<msg>')"
+        printf '  %-20s %s\n' "stop"         "Delete an agent by ID (--agent <id>)"
+        printf '  %-20s %s\n' "agent-turn"   "Alias for start"
+        printf '  %-20s %s\n' "mem-index"     "Rebuild the vector memory search index"
+        printf '  %-20s %s\n' "memory-search" "Semantic search across memory store"
+        printf '%s\n' ""
+        printf '%s\n' "${C_Highlight}Config & Logs${C_Reset}"
+        printf '  %-20s %s\n' "conf"         "Open openclaw.json in VS Code"
+        printf '  %-20s %s\n' "config"       "Get/set config keys (get|set|unset)"
+        printf '  %-20s %s\n' "env"          "Dump all OC and LLM env variables"
+        printf '  %-20s %s\n' "keys"         "List Windows API keys bridged to WSL"
+        printf '  %-20s %s\n' "ms"           "Probe model provider endpoints"
+        printf '  %-20s %s\n' "doc-fix"      "Run openclaw doctor --fix with backup"
+        printf '  %-20s %s\n' "log-dir"      "cd to the OpenClaw logs folder"
+        printf '  %-20s %s\n' "logs"         "Open runtime log in VS Code"
+        printf '  %-20s %s\n' "sec"          "Deep security audit"
+        printf '  %-20s %s\n' "docs"         "Search OpenClaw documentation"
+        printf '  %-20s %s\n' "cache-clear"  "Wipe /dev/shm telemetry caches"
+        printf '  %-20s %s\n' "diag"         "5-point check: doctor, gw, models, env, logs"
+        printf '  %-20s %s\n' "failover"     "Cloud LLM fallback (on|off|status)"
+        printf '  %-20s %s\n' "refresh-keys" "Re-import Windows API keys into WSL"
+        printf '  %-20s %s\n' "trust-sync"   "Save oc-llm-sync.sh SHA256 as trusted"
+        printf '%s\n' ""
+        printf '%s\n' "${C_Highlight}Data & Extensions${C_Reset}"
+        printf '  %-20s %s\n' "wk"           "cd to OpenClaw workspace directory"
+        printf '  %-20s %s\n' "root"         "cd to OpenClaw root directory"
+        printf '  %-20s %s\n' "backup"       "Snapshot workspace + agents to ZIP"
+        printf '  %-20s %s\n' "restore"      "Restore from most recent backup ZIP"
+        printf '  %-20s %s\n' "cron"         "Scheduled tasks (list|add|runs)"
+        printf '  %-20s %s\n' "skills"       "List installed/eligible skill modules"
+        printf '  %-20s %s\n' "plugins"      "Manage plugins (list|doctor|enable|disable)"
+        printf '  %-20s %s\n' "usage"        "Token and cost usage stats (default: 7d)"
+        printf '  %-20s %s\n' "channels"     "Messaging channels (list|status|logs)"
+        printf '  %-20s %s\n' "browser"      "Browser automation (status|start|stop)"
+        printf '  %-20s %s\n' "nodes"        "Compute nodes (status|list|describe)"
+        printf '  %-20s %s\n' "sandbox"      "Code sandboxes (list|recreate|explain)"
+        printf '%s\n' ""
+        printf '%s\n' "${C_Highlight}LLM Integration${C_Reset}"
+        printf '  %-20s %s\n' "local-llm"    "Register local llama.cpp as provider"
+        printf '  %-20s %s\n' "sync-models"  "Sync models.conf with OC provider scan"
+        return 0
+    fi
+    shift
+    case "$sub" in
+        # Gateway
+        restart)       oc-restart "$@" ;;
+        gs)            ocgs "$@" ;;
+        stat)          ocstat "$@" ;;
+        health)        oc-health "$@" ;;
+        tail)          oc-tail "$@" ;;
+        v)             ocv "$@" ;;
+        update)        oc-update "$@" ;;
+        tui)           oc-tui "$@" ;;
+        # Agents & Sessions
+        start)         ocstart "$@" ;;
+        stop)          ocstop "$@" ;;
+        agent-turn)    ocstart "$@" ;;
+        mem-index)     mem-index "$@" ;;
+        memory-search) oc-memory-search "$@" ;;
+        # Config & Logs
+        conf)          occonf "$@" ;;
+        config)        oc-config "$@" ;;
+        env)           oc-env "$@" ;;
+        keys)          ockeys "$@" ;;
+        ms)            ocms "$@" ;;
+        doc-fix)       ocdoc-fix "$@" ;;
+        log-dir)       ologs "$@" ;;
+        logs)          oclogs "$@" ;;
+        sec)           oc-sec "$@" ;;
+        docs)          oc-docs "$@" ;;
+        cache-clear)   oc-cache-clear "$@" ;;
+        diag)          oc-diag "$@" ;;
+        failover)      oc-failover "$@" ;;
+        refresh-keys)  oc-refresh-keys "$@" ;;
+        trust-sync)    oc-trust-sync "$@" ;;
+        # Data & Extensions
+        wk)            owk "$@" ;;
+        root)          ocroot "$@" ;;
+        backup)        oc-backup "$@" ;;
+        restore)       oc-restore "$@" ;;
+        cron)          oc-cron "$@" ;;
+        skills)        oc-skills "$@" ;;
+        plugins)       oc-plugins "$@" ;;
+        usage)         oc-usage "$@" ;;
+        channels)      oc-channels "$@" ;;
+        browser)       oc-browser "$@" ;;
+        nodes)         oc-nodes "$@" ;;
+        sandbox)       oc-sandbox "$@" ;;
+        # LLM Integration
+        local-llm)     oc-local-llm "$@" ;;
+        sync-models)   oc-sync-models "$@" ;;
+        *)
+            printf '%s\n' "${C_Error}Unknown subcommand:${C_Reset} $sub"
+            printf '%s\n' "${C_Dim}Run 'oc' with no arguments for a list of commands.${C_Reset}"
+            return 1
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
 # oc-restart — Stop and restart the OpenClaw gateway.
 # ---------------------------------------------------------------------------
 function oc-restart() {
@@ -1872,7 +1992,7 @@ function oc-restart() {
 # ---------------------------------------------------------------------------
 function ocstart() {
     if [[ -z "$*" ]]; then
-        printf '%s\n' "${C_Dim}Usage:${C_Reset} ocstart --message \"<message>\" [--to <E.164>] [--agent <id>]"
+        printf '%s\n' "${C_Dim}Usage:${C_Reset} oc start --message \"<message>\" [--to <E.164>] [--agent <id>]"
         printf '%s\n' "${C_Dim}  --message     Message body for the agent (required)${C_Reset}"
         printf '%s\n' "${C_Dim}  --to          Recipient number in E.164 format${C_Reset}"
         printf '%s\n' "${C_Dim}  --agent       Agent ID to target${C_Reset}"
@@ -1889,7 +2009,7 @@ function ocstart() {
 # ---------------------------------------------------------------------------
 function ocstop() {
     if [[ -z "$*" ]]; then
-        printf '%s\n' "${C_Dim}Usage:${C_Reset} ocstop --agent <id>"
+        printf '%s\n' "${C_Dim}Usage:${C_Reset} oc stop --agent <id>"
         printf '%s\n' "${C_Dim}  --agent  Agent ID to stop (required)${C_Reset}"
         printf '%s\n' "${C_Dim}  Tip: run 'oa' to list agents${C_Reset}"
         return 1
@@ -4866,56 +4986,56 @@ function tactical_help() {
 
     __hSection "OPENCLAW — GATEWAY"
     __hRow "so / xo" "Start / Stop the OpenClaw gateway (systemd)"
-    __hRow "oc-restart" "Full gateway restart: stop, wait, then start"
-    __hRow "ocgs / ocstat" "Gateway deep health probe / Full status --all"
-    __hRow "oc-health" "Ping gateway HTTP /api/health endpoint"
-    __hRow "oc-tail" "Live-tail gateway journal logs (Ctrl-C to stop)"
-    __hRow "ocv" "Print installed OpenClaw CLI version string"
-    __hRow "oc-update" "Update the OpenClaw CLI binary to latest release"
-    __hRow "oc-tui" "Launch the OpenClaw interactive terminal UI"
+    __hRow "oc restart" "Full gateway restart: stop, wait, then start"
+    __hRow "oc gs / oc stat" "Gateway deep health probe / Full status --all"
+    __hRow "oc health" "Ping gateway HTTP /api/health endpoint"
+    __hRow "oc tail" "Live-tail gateway journal logs (Ctrl-C to stop)"
+    __hRow "oc v" "Print installed OpenClaw CLI version string"
+    __hRow "oc update" "Update the OpenClaw CLI binary to latest release"
+    __hRow "oc tui" "Launch the OpenClaw interactive terminal UI"
 
     __hSection "OPENCLAW — AGENTS & SESSIONS"
     __hRow "os / oa" "List all active sessions / Show registered agents"
-    __hRow "ocstart" "Dispatch an agent turn (-m '<message>' required)"
-    __hRow "ocstop" "Delete an agent by ID (--agent <id> required)"
-    __hRow "oc-agent-turn" "Alias for ocstart (send an agent turn)"
-    __hRow "mem-index" "Rebuild the OpenClaw vector memory search index"
-    __hRow "oc-memory-search" "Semantic search across the OpenClaw memory store"
+    __hRow "oc start" "Dispatch an agent turn (-m '<message>' required)"
+    __hRow "oc stop" "Delete an agent by ID (--agent <id> required)"
+    __hRow "oc agent-turn" "Alias for oc start (send an agent turn)"
+    __hRow "oc mem-index" "Rebuild the OpenClaw vector memory search index"
+    __hRow "oc memory-search" "Semantic search across the OpenClaw memory store"
 
     __hSection "OPENCLAW — CONFIG & LOGS"
-    __hRow "occonf" "Open openclaw.json global config in VS Code"
-    __hRow "oc-config" "Read or write OpenClaw config keys (get|set|unset)"
-    __hRow "oc-env" "Display all OpenClaw and LLM environment variables"
-    __hRow "ockeys" "List Windows API keys bridged into the WSL session"
-    __hRow "ocms" "Probe all configured model provider endpoints"
-    __hRow "ocdoc-fix" "Run openclaw doctor --fix with config backup"
-    __hRow "oclogs" "Open the /tmp/openclaw runtime log in VS Code"
+    __hRow "oc conf" "Open openclaw.json global config in VS Code"
+    __hRow "oc config" "Read or write OpenClaw config keys (get|set|unset)"
+    __hRow "oc env" "Display all OpenClaw and LLM environment variables"
+    __hRow "oc keys" "List Windows API keys bridged into the WSL session"
+    __hRow "oc ms" "Probe all configured model provider endpoints"
+    __hRow "oc doc-fix" "Run openclaw doctor --fix with config backup"
+    __hRow "oc logs" "Open the /tmp/openclaw runtime log in VS Code"
     __hRow "le / lo / lc" "Gateway: 40-line stderr / 120-line full / Clear all"
-    __hRow "ologs" "Change directory to the OpenClaw logs folder"
-    __hRow "oc-sec" "Run a deep OpenClaw security audit with findings"
-    __hRow "oc-docs" "Full-text search across OpenClaw documentation"
-    __hRow "oc-cache-clear" "Remove /dev/shm telemetry caches to force refresh"
-    __hRow "oc-diag" "5-point check: doctor, gateway, models, env, logs"
-    __hRow "oc-failover" "Configure cloud LLM fallback (on|off|status)"
-    __hRow "oc-refresh-keys" "Force re-import of Windows API keys into WSL"
-    __hRow "oc-trust-sync" "Save current oc-llm-sync.sh SHA256 as trusted"
+    __hRow "oc log-dir" "Change directory to the OpenClaw logs folder"
+    __hRow "oc sec" "Run a deep OpenClaw security audit with findings"
+    __hRow "oc docs" "Full-text search across OpenClaw documentation"
+    __hRow "oc cache-clear" "Remove /dev/shm telemetry caches to force refresh"
+    __hRow "oc diag" "5-point check: doctor, gateway, models, env, logs"
+    __hRow "oc failover" "Configure cloud LLM fallback (on|off|status)"
+    __hRow "oc refresh-keys" "Force re-import of Windows API keys into WSL"
+    __hRow "oc trust-sync" "Save current oc-llm-sync.sh SHA256 as trusted"
 
     __hSection "OPENCLAW — DATA & EXTENSIONS"
-    __hRow "owk / ocroot" "Jump to OpenClaw Workspace or Root config dir"
-    __hRow "oc-backup" "Snapshot workspace + agents to timestamped ZIP"
-    __hRow "oc-restore" "Restore workspace + agents from a backup ZIP"
-    __hRow "oc-cron" "Manage OpenClaw scheduled tasks (list|add|runs)"
-    __hRow "oc-skills" "Show installed and eligible OpenClaw skill modules"
-    __hRow "oc-plugins" "Manage plugins (list|doctor|enable|disable)"
-    __hRow "oc-usage" "Display token and cost usage stats (default: 7d)"
-    __hRow "oc-channels" "Manage messaging channels (list|status|logs)"
-    __hRow "oc-browser" "Control headless browser (status|start|stop)"
-    __hRow "oc-nodes" "Manage compute nodes (status|list|describe)"
-    __hRow "oc-sandbox" "Manage code execution sandboxes (list|recreate)"
+    __hRow "oc wk / oc root" "Jump to OpenClaw Workspace or Root config dir"
+    __hRow "oc backup" "Snapshot workspace + agents to timestamped ZIP"
+    __hRow "oc restore" "Restore workspace + agents from a backup ZIP"
+    __hRow "oc cron" "Manage OpenClaw scheduled tasks (list|add|runs)"
+    __hRow "oc skills" "Show installed and eligible OpenClaw skill modules"
+    __hRow "oc plugins" "Manage plugins (list|doctor|enable|disable)"
+    __hRow "oc usage" "Display token and cost usage stats (default: 7d)"
+    __hRow "oc channels" "Manage messaging channels (list|status|logs)"
+    __hRow "oc browser" "Control headless browser (status|start|stop)"
+    __hRow "oc nodes" "Manage compute nodes (status|list|describe)"
+    __hRow "oc sandbox" "Manage code execution sandboxes (list|recreate)"
 
     __hSection "OPENCLAW — LLM INTEGRATION"
-    __hRow "oc-local-llm" "Register local llama.cpp as an OpenClaw provider"
-    __hRow "oc-sync-models" "Sync models.conf with OpenClaw provider scan"
+    __hRow "oc local-llm" "Register local llama.cpp as an OpenClaw provider"
+    __hRow "oc sync-models" "Sync models.conf with OpenClaw provider scan"
 
     __hSection "LLM — MODEL MANAGEMENT"
     __hRow "wake" "Lock NVIDIA GPU persistence mode and WDDM state"
@@ -4947,7 +5067,7 @@ function tactical_help() {
 
     __hSection "GIT & PROJECTS"
     __hRow "mkproj <n>" "Scaffold project: PEP-8 main.py, .venv, git init"
-    __hRow "commitd <msg>" "Git add, commit with your message, and push"
+    __hRow "commit: <msg>" "Git add, commit with your message, and push"
     __hRow "commit" "Git add + commit (LLM auto-message) + push"
     __hRow "cop" "Launch interactive GitHub Copilot CLI session"
     __hRow "?? <prompt>" "One-shot Copilot prompt (e.g. ?? find large files)"

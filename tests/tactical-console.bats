@@ -548,6 +548,19 @@ setup() {
     declare -f oc-health >/dev/null 2>&1
 }
 
+@test "oc: dispatcher prints help with no args" {
+    run oc
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Gateway"* ]]
+    [[ "$output" == *"restart"* ]]
+}
+
+@test "oc: unknown subcommand returns error" {
+    run oc bogus_sub_xyz
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"Unknown subcommand"* ]]
+}
+
 @test "health: gpu-check function is defined" {
     declare -f gpu-check >/dev/null 2>&1
 }
@@ -751,6 +764,7 @@ setup() {
 @test "fn-avail: clear_tactical" { declare -f clear_tactical >/dev/null; }
 @test "fn-avail: commit_auto" { declare -f commit_auto >/dev/null; }
 @test "fn-avail: commit_deploy" { declare -f commit_deploy >/dev/null; }
+@test "fn-avail: oc" { declare -f oc >/dev/null; }
 @test "fn-avail: oc-env" { declare -f oc-env >/dev/null; }
 @test "fn-avail: oc-health" { declare -f oc-health >/dev/null; }
 @test "fn-avail: oc-backup" { declare -f oc-backup >/dev/null; }

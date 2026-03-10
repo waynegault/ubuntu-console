@@ -1,3 +1,3 @@
 #!/bin/bash
-# Handler for commitd MCP tool
+# Handler for commit: MCP tool
 commit_deploy "$1"
