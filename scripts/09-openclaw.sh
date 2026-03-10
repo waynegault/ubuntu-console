@@ -141,7 +141,7 @@ function so() {
         local _serve_pid=$!
         local _spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
         local _sw=0 _sw_max=90
-        while kill -0 "$_serve_pid" 2>/dev/null && (( _sw < _sw_max ))
+        while (( _sw < _sw_max ))
         do
             printf '\r  %s' "${C_Dim}${_spin_chars:_sw%10:1} Starting ${_so_model_name} (${_sw}s)${C_Reset}  "
             # Poll health for early exit once server has had time to launch
@@ -150,6 +150,12 @@ function so() {
                 local _hb
                 _hb=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
                 [[ "$_hb" == *'"ok"'* ]] && break
+            fi
+            # serve exited and no llama-server process exists — real failure
+            if ! kill -0 "$_serve_pid" 2>/dev/null \
+                && ! pgrep -x llama-server >/dev/null 2>&1
+            then
+                break
             fi
             sleep 1
             ((_sw++))

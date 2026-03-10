@@ -968,9 +968,14 @@ function model() {
                 else
                     __tac_info "Active" "[Running but unknown model]" "$C_Warning"
                 fi
-                local health
+                local health health_label health_color
                 health=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-                __tac_info "Health" "${health:-OK}" "$C_Success"
+                if [[ "$health" == *'"ok"'* ]]; then
+                    health_label="OK"; health_color="$C_Success"
+                else
+                    health_label="${health:-UNKNOWN}"; health_color="$C_Warning"
+                fi
+                __tac_info "Health" "$health_label" "$health_color"
                 local tps
                 tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
                 [[ -n "$tps" ]] && __tac_info "Last TPS" "$tps" "$C_Dim"

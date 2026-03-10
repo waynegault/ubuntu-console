@@ -137,12 +137,7 @@ _TAC_LOADER_VERSION="3.0"
 
 _tac_module_dir="$HOME/ubuntu-console/scripts"
 
-for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh
-do
-    [[ -f "$_tac_f" ]] && source "$_tac_f"
-done
-
-# Auto-compute composite version: loader_version.sum(module_versions)
+# Auto-compute composite version before sourcing, so 13-init can display it.
 _tac_mod_sum=0
 for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh
 do
@@ -150,6 +145,11 @@ do
     [[ "$_tac_mv" =~ ^[0-9]+$ ]] && (( _tac_mod_sum += _tac_mv ))
 done
 export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
+
+for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh
+do
+    [[ -f "$_tac_f" ]] && source "$_tac_f"
+done
 
 unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv
 

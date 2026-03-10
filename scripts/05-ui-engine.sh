@@ -340,7 +340,7 @@ function __show_header() {
 
     local left_text=" Bash v${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"
     local center_text="- Wayne's Ubuntu Terminal -"
-    local right_text="v${TACTICAL_PROFILE_VERSION}"
+    local right_text="v${TACTICAL_PROFILE_VERSION} "
 
     local center_start=$(( (inner_width - ${#center_text}) / 2 ))
     local gap1=$(( center_start - ${#left_text} ))
