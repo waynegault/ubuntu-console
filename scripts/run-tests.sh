@@ -55,13 +55,18 @@ section_header() {
     local label="$1" passed="$2" total="$3"
     local colour="$C_BoldGreen"
     local symbol="✓"
-    if (( passed < total ))
+    if [[ "$passed" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]] && (( passed < total ))
     then
         colour="$C_BoldRed"
         symbol="✗"
     fi
     border_mid
-    row "${C_Bold}${C_Cyan}  ${label}${C_Reset}${C_Dim}  ── ${passed}/${total} ${symbol}${C_Reset}"
+    if [[ "$passed" =~ ^[0-9]+$ ]]
+    then
+        row "${C_Bold}${C_Cyan}  ${label}${C_Reset}${C_Dim}  ── ${passed}/${total} ${symbol}${C_Reset}"
+    else
+        row "${C_Bold}${C_Cyan}  ${label}${C_Reset}"
+    fi
     border_mid
 }
 
@@ -95,7 +100,35 @@ SECTION_ORDER=(
 )
 
 # ── Run BATS and capture TAP output ──────────────────────────────────────────
-tap_output=$(bats --tap "$BATS_FILE" "$@" 2>&1) || true
+# Everything goes inside one box.  The live stream prints each result as it
+# arrives, then the grouped section summaries follow, then a conclusion.
+
+border_top
+row "${C_Bold}  TACTICAL CONSOLE — Unit Test Report${C_Reset}"
+row "${C_Dim}  $(date '+%Y-%m-%d %H:%M:%S')   bats $(bats --version 2>/dev/null || echo '?')${C_Reset}"
+
+# ── Part 1: Test Live Stream ─────────────────────────────────────────────────
+section_header "Test Live Stream" "..." "..."
+
+tap_output=""
+_live_num=0
+_live_pass=0
+_live_fail=0
+while IFS= read -r line
+do
+    if [[ "$line" =~ ^ok\ [0-9]+\ (.+)$ ]]
+    then
+        (( _live_num++ ))
+        (( _live_pass++ ))
+        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Green}✓${C_Reset}"
+    elif [[ "$line" =~ ^not\ ok\ [0-9]+\ (.+)$ ]]
+    then
+        (( _live_num++ ))
+        (( _live_fail++ ))
+        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Red}✗${C_Reset}"
+    fi
+    tap_output+="$line"$'\n'
+done < <(bats --tap "$BATS_FILE" "$@" 2>&1) || true
 
 # ── Parse TAP lines into parallel arrays ─────────────────────────────────────
 declare -a T_STATUS=()   # "ok" or "not ok"
@@ -168,10 +201,10 @@ done
 
 grand_pass=0
 grand_fail=0
+_sum_num=0
 
-border_top
-row "${C_Bold}  TACTICAL CONSOLE — Unit Test Report${C_Reset}"
-row "${C_Dim}  $(date '+%Y-%m-%d %H:%M:%S')   bats $(bats --version 2>/dev/null || echo '?')${C_Reset}"
+# ── Part 2: Section Summaries ────────────────────────────────────────────────
+section_header "Section Summaries" "..." "..."
 
 # Pass 2 — render each section
 for p in "${SEC_SEEN_ORDER[@]}"
@@ -199,10 +232,12 @@ do
         if [[ "${T_STATUS[$i]}" == "ok" ]]
         then
             (( grand_pass++ ))
-            row "  ${C_Green}✓${C_Reset} ${T_NAME[$i]#*: }"
+            (( _sum_num++ ))
+            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Green}✓${C_Reset}"
         else
             (( grand_fail++ ))
-            row "  ${C_Red}✗${C_Reset} ${T_NAME[$i]#*: }"
+            (( _sum_num++ ))
+            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Red}✗${C_Reset}"
             # Print diagnostic lines indented
             if [[ -n "${T_DIAG[$i]:-}" ]]
             then
@@ -229,6 +264,22 @@ else
     _summary+="${C_Green}${grand_pass} passed${C_Reset}"
     _summary+="  ${C_Dim}|${C_Reset}  ${grand_total} total"
     row "  $_summary"
+    row_empty
+    for (( i = 0; i < total; i++ ))
+    do
+        if [[ "${T_STATUS[$i]}" != "ok" ]]
+        then
+            row "  ${C_Red}✗${C_Reset} ${T_NAME[$i]}"
+            if [[ -n "${T_DIAG[$i]:-}" ]]
+            then
+                while IFS= read -r dline
+                do
+                    [[ -z "$dline" ]] && continue
+                    row "    ${C_Dim}${dline}${C_Reset}"
+                done <<< "${T_DIAG[$i]}"
+            fi
+        fi
+    done
 fi
 
 border_bot

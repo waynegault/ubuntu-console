@@ -1,10 +1,9 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2034,SC2059,SC2120,SC2154
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
-# AI INSTRUCTION: On ANY change to this file:
-#   1. Increment _TAC_LLM_MANAGER_VERSION below (patch for fixes, minor for features).
-#   2. Increment TACTICAL_PROFILE_VERSION in tactical-console.bashrc (always).
-_TAC_LLM_MANAGER_VERSION="3.0.0"
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
+# Module Version: 1
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================

@@ -1,10 +1,9 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2034,SC2059,SC2154
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
-# AI INSTRUCTION: On ANY change to this file:
-#   1. Increment _TAC_DASHBOARD_HELP_VERSION below (patch for fixes, minor for features).
-#   2. Increment TACTICAL_PROFILE_VERSION in tactical-console.bashrc (always).
-_TAC_DASHBOARD_HELP_VERSION="3.0.0"
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
+# Module Version: 1
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -350,7 +349,7 @@ function tactical_help() {
 
     __hSection "OPENCLAW — AGENTS & SESSIONS"
     __hRow "os / oa" "List all active sessions / Show registered agents"
-    __hRow "oc start" "Dispatch an agent turn (-m '<message>' required)"
+    __hRow "oc start" "Dispatch an agent turn (--message '<msg>' required)"
     __hRow "oc stop" "Delete an agent by ID (--agent <id> required)"
     __hRow "oc agent-turn" "Alias for oc start (send an agent turn)"
     __hRow "oc mem-index" "Rebuild the OpenClaw vector memory search index"
@@ -364,7 +363,7 @@ function tactical_help() {
     __hRow "oc ms" "Probe all configured model provider endpoints"
     __hRow "oc doc-fix" "Run openclaw doctor --fix with config backup"
     __hRow "oc logs" "Open the /tmp/openclaw runtime log in VS Code"
-    __hRow "le / lo / lc" "Gateway: 40-line stderr / 120-line full / Clear all"
+    __hRow "le / lo / lc" "Gateway: 40-line tail / 120-line full / Clear all"
     __hRow "oc log-dir" "Change directory to the OpenClaw logs folder"
     __hRow "oc sec" "Run a deep OpenClaw security audit with findings"
     __hRow "oc docs" "Full-text search across OpenClaw documentation"
@@ -398,6 +397,7 @@ function tactical_help() {
     __hRow "llmconf" "Open the models.conf registry file in VS Code"
     __hRow "model scan" "Scan model dir, read GGUF metadata, auto-calculate params"
     __hRow "model list" "Show numbered model registry (▶ = active)"
+    __hRow "model default [N]" "Show current default LLM or set it to model #N"
     __hRow "model use N" "Start model #N with optimal GPU/ctx/thread settings"
     __hRow "model stop" "Stop the local llama-server"
     __hRow "model status" "Show what's currently running"

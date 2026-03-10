@@ -33,54 +33,59 @@ setup_file() {
 
     # Pre-set to skip dashboard auto-launch and clear_tactical
     export __TAC_INITIALIZED=1
+
+    # Build patched profile files ONCE.  The actual source happens per-test
+    # in setup() because aliases don't survive BATS's per-test subshell fork.
+    _build_test_profile
 }
 
 teardown_file() {
     rm -rf "${TAC_TEST_TMPDIR:-/tmp/bats-noop}"
 }
 
-# Source the profile into each test's shell.  The interactive guard checks
-# $- for 'i'; bats runs with -i when we pass it through the shebang or
-# we can skip the guard by temporarily redefining it.  The simplest approach
-# is to extract and source with the guard stripped.
-_source_profile() {
-    # Already sourced in this shell?
-    [[ -n "${__TAC_PROFILE_SOURCED:-}" ]] && return 0
-
-    # Create patched copies that skip the interactive guard, preexec
-    # DEBUG trap, and ERR trap / set -E — all of which conflict with BATS's
-    # own trap machinery.  Patches apply to both the loader and modules.
+# Build patched copies of the profile.  Strips the interactive guard,
+# preexec DEBUG trap, ERR trap / set -E (all conflict with BATS traps),
+# and the expensive 13-init side-effects (pwsh, loopback, sha256sum).
+_build_test_profile() {
     local patched="$TAC_TEST_TMPDIR/profile_patched.bash"
     local patched_scripts="$TAC_TEST_TMPDIR/scripts"
-    if [[ ! -f "$patched" ]]; then
-        local _sed_args=(
-            -e '/^case \$- in$/,/^esac$/d'
-            -e '/^set -E$/d'
-            -e "/^trap '__tac_err_handler' ERR$/d"
-            -e '/^__tac_preexec_fired=/d'
-            -e '/^trap .*custom_prompt_command/,/DEBUG$/d'
-            -e 's/^declare -ri //'
-        )
-        # Patch the loader — rewrite module dir to the patched copy
-        sed "${_sed_args[@]}" \
-            -e "s|_tac_module_dir=.*|_tac_module_dir=\"$patched_scripts\"|" \
-            "$PROFILE_PATH" > "$patched"
-        # Patch module files with the same transforms
-        mkdir -p "$patched_scripts"
-        for _f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
-            [[ -f "$_f" ]] || continue
-            sed "${_sed_args[@]}" "$_f" > "$patched_scripts/$(basename "$_f")"
-        done
-    fi
-
-    # Suppress any output from sourcing (dashboard, clear, etc.)
-    # shellcheck disable=SC1090
-    source "$patched" &>/dev/null || true
-    __TAC_PROFILE_SOURCED=1
+    local _sed_args=(
+        -e '/^case \$- in$/,/^esac$/d'
+        -e '/^set -E$/d'
+        -e "/^trap '__tac_err_handler' ERR$/d"
+        -e '/^__tac_preexec_fired=/d'
+        -e '/^trap .*custom_prompt_command/,/DEBUG$/d'
+        -e 's/^declare -ri //'
+    )
+    # Patch the loader — rewrite module dir to the patched copy
+    sed "${_sed_args[@]}" \
+        -e "s|_tac_module_dir=.*|_tac_module_dir=\"$patched_scripts\"|" \
+        "$PROFILE_PATH" > "$patched"
+    # Patch module files with the same transforms
+    mkdir -p "$patched_scripts"
+    for _f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+        [[ -f "$_f" ]] || continue
+        sed "${_sed_args[@]}" "$_f" > "$patched_scripts/$(basename "$_f")"
+    done
+    # Replace 13-init with a minimal stub — skip expensive runtime
+    # side-effects (pwsh.exe bridge, loopback, sha256, completions)
+    # that are irrelevant to unit tests.
+    cat > "$patched_scripts/13-init.sh" << 'STUB'
+# Minimal test stub — keeps Module Version for version-computation tests.
+# Module Version: 1
+mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" "$LLAMA_DRIVE_ROOT/.llm" 2>/dev/null || true
+__TAC_BG_PIDS=()
+function __tac_exit_cleanup() {
+    local pid; for pid in "${__TAC_BG_PIDS[@]}"; do kill "$pid" 2>/dev/null; done
+}
+STUB
 }
 
+# Source the pre-built patched profile per-test.  The sed work is already
+# done (by _build_test_profile in setup_file), so this is just a fast source.
 setup() {
-    _source_profile
+    # shellcheck disable=SC1090
+    source "$TAC_TEST_TMPDIR/profile_patched.bash" &>/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -872,10 +877,10 @@ setup() {
     [[ "$wd_bin" == "$LLAMA_SERVER_BIN" ]]
 }
 
-@test "cross-script: all scripts have VERSION variable" {
+@test "cross-script: all scripts have VERSION variable or Module Version comment" {
     for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
         [[ -f "$f" ]] || continue
-        grep -q 'VERSION=' "$f"
+        grep -qE 'VERSION=|^# Module Version:' "$f"
     done
 }
 
@@ -986,18 +991,18 @@ setup() {
     done
 }
 
-@test "hygiene: module version names are unique" {
+@test "hygiene: all 13 modules have a Module Version comment" {
     local count
-    count=$(grep -h '_TAC_[A-Z_]*_VERSION=' \
+    count=$(grep -l '^# Module Version:' \
         "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
-        | sort -u | wc -l)
+        | wc -l)
     [[ "$count" -eq 13 ]]
 }
 
-@test "hygiene: module versions follow _TAC_<NAME>_VERSION pattern" {
+@test "hygiene: module versions follow '# Module Version: N' pattern" {
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
-        grep -qP '_TAC_[A-Z_]+_VERSION=' "$f"
+        grep -qP '^# Module Version: \d+' "$f"
     done
 }
 

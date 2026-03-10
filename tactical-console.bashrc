@@ -62,10 +62,11 @@ esac
 # @exports: TACTICAL_PROFILE_VERSION
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# When ANY module in scripts/ is modified, ALWAYS increment this version too.
-# Module versions (_TAC_*_VERSION) track individual file changes;
-# TACTICAL_PROFILE_VERSION tracks the overall profile release.
-export TACTICAL_PROFILE_VERSION="3.1"
+# When the LOADER itself changes, bump _TAC_LOADER_VERSION below.
+# When a MODULE in scripts/ changes, bump its '# Module Version: N' comment.
+# TACTICAL_PROFILE_VERSION is auto-computed after sourcing all modules:
+#   TACTICAL_PROFILE_VERSION = _TAC_LOADER_VERSION . sum(all module versions)
+_TAC_LOADER_VERSION="3.0"
 
 # AI INSTRUCTION: Follow these terminal formatting rules strictly:
 # 1. A blank line must exist between the bottom of any UI border and the command prompt.
@@ -141,7 +142,16 @@ do
     [[ -f "$_tac_f" ]] && source "$_tac_f"
 done
 
-unset _tac_f _tac_module_dir
+# Auto-compute composite version: loader_version.sum(module_versions)
+_tac_mod_sum=0
+for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh
+do
+    _tac_mv=$(grep -m1 '^# Module Version:' "$_tac_f" 2>/dev/null | awk '{print $NF}')
+    [[ "$_tac_mv" =~ ^[0-9]+$ ]] && (( _tac_mod_sum += _tac_mv ))
+done
+export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
+
+unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv
 
 # ==============================================================================
 # end of file
