@@ -3,7 +3,7 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
@@ -251,32 +251,40 @@ function __get_oc_version() {
 
 # ---------------------------------------------------------------------------
 # __get_oc_metrics — Fetch OpenClaw session count (60s TTL) + version (24h TTL).
-# Combines the session count and cached version into "count|version".
+# Returns "count|age|version".
+#   count — from `openclaw sessions` (cached in /dev/shm, 60s TTL)
+#   age   — seconds since the cached value was last refreshed ("0" = fresh)
 # ---------------------------------------------------------------------------
 function __get_oc_metrics() {
     local ver
     ver=$(__get_oc_version)
+
     local cache="$TAC_CACHE_DIR/tac_ocmetrics"
-    if __cache_fresh "$cache" 60
+    if ! __cache_fresh "$cache" 60
     then
-        cat "$cache"; return
+        (
+            local sessionCount=0
+            if command -v openclaw >/dev/null
+            then
+                sessionCount=$(openclaw sessions --all-agents --json 2>/dev/null | jq -r '.count // 0' 2>/dev/null)
+                sessionCount=${sessionCount:-0}
+            fi
+            echo "$sessionCount" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+        ) &>/dev/null &
+        __TAC_BG_PIDS+=("$!")
     fi
-    (
-        local sessionCount=0
-        if command -v openclaw >/dev/null
-        then
-            sessionCount=$(openclaw sessions --all-agents --json 2>/dev/null | jq -r '.count // 0' 2>/dev/null)
-            sessionCount=${sessionCount:-0}
-        fi
-        echo "$sessionCount|$ver" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
-    ) &>/dev/null &
-    __TAC_BG_PIDS+=("$!")
+
+    local api_count age
     if [[ -f "$cache" ]]
     then
-        cat "$cache"
+        api_count=$(< "$cache")
+        age=$(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
     else
-        echo "Querying...|$ver"
+        api_count="Querying..."
+        age=0
     fi
+
+    echo "${api_count}|${age}|${ver}"
 }
 
 # ---------------------------------------------------------------------------

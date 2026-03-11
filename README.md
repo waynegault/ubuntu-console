@@ -90,7 +90,7 @@ Type `m` at any prompt to render the full-screen Tactical Dashboard:
 ║  WSL          :: ACTIVE  Ubuntu-24.04  (6.6.87.2-microsoft-standard-WSL2)    ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║  OPENCLAW     :: [ONLINE]  v2026.3.2                                         ║
-║  SESSIONS     :: 8 Active                                                    ║
+║  SESSIONS     :: 8 Active (cached 34s ago)                                   ║
 ║  CONTEXT USED :: 14% (18k of 128k)                                           ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║  TARGET REPO  :: main                                                        ║
@@ -611,7 +611,7 @@ Cache TTLs per metric:
 | GPU (NVIDIA detail) | 10s | nvidia-smi is slow (~1.2s) |
 | Battery | 120s | Changes slowly |
 | Context Used | 30s | Scans `agents/*/sessions/sessions.json` for token usage via `jq` |
-| OC Sessions | 60s | Uses `openclaw sessions --all-agents --json` |
+| OC Sessions | 60s | Uses `openclaw sessions --all-agents --json`; displays cache age |
 | OC Version | 86400s (24h) | CLI version barely changes |
 | LLM Slots | 5s | Async query to llama.cpp `/slots` endpoint |
 

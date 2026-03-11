@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -60,9 +60,17 @@ function so() {
         sleep 1
         if __test_port "$OC_PORT"
         then
-            __tac_info "Gateway" "[PORT $OC_PORT BLOCKED]" "$C_Error"
-            __so_check_win_port "$OC_PORT"
-            return 1
+            # Try auto-killing a Windows holder; if it's still blocked, bail
+            if __so_check_win_port "$OC_PORT"
+            then
+                return 1
+            fi
+            # Re-check after auto-kill — if WSL side still holds it, give up
+            if __test_port "$OC_PORT"
+            then
+                __tac_info "Gateway" "[PORT $OC_PORT BLOCKED]" "$C_Error"
+                return 1
+            fi
         fi
     fi
 
@@ -301,14 +309,39 @@ function __so_check_win_port() {
 
     [[ -z "$_win_holder" ]] && return 1
 
+    local _pid_only
+    _pid_only="${_win_holder##*PID }"
+    _pid_only="${_pid_only%%)*}"
+
+    __tac_info "Gateway" "[PORT ${_port} BLOCKED — Windows: ${_win_holder}]" "$C_Warning"
+
+    # Auto-kill the Windows process via taskkill.exe
+    if command -v taskkill.exe &>/dev/null
+    then
+        __tac_info "Gateway" "[KILLING Windows PID ${_pid_only}]" "$C_Warning"
+        taskkill.exe /PID "$_pid_only" /F &>/dev/null
+        sleep 1
+        # Verify the port is now free
+        local _still_held
+        _still_held=$(timeout 3 powershell.exe -NoProfile -NonInteractive -Command "
+            \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue
+            if (\$c) { 'yes' }
+        " 2>/dev/null | tr -d '\r')
+        if [[ "$_still_held" == "yes" ]]
+        then
+            __tac_info "Gateway" "[PORT ${_port} STILL BLOCKED]" "$C_Error"
+            printf '%s\n' "  ${C_Dim}Manual fix: taskkill /PID ${_pid_only} /F (from Windows)${C_Reset}"
+            return 0
+        fi
+        __tac_info "Gateway" "[PORT ${_port} FREED]" "$C_Success"
+        return 1  # port cleared — caller should NOT abort
+    fi
+
+    # No taskkill.exe — fall back to manual instructions
     if [[ "$_block" == "--block" ]]
     then
         __tac_info "Gateway" "[PORT $OC_PORT BLOCKED — Windows]" "$C_Error"
     fi
-    printf '%s\n' "  ${C_Warning}Windows process holding port ${_port}: ${_win_holder}${C_Reset}"
-    local _pid_only
-    _pid_only="${_win_holder##*PID }"
-    _pid_only="${_pid_only%%)*}"
     printf '%s\n' "  ${C_Dim}Kill it from Windows: taskkill /PID ${_pid_only} /F${C_Reset}"
     return 0
 }

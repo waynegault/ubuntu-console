@@ -3,7 +3,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -148,9 +148,9 @@ function tactical_dashboard() {
 
     local metrics
     metrics=$(__get_oc_metrics)
-    local m_sess m_ver
-    IFS='|' read -r m_sess m_ver <<< "$metrics"
-    m_sess=${m_sess%$'\r'}; m_ver=${m_ver%$'\r'}
+    local m_sess m_age m_ver
+    IFS='|' read -r m_sess m_age m_ver <<< "$metrics"
+    m_sess=${m_sess%$'\r'}; m_age=${m_age%$'\r'}; m_ver=${m_ver%$'\r'}
 
     local oc_color=$C_Error
     if [[ $oc_active == 1 ]]
@@ -160,11 +160,18 @@ function tactical_dashboard() {
     __fRow "OPENCLAW" "[$oc_stat]  ${m_ver}" "$oc_color"
 
     local sess_color=$C_Dim
+    local age_label=""
     if [[ "$m_sess" != "Querying..." && "$m_sess" =~ ^[0-9]+$ ]]
     then
         (( m_sess > 0 )) && sess_color=$C_Warning
+        if [[ "$m_age" =~ ^[0-9]+$ ]] && (( m_age > 0 ))
+        then
+            age_label=" (cached ${m_age}s ago)"
+        else
+            age_label=" (live)"
+        fi
     fi
-    __fRow "SESSIONS" "$m_sess Active" "$sess_color"
+    __fRow "SESSIONS" "${m_sess} Active${age_label}" "$sess_color"
 
     local tokens
     tokens=$(__get_tokens)
