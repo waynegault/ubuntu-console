@@ -170,6 +170,12 @@ then
     export PATH="$HOME/.npm-global/bin:$PATH"
 fi
 
+# Homebrew (Linuxbrew) — Go binaries, wacli, etc.
+if [[ -d "/home/linuxbrew/.linuxbrew/bin" && ":$PATH:" != *":/home/linuxbrew/.linuxbrew/bin:"* ]]
+then
+    export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+fi
+
 # GitHub Copilot CLI (only if directory exists)
 if [[ -d "$COPILOT_CLI_DIR" && ":$PATH:" != *":$COPILOT_CLI_DIR:"* ]]
 then

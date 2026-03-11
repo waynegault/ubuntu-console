@@ -15,7 +15,7 @@
 #   oc-plugins, oc-tail, oc-channels, oc-sec, oc-tui, oc-config,
 #   oc-docs, oc-usage, oc-memory-search, oc-local-llm, oc-sync-models,
 #   oc-browser, oc-nodes, oc-sandbox, oc-env, oc-cache-clear, oc-trust-sync,
-#   oc-diag, oc-failover
+#   oc-diag, oc-failover, wacli
 
 # ---------------------------------------------------------------------------
 # so — Start the OpenClaw gateway (systemd-managed service).
@@ -1337,5 +1337,25 @@ function oc-failover() {
     esac
 }
 
+# ---------------------------------------------------------------------------
+# wacli — Wrapper that defaults --store to the OpenClaw store location.
+#   Passes all arguments through; only appends --store if not already given.
+# ---------------------------------------------------------------------------
+function wacli() {
+    local has_store=false
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "--store" ]]; then
+            has_store=true
+            break
+        fi
+    done
+    if $has_store; then
+        command wacli "$@"
+    else
+        command wacli "$@" --store "$HOME/.openclaw/store/wacli"
+    fi
+}
+export -f wacli
 
 # end of file
