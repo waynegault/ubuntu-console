@@ -172,7 +172,7 @@ function __get_git() {
 
 # ---------------------------------------------------------------------------
 # __get_tokens — Read token usage from the most-recent OpenClaw session (30s TTL).
-# Scans agents/*/sessions/sessions.json for the newest session with totalTokens.
+# Scans agents/*/sessions/sessions.json for the newest session with inputTokens.
 # Returns "used|limit" or "N/A|0".
 # ---------------------------------------------------------------------------
 # Performance note (I2): Uses `jq -s` (slurp) to process all session files
@@ -199,10 +199,10 @@ function __get_tokens() {
             result=$(jq -s -r '
                 [ .[]
                   | to_entries[].value
-                  | select(.totalTokens != null and .totalTokens > 0
+                  | select(.inputTokens != null and .inputTokens > 0
                           and .contextTokens != null and .contextTokens > 0) ]
                 | sort_by(.updatedAt) | last
-                | "\(.totalTokens)|\(.contextTokens)"
+                | "\(.inputTokens)|\(.contextTokens)"
             ' "${files[@]}" 2>/dev/null)
         fi
 
