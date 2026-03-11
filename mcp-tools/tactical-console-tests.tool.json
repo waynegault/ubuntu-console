@@ -1,7 +1,0 @@
-{
-  "name": "tactical-console-tests",
-  "description": "Runs tactical-console bats tests.",
-  "input": [],
-  "output": { "type": "text", "description": "Test output." },
-  "handler": "tactical-console-tests.sh"
-}

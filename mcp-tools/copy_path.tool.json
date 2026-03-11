@@ -1,7 +1,0 @@
-{
-  "name": "copy_path",
-  "description": "Copies the current working directory path.",
-  "input": [],
-  "output": { "type": "text", "description": "Path copied message." },
-  "handler": "copy_path.sh"
-}

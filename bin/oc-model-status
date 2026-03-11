@@ -1,0 +1,4 @@
+#!/bin/bash
+# Thin wrapper — delegates to 'openclaw model status --live' via tac-exec
+exec ~/ubuntu-console/bin/tac-exec ocms "$@"
+# end of file

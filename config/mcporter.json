@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "/home/wayne/ubuntu-console/mcp-tools/clear_tactical.tool.json": {
-      "command": "/home/wayne/ubuntu-console/mcp-tools/cls.tool.json"
-    }
-  },
-  "imports": []
-}

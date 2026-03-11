@@ -1,0 +1,27 @@
+#!/bin/bash
+# ==============================================================================
+# tac-exec — Run any command with the full Tactical Console function library.
+# ==============================================================================
+# Purpose:  Wrapper for AI exec environments and MCP tools that need access
+#           to bash functions defined in the Tactical Console profile.
+#
+# Usage:    tac-exec <command> [args...]
+#           tac-exec oc health
+#           tac-exec model list
+#           tac-exec so
+#
+# How:      Sources env.sh (which loads modules 01-12), then executes the
+#           given command with all arguments.
+# ==============================================================================
+
+source "$HOME/ubuntu-console/env.sh"
+
+if [[ $# -eq 0 ]]; then
+    echo "Usage: tac-exec <command> [args...]"
+    echo "Runs <command> with full Tactical Console functions available."
+    exit 1
+fi
+
+"$@"
+
+# end of file

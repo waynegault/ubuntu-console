@@ -1,0 +1,4 @@
+#!/bin/bash
+# Thin wrapper — delegates to the real 'gpu-status' function via tac-exec
+exec ~/ubuntu-console/bin/tac-exec gpu-status "$@"
+# end of file

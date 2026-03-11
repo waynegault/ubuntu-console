@@ -1,7 +1,0 @@
-{
-  "name": "commit",
-  "description": "Deploys with an LLM-generated commit message.",
-  "input": [],
-  "output": { "type": "text", "description": "Commit result." },
-  "handler": "commit.sh"
-}

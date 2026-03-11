@@ -1,7 +1,0 @@
-{
-  "name": "clear_tactical",
-  "description": "Clears the tactical-console screen.",
-  "input": [],
-  "output": { "type": "text", "description": "Screen cleared message." },
-  "handler": "clear_tactical.sh"
-}

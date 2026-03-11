@@ -1,9 +1,0 @@
-{
-  "name": "code",
-  "description": "Opens files or folders in VS Code.",
-  "input": [
-    { "name": "args", "type": "string", "description": "Arguments for VS Code (optional)." }
-  ],
-  "output": { "type": "text", "description": "VS Code opened message." },
-  "handler": "code.sh"
-}

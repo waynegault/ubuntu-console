@@ -1,7 +1,0 @@
-{
-  "name": "os",
-  "description": "Lists OpenClaw sessions.",
-  "input": [],
-  "output": { "type": "text", "description": "Session list." },
-  "handler": "os.sh"
-}

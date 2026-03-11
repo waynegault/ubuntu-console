@@ -1,7 +1,0 @@
-{
-  "name": "tactical_dashboard",
-  "description": "Displays the tactical dashboard.",
-  "input": [],
-  "output": { "type": "text", "description": "Dashboard output." },
-  "handler": "tactical_dashboard.sh"
-}

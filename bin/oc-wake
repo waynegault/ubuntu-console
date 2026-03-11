@@ -1,0 +1,4 @@
+#!/bin/bash
+# Thin wrapper — delegates to the real 'wake' function via tac-exec
+exec ~/ubuntu-console/bin/tac-exec wake "$@"
+# end of file

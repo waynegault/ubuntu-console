@@ -1,7 +1,0 @@
-{
-  "name": "tactical_help",
-  "description": "Displays tactical-console help information.",
-  "input": [],
-  "output": { "type": "text", "description": "Help output." },
-  "handler": "tactical_help.sh"
-}

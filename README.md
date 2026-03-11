@@ -556,6 +556,42 @@ Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
 
 **Never** use PascalCase or camelCase for function names.
 
+### Non-Interactive Access (`env.sh` + `tac-exec`)
+
+The interactive guard in `tactical-console.bashrc` (`case $-`) prevents
+non-interactive shells (exec environments, cron, AI agents) from loading the
+profile. This is intentional — `sftp` and `rsync` must not trigger UI
+side-effects. But AI agents and automation scripts need access to the ~100+
+functions defined in the profile.
+
+**`env.sh`** is a library loader that sources modules 01–12 directly,
+bypassing the interactive guard and skipping `13-init.sh` (which runs
+screen clear, completions, WSL loopback fixes, and EXIT traps). It is
+idempotent (guarded by `__TAC_ENV_LOADED`) and sets `TAC_LIBRARY_MODE=1`
+so functions can detect non-interactive sourcing if needed.
+
+**`bin/tac-exec`** sources `env.sh` then runs `"$@"`. It is symlinked to
+`~/.local/bin/tac-exec` for PATH access.
+
+```bash
+# AI agent or cron job runs:
+tac-exec oc health
+tac-exec model list
+tac-exec so
+tac-exec serve 4
+
+# Or source directly:
+source ~/ubuntu-console/env.sh && oc backup
+```
+
+Thin wrappers in `~/.local/bin/` (`so`, `xo`, `serve`, `oc-backup`, etc.)
+delegate to `tac-exec` rather than re-implementing function logic. This
+ensures all callers use the canonical function definitions with full error
+handling, pre-flight checks, and UI formatting.
+
+**Rule:** Never extract bash functions as standalone scripts. Always
+delegate through `tac-exec`.
+
 ### Cross-Cutting State
 
 These variables are written in one section and read by another. They are the
@@ -964,12 +1000,6 @@ turn sources the 13 numbered modules from `scripts/`.
 ├── bin/
 │   ├── llama-watchdog.sh              # Watchdog: auto-restart with -ngl 999, --prio 2
 │   └── tac_hostmetrics.sh             # Host CPU + iGPU (typeperf) + CUDA (nvidia-smi)
-├── config/
-│   └── mcporter.json                  # MCP tool exporter configuration
-├── mcp-tools/                         # 46 MCP tool wrappers (paired .sh + .tool.json)
-│   ├── tactical_dashboard.sh          #   Example: runs the tactical dashboard
-│   ├── tactical_dashboard.tool.json   #   Example: MCP tool definition
-│   └── ...                            #   (commit, grep, status, llm tools, etc.)
 ├── scripts/                           # 13 numbered profile modules (sourced in order)
 │   ├── 01-constants.sh                #   All paths, ports, env vars
 │   ├── 02-error-handling.sh           #   ERR trap
@@ -999,6 +1029,7 @@ turn sources the 13 numbered modules from `scripts/`.
 |---|---|
 | `~/.bashrc` | thin loader (not in repo — sources `tactical-console.bashrc`) |
 | `/mnt/m/.llm/models.conf` | `llm/models.conf` (not currently in repo) |
+| `~/.local/bin/tac-exec` | `bin/tac-exec` |
 | `~/.local/bin/llama-watchdog.sh` | `bin/llama-watchdog.sh` |
 | `~/.local/bin/tac_hostmetrics.sh` | `bin/tac_hostmetrics.sh` |
 | `~/.config/systemd/user/llama-watchdog.service` | `systemd/llama-watchdog.service` |

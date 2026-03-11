@@ -13,9 +13,10 @@ The following file classes are in-scope for every audit pass:
 - `tactical-console.bashrc` — thin loader
 - `scripts/[0-9][0-9]-*.sh` — 13 numbered modules (01-constants through 13-init)
 - `bin/*.sh` — standalone helper scripts
+- `bin/tac-exec` — non-interactive function runner (symlinked to `~/.local/bin/`)
+- `env.sh` — library loader for non-interactive shells
 - `install.sh` — installer
 - `scripts/lint.sh`, `scripts/run-tests.sh` — CI helper scripts
-- `mcp-tools/*.sh` — MCP tool wrapper scripts (lightweight, 2–8 lines each)
 - `tests/*.bats` — BATS test files
 - `systemd/*` — systemd unit files
 
@@ -53,6 +54,8 @@ Testing & CI — Low
 llama.cpp Integration — Medium
 
 Cross-Script Consistency — Medium
+
+AI Agent Access — High
 
 Final Validation
 
@@ -500,7 +503,6 @@ Strict mode requirements vary by file type:
 - **`install.sh`**: SHOULD use `set -euo pipefail`.
 - **`bin/*.sh`** (sourced into environment via `install.sh` symlinks): MUST NOT use `set -e`.
 - **`scripts/lint.sh`, `scripts/run-tests.sh`**: Document intentional omission with a comment if `set -e` is absent (e.g., bare `(( ))` operators return exit 1 on zero).
-- **`mcp-tools/*.sh`**: Lightweight wrappers; strict mode not required.
 
 3.4
 
@@ -1908,9 +1910,10 @@ Inspect install.sh
 
 install.sh creates/updates symlinks for all scripts in bin/ and systemd/; no manual steps required
 
-13.5 MCP Tool Wrappers
+13.5 Non-Interactive Access (env.sh + tac-exec)
 
-Lightweight shell scripts in `mcp-tools/*.sh` (typically 2–8 lines) are in-scope for baseline hygiene.
+`env.sh` and `bin/tac-exec` provide non-interactive access to all profile
+functions for AI agents, cron, and exec environments.
 
 #
 
@@ -1922,43 +1925,43 @@ Expected
 
 13.5.1
 
-🔍 bash -n passes
+🔍 env.sh sources modules 01-12 only
 
-for f in mcp-tools/*.sh; do bash -n "$f"; done
+`grep -c 'continue' ~/ubuntu-console/env.sh`
 
-All mcp-tools scripts parse without syntax errors
+Returns 1. The `13-init.sh` skip is implemented via a `case/continue` pattern.
 
 13.5.2
 
-🔍 ShellCheck passes
+🔍 env.sh has idempotency guard
 
-shellcheck -s bash mcp-tools/*.sh
+`grep '__TAC_ENV_LOADED' ~/ubuntu-console/env.sh`
 
-Zero findings (or all suppressed with rationale)
+Guard variable is checked at entry and set after first load.
 
 13.5.3
 
-🔍 end-of-file marker present
+🔍 tac-exec delegates via `"$@"`
 
-for f in mcp-tools/*.sh; do grep -v '^[[:space:]]*$' "$f" | tail -1 | grep -qi 'end of file' || echo "MISSING: $f"; done
+`grep '"\$@"' ~/ubuntu-console/bin/tac-exec`
 
-All files end with `# end of file` as last non-blank line
+Arguments are passed through unmodified.
 
 13.5.4
 
-🔍 No carriage returns
+🔍 tac-exec is executable
 
-grep -Plrn '\r' mcp-tools/*.sh
+`[[ -x ~/ubuntu-console/bin/tac-exec ]] && echo OK`
 
-Zero matches
+Prints `OK`.
 
 13.5.5
 
-🔍 Files end with newline
+🔍 end-of-file markers present
 
-for f in mcp-tools/*.sh; do [[ $(tail -c 1 "$f" | xxd | grep -c '0a') -eq 0 ]] && echo "MISSING: $f"; done
+`for f in env.sh bin/tac-exec; do grep -v '^[[:space:]]*$' "$f" | tail -1 | grep -qi 'end of file' || echo "MISSING: $f"; done`
 
-All files end with a trailing newline
+Both files end with `# end of file` as last non-blank line.
 
 13.4 Module Versioning
 
@@ -2010,7 +2013,160 @@ head -8 scripts/[0-9][0-9]-*.sh
 
 Each module starts with: `# shellcheck shell=bash`, shellcheck disable line, `# ─── Module: <name>` divider, AI instruction block (3 lines), version variable
 
-14. Final Validation
+15. AI Agent Access — High
+
+AI agents (OpenClaw, Copilot, etc.) run commands via exec in non-interactive
+shells. The interactive bashrc guard (`case $-`) blocks these shells from
+loading the profile, leaving ~100+ functions invisible. This section audits
+the `env.sh` library loader and `tac-exec` wrapper that bridge this gap.
+
+Background: The profile's interactive guard exists to protect sftp/rsync/scp
+from side-effects. But AI agents need the function library without the
+interactive side-effects (screen clear, prompt, completions, WSL loopback).
+The solution is a two-layer architecture:
+
+- `env.sh` — Sources modules 01-12 (skips 13-init). No interactive guard.
+  Idempotent (guarded by `__TAC_ENV_LOADED`). Sets `TAC_LIBRARY_MODE=1`.
+- `bin/tac-exec` — Sources `env.sh`, then runs `"$@"`. Symlinked to
+  `~/.local/bin/tac-exec` (on PATH via `~/.profile` and `01-constants.sh`).
+
+#
+
+Check
+
+Command / Action
+
+Expected
+
+15.1
+
+🔍 env.sh exists and is sourced correctly
+
+`bash -c 'source ~/ubuntu-console/env.sh && echo $__TAC_ENV_LOADED'`
+
+Prints `1`. No errors on stderr.
+
+15.2
+
+🔍 env.sh loads all function-defining modules
+
+`bash -c 'source ~/ubuntu-console/env.sh && type oc && type so && type model && type tactical_dashboard && type serve && type halt && type commit_auto && type __test_port' >/dev/null 2>&1 && echo OK`
+
+Prints `OK`. Every user-facing function from modules 01-12 is available.
+
+15.3
+
+🔍 env.sh skips 13-init.sh
+
+`bash -c 'source ~/ubuntu-console/env.sh && echo ${__TAC_INITIALIZED:-unset}'`
+
+Prints `unset`. The init module (clear screen, completions, loopback fix, EXIT trap) must not run in library mode.
+
+15.4
+
+🔍 env.sh is idempotent
+
+`bash -c 'source ~/ubuntu-console/env.sh; source ~/ubuntu-console/env.sh && echo OK'`
+
+Prints `OK`. No readonly variable collision errors. Second source is a no-op.
+
+15.5
+
+🔍 tac-exec is executable and on PATH
+
+`ls -la ~/ubuntu-console/bin/tac-exec ~/.local/bin/tac-exec`
+
+`bin/tac-exec` is `-rwxr-xr-x`. `~/.local/bin/tac-exec` is a symlink to it.
+
+15.6
+
+🔍 tac-exec runs functions in non-interactive shell
+
+`bash -c '~/ubuntu-console/bin/tac-exec oc 2>&1 | head -5'`
+
+Prints the `oc` help reference (subcommand list). Not `command not found`.
+
+15.7
+
+🔍 tac-exec propagates arguments correctly
+
+`bash -c '~/ubuntu-console/bin/tac-exec model list 2>&1 | head -3'`
+
+Prints the model registry table header. Multi-word arguments are preserved.
+
+15.8
+
+🔍 tac-exec with no arguments shows usage
+
+`bash -c '~/ubuntu-console/bin/tac-exec 2>&1'`
+
+Prints usage message. Exits non-zero.
+
+15.9
+
+🔍 ~/.local/bin wrappers delegate to tac-exec
+
+`for f in so xo serve oc-backup oc-model-list oc-model-stop; do grep -q tac-exec ~/.local/bin/$f && echo "$f: OK" || echo "$f: FAIL"; done`
+
+All wrappers print `OK`. None contain re-implemented logic — they must delegate via `exec ~/ubuntu-console/bin/tac-exec`.
+
+15.10
+
+🔍 No standalone function extractions in ~/.local/bin
+
+`for f in ~/.local/bin/{so,xo,serve,oc-backup,oc-model-*,oc-wake,oc-gpu-status,oc-quick-diag}; do lines=$(wc -l < "$f" 2>/dev/null); (( lines > 6 )) && echo "WARN: $f has $lines lines (should be ≤6)"; done`
+
+No warnings. All wrapper scripts must be ≤ 6 lines (shebang, comment, exec line, end-of-file comment). Anything larger suggests an extracted copy that should be replaced with a tac-exec delegation.
+
+15.11
+
+🔍 OpenClaw TOOLS.md documents tac-exec
+
+`grep -c 'tac-exec' ~/.openclaw/workspace/TOOLS.md`
+
+Returns ≥ 5. TOOLS.md must contain: usage examples, the "do not extract" instruction, and the full-path fallback.
+
+15.12
+
+🔍 env.sh does not leak interactive side-effects
+
+`bash -c 'source ~/ubuntu-console/env.sh; [[ -z "$PROMPT_COMMAND" ]] && echo OK || echo "LEAK: PROMPT_COMMAND is set"'`
+
+Prints `OK`. PROMPT_COMMAND, PS1 customisations, and DEBUG traps from hooks (§6) should not fire in library mode. If they do, the hooks module needs a `TAC_LIBRARY_MODE` guard.
+
+15.13
+
+🔍 env.sh does not run slow startup operations
+
+`time bash -c 'source ~/ubuntu-console/env.sh' 2>&1 | grep real`
+
+real < 1.0s. env.sh must not call `pwsh.exe` (API key bridge), `sudo` (loopback), or `clear` (screen). Those belong in 13-init only.
+
+15.14
+
+🔧 No mcp-tools/ directory present
+
+`[[ -d ~/ubuntu-console/mcp-tools ]] && echo "FAIL: mcp-tools/ still exists" || echo "OK: removed"`
+
+Prints `OK: removed`. The mcp-tools directory was superseded by tac-exec and should not be recreated. If it exists, it contains stale duplicates.
+
+15.15
+
+🔍 TAC_LIBRARY_MODE is exported
+
+`bash -c 'source ~/ubuntu-console/env.sh && env | grep TAC_LIBRARY_MODE'`
+
+Prints `TAC_LIBRARY_MODE=1`. Functions that need to detect library mode (e.g., to skip UI output) can check this variable.
+
+15.16
+
+🔍 Minimal-PATH fallback works
+
+`env -i HOME="$HOME" PATH="/usr/local/bin:/usr/bin:/bin" bash -c '~/ubuntu-console/bin/tac-exec oc 2>&1 | head -3'`
+
+Prints the `oc` help header. Even without `~/.local/bin` on PATH, the full path to tac-exec must work. TOOLS.md should document this fallback.
+
+16. Final Validation
 
 #
 
@@ -2020,7 +2176,7 @@ Command
 
 Expected
 
-14.1
+16.1
 
 🔍 bash -n passes on all files
 
@@ -2028,7 +2184,7 @@ bash -n tactical-console.bashrc && for f in scripts/[0-9][0-9]-*.sh bin/*.sh; do
 
 Exit 0 for the loader and all 13 modules plus bin/ scripts
 
-14.2
+16.2
 
 🔍 ShellCheck passes
 
@@ -2036,7 +2192,7 @@ shellcheck tactical-console.bashrc scripts/[0-9][0-9]-*.sh
 
 Zero findings (all SC codes either clean or suppressed with documented directives)
 
-14.3
+16.3
 
 🔍 Sourcing works
 
@@ -2044,7 +2200,7 @@ bash -ic 'source ~/ubuntu-console/tactical-console.bashrc; exit'
 
 Exit 0 — loader sources all 13 modules without error
 
-14.4
+16.4
 
 🔍 No regressions in key functions
 
@@ -2052,7 +2208,7 @@ Manually test 3-5 core commands (e.g., model, m, h, oc)
 
 Commands produce expected output; no errors on stderr
 
-14.5
+16.5
 
 🔍 Watchdog timer fires correctly
 
@@ -2060,7 +2216,7 @@ systemctl --user status llama-watchdog.timer
 
 Timer is active and last trigger time is recent
 
-14.6
+16.6
 
 🔍 Clean environment source test
 
@@ -2068,7 +2224,7 @@ env -i HOME="$HOME" bash --noprofile --norc -c 'source ~/ubuntu-console/tactical
 
 Sourcing in a minimal environment doesn't fail due to missing dependencies
 
-14.7
+16.7
 
 🔍 BATS test suite passes
 
@@ -2076,7 +2232,7 @@ bats tests/tactical-console.bats
 
 All BATS tests pass (0 failures). Verify count matches `grep -c '^@test' tests/tactical-console.bats`. Tests cover syntax, shellcheck, structure, constants, function availability, cross-script consistency, and code hygiene (EOF markers, line length, whitespace, carriage returns).
 
-14.8
+16.8
 
 🔍 Module count matches expectations
 
@@ -2084,7 +2240,7 @@ ls scripts/[0-9][0-9]-*.sh | wc -l
 
 13 modules present. If a module was added or removed, update the architecture map in the loader and the BATS structure tests.
 
-14.9
+16.9
 
 🔍 Audit findings logged
 

@@ -1,7 +1,0 @@
-{
-  "name": "ocgs",
-  "description": "Shows OpenClaw gateway status with deep probe.",
-  "input": [],
-  "output": { "type": "text", "description": "Gateway status output." },
-  "handler": "ocgs.sh"
-}

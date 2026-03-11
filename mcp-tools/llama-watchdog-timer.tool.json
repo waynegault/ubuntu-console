@@ -1,9 +1,0 @@
-{
-  "name": "llama-watchdog-timer",
-  "description": "Manages the llama-watchdog systemd timer.",
-  "input": [
-    { "name": "action", "type": "string", "description": "Action to perform: start, stop, status, restart." }
-  ],
-  "output": { "type": "text", "description": "Timer status output." },
-  "handler": "llama-watchdog-timer.sh"
-}

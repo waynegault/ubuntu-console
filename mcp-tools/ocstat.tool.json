@@ -1,7 +1,0 @@
-{
-  "name": "ocstat",
-  "description": "Shows detailed OpenClaw status (--all).",
-  "input": [],
-  "output": { "type": "text", "description": "Status output." },
-  "handler": "ocstat.sh"
-}

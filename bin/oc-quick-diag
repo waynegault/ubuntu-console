@@ -1,0 +1,4 @@
+#!/bin/bash
+# Thin wrapper — delegates to the real 'oc-diag' function via tac-exec
+exec ~/ubuntu-console/bin/tac-exec oc diag "$@"
+# end of file
