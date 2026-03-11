@@ -23,7 +23,7 @@ function tactical_dashboard() {
 
     # --- System metrics block ---
     local systime
-    systime=$(date +"%A %H:%M %d/%m/%Y")
+    systime=$(date +"%H:%M %A %d/%m/%Y")
     local uptime
     uptime=$(__get_uptime)
     local batt
@@ -111,6 +111,10 @@ function tactical_dashboard() {
         fi
         local tps
         tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
+        if [[ -z "$tps" && -n "$_entry" ]]; then
+            tps=$(awk -F'|' '{print $11}' <<< "$_entry")
+            [[ -n "$tps" && "$tps" != "0" ]] && tps="${tps} tps"
+        fi
         __fRow "LOCAL LLM" "ACTIVE $act_mod | ${tps:-$LAST_TPS}" "$C_Success"
 
         # LLM context utilisation via async-cached /slots query
