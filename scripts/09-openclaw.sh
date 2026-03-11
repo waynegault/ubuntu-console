@@ -145,8 +145,10 @@ function so() {
         : "${_so_model_name:=$_so_def_file}"
         __tac_info "Local LLM" "[OFFLINE]" "$C_Warning"
         # Start the default LLM in background; show a compact spinner
-        serve &>/dev/null &
+        # Suppress bash job-control [1] / Done messages
+        { serve &>/dev/null & } 2>/dev/null
         local _serve_pid=$!
+        disown "$_serve_pid" 2>/dev/null
         local _spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
         local _sw=0 _sw_max=90
         while (( _sw < _sw_max ))
@@ -262,7 +264,7 @@ function so() {
     if (( _ts_serve_active ))
     then
         sudo -n tailscale serve --bg "http://127.0.0.1:$OC_PORT" >/dev/null 2>&1 \
-            && __tac_info "Tailscale Serve" "[RESTORED]" "$C_Dim"
+            && __tac_info "Tailscale Serve" "[RESTORED]" "$C_Success"
     fi
 }
 
@@ -300,7 +302,7 @@ function __so_check_win_port() {
 
     local _win_holder
     _win_holder=$(timeout 5 powershell.exe -NoProfile -NonInteractive -Command "
-        \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue
+        \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
         if (\$c) {
             \$p = Get-Process -Id \$c.OwningProcess -ErrorAction SilentlyContinue
             '{0} (PID {1})' -f \$p.ProcessName, \$c.OwningProcess
@@ -351,11 +353,27 @@ function __so_check_win_port() {
 # Uses 'openclaw gateway stop' then systemctl for clean shutdown.
 # ---------------------------------------------------------------------------
 function xo() {
+    local _svc="openclaw-gateway.service"
+    local _was_running=0
+
+    # Check if anything is actually running before we try to stop
+    if systemctl --user is-active --quiet "$_svc" 2>/dev/null \
+        || __test_port "$OC_PORT"
+    then
+        _was_running=1
+    fi
+
     openclaw gateway stop >/dev/null 2>&1
-    systemctl --user stop openclaw-gateway.service 2>/dev/null
+    systemctl --user stop "$_svc" 2>/dev/null
     sleep 0.5
     rm -f "$OC_ROOT/supervisor.lock"
-    __tac_info "Gateway Processes" "[TERMINATED]" "$C_Success"
+
+    if (( _was_running ))
+    then
+        __tac_info "Gateway Processes" "[TERMINATED]" "$C_Success"
+    else
+        __tac_info "Gateway" "[NOT RUNNING]" "$C_Dim"
+    fi
 }
 
 # ---------------------------------------------------------------------------
