@@ -101,8 +101,10 @@ function so() {
     fi
 
     # ── Push API keys into the systemd user environment ────────────────
-    # Systemd user services don't inherit interactive shell exports.
-    # Read key names from the cache file and push via set-environment.
+    # Always source the cache file to ensure all keys are present in the shell environment.
+    if [[ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]]; then
+        source "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null
+    fi
     local _key
     while IFS= read -r _line
     do
@@ -623,7 +625,7 @@ function __bridge_windows_api_keys() {
     local raw
     raw=$(timeout 5 pwsh.exe -NoProfile -NonInteractive -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() |
-        Where-Object { $_.Key -match "API[_-]?KEY|TOKEN" } |
+        Where-Object { $_.Key -match "(?i)API_KEY|TOKEN|PASSWORD" } |
         ForEach-Object { "$($_.Key)=$($_.Value)" }
     ' 2>/dev/null | tr -d '\r')
 
@@ -641,7 +643,7 @@ function __bridge_windows_api_keys() {
     ( umask 077; : > "$tmpfile" )
     while IFS='=' read -r name val
     do
-        [[ -z "$name" || "$name" =~ [^a-zA-Z0-9_] ]] && continue
+        [[ -z "$name" || ! "$name" =~ ^[a-zA-Z0-9_]+$ ]] && continue
         [[ -z "$val" ]] && continue
         # Reject values with embedded newlines (could inject extra commands)
         [[ "$val" == *$'\n'* ]] && continue
