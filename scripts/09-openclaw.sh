@@ -505,12 +505,11 @@ function oc() {
 }
 
 # ---------------------------------------------------------------------------
-# oc-restart — Stop and restart the OpenClaw gateway.
+# oc-restart — Restart the OpenClaw gateway (systemd-managed service).
+# Now uses the native OpenClaw CLI restart for reliability.
 # ---------------------------------------------------------------------------
 function oc-restart() {
-    xo
-    sleep 1
-    so
+    openclaw gateway restart "$@"
 }
 
 # ---------------------------------------------------------------------------

@@ -350,7 +350,7 @@ function tactical_help() {
 
     __hSection "OPENCLAW — GATEWAY"
     __hRow "so / xo" "Start / Stop the OpenClaw gateway (xo stops only — use 'oc restart' to restart)"
-    __hRow "oc restart" "Full gateway restart: stop, wait, then start"
+    __hRow "oc restart" "Full gateway restart (native: openclaw gateway restart)"
     __hRow "oc gs / oc stat" "Gateway deep health probe / Full status --all"
     __hRow "oc health" "Ping gateway HTTP /api/health endpoint"
     __hRow "oc tail" "Live-tail gateway journal logs (Ctrl-C to stop)"

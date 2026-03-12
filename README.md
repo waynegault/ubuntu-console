@@ -246,7 +246,7 @@ bridged API keys.
 |---|---|
 | `so` | Start the OpenClaw gateway. Injects API keys into systemd, runs `openclaw gateway start`, waits 3s, checks port 18789. |
 | `xo` | Stop the gateway (**stop only — does not restart**). Runs `openclaw gateway stop`, then `systemctl --user stop openclaw-gateway.service`, removes supervisor lock. When called from an AI agent context, prints a warning to use `openclaw gateway restart` instead. |
-| `oc-restart` | Stop then start (`xo` + `so`). |
+| `oc-restart` | Restart gateway (native: `openclaw gateway restart`). |
 | `oc-health` | Deep probe: checks port 18789, then calls `openclaw health --json` and parses the status field. |
 | `oc-tail` | Live-tail gateway logs via `openclaw logs --follow`. |
 
@@ -810,7 +810,7 @@ Do not edit the monolith — it is a frozen snapshot.
 | `code` | Editor | Open anything in VS Code |
 | `so` | OpenClaw | Start gateway (warns if local LLM provider offline) |
 | `xo` | OpenClaw | Stop gateway (stop only — use `oc restart` to restart) |
-| `oc-restart` | OpenClaw | Restart gateway |
+| `oc-restart` | OpenClaw | Restart gateway (native: openclaw gateway restart) |
 | `oc-health` | OpenClaw | Deep health probe |
 | `os` | OpenClaw | List sessions |
 | `oa` | OpenClaw | List agents |
