@@ -289,7 +289,11 @@ function __fRow() {
 
     printf "${C_BoxBg}║${C_Reset}"
     printf "  ${C_Dim}%s%s :: ${C_Reset}" "$label" "$lPadStr"
-    printf "${color}%s${C_Reset}" "$val"
+    if [[ -n "$color" ]]; then
+        printf "%s%s%s" "$color" "$val" "$C_Reset"
+    else
+        printf "%s" "$val"
+    fi
     printf "%s${C_BoxBg}║${C_Reset}\n" "$vPadStr"
 }
 

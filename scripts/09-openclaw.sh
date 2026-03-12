@@ -567,15 +567,36 @@ function oc-agent-use() {
     local agent_cache="$TAC_CACHE_DIR/oc_agents.json"
     local session_cache="$TAC_CACHE_DIR/oc_sessions.json"
 
-    # Refresh agents cache when stale (3s TTL). Run synchronously to avoid
-    # interactive job control messages when called directly by the user.
-    if ! __cache_fresh "$agent_cache" 3; then
-        ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true
+    # Refresh agents cache when stale (3s TTL).
+    # Prefer not to block rendering: refresh agents list in background when possible.
+    local now mtime
+    now=$(date +%s)
+    if [[ -f "$agent_cache" ]]; then
+        mtime=$(stat -c %Y "$agent_cache" 2>/dev/null || echo 0)
+    else
+        mtime=0
+    fi
+    if (( now - mtime > 3 )); then
+        if command -v openclaw >/dev/null 2>&1; then
+            if [[ -t 1 ]]; then
+                ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true
+            else
+                ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true &
+            fi
+        fi
     fi
 
-    # Refresh sessions cache when stale (5s TTL) — synchronous for clarity.
-    if ! __cache_fresh "$session_cache" 5; then
-        ( openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null ) && mv "${session_cache}.tmp" "$session_cache" 2>/dev/null || true
+    # Refresh sessions cache when stale (5s TTL) — keep synchronous so session
+    # counts remain snappy and consistent for the dashboard.
+    if [[ -f "$session_cache" ]]; then
+        mtime=$(stat -c %Y "$session_cache" 2>/dev/null || echo 0)
+    else
+        mtime=0
+    fi
+    if (( now - mtime > 5 )); then
+        if command -v openclaw >/dev/null 2>&1; then
+            ( openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null ) && mv "${session_cache}.tmp" "$session_cache" 2>/dev/null || true
+        fi
     fi
 
     # Read cached JSON (may be stale on first run)
@@ -603,15 +624,68 @@ function oc-agent-use() {
             | .[]? | "\(.id)\t\(.name)"' 2>/dev/null > "$tmp_agents" || true
 
     # Build per-agent token aggregates (input, output, total, cap)
+    # Use a sessions-style cache for the aggregated stats to avoid
+    # re-running the grouping jq on every interactive call.
+    # Use a small TSV cache for instant reads during rendering
+    local stats_cache="$TAC_CACHE_DIR/oc_agent_stats.tsv"
+    local stats_ttl=5
+
+    # If the aggregated stats cache is stale, recompute from sessions_json
+    if [[ -f "$stats_cache" ]]; then
+        mtime=$(stat -c %Y "$stats_cache" 2>/dev/null || echo 0)
+    else
+        mtime=0
+    fi
+    if (( now - mtime > stats_ttl )); then
+                # produce TSV lines for instant reading during render
+                ( printf '%s' "$sessions_json" \
+                        | jq -r '
+                            (.sessions // .items // . // [])
+                            | (if type=="array" then . else [] end)
+                            | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
+                            | group_by(.agent)
+                            | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})[] | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' > "${stats_cache}.tmp" 2>/dev/null ) && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
+    fi
+
     local tmp_stats
     tmp_stats=$(mktemp) || tmp_stats="/tmp/oc_stats.$$"
-    printf '%s' "$sessions_json" | jq -r '
-      (.sessions // .items // . // [])
-      | (if type=="array" then . else [] end)
-      | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
-      | group_by(.agent)
-      | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})[]
-      | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' 2>/dev/null > "$tmp_stats" || true
+    # Read precomputed aggregated stats and flatten into tab-separated lines.
+    # Avoid blocking: if stats cache is missing or stale, start recompute
+    # in the background and render a fast fallback immediately.
+    if [[ -f "$stats_cache" ]]; then
+        # stats cache is already TSV — copy directly for fastest reads
+        cat "$stats_cache" > "$tmp_stats" 2>/dev/null || true
+    else
+        # kick off background recompute from the authoritative session cache file
+        if [[ -f "$session_cache" && -s "$session_cache" ]]; then
+            if [[ -t 1 ]]; then
+                ( jq '
+                    (.sessions // .items // . // [])
+                    | (if type=="array" then . else [] end)
+                    | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
+                    | group_by(.agent)
+                    | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})' "$session_cache" 2>/dev/null > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null )
+            else
+                ( jq '
+                    (.sessions // .items // . // [])
+                    | (if type=="array" then . else [] end)
+                    | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
+                    | group_by(.agent)
+                    | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})' "$session_cache" 2>/dev/null > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null ) &
+            fi
+        fi
+        # fast fallback: list known agents with zeroed stats so rendering is immediate
+        if [[ -f "$tmp_agents" ]]; then
+            while IFS=$'\t' read -r id name; do
+                [[ -z "$id" ]] && continue
+                printf '%s\t0\t0\t0\t0\n' "$id" >> "$tmp_stats"
+            done < "$tmp_agents"
+        else
+            # no agent list either; create empty tmp_stats so downstream code
+            # will render the session_count header and return quickly
+            : > "$tmp_stats"
+        fi
+    fi
 
     declare -A amap input_sum output_sum total_sum cap_val
     if [[ -f "$tmp_agents" ]]; then
@@ -682,8 +756,26 @@ function oc-agent-use() {
     local lines_file
     lines_file=$(mktemp) || lines_file="/tmp/oc_lines.$$"
     for id in "${!amap[@]}"; do
-        local tot=${total_sum[$id]:-0}
+        local in_s=${input_sum[$id]:-0}
+        local out_s=${output_sum[$id]:-0}
+        local reported_tot=${total_sum[$id]:-0}
         local cap=${cap_val[$id]:-0}
+        # Compute total: prefer reported total, but if it's smaller than
+        # the observed sum(input+output), use the larger value so numbers
+        # reconcile (some OpenClaw shapes report context-only totals).
+        local tot
+        local sum_io=$(( in_s + out_s ))
+        if (( reported_tot > 0 )); then
+            if (( sum_io > reported_tot )); then
+                tot=$sum_io
+            else
+                tot=$reported_tot
+            fi
+        else
+            tot=$sum_io
+        fi
+        # persist computed total so downstream logic sees reconciled value
+        total_sum["$id"]=$tot
         # default cap when missing
         if (( cap == 0 )); then cap=131072; fi
         # percent (rounded)
@@ -693,49 +785,71 @@ function oc-agent-use() {
         else
             pct=0
         fi
-        printf '%d\t%s\t%s\t%s\t%s\n' "$pct" "$id" "$tot" "$cap" "${input_sum[$id]:-0}" >> "$lines_file"
+        printf '%d\t%s\t%s\t%s\t%s\n' "$pct" "$id" "$tot" "$cap" "$in_s" >> "$lines_file"
     done
 
     local outtmp="${cache}.tmp"
     {
-        printf 'ACTIVE AGENT CONTEXT USE (%d/%d active)\n\n' "$total_active" "$total_agents"
         # Prepare labelled lines and compute max label width for alignment
         local labels_tmp
         labels_tmp=$(mktemp) || labels_tmp="/tmp/oc_labels.$$"
         while IFS=$'\t' read -r pct id tot cap inpt; do
-            # skip agents with zero total tokens (not active)
-            if [[ "${tot:-0}" -eq 0 ]]; then
+            # Include agents that appear in the sessions-derived stats even if
+            # their total token count is zero. Only skip agents that have no
+            # session-derived entry and zero tokens.
+            if [[ "${tot:-0}" -eq 0 && -z "${total_sum[$id]+set}" ]]; then
                 continue
             fi
-            local display id_label label
+            local display label
             display=${amap[$id]:-$id}
-            id_label=$(echo "$id" | sed -E 's/[-_]/ /g' | awk '{for(i=1;i<=NF;i++){ $i=toupper(substr($i,1,1)) tolower(substr($i,2))}}1' )
-            label="${display} (${id_label})"
+            label="${display}"
             # store label plus the rest
             printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$pct" "$id" "$tot" "$cap" "$inpt" >> "$labels_tmp"
         done < <(sort -rn "$lines_file")
 
-        # compute max label width
-        local maxw
-        maxw=$(awk -F"\t" '{ if (length($1) > m) m=length($1) } END { print (m==""?0:m) }' "$labels_tmp")
-        ((maxw = maxw + 1))
-
-        # Print formatted lines with aligned labels
+        # compute printable agent count and max label width
+        local raw_max capw label_max printable_count
+        printable_count=$(awk -F"\t" '$4 > 0 {c++} END {print (c+0)}' "$labels_tmp")
+        # compute raw max label length
+        raw_max=$(awk -F"\t" '{ if (length($1) > m) m=length($1) } END { print (m==""?0:m) }' "$labels_tmp")
+        if [[ -n "${UIWidth:-}" && ${UIWidth} -gt 60 ]]; then
+            local cap_candidate=$(( UIWidth - 48 ))
+            if (( cap_candidate > 14 )); then capw=14; else capw=$cap_candidate; fi
+        else
+            capw=14
+        fi
+        label_max=$raw_max
+        if (( label_max > capw )); then label_max=$capw; fi
+        if (( printable_count > 0 )); then
+            printf 'ACTIVE AGENT CONTEXT USE (%d/%d active)\n\n' "$total_active" "$total_agents"
+        fi
+        # Print formatted lines with aligned labels (skip agents with zero total)
         while IFS=$'\t' read -r label pct id tot cap inpt; do
-            local tot_h in_h out_h cap_h color in_col out_col
+            # hide agents that have zero total tokens
+            if [[ -z "${tot:-}" || ${tot:-0} -eq 0 ]]; then
+                continue
+            fi
+            local label_display tot_h in_h out_h cap_h color in_col out_col
+            # Build base label (without trailing colon), truncate to label_max
+            local label_base
+            label_base="$label"
+            if (( ${#label_base} > label_max )); then
+                label_base="${label_base:0:$((label_max-3))}..."
+            fi
+            # We'll print the name padded to label_max, then a single ': ' separator
+            label_display="$label_base"
             tot_h=$(_human_one "$tot")
             in_h=$(_human_one "$inpt")
             out_h=$(_human_one "${output_sum[$id]:-0}")
             cap_h=$(_human_cap_k "$cap")
-            color=$(__threshold_color "$pct")
-            if (( ${input_sum[$id]:-0} >= ${output_sum[$id]:-0} )); then
-                in_col="${color}${in_h}${C_Reset}"
-                out_col="${out_h}"
-            else
-                in_col="${in_h}"
-                out_col="${color}${out_h}${C_Reset}"
-            fi
-            printf '  %-'"$maxw"'s %s%s%%%s (%s of %s) \u2B06 %s \u2B07 %s\n' "$label" "$color" "$pct" "$C_Reset" "$tot_h" "$cap_h" "$in_col" "$out_col"
+            # Do not embed colour codes in the cache; render plain percent
+            # and let the dashboard apply colouring when displaying.
+            in_col="${in_h}"
+            out_col="${out_h}"
+            local pct_display
+            pct_display="${pct}%"
+            printf "  %s: %s (%s of %s) \u2B06 %s \u2B07 %s\n" \
+                "$label_display" "$pct_display" "$tot_h" "$cap_h" "$in_col" "$out_col"
         done < "$labels_tmp"
         rm -f "$labels_tmp"
     } > "$outtmp"

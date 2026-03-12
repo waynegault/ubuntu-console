@@ -173,35 +173,96 @@ function tactical_dashboard() {
     fi
     __fRow "SESSIONS" "${m_sess} Active${age_label}" "$sess_color"
 
-    local tokens
-    tokens=$(__get_tokens)
-    if [[ "$tokens" == "Querying..."* || "$tokens" == "N/A"* ]]
+    # Replace single-line CONTEXT USED with multi-line ACTIVE AGENTS
+    # Render the output of `oc agent-use` inside the dashboard box when OpenClaw is online.
+    if [[ $oc_active == 1 ]]
     then
-        __fRow "CONTEXT USED" "No data" "$C_Dim"
+        local cache="/dev/shm/oc_agent_use.txt"
+        local agent_use_out=""
+        if [[ -f "$cache" ]]; then
+            agent_use_out=$(cat "$cache" 2>/dev/null || true)
+        else
+            # Kick off a background refresh so the cache is populated for
+            # subsequent renders, but do not block the dashboard render now.
+            ( oc agent-use >/dev/null 2>&1 ) & disown 2>/dev/null || true
+        fi
+        if [[ -z "$agent_use_out" ]]
+        then
+            __fRow "ACTIVE AGENT" "No data" "$C_Dim"
+        else
+            # Use __fRow to render the first agent on the same row as the
+            # "ACTIVE AGENTS" label so the "::" alignment, colours and
+            # right-border padding match other dashboard rows. Subsequent
+            # agents are rendered with an empty label so their text lines up
+            # under the value column.
+            local first=1
+            while IFS= read -r _l; do
+                l=${_l%$'\r'}
+                # Trim leading/trailing spaces and skip blank/header lines
+                l=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' <<< "$l")
+                [[ -z "$l" ]] && continue
+                [[ "$l" =~ ^ACTIVE[[:space:]]+AGENT ]] && continue
+                [[ "$l" =~ ^ACTIVE[[:space:]]+AGENTS ]] && continue
+                if (( first == 1 )); then
+                    # Insert a colon after the agent name before the numeric data
+                    # Ensure a colon follows the agent name. Split at the first
+                    # numeric token (the percentages/counts) and insert ':' after
+                    # the name if not already present.
+                    if [[ "$l" =~ ^(.+?)[[:space:]]+([0-9].*)$ ]]; then
+                        name_part="${BASH_REMATCH[1]}"
+                        rest_part="${BASH_REMATCH[2]}"
+                        name_part="${name_part%:}"
+                        formatted="${name_part}: ${rest_part}"
+                    else
+                        # No numeric suffix; just ensure trailing colon on name
+                        formatted="$l"
+                        [[ "$formatted" != *: ]] && formatted="${formatted}:"
+                    fi
+                    __fRow "ACTIVE AGENT" "$formatted" ""
+                    first=0
+                else
+                    # Render subsequent agent lines without the " :: " label
+                    # but reserve the same label width so values align.
+                    # Use the same measurements as __fRow to preserve alignment.
+                    local val_width=$(( UIWidth - 20 ))
+                    # Split using the original line (preserve ANSI sequences in the
+                    # remainder so percent colouring is retained). Use __strip_ansi
+                    # only for width calculation below.
+                    if [[ "$l" =~ ^(.+?)[[:space:]]+([0-9].*)$ ]]; then
+                        name_part="${BASH_REMATCH[1]}"
+                        rest_part="${BASH_REMATCH[2]}"
+                        name_part="${name_part%:}"
+                        # Apply colouring to the leading percent token in rest_part
+                        if [[ "$rest_part" =~ ^([0-9]{1,3})% ]]; then
+                            local pct_val="${BASH_REMATCH[1]}"
+                            local pct_tok="${BASH_REMATCH[1]}%"
+                            local pct_color
+                            pct_color=$(__threshold_color "$pct_val")
+                            rest_part="${rest_part/"$pct_tok"/"${pct_color}${pct_tok}${C_Reset}"}"
+                        fi
+                        formatted="${name_part}: ${rest_part}"
+                    else
+                        formatted="$l"
+                        [[ "$formatted" != *: ]] && formatted="${formatted}:"
+                    fi
+                    local cleanFormatted
+                    __strip_ansi "$formatted" cleanFormatted
+                    local valPad=$(( val_width - ${#cleanFormatted} ))
+                    (( valPad < 0 )) && valPad=0
+                    local vPadStr=""; (( valPad > 0 )) && printf -v vPadStr '%*s' "$valPad" ""
+                    local labelPad=""; printf -v labelPad '%*s' 12 ""
+                    printf "${C_BoxBg}║${C_Reset}"
+                    printf "  ${C_Dim}%s${C_Reset}" "$labelPad"
+                    # Reserve the same 4-character separator width as __fRow (" :: ")
+                    printf "    %s%s${C_BoxBg}║${C_Reset}\n" "$formatted" "$vPadStr"
+                fi
+            done <<< "$agent_use_out"
+            if (( first == 1 )); then
+                __fRow "ACTIVE AGENT" "No data" "$C_Dim"
+            fi
+        fi
     else
-        local t_used t_limit
-        IFS='|' read -r t_used t_limit <<< "$tokens"
-        t_used=${t_used%$'\r'}; t_limit=${t_limit%$'\r'}
-        local t_pct=$(( t_limit > 0 ? t_used * 100 / t_limit : 0 ))
-        local h_used h_limit
-        if (( t_used >= 1000 ))
-        then
-            h_used="$(( t_used / 1000 ))k"
-        else
-            h_used="$t_used"
-        fi
-        if (( t_limit >= 1000 ))
-        then
-            h_limit="$(( t_limit / 1000 ))k"
-        else
-            h_limit="$t_limit"
-        fi
-        local ctx_tok_color=$C_Success
-        if (( t_pct >= 90 ))
-        then
-            ctx_tok_color=$C_Error
-        fi
-        __fRow "CONTEXT USED" "${t_pct}% (${h_used} of ${h_limit})" "$ctx_tok_color"
+        __fRow "ACTIVE AGENT" "OFFLINE" "$C_Dim"
     fi
 
     # "Cloaking" = active Python virtual environment isolation
