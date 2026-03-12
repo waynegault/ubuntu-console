@@ -351,10 +351,17 @@ function __so_check_win_port() {
 # ---------------------------------------------------------------------------
 # xo — Stop the OpenClaw gateway.
 # Uses 'openclaw gateway stop' then systemctl for clean shutdown.
+# NOTE FOR AI AGENTS: xo only STOPS the gateway — it will NOT restart it.
+#   To restart, use:  openclaw gateway restart   (or the alias: oc restart)
 # ---------------------------------------------------------------------------
 function xo() {
     local _svc="openclaw-gateway.service"
     local _was_running=0
+
+    # Hint for AI agents: xo stops but does not restart.
+    if [[ -n "${OPENCLAW_AGENT_ID:-}" || -n "${AGENT_MODE:-}" ]]; then
+        printf '%s\n' "${C_Warning:-}⚠ xo only stops the gateway. To restart, run: openclaw gateway restart${C_Reset}"
+    fi
 
     # Check if anything is actually running before we try to stop
     if systemctl --user is-active --quiet "$_svc" 2>/dev/null \
@@ -1353,7 +1360,7 @@ function wacli() {
     if $has_store; then
         command wacli "$@"
     else
-        command wacli "$@" --store "$HOME/.openclaw/store/wacli"
+        command wacli --store "$HOME/.openclaw/store/wacli" "$@"
     fi
 }
 export -f wacli

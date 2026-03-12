@@ -349,7 +349,7 @@ function tactical_help() {
     __hRow "code <path>" "Open any file or directory in VS Code (lazy-resolved)"
 
     __hSection "OPENCLAW — GATEWAY"
-    __hRow "so / xo" "Start / Stop the OpenClaw gateway (systemd)"
+    __hRow "so / xo" "Start / Stop the OpenClaw gateway (xo stops only — use 'oc restart' to restart)"
     __hRow "oc restart" "Full gateway restart: stop, wait, then start"
     __hRow "oc gs / oc stat" "Gateway deep health probe / Full status --all"
     __hRow "oc health" "Ping gateway HTTP /api/health endpoint"

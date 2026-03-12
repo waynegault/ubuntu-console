@@ -245,7 +245,7 @@ bridged API keys.
 | Command | What It Does |
 |---|---|
 | `so` | Start the OpenClaw gateway. Injects API keys into systemd, runs `openclaw gateway start`, waits 3s, checks port 18789. |
-| `xo` | Stop the gateway. Runs `openclaw gateway stop`, then `systemctl --user stop openclaw-gateway.service`, removes supervisor lock. |
+| `xo` | Stop the gateway (**stop only — does not restart**). Runs `openclaw gateway stop`, then `systemctl --user stop openclaw-gateway.service`, removes supervisor lock. When called from an AI agent context, prints a warning to use `openclaw gateway restart` instead. |
 | `oc-restart` | Stop then start (`xo` + `so`). |
 | `oc-health` | Deep probe: checks port 18789, then calls `openclaw health --json` and parses the status field. |
 | `oc-tail` | Live-tail gateway logs via `openclaw logs --follow`. |
@@ -312,6 +312,7 @@ bridged API keys.
 | `oc-browser` | Browser automation: `status`, `start`, `stop`, `open` |
 | `oc-nodes` | Node management: `status`, `list`, `describe` |
 | `oc-sandbox` | Sandbox management: `list`, `recreate`, `explain` |
+| `wacli` | WhatsApp CLI wrapper. Automatically injects `--store ~/.openclaw/store/wacli` unless `--store` is already provided. Passes all arguments through. |
 | `oc-failover` | Cloud fallback: `oc-failover on`, `off`, `status` |
 | `oc-local-llm` | Bind OpenClaw's model provider to local llama.cpp |
 | `oc-sync-models` | Sync model registry with OpenClaw scan |
@@ -522,7 +523,7 @@ Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
 | §6 | `scripts/06-hooks.sh` | 110 | `cd` override, prompt (`PS1`), `__test_port` |
 | §7 | `scripts/07-telemetry.sh` | 305 | Host metrics (CPU + dual GPU via typeperf), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` |
 | §8 | `scripts/08-maintenance.sh` | 427 | `up`, `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system (split APT) |
-| §9 | `scripts/09-openclaw.sh` | 1285 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-trust-sync`, `oc-failover`, etc.) |
+| §9 | `scripts/09-openclaw.sh` | 1368 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-trust-sync`, `oc-failover`, wacli, etc.) |
 | §10 | `scripts/10-deployment.sh` | 321 | `mkproj`, `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified) |
 | §11 | `scripts/11-llm-manager.sh` | 1848 | `__require_llm`, model management, streaming chat, burn, bench, explain |
 | §12 | `scripts/12-dashboard-help.sh` | 439 | `tactical_dashboard` and `tactical_help` renderers |
@@ -808,7 +809,7 @@ Do not edit the monolith — it is a frozen snapshot.
 | `oedit` | Editor | Open `tactical-console.bashrc` in VS Code |
 | `code` | Editor | Open anything in VS Code |
 | `so` | OpenClaw | Start gateway (warns if local LLM provider offline) |
-| `xo` | OpenClaw | Stop gateway |
+| `xo` | OpenClaw | Stop gateway (stop only — use `oc restart` to restart) |
 | `oc-restart` | OpenClaw | Restart gateway |
 | `oc-health` | OpenClaw | Deep health probe |
 | `os` | OpenClaw | List sessions |
@@ -829,6 +830,7 @@ Do not edit the monolith — it is a frozen snapshot.
 | `oc-local-llm` | OpenClaw | Link to local LLM |
 | `oc-sync-models` | OpenClaw | Sync model registry |
 | `oc-trust-sync` | OpenClaw | Save current oc-llm-sync.sh SHA256 as trusted |
+| `wacli` | OpenClaw | WhatsApp CLI wrapper (auto-injects `--store` flag) |
 | `le` / `lo` / `lc` | Logs | View stderr / stdout / clear |
 | `model list` | LLM | Show numbered model registry (▶ = active) |
 | `model use N` | LLM | Start model #N with optimal GPU/ctx/thread settings |
