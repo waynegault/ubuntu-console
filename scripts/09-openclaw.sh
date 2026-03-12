@@ -464,6 +464,8 @@ function oc() {
         start)         ocstart "$@" ;;
         stop)          ocstop "$@" ;;
         agent-turn)    ocstart "$@" ;;
+        agent-use)     oc-agent-use "$@" ;;
+        agent-usage)   oc-agent-use "$@" ;;
         mem-index)     mem-index "$@" ;;
         memory-search) oc-memory-search "$@" ;;
         # Config & Logs
@@ -545,6 +547,202 @@ function ocstop() {
         return 1
     fi
     openclaw agents delete "$@"
+}
+
+# ---------------------------------------------------------------------------
+# oc-agent-use — Show per-agent active session counts (simple, cached)
+# Falls back to several `openclaw` JSON shapes and caches rendered output
+# in tmpfs for `ttl` seconds to keep interactive shells snappy.
+# ---------------------------------------------------------------------------
+function oc-agent-use() {
+    local cache="/dev/shm/oc_agent_use.txt"
+    local ttl=5
+
+    # Serve cached rendering when fresh
+    if [[ -f "$cache" ]] && (( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) < ttl )); then
+        cat "$cache"; return 0
+    fi
+
+    # Use async JSON caches for agents and sessions (fast, non-blocking)
+    local agent_cache="$TAC_CACHE_DIR/oc_agents.json"
+    local session_cache="$TAC_CACHE_DIR/oc_sessions.json"
+
+    # Refresh agents cache when stale (3s TTL). Run synchronously to avoid
+    # interactive job control messages when called directly by the user.
+    if ! __cache_fresh "$agent_cache" 3; then
+        ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true
+    fi
+
+    # Refresh sessions cache when stale (5s TTL) — synchronous for clarity.
+    if ! __cache_fresh "$session_cache" 5; then
+        ( openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null ) && mv "${session_cache}.tmp" "$session_cache" 2>/dev/null || true
+    fi
+
+    # Read cached JSON (may be stale on first run)
+    local agents_json sessions_json
+    [[ -f "$agent_cache" ]] && agents_json=$(cat "$agent_cache") || agents_json=""
+    [[ -f "$session_cache" ]] && sessions_json=$(cat "$session_cache") || sessions_json=""
+
+    # Fallback to immediate CLI if no cache exists yet (first-run)
+    if [[ -z "$agents_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
+        agents_json=$(openclaw agents list --json 2>/dev/null || openclaw agents --json 2>/dev/null || true)
+    fi
+    if [[ -z "$sessions_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
+        sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null || openclaw sessions --json 2>/dev/null || true)
+    fi
+
+    local tmp_agents tmp_sessions
+    tmp_agents=$(mktemp) || tmp_agents="/tmp/oc_agents.$$"
+    tmp_sessions=$(mktemp) || tmp_sessions="/tmp/oc_sessions.$$"
+
+        # Extract agent id -> name mapping (best-effort)
+        printf '%s' "$agents_json" | jq -r '
+            (if type=="array" then . elif (.agents? or .items?) then (.agents // .items) else . end)
+            | map({id:(.id//.agent_id//.slug//.key//.name), name:(.identityName//.identity_name//.name//.display_name//.id)})
+            | unique_by(.id)
+            | .[]? | "\(.id)\t\(.name)"' 2>/dev/null > "$tmp_agents" || true
+
+    # Build per-agent token aggregates (input, output, total, cap)
+    local tmp_stats
+    tmp_stats=$(mktemp) || tmp_stats="/tmp/oc_stats.$$"
+    printf '%s' "$sessions_json" | jq -r '
+      (.sessions // .items // . // [])
+      | (if type=="array" then . else [] end)
+      | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
+      | group_by(.agent)
+      | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})[]
+      | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' 2>/dev/null > "$tmp_stats" || true
+
+    declare -A amap input_sum output_sum total_sum cap_val
+    if [[ -f "$tmp_agents" ]]; then
+        while IFS=$'\t' read -r id name; do
+            [[ -z "$id" ]] && continue
+            amap["$id"]="$name"
+        done < "$tmp_agents"
+    fi
+    local total_agents=0 total_active=0
+    if [[ -f "$tmp_stats" ]]; then
+        while IFS=$'\t' read -r id inp out tot cap; do
+            [[ -z "$id" ]] && continue
+            input_sum["$id"]=${inp:-0}
+            output_sum["$id"]=${out:-0}
+            total_sum["$id"]=${tot:-0}
+            cap_val["$id"]=${cap:-0}
+            # ensure name exists
+            [[ -z "${amap[$id]:-}" ]] && amap["$id"]="$id"
+            total_active=$(( total_active + ${tot:-0} ))
+        done < "$tmp_stats"
+    fi
+
+    # total_agents should reflect number of registered agents (from agents list)
+    if [[ -f "$tmp_agents" ]]; then
+        total_agents=$(wc -l < "$tmp_agents" 2>/dev/null || echo 0)
+    else
+        total_agents=${#amap[@]}
+    fi
+
+    # session_count: number of active sessions (prefer .count from sessions JSON)
+    local session_count
+    session_count=$(printf '%s' "$sessions_json" | jq -r '.count // (.sessions|length) // 0' 2>/dev/null || echo 0)
+    total_active=$((session_count))
+
+    # If agents list existed but no sessions, ensure amap entries present
+    if (( total_agents == 0 )); then
+        for id in "${!amap[@]}"; do
+            input_sum["$id"]=${input_sum[$id]:-0}
+            output_sum["$id"]=${output_sum[$id]:-0}
+            total_sum["$id"]=${total_sum[$id]:-0}
+            cap_val["$id"]=${cap_val[$id]:-0}
+            (( total_agents++ ))
+        done
+    fi
+
+    # Helper: humanize tokens to k-units
+    _human() {
+        local n=$1
+        if (( n >= 1000000 )); then
+            awk -v v="$n" 'BEGIN{printf "%.1fm", v/1000000}'
+        elif (( n >= 1000 )); then
+            awk -v v="$n" 'BEGIN{printf "%.1fk", v/1000}'
+        else
+            echo "$n"
+        fi
+    }
+    _human_one() { _human "$1"; }
+    _human_cap_k() {
+        local n=$1
+        if (( n >= 1000 )); then
+            awk -v v="$n" 'BEGIN{printf "%dk", int((v+500)/1000)}'
+        else
+            echo "$n"
+        fi
+    }
+
+    # Assemble sorted list by percent (desc)
+    local lines_file
+    lines_file=$(mktemp) || lines_file="/tmp/oc_lines.$$"
+    for id in "${!amap[@]}"; do
+        local tot=${total_sum[$id]:-0}
+        local cap=${cap_val[$id]:-0}
+        # default cap when missing
+        if (( cap == 0 )); then cap=131072; fi
+        # percent (rounded)
+        local pct
+        if (( cap > 0 )); then
+            pct=$(( (tot * 100 + cap/2) / cap ))
+        else
+            pct=0
+        fi
+        printf '%d\t%s\t%s\t%s\t%s\n' "$pct" "$id" "$tot" "$cap" "${input_sum[$id]:-0}" >> "$lines_file"
+    done
+
+    local outtmp="${cache}.tmp"
+    {
+        printf 'ACTIVE AGENT CONTEXT USE (%d/%d active)\n\n' "$total_active" "$total_agents"
+        # Prepare labelled lines and compute max label width for alignment
+        local labels_tmp
+        labels_tmp=$(mktemp) || labels_tmp="/tmp/oc_labels.$$"
+        while IFS=$'\t' read -r pct id tot cap inpt; do
+            # skip agents with zero total tokens (not active)
+            if [[ "${tot:-0}" -eq 0 ]]; then
+                continue
+            fi
+            local display id_label label
+            display=${amap[$id]:-$id}
+            id_label=$(echo "$id" | sed -E 's/[-_]/ /g' | awk '{for(i=1;i<=NF;i++){ $i=toupper(substr($i,1,1)) tolower(substr($i,2))}}1' )
+            label="${display} (${id_label})"
+            # store label plus the rest
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$pct" "$id" "$tot" "$cap" "$inpt" >> "$labels_tmp"
+        done < <(sort -rn "$lines_file")
+
+        # compute max label width
+        local maxw
+        maxw=$(awk -F"\t" '{ if (length($1) > m) m=length($1) } END { print (m==""?0:m) }' "$labels_tmp")
+        ((maxw = maxw + 1))
+
+        # Print formatted lines with aligned labels
+        while IFS=$'\t' read -r label pct id tot cap inpt; do
+            local tot_h in_h out_h cap_h color in_col out_col
+            tot_h=$(_human_one "$tot")
+            in_h=$(_human_one "$inpt")
+            out_h=$(_human_one "${output_sum[$id]:-0}")
+            cap_h=$(_human_cap_k "$cap")
+            color=$(__threshold_color "$pct")
+            if (( ${input_sum[$id]:-0} >= ${output_sum[$id]:-0} )); then
+                in_col="${color}${in_h}${C_Reset}"
+                out_col="${out_h}"
+            else
+                in_col="${in_h}"
+                out_col="${color}${out_h}${C_Reset}"
+            fi
+            printf '  %-'"$maxw"'s %s%s%%%s (%s of %s) \u2B06 %s \u2B07 %s\n' "$label" "$color" "$pct" "$C_Reset" "$tot_h" "$cap_h" "$in_col" "$out_col"
+        done < "$labels_tmp"
+        rm -f "$labels_tmp"
+    } > "$outtmp"
+
+    mv "$outtmp" "$cache" 2>/dev/null || cp "$outtmp" "$cache" 2>/dev/null
+    cat "$cache"
+    rm -f "$tmp_agents" "$tmp_stats" "$lines_file" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
