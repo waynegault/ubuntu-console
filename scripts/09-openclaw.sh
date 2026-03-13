@@ -319,7 +319,44 @@ function __so_check_win_port() {
 
     __tac_info "Gateway" "[PORT ${_port} BLOCKED — Windows: ${_win_holder}]" "$C_Warning"
 
-    # Auto-kill the Windows process via taskkill.exe
+    # Prefer stopping the actual Windows service(s) hosted by the svchost
+    # instance, falling back to taskkill if stopping the service(s) fails.
+    if command -v powershell.exe &>/dev/null
+    then
+        local _svc_names
+        _svc_names=$(timeout 3 powershell.exe -NoProfile -NonInteractive -Command "
+            \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (\$c) {
+                Get-CimInstance -ClassName Win32_Service -Filter \"ProcessId=\$($c.OwningProcess)\" | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue
+            }
+        " 2>/dev/null | tr -d '\r')
+
+        if [[ -n "$_svc_names" ]]
+        then
+            # Attempt to stop each service gracefully
+            local _stopped_any=0
+            while IFS= read -r _svc_name
+            do
+                [[ -z "$_svc_name" ]] && continue
+                __tac_info "Gateway" "[STOPPING Windows service ${_svc_name}]" "$C_Warning"
+                timeout 5 powershell.exe -NoProfile -NonInteractive -Command "Stop-Service -Name \"${_svc_name}\" -Force -ErrorAction SilentlyContinue" >/dev/null 2>&1 || true
+                _stopped_any=1
+            done <<< "$_svc_names"
+            sleep 1
+            # Re-check the port
+            local _still_held_after_stop
+            _still_held_after_stop=$(timeout 3 powershell.exe -NoProfile -NonInteractive -Command "\
+                \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue; if (\$c) { 'yes' }" 2>/dev/null | tr -d '\r')
+            if [[ "$_still_held_after_stop" != "yes" ]]
+            then
+                __tac_info "Gateway" "[PORT ${_port} FREED]" "$C_Success"
+                return 1
+            fi
+            # If stopping service(s) didn't help, fallthrough to taskkill if available
+        fi
+    fi
+
+    # Auto-kill the Windows process via taskkill.exe as a last resort
     if command -v taskkill.exe &>/dev/null
     then
         __tac_info "Gateway" "[KILLING Windows PID ${_pid_only}]" "$C_Warning"
@@ -334,7 +371,16 @@ function __so_check_win_port() {
         if [[ "$_still_held" == "yes" ]]
         then
             __tac_info "Gateway" "[PORT ${_port} STILL BLOCKED]" "$C_Error"
-            printf '%s\n' "  ${C_Dim}Manual fix: taskkill /PID ${_pid_only} /F (from Windows)${C_Reset}"
+            # Try to provide a more actionable manual fix: suggest stopping the service
+            local _svc_hint
+            _svc_hint=$(timeout 3 powershell.exe -NoProfile -NonInteractive -Command "\
+                Get-CimInstance -ClassName Win32_Service -Filter \"ProcessId=${_pid_only}\" | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue" 2>/dev/null | tr -d '\r')
+            if [[ -n "$_svc_hint" ]]
+            then
+                printf '%s\n' "  ${C_Dim}Manual fix: stop the Windows service(s): ${_svc_hint} (from an elevated PowerShell)${C_Reset}"
+            else
+                printf '%s\n' "  ${C_Dim}Manual fix: taskkill /PID ${_pid_only} /F (from Windows)${C_Reset}"
+            fi
             return 0
         fi
         __tac_info "Gateway" "[PORT ${_port} FREED]" "$C_Success"
