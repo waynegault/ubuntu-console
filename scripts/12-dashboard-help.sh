@@ -179,12 +179,29 @@ function tactical_dashboard() {
     then
         local cache="/dev/shm/oc_agent_use.txt"
         local agent_use_out=""
+        local cache_ttl=5
         if [[ -f "$cache" ]]; then
+            # If the cache exists but is stale, kick a background refresh
+            # so subsequent renders get fresh data, but still read the
+            # current cache for this render to avoid blocking the UI.
+            local mtime
+            mtime=$(stat -c %Y "$cache" 2>/dev/null || echo 0)
+            if (( $(date +%s) - mtime > cache_ttl )); then
+                if command -v setsid >/dev/null 2>&1; then
+                    setsid oc agent-use >/dev/null 2>&1 </dev/null || true
+                else
+                    oc agent-use >/dev/null 2>&1 </dev/null &>/dev/null &
+                fi
+            fi
             agent_use_out=$(cat "$cache" 2>/dev/null || true)
         else
             # Kick off a background refresh so the cache is populated for
             # subsequent renders, but do not block the dashboard render now.
-            ( oc agent-use >/dev/null 2>&1 ) & disown 2>/dev/null || true
+            if command -v setsid >/dev/null 2>&1; then
+                setsid oc agent-use >/dev/null 2>&1 </dev/null || true
+            else
+                ( oc agent-use >/dev/null 2>&1 ) &>/dev/null &
+            fi
         fi
         if [[ -z "$agent_use_out" ]]
         then
