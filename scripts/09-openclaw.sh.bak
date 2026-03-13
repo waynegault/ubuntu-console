@@ -14,7 +14,7 @@
 #   owk, ologs, ocroot, oc, lc, oc-update, oc-health, oc-cron, oc-skills,
 #   oc-plugins, oc-tail, oc-channels, oc-sec, oc-tui, oc-config,
 #   oc-docs, oc-usage, oc-memory-search, oc-local-llm, oc-sync-models,
-#   oc-browser, oc-nodes, oc-sandbox, oc-env, oc-cache-clear,
+#   oc-browser, oc-nodes, oc-sandbox, oc-env, oc-cache-clear, oc-trust-sync,
 #   oc-diag, oc-failover, wacli
 
 # ---------------------------------------------------------------------------
@@ -428,7 +428,7 @@ function oc() {
         printf '  %-20s %s\n' "diag"         "5-point check: doctor, gw, models, env, logs"
         printf '  %-20s %s\n' "failover"     "Cloud LLM fallback (on|off|status)"
         printf '  %-20s %s\n' "refresh-keys" "Re-import Windows API keys into WSL"
-        # 'trust-sync' command removed
+        printf '  %-20s %s\n' "trust-sync"   "Save oc-llm-sync.sh SHA256 as trusted"
         printf '%s\n' ""
         printf '%s\n' "${C_Highlight}Data & Extensions${C_Reset}"
         printf '  %-20s %s\n' "wk"           "cd to OpenClaw workspace directory"
@@ -483,7 +483,7 @@ function oc() {
         diag)          oc-diag "$@" ;;
         failover)      oc-failover "$@" ;;
         refresh-keys)  oc-refresh-keys "$@" ;;
-        # trust-sync removed
+        trust-sync)    oc-trust-sync "$@" ;;
         # Data & Extensions
         wk)            owk "$@" ;;
         root)          ocroot "$@" ;;
@@ -966,38 +966,36 @@ function __bridge_windows_api_keys() {
     source "$cache" 2>/dev/null
 }
 
-# (oc-sync-keys-to-bridge removed; behavior merged into oc-refresh-keys)
+# ---------------------------------------------------------------------------
+# oc-sync-keys-to-bridge — Copy TAC cache exports into the runtime env bridge
+# Converts lines like: export FOO='bar'  ->  FOO='bar'
+# Writes to ~/.openclaw/.env.bridge (chmod 600)
+# ---------------------------------------------------------------------------
+function oc-sync-keys-to-bridge() {
+    local cache="$TAC_CACHE_DIR/tac_win_api_keys"
+    local envd_dir="$HOME/.config/environment.d"
+    local envd_file="$envd_dir/90-openclaw.conf"
+    if [[ ! -f "$cache" ]]; then
+        return 0
+    fi
+    mkdir -p "$envd_dir"
+    # Extract exported lines and strip leading 'export '
+    awk '/^export / { sub(/^export /, ""); print }' "$cache" > "$envd_file.tmp" 2>/dev/null || return 1
+    mv "$envd_file.tmp" "$envd_file" 2>/dev/null || return 1
+    chmod 600 "$envd_file" 2>/dev/null || true
+    __tac_info "Env Bridge" "[SYNCED → $(basename \"$envd_file\")]" "$C_Success"
+}
 
 # ---------------------------------------------------------------------------
-# oc-refresh-keys — Force re-import of Windows API keys into WSL and persist to systemd env
+# oc-refresh-keys — Force re-import of Windows API keys into WSL.
 # ---------------------------------------------------------------------------
 function oc-refresh-keys() {
     rm -f "$TAC_CACHE_DIR/tac_win_api_keys"
     __bridge_windows_api_keys
     if [[ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]]
     then
-        local cache="$TAC_CACHE_DIR/tac_win_api_keys"
-        local envd_dir="$HOME/.config/environment.d"
-        local envd_file="$envd_dir/90-openclaw.conf"
-        mkdir -p "$envd_dir"
-
-        # Extract exported lines and strip leading 'export '
-        awk '/^export / { sub(/^export /, ""); print }' "$cache" > "$envd_file.tmp" 2>/dev/null || true
-        mv "$envd_file.tmp" "$envd_file" 2>/dev/null || true
-        chmod 600 "$envd_file" 2>/dev/null || true
-        __tac_info "Env Bridge" "[SYNCED → $(basename \"$envd_file\")]" "$C_Success"
-
-        # Reload user manager and import variables into the running session
-        systemctl --user daemon-reload 2>/dev/null || true
-        while IFS= read -r _line; do
-            [[ -z "$_line" ]] && continue
-            _name="${_line%%=*}"
-            _val="${_line#*=}"
-            if [[ "$_val" == \"*\" && "$_val" == *\" ]]; then
-                _val="${_val:1:-1}"
-            fi
-            systemctl --user set-environment "${_name}=${_val}" 2>/dev/null || true
-        done < "$envd_file"
+        # Ensure runtime environment bridge file is updated from the TAC cache
+        oc-sync-keys-to-bridge || true
 
         local count
         count=$(wc -l < "$TAC_CACHE_DIR/tac_win_api_keys")
@@ -1580,6 +1578,19 @@ function oc-cache-clear() {
     __tac_info "Telemetry Cache" "[$count file(s) cleared]" "$C_Success"
 }
 
+# ---------------------------------------------------------------------------
+# oc-trust-sync — Record current oc-llm-sync.sh hash as trusted.
+# ---------------------------------------------------------------------------
+function oc-trust-sync() {
+    local src="$OC_WORKSPACE/oc-llm-sync.sh"
+    if [[ ! -f "$src" ]]
+    then
+        __tac_info "oc-llm-sync.sh" "[NOT FOUND]" "$C_Error"
+        return 1
+    fi
+    sha256sum "$src" 2>/dev/null | cut -d' ' -f1 > "$OC_ROOT/oc-llm-sync.sha256"
+    __tac_info "Trusted Hash" "[UPDATED]" "$C_Success"
+}
 
 # ---------------------------------------------------------------------------
 # oc-diag — Combined diagnostic dump: OpenClaw doctor + gateway status +

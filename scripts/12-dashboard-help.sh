@@ -460,7 +460,6 @@ function tactical_help() {
     __hRow "oc diag" "5-point check: doctor, gateway, models, env, logs"
     __hRow "oc failover" "Configure cloud LLM fallback (on|off|status)"
     __hRow "oc refresh-keys" "Force re-import of Windows API keys into WSL"
-    __hRow "oc trust-sync" "Save current oc-llm-sync.sh SHA256 as trusted"
 
     __hSection "OPENCLAW — DATA & EXTENSIONS"
     __hRow "oc wk / oc root" "Jump to OpenClaw Workspace or Root config dir"
