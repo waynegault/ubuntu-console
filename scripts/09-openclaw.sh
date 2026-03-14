@@ -658,6 +658,65 @@ function oc-agent-use() {
         sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null || openclaw sessions --json 2>/dev/null || true)
     fi
 
+    # Fallback: if the OpenClaw CLI returned no sessions (e.g. due to a
+    # workspace/dir change), synthesize a minimal sessions JSON by scanning
+    # the local OC_ROOT agent folders. This makes the dashboard resilient
+    # when the CLI and on-disk workspace are out-of-sync.
+    if [[ -z "$sessions_json" || "$(printf '%s' "$sessions_json" | jq -r '.count // 0' 2>/dev/null || echo 0)" -eq 0 ]]; then
+        local _s_lines="" _s_count=0
+        if [[ -d "${OC_ROOT:-$HOME/.openclaw}/agents" ]]; then
+            for _d in "${OC_ROOT:-$HOME/.openclaw}/agents"/*; do
+                [[ -d "$_d" ]] || continue
+                _aid=$(basename "$_d")
+                # Only include agents that have a sessions file on-disk
+                if [[ -f "$_d/sessions/sessions.json" ]]; then
+                    _s_lines+=$(printf '%s\n' "{\"agentId\":\"%s\",\"totalTokens\":0,\"contextTokens\":0}" "$_aid")
+                    _s_count=$(( _s_count + 1 ))
+                fi
+            done
+        fi
+        if [[ -n "$_s_lines" ]]; then
+            sessions_json=$(printf '{"sessions":[%s],"count":%d}' "$(printf '%s' "$_s_lines" | paste -sd',' -)" "$_s_count")
+        fi
+    fi
+
+    # If agents_json is empty (CLI/cache missing), synthesize a minimal
+    # agents list by scanning the on-disk agent folders so we can still
+    # render agent names in the dashboard even when the CLI is out-of-sync.
+    if [[ -z "$agents_json" ]]; then
+        local _a_lines=()
+        if [[ -d "${OC_ROOT:-$HOME/.openclaw}/agents" ]]; then
+            for _ad in "${OC_ROOT:-$HOME/.openclaw}/agents"/*; do
+                [[ -d "$_ad" ]] || continue
+                _aid=$(basename "$_ad")
+                # Try to pick a friendly name from agent metadata if present
+                if [[ -f "$_ad/agent/identity.json" ]]; then
+                    _aname=$(jq -r '.identityName // .name // empty' "$_ad/agent/identity.json" 2>/dev/null || true)
+                else
+                    _aname="$_aid"
+                fi
+                _a_lines+=("{\"id\":\"${_aid}\",\"identityName\":\"${_aname}\"}")
+            done
+        fi
+        if (( ${#_a_lines[@]} > 0 )); then
+            agents_json=$(printf '[%s]' "$(printf '%s' "${_a_lines[@]}" | paste -sd',' -)")
+        fi
+    fi
+
+    # Merge configured agents from openclaw.json when the CLI returned
+    # fewer agents than are configured. This handles cases where the
+    # openclaw CLI cache/list is stale or restricted to a subset.
+    if [[ -f "${OC_ROOT:-$HOME/.openclaw}/openclaw.json" ]]; then
+        local tmp_cfg tmp_existing
+        tmp_cfg=$(mktemp) || tmp_cfg="/tmp/oc_openclaw_cfg.$$"
+        tmp_existing=$(mktemp) || tmp_existing="/tmp/oc_existing.$$"
+        # Ensure we have valid JSON arrays for merging
+        printf '%s' "${agents_json:-[]}" > "$tmp_existing"
+        jq '[.agents.list[] | {id:.id, identityName:.identity.name}]' "${OC_ROOT:-$HOME/.openclaw}/openclaw.json" > "$tmp_cfg" 2>/dev/null || printf '[]' > "$tmp_cfg"
+        agents_json=$(jq -s '.[0] + .[1] | unique_by(.id)' "$tmp_existing" "$tmp_cfg" 2>/dev/null || cat "$tmp_existing")
+        rm -f "$tmp_cfg" "$tmp_existing" 2>/dev/null || true
+    fi
+
     local tmp_agents tmp_sessions
     tmp_agents=$(mktemp) || tmp_agents="/tmp/oc_agents.$$"
     tmp_sessions=$(mktemp) || tmp_sessions="/tmp/oc_sessions.$$"
@@ -866,9 +925,8 @@ function oc-agent-use() {
         fi
         label_max=$raw_max
         if (( label_max > capw )); then label_max=$capw; fi
-        if (( printable_count > 0 )); then
-            printf 'ACTIVE AGENT CONTEXT USE (%d/%d active)\n\n' "$total_active" "$total_agents"
-        fi
+        # Always emit a header so the dashboard sees a non-empty cache
+        printf 'ACTIVE AGENT CONTEXT USE (%d/%d active)\n\n' "$total_active" "$total_agents"
         # Print formatted lines with aligned labels (skip agents with zero total)
         while IFS=$'\t' read -r label pct id tot cap inpt; do
             # hide agents that have zero total tokens
