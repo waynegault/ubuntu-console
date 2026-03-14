@@ -946,14 +946,21 @@ function oc-agent-use() {
             in_h=$(_human_one "$inpt")
             out_h=$(_human_one "${output_sum[$id]:-0}")
             cap_h=$(_human_cap_k "$cap")
-            # Do not embed colour codes in the cache; render plain percent
-            # and let the dashboard apply colouring when displaying.
+            # Colour the percent value for quick scanning in the terminal.
+            # red: >=70, yellow: 50-69, green: <50
             in_col="${in_h}"
             out_col="${out_h}"
-            local pct_display
+            local pct_display color
             pct_display="${pct}%"
-            printf "  %s: %s (%s of %s) \u2B06 %s \u2B07 %s\n" \
-                "$label_display" "$pct_display" "$tot_h" "$cap_h" "$in_col" "$out_col"
+            if (( pct >= 70 )); then
+                color=${C_Error:-"\e[31m"}
+            elif (( pct < 50 )); then
+                color=${C_Success:-"\e[32m"}
+            else
+                color=${C_Warning:-"\e[33m"}
+            fi
+            printf "  %s: %b%s%b (%s of %s) \u2B06 %s \u2B07 %s\n" \
+                "$label_display" "$color" "$pct_display" "$C_Reset" "$tot_h" "$cap_h" "$in_col" "$out_col"
         done < "$labels_tmp"
         rm -f "$labels_tmp"
     } > "$outtmp"
