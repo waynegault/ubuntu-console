@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC1090,SC2016,SC2034,SC2059,SC2154
+# shellcheck disable=SC1090,SC1091,SC2016,SC2034,SC2059,SC2154
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
@@ -295,7 +295,8 @@ function __so_show_errors() {
 # Usage: __so_check_win_port <port> [--block]
 #   --block: if a Windows holder is found, print error and return 0 (= caller
 #            should abort).  Without --block, just prints an advisory hint.
-# Returns 0 if a Windows holder was found (and reported), 1 otherwise.
+# Returns: exit status 0 means the port is still blocked (caller should abort).
+# Exit status 1 means the Windows holder was cleared (caller may continue).
 # ---------------------------------------------------------------------------
 function __so_check_win_port() {
     local _port="$1" _block="${2:-}"
@@ -352,6 +353,26 @@ function __so_check_win_port() {
                 __tac_info "Gateway" "[PORT ${_port} FREED]" "$C_Success"
                 return 1
             fi
+                # If non-elevated stop didn't free the port, try elevating
+                # via Start-Process -Verb RunAs. This will prompt UAC on Windows.
+                __tac_info "Gateway" "[ATTEMPTING ELEVATED STOP — UAC may appear]" "$C_Dim"
+                # Build a PowerShell-friendly quoted name list: 'svc1','svc2'
+                local _ps_names=""
+                while IFS= read -r _sname; do
+                    [[ -z "$_sname" ]] && continue
+                    _ps_names+="'${_sname}',"
+                done <<< "$_svc_names"
+                _ps_names=${_ps_names%,}
+                if [[ -n "${_ps_names}" ]]; then
+                    timeout 12 powershell.exe -NoProfile -NonInteractive -Command "Start-Process powershell -ArgumentList '-NoProfile -Command \"Stop-Service -Name ${_ps_names} -Force -ErrorAction SilentlyContinue\"' -Verb RunAs" >/dev/null 2>&1 || true
+                    sleep 2
+                    _still_held_after_stop=$(timeout 3 powershell.exe -NoProfile -NonInteractive -Command "\
+                        \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue; if (\$c) { 'yes' }" 2>/dev/null | tr -d '\r')
+                    if [[ "$_still_held_after_stop" != "yes" ]]; then
+                        __tac_info "Gateway" "[PORT ${_port} FREED]" "$C_Success"
+                        return 1
+                    fi
+                fi
             # If stopping service(s) didn't help, fallthrough to taskkill if available
         fi
     fi
@@ -377,7 +398,12 @@ function __so_check_win_port() {
                 Get-CimInstance -ClassName Win32_Service -Filter \"ProcessId=${_pid_only}\" | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue" 2>/dev/null | tr -d '\r')
             if [[ -n "$_svc_hint" ]]
             then
-                printf '%s\n' "  ${C_Dim}Manual fix: stop the Windows service(s): ${_svc_hint} (from an elevated PowerShell)${C_Reset}"
+                # Normalize service names to a comma-separated list
+                local _svc_list
+                _svc_list=$(echo "${_svc_hint}" | tr '\r' '\n' | awk 'NF' | paste -sd ", " -)
+                printf '%s\n' "  ${C_Dim}Manual fix (elevated PowerShell): stop the Windows service(s): ${_svc_list}${C_Reset}"
+                printf '%s\n' "  ${C_Dim}Suggested command:${C_Reset}"
+                printf '%s\n' "    ${C_Dim}Stop-Service -Name ${_svc_list} -Force (run in an elevated PowerShell)${C_Reset}"
             else
                 printf '%s\n' "  ${C_Dim}Manual fix: taskkill /PID ${_pid_only} /F (from Windows)${C_Reset}"
             fi
@@ -390,7 +416,7 @@ function __so_check_win_port() {
     # No taskkill.exe — fall back to manual instructions
     if [[ "$_block" == "--block" ]]
     then
-        __tac_info "Gateway" "[PORT $OC_PORT BLOCKED — Windows]" "$C_Error"
+        __tac_info "Gateway" "[PORT ${_port} BLOCKED — Windows]" "$C_Error"
     fi
     printf '%s\n' "  ${C_Dim}Kill it from Windows: taskkill /PID ${_pid_only} /F${C_Reset}"
     return 0
@@ -625,9 +651,13 @@ function oc-agent-use() {
     if (( now - mtime > 3 )); then
         if command -v openclaw >/dev/null 2>&1; then
             if [[ -t 1 ]]; then
-                ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true
+                if openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null; then
+                    mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true
+                fi
             else
-                ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true &
+                if openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null; then
+                    mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true
+                fi &
             fi
         fi
     fi
@@ -641,7 +671,9 @@ function oc-agent-use() {
     fi
     if (( now - mtime > 5 )); then
         if command -v openclaw >/dev/null 2>&1; then
-            ( openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null ) && mv "${session_cache}.tmp" "$session_cache" 2>/dev/null || true
+            if openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null; then
+                mv "${session_cache}.tmp" "$session_cache" 2>/dev/null || true
+            fi
         fi
     fi
 
@@ -742,14 +774,16 @@ function oc-agent-use() {
         mtime=0
     fi
     if (( now - mtime > stats_ttl )); then
-                # produce TSV lines for instant reading during render
-                ( printf '%s' "$sessions_json" \
-                        | jq -r '
-                            (.sessions // .items // . // [])
-                            | (if type=="array" then . else [] end)
-                            | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
-                            | group_by(.agent)
-                            | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})[] | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' > "${stats_cache}.tmp" 2>/dev/null ) && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
+        # produce TSV lines for instant reading during render
+        if printf '%s' "$sessions_json" \
+                | jq -r '
+                    (.sessions // .items // . // [])
+                    | (if type=="array" then . else [] end)
+                    | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
+                    | group_by(.agent)
+                    | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})[] | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' > "${stats_cache}.tmp" 2>/dev/null; then
+            mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
+        fi
     fi
 
     local tmp_stats
@@ -764,19 +798,23 @@ function oc-agent-use() {
         # kick off background recompute from the authoritative session cache file
         if [[ -f "$session_cache" && -s "$session_cache" ]]; then
             if [[ -t 1 ]]; then
-                ( jq '
+                if jq '
                     (.sessions // .items // . // [])
                     | (if type=="array" then . else [] end)
                     | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
                     | group_by(.agent)
-                    | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})' "$session_cache" 2>/dev/null > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null )
+                    | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})' "$session_cache" 2>/dev/null > "${stats_cache}.tmp"; then
+                    mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
+                fi
             else
-                ( jq '
+                if jq '
                     (.sessions // .items // . // [])
                     | (if type=="array" then . else [] end)
                     | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
                     | group_by(.agent)
-                    | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})' "$session_cache" 2>/dev/null > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null ) &
+                    | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})' "$session_cache" 2>/dev/null > "${stats_cache}.tmp"; then
+                    mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
+                fi &
             fi
         fi
         # fast fallback: list known agents with zeroed stats so rendering is immediate
@@ -968,7 +1006,7 @@ function oc-agent-use() {
             if [[ "$_line" =~ ^[[:space:]]{2}([^:]+):[[:space:]]+([0-9]+)% ]]; then
                 local _label="${BASH_REMATCH[1]}"
                 local _pctnum="${BASH_REMATCH[2]}"
-                local _rest="${_line#${BASH_REMATCH[0]}}"
+                local _rest="${_line#"${BASH_REMATCH[0]}"}"
                 local _color
                 _color=$(__threshold_color "${_pctnum}")
                 printf '  %s: %s%s%%%s%s\n' "${_label}" "${_color}" "${_pctnum}" "${C_Reset}" "${_rest}"
@@ -1108,7 +1146,9 @@ function oc-refresh-keys() {
         awk '/^export / { sub(/^export /, ""); print }' "$cache" > "$envd_file.tmp" 2>/dev/null || true
         mv "$envd_file.tmp" "$envd_file" 2>/dev/null || true
         chmod 600 "$envd_file" 2>/dev/null || true
-        __tac_info "Env Bridge" "[SYNCED → $(basename \"$envd_file\")]" "$C_Success"
+        local _envd_base
+        _envd_base=$(basename "$envd_file")
+        __tac_info "Env Bridge" "[SYNCED → ${_envd_base}]" "$C_Success"
 
         # Reload user manager and import variables into the running session
         systemctl --user daemon-reload 2>/dev/null || true

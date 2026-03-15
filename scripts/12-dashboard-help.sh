@@ -236,7 +236,7 @@ function tactical_dashboard() {
                             local pct_color
                             pct_color=$(__threshold_color "$pct_val")
                             local rest_after
-                            rest_after="${rest_part#${pct_tok}}"
+                            rest_after="${rest_part#"${pct_tok}"}"
                             rest_part="${pct_color}${pct_tok}${C_Reset}${rest_after}"
                         fi
                         formatted="${name_part}: ${rest_part}"
@@ -266,7 +266,7 @@ function tactical_dashboard() {
                             local pct_color
                             pct_color=$(__threshold_color "$pct_val")
                             local rest_after
-                            rest_after="${rest_part#${pct_tok}}"
+                            rest_after="${rest_part#"${pct_tok}"}"
                             rest_part="${pct_color}${pct_tok}${C_Reset}${rest_after}"
                         fi
                         formatted="${name_part}: ${rest_part}"
