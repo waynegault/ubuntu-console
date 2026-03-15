@@ -49,7 +49,7 @@ function cd() {
 
 if [[ " $(id -nG 2>/dev/null) " == *" sudo "* ]]
 then
-    _TAC_ADMIN_BADGE=" \[${C_Warning}\]▼\[${C_Reset}\]"
+    _TAC_ADMIN_BADGE=" \[${C_Warning}\]${TRI_DOWN}\[${C_Reset}\]"
 else
     _TAC_ADMIN_BADGE=""
 fi
@@ -72,8 +72,8 @@ function custom_prompt_command() {
     __tac_last_hist_num="$hist_num"
 
     local ps1_user="\[${C_Highlight}\]\u\[${C_Reset}\]"
-    local exit_badge=" \[${C_Error}\]×\[${C_Reset}\] "
-    (( lastExit == 0 )) && exit_badge=" \[${C_Success}\]✓\[${C_Reset}\] "
+    local exit_badge=" \[${C_Error}\]${CROSS_MARK}\[${C_Reset}\] "
+    (( lastExit == 0 )) && exit_badge=" \[${C_Success}\]${CHECK_MARK}\[${C_Reset}\] "
     local ps1_path="\[${C_Info}\]\w\[${C_Reset}\]"
     local ps1_venv=""
     [[ -n "$VIRTUAL_ENV" ]] && ps1_venv=" \[${C_Success}\]($(basename "$VIRTUAL_ENV"))\[${C_Reset}\]"

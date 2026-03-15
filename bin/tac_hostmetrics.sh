@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tac_hostmetrics.sh — Query Windows host CPU + dual GPU utilization.
+# tac_hostmetrics.sh - Query Windows host CPU + dual GPU utilization.
 # Output: cpu|gpu0|gpu1  (pipe-delimited integers, 0-100)
 # GPU0 = Intel Iris Xe (via typeperf 3D engine counter)
 # GPU1 = NVIDIA GeForce RTX (via nvidia-smi — captures CUDA/compute workloads)
@@ -18,7 +18,7 @@ raw=$(typeperf.exe "\Processor(_Total)\% Processor Time" \
 # typeperf CSV: line 1 = blank, line 2 = header, line 3 = data values
 cpu=$(echo "$raw" | awk -F',' 'NR==3 { printf "%d", $2+0.5 }')
 
-# Intel iGPU (gpu0) from typeperf — works well for the integrated GPU.
+# Intel iGPU (gpu0) from typeperf - works well for the integrated GPU.
 # We take the lowest LUID which corresponds to Intel Iris Xe.
 gpu0=$(echo "$raw" | gawk -F',' '
 NR==2 {
@@ -39,7 +39,7 @@ END {
   else printf "0"
 }')
 
-# NVIDIA dGPU (gpu1) via nvidia-smi — captures CUDA/compute workloads that
+# NVIDIA dGPU (gpu1) via nvidia-smi - captures CUDA/compute workloads that
 # typeperf's engtype_3D counter misses entirely (LLM inference, ML training).
 WSL_NVIDIA_SMI="/usr/lib/wsl/lib/nvidia-smi"
 smi_cmd="$WSL_NVIDIA_SMI"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# llama-watchdog.sh — Check llama-server health; restart from active profile if down.
+# llama-watchdog.sh - Check llama-server health; restart from active profile if down.
 # Called by systemd user timer. Reads /dev/shm state to know which model to restart.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
@@ -8,11 +8,11 @@ VERSION="1.1"
 set -euo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
-# Lock in /dev/shm (tmpfs) — cleared on reboot, no stale lock persistence.
+# Lock in /dev/shm (tmpfs) - cleared on reboot, no stale lock persistence.
 exec 200>/dev/shm/llama-watchdog.lock
-flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance running — skipping"; exit 0; }
+flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance running - skipping"; exit 0; }
 
-# ── Shared constants (canonical values live in tactical-console.bashrc §1) ──
+# -- Shared constants (canonical values live in tactical-console.bashrc §1) --
 # These defaults MUST stay in sync with bashrc. If an env var is exported by
 # the interactive shell, ${VAR:-default} picks it up automatically.
 LLM_PORT="${LLM_PORT:-8081}"

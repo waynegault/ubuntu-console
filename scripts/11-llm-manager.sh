@@ -47,7 +47,7 @@ function __require_llm() {
         printf '%s\n' "${C_Error}[jq missing]${C_Reset} Install: sudo apt install -y jq"
         return 1
     fi
-    if ! __test_port "$LLM_PORT"
+        if ! __test_port "$LLM_PORT" >/dev/null 2>&1
     then
         __tac_info "Llama Server" "[OFFLINE]" "$C_Error"
         return 1
@@ -70,7 +70,7 @@ function wake() {
     # Requires passwordless sudo; harmless failure if denied
     if ! sudo -n "$smi_cmd" -pm 1 >/dev/null 2>&1
     then
-        __tac_info "GPU Persistence" "[FAILED — sudo denied or nvidia-smi error]" "$C_Warning"
+        __tac_info "GPU Persistence" "[FAILED - sudo denied or nvidia-smi error]" "$C_Warning"
         return 1
     fi
     __tac_info "GPU Persistence" "[ENABLED]" "$C_Success"
@@ -86,7 +86,7 @@ function wake() {
         g_util="${g_util// /}"; g_used="${g_used// /}"; g_total="${g_total// /}"; g_temp="${g_temp// /}"
         __tac_info "GPU Util" "${g_util}%" "$C_Text"
         __tac_info "VRAM" "${g_used} MiB / ${g_total} MiB" "$C_Text"
-        __tac_info "Temp" "${g_temp}°C" "$C_Text"
+        __tac_info "Temp" "${g_temp}${DEGREE}C" "$C_Text"
     fi
     printf '%s\n' "${C_Dim}Note: -pm 1 does not survive WSL restarts. Re-run 'wake' after reboot.${C_Reset}"
 }
@@ -151,7 +151,7 @@ function gpu-check() {
     # 1. nvidia-smi reachable?
     if [[ -z "$smi" ]]
     then
-        __tac_info "nvidia-smi" "NOT FOUND — GPU passthrough broken" "$C_Error"
+        __tac_info "nvidia-smi" "NOT FOUND - GPU passthrough broken" "$C_Error"
         __tac_info "Tip" "In WSL run: nvidia-smi  (if this fails, CUDA is unavailable)" "$C_Dim"
         __tac_footer; return 1
     fi
@@ -199,10 +199,10 @@ function gpu-check() {
         then
             __tac_info "Offload" "No offload line found (check -ngl setting)" "$C_Warning"
         else
-            __tac_info "Offload" "No CUDA references in log — may be CPU-only build" "$C_Error"
+            __tac_info "Offload" "No CUDA references in log - may be CPU-only build" "$C_Error"
         fi
     else
-        __tac_info "Server" "Not running — start a model to verify offloading" "$C_Dim"
+        __tac_info "Server" "Not running - start a model to verify offloading" "$C_Dim"
     fi
 
     __tac_footer
@@ -330,9 +330,9 @@ function __gguf_metadata() {
                         off += 8 + sl
                     }
                 }
-                else break  # unknown element type — bail
+                else break  # unknown element type - bail
             }
-            else break  # unknown value type — bail
+            else break  # unknown value type - bail
 
             # Early exit once all 5 target keys are found.
             if (found >= 5) break
@@ -505,7 +505,7 @@ function model() {
             if (( ! __LLAMA_DRIVE_MOUNTED ))
             then
                 __tac_info "Error" \
-                    "[Model drive $LLAMA_DRIVE_ROOT is not mounted — run: sudo mount -t drvfs M: $LLAMA_DRIVE_ROOT]" \
+                    "[Model drive $LLAMA_DRIVE_ROOT is not mounted - run: sudo mount -t drvfs M: $LLAMA_DRIVE_ROOT]" \
                     "$C_Error"
                 return 1
             fi
@@ -553,7 +553,7 @@ function model() {
                 _reg_line+="|${march}|${quant}|${mblocks}"
                 _reg_line+="|${gpu_layers}|${ctx}|${threads}|${prev_tps}"
                 echo "$_reg_line" >> "$tmpconf"
-                __tac_info "  #${num}" "${mname} (${size_gb}G, ${quant}, ${mblocks}L → ${gpu_layers} GPU)" "$C_Success"
+                __tac_info "  #${num}" "${mname} (${size_gb}G, ${quant}, ${mblocks}L ${ARROW_R} ${gpu_layers} GPU)" "$C_Success"
             done
 
             if (( num == 0 ))
@@ -602,7 +602,7 @@ function model() {
                         mkdir -p "$LLAMA_ARCHIVE_DIR"
                         if mv "$src" "$LLAMA_ARCHIVE_DIR/"
                         then
-                            __tac_info "Archived" "#${_anum} ${_aname} (${_aqunt} — discouraged)" "$C_Warning"
+                            __tac_info "Archived" "#${_anum} ${_aname} (${_aqunt} - discouraged)" "$C_Warning"
                             ((archived++))
                         fi
                     fi
@@ -625,7 +625,7 @@ function model() {
                         echo "${new_num}|$(cut -d'|' -f2- <<< "$_cline")" >> "$clean_tmp"
                     done < "$LLM_REGISTRY"
                     mv "$clean_tmp" "$LLM_REGISTRY"
-                    __tac_info "Registry" "[Renumbered — ${new_num} models remain]" "$C_Success"
+                    __tac_info "Registry" "[Renumbered - ${new_num} models remain]" "$C_Success"
                 fi
             fi
 
@@ -636,7 +636,7 @@ function model() {
             # Display the numbered model registry with an arrow marking the active model.
             if [[ ! -f "$LLM_REGISTRY" ]]
             then
-                __tac_info "Registry" "[Not found — run 'model scan' first]" "$C_Warning"
+                __tac_info "Registry" "[Not found - run 'model scan' first]" "$C_Warning"
                 return 1
             fi
 
@@ -649,7 +649,7 @@ function model() {
 
             printf "\n${C_Dim}  %-4s %-30s %-7s %-8s %-9s %-4s %-5s %-4s %s${C_Reset}\n" \
                 "#" "MODEL" "SIZE" "QUANT" "ARCH" "GPU" "CTX" "THR" "TPS"
-            local _list_rule; printf -v _list_rule '%*s' $((UIWidth - 4)) ''; _list_rule="${_list_rule// /─}"
+            local _list_rule; printf -v _list_rule '%*s' $((UIWidth - 4)) ''; _list_rule="${_list_rule// /${BOX_SL}}"
             printf "${C_Dim}  %s${C_Reset}\n" "$_list_rule"
 
             while IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps
@@ -659,7 +659,7 @@ function model() {
                 local color=""
                 if [[ "$num" == "$active_num" ]] && pgrep -x llama-server >/dev/null 2>&1
                 then
-                    marker="▶ "
+                    marker="> "
                     color="$C_Success"
                 elif [[ "$file" == "$default_file" ]]
                 then
@@ -691,9 +691,9 @@ function model() {
             printf "${d_color}${d_avail_h}G free${C_Reset}"
             printf "${C_Dim} of ${d_total_h}G (${d_pct_n}%% used)${C_Reset}\n"
 
-            printf "\n${C_Dim}  model use N  │  model stop  "
-            printf "│  model info N  │  model default N  "
-            printf "│  model scan  │  model bench${C_Reset}\n"
+            printf "\n${C_Dim}  model use N  |  model stop  "
+            printf "|  model info N  |  model default N  "
+            printf "|  model scan  |  model bench${C_Reset}\n"
             ;;
 
         default)
@@ -760,7 +760,7 @@ function model() {
                 if [[ -z "$target" ]]
                 then
                     __tac_info "Error" \
-                        "[Default file not found in registry: $_use_def_file — run 'model scan']" \
+                        "[Default file not found in registry: $_use_def_file - run 'model scan']" \
                         "$C_Error"
                     return 1
                 fi
@@ -772,9 +772,9 @@ function model() {
             fi
             local entry
             entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
-            if [[ -z "$entry" ]]
+                if [[ -z "$entry" ]]
             then
-                __tac_info "Error" "[Model #$target not in registry — run 'model scan']" "$C_Error"; return 1
+                __tac_info "Error" "[Model #$target not in registry - run 'model scan']" "$C_Error"; return 1
             fi
 
             IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps <<< "$entry"
@@ -942,7 +942,7 @@ function model() {
                     __tac_info "GPU Offload" "[$offload_info]" "$C_Dim"
                 fi
             else
-                __tac_info "Status" "FAILED OR TIMEOUT — check: tail $LLM_LOG_FILE" "$C_Error"
+                __tac_info "Status" "FAILED OR TIMEOUT - check: tail $LLM_LOG_FILE" "$C_Error"
             fi
             ;;
 
@@ -1023,7 +1023,7 @@ function model() {
         bench)
             if [[ ! -f "$LLM_REGISTRY" ]]
             then
-                __tac_info "Registry" "[Not found — run 'model scan']" "$C_Error"; return 1
+                __tac_info "Registry" "[Not found - run 'model scan']" "$C_Error"; return 1
             fi
             __tac_header "MODEL BENCHMARK" "open"
 
@@ -1061,7 +1061,7 @@ function model() {
 
             echo ""
             printf "${C_Dim}  %-4s %-30s %-7s %s${C_Reset}\n" "#" "MODEL" "SIZE" "TPS"
-            local _bench_rule; printf -v _bench_rule '%*s' $((UIWidth - 4)) ''; _bench_rule="${_bench_rule// /─}"
+            local _bench_rule; printf -v _bench_rule '%*s' $((UIWidth - 4)) ''; _bench_rule="${_bench_rule// /${BOX_SL}}"
             printf "${C_Dim}  %s${C_Reset}\n" "$_bench_rule"
             for i in "${!b_num[@]}"
             do
@@ -1114,7 +1114,7 @@ function model() {
             if [[ -n "$_del_def_file" && "$file" == "$_del_def_file" ]]
             then
                 __tac_info "Error" \
-                    "[#${target} ${name} is the default LLM — change the default first ('model default <N>')]" \
+                    "[#${target} ${name} is the default LLM - change the default first ('model default <N>')]" \
                     "$C_Error"
                 return 1
             fi
@@ -1150,7 +1150,7 @@ function model() {
                 then
                     __tac_info "File" "[DELETED]" "$C_Success"
                 else
-                    __tac_info "File" "[DELETE FAILED — permission denied]" "$C_Error"
+                    __tac_info "File" "[DELETE FAILED - permission denied]" "$C_Error"
                     return 1
                 fi
             fi
@@ -1158,7 +1158,7 @@ function model() {
             # Remove from registry and renumber
             local remaining
             remaining=$(__renumber_registry "$target")
-            __tac_info "Registry" "[Removed and renumbered — ${remaining} models remain]" "$C_Success"
+            __tac_info "Registry" "[Removed and renumbered - ${remaining} models remain]" "$C_Success"
             ;;
 
         download)
@@ -1166,7 +1166,7 @@ function model() {
             if (( ! __LLAMA_DRIVE_MOUNTED ))
             then
                 __tac_info "Error" \
-                    "[Model drive $LLAMA_DRIVE_ROOT is not mounted — run: sudo mount -t drvfs M: $LLAMA_DRIVE_ROOT]" \
+                    "[Model drive $LLAMA_DRIVE_ROOT is not mounted - run: sudo mount -t drvfs M: $LLAMA_DRIVE_ROOT]" \
                     "$C_Error"
                 return 1
             fi
@@ -1231,7 +1231,7 @@ function model() {
                 if [[ -z "$dl_repo" || "$dl_repo" != *"/"* ]]
                 then
                     printf '%s\n' \
-                        "${C_Error}Error:${C_Reset} '$spec' — repo must be in" \
+                        "${C_Error}Error:${C_Reset} '$spec' - repo must be in" \
                         "${C_Warning}<owner>/<repo>${C_Reset} format (e.g. TheBloke/Ferret_7B-GGUF)"
                     ((fail++))
                     continue
@@ -1240,7 +1240,7 @@ function model() {
                 if [[ -z "$dl_file" ]]
                 then
                     printf '%s\n' \
-                        "${C_Error}Error:${C_Reset} '$spec' —" \
+                        "${C_Error}Error:${C_Reset} '$spec' -" \
                         "missing filename after colon (e.g. :ferret_7b.Q4_K_M.gguf)"
                     ((fail++))
                     continue
@@ -1264,7 +1264,7 @@ function model() {
                     done < "$QUANT_GUIDE"
                     if [[ "$_qrating" == "discouraged" ]]
                     then
-                        printf '%s\n' "${C_Warning}Warning:${C_Reset} ${_pat} is discouraged for 4GB VRAM — ${_qdesc}"
+                        printf '%s\n' "${C_Warning}Warning:${C_Reset} ${_pat} is discouraged for 4GB VRAM - ${_qdesc}"
                         read -r -p "${C_Warning}Download anyway? [y/N]: ${C_Reset}" _qconfirm
                         if [[ "${_qconfirm,,}" != "y" ]]
                         then
@@ -1274,10 +1274,10 @@ function model() {
                         fi
                     elif [[ "$_qrating" == "recommended" ]]
                     then
-                        printf '%s\n' "${C_Success}✓${C_Reset} ${_pat} — ${_qdesc}"
+                        printf '%s\n' "${C_Success}${CHECK_MARK}${C_Reset} ${_pat} - ${_qdesc}"
                     elif [[ "$_qrating" == "acceptable" ]]
                     then
-                        printf '%s\n' "${C_Dim}● ${_pat} — ${_qdesc}${C_Reset}"
+                        printf '%s\n' "${C_Dim}${BULLET} ${_pat} - ${_qdesc}${C_Reset}"
                     fi
                 fi
 
@@ -1331,7 +1331,7 @@ function model() {
                     fi
                 fi
 
-                __tac_info "Downloading" "$dl_repo → $dl_file" "$C_Highlight"
+                __tac_info "Downloading" "$dl_repo ${ARROW_R} $dl_file" "$C_Highlight"
                 if hf download "$dl_repo" "$dl_file" --local-dir "$LLAMA_MODEL_DIR"
                 then
                     __tac_info "OK" "$dl_file" "$C_Success"
@@ -1376,7 +1376,7 @@ function model() {
             if [[ -n "$_arc_def_file" && "$file" == "$_arc_def_file" ]]
             then
                 __tac_info "Error" \
-                    "[#${target} ${name} is the default LLM — change the default first ('model default <N>')]" \
+                    "[#${target} ${name} is the default LLM - change the default first ('model default <N>')]" \
                     "$C_Error"
                 return 1
             fi
@@ -1400,38 +1400,38 @@ function model() {
 
             # Move file
             mkdir -p "$archive_dir"
-            if [[ -f "$fpath" ]]
-            then
+                if [[ -f "$fpath" ]]
+                then
                 if mv "$fpath" "$archive_dir/" 2>/dev/null
                 then
                     __tac_info "File" "[MOVED]" "$C_Success"
                 else
-                    __tac_info "File" "[MOVE FAILED — try: sudo chmod 755 $archive_dir]" "$C_Error"
+                    __tac_info "File" "[MOVE FAILED - try: sudo chmod 755 $archive_dir]" "$C_Error"
                     return 1
                 fi
             else
-                __tac_info "File" "[NOT ON DISK — removing from registry only]" "$C_Warning"
+                __tac_info "File" "[NOT ON DISK - removing from registry only]" "$C_Warning"
             fi
 
             # Remove from registry and renumber
             local remaining
             remaining=$(__renumber_registry "$target")
-            __tac_info "Registry" "[Archived and renumbered — ${remaining} models remain]" "$C_Success"
+            __tac_info "Registry" "[Archived and renumbered - ${remaining} models remain]" "$C_Success"
             ;;
 
         *)
             echo "Usage: model {scan|list|default|use|stop|status|info|bench|delete|archive|download}"
-            echo "  scan       — Scan $LLAMA_MODEL_DIR, read GGUF metadata, auto-calculate params"
-            echo "  list       — Show numbered model registry (▶ = active, * = default)"
-            echo "  default [N]— Show current default LLM, or set it to model #N"
-            echo "  use N      — Start model #N with optimal settings"
-            echo "  stop       — Stop llama-server"
-            echo "  status     — Show what's running"
-            echo "  info N     — Detailed info for model #N"
-            echo "  bench      — Benchmark all on-disk models"
-            echo "  delete N   — Permanently delete model #N from disk and registry"
-            echo "  archive N  — Move model #N to archive/ and remove from registry"
-            echo "  download   — Download GGUF models from Hugging Face (repo:file)"
+            echo "  scan       - Scan $LLAMA_MODEL_DIR, read GGUF metadata, auto-calculate params"
+            echo "  list       - Show numbered model registry (${PLAY_MARK} = active, * = default)"
+            echo "  default [N] - Show current default LLM, or set it to model #N"
+            echo "  use N      - Start model #N with optimal settings"
+            echo "  stop       - Stop llama-server"
+            echo "  status     - Show what's running"
+            echo "  info N     - Detailed info for model #N"
+            echo "  bench      - Benchmark all on-disk models"
+            echo "  delete N   - Permanently delete model #N from disk and registry"
+            echo "  archive N  - Move model #N to archive/ and remove from registry"
+            echo "  download   - Download GGUF models from Hugging Face (repo:file)"
             ;;
     esac
 }
@@ -1508,7 +1508,7 @@ function burn() {
         printf '%s\n' "$C_Reset"
         if [[ "$_health" != *'"ok"'* ]]
         then
-            __tac_info "Status" "Model failed to become healthy — check: tail $LLM_LOG_FILE" "$C_Error"
+            __tac_info "Status" "Model failed to become healthy - check: tail $LLM_LOG_FILE" "$C_Error"
             return 1
         fi
     fi
@@ -1533,7 +1533,7 @@ function burn() {
 
     if [[ -z "$response" ]]
     then
-        printf '%s\n' "${C_Error}[API Error]${C_Reset} No response — model may have crashed during inference."
+        printf '%s\n' "${C_Error}[API Error]${C_Reset} No response - model may have crashed during inference."
         return 1
     fi
 
@@ -1611,7 +1611,7 @@ function wtf_repl() {
     then
         __llm_stream "Explain how to use the following tool or concept:\n$initial"
     fi
-    printf '%s\n' "${C_Dim}wtf: mode — type a topic (or 'end-chat' / Ctrl-C to exit)${C_Reset}"
+    printf '%s\n' "${C_Dim}wtf: mode - type a topic (or 'end-chat' / Ctrl-C to exit)${C_Reset}"
     while true
     do
         local topic
@@ -1775,7 +1775,7 @@ function local_chat() {
     then
         __send_chat_msg "$initial"
     fi
-    printf '%s\n' "${C_Dim}chat: mode — type a message (or 'end-chat' / 'save' / Ctrl-C to exit)${C_Reset}"
+    printf '%s\n' "${C_Dim}chat: mode - type a message (or 'end-chat' / 'save' / Ctrl-C to exit)${C_Reset}"
     while true
     do
         local msg
@@ -1836,7 +1836,7 @@ function chat-pipe() {
     ctx=$(cat)
     if [[ -z "$ctx" ]]
     then
-        __tac_info "stdin" "[EMPTY — pipe some content]" "$C_Error"
+        __tac_info "stdin" "[EMPTY - pipe some content]" "$C_Error"
         return 1
     fi
     local question="${*:-Explain this.}"

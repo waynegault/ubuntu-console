@@ -36,9 +36,9 @@ C_Border=$'\e[38;5;245m'
 W=80  # box width
 
 # ── Drawing helpers ──────────────────────────────────────────────────────────
-border_top()    { printf '%s╔%s╗%s\n' "$C_Border" "$(printf '═%.0s' $(seq 1 $((W-2))))" "$C_Reset"; }
-border_mid()    { printf '%s╟%s╢%s\n' "$C_Border" "$(printf '─%.0s' $(seq 1 $((W-2))))" "$C_Reset"; }
-border_bot()    { printf '%s╚%s╝%s\n' "$C_Border" "$(printf '═%.0s' $(seq 1 $((W-2))))" "$C_Reset"; }
+border_top()    { printf '%s+%s+%s\n' "$C_Border" "$(printf '%.0s-' $(seq 1 $((W-2))))" "$C_Reset"; }
+border_mid()    { printf '%s|%s|%s\n' "$C_Border" "$(printf '%.0s-' $(seq 1 $((W-2))))" "$C_Reset"; }
+border_bot()    { printf '%s+%s+%s\n' "$C_Border" "$(printf '%.0s-' $(seq 1 $((W-2))))" "$C_Reset"; }
 row() {
     local text="$1"
     # Strip ANSI to measure visible length
@@ -46,7 +46,7 @@ row() {
     plain=$(printf '%s' "$text" | sed 's/\x1b\[[0-9;]*m//g')
     local pad=$(( W - 2 - ${#plain} ))
     (( pad < 0 )) && pad=0
-    printf '%s║%s %s%*s%s║%s\n' "$C_Border" "$C_Reset" "$text" "$((pad - 1))" "" "$C_Border" "$C_Reset"
+    printf '%s| %s%*s |%s\n' "$C_Border" "$text" "$((pad - 1))" "" "$C_Reset"
 }
 row_empty() { row ""; }
 
@@ -54,16 +54,16 @@ row_empty() { row ""; }
 section_header() {
     local label="$1" passed="$2" total="$3"
     local colour="$C_BoldGreen"
-    local symbol="✓"
+    local symbol="v"
     if [[ "$passed" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]] && (( passed < total ))
     then
         colour="$C_BoldRed"
-        symbol="✗"
+        symbol="x"
     fi
     border_mid
     if [[ "$passed" =~ ^[0-9]+$ ]]
     then
-        row "${C_Bold}${C_Cyan}  ${label}${C_Reset}${C_Dim}  ── ${passed}/${total} ${symbol}${C_Reset}"
+        row "${C_Bold}${C_Cyan}  ${label}${C_Reset}${C_Dim}  - ${passed}/${total} ${symbol}${C_Reset}"
     else
         row "${C_Bold}${C_Cyan}  ${label}${C_Reset}"
     fi
@@ -71,9 +71,9 @@ section_header() {
 }
 
 # ── Section display names keyed by test-name prefix ──────────────────────────
-declare -A SECTION_NAMES=(
-    ["bash -n"]="1. Syntax — bash -n"
-    ["shellcheck"]="2. Static Analysis — ShellCheck"
+    declare -A SECTION_NAMES=(
+    ["bash -n"]="1. Syntax - bash -n"
+    ["shellcheck"]="2. Static Analysis - ShellCheck"
     ["structure"]="3. Profile Structure"
     ["constants"]="4. Global Constants"
     ["ui"]="5. UI Helper Engine"
@@ -104,7 +104,7 @@ SECTION_ORDER=(
 # arrives, then the grouped section summaries follow, then a conclusion.
 
 border_top
-row "${C_Bold}  TACTICAL CONSOLE — Unit Test Report${C_Reset}"
+row "${C_Bold}  TACTICAL CONSOLE - Unit Test Report${C_Reset}"
 row "${C_Dim}  $(date '+%Y-%m-%d %H:%M:%S')   bats $(bats --version 2>/dev/null || echo '?')${C_Reset}"
 
 # ── Part 1: Test Live Stream ─────────────────────────────────────────────────
@@ -120,12 +120,12 @@ do
     then
         (( _live_num++ ))
         (( _live_pass++ ))
-        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Green}✓${C_Reset}"
+        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Green}${symbol}${C_Reset}"
     elif [[ "$line" =~ ^not\ ok\ [0-9]+\ (.+)$ ]]
     then
         (( _live_num++ ))
         (( _live_fail++ ))
-        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Red}✗${C_Reset}"
+        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Red}${symbol}${C_Reset}"
     fi
     tap_output+="$line"$'\n'
 done < <(bats --tap "$BATS_FILE" "$@" 2>&1) || true
@@ -233,11 +233,11 @@ do
         then
             (( grand_pass++ ))
             (( _sum_num++ ))
-            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Green}✓${C_Reset}"
+            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Green}v${C_Reset}"
         else
             (( grand_fail++ ))
             (( _sum_num++ ))
-            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Red}✗${C_Reset}"
+            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Red}x${C_Reset}"
             # Print diagnostic lines indented
             if [[ -n "${T_DIAG[$i]:-}" ]]
             then
@@ -269,7 +269,7 @@ else
     do
         if [[ "${T_STATUS[$i]}" != "ok" ]]
         then
-            row "  ${C_Red}✗${C_Reset} ${T_NAME[$i]}"
+            row "  ${C_Red}x${C_Reset} ${T_NAME[$i]}"
             if [[ -n "${T_DIAG[$i]:-}" ]]
             then
                 while IFS= read -r dline

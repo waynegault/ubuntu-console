@@ -132,7 +132,7 @@ declare -ri VRAM_USABLE_PCT=95       # Percentage usable after driver overhead
 declare -ri VRAM_THRESHOLD_PCT=85    # Threshold for "fits in VRAM" decisions
 declare -ri COOLDOWN_DAILY=86400     # 24 hours in seconds
 declare -ri COOLDOWN_WEEKLY=604800   # 7 days in seconds
-declare -ri LOG_MAX_BYTES=1048576    # 1 MB — logtrim threshold
+declare -ri LOG_MAX_BYTES=1048576    # 1 MB - logtrim threshold
 declare -ri MOE_DEFAULT_CTX=8192     # Default context size for MoE models
 declare -ri LLAMA_DRIVE_FALLBACK_BYTES=$((200 * 1024 * 1024 * 1024))  # 200 GB
 
@@ -154,6 +154,33 @@ export UIWidth="${UIWidth:-80}"
 # /dev/shm. Precedence: LLM_TPS_CACHE is read on dashboard render; LAST_TPS
 # is the fallback when the cache file does not yet exist.
 LAST_TPS="Untested"
+
+# Unicode-safe UI tokens (use \u escapes so source file remains ASCII)
+# Box drawing tokens
+readonly BOX_TL=$'\u2554'  # BOX_TL (upper-left corner)
+readonly BOX_TR=$'\u2557'  # BOX_TR (upper-right corner)
+readonly BOX_BL=$'\u255A'  # BOX_BL (lower-left corner)
+readonly BOX_BR=$'\u255D'  # BOX_BR (lower-right corner)
+readonly BOX_LM=$'\u2560'  # BOX_LM (left-middle connector)
+readonly BOX_RM=$'\u2563'  # BOX_RM (right-middle connector)
+readonly BOX_H=$'\u2550'   # BOX_H (double horizontal)
+readonly BOX_V=$'\u2551'   # BOX_V (double vertical)
+readonly BOX_SL=$'\u2500'  # BOX_SL (single horizontal)
+readonly BOX_SLC=$'\u255F' # BOX_SLC (single-left connector)
+readonly BOX_SRC=$'\u2562' # BOX_SRC (single-right connector)
+
+# General glyphs
+readonly DEGREE=$'\u00B0'  # DEGREE (degree sign)
+readonly CHECK_MARK=$'\u2713' # CHECK_MARK (check mark)
+readonly CROSS_MARK=$'\u2717' # CROSS_MARK (cross mark)
+readonly BULLET=$'\u25CF'     # BULLET (bullet)
+readonly ARROW_R=$'\u2192'    # ARROW_R (right arrow)
+readonly WARN_SIGN=$'\u26A0'   # WARN_SIGN (warning sign)
+
+# Spinner (ASCII fallback to avoid glyph proliferation in many files)
+readonly SPINNER_ASCII='/-\\|'
+readonly PLAY_MARK=$'\u25B6'  # PLAY_MARK (play triangle)
+readonly TRI_DOWN=$'\u25BC'   # TRI_DOWN (down triangle)
 
 # Guard against PATH duplication on re-source (e.g., source ~/.bashrc).
 # Each block checks whether the directory is already in PATH before prepending.

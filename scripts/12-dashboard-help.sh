@@ -17,7 +17,7 @@
 function tactical_dashboard() {
     command clear
     __TAC_BG_PIDS=()  # Reset to avoid unbounded growth across renders
-    local line; printf -v line '%*s' "$((UIWidth - 2))" ''; line="${line// /═}"
+    local line; printf -v line '%*s' "$((UIWidth - 2))" ''; line="${line// /${BOX_H}}"
 
     __tac_header "TACTICAL DASHBOARD" "open" "$TACTICAL_PROFILE_VERSION"
 
@@ -77,7 +77,7 @@ function tactical_dashboard() {
     __fRow "STORAGE" "$disk" "$C_Text"
 
     # --- GPU & LLM block ---
-    printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
+    printf '%s\n' "${C_BoxBg}${BOX_LM}${line}${BOX_RM}${C_Reset}"
 
     local gpu_display="$gpu_raw"
     local g_name="" g_temp="" g_util="" g_mem_u="" g_mem_t=""
@@ -85,7 +85,7 @@ function tactical_dashboard() {
     then
         IFS=',' read -r g_name g_temp g_util g_mem_u g_mem_t <<< "$gpu_raw"
         g_name="${g_name/ Laptop GPU/}"; g_name="${g_name# }"; g_name="${g_name% }"
-        gpu_display="${g_name} | ${g_util// /}% Load | ${g_temp// /}°C | ${g_mem_u// /} / ${g_mem_t// /} Mb"
+        gpu_display="${g_name} | ${g_util// /}% Load | ${g_temp// /}${DEGREE}C | ${g_mem_u// /} / ${g_mem_t// /} Mb"
     fi
     # GPU colour: <75% load=green, 75-90%=yellow, >90%=red
     local gpu_color=$C_Highlight
@@ -141,7 +141,7 @@ function tactical_dashboard() {
     __fRow "WSL" "ACTIVE  ${WSL_DISTRO_NAME:-UNKNOWN}  ($(uname -r))" "$C_Success"
 
     # --- OpenClaw status block ---
-    printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
+    printf '%s\n' "${C_BoxBg}${BOX_LM}${line}${BOX_RM}${C_Reset}"
     local oc_stat="OFFLINE"
     local oc_active=0
     __test_port "$OC_PORT" && { oc_stat="ONLINE"; oc_active=1; }
@@ -280,10 +280,10 @@ function tactical_dashboard() {
                     (( valPad < 0 )) && valPad=0
                     local vPadStr=""; (( valPad > 0 )) && printf -v vPadStr '%*s' "$valPad" ""
                     local labelPad=""; printf -v labelPad '%*s' 12 ""
-                    printf "${C_BoxBg}║${C_Reset}"
+                    printf "${C_BoxBg}${BOX_V}${C_Reset}"
                     printf "  ${C_Dim}%s${C_Reset}" "$labelPad"
                     # Reserve the same 4-character separator width as __fRow (" :: ")
-                    printf "    %s%s${C_BoxBg}║${C_Reset}\n" "$formatted" "$vPadStr"
+                    printf "    %s%s${C_BoxBg}${BOX_V}${C_Reset}\n" "$formatted" "$vPadStr"
                 fi
             done <<< "$agent_use_out"
             if (( first == 1 )); then
@@ -304,7 +304,7 @@ function tactical_dashboard() {
     gitStat=$(__get_git)
     if [[ -n "$gitStat" ]]
     then
-        printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
+        printf '%s\n' "${C_BoxBg}${BOX_LM}${line}${BOX_RM}${C_Reset}"
         local gBranch gSec
         IFS='|' read -r gBranch gSec <<< "$gitStat"
         __fRow "TARGET REPO" "$gBranch" "$C_Warning"
@@ -316,7 +316,7 @@ function tactical_dashboard() {
         __fRow "SEC STATUS" "$gSec" "$sec_color"
     fi
 
-    printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
+    printf '%s\n' "${C_BoxBg}${BOX_LM}${line}${BOX_RM}${C_Reset}"
 
     local cmds_toggle
     if [[ $oc_active == 1 ]]
@@ -333,9 +333,9 @@ function tactical_dashboard() {
     local lCmdPad=""; (( leftPad  > 0 )) && printf -v lCmdPad '%*s' "$leftPad"  ""
     local rCmdPad=""; (( rightPad > 0 )) && printf -v rCmdPad '%*s' "$rightPad" ""
 
-    printf "${C_BoxBg}║%s${C_Dim}%s${C_Reset}%s${C_BoxBg}║${C_Reset}\n" "$lCmdPad" "$cmds" "$rCmdPad"
+    printf "${C_BoxBg}${BOX_V}%s${C_Dim}%s${C_Reset}%s${C_BoxBg}${BOX_V}${C_Reset}\n" "$lCmdPad" "$cmds" "$rCmdPad"
 
-    printf '%s\n' "${C_BoxBg}╚${line}╝${C_Reset}"
+    printf '%s\n' "${C_BoxBg}${BOX_BL}${line}${BOX_BR}${C_Reset}"
 }
 
 # ---------------------------------------------------------------------------
@@ -403,9 +403,9 @@ function bashrc_dryrun() {
     echo "Dry-run: sourcing $src in a subshell..."
     if bash -n "$src" 2>&1
     then
-        echo "${C_Success}PASS${C_Reset} — No syntax errors."
-    else
-        echo "${C_Error}FAIL${C_Reset} — Syntax errors detected above."
+        echo "${C_Success}PASS${C_Reset} - No syntax errors."
+        else
+            echo "${C_Error}FAIL${C_Reset} - Syntax errors detected above."
         return 1
     fi
 }
@@ -425,7 +425,7 @@ function tactical_help() {
     local __pr=$(( __iw - ${#__title} - __pl ))
     local __ls=""; (( __pl > 0 )) && printf -v __ls '%*s' "$__pl" ""
     local __rs=""; (( __pr > 0 )) && printf -v __rs '%*s' "$__pr" ""
-    printf "${C_BoxBg}║${C_Reset}${C_Warning}%s%s%s${C_Reset}${C_BoxBg}║${C_Reset}\n" "$__ls" "$__title" "$__rs"
+    printf "${C_BoxBg}${BOX_V}${C_Reset}${C_Warning}%s%s%s${C_Reset}${C_BoxBg}${BOX_V}${C_Reset}\n" "$__ls" "$__title" "$__rs"
     __hRow "m" "Open Tactical Dashboard with live system stats"
     __hRow "h" "Display this command reference with all shortcuts"
     __hRow "up" "Run 10-step maintenance: updates, caches, GPU, disk"
@@ -438,8 +438,8 @@ function tactical_help() {
     __hRow "oedit" "Open tactical-console.bashrc in VS Code for editing"
     __hRow "code <path>" "Open any file or directory in VS Code (lazy-resolved)"
 
-    __hSection "OPENCLAW — GATEWAY"
-    __hRow "so / xo" "Start / Stop the OpenClaw gateway (xo stops only — use 'oc restart' to restart)"
+    __hSection "OPENCLAW - GATEWAY"
+    __hRow "so / xo" "Start / Stop the OpenClaw gateway (xo stops only - use 'oc restart' to restart)"
     __hRow "oc restart" "Full gateway restart (native: openclaw gateway restart)"
     __hRow "oc gs / oc stat" "Gateway deep health probe / Full status --all"
     __hRow "oc health" "Ping gateway HTTP /api/health endpoint"
@@ -448,7 +448,7 @@ function tactical_help() {
     __hRow "oc update" "Update the OpenClaw CLI binary to latest release"
     __hRow "oc tui" "Launch the OpenClaw interactive terminal UI"
 
-    __hSection "OPENCLAW — AGENTS & SESSIONS"
+    __hSection "OPENCLAW - AGENTS & SESSIONS"
     __hRow "os / oa" "List all active sessions / Show registered agents"
     __hRow "oc start" "Dispatch an agent turn (--message '<msg>' required)"
     __hRow "oc stop" "Delete an agent by ID (--agent <id> required)"
@@ -456,7 +456,7 @@ function tactical_help() {
     __hRow "oc mem-index" "Rebuild the OpenClaw vector memory search index"
     __hRow "oc memory-search" "Semantic search across the OpenClaw memory store"
 
-    __hSection "OPENCLAW — CONFIG & LOGS"
+    __hSection "OPENCLAW - CONFIG & LOGS"
     __hRow "oc conf" "Open openclaw.json global config in VS Code"
     __hRow "oc config" "Read or write OpenClaw config keys (get|set|unset)"
     __hRow "oc env" "Display all OpenClaw and LLM environment variables"
@@ -473,7 +473,7 @@ function tactical_help() {
     __hRow "oc failover" "Configure cloud LLM fallback (on|off|status)"
     __hRow "oc refresh-keys" "Force re-import of Windows API keys into WSL"
 
-    __hSection "OPENCLAW — DATA & EXTENSIONS"
+    __hSection "OPENCLAW - DATA & EXTENSIONS"
     __hRow "oc wk / oc root" "Jump to OpenClaw Workspace or Root config dir"
     __hRow "oc backup" "Snapshot workspace + agents to timestamped ZIP"
     __hRow "oc restore" "Restore workspace + agents from a backup ZIP"
@@ -486,17 +486,17 @@ function tactical_help() {
     __hRow "oc nodes" "Manage compute nodes (status|list|describe)"
     __hRow "oc sandbox" "Manage code execution sandboxes (list|recreate)"
 
-    __hSection "OPENCLAW — LLM INTEGRATION"
+    __hSection "OPENCLAW - LLM INTEGRATION"
     __hRow "oc local-llm" "Register local llama.cpp as an OpenClaw provider"
     __hRow "oc sync-models" "Sync models.conf with OpenClaw provider scan"
 
-    __hSection "LLM — MODEL MANAGEMENT"
+    __hSection "LLM - MODEL MANAGEMENT"
     __hRow "wake" "Lock NVIDIA GPU persistence mode and WDDM state"
     __hRow "gpu-status" "Detailed NVIDIA GPU stats: util, VRAM, temp, power"
     __hRow "gpu-check" "Quick CUDA verification: device, VRAM, layer offload"
     __hRow "llmconf" "Open the models.conf registry file in VS Code"
     __hRow "model scan" "Scan model dir, read GGUF metadata, auto-calculate params"
-    __hRow "model list" "Show numbered model registry (▶ = active)"
+    __hRow "model list" "Show numbered model registry (${PLAY_MARK} = active)"
     __hRow "model default [N]" "Show current default LLM or set it to model #N"
     __hRow "model use N" "Start model #N with optimal GPU/ctx/thread settings"
     __hRow "model stop" "Stop the local llama-server"
@@ -511,7 +511,7 @@ function tactical_help() {
     __hRow "mlogs" "Open the llama-server runtime log in VS Code"
     __hRow "burn" "Run ~1300 token stress test and measure live TPS"
 
-    __hSection "LLM — CHAT & EXPLAIN"
+    __hSection "LLM - CHAT & EXPLAIN"
     __hRow "chat: [msg]" "Interactive LLM chat session (end-chat to exit)"
     __hRow "  save" "Inside chat: save conversation history to ~/chat_*.json"
     __hRow "chat-context" "Load a file as context then ask questions about it"

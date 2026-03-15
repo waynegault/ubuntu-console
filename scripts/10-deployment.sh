@@ -30,12 +30,12 @@ function mkproj() {
     # Verify required tools before creating any files
     if ! command -v python3 >/dev/null 2>&1
     then
-        __tac_info "python3" "[NOT FOUND — install before using mkproj]" "$C_Error"
+        __tac_info "python3" "[NOT FOUND - install before using mkproj]" "$C_Error"
         return 1
     fi
     if ! command -v git >/dev/null 2>&1
     then
-        __tac_info "git" "[NOT FOUND — install before using mkproj]" "$C_Error"
+        __tac_info "git" "[NOT FOUND - install before using mkproj]" "$C_Error"
         return 1
     fi
 

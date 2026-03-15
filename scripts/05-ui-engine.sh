@@ -156,9 +156,9 @@ function __tac_header() {
     local inner_width=$((UIWidth - 2))
     local line
     printf -v line '%*s' "$inner_width" ''
-    line="${line// /═}"
+    line="${line// /$BOX_H}"
 
-    printf "${C_BoxBg}╔${line}╗${C_Reset}\n"
+    printf "%s%s%s%s%s\n" "$C_BoxBg" "$BOX_TL" "$line" "$BOX_TR" "$C_Reset"
 
     if [[ -n "$version" ]]
     then
@@ -174,9 +174,9 @@ function __tac_header() {
         local pad1=""; (( gap1 > 0 )) && printf -v pad1 '%*s' "$gap1" ""
         local pad2=""; (( gap2 > 0 )) && printf -v pad2 '%*s' "$gap2" ""
 
-        local _hdr_fmt="${C_BoxBg}║${C_Reset}${C_Dim}%s${C_Reset}%s"
+        local _hdr_fmt="${C_BoxBg}${BOX_V}${C_Reset}${C_Dim}%s${C_Reset}%s"
         _hdr_fmt+="${C_Highlight}%s${C_Reset}%s"
-        _hdr_fmt+="${C_Dim}%s${C_Reset}${C_BoxBg}║${C_Reset}\n"
+        _hdr_fmt+="${C_Dim}%s${C_Reset}${C_BoxBg}${BOX_V}${C_Reset}\n"
         printf "$_hdr_fmt" \
             "$left_text" "$pad1" "$center_text" "$pad2" "$right_text"
     else
@@ -188,16 +188,16 @@ function __tac_header() {
         (( pad_left  > 0 )) && printf -v lpad  '%*s' "$pad_left"  ""
         (( pad_right > 0 )) && printf -v rpad '%*s' "$pad_right" ""
 
-        printf "${C_BoxBg}║${C_Reset}%s${C_Highlight}%s${C_Reset}%s${C_BoxBg}║${C_Reset}\n" \
+        printf "${C_BoxBg}${BOX_V}${C_Reset}%s${C_Highlight}%s${C_Reset}%s${C_BoxBg}${BOX_V}${C_Reset}\n" \
             "$lpad" "$display_text" "$rpad"
     fi
 
     if [[ "$style" == "open" ]]
     then
-        printf "${C_BoxBg}╠${line}╣${C_Reset}\n"
+        printf "%s%s%s%s%s\n" "$C_BoxBg" "$BOX_LM" "$line" "$BOX_RM" "$C_Reset"
     elif [[ "$style" == "closed" ]]
     then
-        printf "${C_BoxBg}╚${line}╝${C_Reset}\n"
+        printf "%s%s%s%s%s\n" "$C_BoxBg" "$BOX_BL" "$line" "$BOX_BR" "$C_Reset"
     fi
 }
 
@@ -206,8 +206,8 @@ function __tac_header() {
 # ---------------------------------------------------------------------------
 function __tac_footer() {
     local inner_width=$((UIWidth - 2))
-    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /═}"
-    printf "${C_BoxBg}╚${line}╝${C_Reset}\n"
+    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /${BOX_H}}"
+    printf "%s%s%s%s%s\n" "$C_BoxBg" "$BOX_BL" "$line" "$BOX_BR" "$C_Reset"
 }
 
 # ---------------------------------------------------------------------------
@@ -215,8 +215,8 @@ function __tac_footer() {
 # ---------------------------------------------------------------------------
 function __tac_divider() {
     local inner_width=$((UIWidth - 2))
-    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /─}"
-    printf "${C_BoxBg}╟${line}╢${C_Reset}\n"
+    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /$BOX_SL}"
+    printf "%s%s%s%s%s\n" "$C_BoxBg" "$BOX_SLC" "$line" "$BOX_SRC" "$C_Reset"
 }
 
 # ---------------------------------------------------------------------------
@@ -249,7 +249,7 @@ function __tac_line() {
     (( padLength < 1 )) && padLength=1
 
     local padding; printf -v padding '%*s' "$padLength" ""
-    printf "${C_BoxBg}║${C_Reset} %b%s%b%b%b ${C_BoxBg}║${C_Reset}\n" "$action" "$padding" "$color" "$status" "$C_Reset"
+    printf "${C_BoxBg}${BOX_V}${C_Reset} %b%s%b%b%b ${C_BoxBg}${BOX_V}${C_Reset}\n" "$action" "$padding" "$color" "$status" "$C_Reset"
 }
 
 # ---------------------------------------------------------------------------
@@ -287,14 +287,14 @@ function __fRow() {
     local lPadStr=""; (( labelPad > 0 )) && printf -v lPadStr '%*s' "$labelPad" ""
     local vPadStr=""; (( valPad  > 0 )) && printf -v vPadStr '%*s' "$valPad"  ""
 
-    printf "${C_BoxBg}║${C_Reset}"
+    printf "${C_BoxBg}${BOX_V}${C_Reset}"
     printf "  ${C_Dim}%s%s :: ${C_Reset}" "$label" "$lPadStr"
     if [[ -n "$color" ]]; then
         printf "%s%s%s" "$color" "$val" "$C_Reset"
     else
         printf "%s" "$val"
     fi
-    printf "%s${C_BoxBg}║${C_Reset}\n" "$vPadStr"
+    printf "%s${C_BoxBg}${BOX_V}${C_Reset}\n" "$vPadStr"
 }
 
 # ---------------------------------------------------------------------------
@@ -304,15 +304,15 @@ function __fRow() {
 function __hSection() {
     local title="$1"
     local inner_width=$((UIWidth - 2))
-    local sep; printf -v sep '%*s' "$inner_width" ''; sep="${sep// /═}"
+    local sep; printf -v sep '%*s' "$inner_width" ''; sep="${sep// /${BOX_H}}"
     local pad_left=$(( (inner_width - ${#title}) / 2 ))
     local pad_right=$(( inner_width - ${#title} - pad_left ))
 
     local left_space=""; (( pad_left  > 0 )) && printf -v left_space  '%*s' "$pad_left"  ""
     local right_space=""; (( pad_right > 0 )) && printf -v right_space '%*s' "$pad_right" ""
 
-    printf "${C_BoxBg}╠${sep}╣${C_Reset}\n"
-    printf "${C_BoxBg}║${C_Reset}${C_Warning}%s%s%s${C_Reset}${C_BoxBg}║${C_Reset}\n" \
+    printf "%s%s%s%s%s\n" "$C_BoxBg" "$BOX_LM" "$sep" "$BOX_RM" "$C_Reset"
+    printf "${C_BoxBg}${BOX_V}${C_Reset}${C_Warning}%s%s%s${C_Reset}${C_BoxBg}${BOX_V}${C_Reset}\n" \
         "$left_space" "$title" "$right_space"
 }
 
@@ -332,7 +332,7 @@ function __hRow() {
     local lPadStr=""; (( cmdPad  > 0 )) && printf -v lPadStr '%*s' "$cmdPad"  ""
     local rPadStr=""; (( descPad > 0 )) && printf -v rPadStr '%*s' "$descPad" ""
 
-    printf "${C_BoxBg}║  ${C_Highlight}%s%s${C_Text}%s%s${C_BoxBg}║${C_Reset}\n" "$cmd" "$lPadStr" "$desc" "$rPadStr"
+    printf "${C_BoxBg}${BOX_V}  ${C_Highlight}%s%s${C_Text}%s%s${C_BoxBg}${BOX_V}${C_Reset}\n" "$cmd" "$lPadStr" "$desc" "$rPadStr"
 }
 
 # ---------------------------------------------------------------------------
@@ -340,7 +340,7 @@ function __hRow() {
 # ---------------------------------------------------------------------------
 function __show_header() {
     local inner_width=$((UIWidth - 2))
-    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /═}"
+    local line; printf -v line '%*s' "$inner_width" ''; line="${line// /$BOX_H}"
 
     local left_text=" Bash v${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"
     local center_text="- Wayne's Ubuntu Terminal -"
@@ -353,13 +353,13 @@ function __show_header() {
     local pad1=""; (( gap1 > 0 )) && printf -v pad1 '%*s' "$gap1" ""
     local pad2=""; (( gap2 > 0 )) && printf -v pad2 '%*s' "$gap2" ""
 
-    printf "${C_BoxBg}╔${line}╗${C_Reset}\n"
-    local _hdr_fmt="${C_BoxBg}║${C_Reset}${C_Dim}%s${C_Reset}%s"
+    printf "%s%s%s%s%s\n" "$C_BoxBg" "$BOX_TL" "$line" "$BOX_TR" "$C_Reset"
+    local _hdr_fmt="${C_BoxBg}${BOX_V}${C_Reset}${C_Dim}%s${C_Reset}%s"
     _hdr_fmt+="${C_Highlight}%s${C_Reset}%s"
-    _hdr_fmt+="${C_Dim}%s${C_Reset}${C_BoxBg}║${C_Reset}\n"
+    _hdr_fmt+="${C_Dim}%s${C_Reset}${C_BoxBg}${BOX_V}${C_Reset}\n"
     printf "$_hdr_fmt" \
         "$left_text" "$pad1" "$center_text" "$pad2" "$right_text"
-    printf "${C_BoxBg}╚${line}╝${C_Reset}\n"
+    printf "%s%s%s%s%s\n" "$C_BoxBg" "$BOX_BL" "$line" "$BOX_BR" "$C_Reset"
 }
 
 # ---------------------------------------------------------------------------

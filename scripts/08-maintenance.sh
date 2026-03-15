@@ -47,9 +47,9 @@ function __check_cooldown() {
     # Per-key cooldown periods (default 7 days)
     local cooldown
     case "$key" in
-        apt_index)  cooldown=$COOLDOWN_DAILY  ;;  # 24 hours — security index
-        apt)        cooldown=$COOLDOWN_WEEKLY ;;  # 7 days  — package upgrades
-        *)          cooldown=$COOLDOWN_WEEKLY ;;  # 7 days  — everything else
+        apt_index)  cooldown=$COOLDOWN_DAILY  ;;  # 24 hours - security index
+        apt)        cooldown=$COOLDOWN_WEEKLY ;;  # 7 days  - package upgrades
+        *)          cooldown=$COOLDOWN_WEEKLY ;;  # 7 days  - everything else
     esac
     local last_run
     last_run=$(grep "^${key}=" "$CooldownDB" 2>/dev/null | tail -n 1 | cut -d= -f2)
@@ -309,7 +309,7 @@ function up() {
         fi
         if (( _state_age < 60 ))
         then
-            __tac_line "[10/10] Stale Processes" "[${stale_count} BOOTING — GRACE PERIOD]" "$C_Dim"
+            __tac_line "[10/10] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
         else
             pkill -u "$USER" -x llama-server 2>/dev/null
             rm -f "$ACTIVE_LLM_FILE"
@@ -377,7 +377,7 @@ function sysinfo() {
         g_util=${g_util%%%}
         # Strip whitespace from temperature
         g_temp=${g_temp// /}
-        gpu_info="${g_util}%/${g_temp}°C"
+        gpu_info="${g_util}%/${g_temp}${DEGREE}C"
         gpu_color=$(__threshold_color "$g_util")
     fi
     # CPU colour

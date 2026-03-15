@@ -13,7 +13,7 @@ link() {
     local src="$REPO/$1" dest="$2"
     mkdir -p "$(dirname "$dest")"
     ln -sf "$src" "$dest"
-    echo "  $dest → $src"
+    echo "  $dest -> $src"
 }
 
 echo "Installing Tactical Console from $REPO ..."
@@ -90,9 +90,9 @@ else
     echo "[WARNING] Tactical Console Profile not found at ~/ubuntu-console/tactical-console.bashrc"
 fi
 LOADER
-    echo "  ~/.bashrc — created thin loader"
+    echo "  ~/.bashrc - created thin loader"
 else
-    echo "  ~/.bashrc — already a thin loader (skipped)"
+    echo "  ~/.bashrc - already a thin loader (skipped)"
 fi
 
 # Standalone scripts → ~/.local/bin/

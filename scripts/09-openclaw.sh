@@ -45,7 +45,7 @@ function so() {
     _pre_state=$(systemctl --user show -p SubState --value "$_svc" 2>/dev/null)
     if [[ "$_pre_state" == "auto-restart" || "$_pre_state" == "failed" ]]
     then
-        __tac_info "Gateway" "[STALE — clearing ${_pre_state} state]" "$C_Warning"
+        __tac_info "Gateway" "[STALE - clearing ${_pre_state} state]" "$C_Warning"
         systemctl --user stop "$_svc" 2>/dev/null
         systemctl --user reset-failed "$_svc" 2>/dev/null
         sleep 1
@@ -54,7 +54,7 @@ function so() {
     # ── Pre-flight: detect port held by orphan process ─────────────────
     if __test_port "$OC_PORT"
     then
-        __tac_info "Gateway" "[PORT $OC_PORT HELD — freeing]" "$C_Warning"
+        __tac_info "Gateway" "[PORT $OC_PORT HELD - freeing]" "$C_Warning"
         openclaw gateway stop >/dev/null 2>&1
         systemctl --user stop "$_svc" 2>/dev/null
         sleep 1
@@ -65,7 +65,7 @@ function so() {
             then
                 return 1
             fi
-            # Re-check after auto-kill — if WSL side still holds it, give up
+            # Re-check after auto-kill - if WSL side still holds it, give up
             if __test_port "$OC_PORT"
             then
                 __tac_info "Gateway" "[PORT $OC_PORT BLOCKED]" "$C_Error"
@@ -93,7 +93,7 @@ function so() {
         if tailscale serve status 2>/dev/null | grep -q ":$OC_PORT\b"
         then
             _ts_serve_active=1
-            __tac_info "Tailscale Serve" "[CYCLING — port $OC_PORT proxy]" "$C_Dim"
+            __tac_info "Tailscale Serve" "[CYCLING - port $OC_PORT proxy]" "$C_Dim"
             sudo -n tailscale serve off 2>/dev/null
             rm -f /tmp/openclaw-1000/gateway.*.lock 2>/dev/null
             sleep 1
@@ -116,7 +116,7 @@ function so() {
     # ── Step 1: Ensure local LLM is running ──────────────────────────
     if pgrep -x llama-server >/dev/null 2>&1 && __test_port "$LLM_PORT"
     then
-        # LLM is already running — show which model
+        # LLM is already running - show which model
         local _so_active_num=""
         [[ -f "$ACTIVE_LLM_FILE" ]] && _so_active_num=$(< "$ACTIVE_LLM_FILE")
         if [[ -n "$_so_active_num" && -f "$LLM_REGISTRY" ]]
@@ -130,7 +130,7 @@ function so() {
             __tac_info "Local LLM" "[RUNNING]" "$C_Success"
         fi
     else
-        # LLM not running — resolve default and start it
+        # LLM not running - resolve default and start it
         local _so_def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
         local _so_def_file=""
         [[ -f "$_so_def_conf" ]] && _so_def_file=$(< "$_so_def_conf")
@@ -151,7 +151,7 @@ function so() {
         { serve &>/dev/null & } 2>/dev/null
         local _serve_pid=$!
         disown "$_serve_pid" 2>/dev/null
-        local _spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+        local _spin_chars="$SPINNER_ASCII"
         local _sw=0 _sw_max=90
         while (( _sw < _sw_max ))
         do
@@ -163,7 +163,7 @@ function so() {
                 _hb=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
                 [[ "$_hb" == *'"ok"'* ]] && break
             fi
-            # serve exited and no llama-server process exists — real failure
+            # serve exited and no llama-server process exists - real failure
             if ! kill -0 "$_serve_pid" 2>/dev/null \
                 && ! pgrep -x llama-server >/dev/null 2>&1
             then
@@ -183,11 +183,11 @@ function so() {
             then
                 __tac_info "Local LLM" "[ONLINE] ${_so_model_name} (${_sw}s)" "$C_Success"
             else
-                __tac_info "Local LLM" "[NOT HEALTHY — check: tail $LLM_LOG_FILE]" "$C_Error"
+                __tac_info "Local LLM" "[NOT HEALTHY - check: tail $LLM_LOG_FILE]" "$C_Error"
                 return 1
             fi
         else
-            __tac_info "Local LLM" "[FAILED TO START — check: tail $LLM_LOG_FILE]" "$C_Error"
+            __tac_info "Local LLM" "[FAILED TO START - check: tail $LLM_LOG_FILE]" "$C_Error"
             return 1
         fi
     fi
@@ -196,7 +196,7 @@ function so() {
     openclaw gateway start >/dev/null 2>&1
 
     local ready=0 elapsed=0 max_wait=20
-    local _restarts_before _spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    local _restarts_before _spin_chars="$SPINNER_ASCII"
     _restarts_before=$(systemctl --user show -p NRestarts --value "$_svc" 2>/dev/null || echo 0)
 
     while (( elapsed < max_wait ))
@@ -207,7 +207,7 @@ function so() {
             break
         fi
 
-        # Spinner with elapsed time — single overwritten line
+        # Spinner with elapsed time - single overwritten line
         printf '\r%s' "  ${C_Dim}${_spin_chars:elapsed%10:1} Starting gateway (${elapsed}s)${C_Reset}  "
 
         # Every 5s, check for crash loops or hard failure
@@ -253,7 +253,7 @@ function so() {
         __tac_info "Gateway" "[ONLINE] (${elapsed}s)" "$C_Success"
     elif systemctl --user is-active --quiet "$_svc" 2>/dev/null
     then
-        __tac_info "Gateway" "[STARTING — port not ready]" "$C_Warning"
+            __tac_info "Gateway" "[STARTING - port not ready]" "$C_Warning"
         printf '%s\n' "  ${C_Dim}Service active after ${elapsed}s but port $OC_PORT not responding.${C_Reset}"
         printf '%s\n' "  ${C_Dim}Retry in a moment or run 'le' for logs.${C_Reset}"
     else
@@ -271,7 +271,7 @@ function so() {
 }
 
 # ---------------------------------------------------------------------------
-# __so_show_errors — Extract and display the most recent gateway errors.
+# __so_show_errors - Extract and display the most recent gateway errors.
 # Pulls the last 30 log lines and shows up to 5 matching error patterns.
 # ---------------------------------------------------------------------------
 function __so_show_errors() {
@@ -289,7 +289,7 @@ function __so_show_errors() {
 }
 
 # ---------------------------------------------------------------------------
-# __so_check_win_port — Detect a Windows-side process holding a port (WSL).
+# __so_check_win_port - Detect a Windows-side process holding a port (WSL).
 # WSL shares the host network stack, so a Windows process binding a port is
 # invisible to ss/lsof inside WSL but blocks bind().
 # Usage: __so_check_win_port <port> [--block]
@@ -318,7 +318,7 @@ function __so_check_win_port() {
     _pid_only="${_win_holder##*PID }"
     _pid_only="${_pid_only%%)*}"
 
-    __tac_info "Gateway" "[PORT ${_port} BLOCKED — Windows: ${_win_holder}]" "$C_Warning"
+    __tac_info "Gateway" "[PORT ${_port} BLOCKED - Windows: ${_win_holder}]" "$C_Warning"
 
     # Prefer stopping the actual Windows service(s) hosted by the svchost
     # instance, falling back to taskkill if stopping the service(s) fails.
@@ -355,7 +355,7 @@ function __so_check_win_port() {
             fi
                 # If non-elevated stop didn't free the port, try elevating
                 # via Start-Process -Verb RunAs. This will prompt UAC on Windows.
-                __tac_info "Gateway" "[ATTEMPTING ELEVATED STOP — UAC may appear]" "$C_Dim"
+                __tac_info "Gateway" "[ATTEMPTING ELEVATED STOP - UAC may appear]" "$C_Dim"
                 # Build a PowerShell-friendly quoted name list: 'svc1','svc2'
                 local _ps_names=""
                 while IFS= read -r _sname; do
@@ -410,13 +410,13 @@ function __so_check_win_port() {
             return 0
         fi
         __tac_info "Gateway" "[PORT ${_port} FREED]" "$C_Success"
-        return 1  # port cleared — caller should NOT abort
+        return 1  # port cleared - caller should NOT abort
     fi
 
-    # No taskkill.exe — fall back to manual instructions
+    # No taskkill.exe - fall back to manual instructions
     if [[ "$_block" == "--block" ]]
     then
-        __tac_info "Gateway" "[PORT ${_port} BLOCKED — Windows]" "$C_Error"
+        __tac_info "Gateway" "[PORT ${_port} BLOCKED - Windows]" "$C_Error"
     fi
     printf '%s\n' "  ${C_Dim}Kill it from Windows: taskkill /PID ${_pid_only} /F${C_Reset}"
     return 0
@@ -425,7 +425,7 @@ function __so_check_win_port() {
 # ---------------------------------------------------------------------------
 # xo — Stop the OpenClaw gateway.
 # Uses 'openclaw gateway stop' then systemctl for clean shutdown.
-# NOTE FOR AI AGENTS: xo only STOPS the gateway — it will NOT restart it.
+# NOTE FOR AI AGENTS: xo only STOPS the gateway - it will NOT restart it.
 #   To restart, use:  openclaw gateway restart   (or the alias: oc restart)
 # ---------------------------------------------------------------------------
 function xo() {
@@ -434,7 +434,7 @@ function xo() {
 
     # Hint for AI agents: xo stops but does not restart.
     if [[ -n "${OPENCLAW_AGENT_ID:-}" || -n "${AGENT_MODE:-}" ]]; then
-        printf '%s\n' "${C_Warning:-}⚠ xo only stops the gateway. To restart, run: openclaw gateway restart${C_Reset}"
+        printf '%s\n' "${C_Warning:-}${WARN_SIGN} xo only stops the gateway. To restart, run: openclaw gateway restart${C_Reset}"
     fi
 
     # Check if anything is actually running before we try to stop
@@ -466,7 +466,7 @@ function oc() {
     local sub="${1:-}"
     if [[ -z "$sub" ]]
     then
-        printf '%s\n' "${C_Highlight}oc — OpenClaw Command Reference${C_Reset}"
+        printf '%s\n' "${C_Highlight}oc - OpenClaw Command Reference${C_Reset}"
         printf '%s\n' ""
         printf '%s\n' "${C_Highlight}Gateway${C_Reset}"
         printf '  %-20s %s\n' "restart"      "Full gateway restart: stop, wait, start"
@@ -1025,7 +1025,7 @@ function oc-agent-use() {
 # Wraps the pwsh call in timeout to prevent hangs after sleep/hibernate.
 # ---------------------------------------------------------------------------
 function ockeys() {
-    printf '%s\n' "${C_Highlight}API Keys & Tokens (Windows Environment → WSL):${C_Reset}"
+    printf '%s\n' "${C_Highlight}API Keys & Tokens (Windows Environment ${ARROW_R} WSL):${C_Reset}"
     local found=0
     while IFS='=' read -r name val
     do
@@ -1038,9 +1038,9 @@ function ockeys() {
             local oc_visible=""
             if printenv "$name" >/dev/null 2>&1
             then
-                oc_visible="${C_Success}WSL ✓${C_Reset}"
+                oc_visible="${C_Success}WSL ${CHECK_MARK}${C_Reset}"
             else
-                oc_visible="${C_Error}WSL ✗${C_Reset}"
+                oc_visible="${C_Error}WSL ${CROSS_MARK}${C_Reset}"
             fi
             printf '%s\n' "  ${C_Dim}$name${C_Reset}  $masked  $oc_visible"
             ((found++))
@@ -1065,7 +1065,7 @@ function ocdoc-fix() {
     if [[ -f "$cfg" ]]
     then
         cp "$cfg" "$bak"
-        __tac_info "Config Backup" "[SAVED → $(basename "$bak")]" "$C_Success"
+        __tac_info "Config Backup" "[SAVED ${ARROW_R} $(basename "$bak")]" "$C_Success"
     fi
     openclaw doctor --fix
     if [[ -f "$bak" && -f "$cfg" ]]
@@ -1148,7 +1148,7 @@ function oc-refresh-keys() {
         chmod 600 "$envd_file" 2>/dev/null || true
         local _envd_base
         _envd_base=$(basename "$envd_file")
-        __tac_info "Env Bridge" "[SYNCED → ${_envd_base}]" "$C_Success"
+        __tac_info "Env Bridge" "[SYNCED ${ARROW_R} ${_envd_base}]" "$C_Success"
 
         # Reload user manager and import variables into the running session
         systemctl --user daemon-reload 2>/dev/null || true
@@ -1231,7 +1231,7 @@ function oc-backup() {
         local sz
         sz=$(stat -c%s "$zipPath" 2>/dev/null || echo "0")
         local human_sz=$(( sz / 1024 ))
-        __tac_info "Snapshot Archive" "[CREATED — ${human_sz}KB]" "$C_Success"
+        __tac_info "Snapshot Archive" "[CREATED - ${human_sz}KB]" "$C_Success"
         printf '%s\n' "  ${C_Dim}Path: $zipPath${C_Reset}"
 
         # Prune old snapshots — keep the 10 most recent
@@ -1304,7 +1304,7 @@ function oc-restore() {
     __tac_info "Extracting to staging area..." "[WORKING]" "$C_Dim"
     if ! unzip -q "$latest" -d "$tmp_restore"
     then
-        __tac_info "State Rollback" "[FAILED — ZIP ERROR, current state preserved]" "$C_Error"
+        __tac_info "State Rollback" "[FAILED - ZIP ERROR, current state preserved]" "$C_Error"
         rm -rf "$tmp_restore"
         return 1
     fi
@@ -1314,7 +1314,7 @@ function oc-restore() {
        && ! -f "$tmp_restore/.openclaw/openclaw.json" && ! -f "$tmp_restore/.bashrc" \
        && ! -f "$tmp_restore/.llm/models.conf" ]]
     then
-        __tac_info "State Rollback" "[FAILED — ZIP has no recognisable content]" "$C_Error"
+        __tac_info "State Rollback" "[FAILED - ZIP has no recognisable content]" "$C_Error"
         rm -rf "$tmp_restore"
         return 1
     fi
@@ -1323,7 +1323,7 @@ function oc-restore() {
     # A crafted ZIP could plant executables with elevated permissions.
     if find "$tmp_restore" \( -perm /4000 -o -perm /2000 -o -perm /0002 \) -print -quit 2>/dev/null | grep -q .
     then
-        __tac_info "State Rollback" "[FAILED — ZIP contains unsafe file permissions]" "$C_Error"
+        __tac_info "State Rollback" "[FAILED - ZIP contains unsafe file permissions]" "$C_Error"
         rm -rf "$tmp_restore"
         return 1
     fi
@@ -1646,9 +1646,9 @@ function oc-local-llm() {
     sleep 2
     if __test_port "$OC_PORT"
     then
-        __tac_info "OpenClaw → Local LLM" "[LINKED: $model_name on port $LLM_PORT]" "$C_Success"
+        __tac_info "OpenClaw ${ARROW_R} Local LLM" "[LINKED: $model_name on port $LLM_PORT]" "$C_Success"
     else
-        __tac_info "OpenClaw → Local LLM" "[LINKED but gateway not responding]" "$C_Warning"
+        __tac_info "OpenClaw ${ARROW_R} Local LLM" "[LINKED but gateway not responding]" "$C_Warning"
     fi
 }
 
@@ -1709,7 +1709,7 @@ function oc-sandbox() {
 function oc-env() {
     __tac_header "ENVIRONMENT VARIABLES" "open"
     __tac_line "OC_ROOT" "[$OC_ROOT]" "$C_Highlight"
-    __tac_line "OPENCLAW_ROOT" "[$OPENCLAW_ROOT] (deprecated → OC_ROOT)" "$C_Dim"
+    __tac_line "OPENCLAW_ROOT" "[$OPENCLAW_ROOT] (deprecated ${ARROW_R} OC_ROOT)" "$C_Dim"
     __tac_line "OC_WORKSPACE" "[$OC_WORKSPACE]" "$C_Dim"
     __tac_line "OC_AGENTS" "[$OC_AGENTS]" "$C_Dim"
     __tac_line "OC_LOGS" "[$OC_LOGS]" "$C_Dim"
@@ -1759,9 +1759,9 @@ function oc-diag() {
     printf '%s\n' "${C_Highlight}[2/5] Gateway Status${C_Reset}"
     if curl -sf --max-time 5 "http://127.0.0.1:${OC_PORT:-18789}/api/health" -o /dev/null 2>/dev/null
     then
-        printf '%s\n' "  ${C_Success}● Gateway reachable on port ${OC_PORT:-18789}${C_Reset}"
+        printf '%s\n' "  ${C_Success}${BULLET} Gateway reachable on port ${OC_PORT:-18789}${C_Reset}"
     else
-        printf '%s\n' "  ${C_Error}● Gateway NOT reachable on port ${OC_PORT:-18789}${C_Reset}"
+        printf '%s\n' "  ${C_Error}${BULLET} Gateway NOT reachable on port ${OC_PORT:-18789}${C_Reset}"
     fi
     echo ""
 
@@ -1795,7 +1795,7 @@ function oc-failover() {
         on)
             if [[ -z "${OPENAI_API_KEY:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]
             then
-                __tac_info "Failover" "[No cloud API key found — set OPENAI_API_KEY or ANTHROPIC_API_KEY]" "$C_Error"
+                __tac_info "Failover" "[No cloud API key found - set OPENAI_API_KEY or ANTHROPIC_API_KEY]" "$C_Error"
                 return 1
             fi
             # Verify the fallback model list is configured before enabling
@@ -1803,7 +1803,7 @@ function oc-failover() {
             fb_models=$(openclaw config get llm.fallback.models 2>/dev/null)
             if [[ -z "$fb_models" || "$fb_models" == "null" ]]
             then
-                __tac_info "Failover" "[No fallback models configured — set llm.fallback.models first]" "$C_Warning"
+                __tac_info "Failover" "[No fallback models configured - set llm.fallback.models first]" "$C_Warning"
             fi
             openclaw config set llm.fallback.enabled true 2>/dev/null
             __tac_info "Failover" "[Cloud fallback ENABLED]" "$C_Success"

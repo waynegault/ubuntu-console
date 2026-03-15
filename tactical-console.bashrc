@@ -100,19 +100,19 @@ _TAC_LOADER_VERSION="3.0"
 # Modules are sourced from ~/ubuntu-console/scripts/ in numeric order.
 # Each module has @modular-section, @depends, and @exports annotations.
 #
-# ┌─  01-constants.sh       ─ All paths, ports, env vars (single truth)
-# ├─  02-error-handling.sh   ─ Bash ERR trap → bash-errors.log
-# ├─  03-design-tokens.sh    ─ ANSI color constants (readonly)
-# ├─  04-aliases.sh          ─ Short commands, VS Code wrappers
-# ├─  05-ui-engine.sh        ─ Box-drawing primitives (__tac_* family)
-# ├─  06-hooks.sh            ─ cd override, prompt (PS1), port test
-# ├─  07-telemetry.sh        ─ CPU, GPU, battery, git, disk, tokens
-# ├─  08-maintenance.sh      ─ get-ip, up, cl, cpwd, sysinfo, logtrim
-# ├─  09-openclaw.sh         ─ Gateway, backup, cron, skills, plugins
-# ├─  10-deployment.sh       ─ mkproj scaffold, git commit+push
-# ├─  11-llm-manager.sh      ─ model mgmt, chat, burn, explain
-# ├─  12-dashboard-help.sh   ─ Tactical Dashboard ('m') and Help ('h')
-# └─  13-init.sh             ─ mkdir, completions, WSL loopback fix
+# -  01-constants.sh       - All paths, ports, env vars (single truth)
+# -  02-error-handling.sh   - Bash ERR trap -> bash-errors.log
+# -  03-design-tokens.sh    - ANSI color constants (readonly)
+# -  04-aliases.sh          - Short commands, VS Code wrappers
+# -  05-ui-engine.sh        - Box-drawing primitives (__tac_* family)
+# -  06-hooks.sh            - cd override, prompt (PS1), port test
+# -  07-telemetry.sh        - CPU, GPU, battery, git, disk, tokens
+# -  08-maintenance.sh      - get-ip, up, cl, cpwd, sysinfo, logtrim
+# -  09-openclaw.sh         - Gateway, backup, cron, skills, plugins
+# -  10-deployment.sh       - mkproj scaffold, git commit+push
+# -  11-llm-manager.sh      - model mgmt, chat, burn, explain
+# -  12-dashboard-help.sh   - Tactical Dashboard ('m') and Help ('h')
+# -  13-init.sh             - mkdir, completions, WSL loopback fix
 #
 # CROSS-CUTTING STATE:
 # - LAST_TPS: written by burn/llm_stream (§11) → read by dashboard (§12) via LLM_TPS_CACHE

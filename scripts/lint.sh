@@ -35,7 +35,7 @@ echo ""
 echo "=== ShellCheck ==="
 if ! command -v shellcheck >/dev/null 2>&1
 then
-    echo "  shellcheck not installed — skipping (sudo apt install shellcheck)"
+    echo "  shellcheck not installed - skipping (sudo apt install shellcheck)"
     exit "$rc"
 fi
 
@@ -58,7 +58,7 @@ done
 echo ""
 echo "=== Unicode Safety (non-ASCII in executable code) ==="
 if [[ "${SKIP_UNICODE_CHECK:-0}" == "1" ]]; then
-    echo "  SKIPPED — non-ASCII check disabled (intentional UI glyphs)"
+    echo "  SKIPPED - non-ASCII check disabled (intentional UI glyphs)"
 else
     for f in "$REPO_ROOT"/tactical-console.bashrc \
              "$REPO_ROOT"/install.sh \
@@ -71,7 +71,7 @@ else
         then
             echo "  PASS  ${f#"$REPO_ROOT"/}"
         else
-            echo "  WARN  ${f#"$REPO_ROOT"/}  — non-ASCII on executable lines:"
+            echo "  WARN  ${f#"$REPO_ROOT"/}  - non-ASCII on executable lines:"
             echo "$hits" | head -5
         fi
     done
@@ -82,7 +82,7 @@ if (( rc == 0 ))
 then
     echo "All checks passed."
 else
-    echo "Some checks failed — see above."
+    echo "Some checks failed - see above."
 fi
 exit "$rc"
 
