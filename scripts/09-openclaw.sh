@@ -780,7 +780,7 @@ function oc-agent-use() {
                     (.sessions // .items // . // [])
                     | (if type=="array" then . else [] end)
                     | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
-                    | group_by(.agent)
+                    | sort_by(.agent) | group_by(.agent)
                     | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})[] | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' > "${stats_cache}.tmp" 2>/dev/null; then
             mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
         fi
@@ -802,7 +802,7 @@ function oc-agent-use() {
                     (.sessions // .items // . // [])
                     | (if type=="array" then . else [] end)
                     | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
-                    | group_by(.agent)
+                    | sort_by(.agent) | group_by(.agent)
                     | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})' "$session_cache" 2>/dev/null > "${stats_cache}.tmp"; then
                     mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
                 fi
@@ -811,7 +811,7 @@ function oc-agent-use() {
                     (.sessions // .items // . // [])
                     | (if type=="array" then . else [] end)
                     | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
-                    | group_by(.agent)
+                    | sort_by(.agent) | group_by(.agent)
                     | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})' "$session_cache" 2>/dev/null > "${stats_cache}.tmp"; then
                     mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
                 fi &
@@ -895,17 +895,17 @@ function oc-agent-use() {
         fi
     }
 
-    # Assemble sorted list by percent (desc)
+    # Assemble sorted list by display name (aggregate agents that share a
+    # friendly name) and compute percent (desc)
     local lines_file
     lines_file=$(mktemp) || lines_file="/tmp/oc_lines.$$"
+    declare -A name_in name_out name_tot name_cap name_count name_ids
     for id in "${!amap[@]}"; do
         local in_s=${input_sum[$id]:-0}
         local out_s=${output_sum[$id]:-0}
         local reported_tot=${total_sum[$id]:-0}
         local cap=${cap_val[$id]:-0}
-        # Compute total: prefer reported total, but if it's smaller than
-        # the observed sum(input+output), use the larger value so numbers
-        # reconcile (some OpenClaw shapes report context-only totals).
+        # Compute reconciled total per agent id first
         local tot
         local sum_io=$(( in_s + out_s ))
         if (( reported_tot > 0 )); then
@@ -917,18 +917,32 @@ function oc-agent-use() {
         else
             tot=$sum_io
         fi
-        # persist computed total so downstream logic sees reconciled value
         total_sum["$id"]=$tot
-        # default cap when missing
         if (( cap == 0 )); then cap=131072; fi
-        # percent (rounded)
+        local label
+        label=${amap[$id]:-$id}
+        name_in["$label"]=$(( ${name_in[$label]:-0} + in_s ))
+        name_out["$label"]=$(( ${name_out[$label]:-0} + out_s ))
+        name_tot["$label"]=$(( ${name_tot[$label]:-0} + tot ))
+        # take max cap among agents sharing the label
+        if [[ -z "${name_cap[$label]:-}" || ${cap} -gt ${name_cap[$label]:-0} ]]; then
+            name_cap["$label"]=$cap
+        fi
+        name_count["$label"]=$(( ${name_count[$label]:-0} + 1 ))
+        name_ids["$label"]+="$id," 
+    done
+    # Output aggregated lines (pct, label, total, cap, input)
+    for label in "${!name_tot[@]}"; do
+        local tot=${name_tot[$label]:-0}
+        local cap=${name_cap[$label]:-0}
+        local in_s=${name_in[$label]:-0}
         local pct
         if (( cap > 0 )); then
             pct=$(( (tot * 100 + cap/2) / cap ))
         else
             pct=0
         fi
-        printf '%d\t%s\t%s\t%s\t%s\n' "$pct" "$id" "$tot" "$cap" "$in_s" >> "$lines_file"
+        printf '%d\t%s\t%s\t%s\t%s\n' "$pct" "$label" "$tot" "$cap" "$in_s" >> "$lines_file"
     done
 
     local outtmp="${cache}.tmp"
@@ -963,6 +977,11 @@ function oc-agent-use() {
         fi
         label_max=$raw_max
         if (( label_max > capw )); then label_max=$capw; fi
+        # If multiple agents share the same display name, disambiguate by
+        # appending the agent id in parentheses so users can tell them apart.
+        local label_counts
+        label_counts=$(mktemp) || label_counts="/tmp/oc_label_counts.$$"
+        awk -F"\t" '{cnt[$1]++} END {for (k in cnt) print k "\t" cnt[k]}' "$labels_tmp" > "$label_counts"
         # Always emit a header so the dashboard sees a non-empty cache
         printf 'ACTIVE AGENT CONTEXT USE (%d/%d active)\n\n' "$total_active" "$total_agents"
         # Print formatted lines with aligned labels (skip agents with zero total)
@@ -975,6 +994,12 @@ function oc-agent-use() {
             # Build base label (without trailing colon), truncate to label_max
             local label_base
             label_base="$label"
+            # If this display name appears multiple times, append the id
+            local label_count
+            label_count=$(awk -F"\t" -v l="$label" '$1==l{print $2; exit}' "$label_counts" 2>/dev/null || echo 0)
+            if (( label_count > 1 )); then
+                label_base="${label} (${id})"
+            fi
             if (( ${#label_base} > label_max )); then
                 label_base="${label_base:0:$((label_max-3))}..."
             fi
@@ -995,6 +1020,7 @@ function oc-agent-use() {
                 "$label_display" "$pct_display" "$tot_h" "$cap_h" "$in_col" "$out_col"
         done < "$labels_tmp"
         rm -f "$labels_tmp"
+        rm -f "$label_counts"
     } > "$outtmp"
 
     mv "$outtmp" "$cache" 2>/dev/null || cp "$outtmp" "$cache" 2>/dev/null
