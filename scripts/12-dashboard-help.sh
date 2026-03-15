@@ -229,6 +229,14 @@ function tactical_dashboard() {
                         name_part="${BASH_REMATCH[1]}"
                         rest_part="${BASH_REMATCH[2]}"
                         name_part="${name_part%:}"
+                        # Colourize the leading percent token for the first agent
+                        if [[ "$rest_part" =~ ^([0-9]{1,3})% ]]; then
+                            local pct_val="${BASH_REMATCH[1]}"
+                            local pct_tok="${BASH_REMATCH[1]}%"
+                            local pct_color
+                            pct_color=$(__threshold_color "$pct_val")
+                            rest_part="${rest_part/"$pct_tok"/"${pct_color}${pct_tok}${C_Reset}"}"
+                        fi
                         formatted="${name_part}: ${rest_part}"
                     else
                         # No numeric suffix; just ensure trailing colon on name
