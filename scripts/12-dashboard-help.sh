@@ -225,16 +225,19 @@ function tactical_dashboard() {
                     # Ensure a colon follows the agent name. Split at the first
                     # numeric token (the percentages/counts) and insert ':' after
                     # the name if not already present.
-                    if [[ "$l" =~ ^(.+?):?[[:space:]]*([0-9]{1,3}%.*)$ ]]; then
+                    if [[ "$l" =~ ^([^:]+):?[[:space:]]*([0-9]{1,3}%.*)$ ]]; then
                         name_part="${BASH_REMATCH[1]}"
                         rest_part="${BASH_REMATCH[2]}"
                         name_part="${name_part%:}"
                         # Colourize the leading percent token for the first agent
                         if [[ "$rest_part" =~ ^([0-9]{1,3})% ]]; then
                             local pct_val="${BASH_REMATCH[1]}"
+                            local pct_tok="${pct_val}%"
                             local pct_color
                             pct_color=$(__threshold_color "$pct_val")
-                            rest_part=$(awk -v s="$rest_part" -v c="$pct_color" -v r="$C_Reset" 'BEGIN{ if (match(s,/^[0-9]{1,3}%/)){ printf "%s%s%s%s", c, substr(s,RSTART,RLENGTH), r, substr(s,RLENGTH+1); } else printf "%s", s }')
+                            local rest_after
+                            rest_after="${rest_part#${pct_tok}}"
+                            rest_part="${pct_color}${pct_tok}${C_Reset}${rest_after}"
                         fi
                         formatted="${name_part}: ${rest_part}"
                     else
@@ -252,16 +255,19 @@ function tactical_dashboard() {
                     # Split using the original line (preserve ANSI sequences in the
                     # remainder so percent colouring is retained). Use __strip_ansi
                     # only for width calculation below.
-                    if [[ "$l" =~ ^(.+?):?[[:space:]]*([0-9]{1,3}%.*)$ ]]; then
+                    if [[ "$l" =~ ^([^:]+):?[[:space:]]*([0-9]{1,3}%.*)$ ]]; then
                         name_part="${BASH_REMATCH[1]}"
                         rest_part="${BASH_REMATCH[2]}"
                         name_part="${name_part%:}"
                         # Apply colouring to the leading percent token in rest_part
                         if [[ "$rest_part" =~ ^([0-9]{1,3})% ]]; then
                             local pct_val="${BASH_REMATCH[1]}"
+                            local pct_tok="${pct_val}%"
                             local pct_color
                             pct_color=$(__threshold_color "$pct_val")
-                            rest_part=$(awk -v s="$rest_part" -v c="$pct_color" -v r="$C_Reset" 'BEGIN{ if (match(s,/^[0-9]{1,3}%/)){ printf "%s%s%s%s", c, substr(s,RSTART,RLENGTH), r, substr(s,RLENGTH+1); } else printf "%s", s }')
+                            local rest_after
+                            rest_after="${rest_part#${pct_tok}}"
+                            rest_part="${pct_color}${pct_tok}${C_Reset}${rest_after}"
                         fi
                         formatted="${name_part}: ${rest_part}"
                     else
