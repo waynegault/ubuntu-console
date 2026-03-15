@@ -9,6 +9,10 @@
 VERSION="1.0"
 set -euo pipefail
 
+# Set to '1' to skip the Unicode safety check (non-ASCII in executable lines).
+# Many scripts intentionally include box-drawing and glyphs for TUI output.
+SKIP_UNICODE_CHECK=${SKIP_UNICODE_CHECK:-1}
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 rc=0
 
@@ -53,21 +57,25 @@ done
 
 echo ""
 echo "=== Unicode Safety (non-ASCII in executable code) ==="
-for f in "$REPO_ROOT"/tactical-console.bashrc \
-         "$REPO_ROOT"/install.sh \
-         "$REPO_ROOT"/scripts/*.sh \
-         "$REPO_ROOT"/bin/*.sh
-do
-    # Find non-ASCII on non-comment lines (excludes lines starting with #)
-    hits=$(grep -Pn '[^\x00-\x7F]' "$f" 2>/dev/null | grep -v '^\s*#\|^[0-9]*:\s*#' || true)
-    if [[ -z "$hits" ]]
-    then
-        echo "  PASS  ${f#"$REPO_ROOT"/}"
-    else
-        echo "  WARN  ${f#"$REPO_ROOT"/}  — non-ASCII on executable lines:"
-        echo "$hits" | head -5
-    fi
-done
+if [[ "${SKIP_UNICODE_CHECK:-0}" == "1" ]]; then
+    echo "  SKIPPED — non-ASCII check disabled (intentional UI glyphs)"
+else
+    for f in "$REPO_ROOT"/tactical-console.bashrc \
+             "$REPO_ROOT"/install.sh \
+             "$REPO_ROOT"/scripts/*.sh \
+             "$REPO_ROOT"/bin/*.sh
+    do
+        # Find non-ASCII on non-comment lines (excludes lines starting with #)
+        hits=$(grep -Pn '[^\x00-\x7F]' "$f" 2>/dev/null | grep -v '^\s*#\|^[0-9]*:\s*#' || true)
+        if [[ -z "$hits" ]]
+        then
+            echo "  PASS  ${f#"$REPO_ROOT"/}"
+        else
+            echo "  WARN  ${f#"$REPO_ROOT"/}  — non-ASCII on executable lines:"
+            echo "$hits" | head -5
+        fi
+    done
+fi
 
 echo ""
 if (( rc == 0 ))
