@@ -960,7 +960,25 @@ function oc-agent-use() {
     } > "$outtmp"
 
     mv "$outtmp" "$cache" 2>/dev/null || cp "$outtmp" "$cache" 2>/dev/null
-    cat "$cache"
+    # Print a colorized view for interactive TTYs only. Always keep the
+    # on-disk cache plain so the dashboard can apply its own colouring.
+    if [[ -t 1 ]]; then
+        while IFS= read -r _line; do
+            # Match lines like: "  Label: 72% (...rest...)"
+            if [[ "$_line" =~ ^[[:space:]]{2}([^:]+):[[:space:]]+([0-9]+)% ]]; then
+                local _label="${BASH_REMATCH[1]}"
+                local _pctnum="${BASH_REMATCH[2]}"
+                local _rest="${_line#${BASH_REMATCH[0]}}"
+                local _color
+                _color=$(__threshold_color "${_pctnum}")
+                printf '  %s: %s%s%%%s%s\n' "${_label}" "${_color}" "${_pctnum}" "${C_Reset}" "${_rest}"
+            else
+                printf '%s\n' "$_line"
+            fi
+        done < "$cache"
+    else
+        cat "$cache"
+    fi
     rm -f "$tmp_agents" "$tmp_stats" "$lines_file" 2>/dev/null || true
 }
 
