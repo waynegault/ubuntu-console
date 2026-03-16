@@ -356,6 +356,7 @@ function __so_check_win_port() {
                 # If non-elevated stop didn't free the port, try elevating
                 # via Start-Process -Verb RunAs. This will prompt UAC on Windows.
                 __tac_info "Gateway" "[ATTEMPTING ELEVATED STOP - UAC may appear]" "$C_Dim"
+                printf '%s\n' "  ${C_Dim}If a Windows UAC prompt appears, approve it to allow automatic service stop.${C_Reset}"
                 # Build a PowerShell-friendly quoted name list: 'svc1','svc2'
                 local _ps_names=""
                 while IFS= read -r _sname; do
@@ -408,6 +409,7 @@ function __so_check_win_port() {
             if command -v powershell.exe &>/dev/null
             then
                 __tac_info "Gateway" "[ATTEMPTING ELEVATED TASKKILL - UAC may appear]" "$C_Dim"
+                printf '%s\n' "  ${C_Dim}If a Windows UAC prompt appears, approve it to allow automatic taskkill.${C_Reset}"
                 timeout 12 powershell.exe -NoProfile -NonInteractive -Command \
                     "Start-Process cmd -ArgumentList '/c taskkill /PID ${_pid_only} /F' -Verb RunAs" >/dev/null 2>&1 || true
                 sleep 2
