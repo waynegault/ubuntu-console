@@ -54,6 +54,28 @@ else
     _TAC_ADMIN_BADGE=""
 fi
 
+# Ensure design tokens and glyphs exist so PS1 builds reliably.
+# Some environments or partial sources can leave C_* or glyph vars empty;
+# provide conservative fallbacks here to avoid producing an empty prompt.
+if [[ -z "${C_Reset:-}" ]]
+then
+    C_Reset=$'\e[0m'
+    C_BoxBg=$'\e[38;5;30m'
+    C_Border=$'\e[36m'
+    C_Text=$'\e[37m'
+    C_Dim=$'\e[90m'
+    C_Highlight=$'\e[96m'
+    C_Success=$'\e[32m'
+    C_Warning=$'\e[33m'
+    C_Error=$'\e[31m'
+    C_Info=$'\e[34m'
+fi
+
+# Glyph fallbacks (printable characters; do NOT wrap these in \[ \])
+: "${CHECK_MARK:=$'\u2713'}"
+: "${CROSS_MARK:=$'\u2717'}"
+: "${TRI_DOWN:=$'\u25BC'}"
+
 # custom_prompt_command — PROMPT_COMMAND handler: updates PS1, history, error badge.
 function custom_prompt_command() {
     local lastExit=$?

@@ -137,19 +137,34 @@ _TAC_LOADER_VERSION="3.0"
 
 _tac_module_dir="$HOME/ubuntu-console/scripts"
 
-# Auto-compute composite version before sourcing, so 13-init can display it.
+# Source modules (timed when DEBUG_TAC_STARTUP is set) and accumulate
+# module versions from their "# Module Version: N" comment.
 _tac_mod_sum=0
-for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh
-do
-    _tac_mv=$(grep -m1 '^# Module Version:' "$_tac_f" 2>/dev/null | awk '{print $NF}')
-    [[ "$_tac_mv" =~ ^[0-9]+$ ]] && (( _tac_mod_sum += _tac_mv ))
-done
-export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
+for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh; do
+    if [[ -f "$_tac_f" ]]; then
+        if [[ -n "${DEBUG_TAC_STARTUP:-}" ]]; then
+            printf 'Sourcing %s ... ' "$_tac_f" >&2
+            _tac_start_ns=$(date +%s%N 2>/dev/null || echo 0)
+            source "$_tac_f"
+            _tac_end_ns=$(date +%s%N 2>/dev/null || echo 0)
+            if [[ "$_tac_start_ns" != "0" && "$_tac_end_ns" != "0" ]]; then
+                _tac_ms=$(( (_tac_end_ns - _tac_start_ns) / 1000000 ))
+                printf 'done (%d ms)\n' "$_tac_ms" >&2
+            else
+                printf 'done\n' >&2
+            fi
+            unset _tac_start_ns _tac_end_ns _tac_ms
+        else
+            source "$_tac_f"
+        fi
 
-for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh
-do
-    [[ -f "$_tac_f" ]] && source "$_tac_f"
+        _tac_mv=$(grep -m1 '^# Module Version:' "$_tac_f" 2>/dev/null | awk '{print $NF}')
+        [[ "$_tac_mv" =~ ^[0-9]+$ ]] && (( _tac_mod_sum += _tac_mv ))
+        unset _tac_mv
+    fi
 done
+
+export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
 
 unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv
 

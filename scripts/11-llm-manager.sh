@@ -756,7 +756,7 @@ function model() {
                         "$C_Error"
                     return 1
                 fi
-                target=$(awk -F'|' -v f="$_use_def_file" '$3 == f {print $1}' "$LLM_REGISTRY" 2>/dev/null | head -n1)
+                target=$(awk -F'|' -v f="$_use_def_file" '$3 == f {print $1; exit}' "$LLM_REGISTRY" 2>/dev/null)
                 if [[ -z "$target" ]]
                 then
                     __tac_info "Error" \
@@ -1315,7 +1315,7 @@ function model() {
                     _hf_url+="/${dl_repo}/resolve/main/${dl_file}"
                     remote_size=$(curl -sfI --max-time 10 \
                         "$_hf_url" 2>/dev/null \
-                        | grep -i '^content-length:' | awk '{print $2}' | tr -d '\r')
+                        | awk 'BEGIN{IGNORECASE=1} /^content-length:/ {sub(/\r$/,"",$2); print $2; exit}')
                     if [[ "$remote_size" =~ ^[0-9]+$ ]] && (( remote_size > 0 ))
                     then
                         if (( remote_size > d_avail_bytes ))
@@ -1450,7 +1450,7 @@ function serve() {
             local def_file
             def_file=$(< "$def_conf")
             local def_num
-            def_num=$(awk -F'|' -v f="$def_file" '$3 == f {print $1}' "$LLM_REGISTRY" 2>/dev/null | head -n1)
+            def_num=$(awk -F'|' -v f="$def_file" '$3 == f {print $1; exit}' "$LLM_REGISTRY" 2>/dev/null)
             if [[ -n "$def_num" ]]
             then
                 model use "$def_num"

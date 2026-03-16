@@ -364,11 +364,23 @@ function __so_check_win_port() {
                 done <<< "$_svc_names"
                 _ps_names=${_ps_names%,}
                 if [[ -n "${_ps_names}" ]]; then
-                    timeout 12 powershell.exe -NoProfile -NonInteractive -Command "Start-Process powershell -ArgumentList '-NoProfile -Command \"Stop-Service -Name ${_ps_names} -Force -ErrorAction SilentlyContinue\"' -Verb RunAs" >/dev/null 2>&1 || true
-                    sleep 2
-                    _still_held_after_stop=$(timeout 3 powershell.exe -NoProfile -NonInteractive -Command "\
-                        \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue; if (\$c) { 'yes' }" 2>/dev/null | tr -d '\r')
-                    if [[ "$_still_held_after_stop" != "yes" ]]; then
+                    # Request an elevated PowerShell to stop the service(s). Use
+                    # ExecutionPolicy Bypass and give the operation more time.
+                    timeout 20 powershell.exe -NoProfile -NonInteractive -Command \
+                        "Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"Stop-Service -Name ${_ps_names} -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2\"' -Verb RunAs" >/dev/null 2>&1 || true
+                    # Poll the port for up to 12s to let Windows stop the service.
+                    local _poll=0 _freed="no"
+                    while (( _poll < 12 )); do
+                        _still_held_after_stop=$(timeout 3 powershell.exe -NoProfile -NonInteractive -Command "\
+                            \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue; if (\$c) { 'yes' }" 2>/dev/null | tr -d '\r') || true
+                        if [[ "$_still_held_after_stop" != "yes" && -n "$_still_held_after_stop" ]]; then
+                            _freed="yes"
+                            break
+                        fi
+                        sleep 1
+                        ((_poll++))
+                    done
+                    if [[ "$_freed" == "yes" ]]; then
                         __tac_info "Gateway" "[PORT ${_port} FREED]" "$C_Success"
                         return 1
                     fi
@@ -381,21 +393,35 @@ function __so_check_win_port() {
     if command -v taskkill.exe &>/dev/null
     then
         __tac_info "Gateway" "[KILLING Windows PID ${_pid_only}]" "$C_Warning"
-        taskkill.exe /PID "$_pid_only" /F &>/dev/null
+        taskkill.exe /PID "$_pid_only" /F &>/dev/null || true
         sleep 1
         # Verify the port is now free
         local _still_held
         _still_held=$(timeout 3 powershell.exe -NoProfile -NonInteractive -Command "
             \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue
             if (\$c) { 'yes' }
-        " 2>/dev/null | tr -d '\r')
+        " 2>/dev/null | tr -d '\r') || true
         if [[ "$_still_held" == "yes" ]]
         then
             __tac_info "Gateway" "[PORT ${_port} STILL BLOCKED]" "$C_Error"
+            # Try an elevated taskkill via Start-Process if available
+            if command -v powershell.exe &>/dev/null
+            then
+                __tac_info "Gateway" "[ATTEMPTING ELEVATED TASKKILL - UAC may appear]" "$C_Dim"
+                timeout 12 powershell.exe -NoProfile -NonInteractive -Command \
+                    "Start-Process cmd -ArgumentList '/c taskkill /PID ${_pid_only} /F' -Verb RunAs" >/dev/null 2>&1 || true
+                sleep 2
+                _still_held=$(timeout 3 powershell.exe -NoProfile -NonInteractive -Command "\
+                    \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue; if (\$c) { 'yes' }" 2>/dev/null | tr -d '\r') || true
+                if [[ "$_still_held" != "yes" ]]; then
+                    __tac_info "Gateway" "[PORT ${_port} FREED]" "$C_Success"
+                    return 1
+                fi
+            fi
             # Try to provide a more actionable manual fix: suggest stopping the service
             local _svc_hint
             _svc_hint=$(timeout 3 powershell.exe -NoProfile -NonInteractive -Command "\
-                Get-CimInstance -ClassName Win32_Service -Filter \"ProcessId=${_pid_only}\" | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue" 2>/dev/null | tr -d '\r')
+                Get-CimInstance -ClassName Win32_Service -Filter \"ProcessId=${_pid_only}\" | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue" 2>/dev/null | tr -d '\r') || true
             if [[ -n "$_svc_hint" ]]
             then
                 # Normalize service names to a comma-separated list

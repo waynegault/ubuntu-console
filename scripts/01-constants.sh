@@ -127,14 +127,30 @@ export LLAMA_CPU_THREADS=12  # Default CPU threads
 export LLAMA_CTX_SIZE=4096   # Default context window size
 
 # ---- Named Constants (avoid magic numbers scattered through functions) ----
-declare -ri VRAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024))  # 4 GB RTX 3050 Ti
-declare -ri VRAM_USABLE_PCT=95       # Percentage usable after driver overhead
-declare -ri VRAM_THRESHOLD_PCT=85    # Threshold for "fits in VRAM" decisions
-declare -ri COOLDOWN_DAILY=86400     # 24 hours in seconds
-declare -ri COOLDOWN_WEEKLY=604800   # 7 days in seconds
-declare -ri LOG_MAX_BYTES=1048576    # 1 MB - logtrim threshold
-declare -ri MOE_DEFAULT_CTX=8192     # Default context size for MoE models
-declare -ri LLAMA_DRIVE_FALLBACK_BYTES=$((200 * 1024 * 1024 * 1024))  # 200 GB
+if [[ -z "${VRAM_TOTAL_BYTES+x}" ]]; then
+    declare -ri VRAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024))  # 4 GB RTX 3050 Ti
+fi
+if [[ -z "${VRAM_USABLE_PCT+x}" ]]; then
+    declare -ri VRAM_USABLE_PCT=95       # Percentage usable after driver overhead
+fi
+if [[ -z "${VRAM_THRESHOLD_PCT+x}" ]]; then
+    declare -ri VRAM_THRESHOLD_PCT=85    # Threshold for "fits in VRAM" decisions
+fi
+if [[ -z "${COOLDOWN_DAILY+x}" ]]; then
+    declare -ri COOLDOWN_DAILY=86400     # 24 hours in seconds
+fi
+if [[ -z "${COOLDOWN_WEEKLY+x}" ]]; then
+    declare -ri COOLDOWN_WEEKLY=604800   # 7 days in seconds
+fi
+if [[ -z "${LOG_MAX_BYTES+x}" ]]; then
+    declare -ri LOG_MAX_BYTES=1048576    # 1 MB - logtrim threshold
+fi
+if [[ -z "${MOE_DEFAULT_CTX+x}" ]]; then
+    declare -ri MOE_DEFAULT_CTX=8192     # Default context size for MoE models
+fi
+if [[ -z "${LLAMA_DRIVE_FALLBACK_BYTES+x}" ]]; then
+    declare -ri LLAMA_DRIVE_FALLBACK_BYTES=$((200 * 1024 * 1024 * 1024))  # 200 GB
+fi
 
 # ---- Battery detection (cached once at startup to skip pwsh fallback on desktops) ----
 if [[ -d /sys/class/power_supply/BAT0 ]]
@@ -157,30 +173,34 @@ LAST_TPS="Untested"
 
 # Unicode-safe UI tokens (use \u escapes so source file remains ASCII)
 # Box drawing tokens
-readonly BOX_TL=$'\u2554'  # BOX_TL (upper-left corner)
-readonly BOX_TR=$'\u2557'  # BOX_TR (upper-right corner)
-readonly BOX_BL=$'\u255A'  # BOX_BL (lower-left corner)
-readonly BOX_BR=$'\u255D'  # BOX_BR (lower-right corner)
-readonly BOX_LM=$'\u2560'  # BOX_LM (left-middle connector)
-readonly BOX_RM=$'\u2563'  # BOX_RM (right-middle connector)
-readonly BOX_H=$'\u2550'   # BOX_H (double horizontal)
-readonly BOX_V=$'\u2551'   # BOX_V (double vertical)
-readonly BOX_SL=$'\u2500'  # BOX_SL (single horizontal)
-readonly BOX_SLC=$'\u255F' # BOX_SLC (single-left connector)
-readonly BOX_SRC=$'\u2562' # BOX_SRC (single-right connector)
+
+# Box drawing tokens (guarded so re-sourcing is idempotent)
+if [[ -z "${BOX_TL:-}" ]]; then readonly BOX_TL=$'\u2554'; fi
+if [[ -z "${BOX_TR:-}" ]]; then readonly BOX_TR=$'\u2557'; fi
+if [[ -z "${BOX_BL:-}" ]]; then readonly BOX_BL=$'\u255A'; fi
+if [[ -z "${BOX_BR:-}" ]]; then readonly BOX_BR=$'\u255D'; fi
+if [[ -z "${BOX_LM:-}" ]]; then readonly BOX_LM=$'\u2560'; fi
+if [[ -z "${BOX_RM:-}" ]]; then readonly BOX_RM=$'\u2563'; fi
+if [[ -z "${BOX_H:-}" ]]; then readonly BOX_H=$'\u2550'; fi
+if [[ -z "${BOX_V:-}" ]]; then readonly BOX_V=$'\u2551'; fi
+if [[ -z "${BOX_SL:-}" ]]; then readonly BOX_SL=$'\u2500'; fi
+if [[ -z "${BOX_SLC:-}" ]]; then readonly BOX_SLC=$'\u255F'; fi
+if [[ -z "${BOX_SRC:-}" ]]; then readonly BOX_SRC=$'\u2562'; fi
 
 # General glyphs
-readonly DEGREE=$'\u00B0'  # DEGREE (degree sign)
-readonly CHECK_MARK=$'\u2713' # CHECK_MARK (check mark)
-readonly CROSS_MARK=$'\u2717' # CROSS_MARK (cross mark)
-readonly BULLET=$'\u25CF'     # BULLET (bullet)
-readonly ARROW_R=$'\u2192'    # ARROW_R (right arrow)
-readonly WARN_SIGN=$'\u26A0'   # WARN_SIGN (warning sign)
+
+# General glyphs (guarded so re-sourcing is idempotent)
+if [[ -z "${DEGREE:-}" ]]; then readonly DEGREE=$'\u00B0'; fi
+if [[ -z "${CHECK_MARK:-}" ]]; then readonly CHECK_MARK=$'\u2713'; fi
+if [[ -z "${CROSS_MARK:-}" ]]; then readonly CROSS_MARK=$'\u2717'; fi
+if [[ -z "${BULLET:-}" ]]; then readonly BULLET=$'\u25CF'; fi
+if [[ -z "${ARROW_R:-}" ]]; then readonly ARROW_R=$'\u2192'; fi
+if [[ -z "${WARN_SIGN:-}" ]]; then readonly WARN_SIGN=$'\u26A0'; fi
 
 # Spinner (ASCII fallback to avoid glyph proliferation in many files)
-readonly SPINNER_ASCII='/-\\|'
-readonly PLAY_MARK=$'\u25B6'  # PLAY_MARK (play triangle)
-readonly TRI_DOWN=$'\u25BC'   # TRI_DOWN (down triangle)
+if [[ -z "${SPINNER_ASCII:-}" ]]; then readonly SPINNER_ASCII='/-\\|'; fi
+if [[ -z "${PLAY_MARK:-}" ]]; then readonly PLAY_MARK=$'\u25B6'; fi
+if [[ -z "${TRI_DOWN:-}" ]]; then readonly TRI_DOWN=$'\u25BC'; fi
 
 # Guard against PATH duplication on re-source (e.g., source ~/.bashrc).
 # Each block checks whether the directory is already in PATH before prepending.
