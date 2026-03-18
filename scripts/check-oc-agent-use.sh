@@ -34,3 +34,4 @@ fi
 
 echo "OK: aggregated stats match sessions total"
 exit 0
+# end of file

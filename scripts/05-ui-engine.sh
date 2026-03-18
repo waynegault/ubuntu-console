@@ -337,10 +337,14 @@ function __hRow() {
     local lPadStr=""; (( cmdPad  > 0 )) && printf -v lPadStr '%*s' "$cmdPad"  ""
     local rPadStr=""; (( descPad > 0 )) && printf -v rPadStr '%*s' "$descPad" ""
 
-    printf "%s" "${C_BoxBg}${BOX_V}  "
-    printf "%s" "${C_Highlight}%s%s" "$cmd" "$lPadStr"
-    printf "%s" "${C_Text}%s%s" "$desc" "$rPadStr"
-    printf "%s\n" "${C_BoxBg}${BOX_V}${C_Reset}"
+    # Single printf with explicit format string so color variables are
+    # applied (avoid passing a format-looking string to a "%s" formatter).
+    printf "%b%s%s%b%s%s%b\n" \
+        "${C_BoxBg}${BOX_V}  " \
+        "${C_Highlight}" "$cmd" \
+        "${C_Text}" "$lPadStr$desc" \
+        "$rPadStr" \
+        "${C_BoxBg}${BOX_V}${C_Reset}"
 }
 
 # ---------------------------------------------------------------------------

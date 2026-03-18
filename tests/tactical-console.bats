@@ -757,6 +757,13 @@ setup() {
 @test "fn-avail: __tac_err_handler" { declare -f __tac_err_handler >/dev/null; }
 @test "fn-avail: __fRow" { declare -f __fRow >/dev/null; }
 @test "fn-avail: __hRow" { declare -f __hRow >/dev/null; }
+@test "ui: __hRow formats command and description correctly" {
+    run __hRow "zzz_cmd" "This is a test description"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"zzz_cmd"* ]]
+    [[ "$output" == *"This is a test description"* ]]
+    [[ "$output" != *"%s"* ]]
+}
 @test "fn-avail: __hSection" { declare -f __hSection >/dev/null; }
 @test "fn-avail: __show_header" { declare -f __show_header >/dev/null; }
 @test "fn-avail: __require_design_tokens" { declare -f __require_design_tokens >/dev/null; }

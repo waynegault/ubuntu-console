@@ -169,4 +169,7 @@ export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
 unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv
 
 # ==============================================================================
+
+alias h='tactical_help'
+
 # end of file
