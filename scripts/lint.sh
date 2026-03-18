@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash
 # ==============================================================================
 # lint.sh — Static analysis for the ubuntu-console repository.
 # Runs bash -n syntax checks and shellcheck on all shell files.
 # Usage: ./scripts/lint.sh
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 1
 # shellcheck disable=SC2034
 VERSION="1.0"
 set -euo pipefail

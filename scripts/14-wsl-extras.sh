@@ -1,9 +1,11 @@
 # shellcheck shell=bash
 # -----------------------------------------------------------------------------
 # Module: 14-wsl-extras
-# Purpose: Move WSL/X11 and OpenClaw startup helpers out of the thin loader.
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
 # Module Version: 1
 # -----------------------------------------------------------------------------
+# Purpose: Move WSL/X11 and OpenClaw startup helpers out of the thin loader.
 # This module centralises a few WSL-specific startup helpers that were
 # incorrectly placed in ~/.bashrc (the thin loader). It is safe, idempotent,
 # and guarded so it won't break interactive shells.

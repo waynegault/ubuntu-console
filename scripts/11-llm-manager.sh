@@ -553,7 +553,8 @@ function model() {
                 _reg_line+="|${march}|${quant}|${mblocks}"
                 _reg_line+="|${gpu_layers}|${ctx}|${threads}|${prev_tps}"
                 echo "$_reg_line" >> "$tmpconf"
-                __tac_info "  #${num}" "${mname} (${size_gb}G, ${quant}, ${mblocks}L ${ARROW_R} ${gpu_layers} GPU)" "$C_Success"
+                local __tac_msg="${mname} (${size_gb}G, ${quant}, ${mblocks}L ${ARROW_R} ${gpu_layers} GPU)"
+                __tac_info "  #${num}" "$__tac_msg" "$C_Success"
             done
 
             if (( num == 0 ))
@@ -1061,8 +1062,10 @@ function model() {
 
             echo ""
             printf "${C_Dim}  %-4s %-30s %-7s %s${C_Reset}\n" "#" "MODEL" "SIZE" "TPS"
-            local _bench_rule; printf -v _bench_rule '%*s' $((UIWidth - 4)) ''; _bench_rule="${_bench_rule// /${BOX_SL}}"
-            printf "${C_Dim}  %s${C_Reset}\n" "$_bench_rule"
+            local _bench_rule
+            printf -v _bench_rule '%*s' $((UIWidth - 4)) ''
+            _bench_rule="${_bench_rule// /${BOX_SL}}"
+            printf "%s  %s${C_Reset}\n" "${C_Dim}" "$_bench_rule"
             for i in "${!b_num[@]}"
             do
                 printf "  %-4s %-30s %-7s %s\n" "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}"

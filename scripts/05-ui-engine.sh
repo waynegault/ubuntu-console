@@ -249,7 +249,12 @@ function __tac_line() {
     (( padLength < 1 )) && padLength=1
 
     local padding; printf -v padding '%*s' "$padLength" ""
-    printf "${C_BoxBg}${BOX_V}${C_Reset} %b%s%b%b%b ${C_BoxBg}${BOX_V}${C_Reset}\n" "$action" "$padding" "$color" "$status" "$C_Reset"
+    printf "%s" "${C_BoxBg}${BOX_V}${C_Reset} "
+    printf "%b" "$action"
+    printf "%s" "$padding"
+    printf "%s" "$color"
+    printf "%s" "$status"
+    printf "%s\n" "${C_Reset}${C_BoxBg}${BOX_V}${C_Reset}"
 }
 
 # ---------------------------------------------------------------------------
@@ -332,7 +337,10 @@ function __hRow() {
     local lPadStr=""; (( cmdPad  > 0 )) && printf -v lPadStr '%*s' "$cmdPad"  ""
     local rPadStr=""; (( descPad > 0 )) && printf -v rPadStr '%*s' "$descPad" ""
 
-    printf "${C_BoxBg}${BOX_V}  ${C_Highlight}%s%s${C_Text}%s%s${C_BoxBg}${BOX_V}${C_Reset}\n" "$cmd" "$lPadStr" "$desc" "$rPadStr"
+    printf "%s" "${C_BoxBg}${BOX_V}  "
+    printf "%s" "${C_Highlight}%s%s" "$cmd" "$lPadStr"
+    printf "%s" "${C_Text}%s%s" "$desc" "$rPadStr"
+    printf "%s\n" "${C_BoxBg}${BOX_V}${C_Reset}"
 }
 
 # ---------------------------------------------------------------------------

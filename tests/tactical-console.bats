@@ -991,12 +991,12 @@ setup() {
     done
 }
 
-@test "hygiene: all 13 modules have a Module Version comment" {
+@test "hygiene: all 14 modules have a Module Version comment" {
     local count
     count=$(grep -l '^# Module Version:' \
         "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
         | wc -l)
-    [[ "$count" -eq 13 ]]
+    [[ "$count" -eq 14 ]]
 }
 
 @test "hygiene: module versions follow '# Module Version: N' pattern" {

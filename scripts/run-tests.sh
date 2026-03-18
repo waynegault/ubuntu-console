@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash
 # ==============================================================================
 # run-tests.sh — Pretty-printed BATS test runner for tactical-console
 # ==============================================================================
@@ -10,6 +11,7 @@
 #   scripts/run-tests.sh --filter "calc"   # pass extra args to bats
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 1
 # shellcheck disable=SC2034,SC2317
 VERSION="1.0"
 
@@ -35,6 +37,10 @@ C_Border=$'\e[38;5;245m'
 
 W=80  # box width
 
+# Global symbol used in live stream output (set -u requires it to exist)
+PASS_SYMBOL=$'\u2713'  # ✓
+FAIL_SYMBOL=$'\u2717'  # ✗
+
 # ── Drawing helpers ──────────────────────────────────────────────────────────
 border_top()    { printf '%s+%s+%s\n' "$C_Border" "$(printf '%.0s-' $(seq 1 $((W-2))))" "$C_Reset"; }
 border_mid()    { printf '%s|%s|%s\n' "$C_Border" "$(printf '%.0s-' $(seq 1 $((W-2))))" "$C_Reset"; }
@@ -54,11 +60,11 @@ row_empty() { row ""; }
 section_header() {
     local label="$1" passed="$2" total="$3"
     local colour="$C_BoldGreen"
-    local symbol="v"
+    local symbol="$PASS_SYMBOL"
     if [[ "$passed" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]] && (( passed < total ))
     then
         colour="$C_BoldRed"
-        symbol="x"
+        symbol="$FAIL_SYMBOL"
     fi
     border_mid
     if [[ "$passed" =~ ^[0-9]+$ ]]
@@ -120,12 +126,12 @@ do
     then
         (( _live_num++ ))
         (( _live_pass++ ))
-        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Green}${symbol}${C_Reset}"
+        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Green}${PASS_SYMBOL}${C_Reset}"
     elif [[ "$line" =~ ^not\ ok\ [0-9]+\ (.+)$ ]]
     then
         (( _live_num++ ))
         (( _live_fail++ ))
-        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Red}${symbol}${C_Reset}"
+        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Red}${FAIL_SYMBOL}${C_Reset}"
     fi
     tap_output+="$line"$'\n'
 done < <(bats --tap "$BATS_FILE" "$@" 2>&1) || true
@@ -233,11 +239,11 @@ do
         then
             (( grand_pass++ ))
             (( _sum_num++ ))
-            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Green}v${C_Reset}"
+            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Green}${PASS_SYMBOL}${C_Reset}"
         else
             (( grand_fail++ ))
             (( _sum_num++ ))
-            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Red}x${C_Reset}"
+            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Red}${FAIL_SYMBOL}${C_Reset}"
             # Print diagnostic lines indented
             if [[ -n "${T_DIAG[$i]:-}" ]]
             then
@@ -257,11 +263,11 @@ grand_total=$(( grand_pass + grand_fail ))
 
 if (( grand_fail == 0 ))
 then
-    row "  ${C_BoldGreen}ALL ${grand_total} TESTS PASSED${C_Reset}"
+    row "  ${C_BoldGreen}ALL ${grand_total} TESTS PASSED ${PASS_SYMBOL}${C_Reset}"
 else
-    _summary="${C_BoldRed}${grand_fail} FAILED${C_Reset}"
+    _summary="${C_BoldRed}${grand_fail} FAILED ${FAIL_SYMBOL}${C_Reset}"
     _summary+="  ${C_Dim}|${C_Reset}  "
-    _summary+="${C_Green}${grand_pass} passed${C_Reset}"
+    _summary+="${C_Green}${grand_pass} passed ${PASS_SYMBOL}${C_Reset}"
     _summary+="  ${C_Dim}|${C_Reset}  ${grand_total} total"
     row "  $_summary"
     row_empty
@@ -269,7 +275,7 @@ else
     do
         if [[ "${T_STATUS[$i]}" != "ok" ]]
         then
-            row "  ${C_Red}x${C_Reset} ${T_NAME[$i]}"
+            row "  ${C_Red}${FAIL_SYMBOL}${C_Reset} ${T_NAME[$i]}"
             if [[ -n "${T_DIAG[$i]:-}" ]]
             then
                 while IFS= read -r dline

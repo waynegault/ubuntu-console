@@ -143,7 +143,7 @@ function up() {
     local apt_did_update=0
     if __check_cooldown "apt_index" "$now" hours_left
     then
-        if sudo apt-get update >/dev/null 2>&1
+        if sudo apt update >/dev/null 2>&1
         then
             apt_did_update=1
             __set_cooldown "apt_index" "$now"
@@ -151,11 +151,12 @@ function up() {
     fi
     if __check_cooldown "apt" "$now" hours_left
     then
-        (( apt_did_update )) || sudo apt-get update >/dev/null 2>&1
-        sudo apt-get upgrade -y --no-install-recommends >/dev/null 2>&1
+        (( apt_did_update )) || sudo apt update >/dev/null 2>&1
+        sudo apt upgrade -y --no-install-recommends >/dev/null 2>&1
         local apt_rc=$?
         if (( apt_rc == 0 ))
         then
+            sudo apt autoremove -y >/dev/null 2>&1
             __tac_line "[2/10] APT Packages" "[UPDATED]" "$C_Success"
             __set_cooldown "apt" "$now"
             __set_cooldown "apt_index" "$now"  # upgrade implies fresh index

@@ -65,9 +65,9 @@ then
         _trusted_hash=$(< "$OC_ROOT/oc-llm-sync.sha256")
         if [[ "$_sync_hash" != "$_trusted_hash" ]]
         then
-                printf '%s\n' \
+            printf '%s\n' \
                 "${C_Warning}[Tactical Profile]${C_Reset}" \
-                    "oc-llm-sync.sh hash mismatch - skipped"
+                    "oc-llm-sync.sh hash mismatch — skipped"
         else
             # C7: stderr suppressed because oc-llm-sync.sh may emit harmless
             # warnings (e.g., unbound variables from older versions). The || true
@@ -77,9 +77,9 @@ then
         fi
     else
         # No trusted hash — refuse to source. Run 'oc-trust-sync' first.
-                printf '%s\n' \
+            printf '%s\n' \
                 "${C_Warning}[Tactical Profile]${C_Reset}" \
-                "oc-llm-sync.sh has no trusted hash - skipped"
+                "oc-llm-sync.sh has no trusted hash — skipped"
     fi
     # Always clean up hash variables regardless of code path
     unset _sync_hash _trusted_hash

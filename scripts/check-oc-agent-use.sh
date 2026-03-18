@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash
+# AI INSTRUCTION: This script is a small utility used by tests and CI.
+# Module Version: 1
+# Module Version: 1
 set -euo pipefail
 
 # Simple regression check: verify aggregated totals in oc_agent_stats.tsv

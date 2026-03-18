@@ -128,28 +128,28 @@ export LLAMA_CTX_SIZE=4096   # Default context window size
 
 # ---- Named Constants (avoid magic numbers scattered through functions) ----
 if [[ -z "${VRAM_TOTAL_BYTES+x}" ]]; then
-    declare -ri VRAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024))  # 4 GB RTX 3050 Ti
+declare -ri VRAM_TOTAL_BYTES=$((4 * 1024 * 1024 * 1024))  # 4 GB RTX 3050 Ti
 fi
 if [[ -z "${VRAM_USABLE_PCT+x}" ]]; then
-    declare -ri VRAM_USABLE_PCT=95       # Percentage usable after driver overhead
+declare -ri VRAM_USABLE_PCT=95       # Percentage usable after driver overhead
 fi
 if [[ -z "${VRAM_THRESHOLD_PCT+x}" ]]; then
-    declare -ri VRAM_THRESHOLD_PCT=85    # Threshold for "fits in VRAM" decisions
+declare -ri VRAM_THRESHOLD_PCT=85    # Threshold for "fits in VRAM" decisions
 fi
 if [[ -z "${COOLDOWN_DAILY+x}" ]]; then
-    declare -ri COOLDOWN_DAILY=86400     # 24 hours in seconds
+declare -ri COOLDOWN_DAILY=86400     # 24 hours in seconds
 fi
 if [[ -z "${COOLDOWN_WEEKLY+x}" ]]; then
-    declare -ri COOLDOWN_WEEKLY=604800   # 7 days in seconds
+declare -ri COOLDOWN_WEEKLY=604800   # 7 days in seconds
 fi
 if [[ -z "${LOG_MAX_BYTES+x}" ]]; then
-    declare -ri LOG_MAX_BYTES=1048576    # 1 MB - logtrim threshold
+declare -ri LOG_MAX_BYTES=1048576    # 1 MB - logtrim threshold
 fi
 if [[ -z "${MOE_DEFAULT_CTX+x}" ]]; then
-    declare -ri MOE_DEFAULT_CTX=8192     # Default context size for MoE models
+declare -ri MOE_DEFAULT_CTX=8192     # Default context size for MoE models
 fi
 if [[ -z "${LLAMA_DRIVE_FALLBACK_BYTES+x}" ]]; then
-    declare -ri LLAMA_DRIVE_FALLBACK_BYTES=$((200 * 1024 * 1024 * 1024))  # 200 GB
+declare -ri LLAMA_DRIVE_FALLBACK_BYTES=$((200 * 1024 * 1024 * 1024))  # 200 GB
 fi
 
 # ---- Battery detection (cached once at startup to skip pwsh fallback on desktops) ----
