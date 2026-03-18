@@ -356,7 +356,41 @@ function __show_header() {
 
     local left_text=" Bash v${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"
     local center_text="- Wayne's Ubuntu Terminal -"
-    local right_text="v${TACTICAL_PROFILE_VERSION} "
+
+    # Ensure `TACTICAL_PROFILE_VERSION` is exported so other tools/tests
+    # relying on its presence see a sensible value when this module is
+    # sourced standalone. Prefer the module's comment version, then
+    # the loader version, finally '0.0'. Do not override an existing value.
+    if [[ -z "${TACTICAL_PROFILE_VERSION:-}" ]]; then
+        local _src="${BASH_SOURCE[0]:-$0}"
+        local _mod_ver
+        _mod_ver=$(grep -m1 '^# Module Version:' "$_src" 2>/dev/null | awk '{print $NF}')
+        if [[ "$_mod_ver" =~ ^[0-9]+$ ]]; then
+            export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION:-0}.${_mod_ver}"
+        else
+            export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION:-0}.0"
+        fi
+        unset _src _mod_ver
+    fi
+
+    # Right-hand version: prefer global profile version, else fall back to
+    # the module's declared "Module Version" comment in this file, then
+    # to the loader version, finally 'unknown'. Ensures the header shows a
+    # useful version even when running modules standalone.
+    local right_text=""
+    if [[ -n "${TACTICAL_PROFILE_VERSION:-}" ]]; then
+        right_text="v${TACTICAL_PROFILE_VERSION} "
+    else
+        local _src="${BASH_SOURCE[0]:-$0}"
+        local _mod_ver
+        _mod_ver=$(grep -m1 '^# Module Version:' "$_src" 2>/dev/null | awk '{print $NF}')
+        if [[ "$_mod_ver" =~ ^[0-9]+$ ]]; then
+            right_text="v${_mod_ver} "
+        else
+            right_text="v${_TAC_LOADER_VERSION:-unknown} "
+        fi
+        unset _src _mod_ver
+    fi
 
     local center_start=$(( (inner_width - ${#center_text}) / 2 ))
     local gap1=$(( center_start - ${#left_text} ))
