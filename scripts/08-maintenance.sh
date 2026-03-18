@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -179,6 +179,14 @@ function up() {
         local pkg_err=0
         command -v npm >/dev/null && { npm update -g --quiet >/dev/null 2>&1 || pkg_err=1; }
         command -v cargo >/dev/null && { cargo install-update -a >/dev/null 2>&1 || pkg_err=1; }
+        # Update R packages (non-interactive). Prefer Rscript when available.
+        if command -v Rscript >/dev/null 2>&1
+        then
+            Rscript -e 'update.packages(ask=FALSE, checkBuilt=TRUE)' >/dev/null 2>&1 || pkg_err=1
+        elif command -v R >/dev/null 2>&1
+        then
+            R -e 'update.packages(ask=FALSE, checkBuilt=TRUE)' >/dev/null 2>&1 || pkg_err=1
+        fi
 
         if (( pkg_err == 0 ))
         then
