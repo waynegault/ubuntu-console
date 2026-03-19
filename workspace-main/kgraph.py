@@ -338,9 +338,16 @@ def generate_html(graph: dict, outpath: str):
 
 
 def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: str | None = None):
-  dirname = os.path.abspath(os.path.dirname(path))
-  filename = os.path.basename(path)
-  os.chdir(dirname)
+  # Prefer serving a built frontend (frontend-g6/dist) if present in the repo.
+  repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+  static_dir = os.path.join(repo_root, 'frontend-g6', 'dist')
+  if os.path.isdir(static_dir):
+    os.chdir(static_dir)
+    filename = 'index.html'
+  else:
+    dirname = os.path.abspath(os.path.dirname(path))
+    filename = os.path.basename(path)
+    os.chdir(dirname)
 
   class GraphRequestHandler(SimpleHTTPRequestHandler):
     store = store_path or os.path.expanduser('~/.openclaw/kgraph.json')
@@ -383,7 +390,11 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
   handler = GraphRequestHandler
   httpd = HTTPServer((host, port), handler)
   addr, used_port = httpd.server_address
-  url = f'http://{addr}:{used_port}/{filename}'
+  # If serving the built frontend, point root to index.html
+  if os.path.isdir(static_dir):
+    url = f'http://{addr}:{used_port}/'
+  else:
+    url = f'http://{addr}:{used_port}/{filename}'
   # Open browser in background if available but don't block
   try:
     threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()

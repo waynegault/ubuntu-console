@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import G6 from '@antv/g6'
+import { Graph, Minimap } from '@antv/g6'
 
 export default function App() {
   const containerRef = useRef(null)
@@ -29,7 +29,7 @@ export default function App() {
     const width = containerRef.current.clientWidth
     const height = containerRef.current.clientHeight
 
-    const graph = new G6.Graph({
+    const graph = new Graph({
       container: containerRef.current,
       width,
       height,
@@ -37,7 +37,7 @@ export default function App() {
       modes: {
         default: ['drag-canvas', 'zoom-canvas', 'drag-node', 'click-select']
       },
-      plugins: [new G6.Minimap({ size: [200, 100], className: 'g6-minimap' })],
+      plugins: [new Minimap({ size: [200, 100], className: 'g6-minimap' })],
       defaultNode: {
         type: 'circle',
         size: 56,
