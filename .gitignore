@@ -9,3 +9,4 @@
 *.credentials
 *.secret
 workspace-main/__pycache__
+tests/__pycache__
