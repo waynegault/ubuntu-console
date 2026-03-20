@@ -180,13 +180,29 @@ function up() {
         command -v npm >/dev/null && { npm update -g --quiet >/dev/null 2>&1 || pkg_err=1; }
         command -v cargo >/dev/null && { cargo install-update -a >/dev/null 2>&1 || pkg_err=1; }
         # Update R packages (non-interactive). Prefer Rscript when available.
-        if command -v Rscript >/dev/null 2>&1
-        then
-            Rscript -e 'update.packages(ask=FALSE, checkBuilt=TRUE)' >/dev/null 2>&1 || pkg_err=1
-        elif command -v R >/dev/null 2>&1
-        then
-            R -e 'update.packages(ask=FALSE, checkBuilt=TRUE)' >/dev/null 2>&1 || pkg_err=1
-        fi
+                if command -v Rscript >/dev/null 2>&1
+                then
+                        Rscript -e '
+                                options(repos = c(CRAN = "https://cloud.r-project.org"))
+                                tryCatch({
+                                    update.packages(ask=FALSE, checkBuilt=TRUE, Ncpus=1)
+                                }, error=function(e){})
+                                if (requireNamespace("BiocManager", quietly=TRUE)) {
+                                    tryCatch({ BiocManager::install(ask=FALSE, update=TRUE) }, error=function(e){})
+                                }
+                        ' >/dev/null 2>&1 || pkg_err=1
+                elif command -v R >/dev/null 2>&1
+                then
+                        R -e '
+                                options(repos = c(CRAN = "https://cloud.r-project.org"))
+                                tryCatch({
+                                    update.packages(ask=FALSE, checkBuilt=TRUE, Ncpus=1)
+                                }, error=function(e){})
+                                if (requireNamespace("BiocManager", quietly=TRUE)) {
+                                    tryCatch({ BiocManager::install(ask=FALSE, update=TRUE) }, error=function(e){})
+                                }
+                        ' >/dev/null 2>&1 || pkg_err=1
+                fi
 
         if (( pkg_err == 0 ))
         then
