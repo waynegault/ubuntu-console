@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 3. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -33,98 +33,8 @@ alias m='tactical_dashboard'
 alias cpwd='copy_path'
 alias unittest='~/ubuntu-console/scripts/run-tests.sh'
 
-# g — Launch the kgraph server (serves scripts/kgraph.py --serve)
-# Runs in background and attempts to open the browser (kgraph.py handles the URL).
-function g() {
-    local KG_PY="$HOME/ubuntu-console/scripts/kgraph.py"
-    if [[ ! -f "$KG_PY" ]]; then
-        echo "kgraph script not found: $KG_PY"
-        return 1
-    fi
-
-    # If kgraph isn't running, start it on a known local port in background.
-    local PORT=46139
-    if ! pgrep -f "$KG_PY" >/dev/null 2>&1; then
-        setsid python3 "$KG_PY" --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
-        disown
-    fi
-
-    # kgraph.py writes the embedded page to kgraph.html when --embed is used,
-    # so open that path explicitly to avoid a directory listing.
-    local URL="http://127.0.0.1:${PORT}/kgraph.html"
-
-    # Guard: only open URLs bound to localhost to prevent open-redirect.
-    if [[ "$URL" != http://127.0.0.1:* && "$URL" != http://localhost:* ]]; then
-        printf 'Refusing to open non-localhost URL: %s\n' "$URL"
-        return 1
-    fi
-
-    # immediate user-visible one-liner required by workflow
-    echo "Wen page opened"
-    printf 'URL: %s\n' "$URL"
-
-    # Open browser after the server binds — poll briefly so the tab
-    # opens against a live page.
-    # wait up to ~5s for the server to respond
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        if command -v curl >/dev/null 2>&1; then
-            curl -sSf --head "$URL" >/dev/null 2>&1 && break
-        else
-            # fallback: try connecting with /dev/tcp
-            (echo > /dev/tcp/127.0.0.1/${PORT}) >/dev/null 2>&1 && break
-        fi
-        sleep 0.5
-    done
-
-    # Try WSL/Windows openers first (if running under WSL), then common
-    # Linux browser binaries, then fallback to xdg-open.
-    local opened=1
-    if [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; then
-        # Prefer wslview (wslu) which reliably opens Windows default browser.
-        if command -v wslview >/dev/null 2>&1; then
-            wslview "$URL" >/dev/null 2>&1 || true
-            opened=0
-        elif command -v powershell.exe >/dev/null 2>&1; then
-            powershell.exe -NoProfile -Command Start-Process -ArgumentList "$URL" >/dev/null 2>&1 || true
-            opened=0
-        elif command -v pwsh.exe >/dev/null 2>&1; then
-            pwsh.exe -NoProfile -Command Start-Process -ArgumentList "$URL" >/dev/null 2>&1 || true
-            opened=0
-        fi
-    fi
-
-    if [[ $opened -ne 0 ]]; then
-        local browsers=(
-            msedge
-            microsoft-edge
-            microsoft-edge-stable
-            microsoft-edge-dev
-            chromium-browser
-            chromium
-            google-chrome
-            google-chrome-stable
-            brave-browser
-            firefox
-        )
-        for b in "${browsers[@]}"; do
-            if command -v "$b" >/dev/null 2>&1; then
-                "$b" "$URL" >/dev/null 2>&1 &>/dev/null || true
-                opened=0
-                break
-            fi
-        done
-    fi
-    if [[ $opened -ne 0 ]]; then
-        if command -v xdg-open >/dev/null 2>&1; then
-            xdg-open "$URL" >/dev/null 2>&1 || true
-        fi
-    fi
-
-    # If we couldn't open a browser automatically, print the URL so the user can open it.
-    if [[ $opened -ne 0 ]]; then
-        printf '\nCould not launch a browser automatically. Open this URL manually: %s\n' "$URL"
-    fi
-}
+# g — Shortcut for 'oc g' (launch knowledge graph server).
+alias g='oc g'
 
 # ---- Dev Tools & VS Code Wrappers (lazy-resolved — no pwsh hit at shell start) ----
 # Path resolution is centralised in __resolve_vscode_bin (§1).

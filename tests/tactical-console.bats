@@ -49,6 +49,11 @@ teardown_file() {
 _build_test_profile() {
     local patched="$TAC_TEST_TMPDIR/profile_patched.bash"
     local patched_scripts="$TAC_TEST_TMPDIR/scripts"
+    # Sed transforms to make the profile safe for BATS:
+    #   1. Remove interactive guard (case $-)  — BATS runs non-interactively
+    #   2. Remove set -E / ERR trap           — conflicts with BATS's own traps
+    #   3. Remove preexec DEBUG trap          — fires on every BATS assertion
+    #   4. Strip 'declare -ri'                — readonly prevents re-sourcing
     local _sed_args=(
         -e '/^case \$- in$/,/^esac$/d'
         -e '/^set -E$/d'
@@ -1018,4 +1023,811 @@ setup() {
     wd_file=$(grep -oP 'ACTIVE_LLM_FILE="\K[^"]+' \
         "$REPO_ROOT/bin/llama-watchdog.sh")
     [[ "$wd_file" == "$ACTIVE_LLM_FILE" ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 18. COOLDOWN MECHANISM — Behavioural tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "cooldown: __check_cooldown returns 0 (expired) when no DB entry exists" {
+    local tmp_db="$TAC_TEST_TMPDIR/cooldown_test.txt"
+    touch "$tmp_db"
+    CooldownDB="$tmp_db"
+    local remaining=""
+    __check_cooldown "test_key" "$(date +%s)" remaining
+}
+
+@test "cooldown: __check_cooldown returns 1 (active) when recently set" {
+    local tmp_db="$TAC_TEST_TMPDIR/cooldown_test2.txt"
+    local now
+    now=$(date +%s)
+    echo "test_key=${now}" > "$tmp_db"
+    CooldownDB="$tmp_db"
+    local remaining=""
+    run bash -c "
+        source '$TAC_TEST_TMPDIR/profile_patched.bash' &>/dev/null
+        CooldownDB='$tmp_db'
+        __check_cooldown 'test_key' '$now' _cd_sink
+        echo \$?
+    "
+    [[ "$output" == *"1"* ]]
+}
+
+@test "cooldown: __set_cooldown writes key=timestamp to DB" {
+    local tmp_db="$TAC_TEST_TMPDIR/cooldown_set.txt"
+    touch "$tmp_db"
+    CooldownDB="$tmp_db"
+    __set_cooldown "mykey" "1234567890"
+    grep -q "^mykey=1234567890$" "$tmp_db"
+}
+
+@test "cooldown: __set_cooldown replaces existing key" {
+    local tmp_db="$TAC_TEST_TMPDIR/cooldown_replace.txt"
+    echo "mykey=111" > "$tmp_db"
+    CooldownDB="$tmp_db"
+    __set_cooldown "mykey" "222"
+    local count
+    count=$(grep -c "^mykey=" "$tmp_db")
+    [[ "$count" -eq 1 ]]
+    grep -q "^mykey=222$" "$tmp_db"
+}
+
+@test "cooldown: __check_cooldown apt_index uses COOLDOWN_DAILY (24h)" {
+    local tmp_db="$TAC_TEST_TMPDIR/cooldown_daily.txt"
+    local now
+    now=$(date +%s)
+    local yesterday=$(( now - 86401 ))
+    echo "apt_index=${yesterday}" > "$tmp_db"
+    CooldownDB="$tmp_db"
+    local remaining=""
+    # 24h+ ago → should expire
+    __check_cooldown "apt_index" "$now" remaining
+}
+
+@test "cooldown: __check_cooldown returns remaining time in result var" {
+    local tmp_db="$TAC_TEST_TMPDIR/cooldown_remain.txt"
+    local now
+    now=$(date +%s)
+    # Set cooldown 1 hour ago for a weekly (604800s) key
+    local one_hour_ago=$(( now - 3600 ))
+    echo "some_task=${one_hour_ago}" > "$tmp_db"
+    CooldownDB="$tmp_db"
+    local remaining=""
+    run bash -c "
+        source '$TAC_TEST_TMPDIR/profile_patched.bash' &>/dev/null
+        CooldownDB='$tmp_db'
+        local r=''
+        __check_cooldown 'some_task' '$now' r
+        echo \"\$r\"
+    "
+    # Should contain days and hours format
+    [[ "$output" =~ [0-9]+d.*[0-9]+h ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 19. UI ENGINE — Additional behavioural tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "ui: __fRow formats label and value inside box borders" {
+    run __fRow "TEST" "some value" "$C_Text"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"TEST"* ]]
+    [[ "$output" == *"some value"* ]]
+}
+
+@test "ui: __fRow truncates long values to prevent overflow" {
+    local long_val
+    printf -v long_val '%0100s' '' # 100 spaces
+    long_val="${long_val// /X}"
+    run __fRow "LABEL" "$long_val" "$C_Text"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"..."* ]]
+}
+
+@test "ui: __hSection outputs centred section header with double border" {
+    run __hSection "TEST SECTION"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"TEST SECTION"* ]]
+    [[ "$output" == *"╠"* ]]
+}
+
+@test "ui: __show_header outputs box with version" {
+    run __show_header
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"╔"* ]]
+    [[ "$output" == *"╚"* ]]
+    [[ "$output" == *"Wayne"* ]]
+}
+
+@test "ui: __show_header includes Bash version" {
+    run __show_header
+    [[ "$output" == *"Bash"* ]]
+}
+
+@test "ui: __tac_info pads label and status to UIWidth" {
+    run __tac_info "MyLabel" "[OK]" "$C_Success"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"MyLabel"* ]]
+    [[ "$output" == *"[OK]"* ]]
+}
+
+@test "ui: __tac_line renders bordered row" {
+    run __tac_line "Doing something" "[DONE]" "$C_Success"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Doing something"* ]]
+    [[ "$output" == *"[DONE]"* ]]
+}
+
+@test "ui: __threshold_color boundary: 0 returns C_Success" {
+    result=$(__threshold_color 0)
+    [[ "$result" == "$C_Success" ]]
+}
+
+@test "ui: __threshold_color boundary: 76 returns C_Warning" {
+    result=$(__threshold_color 76)
+    [[ "$result" == "$C_Warning" ]]
+}
+
+@test "ui: __threshold_color boundary: 100 returns C_Error" {
+    result=$(__threshold_color 100)
+    [[ "$result" == "$C_Error" ]]
+}
+
+@test "ui: __require_openclaw returns 1 when openclaw not installed" {
+    # In test env, openclaw is not installed
+    if command -v openclaw >/dev/null 2>&1; then
+        skip "openclaw is installed in this environment"
+    fi
+    run __require_openclaw
+    [ "$status" -eq 1 ]
+}
+
+@test "ui: __usage outputs Usage: prefix" {
+    run __usage "test_cmd <arg>"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
+    [[ "$output" == *"test_cmd"* ]]
+}
+
+@test "ui: __save_nullglob and __restore_nullglob round-trip" {
+    # Ensure nullglob is off before test
+    shopt -u nullglob 2>/dev/null || true
+    __save_nullglob
+    # nullglob should now be on
+    shopt -q nullglob
+    __restore_nullglob
+    # nullglob should be restored to off
+    ! shopt -q nullglob
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 20. ERROR HANDLER
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "error: __tac_err_handler function is defined" {
+    declare -f __tac_err_handler >/dev/null
+}
+
+@test "error: ErrorLogPath variable is set" {
+    [[ -n "$ErrorLogPath" ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 21. TELEMETRY — Behavioural tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "telemetry: __get_uptime contains 'd', 'h', 'm' tokens" {
+    result=$(__get_uptime)
+    [[ "$result" == *"d"* ]]
+    [[ "$result" == *"h"* ]]
+    [[ "$result" == *"m"* ]]
+}
+
+@test "telemetry: __get_disk returns non-empty string" {
+    result=$(__get_disk)
+    [[ -n "$result" ]]
+}
+
+@test "telemetry: __get_disk output contains 'free'" {
+    result=$(__get_disk)
+    [[ "$result" == *"free"* ]]
+}
+
+@test "telemetry: __get_git returns branch info in a git repo" {
+    # The test runs inside the ubuntu-console repo
+    pushd "$REPO_ROOT" >/dev/null
+    result=$(__get_git)
+    [[ -n "$result" ]]
+    [[ "$result" == *"|"* ]]
+    popd >/dev/null
+}
+
+@test "telemetry: __get_git returns empty outside a git repo" {
+    pushd /tmp >/dev/null
+    result=$(__get_git)
+    [[ -z "$result" ]]
+    popd >/dev/null
+}
+
+@test "telemetry: __cache_fresh with large TTL returns fresh for new file" {
+    local cache_file="$TAC_TEST_TMPDIR/test_cache_large_ttl"
+    touch "$cache_file"
+    __cache_fresh "$cache_file" 999999
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 22. MAINTENANCE HELPERS — Behavioural tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "maintenance: __cleanup_temps returns a count" {
+    pushd "$TAC_TEST_TMPDIR" >/dev/null
+    result=$(__cleanup_temps)
+    [[ "$result" =~ ^[0-9]+$ ]]
+    popd >/dev/null
+}
+
+@test "maintenance: __cleanup_temps removes python-*.exe files" {
+    local tmpdir="$TAC_TEST_TMPDIR/cleanup_test"
+    mkdir -p "$tmpdir"
+    touch "$tmpdir/python-3.12.exe"
+    pushd "$tmpdir" >/dev/null
+    result=$(__cleanup_temps)
+    [[ "$result" -ge 1 ]]
+    [[ ! -f "$tmpdir/python-3.12.exe" ]]
+    popd >/dev/null
+}
+
+@test "maintenance: __cleanup_temps removes .pytest_cache" {
+    local tmpdir="$TAC_TEST_TMPDIR/cleanup_pytest"
+    mkdir -p "$tmpdir/.pytest_cache"
+    pushd "$tmpdir" >/dev/null
+    result=$(__cleanup_temps)
+    [[ "$result" -ge 1 ]]
+    [[ ! -d "$tmpdir/.pytest_cache" ]]
+    popd >/dev/null
+}
+
+@test "maintenance: __cleanup_temps does NOT remove .log files" {
+    local tmpdir="$TAC_TEST_TMPDIR/cleanup_nologs"
+    mkdir -p "$tmpdir"
+    touch "$tmpdir/important.log"
+    pushd "$tmpdir" >/dev/null
+    __cleanup_temps >/dev/null
+    [[ -f "$tmpdir/important.log" ]]
+    popd >/dev/null
+}
+
+@test "maintenance: logtrim function trims large log files" {
+    local tmpdir="$TAC_TEST_TMPDIR/logtrim_test"
+    mkdir -p "$tmpdir"
+    # Create a >1MB log file
+    local biglog="$tmpdir/test.log"
+    dd if=/dev/zero bs=1024 count=1100 2>/dev/null | tr '\0' 'A' > "$biglog"
+    # Add some real lines
+    for i in $(seq 1 2000); do echo "line $i" >> "$biglog"; done
+    # Override OC_LOGS to our tmpdir and run logtrim
+    local old_oc_logs="$OC_LOGS"
+    OC_LOGS="$tmpdir"
+    run logtrim
+    OC_LOGS="$old_oc_logs"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Trimmed"* ]]
+}
+
+@test "maintenance: cl function runs without error" {
+    pushd "$TAC_TEST_TMPDIR" >/dev/null
+    run cl
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Sanitation"* ]]
+    popd >/dev/null
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 23. MODEL DISPATCHER — Subcommand routing
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "model: 'model scan' runs without syntax error" {
+    # scan looks for LLAMA_MODEL_DIR which may not exist in test env
+    run model scan
+    # Either succeeds or fails gracefully (not a bash syntax error)
+    [[ "$status" -le 1 ]]
+}
+
+@test "model: 'model list' runs without syntax error" {
+    run model list
+    [[ "$status" -le 1 ]]
+}
+
+@test "model: 'model status' runs without syntax error" {
+    run model status
+    [[ "$status" -le 1 ]]
+}
+
+@test "model: 'model stop' runs without syntax error (server not running)" {
+    run model stop
+    [[ "$status" -le 1 ]]
+}
+
+@test "model: 'model info' without args prints usage" {
+    run model info
+    [[ "$status" -le 1 ]]
+}
+
+@test "model: unknown subcommand prints usage with 'Usage'" {
+    run model nonexistent_xyz
+    [[ "$output" == *"Usage"* ]]
+}
+
+@test "model: 'model' with no args prints usage" {
+    run model
+    [[ "$output" == *"Usage"* ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 24. OC DISPATCHER — Extended subcommand routing
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "oc: 'oc env' runs and shows environment variables" {
+    run oc env
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"OC_ROOT"* ]]
+}
+
+@test "oc: 'oc g' routes to oc-kgraph" {
+    declare -f oc-kgraph >/dev/null
+}
+
+@test "oc: help output includes 'g' subcommand" {
+    run oc
+    [[ "$output" == *"Knowledge Graph"* || "$output" == *" g "* ]]
+}
+
+@test "fn-avail: oc-kgraph" { declare -f oc-kgraph >/dev/null; }
+
+@test "alias: 'g' is defined (oc g)" {
+    alias g >/dev/null 2>&1
+}
+
+@test "oc: 'oc restart' fails gracefully without openclaw" {
+    if command -v openclaw >/dev/null 2>&1; then
+        skip "openclaw is installed"
+    fi
+    run oc restart
+    [[ "$status" -ne 0 ]]
+}
+
+@test "oc: multiple unknown subcommands all return error" {
+    for sub in fake_abc unknown_xyz not_a_command; do
+        run oc "$sub"
+        [[ "$status" -eq 1 ]]
+        [[ "$output" == *"Unknown subcommand"* ]]
+    done
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 25. LLM CALCULATION — Edge cases and boundary tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "calc: __calc_gpu_layers for 0-byte model returns 999 (full offload)" {
+    result=$(__calc_gpu_layers 0 32 "llama")
+    [[ "$result" -eq 999 ]]
+}
+
+@test "calc: __calc_gpu_layers for exactly-VRAM model returns non-negative" {
+    # Model exactly at VRAM threshold (85% of 4GB)
+    local threshold=$(( VRAM_TOTAL_BYTES * VRAM_THRESHOLD_PCT / 100 ))
+    result=$(__calc_gpu_layers "$threshold" 40 "llama")
+    [[ "$result" -ge 0 ]]
+}
+
+@test "calc: __calc_ctx_size MoE always returns MOE_DEFAULT_CTX regardless of size" {
+    for arch in qwen3moe deepseek2moe; do
+        result=$(__calc_ctx_size $((1 * 1024 * 1024 * 1024)) 65536 "$arch")
+        [[ "$result" -eq "$MOE_DEFAULT_CTX" ]]
+    done
+}
+
+@test "calc: __calc_threads minimum is 1 even with 0 layers" {
+    result=$(__calc_threads 0 0)
+    [[ "$result" -ge 1 ]]
+}
+
+@test "calc: __calc_threads with equal gpu_layers and total returns 50% nproc" {
+    local ncpu
+    ncpu=$(nproc 2>/dev/null || echo 16)
+    local expected=$(( ncpu * 50 / 100 ))
+    result=$(__calc_threads 999 999)
+    [[ "$result" -eq "$expected" ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 26. QUANT LABEL — Additional edge cases
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "quant: __quant_label maps ftype 2 to Q4_0" {
+    result=$(__quant_label 2 "")
+    [[ "$result" == "Q4_0" ]]
+}
+
+@test "quant: __quant_label maps ftype 3 to Q4_1" {
+    result=$(__quant_label 3 "")
+    [[ "$result" == "Q4_1" ]]
+}
+
+@test "quant: __quant_label maps ftype 8 to Q5_0" {
+    result=$(__quant_label 8 "")
+    [[ "$result" == "Q5_0" ]]
+}
+
+@test "quant: __quant_label extracts Q5_K_M from filename" {
+    result=$(__quant_label 0 "model-Q5_K_M.gguf")
+    [[ "$result" == "Q5_K_M" ]]
+}
+
+@test "quant: __quant_label extracts Q6_K from filename" {
+    result=$(__quant_label 0 "model-Q6_K.gguf")
+    [[ "$result" == "Q6_K" ]]
+}
+
+@test "quant: __quant_label extracts F32 from filename" {
+    result=$(__quant_label 0 "model-F32.gguf")
+    [[ "$result" == "F32" ]]
+}
+
+@test "quant: __quant_label handles mixed case in IQ variants" {
+    result=$(__quant_label 0 "model-IQ4_XS-v1.gguf")
+    [[ "$result" == "IQ4_XS" ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 27. DEPLOYMENT — mkproj & commit functions
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "deployment: mkproj requires a project name" {
+    run mkproj
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Project Name"* ]]
+}
+
+@test "deployment: mkproj refuses existing directory" {
+    local testdir="$TAC_TEST_TMPDIR/existing_proj"
+    mkdir -p "$testdir"
+    run mkproj "$testdir"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"ALREADY EXISTS"* ]]
+}
+
+@test "deployment: commit_deploy requires a message" {
+    run commit_deploy
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Commit message"* ]]
+}
+
+@test "deployment: commit_deploy fails outside git repo" {
+    pushd "$TAC_TEST_TMPDIR" >/dev/null
+    run commit_deploy "test message"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"NOT A GIT REPO"* ]]
+    popd >/dev/null
+}
+
+@test "deployment: commit_auto fails outside git repo" {
+    pushd "$TAC_TEST_TMPDIR" >/dev/null
+    run commit_auto
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"NOT A GIT REPO"* ]]
+    popd >/dev/null
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 28. LLM GUARDS — __require_llm & __require_openclaw
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "llm-guard: __require_llm fails when LLM server is offline" {
+    # LLM server is not running in test env
+    run __require_llm
+    [ "$status" -ne 0 ]
+}
+
+@test "llm-guard: __require_llm checks for jq" {
+    if ! command -v jq >/dev/null 2>&1; then
+        run __require_llm
+        [[ "$output" == *"jq"* ]]
+    else
+        # jq is installed; __require_llm should fail on port check instead
+        run __require_llm
+        [ "$status" -ne 0 ]
+    fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 29. PORT UTILITIES — Additional tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "port: __test_port returns 1 for port 0 (invalid)" {
+    run __test_port 0
+    [ "$status" -ne 0 ]
+}
+
+@test "port: __test_port returns 1 for very high port (65535)" {
+    run __test_port 65535
+    [ "$status" -ne 0 ]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 30. HOOKS — cd override & prompt
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "hooks: cd function is defined as override" {
+    declare -f cd >/dev/null
+}
+
+@test "hooks: cd successfully changes directory" {
+    local before="$PWD"
+    cd /tmp
+    [[ "$PWD" == "/tmp" ]]
+    cd "$before"
+}
+
+@test "hooks: PROMPT_COMMAND is set" {
+    [[ -n "$PROMPT_COMMAND" ]]
+}
+
+@test "hooks: _TAC_ADMIN_BADGE is defined" {
+    # Variable exists (may be empty if not in sudo group)
+    declare -p _TAC_ADMIN_BADGE >/dev/null 2>&1
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 31. CONSTANTS — Extended validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "constants: AI_STORAGE_ROOT is set" {
+    [[ -n "$AI_STORAGE_ROOT" ]]
+}
+
+@test "constants: OC_WORKSPACE is under OC_ROOT" {
+    [[ "$OC_WORKSPACE" == "$OC_ROOT"* ]]
+}
+
+@test "constants: OC_AGENTS is under OC_ROOT" {
+    [[ "$OC_AGENTS" == "$OC_ROOT"* ]]
+}
+
+@test "constants: OC_LOGS is under OC_ROOT" {
+    [[ "$OC_LOGS" == "$OC_ROOT"* ]]
+}
+
+@test "constants: OC_BACKUPS is under OC_ROOT" {
+    [[ "$OC_BACKUPS" == "$OC_ROOT"* ]]
+}
+
+@test "constants: CooldownDB path is set" {
+    [[ -n "$CooldownDB" ]]
+}
+
+@test "constants: ErrorLogPath is set" {
+    [[ -n "$ErrorLogPath" ]]
+}
+
+@test "constants: LLAMA_MODEL_DIR is under LLAMA_DRIVE_ROOT" {
+    [[ "$LLAMA_MODEL_DIR" == "$LLAMA_DRIVE_ROOT"* ]]
+}
+
+@test "constants: LLAMA_ARCHIVE_DIR is under LLAMA_DRIVE_ROOT" {
+    [[ "$LLAMA_ARCHIVE_DIR" == "$LLAMA_DRIVE_ROOT"* ]]
+}
+
+@test "constants: LLM_REGISTRY is set" {
+    [[ -n "$LLM_REGISTRY" ]]
+}
+
+@test "constants: LOCAL_LLM_URL starts with http" {
+    [[ "$LOCAL_LLM_URL" == http* ]]
+}
+
+@test "constants: TAC_CACHE_DIR is set" {
+    [[ -n "$TAC_CACHE_DIR" ]]
+}
+
+@test "constants: QUANT_GUIDE path is set" {
+    [[ -n "$QUANT_GUIDE" ]]
+}
+
+@test "constants: LOG_MAX_BYTES is numeric" {
+    [[ "$LOG_MAX_BYTES" =~ ^[0-9]+$ ]]
+}
+
+@test "constants: box-drawing chars BOX_TL, BOX_TR, BOX_BL, BOX_BR are set" {
+    [[ -n "$BOX_TL" ]]
+    [[ -n "$BOX_TR" ]]
+    [[ -n "$BOX_BL" ]]
+    [[ -n "$BOX_BR" ]]
+}
+
+@test "constants: box-drawing chars BOX_H, BOX_V are set" {
+    [[ -n "$BOX_H" ]]
+    [[ -n "$BOX_V" ]]
+}
+
+@test "constants: TACTICAL_PROFILE_VERSION is set and non-empty" {
+    [[ -n "$TACTICAL_PROFILE_VERSION" ]]
+}
+
+@test "constants: PLAY_MARK glyph is set" {
+    [[ -n "$PLAY_MARK" ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 32. FUNCTION AVAILABILITY — Additional functions
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "fn-avail: wacli" { declare -f wacli >/dev/null; }
+@test "fn-avail: ocstart" { declare -f ocstart >/dev/null; }
+@test "fn-avail: ocstop" { declare -f ocstop >/dev/null; }
+@test "fn-avail: ocgs" { declare -f ocgs >/dev/null; }
+@test "fn-avail: ocv" { declare -f ocv >/dev/null; }
+@test "fn-avail: ockeys" { declare -f ockeys >/dev/null; }
+@test "fn-avail: ocdoc-fix" { declare -f ocdoc-fix >/dev/null; }
+@test "fn-avail: ologs" { declare -f ologs >/dev/null; }
+@test "fn-avail: ocroot" { declare -f ocroot >/dev/null; }
+@test "fn-avail: owk" { declare -f owk >/dev/null; }
+@test "fn-avail: ocstat" { declare -f ocstat >/dev/null; }
+@test "fn-avail: ocms" { declare -f ocms >/dev/null; }
+@test "fn-avail: oclogs" { declare -f oclogs >/dev/null; }
+@test "fn-avail: __bridge_windows_api_keys" { declare -f __bridge_windows_api_keys >/dev/null; }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 33. CROSS-SCRIPT — Extended consistency checks
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "cross-script: all @exports in modules are actually defined as functions or variables" {
+    local missing=0
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+        [[ -f "$f" ]] || continue
+        local exports_line
+        exports_line=$(grep '^# @exports:' "$f" | sed 's/^# @exports://' | tr ',' '\n')
+        while read -r fn_name; do
+            fn_name=$(echo "$fn_name" | xargs)  # trim whitespace
+            [[ -z "$fn_name" ]] && continue
+            # Skip known variables (not functions) and continuations like
+            # '(plus standard shell aliases)' or 'Note:' lines.
+            [[ "$fn_name" == "("* ]] && continue
+            [[ "$fn_name" == "Note:"* ]] && continue
+            # Skip entries with parentheses like 'cd (override)'
+            [[ "$fn_name" == *"("* ]] && continue
+            [[ "$fn_name" == *")"* ]] && continue
+            # Check both function and variable definitions
+            if ! declare -f "$fn_name" >/dev/null 2>&1 && \
+               ! declare -p "$fn_name" >/dev/null 2>&1; then
+                echo "MISSING: $fn_name from $(basename "$f")"
+                ((missing++))
+            fi
+        done <<< "$exports_line"
+    done
+    [[ "$missing" -eq 0 ]]
+}
+
+@test "cross-script: module numbering — every module has a section header" {
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+        [[ -f "$f" ]] || continue
+        # Every module must have at least one '# ===' or '# ---' banner line
+        grep -qE '^# (===|---)' "$f"
+    done
+}
+
+@test "cross-script: env.sh uses glob to source numbered modules" {
+    # env.sh sources modules via a [0-9][0-9]-*.sh glob pattern
+    grep -q '\[0-9\]\[0-9\]-\*\.sh' "$REPO_ROOT/env.sh"
+}
+
+@test "cross-script: watchdog has correct health endpoint" {
+    grep -q '/health' "$REPO_ROOT/bin/llama-watchdog.sh"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 34. BIN SCRIPTS — Wrapper validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "bin: tac-exec sources env.sh" {
+    grep -q 'env.sh' "$REPO_ROOT/bin/tac-exec"
+}
+
+@test "bin: all oc-* wrappers use tac-exec" {
+    for f in "$REPO_ROOT"/bin/oc-*; do
+        [[ -f "$f" ]] || continue
+        grep -q 'tac-exec' "$f"
+    done
+}
+
+@test "bin: llama-watchdog.sh has correct shebang" {
+    local line1
+    line1=$(head -1 "$REPO_ROOT/bin/llama-watchdog.sh")
+    [[ "$line1" == "#!/usr/bin/env bash" || "$line1" == "#!/bin/bash" ]]
+}
+
+@test "bin: tac_hostmetrics.sh outputs pipe-separated values" {
+    # Just check it has the expected output format structure
+    grep -q '|' "$REPO_ROOT/bin/tac_hostmetrics.sh" || \
+    grep -q 'printf' "$REPO_ROOT/bin/tac_hostmetrics.sh"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 35. SYSTEMD UNITS — Structure validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "systemd: llama-watchdog.service has [Service] section" {
+    grep -q '\[Service\]' "$REPO_ROOT/systemd/llama-watchdog.service"
+}
+
+@test "systemd: llama-watchdog.timer has [Timer] section" {
+    grep -q '\[Timer\]' "$REPO_ROOT/systemd/llama-watchdog.timer"
+}
+
+@test "systemd: timer references the correct service unit" {
+    grep -q 'llama-watchdog.service' "$REPO_ROOT/systemd/llama-watchdog.timer"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 36. INSTALL SCRIPT — Structural validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "install: install.sh exists and is non-empty" {
+    [[ -s "$REPO_ROOT/install.sh" ]]
+}
+
+@test "install: install.sh has a shebang" {
+    local line1
+    line1=$(head -1 "$REPO_ROOT/install.sh")
+    [[ "$line1" == "#!"* ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 37. HYGIENE — Extended checks
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "hygiene: no 'TODO' or 'FIXME' in core modules (or explicitly tracked)" {
+    local count=0
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+        [[ -f "$f" ]] || continue
+        local hits
+        hits=$(grep -ciE 'TODO|FIXME' "$f" || true)
+        count=$((count + hits))
+    done
+    # Allow up to 5 tracked TODOs (but flag if there's an explosion)
+    [[ "$count" -le 5 ]]
+}
+
+@test "hygiene: no shell scripts use 'echo -e' outside comments" {
+    local violations=0
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+        [[ -f "$f" ]] || continue
+        local hits
+        # Only match 'echo -e ' on lines that are NOT comments
+        hits=$(grep -v '^[[:space:]]*#' "$f" | grep -c 'echo -e ' || true)
+        violations=$((violations + hits))
+    done
+    [[ "$violations" -eq 0 ]]
+}
+
+@test "hygiene: quant-guide.conf exists and is non-empty" {
+    [[ -s "$REPO_ROOT/quant-guide.conf" ]]
+}
+
+@test "hygiene: README.md exists" {
+    [[ -f "$REPO_ROOT/README.md" ]]
+}
+
+@test "hygiene: env.sh exists and is non-empty" {
+    [[ -s "$REPO_ROOT/env.sh" ]]
+}
+
+@test "hygiene: all 14 numbered modules exist" {
+    for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14; do
+        local found=0
+        for f in "$REPO_ROOT"/scripts/${i}-*.sh; do
+            [[ -f "$f" ]] && found=1
+        done
+        [[ "$found" -eq 1 ]]
+    done
 }

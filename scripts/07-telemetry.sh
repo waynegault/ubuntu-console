@@ -52,8 +52,11 @@ function __get_disk() {
 # ---------------------------------------------------------------------------
 # __get_host_metrics — Return CPU% | GPU0% | GPU1% from Windows host (10s TTL).
 # Uses typeperf.exe for CPU + both GPUs (Intel Iris + NVIDIA RTX) in one call.
-# On first call after cache expiry, returns stale data while background
-# refresh runs (~4s via typeperf).
+# Async refresh pattern: on the first call after the 10s cache expires,
+# returns the stale cached values immediately while spawning a background
+# subshell to refresh via tac_hostmetrics.sh (~4s typeperf round-trip).
+# This avoids blocking the dashboard render on slow Windows IPC.
+# Falls back to "0|0|0" on first boot when no cache exists yet.
 # ---------------------------------------------------------------------------
 function __get_host_metrics() {
     local cache="$TAC_CACHE_DIR/tac_hostmetrics"
@@ -74,7 +77,9 @@ function __get_host_metrics() {
 }
 
 # ---------------------------------------------------------------------------
-# __resolve_smi — Locate the nvidia-smi binary (WSL path first, then PATH).
+# __resolve_smi — Locate the nvidia-smi binary.
+# Checks WSL_NVIDIA_SMI first (set in §1 constants to /usr/lib/wsl/lib/nvidia-smi),
+# because the WSL-specific path is not on PATH by default. Falls back to PATH.
 # Returns the path on stdout; returns 1 if not found.
 # ---------------------------------------------------------------------------
 function __resolve_smi() {

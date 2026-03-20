@@ -240,7 +240,9 @@ function up() {
         __tac_line "[4/11] R Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [5/11] OpenClaw verification — runs 'openclaw doctor' for real health check
+    # [5/11] OpenClaw verification — runs 'openclaw doctor' for real health check.
+    # --non-interactive: skip all prompts (safe for unattended maintenance).
+    # --no-workspace-suggestions: suppress noisy "workspace not optimised" hints.
     if __check_cooldown "openclaw" "$now" hours_left
     then
         if command -v openclaw >/dev/null
@@ -302,7 +304,9 @@ function up() {
         __tac_line "[7/11] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [8/11] GPU Checks
+    # [8/11] GPU Checks — __get_gpu returns CSV or a sentinel string.
+    # Sentinels: "N/A" (no nvidia-smi), "Querying..." (first-boot cache miss),
+    # or contains "OFFLINE" (driver crash / WSL GPU passthrough failure).
     local gpu
     gpu=$(__get_gpu)
 

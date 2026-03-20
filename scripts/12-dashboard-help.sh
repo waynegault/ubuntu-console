@@ -16,7 +16,11 @@
 # ---------------------------------------------------------------------------
 function tactical_dashboard() {
     command clear
-    __TAC_BG_PIDS=()  # Reset to avoid unbounded growth across renders
+    # Reset the background PID tracker. Telemetry __get_* functions append
+    # subshell PIDs here; the EXIT trap (__tac_exit_cleanup in §13) kills
+    # any still running when the shell exits. Clearing prevents unbounded
+    # growth across multiple dashboard renders in a single session.
+    __TAC_BG_PIDS=()
     local line; printf -v line '%*s' "$((UIWidth - 2))" ''; line="${line// /═}"
 
     __tac_header "TACTICAL DASHBOARD" "open" "$TACTICAL_PROFILE_VERSION"
@@ -477,6 +481,9 @@ function tactical_help() {
     __hSection "OPENCLAW — LLM INTEGRATION"
     __hRow "oc local-llm" "Register local llama.cpp as an OpenClaw provider"
     __hRow "oc sync-models" "Sync models.conf with OpenClaw provider scan"
+
+    __hSection "OPENCLAW — TOOLS"
+    __hRow "oc g" "Launch knowledge graph server and open in browser"
 
     __hSection "LLM — MODEL MANAGEMENT"
     __hRow "wake" "Lock NVIDIA GPU persistence mode and WDDM state"

@@ -14,7 +14,9 @@
 #   __gguf_metadata, __calc_gpu_layers, __calc_ctx_size, __calc_threads,
 #   __quant_label, __require_llm
 # @state-out: LAST_TPS, __LAST_LLM_RESPONSE, ACTIVE_LLM_FILE
+#   (These globals are written by this module and read by other modules.)
 # @state-in: __LLAMA_DRIVE_MOUNTED (§1), C_* design tokens (§4)
+#   (These globals are read by this module but defined in other modules.)
 
 # Ensure LLM_DEFAULT_FILE is defined even if Section 1 wasn't updated
 export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$LLAMA_DRIVE_ROOT/.llm/default_model.conf}"
@@ -47,7 +49,7 @@ function __require_llm() {
         printf '%s\n' "${C_Error}[jq missing]${C_Reset} Install: sudo apt install -y jq"
         return 1
     fi
-        if ! __test_port "$LLM_PORT" >/dev/null 2>&1
+    if ! __test_port "$LLM_PORT" >/dev/null 2>&1
     then
         __tac_info "Llama Server" "[OFFLINE]" "$C_Error"
         return 1
@@ -773,7 +775,7 @@ function model() {
             fi
             local entry
             entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
-                if [[ -z "$entry" ]]
+            if [[ -z "$entry" ]]
             then
                 __tac_info "Error" "[Model #$target not in registry - run 'model scan']" "$C_Error"; return 1
             fi
@@ -1403,8 +1405,8 @@ function model() {
 
             # Move file
             mkdir -p "$archive_dir"
-                if [[ -f "$fpath" ]]
-                then
+            if [[ -f "$fpath" ]]
+            then
                 if mv "$fpath" "$archive_dir/" 2>/dev/null
                 then
                     __tac_info "File" "[MOVED]" "$C_Success"

@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -15,7 +15,7 @@
 #   oc-plugins, oc-tail, oc-channels, oc-sec, oc-tui, oc-config,
 #   oc-docs, oc-usage, oc-memory-search, oc-local-llm, oc-sync-models,
 #   oc-browser, oc-nodes, oc-sandbox, oc-env, oc-cache-clear,
-#   oc-diag, oc-failover, wacli
+#   oc-diag, oc-failover, wacli, oc-kgraph
 
 # ---------------------------------------------------------------------------
 # so — Start the OpenClaw gateway (systemd-managed service).
@@ -40,7 +40,6 @@ function so() {
     # ── Pre-flight: clear stale service state ──────────────────────────
     # If systemd already has the service in a failed or auto-restart
     # state (e.g. crash loop from a previous run), stop it cleanly and
-    # reset the failure counter before attempting a fresh start.
     # reset the failure counter before attempting a fresh start.
     local _pre_state
     _pre_state=$(systemctl --user show -p SubState --value "$_svc" 2>/dev/null)
@@ -157,7 +156,8 @@ function so() {
         while (( _sw < _sw_max ))
         do
             printf '\r  %s' "${C_Dim}${_spin_chars:_sw%10:1} Starting ${_so_model_name} (${_sw}s)${C_Reset}  "
-            # Poll health for early exit once server has had time to launch
+            # Skip health checks for the first 3s — llama-server needs time to
+            # mmap the model file before the HTTP listener binds.
             if (( _sw > 3 )) && __test_port "$LLM_PORT"
             then
                 local _hb
@@ -449,6 +449,9 @@ function oc() {
         printf '%s\n' "${C_Highlight}LLM Integration${C_Reset}"
         printf '  %-20s %s\n' "local-llm"    "Register local llama.cpp as provider"
         printf '  %-20s %s\n' "sync-models"  "Sync models.conf with OC provider scan"
+        printf '%s\n' ""
+        printf '%s\n' "${C_Highlight}Tools${C_Reset}"
+        printf '  %-20s %s\n' "g"            "Launch knowledge graph server in browser"
         return 0
     fi
     shift
@@ -502,6 +505,8 @@ function oc() {
         # LLM Integration
         local-llm)     oc-local-llm "$@" ;;
         sync-models)   oc-sync-models "$@" ;;
+        # Tools
+        g)             oc-kgraph "$@" ;;
         *)
             printf '%s\n' "${C_Error}Unknown subcommand:${C_Reset} $sub"
             printf '%s\n' "${C_Dim}Run 'oc' with no arguments for a list of commands.${C_Reset}"
@@ -552,9 +557,15 @@ function ocstop() {
 }
 
 # ---------------------------------------------------------------------------
-# oc-agent-use — Show per-agent active session counts (simple, cached)
-# Falls back to several `openclaw` JSON shapes and caches rendered output
-# in tmpfs for `ttl` seconds to keep interactive shells snappy.
+# oc-agent-use — Show per-agent active session counts (simple, cached).
+#
+# Data flow:
+#   1. Read oc_agents.json and oc_sessions.json from /dev/shm cache
+#   2. If caches are stale, refresh from `openclaw agents list --json` /
+#      `openclaw sessions --all-agents --json` (background for agents, sync for sessions)
+#   3. Build per-agent stats via jq grouping pipeline → oc_agent_stats.tsv
+#   4. Render a formatted table with token usage, cap%, and colored bars
+#   5. Cache the rendered text to /dev/shm/oc_agent_use.txt (5s TTL)
 # ---------------------------------------------------------------------------
 function oc-agent-use() {
     local cache="/dev/shm/oc_agent_use.txt"
@@ -613,21 +624,21 @@ function oc-agent-use() {
     [[ -f "$session_cache" ]] && sessions_json=$(cat "$session_cache") || sessions_json=""
 
     # Fallback to immediate CLI if no cache exists yet (first-run)
-        if [[ -z "$agents_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
-            agents_json=$(openclaw agents list --json 2>/dev/null \
-                || openclaw agents --json 2>/dev/null || true)
-        fi
-        if [[ -z "$sessions_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
-            sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null \
-                || openclaw sessions --json 2>/dev/null || true)
-        fi
+    if [[ -z "$agents_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
+        agents_json=$(openclaw agents list --json 2>/dev/null \
+            || openclaw agents --json 2>/dev/null || true)
+    fi
+    if [[ -z "$sessions_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
+        sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null \
+            || openclaw sessions --json 2>/dev/null || true)
+    fi
 
     local tmp_agents tmp_sessions
     tmp_agents=$(mktemp) || tmp_agents="/tmp/oc_agents.$$"
     tmp_sessions=$(mktemp) || tmp_sessions="/tmp/oc_sessions.$$"
 
-        # Extract agent id -> name mapping (best-effort)
-        printf '%s' "$agents_json" | jq -r '
+    # Extract agent id -> name mapping (best-effort)
+    printf '%s' "$agents_json" | jq -r '
             (if type=="array" then . elif (.agents? or .items?) then (.agents // .items) else . end)
             | map(
                 { id: ( .id // .agent_id // .slug // .key // .name ),
@@ -636,10 +647,9 @@ function oc-agent-use() {
             | unique_by(.id)
             | .[]? | "\(.id)\t\(.name)"' 2>/dev/null > "$tmp_agents" || true
 
-    # Build per-agent token aggregates (input, output, total, cap)
-    # Use a sessions-style cache for the aggregated stats to avoid
-    # re-running the grouping jq on every interactive call.
-    # Use a small TSV cache for instant reads during rendering
+    # Build per-agent token aggregates (input, output, total, cap).
+    # Produces a TSV with one row per agent: id \t input \t output \t total \t cap.
+    # Uses a small TSV cache for instant reads during rendering.
     local stats_cache="$TAC_CACHE_DIR/oc_agent_stats.tsv"
     local stats_ttl=5
 
@@ -650,30 +660,33 @@ function oc-agent-use() {
         mtime=0
     fi
     if (( now - mtime > stats_ttl )); then
-                # produce TSV lines for instant reading during render
-                ( printf '%s' "$sessions_json" \
-                    | jq -r '
-                        def aid: .agentId // .agent_id // .agent // .agentName // .agent_name;
-                        (.sessions // .items // . // [])
-                        | (if type=="array" then . else [] end)
-                        | map({
-                            agent: aid,
-                            input: (.inputTokens // 0),
-                            output: (.outputTokens // 0),
-                            total: (.totalTokens // 0),
-                            cap: (.contextTokens // 0)
-                          })
-                        | group_by(.agent)
-                        | map({
-                            id: .[0].agent,
-                            input: (map(.input) | add),
-                            output: (map(.output) | add),
-                            total: (map(.total) | add),
-                            cap: (map(.cap) | max)
-                          })[]
-                        | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' \
-                    > "${stats_cache}.tmp" 2>/dev/null ) \
-                    && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
+        # Aggregate sessions_json → per-agent token sums.
+        # jq pipeline: normalise agent ID field name (many JSON shapes),
+        # extract token counts, group by agent, sum input/output/total
+        # and take max cap (context window) per agent. Output as TSV.
+        ( printf '%s' "$sessions_json" \
+            | jq -r '
+                def aid: .agentId // .agent_id // .agent // .agentName // .agent_name;
+                (.sessions // .items // . // [])
+                | (if type=="array" then . else [] end)
+                | map({
+                    agent: aid,
+                    input: (.inputTokens // 0),
+                    output: (.outputTokens // 0),
+                    total: (.totalTokens // 0),
+                    cap: (.contextTokens // 0)
+                  })
+                | group_by(.agent)
+                | map({
+                    id: .[0].agent,
+                    input: (map(.input) | add),
+                    output: (map(.output) | add),
+                    total: (map(.total) | add),
+                    cap: (map(.cap) | max)
+                  })[]
+                | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' \
+            > "${stats_cache}.tmp" 2>/dev/null ) \
+            && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
     fi
 
     local tmp_stats
@@ -738,6 +751,8 @@ function oc-agent-use() {
         fi
     fi
 
+    # Merge agent names (from agents list) and per-agent token stats (from
+    # sessions aggregation) into associative arrays for rendering.
     declare -A amap input_sum output_sum total_sum cap_val
     if [[ -f "$tmp_agents" ]]; then
         while IFS=$'\t' read -r id name; do
@@ -782,7 +797,7 @@ function oc-agent-use() {
         done
     fi
 
-    # Helper: humanize tokens to k-units
+    # Helper: humanize token counts to k/m-unit strings (e.g. 1500 → "1.5k")
     _human() {
         local n=$1
         if (( n >= 1000000 )); then
@@ -1633,10 +1648,6 @@ function oc-cache-clear() {
 
 
 # ---------------------------------------------------------------------------
-# oc-diag — Combined diagnostic dump: OpenClaw doctor + gateway status +
-#            model status + environment variables + recent log tail.
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
 # oc-trust-sync — Record current oc-llm-sync.sh hash as trusted.
 # ---------------------------------------------------------------------------
 function oc-trust-sync() {
@@ -1650,6 +1661,10 @@ function oc-trust-sync() {
     __tac_info "Trusted Hash" "[UPDATED]" "$C_Success"
 }
 
+# ---------------------------------------------------------------------------
+# oc-diag — Combined diagnostic dump: OpenClaw doctor + gateway status +
+#            model status + environment variables + recent log tail.
+# ---------------------------------------------------------------------------
 function oc-diag() {
     __tac_header "OpenClaw Diagnostic Report" "open"
     echo ""
@@ -1754,5 +1769,95 @@ function wacli() {
     fi
 }
 export -f wacli
+
+# ---------------------------------------------------------------------------
+# oc-kgraph — Launch the kgraph knowledge-graph server and open in browser.
+# Starts scripts/kgraph.py on localhost:46139, waits for it to bind, then
+# opens the page in the default browser.
+# ---------------------------------------------------------------------------
+function oc-kgraph() {
+    local KG_PY="$HOME/ubuntu-console/scripts/kgraph.py"
+    if [[ ! -f "$KG_PY" ]]; then
+        __tac_info "kgraph" "[NOT FOUND: $KG_PY]" "$C_Error"
+        return 1
+    fi
+
+    # If kgraph isn't running, start it on a known local port in background.
+    local PORT=46139
+    if ! pgrep -f "$KG_PY" >/dev/null 2>&1; then
+        setsid python3 "$KG_PY" --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
+        disown
+    fi
+
+    # kgraph.py writes the embedded page to kgraph.html when --embed is used,
+    # so open that path explicitly to avoid a directory listing.
+    local URL="http://127.0.0.1:${PORT}/kgraph.html"
+
+    # Guard: only open URLs bound to localhost to prevent open-redirect.
+    if [[ "$URL" != http://127.0.0.1:* && "$URL" != http://localhost:* ]]; then
+        printf 'Refusing to open non-localhost URL: %s\n' "$URL"
+        return 1
+    fi
+
+    __tac_info "Knowledge Graph" "[LAUNCHING]" "$C_Success"
+    printf 'URL: %s\n' "$URL"
+
+    # Wait up to ~5s for the server to respond.
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        if command -v curl >/dev/null 2>&1; then
+            curl -sSf --head "$URL" >/dev/null 2>&1 && break
+        else
+            (echo > /dev/tcp/127.0.0.1/${PORT}) >/dev/null 2>&1 && break
+        fi
+        sleep 0.5
+    done
+
+    # Try WSL/Windows openers first, then Linux browsers, then xdg-open.
+    local opened=1
+    if [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+        if command -v wslview >/dev/null 2>&1; then
+            wslview "$URL" >/dev/null 2>&1 || true
+            opened=0
+        elif command -v powershell.exe >/dev/null 2>&1; then
+            powershell.exe -NoProfile -Command Start-Process -ArgumentList "$URL" >/dev/null 2>&1 || true
+            opened=0
+        elif command -v pwsh.exe >/dev/null 2>&1; then
+            pwsh.exe -NoProfile -Command Start-Process -ArgumentList "$URL" >/dev/null 2>&1 || true
+            opened=0
+        fi
+    fi
+
+    if [[ $opened -ne 0 ]]; then
+        local browsers=(
+            msedge
+            microsoft-edge
+            microsoft-edge-stable
+            microsoft-edge-dev
+            chromium-browser
+            chromium
+            google-chrome
+            google-chrome-stable
+            brave-browser
+            firefox
+        )
+        for b in "${browsers[@]}"; do
+            if command -v "$b" >/dev/null 2>&1; then
+                "$b" "$URL" >/dev/null 2>&1 &>/dev/null || true
+                opened=0
+                break
+            fi
+        done
+    fi
+    if [[ $opened -ne 0 ]]; then
+        if command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "$URL" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if [[ $opened -ne 0 ]]; then
+        printf '\nCould not launch a browser automatically. Open this URL manually: %s\n' "$URL"
+    fi
+}
 
 # end of file

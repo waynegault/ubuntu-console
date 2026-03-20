@@ -79,7 +79,11 @@ cmd+=("--ctx-size" "$use_ctx" "--mlock" "--prio" "2" "--cont-batching" "--parall
 if (( use_gpu > 0 ))
 then
     # Use -ngl 999 to let llama.cpp offload the maximum layers that fit in VRAM.
-    # Larger batches improve prompt eval speed when GPU is active.
+    # Batch sizing strategy:
+    #   Partial offload (gpu < layers): smaller batches (512/512) to avoid
+    #     VRAM pressure from the prompt-eval KV cache.
+    #   Full offload (gpu >= layers): large batches (4096/1024) to saturate
+    #     the GPU pipeline — ~30-50% faster prompt eval.
     batch_size=512; ubatch_size=512
     if (( use_gpu >= ${layers:-0} ))
     then

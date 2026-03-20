@@ -15,11 +15,16 @@ raw=$(typeperf.exe "\Processor(_Total)\% Processor Time" \
       "\GPU Engine(*engtype_3D)\Utilization Percentage" \
       -sc 1 2>/dev/null | tr -d '\r"')
 
-# typeperf CSV: line 1 = blank, line 2 = header, line 3 = data values
+# typeperf CSV structure: line 1 = blank, line 2 = column headers,
+# line 3 = data values.  Column 2 = CPU %.  +0.5 rounds to nearest int.
 cpu=$(echo "$raw" | awk -F',' 'NR==3 { printf "%d", $2+0.5 }')
 
-# Intel iGPU (gpu0) from typeperf - works well for the integrated GPU.
-# We take the lowest LUID which corresponds to Intel Iris Xe.
+# Intel iGPU (gpu0) from typeperf.
+# Each GPU engine counter embeds a LUID (Locally Unique Identifier) in its
+# column header. We parse LUIDs from the header row (NR==2), sum utilisation
+# values per LUID from the data row (NR==3), then sort by LUID.  The lowest
+# LUID corresponds to the Intel Iris Xe integrated GPU (enumerated first by
+# Windows).  The highest LUID is the NVIDIA discrete GPU (see gpu1 below).
 gpu0=$(echo "$raw" | gawk -F',' '
 NR==2 {
   for(i=3;i<=NF;i++) {
@@ -51,7 +56,9 @@ then
         --format=csv,noheader,nounits 2>/dev/null \
         | awk '{printf "%d", $1+0.5}')
 else
-    # Fallback: take highest LUID from typeperf (3D engine only)
+    # Fallback: when nvidia-smi is unavailable, use the highest LUID from
+    # typeperf's 3D engine counters. This only captures DirectX/3D workloads,
+    # not CUDA/compute, so it underreports LLM inference utilisation.
     gpu1=$(echo "$raw" | gawk -F',' '
 NR==2 {
   for(i=3;i<=NF;i++) {

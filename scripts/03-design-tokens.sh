@@ -5,7 +5,7 @@
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
 # Module Version: 1
 # ==============================================================================
-# 4. DESIGN TOKENS
+# 3. DESIGN TOKENS
 # ==============================================================================
 # @modular-section: design-tokens
 # @depends: none

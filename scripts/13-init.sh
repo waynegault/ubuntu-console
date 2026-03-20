@@ -32,6 +32,8 @@ fi
 [[ -f "$OC_ROOT/completions/openclaw.bash" ]] && source "$OC_ROOT/completions/openclaw.bash"
 
 # Fix Loopback for WSL Mirrored Networking (Idempotent & Pulse-Free).
+# WSL2 mirrored networking mode doesn't create a loopback0 dummy interface.
+# Without it, OpenClaw's node-to-node communication on 127.0.0.2 fails.
 # Uses 'command ip' to call /usr/bin/ip directly, avoiding any function shadow.
 # Checks both interface existence AND the specific address to be truly idempotent.
 if ! command ip link show loopback0 >/dev/null 2>&1
@@ -51,7 +53,12 @@ then
     fi
 fi
 
-# OpenClaw LLM sync function (added by Hal)
+# OpenClaw LLM sync function (added by Hal).
+# Vault mechanism: This sources oc-llm-sync.sh, which registers OC's LLM
+# providers (API keys, endpoints) from a credential store into the current
+# session. The file is verified against a trusted SHA-256 hash before
+# sourcing — if the hash doesn't match (tampered/updated), it's skipped
+# with a warning and the shell continues to load without LLM sync.
 # NOTE: This silently sources an external script. If the file is compromised,
 # it executes in the interactive shell. Hash is verified against a trusted
 # reference file and logged for auditability.

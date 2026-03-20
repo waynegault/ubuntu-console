@@ -239,8 +239,11 @@ ${diff_body}"
 
     # Guard: refuse to send diffs containing secret-like patterns to the LLM.
     # Even though LOCAL_LLM_URL is localhost, a misconfigured proxy could route
-    # the request externally. Fail safe by scanning the diff body.
-    local __secret_pat='(sk-[a-zA-Z0-9]{20,}'
+    # the request externally. Fail safe by scanning the diff body.    # Patterns matched:
+    #   sk-...     → OpenAI / Anthropic API keys
+    #   AKIA...    → AWS access key IDs (always start with AKIA)
+    #   ghp_...    → GitHub personal access tokens
+    #   API_KEY=.. → Generic env-var style API key assignments    local __secret_pat='(sk-[a-zA-Z0-9]{20,}'
     __secret_pat+='|AKIA[0-9A-Z]{16}'
     __secret_pat+='|ghp_[a-zA-Z0-9]{36}'
     __secret_pat+='|API[_-]?KEY[[:space:]]*=[[:space:]]*['"'"'"]?[a-zA-Z0-9])'
@@ -256,6 +259,9 @@ ${diff_body}"
     local prompt="Write a concise git commit message (one line, max 72 chars,"
     prompt+=" imperative mood) for the following diff."
     prompt+=" Return ONLY the message, no quotes or explanation."
+    # max_tokens: 80 — commit messages should be ≤72 chars; 80 gives a small buffer.
+    # temperature: 0.3 — low creativity for deterministic, factual summaries.
+    # diff capped at 3000 chars to stay within context window of small local models.
     local payload
     payload=$(jq -n \
         --arg prompt "$prompt" \
