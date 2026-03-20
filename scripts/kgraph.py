@@ -484,7 +484,7 @@ def main():
     parser.add_argument('--host', help='Host to bind server to (default 127.0.0.1)', default='127.0.0.1')
     parser.add_argument('--port', type=int, help='Port to bind server to (default ephemeral)', default=0)
     parser.add_argument('--import-db', help='Import nodes/edges from SQLite memory DB and use as graph')
-    parser.add_argument('--install', nargs='?', const='~/.openclaw/workspace-main/kgraph.py', help='Copy this script to target path and make executable')
+    parser.add_argument('--install', nargs='?', const='~/.openclaw/kgraph.py', help='Copy this script to target path and make executable')
     parser.add_argument('--embed', action='store_true', help='Serve the generated embedded HTML instead of a built frontend')
     args = parser.parse_args()
 

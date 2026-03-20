@@ -33,10 +33,10 @@ alias m='tactical_dashboard'
 alias cpwd='copy_path'
 alias unittest='~/ubuntu-console/scripts/run-tests.sh'
 
-# g — Launch the kgraph server (serves workspace-main/kgraph.py --serve)
+# g — Launch the kgraph server (serves scripts/kgraph.py --serve)
 # Runs in background and attempts to open the browser (kgraph.py handles the URL).
 function g() {
-    local KG_PY="$HOME/ubuntu-console/workspace-main/kgraph.py"
+    local KG_PY="$HOME/ubuntu-console/scripts/kgraph.py"
     if [[ ! -f "$KG_PY" ]]; then
         echo "kgraph script not found: $KG_PY"
         return 1

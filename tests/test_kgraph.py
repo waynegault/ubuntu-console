@@ -6,7 +6,7 @@ import subprocess
 
 def test_generate_html_contains_vis_and_manipulation():
     repo_root = os.path.dirname(os.path.dirname(__file__))
-    script = os.path.join(repo_root, 'workspace-main', 'kgraph.py')
+    script = os.path.join(repo_root, 'scripts', 'kgraph.py')
     assert os.path.exists(script), f"kgraph script not found at {script}"
 
     with tempfile.TemporaryDirectory() as td:
