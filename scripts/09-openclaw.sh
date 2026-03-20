@@ -305,7 +305,8 @@ function __so_check_win_port() {
 
     local _win_holder
     _win_holder=$(timeout 5 powershell.exe -NoProfile -NonInteractive -Command "
-        \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+        \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue \
+            | Select-Object -First 1
         if (\$c) {
             \$p = Get-Process -Id \$c.OwningProcess -ErrorAction SilentlyContinue
             '{0} (PID {1})' -f \$p.ProcessName, \$c.OwningProcess
@@ -652,23 +653,24 @@ function oc-agent-use() {
                 # produce TSV lines for instant reading during render
                 ( printf '%s' "$sessions_json" \
                     | jq -r '
+                        def aid: .agentId // .agent_id // .agent // .agentName // .agent_name;
                         (.sessions // .items // . // [])
                         | (if type=="array" then . else [] end)
-                                                | map(
-                                                        { agent: ( .agentId // .agent_id // .agent // .agentName // .agent_name ),
-                                                            input: ( .inputTokens // 0 ),
-                                                            output: ( .outputTokens // 0 ),
-                                                            total: ( .totalTokens // 0 ),
-                                                            cap: ( .contextTokens // 0 ) }
-                                                    )
+                        | map({
+                            agent: aid,
+                            input: (.inputTokens // 0),
+                            output: (.outputTokens // 0),
+                            total: (.totalTokens // 0),
+                            cap: (.contextTokens // 0)
+                          })
                         | group_by(.agent)
-                                                | map(
-                                                        { id: .[0].agent,
-                                                            input: ( map(.input) | add ),
-                                                            output: ( map(.output) | add ),
-                                                            total: ( map(.total) | add ),
-                                                            cap: ( map(.cap) | max ) }
-                                                    )[]
+                        | map({
+                            id: .[0].agent,
+                            input: (map(.input) | add),
+                            output: (map(.output) | add),
+                            total: (map(.total) | add),
+                            cap: (map(.cap) | max)
+                          })[]
                         | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' \
                     > "${stats_cache}.tmp" 2>/dev/null ) \
                     && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
@@ -686,44 +688,40 @@ function oc-agent-use() {
         # kick off background recompute from the authoritative session cache file
         if [[ -f "$session_cache" && -s "$session_cache" ]]; then
             if [[ -t 1 ]]; then
-                ( jq '
+                ( jq -r '
+                    def aid: .agentId // .agent_id // .agent // .agentName // .agent_name;
                     (.sessions // .items // . // [])
                     | (if type=="array" then . else [] end)
-                                        | map(
-                                                { agent: ( .agentId // .agent_id // .agent // .agentName // .agent_name ),
-                                                    input: ( .inputTokens // 0 ),
-                                                    output: ( .outputTokens // 0 ),
-                                                    total: ( .totalTokens // 0 ),
-                                                    cap: ( .contextTokens // 0 ) }
-                                            )
-                                        | group_by(.agent)
-                                        | map(
-                                                { id: .[0].agent,
-                                                    input: ( map(.input) | add ),
-                                                    output: ( map(.output) | add ),
-                                                    total: ( map(.total) | add ),
-                                                    cap: ( map(.cap) | max ) }
-                                            )' "$session_cache" 2>/dev/null \
+                    | map({ agent: aid,
+                        input: (.inputTokens // 0),
+                        output: (.outputTokens // 0),
+                        total: (.totalTokens // 0),
+                        cap: (.contextTokens // 0) })
+                    | group_by(.agent)
+                    | map({ id: .[0].agent,
+                        input: (map(.input) | add),
+                        output: (map(.output) | add),
+                        total: (map(.total) | add),
+                        cap: (map(.cap) | max) })[]
+                    | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' "$session_cache" 2>/dev/null \
                     > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null )
             else
-                ( jq '
+                ( jq -r '
+                    def aid: .agentId // .agent_id // .agent // .agentName // .agent_name;
                     (.sessions // .items // . // [])
                     | (if type=="array" then . else [] end)
-                                        | map(
-                                                { agent: ( .agentId // .agent_id // .agent // .agentName // .agent_name ),
-                                                    input: ( .inputTokens // 0 ),
-                                                    output: ( .outputTokens // 0 ),
-                                                    total: ( .totalTokens // 0 ),
-                                                    cap: ( .contextTokens // 0 ) }
-                                            )
-                                        | group_by(.agent)
-                                        | map(
-                                                { id: .[0].agent,
-                                                    input: ( map(.input) | add ),
-                                                    output: ( map(.output) | add ),
-                                                    total: ( map(.total) | add ),
-                                                    cap: ( map(.cap) | max ) }
-                                            )' "$session_cache" 2>/dev/null \
+                    | map({ agent: aid,
+                        input: (.inputTokens // 0),
+                        output: (.outputTokens // 0),
+                        total: (.totalTokens // 0),
+                        cap: (.contextTokens // 0) })
+                    | group_by(.agent)
+                    | map({ id: .[0].agent,
+                        input: (map(.input) | add),
+                        output: (map(.output) | add),
+                        total: (map(.total) | add),
+                        cap: (map(.cap) | max) })[]
+                    | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' "$session_cache" 2>/dev/null \
                     > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null ) &
             fi
         fi
@@ -1638,6 +1636,20 @@ function oc-cache-clear() {
 # oc-diag — Combined diagnostic dump: OpenClaw doctor + gateway status +
 #            model status + environment variables + recent log tail.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# oc-trust-sync — Record current oc-llm-sync.sh hash as trusted.
+# ---------------------------------------------------------------------------
+function oc-trust-sync() {
+    local src="$OC_WORKSPACE/oc-llm-sync.sh"
+    if [[ ! -f "$src" ]]
+    then
+        __tac_info "oc-llm-sync.sh" "[NOT FOUND]" "$C_Error"
+        return 1
+    fi
+    sha256sum "$src" 2>/dev/null | cut -d' ' -f1 > "$OC_ROOT/oc-llm-sync.sha256"
+    __tac_info "Trusted Hash" "[UPDATED]" "$C_Success"
+}
+
 function oc-diag() {
     __tac_header "OpenClaw Diagnostic Report" "open"
     echo ""

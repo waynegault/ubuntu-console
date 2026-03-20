@@ -3,7 +3,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -313,7 +313,7 @@ function tactical_dashboard() {
     else
         cmds_toggle="so"
     fi
-    local cmds="up | ${cmds_toggle} | serve <n> | halt | chat: | commit | h"
+    local cmds="up | ${cmds_toggle} | serve <n> | halt | chat: | commit | g | h"
     local totalPad=$(( UIWidth - 2 - ${#cmds} ))
     local leftPad=$(( totalPad / 2 ))
     local rightPad=$(( totalPad - leftPad ))

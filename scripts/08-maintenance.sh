@@ -125,16 +125,16 @@ function up() {
     local _cd_sink=""  # sink for nameref when no result var is needed
     touch "$CooldownDB" 2>/dev/null
 
-    # [1/10] Connectivity
+    # [1/11] Connectivity
     if ping -c 1 -W 2 github.com >/dev/null 2>&1
     then
-        __tac_line "[1/10] Internet Connectivity" "[ESTABLISHED]" "$C_Success"
+        __tac_line "[1/11] Internet Connectivity" "[ESTABLISHED]" "$C_Success"
     else
-        __tac_line "[1/10] Internet Connectivity" "[LOST]" "$C_Error"
+        __tac_line "[1/11] Internet Connectivity" "[LOST]" "$C_Error"
         ((errCount++))
     fi
 
-    # [2/10] APT Index Update (24h cooldown) + Package Upgrade (7d cooldown)
+    # [2/11] APT Index Update (24h cooldown) + Package Upgrade (7d cooldown)
     # Logic:
     #   1. If apt_index cooldown (24h) expired → update index only
     #   2. If apt cooldown (7d) expired → upgrade packages (updates index if not already done)
@@ -157,66 +157,90 @@ function up() {
         if (( apt_rc == 0 ))
         then
             sudo apt autoremove -y >/dev/null 2>&1
-            __tac_line "[2/10] APT Packages" "[UPDATED]" "$C_Success"
+            __tac_line "[2/11] APT Packages" "[UPDATED]" "$C_Success"
             __set_cooldown "apt" "$now"
             __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
         else
-            __tac_line "[2/10] APT Packages" "[FAILED]" "$C_Error"
+            __tac_line "[2/11] APT Packages" "[FAILED]" "$C_Error"
             ((errCount++))
         fi
     else
         if (( apt_did_update ))
         then
-            __tac_line "[2/10] APT Index" "[REFRESHED]" "$C_Success"
+            __tac_line "[2/11] APT Index" "[REFRESHED]" "$C_Success"
         else
-            __tac_line "[2/10] APT Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+            __tac_line "[2/11] APT Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
         fi
     fi
 
-    # [3/10] NPM / Cargo
+    # [3/11] NPM / Cargo
     if __check_cooldown "npm_cargo" "$now" hours_left
     then
         local pkg_err=0
         command -v npm >/dev/null && { npm update -g --quiet >/dev/null 2>&1 || pkg_err=1; }
         command -v cargo >/dev/null && { cargo install-update -a >/dev/null 2>&1 || pkg_err=1; }
-        # Update R packages (non-interactive). Prefer Rscript when available.
-                if command -v Rscript >/dev/null 2>&1
-                then
-                        Rscript -e '
-                                options(repos = c(CRAN = "https://cloud.r-project.org"))
-                                tryCatch({
-                                    update.packages(ask=FALSE, checkBuilt=TRUE, Ncpus=1)
-                                }, error=function(e){})
-                                if (requireNamespace("BiocManager", quietly=TRUE)) {
-                                    tryCatch({ BiocManager::install(ask=FALSE, update=TRUE) }, error=function(e){})
-                                }
-                        ' >/dev/null 2>&1 || pkg_err=1
-                elif command -v R >/dev/null 2>&1
-                then
-                        R -e '
-                                options(repos = c(CRAN = "https://cloud.r-project.org"))
-                                tryCatch({
-                                    update.packages(ask=FALSE, checkBuilt=TRUE, Ncpus=1)
-                                }, error=function(e){})
-                                if (requireNamespace("BiocManager", quietly=TRUE)) {
-                                    tryCatch({ BiocManager::install(ask=FALSE, update=TRUE) }, error=function(e){})
-                                }
-                        ' >/dev/null 2>&1 || pkg_err=1
-                fi
 
         if (( pkg_err == 0 ))
         then
-            __tac_line "[3/10] NPM & Cargo Crates" "[UPDATED]" "$C_Success"
+            __tac_line "[3/11] NPM & Cargo Crates" "[UPDATED]" "$C_Success"
             __set_cooldown "npm_cargo" "$now"
         else
-            __tac_line "[3/10] NPM & Cargo Crates" "[WARNING/FAILED]" "$C_Warning"
+            __tac_line "[3/11] NPM & Cargo Crates" "[WARNING/FAILED]" "$C_Warning"
             ((errCount++))
         fi
     else
-        __tac_line "[3/10] NPM & Cargo Crates" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[3/11] NPM & Cargo Crates" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [4/10] OpenClaw verification — runs 'openclaw doctor' for real health check
+    # [4/11] R Packages (CRAN + Bioconductor)
+    if __check_cooldown "r_pkgs" "$now" hours_left
+    then
+        local r_err=0
+        # Resolve Rscript: prefer PATH, then Windows-side install under /mnt/c.
+        local _rscript=""
+        if command -v Rscript >/dev/null 2>&1
+        then
+            _rscript="Rscript"
+        elif command -v R >/dev/null 2>&1
+        then
+            _rscript="R"
+        else
+            # WSL fallback: pick the highest-versioned Rscript.exe on Windows.
+            local _win_r
+            for _win_r in "/mnt/c/Program Files/R"/R-*/bin/x64/Rscript.exe; do
+                [[ -x "$_win_r" ]] && _rscript="$_win_r"
+            done
+        fi
+        if [[ -n "$_rscript" ]]
+        then
+            "$_rscript" -e '
+                options(repos = c(CRAN = "https://cloud.r-project.org"))
+                tryCatch({
+                    update.packages(ask=FALSE, checkBuilt=TRUE, Ncpus=1)
+                }, error=function(e){})
+                if (requireNamespace("BiocManager", quietly=TRUE)) {
+                    tryCatch({ BiocManager::install(ask=FALSE, update=TRUE) }, error=function(e){})
+                }
+            ' >/dev/null 2>&1 || r_err=1
+        else
+            __tac_line "[4/11] R Packages" "[NOT INSTALLED]" "$C_Dim"
+            r_err=-1  # sentinel: skip cooldown
+        fi
+
+        if (( r_err == 0 ))
+        then
+            __tac_line "[4/11] R Packages" "[UPDATED]" "$C_Success"
+            __set_cooldown "r_pkgs" "$now"
+        elif (( r_err == 1 ))
+        then
+            __tac_line "[4/11] R Packages" "[WARNING/FAILED]" "$C_Warning"
+            ((errCount++))
+        fi
+    else
+        __tac_line "[4/11] R Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+    fi
+
+    # [5/11] OpenClaw verification — runs 'openclaw doctor' for real health check
     if __check_cooldown "openclaw" "$now" hours_left
     then
         if command -v openclaw >/dev/null
@@ -226,33 +250,33 @@ function up() {
             doc_rc=$?
             if (( doc_rc == 0 ))
             then
-                __tac_line "[4/10] OpenClaw Framework" "[HEALTHY]" "$C_Success"
+                __tac_line "[5/11] OpenClaw Framework" "[HEALTHY]" "$C_Success"
             elif (( doc_rc == 124 ))
             then
-                __tac_line "[4/10] OpenClaw Framework" "[TIMED OUT]" "$C_Warning"
+                __tac_line "[5/11] OpenClaw Framework" "[TIMED OUT]" "$C_Warning"
                 ((errCount++))
             else
-                __tac_line "[4/10] OpenClaw Framework" "[ISSUES FOUND - run oc doc-fix]" "$C_Warning"
+                __tac_line "[5/11] OpenClaw Framework" "[ISSUES FOUND - run oc doc-fix]" "$C_Warning"
                 ((errCount++))
             fi
             __set_cooldown "openclaw" "$now"
         else
-            __tac_line "[4/10] OpenClaw Framework" "[MISSING]" "$C_Error"
+            __tac_line "[5/11] OpenClaw Framework" "[MISSING]" "$C_Error"
             ((errCount++))
         fi
     else
-        __tac_line "[4/10] OpenClaw Framework" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[5/11] OpenClaw Framework" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [5/10] Python Venv (a.k.a. "Cloaking" = active virtual environment isolation)
+    # [6/11] Python Venv (a.k.a. "Cloaking" = active virtual environment isolation)
     if [[ -n "$VIRTUAL_ENV" ]]
     then
-        __tac_line "[5/10] Python Venv Cloaking" "[$(basename "$VIRTUAL_ENV")]" "$C_Success"
+        __tac_line "[6/11] Python Venv Cloaking" "[$(basename "$VIRTUAL_ENV")]" "$C_Success"
     else
-        __tac_line "[5/10] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
+        __tac_line "[6/11] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
     fi
 
-    # [6/10] Python Fleet
+    # [7/11] Python Fleet
     if __check_cooldown "pyfleet" "$now" hours_left
     then
         local py_versions=()
@@ -268,29 +292,29 @@ function up() {
             do
                 v_list+=("$(basename "$py")")
             done
-            __tac_line "[6/10] Python Fleet" "[${v_list[*]} VERIFIED]" "$C_Success"
+            __tac_line "[7/11] Python Fleet" "[${v_list[*]} VERIFIED]" "$C_Success"
             __set_cooldown "pyfleet" "$now"
         else
-            __tac_line "[6/10] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
+            __tac_line "[7/11] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
             ((errCount++))
         fi
     else
-        __tac_line "[6/10] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[7/11] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [7/10] GPU Checks
+    # [8/11] GPU Checks
     local gpu
     gpu=$(__get_gpu)
 
     if [[ "$gpu" != "N/A" && "$gpu" != "Querying..." && "$gpu" != *"OFFLINE"* ]]
     then
-        __tac_line "[7/10] RTX 3050 Ti" "[READY]" "$C_Success"
+        __tac_line "[8/11] RTX 3050 Ti" "[READY]" "$C_Success"
     else
-        __tac_line "[7/10] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
+        __tac_line "[8/11] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
         ((errCount++))
     fi
 
-    # [8/10] Sanitation — clean known temp locations, NOT the user's $PWD.
+    # [9/11] Sanitation — clean known temp locations, NOT the user's $PWD.
     # Only removes temp artifacts from /tmp/openclaw and the OC_ROOT directory.
     local count=0
     if [[ -d /tmp/openclaw ]]
@@ -300,25 +324,25 @@ function up() {
             rm -f "$_tmpf" && ((count++))
         done < <(find /tmp/openclaw \( -name '*.tmp' -o -name 'python-*.exe' \) -print0 2>/dev/null)
     fi
-    __tac_line "[8/10] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
+    __tac_line "[9/11] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
 
-    # [9/10] Disk Space Audit — warn if any mount point exceeds 90%
+    # [10/11] Disk Space Audit — warn if any mount point exceeds 90%
     local disk_warn=0
     while read -r pct mount
     do
         local pct_num=${pct%\%}
         if (( pct_num >= 90 ))
         then
-            __tac_line "[9/10] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
+            __tac_line "[10/11] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
             disk_warn=1
             ((errCount++))
         fi
     done < <(df -h --output=pcent,target 2>/dev/null \
         | tail -n +2 | grep -v '/snap/' \
         | grep -v '/mnt/wsl/docker-desktop')
-    (( disk_warn == 0 )) && __tac_line "[9/10] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
+    (( disk_warn == 0 )) && __tac_line "[10/11] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
 
-    # [10/10] Stale Process Cleanup — kill orphaned llama-server instances.
+    # [11/11] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).
     # Per-PID check: only kill processes that are NOT listening on LLM_PORT.
     local stale_pids
@@ -334,14 +358,14 @@ function up() {
         fi
         if (( _state_age < 60 ))
         then
-            __tac_line "[10/10] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
+            __tac_line "[11/11] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
         else
             pkill -u "$USER" -x llama-server 2>/dev/null
             rm -f "$ACTIVE_LLM_FILE"
-            __tac_line "[10/10] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
+            __tac_line "[11/11] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
         fi
     else
-        __tac_line "[10/10] Stale Processes" "[CLEAN]" "$C_Success"
+        __tac_line "[11/11] Stale Processes" "[CLEAN]" "$C_Success"
     fi
 
     __tac_divider

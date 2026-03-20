@@ -38,6 +38,10 @@ HTML_TMPL = """<!doctype html>
   <body>
     <div id="toolbar">
       <button id="save">Save JSON</button>
+      <button id="zoom-in">＋</button>
+      <button id="zoom-out">－</button>
+      <button id="zoom-reset">Reset</button>
+      <span id="zoom-level" style="margin-left:6px;font-weight:600">100%</span>
       <button id="fit">Fit</button>
       <button id="add-node">Add Node</button>
       <button id="add-edge">Add Edge</button>
@@ -72,8 +76,10 @@ HTML_TMPL = """<!doctype html>
           els.push({ data: Object.assign({ id: id, label: d.label || '' }, d) });
         });
         (data.edges || []).forEach((e, idx) => {
-          const id = e.id || ('e' + idx + '_' + e.from + '_' + e.to);
-          els.push({ data: { id: String(id), source: String(e.from), target: String(e.to), label: e.label || '' } });
+            const src = (e.from !== undefined && e.from !== null) ? e.from : (e.source !== undefined ? e.source : '');
+            const tgt = (e.to !== undefined && e.to !== null) ? e.to : (e.target !== undefined ? e.target : '');
+            const id = e.id || ('e' + idx + '_' + String(src) + '_' + String(tgt));
+            els.push({ data: { id: String(id), source: String(src), target: String(tgt), label: e.label || '' } });
         });
         return els;
       }
@@ -134,7 +140,24 @@ HTML_TMPL = """<!doctype html>
               'font-size': 18,
               'font-weight': '600'
           } }
-        ], layout: { name: 'cose', fit: true } });
+        ], layout: { name: 'cose', fit: true },
+        // Improve zoom behaviour across environments
+        zoom: 1.0,
+        minZoom: 0.2,
+        maxZoom: 3,
+        wheelSensitivity: 0.2,
+        userZoomingEnabled: true,
+        userPanningEnabled: true
+        });
+        // Set an initial, reasonable zoom level so the UI isn't zoomed in too far
+        // on some environments. Then ensure clicking a node/edge selects it
+        // (improves UX across browsers).
+        cy.ready(() => {
+          try {
+            cy.zoom(0.94);
+            cy.center();
+          } catch (e) {}
+        });
 
         // Ensure clicking a node/edge selects it (improves UX across browsers)
         cy.on('tap', 'node', (evt) => { try { evt.target.select(); } catch(e){} });
@@ -173,6 +196,18 @@ HTML_TMPL = """<!doctype html>
         cy.on('zoom', updateLabelSizes);
         cy.on('layoutstop', updateLabelSizes);
         updateLabelSizes();
+
+        // Zoom controls
+        function setZoomLabel() {
+          const z = Math.round(cy.zoom() * 100);
+          const el = document.getElementById('zoom-level');
+          if (el) el.textContent = z + '%';
+        }
+        setZoomLabel();
+        document.getElementById('zoom-in').addEventListener('click', () => { cy.zoom({ level: Math.min(cy.zoom() * 1.2, cy.maxZoom()) }); setZoomLabel(); });
+        document.getElementById('zoom-out').addEventListener('click', () => { cy.zoom({ level: Math.max(cy.zoom() / 1.2, cy.minZoom()) }); setZoomLabel(); });
+        document.getElementById('zoom-reset').addEventListener('click', () => { cy.zoom(0.94); cy.center(); setZoomLabel(); });
+        cy.on('zoom', setZoomLabel);
 
         // autosave
         let last = null;
@@ -337,11 +372,11 @@ def generate_html(graph: dict, outpath: str):
         f.write(html)
 
 
-def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: str | None = None):
+def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: str | None = None, force_embed: bool = False):
   # Prefer serving a built frontend (frontend-g6/dist) if present in the repo.
   repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
   static_dir = os.path.join(repo_root, 'frontend-g6', 'dist')
-  if os.path.isdir(static_dir):
+  if (not force_embed) and os.path.isdir(static_dir):
     os.chdir(static_dir)
     filename = 'index.html'
   else:
@@ -349,17 +384,42 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
     filename = os.path.basename(path)
     os.chdir(dirname)
 
+  _CORS_HEADERS = [
+    ('Access-Control-Allow-Origin', '*'),
+    ('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'),
+    ('Access-Control-Allow-Headers', 'Content-Type'),
+  ]
+
   class GraphRequestHandler(SimpleHTTPRequestHandler):
     store = store_path or os.path.expanduser('~/.openclaw/kgraph.json')
     # Path to OpenClaw memory DB to use as fallback source
     memory_db = os.path.expanduser('~/.openclaw/memory-system/data/memory.db')
 
+    def _send_cors_headers(self):
+      for name, value in _CORS_HEADERS:
+        self.send_header(name, value)
+
+    def do_OPTIONS(self):
+      self.send_response(204)
+      self._send_cors_headers()
+      self.end_headers()
+
     def do_GET(self):
       if self.path == '/graph.json':
         try:
-            # Prefer the OpenClaw memory DB unconditionally when present.
+            # Prefer the OpenClaw memory DB when present and non-empty.
             if os.path.exists(self.memory_db):
-              data = json.dumps(load_from_memory_db(self.memory_db))
+              try:
+                db_graph = load_from_memory_db(self.memory_db)
+              except Exception:
+                db_graph = {'nodes': [], 'edges': []}
+              # If the DB contains no nodes/edges, fall back to the configured
+              # JSON store so a sensible default (or embedded sample) is used.
+              if (not db_graph.get('nodes')) and (not db_graph.get('edges')) and os.path.isfile(self.store):
+                with open(self.store, 'r', encoding='utf-8') as f:
+                  data = f.read()
+              else:
+                data = json.dumps(db_graph)
             else:
               with open(self.store, 'r', encoding='utf-8') as f:
                 data = f.read()
@@ -368,8 +428,7 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
             data = json.dumps(SAMPLE_GRAPH)
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        # Allow local browser fetches
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(data.encode('utf-8'))
         return
@@ -384,11 +443,12 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
           with open(self.store, 'wb') as f:
             f.write(body)
           self.send_response(200)
-          self.send_header('Access-Control-Allow-Origin', '*')
+          self._send_cors_headers()
           self.end_headers()
           self.wfile.write(b'OK')
         except Exception as e:
           self.send_response(500)
+          self._send_cors_headers()
           self.end_headers()
           self.wfile.write(str(e).encode())
         return
@@ -425,12 +485,15 @@ def main():
     parser.add_argument('--port', type=int, help='Port to bind server to (default ephemeral)', default=0)
     parser.add_argument('--import-db', help='Import nodes/edges from SQLite memory DB and use as graph')
     parser.add_argument('--install', nargs='?', const='~/.openclaw/workspace-main/kgraph.py', help='Copy this script to target path and make executable')
+    parser.add_argument('--embed', action='store_true', help='Serve the generated embedded HTML instead of a built frontend')
     args = parser.parse_args()
 
     graph = SAMPLE_GRAPH
     if args.graph:
       with open(args.graph, 'r', encoding='utf-8') as gf:
         graph = json.load(gf)
+
+    pass
 
     # Prefer importing from the OpenClaw memory DB when available or requested
     default_memory_db = os.path.expanduser('~/.openclaw/memory-system/data/memory.db')
@@ -442,10 +505,26 @@ def main():
 
     if import_db_path:
       try:
-        graph = load_from_memory_db(import_db_path)
-        print('Imported graph from', import_db_path)
+        db_graph = load_from_memory_db(import_db_path)
+        # Only use DB contents for the embedded HTML if it contains data.
+        if db_graph.get('nodes') or db_graph.get('edges'):
+          graph = db_graph
+          print('Imported graph from', import_db_path)
+        else:
+          print('Memory DB present but empty; using fallback store/sample')
       except Exception as e:
         print('Failed to import DB:', e)
+
+    # If after attempting DB import we still don't have a user graph, prefer
+    # the persistent JSON store so embedded HTML shows the saved graph.
+    default_store = args.store or os.path.expanduser('~/.openclaw/kgraph.json')
+    if (not args.graph) and os.path.isfile(default_store):
+      try:
+        with open(default_store, 'r', encoding='utf-8') as sf:
+          graph = json.load(sf)
+          print('Using store for embedded HTML:', default_store)
+      except Exception:
+        pass
 
     outpath = args.output or os.path.join(tempfile.gettempdir(), 'kgraph.html')
     generate_html(graph, outpath)
@@ -459,7 +538,7 @@ def main():
       print('Installed to', dest)
 
     if args.serve:
-      serve_file(outpath, host=args.host, port=args.port, store_path=(args.store or None))
+      serve_file(outpath, host=args.host, port=args.port, store_path=(args.store or None), force_embed=args.embed)
 
 
 def load_from_memory_db(dbpath: str) -> dict:

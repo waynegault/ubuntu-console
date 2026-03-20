@@ -8,3 +8,4 @@
 # Secrets — never commit
 *.credentials
 *.secret
+workspace-main/__pycache__

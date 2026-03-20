@@ -87,7 +87,11 @@ fi
 
 # Bridge Windows User API keys into WSL so OpenClaw fallback providers work.
 # Cached in /dev/shm for 1 hour; run 'oc-refresh-keys' to force refresh.
-__bridge_windows_api_keys
+# Call the bridge function only if it's defined to avoid noisy errors during
+# partial or failed module loads (e.g., during reload).
+if type __bridge_windows_api_keys >/dev/null 2>&1; then
+    __bridge_windows_api_keys
+fi
 
 # Load Hugging Face token from secure file if not already set by bridge
 if [[ -z "${HF_TOKEN:-}" && -f "$HOME/.config/huggingface/token" ]]

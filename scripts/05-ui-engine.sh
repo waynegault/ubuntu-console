@@ -254,7 +254,7 @@ function __tac_line() {
     printf "%s" "$padding"
     printf "%s" "$color"
     printf "%s" "$status"
-    printf "%s\n" "${C_Reset}${C_BoxBg}${BOX_V}${C_Reset}"
+    printf "%s\n" " ${C_Reset}${C_BoxBg}${BOX_V}${C_Reset}"
 }
 
 # ---------------------------------------------------------------------------
