@@ -41,6 +41,7 @@ function so() {
     # If systemd already has the service in a failed or auto-restart
     # state (e.g. crash loop from a previous run), stop it cleanly and
     # reset the failure counter before attempting a fresh start.
+    # reset the failure counter before attempting a fresh start.
     local _pre_state
     _pre_state=$(systemctl --user show -p SubState --value "$_svc" 2>/dev/null)
     if [[ "$_pre_state" == "auto-restart" || "$_pre_state" == "failed" ]]
@@ -579,9 +580,13 @@ function oc-agent-use() {
     if (( now - mtime > 3 )); then
         if command -v openclaw >/dev/null 2>&1; then
             if [[ -t 1 ]]; then
-                ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true
+                ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null \
+                  || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) \
+                  && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true
             else
-                ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true &
+                ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null \
+                  || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) \
+                  && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true &
             fi
         fi
     fi
@@ -595,7 +600,9 @@ function oc-agent-use() {
     fi
     if (( now - mtime > 5 )); then
         if command -v openclaw >/dev/null 2>&1; then
-            ( openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null ) && mv "${session_cache}.tmp" "$session_cache" 2>/dev/null || true
+                ( openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null \
+                    || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null ) \
+                    && mv "${session_cache}.tmp" "$session_cache" 2>/dev/null || true
         fi
     fi
 
@@ -605,12 +612,14 @@ function oc-agent-use() {
     [[ -f "$session_cache" ]] && sessions_json=$(cat "$session_cache") || sessions_json=""
 
     # Fallback to immediate CLI if no cache exists yet (first-run)
-    if [[ -z "$agents_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
-        agents_json=$(openclaw agents list --json 2>/dev/null || openclaw agents --json 2>/dev/null || true)
-    fi
-    if [[ -z "$sessions_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
-        sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null || openclaw sessions --json 2>/dev/null || true)
-    fi
+        if [[ -z "$agents_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
+            agents_json=$(openclaw agents list --json 2>/dev/null \
+                || openclaw agents --json 2>/dev/null || true)
+        fi
+        if [[ -z "$sessions_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
+            sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null \
+                || openclaw sessions --json 2>/dev/null || true)
+        fi
 
     local tmp_agents tmp_sessions
     tmp_agents=$(mktemp) || tmp_agents="/tmp/oc_agents.$$"
@@ -619,7 +628,10 @@ function oc-agent-use() {
         # Extract agent id -> name mapping (best-effort)
         printf '%s' "$agents_json" | jq -r '
             (if type=="array" then . elif (.agents? or .items?) then (.agents // .items) else . end)
-            | map({id:(.id//.agent_id//.slug//.key//.name), name:(.identityName//.identity_name//.name//.display_name//.id)})
+            | map(
+                { id: ( .id // .agent_id // .slug // .key // .name ),
+                  name: ( .identityName // .identity_name // .name // .display_name // .id ) }
+              )
             | unique_by(.id)
             | .[]? | "\(.id)\t\(.name)"' 2>/dev/null > "$tmp_agents" || true
 
@@ -639,12 +651,27 @@ function oc-agent-use() {
     if (( now - mtime > stats_ttl )); then
                 # produce TSV lines for instant reading during render
                 ( printf '%s' "$sessions_json" \
-                        | jq -r '
-                            (.sessions // .items // . // [])
-                            | (if type=="array" then . else [] end)
-                            | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
-                            | group_by(.agent)
-                            | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})[] | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' > "${stats_cache}.tmp" 2>/dev/null ) && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
+                    | jq -r '
+                        (.sessions // .items // . // [])
+                        | (if type=="array" then . else [] end)
+                                                | map(
+                                                        { agent: ( .agentId // .agent_id // .agent // .agentName // .agent_name ),
+                                                            input: ( .inputTokens // 0 ),
+                                                            output: ( .outputTokens // 0 ),
+                                                            total: ( .totalTokens // 0 ),
+                                                            cap: ( .contextTokens // 0 ) }
+                                                    )
+                        | group_by(.agent)
+                                                | map(
+                                                        { id: .[0].agent,
+                                                            input: ( map(.input) | add ),
+                                                            output: ( map(.output) | add ),
+                                                            total: ( map(.total) | add ),
+                                                            cap: ( map(.cap) | max ) }
+                                                    )[]
+                        | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' \
+                    > "${stats_cache}.tmp" 2>/dev/null ) \
+                    && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
     fi
 
     local tmp_stats
@@ -662,16 +689,42 @@ function oc-agent-use() {
                 ( jq '
                     (.sessions // .items // . // [])
                     | (if type=="array" then . else [] end)
-                    | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
-                    | group_by(.agent)
-                    | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})' "$session_cache" 2>/dev/null > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null )
+                                        | map(
+                                                { agent: ( .agentId // .agent_id // .agent // .agentName // .agent_name ),
+                                                    input: ( .inputTokens // 0 ),
+                                                    output: ( .outputTokens // 0 ),
+                                                    total: ( .totalTokens // 0 ),
+                                                    cap: ( .contextTokens // 0 ) }
+                                            )
+                                        | group_by(.agent)
+                                        | map(
+                                                { id: .[0].agent,
+                                                    input: ( map(.input) | add ),
+                                                    output: ( map(.output) | add ),
+                                                    total: ( map(.total) | add ),
+                                                    cap: ( map(.cap) | max ) }
+                                            )' "$session_cache" 2>/dev/null \
+                    > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null )
             else
                 ( jq '
                     (.sessions // .items // . // [])
                     | (if type=="array" then . else [] end)
-                    | map({agent:(.agentId//.agent_id//.agent//.agentName//.agent_name), input:(.inputTokens//0), output:(.outputTokens//0), total:(.totalTokens//0), cap:(.contextTokens//0)})
-                    | group_by(.agent)
-                    | map({id: .[0].agent, input:(map(.input)|add), output:(map(.output)|add), total:(map(.total)|add), cap:(map(.cap)|max)})' "$session_cache" 2>/dev/null > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null ) &
+                                        | map(
+                                                { agent: ( .agentId // .agent_id // .agent // .agentName // .agent_name ),
+                                                    input: ( .inputTokens // 0 ),
+                                                    output: ( .outputTokens // 0 ),
+                                                    total: ( .totalTokens // 0 ),
+                                                    cap: ( .contextTokens // 0 ) }
+                                            )
+                                        | group_by(.agent)
+                                        | map(
+                                                { id: .[0].agent,
+                                                    input: ( map(.input) | add ),
+                                                    output: ( map(.output) | add ),
+                                                    total: ( map(.total) | add ),
+                                                    cap: ( map(.cap) | max ) }
+                                            )' "$session_cache" 2>/dev/null \
+                    > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null ) &
             fi
         fi
         # fast fallback: list known agents with zeroed stats so rendering is immediate

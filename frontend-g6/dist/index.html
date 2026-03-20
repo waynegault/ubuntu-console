@@ -4,10 +4,325 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>G6 Editor (demo)</title>
-    <script type="module" crossorigin src="/assets/index-B8mvdYJn.js"></script>
+    <script>
+      (async function(){
+        // Try to fetch the local cytoscape asset and evaluate it so that
+        // `window.cytoscape` is available synchronously before importing
+        // the app bundle. Falls back to injecting the CDN script on failure.
+        try {
+          const resp = await fetch('/assets/cytoscape.min.js', {cache: 'no-cache'});
+          if (resp.ok) {
+            const src = await resp.text();
+            try {
+              (0, eval)(src);
+              console.log('cytoscape loaded via fetch, present=', !!window.cytoscape);
+            } catch (e) {
+              console.warn('eval of cytoscape failed, falling back to script tag', e);
+              const s = document.createElement('script');
+              s.src = '/assets/cytoscape.min.js';
+              document.head.appendChild(s);
+            }
+          } else {
+            console.warn('fetch /assets/cytoscape.min.js returned', resp.status);
+            const s = document.createElement('script');
+            s.src = 'https://unpkg.com/cytoscape@3.24.0/dist/cytoscape.min.js';
+            document.head.appendChild(s);
+          }
+        } catch (e) {
+          console.warn('fetch for cytoscape asset failed, injecting CDN script', e);
+          const s = document.createElement('script');
+          s.src = 'https://unpkg.com/cytoscape@3.24.0/dist/cytoscape.min.js';
+          document.head.appendChild(s);
+        }
+
+        // Wait for cytoscape to be available (poll up to 3000ms) before importing
+        function waitForCytoscape(ms){
+          return new Promise((resolve)=>{
+            if (window.cytoscape) return resolve(true)
+            const iv = setInterval(()=>{ if (window.cytoscape){ clearInterval(iv); resolve(true) } }, 100)
+            setTimeout(()=>{ clearInterval(iv); resolve(!!window.cytoscape) }, ms)
+          })
+        }
+
+        const ready = await waitForCytoscape(3000);
+        if (!ready) console.warn('cytoscape not available after wait; continuing to load app module');
+
+        try {
+          await import('/assets/index-DpUCBPVS.js');
+        } catch (e) {
+          console.error('Failed to import app module', e);
+        }
+
+        // If the preferred renderer (G6) didn't create any canvas/svg DOM, mount
+        // Cytoscape directly as a quick production fallback so the user sees nodes.
+        setTimeout(async function(){
+          try{
+            const root = document.getElementById('root');
+            if (!root) return;
+            const canvases = root.querySelectorAll('canvas');
+            const svgs = root.querySelectorAll('svg');
+            if ((canvases && canvases.length>0) || (svgs && svgs.length>0)) {
+              console.log('Renderer present; no Cytoscape fallback needed');
+              return;
+            }
+            if (!window.cytoscape) { console.warn('Cytoscape not available; cannot mount fallback'); return; }
+            const resp = await fetch('/graph.json', {cache:'no-cache'});
+            const j = await resp.json();
+            // mount a fresh container and initialize Cytoscape with the fetched graph
+            root.innerHTML = '<div id="container" style="width:100%;height:80vh"></div>';
+            const container = document.getElementById('container');
+            const elements = [];
+            (j.nodes||[]).forEach(n=>{
+              const id = String(n.id ?? n.key ?? n.name ?? n.label ?? Math.random());
+              elements.push({ data: { id, label: n.label ?? id } });
+            });
+            (j.edges||[]).forEach((e,i)=>{
+              const src = String(e.source ?? e.from ?? e.fromId ?? e.u ?? '');
+              const tgt = String(e.target ?? e.to ?? e.toId ?? e.v ?? '');
+              elements.push({ data: { id: 'e'+i, source: src, target: tgt, label: e.label } });
+            });
+            try{
+              window.cy = window.cytoscape({
+                container: container,
+                elements: elements,
+                style: [
+                  { selector: 'node', style: {
+                      'label': 'data(label)',
+                      'background-color': '#3b82f6',
+                      'color': '#000000',
+                      'text-valign': 'center',
+                      'text-halign': 'center',
+                      'font-size': '12px',
+                      'text-wrap': 'wrap',
+                      'text-max-width': '120px',
+                      'width': 64,
+                      'height': 64
+                    } },
+                  { selector: 'edge', style: { 'line-color': '#999', 'width': 4, 'target-arrow-color': '#999', 'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'label': 'data(label)', 'font-size': 10, 'color': '#000', 'text-rotation': 'autorotate', 'text-margin-y': -6 } },
+                  { selector: ':selected', style: { 'overlay-color': '#ff0', 'overlay-opacity': 0.2 } }
+                ],
+                layout: { name: 'cose', animate: true, randomize: false }
+              });
+              // allow user interaction: dragging, panning, zooming
+              try{ window.cy.autoungrabify(false); window.cy.userPanningEnabled(true); window.cy.userZoomingEnabled(true); window.cy.boxSelectionEnabled(true); window.cy.nodes().grabify(); }catch(e){}
+
+              // initial layout run then stop so users can manually move nodes
+              try{ const init = window.cy.layout({ name: 'cose', animate: true }); init.run(); }catch(e){}
+
+              // enable click-placement flow: set a global flag and listen for background taps
+              window.kg_waitingForPlacement = false;
+              window.cy.on('tap', function(evt){
+                try{
+                  if (!window.kg_waitingForPlacement) return;
+                  // background tap yields core as target
+                  if (evt.target === window.cy){
+                    const pos = evt.position || { x: evt.originalEvent.clientX, y: evt.originalEvent.clientY };
+                    const id = 'n'+Date.now();
+                    const lbl = window.kg_pendingLabel || id;
+                    window.cy.add({ group: 'nodes', data: { id, label: lbl }, position: pos });
+                    window.cy.$('#'+id).grabify();
+                    window.kg_waitingForPlacement = false;
+                    window.kg_pendingLabel = null;
+                    try{ window.cy.fit(); }catch(e){}
+                    console.log('Cytoscape: node placed at', pos);
+                    const s = document.getElementById('kg-status'); if(s) s.innerText = 'status: node placed';
+                  }
+                }catch(e){ console.warn('placement handler error', e) }
+              });
+
+              console.log('Cytoscape fallback mounted, nodes=', (j.nodes||[]).length, 'edges=', (j.edges||[]).length);
+              // Set a default starting zoom so users get a consistent initial view.
+              try{
+                // Prefer setting zoom after any layout completes; fall back to a
+                // timed set if layoutstop doesn't fire.
+                const applyZoom = ()=>{
+                  try{ window.cy.zoom(0.94); window.cy.center(); const zEl = document.getElementById('kg-zoom-level'); if (zEl) zEl.innerText = 'zoom: ' + (Math.round(window.cy.zoom()*100)/100); }catch(e){}
+                };
+                window.cy.once && window.cy.once('layoutstop', applyZoom);
+                // Apply immediately as well so initial view starts at 0.94.
+                applyZoom();
+                setTimeout(applyZoom, 750);
+              }catch(e){/* ignore zoom errors */}
+
+              // Signal that Cytoscape is ready so other code can bind safely.
+              try{ document.dispatchEvent(new Event('kgraph:cy-ready')); }catch(e){}
+            }catch(err){ console.warn('Failed to initialize Cytoscape fallback', err); }
+          }catch(err){ console.warn('Cytoscape fallback script error', err); }
+        }, 1200);
+      })();
+    </script>
+    <!-- Cytoscape control panel (quick tools for add/edit/delete/export/save) -->
+    <div id="kgraph-controls" style="position:fixed;right:12px;top:12px;z-index:99999;background:rgba(255,255,255,0.95);border:1px solid #ddd;padding:8px;border-radius:8px;font-family:Inter,system-ui,Arial;box-shadow:0 6px 18px rgba(0,0,0,0.08)">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;min-width:220px;">
+        <button id="kg-add-node">Add Node</button>
+        <button id="kg-add-edge">Add Edge</button>
+        <button id="kg-delete">Delete</button>
+        <button id="kg-edit">Edit Label</button>
+        <button id="kg-zoom-in">Zoom+</button>
+        <button id="kg-zoom-out">Zoom-</button>
+        <button id="kg-fit">Fit</button>
+        <button id="kg-export">Export</button>
+        <button id="kg-save">Save</button>
+      </div>
+      <div id="kg-status" style="margin-top:6px;font-size:12px;color:#333">status: idle</div>
+    <div id="kg-zoom-level" style="margin-top:6px;font-size:12px;color:#333">zoom: -</div>
+    </div>
+    <script>
+      (function(){
+        function setStatus(s){ const el = document.getElementById('kg-status'); if(el) el.innerText = 'status: '+s }
+        function waitForCy(cb){
+          if (window.cy) return cb(window.cy);
+          let fired = false;
+          let timer = null;
+          function onceReady(){ if (fired) return; fired = true; clearTimeout(timer); document.removeEventListener('kgraph:cy-ready', onceReady); if (window.cy) try{ cb(window.cy) }catch(e){} }
+          document.addEventListener('kgraph:cy-ready', onceReady);
+          // Fallback: also poll briefly in case event missed
+          const poll = setInterval(()=>{ if(window.cy){ clearInterval(poll); onceReady(); } }, 100);
+          timer = setTimeout(()=>{ clearInterval(poll); document.removeEventListener('kgraph:cy-ready', onceReady); if(!fired){ setStatus('cy timeout') } }, 15000);
+        }
+
+          // Event delegation for control buttons
+          const controlMap = {
+            'kg-add-node': async () => {
+              waitForCy(async (cy)=>{
+                const useClick = confirm('Click OK then click on canvas to place node. Cancel to auto-place at center.');
+                const lbl = prompt('Node label (leave empty for auto)') || '';
+                if (useClick){ window.kg_pendingLabel = lbl || null; window.kg_waitingForPlacement = true; setStatus('click canvas to place node'); return; }
+                const id = 'n'+Date.now(); const c = cy.container(); const pos = { x: c.clientWidth/2 + (Math.random()-0.5)*180, y: c.clientHeight/2 + (Math.random()-0.5)*120 };
+                cy.add({ group: 'nodes', data: { id, label: lbl||id }, position: pos }); try{ cy.$('#'+id).grabify(); }catch(e){} cy.$('#'+id).select(); setStatus('node added');
+              })
+            },
+            'kg-add-edge': () => { waitForCy((cy)=>{ const sel = cy.nodes(':selected'); if(sel.length<2){ alert('Select two nodes (ctrl/cmd+click) first'); return } const a = sel[0].id(), b = sel[1].id(); const eid = 'e'+Date.now(); cy.add({ group:'edges', data:{ id: eid, source: a, target: b, label: '' } }); setStatus('edge added'); }) },
+            'kg-delete': () => { waitForCy((cy)=>{ const sel = cy.$(':selected'); if(sel.length===0){ alert('Select elements to delete'); return } sel.remove(); setStatus('deleted selected') }) },
+            'kg-edit': () => { waitForCy((cy)=>{ const sel = cy.$(':selected'); if(sel.length!==1){ alert('Select exactly one node or edge to edit'); return } const el = sel[0]; const current = el.data('label')||el.id(); const nv = prompt('New label', current); if(nv==null) return; el.data('label', nv); setStatus('label updated') }) },
+            'kg-zoom-in': () => { waitForCy(cy=>{ cy.zoom(cy.zoom()*1.2); setStatus('zoomed in') }) },
+            'kg-zoom-out': () => { waitForCy(cy=>{ cy.zoom(cy.zoom()/1.2); setStatus('zoomed out') }) },
+            'kg-fit': () => { waitForCy(cy=>{ try{ cy.fit(); setStatus('fit') }catch(e){ setStatus('fit failed') } }) },
+            'kg-export': () => { waitForCy((cy)=>{ const nodes = cy.nodes().map(n=>({ id: n.id(), label: n.data('label') })); const edges = cy.edges().map(e=>({ source: e.data('source')||e.data('source'), target: e.data('target')||e.data('target'), label: e.data('label') })); const payload = { nodes, edges }; const txt = JSON.stringify(payload, null, 2); const w = window.open('about:blank','kgraph-export'); w.document.body.style.fontFamily='monospace'; w.document.title='kgraph export'; w.document.body.innerText = txt; setStatus('export opened'); }) },
+            'kg-save': async () => { waitForCy(async (cy)=>{ setStatus('saving...'); const nodes = cy.nodes().map(n=>({ id: n.id(), label: n.data('label') })); const edges = cy.edges().map(e=>({ source: e.data('source')||e.data('source'), target: e.data('target')||e.data('target'), label: e.data('label') })); try{ const r = await fetch('/graph.json', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ nodes, edges }) }); if(r.ok){ setStatus('saved'); alert('Graph saved') } else { setStatus('save failed'); alert('Save failed: '+r.status) } }catch(err){ setStatus('save error'); alert('Save error: '+err) } }) }
+          };
+
+          const controls = document.getElementById('kgraph-controls');
+          if (controls) controls.addEventListener('click', (ev)=>{
+            const btn = ev.target.closest && ev.target.closest('button');
+            if (!btn) return; const id = btn.id; if (controlMap[id]) { try { controlMap[id](); } catch(e){ console.warn('control handler failed', e) } }
+          });
+
+        // Removed legacy per-button binders (kg_on) to avoid scope/order issues.
+        // Event handlers are attached via the delegated `controlMap` above.
+
+        // Update zoom display when Cytoscape zooms
+        (function(){
+          waitForCy((cy)=>{
+            const el = document.getElementById('kg-zoom-level');
+            function setZoom(){ if(!el) return; const z = Number(cy.zoom()||0); el.innerText = 'zoom: ' + (Math.round(z*100)/100); }
+            try{ cy.on('zoom pan', setZoom); }catch(e){}
+            try{ setZoom(); }catch(e){}
+          });
+        })();
+
+      })();
+    </script>
+    <script>
+      // DOM renderer probe: look for Cytoscape renderer elements inside the app
+      (function(){
+        setTimeout(function(){
+          try{
+            const root = document.getElementById('root')
+            const container = root && root.querySelector('#container')
+            const canvases = root ? root.querySelectorAll('canvas') : []
+            const svgs = root ? root.querySelectorAll('svg') : []
+            console.log('kgraph-dom-probe', {
+              rootChildCount: root ? root.childElementCount : null,
+              containerExists: !!container,
+              containerChildCount: container ? container.childElementCount : 0,
+              canvasCount: canvases.length,
+              svgCount: svgs.length,
+              canvasSamples: Array.from(canvases).slice(0,5).map(n=>({tag:n.tagName,w:n.clientWidth,h:n.clientHeight})),
+              svgSamples: Array.from(svgs).slice(0,5).map(n=>({tag:n.tagName,w:n.clientWidth,h:n.clientHeight}))
+            })
+          }catch(e){ console.warn('kgraph-dom-probe failed', e) }
+        }, 1500)
+      })();
+    </script>
+    <script>
+      // Dump the root.child for inspection
+      (function(){
+        setTimeout(function(){
+          try{
+            const root = document.getElementById('root')
+            if (!root) return console.log('kgraph-dom-dump: no #root')
+            const child = root.firstElementChild
+            if (!child) return console.log('kgraph-dom-dump: root empty')
+            const html = child.outerHTML || child.innerHTML || child.tagName
+            const trimmed = html.length>800? html.slice(0,800)+'...': html
+            console.log('kgraph-dom-dump', { tag: child.tagName, id: child.id, class: child.className, html: trimmed })
+          }catch(e){ console.warn('kgraph-dom-dump failed', e) }
+        }, 1600)
+      })();
+    </script>
     <link rel="stylesheet" crossorigin href="/assets/index-BS6P-UbO.css">
   </head>
   <body>
     <div id="root"></div>
+    <div id="kgraph-probe" style="position:fixed;left:8px;bottom:8px;background:#0f0;color:#000;padding:6px;z-index:99999">kgraph probe</div>
+    <script>
+      (function(){
+        var probe = document.getElementById('kgraph-probe');
+        var start = Date.now();
+        var iv = setInterval(function(){
+          if (window.cytoscape || Date.now() - start > 3000) {
+            clearInterval(iv);
+            console.log('kgraph-probe loaded', !!window.cytoscape);
+            if (probe) probe.innerText = 'cytoscape=' + (!!window.cytoscape);
+          }
+        }, 100);
+      })();
+    </script>
+    <script>
+      // Minimal probe update to avoid leaking DOM/layout details into the UI
+      setTimeout(() => {
+        try {
+          const probe = document.getElementById('kgraph-probe')
+          if (!probe) return
+          probe.innerText = window.cytoscape ? 'cytoscape=ready' : 'cytoscape=loading'
+        } catch (e) { /* silent */ }
+      }, 1000)
+    </script>
+    <script>
+      // If cytoscape didn't load (Tracking Protection blocking CDN), show actionable fix.
+      setTimeout(() => {
+        if (window.cytoscape) return
+        console.warn('cytoscape not available (likely blocked by Tracking Protection)')
+        const probe = document.getElementById('kgraph-probe')
+        if (probe) probe.innerText = 'cytoscape missing — CDN blocked; see instructions'
+        const root = document.getElementById('root')
+        if (root) {
+          root.innerHTML = `
+            <div style="padding:16px;font-family:Inter,system-ui,Arial;color:#111;background:#fff;">
+              <h3 style="margin:0 0 8px 0">Cytoscape failed to load</h3>
+              <p style="margin:0 0 8px 0">Your browser blocked the Cytoscape CDN (Tracking Prevention). To fix, download Cytoscape locally into the served assets and reload.</p>
+              <pre style="background:#f6f6f6;padding:8px;border-radius:4px;">curl -L https://unpkg.com/cytoscape@3.24.0/dist/cytoscape.min.js -o frontend-g6/dist/assets/cytoscape.min.js</pre>
+              <p style="margin:8px 0 0 0">Then reload this page.</p>
+            </div>
+          `
+        }
+      }, 1200)
+    </script>
+    <script>
+      // Diagnostic: fetch graph.json and log node/edge counts
+      (async function(){
+        try{
+          const r = await fetch('/graph.json', {cache:'no-cache'})
+          const j = await r.json()
+          console.log('kgraph-diagnostic: /graph.json', {
+            nodes: Array.isArray(j.nodes)? j.nodes.length : typeof j.nodes,
+            edges: Array.isArray(j.edges)? j.edges.length : typeof j.edges,
+            sampleNodes: (j.nodes||[]).slice(0,5),
+            sampleEdges: (j.edges||[]).slice(0,5)
+          })
+        }catch(e){ console.warn('kgraph-diagnostic: failed to fetch /graph.json', e) }
+      })();
+    </script>
   </body>
 </html>

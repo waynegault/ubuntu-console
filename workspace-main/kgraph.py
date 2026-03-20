@@ -351,14 +351,21 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
 
   class GraphRequestHandler(SimpleHTTPRequestHandler):
     store = store_path or os.path.expanduser('~/.openclaw/kgraph.json')
+    # Path to OpenClaw memory DB to use as fallback source
+    memory_db = os.path.expanduser('~/.openclaw/memory-system/data/memory.db')
 
     def do_GET(self):
       if self.path == '/graph.json':
         try:
-          with open(self.store, 'r', encoding='utf-8') as f:
-            data = f.read()
+            # Prefer the OpenClaw memory DB unconditionally when present.
+            if os.path.exists(self.memory_db):
+              data = json.dumps(load_from_memory_db(self.memory_db))
+            else:
+              with open(self.store, 'r', encoding='utf-8') as f:
+                data = f.read()
         except Exception:
-          data = json.dumps(SAMPLE_GRAPH)
+            # final fallback to sample graph
+            data = json.dumps(SAMPLE_GRAPH)
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         # Allow local browser fetches
@@ -425,10 +432,18 @@ def main():
       with open(args.graph, 'r', encoding='utf-8') as gf:
         graph = json.load(gf)
 
+    # Prefer importing from the OpenClaw memory DB when available or requested
+    default_memory_db = os.path.expanduser('~/.openclaw/memory-system/data/memory.db')
+    import_db_path = None
     if args.import_db:
+      import_db_path = args.import_db
+    elif os.path.exists(default_memory_db):
+      import_db_path = default_memory_db
+
+    if import_db_path:
       try:
-        graph = load_from_memory_db(args.import_db)
-        print('Imported graph from', args.import_db)
+        graph = load_from_memory_db(import_db_path)
+        print('Imported graph from', import_db_path)
       except Exception as e:
         print('Failed to import DB:', e)
 
