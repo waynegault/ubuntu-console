@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -1041,6 +1041,10 @@ function model() {
                 __tac_info "Registry" "[Not found - run 'model scan']" "$C_Error"; return 1
             fi
             __tac_header "MODEL BENCHMARK" "open"
+            local bench_run_id
+            bench_run_id=$(date +%Y%m%d_%H%M%S)
+            local bench_log_dir="${TAC_CACHE_DIR:-/dev/shm}/llm-bench-logs/${bench_run_id}"
+            mkdir -p "$bench_log_dir" 2>/dev/null
 
             # Save the currently active model to restore after benchmarking
             local _bench_prev_model=""
@@ -1067,7 +1071,23 @@ function model() {
                 # Fairness gate: wait for explicit {"status":"ok"} before burn.
                 local bench_ready=0
                 local bench_ready_timeout=60
-                (( ${b_gpu[$i]:-0} == 0 )) && bench_ready_timeout=180
+                if (( ${b_gpu[$i]:-0} == 0 ))
+                then
+                    bench_ready_timeout=180
+                else
+                    local _bench_size_tenths=0
+                    if [[ "${b_size[$i]}" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
+                    then
+                        _bench_size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
+                    fi
+                    if (( _bench_size_tenths >= 30 ))
+                    then
+                        bench_ready_timeout=120
+                    elif (( _bench_size_tenths >= 20 ))
+                    then
+                        bench_ready_timeout=90
+                    fi
+                fi
                 for (( _br=0; _br < bench_ready_timeout; _br++ ))
                 do
                     if __test_port "$LLM_PORT"
@@ -1087,6 +1107,10 @@ function model() {
                     burn
                 else
                     __tac_info "Bench" "[Model did not reach healthy state in ${bench_ready_timeout}s]" "$C_Error"
+                fi
+                if [[ -f "$LLM_LOG_FILE" ]]
+                then
+                    cp "$LLM_LOG_FILE" "$bench_log_dir/${b_num[$i]}_${b_name[$i]//[^A-Za-z0-9._-]/_}.log" 2>/dev/null
                 fi
                 local tps="FAIL"; [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")
                 b_tps+=("$tps")
@@ -1116,6 +1140,7 @@ function model() {
               done
             } > "$bench_file"
             __tac_info "Saved" "$bench_file" "$C_Dim"
+            __tac_info "Bench Logs" "$bench_log_dir" "$C_Dim"
 
             # Restore previously active model if one was running
             if [[ -n "$_bench_prev_model" ]]
