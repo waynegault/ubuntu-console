@@ -739,50 +739,78 @@ def load_from_memory_db(dbpath: str) -> dict:
 
     # Current OpenClaw memory schema: files/chunks tables.
     elif has_table('files') and has_table('chunks'):
-        file_paths = set()
-        try:
-            cur.execute("SELECT path FROM files")
-            for (path,) in cur.fetchall():
-                if not path:
-                    continue
-                file_paths.add(path)
-                graph['nodes'].append({
-                    'id': f'file:{path}',
-                    'label': os.path.basename(path) or path,
-                    'type': 'file',
-                    'path': path,
-                })
-        except sqlite3.Error:
-            pass
+      file_paths = set()
 
-        try:
-            cur.execute("SELECT id, path, start_line, end_line FROM chunks")
-            for chunk_id, path, start_line, end_line in cur.fetchall():
-                chunk_key = str(chunk_id)
-                graph['nodes'].append({
-                    'id': f'chunk:{chunk_key}',
-                    'label': f'chunk {chunk_key[:8]}',
-                    'type': 'chunk',
-                    'path': path or '',
-                    'start_line': start_line,
-                    'end_line': end_line,
-                })
-                if path:
-                    if path not in file_paths:
-                        file_paths.add(path)
-                        graph['nodes'].append({
-                            'id': f'file:{path}',
-                            'label': os.path.basename(path) or path,
-                            'type': 'file',
-                            'path': path,
-                        })
-                    graph['edges'].append({
-                        'from': f'file:{path}',
-                        'to': f'chunk:{chunk_key}',
-                        'label': 'contains',
-                    })
-        except sqlite3.Error:
-            pass
+      def _preview_text(value: str, limit: int = 72) -> str:
+        text = (value or '').replace('\n', ' ').replace('\r', ' ').strip()
+        text = ' '.join(text.split())
+        if len(text) > limit:
+          return text[: limit - 1] + '…'
+        return text
+
+      try:
+        cur.execute("SELECT path FROM files")
+        for (path,) in cur.fetchall():
+          if not path:
+            continue
+          file_name = os.path.basename(path) or path
+          file_paths.add(path)
+          graph['nodes'].append({
+            'id': f'file:{path}',
+            'label': file_name,
+            'type': 'file',
+            'path': path,
+            'content_preview': f'File: {path}',
+          })
+      except sqlite3.Error:
+        pass
+
+      try:
+        cur.execute("SELECT id, path, start_line, end_line, text FROM chunks")
+        for chunk_id, path, start_line, end_line, chunk_text in cur.fetchall():
+          chunk_key = str(chunk_id)
+          file_name = os.path.basename(path) if path else 'chunk'
+
+          line_range = ''
+          if isinstance(start_line, int) and isinstance(end_line, int):
+            line_range = f'L{start_line}-{end_line}'
+          elif isinstance(start_line, int):
+            line_range = f'L{start_line}'
+
+          preview = _preview_text(chunk_text)
+          chunk_label = f'{file_name} {line_range}'.strip() if line_range else file_name
+          if preview:
+            chunk_label = f'{chunk_label}: {preview}'
+
+          graph['nodes'].append({
+            'id': f'chunk:{chunk_key}',
+            'label': chunk_label,
+            'type': 'chunk',
+            'path': path or '',
+            'start_line': start_line,
+            'end_line': end_line,
+            'chunk_id': chunk_key,
+            'content_preview': preview,
+          })
+
+          if path:
+            if path not in file_paths:
+              file_paths.add(path)
+              file_name = os.path.basename(path) or path
+              graph['nodes'].append({
+                'id': f'file:{path}',
+                'label': file_name,
+                'type': 'file',
+                'path': path,
+                'content_preview': f'File: {path}',
+              })
+            graph['edges'].append({
+              'from': f'file:{path}',
+              'to': f'chunk:{chunk_key}',
+              'label': 'contains chunk',
+            })
+      except sqlite3.Error:
+        pass
 
     conn.close()
     return graph
