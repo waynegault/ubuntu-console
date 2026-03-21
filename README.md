@@ -1,6 +1,6 @@
 # Tactical Console Profile v3.1 - Comprehensive Reference
 
-> **File:** `~/ubuntu-console/tactical-console.bashrc` (thin loader) + `scripts/01–13-*.sh` (modules)
+> **File:** `~/ubuntu-console/tactical-console.bashrc` (thin loader) + `scripts/01–14-*.sh` (modules)
 > **Repo:** [`waynegault/ubuntu-console`](https://github.com/waynegault/ubuntu-console)
 > **Environment:** WSL2 Ubuntu 24.04 on Windows 11 Pro
 > **Hardware:** Intel i9 / Intel Iris Xe (iGPU) / RTX 3050 Ti 4 GB VRAM (CUDA) / Laptop
@@ -28,7 +28,7 @@
 
 The **Tactical Console Profile** is a modular Bash environment that turns a
 WSL2 Ubuntu shell into a unified command-and-control console. A thin loader
-(`tactical-console.bashrc`) sources 13 numbered modules from `scripts/` in
+(`tactical-console.bashrc`) sources 14 numbered modules from `scripts/` in
 dependency order. It manages:
 
 - **System telemetry** — CPU, dual GPU (Intel Iris iGPU via `typeperf.exe` +
@@ -42,6 +42,9 @@ dependency order. It manages:
   validates Python fleets, audits disk space, and kills orphaned processes.
 - **Deployment** — Git commit/push with optional LLM-generated commit
   messages, plus rsync to an OpenClaw production workspace.
+- **Knowledge graph** — Interactive node/edge graph visualisation served
+  locally via `oc g`, backed by a Python HTTP server and React + AntV G6
+  frontend.
 
 ### Design Principles
 
@@ -199,7 +202,7 @@ Profile wraps the entire OpenClaw CLI with ergonomic shell commands.
 │  │  ┌─ ~/.bashrc (thin loader) ────────────────┐  │  │
 │  │  │  source tactical-console.bashrc           │  │  │
 │  │  │  ┌─ tactical-console.bashrc ───────────┐  │  │  │
-│  │  │  │  sources scripts/01..13-*.sh        │  │  │  │
+│  │  │  │  sources scripts/01..14-*.sh        │  │  │  │
 │  │  │  │  ┌─ 09-openclaw.sh ──────────────┐  │  │  │  │
 │  │  │  │  │  __bridge_windows_api_keys()  │  │  │  │  │
 │  │  │  │       │                             │  │  │  │
@@ -317,6 +320,24 @@ bridged API keys.
 | `oc-local-llm` | Bind OpenClaw's model provider to local llama.cpp |
 | `oc-sync-models` | Sync model registry with OpenClaw scan |
 | `oc-trust-sync` | Record current `oc-llm-sync.sh` SHA256 hash as trusted |
+
+### Knowledge Graph (`oc g`)
+
+`oc g` (or `oc-kgraph`) launches an interactive knowledge graph visualisation.
+It starts a Python HTTP server (`scripts/kgraph.py`) that serves a
+Cytoscape.js frontend, then opens the browser. The graph is persisted to
+`~/.openclaw/kgraph.json`.
+
+**Features:**
+- Create, edit, and delete nodes and edges with labels
+- Cluster nodes by attribute or label prefix (compound parent nodes)
+- Toggle edge/node labels
+- Graph data saved via `GET`/`POST` to `/graph.json`
+- Layout controls (force-directed, grid, breadthfirst)
+
+A separate React + AntV G6 frontend lives in `frontend-g6/` for development
+use (`npm run dev` on Vite port 5173). Both UIs read the same
+`~/.openclaw/kgraph.json` data file.
 
 ### Key Paths
 
@@ -494,8 +515,8 @@ displayed in a box-drawn summary table.
 
 ### Modular Architecture
 
-The profile is split into a thin loader (`tactical-console.bashrc`, ~147 lines)
-and 13 numbered modules under `scripts/`. Each module has a metadata block
+The profile is split into a thin loader (`tactical-console.bashrc`, ~175 lines)
+and 14 numbered modules under `scripts/`. Each module has a metadata block
 documenting its dependencies and exports:
 
 ```bash
@@ -506,7 +527,7 @@ documenting its dependencies and exports:
 
 The loader sources every `scripts/[0-9][0-9]-*.sh` file in numeric order.
 Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
-`13-init.sh` loads last.
+`14-wsl-extras.sh` loads last.
 
 > **Monolith backup:** The pre-modularisation single-file version is preserved
 > as `tactical-console.bashrc.monolith` (5,184 lines) for reference and
@@ -514,20 +535,21 @@ Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
 
 | Module | File | Lines | Purpose |
 |---|---|---|---|
-| §0 | `tactical-console.bashrc` | 147 | Version, AI editor rules, architecture map, module loader |
-| §1 | `scripts/01-constants.sh` | 202 | All paths, ports, env vars. Single source of truth. |
-| §2 | `scripts/02-error-handling.sh` | 32 | ERR trap → `bash-errors.log` (exit codes ≥ 2 only) |
-| §3 | `scripts/03-design-tokens.sh` | 49 | ANSI colour constants (`readonly`, re-source safe) |
-| §4 | `scripts/04-aliases.sh` | 140 | Short commands, VS Code wrappers, tactical shortcuts |
-| §5 | `scripts/05-ui-engine.sh` | 371 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, etc. |
-| §6 | `scripts/06-hooks.sh` | 110 | `cd` override, prompt (`PS1`), `__test_port` |
-| §7 | `scripts/07-telemetry.sh` | 305 | Host metrics (CPU + dual GPU via typeperf), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` |
-| §8 | `scripts/08-maintenance.sh` | 427 | `up`, `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system (split APT) |
-| §9 | `scripts/09-openclaw.sh` | 1368 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-trust-sync`, `oc-failover`, wacli, etc.) |
-| §10 | `scripts/10-deployment.sh` | 321 | `mkproj`, `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified) |
-| §11 | `scripts/11-llm-manager.sh` | 1848 | `__require_llm`, model management, streaming chat, burn, bench, explain |
-| §12 | `scripts/12-dashboard-help.sh` | 439 | `tactical_dashboard` and `tactical_help` renderers |
-| §13 | `scripts/13-init.sh` | 125 | `mkdir -p`, completions, loopback fix, bridge call, exit trap (chained) |
+| §0 | `tactical-console.bashrc` | 175 | Version, AI editor rules, architecture map, module loader |
+| §1 | `scripts/01-constants.sh` | 254 | All paths, ports, env vars. Single source of truth. |
+| §2 | `scripts/02-error-handling.sh` | 31 | ERR trap → `bash-errors.log` (exit codes ≥ 2 only) |
+| §3 | `scripts/03-design-tokens.sh` | 48 | ANSI colour constants (`readonly`, re-source safe) |
+| §4 | `scripts/04-aliases.sh` | 142 | Short commands, VS Code wrappers, tactical shortcuts |
+| §5 | `scripts/05-ui-engine.sh` | 420 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, etc. |
+| §6 | `scripts/06-hooks.sh` | 131 | `cd` override, prompt (`PS1`), `__test_port` |
+| §7 | `scripts/07-telemetry.sh` | 317 | Host metrics (CPU + dual GPU via typeperf), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` |
+| §8 | `scripts/08-maintenance.sh` | 479 | `up`, `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system (split APT) |
+| §9 | `scripts/09-openclaw.sh` | 1863 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-trust-sync`, `oc-failover`, wacli, `oc-kgraph`, etc.) |
+| §10 | `scripts/10-deployment.sh` | 326 | `mkproj`, `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified) |
+| §11 | `scripts/11-llm-manager.sh` | 1857 | `__require_llm`, model management, streaming chat, burn, bench, explain |
+| §12 | `scripts/12-dashboard-help.sh` | 534 | `tactical_dashboard` and `tactical_help` renderers |
+| §13 | `scripts/13-init.sh` | 133 | `mkdir -p`, completions, loopback fix, bridge call, exit trap (chained) |
+| §14 | `scripts/14-wsl-extras.sh` | 93 | WSL/X11 startup helpers, OpenClaw completions sourcing |
 
 ### Dependency Graph
 
@@ -544,7 +566,8 @@ Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
 10-deployment.sh           ← 01, 03, 05, 06                 │
 11-llm-manager.sh          ← 01, 03, 05, 06                 │
 12-dashboard-help.sh       ← 01, 03, 05, 07, 06, 09, 11    │
-13-init.sh                 ← all above ────────────────────┘
+13-init.sh                 ← all above                      │
+14-wsl-extras.sh           ← 01 (optional startup helpers) ─┘
 ```
 
 ### Naming Conventions
@@ -702,7 +725,7 @@ for normal "not found" / "false" conditions. Only exit codes ≥ 2 are logged.
 ### Overview
 
 As of v3.0, the profile has been fully modularised. The original monolithic
-single file (~5,184 lines) was split into a thin loader and 13 numbered
+single file (~5,184 lines) was split into a thin loader and 14 numbered
 modules under `scripts/`. The pre-modularisation file is preserved as
 `tactical-console.bashrc.monolith` for reference and emergency rollback.
 
@@ -723,11 +746,12 @@ modules under `scripts/`. The pre-modularisation file is preserved as
     ├── 06-hooks.sh                    # cd override, prompt (PS1), port test
     ├── 07-telemetry.sh                # CPU, GPU, battery, git, disk, tokens
     ├── 08-maintenance.sh              # up, cl, get-ip, sysinfo, logtrim
-    ├── 09-openclaw.sh                 # Full OpenClaw wrapper suite
+    ├── 09-openclaw.sh                 # Full OpenClaw wrapper suite + oc-kgraph
     ├── 10-deployment.sh               # mkproj, git commit+push, deploy
     ├── 11-llm-manager.sh              # Model mgmt, chat, burn, bench
     ├── 12-dashboard-help.sh           # Dashboard ('m') and Help ('h')
-    └── 13-init.sh                     # mkdir, completions, WSL loopback, exit trap
+    ├── 13-init.sh                     # mkdir, completions, WSL loopback, exit trap
+    └── 14-wsl-extras.sh               # WSL/X11 startup helpers, completions
 ```
 
 ### The Loader
@@ -827,6 +851,7 @@ Do not edit the monolith — it is a frozen snapshot.
 | `oc-env` | OpenClaw | Dump env vars |
 | `oc-config` | OpenClaw | Get/set config |
 | `oc-failover` | OpenClaw | Cloud fallback toggle (on/off/status) |
+| `oc g` | OpenClaw | Launch knowledge graph server and open in browser |
 | `oc-local-llm` | OpenClaw | Link to local LLM |
 | `oc-sync-models` | OpenClaw | Sync model registry |
 | `oc-trust-sync` | OpenClaw | Save current oc-llm-sync.sh SHA256 as trusted |
@@ -987,7 +1012,7 @@ runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
 All project files live in a single Git repository at
 `~/ubuntu-console/` (remote: `github.com/waynegault/ubuntu-console`).
 `~/.bashrc` is a thin loader that sources `tactical-console.bashrc`, which in
-turn sources the 13 numbered modules from `scripts/`.
+turn sources the 14 numbered modules from `scripts/`.
 
 ### Directory Structure
 
@@ -995,14 +1020,21 @@ turn sources the 13 numbered modules from `scripts/`.
 ~/ubuntu-console/
 ├── tactical-console.bashrc            # Thin loader + version + module sourcing loop
 ├── tactical-console.bashrc.monolith   # Pre-modularisation backup (frozen snapshot)
+├── env.sh                             # Non-interactive library loader (01–12)
+├── install.sh                         # Idempotent installer for new machines
 ├── quant-guide.conf                   # Quantization priority ratings (editable)
 ├── README.md                          # This file
 ├── inspection.md                      # Audit checklist
-├── install.sh                         # Installer for new machines
 ├── bin/
+│   ├── tac-exec                       # Bootstrap: source env.sh + exec "$@"
+│   ├── tac_hostmetrics.sh             # Host CPU + iGPU (typeperf) + CUDA (nvidia-smi)
 │   ├── llama-watchdog.sh              # Watchdog: auto-restart with -ngl 999, --prio 2
-│   └── tac_hostmetrics.sh             # Host CPU + iGPU (typeperf) + CUDA (nvidia-smi)
-├── scripts/                           # 13 numbered profile modules (sourced in order)
+│   ├── oc-gpu-status                  # Thin wrapper → tac-exec gpu-status
+│   ├── oc-model-status                # Thin wrapper → tac-exec ocms
+│   ├── oc-model-switch                # Thin wrapper → tac-exec serve
+│   ├── oc-quick-diag                  # Thin wrapper → tac-exec oc diag
+│   └── oc-wake                        # Thin wrapper → tac-exec wake
+├── scripts/                           # 14 numbered profile modules (sourced in order)
 │   ├── 01-constants.sh                #   All paths, ports, env vars
 │   ├── 02-error-handling.sh           #   ERR trap
 │   ├── 03-design-tokens.sh            #   ANSI colour constants
@@ -1011,15 +1043,22 @@ turn sources the 13 numbered modules from `scripts/`.
 │   ├── 06-hooks.sh                    #   cd override, prompt, port test
 │   ├── 07-telemetry.sh                #   CPU, GPU, battery, git, disk, tokens
 │   ├── 08-maintenance.sh              #   up, cl, get-ip, sysinfo, logtrim
-│   ├── 09-openclaw.sh                 #   Gateway, backup, cron, skills, plugins
+│   ├── 09-openclaw.sh                 #   Gateway, backup, cron, skills, plugins, kgraph
 │   ├── 10-deployment.sh               #   mkproj, git commit+push, deploy
 │   ├── 11-llm-manager.sh              #   Model mgmt, chat, burn, bench
 │   ├── 12-dashboard-help.sh           #   Dashboard ('m') and Help ('h')
 │   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
+│   ├── 14-wsl-extras.sh               #   WSL/X11 startup helpers, completions
+│   ├── kgraph.py                      #   Knowledge graph HTTP server + Cytoscape.js UI
+│   ├── check-oc-agent-use.sh          #   Agent usage regression checker
 │   ├── lint.sh                        #   ShellCheck + bash -n linter
 │   └── run-tests.sh                   #   BATS test runner
+├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
+│   ├── package.json                   #   Vite 5 + React 18 + G6 5.0
+│   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
-│   └── tactical-console.bats          # 238 BATS unit tests (1,009 lines)
+│   ├── tactical-console.bats          # 362 BATS unit tests (1,833 lines)
+│   └── test_kgraph.py                 # Python tests for kgraph.py
 └── systemd/
     ├── llama-watchdog.service         # systemd unit for watchdog
     └── llama-watchdog.timer           # systemd timer (runs every 60s)
@@ -1034,6 +1073,11 @@ turn sources the 13 numbered modules from `scripts/`.
 | `~/.local/bin/tac-exec` | `bin/tac-exec` |
 | `~/.local/bin/llama-watchdog.sh` | `bin/llama-watchdog.sh` |
 | `~/.local/bin/tac_hostmetrics.sh` | `bin/tac_hostmetrics.sh` |
+| `~/.local/bin/oc-quick-diag` | `bin/oc-quick-diag` |
+| `~/.local/bin/oc-gpu-status` | `bin/oc-gpu-status` |
+| `~/.local/bin/oc-model-status` | `bin/oc-model-status` |
+| `~/.local/bin/oc-model-switch` | `bin/oc-model-switch` |
+| `~/.local/bin/oc-wake` | `bin/oc-wake` |
 | `~/.config/systemd/user/llama-watchdog.service` | `systemd/llama-watchdog.service` |
 | `~/.config/systemd/user/llama-watchdog.timer` | `systemd/llama-watchdog.timer` |
 
