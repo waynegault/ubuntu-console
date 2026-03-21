@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -1046,6 +1046,16 @@ function model() {
             local bench_log_dir="${TAC_CACHE_DIR:-/dev/shm}/llm-bench-logs/${bench_run_id}"
             mkdir -p "$bench_log_dir" 2>/dev/null
 
+            # Suppress the llama-watchdog timer during bench to prevent it from
+            # restarting servers mid-slot and causing false health-timeout FAILs.
+            local _bench_watchdog_was_active=0
+            if systemctl --user is-active --quiet llama-watchdog.timer 2>/dev/null
+            then
+                _bench_watchdog_was_active=1
+                systemctl --user stop llama-watchdog.timer 2>/dev/null
+                __tac_info "Watchdog" "Suspended for bench (will restore)" "$C_Dim"
+            fi
+
             # Save the currently active model to restore after benchmarking
             local _bench_prev_model=""
             [[ -f "$ACTIVE_LLM_FILE" ]] && _bench_prev_model=$(< "$ACTIVE_LLM_FILE")
@@ -1085,7 +1095,7 @@ function model() {
                         bench_ready_timeout=120
                     elif (( _bench_size_tenths >= 20 ))
                     then
-                        bench_ready_timeout=90
+                        bench_ready_timeout=150
                     fi
                 fi
                 for (( _br=0; _br < bench_ready_timeout; _br++ ))
@@ -1147,6 +1157,13 @@ function model() {
             then
                 __tac_info "Restoring" "Model #${_bench_prev_model}" "$C_Dim"
                 model use "$_bench_prev_model" 2>/dev/null
+            fi
+
+            # Re-enable watchdog timer if it was running before bench
+            if (( _bench_watchdog_was_active ))
+            then
+                systemctl --user start llama-watchdog.timer 2>/dev/null
+                __tac_info "Watchdog" "Restored" "$C_Dim"
             fi
             __tac_footer
             ;;
