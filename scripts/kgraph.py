@@ -160,7 +160,7 @@ HTML_TMPL = """<!doctype html>
           lines.push('extra:');
           extra.forEach(([k, v]) => lines.push(`${k}: ${typeof v === 'object' ? JSON.stringify(v, null, 2) : v}`));
         }
-        return lines.join('\n');
+        return lines.join('\\n');
       }
 
       function buildEdgeDetail(edge) {
@@ -169,7 +169,7 @@ HTML_TMPL = """<!doctype html>
           `source: ${edge.source || ''}`,
           `target: ${edge.target || ''}`,
           `label: ${edge.label || ''}`,
-        ].join('\n');
+        ].join('\\n');
       }
 
       async function loadGraph() {
