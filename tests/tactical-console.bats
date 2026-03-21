@@ -11,7 +11,7 @@
 #
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034
-VERSION="1.1"
+VERSION="1.3"
 
 # ==============================================================================
 # SETUP — Source the profile once for all tests
@@ -517,9 +517,14 @@ setup() {
     [[ "$result" -eq 4096 ]]
 }
 
-@test "calc: __calc_ctx_size tiny model (<3GB) caps at 16384" {
+@test "calc: __calc_ctx_size 1-2GB model caps at 8192" {
     result=$(__calc_ctx_size $((1 * 1024 * 1024 * 1024)) 32768 "llama")
-    [[ "$result" -eq 16384 ]]
+    [[ "$result" -eq 8192 ]]
+}
+
+@test "calc: __calc_ctx_size 2-3GB model caps at 4096" {
+    result=$(__calc_ctx_size $((2 * 1024 * 1024 * 1024)) 32768 "llama")
+    [[ "$result" -eq 4096 ]]
 }
 
 @test "calc: __calc_ctx_size tiny model, small native returns native" {
@@ -669,6 +674,12 @@ setup() {
 @test "model: model with unknown subcommand prints usage" {
     run model bogus
     [[ "$output" == *"Usage"* ]]
+}
+
+@test "model: model with no args includes bench helpers in usage" {
+    run model
+    [[ "$output" == *"bench-diff"* ]]
+    [[ "$output" == *"bench-latest"* ]]
 }
 
 @test "model: serve function is defined (convenience wrapper)" {

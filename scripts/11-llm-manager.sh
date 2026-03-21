@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 8
+# Module Version: 10
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -415,6 +415,29 @@ function __calc_ctx_size() {
         else
             echo "$cap"
         fi
+    elif (( file_gb >= 2 ))
+    then
+        # 2-3GB models (roughly 3B-4B) fit on GPU, but 16k ctx is expensive.
+        # 4k keeps enough KV headroom to unlock larger prompt batches.
+        local cap=4096
+        if (( native_ctx < cap ))
+        then
+            echo "$native_ctx"
+        else
+            echo "$cap"
+        fi
+    elif (( file_gb >= 1 ))
+    then
+        # 1-2GB models (roughly 1.5B-3B) are the best throughput tier on 4GB VRAM.
+        # 8k ctx is a better balance than 16k because it avoids forcing the
+        # launch heuristic into the smallest batch tier.
+        local cap=8192
+        if (( native_ctx < cap ))
+        then
+            echo "$native_ctx"
+        else
+            echo "$cap"
+        fi
     else
         local cap=16384
         if (( native_ctx < cap ))
@@ -424,6 +447,49 @@ function __calc_ctx_size() {
             echo "$cap"
         fi
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __bench_resolve_files — Resolve old/new benchmark TSV paths.
+# Usage:
+#   __bench_resolve_files                   -> latest two bench TSVs
+#   __bench_resolve_files old.tsv new.tsv   -> explicit files
+# Outputs: old_path|new_path
+# ---------------------------------------------------------------------------
+function __bench_resolve_files() {
+    if (( $# == 2 ))
+    then
+        printf '%s|%s\n' "$1" "$2"
+        return 0
+    fi
+    if (( $# != 0 ))
+    then
+        return 1
+    fi
+
+    local latest_files=()
+    while IFS= read -r bench_file
+    do
+        latest_files+=("$bench_file")
+    done < <(find "$LLAMA_DRIVE_ROOT/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
+        -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -2 | cut -d' ' -f2-)
+
+    if (( ${#latest_files[@]} < 2 ))
+    then
+        return 1
+    fi
+
+    # newest first from ls -t; diff should read old -> new
+    printf '%s|%s\n' "${latest_files[1]}" "${latest_files[0]}"
+}
+
+# ---------------------------------------------------------------------------
+# __bench_latest_file — Return newest benchmark TSV path.
+# Returns 1 if no bench TSV exists.
+# ---------------------------------------------------------------------------
+function __bench_latest_file() {
+    find "$LLAMA_DRIVE_ROOT/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
+        -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -1 | cut -d' ' -f2-
 }
 
 # __calc_threads — CPU threads based on how much spills to CPU.
@@ -791,11 +857,13 @@ function model() {
 
             IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps <<< "$entry"
             local model_path="$LLAMA_MODEL_DIR/$file"
+            local model_bytes=0
 
             if [[ ! -f "$model_path" ]]
             then
                 __tac_info "Error" "[File $file missing from $LLAMA_MODEL_DIR]" "$C_Error"; return 1
             fi
+            model_bytes=$(stat --format=%s "$model_path" 2>/dev/null || echo 0)
             if [[ ! -x "$LLAMA_SERVER_BIN" ]]
             then
                 __tac_info "Error" "[Server binary not found: $LLAMA_SERVER_BIN]" "$C_Error"; return 1
@@ -832,11 +900,11 @@ function model() {
                 [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
 
                 # Tiered sizing for RTX 3050 Ti 4GB class hardware.
-                if (( ctx >= 8192 || free_vram_mb < 1200 ))
+                if (( ctx > 8192 || free_vram_mb < 1200 ))
                 then
                     batch_size=1024
                     ubatch_size=256
-                elif (( free_vram_mb < 2000 ))
+                elif (( ctx > 4096 || free_vram_mb < 1800 ))
                 then
                     batch_size=2048
                     ubatch_size=512
@@ -845,8 +913,28 @@ function model() {
                     ubatch_size=1024
                 fi
 
+                # Very small models can tolerate more aggressive batches even
+                # when transient free VRAM is mediocre.
+                if (( model_bytes > 0 && model_bytes <= 1600000000 && free_vram_mb >= 900 ))
+                then
+                    if (( batch_size < 2048 ))
+                    then
+                        batch_size=2048
+                        ubatch_size=512
+                    fi
+                fi
+                if (( model_bytes > 0 && model_bytes <= 1100000000 && free_vram_mb >= 1500 && ctx <= 8192 ))
+                then
+                    batch_size=4096
+                    ubatch_size=1024
+                fi
+
                 # Enable 2 slots only when headroom exists to avoid latency spikes.
-                if (( free_vram_mb >= 2200 && ctx <= 4096 ))
+                if (( free_vram_mb >= 1800 && ctx <= 4096 ))
+                then
+                    parallel_slots=2
+                fi
+                if (( model_bytes > 0 && model_bytes <= 1100000000 && free_vram_mb >= 1500 && ctx <= 8192 ))
                 then
                     parallel_slots=2
                 fi
@@ -1208,6 +1296,74 @@ function model() {
             __tac_footer
             ;;
 
+        bench-diff)
+            local diff_files old_bench new_bench
+            diff_files=$(__bench_resolve_files "$@") || {
+                __tac_info "Usage" "[model bench-diff [old.tsv new.tsv]]" "$C_Error"
+                __tac_info "Hint" "Need two bench TSVs in $LLAMA_DRIVE_ROOT/.llm" "$C_Dim"
+                return 1
+            }
+            IFS='|' read -r old_bench new_bench <<< "$diff_files"
+
+            if [[ ! -f "$old_bench" || ! -f "$new_bench" ]]
+            then
+                __tac_info "Error" "[Bench file missing]" "$C_Error"
+                return 1
+            fi
+
+            __tac_header "MODEL BENCH DIFF" "open"
+            __tac_info "Old" "$old_bench" "$C_Dim"
+            __tac_info "New" "$new_bench" "$C_Dim"
+            echo ""
+            printf "${C_Dim}  %-30s %-8s %-8s %-8s %s${C_Reset}\n" "MODEL" "OLD" "NEW" "DELTA" "TREND"
+            local _diff_rule
+            printf -v _diff_rule '%*s' $((UIWidth - 4)) ''
+            _diff_rule="${_diff_rule// /${BOX_SL}}"
+            printf "${C_Dim}  %s${C_Reset}\n" "$_diff_rule"
+
+            awk -F'\t' '
+                function tps_num(raw, val) {
+                    val = raw
+                    gsub(/ tps/, "", val)
+                    return val + 0
+                }
+                FNR == NR {
+                    if ($1 == "#" || $2 == "model") next
+                    old[$2] = tps_num($4)
+                    next
+                }
+                {
+                    if ($1 == "#" || $2 == "model") next
+                    model = $2
+                    newv = tps_num($4)
+                    oldv = ((model in old) ? old[model] : 0)
+                    delta = newv - oldv
+                    pct = (oldv > 0 ? (delta * 100.0 / oldv) : 0)
+                    trend = (delta > 0.05 ? "UP" : (delta < -0.05 ? "DOWN" : "FLAT"))
+                    printf "  %-30s %-8.1f %-8.1f %+7.1f %s (%+.1f%%)\n", model, oldv, newv, delta, trend, pct
+                }
+            ' "$old_bench" "$new_bench"
+            __tac_footer
+            ;;
+
+        bench-latest)
+            local latest_bench
+            latest_bench=$(__bench_latest_file)
+            if [[ -z "$latest_bench" || ! -f "$latest_bench" ]]
+            then
+                __tac_info "Bench" "[No benchmark TSV found]" "$C_Error"
+                return 1
+            fi
+            __tac_header "LATEST BENCH" "open"
+            __tac_info "File" "$latest_bench" "$C_Dim"
+            echo ""
+            awk -F'\t' '
+                $1 == "#" || $2 == "model" { next }
+                { printf "  %-4s %-30s %-7s %s\n", $1, $2, $3, $4 }
+            ' "$latest_bench"
+            __tac_footer
+            ;;
+
         delete)
             # Delete model #N from disk (with confirmation) and renumber the registry.
             if [[ -z "$target" ]]
@@ -1540,7 +1696,7 @@ function model() {
             ;;
 
         *)
-            echo "Usage: model {scan|list|default|use|stop|status|info|bench|delete|archive|download}"
+            echo "Usage: model {scan|list|default|use|stop|status|info|bench|bench-diff|bench-latest|delete|archive|download}"
             echo "  scan       - Scan $LLAMA_MODEL_DIR, read GGUF metadata, auto-calculate params"
             echo "  list       - Show numbered model registry (${PLAY_MARK} = active, * = default)"
             echo "  default [N] - Show current default LLM, or set it to model #N"
@@ -1549,6 +1705,8 @@ function model() {
             echo "  status     - Show what's running"
             echo "  info N     - Detailed info for model #N"
             echo "  bench      - Benchmark all on-disk models"
+            echo "  bench-diff - Compare the latest two bench TSVs (or pass old/new files)"
+            echo "  bench-latest - Show the newest saved benchmark TSV"
             echo "  delete N   - Permanently delete model #N from disk and registry"
             echo "  archive N  - Move model #N to archive/ and remove from registry"
             echo "  download   - Download GGUF models from Hugging Face (repo:file)"
