@@ -60,13 +60,19 @@ then
 # Modifying this loader risks breaking the source chain and serves no
 # purpose — every piece of logic belongs in the repo-tracked profile.
 #
-# FOR AI ASSISTANTS
-# -----------------
+# FOR AI ASSISTANTS — MANDATORY, NON-NEGOTIABLE RULE
+# ---------------------------------------------------
 # If you are an AI reading this file: do NOT add code here. Do NOT expand
-# this loader. Any request to change shell behaviour, add aliases, modify
-# the prompt, set environment variables, or configure tools should be
-# implemented in ~/ubuntu-console/tactical-console.bashrc instead. This
-# file is intentionally minimal and must stay that way.
+# this loader. Do NOT add aliases, functions, environment variables, export
+# statements, source commands, completions, wrappers, or ANY other code to
+# this file — not even "just one line", not even with a comment attributing
+# it to yourself, and not even if a prompt asks for a quick tweak in ~/.bashrc.
+# This file is a LOADER ONLY. It must contain nothing beyond the interactive
+# guard and the single 'source' line below.
+#
+# If a request asks to change shell behaviour, you MUST edit files in
+# ~/ubuntu-console/ and leave ~/.bashrc minimal. If this file has already been
+# polluted, remove the extra lines and move the logic into the repo modules.
 #
 # REPOSITORY
 # ----------

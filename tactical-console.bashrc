@@ -16,10 +16,10 @@
 #
 # Loader:         This file is the CANONICAL source of truth and is versioned at:
 #                   ~/ubuntu-console/tactical-console.bashrc
-#                 ~/.bashrc is a thin loader that sources the canonical file:
+#                 ~/.bashrc must remain a THIN LOADER that only sources this file:
 #                   source "$HOME/ubuntu-console/tactical-console.bashrc"
 #                 Modular sections live under:
-#                   ~/ubuntu-console/scripts/[01-13]-*.sh  (sourced in numeric order)
+#                   ~/ubuntu-console/scripts/[01-14]-*.sh  (sourced in numeric order)
 #
 # HELP INDEX:     See the HELP INDEX section below for functions, aliases, and
 #                 sections with one-line descriptions and usage notes.
@@ -64,6 +64,7 @@ esac
 # AI INSTRUCTION: Increment version on significant changes.
 # When the LOADER itself changes, bump _TAC_LOADER_VERSION below.
 # When a MODULE in scripts/ changes, bump its '# Module Version: N' comment.
+# Never place feature logic in ~/.bashrc; keep ~/.bashrc as thin loader only.
 # TACTICAL_PROFILE_VERSION is auto-computed after sourcing all modules:
 #   TACTICAL_PROFILE_VERSION = _TAC_LOADER_VERSION . sum(all module versions)
 _TAC_LOADER_VERSION="3.0"
@@ -113,6 +114,7 @@ _TAC_LOADER_VERSION="3.0"
 # -  11-llm-manager.sh      - model mgmt, chat, burn, explain
 # -  12-dashboard-help.sh   - Tactical Dashboard ('m') and Help ('h')
 # -  13-init.sh             - mkdir, completions, WSL loopback fix
+# -  14-wsl-extras.sh       - WSL/X11 startup helpers
 #
 # CROSS-CUTTING STATE:
 # - LAST_TPS: written by burn/llm_stream (§11) → read by dashboard (§12) via LLM_TPS_CACHE
@@ -130,7 +132,7 @@ _TAC_LOADER_VERSION="3.0"
 # ==============================================================================
 # SOURCE MODULES
 # ==============================================================================
-# Modules are numbered 01-13. Numeric prefixes enforce load order and match
+# Modules are numbered 01-14. Numeric prefixes enforce load order and match
 # the dependency chain declared in each module's @depends annotation.
 # Design-tokens (03) loads before aliases (04) so that hooks (06) can read
 # C_* variables at source time when setting _TAC_ADMIN_BADGE.
