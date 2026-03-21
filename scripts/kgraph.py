@@ -15,6 +15,7 @@ import threading
 import argparse
 import json
 import os
+import re
 import webbrowser
 import tempfile
 import shutil
@@ -229,6 +230,20 @@ HTML_TMPL = """<!doctype html>
                 'background-image': 'none'
               } },
               { selector: 'node:selected', style: { 'border-width': 6, 'border-color': '#ffb74d' } },
+              { selector: 'node[type = "file"]', style: {
+                'background-color': '#2563eb',
+                'text-outline-color': '#2563eb',
+                'shape': 'roundrectangle',
+                'width': 68,
+                'height': 40
+              } },
+              { selector: 'node[type = "actor"]', style: {
+                'background-color': '#d97706',
+                'text-outline-color': '#d97706',
+                'shape': 'hexagon',
+                'width': 64,
+                'height': 64
+              } },
               { selector: 'edge:selected', style: { 'line-color': '#ffb74d', 'target-arrow-color': '#ffb74d' } },
               { selector: 'node.hide-label', style: { 'label': '' } },
             { selector: 'edge', style: {
@@ -863,10 +878,29 @@ def load_from_memory_db(dbpath: str) -> dict:
     conn = sqlite3.connect(os.path.expanduser(dbpath))
     cur = conn.cursor()
     graph = {'nodes': [], 'edges': []}
+    node_ids = set()
+    edge_ids = set()
 
     def has_table(name: str) -> bool:
         cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (name,))
         return cur.fetchone() is not None
+
+    def add_node(node: dict):
+        node_id = str(node.get('id', ''))
+        if not node_id or node_id in node_ids:
+            return
+        node_ids.add(node_id)
+        graph['nodes'].append(node)
+
+    def add_edge(edge: dict):
+        source = str(edge.get('from', ''))
+        target = str(edge.get('to', ''))
+        label = str(edge.get('label', ''))
+        edge_key = (source, target, label)
+        if not source or not target or edge_key in edge_ids:
+            return
+        edge_ids.add(edge_key)
+        graph['edges'].append(edge)
 
     # Legacy schema: nodes/edges tables.
     if has_table('nodes') and has_table('edges'):
@@ -875,91 +909,175 @@ def load_from_memory_db(dbpath: str) -> dict:
             for row in cur.fetchall():
                 nid, name, canonical = row
                 label = name or canonical or str(nid)
-                graph['nodes'].append({'id': str(nid), 'label': label})
+                add_node({'id': str(nid), 'label': label})
         except sqlite3.Error:
             pass
         try:
             cur.execute("SELECT src_id, dst_id, rel FROM edges")
             for row in cur.fetchall():
                 src, dst, rel = row
-                graph['edges'].append({'from': str(src), 'to': str(dst), 'label': rel or ''})
+                add_edge({'from': str(src), 'to': str(dst), 'label': rel or ''})
         except sqlite3.Error:
             pass
 
     # Current OpenClaw memory schema: files/chunks tables.
     elif has_table('files') and has_table('chunks'):
-      file_paths = set()
+        file_paths = set()
+        file_node_ids = {}
+        file_path_by_basename = {}
 
-      def _preview_text(value: str, limit: int = 72) -> str:
-        text = (value or '').replace('\n', ' ').replace('\r', ' ').strip()
-        text = ' '.join(text.split())
-        if len(text) > limit:
-          return text[: limit - 1] + '…'
-        return text
+        def _preview_text(value: str, limit: int = 72) -> str:
+            text = (value or '').replace('\n', ' ').replace('\r', ' ').strip()
+            text = ' '.join(text.split())
+            if len(text) > limit:
+                return text[: limit - 1] + '…'
+            return text
 
-      try:
-        cur.execute("SELECT path FROM files")
-        for (path,) in cur.fetchall():
-          if not path:
-            continue
-          file_name = os.path.basename(path) or path
-          file_paths.add(path)
-          graph['nodes'].append({
-            'id': f'file:{path}',
-            'label': file_name,
-            'type': 'file',
-            'path': path,
-            'content_preview': f'File: {path}',
-          })
-      except sqlite3.Error:
-        pass
+        def _slug(value: str) -> str:
+            return re.sub(r'[^a-z0-9]+', '-', value.lower()).strip('-')
 
-      try:
-        cur.execute("SELECT id, path, start_line, end_line, text FROM chunks")
-        for chunk_id, path, start_line, end_line, chunk_text in cur.fetchall():
-          chunk_key = str(chunk_id)
-          file_name = os.path.basename(path) if path else 'chunk'
-
-          line_range = ''
-          if isinstance(start_line, int) and isinstance(end_line, int):
-            line_range = f'L{start_line}-{end_line}'
-          elif isinstance(start_line, int):
-            line_range = f'L{start_line}'
-
-          preview = _preview_text(chunk_text)
-          chunk_label = f'{file_name} {line_range}'.strip() if line_range else file_name
-          if preview:
-            chunk_label = f'{chunk_label}: {preview}'
-
-          graph['nodes'].append({
-            'id': f'chunk:{chunk_key}',
-            'label': chunk_label,
-            'type': 'chunk',
-            'path': path or '',
-            'start_line': start_line,
-            'end_line': end_line,
-            'chunk_id': chunk_key,
-            'content_preview': preview,
-          })
-
-          if path:
-            if path not in file_paths:
-              file_paths.add(path)
-              file_name = os.path.basename(path) or path
-              graph['nodes'].append({
-                'id': f'file:{path}',
-                'label': file_name,
-                'type': 'file',
-                'path': path,
-                'content_preview': f'File: {path}',
-              })
-            graph['edges'].append({
-              'from': f'file:{path}',
-              'to': f'chunk:{chunk_key}',
-              'label': 'contains chunk',
+        def add_actor_node(name: str, role: str = '') -> str:
+            actor_id = f"actor:{_slug(name)}"
+            add_node({
+                'id': actor_id,
+                'label': name,
+                'type': 'actor',
+                'role': role,
+                'content_preview': role or f'Actor: {name}',
             })
-      except sqlite3.Error:
-        pass
+            return actor_id
+
+        def iter_actor_mentions(text: str):
+            if not text:
+                return
+
+            direct_pattern = re.compile(
+                r'\b([A-Z][a-z]+)\s+\(([^)]+(?:Director|CEO|Ops|Researcher|Marketing|Finance|Sales|Agent))\)'
+            )
+            reverse_pattern = re.compile(
+                r'\b((?:[A-Z][a-z]+(?:\s*&\s*[A-Z][a-z]+)?\s+)?(?:Finance|Sales|Marketing|Ops|Research|Chief|CEO)[A-Za-z\s&-]*)\s+\(([A-Z][a-z]+)\)'
+            )
+
+            for name, role in direct_pattern.findall(text):
+                yield name.strip(), role.strip()
+            for role, name in reverse_pattern.findall(text):
+                if any(keyword in role for keyword in ('Director', 'CEO', 'Ops', 'Research', 'Finance', 'Sales', 'Marketing', 'Agent', 'Chief')):
+                    yield name.strip(), role.strip()
+
+        def resolve_file_reference(reference: str) -> str | None:
+            ref = reference.strip().strip('`')
+            if not ref:
+                return None
+            if ref in file_node_ids:
+                return ref
+            if ref in file_paths:
+                return ref
+            base = os.path.basename(ref)
+            matches = file_path_by_basename.get(base, [])
+            if len(matches) == 1:
+                return matches[0]
+            return None
+
+        file_ref_pattern = re.compile(r'`([^`]+\.md)`|\b((?:memory/)?[A-Za-z0-9._-]+\.md)\b')
+
+        try:
+            cur.execute("SELECT path FROM files")
+            for (path,) in cur.fetchall():
+                if not path:
+                    continue
+                file_name = os.path.basename(path) or path
+                file_paths.add(path)
+                file_path_by_basename.setdefault(file_name, []).append(path)
+                file_node_ids[path] = f'file:{path}'
+                add_node({
+                    'id': f'file:{path}',
+                    'label': file_name,
+                    'type': 'file',
+                    'path': path,
+                    'content_preview': f'File: {path}',
+                })
+        except sqlite3.Error:
+            pass
+
+        try:
+            cur.execute("SELECT id, path, start_line, end_line, text FROM chunks")
+            for chunk_id, path, start_line, end_line, chunk_text in cur.fetchall():
+                chunk_key = str(chunk_id)
+                file_name = os.path.basename(path) if path else 'chunk'
+
+                line_range = ''
+                if isinstance(start_line, int) and isinstance(end_line, int):
+                    line_range = f'L{start_line}-{end_line}'
+                elif isinstance(start_line, int):
+                    line_range = f'L{start_line}'
+
+                preview = _preview_text(chunk_text)
+                chunk_label = f'{file_name} {line_range}'.strip() if line_range else file_name
+                if preview:
+                    chunk_label = f'{chunk_label}: {preview}'
+
+                add_node({
+                    'id': f'chunk:{chunk_key}',
+                    'label': chunk_label,
+                    'type': 'chunk',
+                    'path': path or '',
+                    'start_line': start_line,
+                    'end_line': end_line,
+                    'chunk_id': chunk_key,
+                    'content_preview': preview,
+                })
+
+                if path:
+                    if path not in file_paths:
+                        file_paths.add(path)
+                        file_name = os.path.basename(path) or path
+                        file_path_by_basename.setdefault(file_name, []).append(path)
+                        file_node_ids[path] = f'file:{path}'
+                        add_node({
+                            'id': f'file:{path}',
+                            'label': file_name,
+                            'type': 'file',
+                            'path': path,
+                            'content_preview': f'File: {path}',
+                        })
+                    add_edge({
+                        'from': f'file:{path}',
+                        'to': f'chunk:{chunk_key}',
+                        'label': 'contains chunk',
+                    })
+
+                for name, role in iter_actor_mentions(chunk_text or ''):
+                    actor_id = add_actor_node(name, role)
+                    add_edge({
+                        'from': f'chunk:{chunk_key}',
+                        'to': actor_id,
+                        'label': 'mentions actor',
+                    })
+                    if path:
+                        add_edge({
+                            'from': f'file:{path}',
+                            'to': actor_id,
+                            'label': 'mentions actor',
+                        })
+
+                for ref_a, ref_b in file_ref_pattern.findall(chunk_text or ''):
+                    ref = ref_a or ref_b
+                    target_path = resolve_file_reference(ref)
+                    if not target_path or target_path == path:
+                        continue
+                    add_edge({
+                        'from': f'chunk:{chunk_key}',
+                        'to': f'file:{target_path}',
+                        'label': 'references file',
+                    })
+                    if path:
+                        add_edge({
+                            'from': f'file:{path}',
+                            'to': f'file:{target_path}',
+                            'label': 'references file',
+                        })
+        except sqlite3.Error:
+            pass
 
     conn.close()
     return graph
