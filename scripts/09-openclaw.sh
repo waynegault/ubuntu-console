@@ -1774,6 +1774,11 @@ export -f wacli
 # oc-kgraph — Launch the kgraph knowledge-graph server and open in browser.
 # Starts scripts/kgraph.py on localhost:46139, waits for it to bind, then
 # opens the page in the default browser.
+#
+# Options:
+#   --reindex   Rebuild OpenClaw memory index and sync graph DB before launch
+#   --restart   Force-restart kgraph server before launch
+#   -h|--help   Show usage
 # ---------------------------------------------------------------------------
 function oc-kgraph() {
     local KG_PY="$HOME/ubuntu-console/scripts/kgraph.py"
@@ -1782,12 +1787,50 @@ function oc-kgraph() {
         return 1
     fi
 
-    # If kgraph isn't running, start it on a known local port in background.
-    local PORT=46139
-    if ! pgrep -f "$KG_PY" >/dev/null 2>&1; then
-        setsid python3 "$KG_PY" --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
-        disown
+    local do_reindex=false
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --reindex|--refresh) do_reindex=true ;;
+            --restart) ;;
+            -h|--help)
+                printf '%s\n' "Usage: oc g [--reindex|--refresh] [--restart]"
+                printf '%s\n' "  --reindex  Rebuild OpenClaw memory index and sync graph DB"
+                printf '%s\n' "  --restart  Force-restart kgraph server"
+                return 0
+                ;;
+        esac
+    done
+
+    if $do_reindex; then
+        __tac_info "kgraph" "[REINDEXING OPENCLAW MEMORY]" "$C_Info"
+        if ! openclaw memory index >/dev/null 2>&1; then
+            __tac_info "kgraph" "[REINDEX FAILED — CONTINUING WITH EXISTING DATA]" "$C_Warning"
+        fi
+
+        # Sync indexed memory DB -> dedicated graph DB used by oc g.
+        python3 - <<'PY' >/dev/null 2>&1 || true
+import sys
+import os
+sys.path.insert(0, os.path.expanduser('~/ubuntu-console'))
+from scripts import kgraph
+memory_db = kgraph.resolve_memory_db_path()
+if memory_db:
+    graph = kgraph.load_from_memory_db(memory_db)
+    kgraph.save_to_graph_db(os.path.expanduser('~/.openclaw/kgraph.sqlite'), graph)
+PY
     fi
+
+    # Always relaunch to avoid stale in-memory code/data across edits.
+    # Kill whatever currently owns the port first (including legacy copies).
+    local PORT=46139
+    fuser -k "${PORT}/tcp" >/dev/null 2>&1 || true
+    if pgrep -f "$KG_PY" >/dev/null 2>&1; then
+        pkill -f "$KG_PY" >/dev/null 2>&1 || true
+    fi
+    sleep 0.3
+    setsid python3 "$KG_PY" --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
+    disown
 
     # kgraph.py writes the embedded page to kgraph.html when --embed is used,
     # so open that path explicitly to avoid a directory listing.
