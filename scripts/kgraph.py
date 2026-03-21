@@ -165,12 +165,14 @@ HTML_TMPL = """<!doctype html>
       }
 
       function buildEdgeDetail(edge) {
-        return [
+        const lines = [
           `id: ${edge.id || ''}`,
           `source: ${edge.source || ''}`,
           `target: ${edge.target || ''}`,
           `label: ${edge.label || ''}`,
-        ].join('\\n');
+        ];
+        if (edge.semantic_score !== undefined) lines.push(`semantic_score: ${edge.semantic_score}`);
+        return lines.join('\\n');
       }
 
       async function loadGraph() {
@@ -193,7 +195,9 @@ HTML_TMPL = """<!doctype html>
             const src = (e.from !== undefined && e.from !== null) ? e.from : (e.source !== undefined ? e.source : '');
             const tgt = (e.to !== undefined && e.to !== null) ? e.to : (e.target !== undefined ? e.target : '');
             const id = e.id || ('e' + idx + '_' + String(src) + '_' + String(tgt));
-            els.push({ data: { id: String(id), source: String(src), target: String(tgt), label: e.label || '' } });
+            const edata = Object.assign({}, e, { id: String(id), source: String(src), target: String(tgt), label: e.label || '' });
+            delete edata.from; delete edata.to;
+            els.push({ data: edata });
         });
         return els;
       }
@@ -244,6 +248,13 @@ HTML_TMPL = """<!doctype html>
                 'width': 64,
                 'height': 64
               } },
+              { selector: 'node[type = "topic"]', style: {
+                'background-color': '#16a34a',
+                'text-outline-color': '#16a34a',
+                'shape': 'diamond',
+                'width': 54,
+                'height': 54
+              } },
               { selector: 'edge:selected', style: { 'line-color': '#ffb74d', 'target-arrow-color': '#ffb74d' } },
               { selector: 'node.hide-label', style: { 'label': '' } },
             { selector: 'edge', style: {
@@ -258,6 +269,19 @@ HTML_TMPL = """<!doctype html>
               'text-margin-y': -6
               } },
               { selector: 'edge.hide-label', style: { 'label': '' } },
+              { selector: 'edge[semantic_score]', style: {
+                'line-style': 'dashed',
+                'line-color': '#7c3aed',
+                'target-arrow-color': '#7c3aed',
+              } },
+              { selector: 'edge[label = "covers topic"]', style: {
+                'line-color': '#16a34a',
+                'target-arrow-color': '#16a34a',
+              } },
+              { selector: 'edge[label = "authored by"]', style: {
+                'line-color': '#b45309',
+                'target-arrow-color': '#b45309',
+              } },
           { selector: '.cluster', style: {
               'background-color': '#ff9800',
               'shape': 'roundrectangle',
@@ -947,6 +971,21 @@ def load_from_memory_db(dbpath: str) -> dict:
             })
             return actor_id
 
+        def add_topic_node(heading_text: str) -> 'str | None':
+            """Create a topic node from a markdown heading; returns id or None for trivial headings."""
+            clean = re.sub(r'[^\x00-\x7E]', '', heading_text).strip()
+            clean = re.sub(r'\s+', ' ', clean)
+            if len(clean) < 4:
+                return None
+            tid = f'topic:{_slug(clean[:60])}'
+            add_node({
+                'id': tid,
+                'label': clean[:60],
+                'type': 'topic',
+                'content_preview': clean,
+            })
+            return tid
+
         def iter_actor_mentions(text: str):
             if not text:
                 return
@@ -979,6 +1018,17 @@ def load_from_memory_db(dbpath: str) -> dict:
             return None
 
         file_ref_pattern = re.compile(r'`([^`]+\.md)`|\b((?:memory/)?[A-Za-z0-9._-]+\.md)\b')
+        heading_pattern = re.compile(r'^#{2,3}\s+(.+)', re.MULTILINE)
+        activate_pat = re.compile(r'^#\s+([A-Z][a-z]+)-Activate\s+Report', re.MULTILINE)
+        AGENT_ROLES = {
+            'Jarvis': 'Operations Director',
+            'Nexus': 'Ops Director',
+            'Marlowe': 'Finance Director',
+            'Del': 'Sales Director',
+            'Rook': 'Researcher',
+            'Vigil': 'Sentinel',
+            'Hal': 'CEO',
+        }
 
         try:
             cur.execute("SELECT path FROM files")
@@ -999,9 +1049,10 @@ def load_from_memory_db(dbpath: str) -> dict:
         except sqlite3.Error:
             pass
 
+        chunk_embeddings = []
         try:
-            cur.execute("SELECT id, path, start_line, end_line, text FROM chunks")
-            for chunk_id, path, start_line, end_line, chunk_text in cur.fetchall():
+            cur.execute("SELECT id, path, start_line, end_line, text, embedding FROM chunks")
+            for chunk_id, path, start_line, end_line, chunk_text, emb_blob in cur.fetchall():
                 chunk_key = str(chunk_id)
                 file_name = os.path.basename(path) if path else 'chunk'
 
@@ -1075,6 +1126,62 @@ def load_from_memory_db(dbpath: str) -> dict:
                             'from': f'file:{path}',
                             'to': f'file:{target_path}',
                             'label': 'references file',
+                        })
+
+                # Collect embedding vector for semantic similarity pass
+                if emb_blob and isinstance(emb_blob, str):
+                    try:
+                        vec = json.loads(emb_blob)
+                        if isinstance(vec, list) and len(vec) > 0:
+                            mag = sum(x * x for x in vec) ** 0.5
+                            if mag > 0:
+                                chunk_embeddings.append((f'chunk:{chunk_key}', path or '', vec, mag))
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+                # Extract H2/H3 headings as topic nodes
+                for hm in heading_pattern.finditer(chunk_text or ''):
+                    topic_id = add_topic_node(hm.group(1))
+                    if topic_id:
+                        add_edge({
+                            'from': f'chunk:{chunk_key}',
+                            'to': topic_id,
+                            'label': 'covers topic',
+                        })
+
+                # Detect activation-report authorship from H1 title
+                for am in activate_pat.finditer(chunk_text or ''):
+                    agent_name = am.group(1)
+                    role = AGENT_ROLES.get(agent_name, 'Agent')
+                    actor_id = add_actor_node(agent_name, role)
+                    add_edge({
+                        'from': f'chunk:{chunk_key}',
+                        'to': actor_id,
+                        'label': 'authored by',
+                    })
+                    if path:
+                        add_edge({
+                            'from': f'file:{path}',
+                            'to': actor_id,
+                            'label': 'authored by',
+                        })
+
+            # Embedding-based semantic similarity (cross-file only)
+            SEMANTIC_THRESHOLD = 0.75
+            for i in range(len(chunk_embeddings)):
+                cid_a, path_a, vec_a, mag_a = chunk_embeddings[i]
+                for j in range(i + 1, len(chunk_embeddings)):
+                    cid_b, path_b, vec_b, mag_b = chunk_embeddings[j]
+                    if path_a == path_b:
+                        continue
+                    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+                    sim = dot / (mag_a * mag_b)
+                    if sim >= SEMANTIC_THRESHOLD:
+                        add_edge({
+                            'from': cid_a,
+                            'to': cid_b,
+                            'label': f'related ({sim:.2f})',
+                            'semantic_score': round(sim, 3),
                         })
         except sqlite3.Error:
             pass
