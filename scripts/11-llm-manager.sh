@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 5
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -1611,12 +1611,57 @@ function burn() {
     fi
 
     local start_ns end_ns response curl_rc
-    start_ns=$(date +%s%N)
-    response=$(curl -sS --max-time "$request_timeout" "$LOCAL_LLM_URL" \
-        -H "Content-Type: application/json" \
-        -d "$payload" 2>/dev/null)
-    curl_rc=$?
-    end_ns=$(date +%s%N)
+    local attempt=1 max_attempts=2
+    while true
+    do
+        start_ns=$(date +%s%N)
+        response=$(curl -sS --max-time "$request_timeout" "$LOCAL_LLM_URL" \
+            -H "Content-Type: application/json" \
+            -d "$payload" 2>/dev/null)
+        curl_rc=$?
+        end_ns=$(date +%s%N)
+
+        # Retry once for transient transport issues (e.g. brief server restart
+        # or socket reset) to improve benchmark fairness.
+        if (( curl_rc != 0 && curl_rc != 28 && attempt < max_attempts ))
+        then
+            printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Transport error (curl ${curl_rc}); waiting for health and retrying once..."
+            local _rh
+            for (( _rh=0; _rh < 20; _rh++ ))
+            do
+                local _rhealth
+                _rhealth=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+                [[ "$_rhealth" == *'"ok"'* ]] && break
+                sleep 1
+            done
+            attempt=$(( attempt + 1 ))
+            continue
+        fi
+
+        # Retry once if server returned 503 "Loading model" (readiness race:
+        # /health reports ok before the model slot is fully ready to serve).
+        if (( curl_rc == 0 && attempt < max_attempts ))
+        then
+            local _loading_msg
+            _loading_msg=$(printf '%s' "$response" | jq -r '.error.message // empty' 2>/dev/null)
+            if [[ "$_loading_msg" == *[Ll]oading* ]]
+            then
+                printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Server still loading (\"${_loading_msg}\"); waiting up to 30s..."
+                local _lw
+                for (( _lw=0; _lw < 30; _lw++ ))
+                do
+                    local _lhealth
+                    _lhealth=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+                    if [[ "$_lhealth" == *'"ok"'* ]]; then sleep 3; break; fi
+                    sleep 1
+                done
+                attempt=$(( attempt + 1 ))
+                continue
+            fi
+        fi
+
+        break
+    done
 
     if (( curl_rc == 28 ))
     then
