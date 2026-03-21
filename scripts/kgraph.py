@@ -21,6 +21,14 @@ import shutil
 import sqlite3
 
 
+MEMORY_DB_CANDIDATES = [
+  '~/.openclaw/memory-system/data/memory.db',
+  '~/.openclaw/memory/main.sqlite',
+]
+
+GRAPH_DB_DEFAULT = '~/.openclaw/kgraph.sqlite'
+
+
 HTML_TMPL = """<!doctype html>
 <html>
   <head>
@@ -372,7 +380,122 @@ def generate_html(graph: dict, outpath: str):
         f.write(html)
 
 
-def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: str | None = None, force_embed: bool = False):
+def resolve_memory_db_path(preferred: str | None = None) -> str | None:
+  if preferred:
+    p = os.path.expanduser(preferred)
+    return p if os.path.exists(p) else None
+  for candidate in MEMORY_DB_CANDIDATES:
+    p = os.path.expanduser(candidate)
+    if os.path.exists(p):
+      return p
+  return None
+
+
+def init_graph_db(dbpath: str):
+  path = os.path.expanduser(dbpath)
+  os.makedirs(os.path.dirname(path), exist_ok=True)
+  conn = sqlite3.connect(path)
+  cur = conn.cursor()
+  cur.execute("""
+    CREATE TABLE IF NOT EXISTS graph_nodes (
+      id TEXT PRIMARY KEY,
+      label TEXT,
+      payload TEXT
+    )
+  """)
+  cur.execute("""
+    CREATE TABLE IF NOT EXISTS graph_edges (
+      source TEXT NOT NULL,
+      target TEXT NOT NULL,
+      label TEXT,
+      payload TEXT,
+      UNIQUE(source, target, label)
+    )
+  """)
+  conn.commit()
+  conn.close()
+
+
+def load_from_graph_db(dbpath: str) -> dict:
+  path = os.path.expanduser(dbpath)
+  if not os.path.exists(path):
+    return {'nodes': [], 'edges': []}
+
+  conn = sqlite3.connect(path)
+  cur = conn.cursor()
+  graph = {'nodes': [], 'edges': []}
+
+  try:
+    cur.execute("SELECT id, label, payload FROM graph_nodes")
+    for node_id, label, payload in cur.fetchall():
+      node = {'id': str(node_id), 'label': label or ''}
+      if payload:
+        try:
+          extra = json.loads(payload)
+          if isinstance(extra, dict):
+            node.update(extra)
+        except Exception:
+          pass
+      graph['nodes'].append(node)
+  except sqlite3.Error:
+    pass
+
+  try:
+    cur.execute("SELECT source, target, label, payload FROM graph_edges")
+    for source, target, label, payload in cur.fetchall():
+      edge = {'from': str(source), 'to': str(target), 'label': label or ''}
+      if payload:
+        try:
+          extra = json.loads(payload)
+          if isinstance(extra, dict):
+            edge.update(extra)
+        except Exception:
+          pass
+      graph['edges'].append(edge)
+  except sqlite3.Error:
+    pass
+
+  conn.close()
+  return graph
+
+
+def save_to_graph_db(dbpath: str, graph: dict):
+  init_graph_db(dbpath)
+  path = os.path.expanduser(dbpath)
+  conn = sqlite3.connect(path)
+  cur = conn.cursor()
+
+  cur.execute("DELETE FROM graph_edges")
+  cur.execute("DELETE FROM graph_nodes")
+
+  for node in graph.get('nodes', []):
+    node_id = str(node.get('id', ''))
+    if not node_id:
+      continue
+    label = node.get('label', '')
+    payload = {k: v for k, v in node.items() if k not in ('id', 'label')}
+    cur.execute(
+      "INSERT OR REPLACE INTO graph_nodes(id, label, payload) VALUES (?, ?, ?)",
+      (node_id, label, json.dumps(payload) if payload else None),
+    )
+
+  for edge in graph.get('edges', []):
+    source = edge.get('from', edge.get('source'))
+    target = edge.get('to', edge.get('target'))
+    if source is None or target is None:
+      continue
+    label = edge.get('label', '')
+    payload = {k: v for k, v in edge.items() if k not in ('from', 'to', 'source', 'target', 'label')}
+    cur.execute(
+      "INSERT OR REPLACE INTO graph_edges(source, target, label, payload) VALUES (?, ?, ?, ?)",
+      (str(source), str(target), label, json.dumps(payload) if payload else None),
+    )
+
+  conn.commit()
+  conn.close()
+
+
+def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: str | None = None, force_embed: bool = False, graph_db_path: str | None = None):
   # Prefer serving a built frontend (frontend-g6/dist) if present in the repo.
   repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
   static_dir = os.path.join(repo_root, 'frontend-g6', 'dist')
@@ -392,8 +515,10 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
 
   class GraphRequestHandler(SimpleHTTPRequestHandler):
     store = store_path or os.path.expanduser('~/.openclaw/kgraph.json')
-    # Path to OpenClaw memory DB to use as fallback source
-    memory_db = os.path.expanduser('~/.openclaw/memory-system/data/memory.db')
+    graph_db = graph_db_path or os.path.expanduser(GRAPH_DB_DEFAULT)
+    # Path to OpenClaw memory DB to use as fallback source.
+    # Supports legacy and current OpenClaw layouts.
+    memory_db = resolve_memory_db_path()
 
     def _send_cors_headers(self):
       for name, value in _CORS_HEADERS:
@@ -407,8 +532,29 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
     def do_GET(self):
       if self.path == '/graph.json':
         try:
-            # Prefer the OpenClaw memory DB when present and non-empty.
-            if os.path.exists(self.memory_db):
+            # Prefer user-edited graph DB when present and non-empty.
+            if self.graph_db and os.path.exists(os.path.expanduser(self.graph_db)):
+              user_graph = load_from_graph_db(self.graph_db)
+              if user_graph.get('nodes') or user_graph.get('edges'):
+                data = json.dumps(user_graph)
+              elif self.memory_db and os.path.exists(self.memory_db):
+                try:
+                  db_graph = load_from_memory_db(self.memory_db)
+                except Exception:
+                  db_graph = {'nodes': [], 'edges': []}
+                if (not db_graph.get('nodes')) and (not db_graph.get('edges')) and os.path.isfile(self.store):
+                  with open(self.store, 'r', encoding='utf-8') as f:
+                    data = f.read()
+                else:
+                  data = json.dumps(db_graph)
+              elif os.path.isfile(self.store):
+                with open(self.store, 'r', encoding='utf-8') as f:
+                  data = f.read()
+              else:
+                data = json.dumps(SAMPLE_GRAPH)
+
+            # Fall back to OpenClaw memory DB when present and non-empty.
+            elif self.memory_db and os.path.exists(self.memory_db):
               try:
                 db_graph = load_from_memory_db(self.memory_db)
               except Exception:
@@ -439,9 +585,20 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
         try:
+          payload = json.loads(body.decode('utf-8'))
+          if not isinstance(payload, dict):
+            raise ValueError('graph payload must be an object')
+          payload.setdefault('nodes', [])
+          payload.setdefault('edges', [])
+
+          # Primary persistence target: dedicated SQLite graph DB.
+          save_to_graph_db(self.graph_db, payload)
+
+          # Backward-compat mirror for tooling expecting kgraph.json.
           os.makedirs(os.path.dirname(self.store), exist_ok=True)
-          with open(self.store, 'wb') as f:
-            f.write(body)
+          with open(self.store, 'w', encoding='utf-8') as f:
+            json.dump(payload, f)
+
           self.send_response(200)
           self._send_cors_headers()
           self.end_headers()
@@ -481,6 +638,7 @@ def main():
     parser.add_argument('--serve', action='store_true', help='Serve generated page and open browser')
     parser.add_argument('--graph', help='Path to a JSON file with nodes/edges')
     parser.add_argument('--store', help='Path to persistent graph JSON (default: ~/.openclaw/kgraph.json)')
+    parser.add_argument('--graph-db', help=f'Path to persistent graph SQLite DB (default: {GRAPH_DB_DEFAULT})')
     parser.add_argument('--host', help='Host to bind server to (default 127.0.0.1)', default='127.0.0.1')
     parser.add_argument('--port', type=int, help='Port to bind server to (default ephemeral)', default=0)
     parser.add_argument('--import-db', help='Import nodes/edges from SQLite memory DB and use as graph')
@@ -493,14 +651,14 @@ def main():
       with open(args.graph, 'r', encoding='utf-8') as gf:
         graph = json.load(gf)
 
-    pass
-
-    # Prefer importing from the OpenClaw memory DB when available or requested
-    default_memory_db = os.path.expanduser('~/.openclaw/memory-system/data/memory.db')
+    graph_db = args.graph_db or os.path.expanduser(GRAPH_DB_DEFAULT)
+    # Prefer importing from the OpenClaw memory DB when available or requested.
+    # Supports legacy and current OpenClaw layouts.
+    default_memory_db = resolve_memory_db_path()
     import_db_path = None
     if args.import_db:
-      import_db_path = args.import_db
-    elif os.path.exists(default_memory_db):
+      import_db_path = resolve_memory_db_path(args.import_db)
+    elif default_memory_db and os.path.exists(default_memory_db):
       import_db_path = default_memory_db
 
     if import_db_path:
@@ -514,6 +672,16 @@ def main():
           print('Memory DB present but empty; using fallback store/sample')
       except Exception as e:
         print('Failed to import DB:', e)
+
+    # Prefer user graph DB over memory DB/sample for embedded HTML preview.
+    if (not args.graph) and os.path.exists(os.path.expanduser(graph_db)):
+      try:
+        user_graph = load_from_graph_db(graph_db)
+        if user_graph.get('nodes') or user_graph.get('edges'):
+          graph = user_graph
+          print('Using graph DB for embedded HTML:', graph_db)
+      except Exception:
+        pass
 
     # If after attempting DB import we still don't have a user graph, prefer
     # the persistent JSON store so embedded HTML shows the saved graph.
@@ -538,7 +706,7 @@ def main():
       print('Installed to', dest)
 
     if args.serve:
-      serve_file(outpath, host=args.host, port=args.port, store_path=(args.store or None), force_embed=args.embed)
+      serve_file(outpath, host=args.host, port=args.port, store_path=(args.store or None), force_embed=args.embed, graph_db_path=graph_db)
 
 
 def load_from_memory_db(dbpath: str) -> dict:
@@ -546,22 +714,76 @@ def load_from_memory_db(dbpath: str) -> dict:
     conn = sqlite3.connect(os.path.expanduser(dbpath))
     cur = conn.cursor()
     graph = {'nodes': [], 'edges': []}
-    # nodes table: id (TEXT), name, canonical_text
-    try:
-        cur.execute("SELECT id, name, canonical_text FROM nodes")
-        for row in cur.fetchall():
-            nid, name, canonical = row
-            label = name or canonical or str(nid)
-            graph['nodes'].append({'id': str(nid), 'label': label})
-    except sqlite3.Error:
-        pass
-    try:
-        cur.execute("SELECT src_id, dst_id, rel FROM edges")
-        for row in cur.fetchall():
-            src, dst, rel = row
-            graph['edges'].append({'from': str(src), 'to': str(dst), 'label': rel or ''})
-    except sqlite3.Error:
-        pass
+
+    def has_table(name: str) -> bool:
+        cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (name,))
+        return cur.fetchone() is not None
+
+    # Legacy schema: nodes/edges tables.
+    if has_table('nodes') and has_table('edges'):
+        try:
+            cur.execute("SELECT id, name, canonical_text FROM nodes")
+            for row in cur.fetchall():
+                nid, name, canonical = row
+                label = name or canonical or str(nid)
+                graph['nodes'].append({'id': str(nid), 'label': label})
+        except sqlite3.Error:
+            pass
+        try:
+            cur.execute("SELECT src_id, dst_id, rel FROM edges")
+            for row in cur.fetchall():
+                src, dst, rel = row
+                graph['edges'].append({'from': str(src), 'to': str(dst), 'label': rel or ''})
+        except sqlite3.Error:
+            pass
+
+    # Current OpenClaw memory schema: files/chunks tables.
+    elif has_table('files') and has_table('chunks'):
+        file_paths = set()
+        try:
+            cur.execute("SELECT path FROM files")
+            for (path,) in cur.fetchall():
+                if not path:
+                    continue
+                file_paths.add(path)
+                graph['nodes'].append({
+                    'id': f'file:{path}',
+                    'label': os.path.basename(path) or path,
+                    'type': 'file',
+                    'path': path,
+                })
+        except sqlite3.Error:
+            pass
+
+        try:
+            cur.execute("SELECT id, path, start_line, end_line FROM chunks")
+            for chunk_id, path, start_line, end_line in cur.fetchall():
+                chunk_key = str(chunk_id)
+                graph['nodes'].append({
+                    'id': f'chunk:{chunk_key}',
+                    'label': f'chunk {chunk_key[:8]}',
+                    'type': 'chunk',
+                    'path': path or '',
+                    'start_line': start_line,
+                    'end_line': end_line,
+                })
+                if path:
+                    if path not in file_paths:
+                        file_paths.add(path)
+                        graph['nodes'].append({
+                            'id': f'file:{path}',
+                            'label': os.path.basename(path) or path,
+                            'type': 'file',
+                            'path': path,
+                        })
+                    graph['edges'].append({
+                        'from': f'file:{path}',
+                        'to': f'chunk:{chunk_key}',
+                        'label': 'contains',
+                    })
+        except sqlite3.Error:
+            pass
+
     conn.close()
     return graph
 
