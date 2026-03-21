@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -909,10 +909,22 @@ function model() {
                 __tac_info "Warning" "[Could not save state]" "$C_Warning"
             fi
 
-            # Wait for ready — CPU-only models over drvfs (9p) can take 60-90s
-            # to mmap a 4GB+ file, so use a longer timeout for them.
-            local health_timeout=30
-            (( gpu_layers == 0 )) && health_timeout=90
+            # Wait for ready — CPU-only models over drvfs (9p) can take much
+            # longer to mmap and warm up, and some larger GPU models need more
+            # startup time than small models.
+            local health_timeout=45
+            local _size_tenths=0
+            if [[ "$size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
+            then
+                _size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
+            fi
+            if (( gpu_layers == 0 ))
+            then
+                health_timeout=180
+            elif (( _size_tenths >= 20 ))
+            then
+                health_timeout=60
+            fi
             local ready=0
             printf '%s' "${C_Dim}Waiting for health endpoint"
             for (( _hw=0; _hw < health_timeout; _hw++ ))
@@ -1034,12 +1046,13 @@ function model() {
             local _bench_prev_model=""
             [[ -f "$ACTIVE_LLM_FILE" ]] && _bench_prev_model=$(< "$ACTIVE_LLM_FILE")
 
-            local -a b_num=() b_name=() b_size=() b_tps=()
-            while IFS='|' read -r num name file size _rest
+            local -a b_num=() b_name=() b_size=() b_gpu=() b_tps=()
+            while IFS='|' read -r num name file size _arch _quant _layers gpu_layers _ctx _threads _tps
             do
                 [[ "$num" == "#" || -z "$num" ]] && continue
                 [[ ! -f "$LLAMA_MODEL_DIR/$file" ]] && continue
                 b_num+=("$num"); b_name+=("$name"); b_size+=("$size")
+                b_gpu+=("${gpu_layers:-0}")
             done < "$LLM_REGISTRY"
 
             (( ${#b_num[@]} == 0 )) && { __tac_info "Bench" "[No on-disk models]" "$C_Warning"; return 1; }
@@ -1051,9 +1064,29 @@ function model() {
                 printf '%s\n' "${C_Highlight}[$(( i+1 ))/${#b_num[@]}] ${b_name[$i]} (${b_size[$i]})${C_Reset}"
                 rm -f "$LLM_TPS_CACHE"  # Clear stale TPS before each model
                 model use "${b_num[$i]}"
-                if __test_port "$LLM_PORT" && curl -sf --max-time 3 "http://127.0.0.1:$LLM_PORT/health" >/dev/null
+                # Fairness gate: wait for explicit {"status":"ok"} before burn.
+                local bench_ready=0
+                local bench_ready_timeout=60
+                (( ${b_gpu[$i]:-0} == 0 )) && bench_ready_timeout=180
+                for (( _br=0; _br < bench_ready_timeout; _br++ ))
+                do
+                    if __test_port "$LLM_PORT"
+                    then
+                        local _bhealth
+                        _bhealth=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+                        if [[ "$_bhealth" == *'"ok"'* ]]
+                        then
+                            bench_ready=1
+                            break
+                        fi
+                    fi
+                    sleep 1
+                done
+                if (( bench_ready ))
                 then
                     burn
+                else
+                    __tac_info "Bench" "[Model did not reach healthy state in ${bench_ready_timeout}s]" "$C_Error"
                 fi
                 local tps="FAIL"; [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")
                 b_tps+=("$tps")
@@ -1518,7 +1551,7 @@ function burn() {
         fi
     fi
 
-    printf '%s\n' "${C_Dim}Testing: ~1300 token synthetic physics response...${C_Reset}"
+    printf '%s\n' "${C_Dim}Testing: ~1500 token synthetic physics response...${C_Reset}"
     printf '%s\n' "${C_Highlight}Processing ....${C_Reset}"
 
     local prompt="Explain the complete theory of special relativity"
@@ -1529,16 +1562,51 @@ function burn() {
     local payload
     payload=$(jq -n --arg p "$prompt" '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')
 
-    local start_ns end_ns response
+    local request_timeout=240
+    if [[ -f "$ACTIVE_LLM_FILE" && -f "$LLM_REGISTRY" ]]
+    then
+        local _burn_num _burn_entry _burn_gpu _burn_size
+        _burn_num=$(< "$ACTIVE_LLM_FILE")
+        _burn_entry=$(awk -F'|' -v n="$_burn_num" '$1 == n {print; exit}' "$LLM_REGISTRY" 2>/dev/null)
+        if [[ -n "$_burn_entry" ]]
+        then
+            IFS='|' read -r _n _name _file _burn_size _arch _quant _layers _burn_gpu _ctx _threads _tps <<< "$_burn_entry"
+            if (( ${_burn_gpu:-0} == 0 ))
+            then
+                request_timeout=900
+            else
+                local _burn_size_tenths=0
+                if [[ "$_burn_size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
+                then
+                    _burn_size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
+                fi
+                (( _burn_size_tenths >= 30 )) && request_timeout=360
+            fi
+        fi
+    fi
+
+    local start_ns end_ns response curl_rc
     start_ns=$(date +%s%N)
-    response=$(curl -s --max-time 120 "$LOCAL_LLM_URL" \
+    response=$(curl -sS --max-time "$request_timeout" "$LOCAL_LLM_URL" \
         -H "Content-Type: application/json" \
         -d "$payload" 2>/dev/null)
+    curl_rc=$?
     end_ns=$(date +%s%N)
+
+    if (( curl_rc == 28 ))
+    then
+        printf '%s\n' "${C_Warning}[API Timeout]${C_Reset} No response within ${request_timeout}s (model likely still computing, not necessarily crashed)."
+        return 1
+    fi
+    if (( curl_rc != 0 ))
+    then
+        printf '%s\n' "${C_Error}[API Transport Error]${C_Reset} curl exit ${curl_rc} while calling local server."
+        return 1
+    fi
 
     if [[ -z "$response" ]]
     then
-        printf '%s\n' "${C_Error}[API Error]${C_Reset} No response - model may have crashed during inference."
+        printf '%s\n' "${C_Error}[API Error]${C_Reset} Empty response from local server."
         return 1
     fi
 
