@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -1622,7 +1622,13 @@ function burn() {
                 then
                     _burn_size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
                 fi
-                (( _burn_size_tenths >= 30 )) && request_timeout=360
+                if [[ "${_arch:-}" == "qwen35" ]]
+                then
+                    request_timeout=600
+                elif (( _burn_size_tenths >= 30 ))
+                then
+                    request_timeout=360
+                fi
             fi
         fi
     fi
