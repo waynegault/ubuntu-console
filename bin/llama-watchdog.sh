@@ -4,7 +4,7 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="1.4"
+VERSION="1.7"
 set -euo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -101,18 +101,15 @@ then
     elif (( use_ctx > 4096 || free_vram_mb < 1800 )); then
         batch_size=2048; ubatch_size=512
     fi
-    if (( size_tenths > 0 && size_tenths <= 16 && free_vram_mb >= 900 )); then
+    if (( size_tenths > 0 && size_tenths < 15 && use_ctx >= 8192 )); then
+        batch_size=1024; ubatch_size=256
+    fi
+    if (( size_tenths >= 15 && size_tenths < 20 && free_vram_mb >= 1200 && use_ctx <= 8192 )); then
         if (( batch_size < 2048 )); then
             batch_size=2048; ubatch_size=512
         fi
     fi
-    if (( size_tenths > 0 && size_tenths <= 11 && free_vram_mb >= 1500 && use_ctx <= 8192 )); then
-        batch_size=4096; ubatch_size=1024
-    fi
     if (( free_vram_mb >= 1800 && use_ctx <= 4096 )); then
-        parallel_slots=2
-    fi
-    if (( size_tenths > 0 && size_tenths <= 11 && free_vram_mb >= 1500 && use_ctx <= 8192 )); then
         parallel_slots=2
     fi
 

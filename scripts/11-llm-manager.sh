@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 10
+# Module Version: 13
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -913,9 +913,19 @@ function model() {
                     ubatch_size=1024
                 fi
 
-                # Very small models can tolerate more aggressive batches even
-                # when transient free VRAM is mediocre.
-                if (( model_bytes > 0 && model_bytes <= 1600000000 && free_vram_mb >= 900 ))
+                # Keep sub-1.5G models conservative. The generic 8k-ctx path
+                # can otherwise push them into 2048/512, which regressed on
+                # Deepseek-R1-Distill and similar 1.0G class models.
+                if (( model_bytes > 0 && model_bytes < 1500000000 && ctx >= 8192 ))
+                then
+                    batch_size=1024
+                    ubatch_size=256
+                fi
+
+                # Targeted throughput retune for the 1.5G-1.9G class only.
+                # The 1.0G tier regressed under 2048/512, so keep this narrower.
+                if (( model_bytes >= 1500000000 && model_bytes < 2000000000 \
+                    && free_vram_mb >= 1200 && ctx <= 8192 ))
                 then
                     if (( batch_size < 2048 ))
                     then
@@ -923,18 +933,9 @@ function model() {
                         ubatch_size=512
                     fi
                 fi
-                if (( model_bytes > 0 && model_bytes <= 1100000000 && free_vram_mb >= 1500 && ctx <= 8192 ))
-                then
-                    batch_size=4096
-                    ubatch_size=1024
-                fi
 
                 # Enable 2 slots only when headroom exists to avoid latency spikes.
                 if (( free_vram_mb >= 1800 && ctx <= 4096 ))
-                then
-                    parallel_slots=2
-                fi
-                if (( model_bytes > 0 && model_bytes <= 1100000000 && free_vram_mb >= 1500 && ctx <= 8192 ))
                 then
                     parallel_slots=2
                 fi
