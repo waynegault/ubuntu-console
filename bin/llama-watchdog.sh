@@ -4,7 +4,7 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="1.1"
+VERSION="1.2"
 set -euo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -75,23 +75,36 @@ pkill -u "$(id -un)" -x llama-server 2>/dev/null || true
 sleep 1
 
 cmd=("$LLAMA_SERVER_BIN" "-m" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
-cmd+=("--ctx-size" "$use_ctx" "--mlock" "--prio" "2" "--cont-batching" "--parallel" "1" "--jinja")
+cmd+=("--ctx-size" "$use_ctx" "--mlock" "--prio" "2" "--cont-batching" "--jinja")
 if (( use_gpu > 0 ))
 then
-    # Use -ngl 999 to let llama.cpp offload the maximum layers that fit in VRAM.
-    # Batch sizing strategy:
-    #   Partial offload (gpu < layers): smaller batches (512/512) to avoid
-    #     VRAM pressure from the prompt-eval KV cache.
-    #   Full offload (gpu >= layers): large batches (4096/1024) to saturate
-    #     the GPU pipeline — ~30-50% faster prompt eval.
-    batch_size=512; ubatch_size=512
-    if (( use_gpu >= ${layers:-0} ))
-    then
-        batch_size=4096; ubatch_size=1024
+    # Adapt batch/parallel to live free VRAM (4GB cards are sensitive to pressure).
+    smi_cmd="${WSL_NVIDIA_SMI:-/usr/lib/wsl/lib/nvidia-smi}"
+    if [[ ! -x "$smi_cmd" ]]; then
+        smi_cmd=$(command -v nvidia-smi 2>/dev/null || true)
     fi
+    free_vram_mb=0
+    if [[ -n "$smi_cmd" ]]; then
+        free_vram_mb=$("$smi_cmd" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null \
+            | head -1 | tr -d ' ')
+    fi
+    [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
+
+    batch_size=4096; ubatch_size=1024; parallel_slots=1
+    if (( use_ctx >= 8192 || free_vram_mb < 1200 )); then
+        batch_size=1024; ubatch_size=256
+    elif (( free_vram_mb < 2000 )); then
+        batch_size=2048; ubatch_size=512
+    fi
+    if (( free_vram_mb >= 2200 && use_ctx <= 4096 )); then
+        parallel_slots=2
+    fi
+
     cmd+=("--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size")
+    cmd+=("--parallel" "$parallel_slots")
     cmd+=("--n-gpu-layers" "999" "--flash-attn" "on" "--threads" "$use_threads")
 else
+    cmd+=("--parallel" "1")
     cmd+=("--batch-size" "512" "--ubatch-size" "512")
     cmd+=("--n-gpu-layers" "0" "--threads" "$use_threads")
     cmd+=("--cache-type-k" "q8_0" "--cache-type-v" "q8_0")

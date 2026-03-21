@@ -11,7 +11,7 @@
 #
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034
-VERSION="1.0"
+VERSION="1.1"
 
 # ==============================================================================
 # SETUP — Source the profile once for all tests
@@ -511,10 +511,10 @@ setup() {
     [[ "$result" -eq 4096 ]]
 }
 
-@test "calc: __calc_ctx_size small GPU model (3-4GB) returns MOE_DEFAULT_CTX" {
+@test "calc: __calc_ctx_size small GPU model (3-4GB) caps at 4096" {
     # 3GB model, large native ctx
     result=$(__calc_ctx_size $((3 * 1024 * 1024 * 1024)) 32768 "llama")
-    [[ "$result" -eq "$MOE_DEFAULT_CTX" ]]
+    [[ "$result" -eq 4096 ]]
 }
 
 @test "calc: __calc_ctx_size tiny model (<3GB) caps at 16384" {

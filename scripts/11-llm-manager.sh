@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -405,7 +405,16 @@ function __calc_ctx_size() {
         fi
     elif (( file_gb >= 3 ))
     then
-        echo "$MOE_DEFAULT_CTX"
+        # 3-4GB models on 4GB VRAM are KV-cache constrained.
+        # Keep ctx conservative to preserve VRAM for layer offload and avoid
+        # prompt-eval slowdowns from memory pressure.
+        local cap=4096
+        if (( native_ctx < cap ))
+        then
+            echo "$native_ctx"
+        else
+            echo "$cap"
+        fi
     else
         local cap=16384
         if (( native_ctx < cap ))
@@ -802,17 +811,45 @@ function model() {
             sudo -n prlimit --memlock=unlimited:unlimited --pid $$ 2>/dev/null
 
             # ── Build server command ────────────────────────────────────
-            # Choose batch sizes based on offload level:
-            # Larger batches dramatically improve prompt eval speed (~30-50%) when
-            # the GPU is doing the work. CPU-only uses moderate batches.
+            # Choose batch sizes adaptively based on real free VRAM.
+            # Large static batches can hurt throughput on 4GB cards once other
+            # allocations (desktop, driver, KV cache) are present.
             local batch_size=512
             local ubatch_size=512
+            local parallel_slots=1
+            local free_vram_mb=0
             if (( gpu_layers > 0 ))
             then
-                # GPU active: larger batches fill the GPU pipeline more efficiently.
-                # -b 4096 / -ub 1024 is safe with 64GB system RAM + 4GB VRAM.
-                batch_size=4096
-                ubatch_size=1024
+                local smi_cmd
+                smi_cmd=$(__resolve_smi 2>/dev/null || true)
+                if [[ -n "$smi_cmd" ]]
+                then
+                    free_vram_mb=$(
+                        "$smi_cmd" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null \
+                        | head -1 | tr -d ' '
+                    )
+                fi
+                [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
+
+                # Tiered sizing for RTX 3050 Ti 4GB class hardware.
+                if (( ctx >= 8192 || free_vram_mb < 1200 ))
+                then
+                    batch_size=1024
+                    ubatch_size=256
+                elif (( free_vram_mb < 2000 ))
+                then
+                    batch_size=2048
+                    ubatch_size=512
+                else
+                    batch_size=4096
+                    ubatch_size=1024
+                fi
+
+                # Enable 2 slots only when headroom exists to avoid latency spikes.
+                if (( free_vram_mb >= 2200 && ctx <= 4096 ))
+                then
+                    parallel_slots=2
+                fi
             fi
 
             # Build command
@@ -823,7 +860,7 @@ function model() {
             cmd+=("--ctx-size" "$ctx" "--mlock" "--prio" "2")
             cmd+=("--batch-size" "$batch_size")
             cmd+=("--ubatch-size" "$ubatch_size")
-            cmd+=("--cont-batching" "--parallel" "1")
+            cmd+=("--cont-batching" "--parallel" "$parallel_slots")
             # --jinja: enable Jinja2 chat template processing from GGUF metadata.
             # Newer models (Qwen3, Phi-4, Gemma3) embed their chat templates;
             # without this flag the server may apply a wrong or hardcoded format.
@@ -894,8 +931,11 @@ function model() {
             else
                 ngl_label="CPU-only"
             fi
+            local start_msg
+            start_msg="#${num} ${name} (${size}, ${ngl_label}, ctx ${ctx}, "
+            start_msg+="b ${batch_size}/${ubatch_size}, p ${parallel_slots})"
             __tac_info "Starting" \
-                "#${num} ${name} (${size}, ${ngl_label}, ctx ${ctx}, batch ${batch_size})" \
+                "$start_msg" \
                 "$C_Highlight"
 
             (nohup "${cmd[@]}" > "$LLM_LOG_FILE" 2>&1 &)
@@ -1602,17 +1642,20 @@ function burn() {
 
     # Non-streaming request — curl + jq, with bash nanosecond timing.
     local payload
-    payload=$(jq -n --arg p "$prompt" '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')
+    payload=$(jq -n --arg p "$prompt" \
+        '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')
 
     local request_timeout=240
     if [[ -f "$ACTIVE_LLM_FILE" && -f "$LLM_REGISTRY" ]]
     then
         local _burn_num _burn_entry _burn_gpu _burn_size
         _burn_num=$(< "$ACTIVE_LLM_FILE")
-        _burn_entry=$(awk -F'|' -v n="$_burn_num" '$1 == n {print; exit}' "$LLM_REGISTRY" 2>/dev/null)
+        _burn_entry=$(awk -F'|' -v n="$_burn_num" '$1 == n {print; exit}' \
+            "$LLM_REGISTRY" 2>/dev/null)
         if [[ -n "$_burn_entry" ]]
         then
-            IFS='|' read -r _n _name _file _burn_size _arch _quant _layers _burn_gpu _ctx _threads _tps <<< "$_burn_entry"
+            IFS='|' read -r _n _name _file _burn_size _arch _quant _layers \
+                _burn_gpu _ctx _threads _tps <<< "$_burn_entry"
             if (( ${_burn_gpu:-0} == 0 ))
             then
                 request_timeout=900
@@ -1648,7 +1691,11 @@ function burn() {
         # or socket reset) to improve benchmark fairness.
         if (( curl_rc != 0 && curl_rc != 28 && attempt < max_attempts ))
         then
-            printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Transport error (curl ${curl_rc}); waiting for health and retrying once..."
+            local _retry_msg
+            _retry_msg="${C_Dim}[API Retry]${C_Reset} Transport error (curl ${curl_rc}); "
+            _retry_msg+="waiting for health and retrying once..."
+            printf '%s\n' \
+                "$_retry_msg"
             local _rh
             for (( _rh=0; _rh < 20; _rh++ ))
             do
@@ -1669,7 +1716,11 @@ function burn() {
             _loading_msg=$(printf '%s' "$response" | jq -r '.error.message // empty' 2>/dev/null)
             if [[ "$_loading_msg" == *[Ll]oading* ]]
             then
-                printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Server still loading (\"${_loading_msg}\"); waiting up to 30s..."
+                local _loading_retry_msg
+                _loading_retry_msg="${C_Dim}[API Retry]${C_Reset} Server still loading "
+                _loading_retry_msg+="(\"${_loading_msg}\"); waiting up to 30s..."
+                printf '%s\n' \
+                    "$_loading_retry_msg"
                 local _lw
                 for (( _lw=0; _lw < 30; _lw++ ))
                 do
@@ -1688,7 +1739,9 @@ function burn() {
 
     if (( curl_rc == 28 ))
     then
-        printf '%s\n' "${C_Warning}[API Timeout]${C_Reset} No response within ${request_timeout}s (model likely still computing, not necessarily crashed)."
+        printf '%s\n' \
+            "${C_Warning}[API Timeout]${C_Reset} No response within ${request_timeout}s "\
+    "(model likely still computing, not necessarily crashed)."
         return 1
     fi
     if (( curl_rc != 0 ))
