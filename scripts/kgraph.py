@@ -41,6 +41,52 @@ HTML_TMPL = """<!doctype html>
       #mynetwork { width: 100%; height: 100vh; border: 1px solid lightgray; }
       #toolbar { position: absolute; left: 12px; top: 12px; z-index: 99; background: rgba(255,255,255,0.95); padding:6px; border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,0.1); }
       #toolbar > * { margin-right:6px; }
+      #detail-panel {
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        width: min(420px, calc(100vw - 24px));
+        max-height: calc(100vh - 24px);
+        overflow: auto;
+        z-index: 99;
+        background: rgba(255,255,255,0.97);
+        border-radius: 10px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.18);
+        border: 1px solid rgba(0,0,0,0.1);
+        padding: 14px;
+      }
+      #detail-panel[hidden] { display: none; }
+      #detail-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+      #detail-title { margin: 0; font-size: 16px; line-height: 1.2; }
+      #detail-meta { margin: 8px 0 10px; color: #4b5563; font-size: 12px; }
+      #detail-summary {
+        margin: 0 0 12px;
+        color: #111827;
+        font-size: 13px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+      }
+      #detail-body {
+        width: 100%;
+        min-height: 180px;
+        resize: vertical;
+        box-sizing: border-box;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        padding: 10px;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color: #111827;
+        background: #f9fafb;
+      }
+      #detail-panel details { margin-top: 12px; }
+      #detail-panel summary { cursor: pointer; font-weight: 600; }
+      #detail-close {
+        border: 0;
+        border-radius: 6px;
+        background: #e5e7eb;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
     </style>
   </head>
   <body>
@@ -63,9 +109,68 @@ HTML_TMPL = """<!doctype html>
       <label><input id="show-node-labels" type="checkbox" checked/> Node labels</label>
       <label><input id="show-edge-labels" type="checkbox" checked/> Edge labels</label>
     </div>
+    <aside id="detail-panel" hidden>
+      <div id="detail-header">
+        <h2 id="detail-title">Selection</h2>
+        <button id="detail-close" type="button">Close</button>
+      </div>
+      <div id="detail-meta"></div>
+      <p id="detail-summary">Select a node or edge to inspect it.</p>
+      <details>
+        <summary>Full details</summary>
+        <textarea id="detail-body" readonly></textarea>
+      </details>
+    </aside>
     <div id="mynetwork"></div>
     <script>
       const embeddedData = %s;
+
+      function shortenLabel(node) {
+        if (node.short_label) return String(node.short_label);
+        if (node.type === 'file') return String((node.path || node.label || '').split('/').pop() || node.label || 'file');
+        if (node.type === 'chunk') {
+          const file = String((node.path || '').split('/').pop() || 'chunk');
+          const start = Number.isInteger(node.start_line) ? node.start_line : null;
+          const end = Number.isInteger(node.end_line) ? node.end_line : null;
+          if (start !== null && end !== null) return `${file} L${start}-${end}`;
+          if (start !== null) return `${file} L${start}`;
+          return file;
+        }
+        const base = String(node.label || '').trim();
+        return base.length > 26 ? base.slice(0, 25) + '…' : (base || String(node.id || 'node'));
+      }
+
+      function buildNodeDetail(node) {
+        const lines = [];
+        lines.push(`id: ${node.id || ''}`);
+        if (node.type) lines.push(`type: ${node.type}`);
+        if (node.path) lines.push(`path: ${node.path}`);
+        if (Number.isInteger(node.start_line)) lines.push(`start_line: ${node.start_line}`);
+        if (Number.isInteger(node.end_line)) lines.push(`end_line: ${node.end_line}`);
+        if (node.chunk_id) lines.push(`chunk_id: ${node.chunk_id}`);
+        if (node.label) lines.push(`label: ${node.label}`);
+        if (node.content_preview) {
+          lines.push('');
+          lines.push('content_preview:');
+          lines.push(String(node.content_preview));
+        }
+        const extra = Object.entries(node).filter(([k]) => !['id','type','path','start_line','end_line','chunk_id','label','content_preview','display_label','short_label'].includes(k));
+        if (extra.length) {
+          lines.push('');
+          lines.push('extra:');
+          extra.forEach(([k, v]) => lines.push(`${k}: ${typeof v === 'object' ? JSON.stringify(v, null, 2) : v}`));
+        }
+        return lines.join('\n');
+      }
+
+      function buildEdgeDetail(edge) {
+        return [
+          `id: ${edge.id || ''}`,
+          `source: ${edge.source || ''}`,
+          `target: ${edge.target || ''}`,
+          `label: ${edge.label || ''}`,
+        ].join('\n');
+      }
 
       async function loadGraph() {
         try {
@@ -81,7 +186,7 @@ HTML_TMPL = """<!doctype html>
           const d = Object.assign({}, n);
           const id = String(d.id);
           delete d.id;
-          els.push({ data: Object.assign({ id: id, label: d.label || '' }, d) });
+          els.push({ data: Object.assign({ id: id, label: d.label || '', display_label: shortenLabel(n) }, d) });
         });
         (data.edges || []).forEach((e, idx) => {
             const src = (e.from !== undefined && e.from !== null) ? e.from : (e.source !== undefined ? e.source : '');
@@ -107,7 +212,7 @@ HTML_TMPL = """<!doctype html>
         const cy = cytoscape({ container: document.getElementById('mynetwork'), elements: elements, style: [
               { selector: 'node', style: {
                 'background-color': '#1976d2',
-                'label': 'data(label)',
+                'label': 'data(display_label)',
                 'shape': 'ellipse',
                 'width': 56,
                 'height': 56,
@@ -157,6 +262,38 @@ HTML_TMPL = """<!doctype html>
         userZoomingEnabled: true,
         userPanningEnabled: true
         });
+
+        const detailPanel = document.getElementById('detail-panel');
+        const detailTitle = document.getElementById('detail-title');
+        const detailMeta = document.getElementById('detail-meta');
+        const detailSummary = document.getElementById('detail-summary');
+        const detailBody = document.getElementById('detail-body');
+        const detailClose = document.getElementById('detail-close');
+
+        function showDetailForElement(el) {
+          if (!el) {
+            detailPanel.hidden = true;
+            return;
+          }
+          const data = el.data() || {};
+          if (el.isNode && el.isNode()) {
+            detailTitle.textContent = data.display_label || data.label || data.id || 'Node';
+            detailMeta.textContent = [data.type || 'node', data.path || '', Number.isInteger(data.start_line) ? `L${data.start_line}${Number.isInteger(data.end_line) ? '-' + data.end_line : ''}` : ''].filter(Boolean).join(' | ');
+            detailSummary.textContent = data.content_preview || data.label || 'No additional content available.';
+            detailBody.value = buildNodeDetail(data);
+          } else if (el.isEdge && el.isEdge()) {
+            detailTitle.textContent = data.label || 'Edge';
+            detailMeta.textContent = `${data.source || ''} -> ${data.target || ''}`;
+            detailSummary.textContent = data.label || 'Relationship edge';
+            detailBody.value = buildEdgeDetail(data);
+          }
+          detailPanel.hidden = false;
+        }
+
+        detailClose.addEventListener('click', () => {
+          detailPanel.hidden = true;
+          cy.elements(':selected').unselect();
+        });
         // Set an initial, reasonable zoom level so the UI isn't zoomed in too far
         // on some environments. Then ensure clicking a node/edge selects it
         // (improves UX across browsers).
@@ -170,6 +307,10 @@ HTML_TMPL = """<!doctype html>
         // Ensure clicking a node/edge selects it (improves UX across browsers)
         cy.on('tap', 'node', (evt) => { try { evt.target.select(); } catch(e){} });
         cy.on('tap', 'edge', (evt) => { try { evt.target.select(); } catch(e){} });
+        cy.on('select', 'node, edge', (evt) => showDetailForElement(evt.target));
+        cy.on('unselect', 'node, edge', () => {
+          if (cy.$(':selected').length === 0) detailPanel.hidden = true;
+        });
 
         // Adjust label sizes dynamically based on current zoom level.
         // Use conservative base sizes and clamp the effective zoom multiplier
@@ -220,7 +361,11 @@ HTML_TMPL = """<!doctype html>
         // autosave
         let last = null;
         setInterval(async () => {
-          const nodes = cy.nodes().map(n => Object.assign({ id: n.id() }, n.data()));
+          const nodes = cy.nodes().map(n => {
+            const d = Object.assign({ id: n.id() }, n.data());
+            delete d.display_label;
+            return d;
+          });
           const edges = cy.edges().map(e => ({ from: e.data('source'), to: e.data('target'), label: e.data('label') }));
           const out = { nodes: nodes, edges: edges };
           const j = JSON.stringify(out);
@@ -346,7 +491,11 @@ HTML_TMPL = """<!doctype html>
 
         // Save button
         document.getElementById('save').addEventListener('click', async () => {
-          const nodes = cy.nodes().map(n => Object.assign({ id: n.id() }, n.data()));
+          const nodes = cy.nodes().map(n => {
+            const d = Object.assign({ id: n.id() }, n.data());
+            delete d.display_label;
+            return d;
+          });
           const edges = cy.edges().map(e => ({ from: e.data('source'), to: e.data('target'), label: e.data('label') }));
           const out = { nodes: nodes, edges: edges };
           try { await fetch('/graph.json', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(out) }); alert('Saved'); } catch (e) { console.warn('save failed', e); }
