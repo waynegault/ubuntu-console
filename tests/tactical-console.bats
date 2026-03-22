@@ -2088,3 +2088,55 @@ EOF
         [[ "$found" -eq 1 ]]
     done
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 29. OPENCLAW — Additional function tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "openclaw: so function is defined" {
+    declare -f so >/dev/null
+}
+
+@test "openclaw: xo function is defined" {
+    declare -f xo >/dev/null
+}
+
+@test "openclaw: oc-health function is defined" {
+    declare -f oc-health >/dev/null
+}
+
+@test "openclaw: oc-backup function is defined" {
+    declare -f oc-backup >/dev/null
+}
+
+@test "openclaw: oc-restore function is defined" {
+    declare -f oc-restore >/dev/null
+}
+
+@test "openclaw: oc-restart function is defined" {
+    declare -f oc-restart >/dev/null
+}
+
+@test "openclaw: ocstop function is defined" {
+    declare -f ocstop >/dev/null
+}
+
+@test "openclaw: ocstart function is defined" {
+    declare -f ocstart >/dev/null
+}
+
+@test "openclaw: __so_check_win_port function is defined" {
+    declare -f __so_check_win_port >/dev/null
+}
+
+@test "openclaw: __bridge_windows_api_keys function is defined" {
+    declare -f __bridge_windows_api_keys >/dev/null
+}
+
+@test "openclaw: oc function is defined and is a dispatcher" {
+    declare -f oc >/dev/null
+    # oc should contain case statement for subcommand dispatch
+    grep -q 'case.*in' "$REPO_ROOT/scripts/09-openclaw.sh"
+}
+
+# end of file
