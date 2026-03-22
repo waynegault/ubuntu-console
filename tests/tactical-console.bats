@@ -1520,10 +1520,42 @@ setup() {
     [[ "$output" == *"Project Name"* ]]
 }
 
+@test "deployment: mkproj refuses path traversal" {
+    run mkproj "../evil"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"PATH TRAVERSAL"* ]]
+}
+
+@test "deployment: mkproj refuses absolute paths" {
+    run mkproj "/tmp/evil"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"ABSOLUTE PATHS"* ]]
+}
+
+@test "deployment: mkproj refuses names starting with numbers" {
+    run mkproj "123project"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"MUST START WITH LETTER"* ]]
+}
+
+@test "deployment: mkproj refuses names with special characters" {
+    run mkproj "my@project!"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"MUST START WITH LETTER"* ]]
+}
+
+@test "deployment: mkproj refuses names longer than 64 chars" {
+    run mkproj "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789X"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"TOO LONG"* ]]
+}
+
 @test "deployment: mkproj refuses existing directory" {
-    local testdir="$TAC_TEST_TMPDIR/existing_proj"
-    mkdir -p "$testdir"
+    local testdir="existing_proj"
+    mkdir -p "$TAC_TEST_TMPDIR/$testdir"
+    pushd "$TAC_TEST_TMPDIR" >/dev/null
     run mkproj "$testdir"
+    popd >/dev/null
     [ "$status" -eq 1 ]
     [[ "$output" == *"ALREADY EXISTS"* ]]
 }

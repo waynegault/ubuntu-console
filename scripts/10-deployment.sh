@@ -16,11 +16,42 @@
 # ---------------------------------------------------------------------------
 function mkproj() {
     local n="$1"
+
+    # Validate: project name is required
     if [[ -z "$n" ]]
     then
         __tac_info "Project Name Required" "[mkproj <Name>]" "$C_Error"
         return 1
     fi
+
+    # Security: reject path traversal attempts (e.g., ../evil, ../../etc)
+    if [[ "$n" == *".."* ]]
+    then
+        __tac_info "Invalid Project Name" "[PATH TRAVERSAL NOT ALLOWED]" "$C_Error"
+        return 1
+    fi
+
+    # Security: reject absolute paths to prevent writing to arbitrary locations
+    if [[ "$n" == /* ]]
+    then
+        __tac_info "Invalid Project Name" "[ABSOLUTE PATHS NOT ALLOWED]" "$C_Error"
+        return 1
+    fi
+
+    # Validate: project name contains only safe characters (alphanumeric, dash, underscore)
+    if [[ ! "$n" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]
+    then
+        __tac_info "Invalid Project Name" "[MUST START WITH LETTER, CONTAIN ONLY A-Z, 0-9, -, _]" "$C_Error"
+        return 1
+    fi
+
+    # Validate: project name is reasonable length (1-64 chars)
+    if [[ ${#n} -gt 64 ]]
+    then
+        __tac_info "Invalid Project Name" "[TOO LONG - MAX 64 CHARS]" "$C_Error"
+        return 1
+    fi
+
     if [[ -d "$n" ]]
     then
         __tac_info "Directory $n" "[ALREADY EXISTS]" "$C_Error"
