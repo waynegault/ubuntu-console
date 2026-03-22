@@ -42,9 +42,10 @@ PASS_SYMBOL=$'\u2713'  # ✓
 FAIL_SYMBOL=$'\u2717'  # ✗
 
 # ── Drawing helpers ──────────────────────────────────────────────────────────
-border_top()    { printf '%s+%s+%s\n' "$C_Border" "$(printf '%.0s-' $(seq 1 $((W-2))))" "$C_Reset"; }
-border_mid()    { printf '%s|%s|%s\n' "$C_Border" "$(printf '%.0s-' $(seq 1 $((W-2))))" "$C_Reset"; }
-border_bot()    { printf '%s+%s+%s\n' "$C_Border" "$(printf '%.0s-' $(seq 1 $((W-2))))" "$C_Reset"; }
+# Pure bash border drawing (no seq fork - uses printf padding for performance)
+border_top()    { printf '%s+%s+%s\n' "$C_Border" "$(printf '%*s' "$((W-2))" '' | tr ' ' '-')" "$C_Reset"; }
+border_mid()    { printf '%s|%s|%s\n' "$C_Border" "$(printf '%*s' "$((W-2))" '' | tr ' ' '-')" "$C_Reset"; }
+border_bot()    { printf '%s+%s+%s\n' "$C_Border" "$(printf '%*s' "$((W-2))" '' | tr ' ' '-')" "$C_Reset"; }
 row() {
     local text="$1"
     # Strip ANSI to measure visible length
