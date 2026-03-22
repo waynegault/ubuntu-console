@@ -8,6 +8,48 @@
 # Secrets — never commit
 *.credentials
 *.secret
-workspace-main/__pycache__
-tests/__pycache__
-scripts/__pycache__
+*.key
+*.pem
+*.token
+.env
+.env.local
+.env.*.local
+credentials/
+vault/
+*_rsa
+*_dsa
+*_ecdsa
+*_ed25519
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.pytest_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Logs
+*.log
+logs/
+
+# OS generated
+.DS_Store
+Thumbs.db
