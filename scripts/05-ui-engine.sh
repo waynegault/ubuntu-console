@@ -127,15 +127,51 @@ function __usage() {
 # Trade-off (I1): The while-loop + global substitution is O(n²) worst-case for
 # strings with many distinct escape sequences, but in practice dashboard values
 # have at most 2-3 distinct sequences so this is faster than forking to sed.
+#
+# Security (S3): Validates varname to prevent indirect variable injection.
+#   - Must be non-empty
+#   - Must start with letter or underscore
+#   - Must contain only alphanumeric and underscore
+#   - Max 64 characters (prevents DoS via long variable names)
+#   - Must not be a bash reserved word
 # ---------------------------------------------------------------------------
 function __strip_ansi() {
     local input="$1" varname="$2" tmp
     # Safety: validate varname is a legal bash identifier (S3 — prevents
     # indirect variable injection if callers ever pass untrusted data).
+
+    # Reject empty or missing varname
+    if [[ -z "$varname" ]]
+    then
+        return 1
+    fi
+
+    # Reject excessively long variable names (DoS prevention)
+    if [[ ${#varname} -gt 64 ]]
+    then
+        return 1
+    fi
+
+    # Reject bash reserved words to prevent shadowing attacks
+    case "$varname" in
+        if|then|else|elif|fi|case|'esac'|for|while|until|do|done|in|function|\
+        select|time|coproc|return|exit|break|continue|local|declare|\
+        typeset|readonly|export|unset|shift|getopts|eval|exec|trap|\
+        wait|kill|bg|fg|jobs|disown|suspend|logout|hash|pwd|cd|pushd|popd|\
+        dirs|set|shopt|umask|alias|unalias|bind|builtin|caller|\
+        command|compgen|complete|compopt|echo|enable|help|let|mapfile|\
+        printf|read|readarray|source|type|ulimit|fc|history|times)
+            return 1
+            ;;
+    esac
+
+    # Validate format: must start with letter or underscore, contain only
+    # alphanumeric and underscore
     if [[ ! "$varname" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]
     then
         return 1
     fi
+
     # Regex stored in a variable to avoid bash 5.x $'...' serialisation quirk
     # where declare -f adds a spurious backslash before '[' in the ANSI token.
     local _ansi_re=$'\e\[[0-9;]*[mK]'
