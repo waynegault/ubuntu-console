@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 16
+# Module Version: 17
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -1223,6 +1223,11 @@ function model() {
             done < "$LLM_REGISTRY"
 
             (( ${#b_num[@]} == 0 )) && { __tac_info "Bench" "[No on-disk models]" "$C_Warning"; return 1; }
+
+            # Ensure GPU is in persistence mode for consistent benchmark results.
+            # WDDM throttling between model loads can cause 3-4x TPS variance.
+            wake 2>/dev/null || true
+
             printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} model(s)...${C_Reset}"
 
             local __BENCH_MODE=1
