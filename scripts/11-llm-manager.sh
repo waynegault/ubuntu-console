@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 13
+# Module Version: 16
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -939,6 +939,27 @@ function model() {
                 then
                     parallel_slots=2
                 fi
+
+                # Per-model recovery overrides (single-request burn focus):
+                # Qwen2.5 Coder 3B has shown better consistency with a smaller
+                # KV window and moderate batching.
+                if [[ "$name" == "Qwen2.5 Coder 3B Instruct" ]]
+                then
+                    (( ctx > 4096 )) && ctx=4096
+                    batch_size=2048
+                    ubatch_size=512
+                    parallel_slots=1
+                fi
+
+                # Qwen3.5-4B showed instability/slowdowns at the aggressive
+                # 4096/1024 + parallel 2 tier; keep it at a safer profile.
+                if [[ "$name" == "Qwen3.5-4B" ]]
+                then
+                    (( ctx > 3072 )) && ctx=3072
+                    batch_size=2048
+                    ubatch_size=512
+                    parallel_slots=1
+                fi
             fi
 
             # Build command
@@ -1050,6 +1071,9 @@ function model() {
             if (( gpu_layers == 0 ))
             then
                 health_timeout=180
+            elif [[ "$name" == "Qwen3.5-4B" ]]
+            then
+                health_timeout=120
             elif (( _size_tenths >= 20 ))
             then
                 health_timeout=60
@@ -1697,7 +1721,8 @@ function model() {
             ;;
 
         *)
-            echo "Usage: model {scan|list|default|use|stop|status|info|bench|bench-diff|bench-latest|delete|archive|download}"
+            echo "Usage: model {scan|list|default|use|stop|status|info|bench|bench-diff|\
+bench-latest|delete|archive|download}"
             echo "  scan       - Scan $LLAMA_MODEL_DIR, read GGUF metadata, auto-calculate params"
             echo "  list       - Show numbered model registry (${PLAY_MARK} = active, * = default)"
             echo "  default [N] - Show current default LLM, or set it to model #N"
