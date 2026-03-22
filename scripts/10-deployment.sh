@@ -104,11 +104,17 @@ EOF
     if [[ -f ".venv/bin/activate" ]]
     then
         source .venv/bin/activate
-        pip install --upgrade pip --quiet
-        pip install -r requirements.txt --quiet
-        __tac_info "Python Dependencies" "[INSTALLED]" "$C_Success"
+        if pip install --upgrade pip --quiet >/dev/null 2>&1 \
+            && pip install -r requirements.txt --quiet >/dev/null 2>&1
+        then
+            __tac_info "Python Dependencies" "[INSTALLED]" "$C_Success"
+        else
+            __tac_info "Python Dependencies" "[FAILED]" "$C_Error"
+            return 1
+        fi
     else
         __tac_info "Python Environment" "[FAILED]" "$C_Error"
+        return 1
     fi
 
     __tac_info "Directory & Git Init" "[SUCCESS]" "$C_Success"

@@ -1526,6 +1526,48 @@ setup() {
     grep -q '^pytest$' "$REPO_ROOT/scripts/10-deployment.sh"
 }
 
+@test "deployment: mkproj fails if virtualenv dependency install fails" {
+    local fakebin="$TAC_TEST_TMPDIR/fakebin"
+    mkdir -p "$fakebin"
+
+    cat > "$fakebin/python3" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "-m" && "${2:-}" == "venv" ]]; then
+    target="${3:-.venv}"
+    mkdir -p "$target/bin"
+    cat > "$target/bin/activate" << 'ACT'
+VIRTUAL_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export VIRTUAL_ENV
+export PATH="$VIRTUAL_ENV/bin:$PATH"
+ACT
+    cat > "$target/bin/pip" << 'PIP'
+#!/usr/bin/env bash
+exit 1
+PIP
+    chmod +x "$target/bin/pip"
+    exit 0
+fi
+exec /usr/bin/python3 "$@"
+EOF
+    chmod +x "$fakebin/python3"
+
+    cat > "$fakebin/git" << 'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+    chmod +x "$fakebin/git"
+
+    pushd "$TAC_TEST_TMPDIR" >/dev/null
+    PATH="$fakebin:$PATH"
+    run mkproj "broken_proj"
+    popd >/dev/null
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Python Dependencies"* ]]
+    [[ "$output" == *"[FAILED]"* ]]
+}
+
 @test "deployment: commit_deploy requires a message" {
     run commit_deploy
     [ "$status" -eq 1 ]
