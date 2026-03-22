@@ -1912,6 +1912,24 @@ EOF
     [ "$after" = "$before" ]
 }
 
+@test "install: reloads user systemd units when systemctl is available" {
+    local home_dir="$TAC_TEST_TMPDIR/install-home-systemd"
+    local stub_dir="$TAC_TEST_TMPDIR/install-stubs"
+    local log_file="$TAC_TEST_TMPDIR/install-systemctl.log"
+    mkdir -p "$home_dir" "$stub_dir"
+
+    cat > "$stub_dir/systemctl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$log_file"
+EOF
+    chmod +x "$stub_dir/systemctl"
+
+    run env HOME="$home_dir" PATH="$stub_dir:$PATH" bash "$REPO_ROOT/install.sh"
+    [ "$status" -eq 0 ]
+
+    grep -q '^--user daemon-reload$' "$log_file"
+}
+
 @test "bin: tac-exec sources env.sh relative to its own path" {
     grep -q 'readlink -f "\${BASH_SOURCE\[0\]}"' "$REPO_ROOT/bin/tac-exec"
     grep -q 'source "\$_tac_exec_root/env.sh"' "$REPO_ROOT/bin/tac-exec"
@@ -1934,6 +1952,11 @@ EOF
 @test "openclaw: restore writes tactical-console.bashrc into TACTICAL_REPO_ROOT" {
     grep -q 'mkdir -p "\$TACTICAL_REPO_ROOT"' "$REPO_ROOT/scripts/09-openclaw.sh"
     grep -q 'cp "\$tmp_restore/ubuntu-console/tactical-console.bashrc" "\$TACTICAL_REPO_ROOT/tactical-console.bashrc"' "$REPO_ROOT/scripts/09-openclaw.sh"
+}
+
+@test "openclaw: restore reloads user systemd units after restoring them" {
+    grep -q 'local restored_systemd_units=0' "$REPO_ROOT/scripts/09-openclaw.sh"
+    grep -q 'systemctl --user daemon-reload >/dev/null 2>&1 || true' "$REPO_ROOT/scripts/09-openclaw.sh"
 }
 
 @test "dashboard: bashrc diagnostics target the canonical tactical-console.bashrc" {

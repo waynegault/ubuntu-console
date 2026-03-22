@@ -4,7 +4,7 @@
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034
-VERSION="1.0"
+VERSION="1.1"
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
@@ -137,6 +137,11 @@ do
     [[ -f "$f" ]] || continue
     link "systemd/$(basename "$f")" "$HOME/.config/systemd/user/$(basename "$f")"
 done
+
+if command -v systemctl >/dev/null 2>&1
+then
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+fi
 
 echo ""
 echo "Done. Run 'exec bash' to reload the profile."

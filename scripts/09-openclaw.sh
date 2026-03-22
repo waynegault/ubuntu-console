@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -1272,6 +1272,7 @@ function oc-restore() {
         fi
     done
     # Restore systemd units if present
+    local restored_systemd_units=0
     for _rs in .config/systemd/user/llama-watchdog.service \
                .config/systemd/user/llama-watchdog.timer
     do
@@ -1279,8 +1280,13 @@ function oc-restore() {
         then
             mkdir -p "$(dirname "$HOME/$_rs")"
             cp "$tmp_restore/$_rs" "$HOME/$_rs"
+            restored_systemd_units=1
         fi
     done
+    if (( restored_systemd_units )) && command -v systemctl >/dev/null 2>&1
+    then
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+    fi
     rm -rf "$tmp_restore"
 
     __tac_info "State Rollback" "[COMPLETE]" "$C_Success"
