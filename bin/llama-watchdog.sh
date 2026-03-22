@@ -4,7 +4,7 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="1.7"
+VERSION="1.9"
 set -euo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -113,6 +113,16 @@ then
         parallel_slots=2
     fi
 
+    # Keep these two models on known-stable settings during auto-restart.
+    if [[ "$name" == "Qwen2.5 Coder 3B Instruct" ]]; then
+        (( use_ctx > 4096 )) && use_ctx=4096
+        batch_size=2048; ubatch_size=512; parallel_slots=1
+    fi
+    if [[ "$name" == "Qwen3.5-4B" ]]; then
+        (( use_ctx > 3072 )) && use_ctx=3072
+        batch_size=2048; ubatch_size=512; parallel_slots=1
+    fi
+
     cmd+=("--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size")
     cmd+=("--parallel" "$parallel_slots")
     cmd+=("--n-gpu-layers" "999" "--flash-attn" "on" "--threads" "$use_threads")
@@ -128,6 +138,11 @@ nohup "${cmd[@]}" >> "$LLM_LOG_FILE" 2>&1 &
 # Wait for health — CPU-only models over drvfs (9p) can take 60-90s to mmap
 health_timeout=30
 (( use_gpu == 0 )) && health_timeout=90
+if (( use_gpu > 0 )) && [[ "$name" == "Qwen3.5-4B" ]]; then
+    health_timeout=120
+elif (( use_gpu > 0 && size_tenths >= 20 )); then
+    health_timeout=60
+fi
 for (( _hw=0; _hw < health_timeout; _hw++ ))
 do
     if curl -sf --max-time 2 "http://127.0.0.1:${LLM_PORT}/health" >/dev/null 2>&1
