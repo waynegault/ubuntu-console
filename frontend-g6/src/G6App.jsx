@@ -1,16 +1,33 @@
 import React, { useEffect, useRef } from 'react'
 
-export default function G6App({ initialData }) {
+function applyGraphData(graph, data) {
+  if (!graph) return
+
+  if (typeof graph.changeData === 'function') {
+    graph.changeData(data)
+  } else if (typeof graph.data === 'function') {
+    graph.data(data)
+    if (typeof graph.render === 'function') {
+      graph.render()
+    }
+  } else if (typeof graph.read === 'function') {
+    graph.read(data)
+  }
+}
+
+export default function G6App({ initialData, onInitError }) {
   const containerRef = useRef(null)
   const graphRef = useRef(null)
 
   useEffect(() => {
     let mounted = true
+    let handleResize = null
+
     ;(async () => {
       try {
         const G6 = await import('@antv/g6')
-        if (!mounted) return
-        const { Graph, Minimap } = G6
+        if (!mounted || !containerRef.current) return
+        const { Graph } = G6
         const width = containerRef.current.clientWidth
         const height = containerRef.current.clientHeight
         const graph = new Graph({
@@ -25,22 +42,42 @@ export default function G6App({ initialData }) {
           layout: { type: 'force', preventOverlap: true }
         })
 
-        // set data safely
-        if (typeof graph.changeData === 'function') graph.changeData(initialData)
-        else if (typeof graph.data === 'function') { graph.data(initialData); if (typeof graph.render === 'function') graph.render() }
-        else if (typeof graph.read === 'function') graph.read(initialData)
-
         graph.on('node:click', (evt) => { /* noop */ })
 
         graphRef.current = graph
+        applyGraphData(graph, initialData)
+
+        handleResize = () => {
+          if (!containerRef.current || !graphRef.current || graphRef.current.get('destroyed')) {
+            return
+          }
+          graphRef.current.changeSize(containerRef.current.clientWidth, containerRef.current.clientHeight)
+        }
+        window.addEventListener('resize', handleResize)
       } catch (e) {
         console.error('G6 init failed', e)
-        // throw to allow fallback
-        throw e
+        if (mounted) {
+          onInitError?.(e)
+        }
       }
     })()
 
-    return () => { mounted = false; try { if (graphRef.current && !graphRef.current.get('destroyed')) graphRef.current.destroy() } catch (e) {} }
+    return () => {
+      mounted = false
+      if (handleResize) {
+        window.removeEventListener('resize', handleResize)
+      }
+      try {
+        if (graphRef.current && !graphRef.current.get('destroyed')) {
+          graphRef.current.destroy()
+        }
+      } catch (e) {}
+      graphRef.current = null
+    }
+  }, [onInitError])
+
+  useEffect(() => {
+    applyGraphData(graphRef.current, initialData)
   }, [initialData])
 
   return (

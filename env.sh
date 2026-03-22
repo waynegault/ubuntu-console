@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -24,7 +24,8 @@ __TAC_ENV_LOADED=1
 # Mark library mode so modules can detect non-interactive sourcing if needed
 export TAC_LIBRARY_MODE=1
 
-_tac_lib_dir="$HOME/ubuntu-console/scripts"
+_tac_env_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_tac_lib_dir="$_tac_env_root/scripts"
 
 for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh; do
     # Skip 13-init.sh — it runs interactive side-effects (clear, completions,
@@ -35,6 +36,6 @@ for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh; do
     [[ -f "$_tac_lib_f" ]] && source "$_tac_lib_f"
 done
 
-unset _tac_lib_f _tac_lib_dir
+unset _tac_env_root _tac_lib_f _tac_lib_dir
 
 # end of file

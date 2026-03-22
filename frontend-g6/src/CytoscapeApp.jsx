@@ -1,16 +1,111 @@
 import React, { useEffect, useRef, useState } from 'react'
 
-export default function CytoscapeApp() {
+const EMPTY_GRAPH = { nodes: [], edges: [] }
+
+function normalizeGraph(data) {
+  return {
+    nodes: Array.isArray(data?.nodes) ? data.nodes : [],
+    edges: Array.isArray(data?.edges) ? data.edges : [],
+  }
+}
+
+function toElementNode(node) {
+  return {
+    data: {
+      ...node,
+      id: String(node.id),
+      label: node.label || '',
+    },
+  }
+}
+
+function toElementEdge(edge, index) {
+  const source = edge.from ?? edge.source
+  const target = edge.to ?? edge.target
+  if (source === undefined || target === undefined || source === null || target === null) {
+    return null
+  }
+
+  return {
+    data: {
+      ...edge,
+      id: String(edge.id || `e${index}`),
+      source: String(source),
+      target: String(target),
+      label: edge.label || '',
+    },
+  }
+}
+
+function serializeNode(node) {
+  return {
+    ...node.data(),
+    id: node.id(),
+    label: node.data('label') || '',
+  }
+}
+
+function serializeEdge(edge) {
+  const data = { ...edge.data() }
+  const source = edge.data('source')
+  const target = edge.data('target')
+  delete data.source
+  delete data.target
+
+  return {
+    ...data,
+    id: edge.id(),
+    from: source,
+    to: target,
+    label: edge.data('label') || '',
+  }
+}
+
+function serializeGraph(cy) {
+  return {
+    nodes: cy.nodes().map(serializeNode),
+    edges: cy.edges().map(serializeEdge),
+  }
+}
+
+function hasGraphData(data) {
+  return normalizeGraph(data).nodes.length > 0 || normalizeGraph(data).edges.length > 0
+}
+
+export default function CytoscapeApp({ initialData = EMPTY_GRAPH }) {
   const containerRef = useRef(null)
   const cyRef = useRef(null)
-  const [data, setData] = useState({ nodes: [], edges: [] })
+  const [data, setData] = useState(normalizeGraph(initialData))
 
   useEffect(() => {
+    if (hasGraphData(initialData)) {
+      setData(normalizeGraph(initialData))
+      return
+    }
+
+    let isActive = true
     fetch('/graph.json')
-      .then(r => r.json())
-      .then(d => setData(d))
-      .catch(() => setData({ nodes: [], edges: [] }))
-  }, [])
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to load graph: ${response.status}`)
+        }
+        return response.json()
+      })
+      .then((graph) => {
+        if (isActive) {
+          setData(normalizeGraph(graph))
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          setData(EMPTY_GRAPH)
+        }
+      })
+
+    return () => {
+      isActive = false
+    }
+  }, [initialData])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -25,8 +120,13 @@ export default function CytoscapeApp() {
     }
 
     const elements = []
-    ;(data.nodes || []).forEach(n => elements.push({ data: { id: String(n.id), label: n.label || '' } }))
-    ;(data.edges || []).forEach((e, i) => elements.push({ data: { id: e.id || ('e' + i), source: String(e.from), target: String(e.to), label: e.label || '' } }))
+    ;(data.nodes || []).forEach((node) => elements.push(toElementNode(node)))
+    ;(data.edges || []).forEach((edge, index) => {
+      const element = toElementEdge(edge, index)
+      if (element) {
+        elements.push(element)
+      }
+    })
 
     const cy = window.cytoscape({
       container: containerRef.current,
@@ -50,9 +150,7 @@ export default function CytoscapeApp() {
     // autosave
     let last = null
     const autosave = async () => {
-      const nodes = cy.nodes().map(n => ({ id: n.id(), label: n.data('label') }))
-      const edges = cy.edges().map(e => ({ from: e.data('source'), to: e.data('target'), label: e.data('label') }))
-      const out = { nodes, edges }
+      const out = serializeGraph(cy)
       const j = JSON.stringify(out)
       if (j !== last) {
         last = j
@@ -75,9 +173,7 @@ export default function CytoscapeApp() {
 
   const save = async () => {
     if (!cyRef.current) return
-    const nodes = cyRef.current.nodes().map(n => ({ id: n.id(), label: n.data('label') }))
-    const edges = cyRef.current.edges().map(e => ({ from: e.data('source'), to: e.data('target'), label: e.data('label') }))
-    const out = { nodes, edges }
+    const out = serializeGraph(cyRef.current)
     await fetch('/graph.json', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(out) })
     alert('Saved')
   }

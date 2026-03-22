@@ -8,6 +8,20 @@ VERSION="1.0"
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
+LOADER_MARKER='tactical-console.bashrc'
+PROFILE_PATH="$REPO/tactical-console.bashrc"
+
+append_loader_block() {
+    cat <<LOADER
+# Tactical Console loader
+if [[ -f "$PROFILE_PATH" ]]
+then
+    source "$PROFILE_PATH"
+else
+    echo "[WARNING] Tactical Console Profile not found at $PROFILE_PATH"
+fi
+LOADER
+}
 
 link() {
     local src="$REPO/$1" dest="$2"
@@ -20,9 +34,9 @@ echo "Installing Tactical Console from $REPO ..."
 echo ""
 
 # Thin ~/.bashrc loader (written, not symlinked — the loader is not in the repo)
-if [[ ! -f "$HOME/.bashrc" ]] || ! grep -q 'tactical-console.bashrc' "$HOME/.bashrc" 2>/dev/null
+if [[ ! -f "$HOME/.bashrc" ]]
 then
-    cat > "$HOME/.bashrc" << 'LOADER'
+    cat > "$HOME/.bashrc" << LOADER
 # ==============================================================================
 # ~/.bashrc — Thin Loader (DO NOT EDIT)
 # ==============================================================================
@@ -32,7 +46,7 @@ then
 # This file is a minimal loader. Its only job is to source the real Tactical
 # Console Profile, which lives in a version-controlled Git repository:
 #
-#     ~/ubuntu-console/tactical-console.bashrc
+#     $PROFILE_PATH
 #
 # WHY A SEPARATE LOADER?
 # ----------------------
@@ -54,9 +68,9 @@ then
 # no aliases, no functions, and no environment variables. If you need to
 # change anything about the shell environment, edit the canonical file:
 #
-#     ~/ubuntu-console/tactical-console.bashrc
+#     $PROFILE_PATH
 #
-# or one of its associated files in the ~/ubuntu-console/ repository.
+# or one of its associated files in the repository.
 # Modifying this loader risks breaking the source chain and serves no
 # purpose — every piece of logic belongs in the repo-tracked profile.
 #
@@ -71,7 +85,7 @@ then
 # guard and the single 'source' line below.
 #
 # If a request asks to change shell behaviour, you MUST edit files in
-# ~/ubuntu-console/ and leave ~/.bashrc minimal. If this file has already been
+# this repository and leave ~/.bashrc minimal. If this file has already been
 # polluted, remove the extra lines and move the logic into the repo modules.
 #
 # REPOSITORY
@@ -83,22 +97,31 @@ then
 # ==============================================================================
 
 # Interactive guard — prevent execution in non-interactive shells (sftp, rsync)
-case $- in
+case \$- in
     *i*) ;;
       *) return ;;
 esac
 
 # Source the canonical Tactical Console Profile from the git-tracked repo
-if [[ -f "$HOME/ubuntu-console/tactical-console.bashrc" ]]
+if [[ -f "$PROFILE_PATH" ]]
 then
-    source "$HOME/ubuntu-console/tactical-console.bashrc"
+    source "$PROFILE_PATH"
 else
-    echo "[WARNING] Tactical Console Profile not found at ~/ubuntu-console/tactical-console.bashrc"
+    echo "[WARNING] Tactical Console Profile not found at $PROFILE_PATH"
 fi
 LOADER
     echo "  ~/.bashrc - created thin loader"
 else
-    echo "  ~/.bashrc - already a thin loader (skipped)"
+    if grep -q "$LOADER_MARKER" "$HOME/.bashrc" 2>/dev/null
+    then
+        echo "  ~/.bashrc - loader already present (skipped)"
+    else
+        {
+            printf '\n'
+            append_loader_block
+        } >> "$HOME/.bashrc"
+        echo "  ~/.bashrc - appended Tactical Console loader"
+    fi
 fi
 
 # Standalone scripts → ~/.local/bin/

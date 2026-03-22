@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ==============================================================================
 # tac-exec — Run any command with the full Tactical Console function library.
 # ==============================================================================
@@ -14,7 +14,10 @@
 #           given command with all arguments.
 # ==============================================================================
 
-source "$HOME/ubuntu-console/env.sh"
+_tac_exec_bin="$(readlink -f "${BASH_SOURCE[0]}")"
+_tac_exec_root="$(cd "$(dirname "$_tac_exec_bin")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$_tac_exec_root/env.sh"
 
 if [[ $# -eq 0 ]]; then
     echo "Usage: tac-exec <command> [args...]"
@@ -23,5 +26,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 "$@"
+
+unset _tac_exec_bin _tac_exec_root
 
 # end of file

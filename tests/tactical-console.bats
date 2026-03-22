@@ -1793,6 +1793,50 @@ setup() {
     [[ "$line1" == "#!"* ]]
 }
 
+@test "install: preserves existing ~/.bashrc content when appending loader" {
+    local home_dir="$TAC_TEST_TMPDIR/install-home-preserve"
+    mkdir -p "$home_dir"
+    printf '%s\n' '# existing config' 'export KEEP_ME=1' > "$home_dir/.bashrc"
+
+    run env HOME="$home_dir" bash "$REPO_ROOT/install.sh"
+    [ "$status" -eq 0 ]
+
+    grep -q 'export KEEP_ME=1' "$home_dir/.bashrc"
+    grep -q 'tactical-console.bashrc' "$home_dir/.bashrc"
+    grep -Fq "$REPO_ROOT/tactical-console.bashrc" "$home_dir/.bashrc"
+}
+
+@test "install: does not duplicate loader when already present" {
+    local home_dir="$TAC_TEST_TMPDIR/install-home-idempotent"
+    mkdir -p "$home_dir"
+    cat > "$home_dir/.bashrc" << 'EOF'
+# existing config
+if [[ -f "$HOME/ubuntu-console/tactical-console.bashrc" ]]
+then
+    source "$HOME/ubuntu-console/tactical-console.bashrc"
+fi
+EOF
+    local before
+    before=$(cat "$home_dir/.bashrc")
+
+    run env HOME="$home_dir" bash "$REPO_ROOT/install.sh"
+    [ "$status" -eq 0 ]
+
+    local after
+    after=$(cat "$home_dir/.bashrc")
+    [ "$after" = "$before" ]
+}
+
+@test "bin: tac-exec sources env.sh relative to its own path" {
+    grep -q 'readlink -f "\${BASH_SOURCE\[0\]}"' "$REPO_ROOT/bin/tac-exec"
+    grep -q 'source "\$_tac_exec_root/env.sh"' "$REPO_ROOT/bin/tac-exec"
+}
+
+@test "cross-script: env.sh loads scripts relative to the repo file location" {
+    grep -q 'dirname "\${BASH_SOURCE\[0\]}"' "$REPO_ROOT/env.sh"
+    grep -q '_tac_lib_dir="\$_tac_env_root/scripts"' "$REPO_ROOT/env.sh"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 37. HYGIENE — Extended checks
 # ─────────────────────────────────────────────────────────────────────────────

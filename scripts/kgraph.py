@@ -20,6 +20,7 @@ import webbrowser
 import tempfile
 import shutil
 import sqlite3
+from functools import partial
 
 
 MEMORY_DB_CANDIDATES = [
@@ -173,6 +174,34 @@ HTML_TMPL = """<!doctype html>
         ];
         if (edge.semantic_score !== undefined) lines.push(`semantic_score: ${edge.semantic_score}`);
         return lines.join('\\n');
+      }
+
+      function serializeNode(node) {
+        return Object.assign({}, node.data(), {
+          id: node.id(),
+          label: node.data('label') || '',
+        });
+      }
+
+      function serializeEdge(edge) {
+        const data = Object.assign({}, edge.data());
+        const source = edge.data('source');
+        const target = edge.data('target');
+        delete data.source;
+        delete data.target;
+        return Object.assign(data, {
+          id: edge.id(),
+          from: source,
+          to: target,
+          label: edge.data('label') || '',
+        });
+      }
+
+      function serializeGraph(cy) {
+        return {
+          nodes: cy.nodes().map(serializeNode),
+          edges: cy.edges().map(serializeEdge),
+        };
       }
 
       async function loadGraph() {
@@ -400,13 +429,8 @@ HTML_TMPL = """<!doctype html>
         // autosave
         let last = null;
         setInterval(async () => {
-          const nodes = cy.nodes().map(n => {
-            const d = Object.assign({ id: n.id() }, n.data());
-            delete d.display_label;
-            return d;
-          });
-          const edges = cy.edges().map(e => ({ from: e.data('source'), to: e.data('target'), label: e.data('label') }));
-          const out = { nodes: nodes, edges: edges };
+          const out = serializeGraph(cy);
+          out.nodes.forEach(n => delete n.display_label);
           const j = JSON.stringify(out);
           if (j !== last) { last = j; try { await fetch('/graph.json', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: j }); console.log('autosaved'); } catch (e) { console.warn('autosave failed', e); } }
         }, 5000);
@@ -530,13 +554,8 @@ HTML_TMPL = """<!doctype html>
 
         // Save button
         document.getElementById('save').addEventListener('click', async () => {
-          const nodes = cy.nodes().map(n => {
-            const d = Object.assign({ id: n.id() }, n.data());
-            delete d.display_label;
-            return d;
-          });
-          const edges = cy.edges().map(e => ({ from: e.data('source'), to: e.data('target'), label: e.data('label') }));
-          const out = { nodes: nodes, edges: edges };
+          const out = serializeGraph(cy);
+          out.nodes.forEach(n => delete n.display_label);
           try { await fetch('/graph.json', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(out) }); alert('Saved'); } catch (e) { console.warn('save failed', e); }
         });
       })();
@@ -561,11 +580,32 @@ SAMPLE_GRAPH = {
 }
 
 
+def ensure_parent_dir(path: str):
+    parent = os.path.dirname(os.path.abspath(os.path.expanduser(path)))
+    if parent:
+      os.makedirs(parent, exist_ok=True)
+
+
 def generate_html(graph: dict, outpath: str):
     payload = json.dumps(graph)
     html = HTML_TMPL.replace('%s', payload, 1)
+    ensure_parent_dir(outpath)
     with open(outpath, 'w', encoding='utf-8') as f:
         f.write(html)
+
+
+def resolve_serve_target(path: str, force_embed: bool = False) -> tuple[str, str, bool]:
+  """Return the directory, filename, and frontend mode used for serving."""
+  repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+  static_dir = os.path.join(repo_root, 'frontend-g6', 'dist')
+  use_built_frontend = (not force_embed) and os.path.isdir(static_dir)
+
+  if use_built_frontend:
+    return static_dir, 'index.html', True
+
+  dirname = os.path.abspath(os.path.dirname(path) or '.')
+  filename = os.path.basename(path)
+  return dirname, filename, False
 
 
 def resolve_memory_db_path(preferred: str | None = None) -> str | None:
@@ -581,7 +621,7 @@ def resolve_memory_db_path(preferred: str | None = None) -> str | None:
 
 def init_graph_db(dbpath: str):
   path = os.path.expanduser(dbpath)
-  os.makedirs(os.path.dirname(path), exist_ok=True)
+  ensure_parent_dir(path)
   conn = sqlite3.connect(path)
   cur = conn.cursor()
   cur.execute("""
@@ -684,16 +724,7 @@ def save_to_graph_db(dbpath: str, graph: dict):
 
 
 def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: str | None = None, force_embed: bool = False, graph_db_path: str | None = None):
-  # Prefer serving a built frontend (frontend-g6/dist) if present in the repo.
-  repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-  static_dir = os.path.join(repo_root, 'frontend-g6', 'dist')
-  if (not force_embed) and os.path.isdir(static_dir):
-    os.chdir(static_dir)
-    filename = 'index.html'
-  else:
-    dirname = os.path.abspath(os.path.dirname(path))
-    filename = os.path.basename(path)
-    os.chdir(dirname)
+  serve_dir, filename, using_built_frontend = resolve_serve_target(path, force_embed=force_embed)
 
   _CORS_HEADERS = [
     ('Access-Control-Allow-Origin', '*'),
@@ -702,6 +733,9 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
   ]
 
   class GraphRequestHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, directory=None, **kwargs):
+      super().__init__(*args, directory=directory or serve_dir, **kwargs)
+
     store = store_path or os.path.expanduser('~/.openclaw/kgraph.json')
     graph_db = graph_db_path or os.path.expanduser(GRAPH_DB_DEFAULT)
     # Path to OpenClaw memory DB to use as fallback source.
@@ -783,7 +817,7 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
           save_to_graph_db(self.graph_db, payload)
 
           # Backward-compat mirror for tooling expecting kgraph.json.
-          os.makedirs(os.path.dirname(self.store), exist_ok=True)
+          ensure_parent_dir(self.store)
           with open(self.store, 'w', encoding='utf-8') as f:
             json.dump(payload, f)
 
@@ -799,11 +833,11 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
         return
       return super().do_POST()
 
-  handler = GraphRequestHandler
+  handler = partial(GraphRequestHandler, directory=serve_dir)
   httpd = HTTPServer((host, port), handler)
   addr, used_port = httpd.server_address
   # If serving the built frontend, point root to index.html
-  if os.path.isdir(static_dir):
+  if using_built_frontend:
     url = f'http://{addr}:{used_port}/'
   else:
     url = f'http://{addr}:{used_port}/{filename}'
@@ -888,7 +922,7 @@ def main():
 
     if args.install:
       dest = os.path.expanduser(args.install)
-      os.makedirs(os.path.dirname(dest), exist_ok=True)
+      ensure_parent_dir(dest)
       shutil.copy2(__file__, dest)
       os.chmod(dest, 0o755)
       print('Installed to', dest)
