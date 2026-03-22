@@ -20,9 +20,16 @@
 # __cache_fresh — Check if a cache file exists and is younger than TTL seconds.
 # Usage: __cache_fresh <cache_path> <ttl_seconds>  →  returns 0 (fresh) or 1
 # Deduplicates the repeated freshness-check pattern across all telemetry funcs.
+#
+# Error handling: Uses local variable for stat timestamp to avoid arithmetic
+# errors if stat fails. Falls back to 0 (epoch) which makes cache appear stale.
 # ---------------------------------------------------------------------------
 function __cache_fresh() {
-    [[ -f "$1" ]] && (( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) < $2 ))
+    local _cache_path="$1" _ttl="$2" _ts _now
+    [[ -f "$_cache_path" ]] || return 1
+    _ts=$(stat -c %Y "$_cache_path" 2>/dev/null) || _ts=0
+    _now=$(date +%s)
+    (( _now - _ts < _ttl ))
 }
 
 # ---------------------------------------------------------------------------
