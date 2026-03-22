@@ -1959,6 +1959,42 @@ EOF
     grep -q 'systemctl --user daemon-reload >/dev/null 2>&1 || true' "$REPO_ROOT/scripts/09-openclaw.sh"
 }
 
+@test "openclaw: restore recreates missing parent directories before moving files" {
+    command -v zip >/dev/null || skip "zip not installed"
+    command -v unzip >/dev/null || skip "unzip not installed"
+
+    local home_dir="$TAC_TEST_TMPDIR/restore-home-fresh"
+    local restore_root="$TAC_TEST_TMPDIR/restore-target-fresh"
+    local backups_dir="$home_dir/.openclaw/backups"
+    local snapshot_src="$TAC_TEST_TMPDIR/restore-snapshot-src"
+    local backup_zip="$backups_dir/snapshot_20260322_000000.zip"
+
+    mkdir -p "$backups_dir" "$snapshot_src/.openclaw/workspace" \
+        "$snapshot_src/.openclaw/agents" "$snapshot_src/.llm"
+    printf '%s\n' 'workspace-ok' > "$snapshot_src/.openclaw/workspace/state.txt"
+    printf '%s\n' 'agent-ok' > "$snapshot_src/.openclaw/agents/agent.txt"
+    printf '%s\n' '{"restored":true}' > "$snapshot_src/.openclaw/openclaw.json"
+    printf '%s\n' '1|demo|demo.gguf' > "$snapshot_src/.llm/models.conf"
+
+    (cd "$snapshot_src" && zip -qr "$backup_zip" .)
+
+    run env HOME="$home_dir" USER="${USER:-wayne}" bash -lc "
+        source '$REPO_ROOT/env.sh' >/dev/null 2>&1
+        export OC_ROOT='$restore_root/.openclaw'
+        export OC_WORKSPACE='\$OC_ROOT/workspace'
+        export OC_AGENTS='\$OC_ROOT/agents'
+        export OC_LOGS='\$OC_ROOT/logs'
+        export OC_BACKUPS='$backups_dir'
+        export LLM_REGISTRY='$restore_root/.llm/models.conf'
+        printf 'y\n' | oc-restore >/dev/null 2>&1
+        test -f '\$OC_WORKSPACE/state.txt'
+        test -f '\$OC_AGENTS/agent.txt'
+        test -f '\$OC_ROOT/openclaw.json'
+        test -f '$restore_root/.llm/models.conf'
+    "
+    [ "$status" -eq 0 ]
+}
+
 @test "dashboard: bashrc diagnostics target the canonical tactical-console.bashrc" {
     grep -q 'local src="\$TACTICAL_REPO_ROOT/tactical-console.bashrc"' "$REPO_ROOT/scripts/12-dashboard-help.sh"
 }

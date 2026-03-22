@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -1235,6 +1235,7 @@ function oc-restore() {
     # restore must NOT wipe workspace/agents if it has no replacements.
     # Atomic swap: rename current → .bak, move new into place, then remove .bak.
     # If the move fails, the .bak can be manually restored (no total-loss window).
+    mkdir -p "$OC_ROOT" "$(dirname "$LLM_REGISTRY")"
     if [[ -d "$tmp_restore/.openclaw/workspace" ]]
     then
         [[ -d "$OC_WORKSPACE" ]] && mv "$OC_WORKSPACE" "${OC_WORKSPACE}.bak"
