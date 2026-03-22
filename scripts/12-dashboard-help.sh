@@ -377,7 +377,7 @@ function bashrc_diagnose() {
     echo "=== ShellCheck ==="
     if command -v shellcheck >/dev/null 2>&1
     then
-        local src="${BASH_SOURCE[0]:-$HOME/ubuntu-console/tactical-console.bashrc}"
+        local src="${BASH_SOURCE[0]:-$TACTICAL_REPO_ROOT/tactical-console.bashrc}"
         local sc_count
         sc_count=$(shellcheck -s bash "$src" 2>&1 | grep -c '^In ' || true)
         echo "  Findings: $sc_count"
@@ -391,7 +391,7 @@ function bashrc_diagnose() {
 # without affecting the current session.
 # ---------------------------------------------------------------------------
 function bashrc_dryrun() {
-    local src="${BASH_SOURCE[0]:-$HOME/ubuntu-console/tactical-console.bashrc}"
+    local src="${BASH_SOURCE[0]:-$TACTICAL_REPO_ROOT/tactical-console.bashrc}"
     echo "Dry-run: sourcing $src in a subshell..."
     if bash -n "$src" 2>&1
     then

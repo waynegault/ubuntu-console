@@ -1597,6 +1597,12 @@ setup() {
     [[ -n "$AI_STORAGE_ROOT" ]]
 }
 
+@test "constants: TACTICAL_REPO_ROOT is set to an absolute directory" {
+    [[ -n "$TACTICAL_REPO_ROOT" ]]
+    [[ "$TACTICAL_REPO_ROOT" == /* ]]
+    [[ -d "$TACTICAL_REPO_ROOT" ]]
+}
+
 @test "constants: OC_WORKSPACE is under OC_ROOT" {
     [[ "$OC_WORKSPACE" == "$OC_ROOT"* ]]
 }
@@ -1643,6 +1649,10 @@ setup() {
 
 @test "constants: QUANT_GUIDE path is set" {
     [[ -n "$QUANT_GUIDE" ]]
+}
+
+@test "constants: QUANT_GUIDE is under TACTICAL_REPO_ROOT" {
+    [[ "$QUANT_GUIDE" == "$TACTICAL_REPO_ROOT/"* ]]
 }
 
 @test "constants: LOG_MAX_BYTES is numeric" {
@@ -1835,6 +1845,20 @@ EOF
 @test "cross-script: env.sh loads scripts relative to the repo file location" {
     grep -q 'dirname "\${BASH_SOURCE\[0\]}"' "$REPO_ROOT/env.sh"
     grep -q '_tac_lib_dir="\$_tac_env_root/scripts"' "$REPO_ROOT/env.sh"
+}
+
+@test "bin: all oc-* wrappers resolve tac-exec relative to the wrapper path" {
+    local f
+    for f in "$REPO_ROOT"/bin/oc-*; do
+        [[ -f "$f" ]] || continue
+        grep -q '_tac_bin_dir=' "$f"
+        grep -q 'exec "\$_tac_bin_dir/tac-exec"' "$f"
+    done
+}
+
+@test "openclaw: restore writes tactical-console.bashrc into TACTICAL_REPO_ROOT" {
+    grep -q 'mkdir -p "\$TACTICAL_REPO_ROOT"' "$REPO_ROOT/scripts/09-openclaw.sh"
+    grep -q 'cp "\$tmp_restore/ubuntu-console/tactical-console.bashrc" "\$TACTICAL_REPO_ROOT/tactical-console.bashrc"' "$REPO_ROOT/scripts/09-openclaw.sh"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

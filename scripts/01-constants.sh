@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 
 # ==============================================================================
@@ -14,7 +14,7 @@
 # @depended-on-by: aliases (§3), design-tokens (§4), ui-engine (§5), hooks (§6),
 #   telemetry (§7), maintenance (§8), openclaw (§9), deployment (§10),
 #   llm-manager (§11), dashboard (§12), init (§13)
-# @exports: AI_STORAGE_ROOT,
+# @exports: AI_STORAGE_ROOT, TACTICAL_REPO_ROOT,
 #   OC_ROOT, OPENCLAW_ROOT, OC_WORKSPACE, OC_AGENTS, OC_LOGS, OC_BACKUPS,
 #   CooldownDB, ErrorLogPath, OC_TMP_LOG, LLAMA_ROOT,
 #   LLAMA_MODEL_DIR, LLAMA_DRIVE_ROOT, LLAMA_ARCHIVE_DIR, LLAMA_SERVER_BIN,
@@ -25,6 +25,7 @@
 
 # ---- Storage Roots ----
 export AI_STORAGE_ROOT="$HOME"
+export TACTICAL_REPO_ROOT="${TACTICAL_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # ---- OpenClaw ----
 export OC_ROOT="$AI_STORAGE_ROOT/.openclaw"
@@ -47,7 +48,7 @@ export LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active"
 export LLAMA_ARCHIVE_DIR="$LLAMA_DRIVE_ROOT/archive"
 # Quantization priority guide — editable config controlling download warnings.
 # See ~/ubuntu-console/quant-guide.conf for rating/description of each quant.
-export QUANT_GUIDE="$HOME/ubuntu-console/quant-guide.conf"
+export QUANT_GUIDE="$TACTICAL_REPO_ROOT/quant-guide.conf"
 # Detect drive size at startup; falls back to 200 GB if df unavailable.
 # WARNING: If the drive is not mounted, all capacity calculations will use
 # the 200GB fallback, which may over- or under-estimate available space.

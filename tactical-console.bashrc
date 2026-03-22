@@ -137,7 +137,9 @@ _TAC_LOADER_VERSION="3.0"
 # Design-tokens (03) loads before aliases (04) so that hooks (06) can read
 # C_* variables at source time when setting _TAC_ADMIN_BADGE.
 
-_tac_module_dir="$HOME/ubuntu-console/scripts"
+_tac_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export TACTICAL_REPO_ROOT="${TACTICAL_REPO_ROOT:-$_tac_repo_root}"
+_tac_module_dir="$TACTICAL_REPO_ROOT/scripts"
 
 # Source modules (timed when DEBUG_TAC_STARTUP is set) and accumulate
 # module versions from their "# Module Version: N" comment.
@@ -168,7 +170,7 @@ done
 
 export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
 
-unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv
+unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv _tac_repo_root
 
 # ==============================================================================
 

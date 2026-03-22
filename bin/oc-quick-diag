@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Thin wrapper — delegates to the real 'oc-diag' function via tac-exec
-exec ~/ubuntu-console/bin/tac-exec oc diag "$@"
+_tac_bin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$_tac_bin_dir/tac-exec" oc diag "$@"
 # end of file

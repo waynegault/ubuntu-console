@@ -1258,8 +1258,8 @@ function oc-restore() {
     [[ -f "$tmp_restore/.bashrc" ]] && cp "$tmp_restore/.bashrc" "$HOME/.bashrc"
     if [[ -f "$tmp_restore/ubuntu-console/tactical-console.bashrc" ]]
     then
-        mkdir -p "$HOME/ubuntu-console"
-        cp "$tmp_restore/ubuntu-console/tactical-console.bashrc" "$HOME/ubuntu-console/tactical-console.bashrc"
+        mkdir -p "$TACTICAL_REPO_ROOT"
+        cp "$tmp_restore/ubuntu-console/tactical-console.bashrc" "$TACTICAL_REPO_ROOT/tactical-console.bashrc"
     fi
     local _rs
     for _rs in .local/bin/llama-watchdog.sh .local/bin/tac_hostmetrics.sh
@@ -1781,7 +1781,7 @@ export -f wacli
 #   -h|--help   Show usage
 # ---------------------------------------------------------------------------
 function oc-kgraph() {
-    local KG_PY="$HOME/ubuntu-console/scripts/kgraph.py"
+    local KG_PY="$TACTICAL_REPO_ROOT/scripts/kgraph.py"
     if [[ ! -f "$KG_PY" ]]; then
         __tac_info "kgraph" "[NOT FOUND: $KG_PY]" "$C_Error"
         return 1
@@ -1812,7 +1812,9 @@ function oc-kgraph() {
         python3 - <<'PY' >/dev/null 2>&1 || true
 import sys
 import os
-sys.path.insert(0, os.path.expanduser('~/ubuntu-console'))
+repo_root = os.environ.get('TACTICAL_REPO_ROOT')
+if repo_root:
+    sys.path.insert(0, repo_root)
 from scripts import kgraph
 memory_db = kgraph.resolve_memory_db_path()
 if memory_db:

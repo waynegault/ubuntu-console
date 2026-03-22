@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 3. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -31,7 +31,7 @@ alias cls='clear_tactical'
 alias reload='command clear; exec bash'
 alias m='tactical_dashboard'
 alias cpwd='copy_path'
-alias unittest='~/ubuntu-console/scripts/run-tests.sh'
+alias unittest='"$TACTICAL_REPO_ROOT"/scripts/run-tests.sh'
 
 # g — Shortcut for 'oc g' (launch knowledge graph server).
 alias g='oc g'
@@ -46,7 +46,7 @@ function code() {
 }
 # oedit — Open tactical-console.bashrc in VS Code for editing.
 function oedit() {
-    __vsc_open "$HOME/ubuntu-console/tactical-console.bashrc" "VS Code opened... (run 'reload' to apply changes)"
+    __vsc_open "$TACTICAL_REPO_ROOT/tactical-console.bashrc" "VS Code opened... (run 'reload' to apply changes)"
 }
 # llmconf — Open the LLM model registry config in VS Code.
 function llmconf() {
