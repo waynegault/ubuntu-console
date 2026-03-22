@@ -91,6 +91,22 @@ function __restore_nullglob() {
 }
 
 # ---------------------------------------------------------------------------
+# __require_command — Verify a command is installed.
+# Usage: __require_command <command_name>
+# Prints an error and returns 1 if missing. Deduplicates the repeated
+# `command -v X >/dev/null 2>&1` pattern across multiple modules.
+# ---------------------------------------------------------------------------
+function __require_command() {
+    local _cmd="$1"
+    if ! command -v "$_cmd" >/dev/null 2>&1
+    then
+        __tac_info "$_cmd" "[NOT INSTALLED]" "$C_Error"
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __require_openclaw — Verify openclaw CLI is installed.
 # Prints an error and returns 1 if missing. Deduplicates the repeated
 # `command -v openclaw >/dev/null` checks across §9 functions.
