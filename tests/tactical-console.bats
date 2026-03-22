@@ -1394,6 +1394,46 @@ setup() {
     [[ "$output" == *"Usage"* ]]
 }
 
+@test "llm-manager: local_chat function is defined" {
+    declare -f local_chat >/dev/null
+}
+
+@test "llm-manager: wtf_repl function is defined" {
+    declare -f wtf_repl >/dev/null
+}
+
+@test "llm-manager: chat-context function is defined" {
+    declare -f chat-context >/dev/null
+}
+
+@test "llm-manager: chat-pipe function is defined" {
+    declare -f chat-pipe >/dev/null
+}
+
+@test "llm-manager: __llm_chat_send function is defined" {
+    declare -f __llm_chat_send >/dev/null
+}
+
+@test "llm-manager: __llm_stream function is defined" {
+    declare -f __llm_stream >/dev/null
+}
+
+@test "llm-manager: __calc_gpu_layers function is defined" {
+    declare -f __calc_gpu_layers >/dev/null
+}
+
+@test "llm-manager: __calc_ctx_size function is defined" {
+    declare -f __calc_ctx_size >/dev/null
+}
+
+@test "llm-manager: __calc_threads function is defined" {
+    declare -f __calc_threads >/dev/null
+}
+
+@test "llm-manager: __quant_label function is defined" {
+    declare -f __quant_label >/dev/null
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 24. OC DISPATCHER — Extended subcommand routing
 # ─────────────────────────────────────────────────────────────────────────────
