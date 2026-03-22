@@ -3,8 +3,29 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
+
+# ==============================================================================
+# 0. USER-CONFIGURABLE PATHS (Customize these for your environment)
+# ==============================================================================
+# These paths can be overridden by setting environment variables in ~/.bashrc
+# BEFORE sourcing tactical-console.bashrc, or by editing the defaults below.
+#
+# WSL Windows Drive Mounts (WSL2 default is /mnt/<drive_letter>)
+#   - LLAMA_DRIVE_ROOT: Mount point for model storage drive (default: /mnt/m)
+#   - WINDOWS_USER_ROOT: Windows user home directory (default: /mnt/c/Users/$USER)
+#
+# To override, add to ~/.bashrc before sourcing tactical-console.bashrc:
+#   export LLAMA_DRIVE_ROOT="/mnt/n"  # Use different drive
+#   export WINDOWS_USER_ROOT="/mnt/c/Users/yourname"
+# ==============================================================================
+
+# ---- WSL Windows Drive Configuration ----
+# Model storage drive (change if your models are on a different drive)
+export LLAMA_DRIVE_ROOT="${LLAMA_DRIVE_ROOT:-/mnt/m}"
+# Windows user directory (for cross-path lookups like VS Code, API keys)
+export WINDOWS_USER_ROOT="${WINDOWS_USER_ROOT:-/mnt/c/Users}"
 
 # ==============================================================================
 # 1. GLOBAL CONSTANTS (ALL PATHS / PORTS DEFINED HERE)
@@ -21,7 +42,7 @@
 #   LLM_REGISTRY, ACTIVE_LLM_FILE, QUANT_GUIDE,
 #   LLM_LOG_FILE, LLM_TPS_CACHE, TAC_CACHE_DIR, VENV_DIR, UIWidth, LAST_TPS,
 #   LLM_PORT, OC_PORT, LOCAL_LLM_URL, __TAC_HAS_BATTERY, __resolve_vscode_bin,
-#   VSCODE_BIN, WSL_NVIDIA_SMI, PATH, HISTCONTROL
+#   VSCODE_BIN, WSL_NVIDIA_SMI, PATH, HISTCONTROL, WINDOWS_USER_ROOT
 
 # ---- Storage Roots ----
 export AI_STORAGE_ROOT="$HOME"
@@ -129,7 +150,7 @@ function __resolve_vscode_bin() {
     # Cache miss or expired — resolve path
     local win_user
     win_user=$(pwsh.exe -NoProfile -Command '[Environment]::UserName' 2>/dev/null | tr -d '\r')
-    VSCODE_BIN="/mnt/c/Users/${win_user}/AppData/Local/Programs/Microsoft VS Code/bin/code"
+    VSCODE_BIN="$WINDOWS_USER_ROOT/${win_user}/AppData/Local/Programs/Microsoft VS Code/bin/code"
     if [[ ! -x "$VSCODE_BIN" ]]
     then
         VSCODE_BIN=$(command -v code 2>/dev/null || echo "")
