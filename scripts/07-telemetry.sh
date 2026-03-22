@@ -57,13 +57,17 @@ function __get_disk() {
 # subshell to refresh via tac_hostmetrics.sh (~4s typeperf round-trip).
 # This avoids blocking the dashboard render on slow Windows IPC.
 # Falls back to "0|0|0" on first boot when no cache exists yet.
+#
+# Race condition fix: Uses PID-suffixed temp file to avoid conflicts if
+# multiple shells refresh simultaneously. Temp file is cleaned up on exit.
 # ---------------------------------------------------------------------------
 function __get_host_metrics() {
     local cache="$TAC_CACHE_DIR/tac_hostmetrics"
+    local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
     if ! __cache_fresh "$cache" 10
     then
-        ( bash "$TACTICAL_REPO_ROOT/bin/tac_hostmetrics.sh" > "${cache}.tmp" 2>/dev/null \
-            && mv "${cache}.tmp" "$cache" ) &>/dev/null &
+        ( bash "$TACTICAL_REPO_ROOT/bin/tac_hostmetrics.sh" > "$cache_tmp" 2>/dev/null \
+            && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; } ) &>/dev/null &
         __TAC_BG_PIDS+=("$!")
     fi
     # Return stale cache data while background refresh runs.
@@ -93,9 +97,13 @@ function __resolve_smi() {
 # ---------------------------------------------------------------------------
 # __get_gpu — Return CSV: name,temp,utilization,mem_used,mem_total (10s TTL).
 # NVIDIA-only detail for the GPU COMPUTE dashboard row.
+#
+# Race condition fix: Uses PID-suffixed temp file to avoid conflicts if
+# multiple shells refresh simultaneously. Temp file is cleaned up on failure.
 # ---------------------------------------------------------------------------
 function __get_gpu() {
     local cache="$TAC_CACHE_DIR/tac_gpu"
+    local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
     if __cache_fresh "$cache" 10
     then
         cat "$cache"; return
@@ -109,9 +117,15 @@ function __get_gpu() {
             raw=$("$smi_cmd" \
                 --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total \
                 --format=csv,noheader,nounits 2>/dev/null)
-            [[ -n "$raw" ]] && printf '%s' "${raw//NVIDIA GeForce /}" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+            if [[ -n "$raw" ]]
+            then
+                printf '%s' "${raw//NVIDIA GeForce /}" > "$cache_tmp" \
+                    && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
+            else
+                echo "N/A" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
+            fi
         else
-            echo "N/A" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+            echo "N/A" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         fi
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
@@ -127,9 +141,13 @@ function __get_gpu() {
 # __get_battery — Return battery percentage + status string (120s TTL).
 # Uses /sys/class/power_supply on laptops; skips pwsh entirely on desktops
 # (detected once at startup via __TAC_HAS_BATTERY).
+#
+# Race condition fix: Uses PID-suffixed temp file to avoid conflicts if
+# multiple shells refresh simultaneously. Temp file is cleaned up on failure.
 # ---------------------------------------------------------------------------
 function __get_battery() {
     local cache="$TAC_CACHE_DIR/tac_batt"
+    local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
     if __cache_fresh "$cache" 120
     then
         cat "$cache"; return
@@ -141,9 +159,9 @@ function __get_battery() {
             cap=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || echo "100")
             local bstat
             bstat=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo "Unknown")
-            echo "${cap}% (${bstat})" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+            echo "${cap}% (${bstat})" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         else
-            echo "A/C POWERED" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+            echo "A/C POWERED" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         fi
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
@@ -185,6 +203,7 @@ function __get_git() {
 # The background subshell ensures the dashboard never blocks.
 function __get_tokens() {
     local cache="$TAC_CACHE_DIR/tac_tokens"
+    local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
     if __cache_fresh "$cache" 30
     then
         cat "$cache"; return
@@ -213,9 +232,9 @@ function __get_tokens() {
 
         if [[ -n "$result" && "$result" != "null|null" ]]
         then
-            echo "$result" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+            echo "$result" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         else
-            echo "N/A|0" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+            echo "N/A|0" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         fi
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
@@ -229,9 +248,13 @@ function __get_tokens() {
 
 # ---------------------------------------------------------------------------
 # __get_oc_version — Fetch OpenClaw CLI version (24h TTL — barely changes).
+#
+# Race condition fix: Uses PID-suffixed temp file to avoid conflicts if
+# multiple shells refresh simultaneously. Temp file is cleaned up on failure.
 # ---------------------------------------------------------------------------
 function __get_oc_version() {
     local cache="$TAC_CACHE_DIR/tac_ocversion"
+    local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
     if __cache_fresh "$cache" "$COOLDOWN_DAILY"
     then
         cat "$cache"; return
@@ -243,7 +266,7 @@ function __get_oc_version() {
             ocVersion=$(openclaw --version 2>/dev/null | awk '{print $2}' | tr -d '\r\n')
             [[ -n "$ocVersion" ]] && ocVersion="v${ocVersion#v}"
         fi
-        echo "$ocVersion" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+        echo "$ocVersion" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
     if [[ -f "$cache" ]]
@@ -259,12 +282,16 @@ function __get_oc_version() {
 # Returns "count|age|version".
 #   count — from `openclaw sessions` (cached in /dev/shm, 60s TTL)
 #   age   — seconds since the cached value was last refreshed ("0" = fresh)
+#
+# Race condition fix: Uses PID-suffixed temp file to avoid conflicts if
+# multiple shells refresh simultaneously. Temp file is cleaned up on failure.
 # ---------------------------------------------------------------------------
 function __get_oc_metrics() {
     local ver
     ver=$(__get_oc_version)
 
     local cache="$TAC_CACHE_DIR/tac_ocmetrics"
+    local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
     if ! __cache_fresh "$cache" 60
     then
         (
@@ -274,7 +301,7 @@ function __get_oc_metrics() {
                 sessionCount=$(openclaw sessions --all-agents --json 2>/dev/null | jq -r '.count // 0' 2>/dev/null)
                 sessionCount=${sessionCount:-0}
             fi
-            echo "$sessionCount" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+            echo "$sessionCount" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         ) &>/dev/null &
         __TAC_BG_PIDS+=("$!")
     fi
@@ -295,9 +322,13 @@ function __get_oc_metrics() {
 # ---------------------------------------------------------------------------
 # __get_llm_slots — Async-cached query to llama.cpp /slots endpoint (5s TTL).
 # Returns JSON from the /slots API, or empty string if unavailable.
+#
+# Race condition fix: Uses PID-suffixed temp file to avoid conflicts if
+# multiple shells refresh simultaneously. Temp file is cleaned up on failure.
 # ---------------------------------------------------------------------------
 function __get_llm_slots() {
     local cache="$TAC_CACHE_DIR/tac_llm_slots"
+    local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
     if __cache_fresh "$cache" 5
     then
         cat "$cache"; return
@@ -305,8 +336,8 @@ function __get_llm_slots() {
     (
         if __test_port "$LLM_PORT"
         then
-            curl -sf --max-time 2 "http://127.0.0.1:${LLM_PORT}/slots" > "${cache}.tmp" 2>/dev/null \
-                && mv "${cache}.tmp" "$cache"
+            curl -sf --max-time 2 "http://127.0.0.1:${LLM_PORT}/slots" > "$cache_tmp" 2>/dev/null \
+                && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         fi
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
