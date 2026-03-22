@@ -5,7 +5,7 @@
 > **Environment:** WSL2 Ubuntu 24.04 on Windows 11 Pro
 > **Hardware:** Intel i9 / Intel Iris Xe (iGPU) / RTX 3050 Ti 4 GB VRAM (CUDA) / Laptop
 > **Author:** Wayne
-> **Last Major Audit:** March 2026 (v3.0: modularisation from monolith; v3.1: full inspection-audit + UI header refresh + `up` performance fix)
+> **Last Major Audit:** March 2026 (v3.0: modularisation from monolith; v3.1: full inspection-audit + UI header refresh + `up` performance fix; follow-up review captured current improvement priorities and roadmap items)
 
 ---
 
@@ -21,6 +21,8 @@
 8. [Dependencies & Requirements](#8-dependencies--requirements)
 9. [Troubleshooting](#9-troubleshooting)
 10. [Repository Layout](#10-repository-layout)
+11. [Improvement Opportunities](#11-improvement-opportunities)
+12. [Proposed Future Functionality](#12-proposed-future-functionality)
 
 ---
 
@@ -38,7 +40,7 @@ dependency order. It manages:
   (llama.cpp) with model registry, GPU/CPU offloading, and streaming chat.
 - **OpenClaw agent framework** — Gateway lifecycle, agent orchestration,
   session management, backup/restore, and API key bridging from Windows.
-- **Maintenance** — A 10-step `up` pipeline that updates APT, NPM, Cargo,
+- **Maintenance** — A 12-step `up` pipeline that updates APT, NPM, Cargo,
   validates Python fleets, audits disk space, and kills orphaned processes.
 - **Deployment** — Git commit/push with optional LLM-generated commit
   messages, plus rsync to an OpenClaw production workspace.
@@ -115,20 +117,22 @@ command documented here is also listed in the help index.
 
 ### System Maintenance (`up`)
 
-Run `up` to execute the 10-step maintenance pipeline:
+Run `up` to execute the 12-step maintenance pipeline:
 
 | Step | What It Does |
 |---|---|
 | 1. Internet Connectivity | Pings `github.com` |
 | 2. APT Packages | Split cooldown: `apt-get update` (24h) + `upgrade --no-install-recommends` (7d) |
 | 3. NPM & Cargo | `npm update -g` and `cargo install-update -a` |
-| 4. OpenClaw Framework | Runs `openclaw doctor` |
-| 5. Python Venv Cloaking | Reports active virtual environment |
-| 6. Python Fleet | Scans `/usr/bin/python3.*` for installed versions |
-| 7. GPU Status | Queries `nvidia-smi` readiness |
-| 8. Sanitation | Cleans temp files from `/tmp/openclaw` |
-| 9. Disk Space Audit | Warns if any mount exceeds 90% |
-| 10. Stale Processes | Kills orphaned `llama-server` instances |
+| 4. R Packages | Updates CRAN and Bioconductor packages when available |
+| 5. OpenClaw Framework | Runs `openclaw doctor` |
+| 6. Python Venv Cloaking | Reports active virtual environment |
+| 7. Python Fleet | Scans `/usr/bin/python3.*` for installed versions |
+| 8. GPU Status | Queries `nvidia-smi` readiness |
+| 9. Sanitation | Cleans temp files from `/tmp/openclaw` |
+| 10. Disk Space Audit | Warns if any mount exceeds 90% |
+| 11. Stale Processes | Kills orphaned `llama-server` instances |
+| 12. README Sync | Checks a few tracked repo facts for documentation drift |
 
 Each step that involves network or package operations has a **cooldown**
 stored in `~/.openclaw/maintenance_cooldowns.txt`. APT index refresh uses a
@@ -250,7 +254,7 @@ bridged API keys.
 | `so` | Start the OpenClaw gateway. Injects API keys into systemd, runs `openclaw gateway start`, waits 3s, checks port 18789. |
 | `xo` | Stop the gateway (**stop only — does not restart**). Runs `openclaw gateway stop`, then `systemctl --user stop openclaw-gateway.service`, removes supervisor lock. When called from an AI agent context, prints a warning to use `openclaw gateway restart` instead. |
 | `oc-restart` | Restart gateway (native: `openclaw gateway restart`). |
-| `oc-health` | Deep probe: checks port 18789, then calls `openclaw health --json` and parses the status field. |
+| `oc-health` | Deep probe: checks port 18789, then calls `openclaw health --json` and parses the status field. Supports `--json` and `--plain` for automation. |
 | `oc-tail` | Live-tail gateway logs via `openclaw logs --follow`. |
 
 ### Logs
@@ -288,17 +292,18 @@ bridged API keys.
 | `ockeys` | Show Windows API keys and their WSL visibility status |
 | `ocms` | Probe model provider status |
 | `oc-diag` | 5-point diagnostic: doctor, gateway, models, env vars, recent logs |
+| `oc-doctor-local` | Validate the full local OpenClaw + llama.cpp path end-to-end. Supports `--json` and `--plain`. |
 | `oc-sec` | Deep security audit: `openclaw security audit --deep` |
 | `oc-docs` | Search OpenClaw docs from the terminal |
 | `ocdoc-fix` | Run `openclaw doctor --fix` with automatic config backup |
-| `oc-cache-clear` | Wipe all `/dev/shm/tac_*` telemetry caches |
+| `oc-cache-clear` | Wipe all `/dev/shm/tac_*` telemetry caches. Supports `--dry-run`. |
 
 ### Backup & Restore
 
 | Command | What It Does |
 |---|---|
 | `oc-backup` | ZIP snapshot of OpenClaw config (`openclaw.json`, `auth.json`), `workspace/`, `agents/`, `models.conf`, `~/.bashrc` loader, `tactical-console.bashrc`, standalone scripts (`~/.local/bin/oc-*`, `llama-watchdog.sh`, `tac_hostmetrics.sh`), and systemd units. Saved to `~/.openclaw/backups/snapshot_YYYYMMDD_HHMMSS.zip`. |
-| `oc-restore` | Restore from the most recent snapshot (destructive — prompts for confirmation). Validates ZIP contents and accepts config-only backups. |
+| `oc-restore` | Restore from the most recent snapshot (destructive — prompts for confirmation). Validates ZIP contents, accepts config-only backups, and supports `--dry-run`. |
 
 ### Extensions & Advanced
 
@@ -402,7 +407,7 @@ column is populated by `model bench`.
 | `--cont-batching` | always | Enables continuous batching for concurrent requests. |
 | `--jinja` | always | Enables Jinja2 chat template processing from GGUF metadata (Qwen3, Phi-4, Gemma3). |
 | Bind address | `127.0.0.1` | Prevents LAN exposure — loopback only. |
-| Health poll | 30 × 1s | Waits up to 30 seconds for model boot. |
+| Health poll | adaptive 45–180s | Shared readiness logic is used by both `model use` and `model bench`, with longer timeouts for CPU-only and larger models. |
 
 ### Quantization Guide
 
@@ -427,13 +432,17 @@ Edit `quant-guide.conf` directly to adjust ratings as hardware or advice changes
 |---|---|
 | `model scan` | Scan `$LLAMA_MODEL_DIR` for GGUF files, read metadata, auto-calculate optimal gpu_layers/ctx/threads, rebuild registry, and auto-archive discouraged quants via `quant-guide.conf`. |
 | `model list` | Show numbered model registry with name, file, size, arch, quant, layers, TPS. Active model marked with ▶. |
-| `model use N` | Start model #N with `-ngl 999`, dynamic threads, `--flash-attn on`, `--prio 2`, `--mlock`, `--jinja`. Batch sizes: 4096/1024 for GPU, 512/512 for CPU-only. Reports actual GPU offload count after boot. Polls `/health` for up to 30s. |
+| `model use N` | Start model #N with `-ngl 999`, dynamic threads, `--flash-attn on`, `--prio 2`, `--mlock`, `--jinja`. Batch sizes: 4096/1024 for GPU, 512/512 for CPU-only. Reports actual GPU offload count after boot. Uses shared adaptive health polling. |
 | `model stop` | `pkill` the llama-server process, remove state file |
-| `model status` | Show currently running model details |
+| `model status` | Show currently running model details. Supports `--json` and `--plain`. |
+| `model doctor` | Validate registry integrity, default model wiring, GPU visibility, watchdog state, and local ports |
+| `model recommend` | Rank scanned models for a 4 GB VRAM system using quant, size, architecture, and saved TPS |
 | `model info N` | Display full details for model #N including on-disk status |
 | `model bench` | Benchmark all on-disk models: starts each, runs burn-in, records TPS. Results persist to `/mnt/m/.llm/bench_*.tsv`. |
-| `model delete N` | Permanently delete model #N from disk and deregister |
-| `model archive N` | Move model #N to `/mnt/m/archive/` and deregister |
+| `model bench-diff` / `model bench-compare` | Compare two benchmark TSV runs |
+| `model bench-history` | Summarise recent saved benchmark TSV runs |
+| `model delete N` | Permanently delete model #N from disk and deregister. Supports `--dry-run`. |
+| `model archive N` | Move model #N to `/mnt/m/archive/` and deregister. Supports `--dry-run`. |
 | `model download` | Download GGUF models from Hugging Face Hub (`repo:file` format). Checks `quant-guide.conf` and warns on discouraged quants. Validates disk space before downloading. |
 | `serve N` | Convenience alias for `model use N` |
 | `halt` | Convenience alias for `model stop` |
@@ -822,20 +831,21 @@ Do not edit the monolith — it is a frozen snapshot.
 |---|---|---|
 | `m` | Dashboard | Render full tactical dashboard |
 | `h` | Help | Show command help index |
-| `up` | Maintenance | 10-step system maintenance |
+| `up` | Maintenance | 12-step system maintenance |
 | `cls` | Shell | Clear screen + banner |
 | `reload` | Shell | Full profile reload (`exec bash`) |
 | `sysinfo` | System | One-line hardware summary |
 | `get-ip` | Network | WSL + WAN IP addresses |
 | `cpwd` | Utility | Copy path to clipboard |
-| `cl` | Utility | Quick temp cleanup |
+| `cl` | Utility | Quick temp cleanup (`--dry-run` supported) |
+| `docs-sync` | Utility | Check README-tracked repo facts for drift |
 | `logtrim` | Utility | Trim logs > 1 MB |
 | `oedit` | Editor | Open `tactical-console.bashrc` in VS Code |
 | `code` | Editor | Open anything in VS Code |
 | `so` | OpenClaw | Start gateway (warns if local LLM provider offline) |
 | `xo` | OpenClaw | Stop gateway (stop only — use `oc restart` to restart) |
 | `oc-restart` | OpenClaw | Restart gateway (native: openclaw gateway restart) |
-| `oc-health` | OpenClaw | Deep health probe |
+| `oc-health` | OpenClaw | Deep health probe (`--json` / `--plain`) |
 | `os` | OpenClaw | List sessions |
 | `oa` | OpenClaw | List agents |
 | `ocstart` | OpenClaw | Send agent turn |
@@ -846,8 +856,9 @@ Do not edit the monolith — it is a frozen snapshot.
 | `ockeys` | OpenClaw | Show API key visibility |
 | `oc-refresh-keys` | OpenClaw | Force re-import API keys |
 | `oc-backup` | OpenClaw | Snapshot config, scripts, systemd units to ZIP |
-| `oc-restore` | OpenClaw | Restore from ZIP (validates contents) |
+| `oc-restore` | OpenClaw | Restore from ZIP (validates contents, `--dry-run`) |
 | `oc-diag` | OpenClaw | 5-point diagnostic |
+| `oc-doctor-local` | OpenClaw | End-to-end local gateway + llama.cpp validation |
 | `oc-env` | OpenClaw | Dump env vars |
 | `oc-config` | OpenClaw | Get/set config |
 | `oc-failover` | OpenClaw | Cloud fallback toggle (on/off/status) |
@@ -860,13 +871,17 @@ Do not edit the monolith — it is a frozen snapshot.
 | `model list` | LLM | Show numbered model registry (▶ = active) |
 | `model use N` | LLM | Start model #N with optimal GPU/ctx/thread settings |
 | `model stop` | LLM | Stop inference server |
-| `model status` | LLM | Show running model details |
+| `model status` | LLM | Show running model details (`--json` / `--plain`) |
+| `model doctor` | LLM | Validate registry/default/GPU/watchdog/ports |
+| `model recommend` | LLM | Rank models for a 4 GB VRAM system |
 | `model info N` | LLM | Full details for model #N |
 | `model scan` | LLM | Scan GGUF files, read metadata, rebuild registry |
 | `model download` | LLM | Fetch from HuggingFace |
-| `model delete N` | LLM | Delete model #N from disk and registry |
-| `model archive N` | LLM | Move model #N to archive and deregister |
+| `model delete N` | LLM | Delete model #N from disk and registry (`--dry-run`) |
+| `model archive N` | LLM | Move model #N to archive and deregister (`--dry-run`) |
 | `model bench` | LLM | Benchmark all on-disk models, persist TSV |
+| `model bench-diff` / `model bench-compare` | LLM | Compare two benchmark runs |
+| `model bench-history` | LLM | Summarise recent benchmark runs |
 | `serve N` / `halt` | LLM | Aliases for use/stop |
 | `wake` | GPU | Lock persistence mode |
 | `burn` | LLM | Stress test + TPS benchmark |
@@ -1020,7 +1035,7 @@ turn sources the 14 numbered modules from `scripts/`.
 ~/ubuntu-console/
 ├── tactical-console.bashrc            # Thin loader + version + module sourcing loop
 ├── tactical-console.bashrc.monolith   # Pre-modularisation backup (frozen snapshot)
-├── env.sh                             # Non-interactive library loader (01–12)
+├── env.sh                             # Non-interactive library loader (all modules except 13-init.sh)
 ├── install.sh                         # Idempotent installer for new machines
 ├── quant-guide.conf                   # Quantization priority ratings (editable)
 ├── README.md                          # This file
@@ -1057,7 +1072,7 @@ turn sources the 14 numbered modules from `scripts/`.
 │   ├── package.json                   #   Vite 5 + React 18 + G6 5.0
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
-│   ├── tactical-console.bats          # 362 BATS unit tests (1,833 lines)
+│   ├── tactical-console.bats          # 436 BATS unit tests (2,345 lines)
 │   └── test_kgraph.py                 # Python tests for kgraph.py
 └── systemd/
     ├── llama-watchdog.service         # systemd unit for watchdog
@@ -1123,6 +1138,49 @@ The Tactical Console avoids this problem entirely:
 Even when measured correctly, LLM inference shows a GPU → CPU → GPU → CPU
 bursty pattern (autoregressive sampling). This is normal — not a sign of
 misconfiguration. High VRAM usage with bursty GPU utilisation is expected.
+
+---
+
+## 11. Improvement Opportunities
+
+The March 2026 follow-up review identified a small set of near-term priorities.
+Those items are now addressed in the current tree:
+
+- **OpenClaw helper duplication removed.** The duplicate `__so_show_errors`
+  definition has been consolidated so future edits only have one source of
+  truth.
+- **Benchmark watchdog restoration hardened.** `model bench` now restores the
+  watchdog cleanly even when it exits early with no on-disk models.
+- **Shared LLM registry/default lookup helpers extracted.** Default-model,
+  active-model, and registry resolution now live behind common helpers used by
+  model management and OpenClaw integration paths.
+- **Shared llama-server health wait adopted.** `model use` and `model bench`
+  now rely on the same readiness helper and timeout policy.
+- **Post-refactor cleanup finished.** Small leftovers such as the unused local
+  in `model()` were removed while the dispatcher was revisited.
+- **README drift guard added.** A lightweight `docs-sync` check is now part of
+  the maintenance flow so a few high-signal repo facts are less likely to drift.
+
+---
+
+## 12. Proposed Future Functionality
+
+Several follow-up roadmap items are now implemented: `model doctor`,
+`model recommend`, `model bench-history` / `model bench-compare`,
+`oc doctor-local`, structured `--json` / `--plain` output for key health/status
+commands, and `--dry-run` support for several destructive operations.
+
+The most valuable remaining additions would likely be:
+
+- **Dashboard fault surfacing** — Add a compact “last failure” or watchdog row
+  to the dashboard so recent errors are visible without opening logs.
+- **Registry provenance and notes** — Allow optional annotations per model
+  (source URL, benchmark date, prompt format notes, preferred use case) to make
+  the local model inventory more self-documenting.
+- **Richer recommendation criteria** — Fold prompt-template compatibility,
+  recent stability, and workload-specific hints into `model recommend`.
+- **Docs-sync auto-fix mode** — Extend the lightweight drift checker into an
+  opt-in fixer that can rewrite a few generated README facts when they change.
 
 ---
 

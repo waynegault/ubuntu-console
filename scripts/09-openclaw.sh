@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -15,7 +15,7 @@
 #   oc-plugins, oc-tail, oc-channels, oc-sec, oc-tui, oc-config,
 #   oc-docs, oc-usage, oc-memory-search, oc-local-llm, oc-sync-models,
 #   oc-browser, oc-nodes, oc-sandbox, oc-env, oc-cache-clear,
-#   oc-diag, oc-failover, wacli, oc-kgraph
+#   oc-diag, oc-doctor-local, oc-failover, wacli, oc-kgraph
 
 # __so_show_errors — Extract and display the most recent gateway errors.
 # Pulls the last 30 log lines and shows up to 5 matching error patterns.
@@ -41,7 +41,7 @@ function __so_show_errors() {
 function __so_check_healthy() {
     if __test_port "$OC_PORT"
     then
-        if pgrep -x llama-server >/dev/null 2>&1 && __test_port "$LLM_PORT"
+        if pgrep -x llama-server >/dev/null 2>&1 && __test_port "${LLM_PORT:-8081}"
         then
             __tac_info "Local LLM" "[RUNNING]" "$C_Success"
         else
@@ -151,10 +151,10 @@ function __so_ensure_llm_running() {
         # LLM already running — show which model
         local _so_active_num=""
         [[ -f "$ACTIVE_LLM_FILE" ]] && _so_active_num=$(< "$ACTIVE_LLM_FILE")
-        if [[ -n "$_so_active_num" && -f "$LLM_REGISTRY" ]]
+        local _so_entry=""
+        [[ -n "$_so_active_num" ]] && _so_entry=$(__llm_active_entry 2>/dev/null || true)
+        if [[ -n "$_so_active_num" && -n "$_so_entry" ]]
         then
-            local _so_entry
-            _so_entry=$(awk -F'|' -v n="$_so_active_num" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
             local _so_mname
             IFS='|' read -r _ _so_mname _ <<< "$_so_entry"
             __tac_info "Local LLM" "[RUNNING] #${_so_active_num} ${_so_mname}" "$C_Success"
@@ -165,9 +165,8 @@ function __so_ensure_llm_running() {
     fi
 
     # LLM not running — resolve default and start it
-    local _so_def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
     local _so_def_file=""
-    [[ -f "$_so_def_conf" ]] && _so_def_file=$(< "$_so_def_conf")
+    _so_def_file=$(__llm_default_file 2>/dev/null || true)
     if [[ -z "$_so_def_file" ]]
     then
         __tac_info "Error" \
@@ -178,7 +177,12 @@ function __so_ensure_llm_running() {
 
     # Look up human-readable model name from registry
     local _so_model_name
-    _so_model_name=$(awk -F'|' -v f="$_so_def_file" '$3 == f {print $2}' "$LLM_REGISTRY" 2>/dev/null)
+    local _so_def_entry=""
+    _so_def_entry=$(__llm_default_entry 2>/dev/null || true)
+    if [[ -n "$_so_def_entry" ]]
+    then
+        IFS='|' read -r _ _so_model_name _ <<< "$_so_def_entry"
+    fi
     : "${_so_model_name:=$_so_def_file}"
 
     __tac_info "Local LLM" "[OFFLINE]" "$C_Warning"
@@ -194,11 +198,9 @@ function __so_ensure_llm_running() {
     while (( _sw < _sw_max ))
     do
         printf '\r  %s' "${C_Dim}${_spin_chars:_sw%10:1} Starting ${_so_model_name} (${_sw}s)${C_Reset}  "
-        if (( _sw > 3 )) && __test_port "$LLM_PORT"
+        if (( _sw > 3 )) && __llm_is_healthy
         then
-            local _hb
-            _hb=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-            [[ "$_hb" == *'"ok"'* ]] && break
+            break
         fi
         if ! kill -0 "$_serve_pid" 2>/dev/null \
             && ! pgrep -x llama-server >/dev/null 2>&1
@@ -212,15 +214,10 @@ function __so_ensure_llm_running() {
     wait "$_serve_pid" 2>/dev/null
 
     # Verify LLM is healthy
-    if __test_port "$LLM_PORT"
+    if __llm_is_healthy
     then
-        local _final_health
-        _final_health=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-        if [[ "$_final_health" == *'"ok"'* ]]
-        then
-            __tac_info "Local LLM" "[ONLINE] ${_so_model_name} (${_sw}s)" "$C_Success"
-            return 0
-        fi
+        __tac_info "Local LLM" "[ONLINE] ${_so_model_name} (${_sw}s)" "$C_Success"
+        return 0
     fi
 
     __tac_info "Local LLM" "[FAILED TO START — check: tail $LLM_LOG_FILE]" "$C_Error"
@@ -354,24 +351,6 @@ function so() {
     then
         sudo -n tailscale serve --bg "http://127.0.0.1:$OC_PORT" >/dev/null 2>&1 \
             && __tac_info "Tailscale Serve" "[RESTORED]" "$C_Success"
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# __so_show_errors — Extract and display the most recent gateway errors.
-# Pulls the last 30 log lines and shows up to 5 matching error patterns.
-# ---------------------------------------------------------------------------
-function __so_show_errors() {
-    local _svc="$1" _errors
-    _errors=$(journalctl --user -u "$_svc" --no-pager -n 30 --output=cat 2>&1 \
-        | grep -iE 'fail|error|port.*in use|already listening|exited|refused' | tail -5)
-    if [[ -n "$_errors" ]]
-    then
-        printf '%s\n' "  ${C_Dim}Recent errors:${C_Reset}"
-        while IFS= read -r _line
-        do
-            printf '%s\n' "    ${C_Dim}${_line}${C_Reset}"
-        done <<< "$_errors"
     fi
 }
 
@@ -514,6 +493,7 @@ function oc() {
         printf '  %-20s %s\n' "docs"         "Search OpenClaw documentation"
         printf '  %-20s %s\n' "cache-clear"  "Wipe /dev/shm telemetry caches"
         printf '  %-20s %s\n' "diag"         "5-point check: doctor, gw, models, env, logs"
+        printf '  %-20s %s\n' "doctor-local" "Validate local gateway + llama.cpp path end-to-end"
         printf '  %-20s %s\n' "failover"     "Cloud LLM fallback (on|off|status)"
         printf '  %-20s %s\n' "refresh-keys" "Re-import Windows API keys into WSL"
         # 'trust-sync' command removed
@@ -572,6 +552,7 @@ function oc() {
         docs)          oc-docs "$@" ;;
         cache-clear)   oc-cache-clear "$@" ;;
         diag)          oc-diag "$@" ;;
+        doctor-local)  oc-doctor-local "$@" ;;
         failover)      oc-failover "$@" ;;
         refresh-keys)  oc-refresh-keys "$@" ;;
         # trust-sync removed
@@ -1252,6 +1233,11 @@ function oc-backup() {
 # DESTRUCTIVE: Deletes current workspace and agents. Prompts for confirmation.
 # ---------------------------------------------------------------------------
 function oc-restore() {
+    local dry_run=0
+    case "${1:-}" in
+        --dry-run|-n) dry_run=1 ;;
+    esac
+
     local latest=""
     local -a snaps=("$OC_BACKUPS"/snapshot_*.zip)
     if [[ -e "${snaps[0]}" ]]
@@ -1271,20 +1257,26 @@ function oc-restore() {
         return 1
     fi
 
-    printf '%s\n' "${C_Warning}WARNING: This will DESTROY the current workspace and agents.${C_Reset}"
-    printf '%s\n' "${C_Dim}Restoring from: $(basename "$latest")${C_Reset}"
-    read -r -p "${C_Warning}Continue? [y/N]: ${C_Reset}" confirm
-    if [[ "${confirm,,}" != "y" ]]
+    if (( ! dry_run ))
     then
-        __tac_info "Restore" "[CANCELLED]" "$C_Dim"; return 0
+        printf '%s\n' "${C_Warning}WARNING: This will DESTROY the current workspace and agents.${C_Reset}"
+        printf '%s\n' "${C_Dim}Restoring from: $(basename "$latest")${C_Reset}"
+        read -r -p "${C_Warning}Continue? [y/N]: ${C_Reset}" confirm
+        if [[ "${confirm,,}" != "y" ]]
+        then
+            __tac_info "Restore" "[CANCELLED]" "$C_Dim"; return 0
+        fi
     fi
 
-    # Stop gateway inline (avoid calling xo which prints its own UI)
-    openclaw gateway stop >/dev/null 2>&1
-    # pkill -x matches only the exact process name (not substrings)
-    pkill -u "$USER" -x openclaw 2>/dev/null
+    if (( ! dry_run ))
+    then
+        # Stop gateway inline (avoid calling xo which prints its own UI)
+        openclaw gateway stop >/dev/null 2>&1
+        # pkill -x matches only the exact process name (not substrings)
+        pkill -u "$USER" -x openclaw 2>/dev/null
 
-    __tac_info "Purging active configurations..." "[WORKING]" "$C_Dim"
+        __tac_info "Purging active configurations..." "[WORKING]" "$C_Dim"
+    fi
 
     # Extract to a temp directory first, validate, then swap — protects
     # against corrupt ZIPs destroying current state with nothing to replace it.
@@ -1315,6 +1307,20 @@ function oc-restore() {
         __tac_info "State Rollback" "[FAILED — ZIP contains unsafe file permissions]" "$C_Error"
         rm -rf "$tmp_restore"
         return 1
+    fi
+
+    if (( dry_run ))
+    then
+        __tac_info "Restore" "[DRY RUN]" "$C_Warning"
+        __tac_info "Snapshot" "$(basename "$latest")" "$C_Dim"
+        [[ -d "$tmp_restore/.openclaw/workspace" ]] && __tac_info "Would Restore" "$OC_WORKSPACE" "$C_Dim"
+        [[ -d "$tmp_restore/.openclaw/agents" ]] && __tac_info "Would Restore" "$OC_AGENTS" "$C_Dim"
+        [[ -f "$tmp_restore/.openclaw/openclaw.json" ]] && __tac_info "Would Restore" "$OC_ROOT/openclaw.json" "$C_Dim"
+        [[ -f "$tmp_restore/.openclaw/auth.json" ]] && __tac_info "Would Restore" "$OC_ROOT/auth.json" "$C_Dim"
+        [[ -f "$tmp_restore/.llm/models.conf" ]] && __tac_info "Would Restore" "$LLM_REGISTRY" "$C_Dim"
+        [[ -f "$tmp_restore/.bashrc" ]] && __tac_info "Would Restore" "$HOME/.bashrc" "$C_Dim"
+        rm -rf "$tmp_restore"
+        return 0
     fi
 
     # Only destroy directories that the backup will replace — a config-only
@@ -1437,15 +1443,54 @@ function oc-update() {
 # Uses jq for JSON parsing instead of Python.
 # ---------------------------------------------------------------------------
 function oc-health() {
+    local output_mode="human"
+    case "${1:-}" in
+        --json) output_mode="json" ;;
+        --plain) output_mode="plain" ;;
+    esac
+
+    local cli_installed=1
+    local port_listening=0
+    local health_status="unknown"
+
     if ! command -v openclaw >/dev/null
     then
+        cli_installed=0
+        if [[ "$output_mode" == "json" ]]
+        then
+            printf '{"cli_installed":false,"port":%s,"port_listening":false,"health_status":"missing_cli"}\n' \
+                "$OC_PORT"
+            return 1
+        fi
+        if [[ "$output_mode" == "plain" ]]
+        then
+            printf '%s\n' "cli_installed=0"
+            printf '%s\n' "port=$OC_PORT"
+            printf '%s\n' "port_listening=0"
+            printf '%s\n' "health_status=missing_cli"
+            return 1
+        fi
         __tac_info "OpenClaw CLI" "[NOT INSTALLED]" "$C_Error"
         return 1
     fi
     if __test_port "$OC_PORT"
     then
-        __tac_info "Gateway Port $OC_PORT" "[LISTENING]" "$C_Success"
+        port_listening=1
     else
+        if [[ "$output_mode" == "json" ]]
+        then
+            printf '{"cli_installed":true,"port":%s,"port_listening":false,"health_status":"port_closed"}\n' \
+                "$OC_PORT"
+            return 1
+        fi
+        if [[ "$output_mode" == "plain" ]]
+        then
+            printf '%s\n' "cli_installed=1"
+            printf '%s\n' "port=$OC_PORT"
+            printf '%s\n' "port_listening=0"
+            printf '%s\n' "health_status=port_closed"
+            return 1
+        fi
         __tac_info "Gateway Port $OC_PORT" "[NOT LISTENING]" "$C_Error"
         return 1
     fi
@@ -1456,14 +1501,44 @@ function oc-health() {
         local hstatus
         hstatus=$(jq -r '.status // "unknown"' <<< "$health_out" 2>/dev/null)
         [[ -z "$hstatus" ]] && hstatus="parse_error"
-        local health_color=$C_Warning
-        if [[ $hstatus == "ok" || $hstatus == "healthy" ]]
-        then
-            health_color=$C_Success
-        fi
-        __tac_info "Health Status" "[${hstatus^^}]" "$health_color"
+        health_status="$hstatus"
     else
+        health_status="no_response"
+    fi
+
+    if [[ "$output_mode" == "json" ]]
+    then
+        printf '{'
+        printf '"cli_installed":%s,' "$([[ $cli_installed -eq 1 ]] && echo true || echo false)"
+        printf '"port":%s,' "$OC_PORT"
+        printf '"port_listening":%s,' "$([[ $port_listening -eq 1 ]] && echo true || echo false)"
+        printf '"health_status":"%s"' "$(__llm_json_escape "$health_status")"
+        printf '}\n'
+        [[ "$health_status" == "ok" || "$health_status" == "healthy" ]]
+        return
+    fi
+
+    if [[ "$output_mode" == "plain" ]]
+    then
+        printf '%s\n' "cli_installed=$cli_installed"
+        printf '%s\n' "port=$OC_PORT"
+        printf '%s\n' "port_listening=$port_listening"
+        printf '%s\n' "health_status=$health_status"
+        [[ "$health_status" == "ok" || "$health_status" == "healthy" ]]
+        return
+    fi
+
+    __tac_info "Gateway Port $OC_PORT" "[LISTENING]" "$C_Success"
+    local health_color=$C_Warning
+    if [[ $health_status == "ok" || $health_status == "healthy" ]]
+    then
+        health_color=$C_Success
+    fi
+    if [[ "$health_status" == "no_response" ]]
+    then
         __tac_info "Health Probe" "[NO RESPONSE]" "$C_Warning"
+    else
+        __tac_info "Health Status" "[${health_status^^}]" "$health_color"
     fi
 }
 
@@ -1602,18 +1677,13 @@ function oc-local-llm() {
     fi
     # Read the active model's name and GGUF filename from the registry
     local model_name="local" model_file=""
-    if [[ -f "$ACTIVE_LLM_FILE" ]]
+    local _entry=""
+    _entry=$(__llm_active_entry 2>/dev/null || true)
+    if [[ -n "$_entry" ]]
     then
-        local _anum
-        _anum=$(< "$ACTIVE_LLM_FILE")
-        if [[ -n "$_anum" && -f "$LLM_REGISTRY" ]]
-        then
-            local _entry
-            _entry=$(awk -F'|' -v n="$_anum" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
-            IFS='|' read -r _ _name _file _ <<< "$_entry"
-            [[ -n "$_name" ]] && model_name="$_name"
-            [[ -n "$_file" ]] && model_file="$_file"
-        fi
+        IFS='|' read -r _ _name _file _ <<< "$_entry"
+        [[ -n "$_name" ]] && model_name="$_name"
+        [[ -n "$_file" ]] && model_file="$_file"
     fi
 
     # Update the local-llama provider in models.providers (the correct config path).
@@ -1728,15 +1798,34 @@ function oc-env() {
 # oc-cache-clear — Wipe all /dev/shm telemetry caches to force a refresh.
 # ---------------------------------------------------------------------------
 function oc-cache-clear() {
+    local dry_run=0
+    case "${1:-}" in
+        --dry-run|-n) dry_run=1 ;;
+    esac
+
     local count=0
     local _had_nullglob=0; shopt -q nullglob && _had_nullglob=1
     shopt -s nullglob
     for f in "$TAC_CACHE_DIR"/tac_*
     do
-        [[ -f "$f" ]] && rm -f "$f" && ((count++))
+        if [[ -f "$f" ]]
+        then
+            if (( dry_run ))
+            then
+                ((count++))
+            elif rm -f "$f"
+            then
+                ((count++))
+            fi
+        fi
     done
     (( _had_nullglob )) || shopt -u nullglob
-    __tac_info "Telemetry Cache" "[$count file(s) cleared]" "$C_Success"
+    if (( dry_run ))
+    then
+        __tac_info "Telemetry Cache" "[$count file(s) would be cleared]" "$C_Warning"
+    else
+        __tac_info "Telemetry Cache" "[$count file(s) cleared]" "$C_Success"
+    fi
 }
 
 
@@ -1793,6 +1882,125 @@ function oc-diag() {
     echo ""
     __tac_footer
     __tac_info "Diagnostics" "[Complete]" "$C_Success"
+}
+
+# ---------------------------------------------------------------------------
+# oc-doctor-local — Validate the full local OpenClaw + llama.cpp path.
+# Usage: oc doctor-local [--json|--plain]
+# ---------------------------------------------------------------------------
+function oc-doctor-local() {
+    local output_mode="human"
+    case "${1:-}" in
+        --json) output_mode="json" ;;
+        --plain) output_mode="plain" ;;
+    esac
+
+    local openclaw_installed=1
+    local gateway_port=0
+    local gateway_health="unknown"
+    local llm_port=0
+    local llm_health=0
+    local model_sync=0
+    local key_cache=0
+    local oc_config=0
+    local active_model=""
+    local issues=0
+
+    command -v openclaw >/dev/null 2>&1 || openclaw_installed=0
+    __test_port "$OC_PORT" && gateway_port=1
+    __test_port "$LLM_PORT" && llm_port=1
+    __llm_is_healthy && llm_health=1
+    [[ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]] && key_cache=1
+    [[ -f "$OC_ROOT/openclaw.json" ]] && oc_config=1
+
+    local active_entry=""
+    active_entry=$(__llm_active_entry 2>/dev/null || true)
+    if [[ -n "$active_entry" ]]
+    then
+        IFS='|' read -r _ active_model _ <<< "$active_entry"
+    fi
+
+    if (( openclaw_installed ))
+    then
+        local _oc_health_json=""
+        _oc_health_json=$(oc-health --json 2>/dev/null || true)
+        gateway_health=$(jq -r '.health_status // "unknown"' <<< "$_oc_health_json" 2>/dev/null)
+        local provider_json=""
+        provider_json=$(openclaw config get models.providers.local-llama 2>/dev/null || true)
+        if [[ -n "$provider_json" && "$provider_json" != "null" && "$provider_json" == *"127.0.0.1:${LLM_PORT}"* ]]
+        then
+            model_sync=1
+        fi
+    else
+        gateway_health="missing_cli"
+    fi
+
+    (( openclaw_installed )) || ((issues++))
+    (( gateway_port )) || ((issues++))
+    [[ "$gateway_health" == "ok" || "$gateway_health" == "healthy" ]] || ((issues++))
+    (( llm_port )) || ((issues++))
+    (( llm_health )) || ((issues++))
+    (( model_sync )) || ((issues++))
+    (( key_cache )) || ((issues++))
+    (( oc_config )) || ((issues++))
+
+    if [[ "$output_mode" == "json" ]]
+    then
+        printf '{'
+        printf '"openclaw_installed":%s,' "$([[ $openclaw_installed -eq 1 ]] && echo true || echo false)"
+        printf '"gateway_port":%s,' "$([[ $gateway_port -eq 1 ]] && echo true || echo false)"
+        printf '"gateway_health":"%s",' "$(__llm_json_escape "$gateway_health")"
+        printf '"llm_port":%s,' "$([[ $llm_port -eq 1 ]] && echo true || echo false)"
+        printf '"llm_health":%s,' "$([[ $llm_health -eq 1 ]] && echo true || echo false)"
+        printf '"model_sync":%s,' "$([[ $model_sync -eq 1 ]] && echo true || echo false)"
+        printf '"key_cache":%s,' "$([[ $key_cache -eq 1 ]] && echo true || echo false)"
+        printf '"oc_config":%s,' "$([[ $oc_config -eq 1 ]] && echo true || echo false)"
+        printf '"active_model":"%s",' "$(__llm_json_escape "$active_model")"
+        printf '"issues":%s' "$issues"
+        printf '}\n'
+        (( issues == 0 ))
+        return
+    fi
+
+    if [[ "$output_mode" == "plain" ]]
+    then
+        printf '%s\n' "openclaw_installed=$openclaw_installed"
+        printf '%s\n' "gateway_port=$gateway_port"
+        printf '%s\n' "gateway_health=$gateway_health"
+        printf '%s\n' "llm_port=$llm_port"
+        printf '%s\n' "llm_health=$llm_health"
+        printf '%s\n' "model_sync=$model_sync"
+        printf '%s\n' "key_cache=$key_cache"
+        printf '%s\n' "oc_config=$oc_config"
+        printf '%s\n' "active_model=$active_model"
+        printf '%s\n' "issues=$issues"
+        (( issues == 0 ))
+        return
+    fi
+
+    __tac_header "LOCAL AI DOCTOR" "open"
+    __tac_info "OpenClaw CLI" "[$([[ $openclaw_installed -eq 1 ]] && echo INSTALLED || echo MISSING)]" \
+        "$([[ $openclaw_installed -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Error")"
+    __tac_info "Gateway Port" "[$([[ $gateway_port -eq 1 ]] && echo LISTENING || echo CLOSED)]" \
+        "$([[ $gateway_port -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Error")"
+    local gateway_health_color="$C_Warning"
+    [[ "$gateway_health" == "ok" || "$gateway_health" == "healthy" ]] && gateway_health_color="$C_Success"
+    __tac_info "Gateway Health" "[${gateway_health^^}]" "$gateway_health_color"
+    __tac_info "LLM Port" "[$([[ $llm_port -eq 1 ]] && echo LISTENING || echo CLOSED)]" \
+        "$([[ $llm_port -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Error")"
+    __tac_info "LLM Health" "[$([[ $llm_health -eq 1 ]] && echo OK || echo OFFLINE_OR_LOADING)]" \
+        "$([[ $llm_health -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
+    __tac_info "Provider Sync" "[$([[ $model_sync -eq 1 ]] && echo OK || echo DRIFT)]" \
+        "$([[ $model_sync -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
+    __tac_info "Key Cache" "[$([[ $key_cache -eq 1 ]] && echo PRESENT || echo MISSING)]" \
+        "$([[ $key_cache -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
+    __tac_info "Config File" "[$([[ $oc_config -eq 1 ]] && echo PRESENT || echo MISSING)]" \
+        "$([[ $oc_config -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
+    [[ -n "$active_model" ]] && __tac_info "Active Model" "[$active_model]" "$C_Dim"
+    __tac_info "Summary" "[$issues issue(s)]" \
+        "$([[ $issues -eq 0 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
+    __tac_footer
+    (( issues == 0 ))
 }
 
 # ---------------------------------------------------------------------------

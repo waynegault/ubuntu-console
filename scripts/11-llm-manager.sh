@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 19
+# Module Version: 20
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -55,6 +55,202 @@ function __require_llm() {
         return 1
     fi
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# __llm_json_escape — Escape a string for safe inline JSON output.
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __llm_json_escape() {
+    local raw="${1:-}"
+    raw="${raw//\\/\\\\}"
+    raw="${raw//\"/\\\"}"
+    raw="${raw//$'\n'/\\n}"
+    raw="${raw//$'\r'/\\r}"
+    raw="${raw//$'\t'/\\t}"
+    printf '%s' "$raw"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_registry_entry_by_num — Resolve a registry entry by model number.
+# @returns 0 on success, 1 if the registry or requested entry is unavailable.
+# ---------------------------------------------------------------------------
+function __llm_registry_entry_by_num() {
+    local target="${1:-}"
+    [[ -n "$target" && -f "$LLM_REGISTRY" ]] || return 1
+    awk -F'|' -v n="$target" '$1 == n {print; exit}' "$LLM_REGISTRY" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# __llm_registry_entry_by_file — Resolve a registry entry by GGUF filename.
+# @returns 0 on success, 1 if the registry or requested entry is unavailable.
+# ---------------------------------------------------------------------------
+function __llm_registry_entry_by_file() {
+    local target_file="${1:-}"
+    [[ -n "$target_file" && -f "$LLM_REGISTRY" ]] || return 1
+    awk -F'|' -v f="$target_file" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# __llm_default_file — Read the configured default GGUF filename.
+# @returns 0 on success, 1 if no default model is configured.
+# ---------------------------------------------------------------------------
+function __llm_default_file() {
+    [[ -f "$LLM_DEFAULT_FILE" ]] || return 1
+    local default_file
+    default_file=$(< "$LLM_DEFAULT_FILE")
+    [[ -n "$default_file" ]] || return 1
+    printf '%s\n' "$default_file"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_default_entry — Resolve the configured default model to a registry row.
+# @returns 0 on success, 1 if no default is configured or it is missing from the registry.
+# ---------------------------------------------------------------------------
+function __llm_default_entry() {
+    local default_file
+    default_file=$(__llm_default_file) || return 1
+    __llm_registry_entry_by_file "$default_file"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_default_number — Resolve the configured default model number.
+# @returns 0 on success, 1 if no default is configured or it is missing from the registry.
+# ---------------------------------------------------------------------------
+function __llm_default_number() {
+    local entry
+    entry=$(__llm_default_entry) || return 1
+    printf '%s\n' "${entry%%|*}"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_active_entry — Resolve the currently active model to a registry row.
+# @returns 0 on success, 1 if no active model state is recorded or it is stale.
+# ---------------------------------------------------------------------------
+function __llm_active_entry() {
+    [[ -f "$ACTIVE_LLM_FILE" ]] || return 1
+    local active_num
+    active_num=$(< "$ACTIVE_LLM_FILE")
+    [[ -n "$active_num" ]] || return 1
+    __llm_registry_entry_by_num "$active_num"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_is_healthy — Check whether llama-server is listening and reports OK.
+# @returns 0 if the local LLM health endpoint reports ok, 1 otherwise.
+# ---------------------------------------------------------------------------
+function __llm_is_healthy() {
+    __test_port "$LLM_PORT" || return 1
+    local health_body
+    health_body=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+    [[ "$health_body" == *'"ok"'* ]]
+}
+
+# ---------------------------------------------------------------------------
+# __llm_health_timeout — Pick a startup timeout for llama-server readiness.
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __llm_health_timeout() {
+    local size="${1:-0G}"
+    local gpu_layers="${2:-0}"
+    local name="${3:-}"
+    local timeout=45
+    local size_tenths=0
+
+    if [[ "$size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
+    then
+        size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
+    fi
+
+    if (( gpu_layers == 0 ))
+    then
+        timeout=180
+    elif [[ "$name" == "Qwen3.5-4B" ]]
+    then
+        timeout=120
+    elif (( size_tenths >= 30 ))
+    then
+        timeout=120
+    elif (( size_tenths >= 20 ))
+    then
+        timeout=60
+    fi
+
+    printf '%s\n' "$timeout"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_wait_for_health — Poll llama-server until it becomes healthy.
+# Usage: __llm_wait_for_health <timeout> <elapsed_var> [dots|silent] [label]
+# @returns 0 on success, 1 on timeout.
+# ---------------------------------------------------------------------------
+function __llm_wait_for_health() {
+    local timeout="${1:-45}"
+    local -n _elapsed_ref="${2:-_llm_wait_elapsed_sink}"
+    local progress_mode="${3:-silent}"
+    local label="${4:-Waiting for health endpoint}"
+
+    _elapsed_ref=0
+    if [[ "$progress_mode" == "dots" ]]
+    then
+        printf '%s' "${C_Dim}${label}${C_Reset}"
+    fi
+
+    for (( _elapsed_ref=0; _elapsed_ref < timeout; _elapsed_ref++ ))
+    do
+        if __llm_is_healthy
+        then
+            [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
+            return 0
+        fi
+        [[ "$progress_mode" == "dots" ]] && printf '.'
+        sleep 1
+    done
+
+    [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# __llm_quant_rating — Read the quant-guide rating for a model filename.
+# @returns 0 always. Prints recommended, acceptable, discouraged, or unknown.
+# ---------------------------------------------------------------------------
+function __llm_quant_rating() {
+    local model_file="${1:-}"
+    if [[ -z "$model_file" || ! -f "$QUANT_GUIDE" ]]
+    then
+        printf '%s\n' "unknown"
+        return 0
+    fi
+
+    local rating="unknown"
+    local _r _pat _desc
+    while IFS='|' read -r _r _pat _desc
+    do
+        [[ -z "$_pat" || "$_r" == "#"* ]] && continue
+        if [[ "${model_file^^}" == *"${_pat^^}"* ]]
+        then
+            rating="$_r"
+            break
+        fi
+    done < "$QUANT_GUIDE"
+    printf '%s\n' "$rating"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_tps_number — Convert a registry or bench TPS string to a number.
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __llm_tps_number() {
+    local raw="${1:-0}"
+    raw="${raw// tps/}"
+    raw="${raw//TPS/}"
+    if [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]]
+    then
+        printf '%s\n' "$raw"
+    else
+        printf '%s\n' "0"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -212,7 +408,9 @@ function gpu-check() {
 
 # ---------------------------------------------------------------------------
 # model — Unified LLM model manager (v3 — auto-scan, numbered selection).
-# Subcommands: scan, list, use, stop, status, info, bench, default
+# Subcommands: scan, list, default, use, stop, status, doctor, recommend,
+#   info, bench, bench-diff, bench-compare, bench-latest, bench-history,
+#   delete, archive, download
 # Registry: models.conf — auto-generated by 'model scan', do not hand-edit.
 # Format: #|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads
 # Active model tracked in: $ACTIVE_LLM_FILE (just the model number)
@@ -722,10 +920,9 @@ function __model_list() {
     fi
 
     local active_num=""
-    [[ -f "$ACTIVE_LLM_FILE" ]] && active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
-    local def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
+    [[ -f "$ACTIVE_LLM_FILE" ]] && active_num=$(< "$ACTIVE_LLM_FILE")
     local default_file=""
-    [[ -f "$def_conf" ]] && default_file=$(cat "$def_conf" 2>/dev/null)
+    default_file=$(__llm_default_file 2>/dev/null || true)
 
     printf "\n${C_Dim}  %-4s %-30s %-7s %-8s %-9s %-4s %-5s %-4s %s${C_Reset}\n" \
         "#" "MODEL" "SIZE" "QUANT" "ARCH" "GPU" "CTX" "THR" "TPS"
@@ -783,16 +980,15 @@ function __model_list() {
 # ---------------------------------------------------------------------------
 function __model_default() {
     local target="${1:-}"
-    local def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
 
     if [[ -z "$target" ]]
     then
-        if [[ -f "$def_conf" ]]
+        if [[ -f "$LLM_DEFAULT_FILE" ]]
         then
             local def_file
-            def_file=$(< "$def_conf")
-            local entry
-            entry=$(awk -F'|' -v f="$def_file" '$3 == f {print $0}' "$LLM_REGISTRY" 2>/dev/null)
+            def_file=$(__llm_default_file 2>/dev/null || true)
+            local entry=""
+            [[ -n "$def_file" ]] && entry=$(__llm_registry_entry_by_file "$def_file")
             if [[ -n "$entry" ]]
             then
                 local num name _rest
@@ -815,7 +1011,7 @@ function __model_default() {
     fi
 
     local entry
-    entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+    entry=$(__llm_registry_entry_by_num "$target")
     if [[ -z "$entry" ]]
     then
         __tac_info "Error" "[Model #$target not found in registry]" "$C_Error"
@@ -824,8 +1020,8 @@ function __model_default() {
 
     local _n name file _rest
     IFS='|' read -r _n name file _rest <<< "$entry"
-    mkdir -p "$(dirname "$def_conf")" 2>/dev/null
-    echo "$file" > "$def_conf"
+    mkdir -p "$(dirname "$LLM_DEFAULT_FILE")" 2>/dev/null
+    echo "$file" > "$LLM_DEFAULT_FILE"
     __tac_info "Default Model" "[SET TO: $name]" "$C_Success"
 }
 
@@ -839,21 +1035,20 @@ function __model_use() {
 
     if [[ -z "$target" ]]
     then
-        local _use_def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
-        local _use_def_file=""
-        [[ -f "$_use_def_conf" ]] && _use_def_file=$(< "$_use_def_conf")
-        if [[ -z "$_use_def_file" ]]
+        local _use_default_file=""
+        _use_default_file=$(__llm_default_file 2>/dev/null || true)
+        if [[ -z "$_use_default_file" ]]
         then
             __tac_info "Error" \
                 "[No model specified and no default set. Run 'model default <N>' to configure.]" \
                 "$C_Error"
             return 1
         fi
-        target=$(awk -F'|' -v f="$_use_def_file" '$3 == f {print $1; exit}' "$LLM_REGISTRY" 2>/dev/null)
+        target=$(__llm_default_number 2>/dev/null || true)
         if [[ -z "$target" ]]
         then
             __tac_info "Error" \
-                "[Default file not found in registry: $_use_def_file - run 'model scan']" \
+                "[Default file not found in registry: $_use_default_file - run 'model scan']" \
                 "$C_Error"
             return 1
         fi
@@ -866,7 +1061,7 @@ function __model_use() {
         return 1
     fi
     local entry
-    entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+    entry=$(__llm_registry_entry_by_num "$target")
     if [[ -z "$entry" ]]
     then
         __tac_info "Error" "[Model #$target not in registry - run 'model scan']" "$C_Error"
@@ -1024,43 +1219,10 @@ function __model_use() {
         __tac_info "Warning" "[Could not save state]" "$C_Warning"
     fi
 
-    local health_timeout=45
-    local _size_tenths=0
-    if [[ "$size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
-    then
-        _size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
-    fi
-    if (( gpu_layers == 0 ))
-    then
-        health_timeout=180
-    elif [[ "$name" == "Qwen3.5-4B" ]]
-    then
-        health_timeout=120
-    elif (( _size_tenths >= 20 ))
-    then
-        health_timeout=60
-    fi
-
-    local ready=0
-    printf '%s' "${C_Dim}Waiting for health endpoint"
-    local _hw
-    for (( _hw=0; _hw < health_timeout; _hw++ ))
-    do
-        if __test_port "$LLM_PORT"
-        then
-            local _hbody
-            _hbody=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-            if [[ "$_hbody" == *'"ok"'* ]]
-            then
-                ready=1
-                break
-            fi
-        fi
-        printf '.'
-        sleep 1
-    done
-    printf '%s\n' "$C_Reset"
-    if (( ready ))
+    local health_timeout
+    health_timeout=$(__llm_health_timeout "$size" "$gpu_layers" "$name")
+    local _health_elapsed=0
+    if __llm_wait_for_health "$health_timeout" _health_elapsed "dots" "Waiting for health endpoint"
     then
         __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
         local offload_info
@@ -1094,19 +1256,26 @@ function __model_stop() {
 # @returns 0 always.
 # ---------------------------------------------------------------------------
 function __model_status() {
+    local output_mode="human"
+    case "${1:-}" in
+        --json) output_mode="json" ;;
+        --plain) output_mode="plain" ;;
+    esac
+
     if pgrep -x llama-server >/dev/null 2>&1 && __test_port "$LLM_PORT"
     then
-        local active_num
-        active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
-        if [[ -n "$active_num" && -f "$LLM_REGISTRY" ]]
+        local active_num=""
+        [[ -f "$ACTIVE_LLM_FILE" ]] && active_num=$(< "$ACTIVE_LLM_FILE")
+        local entry=""
+        local name="" file="" size=""
+        if [[ -n "$active_num" ]]
         then
-            local entry
-            entry=$(awk -F'|' -v n="$active_num" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
-            local _n name file size _rest
+            entry=$(__llm_active_entry 2>/dev/null || true)
+        fi
+        if [[ -n "$entry" ]]
+        then
+            local _n _rest
             IFS='|' read -r _n name file size _rest <<< "$entry"
-            __tac_info "Active" "#${active_num} ${name} (${size})" "$C_Success"
-        else
-            __tac_info "Active" "[Running but unknown model]" "$C_Warning"
         fi
         local health health_label health_color
         health=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
@@ -1118,14 +1287,62 @@ function __model_status() {
             health_label="${health:-UNKNOWN}"
             health_color="$C_Warning"
         fi
-        __tac_info "Health" "$health_label" "$health_color"
         local tps
         tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
+        if [[ "$output_mode" == "json" ]]
+        then
+            printf '{'
+            printf '"online":true,'
+            printf '"port":%s,' "$LLM_PORT"
+            printf '"active_num":"%s",' "$(__llm_json_escape "$active_num")"
+            printf '"active_name":"%s",' "$(__llm_json_escape "$name")"
+            printf '"active_file":"%s",' "$(__llm_json_escape "$file")"
+            printf '"size":"%s",' "$(__llm_json_escape "$size")"
+            printf '"health":"%s",' "$(__llm_json_escape "$health_label")"
+            printf '"last_tps":"%s",' "$(__llm_json_escape "$tps")"
+            printf '"build":"%s"' "$(__llm_json_escape "$LLAMA_BUILD_VERSION")"
+            printf '}\n'
+            return 0
+        fi
+        if [[ "$output_mode" == "plain" ]]
+        then
+            printf '%s\n' "online=1"
+            printf '%s\n' "port=$LLM_PORT"
+            printf '%s\n' "active_num=${active_num:-}"
+            printf '%s\n' "active_name=${name:-}"
+            printf '%s\n' "active_file=${file:-}"
+            printf '%s\n' "size=${size:-}"
+            printf '%s\n' "health=$health_label"
+            printf '%s\n' "last_tps=${tps:-}"
+            printf '%s\n' "build=$LLAMA_BUILD_VERSION"
+            return 0
+        fi
+        if [[ -n "$entry" ]]
+        then
+            __tac_info "Active" "#${active_num} ${name} (${size})" "$C_Success"
+        else
+            __tac_info "Active" "[Running but unknown model]" "$C_Warning"
+        fi
+        __tac_info "Health" "$health_label" "$health_color"
         [[ -n "$tps" ]] && __tac_info "Last TPS" "$tps" "$C_Dim"
         __tac_info "Build" "$LLAMA_BUILD_VERSION" "$C_Dim"
         return 0
     fi
 
+    if [[ "$output_mode" == "json" ]]
+    then
+        printf '{"online":false,"port":%s,"health":"OFFLINE","build":"%s"}\n' \
+            "$LLM_PORT" "$(__llm_json_escape "$LLAMA_BUILD_VERSION")"
+        return 0
+    fi
+    if [[ "$output_mode" == "plain" ]]
+    then
+        printf '%s\n' "online=0"
+        printf '%s\n' "port=$LLM_PORT"
+        printf '%s\n' "health=OFFLINE"
+        printf '%s\n' "build=$LLAMA_BUILD_VERSION"
+        return 0
+    fi
     __tac_info "Status" "[OFFLINE]" "$C_Dim"
     return 0
 }
@@ -1148,7 +1365,7 @@ function __model_info() {
         return 1
     fi
     local entry
-    entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+    entry=$(__llm_registry_entry_by_num "$target")
     if [[ -z "$entry" ]]
     then
         __tac_info "Error" "[Model #$target not found]" "$C_Error"
@@ -1217,6 +1434,11 @@ function __model_bench() {
     if (( ${#b_num[@]} == 0 ))
     then
         __tac_info "Bench" "[No on-disk models]" "$C_Warning"
+        if (( _bench_watchdog_was_active ))
+        then
+            systemctl --user start llama-watchdog.timer 2>/dev/null
+            __tac_info "Watchdog" "Restored" "$C_Dim"
+        fi
         return 1
     fi
 
@@ -1229,45 +1451,12 @@ function __model_bench() {
     do
         printf '%s\n' "${C_Highlight}[$(( i+1 ))/${#b_num[@]}] ${b_name[$i]} (${b_size[$i]})${C_Reset}"
         rm -f "$LLM_TPS_CACHE"
-        __model_use "${b_num[$i]}"
-        local bench_ready=0
-        local bench_ready_timeout=60
-        if (( ${b_gpu[$i]:-0} == 0 ))
-        then
-            bench_ready_timeout=180
-        else
-            local _bench_size_tenths=0
-            if [[ "${b_size[$i]}" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
-            then
-                _bench_size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
-            fi
-            if (( _bench_size_tenths >= 30 ))
-            then
-                bench_ready_timeout=120
-            elif (( _bench_size_tenths >= 20 ))
-            then
-                bench_ready_timeout=150
-            fi
-        fi
-        local _br
-        for (( _br=0; _br < bench_ready_timeout; _br++ ))
-        do
-            if __test_port "$LLM_PORT"
-            then
-                local _bhealth
-                _bhealth=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-                if [[ "$_bhealth" == *'"ok"'* ]]
-                then
-                    bench_ready=1
-                    break
-                fi
-            fi
-            sleep 1
-        done
-        if (( bench_ready ))
+        if __model_use "${b_num[$i]}"
         then
             burn
         else
+            local bench_ready_timeout
+            bench_ready_timeout=$(__llm_health_timeout "${b_size[$i]}" "${b_gpu[$i]}" "${b_name[$i]}")
             __tac_info "Bench" "[Model did not reach healthy state in ${bench_ready_timeout}s]" "$C_Error"
         fi
         if [[ -f "$LLM_LOG_FILE" ]]
@@ -1399,15 +1588,376 @@ function __model_bench_latest() {
 }
 
 # ---------------------------------------------------------------------------
+# __model_bench_history
+# @description Summarise recent benchmark TSV files so throughput trends are visible at a glance.
+# @returns 0 on success, 1 if no benchmark TSV exists.
+# ---------------------------------------------------------------------------
+function __model_bench_history() {
+    local limit="${1:-5}"
+    [[ "$limit" =~ ^[0-9]+$ ]] || limit=5
+
+    local -a bench_files=()
+    while IFS= read -r bench_file
+    do
+        bench_files+=("$bench_file")
+    done < <(find "$LLAMA_DRIVE_ROOT/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
+        -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -n "$limit" | cut -d' ' -f2-)
+
+    if (( ${#bench_files[@]} == 0 ))
+    then
+        __tac_info "Bench" "[No benchmark TSV found]" "$C_Error"
+        return 1
+    fi
+
+    __tac_header "BENCH HISTORY" "open"
+    printf "${C_Dim}  %-20s %-6s %-28s %s${C_Reset}\n" "RUN" "MODELS" "BEST MODEL" "AVG TPS"
+    local _hist_rule
+    printf -v _hist_rule '%*s' $((UIWidth - 4)) ''
+    _hist_rule="${_hist_rule// /${BOX_SL}}"
+    printf "${C_Dim}  %s${C_Reset}\n" "$_hist_rule"
+
+    local bench_file
+    for bench_file in "${bench_files[@]}"
+    do
+        local bench_label
+        bench_label=$(basename "$bench_file")
+        bench_label="${bench_label#bench_}"
+        bench_label="${bench_label%.tsv}"
+        local summary
+        summary=$(
+            awk -F'\t' '
+                function tps_num(raw, val) {
+                    val = raw
+                    gsub(/ tps/, "", val)
+                    return (val ~ /^[0-9.]+$/ ? val + 0 : -1)
+                }
+                $1 == "#" || $2 == "model" { next }
+                {
+                    t = tps_num($4)
+                    total++
+                    if (t >= 0) {
+                        good++
+                        sum += t
+                        if (t > best_tps) {
+                            best_tps = t
+                            best_model = $2
+                        }
+                    }
+                }
+                END {
+                    avg = (good > 0 ? sum / good : 0)
+                    printf "%d|%s|%.1f", total, best_model, avg
+                }
+            ' "$bench_file"
+        )
+        local models_count best_model avg_tps
+        IFS='|' read -r models_count best_model avg_tps <<< "$summary"
+        [[ -z "$best_model" ]] && best_model="No valid TPS data"
+        printf "  %-20s %-6s %-28s %s\n" \
+            "$bench_label" "$models_count" "${best_model:0:28}" "${avg_tps} tps"
+    done
+    __tac_footer
+}
+
+# ---------------------------------------------------------------------------
+# __model_doctor
+# @description Validate registry integrity, default model wiring, GPU visibility, watchdog state, and ports.
+# @returns 0 on success, 1 if one or more checks fail.
+# ---------------------------------------------------------------------------
+function __model_doctor() {
+    local output_mode="human"
+    case "${1:-}" in
+        --json) output_mode="json" ;;
+        --plain) output_mode="plain" ;;
+    esac
+
+    local registry_exists=0
+    local header_ok=0
+    local numbering_ok=1
+    local entries_total=0
+    local missing_files=0
+    local default_set=0
+    local default_in_registry=0
+    local gpu_visible=0
+    local watchdog_active=0
+    local port_listening=0
+    local health_ok=0
+    local active_known=0
+    local issues=0
+    local active_num="" active_name="" default_file=""
+
+    if [[ -f "$LLM_REGISTRY" ]]
+    then
+        registry_exists=1
+        local header_line
+        header_line=$(head -1 "$LLM_REGISTRY" 2>/dev/null)
+        [[ "$header_line" == "#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps" ]] && header_ok=1
+
+        local expected_num=1
+        local num _name file _rest
+        while IFS='|' read -r num _name file _rest
+        do
+            [[ "$num" == "#" || -z "$num" ]] && continue
+            ((entries_total++))
+            [[ "$num" == "$expected_num" ]] || numbering_ok=0
+            [[ -f "$LLAMA_MODEL_DIR/$file" ]] || ((missing_files++))
+            ((expected_num++))
+        done < "$LLM_REGISTRY"
+    fi
+
+    default_file=$(__llm_default_file 2>/dev/null || true)
+    if [[ -n "$default_file" ]]
+    then
+        default_set=1
+        __llm_registry_entry_by_file "$default_file" >/dev/null && default_in_registry=1
+    fi
+
+    if command -v systemctl >/dev/null 2>&1 \
+        && systemctl --user is-active --quiet llama-watchdog.timer 2>/dev/null
+    then
+        watchdog_active=1
+    fi
+
+    if __resolve_smi >/dev/null 2>&1
+    then
+        gpu_visible=1
+    fi
+
+    if __test_port "$LLM_PORT"
+    then
+        port_listening=1
+        if __llm_is_healthy
+        then
+            health_ok=1
+        fi
+    fi
+
+    local active_entry=""
+    if [[ -f "$ACTIVE_LLM_FILE" ]]
+    then
+        active_num=$(< "$ACTIVE_LLM_FILE")
+        active_entry=$(__llm_active_entry 2>/dev/null || true)
+        if [[ -n "$active_entry" ]]
+        then
+            active_known=1
+            IFS='|' read -r _ active_name _ <<< "$active_entry"
+        fi
+    fi
+
+    (( registry_exists )) || ((issues++))
+    (( header_ok )) || ((issues++))
+    (( numbering_ok )) || ((issues++))
+    (( missing_files == 0 )) || ((issues++))
+    (( default_set )) || ((issues++))
+    (( default_in_registry )) || ((issues++))
+    (( gpu_visible )) || ((issues++))
+
+    if [[ "$output_mode" == "json" ]]
+    then
+        printf '{'
+        printf '"registry_exists":%s,' "$([[ $registry_exists -eq 1 ]] && echo true || echo false)"
+        printf '"header_ok":%s,' "$([[ $header_ok -eq 1 ]] && echo true || echo false)"
+        printf '"numbering_ok":%s,' "$([[ $numbering_ok -eq 1 ]] && echo true || echo false)"
+        printf '"entries_total":%s,' "$entries_total"
+        printf '"missing_files":%s,' "$missing_files"
+        printf '"default_set":%s,' "$([[ $default_set -eq 1 ]] && echo true || echo false)"
+        printf '"default_in_registry":%s,' "$([[ $default_in_registry -eq 1 ]] && echo true || echo false)"
+        printf '"default_file":"%s",' "$(__llm_json_escape "$default_file")"
+        printf '"gpu_visible":%s,' "$([[ $gpu_visible -eq 1 ]] && echo true || echo false)"
+        printf '"watchdog_active":%s,' "$([[ $watchdog_active -eq 1 ]] && echo true || echo false)"
+        printf '"port_listening":%s,' "$([[ $port_listening -eq 1 ]] && echo true || echo false)"
+        printf '"health_ok":%s,' "$([[ $health_ok -eq 1 ]] && echo true || echo false)"
+        printf '"active_num":"%s",' "$(__llm_json_escape "$active_num")"
+        printf '"active_name":"%s",' "$(__llm_json_escape "$active_name")"
+        printf '"issues":%s' "$issues"
+        printf '}\n'
+        (( issues == 0 ))
+        return
+    fi
+
+    if [[ "$output_mode" == "plain" ]]
+    then
+        printf '%s\n' "registry_exists=$registry_exists"
+        printf '%s\n' "header_ok=$header_ok"
+        printf '%s\n' "numbering_ok=$numbering_ok"
+        printf '%s\n' "entries_total=$entries_total"
+        printf '%s\n' "missing_files=$missing_files"
+        printf '%s\n' "default_set=$default_set"
+        printf '%s\n' "default_in_registry=$default_in_registry"
+        printf '%s\n' "default_file=$default_file"
+        printf '%s\n' "gpu_visible=$gpu_visible"
+        printf '%s\n' "watchdog_active=$watchdog_active"
+        printf '%s\n' "port_listening=$port_listening"
+        printf '%s\n' "health_ok=$health_ok"
+        printf '%s\n' "active_num=$active_num"
+        printf '%s\n' "active_name=$active_name"
+        printf '%s\n' "issues=$issues"
+        (( issues == 0 ))
+        return
+    fi
+
+    __tac_header "MODEL DOCTOR" "open"
+    __tac_info "Registry" "[$([[ $registry_exists -eq 1 ]] && echo FOUND || echo MISSING)]" \
+        "$([[ $registry_exists -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Error")"
+    __tac_info "Registry Header" "[$([[ $header_ok -eq 1 ]] && echo OK || echo BAD)]" \
+        "$([[ $header_ok -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Error")"
+    __tac_info "Registry Numbering" "[$([[ $numbering_ok -eq 1 ]] && echo OK || echo GAP_OR_DUPLICATE)]" \
+        "$([[ $numbering_ok -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Error")"
+    __tac_info "Missing Files" "[$missing_files]" \
+        "$([[ $missing_files -eq 0 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Error")"
+    __tac_info "Default Model" "[$([[ $default_set -eq 1 ]] && echo "$default_file" || echo NONE_SET)]" \
+        "$([[ $default_set -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Error")"
+    __tac_info "Default In Registry" "[$([[ $default_in_registry -eq 1 ]] && echo YES || echo NO)]" \
+        "$([[ $default_in_registry -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Error")"
+    __tac_info "CUDA Visibility" "[$([[ $gpu_visible -eq 1 ]] && echo READY || echo OFFLINE)]" \
+        "$([[ $gpu_visible -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Error")"
+    __tac_info "Watchdog" "[$([[ $watchdog_active -eq 1 ]] && echo ACTIVE || echo INACTIVE)]" \
+        "$([[ $watchdog_active -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Dim")"
+    __tac_info "LLM Port" "[$([[ $port_listening -eq 1 ]] && echo LISTENING || echo CLOSED)]" \
+        "$([[ $port_listening -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Dim")"
+    __tac_info "Health" "[$([[ $health_ok -eq 1 ]] && echo OK || echo OFFLINE_OR_LOADING)]" \
+        "$([[ $health_ok -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
+    if [[ -n "$active_num" ]]
+    then
+        __tac_info "Active Model" "[#${active_num} ${active_name:-unknown}]" \
+            "$([[ $active_known -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
+    fi
+    __tac_info "Summary" "[$issues issue(s)]" \
+        "$([[ $issues -eq 0 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
+    __tac_footer
+    (( issues == 0 ))
+}
+
+# ---------------------------------------------------------------------------
+# __model_recommend
+# @description Rank on-disk models for a 4 GB VRAM system using quant, size, architecture, and TPS.
+# @returns 0 on success, 1 if the registry is unavailable or empty.
+# ---------------------------------------------------------------------------
+function __model_recommend() {
+    if [[ ! -f "$LLM_REGISTRY" ]]
+    then
+        __tac_info "Registry" "[Not found - run 'model scan' first]" "$C_Error"
+        return 1
+    fi
+
+    local -a ranked=()
+    local num name file size arch quant layers gpu_layers ctx threads tps
+    while IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps
+    do
+        [[ "$num" == "#" || -z "$num" ]] && continue
+        [[ -f "$LLAMA_MODEL_DIR/$file" ]] || continue
+
+        local score=0
+        local rating tps_num size_tenths=0
+        rating=$(__llm_quant_rating "$file")
+        tps_num=$(__llm_tps_number "$tps")
+
+        case "$rating" in
+            recommended) score=$(( score + 35 )) ;;
+            acceptable)  score=$(( score + 20 )) ;;
+            discouraged) score=$(( score - 20 )) ;;
+            *)           score=$(( score + 10 )) ;;
+        esac
+
+        if [[ "$size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
+        then
+            size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
+        fi
+        if (( size_tenths <= 15 ))
+        then
+            score=$(( score + 25 ))
+        elif (( size_tenths <= 25 ))
+        then
+            score=$(( score + 18 ))
+        elif (( size_tenths <= 35 ))
+        then
+            score=$(( score + 8 ))
+        else
+            score=$(( score - 8 ))
+        fi
+
+        if (( gpu_layers > 0 ))
+        then
+            score=$(( score + 15 ))
+        else
+            score=$(( score - 12 ))
+        fi
+
+        if [[ "$arch" == *"moe"* ]]
+        then
+            score=$(( score + 6 ))
+        elif [[ "$arch" == "qwen3" || "$arch" == "qwen2" || "$arch" == "llama" ]]
+        then
+            score=$(( score + 4 ))
+        elif [[ "$arch" == gemma* ]]
+        then
+            score=$(( score + 2 ))
+        fi
+
+        local tps_floor=${tps_num%.*}
+        [[ "$tps_floor" =~ ^[0-9]+$ ]] || tps_floor=0
+        (( tps_floor > 20 )) && tps_floor=20
+        score=$(( score + tps_floor ))
+
+        ranked+=("$(printf '%04d|%s|%s|%s|%s|%s|%s|%s\n' \
+            "$score" "$num" "$name" "$size" "$quant" "$arch" "$tps_num" "$rating")")
+    done < "$LLM_REGISTRY"
+
+    if (( ${#ranked[@]} == 0 ))
+    then
+        __tac_info "Recommend" "[No on-disk models in registry]" "$C_Error"
+        return 1
+    fi
+
+    __tac_header "MODEL RECOMMENDATIONS" "open"
+    printf "${C_Dim}  %-4s %-28s %-7s %-8s %-9s %-7s %s${C_Reset}\n" \
+        "#" "MODEL" "SIZE" "QUANT" "ARCH" "TPS" "SCORE"
+    local _rec_rule
+    printf -v _rec_rule '%*s' $((UIWidth - 4)) ''
+    _rec_rule="${_rec_rule// /${BOX_SL}}"
+    printf "${C_Dim}  %s${C_Reset}\n" "$_rec_rule"
+
+    mapfile -t ranked < <(printf '%s\n' "${ranked[@]}" | sort -r)
+    local entry
+    for entry in "${ranked[@]}"
+    do
+        [[ -z "$entry" ]] && continue
+        local score_padded rec_num rec_name rec_size rec_quant rec_arch rec_tps rec_rating
+        IFS='|' read -r score_padded rec_num rec_name rec_size rec_quant rec_arch rec_tps rec_rating <<< "$entry"
+        local score_display="$score_padded"
+        if [[ "$score_padded" =~ ^-[0-9]+$ ]]
+        then
+            score_display=$(( -10#${score_padded#-} ))
+        elif [[ "$score_padded" =~ ^[0-9]+$ ]]
+        then
+            score_display=$((10#$score_padded))
+        fi
+        printf "  %-4s %-28s %-7s %-8s %-9s %-7s %s (%s)\n" \
+            "$rec_num" "${rec_name:0:28}" "$rec_size" "$rec_quant" "${rec_arch:0:9}" \
+            "${rec_tps}t/s" "$score_display" "$rec_rating"
+    done
+    __tac_footer
+}
+
+# ---------------------------------------------------------------------------
 # __model_delete
 # @description Delete a model from disk and renumber the registry after confirmation.
 # @returns 0 on success or cancellation, 1 if validation or deletion fails.
 # ---------------------------------------------------------------------------
 function __model_delete() {
-    local target="${1:-}"
+    local dry_run=0
+    local target=""
+    while (( $# > 0 ))
+    do
+        case "$1" in
+            --dry-run|-n) dry_run=1 ;;
+            *) target="${1:-}" ;;
+        esac
+        shift
+    done
     if [[ -z "$target" ]]
     then
-        __tac_info "Usage" "[model delete <number>]" "$C_Error"
+        __tac_info "Usage" "[model delete [--dry-run] <number>]" "$C_Error"
         return 1
     fi
     if [[ ! "$target" =~ ^[0-9]+$ ]]
@@ -1416,7 +1966,7 @@ function __model_delete() {
         return 1
     fi
     local entry
-    entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+    entry=$(__llm_registry_entry_by_num "$target")
     if [[ -z "$entry" ]]
     then
         __tac_info "Error" "[Model #$target not found]" "$C_Error"
@@ -1426,9 +1976,8 @@ function __model_delete() {
     IFS='|' read -r _n name file _rest <<< "$entry"
     local fpath="$LLAMA_MODEL_DIR/$file"
 
-    local _del_def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
     local _del_def_file=""
-    [[ -f "$_del_def_conf" ]] && _del_def_file=$(< "$_del_def_conf")
+    _del_def_file=$(__llm_default_file 2>/dev/null || true)
     if [[ -n "$_del_def_file" && "$file" == "$_del_def_file" ]]
     then
         __tac_info "Error" \
@@ -1446,6 +1995,11 @@ function __model_delete() {
         local fsize
         fsize=$(awk "BEGIN{printf \"%.1fG\", $fsize_bytes/1024/1024/1024}")
         __tac_info "Size" "$fsize" "$C_Dim"
+    fi
+    if (( dry_run ))
+    then
+        __tac_info "Dry Run" "[Would delete file and renumber registry only]" "$C_Warning"
+        return 0
     fi
     local confirm
     read -r -p "${C_Warning}Permanently delete this model? [y/N]: ${C_Reset}" confirm
@@ -1670,10 +2224,19 @@ function __model_download() {
 # @returns 0 on success or cancellation, 1 if validation or move fails.
 # ---------------------------------------------------------------------------
 function __model_archive() {
-    local target="${1:-}"
+    local dry_run=0
+    local target=""
+    while (( $# > 0 ))
+    do
+        case "$1" in
+            --dry-run|-n) dry_run=1 ;;
+            *) target="${1:-}" ;;
+        esac
+        shift
+    done
     if [[ -z "$target" ]]
     then
-        __tac_info "Usage" "[model archive <number>]" "$C_Error"
+        __tac_info "Usage" "[model archive [--dry-run] <number>]" "$C_Error"
         return 1
     fi
     if [[ ! "$target" =~ ^[0-9]+$ ]]
@@ -1682,7 +2245,7 @@ function __model_archive() {
         return 1
     fi
     local entry
-    entry=$(awk -F'|' -v n="$target" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+    entry=$(__llm_registry_entry_by_num "$target")
     if [[ -z "$entry" ]]
     then
         __tac_info "Error" "[Model #$target not found]" "$C_Error"
@@ -1693,9 +2256,8 @@ function __model_archive() {
     local fpath="$LLAMA_MODEL_DIR/$file"
     local archive_dir="$LLAMA_ARCHIVE_DIR"
 
-    local _arc_def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
     local _arc_def_file=""
-    [[ -f "$_arc_def_conf" ]] && _arc_def_file=$(< "$_arc_def_conf")
+    _arc_def_file=$(__llm_default_file 2>/dev/null || true)
     if [[ -n "$_arc_def_file" && "$file" == "$_arc_def_file" ]]
     then
         __tac_info "Error" \
@@ -1707,6 +2269,11 @@ function __model_archive() {
     __tac_info "Archive" "#${target} ${name}" "$C_Warning"
     __tac_info "From" "$fpath" "$C_Dim"
     __tac_info "To" "$archive_dir/$file" "$C_Dim"
+    if (( dry_run ))
+    then
+        __tac_info "Dry Run" "[Would move file and renumber registry only]" "$C_Warning"
+        return 0
+    fi
     local confirm
     read -r -p "${C_Warning}Archive this model? [y/N]: ${C_Reset}" confirm
     if [[ "${confirm,,}" != "y" ]]
@@ -1747,20 +2314,24 @@ function __model_archive() {
 # @returns 0 always.
 # ---------------------------------------------------------------------------
 function __model_usage() {
-    echo "Usage: model {scan|list|default|use|stop|status|info|bench|bench-diff|\
-bench-latest|delete|archive|download}"
+    echo "Usage: model {scan|list|default|use|stop|status|doctor|recommend|info|bench|bench-diff|\
+bench-compare|bench-latest|bench-history|delete|archive|download}"
     echo "  scan       - Scan $LLAMA_MODEL_DIR, read GGUF metadata, auto-calculate params"
     echo "  list       - Show numbered model registry (${PLAY_MARK} = active, * = default)"
     echo "  default [N] - Show current default LLM, or set it to model #N"
     echo "  use N      - Start model #N with optimal settings"
     echo "  stop       - Stop llama-server"
-    echo "  status     - Show what's running"
+    echo "  status     - Show what's running (--json|--plain supported)"
+    echo "  doctor     - Validate registry/default/GPU/watchdog/ports"
+    echo "  recommend  - Rank scanned models for a 4GB VRAM system"
     echo "  info N     - Detailed info for model #N"
     echo "  bench      - Benchmark all on-disk models"
     echo "  bench-diff - Compare the latest two bench TSVs (or pass old/new files)"
+    echo "  bench-compare - Alias for bench-diff"
     echo "  bench-latest - Show the newest saved benchmark TSV"
-    echo "  delete N   - Permanently delete model #N from disk and registry"
-    echo "  archive N  - Move model #N to archive/ and remove from registry"
+    echo "  bench-history - Summarise recent saved benchmark TSV runs"
+    echo "  delete N   - Permanently delete model #N from disk and registry (--dry-run)"
+    echo "  archive N  - Move model #N to archive/ and remove from registry (--dry-run)"
     echo "  download   - Download GGUF models from Hugging Face (repo:file)"
     return 0
 }
@@ -1771,7 +2342,6 @@ bench-latest|delete|archive|download}"
 function model() {
     local action="${1:-}"
     (( $# > 0 )) && shift
-    local target="${1:-}"
 
     case "$action" in
         scan)
@@ -1795,7 +2365,15 @@ function model() {
             ;;
 
         status)
-            __model_status
+            __model_status "${1:-}"
+            ;;
+
+        doctor)
+            __model_doctor "${1:-}"
+            ;;
+
+        recommend)
+            __model_recommend
             ;;
 
         info)
@@ -1810,12 +2388,20 @@ function model() {
             __model_bench_diff "$@"
             ;;
 
+        bench-compare)
+            __model_bench_diff "$@"
+            ;;
+
         bench-latest)
             __model_bench_latest
             ;;
 
+        bench-history)
+            __model_bench_history "${1:-}"
+            ;;
+
         delete)
-            __model_delete "${1:-}"
+            __model_delete "$@"
             ;;
 
         download)
@@ -1823,7 +2409,7 @@ function model() {
             ;;
 
         archive)
-            __model_archive "${1:-}"
+            __model_archive "$@"
             ;;
 
         *)
@@ -1835,28 +2421,26 @@ function model() {
 # serve/halt/mlogs — convenience wrappers for the model manager.
 # shellcheck disable=SC2034,SC2059,SC2120,SC2154
 function serve() {
-    local def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
     if [[ -n "${1:-}" ]]
     then
         model use "$1"
     else
         # Start the default LLM
-        if [[ -f "$def_conf" ]]
+        local def_num
+        def_num=$(__llm_default_number 2>/dev/null || true)
+        if [[ -n "$def_num" ]]
         then
-            local def_file
-            def_file=$(< "$def_conf")
-            local def_num
-            def_num=$(awk -F'|' -v f="$def_file" '$3 == f {print $1; exit}' "$LLM_REGISTRY" 2>/dev/null)
-            if [[ -n "$def_num" ]]
-            then
-                model use "$def_num"
-            else
-                __tac_info "Local LLM" "[Default file not found in registry: $def_file]" "$C_Error"
-                return 1
-            fi
+            model use "$def_num"
         else
-            __tac_info "Local LLM" "[NO DEFAULT SET]" "$C_Error"
-            printf '%s\n' "  ${C_Dim}Run 'model default <N>' to configure one.${C_Reset}"
+            local def_file=""
+            def_file=$(__llm_default_file 2>/dev/null || true)
+            if [[ -n "$def_file" ]]
+            then
+                __tac_info "Local LLM" "[Default file not found in registry: $def_file]" "$C_Error"
+            else
+                __tac_info "Local LLM" "[NO DEFAULT SET]" "$C_Error"
+                printf '%s\n' "  ${C_Dim}Run 'model default <N>' to configure one.${C_Reset}"
+            fi
             return 1
         fi
     fi

@@ -11,7 +11,7 @@
 #
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034
-VERSION="1.3"
+VERSION="1.5"
 
 # ==============================================================================
 # SETUP — Source the profile once for all tests
@@ -647,6 +647,13 @@ setup() {
     declare -f up >/dev/null 2>&1
 }
 
+@test "maintenance: up separates npm and cargo package reporting" {
+    local up_src
+    up_src="$(declare -f up)"
+    [[ "$up_src" == *"[3/12] NPM Packages"* ]]
+    [[ "$up_src" == *"Cargo Crates"* ]]
+}
+
 @test "maintenance: cl function is defined" {
     declare -f cl >/dev/null 2>&1
 }
@@ -680,6 +687,14 @@ setup() {
     run model
     [[ "$output" == *"bench-diff"* ]]
     [[ "$output" == *"bench-latest"* ]]
+}
+
+@test "model: model with no args includes doctor and recommend helpers in usage" {
+    run model
+    [[ "$output" == *"doctor"* ]]
+    [[ "$output" == *"recommend"* ]]
+    [[ "$output" == *"bench-history"* ]]
+    [[ "$output" == *"bench-compare"* ]]
 }
 
 @test "model: serve function is defined (convenience wrapper)" {
@@ -786,6 +801,21 @@ setup() {
     [[ "$output" == *"zzz_cmd"* ]]
     [[ "$output" == *"This is a test description"* ]]
     [[ "$output" != *"%s"* ]]
+}
+
+@test "ui: __hRow wraps long command and description without overflowing UIWidth" {
+    run __hRow "model bench-diff / bench-compare" \
+        "Compare two benchmark TSV runs and keep the help box aligned"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"model bench-diff / bench-compare"* ]]
+    [[ "$output" == *"Compare two benchmark TSV runs"* ]]
+
+    while IFS= read -r line
+    do
+        local plain=""
+        __strip_ansi "$line" plain
+        [ "${#plain}" -le "$UIWidth" ]
+    done <<< "$output"
 }
 @test "fn-avail: __hSection" { declare -f __hSection >/dev/null; }
 @test "fn-avail: __show_header" { declare -f __show_header >/dev/null; }
@@ -1458,6 +1488,84 @@ setup() {
     declare -f __model_bench >/dev/null
 }
 
+@test "llm-manager: __llm_registry_entry_by_num function is defined" {
+    declare -f __llm_registry_entry_by_num >/dev/null
+}
+
+@test "llm-manager: __llm_default_entry function is defined" {
+    declare -f __llm_default_entry >/dev/null
+}
+
+@test "llm-manager: __llm_wait_for_health function is defined" {
+    declare -f __llm_wait_for_health >/dev/null
+}
+
+@test "llm-manager: __model_doctor function is defined" {
+    declare -f __model_doctor >/dev/null
+}
+
+@test "llm-manager: __model_recommend function is defined" {
+    declare -f __model_recommend >/dev/null
+}
+
+@test "llm-manager: __model_bench_history function is defined" {
+    declare -f __model_bench_history >/dev/null
+}
+
+@test "llm-manager: model status supports json output" {
+    run model status --json
+    [[ "$output" == \{* ]]
+    [[ "$output" == *'"online":'* ]]
+}
+
+@test "llm-manager: model status supports plain output" {
+    run model status --plain
+    [[ "$output" == *"online="* ]]
+    [[ "$output" == *"port="* ]]
+}
+
+@test "llm-manager: model doctor supports json output" {
+    run model doctor --json
+    [[ "$output" == \{* ]]
+    [[ "$output" == *'"registry_exists":'* ]]
+    [[ "$output" == *'"issues":'* ]]
+}
+
+@test "llm-manager: model delete dry-run does not remove the model file" {
+    local llm_root="$TAC_TEST_TMPDIR/model-delete-dry-run"
+    mkdir -p "$llm_root/models" "$llm_root/.llm"
+    printf '%s\n' '#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps' \
+        '1|Demo Model|demo.gguf|1.0G|llama|Q4_K_M|32|999|4096|4|-' > "$llm_root/.llm/models.conf"
+    touch "$llm_root/models/demo.gguf"
+
+    LLM_REGISTRY="$llm_root/.llm/models.conf"
+    LLM_DEFAULT_FILE="$llm_root/.llm/default_model.conf"
+    LLAMA_MODEL_DIR="$llm_root/models"
+
+    run model delete --dry-run 1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Would delete"* ]]
+    [[ -f "$llm_root/models/demo.gguf" ]]
+}
+
+@test "llm-manager: model recommend ranks on-disk models from registry" {
+    run bash -lc "
+        source '$REPO_ROOT/env.sh' >/dev/null 2>&1
+        llm_root='$TAC_TEST_TMPDIR/model-recommend'
+        mkdir -p \"\$llm_root/models\" \"\$llm_root/.llm\"
+        printf '%s\n' '#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps' \
+            '1|Fast Model|fast-Q4_K_M.gguf|1.0G|llama|Q4_K_M|32|999|4096|4|14.2' \
+            '2|Slow Model|slow-Q8_0.gguf|3.8G|llama|Q8_0|40|0|8192|8|4.1' > \"\$llm_root/.llm/models.conf\"
+        touch \"\$llm_root/models/fast-Q4_K_M.gguf\" \"\$llm_root/models/slow-Q8_0.gguf\"
+        LLM_REGISTRY=\"\$llm_root/.llm/models.conf\"
+        LLAMA_MODEL_DIR=\"\$llm_root/models\"
+        model recommend
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Fast Model"* ]]
+    [[ "$output" == *"Slow Model"* ]]
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 24. OC DISPATCHER — Extended subcommand routing
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1475,6 +1583,11 @@ setup() {
 @test "oc: help output includes 'g' subcommand" {
     run oc
     [[ "$output" == *"Knowledge Graph"* || "$output" == *" g "* ]]
+}
+
+@test "oc: help output includes doctor-local subcommand" {
+    run oc
+    [[ "$output" == *"doctor-local"* ]]
 }
 
 @test "fn-avail: oc-kgraph" { declare -f oc-kgraph >/dev/null; }
@@ -2167,6 +2280,55 @@ EOF
 
 @test "openclaw: oc-health function is defined" {
     declare -f oc-health >/dev/null
+}
+
+@test "openclaw: oc-doctor-local function is defined" {
+    declare -f oc-doctor-local >/dev/null
+}
+
+@test "openclaw: oc-health supports json output" {
+    run oc-health --json
+    [[ "$output" == \{* ]]
+    [[ "$output" == *'"port":'* ]]
+    [[ "$output" == *'"health_status":'* ]]
+}
+
+@test "openclaw: oc-health supports plain output" {
+    run oc-health --plain
+    [[ "$output" == *"port="* ]]
+    [[ "$output" == *"health_status="* ]]
+}
+
+@test "openclaw: oc doctor-local supports json output" {
+    run oc doctor-local --json
+    [[ "$output" == \{* ]]
+    [[ "$output" == *'"issues":'* ]]
+}
+
+@test "openclaw: oc-cache-clear dry-run preserves cache files" {
+    local cache_file="$TAC_CACHE_DIR/tac_smoke_cache"
+    printf '%s\n' 'cached' > "$cache_file"
+    run oc-cache-clear --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"would be cleared"* ]]
+    [[ -f "$cache_file" ]]
+}
+
+@test "maintenance: docs-sync function is defined" {
+    declare -f docs-sync >/dev/null
+}
+
+@test "maintenance: cl dry-run preserves cleanup targets" {
+    local tmpdir="$TAC_TEST_TMPDIR/cl-dry-run"
+    mkdir -p "$tmpdir/.pytest_cache"
+    touch "$tmpdir/python-3.12.exe"
+    pushd "$tmpdir" >/dev/null
+    run cl --dry-run
+    popd >/dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"would be removed"* ]]
+    [[ -f "$tmpdir/python-3.12.exe" ]]
+    [[ -d "$tmpdir/.pytest_cache" ]]
 }
 
 @test "openclaw: oc-backup function is defined" {

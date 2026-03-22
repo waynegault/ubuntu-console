@@ -3,7 +3,7 @@
 # ─── Module: 05-ui-engine ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 5. UI HELPER ENGINE
 # ==============================================================================
@@ -363,29 +363,41 @@ function __hSection() {
 }
 
 # ---------------------------------------------------------------------------
-# __hRow — Help index row: "  command        description" inside box borders.
-# Layout derived from UIWidth: cmd_width=18, desc_width = UIWidth - 22.
+# __hRow — Help index row renderer with safe wrapping for long command/help text.
+# Layout derived from UIWidth: cmd_width=32, desc_width = UIWidth - 37.
 # Usage: __hRow "command" "Description of what it does"
 # ---------------------------------------------------------------------------
 function __hRow() {
-    local cmd="$1"
-    local cmd_width=18
-    local desc_width=$(( UIWidth - 22 ))  # 2 borders + 2 indent + 18 cmd
-    local desc="${2:0:$desc_width}"
-    local cmdPad=$(( cmd_width - ${#cmd} ))
-    local descPad=$(( desc_width - ${#desc} ))
+    local cmd="${1:-}"
+    local desc="${2:-}"
+    local cmd_width=32
+    local desc_width=$(( UIWidth - 37 ))  # 2 borders + 2 indent + 32 cmd + 1 spacer
 
-    local lPadStr=""; (( cmdPad  > 0 )) && printf -v lPadStr '%*s' "$cmdPad"  ""
-    local rPadStr=""; (( descPad > 0 )) && printf -v rPadStr '%*s' "$descPad" ""
+    local first_line=1
+    while [[ -n "$cmd" || -n "$desc" || $first_line -eq 1 ]]
+    do
+        local cmd_chunk="${cmd:0:$cmd_width}"
+        local desc_chunk="${desc:0:$desc_width}"
+        cmd="${cmd:$cmd_width}"
+        desc="${desc:$desc_width}"
 
-    # Single printf with explicit format string so color variables are
-    # applied (avoid passing a format-looking string to a "%s" formatter).
-    printf "%b%s%s%b%s%s%b\n" \
-        "${C_BoxBg}${BOX_V}  " \
-        "${C_Highlight}" "$cmd" \
-        "${C_Text}" "$lPadStr$desc" \
-        "$rPadStr" \
-        "${C_BoxBg}${BOX_V}${C_Reset}"
+        local cmd_pad=$(( cmd_width - ${#cmd_chunk} ))
+        local desc_pad=$(( desc_width - ${#desc_chunk} ))
+        local cmd_pad_str=""
+        local desc_pad_str=""
+        (( cmd_pad > 0 )) && printf -v cmd_pad_str '%*s' "$cmd_pad" ""
+        (( desc_pad > 0 )) && printf -v desc_pad_str '%*s' "$desc_pad" ""
+
+        printf "%b%s%s%b%s%s%b\n" \
+            "${C_BoxBg}${BOX_V}  " \
+            "${C_Highlight}" "$cmd_chunk" \
+            "${C_Text}" "$cmd_pad_str $desc_chunk" \
+            "$desc_pad_str" \
+            "${C_BoxBg}${BOX_V}${C_Reset}"
+
+        first_line=0
+        [[ -n "$cmd" || -n "$desc" ]] || break
+    done
 }
 
 # ---------------------------------------------------------------------------

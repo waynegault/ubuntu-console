@@ -3,7 +3,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -420,7 +420,7 @@ function tactical_help() {
     printf "${C_BoxBg}║${C_Reset}${C_Warning}%s%s%s${C_Reset}${C_BoxBg}║${C_Reset}\n" "$__ls" "$__title" "$__rs"
     __hRow "m" "Open Tactical Dashboard with live system stats"
     __hRow "h" "Display this command reference with all shortcuts"
-    __hRow "up" "Run 10-step maintenance: updates, caches, GPU, disk"
+    __hRow "up" "Run 12-step maintenance: packages, health checks, docs sync"
     __hRow "sysinfo" "One-line summary: CPU load, RAM, disk usage, GPU"
     __hRow "get-ip" "Show WSL internal IP and external WAN address"
     __hRow "cls / reload" "Clear screen + redraw banner / Full profile reload"
@@ -434,7 +434,7 @@ function tactical_help() {
     __hRow "so / xo" "Start / Stop the OpenClaw gateway (xo stops only — use 'oc restart' to restart)"
     __hRow "oc restart" "Full gateway restart (native: openclaw gateway restart)"
     __hRow "oc gs / oc stat" "Gateway deep health probe / Full status --all"
-    __hRow "oc health" "Ping gateway HTTP /api/health endpoint"
+    __hRow "oc health" "Gateway health probe (--json|--plain supported)"
     __hRow "oc tail" "Live-tail gateway journal logs (Ctrl-C to stop)"
     __hRow "oc v" "Print installed OpenClaw CLI version string"
     __hRow "oc update" "Update the OpenClaw CLI binary to latest release"
@@ -460,15 +460,16 @@ function tactical_help() {
     __hRow "oc log-dir" "Change directory to the OpenClaw logs folder"
     __hRow "oc sec" "Run a deep OpenClaw security audit with findings"
     __hRow "oc docs" "Full-text search across OpenClaw documentation"
-    __hRow "oc cache-clear" "Remove /dev/shm telemetry caches to force refresh"
+    __hRow "oc cache-clear" "Remove /dev/shm telemetry caches to force refresh (--dry-run)"
     __hRow "oc diag" "5-point check: doctor, gateway, models, env, logs"
+    __hRow "oc doctor-local" "Validate local gateway + llama.cpp integration"
     __hRow "oc failover" "Configure cloud LLM fallback (on|off|status)"
     __hRow "oc refresh-keys" "Force re-import of Windows API keys into WSL"
 
     __hSection "OPENCLAW — DATA & EXTENSIONS"
     __hRow "oc wk / oc root" "Jump to OpenClaw Workspace or Root config dir"
     __hRow "oc backup" "Snapshot workspace + agents to timestamped ZIP"
-    __hRow "oc restore" "Restore workspace + agents from a backup ZIP"
+    __hRow "oc restore" "Restore workspace + agents from a backup ZIP (--dry-run)"
     __hRow "oc cron" "Manage OpenClaw scheduled tasks (list|add|runs)"
     __hRow "oc skills" "Show installed and eligible OpenClaw skill modules"
     __hRow "oc plugins" "Manage plugins (list|doctor|enable|disable)"
@@ -495,16 +496,21 @@ function tactical_help() {
     __hRow "model default [N]" "Show current default LLM or set it to model #N"
     __hRow "model use N" "Start model #N with optimal GPU/ctx/thread settings"
     __hRow "model stop" "Stop the local llama-server"
-    __hRow "model status" "Show what's currently running"
+    __hRow "model status" "Show what's running (--json|--plain supported)"
+    __hRow "model doctor" "Validate registry/default/GPU/watchdog/ports"
+    __hRow "model recommend" "Rank scanned models for a 4GB VRAM system"
     __hRow "model info N" "Display full details for model #N"
     __hRow "model bench" "Benchmark all on-disk models and compare TPS"
-    __hRow "model delete N" "Permanently delete model #N from disk and registry"
-    __hRow "model archive N" "Move model #N to /mnt/m/archive/ and deregister"
+    __hRow "model bench-diff / bench-compare" "Compare two benchmark TSV runs"
+    __hRow "model bench-history" "Summarise recent saved benchmark runs"
+    __hRow "model delete N" "Permanently delete model #N from disk and registry (--dry-run)"
+    __hRow "model archive N" "Move model #N to /mnt/m/archive/ and deregister (--dry-run)"
     __hRow "model download" "Download GGUF models from Hugging Face (repo:file)"
     __hRow "serve N" "Alias for model use N"
     __hRow "halt" "Stop the local llama.cpp inference server"
     __hRow "mlogs" "Open the llama-server runtime log in VS Code"
     __hRow "burn" "Run ~1300 token stress test and measure live TPS"
+    __hRow "docs-sync" "Check whether README-tracked repo facts have drifted"
 
     __hSection "LLM — CHAT & EXPLAIN"
     __hRow "chat: [msg]" "Interactive LLM chat session (end-chat to exit)"
