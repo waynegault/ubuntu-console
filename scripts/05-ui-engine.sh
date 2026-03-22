@@ -3,7 +3,7 @@
 # ─── Module: 05-ui-engine ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 5. UI HELPER ENGINE
 # ==============================================================================
@@ -54,6 +54,11 @@ function __vsc_open() {
     local msg="${2:-VS Code opened...}"
 
     __resolve_vscode_bin
+    if [[ -z "${VSCODE_BIN:-}" || ! -x "$VSCODE_BIN" ]]
+    then
+        __tac_info "VS Code" "[NOT FOUND]" "$C_Error"
+        return 1
+    fi
     "$VSCODE_BIN" "$target"
     printf '%s\n' "$msg"
 }

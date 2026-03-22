@@ -3,7 +3,7 @@
 # ─── Module: 10-deployment ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 10. DEPLOYMENT & SCAFFOLDING
 # ==============================================================================
@@ -42,7 +42,10 @@ function mkproj() {
     mkdir -p "$n/src" "$n/tests"
     cd "$n" || return
 
-    echo "# Core dependencies" > requirements.txt
+    cat << 'EOF' > requirements.txt
+# Core dependencies
+pytest
+EOF
     printf "__pycache__/\n.venv/\n.env\n*.log\n.pytest_cache/\n" > .gitignore
     printf "ENVIRONMENT=development\nLOG_LEVEL=DEBUG\n" > .env.example
     touch src/__init__.py

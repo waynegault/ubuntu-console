@@ -710,6 +710,13 @@ setup() {
     alias h >/dev/null 2>&1
 }
 
+@test "alias: code function fails cleanly when VS Code is unavailable" {
+    __resolve_vscode_bin() { VSCODE_BIN=""; }
+    VSCODE_BIN=""
+    run code "/tmp/example"
+    [ "$status" -eq 1 ]
+}
+
 @test "alias: 'cls' is defined (clear_tactical)" {
     alias cls >/dev/null 2>&1
 }
@@ -1169,6 +1176,13 @@ setup() {
     [[ "$output" == *"[DONE]"* ]]
 }
 
+@test "ui: __vsc_open fails cleanly when VS Code is unavailable" {
+    __resolve_vscode_bin() { VSCODE_BIN=""; }
+    VSCODE_BIN=""
+    run __vsc_open "/tmp/example"
+    [ "$status" -eq 1 ]
+}
+
 @test "ui: __threshold_color boundary: 0 returns C_Success" {
     result=$(__threshold_color 0)
     [[ "$result" == "$C_Success" ]]
@@ -1506,6 +1520,10 @@ setup() {
     run mkproj "$testdir"
     [ "$status" -eq 1 ]
     [[ "$output" == *"ALREADY EXISTS"* ]]
+}
+
+@test "deployment: mkproj scaffold includes pytest in requirements" {
+    grep -q '^pytest$' "$REPO_ROOT/scripts/10-deployment.sh"
 }
 
 @test "deployment: commit_deploy requires a message" {
@@ -1859,6 +1877,18 @@ EOF
 @test "openclaw: restore writes tactical-console.bashrc into TACTICAL_REPO_ROOT" {
     grep -q 'mkdir -p "\$TACTICAL_REPO_ROOT"' "$REPO_ROOT/scripts/09-openclaw.sh"
     grep -q 'cp "\$tmp_restore/ubuntu-console/tactical-console.bashrc" "\$TACTICAL_REPO_ROOT/tactical-console.bashrc"' "$REPO_ROOT/scripts/09-openclaw.sh"
+}
+
+@test "dashboard: bashrc diagnostics target the canonical tactical-console.bashrc" {
+    grep -q 'local src="\$TACTICAL_REPO_ROOT/tactical-console.bashrc"' "$REPO_ROOT/scripts/12-dashboard-help.sh"
+}
+
+@test "env.sh: library mode bootstraps OpenClaw state for cooldown writes" {
+    local home_dir="$TAC_TEST_TMPDIR/env-home-bootstrap"
+    mkdir -p "$home_dir"
+
+    run env HOME="$home_dir" bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __set_cooldown smoke 123; test -f '$home_dir/.openclaw/maintenance_cooldowns.txt'"
+    [ "$status" -eq 0 ]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

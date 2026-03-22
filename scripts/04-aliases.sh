@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034
+# shellcheck disable=SC2034,SC2154
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
@@ -42,6 +42,11 @@ alias g='oc g'
 # code() passes raw args and skips __vsc_open to support multi-arg/folder usage.
 function code() {
     __resolve_vscode_bin
+    if [[ -z "${VSCODE_BIN:-}" || ! -x "$VSCODE_BIN" ]]
+    then
+        __tac_info "VS Code" "[NOT FOUND]" "$C_Error"
+        return 1
+    fi
     "$VSCODE_BIN" "$@"
 }
 # oedit — Open tactical-console.bashrc in VS Code for editing.

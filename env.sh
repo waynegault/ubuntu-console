@@ -36,6 +36,10 @@ for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh; do
     [[ -f "$_tac_lib_f" ]] && source "$_tac_lib_f"
 done
 
+# Library mode skips 13-init, but core helpers still expect the OpenClaw
+# state directories to exist for cooldown and error-log writes.
+mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" 2>/dev/null || true
+
 unset _tac_env_root _tac_lib_f _tac_lib_dir
 
 # end of file

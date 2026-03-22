@@ -78,6 +78,7 @@ function __check_cooldown() {
 # ---------------------------------------------------------------------------
 function __set_cooldown() {
     local key="$1" now="$2"
+    mkdir -p "$(dirname "$CooldownDB")" 2>/dev/null || true
     # Rewrite the cooldown database: remove old entry, append new timestamp.
     {
         grep -v "^${key}=" "$CooldownDB" 2>/dev/null
