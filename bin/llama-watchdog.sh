@@ -4,7 +4,7 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="2.0"
+VERSION="2.1"
 set -euo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -20,7 +20,8 @@ ACTIVE_LLM_FILE="/dev/shm/active_llm"
 LLM_LOG_FILE="/dev/shm/llama-server.log"
 LLM_REGISTRY="${LLM_REGISTRY:-/mnt/m/.llm/models.conf}"
 LLAMA_MODEL_DIR="${LLAMA_MODEL_DIR:-/mnt/m/active}"
-LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-/home/wayne/llama.cpp/build/bin/llama-server}"
+LLAMA_ROOT="${LLAMA_ROOT:-$HOME/llama.cpp}"
+LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-$LLAMA_ROOT/build/bin/llama-server}"
 LLAMA_CPU_THREADS="${LLAMA_CPU_THREADS:-12}"
 LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-4096}"
 

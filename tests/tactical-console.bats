@@ -901,10 +901,16 @@ setup() {
     [[ "$wd_port" == "$LLM_PORT" ]]
 }
 
-@test "cross-script: watchdog LLAMA_SERVER_BIN default matches bashrc" {
-    local wd_bin
-    wd_bin=$(grep -oP 'LLAMA_SERVER_BIN="\$\{LLAMA_SERVER_BIN:-\K[^}]+' "$REPO_ROOT/bin/llama-watchdog.sh")
-    [[ "$wd_bin" == "$LLAMA_SERVER_BIN" ]]
+@test "cross-script: watchdog LLAMA_ROOT default resolves to bashrc" {
+    local wd_root
+    wd_root=$(grep -oP 'LLAMA_ROOT="\$\{LLAMA_ROOT:-\K[^}]+' "$REPO_ROOT/bin/llama-watchdog.sh")
+    wd_root="${wd_root/\$HOME/$HOME}"
+    [[ "$wd_root" == "$LLAMA_ROOT" ]]
+}
+
+@test "cross-script: watchdog LLAMA_SERVER_BIN default is derived from LLAMA_ROOT" {
+    grep -q 'LLAMA_SERVER_BIN="\${LLAMA_SERVER_BIN:-\$LLAMA_ROOT/build/bin/llama-server}"' \
+        "$REPO_ROOT/bin/llama-watchdog.sh"
 }
 
 @test "cross-script: all scripts have VERSION variable or Module Version comment" {
@@ -1843,6 +1849,11 @@ EOF
 
 @test "systemd: llama-watchdog.service has [Service] section" {
     grep -q '\[Service\]' "$REPO_ROOT/systemd/llama-watchdog.service"
+}
+
+@test "systemd: llama-watchdog.service uses the current user's home" {
+    grep -q '^ExecStart=%h/.local/bin/llama-watchdog.sh$' \
+        "$REPO_ROOT/systemd/llama-watchdog.service"
 }
 
 @test "systemd: llama-watchdog.timer has [Timer] section" {
