@@ -67,6 +67,28 @@ export LLAMA_DRIVE_SIZE
 export LLAMA_SERVER_BIN="$LLAMA_ROOT/build/bin/llama-server"
 export LLAMA_BUILD_VERSION
 LLAMA_BUILD_VERSION=$(git -C "$LLAMA_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+# ---- LLM Registry (models.conf) Schema ----
+# Format: pipe-delimited fields, one model per line
+#   num|name|file|size|arch|quant|layers|gpu_layers|ctx|threads|tps
+#
+# Field descriptions:
+#   num        - Unique model number (used for 'model use <num>')
+#   name       - Human-readable model name (e.g., "Phi-4-mini")
+#   file       - GGUF filename (e.g., "phi-4-mini.Q4_K_M.gguf")
+#   size       - File size with suffix (e.g., "2.5G", "4.1G")
+#   arch       - Model architecture (e.g., "3.8B", "7B", "14B", "MoE-8x7B")
+#   quant      - Quantization type (e.g., "Q4_K_M", "Q5_K_M", "Q8_0")
+#   layers     - Total transformer layers
+#   gpu_layers - Layers to offload to GPU (999 = max, 0 = CPU-only)
+#   ctx        - Context window size (e.g., 4096, 8192)
+#   threads    - CPU threads for inference
+#   tps        - Last measured tokens/sec (performance metric)
+#
+# Example:
+#   1|Phi-4-mini|phi-4-mini.Q4_K_M.gguf|2.5G|3.8B|Q4_K_M|32|999|4096|12|45.2
+#
+# Used by: model scan/use/stop/bench, llama-watchdog.sh, dashboard
 export LLM_REGISTRY="$LLAMA_DRIVE_ROOT/.llm/models.conf"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"
 export LLM_LOG_FILE="/dev/shm/llama-server.log"
