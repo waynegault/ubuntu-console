@@ -1434,6 +1434,30 @@ setup() {
     declare -f __quant_label >/dev/null
 }
 
+@test "llm-manager: __model_scan function is defined" {
+    declare -f __model_scan >/dev/null
+}
+
+@test "llm-manager: __model_list function is defined" {
+    declare -f __model_list >/dev/null
+}
+
+@test "llm-manager: __model_use function is defined" {
+    declare -f __model_use >/dev/null
+}
+
+@test "llm-manager: __model_stop function is defined" {
+    declare -f __model_stop >/dev/null
+}
+
+@test "llm-manager: __model_info function is defined" {
+    declare -f __model_info >/dev/null
+}
+
+@test "llm-manager: __model_bench function is defined" {
+    declare -f __model_bench >/dev/null
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 24. OC DISPATCHER — Extended subcommand routing
 # ─────────────────────────────────────────────────────────────────────────────
