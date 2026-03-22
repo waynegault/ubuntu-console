@@ -4,7 +4,7 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="1.9"
+VERSION="2.0"
 set -euo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -120,6 +120,12 @@ then
     fi
     if [[ "$name" == "Qwen3.5-4B" ]]; then
         (( use_ctx > 3072 )) && use_ctx=3072
+        batch_size=2048; ubatch_size=512; parallel_slots=1
+    fi
+    # Gemma 3 4b It: 3691 MiB VRAM projected at ctx=4096/p=2 vs ~3290 MiB free.
+    # Clamp to ctx=2048/p=1 so KV overhead drops ~75% and fits safely.
+    if [[ "$name" == "Gemma 3 4b It" ]]; then
+        (( use_ctx > 2048 )) && use_ctx=2048
         batch_size=2048; ubatch_size=512; parallel_slots=1
     fi
 

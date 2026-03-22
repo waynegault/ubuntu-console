@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 17
+# Module Version: 18
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -956,6 +956,17 @@ function model() {
                 if [[ "$name" == "Qwen3.5-4B" ]]
                 then
                     (( ctx > 3072 )) && ctx=3072
+                    batch_size=2048
+                    ubatch_size=512
+                    parallel_slots=1
+                fi
+
+                # Gemma 3 4b It: projects 3691 MiB VRAM at ctx=4096/p=2 but
+                # only ~3290 MiB is free. Halve ctx and drop to single slot so
+                # KV overhead falls ~75%, keeping total safely under budget.
+                if [[ "$name" == "Gemma 3 4b It" ]]
+                then
+                    (( ctx > 2048 )) && ctx=2048
                     batch_size=2048
                     ubatch_size=512
                     parallel_slots=1
