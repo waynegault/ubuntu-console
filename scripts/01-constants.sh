@@ -105,25 +105,40 @@ export BASH_COMPLETION_SCRIPT="/usr/share/bash-completion/bash_completion"
 
 # ---- VS Code Path (Lazy-initialized on first use to avoid slow pwsh call at startup) ----
 VSCODE_BIN=""
+# Cache TTL: 7 days (604800 seconds) — VS Code path rarely changes but may
+# need refresh after Windows user rename or VS Code reinstallation.
+readonly __VSCODE_CACHE_TTL=604800
 # Resolve the VS Code binary path, caching the result for subsequent calls.
+# Uses a timestamp file to implement TTL-based cache expiry.
 function __resolve_vscode_bin() {
     [[ -n "$VSCODE_BIN" ]] && return
-    if [[ -f "$TAC_CACHE_DIR/vscode_path" ]]
+    local cache_file="$TAC_CACHE_DIR/vscode_path"
+    local timestamp_file="$TAC_CACHE_DIR/vscode_path.ts"
+    # Check if cache is fresh (within TTL)
+    if [[ -f "$cache_file" && -f "$timestamp_file" ]]
     then
-        VSCODE_BIN=$(< "$TAC_CACHE_DIR/vscode_path")
-    else
-        local win_user
-        win_user=$(pwsh.exe -NoProfile -Command '[Environment]::UserName' 2>/dev/null | tr -d '\r')
-        VSCODE_BIN="/mnt/c/Users/${win_user}/AppData/Local/Programs/Microsoft VS Code/bin/code"
-        if [[ ! -x "$VSCODE_BIN" ]]
+        local now ts
+        now=$(date +%s)
+        ts=$(< "$timestamp_file")
+        if (( now - ts < __VSCODE_CACHE_TTL ))
         then
-            VSCODE_BIN=$(command -v code 2>/dev/null || echo "")
+            VSCODE_BIN=$(< "$cache_file")
+            return
         fi
-        if [[ -n "$VSCODE_BIN" ]]
-        then
-            echo "$VSCODE_BIN" > "$TAC_CACHE_DIR/vscode_path.tmp" \
-                && mv "$TAC_CACHE_DIR/vscode_path.tmp" "$TAC_CACHE_DIR/vscode_path"
-        fi
+    fi
+    # Cache miss or expired — resolve path
+    local win_user
+    win_user=$(pwsh.exe -NoProfile -Command '[Environment]::UserName' 2>/dev/null | tr -d '\r')
+    VSCODE_BIN="/mnt/c/Users/${win_user}/AppData/Local/Programs/Microsoft VS Code/bin/code"
+    if [[ ! -x "$VSCODE_BIN" ]]
+    then
+        VSCODE_BIN=$(command -v code 2>/dev/null || echo "")
+    fi
+    if [[ -n "$VSCODE_BIN" ]]
+    then
+        echo "$VSCODE_BIN" > "${cache_file}.tmp" \
+            && mv "${cache_file}.tmp" "$cache_file"
+        date +%s > "$timestamp_file"
     fi
 }
 
