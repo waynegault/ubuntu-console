@@ -3,13 +3,19 @@
 # ─── Module: 10-deployment ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 10. DEPLOYMENT & SCAFFOLDING
 # ==============================================================================
 # @modular-section: deployment
 # @depends: constants, design-tokens, ui-engine, hooks
 # @exports: mkproj, commit_deploy, commit_auto
+
+# ---- Constants for LLM-powered commit messages ----
+readonly _COMMIT_DIFF_MAX_LINES=500       # Cap diff at 500 lines for context window
+readonly _COMMIT_DIFF_MAX_CHARS=3000      # Cap diff at 3000 chars for small models
+readonly _COMMIT_MAX_TOKENS=80            # Commit messages ≤72 chars; 80 gives buffer
+readonly _COMMIT_TEMPERATURE=0.3          # Low creativity for deterministic summaries
 
 # ---------------------------------------------------------------------------
 # mkproj — Scaffold a new Python project with PEP-8 main.py, tests, venv, git.
@@ -265,14 +271,14 @@ function commit_auto() {
     #   5. On accept: commit, push, deploy. On reject: git reset HEAD.
 
     git add .
-    # Capture both stat (file-level summary) and body (line-level diff, capped at 500 lines)
+    # Capture both stat (file-level summary) and body (line-level diff)
     # Note (I4): Two separate `git diff --cached` calls are intentional — --stat
     # produces a columnar summary while the raw diff gives line-level context.
     # Both read the same index snapshot so there is no consistency issue.
     local diff_stat
     diff_stat=$(git diff --cached --stat 2>/dev/null)
     local diff_body
-    diff_body=$(git diff --cached 2>/dev/null | head -500)
+    diff_body=$(git diff --cached 2>/dev/null | head -"$_COMMIT_DIFF_MAX_LINES")
     local diff="${diff_stat}
 ---
 ${diff_body}"
@@ -299,14 +305,12 @@ ${diff_body}"
     local prompt="Write a concise git commit message (one line, max 72 chars,"
     prompt+=" imperative mood) for the following diff."
     prompt+=" Return ONLY the message, no quotes or explanation."
-    # max_tokens: 80 — commit messages should be ≤72 chars; 80 gives a small buffer.
-    # temperature: 0.3 — low creativity for deterministic, factual summaries.
-    # diff capped at 3000 chars to stay within context window of small local models.
+    # Use constants for LLM parameters (defined at top of file)
     local payload
     payload=$(jq -n \
         --arg prompt "$prompt" \
-        --arg diff "${diff:0:3000}" \
-        '{messages: [{role: "user", content: ($prompt + "\n\n" + $diff)}], max_tokens: 80, temperature: 0.3}')
+        --arg diff "${diff:0:$_COMMIT_DIFF_MAX_CHARS}" \
+        "{messages: [{role: \"user\", content: (\$prompt + \"\n\n\" + \$diff)}], max_tokens: $_COMMIT_MAX_TOKENS, temperature: $_COMMIT_TEMPERATURE}")
 
     local raw_response
     raw_response=$(curl -s --max-time 30 "$LOCAL_LLM_URL" \
