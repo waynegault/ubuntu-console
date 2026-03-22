@@ -13,6 +13,7 @@
 # How:      Sources env.sh (which loads modules 01-12), then executes the
 #           given command with all arguments.
 # ==============================================================================
+set -euo pipefail
 
 _tac_exec_bin="$(readlink -f "${BASH_SOURCE[0]}")"
 _tac_exec_root="$(cd "$(dirname "$_tac_exec_bin")/.." && pwd)"

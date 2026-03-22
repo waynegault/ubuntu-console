@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Thin wrapper — delegates to the real 'serve' function via tac-exec
+set -euo pipefail
 _tac_bin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec "$_tac_bin_dir/tac-exec" serve "$@"
 # end of file
