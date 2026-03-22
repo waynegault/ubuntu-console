@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC1090,SC1091,SC2015,SC2016,SC2034,SC2059,SC2086,SC2154
+# shellcheck disable=SC1090,SC1091,SC2015,SC2016,SC2034,SC2059,SC2086,SC2154,SC2317
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
@@ -17,14 +17,28 @@
 #   oc-browser, oc-nodes, oc-sandbox, oc-env, oc-cache-clear,
 #   oc-diag, oc-failover, wacli, oc-kgraph
 
+# __so_show_errors — Extract and display the most recent gateway errors.
+# Pulls the last 30 log lines and shows up to 5 matching error patterns.
 # ---------------------------------------------------------------------------
-# so — Start the OpenClaw gateway (systemd-managed service).
-# Injects bridged API keys into the systemd user session before starting.
-# ---------------------------------------------------------------------------
-function so() {
-    local _svc="openclaw-gateway.service"
+function __so_show_errors() {
+    local _svc="$1" _errors
+    _errors=$(journalctl --user -u "$_svc" --no-pager -n 30 --output=cat 2>&1 \
+        | grep -iE 'fail|error|port.*in use|already listening|exited|refused' | tail -5)
+    if [[ -n "$_errors" ]]
+    then
+        printf '%s\n' "  ${C_Dim}Recent errors:${C_Reset}"
+        while IFS= read -r _line
+        do
+            printf '%s\n' "    ${C_Dim}${_line}${C_Reset}"
+        done <<< "$_errors"
+    fi
+}
 
-    # Already healthy — nothing to do.
+# ---------------------------------------------------------------------------
+# __so_check_healthy — Check if gateway is already running and healthy.
+# Returns 0 if healthy (nothing to do), 1 if needs startup.
+# ---------------------------------------------------------------------------
+function __so_check_healthy() {
     if __test_port "$OC_PORT"
     then
         if pgrep -x llama-server >/dev/null 2>&1 && __test_port "$LLM_PORT"
@@ -36,11 +50,15 @@ function so() {
         __tac_info "Gateway" "[ALREADY RUNNING]" "$C_Warning"
         return 0
     fi
+    return 1
+}
 
-    # ── Pre-flight: clear stale service state ──────────────────────────
-    # If systemd already has the service in a failed or auto-restart
-    # state (e.g. crash loop from a previous run), stop it cleanly and
-    # reset the failure counter before attempting a fresh start.
+# ---------------------------------------------------------------------------
+# __so_clear_stale_state — Clear stale systemd service state.
+# Returns 0 if state was cleared, 1 if no stale state found.
+# ---------------------------------------------------------------------------
+function __so_clear_stale_state() {
+    local _svc="$1"
     local _pre_state
     _pre_state=$(systemctl --user show -p SubState --value "$_svc" 2>/dev/null)
     if [[ "$_pre_state" == "auto-restart" || "$_pre_state" == "failed" ]]
@@ -49,59 +67,67 @@ function so() {
         systemctl --user stop "$_svc" 2>/dev/null
         systemctl --user reset-failed "$_svc" 2>/dev/null
         sleep 1
+        return 0
     fi
+    return 1
+}
 
-    # ── Pre-flight: detect port held by orphan process ─────────────────
-    if __test_port "$OC_PORT"
+# ---------------------------------------------------------------------------
+# __so_free_port — Free port held by orphan process.
+# Returns 0 if port freed or not held, 1 if still blocked.
+# ---------------------------------------------------------------------------
+function __so_free_port() {
+    local _port="$1"
+    local _svc="openclaw-gateway.service"
+    if __test_port "$_port"
     then
-        __tac_info "Gateway" "[PORT $OC_PORT HELD — freeing]" "$C_Warning"
+        __tac_info "Gateway" "[PORT $_port HELD — freeing]" "$C_Warning"
         openclaw gateway stop >/dev/null 2>&1
         systemctl --user stop "$_svc" 2>/dev/null
         sleep 1
-        if __test_port "$OC_PORT"
+        if __test_port "$_port"
         then
-            # Try auto-killing a Windows holder; if it's still blocked, bail
-            if __so_check_win_port "$OC_PORT"
+            # Try auto-killing a Windows holder
+            if __so_check_win_port "$_port"
             then
                 return 1
             fi
-            # Re-check after auto-kill — if WSL side still holds it, give up
-            if __test_port "$OC_PORT"
+            # Re-check after auto-kill
+            if __test_port "$_port"
             then
-                __tac_info "Gateway" "[PORT $OC_PORT BLOCKED]" "$C_Error"
+                __tac_info "Gateway" "[PORT $_port BLOCKED]" "$C_Error"
                 return 1
             fi
         fi
     fi
+    return 0
+}
 
-    # ── Pre-flight: Windows-side port conflict (WSL only) ──────────────
-    # WSL shares the Windows network stack. A Windows process binding the
-    # port is invisible to ss/lsof but blocks bind() inside WSL. Check
-    # proactively so the user gets a clear message instead of a crash loop.
-    if ! __test_port "$OC_PORT" && __so_check_win_port "$OC_PORT" --block
-    then
-        return 1
-    fi
-
-    # ── Pre-flight: Tailscale Serve port conflict ──────────────────────
-    # Tailscale Serve binds a userspace socket that is invisible to ss/lsof
-    # but blocks Node's bind(). If Serve is proxying to our port and the
-    # gateway isn't running, we must cycle Serve around the startup.
-    local _ts_serve_active=0
+# ---------------------------------------------------------------------------
+# __so_cycle_tailscale_serve — Cycle Tailscale Serve if conflicting.
+# Sets _ts_serve_active=1 if cycled (caller must restore).
+# Uses global _ts_serve_active variable.
+# ---------------------------------------------------------------------------
+function __so_cycle_tailscale_serve() {
+    local _port="$1"
+    _ts_serve_active=0
     if command -v tailscale &>/dev/null
     then
-        if tailscale serve status 2>/dev/null | grep -q ":$OC_PORT\b"
+        if tailscale serve status 2>/dev/null | grep -q ":$_port\b"
         then
             _ts_serve_active=1
-            __tac_info "Tailscale Serve" "[CYCLING — port $OC_PORT proxy]" "$C_Dim"
+            __tac_info "Tailscale Serve" "[CYCLING — port $_port proxy]" "$C_Dim"
             sudo -n tailscale serve off 2>/dev/null
             rm -f /tmp/openclaw-1000/gateway.*.lock 2>/dev/null
             sleep 1
         fi
     fi
+}
 
-    # ── Push API keys into the systemd user environment ────────────────
-    # Always source the cache file to ensure all keys are present in the shell environment.
+# ---------------------------------------------------------------------------
+# __so_push_api_keys — Push API keys into systemd user environment.
+# ---------------------------------------------------------------------------
+function __so_push_api_keys() {
     if [[ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]]; then
         source "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null
     fi
@@ -112,11 +138,17 @@ function so() {
         _key="${_key%%=*}"
         [[ -n "$_key" && -n "${!_key:-}" ]] && systemctl --user set-environment "${_key}=${!_key}" 2>/dev/null
     done < <(grep '^export ' "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null)
+}
 
-    # ── Step 1: Ensure local LLM is running ──────────────────────────
+# ---------------------------------------------------------------------------
+# __so_ensure_llm_running — Ensure local LLM is running.
+# Starts default model if needed, shows spinner during startup.
+# Returns 0 if LLM is running and healthy, 1 on failure.
+# ---------------------------------------------------------------------------
+function __so_ensure_llm_running() {
     if pgrep -x llama-server >/dev/null 2>&1 && __test_port "$LLM_PORT"
     then
-        # LLM is already running — show which model
+        # LLM already running — show which model
         local _so_active_num=""
         [[ -f "$ACTIVE_LLM_FILE" ]] && _so_active_num=$(< "$ACTIVE_LLM_FILE")
         if [[ -n "$_so_active_num" && -f "$LLM_REGISTRY" ]]
@@ -129,71 +161,78 @@ function so() {
         else
             __tac_info "Local LLM" "[RUNNING]" "$C_Success"
         fi
-    else
-        # LLM not running — resolve default and start it
-        local _so_def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
-        local _so_def_file=""
-        [[ -f "$_so_def_conf" ]] && _so_def_file=$(< "$_so_def_conf")
-        if [[ -z "$_so_def_file" ]]
+        return 0
+    fi
+
+    # LLM not running — resolve default and start it
+    local _so_def_conf="${LLAMA_DRIVE_ROOT:-/mnt/m}/.llm/default_model.conf"
+    local _so_def_file=""
+    [[ -f "$_so_def_conf" ]] && _so_def_file=$(< "$_so_def_conf")
+    if [[ -z "$_so_def_file" ]]
+    then
+        __tac_info "Error" \
+            "[Local LLM offline and no default set. Run 'model default <N>' to configure.]" \
+            "$C_Error"
+        return 1
+    fi
+
+    # Look up human-readable model name from registry
+    local _so_model_name
+    _so_model_name=$(awk -F'|' -v f="$_so_def_file" '$3 == f {print $2}' "$LLM_REGISTRY" 2>/dev/null)
+    : "${_so_model_name:=$_so_def_file}"
+
+    __tac_info "Local LLM" "[OFFLINE]" "$C_Warning"
+
+    # Start the default LLM in background with spinner
+    { serve &>/dev/null & } 2>/dev/null
+    local _serve_pid=$!
+    disown "$_serve_pid" 2>/dev/null
+
+    local _spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    local _sw=0 _sw_max=90
+
+    while (( _sw < _sw_max ))
+    do
+        printf '\r  %s' "${C_Dim}${_spin_chars:_sw%10:1} Starting ${_so_model_name} (${_sw}s)${C_Reset}  "
+        if (( _sw > 3 )) && __test_port "$LLM_PORT"
         then
-            __tac_info "Error" \
-                "[Local LLM offline and no default set. Run 'model default <N>' to configure.]" \
-                "$C_Error"
-            return 1
+            local _hb
+            _hb=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+            [[ "$_hb" == *'"ok"'* ]] && break
         fi
-        # Look up human-readable model name from registry
-        local _so_model_name
-        _so_model_name=$(awk -F'|' -v f="$_so_def_file" '$3 == f {print $2}' "$LLM_REGISTRY" 2>/dev/null)
-        : "${_so_model_name:=$_so_def_file}"
-        __tac_info "Local LLM" "[OFFLINE]" "$C_Warning"
-        # Start the default LLM in background; show a compact spinner
-        # Suppress bash job-control [1] / Done messages
-        { serve &>/dev/null & } 2>/dev/null
-        local _serve_pid=$!
-        disown "$_serve_pid" 2>/dev/null
-        local _spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-        local _sw=0 _sw_max=90
-        while (( _sw < _sw_max ))
-        do
-            printf '\r  %s' "${C_Dim}${_spin_chars:_sw%10:1} Starting ${_so_model_name} (${_sw}s)${C_Reset}  "
-            # Skip health checks for the first 3s — llama-server needs time to
-            # mmap the model file before the HTTP listener binds.
-            if (( _sw > 3 )) && __test_port "$LLM_PORT"
-            then
-                local _hb
-                _hb=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-                [[ "$_hb" == *'"ok"'* ]] && break
-            fi
-            # serve exited and no llama-server process exists — real failure
-            if ! kill -0 "$_serve_pid" 2>/dev/null \
-                && ! pgrep -x llama-server >/dev/null 2>&1
-            then
-                break
-            fi
-            sleep 1
-            ((_sw++))
-        done
-        printf '\r%s\r' "$(printf '%*s' 60 '')"   # clear spinner line
-        wait "$_serve_pid" 2>/dev/null
-        # Verify LLM is actually healthy
-        if __test_port "$LLM_PORT"
+        if ! kill -0 "$_serve_pid" 2>/dev/null \
+            && ! pgrep -x llama-server >/dev/null 2>&1
         then
-            local _final_health
-            _final_health=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-            if [[ "$_final_health" == *'"ok"'* ]]
-            then
-                __tac_info "Local LLM" "[ONLINE] ${_so_model_name} (${_sw}s)" "$C_Success"
-            else
-                __tac_info "Local LLM" "[NOT HEALTHY — check: tail $LLM_LOG_FILE]" "$C_Error"
-                return 1
-            fi
-        else
-            __tac_info "Local LLM" "[FAILED TO START — check: tail $LLM_LOG_FILE]" "$C_Error"
-            return 1
+            break
+        fi
+        sleep 1
+        ((_sw++))
+    done
+    printf '\r%s\r' "$(printf '%*s' 60 '')"
+    wait "$_serve_pid" 2>/dev/null
+
+    # Verify LLM is healthy
+    if __test_port "$LLM_PORT"
+    then
+        local _final_health
+        _final_health=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+        if [[ "$_final_health" == *'"ok"'* ]]
+        then
+            __tac_info "Local LLM" "[ONLINE] ${_so_model_name} (${_sw}s)" "$C_Success"
+            return 0
         fi
     fi
 
-    # ── Step 2: Start gateway ──────────────────────────────────────────
+    __tac_info "Local LLM" "[FAILED TO START — check: tail $LLM_LOG_FILE]" "$C_Error"
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# __so_start_gateway — Start gateway and wait for ready state.
+# Returns 0 if gateway is ready, 1 on failure.
+# ---------------------------------------------------------------------------
+function __so_start_gateway() {
+    local _svc="$1"
     openclaw gateway start >/dev/null 2>&1
 
     local ready=0 elapsed=0 max_wait=20
@@ -208,10 +247,8 @@ function so() {
             break
         fi
 
-        # Spinner with elapsed time — single overwritten line
         printf '\r%s' "  ${C_Dim}${_spin_chars:elapsed%10:1} Starting gateway (${elapsed}s)${C_Reset}  "
 
-        # Every 5s, check for crash loops or hard failure
         if (( elapsed > 0 && elapsed % 5 == 0 ))
         then
             local _restarts_now _sub_state
@@ -239,31 +276,80 @@ function so() {
         sleep 1
         (( elapsed++ ))
 
-        # After initial window, extend if service is still alive
         if (( elapsed == 15 && !ready ))
         then
             systemctl --user is-active --quiet "$_svc" 2>/dev/null && max_wait=30
         fi
     done
-    # Clear spinner line
     printf '\r%s\r' "$(printf '%*s' 40 '')"
 
-    # ── Result ─────────────────────────────────────────────────────────
+    # Report result
     if (( ready ))
     then
         __tac_info "Gateway" "[ONLINE] (${elapsed}s)" "$C_Success"
+        return 0
     elif systemctl --user is-active --quiet "$_svc" 2>/dev/null
     then
         __tac_info "Gateway" "[STARTING — port not ready]" "$C_Warning"
         printf '%s\n' "  ${C_Dim}Service active after ${elapsed}s but port $OC_PORT not responding.${C_Reset}"
         printf '%s\n' "  ${C_Dim}Retry in a moment or run 'le' for logs.${C_Reset}"
+        return 0
     else
         __tac_info "Gateway" "[FAILED]" "$C_Error"
         __so_show_errors "$_svc"
         printf '%s\n' "  ${C_Dim}Run 'xo' then 'so' to retry, or 'le' for logs.${C_Reset}"
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# so — Start the OpenClaw gateway (systemd-managed service).
+# Injects bridged API keys into the systemd user session before starting.
+# ---------------------------------------------------------------------------
+function so() {
+    local _svc="openclaw-gateway.service"
+    local _ts_serve_active=0
+
+    # Check if already healthy
+    if __so_check_healthy
+    then
+        return 0
     fi
 
-    # ── Post: restore Tailscale Serve if we cycled it ──────────────────
+    # Pre-flight: clear stale state
+    __so_clear_stale_state "$_svc"
+
+    # Pre-flight: free port if held
+    if ! __so_free_port "$OC_PORT"
+    then
+        return 1
+    fi
+
+    # Pre-flight: check Windows port conflict
+    if ! __test_port "$OC_PORT" && __so_check_win_port "$OC_PORT" --block
+    then
+        return 1
+    fi
+
+    # Pre-flight: cycle Tailscale Serve if conflicting
+    __so_cycle_tailscale_serve "$OC_PORT"
+
+    # Push API keys to systemd environment
+    __so_push_api_keys
+
+    # Ensure LLM is running
+    if ! __so_ensure_llm_running
+    then
+        return 1
+    fi
+
+    # Start gateway
+    if ! __so_start_gateway "$_svc"
+    then
+        return 1
+    fi
+
+    # Restore Tailscale Serve if we cycled it
     if (( _ts_serve_active ))
     then
         sudo -n tailscale serve --bg "http://127.0.0.1:$OC_PORT" >/dev/null 2>&1 \
