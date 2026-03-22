@@ -3,7 +3,7 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
@@ -62,7 +62,7 @@ function __get_host_metrics() {
     local cache="$TAC_CACHE_DIR/tac_hostmetrics"
     if ! __cache_fresh "$cache" 10
     then
-        ( bash "$HOME/.local/bin/tac_hostmetrics.sh" > "${cache}.tmp" 2>/dev/null \
+        ( bash "$TACTICAL_REPO_ROOT/bin/tac_hostmetrics.sh" > "${cache}.tmp" 2>/dev/null \
             && mv "${cache}.tmp" "$cache" ) &>/dev/null &
         __TAC_BG_PIDS+=("$!")
     fi

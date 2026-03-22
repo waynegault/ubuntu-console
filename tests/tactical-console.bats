@@ -1833,6 +1833,10 @@ EOF
     grep -q 'printf' "$REPO_ROOT/bin/tac_hostmetrics.sh"
 }
 
+@test "telemetry: __get_host_metrics uses the repo-local tac_hostmetrics helper" {
+    grep -q '"\$TACTICAL_REPO_ROOT/bin/tac_hostmetrics.sh"' "$REPO_ROOT/scripts/07-telemetry.sh"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 35. SYSTEMD UNITS — Structure validation
 # ─────────────────────────────────────────────────────────────────────────────
