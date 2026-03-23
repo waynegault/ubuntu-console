@@ -2366,3 +2366,126 @@ EOF
 }
 
 # end of file
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 30. ADDITIONAL OPENCLAW TESTS (functions not yet tested)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "openclaw: oc-skills function is defined" {
+    declare -f oc-skills >/dev/null
+}
+
+@test "openclaw: oc-plugins function is defined" {
+    declare -f oc-plugins >/dev/null
+}
+
+@test "openclaw: oc-memory-search function is defined" {
+    declare -f oc-memory-search >/dev/null
+}
+
+@test "openclaw: oc-local-llm function is defined" {
+    declare -f oc-local-llm >/dev/null
+}
+
+@test "openclaw: oc-sync-models function is defined" {
+    declare -f oc-sync-models >/dev/null
+}
+
+@test "openclaw: oc-browser function is defined" {
+    declare -f oc-browser >/dev/null
+}
+
+@test "openclaw: oc-nodes function is defined" {
+    declare -f oc-nodes >/dev/null
+}
+
+@test "openclaw: oc-sandbox function is defined" {
+    declare -f oc-sandbox >/dev/null
+}
+
+@test "openclaw: oc-env function is defined" {
+    declare -f oc-env >/dev/null
+}
+
+@test "openclaw: oc-cache-clear function is defined" {
+    declare -f oc-cache-clear >/dev/null
+}
+
+@test "openclaw: oc-diag function is defined" {
+    declare -f oc-diag >/dev/null
+}
+
+@test "openclaw: oc-failover function is defined" {
+    declare -f oc-failover >/dev/null
+}
+
+@test "openclaw: wacli function is defined" {
+    declare -f wacli >/dev/null
+}
+
+@test "openclaw: oc-kgraph function is defined" {
+    declare -f oc-kgraph >/dev/null
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 31. LLM MANAGER - ADDITIONAL TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "llm-manager: wake function is defined" {
+    declare -f wake >/dev/null
+}
+
+@test "llm-manager: gpu-status function is defined" {
+    declare -f gpu-status >/dev/null
+}
+
+@test "llm-manager: gpu-check function is defined" {
+    declare -f gpu-check >/dev/null
+}
+
+@test "llm-manager: __gguf_metadata function is defined" {
+    declare -f __gguf_metadata >/dev/null
+}
+
+
+@test "llm-manager: __save_tps function is defined" {
+    declare -f __save_tps >/dev/null
+}
+
+@test "llm-manager: __renumber_registry function is defined" {
+    declare -f __renumber_registry >/dev/null
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 32. DASHBOARD/HELP - ADDITIONAL TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "dashboard-help: bashrc_diagnose function is defined" {
+    declare -f bashrc_diagnose >/dev/null
+}
+
+@test "dashboard-help: bashrc_dryrun function is defined" {
+    declare -f bashrc_dryrun >/dev/null
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 33. UI ENGINE - ADDITIONAL TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "ui-engine: __require_command function is defined" {
+    declare -f __require_command >/dev/null
+}
+
+@test "ui-engine: __require_command returns 0 for existing command" {
+    run __require_command bash
+    [ "$status" -eq 0 ]
+}
+
+@test "ui-engine: __require_command returns 1 for missing command" {
+    run __require_command nonexistent_command_xyz123
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"NOT INSTALLED"* ]]
+}
+
+# end of file
