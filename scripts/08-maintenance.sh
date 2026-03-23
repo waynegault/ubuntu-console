@@ -311,82 +311,70 @@ function up() {
     fi
 
     # [4/12] R Packages (CRAN + Bioconductor)
+    # Uses Windows PowerShell script to avoid lock directory issues when running from WSL.
     if __check_cooldown "r_pkgs" "$now" hours_left "$force_mode"
     then
         local r_err=0 r_did_update=0
-        # Resolve Rscript: prefer PATH, then Windows-side install under /mnt/c.
-        local _rscript=""
-        if command -v Rscript >/dev/null 2>&1
-        then
-            _rscript="Rscript"
-        elif command -v R >/dev/null 2>&1
-        then
-            _rscript="R"
-        else
-            # WSL fallback: pick the highest-versioned Rscript.exe on Windows.
-            local _win_r
-            for _win_r in "/mnt/c/Program Files/R"/R-*/bin/x64/Rscript.exe; do
-                [[ -x "$_win_r" ]] && _rscript="$_win_r"
-            done
-        fi
-        if [[ -n "$_rscript" ]]
-        then
-            # Check if R is responsive (Windows R can timeout)
-            local pkg_count
-            pkg_count=$(timeout 10 "$_rscript" -e 'cat(length(installed.packages()))' 2>/dev/null || echo "0")
+        local ps1_script="/mnt/c/Programs/bat Files/update-r-packages.ps1"
 
-            if [[ "$pkg_count" -gt 1 ]]  # >1 because base packages always exist
+        # Check if PowerShell is available
+        if command -v powershell.exe >/dev/null 2>&1
+        then
+            # Check if our helper script exists
+            if [[ -f "$ps1_script" ]]
             then
-                # Run update with timeout and better error handling
+                # Run the Windows PowerShell script
                 local update_output
-                update_output=$(timeout 300 "$_rscript" -e '
-                    options(repos = c(CRAN = "https://cloud.r-project.org"))
-                    pkgs <- installed.packages()[,1]
-                    if (length(pkgs) > 0) {
-                        updated <- tryCatch({
-                            update.packages(ask=FALSE, checkBuilt=TRUE, Ncpus=1)
-                            TRUE
-                        }, error=function(e) {
-                            cat("ERROR:", conditionMessage(e), "\n", file=stderr())
-                            FALSE
-                        })
-                        if (updated) {
-                            if (requireNamespace("BiocManager", quietly=TRUE)) {
-                                BiocManager::install(ask=FALSE, update=TRUE)
-                            }
-                            cat("SUCCESS\n")
-                        }
-                    } else {
-                        cat("NO_PACKAGES\n")
-                    }
-                ' 2>&1)
+                update_output=$(timeout 300 powershell.exe -NoProfile -NonInteractive -File "$ps1_script" 2>&1)
+                local ps_rc=$?
 
-                if [[ "$update_output" == *"SUCCESS"* ]]
+                if (( ps_rc == 0 )) || [[ "$update_output" == *"SUCCESS"* ]]
                 then
                     r_did_update=1
                     __tac_line "[4/12] R Packages" "[UPDATED]" "$C_Success"
-                elif [[ "$update_output" == *"NO_PACKAGES"* ]]
+                elif [[ "$update_output" == *"ERROR"* ]] || (( ps_rc != 0 ))
                 then
-                    r_did_update=1  # No packages to update = success
-                    __tac_line "[4/12] R Packages" "[NO USER PACKAGES]" "$C_Dim"
-                elif [[ "$update_output" == *"failed to lock directory"* ]]
-                then
-                    r_did_update=1  # Lock issue = skip, not failure
-                    __tac_line "[4/12] R Packages" "[SKIP - Run from Windows]" "$C_Dim"
-                elif [[ "$update_output" == *"TIMED"* ]] || [[ -z "$update_output" && "$pkg_count" == "0" ]]
-                then
-                    r_did_update=1  # R unresponsive, skip
-                    __tac_line "[4/12] R Packages" "[SKIP - R unresponsive]" "$C_Dim"
-                else
                     r_err=1
                     __tac_line "[4/12] R Packages" "[FAILED]" "$C_Warning"
+                else
+                    r_did_update=1
+                    __tac_line "[4/12] R Packages" "[NO UPDATE NEEDED]" "$C_Dim"
                 fi
             else
-                r_did_update=1  # No packages to update
-                __tac_line "[4/12] R Packages" "[NO USER PACKAGES]" "$C_Dim"
+                # Helper script not found - skip with helpful message
+                r_did_update=1
+                __tac_line "[4/12] R Packages" "[SKIP - PS1 helper missing]" "$C_Dim"
             fi
         else
-            __tac_line "[4/12] R Packages" "[NOT INSTALLED]" "$C_Dim"
+            # PowerShell not available - try direct R (legacy fallback)
+            local _rscript=""
+            if command -v Rscript >/dev/null 2>&1
+            then
+                _rscript="Rscript"
+            else
+                # WSL fallback: Windows R
+                local _win_r
+                for _win_r in "/mnt/c/Program Files/R"/R-*/bin/x64/Rscript.exe; do
+                    [[ -x "$_win_r" ]] && _rscript="$_win_r"
+                done
+            fi
+
+            if [[ -n "$_rscript" ]]
+            then
+                local pkg_count
+                pkg_count=$(timeout 10 "$_rscript" -e 'cat(length(installed.packages()))' 2>/dev/null || echo "0")
+
+                if [[ "$pkg_count" -gt 1 ]]
+                then
+                    r_did_update=1
+                    __tac_line "[4/12] R Packages" "[SKIP - Run from Windows]" "$C_Dim"
+                else
+                    r_did_update=1
+                    __tac_line "[4/12] R Packages" "[NO USER PACKAGES]" "$C_Dim"
+                fi
+            else
+                __tac_line "[4/12] R Packages" "[NOT INSTALLED]" "$C_Dim"
+            fi
         fi
 
         if (( r_err == 0 && r_did_update == 1 ))
