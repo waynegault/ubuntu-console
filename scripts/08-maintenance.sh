@@ -232,7 +232,7 @@ function up() {
         fi
     fi
 
-    # [3/12] NPM / Cargo
+    # [3/13] NPM / Cargo
     if __check_cooldown "npm_cargo" "$now" hours_left "$force_mode"
     then
         local npm_did_update=0 cargo_did_update=0 pkg_err=0
@@ -253,17 +253,17 @@ function up() {
                 if (( npm_rc == 0 )) || [[ "$update_output" == *"Workspaces not supported for global packages"* ]]
                 then
                     npm_did_update=1
-                    __tac_line "[3/12] NPM Packages" "[UPDATED]" "$C_Success"
+                    __tac_line "[3/13] NPM Packages" "[UPDATED]" "$C_Success"
                 else
-                    __tac_line "[3/12] NPM Packages" "[FAILED]" "$C_Warning"
+                    __tac_line "[3/13] NPM Packages" "[FAILED]" "$C_Warning"
                     pkg_err=1
                 fi
             else
-                __tac_line "[3/12] NPM Packages" "[NO GLOBAL PACKAGES]" "$C_Dim"
+                __tac_line "[3/13] NPM Packages" "[NO GLOBAL PACKAGES]" "$C_Dim"
                 npm_did_update=1  # Nothing to update = success
             fi
         else
-            __tac_line "[3/12] NPM Packages" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[3/13] NPM Packages" "[NOT INSTALLED]" "$C_Dim"
         fi
 
         # Cargo: Requires cargo-install-update
@@ -306,11 +306,11 @@ function up() {
             ((errCount++))
         fi
     else
-        __tac_line "[3/12] NPM Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[3/13] NPM Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
         __tac_line "       Cargo Crates" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [4/12] R Packages (CRAN + Bioconductor)
+    # [5/13] R Packages (CRAN + Bioconductor)
     # Uses Windows PowerShell script to avoid lock directory issues when running from WSL.
     if __check_cooldown "r_pkgs" "$now" hours_left "$force_mode"
     then
@@ -323,6 +323,13 @@ function up() {
             # Check if our helper script exists
             if [[ -f "$ps1_script" ]]
             then
+                # Get package count before update (for verification)
+                local pkg_count_before
+                local _ps_cmd="& { (Get-InstalledModule -ErrorAction SilentlyContinue).Count"
+                _ps_cmd+=" + (Get-Package -ProviderName NuGet -ErrorAction SilentlyContinue).Count }"
+                pkg_count_before=$(timeout 30 powershell.exe -NoProfile -NonInteractive \
+                    -Command "$_ps_cmd" 2>/dev/null || echo "0")
+
                 # Run the Windows PowerShell script
                 local update_output
                 update_output=$(timeout 300 powershell.exe -NoProfile -NonInteractive -File "$ps1_script" 2>&1)
@@ -331,19 +338,29 @@ function up() {
                 if (( ps_rc == 0 )) || [[ "$update_output" == *"SUCCESS"* ]]
                 then
                     r_did_update=1
-                    __tac_line "[4/12] R Packages" "[UPDATED]" "$C_Success"
+                    # Verify by checking if update message appeared
+                    local _verified=0
+                    [[ "$update_output" == *"Updating R packages"* ]] && _verified=1
+                    [[ "$update_output" == *"successfully unpacked"* ]] && _verified=1
+                    [[ "$update_output" == *"updated index"* ]] && _verified=1
+                    if (( _verified == 1 ))
+                    then
+                        __tac_line "[5/13] R Packages" "[UPDATED - Verified]" "$C_Success"
+                    else
+                        __tac_line "[5/13] R Packages" "[UPDATED]" "$C_Success"
+                    fi
                 elif [[ "$update_output" == *"ERROR"* ]] || (( ps_rc != 0 ))
                 then
                     r_err=1
-                    __tac_line "[4/12] R Packages" "[FAILED]" "$C_Warning"
+                    __tac_line "[5/13] R Packages" "[FAILED]" "$C_Warning"
                 else
                     r_did_update=1
-                    __tac_line "[4/12] R Packages" "[NO UPDATE NEEDED]" "$C_Dim"
+                    __tac_line "[5/13] R Packages" "[NO UPDATE NEEDED]" "$C_Dim"
                 fi
             else
                 # Helper script not found - skip with helpful message
                 r_did_update=1
-                __tac_line "[4/12] R Packages" "[SKIP - PS1 helper missing]" "$C_Dim"
+                __tac_line "[5/13] R Packages" "[SKIP - PS1 helper missing]" "$C_Dim"
             fi
         else
             # PowerShell not available - try direct R (legacy fallback)
@@ -367,13 +384,13 @@ function up() {
                 if [[ "$pkg_count" -gt 1 ]]
                 then
                     r_did_update=1
-                    __tac_line "[4/12] R Packages" "[SKIP - Run from Windows]" "$C_Dim"
+                    __tac_line "[5/13] R Packages" "[SKIP - Run from Windows]" "$C_Dim"
                 else
                     r_did_update=1
-                    __tac_line "[4/12] R Packages" "[NO USER PACKAGES]" "$C_Dim"
+                    __tac_line "[5/13] R Packages" "[NO USER PACKAGES]" "$C_Dim"
                 fi
             else
-                __tac_line "[4/12] R Packages" "[NOT INSTALLED]" "$C_Dim"
+                __tac_line "[5/13] R Packages" "[NOT INSTALLED]" "$C_Dim"
             fi
         fi
 
@@ -385,10 +402,10 @@ function up() {
             ((errCount++))
         fi
     else
-        __tac_line "[4/12] R Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[5/13] R Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [5/12] OpenClaw verification — runs 'openclaw doctor' for real health check.
+    # [6/13] OpenClaw verification — runs 'openclaw doctor' for real health check.
     # --non-interactive: skip all prompts (safe for unattended maintenance).
     # --no-workspace-suggestions: suppress noisy "workspace not optimised" hints.
     if __check_cooldown "openclaw" "$now" hours_left "$force_mode"
@@ -400,33 +417,33 @@ function up() {
             doc_rc=$?
             if (( doc_rc == 0 ))
             then
-                __tac_line "[5/12] OpenClaw Framework" "[HEALTHY]" "$C_Success"
+                __tac_line "[6/13] OpenClaw Framework" "[HEALTHY]" "$C_Success"
             elif (( doc_rc == 124 ))
             then
-                __tac_line "[5/12] OpenClaw Framework" "[TIMED OUT]" "$C_Warning"
+                __tac_line "[6/13] OpenClaw Framework" "[TIMED OUT]" "$C_Warning"
                 ((errCount++))
             else
-                __tac_line "[5/12] OpenClaw Framework" "[ISSUES FOUND - run oc doc-fix]" "$C_Warning"
+                __tac_line "[6/13] OpenClaw Framework" "[ISSUES FOUND - run oc doc-fix]" "$C_Warning"
                 ((errCount++))
             fi
             __set_cooldown "openclaw" "$now"
         else
-            __tac_line "[5/12] OpenClaw Framework" "[MISSING]" "$C_Error"
+            __tac_line "[6/13] OpenClaw Framework" "[MISSING]" "$C_Error"
             ((errCount++))
         fi
     else
-        __tac_line "[5/12] OpenClaw Framework" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[6/13] OpenClaw Framework" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [6/12] Python Venv (a.k.a. "Cloaking" = active virtual environment isolation)
+    # [7/13] Python Venv (a.k.a. "Cloaking" = active virtual environment isolation)
     if [[ -n "$VIRTUAL_ENV" ]]
     then
-        __tac_line "[6/12] Python Venv Cloaking" "[$(basename "$VIRTUAL_ENV")]" "$C_Success"
+        __tac_line "[7/13] Python Venv Cloaking" "[$(basename "$VIRTUAL_ENV")]" "$C_Success"
     else
-        __tac_line "[6/12] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
+        __tac_line "[7/13] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
     fi
 
-    # [7/12] Python Fleet
+    # [8/13] Python Fleet
     if __check_cooldown "pyfleet" "$now" hours_left "$force_mode"
     then
         local py_versions=()
@@ -442,14 +459,14 @@ function up() {
             do
                 v_list+=("$(basename "$py")")
             done
-            __tac_line "[7/12] Python Fleet" "[${v_list[*]} VERIFIED]" "$C_Success"
+            __tac_line "[8/13] Python Fleet" "[${v_list[*]} VERIFIED]" "$C_Success"
             __set_cooldown "pyfleet" "$now"
         else
-            __tac_line "[7/12] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
+            __tac_line "[8/13] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
             ((errCount++))
         fi
     else
-        __tac_line "[7/12] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[8/13] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
     # [8/12] GPU Checks — __get_gpu returns CSV or a sentinel string.
@@ -460,7 +477,7 @@ function up() {
 
     if [[ "$gpu" != "N/A" && "$gpu" != "Querying..." && "$gpu" != *"OFFLINE"* ]]
     then
-        __tac_line "[8/12] RTX 3050 Ti" "[READY]" "$C_Success"
+        __tac_line "[9/13] RTX 3050 Ti" "[READY]" "$C_Success"
     else
         __tac_line "[8/12] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
         ((errCount++))
@@ -476,25 +493,25 @@ function up() {
             rm -f "$_tmpf" && ((count++))
         done < <(find /tmp/openclaw \( -name '*.tmp' -o -name 'python-*.exe' \) -print0 2>/dev/null)
     fi
-    __tac_line "[9/12] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
+    __tac_line "[10/13] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
 
-    # [10/12] Disk Space Audit — warn if any mount point exceeds 90%
+    # [11/13] Disk Space Audit — warn if any mount point exceeds 90%
     local disk_warn=0
     while read -r pct mount
     do
         local pct_num=${pct%\%}
         if (( pct_num >= 90 ))
         then
-            __tac_line "[10/12] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
+            __tac_line "[11/13] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
             disk_warn=1
             ((errCount++))
         fi
     done < <(df -h --output=pcent,target 2>/dev/null \
         | tail -n +2 | grep -v '/snap/' \
         | grep -v '/mnt/wsl/docker-desktop')
-    (( disk_warn == 0 )) && __tac_line "[10/12] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
+    (( disk_warn == 0 )) && __tac_line "[11/13] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
 
-    # [11/12] Stale Process Cleanup — kill orphaned llama-server instances.
+    # [12/13] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).
     # Per-PID check: only kill processes that are NOT listening on LLM_PORT.
     local stale_pids
@@ -510,14 +527,14 @@ function up() {
         fi
         if (( _state_age < 60 ))
         then
-            __tac_line "[11/12] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
+            __tac_line "[12/13] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
         else
             pkill -u "$USER" -x llama-server 2>/dev/null
             rm -f "$ACTIVE_LLM_FILE"
-            __tac_line "[11/12] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
+            __tac_line "[12/13] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
         fi
     else
-        __tac_line "[11/12] Stale Processes" "[CLEAN]" "$C_Success"
+        __tac_line "[12/13] Stale Processes" "[CLEAN]" "$C_Success"
     fi
 
     # [12/12] Documentation drift guard — lightweight README accuracy check.
@@ -525,14 +542,14 @@ function up() {
     then
         if __docs_sync_check
         then
-            __tac_line "[12/12] README Sync" "[OK]" "$C_Success"
+            __tac_line "[13/13] README Sync" "[OK]" "$C_Success"
         else
-            __tac_line "[12/12] README Sync" "[DRIFT DETECTED]" "$C_Warning"
+            __tac_line "[13/13] README Sync" "[DRIFT DETECTED]" "$C_Warning"
             ((errCount++))
         fi
         __set_cooldown "docs_sync" "$now"
     else
-        __tac_line "[12/12] README Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[13/13] README Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
     __tac_divider

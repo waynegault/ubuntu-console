@@ -650,7 +650,7 @@ setup() {
 @test "maintenance: up separates npm and cargo package reporting" {
     local up_src
     up_src="$(declare -f up)"
-    [[ "$up_src" == *"[3/12] NPM Packages"* ]]
+    [[ "$up_src" == *"[3/13] NPM Packages"* ]]
     [[ "$up_src" == *"Cargo Crates"* ]]
 }
 
