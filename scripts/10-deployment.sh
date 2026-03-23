@@ -308,9 +308,12 @@ ${diff_body}"
     # Use constants for LLM parameters (defined at top of file)
     local payload
     payload=$(jq -n \
-        --arg prompt "$prompt" \
-        --arg diff "${diff:0:$_COMMIT_DIFF_MAX_CHARS}" \
-        "{messages: [{role: \"user\", content: (\$prompt + \"\n\n\" + \$diff)}], max_tokens: $_COMMIT_MAX_TOKENS, temperature: $_COMMIT_TEMPERATURE}")
+        --arg    prompt      "$prompt" \
+        --arg    diff        "${diff:0:$_COMMIT_DIFF_MAX_CHARS}" \
+        --argjson max_tokens "$_COMMIT_MAX_TOKENS" \
+        --argjson temperature "$_COMMIT_TEMPERATURE" \
+        '{messages:[{role:"user",content:($prompt+"\n\n"+$diff)}],
+          max_tokens:$max_tokens,temperature:$temperature}')
 
     local raw_response
     raw_response=$(curl -s --max-time 30 "$LOCAL_LLM_URL" \
