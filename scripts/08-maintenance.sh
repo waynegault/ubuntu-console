@@ -35,15 +35,24 @@ function __cleanup_temps() {
 
 # ---------------------------------------------------------------------------
 # __check_cooldown — Check if a maintenance task's 7-day cooldown has expired.
-# Usage: __check_cooldown <key> <now_timestamp> <result_var>
+# Usage: __check_cooldown <key> <now_timestamp> <result_var> [force_mode]
 # Returns 0 if cooldown has expired (task should run), 1 if still active.
 # On return 1, sets result_var to remaining time (e.g. "6d 12h").
 # Uses nameref to avoid subshell overhead (called 5+ times per `up` run).
 # Dependencies: $CooldownDB must be set and touchable.
+# If force_mode=1, always returns 0 (skip cooldown for testing).
 # ---------------------------------------------------------------------------
 function __check_cooldown() {
-    local key="$1" now="$2"
+    local key="$1" now="$2" force_mode="${4:-0}"
     local -n __cd_result="${3:-_cd_sink}"
+
+    # Force mode: always run (for testing)
+    if (( force_mode == 1 ))
+    then
+        __cd_result=""
+        return 0
+    fi
+
     # Per-key cooldown periods (default 7 days)
     local cooldown
     case "$key" in
@@ -152,10 +161,17 @@ function get-ip() {
 
 # ---------------------------------------------------------------------------
 # up — Run 12-step system maintenance with cooldowns per step.
+# Usage: up [--force]
+#   --force: Suspend all cooldowns for testing purposes
 # Cooldown functions (__check_cooldown / __set_cooldown) are defined above
 # in this section to avoid leaking nested function definitions.
 # ---------------------------------------------------------------------------
 function up() {
+    local force_mode=0
+    case "${1:-}" in
+        --force|-f) force_mode=1 ;;
+    esac
+
     command clear
     __tac_header "SYSTEM MAINTENANCE" "open"
     local errCount=0
@@ -184,7 +200,7 @@ function up() {
     #   3. If only index was refreshed → show that
     #   4. If both cached → show "CACHED"
     local apt_did_update=0
-    if __check_cooldown "apt_index" "$now" hours_left
+    if __check_cooldown "apt_index" "$now" hours_left "$force_mode"
     then
         if sudo apt update >/dev/null 2>&1
         then
@@ -192,7 +208,7 @@ function up() {
             __set_cooldown "apt_index" "$now"
         fi
     fi
-    if __check_cooldown "apt" "$now" hours_left
+    if __check_cooldown "apt" "$now" hours_left "$force_mode"
     then
         (( apt_did_update )) || sudo apt update >/dev/null 2>&1
         sudo apt upgrade -y --no-install-recommends >/dev/null 2>&1
@@ -217,40 +233,71 @@ function up() {
     fi
 
     # [3/12] NPM / Cargo
-    if __check_cooldown "npm_cargo" "$now" hours_left
+    if __check_cooldown "npm_cargo" "$now" hours_left "$force_mode"
     then
-        local pkg_err=0
+        local npm_did_update=0 cargo_did_update=0 pkg_err=0
 
+        # NPM: Only run if npm is installed and has global packages
         if command -v npm >/dev/null 2>&1
         then
-            if npm update -g --quiet >/dev/null 2>&1
+            # Check if there are any global packages to update
+            local global_pkgs
+            global_pkgs=$(npm list -g --depth=0 2>/dev/null | grep -v "^npm$" | head -1)
+            if [[ -n "$global_pkgs" ]]
             then
-                __tac_line "[3/12] NPM Packages" "[UPDATED]" "$C_Success"
+                if npm update -g --quiet >/dev/null 2>&1
+                then
+                    npm_did_update=1
+                    __tac_line "[3/12] NPM Packages" "[UPDATED]" "$C_Success"
+                else
+                    __tac_line "[3/12] NPM Packages" "[FAILED]" "$C_Warning"
+                    pkg_err=1
+                fi
             else
-                __tac_line "[3/12] NPM Packages" "[FAILED]" "$C_Warning"
-                pkg_err=1
+                __tac_line "[3/12] NPM Packages" "[NO GLOBAL PACKAGES]" "$C_Dim"
+                npm_did_update=1  # Nothing to update = success
             fi
         else
             __tac_line "[3/12] NPM Packages" "[NOT INSTALLED]" "$C_Dim"
         fi
 
+        # Cargo: Requires cargo-install-update
         if command -v cargo >/dev/null 2>&1
         then
-            if cargo install-update -a >/dev/null 2>&1
+            # Check if cargo-update is installed (provides cargo-install-update)
+            local _has_cargo_update=0
+            if command -v cargo-install-update >/dev/null 2>&1
             then
-                __tac_line "       Cargo Crates" "[UPDATED]" "$C_Success"
+                _has_cargo_update=1
+            elif cargo install-update --version >/dev/null 2>&1
+            then
+                _has_cargo_update=1
+            fi
+
+            if (( _has_cargo_update == 1 ))
+            then
+                if cargo install-update -a >/dev/null 2>&1
+                then
+                    cargo_did_update=1
+                    __tac_line "       Cargo Crates" "[UPDATED]" "$C_Success"
+                else
+                    __tac_line "       Cargo Crates" "[FAILED]" "$C_Warning"
+                    pkg_err=1
+                fi
             else
-                __tac_line "       Cargo Crates" "[FAILED]" "$C_Warning"
-                pkg_err=1
+                __tac_line "       Cargo Crates" "[SKIP - install cargo-update]" "$C_Dim"
+                cargo_did_update=1  # Tool not installed = skip, not failure
             fi
         else
             __tac_line "       Cargo Crates" "[NOT INSTALLED]" "$C_Dim"
         fi
 
-        if (( pkg_err == 0 ))
+        # Set cooldown only if both succeeded (or had nothing to update)
+        if (( pkg_err == 0 && npm_did_update == 1 && cargo_did_update == 1 ))
         then
             __set_cooldown "npm_cargo" "$now"
-        else
+        elif (( pkg_err == 1 ))
+        then
             ((errCount++))
         fi
     else
@@ -259,9 +306,9 @@ function up() {
     fi
 
     # [4/12] R Packages (CRAN + Bioconductor)
-    if __check_cooldown "r_pkgs" "$now" hours_left
+    if __check_cooldown "r_pkgs" "$now" hours_left "$force_mode"
     then
-        local r_err=0
+        local r_err=0 r_did_update=0
         # Resolve Rscript: prefer PATH, then Windows-side install under /mnt/c.
         local _rscript=""
         if command -v Rscript >/dev/null 2>&1
@@ -279,27 +326,61 @@ function up() {
         fi
         if [[ -n "$_rscript" ]]
         then
-            "$_rscript" -e '
-                options(repos = c(CRAN = "https://cloud.r-project.org"))
-                tryCatch({
-                    update.packages(ask=FALSE, checkBuilt=TRUE, Ncpus=1)
-                }, error=function(e){})
-                if (requireNamespace("BiocManager", quietly=TRUE)) {
-                    tryCatch({ BiocManager::install(ask=FALSE, update=TRUE) }, error=function(e){})
-                }
-            ' >/dev/null 2>&1 || r_err=1
+            # Check if R has any packages installed
+            local pkg_count
+            pkg_count=$("$_rscript" -e 'cat(length(installed.packages()))' 2>/dev/null || echo "0")
+
+            if [[ "$pkg_count" -gt 1 ]]  # >1 because base packages always exist
+            then
+                # Run update with better error handling
+                local update_output
+                update_output=$("$_rscript" -e '
+                    options(repos = c(CRAN = "https://cloud.r-project.org"))
+                    pkgs <- installed.packages()[,1]
+                    if (length(pkgs) > 0) {
+                        updated <- tryCatch({
+                            update.packages(ask=FALSE, checkBuilt=TRUE, Ncpus=1)
+                            TRUE
+                        }, error=function(e) {
+                            cat("ERROR:", conditionMessage(e), "\n", file=stderr())
+                            FALSE
+                        })
+                        if (updated) {
+                            if (requireNamespace("BiocManager", quietly=TRUE)) {
+                                BiocManager::install(ask=FALSE, update=TRUE)
+                            }
+                            cat("SUCCESS\n")
+                        }
+                    } else {
+                        cat("NO_PACKAGES\n")
+                    }
+                ' 2>&1)
+
+                if [[ "$update_output" == *"SUCCESS"* ]]
+                then
+                    r_did_update=1
+                    __tac_line "[4/12] R Packages" "[UPDATED]" "$C_Success"
+                elif [[ "$update_output" == *"NO_PACKAGES"* ]]
+                then
+                    r_did_update=1  # No packages to update = success
+                    __tac_line "[4/12] R Packages" "[NO USER PACKAGES]" "$C_Dim"
+                else
+                    r_err=1
+                    __tac_line "[4/12] R Packages" "[FAILED]" "$C_Warning"
+                fi
+            else
+                r_did_update=1  # No packages to update
+                __tac_line "[4/12] R Packages" "[NO USER PACKAGES]" "$C_Dim"
+            fi
         else
             __tac_line "[4/12] R Packages" "[NOT INSTALLED]" "$C_Dim"
-            r_err=-1  # sentinel: skip cooldown
         fi
 
-        if (( r_err == 0 ))
+        if (( r_err == 0 && r_did_update == 1 ))
         then
-            __tac_line "[4/12] R Packages" "[UPDATED]" "$C_Success"
             __set_cooldown "r_pkgs" "$now"
         elif (( r_err == 1 ))
         then
-            __tac_line "[4/12] R Packages" "[WARNING/FAILED]" "$C_Warning"
             ((errCount++))
         fi
     else
@@ -309,7 +390,7 @@ function up() {
     # [5/12] OpenClaw verification — runs 'openclaw doctor' for real health check.
     # --non-interactive: skip all prompts (safe for unattended maintenance).
     # --no-workspace-suggestions: suppress noisy "workspace not optimised" hints.
-    if __check_cooldown "openclaw" "$now" hours_left
+    if __check_cooldown "openclaw" "$now" hours_left "$force_mode"
     then
         if command -v openclaw >/dev/null
         then
@@ -345,7 +426,7 @@ function up() {
     fi
 
     # [7/12] Python Fleet
-    if __check_cooldown "pyfleet" "$now" hours_left
+    if __check_cooldown "pyfleet" "$now" hours_left "$force_mode"
     then
         local py_versions=()
         local _py
@@ -439,7 +520,7 @@ function up() {
     fi
 
     # [12/12] Documentation drift guard — lightweight README accuracy check.
-    if __check_cooldown "docs_sync" "$now" hours_left
+    if __check_cooldown "docs_sync" "$now" hours_left "$force_mode"
     then
         if __docs_sync_check
         then

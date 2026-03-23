@@ -1072,7 +1072,7 @@ turn sources the 14 numbered modules from `scripts/`.
 │   ├── package.json                   #   Vite 5 + React 18 + G6 5.0
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
-│   ├── tactical-console.bats          # 438 BATS unit tests (2,368 lines)
+│   ├── tactical-console.bats          # 463 BATS unit tests (2,368 lines)
 │   └── test_kgraph.py                 # Python tests for kgraph.py
 └── systemd/
     ├── llama-watchdog.service         # systemd unit for watchdog
