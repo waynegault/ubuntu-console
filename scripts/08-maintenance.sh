@@ -184,16 +184,16 @@ function up() {
     local _cd_sink=""  # sink for nameref when no result var is needed
     touch "$CooldownDB" 2>/dev/null
 
-    # [1/12] Connectivity
+    # [1/13] Connectivity
     if ping -c 1 -W 2 github.com >/dev/null 2>&1
     then
-        __tac_line "[1/12] Internet Connectivity" "[ESTABLISHED]" "$C_Success"
+        __tac_line "[1/13] Internet Connectivity" "[ESTABLISHED]" "$C_Success"
     else
-        __tac_line "[1/12] Internet Connectivity" "[LOST]" "$C_Error"
+        __tac_line "[1/13] Internet Connectivity" "[LOST]" "$C_Error"
         ((errCount++))
     fi
 
-    # [2/12] APT Index Update (24h cooldown) + Package Upgrade (7d cooldown)
+    # [2/13] APT Index Update (24h cooldown) + Package Upgrade (7d cooldown)
     # Logic:
     #   1. If apt_index cooldown (24h) expired → update index only
     #   2. If apt cooldown (7d) expired → upgrade packages (updates index if not already done)
@@ -216,19 +216,19 @@ function up() {
         if (( apt_rc == 0 ))
         then
             sudo apt autoremove -y >/dev/null 2>&1
-            __tac_line "[2/12] APT Packages" "[UPDATED]" "$C_Success"
+            __tac_line "[2/13] APT Packages" "[UPDATED]" "$C_Success"
             __set_cooldown "apt" "$now"
             __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
         else
-            __tac_line "[2/12] APT Packages" "[FAILED]" "$C_Error"
+            __tac_line "[2/13] APT Packages" "[FAILED]" "$C_Error"
             ((errCount++))
         fi
     else
         if (( apt_did_update ))
         then
-            __tac_line "[2/12] APT Index" "[REFRESHED]" "$C_Success"
+            __tac_line "[2/13] APT Index" "[REFRESHED]" "$C_Success"
         else
-            __tac_line "[2/12] APT Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+            __tac_line "[2/13] APT Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
         fi
     fi
 
