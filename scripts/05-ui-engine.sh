@@ -402,14 +402,14 @@ function __hSection() {
 
 # ---------------------------------------------------------------------------
 # __hRow — Help index row renderer with safe wrapping for long command/help text.
-# Layout derived from UIWidth: cmd_width=32, desc_width = UIWidth - 37.
+# Layout derived from UIWidth: cmd_width=20, desc_width = UIWidth - 25.
 # Usage: __hRow "command" "Description of what it does"
 # ---------------------------------------------------------------------------
 function __hRow() {
     local cmd="${1:-}"
     local desc="${2:-}"
-    local cmd_width=32
-    local desc_width=$(( UIWidth - 37 ))  # 2 borders + 2 indent + 32 cmd + 1 spacer
+    local cmd_width=20
+    local desc_width=$(( UIWidth - 25 ))  # 2 borders + 2 indent + 20 cmd + 1 spacer
 
     local first_line=1
     while [[ -n "$cmd" || -n "$desc" || $first_line -eq 1 ]]

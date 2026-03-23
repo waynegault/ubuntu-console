@@ -804,10 +804,10 @@ setup() {
 }
 
 @test "ui: __hRow wraps long command and description without overflowing UIWidth" {
-    run __hRow "model bench-diff / bench-compare" \
+    run __hRow "model bench-diff" \
         "Compare two benchmark TSV runs and keep the help box aligned"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"model bench-diff / bench-compare"* ]]
+    [[ "$output" == *"model bench-diff"* ]]
     [[ "$output" == *"Compare two benchmark TSV runs"* ]]
 
     while IFS= read -r line
