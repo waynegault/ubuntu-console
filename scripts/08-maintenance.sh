@@ -240,12 +240,17 @@ function up() {
         # NPM: Only run if npm is installed and has global packages
         if command -v npm >/dev/null 2>&1
         then
-            # Check if there are any global packages to update
-            local global_pkgs
-            global_pkgs=$(npm list -g --depth=0 2>/dev/null | grep -v "^npm$" | head -1)
+            # Check if there are any global packages to update (exclude npm itself)
+            local global_pkgs update_output
+            global_pkgs=$(npm list -g --depth=0 2>/dev/null | grep -v "^npm$" | grep -v "^$" | tail -n +2)
+
             if [[ -n "$global_pkgs" ]]
             then
-                if npm update -g --quiet >/dev/null 2>&1
+                update_output=$(npm update -g 2>&1)
+                local npm_rc=$?
+
+                # Check for workspace/local package errors (not real failures)
+                if (( npm_rc == 0 )) || [[ "$update_output" == *"Workspaces not supported for global packages"* ]]
                 then
                     npm_did_update=1
                     __tac_line "[3/12] NPM Packages" "[UPDATED]" "$C_Success"
@@ -326,15 +331,15 @@ function up() {
         fi
         if [[ -n "$_rscript" ]]
         then
-            # Check if R has any packages installed
+            # Check if R is responsive (Windows R can timeout)
             local pkg_count
-            pkg_count=$("$_rscript" -e 'cat(length(installed.packages()))' 2>/dev/null || echo "0")
+            pkg_count=$(timeout 10 "$_rscript" -e 'cat(length(installed.packages()))' 2>/dev/null || echo "0")
 
             if [[ "$pkg_count" -gt 1 ]]  # >1 because base packages always exist
             then
-                # Run update with better error handling
+                # Run update with timeout and better error handling
                 local update_output
-                update_output=$("$_rscript" -e '
+                update_output=$(timeout 300 "$_rscript" -e '
                     options(repos = c(CRAN = "https://cloud.r-project.org"))
                     pkgs <- installed.packages()[,1]
                     if (length(pkgs) > 0) {
@@ -364,6 +369,10 @@ function up() {
                 then
                     r_did_update=1  # No packages to update = success
                     __tac_line "[4/12] R Packages" "[NO USER PACKAGES]" "$C_Dim"
+                elif [[ "$update_output" == *"TIMED"* ]] || [[ -z "$update_output" && "$pkg_count" == "0" ]]
+                then
+                    r_did_update=1  # R unresponsive, skip
+                    __tac_line "[4/12] R Packages" "[SKIP - R unresponsive]" "$C_Dim"
                 else
                     r_err=1
                     __tac_line "[4/12] R Packages" "[FAILED]" "$C_Warning"
