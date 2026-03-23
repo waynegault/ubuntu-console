@@ -536,5 +536,71 @@ function tactical_help() {
     __tac_footer
 }
 
+# ---------------------------------------------------------------------------
+# contextual-help — Show relevant commands based on current context.
+# Usage: contextual-help [auto|llm-active|python-dev|git-active|general]
+# Auto-detects context if no argument provided.
+# ---------------------------------------------------------------------------
+function contextual-help() {
+    local context="${1:-auto}"
+
+    # Auto-detect context
+    if [[ "$context" == "auto" ]]
+    then
+        if pgrep -x llama-server >/dev/null 2>&1
+        then
+            context="llm-active"
+        elif [[ -n "$VIRTUAL_ENV" ]]
+        then
+            context="python-dev"
+        elif git rev-parse --is-inside-work-tree >/dev/null 2>&1
+        then
+            context="git-active"
+        else
+            context="general"
+        fi
+    fi
+
+    command clear
+    __tac_header "CONTEXTUAL HELP: ${context}" "open"
+
+    case "$context" in
+        llm-active)
+            __hRow "burn" "Send ~1300 token stress test, measure live TPS"
+            __hRow "model stop" "Stop the currently active llama-server"
+            __hRow "gpu-status" "Check GPU utilization, VRAM, temperature"
+            __hRow "mlogs" "View llama-server runtime logs in VS Code"
+            __hRow "chat:" "Start interactive chat with active model"
+            __hRow "model bench" "Benchmark the active model"
+            __tac_info "Tip" "Use 'model status' to see active model details" "$C_Dim"
+            ;;
+        python-dev)
+            __hRow "deactivate" "Exit the current virtual environment"
+            __hRow "pytest" "Run Python tests in current directory"
+            __hRow "pip list" "Show installed packages in venv"
+            __hRow "cl" "Clean python cache files (.pyc, __pycache__)"
+            __hRow "mkproj <n>" "Scaffold new Python project with tests"
+            __tac_info "Tip" "Virtual env auto-activates on cd into project" "$C_Dim"
+            ;;
+        git-active)
+            __hRow "commit_auto" "AI-generated commit message from diff"
+            __hRow "commit_deploy" "Commit with your message and push"
+            __hRow "git status" "Show working tree and staging status"
+            __hRow "git diff" "Show unstaged and staged changes"
+            __hRow "cop" "Launch GitHub Copilot CLI session"
+            __tac_info "Tip" "Use 'commit' for LLM-generated commit messages" "$C_Dim"
+            ;;
+        general|*)
+            __hRow "m" "Open tactical dashboard with live system stats"
+            __hRow "h" "Show full command reference (this is extended help)"
+            __hRow "so" "Start OpenClaw gateway and local LLM"
+            __hRow "model use N" "Start model #N with optimal settings"
+            __hRow "up" "Run 12-step maintenance and health checks"
+            __tac_info "Tip" "Run 'h' for full command index" "$C_Dim"
+            ;;
+    esac
+
+    __tac_footer
+}
 
 # end of file

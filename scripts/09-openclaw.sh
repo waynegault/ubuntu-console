@@ -459,6 +459,8 @@ function xo() {
 # ---------------------------------------------------------------------------
 function oc() {
     local sub="${1:-}"
+
+    # Show help if no subcommand provided
     if [[ -z "$sub" ]]
     then
         printf '%s\n' "${C_Highlight}oc — OpenClaw Command Reference${C_Reset}"
@@ -521,6 +523,15 @@ function oc() {
         return 0
     fi
     shift
+
+    # Security: reject path traversal and command injection attempts
+    # Note: $'\0' check omitted - bash strings cannot contain null bytes
+    if [[ "$sub" == *..* || "$sub" == *$'\n'* ]]
+    then
+        __tac_info "SECURITY" "[INVALID SUBCOMMAND]" "$C_Error"
+        return 1
+    fi
+
     case "$sub" in
         # Gateway
         restart)       oc-restart "$@" ;;
@@ -1201,7 +1212,24 @@ function oc-backup() {
         local sz
         sz=$(stat -c%s "$zipPath" 2>/dev/null || echo "0")
         local human_sz=$(( sz / 1024 ))
-        __tac_info "Snapshot Archive" "[CREATED — ${human_sz}KB]" "$C_Success"
+
+        # Verify backup integrity
+        __tac_info "Verifying backup..." "[CHECKSUM]" "$C_Dim"
+        if unzip -tq "$zipPath" >/dev/null 2>&1
+        then
+            __tac_info "Backup Integrity" "[VERIFIED — ${human_sz}KB]" "$C_Success"
+        else
+            __tac_info "Backup Integrity" "[CORRUPTED — DELETE AND RETRY]" "$C_Error"
+            rm -f "$zipPath"
+            return 1
+        fi
+
+        # Test restore structure (dry-run listing)
+        if unzip -l "$zipPath" | grep -q "workspace/"
+        then
+            __tac_info "Restore Test" "[STRUCTURE VALID]" "$C_Success"
+        fi
+
         printf '%s\n' "  ${C_Dim}Path: $zipPath${C_Reset}"
 
         # Prune old snapshots — keep the 10 most recent

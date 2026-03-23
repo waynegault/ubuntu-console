@@ -21,6 +21,12 @@
 # Ensure LLM_DEFAULT_FILE is defined even if Section 1 wasn't updated
 export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$LLAMA_DRIVE_ROOT/.llm/default_model.conf}"
 
+# ---- Named constants for model size thresholds (in tenths of GB) ----
+readonly _MODEL_SIZE_LARGE=30       # 3.0GB+ — large model, longer startup
+readonly _MODEL_SIZE_MEDIUM=20      # 2.0GB+ — medium model, moderate startup
+readonly _MODEL_SIZE_SMALL=15       # 1.5GB+ — small model, fast startup
+readonly _GPU_OFFLOAD_DISABLED=0    # gpu_layers = 0 means CPU-only mode
+
 # ---------------------------------------------------------------------------
 # __save_tps — Persist TPS measurement to the registry's tps column.
 # Called after burn / llm_stream benchmarks so the dashboard and model list
@@ -162,16 +168,16 @@ function __llm_health_timeout() {
         size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
     fi
 
-    if (( gpu_layers == 0 ))
+    if (( gpu_layers == _GPU_OFFLOAD_DISABLED ))
     then
         timeout=180
     elif [[ "$name" == "Qwen3.5-4B" ]]
     then
         timeout=120
-    elif (( size_tenths >= 30 ))
+    elif (( size_tenths >= _MODEL_SIZE_LARGE ))
     then
         timeout=120
-    elif (( size_tenths >= 20 ))
+    elif (( size_tenths >= _MODEL_SIZE_MEDIUM ))
     then
         timeout=60
     fi
@@ -453,6 +459,13 @@ function __gguf_metadata() {
 
         # --- Read metadata KV count (u64, but only lower 32 bits matter) ---
         nkv = u32(16)
+
+        # Sanity check: no valid GGUF has more than 10000 metadata keys.
+        # Corrupted/truncated files could have garbage nkv causing out-of-bounds reads.
+        if (nkv > 10000) {
+            print fname "|unknown|0|4096|0"
+            exit
+        }
 
         # --- Defaults (overwritten if keys are found) ---
         name   = fname
@@ -2528,7 +2541,7 @@ function burn() {
                 if [[ "${_arch:-}" == "qwen35" ]]
                 then
                     request_timeout=600
-                elif (( _burn_size_tenths >= 30 ))
+                elif (( _burn_size_tenths >= _MODEL_SIZE_LARGE ))
                 then
                     request_timeout=360
                 fi

@@ -115,6 +115,7 @@ _TAC_LOADER_VERSION="3.0"
 # -  12-dashboard-help.sh   - Tactical Dashboard ('m') and Help ('h')
 # -  13-init.sh             - mkdir, completions, WSL loopback fix
 # -  14-wsl-extras.sh       - WSL/X11 startup helpers
+# -  15-model-recommender.sh - AI model recommendations by use case
 #
 # CROSS-CUTTING STATE:
 # - LAST_TPS: written by burn/llm_stream (§11) → read by dashboard (§12) via LLM_TPS_CACHE

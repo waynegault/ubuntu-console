@@ -4,11 +4,20 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="2.1"
+VERSION="2.2"
 set -euo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
 # Lock in /dev/shm (tmpfs) - cleared on reboot, no stale lock persistence.
+
+# Cleanup function to release lock explicitly on exit/interrupt
+# shellcheck disable=SC2317  # Called via trap, not directly invoked
+cleanup() {
+    flock -u 200 2>/dev/null || true
+    rm -f /dev/shm/llama-watchdog.lock 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
 exec 200>/dev/shm/llama-watchdog.lock
 flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance running - skipping"; exit 0; }
 

@@ -196,6 +196,14 @@ function __strip_ansi() {
     do
         tmp="${tmp//${BASH_REMATCH[0]}/}"
     done
+
+    # Safety: if input was non-empty but result is empty, input was all ANSI
+    # codes — this could indicate malformed escape sequences or an attack
+    if [[ -n "$input" && -z "$tmp" ]]
+    then
+        return 1
+    fi
+
     printf -v "$varname" '%s' "$tmp"
 }
 
@@ -294,6 +302,7 @@ function __tac_info() {
 # __tac_line — Render a bordered row with action text and right-aligned status.
 # Usage: __tac_line "Action text" "[STATUS]" "$C_Color"
 # Inner text area = UIWidth - 4 (borders + 1-space padding each side).
+# Truncates action text if it exceeds available space to prevent border overflow.
 # ---------------------------------------------------------------------------
 function __tac_line() {
     local action="$1" status="$2" color="${3:-$C_Text}"
@@ -302,6 +311,19 @@ function __tac_line() {
     local cleanStatus; __strip_ansi "$status" cleanStatus
 
     local contentLen=$(( ${#cleanAction} + ${#cleanStatus} ))
+
+    # Truncate action text if content exceeds available space
+    if (( contentLen > inner_text ))
+    then
+        local max_action=$(( inner_text - ${#cleanStatus} - 3 ))
+        if (( max_action > 0 ))
+        then
+            action="${action:0:$((max_action))}..."
+            cleanAction="${cleanAction:0:$((max_action))}..."
+            contentLen=$(( ${#cleanAction} + ${#cleanStatus} ))
+        fi
+    fi
+
     local padLength=$(( inner_text - contentLen ))
     (( padLength < 1 )) && padLength=1
 

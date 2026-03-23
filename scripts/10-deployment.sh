@@ -70,6 +70,17 @@ function mkproj() {
         __tac_info "python3" "[NOT FOUND - install before using mkproj]" "$C_Error"
         return 1
     fi
+
+    # Verify Python version (3.8+ required for modern features)
+    local pyver major minor
+    pyver=$(python3 --version 2>&1 | grep -oP 'Python \K[0-9]+\.[0-9]+' || echo "0.0")
+    IFS='.' read -r major minor <<< "$pyver"
+    if (( major < 3 || (major == 3 && minor < 8) ))
+    then
+        __tac_info "Python Version" "[REQUIRES 3.8+, FOUND $pyver]" "$C_Error"
+        return 1
+    fi
+
     if ! command -v git >/dev/null 2>&1
     then
         __tac_info "git" "[NOT FOUND - install before using mkproj]" "$C_Error"
@@ -238,12 +249,17 @@ function commit_auto() {
         __tac_info "Remote Check" "[NO ORIGIN CONFIGURED]" "$C_Error"
         return 1
     fi
-    # Security: block diff leak to non-localhost LLM endpoints
-    if [[ "$LOCAL_LLM_URL" != http://127.0.0.1:* && "$LOCAL_LLM_URL" != http://localhost:* ]]
-    then
-        __tac_info "SECURITY" "[BLOCKED: LLM URL is not localhost]" "$C_Error"
-        return 1
-    fi
+    # Security: block diff leak to non-localhost LLM endpoints.
+    # Validate host strictly to prevent SSRF via IPv6 or hostname tricks.
+    local _llm_host
+    _llm_host=$(printf '%s' "$LOCAL_LLM_URL" | grep -oP 'http://\K[^:/]+' || echo "")
+    case "$_llm_host" in
+        127.0.0.1|localhost|::1) ;;  # Allowed: IPv4/IPv6 localhost
+        *)
+            __tac_info "SECURITY" "[BLOCKED: LLM URL must be localhost only]" "$C_Error"
+            return 1
+            ;;
+    esac
     if [[ -z $(git status --porcelain) ]]
     then
         __tac_info "Workspace" "[CLEAN - NO CHANGES]" "$C_Dim"
@@ -285,14 +301,26 @@ ${diff_body}"
 
     # Guard: refuse to send diffs containing secret-like patterns to the LLM.
     # Even though LOCAL_LLM_URL is localhost, a misconfigured proxy could route
-    # the request externally. Fail safe by scanning the diff body.    # Patterns matched:
-    #   sk-...     → OpenAI / Anthropic API keys
-    #   AKIA...    → AWS access key IDs (always start with AKIA)
-    #   ghp_...    → GitHub personal access tokens
-    #   API_KEY=.. → Generic env-var style API key assignments    local __secret_pat='(sk-[a-zA-Z0-9]{20,}'
-    __secret_pat+='|AKIA[0-9A-Z]{16}'
-    __secret_pat+='|ghp_[a-zA-Z0-9]{36}'
-    __secret_pat+='|API[_-]?KEY[[:space:]]*=[[:space:]]*['"'"'"]?[a-zA-Z0-9])'
+    # the request externally. Fail safe by scanning the diff body.
+    # Patterns matched:
+    #   sk-...                          → OpenAI / Anthropic API keys
+    #   AKIA...                         → AWS access key IDs (always start with AKIA)
+    #   ghp_...                         → GitHub personal access tokens
+    #   github_pat_...                  → GitHub fine-grained tokens
+    #   xox[baprs]-...                  → Slack tokens
+    #   AIza...                         → Google API keys
+    #   API_KEY=... / API-KEY=...       → Generic env-var style API key assignments
+    #   PRIVATE_KEY=...-----BEGIN       → Private keys in env vars
+    local __secret_pat='(
+        sk-[a-zA-Z0-9]{20,}                    # OpenAI/Anthropic
+        |AKIA[0-9A-Z]{16}                      # AWS
+        |ghp_[a-zA-Z0-9]{36}                   # GitHub PAT
+        |github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}  # GitHub fine-grained
+        |xox[baprs]-[0-9]{10,13}-[0-9]{10,13}  # Slack tokens
+        |AIza[0-9A-Za-z_-]{35}                 # Google API
+        |API[_-]?KEY[[:space:]]*=[[:space:]]*['"'"'"]?[a-zA-Z0-9]{16,}
+        |PRIVATE[_-]?KEY[[:space:]]*=[[:space:]]*['"'"'"]?-----BEGIN
+    )'
     if [[ "$diff_body" =~ $__secret_pat ]]
     then
         __tac_info "SECURITY" "[BLOCKED: diff appears to contain a secret/API key]" "$C_Error"
@@ -327,7 +355,7 @@ ${diff_body}"
     then
         __tac_info "LLM" "[FAILED TO GENERATE MESSAGE]" "$C_Error"
         git reset HEAD >/dev/null 2>&1
-        return 1
+        return 0  # No changes made (same as user cancellation)
     fi
 
     printf '%s\n' "${C_Highlight}Proposed:${C_Reset} $msg"
@@ -364,6 +392,7 @@ ${diff_body}"
         __tac_info "Repository Sync" "[SUCCESS]" "$C_Success"
     else
         __tac_info "Repository Sync" "[REMOTE PUSH FAILED]" "$C_Error"
+        return 1  # Changes committed but not synced - caller should decide retry strategy
     fi
 }
 
