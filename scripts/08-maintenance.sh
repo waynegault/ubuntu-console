@@ -284,17 +284,17 @@ function up() {
                 if cargo install-update -a >/dev/null 2>&1
                 then
                     cargo_did_update=1
-                    __tac_line "       Cargo Crates" "[UPDATED]" "$C_Success"
+                    __tac_line "[4/13] Cargo Crates" "[UPDATED]" "$C_Success"
                 else
-                    __tac_line "       Cargo Crates" "[FAILED]" "$C_Warning"
+                    __tac_line "[4/13] Cargo Crates" "[FAILED]" "$C_Warning"
                     pkg_err=1
                 fi
             else
-                __tac_line "       Cargo Crates" "[SKIP - install cargo-update]" "$C_Dim"
+                __tac_line "[4/13] Cargo Crates" "[SKIP - install cargo-update]" "$C_Dim"
                 cargo_did_update=1  # Tool not installed = skip, not failure
             fi
         else
-            __tac_line "       Cargo Crates" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[4/13] Cargo Crates" "[NOT INSTALLED]" "$C_Dim"
         fi
 
         # Set cooldown only if both succeeded (or had nothing to update)
@@ -307,7 +307,7 @@ function up() {
         fi
     else
         __tac_line "[3/13] NPM Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
-        __tac_line "       Cargo Crates" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[4/13] Cargo Crates" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
     # [5/13] R Packages (CRAN + Bioconductor)
