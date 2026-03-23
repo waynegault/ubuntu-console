@@ -369,6 +369,10 @@ function up() {
                 then
                     r_did_update=1  # No packages to update = success
                     __tac_line "[4/12] R Packages" "[NO USER PACKAGES]" "$C_Dim"
+                elif [[ "$update_output" == *"failed to lock directory"* ]]
+                then
+                    r_did_update=1  # Lock issue = skip, not failure
+                    __tac_line "[4/12] R Packages" "[SKIP - Run from Windows]" "$C_Dim"
                 elif [[ "$update_output" == *"TIMED"* ]] || [[ -z "$update_output" && "$pkg_count" == "0" ]]
                 then
                     r_did_update=1  # R unresponsive, skip
