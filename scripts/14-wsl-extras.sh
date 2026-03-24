@@ -3,7 +3,7 @@
 # Module: 14-wsl-extras
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # -----------------------------------------------------------------------------
 # Purpose: Move WSL/X11 and OpenClaw startup helpers out of the thin loader.
 # This module centralises a few WSL-specific startup helpers that were
@@ -85,6 +85,47 @@ if [[ -r /etc/resolv.conf ]]; then
         fi
         unset _t0 _t1 _ms
     fi
+fi
+
+# Ensure local user bin is on PATH without polluting the thin ~/.bashrc loader.
+if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# WSL-friendly credential storage workaround for Electron-based tooling
+# (for example VS Code launched from this shell). In headless/WSL sessions,
+# desktop keyrings often don't prompt reliably; `basic` avoids keyring prompts.
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    export PASSWORD_STORE="${PASSWORD_STORE:-basic}"
+fi
+
+# Ensure nvm is loaded from the modular shell config, not the thin loader.
+export NVM_DIR="$HOME/.nvm"
+if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+    # shellcheck disable=SC1091
+    . "$NVM_DIR/nvm.sh"
+fi
+if [[ -s "$NVM_DIR/bash_completion" ]]; then
+    # shellcheck disable=SC1091
+    . "$NVM_DIR/bash_completion"
+fi
+
+# PowerShell wrappers so WSL shells can reliably call Windows PowerShell / pwsh.
+if [[ ! -x "$HOME/.local/bin/powershell.exe" ]]; then
+    mkdir -p "$HOME/.local/bin"
+    cat > "$HOME/.local/bin/powershell.exe" <<'EOF'
+#!/usr/bin/env bash
+exec /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "$@"
+EOF
+    chmod +x "$HOME/.local/bin/powershell.exe"
+fi
+if [[ ! -x "$HOME/.local/bin/pwsh" ]]; then
+    mkdir -p "$HOME/.local/bin"
+    cat > "$HOME/.local/bin/pwsh" <<'EOF'
+#!/usr/bin/env bash
+exec '/mnt/c/Program Files/PowerShell/7/pwsh.exe' "$@"
+EOF
+    chmod +x "$HOME/.local/bin/pwsh"
 fi
 
 # NOTE: Do NOT place secrets (API keys, passwords) in this file. Use the
