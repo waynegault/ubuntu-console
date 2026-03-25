@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 6
+# Module Version: 8
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -2126,6 +2126,13 @@ function oc-kgraph() {
                 printf '%s\n' "Usage: oc g [--reindex|--refresh] [--restart]"
                 printf '%s\n' "  --reindex  Rebuild OpenClaw memory index and sync graph DB"
                 printf '%s\n' "  --restart  Force-restart kgraph server"
+                printf '%s\n' ""
+                printf '%s\n' "Graph roles:"
+                printf '%s\n' "  Obsidian/Gigabrain = curated human memory browser"
+                printf '%s\n' "  oc g               = operational / derived graph browser"
+                printf '%s\n' "  OpenStinger        = temporal/entity recall layer"
+                printf '%s\n' ""
+                printf '%s\n' "Views in oc g UI: overview, topics, files, semantic, raw"
                 return 0
                 ;;
         esac
@@ -2163,8 +2170,8 @@ PY
     setsid python3 "$KG_PY" --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
     disown
 
-    # kgraph.py writes the embedded page to kgraph.html when --embed is used,
-    # so open that path explicitly to avoid a directory listing.
+    # Embedded mode serves a single HTML file plus /graph.json API.
+    # Open the file path directly; opening / can yield a directory listing.
     local URL="http://127.0.0.1:${PORT}/kgraph.html"
 
     # Guard: only open URLs bound to localhost to prevent open-redirect.
@@ -2173,32 +2180,51 @@ PY
         return 1
     fi
 
-    __tac_info "Knowledge Graph" "[LAUNCHING]" "$C_Success"
+    __tac_info "Knowledge Graph" "[LAUNCHING — OVERVIEW VIEW]" "$C_Success"
     printf 'URL: %s\n' "$URL"
+    printf '%s\n' 'Use the toolbar to switch views: overview, topics, files, semantic, raw.'
 
-    # Wait up to ~5s for the server to respond.
+    # Wait up to ~5s for the server to respond, then give browsers a tiny
+    # extra moment so we do not race a freshly-bound socket.
     local i
+    local server_ready=1
     for i in 1 2 3 4 5 6 7 8 9 10; do
         if command -v curl >/dev/null 2>&1; then
-            curl -sSf --head "$URL" >/dev/null 2>&1 && break
+            if curl -sSf --head "$URL" >/dev/null 2>&1; then
+                server_ready=0
+                break
+            fi
         else
-            (echo > /dev/tcp/127.0.0.1/${PORT}) >/dev/null 2>&1 && break
+            if (echo > /dev/tcp/127.0.0.1/${PORT}) >/dev/null 2>&1; then
+                server_ready=0
+                break
+            fi
         fi
         sleep 0.5
     done
+    sleep 0.3
 
-    # Try WSL/Windows openers first, then Linux browsers, then xdg-open.
+    if [[ $server_ready -ne 0 ]]; then
+        printf '\nWarning: kgraph server did not confirm readiness yet. URL may still come up if it is slow to bind: %s\n' "$URL"
+    fi
+
+    # Try launchers in a strict order and only claim success when the launcher
+    # itself exits successfully.
     local opened=1
+    local opener_used="manual"
     if [[ -f /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; then
         if command -v wslview >/dev/null 2>&1; then
-            wslview "$URL" >/dev/null 2>&1 || true
-            opened=0
-        elif command -v powershell.exe >/dev/null 2>&1; then
-            powershell.exe -NoProfile -Command Start-Process -ArgumentList "$URL" >/dev/null 2>&1 || true
-            opened=0
-        elif command -v pwsh.exe >/dev/null 2>&1; then
-            pwsh.exe -NoProfile -Command Start-Process -ArgumentList "$URL" >/dev/null 2>&1 || true
-            opened=0
+            if wslview "$URL" >/dev/null 2>&1; then
+                opened=0
+                opener_used="wslview"
+            fi
+        fi
+
+        if [[ $opened -ne 0 ]] && command -v powershell.exe >/dev/null 2>&1; then
+            if powershell.exe -NoProfile -Command "Start-Process '$URL'" >/dev/null 2>&1; then
+                opened=0
+                opener_used="powershell.exe"
+            fi
         fi
     fi
 
@@ -2215,22 +2241,30 @@ PY
             brave-browser
             firefox
         )
+        local b
         for b in "${browsers[@]}"; do
             if command -v "$b" >/dev/null 2>&1; then
-                "$b" "$URL" >/dev/null 2>&1 &>/dev/null || true
-                opened=0
-                break
+                if "$b" "$URL" >/dev/null 2>&1 & then
+                    opened=0
+                    opener_used="$b"
+                    break
+                fi
             fi
         done
     fi
-    if [[ $opened -ne 0 ]]; then
-        if command -v xdg-open >/dev/null 2>&1; then
-            xdg-open "$URL" >/dev/null 2>&1 || true
+
+    if [[ $opened -ne 0 ]] && command -v xdg-open >/dev/null 2>&1; then
+        if xdg-open "$URL" >/dev/null 2>&1; then
+            opened=0
+            opener_used="xdg-open"
         fi
     fi
 
-    if [[ $opened -ne 0 ]]; then
+    if [[ $opened -eq 0 ]]; then
+        printf 'Launcher: %s\n' "$opener_used"
+    else
         printf '\nCould not launch a browser automatically. Open this URL manually: %s\n' "$URL"
+        printf 'Launchers tried: wslview, powershell.exe, browser fallbacks, xdg-open\n'
     fi
 }
 

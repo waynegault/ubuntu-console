@@ -331,18 +331,34 @@ bridged API keys.
 `oc g` (or `oc-kgraph`) launches an interactive knowledge graph visualisation.
 It starts a Python HTTP server (`scripts/kgraph.py`) that serves a
 Cytoscape.js frontend, then opens the browser. The graph is persisted to
-`~/.openclaw/kgraph.json`.
+`~/.openclaw/kgraph.json` and mirrored into `~/.openclaw/kgraph.sqlite`.
+
+**What `oc g` is best for:**
+- browsing OpenClaw-derived file/topic/actor relationships
+- inspecting semantic links between chunks or documents
+- debugging graph extraction and memory structure
+- keeping a small editable manual graph when needed
 
 **Features:**
 - Create, edit, and delete nodes and edges with labels
+- Multiple graph views: `overview`, `topics`, `files`, `semantic`, `raw`
+- Semantic threshold control for noisy similarity edges
 - Cluster nodes by attribute or label prefix (compound parent nodes)
 - Toggle edge/node labels
+- Graph source/view metadata shown in the toolbar
 - Graph data saved via `GET`/`POST` to `/graph.json`
-- Layout controls (force-directed, grid, breadthfirst)
+
+**Recommended use:**
+- `overview` = default human-friendly browsing
+- `topics` = topic/entity centric exploration
+- `files` = document/file structure only
+- `semantic` = strongest similarity edges only
+- `raw` = full unprojected graph for debugging
 
 A separate React + AntV G6 frontend lives in `frontend-g6/` for development
-use (`npm run dev` on Vite port 5173). Both UIs read the same
-`~/.openclaw/kgraph.json` data file.
+use (`npm run dev` on Vite port 5173). Both UIs read the same persisted graph
+state, while the Cytoscape tool can also derive views directly from the
+OpenClaw memory DB.
 
 ### Key Paths
 
@@ -357,7 +373,12 @@ use (`npm run dev` on Vite port 5173). Both UIs read the same
 | `~/.openclaw/bash-errors.log` | ERR trap log |
 | `~/.openclaw/maintenance_cooldowns.txt` | Cooldown timestamps |
 | `~/.openclaw/completions/openclaw.bash` | Bash completions |
+| `~/.openclaw/.env.bridge` | Generated env bridge consumed by the gateway service |
+| `~/.openclaw/kgraph.json` | JSON mirror of the editable knowledge graph |
+| `~/.openclaw/kgraph.sqlite` | Primary persisted SQLite store for `oc g` |
+| `~/.openclaw/state/memory/gigabrain-workspace/obsidian-vault/` | Gigabrain-exported Obsidian vault root |
 | `~/.config/systemd/user/openclaw-gateway.service` | systemd unit file |
+| `~/.config/systemd/user/openclaw-gateway.service.d/env-bridge.conf` | Gateway env-bridge drop-in (ExecStartPre + EnvironmentFile) |
 | `~/.config/systemd/user/llama-watchdog.service` | Watchdog systemd unit |
 | `~/.config/systemd/user/llama-watchdog.timer` | Watchdog timer |
 | `/dev/shm/tac_win_api_keys` | Bridged API key cache (tmpfs) |
@@ -1120,6 +1141,34 @@ git add -A && git commit -m "description" && git push
 ```
 
 ---
+
+### Obsidian + Memory Views
+
+Gigabrain is configured to export an Obsidian-compatible vault under:
+
+- `~/.openclaw/state/memory/gigabrain-workspace/obsidian-vault/`
+
+The intended note content root is:
+- `~/.openclaw/state/memory/gigabrain-workspace/obsidian-vault/`
+
+### Vault layout direction
+Use a **single vault root**. Do not keep generating a nested structure with an
+outer wrapper vault and an inner `Gigabrain/.obsidian` vault.
+
+If you are migrating from an older nested layout, treat the root vault as the
+intended destination going forward and mirror that root to Windows for desktop
+Obsidian use.
+
+This vault should be opened in Obsidian as a **folder vault**, not as an
+individual file. If Obsidian throws an `EISDIR` / “illegal operation on a
+directory” error, it usually means the app is failing to watch that WSL path
+through the Windows UNC bridge. In that case, prefer copying/syncing the vault
+to a native Windows path for desktop Obsidian use.
+
+Recommended viewing split:
+- **Obsidian vault** → curated human memory browsing
+- **`oc g`** → operational/derived graph exploration and debugging
+- **OpenStinger** → temporal/entity recall investigation
 
 ### GPU Utilisation: CUDA vs Task Manager
 

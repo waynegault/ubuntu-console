@@ -92,6 +92,43 @@ class KGraphTests(unittest.TestCase):
             subprocess.run([sys.executable, SCRIPT_PATH, '--install', out], check=True, cwd=td)
             self.assertTrue(os.path.exists(out))
 
+    def test_project_graph_overview_hides_chunks_and_remaps_edges(self):
+        kgraph = load_kgraph_module()
+        graph = {
+            'nodes': [
+                {'id': 'file:a', 'label': 'A.md', 'type': 'file'},
+                {'id': 'chunk:1', 'label': 'chunk', 'type': 'chunk'},
+                {'id': 'topic:x', 'label': 'Topic X', 'type': 'topic'},
+            ],
+            'edges': [
+                {'from': 'file:a', 'to': 'chunk:1', 'label': 'contains chunk'},
+                {'from': 'chunk:1', 'to': 'topic:x', 'label': 'covers topic'},
+            ],
+        }
+        projected = kgraph.project_graph(graph, mode='overview')
+        node_ids = {n['id'] for n in projected['nodes']}
+        self.assertIn('file:a', node_ids)
+        self.assertIn('topic:x', node_ids)
+        self.assertNotIn('chunk:1', node_ids)
+        self.assertEqual(projected['edges'][0]['label'], 'file covers topic')
+
+    def test_project_graph_semantic_filters_by_threshold(self):
+        kgraph = load_kgraph_module()
+        graph = {
+            'nodes': [
+                {'id': 'chunk:a', 'label': 'A', 'type': 'chunk'},
+                {'id': 'chunk:b', 'label': 'B', 'type': 'chunk'},
+                {'id': 'chunk:c', 'label': 'C', 'type': 'chunk'},
+            ],
+            'edges': [
+                {'from': 'chunk:a', 'to': 'chunk:b', 'label': 'related (0.90)', 'semantic_score': 0.90},
+                {'from': 'chunk:a', 'to': 'chunk:c', 'label': 'related (0.78)', 'semantic_score': 0.78},
+            ],
+        }
+        projected = kgraph.project_graph(graph, mode='semantic', semantic_threshold=0.85)
+        self.assertEqual(len(projected['edges']), 1)
+        self.assertEqual(projected['edges'][0]['to'], 'chunk:b')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -490,7 +490,7 @@ function tactical_help() {
     __hRow "oc sync-models" "Sync models.conf"
 
     __hSection "OPENCLAW — TOOLS"
-    __hRow "oc g" "Launch knowledge graph"
+    __hRow "oc g" "Launch operational graph browser (overview/topics/files/semantic/raw)"
 
     __hSection "LLM — MODEL MANAGEMENT"
     __hRow "wake" "Lock GPU persistence mode"
