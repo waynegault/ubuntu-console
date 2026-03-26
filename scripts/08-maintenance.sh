@@ -716,7 +716,22 @@ function cl() {
             then
                 __tac_info "  ..." "+$((path_ghosts - 3)) more" "$C_Dim"
             fi
-            __tac_info "  Fix" "Edit ~/.bashrc or run 'cl --path-fix'" "$C_Dim"
+            # Find where PATH is set (check common locations)
+            local path_source=""
+            if grep -q "export PATH=" "$HOME/.bashrc" 2>/dev/null
+            then
+                path_source="$HOME/.bashrc"
+            elif grep -q "export PATH=" "$TACTICAL_REPO_ROOT/scripts/"*.sh 2>/dev/null
+            then
+                path_source=$(grep -l "export PATH=" "$TACTICAL_REPO_ROOT/scripts/"*.sh 2>/dev/null | head -1)
+            fi
+            if [[ -n "$path_source" ]]
+            then
+                __tac_info "  PATH set in" "$path_source" "$C_Dim"
+                __tac_info "  Fix" "Edit $path_source manually" "$C_Dim"
+            else
+                __tac_info "  Fix" "Search for 'export PATH=' in profile files" "$C_Dim"
+            fi
         else
             __tac_line "Non-existent PATH entries" "[NONE]" "$C_Success"
         fi
