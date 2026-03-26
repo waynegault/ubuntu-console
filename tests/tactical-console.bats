@@ -1073,6 +1073,62 @@ setup() {
     done
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ~/.bashrc THIN LOADER ENFORCEMENT
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "bashrc: file exists and is read-only (mode 444)" {
+    [[ -f "$HOME/.bashrc" ]]
+    local perms
+    perms=$(stat -c '%a' "$HOME/.bashrc" 2>/dev/null || stat -f '%Lp' "$HOME/.bashrc" 2>/dev/null)
+    [[ "$perms" == "444" ]]
+}
+
+@test "bashrc: contains only interactive guard, source command, and comments" {
+    # Count non-comment, non-empty lines (should be exactly 6: case line, 2 pattern lines, if line, source line, fi)
+    local code_lines
+    code_lines=$(grep -v '^[[:space:]]*#' "$HOME/.bashrc" | grep -v '^[[:space:]]*$' | wc -l)
+    [[ "$code_lines" -le 10 ]]
+}
+
+@test "bashrc: does not contain function definitions" {
+    ! grep -q '^[[:space:]]*function[[:space:]]' "$HOME/.bashrc"
+}
+
+@test "bashrc: does not contain alias definitions" {
+    ! grep -q '^[[:space:]]*alias[[:space:]]' "$HOME/.bashrc"
+}
+
+@test "bashrc: does not contain export statements (except in comments)" {
+    ! grep -q '^[[:space:]]*export[[:space:]]' "$HOME/.bashrc"
+}
+
+@test "bashrc: does not source files other than tactical-console.bashrc" {
+    # Allow source of tactical-console.bashrc only
+    local other_sources
+    other_sources=$(grep '^[[:space:]]*source[[:space:]]' "$HOME/.bashrc" | \
+        grep -v 'tactical-console.bashrc' | wc -l)
+    [[ "$other_sources" -eq 0 ]]
+}
+
+@test "bashrc: does not contain OpenClaw completions source" {
+    ! grep -q 'openclaw\.bash' "$HOME/.bashrc"
+}
+
+@test "bashrc: does not contain pnpm PATH configuration" {
+    ! grep -q 'PNPM_HOME' "$HOME/.bashrc"
+}
+
+@test "bashrc: does not contain OPENCLAW_LCM_DEEP_RECALL_CMD" {
+    ! grep -q 'OPENCLAW_LCM_DEEP_RECALL' "$HOME/.bashrc"
+}
+
+@test "bashrc: ends with '# end of file' marker" {
+    local last
+    last=$(grep -v '^[[:space:]]*$' "$HOME/.bashrc" | tail -1)
+    [[ "$last" == "# end of file" ]]
+}
+
 @test "cross-script: watchdog ACTIVE_LLM_FILE matches bashrc constant" {
     local wd_file
     wd_file=$(grep -oP 'ACTIVE_LLM_FILE="\K[^"]+' \
