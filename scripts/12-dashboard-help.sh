@@ -50,9 +50,31 @@ function tactical_dashboard() {
     __fRow "SYSTEM TIME" "$systime" "$C_Text"
     __fRow "UPTIME" "$uptime" "$C_Text"
 
+    # Enhanced battery status with time remaining (if discharging)
+    local batt_detail="$batt"
+    if [[ "$batt" != "A/C POWERED" && "$batt" != "N/A" ]]
+    then
+        local time_remaining=0
+        local bat_file
+        for bat_file in /sys/class/power_supply/BAT*/time_remaining
+        do
+            if [[ -f "$bat_file" ]]
+            then
+                time_remaining=$(head -1 < "$bat_file" 2>/dev/null)
+                break
+            fi
+        done
+        if [[ -n "$time_remaining" && "$time_remaining" =~ ^[0-9]+$ ]] && (( time_remaining > 0 ))
+        then
+            local hours=$((time_remaining / 3600))
+            local mins=$(( (time_remaining % 3600) / 60 ))
+            batt_detail="$batt (~${hours}h ${mins}m)"
+        fi
+    fi
+
     # Battery colour: >50% green, 20-50% yellow, <20% red, A/C=green
     local batt_color=$C_Success
-    if [[ "$batt" != "A/C POWERED" && "$batt" =~ ^([0-9]+)% ]]
+    if [[ "$batt" != "A/C POWERED" && "$batt" != "N/A" && "$batt" =~ ^([0-9]+)% ]]
     then
         local batt_pct=${BASH_REMATCH[1]}
         if (( batt_pct < 20 ))
@@ -63,7 +85,7 @@ function tactical_dashboard() {
             batt_color=$C_Warning
         fi
     fi
-    __fRow "BATTERY" "$batt" "$batt_color"
+    __fRow "BATTERY" "$batt_detail" "$batt_color"
 
     local gpu_raw
     gpu_raw=$(__get_gpu)

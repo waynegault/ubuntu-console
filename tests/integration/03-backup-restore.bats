@@ -10,6 +10,10 @@ setup_file() {
     export REPO_ROOT
     REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
     export PROFILE_PATH="$REPO_ROOT/tactical-console.bashrc"
+    
+    # Source mock framework
+    source "$REPO_ROOT/tests/helpers/mock.sh"
+    
     export TAC_TEST_TMPDIR
     TAC_TEST_TMPDIR="$(mktemp -d)"
     export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
@@ -144,6 +148,28 @@ setup() {
     
     # Should complete successfully
     [[ "$status" -eq 0 ]] || [[ "$output" == *"CREATED"* ]]
+}
+
+@test "integration: oc-backup with mocked openclaw doctor" {
+    # Mock openclaw command
+    mock_command openclaw "
+        if [[ \"\$*\" == *'doctor'* ]]; then
+            echo 'OpenClaw is healthy'
+            return 0
+        fi
+        echo 'mocked openclaw'
+    "
+    
+    # Create test data
+    echo "test" > "$OC_WORKSPACE/test.txt"
+    
+    run oc-backup
+    
+    # Should complete with mocked openclaw
+    [[ "$status" -eq 0 ]] || [[ "$output" == *"CREATED"* ]] || [[ "$output" == *"Snapshot"* ]]
+    
+    # Cleanup mock
+    unmock_command openclaw
 }
 
 # end of file

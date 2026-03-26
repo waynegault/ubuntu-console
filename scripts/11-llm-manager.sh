@@ -31,6 +31,12 @@ readonly _MODEL_SIZE_MEDIUM=20      # 2.0GB+ — medium model, moderate startup
 readonly _MODEL_SIZE_SMALL=15       # 1.5GB+ — small model, fast startup
 readonly _GPU_OFFLOAD_DISABLED=0    # gpu_layers = 0 means CPU-only mode
 
+# ---- Special-case model names (for custom settings/behavior) ----
+readonly _MODEL_QWEN35_4B="Qwen3.5-4B"
+readonly _MODEL_QWEN25_CODER_3B="Qwen2.5 Coder 3B Instruct"
+readonly _MODEL_GEMMA3_4B="Gemma 3 4b It"
+readonly _MODEL_PHI4_MINI="Phi-4-mini"
+
 # ---------------------------------------------------------------------------
 # __save_tps — Persist TPS measurement to the registry's tps column.
 # Called after burn / llm_stream benchmarks so the dashboard and model list
@@ -178,7 +184,7 @@ function __llm_health_timeout() {
     if (( gpu_layers == _GPU_OFFLOAD_DISABLED ))
     then
         timeout=180
-    elif [[ "$name" == "Qwen3.5-4B" ]]
+    elif [[ "$name" == "$_MODEL_QWEN35_4B" ]]
     then
         timeout=120
     elif (( size_tenths >= _MODEL_SIZE_LARGE ))
@@ -1102,11 +1108,53 @@ function __model_use() {
     local model_path="$LLAMA_MODEL_DIR/$file"
     local model_bytes=0
 
+    # Auto-download model if not found (with user confirmation for large files)
     if [[ ! -f "$model_path" ]]
     then
-        __tac_info "Error" "[File $file missing from $LLAMA_MODEL_DIR]" "$C_Error"
-        return 1
+        __tac_info "Model File" "[NOT FOUND - $file]" "$C_Warning"
+        
+        # Check if model download is possible (HuggingFace repo info in registry)
+        local download_prompt="Would you like to download model #$target ($name)? [y/N]: "
+        read -r -e -p "$download_prompt" confirm
+        
+        if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]
+        then
+            # Check file size before downloading
+            local size_num="${size%G}"
+            if (( $(echo "$size_num > 2" | bc -l 2>/dev/null || echo 0) ))
+            then
+                __tac_info "Download Size" "[${size} - This may take several minutes]" "$C_Warning"
+                read -r -e -p "Continue? [y/N]: " confirm_large
+                if [[ "${confirm_large,,}" != "y" && "${confirm_large,,}" != "yes" ]]
+                then
+                    __tac_info "Download" "[CANCELLED]" "$C_Dim"
+                    return 1
+                fi
+            fi
+            
+            # Attempt download
+            __tac_info "Download" "[STARTING - $name ($size)]" "$C_Dim"
+            if __model_download "$file"
+            then
+                __tac_info "Download" "[COMPLETE]" "$C_Success"
+                # Re-check file exists after download
+                if [[ ! -f "$model_path" ]]
+                then
+                    __tac_info "Error" "[Download completed but file not found]" "$C_Error"
+                    return 1
+                fi
+            else
+                __tac_info "Download" "[FAILED]" "$C_Error"
+                __tac_info "Hint" "Run 'model download $file' manually" "$C_Dim"
+                return 1
+            fi
+        else
+            __tac_info "Download" "[CANCELLED]" "$C_Dim"
+            __tac_info "Hint" "Run 'model download $file' to download manually" "$C_Dim"
+            return 1
+        fi
     fi
+    
     model_bytes=$(stat --format=%s "$model_path" 2>/dev/null || echo 0)
     if [[ ! -x "$LLAMA_SERVER_BIN" ]]
     then
@@ -1169,7 +1217,7 @@ function __model_use() {
             parallel_slots=2
         fi
 
-        if [[ "$name" == "Qwen2.5 Coder 3B Instruct" ]]
+        if [[ "$name" == "$_MODEL_QWEN25_CODER_3B" ]]
         then
             (( ctx > 4096 )) && ctx=4096
             batch_size=2048
@@ -1177,7 +1225,7 @@ function __model_use() {
             parallel_slots=1
         fi
 
-        if [[ "$name" == "Qwen3.5-4B" ]]
+        if [[ "$name" == "$_MODEL_QWEN35_4B" ]]
         then
             (( ctx > 3072 )) && ctx=3072
             batch_size=2048
@@ -1185,7 +1233,7 @@ function __model_use() {
             parallel_slots=1
         fi
 
-        if [[ "$name" == "Gemma 3 4b It" ]]
+        if [[ "$name" == "$_MODEL_GEMMA3_4B" ]]
         then
             (( ctx > 2048 )) && ctx=2048
             batch_size=2048
