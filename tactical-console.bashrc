@@ -158,7 +158,7 @@ for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh; do
         if [[ -n "${DEBUG_TAC_STARTUP:-}" ]]; then
             printf 'Sourcing %s ... ' "$_tac_f" >&2
             _tac_start_ns=$(date +%s%N 2>/dev/null || echo 0)
-            source "$_tac_f"
+            source "$_tac_f" 2>/dev/null
             _tac_end_ns=$(date +%s%N 2>/dev/null || echo 0)
             if [[ "$_tac_start_ns" != "0" && "$_tac_end_ns" != "0" ]]; then
                 _tac_ms=$(( (_tac_end_ns - _tac_start_ns) / 1000000 ))
@@ -168,7 +168,7 @@ for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh; do
             fi
             unset _tac_start_ns _tac_end_ns _tac_ms
         else
-            source "$_tac_f"
+            source "$_tac_f" 2>/dev/null
         fi
 
         _tac_mv=$(grep -m1 '^# Module Version:' "$_tac_f" 2>/dev/null | awk '{print $NF}')
