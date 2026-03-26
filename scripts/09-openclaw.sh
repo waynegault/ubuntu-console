@@ -1958,11 +1958,11 @@ function oc-diag() {
     echo ""
 
     printf '%s\n' "${C_Highlight}[2/5] Gateway Status${C_Reset}"
-    if curl -sf --max-time 5 "http://127.0.0.1:${OC_PORT:-18789}/api/health" -o /dev/null 2>/dev/null
+    if curl -sf --max-time 5 "http://127.0.0.1:${OC_PORT:-18790}/api/health" -o /dev/null 2>/dev/null
     then
-        printf '%s\n' "  ${C_Success}● Gateway reachable on port ${OC_PORT:-18789}${C_Reset}"
+        printf '%s\n' "  ${C_Success}● Gateway reachable on port ${OC_PORT:-18790}${C_Reset}"
     else
-        printf '%s\n' "  ${C_Error}● Gateway NOT reachable on port ${OC_PORT:-18789}${C_Reset}"
+        printf '%s\n' "  ${C_Error}● Gateway NOT reachable on port ${OC_PORT:-18790}${C_Reset}"
     fi
     echo ""
 
