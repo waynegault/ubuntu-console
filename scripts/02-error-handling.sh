@@ -53,5 +53,8 @@ function __tac_err_handler() {
 set -E
 trap '__tac_err_handler' ERR
 
+# Ensure error log directory exists on profile load
+mkdir -p "$(dirname "$ErrorLogPath")" 2>/dev/null
+
 
 # end of file
