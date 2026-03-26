@@ -90,8 +90,11 @@ alias commit='commit_auto'
 # ---- OpenClaw Shortcuts (functions defined in §9) ----
 # Wrapper: strip the leading blank line that openclaw always prints.
 # Skip filtering for interactive/redirected commands to avoid breaking TTY.
+# Does a live check for openclaw CLI availability.
 function openclaw() {
-    if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
+    # Live check: verify openclaw CLI exists and responds to --version
+    if ! command -v openclaw >/dev/null 2>&1 || ! command openclaw --version >/dev/null 2>&1
+    then
         __tac_info "OpenClaw" "[NOT INSTALLED]" "$C_Warning"
         return 127
     fi
