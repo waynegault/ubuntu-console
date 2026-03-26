@@ -266,7 +266,7 @@ commands that produce no output (e.g., `cd`).
 ### What Is OpenClaw?
 
 OpenClaw is a Node.js-based AI agent framework (v2026.3.2) that runs as a
-**systemd user service** on port 18789. It provides multi-agent orchestration,
+**systemd user service** on port 18790. It provides multi-agent orchestration,
 session management, and tool-use capabilities. The Tactical
 Profile wraps the entire OpenClaw CLI with ergonomic shell commands.
 
@@ -298,7 +298,7 @@ Profile wraps the entire OpenClaw CLI with ergonomic shell commands.
 │  │  │  │       │                        │   │  │  │  │
 │  │  │  │       ▼                        ▼   │  │  │  │
 │  │  │  │  openclaw-gateway.service  llama   │  │  │  │
-│  │  │  │  (port 18789)             (8081)   │  │  │  │
+│  │  │  │  (port 18790)             (8081)   │  │  │  │
 │  │  │  └────────────────────────────────────┘  │  │  │
 │  │  └─────────────────────────────────────────┘  │  │
 │  └───────────────────────────────────────────────┘  │
@@ -335,10 +335,10 @@ bridged API keys.
 
 | Command | What It Does |
 |---|---|
-| `so` | Start the OpenClaw gateway. Injects API keys into systemd, runs `openclaw gateway start`, waits 3s, checks port 18789. **Fails gracefully if OpenClaw not installed.** |
+| `so` | Start the OpenClaw gateway. Injects API keys into systemd, runs `openclaw gateway start`, waits 3s, checks port 18790. **Fails gracefully if OpenClaw not installed.** |
 | `xo` | Stop the gateway (**stop only — does not restart**). Runs `openclaw gateway stop`, then `systemctl --user stop openclaw-gateway.service`, removes supervisor lock. When called from an AI agent context, prints a warning to use `openclaw gateway restart` instead. **Fails gracefully if OpenClaw not installed.** |
 | `oc-restart` | Restart gateway (native: `openclaw gateway restart`). **Fails gracefully if OpenClaw not installed.** |
-| `oc-health` | Deep probe: checks port 18789, then calls `openclaw health --json` and parses the status field. Supports `--json` and `--plain` for automation. |
+| `oc-health` | Deep probe: checks port 18790, then calls `openclaw health --json` and parses the status field. Supports `--json` and `--plain` for automation. |
 | `oc-tail` | Live-tail gateway logs via `openclaw logs --follow`. |
 
 ### Logs
