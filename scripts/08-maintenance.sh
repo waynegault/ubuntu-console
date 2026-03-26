@@ -646,14 +646,13 @@ function up() {
 
 # ---------------------------------------------------------------------------
 # cl — Quick cleanup without the full maintenance run.
-# Usage: cl [--light] [--report] [--yes] [--path-fix]
+# Usage: cl [--light] [--report] [--yes]
 #   --light:  Only clean python cache (old behavior)
 #   --report: Show what could be cleaned (no deletion)
 #   --yes:    Skip confirmation prompts
-#   --path-fix: Remove non-existent PATH entries (creates backup)
 # ---------------------------------------------------------------------------
 function cl() {
-    local light_mode=0 report_mode=0 yes_mode=0 path_fix_mode=0
+    local light_mode=0 report_mode=0 yes_mode=0
     
     # Parse arguments
     while [[ $# -gt 0 ]]
@@ -662,66 +661,10 @@ function cl() {
             --light|-l) light_mode=1 ;;
             --report|-r) report_mode=1 ;;
             --yes|-y) yes_mode=1 ;;
-            --path-fix) path_fix_mode=1 ;;
-            *) __tac_info "Usage" "[cl [--light] [--report] [--yes] [--path-fix]]" "$C_Error"; return 1 ;;
+            *) __tac_info "Usage" "[cl [--light] [--report] [--yes]]" "$C_Error"; return 1 ;;
         esac
         shift
     done
-    
-    # PATH fix mode: remove ghost entries from profile
-    if (( path_fix_mode == 1 ))
-    then
-        __tac_header "PATH GHOST REMOVAL" "open"
-        
-        # Find ghost paths
-        local IFS=':'
-        local ghost_paths=()
-        for p in $PATH
-        do
-            [[ -n "$p" && ! -d "$p" ]] && ghost_paths+=("$p")
-        done
-        
-        if (( ${#ghost_paths[@]} == 0 ))
-        then
-            __tac_info "PATH ghosts" "[NONE FOUND]" "$C_Success"
-            __tac_footer
-            return 0
-        fi
-        
-        __tac_info "Found" "[${#ghost_paths[@]} ghost entries]" "$C_Warning"
-        
-        # Create backup of profile
-        local profile_backup
-        profile_backup="$HOME/.bashrc.path-backup-$(date +%Y%m%d-%H%M%S)"
-        cp ~/.bashrc "$profile_backup" 2>/dev/null
-        __tac_info "Backup created" "$profile_backup" "$C_Success"
-        
-        # Remove ghost paths from PATH in profile
-        local new_path="$PATH"
-        local ghost
-        for ghost in "${ghost_paths[@]}"
-        do
-            # Escape special chars for sed
-            local escaped_ghost
-            escaped_ghost=$(printf '%s\n' "$ghost" | sed "s/[[\.*^$()+?{|]/\\\\&/g")
-            new_path=$(echo "$new_path" | sed "s|$escaped_ghost:||g" | sed 's/::*/:/g' | sed 's/^://;s/:$//')
-        done
-        
-        # Update PATH in profile (find and replace existing PATH export)
-        if grep -q "^export PATH=" ~/.bashrc 2>/dev/null
-        then
-            sed -i "s|^export PATH=.*|export PATH=\"$new_path\"|" ~/.bashrc 2>/dev/null
-            __tac_info "PATH updated" "[${#ghost_paths[@]} entries removed]" "$C_Success"
-        else
-            # Add new PATH export
-            echo "export PATH=\"$new_path\"" >> ~/.bashrc
-            __tac_info "PATH added" "[${#ghost_paths[@]} ghosts removed]" "$C_Success"
-        fi
-        
-        __tac_info "Reload" "Run 'source ~/.bashrc' to apply" "$C_Dim"
-        __tac_footer
-        return 0
-    fi
     
     # Report mode: show what could be cleaned without deleting
     if (( report_mode == 1 ))

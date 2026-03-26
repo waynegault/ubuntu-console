@@ -476,7 +476,6 @@ function tactical_help() {
     __hRow "cl" "Deep cleanup (apt, brew, journal, docker, npm)"
     __hRow "cl --light" "Light cleanup (python cache only)"
     __hRow "cl --report" "Show cleanup report (no deletion)"
-    __hRow "cl --path-fix" "Remove PATH ghost entries (with backup)"
     __hRow "logtrim" "Trim logs over 1MB to last 1000 lines"
     __hRow "oedit" "Open tactical-console.bashrc in VS Code"
     __hRow "code <path>" "Open any file or directory in VS Code"
