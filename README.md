@@ -41,8 +41,8 @@ dependency order. It manages:
   (llama.cpp) with model registry, GPU/CPU offloading, and streaming chat.
 - **OpenClaw agent framework** — Gateway lifecycle, agent orchestration,
   session management, backup/restore, and API key bridging from Windows.
-- **Maintenance** — A 13-step `up` pipeline that updates APT, NPM, Cargo,
-  validates Python fleets, audits disk space, and kills orphaned processes.
+- **Maintenance** — A 15-step `up` pipeline that updates APT, NPM, Cargo, R packages,
+  validates Python fleets, audits disk space, cleans Docker/NPM caches, and kills orphaned processes.
   Uses flock for race-condition-free cooldown management.
 - **Deployment** — Git commit/push with optional LLM-generated commit
   messages, plus rsync to an OpenClaw production workspace.
@@ -59,6 +59,74 @@ dependency order. It manages:
 | **Instant UI** | Telemetry uses `/dev/shm` caching with background subshell refresh. The dashboard renders stale-but-instant data while new data fetches asynchronously. |
 | **Security First** | LLM binds to `127.0.0.1` only. API key cache is `chmod 600` on `tmpfs`. Git diff is blocked from cloud LLM endpoints. ERR trap logs all failures for post-mortem. |
 | **Hardware Awareness** | `-ngl 999` auto-offloads maximum GPU layers at runtime, CPU threads scale dynamically via `nproc`, and `--flash-attn` + `--prio 2` are tuned for the RTX 3050 Ti 4 GB VRAM ceiling. |
+
+---
+
+## Quick Start (5 Minutes)
+
+### Prerequisites
+
+- WSL2 with Ubuntu 24.04
+- NVIDIA GPU with CUDA passthrough (for local LLM)
+- 20GB free disk space
+
+### Installation
+
+```bash
+# Clone the repository
+cd ~
+git clone https://github.com/waynegault/ubuntu-console.git
+cd ubuntu-console
+
+# Run the installer
+./install.sh
+
+# Reload your shell
+exec bash
+```
+
+### First Commands
+
+```bash
+h              # Show help index (all commands)
+m              # Open tactical dashboard (system stats)
+up             # Run 13-step system maintenance
+```
+
+### Local LLM Setup
+
+```bash
+model list     # See available models
+model use 5    # Start model #5 (optimal settings auto-applied)
+burn "Hello!"  # Test inference speed (~1300 token stress test)
+```
+
+### OpenClaw Gateway
+
+```bash
+so             # Start OpenClaw gateway + local LLM
+xo             # Stop gateway (LLM continues running)
+oc restart     # Full restart (gateway + LLM)
+```
+
+### Git Workflow
+
+```bash
+git add .
+commit_auto    # AI-generated commit message (reviews diff first)
+commit: "msg"  # Your own commit message
+```
+
+### Common Tasks
+
+| Task | Command |
+|------|---------|
+| Check system health | `m` (dashboard) |
+| View GPU status | `gpu-status` |
+| Clean temp files | `cl` |
+| Edit profile | `oedit` |
+| Open any file in VS Code | `code <path>` |
+| Copy current path to clipboard | `cpwd` |
 
 ---
 

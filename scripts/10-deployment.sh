@@ -18,6 +18,62 @@ readonly _COMMIT_MAX_TOKENS=80            # Commit messages ≤72 chars; 80 give
 readonly _COMMIT_TEMPERATURE=0.3          # Low creativity for deterministic summaries
 
 # ---------------------------------------------------------------------------
+# __scan_diff_for_secrets — Scan git diff for API keys, tokens, and secrets.
+# Usage: __scan_diff_for_secrets <diff_content>
+# Returns: 0 if no secrets found, 1 if secrets detected (blocks commit)
+#
+# SECURITY DISCLAIMER:
+# This is a BEST-EFFORT check, NOT a comprehensive security guarantee.
+# It covers common secret formats but may miss: base64-encoded keys, keys with
+# special characters, custom/internal API keys, or keys in external config files.
+# Always use proper secret management (vaults, env vars, CI/CD secrets).
+#
+# Patterns matched:
+#   sk-...                          → OpenAI / Anthropic API keys
+#   AKIA...                         → AWS access key IDs
+#   ghp_...                         → GitHub personal access tokens
+#   github_pat_...                  → GitHub fine-grained tokens
+#   ghpat-...                       → GitHub newer-format tokens
+#   xox[baprs]-...                  → Slack tokens
+#   AIza...                         → Google API keys
+#   EAACEdE...                      → Facebook access tokens
+#   eyJ...                          → JWT tokens (base64-encoded JSON)
+#   -----BEGIN RSA/EC/OPENSSH...    → PEM-encoded private keys
+#   API_KEY=... / API-KEY=...       → Generic env-var style API key assignments
+#   PRIVATE_KEY=...-----BEGIN       → Private keys in env vars
+#   npm_...                         → npm access tokens
+#   pypi-...                        → PyPI API tokens
+# ---------------------------------------------------------------------------
+function __scan_diff_for_secrets() {
+    local diff_body="$1"
+    
+    local __secret_pat='(
+        sk-[a-zA-Z0-9]{20,}                    # OpenAI/Anthropic
+        |AKIA[0-9A-Z]{16}                      # AWS
+        |ghp_[a-zA-Z0-9]{36}                   # GitHub PAT
+        |github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}  # GitHub fine-grained
+        |ghpat-[a-zA-Z0-9]{40,}                # GitHub newer tokens
+        |xox[baprs]-[0-9]{10,13}-[0-9]{10,13}  # Slack tokens
+        |AIza[0-9A-Za-z_-]{35}                 # Google API
+        |EAACEdE[0-9A-Za-z]{20,}               # Facebook access tokens
+        |eyJ[a-zA-Z0-9_-]{20,}                 # JWT tokens (base64 JSON)
+        |-----BEGIN[[:space:]]+(RSA|EC|OPENSSH|DSA)[[:space:]]+PRIVATE[[:space:]]+KEY
+        |API[_-]?KEY[[:space:]]*=[[:space:]]*['"'"'"]?[a-zA-Z0-9]{16,}
+        |PRIVATE[_-]?KEY[[:space:]]*=[[:space:]]*['"'"'"]?-----BEGIN
+        |npm_[a-zA-Z0-9]{36}                   # npm tokens
+        |pypi-[a-zA-Z0-9_-]{20,}               # PyPI tokens
+    )'
+    
+    if [[ "$diff_body" =~ $__secret_pat ]]
+    then
+        __tac_info "SECURITY" "[BLOCKED: diff appears to contain a secret/API key]" "$C_Error"
+        __tac_info "Hint" "Run 'git reset HEAD' to unstage, then use a vault or env vars" "$C_Dim"
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # mkproj — Scaffold a new Python project with PEP-8 main.py, tests, venv, git.
 # ---------------------------------------------------------------------------
 function mkproj() {
@@ -216,6 +272,16 @@ function commit_deploy() {
     __tac_line "Staging $modCount file(s)..." "[WORKING]" "$C_Dim"
     git add .
 
+    # SECURITY: Scan staged diff for secrets before committing
+    local diff_body
+    diff_body=$(git diff --cached 2>/dev/null | head -"$_COMMIT_DIFF_MAX_LINES")
+    if ! __scan_diff_for_secrets "$diff_body"
+    then
+        git reset HEAD >/dev/null 2>&1
+        __tac_footer
+        return 1
+    fi
+
     __tac_line "Committing: \"$msg\"..." "[WORKING]" "$C_Dim"
     if ! git commit -m "$msg" --quiet
     then
@@ -308,52 +374,17 @@ function commit_auto() {
 ---
 ${diff_body}"
 
-    # Guard: refuse to send diffs containing secret-like patterns to the LLM.
-    # Even though LOCAL_LLM_URL is localhost, a misconfigured proxy could route
-    # the request externally. Fail safe by scanning the diff body.
-    # SECURITY DISCLAIMER:
-    # This is a BEST-EFFORT check, NOT a comprehensive security guarantee.
-    # It covers common secret formats but may miss: base64-encoded keys, keys with
-    # special characters, custom/internal API keys, or keys in external config files.
-    # Always use proper secret management (vaults, env vars, CI/CD secrets).
-    #
-    # Patterns matched:
-    #   sk-...                          → OpenAI / Anthropic API keys
-    #   AKIA...                         → AWS access key IDs (always start with AKIA)
-    #   ghp_...                         → GitHub personal access tokens
-    #   github_pat_...                  → GitHub fine-grained tokens
-    #   xox[baprs]-...                  → Slack tokens
-    #   AIza...                         → Google API keys
-    #   EAACEdE...                      → Facebook access tokens
-    #   eyJ...                          → JWT tokens (base64-encoded JSON)
-    #   -----BEGIN RSA/EC/OPENSSH...    → PEM-encoded private keys
-    #   API_KEY=... / API-KEY=...       → Generic env-var style API key assignments
-    #   PRIVATE_KEY=...-----BEGIN       → Private keys in env vars
-    #   ghpat-...                       → GitHub newer-format tokens
-    #   npm_...                         → npm access tokens
-    #   pypi-...                        → PyPI API tokens
-    local __secret_pat='(
-        sk-[a-zA-Z0-9]{20,}                    # OpenAI/Anthropic
-        |AKIA[0-9A-Z]{16}                      # AWS
-        |ghp_[a-zA-Z0-9]{36}                   # GitHub PAT
-        |github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}  # GitHub fine-grained
-        |ghpat-[a-zA-Z0-9]{40,}                # GitHub newer tokens
-        |xox[baprs]-[0-9]{10,13}-[0-9]{10,13}  # Slack tokens
-        |AIza[0-9A-Za-z_-]{35}                 # Google API
-        |EAACEdE[0-9A-Za-z]{20,}               # Facebook access tokens
-        |eyJ[a-zA-Z0-9_-]{20,}                 # JWT tokens (base64 JSON)
-        |-----BEGIN[[:space:]]+(RSA|EC|OPENSSH|DSA)[[:space:]]+PRIVATE[[:space:]]+KEY
-        |API[_-]?KEY[[:space:]]*=[[:space:]]*['"'"'"]?[a-zA-Z0-9]{16,}
-        |PRIVATE[_-]?KEY[[:space:]]*=[[:space:]]*['"'"'"]?-----BEGIN
-        |npm_[a-zA-Z0-9]{36}                   # npm tokens
-        |pypi-[a-zA-Z0-9_-]{20,}               # PyPI tokens
-    )'
-    if [[ "$diff_body" =~ $__secret_pat ]]
+    # SECURITY: Scan diff for secrets before any commit (blocks accidental leaks)
+    if ! __scan_diff_for_secrets "$diff_body"
     then
-        __tac_info "SECURITY" "[BLOCKED: diff appears to contain a secret/API key]" "$C_Error"
         git reset HEAD >/dev/null 2>&1
         return 1
     fi
+
+    # Guard: refuse to send diffs containing secret-like patterns to the LLM.
+    # Even though LOCAL_LLM_URL is localhost, a misconfigured proxy could route
+    # the request externally. Fail safe by scanning the diff body.
+    # (Duplicate check - kept for defense-in-depth before LLM submission)
 
     __tac_info "Generating commit message..." "[LLM]" "$C_Dim"
 

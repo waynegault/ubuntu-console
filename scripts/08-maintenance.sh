@@ -582,6 +582,41 @@ function up() {
         __tac_line "[13/13] README Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
+    # [14/14] Docker Prune — clean unused containers, images, and build cache.
+    if command -v docker >/dev/null 2>&1
+    then
+        local docker_freed
+        docker_freed=$(docker system prune -f --volumes 2>&1 | grep "Total reclaimed space" | grep -oP '[\d.]+[MGK]B' || echo "")
+        if [[ -n "$docker_freed" ]]
+        then
+            __tac_line "[14/14] Docker Prune" "[FREED $docker_freed]" "$C_Success"
+        else
+            __tac_line "[14/14] Docker Prune" "[CLEAN]" "$C_Dim"
+        fi
+    else
+        __tac_line "[14/14] Docker Prune" "[SKIP - Docker not installed]" "$C_Dim"
+    fi
+
+    # [15/15] NPM Cache Clean — verify and clean npm cache.
+    if command -v npm >/dev/null 2>&1
+    then
+        local npm_cache_result
+        npm_cache_result=$(npm cache verify 2>&1 | grep -E "Cache cleaned|Cache size" || echo "")
+        if [[ "$npm_cache_result" == *"Cache cleaned"* ]]
+        then
+            local cleaned_size
+            cleaned_size=$(echo "$npm_cache_result" | grep -oP '[\d.]+[MGK]B' || echo "unknown")
+            __tac_line "[15/15] NPM Cache Clean" "[FREED $cleaned_size]" "$C_Success"
+        elif [[ "$npm_cache_result" == *"Cache size"* ]]
+        then
+            __tac_line "[15/15] NPM Cache Clean" "[NO ACTION NEEDED]" "$C_Dim"
+        else
+            __tac_line "[15/15] NPM Cache Clean" "[VERIFIED]" "$C_Dim"
+        fi
+    else
+        __tac_line "[15/15] NPM Cache Clean" "[SKIP - NPM not installed]" "$C_Dim"
+    fi
+
     __tac_divider
     if (( errCount > 0 ))
     then

@@ -445,7 +445,7 @@ function tactical_help() {
     printf "${C_BoxBg}║${C_Reset}${C_Warning}%s%s%s${C_Reset}${C_BoxBg}║${C_Reset}\n" "$__ls" "$__title" "$__rs"
     __hRow "m" "Open Tactical Dashboard with live system stats"
     __hRow "h" "Display this command reference"
-    __hRow "up" "Run 13-step system maintenance"
+    __hRow "up" "Run 15-step system maintenance"
     __hRow "sysinfo" "One-line summary: CPU, RAM, disk, GPU"
     __hRow "get-ip" "Show WSL and WAN IP addresses"
     __hRow "cls" "Clear screen"
