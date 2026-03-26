@@ -28,7 +28,7 @@ UNICODE_EXCLUDE=(
     "scripts/09-openclaw.sh"       # em-dashes in user messages
     "scripts/13-init.sh"           # em-dashes in warning messages
     "scripts/run-tests.sh"         # unicode check/cross symbols for test output
-    "scripts/10-deployment.sh"     # ≤ symbol in commit constants comment
+    "scripts/10-deployment.sh"     # <= symbol in commit constants comment
     "scripts/11-llm-manager.sh"    # em-dashes in constant comments
 )
 
