@@ -3,7 +3,7 @@
 # ─── Module: 02-error-handling ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 2. ERROR HANDLING
 # ==============================================================================
@@ -50,6 +50,7 @@ function __tac_err_handler() {
         timeout*) return ;;               # Timeout is expected behavior
         curl*) return ;;                  # HTTP errors are expected for probes
         jq*) return ;;                    # Invalid JSON is expected for probes
+        *nvm.sh*) return ;;               # NVM returns exit code 3 when already loaded or in non-interactive shell
     esac
 
     echo "$(date +"%Y-%m-%d %H:%M:%S") [EXIT $__tac_last_err] $BASH_COMMAND" >> "$ErrorLogPath" 2>/dev/null

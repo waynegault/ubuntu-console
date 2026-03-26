@@ -3,7 +3,7 @@
 # Module: 14-wsl-extras
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # -----------------------------------------------------------------------------
 # Purpose: Move WSL/X11 and OpenClaw startup helpers out of the thin loader.
 # This module centralises a few WSL-specific startup helpers that were
@@ -99,16 +99,16 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
     export PASSWORD_STORE="${PASSWORD_STORE:-basic}"
 fi
 
-# Ensure nvm is loaded from the modular shell config, not the thin loader.
-export NVM_DIR="$HOME/.nvm"
-if [[ -s "$NVM_DIR/nvm.sh" ]]; then
-    # shellcheck disable=SC1091
-    . "$NVM_DIR/nvm.sh"
-fi
-if [[ -s "$NVM_DIR/bash_completion" ]]; then
-    # shellcheck disable=SC1091
-    . "$NVM_DIR/bash_completion"
-fi
+# NVM loading disabled - OpenClaw uses Homebrew, not NVM
+# export NVM_DIR="$HOME/.nvm"
+# if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+#     # shellcheck disable=SC1091
+#     . "$NVM_DIR/nvm.sh"
+# fi
+# if [[ -s "$NVM_DIR/bash_completion" ]]; then
+#     # shellcheck disable=SC1091
+#     . "$NVM_DIR/bash_completion"
+# fi
 
 # PowerShell wrappers so WSL shells can reliably call Windows PowerShell / pwsh.
 if [[ ! -x "$HOME/.local/bin/powershell.exe" ]]; then
