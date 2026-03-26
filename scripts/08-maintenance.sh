@@ -646,31 +646,223 @@ function up() {
 
 # ---------------------------------------------------------------------------
 # cl — Quick cleanup without the full maintenance run.
+# Usage: cl [--deep] [--report] [--yes]
+#   --deep:   Include system-level cleanup (apt, brew, journal, docker)
+#   --report: Show what could be cleaned (no deletion)
+#   --yes:    Skip confirmation prompts (use with --deep)
 # ---------------------------------------------------------------------------
 function cl() {
-    local dry_run=0
-    case "${1:-}" in
-        --dry-run|-n) dry_run=1 ;;
-    esac
-
-    if (( dry_run ))
+    local deep_mode=0 report_mode=0 yes_mode=0
+    local mode=""
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]
+    do
+        case "$1" in
+            --deep|-d) deep_mode=1; mode="deep" ;;
+            --report|-r) report_mode=1; mode="report" ;;
+            --yes|-y) yes_mode=1 ;;
+            *) __tac_info "Usage" "[cl [--deep] [--report] [--yes]]" "$C_Error"; return 1 ;;
+        esac
+        shift
+    done
+    
+    # Report mode: show what could be cleaned without deleting
+    if (( report_mode == 1 ))
     then
-        local count=0
-        local f
-        local _had_nullglob=0; shopt -q nullglob && _had_nullglob=1
-        shopt -s nullglob
-        for f in python-*.exe .pytest_cache
+        __tac_header "CLEANUP REPORT" "open"
+        
+        # Current directory debris
+        local pwd_debris=0
+        if [[ -d .pytest_cache ]] || compgen -G "python-*.exe" > /dev/null
+        then
+            pwd_debris=1
+            __tac_line "Python cache in $PWD" "[FOUND]" "$C_Warning"
+        else
+            __tac_line "Python cache in $PWD" "[CLEAN]" "$C_Success"
+        fi
+        
+        # Broken symlinks
+        local broken_links
+        broken_links=$(find ~ -xtype l 2>/dev/null | wc -l)
+        if (( broken_links > 0 ))
+        then
+            __tac_line "Broken symlinks in ~" "[$broken_links found]" "$C_Warning"
+        else
+            __tac_line "Broken symlinks in ~" "[NONE]" "$C_Success"
+        fi
+        
+        # PATH ghosts
+        local path_ghosts=0
+        local IFS=':'
+        for p in $PATH
         do
-            [[ -e "$f" ]] && ((count++))
+            [[ -n "$p" && ! -d "$p" ]] && ((path_ghosts++))
         done
-        (( _had_nullglob )) || shopt -u nullglob
-        __tac_info "Sanitation..." "[$count artifacts would be removed]" "$C_Warning"
+        if (( path_ghosts > 0 ))
+        then
+            __tac_line "Non-existent PATH entries" "[$path_ghosts ghosts]" "$C_Warning"
+        else
+            __tac_line "Non-existent PATH entries" "[NONE]" "$C_Success"
+        fi
+        
+        # Systemd ghost units
+        if command -v systemctl >/dev/null 2>&1
+        then
+            local systemd_ghosts
+            systemd_ghosts=$(systemctl --user list-units --all --state=not-found 2>/dev/null | grep -c "not-found" || echo 0)
+            if (( systemd_ghosts > 0 ))
+            then
+                __tac_line "Systemd ghost units" "[$systemd_ghosts not-found]" "$C_Warning"
+            else
+                __tac_line "Systemd ghost units" "[NONE]" "$C_Success"
+            fi
+        fi
+        
+        # APT cache
+        if command -v apt-get >/dev/null 2>&1
+        then
+            local apt_size
+            apt_size=$(du -sh /var/cache/apt/archives 2>/dev/null | cut -f1 || echo "0")
+            __tac_line "APT cache size" "[$apt_size]" "$C_Text"
+        fi
+        
+        # Brew cache
+        if command -v brew >/dev/null 2>&1
+        then
+            local brew_size
+            brew_size=$(brew cleanup --dry-run 2>&1 | grep -oP '[\d.]+[MGK]B' | head -1 || echo "0")
+            __tac_line "Brew reclaimable" "[$brew_size]" "$C_Text"
+        fi
+        
+        # Journal logs
+        if command -v journalctl >/dev/null 2>&1
+        then
+            local journal_size
+            journal_size=$(journalctl --disk-usage 2>&1 | grep -oP '[\d.]+[MGK]B' || echo "0")
+            __tac_line "Journal logs" "[$journal_size]" "$C_Text"
+        fi
+        
+        # Docker (if installed)
+        if command -v docker >/dev/null 2>&1
+        then
+            local docker_size
+            docker_size=$(docker system df 2>&1 | grep "Images" | awk '{print $4}' || echo "0")
+            __tac_line "Docker images" "[$docker_size]" "$C_Text"
+        fi
+        
+        __tac_footer
         return 0
     fi
-
+    
+    # Standard cleanup (python cache, .pytest_cache)
     local count
     count=$(__cleanup_temps)
     __tac_info "Sanitation..." "[$count artifacts removed]" "$C_Success"
+    
+    # Deep cleanup (optional, requires confirmation)
+    if (( deep_mode == 1 ))
+    then
+        local deep_count=0
+        
+        # APT cleanup
+        if command -v sudo >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1
+        then
+            if (( yes_mode == 0 ))
+            then
+                read -r -e -p "Clean APT cache? [y/N]: " confirm
+                if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
+                then
+                    __tac_info "APT cleanup" "[SKIPPED]" "$C_Dim"
+                else
+                    sudo apt-get autoremove -y >/dev/null 2>&1 && sudo apt-get autoclean >/dev/null 2>&1
+                    __tac_info "APT cleanup" "[COMPLETE]" "$C_Success"
+                    ((deep_count++))
+                fi
+            else
+                sudo apt-get autoremove -y >/dev/null 2>&1 && sudo apt-get autoclean >/dev/null 2>&1
+                __tac_info "APT cleanup" "[COMPLETE]" "$C_Success"
+                ((deep_count++))
+            fi
+        fi
+        
+        # Brew cleanup
+        if command -v brew >/dev/null 2>&1
+        then
+            if (( yes_mode == 0 ))
+            then
+                read -r -e -p "Run brew cleanup? [y/N]: " confirm
+                if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
+                then
+                    __tac_info "Brew cleanup" "[SKIPPED]" "$C_Dim"
+                else
+                    brew cleanup --prune=all >/dev/null 2>&1
+                    __tac_info "Brew cleanup" "[COMPLETE]" "$C_Success"
+                    ((deep_count++))
+                fi
+            else
+                brew cleanup --prune=all >/dev/null 2>&1
+                __tac_info "Brew cleanup" "[COMPLETE]" "$C_Success"
+                ((deep_count++))
+            fi
+        fi
+        
+        # Journal vacuum
+        if command -v journalctl >/dev/null 2>&1
+        then
+            if (( yes_mode == 0 ))
+            then
+                read -r -e -p "Vacuum journal logs (>3 days)? [y/N]: " confirm
+                if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
+                then
+                    __tac_info "Journal vacuum" "[SKIPPED]" "$C_Dim"
+                else
+                    journalctl --vacuum-time=3d >/dev/null 2>&1
+                    __tac_info "Journal vacuum" "[COMPLETE]" "$C_Success"
+                    ((deep_count++))
+                fi
+            else
+                journalctl --vacuum-time=3d >/dev/null 2>&1
+                __tac_info "Journal vacuum" "[COMPLETE]" "$C_Success"
+                ((deep_count++))
+            fi
+        fi
+        
+        # Docker cleanup
+        if command -v docker >/dev/null 2>&1
+        then
+            if (( yes_mode == 0 ))
+            then
+                read -r -e -p "Prune Docker system? [y/N]: " confirm
+                if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
+                then
+                    __tac_info "Docker prune" "[SKIPPED]" "$C_Dim"
+                else
+                    docker system prune -f --volumes >/dev/null 2>&1
+                    __tac_info "Docker prune" "[COMPLETE]" "$C_Success"
+                    ((deep_count++))
+                fi
+            else
+                docker system prune -f --volumes >/dev/null 2>&1
+                __tac_info "Docker prune" "[COMPLETE]" "$C_Success"
+                ((deep_count++))
+            fi
+        fi
+        
+        # Broken symlinks (list only, don't auto-delete)
+        local broken_links
+        broken_links=$(find ~ -xtype l 2>/dev/null | wc -l)
+        if (( broken_links > 0 ))
+        then
+            __tac_info "Broken symlinks" "[$broken_links found - run 'find ~ -xtype l -delete' manually]" "$C_Warning"
+        fi
+        
+        # Summary
+        if (( deep_count > 0 ))
+        then
+            __tac_info "Deep cleanup" "[$deep_count subsystems cleaned]" "$C_Success"
+        fi
+    fi
 }
 
 # ---------------------------------------------------------------------------
