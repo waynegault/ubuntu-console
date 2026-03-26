@@ -179,7 +179,8 @@ done
 # Warn if expected modules are missing (incomplete profile load)
 if (( _tac_found_count < ${#_tac_expected_modules[@]} ))
 then
-    printf '%s\n' "${C_Warning:-}[Tactical Profile]${C_Reset:-} Expected ${#_tac_expected_modules[@]} modules, found $_tac_found_count" >&2
+    printf '%s\n' "${C_Warning:-}[Tactical Profile]${C_Reset:-}" \
+        "Expected ${#_tac_expected_modules[@]} modules, found $_tac_found_count" >&2
     printf '%s\n' "  ${C_Dim:-}Some modules may be missing — check ~/ubuntu-console/scripts/${C_Reset:-}" >&2
 fi
 

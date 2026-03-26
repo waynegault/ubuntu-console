@@ -106,7 +106,7 @@ function model-recommend() {
                 fits_vram=1
             fi
         fi
-        
+
         if (( fits_vram == 0 ))
         then
             continue  # Model too large

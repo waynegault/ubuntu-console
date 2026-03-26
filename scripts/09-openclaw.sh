@@ -231,7 +231,7 @@ function __so_ensure_llm_running() {
     { serve &>/dev/null & } 2>/dev/null
     local _serve_pid=$!
     disown "$_serve_pid" 2>/dev/null
-    
+
     # Verify process actually started
     if ! kill -0 "$_serve_pid" 2>/dev/null && ! pgrep -x llama-server >/dev/null 2>&1
     then
@@ -2279,7 +2279,8 @@ PY
     sleep 0.3
 
     if [[ $server_ready -ne 0 ]]; then
-        printf '\nWarning: kgraph server did not confirm readiness yet. URL may still come up if it is slow to bind: %s\n' "$URL"
+        printf '\nWarning: kgraph server slow to bind.\n'
+        printf 'URL may still come up: %s\n' "$URL"
     fi
 
     # Try launchers in a strict order and only claim success when the launcher

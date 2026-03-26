@@ -204,7 +204,8 @@ setup() {
 
 @test "structure: @modular-section tags present for each section" {
     local count
-    count=$(grep -rc '@modular-section:' "$PROFILE_PATH" "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh | awk -F: '{s+=$NF} END{print s}')
+    count=$(grep -rc '@modular-section:' "$PROFILE_PATH" \
+        "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh | awk -F: '{s+=$NF} END{print s}')
     [[ "$count" -ge 10 ]]
 }
 
@@ -624,7 +625,7 @@ setup() {
 @test "oc: unknown subcommand returns error" {
     run oc bogus_sub_xyz
     [[ "$status" -eq 1 ]]
-    [[ "$output" == *"Unknown subcommand"* ]]
+    [[ "$output" == *"INVALID SUBCOMMAND"* ]]
 }
 
 @test "health: gpu-check function is defined" {
@@ -1608,7 +1609,7 @@ setup() {
     for sub in fake_abc unknown_xyz not_a_command; do
         run oc "$sub"
         [[ "$status" -eq 1 ]]
-        [[ "$output" == *"Unknown subcommand"* ]]
+        [[ "$output" == *"INVALID SUBCOMMAND"* ]]
     done
 }
 
@@ -2160,7 +2161,8 @@ EOF
 
 @test "openclaw: restore writes tactical-console.bashrc into TACTICAL_REPO_ROOT" {
     grep -q 'mkdir -p "\$TACTICAL_REPO_ROOT"' "$REPO_ROOT/scripts/09-openclaw.sh"
-    grep -q 'cp "\$tmp_restore/ubuntu-console/tactical-console.bashrc" "\$TACTICAL_REPO_ROOT/tactical-console.bashrc"' "$REPO_ROOT/scripts/09-openclaw.sh"
+    grep -q 'cp "\$tmp_restore/ubuntu-console/tactical-console.bashrc"' \
+        "$REPO_ROOT/scripts/09-openclaw.sh"
 }
 
 @test "openclaw: restore reloads user systemd units after restoring them" {
@@ -2211,8 +2213,11 @@ EOF
 @test "env.sh: library mode bootstraps OpenClaw state for cooldown writes" {
     local home_dir="$TAC_TEST_TMPDIR/env-home-bootstrap"
     mkdir -p "$home_dir"
+    local cmd="source '$REPO_ROOT/env.sh' >/dev/null 2>&1"
+    cmd+="; __set_cooldown smoke 123"
+    cmd+="; test -f '$home_dir/.openclaw/maintenance_cooldowns.txt'"
 
-    run env HOME="$home_dir" bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __set_cooldown smoke 123; test -f '$home_dir/.openclaw/maintenance_cooldowns.txt'"
+    run env HOME="$home_dir" bash -lc "$cmd"
     [ "$status" -eq 0 ]
 }
 

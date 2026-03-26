@@ -66,7 +66,7 @@ function __check_cooldown() {
         apt)        cooldown=$COOLDOWN_WEEKLY ;;  # 7 days  - package upgrades
         *)          cooldown=$COOLDOWN_WEEKLY ;;  # 7 days  - everything else
     esac
-    
+
     # Use flock for exclusive access to prevent race conditions
     local last_run diff
     {
@@ -186,7 +186,7 @@ function up() {
     case "${1:-}" in
         --force|-f) force_mode=1 ;;
     esac
-    
+
     # Validate: reject unexpected arguments
     if [[ $# -gt 1 ]]
     then

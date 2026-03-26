@@ -29,13 +29,13 @@
 # __tac_last_err intentionally global — traps cannot use `local`.
 function __tac_err_handler() {
     __tac_last_err=$?
-    
+
     # Skip logging for exit code 1 (common false positives)
     if (( __tac_last_err <= 1 ))
     then
         return
     fi
-    
+
     # Skip logging for whitelisted commands that return non-zero as normal behavior
     # shellcheck disable=SC2221,SC2222
     case "$BASH_COMMAND" in
@@ -47,7 +47,7 @@ function __tac_err_handler() {
         curl*) return ;;                  # HTTP errors are expected for probes
         jq*) return ;;                    # Invalid JSON is expected for probes
     esac
-    
+
     echo "$(date +"%Y-%m-%d %H:%M:%S") [EXIT $__tac_last_err] $BASH_COMMAND" >> "$ErrorLogPath" 2>/dev/null
 }
 set -E
