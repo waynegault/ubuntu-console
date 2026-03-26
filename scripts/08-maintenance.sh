@@ -199,12 +199,19 @@ function up() {
     local errCount=0
     local now
     now=$(date +%s)
+
+    # Performance tracking: record start time for metrics
+    local start_time=$now
+
     # hours_left is set by __check_cooldown via nameref (no subshell needed).
     # When __check_cooldown returns 1 (still cooling down), hours_left holds
     # the remaining time string (e.g. "6d 12h").
     local hours_left=""
     # _cd_sink is module-level (declared above) — no need to redeclare
     touch "$CooldownDB" 2>/dev/null
+
+    # Performance tracking: record start time
+    local start_time=$now
 
     # [1/13] Connectivity
     if ping -c 1 -W 2 github.com >/dev/null 2>&1
@@ -624,6 +631,16 @@ function up() {
     else
         __tac_line "Maintenance Status" "[SYSTEMS AT PEAK PARITY]" "$C_Success"
     fi
+    
+    # Performance summary: show total execution time
+    local total_time=$(( $(date +%s) - start_time ))
+    __tac_line "Execution Time" "[${total_time}s]" "$C_Dim"
+    
+    # Write metrics to file for trend analysis
+    local metrics_file="$OC_ROOT/maintenance-history.csv"
+    mkdir -p "$(dirname "$metrics_file")" 2>/dev/null
+    echo "$(date -Iseconds),$total_time,$errCount" >> "$metrics_file" 2>/dev/null
+    
     __tac_footer
 }
 
