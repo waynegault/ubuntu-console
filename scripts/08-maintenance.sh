@@ -646,24 +646,24 @@ function up() {
 
 # ---------------------------------------------------------------------------
 # cl — Quick cleanup without the full maintenance run.
-# Usage: cl [--deep] [--report] [--yes] [--path-fix]
-#   --deep:   Include system-level cleanup (apt, brew, journal, docker)
+# Usage: cl [--light] [--report] [--yes] [--path-fix]
+#   --light:  Only clean python cache (old behavior)
 #   --report: Show what could be cleaned (no deletion)
-#   --yes:    Skip confirmation prompts (use with --deep)
+#   --yes:    Skip confirmation prompts
 #   --path-fix: Remove non-existent PATH entries (creates backup)
 # ---------------------------------------------------------------------------
 function cl() {
-    local deep_mode=0 report_mode=0 yes_mode=0 path_fix_mode=0
+    local light_mode=0 report_mode=0 yes_mode=0 path_fix_mode=0
     
     # Parse arguments
     while [[ $# -gt 0 ]]
     do
         case "$1" in
-            --deep|-d) deep_mode=1 ;;
+            --light|-l) light_mode=1 ;;
             --report|-r) report_mode=1 ;;
             --yes|-y) yes_mode=1 ;;
             --path-fix) path_fix_mode=1 ;;
-            *) __tac_info "Usage" "[cl [--deep] [--report] [--yes] [--path-fix]]" "$C_Error"; return 1 ;;
+            *) __tac_info "Usage" "[cl [--light] [--report] [--yes] [--path-fix]]" "$C_Error"; return 1 ;;
         esac
         shift
     done
@@ -827,145 +827,148 @@ function cl() {
         return 0
     fi
     
-    # Standard cleanup (python cache, .pytest_cache)
-    local count
-    count=$(__cleanup_temps)
-    __tac_info "Sanitation..." "[$count artifacts removed]" "$C_Success"
-    
-    # Deep cleanup (optional, requires confirmation)
-    if (( deep_mode == 1 ))
+    # Light mode: only python cache (old behavior)
+    if (( light_mode == 1 ))
     then
-        local deep_count=0
-        
-        # APT cleanup
-        if command -v sudo >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1
+        local count
+        count=$(__cleanup_temps)
+        __tac_info "Sanitation..." "[$count artifacts removed]" "$C_Success"
+        return 0
+    fi
+    
+    # Default: Full deep cleanup
+    local deep_count=0
+    
+    # APT cleanup
+    if command -v sudo >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1
+    then
+        if (( yes_mode == 0 ))
         then
-            if (( yes_mode == 0 ))
+            read -r -e -p "Clean APT cache? [y/N]: " confirm
+            if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
             then
-                read -r -e -p "Clean APT cache? [y/N]: " confirm
-                if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
-                then
-                    __tac_info "APT cleanup" "[SKIPPED]" "$C_Dim"
-                else
-                    sudo apt-get autoremove -y >/dev/null 2>&1 && sudo apt-get autoclean >/dev/null 2>&1
-                    __tac_info "APT cleanup" "[COMPLETE]" "$C_Success"
-                    ((deep_count++))
-                fi
+                __tac_info "APT cleanup" "[SKIPPED]" "$C_Dim"
             else
                 sudo apt-get autoremove -y >/dev/null 2>&1 && sudo apt-get autoclean >/dev/null 2>&1
                 __tac_info "APT cleanup" "[COMPLETE]" "$C_Success"
                 ((deep_count++))
             fi
+        else
+            sudo apt-get autoremove -y >/dev/null 2>&1 && sudo apt-get autoclean >/dev/null 2>&1
+            __tac_info "APT cleanup" "[COMPLETE]" "$C_Success"
+            ((deep_count++))
         fi
-        
-        # Brew cleanup
-        if command -v brew >/dev/null 2>&1
+    fi
+    
+    # Brew cleanup
+    if command -v brew >/dev/null 2>&1
+    then
+        if (( yes_mode == 0 ))
         then
-            if (( yes_mode == 0 ))
+            read -r -e -p "Run brew cleanup? [y/N]: " confirm
+            if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
             then
-                read -r -e -p "Run brew cleanup? [y/N]: " confirm
-                if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
-                then
-                    __tac_info "Brew cleanup" "[SKIPPED]" "$C_Dim"
-                else
-                    brew cleanup --prune=all >/dev/null 2>&1
-                    __tac_info "Brew cleanup" "[COMPLETE]" "$C_Success"
-                    ((deep_count++))
-                fi
+                __tac_info "Brew cleanup" "[SKIPPED]" "$C_Dim"
             else
                 brew cleanup --prune=all >/dev/null 2>&1
                 __tac_info "Brew cleanup" "[COMPLETE]" "$C_Success"
                 ((deep_count++))
             fi
+        else
+            brew cleanup --prune=all >/dev/null 2>&1
+            __tac_info "Brew cleanup" "[COMPLETE]" "$C_Success"
+            ((deep_count++))
         fi
-        
-        # Journal vacuum
-        if command -v journalctl >/dev/null 2>&1
+    fi
+    
+    # Journal vacuum
+    if command -v journalctl >/dev/null 2>&1
+    then
+        if (( yes_mode == 0 ))
         then
-            if (( yes_mode == 0 ))
+            read -r -e -p "Vacuum journal logs (>3 days)? [y/N]: " confirm
+            if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
             then
-                read -r -e -p "Vacuum journal logs (>3 days)? [y/N]: " confirm
-                if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
-                then
-                    __tac_info "Journal vacuum" "[SKIPPED]" "$C_Dim"
-                else
-                    journalctl --vacuum-time=3d >/dev/null 2>&1
-                    __tac_info "Journal vacuum" "[COMPLETE]" "$C_Success"
-                    ((deep_count++))
-                fi
+                __tac_info "Journal vacuum" "[SKIPPED]" "$C_Dim"
             else
                 journalctl --vacuum-time=3d >/dev/null 2>&1
                 __tac_info "Journal vacuum" "[COMPLETE]" "$C_Success"
                 ((deep_count++))
             fi
+        else
+            journalctl --vacuum-time=3d >/dev/null 2>&1
+            __tac_info "Journal vacuum" "[COMPLETE]" "$C_Success"
+            ((deep_count++))
         fi
-        
-        # Docker cleanup
-        if command -v docker >/dev/null 2>&1
+    fi
+    
+    # Docker cleanup
+    if command -v docker >/dev/null 2>&1
+    then
+        if (( yes_mode == 0 ))
         then
-            if (( yes_mode == 0 ))
+            read -r -e -p "Prune Docker system? [y/N]: " confirm
+            if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
             then
-                read -r -e -p "Prune Docker system? [y/N]: " confirm
-                if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
-                then
-                    __tac_info "Docker prune" "[SKIPPED]" "$C_Dim"
-                else
-                    docker system prune -f --volumes >/dev/null 2>&1
-                    __tac_info "Docker prune" "[COMPLETE]" "$C_Success"
-                    ((deep_count++))
-                fi
+                __tac_info "Docker prune" "[SKIPPED]" "$C_Dim"
             else
                 docker system prune -f --volumes >/dev/null 2>&1
                 __tac_info "Docker prune" "[COMPLETE]" "$C_Success"
                 ((deep_count++))
             fi
-        fi
-        
-        # Systemd ghost reset (safe - just clears failed state)
-        if command -v systemctl >/dev/null 2>&1
-        then
-            systemctl --user reset-failed >/dev/null 2>&1
-            __tac_info "Systemd ghosts" "[RESET]" "$C_Success"
+        else
+            docker system prune -f --volumes >/dev/null 2>&1
+            __tac_info "Docker prune" "[COMPLETE]" "$C_Success"
             ((deep_count++))
         fi
-        
-        # NPM cache cleanup (safe - regenerates on demand)
-        if command -v npm >/dev/null 2>&1
-        then
-            npm cache verify --silent >/dev/null 2>&1
-            __tac_info "NPM cache" "[VERIFIED]" "$C_Success"
-            ((deep_count++))
-        fi
-        
-        # Thumbnail cache (safe - regenerates on demand)
-        if [[ -d ~/.cache/thumbnails ]]
-        then
-            rm -rf ~/.cache/thumbnails/* 2>/dev/null
-            __tac_info "Thumbnail cache" "[CLEARED]" "$C_Success"
-            ((deep_count++))
-        fi
-        
-        # Trash (safe - user-initiated cleanup)
-        if [[ -d ~/.local/share/Trash/files ]]
-        then
-            rm -rf ~/.local/share/Trash/files/* ~/.local/share/Trash/info/* 2>/dev/null
-            __tac_info "Trash" "[EMPTIED]" "$C_Success"
-            ((deep_count++))
-        fi
-        
-        # Broken symlinks (list only, don't auto-delete)
-        local broken_links
-        broken_links=$(find ~ -xtype l 2>/dev/null | wc -l)
-        if (( broken_links > 0 ))
-        then
-            __tac_info "Broken symlinks" "[$broken_links found - run 'find ~ -xtype l -delete' manually]" "$C_Warning"
-        fi
-        
-        # Summary
-        if (( deep_count > 0 ))
-        then
-            __tac_info "Deep cleanup" "[$deep_count subsystems cleaned]" "$C_Success"
-        fi
+    fi
+    
+    # Systemd ghost reset (safe - just clears failed state)
+    if command -v systemctl >/dev/null 2>&1
+    then
+        systemctl --user reset-failed >/dev/null 2>&1
+        __tac_info "Systemd ghosts" "[RESET]" "$C_Success"
+        ((deep_count++))
+    fi
+    
+    # NPM cache cleanup (safe - regenerates on demand)
+    if command -v npm >/dev/null 2>&1
+    then
+        npm cache verify --silent >/dev/null 2>&1
+        __tac_info "NPM cache" "[VERIFIED]" "$C_Success"
+        ((deep_count++))
+    fi
+    
+    # Thumbnail cache (safe - regenerates on demand)
+    if [[ -d ~/.cache/thumbnails ]]
+    then
+        rm -rf ~/.cache/thumbnails/* 2>/dev/null
+        __tac_info "Thumbnail cache" "[CLEARED]" "$C_Success"
+        ((deep_count++))
+    fi
+    
+    # Trash (safe - user-initiated cleanup)
+    if [[ -d ~/.local/share/Trash/files ]]
+    then
+        rm -rf ~/.local/share/Trash/files/* ~/.local/share/Trash/info/* 2>/dev/null
+        __tac_info "Trash" "[EMPTIED]" "$C_Success"
+        ((deep_count++))
+    fi
+    
+    # Broken symlinks (list only, don't auto-delete)
+    local broken_links
+    broken_links=$(find ~ -xtype l 2>/dev/null | wc -l)
+    if (( broken_links > 0 ))
+    then
+        __tac_info "Broken symlinks" "[$broken_links found - run 'find ~ -xtype l -delete' manually]" "$C_Warning"
+    fi
+    
+    # Summary
+    if (( deep_count > 0 ))
+    then
+        __tac_info "Deep cleanup" "[$deep_count subsystems cleaned]" "$C_Success"
+    else
+        __tac_info "Sanitation..." "[No cleanup performed]" "$C_Dim"
     fi
 }
 
