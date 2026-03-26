@@ -68,7 +68,7 @@ function __so_check_healthy() {
         else
             __tac_info "Local LLM" "[OFFLINE]" "$C_Warning"
         fi
-        __tac_info "Gateway" "[ALREADY RUNNING]" "$C_Warning"
+        __tac_info "Gateway" "[ALREADY RUNNING] (port $OC_PORT)" "$C_Warning"
         return 0
     fi
     return 1
@@ -330,7 +330,7 @@ function __so_start_gateway() {
     # Report result
     if (( ready ))
     then
-        __tac_info "Gateway" "[ONLINE] (${elapsed}s)" "$C_Success"
+        __tac_info "Gateway" "[ONLINE] (port $OC_PORT, ${elapsed}s)" "$C_Success"
         return 0
     elif systemctl --user is-active --quiet "$_svc" 2>/dev/null
     then
@@ -517,7 +517,7 @@ function xo() {
 
     if (( _was_running ))
     then
-        __tac_info "Gateway Processes" "[TERMINATED]" "$C_Success"
+        __tac_info "Gateway Processes" "[TERMINATED]" "$C_Error"
     else
         __tac_info "Gateway" "[NOT RUNNING]" "$C_Dim"
     fi
