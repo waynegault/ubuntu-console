@@ -691,7 +691,7 @@ function cl() {
             __tac_line "Broken symlinks in ~" "[NONE]" "$C_Success"
         fi
         
-        # PATH ghosts
+        # PATH ghosts (Linux side)
         local path_ghosts=0
         local IFS=':'
         local ghost_paths=()
@@ -734,6 +734,29 @@ function cl() {
             fi
         else
             __tac_line "Non-existent PATH entries" "[NONE]" "$C_Success"
+        fi
+        
+        # Windows System PATH ghosts (WSL-specific check)
+        local win_ghosts=()
+        local IFS=':'
+        for p in $PATH
+        do
+            if [[ "$p" == "/mnt/c/"* ]] && [[ ! -d "$p" ]]
+            then
+                # Convert to Windows format
+                local win_path
+                win_path=$(echo "$p" | sed 's|/mnt/c/|C:\\|' | sed 's|/|\\|g')
+                win_ghosts+=("$win_path")
+            fi
+        done
+        if (( ${#win_ghosts[@]} > 0 ))
+        then
+            __tac_line "Windows System PATH ghosts" "[${#win_ghosts[@]} found]" "$C_Warning"
+            for wg in "${win_ghosts[@]}"
+            do
+                __tac_info "  Windows" "$wg" "$C_Dim"
+            done
+            __tac_info "  Fix" "Run PowerShell script below (admin)" "$C_Dim"
         fi
         
         # Systemd ghost units
@@ -782,6 +805,29 @@ function cl() {
         fi
         
         __tac_footer
+        
+        # If Windows ghosts found, show PowerShell cleanup script
+        if (( ${#win_ghosts[@]} > 0 ))
+        then
+            printf '\n%s\n' "${C_Highlight}--- PowerShell Cleanup (Run as ADMIN) ---${C_Reset}"
+            printf '%s\n' "${C_Dim}Copy and paste this into Windows PowerShell (Admin):${C_Reset}"
+            printf '\n%s\n' "\$RegistryPath = 'Registry::HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\Session Manager\Environment'"
+            printf '%s\n' "\$CurrentPath = (Get-ItemProperty -Path \$RegistryPath).Path"
+            
+            # Build ghost list for PowerShell
+            local PS_GHOST_LIST=""
+            for wg in "${win_ghosts[@]}"
+            do
+                PS_GHOST_LIST+="'$wg',"
+            done
+            PS_GHOST_LIST="${PS_GHOST_LIST%,}"  # Remove trailing comma
+            
+            printf '%s\n' "\$GhostList = @($PS_GHOST_LIST)"
+            printf '%s\n' "\$NewPath = (\$CurrentPath -split ';' | Where-Object { \$_ -and \$GhostList -notcontains \$_ }) -join ';'"
+            printf '%s\n' "Set-ItemProperty -Path \$RegistryPath -Name 'Path' -Value \$NewPath"
+            printf '%s\n\n' "${C_Success}Write-Host 'Windows System PATH Cleaned!' -ForegroundColor Green${C_Reset}"
+        fi
+        
         return 0
     fi
     
