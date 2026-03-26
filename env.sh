@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1090,SC1091
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -13,8 +14,7 @@
 # Modules skipped: 13-init (interactive side-effects: clear screen,
 #                  completions, WSL loopback, EXIT trap)
 #
-# Guard:    Idempotent — safe to source multiple times. The design-tokens
-#           module and this loader both use guards to prevent re-definition.
+# SC1090/SC1091: Dynamic sourcing by design — modules discovered at runtime
 # ==============================================================================
 
 # Prevent double-sourcing
