@@ -811,21 +811,41 @@ function cl() {
         then
             printf '\n%s\n' "${C_Highlight}--- PowerShell Cleanup (Run as ADMIN) ---${C_Reset}"
             printf '%s\n' "${C_Dim}Copy and paste this into Windows PowerShell (Admin):${C_Reset}"
-            printf '\n%s\n' "\$RegistryPath = 'Registry::HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\Session Manager\Environment'"
-            printf '%s\n' "\$CurrentPath = (Get-ItemProperty -Path \$RegistryPath).Path"
+            printf '\n%s\n' "\$GhostList = @("
             
             # Build ghost list for PowerShell
-            local PS_GHOST_LIST=""
+            local first=1
             for wg in "${win_ghosts[@]}"
             do
-                PS_GHOST_LIST+="'$wg',"
+                if (( first ))
+                then
+                    printf "'%s'" "$wg"
+                    first=0
+                else
+                    printf ",'%s'" "$wg"
+                fi
             done
-            PS_GHOST_LIST="${PS_GHOST_LIST%,}"  # Remove trailing comma
+            printf '%s\n\n' ");"
             
-            printf '%s\n' "\$GhostList = @($PS_GHOST_LIST)"
-            printf '%s\n' "\$NewPath = (\$CurrentPath -split ';' | Where-Object { \$_ -and \$GhostList -notcontains \$_ }) -join ';'"
-            printf '%s\n' "Set-ItemProperty -Path \$RegistryPath -Name 'Path' -Value \$NewPath"
-            printf '%s\n\n' "${C_Success}Write-Host 'Windows System PATH Cleaned!' -ForegroundColor Green${C_Reset}"
+            printf '%s\n' "# Function to clean a specific registry path"
+            printf '%s\n' "function Clean-RegistryPath (\$RegPath) {"
+            printf '%s\n' "    \$Current = (Get-ItemProperty -Path \$RegPath -ErrorAction SilentlyContinue).Path"
+            printf '%s\n' "    if (\$Current) {"
+            printf '%s\n' "        \$New = (\$Current -split ';' | Where-Object { \$_ -and \$GhostList -notcontains \$_ }) -join ';'"
+            printf '%s\n' "        Set-ItemProperty -Path \$RegPath -Name 'Path' -Value \$New"
+            printf '%s\n' "        return \$true"
+            printf '%s\n' "    }"
+            printf '%s\n' "    return \$false"
+            printf '%s\n' "}"
+            printf '\n%s\n' "# Clean User PATH"
+            printf '%s\n' "if (Clean-RegistryPath 'Registry::HKEY_CURRENT_USER\Environment') {"
+            printf '%s\n' "    Write-Host \"✓ User PATH cleaned.\" -ForegroundColor Green"
+            printf '%s\n' "}"
+            printf '\n%s\n' "# Clean System PATH"
+            printf '%s\n' "if (Clean-RegistryPath 'Registry::HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\Session Manager\Environment') {"
+            printf '%s\n' "    Write-Host \"✓ System PATH cleaned.\" -ForegroundColor Green"
+            printf '%s\n' "}"
+            printf '\n%s\n\n' "Write-Host \"DONE! Run 'wsl --shutdown' in Windows to see changes in WSL.\" -ForegroundColor Cyan"
         fi
         
         return 0
@@ -964,7 +984,19 @@ function cl() {
     broken_links=$(find ~ -xtype l 2>/dev/null | wc -l)
     if (( broken_links > 0 ))
     then
-        __tac_info "Broken symlinks" "[$broken_links found - run 'find ~ -xtype l -delete' manually]" "$C_Warning"
+        __tac_info "Broken symlinks" "[$broken_links found]" "$C_Warning"
+        # Show first 3 as examples
+        local broken_sample
+        broken_sample=$(find ~ -xtype l -print 2>/dev/null | head -3)
+        while IFS= read -r link
+        do
+            __tac_info "  Example" "$link" "$C_Dim"
+        done <<< "$broken_sample"
+        if (( broken_links > 3 ))
+        then
+            __tac_info "  ..." "+$((broken_links - 3)) more" "$C_Dim"
+        fi
+        __tac_info "  Fix" "Run 'find ~ -xtype l -delete' manually" "$C_Dim"
     fi
     
     # Summary
