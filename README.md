@@ -1,11 +1,12 @@
 # Tactical Console Profile v3.1 - Comprehensive Reference
 
-> **File:** `~/ubuntu-console/tactical-console.bashrc` (thin loader) + `scripts/01–14-*.sh` (modules)
+> **File:** `~/ubuntu-console/tactical-console.bashrc` (thin loader) + `scripts/01–15-*.sh` (modules)
 > **Repo:** [`waynegault/ubuntu-console`](https://github.com/waynegault/ubuntu-console)
 > **Environment:** WSL2 Ubuntu 24.04 on Windows 11 Pro
 > **Hardware:** Intel i9 / Intel Iris Xe (iGPU) / RTX 3050 Ti 4 GB VRAM (CUDA) / Laptop
 > **Author:** Wayne
 > **Last Major Audit:** March 2026 (v3.0: modularisation from monolith; v3.1: full inspection-audit + UI header refresh + `up` performance fix; follow-up review captured current improvement priorities and roadmap items)
+> **Latest Security Update:** March 2026 (comprehensive codebase review: 47 issues fixed including input validation, race conditions, flock for cooldown DB, whitelist regex for subcommands, OpenClaw functional detection)
 
 ---
 
@@ -30,7 +31,7 @@
 
 The **Tactical Console Profile** is a modular Bash environment that turns a
 WSL2 Ubuntu shell into a unified command-and-control console. A thin loader
-(`tactical-console.bashrc`) sources 14 numbered modules from `scripts/` in
+(`tactical-console.bashrc`) sources 15 numbered modules from `scripts/` in
 dependency order. It manages:
 
 - **System telemetry** — CPU, dual GPU (Intel Iris iGPU via `typeperf.exe` +
@@ -40,8 +41,9 @@ dependency order. It manages:
   (llama.cpp) with model registry, GPU/CPU offloading, and streaming chat.
 - **OpenClaw agent framework** — Gateway lifecycle, agent orchestration,
   session management, backup/restore, and API key bridging from Windows.
-- **Maintenance** — A 12-step `up` pipeline that updates APT, NPM, Cargo,
+- **Maintenance** — A 13-step `up` pipeline that updates APT, NPM, Cargo,
   validates Python fleets, audits disk space, and kills orphaned processes.
+  Uses flock for race-condition-free cooldown management.
 - **Deployment** — Git commit/push with optional LLM-generated commit
   messages, plus rsync to an OpenClaw production workspace.
 - **Knowledge graph** — Interactive node/edge graph visualisation served
@@ -94,9 +96,9 @@ Type `m` at any prompt to render the full-screen Tactical Dashboard:
 |  LOCAL LLM    :: ACTIVE Phi-4-mini-Q6_K | 14.2 t/s                        |
 |  WSL          :: ACTIVE  Ubuntu-24.04  (6.6.87.2-microsoft-standard-WSL2) |
 |------------------------------------------------------------------------------|
-|  OPENCLAW     :: [ONLINE]  v2026.3.2                                      |
-|  SESSIONS     :: 8 Active (cached 34s ago)                                |
-|  CONTEXT USED :: 14% (18k of 128k)                                        |
+|  OPENCLAW     :: [ONLINE]  v2026.3.2    (or [NOT INSTALLED] if missing)   |
+|  SESSIONS     :: 8 Active (cached 34s ago)  (hidden if not installed)     |
+|  ACTIVE AGENT :: 14% (18k of 128k)        (hidden if not installed)       |
 |------------------------------------------------------------------------------|
 |  TARGET REPO  :: main                                                     |
 |  SEC STATUS   :: SECURE                                                   |
@@ -115,24 +117,28 @@ The dashboard colour-codes values at industry-standard thresholds:
 Type `h` to render the full command reference inside a box-drawn panel. Every
 command documented here is also listed in the help index.
 
+**OpenClaw-aware:** When OpenClaw is not installed, all OpenClaw-related
+sections are hidden from the help display to reduce clutter.
+
 ### System Maintenance (`up`)
 
-Run `up` to execute the 12-step maintenance pipeline:
+Run `up` to execute the 13-step maintenance pipeline:
 
 | Step | What It Does |
 |---|---|
 | 1. Internet Connectivity | Pings `github.com` |
-| 2. APT Packages | Split cooldown: `apt-get update` (24h) + `upgrade --no-install-recommends` (7d) |
+| 2. APT Packages | Split cooldown: `apt-get update` (24h) + `upgrade --no-install-recommends` (7d). Dry-run first to detect dependency issues. |
 | 3. NPM & Cargo | `npm update -g` and `cargo install-update -a` |
 | 4. R Packages | Updates CRAN and Bioconductor packages when available |
-| 5. OpenClaw Framework | Runs `openclaw doctor` |
+| 5. OpenClaw Framework | Runs `openclaw doctor` (skipped if not installed) |
 | 6. Python Venv Cloaking | Reports active virtual environment |
 | 7. Python Fleet | Scans `/usr/bin/python3.*` for installed versions |
 | 8. GPU Status | Queries `nvidia-smi` readiness |
 | 9. Sanitation | Cleans temp files from `/tmp/openclaw` |
-| 10. Disk Space Audit | Warns if any mount exceeds 90% |
+| 10. Disk Space Audit | Warns if any mount exceeds 90% (validates numeric input) |
 | 11. Stale Processes | Kills orphaned `llama-server` instances |
 | 12. README Sync | Checks a few tracked repo facts for documentation drift |
+| 13. Documentation Drift | Lightweight README accuracy check |
 
 Each step that involves network or package operations has a **cooldown**
 stored in `~/.openclaw/maintenance_cooldowns.txt`. APT index refresh uses a
@@ -140,11 +146,14 @@ stored in `~/.openclaw/maintenance_cooldowns.txt`. APT index refresh uses a
 cooldown. The cooldown uses Unix timestamps and shows remaining time
 (e.g., `[CACHED - 4d 12h LEFT]`).
 
+**Race Condition Fix:** All cooldown operations use `flock -x` for exclusive
+access to prevent parallel `up` runs from both passing the same check.
+
 ### Navigation & Convenience
 
 | Command | What It Does |
 |---|---|
-| `cls` | Clear screen and redraw the startup banner |
+| `c` or `cls` | Clear screen and redraw the startup banner |
 | `reload` | `exec bash` — full profile reload |
 | `cpwd` | Copy current directory path to Windows clipboard |
 | `cl` | Quick cleanup of `python-*.exe` and `.pytest_cache` in `$PWD` |
@@ -160,6 +169,9 @@ The `cd` command is overridden. When you enter a directory containing
 `.venv/bin/activate`, it is automatically sourced. When you leave the project
 directory tree, `deactivate` is called automatically. The dashboard shows
 active venvs under the "CLOAKING" row.
+
+**Error handling:** If venv activation fails, a warning is printed and
+`VIRTUAL_ENV` is cleared to prevent confusion.
 
 ### Shell Prompt
 
@@ -231,6 +243,10 @@ The profile bridges API keys from the Windows User environment into WSL. This
 is necessary because WSL2 does not inherit Windows environment variables by
 default, but cloud LLM providers (used as fallback) need API keys.
 
+**Security:** API key cache file permissions are validated (600 or 644 only).
+Key names are validated against `^[A-Z_][A-Z0-9_]*$` before indirect expansion
+to prevent command injection.
+
 **How it works:**
 
 1. On shell start, `__bridge_windows_api_keys()` calls `pwsh.exe` (with 5s
@@ -251,9 +267,9 @@ bridged API keys.
 
 | Command | What It Does |
 |---|---|
-| `so` | Start the OpenClaw gateway. Injects API keys into systemd, runs `openclaw gateway start`, waits 3s, checks port 18789. |
-| `xo` | Stop the gateway (**stop only — does not restart**). Runs `openclaw gateway stop`, then `systemctl --user stop openclaw-gateway.service`, removes supervisor lock. When called from an AI agent context, prints a warning to use `openclaw gateway restart` instead. |
-| `oc-restart` | Restart gateway (native: `openclaw gateway restart`). |
+| `so` | Start the OpenClaw gateway. Injects API keys into systemd, runs `openclaw gateway start`, waits 3s, checks port 18789. **Fails gracefully if OpenClaw not installed.** |
+| `xo` | Stop the gateway (**stop only — does not restart**). Runs `openclaw gateway stop`, then `systemctl --user stop openclaw-gateway.service`, removes supervisor lock. When called from an AI agent context, prints a warning to use `openclaw gateway restart` instead. **Fails gracefully if OpenClaw not installed.** |
+| `oc-restart` | Restart gateway (native: `openclaw gateway restart`). **Fails gracefully if OpenClaw not installed.** |
 | `oc-health` | Deep probe: checks port 18789, then calls `openclaw health --json` and parses the status field. Supports `--json` and `--plain` for automation. |
 | `oc-tail` | Live-tail gateway logs via `openclaw logs --follow`. |
 
@@ -545,19 +561,20 @@ displayed in a box-drawn summary table.
 
 ### Modular Architecture
 
-The profile is split into a thin loader (`tactical-console.bashrc`, ~175 lines)
-and 14 numbered modules under `scripts/`. Each module has a metadata block
+The profile is split into a thin loader (`tactical-console.bashrc`, ~195 lines)
+and 15 numbered modules under `scripts/`. Each module has a metadata block
 documenting its dependencies and exports:
 
 ```bash
 # @modular-section: <name>
 # @depends: <comma-separated section names>
 # @exports: <public functions/variables>
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 ```
 
 The loader sources every `scripts/[0-9][0-9]-*.sh` file in numeric order.
 Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
-`14-wsl-extras.sh` loads last.
+`15-model-recommender.sh` loads last.
 
 > **Monolith backup:** The pre-modularisation single-file version is preserved
 > as `tactical-console.bashrc.monolith` (5,184 lines) for reference and
@@ -565,21 +582,22 @@ Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
 
 | Module | File | Lines | Purpose |
 |---|---|---|---|
-| §0 | `tactical-console.bashrc` | 175 | Version, AI editor rules, architecture map, module loader |
-| §1 | `scripts/01-constants.sh` | 254 | All paths, ports, env vars. Single source of truth. |
-| §2 | `scripts/02-error-handling.sh` | 31 | ERR trap → `bash-errors.log` (exit codes ≥ 2 only) |
+| §0 | `tactical-console.bashrc` | 195 | Version, AI editor rules, architecture map, module loader, missing module warning |
+| §1 | `scripts/01-constants.sh` | 327 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
+| §2 | `scripts/02-error-handling.sh` | 60 | ERR trap → `bash-errors.log` (exit codes ≥ 2, whitelisted commands excluded) |
 | §3 | `scripts/03-design-tokens.sh` | 48 | ANSI colour constants (`readonly`, re-source safe) |
-| §4 | `scripts/04-aliases.sh` | 142 | Short commands, VS Code wrappers, tactical shortcuts |
-| §5 | `scripts/05-ui-engine.sh` | 420 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, etc. |
-| §6 | `scripts/06-hooks.sh` | 131 | `cd` override, prompt (`PS1`), `__test_port` |
-| §7 | `scripts/07-telemetry.sh` | 317 | Host metrics (CPU + dual GPU via typeperf), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` |
-| §8 | `scripts/08-maintenance.sh` | 479 | `up`, `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system (split APT) |
-| §9 | `scripts/09-openclaw.sh` | 1863 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-trust-sync`, `oc-failover`, wacli, `oc-kgraph`, etc.) |
-| §10 | `scripts/10-deployment.sh` | 326 | `mkproj`, `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified) |
-| §11 | `scripts/11-llm-manager.sh` | 1857 | `__require_llm`, model management, streaming chat, burn, bench, explain |
-| §12 | `scripts/12-dashboard-help.sh` | 534 | `tactical_dashboard` and `tactical_help` renderers |
-| §13 | `scripts/13-init.sh` | 133 | `mkdir -p`, completions, loopback fix, bridge call, exit trap (chained) |
-| §14 | `scripts/14-wsl-extras.sh` | 93 | WSL/X11 startup helpers, OpenClaw completions sourcing |
+| §4 | `scripts/04-aliases.sh` | 159 | Short commands, VS Code wrappers, tactical shortcuts (`c`, `cls`, `le`, `lo` with PIPESTATUS) |
+| §5 | `scripts/05-ui-engine.sh` | 518 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
+| §6 | `scripts/06-hooks.sh` | 156 | `cd` override (venv auto-activate), prompt (`PS1`), `__test_port`, admin badge |
+| §7 | `scripts/07-telemetry.sh` | 362 | Host metrics (CPU + dual GPU), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` with trap cleanup |
+| §8 | `scripts/08-maintenance.sh` | 710 | `up` (13 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system with flock |
+| §9 | `scripts/09-openclaw.sh` | 2357 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-failover`, wacli, `oc-kgraph`, whitelist subcommand validation, process kill safety) |
+| §10 | `scripts/10-deployment.sh` | 430 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified, secret detection) |
+| §11 | `scripts/11-llm-manager.sh` | 2961 | `__require_llm`, model management, streaming chat, burn, bench, explain, `__calc_gpu_layers`, `__gguf_metadata` |
+| §12 | `scripts/12-dashboard-help.sh` | 640 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` (OpenClaw status) |
+| §13 | `scripts/13-init.sh` | 148 | `mkdir -p` (OpenClaw-aware), completions, loopback fix, bridge call, exit trap (chained) |
+| §14 | `scripts/14-wsl-extras.sh` | 115 | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
+| §15 | `scripts/15-model-recommender.sh` | 195 | AI model recommendations by use case (bc fallback for integer math) |
 
 ### Dependency Graph
 
@@ -1048,7 +1066,11 @@ runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
 All project files live in a single Git repository at
 `~/ubuntu-console/` (remote: `github.com/waynegault/ubuntu-console`).
 `~/.bashrc` is a thin loader that sources `tactical-console.bashrc`, which in
-turn sources the 14 numbered modules from `scripts/`.
+turn sources the 15 numbered modules from `scripts/`.
+
+**~/.bashrc enforcement:** The file is read-only (mode 444) and protected by
+10 unit tests that prevent pollution with functions, aliases, exports, or
+extra source commands.
 
 ### Directory Structure
 
@@ -1070,25 +1092,26 @@ turn sources the 14 numbered modules from `scripts/`.
 │   ├── oc-model-switch                # Thin wrapper → tac-exec serve
 │   ├── oc-quick-diag                  # Thin wrapper → tac-exec oc diag
 │   └── oc-wake                        # Thin wrapper → tac-exec wake
-├── scripts/                           # 14 numbered profile modules (sourced in order)
+├── scripts/                           # 15 numbered profile modules (sourced in order)
 │   ├── 01-constants.sh                #   All paths, ports, env vars
-│   ├── 02-error-handling.sh           #   ERR trap
+│   ├── 02-error-handling.sh           #   ERR trap (whitelisted commands)
 │   ├── 03-design-tokens.sh            #   ANSI colour constants
 │   ├── 04-aliases.sh                  #   Short commands, VS Code wrappers
 │   ├── 05-ui-engine.sh                #   Box-drawing primitives
 │   ├── 06-hooks.sh                    #   cd override, prompt, port test
 │   ├── 07-telemetry.sh                #   CPU, GPU, battery, git, disk, tokens
-│   ├── 08-maintenance.sh              #   up, cl, get-ip, sysinfo, logtrim
+│   ├── 08-maintenance.sh              #   up (13 steps), cl, get-ip, sysinfo, logtrim
 │   ├── 09-openclaw.sh                 #   Gateway, backup, cron, skills, plugins, kgraph
-│   ├── 10-deployment.sh               #   mkproj, git commit+push, deploy
-│   ├── 11-llm-manager.sh              #   Model mgmt, chat, burn, bench
-│   ├── 12-dashboard-help.sh           #   Dashboard ('m') and Help ('h')
+│   ├── 10-deployment.sh               #   mkproj (disk check), git commit+push, deploy
+│   ├── 11-llm-manager.sh              #   Model mgmt, chat, burn, bench, explain
+│   ├── 12-dashboard-help.sh           #   Dashboard ('m') and Help ('h'), bashrc_diagnose
 │   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
-│   ├── 14-wsl-extras.sh               #   WSL/X11 startup helpers, completions
+│   ├── 14-wsl-extras.sh               #   WSL/X11 helpers, completions, vault env
+│   ├── 15-model-recommender.sh        #   AI model recommendations by use case
 │   ├── kgraph.py                      #   Knowledge graph HTTP server + Cytoscape.js UI
 │   ├── check-oc-agent-use.sh          #   Agent usage regression checker
 │   ├── lint.sh                        #   ShellCheck + bash -n linter
-│   └── run-tests.sh                   #   BATS test runner
+│   └── run-tests.sh                   #   BATS test runner (483 tests)
 ├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
 │   ├── package.json                   #   Vite 5 + React 18 + G6 5.0
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
