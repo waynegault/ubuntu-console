@@ -67,7 +67,8 @@ esac
 # Never place feature logic in ~/.bashrc; keep ~/.bashrc as thin loader only.
 # TACTICAL_PROFILE_VERSION is auto-computed after sourcing all modules:
 #   TACTICAL_PROFILE_VERSION = _TAC_LOADER_VERSION . sum(all module versions)
-_TAC_LOADER_VERSION="3.0"
+#   Example: v3.63 = loader v3 + 63 total module versions
+_TAC_LOADER_VERSION="3"
 
 # AI INSTRUCTION: Follow these terminal formatting rules strictly:
 # 1. A blank line must exist between the bottom of any UI border and the command prompt.
