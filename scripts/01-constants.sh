@@ -219,6 +219,12 @@ else
     __TAC_HAS_BATTERY=0
 fi
 
+# ---- OpenClaw installation check (placeholder — set by 09-openclaw.sh) ----
+# __TAC_OPENCLAW_OK is set to 1 if openclaw CLI is installed AND functional.
+# This is evaluated once at profile load time by 09-openclaw.sh.
+# All code should check this variable instead of running `command -v openclaw`.
+__TAC_OPENCLAW_OK=0
+
 # ---- UI Context & Core Environment ----
 export UIWidth="${UIWidth:-80}"
 # LAST_TPS holds the most recent inference speed measurement (tokens/sec).
@@ -274,6 +280,13 @@ fi
 if [[ ":$PATH:" != *":$HOME/.npm-global/bin:"* ]]
 then
     export PATH="$HOME/.npm-global/bin:$PATH"
+fi
+
+# pnpm — globally installed pnpm packages
+export PNPM_HOME="$HOME/.local/share/pnpm"
+if [[ ":$PATH:" != *":$PNPM_HOME:"* ]]
+then
+    export PATH="$PNPM_HOME:$PATH"
 fi
 
 # Homebrew (Linuxbrew) — Go binaries, wacli, etc.

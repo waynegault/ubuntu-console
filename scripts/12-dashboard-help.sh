@@ -97,6 +97,7 @@ function tactical_dashboard() {
     then
         local g_util_n=${g_util// /}
         g_util_n=${g_util_n%\%}  # Strip trailing % for numeric comparison
+        g_util_n=${g_util_n:-0}   # Default to 0 if empty (prevents __threshold_color error)
         gpu_color=$(__threshold_color "$g_util_n")
     fi
     __fRow "GPU" "$gpu_display" "$gpu_color"
@@ -146,41 +147,46 @@ function tactical_dashboard() {
 
     # --- OpenClaw status block ---
     printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
-    local oc_stat="OFFLINE"
-    local oc_active=0
-    __test_port "$OC_PORT" && { oc_stat="ONLINE"; oc_active=1; }
+    if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
+        # OpenClaw CLI not installed — show single status line
+        __fRow "OPENCLAW" "[NOT INSTALLED]" "$C_Dim"
+    else
+        # OpenClaw installed — show detailed status
+        local oc_stat="OFFLINE"
+        local oc_active=0
+        __test_port "$OC_PORT" && { oc_stat="ONLINE"; oc_active=1; }
 
-    local metrics
-    metrics=$(__get_oc_metrics)
-    local m_sess m_age m_ver
-    IFS='|' read -r m_sess m_age m_ver <<< "$metrics"
-    m_sess=${m_sess%$'\r'}; m_age=${m_age%$'\r'}; m_ver=${m_ver%$'\r'}
+        local metrics
+        metrics=$(__get_oc_metrics)
+        local m_sess m_age m_ver
+        IFS='|' read -r m_sess m_age m_ver <<< "$metrics"
+        m_sess=${m_sess%$'\r'}; m_age=${m_age%$'\r'}; m_ver=${m_ver%$'\r'}
 
-    local oc_color=$C_Error
-    if [[ $oc_active == 1 ]]
-    then
-        oc_color=$C_Success
-    fi
-    __fRow "OPENCLAW" "[$oc_stat]  ${m_ver}" "$oc_color"
-
-    local sess_color=$C_Dim
-    local age_label=""
-    if [[ "$m_sess" != "Querying..." && "$m_sess" =~ ^[0-9]+$ ]]
-    then
-        (( m_sess > 0 )) && sess_color=$C_Warning
-        if [[ "$m_age" =~ ^[0-9]+$ ]] && (( m_age > 0 ))
+        local oc_color=$C_Error
+        if [[ $oc_active == 1 ]]
         then
-            age_label=" (cached ${m_age}s ago)"
-        else
-            age_label=" (live)"
+            oc_color=$C_Success
         fi
-    fi
-    __fRow "SESSIONS" "${m_sess} Active${age_label}" "$sess_color"
+        __fRow "OPENCLAW" "[$oc_stat]  ${m_ver}" "$oc_color"
 
-    # Replace single-line CONTEXT USED with multi-line ACTIVE AGENTS
-    # Render the output of `oc agent-use` inside the dashboard box when OpenClaw is online.
-    if [[ $oc_active == 1 ]]
-    then
+        local sess_color=$C_Dim
+        local age_label=""
+        if [[ "$m_sess" != "Querying..." && "$m_sess" =~ ^[0-9]+$ ]]
+        then
+            (( m_sess > 0 )) && sess_color=$C_Warning
+            if [[ "$m_age" =~ ^[0-9]+$ ]] && (( m_age > 0 ))
+            then
+                age_label=" (cached ${m_age}s ago)"
+            else
+                age_label=" (live)"
+            fi
+        fi
+        __fRow "SESSIONS" "${m_sess} Active${age_label}" "$sess_color"
+
+        # Replace single-line CONTEXT USED with multi-line ACTIVE AGENTS
+        # Render the output of `oc agent-use` inside the dashboard box when OpenClaw is online.
+        if [[ $oc_active == 1 ]]
+        then
         local cache="/dev/shm/oc_agent_use.txt"
         local agent_use_out=""
         local cache_ttl=5
@@ -198,6 +204,9 @@ function tactical_dashboard() {
                 fi
             fi
             agent_use_out=$(cat "$cache" 2>/dev/null || true)
+            # Sanitize output: remove control characters (except newlines) to prevent
+            # terminal manipulation via ANSI escape sequences or other control codes.
+            agent_use_out=$(printf '%s' "$agent_use_out" | tr -d '\000-\010\013-\037\177')
         else
             # Kick off a background refresh so the cache is populated for
             # subsequent renders, but do not block the dashboard render now.
@@ -285,6 +294,7 @@ function tactical_dashboard() {
     else
         __fRow "ACTIVE AGENT" "OFFLINE" "$C_Dim"
     fi
+    fi  # End of $__TAC_OPENCLAW_OK check
 
     # "Cloaking" = active Python virtual environment isolation
     if [[ -n "$VIRTUAL_ENV" ]]
@@ -353,7 +363,11 @@ function bashrc_diagnose() {
     echo ""
     echo "=== Key Paths ==="
     echo "AI_STORAGE_ROOT : ${AI_STORAGE_ROOT:-unset}"
-    echo "OC_ROOT         : ${OC_ROOT:-unset}"
+    if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
+        echo "OC_ROOT         : ${OC_ROOT:-unset}"
+    else
+        echo "OC_ROOT         : (OpenClaw not installed)"
+    fi
     echo "LLAMA_ROOT      : ${LLAMA_ROOT:-unset}"
     echo "LLM_REGISTRY    : ${LLM_REGISTRY:-unset}"
     echo "TAC_CACHE_DIR   : ${TAC_CACHE_DIR:-unset}"
@@ -364,7 +378,18 @@ function bashrc_diagnose() {
     do
         if command -v "$t" >/dev/null 2>&1
         then
-            echo "  $t : $(command -v "$t")"
+            local tool_path
+            tool_path=$(command -v "$t")
+            # Special handling for openclaw — check if functional, not just in PATH
+            if [[ "$t" == "openclaw" ]]; then
+                if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
+                    echo "  $t : $tool_path"
+                else
+                    echo "  $t : $tool_path (NOT FUNCTIONAL)"
+                fi
+            else
+                echo "  $t : $tool_path"
+            fi
         else
             echo "  $t : NOT FOUND"
         fi
@@ -431,66 +456,69 @@ function tactical_help() {
     __hRow "oedit" "Open tactical-console.bashrc in VS Code"
     __hRow "code <path>" "Open any file or directory in VS Code"
 
-    __hSection "OPENCLAW — GATEWAY"
-    __hRow "so" "Start the OpenClaw gateway"
-    __hRow "xo" "Stop the OpenClaw gateway"
-    __hRow "oc restart" "Full gateway restart"
-    __hRow "oc gs" "Gateway deep health probe"
-    __hRow "oc stat" "Full gateway status --all"
-    __hRow "oc health" "Gateway health probe"
-    __hRow "oc tail" "Live-tail gateway logs (Ctrl-C)"
-    __hRow "oc v" "Print OpenClaw CLI version"
-    __hRow "oc update" "Update OpenClaw CLI"
-    __hRow "oc tui" "Launch OpenClaw TUI"
+    # OpenClaw sections — only shown if openclaw CLI is installed AND functional
+    if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
+        __hSection "OPENCLAW — GATEWAY"
+        __hRow "so" "Start the OpenClaw gateway"
+        __hRow "xo" "Stop the OpenClaw gateway"
+        __hRow "oc restart" "Full gateway restart"
+        __hRow "oc gs" "Gateway deep health probe"
+        __hRow "oc stat" "Full gateway status --all"
+        __hRow "oc health" "Gateway health probe"
+        __hRow "oc tail" "Live-tail gateway logs (Ctrl-C)"
+        __hRow "oc v" "Print OpenClaw CLI version"
+        __hRow "oc update" "Update OpenClaw CLI"
+        __hRow "oc tui" "Launch OpenClaw TUI"
 
-    __hSection "OPENCLAW — AGENTS & SESSIONS"
-    __hRow "os" "List active sessions"
-    __hRow "oa" "Show registered agents"
-    __hRow "oc start" "Dispatch agent turn (--message)"
-    __hRow "oc stop" "Delete agent by ID"
-    __hRow "oc mem-index" "Rebuild vector memory index"
-    __hRow "oc memory-search" "Semantic memory search"
+        __hSection "OPENCLAW — AGENTS & SESSIONS"
+        __hRow "os" "List active sessions"
+        __hRow "oa" "Show registered agents"
+        __hRow "oc start" "Dispatch agent turn (--message)"
+        __hRow "oc stop" "Delete agent by ID"
+        __hRow "oc mem-index" "Rebuild vector memory index"
+        __hRow "oc memory-search" "Semantic memory search"
 
-    __hSection "OPENCLAW — CONFIG & LOGS"
-    __hRow "oc conf" "Open openclaw.json in VS Code"
-    __hRow "oc config" "Read/write config keys (get|set)"
-    __hRow "oc env" "Show OpenClaw environment vars"
-    __hRow "oc keys" "List Windows API keys bridged"
-    __hRow "oc ms" "Probe model provider endpoints"
-    __hRow "oc doc-fix" "Run openclaw doctor --fix"
-    __hRow "oc logs" "Open runtime log in VS Code"
-    __hRow "le" "40-line log tail"
-    __hRow "lo" "120-line full log"
-    __hRow "lc" "Clear all logs"
-    __hRow "oc log-dir" "Change to logs folder"
-    __hRow "oc sec" "Deep security audit"
-    __hRow "oc docs" "Search documentation"
-    __hRow "oc cache-clear" "Clear /dev/shm telemetry caches"
-    __hRow "oc diag" "5-point health check"
-    __hRow "oc doctor-local" "Validate gateway + llama.cpp"
-    __hRow "oc failover" "Cloud LLM fallback (on|off)"
-    __hRow "oc refresh-keys" "Re-import Windows API keys"
+        __hSection "OPENCLAW — CONFIG & LOGS"
+        __hRow "oc conf" "Open openclaw.json in VS Code"
+        __hRow "oc config" "Read/write config keys (get|set)"
+        __hRow "oc env" "Show OpenClaw environment vars"
+        __hRow "oc keys" "List Windows API keys bridged"
+        __hRow "oc ms" "Probe model provider endpoints"
+        __hRow "oc doc-fix" "Run openclaw doctor --fix"
+        __hRow "oc logs" "Open runtime log in VS Code"
+        __hRow "le" "40-line log tail"
+        __hRow "lo" "120-line full log"
+        __hRow "lc" "Clear all logs"
+        __hRow "oc log-dir" "Change to logs folder"
+        __hRow "oc sec" "Deep security audit"
+        __hRow "oc docs" "Search documentation"
+        __hRow "oc cache-clear" "Clear /dev/shm telemetry caches"
+        __hRow "oc diag" "5-point health check"
+        __hRow "oc doctor-local" "Validate gateway + llama.cpp"
+        __hRow "oc failover" "Cloud LLM fallback (on|off)"
+        __hRow "oc refresh-keys" "Re-import Windows API keys"
 
-    __hSection "OPENCLAW — DATA & EXTENSIONS"
-    __hRow "oc wk" "Change to workspace"
-    __hRow "oc root" "Change to root config"
-    __hRow "oc backup" "Snapshot workspace + agents"
-    __hRow "oc restore" "Restore from backup ZIP"
-    __hRow "oc cron" "Manage scheduled tasks"
-    __hRow "oc skills" "Show skill modules"
-    __hRow "oc plugins" "Manage plugins"
-    __hRow "oc usage" "Token/cost stats (7d)"
-    __hRow "oc channels" "Messaging channels"
-    __hRow "oc browser" "Headless browser"
-    __hRow "oc nodes" "Compute nodes"
-    __hRow "oc sandbox" "Code sandboxes"
+        __hSection "OPENCLAW — DATA & EXTENSIONS"
+        __hRow "oc wk" "Change to workspace"
+        __hRow "oc root" "Change to root config"
+        __hRow "oc backup" "Snapshot workspace + agents"
+        __hRow "oc restore" "Restore from backup ZIP"
+        __hRow "oc cron" "Manage scheduled tasks"
+        __hRow "oc skills" "Show skill modules"
+        __hRow "oc plugins" "Manage plugins"
+        __hRow "oc usage" "Token/cost stats (7d)"
+        __hRow "oc channels" "Messaging channels"
+        __hRow "oc browser" "Headless browser"
+        __hRow "oc nodes" "Compute nodes"
+        __hRow "oc sandbox" "Code sandboxes"
 
-    __hSection "OPENCLAW — LLM INTEGRATION"
-    __hRow "oc local-llm" "Register local llama.cpp"
-    __hRow "oc sync-models" "Sync models.conf"
+        __hSection "OPENCLAW — LLM INTEGRATION"
+        __hRow "oc local-llm" "Register local llama.cpp"
+        __hRow "oc sync-models" "Sync models.conf"
 
-    __hSection "OPENCLAW — TOOLS"
-    __hRow "oc g" "Launch operational graph browser (overview/topics/files/semantic/raw)"
+        __hSection "OPENCLAW — TOOLS"
+        __hRow "oc g" "Launch operational graph browser (overview/topics/files/semantic/raw)"
+    fi
 
     __hSection "LLM — MODEL MANAGEMENT"
     __hRow "wake" "Lock GPU persistence mode"

@@ -116,8 +116,8 @@ HTML_TMPL = """<!doctype html>
         </select>
       </label>
       <label>Semantic ≥
-        <input id="semantic-threshold" type="range" min="0.75" max="0.95" step="0.01" value="0.82" />
-        <span id="semantic-threshold-value">0.82</span>
+        <input id="semantic-threshold" type="range" min="0.80" max="0.95" step="0.01" value="0.85" />
+        <span id="semantic-threshold-value">0.85</span>
       </label>
       <span id="graph-meta" style="margin-left:6px;color:#4b5563;font-size:12px;"></span>
       <button id="zoom-in">＋</button>
@@ -152,7 +152,7 @@ HTML_TMPL = """<!doctype html>
     <div id="mynetwork"></div>
     <script>
       const embeddedData = %s;
-      let currentMeta = { viewMode: 'overview', semanticThreshold: 0.82, source: 'unknown' };
+      let currentMeta = { viewMode: 'overview', semanticThreshold: 0.85, source: 'unknown' };
 
       function shortenLabel(node) {
         if (node.display_label !== undefined && node.display_label !== null) return String(node.display_label);
@@ -241,7 +241,7 @@ HTML_TMPL = """<!doctype html>
 
       async function loadGraph() {
         const view = document.getElementById('view-mode')?.value || 'overview';
-        const semantic = document.getElementById('semantic-threshold')?.value || '0.82';
+        const semantic = document.getElementById('semantic-threshold')?.value || '0.85';
         const url = `/graph.json?view=${encodeURIComponent(view)}&semantic=${encodeURIComponent(semantic)}`;
         try {
           const r = await fetch(url);
@@ -1922,6 +1922,69 @@ def load_life_index(life_root: str | None = None) -> dict:
           index['aliases'][norm] = record
           index['title_aliases'][norm] = record['title']
   return index
+
+
+def load_relations(life_root: str | None = None) -> dict:
+  """Load explicit relations from ~/.openclaw/life/relations.json."""
+  root = resolve_life_root(life_root)
+  rel_path = os.path.join(root, 'relations.json')
+  if not os.path.exists(rel_path):
+    return {'relations': []}
+  try:
+    with open(rel_path, 'r', encoding='utf-8') as f:
+      data = json.load(f)
+    return {'relations': data.get('relations', [])}
+  except Exception:
+    return {'relations': []}
+
+
+def merge_relations(graph: dict, life_root: str | None = None) -> dict:
+  """Inject explicit relation edges into the graph."""
+  relations = load_relations(life_root).get('relations', [])
+  if not relations:
+    return graph
+  nodes = graph.get('nodes', [])
+  edges = graph.get('edges', [])
+  # Build slug-to-node-id mapping (assuming node IDs are slugs)
+  slug_to_node = {}
+  for node in nodes:
+    slug = node.get('slug')
+    if slug:
+      slug_to_node[slug] = node.get('id')
+    # Also consider canonical_slug field
+    canonical_slug = node.get('canonical_slug')
+    if canonical_slug:
+      slug_to_node[canonical_slug] = node.get('id')
+  # Add edges
+  for rel in relations:
+    src_slug = rel.get('source')
+    tgt_slug = rel.get('target')
+    rel_type = rel.get('rel', 'related')
+    if not src_slug or not tgt_slug:
+      continue
+    src_id = slug_to_node.get(src_slug)
+    tgt_id = slug_to_node.get(tgt_slug)
+    if not src_id or not tgt_id:
+      # Optionally create placeholder nodes? For now skip.
+      continue
+    # Avoid duplicate edges
+    edge_exists = any(
+      (e.get('from') == src_id or e.get('source') == src_id) and
+      (e.get('to') == tgt_id or e.get('target') == tgt_id) and
+      e.get('label') == rel_type
+      for e in edges
+    )
+    if not edge_exists:
+      edges.append({
+        'from': src_id,
+        'to': tgt_id,
+        'label': rel_type,
+        'source': rel.get('source'),
+        'target': rel.get('target'),
+        'explicit': True,
+      })
+  graph['edges'] = edges
+  return graph
 
 
 def init_graph_db(dbpath: str):

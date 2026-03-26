@@ -19,7 +19,13 @@
 # false positives like /home/wayne/project2 matching /home/wayne/project).
 # ---------------------------------------------------------------------------
 function cd() {
-    builtin cd "$@" || return $?
+    # Validate arguments before passing to builtin
+    if [[ $# -eq 0 ]]
+    then
+        builtin cd || return $?
+    else
+        builtin cd "$@" || return $?
+    fi
 
     # Auto-activate .venv if present in new directory
     if [[ -f "$VENV_DIR/bin/activate" ]]
@@ -29,6 +35,8 @@ function cd() {
         if ! source "$VENV_DIR/bin/activate" 2>/dev/null
         then
             printf '%sWarning: .venv/bin/activate failed to source%s\n' "$C_Warning" "$C_Reset" >&2
+            # Clear VIRTUAL_ENV to avoid confusion (activation didn't happen)
+            unset VIRTUAL_ENV PS1
         fi
         return
     fi

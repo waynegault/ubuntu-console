@@ -107,12 +107,12 @@ function __require_command() {
 }
 
 # ---------------------------------------------------------------------------
-# __require_openclaw — Verify openclaw CLI is installed.
-# Prints an error and returns 1 if missing. Deduplicates the repeated
-# `command -v openclaw >/dev/null` checks across §9 functions.
+# __require_openclaw — Verify openclaw CLI is installed AND functional.
+# Prints an error and returns 1 if missing. Uses __TAC_OPENCLAW_OK which is
+# set at profile load time by 09-openclaw.sh after a functional check.
 # ---------------------------------------------------------------------------
 function __require_openclaw() {
-    if ! command -v openclaw >/dev/null 2>&1
+    if [[ "$__TAC_OPENCLAW_OK" != "1" ]]
     then
         __tac_info "OpenClaw CLI" "[NOT INSTALLED]" "$C_Error"
         return 1
@@ -143,6 +143,12 @@ function __usage() {
 # Trade-off (I1): The while-loop + global substitution is O(n²) worst-case for
 # strings with many distinct escape sequences, but in practice dashboard values
 # have at most 2-3 distinct sequences so this is faster than forking to sed.
+#
+# Bash version note: The regex-in-while pattern works around a bash 5.0-5.2
+# quirk where ${var//pattern/replacement} with a regex pattern stored in a
+# variable does not correctly match ANSI sequences. Using [[ =~ ]] in a loop
+# with BASH_REMATCH is more reliable across bash versions.
+# See: https://github.com/bminor/bash/blob/master/patchlevel.h (PATCHLEVEL 17+)
 #
 # Security (S3): Validates varname to prevent indirect variable injection.
 #   - Must be non-empty

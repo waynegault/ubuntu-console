@@ -80,10 +80,34 @@ function model-recommend() {
             continue
         fi
 
-        # Check VRAM fit (80% rule)
-        local vram_limit
-        vram_limit=$(awk "BEGIN {printf \"%.1f\", $vram_gb * 0.8}")
-        if (( $(awk "BEGIN {print ($size_num > $vram_limit)}") ))
+        # Check VRAM fit (80% rule) — use bc if available, otherwise pure bash integer math
+        local fits_vram=0
+        if command -v bc >/dev/null 2>&1 && [[ "$size_num" == *"."* ]]
+        then
+            # Has decimal and bc available: use bc for accurate comparison
+            if (( $(echo "$size_num <= $vram_gb * 0.8" | bc) ))
+            then
+                fits_vram=1
+            fi
+        else
+            # Integer-only comparison (works without bc)
+            # Multiply by 10 to handle one decimal place: size*10 <= vram*8
+            local size_x10=${size_num%.*}
+            local size_frac=${size_num#*.}
+            if [[ "$size_num" == *"."* && -n "$size_frac" ]]
+            then
+                # Has decimal: approximate (e.g., 2.5 -> 25)
+                size_x10=$(( size_x10 * 10 + ${size_frac:0:1} ))
+            else
+                size_x10=$(( size_num * 10 ))
+            fi
+            if (( size_x10 <= vram_gb * 8 ))
+            then
+                fits_vram=1
+            fi
+        fi
+        
+        if (( fits_vram == 0 ))
         then
             continue  # Model too large
         fi
@@ -126,7 +150,22 @@ function model-recommend() {
         fi
 
         # VRAM efficiency bonus (smaller models with good performance)
-        if (( $(awk "BEGIN {print ($size_num < 3 && $score > 0)}") ))
+        # Use integer comparison: size < 3 is equivalent to size * 10 < 30
+        local is_small=0
+        if [[ "$size_num" != *"."* ]] && (( size_num < 3 ))
+        then
+            is_small=1
+        elif [[ "$size_num" == *"."* ]]
+        then
+            if command -v bc >/dev/null 2>&1
+            then
+                (( $(echo "$size_num < 3" | bc) )) && is_small=1
+            else
+                # Fallback without bc: check integer part only
+                [[ "${size_num%%.*}" -lt 3 ]] && is_small=1
+            fi
+        fi
+        if (( is_small == 1 && score > 0 ))
         then
             ((score+=1))
             reason="${reason}${reason:+, }vram-efficient"

@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 8
+# Module Version: 10
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -15,7 +15,28 @@
 #   oc-plugins, oc-tail, oc-channels, oc-sec, oc-tui, oc-config,
 #   oc-docs, oc-usage, oc-memory-search, oc-local-llm, oc-sync-models,
 #   oc-browser, oc-nodes, oc-sandbox, oc-env, oc-cache-clear,
-#   oc-diag, oc-doctor-local, oc-failover, wacli, oc-kgraph
+#   oc-diag, oc-doctor-local, oc-failover, wacli, oc-kgraph, __is_openclaw_installed
+
+# ==============================================================================
+# OPENCLAW INSTALLATION CHECK (Evaluated once at profile load time)
+# ==============================================================================
+# __TAC_OPENCLAW_OK is set to 1 only if openclaw CLI exists AND responds to --version.
+# This functional check is performed once when this module loads.
+# All code should check __TAC_OPENCLAW_OK instead of running `command -v openclaw`.
+if command -v openclaw >/dev/null 2>&1 && openclaw --version >/dev/null 2>&1; then
+    __TAC_OPENCLAW_OK=1
+else
+    __TAC_OPENCLAW_OK=0
+fi
+
+# ---------------------------------------------------------------------------
+# __is_openclaw_installed — Check if OpenClaw CLI is installed AND functional.
+# Returns 0 if __TAC_OPENCLAW_OK is set (openclaw responded to --version), 1 otherwise.
+# This uses the cached result from profile load time for efficiency.
+# ---------------------------------------------------------------------------
+function __is_openclaw_installed() {
+    [[ "$__TAC_OPENCLAW_OK" == "1" ]]
+}
 
 # __so_show_errors — Extract and display the most recent gateway errors.
 # Pulls the last 30 log lines and shows up to 5 matching error patterns.
@@ -126,16 +147,35 @@ function __so_cycle_tailscale_serve() {
 
 # ---------------------------------------------------------------------------
 # __so_push_api_keys — Push API keys into systemd user environment.
+# SECURITY: Validates key names before using indirect expansion to prevent
+# command injection. Only allows uppercase letters, digits, and underscores.
 # ---------------------------------------------------------------------------
 function __so_push_api_keys() {
     if [[ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]]; then
-        source "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null
+        # Validate file permissions (should be 600 or 644, owned by user)
+        local _file_perms
+        _file_perms=$(stat -c '%a' "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null || echo "777")
+        if [[ "$_file_perms" != "600" && "$_file_perms" != "644" ]]
+        then
+            __tac_info "Security" "[SKIP api keys - unsafe permissions $_file_perms]" "$C_Warning"
+            return 1
+        fi
+        source "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null || {
+            __tac_info "Security" "[SKIP api keys - source failed]" "$C_Warning"
+            return 1
+        }
     fi
     local _key
     while IFS= read -r _line
     do
         _key="${_line#export }"
         _key="${_key%%=*}"
+        # SECURITY: Validate key name matches safe pattern before indirect expansion
+        if [[ ! "$_key" =~ ^[A-Z_][A-Z0-9_]*$ ]]
+        then
+            __tac_info "Security" "[SKIP invalid key name: $_key]" "$C_Warning"
+            continue
+        fi
         [[ -n "$_key" && -n "${!_key:-}" ]] && systemctl --user set-environment "${_key}=${!_key}" 2>/dev/null
     done < <(grep '^export ' "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null)
 }
@@ -191,6 +231,13 @@ function __so_ensure_llm_running() {
     { serve &>/dev/null & } 2>/dev/null
     local _serve_pid=$!
     disown "$_serve_pid" 2>/dev/null
+    
+    # Verify process actually started
+    if ! kill -0 "$_serve_pid" 2>/dev/null && ! pgrep -x llama-server >/dev/null 2>&1
+    then
+        __tac_info "Local LLM" "[FAILED TO START - process exited immediately]" "$C_Error"
+        return 1
+    fi
 
     local _spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
     local _sw=0 _sw_max=90
@@ -304,6 +351,10 @@ function __so_start_gateway() {
 # Injects bridged API keys into the systemd user session before starting.
 # ---------------------------------------------------------------------------
 function so() {
+    if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
+        __tac_info "OpenClaw" "[NOT INSTALLED - cannot start gateway]" "$C_Error"
+        return 1
+    fi
     local _svc="openclaw-gateway.service"
     local _ts_serve_active=0
 
@@ -368,27 +419,43 @@ function __so_check_win_port() {
     # Only meaningful under WSL with access to PowerShell
     command -v powershell.exe &>/dev/null || return 1
 
-    local _win_holder
+    local _win_holder _win_proc_name
     _win_holder=$(timeout 5 powershell.exe -NoProfile -NonInteractive -Command "
         \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue \
             | Select-Object -First 1
         if (\$c) {
             \$p = Get-Process -Id \$c.OwningProcess -ErrorAction SilentlyContinue
-            '{0} (PID {1})' -f \$p.ProcessName, \$c.OwningProcess
+            '{0}|{1}' -f \$p.ProcessName, \$c.OwningProcess
         }
     " 2>/dev/null | tr -d '\r')
 
     [[ -z "$_win_holder" ]] && return 1
 
-    local _pid_only
-    _pid_only="${_win_holder##*PID }"
-    _pid_only="${_pid_only%%)*}"
+    # Parse process name and PID separately for validation
+    _win_proc_name="${_win_holder%%|*}"
+    local _pid_only="${_win_holder##*|}"
 
-    __tac_info "Gateway" "[PORT ${_port} BLOCKED — Windows: ${_win_holder}]" "$C_Warning"
+    __tac_info "Gateway" "[PORT ${_port} BLOCKED — Windows: ${_win_proc_name} (PID ${_pid_only})]" "$C_Warning"
 
-    # Auto-kill the Windows process via taskkill.exe
+    # Validate process name before killing — only auto-kill known/safe processes
+    # Safe targets: node, python, llama-server, openclaw, code (VS Code), pwsh, powershell
+    local _safe_proc=0
+    case "${_win_proc_name,,}" in
+        node|python|python3|llama-server|openclaw|code|pwsh|powershell|docker*)
+            _safe_proc=1
+            ;;
+    esac
+
+    # Auto-kill the Windows process via taskkill.exe (only if safe or user requested)
     if command -v taskkill.exe &>/dev/null
     then
+        if (( _safe_proc == 0 ))
+        then
+            # Unknown process — warn user and require manual intervention
+            __tac_info "Gateway" "[SKIP KILL — unknown process '${_win_proc_name}']" "$C_Warning"
+            printf '%s\n' "  ${C_Dim}Manual kill (if safe): taskkill /PID ${_pid_only} /F${C_Reset}"
+            return 0
+        fi
         __tac_info "Gateway" "[KILLING Windows PID ${_pid_only}]" "$C_Warning"
         taskkill.exe /PID "$_pid_only" /F &>/dev/null
         sleep 1
@@ -424,6 +491,10 @@ function __so_check_win_port() {
 #   To restart, use:  openclaw gateway restart   (or the alias: oc restart)
 # ---------------------------------------------------------------------------
 function xo() {
+    if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
+        __tac_info "OpenClaw" "[NOT INSTALLED - cannot stop gateway]" "$C_Error"
+        return 1
+    fi
     local _svc="openclaw-gateway.service"
     local _was_running=0
 
@@ -524,11 +595,11 @@ function oc() {
     fi
     shift
 
-    # Security: reject path traversal and command injection attempts
-    # Note: $'\0' check omitted - bash strings cannot contain null bytes
-    if [[ "$sub" == *..* || "$sub" == *$'\n'* ]]
+    # Security: Use whitelist approach for subcommand validation
+    # Only allow known subcommands matching pattern: lowercase letters, digits, hyphens
+    if [[ ! "$sub" =~ ^[a-z][-a-z0-9]*$ ]]
     then
-        __tac_info "SECURITY" "[INVALID SUBCOMMAND]" "$C_Error"
+        __tac_info "SECURITY" "[INVALID SUBCOMMAND: $sub]" "$C_Error"
         return 1
     fi
 
@@ -598,6 +669,10 @@ function oc() {
 # Now uses the native OpenClaw CLI restart for reliability.
 # ---------------------------------------------------------------------------
 function oc-restart() {
+    if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
+        __tac_info "OpenClaw" "[NOT INSTALLED - cannot restart gateway]" "$C_Error"
+        return 1
+    fi
     openclaw gateway restart "$@"
 }
 
@@ -668,7 +743,7 @@ function oc-agent-use() {
         mtime=0
     fi
     if (( now - mtime > 3 )); then
-        if command -v openclaw >/dev/null 2>&1; then
+        if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
             if [[ -t 1 ]]; then
                 ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null \
                   || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) \
@@ -689,7 +764,7 @@ function oc-agent-use() {
         mtime=0
     fi
     if (( now - mtime > 5 )); then
-        if command -v openclaw >/dev/null 2>&1; then
+        if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
                 ( openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null \
                     || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null ) \
                     && mv "${session_cache}.tmp" "$session_cache" 2>/dev/null || true
@@ -702,11 +777,11 @@ function oc-agent-use() {
     [[ -f "$session_cache" ]] && sessions_json=$(cat "$session_cache") || sessions_json=""
 
     # Fallback to immediate CLI if no cache exists yet (first-run)
-    if [[ -z "$agents_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
+    if [[ -z "$agents_json" && "$__TAC_OPENCLAW_OK" == "1" ]]; then
         agents_json=$(openclaw agents list --json 2>/dev/null \
             || openclaw agents --json 2>/dev/null || true)
     fi
-    if [[ -z "$sessions_json" && -x "$(command -v openclaw 2>/dev/null)" ]]; then
+    if [[ -z "$sessions_json" && "$__TAC_OPENCLAW_OK" == "1" ]]; then
         sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null \
             || openclaw sessions --json 2>/dev/null || true)
     fi
@@ -1447,8 +1522,7 @@ function lc() {
 # oc-update — Update the OpenClaw CLI to the latest version.
 # ---------------------------------------------------------------------------
 function oc-update() {
-    if ! command -v openclaw >/dev/null
-    then
+    if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw CLI" "[NOT INSTALLED]" "$C_Error"
         return 1
     fi
@@ -1481,7 +1555,7 @@ function oc-health() {
     local port_listening=0
     local health_status="unknown"
 
-    if ! command -v openclaw >/dev/null
+    if [[ "$__TAC_OPENCLAW_OK" != "1" ]]
     then
         cli_installed=0
         if [[ "$output_mode" == "json" ]]
@@ -1934,7 +2008,7 @@ function oc-doctor-local() {
     local active_model=""
     local issues=0
 
-    command -v openclaw >/dev/null 2>&1 || openclaw_installed=0
+    [[ "$__TAC_OPENCLAW_OK" == "1" ]] || openclaw_installed=0
     __test_port "$OC_PORT" && gateway_port=1
     __test_port "$LLM_PORT" && llm_port=1
     __llm_is_healthy && llm_health=1
@@ -2267,5 +2341,15 @@ PY
         printf 'Launchers tried: wslview, powershell.exe, browser fallbacks, xdg-open\n'
     fi
 }
+
+# ==============================================================================
+# OPENCLAW ENVIRONMENT VARIABLES
+# ==============================================================================
+# These are exported here so they are available to OpenClaw and any child
+# processes. This keeps ~/.bashrc clean and ensures all OC-related config
+# lives in the version-controlled module.
+
+# Deep Recall provider — Python script for life memory recall
+export OPENCLAW_LCM_DEEP_RECALL_CMD="python3 $OC_ROOT/life/deep-recall-provider-lcm.py"
 
 # end of file

@@ -41,7 +41,13 @@ function __cleanup_temps() {
 # Uses nameref to avoid subshell overhead (called 5+ times per `up` run).
 # Dependencies: $CooldownDB must be set and touchable.
 # If force_mode=1, always returns 0 (skip cooldown for testing).
+#
+# RACE CONDITION FIX: Uses flock for exclusive access to CooldownDB during
+# check+set to prevent two parallel `up` runs from both passing the check.
 # ---------------------------------------------------------------------------
+# Module-level sink variable for nameref when caller doesn't provide one.
+# This ensures __check_cooldown works even if caller doesn't declare _cd_sink.
+_cd_sink=""
 function __check_cooldown() {
     local key="$1" now="$2" force_mode="${4:-0}"
     local -n __cd_result="${3:-_cd_sink}"
@@ -60,40 +66,49 @@ function __check_cooldown() {
         apt)        cooldown=$COOLDOWN_WEEKLY ;;  # 7 days  - package upgrades
         *)          cooldown=$COOLDOWN_WEEKLY ;;  # 7 days  - everything else
     esac
-    local last_run
-    last_run=$(grep "^${key}=" "$CooldownDB" 2>/dev/null | tail -n 1 | cut -d= -f2)
-    last_run=${last_run:-0}
-    local diff=$(( now - last_run ))
-    if (( diff < cooldown ))
-    then
-        local remaining=$(( cooldown - diff ))
-        local days=$(( remaining / 86400 ))
-        local hours=$(( (remaining % 86400) / 3600 ))
-        if (( days > 0 ))
+    
+    # Use flock for exclusive access to prevent race conditions
+    local last_run diff
+    {
+        flock -x 200 || return 1
+        last_run=$(grep "^${key}=" "$CooldownDB" 2>/dev/null | tail -n 1 | cut -d= -f2)
+        last_run=${last_run:-0}
+        diff=$(( now - last_run ))
+        if (( diff < cooldown ))
         then
-            __cd_result="${days}d ${hours}h"
-        else
-            __cd_result="${hours}h"
+            local remaining=$(( cooldown - diff ))
+            local days=$(( remaining / 86400 ))
+            local hours=$(( (remaining % 86400) / 3600 ))
+            if (( days > 0 ))
+            then
+                __cd_result="${days}d ${hours}h"
+            else
+                __cd_result="${hours}h"
+            fi
+            return 1
         fi
-        return 1
-    fi
-    __cd_result=""
-    return 0
+        __cd_result=""
+        return 0
+    } 200>"$CooldownDB.lock"
 }
 
 # ---------------------------------------------------------------------------
 # __set_cooldown — Record that a maintenance task was just completed.
 # Usage: __set_cooldown <key> <now_timestamp>
+# RACE CONDITION FIX: Uses flock for exclusive access during update.
 # ---------------------------------------------------------------------------
 function __set_cooldown() {
     local key="$1" now="$2"
     mkdir -p "$(dirname "$CooldownDB")" 2>/dev/null || true
     # Rewrite the cooldown database: remove old entry, append new timestamp.
+    # Use flock for exclusive access to prevent race conditions with __check_cooldown
     {
-        grep -v "^${key}=" "$CooldownDB" 2>/dev/null
-        echo "${key}=${now}"
-    } > "${CooldownDB}.tmp" \
-        && mv "${CooldownDB}.tmp" "$CooldownDB"
+        flock -x 200 || return 1
+        {
+            grep -v "^${key}=" "$CooldownDB" 2>/dev/null
+            echo "${key}=${now}"
+        } > "${CooldownDB}.tmp" && mv "${CooldownDB}.tmp" "$CooldownDB"
+    } 200>"$CooldownDB.lock"
 }
 
 # ---------------------------------------------------------------------------
@@ -171,6 +186,13 @@ function up() {
     case "${1:-}" in
         --force|-f) force_mode=1 ;;
     esac
+    
+    # Validate: reject unexpected arguments
+    if [[ $# -gt 1 ]]
+    then
+        __tac_info "Usage" "[up [--force|-f]]" "$C_Error"
+        return 1
+    fi
 
     command clear
     __tac_header "SYSTEM MAINTENANCE" "open"
@@ -181,7 +203,7 @@ function up() {
     # When __check_cooldown returns 1 (still cooling down), hours_left holds
     # the remaining time string (e.g. "6d 12h").
     local hours_left=""
-    local _cd_sink=""  # sink for nameref when no result var is needed
+    # _cd_sink is module-level (declared above) — no need to redeclare
     touch "$CooldownDB" 2>/dev/null
 
     # [1/13] Connectivity
@@ -211,17 +233,24 @@ function up() {
     if __check_cooldown "apt" "$now" hours_left "$force_mode"
     then
         (( apt_did_update )) || sudo apt update >/dev/null 2>&1
-        sudo apt upgrade -y --no-install-recommends >/dev/null 2>&1
-        local apt_rc=$?
-        if (( apt_rc == 0 ))
+        # Dry-run first to detect dependency issues before actual upgrade
+        if ! sudo apt upgrade --dry-run -y --no-install-recommends >/dev/null 2>&1
         then
-            sudo apt autoremove -y >/dev/null 2>&1
-            __tac_line "[2/13] APT Packages" "[UPDATED]" "$C_Success"
-            __set_cooldown "apt" "$now"
-            __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
-        else
-            __tac_line "[2/13] APT Packages" "[FAILED]" "$C_Error"
+            __tac_line "[2/13] APT Packages" "[DRY-RUN FAILED]" "$C_Warning"
             ((errCount++))
+        else
+            sudo apt upgrade -y --no-install-recommends >/dev/null 2>&1
+            local apt_rc=$?
+            if (( apt_rc == 0 ))
+            then
+                sudo apt autoremove -y >/dev/null 2>&1
+                __tac_line "[2/13] APT Packages" "[UPDATED]" "$C_Success"
+                __set_cooldown "apt" "$now"
+                __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
+            else
+                __tac_line "[2/13] APT Packages" "[FAILED]" "$C_Error"
+                ((errCount++))
+            fi
         fi
     else
         if (( apt_did_update ))
@@ -410,7 +439,7 @@ function up() {
     # --no-workspace-suggestions: suppress noisy "workspace not optimised" hints.
     if __check_cooldown "openclaw" "$now" hours_left "$force_mode"
     then
-        if command -v openclaw >/dev/null
+        if [[ "$__TAC_OPENCLAW_OK" == "1" ]]
         then
             local doc_rc
             timeout 30 openclaw doctor --non-interactive --no-workspace-suggestions >/dev/null 2>&1
@@ -428,8 +457,7 @@ function up() {
             fi
             __set_cooldown "openclaw" "$now"
         else
-            __tac_line "[6/13] OpenClaw Framework" "[MISSING]" "$C_Error"
-            ((errCount++))
+            __tac_line "[6/13] OpenClaw Framework" "[NOT INSTALLED]" "$C_Dim"
         fi
     else
         __tac_line "[6/13] OpenClaw Framework" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
@@ -469,7 +497,7 @@ function up() {
         __tac_line "[8/13] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [8/12] GPU Checks — __get_gpu returns CSV or a sentinel string.
+    # [9/13] GPU Checks — __get_gpu returns CSV or a sentinel string.
     # Sentinels: "N/A" (no nvidia-smi), "Querying..." (first-boot cache miss),
     # or contains "OFFLINE" (driver crash / WSL GPU passthrough failure).
     local gpu
@@ -477,13 +505,13 @@ function up() {
 
     if [[ "$gpu" != "N/A" && "$gpu" != "Querying..." && "$gpu" != *"OFFLINE"* ]]
     then
-        __tac_line "[9/13] RTX 3050 Ti" "[READY]" "$C_Success"
+        __tac_line "[10/13] RTX 3050 Ti" "[READY]" "$C_Success"
     else
-        __tac_line "[8/12] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
+        __tac_line "[9/13] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
         ((errCount++))
     fi
 
-    # [9/12] Sanitation — clean known temp locations, NOT the user's $PWD.
+    # [10/13] Sanitation — clean known temp locations, NOT the user's $PWD.
     # Only removes temp artifacts from /tmp/openclaw and the OC_ROOT directory.
     local count=0
     if [[ -d /tmp/openclaw ]]
@@ -500,6 +528,8 @@ function up() {
     while read -r pct mount
     do
         local pct_num=${pct%\%}
+        # Validate pct_num is numeric before comparison
+        [[ ! "$pct_num" =~ ^[0-9]+$ ]] && continue
         if (( pct_num >= 90 ))
         then
             __tac_line "[11/13] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
@@ -537,7 +567,7 @@ function up() {
         __tac_line "[12/13] Stale Processes" "[CLEAN]" "$C_Success"
     fi
 
-    # [12/12] Documentation drift guard — lightweight README accuracy check.
+    # [13/13] Documentation drift guard — lightweight README accuracy check.
     if __check_cooldown "docs_sync" "$now" hours_left "$force_mode"
     then
         if __docs_sync_check

@@ -18,6 +18,10 @@
 # @state-in: __LLAMA_DRIVE_MOUNTED (§1), C_* design tokens (§4)
 #   (These globals are read by this module but defined in other modules.)
 
+# Fallback for __LLAMA_DRIVE_MOUNTED if module load order changes or §1 is skipped
+# This prevents errors if 11-llm-manager.sh is sourced before 01-constants.sh
+: "${__LLAMA_DRIVE_MOUNTED:=1}"
+
 # Ensure LLM_DEFAULT_FILE is defined even if Section 1 wasn't updated
 export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$LLAMA_DRIVE_ROOT/.llm/default_model.conf}"
 
@@ -79,10 +83,13 @@ function __llm_json_escape() {
 
 # ---------------------------------------------------------------------------
 # __llm_registry_entry_by_num — Resolve a registry entry by model number.
+# Validates that target is numeric before querying.
 # @returns 0 on success, 1 if the registry or requested entry is unavailable.
 # ---------------------------------------------------------------------------
 function __llm_registry_entry_by_num() {
     local target="${1:-}"
+    # Validate target is numeric
+    [[ ! "$target" =~ ^[0-9]+$ ]] && return 1
     [[ -n "$target" && -f "$LLM_REGISTRY" ]] || return 1
     awk -F'|' -v n="$target" '$1 == n {print; exit}' "$LLM_REGISTRY" 2>/dev/null
 }
@@ -462,7 +469,7 @@ function __gguf_metadata() {
 
         # Sanity check: no valid GGUF has more than 10000 metadata keys.
         # Corrupted/truncated files could have garbage nkv causing out-of-bounds reads.
-        if (nkv > 10000) {
+        if (nkv > 10000 || nkv < 0) {
             print fname "|unknown|0|4096|0"
             exit
         }
@@ -482,7 +489,7 @@ function __gguf_metadata() {
 
             # -- Read key: length (u64, lower 32) then UTF-8 bytes --
             klen = u32(off); off += 8
-            if (off + klen > n) break
+            if (klen < 0 || klen > 1000 || off + klen > n) break
             key = ""
             for (i = 0; i < klen; i++)
                 key = key sprintf("%c", b[off + i])
@@ -560,6 +567,15 @@ function __gguf_metadata() {
 # layers that fit in VRAM. This scan-time function determines the launch
 # MODE (gpu vs cpu-only) and stores a hint for display/logging. The actual
 # offload count is decided by the runtime, not by this calculation.
+#
+# Decision logic (binary, not partial offload):
+#   - If model fits entirely in VRAM: return 999 (offload all layers)
+#   - If model exceeds VRAM: return 0 (CPU-only mode is faster than partial)
+#   - For MoE models: return total_layers (expert weights stay on CPU anyway)
+#
+# Rationale: Partial offload (some layers on GPU, rest in system RAM) causes
+# PCIe bandwidth bottlenecks. Pure CPU inference with --mlock is faster than
+# the hybrid path when the model doesn't fit in VRAM.
 # Args: file_size_bytes total_layers [arch]
 # Returns: 999 (max offload), total_layers (MoE), or 0 (CPU-only)
 function __calc_gpu_layers() {

@@ -142,11 +142,18 @@ _tac_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TACTICAL_REPO_ROOT="${TACTICAL_REPO_ROOT:-$_tac_repo_root}"
 _tac_module_dir="$TACTICAL_REPO_ROOT/scripts"
 
+# Expected modules (for warning if any are missing)
+_tac_expected_modules=(01-constants 02-error-handling 03-design-tokens 04-aliases
+    05-ui-engine 06-hooks 07-telemetry 08-maintenance 09-openclaw 10-deployment
+    11-llm-manager 12-dashboard-help 13-init 14-wsl-extras 15-model-recommender)
+
 # Source modules (timed when DEBUG_TAC_STARTUP is set) and accumulate
 # module versions from their "# Module Version: N" comment.
 _tac_mod_sum=0
+_tac_found_count=0
 for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh; do
     if [[ -f "$_tac_f" ]]; then
+        ((_tac_found_count++))
         if [[ -n "${DEBUG_TAC_STARTUP:-}" ]]; then
             printf 'Sourcing %s ... ' "$_tac_f" >&2
             _tac_start_ns=$(date +%s%N 2>/dev/null || echo 0)
@@ -169,9 +176,16 @@ for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh; do
     fi
 done
 
+# Warn if expected modules are missing (incomplete profile load)
+if (( _tac_found_count < ${#_tac_expected_modules[@]} ))
+then
+    printf '%s\n' "${C_Warning:-}[Tactical Profile]${C_Reset:-} Expected ${#_tac_expected_modules[@]} modules, found $_tac_found_count" >&2
+    printf '%s\n' "  ${C_Dim:-}Some modules may be missing — check ~/ubuntu-console/scripts/${C_Reset:-}" >&2
+fi
+
 export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
 
-unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv _tac_repo_root
+unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv _tac_repo_root _tac_expected_modules _tac_found_count
 
 # ==============================================================================
 

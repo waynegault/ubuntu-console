@@ -28,6 +28,7 @@ alias l='ls -CF'
 # ---- Tactical UI & Navigation ----
 alias h='tactical_help'
 alias cls='clear_tactical'
+alias c='clear_tactical'
 alias reload='command clear; exec bash'
 alias m='tactical_dashboard'
 alias cpwd='copy_path'
@@ -64,14 +65,20 @@ function oclogs() {
 # le — Show the last 40 lines of the OpenClaw gateway journal.
 function le() {
     journalctl --user -u openclaw-gateway.service --no-pager -n 60 --output=cat 2>&1 | tail -40
+    return "${PIPESTATUS[0]}"  # Preserve journalctl exit code
 }
 # lo — Show the last 120 lines of the OpenClaw gateway journal.
 function lo() {
     journalctl --user -u openclaw-gateway.service --no-pager -n 120 --output=cat 2>&1
+    return "${PIPESTATUS[0]}"  # Preserve journalctl exit code
 }
 # occonf — Open the OpenClaw config (openclaw.json) in VS Code.
 function occonf() {
-    __vsc_open "$OC_ROOT/openclaw.json"
+    if [[ -f "$OC_ROOT/openclaw.json" ]]; then
+        __vsc_open "$OC_ROOT/openclaw.json"
+    else
+        __tac_info "Config" "[NOT FOUND - $OC_ROOT/openclaw.json]" "$C_Warning"
+    fi
 }
 
 # ---- Git Shortcuts ----
@@ -84,6 +91,10 @@ alias commit='commit_auto'
 # Wrapper: strip the leading blank line that openclaw always prints.
 # Skip filtering for interactive/redirected commands to avoid breaking TTY.
 function openclaw() {
+    if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
+        __tac_info "OpenClaw" "[NOT INSTALLED]" "$C_Warning"
+        return 127
+    fi
     if [[ -t 1 ]] && [[ "$1" != "tui" && "$1" != "logs" ]]
     then
         command openclaw "$@" | sed '1{/^$/d}'

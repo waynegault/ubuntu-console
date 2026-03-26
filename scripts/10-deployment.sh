@@ -87,6 +87,15 @@ function mkproj() {
         return 1
     fi
 
+    # Check available disk space (require at least 100MB for venv + dependencies)
+    local available_kb
+    available_kb=$(df -k . | awk 'NR==2 {print $4}')
+    if [[ -n "$available_kb" && "$available_kb" -lt 102400 ]]
+    then
+        __tac_info "Disk Space" "[INSUFFICIENT - need 100MB, have $((available_kb / 1024))MB]" "$C_Error"
+        return 1
+    fi
+
     mkdir -p "$n/src" "$n/tests"
     cd "$n" || return
 
@@ -302,6 +311,12 @@ ${diff_body}"
     # Guard: refuse to send diffs containing secret-like patterns to the LLM.
     # Even though LOCAL_LLM_URL is localhost, a misconfigured proxy could route
     # the request externally. Fail safe by scanning the diff body.
+    # SECURITY DISCLAIMER:
+    # This is a BEST-EFFORT check, NOT a comprehensive security guarantee.
+    # It covers common secret formats but may miss: base64-encoded keys, keys with
+    # special characters, custom/internal API keys, or keys in external config files.
+    # Always use proper secret management (vaults, env vars, CI/CD secrets).
+    #
     # Patterns matched:
     #   sk-...                          → OpenAI / Anthropic API keys
     #   AKIA...                         → AWS access key IDs (always start with AKIA)
@@ -309,17 +324,29 @@ ${diff_body}"
     #   github_pat_...                  → GitHub fine-grained tokens
     #   xox[baprs]-...                  → Slack tokens
     #   AIza...                         → Google API keys
+    #   EAACEdE...                      → Facebook access tokens
+    #   eyJ...                          → JWT tokens (base64-encoded JSON)
+    #   -----BEGIN RSA/EC/OPENSSH...    → PEM-encoded private keys
     #   API_KEY=... / API-KEY=...       → Generic env-var style API key assignments
     #   PRIVATE_KEY=...-----BEGIN       → Private keys in env vars
+    #   ghpat-...                       → GitHub newer-format tokens
+    #   npm_...                         → npm access tokens
+    #   pypi-...                        → PyPI API tokens
     local __secret_pat='(
         sk-[a-zA-Z0-9]{20,}                    # OpenAI/Anthropic
         |AKIA[0-9A-Z]{16}                      # AWS
         |ghp_[a-zA-Z0-9]{36}                   # GitHub PAT
         |github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}  # GitHub fine-grained
+        |ghpat-[a-zA-Z0-9]{40,}                # GitHub newer tokens
         |xox[baprs]-[0-9]{10,13}-[0-9]{10,13}  # Slack tokens
         |AIza[0-9A-Za-z_-]{35}                 # Google API
+        |EAACEdE[0-9A-Za-z]{20,}               # Facebook access tokens
+        |eyJ[a-zA-Z0-9_-]{20,}                 # JWT tokens (base64 JSON)
+        |-----BEGIN[[:space:]]+(RSA|EC|OPENSSH|DSA)[[:space:]]+PRIVATE[[:space:]]+KEY
         |API[_-]?KEY[[:space:]]*=[[:space:]]*['"'"'"]?[a-zA-Z0-9]{16,}
         |PRIVATE[_-]?KEY[[:space:]]*=[[:space:]]*['"'"'"]?-----BEGIN
+        |npm_[a-zA-Z0-9]{36}                   # npm tokens
+        |pypi-[a-zA-Z0-9_-]{20,}               # PyPI tokens
     )'
     if [[ "$diff_body" =~ $__secret_pat ]]
     then

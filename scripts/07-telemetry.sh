@@ -23,6 +23,10 @@
 #
 # Error handling: Uses local variable for stat timestamp to avoid arithmetic
 # errors if stat fails. Falls back to 0 (epoch) which makes cache appear stale.
+#
+# Portability: Uses GNU stat (-c %Y). For BSD/macOS stat, use (-f %m).
+# This profile is Linux-only (WSL2 focus); BSD support would require:
+#   _ts=$(stat -f %m "$_cache_path" 2>/dev/null || stat -c %Y "$_cache_path" 2>/dev/null) || _ts=0
 # ---------------------------------------------------------------------------
 function __cache_fresh() {
     local _cache_path="$1" _ttl="$2" _ts _now
@@ -73,7 +77,8 @@ function __get_host_metrics() {
     local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
     if ! __cache_fresh "$cache" 10
     then
-        ( bash "$TACTICAL_REPO_ROOT/bin/tac_hostmetrics.sh" > "$cache_tmp" 2>/dev/null \
+        ( trap 'rm -f "$cache_tmp"' EXIT; \
+          bash "$TACTICAL_REPO_ROOT/bin/tac_hostmetrics.sh" > "$cache_tmp" 2>/dev/null \
             && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; } ) &>/dev/null &
         __TAC_BG_PIDS+=("$!")
     fi
@@ -188,7 +193,8 @@ function __get_git() {
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1
     then
         local branch
-        branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+        branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch="UNKNOWN"
+        branch=${branch:-UNKNOWN}
         local dirty
         if [[ -n $(git status --porcelain) ]]
         then
@@ -266,14 +272,14 @@ function __get_oc_version() {
     then
         cat "$cache"; return
     fi
-    (
-        local ocVersion="UNKNOWN"
-        if command -v openclaw >/dev/null
-        then
-            ocVersion=$(openclaw --version 2>/dev/null | awk '{print $2}' | tr -d '\r\n')
-            [[ -n "$ocVersion" ]] && ocVersion="v${ocVersion#v}"
-        fi
-        echo "$ocVersion" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
+    ( trap 'rm -f "$cache_tmp"' EXIT; \
+      local ocVersion="UNKNOWN"
+      if [[ "$__TAC_OPENCLAW_OK" == "1" ]]
+      then
+          ocVersion=$(openclaw --version 2>/dev/null | awk '{print $2}' | tr -d '\r\n')
+          [[ -n "$ocVersion" ]] && ocVersion="v${ocVersion#v}"
+      fi
+      echo "$ocVersion" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
     ) &>/dev/null &
     __TAC_BG_PIDS+=("$!")
     if [[ -f "$cache" ]]
@@ -301,14 +307,14 @@ function __get_oc_metrics() {
     local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
     if ! __cache_fresh "$cache" 60
     then
-        (
-            local sessionCount=0
-            if command -v openclaw >/dev/null
-            then
-                sessionCount=$(openclaw sessions --all-agents --json 2>/dev/null | jq -r '.count // 0' 2>/dev/null)
-                sessionCount=${sessionCount:-0}
-            fi
-            echo "$sessionCount" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
+        ( trap 'rm -f "$cache_tmp"' EXIT; \
+          local sessionCount=0
+          if [[ "$__TAC_OPENCLAW_OK" == "1" ]]
+          then
+              sessionCount=$(openclaw sessions --all-agents --json 2>/dev/null | jq -r '.count // 0' 2>/dev/null)
+              sessionCount=${sessionCount:-0}
+          fi
+          echo "$sessionCount" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         ) &>/dev/null &
         __TAC_BG_PIDS+=("$!")
     fi

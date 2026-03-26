@@ -12,7 +12,12 @@
 # @exports: (none — runs startup side-effects only)
 
 # Create required directories
-mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" "$LLAMA_DRIVE_ROOT/.llm"
+# Only create OpenClaw directories if openclaw CLI is installed AND functional
+if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
+    mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS"
+fi
+# Always create LLM directory (independent of OpenClaw)
+mkdir -p "$LLAMA_DRIVE_ROOT/.llm"
 
 # Check for required dependencies
 if ! command -v jq >/dev/null 2>&1
@@ -59,6 +64,15 @@ fi
 # session. The file is verified against a trusted SHA-256 hash before
 # sourcing — if the hash doesn't match (tampered/updated), it's skipped
 # with a warning and the shell continues to load without LLM sync.
+#
+# SECURITY NOTE: The trusted hash ($OC_ROOT/oc-llm-sync.sha256) should be
+# created by a trusted administrator and have restricted permissions (chmod 400).
+# If an attacker can write to both $OC_WORKSPACE and $OC_ROOT, they could
+# replace both the script and hash. For stronger security:
+#   - Store the trusted hash in a read-only location
+#   - Use GPG signatures instead of SHA-256
+#   - Run 'oc-trust-sync' after any verified update to refresh the hash
+#
 # NOTE: This silently sources an external script. If the file is compromised,
 # it executes in the interactive shell. Hash is verified against a trusted
 # reference file and logged for auditability.
@@ -74,7 +88,7 @@ then
         then
             printf '%s\n' \
                 "${C_Warning}[Tactical Profile]${C_Reset}" \
-                    "oc-llm-sync.sh hash mismatch — skipped"
+                    "oc-llm-sync.sh hash mismatch — skipped (run 'oc-trust-sync' if update is expected)"
         else
             # C7: stderr suppressed because oc-llm-sync.sh may emit harmless
             # warnings (e.g., unbound variables from older versions). The || true
@@ -84,9 +98,9 @@ then
         fi
     else
         # No trusted hash — refuse to source. Run 'oc-trust-sync' first.
-            printf '%s\n' \
-                "${C_Warning}[Tactical Profile]${C_Reset}" \
-                "oc-llm-sync.sh has no trusted hash — skipped"
+        printf '%s\n' \
+            "${C_Warning}[Tactical Profile]${C_Reset}" \
+            "oc-llm-sync.sh has no trusted hash — skipped (run 'oc-trust-sync' to establish trust)"
     fi
     # Always clean up hash variables regardless of code path
     unset _sync_hash _trusted_hash
