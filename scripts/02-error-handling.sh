@@ -3,7 +3,7 @@
 # ─── Module: 02-error-handling ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 2. ERROR HANDLING
 # ==============================================================================
@@ -27,6 +27,10 @@
 #   - jq: returns 5 when input is not JSON (expected for probes)
 # Extracted to a named function for clarity (traps with inline code are hard to read).
 # __tac_last_err intentionally global — traps cannot use `local`.
+
+# Ensure error log directory exists BEFORE setting trap (prevents errors on first use)
+mkdir -p "$(dirname "$ErrorLogPath")" 2>/dev/null
+
 function __tac_err_handler() {
     __tac_last_err=$?
 
@@ -52,9 +56,6 @@ function __tac_err_handler() {
 }
 set -E
 trap '__tac_err_handler' ERR
-
-# Ensure error log directory exists on profile load
-mkdir -p "$(dirname "$ErrorLogPath")" 2>/dev/null
 
 
 # end of file
