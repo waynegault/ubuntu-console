@@ -30,7 +30,16 @@ teardown_file() {
 }
 
 setup() {
-    source "$PROFILE_PATH" 2>/dev/null || true
+    # Set PS1 to simulate interactive shell (required for profile to load functions)
+    export PS1="$ "
+    # Source profile with interactive guard bypassed
+    (set +i; source "$PROFILE_PATH" 2>/dev/null) || true
+    # If functions still not available, source scripts directly
+    if ! declare -f oc-backup >/dev/null 2>&1; then
+        for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+            [[ -f "$f" ]] && source "$f" 2>/dev/null || true
+        done
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
