@@ -1746,24 +1746,36 @@ function oc-plugin-update() {
 
     case "$plugin_id" in
         gigabrain)
-            update_plugin "gigabrain" "https://github.com/legendaryvibecoder/gigabrain.git" "$plugins_dir"
-            (( $? == 0 )) && ((updated++))
+            if update_plugin "gigabrain" "https://github.com/legendaryvibecoder/gigabrain.git" "$plugins_dir"
+            then
+                ((updated++))
+            fi
             ;;
         lossless-claw)
-            update_plugin "lossless-claw" "https://github.com/Martian-Engineering/lossless-claw.git" "$plugins_dir"
-            (( $? == 0 )) && ((updated++))
+            if update_plugin "lossless-claw" "https://github.com/Martian-Engineering/lossless-claw.git" "$plugins_dir"
+            then
+                ((updated++))
+            fi
             ;;
         openstinger)
-            update_plugin "openstinger" "https://github.com/srikanthbellary/openstinger.git" "$vendor_dir"
-            (( $? == 0 )) && ((updated++))
+            if update_plugin "openstinger" "https://github.com/srikanthbellary/openstinger.git" "$vendor_dir"
+            then
+                ((updated++))
+            fi
             ;;
         --all|"")
-            update_plugin "gigabrain" "https://github.com/legendaryvibecoder/gigabrain.git" "$plugins_dir"
-            (( $? == 0 )) && ((updated++))
-            update_plugin "lossless-claw" "https://github.com/Martian-Engineering/lossless-claw.git" "$plugins_dir"
-            (( $? == 0 )) && ((updated++))
-            update_plugin "openstinger" "https://github.com/srikanthbellary/openstinger.git" "$vendor_dir"
-            (( $? == 0 )) && ((updated++))
+            if update_plugin "gigabrain" "https://github.com/legendaryvibecoder/gigabrain.git" "$plugins_dir"
+            then
+                ((updated++))
+            fi
+            if update_plugin "lossless-claw" "https://github.com/Martian-Engineering/lossless-claw.git" "$plugins_dir"
+            then
+                ((updated++))
+            fi
+            if update_plugin "openstinger" "https://github.com/srikanthbellary/openstinger.git" "$vendor_dir"
+            then
+                ((updated++))
+            fi
             ;;
         *)
             __tac_info "Error" "Unknown plugin: $plugin_id" "$C_Error"
