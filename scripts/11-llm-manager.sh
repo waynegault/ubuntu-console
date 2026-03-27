@@ -982,7 +982,8 @@ function __model_list() {
             [[ "$num" == "$active_num" ]] && pgrep -x llama-server >/dev/null 2>&1 && is_active="true"
             [[ "$file" == "$default_file" ]] && is_default="true"
             (( first )) || printf ',\n'
-            printf '    {"num":%s,"name":"%s","file":"%s","size":"%s","arch":"%s","quant":"%s","gpu_layers":%s,"ctx":%s,"active":%s,"default":%s}' \
+            printf '    {"num":%s,"name":"%s","file":"%s","size":"%s","arch":"%s",\
+"quant":"%s","gpu_layers":%s,"ctx":%s,"active":%s,"default":%s}' \
                 "$num" "$(__llm_json_escape "$name")" "$(__llm_json_escape "$file")" "$size" \
                 "$(__llm_json_escape "$arch")" "$quant" "$gpu_layers" "$ctx" "$is_active" "$is_default"
             first=0
@@ -1169,11 +1170,11 @@ function __model_use() {
     if [[ ! -f "$model_path" ]]
     then
         __tac_info "Model File" "[NOT FOUND - $file]" "$C_Warning"
-        
+
         # Check if model download is possible (HuggingFace repo info in registry)
         local download_prompt="Would you like to download model #$target ($name)? [y/N]: "
         read -r -e -p "$download_prompt" confirm
-        
+
         if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]
         then
             # Check file size before downloading
@@ -1188,7 +1189,7 @@ function __model_use() {
                     return 1
                 fi
             fi
-            
+
             # Attempt download
             __tac_info "Download" "[STARTING - $name ($size)]" "$C_Dim"
             if __model_download "$file"
@@ -1211,7 +1212,7 @@ function __model_use() {
             return 1
         fi
     fi
-    
+
     model_bytes=$(stat --format=%s "$model_path" 2>/dev/null || echo 0)
     if [[ ! -x "$LLAMA_SERVER_BIN" ]]
     then

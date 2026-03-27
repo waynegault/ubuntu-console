@@ -142,7 +142,7 @@ then
     cmd+=("--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size")
     cmd+=("--parallel" "$parallel_slots")
     cmd+=("--n-gpu-layers" "999" "--flash-attn" "on" "--threads" "$use_threads")
-    
+
     # KV Cache Experiment Parameters (2026-03-27) - UPDATED with correct parameters
     # Based on llama-server --help output and experiment debugging
     cmd+=("--cache-type-k" "f16" "--cache-type-v" "f16")

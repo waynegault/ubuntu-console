@@ -48,7 +48,7 @@ function __threshold_color() {
 # Usage: __vsc_open <filepath> [confirmation_message]
 # Deduplicates the repeated __resolve_vscode_bin + "$VSCODE_BIN" pattern
 # used by oedit, llmconf, oclogs, occonf, mlogs, and any future wrappers.
-# 
+#
 # Read Mode: If TAC_READ_MODE=1 is set, outputs file content instead of
 # opening VS Code (for AI agents like Hal).
 # ---------------------------------------------------------------------------

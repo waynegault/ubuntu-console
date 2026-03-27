@@ -92,25 +92,25 @@ function __check_api_key_rotation() {
     local key_file="$TAC_CACHE_DIR/tac_win_api_keys"
     local now
     now=$(date +%s)
-    
+
     # Check once per session (not every prompt)
     if [[ -n "${__TAC_KEY_CHECK_DONE:-}" ]]
     then
         return
     fi
-    
+
     if [[ -f "$key_file" ]]
     then
         local key_age
         key_age=$((now - $(stat -c %Y "$key_file" 2>/dev/null || echo 0)))
         local days=$((key_age / 86400))
-        
+
         if (( days > 30 ))
         then
             printf '%s\n' "${C_Warning}⚠ API keys are ${days} days old - consider rotation${C_Reset}" >&2
         fi
     fi
-    
+
     __TAC_KEY_CHECK_DONE=1
 }
 

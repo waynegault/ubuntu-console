@@ -46,7 +46,7 @@ readonly _COMMIT_TEMPERATURE=0.3          # Low creativity for deterministic sum
 # ---------------------------------------------------------------------------
 function __scan_diff_for_secrets() {
     local diff_body="$1"
-    
+
     local __secret_pat='(
         sk-[a-zA-Z0-9]{20,}                    # OpenAI/Anthropic
         |AKIA[0-9A-Z]{16}                      # AWS
@@ -63,7 +63,7 @@ function __scan_diff_for_secrets() {
         |npm_[a-zA-Z0-9]{36}                   # npm tokens
         |pypi-[a-zA-Z0-9_-]{20,}               # PyPI tokens
     )'
-    
+
     if [[ "$diff_body" =~ $__secret_pat ]]
     then
         __tac_info "SECURITY" "[BLOCKED: diff appears to contain a secret/API key]" "$C_Error"

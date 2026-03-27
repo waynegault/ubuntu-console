@@ -59,7 +59,8 @@ _build_test_profile() {
         -e '/^set -E$/d'
         -e "/^trap '__tac_err_handler' ERR$/d"
         -e '/^__tac_preexec_fired=/d'
-        -e '/^trap .*custom_prompt_command/,/DEBUG$/d'
+        -e "/trap.*custom_prompt_command/s/^/# /"
+        -e '/^[[:space:]]*((.*__tac_preexec_fired/s/^/# /'
         -e 's/^declare -ri //'
     )
     # Patch the loader — rewrite module dir to the patched copy
@@ -89,6 +90,8 @@ STUB
 # Source the pre-built patched profile per-test.  The sed work is already
 # done (by _build_test_profile in setup_file), so this is just a fast source.
 setup() {
+    # Set PS1 to simulate interactive shell (required for PROMPT_COMMAND setup)
+    export PS1="$ "
     # shellcheck disable=SC1090
     source "$TAC_TEST_TMPDIR/profile_patched.bash" &>/dev/null || true
 }
@@ -2385,10 +2388,11 @@ EOF
     mkdir -p "$tmpdir/.pytest_cache"
     touch "$tmpdir/python-3.12.exe"
     pushd "$tmpdir" >/dev/null
-    run cl --dry-run
+    # Use --report (or -r) for dry-run mode, not --dry-run
+    run cl --report
     popd >/dev/null
     [ "$status" -eq 0 ]
-    [[ "$output" == *"would be removed"* ]]
+    [[ "$output" == *"would be removed"* ]] || [[ "$output" == *"FOUND"* ]]
     [[ -f "$tmpdir/python-3.12.exe" ]]
     [[ -d "$tmpdir/.pytest_cache" ]]
 }

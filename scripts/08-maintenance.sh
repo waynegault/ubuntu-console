@@ -692,7 +692,9 @@ function up() {
     if command -v docker >/dev/null 2>&1
     then
         local docker_freed
-        docker_freed=$(docker system prune -f --volumes 2>&1 | grep "Total reclaimed space" | grep -oP '[\d.]+[MGK]B' || echo "")
+        docker_freed=$(docker system prune -f --volumes 2>&1 \
+            | grep "Total reclaimed space" \
+            | grep -oP '[\d.]+[MGK]B' || echo "")
         if [[ -n "$docker_freed" ]]
         then
             __tac_line "[16/16] Docker Prune" "[FREED $docker_freed]" "$C_Success"
@@ -730,16 +732,16 @@ function up() {
     else
         __tac_line "Maintenance Status" "[SYSTEMS AT PEAK PARITY]" "$C_Success"
     fi
-    
+
     # Performance summary: show total execution time
     local total_time=$(( $(date +%s) - start_time ))
     __tac_line "Execution Time" "[${total_time}s]" "$C_Dim"
-    
+
     # Write metrics to file for trend analysis
     local metrics_file="$OC_ROOT/maintenance-history.csv"
     mkdir -p "$(dirname "$metrics_file")" 2>/dev/null
     echo "$(date -Iseconds),$total_time,$errCount" >> "$metrics_file" 2>/dev/null
-    
+
     __tac_footer
 }
 
@@ -752,7 +754,7 @@ function up() {
 # ---------------------------------------------------------------------------
 function cl() {
     local light_mode=0 report_mode=0 yes_mode=0
-    
+
     # Parse arguments
     while [[ $# -gt 0 ]]
     do
@@ -764,12 +766,12 @@ function cl() {
         esac
         shift
     done
-    
+
     # Report mode: show what could be cleaned without deleting
     if (( report_mode == 1 ))
     then
         __tac_header "CLEANUP REPORT" "open"
-        
+
         # Current directory debris
         local pwd_debris=0
         if [[ -d .pytest_cache ]] || compgen -G "python-*.exe" > /dev/null
@@ -779,7 +781,7 @@ function cl() {
         else
             __tac_line "Python cache in $PWD" "[CLEAN]" "$C_Success"
         fi
-        
+
         # Broken symlinks
         local broken_links
         broken_links=$(find ~ -xtype l 2>/dev/null | wc -l)
@@ -789,7 +791,7 @@ function cl() {
         else
             __tac_line "Broken symlinks in ~" "[NONE]" "$C_Success"
         fi
-        
+
         # PATH ghosts (Linux side)
         local path_ghosts=0
         local IFS=':'
@@ -834,7 +836,7 @@ function cl() {
         else
             __tac_line "Non-existent PATH entries" "[NONE]" "$C_Success"
         fi
-        
+
         # Windows System PATH ghosts (WSL-specific check)
         local win_ghosts=()
         local IFS=':'
@@ -857,12 +859,13 @@ function cl() {
             done
             __tac_info "  Fix" "Run PowerShell script below (admin)" "$C_Dim"
         fi
-        
+
         # Systemd ghost units
         if command -v systemctl >/dev/null 2>&1
         then
             local systemd_ghosts
-            systemd_ghosts=$(systemctl --user list-units --all --state=not-found 2>/dev/null | grep -c "not-found" || echo 0)
+            systemd_ghosts=$(systemctl --user list-units --all --state=not-found 2>/dev/null \
+                | grep -c "not-found" || echo 0)
             if (( systemd_ghosts > 0 ))
             then
                 __tac_line "Systemd ghost units" "[$systemd_ghosts not-found]" "$C_Warning"
@@ -870,7 +873,7 @@ function cl() {
                 __tac_line "Systemd ghost units" "[NONE]" "$C_Success"
             fi
         fi
-        
+
         # APT cache
         if command -v apt-get >/dev/null 2>&1
         then
@@ -878,7 +881,7 @@ function cl() {
             apt_size=$(du -sh /var/cache/apt/archives 2>/dev/null | cut -f1 || echo "0")
             __tac_line "APT cache size" "[$apt_size]" "$C_Text"
         fi
-        
+
         # Brew cache
         if command -v brew >/dev/null 2>&1
         then
@@ -886,7 +889,7 @@ function cl() {
             brew_size=$(brew cleanup --dry-run 2>&1 | grep -oP '[\d.]+[MGK]B' | head -1 || echo "0")
             __tac_line "Brew reclaimable" "[$brew_size]" "$C_Text"
         fi
-        
+
         # Journal logs
         if command -v journalctl >/dev/null 2>&1
         then
@@ -894,7 +897,7 @@ function cl() {
             journal_size=$(journalctl --disk-usage 2>&1 | grep -oP '[\d.]+[MGK]B' || echo "0")
             __tac_line "Journal logs" "[$journal_size]" "$C_Text"
         fi
-        
+
         # Docker (if installed)
         if command -v docker >/dev/null 2>&1
         then
@@ -902,16 +905,16 @@ function cl() {
             docker_size=$(docker system df 2>&1 | grep "Images" | awk '{print $4}' || echo "0")
             __tac_line "Docker images" "[$docker_size]" "$C_Text"
         fi
-        
+
         __tac_footer
-        
+
         # If Windows ghosts found, show PowerShell cleanup script
         if (( ${#win_ghosts[@]} > 0 ))
         then
             printf '\n%s\n' "${C_Highlight}--- PowerShell Cleanup (Run as ADMIN) ---${C_Reset}"
             printf '%s\n' "${C_Dim}Copy and paste this into Windows PowerShell (Admin):${C_Reset}"
             printf '\n%s\n' "\$GhostList = @("
-            
+
             # Build ghost list for PowerShell
             local first=1
             for wg in "${win_ghosts[@]}"
@@ -925,12 +928,13 @@ function cl() {
                 fi
             done
             printf '%s\n\n' ");"
-            
+
             printf '%s\n' "# Function to clean a specific registry path"
             printf '%s\n' "function Clean-RegistryPath (\$RegPath) {"
             printf '%s\n' "    \$Current = (Get-ItemProperty -Path \$RegPath -ErrorAction SilentlyContinue).Path"
             printf '%s\n' "    if (\$Current) {"
-            printf '%s\n' "        \$New = (\$Current -split ';' | Where-Object { \$_ -and \$GhostList -notcontains \$_ }) -join ';'"
+            printf '%s\n' "        \$New = (\$Current -split ';' | Where-Object { \
+\$_ -and \$GhostList -notcontains \$_ }) -join ';'"
             printf '%s\n' "        Set-ItemProperty -Path \$RegPath -Name 'Path' -Value \$New"
             printf '%s\n' "        return \$true"
             printf '%s\n' "    }"
@@ -941,15 +945,17 @@ function cl() {
             printf '%s\n' "    Write-Host \"✓ User PATH cleaned.\" -ForegroundColor Green"
             printf '%s\n' "}"
             printf '\n%s\n' "# Clean System PATH"
-            printf '%s\n' "if (Clean-RegistryPath 'Registry::HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\Session Manager\Environment') {"
+            printf '%s\n' "if (Clean-RegistryPath 'Registry::HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\
+Session Manager\Environment') {"
             printf '%s\n' "    Write-Host \"✓ System PATH cleaned.\" -ForegroundColor Green"
             printf '%s\n' "}"
-            printf '\n%s\n\n' "Write-Host \"DONE! Run 'wsl --shutdown' in Windows to see changes in WSL.\" -ForegroundColor Cyan"
+            printf '\n%s\n\n' "Write-Host \"DONE! Run 'wsl --shutdown' in Windows to see changes in WSL.\" \
+                -ForegroundColor Cyan"
         fi
-        
+
         return 0
     fi
-    
+
     # Light mode: only python cache (old behavior)
     if (( light_mode == 1 ))
     then
@@ -958,10 +964,10 @@ function cl() {
         __tac_info "Sanitation..." "[$count artifacts removed]" "$C_Success"
         return 0
     fi
-    
+
     # Default: Full deep cleanup
     local deep_count=0
-    
+
     # APT cleanup
     if command -v sudo >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1
     then
@@ -982,7 +988,7 @@ function cl() {
             ((deep_count++))
         fi
     fi
-    
+
     # Brew cleanup
     if command -v brew >/dev/null 2>&1
     then
@@ -1003,7 +1009,7 @@ function cl() {
             ((deep_count++))
         fi
     fi
-    
+
     # Journal vacuum
     if command -v journalctl >/dev/null 2>&1
     then
@@ -1024,7 +1030,7 @@ function cl() {
             ((deep_count++))
         fi
     fi
-    
+
     # Docker cleanup
     if command -v docker >/dev/null 2>&1
     then
@@ -1045,7 +1051,7 @@ function cl() {
             ((deep_count++))
         fi
     fi
-    
+
     # Systemd ghost reset (safe - just clears failed state)
     if command -v systemctl >/dev/null 2>&1
     then
@@ -1053,7 +1059,7 @@ function cl() {
         __tac_info "Systemd ghosts" "[RESET]" "$C_Success"
         ((deep_count++))
     fi
-    
+
     # NPM cache cleanup (safe - regenerates on demand)
     if command -v npm >/dev/null 2>&1
     then
@@ -1061,7 +1067,7 @@ function cl() {
         __tac_info "NPM cache" "[VERIFIED]" "$C_Success"
         ((deep_count++))
     fi
-    
+
     # Thumbnail cache (safe - regenerates on demand)
     if [[ -d ~/.cache/thumbnails ]]
     then
@@ -1069,7 +1075,7 @@ function cl() {
         __tac_info "Thumbnail cache" "[CLEARED]" "$C_Success"
         ((deep_count++))
     fi
-    
+
     # Trash (safe - user-initiated cleanup)
     if [[ -d ~/.local/share/Trash/files ]]
     then
@@ -1077,7 +1083,7 @@ function cl() {
         __tac_info "Trash" "[EMPTIED]" "$C_Success"
         ((deep_count++))
     fi
-    
+
     # Broken symlinks (list only, don't auto-delete)
     local broken_links
     broken_links=$(find ~ -xtype l 2>/dev/null | wc -l)
@@ -1097,7 +1103,7 @@ function cl() {
         fi
         __tac_info "  Fix" "Run 'find ~ -xtype l -delete' manually" "$C_Dim"
     fi
-    
+
     # Summary
     if (( deep_count > 0 ))
     then

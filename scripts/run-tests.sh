@@ -144,25 +144,27 @@ then
     row_empty
     row "  ${C_Bold}Integration Tests${C_Reset}"
     row_empty
-    
+
     for int_test in "$INTEGRATION_DIR"/*.bats
     do
         [[ -f "$int_test" ]] || continue
         int_name=$(basename "$int_test")
         row "  ${C_Dim}Running: $int_name${C_Reset}"
-        
+
         while IFS= read -r line
         do
             if [[ "$line" =~ ^ok\ [0-9]+\ (.+)$ ]]
             then
                 (( _live_num++ ))
                 (( _live_pass++ ))
-                row "  ${C_Dim}${_live_num}.${C_Reset} [integration] ${BASH_REMATCH[1]} ${C_Green}${PASS_SYMBOL}${C_Reset}"
+                row "  ${C_Dim}${_live_num}.${C_Reset} [integration] ${BASH_REMATCH[1]} \
+${C_Green}${PASS_SYMBOL}${C_Reset}"
             elif [[ "$line" =~ ^not\ ok\ [0-9]+\ (.+)$ ]]
             then
                 (( _live_num++ ))
                 (( _live_fail++ ))
-                row "  ${C_Dim}${_live_num}.${C_Reset} [integration] ${BASH_REMATCH[1]} ${C_Red}${FAIL_SYMBOL}${C_Reset}"
+                row "  ${C_Dim}${_live_num}.${C_Reset} [integration] ${BASH_REMATCH[1]} \
+${C_Red}${FAIL_SYMBOL}${C_Reset}"
             fi
             tap_output+="$line"$'\n'
         done < <(bats --tap "$int_test" "$@" 2>&1) || true
