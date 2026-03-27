@@ -4,7 +4,7 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="2.2"
+VERSION="2.4"  # Updated KV cache parameters with correct names (--cache-ram)
 set -euo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -142,6 +142,13 @@ then
     cmd+=("--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size")
     cmd+=("--parallel" "$parallel_slots")
     cmd+=("--n-gpu-layers" "999" "--flash-attn" "on" "--threads" "$use_threads")
+    
+    # KV Cache Experiment Parameters (2026-03-27) - UPDATED with correct parameters
+    # Based on llama-server --help output and experiment debugging
+    cmd+=("--cache-type-k" "f16" "--cache-type-v" "f16")
+    cmd+=("--cache-ram" "2048")  # 2GB cache - corrected parameter name
+    # Note: --keep-cache doesn't exist in this version
+    # --cache-prompt is enabled by default
 else
     cmd+=("--parallel" "1")
     cmd+=("--batch-size" "512" "--ubatch-size" "512")

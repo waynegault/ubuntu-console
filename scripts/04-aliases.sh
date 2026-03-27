@@ -73,7 +73,19 @@ function lo() {
     return "${PIPESTATUS[0]}"  # Preserve journalctl exit code
 }
 # occonf — Open the OpenClaw config (openclaw.json) in VS Code.
+# In read mode (TAC_READ_MODE=1): outputs config content instead.
 function occonf() {
+    if [[ "${TAC_READ_MODE:-}" == "1" ]]
+    then
+        if [[ -f "$OC_ROOT/openclaw.json" ]]
+        then
+            printf '%s\n' "=== $OC_ROOT/openclaw.json ==="
+            cat "$OC_ROOT/openclaw.json"
+        else
+            __tac_info "Config" "[NOT FOUND: $OC_ROOT/openclaw.json]" "$C_Warning"
+        fi
+        return 0
+    fi
     if [[ -f "$OC_ROOT/openclaw.json" ]]; then
         __vsc_open "$OC_ROOT/openclaw.json"
     else

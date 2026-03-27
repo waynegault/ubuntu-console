@@ -10,23 +10,43 @@
 #           tac-exec model list
 #           tac-exec so
 #
+# Special modes:
+#   --read  - For VS Code commands: output file content instead of opening editor
+#   Environment: TAC_READ_MODE=1 also enables read mode
+#
 # How:      Sources env.sh (which loads modules 01-12), then executes the
 #           given command with all arguments.
 # ==============================================================================
-set -euo pipefail
+set -eo pipefail
 
 _tac_exec_bin="$(readlink -f "${BASH_SOURCE[0]}")"
 _tac_exec_root="$(cd "$(dirname "$_tac_exec_bin")/.." && pwd)"
+
+# Change to home directory for consistent context
+cd ~ || exit 1
+
+# Check for read mode (for AI agents - output file content instead of opening VS Code)
+if [[ "${1:-}" == "--read" ]] || [[ "${TAC_READ_MODE:-}" == "1" ]]
+then
+    export TAC_READ_MODE=1
+    if [[ "${1:-}" == "--read" ]]
+    then
+        shift
+    fi
+fi
+
 # shellcheck disable=SC1091
 source "$_tac_exec_root/env.sh"
 
 if [[ $# -eq 0 ]]; then
     echo "Usage: tac-exec <command> [args...]"
+    echo "       tac-exec --read <command>  # Read files instead of opening VS Code"
     echo "Runs <command> with full Tactical Console functions available."
     exit 1
 fi
 
-"$@"
+# Execute command and capture all output
+"$@" 2>&1
 
 unset _tac_exec_bin _tac_exec_root
 

@@ -147,18 +147,22 @@ function custom_prompt_command() {
 # Prepend custom_prompt_command to PROMPT_COMMAND if not already present.
 # Uses the ${var:+;$var} idiom to avoid a leading semicolon when PROMPT_COMMAND
 # is empty. This chains with any pre-existing PROMPT_COMMAND entries.
-if [[ "$PROMPT_COMMAND" != *"custom_prompt_command"* ]]
+# Guard: Only set up interactive prompt features in interactive shells.
+if [[ -n "${PS1:-}" ]]
 then
-    PROMPT_COMMAND="custom_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
-fi
+    if [[ "${PROMPT_COMMAND:-}" != *"custom_prompt_command"* ]]
+    then
+        PROMPT_COMMAND="custom_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+    fi
 
-# Print a blank line before every command's output so there is visual breathing
-# room between the prompt and the result.  The __tac_preexec_fired guard ensures
-# the newline prints only once per interactive command (not again for each
-# pipeline segment, PROMPT_COMMAND, or subshell).
-__tac_preexec_fired=0
-trap '[[ "$BASH_COMMAND" == "$PROMPT_COMMAND" || "$BASH_COMMAND" == custom_prompt_command ]] || \
-      (( __tac_preexec_fired )) || { __tac_preexec_fired=1; echo; }' DEBUG
+    # Print a blank line before every command's output so there is visual breathing
+    # room between the prompt and the result.  The __tac_preexec_fired guard ensures
+    # the newline prints only once per interactive command (not again for each
+    # pipeline segment, PROMPT_COMMAND, or subshell).
+    __tac_preexec_fired=0
+    trap '[[ "$BASH_COMMAND" == "$PROMPT_COMMAND" || "$BASH_COMMAND" == custom_prompt_command ]] || \
+          (( __tac_preexec_fired )) || { __tac_preexec_fired=1; echo; }' DEBUG
+fi
 
 # ---------------------------------------------------------------------------
 # __test_port — Instant port check via kernel socket table (returns 0 if listening).

@@ -48,10 +48,27 @@ function __threshold_color() {
 # Usage: __vsc_open <filepath> [confirmation_message]
 # Deduplicates the repeated __resolve_vscode_bin + "$VSCODE_BIN" pattern
 # used by oedit, llmconf, oclogs, occonf, mlogs, and any future wrappers.
+# 
+# Read Mode: If TAC_READ_MODE=1 is set, outputs file content instead of
+# opening VS Code (for AI agents like Hal).
 # ---------------------------------------------------------------------------
 function __vsc_open() {
     local target="$1"
     local msg="${2:-VS Code opened...}"
+
+    # Read mode: output file content instead of opening VS Code
+    if [[ "${TAC_READ_MODE:-}" == "1" ]]
+    then
+        if [[ -f "$target" ]]
+        then
+            printf '%s\n' "=== $target ==="
+            cat "$target"
+        else
+            __tac_info "File" "[NOT FOUND: $target]" "$C_Error"
+            return 1
+        fi
+        return 0
+    fi
 
     __resolve_vscode_bin
     if [[ -z "${VSCODE_BIN:-}" || ! -x "$VSCODE_BIN" ]]

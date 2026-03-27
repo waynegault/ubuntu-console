@@ -948,9 +948,20 @@ function __model_scan() {
 # @returns 0 on success, 1 if the registry does not exist.
 # ---------------------------------------------------------------------------
 function __model_list() {
+    local output_mode="human"
+    case "${1:-}" in
+        --json) output_mode="json" ;;
+        --plain) output_mode="plain" ;;
+    esac
+
     if [[ ! -f "$LLM_REGISTRY" ]]
     then
-        __tac_info "Registry" "[Not found - run 'model scan' first]" "$C_Warning"
+        if [[ "$output_mode" == "json" ]]
+        then
+            printf '{"error":"Registry not found","registry":"%s"}\n' "$LLM_REGISTRY"
+        else
+            __tac_info "Registry" "[Not found - run 'model scan' first]" "$C_Warning"
+        fi
         return 1
     fi
 
@@ -959,6 +970,52 @@ function __model_list() {
     local default_file=""
     default_file=$(__llm_default_file 2>/dev/null || true)
 
+    if [[ "$output_mode" == "json" ]]
+    then
+        printf '{\n  "models": [\n'
+        local first=1
+        while IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps
+        do
+            [[ "$num" == "#" || -z "$num" ]] && continue
+            local is_active="false"
+            local is_default="false"
+            [[ "$num" == "$active_num" ]] && pgrep -x llama-server >/dev/null 2>&1 && is_active="true"
+            [[ "$file" == "$default_file" ]] && is_default="true"
+            (( first )) || printf ',\n'
+            printf '    {"num":%s,"name":"%s","file":"%s","size":"%s","arch":"%s","quant":"%s","gpu_layers":%s,"ctx":%s,"active":%s,"default":%s}' \
+                "$num" "$(__llm_json_escape "$name")" "$(__llm_json_escape "$file")" "$size" \
+                "$(__llm_json_escape "$arch")" "$quant" "$gpu_layers" "$ctx" "$is_active" "$is_default"
+            first=0
+        done < "$LLM_REGISTRY"
+        printf '\n  ],\n'
+        local d_used_bytes d_total_bytes d_avail_bytes d_pct_n
+        d_used_bytes=$(df -B1 --output=used "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk 'NR==2{print $1+0}')
+        d_used_bytes=${d_used_bytes:-0}
+        d_total_bytes=$LLAMA_DRIVE_SIZE
+        d_avail_bytes=$(( d_total_bytes - d_used_bytes ))
+        (( d_avail_bytes < 0 )) && d_avail_bytes=0
+        d_pct_n=$(( d_total_bytes > 0 ? d_used_bytes * 100 / d_total_bytes : 0 ))
+        printf '  "drive": {"used_gb":%d,"total_gb":%d,"avail_gb":%d,"pct":%d}\n}' \
+            "$((d_used_bytes / 1024 / 1024 / 1024))" "$((d_total_bytes / 1024 / 1024 / 1024))" \
+            "$((d_avail_bytes / 1024 / 1024 / 1024))" "$d_pct_n"
+        return 0
+    fi
+
+    if [[ "$output_mode" == "plain" ]]
+    then
+        while IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps
+        do
+            [[ "$num" == "#" || -z "$num" ]] && continue
+            local status="idle"
+            [[ "$num" == "$active_num" ]] && pgrep -x llama-server >/dev/null 2>&1 && status="active"
+            [[ "$file" == "$default_file" ]] && status="default"
+            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+                "$num" "$name" "$size" "$quant" "$arch" "$gpu_layers" "$ctx" "$threads" "${tps:--}" "$status" "$file"
+        done < "$LLM_REGISTRY"
+        return 0
+    fi
+
+    # Human-readable output
     printf "\n${C_Dim}  %-4s %-30s %-7s %-8s %-9s %-4s %-5s %-4s %s${C_Reset}\n" \
         "#" "MODEL" "SIZE" "QUANT" "ARCH" "GPU" "CTX" "THR" "TPS"
     local _list_rule
@@ -1365,7 +1422,7 @@ function __model_status() {
             health_color="$C_Warning"
         fi
         local tps
-        tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
+        tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null) || true
         if [[ "$output_mode" == "json" ]]
         then
             printf '{'
@@ -2426,7 +2483,7 @@ function model() {
             ;;
 
         list)
-            __model_list
+            __model_list "$@"
             ;;
 
         default)
@@ -2528,7 +2585,20 @@ function halt() {
 }
 
 # mlogs — Open the llama-server log file in VS Code.
+# In read mode (TAC_READ_MODE=1): outputs log content instead.
 function mlogs() {
+    if [[ "${TAC_READ_MODE:-}" == "1" ]]
+    then
+        if [[ -f "$LLM_LOG_FILE" ]]
+        then
+            printf '%s\n' "=== $LLM_LOG_FILE ==="
+            tail -100 "$LLM_LOG_FILE"
+        else
+            __tac_info "LLM Log" "[NOT FOUND: $LLM_LOG_FILE]" "$C_Warning"
+            printf '%s\n' "  ${C_Dim}LLM may not have started yet.${C_Reset}"
+        fi
+        return 0
+    fi
     __resolve_vscode_bin
     "$VSCODE_BIN" "$LLM_LOG_FILE"
     echo "VS Code opened..."

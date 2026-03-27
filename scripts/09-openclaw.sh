@@ -64,11 +64,11 @@ function __so_check_healthy() {
     then
         if pgrep -x llama-server >/dev/null 2>&1 && __test_port "${LLM_PORT:-8081}"
         then
-            __tac_info "Local LLM" "[RUNNING]" "$C_Success"
+            __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT]" "$C_Success"
         else
-            __tac_info "Local LLM" "[OFFLINE]" "$C_Warning"
+            __tac_info "Local LLM" "[OFFLINE]" "$C_Error"
         fi
-        __tac_info "Gateway" "[ALREADY RUNNING] (port $OC_PORT)" "$C_Warning"
+        __tac_info "Gateway" "[RUNNING on PORT $OC_PORT]" "$C_Success"
         return 0
     fi
     return 1
@@ -197,9 +197,9 @@ function __so_ensure_llm_running() {
         then
             local _so_mname
             IFS='|' read -r _ _so_mname _ <<< "$_so_entry"
-            __tac_info "Local LLM" "[RUNNING] #${_so_active_num} ${_so_mname}" "$C_Success"
+            __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT] #${_so_active_num} ${_so_mname}" "$C_Success"
         else
-            __tac_info "Local LLM" "[RUNNING]" "$C_Success"
+            __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT]" "$C_Success"
         fi
         return 0
     fi
@@ -263,7 +263,7 @@ function __so_ensure_llm_running() {
     # Verify LLM is healthy
     if __llm_is_healthy
     then
-        __tac_info "Local LLM" "[ONLINE] ${_so_model_name} (${_sw}s)" "$C_Success"
+        __tac_info "Local LLM" "[ONLINE on PORT $LLM_PORT] ${_so_model_name} (${_sw}s)" "$C_Success"
         return 0
     fi
 
