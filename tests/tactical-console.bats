@@ -1434,7 +1434,8 @@ setup() {
 
 @test "maintenance: cl function runs without error" {
     pushd "$TAC_TEST_TMPDIR" >/dev/null
-    run cl
+    # Use --light mode to avoid slow full-home-directory scans (find ~ -xtype l)
+    run cl --light
     [ "$status" -eq 0 ]
     [[ "$output" == *"Sanitation"* ]]
     popd >/dev/null
