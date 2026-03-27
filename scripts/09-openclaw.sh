@@ -227,6 +227,9 @@ function __so_ensure_llm_running() {
 
     __tac_info "Local LLM" "[OFFLINE]" "$C_Warning"
 
+    # Enable GPU persistence mode before starting the model
+    wake 2>/dev/null || true
+
     # Start the default LLM in background with spinner
     { serve &>/dev/null & } 2>/dev/null
     local _serve_pid=$!
