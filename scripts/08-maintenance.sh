@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -470,15 +470,114 @@ function up() {
         __tac_line "[6/13] OpenClaw Framework" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [7/13] Python Venv (a.k.a. "Cloaking" = active virtual environment isolation)
-    if [[ -n "$VIRTUAL_ENV" ]]
+    # [7/13] OpenClaw Plugin Updates — pull latest from upstream for path-installed plugins.
+    # Checks gigabrain, lossless-claw, and OpenStinger for git updates.
+    if __check_cooldown "oc_plugins" "$now" hours_left "$force_mode"
     then
-        __tac_line "[7/13] Python Venv Cloaking" "[$(basename "$VIRTUAL_ENV")]" "$C_Success"
+        local plugin_updated=0 plugin_err=0
+        local plugins_dir="$HOME/.openclaw/extensions"
+        local vendor_dir="$HOME/.openclaw/vendor"
+
+        # gigabrain plugin update check
+        if [[ -d "$plugins_dir/gigabrain" ]]
+        then
+            if [[ -d "$plugins_dir/gigabrain/.git" ]]
+            then
+                # Full git repo — pull from upstream
+                local gb_remote
+                gb_remote=$(git -C "$plugins_dir/gigabrain" remote get-url origin 2>/dev/null || echo "")
+                if [[ "$gb_remote" == *"legendaryvibecoder/gigabrain"* ]]
+                then
+                    if git -C "$plugins_dir/gigabrain" pull --ff-only >/dev/null 2>&1
+                    then
+                        __tac_line "[7/13] Gigabrain Plugin" "[UPDATED]" "$C_Success"
+                        plugin_updated=1
+                    else
+                        __tac_line "[7/13] Gigabrain Plugin" "[UP TO DATE]" "$C_Dim"
+                    fi
+                else
+                    __tac_line "[7/13] Gigabrain Plugin" "[SKIP - custom remote]" "$C_Dim"
+                fi
+            else
+                __tac_line "[7/13] Gigabrain Plugin" "[SKIP - not a git repo]" "$C_Dim"
+            fi
+        else
+            __tac_line "[7/13] Gigabrain Plugin" "[NOT INSTALLED]" "$C_Dim"
+        fi
+
+        # lossless-claw plugin update check
+        if [[ -d "$plugins_dir/lossless-claw" ]]
+        then
+            if [[ -d "$plugins_dir/lossless-claw/.git" ]]
+            then
+                # Full git repo — pull from upstream
+                local lc_remote
+                lc_remote=$(git -C "$plugins_dir/lossless-claw" remote get-url origin 2>/dev/null || echo "")
+                if [[ "$lc_remote" == *"Martian-Engineering/lossless-claw"* ]]
+                then
+                    if git -C "$plugins_dir/lossless-claw" pull --ff-only >/dev/null 2>&1
+                    then
+                        __tac_line "[8/13] Lossless-Claw Plugin" "[UPDATED]" "$C_Success"
+                        plugin_updated=1
+                    else
+                        __tac_line "[8/13] Lossless-Claw Plugin" "[UP TO DATE]" "$C_Dim"
+                    fi
+                else
+                    __tac_line "[8/13] Lossless-Claw Plugin" "[SKIP - custom remote]" "$C_Dim"
+                fi
+            else
+                __tac_line "[8/13] Lossless-Claw Plugin" "[SKIP - not a git repo]" "$C_Dim"
+            fi
+        else
+            __tac_line "[8/13] Lossless-Claw Plugin" "[NOT INSTALLED]" "$C_Dim"
+        fi
+
+        # OpenStinger update check
+        if [[ -d "$vendor_dir/openstinger" ]]
+        then
+            if [[ -d "$vendor_dir/openstinger/.git" ]]
+            then
+                # Full git repo — pull from upstream
+                local os_remote
+                os_remote=$(git -C "$vendor_dir/openstinger" remote get-url origin 2>/dev/null || echo "")
+                if [[ "$os_remote" == *"srikanthbellary/openstinger"* ]]
+                then
+                    if git -C "$vendor_dir/openstinger" pull --ff-only >/dev/null 2>&1
+                    then
+                        __tac_line "[9/13] OpenStinger" "[UPDATED]" "$C_Success"
+                        plugin_updated=1
+                    else
+                        __tac_line "[9/13] OpenStinger" "[UP TO DATE]" "$C_Dim"
+                    fi
+                else
+                    __tac_line "[9/13] OpenStinger" "[SKIP - custom remote]" "$C_Dim"
+                fi
+            else
+                __tac_line "[9/13] OpenStinger" "[SKIP - not a git repo]" "$C_Dim"
+            fi
+        else
+            __tac_line "[9/13] OpenStinger" "[NOT INSTALLED]" "$C_Dim"
+        fi
+
+        if (( plugin_updated == 1 ))
+        then
+            __set_cooldown "oc_plugins" "$now"
+        else
+            __tac_line "[7/13] OpenClaw Plugins" "[ALL UP TO DATE]" "$C_Dim"
+        fi
     else
-        __tac_line "[7/13] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
+        __tac_line "[7/13] OpenClaw Plugins" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [8/13] Python Fleet
+    # [8/13] Python Venv (a.k.a. "Cloaking" = active virtual environment isolation)
+    if [[ -n "$VIRTUAL_ENV" ]]
+    then
+        __tac_line "[8/13] Python Venv Cloaking" "[$(basename "$VIRTUAL_ENV")]" "$C_Success"
+    else
+        __tac_line "[8/13] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
+    fi
+
+    # [9/13] Python Fleet
     if __check_cooldown "pyfleet" "$now" hours_left "$force_mode"
     then
         local py_versions=()
@@ -494,17 +593,17 @@ function up() {
             do
                 v_list+=("$(basename "$py")")
             done
-            __tac_line "[8/13] Python Fleet" "[${v_list[*]} VERIFIED]" "$C_Success"
+            __tac_line "[9/13] Python Fleet" "[${v_list[*]} VERIFIED]" "$C_Success"
             __set_cooldown "pyfleet" "$now"
         else
-            __tac_line "[8/13] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
+            __tac_line "[9/13] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
             ((errCount++))
         fi
     else
-        __tac_line "[8/13] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[9/13] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [9/13] GPU Checks — __get_gpu returns CSV or a sentinel string.
+    # [10/13] GPU Checks — __get_gpu returns CSV or a sentinel string.
     # Sentinels: "N/A" (no nvidia-smi), "Querying..." (first-boot cache miss),
     # or contains "OFFLINE" (driver crash / WSL GPU passthrough failure).
     local gpu
@@ -512,13 +611,13 @@ function up() {
 
     if [[ "$gpu" != "N/A" && "$gpu" != "Querying..." && "$gpu" != *"OFFLINE"* ]]
     then
-        __tac_line "[10/13] RTX 3050 Ti" "[READY]" "$C_Success"
+        __tac_line "[11/13] RTX 3050 Ti" "[READY]" "$C_Success"
     else
-        __tac_line "[9/13] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
+        __tac_line "[10/13] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
         ((errCount++))
     fi
 
-    # [10/13] Sanitation — clean known temp locations, NOT the user's $PWD.
+    # [11/13] Sanitation — clean known temp locations, NOT the user's $PWD.
     # Only removes temp artifacts from /tmp/openclaw and the OC_ROOT directory.
     local count=0
     if [[ -d /tmp/openclaw ]]
@@ -528,9 +627,9 @@ function up() {
             rm -f "$_tmpf" && ((count++))
         done < <(find /tmp/openclaw \( -name '*.tmp' -o -name 'python-*.exe' \) -print0 2>/dev/null)
     fi
-    __tac_line "[10/13] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
+    __tac_line "[12/13] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
 
-    # [11/13] Disk Space Audit — warn if any mount point exceeds 90%
+    # [12/13] Disk Space Audit — warn if any mount point exceeds 90%
     local disk_warn=0
     while read -r pct mount
     do
@@ -539,16 +638,16 @@ function up() {
         [[ ! "$pct_num" =~ ^[0-9]+$ ]] && continue
         if (( pct_num >= 90 ))
         then
-            __tac_line "[11/13] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
+            __tac_line "[13/13] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
             disk_warn=1
             ((errCount++))
         fi
     done < <(df -h --output=pcent,target 2>/dev/null \
         | tail -n +2 | grep -v '/snap/' \
         | grep -v '/mnt/wsl/docker-desktop')
-    (( disk_warn == 0 )) && __tac_line "[11/13] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
+    (( disk_warn == 0 )) && __tac_line "[13/13] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
 
-    # [12/13] Stale Process Cleanup — kill orphaned llama-server instances.
+    # [14/16] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).
     # Per-PID check: only kill processes that are NOT listening on LLM_PORT.
     local stale_pids
@@ -564,47 +663,47 @@ function up() {
         fi
         if (( _state_age < 60 ))
         then
-            __tac_line "[12/13] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
+            __tac_line "[14/16] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
         else
             pkill -u "$USER" -x llama-server 2>/dev/null
             rm -f "$ACTIVE_LLM_FILE"
-            __tac_line "[12/13] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
+            __tac_line "[14/16] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
         fi
     else
-        __tac_line "[12/13] Stale Processes" "[CLEAN]" "$C_Success"
+        __tac_line "[14/16] Stale Processes" "[CLEAN]" "$C_Success"
     fi
 
-    # [13/13] Documentation drift guard — lightweight README accuracy check.
+    # [15/16] Documentation drift guard — lightweight README accuracy check.
     if __check_cooldown "docs_sync" "$now" hours_left "$force_mode"
     then
         if __docs_sync_check
         then
-            __tac_line "[13/13] README Sync" "[OK]" "$C_Success"
+            __tac_line "[15/16] README Sync" "[OK]" "$C_Success"
         else
-            __tac_line "[13/13] README Sync" "[DRIFT DETECTED]" "$C_Warning"
+            __tac_line "[15/16] README Sync" "[DRIFT DETECTED]" "$C_Warning"
             ((errCount++))
         fi
         __set_cooldown "docs_sync" "$now"
     else
-        __tac_line "[13/13] README Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[15/16] README Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [14/14] Docker Prune — clean unused containers, images, and build cache.
+    # [16/16] Docker Prune — clean unused containers, images, and build cache.
     if command -v docker >/dev/null 2>&1
     then
         local docker_freed
         docker_freed=$(docker system prune -f --volumes 2>&1 | grep "Total reclaimed space" | grep -oP '[\d.]+[MGK]B' || echo "")
         if [[ -n "$docker_freed" ]]
         then
-            __tac_line "[14/14] Docker Prune" "[FREED $docker_freed]" "$C_Success"
+            __tac_line "[16/16] Docker Prune" "[FREED $docker_freed]" "$C_Success"
         else
-            __tac_line "[14/14] Docker Prune" "[CLEAN]" "$C_Dim"
+            __tac_line "[16/16] Docker Prune" "[CLEAN]" "$C_Dim"
         fi
     else
-        __tac_line "[14/14] Docker Prune" "[SKIP - Docker not installed]" "$C_Dim"
+        __tac_line "[16/16] Docker Prune" "[SKIP - Docker not installed]" "$C_Dim"
     fi
 
-    # [15/15] NPM Cache Clean — verify and clean npm cache.
+    # [17/16] NPM Cache Clean — verify and clean npm cache.
     if command -v npm >/dev/null 2>&1
     then
         local npm_cache_result
@@ -613,15 +712,15 @@ function up() {
         then
             local cleaned_size
             cleaned_size=$(echo "$npm_cache_result" | grep -oP '[\d.]+[MGK]B' || echo "unknown")
-            __tac_line "[15/15] NPM Cache Clean" "[FREED $cleaned_size]" "$C_Success"
+            __tac_line "[17/16] NPM Cache Clean" "[FREED $cleaned_size]" "$C_Success"
         elif [[ "$npm_cache_result" == *"Cache size"* ]]
         then
-            __tac_line "[15/15] NPM Cache Clean" "[NO ACTION NEEDED]" "$C_Dim"
+            __tac_line "[17/16] NPM Cache Clean" "[NO ACTION NEEDED]" "$C_Dim"
         else
-            __tac_line "[15/15] NPM Cache Clean" "[VERIFIED]" "$C_Dim"
+            __tac_line "[17/16] NPM Cache Clean" "[VERIFIED]" "$C_Dim"
         fi
     else
-        __tac_line "[15/15] NPM Cache Clean" "[SKIP - NPM not installed]" "$C_Dim"
+        __tac_line "[17/16] NPM Cache Clean" "[SKIP - NPM not installed]" "$C_Dim"
     fi
 
     __tac_divider

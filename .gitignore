@@ -53,3 +53,5 @@ logs/
 # OS generated
 .DS_Store
 Thumbs.db
+scripts/__pycache__
+tests/__pycache__

@@ -1478,9 +1478,10 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
         keep_edges = []
         keep_nodes = set()
         seen = set()
-        concept_types = {'topic', 'project', 'decision', 'issue', 'outcome', 'actor', 'person', 'organization', 'place'}
+        concept_types = {'topic', 'project', 'decision', 'issue', 'outcome', 'actor', 'person', 'organization', 'place', 'chunk'}
         anchor_types = {'project', 'decision', 'issue', 'outcome'}
-        preferred_semantic_types = {'project', 'decision', 'issue', 'outcome', 'actor', 'person', 'organization', 'place'}
+        preferred_semantic_types = {'project', 'decision', 'issue', 'outcome', 'actor', 'person', 'organization', 'place', 'chunk'}
+        life_index = load_life_index()
         concept_nodes = {}
         summary_to_concepts = {}
         chunk_to_concepts = {}
@@ -1698,6 +1699,9 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
                     if len(fallback_pairs) >= 10:
                         break
             for src, dst, label, payload in fallback_pairs:
+                score = float((payload or {}).get('semantic_score', 0) or 0)
+                if score < semantic_threshold:
+                    continue
                 dedupe_append(keep_edges, seen, src, dst, label, payload or None)
                 keep_nodes.add(src)
                 keep_nodes.add(dst)
@@ -1735,6 +1739,10 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
         if mode == 'topics':
             if ntype in {'topic', 'actor', 'project', 'decision', 'issue', 'outcome', 'person', 'organization', 'place'}:
                 out_nodes[nid] = node
+        elif mode == 'semantic':
+            # In semantic mode, only include nodes that have semantic relationships
+            if ntype in semantic_core_types or ntype in {'chunk', 'actor'}:
+                out_nodes[nid] = node
         else:  # overview
             if ntype == 'chunk':
                 continue
@@ -1742,8 +1750,9 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
                 out_nodes[nid] = node
                 continue
             if ntype == 'file':
+                out_nodes[nid] = node
                 continue
-            if is_curated_node(node) and ntype not in {'file'}:
+            if is_curated_node(node):
                 out_nodes[nid] = node
 
     for edge in edges:
@@ -1767,6 +1776,13 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
                 continue
             if src_type == 'chunk' and dst_type == 'file' and label == 'references file':
                 continue
+        elif mode == 'semantic':
+            # In semantic mode, include all edges with semantic_score for later threshold filtering
+            if src in out_nodes and dst in out_nodes:
+                if edge.get('semantic_score') is not None:
+                    payload = {'semantic_score': edge.get('semantic_score')}
+                    dedupe_append(out_edges, seen_edges, src, dst, label, payload)
+                    continue
         else:  # overview
             if src in out_nodes and dst in out_nodes and label != 'contains chunk':
                 if src_type == 'file' and dst_type in {'topic', 'actor', 'project', 'decision', 'issue', 'outcome'} and label in curated_edge_labels:
@@ -1779,10 +1795,11 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
                     payload = {'semantic_score': edge.get('semantic_score')}
                 dedupe_append(out_edges, seen_edges, src, dst, label, payload)
                 continue
+            # Handle chunk-derived edges: lift them to file level
             if src_type == 'chunk' and dst in out_nodes:
                 parent_file = file_from_chunk(src)
-                if parent_file in out_nodes:
-                    mapped_label = 'file ' + label if label not in {'references file'} else 'references file'
+                if parent_file and parent_file in out_nodes:
+                    mapped_label = 'file ' + label if not label.startswith('file ') and label not in {'references file'} else 'references file'
                     if label in {'has project', 'has decision', 'has issue', 'has outcome'}:
                         dedupe_append(out_edges, seen_edges, parent_file, dst, label)
                     elif mapped_label in curated_edge_labels or label in curated_edge_labels:

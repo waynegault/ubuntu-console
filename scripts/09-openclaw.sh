@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 10
+# Module Version: 13
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -1680,8 +1680,107 @@ function oc-plugins() {
         doctor)  openclaw plugins doctor ;;
         enable)  openclaw plugins enable "$2" ;;
         disable) openclaw plugins disable "$2" ;;
-        *)       echo "Usage: oc-plugins {list|doctor|enable|disable} [id]" ;;
+        update)  oc-plugin-update "$2" ;;
+        *)       echo "Usage: oc-plugins {list|doctor|enable|disable|update} [id]" ;;
     esac
+}
+
+# ---------------------------------------------------------------------------
+# oc-plugin-update — Update OpenClaw plugins from upstream git repos.
+# Usage: oc-plugin-update [plugin-id|--all]
+# Updates gigabrain, lossless-claw, and OpenStinger from their GitHub repos.
+# ---------------------------------------------------------------------------
+function oc-plugin-update() {
+    local plugin_id="${1:---all}"
+    local plugins_dir="$HOME/.openclaw/extensions"
+    local vendor_dir="$HOME/.openclaw/vendor"
+    local updated=0
+
+    __tac_header "OPENCLAW PLUGIN UPDATE" "open"
+
+    update_plugin() {
+        local id="$1" repo_url="$2" target_dir="$3"
+        local plugin_dir="$target_dir/$id"
+
+        if [[ ! -d "$plugin_dir" ]]
+        then
+            # Not installed — clone fresh
+            __tac_info "$id" "[INSTALLING from $repo_url]" "$C_Success"
+            if git clone --depth 1 "$repo_url" "$plugin_dir" 2>&1
+            then
+                __tac_line "$id" "[INSTALLED]" "$C_Success"
+                return 0
+            else
+                __tac_line "$id" "[INSTALL FAILED]" "$C_Error"
+                return 1
+            fi
+        elif [[ -d "$plugin_dir/.git" ]]
+        then
+            # Git repo — pull updates
+            local current_remote
+            current_remote=$(git -C "$plugin_dir" remote get-url origin 2>/dev/null || echo "")
+            if [[ "$current_remote" == *"$repo_url"* ]]
+            then
+                if git -C "$plugin_dir" pull --ff-only >/dev/null 2>&1
+                then
+                    __tac_line "$id" "[UPDATED]" "$C_Success"
+                    return 0
+                else
+                    __tac_line "$id" "[UP TO DATE]" "$C_Dim"
+                    return 0
+                fi
+            else
+                __tac_line "$id" "[SKIP - different remote]" "$C_Warning"
+                __tac_info "  Current" "$current_remote" "$C_Dim"
+                __tac_info "  Expected" "$repo_url" "$C_Dim"
+                return 1
+            fi
+        else
+            # Not a git repo — offer to reinstall
+            __tac_line "$id" "[REINSTALL REQUIRED]" "$C_Warning"
+            __tac_info "  Reason" "Not a git repository" "$C_Dim"
+            __tac_info "  Action" "Run: rm -rf '$plugin_dir' && oc-plugin-update $id" "$C_Dim"
+            return 1
+        fi
+    }
+
+    case "$plugin_id" in
+        gigabrain)
+            update_plugin "gigabrain" "https://github.com/legendaryvibecoder/gigabrain.git" "$plugins_dir"
+            (( $? == 0 )) && ((updated++))
+            ;;
+        lossless-claw)
+            update_plugin "lossless-claw" "https://github.com/Martian-Engineering/lossless-claw.git" "$plugins_dir"
+            (( $? == 0 )) && ((updated++))
+            ;;
+        openstinger)
+            update_plugin "openstinger" "https://github.com/srikanthbellary/openstinger.git" "$vendor_dir"
+            (( $? == 0 )) && ((updated++))
+            ;;
+        --all|"")
+            update_plugin "gigabrain" "https://github.com/legendaryvibecoder/gigabrain.git" "$plugins_dir"
+            (( $? == 0 )) && ((updated++))
+            update_plugin "lossless-claw" "https://github.com/Martian-Engineering/lossless-claw.git" "$plugins_dir"
+            (( $? == 0 )) && ((updated++))
+            update_plugin "openstinger" "https://github.com/srikanthbellary/openstinger.git" "$vendor_dir"
+            (( $? == 0 )) && ((updated++))
+            ;;
+        *)
+            __tac_info "Error" "Unknown plugin: $plugin_id" "$C_Error"
+            __tac_info "Usage" "oc-plugin-update [gigabrain|lossless-claw|openstinger|--all]" "$C_Dim"
+            return 1
+            ;;
+    esac
+
+    __tac_divider
+    if (( updated > 0 ))
+    then
+        __tac_line "Update Status" "[$updated plugin(s) processed]" "$C_Success"
+        __tac_info "Note" "Run 'openclaw plugins doctor' to verify" "$C_Dim"
+    else
+        __tac_line "Update Status" "[NO UPDATES]" "$C_Dim"
+    fi
+    __tac_footer
 }
 
 # ---------------------------------------------------------------------------
@@ -1712,6 +1811,145 @@ function oc-channels() {
 # ---------------------------------------------------------------------------
 function oc-sec() {
     openclaw security audit --deep
+}
+
+# ---------------------------------------------------------------------------
+# oc-stinger — OpenStinger MCP memory server management.
+# Usage: oc-stinger {start|stop|status|logs|progress|doctor|restart}
+# ---------------------------------------------------------------------------
+function oc-stinger() {
+    local action="${1:-status}"
+    local os_dir="$HOME/.openclaw/vendor/openstinger"
+    local os_script="$os_dir/scripts/start.sh"
+    local os_venv_python="$os_dir/.venv/bin/python"
+
+    case "$action" in
+        start)
+            __tac_header "OPENSTINGER START" "open"
+            # Start FalkorDB + PostgreSQL
+            if docker compose -f "$os_dir/docker-compose.yml" up -d 2>&1
+            then
+                __tac_line "Containers" "[STARTED]" "$C_Success"
+            else
+                __tac_line "Containers" "[FAILED]" "$C_Error"
+                return 1
+            fi
+            sleep 2
+            # Start Gradient MCP server (Tier 3) in background
+            if pgrep -f "openstinger.gradient.mcp.server" >/dev/null 2>&1
+            then
+                __tac_line "MCP Server" "[ALREADY RUNNING]" "$C_Dim"
+            else
+                cd "$os_dir" && source "$os_dir/.venv/bin/activate" && \
+                    nohup "$os_venv_python" -m openstinger.gradient.mcp.server \
+                    > "$os_dir/.openstinger/openstinger.log" 2>&1 &
+                sleep 3
+                if pgrep -f "openstinger.gradient.mcp.server" >/dev/null 2>&1
+                then
+                    __tac_line "MCP Server (Gradient)" "[STARTED on port 8766]" "$C_Success"
+                else
+                    __tac_line "MCP Server" "[FAILED - check logs]" "$C_Error"
+                fi
+            fi
+            __tac_footer
+            ;;
+        stop)
+            __tac_header "OPENSTINGER STOP" "open"
+            # Stop MCP server
+            if pkill -f "openstinger.mcp.server" 2>/dev/null || \
+               pkill -f "openstinger.gradient.mcp.server" 2>/dev/null
+            then
+                __tac_line "MCP Server" "[STOPPED]" "$C_Success"
+            else
+                __tac_line "MCP Server" "[NOT RUNNING]" "$C_Dim"
+            fi
+            # Stop containers
+            if docker compose -f "$os_dir/docker-compose.yml" down 2>&1
+            then
+                __tac_line "Containers" "[STOPPED]" "$C_Success"
+            else
+                __tac_line "Containers" "[FAILED]" "$C_Warning"
+            fi
+            __tac_footer
+            ;;
+        restart)
+            oc-stinger stop
+            sleep 2
+            oc-stinger start
+            ;;
+        status)
+            __tac_header "OPENSTINGER STATUS" "open"
+            # Check MCP server
+            if pgrep -f "openstinger.gradient.mcp.server" >/dev/null 2>&1
+            then
+                __tac_line "MCP Server (Gradient)" "[RUNNING]" "$C_Success"
+            elif pgrep -f "openstinger.mcp.server" >/dev/null 2>&1
+            then
+                __tac_line "MCP Server (Tier 1)" "[RUNNING]" "$C_Success"
+            else
+                __tac_line "MCP Server" "[STOPPED]" "$C_Warning"
+            fi
+            # Check FalkorDB (container name pattern: openstinger-*falkordb*)
+            if docker ps --filter "name=falkordb" --format "{{.Status}}" 2>/dev/null | grep -q "Up"
+            then
+                __tac_line "FalkorDB" "[RUNNING]" "$C_Success"
+            else
+                __tac_line "FalkorDB" "[STOPPED]" "$C_Warning"
+            fi
+            # Check PostgreSQL (for Gradient tier)
+            if docker ps --filter "name=openstinger-postgres" --format "{{.Status}}" 2>/dev/null | grep -q "Up"
+            then
+                __tac_line "PostgreSQL" "[RUNNING]" "$C_Success"
+            else
+                __tac_line "PostgreSQL" "[NOT RUNNING]" "$C_Dim"
+            fi
+            # Check database
+            if [[ -f "$os_dir/.openstinger/openstinger.db" ]]
+            then
+                local db_size
+                db_size=$(du -h "$os_dir/.openstinger/openstinger.db" 2>/dev/null | cut -f1)
+                __tac_line "SQLite DB" "[$db_size]" "$C_Success"
+            else
+                __tac_line "SQLite DB" "[NOT FOUND]" "$C_Warning"
+            fi
+            # Check SSE endpoint
+            if curl -s --connect-timeout 2 "http://localhost:8766/sse" >/dev/null 2>&1
+            then
+                __tac_line "SSE Endpoint" "[READY on :8766]" "$C_Success"
+            else
+                __tac_line "SSE Endpoint" "[NOT REACHABLE]" "$C_Warning"
+            fi
+            __tac_footer
+            ;;
+        logs)
+            tail -f "$os_dir/.openstinger/openstinger.log" 2>/dev/null || \
+                echo "Log file not found: $os_dir/.openstinger/openstinger.log"
+            ;;
+        progress)
+            if command -v openstinger-cli >/dev/null 2>&1
+            then
+                openstinger-cli progress
+            elif [[ -f "$os_dir/.venv/bin/openstinger-cli" ]]
+            then
+                "$os_dir/.venv/bin/openstinger-cli" progress
+            else
+                __tac_info "Error" "openstinger-cli not found" "$C_Warning"
+                __tac_info "Tip" "Run: cd $os_dir && pip install -e ." "$C_Dim"
+            fi
+            ;;
+        doctor)
+            if [[ -x "$os_script" ]]
+            then
+                "$os_script" doctor
+            else
+                __tac_info "Error" "Doctor script not found: $os_script" "$C_Error"
+            fi
+            ;;
+        *)
+            echo "Usage: oc-stinger {start|stop|status|logs|progress|doctor|restart}"
+            return 1
+            ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------
