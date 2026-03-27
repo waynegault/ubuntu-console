@@ -3,7 +3,7 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================
@@ -26,9 +26,11 @@ then
 fi
 
 # Initialize UI (guard prevents screen-clear on re-source)
+# NOTE: Banner display is deferred to tactical-console.bashrc after version
+# calculation to ensure the correct TACTICAL_PROFILE_VERSION is shown.
 if [[ -z "${__TAC_INITIALIZED:-}" ]]
 then
-    clear_tactical
+    __TAC_DISPLAY_BANNER=1
     __TAC_INITIALIZED=1
 fi
 

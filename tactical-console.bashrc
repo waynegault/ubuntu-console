@@ -68,7 +68,7 @@ esac
 # TACTICAL_PROFILE_VERSION is auto-computed after sourcing all modules:
 #   TACTICAL_PROFILE_VERSION = _TAC_LOADER_VERSION . sum(all module versions)
 #   Example: v3.63 = loader v3 + 63 total module versions
-_TAC_LOADER_VERSION="3"
+_TAC_LOADER_VERSION="4"
 
 # AI INSTRUCTION: Follow these terminal formatting rules strictly:
 # 1. A blank line must exist between the bottom of any UI border and the command prompt.
@@ -188,6 +188,13 @@ fi
 export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
 
 unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv _tac_repo_root _tac_expected_modules _tac_found_count
+
+# Display the initial banner now that TACTICAL_PROFILE_VERSION is set.
+# This ensures the correct version is shown on first terminal open.
+if [[ -n "${__TAC_DISPLAY_BANNER:-}" ]]; then
+    clear_tactical
+    unset __TAC_DISPLAY_BANNER
+fi
 
 # ==============================================================================
 
