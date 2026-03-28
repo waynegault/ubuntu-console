@@ -1604,7 +1604,16 @@ function oc-health() {
     if [[ -n "$health_out" ]]
     then
         local hstatus
-        hstatus=$(jq -r '.status // "unknown"' <<< "$health_out" 2>/dev/null)
+        # Check for .ok == true (gateway is healthy)
+        local ok_val
+        ok_val=$(jq -r '.ok // false' <<< "$health_out" 2>/dev/null)
+        if [[ "$ok_val" == "true" ]]
+        then
+            hstatus="ok"
+        else
+            hstatus=$(jq -r '.status // "unknown"' <<< "$health_out" 2>/dev/null)
+            [[ -z "$hstatus" || "$hstatus" == "null" ]] && hstatus="unknown"
+        fi
         [[ -z "$hstatus" ]] && hstatus="parse_error"
         health_status="$hstatus"
     else
