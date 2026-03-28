@@ -175,7 +175,7 @@ function get-ip() {
 }
 
 # ---------------------------------------------------------------------------
-# up — Run 12-step system maintenance with cooldowns per step.
+# up — Run 17-step system maintenance with cooldowns per step.
 # Usage: up [--force]
 #   --force: Suspend all cooldowns for testing purposes
 # Cooldown functions (__check_cooldown / __set_cooldown) are defined above
@@ -193,6 +193,9 @@ function up() {
         __tac_info "Usage" "[up [--force|-f]]" "$C_Error"
         return 1
     fi
+
+    # Save current working directory to restore after maintenance
+    local original_dir="$PWD"
 
     command clear
     __tac_header "SYSTEM MAINTENANCE" "open"
@@ -743,6 +746,9 @@ function up() {
     echo "$(date -Iseconds),$total_time,$errCount" >> "$metrics_file" 2>/dev/null
 
     __tac_footer
+
+    # Restore original working directory
+    cd "$original_dir" || true
 }
 
 # ---------------------------------------------------------------------------
