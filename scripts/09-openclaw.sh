@@ -534,6 +534,9 @@ function xo() {
 function oc() {
     local sub="${1:-}"
 
+    # Ensure gateway token is available for CLI commands
+    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
+
     # Show help if no subcommand provided
     if [[ -z "$sub" ]]
     then
