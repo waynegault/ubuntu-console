@@ -2086,7 +2086,9 @@ function oc-local-llm() {
 # oc-sync-models — Sync the local model registry with OpenClaw's model scan.
 # ---------------------------------------------------------------------------
 function oc-sync-models() {
-    openclaw models scan --no-probe --yes
+    # Scan all configured providers except OpenRouter (free tier has no tool support)
+    openclaw models scan --no-probe --yes --provider deepseek --provider moonshot --provider google --provider qwen --provider github-copilot --provider xai --provider nvidia 2>/dev/null || \
+    openclaw models scan --no-probe --yes 2>&1 | grep -v "openrouter/"
     __tac_info "Model Registry" "[SYNCED WITH OPENCLAW]" "$C_Success"
 }
 
