@@ -193,8 +193,11 @@ export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
 # OPENCLAW_TOKEN: Gateway authentication token
 export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
 
-# OPENCLAW_PASSWORD: Gateway password auth (fallback)
+# OPENCLAW_PASSWORD: Gateway password auth (moved from config to env)
 export OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-OC!537125Wg}"
+
+# OPENCLAW_GATEWAY_PASSWORD: Alternative env var name (for compatibility)
+export OPENCLAW_GATEWAY_PASSWORD="${OPENCLAW_GATEWAY_PASSWORD:-$OPENCLAW_PASSWORD}"
 
 # ==============================================================================
 #  Startup Optimizations (faster CLI performance)
