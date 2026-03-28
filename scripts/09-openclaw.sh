@@ -2215,23 +2215,8 @@ function oc-diag() {
     __tac_header "OpenClaw Diagnostic Report" "open"
     echo ""
 
-    # Pre-diag: Clean up orphan session files to reduce noise
-    printf '%s\n' "${C_Highlight}[0/5] Cleanup Orphan Sessions${C_Reset}"
-    local orphan_count=0
-    if [[ -d "$OC_AGENTS/main/sessions" ]]
-    then
-        for f in "$OC_AGENTS/main/sessions"/probe-*.jsonl
-        do
-            [[ -f "$f" ]] && mv "$f" "${f}.deleted.$(date +%Y%m%d-%H%M%S)" 2>/dev/null && ((orphan_count++))
-        done
-    fi
-    if (( orphan_count > 0 ))
-    then
-        printf '  %s\n' "${C_Success}● Archived $orphan_count orphan probe session files${C_Reset}"
-    else
-        printf '  %s\n' "${C_Info}● No orphan sessions found${C_Reset}"
-    fi
-    echo ""
+    # Note: Probe session files from ocms are now cleaned up automatically in [3/5]
+    # This section archives truly orphaned session files (deleted from sessions.json)
 
     printf '%s\n' "${C_Highlight}[1/5] openclaw doctor${C_Reset}"
     # Use --fix to avoid interactive prompts, capture output
@@ -2270,8 +2255,19 @@ function oc-diag() {
     echo ""
 
     printf '%s\n' "${C_Highlight}[3/5] Model Provider Status${C_Reset}"
-    # Suppress context overflow errors from ocms (noisy, not helpful in diag)
+    # Run model status check, then clean up probe files it creates
     ocms 2>&1 | grep -v "\[agent/embedded\]\|context overflow\|error=402" | head -n 25
+    
+    # Clean up probe session files created by ocms (they are temporary)
+    local probe_count=0
+    for f in "$OC_AGENTS/main/sessions"/probe-*.jsonl
+    do
+        [[ -f "$f" ]] && rm -f "$f" && ((probe_count++))
+    done 2>/dev/null
+    if (( probe_count > 0 ))
+    then
+        printf '\n  %s\n' "${C_Info}● Cleaned up $probe_count temporary probe session files${C_Reset}"
+    fi
     echo ""
 
     printf '%s\n' "${C_Highlight}[4/5] Environment Variables${C_Reset}"
