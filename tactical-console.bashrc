@@ -187,6 +187,16 @@ fi
 
 export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
 
+# ==============================================================================
+#  Startup Optimizations (faster CLI performance)
+# ==============================================================================
+# NODE_COMPILE_CACHE: Cache compiled JS for repeated CLI runs (~30-50% faster)
+export NODE_COMPILE_CACHE="${NODE_COMPILE_CACHE:-/var/tmp/openclaw-compile-cache}"
+mkdir -p "$NODE_COMPILE_CACHE" 2>/dev/null || true
+
+# OPENCLAW_NO_RESPAWN: Skip self-respawn overhead
+export OPENCLAW_NO_RESPAWN="${OPENCLAW_NO_RESPAWN:-1}"
+
 unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv _tac_repo_root _tac_expected_modules _tac_found_count
 
 # Display the initial banner now that TACTICAL_PROFILE_VERSION is set.

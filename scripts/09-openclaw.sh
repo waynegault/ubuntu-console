@@ -2236,7 +2236,7 @@ function oc-diag() {
     printf '%s\n' "${C_Highlight}[1/5] openclaw doctor${C_Reset}"
     # Use --fix to avoid interactive prompts, capture output
     # Suppress startup optimization warnings (we set them in env.sh)
-    openclaw doctor --fix 2>&1 | grep -v "NODE_COMPILE_CACHE\|OPENCLAW_NO_RESPAWN" | head -n 40
+    openclaw doctor --fix 2>&1 | grep -v "NODE_COMPILE_CACHE\|OPENCLAW_NO_RESPAWN\|Suggested env" | head -n 35
     echo ""
 
     printf '%s\n' "${C_Highlight}[2/5] Gateway Status${C_Reset}"
