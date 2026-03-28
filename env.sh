@@ -24,6 +24,14 @@ __TAC_ENV_LOADED=1
 # Mark library mode so modules can detect non-interactive sourcing if needed
 export TAC_LIBRARY_MODE=1
 
+# Startup optimizations for faster CLI performance
+# NODE_COMPILE_CACHE: Cache compiled JS for repeated CLI runs
+export NODE_COMPILE_CACHE="${NODE_COMPILE_CACHE:-/var/tmp/openclaw-compile-cache}"
+mkdir -p "$NODE_COMPILE_CACHE" 2>/dev/null || true
+
+# OPENCLAW_NO_RESPAWN: Skip self-respawn overhead
+export OPENCLAW_NO_RESPAWN="${OPENCLAW_NO_RESPAWN:-1}"
+
 _tac_env_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _tac_lib_dir="$_tac_env_root/scripts"
 

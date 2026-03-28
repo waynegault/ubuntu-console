@@ -2216,7 +2216,8 @@ function oc-diag() {
     echo ""
 
     printf '%s\n' "${C_Highlight}[1/5] openclaw doctor${C_Reset}"
-    openclaw doctor 2>&1 | head -n 30
+    # Use --fix to avoid interactive prompts, capture output
+    openclaw doctor --fix 2>&1 | head -n 40
     echo ""
 
     printf '%s\n' "${C_Highlight}[2/5] Gateway Status${C_Reset}"
