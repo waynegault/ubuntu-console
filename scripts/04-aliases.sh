@@ -128,10 +128,14 @@ function oa() {
 }
 # ocstat — Show detailed OpenClaw status (--all).
 function ocstat() {
+    # Export token for gateway auth
+    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
     openclaw status --all
 }
 # ocgs — Show OpenClaw gateway status with deep probe.
 function ocgs() {
+    # Export token for gateway auth
+    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
     openclaw gateway status --deep
 }
 # ocv — Print the OpenClaw version.
@@ -144,11 +148,13 @@ function mem-index() {
 }
 # status — Show basic OpenClaw status.
 function status() {
+    # Export token for gateway auth
+    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
     openclaw status
 }
 # ocms — Show OpenClaw model status with live probe.
 function ocms() {
-    openclaw models status --probe
+    oc-sync-models "$@"
 }
 
 # ---- GitHub Copilot CLI ----

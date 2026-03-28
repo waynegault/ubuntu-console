@@ -1602,23 +1602,22 @@ function oc-health() {
         __tac_info "Gateway Port $OC_PORT" "[NOT LISTENING]" "$C_Error"
         return 1
     fi
+    # Use direct curl to /health endpoint (doesn't require auth)
     local health_out
-    health_out=$(openclaw health --json 2>/dev/null)
+    health_out=$(curl -sf --max-time 3 "http://127.0.0.1:${OC_PORT}/health" 2>/dev/null)
     if [[ -n "$health_out" ]]
     then
-        local hstatus
-        # Check for .ok == true (gateway is healthy)
         local ok_val
         ok_val=$(jq -r '.ok // false' <<< "$health_out" 2>/dev/null)
         if [[ "$ok_val" == "true" ]]
         then
-            hstatus="ok"
+            health_status="ok"
         else
-            hstatus=$(jq -r '.status // "unknown"' <<< "$health_out" 2>/dev/null)
-            [[ -z "$hstatus" || "$hstatus" == "null" ]] && hstatus="unknown"
+            local status_val
+            status_val=$(jq -r '.status // "unknown"' <<< "$health_out" 2>/dev/null)
+            [[ -z "$status_val" || "$status_val" == "null" ]] && status_val="unknown"
+            health_status="$status_val"
         fi
-        [[ -z "$hstatus" ]] && hstatus="parse_error"
-        health_status="$hstatus"
     else
         health_status="no_response"
     fi
