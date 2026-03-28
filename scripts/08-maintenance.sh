@@ -647,7 +647,7 @@ function up() {
         | grep -v '/mnt/wsl/docker-desktop')
     (( disk_warn == 0 )) && __tac_line "[13/13] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
 
-    # [14/16] Stale Process Cleanup — kill orphaned llama-server instances.
+    # [14/17] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).
     # Per-PID check: only kill processes that are NOT listening on LLM_PORT.
     local stale_pids
@@ -663,32 +663,32 @@ function up() {
         fi
         if (( _state_age < 60 ))
         then
-            __tac_line "[14/16] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
+            __tac_line "[14/17] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
         else
             pkill -u "$USER" -x llama-server 2>/dev/null
             rm -f "$ACTIVE_LLM_FILE"
-            __tac_line "[14/16] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
+            __tac_line "[14/17] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
         fi
     else
-        __tac_line "[14/16] Stale Processes" "[CLEAN]" "$C_Success"
+        __tac_line "[14/17] Stale Processes" "[CLEAN]" "$C_Success"
     fi
 
-    # [15/16] Documentation drift guard — lightweight README accuracy check.
+    # [15/17] Documentation drift guard — lightweight README accuracy check.
     if __check_cooldown "docs_sync" "$now" hours_left "$force_mode"
     then
         if __docs_sync_check
         then
-            __tac_line "[15/16] README Sync" "[OK]" "$C_Success"
+            __tac_line "[15/17] README Sync" "[OK]" "$C_Success"
         else
-            __tac_line "[15/16] README Sync" "[DRIFT DETECTED]" "$C_Warning"
+            __tac_line "[15/17] README Sync" "[DRIFT DETECTED]" "$C_Warning"
             ((errCount++))
         fi
         __set_cooldown "docs_sync" "$now"
     else
-        __tac_line "[15/16] README Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[15/17] README Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [16/16] Docker Prune — clean unused containers, images, and build cache.
+    # [16/17] Docker Prune — clean unused containers, images, and build cache.
     if command -v docker >/dev/null 2>&1
     then
         local docker_freed
@@ -697,15 +697,15 @@ function up() {
             | grep -oP '[\d.]+[MGK]B' || echo "")
         if [[ -n "$docker_freed" ]]
         then
-            __tac_line "[16/16] Docker Prune" "[FREED $docker_freed]" "$C_Success"
+            __tac_line "[16/17] Docker Prune" "[FREED $docker_freed]" "$C_Success"
         else
-            __tac_line "[16/16] Docker Prune" "[CLEAN]" "$C_Dim"
+            __tac_line "[16/17] Docker Prune" "[CLEAN]" "$C_Dim"
         fi
     else
-        __tac_line "[16/16] Docker Prune" "[SKIP - Docker not installed]" "$C_Dim"
+        __tac_line "[16/17] Docker Prune" "[SKIP - Docker not installed]" "$C_Dim"
     fi
 
-    # [17/16] NPM Cache Clean — verify and clean npm cache.
+    # [17/17] NPM Cache Clean — verify and clean npm cache.
     if command -v npm >/dev/null 2>&1
     then
         local npm_cache_result
@@ -714,15 +714,15 @@ function up() {
         then
             local cleaned_size
             cleaned_size=$(echo "$npm_cache_result" | grep -oP '[\d.]+[MGK]B' || echo "unknown")
-            __tac_line "[17/16] NPM Cache Clean" "[FREED $cleaned_size]" "$C_Success"
+            __tac_line "[17/17] NPM Cache Clean" "[FREED $cleaned_size]" "$C_Success"
         elif [[ "$npm_cache_result" == *"Cache size"* ]]
         then
-            __tac_line "[17/16] NPM Cache Clean" "[NO ACTION NEEDED]" "$C_Dim"
+            __tac_line "[17/17] NPM Cache Clean" "[NO ACTION NEEDED]" "$C_Dim"
         else
-            __tac_line "[17/16] NPM Cache Clean" "[VERIFIED]" "$C_Dim"
+            __tac_line "[17/17] NPM Cache Clean" "[VERIFIED]" "$C_Dim"
         fi
     else
-        __tac_line "[17/16] NPM Cache Clean" "[SKIP - NPM not installed]" "$C_Dim"
+        __tac_line "[17/17] NPM Cache Clean" "[SKIP - NPM not installed]" "$C_Dim"
     fi
 
     __tac_divider

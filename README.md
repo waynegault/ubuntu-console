@@ -1184,7 +1184,7 @@ extra source commands.
 │   ├── package.json                   #   Vite 5 + React 18 + G6 5.0
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
-│   ├── tactical-console.bats          # 463 BATS unit tests (2,368 lines)
+│   ├── tactical-console.bats          # 473 BATS unit tests (2,368 lines)
 │   └── test_kgraph.py                 # Python tests for kgraph.py
 └── systemd/
     ├── llama-watchdog.service         # systemd unit for watchdog
@@ -1260,6 +1260,107 @@ Recommended viewing split:
 - **Obsidian vault** → curated human memory browsing
 - **`oc g`** → operational/derived graph exploration and debugging
 - **OpenStinger** → temporal/entity recall investigation
+
+---
+
+## OpenStinger Integration
+
+### What It Is
+**OpenStinger** is a memory, reasoning, and alignment infrastructure for AI agents. It exposes **30 MCP (Model Context Protocol) tools** that any agent can call natively, built on **FalkorDB** (bi-temporal graph + vector) and **PostgreSQL** (operational audit DB).
+
+### Purpose
+- Prevents agents from hallucinating facts, drifting from values, and forgetting context
+- Provides a unified memory layer compatible with any agent framework
+- Enables memory portability across different agent runtimes and cloud providers
+- Offers queryable operational database for audits and compliance
+
+### Three Tiers of Tools
+
+| Tier | Name | Tools | Function |
+|------|------|-------|----------|
+| **Tier 1** | Memory Harness | 11 | Bi-temporal episodic memory, hybrid BM25 + vector search, date filtering, numeric/IP search |
+| **Tier 2** | StingerVault | 11 | Autonomous distillation into structured self-knowledge (identity, domain, constraints), external document ingestion |
+| **Tier 3** | Gradient | 8 | Alignment evaluation, drift detection, correction engine, observability tools |
+
+### Key Capabilities
+- **30 MCP tools total** served over SSE at `http://localhost:8766/sse`
+- **Hybrid search**: semantic (synonyms/paraphrases), date-range filtering, numeric/IP address search, fuzzy entity matching
+- **SQL-queryable audit trail**: Every ingestion job, entity merge, and alignment event logged to PostgreSQL
+- **Memory portability**: Full memory transfers via Docker volumes between hosts/runtimes
+
+### Compatible Frameworks
+OpenClaw, Nanobot, ZeroClaw, NanoClaw, PicoClaw, Claude Code, Cursor, Qwen-Agent, DeerFlow, LangGraph
+
+### Installation
+
+**Requirements:**
+- Python 3.10+
+- Docker Desktop
+- One API key (Anthropic or OpenAI-compatible provider)
+
+**Quick Start (5 minutes):**
+
+```bash
+# 1. Clone and install
+git clone https://github.com/srikanthbellary/openstinger.git ~/.openclaw/vendor/openstinger
+cd ~/.openclaw/vendor/openstinger
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e "."
+
+# 2. Configure
+cp .env.example .env
+cp config.yaml.example config.yaml
+# Edit .env with API keys, config.yaml with sessions_dir path
+
+# 3. Start FalkorDB
+docker compose up -d
+
+# 4. Start OpenStinger
+python -m openstinger.mcp.server              # Tier 1 only
+python -m openstinger.gradient.mcp.server     # All 3 tiers (30 tools)
+```
+
+### Agent Connection
+```json
+{
+  "mcpServers": {
+    "openstinger": {
+      "baseUrl": "http://localhost:8766/sse"
+    }
+  }
+}
+```
+
+### Architecture
+- Runs **beside** your agent (never inside it)
+- Reads session files **read-only** in the background
+- Two containers: FalkorDB + PostgreSQL
+
+### Configuration Highlights
+- **Embedding options**: OpenAI, OpenAI-compatible providers (Novita, DeepSeek), or **local via Ollama** (v0.8+)
+- **Session formats**: OpenClaw, DeerFlow, Qwen-Agent, or simple JSONL
+- **Tier 3 ships in `observe_only` mode** by default — evaluates but doesn't block until enabled
+
+### Browser UIs (auto-start with Docker)
+- **FalkorDB Browser**: `http://localhost:3000` (visual graph)
+- **Adminer**: `http://localhost:8080` (PostgreSQL inspector)
+
+### Management Commands
+```bash
+oc-stinger start      # Start OpenStinger MCP server
+oc-stinger stop       # Stop OpenStinger
+oc-stinger status     # Check server and database status
+oc-stinger logs       # Tail server logs
+oc-stinger progress   # Show ingestion/processing progress
+```
+
+### Production Features
+- Memory backup/restore via Docker volumes
+- Cloud deployment support (remote agents connect via HTTP SSE)
+- BI tool integration (Metabase, Grafana, Superset) for operational visibility
+
+**License:** MIT License
 
 ### GPU Utilisation: CUDA vs Task Manager
 
