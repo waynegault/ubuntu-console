@@ -2092,6 +2092,12 @@ function oc-sync-models() {
     __tac_info "Model Registry" "[SYNCED WITH OPENCLAW]" "$C_Success"
 }
 
+# ocms — Alias for oc-sync-models (oc ms shorthand)
+# ---------------------------------------------------------------------------
+function ocms() {
+    oc-sync-models "$@"
+}
+
 # ---------------------------------------------------------------------------
 # oc-browser — OpenClaw browser automation lifecycle.
 # ---------------------------------------------------------------------------
