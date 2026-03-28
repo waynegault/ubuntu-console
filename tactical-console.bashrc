@@ -188,6 +188,15 @@ fi
 export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
 
 # ==============================================================================
+#  Gateway Auth Tokens
+# ==============================================================================
+# OPENCLAW_TOKEN: Gateway authentication token
+export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
+
+# OPENCLAW_PASSWORD: Gateway password auth (fallback)
+export OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-OC!537125Wg}"
+
+# ==============================================================================
 #  Startup Optimizations (faster CLI performance)
 # ==============================================================================
 # NODE_COMPILE_CACHE: Cache compiled JS for repeated CLI runs (~30-50% faster)
