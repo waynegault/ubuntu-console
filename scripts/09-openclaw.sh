@@ -2215,34 +2215,100 @@ function oc-diag() {
     __tac_header "OpenClaw Diagnostic Report" "open"
     echo ""
 
+    # Pre-diag: Clean up orphan session files to reduce noise
+    printf '%s\n' "${C_Highlight}[0/5] Cleanup Orphan Sessions${C_Reset}"
+    local orphan_count=0
+    if [[ -d "$OC_AGENTS/main/sessions" ]]
+    then
+        for f in "$OC_AGENTS/main/sessions"/probe-*.jsonl
+        do
+            [[ -f "$f" ]] && mv "$f" "${f}.deleted.$(date +%Y%m%d-%H%M%S)" 2>/dev/null && ((orphan_count++))
+        done
+    fi
+    if (( orphan_count > 0 ))
+    then
+        printf '  %s\n' "${C_Success}● Archived $orphan_count orphan probe session files${C_Reset}"
+    else
+        printf '  %s\n' "${C_Info}● No orphan sessions found${C_Reset}"
+    fi
+    echo ""
+
     printf '%s\n' "${C_Highlight}[1/5] openclaw doctor${C_Reset}"
     # Use --fix to avoid interactive prompts, capture output
-    openclaw doctor --fix 2>&1 | head -n 40
+    # Suppress startup optimization warnings (we set them in env.sh)
+    openclaw doctor --fix 2>&1 | grep -v "NODE_COMPILE_CACHE\|OPENCLAW_NO_RESPAWN" | head -n 40
     echo ""
 
     printf '%s\n' "${C_Highlight}[2/5] Gateway Status${C_Reset}"
-    if curl -sf --max-time 5 "http://127.0.0.1:${OC_PORT:-18790}/api/health" -o /dev/null 2>/dev/null
+    # Check both /health and /api/health endpoints
+    local gw_healthy=0
+    if curl -sf --max-time 3 "http://127.0.0.1:${OC_PORT:-18790}/health" -o /dev/null 2>/dev/null
+    then
+        gw_healthy=1
+    elif curl -sf --max-time 3 "http://127.0.0.1:${OC_PORT:-18790}/api/health" -o /dev/null 2>/dev/null
+    then
+        gw_healthy=1
+    fi
+    
+    if (( gw_healthy ))
     then
         printf '%s\n' "  ${C_Success}● Gateway reachable on port ${OC_PORT:-18790}${C_Reset}"
+        # Show quick health status
+        local hresp
+        hresp=$(curl -sf --max-time 2 "http://127.0.0.1:${OC_PORT:-18790}/health" 2>/dev/null)
+        if [[ -n "$hresp" ]]
+        then
+            local hstatus
+            hstatus=$(echo "$hresp" | jq -r '.status // .ok // "unknown"' 2>/dev/null)
+            [[ "$hstatus" == "true" ]] && hstatus="ok"
+            printf '  %s\n' "${C_Info}  Status: ${hstatus^^}${C_Reset}"
+        fi
     else
         printf '%s\n' "  ${C_Error}● Gateway NOT reachable on port ${OC_PORT:-18790}${C_Reset}"
+        printf '  %s\n' "${C_Warning}  Start with: oc start${C_Reset}"
     fi
     echo ""
 
     printf '%s\n' "${C_Highlight}[3/5] Model Provider Status${C_Reset}"
-    ocms 2>&1 | head -n 20
+    # Suppress context overflow errors from ocms (noisy, not helpful in diag)
+    ocms 2>&1 | grep -v "\[agent/embedded\]\|context overflow\|error=402" | head -n 25
     echo ""
 
     printf '%s\n' "${C_Highlight}[4/5] Environment Variables${C_Reset}"
     oc-env 2>&1
+    # Show optimization status
+    echo ""
+    printf '  %s\n' "${C_Highlight}Startup Optimizations:${C_Reset}"
+    if [[ -n "$NODE_COMPILE_CACHE" ]]
+    then
+        printf '  %s\n' "${C_Success}  ● NODE_COMPILE_CACHE=$NODE_COMPILE_CACHE${C_Reset}"
+    else
+        printf '  %s\n' "${C_Warning}  ○ NODE_COMPILE_CACHE not set (slower CLI startup)${C_Reset}"
+    fi
+    if [[ "${OPENCLAW_NO_RESPAWN:-0}" == "1" ]]
+    then
+        printf '  %s\n' "${C_Success}  ● OPENCLAW_NO_RESPAWN=1${C_Reset}"
+    else
+        printf '  %s\n' "${C_Warning}  ○ OPENCLAW_NO_RESPAWN not set (extra startup overhead)${C_Reset}"
+    fi
     echo ""
 
     printf '%s\n' "${C_Highlight}[5/5] Recent Logs (last 15 lines)${C_Reset}"
-    if [[ -f "$OC_TMP_LOG" ]]
+    # Check multiple log locations
+    local log_found=0
+    for logf in "$OC_TMP_LOG" "$OC_LOGS/openclaw.log" "$OC_ROOT/logs/openclaw.log" "/tmp/openclaw/openclaw.log"
+    do
+        if [[ -f "$logf" ]]
+        then
+            tail -n 15 "$logf"
+            log_found=1
+            break
+        fi
+    done
+    if (( ! log_found ))
     then
-        tail -n 15 "$OC_TMP_LOG"
-    else
-        echo "  (no log file found at $OC_TMP_LOG)"
+        echo "  ${C_Info}(no log file found)${C_Reset}"
+        echo "  Logs location: $OC_LOGS"
     fi
     echo ""
     __tac_footer
