@@ -1,4 +1,56 @@
-# Memory / Obsidian / `oc g` redesign notes
+# ADR-004: Obsidian and Graph Design
+
+**Date:** 2026-03-28  
+**Status:** Accepted
+
+## Context
+
+Multiple graph/memory visualization tools exist in the system (Obsidian, `oc g`, OpenStinger) with overlapping purposes. Need to clarify the role of each and reduce noise in the default graph view.
+
+## Decision
+
+### Obsidian Role
+Use Obsidian as the **human-facing curated memory browser**.
+
+**Target vault path:**
+- `/home/wayne/.openclaw/state/memory/gigabrain-workspace/obsidian-vault`
+
+**Design decisions:**
+- Stop generating nested vault structures
+- Converge on a single intended vault root for human use
+- Open as folder vault (not individual file)
+
+### Graph Split
+
+| Tool | Purpose |
+|------|---------|
+| **Obsidian / Gigabrain** | Curated browsing and human memory review |
+| **`oc g`** | Derived graph exploration and debugging |
+| **OpenStinger** | Temporal/entity recall investigation |
+
+### `oc g` Design Goals
+
+1. **Operational graph browser** — Not the only memory UI
+2. **Explicit graph projections** — `overview`, `topics`, `files`, `semantic`, `raw`
+3. **Less noisy default** — `overview` hides chunk nodes, remaps relations to files
+4. **Controllable semantic links** — Threshold control exposed in UI
+5. **Provenance display** — Toolbar shows data source and active view
+
+## Consequences
+
+### Positive
+- Clear separation of concerns between tools
+- Reduced cognitive load when browsing graphs
+- Better debugging capabilities with projection views
+
+### Negative
+- Requires users to understand which tool to use for which purpose
+- Multiple graph interfaces to maintain
+
+### Neutral
+- Obsidian vault must be opened as folder (not file) to avoid EISDIR errors on Windows UNC paths
+
+---
 
 ## What Obsidian should do
 
