@@ -1171,9 +1171,17 @@ function __model_use() {
     then
         __tac_info "Model File" "[NOT FOUND - $file]" "$C_Warning"
 
-        # Check if model download is possible (HuggingFace repo info in registry)
-        local download_prompt="Would you like to download model #$target ($name)? [y/N]: "
-        read -r -e -p "$download_prompt" confirm
+        # Skip prompts in non-interactive mode - auto-confirm downloads
+        if [[ "${TAC_NONINTERACTIVE:-}" == "1" ]]
+        then
+            __tac_info "Non-interactive" "[Auto-confirming download]" "$C_Dim"
+            confirm="y"
+            confirm_large="y"
+        else
+            # Check if model download is possible (HuggingFace repo info in registry)
+            local download_prompt="Would you like to download model #$target ($name)? [y/N]: "
+            read -r -e -p "$download_prompt" confirm
+        fi
 
         if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]
         then
@@ -1182,7 +1190,10 @@ function __model_use() {
             if (( $(echo "$size_num > 2" | bc -l 2>/dev/null || echo 0) ))
             then
                 __tac_info "Download Size" "[${size} - This may take several minutes]" "$C_Warning"
-                read -r -e -p "Continue? [y/N]: " confirm_large
+                if [[ "${TAC_NONINTERACTIVE:-}" != "1" ]]
+                then
+                    read -r -e -p "Continue? [y/N]: " confirm_large
+                fi
                 if [[ "${confirm_large,,}" != "y" && "${confirm_large,,}" != "yes" ]]
                 then
                     __tac_info "Download" "[CANCELLED]" "$C_Dim"

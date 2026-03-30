@@ -66,7 +66,9 @@ function __so_check_healthy() {
         then
             __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT]" "$C_Success"
         else
-            __tac_info "Local LLM" "[OFFLINE]" "$C_Error"
+            # Gateway is up but LLM is not — this is NOT healthy state
+            __tac_info "Local LLM" "[OFFLINE — will start]" "$C_Warning"
+            return 1
         fi
         __tac_info "Gateway" "[RUNNING on PORT $OC_PORT]" "$C_Success"
         return 0
@@ -207,10 +209,17 @@ function __so_ensure_llm_running() {
     # LLM not running — resolve default and start it
     local _so_def_file=""
     _so_def_file=$(__llm_default_file 2>/dev/null || true)
+
+    # If no default is set, auto-select the first model from the registry
+    if [[ -z "$_so_def_file" && -f "$LLM_REGISTRY" ]]
+    then
+        _so_def_file=$(awk -F'|' 'NR>0 && $3!="" {print $3; exit}' "$LLM_REGISTRY" 2>/dev/null)
+    fi
+
     if [[ -z "$_so_def_file" ]]
     then
         __tac_info "Error" \
-            "[Local LLM offline and no default set. Run 'model default <N>' to configure.]" \
+            "[Local LLM offline and no models available. Run 'model scan' to discover models.]" \
             "$C_Error"
         return 1
     fi
@@ -218,25 +227,33 @@ function __so_ensure_llm_running() {
     # Look up human-readable model name from registry
     local _so_model_name
     local _so_def_entry=""
-    _so_def_entry=$(__llm_default_entry 2>/dev/null || true)
+    _so_def_entry=$(__llm_registry_entry_by_file "$_so_def_file" 2>/dev/null || true)
     if [[ -n "$_so_def_entry" ]]
     then
         IFS='|' read -r _ _so_model_name _ <<< "$_so_def_entry"
     fi
     : "${_so_model_name:=$_so_def_file}"
 
-    __tac_info "Local LLM" "[OFFLINE]" "$C_Warning"
-
     # Enable GPU persistence mode before starting the model
     wake 2>/dev/null || true
 
-    # Start the default LLM in background with spinner
-    { serve &>/dev/null & } 2>/dev/null
-    local _serve_pid=$!
-    disown "$_serve_pid" 2>/dev/null
+    # Start the LLM using serve in non-interactive mode
+    # Redirect output to avoid interleaving with our status messages
+    { TAC_NONINTERACTIVE=1 serve >/dev/null 2>&1 & } 2>/dev/null
 
-    # Verify process actually started
-    if ! kill -0 "$_serve_pid" 2>/dev/null && ! pgrep -x llama-server >/dev/null 2>&1
+    # Wait for llama-server process to appear (give it up to 10 seconds)
+    local _wait_count=0
+    while (( _wait_count < 20 ))
+    do
+        if pgrep -x llama-server >/dev/null 2>&1
+        then
+            break
+        fi
+        sleep 0.5
+        ((_wait_count++))
+    done
+
+    if ! pgrep -x llama-server >/dev/null 2>&1
     then
         __tac_info "Local LLM" "[FAILED TO START - process exited immediately]" "$C_Error"
         return 1
@@ -248,12 +265,11 @@ function __so_ensure_llm_running() {
     while (( _sw < _sw_max ))
     do
         printf '\r  %s' "${C_Dim}${_spin_chars:_sw%10:1} Starting ${_so_model_name} (${_sw}s)${C_Reset}  "
-        if (( _sw > 3 )) && __llm_is_healthy
+        if __llm_is_healthy
         then
             break
         fi
-        if ! kill -0 "$_serve_pid" 2>/dev/null \
-            && ! pgrep -x llama-server >/dev/null 2>&1
+        if ! pgrep -x llama-server >/dev/null 2>&1
         then
             break
         fi
@@ -261,7 +277,6 @@ function __so_ensure_llm_running() {
         ((_sw++))
     done
     printf '\r%s\r' "$(printf '%*s' 60 '')"
-    wait "$_serve_pid" 2>/dev/null
 
     # Verify LLM is healthy
     if __llm_is_healthy
@@ -352,6 +367,7 @@ function __so_start_gateway() {
 # ---------------------------------------------------------------------------
 # so — Start the OpenClaw gateway (systemd-managed service).
 # Injects bridged API keys into the systemd user session before starting.
+# If gateway is already running, only starts the LLM without restarting gateway.
 # ---------------------------------------------------------------------------
 function so() {
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
@@ -360,51 +376,65 @@ function so() {
     fi
     local _svc="openclaw-gateway.service"
     local _ts_serve_active=0
+    local _gateway_already_running=0
 
-    # Check if already healthy
-    if __so_check_healthy
+    # Check if gateway is already running
+    if __test_port "$OC_PORT"
     then
-        return 0
+        _gateway_already_running=1
+        # Check if LLM is also running
+        if pgrep -x llama-server >/dev/null 2>&1 && __test_port "${LLM_PORT:-8081}"
+        then
+            __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT]" "$C_Success"
+            __tac_info "Gateway" "[RUNNING on PORT $OC_PORT]" "$C_Success"
+            return 0
+        fi
+        # Gateway running but LLM offline — only start LLM
+        __tac_info "Gateway" "[RUNNING on PORT $OC_PORT]" "$C_Success"
+    else
+        # Gateway is offline — full startup sequence
+        # Pre-flight: clear stale state
+        __so_clear_stale_state "$_svc"
+
+        # Pre-flight: free port if held
+        if ! __so_free_port "$OC_PORT"
+        then
+            return 1
+        fi
+
+        # Pre-flight: check Windows port conflict
+        if ! __test_port "$OC_PORT" && __so_check_win_port "$OC_PORT" --block
+        then
+            return 1
+        fi
+
+        # Pre-flight: cycle Tailscale Serve if conflicting
+        __so_cycle_tailscale_serve "$OC_PORT"
+
+        # Push API keys to systemd environment
+        __so_push_api_keys
     fi
 
-    # Pre-flight: clear stale state
-    __so_clear_stale_state "$_svc"
-
-    # Pre-flight: free port if held
-    if ! __so_free_port "$OC_PORT"
-    then
-        return 1
-    fi
-
-    # Pre-flight: check Windows port conflict
-    if ! __test_port "$OC_PORT" && __so_check_win_port "$OC_PORT" --block
-    then
-        return 1
-    fi
-
-    # Pre-flight: cycle Tailscale Serve if conflicting
-    __so_cycle_tailscale_serve "$OC_PORT"
-
-    # Push API keys to systemd environment
-    __so_push_api_keys
-
-    # Ensure LLM is running
+    # Ensure LLM is running (common path for both scenarios)
     if ! __so_ensure_llm_running
     then
         return 1
     fi
 
-    # Start gateway
-    if ! __so_start_gateway "$_svc"
+    # Start gateway only if it wasn't already running
+    if (( _gateway_already_running == 0 ))
     then
-        return 1
-    fi
+        if ! __so_start_gateway "$_svc"
+        then
+            return 1
+        fi
 
-    # Restore Tailscale Serve if we cycled it
-    if (( _ts_serve_active ))
-    then
-        sudo -n tailscale serve --bg "http://127.0.0.1:$OC_PORT" >/dev/null 2>&1 \
-            && __tac_info "Tailscale Serve" "[RESTORED]" "$C_Success"
+        # Restore Tailscale Serve if we cycled it
+        if (( _ts_serve_active ))
+        then
+            sudo -n tailscale serve --bg "http://127.0.0.1:$OC_PORT" >/dev/null 2>&1 \
+                && __tac_info "Tailscale Serve" "[RESTORED]" "$C_Success"
+        fi
     fi
 }
 
@@ -545,7 +575,7 @@ function oc() {
         printf '%s\n' "${C_Highlight}Gateway${C_Reset}"
         printf '  %-20s %s\n' "restart"      "Full gateway restart: stop, wait, start"
         printf '  %-20s %s\n' "gs"           "Gateway deep health probe"
-        printf '  %-20s %s\n' "stat"         "Show detailed status (--all)"
+        printf '  %-20s %s\n' "status"       "Show detailed status (--all)"
         printf '  %-20s %s\n' "health"       "Ping gateway HTTP /api/health"
         printf '  %-20s %s\n' "tail"         "Live-tail gateway logs (Ctrl-C to stop)"
         printf '  %-20s %s\n' "v"            "Print OpenClaw CLI version"
@@ -613,7 +643,8 @@ function oc() {
         # Gateway
         restart)       oc-restart "$@" ;;
         gs)            ocgs "$@" ;;
-        stat)          ocstat "$@" ;;
+        status)        oc-status "$@" ;;
+        stat)          oc-status "$@" ;;  # Legacy alias
         health)        oc-health "$@" ;;
         tail)          oc-tail "$@" ;;
         v)             ocv "$@" ;;

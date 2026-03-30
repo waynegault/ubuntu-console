@@ -487,7 +487,7 @@ function tactical_help() {
         __hRow "xo" "Stop the OpenClaw gateway"
         __hRow "oc restart" "Full gateway restart"
         __hRow "oc gs" "Gateway deep health probe"
-        __hRow "oc stat" "Full gateway status --all"
+        __hRow "oc status" "Full gateway status --all"
         __hRow "oc health" "Gateway health probe"
         __hRow "oc tail" "Live-tail gateway logs (Ctrl-C)"
         __hRow "oc v" "Print OpenClaw CLI version"

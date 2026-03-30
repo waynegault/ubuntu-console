@@ -126,11 +126,15 @@ function os() {
 function oa() {
     openclaw agents list
 }
-# ocstat — Show detailed OpenClaw status (--all).
-function ocstat() {
+# oc-status — Show detailed OpenClaw status (--all).
+function oc-status() {
     # Export token for gateway auth
     export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
     openclaw status --all
+}
+# ocstat — Legacy alias for oc-status (deprecated).
+function ocstat() {
+    oc-status "$@"
 }
 # ocgs — Show OpenClaw gateway status with deep probe.
 function ocgs() {

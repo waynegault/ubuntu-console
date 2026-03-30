@@ -361,7 +361,8 @@ bridged API keys.
 | `ocstop` | Delete an agent: `ocstop --agent <id>` |
 
 | `status` | Quick overview: `openclaw status` |
-| `ocstat` | Full status: `openclaw status --all` |
+| `oc-status` | Full status: `openclaw status --all` |
+| `ocstat` | Legacy alias for `oc-status` |
 | `ocgs` | Deep gateway probe: `openclaw gateway status --deep` |
 | `mem-index` | Reindex OpenClaw memory files |
 | `oc-memory-search` | Search vector memory index |
