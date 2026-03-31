@@ -116,7 +116,7 @@ tac-exec model list
 | Service | Port | Health URL |
 |---------|------|------------|
 | LLM (llama-server) | 8081 | `http://127.0.0.1:8081/health` |
-| Gateway (OpenClaw) | 18790 | `http://127.0.0.1:18790/api/health` |
+| Gateway (OpenClaw) | 18789 | `http://127.0.0.1:18789/api/health` |
 
 ---
 

@@ -67,7 +67,7 @@ tac-exec model doctor
 1. **Always use `tac-exec` prefix** - Commands are shell functions, not standalone binaries
 2. **Check status first** - Run `tac-exec model status` before starting/stopping
 3. **Gateway includes LLM** - `tac-exec so` auto-starts LLM if offline
-4. **Port 8081 = LLM, Port 18790 = Gateway** - Use these for health checks
+4. **Port 8081 = LLM, Port 18789 = Gateway** - Use these for health checks
 5. **Don't run in ~/.openclaw/** - LLM operations should target model directories
 
 ## Output Format
@@ -75,7 +75,7 @@ tac-exec model doctor
 Commands use `__tac_info` format:
 ```
 Local LLM    [RUNNING on PORT 8081]
-Gateway      [RUNNING on PORT 18790]
+Gateway      [RUNNING on PORT 18789]
 ```
 
 Colors: Green = running, Red = offline/error, Yellow = warning

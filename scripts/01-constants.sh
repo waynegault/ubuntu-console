@@ -173,7 +173,7 @@ export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
 
 # ---- Network & API ----
 export LLM_PORT=8081
-export OC_PORT=18790
+export OC_PORT=18789
 export LOCAL_LLM_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
 
 # ---- Hardware Tuning (Intel i9 / RTX 3050 Ti 4GB VRAM) ----

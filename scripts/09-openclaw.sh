@@ -2268,20 +2268,20 @@ function oc-diag() {
     printf '%s\n' "${C_Highlight}[2/5] Gateway Status${C_Reset}"
     # Check both /health and /api/health endpoints
     local gw_healthy=0
-    if curl -sf --max-time 3 "http://127.0.0.1:${OC_PORT:-18790}/health" -o /dev/null 2>/dev/null
+    if curl -sf --max-time 3 "http://127.0.0.1:${OC_PORT:-18789}/health" -o /dev/null 2>/dev/null
     then
         gw_healthy=1
-    elif curl -sf --max-time 3 "http://127.0.0.1:${OC_PORT:-18790}/api/health" -o /dev/null 2>/dev/null
+    elif curl -sf --max-time 3 "http://127.0.0.1:${OC_PORT:-18789}/api/health" -o /dev/null 2>/dev/null
     then
         gw_healthy=1
     fi
-    
+
     if (( gw_healthy ))
     then
-        printf '%s\n' "  ${C_Success}● Gateway reachable on port ${OC_PORT:-18790}${C_Reset}"
+        printf '%s\n' "  ${C_Success}● Gateway reachable on port ${OC_PORT:-18789}${C_Reset}"
         # Show quick health status
         local hresp
-        hresp=$(curl -sf --max-time 2 "http://127.0.0.1:${OC_PORT:-18790}/health" 2>/dev/null)
+        hresp=$(curl -sf --max-time 2 "http://127.0.0.1:${OC_PORT:-18789}/health" 2>/dev/null)
         if [[ -n "$hresp" ]]
         then
             local hstatus
@@ -2290,7 +2290,7 @@ function oc-diag() {
             printf '  %s\n' "${C_Info}  Status: ${hstatus^^}${C_Reset}"
         fi
     else
-        printf '%s\n' "  ${C_Error}● Gateway NOT reachable on port ${OC_PORT:-18790}${C_Reset}"
+        printf '%s\n' "  ${C_Error}● Gateway NOT reachable on port ${OC_PORT:-18789}${C_Reset}"
         printf '  %s\n' "${C_Warning}  Start with: oc start${C_Reset}"
     fi
     echo ""
