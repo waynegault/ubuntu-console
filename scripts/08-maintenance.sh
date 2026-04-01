@@ -1200,7 +1200,11 @@ function logtrim() {
         fi
     done
     (( _had_nullglob )) || shopt -u nullglob
-    echo "$total"
+    if (( total > 0 )); then
+        __tac_info "logtrim" "[Trimmed $total file(s)]" "$C_Success"
+    else
+        __tac_info "logtrim" "[No files trimmed]" "$C_Dim"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1212,41 +1216,41 @@ function logtrim() {
 function check-graph-integrity() {
     local quiet=0
     [[ "${1:-}" == "--quiet" ]] && quiet=1
-    
+
     local db="$OC_ROOT/memory/registry.sqlite"
     [[ -f "$db" ]] || { ((quiet)) || __tac_info "Graph Integrity" "[SKIPPED: No database]" "$C_Dim"; return 0; }
-    
+
     local issues=0
     local output=""
-    
+
     # Check for orphan relationships (target entity doesn't exist)
     local orphans
     orphans=$(sqlite3 "$db" "
-        SELECT COUNT(DISTINCT e.target_entity) 
+        SELECT COUNT(DISTINCT e.target_entity)
         FROM memory_entity_relationships e
         WHERE NOT EXISTS (
-            SELECT 1 FROM memory_entity_aliases a 
+            SELECT 1 FROM memory_entity_aliases a
             WHERE a.entity_id = e.target_entity
         );
     " 2>/dev/null || echo "0")
-    
+
     if (( orphans > 0 )); then
         output+="  ${C_Error}●${C_Reset} Found $orphans orphan relationship targets\n"
         ((issues++))
     fi
-    
+
     # Check for duplicate relationships
     local duplicates
     duplicates=$(sqlite3 "$db" "
         SELECT COUNT(*) - COUNT(DISTINCT entity_id_a || '-' || entity_id_b || '-' || relationship_type)
         FROM memory_entity_relationships;
     " 2>/dev/null || echo "0")
-    
+
     if (( duplicates > 0 )); then
         output+="  ${C_Warning}●${C_Reset} Found $duplicates duplicate relationships\n"
         ((issues++))
     fi
-    
+
     # Check for isolated entities (no relationships)
     local isolated
     isolated=$(sqlite3 "$db" "
@@ -1257,11 +1261,11 @@ function check-graph-integrity() {
             WHERE r.entity_id_a = a.entity_id OR r.entity_id_b = a.entity_id
         );
     " 2>/dev/null || echo "0")
-    
+
     if (( isolated > 5 )); then
         output+="  ${C_Info}○${C_Reset} Found $isolated isolated entities (may be normal)\n"
     fi
-    
+
     # Report results
     if (( issues > 0 )); then
         ((quiet)) || {

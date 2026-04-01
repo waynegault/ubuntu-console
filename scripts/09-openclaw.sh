@@ -2085,9 +2085,9 @@ function oc-usage() {
     local stats
     stats=$(printf '%s' "$sessions_json" | jq -r '
         # Normalize input: handle array, object with .sessions, or object with .items
-        (if type=="array" then . 
-         elif (.sessions?) then .sessions 
-         elif (.items?) then .items 
+        (if type=="array" then .
+         elif (.sessions?) then .sessions
+         elif (.items?) then .items
          else . end)
         | map(. // {})
         | {
@@ -2098,7 +2098,8 @@ function oc-usage() {
             session_count: length,
             total_cost: (map(.costUSD // .totalCost // 0) | add // 0)
           }
-        | "Input: \(.total_input)\nOutput: \(.total_output)\nTotal: \(.total_tokens)\nContext: \(.total_context)\nSessions: \(.session_count)\nCost: $\(.total_cost)"
+        | "Input: \(.total_input)\nOutput: \(.total_output)\nTotal: \(.total_tokens)\n"
+        + "Context: \(.total_context)\nSessions: \(.session_count)\nCost: $\(.total_cost)"
     ' 2>/dev/null)
 
     if [[ -z "$stats" ]]; then
@@ -2122,7 +2123,7 @@ function oc-usage() {
 # ---------------------------------------------------------------------------
 function oc-memory-search() {
     local query="${1:-}"
-    
+
     if [[ -z "$query" ]]
     then
         printf '%s\n' "${C_Highlight}Memory Search${C_Reset}"
@@ -2153,7 +2154,7 @@ function oc-memory-search() {
     # Fallback: show memory files directly
     __tac_info "memory-search" "[Query: $query]" "$C_Info"
     printf '%s\n' "${C_Dim}Memory files (most recent first):${C_Reset}"
-    
+
     local found=0
     while IFS= read -r f
     do
@@ -2408,7 +2409,7 @@ function oc-diag() {
     printf '%s\n' "${C_Highlight}[3/5] Model Provider Status${C_Reset}"
     # Run model status check, then clean up probe files it creates
     ocms 2>&1 | grep -v "\[agent/embedded\]\|context overflow\|error=402" | head -n 25
-    
+
     # Clean up probe session files created by ocms (they are temporary)
     local probe_count=0
     for f in "$OC_AGENTS/main/sessions"/probe-*.jsonl
