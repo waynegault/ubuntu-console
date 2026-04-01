@@ -147,8 +147,12 @@ function ocv() {
     openclaw --version
 }
 # mem-index — Trigger OpenClaw memory indexing.
+# Note: The 'openclaw memory index' command was removed. Memory indexing is now
+# handled automatically by the gateway and kgraph. This function is a no-op for
+# backward compatibility.
 function mem-index() {
-    openclaw memory index
+    __tac_info "mem-index" "[Memory indexing is now automatic — command deprecated]" "$C_Info"
+    return 0
 }
 # status — Show basic OpenClaw status.
 function status() {

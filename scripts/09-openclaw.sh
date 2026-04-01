@@ -2116,14 +2116,59 @@ function oc-usage() {
 
 # ---------------------------------------------------------------------------
 # oc-memory-search — Search OpenClaw's vector memory index.
+# Note: The 'openclaw memory search' command was removed. Memory search is now
+# performed automatically by agents during conversation. Users can view memory
+# contents via the knowledge graph UI (oc g) or by inspecting the memory DB.
 # ---------------------------------------------------------------------------
 function oc-memory-search() {
-    if [[ -z "$*" ]]
+    local query="${1:-}"
+    
+    if [[ -z "$query" ]]
     then
-        printf '%s\n' "${C_Dim}Usage:${C_Reset} oc-memory-search <query>"
-        return 1
+        printf '%s\n' "${C_Highlight}Memory Search${C_Reset}"
+        printf '%s\n' ""
+        printf '%s\n' "${C_Dim}Note:${C_Reset} The 'openclaw memory search' command was removed."
+        printf '%s\n' "Memory indexing and search is now performed automatically by agents."
+        printf '%s\n' ""
+        printf '%s\n' "${C_Highlight}Alternatives:${C_Reset}"
+        printf '  %-20s %s\n' "oc g" "View memory in knowledge graph UI"
+        printf '  %-20s %s\n' "mem-index" "Check memory index status (no-op, auto-indexed)"
+        printf '%s\n' ""
+        printf '%s\n' "${C_Dim}Memory DB location:${C_Reset} ~/.openclaw/agents/*/memory/registry.sqlite"
+        return 0
     fi
-    openclaw memory search "$*"
+
+    # Attempt to search via kgraph.py (if search capability exists)
+    local repo_root="${TACTICAL_REPO_ROOT:-$HOME/ubuntu-console}"
+    if [[ -f "$repo_root/scripts/kgraph.py" ]]
+    then
+        local result
+        result=$(python3 "$repo_root/scripts/kgraph.py" --help 2>&1 | grep -c "search" || true)
+        if [[ "$result" -gt 0 ]]
+        then
+            python3 "$repo_root/scripts/kgraph.py" search "$query" 2>/dev/null && return 0
+        fi
+    fi
+
+    # Fallback: show memory files directly
+    __tac_info "memory-search" "[Query: $query]" "$C_Info"
+    printf '%s\n' "${C_Dim}Memory files (most recent first):${C_Reset}"
+    
+    local found=0
+    while IFS= read -r f
+    do
+        if [[ -f "$f" ]]
+        then
+            printf '  %s\n' "$f"
+            ((found++))
+            [[ $found -ge 5 ]] && break
+        fi
+    done < <(find "$OC_AGENTS" -name "registry.sqlite" -type f 2>/dev/null | head -5)
+
+    if [[ $found -eq 0 ]]
+    then
+        __tac_info "memory-search" "[No memory databases found]" "$C_Warning"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -2629,7 +2674,7 @@ function oc-kgraph() {
             --restart) ;;
             -h|--help)
                 printf '%s\n' "Usage: oc g [--reindex|--refresh] [--restart]"
-                printf '%s\n' "  --reindex  Rebuild OpenClaw memory index and sync graph DB"
+                printf '%s\n' "  --reindex  Sync memory DB to graph DB (memory auto-indexed)"
                 printf '%s\n' "  --restart  Force-restart kgraph server"
                 printf '%s\n' ""
                 printf '%s\n' "Graph roles:"
@@ -2644,10 +2689,9 @@ function oc-kgraph() {
     done
 
     if $do_reindex; then
-        __tac_info "kgraph" "[REINDEXING OPENCLAW MEMORY]" "$C_Info"
-        if ! openclaw memory index >/dev/null 2>&1; then
-            __tac_info "kgraph" "[REINDEX FAILED — CONTINUING WITH EXISTING DATA]" "$C_Warning"
-        fi
+        __tac_info "kgraph" "[SYNCING MEMORY DB TO GRAPH DB]" "$C_Info"
+        # Note: 'openclaw memory index' was removed; memory is auto-indexed by gateway.
+        # We just sync from the memory DB to the graph DB.
 
         # Sync indexed memory DB -> dedicated graph DB used by oc g.
         python3 - <<'PY' >/dev/null 2>&1 || true
