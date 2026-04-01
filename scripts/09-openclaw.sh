@@ -2044,9 +2044,74 @@ function oc-docs() {
 # ---------------------------------------------------------------------------
 # oc-usage — Show recent token/cost usage statistics.
 # Usage: oc-usage [period] (default: 7d)
+# Note: The period argument is accepted for compatibility but currently
+#       shows all-time stats since the openclaw CLI doesn't support date filtering.
 # ---------------------------------------------------------------------------
 function oc-usage() {
-    openclaw usage --last "${1:-7d}"
+    local session_cache="$TAC_CACHE_DIR/oc_sessions.json"
+
+    # Refresh sessions cache if stale or missing (5s TTL)
+    local now mtime
+    now=$(date +%s)
+    if [[ -f "$session_cache" ]]; then
+        mtime=$(stat -c %Y "$session_cache" 2>/dev/null || echo 0)
+    else
+        mtime=0
+    fi
+
+    if (( now - mtime > 5 )); then
+        if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
+            ( openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null \
+                || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null ) \
+                && mv "${session_cache}.tmp" "$session_cache" 2>/dev/null || true
+        fi
+    fi
+
+    # Read cached JSON or fetch directly
+    local sessions_json
+    if [[ -f "$session_cache" ]]; then
+        sessions_json=$(cat "$session_cache")
+    elif [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
+        sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null \
+            || openclaw sessions --json 2>/dev/null || true)
+    fi
+
+    if [[ -z "$sessions_json" || "$sessions_json" == "null" ]]; then
+        __tac_info "Usage" "[No session data available]" "$C_Warning"
+        return 0
+    fi
+
+    # Aggregate token stats from all sessions
+    local stats
+    stats=$(printf '%s' "$sessions_json" | jq -r '
+        # Normalize input: handle array, object with .sessions, or object with .items
+        (if type=="array" then . 
+         elif (.sessions?) then .sessions 
+         elif (.items?) then .items 
+         else . end)
+        | map(. // {})
+        | {
+            total_input: (map(.inputTokens // 0) | add // 0),
+            total_output: (map(.outputTokens // 0) | add // 0),
+            total_tokens: (map(.totalTokens // 0) | add // 0),
+            total_context: (map(.contextTokens // 0) | add // 0),
+            session_count: length,
+            total_cost: (map(.costUSD // .totalCost // 0) | add // 0)
+          }
+        | "Input: \(.total_input)\nOutput: \(.total_output)\nTotal: \(.total_tokens)\nContext: \(.total_context)\nSessions: \(.session_count)\nCost: $\(.total_cost)"
+    ' 2>/dev/null)
+
+    if [[ -z "$stats" ]]; then
+        __tac_info "Usage" "[No token data found in sessions]" "$C_Warning"
+        return 0
+    fi
+
+    # Display formatted usage stats
+    printf '%s\n' "${C_Highlight}OpenClaw Usage Statistics${C_Reset}"
+    printf '%s\n' ""
+    printf '%s\n' "$stats" | while IFS= read -r line; do
+        printf '%s\n' "  $line"
+    done
 }
 
 # ---------------------------------------------------------------------------
