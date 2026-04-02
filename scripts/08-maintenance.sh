@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -216,16 +216,16 @@ function up() {
     # Performance tracking: record start time
     local start_time=$now
 
-    # [1/13] Connectivity
+    # [1/17] Connectivity
     if ping -c 1 -W 2 github.com >/dev/null 2>&1
     then
-        __tac_line "[1/13] Internet Connectivity" "[ESTABLISHED]" "$C_Success"
+        __tac_line "[1/17] Internet Connectivity" "[ESTABLISHED]" "$C_Success"
     else
-        __tac_line "[1/13] Internet Connectivity" "[LOST]" "$C_Error"
+        __tac_line "[1/17] Internet Connectivity" "[LOST]" "$C_Error"
         ((errCount++))
     fi
 
-    # [2/13] Linux Update — APT index (24h cooldown) + upgrade (7d cooldown).
+    # [2/17] Linux Update — APT index (24h cooldown) + upgrade (7d cooldown).
     # Logic:
     #   1. If apt_index cooldown (24h) expired → update index only
     #   2. If apt cooldown (7d) expired → upgrade packages (updates index if not already done)
@@ -246,7 +246,7 @@ function up() {
         # Dry-run first to detect dependency issues before actual upgrade
         if ! sudo apt upgrade --dry-run -y --no-install-recommends >/dev/null 2>&1
         then
-            __tac_line "[2/13] Linux Update" "[DRY-RUN FAILED]" "$C_Warning"
+            __tac_line "[2/17] Linux Update" "[DRY-RUN FAILED]" "$C_Warning"
             ((errCount++))
         else
             sudo apt upgrade -y --no-install-recommends >/dev/null 2>&1
@@ -254,24 +254,24 @@ function up() {
             if (( apt_rc == 0 ))
             then
                 sudo apt autoremove -y >/dev/null 2>&1
-                __tac_line "[2/13] Linux Update" "[UPDATED]" "$C_Success"
+                __tac_line "[2/17] Linux Update" "[UPDATED]" "$C_Success"
                 __set_cooldown "apt" "$now"
                 __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
             else
-                __tac_line "[2/13] Linux Update" "[FAILED]" "$C_Error"
+                __tac_line "[2/17] Linux Update" "[FAILED]" "$C_Error"
                 ((errCount++))
             fi
         fi
     else
         if (( apt_did_update ))
         then
-            __tac_line "[2/13] Linux Update" "[INDEX REFRESHED]" "$C_Success"
+            __tac_line "[2/17] Linux Update" "[INDEX REFRESHED]" "$C_Success"
         else
-            __tac_line "[2/13] Linux Update" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+            __tac_line "[2/17] Linux Update" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
         fi
     fi
 
-    # [3/13] NPM / Cargo
+    # [3/17] NPM / Cargo
     if __check_cooldown "npm_cargo" "$now" hours_left "$force_mode"
     then
         local npm_did_update=0 cargo_did_update=0 pkg_err=0
@@ -292,17 +292,17 @@ function up() {
                 if (( npm_rc == 0 )) || [[ "$update_output" == *"Workspaces not supported for global packages"* ]]
                 then
                     npm_did_update=1
-                    __tac_line "[3/13] NPM Packages" "[UPDATED]" "$C_Success"
+                    __tac_line "[3/17] NPM Packages" "[UPDATED]" "$C_Success"
                 else
-                    __tac_line "[3/13] NPM Packages" "[FAILED]" "$C_Warning"
+                    __tac_line "[3/17] NPM Packages" "[FAILED]" "$C_Warning"
                     pkg_err=1
                 fi
             else
-                __tac_line "[3/13] NPM Packages" "[NO GLOBAL PACKAGES]" "$C_Dim"
+                __tac_line "[3/17] NPM Packages" "[NO GLOBAL PACKAGES]" "$C_Dim"
                 npm_did_update=1  # Nothing to update = success
             fi
         else
-            __tac_line "[3/13] NPM Packages" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[3/17] NPM Packages" "[NOT INSTALLED]" "$C_Dim"
         fi
 
         # Cargo: Requires cargo-install-update
@@ -323,17 +323,17 @@ function up() {
                 if cargo install-update -a >/dev/null 2>&1
                 then
                     cargo_did_update=1
-                    __tac_line "[4/13] Cargo Crates" "[UPDATED]" "$C_Success"
+                    __tac_line "[4/17] Cargo Crates" "[UPDATED]" "$C_Success"
                 else
-                    __tac_line "[4/13] Cargo Crates" "[FAILED]" "$C_Warning"
+                    __tac_line "[4/17] Cargo Crates" "[FAILED]" "$C_Warning"
                     pkg_err=1
                 fi
             else
-                __tac_line "[4/13] Cargo Crates" "[SKIP - install cargo-update]" "$C_Dim"
+                __tac_line "[4/17] Cargo Crates" "[SKIP - install cargo-update]" "$C_Dim"
                 cargo_did_update=1  # Tool not installed = skip, not failure
             fi
         else
-            __tac_line "[4/13] Cargo Crates" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[4/17] Cargo Crates" "[NOT INSTALLED]" "$C_Dim"
         fi
 
         # Set cooldown only if both succeeded (or had nothing to update)
@@ -345,11 +345,11 @@ function up() {
             ((errCount++))
         fi
     else
-        __tac_line "[3/13] NPM Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
-        __tac_line "[4/13] Cargo Crates" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[3/17] NPM Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[4/17] Cargo Crates" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [5/13] R Packages (CRAN + Bioconductor)
+    # [5/17] R Packages (CRAN + Bioconductor)
     # Uses Windows PowerShell script to avoid lock directory issues when running from WSL.
     if __check_cooldown "r_pkgs" "$now" hours_left "$force_mode"
     then
@@ -384,22 +384,22 @@ function up() {
                     [[ "$update_output" == *"updated index"* ]] && _verified=1
                     if (( _verified == 1 ))
                     then
-                        __tac_line "[5/13] R Packages" "[UPDATED - Verified]" "$C_Success"
+                        __tac_line "[5/17] R Packages" "[UPDATED - Verified]" "$C_Success"
                     else
-                        __tac_line "[5/13] R Packages" "[UPDATED]" "$C_Success"
+                        __tac_line "[5/17] R Packages" "[UPDATED]" "$C_Success"
                     fi
                 elif [[ "$update_output" == *"ERROR"* ]] || (( ps_rc != 0 ))
                 then
                     r_err=1
-                    __tac_line "[5/13] R Packages" "[FAILED]" "$C_Warning"
+                    __tac_line "[5/17] R Packages" "[FAILED]" "$C_Warning"
                 else
                     r_did_update=1
-                    __tac_line "[5/13] R Packages" "[NO UPDATE NEEDED]" "$C_Dim"
+                    __tac_line "[5/17] R Packages" "[NO UPDATE NEEDED]" "$C_Dim"
                 fi
             else
                 # Helper script not found - skip with helpful message
                 r_did_update=1
-                __tac_line "[5/13] R Packages" "[SKIP - PS1 helper missing]" "$C_Dim"
+                __tac_line "[5/17] R Packages" "[SKIP - PS1 helper missing]" "$C_Dim"
             fi
         else
             # PowerShell not available - try direct R (legacy fallback)
@@ -423,13 +423,13 @@ function up() {
                 if [[ "$pkg_count" -gt 1 ]]
                 then
                     r_did_update=1
-                    __tac_line "[5/13] R Packages" "[SKIP - Run from Windows]" "$C_Dim"
+                    __tac_line "[5/17] R Packages" "[SKIP - Run from Windows]" "$C_Dim"
                 else
                     r_did_update=1
-                    __tac_line "[5/13] R Packages" "[NO USER PACKAGES]" "$C_Dim"
+                    __tac_line "[5/17] R Packages" "[NO USER PACKAGES]" "$C_Dim"
                 fi
             else
-                __tac_line "[5/13] R Packages" "[NOT INSTALLED]" "$C_Dim"
+                __tac_line "[5/17] R Packages" "[NOT INSTALLED]" "$C_Dim"
             fi
         fi
 
@@ -441,10 +441,10 @@ function up() {
             ((errCount++))
         fi
     else
-        __tac_line "[5/13] R Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[5/17] R Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [6/13] OpenClaw verification — runs 'openclaw doctor' for real health check.
+    # [6/17] OpenClaw verification — runs 'openclaw doctor' for real health check.
     # --non-interactive: skip all prompts (safe for unattended maintenance).
     # --no-workspace-suggestions: suppress noisy "workspace not optimised" hints.
     if __check_cooldown "openclaw" "$now" hours_left "$force_mode"
@@ -456,24 +456,24 @@ function up() {
             doc_rc=$?
             if (( doc_rc == 0 ))
             then
-                __tac_line "[6/13] OpenClaw Framework" "[HEALTHY]" "$C_Success"
+                __tac_line "[6/17] OpenClaw Framework" "[HEALTHY]" "$C_Success"
             elif (( doc_rc == 124 ))
             then
-                __tac_line "[6/13] OpenClaw Framework" "[TIMED OUT]" "$C_Warning"
+                __tac_line "[6/17] OpenClaw Framework" "[TIMED OUT]" "$C_Warning"
                 ((errCount++))
             else
-                __tac_line "[6/13] OpenClaw Framework" "[ISSUES FOUND - run oc doc-fix]" "$C_Warning"
+                __tac_line "[6/17] OpenClaw Framework" "[ISSUES FOUND - run oc doc-fix]" "$C_Warning"
                 ((errCount++))
             fi
             __set_cooldown "openclaw" "$now"
         else
-            __tac_line "[6/13] OpenClaw Framework" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[6/17] OpenClaw Framework" "[NOT INSTALLED]" "$C_Dim"
         fi
     else
-        __tac_line "[6/13] OpenClaw Framework" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[6/17] OpenClaw Framework" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [7/13] OpenClaw Plugin Updates — pull latest from upstream for path-installed plugins.
+    # [7/17] OpenClaw Plugin Updates — pull latest from upstream for path-installed plugins.
     # Checks gigabrain, lossless-claw, and OpenStinger for git updates.
     if __check_cooldown "oc_plugins" "$now" hours_left "$force_mode"
     then
@@ -493,20 +493,20 @@ function up() {
                 then
                     if git -C "$plugins_dir/gigabrain" pull --ff-only >/dev/null 2>&1
                     then
-                        __tac_line "[7/13] Gigabrain Plugin" "[UPDATED]" "$C_Success"
+                        __tac_line "[7/17] Gigabrain Plugin" "[UPDATED]" "$C_Success"
                         plugin_updated=1
                     else
-                        __tac_line "[7/13] Gigabrain Plugin" "[UP TO DATE]" "$C_Dim"
+                        __tac_line "[7/17] Gigabrain Plugin" "[UP TO DATE]" "$C_Dim"
                     fi
                 else
-                    __tac_line "[7/13] Gigabrain Plugin" "[SKIP - custom remote]" "$C_Dim"
+                    __tac_line "[7/17] Gigabrain Plugin" "[SKIP - custom remote]" "$C_Dim"
                 fi
             else
                 # Local installation without git — verify it exists and is functional
-                __tac_line "[7/13] Gigabrain Plugin" "[INSTALLED (local)]" "$C_Dim"
+                __tac_line "[7/17] Gigabrain Plugin" "[INSTALLED (local)]" "$C_Dim"
             fi
         else
-            __tac_line "[7/13] Gigabrain Plugin" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[7/17] Gigabrain Plugin" "[NOT INSTALLED]" "$C_Dim"
         fi
 
         # lossless-claw plugin update check
@@ -521,20 +521,20 @@ function up() {
                 then
                     if git -C "$plugins_dir/lossless-claw" pull --ff-only >/dev/null 2>&1
                     then
-                        __tac_line "[8/13] Lossless-Claw Plugin" "[UPDATED]" "$C_Success"
+                        __tac_line "[8/17] Lossless-Claw Plugin" "[UPDATED]" "$C_Success"
                         plugin_updated=1
                     else
-                        __tac_line "[8/13] Lossless-Claw Plugin" "[UP TO DATE]" "$C_Dim"
+                        __tac_line "[8/17] Lossless-Claw Plugin" "[UP TO DATE]" "$C_Dim"
                     fi
                 else
-                    __tac_line "[8/13] Lossless-Claw Plugin" "[SKIP - custom remote]" "$C_Dim"
+                    __tac_line "[8/17] Lossless-Claw Plugin" "[SKIP - custom remote]" "$C_Dim"
                 fi
             else
                 # Local installation without git — verify it exists and is functional
-                __tac_line "[8/13] Lossless-Claw Plugin" "[INSTALLED (local)]" "$C_Dim"
+                __tac_line "[8/17] Lossless-Claw Plugin" "[INSTALLED (local)]" "$C_Dim"
             fi
         else
-            __tac_line "[8/13] Lossless-Claw Plugin" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[8/17] Lossless-Claw Plugin" "[NOT INSTALLED]" "$C_Dim"
         fi
 
         # OpenStinger update check
@@ -549,41 +549,41 @@ function up() {
                 then
                     if git -C "$vendor_dir/openstinger" pull --ff-only >/dev/null 2>&1
                     then
-                        __tac_line "[9/13] OpenStinger" "[UPDATED]" "$C_Success"
+                        __tac_line "[9/17] OpenStinger" "[UPDATED]" "$C_Success"
                         plugin_updated=1
                     else
-                        __tac_line "[9/13] OpenStinger" "[UP TO DATE]" "$C_Dim"
+                        __tac_line "[9/17] OpenStinger" "[UP TO DATE]" "$C_Dim"
                     fi
                 else
-                    __tac_line "[9/13] OpenStinger" "[SKIP - custom remote]" "$C_Dim"
+                    __tac_line "[9/17] OpenStinger" "[SKIP - custom remote]" "$C_Dim"
                 fi
             else
                 # Local installation without git — verify it exists and is functional
-                __tac_line "[9/13] OpenStinger" "[INSTALLED (local)]" "$C_Dim"
+                __tac_line "[9/17] OpenStinger" "[INSTALLED (local)]" "$C_Dim"
             fi
         else
-            __tac_line "[9/13] OpenStinger" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[9/17] OpenStinger" "[NOT INSTALLED]" "$C_Dim"
         fi
 
         if (( plugin_updated == 1 ))
         then
             __set_cooldown "oc_plugins" "$now"
         else
-            __tac_line "[7/13] OpenClaw Plugins" "[ALL UP TO DATE]" "$C_Dim"
+            __tac_line "[7/17] OpenClaw Plugins" "[ALL UP TO DATE]" "$C_Dim"
         fi
     else
-        __tac_line "[7/13] OpenClaw Plugins" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[7/17] OpenClaw Plugins" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [8/13] Python Venv (a.k.a. "Cloaking" = active virtual environment isolation)
+    # [8/17] Python Venv (a.k.a. "Cloaking" = active virtual environment isolation)
     if [[ -n "$VIRTUAL_ENV" ]]
     then
-        __tac_line "[8/13] Python Venv Cloaking" "[$(basename "$VIRTUAL_ENV")]" "$C_Success"
+        __tac_line "[8/17] Python Venv Cloaking" "[$(basename "$VIRTUAL_ENV")]" "$C_Success"
     else
-        __tac_line "[8/13] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
+        __tac_line "[8/17] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
     fi
 
-    # [9/13] Python Fleet
+    # [9/17] Python Fleet
     if __check_cooldown "pyfleet" "$now" hours_left "$force_mode"
     then
         local py_versions=()
@@ -599,17 +599,17 @@ function up() {
             do
                 v_list+=("$(basename "$py")")
             done
-            __tac_line "[9/13] Python Fleet" "[${v_list[*]} VERIFIED]" "$C_Success"
+            __tac_line "[9/17] Python Fleet" "[${v_list[*]} VERIFIED]" "$C_Success"
             __set_cooldown "pyfleet" "$now"
         else
-            __tac_line "[9/13] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
+            __tac_line "[9/17] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
             ((errCount++))
         fi
     else
-        __tac_line "[9/13] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[9/17] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [10/13] GPU Checks — __get_gpu returns CSV or a sentinel string.
+    # [10/17] GPU Checks — __get_gpu returns CSV or a sentinel string.
     # Sentinels: "N/A" (no nvidia-smi), "Querying..." (first-boot cache miss),
     # or contains "OFFLINE" (driver crash / WSL GPU passthrough failure).
     # 
@@ -633,13 +633,13 @@ function up() {
 
     if [[ "$gpu" != "N/A" && "$gpu" != "Querying..." && "$gpu" != *"OFFLINE"* ]]
     then
-        __tac_line "[10/13] GPU Status" "[READY]" "$C_Success"
+        __tac_line "[10/17] GPU Status" "[READY]" "$C_Success"
     else
-        __tac_line "[10/13] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
+        __tac_line "[10/17] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
         ((errCount++))
     fi
 
-    # [11/13] Sanitation — clean known temp locations, NOT the user's $PWD.
+    # [11/17] Sanitation — clean known temp locations, NOT the user's $PWD.
     # Only removes temp artifacts from /tmp/openclaw and the OC_ROOT directory.
     local count=0
     if [[ -d /tmp/openclaw ]]
@@ -649,9 +649,9 @@ function up() {
             rm -f "$_tmpf" && ((count++))
         done < <(find /tmp/openclaw \( -name '*.tmp' -o -name 'python-*.exe' \) -print0 2>/dev/null)
     fi
-    __tac_line "[11/13] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
+    __tac_line "[11/17] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
 
-    # [12/13] Disk Space Audit — warn if any mount point exceeds 90%
+    # [12/17] Disk Space Audit — warn if any mount point exceeds 90%
     local disk_warn=0
     while read -r pct mount
     do
@@ -660,14 +660,14 @@ function up() {
         [[ ! "$pct_num" =~ ^[0-9]+$ ]] && continue
         if (( pct_num >= 90 ))
         then
-            __tac_line "[12/13] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
+            __tac_line "[12/17] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
             disk_warn=1
             ((errCount++))
         fi
     done < <(df -h --output=pcent,target 2>/dev/null \
         | tail -n +2 | grep -v '/snap/' \
         | grep -v '/mnt/wsl/docker-desktop')
-    (( disk_warn == 0 )) && __tac_line "[12/13] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
+    (( disk_warn == 0 )) && __tac_line "[12/17] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
 
     # [13/17] Systemd Unit Check — verify OpenClaw gateway service is configured.
     if systemctl --user list-unit-files | grep -q openclaw-gateway
