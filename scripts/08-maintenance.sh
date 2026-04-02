@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 24
+# Module Version: 25
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -399,20 +399,29 @@ function up() {
 
         if [[ -n "$_rscript" ]]
         then
-            # Check for outdated packages by comparing installed vs available
-            # Must specify the user library path explicitly for Windows R
+            # Check for outdated packages in BOTH system and user libraries
             local has_outdated
             has_outdated=$("$_rscript" -e 'suppressWarnings({
-                lib <- Sys.getenv("R_LIBS_USER")
-                if (lib == "") {
-                    lib <- file.path(Sys.getenv("USERPROFILE"), "Documents", "R", "win-library")
+                # Check user library first (Documents/R/win-library)
+                user_lib <- file.path(Sys.getenv("USERPROFILE"), "Documents", "R", "win-library")
+                if (dir.exists(user_lib)) {
+                    # Get the version-specific subdirectory
+                    user_lib <- list.files(user_lib, full.names = TRUE)[1]
                 }
-                # Get the actual version-specific path
-                lib <- list.files(lib, full.names = TRUE)[1]
-                if (!dir.exists(lib)) { cat("0"); quit() }
-                inst <- installed.packages(lib.loc = lib)
+                # Also check system library
+                sys_lib <- file.path(Sys.getenv("PROGRAMFILES"), "R", list.files(file.path(Sys.getenv("PROGRAMFILES"), "R"), pattern = "^R-")[1], "library")
+                
+                # Get installed packages from both locations
+                inst_user <- if (dir.exists(user_lib)) installed.packages(lib.loc = user_lib) else NULL
+                inst_sys <- if (dir.exists(sys_lib)) installed.packages(lib.loc = sys_lib) else NULL
+                
+                # Combine
+                if (is.null(inst_user) && is.null(inst_sys)) { cat("0"); quit() }
+                inst <- rbind(inst_user, inst_sys)
+                
                 avail <- available.packages()
                 if (is.null(inst) || is.null(avail)) { cat("0"); quit() }
+                
                 old <- numeric(0)
                 for (pkg in rownames(inst)) {
                     if (pkg %in% rownames(avail)) {
@@ -426,8 +435,8 @@ function up() {
 
             if [[ "$has_outdated" =~ ^[1-9][0-9]*$ ]]
             then
-                # Updates available - run update
-                if "$_rscript" -e "options(repos = c(CRAN = 'https://cloud.r-project.org')); update.packages(lib.loc = Sys.getenv('R_LIBS_USER'), ask = FALSE, checkBuilt = TRUE, quiet = TRUE)" >/dev/null 2>&1
+                # Updates available - run update for BOTH user and system libraries
+                if "$_rscript" -e "options(repos = c(CRAN = 'https://cloud.r-project.org')); update.packages(ask = FALSE, checkBuilt = TRUE, quiet = TRUE)" >/dev/null 2>&1
                 then
                     __tac_line "[5/20] R Packages" "[PACKAGES UPDATED]" "$C_Success"
                     r_did_update=1
