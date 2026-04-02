@@ -239,7 +239,7 @@ function __so_ensure_llm_running() {
 
     # Start the LLM using serve in non-interactive mode
     # Redirect output to avoid interleaving with our status messages
-    { TAC_NONINTERACTIVE=1 serve >/dev/null 2>&1 & } 2>/dev/null
+    { TAC_NONINTERACTIVE=1 serve >/dev/null 2>&1 & disown; }
 
     # Wait for llama-server process to appear (give it up to 10 seconds)
     local _wait_count=0
