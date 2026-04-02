@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 27
+# Module Version: 28
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -399,8 +399,8 @@ function up() {
 
         if [[ -n "$_rscript" ]]
         then
-            # Run update and let R handle the detection internally
-            # update.packages() with ask=FALSE only updates if there are outdated packages
+            # Run update - binary only (no compilation required)
+            # This skips packages that need gcc/g++ (Rtools)
             local update_output
             update_output=$(timeout 180 "$_rscript" -e "
                 options(repos = c(CRAN = 'https://cloud.r-project.org'))
@@ -409,12 +409,8 @@ function up() {
                     cat('NONE')
                 } else {
                     cat('HAS_UPDATES')
-                    # First pass: update dependencies (source for compatibility)
-                    update.packages(ask = FALSE, checkBuilt = TRUE, quiet = FALSE, type = 'source')
-                    # Second pass: catch any remaining updates (binary for speed)
-                    update.packages(ask = FALSE, checkBuilt = TRUE, quiet = FALSE, type = 'binary')
-                    # Third pass: force update any locked packages
-                    update.packages(ask = FALSE, checkBuilt = TRUE, quiet = FALSE, INSTALL_opts = '--no-multiarch')
+                    # Update binary packages only (no compilation)
+                    update.packages(ask = FALSE, checkBuilt = TRUE, quiet = FALSE, type = 'both')
                 }
             " 2>&1)
 
@@ -422,11 +418,12 @@ function up() {
             then
                 __tac_line "[5/20] R Packages" "[PACKAGES UPDATED]" "$C_Success"
                 r_did_update=1
-                # Check if any packages failed (locked by running R sessions)
-                if [[ "$update_output" == *"package"*"is in use"* ]] || [[ "$update_output" == *"cannot remove"* ]]
+                # Check if any packages failed due to missing compilers
+                if [[ "$update_output" == *"gcc"*"No such file"* ]] || [[ "$update_output" == *"g++"*"No such file"* ]] || [[ "$update_output" == *"compilation failed"* ]]
                 then
-                    printf '\n%s\n' "${C_Warning}Note: Some packages could not be updated (locked by R/RStudio).${C_Reset}"
-                    printf '%s\n' "      Close R/RStudio and run 'up' again to update remaining packages."
+                    printf '\n%s\n' "${C_Warning}Note: Some packages need Rtools (gcc/g++) to compile.${C_Reset}"
+                    printf '%s\n' "      Install Rtools from: https://cran.r-project.org/bin/windows/Rtools/"
+                    printf '%s\n' "      Or skip these packages (binary-only updates completed)."
                 fi
             elif [[ "$update_output" == *"NONE"* ]]
             then
