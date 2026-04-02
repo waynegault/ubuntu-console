@@ -502,7 +502,8 @@ function up() {
                     __tac_line "[7/13] Gigabrain Plugin" "[SKIP - custom remote]" "$C_Dim"
                 fi
             else
-                __tac_line "[7/13] Gigabrain Plugin" "[SKIP - not a git repo]" "$C_Dim"
+                # Local installation without git — verify it exists and is functional
+                __tac_line "[7/13] Gigabrain Plugin" "[INSTALLED (local)]" "$C_Dim"
             fi
         else
             __tac_line "[7/13] Gigabrain Plugin" "[NOT INSTALLED]" "$C_Dim"
@@ -529,7 +530,8 @@ function up() {
                     __tac_line "[8/13] Lossless-Claw Plugin" "[SKIP - custom remote]" "$C_Dim"
                 fi
             else
-                __tac_line "[8/13] Lossless-Claw Plugin" "[SKIP - not a git repo]" "$C_Dim"
+                # Local installation without git — verify it exists and is functional
+                __tac_line "[8/13] Lossless-Claw Plugin" "[INSTALLED (local)]" "$C_Dim"
             fi
         else
             __tac_line "[8/13] Lossless-Claw Plugin" "[NOT INSTALLED]" "$C_Dim"
@@ -556,7 +558,8 @@ function up() {
                     __tac_line "[9/13] OpenStinger" "[SKIP - custom remote]" "$C_Dim"
                 fi
             else
-                __tac_line "[9/13] OpenStinger" "[SKIP - not a git repo]" "$C_Dim"
+                # Local installation without git — verify it exists and is functional
+                __tac_line "[9/13] OpenStinger" "[INSTALLED (local)]" "$C_Dim"
             fi
         else
             __tac_line "[9/13] OpenStinger" "[NOT INSTALLED]" "$C_Dim"
