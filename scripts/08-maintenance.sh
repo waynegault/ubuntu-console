@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 16
+# Module Version: 17
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -563,6 +563,11 @@ function up() {
                                 # Had something to stash — pull then reapply
                                 if git -C "$_path" pull --ff-only >/dev/null 2>&1
                                 then
+                                    # Install new dependencies if package.json exists
+                                    if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
+                                    then
+                                        npm install --prefix "$_path" --silent 2>/dev/null || true
+                                    fi
                                     git -C "$_path" stash pop >/dev/null 2>&1 || true
                                     __tac_line "$_status_line" "[UPDATED (changes preserved)]" "$C_Success"
                                     return 0
@@ -576,6 +581,11 @@ function up() {
                                 # Just try to pull
                                 if git -C "$_path" pull --ff-only >/dev/null 2>&1
                                 then
+                                    # Install new dependencies if package.json exists
+                                    if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
+                                    then
+                                        npm install --prefix "$_path" --silent 2>/dev/null || true
+                                    fi
                                     __tac_line "$_status_line" "[UPDATED]" "$C_Success"
                                     return 0
                                 else
@@ -621,6 +631,11 @@ function up() {
                 # Behind remote — pull
                 if git -C "$_path" pull --ff-only >/dev/null 2>&1
                 then
+                    # Run npm install if package.json exists (install new dependencies)
+                    if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
+                    then
+                        npm install --prefix "$_path" --silent 2>/dev/null || true
+                    fi
                     __tac_line "$_status_line" "[UPDATED]" "$C_Success"
                     return 0
                 else
