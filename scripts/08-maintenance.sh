@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -330,10 +330,20 @@ function up() {
 
             if (( _has_cargo_update == 1 ))
             then
+                # Get list of outdated crates before update
+                local outdated_crates
+                outdated_crates=$(cargo install-update -l 2>/dev/null | tail -n +4 | grep -v "^$" || echo "")
+
                 if cargo install-update -a >/dev/null 2>&1
                 then
                     cargo_did_update=1
-                    __tac_line "[4/17] Cargo Crates" "[UPDATED]" "$C_Success"
+                    # Check if any crates were actually updated
+                    if [[ -n "$outdated_crates" ]]
+                    then
+                        __tac_line "[4/17] Cargo Crates" "[UPDATED]" "$C_Success"
+                    else
+                        __tac_line "[4/17] Cargo Crates" "[NO UPDATES NEEDED]" "$C_Dim"
+                    fi
                 else
                     __tac_line "[4/17] Cargo Crates" "[FAILED]" "$C_Warning"
                     pkg_err=1
