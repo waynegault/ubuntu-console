@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -225,7 +225,7 @@ function up() {
         ((errCount++))
     fi
 
-    # [2/13] APT Index Update (24h cooldown) + Package Upgrade (7d cooldown)
+    # [2/13] Linux Update — APT index (24h cooldown) + upgrade (7d cooldown).
     # Logic:
     #   1. If apt_index cooldown (24h) expired → update index only
     #   2. If apt cooldown (7d) expired → upgrade packages (updates index if not already done)
@@ -246,7 +246,7 @@ function up() {
         # Dry-run first to detect dependency issues before actual upgrade
         if ! sudo apt upgrade --dry-run -y --no-install-recommends >/dev/null 2>&1
         then
-            __tac_line "[2/13] APT Packages" "[DRY-RUN FAILED]" "$C_Warning"
+            __tac_line "[2/13] Linux Update" "[DRY-RUN FAILED]" "$C_Warning"
             ((errCount++))
         else
             sudo apt upgrade -y --no-install-recommends >/dev/null 2>&1
@@ -254,20 +254,20 @@ function up() {
             if (( apt_rc == 0 ))
             then
                 sudo apt autoremove -y >/dev/null 2>&1
-                __tac_line "[2/13] APT Packages" "[UPDATED]" "$C_Success"
+                __tac_line "[2/13] Linux Update" "[UPDATED]" "$C_Success"
                 __set_cooldown "apt" "$now"
                 __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
             else
-                __tac_line "[2/13] APT Packages" "[FAILED]" "$C_Error"
+                __tac_line "[2/13] Linux Update" "[FAILED]" "$C_Error"
                 ((errCount++))
             fi
         fi
     else
         if (( apt_did_update ))
         then
-            __tac_line "[2/13] APT Index" "[REFRESHED]" "$C_Success"
+            __tac_line "[2/13] Linux Update" "[INDEX REFRESHED]" "$C_Success"
         else
-            __tac_line "[2/13] APT Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+            __tac_line "[2/13] Linux Update" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
         fi
     fi
 

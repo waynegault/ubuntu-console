@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 # 3. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -184,14 +184,9 @@ alias chat:='local_chat'
 alias wtf='wtf_repl'
 
 # ---- System Maintenance ----
-# linup — Quick Linux system update (apt update + upgrade).
-# For full maintenance with cooldowns, use 'up' instead.
-function linup() {
-    sudo apt update && sudo apt upgrade -y
-}
-
 # wsl-up — Update WSL kernel and Microsoft distribution (requires Windows).
 # This is a host-level operation, separate from WSL-internal 'up' maintenance.
+# For WSL-internal updates (APT, NPM, etc.), use 'up' instead.
 function wsl-up() {
     powershell.exe -NoProfile -NonInteractive -Command "wsl --update"
 }
