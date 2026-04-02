@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -475,96 +475,138 @@ function up() {
 
     # [7/17] OpenClaw Plugin Updates — pull latest from upstream for path-installed plugins.
     # Checks gigabrain, lossless-claw, and OpenStinger for git updates.
+    # Offers interactive choice when local changes are detected.
     if __check_cooldown "oc_plugins" "$now" hours_left "$force_mode"
     then
         local plugin_updated=0 plugin_err=0
         local plugins_dir="$HOME/.openclaw/extensions"
         local vendor_dir="$HOME/.openclaw/vendor"
 
-        # gigabrain plugin update check
-        if [[ -d "$plugins_dir/gigabrain" ]]
-        then
-            if [[ -d "$plugins_dir/gigabrain/.git" ]]
+        # __update_plugin — Helper function to update a single plugin with change handling.
+        # Usage: __update_plugin <path> <remote_pattern> <display_name>
+        # Returns: 0 if updated or up-to-date, 1 if skipped/error
+        function __update_plugin() {
+            local _path="$1" _remote_pattern="$2" _name="$3"
+            local _status_line="[7/17] ${_name}"
+
+            if [[ ! -d "$_path" ]]
             then
-                # Full git repo — pull from upstream
-                local gb_remote
-                gb_remote=$(git -C "$plugins_dir/gigabrain" remote get-url origin 2>/dev/null || echo "")
-                if [[ "$gb_remote" == *"legendaryvibecoder/gigabrain"* ]]
-                then
-                    if git -C "$plugins_dir/gigabrain" pull --ff-only >/dev/null 2>&1
-                    then
-                        __tac_line "[7/17] Gigabrain Plugin" "[UPDATED]" "$C_Success"
-                        plugin_updated=1
-                    else
-                        __tac_line "[7/17] Gigabrain Plugin" "[UP TO DATE]" "$C_Dim"
-                    fi
-                else
-                    __tac_line "[7/17] Gigabrain Plugin" "[SKIP - custom remote]" "$C_Dim"
-                fi
-            else
-                # Local installation without git — verify it exists and is functional
-                __tac_line "[7/17] Gigabrain Plugin" "[INSTALLED (local)]" "$C_Dim"
+                __tac_line "$_status_line" "[NOT INSTALLED]" "$C_Dim"
+                return 1
             fi
-        else
-            __tac_line "[7/17] Gigabrain Plugin" "[NOT INSTALLED]" "$C_Dim"
+
+            if [[ ! -d "$_path/.git" ]]
+            then
+                __tac_line "$_status_line" "[INSTALLED (local)]" "$C_Dim"
+                return 1
+            fi
+
+            local _remote
+            _remote=$(git -C "$_path" remote get-url origin 2>/dev/null || echo "")
+            if [[ "$_remote" != *"$_remote_pattern"* ]]
+            then
+                __tac_line "$_status_line" "[SKIP - custom remote]" "$C_Dim"
+                return 1
+            fi
+
+            # Check for local changes
+            local _local_changes
+            _local_changes=$(git -C "$_path" status --porcelain 2>/dev/null)
+
+            if [[ -n "$_local_changes" ]]
+            then
+                # Local changes detected — ask user (only in interactive mode)
+                if [[ -t 0 ]]  # stdin is a terminal
+                then
+                    printf '\n%s %s — local changes detected:\n' "${C_Warning}Warning:${C_Reset}" "$_name"
+                    echo "$_local_changes" | head -5
+                    [[ $(echo "$_local_changes" | wc -l) -gt 5 ]] && echo "  ... and more"
+                    printf '\n%s\n' "Choose an option:"
+                    printf '  [1] Keep local changes (stash + pull + stash pop)\n'
+                    printf '  [2] Discard local changes (hard reset to remote)\n'
+                    printf '  [3] Skip update (keep as-is)\n'
+                    printf '  [a] Apply to all remaining plugins (remember choice)\n'
+                    printf '\nSelection: '
+
+                    local _choice _apply_all=""
+                    read -r _choice
+
+                    case "$_choice" in
+                        a|A) _apply_all="stash"; _choice="1" ;;
+                    esac
+
+                    case "$_choice" in
+                        1)
+                            # Stash, pull, then pop
+                            if git -C "$_path" stash push -m "pre-update backup" >/dev/null 2>&1
+                            then
+                                if git -C "$_path" pull --ff-only >/dev/null 2>&1
+                                then
+                                    git -C "$_path" stash pop >/dev/null 2>&1 || true
+                                    __tac_line "$_status_line" "[UPDATED (changes preserved)]" "$C_Success"
+                                    return 0
+                                else
+                                    git -C "$_path" stash pop >/dev/null 2>&1 || true
+                                    __tac_line "$_status_line" "[UP TO DATE (pull failed, changes kept)]" "$C_Dim"
+                                    return 1
+                                fi
+                            else
+                                # No stash needed (nothing to stash), just pull
+                                if git -C "$_path" pull --ff-only >/dev/null 2>&1
+                                then
+                                    __tac_line "$_status_line" "[UPDATED]" "$C_Success"
+                                    return 0
+                                else
+                                    __tac_line "$_status_line" "[UP TO DATE]" "$C_Dim"
+                                    return 1
+                                fi
+                            fi
+                            ;;
+                        2)
+                            # Hard reset to remote
+                            git -C "$_path" fetch origin >/dev/null 2>&1
+                            git -C "$_path" reset --hard origin/HEAD >/dev/null 2>&1
+                            __tac_line "$_status_line" "[UPDATED (local changes discarded)]" "$C_Warning"
+                            return 0
+                            ;;
+                        *)
+                            __tac_line "$_status_line" "[SKIPPED (local changes)]" "$C_Dim"
+                            return 1
+                            ;;
+                    esac
+                else
+                    # Non-interactive mode — skip safely
+                    __tac_line "$_status_line" "[SKIP - has local changes]" "$C_Dim"
+                    return 1
+                fi
+            fi
+
+            # No local changes — standard pull
+            if git -C "$_path" pull --ff-only >/dev/null 2>&1
+            then
+                __tac_line "$_status_line" "[UPDATED]" "$C_Success"
+                return 0
+            else
+                __tac_line "$_status_line" "[UP TO DATE]" "$C_Dim"
+                return 1
+            fi
+        }
+
+        # Update each plugin
+        if __update_plugin "$plugins_dir/gigabrain" "legendaryvibecoder/gigabrain" "Gigabrain Plugin"
+        then
+            plugin_updated=1
+        fi
+        if __update_plugin "$plugins_dir/lossless-claw" "Martian-Engineering/lossless-claw" "Lossless-Claw Plugin"
+        then
+            plugin_updated=1
+        fi
+        if __update_plugin "$vendor_dir/openstinger" "srikanthbellary/openstinger" "OpenStinger"
+        then
+            plugin_updated=1
         fi
 
-        # lossless-claw plugin update check
-        if [[ -d "$plugins_dir/lossless-claw" ]]
-        then
-            if [[ -d "$plugins_dir/lossless-claw/.git" ]]
-            then
-                # Full git repo — pull from upstream
-                local lc_remote
-                lc_remote=$(git -C "$plugins_dir/lossless-claw" remote get-url origin 2>/dev/null || echo "")
-                if [[ "$lc_remote" == *"Martian-Engineering/lossless-claw"* ]]
-                then
-                    if git -C "$plugins_dir/lossless-claw" pull --ff-only >/dev/null 2>&1
-                    then
-                        __tac_line "[8/17] Lossless-Claw Plugin" "[UPDATED]" "$C_Success"
-                        plugin_updated=1
-                    else
-                        __tac_line "[8/17] Lossless-Claw Plugin" "[UP TO DATE]" "$C_Dim"
-                    fi
-                else
-                    __tac_line "[8/17] Lossless-Claw Plugin" "[SKIP - custom remote]" "$C_Dim"
-                fi
-            else
-                # Local installation without git — verify it exists and is functional
-                __tac_line "[8/17] Lossless-Claw Plugin" "[INSTALLED (local)]" "$C_Dim"
-            fi
-        else
-            __tac_line "[8/17] Lossless-Claw Plugin" "[NOT INSTALLED]" "$C_Dim"
-        fi
-
-        # OpenStinger update check
-        if [[ -d "$vendor_dir/openstinger" ]]
-        then
-            if [[ -d "$vendor_dir/openstinger/.git" ]]
-            then
-                # Full git repo — pull from upstream
-                local os_remote
-                os_remote=$(git -C "$vendor_dir/openstinger" remote get-url origin 2>/dev/null || echo "")
-                if [[ "$os_remote" == *"srikanthbellary/openstinger"* ]]
-                then
-                    if git -C "$vendor_dir/openstinger" pull --ff-only >/dev/null 2>&1
-                    then
-                        __tac_line "[9/17] OpenStinger" "[UPDATED]" "$C_Success"
-                        plugin_updated=1
-                    else
-                        __tac_line "[9/17] OpenStinger" "[UP TO DATE]" "$C_Dim"
-                    fi
-                else
-                    __tac_line "[9/17] OpenStinger" "[SKIP - custom remote]" "$C_Dim"
-                fi
-            else
-                # Local installation without git — verify it exists and is functional
-                __tac_line "[9/17] OpenStinger" "[INSTALLED (local)]" "$C_Dim"
-            fi
-        else
-            __tac_line "[9/17] OpenStinger" "[NOT INSTALLED]" "$C_Dim"
-        fi
-
+        # Set cooldown if any plugin was updated
         if (( plugin_updated == 1 ))
         then
             __set_cooldown "oc_plugins" "$now"
@@ -574,6 +616,8 @@ function up() {
     else
         __tac_line "[7/17] OpenClaw Plugins" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
+
+    unset -f __update_plugin
 
     # [8/17] Python Venv (a.k.a. "Cloaking" = active virtual environment isolation)
     if [[ -n "$VIRTUAL_ENV" ]]
