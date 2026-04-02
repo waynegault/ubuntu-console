@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -668,6 +668,14 @@ function up() {
         | tail -n +2 | grep -v '/snap/' \
         | grep -v '/mnt/wsl/docker-desktop')
     (( disk_warn == 0 )) && __tac_line "[12/13] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
+
+    # [13/17] Systemd Unit Check — verify OpenClaw gateway service is configured.
+    if systemctl --user list-unit-files | grep -q openclaw-gateway
+    then
+        __tac_line "[13/17] Systemd Units" "[CONFIGURED]" "$C_Success"
+    else
+        __tac_line "[13/17] Systemd Units" "[SKIP - no user units]" "$C_Dim"
+    fi
 
     # [14/17] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).
