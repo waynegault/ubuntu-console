@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 3. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -188,6 +188,12 @@ alias wtf='wtf_repl'
 # For full maintenance with cooldowns, use 'up' instead.
 function linup() {
     sudo apt update && sudo apt upgrade -y
+}
+
+# wsl-up — Update WSL kernel and Microsoft distribution (requires Windows).
+# This is a host-level operation, separate from WSL-internal 'up' maintenance.
+function wsl-up() {
+    powershell.exe -NoProfile -NonInteractive -Command "wsl --update"
 }
 
 # end of file

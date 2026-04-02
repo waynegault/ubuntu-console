@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -721,7 +721,7 @@ function up() {
         then
             __tac_line "[16/17] Docker Prune" "[FREED $docker_freed]" "$C_Success"
         else
-            __tac_line "[16/17] Docker Prune" "[CLEAN]" "$C_Dim"
+            __tac_line "[16/17] Docker Prune" "[CLEAN]" "$C_Success"
         fi
     else
         __tac_line "[16/17] Docker Prune" "[SKIP - Docker not installed]" "$C_Dim"
@@ -739,9 +739,9 @@ function up() {
             __tac_line "[17/17] NPM Cache Clean" "[FREED $cleaned_size]" "$C_Success"
         elif [[ "$npm_cache_result" == *"Cache size"* ]]
         then
-            __tac_line "[17/17] NPM Cache Clean" "[NO ACTION NEEDED]" "$C_Dim"
+            __tac_line "[17/17] NPM Cache Clean" "[NO ACTION NEEDED]" "$C_Success"
         else
-            __tac_line "[17/17] NPM Cache Clean" "[VERIFIED]" "$C_Dim"
+            __tac_line "[17/17] NPM Cache Clean" "[VERIFIED]" "$C_Success"
         fi
     else
         __tac_line "[17/17] NPM Cache Clean" "[SKIP - NPM not installed]" "$C_Dim"
