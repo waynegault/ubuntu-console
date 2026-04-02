@@ -1578,16 +1578,41 @@ function oc-update() {
 }
 
 # ---------------------------------------------------------------------------
-# oc-health — Deep gateway health probe via the OpenClaw CLI.
-# Uses jq for JSON parsing instead of Python.
+# oc-health — Comprehensive OpenClaw system health check.
+# Runs full system diagnostics including gateway, agents, database, and more.
 # ---------------------------------------------------------------------------
 function oc-health() {
     local output_mode="human"
     case "${1:-}" in
         --json) output_mode="json" ;;
         --plain) output_mode="plain" ;;
+        --verbose|-v) output_mode="verbose" ;;
     esac
 
+    # Check if enhanced health check script exists
+    local enhanced_script="$HOME/.openclaw/workspace/scripts/oc-health-check.py"
+    
+    if [[ -f "$enhanced_script" ]]
+    then
+        # Use comprehensive health check
+        case "$output_mode" in
+            json)
+                python3 "$enhanced_script" --json
+                ;;
+            plain)
+                python3 "$enhanced_script" --json | jq -r '.checks[] | "\(.name): \(.status) - \(.message)"'
+                ;;
+            verbose)
+                python3 "$enhanced_script" --verbose
+                ;;
+            *)
+                python3 "$enhanced_script"
+                ;;
+        esac
+        return $?
+    fi
+
+    # Fallback to basic health check if enhanced script not found
     local cli_installed=1
     local port_listening=0
     local health_status="unknown"
