@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 15
+# Module Version: 16
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -662,10 +662,36 @@ function up() {
 
     unset -f __update_plugin
 
-    # [8/17] Python Venv (a.k.a. "Cloaking" = active virtual environment isolation)
+    # [8/17] Python Venv — update packages in active virtual environment.
+    # "Cloaking" = active virtual environment isolation.
     if [[ -n "$VIRTUAL_ENV" ]]
     then
-        __tac_line "[8/17] Python Venv Cloaking" "[$(basename "$VIRTUAL_ENV")]" "$C_Success"
+        local venv_name
+        venv_name=$(basename "$VIRTUAL_ENV")
+
+        if __check_cooldown "pyvenv_pkgs" "$now" hours_left "$force_mode"
+        then
+            # Check for outdated packages
+            local outdated_py
+            outdated_py=$("$VIRTUAL_ENV/bin/pip" list --outdated --format=freeze 2>/dev/null || echo "")
+
+            if [[ -n "$outdated_py" ]]
+            then
+                # Upgrade all outdated packages
+                if echo "$outdated_py" | cut -d= -f1 | xargs "$VIRTUAL_ENV/bin/pip" install --upgrade --quiet 2>&1
+                then
+                    __tac_line "[8/17] Python Venv ($venv_name)" "[UPDATED]" "$C_Success"
+                else
+                    __tac_line "[8/17] Python Venv ($venv_name)" "[UPGRADE FAILED]" "$C_Warning"
+                    ((errCount++))
+                fi
+            else
+                __tac_line "[8/17] Python Venv ($venv_name)" "[NO UPDATES NEEDED]" "$C_Dim"
+            fi
+            __set_cooldown "pyvenv_pkgs" "$now"
+        else
+            __tac_line "[8/17] Python Venv ($venv_name)" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        fi
     else
         __tac_line "[8/17] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
     fi
