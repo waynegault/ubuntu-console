@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 23
+# Module Version: 24
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -216,16 +216,16 @@ function up() {
     # Performance tracking: record start time
     local start_time=$now
 
-    # [1/17] Connectivity
+    # [1/20] Connectivity
     if ping -c 1 -W 2 github.com >/dev/null 2>&1
     then
-        __tac_line "[1/17] Internet Connectivity" "[ESTABLISHED]" "$C_Success"
+        __tac_line "[1/20] Internet Connectivity" "[ESTABLISHED]" "$C_Success"
     else
-        __tac_line "[1/17] Internet Connectivity" "[LOST]" "$C_Error"
+        __tac_line "[1/20] Internet Connectivity" "[LOST]" "$C_Error"
         ((errCount++))
     fi
 
-    # [2/17] Linux Update — APT index (24h cooldown) + upgrade (7d cooldown).
+    # [2/20] Linux Update — APT index (24h cooldown) + upgrade (7d cooldown).
     # Logic:
     #   1. If apt_index cooldown (24h) expired → update index only
     #   2. If apt cooldown (7d) expired → upgrade packages (updates index if not already done)
@@ -250,7 +250,7 @@ function up() {
         # Dry-run first to detect dependency issues before actual upgrade
         if ! sudo apt upgrade --dry-run -y --no-install-recommends >/dev/null 2>&1
         then
-            __tac_line "[2/17] Linux Update" "[DRY-RUN FAILED]" "$C_Warning"
+            __tac_line "[2/20] Linux Update" "[DRY-RUN FAILED]" "$C_Warning"
             ((errCount++))
         else
             sudo apt upgrade -y --no-install-recommends >/dev/null 2>&1
@@ -260,27 +260,27 @@ function up() {
                 sudo apt autoremove -y >/dev/null 2>&1
                 if (( upgradable > 0 ))
                 then
-                    __tac_line "[2/17] Linux Update" "[PACKAGES UPDATED]" "$C_Success"
+                    __tac_line "[2/20] Linux Update" "[PACKAGES UPDATED]" "$C_Success"
                 else
-                    __tac_line "[2/17] Linux Update" "[ALREADY UP TO DATE]" "$C_Success"
+                    __tac_line "[2/20] Linux Update" "[ALREADY UP TO DATE]" "$C_Success"
                 fi
                 __set_cooldown "apt" "$now"
                 __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
             else
-                __tac_line "[2/17] Linux Update" "[FAILED]" "$C_Error"
+                __tac_line "[2/20] Linux Update" "[FAILED]" "$C_Error"
                 ((errCount++))
             fi
         fi
     else
         if (( apt_did_update ))
         then
-            __tac_line "[2/17] Linux Update" "[INDEX REFRESHED]" "$C_Success"
+            __tac_line "[2/20] Linux Update" "[INDEX REFRESHED]" "$C_Success"
         else
-            __tac_line "[2/17] Linux Update" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+            __tac_line "[2/20] Linux Update" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
         fi
     fi
 
-    # [3/17] NPM / Cargo
+    # [3/20] NPM / Cargo
     if __check_cooldown "npm_cargo" "$now" hours_left "$force_mode"
     then
         local npm_did_update=0 cargo_did_update=0 pkg_err=0
@@ -308,20 +308,20 @@ function up() {
                     # Check if any packages were actually updated
                     if [[ -n "$outdated_before" ]]
                     then
-                        __tac_line "[3/17] NPM Packages" "[PACKAGES UPDATED]" "$C_Success"
+                        __tac_line "[3/20] NPM Packages" "[PACKAGES UPDATED]" "$C_Success"
                     else
-                        __tac_line "[3/17] NPM Packages" "[ALREADY UP TO DATE]" "$C_Success"
+                        __tac_line "[3/20] NPM Packages" "[ALREADY UP TO DATE]" "$C_Success"
                     fi
                 else
-                    __tac_line "[3/17] NPM Packages" "[FAILED]" "$C_Warning"
+                    __tac_line "[3/20] NPM Packages" "[FAILED]" "$C_Warning"
                     pkg_err=1
                 fi
             else
-                __tac_line "[3/17] NPM Packages" "[NO GLOBAL PACKAGES]" "$C_Dim"
+                __tac_line "[3/20] NPM Packages" "[NO GLOBAL PACKAGES]" "$C_Dim"
                 npm_did_update=1  # Nothing to update = success
             fi
         else
-            __tac_line "[3/17] NPM Packages" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[3/20] NPM Packages" "[NOT INSTALLED]" "$C_Dim"
         fi
 
         # Cargo: Requires cargo-install-update
@@ -349,20 +349,20 @@ function up() {
                     # Check if any crates were actually updated
                     if [[ -n "$outdated_crates" ]]
                     then
-                        __tac_line "[4/17] Cargo Crates" "[CRATES UPDATED]" "$C_Success"
+                        __tac_line "[4/20] Cargo Crates" "[CRATES UPDATED]" "$C_Success"
                     else
-                        __tac_line "[4/17] Cargo Crates" "[ALREADY UP TO DATE]" "$C_Success"
+                        __tac_line "[4/20] Cargo Crates" "[ALREADY UP TO DATE]" "$C_Success"
                     fi
                 else
-                    __tac_line "[4/17] Cargo Crates" "[FAILED]" "$C_Warning"
+                    __tac_line "[4/20] Cargo Crates" "[FAILED]" "$C_Warning"
                     pkg_err=1
                 fi
             else
-                __tac_line "[4/17] Cargo Crates" "[SKIP - install cargo-update]" "$C_Dim"
+                __tac_line "[4/20] Cargo Crates" "[SKIP - install cargo-update]" "$C_Dim"
                 cargo_did_update=1  # Tool not installed = skip, not failure
             fi
         else
-            __tac_line "[4/17] Cargo Crates" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[4/20] Cargo Crates" "[NOT INSTALLED]" "$C_Dim"
         fi
 
         # Set cooldown only if both succeeded (or had nothing to update)
@@ -374,11 +374,11 @@ function up() {
             ((errCount++))
         fi
     else
-        __tac_line "[3/17] NPM Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
-        __tac_line "[4/17] Cargo Crates" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[3/20] NPM Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[4/20] Cargo Crates" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [5/17] R Packages (CRAN + Bioconductor)
+    # [5/20] R Packages (CRAN + Bioconductor)
     # Updates R packages in user library (no admin required).
     if __check_cooldown "r_pkgs" "$now" hours_left "$force_mode"
     then
@@ -400,9 +400,17 @@ function up() {
         if [[ -n "$_rscript" ]]
         then
             # Check for outdated packages by comparing installed vs available
+            # Must specify the user library path explicitly for Windows R
             local has_outdated
             has_outdated=$("$_rscript" -e 'suppressWarnings({
-                inst <- installed.packages()
+                lib <- Sys.getenv("R_LIBS_USER")
+                if (lib == "") {
+                    lib <- file.path(Sys.getenv("USERPROFILE"), "Documents", "R", "win-library")
+                }
+                # Get the actual version-specific path
+                lib <- list.files(lib, full.names = TRUE)[1]
+                if (!dir.exists(lib)) { cat("0"); quit() }
+                inst <- installed.packages(lib.loc = lib)
                 avail <- available.packages()
                 if (is.null(inst) || is.null(avail)) { cat("0"); quit() }
                 old <- numeric(0)
@@ -421,25 +429,25 @@ function up() {
                 # Updates available - run update
                 if "$_rscript" -e "options(repos = c(CRAN = 'https://cloud.r-project.org')); update.packages(lib.loc = Sys.getenv('R_LIBS_USER'), ask = FALSE, checkBuilt = TRUE, quiet = TRUE)" >/dev/null 2>&1
                 then
-                    __tac_line "[5/17] R Packages" "[PACKAGES UPDATED]" "$C_Success"
+                    __tac_line "[5/20] R Packages" "[PACKAGES UPDATED]" "$C_Success"
                     r_did_update=1
                 else
-                    __tac_line "[5/17] R Packages" "[FAILED]" "$C_Warning"
+                    __tac_line "[5/20] R Packages" "[FAILED]" "$C_Warning"
                     r_err=1
                 fi
             else
-                __tac_line "[5/17] R Packages" "[ALREADY UP TO DATE]" "$C_Success"
+                __tac_line "[5/20] R Packages" "[ALREADY UP TO DATE]" "$C_Success"
                 r_did_update=1
             fi
             __set_cooldown "r_pkgs" "$now"
         else
-            __tac_line "[5/17] R Packages" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[5/20] R Packages" "[NOT INSTALLED]" "$C_Dim"
         fi
     else
-        __tac_line "[5/17] R Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[5/20] R Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [6/17] OpenClaw verification — runs 'openclaw doctor' for real health check.
+    # [6/20] OpenClaw verification — runs 'openclaw doctor' for real health check.
     # --non-interactive: skip all prompts (safe for unattended maintenance).
     # --no-workspace-suggestions: suppress noisy "workspace not optimised" hints.
     if __check_cooldown "openclaw" "$now" hours_left "$force_mode"
@@ -451,24 +459,24 @@ function up() {
             doc_rc=$?
             if (( doc_rc == 0 ))
             then
-                __tac_line "[6/17] OpenClaw Framework" "[VERIFIED HEALTHY]" "$C_Success"
+                __tac_line "[6/20] OpenClaw Framework" "[VERIFIED HEALTHY]" "$C_Success"
             elif (( doc_rc == 124 ))
             then
-                __tac_line "[6/17] OpenClaw Framework" "[TIMED OUT]" "$C_Warning"
+                __tac_line "[6/20] OpenClaw Framework" "[TIMED OUT]" "$C_Warning"
                 ((errCount++))
             else
-                __tac_line "[6/17] OpenClaw Framework" "[ISSUES FOUND - run oc doc-fix]" "$C_Warning"
+                __tac_line "[6/20] OpenClaw Framework" "[ISSUES FOUND - run oc doc-fix]" "$C_Warning"
                 ((errCount++))
             fi
             __set_cooldown "openclaw" "$now"
         else
-            __tac_line "[6/17] OpenClaw Framework" "[NOT INSTALLED]" "$C_Dim"
+            __tac_line "[6/20] OpenClaw Framework" "[NOT INSTALLED]" "$C_Dim"
         fi
     else
-        __tac_line "[6/17] OpenClaw Framework" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[6/20] OpenClaw Framework" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [7/17] OpenClaw Plugin Updates — pull latest from upstream for path-installed plugins.
+    # [7/20] OpenClaw Plugin Updates — pull latest from upstream for path-installed plugins.
     # Checks gigabrain, lossless-claw, and OpenStinger for git updates.
     # Offers interactive choice when local changes are detected.
     if __check_cooldown "oc_plugins" "$now" hours_left "$force_mode"
@@ -478,11 +486,11 @@ function up() {
         local vendor_dir="$HOME/.openclaw/vendor"
 
         # __update_plugin — Helper function to update a single plugin with change handling.
-        # Usage: __update_plugin <path> <remote_pattern> <display_name>
+        # Usage: __update_plugin <path> <remote_pattern> <display_name> <step_num>
         # Returns: 0 if updated or up-to-date, 1 if skipped/error
         function __update_plugin() {
-            local _path="$1" _remote_pattern="$2" _name="$3"
-            local _status_line="[7/17] ${_name}"
+            local _path="$1" _remote_pattern="$2" _name="$3" _step_num="${4:-7}"
+            local _status_line="[${_step_num}/20] ${_name}"
 
             if [[ ! -d "$_path" ]]
             then
@@ -632,15 +640,15 @@ function up() {
         }
 
         # Update each plugin
-        if __update_plugin "$plugins_dir/gigabrain" "legendaryvibecoder/gigabrain" "Gigabrain Plugin"
+        if __update_plugin "$plugins_dir/gigabrain" "legendaryvibecoder/gigabrain" "Gigabrain Plugin" "7"
         then
             plugin_updated=1
         fi
-        if __update_plugin "$plugins_dir/lossless-claw" "Martian-Engineering/lossless-claw" "Lossless-Claw Plugin"
+        if __update_plugin "$plugins_dir/lossless-claw" "Martian-Engineering/lossless-claw" "Lossless-Claw Plugin" "8"
         then
             plugin_updated=1
         fi
-        if __update_plugin "$vendor_dir/openstinger" "srikanthbellary/openstinger" "OpenStinger"
+        if __update_plugin "$vendor_dir/openstinger" "srikanthbellary/openstinger" "OpenStinger" "9"
         then
             plugin_updated=1
         fi
@@ -649,17 +657,17 @@ function up() {
         if (( plugin_updated == 1 ))
         then
             __set_cooldown "oc_plugins" "$now"
-            __tac_line "[7/17] OpenClaw Plugins" "[UPDATE COMPLETE]" "$C_Success"
+            __tac_line "[10/20] OpenClaw Plugins" "[PLUGINS UPDATED]" "$C_Success"
         else
-            __tac_line "[7/17] OpenClaw Plugins" "[ALL UP TO DATE]" "$C_Dim"
+            __tac_line "[10/20] OpenClaw Plugins" "[ALREADY UP TO DATE]" "$C_Success"
         fi
     else
-        __tac_line "[7/17] OpenClaw Plugins" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[10/20] OpenClaw Plugins" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
     unset -f __update_plugin
 
-    # [8/17] Python Venv — update packages in active virtual environment.
+    # [11/20] Python Venv — update packages in active virtual environment.
     # "Cloaking" = active virtual environment isolation.
     if [[ -n "$VIRTUAL_ENV" ]]
     then
@@ -677,23 +685,23 @@ function up() {
                 # Upgrade all outdated packages
                 if echo "$outdated_py" | cut -d= -f1 | xargs "$VIRTUAL_ENV/bin/pip" install --upgrade --quiet 2>&1
                 then
-                    __tac_line "[8/17] Python Venv ($venv_name)" "[UPDATED]" "$C_Success"
+                    __tac_line "[11/20] Python Venv ($venv_name)" "[UPDATED]" "$C_Success"
                 else
-                    __tac_line "[8/17] Python Venv ($venv_name)" "[UPGRADE FAILED]" "$C_Warning"
+                    __tac_line "[11/20] Python Venv ($venv_name)" "[UPGRADE FAILED]" "$C_Warning"
                     ((errCount++))
                 fi
             else
-                __tac_line "[8/17] Python Venv ($venv_name)" "[ALREADY UP TO DATE]" "$C_Success"
+                __tac_line "[11/20] Python Venv ($venv_name)" "[ALREADY UP TO DATE]" "$C_Success"
             fi
             __set_cooldown "pyvenv_pkgs" "$now"
         else
-            __tac_line "[8/17] Python Venv ($venv_name)" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+            __tac_line "[11/20] Python Venv ($venv_name)" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
         fi
     else
-        __tac_line "[8/17] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
+        __tac_line "[11/20] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
     fi
 
-    # [9/17] Python Fleet — check which Python 3.x versions are installed.
+    # [12/20] Python Fleet — check which Python 3.x versions are installed.
     # Note: Python is updated via apt (Linux Update step), not here.
     if __check_cooldown "pyfleet" "$now" hours_left "$force_mode"
     then
@@ -710,17 +718,17 @@ function up() {
             do
                 v_list+=("$(basename "$py")")
             done
-            __tac_line "[9/17] Python Fleet" "[${v_list[*]} INSTALLED]" "$C_Success"
+            __tac_line "[12/20] Python Fleet" "[${v_list[*]} INSTALLED]" "$C_Success"
             __set_cooldown "pyfleet" "$now"
         else
-            __tac_line "[9/17] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
+            __tac_line "[12/20] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
             ((errCount++))
         fi
     else
-        __tac_line "[9/17] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[12/20] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [10/17] GPU Checks — __get_gpu returns CSV or a sentinel string.
+    # [13/20] GPU Checks — __get_gpu returns CSV or a sentinel string.
     # Sentinels: "N/A" (no nvidia-smi), "Querying..." (first-boot cache miss),
     # or contains "OFFLINE" (driver crash / WSL GPU passthrough failure).
     # 
@@ -744,13 +752,13 @@ function up() {
 
     if [[ "$gpu" != "N/A" && "$gpu" != "Querying..." && "$gpu" != *"OFFLINE"* ]]
     then
-        __tac_line "[10/17] GPU Status" "[READY]" "$C_Success"
+        __tac_line "[13/20] GPU Status" "[READY]" "$C_Success"
     else
-        __tac_line "[10/17] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
+        __tac_line "[13/20] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
         ((errCount++))
     fi
 
-    # [11/17] Sanitation — clean known temp locations, NOT the user's $PWD.
+    # [11/20] Sanitation — clean known temp locations, NOT the user's $PWD.
     # Only removes temp artifacts from /tmp/openclaw and the OC_ROOT directory.
     local count=0
     if [[ -d /tmp/openclaw ]]
@@ -760,9 +768,9 @@ function up() {
             rm -f "$_tmpf" && ((count++))
         done < <(find /tmp/openclaw \( -name '*.tmp' -o -name 'python-*.exe' \) -print0 2>/dev/null)
     fi
-    __tac_line "[11/17] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
+    __tac_line "[14/20] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
 
-    # [12/17] Disk Space Audit — warn if any mount point exceeds 90%
+    # [15/20] Disk Space Audit — warn if any mount point exceeds 90%
     local disk_warn=0
     while read -r pct mount
     do
@@ -771,24 +779,24 @@ function up() {
         [[ ! "$pct_num" =~ ^[0-9]+$ ]] && continue
         if (( pct_num >= 90 ))
         then
-            __tac_line "[12/17] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
+            __tac_line "[12/20] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
             disk_warn=1
             ((errCount++))
         fi
     done < <(df -h --output=pcent,target 2>/dev/null \
         | tail -n +2 | grep -v '/snap/' \
         | grep -v '/mnt/wsl/docker-desktop')
-    (( disk_warn == 0 )) && __tac_line "[12/17] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
+    (( disk_warn == 0 )) && __tac_line "[15/20] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
 
-    # [13/17] Systemd Unit Check — verify OpenClaw gateway service is configured.
+    # [13/20] Systemd Unit Check — verify OpenClaw gateway service is configured.
     if systemctl --user list-unit-files | grep -q openclaw-gateway
     then
-        __tac_line "[13/17] Systemd Units" "[GATEWAY SERVICE INSTALLED]" "$C_Success"
+        __tac_line "[16/20] Systemd Units" "[GATEWAY SERVICE INSTALLED]" "$C_Success"
     else
-        __tac_line "[13/17] Systemd Units" "[SKIP - no user units]" "$C_Dim"
+        __tac_line "[16/20] Systemd Units" "[SKIP - no user units]" "$C_Dim"
     fi
 
-    # [14/17] Stale Process Cleanup — kill orphaned llama-server instances.
+    # [14/20] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).
     # Per-PID check: only kill processes that are NOT listening on LLM_PORT.
     local stale_pids
@@ -804,32 +812,32 @@ function up() {
         fi
         if (( _state_age < 60 ))
         then
-            __tac_line "[14/17] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
+            __tac_line "[17/20] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
         else
             pkill -u "$USER" -x llama-server 2>/dev/null
             rm -f "$ACTIVE_LLM_FILE"
-            __tac_line "[14/17] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
+            __tac_line "[17/20] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
         fi
     else
-        __tac_line "[14/17] Stale Processes" "[CLEAN]" "$C_Success"
+        __tac_line "[17/20] Stale Processes" "[CLEAN]" "$C_Success"
     fi
 
-    # [15/17] Documentation drift guard — lightweight README accuracy check.
+    # [15/20] Documentation drift guard — lightweight README accuracy check.
     if __check_cooldown "docs_sync" "$now" hours_left "$force_mode"
     then
         if __docs_sync_check
         then
-            __tac_line "[15/17] README Sync" "[OK]" "$C_Success"
+            __tac_line "[18/20] README Sync" "[OK]" "$C_Success"
         else
-            __tac_line "[15/17] README Sync" "[DRIFT DETECTED]" "$C_Warning"
+            __tac_line "[18/20] README Sync" "[DRIFT DETECTED]" "$C_Warning"
             ((errCount++))
         fi
         __set_cooldown "docs_sync" "$now"
     else
-        __tac_line "[15/17] README Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[18/20] README Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    # [16/17] Docker Prune — clean unused containers, images, and build cache.
+    # [19/20] Docker Prune — clean unused containers, images, and build cache.
     if command -v docker >/dev/null 2>&1
     then
         local docker_freed
@@ -838,32 +846,38 @@ function up() {
             | grep -oP '[\d.]+[MGK]B' || echo "")
         if [[ -n "$docker_freed" ]]
         then
-            __tac_line "[16/17] Docker Prune" "[FREED $docker_freed]" "$C_Success"
+            __tac_line "[19/20] Docker Prune" "[FREED $docker_freed]" "$C_Success"
         else
-            __tac_line "[16/17] Docker Prune" "[CLEAN]" "$C_Success"
+            __tac_line "[19/20] Docker Prune" "[CLEAN]" "$C_Success"
         fi
     else
-        __tac_line "[16/17] Docker Prune" "[SKIP - Docker not installed]" "$C_Dim"
+        __tac_line "[19/20] Docker Prune" "[SKIP - Docker not installed]" "$C_Dim"
     fi
 
-    # [17/17] NPM Cache Clean — verify and clean npm cache.
-    if command -v npm >/dev/null 2>&1
+    # [20/20] NPM Cache Clean — verify and clean npm cache (24h cooldown).
+    if __check_cooldown "npm_cache" "$now" hours_left "$force_mode"
     then
-        local npm_cache_result
-        npm_cache_result=$(npm cache verify 2>&1 | grep -E "Cache cleaned|Cache size" || echo "")
-        if [[ "$npm_cache_result" == *"Cache cleaned"* ]]
+        if command -v npm >/dev/null 2>&1
         then
-            local cleaned_size
-            cleaned_size=$(echo "$npm_cache_result" | grep -oP '[\d.]+[MGK]B' || echo "unknown")
-            __tac_line "[17/17] NPM Cache Clean" "[FREED $cleaned_size]" "$C_Success"
-        elif [[ "$npm_cache_result" == *"Cache size"* ]]
-        then
-            __tac_line "[17/17] NPM Cache Clean" "[NO ACTION NEEDED]" "$C_Success"
+            local npm_cache_result
+            npm_cache_result=$(npm cache verify 2>&1 | grep -E "Cache cleaned|Cache size" || echo "")
+            if [[ "$npm_cache_result" == *"Cache cleaned"* ]]
+            then
+                local cleaned_size
+                cleaned_size=$(echo "$npm_cache_result" | grep -oP '[\d.]+[MGK]B' || echo "unknown")
+                __tac_line "[20/20] NPM Cache Clean" "[FREED $cleaned_size]" "$C_Success"
+            elif [[ "$npm_cache_result" == *"Cache size"* ]]
+            then
+                __tac_line "[20/20] NPM Cache Clean" "[ALREADY UP TO DATE]" "$C_Success"
+            else
+                __tac_line "[20/20] NPM Cache Clean" "[VERIFIED]" "$C_Success"
+            fi
+            __set_cooldown "npm_cache" "$now"
         else
-            __tac_line "[17/17] NPM Cache Clean" "[VERIFIED]" "$C_Success"
+            __tac_line "[20/20] NPM Cache Clean" "[SKIP - NPM not installed]" "$C_Dim"
         fi
     else
-        __tac_line "[17/17] NPM Cache Clean" "[SKIP - NPM not installed]" "$C_Dim"
+        __tac_line "[20/20] NPM Cache Clean" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
     __tac_divider
