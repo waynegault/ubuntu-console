@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 13
+# Module Version: 14
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -285,6 +285,10 @@ function up() {
 
             if [[ -n "$global_pkgs" ]]
             then
+                # Get list of outdated packages before update
+                local outdated_before
+                outdated_before=$(npm outdated -g --parseable 2>/dev/null | grep -v "^npm:" || echo "")
+
                 update_output=$(npm update -g 2>&1)
                 local npm_rc=$?
 
@@ -292,7 +296,13 @@ function up() {
                 if (( npm_rc == 0 )) || [[ "$update_output" == *"Workspaces not supported for global packages"* ]]
                 then
                     npm_did_update=1
-                    __tac_line "[3/17] NPM Packages" "[UPDATED]" "$C_Success"
+                    # Check if any packages were actually updated
+                    if [[ -n "$outdated_before" ]]
+                    then
+                        __tac_line "[3/17] NPM Packages" "[UPDATED]" "$C_Success"
+                    else
+                        __tac_line "[3/17] NPM Packages" "[NO UPDATES NEEDED]" "$C_Dim"
+                    fi
                 else
                     __tac_line "[3/17] NPM Packages" "[FAILED]" "$C_Warning"
                     pkg_err=1
