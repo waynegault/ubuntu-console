@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 19
+# Module Version: 20
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -254,7 +254,7 @@ function up() {
             if (( apt_rc == 0 ))
             then
                 sudo apt autoremove -y >/dev/null 2>&1
-                __tac_line "[2/17] Linux Update" "[UPDATED]" "$C_Success"
+                __tac_line "[2/17] Linux Update" "[PACKAGES UPDATED]" "$C_Success"
                 __set_cooldown "apt" "$now"
                 __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
             else
@@ -299,7 +299,7 @@ function up() {
                     # Check if any packages were actually updated
                     if [[ -n "$outdated_before" ]]
                     then
-                        __tac_line "[3/17] NPM Packages" "[UPDATED]" "$C_Success"
+                        __tac_line "[3/17] NPM Packages" "[PACKAGES UPDATED]" "$C_Success"
                     else
                         __tac_line "[3/17] NPM Packages" "[NO UPDATES NEEDED]" "$C_Dim"
                     fi
@@ -340,7 +340,7 @@ function up() {
                     # Check if any crates were actually updated
                     if [[ -n "$outdated_crates" ]]
                     then
-                        __tac_line "[4/17] Cargo Crates" "[UPDATED]" "$C_Success"
+                        __tac_line "[4/17] Cargo Crates" "[CRATES UPDATED]" "$C_Success"
                     else
                         __tac_line "[4/17] Cargo Crates" "[NO UPDATES NEEDED]" "$C_Dim"
                     fi
@@ -476,7 +476,7 @@ function up() {
             doc_rc=$?
             if (( doc_rc == 0 ))
             then
-                __tac_line "[6/17] OpenClaw Framework" "[HEALTHY]" "$C_Success"
+                __tac_line "[6/17] OpenClaw Framework" "[VERIFIED HEALTHY]" "$C_Success"
             elif (( doc_rc == 124 ))
             then
                 __tac_line "[6/17] OpenClaw Framework" "[TIMED OUT]" "$C_Warning"
