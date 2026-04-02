@@ -149,7 +149,8 @@ function __resolve_vscode_bin() {
     fi
     # Cache miss or expired — resolve path
     local win_user
-    win_user=$(pwsh.exe -NoProfile -Command '[Environment]::UserName' 2>/dev/null | tr -d '\r')
+    # Timeout after 2 seconds to avoid hanging WSL startup if PowerShell is unresponsive
+    win_user=$(timeout 2 pwsh.exe -NoProfile -Command '[Environment]::UserName' 2>/dev/null | tr -d '\r')
     VSCODE_BIN="$WINDOWS_USER_ROOT/${win_user}/AppData/Local/Programs/Microsoft VS Code/bin/code"
     if [[ ! -x "$VSCODE_BIN" ]]
     then
