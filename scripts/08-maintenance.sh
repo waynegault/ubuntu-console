@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -649,7 +649,7 @@ function up() {
             rm -f "$_tmpf" && ((count++))
         done < <(find /tmp/openclaw \( -name '*.tmp' -o -name 'python-*.exe' \) -print0 2>/dev/null)
     fi
-    __tac_line "[12/13] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
+    __tac_line "[11/13] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
 
     # [12/13] Disk Space Audit — warn if any mount point exceeds 90%
     local disk_warn=0
@@ -660,14 +660,14 @@ function up() {
         [[ ! "$pct_num" =~ ^[0-9]+$ ]] && continue
         if (( pct_num >= 90 ))
         then
-            __tac_line "[13/13] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
+            __tac_line "[12/13] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
             disk_warn=1
             ((errCount++))
         fi
     done < <(df -h --output=pcent,target 2>/dev/null \
         | tail -n +2 | grep -v '/snap/' \
         | grep -v '/mnt/wsl/docker-desktop')
-    (( disk_warn == 0 )) && __tac_line "[13/13] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
+    (( disk_warn == 0 )) && __tac_line "[12/13] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
 
     # [14/17] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).

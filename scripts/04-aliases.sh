@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 3. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -183,5 +183,11 @@ function cop-ask() {
 alias chat:='local_chat'
 alias wtf='wtf_repl'
 
+# ---- System Maintenance ----
+# linup — Quick Linux system update (apt update + upgrade).
+# For full maintenance with cooldowns, use 'up' instead.
+function linup() {
+    sudo apt update && sudo apt upgrade -y
+}
 
 # end of file
