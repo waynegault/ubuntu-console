@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -612,12 +612,28 @@ function up() {
     # [10/13] GPU Checks — __get_gpu returns CSV or a sentinel string.
     # Sentinels: "N/A" (no nvidia-smi), "Querying..." (first-boot cache miss),
     # or contains "OFFLINE" (driver crash / WSL GPU passthrough failure).
+    # 
+    # Race condition fix: If cache is stale, __get_gpu spawns a background job
+    # and returns "Querying..." immediately. We wait up to 3s for the cache
+    # to be populated before declaring GPU offline.
     local gpu
     gpu=$(__get_gpu)
 
+    # Wait for background cache refresh if needed (max 3s, 100ms intervals)
+    if [[ "$gpu" == "Querying..." ]]
+    then
+        local _wait_count=0
+        while [[ "$gpu" == "Querying..." && $_wait_count -lt 30 ]]
+        do
+            sleep 0.1
+            gpu=$(__get_gpu)
+            ((_wait_count++))
+        done
+    fi
+
     if [[ "$gpu" != "N/A" && "$gpu" != "Querying..." && "$gpu" != *"OFFLINE"* ]]
     then
-        __tac_line "[11/13] RTX 3050 Ti" "[READY]" "$C_Success"
+        __tac_line "[10/13] GPU Status" "[READY]" "$C_Success"
     else
         __tac_line "[10/13] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
         ((errCount++))
