@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 12
+# Module Version: 13
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -522,7 +522,7 @@ function up() {
                     echo "$_local_changes" | head -5
                     [[ $(echo "$_local_changes" | wc -l) -gt 5 ]] && echo "  ... and more"
                     printf '\n%s\n' "Choose an option:"
-                    printf '  [1] Keep local changes (stash + pull + stash pop)\n'
+                    printf '  [1] Keep local changes (stash → pull → reapply)\n'
                     printf '  [2] Discard local changes (hard reset to remote)\n'
                     printf '  [3] Skip update (keep as-is)\n'
                     printf '  [a] Apply to all remaining plugins (remember choice)\n'
@@ -540,6 +540,7 @@ function up() {
                             # Stash, pull, then pop
                             if git -C "$_path" stash push -m "pre-update backup" >/dev/null 2>&1
                             then
+                                # Had something to stash — pull then reapply
                                 if git -C "$_path" pull --ff-only >/dev/null 2>&1
                                 then
                                     git -C "$_path" stash pop >/dev/null 2>&1 || true
@@ -547,17 +548,18 @@ function up() {
                                     return 0
                                 else
                                     git -C "$_path" stash pop >/dev/null 2>&1 || true
-                                    __tac_line "$_status_line" "[UP TO DATE (pull failed, changes kept)]" "$C_Dim"
+                                    __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
                                     return 1
                                 fi
                             else
-                                # No stash needed (nothing to stash), just pull
+                                # Nothing to stash — changes are staged or untracked
+                                # Just try to pull
                                 if git -C "$_path" pull --ff-only >/dev/null 2>&1
                                 then
                                     __tac_line "$_status_line" "[UPDATED]" "$C_Success"
                                     return 0
                                 else
-                                    __tac_line "$_status_line" "[UP TO DATE]" "$C_Dim"
+                                    __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
                                     return 1
                                 fi
                             fi
@@ -566,11 +568,11 @@ function up() {
                             # Hard reset to remote
                             git -C "$_path" fetch origin >/dev/null 2>&1
                             git -C "$_path" reset --hard origin/HEAD >/dev/null 2>&1
-                            __tac_line "$_status_line" "[UPDATED (local changes discarded)]" "$C_Warning"
+                            __tac_line "$_status_line" "[OVERWRITTEN (local changes discarded)]" "$C_Warning"
                             return 0
                             ;;
                         *)
-                            __tac_line "$_status_line" "[SKIPPED (local changes)]" "$C_Dim"
+                            __tac_line "$_status_line" "[SKIPPED (has local changes)]" "$C_Dim"
                             return 1
                             ;;
                     esac
@@ -581,13 +583,33 @@ function up() {
                 fi
             fi
 
-            # No local changes — standard pull
-            if git -C "$_path" pull --ff-only >/dev/null 2>&1
+            # No local changes — check if there are upstream updates
+            git -C "$_path" fetch origin >/dev/null 2>&1
+            local _ahead_behind
+            _ahead_behind=$(git -C "$_path" rev-list --left-right --count HEAD...origin/HEAD 2>/dev/null)
+            local _ahead _behind
+            _ahead=$(echo "$_ahead_behind" | cut -f1)
+            _behind=$(echo "$_ahead_behind" | cut -f2)
+
+            if [[ "$_behind" -eq 0 && "$_ahead" -eq 0 ]]
             then
-                __tac_line "$_status_line" "[UPDATED]" "$C_Success"
-                return 0
+                # Already at latest — nothing to pull
+                __tac_line "$_status_line" "[NO CHANGES]" "$C_Dim"
+                return 1
+            elif [[ "$_behind" -gt 0 ]]
+            then
+                # Behind remote — pull
+                if git -C "$_path" pull --ff-only >/dev/null 2>&1
+                then
+                    __tac_line "$_status_line" "[UPDATED]" "$C_Success"
+                    return 0
+                else
+                    __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
+                    return 1
+                fi
             else
-                __tac_line "$_status_line" "[UP TO DATE]" "$C_Dim"
+                # Ahead of remote (local commits) — don't overwrite
+                __tac_line "$_status_line" "[AHEAD OF REMOTE ($_ahead commit(s))]" "$C_Dim"
                 return 1
             fi
         }
@@ -610,6 +632,7 @@ function up() {
         if (( plugin_updated == 1 ))
         then
             __set_cooldown "oc_plugins" "$now"
+            __tac_line "[7/17] OpenClaw Plugins" "[UPDATE COMPLETE]" "$C_Success"
         else
             __tac_line "[7/17] OpenClaw Plugins" "[ALL UP TO DATE]" "$C_Dim"
         fi
