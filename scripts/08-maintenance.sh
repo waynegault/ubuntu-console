@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 18
+# Module Version: 19
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -550,17 +550,12 @@ function up() {
                     printf '║   %-70s ║\n' "[1] Keep local changes (stash → pull → reapply)"
                     printf '║   %-70s ║\n' "[2] Discard local changes (hard reset to remote)"
                     printf '║   %-70s ║\n' "[3] Skip update (keep as-is)"
-                    printf '║   %-70s ║\n' "[a] Apply to all remaining plugins (remember choice)"
                     printf '║ %-70s ║\n' "Selection: "
                     printf '\e[74C'  # Move cursor to column 74 (after "Selection: ")
 
-                    local _choice _apply_all=""
+                    local _choice
                     read -r _choice
                     printf '\e[0m'  # Reset
-
-                    case "$_choice" in
-                        a|A) _apply_all="stash"; _choice="1" ;;
-                    esac
 
                     case "$_choice" in
                         1)
