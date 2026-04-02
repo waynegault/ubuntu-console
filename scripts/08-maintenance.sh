@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 20
+# Module Version: 21
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -370,95 +370,48 @@ function up() {
     fi
 
     # [5/17] R Packages (CRAN + Bioconductor)
-    # Uses Windows PowerShell script to avoid lock directory issues when running from WSL.
+    # Updates R packages in user library (no admin required).
     if __check_cooldown "r_pkgs" "$now" hours_left "$force_mode"
     then
         local r_err=0 r_did_update=0
-        local ps1_script="/mnt/c/Programs/bat Files/update-r-packages.ps1"
 
-        # Check if PowerShell is available
-        if command -v powershell.exe >/dev/null 2>&1
+        # Find R installation (Windows or WSL)
+        local _rscript=""
+        if command -v Rscript >/dev/null 2>&1
         then
-            # Check if our helper script exists
-            if [[ -f "$ps1_script" ]]
-            then
-                # Get package count before update (for verification)
-                local pkg_count_before
-                local _ps_cmd="& { (Get-InstalledModule -ErrorAction SilentlyContinue).Count"
-                _ps_cmd+=" + (Get-Package -ProviderName NuGet -ErrorAction SilentlyContinue).Count }"
-                pkg_count_before=$(timeout 30 powershell.exe -NoProfile -NonInteractive \
-                    -Command "$_ps_cmd" 2>/dev/null || echo "0")
-
-                # Run the Windows PowerShell script
-                local update_output
-                update_output=$(timeout 300 powershell.exe -NoProfile -NonInteractive -File "$ps1_script" 2>&1)
-                local ps_rc=$?
-
-                if (( ps_rc == 0 )) || [[ "$update_output" == *"SUCCESS"* ]]
-                then
-                    r_did_update=1
-                    # Verify by checking if update message appeared
-                    local _verified=0
-                    [[ "$update_output" == *"Updating R packages"* ]] && _verified=1
-                    [[ "$update_output" == *"successfully unpacked"* ]] && _verified=1
-                    [[ "$update_output" == *"updated index"* ]] && _verified=1
-                    if (( _verified == 1 ))
-                    then
-                        __tac_line "[5/17] R Packages" "[UPDATED - Verified]" "$C_Success"
-                    else
-                        __tac_line "[5/17] R Packages" "[UPDATED]" "$C_Success"
-                    fi
-                elif [[ "$update_output" == *"ERROR"* ]] || (( ps_rc != 0 ))
-                then
-                    r_err=1
-                    __tac_line "[5/17] R Packages" "[FAILED]" "$C_Warning"
-                else
-                    r_did_update=1
-                    __tac_line "[5/17] R Packages" "[NO UPDATE NEEDED]" "$C_Dim"
-                fi
-            else
-                # Helper script not found - skip with helpful message
-                r_did_update=1
-                __tac_line "[5/17] R Packages" "[SKIP - PS1 helper missing]" "$C_Dim"
-            fi
+            _rscript="Rscript"
         else
-            # PowerShell not available - try direct R (legacy fallback)
-            local _rscript=""
-            if command -v Rscript >/dev/null 2>&1
-            then
-                _rscript="Rscript"
-            else
-                # WSL fallback: Windows R
-                local _win_r
-                for _win_r in "/mnt/c/Program Files/R"/R-*/bin/x64/Rscript.exe; do
-                    [[ -x "$_win_r" ]] && _rscript="$_win_r"
-                done
-            fi
-
-            if [[ -n "$_rscript" ]]
-            then
-                local pkg_count
-                pkg_count=$(timeout 10 "$_rscript" -e 'cat(length(installed.packages()))' 2>/dev/null || echo "0")
-
-                if [[ "$pkg_count" -gt 1 ]]
-                then
-                    r_did_update=1
-                    __tac_line "[5/17] R Packages" "[SKIP - Run from Windows]" "$C_Dim"
-                else
-                    r_did_update=1
-                    __tac_line "[5/17] R Packages" "[NO USER PACKAGES]" "$C_Dim"
-                fi
-            else
-                __tac_line "[5/17] R Packages" "[NOT INSTALLED]" "$C_Dim"
-            fi
+            # WSL fallback: Windows R
+            local _win_r
+            for _win_r in "/mnt/c/Program Files/R"/R-*/bin/x64/Rscript.exe; do
+                [[ -x "$_win_r" ]] && _rscript="$_win_r"
+            done
         fi
 
-        if (( r_err == 0 && r_did_update == 1 ))
+        if [[ -n "$_rscript" ]]
         then
+            # Check for outdated packages first
+            local outdated_r
+            outdated_r=$("$_rscript" -e 'library(tools); pkg <- installed.packages()[,3]; upd <- available.packages()[,1]; old <- names(pkg[pkg %in% names(upd) & pkg != upd[names(pkg[pkg %in% names(upd)])]]); if(length(old) > 0) cat(old, sep="\n")' 2>/dev/null | head -5)
+
+            if [[ -n "$outdated_r" ]]
+            then
+                # Update packages (user library, no admin needed)
+                if "$_rscript" -e "options(repos = c(CRAN = 'https://cloud.r-project.org')); update.packages(lib.loc = Sys.getenv('R_LIBS_USER'), ask = FALSE, checkBuilt = TRUE, quiet = TRUE)" >/dev/null 2>&1
+                then
+                    __tac_line "[5/17] R Packages" "[PACKAGES UPDATED]" "$C_Success"
+                    r_did_update=1
+                else
+                    __tac_line "[5/17] R Packages" "[FAILED]" "$C_Warning"
+                    r_err=1
+                fi
+            else
+                __tac_line "[5/17] R Packages" "[NO UPDATES NEEDED]" "$C_Dim"
+                r_did_update=1
+            fi
             __set_cooldown "r_pkgs" "$now"
-        elif (( r_err == 1 ))
-        then
-            ((errCount++))
+        else
+            __tac_line "[5/17] R Packages" "[NOT INSTALLED]" "$C_Dim"
         fi
     else
         __tac_line "[5/17] R Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
