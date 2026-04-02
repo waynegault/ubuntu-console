@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 17
+# Module Version: 18
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -538,18 +538,25 @@ function up() {
                 # Local changes detected — ask user (only in interactive mode)
                 if [[ -t 0 ]]  # stdin is a terminal
                 then
-                    printf '\n%s %s — local changes detected:\n' "${C_Warning}Warning:${C_Reset}" "$_name"
-                    echo "$_local_changes" | head -5
-                    [[ $(echo "$_local_changes" | wc -l) -gt 5 ]] && echo "  ... and more"
-                    printf '\n%s\n' "Choose an option:"
-                    printf '  [1] Keep local changes (stash → pull → reapply)\n'
-                    printf '  [2] Discard local changes (hard reset to remote)\n'
-                    printf '  [3] Skip update (keep as-is)\n'
-                    printf '  [a] Apply to all remaining plugins (remember choice)\n'
-                    printf '\nSelection: '
+                    # Format prompt within table border for continuity
+                    printf '\n%s\n' "║$(printf '─%.0s' {1..76})║"
+                    printf '║ %s %-70s ║\n' "${C_Warning}Warning:${C_Reset}" "$_name — local changes detected:"
+                    echo "$_local_changes" | head -5 | while read -r line; do
+                        printf '║   %-70s ║\n' "${line:0:70}"
+                    done
+                    [[ $(echo "$_local_changes" | wc -l) -gt 5 ]] && printf '║   %-70s ║\n' "... and more"
+                    printf '%s\n' "║$(printf '─%.0s' {1..76})║"
+                    printf '║ %-70s ║\n' "Choose an option:"
+                    printf '║   %-70s ║\n' "[1] Keep local changes (stash → pull → reapply)"
+                    printf '║   %-70s ║\n' "[2] Discard local changes (hard reset to remote)"
+                    printf '║   %-70s ║\n' "[3] Skip update (keep as-is)"
+                    printf '║   %-70s ║\n' "[a] Apply to all remaining plugins (remember choice)"
+                    printf '║ %-70s ║\n' "Selection: "
+                    printf '\e[74C'  # Move cursor to column 74 (after "Selection: ")
 
                     local _choice _apply_all=""
                     read -r _choice
+                    printf '\e[0m'  # Reset
 
                     case "$_choice" in
                         a|A) _apply_all="stash"; _choice="1" ;;
@@ -598,6 +605,11 @@ function up() {
                             # Hard reset to remote
                             git -C "$_path" fetch origin >/dev/null 2>&1
                             git -C "$_path" reset --hard origin/HEAD >/dev/null 2>&1
+                            # Install new dependencies if package.json exists
+                            if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
+                            then
+                                npm install --prefix "$_path" --silent 2>/dev/null || true
+                            fi
                             __tac_line "$_status_line" "[OVERWRITTEN (local changes discarded)]" "$C_Warning"
                             return 0
                             ;;
