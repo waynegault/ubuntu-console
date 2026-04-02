@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 25
+# Module Version: 26
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -379,7 +379,7 @@ function up() {
     fi
 
     # [5/20] R Packages (CRAN + Bioconductor)
-    # Updates R packages in user library (no admin required).
+    # Updates R packages in both system and user libraries.
     if __check_cooldown "r_pkgs" "$now" hours_left "$force_mode"
     then
         local r_err=0 r_did_update=0
@@ -399,54 +399,31 @@ function up() {
 
         if [[ -n "$_rscript" ]]
         then
-            # Check for outdated packages in BOTH system and user libraries
-            local has_outdated
-            has_outdated=$("$_rscript" -e 'suppressWarnings({
-                # Check user library first (Documents/R/win-library)
-                user_lib <- file.path(Sys.getenv("USERPROFILE"), "Documents", "R", "win-library")
-                if (dir.exists(user_lib)) {
-                    # Get the version-specific subdirectory
-                    user_lib <- list.files(user_lib, full.names = TRUE)[1]
+            # Run update and let R handle the detection internally
+            # update.packages() with ask=FALSE only updates if there are outdated packages
+            local update_output
+            update_output=$(timeout 120 "$_rscript" -e "
+                options(repos = c(CRAN = 'https://cloud.r-project.org'))
+                pkgs <- old.packages()
+                if (is.null(pkgs)) {
+                    cat('NONE')
+                } else {
+                    cat('HAS_UPDATES')
+                    update.packages(ask = FALSE, checkBuilt = TRUE, quiet = FALSE)
                 }
-                # Also check system library
-                sys_lib <- file.path(Sys.getenv("PROGRAMFILES"), "R", list.files(file.path(Sys.getenv("PROGRAMFILES"), "R"), pattern = "^R-")[1], "library")
-                
-                # Get installed packages from both locations
-                inst_user <- if (dir.exists(user_lib)) installed.packages(lib.loc = user_lib) else NULL
-                inst_sys <- if (dir.exists(sys_lib)) installed.packages(lib.loc = sys_lib) else NULL
-                
-                # Combine
-                if (is.null(inst_user) && is.null(inst_sys)) { cat("0"); quit() }
-                inst <- rbind(inst_user, inst_sys)
-                
-                avail <- available.packages()
-                if (is.null(inst) || is.null(avail)) { cat("0"); quit() }
-                
-                old <- numeric(0)
-                for (pkg in rownames(inst)) {
-                    if (pkg %in% rownames(avail)) {
-                        if (inst[pkg, "Version"] != avail[pkg, "Version"]) {
-                            old <- c(old, 1)
-                        }
-                    }
-                }
-                cat(length(old))
-            })' 2>/dev/null)
+            " 2>&1)
 
-            if [[ "$has_outdated" =~ ^[1-9][0-9]*$ ]]
+            if [[ "$update_output" == *"HAS_UPDATES"* ]]
             then
-                # Updates available - run update for BOTH user and system libraries
-                if "$_rscript" -e "options(repos = c(CRAN = 'https://cloud.r-project.org')); update.packages(ask = FALSE, checkBuilt = TRUE, quiet = TRUE)" >/dev/null 2>&1
-                then
-                    __tac_line "[5/20] R Packages" "[PACKAGES UPDATED]" "$C_Success"
-                    r_did_update=1
-                else
-                    __tac_line "[5/20] R Packages" "[FAILED]" "$C_Warning"
-                    r_err=1
-                fi
-            else
+                __tac_line "[5/20] R Packages" "[PACKAGES UPDATED]" "$C_Success"
+                r_did_update=1
+            elif [[ "$update_output" == *"NONE"* ]]
+            then
                 __tac_line "[5/20] R Packages" "[ALREADY UP TO DATE]" "$C_Success"
                 r_did_update=1
+            else
+                __tac_line "[5/20] R Packages" "[FAILED]" "$C_Warning"
+                r_err=1
             fi
             __set_cooldown "r_pkgs" "$now"
         else
