@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 
 # ==============================================================================
@@ -200,7 +200,7 @@ if [[ -z "${COOLDOWN_DAILY+x}" ]]; then
 declare -ri COOLDOWN_DAILY=86400     # 24 hours in seconds
 fi
 if [[ -z "${COOLDOWN_WEEKLY+x}" ]]; then
-declare -ri COOLDOWN_WEEKLY=604800   # 7 days in seconds
+declare -ri COOLDOWN_WEEKLY=86400    # 24 hours in seconds (changed from 7 days)
 fi
 if [[ -z "${LOG_MAX_BYTES+x}" ]]; then
 declare -ri LOG_MAX_BYTES=1048576    # 1 MB - logtrim threshold

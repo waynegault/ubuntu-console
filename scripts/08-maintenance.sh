@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 22
+# Module Version: 23
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -262,7 +262,7 @@ function up() {
                 then
                     __tac_line "[2/17] Linux Update" "[PACKAGES UPDATED]" "$C_Success"
                 else
-                    __tac_line "[2/17] Linux Update" "[NO UPDATES NEEDED]" "$C_Dim"
+                    __tac_line "[2/17] Linux Update" "[ALREADY UP TO DATE]" "$C_Success"
                 fi
                 __set_cooldown "apt" "$now"
                 __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
@@ -310,7 +310,7 @@ function up() {
                     then
                         __tac_line "[3/17] NPM Packages" "[PACKAGES UPDATED]" "$C_Success"
                     else
-                        __tac_line "[3/17] NPM Packages" "[NO UPDATES NEEDED]" "$C_Dim"
+                        __tac_line "[3/17] NPM Packages" "[ALREADY UP TO DATE]" "$C_Success"
                     fi
                 else
                     __tac_line "[3/17] NPM Packages" "[FAILED]" "$C_Warning"
@@ -351,7 +351,7 @@ function up() {
                     then
                         __tac_line "[4/17] Cargo Crates" "[CRATES UPDATED]" "$C_Success"
                     else
-                        __tac_line "[4/17] Cargo Crates" "[NO UPDATES NEEDED]" "$C_Dim"
+                        __tac_line "[4/17] Cargo Crates" "[ALREADY UP TO DATE]" "$C_Success"
                     fi
                 else
                     __tac_line "[4/17] Cargo Crates" "[FAILED]" "$C_Warning"
@@ -399,10 +399,23 @@ function up() {
 
         if [[ -n "$_rscript" ]]
         then
-            # Check for outdated packages using old.packages() which returns TRUE if updates available
+            # Check for outdated packages by comparing installed vs available
             local has_outdated
-            has_outdated=$("$_rscript" -e 'suppressWarnings({ old <- old.packages(); cat(if(is.null(old)) "0" else nrow(old)) }))' 2>/dev/null)
-            
+            has_outdated=$("$_rscript" -e 'suppressWarnings({
+                inst <- installed.packages()
+                avail <- available.packages()
+                if (is.null(inst) || is.null(avail)) { cat("0"); quit() }
+                old <- numeric(0)
+                for (pkg in rownames(inst)) {
+                    if (pkg %in% rownames(avail)) {
+                        if (inst[pkg, "Version"] != avail[pkg, "Version"]) {
+                            old <- c(old, 1)
+                        }
+                    }
+                }
+                cat(length(old))
+            })' 2>/dev/null)
+
             if [[ "$has_outdated" =~ ^[1-9][0-9]*$ ]]
             then
                 # Updates available - run update
@@ -415,7 +428,7 @@ function up() {
                     r_err=1
                 fi
             else
-                __tac_line "[5/17] R Packages" "[NO UPDATES NEEDED]" "$C_Dim"
+                __tac_line "[5/17] R Packages" "[ALREADY UP TO DATE]" "$C_Success"
                 r_did_update=1
             fi
             __set_cooldown "r_pkgs" "$now"
@@ -593,7 +606,7 @@ function up() {
             if [[ "$_behind" -eq 0 && "$_ahead" -eq 0 ]]
             then
                 # Already at latest — nothing to pull
-                __tac_line "$_status_line" "[NO CHANGES]" "$C_Dim"
+                __tac_line "$_status_line" "[ALREADY UP TO DATE]" "$C_Success"
                 return 1
             elif [[ "$_behind" -gt 0 ]]
             then
@@ -670,7 +683,7 @@ function up() {
                     ((errCount++))
                 fi
             else
-                __tac_line "[8/17] Python Venv ($venv_name)" "[NO UPDATES NEEDED]" "$C_Dim"
+                __tac_line "[8/17] Python Venv ($venv_name)" "[ALREADY UP TO DATE]" "$C_Success"
             fi
             __set_cooldown "pyvenv_pkgs" "$now"
         else
@@ -680,7 +693,8 @@ function up() {
         __tac_line "[8/17] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
     fi
 
-    # [9/17] Python Fleet
+    # [9/17] Python Fleet — check which Python 3.x versions are installed.
+    # Note: Python is updated via apt (Linux Update step), not here.
     if __check_cooldown "pyfleet" "$now" hours_left "$force_mode"
     then
         local py_versions=()
