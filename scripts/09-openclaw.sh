@@ -13,7 +13,7 @@
 #   __bridge_windows_api_keys, oc-refresh-keys, oc-backup, oc-restore,
 #   owk, ologs, ocroot, oc, lc, oc-update, oc-health, oc-cron, oc-skills,
 #   oc-plugins, oc-tail, oc-channels, oc-sec, oc-tui, oc-config,
-#   oc-docs, oc-usage, oc-memory-search, oc-local-llm, oc-sync-models,
+#   oc-docs, oc-usage, oc-local-llm, oc-sync-models,
 #   oc-browser, oc-nodes, oc-sandbox, oc-env, oc-cache-clear,
 #   oc-diag, oc-doctor-local, oc-failover, wacli, oc-kgraph, __is_openclaw_installed
 
@@ -586,8 +586,6 @@ function oc() {
         printf '  %-20s %s\n' "start"        "Dispatch an agent turn (-m '<msg>')"
         printf '  %-20s %s\n' "stop"         "Delete an agent by ID (--agent <id>)"
         printf '  %-20s %s\n' "agent-turn"   "Alias for start"
-        printf '  %-20s %s\n' "mem-index"     "Rebuild the vector memory search index"
-        printf '  %-20s %s\n' "memory-search" "Semantic search across memory store"
         printf '%s\n' ""
         printf '%s\n' "${C_Highlight}Config & Logs${C_Reset}"
         printf '  %-20s %s\n' "conf"         "Open openclaw.json in VS Code"
@@ -656,8 +654,6 @@ function oc() {
         agent-turn)    ocstart "$@" ;;
         agent-use)     oc-agent-use "$@" ;;
         agent-usage)   oc-agent-use "$@" ;;
-        mem-index)     mem-index "$@" ;;
-        memory-search) oc-memory-search "$@" ;;
         # Config & Logs
         conf)          occonf "$@" ;;
         config)        oc-config "$@" ;;
@@ -1557,8 +1553,19 @@ function lc() {
 
 # ---------------------------------------------------------------------------
 # oc-update — Update the OpenClaw CLI to the latest version.
+# Uses enhanced update script to handle permission issues automatically.
 # ---------------------------------------------------------------------------
 function oc-update() {
+    local enhanced_script="$HOME/.openclaw/workspace/scripts/oc-update-enhanced.sh"
+    
+    # Use enhanced update script if available
+    if [[ -f "$enhanced_script" ]]
+    then
+        exec "$enhanced_script"
+        return $?
+    fi
+    
+    # Fallback to original update method
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw CLI" "[NOT INSTALLED]" "$C_Error"
         return 1
@@ -2141,62 +2148,6 @@ function oc-usage() {
 }
 
 # ---------------------------------------------------------------------------
-# oc-memory-search — Search OpenClaw's vector memory index.
-# Note: The 'openclaw memory search' command was removed. Memory search is now
-# performed automatically by agents during conversation. Users can view memory
-# contents via the knowledge graph UI (oc g) or by inspecting the memory DB.
-# ---------------------------------------------------------------------------
-function oc-memory-search() {
-    local query="${1:-}"
-
-    if [[ -z "$query" ]]
-    then
-        printf '%s\n' "${C_Highlight}Memory Search${C_Reset}"
-        printf '%s\n' ""
-        printf '%s\n' "${C_Dim}Note:${C_Reset} The 'openclaw memory search' command was removed."
-        printf '%s\n' "Memory indexing and search is now performed automatically by agents."
-        printf '%s\n' ""
-        printf '%s\n' "${C_Highlight}Alternatives:${C_Reset}"
-        printf '  %-20s %s\n' "oc g" "View memory in knowledge graph UI"
-        printf '  %-20s %s\n' "mem-index" "Check memory index status (no-op, auto-indexed)"
-        printf '%s\n' ""
-        printf '%s\n' "${C_Dim}Memory DB location:${C_Reset} ~/.openclaw/agents/*/memory/registry.sqlite"
-        return 0
-    fi
-
-    # Attempt to search via kgraph.py (if search capability exists)
-    local repo_root="${TACTICAL_REPO_ROOT:-$HOME/ubuntu-console}"
-    if [[ -f "$repo_root/scripts/kgraph.py" ]]
-    then
-        local result
-        result=$(python3 "$repo_root/scripts/kgraph.py" --help 2>&1 | grep -c "search" || true)
-        if [[ "$result" -gt 0 ]]
-        then
-            python3 "$repo_root/scripts/kgraph.py" search "$query" 2>/dev/null && return 0
-        fi
-    fi
-
-    # Fallback: show memory files directly
-    __tac_info "memory-search" "[Query: $query]" "$C_Info"
-    printf '%s\n' "${C_Dim}Memory files (most recent first):${C_Reset}"
-
-    local found=0
-    while IFS= read -r f
-    do
-        if [[ -f "$f" ]]
-        then
-            printf '  %s\n' "$f"
-            ((found++))
-            [[ $found -ge 5 ]] && break
-        fi
-    done < <(find "$OC_AGENTS" -name "registry.sqlite" -type f 2>/dev/null | head -5)
-
-    if [[ $found -eq 0 ]]
-    then
-        __tac_info "memory-search" "[No memory databases found]" "$C_Warning"
-    fi
-}
-
 # ---------------------------------------------------------------------------
 # oc-local-llm — Configure OpenClaw to use the local llama.cpp server.
 # Binds OpenClaw's model provider to the local inference endpoint so agents
@@ -2528,7 +2479,15 @@ function oc-doctor-local() {
     then
         local _oc_health_json=""
         _oc_health_json=$(oc-health --json 2>/dev/null || true)
-        gateway_health=$(jq -r '.health_status // "unknown"' <<< "$_oc_health_json" 2>/dev/null)
+        # Parse new health check format: look for API Health check status
+        local api_health_status=""
+        api_health_status=$(jq -r '.checks[] | select(.name == "API Health") | .status' <<< "$_oc_health_json" 2>/dev/null || echo "unknown")
+        if [[ "$api_health_status" == "OK" || "$api_health_status" == "ok" ]]
+        then
+            gateway_health="ok"
+        else
+            gateway_health="unknown"
+        fi
         local provider_json=""
         provider_json=$(openclaw config get models.providers.local-llama 2>/dev/null || true)
         if [[ -n "$provider_json" && "$provider_json" != "null" && "$provider_json" == *"127.0.0.1:${LLM_PORT}"* ]]

@@ -10,8 +10,8 @@
 # @modular-section: aliases
 # @depends: constants
 # @exports: code, oedit, llmconf, oclogs, le, lo, occonf, os, oa, ocstat,
-#   ocgs, ocv, mem-index, status, ocms, cop, cop-ask, cop-init (plus standard shell aliases)
-#   Note: owk → 'oc wk', ologs → 'oc log-dir', mem-index → 'oc mem-index'
+#   ocgs, ocv, status, ocms, cop, cop-ask, cop-init (plus standard shell aliases)
+#   Note: owk → 'oc wk', ologs → 'oc log-dir'
 
 # ---- Core OS Aliases ----
 alias ls='ls --color=auto'
@@ -145,14 +145,6 @@ function ocgs() {
 # ocv — Print the OpenClaw version.
 function ocv() {
     openclaw --version
-}
-# mem-index — Trigger OpenClaw memory indexing.
-# Note: The 'openclaw memory index' command was removed. Memory indexing is now
-# handled automatically by the gateway and kgraph. This function is a no-op for
-# backward compatibility.
-function mem-index() {
-    __tac_info "mem-index" "[Memory indexing is now automatic — command deprecated]" "$C_Info"
-    return 0
 }
 # status — Show basic OpenClaw status.
 function status() {
