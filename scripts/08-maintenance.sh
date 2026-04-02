@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 21
+# Module Version: 22
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -243,6 +243,10 @@ function up() {
     if __check_cooldown "apt" "$now" hours_left "$force_mode"
     then
         (( apt_did_update )) || sudo apt update >/dev/null 2>&1
+        # Check for upgradable packages first
+        local upgradable
+        upgradable=$(apt list --upgradable 2>/dev/null | grep -cv "^Listing")
+        
         # Dry-run first to detect dependency issues before actual upgrade
         if ! sudo apt upgrade --dry-run -y --no-install-recommends >/dev/null 2>&1
         then
@@ -254,7 +258,12 @@ function up() {
             if (( apt_rc == 0 ))
             then
                 sudo apt autoremove -y >/dev/null 2>&1
-                __tac_line "[2/17] Linux Update" "[PACKAGES UPDATED]" "$C_Success"
+                if (( upgradable > 0 ))
+                then
+                    __tac_line "[2/17] Linux Update" "[PACKAGES UPDATED]" "$C_Success"
+                else
+                    __tac_line "[2/17] Linux Update" "[NO UPDATES NEEDED]" "$C_Dim"
+                fi
                 __set_cooldown "apt" "$now"
                 __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
             else
@@ -390,13 +399,13 @@ function up() {
 
         if [[ -n "$_rscript" ]]
         then
-            # Check for outdated packages first
-            local outdated_r
-            outdated_r=$("$_rscript" -e 'library(tools); pkg <- installed.packages()[,3]; upd <- available.packages()[,1]; old <- names(pkg[pkg %in% names(upd) & pkg != upd[names(pkg[pkg %in% names(upd)])]]); if(length(old) > 0) cat(old, sep="\n")' 2>/dev/null | head -5)
-
-            if [[ -n "$outdated_r" ]]
+            # Check for outdated packages using old.packages() which returns TRUE if updates available
+            local has_outdated
+            has_outdated=$("$_rscript" -e 'suppressWarnings({ old <- old.packages(); cat(if(is.null(old)) "0" else nrow(old)) }))' 2>/dev/null)
+            
+            if [[ "$has_outdated" =~ ^[1-9][0-9]*$ ]]
             then
-                # Update packages (user library, no admin needed)
+                # Updates available - run update
                 if "$_rscript" -e "options(repos = c(CRAN = 'https://cloud.r-project.org')); update.packages(lib.loc = Sys.getenv('R_LIBS_USER'), ask = FALSE, checkBuilt = TRUE, quiet = TRUE)" >/dev/null 2>&1
                 then
                     __tac_line "[5/17] R Packages" "[PACKAGES UPDATED]" "$C_Success"
@@ -687,7 +696,7 @@ function up() {
             do
                 v_list+=("$(basename "$py")")
             done
-            __tac_line "[9/17] Python Fleet" "[${v_list[*]} VERIFIED]" "$C_Success"
+            __tac_line "[9/17] Python Fleet" "[${v_list[*]} INSTALLED]" "$C_Success"
             __set_cooldown "pyfleet" "$now"
         else
             __tac_line "[9/17] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
@@ -760,7 +769,7 @@ function up() {
     # [13/17] Systemd Unit Check — verify OpenClaw gateway service is configured.
     if systemctl --user list-unit-files | grep -q openclaw-gateway
     then
-        __tac_line "[13/17] Systemd Units" "[CONFIGURED]" "$C_Success"
+        __tac_line "[13/17] Systemd Units" "[GATEWAY SERVICE INSTALLED]" "$C_Success"
     else
         __tac_line "[13/17] Systemd Units" "[SKIP - no user units]" "$C_Dim"
     fi
