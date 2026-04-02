@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 26
+# Module Version: 27
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -402,14 +402,19 @@ function up() {
             # Run update and let R handle the detection internally
             # update.packages() with ask=FALSE only updates if there are outdated packages
             local update_output
-            update_output=$(timeout 120 "$_rscript" -e "
+            update_output=$(timeout 180 "$_rscript" -e "
                 options(repos = c(CRAN = 'https://cloud.r-project.org'))
                 pkgs <- old.packages()
                 if (is.null(pkgs)) {
                     cat('NONE')
                 } else {
                     cat('HAS_UPDATES')
-                    update.packages(ask = FALSE, checkBuilt = TRUE, quiet = FALSE)
+                    # First pass: update dependencies (source for compatibility)
+                    update.packages(ask = FALSE, checkBuilt = TRUE, quiet = FALSE, type = 'source')
+                    # Second pass: catch any remaining updates (binary for speed)
+                    update.packages(ask = FALSE, checkBuilt = TRUE, quiet = FALSE, type = 'binary')
+                    # Third pass: force update any locked packages
+                    update.packages(ask = FALSE, checkBuilt = TRUE, quiet = FALSE, INSTALL_opts = '--no-multiarch')
                 }
             " 2>&1)
 
@@ -417,6 +422,12 @@ function up() {
             then
                 __tac_line "[5/20] R Packages" "[PACKAGES UPDATED]" "$C_Success"
                 r_did_update=1
+                # Check if any packages failed (locked by running R sessions)
+                if [[ "$update_output" == *"package"*"is in use"* ]] || [[ "$update_output" == *"cannot remove"* ]]
+                then
+                    printf '\n%s\n' "${C_Warning}Note: Some packages could not be updated (locked by R/RStudio).${C_Reset}"
+                    printf '%s\n' "      Close R/RStudio and run 'up' again to update remaining packages."
+                fi
             elif [[ "$update_output" == *"NONE"* ]]
             then
                 __tac_line "[5/20] R Packages" "[ALREADY UP TO DATE]" "$C_Success"
