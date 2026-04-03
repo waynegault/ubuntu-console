@@ -48,6 +48,11 @@ done
 # state directories to exist for cooldown and error-log writes.
 mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" 2>/dev/null || true
 
+# Initialize background PID array required by telemetry functions.
+# In interactive mode, this is set by 13-init.sh; in library mode (non-interactive),
+# 13-init.sh is skipped so we must initialize it here.
+__TAC_BG_PIDS=()
+
 unset _tac_env_root _tac_lib_f _tac_lib_dir
 
 # end of file

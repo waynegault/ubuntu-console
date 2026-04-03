@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 22
+# Module Version: 23
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -605,7 +605,9 @@ function __gguf_metadata() {
 function __calc_gpu_layers() {
     local file_bytes=$1 total_layers=$2 arch="${3:-}"
     local vram_bytes="${VRAM_TOTAL_BYTES:-0}"
-    local usable_bytes=$((vram_bytes * ${VRAM_USABLE_PCT:-95} / 100))
+    # Use awk for floating-point to avoid integer truncation (4GB * 95% = 3.8GB, not 3GB)
+    local usable_bytes
+    usable_bytes=$(awk "BEGIN {printf \"%d\", $vram_bytes * ${VRAM_USABLE_PCT:-95} / 100}")
 
     # MoE models: with --cpu-moe, expert weights stay on CPU.
     # Only attention/dense layers load to GPU, so we can offload all layers.
@@ -633,7 +635,9 @@ function __calc_gpu_layers() {
 function __calc_ctx_size() {
     local file_bytes=$1 native_ctx=$2 arch="${3:-}"
     local file_gb=$(( file_bytes / 1024 / 1024 / 1024 ))
-    local vram_limit_gb=$(( ${VRAM_TOTAL_BYTES:-0} * ${VRAM_THRESHOLD_PCT:-85} / 100 / 1024 / 1024 / 1024 ))
+    # Use awk for floating-point to avoid integer truncation
+    local vram_limit_gb
+    vram_limit_gb=$(awk "BEGIN {printf \"%d\", ${VRAM_TOTAL_BYTES:-0} * ${VRAM_THRESHOLD_PCT:-85} / 100 / 1024 / 1024 / 1024}")
 
     # MoE models: expert weights on CPU, only attention on GPU.
     # Active params ~3B, so treat like a small model for ctx sizing.
@@ -2264,6 +2268,7 @@ function __model_download() {
         local dl_repo dl_file
         IFS=":" read -r dl_repo dl_file <<< "$spec"
 
+        # Validate filename — prevent path traversal and non-GGUF files
         if [[ -z "$dl_repo" || "$dl_repo" != *"/"* ]]
         then
             printf '%s\n' \
@@ -2278,6 +2283,15 @@ function __model_download() {
             printf '%s\n' \
                 "${C_Error}Error:${C_Reset} '$spec' -" \
                 "missing filename after colon (e.g. :ferret_7b.Q4_K_M.gguf)"
+            ((fail++))
+            continue
+        fi
+
+        # Path traversal and format validation
+        if [[ "$dl_file" == *"/"* || "$dl_file" == *".."* ]]
+        then
+            printf '%s\n' \
+                "${C_Error}Error:${C_Reset} '$spec' - invalid filename (path traversal detected)"
             ((fail++))
             continue
         fi

@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 28
+# Module Version: 29
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -47,10 +47,11 @@ function __cleanup_temps() {
 # ---------------------------------------------------------------------------
 # Module-level sink variable for nameref when caller doesn't provide one.
 # This ensures __check_cooldown works even if caller doesn't declare _cd_sink.
-_cd_sink=""
+# Uses a highly unique name to avoid accidental shadowing by caller code.
+_TAC_MAINT_CD_SINK=""
 function __check_cooldown() {
     local key="$1" now="$2" force_mode="${4:-0}"
-    local -n __cd_result="${3:-_cd_sink}"
+    local -n __cd_result="${3:-_TAC_MAINT_CD_SINK}"
 
     # Force mode: always run (for testing)
     if (( force_mode == 1 ))

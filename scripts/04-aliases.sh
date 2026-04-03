@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 3. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -127,9 +127,8 @@ alias commit='commit_auto'
 # Skip filtering for interactive/redirected commands to avoid breaking TTY.
 # Does a live check for openclaw CLI availability.
 function openclaw() {
-    # Live check: verify openclaw CLI exists and responds to --version
-    if ! command -v openclaw >/dev/null 2>&1 || ! command openclaw --version >/dev/null 2>&1
-    then
+    # Use cached install check (set at profile load time) — avoids forking openclaw --version
+    if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw" "[NOT INSTALLED]" "$C_Warning"
         return 127
     fi

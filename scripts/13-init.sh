@@ -3,7 +3,7 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================
@@ -43,9 +43,12 @@ fi
 # Without it, OpenClaw's node-to-node communication on 127.0.0.2 fails.
 # Uses 'command ip' to call /usr/bin/ip directly, avoiding any function shadow.
 # Checks both interface existence AND the specific address to be truly idempotent.
+_sudo_check=0
+sudo -n true 2>/dev/null && _sudo_check=1
+
 if ! command ip link show loopback0 >/dev/null 2>&1
 then
-    if sudo -n true 2>/dev/null
+    if (( _sudo_check ))
     then
         sudo ip link add loopback0 type dummy 2>/dev/null
         sudo ip link set loopback0 up 2>/dev/null
@@ -54,30 +57,12 @@ then
 elif ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
 then
     # Interface exists but address is missing (e.g., after network reset)
-    if sudo -n true 2>/dev/null
+    if (( _sudo_check ))
     then
         sudo ip addr add 127.0.0.2/8 dev loopback0 2>/dev/null
     fi
 fi
-
-# OpenClaw LLM sync function (added by Hal).
-# Vault mechanism: This sources oc-llm-sync.sh, which registers OC's LLM
-# providers (API keys, endpoints) from a credential store into the current
-# session. The file is verified against a trusted SHA-256 hash before
-# sourcing — if the hash doesn't match (tampered/updated), it's skipped
-# with a warning and the shell continues to load without LLM sync.
-#
-# SECURITY NOTE: The trusted hash ($OC_ROOT/oc-llm-sync.sha256) should be
-# created by a trusted administrator and have restricted permissions (chmod 400).
-# If an attacker can write to both $OC_WORKSPACE and $OC_ROOT, they could
-# replace both the script and hash. For stronger security:
-#   - Store the trusted hash in a read-only location
-#   - Use GPG signatures instead of SHA-256
-#   - Run 'oc-trust-sync' after any verified update to refresh the hash
-#
-# NOTE: This silently sources an external script. If the file is compromised,
-# it executes in the interactive shell. Hash is verified against a trusted
-# reference file and logged for auditability.
+unset _sudo_check
 if [[ -f "$OC_WORKSPACE/oc-llm-sync.sh" ]]
 then
     _sync_hash=$(sha256sum "$OC_WORKSPACE/oc-llm-sync.sh" 2>/dev/null | cut -d' ' -f1)
