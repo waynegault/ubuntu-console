@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 17
+# Module Version: 18
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -24,7 +24,9 @@
 # __TAC_OPENCLAW_OK is set to 1 only if openclaw CLI exists AND responds to --version.
 # This functional check is performed once when this module loads.
 # All code should check __TAC_OPENCLAW_OK instead of running `command -v openclaw`.
-if command -v openclaw >/dev/null 2>&1 && openclaw --version >/dev/null 2>&1; then
+# NOTE: Uses `command openclaw` to bypass the wrapper function defined in §4,
+# which itself depends on __TAC_OPENCLAW_OK (circular dependency at load time).
+if command -v openclaw >/dev/null 2>&1 && command openclaw --version >/dev/null 2>&1; then
     __TAC_OPENCLAW_OK=1
 else
     __TAC_OPENCLAW_OK=0
