@@ -242,7 +242,7 @@ function os() {
 
     # Print sessions table header with underline
     if (( session_count > 0 )); then
-        printf '\n%s\n' "${C_Dim}Agent          Label                                      Key                         Age         Model            Tokens (ctx %)         Cost    Status  ${C_Reset}"
+        printf '\n%s\n' "${C_Dim}Agent          Label                                      Key                         Age         Model            Tokens      (ctx %)       Cost  Status  ${C_Reset}"
         printf '%s\n' "${C_Dim}────────────   ────────────────────────────────────────   ─────────────────────────   ─────────   ──────────────   ──────────────────────   ──────   ────────${C_Reset}"
 
         # Parse and display sessions
