@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 21
+# Module Version: 22
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -289,31 +289,35 @@ function wake() {
     _pm_output=$(sudo -n "$smi_cmd" -pm 1 2>&1)
     local _pm_status=$?
 
-    # Check for NVML "N/A" error (common in WSL2 when GPU isn't accessible)
-    if [[ "$_pm_output" == *"Failed to initialize NVML: N/A"* ]]
+    # Check for any NVML initialization failure (common in WSL2 with various driver states)
+    if [[ "$_pm_output" == *"Failed to initialize NVML"* ]]
     then
-        # NVML not available - this is a WSL2/driver limitation, not a real failure
-        # Silently skip - GPU will still work for inference
+        # NVML unavailable (WSL2/driver limitation) — GPU still works for inference
         return 0
     fi
 
     # Check for actual failure (sudo denied or other error)
     if (( _pm_status != 0 ))
     then
-        __tac_info "GPU Persistence" "[FAILED - sudo denied or nvidia-smi error]" "$C_Warning"
+        if [[ "$_pm_output" == *"password"* || "$_pm_output" == *"sudo"* || "$_pm_output" == *"authentication"* ]]
+        then
+            __tac_info "GPU Persistence" "[FAILED - passwordless sudo required for nvidia-smi]" "$C_Warning"
+        else
+            __tac_info "GPU Persistence" "[FAILED - nvidia-smi error: $_pm_output]" "$C_Warning"
+        fi
         return 1
     fi
 
     __tac_info "GPU Persistence" "[ENABLED]" "$C_Success"
 
-    local stat
-    stat=$("$smi_cmd" \
+    local gpu_stat
+    gpu_stat=$("$smi_cmd" \
         --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu \
-        --format=csv,noheader,nounits 2>/dev/null || echo "")
-    if [[ -n "$stat" ]]
+        --format=csv,noheader,nounits 2>/dev/null)
+    if [[ -n "$gpu_stat" ]]
     then
         local g_util g_used g_total g_temp
-        IFS=',' read -r g_util g_used g_total g_temp <<< "$stat"
+        IFS=',' read -r g_util g_used g_total g_temp <<< "$gpu_stat"
         g_util="${g_util// /}"; g_used="${g_used// /}"; g_total="${g_total// /}"; g_temp="${g_temp// /}"
         __tac_info "GPU Util" "${g_util}%" "$C_Text"
         __tac_info "VRAM" "${g_used} MiB / ${g_total} MiB" "$C_Text"
@@ -335,9 +339,7 @@ function gpu-status() {
 
     __tac_header "GPU STATUS" "open"
 
-    "$smi" \
-        --query-gpu=name,utilization.gpu,memory.used,memory.total,memory.free,temperature.gpu,power.draw,power.limit \
-        --format=csv,noheader 2>/dev/null | while IFS=, read -r gname gutil gmused gmtotal gmfree gtemp gpwr gplim
+    while IFS=, read -r gname gutil gmused gmtotal gmfree gtemp gpwr gplim
     do
         gutil="${gutil// /}"; gmused="${gmused// /}"; gmtotal="${gmtotal// /}"
         gmfree="${gmfree// /}"; gtemp="${gtemp// /}"; gpwr="${gpwr// /}"; gplim="${gplim// /}"
@@ -355,7 +357,9 @@ function gpu-status() {
         __tac_info "VRAM" "${gmused} / ${gmtotal} (${gmfree} free)" "$C_Text"
         __tac_info "Temp" "${gtemp} C" "$C_Text"
         __tac_info "Power" "${gpwr} / ${gplim}" "$C_Text"
-    done
+    done < <("$smi" \
+        --query-gpu=name,utilization.gpu,memory.used,memory.total,memory.free,temperature.gpu,power.draw,power.limit \
+        --format=csv,noheader 2>/dev/null)
 
     local pm
     pm=$("$smi" --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
@@ -375,7 +379,7 @@ function gpu-status() {
 # ---------------------------------------------------------------------------
 function gpu-check() {
     local smi
-    smi=$(__resolve_smi) || true
+    smi=$(__resolve_smi 2>/dev/null) || true
 
     __tac_header "CUDA / GPU CHECK" "open"
 
@@ -600,8 +604,8 @@ function __gguf_metadata() {
 # Returns: 999 (max offload), total_layers (MoE), or 0 (CPU-only)
 function __calc_gpu_layers() {
     local file_bytes=$1 total_layers=$2 arch="${3:-}"
-    local vram_bytes=$VRAM_TOTAL_BYTES
-    local usable_bytes=$((vram_bytes * VRAM_USABLE_PCT / 100))
+    local vram_bytes="${VRAM_TOTAL_BYTES:-0}"
+    local usable_bytes=$((vram_bytes * ${VRAM_USABLE_PCT:-95} / 100))
 
     # MoE models: with --cpu-moe, expert weights stay on CPU.
     # Only attention/dense layers load to GPU, so we can offload all layers.
@@ -629,7 +633,7 @@ function __calc_gpu_layers() {
 function __calc_ctx_size() {
     local file_bytes=$1 native_ctx=$2 arch="${3:-}"
     local file_gb=$(( file_bytes / 1024 / 1024 / 1024 ))
-    local vram_limit_gb=$(( VRAM_TOTAL_BYTES * VRAM_THRESHOLD_PCT / 100 / 1024 / 1024 / 1024 ))
+    local vram_limit_gb=$(( ${VRAM_TOTAL_BYTES:-0} * ${VRAM_THRESHOLD_PCT:-85} / 100 / 1024 / 1024 / 1024 ))
 
     # MoE models: expert weights on CPU, only attention on GPU.
     # Active params ~3B, so treat like a small model for ctx sizing.

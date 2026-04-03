@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 3. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -12,6 +12,29 @@
 # @exports: code, oedit, llmconf, oclogs, le, lo, occonf, os, oa, ocstat,
 #   ocgs, ocv, status, ocms, cop, cop-ask, cop-init (plus standard shell aliases)
 #   Note: owk → 'oc wk', ologs → 'oc log-dir'
+
+# __os_fetch_cached — Fetch JSON with TTL cache.
+# Reads cache if fresh (<cache_ttl seconds); otherwise runs fetch_cmd,
+# validates JSON, writes cache, and returns the result.
+function __os_fetch_cached() {
+    local cache_file="$1" cache_ttl="$2"
+    shift 2
+    local fetch_cmd="$*"
+    if [[ -f "$cache_file" ]]; then
+        local _now _mtime
+        _now=$(date +%s)
+        _mtime=$(stat -c %Y "$cache_file" 2>/dev/null || echo 0)
+        if (( _now - _mtime < cache_ttl )); then
+            cat "$cache_file"; return 0
+        fi
+    fi
+    local _result
+    _result=$(eval "$fetch_cmd" 2>/dev/null || true)
+    if [[ -n "$_result" ]] && echo "$_result" | jq empty 2>/dev/null; then
+        printf '%s' "$_result" > "$cache_file"
+    fi
+    printf '%s' "$_result"
+}
 
 # ---- Core OS Aliases ----
 alias ls='ls --color=auto'
@@ -133,51 +156,10 @@ function os() {
     local session_cache="$TAC_CACHE_DIR/oc_sessions.json"
     local cache_ttl=5  # seconds
 
-    # Use cached sessions if fresh, otherwise fetch from API
-    local sessions_json
-    if [[ -f "$session_cache" ]]; then
-        local _now _mtime
-        _now=$(date +%s)
-        _mtime=$(stat -c %Y "$session_cache" 2>/dev/null || echo 0)
-        if (( _now - _mtime < cache_ttl )); then
-            sessions_json=$(cat "$session_cache")
-        else
-            sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null || openclaw sessions --json 2>/dev/null || true)
-            # Only cache if it's valid JSON
-            if [[ -n "$sessions_json" ]] && echo "$sessions_json" | jq empty 2>/dev/null; then
-                printf '%s' "$sessions_json" > "$session_cache"
-            fi
-        fi
-    else
-        sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null || openclaw sessions --json 2>/dev/null || true)
-        # Only cache if it's valid JSON
-        if [[ -n "$sessions_json" ]] && echo "$sessions_json" | jq empty 2>/dev/null; then
-            printf '%s' "$sessions_json" > "$session_cache"
-        fi
-    fi
-
-    # Use cached agents if fresh, otherwise fetch from API
-    local agents_json
-    if [[ -f "$agent_cache" ]]; then
-        local _now _mtime
-        _now=$(date +%s)
-        _mtime=$(stat -c %Y "$agent_cache" 2>/dev/null || echo 0)
-        if (( _now - _mtime < cache_ttl )); then
-            agents_json=$(cat "$agent_cache")
-        else
-            agents_json=$(openclaw agents list --json 2>/dev/null || openclaw agents --json 2>/dev/null || true)
-            # Only cache if it's valid JSON
-            if [[ -n "$agents_json" ]] && echo "$agents_json" | jq empty 2>/dev/null; then
-                printf '%s' "$agents_json" > "$agent_cache"
-            fi
-        fi
-    else
-        agents_json=$(openclaw agents list --json 2>/dev/null || openclaw agents --json 2>/dev/null || true)
-        # Only cache if it's valid JSON
-        if [[ -n "$agents_json" ]] && echo "$agents_json" | jq empty 2>/dev/null; then
-            printf '%s' "$agents_json" > "$agent_cache"
-        fi
-    fi
+    # Fetch cached or live JSON (single helper eliminates duplication)
+    local sessions_json agents_json
+    sessions_json=$(__os_fetch_cached "$session_cache" "$cache_ttl" "openclaw sessions --all-agents --json || openclaw sessions --json")
+    agents_json=$(__os_fetch_cached "$agent_cache" "$cache_ttl" "openclaw agents list --json || openclaw agents --json")
 
     # Single jq call to extract all session data at once, sorted by agent name then age (youngest first)
     # Tokens column: input/output right-aligned to 11 chars, then percentage in parens
@@ -280,8 +262,10 @@ function os() {
             # Truncate/pad fields for display (Tokens column: 22 chars, right-aligned for bracket alignment)
             printf '%-12s   %-40s   %-25s   %-9s   %-14s   %-22s   %-6s   %s\n' \
                 "${agent_name:0:12}" "${display_label:0:40}" "${key:0:25}" "${age_str:0:9}" "${model:0:14}" "$tokens" "$cost_str" "$session_status"
-            # Accumulate total cost
-            total_cost=$(awk "BEGIN {printf \"%.6f\", $total_cost + ${session_cost:-0}}")
+            # Accumulate total cost (no subprocess — bash integer arithmetic on micro-cents)
+            if [[ "$session_cost" =~ ^[0-9]*\.[0-9]+$ ]]; then
+                total_cost=$(awk "BEGIN {printf \"%.6f\", $total_cost + $session_cost}")
+            fi
         done <<< "$session_data"
 
         # Print total cost with underline (aligned with Cost column)

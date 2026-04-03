@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 16
+# Module Version: 17
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -461,14 +461,14 @@ function so() {
             return 1
         fi
 
-        # Pre-flight: check Windows port conflict
-        if ! __test_port "$OC_PORT" && __so_check_win_port "$OC_PORT" --block
-        then
-            return 1
-        fi
-
         # Pre-flight: cycle Tailscale Serve if conflicting
         __so_cycle_tailscale_serve "$OC_PORT"
+
+        # Set trap to restore Tailscale Serve on early exit
+        if (( _ts_serve_active ))
+        then
+            trap 'sudo -n tailscale serve --bg "http://127.0.0.1:$OC_PORT" >/dev/null 2>&1; trap - EXIT' EXIT
+        fi
 
         # Push API keys to systemd environment
         __so_push_api_keys
@@ -493,6 +493,8 @@ function so() {
         then
             sudo -n tailscale serve --bg "http://127.0.0.1:$OC_PORT" >/dev/null 2>&1 \
                 && __tac_info "Tailscale Serve" "[RESTORED]" "$C_Success"
+            # Clear the EXIT trap now that we've restored manually
+            trap - EXIT
         fi
 
         # Auto-create session for default agent (hal) if no sessions exist
@@ -509,14 +511,23 @@ function __so_ensure_default_agent_session() {
     local _session_count
     _session_count=$(openclaw sessions --all-agents --json 2>/dev/null | jq -r '
         (if type=="array" then . elif (.sessions?) then .sessions elif (.items?) then .items else . end)
-        | length' 2>/dev/null || echo "0")
+        | length' 2>/dev/null) || true
 
-    if [[ "$_session_count" == "0" || -z "$_session_count" ]]; then
-        # No sessions exist — create one for the default agent (hal)
+    # Validate numeric output — guard against jq failure or partial output
+    if ! [[ "$_session_count" =~ ^[0-9]+$ ]]; then
+        _session_count=0
+    fi
+
+    if [[ "$_session_count" == "0" ]]; then
         __tac_info "Default Agent" "[CREATING session for hal]" "$C_Dim"
-        # Send a minimal ping to create the session (fully detached, no job control)
-        nohup openclaw agent --agent hal --message "." --json >/dev/null 2>&1 &
-        disown 2>/dev/null || true
+        # Give gateway a moment to fully initialize
+        sleep 2
+        if openclaw agent --agent hal --message "." --json >/tmp/hal_session.log 2>&1
+        then
+            __tac_info "Default Agent" "[Session created for hal]" "$C_Success"
+        else
+            __tac_info "Default Agent" "[Failed to create session — see /tmp/hal_session.log]" "$C_Warning"
+        fi
     fi
 }
 
@@ -841,12 +852,18 @@ function oc-purge() {
         return 1
     fi
 
+    # Validate OC_AGENTS path — prevent catastrophic rm -rf
+    if [[ -z "$OC_AGENTS" || "$OC_AGENTS" == "/" || ! "$OC_AGENTS" =~ ^/home|^/dev/shm|^/tmp ]]; then
+        __tac_info "Purge" "[REFUSED - unsafe OC_AGENTS path: ${OC_AGENTS:-(empty)}]" "$C_Error"
+        return 1
+    fi
+
     local _purge_count=0
 
-    # 1. Stop the gateway
+    # 1. Stop the gateway (systemd + CLI only — no broad pkill)
     __tac_info "Gateway" "[STOPPING]" "$C_Warning"
     openclaw gateway stop >/dev/null 2>&1
-    pkill -f "openclaw gateway" 2>/dev/null || true
+    systemctl --user stop openclaw-gateway.service 2>/dev/null || true
     sleep 1
 
     # 2. Clear all agent session directories
@@ -876,11 +893,10 @@ function oc-purge() {
     # Report result
     if (( _purge_count > 0 ))
     then
-        __tac_info "Purge Complete" "[$_purge_count agent session(s) cleared]" "$C_Success"
+        __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared]" "$C_Success"
     else
         __tac_info "Purge Complete" "[No sessions found]" "$C_Dim"
     fi
-    echo "All previous sessions successfully purged."
 }
 
 # ---------------------------------------------------------------------------
