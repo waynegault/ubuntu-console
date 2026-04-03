@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 20
+# Module Version: 21
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -284,12 +284,26 @@ function wake() {
         return 1
     }
 
-    # Requires passwordless sudo; harmless failure if denied
-    if ! sudo -n "$smi_cmd" -pm 1 >/dev/null 2>&1
+    # Try to enable persistence mode; capture output for NVML error detection
+    local _pm_output
+    _pm_output=$(sudo -n "$smi_cmd" -pm 1 2>&1)
+    local _pm_status=$?
+
+    # Check for NVML "N/A" error (common in WSL2 when GPU isn't accessible)
+    if [[ "$_pm_output" == *"Failed to initialize NVML: N/A"* ]]
+    then
+        # NVML not available - this is a WSL2/driver limitation, not a real failure
+        # Silently skip - GPU will still work for inference
+        return 0
+    fi
+
+    # Check for actual failure (sudo denied or other error)
+    if (( _pm_status != 0 ))
     then
         __tac_info "GPU Persistence" "[FAILED - sudo denied or nvidia-smi error]" "$C_Warning"
         return 1
     fi
+
     __tac_info "GPU Persistence" "[ENABLED]" "$C_Success"
 
     local stat

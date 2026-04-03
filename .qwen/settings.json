@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(old_header *)",
+      "Bash(new_header *)",
+      "Bash('printf \\'\\\\n%s\\\\n\\' *)",
+      "Bash('printf \\'%s\\\\n\\' *)",
+      "Bash(\"printf '%-10s %-40s %-26s %-9s %-14s %-20s %-10s %s\\\\n' \\\\\\n                \\\"${agent_name:0:10}\\\" \\\"${display_label:0:40}\\\" \\\"${key:0:26}\\\" \\\"${age_str:0:9}\\\" \\\"${model:0:14}\\\" \\\"$tokens\\\" \\\"$cost_str\\\" \\\"$session_status\\\"\",)",
+      "Bash(\"printf '%-12s   %-40s   %-25s   %-9s   %-14s   %-14s   %-6s   %s\\\\n' \\\\\\n                \\\"${agent_name:0:12}\\\" \\\"${display_label:0:40}\\\" \\\"${key:0:25}\\\" \\\"${age_str:0:9}\\\" \\\"${model:0:14}\\\" \\\"${tokens:0:14}\\\" \\\"$cost_str\\\" \\\"$session_status\\\"\")",
+      "Bash(f.write)",
+      "Bash(print)",
+      "Bash(eof)"
+    ]
+  },
+  "$version": 3
+}

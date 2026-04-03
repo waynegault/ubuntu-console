@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 13
+# Module Version: 16
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -15,7 +15,8 @@
 #   oc-plugins, oc-tail, oc-channels, oc-sec, oc-tui, oc-config,
 #   oc-docs, oc-usage, oc-local-llm, oc-sync-models,
 #   oc-browser, oc-nodes, oc-sandbox, oc-env, oc-cache-clear,
-#   oc-diag, oc-doctor-local, oc-failover, wacli, oc-kgraph, __is_openclaw_installed
+#   oc-diag, oc-doctor-local, oc-failover, wacli, oc-kgraph, oc-purge,
+#   __is_openclaw_installed
 
 # ==============================================================================
 # OPENCLAW INSTALLATION CHECK (Evaluated once at profile load time)
@@ -145,6 +146,61 @@ function __so_cycle_tailscale_serve() {
             sleep 1
         fi
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __so_clear_wslrelay — Proactively clear wslrelay port conflicts.
+# WSL2's networking relay process (wslrelay.exe) can transiently hold ports
+# from previous sessions. This function detects and kills wslrelay if it's
+# blocking the gateway port, before other startup checks run.
+# Returns 0 always (non-blocking — informational only).
+# ---------------------------------------------------------------------------
+function __so_clear_wslrelay() {
+    local _port="$1"
+    command -v powershell.exe &>/dev/null || return 0
+
+    local _win_holder _win_proc_name _pid_only
+    _win_holder=$(timeout 3 powershell.exe -NoProfile -NonInteractive -Command "
+        \$c = Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue \
+            | Select-Object -First 1
+        if (\$c) {
+            \$p = Get-Process -Id \$c.OwningProcess -ErrorAction SilentlyContinue
+            '{0}|{1}' -f \$p.ProcessName, \$c.OwningProcess
+        }
+    " 2>/dev/null | tr -d '\r')
+
+    [[ -z "$_win_holder" ]] && return 0
+
+    _win_proc_name="${_win_holder%%|*}"
+    _pid_only="${_win_holder##*|}"
+
+    # Only act on wslrelay — let other conflicts be handled by __so_check_win_port
+    if [[ "${_win_proc_name,,}" != "wslrelay" ]]
+    then
+        return 0
+    fi
+
+    __tac_info "Gateway" "[WSLRELAY HOLDING PORT $_port — clearing]" "$C_Warning"
+
+    if command -v taskkill.exe &>/dev/null
+    then
+        taskkill.exe /PID "$_pid_only" /F &>/dev/null
+        sleep 1
+
+        # Verify the port is now free
+        local _still_held
+        _still_held=$(timeout 2 powershell.exe -NoProfile -NonInteractive -Command "
+            Get-NetTCPConnection -LocalPort $_port -State Listen -ErrorAction SilentlyContinue
+        " 2>/dev/null | tr -d '\r')
+
+        if [[ -z "$_still_held" ]]
+        then
+            __tac_info "Gateway" "[WSLRELAY CLEARED — port $_port free]" "$C_Success"
+        else
+            __tac_info "Gateway" "[WSLRELAY PERSISTENT — manual intervention may be needed]" "$C_Warning"
+        fi
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -393,6 +449,9 @@ function so() {
         __tac_info "Gateway" "[RUNNING on PORT $OC_PORT]" "$C_Success"
     else
         # Gateway is offline — full startup sequence
+        # Pre-flight: clear wslrelay port conflicts (WSL2 networking issue)
+        __so_clear_wslrelay "$OC_PORT"
+
         # Pre-flight: clear stale state
         __so_clear_stale_state "$_svc"
 
@@ -435,6 +494,29 @@ function so() {
             sudo -n tailscale serve --bg "http://127.0.0.1:$OC_PORT" >/dev/null 2>&1 \
                 && __tac_info "Tailscale Serve" "[RESTORED]" "$C_Success"
         fi
+
+        # Auto-create session for default agent (hal) if no sessions exist
+        __so_ensure_default_agent_session
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __so_ensure_default_agent_session — Create a session for the default agent
+# (hal) if no sessions exist. This ensures hal always has a session ready.
+# ---------------------------------------------------------------------------
+function __so_ensure_default_agent_session() {
+    # Check if any sessions exist
+    local _session_count
+    _session_count=$(openclaw sessions --all-agents --json 2>/dev/null | jq -r '
+        (if type=="array" then . elif (.sessions?) then .sessions elif (.items?) then .items else . end)
+        | length' 2>/dev/null || echo "0")
+
+    if [[ "$_session_count" == "0" || -z "$_session_count" ]]; then
+        # No sessions exist — create one for the default agent (hal)
+        __tac_info "Default Agent" "[CREATING session for hal]" "$C_Dim"
+        # Send a minimal ping to create the session (fully detached, no job control)
+        nohup openclaw agent --agent hal --message "." --json >/dev/null 2>&1 &
+        disown 2>/dev/null || true
     fi
 }
 
@@ -471,10 +553,11 @@ function __so_check_win_port() {
     __tac_info "Gateway" "[PORT ${_port} BLOCKED — Windows: ${_win_proc_name} (PID ${_pid_only})]" "$C_Warning"
 
     # Validate process name before killing — only auto-kill known/safe processes
-    # Safe targets: node, python, llama-server, openclaw, code (VS Code), pwsh, powershell
+    # Safe targets: node, python, llama-server, openclaw, code (VS Code), pwsh, powershell,
+    #   wslrelay (WSL2 networking component — known to hold ports transiently)
     local _safe_proc=0
     case "${_win_proc_name,,}" in
-        node|python|python3|llama-server|openclaw|code|pwsh|powershell|docker*)
+        node|python|python3|llama-server|openclaw|code|pwsh|powershell|docker*|wslrelay)
             _safe_proc=1
             ;;
     esac
@@ -586,6 +669,7 @@ function oc() {
         printf '  %-20s %s\n' "start"        "Dispatch an agent turn (-m '<msg>')"
         printf '  %-20s %s\n' "stop"         "Delete an agent by ID (--agent <id>)"
         printf '  %-20s %s\n' "agent-turn"   "Alias for start"
+        printf '  %-20s %s\n' "purge"        "Stop gateway and clear all agent sessions"
         printf '%s\n' ""
         printf '%s\n' "${C_Highlight}Config & Logs${C_Reset}"
         printf '  %-20s %s\n' "conf"         "Open openclaw.json in VS Code"
@@ -654,6 +738,7 @@ function oc() {
         agent-turn)    ocstart "$@" ;;
         agent-use)     oc-agent-use "$@" ;;
         agent-usage)   oc-agent-use "$@" ;;
+        purge)         oc-purge "$@" ;;
         # Config & Logs
         conf)          occonf "$@" ;;
         config)        oc-config "$@" ;;
@@ -740,6 +825,62 @@ function ocstop() {
         return 1
     fi
     openclaw agents delete "$@"
+}
+
+# ---------------------------------------------------------------------------
+# oc-purge — Stop gateway and clear all agent sessions.
+# Usage: oc purge
+# This command:
+#   1. Stops the OpenClaw gateway
+#   2. Clears all agent session directories (~/.openclaw/agents/*/sessions)
+#   3. Clears session state cache in /dev/shm
+# ---------------------------------------------------------------------------
+function oc-purge() {
+    if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
+        __tac_info "OpenClaw" "[NOT INSTALLED - cannot purge sessions]" "$C_Error"
+        return 1
+    fi
+
+    local _purge_count=0
+
+    # 1. Stop the gateway
+    __tac_info "Gateway" "[STOPPING]" "$C_Warning"
+    openclaw gateway stop >/dev/null 2>&1
+    pkill -f "openclaw gateway" 2>/dev/null || true
+    sleep 1
+
+    # 2. Clear all agent session directories
+    if [[ -d "$OC_AGENTS" ]]
+    then
+        for _agent_dir in "$OC_AGENTS"/*/
+        do
+            if [[ -d "$_agent_dir" ]]
+            then
+                local _session_dir="$_agent_dir/sessions"
+                if [[ -d "$_session_dir" ]]
+                then
+                    rm -rf "$_session_dir"
+                    ((_purge_count++))
+                    __tac_info "Session" "[PURGED] $_session_dir" "$C_Dim"
+                fi
+            fi
+        done
+    fi
+
+    # 3. Clear session state caches
+    rm -f "$TAC_CACHE_DIR/oc_sessions.json" 2>/dev/null
+    rm -f "$TAC_CACHE_DIR/oc_agents.json" 2>/dev/null
+    rm -f "$TAC_CACHE_DIR/oc_agent_use.txt" 2>/dev/null
+    rm -f "$TAC_CACHE_DIR/oc_agent_stats.tsv" 2>/dev/null
+
+    # Report result
+    if (( _purge_count > 0 ))
+    then
+        __tac_info "Purge Complete" "[$_purge_count agent session(s) cleared]" "$C_Success"
+    else
+        __tac_info "Purge Complete" "[No sessions found]" "$C_Dim"
+    fi
+    echo "All previous sessions successfully purged."
 }
 
 # ---------------------------------------------------------------------------
