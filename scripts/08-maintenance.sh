@@ -247,7 +247,7 @@ function up() {
         # Check for upgradable packages first
         local upgradable
         upgradable=$(apt list --upgradable 2>/dev/null | grep -cv "^Listing")
-        
+
         # Dry-run first to detect dependency issues before actual upgrade
         if ! sudo apt upgrade --dry-run -y --no-install-recommends >/dev/null 2>&1
         then
@@ -726,7 +726,7 @@ function up() {
     # [13/20] GPU Checks — __get_gpu returns CSV or a sentinel string.
     # Sentinels: "N/A" (no nvidia-smi), "Querying..." (first-boot cache miss),
     # or contains "OFFLINE" (driver crash / WSL GPU passthrough failure).
-    # 
+    #
     # Race condition fix: If cache is stale, __get_gpu spawns a background job
     # and returns "Querying..." immediately. We wait up to 3s for the cache
     # to be populated before declaring GPU offline.

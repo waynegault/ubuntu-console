@@ -1719,14 +1719,14 @@ function lc() {
 # ---------------------------------------------------------------------------
 function oc-update() {
     local enhanced_script="$HOME/.openclaw/workspace/scripts/oc-update-enhanced.sh"
-    
+
     # Use enhanced update script if available
     if [[ -f "$enhanced_script" ]]
     then
         exec "$enhanced_script"
         return $?
     fi
-    
+
     # Fallback to original update method
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw CLI" "[NOT INSTALLED]" "$C_Error"
@@ -1760,7 +1760,7 @@ function oc-health() {
 
     # Check if enhanced health check script exists
     local enhanced_script="$HOME/.openclaw/workspace/scripts/oc-health-check.py"
-    
+
     if [[ -f "$enhanced_script" ]]
     then
         # Use comprehensive health check
@@ -2974,5 +2974,33 @@ PY
 
 # Deep Recall provider — Python script for life memory recall
 export OPENCLAW_LCM_DEEP_RECALL_CMD="python3 $OC_ROOT/life/deep-recall-provider-lcm.py"
+
+# ---------------------------------------------------------------------------
+# mem-index — Rebuild OpenClaw vector memory index.
+# Thin wrapper: delegates to openclaw CLI with graceful fallback.
+# ---------------------------------------------------------------------------
+function mem-index() {
+    if [[ "$__TAC_OPENCLAW_OK" == "1" ]]
+    then
+        command openclaw mem-index "$@"
+    else
+        __tac_info "OpenClaw" "[NOT INSTALLED]" "$C_Warning"
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# oc-memory-search — Search vector memory index.
+# Thin wrapper: delegates to openclaw CLI with graceful fallback.
+# ---------------------------------------------------------------------------
+function oc-memory-search() {
+    if [[ "$__TAC_OPENCLAW_OK" == "1" ]]
+    then
+        command openclaw memory search "$@"
+    else
+        __tac_info "OpenClaw" "[NOT INSTALLED]" "$C_Warning"
+        return 1
+    fi
+}
 
 # end of file

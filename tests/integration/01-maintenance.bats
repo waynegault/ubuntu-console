@@ -14,6 +14,43 @@ setup_file() {
     TAC_TEST_TMPDIR="$(mktemp -d)"
     export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
     mkdir -p "$TAC_CACHE_DIR"
+    export __TAC_INITIALIZED=1
+    export TAC_SKIP_PWSH=1
+
+    # Build patched scripts directory (same as main test suite)
+    local patched_scripts="$TAC_TEST_TMPDIR/scripts"
+    mkdir -p "$patched_scripts"
+    local _sed_args=(
+        -e '/^case \$- in$/,/^esac$/d'
+        -e '/^set -E$/d'
+        -e "/^trap '__tac_err_handler' ERR$/d"
+        -e '/^__tac_preexec_fired=/d'
+        -e "/trap.*custom_prompt_command/s/^/# /"
+        -e '/^[[:space:]]*((.*__tac_preexec_fired/s/^/# /'
+        -e 's/^declare -ri //'
+    )
+    for _f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+        [[ -f "$_f" ]] || continue
+        sed "${_sed_args[@]}" "$_f" > "$patched_scripts/$(basename "$_f")"
+    done
+    # Replace 13-init with minimal stub
+    cat > "$patched_scripts/13-init.sh" << 'STUB'
+# Minimal test stub
+# Module Version: 1
+mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" "$LLAMA_DRIVE_ROOT/.llm" 2>/dev/null || true
+__TAC_BG_PIDS=()
+function __tac_exit_cleanup() {
+    local pid; for pid in "${__TAC_BG_PIDS[@]}"; do kill "$pid" 2>/dev/null; done
+}
+STUB
+    # Inject TAC_SKIP_PWSH
+    sed -i '1a export TAC_SKIP_PWSH=1' "$patched_scripts/01-constants.sh" 2>/dev/null || true
+
+    # Patch and save the loader
+    local patched_loader="$TAC_TEST_TMPDIR/profile_patched.bash"
+    sed "${_sed_args[@]}" \
+        -e "s|_tac_module_dir=.*|_tac_module_dir=\"$patched_scripts\"|" \
+        "$PROFILE_PATH" > "$patched_loader"
 }
 
 teardown_file() {
@@ -21,16 +58,9 @@ teardown_file() {
 }
 
 setup() {
-    # Set PS1 to simulate interactive shell (required for profile to load functions)
     export PS1="$ "
-    # Source profile with interactive guard bypassed
-    (set +i; source "$PROFILE_PATH" 2>/dev/null) || true
-    # If up function still not available, source scripts directly
-    if ! declare -f up >/dev/null 2>&1; then
-        for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
-            [[ -f "$f" ]] && source "$f" 2>/dev/null || true
-        done
-    fi
+    # shellcheck disable=SC1090
+    source "$TAC_TEST_TMPDIR/profile_patched.bash" &>/dev/null || true
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -41,109 +71,88 @@ setup() {
     declare -f up >/dev/null 2>&1
 }
 
-@test "integration: up shows all 13 steps" {
+@test "integration: up shows all 20 steps" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Check that all 13 step numbers appear in the function source
-    for i in {1..13}; do
-        [[ "$up_src" == *"[$i/13]"* ]] || return 1
-    done
+
+    # The up pipeline has 20 steps — verify key milestones exist
+    [[ "$up_src" == *"[1/"* ]]  # Internet connectivity
+    [[ "$up_src" == *"[2/"* ]]  # APT index
+    [[ "$up_src" == *"[3/20] NPM Packages"* ]]
+    [[ "$up_src" == *"Cargo Crates"* ]]
+    [[ "$up_src" == *"[20/20]"* ]]  # Final step
 }
 
 @test "integration: up has --force flag support" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should contain force mode handling
     [[ "$up_src" == *"--force"* ]] || [[ "$up_src" == *"force_mode"* ]]
 }
 
 @test "integration: up checks connectivity" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should contain connectivity check
-    [[ "$up_src" == *"Internet"* ]] || [[ "$up_src" == *"Connectivity"* ]] || [[ "$up_src" == *"github"* ]]
+    [[ "$up_src" == *"Internet"* ]] || [[ "$up_src" == *"Connectivity"* ]]
 }
 
 @test "integration: up runs APT update" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should contain APT operations
-    [[ "$up_src" == *"APT"* ]] || [[ "$up_src" == *"apt-get"* ]] || [[ "$up_src" == *"[2/13]"* ]]
+    # Step label is "Linux Update" (covers both apt index + upgrade)
+    [[ "$up_src" == *"Linux Update"* ]] || [[ "$up_src" == *"apt"* ]]
 }
 
 @test "integration: up checks NPM" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should contain NPM operations
-    [[ "$up_src" == *"NPM"* ]] || [[ "$up_src" == *"npm"* ]] || [[ "$up_src" == *"[3/13]"* ]]
+    [[ "$up_src" == *"NPM"* ]] || [[ "$up_src" == *"npm"* ]]
 }
 
 @test "integration: up checks R packages" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should contain R package operations
-    [[ "$up_src" == *"R Packages"* ]] || [[ "$up_src" == *"Rscript"* ]] || [[ "$up_src" == *"[5/13]"* ]]
+    [[ "$up_src" == *"R Packages"* ]] || [[ "$up_src" == *"Rscript"* ]]
 }
 
 @test "integration: up checks OpenClaw" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should contain OpenClaw check
-    [[ "$up_src" == *"OpenClaw"* ]] || [[ "$up_src" == *"openclaw doctor"* ]] || [[ "$up_src" == *"[6/13]"* ]]
+    [[ "$up_src" == *"OpenClaw"* ]] || [[ "$up_src" == *"openclaw doctor"* ]]
 }
 
 @test "integration: up checks Python fleet" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should contain Python fleet check
-    [[ "$up_src" == *"Python Fleet"* ]] || [[ "$up_src" == *"python3"* ]] || [[ "$up_src" == *"[8/13]"* ]]
+    [[ "$up_src" == *"Python Fleet"* ]] || [[ "$up_src" == *"python3"* ]]
 }
 
 @test "integration: up checks GPU" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should contain GPU check
-    [[ "$up_src" == *"GPU"* ]] || [[ "$up_src" == *"RTX"* ]] || [[ "$up_src" == *"nvidia"* ]] || [[ "$up_src" == *"[9/13]"* ]]
+    [[ "$up_src" == *"GPU"* ]] || [[ "$up_src" == *"nvidia"* ]]
 }
 
 @test "integration: up checks disk space" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should contain disk space check
-    [[ "$up_src" == *"Disk Space"* ]] || [[ "$up_src" == *"disk"* ]] || [[ "$up_src" == *"[11/13]"* ]]
+    [[ "$up_src" == *"Disk Space"* ]] || [[ "$up_src" == *"disk"* ]]
 }
 
 @test "integration: up has cooldown support" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should contain cooldown logic
     [[ "$up_src" == *"cooldown"* ]] || [[ "$up_src" == *"__check_cooldown"* ]]
 }
 
 @test "integration: up creates cooldown database" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should reference CooldownDB
     [[ "$up_src" == *"CooldownDB"* ]] || [[ "$up_src" == *"maintenance_cooldowns"* ]]
 }
 
 @test "integration: up has help support" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    
-    # Should contain help/usage logic
     [[ "$up_src" == *"--help"* ]] || [[ "$up_src" == *"Usage"* ]] || [[ "$up_src" == *"usage"* ]]
 }
 

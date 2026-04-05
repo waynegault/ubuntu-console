@@ -15,7 +15,13 @@
       "Bash(]:)",
       "Bash(parts.append)",
       "Bash(header *)",
-      "Bash(pyeof)"
+      "Bash(pyeof)",
+      "Bash(-e *)",
+      "Bash(bash *)",
+      "Bash(cd *)",
+      "Bash(bats *)",
+      "Bash(tail *)",
+      "Bash(echo *)"
     ]
   },
   "$version": 3
