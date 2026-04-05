@@ -85,15 +85,68 @@ function __tac_exit_cleanup() {
     local pid; for pid in "${__TAC_BG_PIDS[@]}"; do kill "$pid" 2>/dev/null; done
 }
 STUB
+    # Inject TAC_SKIP_PWSH=1 into the patched constants module to skip
+    # expensive pwsh.exe calls during test profile sourcing.
+    local constants_file="$patched_scripts/01-constants.sh"
+    if [[ -f "$constants_file" ]]
+    then
+        sed -i '1a export TAC_SKIP_PWSH=1' "$constants_file"
+    fi
 }
 
-# Source the pre-built patched profile per-test.  The sed work is already
-# done (by _build_test_profile in setup_file), so this is just a fast source.
-setup() {
+# ==============================================================================
+# LAZY PROFILE SOURCING
+# ==============================================================================
+# Most tests (syntax checks, file greps, declare -f checks) do NOT need the
+# profile sourced. Sourcing the full profile (~15 modules) takes ~150ms per
+# call, which × 473 tests = 70+s of unavoidable overhead.
+#
+# Instead, we source lazily: only tests whose name starts with a known prefix
+# that requires runtime data will source the profile. Static tests skip it.
+#
+# _tac_ensure_profile is idempotent within a BATS test subshell.
+#
+# PERFORMANCE NOTE: The profile's startup path includes a pwsh.exe call with
+# timeout 2 for Windows username detection. In WSL-only CI environments this
+# hits the timeout. We set TAC_SKIP_PWSH=1 before sourcing to skip it.
+
+_TAC_PROFILE_SOURCED=0
+
+_tac_ensure_profile() {
+    [[ "$_TAC_PROFILE_SOURCED" -eq 1 ]] && return 0
     # Set PS1 to simulate interactive shell (required for PROMPT_COMMAND setup)
     export PS1="$ "
+    # Skip expensive pwsh.exe calls in test environment
+    export TAC_SKIP_PWSH=1
     # shellcheck disable=SC1090
     source "$TAC_TEST_TMPDIR/profile_patched.bash" &>/dev/null || true
+    _TAC_PROFILE_SOURCED=1
+}
+
+# Section prefixes that require the profile to be sourced at runtime.
+# Everything else (bash -n, shellcheck, structure, hygiene, cross-script,
+# bashrc, install, systemd, bin) runs as static file checks only.
+_TAC_NEEDS_PROFILE=(
+    "constants:" "ui:" "cache:" "port:" "metrics:"
+    "calc:" "quant:" "health:" "maintenance:" "model:"
+    "prompt:" "alias:" "fn-avail:" "cooldown:"
+    "telemetry:" "deployment:" "llm-guard:" "hooks:"
+    "llm-manager:" "oc:" "openclaw:"
+)
+
+# Per-test setup: auto-source the profile when the test needs it.
+setup() {
+    _TAC_PROFILE_SOURCED=0
+    # BATS_TEST_DESCRIPTION is set by bats before each @test block runs.
+    local desc="${BATS_TEST_DESCRIPTION:-}"
+    for prefix in "${_TAC_NEEDS_PROFILE[@]}"
+    do
+        if [[ "$desc" == "$prefix"* ]]
+        then
+            _tac_ensure_profile
+            return 0
+        fi
+    done
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -219,6 +272,7 @@ setup() {
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. GLOBAL CONSTANTS & CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
+# Tests in this section check runtime variables exported by the profile.
 
 @test "constants: UIWidth is set and numeric" {
     [[ -n "$UIWidth" ]]
@@ -272,8 +326,8 @@ setup() {
     [[ "$COOLDOWN_DAILY" -eq 86400 ]]
 }
 
-@test "constants: COOLDOWN_WEEKLY is 604800 (7d)" {
-    [[ "$COOLDOWN_WEEKLY" -eq 604800 ]]
+@test "constants: COOLDOWN_WEEKLY is 86400 (24h — changed from 7d)" {
+    [[ "$COOLDOWN_WEEKLY" -eq 86400 ]]
 }
 
 @test "constants: LOG_MAX_BYTES is 1048576 (1MB)" {

@@ -9,7 +9,13 @@
       "Bash(\"printf '%-12s   %-40s   %-25s   %-9s   %-14s   %-14s   %-6s   %s\\\\n' \\\\\\n                \\\"${agent_name:0:12}\\\" \\\"${display_label:0:40}\\\" \\\"${key:0:25}\\\" \\\"${age_str:0:9}\\\" \\\"${model:0:14}\\\" \\\"${tokens:0:14}\\\" \\\"$cost_str\\\" \\\"$session_status\\\"\")",
       "Bash(f.write)",
       "Bash(print)",
-      "Bash(eof)"
+      "Bash(eof)",
+      "Bash(time *)",
+      "Bash(python3 *)",
+      "Bash(]:)",
+      "Bash(parts.append)",
+      "Bash(header *)",
+      "Bash(pyeof)"
     ]
   },
   "$version": 3

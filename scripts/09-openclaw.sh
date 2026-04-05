@@ -1575,8 +1575,11 @@ function oc-restore() {
 
     # Extract to a temp directory first, validate, then swap — protects
     # against corrupt ZIPs destroying current state with nothing to replace it.
+    # Use mktemp -d with /tmp as the base (always supports XXXXXX template),
+    # then move to OC_BACKUPS if needed. This avoids issues with network-mounted
+    # or exotic filesystems that may not support mktemp's template expansion.
     local tmp_restore
-    tmp_restore=$(mktemp -d "${OC_BACKUPS}/restore_XXXXXX")
+    tmp_restore=$(mktemp -d "/tmp/oc-restore-XXXXXX")
     __tac_info "Extracting to staging area..." "[WORKING]" "$C_Dim"
     if ! unzip -q "$latest" -d "$tmp_restore"
     then

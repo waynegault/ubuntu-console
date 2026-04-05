@@ -1185,6 +1185,20 @@ function __model_use() {
 
     local num name file size arch quant layers gpu_layers ctx threads tps
     IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps <<< "$entry"
+
+    # Allow context size override via TAC_CTX_SIZE environment variable
+    # (set by `serve --ctx-size N` or `model use N --ctx-size N`)
+    if [[ -n "${TAC_CTX_SIZE:-}" ]]
+    then
+        if [[ "${TAC_CTX_SIZE:-}" =~ ^[0-9]+$ ]]
+        then
+            ctx="$TAC_CTX_SIZE"
+            __tac_info "Context" "[OVERRIDDEN to $ctx via --ctx-size]" "$C_Dim"
+        else
+            __tac_info "Context" "[Invalid override '$TAC_CTX_SIZE' — using registry value $ctx]" "$C_Warning"
+        fi
+    fi
+
     local model_path="$LLAMA_MODEL_DIR/$file"
     local model_bytes=0
 
@@ -2497,7 +2511,7 @@ bench-compare|bench-latest|bench-history|delete|archive|download}"
     echo "  scan       - Scan $LLAMA_MODEL_DIR, read GGUF metadata, auto-calculate params"
     echo "  list       - Show numbered model registry (${PLAY_MARK} = active, * = default)"
     echo "  default [N] - Show current default LLM, or set it to model #N"
-    echo "  use N      - Start model #N with optimal settings"
+    echo "  use N [--ctx-size N] - Start model #N with optimal settings"
     echo "  stop       - Stop llama-server"
     echo "  status     - Show what's running (--json|--plain supported)"
     echo "  doctor     - Validate registry/default/GPU/watchdog/ports"
@@ -2511,6 +2525,12 @@ bench-compare|bench-latest|bench-history|delete|archive|download}"
     echo "  delete N   - Permanently delete model #N from disk and registry (--dry-run)"
     echo "  archive N  - Move model #N to archive/ and remove from registry (--dry-run)"
     echo "  download   - Download GGUF models from Hugging Face (repo:file)"
+    echo ""
+    echo "Options:"
+    echo "  --ctx-size N  Override context window (default from models.conf)"
+    echo ""
+    echo "Also: serve [--ctx-size N]  Start default LLM with optional context override"
+    echo "      halt                  Stop the LLM server"
     return 0
 }
 
@@ -2535,7 +2555,28 @@ function model() {
             ;;
 
         use)
-            __model_use "${1:-}"
+            shift 2>/dev/null || true
+            # Parse --ctx-size override from remaining args
+            local _use_ctx=""
+            local _use_num="${1:-}"
+            shift 2>/dev/null || true
+            while [[ $# -gt 0 ]]
+            do
+                case "$1" in
+                    --ctx-size|--ctx)
+                        _use_ctx="$2"
+                        shift 2
+                        ;;
+                    *)
+                        shift
+                        ;;
+                esac
+            done
+            if [[ -n "$_use_ctx" ]]
+            then
+                export TAC_CTX_SIZE="$_use_ctx"
+            fi
+            __model_use "$_use_num"
             ;;
 
         stop)
@@ -2599,9 +2640,42 @@ function model() {
 # serve/halt/mlogs — convenience wrappers for the model manager.
 # shellcheck disable=SC2034,SC2059,SC2120,SC2154
 function serve() {
-    if [[ -n "${1:-}" ]]
+    # Parse optional --ctx-size override before passing to model use
+    local ctx_override=""
+    local model_arg=""
+    while [[ $# -gt 0 ]]
+    do
+        case "$1" in
+            --ctx-size|--ctx)
+                ctx_override="$2"
+                shift 2
+                ;;
+            -*)
+                printf '%s\n' "${C_Error}[Unknown option: '$1']${C_Reset}"
+                printf '%s\n' "  ${C_Dim}Usage: serve [MODEL_NUM] [--ctx-size N]${C_Reset}"
+                return 1
+                ;;
+            *)
+                model_arg="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # Export context size override so __model_use can pick it up
+    if [[ -n "$ctx_override" ]]
     then
-        model use "$1"
+        if [[ ! "$ctx_override" =~ ^[0-9]+$ ]]
+        then
+            printf '%s\n' "${C_Error}[Not a number: '--ctx-size' = '$ctx_override']${C_Reset}"
+            return 1
+        fi
+        export TAC_CTX_SIZE="$ctx_override"
+    fi
+
+    if [[ -n "$model_arg" ]]
+    then
+        model use "$model_arg"
     else
         # Start the default LLM
         local def_num

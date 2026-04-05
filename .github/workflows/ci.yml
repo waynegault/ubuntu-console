@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint & Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Bash syntax check
+        run: |
+          for f in tactical-console.bashrc install.sh env.sh scripts/*.sh bin/*.sh; do
+            [[ -f "$f" ]] || continue
+            echo "Checking $f ..."
+            bash -n "$f"
+          done
+
+      - name: ShellCheck
+        run: |
+          for f in tactical-console.bashrc install.sh env.sh scripts/*.sh bin/*.sh; do
+            [[ -f "$f" ]] || continue
+            echo "Checking $f ..."
+            shellcheck -s bash "$f"
+          done
+
+      - name: Unicode safety
+        run: SKIP_UNICODE_CHECK=0 scripts/lint.sh
+
+  test:
+    name: Fast Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: Run fast tests
+        run: bats tests/tactical-console-fast.bats
+
+      - name: Run lint script
+        run: scripts/lint.sh
+
+  module-count:
+    name: Module Integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: All 15 numbered modules exist
+        run: |
+          count=$(ls scripts/[0-9][0-9]-*.sh | wc -l)
+          echo "Found $count modules"
+          [[ "$count" -eq 15 ]]
+
+      - name: All modules have version comments
+        run: |
+          missing=0
+          for f in scripts/[0-9][0-9]-*.sh; do
+            if ! grep -q '^# Module Version:' "$f"; then
+              echo "MISSING version in $f"
+              missing=$((missing + 1))
+            fi
+          done
+          [[ "$missing" -eq 0 ]]
+
+      - name: All modules have AI INSTRUCTION
+        run: |
+          missing=0
+          for f in scripts/[0-9][0-9]-*.sh bin/*.sh; do
+            [[ -f "$f" ]] || continue
+            if ! grep -q 'AI INSTRUCTION' "$f"; then
+              echo "MISSING AI INSTRUCTION in $f"
+              missing=$((missing + 1))
+            fi
+          done
+          [[ "$missing" -eq 0 ]]
+
+      - name: All files end with newline
+        run: |
+          for f in tactical-console.bashrc install.sh env.sh \
+                   scripts/[0-9][0-9]-*.sh bin/*.sh; do
+            [[ -f "$f" ]] || continue
+            if [[ "$(tail -c 1 "$f" | xxd -p)" != "0a" ]]; then
+              echo "Missing trailing newline in $f"
+              exit 1
+            fi
+          done
+
+      - name: No carriage returns
+        run: |
+          for f in tactical-console.bashrc install.sh env.sh \
+                   scripts/[0-9][0-9]-*.sh bin/*.sh; do
+            [[ -f "$f" ]] || continue
+            count=$(grep -Pc '\r' "$f" || true)
+            if [[ "$count" -gt 0 ]]; then
+              echo "Carriage returns found in $f"
+              exit 1
+            fi
+          done
+
+# end of file

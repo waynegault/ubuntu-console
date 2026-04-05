@@ -9,8 +9,11 @@
 #           tac-exec oc health
 #           tac-exec model list
 #           tac-exec so
+#           tac-exec serve --ctx-size 32768
+#           tac-exec model use 5 --ctx-size 16384
 #
 # Special modes:
+#   --help  - Show this help message
 #   --read  - For VS Code commands: output file content instead of opening editor
 #   Environment: TAC_READ_MODE=1 also enables read mode
 #
@@ -21,6 +24,44 @@ set -eo pipefail
 
 _tac_exec_bin="$(readlink -f "${BASH_SOURCE[0]}")"
 _tac_exec_root="$(cd "$(dirname "$_tac_exec_bin")/.." && pwd)"
+
+# Show help and exit
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]
+then
+    cat <<'HELP'
+Usage: tac-exec <command> [args...]
+
+Run any command with the full Tactical Console function library available.
+
+Examples:
+  tac-exec oc health
+  tac-exec model list
+  tac-exec model use 5
+  tac-exec serve
+  tac-exec serve --ctx-size 32768
+  tac-exec model use 5 --ctx-size 16384
+  tac-exec so
+  tac-exec xo
+
+Special flags (passed through to commands):
+  --ctx-size N     Override the context window size for llama-server
+  --read           Output file content instead of opening VS Code
+  TAC_READ_MODE=1  Environment equivalent of --read
+
+Common commands:
+  oc <subcommand>          OpenClaw gateway management
+  model <subcommand>       LLM model registry and lifecycle
+  serve [--ctx-size N]     Start the default LLM (optionally override context)
+  halt                     Stop the LLM server
+  so / xo                  OpenClaw gateway start/stop
+  status                   Quick system overview
+
+For full command documentation, see the README or run:
+  tac-exec oc
+  tac-exec model
+HELP
+    exit 0
+fi
 
 # Change to home directory for consistent context
 cd ~ || exit 1
@@ -40,7 +81,9 @@ source "$_tac_exec_root/env.sh"
 
 if [[ $# -eq 0 ]]; then
     echo "Usage: tac-exec <command> [args...]"
-    echo "       tac-exec --read <command>  # Read files instead of opening VS Code"
+    echo "       tac-exec --help            Show full help"
+    echo "       tac-exec --read <command>  Read files instead of opening VS Code"
+    echo "       tac-exec serve --ctx-size 32768  Override context window"
     echo "Runs <command> with full Tactical Console functions available."
     exit 1
 fi
