@@ -875,7 +875,7 @@ function oc-purge() {
         do
             if [[ -d "$_agent_dir" ]]
             then
-                local _session_dir="$_agent_dir/sessions"
+                local _session_dir="${_agent_dir%/}/sessions"
                 if [[ -d "$_session_dir" ]]
                 then
                     rm -rf "$_session_dir"
