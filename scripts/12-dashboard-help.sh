@@ -3,7 +3,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 4
+# Module Version: 6
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -395,7 +395,7 @@ function bashrc_diagnose() {
     echo "TAC_CACHE_DIR   : ${TAC_CACHE_DIR:-unset}"
     echo ""
     echo "=== Tool Availability ==="
-    local tools=(git jq curl nvidia-smi openclaw python3 node npm)
+    local tools=(git jq curl nvidia-smi openclaw gog python3 node npm)
     for t in "${tools[@]}"
     do
         if command -v "$t" >/dev/null 2>&1
@@ -405,6 +405,12 @@ function bashrc_diagnose() {
             # Special handling for openclaw — check if functional, not just in PATH
             if [[ "$t" == "openclaw" ]]; then
                 if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
+                    echo "  $t : $tool_path"
+                else
+                    echo "  $t : $tool_path (NOT FUNCTIONAL)"
+                fi
+            elif [[ "$t" == "gog" ]]; then
+                if [[ "$__TAC_GOG_OK" == "1" ]]; then
                     echo "  $t : $tool_path"
                 else
                     echo "  $t : $tool_path (NOT FUNCTIONAL)"
@@ -542,6 +548,17 @@ function tactical_help() {
 
         __hSection "OPENCLAW — TOOLS"
         __hRow "oc g" "Launch operational graph browser (overview/topics/files/semantic/raw)"
+    fi
+
+    # gog section — only shown if gog CLI is installed AND functional
+    if [[ "$__TAC_GOG_OK" == "1" ]]; then
+        __hSection "GOG — GOOGLE CLI"
+        __hRow "gog-status" "Show auth/config status and accounts"
+        __hRow "gog-login <email>" "Authorize and store refresh token"
+        __hRow "gog-logout <email>" "Remove stored credentials"
+        __hRow "gog-version" "Print gog version"
+        __hRow "gog-help" "Show full gog help reference"
+        __hRow "gog <command>" "Run gog commands directly"
     fi
 
     __hSection "LLM — MODEL MANAGEMENT"

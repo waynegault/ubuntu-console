@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 
 # ==============================================================================
@@ -230,6 +230,12 @@ fi
 # This is evaluated once at profile load time by 09-openclaw.sh.
 # All code should check this variable instead of running `command -v openclaw`.
 __TAC_OPENCLAW_OK=0
+
+# ---- gog installation check (placeholder — set by 09b-gog.sh) ----
+# __TAC_GOG_OK is set to 1 if gog CLI is installed AND functional.
+# This is evaluated once at profile load time by 09b-gog.sh.
+# All code should check this variable instead of running `command -v gog`.
+__TAC_GOG_OK=0
 
 # ---- UI Context & Core Environment ----
 export UIWidth="${UIWidth:-80}"

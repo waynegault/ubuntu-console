@@ -68,7 +68,7 @@ esac
 # TACTICAL_PROFILE_VERSION is auto-computed after sourcing all modules:
 #   TACTICAL_PROFILE_VERSION = _TAC_LOADER_VERSION . sum(all module versions)
 #   Example: v3.63 = loader v3 + 63 total module versions
-_TAC_LOADER_VERSION="4"
+_TAC_LOADER_VERSION="5"
 
 # AI INSTRUCTION: Follow these terminal formatting rules strictly:
 # 1. A blank line must exist between the bottom of any UI border and the command prompt.
@@ -111,6 +111,7 @@ _TAC_LOADER_VERSION="4"
 # -  07-telemetry.sh        - CPU, GPU, battery, git, disk, tokens
 # -  08-maintenance.sh      - get-ip, up, cl, cpwd, sysinfo, logtrim
 # -  09-openclaw.sh         - Gateway, backup, cron, skills, plugins
+# -  09b-gog.sh             - Google CLI (gog) detection and helpers
 # -  10-deployment.sh       - mkproj scaffold, git commit+push
 # -  11-llm-manager.sh      - model mgmt, chat, burn, explain
 # -  12-dashboard-help.sh   - Tactical Dashboard ('m') and Help ('h')
@@ -145,7 +146,7 @@ _tac_module_dir="$TACTICAL_REPO_ROOT/scripts"
 
 # Expected modules (for warning if any are missing)
 _tac_expected_modules=(01-constants 02-error-handling 03-design-tokens 04-aliases
-    05-ui-engine 06-hooks 07-telemetry 08-maintenance 09-openclaw 10-deployment
+    05-ui-engine 06-hooks 07-telemetry 08-maintenance 09-openclaw 09b-gog 10-deployment
     11-llm-manager 12-dashboard-help 13-init 14-wsl-extras 15-model-recommender)
 
 # Source modules (timed when DEBUG_TAC_STARTUP is set) and accumulate
