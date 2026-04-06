@@ -21,7 +21,8 @@
       "Bash(cd *)",
       "Bash(bats *)",
       "Bash(tail *)",
-      "Bash(echo *)"
+      "Bash(echo *)",
+      "Bash(git commit *)"
     ]
   },
   "$version": 3

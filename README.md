@@ -9,6 +9,9 @@ WSL2 Ubuntu shell into a unified command-and-control console. A thin loader
 (`tactical-console.bashrc`) sources 15 numbered modules from `scripts/` in
 dependency order.
 
+Non-interactive library loader (all modules except 13-init.sh) — `env.sh`
+sources all modules for MCP tools, cron jobs, and AI exec environments.
+
 ## Quick Links
 
 | What You Need | Where to Find It |
@@ -47,7 +50,7 @@ dependency order.
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (20s, 41 tests)
-- **Full tests:** `bats tests/tactical-console.bats` (runtime behaviour tests)
+- **Full tests:** `bats tests/tactical-console.bats` (473 BATS unit tests, runtime behaviour)
 - **Lint:** `scripts/lint.sh` (bash -n + shellcheck + Unicode safety)
 
 # end of file
