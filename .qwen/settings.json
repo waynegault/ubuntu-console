@@ -37,7 +37,12 @@
       "Bash(model *)",
       "Bash(__llm_default_file)",
       "Bash(__llm_default_number)",
-      "Bash(ps *)"
+      "Bash(ps *)",
+      "Bash(set *)",
+      "Bash(script)",
+      "Bash(so)",
+      "Bash(__so_ensure_default_agent_session)",
+      "Bash(sleep *)"
     ]
   },
   "$version": 3
