@@ -1394,7 +1394,15 @@ function __model_use() {
     start_msg+="b ${batch_size}/${ubatch_size}, p ${parallel_slots})"
     __tac_info "Starting" "$start_msg" "$C_Highlight"
 
-    (nohup "${cmd[@]}" > "$LLM_LOG_FILE" 2>&1 &)
+    # llama.cpp monitors stdin and will force-shutdown on EOF.
+    # We must keep stdin open — redirecting </dev/null causes immediate EOF.
+    # Use a background sleep process piped to stdin to keep it alive.
+    (
+        trap '' HUP INT TERM
+        { while true; do sleep 86400; done; } | \
+            nohup "${cmd[@]}" >"$LLM_LOG_FILE" 2>&1
+    ) &
+    disown
 
     if ! { echo "$num" > "${ACTIVE_LLM_FILE}.tmp" 2>/dev/null && mv "${ACTIVE_LLM_FILE}.tmp" "$ACTIVE_LLM_FILE"; }
     then
