@@ -500,7 +500,11 @@ function so() {
         fi
 
         # Auto-create session for default agent (hal) if no sessions exist
-        __so_ensure_default_agent_session
+        # This runs in background — don't block the user
+        if [[ ! -f "$TAC_CACHE_DIR/hal_session_created" ]]; then
+            __so_ensure_default_agent_session
+            __tac_info "Default Agent" "[Session creation queued — background]" "$C_Dim"
+        fi
     fi
 }
 
@@ -509,28 +513,30 @@ function so() {
 # (hal) if no sessions exist. This ensures hal always has a session ready.
 # ---------------------------------------------------------------------------
 function __so_ensure_default_agent_session() {
-    # Check if any sessions exist
-    local _session_count
-    _session_count=$(openclaw sessions --all-agents --json 2>/dev/null | jq -r '
-        (if type=="array" then . elif (.sessions?) then .sessions elif (.items?) then .items else . end)
-        | length' 2>/dev/null) || true
+    # Run session check and creation in background to avoid blocking so startup.
+    # The session is a convenience feature — it should not delay the user.
+    (
+        # Check if any sessions exist (with timeout to prevent hanging)
+        local _session_count
+        _session_count=$(timeout 10 openclaw sessions --all-agents --json 2>/dev/null | jq -r '
+            (if type=="array" then . elif (.sessions?) then .sessions elif (.items?) then .items else . end)
+            | length' 2>/dev/null) || true
 
-    # Validate numeric output — guard against jq failure or partial output
-    if ! [[ "$_session_count" =~ ^[0-9]+$ ]]; then
-        _session_count=0
-    fi
-
-    if [[ "$_session_count" == "0" ]]; then
-        __tac_info "Default Agent" "[CREATING session for hal]" "$C_Dim"
-        # Give gateway a moment to fully initialize
-        sleep 2
-        if openclaw agent --agent hal --message "." --json >/tmp/hal_session.log 2>&1
-        then
-            __tac_info "Default Agent" "[Session created for hal]" "$C_Success"
-        else
-            __tac_info "Default Agent" "[Failed to create session — see /tmp/hal_session.log]" "$C_Warning"
+        # Validate numeric output — guard against jq failure or partial output
+        if ! [[ "$_session_count" =~ ^[0-9]+$ ]]; then
+            _session_count=0
         fi
-    fi
+
+        if [[ "$_session_count" == "0" ]]; then
+            # Brief pause to let gateway stabilize, but don't overwait
+            sleep 1
+            if timeout 30 openclaw agent --agent hal --message "." --json >/tmp/hal_session.log 2>&1
+            then
+                # Touch a marker file so next so run knows session was created
+                touch "$TAC_CACHE_DIR/hal_session_created" 2>/dev/null
+            fi
+        fi
+    ) & disown
 }
 
 # ---------------------------------------------------------------------------
@@ -639,9 +645,26 @@ function xo() {
         _was_running=1
     fi
 
-    openclaw gateway stop >/dev/null 2>&1
-    systemctl --user stop "$_svc" 2>/dev/null
-    sleep 0.5
+    openclaw gateway stop >/dev/null 2>&1 &
+    local _xo_stop_pid=$!
+    # Wait up to 10s for graceful stop, then SIGTERM
+    local _xo_wait=0
+    while kill -0 "$_xo_stop_pid" 2>/dev/null && (( _xo_wait < 10 ))
+    do
+        sleep 1
+        ((_xo_wait++))
+    done
+    if kill -0 "$_xo_stop_pid" 2>/dev/null
+    then
+        kill "$_xo_stop_pid" 2>/dev/null
+        wait "$_xo_stop_pid" 2>/dev/null
+    else
+        wait "$_xo_stop_pid" 2>/dev/null
+    fi
+
+    # systemctl stop with timeout via timeout command
+    timeout 8 systemctl --user stop "$_svc" 2>/dev/null || true
+    sleep 0.3
     rm -f "$OC_ROOT/supervisor.lock"
 
     if (( _was_running ))
@@ -864,9 +887,23 @@ function oc-purge() {
 
     # 1. Stop the gateway (systemd + CLI only — no broad pkill)
     __tac_info "Gateway" "[STOPPING]" "$C_Warning"
-    openclaw gateway stop >/dev/null 2>&1
-    systemctl --user stop openclaw-gateway.service 2>/dev/null || true
-    sleep 1
+    openclaw gateway stop >/dev/null 2>&1 &
+    local _purge_stop_pid=$!
+    local _purge_stop_wait=0
+    while kill -0 "$_purge_stop_pid" 2>/dev/null && (( _purge_stop_wait < 8 ))
+    do
+        sleep 1
+        ((_purge_stop_wait++))
+    done
+    if kill -0 "$_purge_stop_pid" 2>/dev/null
+    then
+        kill "$_purge_stop_pid" 2>/dev/null
+        wait "$_purge_stop_pid" 2>/dev/null
+    else
+        wait "$_purge_stop_pid" 2>/dev/null
+    fi
+    timeout 8 systemctl --user stop openclaw-gateway.service 2>/dev/null || true
+    sleep 0.5
 
     # 2. Clear all agent session directories
     if [[ -d "$OC_AGENTS" ]]
