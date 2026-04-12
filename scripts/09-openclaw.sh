@@ -499,17 +499,15 @@ function so() {
             trap - EXIT
         fi
 
-        # Auto-create session for default agent (hal) if no sessions exist
-        # Runs silently in background — no UI noise for the user
-        if [[ ! -f "$TAC_CACHE_DIR/hal_session_created" ]]; then
-            __so_ensure_default_agent_session
-        fi
+        # Auto-create session for default agent (hal) if no sessions exist.
+        # Runs silently in background — no UI noise for the user.
+        __so_ensure_default_agent_session
     fi
 }
 
 # ---------------------------------------------------------------------------
 # __so_ensure_default_agent_session — Create a session for the default agent
-# (hal) if no sessions exist. This ensures hal always has a session ready.
+# (hal) if no sessions exist.
 # ---------------------------------------------------------------------------
 function __so_ensure_default_agent_session() {
     # Run session check and creation in background to avoid blocking so startup.
@@ -528,13 +526,9 @@ function __so_ensure_default_agent_session() {
         fi
 
         if [[ "$_session_count" == "0" ]]; then
-            # Brief pause to let gateway stabilize, but dont overwait
-            sleep 1
-            if timeout 30 openclaw agent --agent hal --message "." --json >/tmp/hal_session.log 2>&1
-            then
-                # Touch a marker file so next so run knows session was created
-                touch "'"$TAC_CACHE_DIR"'/hal_session_created" 2>/dev/null
-            fi
+            # Synthetic bootstrap pings are disabled by operator preference.
+            # No message is sent to create a session implicitly.
+            :
         fi
     ' & )
 }
