@@ -476,9 +476,10 @@ function up() {
     # Offers interactive choice when local changes are detected.
     if __check_cooldown "oc_plugins" "$now" hours_left "$force_mode"
     then
-        local plugin_updated=0 plugin_err=0
+        local plugin_updated=0 plugin_err=0 openstinger_updated=0
         local plugins_dir="$HOME/.openclaw/extensions"
         local vendor_dir="$HOME/.openclaw/vendor"
+        local post_update_check_script="$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
 
         # __update_plugin — Helper function to update a single plugin with change handling.
         # Usage: __update_plugin <path> <remote_pattern> <display_name> <step_num>
@@ -646,6 +647,35 @@ function up() {
         if __update_plugin "$vendor_dir/openstinger" "srikanthbellary/openstinger" "OpenStinger" "9"
         then
             plugin_updated=1
+            openstinger_updated=1
+        fi
+
+        # If plugins changed (especially OpenStinger), validate and reapply
+        # OpenClaw post-update customizations to prevent drift.
+        if (( plugin_updated == 1 ))
+        then
+            if [[ -x "$post_update_check_script" ]]
+            then
+                if "$post_update_check_script" >/dev/null 2>&1
+                then
+                    __tac_line "[10/20] Post-Update Drift" "[CLEAN]" "$C_Success"
+                else
+                    if "$post_update_check_script" --fix >/dev/null 2>&1
+                    then
+                        if (( openstinger_updated == 1 ))
+                        then
+                            __tac_line "[10/20] Post-Update Drift" "[DRIFT FIXED + OPENSTINGER HARDENING REAPPLIED]" "$C_Success"
+                        else
+                            __tac_line "[10/20] Post-Update Drift" "[DRIFT FIXED]" "$C_Success"
+                        fi
+                    else
+                        __tac_line "[10/20] Post-Update Drift" "[FIX FAILED - run post-update-drift-check.sh --fix]" "$C_Warning"
+                        ((errCount++))
+                    fi
+                fi
+            else
+                __tac_line "[10/20] Post-Update Drift" "[SKIP - drift checker missing]" "$C_Dim"
+            fi
         fi
 
         # Set cooldown if any plugin was updated
