@@ -3,13 +3,13 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 9
+# Module Version: 12
 # ==============================================================================
 # 3. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
 # @modular-section: aliases
 # @depends: constants
-# @exports: code, oedit, llmconf, oclogs, le, lo, occonf, os, oa, ocstat,
+# @exports: code, oedit, llmconf, oclogs, le, lo, ocui, occhat, occonf, os, oa, ocstat,
 #   ocgs, ocv, status, ocms, cop, cop-ask, cop-init (plus standard shell aliases)
 #   Note: owk → 'oc wk', ologs → 'oc log-dir'
 
@@ -87,13 +87,59 @@ function oclogs() {
 }
 # le — Show the last 40 lines of the OpenClaw gateway journal.
 function le() {
-    journalctl --user -u openclaw-gateway.service --no-pager -n 60 --output=cat 2>&1 | tail -40
-    return "${PIPESTATUS[0]}"  # Preserve journalctl exit code
+    local _pat
+    _pat='\berror\b|\bfailed\b|\bfailovererror\b|\btimeout\b|\btimed out\b|\bunauthorized\b|\bsecurity warning\b|\bexception\b|\btraceback\b|\bconnection error\b|\bpassword_missing\b|\bcode=1008\b|\b404 No models\b|\b503 Loading model\b|\bmodel_not_found\b|\bcontext overflow\b|\brequires target <E\.164\|group JID>\b|\bMCP server connection timed out\b'
+    journalctl --user -u openclaw-gateway.service --no-pager -n 300 --output=cat 2>&1 \
+        | grep -Ei "$_pat" \
+        | tail -40
+    return "${PIPESTATUS[0]}"
 }
 # lo — Show the last 120 lines of the OpenClaw gateway journal.
 function lo() {
-    journalctl --user -u openclaw-gateway.service --no-pager -n 120 --output=cat 2>&1
-    return "${PIPESTATUS[0]}"  # Preserve journalctl exit code
+    local _pat
+    _pat='\berror\b|\bfailed\b|\bfailovererror\b|\btimeout\b|\btimed out\b|\bunauthorized\b|\bsecurity warning\b|\bexception\b|\btraceback\b|\bconnection error\b|\bpassword_missing\b|\bcode=1008\b|\b404 No models\b|\b503 Loading model\b|\bmodel_not_found\b|\bcontext overflow\b|\brequires target <E\.164\|group JID>\b|\bMCP server connection timed out\b'
+    journalctl --user -u openclaw-gateway.service --no-pager -n 300 --output=cat 2>&1 \
+        | grep -Eiv "$_pat" \
+        | tail -120
+    return "${PIPESTATUS[0]}"
+}
+# __oc_open_local_url — Open a local OpenClaw URL in the default browser.
+# Uses 127.0.0.1 to avoid browser HTTPS-first upgrades on localhost.
+function __oc_open_local_url() {
+    local url="$1"
+
+    if [[ -z "$url" || "$url" != http://127.0.0.1:* ]]; then
+        __tac_info "OpenClaw" "[REFUSING NON-LOCAL URL]" "$C_Error"
+        return 1
+    fi
+
+    if command -v wslview >/dev/null 2>&1; then
+        wslview "$url" >/dev/null 2>&1 && return 0
+    fi
+    if command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$url" >/dev/null 2>&1 && return 0
+    fi
+
+    printf '%s\n' "$url"
+    return 0
+}
+
+# ocui — Open OpenClaw Control UI on the loopback IPv4 URL.
+function ocui() {
+    local _port="${OC_PORT:-18789}"
+    __oc_open_local_url "http://127.0.0.1:${_port}/?gatewayUrl=ws%3A%2F%2F127.0.0.1%3A${_port}"
+}
+
+# occhat — Open the chat page with a target session.
+# Usage: occhat [sessionKey]
+# Example: occhat agent:hal:main
+function occhat() {
+    local _port="${OC_PORT:-18789}"
+    local _session="${1:-agent:hal:main}"
+    local _encoded_session
+
+    _encoded_session=$(printf '%s' "$_session" | sed 's/:/%3A/g')
+    __oc_open_local_url "http://127.0.0.1:${_port}/chat?gatewayUrl=ws%3A%2F%2F127.0.0.1%3A${_port}&session=${_encoded_session}"
 }
 # occonf — Open the OpenClaw config (openclaw.json) in VS Code.
 # In read mode (TAC_READ_MODE=1): outputs config content instead.

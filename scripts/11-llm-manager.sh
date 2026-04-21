@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 23
+# Module Version: 24
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -193,6 +193,11 @@ function __llm_health_timeout() {
     elif (( size_tenths >= _MODEL_SIZE_MEDIUM ))
     then
         timeout=60
+    fi
+
+    if [[ -n "${__BENCH_MODE:-}" && $timeout -lt 80 ]]
+    then
+        timeout=80
     fi
 
     printf '%s\n' "$timeout"

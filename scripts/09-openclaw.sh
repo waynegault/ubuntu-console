@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 18
+# Module Version: 20
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -410,9 +410,28 @@ function __so_start_gateway() {
         return 0
     elif systemctl --user is-active --quiet "$_svc" 2>/dev/null
     then
-        __tac_info "Gateway" "[STARTING — port not ready]" "$C_Warning"
-        printf '%s\n' "  ${C_Dim}Service active after ${elapsed}s but port $OC_PORT not responding.${C_Reset}"
-        printf '%s\n' "  ${C_Dim}Retry in a moment or run 'le' for logs.${C_Reset}"
+        # Final grace check to avoid false negatives on slow bind/port probe races.
+        local _grace_s=0 _grace_max=6
+        while (( _grace_s < _grace_max ))
+        do
+            if __test_port "$OC_PORT"
+            then
+                __tac_info "Gateway" "[ONLINE] (port $OC_PORT, $((elapsed + _grace_s))s)" "$C_Success"
+                return 0
+            fi
+            if journalctl --user -u "$_svc" --no-pager -n 30 --output=cat 2>/dev/null | grep -q 'ready ('
+            then
+                __tac_info "Gateway" "[ONLINE — READY SIGNAL]" "$C_Success"
+                printf '%s\n' "  ${C_Dim}Service reported ready; port probe lagged briefly.${C_Reset}"
+                return 0
+            fi
+            sleep 1
+            ((_grace_s++))
+        done
+
+        __tac_info "Gateway" "[STARTING — finalizing]" "$C_Warning"
+        printf '%s\n' "  ${C_Dim}Service active after $((elapsed + _grace_max))s; startup still settling.${C_Reset}"
+        printf '%s\n' "  ${C_Dim}Run 'le' for logs if this does not clear in a few seconds.${C_Reset}"
         return 0
     else
         __tac_info "Gateway" "[FAILED]" "$C_Error"
@@ -1381,6 +1400,46 @@ function __bridge_windows_api_keys() {
     source "$cache" 2>/dev/null
 }
 
+# ---------------------------------------------------------------------------
+# __oc_upsert_env_kv — Create or update KEY="value" entry in an env file.
+# Preserves other lines exactly; rewrites only the matching key line.
+# ---------------------------------------------------------------------------
+function __oc_upsert_env_kv() {
+    local _file="$1"
+    local _key="$2"
+    local _val="$3"
+
+    [[ -z "$_file" || -z "$_key" ]] && return 1
+    [[ ! "$_key" =~ ^[A-Z_][A-Z0-9_]*$ ]] && return 1
+
+    mkdir -p "$(dirname "$_file")"
+    [[ -f "$_file" ]] || : > "$_file"
+
+    local _tmp
+    _tmp="${_file}.tmp.$$"
+
+    awk -v k="$_key" -v v="$_val" '
+        BEGIN { done=0 }
+        {
+            if ($0 ~ "^" k "=") {
+                gsub(/\\/, "\\\\", v)
+                gsub(/"/, "\\\"", v)
+                print k "=\"" v "\""
+                done=1
+            } else {
+                print $0
+            }
+        }
+        END {
+            if (!done) {
+                gsub(/\\/, "\\\\", v)
+                gsub(/"/, "\\\"", v)
+                print k "=\"" v "\""
+            }
+        }
+    ' "$_file" > "$_tmp" && mv "$_tmp" "$_file"
+}
+
 # (oc-sync-keys-to-bridge removed; behavior merged into oc-refresh-keys)
 
 # ---------------------------------------------------------------------------
@@ -1417,6 +1476,54 @@ function oc-refresh-keys() {
         local count
         count=$(wc -l < "$TAC_CACHE_DIR/tac_win_api_keys")
         __tac_info "Windows API Keys" "[$count variable(s) imported]" "$C_Success"
+
+        # Mirror SmartThings-related vars into local and NAS collector env files.
+        # This keeps NAS cron collectors in sync with Windows User environment.
+        local _local_collectors_env="/home/wayne/.openclaw/workspace-jarvis/scripts/config.env"
+        local _nas_collectors_env="/mnt/HD/HD_a2/butler/cron/openclaw-collectors.env"
+        local _nas_user="${OC_NAS_USER:-sshd}"
+        local _nas_host="${OC_NAS_HOST:-192.168.33.17}"
+        local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
+        local _synced_local=0
+        local _synced_nas=0
+        local _k
+        local _v
+        while IFS= read -r _line
+        do
+            [[ "$_line" =~ ^export[[:space:]]+ ]] || continue
+            _k="${_line#export }"
+            _k="${_k%%=*}"
+            [[ "$_k" =~ ^SMARTTHINGS_[A-Z0-9_]+$ ]] || continue
+            _v="${!_k:-}"
+            [[ -n "$_v" ]] || continue
+
+            __oc_upsert_env_kv "$_local_collectors_env" "$_k" "$_v" && ((_synced_local++))
+
+            if [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1
+            then
+                local _qv
+                printf -v _qv '%q' "$_v"
+                if ssh -n -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no "${_nas_user}@${_nas_host}" \
+                    "sh -c 'f=\"$_nas_collectors_env\"; [ -f \"\$f\" ] || : > \"\$f\"; if grep -q \"^$_k=\" \"\$f\"; then sed -i \"s|^$_k=.*|$_k=\\\"${_qv}\\\"|\" \"\$f\"; else printf \"%s\\n\" \"$_k=\\\"${_qv}\\\"\" >> \"\$f\"; fi'" >/dev/null 2>&1
+                then
+                    ((_synced_nas++))
+                fi
+            fi
+        done < "$TAC_CACHE_DIR/tac_win_api_keys"
+
+        if (( _synced_local > 0 ))
+        then
+            __tac_info "Collector Env" "[LOCAL sync: $_synced_local SMARTTHINGS var(s)]" "$C_Success"
+        else
+            __tac_info "Collector Env" "[LOCAL sync: no SMARTTHINGS vars found]" "$C_Warning"
+        fi
+
+        if (( _synced_nas > 0 ))
+        then
+            __tac_info "Collector Env" "[NAS sync: $_synced_nas SMARTTHINGS var(s)]" "$C_Success"
+        else
+            __tac_info "Collector Env" "[NAS sync skipped/failed - check SSH key or host reachability]" "$C_Warning"
+        fi
     else
         __tac_info "Windows API Keys" "[BRIDGE FAILED - pwsh timeout?]" "$C_Warning"
     fi
