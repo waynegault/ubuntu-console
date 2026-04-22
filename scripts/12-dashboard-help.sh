@@ -349,7 +349,7 @@ function tactical_dashboard() {
     else
         cmds_toggle="so"
     fi
-    local cmds="up | ${cmds_toggle} | serve <n> | halt | chat: | commit | g | h"
+    local cmds="up | ${cmds_toggle} | serve <n> | halt | chat: | commit | g | h | pwsh"
     local totalPad=$(( UIWidth - 2 - ${#cmds} ))
     local leftPad=$(( totalPad / 2 ))
     local rightPad=$(( totalPad - leftPad ))
@@ -485,6 +485,7 @@ function tactical_help() {
     __hRow "logtrim" "Trim logs over 1MB to last 1000 lines"
     __hRow "oedit" "Open tactical-console.bashrc in VS Code"
     __hRow "code <path>" "Open any file or directory in VS Code"
+    __hRow "pwsh" "PowerShell 7 (Linux native; shared profile via OneDrive symlink)"
 
     # OpenClaw sections — only shown if openclaw CLI is installed AND functional
     if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then

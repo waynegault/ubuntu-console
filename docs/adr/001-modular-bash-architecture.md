@@ -19,27 +19,38 @@ Adopt a modular architecture where:
 
 1. **Thin loader** - `~/.bashrc` contains only a loader that sources the canonical profile
 2. **Canonical profile** - `~/ubuntu-console/tactical-console.bashrc` is the thin loader's source
-3. **Numbered modules** - Logic split into `scripts/[01-15]-*.sh` files loaded in numeric order
+3. **Numbered modules** - Logic split into `scripts/[01-15,09b]-*.sh` profile modules loaded in numeric order; utility scripts (`16-20`) are present in `scripts/` but are **not** sourced by the loader
 4. **Explicit dependencies** - Each module declares `@depends` and `@exports` annotations
-5. **Version tracking** - Each module has `# Module Version: N` for change tracking
+5. **Array-based loader** - `tactical-console.bashrc` uses `_tac_expected_modules` (an explicit array) rather than a glob to source exactly the 16 named profile modules — utility scripts are skipped
+6. **Version tracking** - Each module has `# Module Version: N` for change tracking
 
-Module loading order:
+Module loading order (16 profile modules):
 ```
-01-constants.sh       → All paths, ports, env vars (single truth)
-02-error-handling.sh  → Bash ERR trap
-03-design-tokens.sh   → ANSI color constants
-04-aliases.sh         → Short commands, VS Code wrappers
-05-ui-engine.sh       → Box-drawing primitives
-06-hooks.sh           → cd override, prompt (PS1), port test
-07-telemetry.sh       → CPU, GPU, battery, git, disk, tokens
-08-maintenance.sh     → get-ip, up, cl, sysinfo, logtrim
-09-openclaw.sh        → Gateway, backup, cron, skills
-10-deployment.sh      → mkproj scaffold, git commit+push
-11-llm-manager.sh     → model mgmt, chat, burn, explain
-12-dashboard-help.sh  → Tactical Dashboard and Help
-13-init.sh            → mkdir, completions, WSL loopback fix
-14-wsl-extras.sh      → WSL/X11 startup helpers
-15-model-recommender.sh → AI model recommendations
+01-constants.sh         → All paths, ports, env vars (single truth)
+02-error-handling.sh    → Bash ERR trap (exit ≥ 2 logged)
+03-design-tokens.sh     → ANSI color constants (readonly)
+04-aliases.sh           → Short commands, VS Code wrappers
+05-ui-engine.sh         → Box-drawing primitives
+06-hooks.sh             → cd override, prompt (PS1), port test
+07-telemetry.sh         → CPU, GPU, battery, git, disk, tokens
+08-maintenance.sh       → get-ip, up (13 steps), cl, sysinfo, logtrim, docs-sync
+09-openclaw.sh          → Gateway, backup, bridge, oc-failover, wacli, kgraph
+09b-gog.sh              → Google CLI (gog) detection and helpers
+10-deployment.sh        → mkproj scaffold, git commit+push, deploy
+11-llm-manager.sh       → model mgmt, chat, burn, bench, explain
+12-dashboard-help.sh    → Tactical Dashboard and Help, bashrc_diagnose
+13-init.sh              → mkdir, completions, WSL loopback fix (LAST — runs side-effects)
+14-wsl-extras.sh        → WSL/X11 startup helpers, completions, vault env
+15-model-recommender.sh → AI model recommendations by use case
+```
+
+Utility scripts in `scripts/` (not sourced; run standalone or in CI):
+```
+16-check-oc-agent-use.sh               → Agent usage regression checker
+17-import-windows-user-env.sh          → Import Windows user env vars
+18-lint.sh                             → bash -n + shellcheck + Unicode safety
+19-mirror-gigabrain-vault-to-windows.sh → Sync Obsidian vault to Windows
+20-run-tests.sh                        → BATS test runner
 ```
 
 ## Consequences
@@ -52,8 +63,8 @@ Module loading order:
 - **Version tracking** - `TACTICAL_PROFILE_VERSION` auto-computed from module versions
 
 ### Negative
-- **Slightly slower startup** - Multiple `source` calls add ~50-100ms overhead
-- **More files to manage** - 15 files instead of 1 monolith
+- **Slightly slower startup** - Multiple `source` calls add ~10ms overhead (measured on this hardware)
+- **More files to manage** - 16 profile modules + 5 utility scripts instead of 1 monolith
 - **Learning curve** - New contributors must understand module system
 
 ### Risks Mitigated

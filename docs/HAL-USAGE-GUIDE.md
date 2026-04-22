@@ -1,4 +1,24 @@
-# Hal's Guide to Tactical Console Commands
+---
+title: Hal Usage Guide
+---
+
+# Hal Usage Guide
+
+> **Consolidated:** All Hal / AI agent access documentation has been merged into
+> [HAL-COMMAND-CATALOG.md](HAL-COMMAND-CATALOG.md).
+
+See [HAL-COMMAND-CATALOG.md](HAL-COMMAND-CATALOG.md) for:
+
+- Single entry point (`tac-exec`) and file-reading mode (`--read`)
+- All command categories: LLM management, gateway, diagnostics, OpenClaw ops
+- JSON output and `jq` patterns
+- Common workflows (start LLM, switch models, debug, restart gateway)
+- Setup, security, troubleshooting, port reference, and key file locations
+
+← [Back to README](../README.md)
+
+# end of file
+
 
 ## Quick Start
 

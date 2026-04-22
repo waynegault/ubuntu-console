@@ -11,7 +11,7 @@
 #
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034
-VERSION="1.5"
+VERSION="1.6"
 
 # ==============================================================================
 # SETUP — Source the profile once for all tests
@@ -69,7 +69,7 @@ _build_test_profile() {
         "$PROFILE_PATH" > "$patched"
     # Patch module files with the same transforms
     mkdir -p "$patched_scripts"
-    for _f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+    for _f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT/scripts/09b-gog.sh"; do
         [[ -f "$_f" ]] || continue
         sed "${_sed_args[@]}" "$_f" > "$patched_scripts/$(basename "$_f")"
     done
@@ -131,7 +131,7 @@ _TAC_NEEDS_PROFILE=(
     "calc:" "quant:" "health:" "maintenance:" "model:"
     "prompt:" "alias:" "fn-avail:" "cooldown:"
     "telemetry:" "deployment:" "llm-guard:" "hooks:"
-    "llm-manager:" "oc:" "openclaw:"
+    "llm-manager:" "oc:" "openclaw:" "gog:"
     "dashboard-help:" "ui-engine:" "cross-script:"
     "error:" "integration:" "llm-manager:"
 )
@@ -820,6 +820,10 @@ setup() {
     alias commit >/dev/null 2>&1
 }
 
+@test "alias: 'commit:' is defined (commit_deploy)" {
+    alias 'commit:' >/dev/null 2>&1
+}
+
 @test "alias: 'cpwd' is defined (copy_path)" {
     alias cpwd >/dev/null 2>&1
 }
@@ -1026,8 +1030,8 @@ setup() {
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh \
-             "$REPO_ROOT"/scripts/lint.sh \
-             "$REPO_ROOT"/scripts/run-tests.sh; do
+             "$REPO_ROOT"/scripts/18-lint.sh \
+             "$REPO_ROOT"/scripts/20-run-tests.sh; do
         [[ -f "$f" ]] || continue
         local last
         last=$(grep -v '^[[:space:]]*$' "$f" | tail -1)
@@ -1089,8 +1093,8 @@ setup() {
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh \
-             "$REPO_ROOT"/scripts/lint.sh \
-             "$REPO_ROOT"/scripts/run-tests.sh; do
+             "$REPO_ROOT"/scripts/18-lint.sh \
+             "$REPO_ROOT"/scripts/20-run-tests.sh; do
         [[ -f "$f" ]] || continue
         local long
         long=$(awk -v max="$max_width" 'length > max' "$f" | wc -l)
@@ -1112,20 +1116,28 @@ setup() {
 }
 
 @test "hygiene: each module has '# shellcheck shell=bash' at line 1" {
-    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT"/scripts/09b-gog.sh; do
         [[ -f "$f" ]] || continue
+        # Utility scripts (16+) are standalone executables with shebangs; skip
+        case "$(basename "$f")" in
+            1[6-9]-*|[2-9][0-9]-*) continue ;;
+        esac
         local line1
         line1=$(head -1 "$f")
         [[ "$line1" == "# shellcheck shell=bash" ]]
     done
 }
 
-@test "hygiene: all 15 modules have a Module Version comment" {
+@test "hygiene: all 20 modules have a Module Version comment" {
     local count
     count=$(grep -l '^# Module Version:' \
         "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
         | wc -l)
-    [[ "$count" -eq 15 ]]
+    [[ "$count" -eq 20 ]]
+}
+
+@test "hygiene: 09b-gog.sh has a Module Version comment" {
+    grep -q '^# Module Version:' "$REPO_ROOT/scripts/09b-gog.sh"
 }
 
 @test "hygiene: module versions follow '# Module Version: N' pattern" {
@@ -2340,6 +2352,54 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+@test "env.sh: loads 09b-gog module (gog functions available)" {
+    run bash -c "
+        source '$REPO_ROOT/env.sh' >/dev/null 2>&1
+        declare -f gog-status >/dev/null 2>&1
+    "
+    [ "$status" -eq 0 ]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 38. GOG MODULE
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "gog: 09b-gog.sh exists" {
+    [[ -f "$REPO_ROOT/scripts/09b-gog.sh" ]]
+}
+
+@test "gog: __is_gog_installed function is defined" {
+    declare -f __is_gog_installed >/dev/null
+}
+
+@test "gog: gog-status function is defined" {
+    declare -f gog-status >/dev/null
+}
+
+@test "gog: gog-login function is defined" {
+    declare -f gog-login >/dev/null
+}
+
+@test "gog: gog-logout function is defined" {
+    declare -f gog-logout >/dev/null
+}
+
+@test "gog: gog-version function is defined" {
+    declare -f gog-version >/dev/null
+}
+
+@test "gog: gog-help function is defined" {
+    declare -f gog-help >/dev/null
+}
+
+@test "gog: 09b-gog.sh loaded by tactical-console.bashrc array" {
+    grep -q '09b-gog' "$REPO_ROOT/tactical-console.bashrc"
+}
+
+@test "gog: env.sh explicitly sources 09b-gog.sh" {
+    grep -q '09b-gog.sh' "$REPO_ROOT/env.sh"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 37. HYGIENE — Extended checks
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2380,14 +2440,17 @@ EOF
     [[ -s "$REPO_ROOT/env.sh" ]]
 }
 
-@test "hygiene: all 14 numbered modules exist" {
-    for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14; do
+@test "hygiene: all 16 profile modules exist" {
+    # 15 numerically-prefixed modules
+    for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15; do
         local found=0
         for f in "$REPO_ROOT"/scripts/${i}-*.sh; do
             [[ -f "$f" ]] && found=1
         done
-        [[ "$found" -eq 1 ]]
+        [[ "$found" -eq 1 ]] || { echo "Missing module: ${i}-*.sh"; return 1; }
     done
+    # 09b-gog.sh is also a profile module
+    [[ -f "$REPO_ROOT/scripts/09b-gog.sh" ]] || { echo "Missing module: 09b-gog.sh"; return 1; }
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2602,6 +2665,16 @@ EOF
 
 @test "dashboard-help: bashrc_dryrun function is defined" {
     declare -f bashrc_dryrun >/dev/null
+}
+
+@test "dashboard-help: tactical_help mentions pwsh" {
+    grep -q 'pwsh' "$REPO_ROOT/scripts/12-dashboard-help.sh"
+}
+
+@test "dashboard-help: dashboard command bar includes pwsh" {
+    grep -q 'pwsh' "$REPO_ROOT/scripts/12-dashboard-help.sh"
+    # Verify it's in the cmds string specifically
+    grep -q '| pwsh' "$REPO_ROOT/scripts/12-dashboard-help.sh"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

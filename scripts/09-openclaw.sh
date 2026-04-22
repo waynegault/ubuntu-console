@@ -214,7 +214,7 @@ function __so_push_api_keys() {
     if [[ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]]; then
         # Validate file permissions (should be 600 or 644, owned by user)
         local _file_perms
-        _file_perms=$(stat -c '%a' "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null || echo "777")
+            _file_perms=$(stat -c '%a' "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null || echo "666")
         if [[ "$_file_perms" != "600" && "$_file_perms" != "644" ]]
         then
             __tac_info "Security" "[SKIP api keys - unsafe permissions $_file_perms]" "$C_Warning"
@@ -1371,7 +1371,7 @@ function __bridge_windows_api_keys() {
     local raw
     raw=$(timeout 5 pwsh.exe -NoProfile -NonInteractive -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() |
-        Where-Object { $_.Key -match "(?i)API_KEY|TOKEN|PASSWORD" } |
+        Where-Object { $_.Key -match "(?i)(PASSWORD|TOKEN|API(_|-)?KEY|API|KEY)" } |
         ForEach-Object { "$($_.Key)=$($_.Value)" }
     ' 2>/dev/null | tr -d '\r')
 
@@ -1446,93 +1446,68 @@ function __oc_upsert_env_kv() {
 # oc-refresh-keys — Force re-import of Windows API keys into WSL and persist to systemd env
 # ---------------------------------------------------------------------------
 function oc-refresh-keys() {
-    rm -f "$TAC_CACHE_DIR/tac_win_api_keys"
+    local cache="$TAC_CACHE_DIR/tac_win_api_keys"
+    local envd_dir="$HOME/.config/environment.d"
+    local envd_file="$envd_dir/90-openclaw.conf"
+    local _nas_collectors_env="/mnt/HD/HD_a2/butler/cron/openclaw-collectors.env"
+    local _nas_user="${OC_NAS_USER:-sshd}"
+    local _nas_host="${OC_NAS_HOST:-192.168.33.17}"
+    local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
+
+    # 1. Pull matching vars from Windows User environment
+    rm -f "$cache"
     __bridge_windows_api_keys
-    if [[ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]]
-    then
-        local cache="$TAC_CACHE_DIR/tac_win_api_keys"
-        local envd_dir="$HOME/.config/environment.d"
-        local envd_file="$envd_dir/90-openclaw.conf"
-        mkdir -p "$envd_dir"
+    if [[ ! -f "$cache" ]]; then
+        __tac_info "Reading Windows User environment" "[no vars found — is pwsh.exe available?]" "$C_Warning"
+        return 1
+    fi
 
-        # Extract exported lines and strip leading 'export '
-        awk '/^export / { sub(/^export /, ""); print }' "$cache" > "$envd_file.tmp" 2>/dev/null || true
-        mv "$envd_file.tmp" "$envd_file" 2>/dev/null || true
-        chmod 600 "$envd_file" 2>/dev/null || true
-        __tac_info "Env Bridge" "[SYNCED → $(basename \"$envd_file\")]" "$C_Success"
+    local count
+    count=$(grep -c '^export ' "$cache" || true)
+    __tac_info "Reading Windows User environment" "[$count variable(s) imported]" "$C_Success"
 
-        # Reload user manager and import variables into the running session
-        systemctl --user daemon-reload 2>/dev/null || true
-        while IFS= read -r _line; do
-            [[ -z "$_line" ]] && continue
-            _name="${_line%%=*}"
-            _val="${_line#*=}"
-            if [[ "$_val" == \"*\" && "$_val" == *\" ]]; then
-                _val="${_val:1:-1}"
-            fi
-            systemctl --user set-environment "${_name}=${_val}" 2>/dev/null || true
-        done < "$envd_file"
+    # 2. Write WSL environment.d file and reload systemd user env
+    mkdir -p "$envd_dir"
+    awk '/^export / { sub(/^export /, ""); print }' "$cache" > "$envd_file.tmp" 2>/dev/null || true
+    mv "$envd_file.tmp" "$envd_file" 2>/dev/null || true
+    chmod 600 "$envd_file" 2>/dev/null || true
+    systemctl --user daemon-reload 2>/dev/null || true
+    while IFS= read -r _line; do
+        [[ -z "$_line" ]] && continue
+        _name="${_line%%=*}"
+        _val="${_line#*=}"
+        [[ "$_val" == \"*\" ]] && _val="${_val:1:-1}"
+        systemctl --user set-environment "${_name}=${_val}" 2>/dev/null || true
+    done < "$envd_file"
+    __tac_info "Exporting to WSL" "[$envd_file]" "$C_Success"
 
-        local count
-        count=$(wc -l < "$TAC_CACHE_DIR/tac_win_api_keys")
-        __tac_info "Windows API Keys" "[$count variable(s) imported]" "$C_Success"
-
-        # Mirror SmartThings-related vars into local and NAS collector env files.
-        # This keeps NAS cron collectors in sync with Windows User environment.
-        local _local_collectors_env="/home/wayne/.openclaw/workspace-jarvis/scripts/config.env"
-        local _nas_collectors_env="/mnt/HD/HD_a2/butler/cron/openclaw-collectors.env"
-        local _nas_user="${OC_NAS_USER:-sshd}"
-        local _nas_host="${OC_NAS_HOST:-192.168.33.17}"
-        local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
-        local _synced_local=0
+    # 3. Mirror vars to NAS via SSH
+    if [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1; then
         local _synced_nas=0
-        local _k
-        local _v
-        while IFS= read -r _line
-        do
+        local _k _v _qv
+        while IFS= read -r _line; do
             [[ "$_line" =~ ^export[[:space:]]+ ]] || continue
-            _k="${_line#export }"
-            _k="${_k%%=*}"
-            [[ "$_k" =~ ^SMARTTHINGS_[A-Z0-9_]+$ ]] || continue
+            _k="${_line#export }"; _k="${_k%%=*}"
+            [[ "$_k" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
             _v="${!_k:-}"
             [[ -n "$_v" ]] || continue
-
-            __oc_upsert_env_kv "$_local_collectors_env" "$_k" "$_v" && ((_synced_local++))
-
-            if [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1
+            printf -v _qv '%q' "$_v"
+            if ssh -n -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no \
+                "${_nas_user}@${_nas_host}" \
+                "sh -c 'f=\"$_nas_collectors_env\"; [ -f \"\$f\" ] || : > \"\$f\"; \
+                 if grep -q \"^$_k=\" \"\$f\"; then \
+                     sed -i \"s|^$_k=.*|$_k=\\\"${_qv}\\\"|\" \"\$f\"; \
+                 else printf \"%s\\n\" \"$_k=\\\"${_qv}\\\"\" >> \"\$f\"; fi'" >/dev/null 2>&1
             then
-                local _qv
-                printf -v _qv '%q' "$_v"
-                if ssh -n -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no "${_nas_user}@${_nas_host}" \
-                    "sh -c 'f=\"$_nas_collectors_env\"; [ -f \"\$f\" ] || : > \"\$f\"; if grep -q \"^$_k=\" \"\$f\"; then sed -i \"s|^$_k=.*|$_k=\\\"${_qv}\\\"|\" \"\$f\"; else printf \"%s\\n\" \"$_k=\\\"${_qv}\\\"\" >> \"\$f\"; fi'" >/dev/null 2>&1
-                then
-                    ((_synced_nas++))
-                fi
+                ((_synced_nas++))
             fi
-        done < "$TAC_CACHE_DIR/tac_win_api_keys"
-
-        if (( _synced_local > 0 ))
-        then
-            __tac_info "Collector Env" "[LOCAL sync: $_synced_local SMARTTHINGS var(s)]" "$C_Success"
-        else
-            __tac_info "Collector Env" "[LOCAL sync: no SMARTTHINGS vars found]" "$C_Warning"
-        fi
-
-        if (( _synced_nas > 0 ))
-        then
-            __tac_info "Collector Env" "[NAS sync: $_synced_nas SMARTTHINGS var(s)]" "$C_Success"
-        else
-            __tac_info "Collector Env" "[NAS sync skipped/failed - check SSH key or host reachability]" "$C_Warning"
-        fi
+        done < "$cache"
+        __tac_info "Exporting to NAS" "[$_nas_collectors_env]" "$C_Success"
     else
-        __tac_info "Windows API Keys" "[BRIDGE FAILED - pwsh timeout?]" "$C_Warning"
+        __tac_info "Exporting to NAS" "[skipped — SSH key not found or ssh unavailable]" "$C_Warning"
     fi
 }
 
-# ---------------------------------------------------------------------------
-# oc-backup — Snapshot OpenClaw config, workspace, agents, LLM registry,
-# .bashrc profile, standalone scripts, and systemd units.
-# ---------------------------------------------------------------------------
 function oc-backup() {
     if ! command -v zip >/dev/null
     then
@@ -1817,10 +1792,18 @@ function ocroot() {
 }
 
 # ---------------------------------------------------------------------------
-# lc — Rotate the gateway systemd journal logs.
+# lc — Clear the console log view baseline for le/lo.
+# Notes:
+# - This does not delete journal entries.
+# - le/lo read this marker and only show logs after this point.
 # ---------------------------------------------------------------------------
 function lc() {
-    journalctl --user --rotate --vacuum-time=1s -u openclaw-gateway.service >/dev/null 2>&1
+    local _marker_dir="${OC_ROOT:-$HOME/.openclaw}/state"
+    local _marker_file="${_marker_dir}/console-log-clear.epoch"
+
+    mkdir -p "$_marker_dir" 2>/dev/null || true
+    date +%s > "$_marker_file"
+
     __tac_info "Logs" "[CLEARED]" "$C_Success"
 }
 
@@ -2203,7 +2186,8 @@ function oc-stinger() {
                 __tac_line "MCP Server" "[ALREADY RUNNING]" "$C_Dim"
             else
                 set +m
-                cd "$os_dir" && source "$os_dir/.venv/bin/activate" && \
+                cd "$os_dir" || { __tac_line "MCP Server" "[FAILED - dir not found: $os_dir]" "$C_Error"; return 1; }
+                source "$os_dir/.venv/bin/activate" && \
                     nohup "$os_venv_python" -m openstinger.gradient.mcp.server \
                     > "$os_dir/.openstinger/openstinger.log" 2>&1 &
                 disown
@@ -2221,8 +2205,8 @@ function oc-stinger() {
         stop)
             __tac_header "OPENSTINGER STOP" "open"
             # Stop MCP server
-            if pkill -f "openstinger.mcp.server" 2>/dev/null || \
-               pkill -f "openstinger.gradient.mcp.server" 2>/dev/null
+            if pkill -u "$USER" -f "openstinger.mcp.server" 2>/dev/null || \
+               pkill -u "$USER" -f "openstinger.gradient.mcp.server" 2>/dev/null
             then
                 __tac_line "MCP Server" "[STOPPED]" "$C_Success"
             else
@@ -2973,8 +2957,8 @@ PY
     # Kill whatever currently owns the port first (including legacy copies).
     local PORT=46139
     fuser -k "${PORT}/tcp" >/dev/null 2>&1 || true
-    if pgrep -f "$KG_PY" >/dev/null 2>&1; then
-        pkill -f "$KG_PY" >/dev/null 2>&1 || true
+    if pgrep -u "$USER" -f "$KG_PY" >/dev/null 2>&1; then
+        pkill -u "$USER" -f "$KG_PY" >/dev/null 2>&1 || true
     fi
     sleep 0.3
     set +m
@@ -3002,7 +2986,7 @@ PY
     local server_ready=1
     for i in 1 2 3 4 5 6 7 8 9 10; do
         if command -v curl >/dev/null 2>&1; then
-            if curl -sSf --head "$URL" >/dev/null 2>&1; then
+            if curl -sSf --max-time 5 --connect-timeout 3 --head "$URL" >/dev/null 2>&1; then
                 server_ready=0
                 break
             fi

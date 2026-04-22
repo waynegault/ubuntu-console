@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 12
+# Module Version: 13
 # ==============================================================================
 # 3. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -14,12 +14,13 @@
 #   Note: owk → 'oc wk', ologs → 'oc log-dir'
 
 # __os_fetch_cached — Fetch JSON with TTL cache.
-# Reads cache if fresh (<cache_ttl seconds); otherwise runs fetch_cmd,
-# validates JSON, writes cache, and returns the result.
+# Reads cache if fresh (<cache_ttl seconds); otherwise runs the supplied command
+# (passed as separate tokens after the first two arguments), validates JSON,
+# writes cache, and returns the result. No eval — command tokens are passed
+# directly to the shell via "$@".
 function __os_fetch_cached() {
     local cache_file="$1" cache_ttl="$2"
     shift 2
-    local fetch_cmd="$*"
     if [[ -f "$cache_file" ]]; then
         local _now _mtime
         _now=$(date +%s)
@@ -29,7 +30,7 @@ function __os_fetch_cached() {
         fi
     fi
     local _result
-    _result=$(eval "$fetch_cmd" 2>/dev/null || true)
+    _result=$("$@" 2>/dev/null) || true
     if [[ -n "$_result" ]] && echo "$_result" | jq empty 2>/dev/null; then
         printf '%s' "$_result" > "$cache_file"
     fi
@@ -55,7 +56,7 @@ alias c='clear_tactical'
 alias reload='command clear; exec bash'
 alias m='tactical_dashboard'
 alias cpwd='copy_path'
-alias unittest='"$TACTICAL_REPO_ROOT"/scripts/run-tests.sh'
+alias unittest='"$TACTICAL_REPO_ROOT"/scripts/20-run-tests.sh'
 
 # g — Shortcut for 'oc g' (launch knowledge graph server).
 alias g='oc g'
@@ -88,8 +89,17 @@ function oclogs() {
 # le — Show the last 40 lines of the OpenClaw gateway journal.
 function le() {
     local _pat
+    local _marker_file="${OC_ROOT:-$HOME/.openclaw}/state/console-log-clear.epoch"
+    local _since_arg=()
     _pat='\berror\b|\bfailed\b|\bfailovererror\b|\btimeout\b|\btimed out\b|\bunauthorized\b|\bsecurity warning\b|\bexception\b|\btraceback\b|\bconnection error\b|\bpassword_missing\b|\bcode=1008\b|\b404 No models\b|\b503 Loading model\b|\bmodel_not_found\b|\bcontext overflow\b|\brequires target <E\.164\|group JID>\b|\bMCP server connection timed out\b'
-    journalctl --user -u openclaw-gateway.service --no-pager -n 300 --output=cat 2>&1 \
+    if [[ -r "$_marker_file" ]]; then
+        local _epoch
+        _epoch=$(tr -dc '0-9' < "$_marker_file")
+        if [[ -n "$_epoch" ]]; then
+            _since_arg=(--since "@$_epoch")
+        fi
+    fi
+    journalctl --user -u openclaw-gateway.service --no-pager "${_since_arg[@]}" -n 300 --output=cat 2>&1 \
         | grep -Ei "$_pat" \
         | tail -40
     return "${PIPESTATUS[0]}"
@@ -97,8 +107,17 @@ function le() {
 # lo — Show the last 120 lines of the OpenClaw gateway journal.
 function lo() {
     local _pat
+    local _marker_file="${OC_ROOT:-$HOME/.openclaw}/state/console-log-clear.epoch"
+    local _since_arg=()
     _pat='\berror\b|\bfailed\b|\bfailovererror\b|\btimeout\b|\btimed out\b|\bunauthorized\b|\bsecurity warning\b|\bexception\b|\btraceback\b|\bconnection error\b|\bpassword_missing\b|\bcode=1008\b|\b404 No models\b|\b503 Loading model\b|\bmodel_not_found\b|\bcontext overflow\b|\brequires target <E\.164\|group JID>\b|\bMCP server connection timed out\b'
-    journalctl --user -u openclaw-gateway.service --no-pager -n 300 --output=cat 2>&1 \
+    if [[ -r "$_marker_file" ]]; then
+        local _epoch
+        _epoch=$(tr -dc '0-9' < "$_marker_file")
+        if [[ -n "$_epoch" ]]; then
+            _since_arg=(--since "@$_epoch")
+        fi
+    fi
+    journalctl --user -u openclaw-gateway.service --no-pager "${_since_arg[@]}" -n 300 --output=cat 2>&1 \
         | grep -Eiv "$_pat" \
         | tail -120
     return "${PIPESTATUS[0]}"
@@ -203,8 +222,10 @@ function os() {
 
     # Fetch cached or live JSON (single helper eliminates duplication)
     local sessions_json agents_json
-    sessions_json=$(__os_fetch_cached "$session_cache" "$cache_ttl" "openclaw sessions --all-agents --json || openclaw sessions --json")
-    agents_json=$(__os_fetch_cached "$agent_cache" "$cache_ttl" "openclaw agents list --json || openclaw agents --json")
+    sessions_json=$(__os_fetch_cached "$session_cache" "$cache_ttl" openclaw sessions --all-agents --json)
+    [[ -z "$sessions_json" ]] && sessions_json=$(__os_fetch_cached "$session_cache" "$cache_ttl" openclaw sessions --json)
+    agents_json=$(__os_fetch_cached "$agent_cache" "$cache_ttl" openclaw agents list --json)
+    [[ -z "$agents_json" ]] && agents_json=$(__os_fetch_cached "$agent_cache" "$cache_ttl" openclaw agents --json)
 
     # Single jq call to extract all session data at once, sorted by agent name then age (youngest first)
     # Tokens column: input/output right-aligned to 11 chars, then percentage in parens

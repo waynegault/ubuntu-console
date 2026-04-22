@@ -11,14 +11,14 @@ description: Complete quick reference card for every command in Tactical Console
 |---|---|---|
 | `m` | Dashboard | Render full tactical dashboard |
 | `h` | Help | Show command help index |
-| `up` | Maintenance | 12-step system maintenance |
+| `up` | Maintenance | 13-step system maintenance |
 | `cls` | Shell | Clear screen + banner |
 | `reload` | Shell | Full profile reload (`exec bash`) |
 | `sysinfo` | System | One-line hardware summary |
 | `get-ip` | Network | WSL + WAN IP addresses |
 | `cpwd` | Utility | Copy path to clipboard |
 | `cl` | Utility | Quick temp cleanup (`--dry-run` supported) |
-| `docs-sync` | Utility | Check README-tracked repo facts for drift |
+| `docs-sync` | Utility | Check README drift against current repo facts |
 | `logtrim` | Utility | Trim logs > 1 MB |
 | `oedit` | Editor | Open `tactical-console.bashrc` in VS Code |
 | `code` | Editor | Open anything in VS Code |
@@ -71,8 +71,8 @@ description: Complete quick reference card for every command in Tactical Console
 | `explain` | LLM | Explain last command |
 | `wtf` | LLM | Topic explanation REPL |
 | `mkproj` | Dev | Scaffold Python project |
-| `commitd` | Git | Commit with message + push + deploy |
-| `commit` | Git | Commit with LLM message (PID-verified) + push + deploy |
+| `commit: "msg"` | Git | Stage all + commit with YOUR message + push |
+| `commit` | Git | Alias for `commit_auto` — LLM-generated message (PID-verified, secret detection) + push |
 | `deploy` | Deploy | Rsync to production workspace |
 
 ← [Back to README](../README.md)

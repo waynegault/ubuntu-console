@@ -9,6 +9,9 @@
 # This module centralises a few WSL-specific startup helpers that were
 # incorrectly placed in ~/.bashrc (the thin loader). It is safe, idempotent,
 # and guarded so it won't break interactive shells.
+# @modular-section: wsl-extras
+# @depends: constants
+# @exports: (none — side-effects only: loads completions, sets up X11/WSL env)
 
 # Interactive guard — many modules are sourced only for interactive shells
 case $- in

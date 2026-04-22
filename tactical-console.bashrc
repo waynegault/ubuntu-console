@@ -4,7 +4,7 @@
 # ==============================================================================
 # Purpose:        Tactical Console Profile (Interactive shell configuration)
 # Author:         Wayne
-# Last modified:  2026-03-10
+# Last modified:  2026-04-22
 # Environment:    WSL2 (Ubuntu 24.04) / RTX 3050 Ti
 #
 # Prerequisites:  bash >= 4.0
@@ -19,7 +19,7 @@
 #                 ~/.bashrc must remain a THIN LOADER that only sources this file:
 #                   source "$HOME/ubuntu-console/tactical-console.bashrc"
 #                 Modular sections live under:
-#                   ~/ubuntu-console/scripts/[01-14]-*.sh  (sourced in numeric order)
+#                   ~/ubuntu-console/scripts/[01-15]-*.sh + 09b-gog.sh  (sourced in numeric order)
 #
 # HELP INDEX:     See the HELP INDEX section below for functions, aliases, and
 #                 sections with one-line descriptions and usage notes.
@@ -135,7 +135,7 @@ _TAC_LOADER_VERSION="5"
 # ==============================================================================
 # SOURCE MODULES
 # ==============================================================================
-# Modules are numbered 01-14. Numeric prefixes enforce load order and match
+# Modules are numbered 01-15 (plus 09b-gog). Numeric prefixes enforce load order and match
 # the dependency chain declared in each module's @depends annotation.
 # Design-tokens (03) loads before aliases (04) so that hooks (06) can read
 # C_* variables at source time when setting _TAC_ADMIN_BADGE.
@@ -153,7 +153,8 @@ _tac_expected_modules=(01-constants 02-error-handling 03-design-tokens 04-aliase
 # module versions from their "# Module Version: N" comment.
 _tac_mod_sum=0
 _tac_found_count=0
-for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh; do
+for _tac_mod in "${_tac_expected_modules[@]}"; do
+    _tac_f="$_tac_module_dir/${_tac_mod}.sh"
     if [[ -f "$_tac_f" ]]; then
         ((_tac_found_count++))
         if [[ -n "${DEBUG_TAC_STARTUP:-}" ]]; then
@@ -177,6 +178,7 @@ for _tac_f in "$_tac_module_dir"/[0-9][0-9]-*.sh; do
         unset _tac_mv
     fi
 done
+unset _tac_mod
 
 # Warn if expected modules are missing (incomplete profile load)
 if (( _tac_found_count < ${#_tac_expected_modules[@]} ))
@@ -191,14 +193,13 @@ export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
 # ==============================================================================
 #  Gateway Auth Tokens
 # ==============================================================================
-# OPENCLAW_TOKEN: Gateway authentication token
-export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
-
-# OPENCLAW_PASSWORD: Gateway password auth (moved from config to env)
-export OPENCLAW_PASSWORD="${OPENCLAW_PASSWORD:-OC!537125Wg}"
-
-# OPENCLAW_GATEWAY_PASSWORD: Alternative env var name (for compatibility)
-export OPENCLAW_GATEWAY_PASSWORD="${OPENCLAW_GATEWAY_PASSWORD:-$OPENCLAW_PASSWORD}"
+# Credentials are NOT stored here. Set OPENCLAW_TOKEN, OPENCLAW_PASSWORD, and
+# OPENCLAW_GATEWAY_PASSWORD in ~/.openclaw/secrets.env (chmod 600, not tracked
+# by git). This file is sourced below if it exists.
+# shellcheck disable=SC1091
+if [[ -f "$HOME/.openclaw/secrets.env" ]]; then
+    source "$HOME/.openclaw/secrets.env"
+fi
 
 # ==============================================================================
 #  Startup Optimizations (faster CLI performance)

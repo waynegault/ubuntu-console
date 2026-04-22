@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# ==============================================================================
+# 16. CHECK-OC-AGENT-USE — Agent usage regression checker
+# ==============================================================================
 # AI INSTRUCTION: This script is a small utility used by tests and CI.
 # Module Version: 1
+# @modular-section: check-oc-agent-use
+# @depends: none (standalone; reads TAC_CACHE_DIR files)
+# @exports: (none — standalone script, not sourced)
 set -euo pipefail
 
 # Simple regression check: verify aggregated totals in oc_agent_stats.tsv

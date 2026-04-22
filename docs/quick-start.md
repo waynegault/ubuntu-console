@@ -54,8 +54,8 @@ oc restart     # Full restart (gateway + LLM)
 
 ```bash
 git add .
-commit_auto    # AI-generated commit message (reviews diff first)
-commit: "msg"  # Your own commit message
+commit          # AI-generated commit message (alias for commit_auto; reviews diff first)
+commit: "msg"   # Your own commit message (alias for commit_deploy)
 ```
 
 ## Common Tasks

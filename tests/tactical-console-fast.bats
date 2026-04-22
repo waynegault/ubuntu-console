@@ -110,8 +110,8 @@ setup_file() {
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh \
-             "$REPO_ROOT"/scripts/lint.sh \
-             "$REPO_ROOT"/scripts/run-tests.sh; do
+             "$REPO_ROOT"/scripts/18-lint.sh \
+             "$REPO_ROOT"/scripts/20-run-tests.sh; do
         [[ -f "$f" ]] || continue
         local last
         last=$(grep -v '^[[:space:]]*$' "$f" | tail -1)
@@ -152,8 +152,8 @@ setup_file() {
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh \
-             "$REPO_ROOT"/scripts/lint.sh \
-             "$REPO_ROOT"/scripts/run-tests.sh; do
+             "$REPO_ROOT"/scripts/18-lint.sh \
+             "$REPO_ROOT"/scripts/20-run-tests.sh; do
         [[ -f "$f" ]] || continue
         local long
         long=$(awk -v max="$max_width" 'length > max' "$f" | wc -l)
@@ -176,17 +176,21 @@ setup_file() {
 @test "hygiene: each module has '# shellcheck shell=bash' at line 1" {
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
+        # Utility scripts (16+) are standalone executables with shebangs; skip
+        case "$(basename "$f")" in
+            1[6-9]-*|[2-9][0-9]-*) continue ;;
+        esac
         local line1
         line1=$(head -1 "$f")
         [[ "$line1" == "# shellcheck shell=bash" ]]
     done
 }
 
-@test "hygiene: all 15 modules have a Module Version comment" {
+@test "hygiene: all 20 modules have a Module Version comment" {
     local count
     count=$(grep -l '^# Module Version:' \
         "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh | wc -l)
-    [[ "$count" -eq 15 ]]
+    [[ "$count" -eq 20 ]]
 }
 
 @test "hygiene: module versions follow '# Module Version: N' pattern" {
@@ -336,12 +340,19 @@ setup_file() {
     [[ -s "$REPO_ROOT/env.sh" ]]
 }
 
-@test "hygiene: all 15 numbered modules exist" {
+@test "hygiene: all profile modules exist (16 total: 01-15 + 09b)" {
+    # 15 numerically-prefixed profile modules plus 5 utility scripts = 20 [0-9][0-9]-*.sh
     local count=0
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] && count=$(( count + 1 ))
     done
-    [[ "$count" -eq 15 ]]
+    [[ "$count" -eq 20 ]]
+    # 09b-gog.sh is the 16th profile module
+    [[ -f "$REPO_ROOT/scripts/09b-gog.sh" ]]
+}
+
+@test "gog: env.sh explicitly sources 09b-gog.sh" {
+    grep -q '09b-gog.sh' "$REPO_ROOT/env.sh"
 }
 
 # end of file

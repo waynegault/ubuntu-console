@@ -1,4 +1,24 @@
-# Hal Integration — Setup Complete
+---
+title: Hal Integration
+---
+
+# Hal Integration
+
+> **Consolidated:** All Hal / AI agent access documentation has been merged into
+> [HAL-COMMAND-CATALOG.md](HAL-COMMAND-CATALOG.md).
+
+See [HAL-COMMAND-CATALOG.md](HAL-COMMAND-CATALOG.md) for:
+
+- Setup and exec allowlist configuration
+- All command categories with expected outputs
+- JSON/plain output formats
+- Common workflows and troubleshooting
+- Security considerations and key file locations
+
+← [Back to README](../README.md)
+
+# end of file
+
 
 ## ✅ What's Configured
 

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # ==============================================================================
-# lint.sh — Static analysis for the ubuntu-console repository.
+# 18-lint.sh — Static analysis for the ubuntu-console repository.
 # Runs bash -n syntax checks and shellcheck on all shell files.
-# Usage: ./scripts/lint.sh
+# Usage: ./scripts/18-lint.sh
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
 # Module Version: 2
+# @modular-section: lint
+# @depends: none (standalone CI helper)
+# @exports: (none — standalone script, not sourced)
 # shellcheck disable=SC2034
 VERSION="1.1"
 set -euo pipefail
@@ -27,7 +30,7 @@ UNICODE_EXCLUDE=(
     "scripts/12-dashboard-help.sh"
     "scripts/09-openclaw.sh"       # em-dashes in user messages
     "scripts/13-init.sh"           # em-dashes in warning messages
-    "scripts/run-tests.sh"         # unicode check/cross symbols for test output
+    "scripts/20-run-tests.sh"      # unicode check/cross symbols for test output
     "scripts/10-deployment.sh"     # <= symbol in commit constants comment
     "scripts/11-llm-manager.sh"    # em-dashes in constant comments
 )
