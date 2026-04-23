@@ -494,7 +494,7 @@ function __get_METRIC() {
 ```
 ~/ubuntu-console/
 ├── tactical-console.bashrc            # Thin loader + module sourcing loop
-├── env.sh                             # Non-interactive library loader
+├── env.sh                             # Non-interactive library loader (all modules except 13-init.sh)
 ├── install.sh                         # Idempotent installer
 ├── quant-guide.conf                   # Quantization priority ratings (editable)
 ├── bin/
@@ -536,7 +536,7 @@ function __get_METRIC() {
 ├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
-│   ├── tactical-console.bats          # 473 BATS unit tests
+│   ├── tactical-console.bats          # 487 BATS unit tests
 │   ├── tactical-console-fast.bats     # Fast subset (41 tests, ~20s)
 │   └── test_kgraph.py                 # Python tests for kgraph
 └── systemd/
@@ -689,7 +689,7 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 41 tests)
-- **Full tests:** `bats tests/tactical-console.bats` (473 BATS unit tests)
+- **Full tests:** `bats tests/tactical-console.bats` (487 BATS unit tests)
 - **Lint:** `scripts/18-lint.sh` (bash -n + shellcheck + Unicode safety)
 
 Run locally:
