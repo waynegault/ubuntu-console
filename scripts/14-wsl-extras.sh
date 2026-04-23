@@ -3,7 +3,7 @@
 # Module: 14-wsl-extras
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 5
 # -----------------------------------------------------------------------------
 # Purpose: Move WSL/X11 and OpenClaw startup helpers out of the thin loader.
 # This module centralises a few WSL-specific startup helpers that were
@@ -40,7 +40,7 @@ if [[ -f "$HOME/.openclaw/completions/openclaw.bash" ]]; then
     fi
 fi
 
-# Load credential vault exports if present (the loader will perform
+# Optional helper: load credential vault exports if present (the loader will perform
 # safe decryption and export only valid variable names). This keeps
 # secrets out of ~/.bashrc and in the existing vault mechanism.
 _TAC_LOAD_VAULT=${TAC_LOAD_VAULT:-1}

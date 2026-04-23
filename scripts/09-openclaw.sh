@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 20
+# Module Version: 21
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -1809,7 +1809,8 @@ function lc() {
 
 # ---------------------------------------------------------------------------
 # oc-update — Update the OpenClaw CLI to the latest version.
-# Uses enhanced update script to handle permission issues automatically.
+# Optional helper: uses enhanced update script (if present) to
+# handle permission issues automatically.
 # ---------------------------------------------------------------------------
 function oc-update() {
     local enhanced_script="$HOME/.openclaw/workspace/scripts/oc-update-enhanced.sh"
@@ -1842,7 +1843,8 @@ function oc-update() {
 
 # ---------------------------------------------------------------------------
 # oc-health — Comprehensive OpenClaw system health check.
-# Runs full system diagnostics including gateway, agents, database, and more.
+# Optional helper: runs richer diagnostics via oc-health-check.py when present;
+# otherwise falls back to built-in health checks.
 # ---------------------------------------------------------------------------
 function oc-health() {
     local output_mode="human"
