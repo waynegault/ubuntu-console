@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# ==============================================================================
+# load-vault-env — Optional Windows-backed vault env loader
+# ==============================================================================
+# AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 1
 # Optional helper loaded by scripts/14-wsl-extras.sh.
 #
 # Source (repo):   scripts/load-vault-env.sh

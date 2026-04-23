@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Enhanced OpenClaw updater helper.
+# ==============================================================================
+# oc-update-enhanced — Enhanced OpenClaw updater helper
+# ==============================================================================
+# AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 1
 #
 # Behavior:
 # - Runs `openclaw update` directly.
