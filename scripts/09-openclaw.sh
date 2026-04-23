@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 21
+# Module Version: 22
 # ==============================================================================
 # 9. OPENCLAW MANAGER
 # ==============================================================================
@@ -722,6 +722,7 @@ function oc() {
         printf '  %-20s %s\n' "doctor-local" "Validate local gateway + llama.cpp path end-to-end"
         printf '  %-20s %s\n' "failover"     "Cloud LLM fallback (on|off|status)"
         printf '  %-20s %s\n' "refresh-keys" "Re-import Windows API keys into WSL"
+        printf '  %-20s %s\n' "rotate-secrets" "Rotate checklist + optional bash log sanitization"
         # 'trust-sync' command removed
         printf '%s\n' ""
         printf '%s\n' "${C_Highlight}Data & Extensions${C_Reset}"
@@ -743,6 +744,7 @@ function oc() {
         printf '  %-20s %s\n' "sync-models"  "Sync models.conf with OC provider scan"
         printf '%s\n' ""
         printf '%s\n' "${C_Highlight}Tools${C_Reset}"
+        printf '  %-20s %s\n' "unittest"     "Run OpenClaw structural + protocol unit tests"
         printf '  %-20s %s\n' "g"            "Launch knowledge graph server in browser"
         return 0
     fi
@@ -790,6 +792,7 @@ function oc() {
         doctor-local)  oc-doctor-local "$@" ;;
         failover)      oc-failover "$@" ;;
         refresh-keys)  oc-refresh-keys "$@" ;;
+        rotate-secrets) oc-rotate-exposed-secrets "$@" ;;
         # trust-sync removed
         # Data & Extensions
         wk)            owk "$@" ;;
@@ -808,6 +811,7 @@ function oc() {
         local-llm)     oc-local-llm "$@" ;;
         sync-models)   oc-sync-models "$@" ;;
         # Tools
+        unittest)      /home/wayne/.openclaw/workspace/unit-test/run-all-tests.sh ;;
         g)             oc-kgraph "$@" ;;
         *)
             printf '%s\n' "${C_Error}Unknown subcommand:${C_Reset} $sub"
@@ -1358,6 +1362,18 @@ function ocdoc-fix() {
 function __bridge_windows_api_keys() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
     local ttl=3600
+    local _warn_once_file="/dev/shm/tac_pwsh_bridge_warned"
+
+    # Stateful downgrade: if pwsh.exe is unavailable, warn once per session.
+    if ! command -v pwsh.exe >/dev/null 2>&1
+    then
+        if [[ ! -f "$_warn_once_file" ]]
+        then
+            printf '%s\n' "$(date +%s)" > "$_warn_once_file" 2>/dev/null || true
+            echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] __bridge_windows_api_keys: pwsh.exe unavailable; bridge downgraded for this session." >> "$ErrorLogPath" 2>/dev/null
+        fi
+        return 0
+    fi
 
     # Use cached exports if fresh enough
     if [[ -f "$cache" ]] && (( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) < ttl ))
@@ -1377,11 +1393,12 @@ function __bridge_windows_api_keys() {
 
     if [[ -z "$raw" ]]
     then
-        local _warn_msg="__bridge_windows_api_keys:"
-        _warn_msg+=" pwsh.exe returned no data (timeout or not installed)"
-        echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] ${_warn_msg}" \
-            >> "$ErrorLogPath" 2>/dev/null
-        return 1
+        if [[ ! -f "$_warn_once_file" ]]
+        then
+            printf '%s\n' "$(date +%s)" > "$_warn_once_file" 2>/dev/null || true
+            echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] __bridge_windows_api_keys: pwsh.exe returned no data; bridge downgraded for this session." >> "$ErrorLogPath" 2>/dev/null
+        fi
+        return 0
     fi
 
     # Build a sourceable cache file, skipping vars with invalid names
@@ -1398,6 +1415,7 @@ function __bridge_windows_api_keys() {
     mv "$tmpfile" "$cache"
     chmod 600 "$cache"
     source "$cache" 2>/dev/null
+    rm -f "$_warn_once_file" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -1455,6 +1473,12 @@ function oc-refresh-keys() {
     local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
 
     # 1. Pull matching vars from Windows User environment
+    if ! command -v pwsh.exe >/dev/null 2>&1
+    then
+        __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — bridge cannot refresh]" "$C_Warning"
+        return 1
+    fi
+
     rm -f "$cache"
     __bridge_windows_api_keys
     if [[ ! -f "$cache" ]]; then
@@ -1504,8 +1528,68 @@ function oc-refresh-keys() {
         done < "$cache"
         __tac_info "Exporting to NAS" "[$_nas_collectors_env]" "$C_Success"
     else
-        __tac_info "Exporting to NAS" "[skipped — SSH key not found or ssh unavailable]" "$C_Warning"
+        local _reason=""
+        if ! command -v ssh >/dev/null 2>&1
+        then
+            _reason="ssh missing"
+        elif [[ ! -f "$_nas_key" ]]
+        then
+            _reason="SSH key missing ($_nas_key)"
+        else
+            _reason="preflight failed"
+        fi
+        __tac_info "Exporting to NAS" "[skipped — ${_reason}]" "$C_Warning"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# oc-rotate-exposed-secrets — Exposure response helper for bash-errors.log.
+# Usage:
+#   oc rotate-secrets
+#   oc rotate-secrets --sanitize-log
+# ---------------------------------------------------------------------------
+function oc-rotate-exposed-secrets() {
+    local _log="$ErrorLogPath"
+    local _sanitize=0
+    [[ "${1:-}" == "--sanitize-log" ]] && _sanitize=1
+
+    if [[ ! -f "$_log" ]]
+    then
+        __tac_info "Secrets Exposure" "[no log file found: $_log]" "$C_Warning"
+        return 0
+    fi
+
+    local _count
+    _count=$(rg -n "OPENCLAW_GATEWAY_PASSWORD|authkey=|tskey-|(^|[[:space:]])-a[[:space:]]+[A-Za-z0-9._-]{8,}|SSHPASS=|Bearer[[:space:]]+[A-Za-z0-9._=-]+|password=|token=" "$_log" 2>/dev/null | wc -l)
+
+    printf '%s\n' "${C_Highlight}Exposure Response Checklist${C_Reset}"
+    printf '%s\n' "  1) Rotate OpenClaw gateway auth credentials"
+    printf '%s\n' "  2) Rotate Tailscale auth keys if they appeared in command history/logs"
+    printf '%s\n' "  3) Rotate Redis/other CLI password args used with '-a'"
+    printf '%s\n' "  4) Re-run: oc rotate-secrets --sanitize-log"
+    printf '%s\n' "  5) Validate: rg -n 'authkey=|tskey-|OPENCLAW_GATEWAY_PASSWORD| -a ' $_log"
+    __tac_info "Secrets Exposure" "[${_count} potential match(es) detected]" "$C_Warning"
+
+    if (( _sanitize == 0 ))
+    then
+        return 0
+    fi
+
+    local _backup
+    _backup="${_log}.pre-sanitize.$(date +%Y%m%d_%H%M%S)"
+    cp "$_log" "$_backup" || return 1
+
+    sed -E \
+        -e 's/(OPENCLAW_GATEWAY_PASSWORD=)[^[:space:]]+/\1<redacted>/g' \
+        -e 's/(--authkey=)tskey-[^[:space:]">]+/\1<redacted>/g' \
+        -e 's/([?&]authkey=)[^[:space:]"&]+/\1<redacted>/g' \
+        -e 's/(SSHPASS=)[^[:space:]]+/\1<redacted>/g' \
+        -e 's/([Bb]earer[[:space:]]+)[A-Za-z0-9._=-]+/\1<redacted>/g' \
+        -e 's/([[:space:]]-a[[:space:]]+)[^[:space:]]+/\1<redacted>/g' \
+        -e 's/((password|token|api[_-]?key)=)[^[:space:]"]+/\1<redacted>/Ig' \
+        "$_backup" > "$_log"
+
+    __tac_info "Secrets Exposure" "[sanitized log in place; backup: $_backup]" "$C_Success"
 }
 
 function oc-backup() {
