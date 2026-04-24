@@ -3,7 +3,7 @@
 # ─── Module: 06-hooks ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 6. SYSTEM HOOKS & OVERRIDES
 # ==============================================================================
@@ -50,9 +50,14 @@ function cd() {
         current_wd=$(pwd -P)
         if [[ "$current_wd" != "$venv_root" && "$current_wd" != "$venv_root/"* ]]
         then
-            type deactivate >/dev/null 2>&1 && deactivate
+            if type deactivate >/dev/null 2>&1
+            then
+                deactivate >/dev/null 2>&1 || true
+            fi
         fi
     fi
+
+    return 0
 }
 
 if [[ " $(id -nG 2>/dev/null) " == *" sudo "* ]]
