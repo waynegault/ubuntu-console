@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 
 # ==============================================================================
@@ -59,7 +59,7 @@ export OC_AGENTS="$OC_ROOT/agents"
 export OC_LOGS="$OC_ROOT/logs"
 export OC_BACKUPS="$OC_ROOT/backups"
 export CooldownDB="$OC_ROOT/maintenance_cooldowns.txt"
-export ErrorLogPath="$OC_ROOT/bash-errors.log"
+export ErrorLogPath="$OC_LOGS/bash-errors.log"
 export OC_TMP_LOG="/tmp/openclaw/openclaw.log"
 
 # ---- LLM / llama.cpp ----
