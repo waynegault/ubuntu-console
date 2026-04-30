@@ -20,32 +20,22 @@ set -euo pipefail
 # Set SKIP_UNICODE_CHECK=1 to disable entirely.
 SKIP_UNICODE_CHECK=${SKIP_UNICODE_CHECK:-0}
 
-# Files excluded from Unicode check (contain intentional UI glyphs)
-UNICODE_EXCLUDE=(
-    "tactical-console.bashrc"
-    "scripts/05-ui-engine.sh"
-    "scripts/06-hooks.sh"
-    "scripts/07-telemetry.sh"
-    "scripts/08-maintenance.sh"
-    "scripts/12-dashboard-help.sh"
-    "scripts/09-openclaw.sh"       # em-dashes in user messages
-    "scripts/13-init.sh"           # em-dashes in warning messages
-    "scripts/20-run-tests.sh"      # unicode check/cross symbols for test output
-    "scripts/10-deployment.sh"     # <= symbol in commit constants comment
-    "scripts/11-llm-manager.sh"    # em-dashes in constant comments
-)
-
-# Check if a file should be excluded from Unicode check
-__should_exclude_unicode() {
-    local file="$1"
-    local base
-    base=$(basename "$file")
-    for excl in "${UNICODE_EXCLUDE[@]}"
-    do
-        [[ "$file" == *"$excl" ]] && return 0
-    done
-    return 1
-}
+# Allowed non-ASCII codepoint ranges for the Unicode safety check.
+# Characters matching these ranges are intentional UI glyphs and are permitted
+# in any file.  Anything outside ASCII + this allowlist triggers a WARN.
+#
+#  \x{00A0}-\x{00FF}  Latin-1 Supplement  (degree, squared, multiply, section)
+#  \x{2014}           Em dash
+#  \x{2026}           Horizontal ellipsis
+#  \x{2192}           Right arrow
+#  \x{2264}           Less-than-or-equal
+#  \x{2500}-\x{2570}  Box Drawing  (─ ═ ║ ╔ ╗ ╚ ╝ ╟ ╠ ╢ ╣ …)
+#  \x{25CB}-\x{25CF}  Geometric Shapes subset  (○ ●)
+#  \x{26A0}           Warning sign  (⚠)
+#  \x{2713}           Check mark  (✓)
+#  \x{2717}           Ballot X  (✗)
+#  \x{2800}-\x{28FF}  Braille Patterns  (spinner glyphs)
+_UNICODE_ALLOWED='\x{00A0}-\x{00FF}\x{2014}\x{2026}\x{2192}\x{2264}\x{2500}-\x{2570}\x{25CB}-\x{25CF}\x{26A0}\x{2713}\x{2717}\x{2800}-\x{28FF}'
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 rc=0
@@ -100,14 +90,10 @@ else
              "$REPO_ROOT"/scripts/*.sh \
              "$REPO_ROOT"/bin/*.sh
     do
-        # Skip files with intentional UI glyphs (box-drawing, symbols)
-        if __should_exclude_unicode "$f"
-        then
-            echo "  SKIP  ${f#"$REPO_ROOT"/}  - excluded (UI glyphs)"
-            continue
-        fi
-        # Find non-ASCII on non-comment lines (excludes lines starting with #)
-        hits=$(grep -Pn '[^\x00-\x7F]' "$f" 2>/dev/null | grep -v '^\s*#\|^[0-9]*:\s*#' || true)
+        # Find non-ASCII outside the approved glyph allowlist.
+        # Comment lines (# ...) are always excluded from the check.
+        hits=$(grep -Pn "[^\x00-\x7F${_UNICODE_ALLOWED}]" "$f" 2>/dev/null \
+             | grep -v '^[0-9]*:[[:space:]]*#' || true)
         if [[ -z "$hits" ]]
         then
             echo "  PASS  ${f#"$REPO_ROOT"/}"
@@ -122,7 +108,7 @@ else
     if (( unicode_rc == 0 ))
     then
         echo ""
-        echo "  All non-excluded files passed Unicode check."
+        echo "  All files passed Unicode check."
     fi
 fi
 
