@@ -638,6 +638,35 @@ function __so_check_win_port() {
 # NOTE FOR AI AGENTS: xo only STOPS the gateway — it will NOT restart it.
 #   To restart, use:  openclaw gateway restart   (or the alias: oc restart)
 # ---------------------------------------------------------------------------
+function __oc_gateway_databases_closed() {
+    local _deadline=$((SECONDS + 15))
+    local _db_root="${OC_ROOT:-$HOME/.openclaw}/state"
+    local _targets=()
+
+    [[ -f "$_db_root/memory/lcm.db" ]] && _targets+=("$_db_root/memory/lcm.db")
+    [[ -f "$_db_root/store.db" ]] && _targets+=("$_db_root/store.db")
+
+    while (( SECONDS < _deadline )); do
+        if (( ${#_targets[@]} == 0 )) || ! lsof "${_targets[@]}" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    return 1
+}
+
+function __oc_safe_gateway_shutdown() {
+    local _svc="openclaw-gateway.service"
+
+    timeout 10 openclaw gateway stop >/dev/null 2>&1 || true
+    timeout 8 systemctl --user stop "$_svc" 2>/dev/null || true
+
+    if ! __oc_gateway_databases_closed; then
+        __tac_info "Gateway" "[DB HANDLE CHECK TIMED OUT — continuing safely]" "$C_Warning"
+    fi
+    rm -f "$OC_ROOT/supervisor.lock"
+}
+
 function xo() {
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw" "[NOT INSTALLED - cannot stop gateway]" "$C_Error"
@@ -658,13 +687,7 @@ function xo() {
         _was_running=1
     fi
 
-    # Stop gateway (foreground with timeout — no job-control noise)
-    timeout 10 openclaw gateway stop >/dev/null 2>&1 || true
-
-    # systemctl stop with timeout
-    timeout 8 systemctl --user stop "$_svc" 2>/dev/null || true
-    sleep 0.3
-    rm -f "$OC_ROOT/supervisor.lock"
+    __oc_safe_gateway_shutdown
 
     if (( _was_running ))
     then
@@ -830,7 +853,8 @@ function oc-restart() {
         __tac_info "OpenClaw" "[NOT INSTALLED - cannot restart gateway]" "$C_Error"
         return 1
     fi
-    openclaw gateway restart "$@"
+    __oc_safe_gateway_shutdown
+    openclaw gateway start "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -888,10 +912,9 @@ function oc-purge() {
 
     local _purge_count=0
 
-    # 1. Stop the gateway (foreground with timeout — no job-control noise)
+    # 1. Stop the gateway with DB-safe sequencing
     __tac_info "Gateway" "[STOPPING]" "$C_Warning"
-    timeout 10 openclaw gateway stop >/dev/null 2>&1 || true
-    timeout 8 systemctl --user stop openclaw-gateway.service 2>/dev/null || true
+    __oc_safe_gateway_shutdown
     sleep 0.5
 
     # 2. Clear all agent session directories
