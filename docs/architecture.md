@@ -9,7 +9,7 @@ description: Developer guide to the modular profile architecture — module layo
 
 ### Modular Architecture
 
-The profile is split into a thin loader (`tactical-console.bashrc`, ~215 lines)
+The profile is split into a thin loader (`tactical-console.bashrc`, ~225 lines)
 and 16 numbered profile modules under `scripts/`. Each module has a metadata block
 documenting its dependencies and exports:
 
@@ -50,33 +50,33 @@ not profile modules and are never sourced by either loader.
 
 | Module | File | Lines | Purpose |
 |---|---|---|---|
-| §0 | `tactical-console.bashrc` | ~215 | Version, AI editor rules, architecture map, array-based module loader, missing module warning |
-| §1 | `scripts/01-constants.sh` | 338 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
-| §2 | `scripts/02-error-handling.sh` | 62 | ERR trap → `bash-errors.log` (exit codes ≥ 2, whitelisted commands excluded) |
+| §0 | `tactical-console.bashrc` | ~225 | Version, AI editor rules, architecture map, array-based module loader, missing module warning |
+| §1 | `scripts/01-constants.sh` | 342 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
+| §2 | `scripts/02-error-handling.sh` | 258 | ERR trap → `bash-errors.log` (exit codes ≥ 2, whitelisted commands excluded) |
 | §3 | `scripts/03-design-tokens.sh` | 48 | ANSI colour constants (`readonly`, re-source safe) |
-| §4 | `scripts/04-aliases.sh` | 428 | Short commands, VS Code wrappers, tactical shortcuts (`c`, `cls`, `le`, `lo` with PIPESTATUS) |
+| §4 | `scripts/04-aliases.sh` | 421 | Short commands, VS Code wrappers, tactical shortcuts (`c`, `cls`, `le`, `lo` with PIPESTATUS) |
 | §5 | `scripts/05-ui-engine.sh` | 534 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
-| §6 | `scripts/06-hooks.sh` | 192 | `cd` override (venv auto-activate), prompt (`PS1`), `__test_port`, admin badge |
+| §6 | `scripts/06-hooks.sh` | 197 | `cd` override (venv auto-activate), prompt (`PS1`), `__test_port`, admin badge |
 | §7 | `scripts/07-telemetry.sh` | 361 | Host metrics (CPU + dual GPU), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` with trap cleanup |
 | §8 | `scripts/08-maintenance.sh` | 1461 | `up` (13 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, `docs-sync`, cooldown system with `flock` |
-| §9 | `scripts/09-openclaw.sh` | 3105 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-failover`, wacli, `oc-kgraph`, whitelist subcommand validation, process kill safety) |
+| §9 | `scripts/09-openclaw.sh` | 3217 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-failover`, wacli, `oc-kgraph`, whitelist subcommand validation, process kill safety) |
 | §9b | `scripts/09b-gog.sh` | 165 | Google CLI (`gog`) detection, setup helpers, and integration shims |
 | §10 | `scripts/10-deployment.sh` | 460 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified, secret detection) |
 | §11 | `scripts/11-llm-manager.sh` | 3209 | `__require_llm`, model management, streaming chat, burn, bench, explain, `__calc_gpu_layers`, `__gguf_metadata` |
-| §12 | `scripts/12-dashboard-help.sh` | 680 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` (OpenClaw status) |
+| §12 | `scripts/12-dashboard-help.sh` | 681 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` (OpenClaw status) |
 | §13 | `scripts/13-init.sh` | 134 | `mkdir -p` (OpenClaw-aware), completions, loopback fix, bridge call, exit trap (chained) |
-| §14 | `scripts/14-wsl-extras.sh` | 134 | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
+| §14 | `scripts/14-wsl-extras.sh` | 138 | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
 | §15 | `scripts/15-model-recommender.sh` | 194 | AI model recommendations by use case (`bc` fallback for integer math) |
 
-**Utility scripts** (numbered 16–20; not profile modules — never sourced by the loader):
+**Utility scripts** (moved to `tools/`; not profile modules — never sourced by the loader):
 
-| File | Lines | Purpose |
-|---|---|---|
-| `scripts/16-check-oc-agent-use.sh` | 39 | Agent usage regression checker — CI/tests only. Contains `exit 0`. |
-| `scripts/17-import-windows-user-env.sh` | 109 | Standalone script to import Windows user environment variables. |
-| `scripts/18-lint.sh` | 135 | Static analysis: `bash -n` + shellcheck + Unicode safety. CI linter. |
-| `scripts/19-mirror-gigabrain-vault-to-windows.sh` | 38 | Sync Obsidian vault from WSL to Windows. |
-| `scripts/20-run-tests.sh` | 329 | Pretty-printed BATS test runner (473 tests). |
+| File | Purpose |
+|---|---|
+| `tools/check-agent-use.sh` | Agent usage regression checker — CI/tests only. |
+| `tools/import-windows-env.sh` | Standalone script to import Windows user environment variables. |
+| `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety. CI linter. |
+| `tools/mirror-vault.sh` | Sync Obsidian vault from WSL to Windows. |
+| `tools/run-tests.sh` | Pretty-printed BATS test runner (489 tests). |
 
 ### Dependency Graph
 
@@ -297,6 +297,51 @@ Do not edit the monolith — it is a frozen snapshot.
 
 ---
 
+## 9. Dependencies & Requirements
+
+### System Requirements
+
+| Component | Requirement |
+|---|---|
+| **OS** | Windows 11 Pro with WSL2 |
+| **WSL Distribution** | Ubuntu 24.04 |
+| **Shell** | Bash 5.2+ |
+| **GPU** | NVIDIA RTX 3050 Ti (or any CUDA-capable GPU) |
+| **PowerShell** | 7.4+ (as `pwsh.exe` in WSL interop PATH) |
+
+### Required Packages
+
+| Package | Used By | Install |
+|---|---|---|
+| `jq` | All LLM/SSE functions, token scanning | `sudo apt install jq` |
+| `curl` | LLM API calls, health checks, WAN IP | Pre-installed |
+| `ss` (iproute2) | `__test_port` port checking | Pre-installed |
+| `grep` / `awk` / `sed` | Telemetry parsing, text processing | Pre-installed |
+| `find` | Token scanning, temp cleanup, session counting | Pre-installed |
+| `systemctl` / `journalctl` | OpenClaw gateway lifecycle, logs | Pre-installed (systemd) |
+| `typeperf.exe` | Host CPU + iGPU telemetry | Windows built-in (WSL interop) |
+| `nvidia-smi` | CUDA/compute GPU telemetry | WSL NVIDIA driver |
+| `git` | Deployment, commit, sec status | `sudo apt install git` |
+| `rsync` | Deploy sync | `sudo apt install rsync` |
+| `zip` / `unzip` | `oc-backup` / `oc-restore` | `sudo apt install zip unzip` |
+
+### Optional Packages
+
+| Package | Used By | Install |
+|---|---|---|
+| `huggingface-cli` | `model download` | `pip install huggingface-hub` |
+| `cargo` + `install-update` | `up` step 3 (Cargo crate updates) | Rust toolchain |
+| `npm` | `up` step 3 (global package updates) | Node.js |
+| `openclaw` CLI | All `oc-*` commands | `npm install -g openclaw` |
+
+### What Is NOT Required
+
+- **Python** — All LLM streaming is pure bash + curl + jq.
+- **Ruby** — Never used.
+- **Docker** — The gateway runs as a native systemd service.
+
+---
+
 ## 10. Repository Layout
 
 All project files live in a single Git repository at
@@ -317,7 +362,8 @@ extra source commands.
 ├── tactical-console.bashrc.monolith   # Pre-modularisation backup (frozen snapshot)
 ├── env.sh                             # Non-interactive library loader (modules 01-15 except 13-init.sh)
 ├── install.sh                         # Idempotent installer for new machines
-├── quant-guide.conf                   # Quantization priority ratings (editable)
+├── config/
+│   └── quant-guide.conf               # Quantization priority ratings (editable)
 ├── README.md                          # Repository documentation
 ├── inspection.md                      # Audit checklist
 ├── bin/
@@ -346,22 +392,26 @@ extra source commands.
 │   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
 │   ├── 14-wsl-extras.sh               #   WSL/X11 helpers, completions, vault env
 │   ├── 15-model-recommender.sh        #   AI model recommendations by use case
-│   ├── 16-check-oc-agent-use.sh       #   Agent usage regression checker (CI — not sourced)
-│   ├── 17-import-windows-user-env.sh  #   Import Windows user env vars (standalone)
-│   ├── 18-lint.sh                     #   bash -n + shellcheck + Unicode safety
-│   ├── 19-mirror-gigabrain-vault-to-windows.sh  #   Sync Obsidian vault to Windows
-│   ├── 20-run-tests.sh                #   BATS test runner (473 tests)
 │   └── kgraph/                        #   Knowledge graph Python package
+├── tools/                             # Standalone utility scripts (not sourced)
+│   ├── check-agent-use.sh             #   Agent usage regression checker (CI)
+│   ├── import-windows-env.sh          #   Import Windows user env vars (standalone)
+│   ├── lint.sh                        #   bash -n + shellcheck + Unicode safety
+│   ├── mirror-vault.sh                #   Sync Obsidian vault to Windows
+│   ├── run-tests.sh                   #   BATS test runner (489 tests)
 ├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
 │   ├── package.json                   #   Vite 5 + React 18 + G6 5.0
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── docs/                              # Reference documentation
+│   ├── AGENT-GUIDELINES.md            #   AI agent operating manual
 │   ├── architecture.md                #   This file
-│   ├── adr/                           #   Architecture Decision Records
-│   └── HAL-COMMAND-CATALOG.md         #   AI agent access reference
+│   ├── llm.md                         #   Local LLM stack reference
+│   ├── openclaw.md                    #   OpenClaw integration guide
+│   ├── reference.md                   #   Command reference + dashboard
+│   └── troubleshooting.md             #   Diagnostics and fixes
 ├── tests/
-│   ├── tactical-console.bats          # 473 BATS unit tests
-│   ├── tactical-console-fast.bats     # Fast subset (41 tests, ~20s)
+│   ├── tactical-console.bats          # 489 BATS unit tests
+│   ├── tactical-console-fast.bats     # Fast subset (47 tests, ~20s)
 │   └── test_kgraph.py                 # Python tests for kgraph package
 └── systemd/
     ├── llama-watchdog.service         # systemd unit for watchdog

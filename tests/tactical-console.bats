@@ -963,6 +963,8 @@ setup() {
 @test "fn-avail: oc-sec" { declare -f oc-sec >/dev/null; }
 @test "fn-avail: oc-usage" { declare -f oc-usage >/dev/null; }
 @test "fn-avail: oc-failover" { declare -f oc-failover >/dev/null; }
+@test "fn-avail: __oc_gateway_databases_closed" { declare -f __oc_gateway_databases_closed >/dev/null; }
+@test "fn-avail: __oc_safe_gateway_shutdown" { declare -f __oc_safe_gateway_shutdown >/dev/null; }
 @test "fn-avail: oc-memory-search" { declare -f oc-memory-search >/dev/null; }
 @test "fn-avail: oc-plugins" { declare -f oc-plugins >/dev/null; }
 @test "fn-avail: oc-skills" { declare -f oc-skills >/dev/null; }
@@ -1030,8 +1032,8 @@ setup() {
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh \
-             "$REPO_ROOT"/scripts/18-lint.sh \
-             "$REPO_ROOT"/scripts/20-run-tests.sh; do
+             "$REPO_ROOT"/tools/lint.sh \
+             "$REPO_ROOT"/tools/run-tests.sh; do
         [[ -f "$f" ]] || continue
         local last
         last=$(grep -v '^[[:space:]]*$' "$f" | tail -1)
@@ -1093,8 +1095,8 @@ setup() {
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh \
-             "$REPO_ROOT"/scripts/18-lint.sh \
-             "$REPO_ROOT"/scripts/20-run-tests.sh; do
+             "$REPO_ROOT"/tools/lint.sh \
+             "$REPO_ROOT"/tools/run-tests.sh; do
         [[ -f "$f" ]] || continue
         local long
         long=$(awk -v max="$max_width" 'length > max' "$f" | wc -l)
@@ -1128,12 +1130,12 @@ setup() {
     done
 }
 
-@test "hygiene: all 20 modules have a Module Version comment" {
+@test "hygiene: all 15 modules have a Module Version comment" {
     local count
     count=$(grep -l '^# Module Version:' \
         "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
         | wc -l)
-    [[ "$count" -eq 20 ]]
+    [[ "$count" -eq 15 ]]
 }
 
 @test "hygiene: 09b-gog.sh has a Module Version comment" {
@@ -2429,7 +2431,7 @@ EOF
 }
 
 @test "hygiene: quant-guide.conf exists and is non-empty" {
-    [[ -s "$REPO_ROOT/quant-guide.conf" ]]
+    [[ -s "$REPO_ROOT/config/quant-guide.conf" ]]
 }
 
 @test "hygiene: README.md exists" {

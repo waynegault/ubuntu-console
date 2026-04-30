@@ -48,7 +48,7 @@ column is populated by `model bench`.
 
 ## Quantization Guide
 
-The file `~/ubuntu-console/quant-guide.conf` is a manually editable
+The file `~/ubuntu-console/config/quant-guide.conf` is a manually editable
 configuration that rates GGUF quantizations for the RTX 3050 Ti (4 GB VRAM):
 
 | Rating | Quants | Meaning |
@@ -61,7 +61,7 @@ configuration that rates GGUF quantizations for the RTX 3050 Ti (4 GB VRAM):
 - `model download` reads the guide and **warns** (does not block) when downloading a discouraged quant. The user can override interactively.
 - `model scan` reads the guide and **auto-archives** discouraged quants from `/mnt/m/active/` to `/mnt/m/archive/`, skipping the currently running model. The registry is renumbered after archival.
 
-Edit `quant-guide.conf` directly to adjust ratings as hardware or advice changes.
+Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice changes.
 
 ## Model Lifecycle Commands
 
@@ -149,7 +149,7 @@ displayed in a box-drawn summary table.
 | `~/llama.cpp/build/bin/llama-server` | Server binary (`$LLAMA_SERVER_BIN`) |
 | `/mnt/m/.llm/models.conf` | Model registry — 11-field format (`$LLM_REGISTRY`) |
 | `/mnt/m/.llm/bench_*.tsv` | Benchmark history from `model bench` |
-| `~/ubuntu-console/quant-guide.conf` | Quantization priority ratings (`$QUANT_GUIDE`) |
+| `~/ubuntu-console/config/quant-guide.conf` | Quantization priority ratings (`$QUANT_GUIDE`) |
 | `/dev/shm/active_llm` | Active model number (integer) |
 | `/dev/shm/llama-server.log` | Server stdout/stderr log |
 | `/dev/shm/last_tps` | Last measured tokens/sec |

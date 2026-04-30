@@ -2314,6 +2314,7 @@ function oc-stinger() {
         stop)
             __tac_header "OPENSTINGER STOP" "open"
             # Stop MCP server
+            # -f required: target is a Node.js module path (not a simple argv[0]), -x would miss it
             if pkill -u "$USER" -f "openstinger.mcp.server" 2>/dev/null || \
                pkill -u "$USER" -f "openstinger.gradient.mcp.server" 2>/dev/null
             then
@@ -3067,6 +3068,7 @@ PY
     local PORT=46139
     fuser -k "${PORT}/tcp" >/dev/null 2>&1 || true
     if pgrep -u "$USER" -f "$KG_PY" >/dev/null 2>&1; then
+        # -f required: target is python3 with a script-path argument, -x would only match process name
         pkill -u "$USER" -f "$KG_PY" >/dev/null 2>&1 || true
     fi
     sleep 0.3

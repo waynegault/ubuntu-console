@@ -64,12 +64,12 @@ export OC_TMP_LOG="/tmp/openclaw/openclaw.log"
 
 # ---- LLM / llama.cpp ----
 export LLAMA_ROOT="$AI_STORAGE_ROOT/llama.cpp"
-export LLAMA_DRIVE_ROOT="/mnt/m"                # Root of the model drive
+# LLAMA_DRIVE_ROOT is user-configurable at the top of this file.
 export LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active"
 export LLAMA_ARCHIVE_DIR="$LLAMA_DRIVE_ROOT/archive"
 # Quantization priority guide — editable config controlling download warnings.
-# See ~/ubuntu-console/quant-guide.conf for rating/description of each quant.
-export QUANT_GUIDE="$TACTICAL_REPO_ROOT/quant-guide.conf"
+# See ~/ubuntu-console/config/quant-guide.conf for rating/description of each quant.
+export QUANT_GUIDE="$TACTICAL_REPO_ROOT/config/quant-guide.conf"
 # Detect drive size at startup; falls back to 200 GB if df unavailable.
 # WARNING: If the drive is not mounted, all capacity calculations will use
 # the 200GB fallback, which may over- or under-estimate available space.
@@ -87,7 +87,11 @@ fi
 export LLAMA_DRIVE_SIZE
 export LLAMA_SERVER_BIN="$LLAMA_ROOT/build/bin/llama-server"
 export LLAMA_BUILD_VERSION
-LLAMA_BUILD_VERSION=$(git -C "$LLAMA_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+if [[ -d "$LLAMA_ROOT" ]]; then
+    LLAMA_BUILD_VERSION=$(git -C "$LLAMA_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+else
+    LLAMA_BUILD_VERSION="unknown"
+fi
 
 # ---- LLM Registry (models.conf) Schema ----
 # Format: pipe-delimited fields, one model per line
@@ -205,7 +209,7 @@ if [[ -z "${COOLDOWN_DAILY+x}" ]]; then
 declare -ri COOLDOWN_DAILY=86400     # 24 hours in seconds
 fi
 if [[ -z "${COOLDOWN_WEEKLY+x}" ]]; then
-declare -ri COOLDOWN_WEEKLY=86400    # 24 hours in seconds (changed from 7 days)
+declare -ri COOLDOWN_WEEKLY=86400    # 24 hours in seconds (same as daily)
 fi
 if [[ -z "${LOG_MAX_BYTES+x}" ]]; then
 declare -ri LOG_MAX_BYTES=1048576    # 1 MB - logtrim threshold

@@ -55,4 +55,4 @@ logs/
 Thumbs.db
 scripts/__pycache__
 tests/__pycache__
-.qwen/settings.json
+.qwen/settings.jsonmemory/

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 19-mirror-gigabrain-vault-to-windows.sh — Sync Obsidian vault to Windows
+# mirror-vault.sh — Sync Obsidian vault to Windows
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
 # Module Version: 1
-# @modular-section: mirror-gigabrain-vault-to-windows
+# @modular-section: mirror-vault
 # @depends: none (standalone; uses rsync / cp)
 # @exports: (none — standalone script, not sourced)
 #
 # Purpose: Mirror gigabrain workspace vault from WSL to Windows Obsidian folder
-# Usage:   ./scripts/19-mirror-gigabrain-vault-to-windows.sh [src] [dest]
+# Usage:   ./tools/mirror-vault.sh [src] [dest]
 # ==============================================================================
 set -euo pipefail
 

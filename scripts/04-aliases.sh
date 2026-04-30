@@ -5,7 +5,7 @@
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
 # Module Version: 13
 # ==============================================================================
-# 3. ALIAS DEFINITIONS & SHORTCUTS
+# 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
 # @modular-section: aliases
 # @depends: constants
@@ -56,7 +56,7 @@ alias c='clear_tactical'
 alias reload='command clear; exec bash'
 alias m='tactical_dashboard'
 alias cpwd='copy_path'
-alias unittest='"$TACTICAL_REPO_ROOT"/scripts/20-run-tests.sh'
+alias unittest='"$TACTICAL_REPO_ROOT"/tools/run-tests.sh'
 
 # g — Shortcut for 'oc g' (launch knowledge graph server).
 alias g='oc g'
@@ -86,8 +86,10 @@ function llmconf() {
 function oclogs() {
     __vsc_open "$OC_TMP_LOG"
 }
-# le — Show the last 40 lines of the OpenClaw gateway journal.
-function le() {
+# __oc_journal_tail — Shared helper for le/lo.
+# Usage: __oc_journal_tail <lines> <invert:0|1>
+function __oc_journal_tail() {
+    local _lines="$1" _invert="$2"
     local _pat
     local _marker_file="${OC_ROOT:-$HOME/.openclaw}/state/console-log-clear.epoch"
     local _since_arg=()
@@ -99,29 +101,17 @@ function le() {
             _since_arg=(--since "@$_epoch")
         fi
     fi
+    local _grep_flag="-Ei"
+    [[ "$_invert" == "1" ]] && _grep_flag="-Eiv"
     journalctl --user -u openclaw-gateway.service --no-pager "${_since_arg[@]}" -n 300 --output=cat 2>&1 \
-        | grep -Ei "$_pat" \
-        | tail -40
+        | grep "$_grep_flag" "$_pat" \
+        | tail "$_lines"
     return "${PIPESTATUS[0]}"
 }
-# lo — Show the last 120 lines of the OpenClaw gateway journal.
-function lo() {
-    local _pat
-    local _marker_file="${OC_ROOT:-$HOME/.openclaw}/state/console-log-clear.epoch"
-    local _since_arg=()
-    _pat='\berror\b|\bfailed\b|\bfailovererror\b|\btimeout\b|\btimed out\b|\bunauthorized\b|\bsecurity warning\b|\bexception\b|\btraceback\b|\bconnection error\b|\bpassword_missing\b|\bcode=1008\b|\b404 No models\b|\b503 Loading model\b|\bmodel_not_found\b|\bcontext overflow\b|\brequires target <E\.164\|group JID>\b|\bMCP server connection timed out\b'
-    if [[ -r "$_marker_file" ]]; then
-        local _epoch
-        _epoch=$(tr -dc '0-9' < "$_marker_file")
-        if [[ -n "$_epoch" ]]; then
-            _since_arg=(--since "@$_epoch")
-        fi
-    fi
-    journalctl --user -u openclaw-gateway.service --no-pager "${_since_arg[@]}" -n 300 --output=cat 2>&1 \
-        | grep -Eiv "$_pat" \
-        | tail -120
-    return "${PIPESTATUS[0]}"
-}
+# le — Show the last 40 lines of the OpenClaw gateway journal (errors only).
+function le() { __oc_journal_tail 40 0; }
+# lo — Show the last 120 lines of the OpenClaw gateway journal (non-errors).
+function lo() { __oc_journal_tail 120 1; }
 # __oc_open_local_url — Open a local OpenClaw URL in the default browser.
 # Uses 127.0.0.1 to avoid browser HTTPS-first upgrades on localhost.
 function __oc_open_local_url() {

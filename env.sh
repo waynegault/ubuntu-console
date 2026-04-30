@@ -13,7 +13,8 @@
 # Modules loaded:  01-constants through 15-model-recommender (including 09b-gog)
 # Modules skipped: 13-init (interactive side-effects: clear screen,
 #                  completions, WSL loopback, EXIT trap)
-#                  16-20 (utility/dev-tools scripts — not profile modules)
+#                  Utility scripts (tools/) are not in scripts/ so are never
+#                  picked up by the glob — no explicit exclusions needed.
 #
 # SC1090/SC1091: Dynamic sourcing by design — modules discovered at runtime
 # ==============================================================================
@@ -39,14 +40,10 @@ _tac_lib_dir="$_tac_env_root/scripts"
 for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh; do
     # Skip 13-init.sh — it runs interactive side-effects (clear, completions,
     # WSL loopback fix, EXIT trap) that are not needed in library mode.
-    # Skip 16-20 — utility and dev-tools scripts, not profile modules.
+    # Utility scripts (16-20) now live in tools/ and are not matched by the
+    # glob above, so no explicit exclusions are needed for them.
     case "$_tac_lib_f" in
         *13-init.sh) continue ;;
-        *16-check-oc-agent-use.sh) continue ;;
-        *17-import-windows-user-env.sh) continue ;;
-        *18-lint.sh) continue ;;
-        *19-mirror-gigabrain-vault-to-windows.sh) continue ;;
-        *20-run-tests.sh) continue ;;
     esac
     [[ -f "$_tac_lib_f" ]] && source "$_tac_lib_f"
 done

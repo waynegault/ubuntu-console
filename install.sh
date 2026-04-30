@@ -20,6 +20,8 @@ then
 else
     echo "[WARNING] Tactical Console Profile not found at $PROFILE_PATH"
 fi
+
+# end of file
 LOADER
 }
 
@@ -109,6 +111,8 @@ then
 else
     echo "[WARNING] Tactical Console Profile not found at $PROFILE_PATH"
 fi
+
+# end of file
 LOADER
     echo "  ~/.bashrc - created thin loader"
 else

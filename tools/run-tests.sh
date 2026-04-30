@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # ==============================================================================
-# 20-run-tests.sh — Pretty-printed BATS test runner for tactical-console
+# run-tests.sh — Pretty-printed BATS test runner for tactical-console
 # ==============================================================================
 # Wraps `bats --tap` output and regroups it into labelled sections with
 # box-drawn headers matching the tactical-console UI aesthetic.
 #
 # Usage:
-#   scripts/20-run-tests.sh                   # run all tests
-#   scripts/20-run-tests.sh --filter "calc"   # pass extra args to bats
+#   tools/run-tests.sh                   # run all tests
+#   tools/run-tests.sh --filter "calc"   # pass extra args to bats
 #
 # AI INSTRUCTION: Increment version on significant changes.
 # Module Version: 1

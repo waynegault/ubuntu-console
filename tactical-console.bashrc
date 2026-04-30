@@ -220,8 +220,4 @@ if [[ -n "${__TAC_DISPLAY_BANNER:-}" ]]; then
     unset __TAC_DISPLAY_BANNER
 fi
 
-# ==============================================================================
-
-alias h='tactical_help'
-
 # end of file

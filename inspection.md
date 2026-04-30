@@ -2,8 +2,9 @@ Bash Script Inspection, Improvement & Validation Audit
 
 A comprehensive, repeatable checklist for auditing the Tactical Console Profile
 and its modular architecture. Covers the thin loader (tactical-console.bashrc),
-13 numbered modules under scripts/ (01-constants through 13-init), standalone
-scripts in bin/, and companion files. Derived from real-world production audits.
+16 profile modules under scripts/ (01-constants through 15-model-recommender,
+plus 09b-gog), 5 utility scripts (16-20), standalone scripts in bin/, and
+companion files. Derived from real-world production audits.
 Each item includes the rationale, a concrete test command, and the expected outcome.
 
 Scope
@@ -11,17 +12,19 @@ Scope
 The following file classes are in-scope for every audit pass:
 
 - `tactical-console.bashrc` — thin loader
-- `scripts/[0-9][0-9]-*.sh` — 13 numbered modules (01-constants through 13-init)
+- `scripts/[0-9][0-9]-*.sh` — 16 profile modules (01-constants through 15-model-recommender)
+  and 5 utility scripts in `tools/` (check-agent-use, import-windows-env, lint, mirror-vault, run-tests);
+  including `scripts/09b-gog.sh` (the 16th profile module, non-numeric name)
 - `bin/*.sh` — standalone helper scripts
 - `bin/tac-exec` — non-interactive function runner (symlinked to `~/.local/bin/`)
 - `env.sh` — library loader for non-interactive shells
 - `install.sh` — installer
-- `scripts/lint.sh`, `scripts/run-tests.sh` — CI helper scripts
+- `tools/lint.sh`, `tools/run-tests.sh` — CI helper scripts
 - `tests/*.bats` — BATS test files
 - `systemd/*` — systemd unit files
 
 Files excluded by `.gitignore` are out of scope. Companion config files
-(`quant-guide.conf`, `*.json`) are reviewed for correctness but not subject
+(`config/quant-guide.conf`, `*.json`) are reviewed for correctness but not subject
 to shell-specific checks.
 
 Usage: Work through each section top-to-bottom. Mark items [x] as you
@@ -83,9 +86,9 @@ Note baseline
 
 🔧 Mandatory version variable
 
-Loader: `grep 'TACTICAL_PROFILE_VERSION=' <file>`. Modules: `grep -P '_TAC_[A-Z_]+_VERSION=' <file>`.
+Loader: `grep 'TACTICAL_PROFILE_VERSION=' <file>`. Modules: `grep '^# Module Version:' <file>`.
 
-For the loader: `TACTICAL_PROFILE_VERSION="x.y"` near the top. For each module in scripts/: `_TAC_<NAME>_VERSION="x.y.z"` near the top (e.g., `_TAC_CONSTANTS_VERSION`). All version variables must contain the substring `VERSION=` to satisfy cross-script tests.
+For the loader: `_TAC_LOADER_VERSION="N"` near the top; `TACTICAL_PROFILE_VERSION` auto-computed as `${_TAC_LOADER_VERSION}.${_tac_mod_sum}`. For each module in scripts/: `# Module Version: N` comment in the header block. All modules must have this comment to satisfy the `grep '^# Module Version:'` check used in cross-script tests.
 
 1.3
 
@@ -502,7 +505,7 @@ Strict mode requirements vary by file type:
 - **Loader + sourced modules** (`tactical-console.bashrc`, `scripts/[0-9][0-9]-*.sh`): MUST NOT use `set -euo pipefail` (breaks interactive shell — see 3.8).
 - **`install.sh`**: SHOULD use `set -euo pipefail`.
 - **`bin/*.sh`** (sourced into environment via `install.sh` symlinks): MUST NOT use `set -e`.
-- **`scripts/lint.sh`, `scripts/run-tests.sh`**: Document intentional omission with a comment if `set -e` is absent (e.g., bare `(( ))` operators return exit 1 on zero).
+- **`tools/lint.sh`, `tools/run-tests.sh`**: Document intentional omission with a comment if `set -e` is absent (e.g., bare `(( ))` operators return exit 1 on zero).
 
 3.4
 
@@ -1312,9 +1315,9 @@ Difficult regex, file-descriptor manipulation, or Bash-specific tricks have comm
 
 � Modular Architecture
 
-ls scripts/[0-9][0-9]-*.sh
+ls scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh
 
-13 numbered module files exist under scripts/ (01-constants through 13-init). The loader (tactical-console.bashrc) sources them in numeric order. Each module has `@modular-section`, `@depends`, and `@exports` annotations below its header.
+16 profile module files exist under scripts/ (01-constants through 15-model-recommender + 09b-gog). 5 utility scripts live in tools/. The loader (tactical-console.bashrc) sources the profile modules in numeric order. Each module has `@modular-section`, `@depends`, and `@exports` annotations below its header.
 
 9.4.1
 
@@ -1328,9 +1331,9 @@ Every module's @depends lists only modules with a lower numeric prefix. No circu
 
 🔧 Module version tracks changes
 
-grep '_TAC_.*_VERSION=' scripts/[0-9][0-9]-*.sh
+grep 'Module Version:' scripts/[0-9][0-9]-*.sh
 
-Each module has a unique `_TAC_<NAME>_VERSION` variable. When a module is modified, its version is incremented AND `TACTICAL_PROFILE_VERSION` in the loader is also incremented.
+Each module has a `# Module Version: N` comment in its header. When a module is modified, its version number is incremented AND `_TAC_LOADER_VERSION` in `tactical-console.bashrc` is also incremented (which auto-bumps `TACTICAL_PROFILE_VERSION`).
 
 9.4.3
 
@@ -1402,7 +1405,7 @@ A CHANGELOG section or external file tracks significant changes with dates
 
 Inspect §0 or file header
 
-Key architectural choices (modular loader + 13 numbered modules, /dev/shm caching, WSL interop strategy, dual-version scheme) documented for future maintainers
+Key architectural choices (modular loader + 16 profile modules, /dev/shm caching, WSL interop strategy, dual-version scheme) documented for future maintainers
 
 10. Refactor & Maintainability — Low
 
@@ -1500,7 +1503,7 @@ Expected
 
 🔧 Lint script exists
 
-Check scripts/lint.sh
+Check tools/lint.sh
 
 bash -n + shellcheck executed automatically
 
@@ -1760,9 +1763,9 @@ Model metadata format (name, path, flags, context size) documented and validated
 
 🔍 Quantization recommendations enforced
 
-Inspect quant-guide.conf usage
+Inspect config/quant-guide.conf usage
 
-quant-guide.conf consulted or referenced when selecting/recommending models; VRAM limits respected
+config/quant-guide.conf consulted or referenced when selecting/recommending models; VRAM limits respected
 
 12.4.4
 
@@ -1782,7 +1785,7 @@ Active connections drained or errored cleanly before server restart with new mod
 
 13. Cross-Script Consistency — Medium
 
-Verify that constants, patterns, and conventions are consistent across all scripts in the repository. With the modular architecture, this includes consistency between the loader, the 13 modules in scripts/, standalone scripts in bin/, and companion files.
+Verify that constants, patterns, and conventions are consistent across all scripts in the repository. With the modular architecture, this includes consistency between the loader, the 16 profile modules in scripts/, standalone scripts in bin/, and companion files.
 
 13.1 Shared Constants
 
@@ -1925,11 +1928,11 @@ Expected
 
 13.5.1
 
-🔍 env.sh sources modules 01-12 only
+🔍 env.sh sources all profile modules except 13-init.sh
 
 `grep -c 'continue' ~/ubuntu-console/env.sh`
 
-Returns 1. The `13-init.sh` skip is implemented via a `case/continue` pattern.
+Returns 1. env.sh sources all 16 profile modules (01-15 + 09b), skipping only `13-init.sh` via a `case/continue` pattern. Note: `14-wsl-extras.sh` has an interactive guard (`case $- in`) and returns early in library mode, so its side-effects don’t run.
 
 13.5.2
 
@@ -1975,11 +1978,11 @@ Expected
 
 13.4.1
 
-🔍 All modules have version variable
+🔍 All modules have version comment
 
-for f in scripts/[0-9][0-9]-*.sh; do grep -q 'VERSION=' "$f" || echo "MISSING: $f"; done
+for f in scripts/[0-9][0-9]-*.sh; do grep -q '^# Module Version:' "$f" || echo "MISSING: $f"; done
 
-Zero output — every module contains a `_TAC_*_VERSION=` variable
+Zero output — every module contains a `# Module Version: N` comment in its header block.
 
 13.4.2
 
@@ -1991,9 +1994,9 @@ Zero output — every module contains the AI instruction to bump both module and
 
 13.4.3
 
-🔍 Module version names are unique
+🔍 Module version comments all present
 
-grep -h '_TAC_.*_VERSION=' scripts/[0-9][0-9]-*.sh | sort
+grep -h '^# Module Version:' scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh | sort -t: -k3 -n
 
 13 unique variable names, one per module, all following `_TAC_<SECTION>_VERSION` pattern
 
@@ -2182,7 +2185,7 @@ Expected
 
 bash -n tactical-console.bashrc && for f in scripts/[0-9][0-9]-*.sh bin/*.sh; do bash -n "$f"; done
 
-Exit 0 for the loader and all 13 modules plus bin/ scripts
+Exit 0 for the loader and all 16 profile modules plus bin/ scripts
 
 16.2
 
@@ -2198,7 +2201,7 @@ Zero findings (all SC codes either clean or suppressed with documented directive
 
 bash -ic 'source ~/ubuntu-console/tactical-console.bashrc; exit'
 
-Exit 0 — loader sources all 13 modules without error
+Exit 0 — loader sources all 16 profile modules without error
 
 16.4
 
@@ -2238,7 +2241,7 @@ All BATS tests pass (0 failures). Verify count matches `grep -c '^@test' tests/t
 
 ls scripts/[0-9][0-9]-*.sh | wc -l
 
-13 modules present. If a module was added or removed, update the architecture map in the loader and the BATS structure tests.
+15 numbered profile modules present (01-15) plus scripts/09b-gog.sh = 16 total. If a module was added or removed, update the architecture map in the loader and the BATS structure tests.
 
 16.9
 

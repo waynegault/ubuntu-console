@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 17. IMPORT-WINDOWS-USER-ENV — Windows environment variable importer
+# import-windows-env.sh — Windows environment variable importer
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
 # Module Version: 6
@@ -8,7 +8,7 @@
 # @depends: none (standalone; calls pwsh.exe / tasklist.exe)
 # @exports: (none — standalone script, writes to output-file)
 # Usage:
-#   17-import-windows-user-env.sh [output-file] [VAR_NAME...]
+#   tools/import-windows-env.sh [output-file] [VAR_NAME...]
 # If no VAR_NAME values are provided, uses the built-in default list.
 #
 # Sources:

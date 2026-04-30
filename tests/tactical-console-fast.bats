@@ -90,8 +90,8 @@ setup_file() {
         "$PROFILE_PATH"
 }
 
-@test "structure: has section headers 1 through 13" {
-    for i in $(seq 1 13); do
+@test "structure: has section headers 1 through 15" {
+    for i in $(seq 1 15); do
         grep -rqE "^# ${i}\." "$PROFILE_PATH" \
             "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh
     done
@@ -110,8 +110,8 @@ setup_file() {
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh \
-             "$REPO_ROOT"/scripts/18-lint.sh \
-             "$REPO_ROOT"/scripts/20-run-tests.sh; do
+             "$REPO_ROOT"/tools/lint.sh \
+             "$REPO_ROOT"/tools/run-tests.sh; do
         [[ -f "$f" ]] || continue
         local last
         last=$(grep -v '^[[:space:]]*$' "$f" | tail -1)
@@ -152,8 +152,8 @@ setup_file() {
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh \
-             "$REPO_ROOT"/scripts/18-lint.sh \
-             "$REPO_ROOT"/scripts/20-run-tests.sh; do
+             "$REPO_ROOT"/tools/lint.sh \
+             "$REPO_ROOT"/tools/run-tests.sh; do
         [[ -f "$f" ]] || continue
         local long
         long=$(awk -v max="$max_width" 'length > max' "$f" | wc -l)
@@ -186,11 +186,12 @@ setup_file() {
     done
 }
 
-@test "hygiene: all 20 modules have a Module Version comment" {
-    local count
+@test "hygiene: all numbered scripts have a Module Version comment" {
+    local count expected
     count=$(grep -l '^# Module Version:' \
         "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh | wc -l)
-    [[ "$count" -eq 20 ]]
+    expected=$(ls "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh 2>/dev/null | wc -l)
+    [[ "$count" -eq "$expected" ]]
 }
 
 @test "hygiene: module versions follow '# Module Version: N' pattern" {
@@ -252,6 +253,24 @@ setup_file() {
 
 @test "cross-script: watchdog has correct health endpoint" {
     grep -q '/health' "$REPO_ROOT/bin/llama-watchdog.sh"
+}
+
+@test "constants: LLAMA_DRIVE_ROOT not assigned twice" {
+    local count
+    count=$(grep -c '^export LLAMA_DRIVE_ROOT=' "$REPO_ROOT/scripts/01-constants.sh" || true)
+    [[ "$count" -eq 1 ]]
+}
+
+@test "constants: COOLDOWN_WEEKLY is 86400 (24h — changed from 7d)" {
+    grep -qP 'COOLDOWN_WEEKLY=86400' "$REPO_ROOT/scripts/01-constants.sh"
+}
+
+@test "aliases: le and lo share __oc_journal_tail helper" {
+    grep -q '__oc_journal_tail' "$REPO_ROOT/scripts/04-aliases.sh"
+    local helper_count
+    helper_count=$(grep -c '__oc_journal_tail' "$REPO_ROOT/scripts/04-aliases.sh")
+    # definition + 2 call sites
+    [[ "$helper_count" -ge 3 ]]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -329,7 +348,7 @@ setup_file() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 @test "hygiene: quant-guide.conf exists and is non-empty" {
-    [[ -s "$REPO_ROOT/quant-guide.conf" ]]
+    [[ -s "$REPO_ROOT/config/quant-guide.conf" ]]
 }
 
 @test "hygiene: README.md exists" {
@@ -341,18 +360,37 @@ setup_file() {
 }
 
 @test "hygiene: all profile modules exist (16 total: 01-15 + 09b)" {
-    # 15 numerically-prefixed profile modules plus 5 utility scripts = 20 [0-9][0-9]-*.sh
+    # 15 numerically-prefixed profile modules = 15 [0-9][0-9]-*.sh files
     local count=0
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] && count=$(( count + 1 ))
     done
-    [[ "$count" -eq 20 ]]
+    [[ "$count" -eq 15 ]]
     # 09b-gog.sh is the 16th profile module
     [[ -f "$REPO_ROOT/scripts/09b-gog.sh" ]]
 }
 
 @test "gog: env.sh explicitly sources 09b-gog.sh" {
     grep -q '09b-gog.sh' "$REPO_ROOT/env.sh"
+}
+
+@test "env.sh: skips 13-init.sh in library mode" {
+    grep -q '13-init.sh' "$REPO_ROOT/env.sh"
+}
+
+@test "env.sh: does not source utility scripts (now in tools/) in library mode" {
+    # Utility scripts now live in tools/ and are not matched by the scripts/
+    # [0-9][0-9]-*.sh glob, so no explicit skip entries are needed.
+    # Verify none of the tool script names appear as sourced targets in env.sh.
+    local env_content
+    env_content=$(cat "$REPO_ROOT/env.sh")
+    # Should NOT be sourced (they are not in scripts/ anymore)
+    [[ "$env_content" != *"source"*"lint.sh"* ]]
+    [[ "$env_content" != *"source"*"run-tests.sh"* ]]
+    # tools/ directory must exist
+    [[ -d "$REPO_ROOT/tools" ]]
+    [[ -f "$REPO_ROOT/tools/lint.sh" ]]
+    [[ -f "$REPO_ROOT/tools/run-tests.sh" ]]
 }
 
 # end of file

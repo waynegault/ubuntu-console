@@ -4,6 +4,7 @@
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
 # Module Version: 5
+# 14. WSL EXTRAS & STARTUP HELPERS
 # -----------------------------------------------------------------------------
 # Purpose: Move WSL/X11 and OpenClaw startup helpers out of the thin loader.
 # This module centralises a few WSL-specific startup helpers that were

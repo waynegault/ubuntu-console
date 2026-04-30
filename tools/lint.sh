@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # ==============================================================================
-# 18-lint.sh — Static analysis for the ubuntu-console repository.
+# lint.sh — Static analysis for the ubuntu-console repository.
 # Runs bash -n syntax checks and shellcheck on all shell files.
-# Usage: ./scripts/18-lint.sh
+# Usage: ./tools/lint.sh
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
 # Module Version: 2
@@ -44,6 +44,7 @@ echo "=== Bash Syntax Check (bash -n) ==="
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
          "$REPO_ROOT"/scripts/*.sh \
+         "$REPO_ROOT"/tools/*.sh \
          "$REPO_ROOT"/bin/*.sh
 do
     if bash -n "$f" 2>&1
@@ -66,6 +67,7 @@ fi
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
          "$REPO_ROOT"/scripts/*.sh \
+         "$REPO_ROOT"/tools/*.sh \
          "$REPO_ROOT"/bin/*.sh
 do
     local_rc=0
@@ -88,6 +90,7 @@ else
     for f in "$REPO_ROOT"/tactical-console.bashrc \
              "$REPO_ROOT"/install.sh \
              "$REPO_ROOT"/scripts/*.sh \
+             "$REPO_ROOT"/tools/*.sh \
              "$REPO_ROOT"/bin/*.sh
     do
         # Find non-ASCII outside the approved glyph allowlist.

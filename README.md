@@ -48,7 +48,7 @@ tools, AI agents, cron jobs, and automation scripts via `tac-exec`.
 
 | Principle | Implementation |
 |---|---|
-| **Determinism** | Every maintenance step is idempotent with 7-day cooldowns using `flock` |
+| **Determinism** | Every maintenance step is idempotent with 24h cooldowns using `flock` |
 | **Zero Dependencies Beyond Coreutils** | All LLM streaming is pure `bash + curl + jq` — no Python |
 | **Instant UI** | Telemetry uses `/dev/shm` caching with atomic background refresh |
 | **Security First** | LLM binds to `127.0.0.1`; API key cache is `chmod 600` on tmpfs |
@@ -86,6 +86,8 @@ up             # Run 13-step system maintenance
 ---
 
 ## Command Reference
+
+> Quick overview of the most common commands. For the complete reference, see [docs/reference.md](docs/reference.md).
 
 | Command | Category | Description |
 |---|---|---|
@@ -244,7 +246,7 @@ Located at `/mnt/m/.llm/models.conf` — 11-field pipe-delimited, auto-generated
 
 ### Quantization Guide
 
-`quant-guide.conf` rates quants for the RTX 3050 Ti:
+`config/quant-guide.conf` rates quants for the RTX 3050 Ti:
 
 | Rating | Quants |
 |---|---|
@@ -273,7 +275,7 @@ Located at `/mnt/m/.llm/models.conf` — 11-field pipe-delimited, auto-generated
 | `/mnt/m/archive/` | Archived models (`$LLAMA_ARCHIVE_DIR`) |
 | `/mnt/m/.llm/models.conf` | Model registry (`$LLM_REGISTRY`) |
 | `/mnt/m/.llm/bench_*.tsv` | Benchmark history |
-| `~/ubuntu-console/quant-guide.conf` | Quantization ratings (`$QUANT_GUIDE`) |
+| `~/ubuntu-console/config/quant-guide.conf` | Quantization ratings (`$QUANT_GUIDE`) |
 | `/dev/shm/active_llm` | Active model number (integer) |
 | `/dev/shm/llama-server.log` | Server stdout/stderr |
 | `/dev/shm/last_tps` | Last measured tokens/sec |
@@ -348,7 +350,7 @@ Run `up` for the 13-step pipeline:
 | Step | What It Does |
 |---|---|
 | 1. Internet | Pings `github.com` |
-| 2. APT Packages | `apt-get update` (24h cooldown) + `upgrade --no-install-recommends` (7d) |
+| 2. APT Packages | `apt-get update` (24h cooldown) + `upgrade --no-install-recommends` (24h). Dry-run first to detect dependency issues. |
 | 3. NPM & Cargo | `npm update -g` + `cargo install-update -a` |
 | 4. R Packages | Updates CRAN and Bioconductor packages |
 | 5. OpenClaw | Runs `openclaw doctor` (skipped if not installed) |
@@ -363,7 +365,7 @@ Run `up` for the 13-step pipeline:
 
 ### Cooldown System
 
-Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.txt` (Unix timestamps). APT index: 24h; all other network steps: 7d. `flock -x` prevents race conditions when `up` runs in parallel.
+Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.txt` (Unix timestamps). APT index: 24h; APT upgrade: 24h; all other network steps: 24h. `flock -x` prevents race conditions when `up` runs in parallel.
 
 ---
 
@@ -371,7 +373,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ### Module Architecture
 
-The profile is a thin loader (~195 lines) that sources 16 numbered profile modules from `scripts/` via an explicit array (not a glob) to guarantee load order:
+The profile is a thin loader (~225 lines) that sources 16 numbered profile modules from `scripts/` via an explicit array (not a glob) to guarantee load order:
 
 ```bash
 _tac_expected_modules=(
@@ -384,32 +386,32 @@ _tac_expected_modules=(
 
 | Module | Lines | Purpose |
 |---|---|---|
-| `01-constants.sh` | 338 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
-| `02-error-handling.sh` | 62 | ERR trap → `bash-errors.log` (exit codes ≥ 2; exit 1 filtered) |
+| `01-constants.sh` | 342 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
+| `02-error-handling.sh` | 258 | ERR trap → `bash-errors.log` (exit codes ≥ 2; exit 1 filtered) |
 | `03-design-tokens.sh` | 48 | ANSI colour constants (`readonly`, re-source safe) |
-| `04-aliases.sh` | 428 | Short commands, VS Code wrappers, tactical shortcuts |
+| `04-aliases.sh` | 421 | Short commands, VS Code wrappers, tactical shortcuts |
 | `05-ui-engine.sh` | 534 | Box-drawing: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
-| `06-hooks.sh` | 192 | `cd` override (venv auto-activate), prompt (PS1), `__test_port`, admin badge |
+| `06-hooks.sh` | 197 | `cd` override (venv auto-activate), prompt (PS1), `__test_port`, admin badge |
 | `07-telemetry.sh` | 361 | CPU + dual GPU, NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots |
 | `08-maintenance.sh` | 1461 | `up` (13 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system with flock |
-| `09-openclaw.sh` | 3105 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-failover`, wacli, `oc-kgraph`) |
+| `09-openclaw.sh` | 3217 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-failover`, wacli, `oc-kgraph`) |
 | `09b-gog.sh` | 165 | Google CLI (gog) detection and helpers |
 | `10-deployment.sh` | 460 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` |
 | `11-llm-manager.sh` | 3209 | Model management, streaming chat, burn, bench, explain, `__calc_gpu_layers`, `__gguf_metadata` |
-| `12-dashboard-help.sh` | 680 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` |
+| `12-dashboard-help.sh` | 681 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` |
 | `13-init.sh` | 134 | `mkdir -p`, completions, WSL loopback fix, bridge call, EXIT trap (chained) |
-| `14-wsl-extras.sh` | 134 | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
+| `14-wsl-extras.sh` | 138 | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
 | `15-model-recommender.sh` | 194 | AI model recommendations by use case (`bc` fallback for integer math) |
 
-**Utility scripts** (numbered 16–20, not sourced as profile modules):
+**Utility scripts** (in `tools/`, not sourced as profile modules):
 
 | Script | Purpose |
 |---|---|
-| `16-check-oc-agent-use.sh` | Agent usage regression checker (CI/tests) |
-| `17-import-windows-user-env.sh` | Import Windows user environment variables |
-| `18-lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety |
-| `19-mirror-gigabrain-vault-to-windows.sh` | Sync Obsidian vault to Windows |
-| `20-run-tests.sh` | Pretty-printed BATS test runner |
+| `tools/check-agent-use.sh` | Agent usage regression checker (CI/tests) |
+| `tools/import-windows-env.sh` | Import Windows user environment variables |
+| `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety |
+| `tools/mirror-vault.sh` | Sync Obsidian vault to Windows |
+| `tools/run-tests.sh` | Pretty-printed BATS test runner |
 
 ### Dependency Graph
 
@@ -496,7 +498,8 @@ function __get_METRIC() {
 ├── tactical-console.bashrc            # Thin loader + module sourcing loop
 ├── env.sh                             # Non-interactive library loader (all modules except 13-init.sh)
 ├── install.sh                         # Idempotent installer
-├── quant-guide.conf                   # Quantization priority ratings (editable)
+├── config/
+│   └── quant-guide.conf               # Quantization priority ratings (editable)
 ├── bin/
 │   ├── tac-exec                       # Bootstrap: source env.sh + exec "$@"
 │   ├── tac_hostmetrics.sh             # Host CPU + iGPU (typeperf) + CUDA (nvidia-smi)
@@ -523,21 +526,25 @@ function __get_METRIC() {
 │   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
 │   ├── 14-wsl-extras.sh               #   WSL/X11 helpers, completions, vault env
 │   ├── 15-model-recommender.sh        #   AI model recommendations by use case
-│   ├── 16-check-oc-agent-use.sh       #   Agent usage regression checker
-│   ├── 17-import-windows-user-env.sh  #   Import Windows user environment variables
-│   ├── 18-lint.sh                     #   bash -n + shellcheck + Unicode safety
-│   ├── 19-mirror-gigabrain-vault-to-windows.sh  # Sync Obsidian vault to Windows
-│   ├── 20-run-tests.sh                #   BATS test runner
 │   └── kgraph/                        #   Knowledge graph Python package
+├── tools/                             # Standalone utility scripts (not sourced)
+│   ├── check-agent-use.sh             #   Agent usage regression checker
+│   ├── import-windows-env.sh          #   Import Windows user environment variables
+│   ├── lint.sh                        #   bash -n + shellcheck + Unicode safety
+│   ├── mirror-vault.sh                #   Sync Obsidian vault to Windows
+│   └── run-tests.sh                   #   BATS test runner
 ├── docs/                              # Reference documentation
-│   ├── architecture.md                #   Developer guide, module details, ADR rationale
-│   ├── adr/                           #   Architecture decision records
-│   └── HAL-COMMAND-CATALOG.md         #   AI agent command reference
+│   ├── AGENT-GUIDELINES.md            #   AI agent operating manual
+│   ├── architecture.md                #   Developer guide and module details
+│   ├── llm.md                         #   Local LLM stack reference
+│   ├── openclaw.md                    #   OpenClaw integration guide
+│   ├── reference.md                   #   Command reference + dashboard
+│   └── troubleshooting.md             #   Diagnostics and fixes
 ├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
-│   ├── tactical-console.bats          # 487 BATS unit tests
-│   ├── tactical-console-fast.bats     # Fast subset (41 tests, ~20s)
+│   ├── tactical-console.bats          # 489 BATS unit tests
+│   ├── tactical-console-fast.bats     # Fast subset (47 tests, ~20s)
 │   └── test_kgraph.py                 # Python tests for kgraph
 └── systemd/
     ├── llama-watchdog.service
@@ -646,7 +653,7 @@ cp -r ~/ubuntu-console/skills/tactical-console ~/.openclaw/skills/
 openclaw skills enable tactical-console
 ```
 
-Full AI agent command catalog: [docs/HAL-COMMAND-CATALOG.md](docs/HAL-COMMAND-CATALOG.md)
+Full AI agent operating manual: [docs/AGENT-GUIDELINES.md](docs/AGENT-GUIDELINES.md)
 
 ---
 
@@ -688,16 +695,16 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
-- **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 41 tests)
-- **Full tests:** `bats tests/tactical-console.bats` (487 BATS unit tests)
-- **Lint:** `scripts/18-lint.sh` (bash -n + shellcheck + Unicode safety)
+- **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 47 tests)
+- **Full tests:** `bats tests/tactical-console.bats` (489 BATS unit tests)
+- **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety)
 
 Run locally:
 
 ```bash
 bats tests/tactical-console-fast.bats   # Quick feedback
 bats tests/tactical-console.bats        # Full suite
-scripts/18-lint.sh                      # Static analysis
+tools/lint.sh                           # Static analysis
 ```
 
 # end of file
