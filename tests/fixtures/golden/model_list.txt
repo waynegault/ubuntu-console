@@ -1,0 +1,23 @@
+
+[90m  #    MODEL                          SIZE    QUANT    ARCH      GPU  CTX   THR  TPS[0m
+[90m  ────────────────────────────────────────────────────────────────────────────[0m
+  1    Deepseek-R1-Distill-Qwen-1.5B  1.0G    Q4_K_M   qwen2     999  8192  4    82.8[0m
+  2    Llama 3.2 3B Instruct          1.7G    Q4_0_8_8 llama     999  8192  4    46.2[0m
+[96m* 3    Llama 3.2 3B Instruct          1.9G    Q4_K_M   llama     999  8192  4    42.5[0m
+  4    Llama 3.2 3B Instruct          2.2G    Q5_K_M   llama     999  4096  4    38.3[0m
+  5    Infracelestial 7B              3.0G    IQ2_M    qwen2     999  4096  4    11.6[0m
+  6    Qwen2.5 Coder 1.5B Instruct    0.9G    Q4_K_M   qwen2     999  16384 4    19.1[0m
+  7    Qwen2.5 Coder 3B Instruct      1.8G    Q4_K_M   qwen2     999  8192  4    10.4[0m
+  8    Unsloth_Gguf_Ghe5Te28          2.4G    Q4_1     qwen3     999  4096  4    7.4[0m
+  9    Qwen3-4B                       2.4G    Q4_K     qwen3     999  4096  4    7.5[0m
+  10   Qwen3.5-4B                     2.6G    Q4_K_M   qwen35    999  4096  4    5.4[0m
+  11   Smollm2 1.7B 8k Mix7 Ep2 v2    1.0G    Q4_K_M   llama     999  8192  4    16.3[0m
+  12   Gemma 3 4b It                  2.3G    Q4_K_M   gemma3    999  4096  4    7.9[0m
+  13   Llama 3.2 1B                   0.7G    Q4_0     llama     999  16384 4    24.9[0m
+  14   Nanbeige4.1 3B                 2.3G    Q4_K_M   llama     999  4096  4    8.9[0m
+  15   Merged Fp16                    2.3G    F16      llama     999  4096  4    8.4[0m
+  16   tinyllama_tinyllama-1.1b-chat- 0.6G    Q4_K_M   llama     999  2048  4    30.3[0m
+
+[90m  Drive M: [32m177G free[0m[90m of 207G (14% used)[0m
+
+[90m  model use N  |  model stop  |  model info N  |  model default N  |  model scan  |  model bench[0m

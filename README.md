@@ -26,6 +26,7 @@ tools, AI agents, cron jobs, and automation scripts via `tac-exec`.
 - [OpenClaw Integration](#openclaw-integration)
 - [Maintenance Pipeline](#maintenance-pipeline)
 - [Architecture & Developer Guide](#architecture--developer-guide)
+- [PowerShell Translation Prep](#powershell-translation-prep)
 - [Repository Layout](#repository-layout)
 - [Dependencies](#dependencies)
 - [AI Agent Access (tac-exec)](#ai-agent-access-tac-exec)
@@ -43,6 +44,20 @@ tools, AI agents, cron jobs, and automation scripts via `tac-exec`.
 - **Deployment** — Git commit/push with optional LLM-generated commit messages (PID-verified, secret detection)
 - **Knowledge graph** — Interactive Cytoscape.js visualisation via `oc g`
 - **Virtual environment auto-activation** — `cd` override activates/deactivates `.venv` automatically
+
+## PowerShell Translation Prep
+
+This repository now includes non-invasive prep artifacts to make AI-assisted
+translation to PowerShell deterministic and easier to validate:
+
+- `docs/pwsh-translation-prep.md` — Translation strategy and prompt-ready checklist
+- `docs/contracts/command-contracts.yaml` — Starter command behavior contract
+- `docs/contracts/state-contracts.yaml` — Cross-module state contracts
+- `tools/capture-golden-fixtures.sh` — Snapshot selected command outputs for parity checks
+- `tests/fixtures/golden/README.md` — Fixture format and extension guidance
+
+Use these to drive a behavior-first port (PowerShell should match contracts and
+fixtures, not Bash implementation details).
 
 ## Design Principles
 

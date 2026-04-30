@@ -1,0 +1,20 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ Bash {{VERSION}} TACTICAL DASHBOARD {{VERSION}}║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ SYSTEM TIME :: {{TIME}} {{DAY}} {{DATE}} ║
+║ UPTIME :: {{UPTIME}} ║
+║ BATTERY :: A/C POWERED ║
+║ CPU / GPU :: CPU {{CPU_PCT}}% | iGPU {{IGPU_PCT}}% | CUDA {{CUDA_PCT}}% ║
+║ MEMORY :: {{MEM_USED}} / {{MEM_TOTAL}} Gb ║
+║ STORAGE :: C: {{C_FREE}} Gb free | WSL: {{WSL_FREE}} Gb free ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ GPU :: RTX 3050 Ti | {{GPU_LOAD}}% Load | {{TEMP}}°C | {{VRAM_USED}} / {{VRAM_TOTAL}} Mb ║
+║ LOCAL LLM :: OFFLINE ║
+║ WSL :: ACTIVE Ubuntu-{{UBUNTU_VERSION}} (6.6.87.2-microsoft-standard-WSL2) ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ OPENCLAW :: [OFFLINE] {{VERSION}}.26 ║
+║ SESSIONS :: {{SESS_COUNT}} Active (cached {{AGE}}s ago) ║
+║ ACTIVE AGENT :: OFFLINE ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ up | so | serve <n> | halt | chat: | commit | g | h | pwsh ║
+╚══════════════════════════════════════════════════════════════════════════════╝

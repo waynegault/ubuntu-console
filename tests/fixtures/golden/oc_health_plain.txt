@@ -1,0 +1,4 @@
+cli_installed=1
+port=18789
+port_listening=0
+health_status=port_closed

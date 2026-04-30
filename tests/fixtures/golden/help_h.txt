@@ -1,0 +1,141 @@
+[H[2J[3J[38;5;30m╔══════════════════════════════════════════════════════════════════════════════╗[0m
+[38;5;30m║[0m[90m Bash v5.2[0m                        [96mHELP INDEX[0m                            [90mv5.127[0m[38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                                    SYSTEM                                    [0m[38;5;30m║[0m
+[38;5;30m║  [96mm[37m                Open Tactical Dashboard with live system stats             [38;5;30m║[0m
+[38;5;30m║  [96mh[37m                Display this command reference                             [38;5;30m║[0m
+[38;5;30m║  [96mup[37m               Run 15-step system maintenance                             [38;5;30m║[0m
+[38;5;30m║  [96msysinfo[37m          One-line summary: CPU, RAM, disk, GPU                      [38;5;30m║[0m
+[38;5;30m║  [96mget-ip[37m           Show WSL and WAN IP addresses                              [38;5;30m║[0m
+[38;5;30m║  [96mcls[37m              Clear screen                                               [38;5;30m║[0m
+[38;5;30m║  [96mreload[37m           Full profile reload                                        [38;5;30m║[0m
+[38;5;30m║  [96mcpwd[37m             Copy working directory to Windows clipboard                [38;5;30m║[0m
+[38;5;30m║  [96mcl[37m               Deep cleanup (apt, brew, journal, docker, npm)             [38;5;30m║[0m
+[38;5;30m║  [96mcl --light[37m       Light cleanup (python cache only)                          [38;5;30m║[0m
+[38;5;30m║  [96mcl --report[37m      Show cleanup report (no deletion)                          [38;5;30m║[0m
+[38;5;30m║  [96mlogtrim[37m          Trim logs over 1MB to last 1000 lines                      [38;5;30m║[0m
+[38;5;30m║  [96moedit[37m            Open tactical-console.bashrc in VS Code                    [38;5;30m║[0m
+[38;5;30m║  [96mcode <path>[37m      Open any file or directory in VS Code                      [38;5;30m║[0m
+[38;5;30m║  [96mpwsh[37m             PowerShell 7 (Linux native; shared profile via OneDrive sym[38;5;30m║[0m
+[38;5;30m║  [96m[37m                 link)                                                      [38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                              OPENCLAW — GATEWAY                              [0m[38;5;30m║[0m
+[38;5;30m║  [96mso[37m               Start the OpenClaw gateway                                 [38;5;30m║[0m
+[38;5;30m║  [96mxo[37m               Stop the OpenClaw gateway                                  [38;5;30m║[0m
+[38;5;30m║  [96moc restart[37m       Full gateway restart                                       [38;5;30m║[0m
+[38;5;30m║  [96moc gs[37m            Gateway deep health probe                                  [38;5;30m║[0m
+[38;5;30m║  [96moc status[37m        Full gateway status --all                                  [38;5;30m║[0m
+[38;5;30m║  [96moc health[37m        Gateway health probe                                       [38;5;30m║[0m
+[38;5;30m║  [96moc tail[37m          Live-tail gateway logs (Ctrl-C)                            [38;5;30m║[0m
+[38;5;30m║  [96moc v[37m             Print OpenClaw CLI version                                 [38;5;30m║[0m
+[38;5;30m║  [96moc update[37m        Update OpenClaw CLI                                        [38;5;30m║[0m
+[38;5;30m║  [96moc tui[37m           Launch OpenClaw TUI                                        [38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                         OPENCLAW — AGENTS & SESSIONS                         [0m[38;5;30m║[0m
+[38;5;30m║  [96mos[37m               List active sessions                                       [38;5;30m║[0m
+[38;5;30m║  [96moa[37m               Show registered agents                                     [38;5;30m║[0m
+[38;5;30m║  [96moc start[37m         Dispatch agent turn (--message)                            [38;5;30m║[0m
+[38;5;30m║  [96moc stop[37m          Delete agent by ID                                         [38;5;30m║[0m
+[38;5;30m║  [96moc mem-index[37m     Rebuild vector memory index                                [38;5;30m║[0m
+[38;5;30m║  [96moc memory-search[37m Semantic memory search                                     [38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                           OPENCLAW — CONFIG & LOGS                           [0m[38;5;30m║[0m
+[38;5;30m║  [96moc conf[37m          Open openclaw.json in VS Code                              [38;5;30m║[0m
+[38;5;30m║  [96moc config[37m        Read/write config keys (get|set)                           [38;5;30m║[0m
+[38;5;30m║  [96moc env[37m           Show OpenClaw environment vars                             [38;5;30m║[0m
+[38;5;30m║  [96moc keys[37m          List Windows API keys bridged                              [38;5;30m║[0m
+[38;5;30m║  [96moc ms[37m            Probe model provider endpoints                             [38;5;30m║[0m
+[38;5;30m║  [96moc doc-fix[37m       Run openclaw doctor --fix                                  [38;5;30m║[0m
+[38;5;30m║  [96moc logs[37m          Open runtime log in VS Code                                [38;5;30m║[0m
+[38;5;30m║  [96mle[37m               40-line log tail                                           [38;5;30m║[0m
+[38;5;30m║  [96mlo[37m               120-line full log                                          [38;5;30m║[0m
+[38;5;30m║  [96mlc[37m               Clear all logs                                             [38;5;30m║[0m
+[38;5;30m║  [96moc log-dir[37m       Change to logs folder                                      [38;5;30m║[0m
+[38;5;30m║  [96moc sec[37m           Deep security audit                                        [38;5;30m║[0m
+[38;5;30m║  [96moc docs[37m          Search documentation                                       [38;5;30m║[0m
+[38;5;30m║  [96moc cache-clear[37m   Clear /dev/shm telemetry caches                            [38;5;30m║[0m
+[38;5;30m║  [96moc diag[37m          5-point health check                                       [38;5;30m║[0m
+[38;5;30m║  [96moc doctor-local[37m  Validate gateway + llama.cpp                               [38;5;30m║[0m
+[38;5;30m║  [96moc failover[37m      Cloud LLM fallback (on|off)                                [38;5;30m║[0m
+[38;5;30m║  [96moc refresh-keys[37m  Re-import Windows API keys                                 [38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                         OPENCLAW — DATA & EXTENSIONS                         [0m[38;5;30m║[0m
+[38;5;30m║  [96moc wk[37m            Change to workspace                                        [38;5;30m║[0m
+[38;5;30m║  [96moc root[37m          Change to root config                                      [38;5;30m║[0m
+[38;5;30m║  [96moc backup[37m        Snapshot workspace + agents                                [38;5;30m║[0m
+[38;5;30m║  [96moc restore[37m       Restore from backup ZIP                                    [38;5;30m║[0m
+[38;5;30m║  [96moc cron[37m          Manage scheduled tasks                                     [38;5;30m║[0m
+[38;5;30m║  [96moc skills[37m        Show skill modules                                         [38;5;30m║[0m
+[38;5;30m║  [96moc plugins[37m       Manage plugins                                             [38;5;30m║[0m
+[38;5;30m║  [96moc usage[37m         Token/cost stats (7d)                                      [38;5;30m║[0m
+[38;5;30m║  [96moc channels[37m      Messaging channels                                         [38;5;30m║[0m
+[38;5;30m║  [96moc browser[37m       Headless browser                                           [38;5;30m║[0m
+[38;5;30m║  [96moc nodes[37m         Compute nodes                                              [38;5;30m║[0m
+[38;5;30m║  [96moc sandbox[37m       Code sandboxes                                             [38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                          OPENCLAW — LLM INTEGRATION                          [0m[38;5;30m║[0m
+[38;5;30m║  [96moc local-llm[37m     Register local llama.cpp                                   [38;5;30m║[0m
+[38;5;30m║  [96moc sync-models[37m   Sync models.conf                                           [38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                               OPENCLAW — TOOLS                               [0m[38;5;30m║[0m
+[38;5;30m║  [96moc g[37m             Launch operational graph browser (overview/topics/files/sem[38;5;30m║[0m
+[38;5;30m║  [96m[37m                 antic/raw)                                                 [38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                               GOG — GOOGLE CLI                               [0m[38;5;30m║[0m
+[38;5;30m║  [96mgog-status[37m       Show auth/config status and accounts                       [38;5;30m║[0m
+[38;5;30m║  [96mgog-login <email[37m Authorize and store refresh token                          [38;5;30m║[0m
+[38;5;30m║  [96m>[37m                                                                           [38;5;30m║[0m
+[38;5;30m║  [96mgog-logout <emai[37m Remove stored credentials                                  [38;5;30m║[0m
+[38;5;30m║  [96ml>[37m                                                                          [38;5;30m║[0m
+[38;5;30m║  [96mgog-version[37m      Print gog version                                          [38;5;30m║[0m
+[38;5;30m║  [96mgog-help[37m         Show full gog help reference                               [38;5;30m║[0m
+[38;5;30m║  [96mgog <command>[37m    Run gog commands directly                                  [38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                            LLM — MODEL MANAGEMENT                            [0m[38;5;30m║[0m
+[38;5;30m║  [96mwake[37m             Lock GPU persistence mode                                  [38;5;30m║[0m
+[38;5;30m║  [96mgpu-status[37m       NVIDIA GPU: util, VRAM, temp                               [38;5;30m║[0m
+[38;5;30m║  [96mgpu-check[37m        Quick CUDA verification                                    [38;5;30m║[0m
+[38;5;30m║  [96mllmconf[37m          Open models.conf in VS Code                                [38;5;30m║[0m
+[38;5;30m║  [96mmodel scan[37m       Scan and register models                                   [38;5;30m║[0m
+[38;5;30m║  [96mmodel list[37m       Show model registry                                        [38;5;30m║[0m
+[38;5;30m║  [96mmodel default [N[37m Show/set default model                                     [38;5;30m║[0m
+[38;5;30m║  [96m][37m                                                                           [38;5;30m║[0m
+[38;5;30m║  [96mmodel use N[37m      Start model #N                                             [38;5;30m║[0m
+[38;5;30m║  [96mmodel stop[37m       Stop llama-server                                          [38;5;30m║[0m
+[38;5;30m║  [96mmodel status[37m     Show running models                                        [38;5;30m║[0m
+[38;5;30m║  [96mmodel doctor[37m     Validate setup                                             [38;5;30m║[0m
+[38;5;30m║  [96mmodel recommend[37m  Rank models for VRAM                                       [38;5;30m║[0m
+[38;5;30m║  [96mmodel info N[37m     Show model #N details                                      [38;5;30m║[0m
+[38;5;30m║  [96mmodel bench[37m      Benchmark all models                                       [38;5;30m║[0m
+[38;5;30m║  [96mmodel bench-diff[37m Compare benchmark runs                                     [38;5;30m║[0m
+[38;5;30m║  [96mmodel bench-hist[37m Summarise benchmarks                                       [38;5;30m║[0m
+[38;5;30m║  [96mory[37m                                                                         [38;5;30m║[0m
+[38;5;30m║  [96mmodel delete N[37m   Delete model #N                                            [38;5;30m║[0m
+[38;5;30m║  [96mmodel archive N[37m  Archive model #N                                           [38;5;30m║[0m
+[38;5;30m║  [96mmodel download[37m   Download from HuggingFace                                  [38;5;30m║[0m
+[38;5;30m║  [96mserve N[37m          Alias for model use N                                      [38;5;30m║[0m
+[38;5;30m║  [96mhalt[37m             Stop llama-server                                          [38;5;30m║[0m
+[38;5;30m║  [96mmlogs[37m            Open llama-server log                                      [38;5;30m║[0m
+[38;5;30m║  [96mburn[37m             Token stress test (~1300)                                  [38;5;30m║[0m
+[38;5;30m║  [96mdocs-sync[37m        Check README drift                                         [38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                             LLM — CHAT & EXPLAIN                             [0m[38;5;30m║[0m
+[38;5;30m║  [96mchat: [msg][37m      Interactive chat session                                   [38;5;30m║[0m
+[38;5;30m║  [96mchat-context[37m     Load file as context                                       [38;5;30m║[0m
+[38;5;30m║  [96mchat-pipe[37m        Pipe stdout as context                                     [38;5;30m║[0m
+[38;5;30m║  [96mexplain[37m          Explain last command                                       [38;5;30m║[0m
+[38;5;30m║  [96mwtf [topic][37m      Interactive explainer                                      [38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                                GIT & PROJECTS                                [0m[38;5;30m║[0m
+[38;5;30m║  [96mmkproj <n>[37m       Scaffold Python project                                    [38;5;30m║[0m
+[38;5;30m║  [96mcommit: <msg>[37m    Commit with message                                        [38;5;30m║[0m
+[38;5;30m║  [96mcommit[37m           Auto-commit + push                                         [38;5;30m║[0m
+[38;5;30m║  [96mcop[37m              Copilot CLI session                                        [38;5;30m║[0m
+[38;5;30m║  [96m?? <prompt>[37m      One-shot Copilot prompt                                    [38;5;30m║[0m
+[38;5;30m║  [96mcop-ask <msg>[37m    Non-interactive prompt                                     [38;5;30m║[0m
+[38;5;30m║  [96mcop-init[37m         Generate instructions.md                                   [38;5;30m║[0m
+[38;5;30m╠══════════════════════════════════════════════════════════════════════════════╣[0m
+[38;5;30m║[0m[33m                                 DIAGNOSTICS                                  [0m[38;5;30m║[0m
+[38;5;30m║  [96mbashrc_diagnose[37m  Health check                                               [38;5;30m║[0m
+[38;5;30m║  [96mbashrc_dryrun[37m    Syntax-check profile                                       [38;5;30m║[0m
+[38;5;30m╚══════════════════════════════════════════════════════════════════════════════╝[0m

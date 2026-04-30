@@ -1,0 +1,114 @@
+version: 1
+updated: 2026-04-30
+notes:
+  - Cross-module state contracts used by dashboard, OpenClaw, and LLM modules.
+  - Preserve names and semantics during PowerShell translation unless intentionally versioned.
+
+variables:
+  - name: TACTICAL_PROFILE_VERSION
+    producer: tactical-console.bashrc
+    consumers:
+      - dashboard/help renderers
+    type: string
+    semantics: loader_version.module_version_sum
+
+  - name: __TAC_OPENCLAW_OK
+    producer: scripts/09-openclaw.sh
+    consumers:
+      - feature gates across modules
+    type: integer
+    semantics: "1 if OpenClaw CLI is installed and functional, else 0"
+
+  - name: LAST_TPS
+    producer: scripts/11-llm-manager.sh
+    consumers:
+      - scripts/12-dashboard-help.sh
+    type: string
+    semantics: last observed LLM tokens-per-second display value
+
+  - name: __LAST_LLM_RESPONSE
+    producer: scripts/11-llm-manager.sh
+    consumers:
+      - scripts/11-llm-manager.sh
+    type: string
+    semantics: in-memory most recent LLM response payload
+
+  - name: VSCODE_BIN
+    producer: scripts/01-constants.sh
+    consumers:
+      - scripts/04-aliases.sh
+      - scripts/05-ui-engine.sh
+    type: string
+    semantics: resolved VS Code executable path cache
+
+files:
+  - path: /dev/shm/active_llm
+    producer: scripts/11-llm-manager.sh
+    consumers:
+      - scripts/09-openclaw.sh
+      - scripts/12-dashboard-help.sh
+    format: plain text
+    semantics: active model number
+
+  - path: /dev/shm/last_tps
+    producer: scripts/11-llm-manager.sh
+    consumers:
+      - scripts/12-dashboard-help.sh
+    format: plain text
+    semantics: most recent TPS value for dashboard display
+
+  - path: /dev/shm/tac_hostmetrics
+    producer: bin/tac_hostmetrics.sh
+    consumers:
+      - scripts/07-telemetry.sh
+      - scripts/12-dashboard-help.sh
+    format: pipe-delimited "cpu|gpu0|gpu1"
+    semantics: cached host metric snapshot
+
+  - path: /dev/shm/tac_llm_slots
+    producer: scripts/07-telemetry.sh
+    consumers:
+      - scripts/12-dashboard-help.sh
+    format: JSON
+    semantics: cached llama-server slot/context usage
+
+  - path: /dev/shm/tac_oc_version
+    producer: scripts/07-telemetry.sh
+    consumers:
+      - scripts/12-dashboard-help.sh
+    format: plain text
+    semantics: cached OpenClaw version
+
+  - path: /dev/shm/vscode_path
+    producer: scripts/01-constants.sh
+    consumers:
+      - scripts/04-aliases.sh
+      - scripts/05-ui-engine.sh
+    format: plain text
+    semantics: cached VS Code path
+
+  - path: /dev/shm/vscode_path.ts
+    producer: scripts/01-constants.sh
+    consumers:
+      - scripts/01-constants.sh
+    format: plain text epoch seconds
+    semantics: cache freshness timestamp for vscode_path
+
+  - path: ~/.openclaw/maintenance_cooldowns.txt
+    producer: scripts/08-maintenance.sh
+    consumers:
+      - scripts/08-maintenance.sh
+    format: text records
+    semantics: cooldown state for maintenance pipeline steps
+
+  - path: ~/.openclaw/logs/bash-errors.log
+    producer: scripts/02-error-handling.sh
+    consumers:
+      - diagnostics and operator review
+    format: append-only text
+    semantics: redacted error entries and operational hints
+
+translation_rules:
+  - Keep state keys and file meanings stable first; only migrate paths after parity.
+  - Replace shell-global state with module-scoped state carefully; preserve read/write timing.
+  - Maintain cache TTL semantics where they affect perceived dashboard freshness.

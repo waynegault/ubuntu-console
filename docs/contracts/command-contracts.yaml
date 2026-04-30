@@ -1,0 +1,178 @@
+version: 1
+updated: 2026-04-30
+notes:
+  - Starter contract set for PowerShell translation.
+  - Extend incrementally; avoid changing existing command semantics.
+
+entrypoints:
+  interactive_loader:
+    file: tactical-console.bashrc
+    behavior: interactive-only profile loader with module ordering and startup side effects
+  non_interactive_loader:
+    file: env.sh
+    behavior: library mode loader for automation; skips interactive init module
+  exec_wrapper:
+    file: bin/tac-exec
+    behavior: source library mode then execute provided command with full function set
+
+commands:
+  - name: m
+    family: dashboard
+    summary: Render tactical dashboard
+    contract:
+      side_effects:
+        - reads telemetry caches under /dev/shm
+      output_shape:
+        - box-drawn dashboard sections
+      exit_code: 0 unless internal render failure
+
+  - name: h
+    family: help
+    summary: Render tactical help panel
+    contract:
+      side_effects: []
+      output_shape:
+        - grouped command sections
+      exit_code: 0
+
+  - name: up
+    family: maintenance
+    summary: Run maintenance pipeline with cooldown-aware steps
+    contract:
+      side_effects:
+        - writes cooldown records
+        - may call package/system tooling
+      output_shape:
+        - stepwise progress rows
+      exit_code: non-zero on hard step failures
+
+  - name: so
+    family: openclaw
+    summary: Start OpenClaw gateway with dependency checks
+    contract:
+      side_effects:
+        - interacts with systemd user services
+        - may modify gateway runtime state
+      output_shape:
+        - status/info rows
+      exit_code: non-zero when startup cannot complete
+
+  - name: xo
+    family: openclaw
+    summary: Stop OpenClaw gateway
+    contract:
+      side_effects:
+        - stops gateway service/processes
+      output_shape:
+        - status/info rows
+      exit_code: non-zero on stop failure
+
+  - name: oc-health
+    family: openclaw
+    summary: Deep health probe for OpenClaw and dependencies
+    contract:
+      args:
+        - --json
+        - --plain
+      output_shape:
+        - human-readable table or JSON object
+      exit_code: non-zero when health checks fail
+
+  - name: model list
+    family: llm
+    summary: Show registry models with active marker
+    contract:
+      side_effects: []
+      output_shape:
+        - tabular/row model listing
+      exit_code: non-zero when registry unreadable
+
+  - name: model use
+    family: llm
+    summary: Start selected model with computed runtime settings
+    contract:
+      args:
+        - "<model_number>"
+        - --ctx-size N
+      side_effects:
+        - writes active model state
+        - starts llama-server process
+      output_shape:
+        - startup status and selected model details
+      exit_code: non-zero on startup/validation failure
+
+  - name: model stop
+    family: llm
+    summary: Stop local llama-server
+    contract:
+      side_effects:
+        - stops model server process
+      output_shape:
+        - status message
+      exit_code: non-zero on stop failure
+
+  - name: model status
+    family: llm
+    summary: Report active model and server health
+    contract:
+      args:
+        - --json
+        - --plain
+      output_shape:
+        - text row set or JSON object
+      exit_code: non-zero when unavailable/unhealthy
+
+  - name: burn
+    family: llm
+    summary: LLM stress test and TPS benchmark
+    contract:
+      side_effects:
+        - updates TPS cache
+        - may update registry TPS field
+      output_shape:
+        - benchmark summary lines
+      exit_code: non-zero on benchmark failure
+
+  - name: explain
+    family: llm
+    summary: Explain the last command using local LLM
+    contract:
+      side_effects:
+        - reads recent shell context/log state
+      output_shape:
+        - textual explanation
+      exit_code: non-zero when LLM unavailable
+
+  - name: cl
+    family: utility
+    summary: Remove temporary artifacts in current workspace
+    contract:
+      args:
+        - --dry-run
+      side_effects:
+        - file deletions unless dry-run
+      output_shape:
+        - itemized cleanup report
+      exit_code: non-zero on deletion errors
+
+  - name: logtrim
+    family: utility
+    summary: Trim oversized log files to bounded tail
+    contract:
+      side_effects:
+        - rewrites target log files
+      output_shape:
+        - per-file trim results
+      exit_code: non-zero on IO failures
+
+fixture_priority:
+  - m
+  - h
+  - up
+  - so
+  - xo
+  - oc-health --plain
+  - model list
+  - model status --plain
+  - cl --dry-run
+  - logtrim

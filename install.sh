@@ -120,6 +120,8 @@ else
     then
         echo "  ~/.bashrc - loader already present (skipped)"
     else
+        # Temporarily unlock before appending (file may already be 444 from a prior install)
+        chmod 600 "$HOME/.bashrc" 2>/dev/null || true
         {
             printf '\n'
             append_loader_block
@@ -127,6 +129,11 @@ else
         echo "  ~/.bashrc - appended Tactical Console loader"
     fi
 fi
+# Lock ~/.bashrc read-only so no one accidentally adds config to it directly.
+# The canonical profile lives in tactical-console.bashrc; ~/.bashrc is a thin
+# loader only.  chmod 600 before any write, chmod 444 after.
+chmod 444 "$HOME/.bashrc"
+echo "  ~/.bashrc - set read-only (mode 444)"
 
 # Standalone scripts → ~/.local/bin/
 for f in "$REPO"/bin/*

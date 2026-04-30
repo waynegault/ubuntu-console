@@ -1,0 +1,4 @@
+command: cl --dry-run
+captured_at_utc: 2026-04-30T13:09:55Z
+host: XPS15-9520
+exit_code: 1

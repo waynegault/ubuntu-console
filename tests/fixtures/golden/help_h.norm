@@ -1,0 +1,141 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ Bash {{VERSION}} HELP INDEX {{VERSION}}║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ SYSTEM ║
+║ m Open Tactical Dashboard with live system stats ║
+║ h Display this command reference ║
+║ up Run 15-step system maintenance ║
+║ sysinfo One-line summary: CPU, RAM, disk, GPU ║
+║ get-ip Show WSL and WAN IP addresses ║
+║ cls Clear screen ║
+║ reload Full profile reload ║
+║ cpwd Copy working directory to Windows clipboard ║
+║ cl Deep cleanup (apt, brew, journal, docker, npm) ║
+║ cl --light Light cleanup (python cache only) ║
+║ cl --report Show cleanup report (no deletion) ║
+║ logtrim Trim logs over 1MB to last 1000 lines ║
+║ oedit Open tactical-console.bashrc in VS Code ║
+║ code <path> Open any file or directory in VS Code ║
+║ pwsh PowerShell 7 (Linux native; shared profile via OneDrive sym║
+║ link) ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ OPENCLAW — GATEWAY ║
+║ so Start the OpenClaw gateway ║
+║ xo Stop the OpenClaw gateway ║
+║ oc restart Full gateway restart ║
+║ oc gs Gateway deep health probe ║
+║ oc status Full gateway status --all ║
+║ oc health Gateway health probe ║
+║ oc tail Live-tail gateway logs (Ctrl-C) ║
+║ oc v Print OpenClaw CLI version ║
+║ oc update Update OpenClaw CLI ║
+║ oc tui Launch OpenClaw TUI ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ OPENCLAW — AGENTS & SESSIONS ║
+║ os List active sessions ║
+║ oa Show registered agents ║
+║ oc start Dispatch agent turn (--message) ║
+║ oc stop Delete agent by ID ║
+║ oc mem-index Rebuild vector memory index ║
+║ oc memory-search Semantic memory search ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ OPENCLAW — CONFIG & LOGS ║
+║ oc conf Open openclaw.json in VS Code ║
+║ oc config Read/write config keys (get|set) ║
+║ oc env Show OpenClaw environment vars ║
+║ oc keys List Windows API keys bridged ║
+║ oc ms Probe model provider endpoints ║
+║ oc doc-fix Run openclaw doctor --fix ║
+║ oc logs Open runtime log in VS Code ║
+║ le 40-line log tail ║
+║ lo 120-line full log ║
+║ lc Clear all logs ║
+║ oc log-dir Change to logs folder ║
+║ oc sec Deep security audit ║
+║ oc docs Search documentation ║
+║ oc cache-clear Clear /dev/shm telemetry caches ║
+║ oc diag 5-point health check ║
+║ oc doctor-local Validate gateway + llama.cpp ║
+║ oc failover Cloud LLM fallback (on|off) ║
+║ oc refresh-keys Re-import Windows API keys ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ OPENCLAW — DATA & EXTENSIONS ║
+║ oc wk Change to workspace ║
+║ oc root Change to root config ║
+║ oc backup Snapshot workspace + agents ║
+║ oc restore Restore from backup ZIP ║
+║ oc cron Manage scheduled tasks ║
+║ oc skills Show skill modules ║
+║ oc plugins Manage plugins ║
+║ oc usage Token/cost stats (7d) ║
+║ oc channels Messaging channels ║
+║ oc browser Headless browser ║
+║ oc nodes Compute nodes ║
+║ oc sandbox Code sandboxes ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ OPENCLAW — LLM INTEGRATION ║
+║ oc local-llm Register local llama.cpp ║
+║ oc sync-models Sync models.conf ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ OPENCLAW — TOOLS ║
+║ oc g Launch operational graph browser (overview/topics/files/sem║
+║ antic/raw) ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ GOG — GOOGLE CLI ║
+║ gog-status Show auth/config status and accounts ║
+║ gog-login <email Authorize and store refresh token ║
+║ > ║
+║ gog-logout <emai Remove stored credentials ║
+║ l> ║
+║ gog-version Print gog version ║
+║ gog-help Show full gog help reference ║
+║ gog <command> Run gog commands directly ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ LLM — MODEL MANAGEMENT ║
+║ wake Lock GPU persistence mode ║
+║ gpu-status NVIDIA GPU: util, VRAM, temp ║
+║ gpu-check Quick CUDA verification ║
+║ llmconf Open models.conf in VS Code ║
+║ model scan Scan and register models ║
+║ model list Show model registry ║
+║ model default [N Show/set default model ║
+║ ] ║
+║ model use N Start model #N ║
+║ model stop Stop llama-server ║
+║ model status Show running models ║
+║ model doctor Validate setup ║
+║ model recommend Rank models for VRAM ║
+║ model info N Show model #N details ║
+║ model bench Benchmark all models ║
+║ model bench-diff Compare benchmark runs ║
+║ model bench-hist Summarise benchmarks ║
+║ ory ║
+║ model delete N Delete model #N ║
+║ model archive N Archive model #N ║
+║ model download Download from HuggingFace ║
+║ serve N Alias for model use N ║
+║ halt Stop llama-server ║
+║ mlogs Open llama-server log ║
+║ burn Token stress test (~1300) ║
+║ docs-sync Check README drift ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ LLM — CHAT & EXPLAIN ║
+║ chat: [msg] Interactive chat session ║
+║ chat-context Load file as context ║
+║ chat-pipe Pipe stdout as context ║
+║ explain Explain last command ║
+║ wtf [topic] Interactive explainer ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ GIT & PROJECTS ║
+║ mkproj <n> Scaffold Python project ║
+║ commit: <msg> Commit with message ║
+║ commit Auto-commit + push ║
+║ cop Copilot CLI session ║
+║ ?? <prompt> One-shot Copilot prompt ║
+║ cop-ask <msg> Non-interactive prompt ║
+║ cop-init Generate instructions.md ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ DIAGNOSTICS ║
+║ bashrc_diagnose Health check ║
+║ bashrc_dryrun Syntax-check profile ║
+╚══════════════════════════════════════════════════════════════════════════════╝

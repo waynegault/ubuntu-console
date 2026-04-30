@@ -1,0 +1,4 @@
+online=0
+port={{PORT}}
+health=OFFLINE
+build={{GIT_SHA}}
