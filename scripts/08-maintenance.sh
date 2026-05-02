@@ -694,21 +694,43 @@ function up() {
 
     # [11/20] Python Venv — update packages in active virtual environment.
     # "Cloaking" = active virtual environment isolation.
-    if [[ -n "$VIRTUAL_ENV" ]]
+    # Primary source is VIRTUAL_ENV; fall back to interpreter/path detection so
+    # non-standard activation still reports correctly.
+    local active_venv="${VIRTUAL_ENV:-}"
+    if [[ -z "$active_venv" ]]
+    then
+        local py_bin=""
+        py_bin=$(command -v python 2>/dev/null || command -v python3 2>/dev/null || true)
+        if [[ -n "$py_bin" ]]
+        then
+            local py_prefix="${py_bin%/bin/python}"
+            py_prefix="${py_prefix%/bin/python3}"
+            if [[ -f "$py_prefix/bin/activate" ]]
+            then
+                active_venv="$py_prefix"
+            fi
+        fi
+    fi
+    if [[ -z "$active_venv" && -f "$PWD/.venv/bin/activate" ]]
+    then
+        active_venv="$PWD/.venv"
+    fi
+
+    if [[ -n "$active_venv" ]]
     then
         local venv_name
-        venv_name=$(basename "$VIRTUAL_ENV")
+        venv_name=$(basename "$active_venv")
 
         if __check_cooldown "pyvenv_pkgs" "$now" hours_left "$force_mode"
         then
             # Check for outdated packages
             local outdated_py
-            outdated_py=$("$VIRTUAL_ENV/bin/pip" list --outdated --format=freeze 2>/dev/null || echo "")
+            outdated_py=$("$active_venv/bin/pip" list --outdated --format=freeze 2>/dev/null || echo "")
 
             if [[ -n "$outdated_py" ]]
             then
                 # Upgrade all outdated packages
-                if echo "$outdated_py" | cut -d= -f1 | xargs "$VIRTUAL_ENV/bin/pip" install --upgrade --quiet 2>&1
+                if echo "$outdated_py" | cut -d= -f1 | xargs "$active_venv/bin/pip" install --upgrade --quiet 2>&1
                 then
                     __tac_line "[11/20] Python Venv ($venv_name)" "[UPDATED]" "$C_Success"
                 else
