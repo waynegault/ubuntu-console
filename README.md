@@ -256,6 +256,7 @@ Located at `/mnt/m/.llm/models.conf` — 11-field pipe-delimited, auto-generated
 | `-t` (threads) | dynamic | CPU-only: 80%, partial offload: 70%, full GPU: 50% of `nproc` |
 | `--batch-size` | 4096 (GPU) / 512 (CPU) | Larger batches improve prompt eval speed on GPU |
 | `--flash-attn on` | GPU only | Reduces VRAM bandwidth — critical for 4 GB GPUs |
+| `--no-mmap` | adaptive (`LLAMA_NO_MMAP_MODE`) | Improves stability under low VRAM / WSL / MoE workloads by reducing mmap paging stalls |
 | `--jinja` | always | Enables Jinja2 chat templates from GGUF metadata |
 | Bind address | `127.0.0.1` | Loopback only — no LAN exposure |
 

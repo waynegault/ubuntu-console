@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 
 # ==============================================================================
@@ -194,6 +194,11 @@ export LOCAL_LLM_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
 export LLAMA_GPU_LAYERS=33   # Default GPU layers (full offload for small models)
 export LLAMA_CPU_THREADS=12  # Default CPU threads
 export LLAMA_CTX_SIZE=4096   # Default context window size
+# Memory-map mode for llama-server launch:
+#   auto (default): enable --no-mmap for MoE / low-VRAM pressure / WSL
+#   on            : always enable --no-mmap
+#   off           : never enable --no-mmap
+export LLAMA_NO_MMAP_MODE="${LLAMA_NO_MMAP_MODE:-auto}"
 
 # ---- Named Constants (avoid magic numbers scattered through functions) ----
 if [[ -z "${VRAM_TOTAL_BYTES+x}" ]]; then

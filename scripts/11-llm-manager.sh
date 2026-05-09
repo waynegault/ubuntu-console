@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 24
+# Module Version: 25
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -1359,6 +1359,37 @@ function __model_use() {
     cmd+=("--cont-batching" "--parallel" "$parallel_slots")
     cmd+=("--jinja")
 
+    # Adaptive memory-mapping behavior (video-inspired stability tuning).
+    # --no-mmap can reduce page-fault stalls and mmap-related thrashing,
+    # especially for MoE models, low free VRAM situations, and WSL hosts.
+    local use_no_mmap=0
+    local no_mmap_mode="${LLAMA_NO_MMAP_MODE:-auto}"
+    case "$no_mmap_mode" in
+        on)
+            use_no_mmap=1
+            ;;
+        off)
+            use_no_mmap=0
+            ;;
+        auto|*)
+            if [[ "$arch" == *"moe"* ]] || (( free_vram_mb > 0 && free_vram_mb < 1500 ))
+            then
+                use_no_mmap=1
+            elif grep -qi microsoft /proc/version 2>/dev/null
+            then
+                use_no_mmap=1
+            elif (( model_bytes >= 3000000000 ))
+            then
+                use_no_mmap=1
+            fi
+            ;;
+    esac
+
+    if (( use_no_mmap ))
+    then
+        cmd+=("--no-mmap")
+    fi
+
     if (( gpu_layers == 0 ))
     then
         cmd+=("--cache-type-k" "q8_0" "--cache-type-v" "q8_0")
@@ -1395,8 +1426,10 @@ function __model_use() {
 
     local ngl_label="CPU-only"
     (( gpu_layers > 0 )) && ngl_label="ngl=999"
+    local mmap_label="mmap:on"
+    (( use_no_mmap )) && mmap_label="mmap:off"
     local start_msg="#${num} ${name} (${size}, ${ngl_label}, ctx ${ctx}, "
-    start_msg+="b ${batch_size}/${ubatch_size}, p ${parallel_slots})"
+    start_msg+="b ${batch_size}/${ubatch_size}, p ${parallel_slots}, ${mmap_label})"
     __tac_info "Starting" "$start_msg" "$C_Highlight"
 
     # llama.cpp monitors stdin and will force-shutdown on EOF.
