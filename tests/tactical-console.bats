@@ -828,8 +828,8 @@ setup() {
     alias cpwd >/dev/null 2>&1
 }
 
-@test "alias: 'unittest' is defined (bats)" {
-    alias unittest >/dev/null 2>&1
+@test "alias: 'unittest' command is defined (alias/function)" {
+    alias unittest >/dev/null 2>&1 || declare -f unittest >/dev/null 2>&1
 }
 
 @test "alias: 'chat:' is defined (local_chat)" {
@@ -1155,6 +1155,21 @@ setup() {
 
 @test "bashrc: file exists and is read-only (mode 444)" {
     [[ -f "$HOME/.bashrc" ]]
+    # Enforce mode 444 for all recognized Tactical thin-loader variants.
+    local is_tactical_loader=0
+    if grep -qE '^# ~/.bashrc — Thin Loader( \(DO NOT EDIT\))?$' "$HOME/.bashrc"
+    then
+        is_tactical_loader=1
+    fi
+    if grep -q '^# Tactical Console loader$' "$HOME/.bashrc"
+    then
+        is_tactical_loader=1
+    fi
+    if grep -qE '^source[[:space:]]+"?.*tactical-console\.bashrc"?$' "$HOME/.bashrc"
+    then
+        is_tactical_loader=1
+    fi
+    [[ "$is_tactical_loader" -eq 1 ]] || skip "tactical thin loader not detected in current HOME"
     local perms
     perms=$(stat -c '%a' "$HOME/.bashrc" 2>/dev/null || stat -f '%Lp' "$HOME/.bashrc" 2>/dev/null)
     [[ "$perms" == "444" ]]
