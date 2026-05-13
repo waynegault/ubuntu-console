@@ -2741,20 +2741,17 @@ function burn() {
     # Wait for the model to finish loading before sending the completion request.
     # The port may be open (passes __require_llm) but the server returns 503
     # "Loading model" while mmap-ing large files over drvfs (up to 90s for CPU).
-    local _health
-    _health=$(curl -sf --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-    if [[ "$_health" != *'"ok"'* ]]
+    if ! __llm_is_healthy
     then
         printf '%s' "${C_Dim}Waiting for model to finish loading"
         for (( _bw=0; _bw < 90; _bw++ ))
         do
-            _health=$(curl -sf --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-            [[ "$_health" == *'"ok"'* ]] && break
+            __llm_is_healthy && break
             printf '.'
             sleep 1
         done
         printf '%s\n' "$C_Reset"
-        if [[ "$_health" != *'"ok"'* ]]
+        if ! __llm_is_healthy
         then
             __tac_info "Status" "Model failed to become healthy - check: tail $LLM_LOG_FILE" "$C_Error"
             return 1
@@ -2827,9 +2824,7 @@ function burn() {
             local _rh
             for (( _rh=0; _rh < 20; _rh++ ))
             do
-                local _rhealth
-                _rhealth=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-                [[ "$_rhealth" == *'"ok"'* ]] && break
+                __llm_is_healthy && break
                 sleep 1
             done
             attempt=$(( attempt + 1 ))
@@ -2852,9 +2847,7 @@ function burn() {
                 local _lw
                 for (( _lw=0; _lw < 30; _lw++ ))
                 do
-                    local _lhealth
-                    _lhealth=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-                    if [[ "$_lhealth" == *'"ok"'* ]]; then sleep 3; break; fi
+                    if __llm_is_healthy; then sleep 3; break; fi
                     sleep 1
                 done
                 attempt=$(( attempt + 1 ))
