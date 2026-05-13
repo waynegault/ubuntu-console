@@ -8,10 +8,11 @@ description: Complete guide to the local LLM inference stack — model registry,
 ## Overview
 
 The profile provides a complete local inference stack built on
-[llama.cpp](https://github.com/ggerganov/llama.cpp). Models are stored as
-GGUF files, managed through a pipe-delimited registry, and served via the
-`llama-server` binary on port 8081. The system exposes an OpenAI-compatible
-API at `http://127.0.0.1:8081/v1/chat/completions`.
+[llama-cpp-python](https://github.com/abetlen/llama-cpp-python) (pinned to
+`0.3.23`) with CUDA acceleration. Models are stored as GGUF files, managed
+through a pipe-delimited registry, and served via `python -m llama_cpp.server`
+on port 8081. The system exposes an OpenAI-compatible API at
+`http://127.0.0.1:8081/v1/chat/completions`.
 
 All LLM functions are **pure bash + curl + jq** — no Python dependency.
 
@@ -34,11 +35,14 @@ column is populated by `model bench`.
 
 | Parameter | Value | Rationale |
 |---|---|---|
-| `-ngl 999` | max offload | Tells llama.cpp to offload the maximum layers that fit in VRAM at runtime. More accurate than pre-calculating a fixed count, since available VRAM varies at launch time. |
-| `-t` (threads) | dynamic via `nproc` | CPU-only: 80%, partial offload: 70%, full GPU: 50% of available threads. Scales automatically to the host CPU. |
+| `n_gpu_layers` | 24 | Baseline GPU offload tuned for 4GB VRAM systems. Keep this under total 4GB usage to avoid desktop/framebuffer pressure. |
+| `n_threads` | 6 | Pins heavy compute to Alder Lake P-cores (i9-12900HK) for better throughput and thermal behavior. |
+| `n_ctx` | 4096 | Default context target for local serving. |
+| `cache_type_k` | `q8_0` | KV cache key quantization to reduce VRAM pressure while preserving quality. |
+| `flash_attn` | `true` | Explicitly enabled for Ampere GPUs to reduce attention memory overhead. |
+| `offload_kqv` | `true` | Explicitly enabled to improve CUDA-side attention path efficiency. |
 | `--batch-size` | 4096 (GPU) / 512 (CPU) | Larger batches improve prompt eval speed when GPU is active. CPU-only uses smaller batches to avoid memory pressure. |
 | `--ubatch-size` | 1024 (GPU) / 512 (CPU) | Micro-batch size for continuous batching. |
-| `--flash-attn on` | GPU only | Reduces VRAM bandwidth pressure, critical for 4 GB GPUs. Improves throughput without quality loss. |
 | `--prio 2` | always | Elevates llama-server process priority on hybrid CPU systems. |
 | `--mlock` | always | Locks model weights in memory to prevent swapping. |
 | `--cont-batching` | always | Enables continuous batching for concurrent requests. |

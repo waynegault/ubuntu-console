@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 
 # ==============================================================================
@@ -67,6 +67,10 @@ export LLAMA_ROOT="$AI_STORAGE_ROOT/llama.cpp"
 # LLAMA_DRIVE_ROOT is user-configurable at the top of this file.
 export LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active"
 export LLAMA_ARCHIVE_DIR="$LLAMA_DRIVE_ROOT/archive"
+export LLM_SERVER_PYTHON_BIN="${LLM_SERVER_PYTHON_BIN:-python3}"
+export LLM_SERVER_MODULE="${LLM_SERVER_MODULE:-llama_cpp.server}"
+export LLAMA_CPP_PYTHON_VERSION="${LLAMA_CPP_PYTHON_VERSION:-0.3.23}"
+export LLM_SERVER_PROC_PATTERN="${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}"
 # Quantization priority guide — editable config controlling download warnings.
 # See ~/ubuntu-console/config/quant-guide.conf for rating/description of each quant.
 export QUANT_GUIDE="$TACTICAL_REPO_ROOT/config/quant-guide.conf"
@@ -191,9 +195,12 @@ export LOCAL_LLM_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
 # values. The registry format (models.conf) supports per-model overrides:
 #   profile|name|size|proc|file|gpu_layers|ctx_size|threads
 # If the last three fields are missing or empty, these defaults are used.
-export LLAMA_GPU_LAYERS=33   # Default GPU layers (full offload for small models)
-export LLAMA_CPU_THREADS=12  # Default CPU threads
+export LLAMA_GPU_LAYERS=24   # Keep baseline offload under 4GB total VRAM usage on RTX 3050 Ti 4GB.
+export LLAMA_CPU_THREADS=6   # Pin heavy compute to P-cores for better throughput/thermals on i9-12900HK.
 export LLAMA_CTX_SIZE=4096   # Default context window size
+export LLAMA_FLASH_ATTN="${LLAMA_FLASH_ATTN:-true}"
+export LLAMA_OFFLOAD_KQV="${LLAMA_OFFLOAD_KQV:-true}"
+export LLAMA_CACHE_TYPE_K="${LLAMA_CACHE_TYPE_K:-q8_0}"
 # Memory-map mode for llama-server launch:
 #   auto (default): enable --no-mmap for MoE / low-VRAM pressure / WSL
 #   on            : always enable --no-mmap

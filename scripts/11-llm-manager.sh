@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 25
+# Module Version: 26
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -160,9 +160,95 @@ function __llm_active_entry() {
 # ---------------------------------------------------------------------------
 function __llm_is_healthy() {
     __test_port "$LLM_PORT" || return 1
-    local health_body
-    health_body=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-    [[ "$health_body" == *'"ok"'* ]]
+    local health_body models_body
+    health_body=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null || true)
+    if [[ "$health_body" == *'"ok"'* ]]
+    then
+        return 0
+    fi
+    models_body=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/v1/models" 2>/dev/null || true)
+    [[ "$models_body" == *'"data"'* ]]
+}
+
+# ---------------------------------------------------------------------------
+# __llm_server_running / __llm_server_stop — Backend process helpers.
+# Supports both legacy llama-server and llama-cpp-python server module names.
+# ---------------------------------------------------------------------------
+function __llm_server_running() {
+    pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
+}
+
+function __llm_server_stop() {
+    pkill -u "$USER" -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null
+    local _llm_pid
+    _llm_pid=$(ss -tlnp "sport = :${LLM_PORT}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
+    if [[ -n "$_llm_pid" ]]
+    then
+        kill "$_llm_pid" 2>/dev/null || true
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __llm_python_bin_resolve — Pick a Python with llama_cpp==expected version.
+# @returns 0 and prints the python path on success; 1 on failure.
+# ---------------------------------------------------------------------------
+function __llm_python_bin_resolve() {
+    local expected="${LLAMA_CPP_PYTHON_VERSION:-0.3.23}"
+    local cand resolved
+    local -a candidates=()
+
+    [[ -n "${LLM_SERVER_PYTHON_BIN:-}" ]] && candidates+=("$LLM_SERVER_PYTHON_BIN")
+    candidates+=("python3" "python" "/home/linuxbrew/.linuxbrew/bin/python3")
+
+    for cand in "${candidates[@]}"
+    do
+        resolved=""
+        if [[ -x "$cand" ]]
+        then
+            resolved="$cand"
+        else
+            resolved=$(command -v "$cand" 2>/dev/null || true)
+        fi
+        [[ -z "$resolved" ]] && continue
+
+        if "$resolved" - <<'PY' >/dev/null 2>&1
+import os
+import sys
+
+expected = os.environ.get("LLAMA_CPP_PYTHON_VERSION", "0.3.23")
+import llama_cpp  # type: ignore
+import uvicorn  # type: ignore
+if getattr(llama_cpp, "__version__", "unknown") != expected:
+    raise SystemExit(1)
+PY
+        then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# __llm_type_k_value — Map cache type label to llama_cpp --type_k int value.
+# Falls back to a plain integer if LLAMA_CACHE_TYPE_K is already numeric.
+# ---------------------------------------------------------------------------
+function __llm_type_k_value() {
+    local raw="${LLAMA_CACHE_TYPE_K:-q8_0}"
+    case "${raw,,}" in
+        q8_0) echo 8 ;;
+        f16) echo 1 ;;
+        f32) echo 0 ;;
+        *)
+            if [[ "$raw" =~ ^[0-9]+$ ]]
+            then
+                echo "$raw"
+            else
+                echo 8
+            fi
+            ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------
@@ -419,7 +505,7 @@ function gpu-check() {
     fi
 
     # 4. llama-server CUDA offload (check the runtime log)
-    if pgrep -x llama-server >/dev/null 2>&1 && [[ -f "$LLM_LOG_FILE" ]]
+    if __llm_server_running && [[ -f "$LLM_LOG_FILE" ]]
     then
         local offload_line
         offload_line=$(grep -i \
@@ -608,28 +694,14 @@ function __gguf_metadata() {
 # Args: file_size_bytes total_layers [arch]
 # Returns: 999 (max offload), total_layers (MoE), or 0 (CPU-only)
 function __calc_gpu_layers() {
-    local file_bytes=$1 total_layers=$2 arch="${3:-}"
-    local vram_bytes="${VRAM_TOTAL_BYTES:-0}"
-    # Use awk for floating-point to avoid integer truncation (4GB * 95% = 3.8GB, not 3GB)
-    local usable_bytes
-    usable_bytes=$(awk "BEGIN {printf \"%d\", $vram_bytes * ${VRAM_USABLE_PCT:-95} / 100}")
-
-    # MoE models: with --cpu-moe, expert weights stay on CPU.
-    # Only attention/dense layers load to GPU, so we can offload all layers.
-    if [[ "$arch" == *"moe"* ]]
+    local _file_bytes=$1 _total_layers=$2 _arch="${3:-}"
+    local smi_cmd
+    smi_cmd=$(__resolve_smi 2>/dev/null || true)
+    if [[ -n "$smi_cmd" ]]
     then
-        echo "$total_layers"
-        return
-    fi
-
-    if (( file_bytes <= usable_bytes ))
-    then
-        # Model fits in VRAM — use 999 to offload everything the runtime can.
-        echo 999
+        # Baseline for 4GB VRAM systems; higher values may exceed available memory.
+        echo "${LLAMA_GPU_LAYERS:-24}"
     else
-        # Model exceeds VRAM — run CPU-only. Partial offload spills into
-        # shared GPU memory which is ~10-15x slower than dedicated VRAM;
-        # pure CPU inference with --mlock is faster than the hybrid path.
         echo 0
     fi
 }
@@ -638,75 +710,8 @@ function __calc_gpu_layers() {
 # Must account for KV cache VRAM: larger ctx = more VRAM consumed beyond model weights.
 # CPU-only models (>4GB) have no VRAM constraint so can use larger ctx.
 function __calc_ctx_size() {
-    local file_bytes=$1 native_ctx=$2 arch="${3:-}"
-    local file_gb=$(( file_bytes / 1024 / 1024 / 1024 ))
-    # Use awk for floating-point to avoid integer truncation
-    local vram_limit_gb
-    vram_limit_gb=$(awk "BEGIN {printf \"%d\", ${VRAM_TOTAL_BYTES:-0} * ${VRAM_THRESHOLD_PCT:-85} / 100 / 1024 / 1024 / 1024}")
-
-    # MoE models: expert weights on CPU, only attention on GPU.
-    # Active params ~3B, so treat like a small model for ctx sizing.
-    if [[ "$arch" == *"moe"* ]]
-    then
-        echo "$MOE_DEFAULT_CTX"
-        return
-    fi
-
-    if (( file_gb > vram_limit_gb ))
-    then
-        # CPU-only: no VRAM pressure, limited by RAM instead.
-        # Use generous ctx but cap at MOE_DEFAULT_CTX to keep RAM usage reasonable.
-        local cap=$MOE_DEFAULT_CTX
-        if (( native_ctx < cap ))
-        then
-            echo "$native_ctx"
-        else
-            echo "$cap"
-        fi
-    elif (( file_gb >= 3 ))
-    then
-        # 3-4GB models on 4GB VRAM are KV-cache constrained.
-        # Keep ctx conservative to preserve VRAM for layer offload and avoid
-        # prompt-eval slowdowns from memory pressure.
-        local cap=4096
-        if (( native_ctx < cap ))
-        then
-            echo "$native_ctx"
-        else
-            echo "$cap"
-        fi
-    elif (( file_gb >= 2 ))
-    then
-        # 2-3GB models (roughly 3B-4B) fit on GPU, but 16k ctx is expensive.
-        # 4k keeps enough KV headroom to unlock larger prompt batches.
-        local cap=4096
-        if (( native_ctx < cap ))
-        then
-            echo "$native_ctx"
-        else
-            echo "$cap"
-        fi
-    elif (( file_gb >= 1 ))
-    then
-        # 1-2GB models (roughly 1.5B-3B) are the best throughput tier on 4GB VRAM.
-        # 8k ctx is a better balance than 16k because it avoids forcing the
-        # launch heuristic into the smallest batch tier.
-        local cap=8192
-        if (( native_ctx < cap ))
-        then
-            echo "$native_ctx"
-        else
-            echo "$cap"
-        fi
-    else
-        local cap=16384
-        if (( native_ctx < cap ))
-        then
-            echo "$native_ctx"
-        else
-            echo "$cap"
-        fi
-    fi
+    local _file_bytes=$1 _native_ctx=$2 _arch="${3:-}"
+    echo "${LLAMA_CTX_SIZE:-4096}"
 }
 
 # ---------------------------------------------------------------------------
@@ -758,21 +763,8 @@ function __bench_latest_file() {
 #   Partial   → 70% (CPU handles remaining layers + KV-cache)
 #   Full GPU  → 50% (CPU only does prompt processing + sampling)
 function __calc_threads() {
-    local gpu_layers=$1 total_layers=$2
-    local ncpu
-    ncpu=$(nproc 2>/dev/null || echo 16)
-    local threads
-    if (( gpu_layers == 0 ))
-    then
-        threads=$(( ncpu * 80 / 100 ))
-    elif (( gpu_layers >= total_layers ))
-    then
-        threads=$(( ncpu * 50 / 100 ))
-    else
-        threads=$(( ncpu * 70 / 100 ))
-    fi
-    (( threads < 1 )) && threads=1
-    echo "$threads"
+    local _gpu_layers=$1 _total_layers=$2
+    echo "${LLAMA_CPU_THREADS:-6}"
 }
 
 # __quant_label — Map GGUF file_type int to human-readable quant label.
@@ -1006,7 +998,7 @@ function __model_list() {
             [[ "$num" == "#" || -z "$num" ]] && continue
             local is_active="false"
             local is_default="false"
-            [[ "$num" == "$active_num" ]] && pgrep -x llama-server >/dev/null 2>&1 && is_active="true"
+            [[ "$num" == "$active_num" ]] && __llm_server_running && is_active="true"
             [[ "$file" == "$default_file" ]] && is_default="true"
             (( first )) || printf ',\n'
             printf '    {"num":%s,"name":"%s","file":"%s","size":"%s","arch":"%s",\
@@ -1035,7 +1027,7 @@ function __model_list() {
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local status="idle"
-            [[ "$num" == "$active_num" ]] && pgrep -x llama-server >/dev/null 2>&1 && status="active"
+            [[ "$num" == "$active_num" ]] && __llm_server_running && status="active"
             [[ "$file" == "$default_file" ]] && status="default"
             printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
                 "$num" "$name" "$size" "$quant" "$arch" "$gpu_layers" "$ctx" "$threads" "${tps:--}" "$status" "$file"
@@ -1057,7 +1049,7 @@ function __model_list() {
         [[ "$num" == "#" || -z "$num" ]] && continue
         local marker="  "
         local color=""
-        if [[ "$num" == "$active_num" ]] && pgrep -x llama-server >/dev/null 2>&1
+        if [[ "$num" == "$active_num" ]] && __llm_server_running
         then
             marker="> "
             color="$C_Success"
@@ -1266,13 +1258,32 @@ function __model_use() {
     fi
 
     model_bytes=$(stat --format=%s "$model_path" 2>/dev/null || echo 0)
-    if [[ ! -x "$LLAMA_SERVER_BIN" ]]
+    local python_bin
+    python_bin=$(__llm_python_bin_resolve 2>/dev/null || true)
+    if [[ -z "$python_bin" ]]
     then
-        __tac_info "Error" "[Server binary not found: $LLAMA_SERVER_BIN]" "$C_Error"
+        __tac_info "Error" "[No compatible Python found with llama-cpp-python==${LLAMA_CPP_PYTHON_VERSION}]" "$C_Error"
+        __tac_info "Install" "[CMAKE_ARGS='-DGGML_CUDA=on' FORCE_CMAKE=1 pip install 'llama-cpp-python[server]==${LLAMA_CPP_PYTHON_VERSION}']" "$C_Dim"
         return 1
     fi
+    LLM_SERVER_PYTHON_BIN="$python_bin"
 
-    pkill -u "$USER" -x llama-server 2>/dev/null
+    threads="${LLAMA_CPU_THREADS:-6}"
+    if [[ -z "${TAC_CTX_SIZE:-}" ]]
+    then
+        ctx="${LLAMA_CTX_SIZE:-4096}"
+    fi
+    local smi_cmd
+    smi_cmd=$(__resolve_smi 2>/dev/null || true)
+    if [[ -n "$smi_cmd" ]]
+    then
+        # Keep baseline offload conservative for 4GB VRAM systems.
+        gpu_layers="${LLAMA_GPU_LAYERS:-24}"
+    else
+        gpu_layers=0
+    fi
+
+    __llm_server_stop
     sleep 1
     sudo -n prlimit --memlock=unlimited:unlimited --pid $$ 2>/dev/null
 
@@ -1282,8 +1293,6 @@ function __model_use() {
     local free_vram_mb=0
     if (( gpu_layers > 0 ))
     then
-        local smi_cmd
-        smi_cmd=$(__resolve_smi 2>/dev/null || true)
         if [[ -n "$smi_cmd" ]]
         then
             free_vram_mb=$(
@@ -1327,37 +1336,19 @@ function __model_use() {
             parallel_slots=2
         fi
 
-        if [[ "$name" == "$_MODEL_QWEN25_CODER_3B" ]]
-        then
-            (( ctx > 4096 )) && ctx=4096
-            batch_size=2048
-            ubatch_size=512
-            parallel_slots=1
-        fi
-
-        if [[ "$name" == "$_MODEL_QWEN35_4B" ]]
-        then
-            (( ctx > 3072 )) && ctx=3072
-            batch_size=2048
-            ubatch_size=512
-            parallel_slots=1
-        fi
-
-        if [[ "$name" == "$_MODEL_GEMMA3_4B" ]]
-        then
-            (( ctx > 2048 )) && ctx=2048
-            batch_size=2048
-            ubatch_size=512
-            parallel_slots=1
-        fi
     fi
 
-    local cmd=("$LLAMA_SERVER_BIN" "-m" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
-    cmd+=("--ctx-size" "$ctx" "--mlock" "--prio" "2")
-    cmd+=("--batch-size" "$batch_size")
-    cmd+=("--ubatch-size" "$ubatch_size")
-    cmd+=("--cont-batching" "--parallel" "$parallel_slots")
-    cmd+=("--jinja")
+    local type_k_val
+    type_k_val=$(__llm_type_k_value)
+
+    local cmd=("$python_bin" "-m" "$LLM_SERVER_MODULE")
+    cmd+=("--model" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
+    cmd+=("--n_ctx" "$ctx")
+    cmd+=("--n_threads" "$threads")
+    cmd+=("--n_gpu_layers" "$gpu_layers")
+    cmd+=("--flash_attn" "${LLAMA_FLASH_ATTN:-true}")
+    cmd+=("--offload_kqv" "${LLAMA_OFFLOAD_KQV:-true}")
+    cmd+=("--type_k" "$type_k_val")
 
     # Adaptive memory-mapping behavior (video-inspired stability tuning).
     # --no-mmap can reduce page-fault stalls and mmap-related thrashing,
@@ -1387,49 +1378,15 @@ function __model_use() {
 
     if (( use_no_mmap ))
     then
-        cmd+=("--no-mmap")
-    fi
-
-    if (( gpu_layers == 0 ))
-    then
-        cmd+=("--cache-type-k" "q8_0" "--cache-type-v" "q8_0")
-        cmd+=("--n-gpu-layers" "0" "--threads" "$threads")
-        __tac_info "Note" "CPU-only mode (model exceeds 4GB VRAM)" "$C_Dim"
-    else
-        if [[ "$arch" == "gemma"* ]] || [[ "$arch" == *"moe"* ]]
-        then
-            cmd+=("--cache-type-k" "q8_0" "--cache-type-v" "q8_0")
-        fi
-        cmd+=("--n-gpu-layers" "999" "--flash-attn" "on" "--threads" "$threads")
-    fi
-
-    if [[ "$arch" == "gemma"* ]]
-    then
-        cmd+=("--temp" "1.0" "--top-k" "64" "--top-p" "0.95" "--min-p" "0")
-        __tac_info "Note" "Gemma sampling: temp=1.0 top_k=64 top_p=0.95" "$C_Dim"
-    else
-        cmd+=("--temp" "0.7")
-    fi
-
-    if [[ "$arch" == "qwen3" || "$arch" == "qwen3moe" ]]
-    then
-        cmd+=("--reasoning-budget" "0")
-        cmd+=("--no-context-shift")
-        __tac_info "Note" "Reasoning disabled + no-context-shift (Qwen3)" "$C_Dim"
-    fi
-
-    if [[ "$arch" == *"moe"* ]]
-    then
-        cmd+=("--cpu-moe")
-        __tac_info "Note" "MoE: expert layers on CPU (--cpu-moe)" "$C_Dim"
+        cmd+=("--use_mmap" "false")
     fi
 
     local ngl_label="CPU-only"
-    (( gpu_layers > 0 )) && ngl_label="ngl=999"
+    (( gpu_layers > 0 )) && ngl_label="ngl=${gpu_layers}"
     local mmap_label="mmap:on"
     (( use_no_mmap )) && mmap_label="mmap:off"
     local start_msg="#${num} ${name} (${size}, ${ngl_label}, ctx ${ctx}, "
-    start_msg+="b ${batch_size}/${ubatch_size}, p ${parallel_slots}, ${mmap_label})"
+    start_msg+="b ${batch_size}/${ubatch_size}, p ${parallel_slots}, ${mmap_label}, t=${threads}, k=${LLAMA_CACHE_TYPE_K:-q8_0})"
     __tac_info "Starting" "$start_msg" "$C_Highlight"
 
     # llama.cpp monitors stdin and will force-shutdown on EOF.
@@ -1472,7 +1429,7 @@ function __model_use() {
 # @returns 0 always.
 # ---------------------------------------------------------------------------
 function __model_stop() {
-    pkill -u "$USER" -x llama-server 2>/dev/null
+    __llm_server_stop
     rm -f "$ACTIVE_LLM_FILE"
     __tac_info "Llama Server" "[STOPPED]" "$C_Success"
     return 0
@@ -1490,7 +1447,7 @@ function __model_status() {
         --plain) output_mode="plain" ;;
     esac
 
-    if pgrep -x llama-server >/dev/null 2>&1 && __test_port "$LLM_PORT"
+    if __llm_server_running && __test_port "$LLM_PORT"
     then
         local active_num=""
         [[ -f "$ACTIVE_LLM_FILE" ]] && active_num=$(< "$ACTIVE_LLM_FILE")
@@ -1506,13 +1463,13 @@ function __model_status() {
             IFS='|' read -r _n name file size _rest <<< "$entry"
         fi
         local health health_label health_color
-        health=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
-        if [[ "$health" == *'"ok"'* ]]
+        health=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null || true)
+        if __llm_is_healthy
         then
             health_label="OK"
             health_color="$C_Success"
         else
-            health_label="${health:-UNKNOWN}"
+            health_label="${health:-UNHEALTHY}"
             health_color="$C_Warning"
         fi
         local tps

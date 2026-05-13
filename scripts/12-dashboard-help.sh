@@ -622,7 +622,7 @@ function contextual-help() {
     # Auto-detect context
     if [[ "$context" == "auto" ]]
     then
-        if pgrep -x llama-server >/dev/null 2>&1
+            if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
         then
             context="llm-active"
         elif [[ -n "$VIRTUAL_ENV" ]]

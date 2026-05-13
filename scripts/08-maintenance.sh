@@ -847,7 +847,7 @@ function up() {
     # Skip if the active model state file was touched < 60s ago (still booting).
     # Per-PID check: only kill processes that are NOT listening on LLM_PORT.
     local stale_pids
-    stale_pids=$(pgrep -x llama-server 2>/dev/null)
+    stale_pids=$(pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null)
     local stale_count=0
     if [[ -n "$stale_pids" ]] && ! __test_port "$LLM_PORT"
     then
@@ -861,7 +861,7 @@ function up() {
         then
             __tac_line "[17/20] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
         else
-            pkill -u "$USER" -x llama-server 2>/dev/null
+            pkill -u "$USER" -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null
             rm -f "$ACTIVE_LLM_FILE"
             __tac_line "[17/20] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
         fi

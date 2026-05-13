@@ -4,7 +4,7 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="2.4"  # Updated KV cache parameters with correct names (--cache-ram)
+VERSION="2.5"  # Migrated restart path to llama-cpp-python server (v0.3.23).
 set -euo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -30,11 +30,81 @@ LLM_LOG_FILE="/dev/shm/llama-server.log"
 LLM_REGISTRY="${LLM_REGISTRY:-/mnt/m/.llm/models.conf}"
 LLAMA_MODEL_DIR="${LLAMA_MODEL_DIR:-/mnt/m/active}"
 LLAMA_ROOT="${LLAMA_ROOT:-$HOME/llama.cpp}"
-LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-$LLAMA_ROOT/build/bin/llama-server}"
-LLAMA_CPU_THREADS="${LLAMA_CPU_THREADS:-12}"
+LLM_SERVER_PYTHON_BIN="${LLM_SERVER_PYTHON_BIN:-python3}"
+LLM_SERVER_MODULE="${LLM_SERVER_MODULE:-llama_cpp.server}"
+LLM_SERVER_PROC_PATTERN="${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}"
+LLAMA_CPP_PYTHON_VERSION="${LLAMA_CPP_PYTHON_VERSION:-0.3.23}"
+LLAMA_CPU_THREADS="${LLAMA_CPU_THREADS:-6}"
+LLAMA_GPU_LAYERS="${LLAMA_GPU_LAYERS:-24}"
 LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-4096}"
+LLAMA_FLASH_ATTN="${LLAMA_FLASH_ATTN:-true}"
+LLAMA_OFFLOAD_KQV="${LLAMA_OFFLOAD_KQV:-true}"
+LLAMA_CACHE_TYPE_K="${LLAMA_CACHE_TYPE_K:-q8_0}"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] $*"; }
+
+llm_healthy() {
+    if curl -sf --max-time 5 "http://127.0.0.1:${LLM_PORT}/health" >/dev/null 2>&1
+    then
+        return 0
+    fi
+    curl -sf --max-time 5 "http://127.0.0.1:${LLM_PORT}/v1/models" >/dev/null 2>&1
+}
+
+resolve_llm_python_bin() {
+    local expected="${LLAMA_CPP_PYTHON_VERSION:-0.3.23}"
+    local cand resolved
+    local -a candidates=()
+
+    [[ -n "${LLM_SERVER_PYTHON_BIN:-}" ]] && candidates+=("$LLM_SERVER_PYTHON_BIN")
+    candidates+=("python3" "python" "/home/linuxbrew/.linuxbrew/bin/python3")
+
+    for cand in "${candidates[@]}"
+    do
+        resolved=""
+        if [[ -x "$cand" ]]
+        then
+            resolved="$cand"
+        else
+            resolved=$(command -v "$cand" 2>/dev/null || true)
+        fi
+        [[ -z "$resolved" ]] && continue
+
+        if "$resolved" - <<'PY' >/dev/null 2>&1
+import os
+import sys
+
+expected = os.environ.get("LLAMA_CPP_PYTHON_VERSION", "0.3.23")
+import llama_cpp  # type: ignore
+import uvicorn  # type: ignore
+if getattr(llama_cpp, "__version__", "unknown") != expected:
+    raise SystemExit(1)
+PY
+        then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+resolve_type_k_value() {
+    local raw="${LLAMA_CACHE_TYPE_K:-q8_0}"
+    case "${raw,,}" in
+        q8_0) echo 8 ;;
+        f16) echo 1 ;;
+        f32) echo 0 ;;
+        *)
+            if [[ "$raw" =~ ^[0-9]+$ ]]
+            then
+                echo "$raw"
+            else
+                echo 8
+            fi
+            ;;
+    esac
+}
 
 # If no model was ever started, nothing to do
 if [[ ! -f "$ACTIVE_LLM_FILE" ]]
@@ -43,7 +113,7 @@ then
 fi
 
 # If healthy, nothing to do
-if curl -sf --max-time 5 "http://127.0.0.1:${LLM_PORT}/health" >/dev/null 2>&1
+if llm_healthy
 then
     exit 0
 fi
@@ -86,75 +156,31 @@ then
 fi
 
 # Kill any zombie process (exact match avoids hitting unrelated processes).
-pkill -u "$(id -un)" -x llama-server 2>/dev/null || true
+pkill -u "$(id -un)" -f "$LLM_SERVER_PROC_PATTERN" 2>/dev/null || true
 sleep 1
 
-cmd=("$LLAMA_SERVER_BIN" "-m" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
-cmd+=("--ctx-size" "$use_ctx" "--mlock" "--prio" "2" "--cont-batching" "--jinja")
+resolved_python_bin=$(resolve_llm_python_bin || true)
+if [[ -z "$resolved_python_bin" ]]
+then
+    log "No compatible Python found with llama-cpp-python==${LLAMA_CPP_PYTHON_VERSION}"
+    exit 1
+fi
+LLM_SERVER_PYTHON_BIN="$resolved_python_bin"
+
+# Mandatory hardware tuning for i9-12900HK + RTX 3050 Ti 4GB.
+use_threads="${LLAMA_CPU_THREADS:-6}"
+use_ctx="${LLAMA_CTX_SIZE:-4096}"
 if (( use_gpu > 0 ))
 then
-    # Adapt batch/parallel to live free VRAM (4GB cards are sensitive to pressure).
-    smi_cmd="${WSL_NVIDIA_SMI:-/usr/lib/wsl/lib/nvidia-smi}"
-    if [[ ! -x "$smi_cmd" ]]; then
-        smi_cmd=$(command -v nvidia-smi 2>/dev/null || true)
-    fi
-    free_vram_mb=0
-    if [[ -n "$smi_cmd" ]]; then
-        free_vram_mb=$("$smi_cmd" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null \
-            | head -1 | tr -d ' ')
-    fi
-    [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
-
-    batch_size=4096; ubatch_size=1024; parallel_slots=1
-    if (( use_ctx > 8192 || free_vram_mb < 1200 )); then
-        batch_size=1024; ubatch_size=256
-    elif (( use_ctx > 4096 || free_vram_mb < 1800 )); then
-        batch_size=2048; ubatch_size=512
-    fi
-    if (( size_tenths > 0 && size_tenths < 15 && use_ctx >= 8192 )); then
-        batch_size=1024; ubatch_size=256
-    fi
-    if (( size_tenths >= 15 && size_tenths < 20 && free_vram_mb >= 1200 && use_ctx <= 8192 )); then
-        if (( batch_size < 2048 )); then
-            batch_size=2048; ubatch_size=512
-        fi
-    fi
-    if (( free_vram_mb >= 1800 && use_ctx <= 4096 )); then
-        parallel_slots=2
-    fi
-
-    # Keep these two models on known-stable settings during auto-restart.
-    if [[ "$name" == "Qwen2.5 Coder 3B Instruct" ]]; then
-        (( use_ctx > 4096 )) && use_ctx=4096
-        batch_size=2048; ubatch_size=512; parallel_slots=1
-    fi
-    if [[ "$name" == "Qwen3.5-4B" ]]; then
-        (( use_ctx > 3072 )) && use_ctx=3072
-        batch_size=2048; ubatch_size=512; parallel_slots=1
-    fi
-    # Gemma 3 4b It: 3691 MiB VRAM projected at ctx=4096/p=2 vs ~3290 MiB free.
-    # Clamp to ctx=2048/p=1 so KV overhead drops ~75% and fits safely.
-    if [[ "$name" == "Gemma 3 4b It" ]]; then
-        (( use_ctx > 2048 )) && use_ctx=2048
-        batch_size=2048; ubatch_size=512; parallel_slots=1
-    fi
-
-    cmd+=("--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size")
-    cmd+=("--parallel" "$parallel_slots")
-    cmd+=("--n-gpu-layers" "999" "--flash-attn" "on" "--threads" "$use_threads")
-
-    # KV Cache Experiment Parameters (2026-03-27) - UPDATED with correct parameters
-    # Based on llama-server --help output and experiment debugging
-    cmd+=("--cache-type-k" "f16" "--cache-type-v" "f16")
-    cmd+=("--cache-ram" "2048")  # 2GB cache - corrected parameter name
-    # Note: --keep-cache doesn't exist in this version
-    # --cache-prompt is enabled by default
-else
-    cmd+=("--parallel" "1")
-    cmd+=("--batch-size" "512" "--ubatch-size" "512")
-    cmd+=("--n-gpu-layers" "0" "--threads" "$use_threads")
-    cmd+=("--cache-type-k" "q8_0" "--cache-type-v" "q8_0")
+    # Keep baseline offload conservative to stay under 4GB total VRAM usage.
+    use_gpu="${LLAMA_GPU_LAYERS:-24}"
 fi
+
+cmd=("$LLM_SERVER_PYTHON_BIN" "-m" "$LLM_SERVER_MODULE")
+cmd+=("--model" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
+cmd+=("--n_ctx" "$use_ctx" "--n_threads" "$use_threads" "--n_gpu_layers" "$use_gpu")
+cmd+=("--flash_attn" "$LLAMA_FLASH_ATTN" "--offload_kqv" "$LLAMA_OFFLOAD_KQV")
+cmd+=("--type_k" "$(resolve_type_k_value)")
 
 nohup "${cmd[@]}" >> "$LLM_LOG_FILE" 2>&1 &
 
@@ -168,7 +194,7 @@ elif (( use_gpu > 0 && size_tenths >= 20 )); then
 fi
 for (( _hw=0; _hw < health_timeout; _hw++ ))
 do
-    if curl -sf --max-time 2 "http://127.0.0.1:${LLM_PORT}/health" >/dev/null 2>&1
+    if llm_healthy
     then
         log "Restart successful: $name ($size)"
         exit 0

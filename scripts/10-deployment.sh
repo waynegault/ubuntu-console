@@ -345,12 +345,12 @@ function commit_auto() {
         __tac_info "LLM Required" "[OFFLINE - Start a model first]" "$C_Error"
         return 1
     fi
-    # Verify the process listening on $LLM_PORT is actually llama-server
+    # Verify the process listening on $LLM_PORT is a local LLM backend.
     local _llm_pid
     _llm_pid=$(ss -tlnp "sport = :$LLM_PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+')
-    if [[ -z "$_llm_pid" ]] || ! grep -q llama-server "/proc/$_llm_pid/cmdline" 2>/dev/null
+    if [[ -z "$_llm_pid" ]] || ! grep -Eq "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" "/proc/$_llm_pid/cmdline" 2>/dev/null
     then
-        __tac_info "SECURITY" "[BLOCKED: port $LLM_PORT is not llama-server]" "$C_Error"
+        __tac_info "SECURITY" "[BLOCKED: port $LLM_PORT is not the local LLM backend]" "$C_Error"
         return 1
     fi
 

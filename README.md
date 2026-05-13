@@ -38,7 +38,7 @@ tools, AI agents, cron jobs, and automation scripts via `tac-exec`.
 ## Features
 
 - **System telemetry** — CPU, dual GPU (iGPU + CUDA), memory, disk, battery in a 78-column dashboard
-- **Local LLM inference** — Full lifecycle management of `llama-server` (llama.cpp) with OpenAI-compatible API
+- **Local LLM inference** — Full lifecycle management of `llama-cpp-python==0.3.23` server with OpenAI-compatible API
 - **OpenClaw agent framework** — Gateway lifecycle, agent orchestration, backup/restore, knowledge graph
 - **Maintenance** — 13-step `up` pipeline with per-step cooldowns and race condition protection
 - **Deployment** — Git commit/push with optional LLM-generated commit messages (PID-verified, secret detection)
@@ -236,7 +236,7 @@ The `cd` override automatically sources `.venv/bin/activate` when entering a pro
 
 ## Local LLM System
 
-Built on [llama.cpp](https://github.com/ggerganov/llama.cpp). Models are GGUF files managed via a pipe-delimited registry, served on port 8081 with an OpenAI-compatible API. All functions are pure bash + curl + jq.
+Built on [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) (pinned to `0.3.23`). Models are GGUF files managed via a pipe-delimited registry, served on port 8081 with an OpenAI-compatible API. Runtime defaults are tuned for RTX 3050 Ti 4GB + i9-12900HK (`n_gpu_layers=24`, `n_threads=6`, `n_ctx=4096`, `flash_attn=true`, `offload_kqv=true`, `cache_type_k=q8_0`).
 
 ### Model Registry
 

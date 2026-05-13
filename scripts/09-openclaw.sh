@@ -65,7 +65,7 @@ function __so_show_errors() {
 function __so_check_healthy() {
     if __test_port "$OC_PORT"
     then
-        if pgrep -x llama-server >/dev/null 2>&1 && __test_port "${LLM_PORT:-8081}"
+        if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1 && __test_port "${LLM_PORT:-8081}"
         then
             __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT]" "$C_Success"
         else
@@ -246,7 +246,7 @@ function __so_push_api_keys() {
 # Returns 0 if LLM is running and healthy, 1 on failure.
 # ---------------------------------------------------------------------------
 function __so_ensure_llm_running() {
-    if pgrep -x llama-server >/dev/null 2>&1 && __test_port "$LLM_PORT"
+    if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1 && __test_port "$LLM_PORT"
     then
         # LLM already running — show which model
         local _so_active_num=""
@@ -303,7 +303,7 @@ function __so_ensure_llm_running() {
     local _wait_count=0
     while (( _wait_count < 20 ))
     do
-        if pgrep -x llama-server >/dev/null 2>&1
+        if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
         then
             break
         fi
@@ -311,7 +311,7 @@ function __so_ensure_llm_running() {
         ((_wait_count++))
     done
 
-    if ! pgrep -x llama-server >/dev/null 2>&1
+    if ! pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
     then
         __tac_info "Local LLM" "[FAILED TO START - process exited immediately]" "$C_Error"
         return 1
@@ -327,7 +327,7 @@ function __so_ensure_llm_running() {
         then
             break
         fi
-        if ! pgrep -x llama-server >/dev/null 2>&1
+        if ! pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
         then
             break
         fi
@@ -460,7 +460,7 @@ function so() {
     then
         _gateway_already_running=1
         # Check if LLM is also running
-        if pgrep -x llama-server >/dev/null 2>&1 && __test_port "${LLM_PORT:-8081}"
+        if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1 && __test_port "${LLM_PORT:-8081}"
         then
             __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT]" "$C_Success"
             __tac_info "Gateway" "[RUNNING on PORT $OC_PORT]" "$C_Success"
