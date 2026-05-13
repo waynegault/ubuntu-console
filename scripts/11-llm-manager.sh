@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 26
+# Module Version: 27
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -161,13 +161,21 @@ function __llm_active_entry() {
 function __llm_is_healthy() {
     __test_port "$LLM_PORT" || return 1
     local health_body models_body
-    health_body=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null || true)
+    local health_timeout="${LLM_HEALTH_HTTP_TIMEOUT:-20}"
+    health_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null || true)
     if [[ "$health_body" == *'"ok"'* ]]
     then
         return 0
     fi
-    models_body=$(curl -s --max-time 3 "http://127.0.0.1:$LLM_PORT/v1/models" 2>/dev/null || true)
-    [[ "$models_body" == *'"data"'* ]]
+    models_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$LLM_PORT/v1/models" 2>/dev/null || true)
+    if [[ "$models_body" == *'"data"'* ]]
+    then
+        return 0
+    fi
+
+    # Some OpenAI-compatible variants return object=list first; accept that
+    # as a readiness signal when the process is bound and responding.
+    [[ "$models_body" == *'"object"'* && "$models_body" == *'"list"'* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -259,7 +267,7 @@ function __llm_health_timeout() {
     local size="${1:-0G}"
     local gpu_layers="${2:-0}"
     local name="${3:-}"
-    local timeout=45
+    local timeout=90
     local size_tenths=0
 
     if [[ "$size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
@@ -272,13 +280,16 @@ function __llm_health_timeout() {
         timeout=180
     elif [[ "$name" == "$_MODEL_QWEN35_4B" ]]
     then
-        timeout=120
+        timeout=180
     elif (( size_tenths >= _MODEL_SIZE_LARGE ))
     then
-        timeout=120
+        timeout=180
     elif (( size_tenths >= _MODEL_SIZE_MEDIUM ))
     then
-        timeout=60
+        timeout=180
+    elif (( size_tenths >= _MODEL_SIZE_SMALL ))
+    then
+        timeout=120
     fi
 
     if [[ -n "${__BENCH_MODE:-}" && $timeout -lt 80 ]]
@@ -287,6 +298,191 @@ function __llm_health_timeout() {
     fi
 
     printf '%s\n' "$timeout"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_burn_request_timeout — Pick a completion timeout for burn/bench runs.
+# Non-streaming 1500-token requests can legitimately take several minutes on
+# slower models, so benchmark mode uses a higher default floor.
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __llm_burn_request_timeout() {
+    local size="${1:-0G}"
+    local gpu_layers="${2:-0}"
+    local arch="${3:-}"
+    local bench_mode="${4:-${__BENCH_MODE:-}}"
+    local timeout
+    local size_tenths=0
+
+    if [[ -n "$bench_mode" ]]
+    then
+        timeout="${LLM_BENCH_REQUEST_TIMEOUT:-600}"
+    else
+        timeout="${LLM_BURN_REQUEST_TIMEOUT:-360}"
+    fi
+
+    if [[ "$size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
+    then
+        size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
+    fi
+
+    if (( gpu_layers == _GPU_OFFLOAD_DISABLED ))
+    then
+        timeout="${LLM_BURN_REQUEST_TIMEOUT_CPU:-1200}"
+    elif [[ "$arch" == "qwen35" ]]
+    then
+        (( timeout < 900 )) && timeout=900
+    elif (( size_tenths >= _MODEL_SIZE_LARGE ))
+    then
+        (( timeout < 900 )) && timeout=900
+    elif (( size_tenths >= _MODEL_SIZE_MEDIUM ))
+    then
+        (( timeout < 720 )) && timeout=720
+    elif (( size_tenths >= _MODEL_SIZE_SMALL ))
+    then
+        (( timeout < 480 )) && timeout=480
+    fi
+
+    printf '%s\n' "$timeout"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_gpu_clock_snapshot — Return concise GPU clock/pstate snapshot.
+# @returns 0 and prints "pstate=..., gr=...MHz, sm=...MHz, mem=...MHz, util=...%"
+# or "unavailable" when nvidia-smi cannot be queried.
+# ---------------------------------------------------------------------------
+function __llm_gpu_clock_snapshot() {
+    local smi_cmd
+    smi_cmd=$(__resolve_smi 2>/dev/null || true)
+    if [[ -z "$smi_cmd" ]]
+    then
+        printf '%s\n' "unavailable"
+        return 0
+    fi
+
+    local sample
+    sample=$(
+        "$smi_cmd" --query-gpu=pstate,clocks.gr,clocks.sm,clocks.mem,utilization.gpu \
+            --format=csv,noheader,nounits 2>/dev/null | head -1
+    )
+    if [[ -z "$sample" ]]
+    then
+        printf '%s\n' "unavailable"
+        return 0
+    fi
+
+    local pstate gr sm mem util
+    IFS=',' read -r pstate gr sm mem util <<< "$sample"
+    pstate=$(printf '%s' "$pstate" | xargs)
+    gr=$(printf '%s' "$gr" | xargs)
+    sm=$(printf '%s' "$sm" | xargs)
+    mem=$(printf '%s' "$mem" | xargs)
+    util=$(printf '%s' "$util" | xargs)
+    printf 'pstate=%s, gr=%sMHz, sm=%sMHz, mem=%sMHz, util=%s%%\n' \
+        "${pstate:-?}" "${gr:-?}" "${sm:-?}" "${mem:-?}" "${util:-?}"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_bench_perf_prep — Print GPU performance state before a bench run.
+# Reports: AC/battery, pstate, clocks, temp, power, active throttles.
+# Warns when conditions will limit throughput and gives actionable tips.
+# Called by __model_bench; gives the driver 1 s to settle after wake.
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __llm_bench_perf_prep() {
+    local smi_cmd
+    smi_cmd=$(__resolve_smi 2>/dev/null || true)
+
+    __tac_header "GPU PERFORMANCE PREP" "open"
+
+    # 1. AC / battery check via /sys/class/power_supply
+    local _on_ac=1 _bat_path
+    for _bat_path in /sys/class/power_supply/BAT0 /sys/class/power_supply/BAT1 \
+                     /sys/class/power_supply/battery
+    do
+        [[ -f "$_bat_path/status" ]] || continue
+        local _bat_status
+        _bat_status=$(< "$_bat_path/status")
+        [[ "$_bat_status" == "Discharging" ]] && _on_ac=0
+        break
+    done
+
+    if (( _on_ac == 0 ))
+    then
+        __tac_info "Power" "[ON BATTERY — plug in AC for sustained bench performance]" "$C_Warning"
+    else
+        __tac_info "Power" "AC connected" "$C_Success"
+    fi
+
+    if [[ -z "$smi_cmd" ]]
+    then
+        __tac_info "GPU" "[nvidia-smi unavailable — clock data skipped]" "$C_Warning"
+        __tac_footer
+        return 0
+    fi
+
+    # 2. Clock + pstate + thermal snapshot
+    local _gstat
+    _gstat=$(
+        "$smi_cmd" --query-gpu=pstate,clocks.gr,clocks.sm,clocks.mem,temperature.gpu,power.draw \
+            --format=csv,noheader,nounits 2>/dev/null | head -1
+    )
+    if [[ -n "$_gstat" ]]
+    then
+        local _pstate _gr _sm _mem _temp _pwr
+        IFS=',' read -r _pstate _gr _sm _mem _temp _pwr <<< "$_gstat"
+        _pstate=$(printf '%s' "$_pstate" | xargs)
+        _gr=$(printf '%s' "$_gr" | xargs)
+        _sm=$(printf '%s' "$_sm" | xargs)
+        _mem=$(printf '%s' "$_mem" | xargs)
+        _temp=$(printf '%s' "$_temp" | xargs)
+        _pwr=$(printf '%s' "$_pwr" | xargs)
+
+        # P0–P3 = active performance, P4+ = idle/power-save
+        local _pstate_num="${_pstate#P}"
+        local _pstate_note=""
+        local _pstate_color="$C_Success"
+        if [[ "$_pstate_num" =~ ^[0-9]+$ ]] && (( _pstate_num >= 4 ))
+        then
+            _pstate_color="$C_Warning"
+            _pstate_note=" — idle/power-save (clocks boost once load begins)"
+        fi
+
+        __tac_info "pstate" "${_pstate_color}${_pstate}${C_Reset}${_pstate_note}" "$C_Text"
+        __tac_info "Clocks" "${_gr} MHz gr / ${_sm} MHz sm / ${_mem} MHz mem" "$C_Text"
+        __tac_info "Temp" "${_temp}${DEGREE}C" "$C_Text"
+        __tac_info "Power" "${_pwr} W" "$C_Text"
+
+        if [[ "$_temp" =~ ^[0-9]+$ ]] && (( _temp >= 80 ))
+        then
+            __tac_info "THERMAL" "[${_temp}${DEGREE}C — throttling likely; cool down before bench]" "$C_Error"
+        fi
+    fi
+
+    # 3. Active SW throttle check (SW Thermal Slowdown / SW Power Cap)
+    local _throttle_active
+    _throttle_active=$(
+        "$smi_cmd" -q -d PERFORMANCE 2>/dev/null \
+            | grep -E 'SW Thermal Slowdown|SW Power Cap Slowdown' \
+            | grep -v 'Not Active' \
+            | sed 's/^[[:space:]]*//' \
+            | head -4
+    )
+    if [[ -n "$_throttle_active" ]]
+    then
+        local _thr_msg
+        _thr_msg=$(printf '%s' "$_throttle_active" | tr '\n' ';' | sed 's/;$//')
+        __tac_info "Throttle" "[ACTIVE: ${_thr_msg} — reduce heat/load for best bench results]" "$C_Warning"
+    else
+        __tac_info "Throttle" "None detected" "$C_Success"
+    fi
+
+    # 4. Actionable tips line
+    printf '%s\n' "${C_Dim}  Tips: Windows power mode → Best Performance · NVIDIA Control Panel → Prefer Max Performance · use AC power${C_Reset}"
+    __tac_footer
+
+    # Brief settle — lets persistence mode take effect and driver clock state update
+    sleep 1
 }
 
 # ---------------------------------------------------------------------------
@@ -316,6 +512,23 @@ function __llm_wait_for_health() {
         [[ "$progress_mode" == "dots" ]] && printf '.'
         sleep 1
     done
+
+    # Grace phase: if process/port are alive, keep waiting a bit longer for
+    # /v1/models to become responsive under heavy WSL IO/load conditions.
+    local grace_timeout="${LLM_HEALTH_GRACE_TIMEOUT:-180}"
+    if __llm_server_running && __test_port "$LLM_PORT"
+    then
+        for (( _g=0; _g < grace_timeout; _g++ ))
+        do
+            if __llm_is_healthy
+            then
+                [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
+                return 0
+            fi
+            [[ "$progress_mode" == "dots" ]] && printf '+'
+            sleep 1
+        done
+    fi
 
     [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
     return 1
@@ -1258,6 +1471,8 @@ function __model_use() {
     fi
 
     model_bytes=$(stat --format=%s "$model_path" 2>/dev/null || echo 0)
+    local quant_rating
+    quant_rating=$(__llm_quant_rating "$file")
     local python_bin
     python_bin=$(__llm_python_bin_resolve 2>/dev/null || true)
     if [[ -z "$python_bin" ]]
@@ -1268,19 +1483,43 @@ function __model_use() {
     fi
     LLM_SERVER_PYTHON_BIN="$python_bin"
 
-    threads="${LLAMA_CPU_THREADS:-6}"
+    # Prefer per-model registry values from model scan; fall back to global defaults.
+    [[ "$threads" =~ ^[0-9]+$ ]] || threads="${LLAMA_CPU_THREADS:-6}"
     if [[ -z "${TAC_CTX_SIZE:-}" ]]
     then
-        ctx="${LLAMA_CTX_SIZE:-4096}"
+        [[ "$ctx" =~ ^[0-9]+$ ]] || ctx="${LLAMA_CTX_SIZE:-4096}"
     fi
     local smi_cmd
     smi_cmd=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$smi_cmd" ]]
     then
-        # Keep baseline offload conservative for 4GB VRAM systems.
-        gpu_layers="${LLAMA_GPU_LAYERS:-24}"
+        [[ "$gpu_layers" =~ ^[0-9]+$ ]] || gpu_layers="${LLAMA_GPU_LAYERS:-24}"
     else
         gpu_layers=0
+    fi
+
+    # Quant-guide-aware launch tuning for 4GB VRAM systems.
+    # Recommended quants can use the scanned/default layer target; larger
+    # discouraged quants get conservative offload limits to reduce stalls.
+    if (( gpu_layers > 0 ))
+    then
+        case "$quant_rating" in
+            discouraged)
+                if (( model_bytes >= 3500000000 ))
+                then
+                    gpu_layers=0
+                elif (( model_bytes >= 2500000000 ))
+                then
+                    (( gpu_layers > 12 )) && gpu_layers=12
+                fi
+                ;;
+            acceptable)
+                if (( model_bytes >= 2600000000 ))
+                then
+                    (( gpu_layers > 20 )) && gpu_layers=20
+                fi
+                ;;
+        esac
     fi
 
     __llm_server_stop
@@ -1344,6 +1583,7 @@ function __model_use() {
     local cmd=("$python_bin" "-m" "$LLM_SERVER_MODULE")
     cmd+=("--model" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
     cmd+=("--n_ctx" "$ctx")
+    cmd+=("--n_batch" "$batch_size" "--n_ubatch" "$ubatch_size")
     cmd+=("--n_threads" "$threads")
     cmd+=("--n_gpu_layers" "$gpu_layers")
     cmd+=("--flash_attn" "${LLAMA_FLASH_ATTN:-true}")
@@ -1388,6 +1628,19 @@ function __model_use() {
     local start_msg="#${num} ${name} (${size}, ${ngl_label}, ctx ${ctx}, "
     start_msg+="b ${batch_size}/${ubatch_size}, p ${parallel_slots}, ${mmap_label}, t=${threads}, k=${LLAMA_CACHE_TYPE_K:-q8_0})"
     __tac_info "Starting" "$start_msg" "$C_Highlight"
+
+    if [[ -n "${__BENCH_MODE:-}" ]]
+    then
+        local _bench_vram_label _bench_clock_info
+        if [[ "$free_vram_mb" =~ ^[0-9]+$ && "$free_vram_mb" -gt 0 ]]
+        then
+            _bench_vram_label="${free_vram_mb} MiB"
+        else
+            _bench_vram_label="unknown"
+        fi
+        _bench_clock_info=$(__llm_gpu_clock_snapshot)
+        __tac_info "Bench Perf" "[free_vram_mb=${_bench_vram_label}; batch/ubatch=${batch_size}/${ubatch_size}; parallel=${parallel_slots}; ${_bench_clock_info}]" "$C_Dim"
+    fi
 
     # llama.cpp monitors stdin and will force-shutdown on EOF.
     # We must keep stdin open — redirecting </dev/null causes immediate EOF.
@@ -1628,6 +1881,7 @@ function __model_bench() {
     fi
 
     wake 2>/dev/null || true
+    __llm_bench_perf_prep
     printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} model(s)...${C_Reset}"
 
     local __BENCH_MODE=1
@@ -2743,8 +2997,9 @@ function burn() {
     # "Loading model" while mmap-ing large files over drvfs (up to 90s for CPU).
     if ! __llm_is_healthy
     then
+        local burn_ready_timeout="${LLM_BURN_READY_TIMEOUT:-180}"
         printf '%s' "${C_Dim}Waiting for model to finish loading"
-        for (( _bw=0; _bw < 90; _bw++ ))
+        for (( _bw=0; _bw < burn_ready_timeout; _bw++ ))
         do
             __llm_is_healthy && break
             printf '.'
@@ -2766,11 +3021,21 @@ function burn() {
     prompt+=" derivations for time dilation."
 
     # Non-streaming request — curl + jq, with bash nanosecond timing.
+    # Bench mode uses deterministic sampling to make cross-run TPS comparisons
+    # less sensitive to random token path variation.
     local payload
-    payload=$(jq -n --arg p "$prompt" \
-        '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')
+    if [[ -n "${__BENCH_MODE:-}" ]]
+    then
+        payload=$(jq -n \
+            --arg p "$prompt" \
+            --argjson bench_temp "${LLM_BENCH_TEMPERATURE:-0}" \
+            '{messages: [{role: "user", content: $p}], max_tokens: 1500, min_tokens: 1500, temperature: $bench_temp, top_p: 1.0}')
+    else
+        payload=$(jq -n --arg p "$prompt" \
+            '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')
+    fi
 
-    local request_timeout=240
+    local request_timeout=360
     if [[ -f "$ACTIVE_LLM_FILE" && -f "$LLM_REGISTRY" ]]
     then
         local _burn_num _burn_entry _burn_gpu _burn_size
@@ -2781,23 +3046,7 @@ function burn() {
         then
             IFS='|' read -r _n _name _file _burn_size _arch _quant _layers \
                 _burn_gpu _ctx _threads _tps <<< "$_burn_entry"
-            if (( ${_burn_gpu:-0} == 0 ))
-            then
-                request_timeout=900
-            else
-                local _burn_size_tenths=0
-                if [[ "$_burn_size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
-                then
-                    _burn_size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
-                fi
-                if [[ "${_arch:-}" == "qwen35" ]]
-                then
-                    request_timeout=600
-                elif (( _burn_size_tenths >= _MODEL_SIZE_LARGE ))
-                then
-                    request_timeout=360
-                fi
-            fi
+            request_timeout=$(__llm_burn_request_timeout "${_burn_size:-0G}" "${_burn_gpu:-0}" "${_arch:-}" "${__BENCH_MODE:-}")
         fi
     fi
 
