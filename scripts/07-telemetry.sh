@@ -3,15 +3,15 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 5
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
 # @modular-section: telemetry
 # @depends: constants, design-tokens, ui-engine
-# @exports: __cache_fresh, __get_uptime, __get_disk, __get_host_metrics, __get_gpu,
-#   __get_battery, __get_git, __get_tokens, __get_oc_version, __get_oc_metrics,
-#   __get_llm_slots
+# @exports: __cache_fresh, __get_uptime, __get_disk, __get_host_metrics,
+#   __get_gpu_engines, __get_gpu, __get_battery, __get_git, __get_tokens,
+#   __get_oc_version, __get_oc_metrics, __get_llm_slots
 #
 # All telemetry functions use /dev/shm caching and background subshells to avoid
 # blocking the dashboard render. Cache TTLs are tuned per metric volatility.
@@ -61,6 +61,27 @@ function __get_disk() {
 }
 
 # ---------------------------------------------------------------------------
+# __refresh_host_metrics — Spawn a background refresh for host + engine caches.
+# Shared helper used by __get_host_metrics and __get_gpu_engines so both caches
+# are regenerated from one typeperf sample whenever either side goes stale.
+# ---------------------------------------------------------------------------
+function __refresh_host_metrics() {
+    local cache="$TAC_CACHE_DIR/tac_hostmetrics"
+    local cache_tmp="${cache}.$$"
+    local engines_cache="$TAC_CACHE_DIR/tac_gpu_engines"
+    local engines_tmp="${engines_cache}.$$"
+    if ! __cache_fresh "$cache" 10 || ! __cache_fresh "$engines_cache" 10
+    then
+        ( trap 'rm -f "$cache_tmp" "$engines_tmp"' EXIT; \
+          TAC_GPU_ENGINES_OUT="$engines_tmp" \
+          bash "$TACTICAL_REPO_ROOT/bin/tac_hostmetrics.sh" > "$cache_tmp" 2>/dev/null \
+            && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; } \
+            && { [[ -f "$engines_tmp" ]] && mv "$engines_tmp" "$engines_cache"; } ) &>/dev/null &
+        __TAC_BG_PIDS+=("$!")
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # __get_host_metrics — Return CPU% | GPU0% | GPU1% from Windows host (10s TTL).
 # Uses typeperf.exe for CPU + both GPUs (Intel Iris + NVIDIA RTX) in one call.
 # Async refresh pattern: on the first call after the 10s cache expires,
@@ -74,14 +95,7 @@ function __get_disk() {
 # ---------------------------------------------------------------------------
 function __get_host_metrics() {
     local cache="$TAC_CACHE_DIR/tac_hostmetrics"
-    local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
-    if ! __cache_fresh "$cache" 10
-    then
-        ( trap 'rm -f "$cache_tmp"' EXIT; \
-          bash "$TACTICAL_REPO_ROOT/bin/tac_hostmetrics.sh" > "$cache_tmp" 2>/dev/null \
-            && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; } ) &>/dev/null &
-        __TAC_BG_PIDS+=("$!")
-    fi
+    __refresh_host_metrics
     # Return stale cache data while background refresh runs.
     # Fall back to zeros when cache doesn't exist yet (first boot).
     if [[ -f "$cache" ]]
@@ -89,6 +103,22 @@ function __get_host_metrics() {
         cat "$cache"
     else
         echo "0|0|0"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __get_gpu_engines — Return a short NVIDIA dGPU engine summary (10s TTL).
+# Value is produced alongside __get_host_metrics from the same typeperf sample.
+# Falls back to "Idle" on first boot when no cache exists yet.
+# ---------------------------------------------------------------------------
+function __get_gpu_engines() {
+    local cache="$TAC_CACHE_DIR/tac_gpu_engines"
+    __refresh_host_metrics
+    if [[ -f "$cache" ]]
+    then
+        cat "$cache"
+    else
+        echo "Idle"
     fi
 }
 
@@ -131,7 +161,27 @@ function __get_gpu() {
                 --format=csv,noheader,nounits 2>/dev/null)
             if [[ -n "$raw" ]]
             then
-                printf '%s' "${raw//NVIDIA GeForce /}" > "$cache_tmp" \
+                local g_name g_temp g_util g_mem_u g_mem_t
+                IFS=',' read -r g_name g_temp g_util g_mem_u g_mem_t <<< "$raw"
+
+                g_name="${g_name//NVIDIA GeForce /}"
+                g_name="${g_name# }"; g_name="${g_name% }"
+                g_temp="${g_temp# }"; g_temp="${g_temp% }"
+                g_mem_u="${g_mem_u# }"; g_mem_u="${g_mem_u% }"
+                g_mem_t="${g_mem_t# }"; g_mem_t="${g_mem_t% }"
+
+                local gpu1_host g_util_n host_raw _cpu _gpu0
+                host_raw=$(__get_host_metrics)
+                IFS='|' read -r _cpu _gpu0 gpu1_host <<< "$host_raw"
+                g_util_n="${g_util// /}"
+                [[ "$g_util_n" =~ ^[0-9]+$ ]] || g_util_n=0
+                [[ "$gpu1_host" =~ ^[0-9]+$ ]] || gpu1_host=0
+                if (( gpu1_host > g_util_n ))
+                then
+                    g_util_n=$gpu1_host
+                fi
+
+                printf '%s,%s,%s,%s,%s' "$g_name" "$g_temp" "$g_util_n" "$g_mem_u" "$g_mem_t" > "$cache_tmp" \
                     && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
             else
                 echo "N/A" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }

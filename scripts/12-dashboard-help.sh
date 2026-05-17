@@ -3,7 +3,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 6
+# Module Version: 8
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -89,12 +89,14 @@ function tactical_dashboard() {
 
     local gpu_raw
     gpu_raw=$(__get_gpu)
+    local gpu_engines
+    gpu_engines=$(__get_gpu_engines)
 
     # CPU/GPU colour: >90% red, >75% yellow, else green
     local cpu_gpu_color
     local max_gpu=$(( gpu0 > gpu1 ? gpu0 : gpu1 ))
     cpu_gpu_color=$(__threshold_color $(( cpu > max_gpu ? cpu : max_gpu )))
-    __fRow "CPU / GPU" "CPU ${cpu}% | iGPU ${gpu0}% | CUDA ${gpu1}%" "$cpu_gpu_color"
+    __fRow "CPU / GPU" "CPU ${cpu}% | iGPU ${gpu0}% | NVIDIA ${gpu1}%" "$cpu_gpu_color"
 
     # Memory colour: <75% used=green, 75-90%=yellow, >90%=red
     local mem_color
@@ -123,6 +125,7 @@ function tactical_dashboard() {
         gpu_color=$(__threshold_color "$g_util_n")
     fi
     __fRow "GPU" "$gpu_display" "$gpu_color"
+    __fRow "GPU ENGINES" "$gpu_engines" "$gpu_color"
 
     if __test_port "$LLM_PORT"
     then

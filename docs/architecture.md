@@ -200,7 +200,7 @@ Cache TTLs per metric:
 
 | Metric | TTL | Rationale |
 |---|---|---|
-| Host Metrics (CPU + iGPU + CUDA) | 10s | iGPU from `typeperf.exe` 3D engine, CUDA from `nvidia-smi` compute engine |
+| Host Metrics (CPU + iGPU + NVIDIA) | 10s | iGPU from `typeperf.exe` 3D engine, NVIDIA dGPU from Windows engine counters with `nvidia-smi` compute fallback |
 | GPU (NVIDIA detail) | 10s | nvidia-smi is slow (~1.2s) |
 | Battery | 120s | Changes slowly |
 | Context Used | 30s | Scans `agents/*/sessions/sessions.json` for token usage via `jq` |
@@ -368,7 +368,7 @@ extra source commands.
 ├── inspection.md                      # Audit checklist
 ├── bin/
 │   ├── tac-exec                       # Bootstrap: source env.sh + exec "$@"
-│   ├── tac_hostmetrics.sh             # Host CPU + iGPU (typeperf) + CUDA (nvidia-smi)
+│   ├── tac_hostmetrics.sh             # Host CPU + iGPU + NVIDIA dGPU load/engines
 │   ├── llama-watchdog.sh              # Watchdog: auto-restart with -ngl 999, --prio 2
 │   ├── oc-gpu-status                  # Thin wrapper → tac-exec gpu-status
 │   ├── oc-model-status                # Thin wrapper → tac-exec ocms

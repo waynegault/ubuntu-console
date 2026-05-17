@@ -182,11 +182,12 @@ up             # Run 13-step system maintenance
 |  SYSTEM TIME  :: Wednesday 09:14 22/04/2026                                 |
 |  UPTIME       :: 0d 2h 41m                                                  |
 |  BATTERY      :: A/C POWERED                                                |
-|  CPU / GPU    :: CPU 3% | iGPU 2% | CUDA 0%                                 |
+|  CPU / GPU    :: CPU 3% | iGPU 2% | NVIDIA 0%                               |
 |  MEMORY       :: 2.77 / 47.04 Gb                                            |
 |  STORAGE      :: C: 995 Gb free | WSL: 877 Gb free                          |
 |------------------------------------------------------------------------------|
 |  GPU          :: RTX 3050 Ti | 0% Load | 62°C | 3897 / 4096 Mb             |
+|  GPU ENGINES  :: 3D 0% | VDec 0%                                           |
 |  LOCAL LLM    :: ACTIVE Phi-4-mini-Q6_K | 14.2 t/s                         |
 |  WSL          :: ACTIVE  Ubuntu-24.04  (6.6.87.2-microsoft-standard-WSL2)   |
 |------------------------------------------------------------------------------|
@@ -481,7 +482,7 @@ function __get_METRIC() {
 
 | Metric | TTL | Notes |
 |---|---|---|
-| Host metrics (CPU + iGPU + CUDA) | 10s | `typeperf.exe` (iGPU) + `nvidia-smi` (CUDA) |
+| Host metrics (CPU + iGPU + NVIDIA) | 10s | `typeperf.exe` (iGPU + dGPU engines) + `nvidia-smi` (compute fallback) |
 | NVIDIA GPU detail | 10s | `nvidia-smi` takes ~1.2s cold |
 | Battery | 120s | Changes slowly |
 | Context used | 30s | Scans `agents/*/sessions/sessions.json` via `jq` |
@@ -518,7 +519,7 @@ function __get_METRIC() {
 │   └── quant-guide.conf               # Quantization priority ratings (editable)
 ├── bin/
 │   ├── tac-exec                       # Bootstrap: source env.sh + exec "$@"
-│   ├── tac_hostmetrics.sh             # Host CPU + iGPU (typeperf) + CUDA (nvidia-smi)
+│   ├── tac_hostmetrics.sh             # Host CPU + iGPU + NVIDIA dGPU load/engines
 │   ├── llama-watchdog.sh              # Watchdog: auto-restart with -ngl 999, --prio 2
 │   ├── oc-gpu-status                  # Thin wrapper → tac-exec gpu-status
 │   ├── oc-model-status                # Thin wrapper → tac-exec ocms

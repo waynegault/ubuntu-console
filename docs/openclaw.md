@@ -209,7 +209,7 @@ OpenClaw memory DB.
 | `~/.config/systemd/user/llama-watchdog.service` | Watchdog systemd unit |
 | `~/.config/systemd/user/llama-watchdog.timer` | Watchdog timer |
 | `/dev/shm/tac_win_api_keys` | Bridged API key cache (tmpfs) |
-| `~/.local/bin/tac_hostmetrics.sh` | Host CPU + iGPU (typeperf 3D) + CUDA (nvidia-smi compute) |
+| `~/.local/bin/tac_hostmetrics.sh` | Host CPU + iGPU + NVIDIA dGPU load/engines |
 | `~/.local/bin/llama-watchdog.sh` | Watchdog: auto-restart llama-server |
 
 ← [Back to README](../README.md)

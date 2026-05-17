@@ -525,6 +525,22 @@ setup() {
     [[ -n "$result" ]]
 }
 
+@test "metrics: __get_gpu_engines returns the cached engine summary" {
+    echo "3D 31% | VDec 12%" > "$TAC_CACHE_DIR/tac_gpu_engines"
+    result=$(__get_gpu_engines)
+    [[ "$result" == "3D 31% | VDec 12%" ]]
+}
+
+@test "metrics: tactical_dashboard renders the GPU engines row" {
+    echo "42|6|31" > "$TAC_CACHE_DIR/tac_hostmetrics"
+    echo "RTX 3050 Ti Laptop GPU,64,35,3497,4096" > "$TAC_CACHE_DIR/tac_gpu"
+    echo "3D 31% | VDec 12%" > "$TAC_CACHE_DIR/tac_gpu_engines"
+    run tactical_dashboard
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"GPU ENGINES"* ]]
+    [[ "$output" == *"3D 31% | VDec 12%"* ]]
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 8. PURE CALCULATION FUNCTIONS (llama.cpp)
 # ─────────────────────────────────────────────────────────────────────────────

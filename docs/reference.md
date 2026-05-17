@@ -90,11 +90,12 @@ Type `m` at any prompt to render the full-screen Tactical Dashboard:
 |  SYSTEM TIME  :: Saturday 03:04 07/03/2026                                |
 |  UPTIME       :: 0d 0h 24m                                                |
 |  BATTERY      :: A/C POWERED                                              |
-|  CPU / GPU    :: CPU 3% | iGPU 2% | CUDA 0%                                |
+|  CPU / GPU    :: CPU 3% | iGPU 2% | NVIDIA 0%                              |
 |  MEMORY       :: 2.77 / 47.04 Gb                                          |
 |  STORAGE      :: C: 995 Gb free | WSL: 877 Gb free                        |
 |------------------------------------------------------------------------------|
 |  GPU          :: RTX 3050 Ti | 0% Load | 62°C | 3897 / 4096 Mb            |
+|  GPU ENGINES  :: 3D 0% | VDec 0%                                          |
 |  LOCAL LLM    :: ACTIVE Phi-4-mini-Q6_K | 14.2 t/s                        |
 |  WSL          :: ACTIVE  Ubuntu-24.04  (6.6.87.2-microsoft-standard-WSL2) |
 |------------------------------------------------------------------------------|
