@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 27
+# Module Version: 28
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -908,12 +908,19 @@ function __gguf_metadata() {
 # Returns: 999 (max offload), total_layers (MoE), or 0 (CPU-only)
 function __calc_gpu_layers() {
     local _file_bytes=$1 _total_layers=$2 _arch="${3:-}"
-    local smi_cmd
-    smi_cmd=$(__resolve_smi 2>/dev/null || true)
-    if [[ -n "$smi_cmd" ]]
+    local usable_vram=$(( VRAM_TOTAL_BYTES * VRAM_USABLE_PCT / 100 ))
+
+    # MoE models keep experts on CPU; full offload heuristics are not useful.
+    if [[ "${_arch,,}" == *moe* ]]
     then
-        # Baseline for 4GB VRAM systems; higher values may exceed available memory.
-        echo "${LLAMA_GPU_LAYERS:-24}"
+        echo "${_total_layers:-0}"
+        return
+    fi
+
+    # Full offload when the model fits in usable VRAM, otherwise CPU-only.
+    if (( _file_bytes <= usable_vram ))
+    then
+        echo 999
     else
         echo 0
     fi
@@ -924,7 +931,33 @@ function __calc_gpu_layers() {
 # CPU-only models (>4GB) have no VRAM constraint so can use larger ctx.
 function __calc_ctx_size() {
     local _file_bytes=$1 _native_ctx=$2 _arch="${3:-}"
-    echo "${LLAMA_CTX_SIZE:-4096}"
+    local cap
+
+    # MoE models use a stable conservative context regardless of size.
+    if [[ "${_arch,,}" == *moe* ]]
+    then
+        echo "$MOE_DEFAULT_CTX"
+        return
+    fi
+
+    # CPU-only mode (model exceeds VRAM threshold): cap to MOE_DEFAULT_CTX.
+    if (( _file_bytes > VRAM_TOTAL_BYTES * VRAM_THRESHOLD_PCT / 100 ))
+    then
+        cap=$MOE_DEFAULT_CTX
+    # Tiny models can use a wider context while fitting comfortably.
+    elif (( _file_bytes <= 1 * 1024 * 1024 * 1024 ))
+    then
+        cap=8192
+    else
+        cap=4096
+    fi
+
+    if (( _native_ctx > 0 && _native_ctx < cap ))
+    then
+        echo "$_native_ctx"
+    else
+        echo "$cap"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -977,7 +1010,22 @@ function __bench_latest_file() {
 #   Full GPU  → 50% (CPU only does prompt processing + sampling)
 function __calc_threads() {
     local _gpu_layers=$1 _total_layers=$2
-    echo "${LLAMA_CPU_THREADS:-6}"
+    local ncpu pct
+    ncpu=$(nproc 2>/dev/null || echo 16)
+
+    if (( _gpu_layers <= 0 ))
+    then
+        pct=80
+    elif (( _total_layers > 0 && _gpu_layers >= _total_layers ))
+    then
+        pct=50
+    else
+        pct=70
+    fi
+
+    local threads=$(( ncpu * pct / 100 ))
+    (( threads < 1 )) && threads=1
+    echo "$threads"
 }
 
 # __quant_label — Map GGUF file_type int to human-readable quant label.

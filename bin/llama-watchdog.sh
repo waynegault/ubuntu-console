@@ -30,6 +30,7 @@ LLM_LOG_FILE="/dev/shm/llama-server.log"
 LLM_REGISTRY="${LLM_REGISTRY:-/mnt/m/.llm/models.conf}"
 LLAMA_MODEL_DIR="${LLAMA_MODEL_DIR:-/mnt/m/active}"
 LLAMA_ROOT="${LLAMA_ROOT:-$HOME/llama.cpp}"
+LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-$LLAMA_ROOT/build/bin/llama-server}"
 LLM_SERVER_PYTHON_BIN="${LLM_SERVER_PYTHON_BIN:-python3}"
 LLM_SERVER_MODULE="${LLM_SERVER_MODULE:-llama_cpp.server}"
 LLM_SERVER_PROC_PATTERN="${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}"
@@ -157,6 +158,8 @@ fi
 
 # Kill any zombie process (exact match avoids hitting unrelated processes).
 pkill -u "$(id -un)" -f "$LLM_SERVER_PROC_PATTERN" 2>/dev/null || true
+# Legacy safety: ensure classic llama-server process names are also cleaned up.
+pkill -u "$(id -un)" -f "llama-server" 2>/dev/null || true
 sleep 1
 
 resolved_python_bin=$(resolve_llm_python_bin || true)
