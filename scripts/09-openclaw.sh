@@ -689,6 +689,15 @@ function xo() {
 
     __oc_safe_gateway_shutdown
 
+    # Also stop the LLM server if running — it holds GPU VRAM and doesn't
+    # auto-die with the gateway. Otherwise a subsequent process (e.g.
+    # investigator ingest) finds only ~150 MB free and fails to load its
+    # embedder.
+    if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1; then
+        printf '%s\n' "${C_Dim}Stopping LLM server ...${C_Reset}"
+        halt 2>/dev/null || true
+    fi
+
     if (( _was_running ))
     then
         __tac_info "Gateway Processes" "[TERMINATED]" "$C_Error"
