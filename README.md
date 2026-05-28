@@ -153,7 +153,8 @@ up             # Run 13-step system maintenance
 | `model download` | LLM | Fetch from HuggingFace (warns on discouraged quants) |
 | `model delete N` | LLM | Delete model #N from disk (`--dry-run`) |
 | `model archive N` | LLM | Move model #N to archive (`--dry-run`) |
-| `model bench` | LLM | Benchmark all on-disk models, persist TSV |
+| `model bench` | LLM | Benchmark all on-disk models (auto-runs autotune first when profile is missing), persist TSV |
+| `model autotune N` | LLM | Optimize for no OOM, max context, max TPS; save per-model profile |
 | `model bench-diff` | LLM | Compare two benchmark TSV runs |
 | `model bench-history` | LLM | Summarise recent benchmark runs |
 | `serve N` / `halt` | LLM | Aliases for `model use N` / `model stop` |

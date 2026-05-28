@@ -773,6 +773,11 @@ setup() {
     [[ "$output" == *"bench-compare"* ]]
 }
 
+@test "model: model usage does not include autoture typo alias" {
+    run model -h
+    [[ "$output" != *"autoture"* ]]
+}
+
 @test "model: serve function is defined (convenience wrapper)" {
     declare -f serve >/dev/null 2>&1
 }

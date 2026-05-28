@@ -75,6 +75,66 @@ setup() {
     [[ "$fn_src" == *"info"* ]] || [[ "$fn_src" == *"Info"* ]]
 }
 
+@test "integration: model has autotune subcommand" {
+    local fn_src
+    fn_src=$(declare -f model 2>/dev/null)
+
+    [[ "$fn_src" == *"autotune"* ]]
+}
+
+@test "integration: __model_autotune exposes objective priority" {
+    local fn_src
+    fn_src=$(declare -f __model_autotune 2>/dev/null)
+
+    [[ "$fn_src" == *"no OOM"* ]]
+    [[ "$fn_src" == *"max ctx"* ]]
+    [[ "$fn_src" == *"max TPS"* ]]
+}
+
+@test "integration: __model_autotune supports binary context strategy" {
+    local fn_src
+    fn_src=$(declare -f __model_autotune 2>/dev/null)
+
+    [[ "$fn_src" == *"LLM_AUTOTUNE_CTX_STRATEGY"* ]]
+    [[ "$fn_src" == *"LLM_AUTOTUNE_MAX_CTX"* ]]
+    [[ "$fn_src" == *"LLM_AUTOTUNE_CTX_STEP"* ]]
+}
+
+@test "integration: __model_autotune includes stability and pruning knobs" {
+    local fn_src
+    fn_src=$(declare -f __model_autotune 2>/dev/null)
+
+    [[ "$fn_src" == *"LLM_AUTOTUNE_JITTER_PENALTY"* ]]
+    [[ "$fn_src" == *"LLM_AUTOTUNE_EARLY_STOP_MARGIN"* ]]
+    [[ "$fn_src" == *"LLM_AUTOTUNE_WARMUP"* ]]
+    [[ "$fn_src" == *"LLM_AUTOTUNE_CONFIRM_FINAL"* ]]
+}
+
+@test "integration: autotune profile helpers exist" {
+    declare -f __llm_autotune_profile_get >/dev/null 2>&1
+    declare -f __llm_autotune_profile_best_for_model >/dev/null 2>&1
+    declare -f __llm_autotune_profile_save >/dev/null 2>&1
+    declare -f __llm_median_from_list >/dev/null 2>&1
+    declare -f __llm_stddev_from_list >/dev/null 2>&1
+}
+
+@test "integration: __model_bench auto-runs autotune when profile missing" {
+    local fn_src
+    fn_src=$(declare -f __model_bench 2>/dev/null)
+
+    [[ "$fn_src" == *"__llm_autotune_profile_best_for_model"* ]]
+    [[ "$fn_src" == *"No autotune profile"* ]]
+    [[ "$fn_src" == *"__model_autotune"* ]]
+    [[ "$fn_src" == *"FAIL_AUTOTUNE"* ]]
+}
+
+@test "integration: __model_bench disables autotune restore side-effect" {
+    local fn_src
+    fn_src=$(declare -f __model_bench 2>/dev/null)
+
+    [[ "$fn_src" == *"LLM_AUTOTUNE_RESTORE_PREV=0"* ]]
+}
+
 @test "integration: model has use subcommand" {
     local fn_src
     fn_src=$(declare -f model 2>/dev/null)

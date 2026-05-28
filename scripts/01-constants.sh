@@ -201,6 +201,13 @@ export LLAMA_CTX_SIZE=4096   # Default context window size
 export LLAMA_FLASH_ATTN="${LLAMA_FLASH_ATTN:-true}"
 export LLAMA_OFFLOAD_KQV="${LLAMA_OFFLOAD_KQV:-true}"
 export LLAMA_CACHE_TYPE_K="${LLAMA_CACHE_TYPE_K:-q8_0}"
+# Optional launch overrides for VRAM tuning.
+# Leave unset to use adaptive defaults from model metadata + free VRAM.
+export LLAMA_BATCH_SIZE="${LLAMA_BATCH_SIZE:-}"
+export LLAMA_UBATCH_SIZE="${LLAMA_UBATCH_SIZE:-}"
+export LLAMA_PARALLEL_SLOTS="${LLAMA_PARALLEL_SLOTS:-}"
+# Native llama-server --fit-target margin (MiB). Lower values recover VRAM.
+export LLAMA_FIT_TARGET_MB="${LLAMA_FIT_TARGET_MB:-1024}"
 # Memory-map mode for llama-server launch:
 #   auto (default): enable --no-mmap for MoE / low-VRAM pressure / WSL
 #   on            : always enable --no-mmap

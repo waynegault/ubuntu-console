@@ -72,14 +72,15 @@ Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice 
 | Command | What It Does |
 |---|---|
 | `model scan` | Scan `$LLAMA_MODEL_DIR` for GGUF files, read metadata, auto-calculate optimal gpu_layers/ctx/threads, rebuild registry, and auto-archive discouraged quants via `quant-guide.conf`. |
-| `model list` | Show numbered model registry with name, file, size, arch, quant, layers, TPS. Active model marked with ▶. |
+| `model list` | Show numbered model registry with name, file, size, arch, quant, layers, TPS, and autotune status/settings. Active model marked with ▶. |
 | `model use N` | Start model #N with `-ngl 999`, dynamic threads, `--flash-attn on`, `--prio 2`, `--mlock`, `--jinja`. Batch sizes: 4096/1024 for GPU, 512/512 for CPU-only. Reports actual GPU offload count after boot. Uses shared adaptive health polling. |
 | `model stop` | `pkill` the llama-server process, remove state file |
 | `model status` | Show currently running model details. Supports `--json` and `--plain`. |
 | `model doctor` | Validate registry integrity, default model wiring, GPU visibility, watchdog state, and local ports |
 | `model recommend` | Rank scanned models for a 4 GB VRAM system using quant, size, architecture, and saved TPS |
 | `model info N` | Display full details for model #N including on-disk status |
-| `model bench` | Benchmark all on-disk models: starts each, runs burn-in, records TPS. Results persist to `/mnt/m/.llm/bench_*.tsv`. |
+| `model bench` | Benchmark all on-disk models: if a model has no autotune profile, `bench` runs autotune first, then starts model, runs burn-in, and records TPS. Results persist to `/mnt/m/.llm/bench_*.tsv`. |
+| `model autotune N [--backend native|python] [--quick] [--ctx-size N] [--trials N]` | Auto-tune runtime config with objective priority: **1) no OOM, 2) maximum context, 3) maximum TPS**. Saves per-model profile for future `model use` and `model bench`. |
 | `model bench-diff` / `model bench-compare` | Compare two benchmark TSV runs |
 | `model bench-history` | Summarise recent saved benchmark TSV runs |
 | `model delete N` | Permanently delete model #N from disk and deregister. Supports `--dry-run`. |
@@ -130,10 +131,70 @@ measures wall time with nanosecond precision, and reports tokens/second. The
 result is cached for dashboard display. Useful for benchmarking different
 models and GPU states.
 
-`model bench` extends this: it iterates over all on-disk models, boots each
-one, runs the burn prompt, collects TPS, and writes a TSV file to
+`model bench` extends this: it iterates over all on-disk models, ensures
+autotune exists for each model/backend (running autotune first when missing),
+boots each one, runs the burn prompt, collects TPS, and writes a TSV file to
 `/mnt/m/.llm/bench_YYYYMMDD_HHMMSS.tsv` for historical comparison. Results are
 displayed in a box-drawn summary table.
+
+## Autotune Optimizer
+
+`model autotune` now uses a prioritized objective function:
+
+1. No OOM / startup-safe configs
+2. Maximum stable context
+3. Maximum TPS (stability-adjusted)
+
+### What It Optimizes
+
+- Backend-aware profiles (`native` or `python`)
+- Context-aware profiles (`ctx` key)
+- Runtime knobs: `batch`, `ubatch`, `parallel`, `fit_target_mb`
+- Stability score: median TPS with jitter penalty
+- Final winner verification burn (optional)
+
+### Strategy Details
+
+- Locking: serializes runs with `flock` to avoid overlapping autotune jobs.
+- Context strategy: binary discovery of highest startup-stable context, then local sweep.
+- Candidate pruning: skips risky combos based on free VRAM/model size.
+- Early stop: dominated configs can stop after first trial.
+- Failure classes: OOM, timeout, start, burn, no-TPS, dominated.
+
+### Autotune Environment Knobs
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_AUTOTUNE_TRIALS` | `3` | Trials per config |
+| `LLM_AUTOTUNE_CTX_STRATEGY` | `binary` | Context search strategy |
+| `LLM_AUTOTUNE_MAX_CTX` | `32768` | Upper bound for context search |
+| `LLM_AUTOTUNE_CTX_STEP` | `2048` | Step for nearby context sweep |
+| `LLM_AUTOTUNE_JITTER_PENALTY` | `0.30` | TPS score penalty for variance |
+| `LLM_AUTOTUNE_EARLY_STOP_MARGIN` | `2.0` | Early-stop dominated config threshold |
+| `LLM_AUTOTUNE_WARMUP` | `1` | Perform warmup call before timed trials |
+| `LLM_AUTOTUNE_CONFIRM_FINAL` | `1` | Run final verification burn on winner |
+| `LLM_AUTOTUNE_LOCK_FILE` | `/tmp/llm-autotune.lock` | Run serialization lock path |
+| `LLM_AUTOTUNE_LOCK_WAIT_SECONDS` | `5` | Lock wait timeout |
+| `LLM_AUTOTUNE_BURN_TIMEOUT` | `150/240` | Per-trial max time (quick/full) |
+| `LLM_AUTOTUNE_BURN_TIMEOUT_CPU` | `300/420` | CPU-mode per-trial max time |
+| `LLM_AUTOTUNE_READY_TIMEOUT` | `120` | Model health wait timeout |
+
+### Profile Persistence
+
+Profiles are saved to `/mnt/m/.llm/autotune_profiles.tsv` and keyed by:
+
+- model number
+- backend
+- context
+
+Saved rows include confidence metadata:
+
+- `score`, `stddev`, `samples`, `failures`, `ctx_min`, `ctx_max`, `verified`, `objective`
+
+`model use` and `model bench` automatically consume matching profiles.
+
+`model list`/`model scan` show `pending` when no profile exists yet, and show
+the saved optimal settings after autotune has completed.
 
 ## OpenClaw ↔ LLM Bridge
 
@@ -152,6 +213,7 @@ displayed in a box-drawn summary table.
 | `/mnt/m/archive/` | Archived/discouraged models (`$LLAMA_ARCHIVE_DIR`) |
 | `~/llama.cpp/build/bin/llama-server` | Server binary (`$LLAMA_SERVER_BIN`) |
 | `/mnt/m/.llm/models.conf` | Model registry — 11-field format (`$LLM_REGISTRY`) |
+| `/mnt/m/.llm/autotune_profiles.tsv` | Per-model/backend/context autotune profiles + confidence metadata |
 | `/mnt/m/.llm/bench_*.tsv` | Benchmark history from `model bench` |
 | `~/ubuntu-console/config/quant-guide.conf` | Quantization priority ratings (`$QUANT_GUIDE`) |
 | `/dev/shm/active_llm` | Active model number (integer) |
