@@ -1844,7 +1844,7 @@ function __model_use() {
 
     # Apply saved autotune profile for this model/backend unless caller is
     # explicitly running autotune mode. Manual LLAMA_* env overrides still win.
-    if [[ -z "${__AUTOTUNE_MODE:-}" ]]
+    if [[ -z "${__AUTOTUNE_MODE:-}" ]] && [[ "${LLM_IGNORE_AUTOTUNE_PROFILE:-0}" != "1" ]]
     then
         local _profile_row=""
         local _profile_ctx="$ctx"
@@ -1915,6 +1915,10 @@ function __model_use() {
     if [[ -n "$smi_cmd" ]]
     then
         [[ "$gpu_layers" =~ ^[0-9]+$ ]] || gpu_layers="${LLAMA_GPU_LAYERS:-24}"
+        if [[ "${LLAMA_GPU_LAYERS:-}" =~ ^[0-9]+$ ]]
+        then
+            gpu_layers="${LLAMA_GPU_LAYERS}"
+        fi
     else
         gpu_layers=0
     fi
@@ -3053,6 +3057,32 @@ function __model_bench() {
     do
         printf '%s\n' "${C_Highlight}[$(( i+1 ))/${#b_num[@]}] ${b_name[$i]} (${b_size[$i]})${C_Reset}"
 
+        local _bench_safe_overrides=0
+        local _bench_min_free_vram_mb="${LLM_BENCH_MIN_FREE_VRAM_MB:-1200}"
+        local _bench_safe_ctx="${LLM_BENCH_SAFE_CTX:-8192}"
+        local _bench_free_vram_mb=0
+        local _bench_smi
+        _bench_smi=$(__resolve_smi 2>/dev/null || true)
+        if [[ -n "$_bench_smi" ]]
+        then
+            _bench_free_vram_mb=$("$_bench_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        fi
+        [[ "$_bench_min_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_min_free_vram_mb=256
+        [[ "$_bench_safe_ctx" =~ ^[0-9]+$ ]] || _bench_safe_ctx=8192
+        [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_free_vram_mb=0
+
+        if (( _bench_free_vram_mb > 0 && _bench_free_vram_mb < _bench_min_free_vram_mb ))
+        then
+            export LLAMA_GPU_LAYERS=0
+            export LLM_IGNORE_AUTOTUNE_PROFILE=1
+            export TAC_CTX_SIZE="$_bench_safe_ctx"
+            export LLAMA_BATCH_SIZE=512
+            export LLAMA_UBATCH_SIZE=128
+            export LLAMA_PARALLEL_SLOTS=1
+            _bench_safe_overrides=1
+            __tac_info "Bench" "[Low free VRAM (${_bench_free_vram_mb} MiB) - applying safe overrides: ngl=0, ctx=${_bench_safe_ctx}, b=512/128, p=1]" "$C_Warning"
+        fi
+
         # Ensure a per-model autotune profile exists before benchmarking.
         local _bench_profile_row=""
         _bench_profile_row=$(__llm_autotune_profile_best_for_model "${b_num[$i]}" "$bench_backend" 2>/dev/null || true)
@@ -3101,6 +3131,10 @@ function __model_bench() {
         [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")
         b_tps+=("$tps")
         __model_stop 2>/dev/null
+        if (( _bench_safe_overrides == 1 ))
+        then
+            unset LLAMA_GPU_LAYERS LLM_IGNORE_AUTOTUNE_PROFILE TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
+        fi
         sleep 1
     done
     unset __BENCH_MODE
@@ -4218,7 +4252,10 @@ function burn() {
         fi
     fi
 
-    printf '%s\n' "${C_Dim}Testing: ~1500 token synthetic physics response...${C_Reset}"
+    local bench_tokens="${LLM_BENCH_BURN_TOKENS:-768}"
+    [[ "$bench_tokens" =~ ^[0-9]+$ ]] || bench_tokens=768
+    (( bench_tokens < 128 )) && bench_tokens=128
+    printf '%s\n' "${C_Dim}Testing: ~${bench_tokens} token synthetic physics response...${C_Reset}"
     printf '%s\n' "${C_Highlight}Processing ....${C_Reset}"
 
     local prompt="Explain the complete theory of special relativity"
@@ -4233,8 +4270,9 @@ function burn() {
     then
         payload=$(jq -n \
             --arg p "$prompt" \
+            --argjson bench_tokens "$bench_tokens" \
             --argjson bench_temp "${LLM_BENCH_TEMPERATURE:-0}" \
-            '{messages: [{role: "user", content: $p}], max_tokens: 1500, min_tokens: 1500, temperature: $bench_temp, top_p: 1.0}')
+            '{messages: [{role: "user", content: $p}], max_tokens: $bench_tokens, min_tokens: $bench_tokens, temperature: $bench_temp, top_p: 1.0}')
     else
         payload=$(jq -n --arg p "$prompt" \
             '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')
