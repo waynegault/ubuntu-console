@@ -1637,6 +1637,7 @@ function __model_use() {
     cmd+=("--flash_attn" "${LLAMA_FLASH_ATTN:-true}")
     cmd+=("--offload_kqv" "${LLAMA_OFFLOAD_KQV:-true}")
     cmd+=("--type_k" "$type_k_val")
+    cmd+=("--n_parallel" "$parallel_slots")
 
     # Adaptive memory-mapping behavior (video-inspired stability tuning).
     # --no-mmap can reduce page-fault stalls and mmap-related thrashing,

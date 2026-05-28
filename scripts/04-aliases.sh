@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -56,20 +56,22 @@ alias c='clear_tactical'
 alias reload='command clear; exec bash'
 alias m='tactical_dashboard'
 alias cpwd='copy_path'
-# unittest — route to repo-local runners when present.
-# Durable rule: in investigator repo, always use its local unittest entrypoint;
-# otherwise use the ubuntu-console test runner.
+# unittest — route to investigator unittest when present.
+# Durable rule: always prefer investigator's unittest entrypoint from any cwd;
+# fallback to the ubuntu-console test runner only if investigator is unavailable.
 function unittest() {
     local _investigator_root="/home/wayne/investigator"
-    if [[ "$PWD" == "$_investigator_root"* ]]; then
-        if [[ -x "$_investigator_root/.venv/bin/unittest" ]]; then
-            command "$_investigator_root/.venv/bin/unittest" "$@"
-            return $?
-        fi
-        if [[ -x "$_investigator_root/unittest" ]]; then
-            command "$_investigator_root/unittest" "$@"
-            return $?
-        fi
+    if [[ -x "$_investigator_root/.venv/bin/investigator" ]]; then
+        command "$_investigator_root/.venv/bin/investigator" unittest "$@"
+        return $?
+    fi
+    if [[ -x "$_investigator_root/.venv/bin/unittest" ]]; then
+        command "$_investigator_root/.venv/bin/unittest" "$@"
+        return $?
+    fi
+    if [[ -x "$_investigator_root/unittest" ]]; then
+        command "$_investigator_root/unittest" "$@"
+        return $?
     fi
     command "$TACTICAL_REPO_ROOT/tools/run-tests.sh" "$@"
 }
