@@ -2974,6 +2974,24 @@ function __model_bench() {
         __tac_info "Registry" "[Not found - run 'model scan']" "$C_Error"
         return 1
     fi
+
+    local bench_lock_fd=""
+    local bench_lock_file="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
+    local bench_lock_wait_seconds="${LLM_BENCH_LOCK_WAIT_SECONDS:-2}"
+    if command -v flock >/dev/null 2>&1
+    then
+        exec {bench_lock_fd}>"$bench_lock_file" || {
+            __tac_info "Bench" "[Unable to open lock file: $bench_lock_file]" "$C_Error"
+            return 1
+        }
+        if ! flock -w "$bench_lock_wait_seconds" "$bench_lock_fd"
+        then
+            __tac_info "Bench" "[Another bench run is already active (lock: $bench_lock_file)]" "$C_Error"
+            exec {bench_lock_fd}>&-
+            return 1
+        fi
+    fi
+
     __tac_header "MODEL BENCHMARK" "open"
     local bench_run_id
     bench_run_id=$(date +%Y%m%d_%H%M%S)
@@ -2992,6 +3010,10 @@ function __model_bench() {
     [[ -f "$ACTIVE_LLM_FILE" ]] && _bench_prev_model=$(< "$ACTIVE_LLM_FILE")
     local bench_backend=""
     bench_backend=$(__llm_backend_normalize "${LLM_SERVER_BACKEND:-native}")
+    local bench_autotune_mode="${LLM_BENCH_AUTOTUNE_MODE:-quick}"
+    local bench_autotune_trials="${LLM_BENCH_AUTOTUNE_TRIALS:-1}"
+    [[ "$bench_autotune_trials" =~ ^[0-9]+$ ]] || bench_autotune_trials=1
+    (( bench_autotune_trials < 1 )) && bench_autotune_trials=1
 
     local -a b_num=() b_name=() b_size=() b_gpu=() b_tps=()
     local num name file size _arch _quant _layers gpu_layers _ctx _threads _tps
@@ -3013,6 +3035,11 @@ function __model_bench() {
             systemctl --user start llama-watchdog.timer 2>/dev/null
             __tac_info "Watchdog" "Restored" "$C_Dim"
         fi
+        if [[ -n "$bench_lock_fd" ]]
+        then
+            flock -u "$bench_lock_fd" 2>/dev/null || true
+            exec {bench_lock_fd}>&-
+        fi
         return 1
     fi
 
@@ -3032,9 +3059,15 @@ function __model_bench() {
         if [[ -z "$_bench_profile_row" ]]
         then
             __tac_info "Bench" "[No autotune profile for model #${b_num[$i]} ($bench_backend) - running autotune first]" "$C_Warning"
+            __tac_info "Bench" "[Autotune mode=${bench_autotune_mode}, trials=${bench_autotune_trials}]" "$C_Dim"
             export LLM_AUTOTUNE_RESTORE_PREV=0
             export LLM_AUTOTUNE_SKIP_LOCK=1
-            if ! __model_autotune "${b_num[$i]}" --backend "$bench_backend"
+            local -a _bench_autotune_args=("--backend" "$bench_backend" "--trials" "$bench_autotune_trials")
+            if [[ "$bench_autotune_mode" == "quick" ]]
+            then
+                _bench_autotune_args+=("--quick")
+            fi
+            if ! __model_autotune "${b_num[$i]}" "${_bench_autotune_args[@]}"
             then
                 unset LLM_AUTOTUNE_RESTORE_PREV
                 unset LLM_AUTOTUNE_SKIP_LOCK
@@ -3106,6 +3139,11 @@ function __model_bench() {
     then
         systemctl --user start llama-watchdog.timer 2>/dev/null
         __tac_info "Watchdog" "Restored" "$C_Dim"
+    fi
+    if [[ -n "$bench_lock_fd" ]]
+    then
+        flock -u "$bench_lock_fd" 2>/dev/null || true
+        exec {bench_lock_fd}>&-
     fi
     __tac_footer
 }
