@@ -2273,7 +2273,7 @@ function __model_autotune() {
     local lock_fd=""
     local lock_file="${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
     local lock_wait_seconds="${LLM_AUTOTUNE_LOCK_WAIT_SECONDS:-5}"
-    if command -v flock >/dev/null 2>&1
+    if [[ "${LLM_AUTOTUNE_SKIP_LOCK:-0}" != "1" ]] && command -v flock >/dev/null 2>&1
     then
         exec {lock_fd}>"$lock_file" || {
             __tac_info "Autotune" "[Unable to open lock file: $lock_file]" "$C_Error"
@@ -2285,6 +2285,9 @@ function __model_autotune() {
             exec {lock_fd}>&-
             return 1
         fi
+    elif [[ "${LLM_AUTOTUNE_SKIP_LOCK:-0}" == "1" ]]
+    then
+        __tac_info "Autotune" "[Lock skipped by caller]" "$C_Dim"
     fi
 
     local prev_backend="${LLM_SERVER_BACKEND:-}"
@@ -3030,9 +3033,11 @@ function __model_bench() {
         then
             __tac_info "Bench" "[No autotune profile for model #${b_num[$i]} ($bench_backend) - running autotune first]" "$C_Warning"
             export LLM_AUTOTUNE_RESTORE_PREV=0
+            export LLM_AUTOTUNE_SKIP_LOCK=1
             if ! __model_autotune "${b_num[$i]}" --backend "$bench_backend"
             then
                 unset LLM_AUTOTUNE_RESTORE_PREV
+                unset LLM_AUTOTUNE_SKIP_LOCK
                 __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} - skipping benchmark]" "$C_Error"
                 b_tps+=("FAIL_AUTOTUNE")
                 __model_stop 2>/dev/null || true
@@ -3040,6 +3045,7 @@ function __model_bench() {
                 continue
             fi
             unset LLM_AUTOTUNE_RESTORE_PREV
+            unset LLM_AUTOTUNE_SKIP_LOCK
         fi
 
         rm -f "$LLM_TPS_CACHE"
