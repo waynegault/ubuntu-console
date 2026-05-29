@@ -130,7 +130,7 @@ Key translations (not exhaustive — the contracts file is canonical):
   - oc-health --plain output must match tests/fixtures/golden/oc_health_plain.norm
 
   Maintenance (up)
-  - 13-step pipeline with per-step 24h cooldowns
+  - 20-step pipeline with per-step cooldowns (APT upgrade cadence is weekly)
   - Cooldown state stored in $env:USERPROFILE\.openclaw\maintenance_cooldowns.txt
     (equivalent to ~/.openclaw/maintenance_cooldowns.txt)
   - Use file locking (mutex or file-based) equivalent to flock

@@ -39,8 +39,8 @@ unset _tac_mod _tac_expected_modules
 ```
 
 Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
-`15-model-recommender.sh` loads last. Five **utility scripts** (`16–20`) are
-not profile modules and are never sourced by either loader.
+`15-model-recommender.sh` loads last. Utility scripts live in `tools/`, are
+not profile modules, and are never sourced by either loader.
 
 > **Monolith backup:** The pre-modularisation single-file version is preserved
 > as `tactical-console.bashrc.monolith` (5,184 lines) for reference and
@@ -58,7 +58,7 @@ not profile modules and are never sourced by either loader.
 | §5 | `scripts/05-ui-engine.sh` | 534 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
 | §6 | `scripts/06-hooks.sh` | 197 | `cd` override (venv auto-activate), prompt (`PS1`), `__test_port`, admin badge |
 | §7 | `scripts/07-telemetry.sh` | 361 | Host metrics (CPU + dual GPU), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` with trap cleanup |
-| §8 | `scripts/08-maintenance.sh` | 1461 | `up` (13 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, `docs-sync`, cooldown system with `flock` |
+| §8 | `scripts/08-maintenance.sh` | 1461 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, `docs-sync`, cooldown system with `flock` |
 | §9 | `scripts/09-openclaw.sh` | 3217 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-failover`, wacli, `oc-kgraph`, whitelist subcommand validation, process kill safety) |
 | §9b | `scripts/09b-gog.sh` | 165 | Google CLI (`gog`) detection, setup helpers, and integration shims |
 | §10 | `scripts/10-deployment.sh` | 460 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified, secret detection) |
@@ -120,7 +120,7 @@ functions defined in the profile.
 **`env.sh`** is a library loader that sources all 16 profile modules (01–15
 plus `09b-gog`), bypassing the interactive guard and skipping `13-init.sh`
 (which runs screen clear, completions, WSL loopback fixes, and EXIT traps)
-and utility scripts 16–20. Because `09b-gog.sh` does not match the
+and utility scripts in `tools/`. Because `09b-gog.sh` does not match the
 `[0-9][0-9]-*.sh` glob it is sourced explicitly after the main loop. It is
 idempotent (guarded by `__TAC_ENV_LOADED`) and sets `TAC_LIBRARY_MODE=1`
 so functions can detect non-interactive sourcing if needed.
@@ -375,7 +375,7 @@ extra source commands.
 │   ├── oc-model-switch                # Thin wrapper → tac-exec serve
 │   ├── oc-quick-diag                  # Thin wrapper → tac-exec oc diag
 │   └── oc-wake                        # Thin wrapper → tac-exec wake
-├── scripts/                           # Profile modules (01-15, 09b) + utility scripts (16-20)
+├── scripts/                           # Profile modules (01-15, 09b) + kgraph package
 │   ├── 01-constants.sh                #   All paths, ports, env vars
 │   ├── 02-error-handling.sh           #   ERR trap (exit ≥ 2 logged)
 │   ├── 03-design-tokens.sh            #   ANSI colour constants
@@ -383,7 +383,7 @@ extra source commands.
 │   ├── 05-ui-engine.sh                #   Box-drawing primitives
 │   ├── 06-hooks.sh                    #   cd override, prompt, port test
 │   ├── 07-telemetry.sh                #   CPU, GPU, battery, git, disk, tokens
-│   ├── 08-maintenance.sh              #   up (13 steps), cl, get-ip, sysinfo, logtrim, docs-sync
+│   ├── 08-maintenance.sh              #   up (20 steps), cl, get-ip, sysinfo, logtrim, docs-sync
 │   ├── 09-openclaw.sh                 #   Gateway, backup, bridge, oc-failover, wacli, kgraph
 │   ├── 09b-gog.sh                     #   Google CLI (gog) detection and helpers
 │   ├── 10-deployment.sh               #   mkproj (disk check), git commit+push, deploy

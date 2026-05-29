@@ -11,7 +11,7 @@ description: Complete quick reference card for every command, the tactical dashb
 |---|---|---|
 | `m` | Dashboard | Render full tactical dashboard |
 | `h` | Help | Show command help index |
-| `up` | Maintenance | 13-step system maintenance |
+| `up` | Maintenance | 20-step system maintenance |
 | `cls` | Shell | Clear screen + banner |
 | `reload` | Shell | Full profile reload (`exec bash`) |
 | `sysinfo` | System | One-line hardware summary |

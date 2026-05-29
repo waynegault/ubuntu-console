@@ -415,7 +415,7 @@ _tac_expected_modules=(
 | `05-ui-engine.sh` | 534 | Box-drawing: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
 | `06-hooks.sh` | 197 | `cd` override (venv auto-activate), prompt (PS1), `__test_port`, admin badge |
 | `07-telemetry.sh` | 361 | CPU + dual GPU, NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots |
-| `08-maintenance.sh` | 1461 | `up` (13 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system with flock |
+| `08-maintenance.sh` | 1461 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system with flock |
 | `09-openclaw.sh` | 3217 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-failover`, wacli, `oc-kgraph`) |
 | `09b-gog.sh` | 165 | Google CLI (gog) detection and helpers |
 | `10-deployment.sh` | 460 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` |
@@ -507,7 +507,7 @@ function __get_METRIC() {
 
 ### Non-Interactive Access
 
-`env.sh` sources modules `01-15` (skipping `13-init.sh` and utility scripts 16-20). It is idempotent (`__TAC_ENV_LOADED` guard) and sets `TAC_LIBRARY_MODE=1`.
+`env.sh` sources modules `01-15` (skipping `13-init.sh`; utility scripts live in `tools/` and are never sourced). It is idempotent (`__TAC_ENV_LOADED` guard) and sets `TAC_LIBRARY_MODE=1`.
 
 `bin/tac-exec` sources `env.sh` then runs `"$@"`, symlinked to `~/.local/bin/tac-exec`.
 
@@ -531,7 +531,7 @@ function __get_METRIC() {
 │   ├── oc-model-switch                # Thin wrapper → tac-exec serve
 │   ├── oc-quick-diag                  # Thin wrapper → tac-exec oc diag
 │   └── oc-wake                        # Thin wrapper → tac-exec wake
-├── scripts/                           # Profile modules (01-15, 09b) + utility scripts (16-20)
+├── scripts/                           # Profile modules (01-15, 09b) + kgraph package
 │   ├── 01-constants.sh                #   All paths, ports, env vars
 │   ├── 02-error-handling.sh           #   ERR trap
 │   ├── 03-design-tokens.sh            #   ANSI colour constants
@@ -539,7 +539,7 @@ function __get_METRIC() {
 │   ├── 05-ui-engine.sh                #   Box-drawing primitives
 │   ├── 06-hooks.sh                    #   cd override, prompt, port test
 │   ├── 07-telemetry.sh                #   CPU, GPU, battery, git, disk, tokens
-│   ├── 08-maintenance.sh              #   up (13 steps), cl, get-ip, sysinfo
+│   ├── 08-maintenance.sh              #   up (20 steps), cl, get-ip, sysinfo
 │   ├── 09-openclaw.sh                 #   Gateway, backup, kgraph, wacli
 │   ├── 09b-gog.sh                     #   Google CLI (gog) detection and helpers
 │   ├── 10-deployment.sh               #   mkproj, git commit+push, deploy
@@ -625,7 +625,8 @@ function __get_METRIC() {
 | `npm` | `up` step 3 |
 | `openclaw` CLI | All `oc-*` commands |
 
-**Not required:** Python (all LLM streaming is pure bash + curl + jq), Ruby, Docker.
+**Not required for LLM streaming:** Python (streaming is pure bash + curl + jq), Ruby, Docker.
+**Required for `oc g` / kgraph tooling:** Python 3.
 
 ---
 

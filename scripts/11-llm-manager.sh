@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 39
+# Module Version: 41
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -1490,8 +1490,6 @@ function __calc_gpu_layers() {
 # CPU-only models (>4GB) have no VRAM constraint so can use larger ctx.
 function __calc_ctx_size() {
     local _file_bytes=$1 _native_ctx=$2 _arch="${3:-}"
-    local cap
-
     # MoE models use a stable conservative context regardless of size.
     if [[ "${_arch,,}" == *moe* ]]
     then
@@ -1502,20 +1500,15 @@ function __calc_ctx_size() {
     # CPU-only mode (model exceeds VRAM threshold): cap to MOE_DEFAULT_CTX.
     if (( _file_bytes > VRAM_TOTAL_BYTES * VRAM_THRESHOLD_PCT / 100 ))
     then
-        cap=$MOE_DEFAULT_CTX
-    # Tiny models can use a wider context while fitting comfortably.
-    elif (( _file_bytes <= 1 * 1024 * 1024 * 1024 ))
-    then
-        cap=8192
+        echo "$MOE_DEFAULT_CTX"
+        return
     else
-        cap=4096
-    fi
-
-    if (( _native_ctx > 0 && _native_ctx < cap ))
-    then
-        echo "$_native_ctx"
-    else
-        echo "$cap"
+        if (( _native_ctx > 0 ))
+        then
+            echo "$_native_ctx"
+        else
+            echo "$MOE_DEFAULT_CTX"
+        fi
     fi
 }
 
@@ -3192,22 +3185,27 @@ function __model_info() {
     fi
     local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
     IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram <<< "$entry"
+
+    # Explicitly print every models.conf field so schema visibility is complete.
     __tac_info "#" "$num" "$C_Highlight"
-    __tac_info "Model" "$name" "$C_Success"
-    __tac_info "Size" "$size" "$C_Text"
-    __tac_info "Architecture" "$arch" "$C_Text"
-    __tac_info "Quant/Cache-K" "$quant_cache" "$C_Text"
-    __tac_info "GPU Layers" "$gpu_layers" "$C_Highlight"
-    __tac_info "Context Size" "$ctx" "$C_Text"
-    __tac_info "CPU Threads" "$threads" "$C_Text"
-    __tac_info "Batch/Ubatch" "${batch}/${ubatch}" "$C_Text"
-    __tac_info "Parallel/Fit" "${parallel}/${fit_target_mb}" "$C_Text"
-    __tac_info "Backend" "$backend" "$C_Text"
-    __tac_info "Mmap Mode" "${mmap_mode:-auto}" "$C_Text"
-    __tac_info "TPS" "${tps:--}" "$C_Text"
-    __tac_info "Autotuned" "${autotuned:-no}" "$C_Text"
-    __tac_info "Default" "${is_default:-no}" "$C_Text"
-    __tac_info "In VRAM" "${in_vram:-no}" "$C_Text"
+    __tac_info "name" "$name" "$C_Success"
+    __tac_info "file" "$file" "$C_Text"
+    __tac_info "size_gb" "$size" "$C_Text"
+    __tac_info "quant_cache" "$quant_cache" "$C_Text"
+    __tac_info "arch" "$arch" "$C_Text"
+    __tac_info "gpu_layers" "$gpu_layers" "$C_Highlight"
+    __tac_info "ctx" "$ctx" "$C_Text"
+    __tac_info "threads" "$threads" "$C_Text"
+    __tac_info "batch" "$batch" "$C_Text"
+    __tac_info "ubatch" "$ubatch" "$C_Text"
+    __tac_info "parallel" "$parallel" "$C_Text"
+    __tac_info "fit_target_mb" "$fit_target_mb" "$C_Text"
+    __tac_info "backend" "$backend" "$C_Text"
+    __tac_info "mmap_mode" "${mmap_mode:-auto}" "$C_Text"
+    __tac_info "tps" "${tps:--}" "$C_Text"
+    __tac_info "autotuned" "${autotuned:-no}" "$C_Text"
+    __tac_info "is_default" "${is_default:-no}" "$C_Text"
+    __tac_info "in_vram" "${in_vram:-no}" "$C_Text"
     if [[ -f "$LLAMA_MODEL_DIR/$file" ]]
     then
         __tac_info "On Disk" "[FOUND]" "$C_Success"

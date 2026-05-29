@@ -328,8 +328,8 @@ setup() {
     [[ "$COOLDOWN_DAILY" -eq 86400 ]]
 }
 
-@test "constants: COOLDOWN_WEEKLY is 86400 (24h — changed from 7d)" {
-    [[ "$COOLDOWN_WEEKLY" -eq 86400 ]]
+@test "constants: COOLDOWN_WEEKLY is 604800 (7d)" {
+    [[ "$COOLDOWN_WEEKLY" -eq 604800 ]]
 }
 
 @test "constants: LOG_MAX_BYTES is 1048576 (1MB)" {
@@ -582,25 +582,15 @@ setup() {
 }
 
 @test "calc: __calc_ctx_size returns native_ctx when smaller than cap" {
-    # 8GB model (CPU-only), native ctx 4096 (smaller than cap of 8192)
-    result=$(__calc_ctx_size $((8 * 1024 * 1024 * 1024)) 4096 "llama")
+    # 3GB model fits in VRAM, native ctx 4096
+    result=$(__calc_ctx_size $((3 * 1024 * 1024 * 1024)) 4096 "llama")
     [[ "$result" -eq 4096 ]]
 }
 
-@test "calc: __calc_ctx_size small GPU model (3-4GB) caps at 4096" {
+@test "calc: __calc_ctx_size keeps native_ctx for models that fit in VRAM" {
     # 3GB model, large native ctx
     result=$(__calc_ctx_size $((3 * 1024 * 1024 * 1024)) 32768 "llama")
-    [[ "$result" -eq 4096 ]]
-}
-
-@test "calc: __calc_ctx_size 1-2GB model caps at 8192" {
-    result=$(__calc_ctx_size $((1 * 1024 * 1024 * 1024)) 32768 "llama")
-    [[ "$result" -eq 8192 ]]
-}
-
-@test "calc: __calc_ctx_size 2-3GB model caps at 4096" {
-    result=$(__calc_ctx_size $((2 * 1024 * 1024 * 1024)) 32768 "llama")
-    [[ "$result" -eq 4096 ]]
+    [[ "$result" -eq 32768 ]]
 }
 
 @test "calc: __calc_ctx_size tiny model, small native returns native" {
@@ -1311,7 +1301,7 @@ setup() {
     local tmp_db="$TAC_TEST_TMPDIR/cooldown_remain.txt"
     local now
     now=$(date +%s)
-    # Set cooldown 1 hour ago. COOLDOWN_WEEKLY is 86400s (24h).
+    # Set cooldown 1 hour ago. COOLDOWN_WEEKLY is 604800s (7d).
     local one_hour_ago=$(( now - 3600 ))
     echo "some_task=${one_hour_ago}" > "$tmp_db"
     CooldownDB="$tmp_db"
