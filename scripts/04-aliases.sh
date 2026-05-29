@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 15
+# Module Version: 17
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -56,22 +56,36 @@ alias c='clear_tactical'
 alias reload='command clear; exec bash'
 alias m='tactical_dashboard'
 alias cpwd='copy_path'
+
+# Prefix pytest result lines with a running number for easier scanning.
+function __tac_number_pytest_output() {
+    awk '
+        BEGIN { n = 0 }
+        /^[[:space:]]*tests?\/.*::.* (PASSED|FAILED|SKIPPED|XPASS|XFAIL|ERROR|ERRORS?)/ {
+            n++
+            printf "%d. %s\n", n, $0
+            next
+        }
+        { print }
+    '
+}
+
 # unittest — route to investigator unittest when present.
 # Durable rule: always prefer investigator's unittest entrypoint from any cwd;
 # fallback to the ubuntu-console test runner only if investigator is unavailable.
 function unittest() {
     local _investigator_root="/home/wayne/investigator"
     if [[ -x "$_investigator_root/.venv/bin/investigator" ]]; then
-        command "$_investigator_root/.venv/bin/investigator" unittest "$@"
-        return $?
+        command "$_investigator_root/.venv/bin/investigator" unittest "$@" 2>&1 | __tac_number_pytest_output
+        return "${PIPESTATUS[0]}"
     fi
     if [[ -x "$_investigator_root/.venv/bin/unittest" ]]; then
-        command "$_investigator_root/.venv/bin/unittest" "$@"
-        return $?
+        command "$_investigator_root/.venv/bin/unittest" "$@" 2>&1 | __tac_number_pytest_output
+        return "${PIPESTATUS[0]}"
     fi
     if [[ -x "$_investigator_root/unittest" ]]; then
-        command "$_investigator_root/unittest" "$@"
-        return $?
+        command "$_investigator_root/unittest" "$@" 2>&1 | __tac_number_pytest_output
+        return "${PIPESTATUS[0]}"
     fi
     command "$TACTICAL_REPO_ROOT/tools/run-tests.sh" "$@"
 }
