@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 17
+# Module Version: 18
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -70,10 +70,53 @@ function __tac_number_pytest_output() {
     '
 }
 
-# unittest — route to investigator unittest when present.
-# Durable rule: always prefer investigator's unittest entrypoint from any cwd;
-# fallback to the ubuntu-console test runner only if investigator is unavailable.
+# unittest — prefer the current repository's unittest entrypoint when present.
+# If no repository is detected, fall back to the ubuntu-console runner rather
+# than investigator. Investigator remains the fallback for other repos that do
+# not provide a local unittest entrypoint.
+function __tac_repo_unittest_entrypoint() {
+    local repo_root=""
+    repo_root=$(git -C "${PWD:-.}" rev-parse --show-toplevel 2>/dev/null || true)
+
+    if [[ -z "$repo_root" || "$repo_root" == "$TACTICAL_REPO_ROOT" ]]; then
+        printf '%s\n' "$TACTICAL_REPO_ROOT/tools/run-tests.sh"
+        return 0
+    fi
+
+    if [[ -x "$repo_root/unittest" ]]; then
+        printf '%s\n' "$repo_root/unittest"
+        return 0
+    fi
+    if [[ -x "$repo_root/.venv/bin/unittest" ]]; then
+        printf '%s\n' "$repo_root/.venv/bin/unittest"
+        return 0
+    fi
+    if [[ -x "$repo_root/.venv/bin/investigator" ]]; then
+        printf '%s\n' "$repo_root/.venv/bin/investigator unittest"
+        return 0
+    fi
+
+    return 1
+}
+
 function unittest() {
+    local _repo_entrypoint
+    if _repo_entrypoint=$(__tac_repo_unittest_entrypoint)
+    then
+        case "$_repo_entrypoint" in
+            *" investigator unittest")
+                # shellcheck disable=SC2086
+                command $_repo_entrypoint "$@" 2>&1 | __tac_number_pytest_output
+                return "${PIPESTATUS[0]}"
+                ;;
+            *)
+                # shellcheck disable=SC2086
+                command $_repo_entrypoint "$@"
+                return $?
+                ;;
+        esac
+    fi
+
     local _investigator_root="/home/wayne/investigator"
     if [[ -x "$_investigator_root/.venv/bin/investigator" ]]; then
         command "$_investigator_root/.venv/bin/investigator" unittest "$@" 2>&1 | __tac_number_pytest_output
