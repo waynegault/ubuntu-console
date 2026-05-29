@@ -1704,8 +1704,8 @@ setup() {
 @test "llm-manager: model delete dry-run does not remove the model file" {
     local llm_root="$TAC_TEST_TMPDIR/model-delete-dry-run"
     mkdir -p "$llm_root/models" "$llm_root/.llm"
-    printf '%s\n' '#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps' \
-        '1|Demo Model|demo.gguf|1.0G|llama|Q4_K_M|32|999|4096|4|-' > "$llm_root/.llm/models.conf"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
+        '1|Demo Model|demo.gguf|1.0G|Q4_K_M/q8_0|llama|999|4096|4|1024|256|1|256|llama_server|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
     touch "$llm_root/models/demo.gguf"
 
     LLM_REGISTRY="$llm_root/.llm/models.conf"
@@ -1723,9 +1723,9 @@ setup() {
         source '$REPO_ROOT/env.sh' >/dev/null 2>&1
         llm_root='$TAC_TEST_TMPDIR/model-recommend'
         mkdir -p \"\$llm_root/models\" \"\$llm_root/.llm\"
-        printf '%s\n' '#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps' \
-            '1|Fast Model|fast-Q4_K_M.gguf|1.0G|llama|Q4_K_M|32|999|4096|4|14.2' \
-            '2|Slow Model|slow-Q8_0.gguf|3.8G|llama|Q8_0|40|0|8192|8|4.1' > \"\$llm_root/.llm/models.conf\"
+        printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
+            '1|Fast Model|fast-Q4_K_M.gguf|1.0G|Q4_K_M/q8_0|llama|999|4096|4|1024|256|1|256|llama_server|auto|14.2|yes|no|no' \
+            '2|Slow Model|slow-Q8_0.gguf|3.8G|Q8_0/q8_0|llama|0|8192|8|1024|256|1|256|llama_server|auto|4.1|yes|no|no' > \"\$llm_root/.llm/models.conf\"
         touch \"\$llm_root/models/fast-Q4_K_M.gguf\" \"\$llm_root/models/slow-Q8_0.gguf\"
         LLM_REGISTRY=\"\$llm_root/.llm/models.conf\"
         LLAMA_MODEL_DIR=\"\$llm_root/models\"

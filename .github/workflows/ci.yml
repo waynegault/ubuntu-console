@@ -34,7 +34,7 @@ jobs:
           done
 
       - name: Unicode safety
-        run: SKIP_UNICODE_CHECK=0 scripts/lint.sh
+        run: SKIP_UNICODE_CHECK=0 tools/lint.sh
 
   test:
     name: Fast Test Suite
@@ -51,8 +51,14 @@ jobs:
       - name: Run fast tests
         run: bats tests/tactical-console-fast.bats
 
+      - name: Run core tests
+        run: bats tests/tactical-console.bats
+
+      - name: Run integration tests
+        run: bats tests/integration/*.bats
+
       - name: Run lint script
-        run: scripts/lint.sh
+        run: tools/lint.sh
 
   module-count:
     name: Module Integrity

@@ -120,7 +120,7 @@ Key translations (not exhaustive — the contracts file is canonical):
 
   Model management (model list / model use / model stop / model status)
   - LLM registry: \\wsl.localhost\Ubuntu-24.04\mnt\m\.llm\models.conf
-    (pipe-delimited 11-field format: num|name|file|size|arch|quant|layers|gpu_layers|ctx|threads|tps)
+    (pipe-delimited 19-field format: #|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram)
   - Read the registry from Windows via the WSL UNC path
   - model status --plain output must match tests/fixtures/golden/model_status_plain.norm
 

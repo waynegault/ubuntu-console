@@ -31,7 +31,7 @@ FAKEBIN
     chmod +x "$LLAMA_SERVER_BIN"
 
     # Create test model registry entry
-    echo "1|TestModel|test.gguf|2.5G|llama|Q4_K_M|32|0|4096|8|0" > "$LLM_REGISTRY"
+    echo "1|TestModel|test.gguf|2.5G|Q4_K_M/q8_0|llama|0|4096|8|1024|256|1|256|llama_server|auto|0|no|no|no" > "$LLM_REGISTRY"
 
     # Create test model file
     touch "$LLAMA_MODEL_DIR/test.gguf"

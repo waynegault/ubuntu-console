@@ -261,8 +261,8 @@ setup_file() {
     [[ "$count" -eq 1 ]]
 }
 
-@test "constants: COOLDOWN_WEEKLY is 86400 (24h — changed from 7d)" {
-    grep -qP 'COOLDOWN_WEEKLY=86400' "$REPO_ROOT/scripts/01-constants.sh"
+@test "constants: COOLDOWN_WEEKLY is 604800 (7d)" {
+    grep -qP 'COOLDOWN_WEEKLY=604800' "$REPO_ROOT/scripts/01-constants.sh"
 }
 
 @test "aliases: le and lo share __oc_journal_tail helper" {

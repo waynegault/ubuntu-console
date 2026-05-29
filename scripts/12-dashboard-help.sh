@@ -142,7 +142,7 @@ function tactical_dashboard() {
         local tps
         tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
         if [[ -z "$tps" && -n "$_entry" ]]; then
-            tps=$(awk -F'|' '{print $11}' <<< "$_entry")
+            tps=$(awk -F'|' '{print $15}' <<< "$_entry")
             [[ -n "$tps" && "$tps" != "0" ]] && tps="${tps} tps"
         fi
         __fRow "LOCAL LLM" "ACTIVE $act_mod | ${tps:-$LAST_TPS}" "$C_Success"

@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 33
+# Module Version: 39
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -18,9 +18,9 @@
 # @state-in: __LLAMA_DRIVE_MOUNTED (§1), C_* design tokens (§4)
 #   (These globals are read by this module but defined in other modules.)
 
-# Fallback for __LLAMA_DRIVE_MOUNTED if module load order changes or §1 is skipped
-# This prevents errors if 11-llm-manager.sh is sourced before 01-constants.sh
-: "${__LLAMA_DRIVE_MOUNTED:=1}"
+# Fallback for __LLAMA_DRIVE_MOUNTED if module load order changes or §1 is skipped.
+# Default to "not mounted" so callers fail safe instead of silently assuming success.
+: "${__LLAMA_DRIVE_MOUNTED:=0}"
 
 # Ensure LLM_DEFAULT_FILE is defined even if Section 1 wasn't updated
 export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$LLAMA_DRIVE_ROOT/.llm/default_model.conf}"
@@ -47,10 +47,11 @@ readonly _MODEL_PHI4_MINI="Phi-4-mini"
 function __save_tps() {
     local tps_val="$1"
     [[ -z "$tps_val" || ! -f "$ACTIVE_LLM_FILE" || ! -f "$LLM_REGISTRY" ]] && return
+    __llm_registry_sync_state >/dev/null 2>&1 || true
     local active_num
     active_num=$(< "$ACTIVE_LLM_FILE")
     [[ -z "$active_num" ]] && return
-    awk -F'|' -v n="$active_num" -v t="$tps_val" 'BEGIN{OFS="|"} $1 == n {$11 = t} {print}' \
+    awk -F'|' -v n="$active_num" -v t="$tps_val" 'BEGIN{OFS="|"} $1 == n {$16 = t} {print}' \
         "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" \
         && mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
 }
@@ -62,7 +63,8 @@ function __save_model_ctx() {
     local model_num="$1"
     local ctx_val="$2"
     [[ "$model_num" =~ ^[0-9]+$ && "$ctx_val" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return
-    awk -F'|' -v n="$model_num" -v c="$ctx_val" 'BEGIN{OFS="|"} $1 == n {$9 = c} {print}' \
+    __llm_registry_sync_state >/dev/null 2>&1 || true
+    awk -F'|' -v n="$model_num" -v c="$ctx_val" 'BEGIN{OFS="|"} $1 == n {$8 = c} {print}' \
         "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" \
         && mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
 }
@@ -155,59 +157,228 @@ function __llm_default_number() {
 }
 
 # ---------------------------------------------------------------------------
-# __llm_autotune_profiles_file — Return path to persisted autotune profiles.
-# @returns 0 always.
+# __llm_registry_sync_state — Persist default and active flags into registry.
+# Keeps models.conf as canonical state for default selection and in-VRAM model.
+# @returns 0 on success or when registry is unavailable.
 # ---------------------------------------------------------------------------
-function __llm_autotune_profiles_file() {
-    printf '%s\n' "${LLM_AUTOTUNE_PROFILES_FILE:-$LLAMA_DRIVE_ROOT/.llm/autotune_profiles.tsv}"
+function __llm_registry_sync_state() {
+    [[ -f "$LLM_REGISTRY" ]] || return 0
+
+    local default_file=""
+    local active_num=""
+    local active_file=""
+    local running=0
+
+    default_file=$(__llm_default_file 2>/dev/null || true)
+    if __llm_server_running && __test_port "$LLM_PORT"
+    then
+        running=1
+    fi
+
+    if [[ -f "$ACTIVE_LLM_FILE" ]]
+    then
+        active_num=$(< "$ACTIVE_LLM_FILE")
+        active_file=$(awk -F'|' -v n="$active_num" '$1==n {print $3; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
+    fi
+
+    awk -F'|' -v def="$default_file" -v af="$active_file" -v run="$running" 'BEGIN{OFS="|"}
+        $1 == "#" {
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram"
+            next
+        }
+        NF < 16 {
+            next
+        }
+        {
+            # Legacy 16-col: no file state fields and no mmap_mode.
+            if (NF == 16) {
+                $19="no"; $18="no"; $17=$16; $16=$15; $15="auto"
+            }
+            # Legacy 18-col: has state flags but no mmap_mode.
+            if (NF == 18) {
+                $19=$18; $18=$17; $17=$16; $16=$15; $15="auto"
+            }
+            d = ($3 == def ? "yes" : "no")
+            a = (run == 1 && af != "" && $3 == af ? "yes" : "no")
+            $18=d; $19=a
+            if ($15 == "") $15="auto"
+            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+        }
+    ' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" || return 1
+
+    mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY" || return 1
+    return 0
 }
 
 # ---------------------------------------------------------------------------
-# __llm_autotune_profile_get — Return saved profile row for model/backend/context.
-# New format: model_num\tbackend\tctx\tbatch\tubatch\tparallel\tfit_target_mb\ttps\tstamp
-# Legacy format (still supported on read):
-#             model_num\tbackend\tbatch\tubatch\tparallel\tfit_target_mb\ttps\tstamp
+# __llm_autotune_profiles_file — Return registry path for autotune persistence.
+# Autotune winners are persisted directly into flat tuning columns in models.conf.
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __llm_autotune_profiles_file() {
+    printf '%s\n' "$LLM_REGISTRY"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_autotune_sanitize_token — Remove registry delimiters from profile values.
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __llm_autotune_sanitize_token() {
+    local token="${1:-}"
+    token="${token//|/_}"
+    token="${token//;/_}"
+    token="${token//,/_}"
+    printf '%s\n' "$token"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_autotune_blob_upsert — Upsert backend winner into encoded blob.
+# Blob format (per entry, comma-separated; entries separated by ';'):
+# backend,ctx,batch,ubatch,parallel,fit,tps,stamp,score,stddev,samples,
+# failures,ctx_min,ctx_max,verified,objective
+# Keeps at most one profile entry per backend (latest winner wins).
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __llm_autotune_blob_upsert() {
+    local blob="${1:-}"
+    local backend="${2:-}"
+    local ctx_size="${3:-}"
+    local batch="${4:-}"
+    local ubatch="${5:-}"
+    local parallel="${6:-}"
+    local fit_target_mb="${7:-}"
+    local tps="${8:-}"
+    local stamp="${9:-}"
+    local score="${10:-0}"
+    local stddev="${11:-0}"
+    local samples="${12:-0}"
+    local failures="${13:-0}"
+    local ctx_min="${14:-$ctx_size}"
+    local ctx_max="${15:-$ctx_size}"
+    local verified="${16:-0}"
+    local objective="${17:-no-oom>max-ctx>max-tps}"
+
+    objective=$(__llm_autotune_sanitize_token "$objective")
+
+    local out=""
+    local rec
+    local -a entries=()
+    IFS=';' read -r -a entries <<< "$blob"
+    for rec in "${entries[@]}"
+    do
+        [[ -z "$rec" ]] && continue
+        local rb rc _rest
+        IFS=',' read -r rb rc _rest <<< "$rec"
+        if [[ "$rb" == "$backend" ]]
+        then
+            continue
+        fi
+        if [[ -n "$out" ]]
+        then
+            out+=";"
+        fi
+        out+="$rec"
+    done
+
+    local new_entry="${backend},${ctx_size},${batch},${ubatch},${parallel},${fit_target_mb},${tps},${stamp},${score},${stddev},${samples},${failures},${ctx_min},${ctx_max},${verified},${objective}"
+    if [[ -n "$out" ]]
+    then
+        out+=";"
+    fi
+    out+="$new_entry"
+    printf '%s\n' "$out"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_autotune_profile_get — Legacy helper retained for compatibility.
+# Flat schema uses direct columns rather than encoded profile blobs.
+# Returned format:
+#   model_num\tbackend\tctx\tbatch\tubatch\tparallel\tfit_target_mb\ttps\tstamp...
 # @returns 0 on success, 1 when no profile exists.
 # ---------------------------------------------------------------------------
 function __llm_autotune_profile_get() {
     local model_num="${1:-}"
     local backend="${2:-}"
     local ctx_size="${3:-}"
-    local profile_file
-    profile_file=$(__llm_autotune_profiles_file)
+    local entry=""
+    entry=$(__llm_registry_entry_by_num "$model_num") || return 1
 
-    [[ -n "$model_num" && -n "$backend" && -f "$profile_file" ]] || return 1
+    local _num _name _file _size _arch _quant _layers _gpu _ctx _threads _tps blob _done
+    IFS='|' read -r _num _name _file _size _arch _quant _layers _gpu _ctx _threads _tps blob _done <<< "$entry"
+    [[ -n "$backend" && -n "$blob" ]] || return 1
 
-    awk -F'\t' -v n="$model_num" -v b="$backend" -v c="$ctx_size" '
-        $1 == "#" { next }
-        {
-            rn = $1
-            rb = $2
+    local exact=""
+    local fallback=""
+    local rec
+    local -a entries=()
+    IFS=';' read -r -a entries <<< "$blob"
+    for rec in "${entries[@]}"
+    do
+        [[ -z "$rec" ]] && continue
+        local rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj
+        IFS=',' read -r rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj <<< "$rec"
+        [[ "$rb" == "$backend" ]] || continue
 
-            if (NF >= 9) {
-                rc = $3
-            } else if (NF >= 8) {
-                rc = "*"
-            } else {
-                next
-            }
+        [[ -z "$rc" ]] && rc="*"
+        [[ -z "$rscore" ]] && rscore="$rtps"
+        [[ -z "$rstddev" ]] && rstddev="0"
+        [[ -z "$rsamples" ]] && rsamples="0"
+        [[ -z "$rfail" ]] && rfail="0"
+        [[ -z "$rctxmin" ]] && rctxmin="$rc"
+        [[ -z "$rctxmax" ]] && rctxmax="$rc"
+        [[ -z "$rverified" ]] && rverified="0"
+        [[ -z "$robj" ]] && robj="no-oom>max-ctx>max-tps"
 
-            if (rn == n && rb == b) {
-                if (c != "" && rc == c) {
-                    exact = $0
-                } else if ((rc == "*" || rc == "") && fallback == "") {
-                    fallback = $0
-                }
-            }
-        }
-        END {
-            if (exact != "") {
-                print exact
-            } else if (fallback != "") {
-                print fallback
-            }
-        }
-    ' "$profile_file"
+        local row
+        row=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+            "$model_num" "$rb" "$rc" "$rbatch" "$rubatch" "$rparallel" "$rfit" "$rtps" "$rstamp" \
+            "$rscore" "$rstddev" "$rsamples" "$rfail" "$rctxmin" "$rctxmax" "$rverified" "$robj")
+
+        if [[ -n "$ctx_size" && "$rc" == "$ctx_size" ]]
+        then
+            exact="$row"
+        elif [[ ("$rc" == "*" || -z "$rc") && -z "$fallback" ]]
+        then
+            fallback="$row"
+        fi
+    done
+
+    if [[ -n "$exact" ]]
+    then
+        printf '%s\n' "$exact"
+        return 0
+    fi
+    if [[ -n "$fallback" ]]
+    then
+        printf '%s\n' "$fallback"
+        return 0
+    fi
+
+    # Latest backend winner fallback (ctx-agnostic).
+    local rec_any
+    for rec_any in "${entries[@]}"
+    do
+        [[ -z "$rec_any" ]] && continue
+        local rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj
+        IFS=',' read -r rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj <<< "$rec_any"
+        [[ "$rb" == "$backend" ]] || continue
+
+        [[ -z "$rscore" ]] && rscore="$rtps"
+        [[ -z "$rstddev" ]] && rstddev="0"
+        [[ -z "$rsamples" ]] && rsamples="0"
+        [[ -z "$rfail" ]] && rfail="0"
+        [[ -z "$rctxmin" ]] && rctxmin="$rc"
+        [[ -z "$rctxmax" ]] && rctxmax="$rc"
+        [[ -z "$rverified" ]] && rverified="0"
+        [[ -z "$robj" ]] && robj="no-oom>max-ctx>max-tps"
+
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$model_num" "$rb" "${rc:-*}" "$rbatch" "$rubatch" "$rparallel" "$rfit" "$rtps" "$rstamp" \
+            "$rscore" "$rstddev" "$rsamples" "$rfail" "$rctxmin" "$rctxmax" "$rverified" "$robj"
+        return 0
+    done
+
+    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -231,131 +402,197 @@ function __llm_backend_normalize() {
 function __llm_autotune_profile_best_for_model() {
     local model_num="${1:-}"
     local backend="${2:-}"
-    local profile_file
-    profile_file=$(__llm_autotune_profiles_file)
+    [[ "$model_num" =~ ^[0-9]+$ ]] || return 1
 
-    [[ "$model_num" =~ ^[0-9]+$ && -f "$profile_file" ]] || return 1
+    local entry=""
+    entry=$(__llm_registry_entry_by_num "$model_num") || return 1
+    local _num _name _file _size _arch _quant _layers _gpu _ctx _threads _tps blob _done
+    IFS='|' read -r _num _name _file _size _arch _quant _layers _gpu _ctx _threads _tps blob _done <<< "$entry"
+    [[ -n "$blob" ]] || return 1
 
-    awk -F'\t' -v n="$model_num" -v b="$backend" '
-        $1 == "#" { next }
-        $1 != n { next }
-        b != "" && $2 != b { next }
-        {
-            ctx = 0
-            if (NF >= 9 && $3 ~ /^[0-9]+$/) {
-                ctx = $3 + 0
-            }
-            score = 0
-            if (NF >= 10 && $10 ~ /^[0-9]+(\.[0-9]+)?$/) {
-                score = $10 + 0
-            } else if (NF >= 8 && $8 ~ /^[0-9]+(\.[0-9]+)?$/) {
-                score = $8 + 0
-            }
+    local seen=0
+    local best=""
+    local best_ctx=0
+    local best_score=0
+    local rec
+    local -a entries=()
+    IFS=';' read -r -a entries <<< "$blob"
+    for rec in "${entries[@]}"
+    do
+        [[ -z "$rec" ]] && continue
+        local rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj
+        IFS=',' read -r rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj <<< "$rec"
+        [[ -n "$backend" && "$rb" != "$backend" ]] && continue
 
-            if (!seen || ctx > best_ctx || (ctx == best_ctx && score > best_score)) {
-                best = $0
-                best_ctx = ctx
-                best_score = score
-                seen = 1
-            }
-        }
-        END {
-            if (seen) {
-                print best
-            }
-        }
-    ' "$profile_file"
+        local cval=0
+        local sval=0
+        [[ "$rc" =~ ^[0-9]+$ ]] && cval="$rc"
+        if [[ "$rscore" =~ ^[0-9]+(\.[0-9]+)?$ ]]
+        then
+            sval="$rscore"
+        elif [[ "$rtps" =~ ^[0-9]+(\.[0-9]+)?$ ]]
+        then
+            sval="$rtps"
+        fi
+        [[ -z "$rscore" ]] && rscore="$rtps"
+        [[ -z "$rstddev" ]] && rstddev="0"
+        [[ -z "$rsamples" ]] && rsamples="0"
+        [[ -z "$rfail" ]] && rfail="0"
+        [[ -z "$rctxmin" ]] && rctxmin="$rc"
+        [[ -z "$rctxmax" ]] && rctxmax="$rc"
+        [[ -z "$rverified" ]] && rverified="0"
+        [[ -z "$robj" ]] && robj="no-oom>max-ctx>max-tps"
+
+        if (( seen == 0 )) \
+            || (( cval > best_ctx )) \
+            || { (( cval == best_ctx )) && awk -v s="$sval" -v b="$best_score" 'BEGIN{exit !(s>b)}'; }
+        then
+            best=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+                "$model_num" "$rb" "${rc:-*}" "$rbatch" "$rubatch" "$rparallel" "$rfit" "$rtps" "$rstamp" \
+                "$rscore" "$rstddev" "$rsamples" "$rfail" "$rctxmin" "$rctxmax" "$rverified" "$robj")
+            best_ctx="$cval"
+            best_score="$sval"
+            seen=1
+        fi
+    done
+
+    [[ "$seen" == "1" ]] || return 1
+    printf '%s\n' "$best"
 }
 
 # ---------------------------------------------------------------------------
-# __llm_autotune_profile_save — Upsert a profile row for model/backend/context.
+# __llm_autotune_done_for_model — Check flat autotune flag column.
+# models.conf schema (v37): column 17 stores yes/no.
+# @returns 0 when autotuned=yes, 1 otherwise.
+# ---------------------------------------------------------------------------
+function __llm_autotune_done_for_model() {
+    local model_num="${1:-}"
+    [[ "$model_num" =~ ^[0-9]+$ ]] || return 1
+
+    awk -F'|' -v n="$model_num" '$1==n {exit !($17=="yes")}' "$LLM_REGISTRY" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# __llm_autotune_profile_save — Persist latest winning autotune as defaults.
 # New signature:
 #   __llm_autotune_profile_save <model> <backend> <ctx> <batch> <ubatch> <parallel> <fit> <tps> [stamp]
-# Backward-compatible signature:
-#   __llm_autotune_profile_save <model> <backend> <batch> <ubatch> <parallel> <fit> <tps> [stamp]
-#   (saved as wildcard context "*")
 # @returns 0 on success, 1 on validation/write failure.
 # ---------------------------------------------------------------------------
 function __llm_autotune_profile_save() {
     local model_num="${1:-}"
-    local backend="${2:-}"
-    local ctx_size=""
-    local batch=""
-    local ubatch=""
-    local parallel=""
-    local fit_target_mb=""
-    local tps=""
-    local stamp=""
-
-    if [[ -n "${8:-}" ]]
-    then
-        ctx_size="${3:-}"
-        batch="${4:-}"
-        ubatch="${5:-}"
-        parallel="${6:-}"
-        fit_target_mb="${7:-}"
-        tps="${8:-}"
-        stamp="${9:-$(date +%Y-%m-%dT%H:%M:%S%z)}"
-    else
-        ctx_size="*"
-        batch="${3:-}"
-        ubatch="${4:-}"
-        parallel="${5:-}"
-        fit_target_mb="${6:-}"
-        tps="${7:-}"
-        stamp="${8:-$(date +%Y-%m-%dT%H:%M:%S%z)}"
-    fi
-
-    local profile_file profile_dir
-    local meta_score="${LLM_AUTOTUNE_LAST_SCORE:-$tps}"
-    local meta_stddev="${LLM_AUTOTUNE_LAST_STDDEV:-0}"
-    local meta_samples="${LLM_AUTOTUNE_LAST_SAMPLES:-0}"
-    local meta_failures="${LLM_AUTOTUNE_LAST_FAILURES:-0}"
-    local meta_ctx_min="${LLM_AUTOTUNE_LAST_CTX_MIN:-$ctx_size}"
-    local meta_ctx_max="${LLM_AUTOTUNE_LAST_CTX_MAX:-$ctx_size}"
-    local meta_verified="${LLM_AUTOTUNE_LAST_VERIFIED:-0}"
-    local meta_objective="${LLM_AUTOTUNE_OBJECTIVE:-no-oom>max-ctx>max-tps}"
-    profile_file=$(__llm_autotune_profiles_file)
-    profile_dir=$(dirname "$profile_file")
+    local backend="${2:-llama_server}"
+    local ctx_size="${3:-}"
+    local batch="${4:-}"
+    local ubatch="${5:-}"
+    local parallel="${6:-}"
+    local fit_target_mb="${7:-}"
+    local tps="${8:-}"
+    local profile_file="$LLM_REGISTRY"
 
     [[ "$model_num" =~ ^[0-9]+$ ]] || return 1
-    [[ "$ctx_size" == "*" || "$ctx_size" =~ ^[0-9]+$ ]] || return 1
+    [[ "$ctx_size" =~ ^[0-9]+$ ]] || return 1
     [[ "$batch" =~ ^[0-9]+$ ]] || return 1
     [[ "$ubatch" =~ ^[0-9]+$ ]] || return 1
     [[ "$parallel" =~ ^[0-9]+$ ]] || return 1
     [[ "$fit_target_mb" =~ ^[0-9]+$ ]] || return 1
+    [[ "$tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] || tps="0"
 
-    mkdir -p "$profile_dir" 2>/dev/null || return 1
+    [[ -f "$profile_file" ]] || return 1
 
-    if [[ ! -f "$profile_file" ]]
-    then
-        printf '#\tbackend\tctx\tbatch\tubatch\tparallel\tfit_target_mb\ttps\tstamp\tscore\tstddev\tsamples\tfailures\tctx_min\tctx_max\tverified\tobjective\n' > "$profile_file" || return 1
-    fi
+    local updated=0
+    : > "${profile_file}.tmp" || return 1
+    local line
+    while IFS= read -r line
+    do
+        if [[ "$line" == "#|"* ]]
+        then
+            printf '%s\n' "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram" >> "${profile_file}.tmp" || return 1
+            continue
+        fi
 
-    awk -F'\t' -v n="$model_num" -v b="$backend" -v c="$ctx_size" 'BEGIN{OFS="\t"}
-        $1 == "#" { print; next }
+        if [[ -z "$line" ]]
+        then
+            continue
+        fi
+
+        local rnum rname rfile rsize rquant_cache rarch rgpu rctx rthreads rbatch rubatch rparallel rfit rbackend rmmap rtps rautotuned ris_default rin_vram
+        IFS='|' read -r rnum rname rfile rsize rquant_cache rarch rgpu rctx rthreads rbatch rubatch rparallel rfit rbackend rmmap rtps rautotuned ris_default rin_vram <<< "$line"
+
+        if [[ "$rnum" == "$model_num" ]]
+        then
+            rctx="$ctx_size"
+            rbatch="$batch"
+            rubatch="$ubatch"
+            rparallel="$parallel"
+            rfit="$fit_target_mb"
+            rbackend="$backend"
+            [[ -n "$rmmap" ]] || rmmap="auto"
+            rtps="$tps"
+            rautotuned="yes"
+            updated=1
+        fi
+
+        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+            "$rnum" "$rname" "$rfile" "$rsize" "$rquant_cache" "$rarch" "$rgpu" "$rctx" "$rthreads" "$rbatch" "$rubatch" "$rparallel" "$rfit" "$rbackend" "${rmmap:-auto}" "$rtps" "${rautotuned:-no}" "${ris_default:-no}" "${rin_vram:-no}" >> "${profile_file}.tmp" || return 1
+    done < "$profile_file"
+
+    [[ "$updated" == "1" ]] || {
+        rm -f "${profile_file}.tmp"
+        return 1
+    }
+
+    mv "${profile_file}.tmp" "$profile_file" || return 1
+}
+
+# ---------------------------------------------------------------------------
+# __llm_autotune_profiles_remap_by_registry — Carry tuning columns by filename.
+# @returns 0 when remap succeeds or is not needed, 1 on write failure.
+# ---------------------------------------------------------------------------
+function __llm_autotune_profiles_remap_by_registry() {
+    local old_registry="${1:-}"
+    local new_registry="${2:-}"
+    [[ -f "$old_registry" && -f "$new_registry" ]] || return 0
+
+    awk -F'|' 'BEGIN{OFS="|"}
+        FNR == NR {
+            if ($1 != "#" && NF >= 16) {
+                key=$3
+                old_ctx[key]=$8; old_thr[key]=$9; old_batch[key]=$10; old_ub[key]=$11
+                old_par[key]=$12; old_fit[key]=$13; old_be[key]=$14
+                if (NF >= 19) {
+                    old_mm[key]=$15; old_tps[key]=$16; old_done[key]=$17
+                } else {
+                    old_mm[key]="auto"; old_tps[key]=$15; old_done[key]=$16
+                }
+            }
+            next
+        }
         {
-            if (NF >= 9) {
-                rc = $3
-            } else if (NF >= 8) {
-                rc = "*"
-            } else {
-                print
+            if ($1 == "#") {
+                print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram"
                 next
             }
 
-            if (!($1 == n && $2 == b && rc == c)) {
-                print
+            if (NF < 16) {
+                next
             }
+            if (NF == 16) {
+                $19="no"; $18="no"; $17=$16; $16=$15; $15="auto"
+            }
+            if (NF == 18) {
+                $19=$18; $18=$17; $17=$16; $16=$15; $15="auto"
+            }
+            key=$3
+            if (key in old_ctx) {
+                $8=old_ctx[key]; $9=old_thr[key]; $10=old_batch[key]; $11=old_ub[key]
+                $12=old_par[key]; $13=old_fit[key]; $14=old_be[key]; $15=old_mm[key]; $16=old_tps[key]; $17=old_done[key]
+            }
+            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
         }
-    ' "$profile_file" > "${profile_file}.tmp" || return 1
+    ' "$old_registry" "$new_registry" > "${new_registry}.tmp" || return 1
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$model_num" "$backend" "$ctx_size" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "$tps" "$stamp" \
-        "$meta_score" "$meta_stddev" "$meta_samples" "$meta_failures" "$meta_ctx_min" "$meta_ctx_max" "$meta_verified" "$meta_objective" \
-        >> "${profile_file}.tmp" || return 1
-
-    mv "${profile_file}.tmp" "$profile_file" || return 1
+    mv "${new_registry}.tmp" "$new_registry" || return 1
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -441,19 +678,71 @@ function __llm_is_healthy() {
 # Supports both legacy llama-server and llama-cpp-python server module names.
 # ---------------------------------------------------------------------------
 function __llm_server_running() {
-    pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
+    local _llm_user
+    _llm_user="${USER:-$(id -un 2>/dev/null || true)}"
+    if [[ -n "$_llm_user" ]]
+    then
+        pgrep -u "$_llm_user" -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
+    else
+        pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
+    fi
 }
 
 function __llm_server_stop() {
-    pkill -u "$USER" -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null
-    local _llm_pid
-    _llm_pid=$(ss -tlnp "sport = :${LLM_PORT}" 2>/dev/null | awk '
-        match($0, /pid=([0-9]+)/, m) { print m[1]; exit }
-    ')
-    if [[ -n "$_llm_pid" ]]
+    local _llm_user _proc_re _grace _tries _i
+    local _llm_pid _pid
+    local -a _pids=()
+
+    _llm_user="${USER:-$(id -un 2>/dev/null || true)}"
+    _proc_re="${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}"
+    _grace="${LLM_SERVER_STOP_GRACE_SECONDS:-8}"
+    [[ "$_grace" =~ ^[0-9]+$ ]] || _grace=8
+    _tries=$((_grace * 5))
+    ((_tries < 5)) && _tries=5
+
+    if [[ -n "$_llm_user" ]]
     then
-        kill "$_llm_pid" 2>/dev/null || true
+        mapfile -t _pids < <(pgrep -u "$_llm_user" -f "$_proc_re" 2>/dev/null || true)
+    else
+        mapfile -t _pids < <(pgrep -f "$_proc_re" 2>/dev/null || true)
     fi
+
+    _llm_pid=$(ss -tlnp "sport = :${LLM_PORT}" 2>/dev/null | awk 'match($0, /pid=([0-9]+)/, m) { print m[1]; exit }')
+    if [[ "$_llm_pid" =~ ^[0-9]+$ ]]
+    then
+        _pids+=("$_llm_pid")
+    fi
+
+    if (( ${#_pids[@]} == 0 ))
+    then
+        return 0
+    fi
+
+    for _pid in "${_pids[@]}"
+    do
+        [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        kill -TERM "$_pid" 2>/dev/null || true
+    done
+
+    for ((_i=0; _i<_tries; _i++))
+    do
+        if [[ -n "$_llm_user" ]]
+        then
+            mapfile -t _pids < <(pgrep -u "$_llm_user" -f "$_proc_re" 2>/dev/null || true)
+        else
+            mapfile -t _pids < <(pgrep -f "$_proc_re" 2>/dev/null || true)
+        fi
+        (( ${#_pids[@]} == 0 )) && return 0
+        sleep 0.2
+    done
+
+    for _pid in "${_pids[@]}"
+    do
+        [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        kill -KILL "$_pid" 2>/dev/null || true
+    done
+
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -1023,7 +1312,7 @@ function gpu-check() {
 #   info, bench, bench-diff, bench-compare, bench-latest, bench-history,
 #   delete, archive, download
 # Registry: models.conf — auto-generated by 'model scan', do not hand-edit.
-# Format: #|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads
+# Format: #|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram
 # Active model tracked in: $ACTIVE_LLM_FILE (just the model number)
 # ---------------------------------------------------------------------------
 
@@ -1336,17 +1625,28 @@ function __quant_label() {
 # ---------------------------------------------------------------------------
 function __renumber_registry() {
     local target="$1"
+    local old_registry_snapshot
+    old_registry_snapshot=$(mktemp "${LLM_REGISTRY}.old.XXXXXX") || return 1
+    cp "$LLM_REGISTRY" "$old_registry_snapshot" 2>/dev/null || {
+        rm -f "$old_registry_snapshot"
+        return 1
+    }
+
     awk -F'|' -v n="$target" '$1 != n && $1 != "#"' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
     local newnum=0
-    { echo "#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps"
-      while IFS='|' read -r _num rest
-      do
-          ((newnum++))
-          echo "${newnum}|${rest}"
-      done < "${LLM_REGISTRY}.tmp"
+    {
+        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram"
+        while IFS='|' read -r _num rest
+        do
+            ((newnum++))
+            echo "${newnum}|${rest}"
+        done < "${LLM_REGISTRY}.tmp"
     } > "$LLM_REGISTRY"
     rm -f "${LLM_REGISTRY}.tmp"
+    __llm_autotune_profiles_remap_by_registry "$old_registry_snapshot" "$LLM_REGISTRY" >/dev/null 2>&1 || true
+    rm -f "$old_registry_snapshot"
     rm -f "$ACTIVE_LLM_FILE"
+    __llm_registry_sync_state >/dev/null 2>&1 || true
     echo "$newnum"
 }
 
@@ -1366,7 +1666,16 @@ function __model_scan() {
 
     __tac_info "Scanning" "$LLAMA_MODEL_DIR" "$C_Highlight"
     local tmpconf="${LLM_REGISTRY}.tmp"
-    echo "#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps" > "$tmpconf"
+    local old_registry_snapshot=""
+    if [[ -f "$LLM_REGISTRY" ]]
+    then
+        old_registry_snapshot=$(mktemp "${LLM_REGISTRY}.oldscan.XXXXXX") || return 1
+        cp "$LLM_REGISTRY" "$old_registry_snapshot" 2>/dev/null || {
+            rm -f "$old_registry_snapshot"
+            return 1
+        }
+    fi
+    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram" > "$tmpconf"
 
     local num=0
     local gguf
@@ -1379,11 +1688,11 @@ function __model_scan() {
         fbytes=$(stat --format=%s "$gguf" 2>/dev/null || stat -f%z "$gguf" 2>/dev/null)
         (( fbytes < 500000000 )) && continue
 
-        __tac_info "Reading" "$fname" "$C_Dim"
+        __tac_info "Reading" "${fname%.gguf}" "$C_Dim"
         local meta
         meta=$(__gguf_metadata "$gguf")
-        local mname march mblocks mctx mftype
-        IFS='|' read -r mname march mblocks mctx mftype <<< "$meta"
+        local _mname march mblocks mctx mftype
+        IFS='|' read -r _mname march mblocks mctx mftype <<< "$meta"
 
         local size_gb
         size_gb=$(awk "BEGIN{printf \"%.1f\", $fbytes/1024/1024/1024}")
@@ -1397,19 +1706,33 @@ function __model_scan() {
         threads=$(__calc_threads "$gpu_layers" "$mblocks")
 
         ((num++))
-        local prev_tps="-"
+        local prev_batch="${LLAMA_BATCH_SIZE:-1024}"
+        local prev_ubatch="${LLAMA_UBATCH_SIZE:-256}"
+        local prev_parallel="${LLAMA_PARALLEL_SLOTS:-1}"
+        local prev_fit="${LLAMA_FIT_TARGET_MB:-256}"
+        local prev_backend="llama_server"
+        local prev_mmap="auto"
+        local prev_tps="0"
+        local prev_autotuned="no"
+        local prev_default="no"
+        local prev_active="no"
         if [[ -f "$LLM_REGISTRY" ]]
         then
-            prev_tps=$(awk -F'|' -v f="$fname" '$3 == f {print $11}' "$LLM_REGISTRY" 2>/dev/null)
-            [[ -z "$prev_tps" ]] && prev_tps="-"
+            local prev_row
+            prev_row=$(awk -F'|' -v f="$fname" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
+            if [[ -n "$prev_row" ]]
+            then
+                IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_tps prev_autotuned prev_default prev_active <<< "$prev_row"
+            fi
         fi
 
-        local _reg_line="${num}|${mname}|${fname}|${size_gb}G"
-        _reg_line+="|${march}|${quant}|${mblocks}"
-        _reg_line+="|${gpu_layers}|${ctx}|${threads}|${prev_tps}"
+        local quant_cache="${quant}/${LLAMA_CACHE_TYPE_K:-q8_0}"
+
+        local _reg_line="${num}|${_mname:-$fname}|${fname}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}|${ctx}|${threads}"
+        _reg_line+="|${prev_batch}|${prev_ubatch}|${prev_parallel}|${prev_fit}|${prev_backend}|${prev_mmap}|${prev_tps}|${prev_autotuned}|${prev_default}|${prev_active}"
         echo "$_reg_line" >> "$tmpconf"
 
-        local __tac_msg="${mname} (${size_gb}G, ${quant}, ${mblocks}L ${ARROW_R} ${gpu_layers} GPU)"
+        local __tac_msg="${_mname:-Model} (${size_gb}G, ${quant_cache}, ${mblocks}L ${ARROW_R} ${gpu_layers} GPU)"
         __tac_info "  #${num}" "$__tac_msg" "$C_Success"
     done
 
@@ -1421,7 +1744,13 @@ function __model_scan() {
     fi
 
     mv "$tmpconf" "$LLM_REGISTRY"
+    if [[ -n "$old_registry_snapshot" ]]
+    then
+        __llm_autotune_profiles_remap_by_registry "$old_registry_snapshot" "$LLM_REGISTRY" >/dev/null 2>&1 || true
+        rm -f "$old_registry_snapshot"
+    fi
     __tac_info "Registry" "[${num} models written to $LLM_REGISTRY]" "$C_Success"
+    __llm_registry_sync_state >/dev/null 2>&1 || true
 
     if [[ -f "$QUANT_GUIDE" ]]
     then
@@ -1429,10 +1758,10 @@ function __model_scan() {
         active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
         local archived=0
         local to_archive=()
-        local _qnum _qname _qfile _qsize _qarch _qqnt _rest
-        while IFS='|' read -r _qnum _qname _qfile _qsize _qarch _qqnt _rest
+        local _qnum _qname _qfile _qsize _qqcache _qarch _qgpu _qctx _qthr _qb _qub _qp _qfit _qbe _qmm _qtps _qautotuned _qdefault _qactive
+        while IFS='|' read -r _qnum _qname _qfile _qsize _qqcache _qarch _qgpu _qctx _qthr _qb _qub _qp _qfit _qbe _qmm _qtps _qautotuned _qdefault _qactive
         do
-            [[ "$_qnum" == "#"* || -z "$_qfile" ]] && continue
+            [[ "$_qnum" == "#"* || -z "$_qname" ]] && continue
             [[ "$_qnum" == "$active_num" ]] && continue
             local _qrating=""
             local _r _pat _d
@@ -1447,16 +1776,16 @@ function __model_scan() {
             done < "$QUANT_GUIDE"
             if [[ "$_qrating" == "discouraged" ]]
             then
-                to_archive+=("${_qnum}|${_qname}|${_qfile}|${_qqnt}")
+                to_archive+=("${_qnum}|${_qfile}|${_qqcache}")
             fi
         done < "$LLM_REGISTRY"
 
         local _ae
         for _ae in "${to_archive[@]}"
         do
-            local _anum _aname _afile _aqunt
-            IFS='|' read -r _anum _aname _afile _aqunt <<< "$_ae"
-            local src="$LLAMA_MODEL_DIR/$_afile"
+            local _anum _aname _aqunt
+            IFS='|' read -r _anum _aname _aqunt <<< "$_ae"
+            local src="$LLAMA_MODEL_DIR/$_aname"
             if [[ -f "$src" ]]
             then
                 mkdir -p "$LLAMA_ARCHIVE_DIR"
@@ -1473,7 +1802,7 @@ function __model_scan() {
             __tac_info "Enforcement" "[$archived discouraged model(s) moved to archive]" "$C_Warning"
             local clean_tmp="${LLM_REGISTRY}.tmp"
             local new_num=0
-            echo "#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps" > "$clean_tmp"
+            echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram" > "$clean_tmp"
             local _cline
             while IFS= read -r _cline
             do
@@ -1515,39 +1844,30 @@ function __model_list() {
         return 1
     fi
 
+    __llm_registry_sync_state >/dev/null 2>&1 || true
+
     local active_num=""
     [[ -f "$ACTIVE_LLM_FILE" ]] && active_num=$(< "$ACTIVE_LLM_FILE")
     local default_file=""
     default_file=$(__llm_default_file 2>/dev/null || true)
-    local list_backend=""
-    list_backend=$(__llm_backend_normalize "${LLM_SERVER_BACKEND:-native}")
 
     if [[ "$output_mode" == "json" ]]
     then
         printf '{\n  "models": [\n'
         local first=1
-        while IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local is_active="false"
-            local is_default="false"
-            local autotune="pending"
-            local profile_row=""
-            profile_row=$(__llm_autotune_profile_best_for_model "$num" "$list_backend" 2>/dev/null || true)
-            if [[ -n "$profile_row" ]]
-            then
-                local _pf_num _pf_backend _pf_ctx _pf_batch _pf_ubatch _pf_parallel _pf_fit _pf_tps _pf_stamp
-                IFS=$'\t' read -r _pf_num _pf_backend _pf_ctx _pf_batch _pf_ubatch _pf_parallel _pf_fit _pf_tps _pf_stamp _rest <<< "$profile_row"
-                [[ "$_pf_ctx" == "*" || -z "$_pf_ctx" ]] && _pf_ctx="$ctx"
-                autotune="ctx ${_pf_ctx}, b ${_pf_batch}/${_pf_ubatch}, p ${_pf_parallel}, fit ${_pf_fit}, tps ${_pf_tps:-n/a}"
-            fi
-            [[ "$num" == "$active_num" ]] && __llm_server_running && is_active="true"
-            [[ "$file" == "$default_file" ]] && is_default="true"
+            local is_default_json="false"
+            [[ "${in_vram:-no}" == "yes" ]] && is_active="true"
+            [[ "${is_default:-no}" == "yes" ]] && is_default_json="true"
             (( first )) || printf ',\n'
-            printf '    {"num":%s,"name":"%s","file":"%s","size":"%s","arch":"%s",\
-"quant":"%s","gpu_layers":%s,"ctx":%s,"active":%s,"default":%s,"autotune":"%s"}' \
-                "$num" "$(__llm_json_escape "$name")" "$(__llm_json_escape "$file")" "$size" \
-                "$(__llm_json_escape "$arch")" "$quant" "$gpu_layers" "$ctx" "$is_active" "$is_default" "$(__llm_json_escape "$autotune")"
+            printf '    {"num":%s,"name":"%s","file":"%s","size":"%s","quant_cache":"%s","arch":"%s",\
+"gpu_layers":%s,"ctx":%s,"threads":%s,"batch":%s,"ubatch":%s,"parallel":%s,"fit":%s,"backend":"%s","mmap_mode":"%s","tps":"%s","autotuned":"%s","active":%s,"default":%s}' \
+                "$num" "$(__llm_json_escape "$name")" "$(__llm_json_escape "$file")" "$size" "$(__llm_json_escape "$quant_cache")" \
+                "$(__llm_json_escape "$arch")" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" \
+                "$(__llm_json_escape "$backend")" "$(__llm_json_escape "${mmap_mode:-auto}")" "$(__llm_json_escape "${tps:--}")" "$(__llm_json_escape "${autotuned:-no}")" "$is_active" "$is_default_json"
             first=0
         done < "$LLM_REGISTRY"
         printf '\n  ],\n'
@@ -1566,63 +1886,43 @@ function __model_list() {
 
     if [[ "$output_mode" == "plain" ]]
     then
-        while IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local status="idle"
-            local autotune="pending"
-            local profile_row=""
-            profile_row=$(__llm_autotune_profile_best_for_model "$num" "$list_backend" 2>/dev/null || true)
-            if [[ -n "$profile_row" ]]
-            then
-                local _pf_num _pf_backend _pf_ctx _pf_batch _pf_ubatch _pf_parallel _pf_fit _pf_tps _pf_stamp
-                IFS=$'\t' read -r _pf_num _pf_backend _pf_ctx _pf_batch _pf_ubatch _pf_parallel _pf_fit _pf_tps _pf_stamp _rest <<< "$profile_row"
-                [[ "$_pf_ctx" == "*" || -z "$_pf_ctx" ]] && _pf_ctx="$ctx"
-                autotune="ctx ${_pf_ctx};b ${_pf_batch}/${_pf_ubatch};p ${_pf_parallel};fit ${_pf_fit};tps ${_pf_tps:-n/a}"
-            fi
-            [[ "$num" == "$active_num" ]] && __llm_server_running && status="active"
-            [[ "$file" == "$default_file" ]] && status="default"
-            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
-                "$num" "$name" "$size" "$quant" "$arch" "$gpu_layers" "$ctx" "$threads" "${tps:--}" "$status" "$file" "$autotune"
+            [[ "${in_vram:-no}" == "yes" ]] && status="active"
+            [[ "${is_default:-no}" == "yes" ]] && status="default"
+            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+                "$num" "$name" "$file" "$size" "$quant_cache" "$arch" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "$backend" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "$status"
         done < "$LLM_REGISTRY"
         return 0
     fi
 
     # Human-readable output
-    printf "\n${C_Dim}  %-4s %-24s %-7s %-8s %-9s %-4s %-5s %-4s %-7s %s${C_Reset}\n" \
-        "#" "MODEL" "SIZE" "QUANT" "ARCH" "GPU" "CTX" "THR" "TPS" "ATUNE"
+    printf "\n${C_Dim}  %-4s %-20s %-5s %-8s %-6s %-4s %-5s %-4s %-4s %-4s %-4s %-4s %-6s %-4s %-6s %-5s %-4s %-4s${C_Reset}\n" \
+        "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "MMAP" "TPS" "ATUNE" "DEF" "VRAM"
     local _list_rule
     printf -v _list_rule '%*s' $((UIWidth - 4)) ''
     _list_rule="${_list_rule// /${BOX_SL}}"
     printf "${C_Dim}  %s${C_Reset}\n" "$_list_rule"
 
-    local num name file size arch quant layers gpu_layers ctx threads tps
-    while IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
-        local atune_state="pending"
-        local profile_row=""
-        profile_row=$(__llm_autotune_profile_best_for_model "$num" "$list_backend" 2>/dev/null || true)
-        if [[ -n "$profile_row" ]]
-        then
-            local _pf_num _pf_backend _pf_ctx _pf_batch _pf_ubatch _pf_parallel _pf_fit _pf_tps _pf_stamp
-            IFS=$'\t' read -r _pf_num _pf_backend _pf_ctx _pf_batch _pf_ubatch _pf_parallel _pf_fit _pf_tps _pf_stamp _rest <<< "$profile_row"
-            [[ "$_pf_ctx" == "*" || -z "$_pf_ctx" ]] && _pf_ctx="$ctx"
-            atune_state="ctx${_pf_ctx} b${_pf_batch}/${_pf_ubatch} p${_pf_parallel} f${_pf_fit}"
-        fi
         local marker="  "
         local color=""
-        if [[ "$num" == "$active_num" ]] && __llm_server_running
+        if [[ "${in_vram:-no}" == "yes" ]]
         then
             marker="> "
             color="$C_Success"
-        elif [[ "$file" == "$default_file" ]]
+        elif [[ "${is_default:-no}" == "yes" ]]
         then
             marker="* "
             color="$C_Highlight"
         fi
-        printf "${color}${marker}%-4s %-24s %-7s %-8s %-9s %-4s %-5s %-4s %-7s %s${C_Reset}\n" \
-            "$num" "${name:0:24}" "$size" "$quant" "${arch:0:9}" "$gpu_layers" "$ctx" "$threads" "${tps:--}" "$atune_state"
+        printf "${color}${marker}%-4s %-20s %-5s %-8s %-6s %-4s %-5s %-4s %-4s %-4s %-4s %-4s %-6s %-4s %-6s %-5s %-4s %-4s${C_Reset}\n" \
+            "$num" "${name:0:20}" "$size" "${quant_cache:0:8}" "${arch:0:6}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:6}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}"
     done < "$LLM_REGISTRY"
 
     local d_used_bytes d_total_bytes d_avail_bytes d_pct_n
@@ -1697,6 +1997,7 @@ function __model_default() {
     IFS='|' read -r _n name file _rest <<< "$entry"
     mkdir -p "$(dirname "$LLM_DEFAULT_FILE")" 2>/dev/null
     echo "$file" > "$LLM_DEFAULT_FILE"
+    __llm_registry_sync_state >/dev/null 2>&1 || true
     __tac_info "Default Model" "[SET TO: $name]" "$C_Success"
 }
 
@@ -1743,8 +2044,8 @@ function __model_use() {
         return 1
     fi
 
-    local num name file size arch quant layers gpu_layers ctx threads tps
-    IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps <<< "$entry"
+    local num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode tps autotuned is_default in_vram
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode tps autotuned is_default in_vram <<< "$entry"
 
     # Allow context size override via TAC_CTX_SIZE environment variable
     # (set by `serve --ctx-size N` or `model use N --ctx-size N`)
@@ -1761,10 +2062,6 @@ function __model_use() {
 
     local model_path="$LLAMA_MODEL_DIR/$file"
     local model_bytes=0
-    local profile_batch=""
-    local profile_ubatch=""
-    local profile_parallel=""
-    local profile_fit_target_mb=""
 
     # Auto-download model if not found (with user confirmation for large files)
     if [[ ! -f "$model_path" ]]
@@ -1828,9 +2125,9 @@ function __model_use() {
     local quant_rating
     quant_rating=$(__llm_quant_rating "$file")
     local llm_backend
-    llm_backend="${LLM_SERVER_BACKEND:-python}"
+    llm_backend="${LLM_SERVER_BACKEND:-${row_backend:-llama_server}}"
     case "$llm_backend" in
-        native|binary|llama-server)
+        native|binary|llama-server|llama_server)
             llm_backend="native"
             ;;
         python|llama-cpp-python|module|"")
@@ -1841,49 +2138,6 @@ function __model_use() {
             llm_backend="python"
             ;;
     esac
-
-    # Apply saved autotune profile for this model/backend unless caller is
-    # explicitly running autotune mode. Manual LLAMA_* env overrides still win.
-    if [[ -z "${__AUTOTUNE_MODE:-}" ]] && [[ "${LLM_IGNORE_AUTOTUNE_PROFILE:-0}" != "1" ]]
-    then
-        local _profile_row=""
-        local _profile_ctx="$ctx"
-        if [[ "${TAC_CTX_SIZE:-}" =~ ^[0-9]+$ ]]
-        then
-            _profile_ctx="$TAC_CTX_SIZE"
-        elif [[ ! "$_profile_ctx" =~ ^[0-9]+$ ]] && [[ "${LLAMA_CTX_SIZE:-}" =~ ^[0-9]+$ ]]
-        then
-            _profile_ctx="$LLAMA_CTX_SIZE"
-        fi
-
-        _profile_row=$(__llm_autotune_profile_get "$num" "$llm_backend" "$_profile_ctx" 2>/dev/null || true)
-        if [[ -n "$_profile_row" ]]
-        then
-            local _pf_num _pf_backend _pf_ctx _pf_batch _pf_ubatch _pf_parallel _pf_fit _pf_tps _pf_stamp
-            IFS=$'\t' read -r _pf_num _pf_backend _pf_ctx _pf_batch _pf_ubatch _pf_parallel _pf_fit _pf_tps _pf_stamp <<< "$_profile_row"
-
-            # Legacy 8-column rows have no explicit ctx field.
-            if [[ -z "${_pf_stamp:-}" && -n "${_pf_tps:-}" ]]
-            then
-                _pf_stamp="$_pf_tps"
-                _pf_tps="$_pf_fit"
-                _pf_fit="$_pf_parallel"
-                _pf_parallel="$_pf_ubatch"
-                _pf_ubatch="$_pf_batch"
-                _pf_batch="$_pf_ctx"
-                _pf_ctx="*"
-            fi
-
-            if [[ "$_pf_batch" =~ ^[0-9]+$ && "$_pf_ubatch" =~ ^[0-9]+$ && "$_pf_parallel" =~ ^[0-9]+$ ]]
-            then
-                profile_batch="$_pf_batch"
-                profile_ubatch="$_pf_ubatch"
-                profile_parallel="$_pf_parallel"
-                [[ "$_pf_fit" =~ ^[0-9]+$ ]] && profile_fit_target_mb="$_pf_fit"
-                __tac_info "Autotune" "[Applied profile: b ${profile_batch}/${profile_ubatch}, p ${profile_parallel}, fit=${profile_fit_target_mb:-${LLAMA_FIT_TARGET_MB:-1024}} MB, tps=${_pf_tps:-n/a}]" "$C_Dim"
-            fi
-        fi
-    fi
 
     local python_bin=""
     if [[ "$llm_backend" == "python" ]]
@@ -1951,9 +2205,9 @@ function __model_use() {
     sleep 1
     sudo -n prlimit --memlock=unlimited:unlimited --pid $$ 2>/dev/null
 
-    local batch_size=512
-    local ubatch_size=512
-    local parallel_slots=1
+    [[ "$batch_size" =~ ^[0-9]+$ ]] || batch_size=1024
+    [[ "$ubatch_size" =~ ^[0-9]+$ ]] || ubatch_size=256
+    [[ "$parallel_slots" =~ ^[0-9]+$ ]] || parallel_slots=1
     local free_vram_mb=0
     if (( gpu_layers > 0 ))
     then
@@ -1966,40 +2220,7 @@ function __model_use() {
         fi
         [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
 
-        if (( ctx > 8192 || free_vram_mb < 1200 ))
-        then
-            batch_size=1024
-            ubatch_size=256
-        elif (( ctx > 4096 || free_vram_mb < 1800 ))
-        then
-            batch_size=2048
-            ubatch_size=512
-        else
-            batch_size=4096
-            ubatch_size=1024
-        fi
-
-        if (( model_bytes > 0 && model_bytes < 1500000000 && ctx >= 8192 ))
-        then
-            batch_size=1024
-            ubatch_size=256
-        fi
-
-        if (( model_bytes >= 1500000000 && model_bytes < 2000000000 \
-            && free_vram_mb >= 1200 && ctx <= 8192 ))
-        then
-            if (( batch_size < 2048 ))
-            then
-                batch_size=2048
-                ubatch_size=512
-            fi
-        fi
-
-        if (( free_vram_mb >= 1800 && ctx <= 4096 ))
-        then
-            parallel_slots=2
-        fi
-
+        :
     fi
 
     if [[ "${LLAMA_BATCH_SIZE:-}" =~ ^[0-9]+$ ]] && (( LLAMA_BATCH_SIZE > 0 ))
@@ -2019,21 +2240,6 @@ function __model_use() {
         parallel_slots="$LLAMA_PARALLEL_SLOTS"
     fi
 
-    # Apply autotune profile after heuristic/env baseline selection so the
-    # profile values actually take effect.
-    if [[ "$profile_batch" =~ ^[0-9]+$ ]] && (( profile_batch > 0 ))
-    then
-        batch_size="$profile_batch"
-    fi
-    if [[ "$profile_ubatch" =~ ^[0-9]+$ ]] && (( profile_ubatch > 0 ))
-    then
-        ubatch_size="$profile_ubatch"
-    fi
-    if [[ "$profile_parallel" =~ ^[0-9]+$ ]] && (( profile_parallel > 0 ))
-    then
-        parallel_slots="$profile_parallel"
-    fi
-
     if (( ubatch_size > batch_size ))
     then
         ubatch_size="$batch_size"
@@ -2045,11 +2251,7 @@ function __model_use() {
     local cmd=()
     if [[ "$llm_backend" == "native" ]]
     then
-        local fit_target_mb="${LLAMA_FIT_TARGET_MB:-1024}"
-        if [[ "$profile_fit_target_mb" =~ ^[0-9]+$ ]] && (( profile_fit_target_mb >= 0 ))
-        then
-            fit_target_mb="$profile_fit_target_mb"
-        fi
+        fit_target_mb="${fit_target_mb:-${LLAMA_FIT_TARGET_MB:-1024}}"
         if [[ ! "$fit_target_mb" =~ ^[0-9]+$ ]] || (( fit_target_mb < 0 ))
         then
             fit_target_mb=1024
@@ -2093,7 +2295,11 @@ function __model_use() {
     # --no-mmap can reduce page-fault stalls and mmap-related thrashing,
     # especially for MoE models, low free VRAM situations, and WSL hosts.
     local use_no_mmap=0
-    local no_mmap_mode="${LLAMA_NO_MMAP_MODE:-auto}"
+    local no_mmap_mode="${row_mmap_mode:-${LLAMA_NO_MMAP_MODE:-auto}}"
+    case "$no_mmap_mode" in
+        auto|on|off) ;;
+        *) no_mmap_mode="${LLAMA_NO_MMAP_MODE:-auto}" ;;
+    esac
     case "$no_mmap_mode" in
         on)
             use_no_mmap=1
@@ -2148,12 +2354,36 @@ function __model_use() {
     fi
 
     # llama.cpp monitors stdin and will force-shutdown on EOF.
-    # We must keep stdin open — redirecting </dev/null causes immediate EOF.
-    # Use a background sleep process piped to stdin to keep it alive.
+    # We keep stdin open via a FIFO and a dedicated keeper process, then
+    # explicitly tear down the keeper when llama-server exits.
     (
         trap '' HUP INT TERM
-        { while true; do sleep 86400; done; } | \
-            nohup "${cmd[@]}" >"$LLM_LOG_FILE" 2>&1
+
+        local stdin_fifo
+        stdin_fifo=$(mktemp -u /tmp/llm-stdin.XXXXXX)
+        if ! mkfifo "$stdin_fifo" 2>/dev/null
+        then
+            __tac_info "Status" "FAILED OR TIMEOUT - could not create stdin fifo" "$C_Error"
+            exit 1
+        fi
+
+        # Open FIFO writer and keep it alive without producing data.
+        {
+            exec 3>"$stdin_fifo"
+            while true
+            do
+                sleep 86400
+            done
+        } &
+        local stdin_keeper_pid=$!
+
+        nohup "${cmd[@]}" <"$stdin_fifo" >"$LLM_LOG_FILE" 2>&1
+        local server_rc=$?
+
+        kill "$stdin_keeper_pid" >/dev/null 2>&1 || true
+        wait "$stdin_keeper_pid" 2>/dev/null || true
+        rm -f "$stdin_fifo"
+        exit "$server_rc"
     ) &
     disown
 
@@ -2167,6 +2397,7 @@ function __model_use() {
     local _health_elapsed=0
     if __llm_wait_for_health "$health_timeout" _health_elapsed "dots" "Loading LLM (health check)"
     then
+        __llm_registry_sync_state >/dev/null 2>&1 || true
         __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
         local offload_info
         offload_info=$(grep -oiE 'offload(ing|ed) [0-9]+ .* layers' "$LLM_LOG_FILE" 2>/dev/null | tail -1)
@@ -2177,6 +2408,10 @@ function __model_use() {
         return 0
     fi
 
+    # Failed startup must not leave a lingering server process.
+    __llm_server_stop
+    rm -f "$ACTIVE_LLM_FILE"
+    __llm_registry_sync_state >/dev/null 2>&1 || true
     __tac_info "Status" "FAILED OR TIMEOUT - check: tail $LLM_LOG_FILE" "$C_Error"
     return 1
 }
@@ -2201,6 +2436,9 @@ function __model_autotune() {
     local quick_mode=0
     local tune_ctx=""
     local trials="${LLM_AUTOTUNE_TRIALS:-3}"
+
+    # Ensure Ctrl-C/termination cannot leave trial servers running.
+    trap '__model_stop >/dev/null 2>&1 || true' INT TERM
 
     while [[ $# -gt 0 ]]
     do
@@ -2249,8 +2487,9 @@ function __model_autotune() {
         return 1
     fi
 
-    local num name file size arch quant layers gpu_layers ctx threads tps
-    IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps <<< "$entry"
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram <<< "$entry"
+    __tac_info "File" "$file" "$C_Dim"
 
     local backend
     case "$backend_raw" in
@@ -2361,7 +2600,7 @@ function __model_autotune() {
     [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
 
     local model_bytes=0
-    model_bytes=$(stat --format=%s "$LLAMA_MODEL_DIR/$file" 2>/dev/null || echo 0)
+    model_bytes=$(stat --format=%s "$LLAMA_MODEL_DIR/$name" 2>/dev/null || echo 0)
 
     local -a pruned_combos=()
     local _pc
@@ -2531,7 +2770,7 @@ function __model_autotune() {
                     curl -sS --max-time 30 "http://127.0.0.1:${LLM_PORT}/v1/chat/completions" \
                         -H "Content-Type: application/json" \
                         -d '{"messages":[{"role":"user","content":"Warmup"}],"max_tokens":64,"temperature":0,"top_p":1.0}' \
-                        >/tmp/autotune_warmup_${num}_${idx}.log 2>&1 || true
+                        >"/tmp/autotune_warmup_${num}_${idx}.log" 2>&1 || true
                 fi
 
                 for (( trial=1; trial<=trials; trial++ ))
@@ -2704,7 +2943,7 @@ function __model_autotune() {
             export LLAMA_PARALLEL_SLOTS="$best_parallel"
             export LLAMA_FIT_TARGET_MB="$best_fit"
             local _verify_log="/tmp/autotune_verify_${num}.log"
-            if __model_use "$num" >/tmp/autotune_verify_use_${num}.log 2>&1
+            if __model_use "$num" >"/tmp/autotune_verify_use_${num}.log" 2>&1
             then
                 if burn >"$_verify_log" 2>&1
                 then
@@ -2740,7 +2979,7 @@ function __model_autotune() {
         __tac_info "Winner Score" "[${best_score:-$best_tps} (stddev=${best_stddev:-0})]" "$C_Success"
         __tac_info "Winner Ctx" "[${save_ctx}]" "$C_Success"
         __tac_info "Verified" "[$([[ "$verified" == "1" ]] && echo yes || echo no)]" "$C_Dim"
-        __tac_info "Saved" "$(__llm_autotune_profiles_file)" "$C_Dim"
+        __tac_info "Saved" "[models.conf row updated]" "$C_Dim"
     else
         __tac_info "Autotune" "[No stable configuration found]" "$C_Error"
     fi
@@ -2773,6 +3012,7 @@ function __model_autotune() {
     fi
 
     __tac_footer
+    trap - INT TERM
     [[ -n "$best_combo" ]]
 }
 
@@ -2792,7 +3032,7 @@ function __model_autotune_help() {
     echo "What it does:"
     echo "  - Sweeps safe runtime configs (batch/ubatch/parallel/fit)"
     echo "  - Uses median TPS with jitter-aware scoring"
-    echo "  - Saves best profile to: $(__llm_autotune_profiles_file)"
+    echo "  - Saves winner directly into models.conf tuning columns"
     echo "  - model scan/model list will show 'pending' until a profile exists"
     echo ""
     echo "Common options:"
@@ -2822,6 +3062,7 @@ function __model_autotune_help() {
 function __model_stop() {
     __llm_server_stop
     rm -f "$ACTIVE_LLM_FILE"
+    __llm_registry_sync_state >/dev/null 2>&1 || true
     __tac_info "Llama Server" "[STOPPED]" "$C_Success"
     return 0
 }
@@ -2837,6 +3078,8 @@ function __model_status() {
         --json) output_mode="json" ;;
         --plain) output_mode="plain" ;;
     esac
+
+    __llm_registry_sync_state >/dev/null 2>&1 || true
 
     if __llm_server_running && __test_port "$LLM_PORT"
     then
@@ -2947,18 +3190,24 @@ function __model_info() {
         __tac_info "Error" "[Model #$target not found]" "$C_Error"
         return 1
     fi
-    local num name file size arch quant layers gpu_layers ctx threads tps
-    IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps <<< "$entry"
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram <<< "$entry"
     __tac_info "#" "$num" "$C_Highlight"
     __tac_info "Model" "$name" "$C_Success"
-    __tac_info "File" "$file" "$C_Dim"
     __tac_info "Size" "$size" "$C_Text"
     __tac_info "Architecture" "$arch" "$C_Text"
-    __tac_info "Quantisation" "$quant" "$C_Text"
-    __tac_info "Total Layers" "$layers" "$C_Text"
-    __tac_info "GPU Layers" "$gpu_layers / $layers" "$C_Highlight"
+    __tac_info "Quant/Cache-K" "$quant_cache" "$C_Text"
+    __tac_info "GPU Layers" "$gpu_layers" "$C_Highlight"
     __tac_info "Context Size" "$ctx" "$C_Text"
     __tac_info "CPU Threads" "$threads" "$C_Text"
+    __tac_info "Batch/Ubatch" "${batch}/${ubatch}" "$C_Text"
+    __tac_info "Parallel/Fit" "${parallel}/${fit_target_mb}" "$C_Text"
+    __tac_info "Backend" "$backend" "$C_Text"
+    __tac_info "Mmap Mode" "${mmap_mode:-auto}" "$C_Text"
+    __tac_info "TPS" "${tps:--}" "$C_Text"
+    __tac_info "Autotuned" "${autotuned:-no}" "$C_Text"
+    __tac_info "Default" "${is_default:-no}" "$C_Text"
+    __tac_info "In VRAM" "${in_vram:-no}" "$C_Text"
     if [[ -f "$LLAMA_MODEL_DIR/$file" ]]
     then
         __tac_info "On Disk" "[FOUND]" "$C_Success"
@@ -3020,8 +3269,8 @@ function __model_bench() {
     (( bench_autotune_trials < 1 )) && bench_autotune_trials=1
 
     local -a b_num=() b_name=() b_size=() b_gpu=() b_tps=()
-    local num name file size _arch _quant _layers gpu_layers _ctx _threads _tps
-    while IFS='|' read -r num name file size _arch _quant _layers gpu_layers _ctx _threads _tps
+    local num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _tps _autotuned _is_default _in_vram
+    while IFS='|' read -r num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _tps _autotuned _is_default _in_vram
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         [[ ! -f "$LLAMA_MODEL_DIR/$file" ]] && continue
@@ -3083,12 +3332,10 @@ function __model_bench() {
             __tac_info "Bench" "[Low free VRAM (${_bench_free_vram_mb} MiB) - applying safe overrides: ngl=0, ctx=${_bench_safe_ctx}, b=512/128, p=1]" "$C_Warning"
         fi
 
-        # Ensure a per-model autotune profile exists before benchmarking.
-        local _bench_profile_row=""
-        _bench_profile_row=$(__llm_autotune_profile_best_for_model "${b_num[$i]}" "$bench_backend" 2>/dev/null || true)
-        if [[ -z "$_bench_profile_row" ]]
+        # Auto-autotune only if this model/backend has never been autotuned.
+        if ! __llm_autotune_done_for_model "${b_num[$i]}"
         then
-            __tac_info "Bench" "[No autotune profile for model #${b_num[$i]} ($bench_backend) - running autotune first]" "$C_Warning"
+            __tac_info "Bench" "[No prior autotune flag for model #${b_num[$i]} - running autotune first]" "$C_Warning"
             __tac_info "Bench" "[Autotune mode=${bench_autotune_mode}, trials=${bench_autotune_trials}]" "$C_Dim"
             export LLM_AUTOTUNE_RESTORE_PREV=0
             export LLM_AUTOTUNE_SKIP_LOCK=1
@@ -3364,7 +3611,7 @@ function __model_doctor() {
         registry_exists=1
         local header_line
         header_line=$(head -1 "$LLM_REGISTRY" 2>/dev/null)
-        [[ "$header_line" == "#|name|file|size_gb|arch|quant|layers|gpu_layers|ctx|threads|tps" ]] && header_ok=1
+        [[ "$header_line" == "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram" ]] && header_ok=1
 
         local expected_num=1
         local num _name file _rest
@@ -3514,8 +3761,8 @@ function __model_recommend() {
     fi
 
     local -a ranked=()
-    local num name file size arch quant layers gpu_layers ctx threads tps
-    while IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         [[ -f "$LLAMA_MODEL_DIR/$file" ]] || continue
@@ -3573,7 +3820,7 @@ function __model_recommend() {
         score=$(( score + tps_floor ))
 
         ranked+=("$(printf '%04d|%s|%s|%s|%s|%s|%s|%s\n' \
-            "$score" "$num" "$name" "$size" "$quant" "$arch" "$tps_num" "$rating")")
+            "$score" "$num" "$name" "$size" "$quant_cache" "$arch" "$tps_num" "$rating")")
     done < "$LLM_REGISTRY"
 
     if (( ${#ranked[@]} == 0 ))

@@ -805,7 +805,7 @@ function up() {
         ((errCount++))
     fi
 
-    # [11/20] Sanitation — clean known temp locations, NOT the user's $PWD.
+    # [14/20] Sanitation — clean known temp locations, NOT the user's $PWD.
     # Only removes temp artifacts from /tmp/openclaw and the OC_ROOT directory.
     local count=0
     if [[ -d /tmp/openclaw ]]
@@ -826,7 +826,7 @@ function up() {
         [[ ! "$pct_num" =~ ^[0-9]+$ ]] && continue
         if (( pct_num >= 90 ))
         then
-            __tac_line "[12/20] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
+            __tac_line "[15/20] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
             disk_warn=1
             ((errCount++))
         fi
@@ -835,7 +835,7 @@ function up() {
         | grep -v '/mnt/wsl/docker-desktop')
     (( disk_warn == 0 )) && __tac_line "[15/20] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
 
-    # [13/20] Systemd Unit Check — verify OpenClaw gateway service is configured.
+    # [16/20] Systemd Unit Check — verify OpenClaw gateway service is configured.
     if systemctl --user list-unit-files | grep -q openclaw-gateway
     then
         __tac_line "[16/20] Systemd Units" "[GATEWAY SERVICE INSTALLED]" "$C_Success"
@@ -843,7 +843,7 @@ function up() {
         __tac_line "[16/20] Systemd Units" "[SKIP - no user units]" "$C_Dim"
     fi
 
-    # [14/20] Stale Process Cleanup — kill orphaned llama-server instances.
+    # [17/20] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).
     # Per-PID check: only kill processes that are NOT listening on LLM_PORT.
     local stale_pids
@@ -869,7 +869,7 @@ function up() {
         __tac_line "[17/20] Stale Processes" "[CLEAN]" "$C_Success"
     fi
 
-    # [15/20] Documentation drift guard — lightweight README accuracy check.
+    # [18/20] Documentation drift guard — lightweight README accuracy check.
     if __check_cooldown "docs_sync" "$now" hours_left "$force_mode"
     then
         if __docs_sync_check

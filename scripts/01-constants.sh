@@ -99,23 +99,32 @@ fi
 
 # ---- LLM Registry (models.conf) Schema ----
 # Format: pipe-delimited fields, one model per line
-#   num|name|file|size|arch|quant|layers|gpu_layers|ctx|threads|tps
+#   #|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|
+#   parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram
 #
 # Field descriptions:
-#   num        - Unique model number (used for 'model use <num>')
-#   name       - Human-readable model name (e.g., "Phi-4-mini")
-#   file       - GGUF filename (e.g., "phi-4-mini.Q4_K_M.gguf")
-#   size       - File size with suffix (e.g., "2.5G", "4.1G")
-#   arch       - Model architecture (e.g., "3.8B", "7B", "14B", "MoE-8x7B")
-#   quant      - Quantization type (e.g., "Q4_K_M", "Q5_K_M", "Q8_0")
-#   layers     - Total transformer layers
-#   gpu_layers - Layers to offload to GPU (999 = max, 0 = CPU-only)
-#   ctx        - Context window size (e.g., 4096, 8192)
-#   threads    - CPU threads for inference
-#   tps        - Last measured tokens/sec (performance metric)
+#   #            - Unique model number (used for 'model use <num>')
+#   name         - Human-readable model name
+#   file         - GGUF filename
+#   size_gb      - File size with suffix (e.g., "2.5G")
+#   quant_cache  - Quantization + cache type-k (e.g., "Q4_K_M/q8_0")
+#   arch         - Model architecture (e.g., qwen2, llama, phi3)
+#   gpu_layers   - Layers to offload to GPU (999=max, 0=CPU-only)
+#   ctx          - Context window size
+#   threads      - CPU threads for inference
+#   batch        - Batch size
+#   ubatch       - Micro-batch size
+#   parallel     - Parallel slots
+#   fit_target_mb- Native server fit target margin in MiB
+#   backend      - Runtime backend (llama_server / llama_cpp)
+#   mmap_mode    - Per-model mmap policy (auto|on|off)
+#   tps          - Last measured tokens/sec
+#   autotuned    - yes/no autotune completed flag
+#   is_default   - yes/no default model selector
+#   in_vram      - yes/no currently active-in-VRAM selector
 #
 # Example:
-#   1|Phi-4-mini|phi-4-mini.Q4_K_M.gguf|2.5G|3.8B|Q4_K_M|32|999|4096|12|45.2
+#   1|Phi-4-mini|phi-4-mini.Q4_K_M.gguf|2.5G|Q4_K_M/q8_0|phi3|999|4096|12|1024|256|1|1024|llama_server|auto|45.2|yes|no|no
 #
 # Used by: model scan/use/stop/bench, llama-watchdog.sh, dashboard
 export LLM_REGISTRY="$LLAMA_DRIVE_ROOT/.llm/models.conf"
@@ -228,7 +237,7 @@ if [[ -z "${COOLDOWN_DAILY+x}" ]]; then
 declare -ri COOLDOWN_DAILY=86400     # 24 hours in seconds
 fi
 if [[ -z "${COOLDOWN_WEEKLY+x}" ]]; then
-declare -ri COOLDOWN_WEEKLY=86400    # 24 hours in seconds (same as daily)
+declare -ri COOLDOWN_WEEKLY=604800   # 7 days in seconds
 fi
 if [[ -z "${LOG_MAX_BYTES+x}" ]]; then
 declare -ri LOG_MAX_BYTES=1048576    # 1 MB - logtrim threshold

@@ -130,7 +130,8 @@ then
 fi
 
 # Look up model from registry by number
-# Registry format: num|name|file|size|arch|quant|layers|gpu_layers|ctx|threads|tps
+# Registry format:
+# num|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram
 entry=$(awk -F'|' -v n="$active_num" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
 if [[ -z "$entry" ]]
 then
@@ -138,7 +139,7 @@ then
     exit 1
 fi
 
-IFS='|' read -r _num name file size _arch _quant layers gpu_layers ctx threads _tps <<< "$entry"
+IFS='|' read -r _num name file size _quant_cache _arch gpu_layers ctx threads _batch _ubatch _parallel _fit _backend _mmap_mode _tps _autotuned _is_default _in_vram <<< "$entry"
 model_path="$LLAMA_MODEL_DIR/$file"
 
 if [[ ! -f "$model_path" ]]

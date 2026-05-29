@@ -39,18 +39,31 @@ _tac_lib_dir="$_tac_env_root/scripts"
 
 for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh; do
     # Skip 13-init.sh — it runs interactive side-effects (clear, completions,
-    # WSL loopback fix, EXIT trap) that are not needed in library mode.
-    # Utility scripts (16-20) now live in tools/ and are not matched by the
-    # glob above, so no explicit exclusions are needed for them.
+    # WSL loopback fix, trusted sync loader, and UI traps) not needed in library mode.
+    # Utility scripts under tools/ are not matched by this glob.
     case "$_tac_lib_f" in
         *13-init.sh) continue ;;
     esac
-    [[ -f "$_tac_lib_f" ]] && source "$_tac_lib_f"
+    if [[ -f "$_tac_lib_f" ]]
+    then
+        if ! source "$_tac_lib_f"
+        then
+            echo "[tac-env] failed sourcing module: $_tac_lib_f" >&2
+            return 1
+        fi
+    fi
 done
 
 # 09b-gog.sh is a profile module but its name (09b) doesn't match the
-# [0-9][0-9]-*.sh glob used above.  Source it explicitly here.
-[[ -f "$_tac_lib_dir/09b-gog.sh" ]] && source "$_tac_lib_dir/09b-gog.sh"
+# [0-9][0-9]-*.sh glob used above. Source it explicitly here.
+if [[ -f "$_tac_lib_dir/09b-gog.sh" ]]
+then
+    if ! source "$_tac_lib_dir/09b-gog.sh"
+    then
+        echo "[tac-env] failed sourcing module: $_tac_lib_dir/09b-gog.sh" >&2
+        return 1
+    fi
+fi
 
 # Library mode skips 13-init, but core helpers still expect the OpenClaw
 # state directories to exist for cooldown and error-log writes.
@@ -60,6 +73,17 @@ mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" 2>/dev/null || true
 # In interactive mode, this is set by 13-init.sh; in library mode (non-interactive),
 # 13-init.sh is skipped so we must initialize it here.
 __TAC_BG_PIDS=()
+
+# Library mode skips 13-init.sh, so install a lightweight cleanup trap here.
+function __tac_env_cleanup_bg_pids() {
+    local _pid
+    for _pid in "${__TAC_BG_PIDS[@]:-}"
+    do
+        [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        kill "$_pid" 2>/dev/null || true
+    done
+}
+trap __tac_env_cleanup_bg_pids EXIT
 
 unset _tac_env_root _tac_lib_f _tac_lib_dir
 

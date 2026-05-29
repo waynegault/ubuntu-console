@@ -173,7 +173,7 @@ for _tac_mod in "${_tac_expected_modules[@]}"; do
             source "$_tac_f" 2>/dev/null
         fi
 
-        _tac_mv=$(grep -m1 '^# Module Version:' "$_tac_f" 2>/dev/null | awk '{print $NF}')
+        _tac_mv=$(awk '/^# Module Version:/ {print $NF; exit}' "$_tac_f" 2>/dev/null || true)
         [[ "$_tac_mv" =~ ^[0-9]+$ ]] && (( _tac_mod_sum += _tac_mv ))
         unset _tac_mv
     fi

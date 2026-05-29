@@ -142,6 +142,13 @@ do
     link "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")"
 done
 
+# Additional utility scripts that are expected to be directly executable.
+for f in "$REPO"/scripts/load-vault-env.sh "$REPO"/scripts/oc-update-enhanced.sh
+do
+    [[ -f "$f" ]] || continue
+    link "scripts/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")"
+done
+
 # Systemd units
 for f in "$REPO"/systemd/*
 do
