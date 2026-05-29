@@ -11,6 +11,7 @@
 #     or:   ~/ubuntu-console/bin/tac-exec <command> [args...]
 #
 # Modules loaded:  01-constants through 15-model-recommender (including 09b-gog)
+# Standalone executables under scripts/ (for example 18-lint) are skipped.
 # Modules skipped: 13-init (interactive side-effects: clear screen,
 #                  completions, WSL loopback, EXIT trap)
 #                  Utility scripts (tools/) are not in scripts/ so are never
@@ -42,6 +43,7 @@ for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh; do
     # WSL loopback fix, trusted sync loader, and UI traps) not needed in library mode.
     # Utility scripts under tools/ are not matched by this glob.
     case "$_tac_lib_f" in
+        *18-lint.sh) continue ;;
         *13-init.sh) continue ;;
     esac
     if [[ -f "$_tac_lib_f" ]]
