@@ -1141,16 +1141,17 @@ setup() {
     done
 }
 
-@test "hygiene: all 15 modules have a Module Version comment" {
-    local count
-    count=$(grep -l '^# Module Version:' \
-        "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
-        | wc -l)
-    [[ "$count" -eq 15 ]]
-}
-
-@test "hygiene: 09b-gog.sh has a Module Version comment" {
-    grep -q '^# Module Version:' "$REPO_ROOT/scripts/09b-gog.sh"
+@test "hygiene: all modules have a Module Version comment" {
+    local missing=0
+    local f
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT"/scripts/09b-gog.sh; do
+        [[ -f "$f" ]] || continue
+        if ! grep -q '^# Module Version:' "$f"; then
+            echo "MISSING version in $f" >&3
+            missing=$((missing + 1))
+        fi
+    done
+    [[ "$missing" -eq 0 ]]
 }
 
 @test "hygiene: module versions follow '# Module Version: N' pattern" {

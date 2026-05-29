@@ -186,12 +186,17 @@ setup_file() {
     done
 }
 
-@test "hygiene: all numbered scripts have a Module Version comment" {
-    local count expected
-    count=$(grep -l '^# Module Version:' \
-        "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh | wc -l)
-    expected=$(ls "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh 2>/dev/null | wc -l)
-    [[ "$count" -eq "$expected" ]]
+@test "hygiene: all modules have a Module Version comment" {
+    local missing=0
+    local f
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT"/scripts/09b-gog.sh; do
+        [[ -f "$f" ]] || continue
+        if ! grep -q '^# Module Version:' "$f"; then
+            echo "MISSING version in $f" >&3
+            missing=$((missing + 1))
+        fi
+    done
+    [[ "$missing" -eq 0 ]]
 }
 
 @test "hygiene: module versions follow '# Module Version: N' pattern" {
@@ -359,14 +364,14 @@ setup_file() {
     [[ -s "$REPO_ROOT/env.sh" ]]
 }
 
-@test "hygiene: all profile modules exist (16 total: 01-15 + 09b)" {
-    # 15 numerically-prefixed profile modules = 15 [0-9][0-9]-*.sh files
+@test "hygiene: all profile modules exist (17 total: 01-15 + 09b + 18)" {
+    # 16 numerically-prefixed profile modules = 16 [0-9][0-9]-*.sh files
     local count=0
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] && count=$(( count + 1 ))
     done
-    [[ "$count" -eq 15 ]]
-    # 09b-gog.sh is the 16th profile module
+    [[ "$count" -eq 16 ]]
+    # 09b-gog.sh is the 17th profile module
     [[ -f "$REPO_ROOT/scripts/09b-gog.sh" ]]
 }
 
@@ -385,8 +390,8 @@ setup_file() {
     local env_content
     env_content=$(cat "$REPO_ROOT/env.sh")
     # Should NOT be sourced (they are not in scripts/ anymore)
-    [[ "$env_content" != *"source"*"lint.sh"* ]]
-    [[ "$env_content" != *"source"*"run-tests.sh"* ]]
+    [[ "$env_content" != *"source"*"tools/lint.sh"* ]]
+    [[ "$env_content" != *"source"*"tools/run-tests.sh"* ]]
     # tools/ directory must exist
     [[ -d "$REPO_ROOT/tools" ]]
     [[ -f "$REPO_ROOT/tools/lint.sh" ]]

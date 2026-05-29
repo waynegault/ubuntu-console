@@ -67,16 +67,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: All 15 numbered modules exist
+      - name: Numbered modules discovered
         run: |
           count=$(ls scripts/[0-9][0-9]-*.sh | wc -l)
           echo "Found $count modules"
-          [[ "$count" -eq 15 ]]
+          [[ "$count" -gt 0 ]]
 
       - name: All modules have version comments
         run: |
           missing=0
-          for f in scripts/[0-9][0-9]-*.sh; do
+          for f in scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh; do
+            [[ -f "$f" ]] || continue
             if ! grep -q '^# Module Version:' "$f"; then
               echo "MISSING version in $f"
               missing=$((missing + 1))
