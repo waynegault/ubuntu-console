@@ -700,12 +700,19 @@ function __llm_server_stop() {
     _tries=$((_grace * 5))
     ((_tries < 5)) && _tries=5
 
+    # Collect PIDs — avoid mapfile + process substitution (crashes nested context)
+    local _pg_out=""
     if [[ -n "$_llm_user" ]]
     then
-        mapfile -t _pids < <(pgrep -u "$_llm_user" -f "$_proc_re" 2>/dev/null || true)
+        _pg_out=$(pgrep -u "$_llm_user" -f "$_proc_re" 2>/dev/null || true)
     else
-        mapfile -t _pids < <(pgrep -f "$_proc_re" 2>/dev/null || true)
+        _pg_out=$(pgrep -f "$_proc_re" 2>/dev/null || true)
     fi
+    while IFS= read -r _pid
+    do
+        [[ -z "$_pid" ]] && continue
+        _pids+=("$_pid")
+    done <<< "$_pg_out"
 
     _llm_pid=$(ss -tlnp "sport = :${LLM_PORT}" 2>/dev/null | awk 'match($0, /pid=([0-9]+)/, m) { print m[1]; exit }')
     if [[ "$_llm_pid" =~ ^[0-9]+$ ]]
@@ -726,12 +733,18 @@ function __llm_server_stop() {
 
     for ((_i=0; _i<_tries; _i++))
     do
+        _pids=()
         if [[ -n "$_llm_user" ]]
         then
-            mapfile -t _pids < <(pgrep -u "$_llm_user" -f "$_proc_re" 2>/dev/null || true)
+            _pg_out=$(pgrep -u "$_llm_user" -f "$_proc_re" 2>/dev/null || true)
         else
-            mapfile -t _pids < <(pgrep -f "$_proc_re" 2>/dev/null || true)
+            _pg_out=$(pgrep -f "$_proc_re" 2>/dev/null || true)
         fi
+        while IFS= read -r _pid
+        do
+            [[ -z "$_pid" ]] && continue
+            _pids+=("$_pid")
+        done <<< "$_pg_out"
         (( ${#_pids[@]} == 0 )) && return 0
         sleep 0.2
     done
@@ -757,15 +770,15 @@ function __llm_server_stop() {
     _smi=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$_smi" ]]
     then
-        _free_before=$("$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        _free_before=$(timeout 3 "$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         if [[ "$_free_before" =~ ^[0-9]+$ ]]
         then
             _mem_waited=0
-            _mem_max_wait=10
+            _mem_max_wait=3
             while (( _mem_waited < _mem_max_wait ))
             do
                 sleep 0.5
-                _free_after=$("$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+                _free_after=$(timeout 3 "$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
                 [[ "$_free_after" =~ ^[0-9]+$ ]] || break
                 (( _free_after <= _free_before )) && break
                 _free_before="$_free_after"
@@ -2423,7 +2436,8 @@ function __model_use() {
         local stdin_keeper_pid_file="/tmp/llm-keeper.$$.pid"
         {
             exec 3>"$stdin_fifo"
-            echo "$$" > "$stdin_keeper_pid_file"
+            # The PID file is written by the parent after $! is captured.
+            # We just need to keep the FIFO open.
             # sleep 3600 (1 h) — if the parent is killed and we get
             # reparented, we'll eventually die on our own, preventing
             # infinite accumulation.
@@ -2432,6 +2446,10 @@ function __model_use() {
             rm -f "$stdin_fifo" "$stdin_keeper_pid_file" 2>/dev/null || true
         } &
         local stdin_keeper_pid=$!
+        # Write the ACTUAL keeper PID (from $!) to the PID file.
+        # Previously we wrote $$ inside the block, which was the parent's PID.
+        # This caused __model_stop to kill the wrong process.
+        echo "$stdin_keeper_pid" > "$stdin_keeper_pid_file"
         # Also register the PID in the parent's cleanup list if available
         if declare -p bench_cleanup_spawned_pids &>/dev/null
         then
@@ -2449,7 +2467,8 @@ function __model_use() {
     local model_shell_pid=$!
     disown
     # Save the model subshell PID so __model_stop can kill it.
-    echo "$model_shell_pid" > /tmp/llm-modelshell.pid
+    # Include our own PID to prevent stale PIDs from overlapping runs.
+    echo "$model_shell_pid" > "/tmp/llm-modelshell.$$.pid"
 
     if ! { echo "$num" > "${ACTIVE_LLM_FILE}.tmp" 2>/dev/null && mv "${ACTIVE_LLM_FILE}.tmp" "$ACTIVE_LLM_FILE"; }
     then
@@ -3001,8 +3020,11 @@ function __model_autotune() {
 
             __model_stop >/dev/null 2>&1 || true
             sleep 1
+            echo "__DBG: wake at $(date +%H:%M:%S)" 2>&1
         done
+echo "__DBG: inner loop done at $(date +%H:%M:%S)" 2>&1
     done
+echo "__DBG: outer loop done at $(date +%H:%M:%S)" 2>&1
 
     if [[ -n "$best_combo" ]]
     then
@@ -3152,20 +3174,35 @@ function __model_stop() {
         rm -f "$_keeper_file"
     done
     # Kill the model subshell (the `( ... ) & disown` wrapper from __model_use)
-    # that may still be alive waiting on a dead keeper or server. This prevents
-    # zombie bash processes from accumulating across autotune trials.
-    local _ms_pid
-    if [[ -f /tmp/llm-modelshell.pid ]]
-    then
-        _ms_pid=$(< /tmp/llm-modelshell.pid)
-        if [[ "$_ms_pid" =~ ^[0-9]+$ ]]
-        then
-            kill -TERM "$_ms_pid" 2>/dev/null || true
-            sleep 0.2
-            kill -KILL "$_ms_pid" 2>/dev/null || true
-        fi
-        rm -f /tmp/llm-modelshell.pid
-    fi
+    # and its entire process tree (inner bash, stdin keeper, any children).
+    # We kill children before the parent to prevent reparenting to init.
+    local _ms_pid _ms_child _ms_depth
+    # Kill ALL model subshells from any PID file.
+    # We read all /tmp/llm-modelshell.*.pid files (including caller-specific
+    # and legacy) and kill every subshell tree found. This handles stale PID
+    # files from overlapping/previous runs.
+    for _ms_kf in /tmp/llm-modelshell.*.pid /tmp/llm-modelshell.pid
+    do
+        [[ -f "$_ms_kf" ]] || continue
+        _ms_pid=$(< "$_ms_kf")
+        rm -f "$_ms_kf"
+        [[ "$_ms_pid" =~ ^[0-9]+$ ]] || continue
+        # Kill child tree recursively (up to 4 levels)
+        for ((_ms_depth=0; _ms_depth<4; _ms_depth++))
+        do
+            for _ms_child in $(pgrep -P "$_ms_pid" 2>/dev/null || true)
+            do
+                kill -KILL "$_ms_child" 2>/dev/null || true
+            done
+        done
+        # Kill the parent subshell
+        kill -KILL "$_ms_pid" 2>/dev/null || true
+    done
+    # Kill any sleep 3600 keepers reparented to init
+    for _ms_child in $(pgrep -P 1 -f 'sleep 3600' 2>/dev/null || true)
+    do
+        kill -KILL "$_ms_child" 2>/dev/null || true
+    done
 
     rm -f "$ACTIVE_LLM_FILE"
     __llm_registry_sync_state >/dev/null 2>&1 || true
@@ -3174,34 +3211,25 @@ function __model_stop() {
     # After killing llama-server, the CUDA driver may hold VRAM for a grace
     # period. We must wait for it to be released before the next model loads,
     # otherwise fragmented memory from the previous run causes OOM.
-    #
-    # The fastest way to reclaim CUDA memory is to touch /dev/null via a
-    # CUDA-aware process, but the most reliable is polling nvidia-smi until
-    # free VRAM returns to baseline.
     local _smi _free_before _free_after _mem_waited _mem_max_wait
     _smi=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$_smi" ]]
     then
-        _free_before=$("$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        _free_before=$(timeout 3 timeout 3 "$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         if [[ "$_free_before" =~ ^[0-9]+$ ]]
         then
             _mem_waited=0
-            _mem_max_wait=10
-            # Poll every 0.5s until VRAM stabilises (no more freed) or timeout
+            _mem_max_wait=3
             while (( _mem_waited < _mem_max_wait ))
             do
-                sleep 0.5
-                _free_after=$("$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+                _free_after=$(timeout 3 timeout 3 "$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
                 [[ "$_free_after" =~ ^[0-9]+$ ]] || break
-                # If VRAM stopped increasing, we're done
                 (( _free_after <= _free_before )) && break
                 _free_before="$_free_after"
                 _mem_waited=$(( _mem_waited + 1 ))
             done
         fi
     fi
-    # For non-NVIDIA systems, a brief sleep to let kernel cleanup finish
-    sleep 0.5
     __tac_info "Llama Server" "[STOPPED]" "$C_Success"
     return 0
 }
