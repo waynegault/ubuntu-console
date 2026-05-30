@@ -57,14 +57,27 @@ function __save_tps() {
 }
 
 # ---------------------------------------------------------------------------
-# __save_model_ctx — Persist context size to the registry's ctx column.
+# __save_model_ctx — Persist autotune winner ctx to registry.
+# Enforces a minimum context floor (24000) so autotune doesn't save
+# suspiciously small values. Caps are not applied on the high end —
+# autotune's binary search already finds the VRAM-stable maximum.
 # ---------------------------------------------------------------------------
 function __save_model_ctx() {
     local model_num="$1"
     local ctx_val="$2"
     [[ "$model_num" =~ ^[0-9]+$ && "$ctx_val" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return
     __llm_registry_sync_state >/dev/null 2>&1 || true
-    awk -F'|' -v n="$model_num" -v c="$ctx_val" 'BEGIN{OFS="|"} $1 == n {$8 = c} {print}' \
+
+    # Enforce a minimum context floor of 24000. Autotune may pick a very
+    # small ctx on OOM for the best-performing config, but that's rarely
+    # what the user wants. The binary search already finds the max stable
+    # ctx — trust its discovered_ctx, not the combo-sweep runner-up.
+    local min_ctx="${LLM_AUTOTUNE_MIN_CTX:-24000}"
+    [[ "$min_ctx" =~ ^[0-9]+$ ]] || min_ctx=24000
+    local saved="$ctx_val"
+    (( saved < min_ctx )) && saved=$min_ctx
+
+    awk -F'|' -v n="$model_num" -v c="$saved" 'BEGIN{OFS="|"} $1 == n {$8 = c} {print}' \
         "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" \
         && mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
 }
@@ -2735,10 +2748,21 @@ function __model_autotune() {
     then
         # Binary-search the highest startup-stable context first, then test
         # nearby contexts for throughput ranking.
+        local sane_max_ctx="${LLM_AUTOTUNE_CTX_SANE_LIMIT:-8192}"
+        [[ "$sane_max_ctx" =~ ^[0-9]+$ ]] || sane_max_ctx=8192
+
         local base_ctx="${ctx:-4096}"
         [[ "$base_ctx" =~ ^[0-9]+$ ]] || base_ctx=4096
         local max_ctx="${LLM_AUTOTUNE_MAX_CTX:-32768}"
         [[ "$max_ctx" =~ ^[0-9]+$ ]] || max_ctx=32768
+
+        # If registry ctx is unrealistically large (> sane limit), treat it as
+        # a placeholder (common for default template rows) and clamp base_ctx.
+        # This prevents binary-search failure when low > high.
+        if (( base_ctx > sane_max_ctx )); then
+            base_ctx=$sane_max_ctx
+        fi
+
         (( max_ctx < base_ctx )) && max_ctx=$base_ctx
 
         local discovered_ctx="$base_ctx"
