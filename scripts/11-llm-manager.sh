@@ -742,6 +742,39 @@ function __llm_server_stop() {
         kill -KILL "$_pid" 2>/dev/null || true
     done
 
+    # Kill any lingering stdin keeper processes (orphaned sleep loops).
+    local _kp
+    for _kf in /tmp/llm-keeper.*.pid
+    do
+        [[ -f "$_kf" ]] || continue
+        _kp=$(< "$_kf")
+        [[ "$_kp" =~ ^[0-9]+$ ]] && kill -TERM "$_kp" 2>/dev/null || true
+        rm -f "$_kf"
+    done
+
+    # Reclaim GPU memory: wait for VRAM to stabilise after server kill.
+    local _smi _free_before _free_after _mem_waited _mem_max_wait
+    _smi=$(__resolve_smi 2>/dev/null || true)
+    if [[ -n "$_smi" ]]
+    then
+        _free_before=$("$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        if [[ "$_free_before" =~ ^[0-9]+$ ]]
+        then
+            _mem_waited=0
+            _mem_max_wait=10
+            while (( _mem_waited < _mem_max_wait ))
+            do
+                sleep 0.5
+                _free_after=$("$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+                [[ "$_free_after" =~ ^[0-9]+$ ]] || break
+                (( _free_after <= _free_before )) && break
+                _free_before="$_free_after"
+                _mem_waited=$(( _mem_waited + 1 ))
+            done
+        fi
+    fi
+    sleep 0.5
+
     return 0
 }
 
@@ -2352,6 +2385,25 @@ function __model_use() {
     (
         trap '' HUP INT TERM
 
+        # Close all inherited lock file descriptors (from autotune/bench locks)
+        # so child processes (stdin keeper, llama-server) don't inherit them.
+        # This prevents orphaned locks when the parent is killed.
+        for _lfd in /proc/$$/fd/*; do
+            _lfdnum="${_lfd##*/}"
+            [[ "$_lfdnum" -ge 10 ]] && exec {_lfdnum}>&- 2>/dev/null || true
+        done 2>/dev/null
+
+        # Clean up orphan FIFOs and keepers from any previous llama-server
+        # instance that was killed without running __model_stop.
+        local _okf
+        for _okf in /tmp/llm-keeper.*.pid; do
+            [[ -f "$_okf" ]] || continue
+            _okp=$(< "$_okf")
+            [[ "$_okp" =~ ^[0-9]+$ ]] && kill -TERM "$_okp" 2>/dev/null || true
+            rm -f "$_okf"
+        done
+        rm -f /tmp/llm-stdin.*
+
         local stdin_fifo
         stdin_fifo=$(mktemp -u /tmp/llm-stdin.XXXXXX)
         if ! mkfifo "$stdin_fifo" 2>/dev/null
@@ -2361,14 +2413,30 @@ function __model_use() {
         fi
 
         # Open FIFO writer and keep it alive without producing data.
+        # The keeper writes its PID to a file so __model_stop can kill it
+        # directly, preventing orphan sleep processes from accumulating when
+        # llama-server is killed abruptly.
+        #
+        # The keeper self-destructs after 1 hour if orphaned (reparented to
+        # init by a SIGKILL on its parent tree). This is a safety net: in
+        # normal operation __model_stop kills the keeper directly.
+        local stdin_keeper_pid_file="/tmp/llm-keeper.$$.pid"
         {
             exec 3>"$stdin_fifo"
-            while true
-            do
-                sleep 86400
-            done
+            echo "$$" > "$stdin_keeper_pid_file"
+            # sleep 3600 (1 h) — if the parent is killed and we get
+            # reparented, we'll eventually die on our own, preventing
+            # infinite accumulation.
+            sleep 3600
+            # If we reach here, we were orphaned — clean up
+            rm -f "$stdin_fifo" "$stdin_keeper_pid_file" 2>/dev/null || true
         } &
         local stdin_keeper_pid=$!
+        # Also register the PID in the parent's cleanup list if available
+        if declare -p bench_cleanup_spawned_pids &>/dev/null
+        then
+            bench_cleanup_spawned_pids+=("$stdin_keeper_pid")
+        fi
 
         nohup "${cmd[@]}" <"$stdin_fifo" >"$LLM_LOG_FILE" 2>&1
         local server_rc=$?
@@ -2378,7 +2446,10 @@ function __model_use() {
         rm -f "$stdin_fifo"
         exit "$server_rc"
     ) &
+    local model_shell_pid=$!
     disown
+    # Save the model subshell PID so __model_stop can kill it.
+    echo "$model_shell_pid" > /tmp/llm-modelshell.pid
 
     if ! { echo "$num" > "${ACTIVE_LLM_FILE}.tmp" 2>/dev/null && mv "${ACTIVE_LLM_FILE}.tmp" "$ACTIVE_LLM_FILE"; }
     then
@@ -2509,8 +2580,21 @@ function __model_autotune() {
     local lock_fd=""
     local lock_file="${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
     local lock_wait_seconds="${LLM_AUTOTUNE_LOCK_WAIT_SECONDS:-5}"
+
+    # Stale lock detection: if file exists but no process holds it open, remove it.
+    if [[ -f "$lock_file" ]]
+    then
+        if ! lsof "$lock_file" >/dev/null 2>&1
+        then
+            __tac_info "Autotune" "[Cleaning stale lock: $lock_file]" "$C_Warning"
+            rm -f "$lock_file"
+        fi
+    fi
+
     if [[ "${LLM_AUTOTUNE_SKIP_LOCK:-0}" != "1" ]] && command -v flock >/dev/null 2>&1
     then
+        # shellcheck disable=SC2091  # intentional: capture the fd number
+        local lock_fd
         exec {lock_fd}>"$lock_file" || {
             __tac_info "Autotune" "[Unable to open lock file: $lock_file]" "$C_Error"
             return 1
@@ -3054,8 +3138,70 @@ function __model_autotune_help() {
 # ---------------------------------------------------------------------------
 function __model_stop() {
     __llm_server_stop
+    # Kill any lingering stdin keeper processes (sleep-loop bash children)
+    # that were orphaned when llama-server was killed.
+    local _keeper_pid
+    for _keeper_file in /tmp/llm-keeper.*.pid
+    do
+        [[ -f "$_keeper_file" ]] || continue
+        _keeper_pid=$(< "$_keeper_file")
+        if [[ "$_keeper_pid" =~ ^[0-9]+$ ]]
+        then
+            kill -TERM "$_keeper_pid" 2>/dev/null || true
+        fi
+        rm -f "$_keeper_file"
+    done
+    # Kill the model subshell (the `( ... ) & disown` wrapper from __model_use)
+    # that may still be alive waiting on a dead keeper or server. This prevents
+    # zombie bash processes from accumulating across autotune trials.
+    local _ms_pid
+    if [[ -f /tmp/llm-modelshell.pid ]]
+    then
+        _ms_pid=$(< /tmp/llm-modelshell.pid)
+        if [[ "$_ms_pid" =~ ^[0-9]+$ ]]
+        then
+            kill -TERM "$_ms_pid" 2>/dev/null || true
+            sleep 0.2
+            kill -KILL "$_ms_pid" 2>/dev/null || true
+        fi
+        rm -f /tmp/llm-modelshell.pid
+    fi
+
     rm -f "$ACTIVE_LLM_FILE"
     __llm_registry_sync_state >/dev/null 2>&1 || true
+
+    # ---- GPU memory reclamation ----
+    # After killing llama-server, the CUDA driver may hold VRAM for a grace
+    # period. We must wait for it to be released before the next model loads,
+    # otherwise fragmented memory from the previous run causes OOM.
+    #
+    # The fastest way to reclaim CUDA memory is to touch /dev/null via a
+    # CUDA-aware process, but the most reliable is polling nvidia-smi until
+    # free VRAM returns to baseline.
+    local _smi _free_before _free_after _mem_waited _mem_max_wait
+    _smi=$(__resolve_smi 2>/dev/null || true)
+    if [[ -n "$_smi" ]]
+    then
+        _free_before=$("$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        if [[ "$_free_before" =~ ^[0-9]+$ ]]
+        then
+            _mem_waited=0
+            _mem_max_wait=10
+            # Poll every 0.5s until VRAM stabilises (no more freed) or timeout
+            while (( _mem_waited < _mem_max_wait ))
+            do
+                sleep 0.5
+                _free_after=$("$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+                [[ "$_free_after" =~ ^[0-9]+$ ]] || break
+                # If VRAM stopped increasing, we're done
+                (( _free_after <= _free_before )) && break
+                _free_before="$_free_after"
+                _mem_waited=$(( _mem_waited + 1 ))
+            done
+        fi
+    fi
+    # For non-NVIDIA systems, a brief sleep to let kernel cleanup finish
+    sleep 0.5
     __tac_info "Llama Server" "[STOPPED]" "$C_Success"
     return 0
 }
@@ -3215,6 +3361,44 @@ function __model_info() {
 }
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# __bench_run_with_timeout — Wrap a command with an overall timeout.
+# Kills the entire process group if the timeout is exceeded, preventing runaway
+# llama-server or sleep processes from accumulating.
+# @usage  __bench_run_with_timeout <seconds> <command...>
+# @returns 0 if command completes, 124 on timeout.
+# ---------------------------------------------------------------------------
+function __bench_run_with_timeout() {
+    local timeout_s="$1"
+    shift
+    if [[ ! "$timeout_s" =~ ^[0-9]+$ ]] || (( timeout_s < 1 ))
+    then
+        timeout_s=120
+    fi
+    (
+        # Run in a separate process group so we can kill children
+        "$@"
+    ) &
+    local cmd_pid=$!
+    local waited=0
+    local interval=5
+    while (( waited < timeout_s ))
+    do
+        if ! kill -0 "$cmd_pid" 2>/dev/null
+        then
+            wait "$cmd_pid" 2>/dev/null
+            return $?
+        fi
+        sleep "$interval"
+        waited=$(( waited + interval ))
+    done
+    # Timeout — kill the process group
+    kill -TERM -- "$cmd_pid" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "$cmd_pid" 2>/dev/null || true
+    return 124
+}
+
 # __model_bench
 # @description Benchmark on-disk models, save TPS results, and restore prior state.
 # @returns 0 on success, 1 if the registry or benchmark candidates are unavailable.
@@ -3226,9 +3410,37 @@ function __model_bench() {
         return 1
     fi
 
-    local bench_lock_fd=""
+    # ---------------------------------------------------------------------------
+    # Singleton guard: PID file + flock with stale-process detection.
+    # Prevents duplicate bench runs and cleans up after killed processes.
+    # ---------------------------------------------------------------------------
+    local bench_pid_file="${LLM_BENCH_PID_FILE:-/tmp/llm-bench.pid}"
     local bench_lock_file="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
-    local bench_lock_wait_seconds="${LLM_BENCH_LOCK_WAIT_SECONDS:-2}"
+    local bench_lock_wait_seconds="${LLM_BENCH_LOCK_WAIT_SECONDS:-5}"
+
+    # Check for stale PID file (process that no longer exists)
+    if [[ -f "$bench_pid_file" ]]
+    then
+        local old_pid
+        old_pid=$(< "$bench_pid_file")
+        if [[ -n "$old_pid" ]] && [[ "$old_pid" =~ ^[0-9]+$ ]]
+        then
+            if ! kill -0 "$old_pid" 2>/dev/null
+            then
+                __tac_info "Bench" "[Cleaning stale PID $old_pid from $bench_pid_file]" "$C_Warning"
+                rm -f "$bench_pid_file" "$bench_lock_file"
+            fi
+        fi
+    fi
+
+    # Stale bench lock detection: if lock file exists but no one holds it, remove it.
+    if [[ -f "$bench_lock_file" ]] && ! lsof "$bench_lock_file" >/dev/null 2>&1
+    then
+        __tac_info "Bench" "[Cleaning stale lock: $bench_lock_file]" "$C_Warning"
+        rm -f "$bench_lock_file"
+    fi
+
+    local bench_lock_fd=""
     if command -v flock >/dev/null 2>&1
     then
         exec {bench_lock_fd}>"$bench_lock_file" || {
@@ -3241,7 +3453,63 @@ function __model_bench() {
             exec {bench_lock_fd}>&-
             return 1
         fi
+        # Write our PID to the lock (cooperative PID tracking)
+        echo "$$" > "$bench_lock_file"
     fi
+
+    # Write PID file for stale detection
+    echo "$$" > "$bench_pid_file"
+
+    # ---------------------------------------------------------------------------
+    # Cleanup trap: kill orphan processes and remove guard files on exit.
+    # Handles normal completion, SIGINT (Ctrl+C), and abrupt termination.
+    # ---------------------------------------------------------------------------
+    local bench_cleanup_spawned_pids=()
+    __bench_cleanup() {
+        local exit_code=$?
+        # Kill any subprocesses we spawned
+        if (( ${#bench_cleanup_spawned_pids[@]} > 0 ))
+        then
+            kill "${bench_cleanup_spawned_pids[@]}" 2>/dev/null || true
+        fi
+        # Kill any orphan llama-server instances running on bench port
+        local bench_llama_pid
+        bench_llama_pid=$(pgrep -f 'llama-server.*--port 8081' 2>/dev/null || true)
+        if [[ -n "$bench_llama_pid" ]]
+        then
+            kill "$bench_llama_pid" 2>/dev/null || true
+        fi
+        # Remove guard files
+        rm -f "$bench_pid_file"
+        if [[ -n "$bench_lock_fd" ]]
+        then
+            flock -u "$bench_lock_fd" 2>/dev/null || true
+            exec {bench_lock_fd}>&-
+        fi
+        rm -f "$bench_lock_file"
+        return "$exit_code"
+    }
+    trap __bench_cleanup EXIT INT TERM
+
+    # Kill any orphaned stdin keepers from prior runs before starting.
+    # These accumulate if llama-server was killed without going through
+    # __model_stop (e.g., OOM kill, system crash, SIGKILL).
+    local _kp
+    for _kf in /tmp/llm-keeper.*.pid
+    do
+        [[ -f "$_kf" ]] || continue
+        _kp=$(< "$_kf")
+        [[ "$_kp" =~ ^[0-9]+$ ]] && kill -TERM "$_kp" 2>/dev/null || true
+        rm -f "$_kf"
+    done
+    # Catch any orphan sleep loops that lost their PID file (e.g., from a
+    # previous bench run that was SIGKILL'd). These show up as bash processes
+    # holding open FIFOs — grep for the mkfifo pattern, not our own PID.
+    local _my_pid=$$
+    for _sp in $(ps -eo pid,args --no-headers | grep '[l]lm-stdin' | awk '{print $1}' 2>/dev/null || true)
+    do
+        [[ "$_sp" =~ ^[0-9]+$ && "$_sp" != "$_my_pid" ]] && kill -TERM "$_sp" 2>/dev/null || true
+    done
 
     __tac_header "MODEL BENCHMARK" "open"
     local bench_run_id
@@ -3357,11 +3625,26 @@ function __model_bench() {
         fi
 
         rm -f "$LLM_TPS_CACHE"
+        # Timeout guard: if a single model takes too long (stuck llama-server),
+        # kill the server and move on. Default 300s per model.
+        local bench_model_timeout="${LLM_BENCH_MODEL_TIMEOUT:-300}"
+        local bench_model_start="${EPOCHSECONDS:-$(date +%s)}"
+        local bench_model_ok=0
         if __model_use "${b_num[$i]}"
         then
-            if ! burn
+            # Check if we've exceeded the model timeout during __model_use
+            local _now
+            _now="${EPOCHSECONDS:-$(date +%s)}"
+            if (( _now - bench_model_start < bench_model_timeout ))
             then
-                __tac_info "Bench" "[Burn failed for model #${b_num[$i]}]" "$C_Error"
+                if ! burn
+                then
+                    __tac_info "Bench" "[Burn failed for model #${b_num[$i]}]" "$C_Error"
+                fi
+                bench_model_ok=1
+            else
+                __tac_info "Bench" "[Time out after ${bench_model_timeout}s for model #${b_num[$i]} during __model_use]" "$C_Error"
+                __model_stop 2>/dev/null || true
             fi
         else
             local bench_ready_timeout

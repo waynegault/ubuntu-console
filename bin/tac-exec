@@ -1,4 +1,5 @@
-#!/usr/bin/env bash
+#!/home/linuxbrew/.linuxbrew/bin/bash
+# tac-exec — Use Homebrew bash (fixes segfault in system bash 5.2 with namerefs)
 # ==============================================================================
 # tac-exec — Run any command with the full Tactical Console function library.
 # ==============================================================================

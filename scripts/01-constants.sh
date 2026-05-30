@@ -127,7 +127,9 @@ fi
 #   1|Phi-4-mini|phi-4-mini.Q4_K_M.gguf|2.5G|Q4_K_M/q8_0|phi3|999|4096|12|1024|256|1|1024|llama_server|auto|45.2|yes|no|no
 #
 # Used by: model scan/use/stop/bench, llama-watchdog.sh, dashboard
-export LLM_REGISTRY="$LLAMA_DRIVE_ROOT/.llm/models.conf"
+# Registry on local ext4 to avoid 9P atomic-mv corruption on Windows drive.
+# Bench logs remain on drive M: for persistence across WSL rebuilds.
+export LLM_REGISTRY="$HOME/.llm/models.conf"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"
 export LLM_LOG_FILE="/dev/shm/llama-server.log"
 export LLM_TPS_CACHE="/dev/shm/last_tps"
