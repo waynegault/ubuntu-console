@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 44
+# Module Version: 46
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -2484,8 +2484,10 @@ function __model_autotune() {
 
     local __autotune_prev_int_trap=""
     local __autotune_prev_term_trap=""
+    local __autotune_prev_exit_trap=""
     __autotune_prev_int_trap=$(trap -p INT || true)
     __autotune_prev_term_trap=$(trap -p TERM || true)
+    __autotune_prev_exit_trap=$(trap -p EXIT 2>/dev/null || true)
     __autotune_restore_traps() {
         if [[ -n "$__autotune_prev_int_trap" ]]; then
             eval "$__autotune_prev_int_trap"
@@ -2513,6 +2515,12 @@ function __model_autotune() {
     __autotune_fail() {
         __autotune_unlock
         __autotune_restore_traps
+        if [[ -n "$__autotune_prev_exit_trap" ]]
+        then
+            eval "$__autotune_prev_exit_trap"
+        else
+            trap - EXIT
+        fi
         unset -f __autotune_restore_traps __autotune_fail __autotune_unlock 2>/dev/null || true
     }
 
@@ -2530,6 +2538,12 @@ function __model_autotune() {
                 return 0
                 ;;
             --backend)
+                if [[ $# -lt 2 || "$2" == -* ]]
+                then
+                    __tac_info "Autotune" "[Missing value for --backend (expected native|python)]" "$C_Error"
+                    __autotune_fail
+                    return 1
+                fi
                 backend_raw="$2"
                 shift 2
                 ;;
@@ -2538,10 +2552,22 @@ function __model_autotune() {
                 shift
                 ;;
             --ctx-size|--ctx)
+                if [[ $# -lt 2 || "$2" == -* ]]
+                then
+                    __tac_info "Autotune" "[Missing value for --ctx-size]" "$C_Error"
+                    __autotune_fail
+                    return 1
+                fi
                 tune_ctx="$2"
                 shift 2
                 ;;
             --trials)
+                if [[ $# -lt 2 || "$2" == -* ]]
+                then
+                    __tac_info "Autotune" "[Missing value for --trials]" "$C_Error"
+                    __autotune_fail
+                    return 1
+                fi
                 trials="$2"
                 shift 2
                 ;;
@@ -2630,13 +2656,7 @@ function __model_autotune() {
     # Register an EXIT trap to release the lock on any exit (including set -e).
     # This ensures the lock file is cleaned even if the function aborts partway
     # through the sweep without reaching the normal cleanup section.
-    local __autotune_own_exit_trap=""
-    __autotune_own_exit_trap=$(trap -p EXIT 2>/dev/null || true)
-    # Only register if not already set (nested calls from bench skip this).
-    if [[ -z "$__autotune_own_exit_trap" ]]
-    then
-        trap '__autotune_unlock; __autotune_restore_traps; rm -f /tmp/llm-autotune.lock' EXIT
-    fi
+    trap '__autotune_unlock; __autotune_restore_traps' EXIT
 
     local prev_backend="${LLM_SERVER_BACKEND:-}"
     local prev_batch="${LLAMA_BATCH_SIZE:-}"
@@ -3123,11 +3143,10 @@ function __model_autotune() {
 
     __tac_footer
     __autotune_restore_traps
-    # Remove our EXIT trap if we installed one (nested calls from bench skip it).
-    local _exit_trap_clean
-    _exit_trap_clean=$(trap -p EXIT 2>/dev/null || true)
-    if [[ "$_exit_trap_clean" == *'__autotune_unlock'* ]]
+    if [[ -n "$__autotune_prev_exit_trap" ]]
     then
+        eval "$__autotune_prev_exit_trap"
+    else
         trap - EXIT
     fi
     unset -f __autotune_restore_traps __autotune_fail __autotune_unlock 2>/dev/null || true
@@ -3572,6 +3591,32 @@ function __model_bench() {
     local bench_cleanup_spawned_pids=()
     local __bench_signal_rc=0
     local __bench_cleaned=0
+    local __bench_prev_int_trap=""
+    local __bench_prev_term_trap=""
+    local __bench_prev_exit_trap=""
+    __bench_prev_int_trap=$(trap -p INT || true)
+    __bench_prev_term_trap=$(trap -p TERM || true)
+    __bench_prev_exit_trap=$(trap -p EXIT 2>/dev/null || true)
+    __bench_restore_traps() {
+        if [[ -n "$__bench_prev_int_trap" ]]
+        then
+            eval "$__bench_prev_int_trap"
+        else
+            trap - INT
+        fi
+        if [[ -n "$__bench_prev_term_trap" ]]
+        then
+            eval "$__bench_prev_term_trap"
+        else
+            trap - TERM
+        fi
+        if [[ -n "$__bench_prev_exit_trap" ]]
+        then
+            eval "$__bench_prev_exit_trap"
+        else
+            trap - EXIT
+        fi
+    }
     # shellcheck disable=SC2317  # called indirectly via trap
     __bench_cleanup() {
         local _exit_code=$?
@@ -3599,6 +3644,7 @@ function __model_bench() {
             exec {bench_lock_fd}>&- 2>/dev/null || true
         fi
         rm -f "$bench_lock_file"
+        __bench_restore_traps
         # shellcheck disable=SC2086
         return $_exit_code
     }
@@ -3671,6 +3717,7 @@ function __model_bench() {
             flock -u "$bench_lock_fd" 2>/dev/null || true
             exec {bench_lock_fd}>&-
         fi
+        __bench_restore_traps
         return 1
     fi
 
@@ -3849,6 +3896,7 @@ function __model_bench() {
         flock -u "$bench_lock_fd" 2>/dev/null || true
         exec {bench_lock_fd}>&-
     fi
+    __bench_restore_traps
     __tac_footer
 }
 

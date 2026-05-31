@@ -155,6 +155,74 @@ setup() {
     [[ "$fn_src" != *'rm -f "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"'* ]]
 }
 
+@test "integration: __model_bench restores INT TERM EXIT traps" {
+    local fn_src
+    fn_src=$(declare -f __model_bench 2>/dev/null)
+
+    [[ "$fn_src" == *"__bench_restore_traps"* ]]
+    [[ "$fn_src" == *"__bench_prev_int_trap"* ]]
+    [[ "$fn_src" == *"__bench_prev_term_trap"* ]]
+    [[ "$fn_src" == *"__bench_prev_exit_trap"* ]]
+}
+
+@test "integration: __model_autotune restores previous EXIT trap" {
+    local fn_src
+    fn_src=$(declare -f __model_autotune 2>/dev/null)
+
+    [[ "$fn_src" == *"__autotune_prev_exit_trap"* ]]
+    [[ "$fn_src" == *"trap '__autotune_unlock; __autotune_restore_traps' EXIT"* ]]
+}
+
+@test "integration: __model_autotune validates required option values" {
+    local fn_src
+    fn_src=$(declare -f __model_autotune 2>/dev/null)
+
+    [[ "$fn_src" == *"Missing value for --backend"* ]]
+    [[ "$fn_src" == *"Missing value for --ctx-size"* ]]
+    [[ "$fn_src" == *"Missing value for --trials"* ]]
+}
+
+@test "integration: autotune missing --backend value exits quickly" {
+    run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __model_autotune 1 --backend"
+    [[ "$status" -ne 124 ]]
+    [[ "$output" == *"Missing value for --backend"* ]]
+}
+
+@test "integration: autotune missing --ctx-size value exits quickly" {
+    run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __model_autotune 1 --ctx-size"
+    [[ "$status" -ne 124 ]]
+    [[ "$output" == *"Missing value for --ctx-size"* ]]
+}
+
+@test "integration: autotune missing --trials value exits quickly" {
+    run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __model_autotune 1 --trials"
+    [[ "$status" -ne 124 ]]
+    [[ "$output" == *"Missing value for --trials"* ]]
+}
+
+@test "integration: bench does not leak shell traps after return" {
+    local pre_int pre_term pre_exit post_int post_term post_exit
+    pre_int=$(trap -p INT || true)
+    pre_term=$(trap -p TERM || true)
+    pre_exit=$(trap -p EXIT || true)
+
+    local bench_root="$TAC_TEST_TMPDIR/bench-trap-clean"
+    mkdir -p "$bench_root/models" "$bench_root/.llm"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' > "$bench_root/.llm/models.conf"
+
+    LLM_REGISTRY="$bench_root/.llm/models.conf"
+    LLAMA_MODEL_DIR="$bench_root/models"
+    __model_bench >/dev/null 2>&1 || true
+
+    post_int=$(trap -p INT || true)
+    post_term=$(trap -p TERM || true)
+    post_exit=$(trap -p EXIT || true)
+
+    [[ "$post_int" == "$pre_int" ]]
+    [[ "$post_term" == "$pre_term" ]]
+    [[ "$post_exit" == "$pre_exit" ]]
+}
+
 @test "integration: model has use subcommand" {
     local fn_src
     fn_src=$(declare -f model 2>/dev/null)
