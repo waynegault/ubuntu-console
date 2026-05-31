@@ -68,14 +68,10 @@ function __save_model_ctx() {
     [[ "$model_num" =~ ^[0-9]+$ && "$ctx_val" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
-    # Enforce a minimum context floor of 24000. Autotune may pick a very
-    # small ctx on OOM for the best-performing config, but that's rarely
-    # what the user wants. The binary search already finds the max stable
-    # ctx — trust its discovered_ctx, not the combo-sweep runner-up.
-    local min_ctx="${LLM_AUTOTUNE_MIN_CTX:-24000}"
-    [[ "$min_ctx" =~ ^[0-9]+$ ]] || min_ctx=24000
+    # Trust the autotune-discovered ctx as-is. The binary search already finds
+    # the maximum VRAM-stable context — no floor needed. A small ctx means the
+    # model genuinely cannot run larger on available hardware.
     local saved="$ctx_val"
-    (( saved < min_ctx )) && saved=$min_ctx
 
     awk -F'|' -v n="$model_num" -v c="$saved" 'BEGIN{OFS="|"} $1 == n {$8 = c} {print}' \
         "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" \
