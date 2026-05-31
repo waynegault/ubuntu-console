@@ -78,6 +78,17 @@ not profile modules, and are never sourced by either loader.
 | `tools/mirror-vault.sh` | Sync Obsidian vault from WSL to Windows. |
 | `tools/run-tests.sh` | Pretty-printed BATS test runner (489 tests). |
 
+### Repository Boundaries
+
+This repository intentionally excludes investigator/pipeline implementation code.
+If feedback references symbols like `pipeline/model_benchmark.py`,
+`BenchmarkCase`, `BenchmarkResult`, or `_normalize_confidence_label`, treat that
+as out-of-scope for this repo unless those files are explicitly introduced.
+
+Use `tools/check-repo-boundaries.sh` to enforce this contract. The check scans
+`scripts/`, `tools/`, `bin/`, and `tests/` for forbidden cross-repo symbols and
+fails fast when boundaries are violated.
+
 ### Dependency Graph
 
 ```
