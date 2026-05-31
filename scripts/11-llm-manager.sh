@@ -2559,18 +2559,10 @@ function __model_autotune() {
 
     # Serialize autotune runs to avoid overlapping server/curl trials.
     local lock_fd=""
+    __tac_cleanup_stale_locks
+
     local lock_file="${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
     local lock_wait_seconds="${LLM_AUTOTUNE_LOCK_WAIT_SECONDS:-5}"
-
-    # Stale lock detection: if file exists but no process holds it open, remove it.
-    if [[ -f "$lock_file" ]]
-    then
-        if ! lsof "$lock_file" >/dev/null 2>&1
-        then
-            __tac_info "Autotune" "[Cleaning stale lock: $lock_file]" "$C_Warning"
-            rm -f "$lock_file"
-        fi
-    fi
 
     if [[ "${LLM_AUTOTUNE_SKIP_LOCK:-0}" != "1" ]] && command -v flock >/dev/null 2>&1
     then
@@ -3518,27 +3510,9 @@ function __model_bench() {
     local bench_lock_file="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
     local bench_lock_wait_seconds="${LLM_BENCH_LOCK_WAIT_SECONDS:-5}"
 
-    # Check for stale PID file (process that no longer exists)
-    if [[ -f "$bench_pid_file" ]]
-    then
-        local old_pid
-        old_pid=$(< "$bench_pid_file")
-        if [[ -n "$old_pid" ]] && [[ "$old_pid" =~ ^[0-9]+$ ]]
-        then
-            if ! kill -0 "$old_pid" 2>/dev/null
-            then
-                __tac_info "Bench" "[Cleaning stale PID $old_pid from $bench_pid_file]" "$C_Warning"
-                rm -f "$bench_pid_file" "$bench_lock_file"
-            fi
-        fi
-    fi
-
-    # Stale bench lock detection: if lock file exists but no one holds it, remove it.
-    if [[ -f "$bench_lock_file" ]] && ! lsof "$bench_lock_file" >/dev/null 2>&1
-    then
-        __tac_info "Bench" "[Cleaning stale lock: $bench_lock_file]" "$C_Warning"
-        rm -f "$bench_lock_file"
-    fi
+    # Clean up any orphaned locks, keepers, and processes from prior runs
+    # before attempting to acquire the bench lock.
+    __tac_cleanup_stale_locks
 
     local bench_lock_fd=""
     if command -v flock >/dev/null 2>&1
