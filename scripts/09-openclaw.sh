@@ -212,10 +212,10 @@ function __so_clear_wslrelay() {
 # ---------------------------------------------------------------------------
 function __so_push_api_keys() {
     if [[ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]]; then
-        # Validate file permissions (should be 600 or 644, owned by user)
+        # Validate file permissions (must be 600, owned by user)
         local _file_perms
             _file_perms=$(stat -c '%a' "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null || echo "666")
-        if [[ "$_file_perms" != "600" && "$_file_perms" != "644" ]]
+        if [[ "$_file_perms" != "600" ]]
         then
             __tac_info "Security" "[SKIP api keys - unsafe permissions $_file_perms]" "$C_Warning"
             return 1
@@ -271,7 +271,7 @@ function __so_ensure_llm_running() {
     # If no default is set, auto-select the first model from the registry
     if [[ -z "$_so_def_file" && -f "$LLM_REGISTRY" ]]
     then
-        _so_def_file=$(awk -F'|' 'NR>0 && $3!="" {print $3; exit}' "$LLM_REGISTRY" 2>/dev/null)
+        _so_def_file=$(awk -F'|' 'NR>1 && $1 ~ /^[0-9]+$/ && $3!="" {print $3; exit}' "$LLM_REGISTRY" 2>/dev/null)
     fi
 
     if [[ -z "$_so_def_file" ]]
@@ -282,69 +282,51 @@ function __so_ensure_llm_running() {
         return 1
     fi
 
-    # Look up human-readable model name from registry
+    # Look up human-readable model name and model number from registry
+    local _so_model_num=""
     local _so_model_name
     local _so_def_entry=""
     _so_def_entry=$(__llm_registry_entry_by_file "$_so_def_file" 2>/dev/null || true)
     if [[ -n "$_so_def_entry" ]]
     then
-        IFS='|' read -r _ _so_model_name _ <<< "$_so_def_entry"
+        IFS='|' read -r _so_model_num _so_model_name _ <<< "$_so_def_entry"
     fi
+
+    # Fallback for no-default setups: pick the first valid registry row.
+    if [[ -z "$_so_model_num" && -f "$LLM_REGISTRY" ]]
+    then
+        local _so_first_entry=""
+        _so_first_entry=$(awk -F'|' 'NR>1 && $1 ~ /^[0-9]+$/ {print; exit}' "$LLM_REGISTRY" 2>/dev/null)
+        if [[ -n "$_so_first_entry" ]]
+        then
+            IFS='|' read -r _so_model_num _so_model_name _so_def_file _ <<< "$_so_first_entry"
+        fi
+    fi
+
     : "${_so_model_name:=$_so_def_file}"
+
+    if [[ -z "$_so_model_num" || ! "$_so_model_num" =~ ^[0-9]+$ ]]
+    then
+        __tac_info "Local LLM" "[FAILED TO RESOLVE MODEL NUMBER - run 'model scan' then 'model default <N>']" "$C_Error"
+        return 1
+    fi
 
     # Enable GPU persistence mode before starting the model
     wake 2>/dev/null || true
 
-    # Start the LLM using serve in non-interactive mode
-    # Redirect output to avoid interleaving with our status messages
-    { TAC_NONINTERACTIVE=1 serve >/dev/null 2>&1 & disown; }
-
-    # Wait for llama-server process to appear (give it up to 10 seconds)
-    local _wait_count=0
-    while (( _wait_count < 20 ))
-    do
-        if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
-        then
-            break
-        fi
-        sleep 0.5
-        ((_wait_count++))
-    done
-
-    if ! pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
+    # Start resolved model number in non-interactive mode.
+    # Running serve in the foreground avoids shell job-control noise ([N] PID).
+    local _so_start_ts _so_elapsed
+    _so_start_ts=$(date +%s)
+    if ! TAC_NONINTERACTIVE=1 serve "$_so_model_num" >/dev/null 2>&1
     then
-        __tac_info "Local LLM" "[FAILED TO START - process exited immediately]" "$C_Error"
+        __tac_info "Local LLM" "[FAILED TO START — check: tail $LLM_LOG_FILE]" "$C_Error"
         return 1
     fi
 
-    local _spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-    local _sw=0 _sw_max=90
-
-    while (( _sw < _sw_max ))
-    do
-        printf '\r  %s' "${C_Dim}${_spin_chars:_sw%10:1} Starting ${_so_model_name} (${_sw}s)${C_Reset}  "
-        if __llm_is_healthy
-        then
-            break
-        fi
-        if ! pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
-        then
-            break
-        fi
-        sleep 1
-        ((_sw++))
-    done
-    printf '\r%s\r' "$(printf '%*s' 60 '')"
-
-    # Verify LLM is healthy
-    if __llm_is_healthy
-    then
-        __tac_info "Local LLM" "[ONLINE on PORT $LLM_PORT] ${_so_model_name} (${_sw}s)" "$C_Success"
-        return 0
-    fi
-
-    __tac_info "Local LLM" "[FAILED TO START — check: tail $LLM_LOG_FILE]" "$C_Error"
-    return 1
+    _so_elapsed=$(( $(date +%s) - _so_start_ts ))
+    __tac_info "Local LLM" "[ONLINE on PORT $LLM_PORT] ${_so_model_name} (${_so_elapsed}s)" "$C_Success"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -1414,12 +1396,12 @@ function __bridge_windows_api_keys() {
         return
     fi
 
-    # Fetch matching vars from Windows User environment via PowerShell
-    # Broad match: any var containing API_KEY, API-KEY, APIKEY, or TOKEN
+    # Fetch matching vars from Windows User environment via PowerShell.
+    # Intentional narrow match: API key names and token names only.
     local raw
     raw=$(timeout 5 pwsh.exe -NoProfile -NonInteractive -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() |
-        Where-Object { $_.Key -match "(?i)(PASSWORD|TOKEN|API(_|-)?KEY|API|KEY)" } |
+        Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY)" } |
         ForEach-Object { "$($_.Key)=$($_.Value)" }
     ' 2>/dev/null | tr -d '\r')
 
