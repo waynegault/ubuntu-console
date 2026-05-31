@@ -888,26 +888,33 @@ function __llm_burn_request_timeout() {
         timeout="${LLM_BURN_REQUEST_TIMEOUT:-360}"
     fi
 
-    if [[ "$size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
+    # If the caller explicitly set LLM_BURN_REQUEST_TIMEOUT (not defaulted),
+    # respect it unconditionally — no model-size floor. This allows autotune
+    # to enforce short per-trial timeouts (e.g. 90s) without model-size
+    # scaling bumping them to 480-900s.
+    if [[ -z "${LLM_BURN_REQUEST_TIMEOUT:-}" ]]
     then
-        size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
-    fi
+        if [[ "$size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
+        then
+            size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
+        fi
 
-    if (( gpu_layers == _GPU_OFFLOAD_DISABLED ))
-    then
-        timeout="${LLM_BURN_REQUEST_TIMEOUT_CPU:-1200}"
-    elif [[ "$arch" == "qwen35" ]]
-    then
-        (( timeout < 900 )) && timeout=900
-    elif (( size_tenths >= _MODEL_SIZE_LARGE ))
-    then
-        (( timeout < 900 )) && timeout=900
-    elif (( size_tenths >= _MODEL_SIZE_MEDIUM ))
-    then
-        (( timeout < 720 )) && timeout=720
-    elif (( size_tenths >= _MODEL_SIZE_SMALL ))
-    then
-        (( timeout < 480 )) && timeout=480
+        if (( gpu_layers == _GPU_OFFLOAD_DISABLED ))
+        then
+            timeout="${LLM_BURN_REQUEST_TIMEOUT_CPU:-1200}"
+        elif [[ "$arch" == "qwen35" ]]
+        then
+            (( timeout < 900 )) && timeout=900
+        elif (( size_tenths >= _MODEL_SIZE_LARGE ))
+        then
+            (( timeout < 900 )) && timeout=900
+        elif (( size_tenths >= _MODEL_SIZE_MEDIUM ))
+        then
+            (( timeout < 720 )) && timeout=720
+        elif (( size_tenths >= _MODEL_SIZE_SMALL ))
+        then
+            (( timeout < 480 )) && timeout=480
+        fi
     fi
 
     printf '%s\n' "$timeout"
