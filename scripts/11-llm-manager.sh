@@ -2532,6 +2532,7 @@ function __model_autotune() {
     local quick_mode=0
     local tune_ctx=""
     local trials="${LLM_AUTOTUNE_TRIALS:-3}"
+    local __autotune_interrupted=0
 
     local __autotune_prev_int_trap=""
     local __autotune_prev_term_trap=""
@@ -2555,11 +2556,12 @@ function __model_autotune() {
     }
 
     # Ensure Ctrl-C/termination cannot leave trial servers running.
-    trap '__model_stop >/dev/null 2>&1 || true; __autotune_fail; return 130' INT
-    trap '__model_stop >/dev/null 2>&1 || true; __autotune_fail; return 143' TERM
+    trap '__model_stop >/dev/null 2>&1 || true; __autotune_interrupted=130' INT
+    trap '__model_stop >/dev/null 2>&1 || true; __autotune_interrupted=143' TERM
 
     while [[ $# -gt 0 ]]
     do
+        (( __autotune_interrupted != 0 )) && break
         case "$1" in
             -h|--help)
                 __model_autotune_help
@@ -2896,9 +2898,11 @@ function __model_autotune() {
     local c_ctx=""
     for c_ctx in "${ctx_candidates[@]}"
     do
+        (( __autotune_interrupted != 0 )) && break
         export TAC_CTX_SIZE="$c_ctx"
         for combo in "${combos[@]}"
         do
+            (( __autotune_interrupted != 0 )) && break
             idx=$((idx + 1))
             IFS=':' read -r c_batch c_ubatch c_parallel c_fit <<< "$combo"
             export LLAMA_BATCH_SIZE="$c_batch"
@@ -2925,6 +2929,11 @@ function __model_autotune() {
 
                 for (( trial=1; trial<=trials; trial++ ))
                 do
+                    if (( __autotune_interrupted != 0 ))
+                    then
+                        trial_ok=0
+                        break
+                    fi
                     burn_log="/tmp/autotune_burn_${num}_${idx}_${trial}.log"
                     __tac_info "Trial" "[Config ${idx}/${total_configs} | ctx ${c_ctx} | run ${trial}/${trials}: b ${c_batch}/${c_ubatch}, p ${c_parallel}]" "$C_Dim"
                     rm -f "$LLM_TPS_CACHE"
@@ -3164,6 +3173,10 @@ function __model_autotune() {
     __tac_footer
     __autotune_restore_traps
     unset -f __autotune_restore_traps __autotune_fail 2>/dev/null || true
+    if (( __autotune_interrupted != 0 ))
+    then
+        return "$__autotune_interrupted"
+    fi
     [[ -n "$best_combo" ]]
 }
 
@@ -3590,6 +3603,7 @@ function __model_bench() {
     # Handles normal completion, SIGINT (Ctrl+C), and abrupt termination.
     # ---------------------------------------------------------------------------
     local bench_cleanup_spawned_pids=()
+    local __bench_signal_rc=0
     local __bench_cleaned=0
     # shellcheck disable=SC2317  # called indirectly via trap
     __bench_cleanup() {
@@ -3604,6 +3618,11 @@ function __model_bench() {
         then
             kill "${bench_cleanup_spawned_pids[@]}" 2>/dev/null || true
         fi
+        # On interrupt/termination, explicitly stop any active model server.
+        if (( __bench_signal_rc != 0 ))
+        then
+            __model_stop >/dev/null 2>&1 || true
+        fi
         # Remove guard files
         rm -f "$bench_pid_file"
         if [[ -n "$bench_lock_fd" ]]
@@ -3615,8 +3634,8 @@ function __model_bench() {
         return "$exit_code"
     }
     trap '__bench_cleanup' EXIT
-    trap '__bench_cleanup; return 130' INT
-    trap '__bench_cleanup; return 143' TERM
+    trap '__bench_signal_rc=130; __bench_cleanup; return 130' INT
+    trap '__bench_signal_rc=143; __bench_cleanup; return 143' TERM
 
     # Kill any orphaned stdin keepers from prior runs before starting.
     # These accumulate if llama-server was killed without going through
