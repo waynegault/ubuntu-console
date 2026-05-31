@@ -275,9 +275,14 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[E7] Lock: __tac_cleanup_stale_locks preserves lock held by our PID" {
-    echo "$$" > "$LLM_BENCH_LOCK_FILE"
+    # Must use exec flock to hold an fd, not just echo PID — lsof check
+    # requires an actual open file descriptor.
+    exec {fd}>"$LLM_BENCH_LOCK_FILE"
+    flock -x "$fd"
     __tac_cleanup_stale_locks
     [[ -f "$LLM_BENCH_LOCK_FILE" ]]
+    flock -u "$fd"
+    exec {fd}>&-
     rm -f "$LLM_BENCH_LOCK_FILE"
 }
 

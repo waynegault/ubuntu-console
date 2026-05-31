@@ -106,8 +106,13 @@ function __tac_cleanup_stale_locks() {
     # shellcheck disable=SC2034
     local _c_lock _c_pid _c_kf _c_sp _c_my_pid _c_ppid _c_cmd
 
-    # bench lock + pid
-    for _c_lock in /tmp/llm-bench.lock /tmp/llm-autotune.lock
+    # bench lock + pid — also check custom paths used by non-default configs
+    local _c_lock_candidates
+    _c_lock_candidates=(
+        "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
+        "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
+    )
+    for _c_lock in "${_c_lock_candidates[@]}"
     do
         [[ -f "$_c_lock" ]] || continue
         if command -v lsof >/dev/null 2>&1
@@ -117,7 +122,6 @@ function __tac_cleanup_stale_locks() {
                 rm -f "$_c_lock"
             fi
         else
-            # Fallback: no lsof — check if lock file's PID (if any) is alive
             # shellcheck disable=SC2188
             _c_pid=$(<"$_c_lock" 2>/dev/null || true)
             if [[ -z "$_c_pid" ]] || ! kill -0 "$_c_pid" 2>/dev/null
@@ -127,14 +131,15 @@ function __tac_cleanup_stale_locks() {
         fi
     done
 
-    # bench PID file
-    if [[ -f /tmp/llm-bench.pid ]]
+    # bench PID file — check custom path too
+    local _c_pid_file="${LLM_BENCH_PID_FILE:-/tmp/llm-bench.pid}"
+    if [[ -f "$_c_pid_file" ]]
     then
         # shellcheck disable=SC2188
-        _c_pid=$(</tmp/llm-bench.pid 2>/dev/null || true)
+        _c_pid=$(<"$_c_pid_file" 2>/dev/null || true)
         if [[ -z "$_c_pid" ]] || ! kill -0 "$_c_pid" 2>/dev/null
         then
-            rm -f /tmp/llm-bench.pid
+            rm -f "$_c_pid_file"
         fi
     fi
 
@@ -408,7 +413,13 @@ function __llm_autotune_done_for_model() {
     local model_num="${1:-}"
     [[ "$model_num" =~ ^[0-9]+$ ]] || return 1
 
-    awk -F'|' -v n="$model_num" '$1==n {exit !($17=="yes")}' "$LLM_REGISTRY" 2>/dev/null
+    # Awk exits 0 if the entry exists AND autotuned=yes, 1 if not found or !=yes.
+    # Default awk exit code is 0 (pattern never matched), so we must force
+    # exit 1 when the model row doesn't exist at all.
+    awk -F'|' -v n="$model_num" '
+        $1==n {found=1; exit !($17=="yes")}
+        END   {if (!found) exit 1}
+    ' "$LLM_REGISTRY" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
