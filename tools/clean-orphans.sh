@@ -29,29 +29,45 @@ done
 
 # Gather orphan processes
 declare -a ORPHANS=()
+declare -A SEEN_PIDS=()
+
+add_orphan() {
+    local pid="$1"
+    local cmd="$2"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+    [[ -n "${SEEN_PIDS[$pid]:-}" ]] && return 0
+    SEEN_PIDS["$pid"]=1
+    ORPHANS+=("$pid|$cmd")
+}
 
 # 1. Stdin keepers: bash processes holding open /tmp/llm-stdin.* FIFOs
 while IFS='|' read -r pid cmd; do
     pid="${pid// /}"
     if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"llm-stdin"* ]]; then
-        ORPHANS+=("$pid|$cmd")
+        add_orphan "$pid" "$cmd"
     fi
 done < <(ps -eo pid,args --no-headers 2>/dev/null | grep 'llm-stdin' || true)
 
-# 2. sleep loops that are children of init (reparented orphans)
-while IFS='|' read -r pid ppid cmd; do
-    pid="${pid// /}"
-    ppid="${ppid// /}"
-    if [[ "$ppid" == "1" ]] && [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"sleep"* ]]; then
-        ORPHANS+=("$pid|$cmd")
+# 2. Keeper sleep loops from known keeper PID files.
+# This is intentionally strict to avoid killing unrelated init-owned sleep
+# processes on a shared host.
+for keeper_file in /tmp/llm-keeper.*.pid; do
+    [[ -f "$keeper_file" ]] || continue
+    keeper_pid=$(< "$keeper_file")
+    [[ "$keeper_pid" =~ ^[0-9]+$ ]] || continue
+    if kill -0 "$keeper_pid" 2>/dev/null; then
+        keeper_cmd=$(ps -p "$keeper_pid" -o args= 2>/dev/null || true)
+        if [[ "$keeper_cmd" == *"sleep 3600"* ]]; then
+            add_orphan "$keeper_pid" "$keeper_cmd"
+        fi
     fi
-done < <(ps -eo pid,ppid,args --no-headers 2>/dev/null | grep -E 'sleep (3600|86400)' || true)
+done
 
 # 3. llama-server instances spawned by bench (have --no-mmap, no terminal)
 while IFS='|' read -r pid cmd; do
     pid="${pid// /}"
     if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"llama-server"*"no-mmap"* ]]; then
-        ORPHANS+=("$pid|$cmd")
+        add_orphan "$pid" "$cmd"
     fi
 done < <(ps -eo pid,args --no-headers 2>/dev/null | grep 'llama-server' | grep 'no-mmap' || true)
 
