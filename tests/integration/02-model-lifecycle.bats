@@ -110,6 +110,14 @@ setup() {
     [[ "$fn_src" == *"LLM_AUTOTUNE_CONFIRM_FINAL"* ]]
 }
 
+@test "integration: __model_autotune sizes model by registry file path" {
+    local fn_src
+    fn_src=$(declare -f __model_autotune 2>/dev/null)
+
+    [[ "$fn_src" == *'LLAMA_MODEL_DIR/$file'* ]]
+    [[ "$fn_src" != *'LLAMA_MODEL_DIR/$name'* ]]
+}
+
 @test "integration: autotune profile helpers exist" {
     declare -f __llm_autotune_profile_save >/dev/null 2>&1
     declare -f __llm_median_from_list >/dev/null 2>&1
@@ -131,6 +139,20 @@ setup() {
     fn_src=$(declare -f __model_bench 2>/dev/null)
 
     [[ "$fn_src" == *"LLM_AUTOTUNE_RESTORE_PREV=0"* ]]
+}
+
+@test "integration: __model_bench cleanup captures original exit status" {
+    local fn_src
+    fn_src=$(declare -f __model_bench 2>/dev/null)
+
+    [[ "$fn_src" == *'local _exit_code=$?'* ]]
+}
+
+@test "integration: __model_bench cleanup does not delete autotune lock" {
+    local fn_src
+    fn_src=$(declare -f __model_bench 2>/dev/null)
+
+    [[ "$fn_src" != *'rm -f "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"'* ]]
 }
 
 @test "integration: model has use subcommand" {

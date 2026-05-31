@@ -159,18 +159,26 @@ function __tac_cleanup_stale_locks() {
     for _c_kf in /tmp/llm-keeper.*.pid
     do
         [[ -f "$_c_kf" ]] || continue
+        local _c_remove_kf=1
         # shellcheck disable=SC2188
         _c_pid=$(<"$_c_kf" 2>/dev/null || true)
         if [[ "$_c_pid" =~ ^[0-9]+$ ]]
         then
-            _c_ppid=$(ps -o ppid= -p "$_c_pid" 2>/dev/null | tr -d '[:space:]')
-            _c_cmd=$(ps -o args= -p "$_c_pid" 2>/dev/null || true)
-            if [[ "$_c_ppid" == "1" ]] && [[ "$_c_cmd" == *"sleep 3600"* ]]
+            if kill -0 "$_c_pid" 2>/dev/null
             then
-                kill -TERM "$_c_pid" 2>/dev/null || true
+                _c_ppid=$(ps -o ppid= -p "$_c_pid" 2>/dev/null | tr -d '[:space:]')
+                _c_cmd=$(ps -o args= -p "$_c_pid" 2>/dev/null || true)
+                if [[ "$_c_ppid" == "1" ]] && [[ "$_c_cmd" == *"sleep 3600"* ]]
+                then
+                    kill -TERM "$_c_pid" 2>/dev/null || true
+                else
+                    # Live non-orphan keeper: keep its PID file so active
+                    # model-stop flows still have the right target.
+                    _c_remove_kf=0
+                fi
             fi
         fi
-        rm -f "$_c_kf"
+        (( _c_remove_kf == 1 )) && rm -f "$_c_kf"
     done
 
     return 0
