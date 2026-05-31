@@ -774,7 +774,7 @@ function __llm_server_stop() {
     do
         [[ -f "$_kf" ]] || continue
         _kp=$(< "$_kf")
-        [[ "$_kp" =~ ^[0-9]+$ ]] && kill -TERM "$_kp" 2>/dev/null || true
+        if [[ "$_kp" =~ ^[0-9]+$ ]]; then kill -TERM "$_kp" 2>/dev/null; fi
         rm -f "$_kf"
     done
 
@@ -2414,9 +2414,9 @@ function __model_use() {
         # Close all inherited lock file descriptors (from autotune/bench locks)
         # so child processes (stdin keeper, llama-server) don't inherit them.
         # This prevents orphaned locks when the parent is killed.
-        for _lfd in /proc/$$/fd/*; do
+        for _lfd in "/proc/$$/fd/"*; do
             _lfdnum="${_lfd##*/}"
-            [[ "$_lfdnum" -ge 10 ]] && exec {_lfdnum}>&- 2>/dev/null || true
+            if [[ "$_lfdnum" -ge 10 ]]; then exec {_lfdnum}>&- 2>/dev/null; fi
         done 2>/dev/null
 
         # Clean up orphan FIFOs and keepers from any previous llama-server
@@ -2425,7 +2425,7 @@ function __model_use() {
         for _okf in /tmp/llm-keeper.*.pid; do
             [[ -f "$_okf" ]] || continue
             _okp=$(< "$_okf")
-            [[ "$_okp" =~ ^[0-9]+$ ]] && kill -TERM "$_okp" 2>/dev/null || true
+            if [[ "$_okp" =~ ^[0-9]+$ ]]; then kill -TERM "$_okp" 2>/dev/null; fi
             rm -f "$_okf"
         done
         rm -f /tmp/llm-stdin.*
@@ -2526,21 +2526,44 @@ function __model_autotune() {
     fi
 
     local target="${1:-}"
-    shift 2>/dev/null || true
+    shift 1 2>/dev/null || true
 
     local backend_raw="${LLM_SERVER_BACKEND:-native}"
     local quick_mode=0
     local tune_ctx=""
     local trials="${LLM_AUTOTUNE_TRIALS:-3}"
 
+    local __autotune_prev_int_trap=""
+    local __autotune_prev_term_trap=""
+    __autotune_prev_int_trap=$(trap -p INT || true)
+    __autotune_prev_term_trap=$(trap -p TERM || true)
+    __autotune_restore_traps() {
+        if [[ -n "$__autotune_prev_int_trap" ]]; then
+            eval "$__autotune_prev_int_trap"
+        else
+            trap - INT
+        fi
+        if [[ -n "$__autotune_prev_term_trap" ]]; then
+            eval "$__autotune_prev_term_trap"
+        else
+            trap - TERM
+        fi
+    }
+    __autotune_fail() {
+        __autotune_restore_traps
+        unset -f __autotune_restore_traps __autotune_fail 2>/dev/null || true
+    }
+
     # Ensure Ctrl-C/termination cannot leave trial servers running.
-    trap '__model_stop >/dev/null 2>&1 || true' INT TERM
+    trap '__model_stop >/dev/null 2>&1 || true; __autotune_fail; return 130' INT
+    trap '__model_stop >/dev/null 2>&1 || true; __autotune_fail; return 143' TERM
 
     while [[ $# -gt 0 ]]
     do
         case "$1" in
             -h|--help)
                 __model_autotune_help
+                __autotune_fail
                 return 0
                 ;;
             --backend)
@@ -2572,6 +2595,7 @@ function __model_autotune() {
     if [[ -z "$target" || ! "$target" =~ ^[0-9]+$ ]]
     then
         __tac_info "Autotune" "[Specify model number: model autotune <N>]" "$C_Error"
+        __autotune_fail
         return 1
     fi
 
@@ -2580,6 +2604,7 @@ function __model_autotune() {
     if [[ -z "$entry" ]]
     then
         __tac_info "Autotune" "[Model #$target not in registry - run 'model scan']" "$C_Error"
+        __autotune_fail
         return 1
     fi
 
@@ -2593,6 +2618,7 @@ function __model_autotune() {
         python|llama-cpp-python|module|"") backend="python" ;;
         *)
             __tac_info "Autotune" "[Unknown backend '$backend_raw']" "$C_Error"
+            __autotune_fail
             return 1
             ;;
     esac
@@ -2600,11 +2626,13 @@ function __model_autotune() {
     if [[ -n "$tune_ctx" ]] && [[ ! "$tune_ctx" =~ ^[0-9]+$ ]]
     then
         __tac_info "Autotune" "[Invalid --ctx-size '$tune_ctx']" "$C_Error"
+        __autotune_fail
         return 1
     fi
     if [[ ! "$trials" =~ ^[0-9]+$ ]] || (( trials < 1 ))
     then
         __tac_info "Autotune" "[Invalid --trials '$trials']" "$C_Error"
+        __autotune_fail
         return 1
     fi
 
@@ -2629,12 +2657,14 @@ function __model_autotune() {
         local lock_fd
         exec {lock_fd}>"$lock_file" || {
             __tac_info "Autotune" "[Unable to open lock file: $lock_file]" "$C_Error"
+            __autotune_fail
             return 1
         }
         if ! flock -w "$lock_wait_seconds" "$lock_fd"
         then
             __tac_info "Autotune" "[Another autotune is running (lock: $lock_file)]" "$C_Error"
             exec {lock_fd}>&-
+            __autotune_fail
             return 1
         fi
     elif [[ "${LLM_AUTOTUNE_SKIP_LOCK:-0}" == "1" ]]
@@ -3044,11 +3074,8 @@ function __model_autotune() {
 
             __model_stop >/dev/null 2>&1 || true
             sleep 1
-            echo "__DBG: wake at $(date +%H:%M:%S)" 2>&1
         done
-echo "__DBG: inner loop done at $(date +%H:%M:%S)" 2>&1
     done
-echo "__DBG: outer loop done at $(date +%H:%M:%S)" 2>&1
 
     if [[ -n "$best_combo" ]]
     then
@@ -3135,7 +3162,8 @@ echo "__DBG: outer loop done at $(date +%H:%M:%S)" 2>&1
     fi
 
     __tac_footer
-    trap - INT TERM
+    __autotune_restore_traps
+    unset -f __autotune_restore_traps __autotune_fail 2>/dev/null || true
     [[ -n "$best_combo" ]]
 }
 
@@ -3239,14 +3267,14 @@ function __model_stop() {
     _smi=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$_smi" ]]
     then
-        _free_before=$(timeout 3 timeout 3 "$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        _free_before=$(timeout 3 "$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         if [[ "$_free_before" =~ ^[0-9]+$ ]]
         then
             _mem_waited=0
             _mem_max_wait=3
             while (( _mem_waited < _mem_max_wait ))
             do
-                _free_after=$(timeout 3 timeout 3 "$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+                _free_after=$(timeout 3 "$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
                 [[ "$_free_after" =~ ^[0-9]+$ ]] || break
                 (( _free_after <= _free_before )) && break
                 _free_before="$_free_after"
@@ -3423,17 +3451,49 @@ function __model_info() {
 function __bench_run_with_timeout() {
     local timeout_s="$1"
     shift
+    if (( $# == 0 ))
+    then
+        __tac_info "Bench" "[Timeout wrapper called without a command]" "$C_Error"
+        return 2
+    fi
     if [[ ! "$timeout_s" =~ ^[0-9]+$ ]] || (( timeout_s < 1 ))
     then
         timeout_s=120
     fi
-    (
-        # Run in a separate process group so we can kill children
-        "$@"
-    ) &
+    local _self_pgid=""
+    _self_pgid=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')
+
+    local _is_shell_func=0
+    if declare -F "$1" >/dev/null 2>&1
+    then
+        _is_shell_func=1
+    fi
+
+    if (( _is_shell_func == 1 ))
+    then
+        # Shell functions cannot be exec'd by setsid directly.
+        # Run them in a dedicated shell process-group when available.
+        if command -v setsid >/dev/null 2>&1
+        then
+            declare -fx "$1" 2>/dev/null || true
+            setsid bash -lc "source \"\$1\" >/dev/null 2>&1 || true; shift; \"\$@\"" _ "$TACTICAL_PROFILE_PATH" "$@" &
+        else
+            "$@" &
+        fi
+    elif command -v setsid >/dev/null 2>&1
+    then
+        # Start command in a dedicated session/process-group when possible.
+        setsid "$@" &
+    else
+        "$@" &
+    fi
+
     local cmd_pid=$!
+    __BENCH_TIMEOUT_LAST_PID="$cmd_pid"
+    local cmd_pgid=""
+    cmd_pgid=$(ps -o pgid= -p "$cmd_pid" 2>/dev/null | tr -d ' ')
     local waited=0
-    local interval=5
+    local interval=1
     while (( waited < timeout_s ))
     do
         if ! kill -0 "$cmd_pid" 2>/dev/null
@@ -3444,10 +3504,23 @@ function __bench_run_with_timeout() {
         sleep "$interval"
         waited=$(( waited + interval ))
     done
-    # Timeout — kill the process group
-    kill -TERM -- "$cmd_pid" 2>/dev/null || true
+
+    # Timeout — terminate whole spawned process-group when it is isolated.
+    if [[ -n "$cmd_pgid" ]] && [[ "$cmd_pgid" =~ ^[0-9]+$ ]] && [[ -n "$_self_pgid" ]] && [[ "$cmd_pgid" != "$_self_pgid" ]]
+    then
+        kill -TERM -- "-$cmd_pgid" 2>/dev/null || true
+    else
+        kill -TERM -- "$cmd_pid" 2>/dev/null || true
+    fi
     sleep 1
-    kill -KILL -- "$cmd_pid" 2>/dev/null || true
+
+    if [[ -n "$cmd_pgid" ]] && [[ "$cmd_pgid" =~ ^[0-9]+$ ]] && [[ -n "$_self_pgid" ]] && [[ "$cmd_pgid" != "$_self_pgid" ]]
+    then
+        kill -KILL -- "-$cmd_pgid" 2>/dev/null || true
+    else
+        kill -KILL -- "$cmd_pid" 2>/dev/null || true
+    fi
+    wait "$cmd_pid" 2>/dev/null || true
     return 124
 }
 
@@ -3517,19 +3590,19 @@ function __model_bench() {
     # Handles normal completion, SIGINT (Ctrl+C), and abrupt termination.
     # ---------------------------------------------------------------------------
     local bench_cleanup_spawned_pids=()
+    local __bench_cleaned=0
+    # shellcheck disable=SC2317  # called indirectly via trap
     __bench_cleanup() {
+        if (( __bench_cleaned == 1 ))
+        then
+            return $?
+        fi
+        __bench_cleaned=1
         local exit_code=$?
         # Kill any subprocesses we spawned
         if (( ${#bench_cleanup_spawned_pids[@]} > 0 ))
         then
             kill "${bench_cleanup_spawned_pids[@]}" 2>/dev/null || true
-        fi
-        # Kill any orphan llama-server instances running on bench port
-        local bench_llama_pid
-        bench_llama_pid=$(pgrep -f 'llama-server.*--port 8081' 2>/dev/null || true)
-        if [[ -n "$bench_llama_pid" ]]
-        then
-            kill "$bench_llama_pid" 2>/dev/null || true
         fi
         # Remove guard files
         rm -f "$bench_pid_file"
@@ -3541,7 +3614,9 @@ function __model_bench() {
         rm -f "$bench_lock_file"
         return "$exit_code"
     }
-    trap __bench_cleanup EXIT INT TERM
+    trap '__bench_cleanup' EXIT
+    trap '__bench_cleanup; return 130' INT
+    trap '__bench_cleanup; return 143' TERM
 
     # Kill any orphaned stdin keepers from prior runs before starting.
     # These accumulate if llama-server was killed without going through
@@ -3551,16 +3626,16 @@ function __model_bench() {
     do
         [[ -f "$_kf" ]] || continue
         _kp=$(< "$_kf")
-        [[ "$_kp" =~ ^[0-9]+$ ]] && kill -TERM "$_kp" 2>/dev/null || true
+        if [[ "$_kp" =~ ^[0-9]+$ ]]; then kill -TERM "$_kp" 2>/dev/null; fi
         rm -f "$_kf"
     done
     # Catch any orphan sleep loops that lost their PID file (e.g., from a
     # previous bench run that was SIGKILL'd). These show up as bash processes
     # holding open FIFOs — grep for the mkfifo pattern, not our own PID.
     local _my_pid=$$
-    for _sp in $(ps -eo pid,args --no-headers | grep '[l]lm-stdin' | awk '{print $1}' 2>/dev/null || true)
+    for _sp in $(pgrep -a bash 2>/dev/null | awk '/llm-stdin/{print $1}' || true)
     do
-        [[ "$_sp" =~ ^[0-9]+$ && "$_sp" != "$_my_pid" ]] && kill -TERM "$_sp" 2>/dev/null || true
+        if [[ "$_sp" =~ ^[0-9]+$ ]] && [[ "$_sp" != "$_my_pid" ]]; then kill -TERM "$_sp" 2>/dev/null; fi
     done
 
     __tac_header "MODEL BENCHMARK" "open"
@@ -3587,6 +3662,20 @@ function __model_bench() {
     (( bench_autotune_trials < 1 )) && bench_autotune_trials=1
 
     local -a b_num=() b_name=() b_size=() b_gpu=() b_tps=()
+
+    # shellcheck disable=SC2317  # invoked indirectly via timeout wrapper in child shell
+    __bench_run_single_model() {
+        local bench_num="$1"
+        if ! __model_use "$bench_num"
+        then
+            return 2
+        fi
+        if ! burn
+        then
+            return 3
+        fi
+        return 0
+    }
     local num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _tps _autotuned _is_default _in_vram
     while IFS='|' read -r num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _tps _autotuned _is_default _in_vram
     do
@@ -3677,31 +3766,29 @@ function __model_bench() {
         fi
 
         rm -f "$LLM_TPS_CACHE"
-        # Timeout guard: if a single model takes too long (stuck llama-server),
-        # kill the server and move on. Default 300s per model.
+        # Timeout guard: force-bound full model run (__model_use + burn).
         local bench_model_timeout="${LLM_BENCH_MODEL_TIMEOUT:-300}"
-        local bench_model_start="${EPOCHSECONDS:-$(date +%s)}"
-        local bench_model_ok=0
-        if __model_use "${b_num[$i]}"
+        local bench_model_rc=0
+        __bench_run_with_timeout "$bench_model_timeout" __bench_run_single_model "${b_num[$i]}"
+        bench_model_rc=$?
+        if [[ "${__BENCH_TIMEOUT_LAST_PID:-}" =~ ^[0-9]+$ ]]
         then
-            # Check if we've exceeded the model timeout during __model_use
-            local _now
-            _now="${EPOCHSECONDS:-$(date +%s)}"
-            if (( _now - bench_model_start < bench_model_timeout ))
-            then
-                if ! burn
-                then
-                    __tac_info "Bench" "[Burn failed for model #${b_num[$i]}]" "$C_Error"
-                fi
-                bench_model_ok=1
-            else
-                __tac_info "Bench" "[Time out after ${bench_model_timeout}s for model #${b_num[$i]} during __model_use]" "$C_Error"
-                __model_stop 2>/dev/null || true
-            fi
-        else
+            bench_cleanup_spawned_pids+=("$__BENCH_TIMEOUT_LAST_PID")
+        fi
+        if (( bench_model_rc == 124 ))
+        then
+            __tac_info "Bench" "[Timed out after ${bench_model_timeout}s for model #${b_num[$i]} (__model_use + burn)]" "$C_Error"
+        elif (( bench_model_rc == 2 ))
+        then
             local bench_ready_timeout
             bench_ready_timeout=$(__llm_health_timeout "${b_size[$i]}" "${b_gpu[$i]}" "${b_name[$i]}")
             __tac_info "Bench" "[Model did not reach healthy state in ${bench_ready_timeout}s]" "$C_Error"
+        elif (( bench_model_rc == 3 ))
+        then
+            __tac_info "Bench" "[Burn failed for model #${b_num[$i]}]" "$C_Error"
+        elif (( bench_model_rc != 0 ))
+        then
+            __tac_info "Bench" "[Model run failed for model #${b_num[$i]} (rc=${bench_model_rc})]" "$C_Error"
         fi
         if [[ -f "$LLM_LOG_FILE" ]]
         then

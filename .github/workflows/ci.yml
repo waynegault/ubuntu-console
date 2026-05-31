@@ -36,6 +36,9 @@ jobs:
       - name: Unicode safety
         run: SKIP_UNICODE_CHECK=0 tools/lint.sh
 
+      - name: Repo boundary guard
+        run: tools/check-repo-boundaries.sh
+
   test:
     name: Fast Test Suite
     runs-on: ubuntu-latest

@@ -116,6 +116,16 @@ else
 fi
 
 echo ""
+echo "=== Repository Boundary Guard ==="
+if "$REPO_ROOT/tools/check-repo-boundaries.sh"
+then
+    echo "  PASS  repository boundary guard"
+else
+    echo "  FAIL  repository boundary guard"
+    rc=1
+fi
+
+echo ""
 if (( rc == 0 ))
 then
     echo "All checks passed."
