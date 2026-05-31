@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 46
+# Module Version: 47
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -2481,6 +2481,7 @@ function __model_autotune() {
     local tune_ctx=""
     local trials="${LLM_AUTOTUNE_TRIALS:-3}"
     local __autotune_interrupted=0
+    local __autotune_lock_owned=0
 
     local __autotune_prev_int_trap=""
     local __autotune_prev_term_trap=""
@@ -2505,12 +2506,12 @@ function __model_autotune() {
         # from the parent scope; check it dynamically since bash local
         # variables are scoped to the function, not dynamically.
         local _lock_fd="${lock_fd:-}"
-        if [[ -n "$_lock_fd" ]]
+        if [[ "$__autotune_lock_owned" == "1" && -n "$_lock_fd" ]]
         then
             flock -u "$_lock_fd" 2>/dev/null || true
             exec {_lock_fd}>&- 2>/dev/null || true
+            rm -f "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
         fi
-        rm -f "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
     }
     __autotune_fail() {
         __autotune_unlock
@@ -2648,6 +2649,7 @@ function __model_autotune() {
             __autotune_fail
             return 1
         fi
+        __autotune_lock_owned=1
     elif [[ "${LLM_AUTOTUNE_SKIP_LOCK:-0}" == "1" ]]
     then
         __tac_info "Autotune" "[Lock skipped by caller]" "$C_Dim"

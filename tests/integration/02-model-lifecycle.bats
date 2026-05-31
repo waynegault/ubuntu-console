@@ -182,6 +182,14 @@ setup() {
     [[ "$fn_src" == *"Missing value for --trials"* ]]
 }
 
+@test "integration: __model_autotune tracks lock ownership before deleting lock file" {
+    local fn_src
+    fn_src=$(declare -f __model_autotune 2>/dev/null)
+
+    [[ "$fn_src" == *"__autotune_lock_owned=0"* ]]
+    [[ "$fn_src" == *'if [[ "$__autotune_lock_owned" == "1" && -n "$_lock_fd" ]]'* ]]
+}
+
 @test "integration: autotune missing --backend value exits quickly" {
     run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __model_autotune 1 --backend"
     [[ "$status" -ne 124 ]]
@@ -198,6 +206,24 @@ setup() {
     run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __model_autotune 1 --trials"
     [[ "$status" -ne 124 ]]
     [[ "$output" == *"Missing value for --trials"* ]]
+}
+
+@test "integration: autotune early failure does not remove existing lock file" {
+    local lock_file="$TAC_TEST_TMPDIR/autotune-concurrency.lock"
+    printf '%s\n' '424242' > "$lock_file"
+
+    run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; LLM_AUTOTUNE_LOCK_FILE='$lock_file' __model_autotune 999"
+    [[ "$status" -ne 124 ]]
+    [[ -f "$lock_file" ]]
+}
+
+@test "integration: autotune skip-lock mode does not remove existing lock file" {
+    local lock_file="$TAC_TEST_TMPDIR/autotune-skip-lock.lock"
+    printf '%s\n' '424242' > "$lock_file"
+
+    run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; LLM_AUTOTUNE_LOCK_FILE='$lock_file' LLM_AUTOTUNE_SKIP_LOCK=1 __model_autotune 999"
+    [[ "$status" -ne 124 ]]
+    [[ -f "$lock_file" ]]
 }
 
 @test "integration: bench does not leak shell traps after return" {
