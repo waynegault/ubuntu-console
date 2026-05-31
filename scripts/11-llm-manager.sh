@@ -464,6 +464,52 @@ function __llm_autotune_profile_save() {
 }
 
 # ---------------------------------------------------------------------------
+# __llm_autotune_verify_winner — Final verification burn for the chosen winner.
+# Loads the winning config, runs a burn, and reports TPS.
+# @args  <model_num> <ctx> <batch> <ubatch> <parallel> <fit>
+# @stdout The measured TPS value, or empty string on failure.
+# @returns 0 when the verification burn succeeded, 1 otherwise.
+# ---------------------------------------------------------------------------
+function __llm_autotune_verify_winner() {
+    local model_num="$1"
+    local ctx="$2"
+    local batch="$3"
+    local ubatch="$4"
+    local parallel="$5"
+    local fit_target="$6"
+
+    export TAC_CTX_SIZE="$ctx"
+    export LLAMA_BATCH_SIZE="$batch"
+    export LLAMA_UBATCH_SIZE="$ubatch"
+    export LLAMA_PARALLEL_SLOTS="$parallel"
+    export LLAMA_FIT_TARGET_MB="$fit_target"
+
+    local verify_log="/tmp/autotune_verify_${model_num}.log"
+    if ! __model_use "$model_num" >"/tmp/autotune_verify_use_${model_num}.log" 2>&1
+    then
+        __model_stop >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    if ! burn >"$verify_log" 2>&1
+    then
+        __model_stop >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    local verify_tps
+    verify_tps=$(sed -n 's/.*Burn complete: \([0-9][0-9]*\(\.[0-9][0-9]*\)\?\) tps.*/\1/p' "$verify_log" | tail -n1)
+    __model_stop >/dev/null 2>&1 || true
+
+    if [[ "$verify_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]]
+    then
+        printf '%s' "$verify_tps"
+        return 0
+    fi
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # __llm_autotune_profiles_remap_by_registry — Carry tuning columns by filename.
 # @returns 0 when remap succeeds or is not needed, 1 on write failure.
 # ---------------------------------------------------------------------------
@@ -3018,26 +3064,13 @@ function __model_autotune() {
         # Optional final verification pass on the chosen winner.
         if [[ "${LLM_AUTOTUNE_CONFIRM_FINAL:-1}" == "1" ]]
         then
-            export TAC_CTX_SIZE="$save_ctx"
-            export LLAMA_BATCH_SIZE="$best_batch"
-            export LLAMA_UBATCH_SIZE="$best_ubatch"
-            export LLAMA_PARALLEL_SLOTS="$best_parallel"
-            export LLAMA_FIT_TARGET_MB="$best_fit"
-            local _verify_log="/tmp/autotune_verify_${num}.log"
-            if __model_use "$num" >"/tmp/autotune_verify_use_${num}.log" 2>&1
+            local _verify_tps
+            _verify_tps=$(__llm_autotune_verify_winner "$num" "$save_ctx" "$best_batch" "$best_ubatch" "$best_parallel" "$best_fit")
+            if [[ -n "$_verify_tps" ]]
             then
-                if burn >"$_verify_log" 2>&1
-                then
-                    local _verify_tps
-                    _verify_tps=$(sed -n 's/.*Burn complete: \([0-9][0-9]*\(\.[0-9][0-9]*\)\?\) tps.*/\1/p' "$_verify_log" | tail -n1)
-                    if [[ "$_verify_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]]
-                    then
-                        best_tps="$_verify_tps"
-                        verified=1
-                    fi
-                fi
+                best_tps="$_verify_tps"
+                verified=1
             fi
-            __model_stop >/dev/null 2>&1 || true
         fi
 
         export LLM_AUTOTUNE_LAST_SCORE="${best_score:-$best_tps}"
