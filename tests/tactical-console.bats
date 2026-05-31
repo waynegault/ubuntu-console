@@ -1234,8 +1234,8 @@ setup() {
 
 @test "cross-script: watchdog ACTIVE_LLM_FILE matches bashrc constant" {
     local wd_file
-    wd_file=$(grep -oP 'ACTIVE_LLM_FILE="\K[^"]+' \
-        "$REPO_ROOT/bin/llama-watchdog.sh")
+    wd_file=$(sed -nE 's/^ACTIVE_LLM_FILE="\$\{ACTIVE_LLM_FILE:-([^"]+)\}"/\1/p; s/^ACTIVE_LLM_FILE="([^"]+)"/\1/p' \
+        "$REPO_ROOT/bin/llama-watchdog.sh" | head -n1)
     [[ "$wd_file" == "$ACTIVE_LLM_FILE" ]]
 }
 

@@ -1858,16 +1858,18 @@ function __model_list() {
         while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
+            local quant_rating="unknown"
+            quant_rating=$(__llm_quant_rating "$file")
             local is_active="false"
             local is_default_json="false"
             [[ "${in_vram:-no}" == "yes" ]] && is_active="true"
             [[ "${is_default:-no}" == "yes" ]] && is_default_json="true"
             (( first )) || printf ',\n'
             printf '    {"num":%s,"name":"%s","file":"%s","size":"%s","quant_cache":"%s","arch":"%s",\
-"gpu_layers":%s,"ctx":%s,"threads":%s,"batch":%s,"ubatch":%s,"parallel":%s,"fit":%s,"backend":"%s","mmap_mode":"%s","tps":"%s","autotuned":"%s","active":%s,"default":%s}' \
+"gpu_layers":%s,"ctx":%s,"threads":%s,"batch":%s,"ubatch":%s,"parallel":%s,"fit":%s,"backend":"%s","mmap_mode":"%s","tps":"%s","autotuned":"%s","quant_rating":"%s","active":%s,"default":%s}' \
                 "$num" "$(__llm_json_escape "$name")" "$(__llm_json_escape "$file")" "$size" "$(__llm_json_escape "$quant_cache")" \
                 "$(__llm_json_escape "$arch")" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" \
-                "$(__llm_json_escape "$backend")" "$(__llm_json_escape "${mmap_mode:-auto}")" "$(__llm_json_escape "${tps:--}")" "$(__llm_json_escape "${autotuned:-no}")" "$is_active" "$is_default_json"
+                "$(__llm_json_escape "$backend")" "$(__llm_json_escape "${mmap_mode:-auto}")" "$(__llm_json_escape "${tps:--}")" "$(__llm_json_escape "${autotuned:-no}")" "$(__llm_json_escape "$quant_rating")" "$is_active" "$is_default_json"
             first=0
         done < "$LLM_REGISTRY"
         printf '\n  ],\n'
@@ -1899,8 +1901,8 @@ function __model_list() {
     fi
 
     # Human-readable output
-    printf "\n${C_Dim}  %-4s %-20s %-5s %-8s %-6s %-4s %-5s %-4s %-4s %-4s %-4s %-4s %-6s %-4s %-6s %-5s %-4s %-4s${C_Reset}\n" \
-        "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "MMAP" "TPS" "ATUNE" "DEF" "VRAM"
+    printf "\n${C_Dim}  %-4s %-20s %-5s %-8s %-6s %-4s %-5s %-4s %-4s %-4s %-4s %-4s %-6s %-4s %-6s %-5s %-4s %-4s %-11s${C_Reset}\n" \
+        "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "MMAP" "TPS" "ATUNE" "DEF" "VRAM" "RATING"
     local _list_rule
     printf -v _list_rule '%*s' $((UIWidth - 4)) ''
     _list_rule="${_list_rule// /${BOX_SL}}"
@@ -1910,6 +1912,8 @@ function __model_list() {
     while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
+        local quant_rating="unknown"
+        quant_rating=$(__llm_quant_rating "$file")
         local marker="  "
         local color=""
         if [[ "${in_vram:-no}" == "yes" ]]
@@ -1921,8 +1925,8 @@ function __model_list() {
             marker="* "
             color="$C_Highlight"
         fi
-        printf "${color}${marker}%-4s %-20s %-5s %-8s %-6s %-4s %-5s %-4s %-4s %-4s %-4s %-4s %-6s %-4s %-6s %-5s %-4s %-4s${C_Reset}\n" \
-            "$num" "${name:0:20}" "$size" "${quant_cache:0:8}" "${arch:0:6}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:6}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}"
+        printf "${color}${marker}%-4s %-20s %-5s %-8s %-6s %-4s %-5s %-4s %-4s %-4s %-4s %-4s %-6s %-4s %-6s %-5s %-4s %-4s %-11s${C_Reset}\n" \
+            "$num" "${name:0:20}" "$size" "${quant_cache:0:8}" "${arch:0:6}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:6}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}"
     done < "$LLM_REGISTRY"
 
     local d_used_bytes d_total_bytes d_avail_bytes d_pct_n
@@ -2601,6 +2605,8 @@ function __model_autotune() {
     local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
     IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram <<< "$entry"
     __tac_info "File" "$file" "$C_Dim"
+    local quant_rating="unknown"
+    quant_rating=$(__llm_quant_rating "$file")
 
     local backend
     case "$backend_raw" in
@@ -2692,6 +2698,21 @@ function __model_autotune() {
 
     local -a combos=()
     local -a ctx_candidates=()
+    local max_ctx_by_rating=""
+    local max_ubatch_by_rating=0
+    local allow_parallel_two=1
+    case "$quant_rating" in
+        discouraged)
+            max_ctx_by_rating="${LLM_AUTOTUNE_MAX_CTX_DISCOURAGED:-4096}"
+            max_ubatch_by_rating="${LLM_AUTOTUNE_MAX_UBATCH_DISCOURAGED:-512}"
+            allow_parallel_two=0
+            ;;
+        acceptable)
+            max_ctx_by_rating="${LLM_AUTOTUNE_MAX_CTX_ACCEPTABLE:-8192}"
+            ;;
+    esac
+    [[ "$max_ctx_by_rating" =~ ^[0-9]+$ ]] || max_ctx_by_rating=""
+    [[ "$max_ubatch_by_rating" =~ ^[0-9]+$ ]] || max_ubatch_by_rating=0
     if (( quick_mode ))
     then
         combos=(
@@ -2734,6 +2755,14 @@ function __model_autotune() {
     for _pc in "${combos[@]}"
     do
         IFS=':' read -r _pb _pu _pp _pf <<< "$_pc"
+        if (( allow_parallel_two == 0 && _pp > 1 ))
+        then
+            continue
+        fi
+        if (( max_ubatch_by_rating > 0 && _pu > max_ubatch_by_rating ))
+        then
+            continue
+        fi
         # Avoid aggressive parallelism when VRAM is tight.
         if (( free_vram_mb > 0 && free_vram_mb < 1800 && _pp > 1 ))
         then
@@ -2773,6 +2802,10 @@ function __model_autotune() {
         [[ "$base_ctx" =~ ^[0-9]+$ ]] || base_ctx=4096
         local max_ctx="${LLM_AUTOTUNE_MAX_CTX:-32768}"
         [[ "$max_ctx" =~ ^[0-9]+$ ]] || max_ctx=32768
+        if [[ -n "$max_ctx_by_rating" ]] && (( max_ctx > max_ctx_by_rating ))
+        then
+            max_ctx="$max_ctx_by_rating"
+        fi
 
         # If registry ctx is unrealistically large (> sane limit), treat it as
         # a placeholder (common for default template rows) and clamp base_ctx.
@@ -2833,7 +2866,7 @@ function __model_autotune() {
 
     # Unique + sort descending so we prioritize higher context first.
     local _ctx_sorted=""
-    _ctx_sorted=$(printf '%s\n' "${ctx_candidates[@]}" | awk '/^[0-9]+$/ {a[$1]=1} END {for (k in a) print k}' | sort -nr)
+    _ctx_sorted=$(printf '%s\n' "${ctx_candidates[@]}" | awk -v max_ctx="${max_ctx_by_rating:-0}" '/^[0-9]+$/ { if (max_ctx > 0 && $1 > max_ctx) next; a[$1]=1 } END {for (k in a) print k}' | sort -nr)
     ctx_candidates=()
     while IFS= read -r _ctx_line
     do
@@ -2847,6 +2880,7 @@ function __model_autotune() {
     __tac_header "MODEL AUTOTUNE" "open"
     __tac_info "Target" "#${num} ${name} (${size})" "$C_Highlight"
     __tac_info "Backend" "[$backend]" "$C_Dim"
+    __tac_info "Quant" "[${quant_rating}]" "$C_Dim"
     __tac_info "Trials" "[${trials} per config, median score]" "$C_Dim"
     __tac_info "Objective" "[1) no OOM  2) max ctx  3) max TPS]" "$C_Dim"
     __tac_info "Ctx Sweep" "[${ctx_candidates[*]}]" "$C_Dim"
@@ -3403,6 +3437,8 @@ function __model_info() {
     fi
     local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
     IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram <<< "$entry"
+    local quant_rating="unknown"
+    quant_rating=$(__llm_quant_rating "$file")
 
     # Explicitly print every models.conf field so schema visibility is complete.
     __tac_info "#" "$num" "$C_Highlight"
@@ -3410,6 +3446,7 @@ function __model_info() {
     __tac_info "file" "$file" "$C_Text"
     __tac_info "size_gb" "$size" "$C_Text"
     __tac_info "quant_cache" "$quant_cache" "$C_Text"
+    __tac_info "quant_rating" "$quant_rating" "$C_Text"
     __tac_info "arch" "$arch" "$C_Text"
     __tac_info "gpu_layers" "$gpu_layers" "$C_Highlight"
     __tac_info "ctx" "$ctx" "$C_Text"
@@ -3680,7 +3717,7 @@ function __model_bench() {
     [[ "$bench_autotune_trials" =~ ^[0-9]+$ ]] || bench_autotune_trials=1
     (( bench_autotune_trials < 1 )) && bench_autotune_trials=1
 
-    local -a b_num=() b_name=() b_size=() b_gpu=() b_tps=()
+    local -a b_num=() b_name=() b_file=() b_size=() b_gpu=() b_tps=()
 
     # shellcheck disable=SC2317  # invoked indirectly via timeout wrapper in child shell
     __bench_run_single_model() {
@@ -3702,6 +3739,7 @@ function __model_bench() {
         [[ ! -f "$LLAMA_MODEL_DIR/$file" ]] && continue
         b_num+=("$num")
         b_name+=("$name")
+        b_file+=("$file")
         b_size+=("$size")
         b_gpu+=("${gpu_layers:-0}")
     done < "$LLM_REGISTRY"
@@ -3758,46 +3796,54 @@ function __model_bench() {
             __tac_info "Bench" "[Low free VRAM (${_bench_free_vram_mb} MiB) - applying safe overrides: ngl=0, ctx=${_bench_safe_ctx}, b=512/128, p=1]" "$C_Warning"
         fi
 
+        local _bench_quant_rating="unknown"
+        _bench_quant_rating=$(__llm_quant_rating "${b_file[$i]}")
+
         # Auto-autotune only if this model/backend has never been autotuned.
         if ! __llm_autotune_done_for_model "${b_num[$i]}"
         then
-            # If safe overrides are active (low VRAM), temporarily lift them for
-            # autotune so the binary search finds the GPU-stable values, not
-            # CPU-gated ones. Restore safe overrides after autotune for the
-            # benchmark run itself.
-            if (( _bench_safe_overrides == 1 ))
+            if [[ "$_bench_quant_rating" == "discouraged" && "${LLM_ALLOW_AUTOTUNE_DISCOURAGED:-0}" != "1" ]]
             then
-                unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
-            fi
-            __tac_info "Bench" "[No prior autotune flag for model #${b_num[$i]} - running autotune first]" "$C_Warning"
-            __tac_info "Bench" "[Autotune mode=${bench_autotune_mode}, trials=${bench_autotune_trials}]" "$C_Dim"
-            export LLM_AUTOTUNE_RESTORE_PREV=0
-            export LLM_AUTOTUNE_SKIP_LOCK=1
-            local -a _bench_autotune_args=("--backend" "$bench_backend" "--trials" "$bench_autotune_trials")
-            if [[ "$bench_autotune_mode" == "quick" ]]
-            then
-                _bench_autotune_args+=("--quick")
-            fi
-            if ! __model_autotune "${b_num[$i]}" "${_bench_autotune_args[@]}"
-            then
+                __tac_info "Bench" "[Skipping autotune for discouraged quant on model #${b_num[$i]} (set LLM_ALLOW_AUTOTUNE_DISCOURAGED=1 to override)]" "$C_Warning"
+            else
+                # If safe overrides are active (low VRAM), temporarily lift them for
+                # autotune so the binary search finds the GPU-stable values, not
+                # CPU-gated ones. Restore safe overrides after autotune for the
+                # benchmark run itself.
+                if (( _bench_safe_overrides == 1 ))
+                then
+                    unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
+                fi
+                __tac_info "Bench" "[No prior autotune flag for model #${b_num[$i]} - running autotune first]" "$C_Warning"
+                __tac_info "Bench" "[Autotune mode=${bench_autotune_mode}, trials=${bench_autotune_trials}]" "$C_Dim"
+                export LLM_AUTOTUNE_RESTORE_PREV=0
+                export LLM_AUTOTUNE_SKIP_LOCK=1
+                local -a _bench_autotune_args=("--backend" "$bench_backend" "--trials" "$bench_autotune_trials")
+                if [[ "$bench_autotune_mode" == "quick" ]]
+                then
+                    _bench_autotune_args+=("--quick")
+                fi
+                if ! __model_autotune "${b_num[$i]}" "${_bench_autotune_args[@]}"
+                then
+                    unset LLM_AUTOTUNE_RESTORE_PREV
+                    unset LLM_AUTOTUNE_SKIP_LOCK
+                    __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} - skipping benchmark]" "$C_Error"
+                    b_tps+=("FAIL_AUTOTUNE")
+                    __model_stop 2>/dev/null || true
+                    sleep 1
+                    continue
+                fi
                 unset LLM_AUTOTUNE_RESTORE_PREV
                 unset LLM_AUTOTUNE_SKIP_LOCK
-                __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} - skipping benchmark]" "$C_Error"
-                b_tps+=("FAIL_AUTOTUNE")
-                __model_stop 2>/dev/null || true
-                sleep 1
-                continue
-            fi
-            unset LLM_AUTOTUNE_RESTORE_PREV
-            unset LLM_AUTOTUNE_SKIP_LOCK
-            # Restore safe overrides that were lifted before autotune.
-            if (( _bench_safe_overrides == 1 ))
-            then
-                export LLAMA_GPU_LAYERS=0
-                export TAC_CTX_SIZE="$_bench_safe_ctx"
-                export LLAMA_BATCH_SIZE=512
-                export LLAMA_UBATCH_SIZE=128
-                export LLAMA_PARALLEL_SLOTS=1
+                # Restore safe overrides that were lifted before autotune.
+                if (( _bench_safe_overrides == 1 ))
+                then
+                    export LLAMA_GPU_LAYERS=0
+                    export TAC_CTX_SIZE="$_bench_safe_ctx"
+                    export LLAMA_BATCH_SIZE=512
+                    export LLAMA_UBATCH_SIZE=128
+                    export LLAMA_PARALLEL_SLOTS=1
+                fi
             fi
         fi
 

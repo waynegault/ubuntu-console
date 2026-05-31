@@ -47,8 +47,7 @@ HELP
 # Core normalizer — accepts a filename or "-" for stdin
 normalize() {
     local input="${1:--}"
-    cat "$input" \
-    | sed \
+    sed \
         \
         -e 's/\x1b\[[0-9;]*[mKHJsu]//g' \
         -e 's/\x1b\[[0-9]*[A-Z]//g' \
@@ -89,6 +88,7 @@ normalize() {
         \
         -e 's/Ubuntu-[0-9][0-9]*\.[0-9][0-9]*/Ubuntu-{{UBUNTU_VERSION}}/g' \
         -e 's/Bash v[0-9][0-9]*\.[0-9][0-9]*/Bash {{VERSION}}/g' \
+        "$input" \
     | tr -s ' '
 }
 

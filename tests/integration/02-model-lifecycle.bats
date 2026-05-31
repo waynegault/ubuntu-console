@@ -43,6 +43,15 @@ setup() {
     [[ "$fn_src" == *"list"* ]] || [[ "$fn_src" == *"List"* ]]
 }
 
+@test "integration: __model_list exposes quant rating" {
+    local fn_src
+    fn_src=$(declare -f __model_list 2>/dev/null)
+
+    [[ "$fn_src" == *"RATING"* ]]
+    [[ "$fn_src" == *"__llm_quant_rating"* ]]
+    [[ "$fn_src" == *'"quant_rating"'* ]]
+}
+
 @test "integration: model has scan subcommand" {
     local fn_src
     fn_src=$(declare -f model 2>/dev/null)
@@ -73,6 +82,14 @@ setup() {
     fn_src=$(declare -f model 2>/dev/null)
     
     [[ "$fn_src" == *"info"* ]] || [[ "$fn_src" == *"Info"* ]]
+}
+
+@test "integration: __model_info exposes quant rating" {
+    local fn_src
+    fn_src=$(declare -f __model_info 2>/dev/null)
+
+    [[ "$fn_src" == *"quant_rating"* ]]
+    [[ "$fn_src" == *"__llm_quant_rating"* ]]
 }
 
 @test "integration: model has autotune subcommand" {
@@ -110,6 +127,16 @@ setup() {
     [[ "$fn_src" == *"LLM_AUTOTUNE_CONFIRM_FINAL"* ]]
 }
 
+@test "integration: __model_autotune is quant-aware" {
+    local fn_src
+    fn_src=$(declare -f __model_autotune 2>/dev/null)
+
+    [[ "$fn_src" == *"__llm_quant_rating"* ]]
+    [[ "$fn_src" == *"LLM_AUTOTUNE_MAX_CTX_DISCOURAGED"* ]]
+    [[ "$fn_src" == *"LLM_AUTOTUNE_MAX_CTX_ACCEPTABLE"* ]]
+    [[ "$fn_src" == *"LLM_AUTOTUNE_MAX_UBATCH_DISCOURAGED"* ]]
+}
+
 @test "integration: __model_autotune sizes model by registry file path" {
     local fn_src
     fn_src=$(declare -f __model_autotune 2>/dev/null)
@@ -132,6 +159,14 @@ setup() {
     [[ "$fn_src" == *"No prior autotune flag"* ]]
     [[ "$fn_src" == *"__model_autotune"* ]]
     [[ "$fn_src" == *"FAIL_AUTOTUNE"* ]]
+}
+
+@test "integration: __model_bench can skip discouraged quant autotune unless overridden" {
+    local fn_src
+    fn_src=$(declare -f __model_bench 2>/dev/null)
+
+    [[ "$fn_src" == *"LLM_ALLOW_AUTOTUNE_DISCOURAGED"* ]]
+    [[ "$fn_src" == *"Skipping autotune for discouraged quant"* ]]
 }
 
 @test "integration: __model_bench disables autotune restore side-effect" {

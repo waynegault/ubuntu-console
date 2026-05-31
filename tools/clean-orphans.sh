@@ -40,13 +40,12 @@ add_orphan() {
     ORPHANS+=("$pid|$cmd")
 }
 
-# 1. Stdin keepers: bash processes holding open /tmp/llm-stdin.* FIFOs
-while IFS='|' read -r pid cmd; do
-    pid="${pid// /}"
+# 1. Stdin keepers: processes holding open /tmp/llm-stdin.* FIFOs
+while read -r pid cmd; do
     if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"llm-stdin"* ]]; then
         add_orphan "$pid" "$cmd"
     fi
-done < <(ps -eo pid,args --no-headers 2>/dev/null | grep 'llm-stdin' || true)
+done < <(pgrep -af 'llm-stdin' 2>/dev/null || true)
 
 # 2. Keeper sleep loops from known keeper PID files.
 # This is intentionally strict to avoid killing unrelated init-owned sleep
@@ -64,12 +63,11 @@ for keeper_file in /tmp/llm-keeper.*.pid; do
 done
 
 # 3. llama-server instances spawned by bench (have --no-mmap, no terminal)
-while IFS='|' read -r pid cmd; do
-    pid="${pid// /}"
+while read -r pid cmd; do
     if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"llama-server"*"no-mmap"* ]]; then
         add_orphan "$pid" "$cmd"
     fi
-done < <(ps -eo pid,args --no-headers 2>/dev/null | grep 'llama-server' | grep 'no-mmap' || true)
+done < <(pgrep -af 'llama-server.*no-mmap' 2>/dev/null || true)
 
 # 4. Stale bench PID and lock files
 STALE_LOCK=0

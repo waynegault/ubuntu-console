@@ -176,7 +176,7 @@ function get-ip() {
 }
 
 # ---------------------------------------------------------------------------
-# up — Run 17-step system maintenance with cooldowns per step.
+# up — Run 20-step system maintenance with cooldowns per step.
 # Usage: up [--force]
 #   --force: Suspend all cooldowns for testing purposes
 # Cooldown functions (__check_cooldown / __set_cooldown) are defined above
@@ -213,9 +213,6 @@ function up() {
     local hours_left=""
     # _cd_sink is module-level (declared above) — no need to redeclare
     touch "$CooldownDB" 2>/dev/null
-
-    # Performance tracking: record start time
-    local start_time=$now
 
     # [1/20] Connectivity
     if ping -c 1 -W 2 github.com >/dev/null 2>&1

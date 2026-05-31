@@ -189,7 +189,7 @@ Expected
 
 🔧 No curl | bash / wget | sh
 
-grep -nE 'curl.*|.*bash|wget.*|.*sh|curl.*|.*sh' <file>
+grep -nE '(curl[^|;\n]*\|[[:space:]]*(bash|sh)|wget[^|;\n]*\|[[:space:]]*(bash|sh))' <file>
 
 Zero matches (comments OK)
 

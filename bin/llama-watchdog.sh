@@ -25,8 +25,8 @@ flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance
 # These defaults MUST stay in sync with bashrc. If an env var is exported by
 # the interactive shell, ${VAR:-default} picks it up automatically.
 LLM_PORT="${LLM_PORT:-8081}"
-ACTIVE_LLM_FILE="/dev/shm/active_llm"
-LLM_LOG_FILE="/dev/shm/llama-server.log"
+ACTIVE_LLM_FILE="${ACTIVE_LLM_FILE:-/dev/shm/active_llm}"
+LLM_LOG_FILE="${LLM_LOG_FILE:-/dev/shm/llama-server.log}"
 LLM_REGISTRY="${LLM_REGISTRY:-/mnt/m/.llm/models.conf}"
 LLAMA_MODEL_DIR="${LLAMA_MODEL_DIR:-/mnt/m/active}"
 LLAMA_ROOT="${LLAMA_ROOT:-$HOME/llama.cpp}"
