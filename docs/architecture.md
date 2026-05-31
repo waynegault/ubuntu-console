@@ -76,7 +76,7 @@ not profile modules, and are never sourced by either loader.
 | `tools/import-windows-env.sh` | Standalone script to import Windows user environment variables. |
 | `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety. CI linter. |
 | `tools/mirror-vault.sh` | Sync Obsidian vault from WSL to Windows. |
-| `tools/run-tests.sh` | Pretty-printed BATS test runner (489 tests). |
+| `tools/run-tests.sh` | Pretty-printed BATS test runner. |
 
 ### Repository Boundaries
 
@@ -421,7 +421,7 @@ extra source commands.
 │   ├── reference.md                   #   Command reference + dashboard
 │   └── troubleshooting.md             #   Diagnostics and fixes
 ├── tests/
-│   ├── tactical-console.bats          # 489 BATS unit tests
+│   ├── tactical-console.bats          # BATS unit tests
 │   ├── tactical-console-fast.bats     # Fast subset (47 tests, ~20s)
 │   └── test_kgraph.py                 # Python tests for kgraph package
 └── systemd/
@@ -434,7 +434,7 @@ extra source commands.
 | System Path | Repo Path |
 |---|---|
 | `~/.bashrc` | thin loader (not in repo — sources `tactical-console.bashrc`) |
-| `/mnt/m/.llm/models.conf` | `llm/models.conf` (not currently in repo) |
+| `~/.llm/models.conf` | `llm/models.conf` (not currently in repo) |
 | `~/.local/bin/tac-exec` | `bin/tac-exec` |
 | `~/.local/bin/llama-watchdog.sh` | `bin/llama-watchdog.sh` |
 | `~/.local/bin/tac_hostmetrics.sh` | `bin/tac_hostmetrics.sh` |

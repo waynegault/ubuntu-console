@@ -22,7 +22,7 @@ description: Complete quick reference card for every command, the tactical dashb
 | `logtrim` | Utility | Trim logs > 1 MB |
 | `oedit` | Editor | Open `tactical-console.bashrc` in VS Code |
 | `code` | Editor | Open anything in VS Code |
-| `so` | OpenClaw | Start gateway (warns if local LLM provider offline) |
+| `so` | OpenClaw | Start gateway and auto-start Local LLM if needed |
 | `xo` | OpenClaw | Stop gateway (stop only — use `oc restart` to restart) |
 | `oc-restart` | OpenClaw | Restart gateway (native: openclaw gateway restart) |
 | `oc-health` | OpenClaw | Deep health probe (`--json` / `--plain`) |
@@ -59,7 +59,7 @@ description: Complete quick reference card for every command, the tactical dashb
 | `model download` | LLM | Fetch from HuggingFace |
 | `model delete N` | LLM | Delete model #N from disk and registry (`--dry-run`) |
 | `model archive N` | LLM | Move model #N to archive and deregister (`--dry-run`) |
-| `model bench` | LLM | Benchmark all on-disk models, persist TSV |
+| `model bench` | LLM | Benchmark all on-disk models, persist TSV; auto-runs autotune when missing and skips discouraged quant auto-autotune unless `LLM_ALLOW_AUTOTUNE_DISCOURAGED=1` |
 | `model bench-diff` / `model bench-compare` | LLM | Compare two benchmark runs |
 | `model bench-history` | LLM | Summarise recent benchmark runs |
 | `serve N` / `halt` | LLM | Aliases for use/stop |

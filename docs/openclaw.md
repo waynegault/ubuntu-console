@@ -53,7 +53,7 @@ The profile bridges API keys from the Windows User environment into WSL. This
 is necessary because WSL2 does not inherit Windows environment variables by
 default, but cloud LLM providers (used as fallback) need API keys.
 
-**Security:** API key cache file permissions are validated (600 or 644 only).
+**Security:** API key cache file permissions are validated (600 only).
 Key names are validated against `^[A-Z_][A-Z0-9_]*$` before indirect expansion
 to prevent command injection.
 
@@ -77,7 +77,7 @@ bridged API keys.
 
 | Command | What It Does |
 |---|---|
-| `so` | Start the OpenClaw gateway. Injects API keys into systemd, runs `openclaw gateway start`, waits 3s, checks port 18789. **Fails gracefully if OpenClaw not installed.** |
+| `so` | Start the OpenClaw gateway. Injects API keys into systemd, ensures Local LLM is running (auto-starts from default/first registry model when needed), then starts gateway and waits for port 18789 readiness. **Fails gracefully if OpenClaw not installed.** |
 | `xo` | Stop the gateway (**stop only — does not restart**). Runs `openclaw gateway stop`, then `systemctl --user stop openclaw-gateway.service`, removes supervisor lock. When called from an AI agent context, prints a warning to use `openclaw gateway restart` instead. **Fails gracefully if OpenClaw not installed.** |
 | `oc-restart` | Restart gateway (native: `openclaw gateway restart`). **Fails gracefully if OpenClaw not installed.** |
 | `oc-health` | Deep probe: checks port 18789, then calls `openclaw health --json` and parses the status field. Supports `--json` and `--plain` for automation. |

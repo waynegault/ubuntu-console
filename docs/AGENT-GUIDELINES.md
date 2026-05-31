@@ -83,7 +83,7 @@ These normally open VS Code; with `--read` they output content to stdout:
 
 | Command | What It Reads |
 |---------|---------------|
-| `tac-exec --read llmconf` | `/mnt/m/.llm/models.conf` |
+| `tac-exec --read llmconf` | `~/.llm/models.conf` |
 | `tac-exec --read mlogs` | Last 100 lines of `/dev/shm/llama-server.log` |
 | `tac-exec --read occonf` | `~/.openclaw/openclaw.json` |
 | `tac-exec --read oedit` | `~/ubuntu-console/tactical-console.bashrc` |
@@ -244,7 +244,7 @@ cat ~/.openclaw/bash-errors.log | tail -20
 
 | File / Purpose | Path or Command |
 |----------------|-----------------|
-| Model registry | `tac-exec --read llmconf` → `/mnt/m/.llm/models.conf` |
+| Model registry | `tac-exec --read llmconf` → `~/.llm/models.conf` |
 | LLM logs | `tac-exec --read mlogs` → `/dev/shm/llama-server.log` |
 | OpenClaw config | `tac-exec --read occonf` → `~/.openclaw/openclaw.json` |
 | Gateway journal | `tac-exec le` / `tac-exec lo` |
@@ -257,7 +257,8 @@ cat ~/.openclaw/bash-errors.log | tail -20
 
 ## Security
 
-- All commands run as current user — no `sudo`
+- Commands run as current user by default. Some maintenance and hardware paths
+  may use `sudo -n` when available.
 - API keys bridged from Windows are stored in `/dev/shm/tac_win_api_keys`
   (`chmod 600`, tmpfs — never hits disk)
 - `commit_auto` (alias: `commit`) blocks sending git diffs to non-localhost LLM URLs
