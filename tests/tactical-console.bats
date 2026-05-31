@@ -133,7 +133,7 @@ _TAC_NEEDS_PROFILE=(
     "telemetry:" "deployment:" "llm-guard:" "hooks:"
     "llm-manager:" "oc:" "openclaw:" "gog:"
     "dashboard-help:" "ui-engine:" "cross-script:"
-    "error:" "integration:" "llm-manager:"
+    "error:" "integration:" "autotune:"
 )
 
 # Per-test setup: auto-source the profile when the test needs it.
@@ -2723,6 +2723,105 @@ EOF
     run __require_command nonexistent_command_xyz123
     [ "$status" -eq 1 ]
     [[ "$output" == *"NOT INSTALLED"* ]]
+}
+
+# end of file
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 34. AUTOTUNE — Context persistence, profile save, bench interactions
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "autotune: __save_model_ctx function is defined" {
+    declare -f __save_model_ctx >/dev/null
+}
+
+@test "autotune: __model_autotune function is defined" {
+    declare -f __model_autotune >/dev/null
+}
+
+@test "autotune: __save_model_ctx persists ctx value without floor clamping" {
+    local llm_root="$TAC_TEST_TMPDIR/save-model-ctx-no-clamp"
+    mkdir -p "$llm_root/.llm"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
+        '1|Test Model|test.gguf|1.0G|Q4_K_M/q8_0|llama|24|16384|6|1024|256|1|256|native|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
+    LLM_REGISTRY="$llm_root/.llm/models.conf"
+    ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
+    echo "1" > "$ACTIVE_LLM_FILE"
+    __save_model_ctx 1 16384
+    local saved_ctx
+    saved_ctx=$(awk -F'|' '$1==1 {print $8}' "$LLM_REGISTRY")
+    # Should be exactly 16384 — no floor clamping to 24000
+    [[ "$saved_ctx" == "16384" ]]
+}
+
+@test "autotune: __save_model_ctx preserves small ctx values for VRAM-limited models" {
+    local llm_root="$TAC_TEST_TMPDIR/save-model-ctx-small"
+    mkdir -p "$llm_root/.llm"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
+        '2|Tiny Model|tiny.gguf|0.5G|Q4_K_M/q8_0|llama|32|4096|6|1024|256|1|256|native|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
+    LLM_REGISTRY="$llm_root/.llm/models.conf"
+    ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
+    echo "2" > "$ACTIVE_LLM_FILE"
+    __save_model_ctx 2 2048
+    local saved_ctx
+    saved_ctx=$(awk -F'|' '$1==2 {print $8}' "$LLM_REGISTRY")
+    [[ "$saved_ctx" == "2048" ]]
+}
+
+@test "autotune: __llm_autotune_profile_save writes correct fields to registry" {
+    local llm_root="$TAC_TEST_TMPDIR/autotune-profile-save"
+    mkdir -p "$llm_root/.llm"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
+        '3|Profile Test|profile.gguf|2.0G|Q4_K_M/q8_0|llama|24|4096|6|1024|256|1|256|native|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
+    LLM_REGISTRY="$llm_root/.llm/models.conf"
+    ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
+    echo "3" > "$ACTIVE_LLM_FILE"
+    __llm_autotune_profile_save 3 "native" 16384 2048 512 2 512 45.2
+    local row
+    row=$(awk -F'|' '$1==3' "$LLM_REGISTRY")
+    local ctx batch ubatch parallel fit tps autotuned
+    IFS='|' read -r _ _ _ _ _ _ _ ctx _ batch ubatch parallel fit _ _ tps autotuned _ _ <<< "$row"
+    [[ "$ctx" == "16384" ]]
+    [[ "$batch" == "2048" ]]
+    [[ "$ubatch" == "512" ]]
+    [[ "$parallel" == "2" ]]
+    [[ "$fit" == "512" ]]
+    [[ "$tps" == "45.2" ]]
+    [[ "$autotuned" == "yes" ]]
+}
+
+@test "autotune: __llm_autotune_profile_save preserves gpu_layers unchanged" {
+    local llm_root="$TAC_TEST_TMPDIR/autotune-keeps-gpu-layers"
+    mkdir -p "$llm_root/.llm"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
+        '4|GpuLayer Test|gpu.gguf|2.0G|Q4_K_M/q8_0|llama|16|4096|6|1024|256|1|256|native|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
+    LLM_REGISTRY="$llm_root/.llm/models.conf"
+    ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
+    echo "4" > "$ACTIVE_LLM_FILE"
+    __llm_autotune_profile_save 4 "native" 8192 1024 256 1 256 30.0
+    local gpu_layers
+    gpu_layers=$(awk -F'|' '$1==4 {print $7}' "$LLM_REGISTRY")
+    # gpu_layers should still be 16 — autotune never touches it
+    [[ "$gpu_layers" == "16" ]]
+}
+
+@test "autotune: __llm_autotune_done_for_model returns 0 for autotuned=yes" {
+    local llm_root="$TAC_TEST_TMPDIR/autotune-done-check"
+    mkdir -p "$llm_root/.llm"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
+        '5|Done Model|done.gguf|1.0G|Q4_K_M/q8_0|llama|24|16384|6|1024|256|1|256|native|auto|55.1|yes|no|no' > "$llm_root/.llm/models.conf"
+    LLM_REGISTRY="$llm_root/.llm/models.conf"
+    __llm_autotune_done_for_model 5
+}
+
+@test "autotune: __llm_autotune_done_for_model returns 1 for autotuned=no" {
+    local llm_root="$TAC_TEST_TMPDIR/autotune-not-done"
+    mkdir -p "$llm_root/.llm"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
+        '6|Pending Model|pend.gguf|1.0G|Q4_K_M/q8_0|llama|24|4096|6|1024|256|1|256|native|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
+    LLM_REGISTRY="$llm_root/.llm/models.conf"
+    run __llm_autotune_done_for_model 6
+    [ "$status" -ne 0 ]
 }
 
 # end of file

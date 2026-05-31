@@ -97,6 +97,74 @@ function __require_llm() {
 }
 
 # ---------------------------------------------------------------------------
+# __tac_cleanup_stale_locks — Kill orphaned bench/autotune lock files and orphan
+# stdin-keeper processes left behind by aborted runs (SIGKILL, WSL crash, etc.).
+# Safe to call at any time — only removes files with no active holder.
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __tac_cleanup_stale_locks() {
+    # shellcheck disable=SC2034
+    local _c_lock _c_pid _c_kf _c_sp _c_my_pid
+
+    # bench lock + pid
+    for _c_lock in /tmp/llm-bench.lock /tmp/llm-autotune.lock
+    do
+        [[ -f "$_c_lock" ]] || continue
+        if command -v lsof >/dev/null 2>&1
+        then
+            if ! lsof "$_c_lock" >/dev/null 2>&1
+            then
+                rm -f "$_c_lock"
+            fi
+        else
+            # Fallback: no lsof — check if lock file's PID (if any) is alive
+            # shellcheck disable=SC2188
+            _c_pid=$(<"$_c_lock" 2>/dev/null || true)
+            if [[ -z "$_c_pid" ]] || ! kill -0 "$_c_pid" 2>/dev/null
+            then
+                rm -f "$_c_lock"
+            fi
+        fi
+    done
+
+    # bench PID file
+    if [[ -f /tmp/llm-bench.pid ]]
+    then
+        # shellcheck disable=SC2188
+        _c_pid=$(</tmp/llm-bench.pid 2>/dev/null || true)
+        if [[ -z "$_c_pid" ]] || ! kill -0 "$_c_pid" 2>/dev/null
+        then
+            rm -f /tmp/llm-bench.pid
+        fi
+    fi
+
+    # orphaned stdin keepers
+    _c_my_pid=$$
+    for _c_sp in $(pgrep -a bash 2>/dev/null | awk '/llm-stdin/{print $1}' || true)
+    do
+        if [[ "$_c_sp" =~ ^[0-9]+$ ]] && [[ "$_c_sp" != "$_c_my_pid" ]]
+        then
+            kill -TERM "$_c_sp" 2>/dev/null || true
+        fi
+    done
+
+    # orphaned keeper PID files
+    for _c_kf in /tmp/llm-keeper.*.pid
+    do
+        [[ -f "$_c_kf" ]] || continue
+        # shellcheck disable=SC2188
+        _c_pid=$(<"$_c_kf" 2>/dev/null || true)
+        if [[ "$_c_pid" =~ ^[0-9]+$ ]]
+        then
+            kill -TERM "$_c_pid" 2>/dev/null || true
+        fi
+        rm -f "$_c_kf"
+    done
+
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __llm_json_escape — Escape a string for safe inline JSON output.
 # @returns 0 always.
 # ---------------------------------------------------------------------------
@@ -2388,9 +2456,22 @@ function __model_autotune() {
             trap - TERM
         fi
     }
+    __autotune_unlock() {
+        # Release the lock fd if it was opened. lock_fd is a local variable
+        # from the parent scope; check it dynamically since bash local
+        # variables are scoped to the function, not dynamically.
+        local _lock_fd="${lock_fd:-}"
+        if [[ -n "$_lock_fd" ]]
+        then
+            flock -u "$_lock_fd" 2>/dev/null || true
+            exec {_lock_fd}>&- 2>/dev/null || true
+        fi
+        rm -f "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
+    }
     __autotune_fail() {
+        __autotune_unlock
         __autotune_restore_traps
-        unset -f __autotune_restore_traps __autotune_fail 2>/dev/null || true
+        unset -f __autotune_restore_traps __autotune_fail __autotune_unlock 2>/dev/null || true
     }
 
     # Ensure Ctrl-C/termination cannot leave trial servers running.
@@ -2510,6 +2591,17 @@ function __model_autotune() {
     elif [[ "${LLM_AUTOTUNE_SKIP_LOCK:-0}" == "1" ]]
     then
         __tac_info "Autotune" "[Lock skipped by caller]" "$C_Dim"
+    fi
+
+    # Register an EXIT trap to release the lock on any exit (including set -e).
+    # This ensures the lock file is cleaned even if the function aborts partway
+    # through the sweep without reaching the normal cleanup section.
+    local __autotune_own_exit_trap=""
+    __autotune_own_exit_trap=$(trap -p EXIT 2>/dev/null || true)
+    # Only register if not already set (nested calls from bench skip this).
+    if [[ -z "$__autotune_own_exit_trap" ]]
+    then
+        trap '__autotune_unlock; __autotune_restore_traps; rm -f /tmp/llm-autotune.lock' EXIT
     fi
 
     local prev_backend="${LLM_SERVER_BACKEND:-}"
@@ -3010,7 +3102,14 @@ function __model_autotune() {
 
     __tac_footer
     __autotune_restore_traps
-    unset -f __autotune_restore_traps __autotune_fail 2>/dev/null || true
+    # Remove our EXIT trap if we installed one (nested calls from bench skip it).
+    local _exit_trap_clean
+    _exit_trap_clean=$(trap -p EXIT 2>/dev/null || true)
+    if [[ "$_exit_trap_clean" == *'__autotune_unlock'* ]]
+    then
+        trap - EXIT
+    fi
+    unset -f __autotune_restore_traps __autotune_fail __autotune_unlock 2>/dev/null || true
     if (( __autotune_interrupted != 0 ))
     then
         return "$__autotune_interrupted"
@@ -3296,6 +3395,11 @@ function __model_info() {
 # __bench_run_with_timeout — Wrap a command with an overall timeout.
 # Kills the entire process group if the timeout is exceeded, preventing runaway
 # llama-server or sleep processes from accumulating.
+#
+# SAFETY: Uses SIGTERM-first with a grace period to let EXIT traps fire.
+# SIGKILL is only used as a last resort, and ONLY on the child's own
+# process group — never on the parent. This prevents parent process
+# EXIT traps (lock file cleanup, model stop) from being bypassed.
 # @usage  __bench_run_with_timeout <seconds> <command...>
 # @returns 0 if command completes, 124 on timeout.
 # ---------------------------------------------------------------------------
@@ -3356,19 +3460,39 @@ function __bench_run_with_timeout() {
         waited=$(( waited + interval ))
     done
 
-    # Timeout — terminate whole spawned process-group when it is isolated.
+    # Phase 1 — SIGTERM with grace period (lets EXIT traps fire).
     if [[ -n "$cmd_pgid" ]] && [[ "$cmd_pgid" =~ ^[0-9]+$ ]] && [[ -n "$_self_pgid" ]] && [[ "$cmd_pgid" != "$_self_pgid" ]]
     then
         kill -TERM -- "-$cmd_pgid" 2>/dev/null || true
     else
         kill -TERM -- "$cmd_pid" 2>/dev/null || true
     fi
-    sleep 1
 
+    # Grace wait: poll for clean exit, giving the child time to run EXIT traps.
+    local _grace=10 _g_i
+    for (( _g_i=0; _g_i < _grace; _g_i++ ))
+    do
+        if ! kill -0 "$cmd_pid" 2>/dev/null
+        then
+            wait "$cmd_pid" 2>/dev/null
+            return 124
+        fi
+        sleep 1
+    done
+
+    # Phase 2 — SIGKILL only if the child process group is distinct from ours.
+    # NEVER send SIGKILL to our own process group — it would kill the parent
+    # without triggering EXIT traps, leaving stale lock files.
     if [[ -n "$cmd_pgid" ]] && [[ "$cmd_pgid" =~ ^[0-9]+$ ]] && [[ -n "$_self_pgid" ]] && [[ "$cmd_pgid" != "$_self_pgid" ]]
     then
         kill -KILL -- "-$cmd_pgid" 2>/dev/null || true
+    elif [[ "$cmd_pgid" =~ ^[0-9]+$ ]] && [[ "$cmd_pgid" == "$_self_pgid" ]]
+    then
+        # Child shares our PGID — can't safely SIGKILL it without killing
+        # ourselves. Just orphan it; our EXIT trap will clean locks anyway.
+        :
     else
+        # No PGID info — last resort, try killing just the child PID.
         kill -KILL -- "$cmd_pid" 2>/dev/null || true
     fi
     wait "$cmd_pid" 2>/dev/null || true
@@ -3439,6 +3563,8 @@ function __model_bench() {
     # ---------------------------------------------------------------------------
     # Cleanup trap: kill orphan processes and remove guard files on exit.
     # Handles normal completion, SIGINT (Ctrl+C), and abrupt termination.
+    # The EXIT trap fires even under set -e or normal return, so lock files
+    # are always cleaned unless the process receives SIGKILL.
     # ---------------------------------------------------------------------------
     local bench_cleanup_spawned_pids=()
     local __bench_signal_rc=0
@@ -3447,10 +3573,10 @@ function __model_bench() {
     __bench_cleanup() {
         if (( __bench_cleaned == 1 ))
         then
-            return $?
+            # Preserve original exit code from first call.
+            return
         fi
         __bench_cleaned=1
-        local exit_code=$?
         # Kill any subprocesses we spawned
         if (( ${#bench_cleanup_spawned_pids[@]} > 0 ))
         then
@@ -3461,39 +3587,27 @@ function __model_bench() {
         then
             __model_stop >/dev/null 2>&1 || true
         fi
-        # Remove guard files
+        # Remove guard files (unconditionally — these are /tmp files, safe to rm)
         rm -f "$bench_pid_file"
         if [[ -n "$bench_lock_fd" ]]
         then
             flock -u "$bench_lock_fd" 2>/dev/null || true
-            exec {bench_lock_fd}>&-
+            exec {bench_lock_fd}>&- 2>/dev/null || true
         fi
         rm -f "$bench_lock_file"
-        return "$exit_code"
+        # Also clean any stray autotune locks we may have inherited
+        rm -f "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
+        # Preserve original exit code from the context that triggered the trap
+        local _exit_code=$?
+        # shellcheck disable=SC2086
+        return $_exit_code
     }
     trap '__bench_cleanup' EXIT
     trap '__bench_signal_rc=130; __bench_cleanup; return 130' INT
     trap '__bench_signal_rc=143; __bench_cleanup; return 143' TERM
 
-    # Kill any orphaned stdin keepers from prior runs before starting.
-    # These accumulate if llama-server was killed without going through
-    # __model_stop (e.g., OOM kill, system crash, SIGKILL).
-    local _kp
-    for _kf in /tmp/llm-keeper.*.pid
-    do
-        [[ -f "$_kf" ]] || continue
-        _kp=$(< "$_kf")
-        if [[ "$_kp" =~ ^[0-9]+$ ]]; then kill -TERM "$_kp" 2>/dev/null; fi
-        rm -f "$_kf"
-    done
-    # Catch any orphan sleep loops that lost their PID file (e.g., from a
-    # previous bench run that was SIGKILL'd). These show up as bash processes
-    # holding open FIFOs — grep for the mkfifo pattern, not our own PID.
-    local _my_pid=$$
-    for _sp in $(pgrep -a bash 2>/dev/null | awk '/llm-stdin/{print $1}' || true)
-    do
-        if [[ "$_sp" =~ ^[0-9]+$ ]] && [[ "$_sp" != "$_my_pid" ]]; then kill -TERM "$_sp" 2>/dev/null; fi
-    done
+    # Clean up any orphaned locks, keepers, and processes from prior runs.
+    __tac_cleanup_stale_locks
 
     __tac_header "MODEL BENCHMARK" "open"
     local bench_run_id
@@ -3587,7 +3701,6 @@ function __model_bench() {
         if (( _bench_free_vram_mb > 0 && _bench_free_vram_mb < _bench_min_free_vram_mb ))
         then
             export LLAMA_GPU_LAYERS=0
-            export LLM_IGNORE_AUTOTUNE_PROFILE=1
             export TAC_CTX_SIZE="$_bench_safe_ctx"
             export LLAMA_BATCH_SIZE=512
             export LLAMA_UBATCH_SIZE=128
@@ -3599,6 +3712,14 @@ function __model_bench() {
         # Auto-autotune only if this model/backend has never been autotuned.
         if ! __llm_autotune_done_for_model "${b_num[$i]}"
         then
+            # If safe overrides are active (low VRAM), temporarily lift them for
+            # autotune so the binary search finds the GPU-stable values, not
+            # CPU-gated ones. Restore safe overrides after autotune for the
+            # benchmark run itself.
+            if (( _bench_safe_overrides == 1 ))
+            then
+                unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
+            fi
             __tac_info "Bench" "[No prior autotune flag for model #${b_num[$i]} - running autotune first]" "$C_Warning"
             __tac_info "Bench" "[Autotune mode=${bench_autotune_mode}, trials=${bench_autotune_trials}]" "$C_Dim"
             export LLM_AUTOTUNE_RESTORE_PREV=0
@@ -3620,6 +3741,15 @@ function __model_bench() {
             fi
             unset LLM_AUTOTUNE_RESTORE_PREV
             unset LLM_AUTOTUNE_SKIP_LOCK
+            # Restore safe overrides that were lifted before autotune.
+            if (( _bench_safe_overrides == 1 ))
+            then
+                export LLAMA_GPU_LAYERS=0
+                export TAC_CTX_SIZE="$_bench_safe_ctx"
+                export LLAMA_BATCH_SIZE=512
+                export LLAMA_UBATCH_SIZE=128
+                export LLAMA_PARALLEL_SLOTS=1
+            fi
         fi
 
         rm -f "$LLM_TPS_CACHE"
@@ -3657,7 +3787,7 @@ function __model_bench() {
         __model_stop 2>/dev/null
         if (( _bench_safe_overrides == 1 ))
         then
-            unset LLAMA_GPU_LAYERS LLM_IGNORE_AUTOTUNE_PROFILE TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
+            unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
         fi
         sleep 1
     done
@@ -3686,6 +3816,20 @@ function __model_bench() {
     } > "$bench_file"
     __tac_info "Saved" "$bench_file" "$C_Dim"
     __tac_info "Bench Logs" "$bench_log_dir" "$C_Dim"
+
+    # Rotate old bench log directories — keep only the last 5 runs.
+    local _bench_log_base="${TAC_CACHE_DIR:-/dev/shm}/llm-bench-logs"
+    if [[ -d "$_bench_log_base" ]]
+    then
+        local _stale_count
+        _stale_count=$(find "$_bench_log_base" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l)
+        if (( _stale_count > 5 ))
+        then
+            find "$_bench_log_base" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
+                | sort -n | head -n $(( _stale_count - 5 )) | cut -d' ' -f2- \
+                | while IFS= read -r _old_dir; do rm -rf "$_old_dir" 2>/dev/null || true; done
+        fi
+    fi
 
     if [[ -n "$_bench_prev_model" ]]
     then
@@ -4533,6 +4677,7 @@ bench-compare|bench-latest|bench-history|delete|archive|download}"
     echo "  recommend  - Rank scanned models for a 4GB VRAM system"
     echo "  info N     - Detailed info for model #N"
     echo "  bench      - Benchmark all on-disk models"
+    echo "  bench check - Check if a bench run is active (lock status)"
     echo "  autotune N [--backend native|python] [--quick] [--ctx-size N] [--trials N]"
     echo "             - Sweep safe runtime configs and save best profile for model #N"
     echo "  bench-diff - Compare the latest two bench TSVs (or pass old/new files)"
@@ -4616,6 +4761,28 @@ function model() {
             ;;
 
         bench)
+            # Check subcommand: --check / check queries lock status without running.
+            case "${1:-}" in
+                --check|check)
+                    local _bench_lock="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
+                    local _bench_pid="${LLM_BENCH_PID_FILE:-/tmp/llm-bench.pid}"
+                    if [[ -f "$_bench_lock" ]]
+                    then
+                        if command -v lsof >/dev/null 2>&1 && lsof "$_bench_lock" >/dev/null 2>&1
+                        then
+                            # shellcheck disable=SC2188
+                            __tac_info "Bench" "[RUNNING — lock held by PID $(<"$_bench_lock" 2>/dev/null || echo unknown)]" "$C_Warning"
+                            return 0
+                        else
+                            __tac_info "Bench" "[STALE — lock file exists but no active holder]" "$C_Warning"
+                            __tac_info "Bench" "[Run 'model bench' to auto-clean and start]" "$C_Dim"
+                            return 0
+                        fi
+                    fi
+                    __tac_info "Bench" "[IDLE — no bench running]" "$C_Success"
+                    return 0
+                    ;;
+            esac
             __model_bench
             ;;
 
@@ -4796,7 +4963,7 @@ function burn() {
             --arg p "$prompt" \
             --argjson bench_tokens "$bench_tokens" \
             --argjson bench_temp "${LLM_BENCH_TEMPERATURE:-0}" \
-            '{messages: [{role: "user", content: $p}], max_tokens: $bench_tokens, min_tokens: $bench_tokens, temperature: $bench_temp, top_p: 1.0}')
+            '{messages: [{role: "user", content: $p}], max_tokens: $bench_tokens, temperature: $bench_temp, top_p: 1.0}')
     else
         payload=$(jq -n --arg p "$prompt" \
             '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')

@@ -193,7 +193,32 @@ Persisted model-row fields include:
 - `autotuned=no`: run autotune for that model before benchmarking
 - `autotuned=yes`: benchmark directly without auto-retune
 
+### Safe Override Handling
+
+When `model bench` detects low free VRAM (<`LLM_BENCH_MIN_FREE_VRAM_MB`, default
+1200 MiB), it applies safe overrides (`LLAMA_GPU_LAYERS=0`, conservative ctx
+and batch sizes) for the benchmark run. If the model also needs autotune, the
+safe overrides are **lifted before autotune** and restored after — this ensures
+the autotune binary search discovers the GPU-stable profile, not a CPU-gated
+one. If the autotuned profile were found in CPU-only mode, loading with GPU
+layers on the next `model use` could OOM.
+
+### Context Persistence
+
+Autotune-discovered context values are persisted verbatim — there is no minimum
+floor. Earlier versions enforced a 24000 ctx minimum, which could OOM smaller
+models on next load. The binary search already finds the maximum VRAM-stable
+context; trusting it prevents unnecessary failures.
+
 `model list`/`model scan` show `pending` when no autotune has been saved yet, and show the saved optimal settings after autotune completes.
+
+### Burn-In API Payload
+
+The burn-in stress test (`burn`) sends a non-streaming completion request with
+`temperature=0` and `max_tokens=768` in bench mode. The `min_tokens` parameter
+is not included — earlier versions sent `min_tokens` equal to `max_tokens`, but
+this llama-server build does not support that field. Omitting it avoids
+unnecessary API errors.
 
 ## OpenClaw ↔ LLM Bridge
 

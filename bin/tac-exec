@@ -84,6 +84,13 @@ then
   exit 1
 fi
 
+# Clean any stale bench/autotune lock files left from aborted runs.
+# This prevents SIGKILL bypass of EXIT traps from blocking future runs.
+if declare -F __tac_cleanup_stale_locks >/dev/null 2>&1
+then
+  __tac_cleanup_stale_locks
+fi
+
 if [[ $# -eq 0 ]]; then
     echo "Usage: tac-exec <command> [args...]"
     echo "       tac-exec --help            Show full help"

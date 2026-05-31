@@ -883,7 +883,7 @@ Division by zero is prevented with (( divisor > 0 )) checks; modular arithmetic 
 
 🔧 File existence checked before reading
 
-Inspect $(<file) and source calls
+Inspect $(<file>) and source calls
 
 All file reads preceded by [[ -f "$file" ]] guard
 
