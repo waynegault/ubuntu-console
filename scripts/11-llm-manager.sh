@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 41
+# Module Version: 43
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -303,98 +303,6 @@ function __llm_autotune_blob_upsert() {
 }
 
 # ---------------------------------------------------------------------------
-# __llm_autotune_profile_get — Legacy helper retained for compatibility.
-# Flat schema uses direct columns rather than encoded profile blobs.
-# Returned format:
-#   model_num\tbackend\tctx\tbatch\tubatch\tparallel\tfit_target_mb\ttps\tstamp...
-# @returns 0 on success, 1 when no profile exists.
-# ---------------------------------------------------------------------------
-function __llm_autotune_profile_get() {
-    local model_num="${1:-}"
-    local backend="${2:-}"
-    local ctx_size="${3:-}"
-    local entry=""
-    entry=$(__llm_registry_entry_by_num "$model_num") || return 1
-
-    local _num _name _file _size _arch _quant _layers _gpu _ctx _threads _tps blob _done
-    IFS='|' read -r _num _name _file _size _arch _quant _layers _gpu _ctx _threads _tps blob _done <<< "$entry"
-    [[ -n "$backend" && -n "$blob" ]] || return 1
-
-    local exact=""
-    local fallback=""
-    local rec
-    local -a entries=()
-    IFS=';' read -r -a entries <<< "$blob"
-    for rec in "${entries[@]}"
-    do
-        [[ -z "$rec" ]] && continue
-        local rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj
-        IFS=',' read -r rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj <<< "$rec"
-        [[ "$rb" == "$backend" ]] || continue
-
-        [[ -z "$rc" ]] && rc="*"
-        [[ -z "$rscore" ]] && rscore="$rtps"
-        [[ -z "$rstddev" ]] && rstddev="0"
-        [[ -z "$rsamples" ]] && rsamples="0"
-        [[ -z "$rfail" ]] && rfail="0"
-        [[ -z "$rctxmin" ]] && rctxmin="$rc"
-        [[ -z "$rctxmax" ]] && rctxmax="$rc"
-        [[ -z "$rverified" ]] && rverified="0"
-        [[ -z "$robj" ]] && robj="no-oom>max-ctx>max-tps"
-
-        local row
-        row=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
-            "$model_num" "$rb" "$rc" "$rbatch" "$rubatch" "$rparallel" "$rfit" "$rtps" "$rstamp" \
-            "$rscore" "$rstddev" "$rsamples" "$rfail" "$rctxmin" "$rctxmax" "$rverified" "$robj")
-
-        if [[ -n "$ctx_size" && "$rc" == "$ctx_size" ]]
-        then
-            exact="$row"
-        elif [[ ("$rc" == "*" || -z "$rc") && -z "$fallback" ]]
-        then
-            fallback="$row"
-        fi
-    done
-
-    if [[ -n "$exact" ]]
-    then
-        printf '%s\n' "$exact"
-        return 0
-    fi
-    if [[ -n "$fallback" ]]
-    then
-        printf '%s\n' "$fallback"
-        return 0
-    fi
-
-    # Latest backend winner fallback (ctx-agnostic).
-    local rec_any
-    for rec_any in "${entries[@]}"
-    do
-        [[ -z "$rec_any" ]] && continue
-        local rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj
-        IFS=',' read -r rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj <<< "$rec_any"
-        [[ "$rb" == "$backend" ]] || continue
-
-        [[ -z "$rscore" ]] && rscore="$rtps"
-        [[ -z "$rstddev" ]] && rstddev="0"
-        [[ -z "$rsamples" ]] && rsamples="0"
-        [[ -z "$rfail" ]] && rfail="0"
-        [[ -z "$rctxmin" ]] && rctxmin="$rc"
-        [[ -z "$rctxmax" ]] && rctxmax="$rc"
-        [[ -z "$rverified" ]] && rverified="0"
-        [[ -z "$robj" ]] && robj="no-oom>max-ctx>max-tps"
-
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "$model_num" "$rb" "${rc:-*}" "$rbatch" "$rubatch" "$rparallel" "$rfit" "$rtps" "$rstamp" \
-            "$rscore" "$rstddev" "$rsamples" "$rfail" "$rctxmin" "$rctxmax" "$rverified" "$robj"
-        return 0
-    done
-
-    return 1
-}
-
-# ---------------------------------------------------------------------------
 # __llm_backend_normalize — Normalize backend labels to native/python.
 # @returns 0 and prints normalized backend label.
 # ---------------------------------------------------------------------------
@@ -405,72 +313,6 @@ function __llm_backend_normalize() {
         python|llama-cpp-python|module|"") printf '%s\n' "python" ;;
         *) printf '%s\n' "$backend_raw" ;;
     esac
-}
-
-# ---------------------------------------------------------------------------
-# __llm_autotune_profile_best_for_model — Pick best saved profile for model.
-# Selection priority: backend match, then max ctx, then max score/tps.
-# @returns 0 on success, 1 when no matching profile exists.
-# ---------------------------------------------------------------------------
-function __llm_autotune_profile_best_for_model() {
-    local model_num="${1:-}"
-    local backend="${2:-}"
-    [[ "$model_num" =~ ^[0-9]+$ ]] || return 1
-
-    local entry=""
-    entry=$(__llm_registry_entry_by_num "$model_num") || return 1
-    local _num _name _file _size _arch _quant _layers _gpu _ctx _threads _tps blob _done
-    IFS='|' read -r _num _name _file _size _arch _quant _layers _gpu _ctx _threads _tps blob _done <<< "$entry"
-    [[ -n "$blob" ]] || return 1
-
-    local seen=0
-    local best=""
-    local best_ctx=0
-    local best_score=0
-    local rec
-    local -a entries=()
-    IFS=';' read -r -a entries <<< "$blob"
-    for rec in "${entries[@]}"
-    do
-        [[ -z "$rec" ]] && continue
-        local rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj
-        IFS=',' read -r rb rc rbatch rubatch rparallel rfit rtps rstamp rscore rstddev rsamples rfail rctxmin rctxmax rverified robj <<< "$rec"
-        [[ -n "$backend" && "$rb" != "$backend" ]] && continue
-
-        local cval=0
-        local sval=0
-        [[ "$rc" =~ ^[0-9]+$ ]] && cval="$rc"
-        if [[ "$rscore" =~ ^[0-9]+(\.[0-9]+)?$ ]]
-        then
-            sval="$rscore"
-        elif [[ "$rtps" =~ ^[0-9]+(\.[0-9]+)?$ ]]
-        then
-            sval="$rtps"
-        fi
-        [[ -z "$rscore" ]] && rscore="$rtps"
-        [[ -z "$rstddev" ]] && rstddev="0"
-        [[ -z "$rsamples" ]] && rsamples="0"
-        [[ -z "$rfail" ]] && rfail="0"
-        [[ -z "$rctxmin" ]] && rctxmin="$rc"
-        [[ -z "$rctxmax" ]] && rctxmax="$rc"
-        [[ -z "$rverified" ]] && rverified="0"
-        [[ -z "$robj" ]] && robj="no-oom>max-ctx>max-tps"
-
-        if (( seen == 0 )) \
-            || (( cval > best_ctx )) \
-            || { (( cval == best_ctx )) && awk -v s="$sval" -v b="$best_score" 'BEGIN{exit !(s>b)}'; }
-        then
-            best=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
-                "$model_num" "$rb" "${rc:-*}" "$rbatch" "$rubatch" "$rparallel" "$rfit" "$rtps" "$rstamp" \
-                "$rscore" "$rstddev" "$rsamples" "$rfail" "$rctxmin" "$rctxmax" "$rverified" "$robj")
-            best_ctx="$cval"
-            best_score="$sval"
-            seen=1
-        fi
-    done
-
-    [[ "$seen" == "1" ]] || return 1
-    printf '%s\n' "$best"
 }
 
 # ---------------------------------------------------------------------------

@@ -78,7 +78,7 @@ Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice 
 | `model doctor` | Validate registry integrity, default model wiring, GPU visibility, watchdog state, and local ports |
 | `model recommend` | Rank scanned models for a 4 GB VRAM system using quant, size, architecture, and saved TPS |
 | `model info N` | Display full details for model #N including on-disk status |
-| `model bench` | Benchmark all on-disk models: if a model has no autotune profile, `bench` runs autotune first, then starts model, runs burn-in, and records TPS. Results persist to `/mnt/m/.llm/bench_*.tsv`. |
+| `model bench` | Benchmark all on-disk models: if a model row has `autotuned=no`, `bench` runs autotune first (full legitimate parameter sweep for that model), then starts model, runs burn-in, and records TPS. Once `autotuned=yes`, bench will not auto-retune that model unless the row is reset. Results persist to `/mnt/m/.llm/bench_*.tsv`. |
 | `model autotune N [--backend native|python] [--quick] [--ctx-size N] [--trials N]` | Auto-tune runtime config with objective priority: **1) no OOM, 2) maximum context, 3) maximum TPS**. Saves per-model profile for future `model use` and `model bench`. |
 | `model bench-diff` / `model bench-compare` | Compare two benchmark TSV runs |
 | `model bench-history` | Summarise recent saved benchmark TSV runs |
@@ -130,9 +130,9 @@ measures wall time with nanosecond precision, and reports tokens/second. The
 result is cached for dashboard display. Useful for benchmarking different
 models and GPU states.
 
-`model bench` extends this: it iterates over all on-disk models, ensures
-autotune exists for each model/backend (running autotune first when missing),
-boots each one, runs the burn prompt, collects TPS, and writes a TSV file to
+`model bench` extends this: it iterates over all on-disk models, checks each
+model row for `autotuned=no` (running autotune first when missing), boots each
+one, runs the burn prompt, collects TPS, and writes a TSV file to
 `/mnt/m/.llm/bench_YYYYMMDD_HHMMSS.tsv` for historical comparison. Results are
 displayed in a box-drawn summary table.
 
@@ -146,7 +146,7 @@ displayed in a box-drawn summary table.
 
 ### What It Optimizes
 
-- Backend-aware profiles (`native` or `python`)
+- Row-level runtime defaults in `models.conf`
 - Context-aware profiles (`ctx` key)
 - Runtime knobs: `batch`, `ubatch`, `parallel`, `fit_target_mb`
 - Stability score: median TPS with jitter penalty
@@ -180,20 +180,20 @@ displayed in a box-drawn summary table.
 
 ### Profile Persistence
 
-Profiles are saved to `/mnt/m/.llm/autotune_profiles.tsv` and keyed by:
+Autotune winners are persisted directly in `/mnt/m/.llm/models.conf` (flat row schema), not in a separate profile artifact.
 
-- model number
-- backend
-- context
+Persisted model-row fields include:
 
-Saved rows include confidence metadata:
+- `ctx`, `batch`, `ubatch`, `parallel`, `fit_target_mb`, `backend`, `mmap_mode`, `tps`, `autotuned`
 
-- `score`, `stddev`, `samples`, `failures`, `ctx_min`, `ctx_max`, `verified`, `objective`
+`model use` and `model bench` consume those row-level settings directly.
 
-`model use` and `model bench` automatically consume matching profiles.
+`model bench` checks only the row-level `autotuned` flag:
 
-`model list`/`model scan` show `pending` when no profile exists yet, and show
-the saved optimal settings after autotune has completed.
+- `autotuned=no`: run autotune for that model before benchmarking
+- `autotuned=yes`: benchmark directly without auto-retune
+
+`model list`/`model scan` show `pending` when no autotune has been saved yet, and show the saved optimal settings after autotune completes.
 
 ## OpenClaw ↔ LLM Bridge
 

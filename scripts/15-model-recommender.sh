@@ -3,7 +3,7 @@
 # ─── Module: 15-model-recommender ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 15. MODEL RECOMMENDER
 # ==============================================================================
@@ -68,7 +68,7 @@ function model-recommend() {
     #   +2 for architecture match (qwen/llama for reasoning)
     #   +1 for high TPS (>30)
     # Only show models that fit within 80% of VRAM
-    while IFS='|' read -r num name file size arch quant layers gpu_layers ctx threads tps
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
     do
         # Skip comments and empty lines
         [[ -z "$num" || "$num" == "#"* ]] && continue
@@ -143,7 +143,7 @@ function model-recommend() {
 
         # TPS bonus for performance
         local tps_num="${tps% tps}"
-        if [[ "$tps_num" =~ ^[0-9]+$ ]] && (( tps_num > 30 ))
+        if [[ "$tps_num" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v v="$tps_num" 'BEGIN { exit !(v > 30) }'
         then
             ((score+=1))
             reason="${reason}${reason:+, }high-tps"

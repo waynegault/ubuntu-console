@@ -111,19 +111,17 @@ setup() {
 }
 
 @test "integration: autotune profile helpers exist" {
-    declare -f __llm_autotune_profile_get >/dev/null 2>&1
-    declare -f __llm_autotune_profile_best_for_model >/dev/null 2>&1
     declare -f __llm_autotune_profile_save >/dev/null 2>&1
     declare -f __llm_median_from_list >/dev/null 2>&1
     declare -f __llm_stddev_from_list >/dev/null 2>&1
 }
 
-@test "integration: __model_bench auto-runs autotune when profile missing" {
+@test "integration: __model_bench auto-runs autotune when row autotuned=no" {
     local fn_src
     fn_src=$(declare -f __model_bench 2>/dev/null)
 
-    [[ "$fn_src" == *"__llm_autotune_profile_best_for_model"* ]]
-    [[ "$fn_src" == *"No autotune profile"* ]]
+    [[ "$fn_src" == *"__llm_autotune_done_for_model"* ]]
+    [[ "$fn_src" == *"No prior autotune flag"* ]]
     [[ "$fn_src" == *"__model_autotune"* ]]
     [[ "$fn_src" == *"FAIL_AUTOTUNE"* ]]
 }

@@ -45,7 +45,7 @@ while IFS='|' read -r pid ppid cmd; do
     if [[ "$ppid" == "1" ]] && [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"sleep"* ]]; then
         ORPHANS+=("$pid|$cmd")
     fi
-done < <(ps -eo pid,ppid,args --no-headers 2>/dev/null | grep 'sleep 86400' || true)
+done < <(ps -eo pid,ppid,args --no-headers 2>/dev/null | grep -E 'sleep (3600|86400)' || true)
 
 # 3. llama-server instances spawned by bench (have --no-mmap, no terminal)
 while IFS='|' read -r pid cmd; do
