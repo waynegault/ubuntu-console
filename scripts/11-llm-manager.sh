@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 43
+# Module Version: 44
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -104,7 +104,7 @@ function __require_llm() {
 # ---------------------------------------------------------------------------
 function __tac_cleanup_stale_locks() {
     # shellcheck disable=SC2034
-    local _c_lock _c_pid _c_kf _c_sp _c_my_pid
+    local _c_lock _c_pid _c_kf _c_sp _c_my_pid _c_ppid _c_cmd
 
     # bench lock + pid
     for _c_lock in /tmp/llm-bench.lock /tmp/llm-autotune.lock
@@ -144,7 +144,14 @@ function __tac_cleanup_stale_locks() {
     do
         if [[ "$_c_sp" =~ ^[0-9]+$ ]] && [[ "$_c_sp" != "$_c_my_pid" ]]
         then
-            kill -TERM "$_c_sp" 2>/dev/null || true
+            # Only kill true orphans. Live keepers can belong to an active
+            # model run in another shell.
+            _c_ppid=$(ps -o ppid= -p "$_c_sp" 2>/dev/null | tr -d '[:space:]')
+            _c_cmd=$(ps -o args= -p "$_c_sp" 2>/dev/null || true)
+            if [[ "$_c_ppid" == "1" ]] && [[ "$_c_cmd" == *"llm-stdin"* ]]
+            then
+                kill -TERM "$_c_sp" 2>/dev/null || true
+            fi
         fi
     done
 
@@ -156,7 +163,12 @@ function __tac_cleanup_stale_locks() {
         _c_pid=$(<"$_c_kf" 2>/dev/null || true)
         if [[ "$_c_pid" =~ ^[0-9]+$ ]]
         then
-            kill -TERM "$_c_pid" 2>/dev/null || true
+            _c_ppid=$(ps -o ppid= -p "$_c_pid" 2>/dev/null | tr -d '[:space:]')
+            _c_cmd=$(ps -o args= -p "$_c_pid" 2>/dev/null || true)
+            if [[ "$_c_ppid" == "1" ]] && [[ "$_c_cmd" == *"sleep 3600"* ]]
+            then
+                kill -TERM "$_c_pid" 2>/dev/null || true
+            fi
         fi
         rm -f "$_c_kf"
     done
@@ -418,49 +430,25 @@ function __llm_autotune_profile_save() {
 
     [[ -f "$profile_file" ]] || return 1
 
-    local updated=0
-    : > "${profile_file}.tmp" || return 1
-    local line
-    while IFS= read -r line
-    do
-        if [[ "$line" == "#|"* ]]
-        then
-            printf '%s\n' "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram" >> "${profile_file}.tmp" || return 1
-            continue
-        fi
+    __llm_registry_sync_state >/dev/null 2>&1 || true
 
-        if [[ -z "$line" ]]
-        then
-            continue
-        fi
-
-        local rnum rname rfile rsize rquant_cache rarch rgpu rctx rthreads rbatch rubatch rparallel rfit rbackend rmmap rtps rautotuned ris_default rin_vram
-        IFS='|' read -r rnum rname rfile rsize rquant_cache rarch rgpu rctx rthreads rbatch rubatch rparallel rfit rbackend rmmap rtps rautotuned ris_default rin_vram <<< "$line"
-
-        if [[ "$rnum" == "$model_num" ]]
-        then
-            rctx="$ctx_size"
-            rbatch="$batch"
-            rubatch="$ubatch"
-            rparallel="$parallel"
-            rfit="$fit_target_mb"
-            rbackend="$backend"
-            [[ -n "$rmmap" ]] || rmmap="auto"
-            rtps="$tps"
-            rautotuned="yes"
-            updated=1
-        fi
-
-        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
-            "$rnum" "$rname" "$rfile" "$rsize" "$rquant_cache" "$rarch" "$rgpu" "$rctx" "$rthreads" "$rbatch" "$rubatch" "$rparallel" "$rfit" "$rbackend" "${rmmap:-auto}" "$rtps" "${rautotuned:-no}" "${ris_default:-no}" "${rin_vram:-no}" >> "${profile_file}.tmp" || return 1
-    done < "$profile_file"
-
-    [[ "$updated" == "1" ]] || {
-        rm -f "${profile_file}.tmp"
-        return 1
-    }
-
-    mv "${profile_file}.tmp" "$profile_file" || return 1
+    # Update the model row in-place via awk: fields 8 (ctx), 10 (batch),
+    # 11 (ubatch), 12 (parallel), 13 (fit), 14 (backend), 16 (tps), 17 (autotuned).
+    awk -F'|' -v n="$model_num" \
+        -v ctx="$ctx_size" \
+        -v batch="$batch" \
+        -v ubatch="$ubatch" \
+        -v parallel="$parallel" \
+        -v fit="$fit_target_mb" \
+        -v backend="$backend" \
+        -v tps_val="$tps" \
+        'BEGIN{OFS="|"} {
+            if ($1 == n) {
+                $8 = ctx; $10 = batch; $11 = ubatch; $12 = parallel
+                $13 = fit; $14 = backend; $16 = tps_val; $17 = "yes"
+            }
+            print
+        }' "$profile_file" > "${profile_file}.tmp" && mv "${profile_file}.tmp" "$profile_file"
 }
 
 # ---------------------------------------------------------------------------
@@ -2709,7 +2697,7 @@ function __model_autotune() {
     [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
 
     local model_bytes=0
-    model_bytes=$(stat --format=%s "$LLAMA_MODEL_DIR/$name" 2>/dev/null || echo 0)
+    model_bytes=$(stat --format=%s "$LLAMA_MODEL_DIR/$file" 2>/dev/null || echo 0)
 
     local -a pruned_combos=()
     local _pc
@@ -3578,10 +3566,11 @@ function __model_bench() {
     local __bench_cleaned=0
     # shellcheck disable=SC2317  # called indirectly via trap
     __bench_cleanup() {
+        local _exit_code=$?
         if (( __bench_cleaned == 1 ))
         then
             # Preserve original exit code from first call.
-            return
+            return "$_exit_code"
         fi
         __bench_cleaned=1
         # Kill any subprocesses we spawned
@@ -3602,10 +3591,6 @@ function __model_bench() {
             exec {bench_lock_fd}>&- 2>/dev/null || true
         fi
         rm -f "$bench_lock_file"
-        # Also clean any stray autotune locks we may have inherited
-        rm -f "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
-        # Preserve original exit code from the context that triggered the trap
-        local _exit_code=$?
         # shellcheck disable=SC2086
         return $_exit_code
     }
