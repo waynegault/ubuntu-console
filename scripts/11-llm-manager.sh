@@ -3785,10 +3785,12 @@ function __model_bench() {
         [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")
         b_tps+=("$tps")
         __model_stop 2>/dev/null
-        if (( _bench_safe_overrides == 1 ))
-        then
-            unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
-        fi
+        # Always clean up any leaked overrides between model iterations.
+        # LLAMA_GPU_LAYERS etc. may have been set by a previous model's safe
+        # override block and persist into the next model if that model doesn't
+        # enter the override block._bench_safe_overrides only tracks whether
+        # //WE// set them, but another iteration may have set them earlier.
+        unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
         sleep 1
     done
     unset __BENCH_MODE
