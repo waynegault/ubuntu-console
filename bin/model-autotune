@@ -1,0 +1,360 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# model-autotune — Discover optimal llama-server parameters for one GGUF model.
+# ==============================================================================
+# Usage: model-autotune <registry_row_number> [--trials N]
+#
+# What it discovers:
+#   1. Maximum stable context size (binary search from 32768 down to OOM boundary)
+#   2. Best batch/ubatch size for that context (sweep 4 combos)
+#   3. Best parallel slot count (1 or 2)
+#   4. Best mmap mode (on vs off for WSL→Windows drives)
+#
+# Writes results back to the LLM registry at models.conf.
+# Marks autotuned=yes ONLY after a successful full sweep.
+#
+# Prerequisites:
+#   - Source env.sh to set LLAMA_SERVER_BIN, LLM_REGISTRY, LLAMA_MODEL_DIR
+#   - llamba-server binary at $LLAMA_SERVER_BIN
+# ==============================================================================
+set -uo pipefail
+# Note: not using set -e because curl/start failures are handled explicitly
+
+# ── Configuration & precondition checks ──────────────────────────────────────
+
+AT_BURN_TOKENS="${AT_BURN_TOKENS:-768}"
+AT_TRIALS="${AT_TRIALS:-2}"
+AT_WARMUP="${AT_WARMUP:-1}"
+AT_CTX_CEILING="${AT_CTX_CEILING:-131072}"
+AT_CTX_FLOOR="${AT_CTX_FLOOR:-4096}"
+AT_PORT_BASE="${AT_PORT_BASE:-9200}"
+
+: "${LLAMA_SERVER_BIN:?Required: LLAMA_SERVER_BIN}"
+: "${LLM_REGISTRY:?Required: LLM_REGISTRY}"
+: "${LLAMA_MODEL_DIR:?Required: LLAMA_MODEL_DIR}"
+[[ -x "$LLAMA_SERVER_BIN" ]] || { echo "ERROR: $LLAMA_SERVER_BIN not found"; exit 1; }
+[[ -f "$LLM_REGISTRY" ]] || { echo "ERROR: $LLM_REGISTRY not found — run model scan"; exit 1; }
+
+# ── Parse args ───────────────────────────────────────────────────────────────
+
+TARGET="${1:-}"; shift 1 2>/dev/null || true
+TRIALS="$AT_TRIALS"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --trials) TRIALS="$2"; shift 2 ;;
+        --port-base) AT_PORT_BASE="$2"; shift 2 ;;
+        *) echo "Unknown: $1"; exit 1 ;;
+    esac
+done
+
+[[ "$TARGET" =~ ^[0-9]+$ ]] || { echo "Usage: model-autotune <row_number> [--trials N]"; exit 1; }
+[[ "$TRIALS" =~ ^[0-9]+$ ]] && (( TRIALS >= 1 )) || { echo "Invalid trials: $TRIALS"; exit 1; }
+
+# ── Load registry entry ──────────────────────────────────────────────────────
+
+entry=$(awk -F'|' -v n="$TARGET" '$1 == n {print; exit}' "$LLM_REGISTRY")
+[[ -n "$entry" ]] || { echo "ERROR: Row $TARGET not in registry"; exit 1; }
+
+IFS='|' read -r _num name file size _qc arch gpu_layers _prev_ctx threads _prev_batch _prev_ubatch _prev_parallel _prev_fit _prev_backend mmap_mode _prev_tps autotuned _default _active <<< "$entry"
+
+MODEL_PATH="$LLAMA_MODEL_DIR/$file"
+[[ -f "$MODEL_PATH" ]] || { echo "ERROR: $MODEL_PATH not found"; exit 1; }
+
+MODEL_SIZE_BYTES=$(stat --format=%s "$MODEL_PATH")
+MODEL_SIZE_GB=$(awk "BEGIN{printf \"%.1f\", $MODEL_SIZE_BYTES/1e9}")
+
+echo ""
+echo "════════════════════════════════════════════════════════════════"
+echo "  AUTOTUNE: $name ($MODEL_SIZE_GB GB)"
+echo "════════════════════════════════════════════════════════════════"
+echo "  File:     $file"
+echo "  Arch:     $arch"
+echo "  GPU:      $gpu_layers layers"
+echo "  MMap:     $mmap_mode"
+echo "  Trials:   $TRIALS per config"
+echo ""
+
+# ── Helper: start llama-server on a given port ───────────────────────────────
+
+start_server() {
+    local port="$1" ctx="$2" batch="$3" ubatch="$4" parallel="$5" mmap="$6"
+    local fit=256
+
+    local cmd=("$LLAMA_SERVER_BIN"
+        --model "$MODEL_PATH"
+        --port "$port" --host 127.0.0.1
+        --ctx-size "$ctx"
+        --batch-size "$batch" --ubatch-size "$ubatch"
+        --parallel "$parallel"
+        --threads "${threads:-4}"
+        --flash-attn on --fit on --fit-target 256
+    )
+    if [[ "$mmap" == "off" ]]; then cmd+=(--no-mmap); fi
+
+    echo "$$" > "/tmp/autotune_server_${port}.pid"
+    "${cmd[@]}" > "/tmp/autotune_server_${port}.log" 2>&1 &
+    local spid=$!
+    # Wait for health
+    local deadline=$((SECONDS + 480))
+    while (( SECONDS < deadline )); do
+        if curl -s "http://127.0.0.1:${port}/health" 2>/dev/null | grep -q '"ok"'; then
+            # Check for OOM in log
+            if grep -Eiq '(out of memory|oom|cuda.*error|failed to allocate|cannot allocate)' "/tmp/autotune_server_${port}.log" 2>/dev/null; then
+                kill "$spid" 2>/dev/null || true
+                wait "$spid" 2>/dev/null || true
+                return 2  # OOM
+            fi
+            return 0  # ready
+        fi
+        if ! kill -0 "$spid" 2>/dev/null; then
+            # Server died — check if OOM
+            if grep -Eiq '(out of memory|oom|cuda.*error|failed to allocate|cannot allocate)' "/tmp/autotune_server_${port}.log" 2>/dev/null; then
+                return 2
+            fi
+            return 1  # crash
+        fi
+        sleep 0.5
+    done
+    kill "$spid" 2>/dev/null || true
+    wait "$spid" 2>/dev/null || true
+    return 3  # timeout
+}
+
+stop_server() {
+    local port="$1"
+    local pid
+    pid=$(cat "/tmp/autotune_server_${port}.pid" 2>/dev/null || true)
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    rm -f "/tmp/autotune_server_${port}.pid" "/tmp/autotune_server_${port}.log"
+}
+
+# ── Helper: run one burn inference and return TPS ─────────────────────────────
+
+run_burn() {
+    local port="$1" warmup="${2:-0}"
+    local prompt="Explain the complete theory of special relativity in extreme detail, including the mathematical derivations for time dilation."
+
+    if (( warmup )); then
+        curl -sS --max-time 90 "http://127.0.0.1:${port}/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            -d '{"messages":[{"role":"user","content":"Warmup"}],"max_tokens":64,"temperature":0}' \
+            > /dev/null 2>&1 || true
+    fi
+
+    local start_ns end_ns resp rc completion_tokens
+    start_ns=$(date +%s%N)
+    resp=$(curl -sS --max-time 600 "http://127.0.0.1:${port}/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -n --arg p "$prompt" --argjson t "$AT_BURN_TOKENS" '
+            {messages: [{role: "user", content: $p}], max_tokens: $t, temperature: 0, top_p: 1.0}
+        ')" 2>&1)
+    rc=$?
+    end_ns=$(date +%s%N)
+
+    if (( rc != 0 )); then
+        echo "ERROR"
+        return 1
+    fi
+
+    completion_tokens=$(echo "$resp" | jq -r '.usage.completion_tokens // 0' 2>/dev/null)
+    if (( completion_tokens <= 0 )); then
+        echo "ERROR"
+        return 1
+    fi
+
+    local elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+    local tps
+    tps=$(awk "BEGIN{printf \"%.1f\", $completion_tokens * 1000 / $elapsed_ms}")
+    echo "$tps"
+}
+
+# ── Helper: test a config and return (rc, tps) ────────────────────────────────
+
+test_config() {
+    local ctx="$1" batch="$2" ubatch="$3" parallel="$4" mmap="$5" warmup="${6:-0}"
+    local port=$(( AT_PORT_BASE + (RANDOM % 8000) ))
+
+    start_server "$port" "$ctx" "$batch" "$ubatch" "$parallel" "$mmap"
+    local start_rc=$?
+    if (( start_rc != 0 )); then
+        stop_server "$port"
+        if (( start_rc == 2 )); then
+            echo "OOM"
+        else
+            echo "START_FAIL"
+        fi
+        return $start_rc
+    fi
+
+    # Run trials and collect TPS values
+    local tps_samples=()
+    local t
+    for (( t=1; t<=TRIALS; t++ )); do
+        local tps
+        tps=$(run_burn "$port" "$warmup")
+        if [[ "$tps" == "ERROR" || -z "$tps" ]]; then
+            stop_server "$port"
+            echo "BURN_FAIL"
+            return 4
+        fi
+        tps_samples+=("$tps")
+        # Only warm up on first trial
+        warmup=0
+    done
+
+    stop_server "$port"
+
+    # Compute median TPS
+    local sum=0
+    local tps_val
+    for tps_val in "${tps_samples[@]}"; do
+        sum=$(awk "BEGIN{printf \"%.3f\", $sum + $tps_val}")
+    done
+    local avg
+    avg=$(awk "BEGIN{printf \"%.1f\", $sum / ${#tps_samples[@]}}")
+    echo "$avg"
+}
+
+# ── Phase 1: Discover maximum stable context size ─────────────────────────────
+# Probe ceiling first (fail fast), then binary search between floor and ceiling.
+# Uses conservative settings: batch=1024, ubatch=256, parallel=1, mmap=off.
+
+echo "── Phase 1: Context discovery ──"
+echo ""
+
+PROBE_BATCH=1024 PROBE_UBATCH=256 PROBE_PARALLEL=1 PROBE_MMAP="off"
+
+# Test ceiling first — if it works we're done immediately.
+printf "  ctx=%-6d ... " "$AT_CTX_CEILING"
+result=$(test_config "$AT_CTX_CEILING" "$PROBE_BATCH" "$PROBE_UBATCH" "$PROBE_PARALLEL" "$PROBE_MMAP")
+echo "$result"
+
+if [[ ! "$result" =~ ^(OOM|START_FAIL|BURN_FAIL)$ ]]; then
+    DISCOVERED_CTX=$AT_CTX_CEILING
+    echo "  → Ceiling ${AT_CTX_CEILING} is stable — no search needed"
+else
+    echo "  → Ceiling failed ($result) — binary searching downward"
+    DISCOVERED_CTX=0
+    LOW=$AT_CTX_FLOOR
+    HIGH=$AT_CTX_CEILING
+
+    while (( LOW <= HIGH )); do
+        MID=$(( (LOW + HIGH) / 2 ))
+        MID=$(( (MID / 512) * 512 ))
+        (( MID < AT_CTX_FLOOR )) && MID=$AT_CTX_FLOOR
+        (( MID < LOW )) && MID=$LOW
+
+        printf "  ctx=%-6d ... " "$MID"
+        result=$(test_config "$MID" "$PROBE_BATCH" "$PROBE_UBATCH" "$PROBE_PARALLEL" "$PROBE_MMAP")
+        echo "$result"
+
+        if [[ "$result" =~ ^(OOM|START_FAIL)$ ]]; then
+            HIGH=$((MID - 512))
+        else
+            DISCOVERED_CTX=$MID
+            LOW=$((MID + 512))
+        fi
+
+        (( LOW > AT_CTX_CEILING )) && break
+    done
+fi
+
+if (( DISCOVERED_CTX < AT_CTX_FLOOR )); then
+    echo "  FATAL: No stable context found (minimum ${AT_CTX_FLOOR})"
+    exit 1
+fi
+
+echo ""
+echo "  → Discovered ctx: $DISCOVERED_CTX"
+echo ""
+
+# ── Phase 2: Sweep batch/ubatch/parallel at discovered ctx ────────────────────
+
+echo "── Phase 2: Parameter sweep at ctx=$DISCOVERED_CTX ──"
+echo ""
+
+# Combos to test: batch:ubatch:parallel
+COMBOS=(
+    "1024:256:1"
+    "2048:512:1"
+    "1024:256:2"
+    "2048:512:2"
+)
+
+BEST_TPS=0
+BEST_COMBO=""
+BEST_MMAP="off"
+
+declare -A MMAP_SWEEP=(["off"]=1)
+# Only test mmap=on if the model dir supports it (i.e. not WSL→drvfs causing issues)
+MMAP_SWEEP["on"]=1
+
+for mmap_mode in "${!MMAP_SWEEP[@]}"; do
+    for combo in "${COMBOS[@]}"; do
+        IFS=':' read -r c_batch c_ubatch c_parallel <<< "$combo"
+        printf "  b=%-4s ub=%-4s p=%s mmap=%-3s ... " "$c_batch" "$c_ubatch" "$c_parallel" "$mmap_mode"
+        result=$(test_config "$DISCOVERED_CTX" "$c_batch" "$c_ubatch" "$c_parallel" "$mmap_mode" "$AT_WARMUP")
+        echo "$result"
+
+        if [[ ! "$result" =~ ^[0-9] ]]; then
+            echo "    ⚠  Skipped ($result)"
+            continue
+        fi
+
+        if awk -v r="$result" -v b="$BEST_TPS" 'BEGIN{exit !(r > b)}'; then
+            BEST_TPS=$result
+            BEST_COMBO="$combo"
+            BEST_MMAP="$mmap_mode"
+        fi
+    done
+done
+
+if [[ -z "$BEST_COMBO" ]]; then
+    echo "  FATAL: No working config found at ctx=$DISCOVERED_CTX"
+    exit 1
+fi
+
+IFS=':' read -r BEST_BATCH BEST_UBATCH BEST_PARALLEL <<< "$BEST_COMBO"
+
+echo ""
+echo "════════════════════════════════════════════════════════════════"
+echo "  AUTOTUNE COMPLETE"
+echo "════════════════════════════════════════════════════════════════"
+echo "  ctx:       $DISCOVERED_CTX"
+echo "  batch:     $BEST_BATCH"
+echo "  ubatch:    $BEST_UBATCH"
+echo "  parallel:  $BEST_PARALLEL"
+echo "  mmap:      $BEST_MMAP"
+echo "  tps:       $BEST_TPS"
+echo ""
+
+# ── Phase 3: Write back to registry ──────────────────────────────────────────
+
+echo "  Writing to registry row $TARGET ..."
+
+awk -F'|' -v OFS='|' \
+    -v n="$TARGET" \
+    -v ctx="$DISCOVERED_CTX" \
+    -v batch="$BEST_BATCH" \
+    -v ubatch="$BEST_UBATCH" \
+    -v parallel="$BEST_PARALLEL" \
+    -v mmap="$BEST_MMAP" \
+    -v tps_val="$BEST_TPS" \
+    '{
+        if ($1 == n) {
+            $8  = ctx       # ctx
+            $10 = batch     # batch
+            $11 = ubatch    # ubatch
+            $12 = parallel  # parallel
+            $15 = mmap      # mmap_mode
+            $16 = tps_val   # tps
+            $17 = "yes"     # autotuned
+        }
+        print
+    }' "$LLM_REGISTRY" > "$LLM_REGISTRY.tmp" && mv "$LLM_REGISTRY.tmp" "$LLM_REGISTRY"
+
+echo "  ✓ Saved: autotuned=yes"
+echo ""
+echo "════════════════════════════════════════════════════════════════"

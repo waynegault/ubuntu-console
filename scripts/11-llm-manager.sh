@@ -3909,7 +3909,7 @@ function __model_bench() {
                 then
                     _bench_autotune_args+=("--quick")
                 fi
-                if ! __model_autotune "${b_num[$i]}" "${_bench_autotune_args[@]}"
+                if ! python3 "${HOME}/ubuntu-console/bin/model-autotune.py" "${b_num[$i]}" --trials "$bench_autotune_trials"
                 then
                     # Clear any lifted/safe overrides before skipping this model so
                     # later iterations do not inherit a failed model's bench state.
