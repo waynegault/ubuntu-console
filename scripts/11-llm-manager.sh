@@ -3833,6 +3833,7 @@ function __model_bench() {
         then
             flock -u "$bench_lock_fd" 2>/dev/null || true
             exec {bench_lock_fd}>&-
+            rm -f "$bench_lock_file"
         fi
         __bench_restore_traps
         return 1
@@ -4019,6 +4020,7 @@ function __model_bench() {
     then
         flock -u "$bench_lock_fd" 2>/dev/null || true
         exec {bench_lock_fd}>&-
+        rm -f "$bench_lock_file"
     fi
     __bench_restore_traps
     __tac_footer
