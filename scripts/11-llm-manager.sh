@@ -3523,12 +3523,17 @@ function __bench_run_with_timeout() {
 
     if (( _is_shell_func == 1 ))
     then
+        local _bench_profile_path="${TACTICAL_PROFILE_PATH:-}"
+        if [[ -z "$_bench_profile_path" || ! -f "$_bench_profile_path" ]]
+        then
+            _bench_profile_path="${TACTICAL_REPO_ROOT:-}/env.sh"
+        fi
         # Shell functions cannot be exec'd by setsid directly.
         # Run them in a dedicated shell process-group when available.
         if command -v setsid >/dev/null 2>&1
         then
             declare -fx "$1" 2>/dev/null || true
-            setsid bash -lc "source \"\$1\" >/dev/null 2>&1 || true; shift; \"\$@\"" _ "$TACTICAL_PROFILE_PATH" "$@" &
+            setsid bash -lc '[[ -n "$1" && -f "$1" ]] && source "$1" >/dev/null 2>&1 || true; shift; "$@"' _ "$_bench_profile_path" "$@" &
         else
             "$@" &
         fi
@@ -3869,8 +3874,8 @@ function __model_bench() {
         # Timeout guard: force-bound full model run (__model_use + burn).
         local bench_model_timeout="${LLM_BENCH_MODEL_TIMEOUT:-300}"
         local bench_model_rc=0
-        __bench_run_with_timeout "$bench_model_timeout" __bench_run_single_model "${b_num[$i]}"
-        bench_model_rc=$?
+        # Use || to capture non-zero exit codes safely under set -e.
+        __bench_run_with_timeout "$bench_model_timeout" __bench_run_single_model "${b_num[$i]}" || bench_model_rc=$?
         if [[ "${__BENCH_TIMEOUT_LAST_PID:-}" =~ ^[0-9]+$ ]]
         then
             bench_cleanup_spawned_pids+=("$__BENCH_TIMEOUT_LAST_PID")

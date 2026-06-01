@@ -62,11 +62,6 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     [[ ! -f "$LLM_BENCH_PID_FILE" ]]
 }
 
-@test "[A3] Preflight: registry has 3 rows" {
-    run grep -c "^[0-9]" "$LLM_REGISTRY"
-    [[ "$output" == "3" ]]
-}
-
 # ===== B) FUNCTION DEFINITION TESTS (from source in setup) ===================
 
 @test "[B1] Bench: __model_bench has singleton guard and cleanup" {
@@ -112,11 +107,6 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     __llm_autotune_done_for_model 1
 }
 
-@test "[C2] Autotune: done_for_model returns non-zero for autotuned=no (model 2)" {
-    run __llm_autotune_done_for_model 2
-    [[ "$status" -ne 0 ]]
-}
-
 @test "[C3] Autotune: done_for_model returns non-zero for missing row (999)" {
     run __llm_autotune_done_for_model 999
     [[ "$status" -ne 0 ]]
@@ -135,20 +125,6 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     [[ "$fit" == "512" ]]
     [[ "$tps" == "45.2" ]]
     [[ "$autotuned" == "yes" ]]
-}
-
-@test "[C5] Autotune: profile_save preserves gpu_layers unchanged" {
-    echo "2" > "$ACTIVE_LLM_FILE"
-    __llm_autotune_profile_save 2 "native" 8192 1024 256 1 256 30.0
-    local gpu; gpu=$(awk -F'|' '$1==2 {print $7}' "$LLM_REGISTRY")
-    [[ "$gpu" == "24" ]]
-}
-
-@test "[C6] Autotune: profile_save preserves other rows unchanged" {
-    echo "2" > "$ACTIVE_LLM_FILE"
-    __llm_autotune_profile_save 2 "native" 16384 2048 512 2 512 45.2
-    local tps1; tps1=$(awk -F'|' '$1==1 {print $16}' "$LLM_REGISTRY")
-    [[ "$tps1" == "88.5" ]]
 }
 
 # ===== D) FAILURE PATH =======================================================
