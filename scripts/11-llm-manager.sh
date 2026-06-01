@@ -405,19 +405,36 @@ function __llm_backend_normalize() {
 }
 
 # ---------------------------------------------------------------------------
-# __llm_autotune_done_for_model — Check flat autotune flag column.
-# models.conf schema (v37): column 17 stores yes/no.
-# @returns 0 when autotuned=yes, 1 otherwise.
+# __llm_autotune_done_for_model — Check autotune status for a model/backend.
+# models.conf schema (v37): column 17 stores yes/no, column 14 stores backend.
+# @returns 0 when autotuned=yes for the requested backend, 1 otherwise.
 # ---------------------------------------------------------------------------
 function __llm_autotune_done_for_model() {
     local model_num="${1:-}"
+    local requested_backend="${2:-}"
     [[ "$model_num" =~ ^[0-9]+$ ]] || return 1
 
-    # Awk exits 0 if the entry exists AND autotuned=yes, 1 if not found or !=yes.
+    if [[ -n "$requested_backend" ]]
+    then
+        requested_backend=$(__llm_backend_normalize "$requested_backend")
+    fi
+
+    # Awk exits 0 if the entry exists AND autotuned=yes for the requested
+    # backend, 1 if not found or not yet tuned for that runtime.
     # Default awk exit code is 0 (pattern never matched), so we must force
     # exit 1 when the model row doesn't exist at all.
-    awk -F'|' -v n="$model_num" '
-        $1==n {found=1; exit !($17=="yes")}
+    awk -F'|' -v n="$model_num" -v want_backend="$requested_backend" '
+        function norm_backend(raw) {
+            if (raw == "native" || raw == "binary" || raw == "llama-server") return "native"
+            if (raw == "python" || raw == "llama-cpp-python" || raw == "module" || raw == "") return "python"
+            return raw
+        }
+        $1==n {
+            found=1
+            row_backend=norm_backend($14)
+            if ($17 == "yes" && (want_backend == "" || row_backend == want_backend)) exit 0
+            exit 1
+        }
         END   {if (!found) exit 1}
     ' "$LLM_REGISTRY" 2>/dev/null
 }
@@ -3127,6 +3144,7 @@ function __model_autotune() {
         done
     done
 
+    local save_ok=1
     if [[ -n "$best_combo" ]]
     then
         IFS=':' read -r best_batch best_ubatch best_parallel best_fit <<< "$best_combo"
@@ -3155,18 +3173,26 @@ function __model_autotune() {
         export LLM_AUTOTUNE_LAST_VERIFIED="$verified"
         export LLM_AUTOTUNE_OBJECTIVE="no-oom>max-ctx>max-tps"
 
-        __llm_autotune_profile_save "$num" "$backend" "$save_ctx" "$best_batch" "$best_ubatch" "$best_parallel" "$best_fit" "$best_tps"
-        # Keep future model use/bench aligned to the selected context when this
-        # autotune run chose the context automatically.
-        if [[ -z "$tune_ctx" && "$save_ctx" =~ ^[0-9]+$ ]]
+        if ! __llm_autotune_profile_save "$num" "$backend" "$save_ctx" "$best_batch" "$best_ubatch" "$best_parallel" "$best_fit" "$best_tps"
         then
-            __save_model_ctx "$num" "$save_ctx"
+            save_ok=0
+            __tac_info "Autotune" "[Failed to save winner to models.conf]" "$C_Error"
+        else
+            # Keep future model use/bench aligned to the selected context when this
+            # autotune run chose the context automatically.
+            if [[ -z "$tune_ctx" && "$save_ctx" =~ ^[0-9]+$ ]]
+            then
+                __save_model_ctx "$num" "$save_ctx"
+            fi
         fi
         __tac_info "Winner" "[b ${best_batch}/${best_ubatch}, p ${best_parallel}, fit=${best_fit} MB, tps=${best_tps}]" "$C_Success"
         __tac_info "Winner Score" "[${best_score:-$best_tps} (stddev=${best_stddev:-0})]" "$C_Success"
         __tac_info "Winner Ctx" "[${save_ctx}]" "$C_Success"
         __tac_info "Verified" "[$([[ "$verified" == "1" ]] && echo yes || echo no)]" "$C_Dim"
-        __tac_info "Saved" "[models.conf row updated]" "$C_Dim"
+        if (( save_ok == 1 ))
+        then
+            __tac_info "Saved" "[models.conf row updated]" "$C_Dim"
+        fi
     else
         __tac_info "Autotune" "[No stable configuration found]" "$C_Error"
     fi
@@ -3212,7 +3238,7 @@ function __model_autotune() {
     then
         return "$__autotune_interrupted"
     fi
-    [[ -n "$best_combo" ]]
+    [[ -n "$best_combo" ]] && (( save_ok == 1 ))
 }
 
 # ---------------------------------------------------------------------------
@@ -3848,7 +3874,7 @@ function __model_bench() {
         _bench_quant_rating=$(__llm_quant_rating "${b_file[$i]}")
 
         # Auto-autotune only if this model/backend has never been autotuned.
-        if ! __llm_autotune_done_for_model "${b_num[$i]}"
+        if ! __llm_autotune_done_for_model "${b_num[$i]}" "$bench_backend"
         then
             if [[ "$_bench_quant_rating" == "discouraged" && "${LLM_ALLOW_AUTOTUNE_DISCOURAGED:-0}" != "1" ]]
             then
@@ -3873,6 +3899,9 @@ function __model_bench() {
                 fi
                 if ! __model_autotune "${b_num[$i]}" "${_bench_autotune_args[@]}"
                 then
+                    # Clear any lifted/safe overrides before skipping this model so
+                    # later iterations do not inherit a failed model's bench state.
+                    unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
                     unset LLM_AUTOTUNE_RESTORE_PREV
                     unset LLM_AUTOTUNE_SKIP_LOCK
                     __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} - skipping benchmark]" "$C_Error"
