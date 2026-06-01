@@ -3535,11 +3535,11 @@ function __bench_run_with_timeout() {
                 sleep 1
                 kill -KILL -- "$child_pid" 2>/dev/null || true
             fi
-            _child_pids=$(ps -o pid= --ppid $$ 2>/dev/null | tr -d "[:space:]")
-            if [[ -n "$_child_pids" ]]
-            then
-                kill -TERM -- $_child_pids 2>/dev/null || true
-            fi
+            while IFS= read -r _cpid
+            do
+                [[ "$_cpid" =~ ^[0-9]+$ ]] || continue
+                kill -TERM -- "$_cpid" 2>/dev/null || true
+            done < <(ps -o pid= --ppid $$ 2>/dev/null)
         }
         trap __bench_timeout_cleanup EXIT INT TERM
         [[ -n "$1" && -f "$1" ]] && source "$1" >/dev/null 2>&1 || true
