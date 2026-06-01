@@ -3824,7 +3824,7 @@ function __model_bench() {
 
         local _bench_safe_overrides=0
         local _bench_min_free_vram_mb="${LLM_BENCH_MIN_FREE_VRAM_MB:-1200}"
-        local _bench_safe_ctx="${LLM_BENCH_SAFE_CTX:-8192}"
+        local _bench_safe_ctx="${LLM_BENCH_SAFE_CTX:-}"
         local _bench_free_vram_mb=0
         local _bench_smi
         _bench_smi=$(__resolve_smi 2>/dev/null || true)
@@ -3833,18 +3833,29 @@ function __model_bench() {
             _bench_free_vram_mb=$("$_bench_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         fi
         [[ "$_bench_min_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_min_free_vram_mb=256
-        [[ "$_bench_safe_ctx" =~ ^[0-9]+$ ]] || _bench_safe_ctx=8192
+        if [[ -n "$_bench_safe_ctx" ]] && [[ ! "$_bench_safe_ctx" =~ ^[0-9]+$ ]]
+        then
+            _bench_safe_ctx=""
+        fi
         [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_free_vram_mb=0
 
         if (( _bench_free_vram_mb > 0 && _bench_free_vram_mb < _bench_min_free_vram_mb ))
         then
             export LLAMA_GPU_LAYERS=0
-            export TAC_CTX_SIZE="$_bench_safe_ctx"
+            if [[ -n "$_bench_safe_ctx" ]]
+            then
+                export TAC_CTX_SIZE="$_bench_safe_ctx"
+            fi
             export LLAMA_BATCH_SIZE=512
             export LLAMA_UBATCH_SIZE=128
             export LLAMA_PARALLEL_SLOTS=1
             _bench_safe_overrides=1
-            __tac_info "Bench" "[Low free VRAM (${_bench_free_vram_mb} MiB) - applying safe overrides: ngl=0, ctx=${_bench_safe_ctx}, b=512/128, p=1]" "$C_Warning"
+            if [[ -n "$_bench_safe_ctx" ]]
+            then
+                __tac_info "Bench" "[Low free VRAM (${_bench_free_vram_mb} MiB) - applying safe overrides: ngl=0, ctx=${_bench_safe_ctx}, b=512/128, p=1]" "$C_Warning"
+            else
+                __tac_info "Bench" "[Low free VRAM (${_bench_free_vram_mb} MiB) - applying safe overrides: ngl=0, b=512/128, p=1]" "$C_Warning"
+            fi
         fi
 
         local _bench_quant_rating="unknown"
@@ -3890,7 +3901,10 @@ function __model_bench() {
                 if (( _bench_safe_overrides == 1 ))
                 then
                     export LLAMA_GPU_LAYERS=0
-                    export TAC_CTX_SIZE="$_bench_safe_ctx"
+                    if [[ -n "$_bench_safe_ctx" ]]
+                    then
+                        export TAC_CTX_SIZE="$_bench_safe_ctx"
+                    fi
                     export LLAMA_BATCH_SIZE=512
                     export LLAMA_UBATCH_SIZE=128
                     export LLAMA_PARALLEL_SLOTS=1
