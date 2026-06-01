@@ -2595,7 +2595,9 @@ function __model_autotune() {
                 shift 2
                 ;;
             *)
-                shift
+                __tac_info "Autotune" "[Unknown option '$1' - run 'model autotune --help']" "$C_Error"
+                __autotune_fail
+                return 1
                 ;;
         esac
     done
@@ -3184,10 +3186,11 @@ function __model_autotune() {
     unset LLM_AUTOTUNE_LAST_SCORE LLM_AUTOTUNE_LAST_STDDEV LLM_AUTOTUNE_LAST_SAMPLES
     unset LLM_AUTOTUNE_LAST_FAILURES LLM_AUTOTUNE_LAST_CTX_MIN LLM_AUTOTUNE_LAST_CTX_MAX
     unset LLM_AUTOTUNE_LAST_VERIFIED LLM_AUTOTUNE_OBJECTIVE
-    if [[ -n "$lock_fd" ]]
+    if [[ "$__autotune_lock_owned" == "1" && -n "$lock_fd" ]]
     then
         flock -u "$lock_fd" 2>/dev/null || true
         exec {lock_fd}>&-
+        rm -f "$lock_file"
     fi
 
     if [[ "${LLM_AUTOTUNE_RESTORE_PREV:-1}" == "1" ]] && [[ -n "$prev_model" ]] && [[ "$prev_model" =~ ^[0-9]+$ ]]
@@ -3522,6 +3525,30 @@ function __bench_run_with_timeout() {
         _is_shell_func=1
     fi
 
+    local _bench_shell_runner='
+        child_pid=""
+        __bench_timeout_cleanup() {
+            local _child_pids=""
+            if [[ -n "$child_pid" ]] && kill -0 "$child_pid" 2>/dev/null
+            then
+                kill -TERM -- "$child_pid" 2>/dev/null || true
+                sleep 1
+                kill -KILL -- "$child_pid" 2>/dev/null || true
+            fi
+            _child_pids=$(ps -o pid= --ppid $$ 2>/dev/null | tr -d "[:space:]")
+            if [[ -n "$_child_pids" ]]
+            then
+                kill -TERM -- $_child_pids 2>/dev/null || true
+            fi
+        }
+        trap __bench_timeout_cleanup EXIT INT TERM
+        [[ -n "$1" && -f "$1" ]] && source "$1" >/dev/null 2>&1 || true
+        shift
+        "$@" &
+        child_pid=$!
+        wait "$child_pid"
+    '
+
     if (( _is_shell_func == 1 ))
     then
         local _bench_profile_path="${TACTICAL_PROFILE_PATH:-}"
@@ -3534,9 +3561,9 @@ function __bench_run_with_timeout() {
         if command -v setsid >/dev/null 2>&1
         then
             declare -fx "$1" 2>/dev/null || true
-            setsid bash -lc '[[ -n "$1" && -f "$1" ]] && source "$1" >/dev/null 2>&1 || true; shift; "$@"' _ "$_bench_profile_path" "$@" &
+            setsid bash -lc "$_bench_shell_runner" _ "$_bench_profile_path" "$@" &
         else
-            "$@" &
+            bash -lc "$_bench_shell_runner" _ "$_bench_profile_path" "$@" &
         fi
     elif command -v setsid >/dev/null 2>&1
     then
