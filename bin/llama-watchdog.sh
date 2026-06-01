@@ -4,7 +4,7 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="2.5"  # Migrated restart path to llama-cpp-python server (v0.3.23).
+VERSION="2.6"  # Honor registry backend and preserve tuned restart parameters.
 set -euo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -107,6 +107,23 @@ resolve_type_k_value() {
     esac
 }
 
+normalize_backend_label() {
+    local raw="${1:-python}"
+    case "$raw" in
+        native|binary|llama-server|llama_server) printf '%s\n' "native" ;;
+        python|llama-cpp-python|module|"") printf '%s\n' "python" ;;
+        *) printf '%s\n' "python" ;;
+    esac
+}
+
+flash_attn_mode() {
+    case "${LLAMA_FLASH_ATTN:-true}" in
+        true|TRUE|1|yes|YES|on|ON) printf '%s\n' "on" ;;
+        false|FALSE|0|no|NO|off|OFF) printf '%s\n' "off" ;;
+        *) printf '%s\n' "auto" ;;
+    esac
+}
+
 # If no model was ever started, nothing to do
 if [[ ! -f "$ACTIVE_LLM_FILE" ]]
 then
@@ -148,9 +165,14 @@ then
     exit 1
 fi
 
+use_backend=$(normalize_backend_label "${_backend:-}")
 use_gpu="${gpu_layers:-0}"
 use_ctx="${ctx:-$LLAMA_CTX_SIZE}"
 use_threads="${threads:-$LLAMA_CPU_THREADS}"
+use_batch="${_batch:-1024}"
+use_ubatch="${_ubatch:-256}"
+use_parallel="${_parallel:-1}"
+use_fit_target="${_fit:-1024}"
 size_tenths=0
 if [[ "$size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
 then
@@ -163,14 +185,6 @@ pkill -u "$(id -un)" -f "$LLM_SERVER_PROC_PATTERN" 2>/dev/null || true
 pkill -u "$(id -un)" -f "llama-server" 2>/dev/null || true
 sleep 1
 
-resolved_python_bin=$(resolve_llm_python_bin || true)
-if [[ -z "$resolved_python_bin" ]]
-then
-    log "No compatible Python found with llama-cpp-python==${LLAMA_CPP_PYTHON_VERSION}"
-    exit 1
-fi
-LLM_SERVER_PYTHON_BIN="$resolved_python_bin"
-
 # Use the tuned values from the registry row when restarting. Fall back to
 # runtime defaults only if the registry entry is incomplete.
 [[ -n "${use_threads:-}" ]] || use_threads="${LLAMA_CPU_THREADS:-6}"
@@ -180,11 +194,55 @@ then
     use_gpu="${LLAMA_GPU_LAYERS:-24}"
 fi
 
-cmd=("$LLM_SERVER_PYTHON_BIN" "-m" "$LLM_SERVER_MODULE")
-cmd+=("--model" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
-cmd+=("--n_ctx" "$use_ctx" "--n_threads" "$use_threads" "--n_gpu_layers" "$use_gpu")
-cmd+=("--flash_attn" "$LLAMA_FLASH_ATTN" "--offload_kqv" "$LLAMA_OFFLOAD_KQV")
-cmd+=("--type_k" "$(resolve_type_k_value)")
+[[ "$use_batch" =~ ^[0-9]+$ ]] || use_batch=1024
+[[ "$use_ubatch" =~ ^[0-9]+$ ]] || use_ubatch=256
+[[ "$use_parallel" =~ ^[0-9]+$ ]] || use_parallel=1
+[[ "$use_fit_target" =~ ^[0-9]+$ ]] || use_fit_target=1024
+if (( use_ubatch > use_batch ))
+then
+    use_ubatch="$use_batch"
+fi
+
+cmd=()
+if [[ "$use_backend" == "native" ]]
+then
+    if [[ ! -x "$LLAMA_SERVER_BIN" ]]
+    then
+        log "Native llama-server binary not found: $LLAMA_SERVER_BIN"
+        exit 1
+    fi
+    local_kv_offload_flag="--kv-offload"
+    case "${LLAMA_OFFLOAD_KQV:-true}" in
+        false|FALSE|0|no|NO|off|OFF) local_kv_offload_flag="--no-kv-offload" ;;
+    esac
+
+    cmd=("$LLAMA_SERVER_BIN")
+    cmd+=("--model" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
+    cmd+=("--ctx-size" "$use_ctx")
+    cmd+=("--batch-size" "$use_batch" "--ubatch-size" "$use_ubatch")
+    cmd+=("--threads" "$use_threads" "--n-gpu-layers" "$use_gpu")
+    cmd+=("--fit" "on" "--fit-target" "$use_fit_target")
+    cmd+=("--flash-attn" "$(flash_attn_mode)")
+    cmd+=("$local_kv_offload_flag")
+    cmd+=("--cache-type-k" "${LLAMA_CACHE_TYPE_K:-q8_0}")
+    cmd+=("--parallel" "$use_parallel")
+else
+    resolved_python_bin=$(resolve_llm_python_bin || true)
+    if [[ -z "$resolved_python_bin" ]]
+    then
+        log "No compatible Python found with llama-cpp-python==${LLAMA_CPP_PYTHON_VERSION}"
+        exit 1
+    fi
+    LLM_SERVER_PYTHON_BIN="$resolved_python_bin"
+
+    cmd=("$LLM_SERVER_PYTHON_BIN" "-m" "$LLM_SERVER_MODULE")
+    cmd+=("--model" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
+    cmd+=("--n_ctx" "$use_ctx")
+    cmd+=("--n_batch" "$use_batch" "--n_ubatch" "$use_ubatch")
+    cmd+=("--n_threads" "$use_threads" "--n_gpu_layers" "$use_gpu")
+    cmd+=("--flash_attn" "$LLAMA_FLASH_ATTN" "--offload_kqv" "$LLAMA_OFFLOAD_KQV")
+    cmd+=("--type_k" "$(resolve_type_k_value)")
+fi
 
 nohup "${cmd[@]}" >> "$LLM_LOG_FILE" 2>&1 &
 

@@ -122,6 +122,96 @@ MOCK
     [[ "$output" == *"not found"* ]] || [[ "$status" -ne 0 ]] || true
 }
 
+@test "integration: watchdog restarts native backend with tuned native flags" {
+    local mock_bin="$TAC_TEST_TMPDIR/mock-bin-native"
+    local state_dir="$TAC_TEST_TMPDIR/native-state"
+    mkdir -p "$mock_bin" "$state_dir"
+
+    cat > "$mock_bin/curl" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "$*" == *"/health"* ]] || [[ "$*" == *"/v1/models"* ]]
+then
+    [[ -f "$WATCHDOG_TEST_STATE/healthy" ]] && exit 0
+    exit 22
+fi
+exit 22
+MOCK
+    chmod +x "$mock_bin/curl"
+
+    cat > "$LLAMA_SERVER_BIN" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$WATCHDOG_TEST_CMD_LOG"
+touch "$WATCHDOG_TEST_STATE/healthy"
+exit 0
+MOCK
+    chmod +x "$LLAMA_SERVER_BIN"
+
+    printf '%s\n' "1|TestModel|test.gguf|2.5G|Q4_K_M/q8_0|llama|7|8192|11|2048|512|3|1536|native|auto|0|yes|no|no" > "$LLM_REGISTRY"
+    echo "1" > "$ACTIVE_LLM_FILE"
+
+    run env PATH="$mock_bin:$PATH" \
+        WATCHDOG_TEST_STATE="$state_dir" \
+        WATCHDOG_TEST_CMD_LOG="$state_dir/cmd.log" \
+        "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ -f "$state_dir/cmd.log" ]]
+    local cmd_args
+    cmd_args=$(< "$state_dir/cmd.log")
+    [[ "$cmd_args" == *"--ctx-size 8192"* ]]
+    [[ "$cmd_args" == *"--batch-size 2048 --ubatch-size 512"* ]]
+    [[ "$cmd_args" == *"--parallel 3"* ]]
+    [[ "$cmd_args" == *"--fit-target 1536"* ]]
+}
+
+@test "integration: watchdog restarts python backend with tuned python flags" {
+    local mock_bin="$TAC_TEST_TMPDIR/mock-bin-python"
+    local state_dir="$TAC_TEST_TMPDIR/python-state"
+    local fake_python="$TAC_TEST_TMPDIR/fake-python"
+    mkdir -p "$mock_bin" "$state_dir"
+
+    cat > "$mock_bin/curl" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "$*" == *"/health"* ]] || [[ "$*" == *"/v1/models"* ]]
+then
+    [[ -f "$WATCHDOG_TEST_STATE/healthy" ]] && exit 0
+    exit 22
+fi
+exit 22
+MOCK
+    chmod +x "$mock_bin/curl"
+
+    cat > "$fake_python" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-" ]]
+then
+    exit 0
+fi
+printf '%s\n' "$*" > "$WATCHDOG_TEST_CMD_LOG"
+touch "$WATCHDOG_TEST_STATE/healthy"
+exit 0
+MOCK
+    chmod +x "$fake_python"
+
+    printf '%s\n' "1|TestModel|test.gguf|2.5G|Q4_K_M/q8_0|llama|5|6144|9|1536|384|2|1024|python|auto|0|yes|no|no" > "$LLM_REGISTRY"
+    echo "1" > "$ACTIVE_LLM_FILE"
+
+    run env PATH="$mock_bin:$PATH" \
+        WATCHDOG_TEST_STATE="$state_dir" \
+        WATCHDOG_TEST_CMD_LOG="$state_dir/cmd.log" \
+        LLM_SERVER_PYTHON_BIN="$fake_python" \
+        "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ -f "$state_dir/cmd.log" ]]
+    local cmd_args
+    cmd_args=$(< "$state_dir/cmd.log")
+    [[ "$cmd_args" == *"-m llama_cpp.server"* ]]
+    [[ "$cmd_args" == *"--n_ctx 6144"* ]]
+    [[ "$cmd_args" == *"--n_batch 1536 --n_ubatch 384"* ]]
+    [[ "$cmd_args" == *"--n_threads 9"* ]]
+}
+
 @test "integration: watchdog script has version" {
     run head -10 "$WATCHDOG_SCRIPT"
     

@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 47
+# Module Version: 49
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -2417,10 +2417,17 @@ function __model_use() {
         done
         rm -f /tmp/llm-stdin.*
 
-        local stdin_fifo
-        stdin_fifo=$(mktemp -u /tmp/llm-stdin.XXXXXX)
+        local stdin_fifo_dir
+        stdin_fifo_dir=$(mktemp -d /tmp/llm-stdin.XXXXXX)
+        if [[ -z "$stdin_fifo_dir" || ! -d "$stdin_fifo_dir" ]]
+        then
+            __tac_info "Status" "FAILED OR TIMEOUT - could not allocate stdin fifo directory" "$C_Error"
+            exit 1
+        fi
+        local stdin_fifo="$stdin_fifo_dir/stdin"
         if ! mkfifo "$stdin_fifo" 2>/dev/null
         then
+            rm -rf "$stdin_fifo_dir" 2>/dev/null || true
             __tac_info "Status" "FAILED OR TIMEOUT - could not create stdin fifo" "$C_Error"
             exit 1
         fi
@@ -2444,6 +2451,7 @@ function __model_use() {
             sleep 3600
             # If we reach here, we were orphaned — clean up
             rm -f "$stdin_fifo" "$stdin_keeper_pid_file" 2>/dev/null || true
+            rm -rf "$stdin_fifo_dir" 2>/dev/null || true
         } &
         local stdin_keeper_pid=$!
         # Write the ACTUAL keeper PID (from $!) to the PID file.
@@ -2462,6 +2470,7 @@ function __model_use() {
         kill "$stdin_keeper_pid" >/dev/null 2>&1 || true
         wait "$stdin_keeper_pid" 2>/dev/null || true
         rm -f "$stdin_fifo"
+        rm -rf "$stdin_fifo_dir" 2>/dev/null || true
         exit "$server_rc"
     ) &
     local model_shell_pid=$!
@@ -3551,7 +3560,8 @@ function __bench_run_with_timeout() {
         _is_shell_func=1
     fi
 
-    local _bench_shell_runner='
+    local _bench_shell_runner
+    _bench_shell_runner=$(cat <<'EOF'
         child_pid=""
         __bench_timeout_cleanup() {
             local _child_pids=""
@@ -3573,7 +3583,8 @@ function __bench_run_with_timeout() {
         "$@" &
         child_pid=$!
         wait "$child_pid"
-    '
+EOF
+    )
 
     if (( _is_shell_func == 1 ))
     then

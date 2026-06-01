@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 
 # ==============================================================================
@@ -116,7 +116,7 @@ fi
 #   ubatch       - Micro-batch size
 #   parallel     - Parallel slots
 #   fit_target_mb- Native server fit target margin in MiB
-#   backend      - Runtime backend (llama_server / llama_cpp)
+#   backend      - Runtime backend (native / python)
 #   mmap_mode    - Per-model mmap policy (auto|on|off)
 #   tps          - Last measured tokens/sec
 #   autotuned    - yes/no autotune completed flag
@@ -124,7 +124,7 @@ fi
 #   in_vram      - yes/no currently active-in-VRAM selector
 #
 # Example:
-#   1|Phi-4-mini|phi-4-mini.Q4_K_M.gguf|2.5G|Q4_K_M/q8_0|phi3|999|4096|12|1024|256|1|1024|llama_server|auto|45.2|yes|no|no
+#   1|Phi-4-mini|phi-4-mini.Q4_K_M.gguf|2.5G|Q4_K_M/q8_0|phi3|999|4096|12|1024|256|1|1024|native|auto|45.2|yes|no|no
 #
 # Used by: model scan/use/stop/bench, llama-watchdog.sh, dashboard
 # Registry on local ext4 to avoid 9P atomic-mv corruption on Windows drive.
