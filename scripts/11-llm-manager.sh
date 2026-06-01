@@ -3824,7 +3824,6 @@ function __model_bench() {
 
         local _bench_safe_overrides=0
         local _bench_min_free_vram_mb="${LLM_BENCH_MIN_FREE_VRAM_MB:-1200}"
-        local _bench_safe_ctx="${LLM_BENCH_SAFE_CTX:-}"
         local _bench_free_vram_mb=0
         local _bench_smi
         _bench_smi=$(__resolve_smi 2>/dev/null || true)
@@ -3833,29 +3832,16 @@ function __model_bench() {
             _bench_free_vram_mb=$("$_bench_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         fi
         [[ "$_bench_min_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_min_free_vram_mb=256
-        if [[ -n "$_bench_safe_ctx" ]] && [[ ! "$_bench_safe_ctx" =~ ^[0-9]+$ ]]
-        then
-            _bench_safe_ctx=""
-        fi
         [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_free_vram_mb=0
 
         if (( _bench_free_vram_mb > 0 && _bench_free_vram_mb < _bench_min_free_vram_mb ))
         then
             export LLAMA_GPU_LAYERS=0
-            if [[ -n "$_bench_safe_ctx" ]]
-            then
-                export TAC_CTX_SIZE="$_bench_safe_ctx"
-            fi
             export LLAMA_BATCH_SIZE=512
             export LLAMA_UBATCH_SIZE=128
             export LLAMA_PARALLEL_SLOTS=1
             _bench_safe_overrides=1
-            if [[ -n "$_bench_safe_ctx" ]]
-            then
-                __tac_info "Bench" "[Low free VRAM (${_bench_free_vram_mb} MiB) - applying safe overrides: ngl=0, ctx=${_bench_safe_ctx}, b=512/128, p=1]" "$C_Warning"
-            else
-                __tac_info "Bench" "[Low free VRAM (${_bench_free_vram_mb} MiB) - applying safe overrides: ngl=0, b=512/128, p=1]" "$C_Warning"
-            fi
+            __tac_info "Bench" "[Low free VRAM (${_bench_free_vram_mb} MiB) - applying safe overrides: ngl=0, b=512/128, p=1]" "$C_Warning"
         fi
 
         local _bench_quant_rating="unknown"
@@ -3901,10 +3887,6 @@ function __model_bench() {
                 if (( _bench_safe_overrides == 1 ))
                 then
                     export LLAMA_GPU_LAYERS=0
-                    if [[ -n "$_bench_safe_ctx" ]]
-                    then
-                        export TAC_CTX_SIZE="$_bench_safe_ctx"
-                    fi
                     export LLAMA_BATCH_SIZE=512
                     export LLAMA_UBATCH_SIZE=128
                     export LLAMA_PARALLEL_SLOTS=1
@@ -5148,7 +5130,23 @@ function burn() {
     fi
 
     local start_ns end_ns response curl_rc
-    local attempt=1 max_attempts=2
+    local transport_history=""
+    local transport_recovered=0
+    local attempt=1
+    local max_attempts="${LLM_BURN_MAX_ATTEMPTS:-}"
+    local retry_health_wait="${LLM_BURN_RETRY_HEALTH_WAIT:-30}"
+    if [[ ! "$max_attempts" =~ ^[0-9]+$ ]]
+    then
+        if [[ -n "${__BENCH_MODE:-}" ]]
+        then
+            max_attempts=4
+        else
+            max_attempts=3
+        fi
+    fi
+    (( max_attempts < 1 )) && max_attempts=1
+    [[ "$retry_health_wait" =~ ^[0-9]+$ ]] || retry_health_wait=30
+    (( retry_health_wait < 1 )) && retry_health_wait=1
     while true
     do
         start_ns=$(date +%s%N)
@@ -5158,21 +5156,57 @@ function burn() {
         curl_rc=$?
         end_ns=$(date +%s%N)
 
-        # Retry once for transient transport issues (e.g. brief server restart
-        # or socket reset) to improve benchmark fairness.
+        # Retry transient transport issues (e.g. brief server restart/socket
+        # reset) to improve benchmark fairness and reduce false negatives.
         if (( curl_rc != 0 && curl_rc != 28 && attempt < max_attempts ))
         then
+            [[ -n "$transport_history" ]] && transport_history+=","
+            transport_history+="$curl_rc"
             local _retry_msg
+            local _next_attempt=$(( attempt + 1 ))
             _retry_msg="${C_Dim}[API Retry]${C_Reset} Transport error (curl ${curl_rc}); "
-            _retry_msg+="waiting for health and retrying once..."
+            _retry_msg+="request ${attempt}/${max_attempts}; waiting up to ${retry_health_wait}s before retry ${_next_attempt}/${max_attempts}..."
             printf '%s\n' \
                 "$_retry_msg"
             local _rh
-            for (( _rh=0; _rh < 20; _rh++ ))
+            local _healthy=0
+            for (( _rh=0; _rh < retry_health_wait; _rh++ ))
             do
-                __llm_is_healthy && break
+                if __llm_is_healthy
+                then
+                    _healthy=1
+                    break
+                fi
                 sleep 1
             done
+
+            # If readiness never recovered during wait, attempt one active-model
+            # restart as auto-recovery before consuming remaining retries.
+            if (( _healthy == 0 ))
+            then
+                printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Server still unhealthy after ${retry_health_wait}s."
+
+                if (( transport_recovered == 0 )) && [[ "${LLM_BURN_AUTO_RECOVER:-1}" == "1" ]] \
+                    && [[ -n "${_burn_num:-}" && "${_burn_num:-}" =~ ^[0-9]+$ ]]
+                then
+                    printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Restarting active model #${_burn_num} after transport failure..."
+                    if __model_use "$_burn_num" >/tmp/burn_transport_recover_use.log 2>&1
+                    then
+                        local _rw
+                        for (( _rw=0; _rw < retry_health_wait; _rw++ ))
+                        do
+                            if __llm_is_healthy
+                            then
+                                transport_recovered=1
+                                printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Model recovered; retrying request."
+                                break
+                            fi
+                            sleep 1
+                        done
+                    fi
+                fi
+            fi
+
             attempt=$(( attempt + 1 ))
             continue
         fi
@@ -5213,7 +5247,9 @@ function burn() {
     fi
     if (( curl_rc != 0 ))
     then
-        printf '%s\n' "${C_Error}[API Transport Error]${C_Reset} curl exit ${curl_rc} while calling local server."
+        [[ -n "$transport_history" ]] && transport_history+=","
+        [[ -n "${curl_rc:-}" ]] && transport_history+="$curl_rc"
+        printf '%s\n' "${C_Error}[API Transport Error]${C_Reset} curl exit ${curl_rc} while calling local server (attempts: ${attempt}/${max_attempts}; rc history: ${transport_history:-$curl_rc})."
         return 1
     fi
 

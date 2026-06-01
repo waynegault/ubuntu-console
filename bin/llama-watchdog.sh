@@ -27,7 +27,7 @@ flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance
 LLM_PORT="${LLM_PORT:-8081}"
 ACTIVE_LLM_FILE="${ACTIVE_LLM_FILE:-/dev/shm/active_llm}"
 LLM_LOG_FILE="${LLM_LOG_FILE:-/dev/shm/llama-server.log}"
-LLM_REGISTRY="${LLM_REGISTRY:-/mnt/m/.llm/models.conf}"
+export LLM_REGISTRY="${LLM_REGISTRY:-$HOME/.llm/models.conf}"
 LLAMA_MODEL_DIR="${LLAMA_MODEL_DIR:-/mnt/m/active}"
 LLAMA_ROOT="${LLAMA_ROOT:-$HOME/llama.cpp}"
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-$LLAMA_ROOT/build/bin/llama-server}"
@@ -171,12 +171,12 @@ then
 fi
 LLM_SERVER_PYTHON_BIN="$resolved_python_bin"
 
-# Mandatory hardware tuning for i9-12900HK + RTX 3050 Ti 4GB.
-use_threads="${LLAMA_CPU_THREADS:-6}"
-use_ctx="${LLAMA_CTX_SIZE:-4096}"
-if (( use_gpu > 0 ))
+# Use the tuned values from the registry row when restarting. Fall back to
+# runtime defaults only if the registry entry is incomplete.
+[[ -n "${use_threads:-}" ]] || use_threads="${LLAMA_CPU_THREADS:-6}"
+[[ -n "${use_ctx:-}" ]] || use_ctx="${LLAMA_CTX_SIZE:-4096}"
+if [[ -z "${use_gpu:-}" ]]
 then
-    # Keep baseline offload conservative to stay under 4GB total VRAM usage.
     use_gpu="${LLAMA_GPU_LAYERS:-24}"
 fi
 

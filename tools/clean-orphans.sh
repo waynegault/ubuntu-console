@@ -1,4 +1,4 @@
-#!/home/linuxbrew/.linuxbrew/bin/bash
+#!/usr/bin/env bash
 # ==============================================================================
 # clean-orphans.sh — Kill orphaned model bench infrastructure.
 #

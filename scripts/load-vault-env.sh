@@ -128,3 +128,5 @@ unset -f _lve_cleanup
 
 # shellcheck disable=SC2317
 return 0 2>/dev/null || exit 0
+
+# end of file
