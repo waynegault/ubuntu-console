@@ -2673,6 +2673,7 @@ function __model_autotune() {
             __autotune_fail
             return 1
         fi
+        echo "$$" > "$lock_file"
         __autotune_lock_owned=1
     elif [[ "${LLM_AUTOTUNE_SKIP_LOCK:-0}" == "1" ]]
     then
