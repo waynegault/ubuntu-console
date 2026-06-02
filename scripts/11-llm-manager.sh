@@ -1713,6 +1713,7 @@ function __model_scan() {
     echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram" > "$tmpconf"
 
     local num=0
+    __tac_info "Reading" "files from $LLAMA_MODEL_DIR..." "$C_Dim"
     local gguf
     for gguf in "$LLAMA_MODEL_DIR"/*.gguf
     do
@@ -1723,7 +1724,6 @@ function __model_scan() {
         fbytes=$(stat --format=%s "$gguf" 2>/dev/null || stat -f%z "$gguf" 2>/dev/null)
         (( fbytes < 500000000 )) && continue
 
-        __tac_info "Reading" "${fname%.gguf}" "$C_Dim"
         local meta
         meta=$(__gguf_metadata "$gguf")
         local _mname march mblocks mctx mftype
@@ -1767,8 +1767,7 @@ function __model_scan() {
         _reg_line+="|${prev_batch}|${prev_ubatch}|${prev_parallel}|${prev_fit}|${prev_backend}|${prev_mmap}|${prev_tps}|${prev_autotuned}|${prev_default}|${prev_active}"
         echo "$_reg_line" >> "$tmpconf"
 
-        local __tac_msg="${_mname:-Model} (${size_gb}G, ${quant_cache}, ${mblocks}L ${ARROW_R} ${gpu_layers} GPU)"
-        __tac_info "  #${num}" "$__tac_msg" "$C_Success"
+        # Progress: not printing each model individually
     done
 
     if (( num == 0 ))
@@ -1778,6 +1777,7 @@ function __model_scan() {
         return 1
     fi
 
+    __tac_info "Found" "${num} models" "$C_Success"
     mv "$tmpconf" "$LLM_REGISTRY"
     if [[ -n "$old_registry_snapshot" ]]
     then
@@ -1935,11 +1935,12 @@ function __model_list() {
         return 0
     fi
 
-    # Human-readable output
-    printf "\n${C_Dim}  %-4s %-20s %-5s %-8s %-6s %-4s %-5s %-4s %-4s %-4s %-4s %-4s %-6s %-4s %-6s %-5s %-4s %-4s %-11s${C_Reset}\n" \
+    # Human-readable output — compute column widths dynamically
+    local _col_spec="%4s %28s %5s %9s %7s %4s %7s %4s %4s %4s %4s %4s %7s %5s %5s %5s %4s %4s %11s"
+    printf "\n${C_Dim}  ${_col_spec}${C_Reset}\n" \
         "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "MMAP" "TPS" "ATUNE" "DEF" "VRAM" "RATING"
     local _list_rule
-    printf -v _list_rule '%*s' $((UIWidth - 4)) ''
+    printf -v _list_rule '%*s' 144 ''
     _list_rule="${_list_rule// /${BOX_SL}}"
     printf "${C_Dim}  %s${C_Reset}\n" "$_list_rule"
 
@@ -1960,8 +1961,8 @@ function __model_list() {
             marker="* "
             color="$C_Highlight"
         fi
-        printf "${color}${marker}%-4s %-20s %-5s %-8s %-6s %-4s %-5s %-4s %-4s %-4s %-4s %-4s %-6s %-4s %-6s %-5s %-4s %-4s %-11s${C_Reset}\n" \
-            "$num" "${name:0:20}" "$size" "${quant_cache:0:8}" "${arch:0:6}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:6}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}"
+        printf "${color}${marker}${_col_spec}${C_Reset}\n" \
+            "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}"
     done < "$LLM_REGISTRY"
 
     local d_used_bytes d_total_bytes d_avail_bytes d_pct_n
