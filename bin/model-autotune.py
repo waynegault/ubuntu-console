@@ -427,6 +427,10 @@ def main() -> None:
                 _ctx_log.append(f"✓ {probe:,}")
                 step = max(2048, step + ceiling // 12)  # increase step
                 probe += step
+                # Clear VRAM between probes to avoid ghost allocation buildup
+                subprocess.run(["killall", "-9", "llama-server"],
+                               capture_output=True, timeout=5)
+                time.sleep(1)
             else:
                 _log("✗")
                 _ctx_log.append(f"✗ {probe:,}")
@@ -456,7 +460,6 @@ def main() -> None:
                         _ctx_log.append(f"    ✗ {_mid:,}")
                         _high = _mid - 512
                 break
-            _ = [time.sleep(0.3)]
     
     if discovered_ctx < floor:
         print(f"  FATAL: No stable context ≥ {floor}")
