@@ -3772,6 +3772,9 @@ function __model_bench() {
         local _prog_num="$(( i+1 ))"
         printf "\n\n%s── [%s/%s] %s (%s) ──%s\n" "$C_Highlight" "$_prog_num" "$_prog_total" "${b_name[$i]}" "${b_size[$i]}" "$C_Reset"
 
+        # Full VRAM cleanup BEFORE checking VRAM state
+        sudo /usr/local/bin/clear_vram.sh 2>/dev/null || true
+
         local _bench_safe_overrides=0
         local _bench_min_free_vram_mb="${LLM_BENCH_MIN_FREE_VRAM_MB:-1200}"
         local _bench_free_vram_mb=0
@@ -3787,7 +3790,8 @@ function __model_bench() {
         # Show free VRAM before each model
         if [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] && (( _bench_free_vram_mb > 0 )); then
             local _vram_color="$C_Success"
-            (( _bench_free_vram_mb < 1800 )) && _vram_color="$C_Warning"
+            (( _bench_free_vram_mb < 3000 )) && _vram_color="$C_Warning"
+            (( _bench_free_vram_mb < 1800 )) && _vram_color="$C_Error"
             printf "${C_Dim}  VRAM%s${_vram_color}%s${C_Reset}\n" " " "${_bench_free_vram_mb} MiB free"
         fi
 
@@ -3884,8 +3888,8 @@ function __model_bench() {
         [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")
         b_tps+=("$tps")
         __model_stop 2>/dev/null
-        # Full VRAM cleanup between model iterations (WSL2 ghost allocation)
-        sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
+        __tac_info "  VRAM" "clearing..." "$C_Dim"
+        sudo /usr/local/bin/clear_vram.sh 2>/dev/null || true
         # Always clean up any leaked overrides between model iterations.
         # LLAMA_GPU_LAYERS etc. may have been set by a previous model's safe
         # override block and persist into the next model if that model doesn't
