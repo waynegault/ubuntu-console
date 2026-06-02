@@ -2400,7 +2400,7 @@ function __model_use() {
         rm -f "$stdin_fifo"
         rm -rf "$stdin_fifo_dir" 2>/dev/null || true
         exit "$server_rc"
-    ) &
+    ) 2>/dev/null &
     local model_shell_pid=$!
     disown
     # Save the model subshell PID so __model_stop can kill it.
@@ -2415,10 +2415,12 @@ function __model_use() {
     local health_timeout
     health_timeout=$(__llm_health_timeout "$size" "$gpu_layers" "$name")
     local _health_elapsed=0
-    if __llm_wait_for_health "$health_timeout" _health_elapsed "dots" "Loading LLM (health check)"
+    local _health_progress="silent"
+    [[ -n "${__BENCH_MODE:-}" ]] || _health_progress="dots"
+    if __llm_wait_for_health "$health_timeout" _health_elapsed "$_health_progress" "Loading LLM (health check)"
     then
         __llm_registry_sync_state >/dev/null 2>&1 || true
-        __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
+        [[ -n "${__BENCH_MODE:-}" ]] || __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
         local offload_info
         offload_info=$(grep -oiE 'offload(ing|ed) [0-9]+ .* layers' "$LLM_LOG_FILE" 2>/dev/null | tail -1)
         if [[ -n "$offload_info" ]]
@@ -3770,7 +3772,7 @@ function __model_bench() {
     do
         local _prog_total="${#b_num[@]}"
         local _prog_num="$(( i+1 ))"
-        printf "\n%s── [%s/%s] %s (%s) ──%s\n" "$C_Highlight" "$_prog_num" "$_prog_total" "${b_name[$i]}" "${b_size[$i]}" "$C_Reset"
+        printf "\n\n%s── [%s/%s] %s (%s) ──%s\n" "$C_Highlight" "$_prog_num" "$_prog_total" "${b_name[$i]}" "${b_size[$i]}" "$C_Reset"
 
         local _bench_safe_overrides=0
         local _bench_min_free_vram_mb="${LLM_BENCH_MIN_FREE_VRAM_MB:-1200}"

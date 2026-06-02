@@ -362,24 +362,24 @@ def main() -> None:
     free_vram = _get_free_vram_mb()
     
     # — Estimate a sane VRAM-limited ceiling before probing —
-    # The GGUF's native ctx is the model's declaration, but what actually
-    # fits on this GPU is a function of model_size_gb × ctx_size / 512.
-    # A 2.5G model at 131072 ctx consumes ~3.5 GB just for KV cache alone.
-    # We pre-scale to avoid probing an obviously-too-large ctx.
+    # The GGUF's native ctx is the model's declaration, but often exceeds
+    # what fits on a 4GB GPU. We estimate max ctx from model size + VRAM.
     known_free = free_vram or 3800
-    model_gib = model_size_gb * 1.07  # GGUF to GiB (GGML overhead ~7%)
-    kv_per_512 = model_gib / 4  # rough: KV cache per 512 ctx ≈ model_gib/4
-    vram_ceiling = int(min(ceiling, max(floor, (known_free - model_gib * 256) / kv_per_512 * 512)))
-    # Round down to nearest 512
-    vram_ceiling = (vram_ceiling // 512) * 512
-    if vram_ceiling < ceiling:
-        print(f"  Native ctx {native_ctx or 'unknown'} — limited to {vram_ceiling} by {known_free} MiB VRAM")
-        ceiling = max(vram_ceiling, floor)
+    model_overhead = model_size_gb * 256  # ~256 MiB per GB of model weights
+    kv_per_4k = model_size_gb * 256      # ~256 MiB per 4K ctx per GB of model
+    if kv_per_4k > 0:
+        vram_ceiling = int((known_free - model_overhead) / kv_per_4k * 4096)
+        vram_ceiling = max(vram_ceiling, floor)
+        vram_ceiling = min(vram_ceiling, ceiling)
+        vram_ceiling = (vram_ceiling // 512) * 512
+        if vram_ceiling < ceiling:
+            print(f"  Native ctx {native_ctx or 'unknown'} — limited to ~{vram_ceiling:,} by {known_free} MiB VRAM")
+            ceiling = max(vram_ceiling, floor)
     if free_vram:
         print(f"  VRAM {free_vram} MiB free")
     
     c = CONSERVATIVE
-    print(f"  Probe  batch={c['batch']} ubatch={c['ubatch']} p={c['parallel']}")
+    print(f"  Tuning: ctx (fixed batch={c['batch']} ubatch={c['ubatch']} p={c['parallel']})")
     print()
 
     # Probe ceiling first with conservative params and warmup.
@@ -430,7 +430,8 @@ def main() -> None:
             if low > ceiling:
                 break
         
-        # Show probe log as a single line
+        # Show probe log sorted, with failed entries indicated
+        _probe_log.sort(key=lambda x: int(x.split()[-1].replace(',', '')))
         print(f"  {'  '.join(_probe_log)}")
 
     if discovered_ctx < floor:
