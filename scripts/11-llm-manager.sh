@@ -3564,7 +3564,7 @@ function __bench_run_with_timeout() {
             done < <(ps -o pid= --ppid $$ 2>/dev/null)
         }
         trap __bench_timeout_cleanup EXIT INT TERM
-        [[ -n "$1" && -f "$1" ]] && source "$1" >/dev/null 2>&1 || true
+        [[ -n "$1" && -f "$1" ]] && source "$1" 2>/dev/null || true
         shift
         "$@" &
         child_pid=$!
@@ -3581,13 +3581,14 @@ EOF
         fi
         # Shell functions cannot be exec'd by setsid directly.
         # Run them in a dedicated shell process-group when available.
-        # Disable job-control messages for clean output.
+        # Suppress job-control messages and profile banners for clean output.
+        declare -fx "$1" 2>/dev/null || true
+        local _bench_runner_cmd="${_bench_shell_runner}$'\n'"
         if command -v setsid >/dev/null 2>&1
         then
-            declare -fx "$1" 2>/dev/null || true
-            setsid bash -lc "$_bench_shell_runner" _ "$_bench_profile_path" "$@" &
+            setsid bash -c "__BENCH_MODE=1; $_bench_runner_cmd" _ "$_bench_profile_path" "$@" &
         else
-            bash -lc "$_bench_shell_runner" _ "$_bench_profile_path" "$@" &
+            bash -c "__BENCH_MODE=1; $_bench_runner_cmd" _ "$_bench_profile_path" "$@" &
         fi
     elif command -v setsid >/dev/null 2>&1
     then
@@ -3800,6 +3801,7 @@ function __model_bench() {
 
     # shellcheck disable=SC2317  # invoked indirectly via timeout wrapper in child shell
     __bench_run_single_model() {
+        export __BENCH_MODE=1
         local bench_num="$1"
         if ! __model_use "$bench_num"
         then
