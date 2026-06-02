@@ -3507,15 +3507,12 @@ EOF
         # Disable job-control messages for clean output.
         declare -fx "$1" 2>/dev/null || true
         set +m
-        if command -v setsid >/dev/null 2>&1
-        then
+        if command -v setsid >/dev/null 2>&1; then
             setsid bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} $_bench_shell_runner" _ "$_bench_profile_path" "$@" &
         else
             bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} $_bench_shell_runner" _ "$_bench_profile_path" "$@" &
         fi
-    elif command -v setsid >/dev/null 2>&1
-    then
-        # Start command in a dedicated session/process-group when possible.
+    elif command -v setsid >/dev/null 2>&1; then
         set +m
         setsid "$@" &
     else
@@ -3523,6 +3520,7 @@ EOF
         "$@" &
     fi
     local cmd_pid=$!
+    disown "$cmd_pid" 2>/dev/null || true
     __BENCH_TIMEOUT_LAST_PID="$cmd_pid"
     local cmd_pgid=""
     cmd_pgid=$(ps -o pgid= -p "$cmd_pid" 2>/dev/null | tr -d ' ')

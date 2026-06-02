@@ -243,12 +243,16 @@ def run_burn(port: int, warmup: bool = False) -> float | None:
             "messages": [{"role": "user", "content": "Warmup"}],
             "max_tokens": 64, "temperature": 0,
         }).encode()
-        try:
-            req = urllib.request.Request(base_url, data=payload,
-                                         headers={"Content-Type": "application/json"}, method="POST")
-            urllib.request.urlopen(req, timeout=90)
-        except Exception:
-            pass
+        # Warmup may fail because the model is still being loaded from slow
+        # WSL2 drvfs after /health returns ok — retry with longer timeout.
+        for _ in range(2):
+            try:
+                req = urllib.request.Request(base_url, data=payload,
+                                             headers={"Content-Type": "application/json"}, method="POST")
+                urllib.request.urlopen(req, timeout=300)
+                break
+            except Exception:
+                time.sleep(5)
 
     payload = json.dumps({
         "messages": [{"role": "user", "content": BURN_PROMPT}],
@@ -308,18 +312,14 @@ def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
             break
         tps_samples.append(tps)
 
-    # Clean shutdown: kill server and wait for VRAM release
+    # Clean shutdown
     proc.kill(); proc.wait(timeout=10)
     try: Path(f"/tmp/autotune_{port}.log").unlink()
     except Exception: pass
-    # Force VRAM release — WSL2 CUDA doesn't always free on SIGKILL
-    try:
-        subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
-                       capture_output=True, timeout=30)
-    except Exception:
-        subprocess.run(["killall", "-9", "llama-server"],
-                       capture_output=True, timeout=5)
-        time.sleep(2)
+    # Quick kill — full VRAM clear only done before each model or on failed probes
+    subprocess.run(["killall", "-9", "llama-server"],
+                   capture_output=True, timeout=5)
+    time.sleep(1)
     return ("ok", tps_samples)
 
 
