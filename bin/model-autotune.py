@@ -12,7 +12,7 @@ Conservative-params-first ensures we discover the true VRAM-limited ctx ceiling
 without being constrained by aggressive batch/ubatch settings.
 
 Usage:
-    python3 model-autotune.py <registry_row> [--trials N] [--ceiling-override CTX]
+    python3 model-autotune.py <registry_row> [--ceiling-override CTX]
 """
 from __future__ import annotations
 
@@ -35,7 +35,6 @@ MODEL_DIR = Path("/mnt/m/active")
 
 BURN_TOKENS = 768
 CTX_FLOOR = 4096
-TRIALS = 1
 PORT_BASE = 9200
 
 BURN_PROMPT = (
@@ -291,7 +290,7 @@ def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
         return ("start_fail", [])
 
     tps_samples = []
-    for i in range(TRIALS):
+    for i in range(1):
         tps = run_burn(port, warmup=(warmup and i == 0))
         if tps is None:
             proc.kill(); proc.wait(timeout=10)
@@ -324,7 +323,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Autotune a GGUF model")
     parser.add_argument("row", type=int)
-    parser.add_argument("--trials", type=int, default=1)
+
     parser.add_argument("--ceiling-override", type=int, default=None,
                         help="Override auto-detected native ctx ceiling")
     parser.add_argument("--floor", type=int, default=CTX_FLOOR)

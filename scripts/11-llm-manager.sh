@@ -2521,7 +2521,7 @@ function __model_use() {
 # ---------------------------------------------------------------------------
 # __model_autotune
 # @description Sweep safe runtime combos for one model/backend and persist best profile.
-# Usage: model autotune [N] [--backend native|python] [--quick] [--ctx-size N] [--trials N]
+# Usage: model autotune [N] [--backend native|python] [--ctx-size N] [--trials N]
 # @returns 0 on success, 1 on validation/benchmark failure.
 # ---------------------------------------------------------------------------
 function __model_autotune() {
@@ -2535,7 +2535,6 @@ function __model_autotune() {
     shift 1 2>/dev/null || true
 
     local backend_raw="${LLM_SERVER_BACKEND:-native}"
-    local quick_mode=0
     local tune_ctx=""
     local trials="${LLM_AUTOTUNE_TRIALS:-3}"
     local __autotune_interrupted=0
@@ -2605,10 +2604,6 @@ function __model_autotune() {
                 fi
                 backend_raw="$2"
                 shift 2
-                ;;
-            --quick)
-                quick_mode=1
-                shift
                 ;;
             --ctx-size|--ctx)
                 if [[ $# -lt 2 || "$2" == -* ]]
@@ -2742,14 +2737,8 @@ function __model_autotune() {
 
     # Keep autotune responsive: cap request/readiness waits per trial so one
     # bad config does not stall the whole sweep.
-    if (( quick_mode ))
-    then
-        export LLM_BURN_REQUEST_TIMEOUT="${LLM_AUTOTUNE_BURN_TIMEOUT:-150}"
-        export LLM_BURN_REQUEST_TIMEOUT_CPU="${LLM_AUTOTUNE_BURN_TIMEOUT_CPU:-300}"
-    else
-        export LLM_BURN_REQUEST_TIMEOUT="${LLM_AUTOTUNE_BURN_TIMEOUT:-240}"
-        export LLM_BURN_REQUEST_TIMEOUT_CPU="${LLM_AUTOTUNE_BURN_TIMEOUT_CPU:-420}"
-    fi
+    export LLM_BURN_REQUEST_TIMEOUT="${LLM_AUTOTUNE_BURN_TIMEOUT:-240}"
+    export LLM_BURN_REQUEST_TIMEOUT_CPU="${LLM_AUTOTUNE_BURN_TIMEOUT_CPU:-420}"
     export LLM_BURN_READY_TIMEOUT="${LLM_AUTOTUNE_READY_TIMEOUT:-120}"
     local oom_regex='(out of memory|oom|cuda.*(failed|error)|failed to allocate|std::bad_alloc|cannot allocate)'
 
@@ -2770,29 +2759,17 @@ function __model_autotune() {
     esac
     [[ "$max_ctx_by_rating" =~ ^[0-9]+$ ]] || max_ctx_by_rating=""
     [[ "$max_ubatch_by_rating" =~ ^[0-9]+$ ]] || max_ubatch_by_rating=0
-    if (( quick_mode ))
-    then
-        combos=(
-            "1024:256:1:256"
-            "2048:512:1:256"
-            "1024:256:2:256"
-            "2048:512:2:256"
-        )
-        # Quick mode still tests a higher-context candidate first.
-        ctx_candidates=(8192 4096)
-    else
-        combos=(
-            "512:128:1:256"
-            "1024:256:1:256"
-            "2048:512:1:256"
-            "4096:1024:1:512"
-            "512:128:2:256"
-            "1024:256:2:256"
-            "2048:512:2:256"
-            "4096:1024:2:512"
-        )
-        ctx_candidates=(12288 8192 6144 4096)
-    fi
+    combos=(
+        "512:128:1:256"
+        "1024:256:1:256"
+        "2048:512:1:256"
+        "4096:1024:1:512"
+        "512:128:2:256"
+        "1024:256:2:256"
+        "2048:512:2:256"
+        "4096:1024:2:512"
+    )
+    ctx_candidates=(12288 8192 6144 4096)
 
     # Per-model candidate pruning based on available VRAM and model size.
     local free_vram_mb=0
@@ -3266,7 +3243,7 @@ function __model_autotune() {
 # @returns 0 always.
 # ---------------------------------------------------------------------------
 function __model_autotune_help() {
-    echo "Usage: model autotune <N> [--backend native|python] [--quick] [--ctx-size N] [--trials N]"
+    echo "Usage: model autotune <N> [--backend native|python] [--ctx-size N] [--trials N]"
     echo ""
     echo "Objective priority:"
     echo "  1) no OOM"
@@ -3281,9 +3258,8 @@ function __model_autotune_help() {
     echo ""
     echo "Common options:"
     echo "  --backend native|python   Select llama backend (default from env)"
-    echo "  --quick                   Reduced sweep for faster tuning"
+
     echo "  --ctx-size N              Force one context value"
-    echo "  --trials N                Number of burn trials per config"
     echo "  -h, --help                Show this help"
     echo ""
     echo "Key environment knobs:"
@@ -3293,8 +3269,8 @@ function __model_autotune_help() {
     echo "  LLM_AUTOTUNE_LOCK_FILE, LLM_AUTOTUNE_LOCK_WAIT_SECONDS"
     echo ""
     echo "Examples:"
-    echo "  model autotune 3 --backend native --quick --trials 1"
-    echo "  model autotune 7 --ctx-size 8192 --trials 3"
+    echo "  model autotune 3 --backend native"
+    echo "  model autotune 7 --ctx-size 8192"
     return 0
 }
 
@@ -3815,7 +3791,7 @@ function __model_bench() {
     [[ -f "$ACTIVE_LLM_FILE" ]] && _bench_prev_model=$(< "$ACTIVE_LLM_FILE")
     local bench_backend=""
     bench_backend=$(__llm_backend_normalize "${LLM_SERVER_BACKEND:-native}")
-    local bench_autotune_mode="${LLM_BENCH_AUTOTUNE_MODE:-quick}"
+    local bench_autotune_mode="comprehensive"
     local bench_autotune_trials="${LLM_BENCH_AUTOTUNE_TRIALS:-1}"
     [[ "$bench_autotune_trials" =~ ^[0-9]+$ ]] || bench_autotune_trials=1
     (( bench_autotune_trials < 1 )) && bench_autotune_trials=1
@@ -3920,11 +3896,8 @@ function __model_bench() {
                 __tac_info "  Autotune" "model #${b_num[$i]} (${bench_autotune_mode})..." "$C_Dim"
                 export LLM_AUTOTUNE_RESTORE_PREV=0
                 export LLM_AUTOTUNE_SKIP_LOCK=1
-                local -a _bench_autotune_args=("--backend" "$bench_backend" "--trials" "$bench_autotune_trials")
-                if [[ "$bench_autotune_mode" == "quick" ]]
-                then
-                    _bench_autotune_args+=("--quick")
-                fi
+
+
                 if ! python3 "${HOME}/ubuntu-console/bin/model-autotune.py" "${b_num[$i]}" --trials "$bench_autotune_trials"
                 then
                     # Clear any lifted/safe overrides before skipping this model so
@@ -4884,7 +4857,7 @@ bench-compare|bench-latest|bench-history|delete|archive|download}"
     echo "  info N     - Detailed info for model #N"
     echo "  bench      - Benchmark all on-disk models"
     echo "  bench check - Check if a bench run is active (lock status)"
-    echo "  autotune N [--backend native|python] [--quick] [--ctx-size N] [--trials N]"
+    echo "  autotune N [--backend native|python] [--ctx-size N] [--trials N]"
     echo "             - Sweep safe runtime configs and save best profile for model #N"
     echo "  bench-diff - Compare the latest two bench TSVs (or pass old/new files)"
     echo "  bench-compare - Alias for bench-diff"
