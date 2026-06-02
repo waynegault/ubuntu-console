@@ -283,11 +283,18 @@ def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
         log_path = Path(f"/tmp/autotune_{port}.log")
         if log_path.exists():
             try:
-                if OOM_RE.search(log_path.read_text(errors="ignore")):
+                text = log_path.read_text(errors="ignore")
+                if OOM_RE.search(text):
                     return ("oom", [])
+                # Check for CUDA or load specific errors
+                for err in ("cudaError", "CUDA error", "failed to allocate",
+                           "std::bad_alloc", "cannot allocate memory",
+                           "GGML_ASSERT", "not enough memory"):
+                    if err in text:
+                        return ("oom", [])
             except Exception:
                 pass
-        return ("start_fail", [])
+        return ("load_fail", [])
 
     tps_samples = []
     for i in range(1):
@@ -361,19 +368,20 @@ def main() -> None:
     kill_zombie_servers()
     free_vram = _get_free_vram_mb()
     
-    # — Estimate a sane VRAM-limited ceiling before probing —
-    # The GGUF's native ctx is the model's declaration, but often exceeds
-    # what fits on a 4GB GPU. We estimate max ctx from model size + VRAM.
+    # — Estimate a conservative starting ceiling —
+    # The GGUF's native ctx is the model's declaration, but rarely fits
+    # on a 4GB GPU with larger models. We estimate a safe starting point
+    # and rely on the binary search to find the true stable max.
     known_free = free_vram or 3800
-    model_overhead = model_size_gb * 256  # ~256 MiB per GB of model weights
-    kv_per_4k = model_size_gb * 256      # ~256 MiB per 4K ctx per GB of model
+    model_overhead = model_size_gb * 320
+    kv_per_4k = model_size_gb * 400
     if kv_per_4k > 0:
         vram_ceiling = int((known_free - model_overhead) / kv_per_4k * 4096)
         vram_ceiling = max(vram_ceiling, floor)
         vram_ceiling = min(vram_ceiling, ceiling)
         vram_ceiling = (vram_ceiling // 512) * 512
         if vram_ceiling < ceiling:
-            print(f"  Native ctx {native_ctx or 'unknown'} — limited to ~{vram_ceiling:,} by {known_free} MiB VRAM")
+            print(f"  Native ctx {native_ctx or 'unknown'} — starting probe at ~{vram_ceiling:,}")
             ceiling = max(vram_ceiling, floor)
     if free_vram:
         print(f"  VRAM {free_vram} MiB free")
@@ -388,12 +396,14 @@ def main() -> None:
     print(f"  ctx {_ctx_display:>7} → ", end="", flush=True)
     status, tps_vals = test_config(model_path, ceiling, c["batch"], c["ubatch"],
                                    c["parallel"], c["mmap"], warmup=True)
-    print(f"{status}" + (f" ({tps_vals[0]:.1f} tps)" if tps_vals else ""))
+    _status_msg = {"ok": "✓", "oom": "OOM", "burn_fail": "✗", "load_fail": "✗"}.get(status, status)
+    _tps_msg = f" ({tps_vals[0]:.1f} tps)" if tps_vals else ""
+    print(f"{_status_msg}{_tps_msg}")
 
     if status == "ok":
         discovered_ctx = ceiling
         best_tps = tps_vals[0] if tps_vals else 0
-        print(f"  → Native ceiling stable")
+        print(f"  → Stable at {ceiling}")
     else:
         print(f"  → {ceiling} too high — binary searching")
         discovered_ctx = 0
@@ -410,7 +420,7 @@ def main() -> None:
             status, tps_vals = test_config(model_path, mid, c["batch"], c["ubatch"],
                                            c["parallel"], c["mmap"], warmup=True)
             # Aggressive VRAM cleanup between probes
-            if status in ("oom", "start_fail"):
+            if status in ("oom", "load_fail"):
                 try:
                     subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
                                    capture_output=True, timeout=30)
