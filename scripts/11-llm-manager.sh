@@ -984,111 +984,29 @@ function __llm_bench_perf_prep() {
     local smi_cmd
     smi_cmd=$(__resolve_smi 2>/dev/null || true)
 
-    __tac_header "GPU PERFORMANCE PREP" "open"
-
-    # 1. AC / battery check via /sys/class/power_supply
-    local _on_ac=1 _bat_path
-    for _bat_path in /sys/class/power_supply/BAT0 /sys/class/power_supply/BAT1 \
-                     /sys/class/power_supply/battery
-    do
-        [[ -f "$_bat_path/status" ]] || continue
-        local _bat_status
-        _bat_status=$(< "$_bat_path/status")
-        [[ "$_bat_status" == "Discharging" ]] && _on_ac=0
-        break
-    done
-
-    if (( _on_ac == 0 ))
+    # Compact GPU status within the bench header
+    local _gpu_line=""
+    if [[ -n "$smi_cmd" ]]
     then
-        __tac_info "Power" "[ON BATTERY — plug in AC for sustained bench performance]" "$C_Warning"
-    else
-        __tac_info "Power" "AC connected" "$C_Success"
-    fi
-
-    if [[ -z "$smi_cmd" ]]
-    then
-        __tac_info "GPU" "[nvidia-smi unavailable — clock data skipped]" "$C_Warning"
-        __tac_footer
-        return 0
-    fi
-
-    # 2. Clock + pstate + thermal snapshot
-    local _gstat
-    _gstat=$(
-        "$smi_cmd" --query-gpu=pstate,clocks.gr,clocks.sm,clocks.mem,temperature.gpu,power.draw \
-            --format=csv,noheader,nounits 2>/dev/null | head -1
-    )
-    if [[ -n "$_gstat" ]]
-    then
-        local _pstate _gr _sm _mem _temp _pwr
-        IFS=',' read -r _pstate _gr _sm _mem _temp _pwr <<< "$_gstat"
-        _pstate=$(printf '%s' "$_pstate" | xargs)
-        _gr=$(printf '%s' "$_gr" | xargs)
-        _sm=$(printf '%s' "$_sm" | xargs)
-        _mem=$(printf '%s' "$_mem" | xargs)
-        _temp=$(printf '%s' "$_temp" | xargs)
-        _pwr=$(printf '%s' "$_pwr" | xargs)
-
-        # P0–P3 = active performance, P4+ = idle/power-save
-        local _pstate_num="${_pstate#P}"
-        local _pstate_note=""
-        local _pstate_color="$C_Success"
-        if [[ "$_pstate_num" =~ ^[0-9]+$ ]] && (( _pstate_num >= 4 ))
-        then
-            _pstate_color="$C_Warning"
-            _pstate_note=" — idle/power-save (clocks boost once load begins)"
-        fi
-
-        __tac_info "pstate" "${_pstate_color}${_pstate}${C_Reset}${_pstate_note}" "$C_Text"
-        __tac_info "Clocks" "${_gr} MHz gr / ${_sm} MHz sm / ${_mem} MHz mem" "$C_Text"
-        __tac_info "Temp" "${_temp}${DEGREE}C" "$C_Text"
-        __tac_info "Power" "${_pwr} W" "$C_Text"
-
-        if [[ "$_temp" =~ ^[0-9]+$ ]] && (( _temp >= 80 ))
-        then
-            __tac_info "THERMAL" "[${_temp}${DEGREE}C — throttling likely; cool down before bench]" "$C_Error"
+        local _gstat _temp _pwr _pstate _gr _sm _mem
+        _gstat=$(
+            "$smi_cmd" --query-gpu=pstate,clocks.gr,clocks.sm,clocks.mem,temperature.gpu,power.draw \
+                --format=csv,noheader,nounits 2>/dev/null | head -1
+        )
+        if [[ -n "$_gstat" ]]; then
+            IFS=',' read -r _pstate _gr _sm _mem _temp _pwr <<< "$_gstat"
+            _pstate=$(printf '%s' "$_pstate" | xargs)
+            _gr=$(printf '%s' "$_gr" | xargs)
+            _sm=$(printf '%s' "$_sm" | xargs)
+            _mem=$(printf '%s' "$_mem" | xargs)
+            _temp=$(printf '%s' "$_temp" | xargs)
+            _pwr=$(printf '%s' "$_pwr" | xargs)
+            _gpu_line="$_pstate  ${_gr}/${_sm}/${_mem} MHz  ${_temp}°C  ${_pwr}W ✓"
         fi
     fi
-
-    # 3. Active SW throttle check (live state only).
-    # Read from "Clocks Throttle Reasons" to avoid mixing in cumulative
-    # "Clocks Event Reasons" counters (e.g., 0 us / historical us values).
-    local _throttle_active
-    _throttle_active=$(
-        "$smi_cmd" -q -d PERFORMANCE 2>/dev/null \
-            | awk '
-                /Clocks Throttle Reasons/ { in_reasons=1; next }
-                /Clocks Event Reasons/    { in_reasons=0 }
-                in_reasons && /SW Thermal Slowdown|SW Power Cap Slowdown/ {
-                    if ($0 !~ /Not Active/) {
-                        gsub(/^[[:space:]]+/, "")
-                        print
-                        count++
-                        if (count >= 4) exit
-                    }
-                }
-            '
-    )
-    if [[ -n "$_throttle_active" ]]
-    then
-        local _thr_msg
-        _thr_msg=$(printf '%s' "$_throttle_active" | tr '\n' ';' | sed 's/;$//')
-        __tac_info "Throttle" "[ACTIVE: ${_thr_msg} — reduce heat/load for best bench results]" "$C_Warning"
-    else
-        __tac_info "Throttle" "None detected" "$C_Success"
-    fi
-
-    # 4. Compact status line: pstate, clocks, temp, power, throttle
-    local _gpu_line="${_pstate}  ${_gr}/${_sm}/${_mem} MHz  ${_temp}°C  ${_pwr}W"
-    if [[ -z "$_throttle_active" ]]; then
-        _gpu_line+="  ✓"
-    else
-        _gpu_line+="  ⚠"
-    fi
-    printf "${C_Dim}  GPU${C_Reset}  ${_gpu_line}\n"
+    [[ -z "$_gpu_line" ]] && _gpu_line="GPU info unavailable"
+    printf "${C_Dim}  %s${C_Reset}\n" "$_gpu_line"
     __tac_footer
-
-    # Brief settle — lets persistence mode take effect and driver clock state update
     sleep 1
 }
 
@@ -3582,13 +3500,15 @@ EOF
         # Shell functions cannot be exec'd by setsid directly.
         # Run them in a dedicated shell process-group when available.
         # Suppress job-control messages and profile banners for clean output.
+        # Shell functions cannot be exec'd by setsid directly.
+        # Run them in a dedicated shell process-group when available.
+        # Disable job-control messages for clean output.
         declare -fx "$1" 2>/dev/null || true
-        local _bench_runner_cmd="${_bench_shell_runner}$'\n'"
         if command -v setsid >/dev/null 2>&1
         then
-            setsid bash -c "__BENCH_MODE=1; $_bench_runner_cmd" _ "$_bench_profile_path" "$@" &
+            setsid bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} $_bench_shell_runner" _ "$_bench_profile_path" "$@" &
         else
-            bash -c "__BENCH_MODE=1; $_bench_runner_cmd" _ "$_bench_profile_path" "$@" &
+            bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} $_bench_shell_runner" _ "$_bench_profile_path" "$@" &
         fi
     elif command -v setsid >/dev/null 2>&1
     then
@@ -3793,9 +3713,6 @@ function __model_bench() {
     local bench_backend=""
     bench_backend=$(__llm_backend_normalize "${LLM_SERVER_BACKEND:-native}")
     local bench_autotune_mode="comprehensive"
-    local bench_autotune_trials="${LLM_BENCH_AUTOTUNE_TRIALS:-1}"
-    [[ "$bench_autotune_trials" =~ ^[0-9]+$ ]] || bench_autotune_trials=1
-    (( bench_autotune_trials < 1 )) && bench_autotune_trials=1
 
     local -a b_num=() b_name=() b_file=() b_size=() b_gpu=() b_tps=()
 
@@ -3900,7 +3817,7 @@ function __model_bench() {
                 export LLM_AUTOTUNE_SKIP_LOCK=1
 
 
-                if ! python3 "${HOME}/ubuntu-console/bin/model-autotune.py" "${b_num[$i]}" --trials "$bench_autotune_trials"
+                if ! python3 "${HOME}/ubuntu-console/bin/model-autotune.py" "${b_num[$i]}"
                 then
                     # Clear any lifted/safe overrides before skipping this model so
                     # later iterations do not inherit a failed model's bench state.
