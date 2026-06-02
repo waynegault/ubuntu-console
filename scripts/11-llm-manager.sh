@@ -1078,8 +1078,14 @@ function __llm_bench_perf_prep() {
         __tac_info "Throttle" "None detected" "$C_Success"
     fi
 
-    # 4. Actionable tips line
-    printf '%s\n' "${C_Dim}  Tips: Windows power mode → Best Performance · NVIDIA Control Panel → Prefer Max Performance · use AC power${C_Reset}"
+    # 4. Compact status line: pstate, clocks, temp, power, throttle
+    local _gpu_line="${_pstate}  ${_gr}/${_sm}/${_mem} MHz  ${_temp}°C  ${_pwr}W"
+    if [[ -z "$_throttle_active" ]]; then
+        _gpu_line+="  ✓"
+    else
+        _gpu_line+="  ⚠"
+    fi
+    printf "${C_Dim}  GPU${C_Reset}  ${_gpu_line}\n"
     __tac_footer
 
     # Brief settle — lets persistence mode take effect and driver clock state update
@@ -2377,8 +2383,11 @@ function __model_use() {
     (( use_no_mmap )) && mmap_label="mmap:off"
     local start_msg="#${num} ${name} (${size}, ${ngl_label}, ctx ${ctx}, "
     start_msg+="b ${batch_size}/${ubatch_size}, p ${parallel_slots}, ${mmap_label}, t=${threads}, k=${LLAMA_CACHE_TYPE_K:-q8_0})"
-    __tac_info "Starting" "$start_msg" "$C_Highlight"
-    __tac_info "Backend" "[$llm_backend]" "$C_Dim"
+    if [[ -z "${__BENCH_MODE:-}" ]]
+    then
+        __tac_info "Starting" "$start_msg" "$C_Highlight"
+        __tac_info "Backend" "[$llm_backend]" "$C_Dim"
+    fi
 
     if [[ -n "${__BENCH_MODE:-}" ]]
     then
@@ -2390,7 +2399,7 @@ function __model_use() {
             _bench_vram_label="unknown"
         fi
         _bench_clock_info=$(__llm_gpu_clock_snapshot)
-        __tac_info "Bench Perf" "[free_vram_mb=${_bench_vram_label}; batch/ubatch=${batch_size}/${ubatch_size}; parallel=${parallel_slots}; ${_bench_clock_info}]" "$C_Dim"
+        # Bench mode: extra info suppressed for cleaner output
     fi
 
     # llama.cpp monitors stdin and will force-shutdown on EOF.
@@ -2416,7 +2425,7 @@ function __model_use() {
             if [[ "$_okp" =~ ^[0-9]+$ ]]; then kill -TERM "$_okp" 2>/dev/null; fi
             rm -f "$_okf"
         done
-        rm -f /tmp/llm-stdin.*
+        rm -rf /tmp/llm-stdin.* 2>/dev/null || true
 
         local stdin_fifo_dir
         stdin_fifo_dir=$(mktemp -d /tmp/llm-stdin.XXXXXX)
@@ -3596,6 +3605,7 @@ EOF
         fi
         # Shell functions cannot be exec'd by setsid directly.
         # Run them in a dedicated shell process-group when available.
+        # Disable job-control messages for clean output.
         if command -v setsid >/dev/null 2>&1
         then
             declare -fx "$1" 2>/dev/null || true
@@ -3611,6 +3621,8 @@ EOF
         "$@" &
     fi
 
+    # Suppress shell job-control notifications for background process
+    set +m
     local cmd_pid=$!
     __BENCH_TIMEOUT_LAST_PID="$cmd_pid"
     local cmd_pgid=""
@@ -3622,6 +3634,7 @@ EOF
         if ! kill -0 "$cmd_pid" 2>/dev/null
         then
             wait "$cmd_pid" 2>/dev/null
+            set -m 2>/dev/null || true
             return $?
         fi
         sleep "$interval"
@@ -3664,6 +3677,7 @@ EOF
         kill -KILL -- "$cmd_pid" 2>/dev/null || true
     fi
     wait "$cmd_pid" 2>/dev/null || true
+    set -m 2>/dev/null || true
     return 124
 }
 
@@ -3853,13 +3867,15 @@ function __model_bench() {
 
     wake 2>/dev/null || true
     __llm_bench_perf_prep
-    printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} model(s)...${C_Reset}"
+    printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} models...${C_Reset}"
 
     local __BENCH_MODE=1
     local i
     for i in "${!b_num[@]}"
     do
-        printf '%s\n' "${C_Highlight}[$(( i+1 ))/${#b_num[@]}] ${b_name[$i]} (${b_size[$i]})${C_Reset}"
+        local _prog_total="${#b_num[@]}"
+        local _prog_num="$(( i+1 ))"
+        printf "\n%s── [%s/%s] %s (%s) ──%s\n" "$C_Highlight" "$_prog_num" "$_prog_total" "${b_name[$i]}" "${b_size[$i]}" "$C_Reset"
 
         local _bench_safe_overrides=0
         local _bench_min_free_vram_mb="${LLM_BENCH_MIN_FREE_VRAM_MB:-1200}"
@@ -3880,7 +3896,7 @@ function __model_bench() {
             export LLAMA_UBATCH_SIZE=128
             export LLAMA_PARALLEL_SLOTS=1
             _bench_safe_overrides=1
-            __tac_info "Bench" "[Low free VRAM (${_bench_free_vram_mb} MiB) - applying safe overrides: ngl=0, b=512/128, p=1]" "$C_Warning"
+            __tac_info "  VRAM" "low (${_bench_free_vram_mb} MiB) — safe overrides: ngl=0" "$C_Warning"
         fi
 
         local _bench_quant_rating="unknown"
@@ -3901,8 +3917,7 @@ function __model_bench() {
                 then
                     unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
                 fi
-                __tac_info "Bench" "[No prior autotune flag for model #${b_num[$i]} - running autotune first]" "$C_Warning"
-                __tac_info "Bench" "[Autotune mode=${bench_autotune_mode}, trials=${bench_autotune_trials}]" "$C_Dim"
+                __tac_info "  Autotune" "model #${b_num[$i]} (${bench_autotune_mode})..." "$C_Dim"
                 export LLM_AUTOTUNE_RESTORE_PREV=0
                 export LLM_AUTOTUNE_SKIP_LOCK=1
                 local -a _bench_autotune_args=("--backend" "$bench_backend" "--trials" "$bench_autotune_trials")

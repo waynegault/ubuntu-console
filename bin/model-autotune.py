@@ -340,33 +340,32 @@ def main() -> None:
     ceiling = args.ceiling_override or native_ctx or 131072
     floor = args.floor
 
-    print(f"\n{'='*60}")
-    print(f"  AUTOTUNE: {entry['name']} ({model_size_gb} GB)")
-    print(f"{'='*60}")
-    print(f"  File:      {entry['file']}")
+    print()
+    _line = '─' * 50
+    print(f"  {_line}")
+    print(f"  Autotune {entry['name']} ({model_size_gb} GB)")
+    print(f"  {_line}")
     print(f"  Arch:      {entry['arch']}")
-    print(f"  Native ctx: {native_ctx or 'unknown'}")
-    print(f"  Ceiling:   {ceiling}")
-    print(f"  Floor:     {floor}")
+    print(f"  Native ctx: {native_ctx or 'unknown'}  →  Ceiling: {ceiling}  Floor: {floor}")
     print()
 
     kill_zombie_servers()
     free_vram = _get_free_vram_mb()
     if free_vram:
-        print(f"  Free VRAM: {free_vram} MiB")
+        print(f"  VRAM: {free_vram} MiB free")
     print()
 
     # ── Phase 1: Context discovery with conservative params ──────────────
     # Conservative params = smallest VRAM footprint. Finds true ctx ceiling.
     c = CONSERVATIVE
-    print(f"── Phase 1: Context discovery ──")
-    print(f"  (conservative: batch={c['batch']}, ubatch={c['ubatch']}, "
-          f"p={c['parallel']}, mmap={c['mmap']})")
+    print(f"  Context discovery  batch={c['batch']} ubatch={c['ubatch']} "
+          f"p={c['parallel']} mmap={c['mmap']}")
     print()
 
     # Probe ceiling first with conservative params and warmup.
     # Warmup ensures the GPU is in high-clock state before measuring TPS.
-    print(f"  ctx={ceiling:>6} ... ", end="", flush=True)
+    _ctx_display = f"{ceiling:,}" if ceiling > 999 else str(ceiling)
+    print(f"  ctx {_ctx_display:>7} → ", end="", flush=True)
     status, tps_vals = test_config(model_path, ceiling, c["batch"], c["ubatch"],
                                    c["parallel"], c["mmap"], warmup=True)
     print(f"{status}" + (f" ({tps_vals[0]:.1f} tps)" if tps_vals else ""))
@@ -386,7 +385,8 @@ def main() -> None:
             mid = max(mid, floor)
             mid = max(mid, low)
 
-            print(f"  ctx={mid:>6} ... ", end="", flush=True)
+            _ctx_display = f"{mid:,}" if mid > 999 else str(mid)
+            print(f"  ctx {_ctx_display:>7} → ", end="", flush=True)
             status, tps_vals = test_config(model_path, mid, c["batch"], c["ubatch"],
                                            c["parallel"], c["mmap"], warmup=True)
             print(f"{status}" + (f" ({tps_vals[0]:.1f} tps)" if tps_vals else ""))
@@ -404,7 +404,7 @@ def main() -> None:
         print(f"  FATAL: No stable context ≥ {floor}")
         sys.exit(1)
 
-    print(f"\n  → Discovered ctx: {discovered_ctx}  ({best_tps:.1f} tps)")
+    print(f"  → ctx {discovered_ctx}  ({best_tps:.1f} tps)")
 
     # Use conservative params directly (proven: batch/ubatch/parallel
     # have <1% effect on TPS; conservative = smallest VRAM footprint).
@@ -412,15 +412,9 @@ def main() -> None:
     best_parallel, best_mmap = c["parallel"], c["mmap"]
 
     # ── Phase 3: Registry writeback ─────────────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"  AUTOTUNE COMPLETE")
-    print(f"{'='*60}")
-    print(f"  ctx:       {discovered_ctx}")
-    print(f"  batch:     {best_batch}")
-    print(f"  ubatch:    {best_ubatch}")
-    print(f"  parallel:  {best_parallel}")
-    print(f"  mmap:      {best_mmap}")
-    print(f"  tps:       {best_tps:.1f}")
+    print(f"  {_line}")
+    print(f"  ✓ ctx {discovered_ctx}  batch {best_batch}/{best_ubatch}  p{best_parallel}  mmap={best_mmap}  {best_tps:.1f} tps")
+    print(f"  {_line}")
     print()
 
     write_registry_row(args.row, {
@@ -433,7 +427,7 @@ def main() -> None:
         "autotuned": "yes",
     })
 
-    print(f"  ✓ Registry row {args.row} updated: autotuned=yes")
+    print(f"    Registry row {args.row}: autotuned=yes")
     print()
 
 
