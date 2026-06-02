@@ -3933,6 +3933,7 @@ function __model_bench() {
                     unset LLM_AUTOTUNE_RESTORE_PREV
                     unset LLM_AUTOTUNE_SKIP_LOCK
                     __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} - skipping benchmark]" "$C_Error"
+                    sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
                     b_tps+=("FAIL_AUTOTUNE")
                     __model_stop 2>/dev/null || true
                     sleep 1
@@ -3984,6 +3985,8 @@ function __model_bench() {
         [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")
         b_tps+=("$tps")
         __model_stop 2>/dev/null
+        # Full VRAM cleanup between model iterations (WSL2 ghost allocation)
+        sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
         # Always clean up any leaked overrides between model iterations.
         # LLAMA_GPU_LAYERS etc. may have been set by a previous model's safe
         # override block and persist into the next model if that model doesn't

@@ -156,17 +156,19 @@ def write_registry_row(row: int, updates: dict) -> None:
 
 
 def kill_zombie_servers() -> None:
-    for _ in range(5):
-        try:
-            subprocess.run(["killall", "-9", "llama-server"],
-                           capture_output=True, timeout=5)
-        except Exception:
-            pass
-        time.sleep(1)
-        free = _get_free_vram_mb()
-        if free is not None and free > 3000:
-            break
-    time.sleep(2)
+    """Kill ALL llama-server instances and fully release VRAM.
+    
+    WSL2 CUDA has a known issue where SIGKILL doesn't always release
+    VRAM immediately. We use clear_vram.sh which reloads the nvidia-uvm
+    kernel module to force Windows host to release ghost allocations."""
+    try:
+        subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
+                       capture_output=True, timeout=30)
+    except Exception:
+        # Fallback: basic kill if clear_vram.sh fails
+        subprocess.run(["killall", "-9", "llama-server"],
+                       capture_output=True, timeout=5)
+        time.sleep(2)
 
 
 def _get_free_vram_mb() -> int | None:
@@ -300,9 +302,18 @@ def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
             break
         tps_samples.append(tps)
 
+    # Clean shutdown: kill server and wait for VRAM release
     proc.kill(); proc.wait(timeout=10)
     try: Path(f"/tmp/autotune_{port}.log").unlink()
     except Exception: pass
+    # Force VRAM release — WSL2 CUDA doesn't always free on SIGKILL
+    try:
+        subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
+                       capture_output=True, timeout=30)
+    except Exception:
+        subprocess.run(["killall", "-9", "llama-server"],
+                       capture_output=True, timeout=5)
+        time.sleep(2)
     return ("ok", tps_samples)
 
 
@@ -341,25 +352,35 @@ def main() -> None:
     floor = args.floor
 
     print()
-    _line = '─' * 50
+    _line = '─' * 42
     print(f"  {_line}")
     print(f"  Autotune {entry['name']} ({model_size_gb} GB)")
     print(f"  {_line}")
-    print(f"  Arch:      {entry['arch']}")
-    print(f"  Native ctx: {native_ctx or 'unknown'}  →  Ceiling: {ceiling}  Floor: {floor}")
+    print(f"  Arch      {entry['arch']}")
     print()
 
     kill_zombie_servers()
     free_vram = _get_free_vram_mb()
+    
+    # — Estimate a sane VRAM-limited ceiling before probing —
+    # The GGUF's native ctx is the model's declaration, but what actually
+    # fits on this GPU is a function of model_size_gb × ctx_size / 512.
+    # A 2.5G model at 131072 ctx consumes ~3.5 GB just for KV cache alone.
+    # We pre-scale to avoid probing an obviously-too-large ctx.
+    known_free = free_vram or 3800
+    model_gib = model_size_gb * 1.07  # GGUF to GiB (GGML overhead ~7%)
+    kv_per_512 = model_gib / 4  # rough: KV cache per 512 ctx ≈ model_gib/4
+    vram_ceiling = int(min(ceiling, max(floor, (known_free - model_gib * 256) / kv_per_512 * 512)))
+    # Round down to nearest 512
+    vram_ceiling = (vram_ceiling // 512) * 512
+    if vram_ceiling < ceiling:
+        print(f"  Native ctx {native_ctx or 'unknown'} — limited to {vram_ceiling} by {known_free} MiB VRAM")
+        ceiling = max(vram_ceiling, floor)
     if free_vram:
-        print(f"  VRAM: {free_vram} MiB free")
-    print()
-
-    # ── Phase 1: Context discovery with conservative params ──────────────
-    # Conservative params = smallest VRAM footprint. Finds true ctx ceiling.
+        print(f"  VRAM {free_vram} MiB free")
+    
     c = CONSERVATIVE
-    print(f"  Context discovery  batch={c['batch']} ubatch={c['ubatch']} "
-          f"p={c['parallel']} mmap={c['mmap']}")
+    print(f"  Probe  batch={c['batch']} ubatch={c['ubatch']} p={c['parallel']}")
     print()
 
     # Probe ceiling first with conservative params and warmup.
@@ -375,30 +396,43 @@ def main() -> None:
         best_tps = tps_vals[0] if tps_vals else 0
         print(f"  → Native ceiling stable")
     else:
-        print(f"  → Ceiling failed ({status}) — binary searching downward")
+        print(f"  → {ceiling} too high — binary searching")
         discovered_ctx = 0
         best_tps = 0
         low, high = floor, ceiling
+        _probe_log = []
 
         while low <= high:
             mid = ((low + high) // 2) // 512 * 512
             mid = max(mid, floor)
             mid = max(mid, low)
 
-            _ctx_display = f"{mid:,}" if mid > 999 else str(mid)
-            print(f"  ctx {_ctx_display:>7} → ", end="", flush=True)
+            # Probe with compact one-char status
             status, tps_vals = test_config(model_path, mid, c["batch"], c["ubatch"],
                                            c["parallel"], c["mmap"], warmup=True)
-            print(f"{status}" + (f" ({tps_vals[0]:.1f} tps)" if tps_vals else ""))
-
+            # Aggressive VRAM cleanup between probes
             if status in ("oom", "start_fail"):
-                high = mid - 512
-            else:
+                try:
+                    subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
+                                   capture_output=True, timeout=30)
+                except Exception:
+                    subprocess.run(["killall", "-9", "llama-server"],
+                                   capture_output=True, timeout=5)
+                    time.sleep(2)
+            
+            if status == "ok":
+                _probe_log.append(f"✓ {mid:,}")
                 discovered_ctx = mid
                 best_tps = tps_vals[0] if tps_vals else 0
                 low = mid + 512
+            else:
+                _probe_log.append(f"✗ {mid:,}")
+                high = mid - 512
             if low > ceiling:
                 break
+        
+        # Show probe log as a single line
+        print(f"  {'  '.join(_probe_log)}")
 
     if discovered_ctx < floor:
         print(f"  FATAL: No stable context ≥ {floor}")
