@@ -3784,6 +3784,13 @@ function __model_bench() {
         [[ "$_bench_min_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_min_free_vram_mb=256
         [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_free_vram_mb=0
 
+        # Show free VRAM before each model
+        if [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] && (( _bench_free_vram_mb > 0 )); then
+            local _vram_color="$C_Success"
+            (( _bench_free_vram_mb < 1800 )) && _vram_color="$C_Warning"
+            printf "${C_Dim}  VRAM%s${_vram_color}%s${C_Reset}\n" " " "${_bench_free_vram_mb} MiB free"
+        fi
+
         if (( _bench_free_vram_mb > 0 && _bench_free_vram_mb < _bench_min_free_vram_mb ))
         then
             export LLAMA_GPU_LAYERS=0
