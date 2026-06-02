@@ -5097,7 +5097,6 @@ function burn() {
     __require_llm || return 1
     if [[ -z "${__BENCH_MODE:-}" ]]
     then
-        [[ -t 1 ]] && command clear
         __tac_header "HARDWARE BURN-IN STRESS TEST"
     fi
 
