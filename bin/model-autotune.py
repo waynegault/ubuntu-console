@@ -387,75 +387,143 @@ def main() -> None:
         print(f"  VRAM {free_vram} MiB free")
     
     c = CONSERVATIVE
-    print(f"  Tuning: ctx (fixed batch={c['batch']} ubatch={c['ubatch']} p={c['parallel']})")
+    _log = lambda s, end='\n': print(s, end=end, flush=True)
+    print()
+    print(f"  ── ctx discovery ──")
     print()
 
-    # Probe ceiling first with conservative params and warmup.
-    # Warmup ensures the GPU is in high-clock state before measuring TPS.
-    _ctx_display = f"{ceiling:,}" if ceiling > 999 else str(ceiling)
-    print(f"  ctx {_ctx_display:>7} → ", end="", flush=True)
+    # ── Phase 1: Find the max stable ctx ──
+    # Start at the conservative VRAM estimate, probe UPWARD in steps
+    # until failure, then narrow down with binary search.
+    discovered_ctx = 0
+    best_tps = 0.0
+    _ctx_log = []
+    
+    # Step 1: Initial probe at conservative estimate
+    _log(f"  {ceiling:>8,} → ", end="")
     status, tps_vals = test_config(model_path, ceiling, c["batch"], c["ubatch"],
                                    c["parallel"], c["mmap"], warmup=True)
-    _status_msg = {"ok": "✓", "oom": "OOM", "burn_fail": "✗", "load_fail": "✗"}.get(status, status)
-    _tps_msg = f" ({tps_vals[0]:.1f} tps)" if tps_vals else ""
-    print(f"{_status_msg}{_tps_msg}")
-
     if status == "ok":
+        _log(f"✓ {tps_vals[0]:.1f} tps")
         discovered_ctx = ceiling
-        best_tps = tps_vals[0] if tps_vals else 0
-        print(f"  → Stable at {ceiling}")
+        best_tps = tps_vals[0]
+        _ctx_log.append(f"✓ {ceiling:,}")
     else:
-        print(f"  → {ceiling} too high — binary searching")
-        discovered_ctx = 0
-        best_tps = 0
-        low, high = floor, ceiling
-        _probe_log = []
+        _log("✗ too high")
+        ceiling = floor  # reset to floor and search up from there
 
-        while low <= high:
-            mid = ((low + high) // 2) // 512 * 512
-            mid = max(mid, floor)
-            mid = max(mid, low)
-
-            # Probe with compact one-char status
-            status, tps_vals = test_config(model_path, mid, c["batch"], c["ubatch"],
+    # Step 2: Probe upward in increasing steps until failure
+    if discovered_ctx > 0 and ceiling < native_ctx:
+        step = max(2048, ceiling // 8)
+        probe = ceiling + step
+        while probe <= native_ctx:
+            _log(f"  {probe:>8,} → ", end="")
+            status, tps_vals = test_config(model_path, probe, c["batch"], c["ubatch"],
                                            c["parallel"], c["mmap"], warmup=True)
-            # Aggressive VRAM cleanup between probes
-            if status in ("oom", "load_fail"):
-                try:
-                    subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
-                                   capture_output=True, timeout=30)
-                except Exception:
-                    subprocess.run(["killall", "-9", "llama-server"],
-                                   capture_output=True, timeout=5)
-                    time.sleep(2)
-            
             if status == "ok":
-                _probe_log.append(f"✓ {mid:,}")
-                discovered_ctx = mid
-                best_tps = tps_vals[0] if tps_vals else 0
-                low = mid + 512
+                _log(f"✓ {tps_vals[0]:.1f} tps")
+                discovered_ctx = probe
+                best_tps = tps_vals[0]
+                _ctx_log.append(f"✓ {probe:,}")
+                step = max(2048, step + ceiling // 12)  # increase step
+                probe += step
             else:
-                _probe_log.append(f"✗ {mid:,}")
-                high = mid - 512
-            if low > ceiling:
+                _log("✗")
+                _ctx_log.append(f"✗ {probe:,}")
+                # Found the upper bound, binary search between last good and this
+                _low = discovered_ctx
+                _high = probe
+                _ctx_log.append("  ── narrowing ──")
+                while _low <= _high:
+                    _mid = ((_low + _high) // 2) // 512 * 512
+                    _mid = max(_mid, _low)
+                    status, tps_vals = test_config(model_path, _mid, c["batch"], c["ubatch"],
+                                                   c["parallel"], c["mmap"], warmup=True)
+                    if status in ("oom", "load_fail"):
+                        try:
+                            subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
+                                           capture_output=True, timeout=30)
+                        except Exception:
+                            subprocess.run(["killall", "-9", "llama-server"],
+                                           capture_output=True, timeout=5)
+                            time.sleep(2)
+                    if status == "ok":
+                        _ctx_log.append(f"    ✓ {_mid:,}")
+                        discovered_ctx = _mid
+                        best_tps = tps_vals[0] if tps_vals else best_tps
+                        _low = _mid + 512
+                    else:
+                        _ctx_log.append(f"    ✗ {_mid:,}")
+                        _high = _mid - 512
                 break
-        
-        # Show probe log sorted, with failed entries indicated
-        _probe_log.sort(key=lambda x: int(x.split()[-1].replace(',', '')))
-        print(f"  {'  '.join(_probe_log)}")
-
+            _ = [time.sleep(0.3)]
+    
     if discovered_ctx < floor:
         print(f"  FATAL: No stable context ≥ {floor}")
         sys.exit(1)
+    
+    _ctx_log.sort(key=lambda x: int(x.split()[-1].replace(',', '')) if x.split()[-1].replace(',','').isdigit() else 999999999)
+    print(f"  {'  '.join(_ctx_log)}")
+    print()
+    print(f"  Max ctx: {discovered_ctx}  ({best_tps:.1f} tps)")
+    print()
 
-    # Use conservative params directly (proven: batch/ubatch/parallel
-    # have <1% effect on TPS; conservative = smallest VRAM footprint).
-    best_batch, best_ubatch = c["batch"], c["ubatch"]
-    best_parallel, best_mmap = c["parallel"], c["mmap"]
+    # ── Phase 2: Test batch/ubatch/parallel combos at max ctx ──
+    # Different combos have <1% TPS impact on most models, but some
+    # benefit from higher batch sizes on newer architectures (qwen3,
+    # gemma3). We test a few key combos to find the best.
+    combos = [
+        dict(batch=512, ubatch=128, parallel=1, fit=256),
+        dict(batch=1024, ubatch=256, parallel=1, fit=256),
+        dict(batch=512, ubatch=128, parallel=2, fit=256),
+        dict(batch=1024, ubatch=512, parallel=1, fit=512),
+    ]
+    
+    # Prune combos that don't make sense for this model
+    pruned = []
+    for combo in combos:
+        if combo['parallel'] == 2 and discovered_ctx < 16384:
+            continue  # parallel=2 needs decent ctx to be worth it
+        if combo['batch'] > 512 and discovered_ctx < 8192:
+            continue  # high batch useless at small ctx
+        pruned.append(combo)
+    
+    print(f"  ── param tuning ──")
+    best_combo = CONSERVATIVE.copy()
+    best_combo_tps = best_tps
+    
+    for combo in pruned:
+        # Clear VRAM between param tests
+        try:
+            subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
+                           capture_output=True, timeout=30)
+        except Exception:
+            subprocess.run(["killall", "-9", "llama-server"],
+                           capture_output=True, timeout=5)
+            time.sleep(2)
+        
+        # Quick TPS at this ctx with different params
+        _log(f"  {discovered_ctx:,}  b={combo['batch']}/{combo['ubatch']}  p={combo['parallel']} → ", end="")
+        status, tps_vals = test_config(
+            model_path, discovered_ctx,
+            combo['batch'], combo['ubatch'],
+            combo['parallel'], CONSERVATIVE['mmap'],
+            warmup=(combo == pruned[0]))
+        if status == "ok" and tps_vals:
+            _log(f"{tps_vals[0]:.1f} tps")
+            if tps_vals[0] > best_combo_tps:
+                best_combo = combo
+                best_combo_tps = tps_vals[0]
+        else:
+            _log("✗")
+    
+    print()
+    best_batch, best_ubatch = best_combo['batch'], best_combo['ubatch']
+    best_parallel, best_mmap = best_combo['parallel'], CONSERVATIVE['mmap']
 
     # ── Phase 3: Registry writeback ─────────────────────────────────────
     print(f"  {_line}")
-    print(f"  ✓ ctx {discovered_ctx}  batch {best_batch}/{best_ubatch}  p{best_parallel}  mmap={best_mmap}  {best_tps:.1f} tps")
+    print(f"  ✓ ctx {discovered_ctx}  b {best_batch}/{best_ubatch}  p{best_parallel}  mmap={best_mmap}  {best_combo_tps:.1f} tps")
     print(f"  {_line}")
     print()
 
