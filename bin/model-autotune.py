@@ -448,8 +448,6 @@ def main() -> None:
         print(f"  FATAL: No stable context ≥ {floor}")
         sys.exit(1)
 
-    print(f"  → ctx {discovered_ctx}  ({best_tps:.1f} tps)")
-
     # Use conservative params directly (proven: batch/ubatch/parallel
     # have <1% effect on TPS; conservative = smallest VRAM footprint).
     best_batch, best_ubatch = c["batch"], c["ubatch"]

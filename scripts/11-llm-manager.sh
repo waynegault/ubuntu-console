@@ -2434,7 +2434,7 @@ function __model_use() {
     __llm_server_stop
     rm -f "$ACTIVE_LLM_FILE"
     __llm_registry_sync_state >/dev/null 2>&1 || true
-    __tac_info "Status" "FAILED OR TIMEOUT - check: tail $LLM_LOG_FILE" "$C_Error"
+    [[ -z "${__BENCH_MODE:-}" ]] && __tac_info "Status" "FAILED OR TIMEOUT - check: tail $LLM_LOG_FILE" "$C_Error"
     return 1
 }
 
@@ -3271,7 +3271,7 @@ function __model_stop() {
             done
         fi
     fi
-    __tac_info "Llama Server" "[STOPPED]" "$C_Success"
+    [[ -z "${__BENCH_MODE:-}" ]] && __tac_info "Llama Server" "[STOPPED]" "$C_Success"
     return 0
 }
 
@@ -3506,6 +3506,7 @@ EOF
         # Run them in a dedicated shell process-group when available.
         # Disable job-control messages for clean output.
         declare -fx "$1" 2>/dev/null || true
+        set +m
         if command -v setsid >/dev/null 2>&1
         then
             setsid bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} $_bench_shell_runner" _ "$_bench_profile_path" "$@" &
@@ -3515,13 +3516,12 @@ EOF
     elif command -v setsid >/dev/null 2>&1
     then
         # Start command in a dedicated session/process-group when possible.
+        set +m
         setsid "$@" &
     else
+        set +m
         "$@" &
     fi
-
-    # Suppress shell job-control notifications for background process
-    set +m
     local cmd_pid=$!
     __BENCH_TIMEOUT_LAST_PID="$cmd_pid"
     local cmd_pgid=""
