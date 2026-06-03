@@ -105,6 +105,25 @@ def read_native_ctx(model_path: str) -> int | None:
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
+def estimate_vram_ceiling(model_size_gb: float, free_vram_mb: int | None,
+                          native_ctx: int | None, floor: int,
+                          ceiling: int) -> int:
+    """Estimate a safe ctx ceiling from available VRAM.
+    
+    Returns a 512-aligned ctx value bounded by floor..ceiling.
+    If VRAM data is insufficient, returns floor as a safe minimum.
+    """
+    known_free = free_vram_mb or 3800
+    model_overhead = model_size_gb * 320
+    kv_per_4k = model_size_gb * 400
+    if kv_per_4k <= 0:
+        return floor
+    est = int((known_free - model_overhead) / kv_per_4k * 4096)
+    est = min(est, ceiling)
+    est = (est // 512) * 512
+    return max(est, floor)
+
+
 def pick_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -399,16 +418,9 @@ def main() -> None:
     # — Use the VRAM estimate as a rough guide but start probing at native ctx —
     # Starting high and binary-searching down avoids extra probe runs when the
     # model comfortably fits the available VRAM.
-    known_free = free_vram or 3800
-    model_overhead = model_size_gb * 320
-    kv_per_4k = model_size_gb * 400
-    vram_ceiling = ceiling
-    if kv_per_4k > 0:
-        _est = int((known_free - model_overhead) / kv_per_4k * 4096)
-        _est = min(_est, vram_ceiling)
-        _est = (_est // 512) * 512
-        native_display = f"{native_ctx:,}" if native_ctx else "unknown"
-        print(f"  Native ctx {native_display}  — estimated ceiling ~{_est:,}")
+    _est = estimate_vram_ceiling(model_size_gb, free_vram, native_ctx, floor, ceiling)
+    native_display = f"{native_ctx:,}" if native_ctx else "unknown"
+    print(f"  Native ctx {native_display}  — estimated ceiling ~{_est:,}")
     if free_vram:
         print(f"  VRAM {free_vram} MiB free")
     
