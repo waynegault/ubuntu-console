@@ -56,3 +56,4 @@ Thumbs.db
 scripts/__pycache__
 tests/__pycache__
 .qwen/settings.jsonmemory/
+.tmp-bats

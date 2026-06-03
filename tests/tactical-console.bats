@@ -184,16 +184,14 @@ setup() {
 
 @test "shellcheck: tactical-console.bashrc has no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    run shellcheck -s bash "$PROFILE_PATH"
-    [ "$status" -eq 0 ]
+    shellcheck -s bash "$PROFILE_PATH"
 }
 
 @test "shellcheck: companion scripts have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
         [[ -f "$f" ]] || continue
-        run shellcheck -s bash "$f"
-        [ "$status" -eq 0 ]
+        shellcheck -s bash "$f"
     done
 }
 
@@ -207,32 +205,28 @@ setup() {
 
 @test "shellcheck: tactical-console.bashrc passes at all severities" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    run shellcheck -s bash "$PROFILE_PATH"
-    [ "$status" -eq 0 ]
+    shellcheck -s bash "$PROFILE_PATH"
 }
 
 @test "shellcheck: companion scripts pass at all severities" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
         [[ -f "$f" ]] || continue
-        run shellcheck -s bash "$f"
-        [ "$status" -eq 0 ]
+        shellcheck -s bash "$f"
     done
 }
 
 @test "shellcheck: install.sh passes at all severities" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     [[ -f "$REPO_ROOT/install.sh" ]] || skip "install.sh not found"
-    run shellcheck -s bash "$REPO_ROOT/install.sh"
-    [ "$status" -eq 0 ]
+    shellcheck -s bash "$REPO_ROOT/install.sh"
 }
 
 @test "shellcheck: mcp-tools/*.sh pass at all severities" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     for f in "$REPO_ROOT"/mcp-tools/*.sh; do
         [[ -f "$f" ]] || continue
-        run shellcheck -s bash "$f"
-        [ "$status" -eq 0 ]
+        shellcheck -s bash "$f"
     done
 }
 
@@ -656,7 +650,7 @@ setup() {
     [[ "$result" == "IQ3_M" ]]
 }
 
-@test "quant: __quant_label returns 'unknown' for unrecognised ftype and filename" {
+@test "quant: __quant_label returns unknown for unrecognised ftype and filename" {
     result=$(__quant_label 99 "no-quant-info-here.gguf")
     [[ "$result" == "unknown" ]]
 }
@@ -792,7 +786,7 @@ setup() {
 # 14. ALIAS REGISTRATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "alias: 'h' is defined (tactical_help)" {
+@test "alias: h is defined (tactical_help)" {
     alias h >/dev/null 2>&1
 }
 
@@ -803,47 +797,47 @@ setup() {
     [ "$status" -eq 1 ]
 }
 
-@test "alias: 'cls' is defined (clear_tactical)" {
+@test "alias: cls is defined (clear_tactical)" {
     alias cls >/dev/null 2>&1
 }
 
-@test "alias: 'm' is defined (tactical_dashboard)" {
+@test "alias: m is defined (tactical_dashboard)" {
     alias m >/dev/null 2>&1
 }
 
-@test "alias: 'reload' is defined" {
+@test "alias: reload is defined" {
     alias reload >/dev/null 2>&1
 }
 
-@test "alias: 'll' is defined (ls -alF)" {
+@test "alias: ll is defined (ls -alF)" {
     alias ll >/dev/null 2>&1
 }
 
-@test "alias: 'la' is defined (ls -A)" {
+@test "alias: la is defined (ls -A)" {
     alias la >/dev/null 2>&1
 }
 
-@test "alias: 'l' is defined (ls -CF)" {
+@test "alias: l is defined (ls -CF)" {
     alias l >/dev/null 2>&1
 }
 
-@test "alias: 'commit' is defined" {
+@test "alias: commit is defined" {
     alias commit >/dev/null 2>&1
 }
 
-@test "alias: 'commit:' is defined (commit_deploy)" {
+@test "alias: commit: is defined (commit_deploy)" {
     alias 'commit:' >/dev/null 2>&1
 }
 
-@test "alias: 'cpwd' is defined (copy_path)" {
+@test "alias: cpwd is defined (copy_path)" {
     alias cpwd >/dev/null 2>&1
 }
 
-@test "alias: 'unittest' command is defined (alias/function)" {
+@test "alias: unittest command is defined (alias/function)" {
     alias unittest >/dev/null 2>&1 || declare -f unittest >/dev/null 2>&1
 }
 
-@test "alias: 'chat:' is defined (local_chat)" {
+@test "alias: chat: is defined (local_chat)" {
     alias 'chat:' >/dev/null 2>&1
 }
 
@@ -1038,7 +1032,7 @@ setup() {
 # 17. CODE HYGIENE
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "hygiene: all scripts end with '# end of file' marker" {
+@test "hygiene: all scripts end with # end of file marker" {
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
@@ -1052,7 +1046,7 @@ setup() {
     done
 }
 
-@test "hygiene: mcp-tools scripts end with '# end of file' marker" {
+@test "hygiene: mcp-tools scripts end with # end of file marker" {
     for f in "$REPO_ROOT"/mcp-tools/*.sh; do
         [[ -f "$f" ]] || continue
         local last
@@ -1128,7 +1122,7 @@ setup() {
     done
 }
 
-@test "hygiene: each module has '# shellcheck shell=bash' at line 1" {
+@test "hygiene: each module has # shellcheck shell=bash at line 1" {
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT"/scripts/09b-gog.sh; do
         [[ -f "$f" ]] || continue
         # Utility scripts (16+) are standalone executables with shebangs; skip
@@ -1154,7 +1148,7 @@ setup() {
     [[ "$missing" -eq 0 ]]
 }
 
-@test "hygiene: module versions follow '# Module Version: N' pattern" {
+@test "hygiene: module versions follow # Module Version: N pattern" {
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
         grep -qP '^# Module Version: \d+' "$f"
@@ -1226,7 +1220,7 @@ setup() {
     ! grep -q 'OPENCLAW_LCM_DEEP_RECALL' "$HOME/.bashrc"
 }
 
-@test "bashrc: ends with '# end of file' marker" {
+@test "bashrc: ends with # end of file marker" {
     local last
     last=$(grep -v '^[[:space:]]*$' "$HOME/.bashrc" | tail -1)
     [[ "$last" == "# end of file" ]]
@@ -1437,7 +1431,7 @@ setup() {
 # 21. TELEMETRY — Behavioural tests
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "telemetry: __get_uptime contains 'd', 'h', 'm' tokens" {
+@test "telemetry: __get_uptime contains d h m tokens" {
     result=$(__get_uptime)
     [[ "$result" == *"d"* ]]
     [[ "$result" == *"h"* ]]
@@ -1449,7 +1443,7 @@ setup() {
     [[ -n "$result" ]]
 }
 
-@test "telemetry: __get_disk output contains 'free'" {
+@test "telemetry: __get_disk output contains free" {
     result=$(__get_disk)
     [[ "$result" == *"free"* ]]
 }
@@ -1548,39 +1542,39 @@ setup() {
 # 23. MODEL DISPATCHER — Subcommand routing
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "model: 'model scan' runs without syntax error" {
+@test "model: model scan runs without syntax error" {
     # scan looks for LLAMA_MODEL_DIR which may not exist in test env
     run model scan
     # Either succeeds or fails gracefully (not a bash syntax error)
     [[ "$status" -le 1 ]]
 }
 
-@test "model: 'model list' runs without syntax error" {
+@test "model: model list runs without syntax error" {
     run model list
     [[ "$status" -le 1 ]]
 }
 
-@test "model: 'model status' runs without syntax error" {
+@test "model: model status runs without syntax error" {
     run model status
     [[ "$status" -le 1 ]]
 }
 
-@test "model: 'model stop' runs without syntax error (server not running)" {
+@test "model: model stop runs without syntax error (server not running)" {
     run model stop
     [[ "$status" -le 1 ]]
 }
 
-@test "model: 'model info' without args prints usage" {
+@test "model: model info without args prints usage" {
     run model info
     [[ "$status" -le 1 ]]
 }
 
-@test "model: unknown subcommand prints usage with 'Usage'" {
+@test "model: unknown subcommand prints usage with Usage" {
     run model nonexistent_xyz
     [[ "$output" == *"Usage"* ]]
 }
 
-@test "model: 'model' with no args prints usage" {
+@test "model: model with no args prints usage" {
     run model
     [[ "$output" == *"Usage"* ]]
 }
@@ -1731,17 +1725,17 @@ setup() {
 # 24. OC DISPATCHER — Extended subcommand routing
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "oc: 'oc env' runs and shows environment variables" {
+@test "oc: oc env runs and shows environment variables" {
     run oc env
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"OC_ROOT"* ]]
 }
 
-@test "oc: 'oc g' routes to oc-kgraph" {
+@test "oc: oc g routes to oc-kgraph" {
     declare -f oc-kgraph >/dev/null
 }
 
-@test "oc: help output includes 'g' subcommand" {
+@test "oc: help output includes g subcommand" {
     run oc
     [[ "$output" == *"Knowledge Graph"* || "$output" == *" g "* ]]
 }
@@ -1753,11 +1747,11 @@ setup() {
 
 @test "fn-avail: oc-kgraph" { declare -f oc-kgraph >/dev/null; }
 
-@test "alias: 'g' is defined (oc g)" {
+@test "alias: g is defined (oc g)" {
     alias g >/dev/null 2>&1
 }
 
-@test "oc: 'oc restart' fails gracefully without openclaw" {
+@test "oc: oc restart fails gracefully without openclaw" {
     if command -v openclaw >/dev/null 2>&1; then
         skip "openclaw is installed"
     fi
@@ -1951,19 +1945,25 @@ EOF
 }
 
 @test "deployment: commit_deploy fails outside git repo" {
-    pushd "$TAC_TEST_TMPDIR" >/dev/null
+    local outside_repo
+    outside_repo=$(mktemp -d)
+    pushd "$outside_repo" >/dev/null
     run commit_deploy "test message"
     [ "$status" -eq 1 ]
     [[ "$output" == *"NOT A GIT REPO"* ]]
     popd >/dev/null
+    rm -rf "$outside_repo"
 }
 
 @test "deployment: commit_auto fails outside git repo" {
-    pushd "$TAC_TEST_TMPDIR" >/dev/null
+    local outside_repo
+    outside_repo=$(mktemp -d)
+    pushd "$outside_repo" >/dev/null
     run commit_auto
     [ "$status" -eq 1 ]
     [[ "$output" == *"NOT A GIT REPO"* ]]
     popd >/dev/null
+    rm -rf "$outside_repo"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2221,7 +2221,7 @@ EOF
     grep -q '\[Service\]' "$REPO_ROOT/systemd/llama-watchdog.service"
 }
 
-@test "systemd: llama-watchdog.service uses the current user's home" {
+@test "systemd: llama-watchdog.service uses the current user home" {
     grep -q '^ExecStart=%h/.local/bin/llama-watchdog.sh$' \
         "$REPO_ROOT/systemd/llama-watchdog.service"
 }
@@ -2433,7 +2433,7 @@ EOF
 # 37. HYGIENE — Extended checks
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "hygiene: no 'TODO' or 'FIXME' in core modules (or explicitly tracked)" {
+@test "hygiene: no TODO or FIXME in core modules (or explicitly tracked)" {
     local count=0
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
@@ -2445,7 +2445,7 @@ EOF
     [[ "$count" -le 5 ]]
 }
 
-@test "hygiene: no shell scripts use 'echo -e' outside comments" {
+@test "hygiene: no shell scripts use echo -e outside comments" {
     local violations=0
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue

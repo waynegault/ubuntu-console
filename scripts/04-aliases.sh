@@ -57,6 +57,13 @@ alias reload='command clear; exec bash'
 alias m='tactical_dashboard'
 alias cpwd='copy_path'
 
+function bats() {
+    local repo_root="${TACTICAL_REPO_ROOT:-$PWD}"
+    local tmpdir="$repo_root/.tmp-bats"
+    mkdir -p "$tmpdir"
+    TMPDIR="$tmpdir" command bats "$@"
+}
+
 # Prefix pytest result lines with a running number for easier scanning.
 function __tac_number_pytest_output() {
     awk '

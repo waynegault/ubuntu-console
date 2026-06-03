@@ -57,24 +57,21 @@ setup_file() {
 
 @test "shellcheck: tactical-console.bashrc has no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    run shellcheck -s bash "$PROFILE_PATH"
-    [ "$status" -eq 0 ]
+    shellcheck -s bash "$PROFILE_PATH"
 }
 
 @test "shellcheck: companion scripts have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
         [[ -f "$f" ]] || continue
-        run shellcheck -s bash "$f"
-        [ "$status" -eq 0 ]
+        shellcheck -s bash "$f"
     done
 }
 
 @test "shellcheck: install.sh passes at all severities" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     [[ -f "$REPO_ROOT/install.sh" ]] || skip "install.sh not found"
-    run shellcheck -s bash "$REPO_ROOT/install.sh"
-    [ "$status" -eq 0 ]
+    shellcheck -s bash "$REPO_ROOT/install.sh"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -105,7 +102,7 @@ setup_file() {
 # 3. CODE HYGIENE
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "hygiene: all scripts end with '# end of file' marker" {
+@test "hygiene: all scripts end with # end of file marker" {
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
@@ -173,7 +170,7 @@ setup_file() {
     done
 }
 
-@test "hygiene: each module has '# shellcheck shell=bash' at line 1" {
+@test "hygiene: each module has # shellcheck shell=bash at line 1" {
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
         # Utility scripts (16+) are standalone executables with shebangs; skip
@@ -199,14 +196,14 @@ setup_file() {
     [[ "$missing" -eq 0 ]]
 }
 
-@test "hygiene: module versions follow '# Module Version: N' pattern" {
+@test "hygiene: module versions follow # Module Version: N pattern" {
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
         [[ -f "$f" ]] || continue
         grep -qP '^# Module Version: \d+' "$f"
     done
 }
 
-@test "hygiene: no 'TODO' or 'FIXME' in core modules (or explicitly tracked)" {
+@test "hygiene: no TODO or FIXME in core modules (or explicitly tracked)" {
     # Allow explicit TODO markers that are documented in inspection.md
     run grep -rn 'TODO\|FIXME' \
         "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
@@ -215,7 +212,7 @@ setup_file() {
     [ "$status" -ne 0 ]
 }
 
-@test "hygiene: no shell scripts use 'echo -e' outside comments" {
+@test "hygiene: no shell scripts use echo -e outside comments" {
     for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$PROFILE_PATH"; do
@@ -321,7 +318,7 @@ setup_file() {
     grep -q '\[Service\]' "$REPO_ROOT/systemd/llama-watchdog.service"
 }
 
-@test "systemd: llama-watchdog.service uses the current user's home" {
+@test "systemd: llama-watchdog.service uses the current user home" {
     grep -q '^ExecStart=%h/.local/bin/llama-watchdog.sh$' \
         "$REPO_ROOT/systemd/llama-watchdog.service"
 }
