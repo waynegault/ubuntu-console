@@ -454,7 +454,8 @@ function __llm_backend_normalize() {
 
 # ---------------------------------------------------------------------------
 # __llm_autotune_done_for_model — Check autotune status for a model/backend.
-# models.conf schema: column 18 stores yes/no, column 14 stores backend.
+# models.conf schema (single supported format):
+# ...|backend(14)|mmap_mode(15)|flash_attn(16)|tps(17)|autotuned(18)|...
 # @returns 0 when autotuned=yes for the requested backend, 1 otherwise.
 # ---------------------------------------------------------------------------
 function __llm_autotune_done_for_model() {
@@ -514,10 +515,9 @@ function __llm_autotune_profile_save() {
 
     [[ -f "$profile_file" ]] || return 1
 
-    __llm_registry_sync_state >/dev/null 2>&1 || true
-
     # Update the model row in-place via awk: fields 8 (ctx), 10 (batch),
-    # 11 (ubatch), 12 (parallel), 13 (fit), 14 (backend), 17 (tps), 18 (autotuned).
+    # 11 (ubatch), 12 (parallel), 13 (fit), 14 (backend), 16 (flash_attn),
+    # 17 (tps), 18 (autotuned).
     awk -F'|' -v n="$model_num" \
         -v ctx="$ctx_size" \
         -v batch="$batch" \
@@ -529,7 +529,9 @@ function __llm_autotune_profile_save() {
         'BEGIN{OFS="|"} {
             if ($1 == n) {
                 $8 = ctx; $10 = batch; $11 = ubatch; $12 = parallel
-                $13 = fit; $14 = backend; if ($16 == "") $16 = "on"; $17 = tps_val; $18 = "yes"
+                $13 = fit; $14 = backend
+                if ($16 == "") $16 = "on"
+                $17 = tps_val; $18 = "yes"
             }
             print
         }' "$profile_file" > "${profile_file}.tmp" && mv "${profile_file}.tmp" "$profile_file"

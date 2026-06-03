@@ -151,7 +151,7 @@ setup() {
     declare -f __llm_stddev_from_list >/dev/null 2>&1
 }
 
-@test "integration: __model_bench auto-runs autotune when row autotuned=no" {
+test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
     local fn_src
     fn_src=$(declare -f __model_bench 2>/dev/null)
 

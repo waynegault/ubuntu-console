@@ -2771,8 +2771,8 @@ EOF
 @test "autotune: __llm_autotune_profile_save writes correct fields to registry" {
     local llm_root="$TAC_TEST_TMPDIR/autotune-profile-save"
     mkdir -p "$llm_root/.llm"
-    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
-        '3|Profile Test|profile.gguf|2.0G|Q4_K_M/q8_0|llama|24|4096|6|1024|256|1|256|native|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+        '3|Profile Test|profile.gguf|2.0G|Q4_K_M/q8_0|llama|24|4096|6|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
     LLM_REGISTRY="$llm_root/.llm/models.conf"
     ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
     echo "3" > "$ACTIVE_LLM_FILE"
@@ -2780,7 +2780,7 @@ EOF
     local row
     row=$(awk -F'|' '$1==3' "$LLM_REGISTRY")
     local ctx batch ubatch parallel fit tps autotuned
-    IFS='|' read -r _ _ _ _ _ _ _ ctx _ batch ubatch parallel fit _ _ tps autotuned _ _ <<< "$row"
+    IFS='|' read -r _ _ _ _ _ _ _ ctx _ batch ubatch parallel fit _ _ _ tps autotuned _ _ <<< "$row"
     [[ "$ctx" == "16384" ]]
     [[ "$batch" == "2048" ]]
     [[ "$ubatch" == "512" ]]
@@ -2808,8 +2808,8 @@ EOF
 @test "autotune: __llm_autotune_done_for_model returns 0 for autotuned=yes" {
     local llm_root="$TAC_TEST_TMPDIR/autotune-done-check"
     mkdir -p "$llm_root/.llm"
-    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
-        '5|Done Model|done.gguf|1.0G|Q4_K_M/q8_0|llama|24|16384|6|1024|256|1|256|native|auto|55.1|yes|no|no' > "$llm_root/.llm/models.conf"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+        '5|Done Model|done.gguf|1.0G|Q4_K_M/q8_0|llama|24|16384|6|1024|256|1|256|native|auto|on|55.1|yes|no|no' > "$llm_root/.llm/models.conf"
     LLM_REGISTRY="$llm_root/.llm/models.conf"
     __llm_autotune_done_for_model 5
 }
@@ -2817,8 +2817,8 @@ EOF
 @test "autotune: __llm_autotune_done_for_model returns 1 for autotuned=no" {
     local llm_root="$TAC_TEST_TMPDIR/autotune-not-done"
     mkdir -p "$llm_root/.llm"
-    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
-        '6|Pending Model|pend.gguf|1.0G|Q4_K_M/q8_0|llama|24|4096|6|1024|256|1|256|native|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+        '6|Pending Model|pend.gguf|1.0G|Q4_K_M/q8_0|llama|24|4096|6|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
     LLM_REGISTRY="$llm_root/.llm/models.conf"
     run __llm_autotune_done_for_model 6
     [ "$status" -ne 0 ]

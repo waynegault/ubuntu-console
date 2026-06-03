@@ -160,15 +160,15 @@ up             # Run 20-step system maintenance
 | `serve N` / `halt` | LLM | Aliases for `model use N` / `model stop` |
 | `wake` | GPU | Lock GPU persistence mode |
 | `burn` | LLM | Stress test + TPS benchmark |
-| `chatl` | LLM | Multi-turn chat REPL |
+| `chat:` | LLM | Multi-turn chat REPL |
 | `chat-context` | LLM | File context → LLM |
 | `chat-pipe` | LLM | Stdin context → LLM |
 | `explain` | LLM | Explain last command |
 | `wtf` | LLM | Topic explanation REPL |
 | `mkproj` | Dev | Scaffold Python project |
-| `commitd` | Git | Commit with message + push + deploy |
+| `commit:` | Git | Commit with message and push |
+| `commit_deploy` | Git | Function behind `commit:` alias |
 | `commit_auto` | Git | LLM-generated commit message (PID-verified) + push |
-| `deploy` | Deploy | Rsync to production workspace |
 
 ---
 
@@ -178,7 +178,7 @@ up             # Run 20-step system maintenance
 
 ```
 +------------------------------------------------------------------------------+
-|                      TACTICAL DASHBOARD                      (ver.: 5.120)  |
+|                      TACTICAL DASHBOARD                      (ver.: 5.177)  |
 |------------------------------------------------------------------------------|
 |  SYSTEM TIME  :: Wednesday 09:14 22/04/2026                                 |
 |  UPTIME       :: 0d 2h 41m                                                  |
@@ -199,7 +199,7 @@ up             # Run 20-step system maintenance
 |  TARGET REPO  :: main                                                       |
 |  SEC STATUS   :: SECURE                                                     |
 |------------------------------------------------------------------------------|
-|            up | xo | serve | halt | chatl | commitd | status | h            |
+|        up | xo | serve <n> | halt | chat: | commit | g | h | pwsh          |
 +------------------------------------------------------------------------------+
 ```
 
@@ -298,7 +298,7 @@ export LLM_AUTOTUNE_MIN_CTX_FRACTION=0.50
 
 | Command | What It Does |
 |---|---|
-| `chatl [msg]` | Multi-turn REPL — full JSON history, SSE streaming, `end-chat` to exit |
+| `chat:` | Multi-turn REPL — full JSON history, SSE streaming, `end-chat` to exit |
 | `chat-context <file> "question"` | Feed a file as context (capped at 16,000 chars) |
 | `chat-pipe` | Pipe stdin: `cat error.log \| chat-pipe "What's wrong?"` |
 | `explain` | Explain the last command run (uses `fc -ln -2 -2`) |
@@ -428,19 +428,19 @@ _tac_expected_modules=(
 
 | Module | Lines | Purpose |
 |---|---|---|
-| `01-constants.sh` | 342 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
+| `01-constants.sh` | 372 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
 | `02-error-handling.sh` | 258 | ERR trap → `bash-errors.log` (exit codes ≥ 2; exit 1 filtered) |
 | `03-design-tokens.sh` | 48 | ANSI colour constants (`readonly`, re-source safe) |
-| `04-aliases.sh` | 421 | Short commands, VS Code wrappers, tactical shortcuts |
+| `04-aliases.sh` | 496 | Short commands, VS Code wrappers, tactical shortcuts |
 | `05-ui-engine.sh` | 534 | Box-drawing: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
 | `06-hooks.sh` | 197 | `cd` override (venv auto-activate), prompt (PS1), `__test_port`, admin badge |
-| `07-telemetry.sh` | 361 | CPU + dual GPU, NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots |
-| `08-maintenance.sh` | 1461 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system with flock |
-| `09-openclaw.sh` | 3217 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-failover`, wacli, `oc-kgraph`) |
+| `07-telemetry.sh` | 411 | CPU + dual GPU, NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots |
+| `08-maintenance.sh` | 1480 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system with flock |
+| `09-openclaw.sh` | 3208 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-failover`, wacli, `oc-kgraph`) |
 | `09b-gog.sh` | 165 | Google CLI (gog) detection and helpers |
-| `10-deployment.sh` | 460 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` |
-| `11-llm-manager.sh` | 3209 | Model management, streaming chat, burn, bench, explain, `__calc_gpu_layers`, `__gguf_metadata` |
-| `12-dashboard-help.sh` | 681 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` |
+| `10-deployment.sh` | 460 | `mkproj` (disk space check), `commit_deploy`, `commit_auto` |
+| `11-llm-manager.sh` | 5774 | Model management, streaming chat, burn, bench, explain, `__calc_gpu_layers`, `__gguf_metadata` |
+| `12-dashboard-help.sh` | 686 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` |
 | `13-init.sh` | 134 | `mkdir -p`, completions, WSL loopback fix, bridge call, EXIT trap (chained) |
 | `14-wsl-extras.sh` | 138 | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
 | `15-model-recommender.sh` | 194 | AI model recommendations by use case (`bc` fallback for integer math) |

@@ -103,7 +103,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 
 # ===== C) AUTOTUNE PERSISTENCE ===============================================
 
-@test "[C1] Autotune: done_for_model returns 0 for autotuned=yes (model 1)" {
+test_c1_autotune_done_for_model_yes() {
     __llm_autotune_done_for_model 1
 }
 
@@ -112,7 +112,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     [[ "$status" -ne 0 ]]
 }
 
-@test "[C4] Autotune: profile_save writes all fields + sets autotuned=yes" {
+test_c4_autotune_profile_save_writes_fields() {
     echo "2" > "$ACTIVE_LLM_FILE"
     __llm_autotune_profile_save 2 "native" 16384 2048 512 2 512 45.2
     local row; row=$(awk -F'|' '$1==2' "$LLM_REGISTRY")
@@ -161,7 +161,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     [[ "$output" == *"Missing value for --trials"* ]]
 }
 
-@test "[D5] Failure: autotune invalid --ctx-size (non-numeric)" {
+test_d5_autotune_invalid_ctx_size_non_numeric() {
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --ctx-size abc 2>/dev/null || true"
@@ -169,7 +169,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     [[ "$output" == *"Invalid"* ]]
 }
 
-@test "[D6] Failure: autotune --trials 0 fails (must be >= 1)" {
+test_d6_autotune_trials_zero_fails() {
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --trials 0 2>/dev/null || true"
@@ -177,7 +177,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     [[ "$output" == *"Invalid"* ]]
 }
 
-@test "[D7] Failure: autotune unknown backend" {
+test_d7_autotune_unknown_backend() {
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --backend nonexistent 2>/dev/null || true"
@@ -197,7 +197,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     flock -u "$fd"; exec {fd}>&-; rm -f "$LLM_BENCH_LOCK_FILE"
 }
 
-@test "[E2] Lock: autotune singleton prevents concurrent run" {
+test_e2_lock_autotune_singleton_prevents_concurrent_run() {
     exec {fd}>"$LLM_AUTOTUNE_LOCK_FILE"
     flock -x "$fd"
     echo "$$" > "$LLM_AUTOTUNE_LOCK_FILE"
