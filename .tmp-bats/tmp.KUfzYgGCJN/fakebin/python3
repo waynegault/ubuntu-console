@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "-m" && "${2:-}" == "venv" ]]; then
+    target="${3:-.venv}"
+    mkdir -p "$target/bin"
+    cat > "$target/bin/activate" << 'ACT'
+VIRTUAL_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export VIRTUAL_ENV
+export PATH="$VIRTUAL_ENV/bin:$PATH"
+ACT
+    cat > "$target/bin/pip" << 'PIP'
+#!/usr/bin/env bash
+exit 1
+PIP
+    chmod +x "$target/bin/pip"
+    exit 0
+fi
+exec /usr/bin/python3 "$@"
