@@ -571,6 +571,24 @@ def stable_tps(samples: list[float]) -> float:
         return float(samples[0])
 
 
+def stable_score(samples: list[float], penalty: float = 0.20) -> float:
+    """Score TPS samples with a stability penalty.
+
+    Higher is better. We penalize high variance so bursty configs lose to
+    steadier ones at similar median TPS.
+    """
+    if not samples:
+        return 0.0
+    med = stable_tps(samples)
+    if len(samples) < 2:
+        return med
+    try:
+        sd = float(statistics.pstdev(samples))
+    except Exception:
+        sd = 0.0
+    return max(0.0, med - (max(0.0, penalty) * sd))
+
+
 def refine_upward_from_ctx(
     *,
     model_path: str,
@@ -888,49 +906,188 @@ def main() -> None:
     print()
 
     # ── Phase 3: Batch/ubatch/parallel tuning at discovered ctx ─────────
-    combos = [
-        dict(batch=512,  ubatch=128, parallel=1, fit=256),
-        dict(batch=1024, ubatch=256, parallel=1, fit=256),
-        dict(batch=512,  ubatch=128, parallel=2, fit=256),
-        dict(batch=1024, ubatch=512, parallel=1, fit=512),
-    ]
-    def _prune_for_ctx(ctx_val: int) -> list[dict[str, int]]:
-        return [
-            c for c in combos
-            if not (c["parallel"] == 2 and ctx_val < 16384)
-            and not (c["batch"] > 512 and ctx_val < 8192)
-        ]
+    # Adaptive search: evaluate a small anchor set, then expand around top
+    # performers (beam search) instead of brute-forcing a static list.
+    stability_penalty = float(os.environ.get("LLM_AUTOTUNE_PARAM_STABILITY_PENALTY", "0.20"))
+    beam_width = max(1, int(os.environ.get("LLM_AUTOTUNE_PARAM_BEAM_WIDTH", "2")))
+    beam_rounds = max(1, int(os.environ.get("LLM_AUTOTUNE_PARAM_BEAM_ROUNDS", "2")))
+
+    def _fit_for_batch(batch: int) -> int:
+        if batch <= 1024:
+            return 256
+        if batch <= 1536:
+            return 512
+        return 768
+
+    def _combo_key(c: dict[str, int]) -> tuple[int, int, int]:
+        return (c["batch"], c["ubatch"], c["parallel"])
+
+    def _candidate_space(ctx_val: int) -> list[dict[str, int]]:
+        batches = [512, 768, 1024, 1536, 2048]
+        ubatches = [128, 256, 512]
+        parallels = [1, 2]
+        if ctx_val >= 32768:
+            parallels.append(3)
+
+        out: list[dict[str, int]] = []
+        for b in batches:
+            if ctx_val < 8192 and b > 1024:
+                continue
+            if ctx_val < 16384 and b > 1536:
+                continue
+            for u in ubatches:
+                if u > b:
+                    continue
+                for p in parallels:
+                    if ctx_val < 16384 and p > 1:
+                        continue
+                    if ctx_val < 32768 and p > 2:
+                        continue
+                    out.append({"batch": b, "ubatch": u, "parallel": p, "fit": _fit_for_batch(b)})
+        return out
+
+    def _anchor_combos(space: list[dict[str, int]]) -> list[dict[str, int]]:
+        wanted = {
+            (512, 128, 1),
+            (1024, 256, 1),
+            (1024, 512, 1),
+            (512, 128, 2),
+            (1536, 512, 1),
+        }
+        anchors = [c for c in space if _combo_key(c) in wanted]
+        if anchors:
+            return anchors
+        return space[: min(4, len(space))]
+
+    def _neighbors(combo: dict[str, int], space: list[dict[str, int]]) -> list[dict[str, int]]:
+        by_key = {_combo_key(c): c for c in space}
+        batches = sorted({c["batch"] for c in space})
+        ubatches = sorted({c["ubatch"] for c in space})
+        parallels = sorted({c["parallel"] for c in space})
+
+        def _adj(values: list[int], cur: int) -> list[int]:
+            if cur not in values:
+                return []
+            i = values.index(cur)
+            out_i = []
+            if i > 0:
+                out_i.append(values[i - 1])
+            if i + 1 < len(values):
+                out_i.append(values[i + 1])
+            return out_i
+
+        candidate_keys: set[tuple[int, int, int]] = set()
+        for nb in _adj(batches, combo["batch"]):
+            candidate_keys.add((nb, combo["ubatch"], combo["parallel"]))
+        for nu in _adj(ubatches, combo["ubatch"]):
+            candidate_keys.add((combo["batch"], nu, combo["parallel"]))
+        for np in _adj(parallels, combo["parallel"]):
+            candidate_keys.add((combo["batch"], combo["ubatch"], np))
+
+        # One diagonal move helps jump from conservative to higher-throughput
+        # candidates without evaluating the entire grid.
+        for nb in _adj(batches, combo["batch"]):
+            for nu in _adj(ubatches, combo["ubatch"]):
+                candidate_keys.add((nb, nu, combo["parallel"]))
+
+        out: list[dict[str, int]] = []
+        for k in candidate_keys:
+            c = by_key.get(k)
+            if c is not None:
+                out.append(c)
+        return out
 
     def _run_param_tuning(ctx_val: int, profile: dict[str, str]) -> tuple[dict[str, int], float, int, int, list[dict[str, int]]]:
-        pruned_local = _prune_for_ctx(ctx_val)
-        best_combo_local = dict(CONSERVATIVE)
-        best_tps_local = 0.0
+        space = _candidate_space(ctx_val)
+        if not space:
+            return (dict(CONSERVATIVE), 0.0, 0, 0, [])
+
+        seen: set[tuple[int, int, int]] = set()
+        records: dict[tuple[int, int, int], dict[str, float | dict[str, int]]] = {}
         load_fail_local = 0
         ok_local = 0
-        for i, combo in enumerate(pruned_local):
+
+        def _eval(combo: dict[str, int], warmup: bool = False) -> None:
+            nonlocal load_fail_local
+            nonlocal ok_local
+
+            key = _combo_key(combo)
+            if key in seen:
+                return
+            seen.add(key)
+
             print(f"  {ctx_val:,}  b={combo['batch']}/{combo['ubatch']}  p={combo['parallel']} → ", end="", flush=True)
             status, tps_vals = test_config_with_retry(
-                model_path, ctx_val,
-                combo["batch"], combo["ubatch"], combo["parallel"],
+                model_path,
+                ctx_val,
+                combo["batch"],
+                combo["ubatch"],
+                combo["parallel"],
                 profile["mmap"],
                 flash_attn=profile["flash_attn"],
-                warmup=(i == 0),
+                warmup=warmup,
                 samples=max(1, TPS_SAMPLES_PARAM),
                 burn_tokens=BURN_TOKENS_SCORE,
                 retries=1,
             )
-            if status == "ok" and tps_vals:
-                ok_local += 1
-                score = stable_tps(tps_vals)
-                print(f"{score:.1f} tps (median of {len(tps_vals)})", flush=True)
-                if score >= best_tps_local:
-                    best_combo_local = combo
-                    best_tps_local = score
-            else:
+            if status != "ok" or not tps_vals:
                 if status == "load_fail":
                     load_fail_local += 1
                 print(f"✗ ({status})", flush=True)
-        return (best_combo_local, best_tps_local, load_fail_local, ok_local, pruned_local)
+                return
+
+            ok_local += 1
+            median_tps = stable_tps(tps_vals)
+            score = stable_score(tps_vals, penalty=stability_penalty)
+            spread = max(tps_vals) - min(tps_vals) if len(tps_vals) > 1 else 0.0
+            print(f"{median_tps:.1f} tps (score {score:.1f}, spread {spread:.1f})", flush=True)
+            records[key] = {
+                "combo": combo,
+                "score": float(score),
+                "tps": float(median_tps),
+            }
+
+        def _top_beam() -> list[dict[str, int]]:
+            ranked = sorted(
+                records.values(),
+                key=lambda r: (float(r["score"]), float(r["tps"])),
+                reverse=True,
+            )
+            return [dict(r["combo"]) for r in ranked[:beam_width]]
+
+        anchors = _anchor_combos(space)
+        for i, combo in enumerate(anchors):
+            _eval(combo, warmup=(i == 0))
+
+        beam = _top_beam()
+        for _ in range(beam_rounds):
+            if not beam:
+                break
+            frontier: list[dict[str, int]] = []
+            for combo in beam:
+                for ncombo in _neighbors(combo, space):
+                    if _combo_key(ncombo) not in seen:
+                        frontier.append(ncombo)
+            if not frontier:
+                break
+            for combo in frontier:
+                _eval(combo)
+            next_beam = _top_beam()
+            if {_combo_key(c) for c in next_beam} == {_combo_key(c) for c in beam}:
+                break
+            beam = next_beam
+
+        if not records:
+            return (dict(CONSERVATIVE), 0.0, load_fail_local, ok_local, space)
+
+        best = sorted(
+            records.values(),
+            key=lambda r: (float(r["score"]), float(r["tps"])),
+            reverse=True,
+        )[0]
+        best_combo_local = dict(best["combo"])
+        best_tps_local = float(best["tps"])
+        return (best_combo_local, best_tps_local, load_fail_local, ok_local, space)
 
     print(f"  ── param tuning ──")
     best_combo, best_combo_tps, load_fail_count, ok_count, pruned = _run_param_tuning(discovered_ctx, selected_profile)
@@ -961,7 +1118,7 @@ def main() -> None:
         kill_zombie_servers()
         local_best_tps   = 0.0
         local_best_combo = best_combo
-        for combo in pruned:
+        for combo in _candidate_space(tuned_ctx):
             status, tps_vals = test_config_with_retry(
                 model_path, tuned_ctx,
                 combo["batch"], combo["ubatch"], combo["parallel"],
