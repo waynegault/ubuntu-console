@@ -27,13 +27,16 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+
 # ── Constants ──────────────────────────────────────────────────────────
 
 LLAMA_SERVER = Path(os.path.expanduser("~/llama.cpp/build/bin/llama-server"))
 REGISTRY = Path(os.path.expanduser("~/.llm/models.conf"))
 MODEL_DIR = Path("/mnt/m/active")
 
-BURN_TOKENS = 768
+# Short burst for ctx discovery — TPS accuracy isn't the goal, we just need to
+# confirm the model can generate at a given ctx size without crashing.
+BURN_TOKENS = 64
 CTX_FLOOR = 4096
 PORT_BASE = 9200
 
@@ -65,7 +68,7 @@ def read_native_ctx(model_path: str) -> int | None:
              "--ctx-size", "512",
              "--batch-size", "64", "--ubatch-size", "64",
              "--parallel", "1", "--threads", "1",
-             "--flash-attn", "on", "--fit", "off", "--no-mmap"],
+             "--flash-attn", "on", "--fit", "on", "--fit-target", "256", "--no-mmap"],
             stdout=open(str(log_path), "w"),
             stderr=subprocess.STDOUT,
         )
@@ -197,7 +200,7 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
         "--parallel", str(parallel),
         "--threads", str(threads),
         "--flash-attn", "on",
-        "--fit", "off",
+        "--fit", "on", "--fit-target", "256",
     ]
     if mmap == "off":
         cmd.append("--no-mmap")
@@ -210,6 +213,7 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
         return None
 
     deadline = time.monotonic() + 240
+    health_ok = False
     while time.monotonic() < deadline:
         try:
             req = urllib.request.Request(f"http://127.0.0.1:{port}/health", method="GET")
@@ -221,7 +225,8 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
                         return None
                 except Exception:
                     pass
-                return proc
+                health_ok = True
+                break
         except (urllib.error.URLError, TimeoutError, OSError):
             if proc.poll() is not None:
                 try:
@@ -232,6 +237,29 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
                 return None
             time.sleep(0.5)
 
+    if not health_ok:
+        proc.kill(); proc.wait(timeout=10)
+        return None
+
+    # Pre-flight: send a tiny completion to confirm the model slot is actually
+    # ready to serve (WSL2: /health returns OK before slot is ready).
+    deadline = time.monotonic() + 120
+    preflight = json.dumps({
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1, "temperature": 0,
+    }).encode()
+    preflight_url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    while time.monotonic() < deadline:
+        try:
+            req = urllib.request.Request(preflight_url, data=preflight,
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=30):
+                return proc
+        except Exception:
+            if proc.poll() is not None:
+                return None
+            time.sleep(2)
+
     proc.kill(); proc.wait(timeout=10)
     return None
 
@@ -241,18 +269,18 @@ def run_burn(port: int, warmup: bool = False) -> float | None:
     if warmup:
         payload = json.dumps({
             "messages": [{"role": "user", "content": "Warmup"}],
-            "max_tokens": 64, "temperature": 0,
+            "max_tokens": 8, "temperature": 0,
         }).encode()
         # Warmup may fail because the model is still being loaded from slow
-        # WSL2 drvfs after /health returns ok — retry with longer timeout.
-        for _ in range(2):
+        # WSL2 drvfs after /health returns ok — retry with escalating delays.
+        for _ in range(8):
             try:
                 req = urllib.request.Request(base_url, data=payload,
                                              headers={"Content-Type": "application/json"}, method="POST")
                 urllib.request.urlopen(req, timeout=300)
                 break
             except Exception:
-                time.sleep(5)
+                time.sleep(10)
 
     payload = json.dumps({
         "messages": [{"role": "user", "content": BURN_PROMPT}],
@@ -368,21 +396,19 @@ def main() -> None:
     kill_zombie_servers()
     free_vram = _get_free_vram_mb()
     
-    # — Estimate a conservative starting ceiling —
-    # The GGUF's native ctx is the model's declaration, but rarely fits
-    # on a 4GB GPU with larger models. We estimate a safe starting point
-    # and rely on the binary search to find the true stable max.
+    # — Use the VRAM estimate as a rough guide but start probing at native ctx —
+    # Starting high and binary-searching down avoids extra probe runs when the
+    # model comfortably fits the available VRAM.
     known_free = free_vram or 3800
     model_overhead = model_size_gb * 320
     kv_per_4k = model_size_gb * 400
+    vram_ceiling = ceiling
     if kv_per_4k > 0:
-        vram_ceiling = int((known_free - model_overhead) / kv_per_4k * 4096)
-        vram_ceiling = max(vram_ceiling, floor)
-        vram_ceiling = min(vram_ceiling, ceiling)
-        vram_ceiling = (vram_ceiling // 512) * 512
-        if vram_ceiling < ceiling:
-            print(f"  Native ctx {native_ctx or 'unknown'} — starting probe at ~{vram_ceiling:,}")
-            ceiling = max(vram_ceiling, floor)
+        _est = int((known_free - model_overhead) / kv_per_4k * 4096)
+        _est = min(_est, vram_ceiling)
+        _est = (_est // 512) * 512
+        native_display = f"{native_ctx:,}" if native_ctx else "unknown"
+        print(f"  Native ctx {native_display}  — estimated ceiling ~{_est:,}")
     if free_vram:
         print(f"  VRAM {free_vram} MiB free")
     
@@ -393,77 +419,92 @@ def main() -> None:
     print()
 
     # ── Phase 1: Find the max stable ctx ──
-    # Start at the conservative VRAM estimate, probe UPWARD in steps
-    # until failure, then narrow down with binary search.
+    # Probe from native ctx DOWNWARD until success, then binary search down.
+    # This wastes at most one probe when the model fits natively, and avoids
+    # many probes when the estimate is too conservative.
     discovered_ctx = 0
     best_tps = 0.0
     _ctx_log = []
     
-    # Step 1: Initial probe at conservative estimate
-    _log(f"  {ceiling:>8,} → ", end="")
-    status, tps_vals = test_config(model_path, ceiling, c["batch"], c["ubatch"],
+    # Step 1: Quick check at native ctx — if it fits, we're done in one probe.
+    probe_ctx = native_ctx if native_ctx else ceiling
+    _log(f"  {probe_ctx:>8,} → ", end="")
+    status, tps_vals = test_config(model_path, probe_ctx, c["batch"], c["ubatch"],
                                    c["parallel"], c["mmap"], warmup=True)
     if status == "ok":
         _log(f"✓ {tps_vals[0]:.1f} tps")
-        discovered_ctx = ceiling
+        discovered_ctx = native_ctx
         best_tps = tps_vals[0]
-        _ctx_log.append(f"✓ {ceiling:,}")
+        _ctx_log.append(f"✓ {probe_ctx:,}")
     else:
-        _log("✗ too high")
-        ceiling = floor  # reset to floor and search up from there
-
-    # Step 2: Probe upward in increasing steps until failure
-    if discovered_ctx > 0 and ceiling < native_ctx:
+        _log("✗")
+        _ctx_log.append(f"✗ {probe_ctx:,}")
+        # Native ctx failed — use the VRAM estimate and probe upward.
+        try:
+            subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
+                           capture_output=True, timeout=30)
+        except Exception:
+            subprocess.run(["killall", "-9", "llama-server"],
+                           capture_output=True, timeout=5)
+            time.sleep(2)
+        ceiling = max(_est, floor)
         step = max(2048, ceiling // 8)
-        probe = ceiling + step
-        while probe <= native_ctx:
+        probe = ceiling
+        while probe >= floor:
             _log(f"  {probe:>8,} → ", end="")
             status, tps_vals = test_config(model_path, probe, c["batch"], c["ubatch"],
-                                           c["parallel"], c["mmap"], warmup=True)
+                                           c["parallel"], c["mmap"], warmup=False)
             if status == "ok":
                 _log(f"✓ {tps_vals[0]:.1f} tps")
                 discovered_ctx = probe
                 best_tps = tps_vals[0]
                 _ctx_log.append(f"✓ {probe:,}")
-                step = max(2048, step + ceiling // 12)  # increase step
-                probe += step
-                # Clear VRAM between probes to avoid ghost allocation buildup
-                subprocess.run(["killall", "-9", "llama-server"],
-                               capture_output=True, timeout=5)
-                time.sleep(1)
+                break
             else:
                 _log("✗")
                 _ctx_log.append(f"✗ {probe:,}")
-                # Found the upper bound, binary search between last good and this
-                _low = discovered_ctx
-                _high = probe
-                _ctx_log.append("  ── narrowing ──")
-                while _low <= _high:
-                    _mid = ((_low + _high) // 2) // 512 * 512
-                    _mid = max(_mid, _low)
-                    status, tps_vals = test_config(model_path, _mid, c["batch"], c["ubatch"],
-                                                   c["parallel"], c["mmap"], warmup=True)
-                    if status in ("oom", "load_fail"):
-                        try:
-                            subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
-                                           capture_output=True, timeout=30)
-                        except Exception:
-                            subprocess.run(["killall", "-9", "llama-server"],
-                                           capture_output=True, timeout=5)
-                            time.sleep(2)
-                    if status == "ok":
-                        _ctx_log.append(f"    ✓ {_mid:,}")
-                        discovered_ctx = _mid
-                        best_tps = tps_vals[0] if tps_vals else best_tps
-                        _low = _mid + 512
-                    else:
-                        _ctx_log.append(f"    ✗ {_mid:,}")
-                        _high = _mid - 512
+                try:
+                    subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
+                                   capture_output=True, timeout=30)
+                except Exception:
+                    subprocess.run(["killall", "-9", "llama-server"],
+                                   capture_output=True, timeout=5)
+                    time.sleep(2)
+            if probe <= floor:
+                probe = 0
                 break
+            probe = max(floor, probe - step)
     
-    if discovered_ctx < floor:
+    if discovered_ctx == 0:
         print(f"  FATAL: No stable context ≥ {floor}")
         sys.exit(1)
+    
+    # Binary search upward from discovered_ctx to confirm the true max
+    if discovered_ctx < native_ctx:
+        _low = discovered_ctx + 512
+        _high = min(discovered_ctx + step, native_ctx)
+        _ctx_log.append("  ── narrowing ──")
+        while _low <= _high:
+            _mid = ((_low + _high) // 2) // 512 * 512
+            _mid = max(_mid, _low)
+            status, tps_vals = test_config(model_path, _mid, c["batch"], c["ubatch"],
+                                           c["parallel"], c["mmap"], warmup=False)
+            if status in ("oom", "load_fail", "burn_fail"):
+                try:
+                    subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
+                                   capture_output=True, timeout=30)
+                except Exception:
+                    subprocess.run(["killall", "-9", "llama-server"],
+                                   capture_output=True, timeout=5)
+                    time.sleep(2)
+            if status == "ok":
+                _ctx_log.append(f"    ✓ {_mid:,}")
+                discovered_ctx = _mid
+                best_tps = tps_vals[0] if tps_vals else best_tps
+                _low = _mid + 512
+            else:
+                _ctx_log.append(f"    ✗ {_mid:,}")
+                _high = _mid - 512
     
     _ctx_log.sort(key=lambda x: int(x.split()[-1].replace(',', '')) if x.split()[-1].replace(',','').isdigit() else 999999999)
     print(f"  {'  '.join(_ctx_log)}")
@@ -493,7 +534,7 @@ def main() -> None:
     
     print(f"  ── param tuning ──")
     best_combo = CONSERVATIVE.copy()
-    best_combo_tps = best_tps
+    best_combo_tps = 0.0  # reset; will be set by the first successful combo
     
     for combo in pruned:
         # Clear VRAM between param tests
@@ -514,7 +555,7 @@ def main() -> None:
             warmup=(combo == pruned[0]))
         if status == "ok" and tps_vals:
             _log(f"{tps_vals[0]:.1f} tps")
-            if tps_vals[0] > best_combo_tps:
+            if tps_vals[0] >= best_combo_tps:
                 best_combo = combo
                 best_combo_tps = tps_vals[0]
         else:

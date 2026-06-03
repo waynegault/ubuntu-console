@@ -425,7 +425,7 @@ function __llm_autotune_done_for_model() {
     # exit 1 when the model row doesn't exist at all.
     awk -F'|' -v n="$model_num" -v want_backend="$requested_backend" '
         function norm_backend(raw) {
-            if (raw == "native" || raw == "binary" || raw == "llama-server") return "native"
+            if (raw == "native" || raw == "binary" || raw == "llama-server" || raw == "llama_server") return "native"
             if (raw == "python" || raw == "llama-cpp-python" || raw == "module" || raw == "") return "python"
             return raw
         }
@@ -2238,7 +2238,13 @@ function __model_use() {
         cmd+=("--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size")
         cmd+=("--threads" "$threads")
         cmd+=("--n-gpu-layers" "$gpu_layers")
-        cmd+=("--fit" "on" "--fit-target" "$fit_target_mb")
+        # Bench mode uses a reduced fit target so large models can start on
+        # 4 GB VRAM without being rejected by an impossible 1 GB free target.
+        if [[ -n "${__BENCH_MODE:-}" ]]; then
+            cmd+=("--fit" "on" "--fit-target" "256")
+        else
+            cmd+=("--fit" "on" "--fit-target" "$fit_target_mb")
+        fi
         cmd+=("--flash-attn" "$flash_attn_mode")
         cmd+=("$kv_offload_flag")
         cmd+=("--cache-type-k" "${LLAMA_CACHE_TYPE_K:-q8_0}")
@@ -2317,7 +2323,17 @@ function __model_use() {
             _bench_vram_label="unknown"
         fi
         _bench_clock_info=$(__llm_gpu_clock_snapshot)
-        # Bench mode: extra info suppressed for cleaner output
+        # Show tuned params in bench mode to confirm what's running.
+        local _fit_label="fit:${fit_target_mb}"
+        local _autotuned_label=""
+        if [[ "${autotuned:-no}" == "yes" ]]
+        then
+            _autotuned_label="autotuned"
+        else
+            _autotuned_label="defaults"
+        fi
+        printf "Using %s params: ctx %s  b %s/%s  p %s  ngl %s  %s\n" \
+            "$_autotuned_label" "$ctx" "$batch_size" "$ubatch_size" "$parallel_slots" "$gpu_layers" "$_fit_label"
     fi
 
     # llama.cpp monitors stdin and will force-shutdown on EOF.
@@ -2420,6 +2436,30 @@ function __model_use() {
     if __llm_wait_for_health "$health_timeout" _health_elapsed "$_health_progress" "Loading LLM (health check)"
     then
         __llm_registry_sync_state >/dev/null 2>&1 || true
+        # Bench mode: pre-flight a tiny completion to make sure the model slot is
+        # actually ready to serve (WSL2: /health returns OK before slot is ready,
+        # causing curl 52 on the first real request).
+        if [[ -n "${__BENCH_MODE:-}" ]]
+        then
+            local _preflight='{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}'
+            local _pf_rc
+            _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+                -H 'Content-Type: application/json' \
+                -d "$_preflight" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" 2>/dev/null || echo 0)
+            # If preflight didn't get a 200, the slot wasn't ready yet — wait for
+            # it to stabilise by polling /health until it sticks.
+            if [[ "$_pf_rc" != "200" ]]
+            then
+                for (( _pf=0; _pf < 60; _pf++ ))
+                do
+                    sleep 1
+                    _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+                        -H 'Content-Type: application/json' \
+                        -d "$_preflight" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" 2>/dev/null || echo 0)
+                    [[ "$_pf_rc" == "200" ]] && break
+                done
+            fi
+        fi
         [[ -n "${__BENCH_MODE:-}" ]] || __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
         local offload_info
         offload_info=$(grep -oiE 'offload(ing|ed) [0-9]+ .* layers' "$LLM_LOG_FILE" 2>/dev/null | tail -1)
@@ -3773,7 +3813,7 @@ function __model_bench() {
         printf "\n\n%s── [%s/%s] %s (%s) ──%s\n" "$C_Highlight" "$_prog_num" "$_prog_total" "${b_name[$i]}" "${b_size[$i]}" "$C_Reset"
 
         # Full VRAM cleanup BEFORE checking VRAM state
-        sudo /usr/local/bin/clear_vram.sh 2>/dev/null || true
+        sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
 
         local _bench_safe_overrides=0
         local _bench_min_free_vram_mb="${LLM_BENCH_MIN_FREE_VRAM_MB:-1200}"
@@ -3787,12 +3827,9 @@ function __model_bench() {
         [[ "$_bench_min_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_min_free_vram_mb=256
         [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_free_vram_mb=0
 
-        # Show free VRAM before each model
+        # Compact VRAM line
         if [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] && (( _bench_free_vram_mb > 0 )); then
-            local _vram_color="$C_Success"
-            (( _bench_free_vram_mb < 3000 )) && _vram_color="$C_Warning"
-            (( _bench_free_vram_mb < 1800 )) && _vram_color="$C_Error"
-            printf "${C_Dim}  VRAM%s${_vram_color}%s${C_Reset}\n" " " "${_bench_free_vram_mb} MiB free"
+            printf "VRAM %s MiB VRAM free\n" "$_bench_free_vram_mb"
         fi
 
         if (( _bench_free_vram_mb > 0 && _bench_free_vram_mb < _bench_min_free_vram_mb ))
@@ -3857,7 +3894,7 @@ function __model_bench() {
 
         rm -f "$LLM_TPS_CACHE"
         # Timeout guard: force-bound full model run (__model_use + burn).
-        local bench_model_timeout="${LLM_BENCH_MODEL_TIMEOUT:-300}"
+        local bench_model_timeout="${LLM_BENCH_MODEL_TIMEOUT:-600}"
         local bench_model_rc=0
         # Use || to capture non-zero exit codes safely under set -e.
         __bench_run_with_timeout "$bench_model_timeout" __bench_run_single_model "${b_num[$i]}" || bench_model_rc=$?
@@ -3888,8 +3925,8 @@ function __model_bench() {
         [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")
         b_tps+=("$tps")
         __model_stop 2>/dev/null
-        __tac_info "  VRAM" "clearing..." "$C_Dim"
-        sudo /usr/local/bin/clear_vram.sh 2>/dev/null || true
+        printf "\nClearing VRAM\n"
+        sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
         # Always clean up any leaked overrides between model iterations.
         # LLAMA_GPU_LAYERS etc. may have been set by a previous model's safe
         # override block and persist into the next model if that model doesn't
@@ -5138,6 +5175,29 @@ function burn() {
                 if __llm_is_healthy
                 then
                     _healthy=1
+                    # Pre-flight a tiny completion to confirm the slot is actually
+                    # ready (WSL2: /health can return OK before the model slot can
+                    # serve completions).
+                    if [[ -n "${__BENCH_MODE:-}" ]]
+                    then
+                        local _pf_body='{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}'
+                        local _pf_rc
+                        _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+                            -H 'Content-Type: application/json' \
+                            -d "$_pf_body" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" 2>/dev/null || echo 0)
+                        if [[ "$_pf_rc" != "200" ]]
+                        then
+                            # Slot not ready — poll until it responds.
+                            for (( _pfr=0; _pfr < 60; _pfr++ ))
+                            do
+                                sleep 1
+                                _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+                                    -H 'Content-Type: application/json' \
+                                    -d "$_pf_body" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" 2>/dev/null || echo 0)
+                                [[ "$_pf_rc" == "200" ]] && break
+                            done
+                        fi
+                    fi
                     break
                 fi
                 sleep 1
@@ -5149,10 +5209,13 @@ function burn() {
             then
                 printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Server still unhealthy after ${retry_health_wait}s."
 
-                if (( transport_recovered == 0 )) && [[ "${LLM_BURN_AUTO_RECOVER:-1}" == "1" ]] \
+                if [[ "${LLM_BURN_AUTO_RECOVER:-1}" == "1" ]] \
                     && [[ -n "${_burn_num:-}" && "${_burn_num:-}" =~ ^[0-9]+$ ]]
                 then
                     printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Restarting active model #${_burn_num} after transport failure..."
+                    # Clear VRAM before reload to remove ghost allocations from the
+                    # failed server instance (WSL2 CUDA often holds stale memory).
+                    sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
                     if __model_use "$_burn_num" >/tmp/burn_transport_recover_use.log 2>&1
                     then
                         local _rw
