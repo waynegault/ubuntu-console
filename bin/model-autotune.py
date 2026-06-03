@@ -20,6 +20,7 @@ import json
 import os
 import re
 import socket
+import statistics
 import subprocess
 import sys
 import time
@@ -36,9 +37,16 @@ MODEL_DIR = Path("/mnt/m/active")
 
 # Short burst for ctx discovery — TPS accuracy isn't the goal, we just need to
 # confirm the model can generate at a given ctx size without crashing.
-BURN_TOKENS = 64
+BURN_TOKENS_DISCOVERY = int(os.environ.get("LLM_AUTOTUNE_BURN_TOKENS_DISCOVERY", "64"))
+BURN_TOKENS_SCORE = int(os.environ.get("LLM_AUTOTUNE_BURN_TOKENS_SCORE", "128"))
+TPS_SAMPLES_PROFILE = int(os.environ.get("LLM_AUTOTUNE_TPS_SAMPLES_PROFILE", "2"))
+TPS_SAMPLES_PARAM = int(os.environ.get("LLM_AUTOTUNE_TPS_SAMPLES_PARAM", "2"))
+STARTUP_HEALTH_TIMEOUT_SEC = int(os.environ.get("LLM_AUTOTUNE_STARTUP_HEALTH_TIMEOUT_SEC", "120"))
+STARTUP_PREFLIGHT_TIMEOUT_SEC = int(os.environ.get("LLM_AUTOTUNE_STARTUP_PREFLIGHT_TIMEOUT_SEC", "60"))
 CTX_FLOOR = 4096
 PORT_BASE = 9200
+MIN_ACCEPTABLE_TPS_DEFAULT = 2.5
+BURN_TIMEOUT_SEC = int(os.environ.get("LLM_AUTOTUNE_BURN_TIMEOUT_SEC", "600"))
 
 BURN_PROMPT = (
     "Explain the complete theory of special relativity in extreme detail, "
@@ -52,54 +60,147 @@ OOM_RE = re.compile(r"out of memory|oom|cuda.*(?:failed|error)|failed to allocat
                      re.IGNORECASE)
 
 
+def _parse_arch_tps_overrides(raw: str) -> dict[str, float]:
+    """Parse LLM_AUTOTUNE_MIN_TPS_ARCH mapping like: "phi3=3.0,gemma3n=2.7"."""
+    out: dict[str, float] = {}
+    for item in (raw or "").split(","):
+        token = item.strip()
+        if not token or "=" not in token:
+            continue
+        key, val = token.split("=", 1)
+        key = key.strip().lower()
+        try:
+            out[key] = float(val.strip())
+        except Exception:
+            continue
+    return out
+
+
+def resolve_min_tps(arch: str, model_size_gb: float, cli_min_tps: float | None) -> float:
+    """Resolve min TPS policy.
+
+    Priority:
+      1) Explicit --min-tps CLI override.
+      2) Arch override from LLM_AUTOTUNE_MIN_TPS_ARCH (exact/prefix).
+      3) Built-in arch defaults (phi3=3.0).
+      4) Large-model relaxation (>= LLM_AUTOTUNE_LARGE_MODEL_GB => LLM_AUTOTUNE_MIN_TPS_LARGE).
+      5) Global default LLM_AUTOTUNE_MIN_TPS (2.5).
+    """
+    if cli_min_tps is not None:
+        return float(cli_min_tps)
+
+    base = float(os.environ.get("LLM_AUTOTUNE_MIN_TPS", MIN_ACCEPTABLE_TPS_DEFAULT))
+    a = (arch or "").strip().lower()
+
+    env_map = _parse_arch_tps_overrides(os.environ.get("LLM_AUTOTUNE_MIN_TPS_ARCH", ""))
+    for k, v in env_map.items():
+        if a == k or a.startswith(k):
+            return float(v)
+
+    builtins = {
+        "phi3": float(os.environ.get("LLM_AUTOTUNE_MIN_TPS_PHI3", "3.0")),
+    }
+    for k, v in builtins.items():
+        if a == k or a.startswith(k):
+            return float(v)
+
+    large_threshold = float(os.environ.get("LLM_AUTOTUNE_LARGE_MODEL_GB", "3.0"))
+    large_floor = float(os.environ.get("LLM_AUTOTUNE_MIN_TPS_LARGE", "2.0"))
+    if model_size_gb >= large_threshold:
+        return float(large_floor)
+
+    return base
+
+
+def discovery_profiles_for_arch(arch: str) -> list[dict[str, str]]:
+    """Return startup flag profiles for ctx discovery.
+
+    Some architectures are sensitive to mmap/flash-attn combinations on
+    constrained VRAM systems (notably phi3 variants on WSL2). Try a small
+    ordered set of conservative profiles before declaring a model unusable.
+    """
+    a = (arch or "").strip().lower()
+    if a.startswith("phi3") or a.startswith("phi"):
+        return [
+            {"mmap": "off", "flash_attn": "on"},
+            {"mmap": "auto", "flash_attn": "on"},
+            {"mmap": "off", "flash_attn": "off"},
+            {"mmap": "auto", "flash_attn": "off"},
+        ]
+    if a.startswith("gemma3n"):
+        return [
+            {"mmap": "off", "flash_attn": "on"},
+            {"mmap": "auto", "flash_attn": "on"},
+            {"mmap": "off", "flash_attn": "off"},
+            {"mmap": "auto", "flash_attn": "off"},
+        ]
+    # Default path: evaluate both flash-attn on/off with both mmap modes,
+    # so flash-attn=off can legitimately win when it improves stability.
+    return [
+        {"mmap": "off", "flash_attn": "on"},
+        {"mmap": "auto", "flash_attn": "on"},
+        {"mmap": "off", "flash_attn": "off"},
+        {"mmap": "auto", "flash_attn": "off"},
+    ]
+
+
 # ── GGUF metadata ─────────────────────────────────────────────────────
 
 def read_native_ctx(model_path: str) -> int | None:
-    """Read the model's native context length by briefly starting llama-server
-    and parsing its metadata output. Returns None if unreadable."""
-    import tempfile
-    log_path = Path(tempfile.mktemp(suffix=".log", prefix="autotune_meta_"))
-    port = pick_port()
+    """Read the model's native context length directly from the GGUF binary header.
+
+    GGUF format: magic(4) + version(4) + n_tensors(8) + n_kv(8) + kv_pairs...
+    Each kv pair: key_len(8) + key(key_len) + type(4) + value...
+    We scan for '<arch>.context_length' or 'context_length'.
+    Returns None if unreadable.
+    """
+    import struct
+    GGUF_MAGIC = b"GGUF"
+    # Fixed-width byte sizes per GGUF scalar type id
+    _SCALAR_SZ = {4: 4, 5: 4, 6: 4, 10: 8, 11: 8, 7: 1, 12: 2, 13: 4}
+
+    def _skip(f: "BinaryIO", vtype: int) -> None:
+        if vtype in _SCALAR_SZ:
+            f.read(_SCALAR_SZ[vtype])
+        elif vtype == 8:  # string
+            slen = struct.unpack("<Q", f.read(8))[0]
+            f.read(slen)
+        elif vtype == 9:  # array — skip each element
+            arr_type = struct.unpack("<I", f.read(4))[0]
+            arr_len = struct.unpack("<Q", f.read(8))[0]
+            for _ in range(arr_len):
+                _skip(f, arr_type)
+        else:
+            raise ValueError(f"unknown GGUF type {vtype}")
+
+    def _read_int(f: "BinaryIO", vtype: int) -> int | None:
+        if vtype == 4:  return struct.unpack("<I", f.read(4))[0]
+        if vtype == 5:  return struct.unpack("<i", f.read(4))[0]
+        if vtype == 10: return struct.unpack("<Q", f.read(8))[0]
+        if vtype == 11: return struct.unpack("<q", f.read(8))[0]
+        _skip(f, vtype)
+        return None
+
     try:
-        proc = subprocess.Popen(
-            [str(LLAMA_SERVER),
-             "--model", model_path,
-             "--host", "127.0.0.1", "--port", str(port),
-             "--ctx-size", "512",
-             "--batch-size", "64", "--ubatch-size", "64",
-             "--parallel", "1", "--threads", "1",
-             "--flash-attn", "on", "--fit", "on", "--fit-target", "256", "--no-mmap"],
-            stdout=open(str(log_path), "w"),
-            stderr=subprocess.STDOUT,
-        )
-        # Wait for n_ctx_train to appear in log
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            if log_path.exists():
-                try:
-                    text = log_path.read_text(errors="ignore")
-                    m = re.search(r'n_ctx_train\s*=\s*(\d+)', text)
-                    if m:
-                        return int(m.group(1))
-                except Exception:
-                    pass
-            if proc.poll() is not None:
-                break
-            time.sleep(0.2)
-        proc.kill()
-        proc.wait(timeout=5)
+        with open(model_path, "rb") as f:
+            if f.read(4) != GGUF_MAGIC:
+                return None
+            version = struct.unpack("<I", f.read(4))[0]
+            if version not in (1, 2, 3):
+                return None
+            _n_tensors = struct.unpack("<Q", f.read(8))[0]
+            n_kv = struct.unpack("<Q", f.read(8))[0]
+            for _ in range(min(int(n_kv), 512)):
+                key_len = struct.unpack("<Q", f.read(8))[0]
+                if key_len > 512:
+                    return None  # malformed
+                key = f.read(key_len).decode("utf-8", errors="replace")
+                vtype = struct.unpack("<I", f.read(4))[0]
+                val = _read_int(f, vtype)
+                if key.endswith(".context_length") and val is not None and val > 0:
+                    return int(val)
     except Exception:
         pass
-    finally:
-        try:
-            proc.kill()
-            proc.wait(timeout=5)
-        except Exception:
-            pass
-        try:
-            log_path.unlink()
-        except Exception:
-            pass
     return None
 
 
@@ -138,14 +239,23 @@ def load_registry_row(row: int) -> dict | None:
             continue
         parts = line.split("|")
         if parts[0].strip() == str(row):
+            if len(parts) != 20:
+                raise RuntimeError(f"Invalid registry schema in row {row}: expected 20 columns, got {len(parts)}")
+
+            def _get(idx: int, default: str = "") -> str:
+                return parts[idx] if idx < len(parts) else default
+
             return {
-                "num": parts[0], "name": parts[1], "file": parts[2], "size": parts[3],
-                "quant_cache": parts[4], "arch": parts[5], "gpu_layers": parts[6],
-                "ctx": parts[7], "threads": parts[8], "batch": parts[9],
-                "ubatch": parts[10], "parallel": parts[11], "fit_target_mb": parts[12],
-                "backend": parts[13], "mmap_mode": parts[14], "tps": parts[15],
-                "autotuned": parts[16], "is_default": parts[17],
-                "in_vram": parts[18] if len(parts) > 18 else "no",
+                "num": _get(0), "name": _get(1), "file": _get(2), "size": _get(3),
+                "quant_cache": _get(4), "arch": _get(5), "gpu_layers": _get(6),
+                "ctx": _get(7), "threads": _get(8), "batch": _get(9),
+                "ubatch": _get(10), "parallel": _get(11), "fit_target_mb": _get(12),
+                "backend": _get(13), "mmap_mode": _get(14, "auto"),
+                "flash_attn": _get(15, "on"),
+                "tps": _get(16, "0"),
+                "autotuned": _get(17, "no"),
+                "is_default": _get(18, "no"),
+                "in_vram": _get(19, "no"),
             }
     return None
 
@@ -157,7 +267,7 @@ def write_registry_row(row: int, updates: dict) -> None:
     field_map = {
         "ctx": 7, "batch": 9, "ubatch": 10, "parallel": 11,
         "fit_target_mb": 12, "backend": 13, "mmap_mode": 14,
-        "tps": 15, "autotuned": 16,
+        "flash_attn": 15, "tps": 16, "autotuned": 17,
     }
     for line in lines:
         stripped = line.strip()
@@ -166,6 +276,8 @@ def write_registry_row(row: int, updates: dict) -> None:
             continue
         parts = line.split("|")
         if parts[0].strip() == str(row):
+            if len(parts) != 20:
+                raise RuntimeError(f"Invalid registry schema in row {row}: expected 20 columns, got {len(parts)}")
             for key, value in updates.items():
                 idx = field_map.get(key)
                 if idx is not None and idx < len(parts):
@@ -181,15 +293,19 @@ def kill_zombie_servers() -> None:
     
     WSL2 CUDA has a known issue where SIGKILL doesn't always release
     VRAM immediately. We use clear_vram.sh which reloads the nvidia-uvm
-    kernel module to force Windows host to release ghost allocations."""
+    kernel module to force Windows host to release ghost allocations.
+    
+    After clearing VRAM we add a cooldown to let the WSL2 9p drvfs
+    release any cached file handles on the previous model's GGUF."""
     try:
         subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
                        capture_output=True, timeout=30)
+        time.sleep(1.5)  # let nvidia-uvm reload settle
     except Exception:
         # Fallback: basic kill if clear_vram.sh fails
         subprocess.run(["killall", "-9", "llama-server"],
                        capture_output=True, timeout=5)
-        time.sleep(2)
+        time.sleep(3)
 
 
 def _get_free_vram_mb() -> int | None:
@@ -209,7 +325,8 @@ def _get_free_vram_mb() -> int | None:
 # ── Server lifecycle ───────────────────────────────────────────────────
 
 def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
-                 parallel: int, mmap: str, port: int, threads: int = 4) -> subprocess.Popen | None:
+                 parallel: int, mmap: str, port: int, threads: int = 4,
+                 flash_attn: str = "on") -> subprocess.Popen | None:
     cmd = [
         str(LLAMA_SERVER),
         "--model", model_path,
@@ -218,7 +335,7 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
         "--batch-size", str(batch), "--ubatch-size", str(ubatch),
         "--parallel", str(parallel),
         "--threads", str(threads),
-        "--flash-attn", "on",
+        "--flash-attn", flash_attn,
         "--fit", "on", "--fit-target", "256",
     ]
     if mmap == "off":
@@ -231,7 +348,7 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
     except FileNotFoundError:
         return None
 
-    deadline = time.monotonic() + 240
+    deadline = time.monotonic() + STARTUP_HEALTH_TIMEOUT_SEC
     health_ok = False
     while time.monotonic() < deadline:
         try:
@@ -262,7 +379,7 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
 
     # Pre-flight: send a tiny completion to confirm the model slot is actually
     # ready to serve (WSL2: /health returns OK before slot is ready).
-    deadline = time.monotonic() + 120
+    deadline = time.monotonic() + STARTUP_PREFLIGHT_TIMEOUT_SEC
     preflight = json.dumps({
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": 1, "temperature": 0,
@@ -283,7 +400,7 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
     return None
 
 
-def run_burn(port: int, warmup: bool = False) -> float | None:
+def run_burn(port: int, warmup: bool = False, max_tokens: int = BURN_TOKENS_DISCOVERY) -> float | None:
     base_url = f"http://127.0.0.1:{port}/v1/chat/completions"
     if warmup:
         payload = json.dumps({
@@ -303,33 +420,48 @@ def run_burn(port: int, warmup: bool = False) -> float | None:
 
     payload = json.dumps({
         "messages": [{"role": "user", "content": BURN_PROMPT}],
-        "max_tokens": BURN_TOKENS, "temperature": 0, "top_p": 1.0,
+        "max_tokens": max_tokens, "temperature": 0, "top_p": 1.0,
     }).encode()
 
-    start_ns = time.monotonic_ns()
-    try:
-        req = urllib.request.Request(base_url, data=payload,
-                                     headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=600) as resp:
-            body = resp.read().decode()
-    except Exception:
-        return None
-    elapsed_ms = (time.monotonic_ns() - start_ns) / 1e6
+    for attempt in range(2):
+        start_ns = time.monotonic_ns()
+        try:
+            req = urllib.request.Request(base_url, data=payload,
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=BURN_TIMEOUT_SEC) as resp:
+                body = resp.read().decode()
+        except Exception:
+            if attempt == 0:
+                time.sleep(2)
+                continue
+            return None
+        elapsed_ms = (time.monotonic_ns() - start_ns) / 1e6
 
-    try:
-        data = json.loads(body)
-        ct = data.get("usage", {}).get("completion_tokens", 0)
-    except Exception:
-        return None
-    if ct <= 0:
-        return None
-    return ct * 1000 / elapsed_ms
+        try:
+            data = json.loads(body)
+            ct = data.get("usage", {}).get("completion_tokens", 0)
+        except Exception:
+            if attempt == 0:
+                time.sleep(2)
+                continue
+            return None
+        if ct <= 0:
+            if attempt == 0:
+                time.sleep(2)
+                continue
+            return None
+        return ct * 1000 / elapsed_ms
+
+    return None
 
 
 def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
-                parallel: int, mmap: str, warmup: bool = False) -> tuple[str, list[float]]:
+                parallel: int, mmap: str, warmup: bool = False,
+                flash_attn: str = "on", samples: int = 1,
+                burn_tokens: int = BURN_TOKENS_DISCOVERY) -> tuple[str, list[float]]:
     port = pick_port()
-    proc = start_server(model_path, ctx, batch, ubatch, parallel, mmap, port)
+    proc = start_server(model_path, ctx, batch, ubatch, parallel, mmap, port,
+                        flash_attn=flash_attn)
     if proc is None:
         log_path = Path(f"/tmp/autotune_{port}.log")
         if log_path.exists():
@@ -348,8 +480,8 @@ def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
         return ("load_fail", [])
 
     tps_samples = []
-    for i in range(1):
-        tps = run_burn(port, warmup=(warmup and i == 0))
+    for i in range(max(1, int(samples))):
+        tps = run_burn(port, warmup=(warmup and i == 0), max_tokens=burn_tokens)
         if tps is None:
             proc.kill(); proc.wait(timeout=10)
             try: Path(f"/tmp/autotune_{port}.log").unlink()
@@ -363,11 +495,189 @@ def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
     proc.kill(); proc.wait(timeout=10)
     try: Path(f"/tmp/autotune_{port}.log").unlink()
     except Exception: pass
-    # Quick kill — full VRAM clear only done before each model or on failed probes
-    subprocess.run(["killall", "-9", "llama-server"],
-                   capture_output=True, timeout=5)
-    time.sleep(1)
+    kill_zombie_servers()
     return ("ok", tps_samples)
+
+
+def test_config_with_retry(model_path: str, ctx: int, batch: int, ubatch: int,
+                           parallel: int, mmap: str, warmup: bool = False,
+                           flash_attn: str = "on", samples: int = 1,
+                           burn_tokens: int = BURN_TOKENS_DISCOVERY,
+                           retries: int = 1) -> tuple[str, list[float]]:
+    """Run one config and retry once on transient startup failures."""
+    attempts = 0
+    while True:
+        status, tps_vals = test_config(
+            model_path,
+            ctx,
+            batch,
+            ubatch,
+            parallel,
+            mmap,
+            warmup=warmup,
+            flash_attn=flash_attn,
+            samples=samples,
+            burn_tokens=burn_tokens,
+        )
+        if status != "load_fail":
+            return (status, tps_vals)
+        if attempts >= retries:
+            return (status, tps_vals)
+        attempts += 1
+        # Transient startup failures happen after rapid clear/restart cycles.
+        kill_zombie_servers()
+        time.sleep(1.0)
+
+
+def stable_tps(samples: list[float]) -> float:
+    if not samples:
+        return 0.0
+    try:
+        return float(statistics.median(samples))
+    except Exception:
+        return float(samples[0])
+
+
+def refine_upward_from_ctx(
+    *,
+    model_path: str,
+    start_ctx: int,
+    start_tps: float,
+    ceiling: int,
+    step: int,
+    c: dict[str, int | str],
+    flash_attn: str,
+) -> tuple[int, float]:
+    """Continue upward search from an already-proven ctx without re-probing start_ctx."""
+    highest_ok = start_ctx
+    best_tps = start_tps
+    up_step = max(512, (step // 512) * 512)
+
+    while up_step >= 512:
+        candidate = highest_ok + up_step
+        if candidate > ceiling:
+            if up_step == 512:
+                break
+            up_step = max(512, (up_step // 2 // 512) * 512)
+            continue
+
+        print(f"  {candidate:>8,} -> ", end="", flush=True)
+        status, tps_vals = test_config(
+            model_path,
+            candidate,
+            int(c["batch"]),
+            int(c["ubatch"]),
+            int(c["parallel"]),
+            str(c["mmap"]),
+            flash_attn=flash_attn,
+            samples=1,
+            burn_tokens=BURN_TOKENS_DISCOVERY,
+        )
+        if status == "ok" and tps_vals:
+            cand_tps = tps_vals[0]
+            print(f"OK {cand_tps:.1f} tps", flush=True)
+            highest_ok = candidate
+            best_tps = cand_tps
+            continue
+
+        print("FAIL", flush=True)
+        kill_zombie_servers()
+        if up_step == 512:
+            break
+        up_step = max(512, (up_step // 2 // 512) * 512)
+
+    return (highest_ok, best_tps)
+
+
+def discover_ctx_with_profile(
+    *,
+    model_path: str,
+    floor: int,
+    ceiling: int,
+    native_ctx: int | None,
+    est_ceiling: int,
+    c: dict[str, int | str],
+    flash_attn: str,
+) -> tuple[int, float, list[str], int]:
+    """Discover max stable ctx for one mmap/flash-attn profile.
+
+    Returns: (discovered_ctx, best_tps, ctx_log, step_used)
+    """
+    discovered_ctx = 0
+    best_tps = 0.0
+    ctx_log: list[str] = []
+    start_ctx = min(ceiling, est_ceiling)
+    start_ctx = (start_ctx // 512) * 512
+    start_ctx = max(floor, start_ctx)
+
+    step = max(512, ((start_ctx - floor) // 4 // 512) * 512)
+    if step == 0:
+        step = 512
+
+    def _probe(ctx_val: int, warmup: bool) -> tuple[str, list[float]]:
+        print(f"  {ctx_val:>8,} -> ", end="", flush=True)
+        _status, _tps_vals = test_config(
+            model_path,
+            ctx_val,
+            int(c["batch"]),
+            int(c["ubatch"]),
+            int(c["parallel"]),
+            str(c["mmap"]),
+            warmup=warmup,
+            flash_attn=flash_attn,
+            samples=1,
+            burn_tokens=BURN_TOKENS_DISCOVERY,
+        )
+        if _status == "ok" and _tps_vals:
+            print(f"OK {_tps_vals[0]:.1f} tps", flush=True)
+            ctx_log.append(f"OK {ctx_val:,}")
+        else:
+            print("FAIL", flush=True)
+            ctx_log.append(f"FAIL {ctx_val:,}")
+            kill_zombie_servers()
+        return (_status, _tps_vals)
+
+    # 1) Start at estimated ceiling. If it fails, walk down to find first success.
+    probe = start_ctx
+    first = True
+    while probe >= floor:
+        status, tps_vals = _probe(probe, warmup=first)
+        first = False
+        if status == "ok" and tps_vals:
+            discovered_ctx = probe
+            best_tps = tps_vals[0]
+            break
+        if probe == floor:
+            break
+        probe = max(floor, probe - step)
+
+    if discovered_ctx == 0:
+        return (0, 0.0, ctx_log, step)
+
+    # 2) Walk upward from first success. On failure, reduce step and retry from
+    # the highest successful ctx until 512 resolution is exhausted.
+    highest_ok = discovered_ctx
+    up_step = step
+    while up_step >= 512:
+        candidate = highest_ok + up_step
+        if candidate > ceiling:
+            if up_step == 512:
+                break
+            up_step = max(512, (up_step // 2 // 512) * 512)
+            continue
+
+        status, tps_vals = _probe(candidate, warmup=False)
+        if status == "ok" and tps_vals:
+            highest_ok = candidate
+            discovered_ctx = candidate
+            best_tps = tps_vals[0]
+            continue
+
+        if up_step == 512:
+            break
+        up_step = max(512, (up_step // 2 // 512) * 512)
+
+    return (discovered_ctx, best_tps, ctx_log, step)
 
 
 # ── Main ───────────────────────────────────────────────────────────────
@@ -377,10 +687,11 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Autotune a GGUF model")
     parser.add_argument("row", type=int)
-
     parser.add_argument("--ceiling-override", type=int, default=None,
                         help="Override auto-detected native ctx ceiling")
     parser.add_argument("--floor", type=int, default=CTX_FLOOR)
+    parser.add_argument("--min-tps", type=float, default=None,
+                        help="Minimum acceptable TPS override (otherwise uses arch/size policy)")
     args = parser.parse_args()
 
     if not LLAMA_SERVER.exists():
@@ -398,188 +709,258 @@ def main() -> None:
         sys.exit(1)
 
     model_size_gb = round(Path(model_path).stat().st_size / 1e9, 1)
+    min_tps = resolve_min_tps(entry.get("arch", ""), model_size_gb, args.min_tps)
 
-    # ── Phase 0: Detect native ctx ceiling from GGUF ────────────────────
+    # ── Phase 0: Read native ctx directly from GGUF binary ──────────────
     native_ctx = read_native_ctx(model_path)
     ceiling = args.ceiling_override or native_ctx or 131072
     floor = args.floor
 
-    print()
     _line = '─' * 42
+    print()
     print(f"  {_line}")
     print(f"  Autotune {entry['name']} ({model_size_gb} GB)")
     print(f"  {_line}")
     print(f"  Arch      {entry['arch']}")
+    print(f"  Min TPS   {min_tps:.1f}")
     print()
 
     kill_zombie_servers()
     free_vram = _get_free_vram_mb()
-    
-    # — Use the VRAM estimate as a rough guide but start probing at native ctx —
-    # Starting high and binary-searching down avoids extra probe runs when the
-    # model comfortably fits the available VRAM.
     _est = estimate_vram_ceiling(model_size_gb, free_vram, native_ctx, floor, ceiling)
     native_display = f"{native_ctx:,}" if native_ctx else "unknown"
     print(f"  Native ctx {native_display}  — estimated ceiling ~{_est:,}")
     if free_vram:
         print(f"  VRAM {free_vram} MiB free")
-    
-    c = CONSERVATIVE
-    _log = lambda s, end='\n': print(s, end=end, flush=True)
     print()
+
+    profiles = discovery_profiles_for_arch(entry.get("arch", ""))
+
+    # ── Phase 1: ctx discovery with reduced redundant probes ─────────────
+    #
+    # Largest-ctx policy: we must not miss a higher ctx from a secondary
+    # profile. We do one full discovery on the primary profile, then only do
+    # cheap checks on other profiles and run upward refinement if they can
+    # sustain the current global max.
+    #
     print(f"  ── ctx discovery ──")
     print()
 
-    # ── Phase 1: Find the max stable ctx ──
-    # Probe from native ctx DOWNWARD until success, then binary search down.
-    # This wastes at most one probe when the model fits natively, and avoids
-    # many probes when the estimate is too conservative.
-    discovered_ctx = 0
-    best_tps = 0.0
-    _ctx_log = []
-    
-    # Step 1: Quick check at native ctx — if it fits, we're done in one probe.
-    probe_ctx = native_ctx if native_ctx else ceiling
-    _log(f"  {probe_ctx:>8,} → ", end="")
-    status, tps_vals = test_config(model_path, probe_ctx, c["batch"], c["ubatch"],
-                                   c["parallel"], c["mmap"], warmup=True)
-    if status == "ok":
-        _log(f"✓ {tps_vals[0]:.1f} tps")
-        discovered_ctx = native_ctx
-        best_tps = tps_vals[0]
-        _ctx_log.append(f"✓ {probe_ctx:,}")
-    else:
-        _log("✗")
-        _ctx_log.append(f"✗ {probe_ctx:,}")
-        # Native ctx failed — use the VRAM estimate and probe upward.
-        try:
-            subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
-                           capture_output=True, timeout=30)
-        except Exception:
-            subprocess.run(["killall", "-9", "llama-server"],
-                           capture_output=True, timeout=5)
-            time.sleep(2)
-        ceiling = max(_est, floor)
-        step = max(2048, ceiling // 8)
-        probe = ceiling
-        while probe >= floor:
-            _log(f"  {probe:>8,} → ", end="")
-            status, tps_vals = test_config(model_path, probe, c["batch"], c["ubatch"],
-                                           c["parallel"], c["mmap"], warmup=False)
-            if status == "ok":
-                _log(f"✓ {tps_vals[0]:.1f} tps")
-                discovered_ctx = probe
-                best_tps = tps_vals[0]
-                _ctx_log.append(f"✓ {probe:,}")
+    primary = profiles[0]
+    print(f"  profile mmap={primary['mmap']} flash-attn={primary['flash_attn']}")
+    c_primary = dict(CONSERVATIVE)
+    c_primary["mmap"] = primary["mmap"]
+    max_stable_ctx, max_stable_tps, _ctx_log, step_hint = discover_ctx_with_profile(
+        model_path=model_path,
+        floor=floor,
+        ceiling=ceiling,
+        native_ctx=native_ctx,
+        est_ceiling=_est,
+        c=c_primary,
+        flash_attn=primary["flash_attn"],
+    )
+    discovery_profile = primary if max_stable_ctx > 0 else None
+
+    # If the primary profile cannot hold floor, fall back to full discovery on
+    # the remaining profiles until one succeeds.
+    if max_stable_ctx == 0:
+        for profile in profiles[1:]:
+            print(f"  profile mmap={profile['mmap']} flash-attn={profile['flash_attn']}")
+            c_profile = dict(CONSERVATIVE)
+            c_profile["mmap"] = profile["mmap"]
+            _ctx, _tps, _ctx_log, step_hint = discover_ctx_with_profile(
+                model_path=model_path,
+                floor=floor,
+                ceiling=ceiling,
+                native_ctx=native_ctx,
+                est_ceiling=_est,
+                c=c_profile,
+                flash_attn=profile["flash_attn"],
+            )
+            if _ctx > 0:
+                max_stable_ctx = _ctx
+                max_stable_tps = _tps
+                discovery_profile = profile
                 break
-            else:
-                _log("✗")
-                _ctx_log.append(f"✗ {probe:,}")
-                try:
-                    subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
-                                   capture_output=True, timeout=30)
-                except Exception:
-                    subprocess.run(["killall", "-9", "llama-server"],
-                                   capture_output=True, timeout=5)
-                    time.sleep(2)
-            if probe <= floor:
-                probe = 0
-                break
-            probe = max(floor, probe - step)
-    
-    if discovered_ctx == 0:
+            print(f"  profile failed at floor {floor:,} — trying next")
+
+    if max_stable_ctx == 0 or discovery_profile is None:
         print(f"  FATAL: No stable context ≥ {floor}")
         sys.exit(1)
-    
-    # Binary search upward from discovered_ctx to confirm the true max
-    if discovered_ctx < native_ctx:
-        _low = discovered_ctx + 512
-        _high = min(discovered_ctx + step, native_ctx)
-        _ctx_log.append("  ── narrowing ──")
-        while _low <= _high:
-            _mid = ((_low + _high) // 2) // 512 * 512
-            _mid = max(_mid, _low)
-            status, tps_vals = test_config(model_path, _mid, c["batch"], c["ubatch"],
-                                           c["parallel"], c["mmap"], warmup=False)
-            if status in ("oom", "load_fail", "burn_fail"):
-                try:
-                    subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
-                                   capture_output=True, timeout=30)
-                except Exception:
-                    subprocess.run(["killall", "-9", "llama-server"],
-                                   capture_output=True, timeout=5)
-                    time.sleep(2)
-            if status == "ok":
-                _ctx_log.append(f"    ✓ {_mid:,}")
-                discovered_ctx = _mid
-                best_tps = tps_vals[0] if tps_vals else best_tps
-                _low = _mid + 512
-            else:
-                _ctx_log.append(f"    ✗ {_mid:,}")
-                _high = _mid - 512
-    
-    _ctx_log.sort(key=lambda x: int(x.split()[-1].replace(',', '')) if x.split()[-1].replace(',','').isdigit() else 999999999)
-    print(f"  {'  '.join(_ctx_log)}")
+
     print()
-    print(f"  Max ctx: {discovered_ctx}  ({best_tps:.1f} tps)")
+    print(f"  Max stable ctx: {max_stable_ctx:,}  ({max_stable_tps:.1f} tps)")
+    print(f"  Discovery profile: mmap={discovery_profile['mmap']} flash-attn={discovery_profile['flash_attn']}")
     print()
 
-    # ── Phase 2: Test batch/ubatch/parallel combos at max ctx ──
-    # Different combos have <1% TPS impact on most models, but some
-    # benefit from higher batch sizes on newer architectures (qwen3,
-    # gemma3). We test a few key combos to find the best.
+    # ── Phase 2: Cross-profile refinement (largest ctx first) ───────────
+    print(f"  ── profile refinement at ctx {max_stable_ctx:,} ──")
+    print()
+
+    selected_profile = discovery_profile
+    discovered_ctx = max_stable_ctx
+    selected_tps = max_stable_tps
+
+    for profile in [p for p in profiles if p != discovery_profile]:
+        print(f"  mmap={profile['mmap']} fa={profile['flash_attn']}  probe {max_stable_ctx:,} -> ", end="", flush=True)
+        status, tps_vals = test_config_with_retry(
+            model_path,
+            max_stable_ctx,
+            CONSERVATIVE["batch"],
+            CONSERVATIVE["ubatch"],
+            CONSERVATIVE["parallel"],
+            profile["mmap"],
+            flash_attn=profile["flash_attn"],
+            samples=max(1, TPS_SAMPLES_PROFILE),
+            burn_tokens=BURN_TOKENS_SCORE,
+            retries=1,
+        )
+        if status != "ok" or not tps_vals:
+            print("FAIL", flush=True)
+            kill_zombie_servers()
+            continue
+
+        profile_tps = stable_tps(tps_vals)
+        profile_ctx = max_stable_ctx
+        print(f"OK {profile_tps:.1f} tps (median of {len(tps_vals)})", flush=True)
+
+        # Only profiles that hold current max can possibly beat it. Refine
+        # upward from current max to see if they can extend the ceiling.
+        c_profile = dict(CONSERVATIVE)
+        c_profile["mmap"] = profile["mmap"]
+        up_ctx, up_tps = refine_upward_from_ctx(
+            model_path=model_path,
+            start_ctx=max_stable_ctx,
+            start_tps=profile_tps,
+            ceiling=ceiling,
+            step=step_hint,
+            c=c_profile,
+            flash_attn=profile["flash_attn"],
+        )
+        if up_ctx > profile_ctx:
+            profile_ctx = up_ctx
+            profile_tps = up_tps
+            print(f"    profile extends max ctx -> {profile_ctx:,} ({profile_tps:.1f} tps)")
+
+        if profile_ctx > max_stable_ctx or (profile_ctx == max_stable_ctx and profile_tps > max_stable_tps):
+            max_stable_ctx = profile_ctx
+            max_stable_tps = profile_tps
+
+        if profile_ctx > discovered_ctx or (profile_ctx == discovered_ctx and profile_tps > selected_tps):
+            discovered_ctx = profile_ctx
+            selected_tps = profile_tps
+            selected_profile = profile
+    print()
+    print(f"  Selected profile: mmap={selected_profile['mmap']} flash-attn={selected_profile['flash_attn']}  ({selected_tps:.1f} tps)")
+    print()
+
+    # ── Phase 3: Batch/ubatch/parallel tuning at discovered ctx ─────────
     combos = [
-        dict(batch=512, ubatch=128, parallel=1, fit=256),
+        dict(batch=512,  ubatch=128, parallel=1, fit=256),
         dict(batch=1024, ubatch=256, parallel=1, fit=256),
-        dict(batch=512, ubatch=128, parallel=2, fit=256),
+        dict(batch=512,  ubatch=128, parallel=2, fit=256),
         dict(batch=1024, ubatch=512, parallel=1, fit=512),
     ]
-    
-    # Prune combos that don't make sense for this model
-    pruned = []
-    for combo in combos:
-        if combo['parallel'] == 2 and discovered_ctx < 16384:
-            continue  # parallel=2 needs decent ctx to be worth it
-        if combo['batch'] > 512 and discovered_ctx < 8192:
-            continue  # high batch useless at small ctx
-        pruned.append(combo)
-    
-    print(f"  ── param tuning ──")
-    best_combo = CONSERVATIVE.copy()
-    best_combo_tps = 0.0  # reset; will be set by the first successful combo
-    
-    for combo in pruned:
-        # Clear VRAM between param tests
-        try:
-            subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
-                           capture_output=True, timeout=30)
-        except Exception:
-            subprocess.run(["killall", "-9", "llama-server"],
-                           capture_output=True, timeout=5)
-            time.sleep(2)
-        
-        # Quick TPS at this ctx with different params
-        _log(f"  {discovered_ctx:,}  b={combo['batch']}/{combo['ubatch']}  p={combo['parallel']} → ", end="")
-        status, tps_vals = test_config(
-            model_path, discovered_ctx,
-            combo['batch'], combo['ubatch'],
-            combo['parallel'], CONSERVATIVE['mmap'],
-            warmup=(combo == pruned[0]))
-        if status == "ok" and tps_vals:
-            _log(f"{tps_vals[0]:.1f} tps")
-            if tps_vals[0] >= best_combo_tps:
-                best_combo = combo
-                best_combo_tps = tps_vals[0]
-        else:
-            _log("✗")
-    
-    print()
-    best_batch, best_ubatch = best_combo['batch'], best_combo['ubatch']
-    best_parallel, best_mmap = best_combo['parallel'], CONSERVATIVE['mmap']
+    def _prune_for_ctx(ctx_val: int) -> list[dict[str, int]]:
+        return [
+            c for c in combos
+            if not (c["parallel"] == 2 and ctx_val < 16384)
+            and not (c["batch"] > 512 and ctx_val < 8192)
+        ]
 
-    # ── Phase 3: Registry writeback ─────────────────────────────────────
+    def _run_param_tuning(ctx_val: int, profile: dict[str, str]) -> tuple[dict[str, int], float, int, int, list[dict[str, int]]]:
+        pruned_local = _prune_for_ctx(ctx_val)
+        best_combo_local = dict(CONSERVATIVE)
+        best_tps_local = 0.0
+        load_fail_local = 0
+        ok_local = 0
+        for i, combo in enumerate(pruned_local):
+            print(f"  {ctx_val:,}  b={combo['batch']}/{combo['ubatch']}  p={combo['parallel']} → ", end="", flush=True)
+            status, tps_vals = test_config_with_retry(
+                model_path, ctx_val,
+                combo["batch"], combo["ubatch"], combo["parallel"],
+                profile["mmap"],
+                flash_attn=profile["flash_attn"],
+                warmup=(i == 0),
+                samples=max(1, TPS_SAMPLES_PARAM),
+                burn_tokens=BURN_TOKENS_SCORE,
+                retries=1,
+            )
+            if status == "ok" and tps_vals:
+                ok_local += 1
+                score = stable_tps(tps_vals)
+                print(f"{score:.1f} tps (median of {len(tps_vals)})", flush=True)
+                if score >= best_tps_local:
+                    best_combo_local = combo
+                    best_tps_local = score
+            else:
+                if status == "load_fail":
+                    load_fail_local += 1
+                print(f"✗ ({status})", flush=True)
+        return (best_combo_local, best_tps_local, load_fail_local, ok_local, pruned_local)
+
+    print(f"  ── param tuning ──")
+    best_combo, best_combo_tps, load_fail_count, ok_count, pruned = _run_param_tuning(discovered_ctx, selected_profile)
+
+    # If refinement selected an unstable edge profile/ctx (all combos failed to
+    # start), fall back once to the discovery profile which was known-good.
+    if ok_count == 0 and load_fail_count == len(pruned) and selected_profile != discovery_profile:
+        print(f"  all combos load_fail at selected profile — falling back to discovery profile")
+        selected_profile = discovery_profile
+        discovered_ctx = max_stable_ctx
+        best_combo, best_combo_tps, load_fail_count, ok_count, pruned = _run_param_tuning(discovered_ctx, selected_profile)
+
+    print()
+    best_batch    = best_combo["batch"]
+    best_ubatch   = best_combo["ubatch"]
+    best_parallel = best_combo["parallel"]
+    best_mmap     = selected_profile["mmap"]
+
+    # ── Phase 4: TPS floor — downshift ctx if too slow ──────────────────
+    tuned_ctx = discovered_ctx
+    if best_combo_tps < min_tps:
+        print(f"  TPS {best_combo_tps:.1f} below floor {min_tps:.1f} at ctx {discovered_ctx:,} — downshifting ctx")
+    while best_combo_tps < min_tps and tuned_ctx > floor:
+        next_ctx = max(floor, (int(tuned_ctx * 0.75) // 512) * 512)
+        if next_ctx >= tuned_ctx:
+            next_ctx = max(floor, tuned_ctx - 512)
+        tuned_ctx = next_ctx
+        kill_zombie_servers()
+        local_best_tps   = 0.0
+        local_best_combo = best_combo
+        for combo in pruned:
+            status, tps_vals = test_config_with_retry(
+                model_path, tuned_ctx,
+                combo["batch"], combo["ubatch"], combo["parallel"],
+                selected_profile["mmap"],
+                flash_attn=selected_profile["flash_attn"],
+                samples=max(1, TPS_SAMPLES_PARAM),
+                burn_tokens=BURN_TOKENS_SCORE,
+                retries=1,
+            )
+            if status == "ok" and tps_vals:
+                score = stable_tps(tps_vals)
+                if score < local_best_tps:
+                    continue
+                local_best_tps   = score
+                local_best_combo = combo
+        best_combo_tps = local_best_tps
+        best_combo     = local_best_combo
+        best_batch     = best_combo["batch"]
+        best_ubatch    = best_combo["ubatch"]
+        best_parallel  = best_combo["parallel"]
+        print(f"  ctx {tuned_ctx:,} -> best {best_combo_tps:.1f} tps")
+
+    discovered_ctx = tuned_ctx
+    if best_combo_tps < min_tps:
+        print(f"  WARN: No configuration met min TPS floor {min_tps:.1f}; marking row as not autotuned")
+        autotuned_flag = "no"
+    else:
+        autotuned_flag = "yes"
+
+    # ── Phase 5: Registry writeback ─────────────────────────────────────
     print(f"  {_line}")
-    print(f"  ✓ ctx {discovered_ctx}  b {best_batch}/{best_ubatch}  p{best_parallel}  mmap={best_mmap}  {best_combo_tps:.1f} tps")
+    print(f"  ✓ ctx {discovered_ctx}  b {best_batch}/{best_ubatch}  p{best_parallel}  mmap={best_mmap}  fa={selected_profile['flash_attn']}  {best_combo_tps:.1f} tps")
     print(f"  {_line}")
     print()
 
@@ -589,13 +970,21 @@ def main() -> None:
         "ubatch": best_ubatch,
         "parallel": best_parallel,
         "mmap_mode": best_mmap,
-        "tps": f"{best_tps:.1f}",
-        "autotuned": "yes",
+        "flash_attn": selected_profile["flash_attn"],
+        "tps": f"{best_combo_tps:.1f}",
+        "autotuned": autotuned_flag,
     })
 
-    print(f"    Registry row {args.row}: autotuned=yes")
+    print(f"    Registry row {args.row}: autotuned={autotuned_flag}")
     print()
+
+    if autotuned_flag != "yes":
+        sys.exit(2)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n  Interrupted by user")
+        sys.exit(130)

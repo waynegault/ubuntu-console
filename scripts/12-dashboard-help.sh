@@ -3,7 +3,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -579,7 +579,8 @@ function tactical_help() {
     __hRow "model doctor" "Validate setup"
     __hRow "model recommend" "Rank models for VRAM"
     __hRow "model info N" "Show model #N details"
-    __hRow "model bench" "Benchmark all models"
+    __hRow "model autotune N" "Tune no-oom/max-ctx/max-tps profile"
+    __hRow "model bench [MODEL...]" "Benchmark all or selected models"
     __hRow "model bench-diff" "Compare benchmark runs"
     __hRow "model bench-history" "Summarise benchmarks"
     __hRow "model delete N" "Delete model #N"
@@ -590,6 +591,7 @@ function tactical_help() {
     __hRow "mlogs" "Open llama-server log"
     __hRow "burn" "Token stress test (~1300)"
     __hRow "docs-sync" "Check README drift"
+    __tac_info "Autotune knob" "LLM_AUTOTUNE_MIN_CTX_FRACTION (default 0.60): minimum selected ctx as fraction of max stable ctx" "$C_Dim"
 
     __hSection "LLM — CHAT & EXPLAIN"
     __hRow "chat: [msg]" "Interactive chat session"
@@ -649,7 +651,7 @@ function contextual-help() {
             __hRow "gpu-status" "Check GPU utilization, VRAM, temperature"
             __hRow "mlogs" "View llama-server runtime logs in VS Code"
             __hRow "chat:" "Start interactive chat with active model"
-            __hRow "model bench" "Benchmark the active model"
+            __hRow "model bench [MODEL...]" "Benchmark selected models"
             __tac_info "Tip" "Use 'model status' to see active model details" "$C_Dim"
             ;;
         python-dev)

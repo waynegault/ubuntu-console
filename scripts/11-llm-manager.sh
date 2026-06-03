@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 49
+# Module Version: 56
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -51,7 +51,7 @@ function __save_tps() {
     local active_num
     active_num=$(< "$ACTIVE_LLM_FILE")
     [[ -z "$active_num" ]] && return
-    awk -F'|' -v n="$active_num" -v t="$tps_val" 'BEGIN{OFS="|"} $1 == n {$16 = t} {print}' \
+    awk -F'|' -v n="$active_num" -v t="$tps_val" 'BEGIN{OFS="|"} $1 == n {$17 = t} {print}' \
         "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" \
         && mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
 }
@@ -133,6 +133,7 @@ function __tac_cleanup_stale_locks() {
 
     # bench PID file — check custom path too
     local _c_pid_file="${LLM_BENCH_PID_FILE:-/tmp/llm-bench.pid}"
+    local _c_bench_active=0
     if [[ -f "$_c_pid_file" ]]
     then
         # shellcheck disable=SC2188
@@ -140,6 +141,23 @@ function __tac_cleanup_stale_locks() {
         if [[ -z "$_c_pid" ]] || ! kill -0 "$_c_pid" 2>/dev/null
         then
             rm -f "$_c_pid_file"
+        else
+            _c_bench_active=1
+        fi
+    fi
+
+    # Bench lock ownership is cooperative: the lock file stores owner PID.
+    # Treat bench as active only when that owner PID is alive. An orphaned
+    # child can keep the lock file open without owning a valid bench session.
+    local _c_bench_lock="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
+    if [[ -f "$_c_bench_lock" ]]
+    then
+        # shellcheck disable=SC2188
+        local _c_lock_owner
+        _c_lock_owner=$(cat "$_c_bench_lock" 2>/dev/null || true)
+        if [[ "$_c_lock_owner" =~ ^[0-9]+$ ]] && kill -0 "$_c_lock_owner" 2>/dev/null
+        then
+            _c_bench_active=1
         fi
     fi
 
@@ -159,6 +177,25 @@ function __tac_cleanup_stale_locks() {
             fi
         fi
     done
+
+    # orphaned bench timeout wrappers (left behind after interrupted runs)
+    # Only reap when no active bench owner exists.
+    local _c_bp _c_bppid _c_bcmd
+    if (( _c_bench_active == 0 ))
+    then
+        for _c_bp in $(pgrep -af '__BENCH_MODE=1' 2>/dev/null | awk '{print $1}' || true)
+        do
+            [[ "$_c_bp" =~ ^[0-9]+$ ]] || continue
+            _c_bppid=$(ps -o ppid= -p "$_c_bp" 2>/dev/null | tr -d '[:space:]')
+            _c_bcmd=$(ps -o args= -p "$_c_bp" 2>/dev/null || true)
+            if [[ "$_c_bcmd" == *"__BENCH_MODE=1"* ]] && [[ "$_c_bppid" != "$$" ]]
+            then
+                kill -TERM "$_c_bp" 2>/dev/null || true
+                sleep 1
+                kill -KILL "$_c_bp" 2>/dev/null || true
+            fi
+        done
+    fi
 
     # orphaned keeper PID files
     for _c_kf in /tmp/llm-keeper.*.pid
@@ -285,7 +322,7 @@ function __llm_registry_sync_state() {
 
     awk -F'|' -v def="$default_file" -v af="$active_file" -v run="$running" 'BEGIN{OFS="|"}
         $1 == "#" {
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram"
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
             next
         }
         NF < 16 {
@@ -294,17 +331,28 @@ function __llm_registry_sync_state() {
         {
             # Legacy 16-col: no file state fields and no mmap_mode.
             if (NF == 16) {
-                $19="no"; $18="no"; $17=$16; $16=$15; $15="auto"
+                $20="no"; $19="no"; $18=$16; $17=$15; $16="on"; $15="auto"
             }
             # Legacy 18-col: has state flags but no mmap_mode.
             if (NF == 18) {
-                $19=$18; $18=$17; $17=$16; $16=$15; $15="auto"
+                $20=$18; $19=$17; $18=$16; $17=$15; $16="on"; $15="auto"
+            }
+            # Legacy 19-col has two historical variants:
+            # A) ...|mmap_mode|tps|autotuned|is_default|in_vram  (no flash_attn)
+            # B) ...|mmap_mode|flash_attn|tps|autotuned|is_default (no in_vram)
+            if (NF == 19) {
+                if ($16 == "on" || $16 == "off" || $16 == "auto") {
+                    $20="no"
+                } else {
+                    $20=$19; $19=$18; $18=$17; $17=$16; $16="on"
+                }
             }
             d = ($3 == def ? "yes" : "no")
             a = (run == 1 && af != "" && $3 == af ? "yes" : "no")
-            $18=d; $19=a
+            $19=d; $20=a
             if ($15 == "") $15="auto"
-            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+            if ($16 == "") $16="on"
+            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
         }
     ' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" || return 1
 
@@ -406,7 +454,7 @@ function __llm_backend_normalize() {
 
 # ---------------------------------------------------------------------------
 # __llm_autotune_done_for_model — Check autotune status for a model/backend.
-# models.conf schema (v37): column 17 stores yes/no, column 14 stores backend.
+# models.conf schema: column 18 stores yes/no, column 14 stores backend.
 # @returns 0 when autotuned=yes for the requested backend, 1 otherwise.
 # ---------------------------------------------------------------------------
 function __llm_autotune_done_for_model() {
@@ -432,7 +480,7 @@ function __llm_autotune_done_for_model() {
         $1==n {
             found=1
             row_backend=norm_backend($14)
-            if ($17 == "yes" && (want_backend == "" || row_backend == want_backend)) exit 0
+            if ($18 == "yes" && (want_backend == "" || row_backend == want_backend)) exit 0
             exit 1
         }
         END   {if (!found) exit 1}
@@ -469,7 +517,7 @@ function __llm_autotune_profile_save() {
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
     # Update the model row in-place via awk: fields 8 (ctx), 10 (batch),
-    # 11 (ubatch), 12 (parallel), 13 (fit), 14 (backend), 16 (tps), 17 (autotuned).
+    # 11 (ubatch), 12 (parallel), 13 (fit), 14 (backend), 17 (tps), 18 (autotuned).
     awk -F'|' -v n="$model_num" \
         -v ctx="$ctx_size" \
         -v batch="$batch" \
@@ -481,7 +529,7 @@ function __llm_autotune_profile_save() {
         'BEGIN{OFS="|"} {
             if ($1 == n) {
                 $8 = ctx; $10 = batch; $11 = ubatch; $12 = parallel
-                $13 = fit; $14 = backend; $16 = tps_val; $17 = "yes"
+                $13 = fit; $14 = backend; if ($16 == "") $16 = "on"; $17 = tps_val; $18 = "yes"
             }
             print
         }' "$profile_file" > "${profile_file}.tmp" && mv "${profile_file}.tmp" "$profile_file"
@@ -548,17 +596,24 @@ function __llm_autotune_profiles_remap_by_registry() {
                 key=$3
                 old_ctx[key]=$8; old_thr[key]=$9; old_batch[key]=$10; old_ub[key]=$11
                 old_par[key]=$12; old_fit[key]=$13; old_be[key]=$14
-                if (NF >= 19) {
-                    old_mm[key]=$15; old_tps[key]=$16; old_done[key]=$17
+                if (NF >= 20) {
+                    old_mm[key]=$15; old_fa[key]=$16; old_tps[key]=$17; old_done[key]=$18
+                } else if (NF == 19) {
+                    old_mm[key]=$15
+                    if ($16 == "on" || $16 == "off" || $16 == "auto") {
+                        old_fa[key]=$16; old_tps[key]=$17; old_done[key]=$18
+                    } else {
+                        old_fa[key]="on"; old_tps[key]=$16; old_done[key]=$17
+                    }
                 } else {
-                    old_mm[key]="auto"; old_tps[key]=$15; old_done[key]=$16
+                    old_mm[key]="auto"; old_fa[key]="on"; old_tps[key]=$15; old_done[key]=$16
                 }
             }
             next
         }
         {
             if ($1 == "#") {
-                print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram"
+                print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
                 next
             }
 
@@ -566,17 +621,26 @@ function __llm_autotune_profiles_remap_by_registry() {
                 next
             }
             if (NF == 16) {
-                $19="no"; $18="no"; $17=$16; $16=$15; $15="auto"
+                $20="no"; $19="no"; $18=$16; $17=$15; $16="on"; $15="auto"
             }
             if (NF == 18) {
-                $19=$18; $18=$17; $17=$16; $16=$15; $15="auto"
+                $20=$18; $19=$17; $18=$16; $17=$15; $16="on"; $15="auto"
+            }
+            if (NF == 19) {
+                if ($16 == "on" || $16 == "off" || $16 == "auto") {
+                    $20="no"
+                } else {
+                    $20=$19; $19=$18; $18=$17; $17=$16; $16="on"
+                }
             }
             key=$3
             if (key in old_ctx) {
                 $8=old_ctx[key]; $9=old_thr[key]; $10=old_batch[key]; $11=old_ub[key]
-                $12=old_par[key]; $13=old_fit[key]; $14=old_be[key]; $15=old_mm[key]; $16=old_tps[key]; $17=old_done[key]
+                $12=old_par[key]; $13=old_fit[key]; $14=old_be[key]; $15=old_mm[key];
+                $16=old_fa[key]; $17=old_tps[key]; $18=old_done[key]
             }
-            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+            if ($16 == "") $16="on"
+            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
         }
     ' "$old_registry" "$new_registry" > "${new_registry}.tmp" || return 1
 
@@ -1278,7 +1342,7 @@ function gpu-check() {
 #   info, bench, bench-diff, bench-compare, bench-latest, bench-history,
 #   delete, archive, download
 # Registry: models.conf — auto-generated by 'model scan', do not hand-edit.
-# Format: #|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram
+# Format: #|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram
 # Active model tracked in: $ACTIVE_LLM_FILE (just the model number)
 # ---------------------------------------------------------------------------
 
@@ -1594,7 +1658,7 @@ function __renumber_registry() {
     awk -F'|' -v n="$target" '$1 != n && $1 != "#"' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
     local newnum=0
     {
-        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram"
+        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
         while IFS='|' read -r _num rest
         do
             ((newnum++))
@@ -1634,7 +1698,7 @@ function __model_scan() {
             return 1
         }
     fi
-    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram" > "$tmpconf"
+    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram" > "$tmpconf"
 
     local num=0
     __tac_info "Reading" "files from $LLAMA_MODEL_DIR..." "$C_Dim"
@@ -1671,6 +1735,7 @@ function __model_scan() {
         local prev_fit="${LLAMA_FIT_TARGET_MB:-256}"
         local prev_backend="llama_server"
         local prev_mmap="auto"
+        local prev_flash_attn="on"
         local prev_tps="0"
         local prev_autotuned="no"
         local prev_default="no"
@@ -1681,14 +1746,15 @@ function __model_scan() {
             prev_row=$(awk -F'|' -v f="$fname" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
             if [[ -n "$prev_row" ]]
             then
-                IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_tps prev_autotuned prev_default prev_active <<< "$prev_row"
+                IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_flash_attn prev_tps prev_autotuned prev_default prev_active <<< "$prev_row"
+                [[ -z "${prev_flash_attn:-}" ]] && prev_flash_attn="on"
             fi
         fi
 
         local quant_cache="${quant}/${LLAMA_CACHE_TYPE_K:-q8_0}"
 
         local _reg_line="${num}|${_mname:-$fname}|${fname}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}|${ctx}|${threads}"
-        _reg_line+="|${prev_batch}|${prev_ubatch}|${prev_parallel}|${prev_fit}|${prev_backend}|${prev_mmap}|${prev_tps}|${prev_autotuned}|${prev_default}|${prev_active}"
+        _reg_line+="|${prev_batch}|${prev_ubatch}|${prev_parallel}|${prev_fit}|${prev_backend}|${prev_mmap}|${prev_flash_attn}|${prev_tps}|${prev_autotuned}|${prev_default}|${prev_active}"
         echo "$_reg_line" >> "$tmpconf"
 
         # Progress: not printing each model individually
@@ -1717,8 +1783,8 @@ function __model_scan() {
         active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
         local archived=0
         local to_archive=()
-        local _qnum _qname _qfile _qsize _qqcache _qarch _qgpu _qctx _qthr _qb _qub _qp _qfit _qbe _qmm _qtps _qautotuned _qdefault _qactive
-        while IFS='|' read -r _qnum _qname _qfile _qsize _qqcache _qarch _qgpu _qctx _qthr _qb _qub _qp _qfit _qbe _qmm _qtps _qautotuned _qdefault _qactive
+        local _qnum _qname _qfile _qsize _qqcache _qarch _qgpu _qctx _qthr _qb _qub _qp _qfit _qbe _qmm _qfa _qtps _qautotuned _qdefault _qactive
+        while IFS='|' read -r _qnum _qname _qfile _qsize _qqcache _qarch _qgpu _qctx _qthr _qb _qub _qp _qfit _qbe _qmm _qfa _qtps _qautotuned _qdefault _qactive
         do
             [[ "$_qnum" == "#"* || -z "$_qname" ]] && continue
             [[ "$_qnum" == "$active_num" ]] && continue
@@ -1761,7 +1827,7 @@ function __model_scan() {
             __tac_info "Enforcement" "[$archived discouraged model(s) moved to archive]" "$C_Warning"
             local clean_tmp="${LLM_REGISTRY}.tmp"
             local new_num=0
-            echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram" > "$clean_tmp"
+            echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram" > "$clean_tmp"
             local _cline
             while IFS= read -r _cline
             do
@@ -1814,7 +1880,7 @@ function __model_list() {
     then
         printf '{\n  "models": [\n'
         local first=1
-        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local quant_rating="unknown"
@@ -1825,10 +1891,10 @@ function __model_list() {
             [[ "${is_default:-no}" == "yes" ]] && is_default_json="true"
             (( first )) || printf ',\n'
             printf '    {"num":%s,"name":"%s","file":"%s","size":"%s","quant_cache":"%s","arch":"%s",\
-"gpu_layers":%s,"ctx":%s,"threads":%s,"batch":%s,"ubatch":%s,"parallel":%s,"fit":%s,"backend":"%s","mmap_mode":"%s","tps":"%s","autotuned":"%s","quant_rating":"%s","active":%s,"default":%s}' \
+"gpu_layers":%s,"ctx":%s,"threads":%s,"batch":%s,"ubatch":%s,"parallel":%s,"fit":%s,"backend":"%s","mmap_mode":"%s","flash_attn":"%s","tps":"%s","autotuned":"%s","quant_rating":"%s","active":%s,"default":%s}' \
                 "$num" "$(__llm_json_escape "$name")" "$(__llm_json_escape "$file")" "$size" "$(__llm_json_escape "$quant_cache")" \
                 "$(__llm_json_escape "$arch")" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" \
-                "$(__llm_json_escape "$backend")" "$(__llm_json_escape "${mmap_mode:-auto}")" "$(__llm_json_escape "${tps:--}")" "$(__llm_json_escape "${autotuned:-no}")" "$(__llm_json_escape "$quant_rating")" "$is_active" "$is_default_json"
+                "$(__llm_json_escape "$backend")" "$(__llm_json_escape "${mmap_mode:-auto}")" "$(__llm_json_escape "${flash_attn:-on}")" "$(__llm_json_escape "${tps:--}")" "$(__llm_json_escape "${autotuned:-no}")" "$(__llm_json_escape "$quant_rating")" "$is_active" "$is_default_json"
             first=0
         done < "$LLM_REGISTRY"
         printf '\n  ],\n'
@@ -1847,29 +1913,29 @@ function __model_list() {
 
     if [[ "$output_mode" == "plain" ]]
     then
-        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local status="idle"
             [[ "${in_vram:-no}" == "yes" ]] && status="active"
             [[ "${is_default:-no}" == "yes" ]] && status="default"
-            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
-                "$num" "$name" "$file" "$size" "$quant_cache" "$arch" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "$backend" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "$status"
+            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+                "$num" "$name" "$file" "$size" "$quant_cache" "$arch" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "$backend" "${mmap_mode:-auto}" "${flash_attn:-on}" "${tps:--}" "${autotuned:-no}" "$status"
         done < "$LLM_REGISTRY"
         return 0
     fi
 
     # Human-readable output — compute column widths dynamically
-    local _col_spec="%4s %28s %5s %9s %7s %4s %7s %4s %4s %4s %4s %4s %7s %5s %5s %5s %4s %4s %11s"
+    local _col_spec="%4s %28s %5s %9s %7s %4s %7s %4s %4s %4s %4s %4s %7s %4s %5s %5s %5s %4s %4s %11s"
     printf "\n${C_Dim}  ${_col_spec}${C_Reset}\n" \
-        "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "MMAP" "TPS" "ATUNE" "DEF" "VRAM" "RATING"
+        "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "FA" "MMAP" "TPS" "ATUNE" "DEF" "VRAM" "RATING"
     local _list_rule
-    printf -v _list_rule '%*s' 144 ''
+    printf -v _list_rule '%*s' 149 ''
     _list_rule="${_list_rule// /${BOX_SL}}"
     printf "${C_Dim}  %s${C_Reset}\n" "$_list_rule"
 
-    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
-    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         local quant_rating="unknown"
@@ -1886,7 +1952,7 @@ function __model_list() {
             color="$C_Highlight"
         fi
         printf "${color}${marker}${_col_spec}${C_Reset}\n" \
-            "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}"
+            "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${flash_attn:-on}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}"
     done < "$LLM_REGISTRY"
 
     local d_used_bytes d_total_bytes d_avail_bytes d_pct_n
@@ -2008,8 +2074,8 @@ function __model_use() {
         return 1
     fi
 
-    local num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode tps autotuned is_default in_vram
-    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode tps autotuned is_default in_vram <<< "$entry"
+    local num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram <<< "$entry"
 
     # Allow context size override via TAC_CTX_SIZE environment variable
     # (set by `serve --ctx-size N` or `model use N --ctx-size N`)
@@ -2222,7 +2288,8 @@ function __model_use() {
         fi
 
         local flash_attn_mode="auto"
-        case "${LLAMA_FLASH_ATTN:-true}" in
+        local _flash_attn_setting="${LLAMA_FLASH_ATTN:-${row_flash_attn:-true}}"
+        case "${_flash_attn_setting}" in
             true|TRUE|1|yes|YES|on|ON) flash_attn_mode="on" ;;
             false|FALSE|0|no|NO|off|OFF) flash_attn_mode="off" ;;
         esac
@@ -2613,8 +2680,8 @@ function __model_autotune() {
         return 1
     fi
 
-    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
-    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram <<< "$entry"
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram <<< "$entry"
     __tac_info "File" "$file" "$C_Dim"
     local quant_rating="unknown"
     quant_rating=$(__llm_quant_rating "$file")
@@ -3226,6 +3293,7 @@ function __model_autotune_help() {
     echo "  LLM_AUTOTUNE_CTX_STRATEGY, LLM_AUTOTUNE_MAX_CTX, LLM_AUTOTUNE_CTX_STEP"
     echo "  LLM_AUTOTUNE_JITTER_PENALTY, LLM_AUTOTUNE_EARLY_STOP_MARGIN"
     echo "  LLM_AUTOTUNE_WARMUP, LLM_AUTOTUNE_CONFIRM_FINAL"
+    echo "  LLM_AUTOTUNE_MIN_CTX_FRACTION (default 0.60)"
     echo "  LLM_AUTOTUNE_LOCK_FILE, LLM_AUTOTUNE_LOCK_WAIT_SECONDS"
     echo ""
     echo "Examples:"
@@ -3438,8 +3506,8 @@ function __model_info() {
         __tac_info "Error" "[Model #$target not found]" "$C_Error"
         return 1
     fi
-    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
-    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram <<< "$entry"
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram <<< "$entry"
     local quant_rating="unknown"
     quant_rating=$(__llm_quant_rating "$file")
 
@@ -3460,6 +3528,7 @@ function __model_info() {
     __tac_info "fit_target_mb" "$fit_target_mb" "$C_Text"
     __tac_info "backend" "$backend" "$C_Text"
     __tac_info "mmap_mode" "${mmap_mode:-auto}" "$C_Text"
+    __tac_info "flash_attn" "${flash_attn:-on}" "$C_Text"
     __tac_info "tps" "${tps:--}" "$C_Text"
     __tac_info "autotuned" "${autotuned:-no}" "$C_Text"
     __tac_info "is_default" "${is_default:-no}" "$C_Text"
@@ -3623,6 +3692,7 @@ EOF
 # @returns 0 on success, 1 if the registry or benchmark candidates are unavailable.
 # ---------------------------------------------------------------------------
 function __model_bench() {
+    local -a bench_selectors=("$@")
     if [[ ! -f "$LLM_REGISTRY" ]]
     then
         __tac_info "Registry" "[Not found - run 'model scan']" "$C_Error"
@@ -3710,6 +3780,20 @@ function __model_bench() {
         then
             kill "${bench_cleanup_spawned_pids[@]}" 2>/dev/null || true
         fi
+        # Hard-stop any lingering bench timeout wrappers from this run.
+        # These shells are always bench-internal and safe to reap.
+        local _bpid
+        for _bpid in $(pgrep -f '__BENCH_MODE=1' 2>/dev/null || true)
+        do
+            [[ "$_bpid" =~ ^[0-9]+$ ]] || continue
+            kill -TERM "$_bpid" 2>/dev/null || true
+        done
+        sleep 1
+        for _bpid in $(pgrep -f '__BENCH_MODE=1' 2>/dev/null || true)
+        do
+            [[ "$_bpid" =~ ^[0-9]+$ ]] || continue
+            kill -KILL "$_bpid" 2>/dev/null || true
+        done
         # On interrupt/termination, explicitly stop any active model server.
         if (( __bench_signal_rc != 0 ))
         then
@@ -3770,11 +3854,32 @@ function __model_bench() {
         fi
         return 0
     }
-    local num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _tps _autotuned _is_default _in_vram
-    while IFS='|' read -r num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _tps _autotuned _is_default _in_vram
+    local num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _flash_attn _tps _autotuned _is_default _in_vram
+    while IFS='|' read -r num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _flash_attn _tps _autotuned _is_default _in_vram
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         [[ ! -f "$LLAMA_MODEL_DIR/$file" ]] && continue
+        if (( ${#bench_selectors[@]} > 0 ))
+        then
+            local _bench_match=0
+            local _selector _selector_lc
+            for _selector in "${bench_selectors[@]}"
+            do
+                [[ -z "$_selector" ]] && continue
+                _selector_lc="${_selector,,}"
+                if [[ "$_selector" =~ ^[0-9]+$ ]]; then
+                    [[ "$num" == "$_selector" ]] || continue
+                elif [[ "${name,,}" != *"$_selector_lc"* && "${file,,}" != *"$_selector_lc"* ]]; then
+                    continue
+                fi
+                if [[ "${num,,}" == "$_selector_lc" || "${name,,}" == *"$_selector_lc"* || "${file,,}" == *"$_selector_lc"* ]]
+                then
+                    _bench_match=1
+                    break
+                fi
+            done
+            (( _bench_match == 1 )) || continue
+        fi
         b_num+=("$num")
         b_name+=("$name")
         b_file+=("$file")
@@ -3784,6 +3889,10 @@ function __model_bench() {
 
     if (( ${#b_num[@]} == 0 ))
     then
+        if (( ${#bench_selectors[@]} > 0 ))
+        then
+            __tac_info "Bench" "[No models matched selectors: ${bench_selectors[*]}]" "$C_Error"
+        fi
         __tac_info "Bench" "[No on-disk models]" "$C_Warning"
         if (( _bench_watchdog_was_active ))
         then
@@ -3802,7 +3911,12 @@ function __model_bench() {
 
     wake 2>/dev/null || true
     __llm_bench_perf_prep
-    printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} models...${C_Reset}"
+    if (( ${#bench_selectors[@]} > 0 ))
+    then
+        printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} selected models (${bench_selectors[*]})...${C_Reset}"
+    else
+        printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} models...${C_Reset}"
+    fi
 
     local __BENCH_MODE=1
     local i
@@ -3865,16 +3979,24 @@ function __model_bench() {
                 export LLM_AUTOTUNE_SKIP_LOCK=1
 
 
-                if ! python3 "${HOME}/ubuntu-console/bin/model-autotune.py" "${b_num[$i]}"
+                local _autotune_rc=0
+                python3 "${HOME}/ubuntu-console/bin/model-autotune.py" "${b_num[$i]}" || _autotune_rc=$?
+                if (( _autotune_rc != 0 ))
                 then
                     # Clear any lifted/safe overrides before skipping this model so
                     # later iterations do not inherit a failed model's bench state.
                     unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
                     unset LLM_AUTOTUNE_RESTORE_PREV
                     unset LLM_AUTOTUNE_SKIP_LOCK
-                    __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} - skipping benchmark]" "$C_Error"
+                    if (( _autotune_rc == 2 ))
+                    then
+                        __tac_info "Bench" "[Autotune marked model #${b_num[$i]} as unusable (TPS floor not met) - skipping benchmark]" "$C_Warning"
+                        b_tps+=("UNUSABLE")
+                    else
+                        __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} - skipping benchmark]" "$C_Error"
+                        b_tps+=("FAIL_AUTOTUNE")
+                    fi
                     sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
-                    b_tps+=("FAIL_AUTOTUNE")
                     __model_stop 2>/dev/null || true
                     sleep 1
                     continue
@@ -3933,7 +4055,16 @@ function __model_bench() {
         # enter the override block._bench_safe_overrides only tracks whether
         # //WE// set them, but another iteration may have set them earlier.
         unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
-        sleep 1
+        # Cooldown: let WSL2 9p drvfs flush cached file handles and release
+        # any lingering locks on the previous model's GGUF before the next
+        # model starts. Without this, rapid model cycling causes curl 52
+        # (empty reply) as llama-server stalls on congested I/O.
+        local _cooldown_s="${LLM_BENCH_COOLDOWN_SEC:-4}"
+        [[ "$_cooldown_s" =~ ^[0-9]+$ ]] || _cooldown_s=4
+        if (( _cooldown_s > 0 )); then
+            sync 2>/dev/null || true
+            sleep "$_cooldown_s"
+        fi
     done
     unset __BENCH_MODE
 
@@ -4178,7 +4309,7 @@ function __model_doctor() {
         registry_exists=1
         local header_line
         header_line=$(head -1 "$LLM_REGISTRY" 2>/dev/null)
-        [[ "$header_line" == "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram" ]] && header_ok=1
+        [[ "$header_line" == "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram" ]] && header_ok=1
 
         local expected_num=1
         local num _name file _rest
@@ -4328,8 +4459,8 @@ function __model_recommend() {
     fi
 
     local -a ranked=()
-    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
-    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         [[ -f "$LLAMA_MODEL_DIR/$file" ]] || continue
@@ -4822,8 +4953,9 @@ bench-compare|bench-latest|bench-history|delete|archive|download}"
     echo "  doctor     - Validate registry/default/GPU/watchdog/ports"
     echo "  recommend  - Rank scanned models for a 4GB VRAM system"
     echo "  info N     - Detailed info for model #N"
-    echo "  bench      - Benchmark all on-disk models"
+    echo "  bench [MODEL...] - Benchmark all on-disk models or a selected subset"
     echo "  bench check - Check if a bench run is active (lock status)"
+    echo "  bench --help - Show bench-specific usage and selector examples"
     echo "  autotune N [--backend native|python] [--ctx-size N] [--trials N]"
     echo "             - Sweep safe runtime configs and save best profile for model #N"
     echo "  bench-diff - Compare the latest two bench TSVs (or pass old/new files)"
@@ -4909,6 +5041,25 @@ function model() {
         bench)
             # Check subcommand: --check / check queries lock status without running.
             case "${1:-}" in
+                --help|-h|help)
+                    echo "Usage: model bench [MODEL ...]"
+                    echo ""
+                    echo "Selectors (OR semantics):"
+                    echo "  - Number: exact model row match (e.g. 6 15)"
+                    echo "  - Text: case-insensitive substring of model name or file"
+                    echo ""
+                    echo "Examples:"
+                    echo "  model bench"
+                    echo "  model bench 6 15"
+                    echo "  model bench qwen phi"
+                    echo ""
+                    echo "Environment knobs:"
+                    echo "  LLM_BENCH_MODEL_TIMEOUT      Per-model timeout seconds"
+                    echo "  LLM_BENCH_REQUEST_TIMEOUT    Burn request timeout seconds"
+                    echo "  LLM_BENCH_BURN_TOKENS        Burn max_tokens (default 768)"
+                    echo "  LLM_BENCH_COOLDOWN_SEC       Cooldown between models"
+                    return 0
+                    ;;
                 --check|check)
                     local _bench_lock="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
                     local _bench_pid="${LLM_BENCH_PID_FILE:-/tmp/llm-bench.pid}"
@@ -4929,7 +5080,7 @@ function model() {
                     return 0
                     ;;
             esac
-            __model_bench
+            __model_bench "$@"
             ;;
 
         autotune)
@@ -5135,6 +5286,7 @@ function burn() {
     local attempt=1
     local max_attempts="${LLM_BURN_MAX_ATTEMPTS:-}"
     local retry_health_wait="${LLM_BURN_RETRY_HEALTH_WAIT:-30}"
+    local retry_settle_sec="${LLM_BURN_RETRY_SETTLE_SEC:-2}"
     if [[ ! "$max_attempts" =~ ^[0-9]+$ ]]
     then
         if [[ -n "${__BENCH_MODE:-}" ]]
@@ -5147,6 +5299,8 @@ function burn() {
     (( max_attempts < 1 )) && max_attempts=1
     [[ "$retry_health_wait" =~ ^[0-9]+$ ]] || retry_health_wait=30
     (( retry_health_wait < 1 )) && retry_health_wait=1
+    [[ "$retry_settle_sec" =~ ^[0-9]+$ ]] || retry_settle_sec=2
+    (( retry_settle_sec < 0 )) && retry_settle_sec=0
     while true
     do
         start_ns=$(date +%s%N)
@@ -5168,6 +5322,21 @@ function burn() {
             _retry_msg+="request ${attempt}/${max_attempts}; waiting up to ${retry_health_wait}s before retry ${_next_attempt}/${max_attempts}..."
             printf '%s\n' \
                 "$_retry_msg"
+            if [[ -n "${__BENCH_MODE:-}" ]] && [[ "$bench_tokens" =~ ^[0-9]+$ ]] && (( bench_tokens > 128 ))
+            then
+                local _retry_tokens=$(( bench_tokens / 2 ))
+                (( _retry_tokens < 128 )) && _retry_tokens=128
+                if (( _retry_tokens < bench_tokens ))
+                then
+                    bench_tokens=$_retry_tokens
+                    payload=$(jq -n \
+                        --arg p "$prompt" \
+                        --argjson bench_tokens "$bench_tokens" \
+                        --argjson bench_temp "${LLM_BENCH_TEMPERATURE:-0}" \
+                        '{messages: [{role: "user", content: $p}], max_tokens: $bench_tokens, temperature: $bench_temp, top_p: 1.0}')
+                    printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Retrying with ${bench_tokens} tokens after transient failure."
+                fi
+            fi
             local _rh
             local _healthy=0
             for (( _rh=0; _rh < retry_health_wait; _rh++ ))
@@ -5197,6 +5366,10 @@ function burn() {
                                 [[ "$_pf_rc" == "200" ]] && break
                             done
                         fi
+                    fi
+                    if (( retry_settle_sec > 0 ))
+                    then
+                        sleep "$retry_settle_sec"
                     fi
                     break
                 fi

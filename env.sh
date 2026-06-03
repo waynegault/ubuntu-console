@@ -35,6 +35,10 @@ mkdir -p "$NODE_COMPILE_CACHE" 2>/dev/null || true
 # OPENCLAW_NO_RESPAWN: Skip self-respawn overhead
 export OPENCLAW_NO_RESPAWN="${OPENCLAW_NO_RESPAWN:-1}"
 
+# LLM autotune context retention guardrail: keep selected ctx at or above a
+# fraction of the max stable ctx discovered per model.
+export LLM_AUTOTUNE_MIN_CTX_FRACTION="${LLM_AUTOTUNE_MIN_CTX_FRACTION:-0.60}"
+
 _tac_env_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _tac_lib_dir="$_tac_env_root/scripts"
 
