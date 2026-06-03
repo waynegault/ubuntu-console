@@ -60,12 +60,29 @@ setup_file() {
     shellcheck -s bash "$PROFILE_PATH"
 }
 
-@test "shellcheck: companion scripts have no findings" {
+@test "shellcheck: companion bin scripts have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
-        [[ -f "$f" ]] || continue
-        shellcheck -s bash "$f"
-    done
+    shellcheck -s bash "$REPO_ROOT"/bin/*.sh
+}
+
+@test "shellcheck: companion scripts 0x have no findings" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    shellcheck -s bash "$REPO_ROOT"/scripts/0*.sh
+}
+
+@test "shellcheck: companion scripts 10-12 have no findings" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    shellcheck -s bash \
+        "$REPO_ROOT"/scripts/1[0-2]-*.sh
+}
+
+@test "shellcheck: companion scripts 13-15 and extras have no findings" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    shellcheck -s bash \
+        "$REPO_ROOT"/scripts/1[3-5]-*.sh \
+        "$REPO_ROOT"/scripts/18-lint.sh \
+        "$REPO_ROOT"/scripts/load-vault-env.sh \
+        "$REPO_ROOT"/scripts/oc-update-enhanced.sh
 }
 
 @test "shellcheck: install.sh passes at all severities" {

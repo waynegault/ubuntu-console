@@ -187,12 +187,36 @@ setup() {
     shellcheck -s bash "$PROFILE_PATH"
 }
 
-@test "shellcheck: companion scripts have no findings" {
+@test "shellcheck: companion bin scripts have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
-        [[ -f "$f" ]] || continue
-        shellcheck -s bash "$f"
-    done
+    shellcheck -s bash "$REPO_ROOT"/bin/*.sh
+}
+
+@test "shellcheck: companion scripts 0x have no findings" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    shellcheck -s bash "$REPO_ROOT"/scripts/0*.sh
+}
+
+@test "shellcheck: companion scripts 10 and 12 have no findings" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    shellcheck -s bash \
+        "$REPO_ROOT"/scripts/10-deployment.sh \
+        "$REPO_ROOT"/scripts/12-dashboard-help.sh
+}
+
+@test "shellcheck: companion script 11 has no findings" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    [[ -n "${VSCODE_PID:-}" ]] && skip "skip long shellcheck in VS Code test host"
+    shellcheck -s bash "$REPO_ROOT"/scripts/11-llm-manager.sh
+}
+
+@test "shellcheck: companion scripts 13-15 and extras have no findings" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    shellcheck -s bash \
+        "$REPO_ROOT"/scripts/1[3-5]-*.sh \
+        "$REPO_ROOT"/scripts/18-lint.sh \
+        "$REPO_ROOT"/scripts/load-vault-env.sh \
+        "$REPO_ROOT"/scripts/oc-update-enhanced.sh
 }
 
 @test "bash -n: all mcp-tools/*.sh scripts parse without syntax errors" {
@@ -208,12 +232,36 @@ setup() {
     shellcheck -s bash "$PROFILE_PATH"
 }
 
-@test "shellcheck: companion scripts pass at all severities" {
+@test "shellcheck: companion bin scripts pass at all severities" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    for f in "$REPO_ROOT"/bin/*.sh "$REPO_ROOT"/scripts/*.sh; do
-        [[ -f "$f" ]] || continue
-        shellcheck -s bash "$f"
-    done
+    shellcheck -s bash "$REPO_ROOT"/bin/*.sh
+}
+
+@test "shellcheck: companion scripts 0x pass at all severities" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    shellcheck -s bash "$REPO_ROOT"/scripts/0*.sh
+}
+
+@test "shellcheck: companion scripts 10 and 12 pass at all severities" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    shellcheck -s bash \
+        "$REPO_ROOT"/scripts/10-deployment.sh \
+        "$REPO_ROOT"/scripts/12-dashboard-help.sh
+}
+
+@test "shellcheck: companion script 11 passes at all severities" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    [[ -n "${VSCODE_PID:-}" ]] && skip "skip long shellcheck in VS Code test host"
+    shellcheck -s bash "$REPO_ROOT"/scripts/11-llm-manager.sh
+}
+
+@test "shellcheck: companion scripts 13-15 and extras pass at all severities" {
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    shellcheck -s bash \
+        "$REPO_ROOT"/scripts/1[3-5]-*.sh \
+        "$REPO_ROOT"/scripts/18-lint.sh \
+        "$REPO_ROOT"/scripts/load-vault-env.sh \
+        "$REPO_ROOT"/scripts/oc-update-enhanced.sh
 }
 
 @test "shellcheck: install.sh passes at all severities" {
