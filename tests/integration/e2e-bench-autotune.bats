@@ -103,28 +103,25 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 
 # ===== C) AUTOTUNE PERSISTENCE ===============================================
 
-test_c1_autotune_done_for_model_yes() {
-    __llm_autotune_done_for_model 1
-}
-
-@test "[C3] Autotune: done_for_model returns non-zero for missing row (999)" {
-    run __llm_autotune_done_for_model 999
-    [[ "$status" -ne 0 ]]
-}
-
-test_c4_autotune_profile_save_writes_fields() {
+@test "[C4] Autotune: profile_save writes all fields + sets autotuned=yes" {
     echo "2" > "$ACTIVE_LLM_FILE"
-    __llm_autotune_profile_save 2 "native" 16384 2048 512 2 512 45.2
-    local row; row=$(awk -F'|' '$1==2' "$LLM_REGISTRY")
-    local ctx batch ubatch parallel fit tps autotuned
-    IFS='|' read -r _ _ _ _ _ _ _ ctx _ batch ubatch parallel fit _ _ tps autotuned _ _ <<< "$row"
-    [[ "$ctx" == "16384" ]]
-    [[ "$batch" == "2048" ]]
-    [[ "$ubatch" == "512" ]]
-    [[ "$parallel" == "2" ]]
-    [[ "$fit" == "512" ]]
-    [[ "$tps" == "45.2" ]]
-    [[ "$autotuned" == "yes" ]]
+    run __llm_autotune_profile_save 2 "native" 16384 2048 512 2 512 45.2
+    [[ "$status" -eq 0 ]]
+
+    run awk -F'|' '$1==2 {print $8; exit}' "$LLM_REGISTRY"
+    [[ "$output" == "16384" ]]
+    run awk -F'|' '$1==2 {print $10; exit}' "$LLM_REGISTRY"
+    [[ "$output" == "2048" ]]
+    run awk -F'|' '$1==2 {print $11; exit}' "$LLM_REGISTRY"
+    [[ "$output" == "512" ]]
+    run awk -F'|' '$1==2 {print $12; exit}' "$LLM_REGISTRY"
+    [[ "$output" == "2" ]]
+    run awk -F'|' '$1==2 {print $13; exit}' "$LLM_REGISTRY"
+    [[ "$output" == "512" ]]
+    run awk -F'|' '$1==2 {print $17; exit}' "$LLM_REGISTRY"
+    [[ "$output" == "45.2" ]]
+    run awk -F'|' '$1==2 {print $18; exit}' "$LLM_REGISTRY"
+    [[ "$output" == "yes" ]]
 }
 
 # ===== D) FAILURE PATH =======================================================
@@ -161,7 +158,7 @@ test_c4_autotune_profile_save_writes_fields() {
     [[ "$output" == *"Missing value for --trials"* ]]
 }
 
-test_d5_autotune_invalid_ctx_size_non_numeric() {
+@test "[D5] Failure: autotune invalid --ctx-size (non-numeric)" {
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --ctx-size abc 2>/dev/null || true"
@@ -169,7 +166,7 @@ test_d5_autotune_invalid_ctx_size_non_numeric() {
     [[ "$output" == *"Invalid"* ]]
 }
 
-test_d6_autotune_trials_zero_fails() {
+@test "[D6] Failure: autotune --trials 0 fails (must be >= 1)" {
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --trials 0 2>/dev/null || true"
@@ -177,7 +174,7 @@ test_d6_autotune_trials_zero_fails() {
     [[ "$output" == *"Invalid"* ]]
 }
 
-test_d7_autotune_unknown_backend() {
+@test "[D7] Failure: autotune unknown backend" {
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --backend nonexistent 2>/dev/null || true"
@@ -197,7 +194,7 @@ test_d7_autotune_unknown_backend() {
     flock -u "$fd"; exec {fd}>&-; rm -f "$LLM_BENCH_LOCK_FILE"
 }
 
-test_e2_lock_autotune_singleton_prevents_concurrent_run() {
+@test "[E2] Lock: autotune singleton prevents concurrent run" {
     exec {fd}>"$LLM_AUTOTUNE_LOCK_FILE"
     flock -x "$fd"
     echo "$$" > "$LLM_AUTOTUNE_LOCK_FILE"

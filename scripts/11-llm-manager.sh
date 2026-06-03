@@ -3568,6 +3568,8 @@ function __bench_run_with_timeout() {
     then
         timeout_s=120
     fi
+    local _monitor_was_on=0
+    [[ "$-" == *m* ]] && _monitor_was_on=1
     local _self_pgid=""
     _self_pgid=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')
 
@@ -3581,7 +3583,6 @@ function __bench_run_with_timeout() {
     _bench_shell_runner=$(cat <<'EOF'
         child_pid=""
         __bench_timeout_cleanup() {
-            local _child_pids=""
             if [[ -n "$child_pid" ]] && kill -0 "$child_pid" 2>/dev/null
             then
                 kill -TERM -- "$child_pid" 2>/dev/null || true
@@ -3612,22 +3613,18 @@ EOF
         fi
         # Shell functions cannot be exec'd by setsid directly.
         # Run them in a dedicated shell process-group when available.
-        # Suppress job-control messages and profile banners for clean output.
-        # Shell functions cannot be exec'd by setsid directly.
-        # Run them in a dedicated shell process-group when available.
-        # Disable job-control messages for clean output.
         declare -fx "$1" 2>/dev/null || true
-        set +m
+        (( _monitor_was_on == 1 )) && set +m
         if command -v setsid >/dev/null 2>&1; then
             setsid bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} $_bench_shell_runner" _ "$_bench_profile_path" "$@" &
         else
             bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} $_bench_shell_runner" _ "$_bench_profile_path" "$@" &
         fi
     elif command -v setsid >/dev/null 2>&1; then
-        set +m
+        (( _monitor_was_on == 1 )) && set +m
         setsid "$@" &
     else
-        set +m
+        (( _monitor_was_on == 1 )) && set +m
         "$@" &
     fi
     local cmd_pid=$!
@@ -3642,7 +3639,10 @@ EOF
         if ! kill -0 "$cmd_pid" 2>/dev/null
         then
             wait "$cmd_pid" 2>/dev/null
-            set -m 2>/dev/null || true
+            if (( _monitor_was_on == 1 ))
+            then
+                set -m 2>/dev/null || true
+            fi
             return $?
         fi
         sleep "$interval"
@@ -3664,6 +3664,10 @@ EOF
         if ! kill -0 "$cmd_pid" 2>/dev/null
         then
             wait "$cmd_pid" 2>/dev/null
+            if (( _monitor_was_on == 1 ))
+            then
+                set -m 2>/dev/null || true
+            fi
             return 124
         fi
         sleep 1
@@ -3685,7 +3689,10 @@ EOF
         kill -KILL -- "$cmd_pid" 2>/dev/null || true
     fi
     wait "$cmd_pid" 2>/dev/null || true
-    set -m 2>/dev/null || true
+    if (( _monitor_was_on == 1 ))
+    then
+        set -m 2>/dev/null || true
+    fi
     return 124
 }
 
@@ -3782,20 +3789,6 @@ function __model_bench() {
         then
             kill "${bench_cleanup_spawned_pids[@]}" 2>/dev/null || true
         fi
-        # Hard-stop any lingering bench timeout wrappers from this run.
-        # These shells are always bench-internal and safe to reap.
-        local _bpid
-        for _bpid in $(pgrep -f '__BENCH_MODE=1' 2>/dev/null || true)
-        do
-            [[ "$_bpid" =~ ^[0-9]+$ ]] || continue
-            kill -TERM "$_bpid" 2>/dev/null || true
-        done
-        sleep 1
-        for _bpid in $(pgrep -f '__BENCH_MODE=1' 2>/dev/null || true)
-        do
-            [[ "$_bpid" =~ ^[0-9]+$ ]] || continue
-            kill -KILL "$_bpid" 2>/dev/null || true
-        done
         # On interrupt/termination, explicitly stop any active model server.
         if (( __bench_signal_rc != 0 ))
         then
@@ -3838,6 +3831,8 @@ function __model_bench() {
     [[ -f "$ACTIVE_LLM_FILE" ]] && _bench_prev_model=$(< "$ACTIVE_LLM_FILE")
     local bench_backend=""
     bench_backend=$(__llm_backend_normalize "${LLM_SERVER_BACKEND:-native}")
+    local _tac_root="${TACTICAL_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+    local _autotune_script="${_tac_root}/bin/model-autotune.py"
     local bench_autotune_mode="comprehensive"
 
     local -a b_num=() b_name=() b_file=() b_size=() b_gpu=() b_tps=()
@@ -3982,7 +3977,13 @@ function __model_bench() {
 
 
                 local _autotune_rc=0
-                python3 "${HOME}/ubuntu-console/bin/model-autotune.py" "${b_num[$i]}" || _autotune_rc=$?
+                if [[ -x "$_autotune_script" || -f "$_autotune_script" ]]
+                then
+                    python3 "$_autotune_script" "${b_num[$i]}" || _autotune_rc=$?
+                else
+                    _autotune_rc=1
+                    __tac_info "Bench" "[Autotune script not found: $_autotune_script]" "$C_Error"
+                fi
                 if (( _autotune_rc != 0 ))
                 then
                     # Clear any lifted/safe overrides before skipping this model so
