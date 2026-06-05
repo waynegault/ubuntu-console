@@ -601,6 +601,88 @@ function __llm_autotune_verify_winner() {
 }
 
 # ---------------------------------------------------------------------------
+# __llm_autotune_estimate_ctx_start — Estimate a useful initial ctx probe.
+# Uses saved ctx/TPS plus rough model-size and free-VRAM heuristics so autotune
+# starts near the likely throughput-stable range instead of a flat default.
+# @args <saved_ctx> <saved_tps> <min_tps> <max_ctx> <sane_max_ctx> <model_bytes> <free_vram_mb>
+# @stdout Estimated ctx rounded to 512.
+# ---------------------------------------------------------------------------
+function __llm_autotune_estimate_ctx_start() {
+    local saved_ctx="${1:-}"
+    local saved_tps="${2:-}"
+    local min_tps="${3:-0}"
+    local max_ctx="${4:-8192}"
+    local sane_max_ctx="${5:-8192}"
+    local model_bytes="${6:-0}"
+    local free_vram_mb="${7:-0}"
+
+    local estimate=4096
+    local min_ctx_floor="${LLM_AUTOTUNE_MIN_CTX_FLOOR:-2048}"
+    [[ "$min_ctx_floor" =~ ^[0-9]+$ ]] || min_ctx_floor=2048
+    [[ "$max_ctx" =~ ^[0-9]+$ ]] || max_ctx=8192
+    [[ "$sane_max_ctx" =~ ^[0-9]+$ ]] || sane_max_ctx="$max_ctx"
+    [[ "$model_bytes" =~ ^[0-9]+$ ]] || model_bytes=0
+    [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
+
+    if [[ "$saved_ctx" =~ ^[0-9]+$ ]]
+    then
+        estimate="$saved_ctx"
+    fi
+
+    if (( model_bytes >= 7000000000 ))
+    then
+        estimate=2048
+    elif (( model_bytes >= 3500000000 ))
+    then
+        estimate=4096
+    elif (( model_bytes >= 1800000000 ))
+    then
+        estimate=8192
+    elif (( model_bytes > 0 ))
+    then
+        estimate=12288
+    fi
+
+    if [[ "$saved_ctx" =~ ^[0-9]+$ ]]
+    then
+        estimate="$saved_ctx"
+    fi
+
+    if [[ "$saved_ctx" =~ ^[0-9]+$ ]] && [[ "$saved_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$min_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v m="$min_tps" 'BEGIN{exit !(m>0)}'
+    then
+        local scaled_estimate
+        scaled_estimate=$(awk -v ctx="$saved_ctx" -v t="$saved_tps" -v m="$min_tps" 'BEGIN {
+            ratio=t/m;
+            if (ratio < 0.50) ratio=0.50;
+            if (ratio > 1.60) ratio=1.60;
+            printf "%d", ctx*ratio;
+        }')
+        [[ "$scaled_estimate" =~ ^[0-9]+$ ]] && estimate="$scaled_estimate"
+    fi
+
+    if (( free_vram_mb > 0 && free_vram_mb < 4096 && estimate > 8192 ))
+    then
+        estimate=8192
+    fi
+    if (( free_vram_mb > 0 && free_vram_mb < 3072 && estimate > 6144 ))
+    then
+        estimate=6144
+    fi
+    if (( free_vram_mb > 0 && free_vram_mb < 2048 && estimate > 4096 ))
+    then
+        estimate=4096
+    fi
+
+    (( estimate > sane_max_ctx )) && estimate="$sane_max_ctx"
+    (( estimate > max_ctx )) && estimate="$max_ctx"
+    (( estimate < min_ctx_floor )) && estimate="$min_ctx_floor"
+
+    estimate=$(( (estimate / 512) * 512 ))
+    (( estimate < 512 )) && estimate=512
+    printf '%s\n' "$estimate"
+}
+
+# ---------------------------------------------------------------------------
 # __llm_autotune_profiles_remap_by_registry — Carry tuning columns by filename.
 # @returns 0 when remap succeeds or is not needed, 1 on write failure.
 # ---------------------------------------------------------------------------
@@ -2804,8 +2886,10 @@ function __model_autotune() {
 
     local __AUTOTUNE_MODE=1
     local __BENCH_MODE=1
+    local min_tps_required="${LLM_MIN_TPS:-6}"
     export LLM_SERVER_BACKEND="$backend"
     [[ -n "$tune_ctx" ]] && export TAC_CTX_SIZE="$tune_ctx"
+    [[ "$min_tps_required" =~ ^[0-9]+(\.[0-9]+)?$ ]] || min_tps_required="6"
 
     # Keep autotune responsive: cap request/readiness waits per trial so one
     # bad config does not stall the whole sweep.
@@ -2843,19 +2927,75 @@ function __model_autotune() {
     )
     ctx_candidates=(12288 8192 6144 4096)
 
-    # Per-model candidate pruning based on available VRAM and model size.
+    if [[ "$batch" =~ ^[0-9]+$ ]] && [[ "$ubatch" =~ ^[0-9]+$ ]] && [[ "$parallel" =~ ^[0-9]+$ ]] && [[ "$fit_target_mb" =~ ^[0-9]+$ ]]
+    then
+        combos=("${batch}:${ubatch}:${parallel}:${fit_target_mb}" "${combos[@]}")
+    fi
+
+    # -----------------------------------------------------------------------
+    # VRAM-aware context upper bound estimation.
+    # On a 4-6GB GPU the naive binary-search range (8192-32768) wastes 3-4
+    # server restarts probing ctx values that are guaranteed OOM.  Instead we
+    # compute a realistic per-model starting bound:
+    #
+    #   kv_cache_per_token_mb ≈ layers × (num_kv_heads / num_heads) ×
+    #                           (bytes_per_k + bytes_per_q) / 1M
+    #
+    # For typical 8-bit K-cache + 0-bit (!) Q-cache on Qwen2/Llama archs:
+    #   kv_mb ≈ (ngl / 24_total) * 0.5 * layers * (num_kv / num_heads) * 2 / 1M
+    #
+    # Practical rule-of-thumb: model weight uses ~80 % of VRAM at full offload,
+    # remaining ~20 % goes to KV cache + overhead.  So:
+    #   kv_budget_mb = max(0, free_vram_mb - model_bytes_mb * 0.85)
+    #   safe_max_ctx  ≈ kv_budget_mb * 2 / (layers * kv_head_ratio)
+    #
+    # When nvidia-smi is unavailable we fall back to a conservative 8192.
+    # -----------------------------------------------------------------------
     local free_vram_mb=0
+    local total_vram_mb=0
     local smi_cmd
     smi_cmd=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$smi_cmd" ]]
     then
         free_vram_mb=$("$smi_cmd" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        total_vram_mb=$("$smi_cmd" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
     fi
     [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
+    [[ "$total_vram_mb" =~ ^[0-9]+$ ]] || total_vram_mb=0
 
     local model_bytes=0
     model_bytes=$(stat --format=%s "$LLAMA_MODEL_DIR/$file" 2>/dev/null || echo 0)
+    local model_mb=$(( model_bytes / 1048576 ))
 
+    # Compute VRAM-aware ctx upper bound.
+    local estimated_max_ctx=8192   # safe default
+    if (( free_vram_mb > 0 && model_mb > 0 ))
+    then
+        # KV cache overhead: ~0.5 MiB per 1K ctx per 1B param (approx)
+        # For a typical Q4_K_M at ngl ~20 on Ada: ~0.3-0.4 MB/K/token
+        # Model weight in VRAM ≈ offloaded fraction × model_mb × (load overhead)
+        local offload_frac=0.85
+        local vram_model_overhead_mb
+        vram_model_overhead_mb=$(awk "BEGIN { m = $model_mb * $offload_frac; print (m < 1 ? 1 : m) }" 2>/dev/null || echo "$model_mb")
+        local kv_budget_mb=$(( free_vram_mb - vram_model_overhead_mb - 256 ))   # 256 MB headroom
+        if (( kv_budget_mb > 64 ))
+        then
+            # Estimate: 1K tokens ≈ 0.4 MB × sqrt(layers / 32) × kv_head_ratio
+            # Simplified: ~0.3 MB per 1K ctx per 1B model_weight
+            local kv_mb_per_1k
+            kv_mb_per_1k=$(awk "BEGIN { v = ($model_mb ^ 0.5) * 0.08; print (v < 0.1 ? 0.1 : v) }" 2>/dev/null || echo 0.3)
+            estimated_max_ctx=$(awk "BEGIN { c = int($kv_budget_mb / $kv_mb_per_1k * 1.0); print (c < 512 ? 512 : c) }" 2>/dev/null || echo 8192)
+            # Round to nearest 512
+            estimated_max_ctx=$(( (estimated_max_ctx / 512) * 512 ))
+        fi
+        if [[ -n "$max_ctx_by_rating" ]] && (( estimated_max_ctx > max_ctx_by_rating ))
+        then
+            estimated_max_ctx="$max_ctx_by_rating"
+        fi
+        (( estimated_max_ctx < 512 )) && estimated_max_ctx=512
+    fi
+
+    # Per-model candidate pruning based on available VRAM and model size.
     local -a pruned_combos=()
     local _pc
     for _pc in "${combos[@]}"
@@ -2886,6 +3026,14 @@ function __model_autotune() {
         combos=("${pruned_combos[@]}")
     fi
 
+    local _combo_sorted=""
+    _combo_sorted=$(printf '%s\n' "${combos[@]}" | awk '!seen[$0]++')
+    combos=()
+    while IFS= read -r _combo_line
+    do
+        [[ -n "$_combo_line" ]] && combos+=("$_combo_line")
+    done <<< "$_combo_sorted"
+
     # Always include registry/default ctx so each model has at least one
     # realistic baseline candidate.
     if [[ "$ctx" =~ ^[0-9]+$ ]]
@@ -2899,8 +3047,9 @@ function __model_autotune() {
         ctx_candidates=("$tune_ctx")
     elif [[ "${LLM_AUTOTUNE_CTX_STRATEGY:-binary}" == "binary" ]]
     then
-        # Binary-search the highest startup-stable context first, then test
-        # nearby contexts for throughput ranking.
+        # Binary-search the highest context that still meets the minimum TPS
+        # floor, starting from an estimate derived from the saved row and the
+        # current memory budget.
         local sane_max_ctx="${LLM_AUTOTUNE_CTX_SANE_LIMIT:-8192}"
         [[ "$sane_max_ctx" =~ ^[0-9]+$ ]] || sane_max_ctx=8192
 
@@ -2913,22 +3062,78 @@ function __model_autotune() {
             max_ctx="$max_ctx_by_rating"
         fi
 
-        # If registry ctx is unrealistically large (> sane limit), treat it as
-        # a placeholder (common for default template rows) and clamp base_ctx.
-        # This prevents binary-search failure when low > high.
-        if (( base_ctx > sane_max_ctx )); then
-            base_ctx=$sane_max_ctx
-        fi
+        base_ctx=$(__llm_autotune_estimate_ctx_start "$base_ctx" "$tps" "$min_tps_required" "$max_ctx" "$sane_max_ctx" "$model_bytes" "$free_vram_mb")
+        [[ "$base_ctx" =~ ^[0-9]+$ ]] || base_ctx=4096
 
-        (( max_ctx < base_ctx )) && max_ctx=$base_ctx
-
-        local discovered_ctx="$base_ctx"
-        local low="$base_ctx"
+        local discovered_ctx=""
+        local min_ctx_floor="${LLM_AUTOTUNE_MIN_CTX_FLOOR:-2048}"
+        [[ "$min_ctx_floor" =~ ^[0-9]+$ ]] || min_ctx_floor=2048
+        local low="$min_ctx_floor"
         local high="$max_ctx"
-        local probe_batch=1024
-        local probe_ubatch=256
+        local probe_batch="${batch:-1024}"
+        local probe_ubatch="${ubatch:-256}"
         local probe_parallel=1
-        local probe_fit=256
+        local probe_fit="${fit_target_mb:-256}"
+        [[ "$probe_batch" =~ ^[0-9]+$ ]] || probe_batch=1024
+        [[ "$probe_ubatch" =~ ^[0-9]+$ ]] || probe_ubatch=256
+        [[ "$probe_fit" =~ ^[0-9]+$ ]] || probe_fit=256
+        (( probe_batch > 1024 )) && probe_batch=1024
+        (( probe_ubatch > 256 )) && probe_ubatch=256
+        (( probe_batch < 256 )) && probe_batch=256
+        (( probe_ubatch < 128 )) && probe_ubatch=128
+        local probe_step=512
+        local last_probe_tps=""
+        local probe_anchor="$base_ctx"
+
+        __llm_autotune_ctx_probe() {
+            local probe_ctx="$1"
+            local probe_log="/tmp/autotune_ctx_probe_${num}_${probe_ctx}.log"
+            local probe_use_log="/tmp/autotune_ctx_probe_use_${num}_${probe_ctx}.log"
+            local probe_tps=""
+
+            export TAC_CTX_SIZE="$probe_ctx"
+            export LLAMA_BATCH_SIZE="$probe_batch"
+            export LLAMA_UBATCH_SIZE="$probe_ubatch"
+            export LLAMA_PARALLEL_SLOTS="$probe_parallel"
+            export LLAMA_FIT_TARGET_MB="$probe_fit"
+
+            if ! __model_use "$num" >"$probe_use_log" 2>&1
+            then
+                __model_stop >/dev/null 2>&1 || true
+                return 1
+            fi
+
+            if awk -v min="$min_tps_required" 'BEGIN{exit !(min>0)}'
+            then
+                if ! burn >"$probe_log" 2>&1
+                then
+                    __model_stop >/dev/null 2>&1 || true
+                    return 1
+                fi
+                probe_tps=$(sed -n 's/.*Burn complete: \([0-9][0-9]*\(\.[0-9][0-9]*\)\?\) tps.*/\1/p' "$probe_log" | tail -n1)
+                [[ "$probe_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] || probe_tps="0"
+                last_probe_tps="$probe_tps"
+                if awk -v t="$probe_tps" -v min="$min_tps_required" 'BEGIN{exit !(t>=min)}'
+                then
+                    __model_stop >/dev/null 2>&1 || true
+                    return 0
+                fi
+                __model_stop >/dev/null 2>&1 || true
+                return 1
+            fi
+
+            last_probe_tps=""
+            __model_stop >/dev/null 2>&1 || true
+            return 0
+        }
+
+        if __llm_autotune_ctx_probe "$probe_anchor"
+        then
+            discovered_ctx="$probe_anchor"
+            low=$((probe_anchor + probe_step))
+        else
+            high=$((probe_anchor - probe_step))
+        fi
 
         while (( low <= high ))
         do
@@ -2937,37 +3142,33 @@ function __model_autotune() {
             (( mid < 512 )) && mid=512
             (( mid < low )) && mid=$low
 
-            export TAC_CTX_SIZE="$mid"
-            export LLAMA_BATCH_SIZE="$probe_batch"
-            export LLAMA_UBATCH_SIZE="$probe_ubatch"
-            export LLAMA_PARALLEL_SLOTS="$probe_parallel"
-            export LLAMA_FIT_TARGET_MB="$probe_fit"
-
-            local probe_log="/tmp/autotune_ctx_probe_${num}_${mid}.log"
-            if __model_use "$num" >"$probe_log" 2>&1
+            if __llm_autotune_ctx_probe "$mid"
             then
-                if grep -Eiq "$oom_regex" "$probe_log" 2>/dev/null
-                then
-                    high=$((mid - 512))
-                else
-                    discovered_ctx="$mid"
-                    low=$((mid + 512))
-                fi
+                discovered_ctx="$mid"
+                low=$((mid + probe_step))
             else
-                high=$((mid - 512))
+                high=$((mid - probe_step))
             fi
-            __model_stop >/dev/null 2>&1 || true
 
-            # Prevent binary loop stalling on boundary rounding.
             if (( low > max_ctx ))
             then
                 break
             fi
         done
 
+        unset -f __llm_autotune_ctx_probe 2>/dev/null || true
+
+        [[ -n "$discovered_ctx" ]] || discovered_ctx="$min_ctx_floor"
+
         local ctx_step="${LLM_AUTOTUNE_CTX_STEP:-2048}"
         [[ "$ctx_step" =~ ^[0-9]+$ ]] || ctx_step=2048
-        ctx_candidates=("$discovered_ctx" "$((discovered_ctx - ctx_step))" "$((discovered_ctx - 2 * ctx_step))" "$base_ctx")
+        ctx_candidates=(
+            "$discovered_ctx"
+            "$((discovered_ctx + probe_step))"
+            "$((discovered_ctx - (ctx_step / 2)))"
+            "$((discovered_ctx - ctx_step))"
+            "$base_ctx"
+        )
     fi
 
     # Unique + sort descending so we prioritize higher context first.
@@ -2988,7 +3189,12 @@ function __model_autotune() {
     __tac_info "Backend" "[$backend]" "$C_Dim"
     __tac_info "Quant" "[${quant_rating}]" "$C_Dim"
     __tac_info "Trials" "[${trials} per config, median score]" "$C_Dim"
-    __tac_info "Objective" "[1) no OOM  2) max ctx  3) max TPS]" "$C_Dim"
+    if awk -v min="$min_tps_required" 'BEGIN{exit !(min>0)}'
+    then
+        __tac_info "Objective" "[1) no OOM  2) >= ${min_tps_required} TPS  3) max ctx  4) max TPS]" "$C_Dim"
+    else
+        __tac_info "Objective" "[1) no OOM  2) max ctx  3) max TPS]" "$C_Dim"
+    fi
     __tac_info "Ctx Sweep" "[${ctx_candidates[*]}]" "$C_Dim"
     [[ -n "$tune_ctx" ]] && __tac_info "Context" "[Forced ctx=${tune_ctx}]" "$C_Dim"
     echo ""
@@ -3007,6 +3213,14 @@ function __model_autotune() {
     local best_samples=0
     local best_combo=""
     local best_ctx=""
+    local best_meets_min_tps=0
+    local fallback_tps=""
+    local fallback_score=""
+    local fallback_stddev=""
+    local fallback_failures=0
+    local fallback_samples=0
+    local fallback_combo=""
+    local fallback_ctx=""
     local total_configs=$(( ${#ctx_candidates[@]} * ${#combos[@]} ))
     local jitter_penalty="${LLM_AUTOTUNE_JITTER_PENALTY:-0.30}"
     local early_stop_margin="${LLM_AUTOTUNE_EARLY_STOP_MARGIN:-2.0}"
@@ -3020,6 +3234,9 @@ function __model_autotune() {
     local fail_dominated=0
 
     declare -A best_score_by_ctx
+    # Track combos that OOMed at larger ctx so they can be skipped at
+    # smaller ctx values — saving server restarts and time.
+    declare -A _oom_combos
 
     local c_ctx=""
     for c_ctx in "${ctx_candidates[@]}"
@@ -3031,6 +3248,14 @@ function __model_autotune() {
             (( __autotune_interrupted != 0 )) && break
             idx=$((idx + 1))
             IFS=':' read -r c_batch c_ubatch c_parallel c_fit <<< "$combo"
+            # Skip this combo if it OOMed at a larger ctx — it will only
+            # perform worse at smaller ctx values.
+            local _ck="${c_batch}:${c_ubatch}:${c_parallel}"
+            if [[ -n "${_oom_combos[$_ck]:-}" ]]
+            then
+                printf "  %-4s %-5s %-18s %-8s %-8s\n" "$idx" "$c_ctx" "b ${c_batch}/${c_ubatch} p ${c_parallel}" "  - " "SKIP"
+                continue
+            fi
             export LLAMA_BATCH_SIZE="$c_batch"
             export LLAMA_UBATCH_SIZE="$c_ubatch"
             export LLAMA_PARALLEL_SLOTS="$c_parallel"
@@ -3042,6 +3267,7 @@ function __model_autotune() {
             local trial run_tps trial_ok=1
             local oom_detected=0
             local dominated_detected=0
+            local skip_combo=0
 
             if __model_use "$num" >"$use_log" 2>&1
             then
@@ -3122,6 +3348,13 @@ function __model_autotune() {
                 printf "  %-4s %-5s %-18s %-8s %-8s\n" "$idx" "$c_ctx" "b ${c_batch}/${c_ubatch} p ${c_parallel}" "FAIL" "$([[ $oom_detected -eq 1 ]] && echo OOM || echo START)"
                 __model_stop >/dev/null 2>&1 || true
                 sleep 1
+                # If this combo OOMed at a larger ctx, skip it at all
+                # smaller ctx values too — it will only perform worse.
+                if (( oom_detected == 1 ))
+                then
+                    skip_combo=1
+                    _oom_combos["${c_batch}:${c_ubatch}:${c_parallel}"]=1
+                fi
                 continue
             fi
 
@@ -3138,6 +3371,7 @@ function __model_autotune() {
                 then
                     score_tps=$(awk -v m="$median_tps" -v s="$stddev_tps" -v p="$jitter_penalty" 'BEGIN{printf "%.3f", (m - (s*p))}')
                     local status_label="OK"
+                    local meets_min_tps=1
                     if (( oom_detected == 1 ))
                     then
                         status_label="OOM"
@@ -3151,23 +3385,49 @@ function __model_autotune() {
                         status_label="PARTIAL"
                     fi
 
+                    if awk -v min="$min_tps_required" 'BEGIN{exit !(min>0)}'
+                    then
+                        if ! awk -v t="$median_tps" -v min="$min_tps_required" 'BEGIN{exit !(t>=min)}'
+                        then
+                            meets_min_tps=0
+                            status_label="SLOW"
+                        fi
+                    fi
+
                     printf "  %-4s %-5s %-18s %-8s %-8s\n" "$idx" "$c_ctx" "b ${c_batch}/${c_ubatch} p ${c_parallel}" "$median_tps" "$status_label"
 
                     # Objective priority:
-                    # 1) no OOM, 2) maximum context, 3) maximum TPS.
+                    # 1) no OOM, 2) minimum TPS floor, 3) maximum context,
+                    # 4) maximum TPS.
                     if (( oom_detected == 0 ))
                     then
-                        if [[ -z "$best_combo" ]] \
-                            || (( c_ctx > best_ctx )) \
-                            || { (( c_ctx == best_ctx )) && awk -v s="$score_tps" -v b="$best_score" 'BEGIN{exit !(s>b)}'; }
+                        if (( meets_min_tps == 1 ))
                         then
-                            best_tps="$median_tps"
-                            best_score="$score_tps"
-                            best_stddev="$stddev_tps"
-                            best_failures=$(( trials - ${#tps_samples[@]} ))
-                            best_samples=${#tps_samples[@]}
-                            best_combo="$combo"
-                            best_ctx="$c_ctx"
+                            if [[ -z "$best_combo" ]] \
+                                || (( best_meets_min_tps == 0 )) \
+                                || (( c_ctx > best_ctx )) \
+                                || { (( c_ctx == best_ctx )) && awk -v s="$score_tps" -v b="$best_score" 'BEGIN{exit !(s>b)}'; }
+                            then
+                                best_tps="$median_tps"
+                                best_score="$score_tps"
+                                best_stddev="$stddev_tps"
+                                best_failures=$(( trials - ${#tps_samples[@]} ))
+                                best_samples=${#tps_samples[@]}
+                                best_combo="$combo"
+                                best_ctx="$c_ctx"
+                                best_meets_min_tps=1
+                            fi
+                        elif [[ -z "$fallback_combo" ]] \
+                            || (( c_ctx > fallback_ctx )) \
+                            || { (( c_ctx == fallback_ctx )) && awk -v s="$score_tps" -v b="$fallback_score" 'BEGIN{exit !(s>b)}'; }
+                        then
+                            fallback_tps="$median_tps"
+                            fallback_score="$score_tps"
+                            fallback_stddev="$stddev_tps"
+                            fallback_failures=$(( trials - ${#tps_samples[@]} ))
+                            fallback_samples=${#tps_samples[@]}
+                            fallback_combo="$combo"
+                            fallback_ctx="$c_ctx"
                         fi
 
                         if [[ -z "${best_score_by_ctx[$c_ctx]:-}" ]] || awk -v s="$score_tps" -v b="${best_score_by_ctx[$c_ctx]:-0}" 'BEGIN{exit !(s>b)}'
@@ -3213,6 +3473,18 @@ function __model_autotune() {
     done
 
     local save_ok=1
+    if [[ -z "$best_combo" && -n "$fallback_combo" ]]
+    then
+        best_tps="$fallback_tps"
+        best_score="$fallback_score"
+        best_stddev="$fallback_stddev"
+        best_failures="$fallback_failures"
+        best_samples="$fallback_samples"
+        best_combo="$fallback_combo"
+        best_ctx="$fallback_ctx"
+        __tac_info "Autotune" "[No config met ${min_tps_required} TPS; saving best fallback instead]" "$C_Warning"
+    fi
+
     if [[ -n "$best_combo" ]]
     then
         IFS=':' read -r best_batch best_ubatch best_parallel best_fit <<< "$best_combo"
@@ -3239,7 +3511,12 @@ function __model_autotune() {
         export LLM_AUTOTUNE_LAST_CTX_MIN="${ctx_candidates[${#ctx_candidates[@]}-1]:-$save_ctx}"
         export LLM_AUTOTUNE_LAST_CTX_MAX="${ctx_candidates[0]:-$save_ctx}"
         export LLM_AUTOTUNE_LAST_VERIFIED="$verified"
-        export LLM_AUTOTUNE_OBJECTIVE="no-oom>max-ctx>max-tps"
+        if (( best_meets_min_tps == 1 )) && awk -v min="$min_tps_required" 'BEGIN{exit !(min>0)}'
+        then
+            export LLM_AUTOTUNE_OBJECTIVE="no-oom>min-tps>max-ctx>max-tps"
+        else
+            export LLM_AUTOTUNE_OBJECTIVE="no-oom>max-ctx>max-tps"
+        fi
 
         if ! __llm_autotune_profile_save "$num" "$backend" "$save_ctx" "$best_batch" "$best_ubatch" "$best_parallel" "$best_fit" "$best_tps"
         then
@@ -3256,6 +3533,10 @@ function __model_autotune() {
         __tac_info "Winner" "[b ${best_batch}/${best_ubatch}, p ${best_parallel}, fit=${best_fit} MB, tps=${best_tps}]" "$C_Success"
         __tac_info "Winner Score" "[${best_score:-$best_tps} (stddev=${best_stddev:-0})]" "$C_Success"
         __tac_info "Winner Ctx" "[${save_ctx}]" "$C_Success"
+        if awk -v min="$min_tps_required" 'BEGIN{exit !(min>0)}'
+        then
+            __tac_info "Min TPS" "[required=${min_tps_required}, met=$([[ "$best_meets_min_tps" == "1" ]] && echo yes || echo no)]" "$C_Dim"
+        fi
         __tac_info "Verified" "[$([[ "$verified" == "1" ]] && echo yes || echo no)]" "$C_Dim"
         if (( save_ok == 1 ))
         then
@@ -3319,11 +3600,14 @@ function __model_autotune_help() {
     echo ""
     echo "Objective priority:"
     echo "  1) no OOM"
-    echo "  2) maximum context"
-    echo "  3) maximum TPS"
+    echo "  2) minimum TPS floor (LLM_MIN_TPS, default 6)"
+    echo "  3) maximum context"
+    echo "  4) maximum TPS"
     echo ""
     echo "What it does:"
     echo "  - Sweeps safe runtime configs (batch/ubatch/parallel/fit)"
+    echo "  - Starts ctx probing from the saved ctx/TPS instead of a flat default"
+    echo "  - Uses a min-TPS-aware ctx probe to avoid wasting time on slow ctx values"
     echo "  - Uses median TPS with jitter-aware scoring"
     echo "  - Saves winner directly into models.conf tuning columns"
     echo "  - model scan/model list will show 'pending' until a profile exists"
@@ -3336,6 +3620,7 @@ function __model_autotune_help() {
     echo ""
     echo "Key environment knobs:"
     echo "  LLM_AUTOTUNE_CTX_STRATEGY, LLM_AUTOTUNE_MAX_CTX, LLM_AUTOTUNE_CTX_STEP"
+    echo "  LLM_MIN_TPS (default 6), LLM_AUTOTUNE_MIN_CTX_FLOOR"
     echo "  LLM_AUTOTUNE_JITTER_PENALTY, LLM_AUTOTUNE_EARLY_STOP_MARGIN"
     echo "  LLM_AUTOTUNE_WARMUP, LLM_AUTOTUNE_CONFIRM_FINAL"
     echo "  LLM_AUTOTUNE_MIN_CTX_FRACTION (default 0.60)"

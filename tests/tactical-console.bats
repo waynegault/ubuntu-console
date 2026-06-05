@@ -2872,4 +2872,16 @@ EOF
     [ "$status" -ne 0 ]
 }
 
+@test "autotune: __llm_autotune_estimate_ctx_start scales ctx down when saved tps is below target" {
+    run __llm_autotune_estimate_ctx_start 8192 4.0 8.0 32768 32768 2000000000 3000
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == "4096" ]]
+}
+
+@test "autotune: __llm_autotune_estimate_ctx_start respects ctx floor and sane cap" {
+    run __llm_autotune_estimate_ctx_start 65536 0 0 12288 8192 8000000000 1500
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == "4096" ]]
+}
+
 # end of file

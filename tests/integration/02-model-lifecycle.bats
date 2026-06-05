@@ -127,6 +127,15 @@ setup() {
     [[ "$fn_src" == *"LLM_AUTOTUNE_CONFIRM_FINAL"* ]]
 }
 
+@test "integration: __model_autotune honors a minimum TPS floor" {
+    local fn_src
+    fn_src=$(declare -f __model_autotune 2>/dev/null)
+
+    [[ "$fn_src" == *"LLM_MIN_TPS"* ]]
+    [[ "$fn_src" == *"best_meets_min_tps"* ]]
+    [[ "$fn_src" == *"SLOW"* ]]
+}
+
 @test "integration: __model_autotune is quant-aware" {
     local fn_src
     fn_src=$(declare -f __model_autotune 2>/dev/null)
