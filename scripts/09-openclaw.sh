@@ -1652,10 +1652,10 @@ function oc-backup() {
         fi
     )
 
-    # Model registry (on M drive, stored as .llm/models.conf in archive)
+    # Model registry (backed up from canonical location)
     if [[ -f "$LLM_REGISTRY" ]]
     then
-        (cd "$LLAMA_DRIVE_ROOT" && zip -q "$zipPath" ".llm/models.conf")
+        (cd "$HOME" && zip -q "$zipPath" ".llm/models.conf")
     fi
 
     if [[ -f "$zipPath" ]]

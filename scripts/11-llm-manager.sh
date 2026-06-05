@@ -23,7 +23,7 @@
 : "${__LLAMA_DRIVE_MOUNTED:=0}"
 
 # Ensure LLM_DEFAULT_FILE is defined even if Section 1 wasn't updated
-export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$LLAMA_DRIVE_ROOT/.llm/default_model.conf}"
+export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$HOME/.llm/default_model.conf}"
 
 # ---- Named constants for model size thresholds (in tenths of GB) ----
 readonly _MODEL_SIZE_LARGE=30       # 3.0GB+ — large model, longer startup
@@ -518,6 +518,23 @@ function __llm_autotune_profile_save() {
     # Update the model row in-place via awk: fields 8 (ctx), 10 (batch),
     # 11 (ubatch), 12 (parallel), 13 (fit), 14 (backend), 16 (flash_attn),
     # 17 (tps), 18 (autotuned).
+    # Auto-backup registry before mutating, so 3 days of tuning data
+    # is never lost to a single command (model scan, machine reboot, etc.).
+    local _backup_dir
+    _backup_dir="$(dirname "$profile_file")/backups"
+    mkdir -p "$_backup_dir"
+    cp "$profile_file" "$_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    # Keep only the 50 most recent backups
+    while IFS= read -r _old_backup
+    do
+        rm -- "$_old_backup" 2>/dev/null || true
+    done < <(
+        find "$_backup_dir" -maxdepth 1 -type f -name 'models.conf.*' -printf '%T@|%p\n' 2>/dev/null \
+            | sort -t'|' -k1,1nr \
+            | tail -n +51 \
+            | cut -d'|' -f2-
+    )
+
     awk -F'|' -v n="$model_num" \
         -v ctx="$ctx_size" \
         -v batch="$batch" \
@@ -1566,7 +1583,7 @@ function __bench_resolve_files() {
     while IFS= read -r bench_file
     do
         latest_files+=("$bench_file")
-    done < <(find "$LLAMA_DRIVE_ROOT/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
+    done < <(find "$HOME/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
         -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -2 | cut -d' ' -f2-)
 
     if (( ${#latest_files[@]} < 2 ))
@@ -1583,7 +1600,7 @@ function __bench_resolve_files() {
 # Returns 1 if no bench TSV exists.
 # ---------------------------------------------------------------------------
 function __bench_latest_file() {
-    find "$LLAMA_DRIVE_ROOT/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
+    find "$HOME/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
         -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -1 | cut -d' ' -f2-
 }
 
@@ -1687,6 +1704,21 @@ function __model_scan() {
             "[Model drive $LLAMA_DRIVE_ROOT is not mounted - run: sudo mount -t drvfs M: $LLAMA_DRIVE_ROOT]" \
             "$C_Error"
         return 1
+    fi
+
+    # Before scanning, count how many autotuned rows exist. If any will be
+    # lost by a fresh scan, warn the user so 3 days of tuning data is not
+    # silently destroyed (as happened in the 2026-06-05 incident).
+    local _autotuned_count=0
+    if [[ -f "$LLM_REGISTRY" ]]
+    then
+        _autotuned_count=$(awk -F'|' '$18 == "yes" {count++} END {print count+0}' "$LLM_REGISTRY")
+        if (( _autotuned_count > 0 ))
+        then
+            __tac_info "Warning" "[$_autotuned_count models have autotuned data that will be LOST by this scan]" "$C_Warning"
+            __tac_info "Warning" "[A backup will be saved, but you may want to cancel (Ctrl+C) and reconsider]" "$C_Warning"
+            __tac_divider
+        fi
     fi
 
     __tac_info "Scanning" "$LLAMA_MODEL_DIR" "$C_Highlight"
@@ -2200,10 +2232,13 @@ function __model_use() {
     smi_cmd=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$smi_cmd" ]]
     then
-        [[ "$gpu_layers" =~ ^[0-9]+$ ]] || gpu_layers="${LLAMA_GPU_LAYERS:-24}"
-        if [[ "${LLAMA_GPU_LAYERS:-}" =~ ^[0-9]+$ ]]
+        [[ "$gpu_layers" =~ ^[0-9]+$ ]] || gpu_layers="${LLAMA_GPU_LAYERS:-${LLM_GPU_LAYERS:-24}}"
+        if [[ -n "${LLAMA_GPU_LAYERS:-}" && "${LLAMA_GPU_LAYERS}" =~ ^[0-9]+$ ]]
         then
             gpu_layers="${LLAMA_GPU_LAYERS}"
+        elif [[ -n "${LLM_GPU_LAYERS:-}" && "${LLM_GPU_LAYERS}" =~ ^[0-9]+$ ]]
+        then
+            gpu_layers="${LLM_GPU_LAYERS}"
         fi
     else
         gpu_layers=0
@@ -2554,6 +2589,14 @@ function __model_use() {
 # @returns 0 on success, 1 on validation/benchmark failure.
 # ---------------------------------------------------------------------------
 function __model_autotune() {
+    # Sanitize any stale traps from previous killed runs.
+    # When the user kills model autotune externally (Ctrl+C / killall),
+    # the EXIT/INT/TERM traps set by the previous invocation may persist
+    # in the shell session and block subsequent autotune calls.
+    # Clearing them from the start prevents this leak without requiring
+    # a fresh terminal.
+    trap - INT TERM EXIT
+
     if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]
     then
         __model_autotune_help
@@ -3298,9 +3341,14 @@ function __model_autotune_help() {
     echo "  LLM_AUTOTUNE_MIN_CTX_FRACTION (default 0.60)"
     echo "  LLM_AUTOTUNE_LOCK_FILE, LLM_AUTOTUNE_LOCK_WAIT_SECONDS"
     echo ""
+    echo ""
+    echo "Batch:"
+    echo "  model autotune all          Run autotune on all untuned models"
+    echo ""
     echo "Examples:"
     echo "  model autotune 3 --backend native"
     echo "  model autotune 7 --ctx-size 8192"
+    echo "  model autotune all"
     return 0
 }
 
@@ -4083,7 +4131,7 @@ function __model_bench() {
     done
 
     local bench_file
-    bench_file="$LLAMA_DRIVE_ROOT/.llm/bench_$(date +%Y%m%d_%H%M%S).tsv"
+    bench_file="$HOME/.llm/bench_$(date +%Y%m%d_%H%M%S).tsv"
     {
         printf "#\tmodel\tsize\ttps\n"
         for i in "${!b_num[@]}"
@@ -4139,7 +4187,7 @@ function __model_bench_diff() {
     local diff_files old_bench new_bench
     diff_files=$(__bench_resolve_files "$@") || {
         __tac_info "Usage" "[model bench-diff [old.tsv new.tsv]]" "$C_Error"
-        __tac_info "Hint" "Need two bench TSVs in $LLAMA_DRIVE_ROOT/.llm" "$C_Dim"
+        __tac_info "Hint" "Need two bench TSVs in $HOME/.llm" "$C_Dim"
         return 1
     }
     IFS='|' read -r old_bench new_bench <<< "$diff_files"
@@ -4221,7 +4269,7 @@ function __model_bench_history() {
     while IFS= read -r bench_file
     do
         bench_files+=("$bench_file")
-    done < <(find "$LLAMA_DRIVE_ROOT/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
+    done < <(find "$HOME/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
         -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -n "$limit" | cut -d' ' -f2-)
 
     if (( ${#bench_files[@]} == 0 ))
@@ -5087,7 +5135,31 @@ function model() {
             ;;
 
         autotune)
-            __model_autotune "$@"
+            # Clear stale traps from previous killed autotune runs
+            trap - INT TERM EXIT
+            if [[ "${1:-}" == "all" ]]
+            then
+                shift
+                while IFS='|' read -r _at_num _at_name _at_file _at_size _at_qc _at_arch _at_gpu _at_ctx _at_thr _at_ba _at_ub _at_par _at_fit _at_be _at_mm _at_fa _at_tps _at_tuned _at_def _at_vram
+                do
+                    [[ "$_at_num" == "#" || -z "$_at_num" ]] && continue
+                    if [[ "$_at_tuned" != "yes" ]]
+                    then
+                        echo ""
+                        __tac_header "AUTOTUNE ALL" "open"
+                        __tac_info "Next" "#${_at_num} ${_at_name} (${_at_size})" "$C_Highlight"
+                        __tac_divider
+                        __model_autotune "$_at_num"
+                        echo ""
+                    fi
+                done < "$LLM_REGISTRY"
+                __tac_info "Autotune All" "[Complete — all untuned models processed]" "$C_Success"
+                return 0
+            fi
+            # Run in a subshell to prevent trap/process leaks from
+            # interfering with subsequent commands. The `autotune all`
+            # path already has this isolation via the while-read loop.
+            ( __model_autotune "$@" )
             ;;
 
         bench-diff)

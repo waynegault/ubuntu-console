@@ -17,7 +17,7 @@ if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
     mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS"
 fi
 # Always create LLM directory (independent of OpenClaw)
-mkdir -p "$LLAMA_DRIVE_ROOT/.llm"
+mkdir -p "$HOME/.llm"
 
 # Check for required dependencies
 if ! command -v jq >/dev/null 2>&1
