@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 56
+# Module Version: 95
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -105,6 +105,20 @@ function __require_llm() {
 function __tac_cleanup_stale_locks() {
     # shellcheck disable=SC2034
     local _c_lock _c_pid _c_kf _c_sp _c_my_pid _c_ppid _c_cmd
+    local -a _c_live_model_shells=()
+
+    # Track currently live model-shell wrappers so we do not kill keepers that
+    # still belong to an active model session.
+    local _c_ms_kf _c_ms_pid
+    for _c_ms_kf in /tmp/llm-modelshell.*.pid /tmp/llm-modelshell.pid
+    do
+        [[ -f "$_c_ms_kf" ]] || continue
+        _c_ms_pid=$(cat "$_c_ms_kf" 2>/dev/null || true)
+        if [[ "$_c_ms_pid" =~ ^[0-9]+$ ]] && kill -0 "$_c_ms_pid" 2>/dev/null
+        then
+            _c_live_model_shells+=("$_c_ms_pid")
+        fi
+    done
 
     # bench lock + pid — also check custom paths used by non-default configs
     local _c_lock_candidates
@@ -171,7 +185,9 @@ function __tac_cleanup_stale_locks() {
             # model run in another shell.
             _c_ppid=$(ps -o ppid= -p "$_c_sp" 2>/dev/null | tr -d '[:space:]')
             _c_cmd=$(ps -o args= -p "$_c_sp" 2>/dev/null || true)
-            if [[ "$_c_ppid" == "1" ]] && [[ "$_c_cmd" == *"llm-stdin"* ]]
+            if [[ "$_c_cmd" == *"llm-stdin"* ]] && {
+                [[ "$_c_ppid" == "1" ]] || ! [[ " ${_c_live_model_shells[*]} " == *" $_c_ppid "* ]];
+            }
             then
                 kill -TERM "$_c_sp" 2>/dev/null || true
             fi
@@ -210,7 +226,9 @@ function __tac_cleanup_stale_locks() {
             then
                 _c_ppid=$(ps -o ppid= -p "$_c_pid" 2>/dev/null | tr -d '[:space:]')
                 _c_cmd=$(ps -o args= -p "$_c_pid" 2>/dev/null || true)
-                if [[ "$_c_ppid" == "1" ]] && [[ "$_c_cmd" == *"sleep 3600"* ]]
+                if [[ "$_c_cmd" == *"sleep 3600"* ]] && {
+                    [[ "$_c_ppid" == "1" ]] || ! [[ " ${_c_live_model_shells[*]} " == *" $_c_ppid "* ]];
+                }
                 then
                     kill -TERM "$_c_pid" 2>/dev/null || true
                 else
@@ -222,6 +240,22 @@ function __tac_cleanup_stale_locks() {
         fi
         (( _c_remove_kf == 1 )) && rm -f "$_c_kf"
     done
+
+    # Fallback: if a keeper lost its PID file, reap any remaining sleep-loop
+    # helpers that are no longer attached to a live model shell.
+    while IFS= read -r _c_line
+    do
+        [[ -n "$_c_line" ]] || continue
+        _c_sp=${_c_line%% *}
+        _c_cmd=${_c_line#* }
+        [[ "$_c_sp" =~ ^[0-9]+$ ]] || continue
+        [[ "$_c_cmd" == *"sleep 3600"* ]] || continue
+        _c_ppid=$(ps -o ppid= -p "$_c_sp" 2>/dev/null | tr -d '[:space:]')
+        if [[ -z "$_c_ppid" ]] || [[ "$_c_ppid" == "1" ]] || ! [[ " ${_c_live_model_shells[*]} " == *" $_c_ppid "* ]]
+        then
+            kill -TERM "$_c_sp" 2>/dev/null || true
+        fi
+    done < <(pgrep -af 'sleep 3600' 2>/dev/null || true)
 
     return 0
 }
@@ -604,7 +638,7 @@ function __llm_autotune_verify_winner() {
 # __llm_autotune_estimate_ctx_start — Estimate a useful initial ctx probe.
 # Uses saved ctx/TPS plus rough model-size and free-VRAM heuristics so autotune
 # starts near the likely throughput-stable range instead of a flat default.
-# @args <saved_ctx> <saved_tps> <min_tps> <max_ctx> <sane_max_ctx> <model_bytes> <free_vram_mb>
+# @args <saved_ctx> <saved_tps> <min_tps> <max_ctx> <model_bytes> <free_vram_mb>
 # @stdout Estimated ctx rounded to 512.
 # ---------------------------------------------------------------------------
 function __llm_autotune_estimate_ctx_start() {
@@ -612,38 +646,45 @@ function __llm_autotune_estimate_ctx_start() {
     local saved_tps="${2:-}"
     local min_tps="${3:-0}"
     local max_ctx="${4:-8192}"
-    local sane_max_ctx="${5:-8192}"
-    local model_bytes="${6:-0}"
-    local free_vram_mb="${7:-0}"
+    local model_bytes="${5:-0}"
+    local free_vram_mb="${6:-0}"
 
     local estimate=4096
+    local model_baseline_ctx=4096
+    local start_floor_ctx="${LLM_AUTOTUNE_START_FLOOR_CTX:-}"
+    local model_mb=0
+    local dynamic_start_floor=0
+    local start_floor_source="auto"
     local min_ctx_floor="${LLM_AUTOTUNE_MIN_CTX_FLOOR:-2048}"
     [[ "$min_ctx_floor" =~ ^[0-9]+$ ]] || min_ctx_floor=2048
     [[ "$max_ctx" =~ ^[0-9]+$ ]] || max_ctx=8192
-    [[ "$sane_max_ctx" =~ ^[0-9]+$ ]] || sane_max_ctx="$max_ctx"
     [[ "$model_bytes" =~ ^[0-9]+$ ]] || model_bytes=0
     [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
-
-    if [[ "$saved_ctx" =~ ^[0-9]+$ ]]
-    then
-        estimate="$saved_ctx"
-    fi
+    [[ "$start_floor_ctx" =~ ^[0-9]+$ ]] || start_floor_ctx=""
+    (( model_bytes > 0 )) && model_mb=$(( model_bytes / 1048576 ))
 
     if (( model_bytes >= 7000000000 ))
     then
         estimate=2048
+        model_baseline_ctx=2048
     elif (( model_bytes >= 3500000000 ))
     then
         estimate=4096
+        model_baseline_ctx=4096
     elif (( model_bytes >= 1800000000 ))
     then
         estimate=8192
+        model_baseline_ctx=8192
     elif (( model_bytes > 0 ))
     then
         estimate=12288
+        model_baseline_ctx=12288
     fi
 
-    if [[ "$saved_ctx" =~ ^[0-9]+$ ]]
+    # Saved ctx should not drag the starting point downward when stale.
+    # Use it only to raise the baseline unless we also have saved TPS, where
+    # ratio-based scaling below can make a more informed adjustment.
+    if [[ "$saved_ctx" =~ ^[0-9]+$ ]] && (( saved_ctx > estimate ))
     then
         estimate="$saved_ctx"
     fi
@@ -660,26 +701,147 @@ function __llm_autotune_estimate_ctx_start() {
         [[ "$scaled_estimate" =~ ^[0-9]+$ ]] && estimate="$scaled_estimate"
     fi
 
-    if (( free_vram_mb > 0 && free_vram_mb < 4096 && estimate > 8192 ))
+    # Dynamic start floor: estimate from model class and live free VRAM.
+    # Optional override is supported via LLM_AUTOTUNE_START_FLOOR_CTX.
+    dynamic_start_floor="$model_baseline_ctx"
+    if [[ -n "$start_floor_ctx" ]] && (( start_floor_ctx > 0 ))
     then
-        estimate=8192
+        dynamic_start_floor="$start_floor_ctx"
+        start_floor_source="override"
+    elif (( model_bytes >= 1800000000 && model_mb > 0 && free_vram_mb > 0 ))
+    then
+        # User policy: usable KV budget starts from clear VRAM minus model
+        # size minus a 20% safety reserve.
+        local reserve_mb=0
+        local kv_budget_mb=0
+        local kv_mb_per_1k=0
+        reserve_mb=$(awk -v free="$free_vram_mb" 'BEGIN{printf "%d", free*0.20}')
+        [[ "$reserve_mb" =~ ^[0-9]+$ ]] || reserve_mb=0
+
+        kv_budget_mb=$(( free_vram_mb - model_mb - reserve_mb ))
+        kv_mb_per_1k=$(awk -v mb="$model_mb" 'BEGIN {
+            v = (sqrt(mb)) * 0.08;
+            if (v < 0.1) v = 0.1;
+            print v;
+        }')
+        [[ "$kv_mb_per_1k" =~ ^[0-9]+(\.[0-9]+)?$ ]] || kv_mb_per_1k="0.3"
+
+        if (( kv_budget_mb > 64 ))
+        then
+            dynamic_start_floor=$(awk -v base="$model_baseline_ctx" -v b="$kv_budget_mb" -v k="$kv_mb_per_1k" 'BEGIN {
+                c = int((b / k) * 1000.0);
+                if (c < base) c = base;
+                print c;
+            }')
+        fi
+        [[ "$dynamic_start_floor" =~ ^[0-9]+$ ]] || dynamic_start_floor="$model_baseline_ctx"
+    elif (( model_bytes >= 1800000000 && max_ctx > 0 ))
+    then
+        # Fallback when live VRAM telemetry is unavailable: start from a
+        # fraction of the estimated ceiling instead of falling back to the
+        # small baseline.
+        dynamic_start_floor=$(awk -v base="$model_baseline_ctx" -v max="$max_ctx" 'BEGIN {
+            est = int(max * 0.5);
+            if (est < base) est = base;
+            print est;
+        }')
+        [[ "$dynamic_start_floor" =~ ^[0-9]+$ ]] || dynamic_start_floor="$model_baseline_ctx"
     fi
-    if (( free_vram_mb > 0 && free_vram_mb < 3072 && estimate > 6144 ))
+    (( dynamic_start_floor > max_ctx )) && dynamic_start_floor="$max_ctx"
+    dynamic_start_floor=$(( (dynamic_start_floor / 512) * 512 ))
+    (( dynamic_start_floor < model_baseline_ctx )) && dynamic_start_floor="$model_baseline_ctx"
+    if (( estimate < dynamic_start_floor ))
     then
-        estimate=6144
-    fi
-    if (( free_vram_mb > 0 && free_vram_mb < 2048 && estimate > 4096 ))
-    then
-        estimate=4096
+        estimate="$dynamic_start_floor"
     fi
 
-    (( estimate > sane_max_ctx )) && estimate="$sane_max_ctx"
+    # Keep probe starts practical for the model class. Phase 1 now grows until
+    # first failure and backs off, so starting too low only wastes time.
+    (( estimate < model_baseline_ctx )) && estimate="$model_baseline_ctx"
+
     (( estimate > max_ctx )) && estimate="$max_ctx"
     (( estimate < min_ctx_floor )) && estimate="$min_ctx_floor"
 
     estimate=$(( (estimate / 512) * 512 ))
     (( estimate < 512 )) && estimate=512
+
+    # Debug surface: explain how the probe anchor was derived.
+    __LLM_AUTOTUNE_START_CTX_INFO="model_mb=${model_mb} free_vram_mb=${free_vram_mb} baseline=${model_baseline_ctx} dynamic_floor=${dynamic_start_floor} source=${start_floor_source} max_ctx=${max_ctx} min_floor=${min_ctx_floor}"
     printf '%s\n' "$estimate"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_autotune_overhead_file — Storage for learned model overhead fractions.
+# Format: model_file|backend|frac|samples
+# ---------------------------------------------------------------------------
+function __llm_autotune_overhead_file() {
+    printf '%s\n' "${LLM_AUTOTUNE_OVERHEAD_FILE:-$HOME/.llm/autotune-overhead.tsv}"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_autotune_get_overhead_frac — Read learned overhead fraction.
+# @args <model_file> <backend>
+# @stdout Fraction (e.g. 0.83) or empty when unavailable.
+# ---------------------------------------------------------------------------
+function __llm_autotune_get_overhead_frac() {
+    local model_file="${1:-}"
+    local backend="${2:-native}"
+    local store
+    store=$(__llm_autotune_overhead_file)
+    [[ -n "$model_file" && -f "$store" ]] || return 0
+
+    awk -F'|' -v m="$model_file" -v b="$backend" '
+        $1 == m && $2 == b && $3 ~ /^[0-9]+(\.[0-9]+)?$/ {print $3; found=1; exit}
+        END {if (!found) exit 0}
+    ' "$store" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# __llm_autotune_record_overhead_frac — Update learned overhead fraction.
+# @args <model_file> <backend> <frac>
+# ---------------------------------------------------------------------------
+function __llm_autotune_record_overhead_frac() {
+    local model_file="${1:-}"
+    local backend="${2:-native}"
+    local frac="${3:-}"
+    local store
+    store=$(__llm_autotune_overhead_file)
+
+    [[ -n "$model_file" ]] || return 0
+    [[ "$frac" =~ ^[0-9]+(\.[0-9]+)?$ ]] || return 0
+
+    # Clamp to a practical range.
+    frac=$(awk -v f="$frac" 'BEGIN{if (f < 0.20) f=0.20; if (f > 1.20) f=1.20; printf "%.4f", f}')
+
+    mkdir -p "$(dirname "$store")" 2>/dev/null || return 0
+    local tmp
+    tmp=$(mktemp "${store}.tmp.XXXXXX") || return 0
+
+    awk -F'|' -v m="$model_file" -v b="$backend" -v f="$frac" 'BEGIN{OFS="|"; done=0}
+        {
+            if ($1 == m && $2 == b) {
+                oldf=($3 ~ /^[0-9]+(\.[0-9]+)?$/) ? $3+0 : f+0
+                olds=($4 ~ /^[0-9]+$/) ? $4+0 : 0
+                news=olds+1
+                newf=((oldf*olds)+(f+0))/news
+                printf "%s|%s|%.4f|%d\n", m, b, newf, news
+                done=1
+                next
+            }
+            print
+        }
+        END {
+            if (!done) {
+                printf "%s|%s|%.4f|1\n", m, b, f+0
+            }
+        }
+    ' "$store" 2>/dev/null > "$tmp" || {
+        rm -f "$tmp"
+        return 0
+    }
+
+    mv "$tmp" "$store" 2>/dev/null || rm -f "$tmp"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -689,7 +851,7 @@ function __llm_autotune_estimate_ctx_start() {
 function __llm_autotune_profiles_remap_by_registry() {
     local old_registry="${1:-}"
     local new_registry="${2:-}"
-    [[ -f "$old_registry" && -f "$new_registry" ]] || return 0
+    [[ -s "$old_registry" && -f "$new_registry" ]] || return 0
 
     awk -F'|' 'BEGIN{OFS="|"}
         FNR == NR {
@@ -1797,9 +1959,7 @@ function __model_scan() {
         _autotuned_count=$(awk -F'|' '$18 == "yes" {count++} END {print count+0}' "$LLM_REGISTRY")
         if (( _autotuned_count > 0 ))
         then
-            __tac_info "Warning" "[$_autotuned_count models have autotuned data that will be LOST by this scan]" "$C_Warning"
-            __tac_info "Warning" "[A backup will be saved, but you may want to cancel (Ctrl+C) and reconsider]" "$C_Warning"
-            __tac_divider
+            __tac_info "Note" "[$_autotuned_count models with autotuned data — remapped from previous scan]" "$C_Dim"
         fi
     fi
 
@@ -2531,9 +2691,12 @@ function __model_use() {
         # Close all inherited lock file descriptors (from autotune/bench locks)
         # so child processes (stdin keeper, llama-server) don't inherit them.
         # This prevents orphaned locks when the parent is killed.
-        for _lfd in "/proc/$$/fd/"*; do
+        local _lock_fd_dir="/proc/${BASHPID:-$$}/fd"
+        for _lfd in "${_lock_fd_dir}/"*; do
             _lfdnum="${_lfd##*/}"
-            if [[ "$_lfdnum" -ge 10 ]]; then exec {_lfdnum}>&- 2>/dev/null; fi
+            if [[ "$_lfdnum" =~ ^[0-9]+$ ]] && [[ "$_lfdnum" -ge 10 ]]; then
+                eval "exec ${_lfdnum}>&-" 2>/dev/null || true
+            fi
         done 2>/dev/null
 
         # Clean up orphan FIFOs and keepers from any previous llama-server
@@ -2670,7 +2833,9 @@ function __model_use() {
 # Usage: model autotune [N] [--backend native|python] [--ctx-size N] [--trials N]
 # @returns 0 on success, 1 on validation/benchmark failure.
 # ---------------------------------------------------------------------------
-function __model_autotune() {
+# [DEPRECATED - use standalone scripts/autotune-model.sh]
+# Kept as dead code to avoid breaking external references.
+function __model_autotune_DEPRECATED() {
     # Sanitize any stale traps from previous killed runs.
     # When the user kills model autotune externally (Ctrl+C / killall),
     # the EXIT/INT/TERM traps set by the previous invocation may persist
@@ -2736,9 +2901,10 @@ function __model_autotune() {
         unset -f __autotune_restore_traps __autotune_fail __autotune_unlock 2>/dev/null || true
     }
 
-    # Ensure Ctrl-C/termination cannot leave trial servers running.
-    trap '__model_stop >/dev/null 2>&1 || true; __autotune_interrupted=130' INT
-    trap '__model_stop >/dev/null 2>&1 || true; __autotune_interrupted=143' TERM
+    # Ensure Ctrl-C/termination cannot leave child helpers running or keep the
+    # autotune lock held while the shell unwinds after interruption.
+    trap 'pkill -TERM -P $$ 2>/dev/null || true; __model_stop >/dev/null 2>&1 || true; __autotune_unlock; __autotune_interrupted=130' INT
+    trap 'pkill -TERM -P $$ 2>/dev/null || true; __model_stop >/dev/null 2>&1 || true; __autotune_unlock; __autotune_interrupted=143' TERM
 
     while [[ $# -gt 0 ]]
     do
@@ -2810,6 +2976,7 @@ function __model_autotune() {
     local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
     IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram <<< "$entry"
     __tac_info "File" "$file" "$C_Dim"
+    __tac_info "Autotune" "[Preparing sweep for #${num} ${name}]" "$C_Dim"
     local quant_rating="unknown"
     quant_rating=$(__llm_quant_rating "$file")
 
@@ -2867,10 +3034,10 @@ function __model_autotune() {
         __tac_info "Autotune" "[Lock skipped by caller]" "$C_Dim"
     fi
 
-    # Register an EXIT trap to release the lock on any exit (including set -e).
-    # This ensures the lock file is cleaned even if the function aborts partway
-    # through the sweep without reaching the normal cleanup section.
-    trap '__autotune_unlock; __autotune_restore_traps' EXIT
+    # Register an EXIT trap that mirrors the signal cleanup path. If the shell
+    # exits unexpectedly after a probe launched, release the lock and stop any
+    # live llama-server helpers so they cannot outlive the autotune session.
+    trap 'pkill -TERM -P $$ 2>/dev/null || true; __model_stop >/dev/null 2>&1 || true; __autotune_unlock; __autotune_restore_traps' EXIT
 
     local prev_backend="${LLM_SERVER_BACKEND:-}"
     local prev_batch="${LLAMA_BATCH_SIZE:-}"
@@ -2891,6 +3058,13 @@ function __model_autotune() {
     [[ -n "$tune_ctx" ]] && export TAC_CTX_SIZE="$tune_ctx"
     [[ "$min_tps_required" =~ ^[0-9]+(\.[0-9]+)?$ ]] || min_tps_required="6"
 
+    __tac_info "Autotune" "[Lock acquired; building candidate sweep]" "$C_Dim"
+
+    # Sample "clear" VRAM for ctx budgeting. If a model is already loaded,
+    # its allocations make free-VRAM-based sizing anchor too low.
+    __model_stop >/dev/null 2>&1 || true
+    sleep 1
+
     # Keep autotune responsive: cap request/readiness waits per trial so one
     # bad config does not stall the whole sweep.
     export LLM_BURN_REQUEST_TIMEOUT="${LLM_AUTOTUNE_BURN_TIMEOUT:-240}"
@@ -2903,14 +3077,22 @@ function __model_autotune() {
     local max_ctx_by_rating=""
     local max_ubatch_by_rating=0
     local allow_parallel_two=1
+    local respect_quant_ctx_cap="${LLM_AUTOTUNE_RESPECT_QUANT_CTX_CAP:-0}"
+    [[ "$respect_quant_ctx_cap" =~ ^[01]$ ]] || respect_quant_ctx_cap=0
     case "$quant_rating" in
         discouraged)
-            max_ctx_by_rating="${LLM_AUTOTUNE_MAX_CTX_DISCOURAGED:-4096}"
+            if (( respect_quant_ctx_cap == 1 ))
+            then
+                max_ctx_by_rating="${LLM_AUTOTUNE_MAX_CTX_DISCOURAGED:-4096}"
+            fi
             max_ubatch_by_rating="${LLM_AUTOTUNE_MAX_UBATCH_DISCOURAGED:-512}"
             allow_parallel_two=0
             ;;
         acceptable)
-            max_ctx_by_rating="${LLM_AUTOTUNE_MAX_CTX_ACCEPTABLE:-8192}"
+            if (( respect_quant_ctx_cap == 1 ))
+            then
+                max_ctx_by_rating="${LLM_AUTOTUNE_MAX_CTX_ACCEPTABLE:-8192}"
+            fi
             ;;
     esac
     [[ "$max_ctx_by_rating" =~ ^[0-9]+$ ]] || max_ctx_by_rating=""
@@ -2969,26 +3151,31 @@ function __model_autotune() {
 
     # Compute VRAM-aware ctx upper bound.
     local estimated_max_ctx=8192   # safe default
-    if (( free_vram_mb > 0 && model_mb > 0 ))
+    if (( (free_vram_mb > 0 || total_vram_mb > 0) && model_mb > 0 ))
     then
-        # KV cache overhead: ~0.5 MiB per 1K ctx per 1B param (approx)
-        # For a typical Q4_K_M at ngl ~20 on Ada: ~0.3-0.4 MB/K/token
-        # Model weight in VRAM ≈ offloaded fraction × model_mb × (load overhead)
-        local offload_frac=0.85
-        local vram_model_overhead_mb
-        vram_model_overhead_mb=$(awk "BEGIN { m = $model_mb * $offload_frac; print (m < 1 ? 1 : m) }" 2>/dev/null || echo "$model_mb")
-        local kv_budget_mb=$(( free_vram_mb - vram_model_overhead_mb - 256 ))   # 256 MB headroom
+        # User policy for ctx budgeting:
+        #   usable_kv_mb = free_vram_mb - model_mb - 20% reserve
+        local reserve_mb=0
+        reserve_mb=$(awk -v free="$free_vram_mb" 'BEGIN{printf "%d", free*0.20}')
+        [[ "$reserve_mb" =~ ^[0-9]+$ ]] || reserve_mb=0
+        local kv_budget_mb=$(( free_vram_mb - model_mb - reserve_mb ))
+        if (( kv_budget_mb <= 64 && total_vram_mb > 0 ))
+        then
+            # Fallback: some drivers report temporarily low "free" even after
+            # cleanup. Use total VRAM budget as a practical starting ceiling.
+            reserve_mb=$(awk -v total="$total_vram_mb" 'BEGIN{printf "%d", total*0.20}')
+            [[ "$reserve_mb" =~ ^[0-9]+$ ]] || reserve_mb=0
+            kv_budget_mb=$(( total_vram_mb - model_mb - reserve_mb ))
+        fi
         if (( kv_budget_mb > 64 ))
         then
-            # Estimate: 1K tokens ≈ 0.4 MB × sqrt(layers / 32) × kv_head_ratio
-            # Simplified: ~0.3 MB per 1K ctx per 1B model_weight
             local kv_mb_per_1k
-            kv_mb_per_1k=$(awk "BEGIN { v = ($model_mb ^ 0.5) * 0.08; print (v < 0.1 ? 0.1 : v) }" 2>/dev/null || echo 0.3)
-            estimated_max_ctx=$(awk "BEGIN { c = int($kv_budget_mb / $kv_mb_per_1k * 1.0); print (c < 512 ? 512 : c) }" 2>/dev/null || echo 8192)
+            kv_mb_per_1k=$(awk "BEGIN { v = sqrt($model_mb) * 0.08; print (v < 0.1 ? 0.1 : v) }" 2>/dev/null || echo 0.3)
+            estimated_max_ctx=$(awk "BEGIN { c = int(($kv_budget_mb / $kv_mb_per_1k) * 1000.0); print (c < 512 ? 512 : c) }" 2>/dev/null || echo 8192)
             # Round to nearest 512
             estimated_max_ctx=$(( (estimated_max_ctx / 512) * 512 ))
         fi
-        if [[ -n "$max_ctx_by_rating" ]] && (( estimated_max_ctx > max_ctx_by_rating ))
+        if (( respect_quant_ctx_cap == 1 )) && [[ -n "$max_ctx_by_rating" ]] && (( estimated_max_ctx > max_ctx_by_rating ))
         then
             estimated_max_ctx="$max_ctx_by_rating"
         fi
@@ -3047,29 +3234,74 @@ function __model_autotune() {
         ctx_candidates=("$tune_ctx")
     elif [[ "${LLM_AUTOTUNE_CTX_STRATEGY:-binary}" == "binary" ]]
     then
-        # Binary-search the highest context that still meets the minimum TPS
-        # floor, starting from an estimate derived from the saved row and the
-        # current memory budget.
-        local sane_max_ctx="${LLM_AUTOTUNE_CTX_SANE_LIMIT:-8192}"
-        [[ "$sane_max_ctx" =~ ^[0-9]+$ ]] || sane_max_ctx=8192
-
+        __tac_info "Autotune" "[Running context probe phase]" "$C_Dim"
         local base_ctx="${ctx:-4096}"
         [[ "$base_ctx" =~ ^[0-9]+$ ]] || base_ctx=4096
-        local max_ctx="${LLM_AUTOTUNE_MAX_CTX:-32768}"
-        [[ "$max_ctx" =~ ^[0-9]+$ ]] || max_ctx=32768
-        if [[ -n "$max_ctx_by_rating" ]] && (( max_ctx > max_ctx_by_rating ))
+        local search_cap_ctx="${LLM_AUTOTUNE_HARD_MAX_CTX:-0}"
+        [[ "$search_cap_ctx" =~ ^[0-9]+$ ]] || search_cap_ctx=0
+        (( search_cap_ctx > 0 && search_cap_ctx < 4096 )) && search_cap_ctx=4096
+        if (( respect_quant_ctx_cap == 1 )) && [[ -n "$max_ctx_by_rating" ]] && (( search_cap_ctx > 0 && search_cap_ctx > max_ctx_by_rating ))
         then
-            max_ctx="$max_ctx_by_rating"
+            search_cap_ctx="$max_ctx_by_rating"
         fi
 
-        base_ctx=$(__llm_autotune_estimate_ctx_start "$base_ctx" "$tps" "$min_tps_required" "$max_ctx" "$sane_max_ctx" "$model_bytes" "$free_vram_mb")
+        local max_ctx_for_start="$estimated_max_ctx"
+        [[ "$max_ctx_for_start" =~ ^[0-9]+$ ]] || max_ctx_for_start=262144
+        (( max_ctx_for_start < 2048 )) && max_ctx_for_start=2048
+        (( search_cap_ctx > 0 && max_ctx_for_start > search_cap_ctx )) && max_ctx_for_start="$search_cap_ctx"
+
+        base_ctx=$(__llm_autotune_estimate_ctx_start "$base_ctx" "$tps" "$min_tps_required" "$max_ctx_for_start" "$model_bytes" "$free_vram_mb")
         [[ "$base_ctx" =~ ^[0-9]+$ ]] || base_ctx=4096
 
+        # Hard-raise probe anchor from live VRAM budget policy:
+        # start_ctx uses (free VRAM - model size - 20% reserve) as KV budget.
+        local reserve_mb=0
+        local kv_budget_mb=0
+        local kv_mb_per_1k=0
+        local vram_start_ctx=0
+        local budget_source="free"
+        reserve_mb=$(awk -v free="$free_vram_mb" 'BEGIN{printf "%d", free*0.20}')
+        [[ "$reserve_mb" =~ ^[0-9]+$ ]] || reserve_mb=0
+        kv_budget_mb=$(( free_vram_mb - model_mb - reserve_mb ))
+        if (( kv_budget_mb <= 64 && total_vram_mb > 0 ))
+        then
+            reserve_mb=$(awk -v total="$total_vram_mb" 'BEGIN{printf "%d", total*0.20}')
+            [[ "$reserve_mb" =~ ^[0-9]+$ ]] || reserve_mb=0
+            kv_budget_mb=$(( total_vram_mb - model_mb - reserve_mb ))
+            budget_source="total"
+        fi
+        if (( kv_budget_mb > 64 && model_mb > 0 ))
+        then
+            kv_mb_per_1k=$(awk -v mb="$model_mb" 'BEGIN {
+                v = sqrt(mb) * 0.08;
+                if (v < 0.1) v = 0.1;
+                print v;
+            }')
+            [[ "$kv_mb_per_1k" =~ ^[0-9]+(\.[0-9]+)?$ ]] || kv_mb_per_1k="0.3"
+            vram_start_ctx=$(awk -v b="$kv_budget_mb" -v k="$kv_mb_per_1k" 'BEGIN {
+                c = int((b / k) * 1000.0);
+                if (c < 512) c = 512;
+                print c;
+            }')
+            [[ "$vram_start_ctx" =~ ^[0-9]+$ ]] || vram_start_ctx=0
+            if (( vram_start_ctx > 0 ))
+            then
+                vram_start_ctx=$(( (vram_start_ctx / 512) * 512 ))
+                (( vram_start_ctx > max_ctx_for_start )) && vram_start_ctx="$max_ctx_for_start"
+                if (( vram_start_ctx > base_ctx ))
+                then
+                    base_ctx="$vram_start_ctx"
+                fi
+            fi
+        fi
+        __tac_info "Ctx Probe" "[start anchor ctx=${base_ctx} | free=${free_vram_mb} total=${total_vram_mb} model=${model_mb} reserve20=${reserve_mb} kv_budget=${kv_budget_mb} source=${budget_source} max_start=${max_ctx_for_start}]" "$C_Dim"
+
         local discovered_ctx=""
+        local discovered_ctx_tps=""
         local min_ctx_floor="${LLM_AUTOTUNE_MIN_CTX_FLOOR:-2048}"
         [[ "$min_ctx_floor" =~ ^[0-9]+$ ]] || min_ctx_floor=2048
         local low="$min_ctx_floor"
-        local high="$max_ctx"
+        local high=0
         local probe_batch="${batch:-1024}"
         local probe_ubatch="${ubatch:-256}"
         local probe_parallel=1
@@ -3081,15 +3313,102 @@ function __model_autotune() {
         (( probe_ubatch > 256 )) && probe_ubatch=256
         (( probe_batch < 256 )) && probe_batch=256
         (( probe_ubatch < 128 )) && probe_ubatch=128
-        local probe_step=512
+        local probe_refine_step="${LLM_AUTOTUNE_CTX_REFINE_STEP:-1024}"
+        local probe_grow_step="${LLM_AUTOTUNE_CTX_GROW_STEP:-4096}"
+        local probe_grow_multiplier="${LLM_AUTOTUNE_CTX_GROW_MULTIPLIER:-3}"
+        local probe_grow_pct="${LLM_AUTOTUNE_CTX_GROW_PCT:-0.15}"
         local last_probe_tps=""
         local probe_anchor="$base_ctx"
+        local probe_burn_tokens="${LLM_AUTOTUNE_PROBE_BURN_TOKENS:-128}"
+        local probe_burn_attempts="${LLM_AUTOTUNE_PROBE_MAX_ATTEMPTS:-1}"
+        local probe_burn_attempts_grow="${LLM_AUTOTUNE_PROBE_GROW_MAX_ATTEMPTS:-1}"
+        local probe_burn_timeout="${LLM_AUTOTUNE_PROBE_BURN_TIMEOUT:-60}"
+        local probe_burn_timeout_grow="${LLM_AUTOTUNE_PROBE_GROW_BURN_TIMEOUT:-30}"
+        local probe_burn_tokens_refine="${LLM_AUTOTUNE_PROBE_REFINE_BURN_TOKENS:-64}"
+        local probe_burn_attempts_refine="${LLM_AUTOTUNE_PROBE_REFINE_MAX_ATTEMPTS:-1}"
+        local probe_burn_timeout_refine="${LLM_AUTOTUNE_PROBE_REFINE_BURN_TIMEOUT:-40}"
+        local probe_load_timeout="${LLM_AUTOTUNE_PROBE_LOAD_TIMEOUT:-45}"
+        local probe_load_timeout_grow="${LLM_AUTOTUNE_PROBE_GROW_LOAD_TIMEOUT:-20}"
+        local probe_load_timeout_refine="${LLM_AUTOTUNE_PROBE_REFINE_LOAD_TIMEOUT:-35}"
+        local probe_recheck_enabled="${LLM_AUTOTUNE_PROBE_RECHECK_ENABLED:-0}"
+        local probe_load_only="${LLM_AUTOTUNE_PROBE_LOAD_ONLY:-1}"
+        local probe_near_floor_margin="${LLM_AUTOTUNE_PROBE_NEAR_FLOOR_MARGIN:-0.6}"
+        [[ "$probe_burn_tokens" =~ ^[0-9]+$ ]] || probe_burn_tokens=256
+        (( probe_burn_tokens < 128 )) && probe_burn_tokens=128
+        [[ "$probe_refine_step" =~ ^[0-9]+$ ]] || probe_refine_step=512
+        (( probe_refine_step < 256 )) && probe_refine_step=256
+        probe_refine_step=$(( (probe_refine_step / 256) * 256 ))
+        (( probe_refine_step < 256 )) && probe_refine_step=256
+        [[ "$probe_grow_step" =~ ^[0-9]+$ ]] || probe_grow_step=2048
+        (( probe_grow_step < probe_refine_step )) && probe_grow_step="$probe_refine_step"
+        probe_grow_step=$(( (probe_grow_step / probe_refine_step) * probe_refine_step ))
+        (( probe_grow_step < probe_refine_step )) && probe_grow_step="$probe_refine_step"
+        [[ "$probe_grow_multiplier" =~ ^[0-9]+$ ]] || probe_grow_multiplier=2
+        (( probe_grow_multiplier < 2 )) && probe_grow_multiplier=2
+        (( probe_grow_multiplier > 4 )) && probe_grow_multiplier=4
+        [[ "$probe_grow_pct" =~ ^[0-9]+(\.[0-9]+)?$ ]] || probe_grow_pct=0.12
+        awk -v p="$probe_grow_pct" 'BEGIN{exit !(p>0)}' || probe_grow_pct=0.12
+        awk -v p="$probe_grow_pct" 'BEGIN{exit !(p<=0.9)}' || probe_grow_pct=0.9
+        [[ "$probe_burn_attempts" =~ ^[0-9]+$ ]] || probe_burn_attempts=2
+        (( probe_burn_attempts < 1 )) && probe_burn_attempts=1
+        [[ "$probe_burn_attempts_grow" =~ ^[0-9]+$ ]] || probe_burn_attempts_grow=1
+        (( probe_burn_attempts_grow < 1 )) && probe_burn_attempts_grow=1
+        [[ "$probe_burn_tokens_refine" =~ ^[0-9]+$ ]] || probe_burn_tokens_refine=96
+        (( probe_burn_tokens_refine < 48 )) && probe_burn_tokens_refine=48
+        [[ "$probe_burn_attempts_refine" =~ ^[0-9]+$ ]] || probe_burn_attempts_refine=1
+        (( probe_burn_attempts_refine < 1 )) && probe_burn_attempts_refine=1
+        [[ "$probe_burn_timeout" =~ ^[0-9]+$ ]] || probe_burn_timeout=120
+        (( probe_burn_timeout < 30 )) && probe_burn_timeout=30
+        [[ "$probe_burn_timeout_grow" =~ ^[0-9]+$ ]] || probe_burn_timeout_grow=60
+        (( probe_burn_timeout_grow < 20 )) && probe_burn_timeout_grow=20
+        [[ "$probe_burn_timeout_refine" =~ ^[0-9]+$ ]] || probe_burn_timeout_refine=75
+        (( probe_burn_timeout_refine < 20 )) && probe_burn_timeout_refine=20
+        [[ "$probe_load_timeout" =~ ^[0-9]+$ ]] || probe_load_timeout=120
+        (( probe_load_timeout < 20 )) && probe_load_timeout=20
+        [[ "$probe_load_timeout_grow" =~ ^[0-9]+$ ]] || probe_load_timeout_grow=45
+        (( probe_load_timeout_grow < 10 )) && probe_load_timeout_grow=10
+        [[ "$probe_load_timeout_refine" =~ ^[0-9]+$ ]] || probe_load_timeout_refine=35
+        (( probe_load_timeout_refine < 10 )) && probe_load_timeout_refine=10
+        [[ "$probe_recheck_enabled" =~ ^[01]$ ]] || probe_recheck_enabled=0
+        [[ "$probe_load_only" =~ ^[01]$ ]] || probe_load_only=1
+        [[ "$probe_near_floor_margin" =~ ^[0-9]+(\.[0-9]+)?$ ]] || probe_near_floor_margin=0.6
 
         __llm_autotune_ctx_probe() {
             local probe_ctx="$1"
+            local probe_mode="${2:-refine}"
             local probe_log="/tmp/autotune_ctx_probe_${num}_${probe_ctx}.log"
             local probe_use_log="/tmp/autotune_ctx_probe_use_${num}_${probe_ctx}.log"
             local probe_tps=""
+            local probe_status_interval="${LLM_AUTOTUNE_PROBE_STATUS_INTERVAL:-10}"
+            local probe_elapsed=0
+            local probe_burn_pid=""
+            local probe_burn_rc=0
+            local mode_burn_tokens="$probe_burn_tokens"
+            local mode_burn_timeout="$probe_burn_timeout"
+            local mode_load_timeout="$probe_load_timeout"
+            local mode_burn_attempts="$probe_burn_attempts"
+
+            if [[ "$probe_mode" == "grow" || "$probe_mode" == "anchor" ]]
+            then
+                mode_burn_tokens="${LLM_AUTOTUNE_PROBE_GROW_BURN_TOKENS:-64}"
+                [[ "$mode_burn_tokens" =~ ^[0-9]+$ ]] || mode_burn_tokens=64
+                (( mode_burn_tokens < 32 )) && mode_burn_tokens=32
+                mode_burn_timeout="$probe_burn_timeout_grow"
+                mode_load_timeout="$probe_load_timeout_grow"
+                mode_burn_attempts="$probe_burn_attempts_grow"
+            elif [[ "$probe_mode" == "refine" ]]
+            then
+                mode_burn_tokens="$probe_burn_tokens_refine"
+                mode_burn_timeout="$probe_burn_timeout_refine"
+                mode_load_timeout="$probe_load_timeout_refine"
+                mode_burn_attempts="$probe_burn_attempts_refine"
+            fi
+
+            [[ "$probe_status_interval" =~ ^[0-9]+$ ]] || probe_status_interval=10
+            (( probe_status_interval < 2 )) && probe_status_interval=2
+
+            __tac_info "Ctx Probe" "[ctx=${probe_ctx} | mode=${probe_mode} | min_tps=${min_tps_required}]" "$C_Dim"
+            __tac_info "Ctx Probe" "[ctx=${probe_ctx} | starting model]" "$C_Dim"
 
             export TAC_CTX_SIZE="$probe_ctx"
             export LLAMA_BATCH_SIZE="$probe_batch"
@@ -3097,27 +3416,151 @@ function __model_autotune() {
             export LLAMA_PARALLEL_SLOTS="$probe_parallel"
             export LLAMA_FIT_TARGET_MB="$probe_fit"
 
-            if ! __model_use "$num" >"$probe_use_log" 2>&1
+            __model_use "$num" >"$probe_use_log" 2>&1 &
+            local probe_use_pid=$!
+            local probe_use_rc=0
+
+            probe_elapsed=0
+            while kill -0 "$probe_use_pid" 2>/dev/null
+            do
+                sleep 1
+                probe_elapsed=$((probe_elapsed + 1))
+                if (( probe_elapsed % probe_status_interval == 0 ))
+                then
+                    __tac_info "Ctx Probe" "[ctx=${probe_ctx} | loading ${probe_elapsed}s]" "$C_Dim"
+                fi
+                if (( probe_elapsed >= mode_load_timeout ))
+                then
+                    kill -TERM "$probe_use_pid" 2>/dev/null || true
+                    wait "$probe_use_pid" 2>/dev/null || true
+                    __model_stop >/dev/null 2>&1 || true
+                    __tac_info "Ctx Probe" "[ctx=${probe_ctx} | start timeout ${mode_load_timeout}s -> fail fast]" "$C_Warning"
+                    return 1
+                fi
+            done
+
+            wait "$probe_use_pid" 2>/dev/null || probe_use_rc=$?
+
+            if (( probe_use_rc != 0 ))
             then
+                __tac_info "Ctx Probe" "[ctx=${probe_ctx} | model start failed]" "$C_Warning"
                 __model_stop >/dev/null 2>&1 || true
                 return 1
             fi
 
+            __tac_info "Ctx Probe" "[ctx=${probe_ctx} | model ready]" "$C_Dim"
+
+            # Fast discovery mode: for grow/refine probes, use startup success
+            # as the pass/fail signal. This finds failure boundaries much
+            # faster than running a burn at every intermediate ctx.
+            if (( probe_load_only == 1 )) && [[ "$probe_mode" == "grow" || "$probe_mode" == "refine" ]]
+            then
+                last_probe_tps="load-only"
+                __tac_info "Ctx Probe" "[ctx=${probe_ctx} | load-only pass]" "$C_Dim"
+                __model_stop >/dev/null 2>&1 || true
+                return 0
+            fi
+
+            # Learn per-model/backend overhead coefficient from observed VRAM
+            # drop between pre-probe snapshot and post-load snapshot.
+            if (( free_vram_mb > 0 && model_bytes > 0 ))
+            then
+                local _probe_free_after_load=0
+                if [[ -n "$smi_cmd" ]]
+                then
+                    _probe_free_after_load=$($smi_cmd --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+                    [[ "$_probe_free_after_load" =~ ^[0-9]+$ ]] || _probe_free_after_load=0
+                fi
+                if (( _probe_free_after_load > 0 && _probe_free_after_load < free_vram_mb ))
+                then
+                    local _obs_overhead_mb=$(( free_vram_mb - _probe_free_after_load ))
+                    local _obs_model_mb=$(( model_bytes / 1048576 ))
+                    if (( _obs_model_mb > 0 ))
+                    then
+                        local _obs_frac
+                        _obs_frac=$(awk -v o="$_obs_overhead_mb" -v m="$_obs_model_mb" 'BEGIN{printf "%.4f", o/m}')
+                        __llm_autotune_record_overhead_frac "$file" "$backend" "$_obs_frac" >/dev/null 2>&1 || true
+                    fi
+                fi
+            fi
+
             if awk -v min="$min_tps_required" 'BEGIN{exit !(min>0)}'
             then
-                if ! burn >"$probe_log" 2>&1
+                __tac_info "Ctx Probe" "[ctx=${probe_ctx} | burn started | ${mode_burn_tokens} tok]" "$C_Dim"
+                LLM_BENCH_BURN_TOKENS="$mode_burn_tokens" \
+                LLM_BURN_MAX_ATTEMPTS="$mode_burn_attempts" \
+                LLM_BURN_REQUEST_TIMEOUT="$mode_burn_timeout" \
+                burn >"$probe_log" 2>&1 &
+                probe_burn_pid=$!
+
+                while kill -0 "$probe_burn_pid" 2>/dev/null
+                do
+                    sleep 1
+                    probe_elapsed=$((probe_elapsed + 1))
+                    if (( probe_elapsed % probe_status_interval == 0 ))
+                    then
+                        __tac_info "Ctx Probe" "[ctx=${probe_ctx} | running ${probe_elapsed}s]" "$C_Dim"
+                    fi
+                done
+
+                wait "$probe_burn_pid" 2>/dev/null || probe_burn_rc=$?
+
+                if (( probe_burn_rc != 0 ))
                 then
                     __model_stop >/dev/null 2>&1 || true
+                    __tac_info "Ctx Probe" "[ctx=${probe_ctx} | burn failed]" "$C_Warning"
+                    local probe_fail_reason=""
+                    probe_fail_reason=$(tail -n 8 "$probe_log" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -n1)
+                    if [[ -n "$probe_fail_reason" ]]
+                    then
+                        __tac_info "Ctx Probe" "[ctx=${probe_ctx} | ${probe_fail_reason}]" "$C_Dim"
+                    fi
                     return 1
                 fi
+
                 probe_tps=$(sed -n 's/.*Burn complete: \([0-9][0-9]*\(\.[0-9][0-9]*\)\?\) tps.*/\1/p' "$probe_log" | tail -n1)
                 [[ "$probe_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] || probe_tps="0"
                 last_probe_tps="$probe_tps"
+                __tac_info "Ctx Probe" "[ctx=${probe_ctx} | result ${probe_tps} tps]" "$C_Dim"
+
+                # Stabilize probe decisions near the floor by escalating the
+                # probe burn length. Full autotune trials remain unchanged and
+                # continue to use the normal burn defaults.
+                local _near_floor=0
+                _near_floor=$(awk -v t="$probe_tps" -v min="$min_tps_required" -v m="$probe_near_floor_margin" 'BEGIN{d=t-min; if (d<0) d=-d; print (d<=m)?1:0}')
+                if (( probe_recheck_enabled == 1 )) && [[ "$probe_mode" != "grow" && "$_near_floor" == "1" ]]
+                then
+                    local _escalate_tok
+                    for _escalate_tok in 224 256
+                    do
+                        (( _escalate_tok > probe_burn_tokens )) || continue
+                        __tac_info "Ctx Probe" "[ctx=${probe_ctx} | near floor -> recheck ${_escalate_tok} tok]" "$C_Dim"
+                        LLM_BENCH_BURN_TOKENS="$_escalate_tok" \
+                        LLM_BURN_MAX_ATTEMPTS="$probe_burn_attempts" \
+                        LLM_BURN_REQUEST_TIMEOUT="$probe_burn_timeout" \
+                        burn >"$probe_log" 2>&1 || {
+                            __model_stop >/dev/null 2>&1 || true
+                            __tac_info "Ctx Probe" "[ctx=${probe_ctx} | recheck failed]" "$C_Warning"
+                            return 1
+                        }
+
+                        probe_tps=$(sed -n 's/.*Burn complete: \([0-9][0-9]*\(\.[0-9][0-9]*\)\?\) tps.*/\1/p' "$probe_log" | tail -n1)
+                        [[ "$probe_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] || probe_tps="0"
+                        last_probe_tps="$probe_tps"
+                        __tac_info "Ctx Probe" "[ctx=${probe_ctx} | recheck ${probe_tps} tps]" "$C_Dim"
+
+                        _near_floor=$(awk -v t="$probe_tps" -v min="$min_tps_required" -v m="$probe_near_floor_margin" 'BEGIN{d=t-min; if (d<0) d=-d; print (d<=m)?1:0}')
+                        [[ "$_near_floor" == "1" ]] || break
+                    done
+                fi
+
                 if awk -v t="$probe_tps" -v min="$min_tps_required" 'BEGIN{exit !(t>=min)}'
                 then
+                    __tac_info "Ctx Probe" "[ctx=${probe_ctx} | pass]" "$C_Success"
                     __model_stop >/dev/null 2>&1 || true
                     return 0
                 fi
+                __tac_info "Ctx Probe" "[ctx=${probe_ctx} | below floor]" "$C_Warning"
                 __model_stop >/dev/null 2>&1 || true
                 return 1
             fi
@@ -3127,30 +3570,103 @@ function __model_autotune() {
             return 0
         }
 
-        if __llm_autotune_ctx_probe "$probe_anchor"
+        # Align anchor to probe granularity so the grow/refine phases can
+        # reuse a consistent ctx grid.
+        probe_anchor=$(( (probe_anchor / probe_refine_step) * probe_refine_step ))
+        (( probe_anchor < min_ctx_floor )) && probe_anchor="$min_ctx_floor"
+
+        if __llm_autotune_ctx_probe "$probe_anchor" "anchor"
         then
             discovered_ctx="$probe_anchor"
-            low=$((probe_anchor + probe_step))
+            discovered_ctx_tps="$last_probe_tps"
+            low=$((probe_anchor + probe_refine_step))
+
+            # Phase 1 policy: keep increasing ctx until first failure, then
+            # back off with binary search to the highest passing ctx.
+            local fail_ctx=""
+            local grow_step="$probe_grow_step"
+            local next_ctx=$((discovered_ctx + grow_step))
+            while true
+            do
+                if (( search_cap_ctx > 0 && next_ctx > search_cap_ctx ))
+                then
+                    break
+                fi
+                # VRAM-aware cap: if the estimated max ctx is reliable and
+                # the next grow step exceeds it, stop growing and refine.
+                if (( estimated_max_ctx > 0 && next_ctx > estimated_max_ctx ))
+                then
+                    __tac_info "Ctx Probe" "[stopping growth: next_ctx=${next_ctx} > estimated_max_ctx=${estimated_max_ctx}]" "$C_Dim"
+                    # Set fail_ctx so the refine phase runs between here and discovered_ctx
+                    fail_ctx="$next_ctx"
+                    break
+                fi
+                if (( next_ctx >= 2147483000 ))
+                then
+                    __tac_info "Ctx Probe" "[stopping growth near integer limit at ctx=${next_ctx}]" "$C_Dim"
+                    break
+                fi
+                if __llm_autotune_ctx_probe "$next_ctx" "grow"
+                then
+                    discovered_ctx="$next_ctx"
+                    discovered_ctx_tps="$last_probe_tps"
+                    local pct_step=0
+                    pct_step=$(awk -v c="$discovered_ctx" -v p="$probe_grow_pct" 'BEGIN{printf "%d", c*p}')
+                    [[ "$pct_step" =~ ^[0-9]+$ ]] || pct_step=0
+                    (( pct_step < probe_refine_step )) && pct_step="$probe_refine_step"
+                    (( pct_step > grow_step )) && grow_step="$pct_step"
+                    grow_step=$((grow_step * probe_grow_multiplier))
+                    next_ctx=$((discovered_ctx + grow_step))
+                    next_ctx=$(( (next_ctx / probe_refine_step) * probe_refine_step ))
+                    (( next_ctx <= discovered_ctx )) && next_ctx=$((discovered_ctx + probe_refine_step))
+                    continue
+                fi
+                fail_ctx="$next_ctx"
+                break
+            done
+
+            if [[ -n "$fail_ctx" ]] && [[ "$fail_ctx" =~ ^[0-9]+$ ]]
+            then
+                low=$((discovered_ctx + probe_refine_step))
+                high=$((fail_ctx - probe_refine_step))
+            else
+                # No failure seen yet; continue with the discovered best.
+                low=$((discovered_ctx + probe_refine_step))
+                high="$discovered_ctx"
+            fi
         else
-            high=$((probe_anchor - probe_step))
+            high=$((probe_anchor - probe_refine_step))
+        fi
+
+        # Tighten refine step for narrow ranges: if the search window is
+        # < 4096 ctx, use 512 steps instead of the default 1024 so we don't
+        # miss the best ctx just because the grid is coarse.
+        local _effective_refine_step="$probe_refine_step"
+        local _refine_range=$(( high - low ))
+        if (( _refine_range > 0 && _refine_range < 4096 ))
+        then
+            _effective_refine_step=512
         fi
 
         while (( low <= high ))
         do
             local mid=$(( (low + high) / 2 ))
-            mid=$(( (mid / 512) * 512 ))
+            mid=$(( (mid / _effective_refine_step) * _effective_refine_step ))
             (( mid < 512 )) && mid=512
             (( mid < low )) && mid=$low
 
-            if __llm_autotune_ctx_probe "$mid"
+            __tac_info "Ctx Probe" "[refine l=${low} h=${high} m=${mid} step=${_effective_refine_step}]" "$C_Dim"
+
+            if __llm_autotune_ctx_probe "$mid" "refine"
             then
                 discovered_ctx="$mid"
-                low=$((mid + probe_step))
+                discovered_ctx_tps="$last_probe_tps"
+                low=$((mid + probe_refine_step))
             else
-                high=$((mid - probe_step))
+                high=$((mid - probe_refine_step))
             fi
 
-            if (( low > max_ctx ))
+            if (( search_cap_ctx > 0 && low > search_cap_ctx ))
             then
                 break
             fi
@@ -3162,18 +3678,45 @@ function __model_autotune() {
 
         local ctx_step="${LLM_AUTOTUNE_CTX_STEP:-2048}"
         [[ "$ctx_step" =~ ^[0-9]+$ ]] || ctx_step=2048
+        local ctx_candidate_mode="${LLM_AUTOTUNE_CTX_CANDIDATE_MODE:-focused}"
         ctx_candidates=(
             "$discovered_ctx"
-            "$((discovered_ctx + probe_step))"
-            "$((discovered_ctx - (ctx_step / 2)))"
-            "$((discovered_ctx - ctx_step))"
-            "$base_ctx"
+            "$((discovered_ctx - probe_refine_step))"
         )
+        if [[ "$ctx_candidate_mode" != "focused" ]]
+        then
+            ctx_candidates+=(
+                "$((discovered_ctx + probe_grow_step))"
+                "$((discovered_ctx - (ctx_step / 2)))"
+                "$((discovered_ctx - ctx_step))"
+                "$base_ctx"
+            )
+        fi
+
+        local discovered_probe_note=""
+        if [[ -n "$discovered_ctx_tps" ]]
+        then
+            discovered_probe_note=" | probe_tps=${discovered_ctx_tps}"
+        fi
+        __tac_info "Ctx Probe" "[selected ctx=${discovered_ctx} (highest passing probe >= ${min_tps_required} TPS${discovered_probe_note})]" "$C_Dim"
+        if (( search_cap_ctx > 0 ))
+        then
+            __tac_info "Ctx Probe" "[search policy: grow ctx until fail/below-floor, then binary backoff (user cap ${search_cap_ctx})]" "$C_Dim"
+        else
+            __tac_info "Ctx Probe" "[search policy: grow ctx until fail/below-floor, then binary backoff (no hard cap)]" "$C_Dim"
+        fi
+        __tac_info "Ctx Probe" "[probe stride: grow=${probe_grow_step}, refine=${probe_refine_step}, multiplier=${probe_grow_multiplier}, pct=${probe_grow_pct}]" "$C_Dim"
+        if [[ "$ctx_candidate_mode" == "focused" ]]
+        then
+            __tac_info "Ctx Probe" "[sweep rationale: focused post-probe sweep (ctx=${discovered_ctx}, fallback=${discovered_ctx}-${probe_refine_step})]" "$C_Dim"
+        else
+            __tac_info "Ctx Probe" "[sweep rationale: +${probe_grow_step} headroom, -$((ctx_step / 2)) and -${ctx_step} stability checks, +base ${base_ctx}]" "$C_Dim"
+        fi
     fi
 
     # Unique + sort descending so we prioritize higher context first.
     local _ctx_sorted=""
-    _ctx_sorted=$(printf '%s\n' "${ctx_candidates[@]}" | awk -v max_ctx="${max_ctx_by_rating:-0}" '/^[0-9]+$/ { if (max_ctx > 0 && $1 > max_ctx) next; a[$1]=1 } END {for (k in a) print k}' | sort -nr)
+    _ctx_sorted=$(printf '%s\n' "${ctx_candidates[@]}" | awk -v max_ctx="${max_ctx_by_rating:-0}" -v cap_ctx="${search_cap_ctx:-0}" '/^[0-9]+$/ { if (cap_ctx > 0 && $1 > cap_ctx) next; if (max_ctx > 0 && $1 > max_ctx) next; a[$1]=1 } END {for (k in a) print k}' | sort -nr)
     ctx_candidates=()
     while IFS= read -r _ctx_line
     do
@@ -3224,7 +3767,8 @@ function __model_autotune() {
     local total_configs=$(( ${#ctx_candidates[@]} * ${#combos[@]} ))
     local jitter_penalty="${LLM_AUTOTUNE_JITTER_PENALTY:-0.30}"
     local early_stop_margin="${LLM_AUTOTUNE_EARLY_STOP_MARGIN:-2.0}"
-    local do_warmup="${LLM_AUTOTUNE_WARMUP:-1}"
+    # Warmup is opt-in so autotune reaches the first measured probe sooner.
+    local do_warmup="${LLM_AUTOTUNE_WARMUP:-0}"
 
     local fail_oom=0
     local fail_timeout=0
@@ -3267,7 +3811,7 @@ function __model_autotune() {
             local trial run_tps trial_ok=1
             local oom_detected=0
             local dominated_detected=0
-            local skip_combo=0
+            # skip_combo is tracked via _oom_combos dict above
 
             if __model_use "$num" >"$use_log" 2>&1
             then
@@ -3352,7 +3896,6 @@ function __model_autotune() {
                 # smaller ctx values too — it will only perform worse.
                 if (( oom_detected == 1 ))
                 then
-                    skip_combo=1
                     _oom_combos["${c_batch}:${c_ubatch}:${c_parallel}"]=1
                 fi
                 continue
@@ -3596,43 +4139,25 @@ function __model_autotune() {
 # @returns 0 always.
 # ---------------------------------------------------------------------------
 function __model_autotune_help() {
-    echo "Usage: model autotune <N> [--backend native|python] [--ctx-size N] [--trials N]"
+    echo "Usage: model autotune <N>"
+    echo "       model autotune all"
     echo ""
-    echo "Objective priority:"
-    echo "  1) no OOM"
-    echo "  2) minimum TPS floor (LLM_MIN_TPS, default 6)"
-    echo "  3) maximum context"
-    echo "  4) maximum TPS"
+    echo "Tests a range of context sizes and batch/ubatch combos to find the"
+    echo "optimal configuration for model #N. Saves the best combo (ctx \u00d7 tps)"
+    echo "to models.conf as the model's default runtime profile."
     echo ""
-    echo "What it does:"
-    echo "  - Sweeps safe runtime configs (batch/ubatch/parallel/fit)"
-    echo "  - Starts ctx probing from the saved ctx/TPS instead of a flat default"
-    echo "  - Uses a min-TPS-aware ctx probe to avoid wasting time on slow ctx values"
-    echo "  - Uses median TPS with jitter-aware scoring"
-    echo "  - Saves winner directly into models.conf tuning columns"
-    echo "  - model scan/model list will show 'pending' until a profile exists"
-    echo ""
-    echo "Common options:"
-    echo "  --backend native|python   Select llama backend (default from env)"
-
-    echo "  --ctx-size N              Force one context value"
-    echo "  -h, --help                Show this help"
-    echo ""
-    echo "Key environment knobs:"
-    echo "  LLM_AUTOTUNE_CTX_STRATEGY, LLM_AUTOTUNE_MAX_CTX, LLM_AUTOTUNE_CTX_STEP"
-    echo "  LLM_MIN_TPS (default 6), LLM_AUTOTUNE_MIN_CTX_FLOOR"
-    echo "  LLM_AUTOTUNE_JITTER_PENALTY, LLM_AUTOTUNE_EARLY_STOP_MARGIN"
-    echo "  LLM_AUTOTUNE_WARMUP, LLM_AUTOTUNE_CONFIRM_FINAL"
-    echo "  LLM_AUTOTUNE_MIN_CTX_FRACTION (default 0.60)"
-    echo "  LLM_AUTOTUNE_LOCK_FILE, LLM_AUTOTUNE_LOCK_WAIT_SECONDS"
-    echo ""
+    echo "Strategy:"
+    echo "  - Context ladder: 4096 \u2192 32768, stops at first level that OOMs"
+    echo "  - Batch combos: 1-3 depending on model size"
+    echo "  - Parallel always 1 (4GB VRAM limit)"
+    echo "  - No --fit flag (projection bug in this llama-server build)"
+    echo "  - Full VRAM drain between each test"
     echo ""
     echo "Batch:"
     echo "  model autotune all          Run autotune on all untuned models"
     echo ""
     echo "Examples:"
-    echo "  model autotune 3 --backend native"
-    echo "  model autotune 7 --ctx-size 8192"
+    echo "  model autotune 3"
     echo "  model autotune all"
     return 0
 }
@@ -3657,6 +4182,22 @@ function __model_stop() {
         fi
         rm -f "$_keeper_file"
     done
+    # Fallback for keepers that lost their PID file or were reparented to an
+    # unexpected shell by the VS Code terminal relay.
+    local _keeper_line _keeper_ppid _keeper_cmd
+    while IFS= read -r _keeper_line
+    do
+        [[ -n "$_keeper_line" ]] || continue
+        _keeper_pid=${_keeper_line%% *}
+        _keeper_cmd=${_keeper_line#* }
+        [[ "$_keeper_pid" =~ ^[0-9]+$ ]] || continue
+        [[ "$_keeper_cmd" == *"sleep 3600"* ]] || continue
+        _keeper_ppid=$(ps -o ppid= -p "$_keeper_pid" 2>/dev/null | tr -d '[:space:]')
+        if [[ -z "$_keeper_ppid" ]] || [[ "$_keeper_ppid" == "1" ]]
+        then
+            kill -KILL "$_keeper_pid" 2>/dev/null || true
+        fi
+    done < <(pgrep -af 'sleep 3600' 2>/dev/null || true)
     # Kill the model subshell (the `( ... ) & disown` wrapper from __model_use)
     # and its entire process tree (inner bash, stdin keeper, any children).
     # We kill children before the parent to prevent reparenting to init.
@@ -3682,12 +4223,6 @@ function __model_stop() {
         # Kill the parent subshell
         kill -KILL "$_ms_pid" 2>/dev/null || true
     done
-    # Kill any sleep 3600 keepers reparented to init
-    for _ms_child in $(pgrep -P 1 -f 'sleep 3600' 2>/dev/null || true)
-    do
-        kill -KILL "$_ms_child" 2>/dev/null || true
-    done
-
     rm -f "$ACTIVE_LLM_FILE"
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
@@ -4164,9 +4699,11 @@ function __model_bench() {
     [[ -f "$ACTIVE_LLM_FILE" ]] && _bench_prev_model=$(< "$ACTIVE_LLM_FILE")
     local bench_backend=""
     bench_backend=$(__llm_backend_normalize "${LLM_SERVER_BACKEND:-native}")
-    local _tac_root="${TACTICAL_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-    local _autotune_script="${_tac_root}/bin/model-autotune.py"
-    local bench_autotune_mode="comprehensive"
+    local bench_autotune_mode="unified"
+    if [[ -n "${LLM_BENCH_AUTOTUNE_ENGINE:-}" && "${LLM_BENCH_AUTOTUNE_ENGINE}" != "shell" ]]
+    then
+        __tac_info "Bench" "[Ignoring LLM_BENCH_AUTOTUNE_ENGINE=${LLM_BENCH_AUTOTUNE_ENGINE}; single autotuner mode uses shell]" "$C_Dim"
+    fi
 
     local -a b_num=() b_name=() b_file=() b_size=() b_gpu=() b_tps=()
 
@@ -4310,13 +4847,9 @@ function __model_bench() {
 
 
                 local _autotune_rc=0
-                if [[ -x "$_autotune_script" || -f "$_autotune_script" ]]
-                then
-                    python3 "$_autotune_script" "${b_num[$i]}" || _autotune_rc=$?
-                else
-                    _autotune_rc=1
-                    __tac_info "Bench" "[Autotune script not found: $_autotune_script]" "$C_Error"
-                fi
+                # Single autotuner policy: bench and interactive flows both
+                # use the standalone autotune script (no --fit bug, verified).
+                bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "${b_num[$i]}" 2>&1 || _autotune_rc=$?
                 if (( _autotune_rc != 0 ))
                 then
                     # Clear any lifted/safe overrides before skipping this model so
@@ -5425,26 +5958,17 @@ function model() {
             if [[ "${1:-}" == "all" ]]
             then
                 shift
-                while IFS='|' read -r _at_num _at_name _at_file _at_size _at_qc _at_arch _at_gpu _at_ctx _at_thr _at_ba _at_ub _at_par _at_fit _at_be _at_mm _at_fa _at_tps _at_tuned _at_def _at_vram
-                do
-                    [[ "$_at_num" == "#" || -z "$_at_num" ]] && continue
-                    if [[ "$_at_tuned" != "yes" ]]
-                    then
-                        echo ""
-                        __tac_header "AUTOTUNE ALL" "open"
-                        __tac_info "Next" "#${_at_num} ${_at_name} (${_at_size})" "$C_Highlight"
-                        __tac_divider
-                        __model_autotune "$_at_num"
-                        echo ""
-                    fi
-                done < "$LLM_REGISTRY"
+                bash "$HOME/ubuntu-console/scripts/run-autotune-batch.sh" 2>&1
                 __tac_info "Autotune All" "[Complete — all untuned models processed]" "$C_Success"
                 return 0
             fi
-            # Run in a subshell to prevent trap/process leaks from
-            # interfering with subsequent commands. The `autotune all`
-            # path already has this isolation via the while-read loop.
-            ( __model_autotune "$@" )
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || "${1:-}" == "help" ]]
+            then
+                __model_autotune_help
+                return 0
+            fi
+            # Route to the standalone autotune script (proven, no --fit bug)
+            bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "$1" 2>&1
             ;;
 
         bench-diff)

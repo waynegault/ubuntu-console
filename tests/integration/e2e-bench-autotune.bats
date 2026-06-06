@@ -259,6 +259,18 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     rm -f "$LLM_BENCH_LOCK_FILE"
 }
 
+@test "[E8] Lock: __tac_cleanup_stale_locks reaps keeper sleeps outside live model shells" {
+    sleep 3600 &
+    local keeper_pid=$!
+    local keeper_file="/tmp/llm-keeper.$BASHPID.pid"
+    echo "$keeper_pid" > "$keeper_file"
+
+    __tac_cleanup_stale_locks
+
+    ! kill -0 "$keeper_pid" 2>/dev/null
+    [[ ! -f "$keeper_file" ]]
+}
+
 # ===== F) STATE RESTORATION ==================================================
 
 @test "[F1] Restoration: bench does not leak traps into parent shell" {

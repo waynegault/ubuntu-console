@@ -2853,6 +2853,26 @@ EOF
     [[ "$gpu_layers" == "16" ]]
 }
 
+@test "autotune: remap helper leaves new registry intact when old snapshot is empty" {
+    local llm_root="$TAC_TEST_TMPDIR/autotune-remap-empty-old"
+    mkdir -p "$llm_root/.llm"
+    local old_registry="$llm_root/.llm/old.conf"
+    local new_registry="$llm_root/.llm/new.conf"
+    : > "$old_registry"
+    printf '%s\n' \
+        '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+        '1|Scan Model|scan.gguf|1.0G|Q4_K_M/q8_0|llama|24|8192|6|1024|256|1|256|llama_server|auto|on|12.5|no|no|no' \
+        > "$new_registry"
+
+    __llm_autotune_profiles_remap_by_registry "$old_registry" "$new_registry"
+
+    local line_count row
+    line_count=$(wc -l < "$new_registry")
+    row=$(awk -F'|' '$1==1 {print $3"|"$8"|"$17}' "$new_registry")
+    [[ "$line_count" -eq 2 ]]
+    [[ "$row" == 'scan.gguf|8192|12.5' ]]
+}
+
 @test "autotune: __llm_autotune_done_for_model returns 0 for autotuned=yes" {
     local llm_root="$TAC_TEST_TMPDIR/autotune-done-check"
     mkdir -p "$llm_root/.llm"

@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2034,SC2059,SC2154,SC2317
-# ─── Module: 09b-gog ───────────────────────────────────────────────────────
+# --- Module: 09b-gog ------------------------------------------------------
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
 # Module Version: 1
@@ -25,7 +25,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# __is_gog_installed — Check if gog CLI is installed AND functional.
+# __is_gog_installed - Check if gog CLI is installed AND functional.
 # Returns 0 if __TAC_GOG_OK is set (gog responded to --version), 1 otherwise.
 # This uses the cached result from profile load time for efficiency.
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ function __is_gog_installed() {
 }
 
 # ---------------------------------------------------------------------------
-# gog-status — Show gog authentication status and configuration.
+# gog-status - Show gog authentication status and configuration.
 # Displays config file location, keyring backend, and authorized accounts.
 # ---------------------------------------------------------------------------
 function gog-status() {
@@ -44,7 +44,7 @@ function gog-status() {
         return 1
     fi
 
-    echo "${C_Warning}═══ GOG STATUS ═══${C_Reset}"
+    echo "${C_Warning}=== GOG STATUS ===${C_Reset}"
     echo ""
 
     # Show version
@@ -73,7 +73,7 @@ function gog-status() {
         accounts=$(jq -r '.accounts[]?.email // empty' "$config_file" 2>/dev/null)
         if [[ -n "$accounts" ]]; then
             while IFS= read -r email; do
-                echo "  ${C_Success}✓${C_Reset} $email"
+                echo "  ${C_Success}[OK]${C_Reset} $email"
             done <<< "$accounts"
         else
             echo "  ${C_Dim}No accounts configured${C_Reset}"
@@ -85,7 +85,7 @@ function gog-status() {
 }
 
 # ---------------------------------------------------------------------------
-# gog-login — Authorize and store a refresh token for a Google account.
+# gog-login - Authorize and store a refresh token for a Google account.
 # Wrapper around 'gog login <email>' with status feedback.
 # ---------------------------------------------------------------------------
 function gog-login() {
@@ -105,15 +105,15 @@ function gog-login() {
     command gog login "$1"
     local rc=$?
     if [[ $rc -eq 0 ]]; then
-        echo "${C_Success}✓ Successfully authorized $1${C_Reset}"
+        echo "${C_Success}[OK] Successfully authorized $1${C_Reset}"
     else
-        echo "${C_Error}✗ Authorization failed (exit code: $rc)${C_Reset}"
+        echo "${C_Error}[FAIL] Authorization failed (exit code: $rc)${C_Reset}"
     fi
     return $rc
 }
 
 # ---------------------------------------------------------------------------
-# gog-logout — Remove stored credentials for a Google account.
+# gog-logout - Remove stored credentials for a Google account.
 # Wrapper around 'gog logout <email>' with confirmation.
 # ---------------------------------------------------------------------------
 function gog-logout() {
@@ -131,15 +131,15 @@ function gog-logout() {
     command gog logout "$1" -y
     local rc=$?
     if [[ $rc -eq 0 ]]; then
-        echo "${C_Success}✓ Successfully logged out $1${C_Reset}"
+        echo "${C_Success}[OK] Successfully logged out $1${C_Reset}"
     else
-        echo "${C_Error}✗ Logout failed (exit code: $rc)${C_Reset}"
+        echo "${C_Error}[FAIL] Logout failed (exit code: $rc)${C_Reset}"
     fi
     return $rc
 }
 
 # ---------------------------------------------------------------------------
-# gog-version — Print gog version information.
+# gog-version - Print gog version information.
 # ---------------------------------------------------------------------------
 function gog-version() {
     if [[ "$__TAC_GOG_OK" != "1" ]]; then
@@ -151,7 +151,7 @@ function gog-version() {
 }
 
 # ---------------------------------------------------------------------------
-# gog-help — Display gog help information in the tactical console style.
+# gog-help - Display gog help information in the tactical console style.
 # ---------------------------------------------------------------------------
 function gog-help() {
     if [[ "$__TAC_GOG_OK" != "1" ]]; then

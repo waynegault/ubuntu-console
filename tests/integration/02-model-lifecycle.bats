@@ -214,7 +214,7 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
     fn_src=$(declare -f __model_autotune 2>/dev/null)
 
     [[ "$fn_src" == *"__autotune_prev_exit_trap"* ]]
-    [[ "$fn_src" == *"trap '__autotune_unlock; __autotune_restore_traps' EXIT"* ]]
+    [[ "$fn_src" == *"trap 'pkill -TERM -P \$\$ 2>/dev/null || true; __model_stop >/dev/null 2>&1 || true; __autotune_unlock; __autotune_restore_traps' EXIT"* ]]
 }
 
 @test "integration: __model_autotune validates required option values" {

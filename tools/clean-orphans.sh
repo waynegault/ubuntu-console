@@ -27,9 +27,29 @@ for arg in "$@"; do
     esac
 done
 
+# Safety guard: do not reap processes while an active autotune session owns the
+# lock. This prevents accidental termination of legitimate in-flight probes.
+AUTOTUNE_LOCK_FILE="${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
+AUTOTUNE_OWNER_PID=""
+AUTOTUNE_ACTIVE=0
+if [[ -f "$AUTOTUNE_LOCK_FILE" ]]; then
+    AUTOTUNE_OWNER_PID=$(cat "$AUTOTUNE_LOCK_FILE" 2>/dev/null || true)
+    if [[ "$AUTOTUNE_OWNER_PID" =~ ^[0-9]+$ ]] && kill -0 "$AUTOTUNE_OWNER_PID" 2>/dev/null; then
+        AUTOTUNE_ACTIVE=1
+    fi
+fi
+
+if (( AUTOTUNE_ACTIVE == 1 )) && [[ "${CLEAN_ORPHANS_IGNORE_ACTIVE_AUTOTUNE:-0}" != "1" ]]; then
+    echo "[clean-orphans] Active autotune detected (owner PID=$AUTOTUNE_OWNER_PID, lock=$AUTOTUNE_LOCK_FILE)."
+    echo "[clean-orphans] Refusing cleanup to avoid killing a live run."
+    echo "[clean-orphans] If this is definitely stale, rerun with CLEAN_ORPHANS_IGNORE_ACTIVE_AUTOTUNE=1."
+    exit 2
+fi
+
 # Gather orphan processes
 declare -a ORPHANS=()
 declare -A SEEN_PIDS=()
+declare -a LIVE_MODEL_SHELLS=()
 
 add_orphan() {
     local pid="$1"
@@ -40,6 +60,16 @@ add_orphan() {
     ORPHANS+=("$pid|$cmd")
 }
 
+# Live model-shell wrappers are allowed to own keeper sleeps.
+for modelshell_file in /tmp/llm-modelshell.*.pid /tmp/llm-modelshell.pid; do
+    [[ -f "$modelshell_file" ]] || continue
+    modelshell_pid=$(< "$modelshell_file")
+    [[ "$modelshell_pid" =~ ^[0-9]+$ ]] || continue
+    if kill -0 "$modelshell_pid" 2>/dev/null; then
+        LIVE_MODEL_SHELLS+=("$modelshell_pid")
+    fi
+done
+
 # 1. Stdin keepers: processes holding open /tmp/llm-stdin.* FIFOs
 while read -r pid cmd; do
     if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"llm-stdin"* ]]; then
@@ -48,19 +78,33 @@ while read -r pid cmd; do
 done < <(pgrep -af 'llm-stdin' 2>/dev/null || true)
 
 # 2. Keeper sleep loops from known keeper PID files.
-# This is intentionally strict to avoid killing unrelated init-owned sleep
-# processes on a shared host.
+# This is intentionally strict to avoid killing unrelated sleep processes on a
+# shared host.
 for keeper_file in /tmp/llm-keeper.*.pid; do
     [[ -f "$keeper_file" ]] || continue
     keeper_pid=$(< "$keeper_file")
     [[ "$keeper_pid" =~ ^[0-9]+$ ]] || continue
     if kill -0 "$keeper_pid" 2>/dev/null; then
         keeper_cmd=$(ps -p "$keeper_pid" -o args= 2>/dev/null || true)
-        if [[ "$keeper_cmd" == *"sleep 3600"* ]]; then
+        keeper_ppid=$(ps -o ppid= -p "$keeper_pid" 2>/dev/null | tr -d '[:space:]')
+        if [[ "$keeper_cmd" == *"sleep 3600"* ]] && {
+            [[ "$keeper_ppid" == "1" ]] || ! [[ " ${LIVE_MODEL_SHELLS[*]} " == *" ${keeper_ppid} "* ]];
+        }; then
             add_orphan "$keeper_pid" "$keeper_cmd"
         fi
     fi
 done
+
+# 2b. Keeper sleep loops that lost their PID file or were reparented to an
+# unexpected shell by the terminal relay.
+while read -r pid cmd; do
+    if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"sleep 3600"* ]]; then
+        ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+        if [[ -z "$ppid" ]] || [[ "$ppid" == "1" ]] || ! [[ " ${LIVE_MODEL_SHELLS[*]} " == *" ${ppid} "* ]]; then
+            add_orphan "$pid" "$cmd"
+        fi
+    fi
+done < <(pgrep -af 'sleep 3600' 2>/dev/null || true)
 
 # 3. llama-server instances spawned by bench (have --no-mmap, no terminal)
 while read -r pid cmd; do
