@@ -1,4 +1,6 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #

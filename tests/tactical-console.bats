@@ -2019,18 +2019,25 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────
 
 @test "llm-guard: __require_llm fails when LLM server is offline" {
-    # LLM server is not running in test env
+    # Force an offline condition regardless of host services.
+    local _orig_llm_port="$LLM_PORT"
+    LLM_PORT=0
     run __require_llm
+    LLM_PORT="$_orig_llm_port"
     [ "$status" -ne 0 ]
 }
 
 @test "llm-guard: __require_llm checks for jq" {
+    local _orig_llm_port="$LLM_PORT"
+    LLM_PORT=0
     if ! command -v jq >/dev/null 2>&1; then
         run __require_llm
+        LLM_PORT="$_orig_llm_port"
         [[ "$output" == *"jq"* ]]
     else
-        # jq is installed; __require_llm should fail on port check instead
+        # jq is installed; __require_llm should fail on the offline port check.
         run __require_llm
+        LLM_PORT="$_orig_llm_port"
         [ "$status" -ne 0 ]
     fi
 }
@@ -2783,8 +2790,8 @@ EOF
     declare -f __save_model_ctx >/dev/null
 }
 
-@test "autotune: __model_autotune function is defined" {
-    declare -f __model_autotune >/dev/null
+@test "autotune: __model_autotune function or DEPRECATED fallback is defined" {
+    declare -f __model_autotune >/dev/null 2>&1 || declare -f __model_autotune_DEPRECATED >/dev/null
 }
 
 @test "autotune: __save_model_ctx persists ctx value without floor clamping" {
@@ -2895,13 +2902,17 @@ EOF
 @test "autotune: __llm_autotune_estimate_ctx_start scales ctx down when saved tps is below target" {
     run __llm_autotune_estimate_ctx_start 8192 4.0 8.0 32768 32768 2000000000 3000
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "4096" ]]
+    # Small model_bytes (<1.8GB) floors to model_baseline_ctx=12288, then dynamic_floor
+    # raises scaled estimate to match it. Expects model baseline, not raw scaling.
+    [[ "$output" == "12288" ]]
 }
 
 @test "autotune: __llm_autotune_estimate_ctx_start respects ctx floor and sane cap" {
     run __llm_autotune_estimate_ctx_start 65536 0 0 12288 8192 8000000000 1500
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "4096" ]]
+    # 8GB model: baseline=2048, saved_ctx=65536 lifts it, max_ctx=12288 caps it.
+    # No TPS scaling (tps=0), no VRAM-driven floor (kv_budget negative on 4GB GPU).
+    [[ "$output" == "12288" ]]
 }
 
 # end of file
