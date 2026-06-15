@@ -1,6 +1,6 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -8,6 +8,9 @@
 # Phase 2: step up 50% from working ctx until OOM, then binary probe
 #          between the last working ctx and OOM point.
 # Score  : ctx × tps (penalises VRAM-swapping configurations).
+#
+# Sources tactical-console functions for VRAM budget, stale process cleanup,
+# GGUF metadata, and profile saving — no duplicates.
 #===============================================================================
 
 set -uo pipefail
@@ -17,6 +20,12 @@ MODEL="${1:?Usage: autotune-model.sh MODEL_NUM}"
 
 cd /home/wayne/ubuntu-console || exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
+source scripts/01-constants.sh 2>/dev/null || true
+source scripts/11-llm-manager.sh 2>/dev/null || true
+
+# Source the tactical console for shared functions (__gguf_metadata, __kv_mb_per_1k,
+# __gpu_clear_stale_processes, __llm_autotune_profile_save)
+# Falls back to standalone mode if sourcing fails.
 
 ENTRY=$(grep "^${MODEL}|" "$LLM_REGISTRY" 2>/dev/null) || {
     echo "Error: Model #${MODEL} not found in registry"; exit 1; }
@@ -40,31 +49,47 @@ fi
 echo "[${MODEL}] ${name} (${size}, ${gpu_layers:-0} gpu layers)"
 echo ""
 
-if [ "$SIZE_INT" -lt 1 ]; then
-    COMBOS=("1024:256" "2048:512" "4096:1024")
-elif [ "$SIZE_INT" -lt 2 ]; then
-    COMBOS=("1024:256" "2048:512" "4096:1024")
-else
-    COMBOS=("1024:256" "2048:512" "4096:1024")
-fi
+# Combos — same for all model sizes (spec needs updating but code works)
+COMBOS=("1024:256" "2048:512" "4096:1024")
 
 REG_CTX=${_ctx:-4096}
 MIN_CTX=4096
 MIN_TPS=${LLM_MIN_TPS:-20}
 
-# VRAM-based start ctx: factor scales by model size (calibrated from autotune runs).
-#   <1GB: x1000   1-2GB: x500   2-3GB: x100   >3GB: x25
+# ---------------------------------------------------------------------------
+# VRAM-based start ctx using shared __kv_mb_per_1k when available
+# Falls back to simple size-class factor if functions unavailable.
+# ---------------------------------------------------------------------------
 MODEL_BYTES=$(stat --format=%s "$MODEL_PATH" 2>/dev/null || echo 0)
 FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
 FREE_VRAM=${FREE_VRAM:-3965}
 MODEL_MB=$(( MODEL_BYTES / 1048576 ))
 BUDGET=$(( FREE_VRAM - MODEL_MB - 200 ))
-if [ "$MODEL_MB" -gt 3000 ]; then FACTOR=50
-elif [ "$MODEL_MB" -gt 2000 ]; then FACTOR=100
-elif [ "$MODEL_MB" -gt 1000 ]; then FACTOR=500
-else FACTOR=1000; fi
-if [ "$BUDGET" -gt 0 ]; then START_CTX=$(( BUDGET * FACTOR ))
-else START_CTX=$MIN_CTX; fi
+
+if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/null; then
+    # Shared function path — architecture-aware estimate
+    _meta=$(__gguf_metadata "$MODEL_PATH" 2>/dev/null || true)
+    if [[ -n "$_meta" ]]; then
+        _n_layers=$(echo "$_meta" | cut -d'|' -f3)
+        _kv_mb=$(__kv_mb_per_1k "${_n_layers:-0}")
+    else
+        _kv_mb=$(__kv_mb_per_1k "0")
+    fi
+    if (( BUDGET > 0 )); then
+        START_CTX=$(awk -v b="$BUDGET" -v k="$_kv_mb" 'BEGIN{c=int((b/k)*1000); print c<4096?4096:c}')
+    else
+        START_CTX=$MIN_CTX
+    fi
+else
+    # Standalone fallback: size-class factor heuristic
+    if [ "$MODEL_MB" -gt 3000 ]; then FACTOR=50
+    elif [ "$MODEL_MB" -gt 2000 ]; then FACTOR=100
+    elif [ "$MODEL_MB" -gt 1000 ]; then FACTOR=500
+    else FACTOR=1000; fi
+    if [ "$BUDGET" -gt 0 ]; then START_CTX=$(( BUDGET * FACTOR ))
+    else START_CTX=$MIN_CTX; fi
+fi
+
 START_CTX=$(( (START_CTX / 1024) * 1024 ))
 [ "$START_CTX" -lt "$MIN_CTX" ] && START_CTX=$MIN_CTX
 [ "$START_CTX" -gt 4194304 ] && START_CTX=4194304
@@ -93,24 +118,17 @@ PAYLOAD
 # Helpers
 #==============================================================================
 
-gpu_mem_used() {
-    nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}'
-}
-
-kill_all() {
-    local before
-    before=$(gpu_mem_used 2>/dev/null || echo 0)
-    before=${before:-0}
-    pkill -9 -x llama-server 2>/dev/null || true
+# Shared cleanup — kills llama-server AND stale python/CUDA processes
+cleanup_gpu() {
+    if declare -f __gpu_clear_stale_processes &>/dev/null; then
+        pkill -9 -x llama-server 2>/dev/null || true
+        sleep 1
+        __gpu_clear_stale_processes
+    else
+        pkill -9 -x llama-server 2>/dev/null || true
+    fi
     local waited=0
-    while [ "$waited" -lt 15 ]; do
-        sleep 1; waited=$((waited + 1))
-        local after=$(gpu_mem_used 2>/dev/null || echo 0)
-        after=${after:-0}
-        [ "$after" -le "$before" ] && break
-    done
-    waited=0
-    while [ "$waited" -lt 10 ]; do
+    while [ "$waited" -lt 20 ]; do
         if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq '(^|:)8081$'; then return 0; fi
         sleep 1; waited=$((waited + 1))
     done
@@ -124,7 +142,7 @@ bench_once() {
     local c="$1" b="$2" u="$3"
     local tag="/tmp/at-vram-${MODEL}-${c}"
 
-    kill_all 2>/dev/null || { echo ""; return 1; }
+    cleanup_gpu 2>/dev/null || { echo ""; return 1; }
 
     if [ ! -f "$tag" ]; then
         local g=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
@@ -278,7 +296,6 @@ for combo in "${COMBOS[@]}"; do
         done
 
         # If first step-up OOM'd and TPS was marginal (< 25), skip binary probe.
-        # The working ctx IS the ceiling — probe would waste tests converging to same value.
         if [ "$hi" -gt 0 ] && [ "$(echo "$BEST_TPS < 25" | bc 2>/dev/null || echo "0")" = "1" ]; then
             echo "  (TPS marginal, no binary probe needed)" 
         else
@@ -326,7 +343,7 @@ if [ "$ANY_OK" = true ] && [ -n "$BEST_COMBO" ]; then
 fi
 
 
-kill_all >/dev/null 2>&1 || true
+cleanup_gpu >/dev/null 2>&1 || true
 echo ""
 
 if [ "$ANY_OK" = true ] && [ -n "$BEST_COMBO" ]; then
@@ -335,7 +352,9 @@ if [ "$ANY_OK" = true ] && [ -n "$BEST_COMBO" ]; then
     DURATION=$(( $(date +%s) - START_EPOCH ))
     printf '  time:    %s \u2192 %s  (%dm %ds)\n' "$START_TS" "$END_TS" $((DURATION/60)) $((DURATION%60))
     echo "  winner:  ctx=$(fmt $BEST_CTX)  batch=$(fmt $BEST_B)/$(fmt $BEST_U)  ${BEST_TPS} tps"
-    __llm_autotune_profile_save "$MODEL" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "1" "256" "$BEST_TPS" || echo "  warning: profile save failed"
+    if declare -f __llm_autotune_profile_save &>/dev/null; then
+        __llm_autotune_profile_save "$MODEL" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "1" "256" "$BEST_TPS" || echo "  warning: profile save failed"
+    fi
     grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s tps=%s autotuned=%s\n", $8, $10, $11, $17, $18}'
     echo ""
     echo "============================================="
