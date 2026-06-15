@@ -677,6 +677,23 @@ function __llm_autotune_verify_winner() {
 }
 
 # ---------------------------------------------------------------------------
+# __kv_mb_per_1k M-bM-^@M-^T Estimate KV cache cost per 1K tokens (G-5 audit).
+# Uses n_layers when available (from GGUF metadata), falls back to 12.0 MB/1K.
+# The old sqrt(model_mb)*0.08 heuristic was 8-48x too optimistic.
+# Reference: llama.cpp KV cache = (K_dtype + V_dtype) * n_embd_head * n_kv_heads * n_layers
+# For q8_0 K + f16 V with 128 head dim and 4 KV heads: ~0.5 MB/layer/1K
+# ---------------------------------------------------------------------------
+function __kv_mb_per_1k() {
+    local n_layers="${1:-0}"
+    [[ "$n_layers" =~ ^[0-9]+$ ]] || n_layers=0
+    if (( n_layers > 0 )); then
+        awk -v L="$n_layers" 'BEGIN{printf "%.2f", L * 0.5}'
+    else
+        echo "12.0"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # __llm_autotune_estimate_ctx_start — Estimate a useful initial ctx probe.
 # Uses saved ctx/TPS plus rough model-size and free-VRAM heuristics so autotune
 # starts near the likely throughput-stable range instead of a flat default.
@@ -759,16 +776,12 @@ function __llm_autotune_estimate_ctx_start() {
         # size minus a 20% safety reserve.
         local reserve_mb=0
         local kv_budget_mb=0
-        local kv_mb_per_1k=0
         reserve_mb=$(awk -v free="$free_vram_mb" 'BEGIN{printf "%d", free*0.20}')
         [[ "$reserve_mb" =~ ^[0-9]+$ ]] || reserve_mb=0
 
         kv_budget_mb=$(( free_vram_mb - model_mb - reserve_mb ))
-        # FIX (G-5 audit): Conservative fallback KV cost per 1K.
-        # Cache-only models (which reach this code path) use ~12 MB/1K
-        # minimum for 1B+ models, growing with model size.
-        kv_mb_per_1k=12.0
-        [[ "$kv_mb_per_1k" =~ ^[0-9]+(\.[0-9]+)?$ ]] || kv_mb_per_1k="12.0"
+        local kv_mb_per_1k
+        kv_mb_per_1k=$(__kv_mb_per_1k "${n_layers:-0}")
 
         if (( kv_budget_mb > 64 ))
         then
@@ -3508,11 +3521,7 @@ function __model_autotune_DEPRECATED() {
     # Trust the autotune-discovered ctx as-is on the low end.
         if (( kv_budget_mb > 64 && model_mb > 0 ))
         then
-            # FIX (G-5 audit): Conservative KV cost per 1K. The
-            # architecture-aware estimate in __llm_autotune_max_ctx_for_model
-            # applies the n_ctx_train cap upstream via max_ctx_for_start.
-            kv_mb_per_1k=12.0
-            [[ "$kv_mb_per_1k" =~ ^[0-9]+(\.[0-9]+)?$ ]] || kv_mb_per_1k="12.0"
+            kv_mb_per_1k=$(__kv_mb_per_1k "${n_layers:-0}")
             vram_start_ctx=$(awk -v b="$kv_budget_mb" -v k="$kv_mb_per_1k" 'BEGIN {
                 c = int((b / k) * 1000.0);
                 if (c < 512) c = 512;
