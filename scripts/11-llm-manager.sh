@@ -764,12 +764,11 @@ function __llm_autotune_estimate_ctx_start() {
         [[ "$reserve_mb" =~ ^[0-9]+$ ]] || reserve_mb=0
 
         kv_budget_mb=$(( free_vram_mb - model_mb - reserve_mb ))
-        kv_mb_per_1k=$(awk -v mb="$model_mb" 'BEGIN {
-            v = (sqrt(mb)) * 0.08;
-            if (v < 0.1) v = 0.1;
-            print v;
-        }')
-        [[ "$kv_mb_per_1k" =~ ^[0-9]+(\.[0-9]+)?$ ]] || kv_mb_per_1k="0.3"
+        # FIX (G-5 audit): Conservative fallback KV cost per 1K.
+        # Cache-only models (which reach this code path) use ~12 MB/1K
+        # minimum for 1B+ models, growing with model size.
+        kv_mb_per_1k=12.0
+        [[ "$kv_mb_per_1k" =~ ^[0-9]+(\.[0-9]+)?$ ]] || kv_mb_per_1k="12.0"
 
         if (( kv_budget_mb > 64 ))
         then
@@ -3509,12 +3508,11 @@ function __model_autotune_DEPRECATED() {
     # Trust the autotune-discovered ctx as-is on the low end.
         if (( kv_budget_mb > 64 && model_mb > 0 ))
         then
-            kv_mb_per_1k=$(awk -v mb="$model_mb" 'BEGIN {
-                v = sqrt(mb) * 0.08;
-                if (v < 0.1) v = 0.1;
-                print v;
-            }')
-            [[ "$kv_mb_per_1k" =~ ^[0-9]+(\.[0-9]+)?$ ]] || kv_mb_per_1k="0.3"
+            # FIX (G-5 audit): Conservative KV cost per 1K. The
+            # architecture-aware estimate in __llm_autotune_max_ctx_for_model
+            # applies the n_ctx_train cap upstream via max_ctx_for_start.
+            kv_mb_per_1k=12.0
+            [[ "$kv_mb_per_1k" =~ ^[0-9]+(\.[0-9]+)?$ ]] || kv_mb_per_1k="12.0"
             vram_start_ctx=$(awk -v b="$kv_budget_mb" -v k="$kv_mb_per_1k" 'BEGIN {
                 c = int((b / k) * 1000.0);
                 if (c < 512) c = 512;
