@@ -68,10 +68,25 @@ function __save_model_ctx() {
     [[ "$model_num" =~ ^[0-9]+$ && "$ctx_val" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
-    # Trust the autotune-discovered ctx as-is. The binary search already finds
-    # the maximum VRAM-stable context — no floor needed. A small ctx means the
-    # model genuinely cannot run larger on available hardware.
+    # Safety cap: never exceed the model's native training context length.
+    # The autotune binary search should already cap at n_ctx_train via
+    # estimated_max_ctx, but be defensive in the write path (G-5 audit).
     local saved="$ctx_val"
+    local _gguf_file _model_meta _n_ctx_train
+    _gguf_file=$(awk -F'|' -v n="$model_num" 'NR>1 && $1 == n {print $3}' "$LLM_REGISTRY" 2>/dev/null | head -1)
+    if [[ -n "$_gguf_file" ]] && [[ -f "$LLAMA_MODEL_DIR/$_gguf_file" ]]; then
+        _model_meta=$(__gguf_metadata "$LLAMA_MODEL_DIR/$_gguf_file" 2>/dev/null || true)
+        if [[ -n "$_model_meta" ]]; then
+            _n_ctx_train=$(echo "$_model_meta" | cut -d'|' -f4)
+            if [[ "$_n_ctx_train" =~ ^[0-9]+$ ]] && (( _n_ctx_train > 0 && saved > _n_ctx_train )); then
+                local _old="$saved"
+                saved=$(( (_n_ctx_train / 512) * 512 ))
+                __tac_status "Ctx Cap" "saved ctx=$_old capped to n_ctx_train=$_n_ctx_train" "$C_Warning"
+            fi
+        fi
+    fi
+
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     awk -F'|' -v n="$model_num" -v c="$saved" 'BEGIN{OFS="|"} $1 == n {$8 = c} {print}' \
         "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" \
@@ -88,11 +103,13 @@ function __require_llm() {
         printf '%s\n' "${C_Error}[jq missing]${C_Reset} Install: sudo apt install -y jq"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if ! __test_port "$LLM_PORT" >/dev/null 2>&1
     then
         __tac_info "Llama Server" "[OFFLINE]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     return 0
 }
 
@@ -118,6 +135,7 @@ function __tac_cleanup_stale_locks() {
         then
             _c_live_model_shells+=("$_c_ms_pid")
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     done
 
     # bench lock + pid — also check custom paths used by non-default configs
@@ -135,6 +153,7 @@ function __tac_cleanup_stale_locks() {
             then
                 rm -f "$_c_lock"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         else
             # shellcheck disable=SC2188
             _c_pid=$(<"$_c_lock" 2>/dev/null || true)
@@ -142,7 +161,9 @@ function __tac_cleanup_stale_locks() {
             then
                 rm -f "$_c_lock"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     done
 
     # bench PID file — check custom path too
@@ -158,7 +179,9 @@ function __tac_cleanup_stale_locks() {
         else
             _c_bench_active=1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Bench lock ownership is cooperative: the lock file stores owner PID.
     # Treat bench as active only when that owner PID is alive. An orphaned
@@ -173,7 +196,9 @@ function __tac_cleanup_stale_locks() {
         then
             _c_bench_active=1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # orphaned stdin keepers
     _c_my_pid=$$
@@ -191,7 +216,9 @@ function __tac_cleanup_stale_locks() {
             then
                 kill -TERM "$_c_sp" 2>/dev/null || true
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     done
 
     # orphaned bench timeout wrappers (left behind after interrupted runs)
@@ -210,8 +237,10 @@ function __tac_cleanup_stale_locks() {
                 sleep 1
                 kill -KILL "$_c_bp" 2>/dev/null || true
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         done
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # orphaned keeper PID files
     for _c_kf in /tmp/llm-keeper.*.pid
@@ -236,8 +265,11 @@ function __tac_cleanup_stale_locks() {
                     # model-stop flows still have the right target.
                     _c_remove_kf=0
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         (( _c_remove_kf == 1 )) && rm -f "$_c_kf"
     done
 
@@ -255,6 +287,7 @@ function __tac_cleanup_stale_locks() {
         then
             kill -TERM "$_c_sp" 2>/dev/null || true
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     done < <(pgrep -af 'sleep 3600' 2>/dev/null || true)
 
     return 0
@@ -347,12 +380,14 @@ function __llm_registry_sync_state() {
     then
         running=1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -f "$ACTIVE_LLM_FILE" ]]
     then
         active_num=$(< "$ACTIVE_LLM_FILE")
         active_file=$(awk -F'|' -v n="$active_num" '$1==n {print $3; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     awk -F'|' -v def="$default_file" -v af="$active_file" -v run="$running" 'BEGIN{OFS="|"}
         $1 == "#" {
@@ -457,10 +492,12 @@ function __llm_autotune_blob_upsert() {
         then
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -n "$out" ]]
         then
             out+=";"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         out+="$rec"
     done
 
@@ -469,6 +506,7 @@ function __llm_autotune_blob_upsert() {
     then
         out+=";"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     out+="$new_entry"
     printf '%s\n' "$out"
 }
@@ -501,6 +539,7 @@ function __llm_autotune_done_for_model() {
     then
         requested_backend=$(__llm_backend_normalize "$requested_backend")
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Awk exits 0 if the entry exists AND autotuned=yes for the requested
     # backend, 1 if not found or not yet tuned for that runtime.
@@ -615,12 +654,14 @@ function __llm_autotune_verify_winner() {
         __model_stop >/dev/null 2>&1 || true
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if ! burn >"$verify_log" 2>&1
     then
         __model_stop >/dev/null 2>&1 || true
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local verify_tps
     verify_tps=$(sed -n 's/.*Burn complete: \([0-9][0-9]*\(\.[0-9][0-9]*\)\?\) tps.*/\1/p' "$verify_log" | tail -n1)
@@ -631,6 +672,7 @@ function __llm_autotune_verify_winner() {
         printf '%s' "$verify_tps"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     return 1
 }
 
@@ -680,6 +722,7 @@ function __llm_autotune_estimate_ctx_start() {
         estimate=12288
         model_baseline_ctx=12288
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Saved ctx should not drag the starting point downward when stale.
     # Use it only to raise the baseline unless we also have saved TPS, where
@@ -688,6 +731,7 @@ function __llm_autotune_estimate_ctx_start() {
     then
         estimate="$saved_ctx"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ "$saved_ctx" =~ ^[0-9]+$ ]] && [[ "$saved_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$min_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v m="$min_tps" 'BEGIN{exit !(m>0)}'
     then
@@ -700,6 +744,7 @@ function __llm_autotune_estimate_ctx_start() {
         }')
         [[ "$scaled_estimate" =~ ^[0-9]+$ ]] && estimate="$scaled_estimate"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Dynamic start floor: estimate from model class and live free VRAM.
     # Optional override is supported via LLM_AUTOTUNE_START_FLOOR_CTX.
@@ -734,6 +779,7 @@ function __llm_autotune_estimate_ctx_start() {
                 print c;
             }')
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         [[ "$dynamic_start_floor" =~ ^[0-9]+$ ]] || dynamic_start_floor="$model_baseline_ctx"
     elif (( model_bytes >= 1800000000 && max_ctx > 0 ))
     then
@@ -747,6 +793,7 @@ function __llm_autotune_estimate_ctx_start() {
         }')
         [[ "$dynamic_start_floor" =~ ^[0-9]+$ ]] || dynamic_start_floor="$model_baseline_ctx"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     (( dynamic_start_floor > max_ctx )) && dynamic_start_floor="$max_ctx"
     dynamic_start_floor=$(( (dynamic_start_floor / 512) * 512 ))
     (( dynamic_start_floor < model_baseline_ctx )) && dynamic_start_floor="$model_baseline_ctx"
@@ -754,6 +801,7 @@ function __llm_autotune_estimate_ctx_start() {
     then
         estimate="$dynamic_start_floor"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Keep probe starts practical for the model class. Phase 1 now grows until
     # first failure and backs off, so starting too low only wastes time.
@@ -978,11 +1026,13 @@ function __llm_is_healthy() {
     then
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     models_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$LLM_PORT/v1/models" 2>/dev/null || true)
     if [[ "$models_body" == *'"data"'* ]]
     then
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Some OpenAI-compatible variants return object=list first; accept that
     # as a readiness signal when the process is bound and responding.
@@ -1002,6 +1052,7 @@ function __llm_server_running() {
     else
         pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 }
 
 function __llm_server_stop() {
@@ -1024,6 +1075,7 @@ function __llm_server_stop() {
     else
         _pg_out=$(pgrep -f "$_proc_re" 2>/dev/null || true)
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     while IFS= read -r _pid
     do
         [[ -z "$_pid" ]] && continue
@@ -1035,11 +1087,13 @@ function __llm_server_stop() {
     then
         _pids+=("$_llm_pid")
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if (( ${#_pids[@]} == 0 ))
     then
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     for _pid in "${_pids[@]}"
     do
@@ -1056,6 +1110,7 @@ function __llm_server_stop() {
         else
             _pg_out=$(pgrep -f "$_proc_re" 2>/dev/null || true)
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         while IFS= read -r _pid
         do
             [[ -z "$_pid" ]] && continue
@@ -1101,7 +1156,9 @@ function __llm_server_stop() {
                 _mem_waited=$(( _mem_waited + 1 ))
             done
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     sleep 0.5
 
     return 0
@@ -1128,6 +1185,7 @@ function __llm_python_bin_resolve() {
         else
             resolved=$(command -v "$cand" 2>/dev/null || true)
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         [[ -z "$resolved" ]] && continue
 
         if "$resolved" - <<'PY' >/dev/null 2>&1
@@ -1144,6 +1202,7 @@ PY
             printf '%s\n' "$resolved"
             return 0
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     done
 
     return 1
@@ -1166,6 +1225,7 @@ function __llm_type_k_value() {
             else
                 echo 8
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             ;;
     esac
 }
@@ -1185,6 +1245,7 @@ function __llm_health_timeout() {
     then
         size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if (( gpu_layers == _GPU_OFFLOAD_DISABLED ))
     then
@@ -1202,11 +1263,13 @@ function __llm_health_timeout() {
     then
         timeout=120
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -n "${__BENCH_MODE:-}" && $timeout -lt 80 ]]
     then
         timeout=80
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     printf '%s\n' "$timeout"
 }
@@ -1231,6 +1294,7 @@ function __llm_burn_request_timeout() {
     else
         timeout="${LLM_BURN_REQUEST_TIMEOUT:-360}"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # If the caller explicitly set LLM_BURN_REQUEST_TIMEOUT (not defaulted),
     # respect it unconditionally — no model-size floor. This allows autotune
@@ -1242,6 +1306,7 @@ function __llm_burn_request_timeout() {
         then
             size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         if (( gpu_layers == _GPU_OFFLOAD_DISABLED ))
         then
@@ -1259,7 +1324,9 @@ function __llm_burn_request_timeout() {
         then
             (( timeout < 480 )) && timeout=480
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     printf '%s\n' "$timeout"
 }
@@ -1277,6 +1344,7 @@ function __llm_gpu_clock_snapshot() {
         printf '%s\n' "unavailable"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local sample
     sample=$(
@@ -1288,6 +1356,7 @@ function __llm_gpu_clock_snapshot() {
         printf '%s\n' "unavailable"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local pstate gr sm mem util
     IFS=',' read -r pstate gr sm mem util <<< "$sample"
@@ -1330,7 +1399,9 @@ function __llm_bench_perf_prep() {
             _pwr=$(printf '%s' "$_pwr" | xargs)
             _gpu_line="$_pstate  ${_gr}/${_sm}/${_mem} MHz  ${_temp}°C  ${_pwr}W ✓"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     [[ -z "$_gpu_line" ]] && _gpu_line="GPU info unavailable"
     printf "${C_Dim}  %s${C_Reset}\n" "$_gpu_line"
     __tac_footer
@@ -1353,6 +1424,7 @@ function __llm_wait_for_health() {
     then
         printf '%s' "${C_Dim}${label}${C_Reset}"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     for (( _elapsed_ref=0; _elapsed_ref < timeout; _elapsed_ref++ ))
     do
@@ -1361,6 +1433,7 @@ function __llm_wait_for_health() {
             [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
             return 0
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         [[ "$progress_mode" == "dots" ]] && printf '.'
         sleep 1
     done
@@ -1377,10 +1450,12 @@ function __llm_wait_for_health() {
                 [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
                 return 0
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             [[ "$progress_mode" == "dots" ]] && printf '+'
             sleep 1
         done
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
     return 1
@@ -1397,6 +1472,7 @@ function __llm_quant_rating() {
         printf '%s\n' "unknown"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local rating="unknown"
     local _r _pat _desc
@@ -1408,6 +1484,7 @@ function __llm_quant_rating() {
             rating="$_r"
             break
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     done < "$QUANT_GUIDE"
     printf '%s\n' "$rating"
 }
@@ -1426,6 +1503,7 @@ function __llm_tps_number() {
     else
         printf '%s\n' "0"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 }
 
 # ---------------------------------------------------------------------------
@@ -1451,6 +1529,7 @@ function wake() {
         # NVML unavailable (WSL2/driver limitation) — GPU still works for inference
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Check for actual failure (sudo denied or other error)
     if (( _pm_status != 0 ))
@@ -1461,8 +1540,10 @@ function wake() {
         else
             __tac_info "GPU Persistence" "[FAILED - nvidia-smi error: $_pm_output]" "$C_Warning"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_info "GPU Persistence" "[ENABLED]" "$C_Success"
 
@@ -1479,6 +1560,7 @@ function wake() {
         __tac_info "VRAM" "${g_used} MiB / ${g_total} MiB" "$C_Text"
         __tac_info "Temp" "${g_temp}${DEGREE}C" "$C_Text"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     printf '%s\n' "${C_Dim}Note: -pm 1 does not survive WSL restarts. Re-run 'wake' after reboot.${C_Reset}"
 }
 
@@ -1505,6 +1587,7 @@ function gpu-status() {
         then
             util_n=0
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         local color
         color=$(__threshold_color "$util_n")
 
@@ -1525,6 +1608,7 @@ function gpu-status() {
     else
         __tac_info "Persist" "OFF (run 'wake' to enable)" "$C_Warning"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __tac_footer
 }
 
@@ -1546,6 +1630,7 @@ function gpu-check() {
         __tac_info "Tip" "In WSL run: nvidia-smi  (if this fails, CUDA is unavailable)" "$C_Dim"
         __tac_footer; return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __tac_info "nvidia-smi" "OK" "$C_Success"
 
     # 2. CUDA device visible?
@@ -1556,6 +1641,7 @@ function gpu-check() {
         __tac_info "CUDA Device" "NONE DETECTED" "$C_Error"
         __tac_footer; return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __tac_info "CUDA Device" "$gpu_name" "$C_Success"
 
     # 3. VRAM status
@@ -1568,6 +1654,7 @@ function gpu-check() {
         used="${used// /}"; total="${total// /}"
         __tac_info "VRAM" "${used} MiB / ${total} MiB" "$C_Text"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # 4. llama-server CUDA offload (check the runtime log)
     if __llm_server_running && [[ -f "$LLM_LOG_FILE" ]]
@@ -1583,6 +1670,7 @@ function gpu-check() {
         then
             __tac_info "CUDA Init" "${cuda_line##*: }" "$C_Success"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -n "$offload_line" ]]
         then
             __tac_info "Offload" "${offload_line##*: }" "$C_Success"
@@ -1592,9 +1680,11 @@ function gpu-check() {
         else
             __tac_info "Offload" "No CUDA references in log - may be CPU-only build" "$C_Error"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     else
         __tac_info "Server" "Not running - start a model to verify offloading" "$C_Dim"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_footer
 }
@@ -1768,6 +1858,7 @@ function __calc_gpu_layers() {
         echo "${_total_layers:-0}"
         return
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Full offload when the model fits in usable VRAM, otherwise CPU-only.
     if (( _file_bytes <= usable_vram ))
@@ -1776,6 +1867,7 @@ function __calc_gpu_layers() {
     else
         echo 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 }
 
 # __calc_ctx_size — Pick a practical context size.
@@ -1789,6 +1881,7 @@ function __calc_ctx_size() {
         echo "$MOE_DEFAULT_CTX"
         return
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # CPU-only mode (model exceeds VRAM threshold): cap to MOE_DEFAULT_CTX.
     if (( _file_bytes > VRAM_TOTAL_BYTES * VRAM_THRESHOLD_PCT / 100 ))
@@ -1802,7 +1895,9 @@ function __calc_ctx_size() {
         else
             echo "$MOE_DEFAULT_CTX"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 }
 
 # ---------------------------------------------------------------------------
@@ -1818,10 +1913,12 @@ function __bench_resolve_files() {
         printf '%s|%s\n' "$1" "$2"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if (( $# != 0 ))
     then
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local latest_files=()
     while IFS= read -r bench_file
@@ -1834,6 +1931,7 @@ function __bench_resolve_files() {
     then
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # newest first from ls -t; diff should read old -> new
     printf '%s|%s\n' "${latest_files[1]}" "${latest_files[0]}"
@@ -1867,6 +1965,7 @@ function __calc_threads() {
     else
         pct=70
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local threads=$(( ncpu * pct / 100 ))
     (( threads < 1 )) && threads=1
@@ -1901,6 +2000,7 @@ function __quant_label() {
             | tr '[:lower:]' '[:upper:]')
         [[ -n "$extracted" ]] && label="$extracted"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     echo "${label:-unknown}"
 }
 
@@ -1949,6 +2049,7 @@ function __model_scan() {
             "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Before scanning, count how many autotuned rows exist. If any will be
     # lost by a fresh scan, warn the user so 3 days of tuning data is not
@@ -1961,7 +2062,9 @@ function __model_scan() {
         then
             __tac_info "Note" "[$_autotuned_count models with autotuned data — remapped from previous scan]" "$C_Dim"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_info "Scanning" "$LLAMA_MODEL_DIR" "$C_Highlight"
     local tmpconf="${LLM_REGISTRY}.tmp"
@@ -1974,6 +2077,7 @@ function __model_scan() {
             return 1
         }
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram" > "$tmpconf"
 
     local num=0
@@ -2025,7 +2129,9 @@ function __model_scan() {
                 IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_flash_attn prev_tps prev_autotuned prev_default prev_active <<< "$prev_row"
                 [[ -z "${prev_flash_attn:-}" ]] && prev_flash_attn="on"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         local quant_cache="${quant}/${LLAMA_CACHE_TYPE_K:-q8_0}"
 
@@ -2042,6 +2148,7 @@ function __model_scan() {
         rm -f "$tmpconf"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_info "Found" "${num} models" "$C_Success"
     mv "$tmpconf" "$LLM_REGISTRY"
@@ -2050,6 +2157,7 @@ function __model_scan() {
         __llm_autotune_profiles_remap_by_registry "$old_registry_snapshot" "$LLM_REGISTRY" >/dev/null 2>&1 || true
         rm -f "$old_registry_snapshot"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __tac_info "Registry" "[${num} models written to $LLM_REGISTRY]" "$C_Success"
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
@@ -2074,11 +2182,13 @@ function __model_scan() {
                     _qrating="$_r"
                     break
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             done < "$QUANT_GUIDE"
             if [[ "$_qrating" == "discouraged" ]]
             then
                 to_archive+=("${_qnum}|${_qfile}|${_qqcache}")
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         done < "$LLM_REGISTRY"
 
         local _ae
@@ -2095,7 +2205,9 @@ function __model_scan() {
                     __tac_info "Archived" "#${_anum} ${_aname} (${_aqunt} - discouraged)" "$C_Warning"
                     ((archived++))
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         done
 
         if (( archived > 0 ))
@@ -2117,7 +2229,9 @@ function __model_scan() {
             mv "$clean_tmp" "$LLM_REGISTRY"
             __tac_info "Registry" "[Renumbered - ${new_num} models remain]" "$C_Success"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __model_list
 }
@@ -2142,8 +2256,10 @@ function __model_list() {
         else
             __tac_info "Registry" "[Not found - run 'model scan' first]" "$C_Warning"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
@@ -2186,6 +2302,7 @@ function __model_list() {
             "$((d_avail_bytes / 1024 / 1024 / 1024))" "$d_pct_n"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ "$output_mode" == "plain" ]]
     then
@@ -2200,6 +2317,7 @@ function __model_list() {
         done < "$LLM_REGISTRY"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Human-readable output — compute column widths dynamically
     local _col_spec="%4s %28s %5s %9s %7s %4s %7s %4s %4s %4s %4s %4s %7s %4s %5s %5s %5s %4s %4s %11s"
@@ -2227,6 +2345,7 @@ function __model_list() {
             marker="* "
             color="$C_Highlight"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         printf "${color}${marker}${_col_spec}${C_Reset}\n" \
             "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${flash_attn:-on}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}"
     done < "$LLM_REGISTRY"
@@ -2278,18 +2397,22 @@ function __model_default() {
             else
                 __tac_info "Default Model" "[$def_file (Not found in registry)]" "$C_Warning"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         else
             __tac_info "Default Model" "[NONE SET]" "$C_Dim"
             printf '%s\n' "  ${C_Dim}Run 'model default <N>' to set one.${C_Reset}"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ ! "$target" =~ ^[0-9]+$ ]]
     then
         __tac_info "Error" "[Not a number: '$target']" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local entry
     entry=$(__llm_registry_entry_by_num "$target")
@@ -2298,6 +2421,7 @@ function __model_default() {
         __tac_info "Error" "[Model #$target not found in registry]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local _n name file _rest
     IFS='|' read -r _n name file _rest <<< "$entry"
@@ -2326,6 +2450,7 @@ function __model_use() {
                 "$C_Error"
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         target=$(__llm_default_number 2>/dev/null || true)
         if [[ -z "$target" ]]
         then
@@ -2334,14 +2459,17 @@ function __model_use() {
                 "$C_Error"
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         __tac_info "Default" "[Using default model #${target}]" "$C_Dim"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ ! "$target" =~ ^[0-9]+$ ]]
     then
         __tac_info "Error" "[Not a number: '$target']" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local entry
     entry=$(__llm_registry_entry_by_num "$target")
     if [[ -z "$entry" ]]
@@ -2349,6 +2477,7 @@ function __model_use() {
         __tac_info "Error" "[Model #$target not in registry - run 'model scan']" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram
     IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram <<< "$entry"
@@ -2364,7 +2493,9 @@ function __model_use() {
         else
             __tac_info "Context" "[Invalid override '$TAC_CTX_SIZE' — using registry value $ctx]" "$C_Warning"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local model_path="$LLAMA_MODEL_DIR/$file"
     local model_bytes=0
@@ -2385,6 +2516,7 @@ function __model_use() {
             local download_prompt="Would you like to download model #$target ($name)? [y/N]: "
             read -r -e -p "$download_prompt" confirm
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]
         then
@@ -2397,12 +2529,15 @@ function __model_use() {
                 then
                     read -r -e -p "Continue? [y/N]: " confirm_large
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 if [[ "${confirm_large,,}" != "y" && "${confirm_large,,}" != "yes" ]]
                 then
                     __tac_info "Download" "[CANCELLED]" "$C_Dim"
                     return 1
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
             # Attempt download
             __tac_info "Download" "[STARTING - $name ($size)]" "$C_Dim"
@@ -2415,17 +2550,21 @@ function __model_use() {
                     __tac_info "Error" "[Download completed but file not found]" "$C_Error"
                     return 1
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             else
                 __tac_info "Download" "[FAILED]" "$C_Error"
                 __tac_info "Hint" "Run 'model download $file' manually" "$C_Dim"
                 return 1
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         else
             __tac_info "Download" "[CANCELLED]" "$C_Dim"
             __tac_info "Hint" "Run 'model download $file' to download manually" "$C_Dim"
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     model_bytes=$(stat --format=%s "$model_path" 2>/dev/null || echo 0)
     local quant_rating
@@ -2455,6 +2594,7 @@ function __model_use() {
             __tac_info "Install" "[CMAKE_ARGS='-DGGML_CUDA=on' FORCE_CMAKE=1 pip install 'llama-cpp-python[server]==${LLAMA_CPP_PYTHON_VERSION}']" "$C_Dim"
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         LLM_SERVER_PYTHON_BIN="$python_bin"
     else
         if [[ ! -x "$LLAMA_SERVER_BIN" ]]
@@ -2462,7 +2602,9 @@ function __model_use() {
             __tac_info "Error" "[Native llama-server binary not found: $LLAMA_SERVER_BIN]" "$C_Error"
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Prefer per-model registry values from model scan; fall back to global defaults.
     [[ "$threads" =~ ^[0-9]+$ ]] || threads="${LLAMA_CPU_THREADS:-6}"
@@ -2470,6 +2612,7 @@ function __model_use() {
     then
         [[ "$ctx" =~ ^[0-9]+$ ]] || ctx="${LLAMA_CTX_SIZE:-4096}"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local smi_cmd
     smi_cmd=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$smi_cmd" ]]
@@ -2482,9 +2625,11 @@ function __model_use() {
         then
             gpu_layers="${LLM_GPU_LAYERS}"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     else
         gpu_layers=0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Quant-guide-aware launch tuning for 4GB VRAM systems.
     # Recommended quants can use the scanned/default layer target; larger
@@ -2500,15 +2645,18 @@ function __model_use() {
                 then
                     (( gpu_layers > 12 )) && gpu_layers=12
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 ;;
             acceptable)
                 if (( model_bytes >= 2600000000 ))
                 then
                     (( gpu_layers > 20 )) && gpu_layers=20
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 ;;
         esac
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __llm_server_stop
     sleep 1
@@ -2527,32 +2675,39 @@ function __model_use() {
                 | head -1 | tr -d ' '
             )
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
 
         :
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ "${LLAMA_BATCH_SIZE:-}" =~ ^[0-9]+$ ]] && (( LLAMA_BATCH_SIZE > 0 ))
     then
         batch_size="$LLAMA_BATCH_SIZE"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if [[ "${LLAMA_UBATCH_SIZE:-}" =~ ^[0-9]+$ ]] && (( LLAMA_UBATCH_SIZE > 0 ))
     then
         ubatch_size="$LLAMA_UBATCH_SIZE"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if (( ubatch_size > batch_size ))
     then
         ubatch_size="$batch_size"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if [[ "${LLAMA_PARALLEL_SLOTS:-}" =~ ^[0-9]+$ ]] && (( LLAMA_PARALLEL_SLOTS > 0 ))
     then
         parallel_slots="$LLAMA_PARALLEL_SLOTS"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if (( ubatch_size > batch_size ))
     then
         ubatch_size="$batch_size"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local type_k_val
     type_k_val=$(__llm_type_k_value)
@@ -2565,6 +2720,7 @@ function __model_use() {
         then
             fit_target_mb=1024
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         local flash_attn_mode="auto"
         local _flash_attn_setting="${LLAMA_FLASH_ATTN:-${row_flash_attn:-true}}"
@@ -2591,6 +2747,7 @@ function __model_use() {
         else
             cmd+=("--fit" "on" "--fit-target" "$fit_target_mb")
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         cmd+=("--flash-attn" "$flash_attn_mode")
         cmd+=("$kv_offload_flag")
         cmd+=("--cache-type-k" "${LLAMA_CACHE_TYPE_K:-q8_0}")
@@ -2606,6 +2763,7 @@ function __model_use() {
         cmd+=("--offload_kqv" "${LLAMA_OFFLOAD_KQV:-true}")
         cmd+=("--type_k" "$type_k_val")
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Adaptive memory-mapping behavior (video-inspired stability tuning).
     # --no-mmap can reduce page-fault stalls and mmap-related thrashing,
@@ -2634,6 +2792,7 @@ function __model_use() {
             then
                 use_no_mmap=1
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             ;;
     esac
 
@@ -2645,7 +2804,9 @@ function __model_use() {
         else
             cmd+=("--use_mmap" "false")
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local ngl_label="CPU-only"
     (( gpu_layers > 0 )) && ngl_label="ngl=${gpu_layers}"
@@ -2658,6 +2819,7 @@ function __model_use() {
         __tac_info "Starting" "$start_msg" "$C_Highlight"
         __tac_info "Backend" "[$llm_backend]" "$C_Dim"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -n "${__BENCH_MODE:-}" ]]
     then
@@ -2668,6 +2830,7 @@ function __model_use() {
         else
             _bench_vram_label="unknown"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         _bench_clock_info=$(__llm_gpu_clock_snapshot)
         # Show tuned params in bench mode to confirm what's running.
         local _fit_label="fit:${fit_target_mb}"
@@ -2678,9 +2841,11 @@ function __model_use() {
         else
             _autotuned_label="defaults"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         printf "Using %s params: ctx %s  b %s/%s  p %s  ngl %s  %s\n" \
             "$_autotuned_label" "$ctx" "$batch_size" "$ubatch_size" "$parallel_slots" "$gpu_layers" "$_fit_label"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # llama.cpp monitors stdin and will force-shutdown on EOF.
     # We keep stdin open via a FIFO and a dedicated keeper process, then
@@ -2697,6 +2862,7 @@ function __model_use() {
             if [[ "$_lfdnum" =~ ^[0-9]+$ ]] && [[ "$_lfdnum" -ge 10 ]]; then
                 eval "exec ${_lfdnum}>&-" 2>/dev/null || true
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         done 2>/dev/null
 
         # Clean up orphan FIFOs and keepers from any previous llama-server
@@ -2717,6 +2883,7 @@ function __model_use() {
             __tac_info "Status" "FAILED OR TIMEOUT - could not allocate stdin fifo directory" "$C_Error"
             exit 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         local stdin_fifo="$stdin_fifo_dir/stdin"
         if ! mkfifo "$stdin_fifo" 2>/dev/null
         then
@@ -2724,6 +2891,7 @@ function __model_use() {
             __tac_info "Status" "FAILED OR TIMEOUT - could not create stdin fifo" "$C_Error"
             exit 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         # Open FIFO writer and keep it alive without producing data.
         # The keeper writes its PID to a file so __model_stop can kill it
@@ -2756,6 +2924,7 @@ function __model_use() {
         then
             bench_cleanup_spawned_pids+=("$stdin_keeper_pid")
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         nohup "${cmd[@]}" <"$stdin_fifo" >"$LLM_LOG_FILE" 2>&1
         local server_rc=$?
@@ -2776,6 +2945,7 @@ function __model_use() {
     then
         __tac_info "Warning" "[Could not save state]" "$C_Warning"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local health_timeout
     health_timeout=$(__llm_health_timeout "$size" "$gpu_layers" "$name")
@@ -2808,7 +2978,9 @@ function __model_use() {
                     [[ "$_pf_rc" == "200" ]] && break
                 done
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         [[ -n "${__BENCH_MODE:-}" ]] || __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
         local offload_info
         offload_info=$(grep -oiE 'offload(ing|ed) [0-9]+ .* layers' "$LLM_LOG_FILE" 2>/dev/null | tail -1)
@@ -2816,8 +2988,10 @@ function __model_use() {
         then
             __tac_info "GPU Offload" "[$offload_info]" "$C_Dim"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Failed startup must not leave a lingering server process.
     __llm_server_stop
@@ -2849,6 +3023,7 @@ function __model_autotune_DEPRECATED() {
         __model_autotune_help
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local target="${1:-}"
     shift 1 2>/dev/null || true
@@ -2871,11 +3046,13 @@ function __model_autotune_DEPRECATED() {
         else
             trap - INT
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -n "$__autotune_prev_term_trap" ]]; then
             eval "$__autotune_prev_term_trap"
         else
             trap - TERM
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     }
     __autotune_unlock() {
         # Release the lock fd if it was opened. lock_fd is a local variable
@@ -2888,6 +3065,7 @@ function __model_autotune_DEPRECATED() {
             exec {_lock_fd}>&- 2>/dev/null || true
             rm -f "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     }
     __autotune_fail() {
         __autotune_unlock
@@ -2898,6 +3076,7 @@ function __model_autotune_DEPRECATED() {
         else
             trap - EXIT
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         unset -f __autotune_restore_traps __autotune_fail __autotune_unlock 2>/dev/null || true
     }
 
@@ -2922,6 +3101,7 @@ function __model_autotune_DEPRECATED() {
                     __autotune_fail
                     return 1
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 backend_raw="$2"
                 shift 2
                 ;;
@@ -2932,6 +3112,7 @@ function __model_autotune_DEPRECATED() {
                     __autotune_fail
                     return 1
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 tune_ctx="$2"
                 shift 2
                 ;;
@@ -2942,6 +3123,7 @@ function __model_autotune_DEPRECATED() {
                     __autotune_fail
                     return 1
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 trials="$2"
                 shift 2
                 ;;
@@ -2957,12 +3139,14 @@ function __model_autotune_DEPRECATED() {
     then
         target=$(__llm_default_number 2>/dev/null || true)
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if [[ -z "$target" || ! "$target" =~ ^[0-9]+$ ]]
     then
         __tac_info "Autotune" "[Specify model number: model autotune <N>]" "$C_Error"
         __autotune_fail
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local entry
     entry=$(__llm_registry_entry_by_num "$target")
@@ -2972,6 +3156,7 @@ function __model_autotune_DEPRECATED() {
         __autotune_fail
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
     IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram <<< "$entry"
@@ -2997,12 +3182,14 @@ function __model_autotune_DEPRECATED() {
         __autotune_fail
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if [[ ! "$trials" =~ ^[0-9]+$ ]] || (( trials < 1 ))
     then
         __tac_info "Autotune" "[Invalid --trials '$trials']" "$C_Error"
         __autotune_fail
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Serialize autotune runs to avoid overlapping server/curl trials.
     local lock_fd=""
@@ -3027,12 +3214,14 @@ function __model_autotune_DEPRECATED() {
             __autotune_fail
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         echo "$$" > "$lock_file"
         __autotune_lock_owned=1
     elif [[ "${LLM_AUTOTUNE_SKIP_LOCK:-0}" == "1" ]]
     then
         __tac_info "Autotune" "[Lock skipped by caller]" "$C_Dim"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Register an EXIT trap that mirrors the signal cleanup path. If the shell
     # exits unexpectedly after a probe launched, release the lock and stop any
@@ -3085,6 +3274,7 @@ function __model_autotune_DEPRECATED() {
             then
                 max_ctx_by_rating="${LLM_AUTOTUNE_MAX_CTX_DISCOURAGED:-4096}"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             max_ubatch_by_rating="${LLM_AUTOTUNE_MAX_UBATCH_DISCOURAGED:-512}"
             allow_parallel_two=0
             ;;
@@ -3093,6 +3283,7 @@ function __model_autotune_DEPRECATED() {
             then
                 max_ctx_by_rating="${LLM_AUTOTUNE_MAX_CTX_ACCEPTABLE:-8192}"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             ;;
     esac
     [[ "$max_ctx_by_rating" =~ ^[0-9]+$ ]] || max_ctx_by_rating=""
@@ -3113,6 +3304,7 @@ function __model_autotune_DEPRECATED() {
     then
         combos=("${batch}:${ubatch}:${parallel}:${fit_target_mb}" "${combos[@]}")
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # -----------------------------------------------------------------------
     # VRAM-aware context upper bound estimation.
@@ -3142,6 +3334,7 @@ function __model_autotune_DEPRECATED() {
         free_vram_mb=$("$smi_cmd" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         total_vram_mb=$("$smi_cmd" --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
     [[ "$total_vram_mb" =~ ^[0-9]+$ ]] || total_vram_mb=0
 
@@ -3149,7 +3342,20 @@ function __model_autotune_DEPRECATED() {
     model_bytes=$(stat --format=%s "$LLAMA_MODEL_DIR/$file" 2>/dev/null || echo 0)
     local model_mb=$(( model_bytes / 1048576 ))
 
-    # Compute VRAM-aware ctx upper bound.
+    # Read GGUF metadata to get native context length and block count.
+    local gguf_meta n_layers=0 n_ctx_train=0 gguf_arch=""
+    gguf_meta=$(__gguf_metadata "$LLAMA_MODEL_DIR/$file" 2>/dev/null || true)
+    if [[ -n "$gguf_meta" ]]; then
+        # Output format: name|architecture|block_count|context_length|file_type
+        gguf_arch=$(echo "$gguf_meta" | cut -d'|' -f2)
+        n_layers=$(echo "$gguf_meta" | cut -d'|' -f3)
+        n_ctx_train=$(echo "$gguf_meta" | cut -d'|' -f4)
+        [[ "$n_layers" =~ ^[0-9]+$ ]] || n_layers=0
+        [[ "$n_ctx_train" =~ ^[0-9]+$ ]] || n_ctx_train=0
+    fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+
+    # Compute VRAM-aware ctx upper bound, capped at n_ctx_train.
     local estimated_max_ctx=8192   # safe default
     if (( (free_vram_mb > 0 || total_vram_mb > 0) && model_mb > 0 ))
     then
@@ -3167,20 +3373,43 @@ function __model_autotune_DEPRECATED() {
             [[ "$reserve_mb" =~ ^[0-9]+$ ]] || reserve_mb=0
             kv_budget_mb=$(( total_vram_mb - model_mb - reserve_mb ))
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if (( kv_budget_mb > 64 ))
         then
-            local kv_mb_per_1k
-            kv_mb_per_1k=$(awk "BEGIN { v = sqrt($model_mb) * 0.08; print (v < 0.1 ? 0.1 : v) }" 2>/dev/null || echo 0.3)
+            # FIX (G-5 audit): Replace old sqrt(model_mb) heuristic
+            # which was 8-48x too optimistic. Use architecture-aware factor.
+            # llama.cpp KV cache: (1+2) * 128 * kv_heads * n_layers / (1024^2)
+            # ~0.5 MB per layer per 1K for typical 2-4 KV heads.
+            local kv_mb_per_1k=0.0
+            if (( n_layers > 0 )); then
+                kv_mb_per_1k=$(awk -v L="$n_layers" 'BEGIN{printf "%.2f", L * 0.5}')
+            else
+                # Fallback when GGUF metadata is unavailable.
+                kv_mb_per_1k=12.0
+            fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             estimated_max_ctx=$(awk "BEGIN { c = int(($kv_budget_mb / $kv_mb_per_1k) * 1000.0); print (c < 512 ? 512 : c) }" 2>/dev/null || echo 8192)
             # Round to nearest 512
             estimated_max_ctx=$(( (estimated_max_ctx / 512) * 512 ))
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if (( respect_quant_ctx_cap == 1 )) && [[ -n "$max_ctx_by_rating" ]] && (( estimated_max_ctx > max_ctx_by_rating ))
         then
             estimated_max_ctx="$max_ctx_by_rating"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+        # Safety cap: never exceed the model's native training context length.
+        if (( n_ctx_train > 0 && estimated_max_ctx > n_ctx_train )); then
+            local old_est="$estimated_max_ctx"
+            estimated_max_ctx=$(( (n_ctx_train / 512) * 512 ))
+            __tac_status "Ctx Bound" \
+                "estimated_max_ctx=$old_est capped to n_ctx_train=$n_ctx_train" \
+                "$C_Warning"
+        fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         (( estimated_max_ctx < 512 )) && estimated_max_ctx=512
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Per-model candidate pruning based on available VRAM and model size.
     local -a pruned_combos=()
@@ -3192,26 +3421,31 @@ function __model_autotune_DEPRECATED() {
         then
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if (( max_ubatch_by_rating > 0 && _pu > max_ubatch_by_rating ))
         then
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         # Avoid aggressive parallelism when VRAM is tight.
         if (( free_vram_mb > 0 && free_vram_mb < 1800 && _pp > 1 ))
         then
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         # Keep ubatch conservative for larger model footprints on 4GB VRAM.
         if (( model_bytes >= 1800000000 && _pu > 512 ))
         then
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         pruned_combos+=("$_pc")
     done
     if (( ${#pruned_combos[@]} > 0 ))
     then
         combos=("${pruned_combos[@]}")
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local _combo_sorted=""
     _combo_sorted=$(printf '%s\n' "${combos[@]}" | awk '!seen[$0]++')
@@ -3227,6 +3461,7 @@ function __model_autotune_DEPRECATED() {
     then
         ctx_candidates+=("$ctx")
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # If caller forced ctx, only test that value.
     if [[ -n "$tune_ctx" ]]
@@ -3244,6 +3479,7 @@ function __model_autotune_DEPRECATED() {
         then
             search_cap_ctx="$max_ctx_by_rating"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         local max_ctx_for_start="$estimated_max_ctx"
         [[ "$max_ctx_for_start" =~ ^[0-9]+$ ]] || max_ctx_for_start=262144
@@ -3270,6 +3506,7 @@ function __model_autotune_DEPRECATED() {
             kv_budget_mb=$(( total_vram_mb - model_mb - reserve_mb ))
             budget_source="total"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if (( kv_budget_mb > 64 && model_mb > 0 ))
         then
             kv_mb_per_1k=$(awk -v mb="$model_mb" 'BEGIN {
@@ -3292,8 +3529,11 @@ function __model_autotune_DEPRECATED() {
                 then
                     base_ctx="$vram_start_ctx"
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         __tac_info "Ctx Probe" "[start anchor ctx=${base_ctx} | free=${free_vram_mb} total=${total_vram_mb} model=${model_mb} reserve20=${reserve_mb} kv_budget=${kv_budget_mb} source=${budget_source} max_start=${max_ctx_for_start}]" "$C_Dim"
 
         local discovered_ctx=""
@@ -3403,6 +3643,7 @@ function __model_autotune_DEPRECATED() {
                 mode_load_timeout="$probe_load_timeout_refine"
                 mode_burn_attempts="$probe_burn_attempts_refine"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
             [[ "$probe_status_interval" =~ ^[0-9]+$ ]] || probe_status_interval=10
             (( probe_status_interval < 2 )) && probe_status_interval=2
@@ -3429,6 +3670,7 @@ function __model_autotune_DEPRECATED() {
                 then
                     __tac_info "Ctx Probe" "[ctx=${probe_ctx} | loading ${probe_elapsed}s]" "$C_Dim"
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 if (( probe_elapsed >= mode_load_timeout ))
                 then
                     kill -TERM "$probe_use_pid" 2>/dev/null || true
@@ -3437,6 +3679,7 @@ function __model_autotune_DEPRECATED() {
                     __tac_info "Ctx Probe" "[ctx=${probe_ctx} | start timeout ${mode_load_timeout}s -> fail fast]" "$C_Warning"
                     return 1
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             done
 
             wait "$probe_use_pid" 2>/dev/null || probe_use_rc=$?
@@ -3447,6 +3690,7 @@ function __model_autotune_DEPRECATED() {
                 __model_stop >/dev/null 2>&1 || true
                 return 1
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
             __tac_info "Ctx Probe" "[ctx=${probe_ctx} | model ready]" "$C_Dim"
 
@@ -3460,6 +3704,7 @@ function __model_autotune_DEPRECATED() {
                 __model_stop >/dev/null 2>&1 || true
                 return 0
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
             # Learn per-model/backend overhead coefficient from observed VRAM
             # drop between pre-probe snapshot and post-load snapshot.
@@ -3471,6 +3716,7 @@ function __model_autotune_DEPRECATED() {
                     _probe_free_after_load=$($smi_cmd --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
                     [[ "$_probe_free_after_load" =~ ^[0-9]+$ ]] || _probe_free_after_load=0
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 if (( _probe_free_after_load > 0 && _probe_free_after_load < free_vram_mb ))
                 then
                     local _obs_overhead_mb=$(( free_vram_mb - _probe_free_after_load ))
@@ -3481,8 +3727,11 @@ function __model_autotune_DEPRECATED() {
                         _obs_frac=$(awk -v o="$_obs_overhead_mb" -v m="$_obs_model_mb" 'BEGIN{printf "%.4f", o/m}')
                         __llm_autotune_record_overhead_frac "$file" "$backend" "$_obs_frac" >/dev/null 2>&1 || true
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
             if awk -v min="$min_tps_required" 'BEGIN{exit !(min>0)}'
             then
@@ -3501,6 +3750,7 @@ function __model_autotune_DEPRECATED() {
                     then
                         __tac_info "Ctx Probe" "[ctx=${probe_ctx} | running ${probe_elapsed}s]" "$C_Dim"
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 done
 
                 wait "$probe_burn_pid" 2>/dev/null || probe_burn_rc=$?
@@ -3515,8 +3765,10 @@ function __model_autotune_DEPRECATED() {
                     then
                         __tac_info "Ctx Probe" "[ctx=${probe_ctx} | ${probe_fail_reason}]" "$C_Dim"
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                     return 1
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
                 probe_tps=$(sed -n 's/.*Burn complete: \([0-9][0-9]*\(\.[0-9][0-9]*\)\?\) tps.*/\1/p' "$probe_log" | tail -n1)
                 [[ "$probe_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] || probe_tps="0"
@@ -3553,6 +3805,7 @@ function __model_autotune_DEPRECATED() {
                         [[ "$_near_floor" == "1" ]] || break
                     done
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
                 if awk -v t="$probe_tps" -v min="$min_tps_required" 'BEGIN{exit !(t>=min)}'
                 then
@@ -3560,10 +3813,12 @@ function __model_autotune_DEPRECATED() {
                     __model_stop >/dev/null 2>&1 || true
                     return 0
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 __tac_info "Ctx Probe" "[ctx=${probe_ctx} | below floor]" "$C_Warning"
                 __model_stop >/dev/null 2>&1 || true
                 return 1
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
             last_probe_tps=""
             __model_stop >/dev/null 2>&1 || true
@@ -3592,6 +3847,7 @@ function __model_autotune_DEPRECATED() {
                 then
                     break
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 # VRAM-aware cap: if the estimated max ctx is reliable and
                 # the next grow step exceeds it, stop growing and refine.
                 if (( estimated_max_ctx > 0 && next_ctx > estimated_max_ctx ))
@@ -3601,11 +3857,13 @@ function __model_autotune_DEPRECATED() {
                     fail_ctx="$next_ctx"
                     break
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 if (( next_ctx >= 2147483000 ))
                 then
                     __tac_info "Ctx Probe" "[stopping growth near integer limit at ctx=${next_ctx}]" "$C_Dim"
                     break
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 if __llm_autotune_ctx_probe "$next_ctx" "grow"
                 then
                     discovered_ctx="$next_ctx"
@@ -3621,6 +3879,7 @@ function __model_autotune_DEPRECATED() {
                     (( next_ctx <= discovered_ctx )) && next_ctx=$((discovered_ctx + probe_refine_step))
                     continue
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 fail_ctx="$next_ctx"
                 break
             done
@@ -3634,9 +3893,11 @@ function __model_autotune_DEPRECATED() {
                 low=$((discovered_ctx + probe_refine_step))
                 high="$discovered_ctx"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         else
             high=$((probe_anchor - probe_refine_step))
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         # Tighten refine step for narrow ranges: if the search window is
         # < 4096 ctx, use 512 steps instead of the default 1024 so we don't
@@ -3647,6 +3908,7 @@ function __model_autotune_DEPRECATED() {
         then
             _effective_refine_step=512
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         while (( low <= high ))
         do
@@ -3665,11 +3927,13 @@ function __model_autotune_DEPRECATED() {
             else
                 high=$((mid - probe_refine_step))
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
             if (( search_cap_ctx > 0 && low > search_cap_ctx ))
             then
                 break
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         done
 
         unset -f __llm_autotune_ctx_probe 2>/dev/null || true
@@ -3692,12 +3956,14 @@ function __model_autotune_DEPRECATED() {
                 "$base_ctx"
             )
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         local discovered_probe_note=""
         if [[ -n "$discovered_ctx_tps" ]]
         then
             discovered_probe_note=" | probe_tps=${discovered_ctx_tps}"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         __tac_info "Ctx Probe" "[selected ctx=${discovered_ctx} (highest passing probe >= ${min_tps_required} TPS${discovered_probe_note})]" "$C_Dim"
         if (( search_cap_ctx > 0 ))
         then
@@ -3705,6 +3971,7 @@ function __model_autotune_DEPRECATED() {
         else
             __tac_info "Ctx Probe" "[search policy: grow ctx until fail/below-floor, then binary backoff (no hard cap)]" "$C_Dim"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         __tac_info "Ctx Probe" "[probe stride: grow=${probe_grow_step}, refine=${probe_refine_step}, multiplier=${probe_grow_multiplier}, pct=${probe_grow_pct}]" "$C_Dim"
         if [[ "$ctx_candidate_mode" == "focused" ]]
         then
@@ -3712,7 +3979,9 @@ function __model_autotune_DEPRECATED() {
         else
             __tac_info "Ctx Probe" "[sweep rationale: +${probe_grow_step} headroom, -$((ctx_step / 2)) and -${ctx_step} stability checks, +base ${base_ctx}]" "$C_Dim"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Unique + sort descending so we prioritize higher context first.
     local _ctx_sorted=""
@@ -3726,6 +3995,7 @@ function __model_autotune_DEPRECATED() {
     then
         ctx_candidates=(4096)
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_header "MODEL AUTOTUNE" "open"
     __tac_info "Target" "#${num} ${name} (${size})" "$C_Highlight"
@@ -3738,6 +4008,7 @@ function __model_autotune_DEPRECATED() {
     else
         __tac_info "Objective" "[1) no OOM  2) max ctx  3) max TPS]" "$C_Dim"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __tac_info "Ctx Sweep" "[${ctx_candidates[*]}]" "$C_Dim"
     [[ -n "$tune_ctx" ]] && __tac_info "Context" "[Forced ctx=${tune_ctx}]" "$C_Dim"
     echo ""
@@ -3800,6 +4071,7 @@ function __model_autotune_DEPRECATED() {
                 printf "  %-4s %-5s %-18s %-8s %-8s\n" "$idx" "$c_ctx" "b ${c_batch}/${c_ubatch} p ${c_parallel}" "  - " "SKIP"
                 continue
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             export LLAMA_BATCH_SIZE="$c_batch"
             export LLAMA_UBATCH_SIZE="$c_ubatch"
             export LLAMA_PARALLEL_SLOTS="$c_parallel"
@@ -3822,6 +4094,7 @@ function __model_autotune_DEPRECATED() {
                         -d '{"messages":[{"role":"user","content":"Warmup"}],"max_tokens":64,"temperature":0,"top_p":1.0}' \
                         >"/tmp/autotune_warmup_${num}_${idx}.log" 2>&1 || true
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
                 for (( trial=1; trial<=trials; trial++ ))
                 do
@@ -3830,6 +4103,7 @@ function __model_autotune_DEPRECATED() {
                         trial_ok=0
                         break
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                     burn_log="/tmp/autotune_burn_${num}_${idx}_${trial}.log"
                     __tac_info "Trial" "[Config ${idx}/${total_configs} | ctx ${c_ctx} | run ${trial}/${trials}: b ${c_batch}/${c_ubatch}, p ${c_parallel}]" "$C_Dim"
                     rm -f "$LLM_TPS_CACHE"
@@ -3844,6 +4118,7 @@ function __model_autotune_DEPRECATED() {
                         then
                             run_tps=$(sed -n 's/.*Burn complete: \([0-9][0-9]*\(\.[0-9][0-9]*\)\?\) tps.*/\1/p' "$burn_log" | tail -n1)
                         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
                         if grep -Eiq "$oom_regex" "$burn_log" 2>/dev/null
                         then
@@ -3851,6 +4126,7 @@ function __model_autotune_DEPRECATED() {
                             trial_ok=0
                             break
                         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
                         if [[ "$run_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]]
                         then
@@ -3868,19 +4144,24 @@ function __model_autotune_DEPRECATED() {
                                     trial_ok=0
                                     break
                                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                         else
                             trial_ok=0
                             break
                         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                     else
                         if grep -Eiq "$oom_regex" "$burn_log" 2>/dev/null
                         then
                             oom_detected=1
                         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                         trial_ok=0
                         break
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 done
             else
                 if grep -Eiq "$oom_regex" "$use_log" 2>/dev/null
@@ -3888,6 +4169,7 @@ function __model_autotune_DEPRECATED() {
                     oom_detected=1
                     fail_oom=$((fail_oom + 1))
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 (( oom_detected == 0 )) && fail_start=$((fail_start + 1))
                 printf "  %-4s %-5s %-18s %-8s %-8s\n" "$idx" "$c_ctx" "b ${c_batch}/${c_ubatch} p ${c_parallel}" "FAIL" "$([[ $oom_detected -eq 1 ]] && echo OOM || echo START)"
                 __model_stop >/dev/null 2>&1 || true
@@ -3898,8 +4180,10 @@ function __model_autotune_DEPRECATED() {
                 then
                     _oom_combos["${c_batch}:${c_ubatch}:${c_parallel}"]=1
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 continue
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
             if (( ${#tps_samples[@]} > 0 ))
             then
@@ -3927,6 +4211,7 @@ function __model_autotune_DEPRECATED() {
                     then
                         status_label="PARTIAL"
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
                     if awk -v min="$min_tps_required" 'BEGIN{exit !(min>0)}'
                     then
@@ -3935,7 +4220,9 @@ function __model_autotune_DEPRECATED() {
                             meets_min_tps=0
                             status_label="SLOW"
                         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
                     printf "  %-4s %-5s %-18s %-8s %-8s\n" "$idx" "$c_ctx" "b ${c_batch}/${c_ubatch} p ${c_parallel}" "$median_tps" "$status_label"
 
@@ -3960,6 +4247,7 @@ function __model_autotune_DEPRECATED() {
                                 best_ctx="$c_ctx"
                                 best_meets_min_tps=1
                             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                         elif [[ -z "$fallback_combo" ]] \
                             || (( c_ctx > fallback_ctx )) \
                             || { (( c_ctx == fallback_ctx )) && awk -v s="$score_tps" -v b="$fallback_score" 'BEGIN{exit !(s>b)}'; }
@@ -3972,16 +4260,20 @@ function __model_autotune_DEPRECATED() {
                             fallback_combo="$combo"
                             fallback_ctx="$c_ctx"
                         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
                         if [[ -z "${best_score_by_ctx[$c_ctx]:-}" ]] || awk -v s="$score_tps" -v b="${best_score_by_ctx[$c_ctx]:-0}" 'BEGIN{exit !(s>b)}'
                         then
                             best_score_by_ctx[$c_ctx]="$score_tps"
                         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 else
                     fail_notps=$((fail_notps + 1))
                     printf "  %-4s %-5s %-18s %-8s %-8s\n" "$idx" "$c_ctx" "b ${c_batch}/${c_ubatch} p ${c_parallel}" "FAIL" "NO TPS"
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             else
                 local fail_status="BURN"
                 if (( oom_detected == 1 ))
@@ -3993,6 +4285,7 @@ function __model_autotune_DEPRECATED() {
                     fail_status="DOM"
                     fail_dominated=$((fail_dominated + 1))
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 if [[ -n "$burn_log" && -f "$burn_log" ]]
                 then
                     local _burn_err
@@ -4002,13 +4295,17 @@ function __model_autotune_DEPRECATED() {
                         fail_status="TIMEOUT"
                         fail_timeout=$((fail_timeout + 1))
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 if [[ "$fail_status" == "BURN" ]]
                 then
                     fail_burn=$((fail_burn + 1))
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 printf "  %-4s %-5s %-18s %-8s %-8s\n" "$idx" "$c_ctx" "b ${c_batch}/${c_ubatch} p ${c_parallel}" "FAIL" "$fail_status"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
             __model_stop >/dev/null 2>&1 || true
             sleep 1
@@ -4027,6 +4324,7 @@ function __model_autotune_DEPRECATED() {
         best_ctx="$fallback_ctx"
         __tac_info "Autotune" "[No config met ${min_tps_required} TPS; saving best fallback instead]" "$C_Warning"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -n "$best_combo" ]]
     then
@@ -4045,7 +4343,9 @@ function __model_autotune_DEPRECATED() {
                 best_tps="$_verify_tps"
                 verified=1
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         export LLM_AUTOTUNE_LAST_SCORE="${best_score:-$best_tps}"
         export LLM_AUTOTUNE_LAST_STDDEV="${best_stddev:-0}"
@@ -4060,6 +4360,7 @@ function __model_autotune_DEPRECATED() {
         else
             export LLM_AUTOTUNE_OBJECTIVE="no-oom>max-ctx>max-tps"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         if ! __llm_autotune_profile_save "$num" "$backend" "$save_ctx" "$best_batch" "$best_ubatch" "$best_parallel" "$best_fit" "$best_tps"
         then
@@ -4072,7 +4373,9 @@ function __model_autotune_DEPRECATED() {
             then
                 __save_model_ctx "$num" "$save_ctx"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         __tac_info "Winner" "[b ${best_batch}/${best_ubatch}, p ${best_parallel}, fit=${best_fit} MB, tps=${best_tps}]" "$C_Success"
         __tac_info "Winner Score" "[${best_score:-$best_tps} (stddev=${best_stddev:-0})]" "$C_Success"
         __tac_info "Winner Ctx" "[${save_ctx}]" "$C_Success"
@@ -4080,14 +4383,17 @@ function __model_autotune_DEPRECATED() {
         then
             __tac_info "Min TPS" "[required=${min_tps_required}, met=$([[ "$best_meets_min_tps" == "1" ]] && echo yes || echo no)]" "$C_Dim"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         __tac_info "Verified" "[$([[ "$verified" == "1" ]] && echo yes || echo no)]" "$C_Dim"
         if (( save_ok == 1 ))
         then
             __tac_info "Saved" "[models.conf row updated]" "$C_Dim"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     else
         __tac_info "Autotune" "[No stable configuration found]" "$C_Error"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_info "Failure Summary" "[oom=${fail_oom}, timeout=${fail_timeout}, start=${fail_start}, burn=${fail_burn}, no_tps=${fail_notps}, dominated=${fail_dominated}]" "$C_Dim"
 
@@ -4110,12 +4416,14 @@ function __model_autotune_DEPRECATED() {
         exec {lock_fd}>&-
         rm -f "$lock_file"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ "${LLM_AUTOTUNE_RESTORE_PREV:-1}" == "1" ]] && [[ -n "$prev_model" ]] && [[ "$prev_model" =~ ^[0-9]+$ ]]
     then
         __tac_info "Restoring" "Model #${prev_model}" "$C_Dim"
         __model_use "$prev_model" >/dev/null 2>&1 || true
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_footer
     __autotune_restore_traps
@@ -4125,11 +4433,13 @@ function __model_autotune_DEPRECATED() {
     else
         trap - EXIT
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     unset -f __autotune_restore_traps __autotune_fail __autotune_unlock 2>/dev/null || true
     if (( __autotune_interrupted != 0 ))
     then
         return "$__autotune_interrupted"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     [[ -n "$best_combo" ]] && (( save_ok == 1 ))
 }
 
@@ -4180,6 +4490,7 @@ function __model_stop() {
         then
             kill -TERM "$_keeper_pid" 2>/dev/null || true
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         rm -f "$_keeper_file"
     done
     # Fallback for keepers that lost their PID file or were reparented to an
@@ -4197,6 +4508,7 @@ function __model_stop() {
         then
             kill -KILL "$_keeper_pid" 2>/dev/null || true
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     done < <(pgrep -af 'sleep 3600' 2>/dev/null || true)
     # Kill the model subshell (the `( ... ) & disown` wrapper from __model_use)
     # and its entire process tree (inner bash, stdin keeper, any children).
@@ -4248,7 +4560,9 @@ function __model_stop() {
                 _mem_waited=$(( _mem_waited + 1 ))
             done
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     [[ -z "${__BENCH_MODE:-}" ]] && __tac_info "Llama Server" "[STOPPED]" "$C_Success"
     return 0
 }
@@ -4277,11 +4591,13 @@ function __model_status() {
         then
             entry=$(__llm_active_entry 2>/dev/null || true)
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -n "$entry" ]]
         then
             local _n _rest
             IFS='|' read -r _n name file size _rest <<< "$entry"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         local health health_label health_color
         health=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null || true)
         if __llm_is_healthy
@@ -4292,6 +4608,7 @@ function __model_status() {
             health_label="${health:-UNHEALTHY}"
             health_color="$C_Warning"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         local tps
         tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null) || true
         if [[ "$output_mode" == "json" ]]
@@ -4309,6 +4626,7 @@ function __model_status() {
             printf '}\n'
             return 0
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ "$output_mode" == "plain" ]]
         then
             printf '%s\n' "online=1"
@@ -4322,17 +4640,20 @@ function __model_status() {
             printf '%s\n' "build=$LLAMA_BUILD_VERSION"
             return 0
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -n "$entry" ]]
         then
             __tac_info "Active" "#${active_num} ${name} (${size})" "$C_Success"
         else
             __tac_info "Active" "[Running but unknown model]" "$C_Warning"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         __tac_info "Health" "$health_label" "$health_color"
         [[ -n "$tps" ]] && __tac_info "Last TPS" "$tps" "$C_Dim"
         __tac_info "Build" "$LLAMA_BUILD_VERSION" "$C_Dim"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ "$output_mode" == "json" ]]
     then
@@ -4340,6 +4661,7 @@ function __model_status() {
             "$LLM_PORT" "$(__llm_json_escape "$LLAMA_BUILD_VERSION")"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if [[ "$output_mode" == "plain" ]]
     then
         printf '%s\n' "online=0"
@@ -4348,6 +4670,7 @@ function __model_status() {
         printf '%s\n' "build=$LLAMA_BUILD_VERSION"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __tac_info "Status" "[OFFLINE]" "$C_Dim"
     return 0
 }
@@ -4364,11 +4687,13 @@ function __model_info() {
         __tac_info "Usage" "[model info <number>]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if [[ ! "$target" =~ ^[0-9]+$ ]]
     then
         __tac_info "Error" "[Not a number: '$target']" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local entry
     entry=$(__llm_registry_entry_by_num "$target")
     if [[ -z "$entry" ]]
@@ -4376,6 +4701,7 @@ function __model_info() {
         __tac_info "Error" "[Model #$target not found]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
     IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram <<< "$entry"
     local quant_rating="unknown"
@@ -4409,6 +4735,7 @@ function __model_info() {
     else
         __tac_info "On Disk" "[MISSING]" "$C_Error"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 }
 
 # ---------------------------------------------------------------------------
@@ -4432,10 +4759,12 @@ function __bench_run_with_timeout() {
         __tac_info "Bench" "[Timeout wrapper called without a command]" "$C_Error"
         return 2
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if [[ ! "$timeout_s" =~ ^[0-9]+$ ]] || (( timeout_s < 1 ))
     then
         timeout_s=120
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local _monitor_was_on=0
     [[ "$-" == *m* ]] && _monitor_was_on=1
     local _self_pgid=""
@@ -4446,6 +4775,7 @@ function __bench_run_with_timeout() {
     then
         _is_shell_func=1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local _bench_shell_runner
     _bench_shell_runner=$(cat <<'EOF'
@@ -4457,6 +4787,7 @@ function __bench_run_with_timeout() {
                 sleep 1
                 kill -KILL -- "$child_pid" 2>/dev/null || true
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             while IFS= read -r _cpid
             do
                 [[ "$_cpid" =~ ^[0-9]+$ ]] || continue
@@ -4479,6 +4810,7 @@ EOF
         then
             _bench_profile_path="${TACTICAL_REPO_ROOT:-}/env.sh"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         # Shell functions cannot be exec'd by setsid directly.
         # Run them in a dedicated shell process-group when available.
         declare -fx "$1" 2>/dev/null || true
@@ -4488,6 +4820,7 @@ EOF
         else
             bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} $_bench_shell_runner" _ "$_bench_profile_path" "$@" &
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     elif command -v setsid >/dev/null 2>&1; then
         (( _monitor_was_on == 1 )) && set +m
         setsid "$@" &
@@ -4495,6 +4828,7 @@ EOF
         (( _monitor_was_on == 1 )) && set +m
         "$@" &
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local cmd_pid=$!
     disown "$cmd_pid" 2>/dev/null || true
     __BENCH_TIMEOUT_LAST_PID="$cmd_pid"
@@ -4511,8 +4845,10 @@ EOF
             then
                 set -m 2>/dev/null || true
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             return $?
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         sleep "$interval"
         waited=$(( waited + interval ))
     done
@@ -4524,6 +4860,7 @@ EOF
     else
         kill -TERM -- "$cmd_pid" 2>/dev/null || true
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Grace wait: poll for clean exit, giving the child time to run EXIT traps.
     local _grace=10 _g_i
@@ -4536,8 +4873,10 @@ EOF
             then
                 set -m 2>/dev/null || true
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             return 124
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         sleep 1
     done
 
@@ -4556,11 +4895,13 @@ EOF
         # No PGID info — last resort, try killing just the child PID.
         kill -KILL -- "$cmd_pid" 2>/dev/null || true
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     wait "$cmd_pid" 2>/dev/null || true
     if (( _monitor_was_on == 1 ))
     then
         set -m 2>/dev/null || true
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     return 124
 }
 
@@ -4575,6 +4916,7 @@ function __model_bench() {
         __tac_info "Registry" "[Not found - run 'model scan']" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # ---------------------------------------------------------------------------
     # Singleton guard: PID file + flock with stale-process detection.
@@ -4601,9 +4943,11 @@ function __model_bench() {
             exec {bench_lock_fd}>&-
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         # Write our PID to the lock (cooperative PID tracking)
         echo "$$" > "$bench_lock_file"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Write PID file for stale detection
     echo "$$" > "$bench_pid_file"
@@ -4630,18 +4974,21 @@ function __model_bench() {
         else
             trap - INT
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -n "$__bench_prev_term_trap" ]]
         then
             eval "$__bench_prev_term_trap"
         else
             trap - TERM
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -n "$__bench_prev_exit_trap" ]]
         then
             eval "$__bench_prev_exit_trap"
         else
             trap - EXIT
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     }
     # shellcheck disable=SC2317  # called indirectly via trap
     __bench_cleanup() {
@@ -4651,17 +4998,20 @@ function __model_bench() {
             # Preserve original exit code from first call.
             return "$_exit_code"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         __bench_cleaned=1
         # Kill any subprocesses we spawned
         if (( ${#bench_cleanup_spawned_pids[@]} > 0 ))
         then
             kill "${bench_cleanup_spawned_pids[@]}" 2>/dev/null || true
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         # On interrupt/termination, explicitly stop any active model server.
         if (( __bench_signal_rc != 0 ))
         then
             __model_stop >/dev/null 2>&1 || true
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         # Remove guard files (unconditionally — these are /tmp files, safe to rm)
         rm -f "$bench_pid_file"
         if [[ -n "$bench_lock_fd" ]]
@@ -4669,6 +5019,7 @@ function __model_bench() {
             flock -u "$bench_lock_fd" 2>/dev/null || true
             exec {bench_lock_fd}>&- 2>/dev/null || true
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         rm -f "$bench_lock_file"
         __bench_restore_traps
         # shellcheck disable=SC2086
@@ -4694,6 +5045,7 @@ function __model_bench() {
         systemctl --user stop llama-watchdog.timer 2>/dev/null
         __tac_info "Watchdog" "Suspended for bench (will restore)" "$C_Dim"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local _bench_prev_model=""
     [[ -f "$ACTIVE_LLM_FILE" ]] && _bench_prev_model=$(< "$ACTIVE_LLM_FILE")
@@ -4704,6 +5056,7 @@ function __model_bench() {
     then
         __tac_info "Bench" "[Ignoring LLM_BENCH_AUTOTUNE_ENGINE=${LLM_BENCH_AUTOTUNE_ENGINE}; single autotuner mode uses shell]" "$C_Dim"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local -a b_num=() b_name=() b_file=() b_size=() b_gpu=() b_tps=()
 
@@ -4715,10 +5068,12 @@ function __model_bench() {
         then
             return 2
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if ! burn
         then
             return 3
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         return 0
     }
     local num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _flash_attn _tps _autotuned _is_default _in_vram
@@ -4739,14 +5094,17 @@ function __model_bench() {
                 elif [[ "${name,,}" != *"$_selector_lc"* && "${file,,}" != *"$_selector_lc"* ]]; then
                     continue
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 if [[ "${num,,}" == "$_selector_lc" || "${name,,}" == *"$_selector_lc"* || "${file,,}" == *"$_selector_lc"* ]]
                 then
                     _bench_match=1
                     break
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             done
             (( _bench_match == 1 )) || continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         b_num+=("$num")
         b_name+=("$name")
         b_file+=("$file")
@@ -4760,21 +5118,25 @@ function __model_bench() {
         then
             __tac_info "Bench" "[No models matched selectors: ${bench_selectors[*]}]" "$C_Error"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         __tac_info "Bench" "[No on-disk models]" "$C_Warning"
         if (( _bench_watchdog_was_active ))
         then
             systemctl --user start llama-watchdog.timer 2>/dev/null
             __tac_info "Watchdog" "Restored" "$C_Dim"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -n "$bench_lock_fd" ]]
         then
             flock -u "$bench_lock_fd" 2>/dev/null || true
             exec {bench_lock_fd}>&-
             rm -f "$bench_lock_file"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         __bench_restore_traps
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     wake 2>/dev/null || true
     __llm_bench_perf_prep
@@ -4784,6 +5146,7 @@ function __model_bench() {
     else
         printf '%s\n\n' "${C_Dim}Benchmarking ${#b_num[@]} models...${C_Reset}"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local __BENCH_MODE=1
     local i
@@ -4805,6 +5168,7 @@ function __model_bench() {
         then
             _bench_free_vram_mb=$("$_bench_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         [[ "$_bench_min_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_min_free_vram_mb=256
         [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] || _bench_free_vram_mb=0
 
@@ -4812,6 +5176,7 @@ function __model_bench() {
         if [[ "$_bench_free_vram_mb" =~ ^[0-9]+$ ]] && (( _bench_free_vram_mb > 0 )); then
             printf "VRAM %s MiB VRAM free\n" "$_bench_free_vram_mb"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         if (( _bench_free_vram_mb > 0 && _bench_free_vram_mb < _bench_min_free_vram_mb ))
         then
@@ -4822,6 +5187,7 @@ function __model_bench() {
             _bench_safe_overrides=1
             __tac_info "  VRAM" "low (${_bench_free_vram_mb} MiB) — safe overrides: ngl=0" "$C_Warning"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         local _bench_quant_rating="unknown"
         _bench_quant_rating=$(__llm_quant_rating "${b_file[$i]}")
@@ -4841,6 +5207,7 @@ function __model_bench() {
                 then
                     unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 __tac_info "  Autotune" "model #${b_num[$i]} (${bench_autotune_mode})..." "$C_Dim"
                 export LLM_AUTOTUNE_RESTORE_PREV=0
                 export LLM_AUTOTUNE_SKIP_LOCK=1
@@ -4865,11 +5232,13 @@ function __model_bench() {
                         __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} - skipping benchmark]" "$C_Error"
                         b_tps+=("FAIL_AUTOTUNE")
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                     sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
                     __model_stop 2>/dev/null || true
                     sleep 1
                     continue
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 unset LLM_AUTOTUNE_RESTORE_PREV
                 unset LLM_AUTOTUNE_SKIP_LOCK
                 # Restore safe overrides that were lifted before autotune.
@@ -4880,8 +5249,11 @@ function __model_bench() {
                     export LLAMA_UBATCH_SIZE=128
                     export LLAMA_PARALLEL_SLOTS=1
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         rm -f "$LLM_TPS_CACHE"
         # Timeout guard: force-bound full model run (__model_use + burn).
@@ -4893,6 +5265,7 @@ function __model_bench() {
         then
             bench_cleanup_spawned_pids+=("$__BENCH_TIMEOUT_LAST_PID")
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if (( bench_model_rc == 124 ))
         then
             __tac_info "Bench" "[Timed out after ${bench_model_timeout}s for model #${b_num[$i]} (__model_use + burn)]" "$C_Error"
@@ -4908,10 +5281,12 @@ function __model_bench() {
         then
             __tac_info "Bench" "[Model run failed for model #${b_num[$i]} (rc=${bench_model_rc})]" "$C_Error"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -f "$LLM_LOG_FILE" ]]
         then
             cp "$LLM_LOG_FILE" "$bench_log_dir/${b_num[$i]}_${b_name[$i]//[^A-Za-z0-9._-]/_}.log" 2>/dev/null
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         local tps="FAIL"
         [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")
         b_tps+=("$tps")
@@ -4934,6 +5309,7 @@ function __model_bench() {
             sync 2>/dev/null || true
             sleep "$_cooldown_s"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     done
     unset __BENCH_MODE
 
@@ -4973,25 +5349,30 @@ function __model_bench() {
                 | sort -n | head -n $(( _stale_count - 5 )) | cut -d' ' -f2- \
                 | while IFS= read -r _old_dir; do rm -rf "$_old_dir" 2>/dev/null || true; done
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -n "$_bench_prev_model" ]]
     then
         __tac_info "Restoring" "Model #${_bench_prev_model}" "$C_Dim"
         __model_use "$_bench_prev_model" 2>/dev/null
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if (( _bench_watchdog_was_active ))
     then
         systemctl --user start llama-watchdog.timer 2>/dev/null
         __tac_info "Watchdog" "Restored" "$C_Dim"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if [[ -n "$bench_lock_fd" ]]
     then
         flock -u "$bench_lock_fd" 2>/dev/null || true
         exec {bench_lock_fd}>&-
         rm -f "$bench_lock_file"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __bench_restore_traps
     __tac_footer
 }
@@ -5015,6 +5396,7 @@ function __model_bench_diff() {
         __tac_info "Error" "[Bench file missing]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_header "MODEL BENCH DIFF" "open"
     __tac_info "Old" "$old_bench" "$C_Dim"
@@ -5064,6 +5446,7 @@ function __model_bench_latest() {
         __tac_info "Bench" "[No benchmark TSV found]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __tac_header "LATEST BENCH" "open"
     __tac_info "File" "$latest_bench" "$C_Dim"
     echo ""
@@ -5095,6 +5478,7 @@ function __model_bench_history() {
         __tac_info "Bench" "[No benchmark TSV found]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_header "BENCH HISTORY" "open"
     printf "${C_Dim}  %-20s %-6s %-28s %s${C_Reset}\n" "RUN" "MODELS" "BEST MODEL" "AVG TPS"
@@ -5191,6 +5575,7 @@ function __model_doctor() {
             ((expected_num++))
         done < "$LLM_REGISTRY"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     default_file=$(__llm_default_file 2>/dev/null || true)
     if [[ -n "$default_file" ]]
@@ -5198,17 +5583,20 @@ function __model_doctor() {
         default_set=1
         __llm_registry_entry_by_file "$default_file" >/dev/null && default_in_registry=1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if command -v systemctl >/dev/null 2>&1 \
         && systemctl --user is-active --quiet llama-watchdog.timer 2>/dev/null
     then
         watchdog_active=1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if __resolve_smi >/dev/null 2>&1
     then
         gpu_visible=1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if __test_port "$LLM_PORT"
     then
@@ -5217,7 +5605,9 @@ function __model_doctor() {
         then
             health_ok=1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local active_entry=""
     if [[ -f "$ACTIVE_LLM_FILE" ]]
@@ -5229,7 +5619,9 @@ function __model_doctor() {
             active_known=1
             IFS='|' read -r _ active_name _ <<< "$active_entry"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     (( registry_exists )) || ((issues++))
     (( header_ok )) || ((issues++))
@@ -5261,6 +5653,7 @@ function __model_doctor() {
         (( issues == 0 ))
         return
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ "$output_mode" == "plain" ]]
     then
@@ -5282,6 +5675,7 @@ function __model_doctor() {
         (( issues == 0 ))
         return
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_header "MODEL DOCTOR" "open"
     __tac_info "Registry" "[$([[ $registry_exists -eq 1 ]] && echo FOUND || echo MISSING)]" \
@@ -5309,6 +5703,7 @@ function __model_doctor() {
         __tac_info "Active Model" "[#${active_num} ${active_name:-unknown}]" \
             "$([[ $active_known -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __tac_info "Summary" "[$issues issue(s)]" \
         "$([[ $issues -eq 0 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
     __tac_footer
@@ -5326,6 +5721,7 @@ function __model_recommend() {
         __tac_info "Registry" "[Not found - run 'model scan' first]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local -a ranked=()
     local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
@@ -5350,6 +5746,7 @@ function __model_recommend() {
         then
             size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if (( size_tenths <= 15 ))
         then
             score=$(( score + 25 ))
@@ -5362,6 +5759,7 @@ function __model_recommend() {
         else
             score=$(( score - 8 ))
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         if (( gpu_layers > 0 ))
         then
@@ -5369,6 +5767,7 @@ function __model_recommend() {
         else
             score=$(( score - 12 ))
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         if [[ "$arch" == *"moe"* ]]
         then
@@ -5380,6 +5779,7 @@ function __model_recommend() {
         then
             score=$(( score + 2 ))
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         local tps_floor=${tps_num%.*}
         [[ "$tps_floor" =~ ^[0-9]+$ ]] || tps_floor=0
@@ -5395,6 +5795,7 @@ function __model_recommend() {
         __tac_info "Recommend" "[No on-disk models in registry]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_header "MODEL RECOMMENDATIONS" "open"
     printf "${C_Dim}  %-4s %-28s %-7s %-8s %-9s %-7s %s${C_Reset}\n" \
@@ -5419,6 +5820,7 @@ function __model_recommend() {
         then
             score_display=$((10#$score_padded))
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         printf "  %-4s %-28s %-7s %-8s %-9s %-7s %s (%s)\n" \
             "$rec_num" "${rec_name:0:28}" "$rec_size" "$rec_quant" "${rec_arch:0:9}" \
             "${rec_tps}t/s" "$score_display" "$rec_rating"
@@ -5447,11 +5849,13 @@ function __model_delete() {
         __tac_info "Usage" "[model delete [--dry-run] <number>]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if [[ ! "$target" =~ ^[0-9]+$ ]]
     then
         __tac_info "Error" "[Not a number: '$target']" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local entry
     entry=$(__llm_registry_entry_by_num "$target")
     if [[ -z "$entry" ]]
@@ -5459,6 +5863,7 @@ function __model_delete() {
         __tac_info "Error" "[Model #$target not found]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local _n name file _rest
     IFS='|' read -r _n name file _rest <<< "$entry"
     local fpath="$LLAMA_MODEL_DIR/$file"
@@ -5472,6 +5877,7 @@ function __model_delete() {
             "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_info "Delete" "#${target} ${name}" "$C_Warning"
     __tac_info "File" "$fpath" "$C_Dim"
@@ -5483,11 +5889,13 @@ function __model_delete() {
         fsize=$(awk "BEGIN{printf \"%.1fG\", $fsize_bytes/1024/1024/1024}")
         __tac_info "Size" "$fsize" "$C_Dim"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if (( dry_run ))
     then
         __tac_info "Dry Run" "[Would delete file and renumber registry only]" "$C_Warning"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local confirm
     read -r -p "${C_Warning}Permanently delete this model? [y/N]: ${C_Reset}" confirm
     if [[ "${confirm,,}" != "y" ]]
@@ -5495,6 +5903,7 @@ function __model_delete() {
         __tac_info "Delete" "[CANCELLED]" "$C_Dim"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local active_num
     active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
@@ -5502,6 +5911,7 @@ function __model_delete() {
     then
         __model_stop
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -f "$fpath" ]]
     then
@@ -5512,7 +5922,9 @@ function __model_delete() {
             __tac_info "File" "[DELETE FAILED - permission denied]" "$C_Error"
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local remaining
     remaining=$(__renumber_registry "$target")
@@ -5532,6 +5944,7 @@ function __model_download() {
             "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if [[ $# -eq 0 ]]
     then
         printf '%s\n' "${C_Error}Error:${C_Reset} No models specified."
@@ -5550,6 +5963,7 @@ function __model_download() {
         echo "      microsoft_Phi-4-mini-instruct-Q4_K_M.gguf"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if ! command -v hf >/dev/null 2>&1
     then
@@ -5557,6 +5971,7 @@ function __model_download() {
             "Install with: pip install huggingface_hub[cli]"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -z "${HF_TOKEN:-}" ]]
     then
@@ -5564,6 +5979,7 @@ function __model_download() {
         printf '%s\n' "      Set it with: export HF_TOKEN=hf_..."
         echo ""
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
     mkdir -p "$HF_HOME" "$LLAMA_MODEL_DIR"
@@ -5583,6 +5999,7 @@ function __model_download() {
             ((fail++))
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         local dl_repo dl_file
         IFS=":" read -r dl_repo dl_file <<< "$spec"
@@ -5596,6 +6013,7 @@ function __model_download() {
             ((fail++))
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         if [[ -z "$dl_file" ]]
         then
@@ -5605,6 +6023,7 @@ function __model_download() {
             ((fail++))
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         # Path traversal and format validation
         if [[ "$dl_file" == *"/"* || "$dl_file" == *".."* ]]
@@ -5614,6 +6033,7 @@ function __model_download() {
             ((fail++))
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         local dest="$LLAMA_MODEL_DIR/$dl_file"
         local archive_dest="$LLAMA_ARCHIVE_DIR/$dl_file"
@@ -5632,6 +6052,7 @@ function __model_download() {
                     _qdesc="$_d"
                     break
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             done < "$QUANT_GUIDE"
             if [[ "$_qrating" == "discouraged" ]]
             then
@@ -5644,6 +6065,7 @@ function __model_download() {
                     ((fail++))
                     continue
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             elif [[ "$_qrating" == "recommended" ]]
             then
                 printf '%s\n' "${C_Success}${CHECK_MARK}${C_Reset} ${_pat} - ${_qdesc}"
@@ -5651,7 +6073,9 @@ function __model_download() {
             then
                 printf '%s\n' "${C_Dim}${BULLET} ${_pat} - ${_qdesc}${C_Reset}"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         if [[ -f "$dest" ]]
         then
@@ -5659,12 +6083,14 @@ function __model_download() {
             ((ok++))
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -f "$archive_dest" ]]
         then
             __tac_info "Skip" "$dl_file already exists (archived)" "$C_Warning"
             ((ok++))
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         local d_used_bytes
         d_used_bytes=$(df -B1 --output=used "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk 'NR==2{print $1+0}')
@@ -5695,8 +6121,11 @@ function __model_download() {
                     ((fail++))
                     continue
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         __tac_info "Downloading" "$dl_repo ${ARROW_R} $dl_file" "$C_Highlight"
         if hf download "$dl_repo" "$dl_file" --local-dir "$LLAMA_MODEL_DIR"
@@ -5707,6 +6136,7 @@ function __model_download() {
             __tac_info "FAIL" "$dl_repo $dl_file" "$C_Error"
             ((fail++))
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     done
 
     echo ""
@@ -5736,11 +6166,13 @@ function __model_archive() {
         __tac_info "Usage" "[model archive [--dry-run] <number>]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if [[ ! "$target" =~ ^[0-9]+$ ]]
     then
         __tac_info "Error" "[Not a number: '$target']" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local entry
     entry=$(__llm_registry_entry_by_num "$target")
     if [[ -z "$entry" ]]
@@ -5748,6 +6180,7 @@ function __model_archive() {
         __tac_info "Error" "[Model #$target not found]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local _n name file _rest
     IFS='|' read -r _n name file _rest <<< "$entry"
     local fpath="$LLAMA_MODEL_DIR/$file"
@@ -5762,6 +6195,7 @@ function __model_archive() {
             "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_info "Archive" "#${target} ${name}" "$C_Warning"
     __tac_info "From" "$fpath" "$C_Dim"
@@ -5771,6 +6205,7 @@ function __model_archive() {
         __tac_info "Dry Run" "[Would move file and renumber registry only]" "$C_Warning"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local confirm
     read -r -p "${C_Warning}Archive this model? [y/N]: ${C_Reset}" confirm
     if [[ "${confirm,,}" != "y" ]]
@@ -5778,6 +6213,7 @@ function __model_archive() {
         __tac_info "Archive" "[CANCELLED]" "$C_Dim"
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local active_num
     active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
@@ -5785,6 +6221,7 @@ function __model_archive() {
     then
         __model_stop
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     mkdir -p "$archive_dir"
     if [[ -f "$fpath" ]]
@@ -5796,9 +6233,11 @@ function __model_archive() {
             __tac_info "File" "[MOVE FAILED - try: sudo chmod 755 $archive_dir]" "$C_Error"
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     else
         __tac_info "File" "[NOT ON DISK - removing from registry only]" "$C_Warning"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local remaining
     remaining=$(__renumber_registry "$target")
@@ -5884,6 +6323,7 @@ function model() {
             then
                 export TAC_CTX_SIZE="$_use_ctx"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             __model_use "$_use_num"
             ;;
 
@@ -5944,7 +6384,9 @@ function model() {
                             __tac_info "Bench" "[Run 'model bench' to auto-clean and start]" "$C_Dim"
                             return 0
                         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                     __tac_info "Bench" "[IDLE — no bench running]" "$C_Success"
                     return 0
                     ;;
@@ -5962,11 +6404,13 @@ function model() {
                 __tac_info "Autotune All" "[Complete — all untuned models processed]" "$C_Success"
                 return 0
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || "${1:-}" == "help" ]]
             then
                 __model_autotune_help
                 return 0
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             # Route to the standalone autotune script (proven, no --fit bug)
             bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "$1" 2>&1
             ;;
@@ -6038,8 +6482,10 @@ function serve() {
             printf '%s\n' "${C_Error}[Not a number: '--ctx-size' = '$ctx_override']${C_Reset}"
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         export TAC_CTX_SIZE="$ctx_override"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -n "$model_arg" ]]
     then
@@ -6061,9 +6507,12 @@ function serve() {
                 __tac_info "Local LLM" "[NO DEFAULT SET]" "$C_Error"
                 printf '%s\n' "  ${C_Dim}Run 'model default <N>' to configure one.${C_Reset}"
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 }
 # halt — Stop the currently running LLM model.
 function halt() {
@@ -6083,8 +6532,10 @@ function mlogs() {
             __tac_info "LLM Log" "[NOT FOUND: $LLM_LOG_FILE]" "$C_Warning"
             printf '%s\n' "  ${C_Dim}LLM may not have started yet.${C_Reset}"
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         return 0
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __resolve_vscode_bin
     "$VSCODE_BIN" "$LLM_LOG_FILE"
     echo "VS Code opened..."
@@ -6101,6 +6552,7 @@ function burn() {
     then
         __tac_header "HARDWARE BURN-IN STRESS TEST"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Wait for the model to finish loading before sending the completion request.
     # The port may be open (passes __require_llm) but the server returns 503
@@ -6121,7 +6573,9 @@ function burn() {
             __tac_info "Status" "Model failed to become healthy - check: tail $LLM_LOG_FILE" "$C_Error"
             return 1
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local bench_tokens="${LLM_BENCH_BURN_TOKENS:-768}"
     [[ "$bench_tokens" =~ ^[0-9]+$ ]] || bench_tokens=768
@@ -6148,6 +6602,7 @@ function burn() {
         payload=$(jq -n --arg p "$prompt" \
             '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local request_timeout=360
     if [[ -f "$ACTIVE_LLM_FILE" && -f "$LLM_REGISTRY" ]]
@@ -6162,7 +6617,9 @@ function burn() {
                 _burn_gpu _ctx _threads _tps <<< "$_burn_entry"
             request_timeout=$(__llm_burn_request_timeout "${_burn_size:-0G}" "${_burn_gpu:-0}" "${_arch:-}" "${__BENCH_MODE:-}")
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local start_ns end_ns response curl_rc
     local transport_history=""
@@ -6179,7 +6636,9 @@ function burn() {
         else
             max_attempts=3
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     (( max_attempts < 1 )) && max_attempts=1
     [[ "$retry_health_wait" =~ ^[0-9]+$ ]] || retry_health_wait=30
     (( retry_health_wait < 1 )) && retry_health_wait=1
@@ -6220,7 +6679,9 @@ function burn() {
                         '{messages: [{role: "user", content: $p}], max_tokens: $bench_tokens, temperature: $bench_temp, top_p: 1.0}')
                     printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Retrying with ${bench_tokens} tokens after transient failure."
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             local _rh
             local _healthy=0
             for (( _rh=0; _rh < retry_health_wait; _rh++ ))
@@ -6250,13 +6711,17 @@ function burn() {
                                 [[ "$_pf_rc" == "200" ]] && break
                             done
                         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                     if (( retry_settle_sec > 0 ))
                     then
                         sleep "$retry_settle_sec"
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                     break
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 sleep 1
             done
 
@@ -6284,15 +6749,20 @@ function burn() {
                                 printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Model recovered; retrying request."
                                 break
                             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                             sleep 1
                         done
                     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
                 fi
+    # Trust the autotune-discovered ctx as-is on the low end.
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
             attempt=$(( attempt + 1 ))
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         # Retry once if server returned 503 "Loading model" (readiness race:
         # /health reports ok before the model slot is fully ready to serve).
@@ -6316,7 +6786,9 @@ function burn() {
                 attempt=$(( attempt + 1 ))
                 continue
             fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         break
     done
@@ -6328,6 +6800,7 @@ function burn() {
     "(model likely still computing, not necessarily crashed)."
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     if (( curl_rc != 0 ))
     then
         [[ -n "$transport_history" ]] && transport_history+=","
@@ -6335,12 +6808,14 @@ function burn() {
         printf '%s\n' "${C_Error}[API Transport Error]${C_Reset} curl exit ${curl_rc} while calling local server (attempts: ${attempt}/${max_attempts}; rc history: ${transport_history:-$curl_rc})."
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -z "$response" ]]
     then
         printf '%s\n' "${C_Error}[API Error]${C_Reset} Empty response from local server."
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Check for HTTP-level error in response body
     local err_msg
@@ -6350,6 +6825,7 @@ function burn() {
         printf '%s\n' "${C_Warning}[API Status]${C_Reset} $err_msg"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
     local elapsed_s=$(( elapsed_ms / 1000 ))
@@ -6362,6 +6838,7 @@ function burn() {
     then
         tokens=$(printf '%s' "$response" | jq -r '.choices[0].message.content // ""' 2>/dev/null | wc -w)
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     local tps_int=0 tps_dec=0
     if (( elapsed_ms > 0 && tokens > 0 ))
@@ -6370,11 +6847,13 @@ function burn() {
         tps_int=$(( tps_x10 / 10 ))
         tps_dec=$(( tps_x10 % 10 ))
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -z "${__BENCH_MODE:-}" ]]
     then
         printf '%s\n' "${C_Dim}Hint: If inference was slow, first run \"wake\" to lock WDDM state.${C_Reset}"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     printf '%s\n' \
         "${C_Success}Burn complete: ${tps_int}.${tps_dec} tps" \
         "(${tokens} tokens in ${elapsed_s}.${elapsed_dec}s)${C_Reset}"
@@ -6397,6 +6876,7 @@ function explain() {
         __tac_line "Explain" "[NO PREVIOUS COMMAND FOUND]" "$C_Warning"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __llm_stream "Explain this bash command and diagnose any potential errors:\n$last_cmd"
 }
 
@@ -6417,6 +6897,7 @@ function wtf_repl() {
     then
         __llm_stream "Explain how to use the following tool or concept:\n$initial"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     printf '%s\n' "${C_Dim}wtf: mode - type a topic (or 'end-chat' / Ctrl-C to exit)${C_Reset}"
     while true
     do
@@ -6462,6 +6943,7 @@ function __llm_sse_core() {
             response_text+="$content"
             ((chunk_count++))
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
         local srv_tok
         srv_tok=$(printf '%s' "$payload_data" | jq -r '.usage.completion_tokens // empty' 2>/dev/null)
@@ -6478,6 +6960,7 @@ function __llm_sse_core() {
     then
         tokens=$chunk_count
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     if (( tokens > 0 && elapsed_ms > 0 ))
     then
@@ -6491,6 +6974,7 @@ function __llm_sse_core() {
     else
         echo
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     [[ -f "$LLM_TPS_CACHE" ]] && LAST_TPS=$(< "$LLM_TPS_CACHE")
     __LAST_LLM_RESPONSE="$response_text"
@@ -6517,6 +7001,7 @@ function __llm_stream() {
     else
         payload=$(jq -n --arg p "$prompt" '{messages: [{role: "user", content: $p}], stream: true}')
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
 
     (( show_header == 1 )) && printf '\n%s\n\n' "${C_Highlight}AI Analysis:${C_Reset}"
 
@@ -6573,6 +7058,7 @@ function local_chat() {
                 | jq --arg m "$__LAST_LLM_RESPONSE" \
                 '. + [{role: "assistant", content: $m}]')
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     }
 
     local initial="$*"
@@ -6581,6 +7067,7 @@ function local_chat() {
     then
         __send_chat_msg "$initial"
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     printf '%s\n' "${C_Dim}chat: mode - type a message (or 'end-chat' / 'save' / Ctrl-C to exit)${C_Reset}"
     while true
     do
@@ -6598,6 +7085,7 @@ function local_chat() {
                 || printf '%s\n' "${C_Error}Failed to save${C_Reset}"
             continue
         fi
+    # Trust the autotune-discovered ctx as-is on the low end.
         __send_chat_msg "$msg"
     done
 
@@ -6616,6 +7104,7 @@ function chat-context() {
         printf '%s\n' "${C_Dim}Usage:${C_Reset} chat-context <file> \"question about this file\""
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local file="$1"; shift
     local question="$*"
     if [[ ! -f "$file" ]]
@@ -6623,6 +7112,7 @@ function chat-context() {
         __tac_info "File" "[NOT FOUND: $file]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     __require_llm || return 1
     # Cap file content to stay within context window (configurable via env)
     local max_chars="${CHAT_CONTEXT_MAX:-16000}"
@@ -6645,6 +7135,7 @@ function chat-pipe() {
         __tac_info "stdin" "[EMPTY - pipe some content]" "$C_Error"
         return 1
     fi
+    # Trust the autotune-discovered ctx as-is on the low end.
     local question="${*:-Explain this.}"
     __llm_stream "${ctx}\n\n${question}"
 }
