@@ -2162,7 +2162,13 @@ function __model_scan() {
 
         local quant_cache="${quant}/${LLAMA_CACHE_TYPE_K:-q8_0}"
 
-        local _reg_line="${num}|${_mname:-$fname}|${fname}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}|${ctx}|${threads}"
+        # Preserve autotuned ctx: use prev_ctx instead of fresh calc when autotuned
+        local _final_ctx="$ctx"
+        if [[ "$prev_autotuned" == "yes" ]] && [[ -n "${_pctx:-}" ]] && (( _pctx > 0 ))
+        then
+            _final_ctx="$_pctx"
+        fi
+        local _reg_line="${num}|${_mname:-$fname}|${fname}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}|${_final_ctx}|${threads}"
         _reg_line+="|${prev_batch}|${prev_ubatch}|${prev_parallel}|${prev_fit}|${prev_backend}|${prev_mmap}|${prev_flash_attn}|${prev_tps}|${prev_autotuned}|${prev_default}|${prev_active}"
         echo "$_reg_line" >> "$tmpconf"
 
