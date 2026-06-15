@@ -5557,6 +5557,98 @@ function __model_bench_history() {
     __tac_footer
 }
 
+
+# ---------------------------------------------------------------------------
+# __model_bench_trend
+# @description Compare latest two bench TSV files and flag per-model TPS drops >15%.
+# Stores a basic benchmark history so regressions are visible without manual
+# comparison.  Flags models whose TPS dropped >15% from the previous run.
+#
+# Reference: G-6 — node-level slowdown detection
+# (source: Kaarat, TDS 2026-06-11)
+# ---------------------------------------------------------------------------
+function __model_bench_trend() {
+    local -a bench_files=()
+    while IFS= read -r bench_file
+    do
+        bench_files+=("$bench_file")
+    done < <(find "$HOME/.llm" -maxdepth 1 -name 'bench_*.tsv' -type f \
+        -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -2 | cut -d' ' -f2-)
+
+    if (( ${#bench_files[@]} < 2 ))
+    then
+        __tac_info "Bench Trend" "[Need at least 2 benchmark runs — only ${#bench_files[@]} found]" "$C_Error"
+        return 1
+    fi
+
+    local old_file="${bench_files[1]}"  # older
+    local new_file="${bench_files[0]}"  # newer (latest)
+
+    # Read per-model TPS from both files (TSV format: #	model	file	tps	...)
+    # Using awk to build lookup from old file, then compare with new file
+    local trend_output
+    trend_output=$(
+        awk -F'\t' '
+            function tps_num(raw, val) {
+                val = raw
+                gsub(/ tps/, "", val)
+                return (val ~ /^[0-9.]+$/ ? val + 0 : -1)
+            }
+
+            # First file (old): build lookup
+            NR == FNR {
+                if (FNR == 1 || \$1 == "#") next
+                old_tps[\$2] = tps_num(\$4)
+                old_ctx[\$2] = \$5  # ctx
+                next
+            }
+
+            # Second file (new): compare
+            {
+                if (FNR == 1 || \$1 == "#") next
+                if (\$1 == "") next
+                new_t = tps_num(\$4)
+                old_t = old_tps[\$2]
+                if (old_t > 0 && new_t > 0) {
+                    pct = (new_t - old_t) / old_t * 100
+                    if (pct < -15) {
+                        printf "FLAG|%s|%.1f|%.1f|%.0f%%|%s\n", \$2, old_t, new_t, pct, \$5
+                    } else if (pct < -5) {
+                        printf "WARN|%s|%.1f|%.1f|%.0f%%|%s\n", \$2, old_t, new_t, pct, \$5
+                    }
+                }
+            }
+        ' "$old_file" "$new_file"
+    )
+
+    if [[ -z "$trend_output" ]]
+    then
+        __tac_info "Bench Trend" "[No significant TPS changes detected between last two runs]" "$C_Success"
+        return 0
+    fi
+
+    __tac_header "TPS TREND (last 2 runs)" "open"
+    printf "${C_Dim}  %-6s %-50s %10s %10s %8s %s${C_Reset}\n" "STATUS" "MODEL" "OLD TPS" "NEW TPS" "CHANGE" "CTX"
+    printf -v _trend_rule '%*s' $((UIWidth - 4)) ''
+    _trend_rule="${_trend_rule// /${BOX_SL}}"
+    printf "${C_Dim}  %s${C_Reset}\n" "$_trend_rule"
+
+    local old_ifs="$IFS"
+    while IFS='|' read -r status model old_tps new_tps pct ctx
+    do
+        local color="$C_Dim"
+        local label="ok"
+        case "$status" in
+            FLAG) color="$C_Error";  label="DROP" ;;
+            WARN) color="$C_Warning"; label="warn" ;;
+        esac
+        printf "  ${color}%-6s %-50s %8.1f %8.1f %7.0f%% %s${C_Reset}\n" "$label" "${model:0:50}" "$old_tps" "$new_tps" "$pct" "$ctx"
+    done <<< "$trend_output"
+    IFS="$old_ifs"
+    __tac_footer
+    __tac_info "Tip" "Run model bench-diff for detailed per-model comparison" "$C_Dim"
+}
+
 # ---------------------------------------------------------------------------
 # __model_doctor
 # @description Validate registry integrity, default model wiring, GPU visibility, watchdog state, and ports.
@@ -6296,7 +6388,8 @@ bench-compare|bench-latest|bench-history|delete|archive|download}"
     echo "  bench-diff - Compare the latest two bench TSVs (or pass old/new files)"
     echo "  bench-compare - Alias for bench-diff"
     echo "  bench-latest - Show the newest saved benchmark TSV"
-    echo "  bench-history - Summarise recent saved benchmark TSV runs"
+    echo "  bench-history - Summarise recent saved benchmark TSV runs
+  bench-trend   - Compare latest bench TPS vs baseline, flag >15% drops"
     echo "  delete N   - Permanently delete model #N from disk and registry (--dry-run)"
     echo "  archive N  - Move model #N to archive/ and remove from registry (--dry-run)"
     echo "  download   - Download GGUF models from Hugging Face (repo:file)"
@@ -6456,6 +6549,10 @@ function model() {
 
         bench-history)
             __model_bench_history "${1:-}"
+            ;;
+
+        bench-trend)
+            __model_bench_trend
             ;;
 
         delete)
