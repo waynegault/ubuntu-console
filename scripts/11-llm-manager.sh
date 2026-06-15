@@ -68,25 +68,7 @@ function __save_model_ctx() {
     [[ "$model_num" =~ ^[0-9]+$ && "$ctx_val" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
-    # Safety cap: never exceed the model's native training context length.
-    # The autotune binary search should already cap at n_ctx_train via
-    # estimated_max_ctx, but be defensive in the write path (G-5 audit).
     local saved="$ctx_val"
-    local _gguf_file _model_meta _n_ctx_train
-    _gguf_file=$(awk -F'|' -v n="$model_num" 'NR>1 && $1 == n {print $3}' "$LLM_REGISTRY" 2>/dev/null | head -1)
-    if [[ -n "$_gguf_file" ]] && [[ -f "$LLAMA_MODEL_DIR/$_gguf_file" ]]; then
-        _model_meta=$(__gguf_metadata "$LLAMA_MODEL_DIR/$_gguf_file" 2>/dev/null || true)
-        if [[ -n "$_model_meta" ]]; then
-            _n_ctx_train=$(echo "$_model_meta" | cut -d'|' -f4)
-            if [[ "$_n_ctx_train" =~ ^[0-9]+$ ]] && (( _n_ctx_train > 0 && saved > _n_ctx_train )); then
-                local _old="$saved"
-                saved=$(( (_n_ctx_train / 512) * 512 ))
-                __tac_status "Ctx Cap" "saved ctx=$_old capped to n_ctx_train=$_n_ctx_train" "$C_Warning"
-            fi
-        fi
-    fi
-
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     awk -F'|' -v n="$model_num" -v c="$saved" 'BEGIN{OFS="|"} $1 == n {$8 = c} {print}' \
         "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" \
@@ -3444,14 +3426,9 @@ function __model_autotune_DEPRECATED() {
             estimated_max_ctx="$max_ctx_by_rating"
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
-        # Safety cap: never exceed the model's native training context length.
-        if (( n_ctx_train > 0 && estimated_max_ctx > n_ctx_train )); then
-            local old_est="$estimated_max_ctx"
-            estimated_max_ctx=$(( (n_ctx_train / 512) * 512 ))
-            __tac_status "Ctx Bound" \
-                "estimated_max_ctx=$old_est capped to n_ctx_train=$n_ctx_train" \
-                "$C_Warning"
-        fi
+        # Note: No hard n_ctx_train cap here. The VRAM-based estimated_max_ctx
+        # is the correct GPU OOM protection. Models using flash attention + CPU
+        # KV cache can run contexts beyond n_ctx_train with acceptable TPS.
     # Trust the autotune-discovered ctx as-is on the low end.
         (( estimated_max_ctx < 512 )) && estimated_max_ctx=512
     fi
