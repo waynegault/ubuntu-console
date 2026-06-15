@@ -296,6 +296,39 @@ function __tac_cleanup_stale_locks() {
 # ---------------------------------------------------------------------------
 # __llm_json_escape — Escape a string for safe inline JSON output.
 # @returns 0 always.
+
+# ---------------------------------------------------------------------------
+# __gpu_clear_stale_processes — Kill stale Python/CUDA processes holding VRAM.
+# Bench/autotune call __model_stop which only kills llama-server. Python
+# processes holding CUDA contexts are not cleared, silently consuming VRAM.
+# This function finds python3.12 processes that hold GPU file descriptors
+# and kills any that are not the current bench/autotune session.
+# REF: G-5 audit — VRAM clearing gap
+# ---------------------------------------------------------------------------
+function __gpu_clear_stale_processes() {
+    local _gpu_pid _keep_pid _keep_pids count=0
+    _keep_pid="$$"
+    _keep_pids=" $PPID $_keep_pid "
+    while IFS= read -r _gpu_pid; do
+        [[ "$_gpu_pid" =~ ^[0-9]+$ ]] || continue
+        [[ "$_keep_pids" == *" $_gpu_pid "* ]] && continue
+        local _gpu_etime _gpu_cmd
+        _gpu_etime=$(ps -o etime= -p "$_gpu_pid" 2>/dev/null | tr -d '[:space:]')
+        _gpu_cmd=$(ps -o comm= -p "$_gpu_pid" 2>/dev/null | tr -d '[:space:]')
+        [[ -z "$_gpu_cmd" ]] && continue
+        [[ "$_gpu_cmd" == *llama* ]] && continue
+        if [[ "$_gpu_cmd" == python* ]]; then
+            kill -TERM "$_gpu_pid" 2>/dev/null || true
+            sleep 1
+            kill -KILL "$_gpu_pid" 2>/dev/null || true
+            count=$((count + 1))
+        fi
+    done < <(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null || true)
+    if (( count > 0 )); then
+        __tac_info "VRAM" "killed ${count} stale GPU process(es)" "$C_Warning"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 function __llm_json_escape() {
     local raw="${1:-}"
@@ -3264,7 +3297,8 @@ function __model_autotune_DEPRECATED() {
     # Sample "clear" VRAM for ctx budgeting. If a model is already loaded,
     # its allocations make free-VRAM-based sizing anchor too low.
     __model_stop >/dev/null 2>&1 || true
-    sleep 1
+    __gpu_clear_stale_processes
+    sleep 2
 
     # Keep autotune responsive: cap request/readiness waits per trial so one
     # bad config does not stall the whole sweep.
@@ -4180,7 +4214,8 @@ function __model_autotune_DEPRECATED() {
                 (( oom_detected == 0 )) && fail_start=$((fail_start + 1))
                 printf "  %-4s %-5s %-18s %-8s %-8s\n" "$idx" "$c_ctx" "b ${c_batch}/${c_ubatch} p ${c_parallel}" "FAIL" "$([[ $oom_detected -eq 1 ]] && echo OOM || echo START)"
                 __model_stop >/dev/null 2>&1 || true
-                sleep 1
+                __gpu_clear_stale_processes
+                sleep 2
                 # If this combo OOMed at a larger ctx, skip it at all
                 # smaller ctx values too — it will only perform worse.
                 if (( oom_detected == 1 ))
@@ -4315,7 +4350,8 @@ function __model_autotune_DEPRECATED() {
     # Trust the autotune-discovered ctx as-is on the low end.
 
             __model_stop >/dev/null 2>&1 || true
-            sleep 1
+            __gpu_clear_stale_processes
+            sleep 2
         done
     done
 
@@ -5242,7 +5278,8 @@ function __model_bench() {
     # Trust the autotune-discovered ctx as-is on the low end.
                     sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
                     __model_stop 2>/dev/null || true
-                    sleep 1
+                    __gpu_clear_stale_processes
+                    sleep 2
                     continue
                 fi
     # Trust the autotune-discovered ctx as-is on the low end.
