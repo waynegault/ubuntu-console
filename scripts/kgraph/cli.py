@@ -83,6 +83,8 @@ def main():
     parser.add_argument('--validate', help='Validate a graph JSON file against schema')
     parser.add_argument('--pr-dashboard', action='store_true', help='Generate PR dashboard HTML (requires gh CLI)')
     parser.add_argument('--security-check', help='Run security checks on a graph JSON file')
+    parser.add_argument('--benchmark', action='store_true', help='Run token-reduction benchmark')
+    parser.add_argument('--benchmark-dir', help='Source directory for benchmark (default: kgraph package dir)')
     parser.add_argument('--mcp', action='store_true', help='Serve MCP server')
     parser.add_argument('--confidence', action='store_true', help='Show confidence stats for edges')
 
@@ -230,6 +232,26 @@ def main():
             sys.exit(1)
         else:
             print(f'{args.security_check}: security check PASSED')
+        return
+
+    # ── Benchmark mode ──
+    if args.benchmark:
+        from .benchmark import run_benchmark, format_benchmark_report
+        source_dir = args.benchmark_dir or None
+        if source_dir is None:
+            source_dir = os.path.dirname(__file__)
+        graph = None
+        if args.graph_db:
+            from .graph_db import load_from_graph_db
+            graph = load_from_graph_db(args.graph_db)
+        report = run_benchmark(source_dir, graph=graph)
+        output = args.output
+        if output:
+            with open(output, 'w', encoding='utf-8') as f:
+                json.dump(report, f, indent=2)
+            print(f'Benchmark report written to {output}')
+        else:
+            print(format_benchmark_report(report))
         return
 
     # ── MCP server ──
