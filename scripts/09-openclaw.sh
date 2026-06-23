@@ -3035,23 +3035,49 @@ function oc-kgraph() {
     done
 
     if $do_reindex; then
-        __tac_info "kgraph" "[SYNCING MEMORY DB TO GRAPH DB]" "$C_Info"
-        # Note: 'openclaw memory index' was removed; memory is auto-indexed by gateway.
-        # We just sync from the memory DB to the graph DB.
-
-        # Sync indexed memory DB -> dedicated graph DB used by oc g.
+        __tac_info "kgraph" "[SYNCING MEMORY DB + AST — GRAPH DB]" "$C_Info"
         python3 - <<'PY' >/dev/null 2>&1 || true
-import sys
-import os
-repo_root = os.environ.get('TACTICAL_REPO_ROOT')
+import sys, os
+repo_root = os.environ.get('TACTICAL_REPO_ROOT', '/home/wayne/ubuntu-console')
 if repo_root:
-    sys.path.insert(0, repo_root)
-from scripts import kgraph
-memory_db = kgraph.resolve_memory_db_path()
+    sys.path.insert(0, os.path.join(repo_root, 'scripts'))
+from kgraph import (
+    resolve_memory_db_path, load_from_memory_db, load_from_graph_db,
+    save_to_graph_db, extract_repo_graph, tag_confidence
+)
+from kgraph.update import _merge_graphs
+from kgraph.confidence import confidence_stats
+
+# Load existing graph DB (preserving user edits)
+graph_db = os.path.expanduser('~/.openclaw/kgraph.sqlite')
+graph = load_from_graph_db(graph_db)
+
+# Merge memory DB
+memory_db = resolve_memory_db_path()
 if memory_db:
-    graph = kgraph.load_from_memory_db(memory_db)
-    kgraph.save_to_graph_db(os.path.expanduser('~/.openclaw/kgraph.sqlite'), graph)
+    try:
+        mem = load_from_memory_db(memory_db)
+        graph = _merge_graphs(graph, mem)
+    except Exception:
+        pass
+
+# Run AST extraction on ubuntu-console repo
+if repo_root:
+    try:
+        ast = extract_repo_graph(repo_root, max_files=100)
+        graph = _merge_graphs(graph, ast)
+    except Exception:
+        pass
+
+graph = tag_confidence(graph)
+save_to_graph_db(graph_db, graph)
 PY
+        local _rc=$?
+        if [[ $_rc -eq 0 ]]; then
+            __tac_info "kgraph" "[REINDEX COMPLETE]" "$C_Success"
+        else
+            __tac_info "kgraph" "[REINDEX FAILED: $_rc]" "$C_Error"
+        fi
     fi
 
     # Always relaunch to avoid stale in-memory code/data across edits.

@@ -403,7 +403,26 @@ extra source commands.
 │   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
 │   ├── 14-wsl-extras.sh               #   WSL/X11 helpers, completions, vault env
 │   ├── 15-model-recommender.sh        #   AI model recommendations by use case
-│   └── kgraph/                        #   Knowledge graph Python package
+│   └── kgraph/                        #   Knowledge graph Python package (24 modules)
+│       ├── cli.py                      #     CLI entry point (all --commands)
+│       ├── ast_extractor.py            #     tree-sitter AST parser (Bash/Python)
+│       ├── community.py                #     Louvain/greedy clustering, god nodes
+│       ├── confidence.py               #     EXTRACTED/INFERRED/AMBIGUOUS tagging
+│       ├── report.py                   #     GRAPH_REPORT.md generator
+│       ├── query.py                    #     Query/path/explain navigation
+│       ├── call_flow.py                #     Mermaid/HTML call flow export
+│       ├── mcp_server.py               #     JSON-RPC MCP server (5 tools)
+│       ├── update.py                   #     Incremental rebuild & watch mode
+│       ├── validate.py                 #     Input validation & XSS prevention
+│       ├── pr_dashboard.py             #     Git history ↔ graph dashboard
+│       ├── benchmark.py                #     Token-reduction benchmark
+│       ├── server.py                   #     HTTP graph viewer (rate-limited POST)
+│       ├── html.py                     #     Cytoscape.js template + CSP header
+│       ├── projection.py               #     Multi-view graph projection engine
+│       ├── graph_db.py                 #     SQLite persistence layer
+│       ├── memory_import.py            #     OpenClaw memory DB import
+│       ├── life_index.py               #     Canonical concept / life index
+│       └── constants.py                #     Shared constants & defaults
 ├── tools/                             # Standalone utility scripts (not sourced)
 │   ├── check-agent-use.sh             #   Agent usage regression checker (CI)
 │   ├── import-windows-env.sh          #   Import Windows user env vars (standalone)

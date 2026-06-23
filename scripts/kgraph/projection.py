@@ -30,6 +30,8 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
     node_by_id = {str(n.get('id')): dict(n) for n in nodes if n.get('id') is not None}
 
     curated_edge_labels = {'covers topic', 'mentions actor', 'authored by', 'references file', 'file mentions actor', 'file authored by', 'has project', 'has decision', 'has issue', 'has outcome'}
+    ast_edge_labels = {'defines', 'calls', 'imports', 'resolves_to'}
+    ast_node_types = {'function', 'class', 'call', 'module', 'variable'}
     weak_node_labels = {
         'created', 'updated', 'watched', 'watch', 'identified', 'audited', 'added', 'removed', 'fixed', 'changed',
         'summary', 'overview', 'context', 'details', 'notes', 'status', 'result', 'results', 'outcome', 'outcomes',
@@ -837,12 +839,29 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
 
     if mode == 'files':
         for nid, node in node_by_id.items():
-            if str(node.get('type', '')) == 'file':
+            ntype = str(node.get('type', ''))
+            if ntype == 'file':
+                out_nodes[nid] = node
+        # Build set of file IDs for quick inclusion lookup
+        file_node_ids = set(out_nodes.keys())
+        # Also include AST code nodes that belong to visible files
+        for nid, node in node_by_id.items():
+            ntype = str(node.get('type', ''))
+            if ntype in ast_node_types:
                 out_nodes[nid] = node
         for edge in edges:
             src, dst = edge_endpoints(edge)
             label = str(edge.get('label', ''))
+            # inter-file edges
             if node_type(src) == 'file' and node_type(dst) == 'file':
+                dedupe_append(out_edges, seen_edges, src, dst, label)
+                continue
+            # file -> definition (defines) and file -> call edges
+            if node_type(src) == 'file' and dst in out_nodes and label in ast_edge_labels:
+                dedupe_append(out_edges, seen_edges, src, dst, label)
+                continue
+            # call -> call edges (calls)
+            if src in out_nodes and dst in out_nodes and label in ast_edge_labels:
                 dedupe_append(out_edges, seen_edges, src, dst, label)
         return enrich_graph_payload({'nodes': list(out_nodes.values()), 'edges': out_edges}, mode)
 
@@ -862,6 +881,10 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
                 out_nodes[nid] = node
                 continue
             if ntype == 'file':
+                out_nodes[nid] = node
+                continue
+            if ntype in ast_node_types:
+                # AST code nodes: function, class, call, module, variable
                 out_nodes[nid] = node
                 continue
             if is_curated_node(node):
@@ -897,6 +920,10 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
                     continue
         else:  # overview
             if src in out_nodes and dst in out_nodes and label != 'contains chunk':
+                # Always show AST-derived code edges
+                if label in ast_edge_labels:
+                    dedupe_append(out_edges, seen_edges, src, dst, label)
+                    continue
                 if src_type == 'file' and dst_type in {'topic', 'actor', 'project', 'decision', 'issue', 'outcome'} and label in curated_edge_labels:
                     # Prefer chunk-derived lifted structure over direct file fan-out to reduce starbursts.
                     continue

@@ -361,11 +361,23 @@ For the OpenClaw gateway (systemd, not a shell child), `so()` reads the cache an
 
 `oc-restore` prompts for confirmation, validates ZIP contents, supports `--dry-run`.
 
-### Knowledge Graph (`oc g`)
+### Knowledge Graph (`oc g` / `kgraph`)
 
-`oc g` starts `scripts/kgraph.py` (Python HTTP server + Cytoscape.js frontend) and opens the browser. Graph is persisted to `~/.openclaw/kgraph.json` and mirrored to `~/.openclaw/kgraph.sqlite`.
+`oc g` launches the interactive graph viewer (Cytoscape.js, persisted to `~/.openclaw/kgraph.sqlite`).
+The `kgraph` CLI exposes the full toolchain — install it globally:
 
-Graph views: `overview` (default), `topics`, `files`, `semantic`, `raw`. A React + AntV G6 development frontend lives in `frontend-g6/` (Vite port 5173).
+```bash
+uv tool install ./scripts          # from repo root
+uv tool install openclaw-kgraph   # future: from PyPI
+```
+
+**CLI commands:** `--ast`, `--update`, `--watch`, `--report`, `--communities`,
+`--god-nodes`, `--call-flow`, `--mcp`, `--confidence`, `--query`, `--path`,
+`--explain`, `--pr-dashboard`, `--benchmark`, `--audit`, `--install-hook`.
+See `docs/openclaw.md` for full reference.
+
+Graph views: `overview` (default), `topics`, `files`, `semantic`, `raw`.
+A React + AntV G6 dev frontend lives in `frontend-g6/` (Vite port 5173).
 
 ### Key Paths
 

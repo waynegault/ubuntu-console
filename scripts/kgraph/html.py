@@ -12,6 +12,7 @@ HTML_TMPL = """<!doctype html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://unpkg.com; script-src https://unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://unpkg.com;" />
     <title>Knowledge Graph (Cytoscape)</title>
     <script src="https://unpkg.com/cytoscape@3.24.0/dist/cytoscape.min.js"></script>
     <style>

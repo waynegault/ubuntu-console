@@ -6,6 +6,7 @@ the Cytoscape frontend and handles graph.json GET/POST.
 """
 import os
 import json
+import time
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 import threading
@@ -33,6 +34,10 @@ def resolve_serve_target(path: str, force_embed: bool = False) -> tuple[str, str
 
 def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: str | None = None, force_embed: bool = False, graph_db_path: str | None = None, view_mode: str = 'overview', semantic_threshold: float = 0.82):
   serve_dir, filename, using_built_frontend = resolve_serve_target(path, force_embed=force_embed)
+
+  # ── Rate limiter (class-level, shared across requests) ──
+  _rl_requests: list[float] = []
+  _rl_max = 30
 
   _CORS_HEADERS = [
     ('Access-Control-Allow-Origin', '*'),
@@ -183,6 +188,20 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
 
     def do_POST(self):
       if self.path == '/graph.json':
+        # ── Rate limit: max 30 POSTs per 60s sliding window ──
+        now = time.monotonic()
+        cutoff = now - 60.0
+        self.__class__._rl_requests = [t for t in self.__class__._rl_requests if t > cutoff]
+        if len(self.__class__._rl_requests) >= self.__class__._rl_max:
+          self.send_response(429)
+          self.send_header('Content-Type', 'text/plain')
+          self.send_header('Retry-After', '60')
+          self._send_cors_headers()
+          self.end_headers()
+          self.wfile.write(b'Rate limit exceeded. Max 30 POST requests per 60 seconds.')
+          return
+        self.__class__._rl_requests.append(now)
+
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
         try:

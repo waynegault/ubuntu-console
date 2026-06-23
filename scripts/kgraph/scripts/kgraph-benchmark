@@ -1,5 +1,0 @@
-#!/usr/bin/env python3
-"""Entry-point script for kgraph-benchmark."""
-from kgraph.benchmark import main
-
-main()

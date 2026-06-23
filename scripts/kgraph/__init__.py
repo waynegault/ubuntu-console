@@ -123,6 +123,17 @@ from .validate import (
     sanitize_label,
 )
 
+# PR dashboard
+from .pr_dashboard import (
+    generate_pr_dashboard,
+)
+
+# Benchmark
+from .benchmark import (
+    benchmark_graph_vs_raw,
+    print_benchmark,
+)
+
 # CLI
 from .cli import main
 
@@ -189,4 +200,9 @@ __all__ = [
     # validate
     "validate_graph_payload",
     "sanitize_label",
+    # pr_dashboard
+    "generate_pr_dashboard",
+    # benchmark
+    "benchmark_graph_vs_raw",
+    "print_benchmark",
 ]

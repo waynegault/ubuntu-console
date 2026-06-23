@@ -1,9 +1,0 @@
-#!/usr/bin/env python3
-"""Entry-point script for kgraph (pip-installable package).
-
-Usage:
-    kgraph --help
-"""
-from kgraph.cli import main
-
-main()

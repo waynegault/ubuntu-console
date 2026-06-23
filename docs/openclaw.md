@@ -153,39 +153,109 @@ bridged API keys.
 | `oc-sync-models` | Sync model registry with OpenClaw scan |
 | `oc-trust-sync` | Record current `oc-llm-sync.sh` SHA256 hash as trusted |
 
-## Knowledge Graph (`oc g`)
+## Knowledge Graph (`oc g` / `kgraph`)
 
-`oc g` (or `oc-kgraph`) launches an interactive knowledge graph visualisation.
-It starts a Python HTTP server (`scripts/kgraph.py`) that serves a
-Cytoscape.js frontend, then opens the browser. The graph is persisted to
-`~/.openclaw/kgraph.json` and mirrored into `~/.openclaw/kgraph.sqlite`.
+The kgraph package (`scripts/kgraph/`) is a full knowledge graph toolchain:
+interactive viewer, AST code extractor, community detection, MCP server,
+and CLI tools for graph navigation.
 
-**What `oc g` is best for:**
-- browsing OpenClaw-derived file/topic/actor relationships
-- inspecting semantic links between chunks or documents
-- debugging graph extraction and memory structure
-- keeping a small editable manual graph when needed
+### Interactive Viewer (`oc g`)
 
-**Features:**
-- Create, edit, and delete nodes and edges with labels
-- Multiple graph views: `overview`, `topics`, `files`, `semantic`, `raw`
+`oc g` (or `oc-kgraph`) launches the Cytoscape.js graph viewer. Graph data is
+persisted to `~/.openclaw/kgraph.sqlite` (primary) and mirrored to
+`~/.openclaw/kgraph.json`. A React + AntV G6 frontend lives in `frontend-g6/`
+for development (`npm run dev` on port 5173). Both read the same persisted graph.
+
+### CLI Mode (`kgraph`)
+
+The `kgraph` CLI is installable as a standalone tool via `uv tool install ./scripts`
+from the repo root. It exposes all features as subcommands:
+
+| Command | Description |
+|---------|------------|
+| `kgraph --serve` | Launch interactive viewer (same as `oc g`) |
+| `kgraph --ast --repo .` | Extract AST code concepts from a repo |
+| `kgraph --update --source-dir .` | Incremental rebuild (memory DB → AST → communities) |
+| `kgraph --watch` | Watch files and auto-rebuild |
+| `kgraph --report` | Generate GRAPH_REPORT.md with god nodes, communities, surprises |
+| `kgraph --communities` | Detect communities/clusters in the graph |
+| `kgraph --god-nodes` | List most central nodes by composite centrality |
+| `kgraph --call-flow` | Generate call-flow HTML/Mermaid from AST data |
+| `kgraph --mcp` | Serve MCP JSON-RPC server for LLM tool-call access |
+| `kgraph --query <pattern>` | Find nodes matching a label/type |
+| `kgraph --path <src> <dst>` | Shortest path between two nodes |
+| `kgraph --explain <node>` | Describe a node and its connections |
+| `kgraph --confidence` | Show edge confidence breakdown (EXTRACTED/INFERRED/AMBIGUOUS) |
+| `kgraph --pr-dashboard` | Generate PR dashboard correlating git history ↔ graph nodes |
+| `kgraph --benchmark` | Run token-reduction benchmark (graph vs raw files) |
+| `kgraph --audit` | Show security audit report |
+| `kgraph --install-hook` | Install git post-commit/post-merge hooks for auto-rebuild |
+
+### Interactive Viewer Features
+
+- **Multi-view projections:** `overview` (default), `topics`, `files`, `semantic`, `raw`
+- Create, edit, delete nodes and edges with labels
 - Semantic threshold control for noisy similarity edges
-- Cluster nodes by attribute or label prefix (compound parent nodes)
+- Cluster nodes by attribute or label prefix
 - Toggle edge/node labels
 - Graph source/view metadata shown in the toolbar
 - Graph data saved via `GET`/`POST` to `/graph.json`
+- **Rate-limited POST** (30 req/min) — returns 429 with Retry-After
 
-**Recommended use:**
-- `overview` = default human-friendly browsing
-- `topics` = topic/entity centric exploration
-- `files` = document/file structure only
-- `semantic` = strongest similarity edges only
-- `raw` = full unprojected graph for debugging
+### AST Code Extraction (`kgraph --ast`)
 
-A separate React + AntV G6 frontend lives in `frontend-g6/` for development
-use (`npm run dev` on Vite port 5173). Both UIs read the same persisted graph
-state, while the Cytoscape tool can also derive views directly from the
-OpenClaw memory DB.
+Extracts function definitions, class definitions, calls, imports, and file
+dependencies from source code using tree-sitter. Supports Bash and Python.
+Deterministic, zero API calls. 26+ language grammars available.
+
+```bash
+kgraph --ast --repo /path/to/repo --ast-subdirs scripts --output ast-graph.json
+kgraph --confidence --graph ast-graph.json
+kgraph --god-nodes --graph ast-graph.json
+```
+
+### Community Detection (`kgraph --communities`)
+
+Uses networkx (Louvain/greedy modularity) to detect semantic clusters.
+Also computes degree, betweenness, and eigenvector centrality to identify
+"god nodes" — the most central concepts in the graph.
+
+### Confidence Tagging (`kgraph --confidence`)
+
+Every graph edge is tagged with one of:
+- **EXTRACTED** — directly from source (AST parse, explicit DB relation)
+- **INFERRED** — derived via co-occurrence or semantic similarity
+- **AMBIGUOUS** — low-confidence, needs verification
+
+### MCP Server (`kgraph --mcp`)
+
+Exposes 5 tools via JSON-RPC over HTTP (binds localhost only):
+- `kgraph_query` — search nodes by pattern
+- `kgraph_path` — shortest path between two nodes
+- `kgraph_explain` — node description with connections
+- `kgraph_report` — generate current graph report
+- `kgraph_stats` — basic graph statistics
+
+Clients connect to `http://127.0.0.1:8331` (configurable port).
+
+### Git Hooks (`kgraph --install-hook`)
+
+Installs post-commit and post-merge hooks that auto-rebuild the graph
+when source files change. Detects changes via tree-sitter and runs
+`kgraph --update` automatically.
+
+### Installation
+
+```bash
+# From repo (recommended — updates with repo)
+uv tool install ./scripts
+
+# Standalone (when published to PyPI)
+uv tool install openclaw-kgraph
+
+# With AST support (Bash + Python grammars)
+uv tool install ./scripts --extra ast
+```
 
 ## Key Paths
 
