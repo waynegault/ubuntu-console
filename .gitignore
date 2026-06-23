@@ -57,3 +57,16 @@ scripts/__pycache__
 tests/__pycache__
 .qwen/settings.jsonmemory/
 .tmp-bats
+
+# kgraph output files
+*.sqlite
+*.sqlite3
+.graphignore
+kgraph_pr_dashboard*.html
+audit*.html
+audit*.json
+benchmark*.json
+benchmark*.html
+*_sanitized.json
+GRAPH_REPORT*.md
+.graphignore_*
