@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+"""Entry-point script for kgraph-security."""
+from kgraph.security import main
+
+main()

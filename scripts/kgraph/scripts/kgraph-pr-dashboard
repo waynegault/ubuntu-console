@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+"""Entry-point script for kgraph-pr-dashboard."""
+from kgraph.pr_dashboard import main
+
+main()
