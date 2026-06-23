@@ -7,14 +7,6 @@ optional canonical_helpers integration used across multiple modules.
 import re
 import json
 import os
-import sqlite3
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, HTTPServer
-import threading
-import argparse
-import webbrowser
-import tempfile
-import shutil
 
 try:
     from canonical_helpers import load_canonical_data, normalize_canonical_name
