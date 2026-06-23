@@ -45,6 +45,10 @@ yarn-error.log*
 *.dylib
 *.dll
 *.exe
+scripts/build/
+scripts/dist/
+scripts/*.egg-info/
+scripts/*.egg
 
 # Logs
 *.log
