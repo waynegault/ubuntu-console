@@ -85,6 +85,7 @@ def main():
     parser.add_argument('--security-check', help='Run security checks on a graph JSON file')
     parser.add_argument('--benchmark', action='store_true', help='Run token-reduction benchmark')
     parser.add_argument('--benchmark-dir', help='Source directory for benchmark (default: kgraph package dir)')
+    parser.add_argument('--security-audit', action='store_true', help='Run security audit of kgraph modules')
     parser.add_argument('--mcp', action='store_true', help='Serve MCP server')
     parser.add_argument('--confidence', action='store_true', help='Show confidence stats for edges')
 
@@ -252,6 +253,35 @@ def main():
             print(f'Benchmark report written to {output}')
         else:
             print(format_benchmark_report(report))
+        return
+
+    # ── Security audit mode ──
+    if args.security_audit:
+        from .security_audit import run_security_audit, generate_audit_html_report
+        report = run_security_audit()
+        output = args.output
+        if output:
+            if output.endswith('.html') or output.endswith('.htm'):
+                html = generate_audit_html_report(report)
+                with open(output, 'w', encoding='utf-8') as f:
+                    f.write(html)
+            else:
+                with open(output, 'w', encoding='utf-8') as f:
+                    json.dump(report, f, indent=2)
+            print(f'Audit report written to {output}')
+        else:
+            print(f'\n=== kgraph Security Audit Report ===')
+            print(f"Timestamp: {report.get('audit_timestamp', '')}")
+            print(f"Total findings: {report.get('total_findings', 0)}")
+            sev = report.get('severity_summary', {})
+            for level in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']:
+                if sev.get(level, 0):
+                    print(f'  {level}: {sev[level]}')
+            for finding in report.get('findings_flat', []):
+                import os as _os
+                print(f"  [{finding['severity']}] {finding['title']}")
+                print(f"    File: {_os.path.basename(finding.get('file', ''))}:{finding.get('line', '?')}")
+                print(f"    {finding['description'][:100]}...")
         return
 
     # ── MCP server ──
