@@ -24,9 +24,6 @@
 [[ -n "${__TAC_ENV_LOADED:-}" ]] && return 0
 __TAC_ENV_LOADED=1
 
-# Mark library mode so modules can detect non-interactive sourcing if needed
-export TAC_LIBRARY_MODE=1
-
 # Startup optimizations for faster CLI performance
 # NODE_COMPILE_CACHE: Cache compiled JS for repeated CLI runs
 export NODE_COMPILE_CACHE="${NODE_COMPILE_CACHE:-/var/tmp/openclaw-compile-cache}"

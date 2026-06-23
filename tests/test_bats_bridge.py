@@ -9,52 +9,99 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BATS_EXECUTABLE = "bats"
 
+# ── BATS suite definitions ─────────────────────────────────────────────────
+# (glob_pattern, marker_or_marks, timeout_s)
+# Use markers for filtering (e.g. `pytest -m "bats_unit"`) and per-suite
+# timeouts so slow suites fail fast instead of hanging the whole run.
 
-def _discover_bats_files() -> list[Path]:
-    patterns = (
-        "tests/*.bats",
-        "tests/unit/*.bats",
-        "tests/integration/*.bats",
-    )
-    files: list[Path] = []
-    for pattern in patterns:
-        files.extend(sorted(REPO_ROOT.glob(pattern)))
-    return files
+_BATS_SUITE_DEFS: list[tuple[str, object, int]] = [
+    ("tests/unit/*.bats",               pytest.mark.bats_unit,         60),
+    ("tests/tactical-console-fast.bats", pytest.mark.bats_fast,       120),
+    ("tests/tactical-console.bats",      pytest.mark.bats_full,       600),
+    ("tests/llm-json-output.bats",       pytest.mark.bats_llm,        120),
+    ("tests/integration/*.bats",         pytest.mark.bats_integration, 120),
+    ("tests/*.bats",                     pytest.mark.bats_default,     120),
+]
 
 
-BATS_FILES = _discover_bats_files()
+def _discover_params() -> list[pytest.param]:
+    """Build pytest.param instances with dedup, markers, and per-suite timeouts."""
+    seen: set[str] = set()
+    params: list[pytest.param] = []
+    for pattern, marker, timeout in _BATS_SUITE_DEFS:
+        for p in sorted(REPO_ROOT.glob(pattern)):
+            rel = str(p.relative_to(REPO_ROOT))
+            if rel in seen:
+                continue
+            seen.add(rel)
+            params.append(
+                pytest.param(
+                    p,
+                    timeout,
+                    id=rel,
+                    marks=[pytest.mark.bats, marker],
+                )
+            )
+    return params
 
 
-@pytest.mark.bats
-@pytest.mark.parametrize(
-    "bats_file",
-    BATS_FILES,
-    ids=lambda p: str(p.relative_to(REPO_ROOT)),
-)
-def test_bats_suite(bats_file: Path) -> None:
+BATS_PARAMS = _discover_params()
+
+
+def _run_bats(bats_file: Path, timeout_s: int) -> subprocess.CompletedProcess[str]:
+    """Run a BATS file with process-group-scoped timeout."""
     env = os.environ.copy()
     env.setdefault("TERM", "xterm-256color")
-    results: list[subprocess.CompletedProcess[str]] = []
-    for _ in range(2):
-        result = subprocess.run(
-            [BATS_EXECUTABLE, "--tap", str(bats_file)],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            env=env,
-            check=False,
-        )
-        results.append(result)
-        if result.returncode == 0:
-            return
-
-    last = results[-1]
-    first = results[0]
-    first_tail = "\n".join((first.stdout + "\n" + first.stderr).splitlines()[-40:])
-    last_tail = "\n".join((last.stdout + "\n" + last.stderr).splitlines()[-80:])
-    pytest.fail(
-        f"BATS suite failed after retry: {bats_file.relative_to(REPO_ROOT)}\n"
-        f"first_exit={first.returncode} retry_exit={last.returncode}\n"
-        f"--- first attempt tail ---\n{first_tail}\n"
-        f"--- retry attempt tail ---\n{last_tail}"
+    cmd = [BATS_EXECUTABLE, "--tap", str(bats_file)]
+    if os.path.exists("/usr/bin/timeout") or os.path.exists("/bin/timeout"):
+        cmd = ["timeout", "-k", "5", str(timeout_s)] + cmd
+    result = subprocess.run(
+        cmd,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
     )
+    if result.returncode == 124:
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout=timeout_s,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
+    return result
+
+
+def _fail_message(bats_file: Path, result: subprocess.CompletedProcess[str]) -> str:
+    """Build a readable failure message from a BATS run result."""
+    lines: list[str] = []
+    rel = bats_file.relative_to(REPO_ROOT)
+    if result.returncode == 124:
+        return f"BATS suite timed out: {rel}"
+    lines.append(f"BATS suite failed (exit={result.returncode}): {rel}")
+    output_lines = (result.stdout + "\n" + result.stderr).splitlines()
+    lines.extend(output_lines[-40:])
+    return "\n".join(lines)
+
+
+@pytest.mark.parametrize(
+    "bats_file,timeout_s",
+    BATS_PARAMS,
+)
+def test_bats_suite(bats_file: Path, timeout_s: int) -> None:
+    try:
+        result = _run_bats(bats_file, timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(
+            f"BATS suite timed out ({timeout_s}s): "
+            f"{bats_file.relative_to(REPO_ROOT)}\n"
+            f"stdout tail:\n"
+            + "\n".join((exc.output or "").splitlines()[-40:])
+            + "\n--- stderr tail ---\n"
+            + "\n".join((exc.stderr or "").splitlines()[-40:])
+        )
+        return
+
+    if result.returncode != 0:
+        pytest.fail(_fail_message(bats_file, result))

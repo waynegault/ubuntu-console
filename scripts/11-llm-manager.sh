@@ -5638,7 +5638,7 @@ function __model_bench_trend() {
     local old_file="${bench_files[1]}"  # older
     local new_file="${bench_files[0]}"  # newer (latest)
 
-    # Read per-model TPS from both files (TSV format: #	model	file	tps	...)
+    # Read per-model TPS from both files (TSV format: #  model  file  tps  ...)
     # Using awk to build lookup from old file, then compare with new file
     local trend_output
     trend_output=$(

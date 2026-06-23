@@ -1,332 +1,89 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # ==============================================================================
-# run-tests.sh — Pretty-printed BATS test runner for tactical-console
+# run-tests.sh — Tactical Console Unit Test Runner
 # ==============================================================================
-# Wraps `bats --tap` output and regroups it into labelled sections with
-# box-drawn headers matching the tactical-console UI aesthetic.
-#
+# Runs all unit tests via pytest (which bridges BATS through test_bats_bridge.py).
 # Usage:
-#   tools/run-tests.sh                   # run all tests
-#   tools/run-tests.sh --filter "calc"   # pass extra args to bats
-#
-# AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
-# @modular-section: run-tests
-# @depends: none (standalone CI helper; invokes bats)
-# @exports: (none — standalone script, not sourced)
-# shellcheck disable=SC2034,SC2317
-VERSION="1.0"
-
-# NOTE: set -e intentionally omitted — bare (( )) post-increment operators
-# (e.g. ((grand_fail++)) when value is 0) return exit code 1, which would
-# cause premature script termination under errexit.
+#   tools/run-tests.sh                    # all unit & fast tests (default)
+#   tools/run-tests.sh --all              # everything including LLM/integration
+#   tools/run-tests.sh --llm              # with LLM-dependent tests
+#   tools/run-tests.sh --integration      # with integration tests
+#   tools/run-tests.sh --fast             # fast static-analysis tests only
+#   tools/run-tests.sh -- --filter "bash" # pass extra args to pytest
+# ==============================================================================
+# Module Version: 2
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BATS_FILE="$REPO_ROOT/tests/tactical-console.bats"
+
+# Parse flags
+_MODE=""
+_EXTRA_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --all)      _MODE="all";      shift ;;
+        --llm)      _MODE="llm";      shift ;;
+        --integration) _MODE="integration"; shift ;;
+        --fast)     _MODE="fast";     shift ;;
+        --)         shift; _EXTRA_ARGS+=("$@"); break ;;
+        *)          _EXTRA_ARGS+=("$1"); shift ;;
+    esac
+done
+
+# Select pytest markers based on mode
+case "${_MODE:-}" in
+    all)
+        PYTEST_ARGS=()
+        DESC="ALL TESTS"
+        ;;
+    llm)
+        PYTEST_ARGS=(-m "bats_llm or not bats_llm")
+        DESC="with LLM tests"
+        ;;
+    integration)
+        PYTEST_ARGS=(-m "bats_integration or not bats_integration")
+        DESC="with integration tests"
+        ;;
+    fast)
+        PYTEST_ARGS=(-m "bats_fast")
+        DESC="fast static-analysis only"
+        ;;
+    *)
+        PYTEST_ARGS=(-m "not bats_llm and not bats_integration")
+        DESC="unit & fast tests"
+        ;;
+esac
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 C_Reset=$'\e[0m'
 C_Green=$'\e[32m'
 C_Red=$'\e[31m'
-C_Yellow=$'\e[33m'
 C_Cyan=$'\e[36m'
 C_Dim=$'\e[2m'
 C_Bold=$'\e[1m'
-C_BoldGreen=$'\e[1;32m'
-C_BoldRed=$'\e[1;31m'
 C_Border=$'\e[38;5;245m'
+W=80
 
-W=80  # box width
-
-# Global symbol used in live stream output (set -u requires it to exist)
-PASS_SYMBOL=$'\u2713'  # ✓
-FAIL_SYMBOL=$'\u2717'  # ✗
-
-# ── Drawing helpers ──────────────────────────────────────────────────────────
-# Pure bash border drawing (no seq fork - uses printf padding for performance)
 border_top()    { printf '%s+%s+%s\n' "$C_Border" "$(printf '%*s' "$((W-2))" '' | tr ' ' '-')" "$C_Reset"; }
-border_mid()    { printf '%s|%s|%s\n' "$C_Border" "$(printf '%*s' "$((W-2))" '' | tr ' ' '-')" "$C_Reset"; }
 border_bot()    { printf '%s+%s+%s\n' "$C_Border" "$(printf '%*s' "$((W-2))" '' | tr ' ' '-')" "$C_Reset"; }
 row() {
     local text="$1"
-    # Strip ANSI to measure visible length
-    local plain
-    plain=$(printf '%s' "$text" | sed 's/\x1b\[[0-9;]*m//g')
-    local pad=$(( W - 2 - ${#plain} ))
-    (( pad < 0 )) && pad=0
+    local plain; plain=$(printf '%s' "$text" | sed 's/\x1b\[[0-9;]*m//g')
+    local pad=$(( W - 2 - ${#plain} )); (( pad < 0 )) && pad=0
     printf '%s| %s%*s |%s\n' "$C_Border" "$text" "$((pad - 1))" "" "$C_Reset"
 }
-row_empty() { row ""; }
 
-# ── Section header ───────────────────────────────────────────────────────────
-section_header() {
-    local label="$1" passed="$2" total="$3"
-    local colour="$C_BoldGreen"
-    local symbol="$PASS_SYMBOL"
-    if [[ "$passed" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]] && (( passed < total ))
-    then
-        colour="$C_BoldRed"
-        symbol="$FAIL_SYMBOL"
-    fi
-    border_mid
-    if [[ "$passed" =~ ^[0-9]+$ ]]
-    then
-        row "${C_Bold}${C_Cyan}  ${label}${C_Reset}${C_Dim}  - ${passed}/${total} ${symbol}${C_Reset}"
-    else
-        row "${C_Bold}${C_Cyan}  ${label}${C_Reset}"
-    fi
-    border_mid
-}
-
-# ── Section display names keyed by test-name prefix ──────────────────────────
-    declare -A SECTION_NAMES=(
-    ["bash -n"]="1. Syntax - bash -n"
-    ["shellcheck"]="2. Static Analysis - ShellCheck"
-    ["structure"]="3. Profile Structure"
-    ["constants"]="4. Global Constants"
-    ["ui"]="5. UI Helper Engine"
-    ["cache"]="6. Caching Engine"
-    ["port"]="7. Port Utilities"
-    ["metrics"]="8. System Metrics"
-    ["calc"]="9. Pure Calculations"
-    ["quant"]="10. Quant-Label Mapping"
-    ["health"]="11. Health Checks"
-    ["maintenance"]="12. Maintenance Helpers"
-    ["model"]="13. Model Management"
-    ["prompt"]="14. Prompt"
-    ["alias"]="15. Alias Registration"
-    ["fn-avail"]="16. Function Availability"
-    ["cross-script"]="17. Cross-Script Consistency"
-)
-
-# Ordered list of prefixes (bash associative arrays are unordered)
-SECTION_ORDER=(
-    "bash -n" "shellcheck" "structure" "constants" "ui"
-    "cache" "port" "metrics" "calc" "quant"
-    "health" "maintenance" "model" "prompt" "alias"
-    "fn-avail" "cross-script"
-)
-
-# ── Run BATS and capture TAP output ──────────────────────────────────────────
-# Everything goes inside one box.  The live stream prints each result as it
-# arrives, then the grouped section summaries follow, then a conclusion.
-
+# ── Run Tests ────────────────────────────────────────────────────────────────
 border_top
-row "${C_Bold}  TACTICAL CONSOLE - Unit Test Report${C_Reset}"
-row "${C_Dim}  $(date '+%Y-%m-%d %H:%M:%S')   bats $(bats --version 2>/dev/null || echo '?')${C_Reset}"
+row "${C_Bold}  TACTICAL CONSOLE - Test Suite${C_Reset}"
+row "${C_Dim}  $(date '+%Y-%m-%d %H:%M:%S')   mode: ${DESC}${C_Reset}"
+printf '%s|%s|%s\n' "$C_Border" "$(printf '%*s' "$((W-2))" '' | tr ' ' '-')" "$C_Reset"
 
-# ── Part 1: Test Live Stream ─────────────────────────────────────────────────
-section_header "Test Live Stream" "..." "..."
-
-tap_output=""
-_live_num=0
-_live_pass=0
-_live_fail=0
-while IFS= read -r line
-do
-    if [[ "$line" =~ ^ok\ [0-9]+\ (.+)$ ]]
-    then
-        (( _live_num++ ))
-        (( _live_pass++ ))
-        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Green}${PASS_SYMBOL}${C_Reset}"
-    elif [[ "$line" =~ ^not\ ok\ [0-9]+\ (.+)$ ]]
-    then
-        (( _live_num++ ))
-        (( _live_fail++ ))
-        row "  ${C_Dim}${_live_num}.${C_Reset} ${BASH_REMATCH[1]} ${C_Red}${FAIL_SYMBOL}${C_Reset}"
-    fi
-    tap_output+="$line"$'\n'
-done < <(bats --tap "$BATS_FILE" "$@" 2>&1) || true
-
-# Run integration tests if they exist
-INTEGRATION_DIR="$REPO_ROOT/tests/integration"
-if [[ -d "$INTEGRATION_DIR" ]] && compgen -G "$INTEGRATION_DIR/*.bats" > /dev/null
-then
-    row_empty
-    row "  ${C_Bold}Integration Tests${C_Reset}"
-    row_empty
-
-    for int_test in "$INTEGRATION_DIR"/*.bats
-    do
-        [[ -f "$int_test" ]] || continue
-        int_name=$(basename "$int_test")
-        row "  ${C_Dim}Running: $int_name${C_Reset}"
-
-        while IFS= read -r line
-        do
-            if [[ "$line" =~ ^ok\ [0-9]+\ (.+)$ ]]
-            then
-                (( _live_num++ ))
-                (( _live_pass++ ))
-                row "  ${C_Dim}${_live_num}.${C_Reset} [integration] ${BASH_REMATCH[1]} \
-${C_Green}${PASS_SYMBOL}${C_Reset}"
-            elif [[ "$line" =~ ^not\ ok\ [0-9]+\ (.+)$ ]]
-            then
-                (( _live_num++ ))
-                (( _live_fail++ ))
-                row "  ${C_Dim}${_live_num}.${C_Reset} [integration] ${BASH_REMATCH[1]} \
-${C_Red}${FAIL_SYMBOL}${C_Reset}"
-            fi
-            tap_output+="$line"$'\n'
-        done < <(bats --tap "$int_test" "$@" 2>&1) || true
-    done
-fi
-
-# ── Parse TAP lines into parallel arrays ─────────────────────────────────────
-declare -a T_STATUS=()   # "ok" or "not ok"
-declare -a T_NAME=()     # full test description
-declare -a T_PREFIX=()   # section prefix (before first ':')
-declare -a T_DIAG=()     # diagnostic lines (# comments after a failure)
-
-total=0
-diag_buf=""
-while IFS= read -r line
-do
-    # TAP plan line
-    [[ "$line" =~ ^1\.\.  ]] && continue
-
-    # Diagnostic comment
-    if [[ "$line" =~ ^#\  ]]
-    then
-        diag_buf+="${line}"$'\n'
-        continue
-    fi
-
-    # Test result line
-    if [[ "$line" =~ ^(ok|not\ ok)\ [0-9]+\ (.+)$ ]]
-    then
-        # Flush previous diag buffer
-        if (( total > 0 ))
-        then
-            T_DIAG[total - 1]="$diag_buf"
-        fi
-        diag_buf=""
-
-        local_status="${BASH_REMATCH[1]}"
-        local_desc="${BASH_REMATCH[2]}"
-        # Extract prefix (text before first ':')
-        local_prefix="${local_desc%%:*}"
-
-        T_STATUS+=("$local_status")
-        T_NAME+=("$local_desc")
-        T_PREFIX+=("$local_prefix")
-        (( total++ ))
-    fi
-done <<< "$tap_output"
-
-# Flush final diag
-if (( total > 0 ))
-then
-    T_DIAG[total - 1]="$diag_buf"
-fi
-
-# ── Render ───────────────────────────────────────────────────────────────────
-# Two-pass: first tally per-section counts, then render with header-first layout.
-
-# Pass 1 — collect per-section counts
-declare -A SEC_PASS=()
-declare -A SEC_TOTAL=()
-declare -a SEC_SEEN_ORDER=()   # maintains first-seen order of prefixes
-
-for (( i = 0; i < total; i++ ))
-do
-    p="${T_PREFIX[$i]}"
-    if [[ -z "${SEC_TOTAL[$p]+x}" ]]
-    then
-        SEC_TOTAL[$p]=0
-        SEC_PASS[$p]=0
-        SEC_SEEN_ORDER+=("$p")
-    fi
-    (( SEC_TOTAL[$p]++ ))
-    [[ "${T_STATUS[$i]}" == "ok" ]] && (( SEC_PASS[$p]++ ))
-done
-
-grand_pass=0
-grand_fail=0
-_sum_num=0
-
-# ── Part 2: Section Summaries ────────────────────────────────────────────────
-section_header "Section Summaries" "..." "..."
-
-# Pass 2 — render each section
-for p in "${SEC_SEEN_ORDER[@]}"
-do
-    local_pass=${SEC_PASS[$p]}
-    local_total=${SEC_TOTAL[$p]}
-    display="${SECTION_NAMES[$p]:-$p}"
-
-    # Section header with pass/total
-    section_header "$display" "$local_pass" "$local_total"
-
-    # Collapsed sections: fn-avail, cross-script — header only
-    if [[ "$p" == "fn-avail" || "$p" == "cross-script" ]]
-    then
-        (( grand_pass += local_pass ))
-        (( grand_fail += local_total - local_pass ))
-        continue
-    fi
-
-    # Print individual test rows for this section
-    for (( i = 0; i < total; i++ ))
-    do
-        [[ "${T_PREFIX[$i]}" != "$p" ]] && continue
-
-        if [[ "${T_STATUS[$i]}" == "ok" ]]
-        then
-            (( grand_pass++ ))
-            (( _sum_num++ ))
-            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Green}${PASS_SYMBOL}${C_Reset}"
-        else
-            (( grand_fail++ ))
-            (( _sum_num++ ))
-            row "  ${C_Dim}${_sum_num}.${C_Reset} ${T_NAME[$i]#*: } ${C_Red}${FAIL_SYMBOL}${C_Reset}"
-            # Print diagnostic lines indented
-            if [[ -n "${T_DIAG[$i]:-}" ]]
-            then
-                while IFS= read -r dline
-                do
-                    [[ -z "$dline" ]] && continue
-                    row "    ${C_Dim}${dline}${C_Reset}"
-                done <<< "${T_DIAG[$i]}"
-            fi
-        fi
-    done
-done
-
-# ── Summary ──────────────────────────────────────────────────────────────────
-border_mid
-grand_total=$(( grand_pass + grand_fail ))
-
-if (( grand_fail == 0 ))
-then
-    row "  ${C_BoldGreen}ALL ${grand_total} TESTS PASSED ${PASS_SYMBOL}${C_Reset}"
-else
-    _summary="${C_BoldRed}${grand_fail} FAILED ${FAIL_SYMBOL}${C_Reset}"
-    _summary+="  ${C_Dim}|${C_Reset}  "
-    _summary+="${C_Green}${grand_pass} passed ${PASS_SYMBOL}${C_Reset}"
-    _summary+="  ${C_Dim}|${C_Reset}  ${grand_total} total"
-    row "  $_summary"
-    row_empty
-    for (( i = 0; i < total; i++ ))
-    do
-        if [[ "${T_STATUS[$i]}" != "ok" ]]
-        then
-            row "  ${C_Red}${FAIL_SYMBOL}${C_Reset} ${T_NAME[$i]}"
-            if [[ -n "${T_DIAG[$i]:-}" ]]
-            then
-                while IFS= read -r dline
-                do
-                    [[ -z "$dline" ]] && continue
-                    row "    ${C_Dim}${dline}${C_Reset}"
-                done <<< "${T_DIAG[$i]}"
-            fi
-        fi
-    done
-fi
+cd "$REPO_ROOT"
+python3 -m pytest tests/ "${PYTEST_ARGS[@]}" -v --tb=short "${_EXTRA_ARGS[@]}"
+PY_EXIT=$?
 
 border_bot
-
-exit $(( grand_fail > 0 ? 1 : 0 ))
+exit $PY_EXIT
 # end of file

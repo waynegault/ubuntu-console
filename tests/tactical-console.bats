@@ -207,7 +207,7 @@ setup() {
 @test "shellcheck: companion script 11 has no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     [[ -n "${VSCODE_PID:-}" ]] && skip "skip long shellcheck in VS Code test host"
-    shellcheck -s bash "$REPO_ROOT"/scripts/11-llm-manager.sh
+    timeout 60 shellcheck -s bash "$REPO_ROOT"/scripts/11-llm-manager.sh
 }
 
 @test "shellcheck: companion scripts 13-15 and extras have no findings" {
@@ -252,7 +252,7 @@ setup() {
 @test "shellcheck: companion script 11 passes at all severities" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     [[ -n "${VSCODE_PID:-}" ]] && skip "skip long shellcheck in VS Code test host"
-    shellcheck -s bash "$REPO_ROOT"/scripts/11-llm-manager.sh
+    timeout 60 shellcheck -s bash "$REPO_ROOT"/scripts/11-llm-manager.sh
 }
 
 @test "shellcheck: companion scripts 13-15 and extras pass at all severities" {
@@ -936,7 +936,7 @@ setup() {
 }
 @test "fn-avail: __hSection" { declare -f __hSection >/dev/null; }
 @test "fn-avail: __show_header" { declare -f __show_header >/dev/null; }
-@test "fn-avail: __require_design_tokens" { declare -f __require_design_tokens >/dev/null; }
+
 @test "fn-avail: __require_openclaw" { declare -f __require_openclaw >/dev/null; }
 @test "fn-avail: __require_llm" { declare -f __require_llm >/dev/null; }
 @test "fn-avail: __usage" { declare -f __usage >/dev/null; }

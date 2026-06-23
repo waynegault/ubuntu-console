@@ -46,4 +46,19 @@ if _shim_entry is not None:
 main = _pkg.main
 
 if __name__ == '__main__':
+    # Handle --install before delegating to the package CLI, so the shim
+    # script itself gets copied (the --install flag was part of the original
+    # monolithic script and tests expect it).
+    import shutil as _shutil
+    _argv = [a for a in _sys.argv[1:] if not a.startswith('--install')]
+    for i, a in enumerate(_sys.argv[1:]):
+        if a == '--install':
+            _dest = _sys.argv[i + 2] if i + 2 < len(_sys.argv) and not _sys.argv[i + 2].startswith('-') else _os.path.expanduser('~/.openclaw/kgraph.py')
+            _parent = _os.path.dirname(_dest)
+            if _parent:
+                _os.makedirs(_parent, exist_ok=True)
+            _shutil.copy2(__file__, _dest)
+            _os.chmod(_dest, 0o755)
+            print('Installed to', _dest)
+            _sys.exit(0)
     main()

@@ -32,17 +32,5 @@ then
     readonly C_Info=$'\e[34m'          # Blue
 fi
 
-# __require_design_tokens — Assert design tokens are loaded.
-# Call at the top of any module that uses C_* tokens after modularisation.
-# In the monolith this is a no-op (tokens are always above), but when sections
-# become separate files it catches missing source-order dependencies early.
-function __require_design_tokens() {
-    [[ -n "${C_Reset:-}" ]] && return 0
-    printf '%s\n' \
-        "[Tactical Profile] FATAL: design tokens not loaded." \
-        "Source 04-design-tokens.sh before this module." >&2
-    return 1
-}
-
 
 # end of file

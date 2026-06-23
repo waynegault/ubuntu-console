@@ -57,86 +57,22 @@ alias reload='command clear; exec bash'
 alias m='tactical_dashboard'
 alias cpwd='copy_path'
 
-function bats() {
-    local repo_root="${TACTICAL_REPO_ROOT:-$PWD}"
-    local tmpdir="$repo_root/.tmp-bats"
-    mkdir -p "$tmpdir"
-    TMPDIR="$tmpdir" command bats "$@"
-}
-
-# Prefix pytest result lines with a running number for easier scanning.
-function __tac_number_pytest_output() {
-    awk '
-        BEGIN { n = 0 }
-        /^[[:space:]]*tests?\/.*::.* (PASSED|FAILED|SKIPPED|XPASS|XFAIL|ERROR|ERRORS?)/ {
-            n++
-            printf "%d. %s\n", n, $0
-            next
-        }
-        { print }
-    '
-}
-
-# unittest — prefer the current repository's unittest entrypoint when present.
-# If no repository is detected, fall back to the ubuntu-console runner rather
-# than investigator. Investigator remains the fallback for other repos that do
-# not provide a local unittest entrypoint.
-function __tac_repo_unittest_entrypoint() {
-    local repo_root=""
+# unittest — Run all unit tests via pytest/BATS bridge.
+# Passes through to the ubuntu-console runner; detects repo-specific entrypoints.
+function unittest() {
+    local repo_root
     repo_root=$(git -C "${PWD:-.}" rev-parse --show-toplevel 2>/dev/null || true)
 
-    if [[ -z "$repo_root" || "$repo_root" == "$TACTICAL_REPO_ROOT" ]]; then
-        printf '%s\n' "$TACTICAL_REPO_ROOT/tools/run-tests.sh"
-        return 0
+    if [[ -n "$repo_root" && "$repo_root" != "$TACTICAL_REPO_ROOT" ]]; then
+        # Running in a different repo — check for repo-specific runner
+        if [[ -x "$repo_root/unittest" ]]; then
+            command "$repo_root/unittest" "$@"; return $?
+        fi
+        if [[ -x "$repo_root/.venv/bin/investigator" ]]; then
+            command "$repo_root/.venv/bin/investigator" unittest "$@"; return "${PIPESTATUS[0]}"
+        fi
     fi
 
-    if [[ -x "$repo_root/unittest" ]]; then
-        printf '%s\n' "$repo_root/unittest"
-        return 0
-    fi
-    if [[ -x "$repo_root/.venv/bin/unittest" ]]; then
-        printf '%s\n' "$repo_root/.venv/bin/unittest"
-        return 0
-    fi
-    if [[ -x "$repo_root/.venv/bin/investigator" ]]; then
-        printf '%s\n' "$repo_root/.venv/bin/investigator unittest"
-        return 0
-    fi
-
-    return 1
-}
-
-function unittest() {
-    local _repo_entrypoint
-    if _repo_entrypoint=$(__tac_repo_unittest_entrypoint)
-    then
-        case "$_repo_entrypoint" in
-            *" investigator unittest")
-                # shellcheck disable=SC2086
-                command $_repo_entrypoint "$@" 2>&1 | __tac_number_pytest_output
-                return "${PIPESTATUS[0]}"
-                ;;
-            *)
-                # shellcheck disable=SC2086
-                command $_repo_entrypoint "$@"
-                return $?
-                ;;
-        esac
-    fi
-
-    local _investigator_root="/home/wayne/investigator"
-    if [[ -x "$_investigator_root/.venv/bin/investigator" ]]; then
-        command "$_investigator_root/.venv/bin/investigator" unittest "$@" 2>&1 | __tac_number_pytest_output
-        return "${PIPESTATUS[0]}"
-    fi
-    if [[ -x "$_investigator_root/.venv/bin/unittest" ]]; then
-        command "$_investigator_root/.venv/bin/unittest" "$@" 2>&1 | __tac_number_pytest_output
-        return "${PIPESTATUS[0]}"
-    fi
-    if [[ -x "$_investigator_root/unittest" ]]; then
-        command "$_investigator_root/unittest" "$@" 2>&1 | __tac_number_pytest_output
-        return "${PIPESTATUS[0]}"
-    fi
     command "$TACTICAL_REPO_ROOT/tools/run-tests.sh" "$@"
 }
 
