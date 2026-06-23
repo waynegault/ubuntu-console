@@ -81,6 +81,8 @@ def main():
     parser.add_argument('--god-nodes', action='store_true', help='List most central nodes')
     parser.add_argument('--call-flow', action='store_true', help='Generate call-flow HTML/Mermaid')
     parser.add_argument('--validate', help='Validate a graph JSON file against schema')
+    parser.add_argument('--pr-dashboard', action='store_true', help='Generate PR dashboard HTML (requires gh CLI)')
+    parser.add_argument('--security-check', help='Run security checks on a graph JSON file')
     parser.add_argument('--mcp', action='store_true', help='Serve MCP server')
     parser.add_argument('--confidence', action='store_true', help='Show confidence stats for edges')
 
@@ -207,6 +209,27 @@ def main():
             sys.exit(1)
         else:
             print(f'{args.validate}: validation PASSED')
+        return
+
+    # ── PR Dashboard mode ──
+    if args.pr_dashboard:
+        from .pr_dashboard import fetch_prs, generate_dashboard
+        prs = fetch_prs()
+        output = getattr(args, 'output', None) or 'kgraph_pr_dashboard.html'
+        generate_dashboard(prs, output)
+        return
+
+    # ── Security check mode ──
+    if args.security_check:
+        from .security import check_graph_security
+        issues = check_graph_security(args.security_check)
+        if issues:
+            print(f'Security check: {len(issues)} issue(s)')
+            for issue in issues:
+                print(f'  [{issue.get("severity","info")}] [{issue.get("type","unknown")}] {issue.get("message","")}')
+            sys.exit(1)
+        else:
+            print(f'{args.security_check}: security check PASSED')
         return
 
     # ── MCP server ──

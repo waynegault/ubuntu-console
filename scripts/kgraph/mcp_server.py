@@ -18,6 +18,7 @@ from .query import query_nodes, find_path, explain_node, format_explain, format_
 from .report import generate_report
 from .graph_db import load_from_graph_db
 from .constants import GRAPH_DB_DEFAULT
+# Lazy imports to avoid circular dependency via __init__.py
 
 
 def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = None):
@@ -26,6 +27,14 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
     This is a lightweight implementation. For a full MCP spec server,
     consider using the official MCP Python SDK.
     """
+    # Lazy imports to avoid circular dependency
+    from .security import RateLimiter, detect_json_bomb, sanitize_graph
+
+    _security = {
+        'rate_limiter': RateLimiter(max_requests=30, window=60),
+        'detect_json_bomb': detect_json_bomb,
+    }
+
     graph_db_path = os.path.expanduser(graph_db or GRAPH_DB_DEFAULT)
     graph = load_from_graph_db(graph_db_path) if os.path.exists(graph_db_path) else {'nodes': [], 'edges': []}
 
@@ -35,14 +44,50 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
     class MCPHandler(BaseHTTPRequestHandler):
         graph = graph
         graph_db = graph_db_path
+        _rate_limiter = _security['rate_limiter']
+        _detect_bomb = _security['detect_json_bomb']
 
         def _reload_graph(self):
             if os.path.exists(self.graph_db):
                 self.graph = load_from_graph_db(self.graph_db)
 
+        def _rate_limit_check(self) -> bool:
+            if not self._rate_limiter.allow():
+                resp = json.dumps({
+                    'jsonrpc': '2.0',
+                    'error': {'code': -32000, 'message': 'Rate limit exceeded'},
+                    'id': None,
+                })
+                self.send_response(429)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Retry-After', '60')
+                self.end_headers()
+                self.wfile.write(resp.encode('utf-8'))
+                return False
+            return True
+
         def do_POST(self):
             length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(length)
+
+            # Check for JSON bombs / oversized payloads
+            bomb_issues = self._detect_bomb(body)
+            has_fatal = any(i.get('severity') == 'error' for i in bomb_issues)
+            if has_fatal:
+                self.send_response(413)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'error': 'Payload rejected: ' + bomb_issues[0].get('message', 'oversize'),
+                }).encode('utf-8'))
+                return
+
+            # Rate limiting
+            if not self._rate_limit_check():
+                return
+
             try:
                 req = json.loads(body.decode('utf-8'))
             except Exception:
