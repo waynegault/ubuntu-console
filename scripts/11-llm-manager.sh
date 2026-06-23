@@ -1900,6 +1900,8 @@ function __calc_gpu_layers() {
 # __calc_ctx_size — Pick a practical context size.
 # Must account for KV cache VRAM: larger ctx = more VRAM consumed beyond model weights.
 # CPU-only models (>4GB) have no VRAM constraint so can use larger ctx.
+# For GPU-capable models, estimates ctx from VRAM budget so first registration
+# is realistic instead of storing the GGUF metadata value (which can be 1M+).
 function __calc_ctx_size() {
     local _file_bytes=$1 _native_ctx=$2 _arch="${3:-}"
     # MoE models use a stable conservative context regardless of size.
@@ -1908,23 +1910,75 @@ function __calc_ctx_size() {
         echo "$MOE_DEFAULT_CTX"
         return
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # CPU-only mode (model exceeds VRAM threshold): cap to MOE_DEFAULT_CTX.
     if (( _file_bytes > VRAM_TOTAL_BYTES * VRAM_THRESHOLD_PCT / 100 ))
     then
         echo "$MOE_DEFAULT_CTX"
         return
+    fi
+
+    # GPU-capable: estimate realistic ctx from VRAM budget.
+    # KV cache overhead: ~0.5 MB per layer per 1K tokens (q8_0 K + f16 V).
+    # We budget remaining VRAM after model weights for ~20K context as a
+    # practical starting point, capped by the model's native max.
+    local _model_mb=$(( _file_bytes / 1048576 ))
+    local _vram_free_mb
+    if command -v nvidia-smi &>/dev/null; then
+        _vram_free_mb=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    fi
+    [[ "$_vram_free_mb" =~ ^[0-9]+$ ]] || _vram_free_mb=""
+    local _vram_total_mb=$(( VRAM_TOTAL_BYTES / 1048576 ))  # 4096 for 4GB
+    [[ -n "$_vram_free_mb" && "$_vram_free_mb" -gt "$_vram_total_mb" ]] && _vram_free_mb=$_vram_total_mb
+    local _vram_avail_mb=$(( _vram_total_mb - _model_mb - 200 ))  # minus weights + 200MB OS
+    [[ -n "$_vram_free_mb" && "$_vram_free_mb" -lt "$_vram_avail_mb" ]] && _vram_avail_mb=$_vram_free_mb
+
+    # Estimate KV cache MB per 1K tokens from model size (proxy for layer count).
+    # Typical: <1GB ~16 layers (0.5 MB/layer => 8 MB/1K), 1-2GB ~24 layers (12 MB/1K),
+    # 2-3GB ~28 layers (14 MB/1K), 3-4GB ~32 layers (16 MB/1K)
+    local _kv_mb_per_1k=12.0
+    if (( _model_mb >= 3500 )); then
+        _kv_mb_per_1k=16.0
+    elif (( _model_mb >= 2000 )); then
+        _kv_mb_per_1k=14.0
+    elif (( _model_mb >= 1000 )); then
+        _kv_mb_per_1k=12.0
+    elif (( _model_mb >= 500 )); then
+        _kv_mb_per_1k=10.0
     else
-        if (( _native_ctx > 0 ))
-        then
-            echo "$_native_ctx"
+        _kv_mb_per_1k=8.0
+    fi
+
+    if (( _vram_avail_mb > 0 )); then
+        # Estimate ctx from available VRAM: ctx = trunc(vram_avail / kv_mb_per_1k * 1000 / 1024) * 1024
+        local _est_ctx
+        _est_ctx=$(awk -v v="$_vram_avail_mb" -v k="$_kv_mb_per_1k" 'BEGIN{c=int(v/k*1000/1024)*1024; print c<4096?4096:c}')
+        # Cap at native model context limit
+        if (( _native_ctx > 0 && _native_ctx < _est_ctx )); then
+            _est_ctx=$_native_ctx
+        fi
+        # Absolute ceiling: 64K for initial registration on a 4GB GPU.
+        # Autotune will find the real optimum; this is just a realistic first guess.
+        (( _est_ctx > 65536 )) && _est_ctx=65536
+        echo "$_est_ctx"
+    else
+        # No VRAM available before freeing model weights, use a conservative fallback
+        if (( _native_ctx > 0 )); then
+            # Cap native ctx to a value proportional to model size vs VRAM
+            local _ratio=$(( _model_mb * 100 / _vram_total_mb ))
+            if (( _ratio >= 100 )); then
+                echo "$MOE_DEFAULT_CTX"
+            elif (( _ratio >= 75 )); then
+                local _cap=$(( _native_ctx < 16384 ? _native_ctx : 16384 ))
+                echo "$_cap"
+            else
+                local _cap=$(( _native_ctx < 32768 ? _native_ctx : 32768 ))
+                echo "$_cap"
+            fi
         else
             echo "$MOE_DEFAULT_CTX"
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 }
 
 # ---------------------------------------------------------------------------

@@ -1,18 +1,26 @@
-"""kgraph — Serve an interactive Cytoscape-based knowledge graph.
+"""kgraph — Knowledge graph server, AST extractor, community detection, MCP, and CLI tools.
 
 Features:
-- Cytoscape.js frontend (from CDN)
+- Cytoscape.js frontend (from CDN) with multi-view projections
 - Edit/create/delete nodes and edges
-- Edge labels and node labels with toggles
-- Cluster by node attribute or by label prefix (creates compound parent nodes)
-- Persistent store via GET/POST /graph.json (defaults to ~/.openclaw/kgraph.json)
+- Persistent store via SQLite (graph_db) + JSON fallback
+- Cluster by node attribute or label prefix
+- AST-based code-to-concept extraction (tree-sitter) — Bash/Python
+- Community detection with Leiden-like greedy modularity
+- God-node / centrality analysis
+- GRAPH_REPORT.md generation with surprising connections
+- Call-flow HTML / Mermaid export
+- Confidence tagging (EXTRACTED/INFERRED/AMBIGUOUS)
+- Query/path/explain CLI tools
+- MCP server for tool-call graph access
+- --update incremental rebuild
+- --watch auto-sync mode
+- Git hooks for post-commit rebuild
 
-This package was decomposed from a single 3200+ line module into
-logical submodules for maintainability.  All public symbols are
-re-exported here so existing imports continue to work unchanged.
+All public symbols are re-exported here so existing imports work unchanged.
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 # Constants
 from .constants import (
@@ -60,6 +68,61 @@ from .server import (
 # Memory import
 from .memory_import import load_from_memory_db
 
+# AST code-to-concept extraction (tree-sitter)
+from .ast_extractor import (
+    ast_available,
+    extract_repo_graph,
+)
+
+# Community detection / clustering
+from .community import (
+    communities_available,
+    detect_communities,
+    compute_centrality,
+    find_god_nodes,
+)
+
+# Confidence tagging
+from .confidence import (
+    tag_confidence,
+    confidence_stats,
+)
+
+# Report generation
+from .report import (
+    generate_report,
+)
+
+# Query / path / explain tools
+from .query import (
+    query_nodes,
+    find_path,
+    explain_node,
+    format_explain,
+    format_path,
+)
+
+# Call-flow Mermaid / HTML export
+from .call_flow import (
+    generate_call_flow_mermaid,
+    generate_call_flow_html,
+)
+
+# Update / watch mode
+from .update import (
+    incremental_update,
+    start_watch,
+)
+
+# MCP server
+from .mcp_server import serve_mcp
+
+# Input validation / security
+from .validate import (
+    validate_graph_payload,
+    sanitize_label,
+)
+
 # CLI
 from .cli import main
 
@@ -96,4 +159,34 @@ __all__ = [
     "load_from_memory_db",
     # cli
     "main",
+    # ast_extractor
+    "ast_available",
+    "extract_repo_graph",
+    # community
+    "communities_available",
+    "detect_communities",
+    "compute_centrality",
+    "find_god_nodes",
+    # confidence
+    "tag_confidence",
+    "confidence_stats",
+    # report
+    "generate_report",
+    # query
+    "query_nodes",
+    "find_path",
+    "explain_node",
+    "format_explain",
+    "format_path",
+    # call_flow
+    "generate_call_flow_mermaid",
+    "generate_call_flow_html",
+    # update
+    "incremental_update",
+    "start_watch",
+    # mcp
+    "serve_mcp",
+    # validate
+    "validate_graph_payload",
+    "sanitize_label",
 ]
