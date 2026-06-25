@@ -47,7 +47,7 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
     if mem_db_path and os.path.exists(mem_db_path):
         try:
             mem_graph = load_from_memory_db(mem_db_path)
-            graph = _merge_graphs(graph, mem_graph)
+            graph = merge_graphs(graph, mem_graph)
         except Exception as e:
             print(f'  [warn] Memory DB import failed: {e}')
 
@@ -60,7 +60,7 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
                                             max_files=kwargs.get('ast_max_files', 0),
                                             subdirs=kwargs.get('ast_subdirs', None))
             if ast_graph.get('nodes'):
-                graph = _merge_graphs(graph, ast_graph)
+                graph = merge_graphs(graph, ast_graph)
                 print(f'  AST: {len(ast_graph["nodes"])} nodes, {len(ast_graph["edges"])} edges from {source_dir}')
         except Exception as e:
             print(f'  [warn] AST extraction failed: {e}')
@@ -78,7 +78,7 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
     return graph
 
 
-def _merge_graphs(base: dict, overlay: dict) -> dict:
+def merge_graphs(base: dict, overlay: dict) -> dict:
     """Merge overlay graph into base, deduplicating by id."""
     merged = {'nodes': list(base.get('nodes', [])), 'edges': []}
     seen_nodes = set()

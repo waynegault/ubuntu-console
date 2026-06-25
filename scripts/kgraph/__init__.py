@@ -1,24 +1,4 @@
-"""kgraph — Knowledge graph server, AST extractor, community detection, MCP, and CLI tools.
-
-Features:
-- Cytoscape.js frontend (from CDN) with multi-view projections
-- Edit/create/delete nodes and edges
-- Persistent store via SQLite (graph_db) + JSON fallback
-- Cluster by node attribute or label prefix
-- AST-based code-to-concept extraction (tree-sitter) — Bash/Python
-- Community detection with Leiden-like greedy modularity
-- God-node / centrality analysis
-- GRAPH_REPORT.md generation with surprising connections
-- Call-flow HTML / Mermaid export
-- Confidence tagging (EXTRACTED/INFERRED/AMBIGUOUS)
-- Query/path/explain CLI tools
-- MCP server for tool-call graph access
-- --update incremental rebuild
-- --watch auto-sync mode
-- Git hooks for post-commit rebuild
-
-All public symbols are re-exported here so existing imports work unchanged.
-"""
+"""kgraph — Knowledge graph server, AST extractor, community detection, MCP, and CLI tools."""
 
 __version__ = "2.0.0"
 
@@ -112,6 +92,7 @@ from .call_flow import (
 from .update import (
     incremental_update,
     start_watch,
+    merge_graphs,
 )
 
 # MCP server
@@ -195,6 +176,7 @@ __all__ = [
     # update
     "incremental_update",
     "start_watch",
+    "merge_graphs",
     # mcp
     "serve_mcp",
     # validate

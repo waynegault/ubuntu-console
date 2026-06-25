@@ -1,9 +1,4 @@
-"""Constants and import-time setup for the kgraph package.
-
-Re-exports the shared constants (MEMORY_DB_CANDIDATES, GRAPH_DB_DEFAULT,
-LIFE_ROOT_DEFAULT, CANONICAL_CONCEPTS_DEFAULT, SAMPLE_GRAPH) and the
-optional canonical_helpers integration used across multiple modules.
-"""
+"""Constants and import-time setup for the kgraph package."""
 import re
 import json
 import os

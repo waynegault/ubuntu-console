@@ -1,4 +1,3 @@
-import importlib.util
 import os
 import subprocess
 import sys
@@ -7,24 +6,22 @@ import unittest
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
-SCRIPT_PATH = os.path.join(REPO_ROOT, 'scripts', 'kgraph.py')
+SCRIPT_DIR = os.path.join(REPO_ROOT, 'scripts')
+# Import the kgraph package directly; the backward-compatibility shim
+# (scripts/kgraph.py) was removed during cleanup.
+sys.path.insert(0, SCRIPT_DIR)
+import kgraph  # noqa: E402
 
 
 def load_kgraph_module():
-    spec = importlib.util.spec_from_file_location('kgraph', SCRIPT_PATH)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    return kgraph
 
 
 class KGraphTests(unittest.TestCase):
     def test_generate_html_contains_cytoscape_markup(self):
-        self.assertTrue(os.path.exists(SCRIPT_PATH), f'kgraph script not found at {SCRIPT_PATH}')
-
         with tempfile.TemporaryDirectory() as td:
             out = os.path.join(td, 'nested', 'kgraph.html')
-            subprocess.run([sys.executable, SCRIPT_PATH, '--output', out], check=True)
+            subprocess.run([sys.executable, '-m', 'kgraph', '--output', out], check=True, cwd=SCRIPT_DIR)
 
             self.assertTrue(os.path.exists(out), 'Output HTML not created')
             with open(out, 'r', encoding='utf-8') as handle:
@@ -86,11 +83,19 @@ class KGraphTests(unittest.TestCase):
         self.assertEqual(loaded['nodes'][0]['id'], 'n1')
         self.assertEqual(loaded['edges'][0]['label'], 'links')
 
-    def test_install_supports_basename_target(self):
+    def test_install_flag_is_not_supported(self):
+        # The legacy --install flag was a backward-compatibility shim feature
+        # and is no longer supported. The package CLI should reject it.
         with tempfile.TemporaryDirectory() as td:
             out = os.path.join(td, 'kgraph.py')
-            subprocess.run([sys.executable, SCRIPT_PATH, '--install', out], check=True, cwd=td)
-            self.assertTrue(os.path.exists(out))
+            result = subprocess.run(
+                [sys.executable, '-m', 'kgraph', '--install', out],
+                cwd=SCRIPT_DIR,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(os.path.exists(out))
 
     def test_project_graph_overview_hides_chunks_and_remaps_edges(self):
         kgraph = load_kgraph_module()

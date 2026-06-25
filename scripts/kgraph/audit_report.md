@@ -6,7 +6,7 @@ Date: 2026-06-23
 
 The `scripts/kgraph/` directory contains a Python package (`openclaw-kgraph v2.0.0`) providing knowledge graph functionality: AST extraction, community detection, MCP server, CLI tools, and HTML visualization.
 
-A backward-compatibility shim exists at `scripts/kgraph.py` that re-exports all public symbols from the package.
+A kgraph package is installed at scripts/kgraph/ as a pip-installable package
 
 ## Module Inventory
 

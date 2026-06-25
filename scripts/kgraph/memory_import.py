@@ -42,26 +42,8 @@ def load_from_memory_db(dbpath: str) -> dict:
         edge_ids.add(edge_key)
         graph['edges'].append(edge)
 
-    # Legacy schema: nodes/edges tables.
-    if has_table('nodes') and has_table('edges'):
-        try:
-            cur.execute("SELECT id, name, canonical_text FROM nodes")
-            for row in cur.fetchall():
-                nid, name, canonical = row
-                label = name or canonical or str(nid)
-                add_node({'id': str(nid), 'label': label})
-        except sqlite3.Error:
-            pass
-        try:
-            cur.execute("SELECT src_id, dst_id, rel FROM edges")
-            for row in cur.fetchall():
-                src, dst, rel = row
-                add_edge({'from': str(src), 'to': str(dst), 'label': rel or ''})
-        except sqlite3.Error:
-            pass
-
     # Current OpenClaw memory schema: files/chunks tables.
-    elif has_table('files') and has_table('chunks'):
+    if has_table('files') and has_table('chunks'):
         life_index = load_life_index()
         file_paths = set()
         file_node_ids = {}

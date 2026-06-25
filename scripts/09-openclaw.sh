@@ -2997,7 +2997,7 @@ export -f wacli
 
 # ---------------------------------------------------------------------------
 # oc-kgraph — Launch the kgraph knowledge-graph server and open in browser.
-# Starts scripts/kgraph.py on localhost:46139, waits for it to bind, then
+# Starts the kgraph package on localhost:46139, waits for it to bind, then
 # opens the page in the default browser.
 #
 # Options:
@@ -3006,9 +3006,9 @@ export -f wacli
 #   -h|--help   Show usage
 # ---------------------------------------------------------------------------
 function oc-kgraph() {
-    local KG_PY="$TACTICAL_REPO_ROOT/scripts/kgraph.py"
-    if [[ ! -f "$KG_PY" ]]; then
-        __tac_info "kgraph" "[NOT FOUND: $KG_PY]" "$C_Error"
+    local KG_PKG="$TACTICAL_REPO_ROOT/scripts/kgraph"
+    if [[ ! -d "$KG_PKG" ]]; then
+        __tac_info "kgraph" "[NOT FOUND: $KG_PKG]" "$C_Error"
         return 1
     fi
 
@@ -3045,7 +3045,7 @@ from kgraph import (
     resolve_memory_db_path, load_from_memory_db, load_from_graph_db,
     save_to_graph_db, extract_repo_graph, tag_confidence
 )
-from kgraph.update import _merge_graphs
+from kgraph.update import merge_graphs
 from kgraph.confidence import confidence_stats
 
 # Load existing graph DB (preserving user edits)
@@ -3057,7 +3057,7 @@ memory_db = resolve_memory_db_path()
 if memory_db:
     try:
         mem = load_from_memory_db(memory_db)
-        graph = _merge_graphs(graph, mem)
+        graph = merge_graphs(graph, mem)
     except Exception:
         pass
 
@@ -3065,7 +3065,7 @@ if memory_db:
 if repo_root:
     try:
         ast = extract_repo_graph(repo_root, max_files=100)
-        graph = _merge_graphs(graph, ast)
+        graph = merge_graphs(graph, ast)
     except Exception:
         pass
 
@@ -3084,13 +3084,13 @@ PY
     # Kill whatever currently owns the port first (including legacy copies).
     local PORT=46139
     fuser -k "${PORT}/tcp" >/dev/null 2>&1 || true
-    if pgrep -u "$USER" -f "$KG_PY" >/dev/null 2>&1; then
-        # -f required: target is python3 with a script-path argument, -x would only match process name
-        pkill -u "$USER" -f "$KG_PY" >/dev/null 2>&1 || true
+    if pgrep -u "$USER" -f "kgraph --serve" >/dev/null 2>&1; then
+        # -f required: target is python3 with a module invocation, -x would only match process name
+        pkill -u "$USER" -f "kgraph --serve" >/dev/null 2>&1 || true
     fi
     sleep 0.3
     set +m
-    setsid python3 "$KG_PY" --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
+    setsid python3 -m kgraph --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
     disown
     set -m
 

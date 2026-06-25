@@ -15,7 +15,7 @@ Date: 2026-06-23
 | File | Type | Lines | Status |
 |---|---|---|---|
 | `test_bats_bridge.py` | Python/pytest | ~60 | ✅ Active — parametrizes all BATS suites |
-| `test_kgraph.py` | Python/unittest | ~190 | ✅ Active — tests backward-compat shim and graph functions |
+| `test_kgraph.py` | Python/unittest | ~190 | ✅ Active — tests the kgraph package module functions |
 | `test_model_autotune.py` | Python/unittest | ~280 | ✅ Active — tests pure-logic functions in model-autotune.py |
 | `tactical-console.bats` | BATS (full) | 2918 | ✅ Active — full behavioural suite (~473 tests) |
 | `tactical-console-fast.bats` | BATS (fast) | 424 | ✅ Active — static analysis only, no profile sourcing |
@@ -36,7 +36,7 @@ Date: 2026-06-23
 
 ## Coverage Gaps
 
-1. **No Python unit tests for `scripts/kgraph/` modules individually** — tests run against the backward-compat shim `scripts/kgraph.py`, not the package modules directly
+1. **No Python unit tests for `scripts/kgraph/` modules individually** — tests run against the kgraph package`, not the package modules directly
 2. **No unit tests for `bin/llama-watchdog.sh`** — only integration tests in `04-watchdog.bats`
 3. **No tests for `bin/tac_hostmetrics.sh`** — requires Windows host (WSL-only)
 4. **No tests for `tools/*` scripts** — assumed ad-hoc/developer tools

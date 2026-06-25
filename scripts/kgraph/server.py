@@ -57,7 +57,6 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
     view_mode = initial_view_mode
     semantic_threshold = initial_semantic_threshold
     # Path to OpenClaw memory DB to use as fallback source.
-    # Supports legacy and current OpenClaw layouts.
     memory_db = resolve_memory_db_path()
 
     def _send_cors_headers(self):
@@ -213,11 +212,6 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
 
           # Primary persistence target: dedicated SQLite graph DB.
           save_to_graph_db(self.graph_db, payload)
-
-          # Backward-compat mirror for tooling expecting kgraph.json.
-          ensure_parent_dir(self.store)
-          with open(self.store, 'w', encoding='utf-8') as f:
-            json.dump(payload, f)
 
           self.send_response(200)
           self._send_cors_headers()
