@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 from pathlib import Path
 
@@ -49,28 +50,72 @@ BATS_PARAMS = _discover_params()
 
 
 def _run_bats(bats_file: Path, timeout_s: int) -> subprocess.CompletedProcess[str]:
-    """Run a BATS file with process-group-scoped timeout."""
+    """Run a BATS file with a process-group-scoped timeout.
+
+    ``timeout_s`` is enforced by Python's ``subprocess`` API.  A new process
+    session is created so that on timeout we can terminate the entire BATS
+    process group, including any grandchildren (e.g. shellcheck, llama-server,
+    curl) that BATS may have spawned.  If the GNU ``timeout`` utility is
+    available it is also prepended as a last-resort safety net, but the
+    Python-level timeout is authoritative.
+    """
     env = os.environ.copy()
     env.setdefault("TERM", "xterm-256color")
     cmd = [BATS_EXECUTABLE, "--tap", str(bats_file)]
-    if os.path.exists("/usr/bin/timeout") or os.path.exists("/bin/timeout"):
-        cmd = ["timeout", "-k", "5", str(timeout_s)] + cmd
-    result = subprocess.run(
+
+    # Last-resort external timeout: give it a small buffer so the Python
+    # timeout fires first and we get a clean process-group kill.
+    timeout_bin = "/usr/bin/timeout" if os.path.exists("/usr/bin/timeout") else None
+    if timeout_bin is None and os.path.exists("/bin/timeout"):
+        timeout_bin = "/bin/timeout"
+    if timeout_bin is not None:
+        cmd = [timeout_bin, "-k", "5", str(timeout_s + 15)] + cmd
+
+    with subprocess.Popen(
         cmd,
         cwd=REPO_ROOT,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         env=env,
-        check=False,
-    )
-    if result.returncode == 124:
+        start_new_session=True,
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            # Terminate the whole process group so no orphaned grandchild can
+            # keep running after we give up on this suite.
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+                stdout, stderr = proc.communicate()
+            raise subprocess.TimeoutExpired(
+                cmd=cmd,
+                timeout=timeout_s,
+                output=stdout,
+                stderr=stderr,
+            )
+
+    # Normalize the exit code from the external timeout wrapper so callers can
+    # rely on 124 meaning "timed out".
+    returncode = proc.returncode
+    if returncode == 124:
         raise subprocess.TimeoutExpired(
-            cmd,
+            cmd=cmd,
             timeout=timeout_s,
-            output=result.stdout,
-            stderr=result.stderr,
+            output=stdout,
+            stderr=stderr,
         )
-    return result
+
+    return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
 
 
 def _fail_message(bats_file: Path, result: subprocess.CompletedProcess[str]) -> str:

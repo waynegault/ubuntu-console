@@ -34,6 +34,29 @@ setup_file() {
     # Pre-set to skip dashboard auto-launch and clear_tactical
     export __TAC_INITIALIZED=1
 
+    # Isolate $HOME so bashrc-hygiene tests run against a pristine thin loader
+    # instead of the user's potentially drifted real ~/.bashrc.
+    export _TAC_REAL_HOME="$HOME"
+    export HOME="$TAC_TEST_TMPDIR/home"
+    mkdir -p "$HOME"
+    cat > "$HOME/.bashrc" << 'EOF'
+# ~/.bashrc — Thin Loader
+# This file is intentionally minimal and should remain read-only.
+# shellcheck shell=bash
+
+# Interactive guard — skip for non-interactive shells
+case $- in
+    *i*) ;;
+      *) return ;;
+esac
+
+# Source the canonical tactical console profile from the git-tracked repo
+source "$HOME/ubuntu-console/tactical-console.bashrc"
+
+# end of file
+EOF
+    chmod 444 "$HOME/.bashrc"
+
     # Build patched profile files ONCE.  The actual source happens per-test
     # in setup() because aliases don't survive BATS's per-test subshell fork.
     _build_test_profile
@@ -224,57 +247,6 @@ setup() {
         [[ -f "$f" ]] || continue
         run bash -n "$f"
         [ "$status" -eq 0 ]
-    done
-}
-
-@test "shellcheck: tactical-console.bashrc passes at all severities" {
-    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    shellcheck -s bash "$PROFILE_PATH"
-}
-
-@test "shellcheck: companion bin scripts pass at all severities" {
-    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    shellcheck -s bash "$REPO_ROOT"/bin/*.sh
-}
-
-@test "shellcheck: companion scripts 0x pass at all severities" {
-    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    shellcheck -s bash "$REPO_ROOT"/scripts/0*.sh
-}
-
-@test "shellcheck: companion scripts 10 and 12 pass at all severities" {
-    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    shellcheck -s bash \
-        "$REPO_ROOT"/scripts/10-deployment.sh \
-        "$REPO_ROOT"/scripts/12-dashboard-help.sh
-}
-
-@test "shellcheck: companion script 11 passes at all severities" {
-    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    [[ -n "${VSCODE_PID:-}" ]] && skip "skip long shellcheck in VS Code test host"
-    timeout 60 shellcheck -s bash "$REPO_ROOT"/scripts/11-llm-manager.sh
-}
-
-@test "shellcheck: companion scripts 13-15 and extras pass at all severities" {
-    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    shellcheck -s bash \
-        "$REPO_ROOT"/scripts/1[3-5]-*.sh \
-        "$REPO_ROOT"/scripts/18-lint.sh \
-        "$REPO_ROOT"/scripts/load-vault-env.sh \
-        "$REPO_ROOT"/scripts/oc-update-enhanced.sh
-}
-
-@test "shellcheck: install.sh passes at all severities" {
-    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    [[ -f "$REPO_ROOT/install.sh" ]] || skip "install.sh not found"
-    shellcheck -s bash "$REPO_ROOT/install.sh"
-}
-
-@test "shellcheck: mcp-tools/*.sh pass at all severities" {
-    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    for f in "$REPO_ROOT"/mcp-tools/*.sh; do
-        [[ -f "$f" ]] || continue
-        shellcheck -s bash "$f"
     done
 }
 

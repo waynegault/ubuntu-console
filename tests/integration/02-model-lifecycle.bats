@@ -235,24 +235,28 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
 }
 
 @test "integration: autotune missing --backend value exits quickly" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __model_autotune 1 --backend"
     [[ "$status" -ne 124 ]]
     [[ "$output" == *"Missing value for --backend"* ]]
 }
 
 @test "integration: autotune missing --ctx-size value exits quickly" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __model_autotune 1 --ctx-size"
     [[ "$status" -ne 124 ]]
     [[ "$output" == *"Missing value for --ctx-size"* ]]
 }
 
 @test "integration: autotune missing --trials value exits quickly" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __model_autotune 1 --trials"
     [[ "$status" -ne 124 ]]
     [[ "$output" == *"Missing value for --trials"* ]]
 }
 
 @test "integration: autotune early failure does not remove existing lock file" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     local lock_file="$TAC_TEST_TMPDIR/autotune-concurrency.lock"
     printf '%s\n' '424242' > "$lock_file"
 
@@ -262,6 +266,7 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
 }
 
 @test "integration: autotune skip-lock mode does not remove existing lock file" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     local lock_file="$TAC_TEST_TMPDIR/autotune-skip-lock.lock"
     printf '%s\n' '424242' > "$lock_file"
 

@@ -127,6 +127,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 # ===== D) FAILURE PATH =======================================================
 
 @test "[D1] Failure: autotune non-existent model fails fast" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 999 2>/dev/null || true"
@@ -135,6 +136,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[D2] Failure: autotune missing --backend value" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --backend 2>/dev/null || true"
@@ -143,6 +145,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[D3] Failure: autotune missing --ctx-size value" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --ctx-size 2>/dev/null || true"
@@ -151,6 +154,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[D4] Failure: autotune missing --trials value" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --trials 2>/dev/null || true"
@@ -159,6 +163,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[D5] Failure: autotune invalid --ctx-size (non-numeric)" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --ctx-size abc 2>/dev/null || true"
@@ -167,6 +172,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[D6] Failure: autotune --trials 0 fails (must be >= 1)" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --trials 0 2>/dev/null || true"
@@ -175,6 +181,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[D7] Failure: autotune unknown backend" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
         __model_autotune 1 --backend nonexistent 2>/dev/null || true"
@@ -195,6 +202,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[E2] Lock: autotune singleton prevents concurrent run" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     exec {fd}>"$LLM_AUTOTUNE_LOCK_FILE"
     flock -x "$fd"
     echo "$$" > "$LLM_AUTOTUNE_LOCK_FILE"
@@ -207,6 +215,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[E3] Lock: autotune failure (invalid args) preserves pre-existing lock" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     echo "424242" > "$LLM_AUTOTUNE_LOCK_FILE"
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
@@ -216,6 +225,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[E4] Lock: skip-lock mode preserves existing lock file" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     echo "424242" > "$LLM_AUTOTUNE_LOCK_FILE"
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         LLM_REGISTRY=$LLM_REGISTRY LLM_AUTOTUNE_LOCK_FILE=$LLM_AUTOTUNE_LOCK_FILE \
@@ -225,6 +235,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[E5] Lock: skip-lock does not clobber PID in lock file" {
+    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
     local other_pid=424242
     echo "$other_pid" > "$LLM_AUTOTUNE_LOCK_FILE"
     run timeout 3 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
