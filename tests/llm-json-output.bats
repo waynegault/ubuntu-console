@@ -41,6 +41,15 @@ setup_file() {
     export LLM_BENCH_TIMEOUT_S="${LLM_BENCH_TIMEOUT_S:-120}"
     export LLM_RESULTS_DIR="${LLM_RESULTS_DIR:-$BATS_TEST_DIRNAME/../logs/llm-tests}"
 
+    # Early-abort skip flag: if the binary or model GGUF is missing at
+    # setup time, set _LLM_UNAVAILABLE=1 so every test can fast-skip
+    # without running individual file-existence checks.
+    export _LLM_UNAVAILABLE=0
+    if [ ! -x "$LLM_SERVER_BIN" ] || [ ! -f "$LLM_MODEL_GGUF" ]; then
+        echo "# SKIP: LLM server ($LLM_SERVER_BIN) or model GGUF ($LLM_MODEL_GGUF) not available" >&3
+        export _LLM_UNAVAILABLE=1
+    fi
+
     mkdir -p "$LLM_RESULTS_DIR"
 }
 
@@ -48,14 +57,29 @@ teardown_file() {
     _kill_llama_server
 }
 
+_llm_check() {
+    if [ "$_LLM_UNAVAILABLE" = "1" ]; then
+        skip "LLM server binary or model GGUF not available"
+    fi
+}
+
 _llama_base_url() {
     echo "http://127.0.0.1:${LLM_BENCH_PORT}"
 }
 
 _start_llama_server() {
+    _llm_check
     if curl -sf --max-time 5 "$(_llama_base_url)/v1/models" >/dev/null 2>&1; then
         echo "server already running on port ${LLM_BENCH_PORT}" >&2
         return 0
+    fi
+    if [ ! -x "$LLM_SERVER_BIN" ]; then
+        echo "LLM server binary not found: $LLM_SERVER_BIN" >&2
+        return 1
+    fi
+    if [ ! -f "$LLM_MODEL_GGUF" ]; then
+        echo "LLM model GGUF not found: $LLM_MODEL_GGUF" >&2
+        return 1
     fi
     local logfile="$LLM_RESULTS_DIR/server_${LLM_BENCH_PORT}.log"
     "$LLM_SERVER_BIN" \
@@ -73,7 +97,7 @@ _start_llama_server() {
     local pid=$!
     echo "started llama-server PID $pid on port ${LLM_BENCH_PORT}" >&2
     echo "$pid" > "$LLM_RESULTS_DIR/server_${LLM_BENCH_PORT}.pid"
-    # Wait for health
+    # Wait for health — return early on process death
     local waited=0
     while [ $waited -lt 30 ]; do
         if curl -sf --max-time 5 "$(_llama_base_url)/v1/models" >/dev/null 2>&1; then
@@ -81,7 +105,7 @@ _start_llama_server() {
             return 0
         fi
         if ! kill -0 "$pid" 2>/dev/null; then
-            echo "server process died during startup" >&2
+            echo "server process died during startup (exit code: $(wait $pid 2>/dev/null; echo $?))" >&2
             return 1
         fi
         sleep 1

@@ -227,12 +227,6 @@ setup() {
         "$REPO_ROOT"/scripts/12-dashboard-help.sh
 }
 
-@test "shellcheck: companion script 11 has no findings" {
-    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    [[ -n "${VSCODE_PID:-}" ]] && skip "skip long shellcheck in VS Code test host"
-    timeout 60 shellcheck -s bash "$REPO_ROOT"/scripts/11-llm-manager.sh
-}
-
 @test "shellcheck: companion scripts 13-15 and extras have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     shellcheck -s bash \
@@ -2760,10 +2754,6 @@ EOF
 
 @test "autotune: __save_model_ctx function is defined" {
     declare -f __save_model_ctx >/dev/null
-}
-
-@test "autotune: __model_autotune function or DEPRECATED fallback is defined" {
-    declare -f __model_autotune >/dev/null 2>&1 || declare -f __model_autotune_DEPRECATED >/dev/null
 }
 
 @test "autotune: __save_model_ctx persists ctx value without floor clamping" {

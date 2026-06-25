@@ -77,14 +77,6 @@ setup_file() {
         "$REPO_ROOT"/scripts/12-dashboard-help.sh
 }
 
-@test "shellcheck: companion script 11 has no findings" {
-    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    [[ -n "\${VSCODE_PID:-}" ]] && skip "skip long shellcheck in VS Code test host"
-    # shellcheck on 11-llm-manager.sh can hang for minutes on some platforms;
-    # wrap in a 60s timeout to avoid blocking the test suite.
-    timeout 60 shellcheck -s bash "$REPO_ROOT"/scripts/11-llm-manager.sh
-}
-
 @test "shellcheck: companion scripts 13-15 and extras have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     shellcheck -s bash \

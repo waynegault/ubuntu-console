@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -50,14 +51,19 @@ BATS_PARAMS = _discover_params()
 
 
 def _run_bats(bats_file: Path, timeout_s: int) -> subprocess.CompletedProcess[str]:
-    """Run a BATS file with a process-group-scoped timeout.
+    """Run a BATS file using temp files for stdout/stderr to avoid pipe deadlocks.
 
-    ``timeout_s`` is enforced by Python's ``subprocess`` API.  A new process
-    session is created so that on timeout we can terminate the entire BATS
-    process group, including any grandchildren (e.g. shellcheck, llama-server,
-    curl) that BATS may have spawned.  If the GNU ``timeout`` utility is
-    available it is also prepended as a last-resort safety net, but the
-    Python-level timeout is authoritative.
+    ``timeout_s`` is enforced by Python's ``subprocess`` API via
+    ``proc.wait(timeout=...)``. A new process session is created so that on
+    timeout we can terminate the entire BATS process group, including any
+    grandchildren (e.g. shellcheck, llama-server, curl) that BATS may have
+    spawned.  If the GNU ``timeout`` utility is available it is also prepended
+    as a last-resort safety net.
+
+    Using temp files instead of ``stdout=PIPE`` / ``stderr=PIPE`` avoids
+    deadlocks when a child process fills the pipe buffer (>64KB typical) while
+    the parent hasn't yet called ``communicate()`` — standard POSIX pipe
+    deadlock scenario.
     """
     env = os.environ.copy()
     env.setdefault("TERM", "xterm-256color")
@@ -71,38 +77,66 @@ def _run_bats(bats_file: Path, timeout_s: int) -> subprocess.CompletedProcess[st
     if timeout_bin is not None:
         cmd = [timeout_bin, "-k", "5", str(timeout_s + 15)] + cmd
 
-    with subprocess.Popen(
-        cmd,
-        cwd=REPO_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=env,
-        start_new_session=True,
-    ) as proc:
+    # Use temp files instead of PIPE to avoid pipe-buffer deadlocks.
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".bats-stdout", delete=False) as tf_out, \
+         tempfile.NamedTemporaryFile(mode="w+", suffix=".bats-stderr", delete=False) as tf_err:
+        stdout_path = tf_out.name
+        stderr_path = tf_err.name
+
         try:
-            stdout, stderr = proc.communicate(timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            # Terminate the whole process group so no orphaned grandchild can
-            # keep running after we give up on this suite.
+            with subprocess.Popen(
+                cmd,
+                cwd=REPO_ROOT,
+                stdout=tf_out,
+                stderr=tf_err,
+                text=True,
+                env=env,
+                start_new_session=True,
+            ) as proc:
+                try:
+                    proc.wait(timeout=timeout_s)
+                except subprocess.TimeoutExpired:
+                    # Terminate the whole process group so no orphaned grandchild can
+                    # keep running after we give up on this suite.
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                    except (ProcessLookupError, OSError):
+                        pass
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        except (ProcessLookupError, OSError):
+                            pass
+                        proc.wait()
+                    # Read the temp files for the error message.
+                    tf_out.seek(0)
+                    tf_err.seek(0)
+                    stdout_data = tf_out.read()
+                    stderr_data = tf_err.read()
+                    raise subprocess.TimeoutExpired(
+                        cmd=cmd,
+                        timeout=timeout_s,
+                        output=stdout_data,
+                        stderr=stderr_data,
+                    )
+
+            # Normal exit — read the temp files.
+            tf_out.seek(0)
+            tf_err.seek(0)
+            stdout_data = tf_out.read()
+            stderr_data = tf_err.read()
+        finally:
+            # Clean up temp files.
             try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-            except (ProcessLookupError, OSError):
+                os.unlink(stdout_path)
+            except OSError:
                 pass
             try:
-                stdout, stderr = proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except (ProcessLookupError, OSError):
-                    pass
-                stdout, stderr = proc.communicate()
-            raise subprocess.TimeoutExpired(
-                cmd=cmd,
-                timeout=timeout_s,
-                output=stdout,
-                stderr=stderr,
-            )
+                os.unlink(stderr_path)
+            except OSError:
+                pass
 
     # Normalize the exit code from the external timeout wrapper so callers can
     # rely on 124 meaning "timed out".
@@ -111,11 +145,11 @@ def _run_bats(bats_file: Path, timeout_s: int) -> subprocess.CompletedProcess[st
         raise subprocess.TimeoutExpired(
             cmd=cmd,
             timeout=timeout_s,
-            output=stdout,
-            stderr=stderr,
+            output=stdout_data,
+            stderr=stderr_data,
         )
 
-    return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+    return subprocess.CompletedProcess(cmd, returncode, stdout_data, stderr_data)
 
 
 def _fail_message(bats_file: Path, result: subprocess.CompletedProcess[str]) -> str:
