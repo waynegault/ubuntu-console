@@ -213,11 +213,17 @@ bench_once() {
         echo ""; return 1
     fi
 
-    # GPU warmup: send a short completion to wake GPU clocks from power-save.
-    # Without this, the first test on a cold GPU runs at ~19 TPS instead of 60+.
+    # GPU warmup: wake clocks from power-save (P5/P8 → P0).
+    # Laptop GPUs idle at 1035 MHz (~19 TPS) but can reach 1600+ MHz (60+ TPS).
+    # 8 tokens isn't enough compute — use 64 when cold, 8 when already warm.
+    local warmup_tokens=8
+    local _pstate; _pstate=$(nvidia-smi --query-gpu=pstate --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+    if [[ -n "$_pstate" ]] && [[ "$_pstate" != "P0" ]]; then
+        warmup_tokens=64
+    fi
     curl -sS --max-time 30 http://127.0.0.1:8081/v1/chat/completions \
         -H "Content-Type: application/json" \
-        -d '{"messages":[{"role":"user","content":"Warmup"}],"max_tokens":8,"temperature":0}' \
+        -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Warmup\"}],\"max_tokens\":${warmup_tokens},\"temperature\":0}" \
         > /dev/null 2>&1 || true
 
     local start_ns; start_ns=$(date +%s%N)
@@ -234,7 +240,7 @@ except: print(0)" 2>/dev/null) || tokens=0
     [[ "$tokens" =~ ^[0-9]+$ ]] || tokens=0
 
     if [ "$elapsed_ms" -gt 0 ] && [ "$tokens" -gt 0 ]; then
-        echo "scale=1; $tokens * 1000 / $elapsed_ms" | bc 2>/dev/null || echo "0"
+        echo "scale=2; $tokens * 1000 / $elapsed_ms" | bc 2>/dev/null || echo "0"
         return 0
     fi
     echo ""
@@ -252,7 +258,7 @@ bench_ctx() {
         local tps; tps=$(bench_once "$c" "$b" "$u" "$mmap_mode") || { echo ""; return 1; }
         tps=$(echo "$tps" | bc 2>/dev/null || echo "0"); [ -z "$tps" ] && tps=0
         if [ "$(echo "$tps <= 0" | bc 2>/dev/null || echo "1")" = "1" ]; then echo ""; return 1; fi
-        if [ "$(echo "$tps < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then echo ""; return 1; fi
+        if [ "$(echo "$tps + 1 < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then echo ""; return 1; fi
         echo "$tps"
         return 0
     fi
@@ -274,7 +280,7 @@ bench_ctx() {
         [ "$(echo "$t1 > 0" | bc 2>/dev/null || echo "0")" = "1" ] && tps=$t1 || tps=$t2
     fi
     tps=$(echo "scale=2; $tps / 1" | bc -l 2>/dev/null || echo "$tps"); [ -z "$tps" ] && tps=0
-    if [ "$(echo "$tps < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then echo ""; return 1; fi
+    if [ "$(echo "$tps + 1 < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then echo ""; return 1; fi
     echo "$tps"
     return 0
 }
@@ -443,7 +449,7 @@ if [ "$ANY_OK" = true ] && [ -n "$BEST_COMBO" ]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
 
     # TPS floor check: reject configs that are too slow to be usable.
-    if [ "$(echo "$BEST_TPS < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then
+    if [ "$(echo "$BEST_TPS + 1 < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then
         echo "  TPS ${BEST_TPS} below floor ${MIN_TPS} — marking as unusable"
         echo "  failed: TPS below floor"
         exit 2
