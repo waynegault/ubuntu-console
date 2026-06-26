@@ -45,7 +45,7 @@ STARTUP_HEALTH_TIMEOUT_SEC = int(os.environ.get("LLM_AUTOTUNE_STARTUP_HEALTH_TIM
 STARTUP_PREFLIGHT_TIMEOUT_SEC = int(os.environ.get("LLM_AUTOTUNE_STARTUP_PREFLIGHT_TIMEOUT_SEC", "60"))
 CTX_FLOOR = 4096
 PORT_BASE = 9200
-MIN_ACCEPTABLE_TPS_DEFAULT = 2.5
+MIN_ACCEPTABLE_TPS_DEFAULT = 20.0
 BURN_TIMEOUT_SEC = int(os.environ.get("LLM_AUTOTUNE_BURN_TIMEOUT_SEC", "600"))
 
 # Backward-compatible alias used by tests and older callers.
@@ -369,7 +369,7 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
         "--parallel", str(parallel),
         "--threads", str(threads),
         "--flash-attn", flash_attn,
-        "--fit", "on", "--fit-target", "256",
+        "--fit", "off",
     ]
     if mmap == "off":
         cmd.append("--no-mmap")

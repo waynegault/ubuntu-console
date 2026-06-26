@@ -50,8 +50,14 @@ fi
 echo "[${MODEL}] ${name} (${size}, ${gpu_layers:-0} gpu layers)"
 echo ""
 
-# Combos — same for all model sizes (spec needs updating but code works)
-COMBOS=("1024:256" "2048:512" "4096:1024")
+# Combos — selected by GGUF file size to avoid guaranteed-OOM combos on large models
+if [ "$MODEL_MB" -lt 1000 ]; then
+    COMBOS=("1024:256" "2048:512" "4096:1024")
+elif [ "$MODEL_MB" -lt 2000 ]; then
+    COMBOS=("1024:256" "2048:512")
+else
+    COMBOS=("1024:256")
+fi
 
 MIN_CTX=4096
 MIN_TPS=${LLM_MIN_TPS:-20}
@@ -137,9 +143,11 @@ cleanup_gpu() {
 
 # ---------------------------------------------------------------------------
 # bench_once — start server, run benchmark, return TPS on stdout.
+#   args: ctx batch ubatch [mmap_mode]
+#   mmap_mode: "off" (--no-mmap, default) or "auto" (--mmap auto)
 # ---------------------------------------------------------------------------
 bench_once() {
-    local c="$1" b="$2" u="$3"
+    local c="$1" b="$2" u="$3" mmap_mode="${4:-off}"
     local tag="/tmp/at-vram-${MODEL}-${c}"
 
     cleanup_gpu 2>/dev/null || { echo ""; return 1; }
@@ -150,11 +158,14 @@ bench_once() {
         touch "$tag"
     fi
 
+    local mmap_flag="--no-mmap"
+    [ "$mmap_mode" = "auto" ] && mmap_flag=""
+
     "$LLAMA_BIN" --model "$MODEL_PATH" --port 8081 --host 127.0.0.1 \
         --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
         --threads "$TUNE_THREADS" --n-gpu-layers "${gpu_layers:-999}" \
         --parallel 1 --fit off --flash-attn on --kv-offload \
-        --cache-type-k q8_0 --no-mmap \
+        --cache-type-k q8_0 $mmap_flag \
         > "/tmp/at-${MODEL}-c${c}-b${b}.log" 2>&1 &
     local pid=$!
 
@@ -165,6 +176,25 @@ bench_once() {
         curl -sS --max-time 2 http://127.0.0.1:8081/health 2>/dev/null | grep -q 'ok' && break
     done
     if [ "$hw" -ge 90 ]; then
+        kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+        echo ""; return 1
+    fi
+
+    # Pre-flight: confirm model slot is actually ready to serve.
+    # WSL2 drvfs: /health returns OK before the GGUF memory-map completes,
+    # so the first real completion can stall or return 0 tokens.
+    local pf_ok=0 pf_w=0
+    while [ "$pf_w" -lt 60 ]; do
+        if curl -sS --max-time 5 http://127.0.0.1:8081/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}' \
+            2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))" 2>/dev/null | grep -q '[1-9]'; then
+            pf_ok=1; break
+        fi
+        kill -0 "$pid" 2>/dev/null || { echo ""; return 1; }
+        sleep 1; pf_w=$((pf_w + 1))
+    done
+    if [ "$pf_ok" -ne 1 ]; then
         kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
         echo ""; return 1
     fi
@@ -192,12 +222,13 @@ except: print(0)" 2>/dev/null) || tokens=0
 
 # ---------------------------------------------------------------------------
 # bench_ctx — returns TPS on stdout, empty on failure. RC 0/1.
+#   args: ctx batch ubatch [samples] [mmap_mode]
 # ---------------------------------------------------------------------------
 bench_ctx() {
-    local c="$1" b="$2" u="$3" samples="${4:-1}"
+    local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-off}"
 
     if [ "$samples" -eq 1 ]; then
-        local tps; tps=$(bench_once "$c" "$b" "$u") || { echo ""; return 1; }
+        local tps; tps=$(bench_once "$c" "$b" "$u" "$mmap_mode") || { echo ""; return 1; }
         tps=$(echo "$tps" | bc 2>/dev/null || echo "0"); [ -z "$tps" ] && tps=0
         if [ "$(echo "$tps <= 0" | bc 2>/dev/null || echo "1")" = "1" ]; then echo ""; return 1; fi
         if [ "$(echo "$tps < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then echo ""; return 1; fi
@@ -205,9 +236,9 @@ bench_ctx() {
         return 0
     fi
 
-    local t1; t1=$(bench_once "$c" "$b" "$u") || t1=""
+    local t1; t1=$(bench_once "$c" "$b" "$u" "$mmap_mode") || t1=""
     t1=$(echo "$t1" | bc 2>/dev/null || echo "0")
-    local t2; t2=$(bench_once "$c" "$b" "$u") || t2=""
+    local t2; t2=$(bench_once "$c" "$b" "$u" "$mmap_mode") || t2=""
     t2=$(echo "$t2" | bc 2>/dev/null || echo "0")
 
     local o=0
@@ -303,11 +334,13 @@ for combo in "${COMBOS[@]}"; do
         prev_c=-1; probe_count=0
         while [ $((hi - lo)) -ge 512 ] && [ "$probe_count" -lt 5 ]; do
             probe_count=$((probe_count + 1))
+            nsamples=1
+            [ "$probe_count" -gt 1 ] && nsamples=2   # double-sample in refinement zone
             c=$(( (lo + hi) / 2 / 512 * 512 ))
             [ "$c" -eq "$prev_c" ] && break
             prev_c=$c
             test_num=$((test_num + 1))
-            bench_ctx "$c" "$b" "$u" 1 > /tmp/at-tps-$$; rc=$?
+            bench_ctx "$c" "$b" "$u" "$nsamples" > /tmp/at-tps-$$; rc=$?
             tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
             if [ "$rc" -ne 0 ]; then
                 hi=$c
@@ -322,6 +355,45 @@ for combo in "${COMBOS[@]}"; do
     done
     [ "$found" = false ] && echo "  Test $test_num: ctx $(fmt "$c") - OOM - model cannot run at any ctx"
 done
+
+# --- mmap fallback ---
+# If --no-mmap failed at all ctx for all combos, retry with --mmap auto.
+# Some architectures (phi3, gemma3n) are sensitive to mmap mode on WSL2.
+if [ "$ANY_OK" = false ]; then
+    echo ""
+    echo "  --no-mmap failed at all ctx — retrying with --mmap auto"
+    echo ""
+    for combo in "${COMBOS[@]}"; do
+        IFS=':' read -r b u <<< "$combo"
+        echo "  batch $(fmt "$b")/$(fmt "$u")  (mmap auto)"
+        echo "  ---------------------"
+
+        c=$START_CTX; found=false
+        while [ "$c" -ge "$MIN_CTX" ]; do
+            tps=$(bench_ctx "$c" "$b" "$u" 1 "auto") || {
+                echo "  ctx $(fmt "$c") - OOM: dropping to $(fmt $((c/2)))"
+                c=$((c/2)); [ "$c" -lt "$MIN_CTX" ] && break; continue
+            }
+            echo "  ctx $(fmt "$c") - ${tps} tps"
+            found=true; ANY_OK=true
+            record_best "$c" "$tps" "$b" "$u"
+            # Phase 2: step up, stop at first OOM (fallback path — keep it simple)
+            lo=$c; c=$((c * 3 / 2))
+            while true; do
+                bench_ctx "$c" "$b" "$u" 1 "auto" > /tmp/at-tps-$$; rc=$?
+                tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
+                if [ "$rc" -ne 0 ]; then
+                    echo "  ctx $(fmt "$c") - OOM"
+                    break
+                fi
+                lo=$c; record_best "$lo" "$tps" "$b" "$u"
+                echo "  ctx $(fmt "$c") - ${tps} tps - climbing to $(fmt $((c*3/2)))"
+                c=$((c * 3 / 2))
+            done
+            break
+        done
+    done
+fi
 
 # --- Ubatch ratio testing ---
 if [ "$ANY_OK" = true ] && [ -n "$BEST_COMBO" ]; then
@@ -348,6 +420,14 @@ echo ""
 
 if [ "$ANY_OK" = true ] && [ -n "$BEST_COMBO" ]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
+
+    # TPS floor check: reject configs that are too slow to be usable.
+    if [ "$(echo "$BEST_TPS < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then
+        echo "  TPS ${BEST_TPS} below floor ${MIN_TPS} — marking as unusable"
+        echo "  failed: TPS below floor"
+        exit 2
+    fi
+
     END_TS=$(date '+%H:%M:%S')
     DURATION=$(( $(date +%s) - START_EPOCH ))
     printf '  time:    %s \u2192 %s  (%dm %ds)\n' "$START_TS" "$END_TS" $((DURATION/60)) $((DURATION%60))
