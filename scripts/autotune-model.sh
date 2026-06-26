@@ -50,15 +50,6 @@ fi
 echo "[${MODEL}] ${name} (${size}, ${gpu_layers:-0} gpu layers)"
 echo ""
 
-# Combos — selected by GGUF file size to avoid guaranteed-OOM combos on large models
-if [ "$MODEL_MB" -lt 1000 ]; then
-    COMBOS=("1024:256" "2048:512" "4096:1024")
-elif [ "$MODEL_MB" -lt 2000 ]; then
-    COMBOS=("1024:256" "2048:512")
-else
-    COMBOS=("1024:256")
-fi
-
 MIN_CTX=4096
 MIN_TPS=${LLM_MIN_TPS:-20}
 
@@ -70,6 +61,16 @@ MODEL_BYTES=$(stat --format=%s "$MODEL_PATH" 2>/dev/null || echo 0)
 FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
 FREE_VRAM=${FREE_VRAM:-3965}
 MODEL_MB=$(( MODEL_BYTES / 1048576 ))
+
+# Combos — selected by GGUF file size to avoid guaranteed-OOM combos on large models
+if [ "$MODEL_MB" -lt 1000 ]; then
+    COMBOS=("1024:256" "2048:512" "4096:1024")
+elif [ "$MODEL_MB" -lt 2000 ]; then
+    COMBOS=("1024:256" "2048:512")
+else
+    COMBOS=("1024:256")
+fi
+
 BUDGET=$(( FREE_VRAM - MODEL_MB - 200 ))
 
 if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/null; then
@@ -77,8 +78,10 @@ if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/nu
     _meta=$(__gguf_metadata "$MODEL_PATH" 2>/dev/null || true)
     if [[ -n "$_meta" ]]; then
         _n_layers=$(echo "$_meta" | cut -d'|' -f3)
+        _native_ctx=$(echo "$_meta" | cut -d'|' -f4)
         _kv_mb=$(__kv_mb_per_1k "${_n_layers:-0}")
     else
+        _native_ctx=""
         _kv_mb=$(__kv_mb_per_1k "0")
     fi
     if (( BUDGET > 0 )); then
@@ -88,6 +91,7 @@ if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/nu
     fi
 else
     # Standalone fallback: size-class factor heuristic
+    _native_ctx=""
     if [ "$MODEL_MB" -gt 3000 ]; then FACTOR=50
     elif [ "$MODEL_MB" -gt 2000 ]; then FACTOR=100
     elif [ "$MODEL_MB" -gt 1000 ]; then FACTOR=500
@@ -99,6 +103,16 @@ fi
 START_CTX=$(( (START_CTX / 1024) * 1024 ))
 [ "$START_CTX" -lt "$MIN_CTX" ] && START_CTX=$MIN_CTX
 [ "$START_CTX" -gt 4194304 ] && START_CTX=4194304
+
+# Cap START_CTX by native training context to avoid probing into RoPE-extended
+# territory where KV-cache load times explode and generation quality is unknown.
+# Multiplier: 4× for <2 GB models (VRAM headroom), 2× for ≥2 GB (tight VRAM).
+if [[ -n "${_native_ctx:-}" ]] && [[ "$_native_ctx" =~ ^[0-9]+$ ]] && [ "$_native_ctx" -gt 0 ]; then
+    _mult=4
+    [ "$MODEL_MB" -ge 2000 ] && _mult=2
+    _ceiling=$(( _native_ctx * _mult ))
+    [ "$START_CTX" -gt "$_ceiling" ] && START_CTX=$_ceiling
+fi
 
 # Comma-format numbers
 fmt() { echo "$1" | sed ':a;s/\B[0-9]\{3\}\>/,&/;ta'; }
@@ -198,6 +212,13 @@ bench_once() {
         kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
         echo ""; return 1
     fi
+
+    # GPU warmup: send a short completion to wake GPU clocks from power-save.
+    # Without this, the first test on a cold GPU runs at ~19 TPS instead of 60+.
+    curl -sS --max-time 30 http://127.0.0.1:8081/v1/chat/completions \
+        -H "Content-Type: application/json" \
+        -d '{"messages":[{"role":"user","content":"Warmup"}],"max_tokens":8,"temperature":0}' \
+        > /dev/null 2>&1 || true
 
     local start_ns; start_ns=$(date +%s%N)
     local resp; resp=$(curl -sS --max-time 180 http://127.0.0.1:8081/v1/chat/completions \
