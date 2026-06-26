@@ -6,11 +6,10 @@
 # Runs Python tests via pytest and BATS suites directly with live TAP display.
 #
 # Usage:
-#   tools/run-tests.sh                    # unit & fast tests (default)
-#   tools/run-tests.sh --all              # everything including LLM/integration
+#   tools/run-tests.sh                    # all tests (default)
+#   tools/run-tests.sh --fast             # fast static-analysis tests only
 #   tools/run-tests.sh --llm              # with LLM-dependent tests
 #   tools/run-tests.sh --integration      # with integration tests
-#   tools/run-tests.sh --fast             # fast static-analysis tests only
 #   tools/run-tests.sh -- --filter "bash" # pass extra args to bats
 # ==============================================================================
 # Module Version: 3
@@ -19,7 +18,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────
-_MODE=""
+_MODE="all"
 _EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in

@@ -1,4 +1,5 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
+# shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # Module Version: 1
 #===============================================================================
@@ -25,7 +26,7 @@ source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
 if [ $# -eq 0 ]; then
     MODELS=$(awk -F'|' '$1 ~ /^[0-9]+$/ && $18 != "yes" {print $1}' "$LLM_REGISTRY" | sort -n | tr '\n' ' ')
 else
-    MODELS="$@"
+    MODELS="$*"
 fi
 
 TOTAL=$(echo "$MODELS" | wc -w)
