@@ -104,9 +104,10 @@ setup() {
     local fn_src
     fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
-    [[ "$fn_src" == *"no OOM"* || "$fn_src" == *"BEST_SCORE"* ]]
-    [[ "$fn_src" == *"max ctx"* || "$fn_src" == *"BEST_CTX"* ]]
-    [[ "$fn_src" == *"max TPS"* || "$fn_src" == *"BEST_TPS"* ]]
+    # Selection logic: highest ctx above TPS floor wins.
+    [[ "$fn_src" == *"higher ctx"* || "$fn_src" == *"BEST_CTX"* ]]
+    [[ "$fn_src" == *"BEST_CTX"* ]]
+    [[ "$fn_src" == *"BEST_TPS"* ]]
 }
 
 @test "integration: autotune-model.sh supports binary strategy" {

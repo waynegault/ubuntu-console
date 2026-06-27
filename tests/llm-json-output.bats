@@ -92,14 +92,14 @@ _start_llama_server() {
         --batch-size 1024 \
         --ubatch-size 256 \
         --parallel 1 \
-        --log-disable \
         2>"$logfile" &
     local pid=$!
     echo "started llama-server PID $pid on port ${LLM_BENCH_PORT}" >&2
     echo "$pid" > "$LLM_RESULTS_DIR/server_${LLM_BENCH_PORT}.pid"
-    # Wait for health — return early on process death
+    # Wait for health — return early on process death.
+    # 90 s accounts for cold NTFS/WSL2 model loads (2.5 GB GGUF).
     local waited=0
-    while [ $waited -lt 30 ]; do
+    while [ $waited -lt 90 ]; do
         if curl -sf --max-time 5 "$(_llama_base_url)/v1/models" >/dev/null 2>&1; then
             echo "server ready after ${waited}s" >&2
             return 0
@@ -111,7 +111,7 @@ _start_llama_server() {
         sleep 1
         waited=$((waited + 1))
     done
-    echo "server failed to become healthy within 30s" >&2
+    echo "server failed to become healthy within 90s" >&2
     # Ensure we don't leak a partially-started server.
     kill "$pid" 2>/dev/null || true
     return 1

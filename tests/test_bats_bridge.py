@@ -16,11 +16,11 @@ BATS_EXECUTABLE = "bats"
 # Use markers for filtering (e.g. `pytest -m "bats_unit"`) and per-suite
 # timeouts so slow suites fail fast instead of hanging the whole run.
 
-_BATS_SUITE_DEFS: list[tuple[str, object, int]] = [
+_BATS_SUITE_DEFS: list[tuple[str, pytest.MarkDecorator | pytest.Mark, int]] = [
     ("tests/unit/*.bats",               pytest.mark.bats_unit,         60),
     ("tests/tactical-console-fast.bats", pytest.mark.bats_fast,       120),
     ("tests/tactical-console.bats",      pytest.mark.bats_full,       600),
-    ("tests/llm-json-output.bats",       pytest.mark.bats_llm,        120),
+    ("tests/llm-json-output.bats",       pytest.mark.bats_llm,        600),
     ("tests/integration/*.bats",         pytest.mark.bats_integration, 120),
     ("tests/*.bats",                     pytest.mark.bats_default,     120),
 ]
@@ -41,7 +41,7 @@ def _discover_params() -> list[pytest.param]:
                     p,
                     timeout,
                     id=rel,
-                    marks=[pytest.mark.bats, marker],
+                    marks=[pytest.mark.bats, marker],  # type: ignore[list-item]
                 )
             )
     return params
@@ -172,13 +172,21 @@ def test_bats_suite(bats_file: Path, timeout_s: int) -> None:
     try:
         result = _run_bats(bats_file, timeout_s)
     except subprocess.TimeoutExpired as exc:
+        stdout_tail: list[str] = []
+        stderr_tail: list[str] = []
+        if exc.output is not None:
+            out = exc.output.decode() if isinstance(exc.output, bytes) else exc.output
+            stdout_tail = out.splitlines()[-40:]
+        if exc.stderr is not None:
+            err = exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
+            stderr_tail = err.splitlines()[-40:]
         pytest.fail(
             f"BATS suite timed out ({timeout_s}s): "
             f"{bats_file.relative_to(REPO_ROOT)}\n"
             f"stdout tail:\n"
-            + "\n".join((exc.output or "").splitlines()[-40:])
+            + "\n".join(stdout_tail)
             + "\n--- stderr tail ---\n"
-            + "\n".join((exc.stderr or "").splitlines()[-40:])
+            + "\n".join(stderr_tail)
         )
         return
 
