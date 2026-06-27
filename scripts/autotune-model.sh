@@ -51,7 +51,7 @@ echo "[${MODEL}] ${name} (${size}, ${gpu_layers:-0} gpu layers)"
 echo ""
 
 MIN_CTX=4096
-MIN_TPS=${LLM_MIN_TPS:-20}
+MIN_TPS=${LLM_MIN_TPS:-10}
 
 # ---------------------------------------------------------------------------
 # VRAM-based start ctx using shared __kv_mb_per_1k when available
@@ -138,7 +138,10 @@ PAYLOAD
 # Helpers
 #==============================================================================
 
-# Shared cleanup — kills llama-server AND stale python/CUDA processes
+# Shared cleanup — kills llama-server, stale processes, and forces WSL2
+# ghost-VRAM release via nvidia-smi query-context reset (double-kill trick).
+# This is the fast path (~2 s). The full nvidia-uvm reload (clear_vram.sh)
+# runs between models in the bench loop, not between every ctx probe.
 cleanup_gpu() {
     if declare -f __gpu_clear_stale_processes &>/dev/null; then
         pkill -9 -x llama-server 2>/dev/null || true
@@ -147,6 +150,20 @@ cleanup_gpu() {
     else
         pkill -9 -x llama-server 2>/dev/null || true
     fi
+
+    # WSL2 ghost-VRAM workaround: kill nvidia-smi to recycle the CUDA
+    # query context, then double-kill to trigger dxgkrnl release.
+    # Does NOT reload nvidia-uvm (too slow for per-probe use).
+    pkill -9 -x nvidia-smi 2>/dev/null || true
+    sleep 1
+    sync 2>/dev/null || true
+    if [ -w /proc/sys/vm/drop_caches ]; then
+        echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+    fi
+    nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
+    pkill -9 -x nvidia-smi 2>/dev/null || true
+    sleep 1
+
     local waited=0
     while [ "$waited" -lt 20 ]; do
         if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq '(^|:)8081$'; then return 0; fi
@@ -158,10 +175,11 @@ cleanup_gpu() {
 # ---------------------------------------------------------------------------
 # bench_once — start server, run benchmark, return TPS on stdout.
 #   args: ctx batch ubatch [mmap_mode]
-#   mmap_mode: "off" (--no-mmap, default) or "auto" (--mmap auto)
+#   mmap_mode: "auto" (--mmap, default) or "off" (--no-mmap)
+#   Defaults to --mmap to avoid CUDA malloc ghost-VRAM OOM on WSL2.
 # ---------------------------------------------------------------------------
 bench_once() {
-    local c="$1" b="$2" u="$3" mmap_mode="${4:-off}"
+    local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}"
     local tag="/tmp/at-vram-${MODEL}-${c}"
 
     cleanup_gpu 2>/dev/null || { echo ""; return 1; }
@@ -172,8 +190,8 @@ bench_once() {
         touch "$tag"
     fi
 
-    local mmap_flag="--no-mmap"
-    [ "$mmap_mode" = "auto" ] && mmap_flag=""
+    local mmap_flag=""
+    [ "$mmap_mode" = "off" ] && mmap_flag="--no-mmap"
 
     "$LLAMA_BIN" --model "$MODEL_PATH" --port 8081 --host 127.0.0.1 \
         --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
@@ -252,13 +270,14 @@ except: print(0)" 2>/dev/null) || tokens=0
 #   args: ctx batch ubatch [samples] [mmap_mode]
 # ---------------------------------------------------------------------------
 bench_ctx() {
-    local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-off}"
+    local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}"
 
     if [ "$samples" -eq 1 ]; then
         local tps; tps=$(bench_once "$c" "$b" "$u" "$mmap_mode") || { echo ""; return 1; }
         tps=$(echo "$tps" | bc 2>/dev/null || echo "0"); [ -z "$tps" ] && tps=0
         if [ "$(echo "$tps <= 0" | bc 2>/dev/null || echo "1")" = "1" ]; then echo ""; return 1; fi
-        if [ "$(echo "$tps + 1 < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then echo ""; return 1; fi
+        # Phase 1: only check for actual OOM (0 tokens). TPS floor is applied
+        # at the final check — rejecting slow models mid-probe hides viable ctx.
         echo "$tps"
         return 0
     fi
@@ -280,7 +299,8 @@ bench_ctx() {
         [ "$(echo "$t1 > 0" | bc 2>/dev/null || echo "0")" = "1" ] && tps=$t1 || tps=$t2
     fi
     tps=$(echo "scale=2; $tps / 1" | bc -l 2>/dev/null || echo "$tps"); [ -z "$tps" ] && tps=0
-    if [ "$(echo "$tps + 1 < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then echo ""; return 1; fi
+    # Refinement: only check for actual OOM (0 tokens). TPS floor is applied
+    # at the final check — rejecting here hides the true ceiling.
     echo "$tps"
     return 0
 }
@@ -384,20 +404,20 @@ for combo in "${COMBOS[@]}"; do
 done
 
 # --- mmap fallback ---
-# If --no-mmap failed at all ctx for all combos, retry with --mmap auto.
-# Some architectures (phi3, gemma3n) are sensitive to mmap mode on WSL2.
+# If --mmap (default) failed at all ctx for all combos, retry with --no-mmap.
+# Some architectures (phi3, gemma3n) need --no-mmap for stable VRAM allocation.
 if [ "$ANY_OK" = false ]; then
     echo ""
-    echo "  --no-mmap failed at all ctx — retrying with --mmap auto"
+    echo "  --mmap failed at all ctx — retrying with --no-mmap"
     echo ""
     for combo in "${COMBOS[@]}"; do
         IFS=':' read -r b u <<< "$combo"
-        echo "  batch $(fmt "$b")/$(fmt "$u")  (mmap auto)"
+        echo "  batch $(fmt "$b")/$(fmt "$u")  (--no-mmap)"
         echo "  ---------------------"
 
         c=$START_CTX; found=false
         while [ "$c" -ge "$MIN_CTX" ]; do
-            tps=$(bench_ctx "$c" "$b" "$u" 1 "auto") || {
+            tps=$(bench_ctx "$c" "$b" "$u" 1 "off") || {
                 echo "  ctx $(fmt "$c") - OOM: dropping to $(fmt $((c/2)))"
                 c=$((c/2)); [ "$c" -lt "$MIN_CTX" ] && break; continue
             }
@@ -407,7 +427,7 @@ if [ "$ANY_OK" = false ]; then
             # Phase 2: step up, stop at first OOM (fallback path — keep it simple)
             lo=$c; c=$((c * 3 / 2))
             while true; do
-                bench_ctx "$c" "$b" "$u" 1 "auto" > /tmp/at-tps-$$; rc=$?
+                bench_ctx "$c" "$b" "$u" 1 "off" > /tmp/at-tps-$$; rc=$?
                 tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
                 if [ "$rc" -ne 0 ]; then
                     echo "  ctx $(fmt "$c") - OOM"
@@ -448,11 +468,11 @@ echo ""
 if [ "$ANY_OK" = true ] && [ -n "$BEST_COMBO" ]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
 
-    # TPS floor check: reject configs that are too slow to be usable.
+    # TPS floor check: warn if below floor, but still save the best config.
+    # We've already found the optimal ctx/batch/ubatch — the model is just
+    # too slow for this GPU. Mark it autotuned so the bench can proceed.
     if [ "$(echo "$BEST_TPS + 1 < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then
-        echo "  TPS ${BEST_TPS} below floor ${MIN_TPS} — marking as unusable"
-        echo "  failed: TPS below floor"
-        exit 2
+        echo "  TPS ${BEST_TPS} below floor ${MIN_TPS} — saving best config anyway"
     fi
 
     END_TS=$(date '+%H:%M:%S')

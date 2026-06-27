@@ -3444,7 +3444,13 @@ function __bench_run_with_timeout() {
         shift
         "$@" &
         child_pid=$!
-        wait "$child_pid"
+        # Guard against empty child_pid (process already exited) which would
+        # cause wait "" to hang indefinitely waiting for non-existent children.
+        if [[ -n "$child_pid" ]] && [[ "$child_pid" =~ ^[0-9]+$ ]]; then
+            wait "$child_pid"
+        else
+            wait
+        fi
 EOF
     )
 
@@ -3869,14 +3875,8 @@ function __model_bench() {
                     unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
                     unset LLM_AUTOTUNE_RESTORE_PREV
                     unset LLM_AUTOTUNE_SKIP_LOCK
-                    if (( _autotune_rc == 2 ))
-                    then
-                        __tac_info "Bench" "[Autotune marked model #${b_num[$i]} as unusable (TPS floor not met) - skipping benchmark]" "$C_Warning"
-                        b_tps+=("UNUSABLE")
-                    else
-                        __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} - skipping benchmark]" "$C_Error"
-                        b_tps+=("FAIL_AUTOTUNE")
-                    fi
+                    __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} (no working config) - skipping benchmark]" "$C_Error"
+                    b_tps+=("FAIL_AUTOTUNE")
     # Trust the autotune-discovered ctx as-is on the low end.
                     sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
                     __model_stop 2>/dev/null || true
