@@ -410,6 +410,10 @@ function __llm_registry_sync_state() {
             next
         }
         NF < 16 {
+            # Rows with fewer than 16 fields are legacy or malformed.
+            # Print them as-is rather than dropping — silent data loss is
+            # worse than a stale row.
+            print
             next
         }
         {
