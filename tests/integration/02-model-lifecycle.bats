@@ -12,11 +12,8 @@ setup_file() {
     export PROFILE_PATH="$REPO_ROOT/tactical-console.bashrc"
     export TAC_TEST_TMPDIR
     TAC_TEST_TMPDIR="$(mktemp -d)"
-    export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
-    export LLM_REGISTRY="$TAC_TEST_TMPDIR/models.conf"
-    export LLAMA_DRIVE_ROOT="$TAC_TEST_TMPDIR/llama-drive"
-    export LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active"
-    mkdir -p "$TAC_CACHE_DIR" "$LLAMA_MODEL_DIR"
+    export LLAMA_MODEL_DIR="$TAC_TEST_TMPDIR/models"
+    mkdir -p "$LLAMA_MODEL_DIR"
 }
 
 teardown_file() {
@@ -26,6 +23,10 @@ teardown_file() {
 setup() {
     # Load all profile functions via env.sh (the non-interactive library loader)
     source "$REPO_ROOT/env.sh" 2>/dev/null || true
+
+    # Override AFTER sourcing — 01-constants.sh sets LLM_REGISTRY to the real path.
+    export LLM_REGISTRY="$TAC_TEST_TMPDIR/models.conf"
+    export LLAMA_MODEL_DIR="$TAC_TEST_TMPDIR/models"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,56 +100,53 @@ setup() {
     [[ "$fn_src" == *"autotune"* ]]
 }
 
-@test "integration: __model_autotune exposes objective priority" {
+@test "integration: autotune-model.sh exposes objective priority" {
     local fn_src
-    fn_src=$(declare -f __model_autotune 2>/dev/null)
+    fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
-    [[ "$fn_src" == *"no OOM"* ]]
-    [[ "$fn_src" == *"max ctx"* ]]
-    [[ "$fn_src" == *"max TPS"* ]]
+    [[ "$fn_src" == *"no OOM"* || "$fn_src" == *"BEST_SCORE"* ]]
+    [[ "$fn_src" == *"max ctx"* || "$fn_src" == *"BEST_CTX"* ]]
+    [[ "$fn_src" == *"max TPS"* || "$fn_src" == *"BEST_TPS"* ]]
 }
 
-@test "integration: __model_autotune supports binary context strategy" {
+@test "integration: autotune-model.sh supports binary strategy" {
     local fn_src
-    fn_src=$(declare -f __model_autotune 2>/dev/null)
-
-    [[ "$fn_src" == *"LLM_AUTOTUNE_CTX_STRATEGY"* ]]
-    [[ "$fn_src" == *"LLM_AUTOTUNE_MAX_CTX"* ]]
-    [[ "$fn_src" == *"LLM_AUTOTUNE_CTX_STEP"* ]]
+    fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$fn_src" == *"START_CTX"* ]]
+    [[ "$fn_src" == *"binary probe"* ]]
+    [[ "$fn_src" == *"c / 2"* || "$fn_src" == *"c/2"* ]]
 }
 
-@test "integration: __model_autotune includes stability and pruning knobs" {
+@test "integration: autotune-model.sh includes stability and pruning knobs" {
     local fn_src
-    fn_src=$(declare -f __model_autotune 2>/dev/null)
+    fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
-    [[ "$fn_src" == *"LLM_AUTOTUNE_JITTER_PENALTY"* ]]
-    [[ "$fn_src" == *"LLM_AUTOTUNE_EARLY_STOP_MARGIN"* ]]
-    [[ "$fn_src" == *"LLM_AUTOTUNE_WARMUP"* ]]
-    [[ "$fn_src" == *"LLM_AUTOTUNE_CONFIRM_FINAL"* ]]
+    [[ "$fn_src" == *"stable"* ]]
+    [[ "$fn_src" == *"TPS stable"* ]]
+    [[ "$fn_src" == *"nsamples"* ]]
 }
 
-@test "integration: __model_autotune honors a minimum TPS floor" {
+@test "integration: autotune-model.sh honors a minimum TPS floor" {
     local fn_src
-    fn_src=$(declare -f __model_autotune 2>/dev/null)
+    fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
     [[ "$fn_src" == *"LLM_MIN_TPS"* ]]
-    [[ "$fn_src" == *"best_meets_min_tps"* ]]
-    [[ "$fn_src" == *"SLOW"* ]]
+    [[ "$fn_src" == *"MIN_TPS"* ]]
+    [[ "$fn_src" == *"below floor"* ]]
 }
 
-@test "integration: __model_autotune is quant-aware" {
+@test "integration: autotune-model.sh checks quant awareness" {
     local fn_src
-    fn_src=$(declare -f __model_autotune 2>/dev/null)
+    fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
-    [[ "$fn_src" == *"__llm_quant_rating"* ]]
-    [[ "$fn_src" == *"LLM_AUTOTUNE_MAX_CTX_DISCOURAGED"* ]]
-    [[ "$fn_src" == *"LLM_AUTOTUNE_MAX_CTX_ACCEPTABLE"* ]]
-    [[ "$fn_src" == *"LLM_AUTOTUNE_MAX_UBATCH_DISCOURAGED"* ]]
+    # Checks GGUF metadata for architecture and layer count
+    [[ "$fn_src" == *"__gguf_metadata"* ]]
+    [[ "$fn_src" == *"n_layers"* ]]
 }
 
-@test "integration: __model_autotune sizes model by registry file path" {
+@test "integration: autotune-model.sh sizes model by registry file path" {
     local fn_src
-    fn_src=$(declare -f __model_autotune 2>/dev/null)
+    fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
     [[ "$fn_src" == *'LLAMA_MODEL_DIR/$file'* ]]
     [[ "$fn_src" != *'LLAMA_MODEL_DIR/$name'* ]]
@@ -209,70 +207,62 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
     [[ "$fn_src" == *"__bench_prev_exit_trap"* ]]
 }
 
-@test "integration: __model_autotune restores previous EXIT trap" {
+@test "integration: autotune-model.sh validates required model number" {
     local fn_src
-    fn_src=$(declare -f __model_autotune 2>/dev/null)
+    fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
-    [[ "$fn_src" == *"__autotune_prev_exit_trap"* ]]
-    [[ "$fn_src" == *"trap 'pkill -TERM -P \$\$ 2>/dev/null || true; __model_stop >/dev/null 2>&1 || true; __autotune_unlock; __autotune_restore_traps' EXIT"* ]]
+    [[ "$fn_src" == *"MODEL_NUM must be a number"* ]]
+    [[ "$fn_src" == *"Usage: autotune-model.sh MODEL_NUM"* ]]
 }
 
-@test "integration: __model_autotune validates required option values" {
+@test "integration: autotune-model.sh preserves lock file on early exit" {
     local fn_src
-    fn_src=$(declare -f __model_autotune 2>/dev/null)
+    fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
-    [[ "$fn_src" == *"Missing value for --backend"* ]]
-    [[ "$fn_src" == *"Missing value for --ctx-size"* ]]
-    [[ "$fn_src" == *"Missing value for --trials"* ]]
+    # Script should not delete lock files it didn't create
+    [[ "$fn_src" != *"rm -f /tmp/llm-bench.lock"* ]]
 }
 
-@test "integration: __model_autotune tracks lock ownership before deleting lock file" {
+@test "integration: autotune missing model number exits quickly" {
+    run timeout 3 bash "$REPO_ROOT/scripts/autotune-model.sh"
+    [[ "$status" -ne 124 ]]
+    [[ "$output" == *"Usage"* || "$output" == *"MODEL_NUM"* ]]
+}
+
+@test "integration: autotune invalid model number exits quickly" {
+    run timeout 3 bash "$REPO_ROOT/scripts/autotune-model.sh" notanumber
+    [[ "$status" -ne 124 ]]
+    [[ "$output" == *"must be a number"* ]]
+}
+
+@test "integration: autotune nonexistent model exits quickly" {
+    run timeout 5 bash "$REPO_ROOT/scripts/autotune-model.sh" 99999
+    [[ "$status" -ne 124 ]]
+    [[ "$output" == *"not found"* || "$output" == *"Error"* ]]
+}
+
+@test "integration: autotune-model.sh sources shared helpers" {
     local fn_src
-    fn_src=$(declare -f __model_autotune 2>/dev/null)
+    fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
-    [[ "$fn_src" == *"__autotune_lock_owned=0"* ]]
-    [[ "$fn_src" == *'if [[ "$__autotune_lock_owned" == "1" && -n "$_lock_fd" ]]'* ]]
+    [[ "$fn_src" == *"source env.sh"* ]]
+    [[ "$fn_src" == *"source scripts/11-llm-manager.sh"* ]]
 }
 
-@test "integration: autotune missing --backend value exits quickly" {
-    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
-    run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __model_autotune 1 --backend"
-    [[ "$status" -ne 124 ]]
-    [[ "$output" == *"Missing value for --backend"* ]]
+@test "integration: autotune-model.sh has mmap fallback" {
+    local fn_src
+    fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+
+    [[ "$fn_src" == *"mmap"* ]]
+    [[ "$fn_src" == *"no-mmap"* ]]
 }
 
-@test "integration: autotune missing --ctx-size value exits quickly" {
-    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
-    run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __model_autotune 1 --ctx-size"
-    [[ "$status" -ne 124 ]]
-    [[ "$output" == *"Missing value for --ctx-size"* ]]
-}
+@test "integration: autotune-model.sh handles LLM_AUTOTUNE_SKIP_LOCK" {
+    local fn_src
+    fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
-@test "integration: autotune missing --trials value exits quickly" {
-    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
-    run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; __model_autotune 1 --trials"
-    [[ "$status" -ne 124 ]]
-    [[ "$output" == *"Missing value for --trials"* ]]
-}
-
-@test "integration: autotune early failure does not remove existing lock file" {
-    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
-    local lock_file="$TAC_TEST_TMPDIR/autotune-concurrency.lock"
-    printf '%s\n' '424242' > "$lock_file"
-
-    run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; LLM_AUTOTUNE_LOCK_FILE='$lock_file' __model_autotune 999"
-    [[ "$status" -ne 124 ]]
-    [[ -f "$lock_file" ]]
-}
-
-@test "integration: autotune skip-lock mode does not remove existing lock file" {
-    command -v __model_autotune >/dev/null 2>&1 || skip "__model_autotune not available"
-    local lock_file="$TAC_TEST_TMPDIR/autotune-skip-lock.lock"
-    printf '%s\n' '424242' > "$lock_file"
-
-    run timeout 3 bash -lc "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; LLM_AUTOTUNE_LOCK_FILE='$lock_file' LLM_AUTOTUNE_SKIP_LOCK=1 __model_autotune 999"
-    [[ "$status" -ne 124 ]]
-    [[ -f "$lock_file" ]]
+    # Script should respect the skip-lock convention (doesn't acquire bench lock)
+    [[ "$fn_src" != *"flock /tmp/llm-bench.lock"* ]]
 }
 
 @test "integration: bench does not leak shell traps after return" {

@@ -309,13 +309,31 @@ bench_ctx() {
 # Probe
 #==============================================================================
 
-BEST_SCORE=0; BEST_TPS="0"; BEST_COMBO=""; BEST_CTX=0; ANY_OK=false
+BEST_TPS="0"; BEST_COMBO=""; BEST_CTX=0; ANY_OK=false
 
 record_best() {
     local c=$1 tps=$2 b=$3 u=$4
-    local s; s=$(echo "$c * $tps" | bc 2>/dev/null || echo "0")
-    [ "$(echo "$s > $BEST_SCORE" | bc 2>/dev/null || echo "0")" = "1" ] && \
-        { BEST_SCORE=$s; BEST_TPS=$tps; BEST_COMBO="$b:$u"; BEST_CTX=$c; }
+
+    # Pick the highest ctx that meets the TPS floor.  If no candidate
+    # meets the floor, fall back to the highest ctx regardless of TPS.
+    local above; above=$(echo "$tps >= $MIN_TPS" | bc 2>/dev/null || echo "0")
+    local best_above; best_above=$(echo "$BEST_TPS >= $MIN_TPS" | bc 2>/dev/null || echo "0")
+
+    if [ "$above" = "1" ] && [ "$best_above" = "0" ]; then
+        # New candidate meets floor, current best does not — immediate win.
+        BEST_TPS=$tps; BEST_COMBO="$b:$u"; BEST_CTX=$c
+    elif [ "$above" = "1" ] && [ "$best_above" = "1" ]; then
+        # Both meet floor: pick the higher ctx.
+        if [ "$(echo "$c > $BEST_CTX" | bc 2>/dev/null || echo "0")" = "1" ]; then
+            BEST_TPS=$tps; BEST_COMBO="$b:$u"; BEST_CTX=$c
+        fi
+    elif [ "$above" = "0" ] && [ "$best_above" = "0" ]; then
+        # Neither meets floor: pick the higher ctx.
+        if [ "$(echo "$c > $BEST_CTX" | bc 2>/dev/null || echo "0")" = "1" ]; then
+            BEST_TPS=$tps; BEST_COMBO="$b:$u"; BEST_CTX=$c
+        fi
+    fi
+    # else: new candidate below floor, current best above floor — keep current.
 }
 
 for combo in "${COMBOS[@]}"; do
