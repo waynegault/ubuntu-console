@@ -2109,7 +2109,7 @@ function __renumber_registry() {
         echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
         while IFS='|' read -r _num rest
         do
-            ((newnum++))
+            ((++newnum))
             echo "${newnum}|${rest}"
         done < "${LLM_REGISTRY}.tmp"
     } > "$LLM_REGISTRY"
@@ -2193,7 +2193,7 @@ function __model_scan() {
         local threads
         threads=$(__calc_threads "$gpu_layers" "$mblocks")
 
-        ((num++))
+        ((++num))
         local prev_batch="${LLAMA_BATCH_SIZE:-1024}"
         local prev_ubatch="${LLAMA_UBATCH_SIZE:-256}"
         local prev_parallel="${LLAMA_PARALLEL_SLOTS:-1}"
@@ -2294,7 +2294,7 @@ function __model_scan() {
                 if mv "$src" "$LLAMA_ARCHIVE_DIR/"
                 then
                     __tac_info "Archived" "#${_anum} ${_aname} (${_aqunt} - discouraged)" "$C_Warning"
-                    ((archived++))
+                    ((++archived))
                 fi
     # Trust the autotune-discovered ctx as-is on the low end.
             fi
@@ -2314,7 +2314,7 @@ function __model_scan() {
                 local _cfile
                 _cfile=$(cut -d'|' -f3 <<< "$_cline")
                 [[ -f "$LLAMA_MODEL_DIR/$_cfile" ]] || continue
-                ((new_num++))
+                ((++new_num))
                 echo "${new_num}|$(cut -d'|' -f2- <<< "$_cline")" >> "$clean_tmp"
             done < "$LLM_REGISTRY"
             mv "$clean_tmp" "$LLM_REGISTRY"
@@ -4311,10 +4311,10 @@ function __model_doctor() {
         while IFS='|' read -r num _name file _rest
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
-            ((entries_total++))
+            ((++entries_total))
             [[ "$num" == "$expected_num" ]] || numbering_ok=0
-            [[ -f "$LLAMA_MODEL_DIR/$file" ]] || ((missing_files++))
-            ((expected_num++))
+            [[ -f "$LLAMA_MODEL_DIR/$file" ]] || ((++missing_files))
+            ((++expected_num))
         done < "$LLM_REGISTRY"
     fi
     # Trust the autotune-discovered ctx as-is on the low end.
@@ -4365,13 +4365,13 @@ function __model_doctor() {
     fi
     # Trust the autotune-discovered ctx as-is on the low end.
 
-    (( registry_exists )) || ((issues++))
-    (( header_ok )) || ((issues++))
-    (( numbering_ok )) || ((issues++))
-    (( missing_files == 0 )) || ((issues++))
-    (( default_set )) || ((issues++))
-    (( default_in_registry )) || ((issues++))
-    (( gpu_visible )) || ((issues++))
+    (( registry_exists )) || ((++issues))
+    (( header_ok )) || ((++issues))
+    (( numbering_ok )) || ((++issues))
+    (( missing_files == 0 )) || ((++issues))
+    (( default_set )) || ((++issues))
+    (( default_in_registry )) || ((++issues))
+    (( gpu_visible )) || ((++issues))
 
     if [[ "$output_mode" == "json" ]]
     then
@@ -4738,7 +4738,7 @@ function __model_download() {
             printf '%s\n' \
                 "       Expected ${C_Warning}<owner/repo>:<filename.gguf>${C_Reset}" \
                 " e.g. TheBloke/Ferret_7B-GGUF:ferret_7b.Q4_K_M.gguf"
-            ((fail++))
+            ((++fail))
             continue
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
@@ -4752,7 +4752,7 @@ function __model_download() {
             printf '%s\n' \
                 "${C_Error}Error:${C_Reset} '$spec' - repo must be in" \
                 "${C_Warning}<owner>/<repo>${C_Reset} format (e.g. TheBloke/Ferret_7B-GGUF)"
-            ((fail++))
+            ((++fail))
             continue
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
@@ -4762,7 +4762,7 @@ function __model_download() {
             printf '%s\n' \
                 "${C_Error}Error:${C_Reset} '$spec' -" \
                 "missing filename after colon (e.g. :ferret_7b.Q4_K_M.gguf)"
-            ((fail++))
+            ((++fail))
             continue
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
@@ -4772,7 +4772,7 @@ function __model_download() {
         then
             printf '%s\n' \
                 "${C_Error}Error:${C_Reset} '$spec' - invalid filename (path traversal detected)"
-            ((fail++))
+            ((++fail))
             continue
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
@@ -4804,7 +4804,7 @@ function __model_download() {
                 if [[ "${_qconfirm,,}" != "y" ]]
                 then
                     __tac_info "Skip" "$dl_file (discouraged quant)" "$C_Dim"
-                    ((fail++))
+                    ((++fail))
                     continue
                 fi
     # Trust the autotune-discovered ctx as-is on the low end.
@@ -4822,14 +4822,14 @@ function __model_download() {
         if [[ -f "$dest" ]]
         then
             __tac_info "Skip" "$dl_file already exists (active)" "$C_Warning"
-            ((ok++))
+            ((++ok))
             continue
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -f "$archive_dest" ]]
         then
             __tac_info "Skip" "$dl_file already exists (archived)" "$C_Warning"
-            ((ok++))
+            ((++ok))
             continue
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
@@ -4860,7 +4860,7 @@ function __model_download() {
                     printf '%s\n' \
                         "${C_Error}Error:${C_Reset} Not enough space" \
                         "for $dl_file (need ~${need_gb}G, only ${have_gb}G free on M:)"
-                    ((fail++))
+                    ((++fail))
                     continue
                 fi
     # Trust the autotune-discovered ctx as-is on the low end.
@@ -4873,10 +4873,10 @@ function __model_download() {
         if hf download "$dl_repo" "$dl_file" --local-dir "$LLAMA_MODEL_DIR"
         then
             __tac_info "OK" "$dl_file" "$C_Success"
-            ((ok++))
+            ((++ok))
         else
             __tac_info "FAIL" "$dl_repo $dl_file" "$C_Error"
-            ((fail++))
+            ((++fail))
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
     done
@@ -5688,7 +5688,7 @@ function __llm_sse_core() {
         then
             printf '%s' "$content"
             response_text+="$content"
-            ((chunk_count++))
+            ((++chunk_count))
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
 
