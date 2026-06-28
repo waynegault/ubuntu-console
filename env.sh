@@ -24,6 +24,11 @@
 [[ -n "${__TAC_ENV_LOADED:-}" ]] && return 0
 __TAC_ENV_LOADED=1
 
+# Signal to functions/hooks that we are running in library (non-interactive)
+# mode.  Functions that would normally take interactive actions (clear screen,
+# set PS1, register completions) can check this variable to skip them.
+export TAC_LIBRARY_MODE=1
+
 # Startup optimizations for faster CLI performance
 # NODE_COMPILE_CACHE: Cache compiled JS for repeated CLI runs
 export NODE_COMPILE_CACHE="${NODE_COMPILE_CACHE:-/var/tmp/openclaw-compile-cache}"
