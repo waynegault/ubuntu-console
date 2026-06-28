@@ -52,8 +52,13 @@ function __save_tps() {
     active_num=$(< "$ACTIVE_LLM_FILE")
     [[ -z "$active_num" ]] && return
     awk -F'|' -v n="$active_num" -v t="$tps_val" 'BEGIN{OFS="|"} $1 == n {$17 = t} {print}' \
-        "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" \
-        && mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
+        "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
+    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 1 ]]
+    then
+        mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
+    else
+        rm -f "${LLM_REGISTRY}.tmp"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -71,8 +76,13 @@ function __save_model_ctx() {
     local saved="$ctx_val"
 
     awk -F'|' -v n="$model_num" -v c="$saved" 'BEGIN{OFS="|"} $1 == n {$8 = c} {print}' \
-        "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" \
-        && mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
+        "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
+    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 1 ]]
+    then
+        mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
+    else
+        rm -f "${LLM_REGISTRY}.tmp"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -444,7 +454,15 @@ function __llm_registry_sync_state() {
         }
     ' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" || return 1
 
-    mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY" || return 1
+    # Safety: never replace the registry with an empty or truncated file.
+    # A failed awk run can produce 0 lines, wiping all model data.
+    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 1 ]]
+    then
+        mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY" || return 1
+    else
+        rm -f "${LLM_REGISTRY}.tmp"
+        return 1
+    fi
     return 0
 }
 
@@ -986,7 +1004,13 @@ function __llm_autotune_profiles_remap_by_registry() {
         }
     ' "$old_registry" "$new_registry" > "${new_registry}.tmp" || return 1
 
-    mv "${new_registry}.tmp" "$new_registry" || return 1
+    if [[ -s "${new_registry}.tmp" ]] && [[ "$(wc -l < "${new_registry}.tmp")" -ge 1 ]]
+    then
+        mv "${new_registry}.tmp" "$new_registry" || return 1
+    else
+        rm -f "${new_registry}.tmp"
+        return 1
+    fi
     return 0
 }
 

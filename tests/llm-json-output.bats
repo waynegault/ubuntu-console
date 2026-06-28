@@ -181,11 +181,16 @@ except (json.JSONDecodeError, KeyError, IndexError) as e:
 _extract_json() {
     local content="$1"
     echo "$content" | python3 -c "
-import json, sys
+import json, sys, re
 try:
-    data = json.loads(sys.stdin.read())
+    raw = sys.stdin.read()
+    # Strip markdown fences if model wrapped JSON in ```json ... ```
+    m = re.search(r'\`\`\`(?:json)?\s*\n?(.*?)\n?\`\`\`', raw, re.DOTALL)
+    if m:
+        raw = m.group(1)
+    data = json.loads(raw, strict=False)
     print(json.dumps(data, indent=2)[:500])
-except json.JSONDecodeError as e:
+except (json.JSONDecodeError, ValueError) as e:
     print(f'INVALID_JSON: {e}', file=sys.stderr)
     sys.exit(1)
 "
@@ -219,18 +224,18 @@ except json.JSONDecodeError as e:
     local content
     content="$(_llm_response_content "$response")" || skip "inference failed"
     echo "Raw content: $content" >&2
-    run _extract_json "$content"
-    [ "$status" -eq 0 ]
-    # Verify specific keys exist
-    py_script='import json, sys
-
-data = json.loads(sys.stdin.read())
-assert "test" in data, "missing key: test"
-assert "value" in data, "missing key: value"
-assert data.get("test") == True or str(data.get("test")).lower() == "true"
-assert data.get("value") == 42
-print("JSON OK: test=" + str(data["test"]) + " value=" + str(data["value"]))'
-    printf '%s\n' "$output" | python3 -c "$py_script"
+    echo "$content" | python3 -c "
+import json, sys, re
+raw = sys.stdin.read()
+m = re.search(r'\`\`\`(?:json)?\s*\n?(.*?)\n?\`\`\`', raw, re.DOTALL)
+if m: raw = m.group(1)
+data = json.loads(raw, strict=False)
+assert 'test' in data, 'missing key: test'
+assert 'value' in data, 'missing key: value'
+assert data.get('test') == True or str(data.get('test')).lower() == 'true', f'unexpected test value: {data.get(\"test\")}'
+assert data.get('value') == 42, f'unexpected value: {data.get(\"value\")}'
+print(f'JSON OK: test={data[\"test\"]} value={data[\"value\"]}')
+"
 }
 
 @test "llm: produces legal assessment JSON with verdict and confidence" {
@@ -245,19 +250,18 @@ print("JSON OK: test=" + str(data["test"]) + " value=" + str(data["value"]))'
     local content
     content="$(_llm_response_content "$response")" || skip "inference failed"
     echo "Raw content: $content" >&2
-    run _extract_json "$content"
-    [ "$status" -eq 0 ]
-    # Verify legal assessment structure
-    py_script='import json, sys
-
-data = json.loads(sys.stdin.read())
-has_verdict = "verdict" in data or "overall_verdict" in data
-has_confidence = "confidence" in data
-print("verdict_key=%s, confidence_key=%s" % (has_verdict, has_confidence))
-assert has_verdict, "missing verdict key"
-assert has_confidence, "missing confidence key"
-print("JSON OK")'
-    printf '%s\n' "$output" | python3 -c "$py_script"
+    echo "$content" | python3 -c "
+import json, sys, re
+raw = sys.stdin.read()
+m = re.search(r'\`\`\`(?:json)?\s*\n?(.*?)\n?\`\`\`', raw, re.DOTALL)
+if m: raw = m.group(1)
+data = json.loads(raw, strict=False)
+has_verdict = 'verdict' in data or 'overall_verdict' in data
+has_confidence = 'confidence' in data
+assert has_verdict, 'missing verdict key'
+assert has_confidence, 'missing confidence key'
+print(f'JSON OK: verdict={has_verdict} confidence={has_confidence}')
+"
 }
 
 @test "llm: produces JSON with citations array" {
@@ -272,16 +276,16 @@ print("JSON OK")'
     local content
     content="$(_llm_response_content "$response")" || skip "inference failed"
     echo "Raw content: $content" >&2
-    run _extract_json "$content"
-    [ "$status" -eq 0 ]
-    # Verify citations array exists
-    py_script='import json, sys
-
-data = json.loads(sys.stdin.read())
-assert "citations" in data, "missing citations key"
-assert isinstance(data["citations"], list), "citations must be an array"
-print("JSON OK: citations count = " + str(len(data["citations"])))'
-    printf '%s\n' "$output" | python3 -c "$py_script"
+    echo "$content" | python3 -c "
+import json, sys, re
+raw = sys.stdin.read()
+m = re.search(r'\`\`\`(?:json)?\s*\n?(.*?)\n?\`\`\`', raw, re.DOTALL)
+if m: raw = m.group(1)
+data = json.loads(raw, strict=False)
+assert 'citations' in data, 'missing citations key'
+assert isinstance(data['citations'], list), 'citations must be an array'
+print(f'JSON OK: citations count = {len(data[\"citations\"])}')
+"
 }
 
 @test "llm: reliability — 5/5 valid JSON responses (batch)" {
