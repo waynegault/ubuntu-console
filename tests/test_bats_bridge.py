@@ -38,13 +38,13 @@ def _discover_params() -> list[Any]:
             if rel in seen:
                 continue
             seen.add(rel)
-            # Use just the filename as the test id — VSCode's test explorer
-            # struggles with slashes and dots inside parametrized ids.
+            # Use just the stem (filename without extension) as the test id.
+            # VSCode's test explorer can't resolve ids with dots or slashes.
             params.append(
                 pytest.param(
                     p,
                     timeout,
-                    id=p.name,
+                    id=p.stem,  # e.g. "llm-json-output" instead of "llm-json-output.bats"
                     marks=[pytest.mark.bats, marker],  # type: ignore[list-item]
                 )
             )
