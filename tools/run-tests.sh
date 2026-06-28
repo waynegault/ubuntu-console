@@ -35,7 +35,7 @@ done
 C_Reset=$'\e[0m'
 C_Green=$'\e[32m'
 C_Red=$'\e[31m'
-C_Yellow=$'\e[33m'
+C_Yellow=$'\e[33m'   # shellcheck disable=SC2034 — used by sourced BATS helpers
 C_Cyan=$'\e[36m'
 C_Dim=$'\e[2m'
 C_Bold=$'\e[1m'
@@ -64,7 +64,7 @@ section_header() {
     border_mid
     if [[ "$passed" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]]
     then
-        local symbol="$PASS_SYMBOL" colour="$C_BoldGreen"
+        local symbol="$PASS_SYMBOL" colour="$C_BoldGreen"  # shellcheck disable=SC2034 — 'colour' read by row()
         (( passed < total )) && { symbol="$FAIL_SYMBOL"; colour="$C_BoldRed"; }
         row "${C_Bold}${C_Cyan}  ${label}${C_Reset}${C_Dim}  - ${passed}/${total} ${symbol}${C_Reset}"
     else
@@ -199,7 +199,7 @@ mapfile -t BATS_FILES < <(_build_bats_list "${_MODE:-}")
 
 for bf in "${BATS_FILES[@]}"; do
     [[ -f "$bf" ]] || continue
-    bf_rel="${bf#$REPO_ROOT/}"
+    bf_rel="${bf#"$REPO_ROOT"/}"
     row_empty
     row "  ${C_Bold}${bf_rel}${C_Reset}"
     _run_bats_file "$bf" ""
@@ -277,7 +277,7 @@ if [[ "${_MODE:-}" != "fast" ]]; then
         *)     _PY_MARKERS="-m not (bats_llm or bats_integration)" ;;
     esac
 
-    cd "$REPO_ROOT"
+    cd "$REPO_ROOT" || exit 1
     python3 -m pytest tests/ -v --tb=short ${_PY_MARKERS:+"$_PY_MARKERS"} \
         --ignore=tests/test_bats_bridge.py 2>&1 || _PY_EXIT=$?
 fi

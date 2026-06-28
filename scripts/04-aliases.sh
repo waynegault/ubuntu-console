@@ -433,7 +433,7 @@ alias wtf='wtf_repl'
 # This is a host-level operation, separate from WSL-internal 'up' maintenance.
 # For WSL-internal updates (APT, NPM, etc.), use 'up' instead.
 function wsl-up() {
-    powershell.exe -NoProfile -NonInteractive -Command "wsl --update"
+    timeout 30 powershell.exe -NoProfile -NonInteractive -Command "wsl --update" 2>/dev/null || true
 }
 
 # end of file

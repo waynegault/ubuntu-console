@@ -1210,7 +1210,9 @@ function __llm_server_stop() {
     do
         [[ -f "$_kf" ]] || continue
         _kp=$(< "$_kf")
-        if [[ "$_kp" =~ ^[0-9]+$ ]]; then kill -TERM "$_kp" 2>/dev/null; fi
+        if [[ "$_kp" =~ ^[0-9]+$ ]]; then
+            kill -TERM "$_kp" 2>/dev/null
+        fi
         rm -f "$_kf"
     done
 
@@ -2892,6 +2894,7 @@ function __model_use() {
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
         cmd+=("--flash-attn" "$flash_attn_mode")
+        cmd+=("--jinja")   # Enable Jinja2 chat templates from GGUF metadata
         cmd+=("$kv_offload_flag")
         cmd+=("--cache-type-k" "${LLAMA_CACHE_TYPE_K:-q8_0}")
         cmd+=("--parallel" "$parallel_slots")
@@ -3014,7 +3017,9 @@ function __model_use() {
         for _okf in /tmp/llm-keeper.*.pid; do
             [[ -f "$_okf" ]] || continue
             _okp=$(< "$_okf")
-            if [[ "$_okp" =~ ^[0-9]+$ ]]; then kill -TERM "$_okp" 2>/dev/null; fi
+            if [[ "$_okp" =~ ^[0-9]+$ ]]; then
+                kill -TERM "$_okp" 2>/dev/null
+            fi
             rm -f "$_okf"
         done
         rm -rf /tmp/llm-stdin.* 2>/dev/null || true
@@ -5579,7 +5584,10 @@ function burn() {
                 local _lw
                 for (( _lw=0; _lw < 30; _lw++ ))
                 do
-                    if __llm_is_healthy; then sleep 3; break; fi
+                    if __llm_is_healthy; then
+                        sleep 3
+                        break
+                    fi
                     sleep 1
                 done
                 attempt=$(( attempt + 1 ))

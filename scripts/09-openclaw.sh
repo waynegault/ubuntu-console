@@ -1247,7 +1247,9 @@ function oc-agent-use() {
         # persist computed total so downstream logic sees reconciled value
         total_sum["$id"]=$tot
         # default cap when missing
-        if (( cap == 0 )); then cap=131072; fi
+        if (( cap == 0 )); then
+            cap=131072
+        fi
         # percent (rounded)
         local pct
         if (( cap > 0 )); then
@@ -1284,12 +1286,18 @@ function oc-agent-use() {
         raw_max=$(awk -F"\t" '{ if (length($1) > m) m=length($1) } END { print (m==""?0:m) }' "$labels_tmp")
         if [[ -n "${UIWidth:-}" && ${UIWidth} -gt 60 ]]; then
             local cap_candidate=$(( UIWidth - 48 ))
-            if (( cap_candidate > 14 )); then capw=14; else capw=$cap_candidate; fi
+            if (( cap_candidate > 14 )); then
+                capw=14
+            else
+                capw=$cap_candidate
+            fi
         else
             capw=14
         fi
         label_max=$raw_max
-        if (( label_max > capw )); then label_max=$capw; fi
+        if (( label_max > capw )); then
+            label_max=$capw
+        fi
         if (( printable_count > 0 )); then
             printf 'ACTIVE AGENT CONTEXT USE (%d/%d active)\n\n' "$total_active" "$total_agents"
         fi
@@ -3164,7 +3172,7 @@ PY
         fi
 
         if [[ $opened -ne 0 ]] && command -v powershell.exe >/dev/null 2>&1; then
-            if powershell.exe -NoProfile -Command "Start-Process '$URL'" >/dev/null 2>&1; then
+            if timeout 10 powershell.exe -NoProfile -Command "Start-Process '$URL'" >/dev/null 2>&1; then
                 opened=0
                 opener_used="powershell.exe"
             fi

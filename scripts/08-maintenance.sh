@@ -1048,7 +1048,8 @@ function cl() {
             then
                 # Convert to Windows format
                 local win_path
-                win_path=$(echo "$p" | sed 's|/mnt/c/|C:\\|' | sed 's|/|\\|g')
+                win_path="${p/\/mnt\/c\//C:\\}"
+                win_path="${win_path//\//\\}"
                 win_ghosts+=("$win_path")
             fi
         done

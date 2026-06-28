@@ -40,12 +40,12 @@ SIZE_INT=${size%G}; SIZE_INT=${SIZE_INT%.*}; SIZE_INT=${SIZE_INT:-1}
 [[ "$SIZE_INT" =~ ^[0-9]+$ ]] || SIZE_INT=1
 
 CPU_COUNT=$(nproc 2>/dev/null || echo 6)
-if [[ "$_thr" =~ ^[0-9]+$ ]] && [ "$_thr" -gt 0 ] && [ "$_thr" -le "$CPU_COUNT" ]; then
+if [[ "$_thr" =~ ^[0-9]+$ ]] && [[ $_thr -gt 0 ]] && [[ $_thr -le $CPU_COUNT ]]; then
     TUNE_THREADS="$_thr"
 else
     TUNE_THREADS="$CPU_COUNT"
 fi
-[ "${gpu_layers:-999}" -eq 0 ] && TUNE_THREADS="$CPU_COUNT"
+[[ ${gpu_layers:-999} -eq 0 ]] && TUNE_THREADS="$CPU_COUNT"
 
 echo "[${MODEL}] ${name} (${size}, ${gpu_layers:-0} gpu layers)"
 echo ""
@@ -63,9 +63,9 @@ FREE_VRAM=${FREE_VRAM:-3965}
 MODEL_MB=$(( MODEL_BYTES / 1048576 ))
 
 # Combos — selected by GGUF file size to avoid guaranteed-OOM combos on large models
-if [ "$MODEL_MB" -lt 1000 ]; then
+if [[ $MODEL_MB -lt 1000 ]]; then
     COMBOS=("1024:256" "2048:512" "4096:1024")
-elif [ "$MODEL_MB" -lt 2000 ]; then
+elif [[ $MODEL_MB -lt 2000 ]]; then
     COMBOS=("1024:256" "2048:512")
 else
     COMBOS=("1024:256")
@@ -92,31 +92,31 @@ if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/nu
 else
     # Standalone fallback: size-class factor heuristic
     _native_ctx=""
-    if [ "$MODEL_MB" -gt 3000 ]; then FACTOR=50
-    elif [ "$MODEL_MB" -gt 2000 ]; then FACTOR=100
-    elif [ "$MODEL_MB" -gt 1000 ]; then FACTOR=500
+    if [[ $MODEL_MB -gt 3000 ]]; then FACTOR=50
+    elif [[ $MODEL_MB -gt 2000 ]]; then FACTOR=100
+    elif [[ $MODEL_MB -gt 1000 ]]; then FACTOR=500
     else FACTOR=1000; fi
-    if [ "$BUDGET" -gt 0 ]; then START_CTX=$(( BUDGET * FACTOR ))
+    if [[ $BUDGET -gt 0 ]]; then START_CTX=$(( BUDGET * FACTOR ))
     else START_CTX=$MIN_CTX; fi
 fi
 
 START_CTX=$(( (START_CTX / 1024) * 1024 ))
-[ "$START_CTX" -lt "$MIN_CTX" ] && START_CTX=$MIN_CTX
-[ "$START_CTX" -gt 4194304 ] && START_CTX=4194304
+[[ $START_CTX -lt $MIN_CTX ]] && START_CTX=$MIN_CTX
+[[ $START_CTX -gt 4194304 ]] && START_CTX=4194304
 
 # Cap START_CTX by native training context to avoid probing into RoPE-extended
 # territory where KV-cache load times explode and generation quality is unknown.
 # Multiplier: 4× for <2 GB models (VRAM headroom), 2× for ≥2 GB (tight VRAM).
-if [[ -n "${_native_ctx:-}" ]] && [[ "$_native_ctx" =~ ^[0-9]+$ ]] && [ "$_native_ctx" -gt 0 ]; then
+if [[ -n "${_native_ctx:-}" ]] && [[ "$_native_ctx" =~ ^[0-9]+$ ]] && [[ $_native_ctx -gt 0 ]]; then
     _mult=4
-    [ "$MODEL_MB" -ge 2000 ] && _mult=2
+    [[ $MODEL_MB -ge 2000 ]] && _mult=2
     _ceiling=$(( _native_ctx * _mult ))
-    [ "$START_CTX" -gt "$_ceiling" ] && START_CTX=$_ceiling
+    [[ $START_CTX -gt $_ceiling ]] && START_CTX=$_ceiling
 fi
 
 # Comma-format numbers
-fmt() { echo "$1" | sed ':a;s/\B[0-9]\{3\}\>/,&/;ta'; }
-fmts() { echo "$1" | sed 's/1024/1,024/g; s/2048/2,048/g; s/4096/4,096/g; s/:256/:256/g; s/:512/:512/g; s/:1024/:1,024/g'; }
+fmt() { printf "%'d" "$1"; }
+fmts() { local _s; _s=$(printf "%'d" "${1%%:*}"); printf "%s:%'d" "$_s" "${1##*:}"; }
 
 echo "============================================="
 echo ""
@@ -157,7 +157,7 @@ cleanup_gpu() {
     pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
     sleep 1
     sync 2>/dev/null || true
-    if [ -w /proc/sys/vm/drop_caches ]; then
+    if [[ -w /proc/sys/vm/drop_caches ]]; then
         echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
     fi
     nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
@@ -165,7 +165,7 @@ cleanup_gpu() {
     sleep 1
 
     local waited=0
-    while [ "$waited" -lt 20 ]; do
+    while [[ $waited -lt 20 ]]; do
         if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq '(^|:)8081$'; then return 0; fi
         sleep 1; waited=$((waited + 1))
     done
@@ -184,14 +184,14 @@ bench_once() {
 
     cleanup_gpu 2>/dev/null || { echo ""; return 1; }
 
-    if [ ! -f "$tag" ]; then
+    if [[ ! -f $tag ]]; then
         local g; g=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         echo "  VRAM cleared: $(fmt "${g:-?}") MiB free" >&2
         touch "$tag"
     fi
 
     local mmap_flag=""
-    [ "$mmap_mode" = "off" ] && mmap_flag="--no-mmap"
+    [[ $mmap_mode == off ]] && mmap_flag="--no-mmap"
 
     "$LLAMA_BIN" --model "$MODEL_PATH" --port 8081 --host 127.0.0.1 \
         --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
@@ -202,12 +202,12 @@ bench_once() {
     local pid=$!
 
     local hw=0
-    while [ "$hw" -lt 90 ]; do
+    while [[ $hw -lt 90 ]]; do
         sleep 1; hw=$((hw + 1))
         kill -0 "$pid" 2>/dev/null || { echo ""; return 1; }
         curl -sS --max-time 2 http://127.0.0.1:8081/health 2>/dev/null | grep -q 'ok' && break
     done
-    if [ "$hw" -ge 90 ]; then
+    if [[ $hw -ge 90 ]]; then
         kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
         echo ""; return 1
     fi
@@ -216,7 +216,7 @@ bench_once() {
     # WSL2 drvfs: /health returns OK before the GGUF memory-map completes,
     # so the first real completion can stall or return 0 tokens.
     local pf_ok=0 pf_w=0
-    while [ "$pf_w" -lt 60 ]; do
+    while [[ $pf_w -lt 60 ]]; do
         if curl -sS --max-time 5 http://127.0.0.1:8081/v1/chat/completions \
             -H "Content-Type: application/json" \
             -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}' \
@@ -226,7 +226,7 @@ bench_once() {
         kill -0 "$pid" 2>/dev/null || { echo ""; return 1; }
         sleep 1; pf_w=$((pf_w + 1))
     done
-    if [ "$pf_ok" -ne 1 ]; then
+    if [[ $pf_ok -ne 1 ]]; then
         kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
         echo ""; return 1
     fi
@@ -257,7 +257,7 @@ try: d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))
 except: print(0)" 2>/dev/null) || tokens=0
     [[ "$tokens" =~ ^[0-9]+$ ]] || tokens=0
 
-    if [ "$elapsed_ms" -gt 0 ] && [ "$tokens" -gt 0 ]; then
+    if [[ $elapsed_ms -gt 0 && $tokens -gt 0 ]]; then
         echo "scale=2; $tokens * 1000 / $elapsed_ms" | bc 2>/dev/null || echo "0"
         return 0
     fi
@@ -272,10 +272,10 @@ except: print(0)" 2>/dev/null) || tokens=0
 bench_ctx() {
     local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}"
 
-    if [ "$samples" -eq 1 ]; then
+    if [[ $samples -eq 1 ]]; then
         local tps; tps=$(bench_once "$c" "$b" "$u" "$mmap_mode") || { echo ""; return 1; }
         tps=$(echo "$tps" | bc 2>/dev/null || echo "0"); [ -z "$tps" ] && tps=0
-        if [ "$(echo "$tps <= 0" | bc 2>/dev/null || echo "1")" = "1" ]; then echo ""; return 1; fi
+        if [[ $(echo "$tps <= 0" | bc 2>/dev/null || echo "1") == 1 ]]; then echo ""; return 1; fi
         # Phase 1: only check for actual OOM (0 tokens). TPS floor is applied
         # at the final check — rejecting slow models mid-probe hides viable ctx.
         echo "$tps"
@@ -288,15 +288,15 @@ bench_ctx() {
     t2=$(echo "$t2" | bc 2>/dev/null || echo "0")
 
     local o=0
-    [ "$(echo "$t1 <= 0" | bc 2>/dev/null || echo "1")" = "1" ] && o=$((o+1))
-    [ "$(echo "$t2 <= 0" | bc 2>/dev/null || echo "1")" = "1" ] && o=$((o+1))
-    if [ "$o" -ge 2 ]; then echo ""; return 1; fi
+    [[ $(echo "$t1 <= 0" | bc 2>/dev/null || echo "1") == 1 ]] && o=$((o+1))
+    [[ $(echo "$t2 <= 0" | bc 2>/dev/null || echo "1") == 1 ]] && o=$((o+1))
+    if [[ $o -ge 2 ]]; then echo ""; return 1; fi
 
     local tps
-    if [ "$o" -eq 0 ]; then
+    if [[ $o -eq 0 ]]; then
         tps=$(echo "($t1+$t2)/2" | bc -l 2>/dev/null || echo "$t1")
     else
-        [ "$(echo "$t1 > 0" | bc 2>/dev/null || echo "0")" = "1" ] && tps=$t1 || tps=$t2
+        [[ $(echo "$t1 > 0" | bc 2>/dev/null || echo "0") == 1 ]] && tps=$t1 || tps=$t2
     fi
     tps=$(echo "scale=2; $tps / 1" | bc -l 2>/dev/null || echo "$tps"); [ -z "$tps" ] && tps=0
     # Refinement: only check for actual OOM (0 tokens). TPS floor is applied
@@ -319,17 +319,17 @@ record_best() {
     local above; above=$(echo "$tps >= $MIN_TPS" | bc 2>/dev/null || echo "0")
     local best_above; best_above=$(echo "$BEST_TPS >= $MIN_TPS" | bc 2>/dev/null || echo "0")
 
-    if [ "$above" = "1" ] && [ "$best_above" = "0" ]; then
+    if [[ $above == 1 && $best_above == 0 ]]; then
         # New candidate meets floor, current best does not — immediate win.
         BEST_TPS=$tps; BEST_COMBO="$b:$u"; BEST_CTX=$c
-    elif [ "$above" = "1" ] && [ "$best_above" = "1" ]; then
+    elif [[ $above == 1 && $best_above == 1 ]]; then
         # Both meet floor: pick the higher ctx.
-        if [ "$(echo "$c > $BEST_CTX" | bc 2>/dev/null || echo "0")" = "1" ]; then
+        if [[ $(echo "$c > $BEST_CTX" | bc 2>/dev/null || echo "0") == 1 ]]; then
             BEST_TPS=$tps; BEST_COMBO="$b:$u"; BEST_CTX=$c
         fi
-    elif [ "$above" = "0" ] && [ "$best_above" = "0" ]; then
+    elif [[ $above == 0 && $best_above == 0 ]]; then
         # Neither meets floor: pick the higher ctx.
-        if [ "$(echo "$c > $BEST_CTX" | bc 2>/dev/null || echo "0")" = "1" ]; then
+        if [[ $(echo "$c > $BEST_CTX" | bc 2>/dev/null || echo "0") == 1 ]]; then
             BEST_TPS=$tps; BEST_COMBO="$b:$u"; BEST_CTX=$c
         fi
     fi
@@ -343,9 +343,9 @@ for combo in "${COMBOS[@]}"; do
     echo "  ---------------------"
 
     c0=$START_CTX
-    if [ "$BEST_CTX" -gt 0 ]; then
+    if [[ $BEST_CTX -gt 0 ]]; then
         tps=$(bench_ctx "$BEST_CTX" "$b" "$u" 1) || tps=""
-        if [ -n "$tps" ]; then
+        if [[ -n $tps ]]; then
             echo "  ctx $(fmt "$BEST_CTX") - ${tps} tps"
             ANY_OK=true; record_best "$BEST_CTX" "$tps" "$b" "$u"
         else
@@ -354,11 +354,11 @@ for combo in "${COMBOS[@]}"; do
         continue
     fi
     test_num=0; c=$c0; found=false
-    while [ "$c" -ge "$MIN_CTX" ]; do
+    while [[ $c -ge $MIN_CTX ]]; do
         test_num=$((test_num + 1))
         tps=$(bench_ctx "$c" "$b" "$u" 1) || {
             echo "  Test $test_num: ctx $(fmt "$c") - OOM: dropping to $(fmt $((c/2)))"
-            c=$((c/2)); [ "$c" -lt "$MIN_CTX" ] && break; continue
+            c=$((c/2)); [[ $c -lt $MIN_CTX ]] && break; continue
         }
         echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps"
         found=true; ANY_OK=true
@@ -370,19 +370,19 @@ for combo in "${COMBOS[@]}"; do
             test_num=$((test_num + 1))
             bench_ctx "$c" "$b" "$u" 1 > /tmp/at-tps-$$; rc=$?
             tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
-            if [ "$rc" -ne 0 ]; then
+            if [[ $rc -ne 0 ]]; then
                 hi=$c
                 echo "  Test $test_num: ctx $(fmt "$c") - OOM: binary probe $(fmt $(( (lo+hi)/2/512*512 )))"
                 break
             fi
             lo=$c; record_best "$lo" "$tps" "$b" "$u"
             drop=$(echo "scale=4; ($prev_tps - $tps) / $prev_tps" | bc 2>/dev/null || echo "0")
-            if [ "$(echo "$drop < 0.10" | bc 2>/dev/null || echo "0")" = "1" ]; then
+            if [[ $(echo "$drop < 0.10" | bc 2>/dev/null || echo "0") == 1 ]]; then
                 stable=$((stable + 1))
             else
                 stable=0; prev_tps=$tps
             fi
-            if [ "$stable" -ge 3 ]; then
+            if [[ $stable -ge 3 ]]; then
                 echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps (TPS stable, stopping climb)"
                 hi=$((c * 3 / 2))
                 break
@@ -392,22 +392,22 @@ for combo in "${COMBOS[@]}"; do
         done
 
         # If first step-up OOM'd and TPS was marginal (< 25), skip binary probe.
-        if [ "$hi" -gt 0 ] && [ "$(echo "$BEST_TPS < 25" | bc 2>/dev/null || echo "0")" = "1" ]; then
+        if [[ $hi -gt 0 ]] && [[ $(echo "$BEST_TPS < 25" | bc 2>/dev/null || echo "0") == 1 ]]; then
             echo "  (TPS marginal, no binary probe needed)" 
         else
         # Binary probe between lo (working) and hi (OOM) — max 5 steps
         prev_c=-1; probe_count=0
-        while [ $((hi - lo)) -ge 512 ] && [ "$probe_count" -lt 5 ]; do
+        while [[ $((hi - lo)) -ge 512 ]] && [[ $probe_count -lt 5 ]]; do
             probe_count=$((probe_count + 1))
             nsamples=1
-            [ "$probe_count" -gt 1 ] && nsamples=2   # double-sample in refinement zone
+            [[ $probe_count -gt 1 ]] && nsamples=2   # double-sample in refinement zone
             c=$(( (lo + hi) / 2 / 512 * 512 ))
-            [ "$c" -eq "$prev_c" ] && break
+            [[ $c -eq $prev_c ]] && break
             prev_c=$c
             test_num=$((test_num + 1))
             bench_ctx "$c" "$b" "$u" "$nsamples" > /tmp/at-tps-$$; rc=$?
             tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
-            if [ "$rc" -ne 0 ]; then
+            if [[ $rc -ne 0 ]]; then
                 hi=$c
                 echo "  Test $test_num: ctx $(fmt "$c") - OOM"
             else
@@ -418,13 +418,13 @@ for combo in "${COMBOS[@]}"; do
         fi
         break
     done
-    [ "$found" = false ] && echo "  Test $test_num: ctx $(fmt "$c") - OOM - model cannot run at any ctx"
+    [[ $found == false ]] && echo "  Test $test_num: ctx $(fmt "$c") - OOM - model cannot run at any ctx"
 done
 
 # --- mmap fallback ---
 # If --mmap (default) failed at all ctx for all combos, retry with --no-mmap.
 # Some architectures (phi3, gemma3n) need --no-mmap for stable VRAM allocation.
-if [ "$ANY_OK" = false ]; then
+if [[ $ANY_OK == false ]]; then
     echo ""
     echo "  --mmap failed at all ctx — retrying with --no-mmap"
     echo ""
@@ -434,10 +434,10 @@ if [ "$ANY_OK" = false ]; then
         echo "  ---------------------"
 
         c=$START_CTX; found=false
-        while [ "$c" -ge "$MIN_CTX" ]; do
+        while [[ $c -ge $MIN_CTX ]]; do
             tps=$(bench_ctx "$c" "$b" "$u" 1 "off") || {
                 echo "  ctx $(fmt "$c") - OOM: dropping to $(fmt $((c/2)))"
-                c=$((c/2)); [ "$c" -lt "$MIN_CTX" ] && break; continue
+                c=$((c/2)); [[ $c -lt $MIN_CTX ]] && break; continue
             }
             echo "  ctx $(fmt "$c") - ${tps} tps"
             found=true; ANY_OK=true
@@ -447,7 +447,7 @@ if [ "$ANY_OK" = false ]; then
             while true; do
                 bench_ctx "$c" "$b" "$u" 1 "off" > /tmp/at-tps-$$; rc=$?
                 tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
-                if [ "$rc" -ne 0 ]; then
+                if [[ $rc -ne 0 ]]; then
                     echo "  ctx $(fmt "$c") - OOM"
                     break
                 fi
@@ -461,16 +461,16 @@ if [ "$ANY_OK" = false ]; then
 fi
 
 # --- Ubatch ratio testing ---
-if [ "$ANY_OK" = true ] && [ -n "$BEST_COMBO" ]; then
+if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
     echo ""
     echo "  ubatch testing at ctx=$(fmt "$BEST_CTX") batch=$(fmt "$BEST_B")"
     echo "  ---------------------"
     for ub in 128 256 512; do
-        [ "$ub" -eq "$BEST_U" ] && continue
-        [ "$ub" -gt "$BEST_B" ] && continue
+        [[ $ub -eq $BEST_U ]] && continue
+        [[ $ub -gt $BEST_B ]] && continue
         tps=$(bench_ctx "$BEST_CTX" "$BEST_B" "$ub" 1) || tps=""
-        if [ -n "$tps" ]; then
+        if [[ -n $tps ]]; then
             echo "  ubatch $ub - ${tps} tps"
             record_best "$BEST_CTX" "$tps" "$BEST_B" "$ub"
         else
@@ -483,13 +483,13 @@ fi
 cleanup_gpu >/dev/null 2>&1 || true
 echo ""
 
-if [ "$ANY_OK" = true ] && [ -n "$BEST_COMBO" ]; then
+if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
 
     # TPS floor check: warn if below floor, but still save the best config.
     # We've already found the optimal ctx/batch/ubatch — the model is just
     # too slow for this GPU. Mark it autotuned so the bench can proceed.
-    if [ "$(echo "$BEST_TPS + 1 < $MIN_TPS" | bc 2>/dev/null || echo "0")" = "1" ]; then
+    if [[ $(echo "$BEST_TPS + 1 < $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
         echo "  TPS ${BEST_TPS} below floor ${MIN_TPS} — saving best config anyway"
     fi
 

@@ -14,7 +14,7 @@
 VERSION="1.1"
 set -euo pipefail
 
-raw=$(typeperf.exe "\Processor(_Total)\% Processor Time" \
+raw=$(timeout 15 typeperf.exe "\Processor(_Total)\% Processor Time" \
   "\GPU Engine(*)\Utilization Percentage" \
       -sc 1 2>/dev/null | tr -d '\r"')
 
