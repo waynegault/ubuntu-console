@@ -44,7 +44,7 @@ echo ""
 drain_vram() {
     local before after
     before=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}')
-    pkill -9 -x llama-server 2>/dev/null || true
+    pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
     local waited=0
     while [ "$waited" -lt 15 ]; do
         sleep 1

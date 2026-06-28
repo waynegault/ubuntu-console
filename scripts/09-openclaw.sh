@@ -696,8 +696,26 @@ function xo() {
 function oc() {
     local sub="${1:-}"
 
-    # Ensure gateway token is available for CLI commands
-    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
+    # Ensure gateway token is available for CLI commands.
+    # Generate a per-install random token on first use if not already
+    # configured via OPENCLAW_TOKEN env or ~/.openclaw/secrets.env.
+    # This avoids a hardcoded default that would be in source control.
+    if [[ -z "${OPENCLAW_TOKEN:-}" ]]
+    then
+        local _token_file="$HOME/.openclaw/.gateway_token"
+        if [[ -f "$_token_file" ]]
+        then
+            OPENCLAW_TOKEN=$(< "$_token_file")
+        else
+            mkdir -p "$HOME/.openclaw"
+            OPENCLAW_TOKEN=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || \
+                             openssl rand -hex 16 2>/dev/null || \
+                             date +%s%N | sha256sum | head -c 32)
+            printf '%s' "$OPENCLAW_TOKEN" > "$_token_file"
+            chmod 600 "$_token_file"
+        fi
+    fi
+    export OPENCLAW_TOKEN
 
     # Show help if no subcommand provided
     if [[ -z "$sub" ]]

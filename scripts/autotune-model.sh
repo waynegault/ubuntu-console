@@ -144,24 +144,24 @@ PAYLOAD
 # runs between models in the bench loop, not between every ctx probe.
 cleanup_gpu() {
     if declare -f __gpu_clear_stale_processes &>/dev/null; then
-        pkill -9 -x llama-server 2>/dev/null || true
+        pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
         sleep 1
         __gpu_clear_stale_processes
     else
-        pkill -9 -x llama-server 2>/dev/null || true
+        pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
     fi
 
     # WSL2 ghost-VRAM workaround: kill nvidia-smi to recycle the CUDA
     # query context, then double-kill to trigger dxgkrnl release.
     # Does NOT reload nvidia-uvm (too slow for per-probe use).
-    pkill -9 -x nvidia-smi 2>/dev/null || true
+    pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
     sleep 1
     sync 2>/dev/null || true
     if [ -w /proc/sys/vm/drop_caches ]; then
         echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
     fi
     nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
-    pkill -9 -x nvidia-smi 2>/dev/null || true
+    pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
     sleep 1
 
     local waited=0
