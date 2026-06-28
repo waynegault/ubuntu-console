@@ -214,6 +214,7 @@ then
     local_kv_offload_flag="--kv-offload"
     case "${LLAMA_OFFLOAD_KQV:-true}" in
         false|FALSE|0|no|NO|off|OFF) local_kv_offload_flag="--no-kv-offload" ;;
+        *) local_kv_offload_flag="--kv-offload" ;;
     esac
 
     cmd=("$LLAMA_SERVER_BIN")

@@ -114,7 +114,7 @@ if [[ -n "${_native_ctx:-}" ]] && [[ "$_native_ctx" =~ ^[0-9]+$ ]] && [[ $_nativ
     [[ $START_CTX -gt $_ceiling ]] && START_CTX=$_ceiling
 fi
 
-# Comma-format numbers
+# Comma-format numbers (standalone helpers — no outer-scope capture)
 fmt() { printf "%'d" "$1"; }
 fmts() { local _s; _s=$(printf "%'d" "${1%%:*}"); printf "%s:%'d" "$_s" "${1##*:}"; }
 
@@ -142,6 +142,7 @@ PAYLOAD
 # ghost-VRAM release via nvidia-smi query-context reset (double-kill trick).
 # This is the fast path (~2 s). The full nvidia-uvm reload (clear_vram.sh)
 # runs between models in the bench loop, not between every ctx probe.
+# Nested function — captures $MODEL from parent scope for temp-file naming
 cleanup_gpu() {
     if declare -f __gpu_clear_stale_processes &>/dev/null; then
         pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
@@ -178,6 +179,7 @@ cleanup_gpu() {
 #   mmap_mode: "auto" (--mmap, default) or "off" (--no-mmap)
 #   Defaults to --mmap to avoid CUDA malloc ghost-VRAM OOM on WSL2.
 # ---------------------------------------------------------------------------
+# Nested function — captures $MODEL from parent scope for temp-tag naming
 bench_once() {
     local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}"
     local tag="/tmp/at-vram-${MODEL}-${c}"
@@ -311,6 +313,7 @@ bench_ctx() {
 
 BEST_TPS="0"; BEST_COMBO=""; BEST_CTX=0; ANY_OK=false
 
+# Nested function — writes to BEST_TPS/BEST_COMBO/BEST_CTX/ANY_OK globals
 record_best() {
     local c=$1 tps=$2 b=$3 u=$4
 

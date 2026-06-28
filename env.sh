@@ -51,6 +51,7 @@ for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh; do
     case "$_tac_lib_f" in
         *18-lint.sh) continue ;;
         *13-init.sh) continue ;;
+        *) ;;  # all other modules loaded normally
     esac
     if [[ -f "$_tac_lib_f" ]]
     then

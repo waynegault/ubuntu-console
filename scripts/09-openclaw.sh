@@ -1212,6 +1212,7 @@ function oc-agent-use() {
             echo "$n"
         fi
     }
+    # Nested helpers — capture $_human (main formatting function) from parent scope
     _human_one() { _human "$1"; }
     _human_cap_k() {
         local n=$1
