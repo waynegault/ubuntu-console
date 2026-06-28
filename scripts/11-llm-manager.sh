@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 95
+# Module Version: 96
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP
 # ==============================================================================
@@ -657,7 +657,14 @@ function __llm_autotune_profile_save() {
         -v fit="$fit_target_mb" \
         -v backend="$backend" \
         -v tps_val="$tps" \
-        'BEGIN{OFS="|"} {
+        'BEGIN {
+            OFS="|"
+            # Emit header unconditionally so a headerless registry
+            # does not self-perpetuate (same guard as sync_state).
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
+        }
+        $1 == "#" { next }
+        {
             if ($1 == n) {
                 $8 = ctx; $10 = batch; $11 = ubatch; $12 = parallel
                 $13 = fit; $14 = backend
@@ -665,7 +672,16 @@ function __llm_autotune_profile_save() {
                 $17 = tps_val; $18 = "yes"
             }
             print
-        }' "$profile_file" > "${profile_file}.tmp" && mv "${profile_file}.tmp" "$profile_file"
+        }' "$profile_file" > "${profile_file}.tmp"
+
+    # Safety: never replace the registry with an empty or truncated file.
+    if [[ -s "${profile_file}.tmp" ]] && [[ "$(wc -l < "${profile_file}.tmp")" -ge 1 ]]
+    then
+        mv "${profile_file}.tmp" "$profile_file" || return 1
+    else
+        rm -f "${profile_file}.tmp"
+        return 1
+    fi
 }
 
 # ---------------------------------------------------------------------------
