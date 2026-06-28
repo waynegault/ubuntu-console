@@ -24,6 +24,7 @@ for arg in "$@"; do
     case "$arg" in
         --force|-f) FORCE=1 ;;
         --check|-c) CHECK=1 ;;
+        *) ;;
     esac
 done
 

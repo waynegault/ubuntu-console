@@ -186,6 +186,7 @@ function up() {
     local force_mode=0
     case "${1:-}" in
         --force|-f) force_mode=1 ;;
+        *) ;;
     esac
 
     # Validate: reject unexpected arguments

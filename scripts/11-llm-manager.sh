@@ -2120,6 +2120,7 @@ function __quant_label() {
         17) label="Q5_K_M";; 18) label="Q6_K";;  19) label="IQ2_XXS";;
         20) label="IQ2_XS";; 21) label="IQ3_XXS";; 26) label="IQ3_M";;
         28) label="Q4_0_4_4";; 29) label="Q4_0_4_8";; 30) label="Q4_0_8_8";;
+        *) ;;
     esac
     # Regex matches GGUF quantization naming patterns:
     #   IQ variants (IQ2_XXS, IQ3_M, etc.), standard K-quants (Q4_K_S, Q5_K_M),
@@ -2391,6 +2392,7 @@ function __model_list() {
     case "${1:-}" in
         --json) output_mode="json" ;;
         --plain) output_mode="plain" ;;
+        *) ;;
     esac
 
     if [[ ! -f "$LLM_REGISTRY" ]]
@@ -2799,6 +2801,7 @@ function __model_use() {
                 fi
     # Trust the autotune-discovered ctx as-is on the low end.
                 ;;
+            *) ;;
         esac
     fi
     # Trust the autotune-discovered ctx as-is on the low end.
@@ -2872,11 +2875,13 @@ function __model_use() {
         case "${_flash_attn_setting}" in
             true|TRUE|1|yes|YES|on|ON) flash_attn_mode="on" ;;
             false|FALSE|0|no|NO|off|OFF) flash_attn_mode="off" ;;
+            *) ;;
         esac
 
         local kv_offload_flag="--kv-offload"
         case "${LLAMA_OFFLOAD_KQV:-true}" in
             false|FALSE|0|no|NO|off|OFF) kv_offload_flag="--no-kv-offload" ;;
+            *) ;;
         esac
 
         cmd=("$LLAMA_SERVER_BIN")
@@ -3283,6 +3288,7 @@ function __model_status() {
     case "${1:-}" in
         --json) output_mode="json" ;;
         --plain) output_mode="plain" ;;
+        *) ;;
     esac
 
     __llm_registry_sync_state >/dev/null 2>&1 || true
@@ -4321,6 +4327,7 @@ function __model_bench_trend() {
         case "$status" in
             FLAG) color="$C_Error";  label="DROP" ;;
             WARN) color="$C_Warning"; label="warn" ;;
+            *) ;;
         esac
         printf "  ${color}%-6s %-50s %8.1f %8.1f %7.0f%% %s${C_Reset}\n" "$label" "${model:0:50}" "$old_tps" "$new_tps" "$pct" "$ctx"
     done <<< "$trend_output"
@@ -4339,6 +4346,7 @@ function __model_doctor() {
     case "${1:-}" in
         --json) output_mode="json" ;;
         --plain) output_mode="plain" ;;
+        *) ;;
     esac
 
     local registry_exists=0
@@ -5190,6 +5198,7 @@ function model() {
                     __tac_info "Bench" "[IDLE — no bench running]" "$C_Success"
                     return 0
                     ;;
+                *) ;;
             esac
             __model_bench "$@"
             ;;

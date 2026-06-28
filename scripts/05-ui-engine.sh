@@ -202,6 +202,7 @@ function __strip_ansi() {
         printf|read|readarray|source|type|ulimit|fc|history|times)
             return 1
             ;;
+        *) ;;
     esac
 
     # Validate format: must start with letter or underscore, contain only

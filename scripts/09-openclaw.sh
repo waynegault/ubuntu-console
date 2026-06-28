@@ -574,6 +574,7 @@ function __so_check_win_port() {
         node|python|python3|llama-server|openclaw|code|pwsh|powershell|docker*|wslrelay)
             _safe_proc=1
             ;;
+        *) ;;
     esac
 
     # Auto-kill the Windows process via taskkill.exe (only if safe or user requested)
@@ -1742,6 +1743,7 @@ function oc-restore() {
     local dry_run=0
     case "${1:-}" in
         --dry-run|-n) dry_run=1 ;;
+        *) ;;
     esac
 
     local latest=""
@@ -1977,6 +1979,7 @@ function oc-health() {
         --json) output_mode="json" ;;
         --plain) output_mode="plain" ;;
         --verbose|-v) output_mode="verbose" ;;
+        *) ;;
     esac
 
     # Check if enhanced health check script exists
@@ -2681,6 +2684,7 @@ function oc-cache-clear() {
     local dry_run=0
     case "${1:-}" in
         --dry-run|-n) dry_run=1 ;;
+        *) ;;
     esac
 
     local count=0
@@ -2836,6 +2840,7 @@ function oc-doctor-local() {
     case "${1:-}" in
         --json) output_mode="json" ;;
         --plain) output_mode="plain" ;;
+        *) ;;
     esac
 
     local openclaw_installed=1
@@ -3058,6 +3063,7 @@ function oc-kgraph() {
                 printf '%s\n' "Views in oc g UI: overview, topics, files, semantic, raw"
                 return 0
                 ;;
+            *) ;;
         esac
     done
 

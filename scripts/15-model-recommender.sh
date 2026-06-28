@@ -139,6 +139,7 @@ function model-recommend() {
                     reason="creative-writing"
                 fi
                 ;;
+            *) ;;
         esac
 
         # TPS bonus for performance

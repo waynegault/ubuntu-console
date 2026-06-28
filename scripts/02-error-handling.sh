@@ -55,6 +55,7 @@ function __tac_is_internal_noise_command() {
         "/usr/lib/command-not-found -- \"\$1\"") return 0 ;;
         "custom_prompt_command"|*"BASH_COMMAND"*|*"__tac_err_handler"*) return 0 ;;
         *"__bridge_windows_api_keys"*) return 0 ;;
+        *) ;;
     esac
     return 1
 }
@@ -74,6 +75,7 @@ function __tac_emit_shell_hint() {
         wsl\ *)
             _hint_key="wsl"
             ;;
+        *) ;;
     esac
 
     [[ -z "$_hint_key" ]] && return
@@ -94,6 +96,7 @@ function __tac_emit_shell_hint() {
         wsl)
             echo "$(date +"%Y-%m-%d %H:%M:%S") [HINT] 'wsl' command was run inside WSL. Use native Linux command or run from Windows terminal." >> "$ErrorLogPath" 2>/dev/null
             ;;
+        *) ;;
     esac
 }
 
@@ -214,12 +217,14 @@ function __tac_err_handler() {
         curl*) return ;;                  # HTTP errors are expected for probes
         jq*) return ;;                    # Invalid JSON is expected for probes
         *nvm.sh*) return ;;               # NVM returns exit code 3 when already loaded or in non-interactive shell
+        *) ;;
     esac
 
     case "$__tac_last_err" in
         130) _label="INTERRUPTED 130" ;;
         124) _label="TIMEOUT 124" ;;
         127) _label="NOT_FOUND 127" ;;
+        *) ;;
     esac
 
     if ! __tac_ssh_circuit_breaker_allows_log "$_raw_cmd" "$__tac_last_err"
