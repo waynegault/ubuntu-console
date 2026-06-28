@@ -38,11 +38,13 @@ def _discover_params() -> list[Any]:
             if rel in seen:
                 continue
             seen.add(rel)
+            # Use just the filename as the test id — VSCode's test explorer
+            # struggles with slashes and dots inside parametrized ids.
             params.append(
                 pytest.param(
                     p,
                     timeout,
-                    id=rel,
+                    id=p.name,
                     marks=[pytest.mark.bats, marker],  # type: ignore[list-item]
                 )
             )
