@@ -3864,7 +3864,7 @@ function __model_bench() {
         printf "\n\n%s── [%s/%s] %s (%s) ──%s\n" "$C_Highlight" "$_prog_num" "$_prog_total" "${b_name[$i]}" "${b_size[$i]}" "$C_Reset"
 
         # Full VRAM cleanup BEFORE checking VRAM state
-        sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
+        sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
 
         local _bench_safe_overrides=0
         local _bench_min_free_vram_mb="${LLM_BENCH_MIN_FREE_VRAM_MB:-1200}"
@@ -3934,7 +3934,7 @@ function __model_bench() {
                     __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} (no working config) - skipping benchmark]" "$C_Error"
                     b_tps+=("FAIL_AUTOTUNE")
     # Trust the autotune-discovered ctx as-is on the low end.
-                    sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
+                    sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
                     __model_stop 2>/dev/null || true
                     __gpu_clear_stale_processes
                     sleep 2
@@ -3994,7 +3994,7 @@ function __model_bench() {
         b_tps+=("$tps")
         __model_stop 2>/dev/null
         printf "\nClearing VRAM\n"
-        sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
+        sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
         # Always clean up any leaked overrides between model iterations.
         # LLAMA_GPU_LAYERS etc. may have been set by a previous model's safe
         # override block and persist into the next model if that model doesn't
@@ -5536,7 +5536,7 @@ function burn() {
                     printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Restarting active model #${_burn_num} after transport failure..."
                     # Clear VRAM before reload to remove ghost allocations from the
                     # failed server instance (WSL2 CUDA often holds stale memory).
-                    sudo /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
+                    sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
                     if __model_use "$_burn_num" >/tmp/burn_transport_recover_use.log 2>&1
                     then
                         local _rw
