@@ -176,13 +176,13 @@ def test_bats_suite(bats_file: Path, timeout_s: int) -> None:
         stdout_tail: list[str] = []
         stderr_tail: list[str] = []
         if exc.output is not None:
-            out = exc.output.decode() if isinstance(exc.output, bytes) else exc.output
-            if out is not None:
-                stdout_tail = out.splitlines()[-40:]
+            raw = exc.output
+            out: str = raw.decode() if isinstance(raw, bytes) else raw  # type: ignore[assignment]
+            stdout_tail = out.splitlines()[-40:]
         if exc.stderr is not None:
-            err = exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
-            if err is not None:
-                stderr_tail = err.splitlines()[-40:]
+            raw = exc.stderr
+            err: str = raw.decode() if isinstance(raw, bytes) else raw  # type: ignore[assignment]
+            stderr_tail = err.splitlines()[-40:]
         pytest.fail(
             f"BATS suite timed out ({timeout_s}s): "
             f"{bats_file.relative_to(REPO_ROOT)}\n"
