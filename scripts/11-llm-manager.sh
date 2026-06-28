@@ -414,11 +414,15 @@ function __llm_registry_sync_state() {
     fi
     # Trust the autotune-discovered ctx as-is on the low end.
 
-    awk -F'|' -v def="$default_file" -v af="$active_file" -v run="$running" 'BEGIN{OFS="|"}
-        $1 == "#" {
+    awk -F'|' -v def="$default_file" -v af="$active_file" -v run="$running" 'BEGIN {
+            OFS="|"
+            # Always emit the canonical header first, even if the input
+            # registry has lost its header line (e.g. after an interrupted
+            # model-scan renumbering pass).  This prevents a headerless
+            # registry from self-perpetuating across every sync_state call.
             print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
-            next
         }
+        $1 == "#" { next }
         NF < 16 {
             # Rows with fewer than 16 fields are legacy or malformed.
             # Print them as-is rather than dropping — silent data loss is
@@ -950,7 +954,13 @@ function __llm_autotune_profiles_remap_by_registry() {
     local new_registry="${2:-}"
     [[ -s "$old_registry" && -f "$new_registry" ]] || return 0
 
-    awk -F'|' 'BEGIN{OFS="|"}
+    awk -F'|' 'BEGIN {
+            OFS="|"
+            # Always emit the canonical header so a headerless input
+            # registry does not self-perpetuate (same guard as in
+            # __llm_registry_sync_state).
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
+        }
         FNR == NR {
             if ($1 != "#" && NF >= 16) {
                 key=$3
@@ -972,10 +982,7 @@ function __llm_autotune_profiles_remap_by_registry() {
             next
         }
         {
-            if ($1 == "#") {
-                print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
-                next
-            }
+            if ($1 == "#") { next }
 
             if (NF < 16) {
                 next
@@ -2328,7 +2335,12 @@ function __model_scan() {
         if (( archived > 0 ))
         then
             __tac_info "Enforcement" "[$archived discouraged model(s) moved to archive]" "$C_Warning"
-            local clean_tmp="${LLM_REGISTRY}.tmp"
+            # Use a per-run temp file (not .tmp which is shared with the
+            # initial scan write and with __llm_registry_sync_state).
+            # An interrupted renumber pass must never leave a half-built
+            # registry behind; the original models.conf stays intact
+            # until the final mv.
+            local clean_tmp="${LLM_REGISTRY}.renum.$$"
             local new_num=0
             echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram" > "$clean_tmp"
             local _cline
