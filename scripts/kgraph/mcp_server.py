@@ -13,9 +13,8 @@ Provides tools:
 
 import json
 import os
-import sys
 import time
-from .query import query_nodes, find_path, explain_node, format_explain, format_path
+from .query import query_nodes, find_path, explain_node
 from .report import generate_report
 from .graph_db import load_from_graph_db
 from .constants import GRAPH_DB_DEFAULT
@@ -32,7 +31,6 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
     graph = load_from_graph_db(graph_db_path) if os.path.exists(graph_db_path) else {'nodes': [], 'edges': []}
 
     from http.server import HTTPServer, BaseHTTPRequestHandler
-    import urllib.parse
 
     class MCPHandler(BaseHTTPRequestHandler):
         graph = graph
@@ -202,7 +200,7 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
     httpd = HTTPServer((host, port), MCPHandler)
     addr, used_port = httpd.server_address
     print(f'MCP server listening on {addr}:{used_port}')
-    print(f'  Tools: kgraph_query, kgraph_path, kgraph_explain, kgraph_report, kgraph_stats')
+    print('  Tools: kgraph_query, kgraph_path, kgraph_explain, kgraph_report, kgraph_stats')
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

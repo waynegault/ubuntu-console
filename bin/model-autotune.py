@@ -27,7 +27,7 @@ import time
 import urllib.request
 import urllib.error
 from pathlib import Path
-
+from typing import BinaryIO
 
 # ── Constants ──────────────────────────────────────────────────────────
 
@@ -162,7 +162,7 @@ def read_native_ctx(model_path: str) -> int | None:
     # Fixed-width byte sizes per GGUF scalar type id
     _SCALAR_SZ = {4: 4, 5: 4, 6: 4, 10: 8, 11: 8, 7: 1, 12: 2, 13: 4}
 
-    def _skip(f: "BinaryIO", vtype: int) -> None:
+    def _skip(f: BinaryIO, vtype: int) -> None:
         if vtype in _SCALAR_SZ:
             f.read(_SCALAR_SZ[vtype])
         elif vtype == 8:  # string
@@ -176,11 +176,15 @@ def read_native_ctx(model_path: str) -> int | None:
         else:
             raise ValueError(f"unknown GGUF type {vtype}")
 
-    def _read_int(f: "BinaryIO", vtype: int) -> int | None:
-        if vtype == 4:  return struct.unpack("<I", f.read(4))[0]
-        if vtype == 5:  return struct.unpack("<i", f.read(4))[0]
-        if vtype == 10: return struct.unpack("<Q", f.read(8))[0]
-        if vtype == 11: return struct.unpack("<q", f.read(8))[0]
+    def _read_int(f: BinaryIO, vtype: int) -> int | None:
+        if vtype == 4:
+            return struct.unpack("<I", f.read(4))[0]
+        if vtype == 5:
+            return struct.unpack("<i", f.read(4))[0]
+        if vtype == 10:
+            return struct.unpack("<Q", f.read(8))[0]
+        if vtype == 11:
+            return struct.unpack("<q", f.read(8))[0]
         _skip(f, vtype)
         return None
 
@@ -390,7 +394,8 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
                 try:
                     log_text = Path(log_path).read_text(errors="ignore")
                     if OOM_RE.search(log_text):
-                        proc.kill(); proc.wait(timeout=10)
+                        proc.kill()
+                        proc.wait(timeout=10)
                         return None
                 except Exception:
                     pass
@@ -407,7 +412,8 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
             time.sleep(0.5)
 
     if not health_ok:
-        proc.kill(); proc.wait(timeout=10)
+        proc.kill()
+        proc.wait(timeout=10)
         return None
 
     # Pre-flight: send a tiny completion to confirm the model slot is actually
@@ -429,7 +435,8 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
                 return None
             time.sleep(2)
 
-    proc.kill(); proc.wait(timeout=10)
+    proc.kill()
+    proc.wait(timeout=10)
     return None
 
 
@@ -516,18 +523,24 @@ def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
     for i in range(max(1, int(samples))):
         tps = run_burn(port, warmup=(warmup and i == 0), max_tokens=burn_tokens)
         if tps is None:
-            proc.kill(); proc.wait(timeout=10)
-            try: Path(f"/tmp/autotune_{port}.log").unlink()
-            except Exception: pass
+            proc.kill()
+            proc.wait(timeout=10)
+            try:
+                Path(f"/tmp/autotune_{port}.log").unlink()
+            except Exception:
+                pass
             if not tps_samples:
                 return ("burn_fail", [])
             break
         tps_samples.append(tps)
 
     # Clean shutdown
-    proc.kill(); proc.wait(timeout=10)
-    try: Path(f"/tmp/autotune_{port}.log").unlink()
-    except Exception: pass
+    proc.kill()
+    proc.wait(timeout=10)
+    try:
+        Path(f"/tmp/autotune_{port}.log").unlink()
+    except Exception:
+        pass
     kill_zombie_servers()
     return ("ok", tps_samples)
 
@@ -794,7 +807,7 @@ def main() -> None:
     # cheap checks on other profiles and run upward refinement if they can
     # sustain the current global max.
     #
-    print(f"  ── ctx discovery ──")
+    print("  ── ctx discovery ──")
     print()
 
     primary = profiles[0]
@@ -1089,13 +1102,13 @@ def main() -> None:
         best_tps_local = float(best["tps"])
         return (best_combo_local, best_tps_local, load_fail_local, ok_local, space)
 
-    print(f"  ── param tuning ──")
+    print("  ── param tuning ──")
     best_combo, best_combo_tps, load_fail_count, ok_count, pruned = _run_param_tuning(discovered_ctx, selected_profile)
 
     # If refinement selected an unstable edge profile/ctx (all combos failed to
     # start), fall back once to the discovery profile which was known-good.
     if ok_count == 0 and load_fail_count == len(pruned) and selected_profile != discovery_profile:
-        print(f"  all combos load_fail at selected profile — falling back to discovery profile")
+        print("  all combos load_fail at selected profile — falling back to discovery profile")
         selected_profile = discovery_profile
         discovered_ctx = max_stable_ctx
         best_combo, best_combo_tps, load_fail_count, ok_count, pruned = _run_param_tuning(discovered_ctx, selected_profile)

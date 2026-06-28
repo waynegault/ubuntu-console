@@ -9,8 +9,6 @@ require a running llama-server and GPU.
 
 import importlib.util
 import os
-import re
-import sys
 import tempfile
 import unittest
 

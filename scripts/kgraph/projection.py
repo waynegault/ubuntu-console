@@ -6,8 +6,6 @@ semantic, raw). The nested enrich_graph_payload() function is kept
 inside project_graph as in the original.
 """
 import re
-import json
-from .constants import normalize_canonical_name
 from .life_index import load_life_index
 
 
@@ -377,7 +375,7 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
                     filtered_nodes.append(node)
                 elif current_mode == 'topics' and ntype in {'topic', 'project', 'decision', 'issue', 'outcome'} and degree.get(nid, 0) > 0:
                     filtered_nodes.append(node)
-                elif current_mode != 'semantic' and ntype in {'topic', 'project', 'decision', 'issue', 'outcome'} and adjacency.get(nid, 0) > 0:
+                elif current_mode != 'semantic' and ntype in {'topic', 'project', 'decision', 'issue', 'outcome'} and degree.get(nid, 0) > 0:
                     filtered_nodes.append(node)
 
             out['nodes'] = filtered_nodes
@@ -843,7 +841,7 @@ def project_graph(graph: dict, mode: str = 'overview', semantic_threshold: float
             if ntype == 'file':
                 out_nodes[nid] = node
         # Build set of file IDs for quick inclusion lookup
-        file_node_ids = set(out_nodes.keys())
+        set(out_nodes.keys())
         # Also include AST code nodes that belong to visible files
         for nid, node in node_by_id.items():
             ntype = str(node.get('type', ''))

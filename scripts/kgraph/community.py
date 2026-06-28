@@ -7,8 +7,6 @@ concepts that bridge otherwise disconnected groups.
 Uses networkx as the graph engine under the hood. Pure offline.
 """
 
-import os
-import json
 
 try:
     import networkx as nx
@@ -41,7 +39,7 @@ def detect_communities(graph: dict, method: str = "leiden_like", **kwargs) -> di
         return graph
 
     min_community_size = kwargs.get('min_community_size', 2)
-    min_zoom = kwargs.get('min_zoom', 0.30)
+    kwargs.get('min_zoom', 0.30)
 
     G = nx.Graph()
     node_labels = {}
@@ -69,7 +67,6 @@ def detect_communities(graph: dict, method: str = "leiden_like", **kwargs) -> di
     if G.number_of_nodes() < 3 or G.number_of_edges() < 2:
         return graph
 
-    communities = []
     try:
         if method == 'louvain':
             comms = list(louvain_communities(G, weight='weight', seed=42))

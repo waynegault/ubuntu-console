@@ -6,9 +6,7 @@ and how they connect to the knowledge graph.
 """
 
 import os
-import json
 import subprocess
-import re
 from datetime import datetime, timezone
 
 
@@ -89,7 +87,7 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
     commit_cmd = [
         'git', 'log', since,
         '--format=%H|%an|%ae|%ai|%s',
-        f'--max-count=100',
+        '--max-count=100',
     ]
     if author:
         commit_cmd.append(f'--author={author}')

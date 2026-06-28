@@ -1,7 +1,5 @@
 """Constants and import-time setup for the kgraph package."""
 import re
-import json
-import os
 
 try:
     from canonical_helpers import load_canonical_data, normalize_canonical_name

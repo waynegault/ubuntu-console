@@ -9,7 +9,7 @@ import os
 import re
 import json
 import sqlite3
-from .constants import normalize_canonical_name, load_canonical_data
+from .constants import normalize_canonical_name
 from .life_index import load_life_index
 
 
@@ -817,7 +817,3 @@ def load_from_memory_db(dbpath: str) -> dict:
 
     conn.close()
     return graph
-
-
-if __name__ == '__main__':
-    main()

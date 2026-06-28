@@ -11,9 +11,7 @@ merging into the main kgraph.
 Supported languages: bash, python (add via extra grammar install).
 """
 
-import os
 import re
-import json
 from pathlib import Path
 
 _AST_AVAILABLE = False

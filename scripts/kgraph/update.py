@@ -9,7 +9,6 @@ manual --update invocations.
 """
 
 import os
-import json
 import time
 import hashlib
 from pathlib import Path
@@ -29,7 +28,7 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
     Returns:
         The merged graph dict.
     """
-    from .graph_db import load_from_graph_db, save_to_graph_db, init_graph_db
+    from .graph_db import load_from_graph_db, save_to_graph_db
     from .memory_import import load_from_memory_db
     from .confidence import tag_confidence
     from .community import detect_communities
@@ -129,7 +128,6 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
         source_dir: Repo root for AST extraction.
         interval: Poll interval in seconds.
     """
-    import hashlib
 
     # Track file hashes
     file_hashes = {}
@@ -154,7 +152,7 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
         file_hashes = _hash_files(source_dir)
         print(f'  Watching {source_dir} ({len(file_hashes)} files, interval={interval}s)')
 
-    print(f'  Watch mode active. Press Ctrl+C to stop.')
+    print('  Watch mode active. Press Ctrl+C to stop.')
     while True:
         time.sleep(interval)
 
@@ -166,14 +164,14 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
                 file_hashes = current
 
         if mem_db_path and os.path.exists(mem_db_path):
-            mtime = os.path.getmtime(mem_db_path)
+            os.path.getmtime(mem_db_path)
             # We rely on file watcher or explicit changes to memory DB
             pass
 
         if changed:
             print(f'  [{time.strftime("%H:%M:%S")}] File changes detected, rebuilding...')
             try:
-                graph = incremental_update(
+                incremental_update(
                     graph_db_path,
                     mem_db_path=mem_db_path,
                     source_dir=source_dir,

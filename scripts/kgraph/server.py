@@ -13,7 +13,6 @@ import threading
 import webbrowser
 from .constants import GRAPH_DB_DEFAULT, SAMPLE_GRAPH
 from .graph_db import resolve_memory_db_path, load_from_graph_db, save_to_graph_db
-from .html import ensure_parent_dir
 from .projection import project_graph
 from .memory_import import load_from_memory_db
 

@@ -22,9 +22,9 @@ import os
 import json
 import sys
 import tempfile
-from .constants import GRAPH_DB_DEFAULT, SAMPLE_GRAPH, MEMORY_DB_CANDIDATES, load_canonical_data, normalize_canonical_name
-from .graph_db import resolve_memory_db_path, load_from_graph_db, save_to_graph_db
-from .html import generate_html, ensure_parent_dir
+from .constants import GRAPH_DB_DEFAULT, SAMPLE_GRAPH
+from .graph_db import resolve_memory_db_path, load_from_graph_db
+from .html import generate_html
 from .memory_import import load_from_memory_db
 from .server import serve_file
 from .confidence import tag_confidence, confidence_stats
@@ -291,7 +291,7 @@ def main():
     if args.confidence:
         g = tag_confidence(graph)
         s = confidence_stats(g)
-        print(f'Edge confidence:')
+        print('Edge confidence:')
         print(f'  Total: {s["total"]}')
         print(f'  EXTRACTED: {s["extracted"]} ({s["extracted_pct"]}%)')
         print(f'  INFERRED:  {s["inferred"]} ({s["inferred_pct"]}%)')

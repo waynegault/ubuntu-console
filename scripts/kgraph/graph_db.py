@@ -7,7 +7,7 @@ data from SQLite.
 import os
 import json
 import sqlite3
-from .constants import GRAPH_DB_DEFAULT, MEMORY_DB_CANDIDATES
+from .constants import MEMORY_DB_CANDIDATES
 from .html import ensure_parent_dir
 
 

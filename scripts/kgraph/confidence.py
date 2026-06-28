@@ -8,7 +8,6 @@ Every edge in the graph gets one of:
 Also provides a confidence-tagging pass that can be applied to any graph.
 """
 
-import re
 
 # Confidence levels
 EXTRACTED = 'EXTRACTED'
