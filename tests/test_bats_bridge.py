@@ -16,6 +16,8 @@ BATS_EXECUTABLE = "bats"
 # (glob_pattern, marker_or_marks, timeout_s)
 # Use markers for filtering (e.g. `pytest -m "bats_unit"`) and per-suite
 # timeouts so slow suites fail fast instead of hanging the whole run.
+# The `tests/*.bats` catch-all is omitted — the explicit patterns above
+# already cover every bats file under tests/.
 
 _BATS_SUITE_DEFS: list[tuple[str, pytest.MarkDecorator | pytest.Mark, int]] = [
     ("tests/unit/*.bats",               pytest.mark.bats_unit,         60),
@@ -23,7 +25,6 @@ _BATS_SUITE_DEFS: list[tuple[str, pytest.MarkDecorator | pytest.Mark, int]] = [
     ("tests/tactical-console.bats",      pytest.mark.bats_full,       600),
     ("tests/llm-json-output.bats",       pytest.mark.bats_llm,        600),
     ("tests/integration/*.bats",         pytest.mark.bats_integration, 120),
-    ("tests/*.bats",                     pytest.mark.bats_default,     120),
 ]
 
 
@@ -46,6 +47,45 @@ def _discover_params() -> list[Any]:
                 )
             )
     return params
+
+
+def _timeout_tail(exc: subprocess.TimeoutExpired) -> tuple[list[str], list[str]]:
+    """Extract last 40 lines of stdout/stderr from a TimeoutExpired exception."""
+    stdout_tail: list[str] = []
+    stderr_tail: list[str] = []
+    for attr, dst in [("output", stdout_tail), ("stderr", stderr_tail)]:
+        raw = getattr(exc, attr, None)
+        if raw is not None:
+            out: str = raw.decode() if isinstance(raw, bytes) else raw  # type: ignore[assignment]
+            dst.extend(out.splitlines()[-40:])
+    return stdout_tail, stderr_tail
+
+
+def _read_temp_files(tf_out, tf_err) -> tuple[str, str]:
+    """Seek and read both temp files, returning (stdout, stderr)."""
+    tf_out.seek(0)
+    tf_err.seek(0)
+    return tf_out.read(), tf_err.read()
+
+
+def _kill_process_group(pid: int) -> None:
+    """Terminate a process group, escalating to SIGKILL if needed."""
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        return
+    import time as _time
+    deadline = _time.monotonic() + 5
+    while _time.monotonic() < deadline:
+        try:
+            os.killpg(os.getpgid(pid), 0)
+        except (ProcessLookupError, OSError):
+            return
+        _time.sleep(0.25)
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass
 
 
 BATS_PARAMS = _discover_params()
@@ -97,47 +137,19 @@ def _run_bats(bats_file: Path, timeout_s: int) -> subprocess.CompletedProcess[st
                 try:
                     proc.wait(timeout=timeout_s)
                 except subprocess.TimeoutExpired:
-                    # Terminate the whole process group so no orphaned grandchild can
-                    # keep running after we give up on this suite.
-                    try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                    except (ProcessLookupError, OSError):
-                        pass
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                        except (ProcessLookupError, OSError):
-                            pass
-                        proc.wait()
-                    # Read the temp files for the error message.
-                    tf_out.seek(0)
-                    tf_err.seek(0)
-                    stdout_data = tf_out.read()
-                    stderr_data = tf_err.read()
+                    _kill_process_group(proc.pid)
+                    stdout_data, stderr_data = _read_temp_files(tf_out, tf_err)
                     raise subprocess.TimeoutExpired(
-                        cmd=cmd,
-                        timeout=timeout_s,
-                        output=stdout_data,
-                        stderr=stderr_data,
+                        cmd=cmd, timeout=timeout_s,
+                        output=stdout_data, stderr=stderr_data,
                     )
-
-            # Normal exit — read the temp files.
-            tf_out.seek(0)
-            tf_err.seek(0)
-            stdout_data = tf_out.read()
-            stderr_data = tf_err.read()
+            stdout_data, stderr_data = _read_temp_files(tf_out, tf_err)
         finally:
-            # Clean up temp files.
-            try:
-                os.unlink(stdout_path)
-            except OSError:
-                pass
-            try:
-                os.unlink(stderr_path)
-            except OSError:
-                pass
+            for p in (stdout_path, stderr_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
     # Normalize the exit code from the external timeout wrapper so callers can
     # rely on 124 meaning "timed out".
@@ -173,16 +185,7 @@ def test_bats_suite(bats_file: Path, timeout_s: int) -> None:
     try:
         result = _run_bats(bats_file, timeout_s)
     except subprocess.TimeoutExpired as exc:
-        stdout_tail: list[str] = []
-        stderr_tail: list[str] = []
-        if exc.output is not None:
-            raw = exc.output
-            out: str = raw.decode() if isinstance(raw, bytes) else raw  # type: ignore[assignment]
-            stdout_tail = out.splitlines()[-40:]
-        if exc.stderr is not None:
-            raw = exc.stderr
-            err: str = raw.decode() if isinstance(raw, bytes) else raw  # type: ignore[assignment]
-            stderr_tail = err.splitlines()[-40:]
+        stdout_tail, stderr_tail = _timeout_tail(exc)
         pytest.fail(
             f"BATS suite timed out ({timeout_s}s): "
             f"{bats_file.relative_to(REPO_ROOT)}\n"
