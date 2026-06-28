@@ -5,6 +5,7 @@ import signal
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -26,10 +27,10 @@ _BATS_SUITE_DEFS: list[tuple[str, pytest.MarkDecorator | pytest.Mark, int]] = [
 ]
 
 
-def _discover_params() -> list[pytest.param]:
+def _discover_params() -> list[Any]:
     """Build pytest.param instances with dedup, markers, and per-suite timeouts."""
     seen: set[str] = set()
-    params: list[pytest.param] = []
+    params: list[Any] = []
     for pattern, marker, timeout in _BATS_SUITE_DEFS:
         for p in sorted(REPO_ROOT.glob(pattern)):
             rel = str(p.relative_to(REPO_ROOT))
