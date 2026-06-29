@@ -14,6 +14,11 @@ through a pipe-delimited registry, and served via `python -m llama_cpp.server`
 on port 8081. The system exposes an OpenAI-compatible API at
 `http://127.0.0.1:8081/v1/chat/completions`.
 
+> **AUTOTUNE_PORT:** The autotune process (`scripts/autotune-model.sh`)
+> uses a separate port (`${AUTOTUNE_PORT:-18081}`) to avoid conflicting
+> with the watchdog daemon on the default 8081. The benchmark continues
+> to use `LLM_PORT` (8081).
+
 All LLM functions are **pure bash + curl + jq** — no Python dependency.
 
 ## Model Registry

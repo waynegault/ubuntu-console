@@ -3522,37 +3522,7 @@ function __bench_run_with_timeout() {
     fi
     # Trust the autotune-discovered ctx as-is on the low end.
 
-    local _bench_shell_runner
-    _bench_shell_runner=$(cat <<'EOF'
-        child_pid=""
-        __bench_timeout_cleanup() {
-            if [[ -n "$child_pid" ]] && kill -0 "$child_pid" 2>/dev/null
-            then
-                kill -TERM -- "$child_pid" 2>/dev/null || true
-                sleep 1
-                kill -KILL -- "$child_pid" 2>/dev/null || true
-            fi
-    # Trust the autotune-discovered ctx as-is on the low end.
-            while IFS= read -r _cpid
-            do
-                [[ "$_cpid" =~ ^[0-9]+$ ]] || continue
-                kill -TERM -- "$_cpid" 2>/dev/null || true
-            done < <(ps -o pid= --ppid $$ 2>/dev/null)
-        }
-        trap __bench_timeout_cleanup EXIT INT TERM
-        [[ -n "$1" && -f "$1" ]] && source "$1" 2>/dev/null || true
-        shift
-        "$@" &
-        child_pid=$!
-        # Guard against empty child_pid (process already exited) which would
-        # cause wait "" to hang indefinitely waiting for non-existent children.
-        if [[ -n "$child_pid" ]] && [[ "$child_pid" =~ ^[0-9]+$ ]]; then
-            wait "$child_pid"
-        else
-            wait
-        fi
-EOF
-    )
+    local _bench_runner_script="${TACTICAL_REPO_ROOT:-}/bin/bench-timeout-runner.sh"
 
     if (( _is_shell_func == 1 ))
     then
@@ -3567,9 +3537,9 @@ EOF
         declare -fx "$1" 2>/dev/null || true
         (( _monitor_was_on == 1 )) && set +m
         if command -v setsid >/dev/null 2>&1; then
-            setsid bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} $_bench_shell_runner" _ "$_bench_profile_path" "$@" &
+            setsid bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} \"\$_bench_runner_script\" \"\$_bench_profile_path\" \"\$@\"" _ "$_bench_runner_script" "$_bench_profile_path" "$@" &
         else
-            bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} $_bench_shell_runner" _ "$_bench_profile_path" "$@" &
+            bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} \"\$_bench_runner_script\" \"\$_bench_profile_path\" \"\$@\"" _ "$_bench_runner_script" "$_bench_profile_path" "$@" &
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
     elif command -v setsid >/dev/null 2>&1; then
@@ -5493,6 +5463,7 @@ function burn() {
     (( retry_health_wait < 1 )) && retry_health_wait=1
     [[ "$retry_settle_sec" =~ ^[0-9]+$ ]] || retry_settle_sec=2
     (( retry_settle_sec < 0 )) && retry_settle_sec=0
+    local _burn_recovery_attempt=0
     while true
     do
         start_ns=$(date +%s%N)
@@ -5587,6 +5558,17 @@ function burn() {
                     # Clear VRAM before reload to remove ghost allocations from the
                     # failed server instance (WSL2 CUDA often holds stale memory).
                     sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
+                    # Step-down ctx on each successive recovery attempt so a broken
+                    # autotuned ctx does not cause repeated identical crashes.
+                    _burn_recovery_attempt=$(( _burn_recovery_attempt + 1 ))
+                    local _burn_saved_ctx="${LLAMA_N_CTX:-${_ctx:-4096}}"
+                    if (( _burn_recovery_attempt > 1 )) && [[ -n "${_ctx:-}" ]]
+                    then
+                        local _burn_reduced_ctx=$(( _ctx / (2 ** (_burn_recovery_attempt - 1)) ))
+                        [[ "$_burn_reduced_ctx" -lt 4096 ]] && _burn_reduced_ctx=4096
+                        export LLAMA_N_CTX="$_burn_reduced_ctx"
+                        printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Step-down ctx: ${_ctx} \xe2\x86\x92 ${_burn_reduced_ctx} (attempt ${_burn_recovery_attempt})"
+                    fi
                     if __model_use "$_burn_num" >/tmp/burn_transport_recover_use.log 2>&1
                     then
                         local _rw
@@ -5602,6 +5584,9 @@ function burn() {
                             sleep 1
                         done
                     fi
+                    # Restore original ctx after the recovery attempt so subsequent
+                    # health checks and retries use the configured value.
+                    export LLAMA_N_CTX="$_burn_saved_ctx"
     # Trust the autotune-discovered ctx as-is on the low end.
                 fi
     # Trust the autotune-discovered ctx as-is on the low end.

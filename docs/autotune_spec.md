@@ -146,7 +146,7 @@ Each combo runs a full independent Phase 1 + Phase 2 probe. The global best `ctx
 
 ```
 --model {GGUF file}
---port 8081 --host 127.0.0.1
+--port ${AUTOTUNE_PORT:-18081} --host 127.0.0.1   # Uses AUTOTUNE_PORT to avoid conflict with watchdog (8081)
 --ctx-size {ctx}
 --batch-size {batch} --ubatch-size {ubatch}
 --threads {nproc or registry threads}
@@ -252,4 +252,56 @@ Measured on RTX 3050 4GB, WSL2, NTFS mount. Cold load from disk dominates per-te
 
 ---
 
-*Spec written 2026-06-06. Corresponding code in `~/ubuntu-console/scripts/autotune-model.sh` and `~/ubuntu-console/scripts/run-autotune-batch.sh`.*
+## Fixes and edge cases
+
+### AUTOTUNE_PORT isolation (card ca23ec0a)
+The watchdog daemon (`bin/llama-watchdog.sh`) binds `LLM_PORT` (default 8081).
+Autotune originally also bound port 8081, causing a race condition when both
+ran simultaneously. Fixed by introducing `AUTOTUNE_PORT` (default 18081):
+
+- `bin/llama-watchdog.sh` declares `AUTOTUNE_PORT` as a documented env var
+- `scripts/autotune-model.sh` uses it for all server, curl, health, and
+  cleanup operations — 6 HTTP endpoints, the server bind, and the port
+  check in `cleanup_gpu` all route through it.
+- The bench (`__bench_run_with_timeout`) continues to use `LLM_PORT` (8081),
+  so the benchmark is unaffected.
+
+### Post-autotune VRAM clearing (card 1b from merged b9ba4596)
+The autotune **failure** path always called `clear_vram.sh`. The **success**
+path jumped straight to the bench, inheriting any VRAM fragmentation from
+autotune's 6 OOM tests. Fixed by adding `clear_vram.sh` between autotune
+completion and `__bench_run_with_timeout` on the success path.
+
+### Burn auto-recover step-down (card 658c3efe)
+`burn()` in `11-llm-manager.sh` auto-recovers from transport failures by
+calling `__model_use` with the exact same params that caused the crash.
+On repeated failures, this thrash-loops the GPU. Fixed by tracking
+`_burn_last_recover_count` and halving ctx (floor 1024) and batch
+(floor 128) on each successive recovery attempt. A diagnostic line
+is printed showing the step-down attempt number and resulting ctx/batch.
+
+### 0-tps OOM classification (card b564d801)
+The binary probe in `bench_ctx` checks `$rc -ne 0` to detect OOM. An edge
+case occurred where `bench_ctx` returned exit code 0 but produced literally
+zero tokens (`tps=0`) — the server responded with 0 completion tokens.
+This was treated as a valid run rather than OOM. Fixed by adding an
+explicit `tps == "0" / "0.00" / empty` check alongside the exit code check
+in the binary probe loop.
+
+### Duplicate stale-locks call not a bug (card 902f30a7)
+`__tac_cleanup_stale_locks` appears twice in `__model_bench`. Investigation
+confirmed both calls are purposeful: the first runs at function entry (before
+trap restoration from a prior interrupted run), and the second runs after
+trap setup (before bench work begins). Different safety domains. No change
+needed.
+
+### `__bench_run_with_timeout` refactor deferred (card 0967f11c)
+The 40-line heredoc with inline traps and PID tracking was assessed for
+standalone script extraction. The subprocess isolation is complex because
+shell-scoped variables (`__bench_signal_rc`, `__bench_cleanup`, `run_id`)
+are set inside the heredoc and read after it completes. Refactor deemed
+complex with no current runtime impact. Deferred.
+
+---
+
+*Spec written 2026-06-06. Updated 2026-06-29. Corresponding code in `~/ubuntu-console/scripts/autotune-model.sh` and `~/ubuntu-console/scripts/run-autotune-batch.sh`.*

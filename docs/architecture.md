@@ -380,7 +380,8 @@ extra source commands.
 ├── bin/
 │   ├── tac-exec                       # Bootstrap: source env.sh + exec "$@"
 │   ├── tac_hostmetrics.sh             # Host CPU + iGPU + NVIDIA dGPU load/engines
-│   ├── llama-watchdog.sh              # Watchdog: auto-restart with -ngl 999, --prio 2
+│   ├── llama-watchdog.sh              # Watchdog: auto-restart on port 8081, --prio 2
+│   │                                   # AUTOTUNE_PORT env var for autotune isolation
 │   ├── oc-gpu-status                  # Thin wrapper → tac-exec gpu-status
 │   ├── oc-model-status                # Thin wrapper → tac-exec ocms
 │   ├── oc-model-switch                # Thin wrapper → tac-exec serve
