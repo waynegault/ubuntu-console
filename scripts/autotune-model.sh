@@ -365,33 +365,6 @@ record_best() {
     # else: new candidate below floor, current best above floor — keep current.
 }
 
-# ── Dual-ngl probe pass ────────────────────────────────────────────
-# Probe once at 999 (max envelope) and once at bench's actual ngl, then
-# tag the results so the bench picks the correct (non-999) values.
-# Results from max-envelope probes are logged for comparison only.
-if [[ "$BENCH_NGL" != "999" ]]; then
-    echo "  ngl envelope check (999 vs ${BENCH_NGL})..."
-    _env_c="$START_CTX"
-    _env_b="${COMBOS[0]%%:*}"
-    _env_u="${COMBOS[0]##*:}"
-    _env_b="${_env_b:-512}"; _env_u="${_env_u:-128}"
-    _tps_999=$(bench_ctx "$_env_c" "$_env_b" "$_env_u" 1 "auto" "999"); _tps_999="${_tps_999:-}"
-    _tps_bench=$(bench_ctx "$_env_c" "$_env_b" "$_env_u" 1 "auto" "${BENCH_NGL}"); _tps_bench="${_tps_bench:-}"
-    if [[ -n "$_tps_999" && -n "$_tps_bench" ]]; then
-        _diff=$(echo "scale=1; $_tps_999 - $_tps_bench" | bc 2>/dev/null || echo "?")
-        echo "  Envelope: 999ngl=${_tps_999} tps  Bench: ${BENCH_NGL}ngl=${_tps_bench} tps  Δ=${_diff} tps"
-    elif [[ -n "$_tps_999" ]]; then
-        echo "  Envelope: 999ngl=${_tps_999} tps  Bench: ${BENCH_NGL}ngl=FAIL"
-    elif [[ -n "$_tps_bench" ]]; then
-        echo "  Envelope: 999ngl=FAIL  Bench: ${BENCH_NGL}ngl=${_tps_bench} tps"
-    else
-        echo "  Envelope: both ngl values FAIL at ctx ${_env_c}"
-    fi
-    # Tag which results the bench should use (tag file)
-    echo "${BENCH_NGL}" > "/tmp/at-ngl-${MODEL}"
-    echo "  Tuned for ngl=${BENCH_NGL} — 999-envelope data logged for reference"
-fi
-
 for combo in "${COMBOS[@]}"; do
     IFS=':' read -r b u <<< "$combo"
     echo ""
