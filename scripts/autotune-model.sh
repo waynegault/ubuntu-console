@@ -45,9 +45,11 @@ if [[ "$_thr" =~ ^[0-9]+$ ]] && [[ $_thr -gt 0 ]] && [[ $_thr -le $CPU_COUNT ]];
 else
     TUNE_THREADS="$CPU_COUNT"
 fi
+BENCH_NGL="${gpu_layers:-999}"
 [[ ${gpu_layers:-999} -eq 0 ]] && TUNE_THREADS="$CPU_COUNT"
 
 echo "[${MODEL}] ${name} (${size}, ${gpu_layers:-0} gpu layers)"
+echo "  Bench NGL: ${BENCH_NGL}  — max envelope: 999"
 echo ""
 
 MIN_CTX=4096
@@ -144,32 +146,41 @@ PAYLOAD
 # runs between models in the bench loop, not between every ctx probe.
 # Nested function — captures $MODEL from parent scope for temp-file naming
 cleanup_gpu() {
-    if declare -f __gpu_clear_stale_processes &>/dev/null; then
-        pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
+    local max_retries="${1:-1}"
+    local attempt=0
+    while [[ $attempt -lt $max_retries ]]; do
+        if declare -f __gpu_clear_stale_processes &>/dev/null; then
+            pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
+            sleep 1
+            __gpu_clear_stale_processes
+        else
+            pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
+        fi
+
+        # WSL2 ghost-VRAM workaround: kill nvidia-smi to recycle the CUDA
+        # query context, then double-kill to trigger dxgkrnl release.
+        # Does NOT reload nvidia-uvm (too slow for per-probe use).
+        pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
         sleep 1
-        __gpu_clear_stale_processes
-    else
-        pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
-    fi
+        sync 2>/dev/null || true
+        if [[ -w /proc/sys/vm/drop_caches ]]; then
+            echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+        fi
+        nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
+        pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
+        sleep 1
 
-    # WSL2 ghost-VRAM workaround: kill nvidia-smi to recycle the CUDA
-    # query context, then double-kill to trigger dxgkrnl release.
-    # Does NOT reload nvidia-uvm (too slow for per-probe use).
-    pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
-    sleep 1
-    sync 2>/dev/null || true
-    if [[ -w /proc/sys/vm/drop_caches ]]; then
-        echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
-    fi
-    nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
-    pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
-    sleep 1
+        local waited=0
+    local cleanup_port="${AUTOTUNE_PORT:-18081}"
+        while [[ $waited -lt 20 ]]; do
+            if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$cleanup_port\$"; then return 0; fi
+            sleep 1; waited=$((waited + 1))
+        done
 
-    local waited=0
-    while [[ $waited -lt 20 ]]; do
-        if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq '(^|:)8081$'; then return 0; fi
-        sleep 1; waited=$((waited + 1))
+        attempt=$((attempt + 1))
+        [[ $attempt -lt $max_retries ]] && sleep 2
     done
+    echo "ERROR: Port $cleanup_port still occupied after ${max_retries} cleanup attempts" >&2
     return 1
 }
 
@@ -181,8 +192,9 @@ cleanup_gpu() {
 # ---------------------------------------------------------------------------
 # Nested function — captures $MODEL from parent scope for temp-tag naming
 bench_once() {
-    local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}"
+    local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="$5"
     local tag="/tmp/at-vram-${MODEL}-${c}"
+    local effective_ngl="${override_ngl:-${BENCH_NGL:-999}}"
 
     cleanup_gpu 2>/dev/null || { echo ""; return 1; }
 
@@ -195,9 +207,15 @@ bench_once() {
     local mmap_flag=""
     [[ $mmap_mode == off ]] && mmap_flag="--no-mmap"
 
-    "$LLAMA_BIN" --model "$MODEL_PATH" --port 8081 --host 127.0.0.1 \
+    # REF: ubuntu-console card ca23ec0a — Use AUTOTUNE_PORT (default 18081)
+    # to avoid conflicting with the watchdog daemon on LLM_PORT (8081).
+    # The bench uses LLM_PORT which preserves the watchdog's port.
+    local autotune_port="${AUTOTUNE_PORT:-18081}"
+    # Update all curl/http references to use the same port
+    local health_url="http://127.0.0.1:$autotune_port"
+    "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
         --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
-        --threads "$TUNE_THREADS" --n-gpu-layers "${gpu_layers:-999}" \
+        --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
         --parallel 1 --fit off --flash-attn on --kv-offload \
         --cache-type-k q8_0 $mmap_flag \
         > "/tmp/at-${MODEL}-c${c}-b${b}.log" 2>&1 &
@@ -207,7 +225,7 @@ bench_once() {
     while [[ $hw -lt 90 ]]; do
         sleep 1; hw=$((hw + 1))
         kill -0 "$pid" 2>/dev/null || { echo ""; return 1; }
-        curl -sS --max-time 2 http://127.0.0.1:8081/health 2>/dev/null | grep -q 'ok' && break
+        curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q 'ok' && break
     done
     if [[ $hw -ge 90 ]]; then
         kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
@@ -219,7 +237,7 @@ bench_once() {
     # so the first real completion can stall or return 0 tokens.
     local pf_ok=0 pf_w=0
     while [[ $pf_w -lt 60 ]]; do
-        if curl -sS --max-time 5 http://127.0.0.1:8081/v1/chat/completions \
+        if curl -sS --max-time 5 "$health_url/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}' \
             2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))" 2>/dev/null | grep -q '[1-9]'; then
@@ -241,13 +259,13 @@ bench_once() {
     if [[ -n "$_pstate" ]] && [[ "$_pstate" != "P0" ]]; then
         warmup_tokens=64
     fi
-    curl -sS --max-time 30 http://127.0.0.1:8081/v1/chat/completions \
+    curl -sS --max-time 30 "$health_url/v1/chat/completions" \
         -H "Content-Type: application/json" \
         -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Warmup\"}],\"max_tokens\":${warmup_tokens},\"temperature\":0}" \
         > /dev/null 2>&1 || true
 
     local start_ns; start_ns=$(date +%s%N)
-    local resp; resp=$(curl -sS --max-time 180 http://127.0.0.1:8081/v1/chat/completions \
+    local resp; resp=$(curl -sS --max-time 180 "$health_url/v1/chat/completions" \
         -H "Content-Type: application/json" -d @"$PAYLOAD_FILE" 2>/dev/null) || true
     local end_ns; end_ns=$(date +%s%N)
     kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
@@ -272,10 +290,10 @@ except: print(0)" 2>/dev/null) || tokens=0
 #   args: ctx batch ubatch [samples] [mmap_mode]
 # ---------------------------------------------------------------------------
 bench_ctx() {
-    local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}"
+    local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}" override_ngl="$6"
 
     if [[ $samples -eq 1 ]]; then
-        local tps; tps=$(bench_once "$c" "$b" "$u" "$mmap_mode") || { echo ""; return 1; }
+        local tps; tps=$(bench_once "$c" "$b" "$u" "$mmap_mode" "$override_ngl") || { echo ""; return 1; }
         tps=$(echo "$tps" | bc 2>/dev/null || echo "0"); [ -z "$tps" ] && tps=0
         if [[ $(echo "$tps <= 0" | bc 2>/dev/null || echo "1") == 1 ]]; then echo ""; return 1; fi
         # Phase 1: only check for actual OOM (0 tokens). TPS floor is applied
@@ -284,9 +302,9 @@ bench_ctx() {
         return 0
     fi
 
-    local t1; t1=$(bench_once "$c" "$b" "$u" "$mmap_mode") || t1=""
+    local t1; t1=$(bench_once "$c" "$b" "$u" "$mmap_mode" "$override_ngl") || t1=""
     t1=$(echo "$t1" | bc 2>/dev/null || echo "0")
-    local t2; t2=$(bench_once "$c" "$b" "$u" "$mmap_mode") || t2=""
+    local t2; t2=$(bench_once "$c" "$b" "$u" "$mmap_mode" "$override_ngl") || t2=""
     t2=$(echo "$t2" | bc 2>/dev/null || echo "0")
 
     local o=0
@@ -338,6 +356,33 @@ record_best() {
     fi
     # else: new candidate below floor, current best above floor — keep current.
 }
+
+# ── Dual-ngl probe pass ────────────────────────────────────────────
+# Probe once at 999 (max envelope) and once at bench's actual ngl, then
+# tag the results so the bench picks the correct (non-999) values.
+# Results from max-envelope probes are logged for comparison only.
+if [[ "$BENCH_NGL" != "999" ]]; then
+    echo "  ngl envelope check (999 vs ${BENCH_NGL})..."
+    _env_c="$START_CTX"
+    _env_b="${COMBOS[0]%%:*}"
+    _env_u="${COMBOS[0]##*:}"
+    _env_b="${_env_b:-512}"; _env_u="${_env_u:-128}"
+    _tps_999=$(bench_ctx "$_env_c" "$_env_b" "$_env_u" 1 "auto" "999"); _tps_999="${_tps_999:-}"
+    _tps_bench=$(bench_ctx "$_env_c" "$_env_b" "$_env_u" 1 "auto" "${BENCH_NGL}"); _tps_bench="${_tps_bench:-}"
+    if [[ -n "$_tps_999" && -n "$_tps_bench" ]]; then
+        _diff=$(echo "scale=1; $_tps_999 - $_tps_bench" | bc 2>/dev/null || echo "?")
+        echo "  Envelope: 999ngl=${_tps_999} tps  Bench: ${BENCH_NGL}ngl=${_tps_bench} tps  Δ=${_diff} tps"
+    elif [[ -n "$_tps_999" ]]; then
+        echo "  Envelope: 999ngl=${_tps_999} tps  Bench: ${BENCH_NGL}ngl=FAIL"
+    elif [[ -n "$_tps_bench" ]]; then
+        echo "  Envelope: 999ngl=FAIL  Bench: ${BENCH_NGL}ngl=${_tps_bench} tps"
+    else
+        echo "  Envelope: both ngl values FAIL at ctx ${_env_c}"
+    fi
+    # Tag which results the bench should use (tag file)
+    echo "${BENCH_NGL}" > "/tmp/at-ngl-${MODEL}"
+    echo "  Tuned for ngl=${BENCH_NGL} — 999-envelope data logged for reference"
+fi
 
 for combo in "${COMBOS[@]}"; do
     IFS=':' read -r b u <<< "$combo"
@@ -483,7 +528,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
 fi
 
 
-cleanup_gpu >/dev/null 2>&1 || true
+cleanup_gpu 3 >/dev/null 2>&1 || { echo "ERROR: cleanup_gpu failed after 3 retries — port 8081 still bound" >&2; exit 1; }
 echo ""
 
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then

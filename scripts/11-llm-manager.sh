@@ -3995,6 +3995,12 @@ function __model_bench() {
                     export LLAMA_UBATCH_SIZE=128
                     export LLAMA_PARALLEL_SLOTS=1
                 fi
+                # FIX-C2: Autotune success path must also clear VRAM before bench.
+                # Autotune's 6 OOM tests can leave VRAM fragmented or CUDA in a
+                # corrupted state. The failure path already calls clear_vram.sh;
+                # the success path was missing it, jumping straight to the bench.
+                # REF: ubuntu-console card b9ba4596 — Card 2
+                sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
     # Trust the autotune-discovered ctx as-is on the low end.
             fi
     # Trust the autotune-discovered ctx as-is on the low end.
