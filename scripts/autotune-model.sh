@@ -192,7 +192,7 @@ cleanup_gpu() {
 # ---------------------------------------------------------------------------
 # Nested function — captures $MODEL from parent scope for temp-tag naming
 bench_once() {
-    local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="$5"
+    local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}"
     local tag="/tmp/at-vram-${MODEL}-${c}"
     local effective_ngl="${override_ngl:-${BENCH_NGL:-999}}"
 
@@ -290,7 +290,7 @@ except: print(0)" 2>/dev/null) || tokens=0
 #   args: ctx batch ubatch [samples] [mmap_mode]
 # ---------------------------------------------------------------------------
 bench_ctx() {
-    local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}" override_ngl="$6"
+    local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}" override_ngl="${6:-}"
 
     if [[ $samples -eq 1 ]]; then
         local tps; tps=$(bench_once "$c" "$b" "$u" "$mmap_mode" "$override_ngl") || { echo ""; return 1; }
