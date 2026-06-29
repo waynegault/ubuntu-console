@@ -25,6 +25,16 @@ flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance
 # These defaults MUST stay in sync with bashrc. If an env var is exported by
 # the interactive shell, ${VAR:-default} picks it up automatically.
 LLM_PORT="${LLM_PORT:-8081}"
+
+# REF: ubuntu-console card ca23ec0a — Watchdog uses LLM_PORT (usually 8081).
+# Autotune also uses port 8081. When the watchdog is active and autotune runs,
+# both compete for the same port. The bench should skip the watchdog during
+# autotune runs (handled via LLM_BENCH_LOCK), but the fallback watchdog check
+# mirrors the env var. We provide AUTOTUNE_PORT so autotune-model.sh can adopt
+# a different port, leaving the watchdog untouched.
+# This works because __model_bench stops the service before autotune, and
+# bench_run_with_timeout uses LLM_PORT (preserving the watchdog's port).
+AUTOTUNE_PORT="${AUTOTUNE_PORT:-18081}"
 ACTIVE_LLM_FILE="${ACTIVE_LLM_FILE:-/dev/shm/active_llm}"
 LLM_LOG_FILE="${LLM_LOG_FILE:-/dev/shm/llama-server.log}"
 export LLM_REGISTRY="${LLM_REGISTRY:-$HOME/.llm/models.conf}"

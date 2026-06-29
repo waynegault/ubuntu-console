@@ -5,6 +5,8 @@
 > **Hardware:** Intel i9 / Intel Iris Xe (iGPU) / RTX 3050 Ti 4 GB VRAM (CUDA)
 > **Shell:** Bash 5.2+
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/waynegault/ubuntu-console)
+
 The **Tactical Console Profile** is a modular Bash environment that turns a
 WSL2 Ubuntu shell into a unified command-and-control console. A thin loader
 (`tactical-console.bashrc`) sources 16 numbered profile modules from `scripts/`

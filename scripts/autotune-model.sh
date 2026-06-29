@@ -418,9 +418,17 @@ for combo in "${COMBOS[@]}"; do
             test_num=$((test_num + 1))
             bench_ctx "$c" "$b" "$u" 1 > /tmp/at-tps-$$; rc=$?
             tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
-            if [[ $rc -ne 0 ]]; then
+            # REF: ubuntu-console card b564d801 — bench_ctx can return rc=0 with tps=0
+            # when the server replies successfully with 0 completion tokens.
+            # Catch both non-zero rc AND empty/zero tps as OOM to ensure consistent
+            # classification in the binary probe.
+            if [[ $rc -ne 0 ]] || [[ -z "$tps" || "$tps" == "0" || "$tps" == "0.00" ]]; then
                 hi=$c
-                echo "  Test $test_num: ctx $(fmt "$c") - OOM: binary probe $(fmt $(( (lo+hi)/2/512*512 )))"
+                if [[ -n "$tps" && "$tps" == "0" ]]; then
+                    echo "  Test $test_num: ctx $(fmt "$c") - 0 tps (OOM): binary probe $(fmt $(( (lo+hi)/2/512*512 )))"
+                else
+                    echo "  Test $test_num: ctx $(fmt "$c") - OOM: binary probe $(fmt $(( (lo+hi)/2/512*512 )))"
+                fi
                 break
             fi
             lo=$c; record_best "$lo" "$tps" "$b" "$u"
@@ -528,7 +536,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
 fi
 
 
-cleanup_gpu 3 >/dev/null 2>&1 || { echo "ERROR: cleanup_gpu failed after 3 retries — port 8081 still bound" >&2; exit 1; }
+# REF: ubuntu-console card ca23ec0a — cleanup_gpu uses AUTOTUNE_PORT, not 8081
+cleanup_gpu 3 >/dev/null 2>&1 || { echo "ERROR: cleanup_gpu failed after 3 retries — port ${AUTOTUNE_PORT:-18081} still bound" >&2; exit 1; }
 echo ""
 
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
