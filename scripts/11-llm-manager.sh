@@ -2164,8 +2164,18 @@ function __renumber_registry() {
             ((++newnum))
             echo "${newnum}|${rest}"
         done < "${LLM_REGISTRY}.tmp"
-    } > "$LLM_REGISTRY"
+    } > "${LLM_REGISTRY}.tmp2"
     rm -f "${LLM_REGISTRY}.tmp"
+    # Safety: refuse to replace registry with header-only output.
+    if [[ -s "${LLM_REGISTRY}.tmp2" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp2")" -ge 2 ]]
+    then
+        mv "${LLM_REGISTRY}.tmp2" "$LLM_REGISTRY"
+    else
+        __tac_info "Registry" "[Refusing to overwrite — would leave $(wc -l < "${LLM_REGISTRY}.tmp2") lines]" "$C_Error"
+        rm -f "${LLM_REGISTRY}.tmp2"
+        rm -f "$old_registry_snapshot"
+        return 1
+    fi
     __llm_autotune_profiles_remap_by_registry "$old_registry_snapshot" "$LLM_REGISTRY" >/dev/null 2>&1 || true
     rm -f "$old_registry_snapshot"
     rm -f "$ACTIVE_LLM_FILE"
@@ -2294,7 +2304,22 @@ function __model_scan() {
     # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_info "Found" "${num} models" "$C_Success"
-    mv "$tmpconf" "$LLM_REGISTRY"
+    # Safety: never replace the registry with an empty or header-only file.
+    # A failed scan (disk full, I/O error, drive unmounted mid-scan) can
+    # produce a tmpconf with only the header line.  Require ≥ 2 lines
+    # (header + at least 1 data row) before overwriting the registry.
+    if [[ -s "$tmpconf" ]] && [[ "$(wc -l < "$tmpconf")" -ge 2 ]]
+    then
+        mv "$tmpconf" "$LLM_REGISTRY"
+    else
+        __tac_info "Registry" "[Refusing to overwrite with $(wc -l < "$tmpconf") lines — keeping existing registry]" "$C_Error"
+        rm -f "$tmpconf"
+        if [[ -n "$old_registry_snapshot" ]]
+        then
+            rm -f "$old_registry_snapshot"
+        fi
+        return 1
+    fi
     if [[ -n "$old_registry_snapshot" ]]
     then
         __llm_autotune_profiles_remap_by_registry "$old_registry_snapshot" "$LLM_REGISTRY" >/dev/null 2>&1 || true
@@ -2374,7 +2399,13 @@ function __model_scan() {
                 ((++new_num))
                 echo "${new_num}|$(cut -d'|' -f2- <<< "$_cline")" >> "$clean_tmp"
             done < "$LLM_REGISTRY"
-            mv "$clean_tmp" "$LLM_REGISTRY"
+            if [[ -s "$clean_tmp" ]] && [[ "$(wc -l < "$clean_tmp")" -ge 2 ]]
+            then
+                mv "$clean_tmp" "$LLM_REGISTRY"
+            else
+                __tac_info "Registry" "[Refusing to renumber — output has $(wc -l < "$clean_tmp") lines, keeping existing registry]" "$C_Error"
+                rm -f "$clean_tmp"
+            fi
             __tac_info "Registry" "[Renumbered - ${new_num} models remain]" "$C_Success"
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
