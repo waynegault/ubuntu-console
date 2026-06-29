@@ -50,6 +50,18 @@ setup_file() {
         export _LLM_UNAVAILABLE=1
     fi
 
+    # Skip structured-output tests for models under ~2 GB — sub-2B
+    # parameter models rarely produce reliable JSON with specific keys.
+    export _LLM_TOO_SMALL=0
+    if [ -f "$LLM_MODEL_GGUF" ]; then
+        local _model_bytes
+        _model_bytes=$(stat --printf='%s' "$LLM_MODEL_GGUF" 2>/dev/null || echo 0)
+        if [ "$_model_bytes" -lt 2000000000 ]; then
+            echo "# SKIP: model too small for structured JSON tests ($((_model_bytes / 1048576)) MB)" >&3
+            export _LLM_TOO_SMALL=1
+        fi
+    fi
+
     mkdir -p "$LLM_RESULTS_DIR"
 }
 
@@ -60,6 +72,13 @@ teardown_file() {
 _llm_check() {
     if [ "$_LLM_UNAVAILABLE" = "1" ]; then
         skip "LLM server binary or model GGUF not available"
+    fi
+}
+
+_needs_good_model() {
+    _llm_check
+    if [ "$_LLM_TOO_SMALL" = "1" ]; then
+        skip "model too small for reliable structured JSON (use ≥ 2GB model)"
     fi
 }
 
@@ -240,9 +259,7 @@ print(f'JSON OK: test={data[\"test\"]} value={data[\"value\"]}')
 }
 
 @test "llm: produces legal assessment JSON with verdict and confidence" {
-    if [ ! -x "$LLM_SERVER_BIN" ] || [ ! -f "$LLM_MODEL_GGUF" ]; then
-        skip "LLM server binary or model GGUF not available"
-    fi
+    _needs_good_model
     local response
     response="$(_llm_infer \
       'Analyze this legal claim: \"The supplier breached the 30-day delivery obligation in the contract.\" Return JSON with verdict, confidence, and reasoning.' \
@@ -267,9 +284,7 @@ print(f'JSON OK: verdict={has_verdict} confidence={has_confidence}')
 }
 
 @test "llm: produces JSON with citations array" {
-    if [ ! -x "$LLM_SERVER_BIN" ] || [ ! -f "$LLM_MODEL_GGUF" ]; then
-        skip "LLM server binary or model GGUF not available"
-    fi
+    _needs_good_model
     local response
     response="$(_llm_infer \
       'Analyze this legal claim: \"The landlord failed to repair the heating system within a reasonable time.\" Include citations array in your JSON response.' \
@@ -292,9 +307,7 @@ print(f'JSON OK: citations count = {len(data[\"citations\"])}')
 }
 
 @test "llm: reliability — 5/5 valid JSON responses (batch)" {
-    if [ ! -x "$LLM_SERVER_BIN" ] || [ ! -f "$LLM_MODEL_GGUF" ]; then
-        skip "LLM server binary or model GGUF not available"
-    fi
+    _needs_good_model
     local i success total
     success=0
     total=5
