@@ -19,7 +19,6 @@ Date: 2026-06-23
 | `test_model_autotune.py` | Python/unittest | ~280 | ✅ Active — tests pure-logic functions in model-autotune.py |
 | `tactical-console.bats` | BATS (full) | 2918 | ✅ Active — full behavioural suite (~473 tests) |
 | `tactical-console-fast.bats` | BATS (fast) | 424 | ✅ Active — static analysis only, no profile sourcing |
-| `llm-json-output.bats` | BATS (llm) | 241 | ⚠️ LLM-dependant — requires running server |
 | `unit/01-refresh-keys.bats` | BATS (unit) | 69 | ✅ Active |
 | `unit/02-so-startup.bats` | BATS (unit) | 65 | ✅ Active |
 | `integration/01-maintenance.bats` | BATS | 159 | ⚠️ Integration — non-hermetic |

@@ -23,7 +23,6 @@ _BATS_SUITE_DEFS: list[tuple[str, pytest.MarkDecorator | pytest.Mark, int]] = [
     ("tests/unit/*.bats",               pytest.mark.bats_unit,         60),
     ("tests/tactical-console-fast.bats", pytest.mark.bats_fast,       120),
     ("tests/tactical-console.bats",      pytest.mark.bats_full,       600),
-    ("tests/llm-json-output.bats",       pytest.mark.bats_llm,        600),
     ("tests/integration/*.bats",         pytest.mark.bats_integration, 120),
 ]
 
