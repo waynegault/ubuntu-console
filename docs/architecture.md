@@ -440,6 +440,7 @@ extra source commands.
 │   ├── reference.md                   #   Command reference + dashboard
 │   └── troubleshooting.md             #   Diagnostics and fixes
 ├── tests/
+│   ├── conftest.py                    # Pytest config — serializes BATS suites
 │   ├── tactical-console.bats          # BATS full suite (497 tests)
 │   ├── tactical-console-fast.bats     # Fast subset (50 tests, ~20s)
 │   ├── test_bats_bridge.py            # Pytest parametrize bridge for all BATS suites

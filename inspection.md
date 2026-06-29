@@ -26,7 +26,9 @@ The following file classes are in-scope for every audit pass:
 - `tests/test_bats_bridge.py` — Pytest parametrize bridge for BATS suites
 - `tests/test_model_autotune.py` — Python tests for autotune logic
 - `tests/test_kgraph.py` — Python tests for kgraph package
+- `tests/conftest.py` — Pytest fixtures (BATS serialization via flock)
 - `pytest.ini` — Pytest configuration (markers, testpaths)
+- `.git/hooks/pre-commit` — Pre-commit hook (staged-file lint only)
 - `systemd/*` — systemd unit files
 
 Files excluded by `.gitignore` are out of scope. Companion config files

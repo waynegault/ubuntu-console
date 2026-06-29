@@ -597,6 +597,7 @@ function __get_METRIC() {
 ├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
+│   ├── conftest.py                    # Pytest config — serializes BATS suites
 │   ├── tactical-console.bats          # BATS full suite (497 tests)
 │   ├── tactical-console-fast.bats     # Fast subset (50 tests, ~20s)
 │   ├── test_bats_bridge.py            # Pytest parametrize bridge for all BATS suites
