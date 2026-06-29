@@ -146,6 +146,14 @@ then
     exit 0
 fi
 
+# If bench/autotune is running, skip restart to avoid port conflict (ca23ec0a)
+bench_lock="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
+if [[ -f "$bench_lock" ]]
+then
+    log "Bench lock present ($bench_lock) — skipping restart (port may be claimed by autotune)"
+    exit 0
+fi
+
 log "Health check failed. Attempting restart..."
 
 # Active LLM file stores model number (matches registry $1 field)
