@@ -169,9 +169,22 @@ setup() {
         if [[ "$desc" == "$prefix"* ]]
         then
             _tac_ensure_profile
-            return 0
+            break
         fi
     done
+    # calc: tests must be deterministic — hide nvidia-smi so VRAM heuristics
+    # use the fixed VRAM_TOTAL_BYTES constant, not real GPU state.
+    if [[ "$desc" == "calc:"* ]] && command -v nvidia-smi &>/dev/null; then
+        local _stub_dir
+        _stub_dir=$(mktemp -d "$TAC_TEST_TMPDIR/nvidia-stub.XXXXXX")
+        cat > "$_stub_dir/nvidia-smi" << 'EOF'
+#!/usr/bin/env bash
+# Return max VRAM so calc functions use the fixed VRAM_TOTAL_BYTES heuristic
+echo "4096"
+EOF
+        chmod +x "$_stub_dir/nvidia-smi"
+        export PATH="$_stub_dir:$PATH"
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
