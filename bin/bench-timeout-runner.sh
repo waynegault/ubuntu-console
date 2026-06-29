@@ -44,6 +44,9 @@
 # process — never on parent process groups. This prevents parent EXIT traps
 # (lock file cleanup, model stop) from being bypassed.
 
+# AI INSTRUCTION: Increment version on significant changes.
+# shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
+VERSION="1.0"  # Extracted from __bench_run_with_timeout (card #0967f11c).
 # shellcheck disable=SC2317  # trap handlers are called by trap, not directly
 set -euo pipefail
 
@@ -76,6 +79,7 @@ __btr_log() {
 
 # --- Cleanup trap ------------------------------------------------------------
 child_pid=""
+# shellcheck disable=SC2317  # trap handlers are called by trap, not directly
 __btr_cleanup() {
     local _exit_code=$?
     set +e
@@ -126,3 +130,5 @@ fi
 
 __btr_log "INFO" "child exited with code $_wait_exit"
 exit "$_wait_exit"
+
+# end of file
