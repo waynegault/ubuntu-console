@@ -23,6 +23,7 @@ import socket
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import urllib.error
@@ -322,7 +323,19 @@ def write_registry_row(row: int, updates: dict) -> None:
             new_lines.append("|".join(parts))
         else:
             new_lines.append(line)
-    REGISTRY.write_text("\n".join(new_lines) + "\n")
+    # Atomic write via tmp+rename so a crash mid-write cannot truncate
+    # the registry.  Matches the bash-side guard pattern (commit 37bf04b).
+    fd, tmp_name = tempfile.mkstemp(dir=str(REGISTRY.parent), prefix=".models.conf.", suffix=".tmp")
+    os.close(fd)
+    tmp = Path(tmp_name)
+    tmp.write_text("\n".join(new_lines) + "\n")
+    # Safety: never replace with a header-only file (≥2 lines, at least 1 data row).
+    content_check = tmp.read_text(errors="ignore")
+    if content_check.count("\n") >= 1 and len([ln for ln in content_check.splitlines() if ln and not ln.startswith("#")]) >= 1:
+        tmp.replace(REGISTRY)
+    else:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError("Refusing to overwrite registry with header-only output")
 
 
 def kill_zombie_servers() -> None:
