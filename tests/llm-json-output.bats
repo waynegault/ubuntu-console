@@ -224,7 +224,7 @@ except (json.JSONDecodeError, ValueError) as e:
     local content
     content="$(_llm_response_content "$response")" || skip "inference failed"
     echo "Raw content: $content" >&2
-    echo "$content" | python3 -c "
+    run python3 -c "
 import json, sys, re
 raw = sys.stdin.read()
 m = re.search(r'\`\`\`(?:json)?\s*\n?(.*?)\n?\`\`\`', raw, re.DOTALL)
@@ -235,7 +235,8 @@ assert 'value' in data, 'missing key: value'
 assert data.get('test') == True or str(data.get('test')).lower() == 'true', f'unexpected test value: {data.get(\"test\")}'
 assert data.get('value') == 42, f'unexpected value: {data.get(\"value\")}'
 print(f'JSON OK: test={data[\"test\"]} value={data[\"value\"]}')
-"
+" <<< "$content"
+    [ "$status" -eq 0 ]
 }
 
 @test "llm: produces legal assessment JSON with verdict and confidence" {
@@ -250,7 +251,7 @@ print(f'JSON OK: test={data[\"test\"]} value={data[\"value\"]}')
     local content
     content="$(_llm_response_content "$response")" || skip "inference failed"
     echo "Raw content: $content" >&2
-    echo "$content" | python3 -c "
+    run python3 -c "
 import json, sys, re
 raw = sys.stdin.read()
 m = re.search(r'\`\`\`(?:json)?\s*\n?(.*?)\n?\`\`\`', raw, re.DOTALL)
@@ -261,7 +262,8 @@ has_confidence = 'confidence' in data
 assert has_verdict, 'missing verdict key'
 assert has_confidence, 'missing confidence key'
 print(f'JSON OK: verdict={has_verdict} confidence={has_confidence}')
-"
+" <<< "$content"
+    [ "$status" -eq 0 ]
 }
 
 @test "llm: produces JSON with citations array" {
@@ -276,7 +278,7 @@ print(f'JSON OK: verdict={has_verdict} confidence={has_confidence}')
     local content
     content="$(_llm_response_content "$response")" || skip "inference failed"
     echo "Raw content: $content" >&2
-    echo "$content" | python3 -c "
+    run python3 -c "
 import json, sys, re
 raw = sys.stdin.read()
 m = re.search(r'\`\`\`(?:json)?\s*\n?(.*?)\n?\`\`\`', raw, re.DOTALL)
@@ -285,7 +287,8 @@ data = json.loads(raw, strict=False)
 assert 'citations' in data, 'missing citations key'
 assert isinstance(data['citations'], list), 'citations must be an array'
 print(f'JSON OK: citations count = {len(data[\"citations\"])}')
-"
+" <<< "$content"
+    [ "$status" -eq 0 ]
 }
 
 @test "llm: reliability — 5/5 valid JSON responses (batch)" {
