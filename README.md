@@ -597,9 +597,14 @@ function __get_METRIC() {
 ├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
-│   ├── tactical-console.bats          # BATS unit tests
-│   ├── tactical-console-fast.bats     # Fast subset (47 tests, ~20s)
-│   └── test_kgraph.py                 # Python tests for kgraph
+│   ├── tactical-console.bats          # BATS full suite (497 tests)
+│   ├── tactical-console-fast.bats     # Fast subset (50 tests, ~20s)
+│   ├── test_bats_bridge.py            # Pytest parametrize bridge for all BATS suites
+│   ├── test_model_autotune.py         # Python tests for autotune logic
+│   ├── test_kgraph.py                 # Python tests for kgraph package
+│   ├── audit_report.md                # Test infrastructure audit
+│   ├── unit/                          # BATS unit tests (33 tests)
+│   └── integration/                   # BATS integration tests (109 tests)
 └── systemd/
     ├── llama-watchdog.service
     └── llama-watchdog.timer
@@ -750,8 +755,10 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
-- **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 47 tests)
-- **Full tests:** `bats tests/tactical-console.bats` (see `tools/run-tests.sh` summary for current count)
+- **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 50 tests)
+- **Full tests:** `bats tests/tactical-console.bats` (497 tests)
+- **Unit tests:** `bats tests/unit/*.bats` (33 tests)
+- **Integration tests:** `bats tests/integration/*.bats` (109 tests)
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety)
 
 Run locally:
@@ -759,6 +766,8 @@ Run locally:
 ```bash
 bats tests/tactical-console-fast.bats   # Quick feedback
 bats tests/tactical-console.bats        # Full suite
+bats tests/unit/*.bats                  # Unit tests
+bats tests/integration/*.bats           # Integration tests
 tools/lint.sh                           # Static analysis
 ```
 

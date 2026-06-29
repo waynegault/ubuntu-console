@@ -221,7 +221,7 @@ Test requirements:
 - Fixture parity tests: call Get-TacNormalizedOutput, diff against .norm file,
   assert zero diff
 - Test file must have equivalent coverage to tests/tactical-console.bats
-  (~489 assertions); aim for parity of intent, not line-for-line duplication
+  (~497 assertions); aim for parity of intent, not line-for-line duplication
 - Include a run-tests.ps1 equivalent to tools/run-tests.sh with colored output
 
 

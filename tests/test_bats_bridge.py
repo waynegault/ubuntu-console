@@ -43,7 +43,7 @@ def _discover_params() -> list[Any]:
                 pytest.param(
                     p,
                     timeout,
-                    id=p.stem,  # e.g. "llm-json-output" instead of "llm-json-output.bats"
+                    id=p.stem,  # e.g. "tactical-console-fast" instead of "tactical-console-fast.bats"
                     marks=[pytest.mark.bats, marker],  # type: ignore[list-item]
                 )
             )

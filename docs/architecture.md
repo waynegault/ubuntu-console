@@ -428,7 +428,7 @@ extra source commands.
 │   ├── import-windows-env.sh          #   Import Windows user env vars (standalone)
 │   ├── lint.sh                        #   bash -n + shellcheck + Unicode safety
 │   ├── mirror-vault.sh                #   Sync Obsidian vault to Windows
-│   ├── run-tests.sh                   #   BATS test runner (489 tests)
+│   ├── run-tests.sh                   #   BATS test runner
 ├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
 │   ├── package.json                   #   Vite 5 + React 18 + G6 5.0
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
@@ -440,9 +440,14 @@ extra source commands.
 │   ├── reference.md                   #   Command reference + dashboard
 │   └── troubleshooting.md             #   Diagnostics and fixes
 ├── tests/
-│   ├── tactical-console.bats          # BATS unit tests
-│   ├── tactical-console-fast.bats     # Fast subset (47 tests, ~20s)
-│   └── test_kgraph.py                 # Python tests for kgraph package
+│   ├── tactical-console.bats          # BATS full suite (497 tests)
+│   ├── tactical-console-fast.bats     # Fast subset (50 tests, ~20s)
+│   ├── test_bats_bridge.py            # Pytest parametrize bridge for all BATS suites
+│   ├── test_model_autotune.py         # Python tests for autotune logic
+│   ├── test_kgraph.py                 # Python tests for kgraph package
+│   ├── audit_report.md                # Test infrastructure audit
+│   ├── unit/                          # BATS unit tests (33 tests)
+│   └── integration/                   # BATS integration tests (109 tests)
 └── systemd/
     ├── llama-watchdog.service         # systemd unit for watchdog
     └── llama-watchdog.timer           # systemd timer (runs every 60s)

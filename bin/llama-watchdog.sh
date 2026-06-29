@@ -179,9 +179,13 @@ then
     size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
 fi
 
-# Kill any zombie process (exact match avoids hitting unrelated processes).
+# Kill any zombie process. Uses -f (full-command-line match) instead of -x
+# (exact process-name match) because the Python backend runs as
+# "python3 -m llama_cpp.server" — -x would require killing all python3,
+# while -f targets only the specific module path.
 pkill -u "$(id -un)" -f "$LLM_SERVER_PROC_PATTERN" 2>/dev/null || true
 # Legacy safety: ensure classic llama-server process names are also cleaned up.
+# Also uses -f to catch symlinked or path-invoked binaries.
 pkill -u "$(id -un)" -f "llama-server" 2>/dev/null || true
 sleep 1
 

@@ -20,7 +20,13 @@ The following file classes are in-scope for every audit pass:
 - `env.sh` — library loader for non-interactive shells
 - `install.sh` — installer
 - `tools/lint.sh`, `tools/run-tests.sh` — CI helper scripts
-- `tests/*.bats` — BATS test files
+- `tests/*.bats` — BATS test files at root level
+- `tests/unit/*.bats` — BATS unit test files
+- `tests/integration/*.bats` — BATS integration test files
+- `tests/test_bats_bridge.py` — Pytest parametrize bridge for BATS suites
+- `tests/test_model_autotune.py` — Python tests for autotune logic
+- `tests/test_kgraph.py` — Python tests for kgraph package
+- `pytest.ini` — Pytest configuration (markers, testpaths)
 - `systemd/*` — systemd unit files
 
 Files excluded by `.gitignore` are out of scope. Companion config files

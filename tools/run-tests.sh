@@ -274,7 +274,7 @@ if [[ "${_MODE:-}" != "fast" ]]; then
     _PY_MARKERS=""
     case "${_MODE:-}" in
         all)   ;;
-        *)     _PY_MARKERS="-m not (bats_llm or bats_integration)" ;;
+        *)     _PY_MARKERS="-m not bats_integration" ;;
     esac
 
     cd "$REPO_ROOT" || exit 1

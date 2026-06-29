@@ -512,3 +512,5 @@ else
     echo "  failed: no working config"
     exit 1
 fi
+
+# end of file
