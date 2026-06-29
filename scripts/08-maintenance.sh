@@ -843,25 +843,34 @@ function up() {
 
     # [17/20] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).
-    # Per-PID check: only kill processes that are NOT listening on LLM_PORT.
+    # Per-PID check: only kill processes with NO active socket listener on LLM_PORT.
+    # Use /proc/PID/fd to check real socket bind, not connect-timeout (which
+    # fails when llama-server is busy processing — not orphaned).
     local stale_pids
     stale_pids=$(pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null)
     local stale_count=0
-    if [[ -n "$stale_pids" ]] && ! __test_port "$LLM_PORT"
+    if [[ -n "$stale_pids" ]]
     then
-        stale_count=$(echo "$stale_pids" | wc -l)
-        local _state_age=999
-        if [[ -f "$ACTIVE_LLM_FILE" ]]
+        # Filter out PIDs that still own the port socket (busy processing, not orphaned)
+        local true_orphans=""
+        while IFS= read -r pid; do
+            # shellcheck disable=SC2010  # ls -l needed to resolve symlink targets, not filenames
+            if [[ -d "/proc/$pid/fd" ]] && ls -l "/proc/$pid/fd/" 2>/dev/null | grep -q ":$LLM_PORT"; then
+                :  # port socket active — not orphaned
+            else
+                true_orphans="$true_orphans $pid"
+            fi
+        done <<< "$stale_pids"
+
+        true_orphans=$(echo "$true_orphans" | xargs)
+        if [[ -n "$true_orphans" ]]
         then
-            _state_age=$(( $(date +%s) - $(stat -c %Y "$ACTIVE_LLM_FILE" 2>/dev/null || echo 0) ))
-        fi
-        if (( _state_age < 60 ))
-        then
-            __tac_line "[17/20] Stale Processes" "[${stale_count} BOOTING - GRACE PERIOD]" "$C_Dim"
-        else
-            pkill -u "$USER" -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null
+            stale_count=$(echo "$true_orphans" | wc -w)
+            pkill -u "$USER" -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null || true
             rm -f "$ACTIVE_LLM_FILE"
             __tac_line "[17/20] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
+        else
+            __tac_line "[17/20] Stale Processes" "[CLEAN]" "$C_Success"
         fi
     else
         __tac_line "[17/20] Stale Processes" "[CLEAN]" "$C_Success"
