@@ -294,8 +294,16 @@ bench_ctx() {
 
     if [[ $samples -eq 1 ]]; then
         local tps; tps=$(bench_once "$c" "$b" "$u" "$mmap_mode" "$override_ngl") || { echo ""; return 1; }
+        # Pre-check tps=0 edge-cases that bc may miss (locale, trailing whitespace).
+        if [[ -z "$tps" || "$tps" == "0" || "$tps" == "0.00" || "$tps" == "0,00" ]]; then
+            echo "DEBUG: bench_once raw tps=[$tps] for ctx=$c — classified as OOM" >&2
+            echo ""; return 1
+        fi
         tps=$(echo "$tps" | bc 2>/dev/null || echo "0"); [ -z "$tps" ] && tps=0
-        if [[ $(echo "$tps <= 0" | bc 2>/dev/null || echo "1") == 1 ]]; then echo ""; return 1; fi
+        if [[ $(echo "$tps <= 0" | bc 2>/dev/null || echo "1") == 1 ]]; then
+            echo "DEBUG: bc-evaluated tps=[$tps] for ctx=$c — classified as OOM" >&2
+            echo ""; return 1
+        fi
         # Phase 1: only check for actual OOM (0 tokens). TPS floor is applied
         # at the final check — rejecting slow models mid-probe hides viable ctx.
         echo "$tps"
@@ -422,7 +430,7 @@ for combo in "${COMBOS[@]}"; do
             # when the server replies successfully with 0 completion tokens.
             # Catch both non-zero rc AND empty/zero tps as OOM to ensure consistent
             # classification in the binary probe.
-            if [[ $rc -ne 0 ]] || [[ -z "$tps" || "$tps" == "0" || "$tps" == "0.00" ]]; then
+            if [[ $rc -ne 0 ]] || [[ -z "$tps" || "$tps" == "0" || "$tps" == "0.00" || "$tps" == "0,00" ]]; then
                 hi=$c
                 if [[ -n "$tps" && "$tps" == "0" ]]; then
                     echo "  Test $test_num: ctx $(fmt "$c") - 0 tps (OOM): binary probe $(fmt $(( (lo+hi)/2/512*512 )))"
