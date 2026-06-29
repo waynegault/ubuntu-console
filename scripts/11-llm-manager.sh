@@ -3780,9 +3780,6 @@ function __model_bench() {
     trap '__bench_signal_rc=130; __bench_cleanup; return 130' INT
     trap '__bench_signal_rc=143; __bench_cleanup; return 143' TERM
 
-    # Clean up any orphaned locks, keepers, and processes from prior runs.
-    __tac_cleanup_stale_locks
-
     __tac_header "MODEL BENCHMARK" "open"
     local bench_run_id
     bench_run_id=$(date +%Y%m%d_%H%M%S)
