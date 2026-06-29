@@ -53,7 +53,7 @@ function __save_tps() {
     [[ -z "$active_num" ]] && return
     awk -F'|' -v n="$active_num" -v t="$tps_val" 'BEGIN{OFS="|"} $1 == n {$17 = t} {print}' \
         "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
-    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 1 ]]
+    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 2 ]]
     then
         mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
     else
@@ -77,7 +77,7 @@ function __save_model_ctx() {
 
     awk -F'|' -v n="$model_num" -v c="$saved" 'BEGIN{OFS="|"} $1 == n {$8 = c} {print}' \
         "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
-    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 1 ]]
+    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 2 ]]
     then
         mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
     else
@@ -460,7 +460,9 @@ function __llm_registry_sync_state() {
 
     # Safety: never replace the registry with an empty or truncated file.
     # A failed awk run can produce 0 lines, wiping all model data.
-    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 1 ]]
+    # Require header + at least 1 data row (≥ 2 lines) so a header-only
+    # output cannot overwrite a populated registry.
+    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 2 ]]
     then
         mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY" || return 1
     else
@@ -675,7 +677,7 @@ function __llm_autotune_profile_save() {
         }' "$profile_file" > "${profile_file}.tmp"
 
     # Safety: never replace the registry with an empty or truncated file.
-    if [[ -s "${profile_file}.tmp" ]] && [[ "$(wc -l < "${profile_file}.tmp")" -ge 1 ]]
+    if [[ -s "${profile_file}.tmp" ]] && [[ "$(wc -l < "${profile_file}.tmp")" -ge 2 ]]
     then
         mv "${profile_file}.tmp" "$profile_file" || return 1
     else
@@ -1027,7 +1029,7 @@ function __llm_autotune_profiles_remap_by_registry() {
         }
     ' "$old_registry" "$new_registry" > "${new_registry}.tmp" || return 1
 
-    if [[ -s "${new_registry}.tmp" ]] && [[ "$(wc -l < "${new_registry}.tmp")" -ge 1 ]]
+    if [[ -s "${new_registry}.tmp" ]] && [[ "$(wc -l < "${new_registry}.tmp")" -ge 2 ]]
     then
         mv "${new_registry}.tmp" "$new_registry" || return 1
     else
