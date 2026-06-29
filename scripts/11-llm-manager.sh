@@ -3537,9 +3537,9 @@ function __bench_run_with_timeout() {
         declare -fx "$1" 2>/dev/null || true
         (( _monitor_was_on == 1 )) && set +m
         if command -v setsid >/dev/null 2>&1; then
-            setsid bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} \"\$_bench_runner_script\" \"\$_bench_profile_path\" \"\$@\"" _ "$_bench_runner_script" "$_bench_profile_path" "$@" &
+            setsid bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} \"\$1\" \"\$2\" \"\${@:3}\"" _ "$_bench_runner_script" "$_bench_profile_path" "$@" &
         else
-            bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} \"\$_bench_runner_script\" \"\$_bench_profile_path\" \"\$@\"" _ "$_bench_runner_script" "$_bench_profile_path" "$@" &
+            bash -lc "__BENCH_MODE=${__BENCH_MODE:-1} \"\$1\" \"\$2\" \"\${@:3}\"" _ "$_bench_runner_script" "$_bench_profile_path" "$@" &
         fi
     # Trust the autotune-discovered ctx as-is on the low end.
     elif command -v setsid >/dev/null 2>&1; then
