@@ -35,7 +35,8 @@ done
 C_Reset=$'\e[0m'
 C_Green=$'\e[32m'
 C_Red=$'\e[31m'
-C_Yellow=$'\e[33m'   # shellcheck disable=SC2034 — used by sourced BATS helpers
+# shellcheck disable=SC2034
+C_Yellow=$'\e[33m'
 C_Cyan=$'\e[36m'
 C_Dim=$'\e[2m'
 C_Bold=$'\e[1m'
@@ -64,7 +65,9 @@ section_header() {
     border_mid
     if [[ "$passed" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]]
     then
-        local symbol="$PASS_SYMBOL" colour="$C_BoldGreen"  # shellcheck disable=SC2034 — 'colour' read by row()
+        # shellcheck disable=SC2034
+        local symbol="$PASS_SYMBOL" colour="$C_BoldGreen"
+        # shellcheck disable=SC2034
         (( passed < total )) && { symbol="$FAIL_SYMBOL"; colour="$C_BoldRed"; }
         row "${C_Bold}${C_Cyan}  ${label}${C_Reset}${C_Dim}  - ${passed}/${total} ${symbol}${C_Reset}"
     else
@@ -278,7 +281,21 @@ if [[ "${_MODE:-}" != "fast" ]]; then
     esac
 
     cd "$REPO_ROOT" || exit 1
-    python3 -m pytest tests/ -v --tb=short ${_PY_MARKERS:+"$_PY_MARKERS"} \
+
+    # Clear Python bytecode caches so tests always run against latest code.
+    # Stale .pyc files cause intermittent "reimported module used old code"
+    # failures when source files change between test runs.
+    echo "  ${C_Dim}Clearing __pycache__...${C_Reset}" >&2
+    find "$REPO_ROOT" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+    find "$REPO_ROOT" -name "*.pyc" -delete 2>/dev/null || true
+
+    # Prefer the project venv when available.
+    _PYTHON="python3"
+    if [[ -f "$REPO_ROOT/.venv/bin/python" ]]; then
+        _PYTHON="$REPO_ROOT/.venv/bin/python"
+    fi
+
+    $_PYTHON -m pytest tests/ -v --tb=short ${_PY_MARKERS:+"$_PY_MARKERS"} \
         --ignore=tests/test_bats_bridge.py 2>&1 || _PY_EXIT=$?
 fi
 

@@ -114,6 +114,7 @@ class RegistryRowParsingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.mod = load_module()
+        cls._orig_registry = cls.mod.REGISTRY  # save for tearDown restore
         # Build a realistic registry fragment
         cls.sample = (
             "# LLM Registry\n"
@@ -131,7 +132,7 @@ class RegistryRowParsingTests(unittest.TestCase):
 
     def tearDown(self):
         os.unlink(self.tmp.name)
-        self.mod.REGISTRY = self.mod.REGISTRY  # reset if we patched it
+        self.mod.REGISTRY = self._orig_registry  # restore original path
 
     def _patch_registry(self):
         """Point REGISTRY path to our temp file."""

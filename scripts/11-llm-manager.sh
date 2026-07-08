@@ -2223,6 +2223,12 @@ function __model_scan() {
             rm -f "$old_registry_snapshot"
             return 1
         }
+        # Persistent backup in ~/.llm/backups/ so pre-scan state can be
+        # recovered if autotune data is accidentally lost (issue 2026-07-07).
+        local _scan_backup_dir
+        _scan_backup_dir="$(dirname "$LLM_REGISTRY")/backups"
+        mkdir -p "$_scan_backup_dir"
+        cp "$LLM_REGISTRY" "$_scan_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S).pre-scan"
     fi
     # Trust the autotune-discovered ctx as-is on the low end.
     echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram" > "$tmpconf"

@@ -33,7 +33,7 @@ from typing import BinaryIO
 # ── Constants ──────────────────────────────────────────────────────────
 
 LLAMA_SERVER = Path(os.path.expanduser("~/llama.cpp/build/bin/llama-server"))
-REGISTRY = Path(os.path.expanduser("~/.llm/models.conf"))
+REGISTRY = Path(os.environ.get("LLM_REGISTRY", os.path.expanduser("~/.llm/models.conf")))
 MODEL_DIR = Path("/mnt/m/active")
 
 # Short burst for ctx discovery — TPS accuracy isn't the goal, we just need to
