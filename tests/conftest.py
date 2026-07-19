@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fcntl
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,22 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
     _LOCK_DIR.mkdir(mode=0o700, exist_ok=True)
     lock_path = _LOCK_DIR / "suite.lock"
     with open(lock_path, "w") as lf:
-        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
-        yield
-        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+        # Non-blocking poll so we surface a clear error instead of hanging
+        # forever when a previous run left a stuck process holding the lock.
+        deadline = time.monotonic() + 300  # 5 min grace for a running suite
+        while True:
+            try:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    pytest.fail(
+                        "Could not acquire BATS serialisation lock within 300 s — "
+                        "another BATS suite may be hung. Check for stale "
+                        f"processes holding {lock_path}"
+                    )
+                time.sleep(1)
+        try:
+            yield
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
