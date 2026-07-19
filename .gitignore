@@ -61,6 +61,7 @@ scripts/__pycache__
 tests/__pycache__
 .qwen/settings.jsonmemory/
 .tmp-bats
+.jolli/
 
 # kgraph output files
 *.sqlite

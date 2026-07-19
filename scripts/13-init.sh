@@ -3,7 +3,7 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================
@@ -50,6 +50,13 @@ export DIRENV_LOG_FORMAT=""
 if command -v direnv >/dev/null 2>&1
 then
     eval "$(direnv hook bash)"
+    # Belt and suspenders: wrap _direnv_hook to suppress all stderr.
+    # DIRENV_LOG_FORMAT="" should work but some direnv versions still leak
+    # "direnv: loading …" / "direnv: export …" to stderr.
+    if declare -f _direnv_hook >/dev/null 2>&1; then
+        eval "_tac_orig_direnv_hook$(declare -f _direnv_hook | sed '1s/^_direnv_hook//')"
+        _direnv_hook() { _tac_orig_direnv_hook "$@" 2>/dev/null; }
+    fi
 fi
 
 # Fix Loopback for WSL Mirrored Networking (Idempotent & Pulse-Free).
