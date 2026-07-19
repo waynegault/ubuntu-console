@@ -3,7 +3,7 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================
@@ -37,6 +37,20 @@ fi
 # Load completions safely (only once — guarded with -f check)
 [[ -f "$BASH_COMPLETION_SCRIPT" ]] && . "$BASH_COMPLETION_SCRIPT"
 [[ -f "$OC_ROOT/completions/openclaw.bash" ]] && source "$OC_ROOT/completions/openclaw.bash"
+
+# Homebrew Node@24 — specific Node version (before general Homebrew PATH)
+if [[ -d "/home/linuxbrew/.linuxbrew/opt/node@24/bin" ]] \
+    && [[ ":$PATH:" != *":/home/linuxbrew/.linuxbrew/opt/node@24/bin:"* ]]
+then
+    export PATH="/home/linuxbrew/.linuxbrew/opt/node@24/bin:$PATH"
+fi
+
+# direnv — auto-load .envrc on directory change (silent: no loading/export messages)
+export DIRENV_LOG_FORMAT=""
+if command -v direnv >/dev/null 2>&1
+then
+    eval "$(direnv hook bash)"
+fi
 
 # Fix Loopback for WSL Mirrored Networking (Idempotent & Pulse-Free).
 # WSL2 mirrored networking mode doesn't create a loopback0 dummy interface.

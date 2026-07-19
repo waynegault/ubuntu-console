@@ -18,6 +18,11 @@
 #                  picked up by the glob — no explicit exclusions needed.
 #
 # SC1090/SC1091: Dynamic sourcing by design — modules discovered at runtime
+#
+# AI INSTRUCTION: Keep this file in sync with tactical-console.bashrc's module
+# sourcing loop. When modules are added or removed from scripts/, update the
+# skip list below. This file must never contain interactive side-effects
+# (clear screen, prompt changes, completions, EXIT trap, WSL loopback).
 # ==============================================================================
 
 # Prevent double-sourcing

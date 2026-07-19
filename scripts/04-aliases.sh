@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 20
+# Module Version: 21
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -427,6 +427,10 @@ function cop-ask() {
 # wtf <topic>— ask the local LLM to explain a tool or concept (REPL mode)
 alias chat:='local_chat'
 alias wtf='wtf_repl'
+
+# ---- Project Shortcuts ----
+# inv — Enter investigator project and run its CLI.
+alias inv='cd /home/wayne/investigator && .venv/bin/python3 -m pipeline.cli'
 
 # ---- System Maintenance ----
 # wsl-up — Update WSL kernel and Microsoft distribution (requires Windows).
