@@ -211,6 +211,12 @@ mkdir -p "$NODE_COMPILE_CACHE" 2>/dev/null || true
 # OPENCLAW_NO_RESPAWN: Skip self-respawn overhead
 export OPENCLAW_NO_RESPAWN="${OPENCLAW_NO_RESPAWN:-1}"
 
+# NODE_OPTIONS: Prefer IPv4 DNS — this machine has no IPv6 default route,
+# causing Node.js fetch() to time out on IPv6 connection attempts.
+if [[ "$NODE_OPTIONS" != *"dns-result-order"* ]]; then
+    export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
+fi
+
 unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv _tac_repo_root _tac_expected_modules _tac_found_count
 
 # Display the initial banner now that TACTICAL_PROFILE_VERSION is set.
