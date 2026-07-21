@@ -5,19 +5,20 @@ implementation with the nested GraphRequestHandler class that serves
 the Cytoscape frontend and handles graph.json GET/POST.
 """
 import logging
-import os
 import json
-import time
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, HTTPServer
+import os
 import threading
+import time
 import webbrowser
+from functools import partial
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+
+from .constants import GRAPH_DB_DEFAULT, SAMPLE_GRAPH
+from .graph_db import load_from_graph_db, resolve_memory_db_path, save_to_graph_db
+from .memory_import import load_from_memory_db
+from .projection import project_graph
 
 logger = logging.getLogger(__name__)
-from .constants import GRAPH_DB_DEFAULT, SAMPLE_GRAPH
-from .graph_db import resolve_memory_db_path, load_from_graph_db, save_to_graph_db
-from .projection import project_graph
-from .memory_import import load_from_memory_db
 
 
 def resolve_serve_target(path: str, force_embed: bool = False) -> tuple[str, str, bool]:

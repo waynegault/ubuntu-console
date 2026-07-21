@@ -43,7 +43,6 @@ def detect_communities(graph: dict, method: str = "leiden_like", **kwargs) -> di
         return graph
 
     min_community_size = kwargs.get('min_community_size', 2)
-    kwargs.get('min_zoom', 0.30)
 
     G = nx.Graph()
     node_labels = {}
