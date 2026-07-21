@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/home/wayne/ubuntu-console/.venv/bin/python
 """
 model-autotune — Discover optimal llama-server parameters for one GGUF model.
 
@@ -78,7 +78,7 @@ def _parse_arch_tps_overrides(raw: str) -> dict[str, float]:
         key = key.strip().lower()
         try:
             out[key] = float(val.strip())
-        except Exception:
+        except (ValueError, TypeError):
             continue
     return out
 
@@ -210,7 +210,7 @@ def read_native_ctx(model_path: str) -> int | None:
                 val = _read_int(f, vtype)
                 if key.endswith(".context_length") and val is not None and val > 0:
                     return int(val)
-    except Exception:
+    except (OSError, struct.error, ValueError, EOFError):
         pass
     return None
 
@@ -329,7 +329,7 @@ def kill_zombie_servers() -> None:
         subprocess.run(["sudo", "/usr/local/bin/clear_vram.sh"],
                        capture_output=True, timeout=30)
         time.sleep(1.5)  # let nvidia-uvm reload settle
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         # Fallback: basic kill if clear_vram.sh fails
         subprocess.run(["killall", "-9", "llama-server"],
                        capture_output=True, timeout=5)
@@ -345,7 +345,7 @@ def _get_free_vram_mb() -> int | None:
             )
             if result.returncode == 0 and result.stdout.strip():
                 return int(result.stdout.strip().split("\n")[0])
-        except Exception:
+        except (OSError, subprocess.SubprocessError, ValueError):
             continue
     return None
 
@@ -390,7 +390,7 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
                         proc.kill()
                         proc.wait(timeout=10)
                         return None
-                except Exception:
+                except OSError:
                     pass
                 health_ok = True
                 break
@@ -399,7 +399,7 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
                 try:
                     if OOM_RE.search(Path(log_path).read_text(errors="ignore")):
                         return None
-                except Exception:
+                except OSError:
                     pass
                 return None
             time.sleep(0.5)
@@ -423,7 +423,7 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
                                          headers={"Content-Type": "application/json"}, method="POST")
             with urllib.request.urlopen(req, timeout=30):
                 return proc
-        except Exception:
+        except (urllib.error.URLError, TimeoutError, OSError):
             if proc.poll() is not None:
                 return None
             time.sleep(2)
@@ -448,7 +448,7 @@ def run_burn(port: int, warmup: bool = False, max_tokens: int = BURN_TOKENS_DISC
                                              headers={"Content-Type": "application/json"}, method="POST")
                 urllib.request.urlopen(req, timeout=300)
                 break
-            except Exception:
+            except (urllib.error.URLError, TimeoutError, OSError):
                 time.sleep(10)
 
     payload = json.dumps({
@@ -463,7 +463,7 @@ def run_burn(port: int, warmup: bool = False, max_tokens: int = BURN_TOKENS_DISC
                                          headers={"Content-Type": "application/json"}, method="POST")
             with urllib.request.urlopen(req, timeout=BURN_TIMEOUT_SEC) as resp:
                 body = resp.read().decode()
-        except Exception:
+        except (urllib.error.URLError, TimeoutError, OSError):
             if attempt == 0:
                 time.sleep(2)
                 continue
@@ -473,7 +473,7 @@ def run_burn(port: int, warmup: bool = False, max_tokens: int = BURN_TOKENS_DISC
         try:
             data = json.loads(body)
             ct = data.get("usage", {}).get("completion_tokens", 0)
-        except Exception:
+        except (json.JSONDecodeError, KeyError, TypeError):
             if attempt == 0:
                 time.sleep(2)
                 continue
@@ -508,7 +508,7 @@ def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
                            "GGML_ASSERT", "not enough memory"):
                     if err in text:
                         return ("oom", [])
-            except Exception:
+            except OSError:
                 pass
         return ("load_fail", [])
 
@@ -520,7 +520,7 @@ def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
             proc.wait(timeout=10)
             try:
                 Path(f"/tmp/autotune_{port}.log").unlink()
-            except Exception:
+            except OSError:
                 pass
             if not tps_samples:
                 return ("burn_fail", [])
@@ -532,7 +532,7 @@ def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
     proc.wait(timeout=10)
     try:
         Path(f"/tmp/autotune_{port}.log").unlink()
-    except Exception:
+    except OSError:
         pass
     kill_zombie_servers()
     return ("ok", tps_samples)
@@ -573,7 +573,7 @@ def stable_tps(samples: list[float]) -> float:
         return 0.0
     try:
         return float(statistics.median(samples))
-    except Exception:
+    except statistics.StatisticsError:
         return float(samples[0])
 
 
@@ -590,7 +590,7 @@ def stable_score(samples: list[float], penalty: float = 0.20) -> float:
         return med
     try:
         sd = float(statistics.pstdev(samples))
-    except Exception:
+    except statistics.StatisticsError:
         sd = 0.0
     return max(0.0, med - (max(0.0, penalty) * sd))
 

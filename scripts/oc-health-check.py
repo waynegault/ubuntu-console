@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/home/wayne/ubuntu-console/.venv/bin/python
 """Richer OpenClaw diagnostics helper used by `oc-health`.
 
 Outputs:
@@ -19,7 +19,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Dict, List, Optional
 
 
 def _check_tcp_port(host: str, port: int, timeout: float = 1.5) -> bool:
@@ -30,7 +29,7 @@ def _check_tcp_port(host: str, port: int, timeout: float = 1.5) -> bool:
         return False
 
 
-def _run(cmd: List[str], timeout: float = 3.0) -> subprocess.CompletedProcess[str]:
+def _run(cmd: list[str], timeout: float = 3.0) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
         check=False,
@@ -45,7 +44,7 @@ def _status_rank(status: str) -> int:
     return order.get(status, 3)
 
 
-def _summary_status(checks: List[Dict[str, object]]) -> str:
+def _summary_status(checks: list[dict[str, object]]) -> str:
     worst = "ok"
     for c in checks:
         s = str(c.get("status", "fail"))
@@ -54,7 +53,7 @@ def _summary_status(checks: List[Dict[str, object]]) -> str:
     return worst
 
 
-def _check_openclaw_cli() -> Dict[str, object]:
+def _check_openclaw_cli() -> dict[str, object]:
     cli_path = shutil.which("openclaw")
     if not cli_path:
         return {
@@ -94,7 +93,7 @@ def _check_openclaw_cli() -> Dict[str, object]:
     }
 
 
-def _check_gateway_port(port: int) -> Dict[str, object]:
+def _check_gateway_port(port: int) -> dict[str, object]:
     listening = _check_tcp_port("127.0.0.1", port)
     return {
         "name": "gateway_port",
@@ -104,7 +103,7 @@ def _check_gateway_port(port: int) -> Dict[str, object]:
     }
 
 
-def _check_gateway_health(port: int) -> Dict[str, object]:
+def _check_gateway_health(port: int) -> dict[str, object]:
     url = f"http://127.0.0.1:{port}/health"
     started = time.time()
     try:
@@ -118,7 +117,7 @@ def _check_gateway_health(port: int) -> Dict[str, object]:
             "message": f"health endpoint HTTP {exc.code}",
             "details": {"url": url, "http_status": exc.code},
         }
-    except Exception as exc:  # noqa: BLE001
+    except (urllib.error.URLError, OSError, ValueError) as exc:
         return {
             "name": "gateway_health",
             "status": "fail",
@@ -152,7 +151,7 @@ def _check_gateway_health(port: int) -> Dict[str, object]:
     }
 
 
-def _check_llm_port(port: int) -> Dict[str, object]:
+def _check_llm_port(port: int) -> dict[str, object]:
     listening = _check_tcp_port("127.0.0.1", port)
     return {
         "name": "llm_port",
@@ -162,7 +161,7 @@ def _check_llm_port(port: int) -> Dict[str, object]:
     }
 
 
-def _check_systemd_gateway() -> Dict[str, object]:
+def _check_systemd_gateway() -> dict[str, object]:
     if shutil.which("systemctl") is None:
         return {
             "name": "gateway_service",
@@ -195,7 +194,7 @@ def _check_systemd_gateway() -> Dict[str, object]:
     }
 
 
-def _check_jq() -> Dict[str, object]:
+def _check_jq() -> dict[str, object]:
     jq_path = shutil.which("jq")
     return {
         "name": "jq",
@@ -205,11 +204,11 @@ def _check_jq() -> Dict[str, object]:
     }
 
 
-def build_report() -> Dict[str, object]:
+def build_report() -> dict[str, object]:
     oc_port = int(os.getenv("OC_PORT", "18789"))
     llm_port = int(os.getenv("LLM_PORT", "8081"))
 
-    checks: List[Dict[str, object]] = [
+    checks: list[dict[str, object]] = [
         _check_openclaw_cli(),
         _check_gateway_port(oc_port),
         _check_gateway_health(oc_port),
@@ -236,7 +235,7 @@ def _symbol(status: str) -> str:
     }.get(status, "[FAIL]")
 
 
-def print_human(report: Dict[str, object], verbose: bool = False) -> None:
+def print_human(report: dict[str, object], verbose: bool = False) -> None:
     summary = str(report.get("summary", "fail")).upper()
     print(f"OpenClaw Health Summary: {summary}")
     print("")
@@ -251,7 +250,7 @@ def print_human(report: Dict[str, object], verbose: bool = False) -> None:
                 print(f"       details: {json.dumps(details, ensure_ascii=True, sort_keys=True)}")
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Richer OpenClaw health diagnostics")
     parser.add_argument("--json", action="store_true", help="Emit JSON report")
     parser.add_argument("--verbose", action="store_true", help="Verbose human output")

@@ -31,6 +31,7 @@ __pycache__/
 venv/
 ENV/
 .pytest_cache/
+.ruff_cache/
 
 # Node
 node_modules/
@@ -59,7 +60,9 @@ logs/
 Thumbs.db
 scripts/__pycache__
 tests/__pycache__
-.qwen/settings.jsonmemory/
+.qwen/settings.json
+.qwen-session
+memory/
 .tmp-bats
 .jolli/
 

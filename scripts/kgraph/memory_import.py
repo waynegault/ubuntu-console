@@ -1,46 +1,62 @@
 """Memory DB import pipeline.
 
-Exports load_from_memory_db() — the large concept extraction pipeline
+Exports load_from_memory_db() — the concept extraction pipeline
 that loads nodes/edges from an OpenClaw memory SQLite database,
 including topic extraction, actor mentions, semantic analysis, and
 embedding-based similarity.
+
+Returns a ``Graph`` model.
 """
+
+from __future__ import annotations
+
+import json
 import os
 import re
-import json
 import sqlite3
+
 from .constants import normalize_canonical_name
 from .life_index import load_life_index
+from .models import Graph, GraphBuilder, slugify
+
+# ── Concept configuration ──────────────────────────────────────────────
+
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config", "concept-aliases.json")
 
 
-def load_from_memory_db(dbpath: str) -> dict:
-    """Load nodes/edges from an OpenClaw memory SQLite DB into graph dict."""
+def _load_concept_config() -> dict:
+    """Load concept aliases and classification data from config/concept-aliases.json."""
+    path = os.path.normpath(_CONFIG_PATH)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+_concept_config = _load_concept_config()
+SCAFFOLDING_LABELS = frozenset(_concept_config.get("scaffolding_labels", []))
+CONCEPT_ALIASES = _concept_config.get("concept_aliases", {})
+LOW_VALUE_CONCEPTS = frozenset(_concept_config.get("low_value_semantic_concepts", []))
+WRAPPER_TERMS = frozenset(_concept_config.get("canonical_wrapper_terms", []))
+AGENT_ROLES = _concept_config.get("agent_roles", {})
+
+
+def load_from_memory_db(dbpath: str) -> Graph:
+    """Load nodes/edges from an OpenClaw memory SQLite DB into a Graph model."""
     conn = sqlite3.connect(os.path.expanduser(dbpath))
     cur = conn.cursor()
-    graph = {'nodes': [], 'edges': []}
-    node_ids = set()
-    edge_ids = set()
+    builder = GraphBuilder()
 
     def has_table(name: str) -> bool:
         cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (name,))
         return cur.fetchone() is not None
 
     def add_node(node: dict):
-        node_id = str(node.get('id', ''))
-        if not node_id or node_id in node_ids:
-            return
-        node_ids.add(node_id)
-        graph['nodes'].append(node)
+        builder.add_node(node)
 
     def add_edge(edge: dict):
-        source = str(edge.get('from', ''))
-        target = str(edge.get('to', ''))
-        label = str(edge.get('label', ''))
-        edge_key = (source, target, label)
-        if not source or not target or edge_key in edge_ids:
-            return
-        edge_ids.add(edge_key)
-        graph['edges'].append(edge)
+        builder.add_edge(edge)
 
     # Current OpenClaw memory schema: files/chunks tables.
     if has_table('files') and has_table('chunks'):
@@ -57,7 +73,7 @@ def load_from_memory_db(dbpath: str) -> dict:
             return text
 
         def _slug(value: str) -> str:
-            return re.sub(r'[^a-z0-9]+', '-', value.lower()).strip('-')
+            return slugify(value)
 
         def add_actor_node(name: str, role: str = '') -> str:
             actor_id = f"actor:{_slug(name)}"
@@ -85,77 +101,10 @@ def load_from_memory_db(dbpath: str) -> dict:
             })
             return tid
 
-        scaffolding_labels = {
-            'summary', 'overview', 'context', 'details', 'notes', 'durable notes', 'working style',
-            'memory routing', 'memory architecture', 'memory layers', 'core identity', 'what changed',
-            'current state', 'important technical state', 'audit findings', 'key decisions', 'rationale',
-            'next actions', 'next action', 'next steps', 'next step', 'open threads', 'open thread',
-            'open items', 'todo', 'todos', 'status', 'result', 'results', 'outcome', 'outcomes',
-            'memory md', 'profile md', 'daily note', 'daily notes', 'semantic', 'files', 'overview', 'raw'
-        }
-        concept_aliases = {
-            'graph quality': 'graph quality',
-            'graph layout quality': 'graph quality',
-            'layout quality': 'graph quality',
-            'semantic graph quality': 'graph quality',
-            'semantic graph': 'graph quality',
-            'graph layout': 'graph quality',
-            'layout readability': 'graph quality',
-            'memory stack': 'memory stack',
-            'repo cleanup': 'repo cleanup',
-            'repository cleanup': 'repo cleanup',
-            'clean repo state': 'repo cleanup',
-            'history rewrite': 'repo cleanup',
-            'force push': 'repo cleanup',
-            'git cleanup': 'repo cleanup',
-            'git history rewrite': 'repo cleanup',
-            'gateway token rotation': 'gateway token rotation',
-            'token rotation': 'gateway token rotation',
-            'rotate gateway token': 'gateway token rotation',
-            'semantic filtering': 'semantic filtering',
-            'semantic suppression': 'semantic filtering',
-            'semantic projection': 'semantic filtering',
-            'semantic decluttering': 'semantic filtering',
-            'semantic thresholding': 'semantic filtering',
-            'semantic threshold': 'semantic filtering',
-            'oauth secret refs': 'oauth secret refs',
-            'oauth refs': 'oauth secret refs',
-            'secret refs': 'oauth secret refs',
-            'oauth ref support': 'oauth secret refs',
-            'env bridge': 'env bridge',
-            'environment bridge': 'env bridge',
-            'windows env bridge': 'env bridge',
-            'wsl env bridge': 'env bridge',
-            'systemd env bridge': 'env bridge',
-            'bridge generation': 'env bridge',
-            'copilot token exchange': 'copilot token',
-            'github copilot token': 'copilot token',
-            'copilot token': 'copilot token',
-            'copilot auth': 'copilot token',
-            'profile duplication': 'profile deduplication',
-            'duplicate profile bullets': 'profile deduplication',
-            'profile dedupe': 'profile deduplication',
-            'profile deduplication': 'profile deduplication',
-            'launcher fix': 'launcher reliability',
-            'launcher behavior': 'launcher reliability',
-            'oc g launcher': 'launcher reliability',
-            'graph source selection': 'semantic source routing',
-            'semantic source bug': 'semantic source routing',
-            'source routing': 'semantic source routing',
-            'naming cleanup': 'semantic naming',
-            'node naming': 'semantic naming',
-            'label cleanup': 'semantic naming',
-            'naming quality': 'semantic naming',
-            'synthetic labels': 'semantic naming',
-            'topic cleanup': 'topic structure',
-            'topics projection': 'topic structure',
-            'topics mode': 'topic structure',
-        }
-        low_value_semantic_concepts = {
-            'workspace', 'openclaw', 'gateway', 'engram', 'wayne', 'hal',
-            'linux', 'ubuntu', 'windows', 'wsl', 'wsl2', 'systemd'
-        }
-        canonical_wrapper_terms = {'workspace', 'openclaw', 'gateway', 'engram', 'wayne', 'hal'}
+        scaffolding_labels = SCAFFOLDING_LABELS
+        concept_aliases = CONCEPT_ALIASES
+        low_value_semantic_concepts = LOW_VALUE_CONCEPTS
+        canonical_wrapper_terms = WRAPPER_TERMS
 
         def canonicalize_concept(kind: str, label: str) -> str | None:
             clean = re.sub(r'[^\x00-\x7E]', '', label or '').strip(' .:-')
@@ -331,11 +280,11 @@ def load_from_memory_db(dbpath: str) -> dict:
             }
             seen = set()
             for cid in concept_ids:
-                node = next((n for n in graph['nodes'] if str(n.get('id')) == cid), None)
+                node = builder.get_node(cid)
                 if not node:
                     continue
-                label = str(node.get('label', '') or '').strip()
-                ntype = str(node.get('type', '') or '').lower()
+                label = (node.label if hasattr(node, 'label') else str(node.get('label', '') or '')).strip()
+                ntype = (node.type if hasattr(node, 'type') else str(node.get('type', '') or '')).lower()
                 if not label or ntype not in buckets:
                     continue
                 key = (ntype, label.lower())
@@ -431,15 +380,6 @@ def load_from_memory_db(dbpath: str) -> dict:
             ('project', re.compile(r'^(?:project|projects|workstream|workstreams|initiative|initiatives|focus)\b\s*[:\-]?\s*(.+)?$', re.IGNORECASE)),
             ('outcome', re.compile(r'^(?:outcome|outcomes|status|next step|next steps|result|results)\b\s*[:\-]?\s*(.+)?$', re.IGNORECASE)),
         ]
-        AGENT_ROLES = {
-            'Jarvis': 'Operations Director',
-            'Nexus': 'Ops Director',
-            'Marlowe': 'Finance Director',
-            'Del': 'Sales Director',
-            'Rook': 'Researcher',
-            'Vigil': 'Sentinel',
-            'Hal': 'CEO',
-        }
 
         try:
             cur.execute("SELECT path FROM files")
@@ -501,7 +441,8 @@ def load_from_memory_db(dbpath: str) -> dict:
             def node_type_for(node_id: str) -> str:
                 if node_id in node_type_cache:
                     return node_type_cache[node_id]
-                node_type_cache[node_id] = str(next((n.get('type', '') for n in graph['nodes'] if str(n.get('id')) == node_id), '') or '')
+                n = builder.get_node(node_id)
+                node_type_cache[node_id] = (n.type if n and hasattr(n, 'type') else '')
                 return node_type_cache[node_id]
 
             def connect_semantic_concepts(concept_ids: list[str]):
@@ -816,4 +757,4 @@ def load_from_memory_db(dbpath: str) -> dict:
             pass
 
     conn.close()
-    return graph
+    return builder.build()

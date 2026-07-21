@@ -28,7 +28,8 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
     consider using the official MCP Python SDK.
     """
     graph_db_path = os.path.expanduser(graph_db or GRAPH_DB_DEFAULT)
-    graph = load_from_graph_db(graph_db_path) if os.path.exists(graph_db_path) else {'nodes': [], 'edges': []}
+    raw = load_from_graph_db(graph_db_path) if os.path.exists(graph_db_path) else {'nodes': [], 'edges': []}
+    graph = raw.to_dict() if hasattr(raw, 'to_dict') else raw
 
     from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -61,7 +62,8 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
 
         def _reload_graph(self):
             if os.path.exists(self.graph_db):
-                self.graph = load_from_graph_db(self.graph_db)
+                raw = load_from_graph_db(self.graph_db)
+                self.graph = raw.to_dict() if hasattr(raw, 'to_dict') else raw
             return True
 
         def do_POST(self):
@@ -86,7 +88,7 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
 
             try:
                 req = json.loads(body.decode('utf-8'))
-            except Exception:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 self._send_error(400, 'Invalid JSON')
                 return
 

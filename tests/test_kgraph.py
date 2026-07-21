@@ -58,10 +58,10 @@ class KGraphTests(unittest.TestCase):
             kgraph.save_to_graph_db(db_path, graph)
             loaded = kgraph.load_from_graph_db(db_path)
 
-        self.assertEqual(loaded['nodes'][0]['id'], 'n1')
-        self.assertEqual(loaded['nodes'][0]['type'], 'topic')
-        self.assertEqual(loaded['edges'][0]['from'], 'n1')
-        self.assertEqual(loaded['edges'][0]['semantic_score'], 0.82)
+        self.assertEqual(loaded.nodes[0].id, 'n1')
+        self.assertEqual(loaded.nodes[0].type, 'topic')
+        self.assertEqual(loaded.edges[0].source, 'n1')
+        self.assertEqual(loaded.edges[0].semantic_score, 0.82)
 
     def test_graph_db_round_trip_supports_basename_path(self):
         kgraph = load_kgraph_module()
@@ -80,8 +80,8 @@ class KGraphTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
-        self.assertEqual(loaded['nodes'][0]['id'], 'n1')
-        self.assertEqual(loaded['edges'][0]['label'], 'links')
+        self.assertEqual(loaded.nodes[0].id, 'n1')
+        self.assertEqual(loaded.edges[0].label, 'links')
 
     def test_install_flag_is_not_supported(self):
         # The legacy --install flag was a backward-compatibility shim feature
@@ -149,8 +149,8 @@ class TestConfidence(unittest.TestCase):
             ],
         }
         result = self.kgraph.tag_confidence(graph)
-        for e in result['edges']:
-            self.assertEqual(e['confidence'], 'EXTRACTED')
+        for e in result.edges:
+            self.assertEqual(e.confidence.value, 'EXTRACTED')
 
     def test_tag_confidence_inferred_semantic_edges(self):
         graph = {
@@ -160,8 +160,8 @@ class TestConfidence(unittest.TestCase):
             ],
         }
         result = self.kgraph.tag_confidence(graph)
-        for e in result['edges']:
-            self.assertEqual(e['confidence'], 'INFERRED')
+        for e in result.edges:
+            self.assertEqual(e.confidence.value, 'INFERRED')
 
     def test_tag_confidence_ambiguous_low_semantic(self):
         graph = {
@@ -171,8 +171,8 @@ class TestConfidence(unittest.TestCase):
             ],
         }
         result = self.kgraph.tag_confidence(graph)
-        for e in result['edges']:
-            self.assertEqual(e['confidence'], 'AMBIGUOUS')
+        for e in result.edges:
+            self.assertEqual(e.confidence.value, 'AMBIGUOUS')
 
     def test_tag_confidence_explicit_flag(self):
         graph = {
@@ -181,7 +181,7 @@ class TestConfidence(unittest.TestCase):
             ],
         }
         result = self.kgraph.tag_confidence(graph)
-        self.assertEqual(result['edges'][0]['confidence'], 'EXTRACTED')
+        self.assertEqual(result.edges[0].confidence.value, 'EXTRACTED')
 
     def test_tag_confidence_inferred_flag(self):
         graph = {
@@ -190,7 +190,7 @@ class TestConfidence(unittest.TestCase):
             ],
         }
         result = self.kgraph.tag_confidence(graph)
-        self.assertEqual(result['edges'][0]['confidence'], 'INFERRED')
+        self.assertEqual(result.edges[0].confidence.value, 'INFERRED')
 
     def test_tag_confidence_cooccurrence_threshold(self):
         graph = {
@@ -200,8 +200,8 @@ class TestConfidence(unittest.TestCase):
             ],
         }
         result = self.kgraph.tag_confidence(graph)
-        self.assertEqual(result['edges'][0]['confidence'], 'INFERRED')
-        self.assertEqual(result['edges'][1]['confidence'], 'AMBIGUOUS')
+        self.assertEqual(result.edges[0].confidence.value, 'INFERRED')
+        self.assertEqual(result.edges[1].confidence.value, 'AMBIGUOUS')
 
     def test_tag_confidence_ambiguous_fallback_related_label(self):
         graph = {
@@ -210,7 +210,7 @@ class TestConfidence(unittest.TestCase):
             ],
         }
         result = self.kgraph.tag_confidence(graph)
-        self.assertEqual(result['edges'][0]['confidence'], 'AMBIGUOUS')
+        self.assertEqual(result.edges[0].confidence.value, 'AMBIGUOUS')
 
     def test_tag_confidence_preserves_existing_fields(self):
         graph = {
@@ -218,9 +218,9 @@ class TestConfidence(unittest.TestCase):
             'edges': [{'from': 'a', 'to': 'b', 'label': 'imports', 'source': 'ast', 'extra': 'keep'}],
         }
         result = self.kgraph.tag_confidence(graph)
-        self.assertEqual(result['nodes'][0]['label'], 'A')
-        self.assertEqual(result['edges'][0]['extra'], 'keep')
-        self.assertEqual(result['edges'][0]['confidence'], 'EXTRACTED')
+        self.assertEqual(result.nodes[0].label, 'A')
+        self.assertEqual(result.edges[0].extra, 'keep')
+        self.assertEqual(result.edges[0].confidence.value, 'EXTRACTED')
 
     def test_confidence_stats_empty_graph(self):
         stats = self.kgraph.confidence_stats({'edges': []})
@@ -501,23 +501,22 @@ class CommunityDetectionTests(unittest.TestCase):
     # ── detect_communities ──────────────────────────────────────────
 
     def test_detect_communities_empty_graph_returns_as_is(self):
-        """detect_communities on empty graph returns graph unchanged."""
+        """detect_communities on empty graph returns graph with no communities."""
         graph = {'nodes': [], 'edges': []}
         result = kgraph.detect_communities(graph, method='greedy')
-        self.assertIs(result, graph)  # same object, no _meta added
-        self.assertNotIn('_meta', result)
+        self.assertEqual(result.meta.communities, [])
 
     def test_detect_communities_too_few_nodes_returns_as_is(self):
-        """detect_communities with <3 nodes returns graph unchanged."""
+        """detect_communities with <3 nodes returns graph with no communities."""
         graph = {
             'nodes': [{'id': 'a', 'label': 'A'}, {'id': 'b', 'label': 'B'}],
             'edges': [{'from': 'a', 'to': 'b'}],
         }
         result = kgraph.detect_communities(graph, method='greedy')
-        self.assertNotIn('_meta', result)
+        self.assertEqual(result.meta.communities, [])
 
     def test_detect_communities_too_few_edges_returns_as_is(self):
-        """detect_communities with <2 edges returns graph unchanged."""
+        """detect_communities with <2 edges returns graph with no communities."""
         graph = {
             'nodes': [
                 {'id': 'a', 'label': 'A'},
@@ -527,34 +526,27 @@ class CommunityDetectionTests(unittest.TestCase):
             'edges': [{'from': 'a', 'to': 'b'}],
         }
         result = kgraph.detect_communities(graph, method='greedy')
-        self.assertNotIn('_meta', result)
+        self.assertEqual(result.meta.communities, [])
 
     def test_detect_communities_greedy_adds_communities(self):
-        """greedy modularity detection populates _meta.communities."""
+        """greedy modularity detection populates meta.communities."""
         result = kgraph.detect_communities(_SMALL_CONNECTED_GRAPH, method='greedy')
-        self.assertIn('_meta', result)
-        meta = result['_meta']
-        self.assertIn('communities', meta)
-        self.assertGreater(len(meta['communities']), 0)
-        for comm in meta['communities']:
+        self.assertGreater(len(result.meta.communities), 0)
+        for comm in result.meta.communities:
             self.assertIn('id', comm)
             self.assertIn('label', comm)
             self.assertIn('members', comm)
             self.assertIn('size', comm)
 
     def test_detect_communities_louvain_adds_communities(self):
-        """louvain detection populates _meta.communities."""
+        """louvain detection populates meta.communities."""
         result = kgraph.detect_communities(_SMALL_CONNECTED_GRAPH, method='louvain')
-        self.assertIn('_meta', result)
-        meta = result['_meta']
-        self.assertIn('communities', meta)
-        self.assertGreater(len(meta['communities']), 0)
+        self.assertGreater(len(result.meta.communities), 0)
 
     def test_detect_communities_method_defaults_to_leiden_like(self):
         """default method ('leiden_like') falls through to greedy modularity."""
         result = kgraph.detect_communities(_SMALL_CONNECTED_GRAPH)
-        self.assertIn('_meta', result)
-        self.assertEqual(result['_meta'].get('community_method'), 'leiden_like')
+        self.assertEqual(result.meta.community_method, 'leiden_like')
 
     def test_detect_communities_label_truncation(self):
         """community labels are truncated to 80 chars."""
@@ -574,12 +566,11 @@ class CommunityDetectionTests(unittest.TestCase):
             ],
         }
         result = kgraph.detect_communities(long_label_graph, method='greedy')
-        for comm in result['_meta']['communities']:
+        for comm in result.meta.communities:
             self.assertLessEqual(len(comm['label']), 80)
 
     def test_detect_communities_min_community_size_filters(self):
         """min_community_size drops smaller communities."""
-        # Use a fresh graph to avoid cross-test mutation of _SMALL_CONNECTED_GRAPH
         graph = {
             'nodes': [
                 {'id': 'a', 'label': 'A'},
@@ -596,14 +587,12 @@ class CommunityDetectionTests(unittest.TestCase):
             ],
         }
         result = kgraph.detect_communities(graph, method='greedy', min_community_size=5)
-        # With min_community_size=5, both communities (sizes 3 and 2) are dropped
-        communities = result['_meta'].get('communities', [])
-        self.assertEqual(len(communities), 0)
+        self.assertEqual(len(result.meta.communities), 0)
 
     def test_detect_communities_missing_graph_keys(self):
         """detect_communities handles missing 'nodes'/'edges' keys gracefully."""
         result = kgraph.detect_communities({'foo': 'bar'}, method='greedy')
-        self.assertNotIn('_meta', result)
+        self.assertEqual(result.meta.communities, [])
 
     def test_detect_communities_edge_source_target_aliases(self):
         """edges can use 'source'/'target' keys instead of 'from'/'to'."""
@@ -623,8 +612,7 @@ class CommunityDetectionTests(unittest.TestCase):
             ],
         }
         result = kgraph.detect_communities(graph, method='greedy')
-        self.assertIn('_meta', result)
-        self.assertIn('communities', result['_meta'])
+        self.assertGreater(len(result.meta.communities), 0)
 
     def test_detect_communities_edge_semantic_score_as_weight(self):
         """edges can use semantic_score instead of weight."""
@@ -644,17 +632,16 @@ class CommunityDetectionTests(unittest.TestCase):
             ],
         }
         result = kgraph.detect_communities(graph, method='greedy')
-        self.assertIn('_meta', result)
-        self.assertIn('communities', result['_meta'])
+        self.assertGreater(len(result.meta.communities), 0)
 
     def test_detect_communities_preserves_existing_meta(self):
-        """existing _meta keys are preserved in the output."""
+        """existing meta fields are preserved in the output."""
         graph = dict(_SMALL_CONNECTED_GRAPH)
         graph['_meta'] = {'source': 'test', 'version': 1}
         result = kgraph.detect_communities(graph, method='greedy')
-        self.assertEqual(result['_meta']['source'], 'test')
-        self.assertEqual(result['_meta']['version'], 1)
-        self.assertIn('communities', result['_meta'])
+        self.assertEqual(result.meta.source, 'test')
+        self.assertEqual(result.meta.version, 1)
+        self.assertGreater(len(result.meta.communities), 0)
 
     # ── compute_centrality ──────────────────────────────────────────
 
@@ -827,13 +814,12 @@ class ValidatePayloadTests(unittest.TestCase):
         self.assertIn('must be a list', msg)
 
     def test_validate_payload_missing_required_node_field(self):
-        """validate_graph_payload catches missing required fields."""
+        """validate_graph_payload catches missing required fields (id)."""
         valid, msg = kgraph.validate_graph_payload({
-            'nodes': [{'id': 1}],  # missing 'label'
+            'nodes': [{'label': 'No ID'}],  # missing 'id'
             'edges': [],
         })
         self.assertFalse(valid)
-        self.assertIn('missing required', msg)
 
     def test_validate_payload_xss_detection(self):
         """validate_graph_payload flags nodes with XSS patterns."""

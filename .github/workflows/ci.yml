@@ -123,4 +123,28 @@ jobs:
             fi
           done
 
+  python:
+    name: Python Lint & Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest pytest-timeout pydantic networkx
+          pip install tree-sitter tree-sitter-bash tree-sitter-python
+
+      - name: Ruff lint
+        run: ruff check scripts/kgraph/
+
+      - name: Run Python tests
+        run: python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_model_autotune.py -x --timeout=120 -q
+
 # end of file

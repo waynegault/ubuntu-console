@@ -56,6 +56,10 @@ def _memo(fn: _t.Callable[[], object]) -> _t.Callable[[], object]:
 
 
 # ── Register lazy loaders ─────────────────────────────────────────────
+_lazy(".models", [
+    "ConfidenceLevel", "GraphNode", "GraphEdge", "GraphMeta", "Graph",
+    "GraphBuilder", "slugify", "estimate_tokens",
+])
 _lazy(".constants", [
     "MEMORY_DB_CANDIDATES", "GRAPH_DB_DEFAULT", "LIFE_ROOT_DEFAULT",
     "CANONICAL_CONCEPTS_DEFAULT", "SAMPLE_GRAPH", "load_canonical_data",
@@ -82,6 +86,8 @@ _lazy(".cli", ["main"])
 
 __all__ = [
     "__version__",
+    "ConfidenceLevel", "GraphNode", "GraphEdge", "GraphMeta", "Graph",
+    "GraphBuilder", "slugify", "estimate_tokens",
     "MEMORY_DB_CANDIDATES", "GRAPH_DB_DEFAULT", "LIFE_ROOT_DEFAULT",
     "CANONICAL_CONCEPTS_DEFAULT", "SAMPLE_GRAPH", "load_canonical_data",
     "normalize_canonical_name",

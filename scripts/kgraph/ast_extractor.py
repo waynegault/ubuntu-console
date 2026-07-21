@@ -1,32 +1,33 @@
 """AST-based code-to-concept extraction using tree-sitter.
 
 Extracts function/class/variable definitions, call graphs, and
-file-level dependencies from source files (Bash, Python initially).
+file-level dependencies from source files (Bash, Python).
 No API calls — deterministic, language-specific parsing.
 
-The extractor reads a repo directory, walks the tree, and produces
-a graph dict with typed nodes and labelled edges, suitable for
-merging into the main kgraph.
-
-Supported languages: bash, python (add via extra grammar install).
+Produces a ``Graph`` model with typed nodes and labelled edges,
+suitable for merging into the main kgraph via ``GraphBuilder``.
 """
 
+from __future__ import annotations
+
 import logging
-import re
 from pathlib import Path
+
+from .models import Graph, GraphBuilder, slugify
 
 logger = logging.getLogger(__name__)
 
 _AST_AVAILABLE = False
 try:
-    from tree_sitter import Parser, Language, Query, QueryCursor
+    from tree_sitter import Language, Parser, Query, QueryCursor
     _AST_AVAILABLE = True
 except ImportError:
-    Parser = None
+    Parser = None  # type: ignore[assignment,misc]
 
-_LANGUAGES = {}
+_LANGUAGES: dict[str, object] = {}
 
-def _load_grammars():
+
+def _load_grammars() -> dict:
     """Lazy-load tree-sitter language grammars."""
     global _LANGUAGES, _AST_AVAILABLE
     if _LANGUAGES or not _AST_AVAILABLE:
@@ -34,8 +35,8 @@ def _load_grammars():
     try:
         import tree_sitter_bash
         import tree_sitter_python
-        _LANGUAGES['bash'] = Language(tree_sitter_bash.language())
-        _LANGUAGES['python'] = Language(tree_sitter_python.language())
+        _LANGUAGES["bash"] = Language(tree_sitter_bash.language())
+        _LANGUAGES["python"] = Language(tree_sitter_python.language())
     except ImportError:
         _AST_AVAILABLE = False
     return _LANGUAGES
@@ -43,16 +44,9 @@ def _load_grammars():
 
 # ── helpers ─────────────────────────────────────────────────────────────
 
-def _slug(text: str) -> str:
-    return re.sub(r'[^a-z0-9_]+', '_', text.lower()).strip('_')
-
 
 def _query_captures(lang: Language, query_text: str, root_node) -> list[tuple]:
-    """Run a tree-sitter query and return (node, capture_name) tuples.
-
-    tree-sitter v0.25 returns matches as list of
-    (pattern_index, {capture_name: [node, ...], ...})
-    """
+    """Run a tree-sitter query and return (node, capture_name) tuples."""
     q = Query(lang, query_text)
     cursor = QueryCursor(q)
     results = []
@@ -63,82 +57,79 @@ def _query_captures(lang: Language, query_text: str, root_node) -> list[tuple]:
     return results
 
 
+def _node_text(node, code: bytes) -> str:
+    try:
+        return code[node.start_byte:node.end_byte].decode("utf-8")
+    except (UnicodeDecodeError, IndexError) as exc:
+        logger.warning("Failed to decode node text from source bytes: %s", exc)
+        return ""
+
 
 # ── file extension → language lookup ──────────────────────────────────
 
 EXT_LANG = {
-    '.sh': 'bash',
-    '.bash': 'bash',
-    '.zsh': 'bash',
-    '.py': 'python',
-    '.pyw': 'python',
+    ".sh": "bash",
+    ".bash": "bash",
+    ".zsh": "bash",
+    ".py": "python",
+    ".pyw": "python",
 }
 
 # ── Bash query patterns ───────────────────────────────────────────────
 
 BASH_QUERIES = {
-    'function_def': """
+    "function_def": """
       (function_definition
         name: (word) @name
       ) @func
     """,
-    'function_call': """
+    "function_call": """
       (command_name
         (word) @call
       )
     """,
-    'variable_def': """
+    "variable_def": """
       (variable_assignment
         name: (variable_name) @name
       ) @assign
-    """,
-    'variable_export': """
-      (declaration_command
-        name: (variable_name) @name
-      ) @export
     """,
 }
 
 # ── Python query patterns ────────────────────────────────────────────
 
 PYTHON_QUERIES = {
-    'function_def': """
+    "function_def": """
       (function_definition
         name: (identifier) @name
       ) @func
     """,
-    'class_def': """
+    "class_def": """
       (class_definition
         name: (identifier) @name
       ) @class
     """,
-    'import': """
+    "import": """
       (import_statement
         name: (dotted_name) @module
       )
     """,
-    'import_from': """
+    "import_from": """
       (import_from_statement
         module_name: (dotted_name) @module
         name: (dotted_name) @name
       )
     """,
-    'function_call': """
+    "function_call": """
       (call
         function: (identifier) @call
       )
     """,
-    'method_call': """
+    "method_call": """
       (call
         function: (attribute
           attribute: (identifier) @call
         )
       )
-    """,
-    'async_function': """
-      (function_definition
-        name: (identifier) @name
-      ) @func
     """,
 }
 
@@ -155,52 +146,26 @@ def ast_available() -> bool:
 def extract_repo_graph(repo_root: str, **kwargs) -> dict:
     """Walk a repo directory and extract nodes/edges via AST.
 
-    Args:
-        repo_root: Absolute path to the repository root.
-        include_variables: Include variable/assignment nodes (noisier).
-        max_files: Max source files to parse (0 = unlimited).
-
-    Returns:
-        A dict with 'nodes' and 'edges' lists ready for kgraph.
+    Returns a plain dict (``{'nodes': [...], 'edges': [...]}``) for
+    backward compatibility with callers that merge via ``GraphBuilder``.
     """
     _load_grammars()
     if not _AST_AVAILABLE:
-        return {'nodes': [], 'edges': [], '_meta': {'error': 'tree-sitter not available'}}
+        return {"nodes": [], "edges": [], "_meta": {"error": "tree-sitter not available"}}
 
-    include_variables = kwargs.get('include_variables', False)
-    max_files = kwargs.get('max_files', 0)
-    scan_subdirs = kwargs.get('subdirs', None)  # list of subdirs or None for all
+    include_variables = kwargs.get("include_variables", False)
+    max_files = kwargs.get("max_files", 0)
+    scan_subdirs = kwargs.get("subdirs")
 
-    graph = {'nodes': [], 'edges': []}
-    node_ids = set()
-    edge_keys = set()
-
-    def add_node(node: dict):
-        nid = str(node.get('id', ''))
-        if not nid or nid in node_ids:
-            return
-        node_ids.add(nid)
-        graph['nodes'].append(node)
-
-    def add_edge(edge: dict):
-        src = str(edge.get('from', ''))
-        dst = str(edge.get('to', ''))
-        label = str(edge.get('label', ''))
-        key = (src, dst, label)
-        if not src or not dst or key in edge_keys:
-            return
-        edge_keys.add(key)
-        graph['edges'].append(edge)
+    builder = GraphBuilder()
 
     # ── file discovery ──
     root = Path(repo_root).resolve()
-    source_files = []
+    source_files: list[tuple[Path, str]] = []
     for ext, lang in EXT_LANG.items():
-        pattern = f'**/*{ext}'
-        for fpath in root.glob(pattern):
-            # Skip hidden dirs, venv, node_modules, .git
+        for fpath in root.glob(f"**/*{ext}"):
             parts = fpath.relative_to(root).parts
-            if any(p.startswith('.') or p in ('venv', 'node_modules', '__pycache__', 'dist', 'build', '.git') for p in parts):
+            if any(p.startswith(".") or p in ("venv", "node_modules", "__pycache__", "dist", "build", ".git") for p in parts):
                 continue
             if scan_subdirs:
                 if not any(fpath.relative_to(root).as_posix().startswith(s) for s in scan_subdirs):
@@ -211,8 +176,8 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
         source_files = source_files[:max_files]
 
     # ── per-file extraction ──
-    parsers = {}
-    file_node_ids = {}
+    parsers: dict[str, Parser] = {}
+    file_node_ids: dict[str, str] = {}
 
     for fpath, lang in source_files:
         grammar_lang = _LANGUAGES.get(lang)
@@ -223,294 +188,175 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
         parser = parsers[lang]
 
         try:
-            with open(fpath, 'rb') as f:
-                code = f.read()
-        except (OSError, IOError):
+            code = fpath.read_bytes()
+        except OSError:
             continue
 
         rel_path = fpath.relative_to(root).as_posix()
-        file_basename = fpath.name
-        file_id = f'ast_file:{_slug(rel_path)}'
+        file_id = f"ast_file:{slugify(rel_path)}"
         file_node_ids[rel_path] = file_id
 
-        add_node({
-            'id': file_id,
-            'label': file_basename,
-            'type': 'file',
-            'path': str(fpath),
-            'rel_path': rel_path,
-            'lang': lang,
-            'source': 'ast',
+        builder.add_node({
+            "id": file_id,
+            "label": fpath.name,
+            "type": "file",
+            "path": str(fpath),
+            "rel_path": rel_path,
+            "language": lang,
+            "source": "ast",
         })
 
         tree = parser.parse(code)
         root_node = tree.root_node
 
-        # ── function/class definitions ──
-        if lang == 'python':
-            _extract_python_defs(root_node, code, rel_path, file_id,
-                                 add_node, add_edge, include_variables)
-        elif lang == 'bash':
-            _extract_bash_defs(root_node, code, rel_path, file_id,
-                               add_node, add_edge, include_variables)
+        if lang == "python":
+            _extract_python_defs(root_node, code, rel_path, file_id, builder, include_variables)
+        elif lang == "bash":
+            _extract_bash_defs(root_node, code, rel_path, file_id, builder, include_variables)
 
-        # ── calls (both languages) ──
-        _extract_calls(root_node, code, lang, rel_path, file_id,
-                       add_node, add_edge)
+        _extract_calls(root_node, code, lang, rel_path, file_id, builder)
 
     # ── inter-file refs from imports ──
-    _resolve_import_edges(file_node_ids, graph, add_edge)
+    graph = builder.build()
+    _resolve_import_edges(file_node_ids, graph, builder)
+    graph = builder.build()
 
-    graph['_meta'] = {
-        'source': 'ast',
-        'files_parsed': len(source_files),
-        'languages': list(set(EXT_LANG.get(fpath.suffix, '') for fpath, _ in source_files)),
+    result = graph.to_dict()
+    result["_meta"] = {
+        "source": "ast",
+        "files_parsed": len(source_files),
+        "languages": list({lang for _, lang in source_files}),
     }
-    return graph
+    return result
 
 
 # ── language-specific extraction helpers ──────────────────────────────
 
 
-def _extract_bash_defs(root_node, code, rel_path, file_id,
-                       add_node, add_edge, include_variables):
+def _extract_bash_defs(root_node, code: bytes, rel_path: str, file_id: str,
+                       builder: GraphBuilder, include_variables: bool) -> None:
     """Extract bash function definitions and variable assignments."""
-    try:
-        lang = _LANGUAGES['bash']
-    except KeyError:
+    lang = _LANGUAGES.get("bash")
+    if not lang:
         return
 
-    captures = _query_captures(lang, BASH_QUERIES['function_def'], root_node)
-
-    func_names = set()
-    for node, tag in captures:
-        if tag == 'name':
+    for node, tag in _query_captures(lang, BASH_QUERIES["function_def"], root_node):
+        if tag == "name":
             name = _node_text(node, code)
             if not name or not name.strip():
                 continue
-            slug = _slug(name)
-            nid = f'ast_func:{slug}'
-            add_node({
-                'id': nid,
-                'label': name.strip(),
-                'type': 'function',
-                'language': 'bash',
-                'source': 'ast',
-                'file': rel_path,
-                'confidence': 'EXTRACTED',
+            nid = f"ast_func:{slugify(name)}"
+            builder.add_node({
+                "id": nid, "label": name.strip(), "type": "function",
+                "language": "bash", "source": "ast", "file": rel_path,
+                "confidence": "EXTRACTED",
             })
-            func_names.add(name.strip())
-            add_edge({
-                'from': file_id,
-                'to': nid,
-                'label': 'defines',
-                'confidence': 'EXTRACTED',
-            })
+            builder.add_edge({"source": file_id, "target": nid, "label": "defines", "confidence": "EXTRACTED"})
 
     if include_variables:
-        for node, tag in _query_captures(lang, BASH_QUERIES['variable_def'], root_node):
-            if tag == 'name':
+        for node, tag in _query_captures(lang, BASH_QUERIES["variable_def"], root_node):
+            if tag == "name":
                 name = _node_text(node, code)
                 if not name or not name.strip():
                     continue
-                slug = _slug(name)
-                nid = f'ast_var:{slug}'
-                add_node({
-                    'id': nid,
-                    'label': name.strip(),
-                    'type': 'variable',
-                    'language': 'bash',
-                    'source': 'ast',
-                    'confidence': 'EXTRACTED',
+                nid = f"ast_var:{slugify(name)}"
+                builder.add_node({
+                    "id": nid, "label": name.strip(), "type": "variable",
+                    "language": "bash", "source": "ast", "confidence": "EXTRACTED",
                 })
-                add_edge({
-                    'from': file_id,
-                    'to': nid,
-                    'label': 'defines',
-                    'confidence': 'EXTRACTED',
-                })
+                builder.add_edge({"source": file_id, "target": nid, "label": "defines", "confidence": "EXTRACTED"})
 
 
-def _extract_python_defs(root_node, code, rel_path, file_id,
-                         add_node, add_edge, include_variables):
+def _extract_python_defs(root_node, code: bytes, rel_path: str, file_id: str,
+                         builder: GraphBuilder, include_variables: bool) -> None:
     """Extract Python function and class definitions."""
-    try:
-        lang = _LANGUAGES['python']
-    except KeyError:
+    lang = _LANGUAGES.get("python")
+    if not lang:
         return
 
-    # Functions
-    for node, tag in _query_captures(lang, PYTHON_QUERIES['function_def'], root_node):
-        if tag == 'name':
+    for node, tag in _query_captures(lang, PYTHON_QUERIES["function_def"], root_node):
+        if tag == "name":
             name = _node_text(node, code)
             if not name or not name.strip():
                 continue
-            slug = _slug(name)
-            nid = f'ast_func:{slug}'
-            # Check if async
+            nid = f"ast_func:{slugify(name)}"
             parent = node.parent
-            is_async = parent and parent.type == 'function_definition' and any(
-                c.type == 'async' for c in parent.children
+            is_async = parent and parent.type == "function_definition" and any(
+                c.type == "async" for c in parent.children
             )
-            add_node({
-                'id': nid,
-                'label': name.strip(),
-                'type': 'function',
-                'language': 'python',
-                'source': 'ast',
-                'async': is_async,
-                'file': rel_path,
-                'confidence': 'EXTRACTED',
+            builder.add_node({
+                "id": nid, "label": name.strip(), "type": "function",
+                "language": "python", "source": "ast", "file": rel_path,
+                "confidence": "EXTRACTED", "async": is_async,
             })
-            add_edge({
-                'from': file_id,
-                'to': nid,
-                'label': 'defines',
-                'confidence': 'EXTRACTED',
-            })
+            builder.add_edge({"source": file_id, "target": nid, "label": "defines", "confidence": "EXTRACTED"})
 
-    # Classes
-    for node, tag in _query_captures(lang, PYTHON_QUERIES['class_def'], root_node):
-        if tag == 'name':
+    for node, tag in _query_captures(lang, PYTHON_QUERIES["class_def"], root_node):
+        if tag == "name":
             name = _node_text(node, code)
             if not name or not name.strip():
                 continue
-            slug = _slug(name)
-            nid = f'ast_class:{slug}'
-            add_node({
-                'id': nid,
-                'label': name.strip(),
-                'type': 'class',
-                'language': 'python',
-                'source': 'ast',
-                'file': rel_path,
-                'confidence': 'EXTRACTED',
+            nid = f"ast_class:{slugify(name)}"
+            builder.add_node({
+                "id": nid, "label": name.strip(), "type": "class",
+                "language": "python", "source": "ast", "file": rel_path,
+                "confidence": "EXTRACTED",
             })
-            add_edge({
-                'from': file_id,
-                'to': nid,
-                'label': 'defines',
-                'confidence': 'EXTRACTED',
-            })
+            builder.add_edge({"source": file_id, "target": nid, "label": "defines", "confidence": "EXTRACTED"})
 
-    # Imports
-    for node, tag in _query_captures(lang, PYTHON_QUERIES['import'], root_node):
-        if tag == 'module':
-            module = _node_text(node, code)
-            if module:
-                slug = _slug(module)
-                nid = f'ast_module:{slug}'
-                add_node({
-                    'id': nid,
-                    'label': module.strip(),
-                    'type': 'module',
-                    'language': 'python',
-                    'source': 'ast',
-                    'confidence': 'EXTRACTED',
-                })
-                add_edge({
-                    'from': file_id,
-                    'to': nid,
-                    'label': 'imports',
-                    'confidence': 'EXTRACTED',
-                })
-
-    for node, tag in _query_captures(lang, PYTHON_QUERIES['import_from'], root_node):
-        if tag == 'module':
-            module = _node_text(node, code)
-            if module:
-                slug = _slug(module)
-                nid = f'ast_module:{slug}'
-                add_node({
-                    'id': nid,
-                    'label': module.strip(),
-                    'type': 'module',
-                    'language': 'python',
-                    'source': 'ast',
-                    'confidence': 'EXTRACTED',
-                })
-                add_edge({
-                    'from': file_id,
-                    'to': nid,
-                    'label': 'imports',
-                    'confidence': 'EXTRACTED',
-                })
+    for query_key in ("import", "import_from"):
+        for node, tag in _query_captures(lang, PYTHON_QUERIES[query_key], root_node):
+            if tag == "module":
+                module = _node_text(node, code)
+                if module:
+                    nid = f"ast_module:{slugify(module)}"
+                    builder.add_node({
+                        "id": nid, "label": module.strip(), "type": "module",
+                        "language": "python", "source": "ast", "confidence": "EXTRACTED",
+                    })
+                    builder.add_edge({"source": file_id, "target": nid, "label": "imports", "confidence": "EXTRACTED"})
 
 
-def _extract_calls(root_node, code, lang, rel_path, file_id,
-                   add_node, add_edge):
-    """Extract function/method call references (not definitions)."""
-    try:
-        grammar_lang = _LANGUAGES[lang]
-    except KeyError:
+def _extract_calls(root_node, code: bytes, lang: str, rel_path: str,
+                   file_id: str, builder: GraphBuilder) -> None:
+    """Extract function/method call references."""
+    grammar_lang = _LANGUAGES.get(lang)
+    if not grammar_lang:
         return
 
-    if lang == 'python':
-        queries = [PYTHON_QUERIES['function_call'], PYTHON_QUERIES['method_call']]
-    elif lang == 'bash':
-        queries = [BASH_QUERIES['function_call']]
+    if lang == "python":
+        queries = [PYTHON_QUERIES["function_call"], PYTHON_QUERIES["method_call"]]
+    elif lang == "bash":
+        queries = [BASH_QUERIES["function_call"]]
     else:
         return
 
-    seen_calls = set()
+    seen_calls: set[str] = set()
     for qtext in queries:
         for node, tag in _query_captures(grammar_lang, qtext, root_node):
-            if tag != 'call':
+            if tag != "call":
                 continue
             name = _node_text(node, code)
-            if not name or not name.strip():
-                continue
-            if name.strip() in seen_calls:
+            if not name or not name.strip() or name.strip() in seen_calls:
                 continue
             seen_calls.add(name.strip())
-            slug = _slug(name)
-            nid = f'ast_call:{slug}'
-            add_node({
-                'id': nid,
-                'label': name.strip(),
-                'type': 'call',
-                'language': lang,
-                'source': 'ast',
-                'confidence': 'EXTRACTED',
+            nid = f"ast_call:{slugify(name)}"
+            builder.add_node({
+                "id": nid, "label": name.strip(), "type": "call",
+                "language": lang, "source": "ast", "confidence": "EXTRACTED",
             })
-            add_edge({
-                'from': file_id,
-                'to': nid,
-                'label': 'calls',
-                'confidence': 'EXTRACTED',
-            })
+            builder.add_edge({"source": file_id, "target": nid, "label": "calls", "confidence": "EXTRACTED"})
 
 
-def _resolve_import_edges(file_node_ids, graph, add_edge):
+def _resolve_import_edges(file_node_ids: dict[str, str], graph: Graph,
+                          builder: GraphBuilder) -> None:
     """Connect import nodes to file nodes when module name matches path."""
-    nodes_by_label = {}
-    for n in graph['nodes']:
-        label = str(n.get('label', '')).strip().lower()
-        ntype = str(n.get('type', '')).strip().lower()
-        if ntype == 'module' and label:
-            nodes_by_label[label] = str(n.get('id', ''))
-
-    for n in graph['nodes']:
-        ntype = str(n.get('type', '')).strip().lower()
-        if ntype != 'module':
+    for n in graph.nodes:
+        if n.type != "module":
             continue
-        label = str(n.get('label', '')).strip().lower()
-        # Try to find a file node whose rel_path matches the module
+        label = n.label.strip().lower()
         for rel_path, fid in file_node_ids.items():
-            rel_stem = Path(rel_path).stem.lower().replace('-', '_')
-            if label == rel_stem or label.endswith('.' + rel_stem):
-                add_edge({
-                    'from': str(n.get('id', '')),
-                    'to': fid,
-                    'label': 'resolves_to',
-                    'confidence': 'INFERRED',
-                })
+            rel_stem = Path(rel_path).stem.lower().replace("-", "_")
+            if label == rel_stem or label.endswith("." + rel_stem):
+                builder.add_edge({"source": n.id, "target": fid, "label": "resolves_to", "confidence": "INFERRED"})
                 break
-
-
-def _node_text(node, code: bytes) -> str:
-    try:
-        return code[node.start_byte:node.end_byte].decode('utf-8')
-    except Exception as exc:
-        logger.warning("Failed to decode node text from source bytes: %s", exc)
-        return ''

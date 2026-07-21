@@ -101,6 +101,9 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
                     graph = load_from_memory_db(path)
                 else:
                     graph = load_from_graph_db(path)
+                # Normalise Graph models to dicts for project_graph()
+                if hasattr(graph, "to_dict"):
+                    graph = graph.to_dict()
                 if graph.get("nodes") or graph.get("edges"):
                     return graph, name
             except Exception as exc:
@@ -210,7 +213,7 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
   # Open browser in background if available but don't block
   try:
     threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
-  except Exception:
+  except OSError:
     pass
 
   print('Serving', url)
