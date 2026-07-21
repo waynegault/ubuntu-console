@@ -49,7 +49,7 @@ export LLM_AUTOTUNE_MIN_CTX_FRACTION="${LLM_AUTOTUNE_MIN_CTX_FRACTION:-0.60}"
 _tac_env_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _tac_lib_dir="$_tac_env_root/scripts"
 
-for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh; do
+for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh "$_tac_lib_dir"/[0-9][0-9][a-z]-*.sh; do
     # Skip 13-init.sh — it runs interactive side-effects (clear, completions,
     # WSL loopback fix, trusted sync loader, and UI traps) not needed in library mode.
     # Utility scripts under tools/ are not matched by this glob.
@@ -68,16 +68,19 @@ for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh; do
     fi
 done
 
-# 09b-gog.sh is a profile module but its name (09b) doesn't match the
-# [0-9][0-9]-*.sh glob used above. Source it explicitly here.
-if [[ -f "$_tac_lib_dir/09b-gog.sh" ]]
-then
-    if ! source "$_tac_lib_dir/09b-gog.sh"
-    then
-        echo "[tac-env] failed sourcing module: $_tac_lib_dir/09b-gog.sh" >&2
-        return 1
-    fi
-fi
+# Sub-modules with non-numeric prefixes are matched by the glob above
+# (e.g. 11a-llm-registry.sh).  Only truly numeric-module names need
+# explicit sourcing: 09b-gog.sh is kept here for backward compat.
+
+# 09b-gog.sh is handled by the [0-9][0-9][a-z]-*.sh glob above.
+# if [[ -f "$_tac_lib_dir/09b-gog.sh" ]]
+# then
+#     if ! source "$_tac_lib_dir/09b-gog.sh"
+#     then
+#         echo "[tac-env] failed sourcing module: $_tac_lib_dir/09b-gog.sh" >&2
+#         return 1
+#     fi
+# fi
 
 # Library mode skips 13-init, but core helpers still expect the OpenClaw
 # state directories to exist for cooldown and error-log writes.

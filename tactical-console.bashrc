@@ -147,7 +147,8 @@ _tac_module_dir="$TACTICAL_REPO_ROOT/scripts"
 # Expected modules (for warning if any are missing)
 _tac_expected_modules=(01-constants 02-error-handling 03-design-tokens 04-aliases
     05-ui-engine 06-hooks 07-telemetry 08-maintenance 09-openclaw 09b-gog 10-deployment
-    11-llm-manager 12-dashboard-help 13-init 14-wsl-extras 15-model-recommender)
+    11a-llm-registry 11b-llm-autotune 11c-llm-server 11d-llm-gpu 11e-llm-model 11f-llm-runtime
+    12-dashboard-help 13-init 14-wsl-extras 15-model-recommender)
 
 # Source modules (timed when DEBUG_TAC_STARTUP is set) and accumulate
 # module versions from their "# Module Version: N" comment.
