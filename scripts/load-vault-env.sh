@@ -78,7 +78,7 @@ fi
 _lve_tmp_file=$(mktemp)
 
 # Parse KEY=VALUE files and emit validated export lines.
-python3 - "$_lve_tmp_file" "${_lve_existing_files[@]}" <<'PY'
+"${TAC_PYTHON:-python3}" - "$_lve_tmp_file" "${_lve_existing_files[@]}" <<'PY'
 import pathlib
 import re
 import shlex

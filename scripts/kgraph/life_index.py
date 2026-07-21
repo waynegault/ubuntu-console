@@ -7,6 +7,7 @@ OpenClaw life directory and inject explicit relation edges into graphs.
 import os
 import re
 import json
+from pathlib import Path
 from .constants import (
     CANONICAL_CONCEPTS_DEFAULT,
     LIFE_ROOT_DEFAULT,
@@ -33,7 +34,7 @@ def load_life_index(life_root: str | None = None) -> dict:
   canonical_json = os.path.expanduser(CANONICAL_CONCEPTS_DEFAULT)
   if os.path.isfile(canonical_json):
     try:
-      payload = load_canonical_data() if load_canonical_data else json.loads(open(canonical_json, 'r', encoding='utf-8').read())
+      payload = load_canonical_data() if load_canonical_data else json.loads(Path(canonical_json).read_text(encoding='utf-8'))
       for record in payload.get('records', []):
         rec = {
           'slug': str(record.get('slug') or '').strip().lower(),

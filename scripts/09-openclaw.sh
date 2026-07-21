@@ -1990,16 +1990,16 @@ function oc-health() {
         # Use comprehensive health check
         case "$output_mode" in
             json)
-                python3 "$enhanced_script" --json
+                "$TAC_PYTHON" "$enhanced_script" --json
                 ;;
             plain)
-                python3 "$enhanced_script" --json | jq -r '.checks[] | "\(.name): \(.status) - \(.message)"'
+                "$TAC_PYTHON" "$enhanced_script" --json | jq -r '.checks[] | "\(.name): \(.status) - \(.message)"'
                 ;;
             verbose)
-                python3 "$enhanced_script" --verbose
+                "$TAC_PYTHON" "$enhanced_script" --verbose
                 ;;
             *)
-                python3 "$enhanced_script"
+                "$TAC_PYTHON" "$enhanced_script"
                 ;;
         esac
         return $?
@@ -3069,7 +3069,7 @@ function oc-kgraph() {
 
     if $do_reindex; then
         __tac_info "kgraph" "[SYNCING MEMORY DB + AST — GRAPH DB]" "$C_Info"
-        python3 - <<'PY' >/dev/null 2>&1 || true
+        "$TAC_PYTHON" - <<'PY' >/dev/null 2>&1 || true
 import sys, os
 repo_root = os.environ.get('TACTICAL_REPO_ROOT', '/home/wayne/ubuntu-console')
 if repo_root:
@@ -3123,7 +3123,7 @@ PY
     fi
     sleep 0.3
     set +m
-    setsid python3 -m kgraph --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
+    setsid "$TAC_PYTHON" -m kgraph --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
     disown
     set -m
 
@@ -3234,7 +3234,7 @@ PY
 # lives in the version-controlled module.
 
 # Deep Recall provider — Python script for life memory recall
-export OPENCLAW_LCM_DEEP_RECALL_CMD="python3 $OC_ROOT/life/deep-recall-provider-lcm.py"
+export OPENCLAW_LCM_DEEP_RECALL_CMD="$TAC_PYTHON $OC_ROOT/life/deep-recall-provider-lcm.py"
 
 # ---------------------------------------------------------------------------
 # mem-index — Rebuild OpenClaw vector memory index.

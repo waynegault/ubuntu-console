@@ -423,32 +423,8 @@ function __llm_registry_sync_state() {
             print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
         }
         $1 == "#" { next }
-        NF < 16 {
-            # Rows with fewer than 16 fields are legacy or malformed.
-            # Print them as-is rather than dropping — silent data loss is
-            # worse than a stale row.
-            print
-            next
-        }
+        NF != 20 { next }
         {
-            # Legacy 16-col: no file state fields and no mmap_mode.
-            if (NF == 16) {
-                $20="no"; $19="no"; $18=$16; $17=$15; $16="on"; $15="auto"
-            }
-            # Legacy 18-col: has state flags but no mmap_mode.
-            if (NF == 18) {
-                $20=$18; $19=$17; $18=$16; $17=$15; $16="on"; $15="auto"
-            }
-            # Legacy 19-col has two historical variants:
-            # A) ...|mmap_mode|tps|autotuned|is_default|in_vram  (no flash_attn)
-            # B) ...|mmap_mode|flash_attn|tps|autotuned|is_default (no in_vram)
-            if (NF == 19) {
-                if ($16 == "on" || $16 == "off" || $16 == "auto") {
-                    $20="no"
-                } else {
-                    $20=$19; $19=$18; $18=$17; $17=$16; $16="on"
-                }
-            }
             d = ($3 == def ? "yes" : "no")
             a = (run == 1 && af != "" && $3 == af ? "yes" : "no")
             $19=d; $20=a
@@ -980,44 +956,16 @@ function __llm_autotune_profiles_remap_by_registry() {
             print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
         }
         FNR == NR {
-            if ($1 != "#" && NF >= 16) {
+            if ($1 != "#" && NF == 20) {
                 key=$3
                 old_ctx[key]=$8; old_thr[key]=$9; old_batch[key]=$10; old_ub[key]=$11
                 old_par[key]=$12; old_fit[key]=$13; old_be[key]=$14
-                if (NF >= 20) {
-                    old_mm[key]=$15; old_fa[key]=$16; old_tps[key]=$17; old_done[key]=$18
-                } else if (NF == 19) {
-                    old_mm[key]=$15
-                    if ($16 == "on" || $16 == "off" || $16 == "auto") {
-                        old_fa[key]=$16; old_tps[key]=$17; old_done[key]=$18
-                    } else {
-                        old_fa[key]="on"; old_tps[key]=$16; old_done[key]=$17
-                    }
-                } else {
-                    old_mm[key]="auto"; old_fa[key]="on"; old_tps[key]=$15; old_done[key]=$16
-                }
+                old_mm[key]=$15; old_fa[key]=$16; old_tps[key]=$17; old_done[key]=$18
             }
             next
         }
         {
-            if ($1 == "#") { next }
-
-            if (NF < 16) {
-                next
-            }
-            if (NF == 16) {
-                $20="no"; $19="no"; $18=$16; $17=$15; $16="on"; $15="auto"
-            }
-            if (NF == 18) {
-                $20=$18; $19=$17; $18=$16; $17=$15; $16="on"; $15="auto"
-            }
-            if (NF == 19) {
-                if ($16 == "on" || $16 == "off" || $16 == "auto") {
-                    $20="no"
-                } else {
-                    $20=$19; $19=$18; $18=$17; $17=$16; $16="on"
-                }
-            }
+            if ($1 == "#" || NF != 20) { next }
             key=$3
             if (key in old_ctx) {
                 $8=old_ctx[key]; $9=old_thr[key]; $10=old_batch[key]; $11=old_ub[key]

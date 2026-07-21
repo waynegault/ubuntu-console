@@ -7,13 +7,33 @@ hangs when the thread-based timeout cannot interrupt blocked I/O.
 from __future__ import annotations
 
 import fcntl
+import shutil
 import tempfile
 import time
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
 
 _LOCK_DIR = Path(tempfile.gettempdir()) / "tac-pytest-bats-locks"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _protect_registry_file() -> Generator[None, None, None]:
+    """Snapshot-restore ~/.llm/models.conf around the test session.
+
+    Tests must never mutate the real registry file.  This fixture snapshots
+    the file before the session and restores it after, so any test that
+    accidentally writes to ~/.llm/models.conf is automatically rolled back.
+    """
+    registry_path = Path.home() / ".llm" / "models.conf"
+    snapshot_path = Path(tempfile.mktemp(suffix=".models.conf.bak"))
+    if registry_path.exists():
+        shutil.copy2(registry_path, snapshot_path)
+    yield
+    if snapshot_path.exists():
+        shutil.copy2(snapshot_path, registry_path)
+        snapshot_path.unlink(missing_ok=True)
 
 
 @pytest.fixture(autouse=True)

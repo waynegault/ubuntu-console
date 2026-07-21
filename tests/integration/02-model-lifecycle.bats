@@ -274,7 +274,7 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
 
     local bench_root="$TAC_TEST_TMPDIR/bench-trap-clean"
     mkdir -p "$bench_root/models" "$bench_root/.llm"
-    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' > "$bench_root/.llm/models.conf"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' > "$bench_root/.llm/models.conf"
 
     LLM_REGISTRY="$bench_root/.llm/models.conf"
     LLAMA_MODEL_DIR="$bench_root/models"

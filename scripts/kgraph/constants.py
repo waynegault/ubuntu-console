@@ -1,16 +1,14 @@
 """Constants and import-time setup for the kgraph package."""
 import re
 
-try:
-    from canonical_helpers import load_canonical_data, normalize_canonical_name
-except Exception:
-    load_canonical_data = None
+load_canonical_data = None
 
-    def normalize_canonical_name(text: str) -> str:
-        norm = re.sub(r'\s+', ' ', str(text or '').strip().lower())
-        norm = re.sub(r'[^a-z0-9\s._:-]', ' ', norm)
-        norm = re.sub(r'\s+', ' ', norm).strip(' .:-')
-        return norm
+
+def normalize_canonical_name(text: str) -> str:
+    norm = re.sub(r'\s+', ' ', str(text or '').strip().lower())
+    norm = re.sub(r'[^a-z0-9\s._:-]', ' ', norm)
+    norm = re.sub(r'\s+', ' ', norm).strip(' .:-')
+    return norm
 
 
 MEMORY_DB_CANDIDATES = [

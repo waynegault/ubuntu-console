@@ -115,13 +115,13 @@ class RegistryRowParsingTests(unittest.TestCase):
     def setUpClass(cls):
         cls.mod = load_module()
         cls._orig_registry = cls.mod.REGISTRY  # save for tearDown restore
-        # Build a realistic registry fragment
+        # Build a realistic registry fragment (20-col format with flash_attn)
         cls.sample = (
             "# LLM Registry\n"
-            "# col: num|name|file|size|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram\n"
-            "1|qwen3-4b-q4_k_m.gguf|qwen3-4b-q4_k_m.gguf|2.3G|256|qwen2|33|32768|4|512|128|1|0|native|off|60.7|yes|y|no\n"
-            "2|deepseek-coder-1.3b-instruct-q4_k_m.gguf|deepseek-coder-1.3b-instruct-q4_k_m.gguf|780M|320|deepseek2|26|16384|4|512|128|1|0|binary|off|71.8|yes|n|no\n"
-            "3|tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf|tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf|666M|256|llama|26|4096|4|512|128|1|0|native|off||no|n|no\n"
+            "# col: num|name|file|size|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram\n"
+            "1|qwen3-4b-q4_k_m.gguf|qwen3-4b-q4_k_m.gguf|2.3G|256|qwen2|33|32768|4|512|128|1|0|native|off|on|60.7|yes|y|no\n"
+            "2|deepseek-coder-1.3b-instruct-q4_k_m.gguf|deepseek-coder-1.3b-instruct-q4_k_m.gguf|780M|320|deepseek2|26|16384|4|512|128|1|0|binary|off|on|71.8|yes|n|no\n"
+            "3|tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf|tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf|666M|256|llama|26|4096|4|512|128|1|0|native|off|off||no|n|no\n"
         )
 
     def setUp(self):

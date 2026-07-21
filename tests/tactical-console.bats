@@ -1716,8 +1716,8 @@ EOF
 @test "llm-manager: model delete dry-run does not remove the model file" {
     local llm_root="$TAC_TEST_TMPDIR/model-delete-dry-run"
     mkdir -p "$llm_root/models" "$llm_root/.llm"
-    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
-        '1|Demo Model|demo.gguf|1.0G|Q4_K_M/q8_0|llama|999|4096|4|1024|256|1|256|llama_server|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+        '1|Demo Model|demo.gguf|1.0G|Q4_K_M/q8_0|llama|999|4096|4|1024|256|1|256|llama_server|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
     touch "$llm_root/models/demo.gguf"
 
     LLM_REGISTRY="$llm_root/.llm/models.conf"
@@ -1735,9 +1735,9 @@ EOF
         source '$REPO_ROOT/env.sh' >/dev/null 2>&1
         llm_root='$TAC_TEST_TMPDIR/model-recommend'
         mkdir -p \"\$llm_root/models\" \"\$llm_root/.llm\"
-        printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
-            '1|Fast Model|fast-Q4_K_M.gguf|1.0G|Q4_K_M/q8_0|llama|999|4096|4|1024|256|1|256|llama_server|auto|14.2|yes|no|no' \
-            '2|Slow Model|slow-Q8_0.gguf|3.8G|Q8_0/q8_0|llama|0|8192|8|1024|256|1|256|llama_server|auto|4.1|yes|no|no' > \"\$llm_root/.llm/models.conf\"
+        printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+            '1|Fast Model|fast-Q4_K_M.gguf|1.0G|Q4_K_M/q8_0|llama|999|4096|4|1024|256|1|256|llama_server|auto|on|14.2|yes|no|no' \
+            '2|Slow Model|slow-Q8_0.gguf|3.8G|Q8_0/q8_0|llama|0|8192|8|1024|256|1|256|llama_server|auto|on|4.1|yes|no|no' > \"\$llm_root/.llm/models.conf\"
         touch \"\$llm_root/models/fast-Q4_K_M.gguf\" \"\$llm_root/models/slow-Q8_0.gguf\"
         LLM_REGISTRY=\"\$llm_root/.llm/models.conf\"
         LLAMA_MODEL_DIR=\"\$llm_root/models\"
@@ -2772,8 +2772,8 @@ EOF
 @test "autotune: __save_model_ctx persists ctx value without floor clamping" {
     local llm_root="$TAC_TEST_TMPDIR/save-model-ctx-no-clamp"
     mkdir -p "$llm_root/.llm"
-    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
-        '1|Test Model|test.gguf|1.0G|Q4_K_M/q8_0|llama|24|16384|6|1024|256|1|256|native|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+        '1|Test Model|test.gguf|1.0G|Q4_K_M/q8_0|llama|24|16384|6|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
     LLM_REGISTRY="$llm_root/.llm/models.conf"
     ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
     echo "1" > "$ACTIVE_LLM_FILE"
@@ -2787,8 +2787,8 @@ EOF
 @test "autotune: __save_model_ctx preserves small ctx values for VRAM-limited models" {
     local llm_root="$TAC_TEST_TMPDIR/save-model-ctx-small"
     mkdir -p "$llm_root/.llm"
-    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
-        '2|Tiny Model|tiny.gguf|0.5G|Q4_K_M/q8_0|llama|32|4096|6|1024|256|1|256|native|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+        '2|Tiny Model|tiny.gguf|0.5G|Q4_K_M/q8_0|llama|32|4096|6|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
     LLM_REGISTRY="$llm_root/.llm/models.conf"
     ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
     echo "2" > "$ACTIVE_LLM_FILE"
@@ -2823,8 +2823,8 @@ EOF
 @test "autotune: __llm_autotune_profile_save preserves gpu_layers unchanged" {
     local llm_root="$TAC_TEST_TMPDIR/autotune-keeps-gpu-layers"
     mkdir -p "$llm_root/.llm"
-    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' \
-        '4|GpuLayer Test|gpu.gguf|2.0G|Q4_K_M/q8_0|llama|16|4096|6|1024|256|1|256|native|auto|0|no|no|no' > "$llm_root/.llm/models.conf"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+        '4|GpuLayer Test|gpu.gguf|2.0G|Q4_K_M/q8_0|llama|16|4096|6|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
     LLM_REGISTRY="$llm_root/.llm/models.conf"
     ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
     echo "4" > "$ACTIVE_LLM_FILE"

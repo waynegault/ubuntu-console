@@ -68,6 +68,13 @@ export LLAMA_ROOT="$AI_STORAGE_ROOT/llama.cpp"
 export LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active"
 export LLAMA_ARCHIVE_DIR="$LLAMA_DRIVE_ROOT/archive"
 export LLM_SERVER_PYTHON_BIN="${LLM_SERVER_PYTHON_BIN:-python3}"
+# TAC_PYTHON: project .venv Python when available, else system python3.
+# All inline Python calls in scripts/ and bin/ should use this.
+if [[ -x "$TACTICAL_REPO_ROOT/.venv/bin/python" ]]; then
+    export TAC_PYTHON="$TACTICAL_REPO_ROOT/.venv/bin/python"
+else
+    export TAC_PYTHON="python3"
+fi
 export LLM_SERVER_MODULE="${LLM_SERVER_MODULE:-llama_cpp.server}"
 export LLAMA_CPP_PYTHON_VERSION="${LLAMA_CPP_PYTHON_VERSION:-0.3.23}"
 export LLM_SERVER_PROC_PATTERN="${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}"
@@ -100,7 +107,7 @@ fi
 # ---- LLM Registry (models.conf) Schema ----
 # Format: pipe-delimited fields, one model per line
 #   #|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|
-#   parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram
+#   parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram
 #
 # Field descriptions:
 #   #            - Unique model number (used for 'model use <num>')
@@ -118,13 +125,14 @@ fi
 #   fit_target_mb- Native server fit target margin in MiB
 #   backend      - Runtime backend (native / python)
 #   mmap_mode    - Per-model mmap policy (auto|on|off)
+#   flash_attn   - Flash attention (on|off)
 #   tps          - Last measured tokens/sec
 #   autotuned    - yes/no autotune completed flag
 #   is_default   - yes/no default model selector
 #   in_vram      - yes/no currently active-in-VRAM selector
 #
 # Example:
-#   1|Phi-4-mini|phi-4-mini.Q4_K_M.gguf|2.5G|Q4_K_M/q8_0|phi3|999|4096|12|1024|256|1|1024|native|auto|45.2|yes|no|no
+#   1|Phi-4-mini|phi-4-mini.Q4_K_M.gguf|2.5G|Q4_K_M/q8_0|phi3|999|4096|12|1024|256|1|1024|native|auto|on|45.2|yes|no|no
 #
 # Used by: model scan/use/stop/bench, llama-watchdog.sh, dashboard
 # Registry on local ext4 to avoid 9P atomic-mv corruption on Windows drive.

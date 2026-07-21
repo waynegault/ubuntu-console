@@ -247,28 +247,13 @@ def load_registry_row(row: int) -> dict | None:
             continue
         parts = line.split("|")
         if parts[0].strip() == str(row):
-            if len(parts) not in (19, 20):
+            if len(parts) != 20:
                 raise RuntimeError(
-                    f"Invalid registry schema in row {row}: expected 19 or 20 columns, got {len(parts)}"
+                    f"Invalid registry schema in row {row}: expected 20 columns, got {len(parts)}"
                 )
 
             def _get(idx: int, default: str = "") -> str:
                 return parts[idx] if idx < len(parts) else default
-
-            # 19-column schema has no flash_attn field:
-            # ...|backend|mmap_mode|tps|autotuned|is_default|in_vram
-            if len(parts) == 19:
-                flash_attn = "on"
-                tps = _get(15, "0")
-                autotuned = _get(16, "no")
-                is_default = _get(17, "no")
-                in_vram = _get(18, "no")
-            else:
-                flash_attn = _get(15, "on")
-                tps = _get(16, "0")
-                autotuned = _get(17, "no")
-                is_default = _get(18, "no")
-                in_vram = _get(19, "no")
 
             return {
                 "num": _get(0), "name": _get(1), "file": _get(2), "size": _get(3),
@@ -276,11 +261,11 @@ def load_registry_row(row: int) -> dict | None:
                 "ctx": _get(7), "threads": _get(8), "batch": _get(9),
                 "ubatch": _get(10), "parallel": _get(11), "fit_target_mb": _get(12),
                 "backend": _get(13), "mmap_mode": _get(14, "auto"),
-                "flash_attn": flash_attn,
-                "tps": tps,
-                "autotuned": autotuned,
-                "is_default": is_default,
-                "in_vram": in_vram,
+                "flash_attn": _get(15, "on"),
+                "tps": _get(16, "0"),
+                "autotuned": _get(17, "no"),
+                "is_default": _get(18, "no"),
+                "in_vram": _get(19, "no"),
             }
     return None
 
@@ -301,23 +286,13 @@ def write_registry_row(row: int, updates: dict) -> None:
             continue
         parts = line.split("|")
         if parts[0].strip() == str(row):
-            if len(parts) not in (19, 20):
+            if len(parts) != 20:
                 raise RuntimeError(
-                    f"Invalid registry schema in row {row}: expected 19 or 20 columns, got {len(parts)}"
+                    f"Invalid registry schema in row {row}: expected 20 columns, got {len(parts)}"
                 )
 
-            # Column indexes differ by schema depending on flash_attn presence.
-            if len(parts) == 19:
-                schema_field_map = {
-                    "ctx": 7, "batch": 9, "ubatch": 10, "parallel": 11,
-                    "fit_target_mb": 12, "backend": 13, "mmap_mode": 14,
-                    "tps": 15, "autotuned": 16,
-                }
-            else:
-                schema_field_map = field_map
-
             for key, value in updates.items():
-                idx = schema_field_map.get(key)
+                idx = field_map.get(key)
                 if idx is not None and idx < len(parts):
                     parts[idx] = str(value)
             new_lines.append("|".join(parts))
@@ -393,8 +368,10 @@ def start_server(model_path: str, ctx: int, batch: int, ubatch: int,
 
     log_path = f"/tmp/autotune_{port}.log"
     try:
+        log_fh = open(log_path, "w")
         proc = subprocess.Popen(
-            cmd, stdout=open(log_path, "w"), stderr=subprocess.STDOUT)
+            cmd, stdout=log_fh, stderr=subprocess.STDOUT)
+        log_fh.close()
     except FileNotFoundError:
         return None
 

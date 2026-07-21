@@ -16,10 +16,10 @@ setup() {
     echo "stub" > "$TAC_TEST_TMPDIR/models/untuned.gguf"
 
     cat > "$TAC_TEST_TMPDIR/.llm/models.conf" <<'REGISTRY'
-#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram
-1|Tuned Model|tuned.gguf|0.5G|Q4_K_M/q8_0|llama|24|8192|4|1024|256|1|256|native|auto|88.5|yes|yes|no
-2|Untuned Model|untuned.gguf|0.5G|Q4_K_M/q8_0|llama|24|4096|4|1024|256|1|256|native|auto|0|no|no|no
-3|Missing File|missing.gguf|0.5G|Q4_K_M/q8_0|llama|24|4096|4|1024|256|1|256|native|auto|0|no|no|no
+#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram
+1|Tuned Model|tuned.gguf|0.5G|Q4_K_M/q8_0|llama|24|8192|4|1024|256|1|256|native|auto|on|88.5|yes|yes|no
+2|Untuned Model|untuned.gguf|0.5G|Q4_K_M/q8_0|llama|24|4096|4|1024|256|1|256|native|auto|on|0|no|no|no
+3|Missing File|missing.gguf|0.5G|Q4_K_M/q8_0|llama|24|4096|4|1024|256|1|256|native|auto|on|0|no|no|no
 REGISTRY
 
     source "$REPO_ROOT/env.sh" >/dev/null 2>&1
@@ -241,7 +241,7 @@ ACTIVE_LLM_FILE=$ACTIVE_LLM_FILE LLM_TPS_CACHE=$LLM_TPS_CACHE \
 LLAMA_DRIVE_ROOT=$LLAMA_DRIVE_ROOT LLM_BENCH_MODEL_TIMEOUT=10 \
 LLM_BENCH_LOCK_WAIT_SECONDS=1"
     # Use empty registry to prevent real model loading
-    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|tps|autotuned|is_default|in_vram' > /tmp/.bench_trap_registry
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' > /tmp/.bench_trap_registry
     local e_reg=/tmp/.bench_trap_registry
 
     run bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \

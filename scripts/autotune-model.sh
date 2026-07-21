@@ -240,7 +240,7 @@ bench_once() {
         if curl -sS --max-time 5 "$health_url/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}' \
-            2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))" 2>/dev/null | grep -q '[1-9]'; then
+            2>/dev/null | "$TAC_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))" 2>/dev/null | grep -q '[1-9]'; then
             pf_ok=1; break
         fi
         kill -0 "$pid" 2>/dev/null || { echo ""; return 1; }
@@ -271,7 +271,7 @@ bench_once() {
     kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
 
     local elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
-    local tokens; tokens=$(echo "$resp" | python3 -c "
+    local tokens; tokens=$(echo "$resp" | "$TAC_PYTHON" -c "
 import sys, json
 try: d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))
 except: print(0)" 2>/dev/null) || tokens=0
