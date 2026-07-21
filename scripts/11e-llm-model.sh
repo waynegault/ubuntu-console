@@ -413,12 +413,20 @@ function __model_default() {
 }
 
 # ---------------------------------------------------------------------------
-# __model_use
-# @description Start a registry model with adaptive llama-server settings and health checks.
-# @returns 0 on success, 1 if validation or startup fails.
+# ====== __model_use helper functions ======
+
 # ---------------------------------------------------------------------------
-function __model_use() {
-    local target="${1:-}"
+# __model_use_resolve_model
+# @description Resolve model target, look up registry entry, parse fields.
+# @arg $1 target model number (may be empty to use default)
+# @sets target, num, name, file, size, quant_cache, arch, gpu_layers, ctx,
+#        threads, batch_size, ubatch_size, parallel_slots, fit_target_mb,
+#        row_backend, row_mmap_mode, row_flash_attn, tps, autotuned,
+#        is_default, in_vram; may also override ctx via TAC_CTX_SIZE
+# @returns 0 on success, 1 if validation or registry lookup fails.
+# ---------------------------------------------------------------------------
+function __model_use_resolve_model() {
+    target="${1:-}"
 
     if [[ -z "$target" ]]
     then
@@ -455,7 +463,8 @@ function __model_use() {
         return 1
     fi
 
-    local num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram
+    # These variables are shared with caller via dynamic scope —
+    # declared as `local` in __model_use, assigned here.
     IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram <<< "$entry"
 
     # Allow context size override via TAC_CTX_SIZE environment variable
@@ -470,11 +479,19 @@ function __model_use() {
             __tac_info "Context" "[Invalid override '$TAC_CTX_SIZE' — using registry value $ctx]" "$C_Warning"
         fi
     fi
+}
 
-    local model_path="$LLAMA_MODEL_DIR/$file"
-    local model_bytes=0
+# ---------------------------------------------------------------------------
+# __model_use_ensure_downloaded
+# @description Check if model file exists locally; prompt and download if not.
+# @uses file, name, size, target (from resolve_model scope)
+# @sets model_path, model_bytes
+# @returns 0 on success (file present), 1 if download fails or cancelled.
+# ---------------------------------------------------------------------------
+function __model_use_ensure_downloaded() {
+    model_path="$LLAMA_MODEL_DIR/$file"
+    model_bytes=0
 
-    # Auto-download model if not found (with user confirmation for large files)
     if [[ ! -f "$model_path" ]]
     then
         __tac_info "Model File" "[NOT FOUND - $file]" "$C_Warning"
@@ -486,7 +503,6 @@ function __model_use() {
             confirm="y"
             confirm_large="y"
         else
-            # Check if model download is possible (HuggingFace repo info in registry)
             local download_prompt="Would you like to download model #$target ($name)? [y/N]: "
             read -r -e -p "$download_prompt" confirm
         fi
@@ -533,9 +549,17 @@ function __model_use() {
     fi
 
     model_bytes=$(stat --format=%s "$model_path" 2>/dev/null || echo 0)
-    local quant_rating
+}
+
+# ---------------------------------------------------------------------------
+# __model_use_select_backend
+# @description Determine server backend (native vs python) and resolve binary.
+# @uses file, row_backend (from resolve_model scope)
+# @sets quant_rating, llm_backend, python_bin, LLM_SERVER_PYTHON_BIN
+# @returns 0 on success, 1 if required binary not found.
+# ---------------------------------------------------------------------------
+function __model_use_select_backend() {
     quant_rating=$(__llm_quant_rating "$file")
-    local llm_backend
     llm_backend="${LLM_SERVER_BACKEND:-${row_backend:-llama_server}}"
     case "$llm_backend" in
         native|binary|llama-server|llama_server)
@@ -550,7 +574,7 @@ function __model_use() {
             ;;
     esac
 
-    local python_bin=""
+    python_bin=""
     if [[ "$llm_backend" == "python" ]]
     then
         python_bin=$(__llm_python_bin_resolve 2>/dev/null || true)
@@ -568,14 +592,25 @@ function __model_use() {
             return 1
         fi
     fi
+}
 
+# ---------------------------------------------------------------------------
+# __model_use_configure_params
+# @description Configure runtime parameters: threads, ctx, GPU layers, batch,
+#   ubatch, parallel slots, free VRAM, and cache type.
+# @uses TAC_CTX_SIZE, ctx, threads (initial from registry), quant_rating,
+#   model_bytes, gpu_layers (initial from registry)
+# @sets threads, smi_cmd, gpu_layers, batch_size, ubatch_size, parallel_slots,
+#   free_vram_mb, type_k_val (all finalised)
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __model_use_configure_params() {
     # Prefer per-model registry values from model scan; fall back to global defaults.
     [[ "$threads" =~ ^[0-9]+$ ]] || threads="${LLAMA_CPU_THREADS:-6}"
     if [[ -z "${TAC_CTX_SIZE:-}" ]]
     then
         [[ "$ctx" =~ ^[0-9]+$ ]] || ctx="${LLAMA_CTX_SIZE:-4096}"
     fi
-    local smi_cmd
     smi_cmd=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$smi_cmd" ]]
     then
@@ -591,9 +626,7 @@ function __model_use() {
         gpu_layers=0
     fi
 
-    # Quant-guide-aware launch tuning for 4GB VRAM systems.
-    # Recommended quants can use the scanned/default layer target; larger
-    # discouraged quants get conservative offload limits to reduce stalls.
+    # Quant-guide-aware launch tuning for 4GB VRAM systems
     if (( gpu_layers > 0 ))
     then
         case "$quant_rating" in
@@ -623,7 +656,7 @@ function __model_use() {
     [[ "$batch_size" =~ ^[0-9]+$ ]] || batch_size=1024
     [[ "$ubatch_size" =~ ^[0-9]+$ ]] || ubatch_size=256
     [[ "$parallel_slots" =~ ^[0-9]+$ ]] || parallel_slots=1
-    local free_vram_mb=0
+    free_vram_mb=0
     if (( gpu_layers > 0 ))
     then
         if [[ -n "$smi_cmd" ]]
@@ -634,8 +667,6 @@ function __model_use() {
             )
         fi
         [[ "$free_vram_mb" =~ ^[0-9]+$ ]] || free_vram_mb=0
-
-        :
     fi
 
     if [[ "${LLAMA_BATCH_SIZE:-}" =~ ^[0-9]+$ ]] && (( LLAMA_BATCH_SIZE > 0 ))
@@ -660,10 +691,20 @@ function __model_use() {
         ubatch_size="$batch_size"
     fi
 
-    local type_k_val
     type_k_val=$(__llm_type_k_value)
+}
 
-    local cmd=()
+# ---------------------------------------------------------------------------
+# __model_use_build_command
+# @description Build the server command array and configure mmap behavior.
+# @uses llm_backend, model_path, ctx, batch_size, ubatch_size, threads,
+#   gpu_layers, row_flash_attn, fit_target_mb, row_mmap_mode, arch,
+#   free_vram_mb, model_bytes, parallel_slots
+# @sets cmd, fit_target_mb (finalised), use_no_mmap
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __model_use_build_command() {
+    cmd=()
     if [[ "$llm_backend" == "native" ]]
     then
         fit_target_mb="${fit_target_mb:-${LLAMA_FIT_TARGET_MB:-1024}}"
@@ -692,15 +733,13 @@ function __model_use() {
         cmd+=("--batch-size" "$batch_size" "--ubatch-size" "$ubatch_size")
         cmd+=("--threads" "$threads")
         cmd+=("--n-gpu-layers" "$gpu_layers")
-        # Bench mode uses a reduced fit target so large models can start on
-        # 4 GB VRAM without being rejected by an impossible 1 GB free target.
         if [[ -n "${__BENCH_MODE:-}" ]]; then
             cmd+=("--fit" "on" "--fit-target" "256")
         else
             cmd+=("--fit" "on" "--fit-target" "$fit_target_mb")
         fi
         cmd+=("--flash-attn" "$flash_attn_mode")
-        cmd+=("--jinja")   # Enable Jinja2 chat templates from GGUF metadata
+        cmd+=("--jinja")
         cmd+=("$kv_offload_flag")
         cmd+=("--cache-type-k" "${LLAMA_CACHE_TYPE_K:-q8_0}")
         cmd+=("--parallel" "$parallel_slots")
@@ -717,9 +756,7 @@ function __model_use() {
     fi
 
     # Adaptive memory-mapping behavior (video-inspired stability tuning).
-    # --no-mmap can reduce page-fault stalls and mmap-related thrashing,
-    # especially for MoE models, low free VRAM situations, and WSL hosts.
-    local use_no_mmap=0
+    use_no_mmap=0
     local no_mmap_mode="${row_mmap_mode:-${LLAMA_NO_MMAP_MODE:-auto}}"
     case "$no_mmap_mode" in
         auto|on|off) ;;
@@ -755,7 +792,18 @@ function __model_use() {
             cmd+=("--use_mmap" "false")
         fi
     fi
+}
 
+# ---------------------------------------------------------------------------
+# __model_use_launch_server
+# @description Print startup info, launch server with stdin FIFO keeper, save PID.
+# @uses cmd, num, name, size, gpu_layers, ctx, batch_size, ubatch_size,
+#   parallel_slots, threads, use_no_mmap, llm_backend, free_vram_mb,
+#   autotuned, fit_target_mb, __BENCH_MODE
+# @sets model_shell_pid; writes active model state to disk.
+# @returns 0 always.
+# ---------------------------------------------------------------------------
+function __model_use_launch_server() {
     local ngl_label="CPU-only"
     (( gpu_layers > 0 )) && ngl_label="ngl=${gpu_layers}"
     local mmap_label="mmap:on"
@@ -778,7 +826,6 @@ function __model_use() {
             _bench_vram_label="unknown"
         fi
         _bench_clock_info=$(__llm_gpu_clock_snapshot)
-        # Show tuned params in bench mode to confirm what's running.
         local _fit_label="fit:${fit_target_mb}"
         local _autotuned_label=""
         if [[ "${autotuned:-no}" == "yes" ]]
@@ -799,7 +846,6 @@ function __model_use() {
 
         # Close all inherited lock file descriptors (from autotune/bench locks)
         # so child processes (stdin keeper, llama-server) don't inherit them.
-        # This prevents orphaned locks when the parent is killed.
         local _lock_fd_dir="/proc/${BASHPID:-$$}/fd"
         for _lfd in "${_lock_fd_dir}/"*; do
             _lfdnum="${_lfd##*/}"
@@ -877,7 +923,7 @@ function __model_use() {
         rm -rf "$stdin_fifo_dir" 2>/dev/null || true
         exit "$server_rc"
     ) 2>/dev/null &
-    local model_shell_pid=$!
+    model_shell_pid=$!
     disown
     # Save the model subshell PID so __model_stop can kill it.
     # Include our own PID to prevent stale PIDs from overlapping runs.
@@ -887,7 +933,15 @@ function __model_use() {
     then
         __tac_info "Warning" "[Could not save state]" "$C_Warning"
     fi
+}
 
+# ---------------------------------------------------------------------------
+# __model_use_wait_healthy
+# @description Wait for server health check, run bench preflight if needed.
+# @uses size, gpu_layers, name, num, __BENCH_MODE, ACTIVE_LLM_FILE
+# @returns 0 when healthy, 1 on timeout/failure (after cleanup).
+# ---------------------------------------------------------------------------
+function __model_use_wait_healthy() {
     local health_timeout
     health_timeout=$(__llm_health_timeout "$size" "$gpu_layers" "$name")
     local _health_elapsed=0
@@ -910,6 +964,7 @@ function __model_use() {
             # it to stabilise by polling /health until it sticks.
             if [[ "$_pf_rc" != "200" ]]
             then
+                local _pf
                 for (( _pf=0; _pf < 60; _pf++ ))
                 do
                     sleep 1
@@ -936,6 +991,32 @@ function __model_use() {
     __llm_registry_sync_state >/dev/null 2>&1 || true
     [[ -z "${__BENCH_MODE:-}" ]] && __tac_info "Status" "FAILED OR TIMEOUT - check: tail $LLM_LOG_FILE" "$C_Error"
     return 1
+}
+
+# ---------------------------------------------------------------------------
+# __model_use (thin orchestrator)
+# @description Start a registry model with adaptive llama-server settings
+#   and health checks.
+# @returns 0 on success, 1 if validation or startup fails.
+# ---------------------------------------------------------------------------
+function __model_use() {
+    # Shared variables — declared local here, populated by helpers via
+    # dynamic scope (caller locals are visible to called functions).
+    local target num name file size quant_cache arch gpu_layers
+    local ctx threads batch_size ubatch_size parallel_slots fit_target_mb
+    local row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram
+    local model_path model_bytes quant_rating llm_backend python_bin
+    local smi_cmd free_vram_mb type_k_val use_no_mmap
+    local cmd model_shell_pid
+
+    __model_use_resolve_model "$@" || return 1
+    __model_use_ensure_downloaded || return 1
+    __model_use_select_backend || return 1
+    __model_use_configure_params
+    __model_use_build_command
+    __model_use_launch_server
+    __model_use_wait_healthy
+    return $?
 }
 
 # ---------------------------------------------------------------------------
