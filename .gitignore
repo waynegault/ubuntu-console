@@ -74,4 +74,4 @@ benchmark*.json
 benchmark*.html
 *_sanitized.json
 GRAPH_REPORT*.md
-.graphignore_*
+.graphignore_*audit*.md
