@@ -92,7 +92,8 @@ _build_test_profile() {
         "$PROFILE_PATH" > "$patched"
     # Patch module files with the same transforms
     mkdir -p "$patched_scripts"
-    for _f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT/scripts/09b-gog.sh"; do
+    for _f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+              "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh; do
         [[ -f "$_f" ]] || continue
         sed "${_sed_args[@]}" "$_f" > "$patched_scripts/$(basename "$_f")"
     done
@@ -1150,7 +1151,7 @@ EOF
 }
 
 @test "hygiene: each module has # shellcheck shell=bash at line 1" {
-    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT"/scripts/09b-gog.sh; do
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh; do
         [[ -f "$f" ]] || continue
         # Utility scripts (16+) are standalone executables with shebangs; skip
         case "$(basename "$f")" in
@@ -1165,7 +1166,7 @@ EOF
 @test "hygiene: all modules have a Module Version comment" {
     local missing=0
     local f
-    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT"/scripts/09b-gog.sh; do
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh; do
         [[ -f "$f" ]] || continue
         if ! grep -q '^# Module Version:' "$f"; then
             echo "MISSING version in $f" >&3
