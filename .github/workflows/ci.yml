@@ -51,17 +51,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bats
 
-      - name: Run fast tests
+      - name: Run fast tests (50 smoke tests)
         run: bats tests/tactical-console-fast.bats
-
-      - name: Run core tests
-        run: bats tests/tactical-console.bats
-
-      - name: Run integration tests
-        run: bats tests/integration/*.bats
 
       - name: Run lint script
         run: tools/lint.sh
+
+    # Full suite (371 tests) and integration tests (109 tests) are run
+    # locally via test_bats_bridge.py or: bats tests/tactical-console.bats
 
   module-count:
     name: Module Integrity
@@ -145,6 +142,6 @@ jobs:
         run: ruff check scripts/kgraph/
 
       - name: Run Python tests
-        run: python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_model_autotune.py -x --timeout=120 -q
+        run: python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_model_autotune.py tests/test_untested_modules.py -x --timeout=120 -q
 
 # end of file
