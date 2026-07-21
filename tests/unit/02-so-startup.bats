@@ -5,12 +5,11 @@ setup() {
     export REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
     export TAC_TEST_TMPDIR="$(mktemp -d)"
     export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
-    export LLM_REGISTRY="$TAC_TEST_TMPDIR/models.conf"
-    export ACTIVE_LLM_FILE="$TAC_TEST_TMPDIR/active_llm"
-    export LLM_PORT=8081
-    export OC_PORT=18789
     mkdir -p "$TAC_CACHE_DIR"
 
+    # Source scripts FIRST so 01-constants.sh sets LLM_REGISTRY to the
+    # real path, THEN override with a test-local path so no code writes
+    # to the real ~/.llm/models.conf during tests.
     # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/01-constants.sh"
     # shellcheck disable=SC1090
@@ -19,6 +18,12 @@ setup() {
     source "$REPO_ROOT/scripts/05-ui-engine.sh"
     # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/09-openclaw.sh"
+
+    # Override paths AFTER sourcing so we don't touch the real registry.
+    export LLM_REGISTRY="$TAC_TEST_TMPDIR/models.conf"
+    export ACTIVE_LLM_FILE="$TAC_TEST_TMPDIR/active_llm"
+    export LLM_PORT=8081
+    export OC_PORT=18789
 
     # Keep test output deterministic.
     __llm_default_file() { echo ""; }
