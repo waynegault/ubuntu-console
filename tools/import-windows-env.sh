@@ -18,6 +18,12 @@
 
 set -euo pipefail
 
+# Use project .venv Python when available
+_TAC_PY=$(command -v python3)
+if [[ -f "$(cd "$(dirname "$0")/.." && pwd)/.venv/bin/python" ]]; then
+    _TAC_PY="$(cd "$(dirname "$0")/.." && pwd)/.venv/bin/python"
+fi
+
 OUT="${1:-$HOME/.openclaw/.env.bridge}"
 shift || true
 mkdir -p "$(dirname "$OUT")"
@@ -64,7 +70,7 @@ PS_EOF
 
 WINDOWS_ENV_JSON=$("$PS_BIN" -NoProfile -Command "$PS_SCRIPT")
 
-python3 - "$OUT" "$WINDOWS_ENV_JSON" "$HOME/.qwen/oauth_creds.json" "${NAMES[@]}" <<'PY'
+"$_TAC_PY" - "$OUT" "$WINDOWS_ENV_JSON" "$HOME/.qwen/oauth_creds.json" "${NAMES[@]}" <<'PY'
 import json
 import pathlib
 import shlex

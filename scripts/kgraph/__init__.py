@@ -2,189 +2,105 @@
 
 __version__ = "2.0.0"
 
-# Constants
-from .constants import (
-    MEMORY_DB_CANDIDATES,
-    GRAPH_DB_DEFAULT,
-    LIFE_ROOT_DEFAULT,
-    CANONICAL_CONCEPTS_DEFAULT,
-    SAMPLE_GRAPH,
-    load_canonical_data,
-    normalize_canonical_name,
-)
+# Lazy imports — modules are loaded on first access to avoid paying the
+# startup cost of importing all 16 submodules (tree-sitter, networkx, HTTP
+# server, MCP server, AST extractor, etc.) on every `kgraph --help`.
+# Use `from kgraph import <name>` as normal; the import machinery is unchanged.
+# The __all__ list respects the public API contract.
 
-# HTML template
-from .html import (
-    HTML_TMPL,
-    ensure_parent_dir,
-    generate_html,
-)
+import typing as _t
 
-# Graph projection engine
-from .projection import project_graph
+_MODULES: dict[str,
+                 _t.Callable[[], object]] = {}
 
-# Life index and relations
-from .life_index import (
-    resolve_life_root,
-    load_life_index,
-    load_relations,
-    merge_relations,
-)
 
-# Graph database
-from .graph_db import (
-    resolve_memory_db_path,
-    init_graph_db,
-    load_from_graph_db,
-    save_to_graph_db,
-)
+def __getattr__(name: str) -> object:
+    """Lazy-load submodule attribute on first access via `from kgraph import X`.
 
-# HTTP server
-from .server import (
-    resolve_serve_target,
-    serve_file,
-)
+    Each submodule is imported exactly once, on the first attribute access
+    that requires it.
+    """
+    fn = _MODULES.get(name)
+    if fn is not None:
+        return fn()
+    raise AttributeError(f"module 'kgraph' has no attribute {name!r}")
 
-# Memory import
-from .memory_import import load_from_memory_db
 
-# AST code-to-concept extraction (tree-sitter)
-from .ast_extractor import (
-    ast_available,
-    extract_repo_graph,
-)
+def _lazy(mod_path: str, attrs: list[str]) -> None:
+    """Register a lazy loader for *attrs* that imports *mod_path*."""
+    for a in attrs:
+        _MODULES[a] = _memo(lambda mp=mod_path, al=a: _import_one(mp, al))
 
-# Community detection / clustering
-from .community import (
-    communities_available,
-    detect_communities,
-    compute_centrality,
-    find_god_nodes,
-)
 
-# Confidence tagging
-from .confidence import (
-    tag_confidence,
-    confidence_stats,
-)
+_imported_cache: dict[str, object] = {}
 
-# Report generation
-from .report import (
-    generate_report,
-)
 
-# Query / path / explain tools
-from .query import (
-    query_nodes,
-    find_path,
-    explain_node,
-    format_explain,
-    format_path,
-)
+def _import_one(mod_path: str, attr: str) -> object:
+    if attr not in _imported_cache:
+        import importlib
+        _imported_cache[attr] = getattr(importlib.import_module(mod_path), attr)
+    return _imported_cache[attr]
 
-# Call-flow Mermaid / HTML export
-from .call_flow import (
-    generate_call_flow_mermaid,
-    generate_call_flow_html,
-)
 
-# Update / watch mode
-from .update import (
-    incremental_update,
-    start_watch,
-    merge_graphs,
-)
+def _memo(fn: _t.Callable[[], object]) -> _t.Callable[[], object]:
+    """Return a wrapper that calls *fn* once and caches the result."""
+    sentinel = object()
+    val: object = sentinel
 
-# MCP server
-from .mcp_server import serve_mcp
+    def wrapper() -> object:
+        nonlocal val
+        if val is sentinel:
+            val = fn()
+        return val
+    return wrapper
 
-# Input validation / security
-from .validate import (
-    validate_graph_payload,
-    sanitize_label,
-)
 
-# PR dashboard
-from .pr_dashboard import (
-    generate_pr_dashboard,
-)
-
-# Benchmark
-from .benchmark import (
-    benchmark_graph_vs_raw,
-    print_benchmark,
-)
-
-# CLI
-from .cli import main
+# ── Register lazy loaders ─────────────────────────────────────────────
+_lazy(".constants", [
+    "MEMORY_DB_CANDIDATES", "GRAPH_DB_DEFAULT", "LIFE_ROOT_DEFAULT",
+    "CANONICAL_CONCEPTS_DEFAULT", "SAMPLE_GRAPH", "load_canonical_data",
+    "normalize_canonical_name",
+])
+_lazy(".html", ["HTML_TMPL", "ensure_parent_dir", "generate_html"])
+_lazy(".projection", ["project_graph"])
+_lazy(".life_index", ["resolve_life_root", "load_life_index", "load_relations", "merge_relations"])
+_lazy(".graph_db", ["resolve_memory_db_path", "init_graph_db", "load_from_graph_db", "save_to_graph_db"])
+_lazy(".server", ["resolve_serve_target", "serve_file"])
+_lazy(".memory_import", ["load_from_memory_db"])
+_lazy(".ast_extractor", ["ast_available", "extract_repo_graph"])
+_lazy(".community", ["communities_available", "detect_communities", "compute_centrality", "find_god_nodes"])
+_lazy(".confidence", ["tag_confidence", "confidence_stats"])
+_lazy(".report", ["generate_report"])
+_lazy(".query", ["query_nodes", "find_path", "explain_node", "format_explain", "format_path"])
+_lazy(".call_flow", ["generate_call_flow_mermaid", "generate_call_flow_html"])
+_lazy(".update", ["incremental_update", "start_watch", "merge_graphs"])
+_lazy(".mcp_server", ["serve_mcp"])
+_lazy(".validate", ["validate_graph_payload", "sanitize_label"])
+_lazy(".pr_dashboard", ["generate_pr_dashboard"])
+_lazy(".benchmark", ["benchmark_graph_vs_raw", "print_benchmark"])
+_lazy(".cli", ["main"])
 
 __all__ = [
     "__version__",
-    # constants
-    "MEMORY_DB_CANDIDATES",
-    "GRAPH_DB_DEFAULT",
-    "LIFE_ROOT_DEFAULT",
-    "CANONICAL_CONCEPTS_DEFAULT",
-    "SAMPLE_GRAPH",
-    "load_canonical_data",
+    "MEMORY_DB_CANDIDATES", "GRAPH_DB_DEFAULT", "LIFE_ROOT_DEFAULT",
+    "CANONICAL_CONCEPTS_DEFAULT", "SAMPLE_GRAPH", "load_canonical_data",
     "normalize_canonical_name",
-    # html
-    "HTML_TMPL",
-    "ensure_parent_dir",
-    "generate_html",
-    # projection
+    "HTML_TMPL", "ensure_parent_dir", "generate_html",
     "project_graph",
-    # life_index
-    "resolve_life_root",
-    "load_life_index",
-    "load_relations",
-    "merge_relations",
-    # graph_db
-    "resolve_memory_db_path",
-    "init_graph_db",
-    "load_from_graph_db",
-    "save_to_graph_db",
-    # server
-    "resolve_serve_target",
-    "serve_file",
-    # memory_import
+    "resolve_life_root", "load_life_index", "load_relations", "merge_relations",
+    "resolve_memory_db_path", "init_graph_db", "load_from_graph_db", "save_to_graph_db",
+    "resolve_serve_target", "serve_file",
     "load_from_memory_db",
-    # cli
     "main",
-    # ast_extractor
-    "ast_available",
-    "extract_repo_graph",
-    # community
-    "communities_available",
-    "detect_communities",
-    "compute_centrality",
-    "find_god_nodes",
-    # confidence
-    "tag_confidence",
-    "confidence_stats",
-    # report
+    "ast_available", "extract_repo_graph",
+    "communities_available", "detect_communities", "compute_centrality", "find_god_nodes",
+    "tag_confidence", "confidence_stats",
     "generate_report",
-    # query
-    "query_nodes",
-    "find_path",
-    "explain_node",
-    "format_explain",
-    "format_path",
-    # call_flow
-    "generate_call_flow_mermaid",
-    "generate_call_flow_html",
-    # update
-    "incremental_update",
-    "start_watch",
-    "merge_graphs",
-    # mcp
+    "query_nodes", "find_path", "explain_node", "format_explain", "format_path",
+    "generate_call_flow_mermaid", "generate_call_flow_html",
+    "incremental_update", "start_watch", "merge_graphs",
     "serve_mcp",
-    # validate
-    "validate_graph_payload",
-    "sanitize_label",
-    # pr_dashboard
+    "validate_graph_payload", "sanitize_label",
     "generate_pr_dashboard",
-    # benchmark
-    "benchmark_graph_vs_raw",
-    "print_benchmark",
+    "benchmark_graph_vs_raw", "print_benchmark",
 ]

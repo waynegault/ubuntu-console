@@ -67,6 +67,47 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
       self._send_cors_headers()
       self.end_headers()
 
+    def _resolve_graph(self, prefer_memory: bool) -> tuple[dict, str]:
+        """Try multiple graph sources and return (graph, source_name).
+
+        Fallback chain: memory-db → graph-db → json-store → sample graph.
+        """
+        graph_db_path = os.path.expanduser(self.graph_db) if self.graph_db else ""
+        memory_db_path = self.memory_db or ""
+        has_graph_db = bool(graph_db_path and os.path.exists(graph_db_path))
+        has_memory_db = bool(memory_db_path and os.path.exists(memory_db_path))
+        has_store = bool(self.store and os.path.isfile(self.store))
+
+        sources: list[tuple[str, str, bool]] = []
+
+        if prefer_memory and has_memory_db:
+            sources.append(("memory-db", memory_db_path, True))
+            if has_graph_db:
+                sources.append(("graph-db", graph_db_path, False))
+        elif has_graph_db:
+            sources.append(("graph-db", graph_db_path, False))
+            if has_memory_db:
+                sources.append(("memory-db", memory_db_path, True))
+        elif has_memory_db:
+            sources.append(("memory-db", memory_db_path, True))
+
+        for name, path, is_memory in sources:
+            try:
+                if is_memory:
+                    graph = load_from_memory_db(path)
+                else:
+                    graph = load_from_graph_db(path)
+                if graph.get("nodes") or graph.get("edges"):
+                    return graph, name
+            except Exception:
+                pass
+
+        if has_store:
+            with open(self.store, "r", encoding="utf-8") as f:
+                return json.load(f), "json-store"
+
+        return SAMPLE_GRAPH, "sample"
+
     def do_GET(self):
       request_path = self.path.split('?', 1)[0]
       if request_path == '/graph.json':
@@ -83,79 +124,8 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
         except (TypeError, ValueError):
           req_semantic = self.semantic_threshold
         try:
-            graph_db_exists = bool(self.graph_db and os.path.exists(os.path.expanduser(self.graph_db)))
-            memory_db_exists = bool(self.memory_db and os.path.exists(self.memory_db))
-
-            # Semantic / overview / topics / files should project from memory-derived graph when available.
-            # Raw is the place where user-edited graph DB should dominate.
-            prefer_memory_projection = req_view_mode in {'semantic', 'overview', 'topics', 'files'}
-
-            base_graph = None
-            source_name = 'sample'
-
-            if prefer_memory_projection and memory_db_exists:
-              try:
-                base_graph = load_from_memory_db(self.memory_db)
-                source_name = 'memory-db'
-              except Exception:
-                base_graph = {'nodes': [], 'edges': []}
-              if (not base_graph.get('nodes')) and (not base_graph.get('edges')) and graph_db_exists:
-                user_graph = load_from_graph_db(self.graph_db)
-                if user_graph.get('nodes') or user_graph.get('edges'):
-                  base_graph = user_graph
-                  source_name = 'graph-db'
-              if (not base_graph.get('nodes')) and (not base_graph.get('edges')) and os.path.isfile(self.store):
-                with open(self.store, 'r', encoding='utf-8') as f:
-                  base_graph = json.load(f)
-                source_name = 'json-store'
-              if base_graph is None or ((not base_graph.get('nodes')) and (not base_graph.get('edges')) and not os.path.isfile(self.store)):
-                base_graph = SAMPLE_GRAPH
-                source_name = 'sample'
-            elif graph_db_exists:
-              user_graph = load_from_graph_db(self.graph_db)
-              if user_graph.get('nodes') or user_graph.get('edges'):
-                base_graph = user_graph
-                source_name = 'graph-db'
-              elif memory_db_exists:
-                try:
-                  base_graph = load_from_memory_db(self.memory_db)
-                  source_name = 'memory-db'
-                except Exception:
-                  base_graph = {'nodes': [], 'edges': []}
-                if (not base_graph.get('nodes')) and (not base_graph.get('edges')) and os.path.isfile(self.store):
-                  with open(self.store, 'r', encoding='utf-8') as f:
-                    base_graph = json.load(f)
-                  source_name = 'json-store'
-                elif (not base_graph.get('nodes')) and (not base_graph.get('edges')):
-                  base_graph = SAMPLE_GRAPH
-                  source_name = 'sample'
-              elif os.path.isfile(self.store):
-                with open(self.store, 'r', encoding='utf-8') as f:
-                  base_graph = json.load(f)
-                source_name = 'json-store'
-              else:
-                base_graph = SAMPLE_GRAPH
-                source_name = 'sample'
-            elif memory_db_exists:
-              try:
-                base_graph = load_from_memory_db(self.memory_db)
-                source_name = 'memory-db'
-              except Exception:
-                base_graph = {'nodes': [], 'edges': []}
-              if (not base_graph.get('nodes')) and (not base_graph.get('edges')) and os.path.isfile(self.store):
-                with open(self.store, 'r', encoding='utf-8') as f:
-                  base_graph = json.load(f)
-                source_name = 'json-store'
-              elif (not base_graph.get('nodes')) and (not base_graph.get('edges')):
-                base_graph = SAMPLE_GRAPH
-                source_name = 'sample'
-            elif os.path.isfile(self.store):
-              with open(self.store, 'r', encoding='utf-8') as f:
-                base_graph = json.load(f)
-              source_name = 'json-store'
-            else:
-              base_graph = SAMPLE_GRAPH
-              source_name = 'sample'
+            prefer_memory = req_view_mode in {'semantic', 'overview', 'topics', 'files'}
+            base_graph, source_name = self._resolve_graph(prefer_memory)
 
             projected = project_graph(base_graph, mode=req_view_mode, semantic_threshold=req_semantic)
             meta = {
