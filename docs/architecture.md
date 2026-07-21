@@ -53,7 +53,7 @@ not profile modules, and are never sourced by either loader.
 **Profile modules** (sourced in order by the loader):
 
 | Module | File | Lines | Purpose |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | §0 | `tactical-console.bashrc` | ~225 | Version, AI editor rules, architecture map, array-based module loader, missing module warning |
 | §1 | `scripts/01-constants.sh` | 342 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
 | §2 | `scripts/02-error-handling.sh` | 258 | ERR trap → `bash-errors.log` (exit codes ≥ 2, whitelisted commands excluded) |
@@ -86,7 +86,7 @@ not profile modules, and are never sourced by either loader.
 **Utility scripts** (moved to `tools/`; not profile modules — never sourced by the loader):
 
 | File | Purpose |
-|---|---|
+| --- | --- |
 | `tools/check-agent-use.sh` | Agent usage regression checker — CI/tests only. |
 | `tools/import-windows-env.sh` | Standalone script to import Windows user environment variables. |
 | `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety. CI linter. |
@@ -106,7 +106,7 @@ fails fast when boundaries are violated.
 
 ### Dependency Graph
 
-```
+```text
 01-constants.sh ────────────────────────────────────────────┐
 02-error-handling.sh       ← 01                             │
 03-design-tokens.sh        (standalone)                     │
@@ -139,7 +139,7 @@ fails fast when boundaries are violated.
 ### Naming Conventions
 
 | Pattern | Meaning | Examples |
-|---|---|---|
+| --- | --- | --- |
 | `__double_underscore` | Internal/private helper | `__test_port`, `__get_host_metrics`, `__strip_ansi` |
 | `kebab-case` | User-facing command | `oc-health`, `get-ip`, `oc-backup` |
 | Lowercase abbreviation | Tactical shortcut | `so`, `xo`, `cl`, `m`, `h` |
@@ -190,7 +190,7 @@ These variables are written in one section and read by another. They are the
 coupling points that must be preserved during modularisation:
 
 | Variable | Written By | Read By | Medium |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `LAST_TPS` | `burn`, `__llm_stream` (§11) | `tactical_dashboard` (§12) | `/dev/shm/last_tps` |
 | `__LAST_LLM_RESPONSE` | `__llm_chat_send` (§11) | `local_chat` (§11) | Shell variable |
 | `ACTIVE_LLM_FILE` | `model use` (§11) | `oc-local-llm` (§9), dashboard (§12) | `/dev/shm/active_llm` |
@@ -236,7 +236,7 @@ function __get_METRIC() {
 Cache TTLs per metric:
 
 | Metric | TTL | Rationale |
-|---|---|---|
+| --- | --- | --- |
 | Host Metrics (CPU + iGPU + NVIDIA) | 10s | iGPU from `typeperf.exe` 3D engine, NVIDIA dGPU from Windows engine counters with `nvidia-smi` compute fallback |
 | GPU (NVIDIA detail) | 10s | nvidia-smi is slow (~1.2s) |
 | Battery | 120s | Changes slowly |
@@ -270,7 +270,7 @@ Layout constants are derived from `UIWidth` (default 80):
 
 The ERR trap logs to `~/.openclaw/bash-errors.log` with timestamps:
 
-```
+```text
 2026-03-07 14:32:01 [EXIT 127] some_missing_command --flag
 ```
 
@@ -303,7 +303,7 @@ modules can be reordered as long as their `@depends` are satisfied.
 ### Benefits Realised
 
 | Benefit | Detail |
-|---|---|
+| --- | --- |
 | **Faster iteration** | Edit `11e-llm-model.sh` without scrolling past 500 lines of unrelated server or GPU code. |
 | **Targeted testing** | `bash -n scripts/09a-oc-gateway.sh` checks only gateway functions. |
 | **Selective loading** | On a server with no GPU, skip `11d-llm-gpu.sh`. On a headless box, skip `12-dashboard-help.sh`. |
@@ -325,7 +325,7 @@ Do not edit the monolith — it is a frozen snapshot.
 ### Risks & Mitigations
 
 | Risk | Mitigation |
-|---|---|
+| --- | --- |
 | Source order bugs | Numeric prefixes enforce deterministic ordering. `bash -n` runs on every module in CI. |
 | `readonly` collisions on re-source | Already guarded with `[[ -z "${C_Reset:-}" ]]`. |
 | Missing module breaks shell | The loader warns if expected module count doesn't match; each `[[ -f ]]` guards gracefully. |
@@ -339,7 +339,7 @@ Do not edit the monolith — it is a frozen snapshot.
 ### System Requirements
 
 | Component | Requirement |
-|---|---|
+| --- | --- |
 | **OS** | Windows 11 Pro with WSL2 |
 | **WSL Distribution** | Ubuntu 24.04 |
 | **Shell** | Bash 5.2+ |
@@ -349,7 +349,7 @@ Do not edit the monolith — it is a frozen snapshot.
 ### Required Packages
 
 | Package | Used By | Install |
-|---|---|---|
+| --- | --- | --- |
 | `jq` | All LLM/SSE functions, token scanning | `sudo apt install jq` |
 | `curl` | LLM API calls, health checks, WAN IP | Pre-installed |
 | `ss` (iproute2) | `__test_port` port checking | Pre-installed |
@@ -365,7 +365,7 @@ Do not edit the monolith — it is a frozen snapshot.
 ### Optional Packages
 
 | Package | Used By | Install |
-|---|---|---|
+| --- | --- | --- |
 | `huggingface-cli` | `model download` | `pip install huggingface-hub` |
 | `cargo` + `install-update` | `up` step 3 (Cargo crate updates) | Rust toolchain |
 | `npm` | `up` step 3 (global package updates) | Node.js |
@@ -393,7 +393,7 @@ extra source commands.
 
 ### Directory Structure
 
-```
+```text
 ~/ubuntu-console/
 ├── tactical-console.bashrc            # Thin loader + array-based module sourcing loop
 ├── tactical-console.bashrc.monolith   # Pre-modularisation backup (frozen snapshot)
@@ -495,7 +495,7 @@ extra source commands.
 ### Symlink Map
 
 | System Path | Repo Path |
-|---|---|
+| --- | --- |
 | `~/.bashrc` | thin loader (not in repo — sources `tactical-console.bashrc`) |
 | `~/.llm/models.conf` | `llm/models.conf` (not currently in repo) |
 | `~/.local/bin/tac-exec` | `bin/tac-exec` |
