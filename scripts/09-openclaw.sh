@@ -23,6 +23,16 @@
 #   mem-index, oc-memory-search
 # ---------------------------------------------------------------------------
 
+# ── OpenClaw installation check ───────────────────────────────────────
+# __TAC_OPENCLAW_OK is set to 1 only if openclaw CLI exists and responds.
+# Uses `command openclaw` to bypass the wrapper function defined in §4,
+# which itself depends on __TAC_OPENCLAW_OK (circular dependency at load time).
+if command -v openclaw >/dev/null 2>&1 && command openclaw --version >/dev/null 2>&1; then
+    __TAC_OPENCLAW_OK=1
+else
+    __TAC_OPENCLAW_OK=0
+fi
+
 # ── Source sub-modules in dependency order ──────────────────────────────
 _MOD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
