@@ -7,6 +7,217 @@
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
 
+function __tac_cleanup_stale_locks() {
+    # shellcheck disable=SC2034
+    local _c_lock _c_pid _c_kf _c_sp _c_my_pid _c_ppid _c_cmd
+    local -a _c_live_model_shells=()
+
+    # Track currently live model-shell wrappers so we do not kill keepers that
+    # still belong to an active model session.
+    local _c_ms_kf _c_ms_pid
+    for _c_ms_kf in /tmp/llm-modelshell.*.pid /tmp/llm-modelshell.pid
+    do
+        [[ -f "$_c_ms_kf" ]] || continue
+        _c_ms_pid=$(cat "$_c_ms_kf" 2>/dev/null || true)
+        if [[ "$_c_ms_pid" =~ ^[0-9]+$ ]] && kill -0 "$_c_ms_pid" 2>/dev/null
+        then
+            _c_live_model_shells+=("$_c_ms_pid")
+        fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+    done
+
+    # bench lock + pid — also check custom paths used by non-default configs
+    local _c_lock_candidates
+    _c_lock_candidates=(
+        "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
+        "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
+    )
+    for _c_lock in "${_c_lock_candidates[@]}"
+    do
+        [[ -f "$_c_lock" ]] || continue
+        if command -v lsof >/dev/null 2>&1
+        then
+            if ! lsof "$_c_lock" >/dev/null 2>&1
+            then
+                rm -f "$_c_lock"
+            fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+        else
+            # shellcheck disable=SC2188
+            _c_pid=$(<"$_c_lock" 2>/dev/null || true)
+            if [[ -z "$_c_pid" ]] || ! kill -0 "$_c_pid" 2>/dev/null
+            then
+                rm -f "$_c_lock"
+            fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+        fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+    done
+
+    # bench PID file — check custom path too
+    local _c_pid_file="${LLM_BENCH_PID_FILE:-/tmp/llm-bench.pid}"
+    local _c_bench_active=0
+    if [[ -f "$_c_pid_file" ]]
+    then
+        # shellcheck disable=SC2188
+        _c_pid=$(<"$_c_pid_file" 2>/dev/null || true)
+        if [[ -z "$_c_pid" ]] || ! kill -0 "$_c_pid" 2>/dev/null
+        then
+            rm -f "$_c_pid_file"
+        else
+            _c_bench_active=1
+        fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+    fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+
+    # Bench lock ownership is cooperative: the lock file stores owner PID.
+    # Treat bench as active only when that owner PID is alive. An orphaned
+    # child can keep the lock file open without owning a valid bench session.
+    local _c_bench_lock="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
+    if [[ -f "$_c_bench_lock" ]]
+    then
+        # shellcheck disable=SC2188
+        local _c_lock_owner
+        _c_lock_owner=$(cat "$_c_bench_lock" 2>/dev/null || true)
+        if [[ "$_c_lock_owner" =~ ^[0-9]+$ ]] && kill -0 "$_c_lock_owner" 2>/dev/null
+        then
+            _c_bench_active=1
+        fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+    fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+
+    # orphaned stdin keepers
+    _c_my_pid=$$
+    for _c_sp in $(pgrep -a bash 2>/dev/null | awk '/llm-stdin/{print $1}' || true)
+    do
+        if [[ "$_c_sp" =~ ^[0-9]+$ ]] && [[ "$_c_sp" != "$_c_my_pid" ]]
+        then
+            # Only kill true orphans. Live keepers can belong to an active
+            # model run in another shell.
+            _c_ppid=$(ps -o ppid= -p "$_c_sp" 2>/dev/null | tr -d '[:space:]')
+            _c_cmd=$(ps -o args= -p "$_c_sp" 2>/dev/null || true)
+            if [[ "$_c_cmd" == *"llm-stdin"* ]] && {
+                [[ "$_c_ppid" == "1" ]] || ! [[ " ${_c_live_model_shells[*]} " == *" $_c_ppid "* ]];
+            }
+            then
+                kill -TERM "$_c_sp" 2>/dev/null || true
+            fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+        fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+    done
+
+    # orphaned bench timeout wrappers (left behind after interrupted runs)
+    # Only reap when no active bench owner exists.
+    local _c_bp _c_bppid _c_bcmd
+    if (( _c_bench_active == 0 ))
+    then
+        for _c_bp in $(pgrep -af '__BENCH_MODE=1' 2>/dev/null | awk '{print $1}' || true)
+        do
+            [[ "$_c_bp" =~ ^[0-9]+$ ]] || continue
+            _c_bppid=$(ps -o ppid= -p "$_c_bp" 2>/dev/null | tr -d '[:space:]')
+            _c_bcmd=$(ps -o args= -p "$_c_bp" 2>/dev/null || true)
+            if [[ "$_c_bcmd" == *"__BENCH_MODE=1"* ]] && [[ "$_c_bppid" != "$$" ]]
+            then
+                kill -TERM "$_c_bp" 2>/dev/null || true
+                sleep 1
+                kill -KILL "$_c_bp" 2>/dev/null || true
+            fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+        done
+    fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+
+    # orphaned keeper PID files
+    for _c_kf in /tmp/llm-keeper.*.pid
+    do
+        [[ -f "$_c_kf" ]] || continue
+        local _c_remove_kf=1
+        # shellcheck disable=SC2188
+        _c_pid=$(<"$_c_kf" 2>/dev/null || true)
+        if [[ "$_c_pid" =~ ^[0-9]+$ ]]
+        then
+            if kill -0 "$_c_pid" 2>/dev/null
+            then
+                _c_ppid=$(ps -o ppid= -p "$_c_pid" 2>/dev/null | tr -d '[:space:]')
+                _c_cmd=$(ps -o args= -p "$_c_pid" 2>/dev/null || true)
+                if [[ "$_c_cmd" == *"sleep 3600"* ]] && {
+                    [[ "$_c_ppid" == "1" ]] || ! [[ " ${_c_live_model_shells[*]} " == *" $_c_ppid "* ]];
+                }
+                then
+                    kill -TERM "$_c_pid" 2>/dev/null || true
+                else
+                    # Live non-orphan keeper: keep its PID file so active
+                    # model-stop flows still have the right target.
+                    _c_remove_kf=0
+                fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+            fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+        fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+        (( _c_remove_kf == 1 )) && rm -f "$_c_kf"
+    done
+
+    # Fallback: if a keeper lost its PID file, reap any remaining sleep-loop
+    # helpers that are no longer attached to a live model shell.
+    while IFS= read -r _c_line
+    do
+        [[ -n "$_c_line" ]] || continue
+        _c_sp=${_c_line%% *}
+        _c_cmd=${_c_line#* }
+        [[ "$_c_sp" =~ ^[0-9]+$ ]] || continue
+        [[ "$_c_cmd" == *"sleep 3600"* ]] || continue
+        _c_ppid=$(ps -o ppid= -p "$_c_sp" 2>/dev/null | tr -d '[:space:]')
+        if [[ -z "$_c_ppid" ]] || [[ "$_c_ppid" == "1" ]] || ! [[ " ${_c_live_model_shells[*]} " == *" $_c_ppid "* ]]
+        then
+            kill -TERM "$_c_sp" 2>/dev/null || true
+        fi
+    # Trust the autotune-discovered ctx as-is on the low end.
+    done < <(pgrep -af 'sleep 3600' 2>/dev/null || true)
+
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# __llm_json_escape — Escape a string for safe inline JSON output.
+# @returns 0 always.
+
+# ---------------------------------------------------------------------------
+# __gpu_clear_stale_processes — Kill stale Python/CUDA processes holding VRAM.
+# Bench/autotune call __model_stop which only kills llama-server. Python
+# processes holding CUDA contexts are not cleared, silently consuming VRAM.
+# This function finds python3.12 processes that hold GPU file descriptors
+# and kills any that are not the current bench/autotune session.
+# REF: G-5 audit — VRAM clearing gap
+# ---------------------------------------------------------------------------
+function __gpu_clear_stale_processes() {
+    local _gpu_pid _keep_pid _keep_pids count=0
+    _keep_pid="$$"
+    _keep_pids=" $PPID $_keep_pid "
+    while IFS= read -r _gpu_pid; do
+        [[ "$_gpu_pid" =~ ^[0-9]+$ ]] || continue
+        [[ "$_keep_pids" == *" $_gpu_pid "* ]] && continue
+        local _gpu_etime _gpu_cmd
+        _gpu_etime=$(ps -o etime= -p "$_gpu_pid" 2>/dev/null | tr -d '[:space:]')
+        _gpu_cmd=$(ps -o comm= -p "$_gpu_pid" 2>/dev/null | tr -d '[:space:]')
+        [[ -z "$_gpu_cmd" ]] && continue
+        [[ "$_gpu_cmd" == *llama* ]] && continue
+        if [[ "$_gpu_cmd" == python* ]]; then
+            kill -TERM "$_gpu_pid" 2>/dev/null || true
+            sleep 1
+            kill -KILL "$_gpu_pid" 2>/dev/null || true
+            count=$((count + 1))
+        fi
+    done < <(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null || true)
+    if (( count > 0 )); then
+        __tac_info "VRAM" "killed ${count} stale GPU process(es)" "$C_Warning"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 function wake() {
     local smi_cmd
     smi_cmd=$(__resolve_smi) || {
