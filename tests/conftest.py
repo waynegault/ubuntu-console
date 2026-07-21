@@ -53,11 +53,15 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
         return
 
     _LOCK_DIR.mkdir(mode=0o700, exist_ok=True)
-    lock_path = _LOCK_DIR / "suite.lock"
+    # Per-file lock: use the test file's stem as the lock name so
+    # unrelated suites (unit, integration, main) can run concurrently.
+    # Only the same bats file is blocked from running twice.
+    lock_name = Path(request.path).stem if hasattr(request, 'path') else "suite"
+    lock_path = _LOCK_DIR / f"{lock_name}.lock"
     with open(lock_path, "w") as lf:
         # Non-blocking poll so we surface a clear error instead of hanging
         # forever when a previous run left a stuck process holding the lock.
-        deadline = time.monotonic() + 300  # 5 min grace for a running suite
+        deadline = time.monotonic() + 60  # 1 min grace for a running suite
         while True:
             try:
                 fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
