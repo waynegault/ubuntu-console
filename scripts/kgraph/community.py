@@ -11,6 +11,7 @@ models or legacy dicts.
 from __future__ import annotations
 
 import logging
+import warnings
 
 from .models import Graph
 
@@ -127,7 +128,9 @@ def compute_centrality(graph: Graph | dict) -> dict:
         betweenness = {}
 
     try:
-        eigenvector = nx.eigenvector_centrality_numpy(G, weight="weight")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            eigenvector = nx.eigenvector_centrality_numpy(G, weight="weight")
     except (ValueError, TypeError, ZeroDivisionError, ArithmeticError) as exc:
         logger.warning("Eigenvector centrality (numpy) failed, trying fallback: %s", exc)
         try:
