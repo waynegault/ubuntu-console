@@ -51,7 +51,7 @@ drain_vram() {
         sleep 1
         waited=$((waited + 1))
         after=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}')
-        [ "$after" -le "$before" ] && break
+        [[ "$after" -le "$before" ]] && break
     done
     waited=0
     while [ "$waited" -lt 10 ]; do

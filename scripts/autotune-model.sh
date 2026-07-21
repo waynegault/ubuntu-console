@@ -35,7 +35,7 @@ ENTRY=$(grep "^${MODEL}|" "$LLM_REGISTRY" 2>/dev/null) || {
 IFS='|' read -r _num name file size _qc _arch gpu_layers _ctx _thr _ba _ub _pa _fi _be _mm _fa _tps _autotuned _isdef _vram <<< "$ENTRY"
 
 MODEL_PATH="$LLAMA_MODEL_DIR/$file"
-[ -f "$MODEL_PATH" ] || { echo "Error: File not found: $MODEL_PATH"; exit 1; }
+[[ -f "$MODEL_PATH" ]] || { echo "Error: File not found: $MODEL_PATH"; exit 1; }
 
 SIZE_INT=${size%G}; SIZE_INT=${SIZE_INT%.*}; SIZE_INT=${SIZE_INT:-1}
 [[ "$SIZE_INT" =~ ^[0-9]+$ ]] || SIZE_INT=1
