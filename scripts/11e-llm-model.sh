@@ -58,7 +58,7 @@ function __model_scan() {
         fname=$(basename "$gguf")
         local fbytes
         fbytes=$(stat --format=%s "$gguf" 2>/dev/null || stat -f%z "$gguf" 2>/dev/null)
-        (( fbytes < 500000000 )) && continue
+        (( fbytes < 300000000 )) && continue
 
         local meta
         meta=$(__gguf_metadata "$gguf")
