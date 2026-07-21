@@ -1569,31 +1569,31 @@ EOF
 # 23. MODEL DISPATCHER — Subcommand routing
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "model: model scan runs without syntax error" {
+@test "model: model scan fails gracefully when no model directory" {
     # scan looks for LLAMA_MODEL_DIR which may not exist in test env
     run model scan
-    # Either succeeds or fails gracefully (not a bash syntax error)
-    [[ "$status" -le 1 ]]
+    # Expected to fail with exit 1 when no models found
+    [[ "$status" -eq 1 ]]
 }
 
-@test "model: model list runs without syntax error" {
+@test "model: model list succeeds (empty state is valid)" {
     run model list
-    [[ "$status" -le 1 ]]
+    [[ "$status" -eq 0 ]]
 }
 
-@test "model: model status runs without syntax error" {
+@test "model: model status reports offline when server not running" {
     run model status
-    [[ "$status" -le 1 ]]
+    [[ "$status" -eq 1 ]]
 }
 
-@test "model: model stop runs without syntax error (server not running)" {
+@test "model: model stop succeeds when no server running" {
     run model stop
-    [[ "$status" -le 1 ]]
+    [[ "$status" -eq 0 ]]
 }
 
-@test "model: model info without args prints usage" {
+@test "model: model info without args shows usage" {
     run model info
-    [[ "$status" -le 1 ]]
+    [[ "$status" -eq 0 ]]
 }
 
 @test "model: unknown subcommand prints usage with Usage" {

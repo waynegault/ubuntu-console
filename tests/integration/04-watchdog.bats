@@ -73,7 +73,9 @@ setup() {
     echo "1" > "$ACTIVE_LLM_FILE"
     
     # Create fake healthy endpoint (mock curl)
-    cat > /tmp/mock_curl_healthy << 'MOCK'
+    MOCK_DIR="$TAC_TEST_TMPDIR/mocks"
+    mkdir -p "$MOCK_DIR"
+    cat > "$MOCK_DIR/mock_curl_healthy" << 'MOCK'
 #!/usr/bin/env bash
 if [[ "$*" == *"/health"* ]]; then
     echo '{"status":"ok"}'
@@ -81,19 +83,19 @@ if [[ "$*" == *"/health"* ]]; then
 fi
 /usr/bin/curl "$@"
 MOCK
-    chmod +x /tmp/mock_curl_healthy
-    
+    chmod +x "$MOCK_DIR/mock_curl_healthy"
+
     # Temporarily override curl
     local orig_curl
     orig_curl=$(command -v curl)
-    export PATH="/tmp:$PATH"
-    cp /tmp/mock_curl_healthy /tmp/curl
-    
+    export PATH="$MOCK_DIR:$PATH"
+    cp "$MOCK_DIR/mock_curl_healthy" "$MOCK_DIR/curl"
+
     run "$WATCHDOG_SCRIPT"
-    
+
     # Restore curl
-    rm /tmp/curl
-    export PATH=$(echo "$PATH" | sed 's|/tmp:||')
+    rm "$MOCK_DIR/curl"
+    export PATH=$(echo "$PATH" | sed "s|$MOCK_DIR:||")
     
     # Should exit cleanly (healthy)
     [[ "$status" -eq 0 ]]
@@ -106,7 +108,7 @@ MOCK
     run "$WATCHDOG_SCRIPT"
 
     # Should report error or exit non-zero (health check may pass in some envs)
-    [[ "$output" == *"Invalid"* ]] || [[ "$status" -ne 0 ]] || true
+    [[ "$output" == *"Invalid"* ]] || [[ "$status" -ne 0 ]]
 }
 
 @test "integration: watchdog handles missing model file" {
@@ -118,8 +120,8 @@ MOCK
 
     run "$WATCHDOG_SCRIPT"
 
-    # Should report model not found or exit non-zero (health check may pass in some envs)
-    [[ "$output" == *"not found"* ]] || [[ "$status" -ne 0 ]] || true
+    # Should report model not found or exit non-zero
+    [[ "$output" == *"not found"* ]] || [[ "$status" -ne 0 ]]
 }
 
 @test "integration: watchdog restarts native backend with tuned native flags" {

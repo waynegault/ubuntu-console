@@ -241,8 +241,8 @@ ACTIVE_LLM_FILE=$ACTIVE_LLM_FILE LLM_TPS_CACHE=$LLM_TPS_CACHE \
 LLAMA_DRIVE_ROOT=$LLAMA_DRIVE_ROOT LLM_BENCH_MODEL_TIMEOUT=10 \
 LLM_BENCH_LOCK_WAIT_SECONDS=1"
     # Use empty registry to prevent real model loading
-    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' > /tmp/.bench_trap_registry
-    local e_reg=/tmp/.bench_trap_registry
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' > "$TAC_TEST_TMPDIR/.bench_trap_registry"
+    local e_reg="$TAC_TEST_TMPDIR/.bench_trap_registry"
 
     run bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
         $vars LLM_REGISTRY=$e_reg \
