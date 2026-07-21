@@ -3,7 +3,9 @@
 import pytest
 from pydantic import ValidationError
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts"))
 
 from kgraph.models import (
@@ -11,7 +13,6 @@ from kgraph.models import (
     Graph,
     GraphBuilder,
     GraphEdge,
-    GraphMeta,
     GraphNode,
     estimate_tokens,
     slugify,

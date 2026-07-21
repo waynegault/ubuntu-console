@@ -106,7 +106,7 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
                     graph = graph.to_dict()
                 if graph.get("nodes") or graph.get("edges"):
                     return graph, name
-            except Exception as exc:
+            except (OSError, ValueError, KeyError) as exc:
                 logger.warning("Failed to load graph source %s: %s", name, exc)
 
         if has_store:
@@ -144,7 +144,7 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
             payload['_meta'] = dict(payload.get('_meta', {}))
             payload['_meta'].update(meta)
             data = json.dumps(payload)
-        except Exception as exc:
+        except (ValueError, KeyError, TypeError) as exc:
             logger.warning("Graph projection failed, falling back to sample: %s", exc)
             # final fallback to sample graph
             fallback = project_graph(SAMPLE_GRAPH, mode=req_view_mode, semantic_threshold=req_semantic)
@@ -194,7 +194,7 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
           self._send_cors_headers()
           self.end_headers()
           self.wfile.write(b'OK')
-        except Exception as e:
+        except (json.JSONDecodeError, ValueError, OSError) as e:
           self.send_response(500)
           self._send_cors_headers()
           self.end_headers()

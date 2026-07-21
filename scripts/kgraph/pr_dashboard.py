@@ -83,7 +83,7 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
                     'date': parts[3],
                     'subject': parts[4],
                 })
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         merges = [{'error': str(e)}]
 
     # Recent commits (non-merge)
@@ -111,7 +111,7 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
                     'date': parts[3],
                     'subject': parts[4],
                 })
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("Failed to parse recent merges for dashboard: %s", exc)
 
     # Files changed recently
@@ -132,7 +132,7 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
                     'status': parts[0],
                     'path': parts[1],
                 })
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("Failed to list recently changed files: %s", exc)
 
     # Active branches
@@ -149,7 +149,7 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
                     'name': line.lstrip('* ').strip(),
                     'current': is_current,
                 })
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("Failed to list active branches: %s", exc)
 
     # Authors
@@ -169,7 +169,7 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
                 name = parts[0].strip()
                 email = parts[1].strip() if len(parts) > 1 else ''
                 authors[name] = email
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("Failed to get authors list: %s", exc)
 
     return {

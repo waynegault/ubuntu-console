@@ -26,8 +26,13 @@ The following file classes are in-scope for every audit pass:
 - `tests/test_bats_bridge.py` — Pytest parametrize bridge for BATS suites
 - `tests/test_model_autotune.py` — Python tests for autotune logic
 - `tests/test_kgraph.py` — Python tests for kgraph package
+- `tests/test_models.py` — Pydantic model tests (GraphNode, GraphEdge, Graph, GraphBuilder)
+- `tests/test_untested_modules.py` — Tests for call_flow, update, life_index, benchmark, mcp_server, pr_dashboard, validate
 - `tests/conftest.py` — Pytest fixtures (BATS serialization via flock)
 - `pytest.ini` — Pytest configuration (markers, testpaths)
+- `scripts/kgraph/models.py` — Pydantic models (GraphNode, GraphEdge, Graph, GraphBuilder, ConfidenceLevel)
+- `scripts/kgraph/templates/kgraph.html` — Cytoscape.js viewer template
+- `config/concept-aliases.json` — kgraph concept classification data
 - `.git/hooks/pre-commit` — Pre-commit hook (staged-file lint only)
 - `systemd/*` — systemd unit files
 
@@ -1562,6 +1567,62 @@ Linting and bash -n run automatically before commits land
 Check for test that sources bashrc
 
 A test verifies that sourcing tactical-console.bashrc in a clean environment completes without error or hang
+
+11.8
+
+🔧 Python lint (ruff) passes
+
+`.venv/bin/python -m ruff check scripts/kgraph/ bin/model-autotune.py scripts/oc-health-check.py tests/`
+
+All checks passed — no bare excepts (BLE001), no unused imports (F401), no import order violations (E402)
+
+11.9
+
+🔧 Python tests pass
+
+`.venv/bin/python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_model_autotune.py tests/test_untested_modules.py --timeout=60 -q`
+
+173 tests pass, 0 failures
+
+11.10
+
+🔧 Pydantic models enforce schema
+
+Check `scripts/kgraph/models.py`
+
+GraphNode requires `id`; GraphEdge canonicalises `from`/`to` → `source`/`target`; GraphBuilder deduplicates; all kgraph modules accept `Graph | dict`
+
+11.11
+
+🔧 Python CI job exists
+
+Check `.github/workflows/ci.yml`
+
+`python` job runs ruff lint + pytest on Python 3.12
+
+11.12
+
+🔍 No bare `except Exception:` in Python
+
+`.venv/bin/python -m ruff check --select BLE001,S110,S112 scripts/kgraph/ bin/model-autotune.py scripts/oc-health-check.py`
+
+0 violations — all exception handlers use specific types
+
+11.13
+
+🔍 Python .venv compliance
+
+Check shebangs in `bin/model-autotune.py` and `scripts/oc-health-check.py`
+
+Shebangs point to `.venv/bin/python`, not system `python3`
+
+11.14
+
+🔍 Concept aliases externalised
+
+Check `config/concept-aliases.json` exists and `scripts/kgraph/memory_import.py` loads from it
+
+No hardcoded alias dicts in Python source; all classification data in JSON config
 
 12. llama.cpp Integration — Medium
 

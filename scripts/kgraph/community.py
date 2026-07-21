@@ -74,7 +74,7 @@ def detect_communities(graph: Graph | dict, method: str = "leiden_like", **kwarg
             comms = list(louvain_communities(G, weight="weight", seed=42))
         else:
             comms = list(greedy_modularity_communities(G, weight="weight"))
-    except Exception as exc:
+    except (ValueError, ZeroDivisionError) as exc:
         logger.warning("Community detection failed, returning unclustered graph: %s", exc)
         return graph
 
@@ -122,17 +122,17 @@ def compute_centrality(graph: Graph | dict) -> dict:
     degree = dict(G.degree())
     try:
         betweenness = nx.betweenness_centrality(G, weight="weight", k=min(200, G.number_of_nodes()))
-    except Exception as exc:
+    except (ValueError, ZeroDivisionError) as exc:
         logger.warning("Betweenness centrality computation failed: %s", exc)
         betweenness = {}
 
     try:
         eigenvector = nx.eigenvector_centrality_numpy(G, weight="weight")
-    except Exception as exc:
+    except (ValueError, TypeError, ZeroDivisionError, ArithmeticError) as exc:
         logger.warning("Eigenvector centrality (numpy) failed, trying fallback: %s", exc)
         try:
             eigenvector = nx.eigenvector_centrality(G, max_iter=200)
-        except Exception as exc2:
+        except (ValueError, TypeError, ZeroDivisionError, ArithmeticError) as exc2:
             logger.warning("Eigenvector centrality fallback also failed: %s", exc2)
             eigenvector = {}
 

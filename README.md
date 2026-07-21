@@ -381,6 +381,13 @@ See `docs/openclaw.md` for full reference.
 Graph views: `overview` (default), `topics`, `files`, `semantic`, `raw`.
 A React + AntV G6 dev frontend lives in `frontend-g6/` (Vite port 5173).
 
+**Architecture:** All graph data flows through Pydantic models (`GraphNode`,
+`GraphEdge`, `Graph`, `GraphBuilder`) defined in `scripts/kgraph/models.py`.
+Edge endpoints are canonicalised to `source`/`target` (legacy `from`/`to`
+auto-mapped). Concept aliases and classification data are externalised to
+`config/concept-aliases.json`. The HTML viewer template lives in
+`scripts/kgraph/templates/kgraph.html`.
+
 ### Key Paths
 
 | Path | Purpose |
@@ -555,7 +562,8 @@ function __get_METRIC() {
 ├── env.sh                             # Non-interactive library loader (all modules except 13-init.sh)
 ├── install.sh                         # Idempotent installer
 ├── config/
-│   └── quant-guide.conf               # Quantization priority ratings (editable)
+│   ├── quant-guide.conf               # Quantization priority ratings (editable)
+│   └── concept-aliases.json           # kgraph concept classification data
 ├── bin/
 │   ├── tac-exec                       # Bootstrap: source env.sh + exec "$@"
 │   ├── tac_hostmetrics.sh             # Host CPU + iGPU + NVIDIA dGPU load/engines
@@ -582,7 +590,9 @@ function __get_METRIC() {
 │   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
 │   ├── 14-wsl-extras.sh               #   WSL/X11 helpers, completions, vault env
 │   ├── 15-model-recommender.sh        #   AI model recommendations by use case
-│   └── kgraph/                        #   Knowledge graph Python package
+│   └── kgraph/                        #   Knowledge graph Python package (Pydantic models)
+│       ├── models.py                  #     GraphNode, GraphEdge, Graph, GraphBuilder
+│       └── templates/kgraph.html      #     Cytoscape.js viewer template
 ├── tools/                             # Standalone utility scripts (not sourced)
 │   ├── check-agent-use.sh             #   Agent usage regression checker
 │   ├── import-windows-env.sh          #   Import Windows user environment variables
@@ -592,10 +602,14 @@ function __get_METRIC() {
 ├── docs/                              # Reference documentation
 │   ├── AGENT-GUIDELINES.md            #   AI agent operating manual
 │   ├── architecture.md                #   Developer guide and module details
+│   ├── autotune_spec.md               #   Model autotune functional spec
+│   ├── inspection.md                  #   Audit checklist
 │   ├── llm.md                         #   Local LLM stack reference
 │   ├── openclaw.md                    #   OpenClaw integration guide
+│   ├── pwsh-build-prompt.md           #   PowerShell translation strategy + AI build prompt
 │   ├── reference.md                   #   Command reference + dashboard
-│   └── troubleshooting.md             #   Diagnostics and fixes
+│   ├── troubleshooting.md             #   Diagnostics and fixes
+│   └── contracts/                     #   PowerShell translation contracts (YAML)
 ├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
@@ -605,7 +619,8 @@ function __get_METRIC() {
 │   ├── test_bats_bridge.py            # Pytest parametrize bridge for all BATS suites
 │   ├── test_model_autotune.py         # Python tests for autotune logic
 │   ├── test_kgraph.py                 # Python tests for kgraph package
-│   ├── audit_report.md                # Test infrastructure audit
+│   ├── test_models.py                 # Pydantic model tests (36 tests)
+│   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
 │   ├── unit/                          # BATS unit tests (33 tests)
 │   └── integration/                   # BATS integration tests (109 tests)
 └── systemd/
@@ -666,7 +681,7 @@ function __get_METRIC() {
 | `openclaw` CLI | All `oc-*` commands |
 
 **Not required for LLM streaming:** Python (streaming is pure bash + curl + jq), Ruby, Docker.
-**Required for `oc g` / kgraph tooling:** Python 3.
+**Required for `oc g` / kgraph tooling:** Python 3.12+, `pydantic>=2.0`, `networkx>=3.0` (declared in `scripts/pyproject.toml`).
 
 ---
 

@@ -52,7 +52,7 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
         try:
             mem_graph = load_from_memory_db(mem_db_path)
             builder.merge(mem_graph)
-        except Exception as exc:
+        except (OSError, ValueError, KeyError) as exc:
             logger.warning("Memory DB import failed: %s", exc)
 
     # 3. AST extraction
@@ -69,7 +69,7 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
                 builder.merge(ast_graph)
                 logger.info("AST: %d nodes, %d edges from %s",
                             len(ast_graph["nodes"]), len(ast_graph["edges"]), source_dir)
-        except Exception as exc:
+        except (OSError, ValueError, KeyError) as exc:
             logger.warning("AST extraction failed: %s", exc)
 
     graph = builder.build()
@@ -160,5 +160,5 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
                 from .graph_db import load_from_graph_db
                 reloaded = load_from_graph_db(graph_db_path)
                 print(f"  Rebuilt: {len(reloaded.nodes)} nodes, {len(reloaded.edges)} edges")
-            except Exception as exc:
+            except (OSError, ValueError, KeyError) as exc:
                 logger.warning("Rebuild failed: %s", exc)
