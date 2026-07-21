@@ -123,6 +123,7 @@ setup_file() {
 @test "hygiene: all scripts end with # end of file marker" {
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh \
              "$REPO_ROOT"/tools/lint.sh \
@@ -137,6 +138,7 @@ setup_file() {
 @test "hygiene: no carriage returns in any script" {
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh; do
         [[ -f "$f" ]] || continue
@@ -149,6 +151,7 @@ setup_file() {
 @test "hygiene: no tabs in core scripts" {
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh; do
         [[ -f "$f" ]] || continue
@@ -165,6 +168,7 @@ setup_file() {
     local max_width=200  # relaxed limit for UI/jq display lines
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh \
              "$REPO_ROOT"/tools/lint.sh \
@@ -179,6 +183,7 @@ setup_file() {
 @test "hygiene: no UTF-8 BOM in any script" {
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \
+             "$REPO_ROOT"/scripts/[0-9][0-9][a-z]-*.sh \
              "$REPO_ROOT"/bin/*.sh \
              "$REPO_ROOT"/install.sh; do
         [[ -f "$f" ]] || continue

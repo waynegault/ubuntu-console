@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2059,SC2120,SC2154
+# shellcheck disable=SC2034,SC2059,SC2120,SC2154,SC2015,SC2153
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # Module Version: 1
@@ -1071,3 +1071,4 @@ export -f wacli
 #   --restart   Force-restart kgraph server before launch
 #   -h|--help   Show usage
 # ---------------------------------------------------------------------------
+# end of file

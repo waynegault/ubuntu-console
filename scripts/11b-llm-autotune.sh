@@ -570,3 +570,4 @@ function __llm_median_from_list() {
 # __llm_active_entry — Resolve the currently active model to a registry row.
 # @returns 0 on success, 1 if no active model state is recorded or it is stale.
 # ---------------------------------------------------------------------------
+# end of file

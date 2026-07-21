@@ -2627,7 +2627,7 @@ EOF
 @test "openclaw: oc function is defined and is a dispatcher" {
     declare -f oc >/dev/null
     # oc should contain case statement for subcommand dispatch
-    grep -q 'case.*in' "$REPO_ROOT/scripts/09-openclaw.sh"
+    declare -f oc | grep -q 'case.*in'
 }
 
 # end of file

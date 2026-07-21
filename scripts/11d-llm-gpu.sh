@@ -777,4 +777,4 @@ function __renumber_registry() {
 # __model_scan
 # @description Scan GGUF files, regenerate the registry, and archive discouraged quants.
 # @returns 0 on success, 1 if the model drive is unavailable or no models are found.
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------# end of file

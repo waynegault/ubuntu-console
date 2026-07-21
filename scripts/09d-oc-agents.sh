@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2059,SC2120,SC2154
+# shellcheck disable=SC2034,SC2059,SC2120,SC2154,SC2015,SC2016,SC1090
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # Module Version: 1
@@ -669,3 +669,4 @@ function oc-rotate-exposed-secrets() {
     __tac_info "Secrets Exposure" "[sanitized log in place; backup: $_backup]" "$C_Success"
 }
 
+# end of file

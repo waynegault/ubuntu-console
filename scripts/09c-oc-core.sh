@@ -329,3 +329,4 @@ function oc-purge() {
 #   4. Render a formatted table with token usage, cap%, and colored bars
 #   5. Cache the rendered text to /dev/shm/oc_agent_use.txt (5s TTL)
 # ---------------------------------------------------------------------------
+# end of file

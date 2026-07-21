@@ -616,3 +616,4 @@ function __oc_safe_gateway_shutdown() {
     rm -f "$OC_ROOT/supervisor.lock"
 }
 
+# end of file

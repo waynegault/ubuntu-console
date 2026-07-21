@@ -484,4 +484,4 @@ function __llm_tps_number() {
 # wake — Lock the GPU into persistent mode to prevent WDDM sleep in WSL2.
 # NOTE: Persistence mode (-pm 1) is a runtime setting and does NOT survive
 # WSL restarts. You must re-run 'wake' after each 'wsl --shutdown'.
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------# end of file
