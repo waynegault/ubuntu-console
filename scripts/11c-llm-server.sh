@@ -28,13 +28,11 @@ function __llm_is_healthy() {
     then
         return 0
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     models_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$LLM_PORT/v1/models" 2>/dev/null || true)
     if [[ "$models_body" == *'"data"'* ]]
     then
         return 0
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Some OpenAI-compatible variants return object=list first; accept that
     # as a readiness signal when the process is bound and responding.
@@ -54,7 +52,6 @@ function __llm_server_running() {
     else
         pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 }
 
 function __llm_server_stop() {
@@ -77,7 +74,6 @@ function __llm_server_stop() {
     else
         _pg_out=$(pgrep -f "$_proc_re" 2>/dev/null || true)
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     while IFS= read -r _pid
     do
         [[ -z "$_pid" ]] && continue
@@ -89,13 +85,11 @@ function __llm_server_stop() {
     then
         _pids+=("$_llm_pid")
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     if (( ${#_pids[@]} == 0 ))
     then
         return 0
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     for _pid in "${_pids[@]}"
     do
@@ -112,7 +106,6 @@ function __llm_server_stop() {
         else
             _pg_out=$(pgrep -f "$_proc_re" 2>/dev/null || true)
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         while IFS= read -r _pid
         do
             [[ -z "$_pid" ]] && continue
@@ -160,9 +153,7 @@ function __llm_server_stop() {
                 _mem_waited=$(( _mem_waited + 1 ))
             done
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     sleep 0.5
 
     return 0
@@ -189,7 +180,6 @@ function __llm_python_bin_resolve() {
         else
             resolved=$(command -v "$cand" 2>/dev/null || true)
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         [[ -z "$resolved" ]] && continue
 
         if "$resolved" - <<'PY' >/dev/null 2>&1
@@ -206,7 +196,6 @@ PY
             printf '%s\n' "$resolved"
             return 0
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     done
 
     return 1
@@ -229,7 +218,6 @@ function __llm_type_k_value() {
             else
                 echo 8
             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
             ;;
     esac
 }
@@ -249,7 +237,6 @@ function __llm_health_timeout() {
     then
         size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     if (( gpu_layers == _GPU_OFFLOAD_DISABLED ))
     then
@@ -267,13 +254,11 @@ function __llm_health_timeout() {
     then
         timeout=120
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -n "${__BENCH_MODE:-}" && $timeout -lt 80 ]]
     then
         timeout=80
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     printf '%s\n' "$timeout"
 }
@@ -298,7 +283,6 @@ function __llm_burn_request_timeout() {
     else
         timeout="${LLM_BURN_REQUEST_TIMEOUT:-360}"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # If the caller explicitly set LLM_BURN_REQUEST_TIMEOUT (not defaulted),
     # respect it unconditionally — no model-size floor. This allows autotune
@@ -310,7 +294,6 @@ function __llm_burn_request_timeout() {
         then
             size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
         if (( gpu_layers == _GPU_OFFLOAD_DISABLED ))
         then
@@ -328,9 +311,7 @@ function __llm_burn_request_timeout() {
         then
             (( timeout < 480 )) && timeout=480
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     printf '%s\n' "$timeout"
 }
@@ -348,7 +329,6 @@ function __llm_gpu_clock_snapshot() {
         printf '%s\n' "unavailable"
         return 0
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     local sample
     sample=$(
@@ -360,7 +340,6 @@ function __llm_gpu_clock_snapshot() {
         printf '%s\n' "unavailable"
         return 0
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     local pstate gr sm mem util
     IFS=',' read -r pstate gr sm mem util <<< "$sample"
@@ -403,9 +382,7 @@ function __llm_bench_perf_prep() {
             _pwr=$(printf '%s' "$_pwr" | xargs)
             _gpu_line="$_pstate  ${_gr}/${_sm}/${_mem} MHz  ${_temp}°C  ${_pwr}W ✓"
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     [[ -z "$_gpu_line" ]] && _gpu_line="GPU info unavailable"
     printf "${C_Dim}  %s${C_Reset}\n" "$_gpu_line"
     __tac_footer
@@ -428,7 +405,6 @@ function __llm_wait_for_health() {
     then
         printf '%s' "${C_Dim}${label}${C_Reset}"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     for (( _elapsed_ref=0; _elapsed_ref < timeout; _elapsed_ref++ ))
     do
@@ -437,7 +413,6 @@ function __llm_wait_for_health() {
             [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
             return 0
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         [[ "$progress_mode" == "dots" ]] && printf '.'
         sleep 1
     done
@@ -454,12 +429,10 @@ function __llm_wait_for_health() {
                 [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
                 return 0
             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
             [[ "$progress_mode" == "dots" ]] && printf '+'
             sleep 1
         done
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     [[ "$progress_mode" == "dots" ]] && printf '%s\n' "$C_Reset"
     return 1
@@ -476,7 +449,6 @@ function __llm_quant_rating() {
         printf '%s\n' "unknown"
         return 0
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     local rating="unknown"
     local _r _pat _desc
@@ -488,7 +460,6 @@ function __llm_quant_rating() {
             rating="$_r"
             break
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     done < "$QUANT_GUIDE"
     printf '%s\n' "$rating"
 }
@@ -507,7 +478,6 @@ function __llm_tps_number() {
     else
         printf '%s\n' "0"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 }
 
 # ---------------------------------------------------------------------------

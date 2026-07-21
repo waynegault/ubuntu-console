@@ -430,7 +430,7 @@ alias wtf='wtf_repl'
 
 # ---- Project Shortcuts ----
 # inv — Enter investigator project and run its CLI.
-alias inv='cd /home/wayne/investigator && .venv/bin/python3 -m pipeline.cli'
+alias inv='cd "$HOME/investigator" && .venv/bin/python3 -m pipeline.cli'
 
 # ---- System Maintenance ----
 # wsl-up — Update WSL kernel and Microsoft distribution (requires Windows).

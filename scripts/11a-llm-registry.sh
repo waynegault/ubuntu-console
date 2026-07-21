@@ -58,13 +58,11 @@ function __require_llm() {
         printf '%s\n' "${C_Error}[jq missing]${C_Reset} Install: sudo apt install -y jq"
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     if ! __test_port "$LLM_PORT" >/dev/null 2>&1
     then
         __tac_info "Llama Server" "[OFFLINE]" "$C_Error"
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     return 0
 }
 
@@ -157,14 +155,12 @@ function __llm_registry_sync_state() {
     then
         running=1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -f "$ACTIVE_LLM_FILE" ]]
     then
         active_num=$(< "$ACTIVE_LLM_FILE")
         active_file=$(awk -F'|' -v n="$active_num" '$1==n {print $3; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     awk -F'|' -v def="$default_file" -v af="$active_file" -v run="$running" 'BEGIN {
             OFS="|"

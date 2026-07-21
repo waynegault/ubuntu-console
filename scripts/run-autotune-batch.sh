@@ -19,7 +19,8 @@
 
 set -uo pipefail
 
-cd /home/wayne/ubuntu-console || exit 1
+_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$_SELF_DIR/.." || exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
 
 # Parse model list

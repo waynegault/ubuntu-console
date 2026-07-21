@@ -1,5 +1,14 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2034,SC2059,SC2120,SC2154
+# --- Module: 09f-oc-misc ---
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
+# ==============================================================================
+# 09f-oc-misc — Miscellaneous OC commands (kgraph, stinger, mem-index)
+# ==============================================================================
+
 function oc-kgraph() {
-    local KG_PKG="$TACTICAL_REPO_ROOT/scripts/kgraph",SC2154
+    local KG_PKG="$TACTICAL_REPO_ROOT/scripts/kgraph"
     if [[ ! -d "$KG_PKG" ]]; then
         __tac_info "kgraph" "[NOT FOUND: $KG_PKG]" "$C_Error"
         return 1

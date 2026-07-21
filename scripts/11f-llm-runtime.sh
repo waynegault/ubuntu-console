@@ -38,10 +38,8 @@ function serve() {
             printf '%s\n' "${C_Error}[Not a number: '--ctx-size' = '$ctx_override']${C_Reset}"
             return 1
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         export TAC_CTX_SIZE="$ctx_override"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -n "$model_arg" ]]
     then
@@ -63,12 +61,9 @@ function serve() {
                 __tac_info "Local LLM" "[NO DEFAULT SET]" "$C_Error"
                 printf '%s\n' "  ${C_Dim}Run 'model default <N>' to configure one.${C_Reset}"
             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
             return 1
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 }
 # halt — Stop the currently running LLM model.
 function halt() {
@@ -88,10 +83,8 @@ function mlogs() {
             __tac_info "LLM Log" "[NOT FOUND: $LLM_LOG_FILE]" "$C_Warning"
             printf '%s\n' "  ${C_Dim}LLM may not have started yet.${C_Reset}"
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         return 0
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     __resolve_vscode_bin
     "$VSCODE_BIN" "$LLM_LOG_FILE"
     echo "VS Code opened..."
@@ -108,7 +101,6 @@ function burn() {
     then
         __tac_header "HARDWARE BURN-IN STRESS TEST"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Wait for the model to finish loading before sending the completion request.
     # The port may be open (passes __require_llm) but the server returns 503
@@ -129,9 +121,7 @@ function burn() {
             __tac_info "Status" "Model failed to become healthy - check: tail $LLM_LOG_FILE" "$C_Error"
             return 1
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     local bench_tokens="${LLM_BENCH_BURN_TOKENS:-768}"
     [[ "$bench_tokens" =~ ^[0-9]+$ ]] || bench_tokens=768
@@ -158,7 +148,6 @@ function burn() {
         payload=$(jq -n --arg p "$prompt" \
             '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     local request_timeout=360
     if [[ -f "$ACTIVE_LLM_FILE" && -f "$LLM_REGISTRY" ]]
@@ -173,9 +162,7 @@ function burn() {
                 _burn_gpu _ctx _threads _tps <<< "$_burn_entry"
             request_timeout=$(__llm_burn_request_timeout "${_burn_size:-0G}" "${_burn_gpu:-0}" "${_arch:-}" "${__BENCH_MODE:-}")
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     local start_ns end_ns response curl_rc
     local transport_history=""
@@ -192,9 +179,7 @@ function burn() {
         else
             max_attempts=3
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     (( max_attempts < 1 )) && max_attempts=1
     [[ "$retry_health_wait" =~ ^[0-9]+$ ]] || retry_health_wait=30
     (( retry_health_wait < 1 )) && retry_health_wait=1
@@ -236,9 +221,7 @@ function burn() {
                         '{messages: [{role: "user", content: $p}], max_tokens: $bench_tokens, temperature: $bench_temp, top_p: 1.0}')
                     printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Retrying with ${bench_tokens} tokens after transient failure."
                 fi
-    # Trust the autotune-discovered ctx as-is on the low end.
             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
             local _rh
             local _healthy=0
             for (( _rh=0; _rh < retry_health_wait; _rh++ ))
@@ -268,17 +251,13 @@ function burn() {
                                 [[ "$_pf_rc" == "200" ]] && break
                             done
                         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
                     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
                     if (( retry_settle_sec > 0 ))
                     then
                         sleep "$retry_settle_sec"
                     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
                     break
                 fi
-    # Trust the autotune-discovered ctx as-is on the low end.
                 sleep 1
             done
 
@@ -317,23 +296,18 @@ function burn() {
                                 printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Model recovered; retrying request."
                                 break
                             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
                             sleep 1
                         done
                     fi
                     # Restore original ctx after the recovery attempt so subsequent
                     # health checks and retries use the configured value.
                     export LLAMA_N_CTX="$_burn_saved_ctx"
-    # Trust the autotune-discovered ctx as-is on the low end.
                 fi
-    # Trust the autotune-discovered ctx as-is on the low end.
             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
             attempt=$(( attempt + 1 ))
             continue
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
         # Retry once if server returned 503 "Loading model" (readiness race:
         # /health reports ok before the model slot is fully ready to serve).
@@ -360,9 +334,7 @@ function burn() {
                 attempt=$(( attempt + 1 ))
                 continue
             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
         break
     done
@@ -374,7 +346,6 @@ function burn() {
     "(model likely still computing, not necessarily crashed)."
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     if (( curl_rc != 0 ))
     then
         [[ -n "$transport_history" ]] && transport_history+=","
@@ -382,14 +353,12 @@ function burn() {
         printf '%s\n' "${C_Error}[API Transport Error]${C_Reset} curl exit ${curl_rc} while calling local server (attempts: ${attempt}/${max_attempts}; rc history: ${transport_history:-$curl_rc})."
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -z "$response" ]]
     then
         printf '%s\n' "${C_Error}[API Error]${C_Reset} Empty response from local server."
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Check for HTTP-level error in response body
     local err_msg
@@ -399,7 +368,6 @@ function burn() {
         printf '%s\n' "${C_Warning}[API Status]${C_Reset} $err_msg"
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     local elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
     local elapsed_s=$(( elapsed_ms / 1000 ))
@@ -412,7 +380,6 @@ function burn() {
     then
         tokens=$(printf '%s' "$response" | jq -r '.choices[0].message.content // ""' 2>/dev/null | wc -w)
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     local tps_int=0 tps_dec=0
     if (( elapsed_ms > 0 && tokens > 0 ))
@@ -421,13 +388,11 @@ function burn() {
         tps_int=$(( tps_x10 / 10 ))
         tps_dec=$(( tps_x10 % 10 ))
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ -z "${__BENCH_MODE:-}" ]]
     then
         printf '%s\n' "${C_Dim}Hint: If inference was slow, first run \"wake\" to lock WDDM state.${C_Reset}"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     printf '%s\n' \
         "${C_Success}Burn complete: ${tps_int}.${tps_dec} tps" \
         "(${tokens} tokens in ${elapsed_s}.${elapsed_dec}s)${C_Reset}"
@@ -450,7 +415,6 @@ function explain() {
         __tac_line "Explain" "[NO PREVIOUS COMMAND FOUND]" "$C_Warning"
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     __llm_stream "Explain this bash command and diagnose any potential errors:\n$last_cmd"
 }
 
@@ -471,7 +435,6 @@ function wtf_repl() {
     then
         __llm_stream "Explain how to use the following tool or concept:\n$initial"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     printf '%s\n' "${C_Dim}wtf: mode - type a topic (or 'end-chat' / Ctrl-C to exit)${C_Reset}"
     while true
     do
@@ -517,7 +480,6 @@ function __llm_sse_core() {
             response_text+="$content"
             ((++chunk_count))
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
         local srv_tok
         srv_tok=$(printf '%s' "$payload_data" | jq -r '.usage.completion_tokens // empty' 2>/dev/null)
@@ -534,7 +496,6 @@ function __llm_sse_core() {
     then
         tokens=$chunk_count
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     if (( tokens > 0 && elapsed_ms > 0 ))
     then
@@ -548,7 +509,6 @@ function __llm_sse_core() {
     else
         echo
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     [[ -f "$LLM_TPS_CACHE" ]] && LAST_TPS=$(< "$LLM_TPS_CACHE")
     __LAST_LLM_RESPONSE="$response_text"
@@ -575,7 +535,6 @@ function __llm_stream() {
     else
         payload=$(jq -n --arg p "$prompt" '{messages: [{role: "user", content: $p}], stream: true}')
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     (( show_header == 1 )) && printf '\n%s\n\n' "${C_Highlight}AI Analysis:${C_Reset}"
 
@@ -632,7 +591,6 @@ function local_chat() {
                 | jq --arg m "$__LAST_LLM_RESPONSE" \
                 '. + [{role: "assistant", content: $m}]')
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     }
 
     local initial="$*"
@@ -641,7 +599,6 @@ function local_chat() {
     then
         __send_chat_msg "$initial"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     printf '%s\n' "${C_Dim}chat: mode - type a message (or 'end-chat' / 'save' / Ctrl-C to exit)${C_Reset}"
     while true
     do
@@ -659,7 +616,6 @@ function local_chat() {
                 || printf '%s\n' "${C_Error}Failed to save${C_Reset}"
             continue
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         __send_chat_msg "$msg"
     done
 
@@ -678,7 +634,6 @@ function chat-context() {
         printf '%s\n' "${C_Dim}Usage:${C_Reset} chat-context <file> \"question about this file\""
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     local file="$1"; shift
     local question="$*"
     if [[ ! -f "$file" ]]
@@ -686,7 +641,6 @@ function chat-context() {
         __tac_info "File" "[NOT FOUND: $file]" "$C_Error"
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     __require_llm || return 1
     # Cap file content to stay within context window (configurable via env)
     local max_chars="${CHAT_CONTEXT_MAX:-16000}"
@@ -709,7 +663,6 @@ function chat-pipe() {
         __tac_info "stdin" "[EMPTY - pipe some content]" "$C_Error"
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     local question="${*:-Explain this.}"
     __llm_stream "${ctx}\n\n${question}"
 }

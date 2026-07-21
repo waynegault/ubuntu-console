@@ -201,7 +201,7 @@ function oc() {
         local-llm)     oc-local-llm "$@" ;;
         sync-models)   oc-sync-models "$@" ;;
         # Tools
-        unittest)      /home/wayne/.openclaw/workspace/unit-test/run-all-tests.sh ;;
+        unittest)      "$HOME/.openclaw/workspace/unit-test/run-all-tests.sh" ;;
         g)             oc-kgraph "$@" ;;
         *)
             printf '%s\n' "${C_Error}Unknown subcommand:${C_Reset} $sub"

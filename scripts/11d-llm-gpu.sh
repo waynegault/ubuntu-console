@@ -23,7 +23,6 @@ function __tac_cleanup_stale_locks() {
         then
             _c_live_model_shells+=("$_c_ms_pid")
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     done
 
     # bench lock + pid — also check custom paths used by non-default configs
@@ -41,7 +40,6 @@ function __tac_cleanup_stale_locks() {
             then
                 rm -f "$_c_lock"
             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         else
             # shellcheck disable=SC2188
             _c_pid=$(<"$_c_lock" 2>/dev/null || true)
@@ -49,9 +47,7 @@ function __tac_cleanup_stale_locks() {
             then
                 rm -f "$_c_lock"
             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     done
 
     # bench PID file — check custom path too
@@ -67,9 +63,7 @@ function __tac_cleanup_stale_locks() {
         else
             _c_bench_active=1
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Bench lock ownership is cooperative: the lock file stores owner PID.
     # Treat bench as active only when that owner PID is alive. An orphaned
@@ -84,9 +78,7 @@ function __tac_cleanup_stale_locks() {
         then
             _c_bench_active=1
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # orphaned stdin keepers
     _c_my_pid=$$
@@ -104,9 +96,7 @@ function __tac_cleanup_stale_locks() {
             then
                 kill -TERM "$_c_sp" 2>/dev/null || true
             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     done
 
     # orphaned bench timeout wrappers (left behind after interrupted runs)
@@ -125,10 +115,8 @@ function __tac_cleanup_stale_locks() {
                 sleep 1
                 kill -KILL "$_c_bp" 2>/dev/null || true
             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         done
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # orphaned keeper PID files
     for _c_kf in /tmp/llm-keeper.*.pid
@@ -153,11 +141,8 @@ function __tac_cleanup_stale_locks() {
                     # model-stop flows still have the right target.
                     _c_remove_kf=0
                 fi
-    # Trust the autotune-discovered ctx as-is on the low end.
             fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         (( _c_remove_kf == 1 )) && rm -f "$_c_kf"
     done
 
@@ -175,7 +160,6 @@ function __tac_cleanup_stale_locks() {
         then
             kill -TERM "$_c_sp" 2>/dev/null || true
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     done < <(pgrep -af 'sleep 3600' 2>/dev/null || true)
 
     return 0
@@ -236,7 +220,6 @@ function wake() {
         # NVML unavailable (WSL2/driver limitation) — GPU still works for inference
         return 0
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Check for actual failure (sudo denied or other error)
     if (( _pm_status != 0 ))
@@ -247,10 +230,8 @@ function wake() {
         else
             __tac_info "GPU Persistence" "[FAILED - nvidia-smi error: $_pm_output]" "$C_Warning"
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_info "GPU Persistence" "[ENABLED]" "$C_Success"
 
@@ -267,7 +248,6 @@ function wake() {
         __tac_info "VRAM" "${g_used} MiB / ${g_total} MiB" "$C_Text"
         __tac_info "Temp" "${g_temp}${DEGREE}C" "$C_Text"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     printf '%s\n' "${C_Dim}Note: -pm 1 does not survive WSL restarts. Re-run 'wake' after reboot.${C_Reset}"
 }
 
@@ -294,7 +274,6 @@ function gpu-status() {
         then
             util_n=0
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         local color
         color=$(__threshold_color "$util_n")
 
@@ -315,7 +294,6 @@ function gpu-status() {
     else
         __tac_info "Persist" "OFF (run 'wake' to enable)" "$C_Warning"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     __tac_footer
 }
 
@@ -337,7 +315,6 @@ function gpu-check() {
         __tac_info "Tip" "In WSL run: nvidia-smi  (if this fails, CUDA is unavailable)" "$C_Dim"
         __tac_footer; return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     __tac_info "nvidia-smi" "OK" "$C_Success"
 
     # 2. CUDA device visible?
@@ -348,7 +325,6 @@ function gpu-check() {
         __tac_info "CUDA Device" "NONE DETECTED" "$C_Error"
         __tac_footer; return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     __tac_info "CUDA Device" "$gpu_name" "$C_Success"
 
     # 3. VRAM status
@@ -361,7 +337,6 @@ function gpu-check() {
         used="${used// /}"; total="${total// /}"
         __tac_info "VRAM" "${used} MiB / ${total} MiB" "$C_Text"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # 4. llama-server CUDA offload (check the runtime log)
     if __llm_server_running && [[ -f "$LLM_LOG_FILE" ]]
@@ -377,7 +352,6 @@ function gpu-check() {
         then
             __tac_info "CUDA Init" "${cuda_line##*: }" "$C_Success"
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -n "$offload_line" ]]
         then
             __tac_info "Offload" "${offload_line##*: }" "$C_Success"
@@ -387,11 +361,9 @@ function gpu-check() {
         else
             __tac_info "Offload" "No CUDA references in log - may be CPU-only build" "$C_Error"
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     else
         __tac_info "Server" "Not running - start a model to verify offloading" "$C_Dim"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     __tac_footer
 }
@@ -565,7 +537,6 @@ function __calc_gpu_layers() {
         echo "${_total_layers:-0}"
         return
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Full offload when the model fits in usable VRAM, otherwise CPU-only.
     if (( _file_bytes <= usable_vram ))
@@ -574,7 +545,6 @@ function __calc_gpu_layers() {
     else
         echo 0
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 }
 
 # __calc_ctx_size — Pick a practical context size.
@@ -674,12 +644,10 @@ function __bench_resolve_files() {
         printf '%s|%s\n' "$1" "$2"
         return 0
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     if (( $# != 0 ))
     then
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     local latest_files=()
     while IFS= read -r bench_file
@@ -692,7 +660,6 @@ function __bench_resolve_files() {
     then
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # newest first from ls -t; diff should read old -> new
     printf '%s|%s\n' "${latest_files[1]}" "${latest_files[0]}"
@@ -726,7 +693,6 @@ function __calc_threads() {
     else
         pct=70
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     local threads=$(( ncpu * pct / 100 ))
     (( threads < 1 )) && threads=1
@@ -762,7 +728,6 @@ function __quant_label() {
             | tr '[:lower:]' '[:upper:]')
         [[ -n "$extracted" ]] && label="$extracted"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     echo "${label:-unknown}"
 }
 

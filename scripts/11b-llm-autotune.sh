@@ -63,12 +63,10 @@ function __llm_autotune_blob_upsert() {
         then
             continue
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         if [[ -n "$out" ]]
         then
             out+=";"
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         out+="$rec"
     done
 
@@ -77,7 +75,6 @@ function __llm_autotune_blob_upsert() {
     then
         out+=";"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     out+="$new_entry"
     printf '%s\n' "$out"
 }
@@ -110,7 +107,6 @@ function __llm_autotune_done_for_model() {
     then
         requested_backend=$(__llm_backend_normalize "$requested_backend")
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Awk exits 0 if the entry exists AND autotuned=yes for the requested
     # backend, 1 if not found or not yet tuned for that runtime.
@@ -241,14 +237,12 @@ function __llm_autotune_verify_winner() {
         __model_stop >/dev/null 2>&1 || true
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     if ! burn >"$verify_log" 2>&1
     then
         __model_stop >/dev/null 2>&1 || true
         return 1
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     local verify_tps
     verify_tps=$(sed -n 's/.*Burn complete: \([0-9][0-9]*\(\.[0-9][0-9]*\)\?\) tps.*/\1/p' "$verify_log" | tail -n1)
@@ -259,7 +253,6 @@ function __llm_autotune_verify_winner() {
         printf '%s' "$verify_tps"
         return 0
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     return 1
 }
 
@@ -326,7 +319,6 @@ function __llm_autotune_estimate_ctx_start() {
         estimate=12288
         model_baseline_ctx=12288
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Saved ctx should not drag the starting point downward when stale.
     # Use it only to raise the baseline unless we also have saved TPS, where
@@ -335,7 +327,6 @@ function __llm_autotune_estimate_ctx_start() {
     then
         estimate="$saved_ctx"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     if [[ "$saved_ctx" =~ ^[0-9]+$ ]] && [[ "$saved_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "$min_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v m="$min_tps" 'BEGIN{exit !(m>0)}'
     then
@@ -348,7 +339,6 @@ function __llm_autotune_estimate_ctx_start() {
         }')
         [[ "$scaled_estimate" =~ ^[0-9]+$ ]] && estimate="$scaled_estimate"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Dynamic start floor: estimate from model class and live free VRAM.
     # Optional override is supported via LLM_AUTOTUNE_START_FLOOR_CTX.
@@ -378,7 +368,6 @@ function __llm_autotune_estimate_ctx_start() {
                 print c;
             }')
         fi
-    # Trust the autotune-discovered ctx as-is on the low end.
         [[ "$dynamic_start_floor" =~ ^[0-9]+$ ]] || dynamic_start_floor="$model_baseline_ctx"
     elif (( model_bytes >= 1800000000 && max_ctx > 0 ))
     then
@@ -392,7 +381,6 @@ function __llm_autotune_estimate_ctx_start() {
         }')
         [[ "$dynamic_start_floor" =~ ^[0-9]+$ ]] || dynamic_start_floor="$model_baseline_ctx"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
     (( dynamic_start_floor > max_ctx )) && dynamic_start_floor="$max_ctx"
     dynamic_start_floor=$(( (dynamic_start_floor / 512) * 512 ))
     (( dynamic_start_floor < model_baseline_ctx )) && dynamic_start_floor="$model_baseline_ctx"
@@ -400,7 +388,6 @@ function __llm_autotune_estimate_ctx_start() {
     then
         estimate="$dynamic_start_floor"
     fi
-    # Trust the autotune-discovered ctx as-is on the low end.
 
     # Keep probe starts practical for the model class. Phase 1 now grows until
     # first failure and backs off, so starting too low only wastes time.

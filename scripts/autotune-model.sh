@@ -19,7 +19,8 @@ set -uo pipefail
 MODEL="${1:?Usage: autotune-model.sh MODEL_NUM}"
 [[ "$MODEL" =~ ^[0-9]+$ ]] || { echo "Error: MODEL_NUM must be a number"; exit 1; }
 
-cd /home/wayne/ubuntu-console || exit 1
+_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$_SELF_DIR/.." || exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
 source scripts/01-constants.sh 2>/dev/null || true
 source scripts/11-llm-manager.sh 2>/dev/null || true
@@ -130,7 +131,7 @@ echo "  start:  ${START_TS}"
 echo ""
 START_EPOCH=$(date +%s)
 
-LLAMA_BIN="${LLAMA_SERVER_BIN:-/home/wayne/llama.cpp/build/bin/llama-server}"
+LLAMA_BIN="${LLAMA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}"
 PAYLOAD_FILE="/tmp/autotune-payload-${MODEL}.json"
 cat > "$PAYLOAD_FILE" << 'PAYLOAD'
 {"messages":[{"role":"user","content":"Explain special relativity: time dilation, length contraction, mass-energy equivalence."}],"max_tokens":256,"temperature":0}
