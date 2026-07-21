@@ -38,7 +38,7 @@ _imported_cache: dict[str, object] = {}
 def _import_one(mod_path: str, attr: str) -> object:
     if attr not in _imported_cache:
         import importlib
-        _imported_cache[attr] = getattr(importlib.import_module(mod_path), attr)
+        _imported_cache[attr] = getattr(importlib.import_module(mod_path, package="kgraph"), attr)
     return _imported_cache[attr]
 
 
