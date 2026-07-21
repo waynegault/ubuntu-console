@@ -74,74 +74,96 @@ setup() {
 @test "integration: up shows all 20 steps" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
+    local step_src
+    step_src="$(declare -f __up_npm_cargo 2>/dev/null || true)$(declare -f __up_apt_update 2>/dev/null || true)"
 
-    # The up pipeline has 20 steps — verify key milestones exist
-    [[ "$up_src" == *"[1/"* ]]  # Internet connectivity
-    [[ "$up_src" == *"[2/"* ]]  # APT index
-    [[ "$up_src" == *"[3/20] NPM Packages"* ]]
-    [[ "$up_src" == *"Cargo Crates"* ]]
-    [[ "$up_src" == *"[20/20]"* ]]  # Final step
+    # The up pipeline has 20 steps — verify orchestrator calls helpers
+    [[ "$up_src" == *"__up_connectivity"* ]]
+    [[ "$up_src" == *"__up_apt_update"* ]]
+    [[ "$step_src" == *"[3/20] NPM Packages"* ]]
+    [[ "$step_src" == *"Cargo Crates"* ]]
+    [[ "$up_src" == *"__up_npm_cache"* ]]  # Final step
 }
 
 @test "integration: up has --force flag support" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    [[ "$up_src" == *"--force"* ]] || [[ "$up_src" == *"force_mode"* ]]
+    local step_src
+    step_src="$(declare -f __up_connectivity 2>/dev/null || true)$(declare -f __up_apt_update 2>/dev/null || true)"
+    [[ "$up_src" == *"--force"* ]] || [[ "$step_src" == *"force_mode"* ]]
 }
 
 @test "integration: up checks connectivity" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    [[ "$up_src" == *"Internet"* ]] || [[ "$up_src" == *"Connectivity"* ]]
+    local step_src
+    step_src="$(declare -f __up_connectivity 2>/dev/null || true)"
+    # Check that up() delegates to the connectivity helper
+    [[ "$up_src" == *"__up_connectivity"* ]] || [[ "$step_src" == *"ping"* ]]
 }
 
 @test "integration: up runs APT update" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    # Step label is "Linux Update" (covers both apt index + upgrade)
-    [[ "$up_src" == *"Linux Update"* ]] || [[ "$up_src" == *"apt"* ]]
+    local step_src
+    step_src="$(declare -f __up_apt_update 2>/dev/null || true)"
+    [[ "$up_src" == *"__up_apt_update"* ]] || [[ "$step_src" == *"apt"* ]]
 }
 
 @test "integration: up checks NPM" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    [[ "$up_src" == *"NPM"* ]] || [[ "$up_src" == *"npm"* ]]
+    local step_src
+    step_src="$(declare -f __up_npm_cargo 2>/dev/null || true)"
+    [[ "$up_src" == *"__up_npm_cargo"* ]] || [[ "$step_src" == *"NPM"* ]]
 }
 
 @test "integration: up checks R packages" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    [[ "$up_src" == *"R Packages"* ]] || [[ "$up_src" == *"Rscript"* ]]
+    local step_src
+    step_src="$(declare -f __up_r_packages 2>/dev/null || true)"
+    [[ "$up_src" == *"__up_r_packages"* ]] || [[ "$step_src" == *"Rscript"* ]]
 }
 
 @test "integration: up checks OpenClaw" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    [[ "$up_src" == *"OpenClaw"* ]] || [[ "$up_src" == *"openclaw doctor"* ]]
+    local step_src
+    step_src="$(declare -f __up_openclaw_doctor 2>/dev/null || true)"
+    [[ "$up_src" == *"__up_openclaw_doctor"* ]] || [[ "$step_src" == *"openclaw doctor"* ]]
 }
 
 @test "integration: up checks Python fleet" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    [[ "$up_src" == *"Python Fleet"* ]] || [[ "$up_src" == *"python3"* ]]
+    local step_src
+    step_src="$(declare -f __up_python_fleet 2>/dev/null || true)"
+    [[ "$up_src" == *"__up_python_fleet"* ]] || [[ "$step_src" == *"python3"* ]]
 }
 
 @test "integration: up checks GPU" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    [[ "$up_src" == *"GPU"* ]] || [[ "$up_src" == *"nvidia"* ]]
+    local step_src
+    step_src="$(declare -f __up_gpu_status 2>/dev/null || true)"
+    [[ "$up_src" == *"__up_gpu_status"* ]] || [[ "$step_src" == *"nvidia"* ]]
 }
 
 @test "integration: up checks disk space" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    [[ "$up_src" == *"Disk Space"* ]] || [[ "$up_src" == *"disk"* ]]
+    local step_src
+    step_src="$(declare -f __up_disk_audit 2>/dev/null || true)"
+    [[ "$up_src" == *"__up_disk_audit"* ]] || [[ "$step_src" == *"disk"* ]]
 }
 
 @test "integration: up has cooldown support" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    [[ "$up_src" == *"cooldown"* ]] || [[ "$up_src" == *"__check_cooldown"* ]]
+    local step_src
+    step_src="$(declare -f __up_apt_update 2>/dev/null || true)"
+    [[ "$step_src" == *"cooldown"* ]] || [[ "$step_src" == *"__check_cooldown"* ]]
 }
 
 @test "integration: up creates cooldown database" {
