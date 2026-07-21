@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 7
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================

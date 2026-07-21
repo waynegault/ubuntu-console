@@ -11,7 +11,7 @@
 #   common OpenClaw state/config/cache directories (via sudo when available),
 #   then retries once.
 
-set -u
+set -euo pipefail
 
 _print() {
     printf '%s\n' "$*"

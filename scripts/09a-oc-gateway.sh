@@ -7,10 +7,6 @@
 # 09a-oc-gateway
 # ==============================================================================
 
-function __is_openclaw_installed() {
-    [[ "$__TAC_OPENCLAW_OK" == "1" ]]
-}
-
 # __so_show_errors — Extract and display the most recent gateway errors.
 # Pulls the last 30 log lines and shows up to 5 matching error patterns.
 # ---------------------------------------------------------------------------
