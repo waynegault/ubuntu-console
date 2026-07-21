@@ -217,7 +217,7 @@ function openclaw() {
 # Shows session names/labels and highlights agents without active sessions.
 # Optimized: Uses cached data with TTL, combines jq calls, minimizes API calls.
 function os() {
-    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
+    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-}"
 
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw" "[NOT INSTALLED]" "$C_Error"
@@ -382,7 +382,7 @@ function oa() {
 # oc-status — Show detailed OpenClaw status (--all).
 function oc-status() {
     # Export token for gateway auth
-    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
+    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-}"
     openclaw status --all
 }
 # ocstat — Legacy alias for oc-status (deprecated).
@@ -392,7 +392,7 @@ function ocstat() {
 # ocgs — Show OpenClaw gateway status with deep probe.
 function ocgs() {
     # Export token for gateway auth
-    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
+    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-}"
     openclaw gateway status --deep
 }
 # ocv — Print the OpenClaw version.
@@ -402,7 +402,7 @@ function ocv() {
 # status — Show basic OpenClaw status.
 function status() {
     # Export token for gateway auth
-    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-a3ac821b07f6884d3bf40650f1530e2d}"
+    export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-}"
     openclaw status
 }
 # ocms — Show OpenClaw model status with live probe.
