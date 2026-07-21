@@ -26,9 +26,13 @@ guaranteeing load order and preventing accidental sourcing of utility scripts:
 ```bash
 _tac_expected_modules=(
     01-constants 02-error-handling 03-design-tokens 04-aliases
-    05-ui-engine 06-hooks 07-telemetry 08-maintenance 09-openclaw 09b-gog
-    10-deployment 11-llm-manager 12-dashboard-help 13-init 14-wsl-extras
-    15-model-recommender
+    05-ui-engine 06-hooks 07-telemetry 08-maintenance
+    09-openclaw 09a-oc-gateway 09b-gog 09c-oc-core 09d-oc-agents
+    09e-oc-health 09f-oc-misc
+    10-deployment
+    11a-llm-registry 11b-llm-autotune 11c-llm-server 11d-llm-gpu
+    11e-llm-model 11f-llm-runtime
+    12-dashboard-help 13-init 14-wsl-extras 15-model-recommender
 )
 
 for _tac_mod in "${_tac_expected_modules[@]}"; do
@@ -59,10 +63,21 @@ not profile modules, and are never sourced by either loader.
 | §6 | `scripts/06-hooks.sh` | 197 | `cd` override (venv auto-activate), prompt (`PS1`), `__test_port`, admin badge |
 | §7 | `scripts/07-telemetry.sh` | 361 | Host metrics (CPU + dual GPU), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` with trap cleanup |
 | §8 | `scripts/08-maintenance.sh` | 1461 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, `docs-sync`, cooldown system with `flock` |
-| §9 | `scripts/09-openclaw.sh` | 3217 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-failover`, wacli, `oc-kgraph`, whitelist subcommand validation, process kill safety) |
+| §9 | `scripts/09-openclaw.sh` (thin loader) | 25 | Sources 09a–09f sub-modules in order |
+| §9a | `scripts/09a-oc-gateway.sh` | 619 | Gateway lifecycle: `so()`, start/stop/health, Tailscale cycling, API key bridge |
 | §9b | `scripts/09b-gog.sh` | 165 | Google CLI (`gog`) detection, setup helpers, and integration shims |
+| §9c | `scripts/09c-oc-core.sh` | 332 | Core dispatcher: `oc()`, `xo()`, shortcut commands |
+| §9d | `scripts/09d-oc-agents.sh` | 673 | Agent management, API keys, secrets rotation |
+| §9e | `scripts/09e-oc-health.sh` | 1075 | Health checks, diagnostics, failover, utilities |
+| §9f | `scripts/09f-oc-misc.sh` | 322 | KGraph, stinger, backup/restore, mem-index |
 | §10 | `scripts/10-deployment.sh` | 460 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified, secret detection) |
-| §11 | `scripts/11-llm-manager.sh` | 3209 | `__require_llm`, model management, streaming chat, burn, bench, explain, `__calc_gpu_layers`, `__gguf_metadata` |
+| §11 | `scripts/11-llm-manager.sh` (thin loader) | 43 | Sources 11a–11f sub-modules in order |
+| §11a | `scripts/11a-llm-registry.sh` | 295 | Registry CRUD: `__llm_registry_sync_state`, `__renumber_registry`, entry helpers |
+| §11b | `scripts/11b-llm-autotune.sh` | 585 | Autotune infrastructure: profile save, ctx estimation, blob upsert |
+| §11c | `scripts/11c-llm-server.sh` | 516 | Server lifecycle: start/stop, health checks, Python binary resolution |
+| §11d | `scripts/11d-llm-gpu.sh` | 838 | GPU status, GGUF metadata parsing, calculations (`__calc_gpu_layers`, `__calc_ctx_size`) |
+| §11e | `scripts/11e-llm-model.sh` | 2971 | Model commands: scan, list, use (7 helpers), bench, download, archive, delete, doctor |
+| §11f | `scripts/11f-llm-runtime.sh` | 724 | Runtime: `serve`, `burn`, `local_chat`, SSE streaming, explain, `wtf_repl` |
 | §12 | `scripts/12-dashboard-help.sh` | 681 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` (OpenClaw status) |
 | §13 | `scripts/13-init.sh` | 134 | `mkdir -p` (OpenClaw-aware), completions, loopback fix, bridge call, exit trap (chained) |
 | §14 | `scripts/14-wsl-extras.sh` | 138 | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
@@ -100,10 +115,21 @@ fails fast when boundaries are violated.
 06-hooks.sh                ← 01, 03                         │
 07-telemetry.sh            ← 01, 03, 05                     │
 08-maintenance.sh          ← 01, 03, 05, 07                 │
-09-openclaw.sh             ← 01, 03, 05, 06                 │
-09b-gog.sh                 ← 01                             │
-10-deployment.sh           ← 01, 03, 05, 06                 │
-11-llm-manager.sh          ← 01, 03, 05, 06                 │
+09-openclaw.sh (thin)     ─┐                                │
+  09a-oc-gateway.sh       ← 01, 03, 05, 06                 │
+  09b-gog.sh              ← 01                             │
+  09c-oc-core.sh          ← 09a                             │
+  09d-oc-agents.sh        ← 09c                             │
+  09e-oc-health.sh        ← 09c                             │
+  09f-oc-misc.sh          ← 09c                             │
+10-deployment.sh           ← 01, 03, 05                     │
+11-llm-manager.sh (thin) ─┐                                │
+  11a-llm-registry.sh     ← 01                              │
+  11b-llm-autotune.sh     ← 11a                             │
+  11c-llm-server.sh       ← 01, 11a                         │
+  11d-llm-gpu.sh          ← 01, 03                          │
+  11e-llm-model.sh        ← 11a, 11b, 11c, 11d             │
+  11f-llm-runtime.sh      ← 11e                             │
 12-dashboard-help.sh       ← 01, 03, 05, 07, 06, 09, 11    │
 13-init.sh                 ← all above                      │
 14-wsl-extras.sh           ← 01 (optional startup helpers) ─┘
@@ -278,11 +304,11 @@ modules can be reordered as long as their `@depends` are satisfied.
 
 | Benefit | Detail |
 |---|---|
-| **Faster iteration** | Edit `11-llm-manager.sh` without scrolling past 1,200 lines of unrelated OpenClaw code. |
-| **Targeted testing** | `bash -n scripts/09-openclaw.sh` checks only OpenClaw functions. |
-| **Selective loading** | On a server with no GPU, skip `11-llm-manager.sh`. On a headless box, skip `12-dashboard-help.sh`. |
+| **Faster iteration** | Edit `11e-llm-model.sh` without scrolling past 500 lines of unrelated server or GPU code. |
+| **Targeted testing** | `bash -n scripts/09a-oc-gateway.sh` checks only gateway functions. |
+| **Selective loading** | On a server with no GPU, skip `11d-llm-gpu.sh`. On a headless box, skip `12-dashboard-help.sh`. |
 | **Reduced merge conflicts** | Edits to OpenClaw and LLM code never touch the same file. |
-| **Git blame clarity** | `git log scripts/09-openclaw.sh` shows only OpenClaw changes. |
+| **Git blame clarity** | `git log scripts/09c-oc-core.sh` shows only core dispatcher changes. |
 | **Easier onboarding** | A new developer reads one 200-line module instead of a 5,184-line monolith. |
 
 ### Monolith Backup
@@ -396,10 +422,21 @@ extra source commands.
 │   ├── 06-hooks.sh                    #   cd override, prompt, port test
 │   ├── 07-telemetry.sh                #   CPU, GPU, battery, git, disk, tokens
 │   ├── 08-maintenance.sh              #   up (20 steps), cl, get-ip, sysinfo, logtrim, docs-sync
-│   ├── 09-openclaw.sh                 #   Gateway, backup, bridge, oc-failover, wacli, kgraph
-│   ├── 09b-gog.sh                     #   Google CLI (gog) detection and helpers
-│   ├── 10-deployment.sh               #   mkproj (disk check), git commit+push, deploy
-│   ├── 11-llm-manager.sh              #   Model mgmt, chat, burn, bench, explain
+│   ├── 09-openclaw.sh (thin loader) #   Sources 09a-09f sub-modules
+│   ├── 09a-oc-gateway.sh            #   Gateway lifecycle, so() start/stop
+│   ├── 09b-gog.sh                   #   Google CLI (gog) detection and helpers
+│   ├── 09c-oc-core.sh               #   oc/xo dispatchers, shortcut commands
+│   ├── 09d-oc-agents.sh             #   Agent management, keys, secrets
+│   ├── 09e-oc-health.sh             #   Health checks, diagnostics, failover
+│   ├── 09f-oc-misc.sh               #   KGraph, stinger, backup/restore
+│   ├── 10-deployment.sh             #   mkproj (disk check), git commit+push, deploy
+│   ├── 11-llm-manager.sh (thin)     #   Sources 11a-11f sub-modules
+│   ├── 11a-llm-registry.sh          #   Registry CRUD, sync, renumber
+│   ├── 11b-llm-autotune.sh          #   Autotune infrastructure, profiles
+│   ├── 11c-llm-server.sh            #   Server lifecycle, health, python
+│   ├── 11d-llm-gpu.sh               #   GPU status, GGUF metadata, calc
+│   ├── 11e-llm-model.sh             #   Model commands: scan, list, use, bench
+│   ├── 11f-llm-runtime.sh           #   Serve, burn, chat, SSE streaming
 │   ├── 12-dashboard-help.sh           #   Dashboard ('m') and Help ('h'), bashrc_diagnose
 │   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
 │   ├── 14-wsl-extras.sh               #   WSL/X11 helpers, completions, vault env

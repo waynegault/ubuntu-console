@@ -161,6 +161,147 @@ _TAC_NEEDS_PROFILE=(
 )
 
 # Per-test setup: auto-source the profile when the test needs it.
+
+@test "fn-avail: all expected functions are defined" {
+    local missing=0
+    for fn in \
+        __cache_fresh \
+        __threshold_color \
+        __strip_ansi \
+        __test_port \
+        __resolve_smi \
+        __resolve_vscode_bin \
+        __vsc_open \
+        __save_nullglob \
+        __restore_nullglob \
+        __tac_header \
+        __tac_footer \
+        __tac_divider \
+        __tac_info \
+        __tac_line \
+        __tac_exit_cleanup \
+        __tac_err_handler \
+        __fRow \
+        __hRow \
+        __hSection \
+        __show_header \
+        __require_openclaw \
+        __require_llm \
+        __usage \
+        __get_uptime \
+        __get_disk \
+        __get_gpu \
+        __get_git \
+        __get_battery \
+        __get_host_metrics \
+        __get_oc_version \
+        __get_oc_metrics \
+        __get_tokens \
+        __get_llm_slots \
+        __check_cooldown \
+        __set_cooldown \
+        __cleanup_temps \
+        __calc_gpu_layers \
+        __calc_ctx_size \
+        __calc_threads \
+        __quant_label \
+        __gguf_metadata \
+        __renumber_registry \
+        __save_tps \
+        __llm_chat_send \
+        __llm_sse_core \
+        __llm_stream \
+        model \
+        serve \
+        halt \
+        burn \
+        local_chat \
+        explain \
+        chat-context \
+        chat-pipe \
+        wtf_repl \
+        up \
+        cl \
+        logtrim \
+        so \
+        xo \
+        status \
+        sysinfo \
+        wake \
+        gpu-status \
+        gpu-check \
+        tactical_dashboard \
+        tactical_help \
+        clear_tactical \
+        commit_auto \
+        commit_deploy \
+        oc \
+        oc-env \
+        oc-health \
+        oc-backup \
+        oc-restore \
+        oc-diag \
+        oc-local-llm \
+        oc-cache-clear \
+        oc-browser \
+        oc-docs \
+        oc-config \
+        oc-refresh-keys \
+        oc-update \
+        oc-restart \
+        oc-tail \
+        oc-sandbox \
+        oc-sec \
+        oc-usage \
+        oc-failover \
+        __oc_gateway_databases_closed \
+        __oc_safe_gateway_shutdown \
+        oc-memory-search \
+        oc-plugins \
+        oc-skills \
+        oc-channels \
+        oc-nodes \
+        oc-cron \
+        oc-tui \
+        oc-trust-sync \
+        oc-sync-models \
+        bashrc_diagnose \
+        bashrc_dryrun \
+        get-ip \
+        copy_path \
+        mkproj \
+        oedit \
+        llmconf \
+        occonf \
+        mlogs \
+        mem-index \
+        lc \
+        custom_prompt_command \
+        oc-kgraph \
+        wacli \
+        ocstart \
+        ocstop \
+        ocgs \
+        ocv \
+        ockeys \
+        ocdoc-fix \
+        ologs \
+        ocroot \
+        owk \
+        ocstat \
+        ocms \
+        oclogs \
+        __bridge_windows_api_keys \
+        DUMMY_END
+    do
+        [[ "$fn" == "DUMMY_END" ]] && continue
+        if ! declare -f "$fn" >/dev/null 2>&1; then
+            echo "  MISSING: $fn" >&3
+            missing=$((missing + 1))
+        fi
+    done
+    [[ "$missing" -eq 0 ]]
+}
 setup() {
     _TAC_PROFILE_SOURCED=0
     # BATS_TEST_DESCRIPTION is set by bats before each @test block runs.
@@ -877,24 +1018,6 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Core internal helpers
-@test "fn-avail: __cache_fresh" { declare -f __cache_fresh >/dev/null; }
-@test "fn-avail: __threshold_color" { declare -f __threshold_color >/dev/null; }
-@test "fn-avail: __strip_ansi" { declare -f __strip_ansi >/dev/null; }
-@test "fn-avail: __test_port" { declare -f __test_port >/dev/null; }
-@test "fn-avail: __resolve_smi" { declare -f __resolve_smi >/dev/null; }
-@test "fn-avail: __resolve_vscode_bin" { declare -f __resolve_vscode_bin >/dev/null; }
-@test "fn-avail: __vsc_open" { declare -f __vsc_open >/dev/null; }
-@test "fn-avail: __save_nullglob" { declare -f __save_nullglob >/dev/null; }
-@test "fn-avail: __restore_nullglob" { declare -f __restore_nullglob >/dev/null; }
-@test "fn-avail: __tac_header" { declare -f __tac_header >/dev/null; }
-@test "fn-avail: __tac_footer" { declare -f __tac_footer >/dev/null; }
-@test "fn-avail: __tac_divider" { declare -f __tac_divider >/dev/null; }
-@test "fn-avail: __tac_info" { declare -f __tac_info >/dev/null; }
-@test "fn-avail: __tac_line" { declare -f __tac_line >/dev/null; }
-@test "fn-avail: __tac_exit_cleanup" { declare -f __tac_exit_cleanup >/dev/null; }
-@test "fn-avail: __tac_err_handler" { declare -f __tac_err_handler >/dev/null; }
-@test "fn-avail: __fRow" { declare -f __fRow >/dev/null; }
-@test "fn-avail: __hRow" { declare -f __hRow >/dev/null; }
 @test "ui: __hRow formats command and description correctly" {
     run __hRow "zzz_cmd" "This is a test description"
     [ "$status" -eq 0 ]
@@ -917,111 +1040,17 @@ EOF
         [ "${#plain}" -le "$UIWidth" ]
     done <<< "$output"
 }
-@test "fn-avail: __hSection" { declare -f __hSection >/dev/null; }
-@test "fn-avail: __show_header" { declare -f __show_header >/dev/null; }
 
-@test "fn-avail: __require_openclaw" { declare -f __require_openclaw >/dev/null; }
-@test "fn-avail: __require_llm" { declare -f __require_llm >/dev/null; }
-@test "fn-avail: __usage" { declare -f __usage >/dev/null; }
 
 # Telemetry
-@test "fn-avail: __get_uptime" { declare -f __get_uptime >/dev/null; }
-@test "fn-avail: __get_disk" { declare -f __get_disk >/dev/null; }
-@test "fn-avail: __get_gpu" { declare -f __get_gpu >/dev/null; }
-@test "fn-avail: __get_git" { declare -f __get_git >/dev/null; }
-@test "fn-avail: __get_battery" { declare -f __get_battery >/dev/null; }
-@test "fn-avail: __get_host_metrics" { declare -f __get_host_metrics >/dev/null; }
-@test "fn-avail: __get_oc_version" { declare -f __get_oc_version >/dev/null; }
-@test "fn-avail: __get_oc_metrics" { declare -f __get_oc_metrics >/dev/null; }
-@test "fn-avail: __get_tokens" { declare -f __get_tokens >/dev/null; }
-@test "fn-avail: __get_llm_slots" { declare -f __get_llm_slots >/dev/null; }
 
 # Caching / cooldown
-@test "fn-avail: __check_cooldown" { declare -f __check_cooldown >/dev/null; }
-@test "fn-avail: __set_cooldown" { declare -f __set_cooldown >/dev/null; }
-@test "fn-avail: __cleanup_temps" { declare -f __cleanup_temps >/dev/null; }
 
 # LLM calculation
-@test "fn-avail: __calc_gpu_layers" { declare -f __calc_gpu_layers >/dev/null; }
-@test "fn-avail: __calc_ctx_size" { declare -f __calc_ctx_size >/dev/null; }
-@test "fn-avail: __calc_threads" { declare -f __calc_threads >/dev/null; }
-@test "fn-avail: __quant_label" { declare -f __quant_label >/dev/null; }
-@test "fn-avail: __gguf_metadata" { declare -f __gguf_metadata >/dev/null; }
-@test "fn-avail: __renumber_registry" { declare -f __renumber_registry >/dev/null; }
-@test "fn-avail: __save_tps" { declare -f __save_tps >/dev/null; }
 
 # LLM streaming
-@test "fn-avail: __llm_chat_send" { declare -f __llm_chat_send >/dev/null; }
-@test "fn-avail: __llm_sse_core" { declare -f __llm_sse_core >/dev/null; }
-@test "fn-avail: __llm_stream" { declare -f __llm_stream >/dev/null; }
 
 # User-facing functions
-@test "fn-avail: model" { declare -f model >/dev/null; }
-@test "fn-avail: serve" { declare -f serve >/dev/null; }
-@test "fn-avail: halt" { declare -f halt >/dev/null; }
-@test "fn-avail: burn" { declare -f burn >/dev/null; }
-@test "fn-avail: local_chat" { declare -f local_chat >/dev/null; }
-@test "fn-avail: explain" { declare -f explain >/dev/null; }
-@test "fn-avail: chat-context" { declare -f chat-context >/dev/null; }
-@test "fn-avail: chat-pipe" { declare -f chat-pipe >/dev/null; }
-@test "fn-avail: wtf_repl" { declare -f wtf_repl >/dev/null; }
-@test "fn-avail: up" { declare -f up >/dev/null; }
-@test "fn-avail: cl" { declare -f cl >/dev/null; }
-@test "fn-avail: logtrim" { declare -f logtrim >/dev/null; }
-@test "fn-avail: so" { declare -f so >/dev/null; }
-@test "fn-avail: xo" { declare -f xo >/dev/null; }
-@test "fn-avail: status" { declare -f status >/dev/null; }
-@test "fn-avail: sysinfo" { declare -f sysinfo >/dev/null; }
-@test "fn-avail: wake" { declare -f wake >/dev/null; }
-@test "fn-avail: gpu-status" { declare -f gpu-status >/dev/null; }
-@test "fn-avail: gpu-check" { declare -f gpu-check >/dev/null; }
-@test "fn-avail: tactical_dashboard" { declare -f tactical_dashboard >/dev/null; }
-@test "fn-avail: tactical_help" { declare -f tactical_help >/dev/null; }
-@test "fn-avail: clear_tactical" { declare -f clear_tactical >/dev/null; }
-@test "fn-avail: commit_auto" { declare -f commit_auto >/dev/null; }
-@test "fn-avail: commit_deploy" { declare -f commit_deploy >/dev/null; }
-@test "fn-avail: oc" { declare -f oc >/dev/null; }
-@test "fn-avail: oc-env" { declare -f oc-env >/dev/null; }
-@test "fn-avail: oc-health" { declare -f oc-health >/dev/null; }
-@test "fn-avail: oc-backup" { declare -f oc-backup >/dev/null; }
-@test "fn-avail: oc-restore" { declare -f oc-restore >/dev/null; }
-@test "fn-avail: oc-diag" { declare -f oc-diag >/dev/null; }
-@test "fn-avail: oc-local-llm" { declare -f oc-local-llm >/dev/null; }
-@test "fn-avail: oc-cache-clear" { declare -f oc-cache-clear >/dev/null; }
-@test "fn-avail: oc-browser" { declare -f oc-browser >/dev/null; }
-@test "fn-avail: oc-docs" { declare -f oc-docs >/dev/null; }
-@test "fn-avail: oc-config" { declare -f oc-config >/dev/null; }
-@test "fn-avail: oc-refresh-keys" { declare -f oc-refresh-keys >/dev/null; }
-@test "fn-avail: oc-update" { declare -f oc-update >/dev/null; }
-@test "fn-avail: oc-restart" { declare -f oc-restart >/dev/null; }
-@test "fn-avail: oc-tail" { declare -f oc-tail >/dev/null; }
-@test "fn-avail: oc-sandbox" { declare -f oc-sandbox >/dev/null; }
-@test "fn-avail: oc-sec" { declare -f oc-sec >/dev/null; }
-@test "fn-avail: oc-usage" { declare -f oc-usage >/dev/null; }
-@test "fn-avail: oc-failover" { declare -f oc-failover >/dev/null; }
-@test "fn-avail: __oc_gateway_databases_closed" { declare -f __oc_gateway_databases_closed >/dev/null; }
-@test "fn-avail: __oc_safe_gateway_shutdown" { declare -f __oc_safe_gateway_shutdown >/dev/null; }
-@test "fn-avail: oc-memory-search" { declare -f oc-memory-search >/dev/null; }
-@test "fn-avail: oc-plugins" { declare -f oc-plugins >/dev/null; }
-@test "fn-avail: oc-skills" { declare -f oc-skills >/dev/null; }
-@test "fn-avail: oc-channels" { declare -f oc-channels >/dev/null; }
-@test "fn-avail: oc-nodes" { declare -f oc-nodes >/dev/null; }
-@test "fn-avail: oc-cron" { declare -f oc-cron >/dev/null; }
-@test "fn-avail: oc-tui" { declare -f oc-tui >/dev/null; }
-@test "fn-avail: oc-trust-sync" { declare -f oc-trust-sync >/dev/null; }
-@test "fn-avail: oc-sync-models" { declare -f oc-sync-models >/dev/null; }
-@test "fn-avail: bashrc_diagnose" { declare -f bashrc_diagnose >/dev/null; }
-@test "fn-avail: bashrc_dryrun" { declare -f bashrc_dryrun >/dev/null; }
-@test "fn-avail: get-ip" { declare -f get-ip >/dev/null; }
-@test "fn-avail: copy_path" { declare -f copy_path >/dev/null; }
-@test "fn-avail: mkproj" { declare -f mkproj >/dev/null; }
-@test "fn-avail: oedit" { declare -f oedit >/dev/null; }
-@test "fn-avail: llmconf" { declare -f llmconf >/dev/null; }
-@test "fn-avail: occonf" { declare -f occonf >/dev/null; }
-@test "fn-avail: mlogs" { declare -f mlogs >/dev/null; }
-@test "fn-avail: mem-index" { declare -f mem-index >/dev/null; }
-@test "fn-avail: lc" { declare -f lc >/dev/null; }
-@test "fn-avail: custom_prompt_command" { declare -f custom_prompt_command >/dev/null; }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 16. CROSS-SCRIPT CONSISTENCY
@@ -1776,7 +1805,6 @@ EOF
     [[ "$output" == *"doctor-local"* ]]
 }
 
-@test "fn-avail: oc-kgraph" { declare -f oc-kgraph >/dev/null; }
 
 @test "alias: g is defined (oc g)" {
     alias g >/dev/null 2>&1
@@ -2157,20 +2185,6 @@ EOF
 # 32. FUNCTION AVAILABILITY — Additional functions
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "fn-avail: wacli" { declare -f wacli >/dev/null; }
-@test "fn-avail: ocstart" { declare -f ocstart >/dev/null; }
-@test "fn-avail: ocstop" { declare -f ocstop >/dev/null; }
-@test "fn-avail: ocgs" { declare -f ocgs >/dev/null; }
-@test "fn-avail: ocv" { declare -f ocv >/dev/null; }
-@test "fn-avail: ockeys" { declare -f ockeys >/dev/null; }
-@test "fn-avail: ocdoc-fix" { declare -f ocdoc-fix >/dev/null; }
-@test "fn-avail: ologs" { declare -f ologs >/dev/null; }
-@test "fn-avail: ocroot" { declare -f ocroot >/dev/null; }
-@test "fn-avail: owk" { declare -f owk >/dev/null; }
-@test "fn-avail: ocstat" { declare -f ocstat >/dev/null; }
-@test "fn-avail: ocms" { declare -f ocms >/dev/null; }
-@test "fn-avail: oclogs" { declare -f oclogs >/dev/null; }
-@test "fn-avail: __bridge_windows_api_keys" { declare -f __bridge_windows_api_keys >/dev/null; }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 33. CROSS-SCRIPT — Extended consistency checks
