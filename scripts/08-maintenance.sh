@@ -176,44 +176,12 @@ function get-ip() {
 }
 
 # ---------------------------------------------------------------------------
-# up — Run 20-step system maintenance with cooldowns per step.
-# Usage: up [--force]
-#   --force: Suspend all cooldowns for testing purposes
-# Cooldown functions (__check_cooldown / __set_cooldown) are defined above
-# in this section to avoid leaking nested function definitions.
+# __up_connectivity — [1/20] Check internet connectivity via ping.
+# Part of the 20-step maintenance pipeline. No cooldown — always runs.
 # ---------------------------------------------------------------------------
-function up() {
-    local force_mode=0
-    case "${1:-}" in
-        --force|-f) force_mode=1 ;;
-        *) ;;
-    esac
-
-    # Validate: reject unexpected arguments
-    if [[ $# -gt 1 ]]
-    then
-        __tac_info "Usage" "[up [--force|-f]]" "$C_Error"
-        return 1
-    fi
-
-    # Save current working directory to restore after maintenance
-    local original_dir="$PWD"
-
-    command clear
-    __tac_header "SYSTEM MAINTENANCE" "open"
-    local errCount=0
-    local now
-    now=$(date +%s)
-
-    # Performance tracking: record start time for metrics
-    local start_time=$now
-
-    # hours_left is set by __check_cooldown via nameref (no subshell needed).
-    # When __check_cooldown returns 1 (still cooling down), hours_left holds
-    # the remaining time string (e.g. "6d 12h").
-    local hours_left=""
-    # _cd_sink is module-level (declared above) — no need to redeclare
-    touch "$CooldownDB" 2>/dev/null
+function __up_connectivity() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
 
     # [1/20] Connectivity
     if ping -c 1 -W 2 github.com >/dev/null 2>&1
@@ -221,8 +189,18 @@ function up() {
         __tac_line "[1/20] Internet Connectivity" "[ESTABLISHED]" "$C_Success"
     else
         __tac_line "[1/20] Internet Connectivity" "[LOST]" "$C_Error"
-        ((errCount++))
+        ((_up_err++))
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_apt_update — [2/20] APT index refresh (24h cooldown) + upgrade (7d).
+# Dual cooldown: updates index on apt_index expiry, upgrades on apt expiry.
+# ---------------------------------------------------------------------------
+function __up_apt_update() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
+    local hours_left=""
 
     # [2/20] Linux Update — APT index (24h cooldown) + upgrade (7d cooldown).
     # Logic:
@@ -250,7 +228,7 @@ function up() {
         if ! sudo apt upgrade --dry-run -y --no-install-recommends >/dev/null 2>&1
         then
             __tac_line "[2/20] Linux Update" "[DRY-RUN FAILED]" "$C_Warning"
-            ((errCount++))
+            ((_up_err++))
         else
             sudo apt upgrade -y --no-install-recommends >/dev/null 2>&1
             local apt_rc=$?
@@ -267,7 +245,7 @@ function up() {
                 __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
             else
                 __tac_line "[2/20] Linux Update" "[FAILED]" "$C_Error"
-                ((errCount++))
+                ((_up_err++))
             fi
         fi
     else
@@ -278,6 +256,16 @@ function up() {
             __tac_line "[2/20] Linux Update" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
         fi
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_npm_cargo — [3-4/20] NPM global packages + Cargo crates.
+# Both share a single "npm_cargo" cooldown. When cached, outputs both lines.
+# ---------------------------------------------------------------------------
+function __up_npm_cargo() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
+    local hours_left=""
 
     # [3/20] NPM / Cargo
     if __check_cooldown "npm_cargo" "$now" hours_left "$force_mode"
@@ -370,12 +358,22 @@ function up() {
             __set_cooldown "npm_cargo" "$now"
         elif (( pkg_err == 1 ))
         then
-            ((errCount++))
+            ((_up_err++))
         fi
     else
         __tac_line "[3/20] NPM Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
         __tac_line "[4/20] Cargo Crates" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_r_packages — [5/20] Update R packages (CRAN + Bioconductor).
+# Updates both system and user R libraries with binary-only packages.
+# ---------------------------------------------------------------------------
+function __up_r_packages() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
+    local hours_left=""
 
     # [5/20] R Packages (CRAN + Bioconductor)
     # Updates R packages in both system and user libraries.
@@ -439,6 +437,16 @@ function up() {
     else
         __tac_line "[5/20] R Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_openclaw_doctor — [6/20] Run openclaw doctor for health check.
+# Verifies OpenClaw framework is healthy using doctor command.
+# ---------------------------------------------------------------------------
+function __up_openclaw_doctor() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
+    local hours_left=""
 
     # [6/20] OpenClaw verification — runs 'openclaw doctor' for real health check.
     # --non-interactive: skip all prompts (safe for unattended maintenance).
@@ -456,10 +464,10 @@ function up() {
             elif (( doc_rc == 124 ))
             then
                 __tac_line "[6/20] OpenClaw Framework" "[TIMED OUT]" "$C_Warning"
-                ((errCount++))
+                ((_up_err++))
             else
                 __tac_line "[6/20] OpenClaw Framework" "[ISSUES FOUND - run oc doc-fix]" "$C_Warning"
-                ((errCount++))
+                ((_up_err++))
             fi
             __set_cooldown "openclaw" "$now"
         else
@@ -468,6 +476,17 @@ function up() {
     else
         __tac_line "[6/20] OpenClaw Framework" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_oc_plugins — [7-10/20] Update OpenClaw path-installed plugins.
+# Checks Gigabrain, Lossless-Claw, and OpenStinger for git updates,
+# then runs Post-Update Drift check if any plugin changed.
+# ---------------------------------------------------------------------------
+function __up_oc_plugins() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
+    local hours_left=""
 
     # [7/20] OpenClaw Plugin Updates — pull latest from upstream for path-installed plugins.
     # Checks gigabrain, lossless-claw, and OpenStinger for git updates.
@@ -668,7 +687,7 @@ function up() {
                         fi
                     else
                         __tac_line "[10/20] Post-Update Drift" "[FIX FAILED - run post-update-drift-check.sh --fix]" "$C_Warning"
-                        ((errCount++))
+                        ((_up_err++))
                     fi
                 fi
             else
@@ -689,6 +708,16 @@ function up() {
     fi
 
     unset -f __update_plugin
+}
+
+# ---------------------------------------------------------------------------
+# __up_python_venv — [11/20] Update packages in active Python virtual env.
+# Detects active venv via VIRTUAL_ENV or path fallback.
+# ---------------------------------------------------------------------------
+function __up_python_venv() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
+    local hours_left=""
 
     # [11/20] Python Venv — update packages in active virtual environment.
     # "Cloaking" = active virtual environment isolation.
@@ -733,7 +762,7 @@ function up() {
                     __tac_line "[11/20] Python Venv ($venv_name)" "[UPDATED]" "$C_Success"
                 else
                     __tac_line "[11/20] Python Venv ($venv_name)" "[UPGRADE FAILED]" "$C_Warning"
-                    ((errCount++))
+                    ((_up_err++))
                 fi
             else
                 __tac_line "[11/20] Python Venv ($venv_name)" "[ALREADY UP TO DATE]" "$C_Success"
@@ -745,6 +774,16 @@ function up() {
     else
         __tac_line "[11/20] Python Venv Cloaking" "[INACTIVE]" "$C_Dim"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_python_fleet — [12/20] Detect installed Python 3.x versions.
+# Checks /usr/bin/python3.* for available interpreters.
+# ---------------------------------------------------------------------------
+function __up_python_fleet() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
+    local hours_left=""
 
     # [12/20] Python Fleet — check which Python 3.x versions are installed.
     # Note: Python is updated via apt (Linux Update step), not here.
@@ -767,11 +806,20 @@ function up() {
             __set_cooldown "pyfleet" "$now"
         else
             __tac_line "[12/20] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
-            ((errCount++))
+            ((_up_err++))
         fi
     else
         __tac_line "[12/20] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_gpu_status — [13/20] Check GPU readiness via __get_gpu.
+# No cooldown. Includes 3-second wait for background cache refresh.
+# ---------------------------------------------------------------------------
+function __up_gpu_status() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
 
     # [13/20] GPU Checks — __get_gpu returns CSV or a sentinel string.
     # Sentinels: "N/A" (no nvidia-smi), "Querying..." (first-boot cache miss),
@@ -800,8 +848,17 @@ function up() {
         __tac_line "[13/20] GPU Status" "[READY]" "$C_Success"
     else
         __tac_line "[13/20] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
-        ((errCount++))
+        ((_up_err++))
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_temp_sanitation — [14/20] Clean temp files from known safe locations.
+# No cooldown. Only cleans /tmp/openclaw, not the user's $PWD.
+# ---------------------------------------------------------------------------
+function __up_temp_sanitation() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
 
     # [14/20] Sanitation — clean known temp locations, NOT the user's $PWD.
     # Only removes temp artifacts from /tmp/openclaw and the OC_ROOT directory.
@@ -814,6 +871,15 @@ function up() {
         done < <(find /tmp/openclaw \( -name '*.tmp' -o -name 'python-*.exe' \) -print0 2>/dev/null)
     fi
     __tac_line "[14/20] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
+}
+
+# ---------------------------------------------------------------------------
+# __up_disk_audit — [15/20] Audit disk space and warn on mounts > 90%.
+# No cooldown. Excludes /snap/ and Docker Desktop mounts.
+# ---------------------------------------------------------------------------
+function __up_disk_audit() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
 
     # [15/20] Disk Space Audit — warn if any mount point exceeds 90%
     local disk_warn=0
@@ -826,12 +892,21 @@ function up() {
         then
             __tac_line "[15/20] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
             disk_warn=1
-            ((errCount++))
+            ((_up_err++))
         fi
     done < <(df -h --output=pcent,target 2>/dev/null \
         | tail -n +2 | grep -v '/snap/' \
         | grep -v '/mnt/wsl/docker-desktop')
     (( disk_warn == 0 )) && __tac_line "[15/20] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
+}
+
+# ---------------------------------------------------------------------------
+# __up_systemd_units — [16/20] Check OpenClaw gateway systemd service.
+# No cooldown. Verifies user-level systemd unit is installed.
+# ---------------------------------------------------------------------------
+function __up_systemd_units() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
 
     # [16/20] Systemd Unit Check — verify OpenClaw gateway service is configured.
     if systemctl --user list-unit-files | grep -q openclaw-gateway
@@ -840,6 +915,15 @@ function up() {
     else
         __tac_line "[16/20] Systemd Units" "[SKIP - no user units]" "$C_Dim"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_stale_processes — [17/20] Clean up orphaned llama-server instances.
+# No cooldown. Only kills processes without active socket on LLM_PORT.
+# ---------------------------------------------------------------------------
+function __up_stale_processes() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
 
     # [17/20] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).
@@ -875,6 +959,16 @@ function up() {
     else
         __tac_line "[17/20] Stale Processes" "[CLEAN]" "$C_Success"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_docs_sync — [18/20] Check README for drift against repo facts.
+# Uses cooldown to avoid checking on every maintenance run.
+# ---------------------------------------------------------------------------
+function __up_docs_sync() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
+    local hours_left=""
 
     # [18/20] Documentation drift guard — lightweight README accuracy check.
     if __check_cooldown "docs_sync" "$now" hours_left "$force_mode"
@@ -884,12 +978,21 @@ function up() {
             __tac_line "[18/20] README Sync" "[OK]" "$C_Success"
         else
             __tac_line "[18/20] README Sync" "[DRIFT DETECTED]" "$C_Warning"
-            ((errCount++))
+            ((_up_err++))
         fi
         __set_cooldown "docs_sync" "$now"
     else
         __tac_line "[18/20] README Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_docker_prune — [19/20] Prune unused Docker resources.
+# No cooldown. Cleans containers, images, volumes, and build cache.
+# ---------------------------------------------------------------------------
+function __up_docker_prune() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
 
     # [19/20] Docker Prune — clean unused containers, images, and build cache.
     if command -v docker >/dev/null 2>&1
@@ -907,6 +1010,15 @@ function up() {
     else
         __tac_line "[19/20] Docker Prune" "[SKIP - Docker not installed]" "$C_Dim"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __up_npm_cache — [20/20] Verify and clean npm cache (24h cooldown).
+# ---------------------------------------------------------------------------
+function __up_npm_cache() {
+    local now="$1" force_mode="$2"
+    local -n _up_err="$3"
+    local hours_left=""
 
     # [20/20] NPM Cache Clean — verify and clean npm cache (24h cooldown).
     if __check_cooldown "npm_cache" "$now" hours_left "$force_mode"
@@ -933,6 +1045,60 @@ function up() {
     else
         __tac_line "[20/20] NPM Cache Clean" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# up — Run 20-step system maintenance with cooldowns per step.
+# Usage: up [--force]
+#   --force: Suspend all cooldowns for testing purposes
+# Cooldown functions (__check_cooldown / __set_cooldown) are defined above
+# in this section to avoid leaking nested function definitions.
+# ---------------------------------------------------------------------------
+function up() {
+    local force_mode=0
+    case "${1:-}" in
+        --force|-f) force_mode=1 ;;
+        *) ;;
+    esac
+
+    # Validate: reject unexpected arguments
+    if [[ $# -gt 1 ]]
+    then
+        __tac_info "Usage" "[up [--force|-f]]" "$C_Error"
+        return 1
+    fi
+
+    # Save current working directory to restore after maintenance
+    local original_dir="$PWD"
+
+    command clear
+    __tac_header "SYSTEM MAINTENANCE" "open"
+    local errCount=0
+    local now
+    now=$(date +%s)
+
+    # Performance tracking: record start time for metrics
+    local start_time=$now
+
+    touch "$CooldownDB" 2>/dev/null
+
+    # Call each step — each function receives (now, force_mode, errCount_nameref)
+    __up_connectivity "$now" "$force_mode" errCount
+    __up_apt_update "$now" "$force_mode" errCount
+    __up_npm_cargo "$now" "$force_mode" errCount
+    __up_r_packages "$now" "$force_mode" errCount
+    __up_openclaw_doctor "$now" "$force_mode" errCount
+    __up_oc_plugins "$now" "$force_mode" errCount
+    __up_python_venv "$now" "$force_mode" errCount
+    __up_python_fleet "$now" "$force_mode" errCount
+    __up_gpu_status "$now" "$force_mode" errCount
+    __up_temp_sanitation "$now" "$force_mode" errCount
+    __up_disk_audit "$now" "$force_mode" errCount
+    __up_systemd_units "$now" "$force_mode" errCount
+    __up_stale_processes "$now" "$force_mode" errCount
+    __up_docs_sync "$now" "$force_mode" errCount
+    __up_docker_prune "$now" "$force_mode" errCount
+    __up_npm_cache "$now" "$force_mode" errCount
 
     __tac_divider
     if (( errCount > 0 ))
