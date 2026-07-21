@@ -16,3 +16,4 @@ else
     echo "Error: $TOOLS_LINT not found" >&2
     exit 1
 fi
+# end of file
