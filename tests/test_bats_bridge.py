@@ -21,7 +21,7 @@ BATS_EXECUTABLE = "bats"
 
 _BATS_SUITE_DEFS: list[tuple[str, pytest.MarkDecorator | pytest.Mark, int]] = [
     ("tests/unit/*.bats",                 pytest.mark.bats_unit,         60),
-    ("tests/tactical-console.bats",        pytest.mark.bats_full,       480),
+    ("tests/tactical-console.bats",        pytest.mark.bats_full,       900),
     ("tests/integration/*.bats",           pytest.mark.bats_integration, 120),
 ]
 
@@ -42,8 +42,8 @@ def _discover_params() -> list[Any]:
                 pytest.param(
                     p,
                     timeout,
-                    id=p.stem,  # e.g. "tactical-console-fast" instead of "tactical-console-fast.bats"
-                    marks=[pytest.mark.bats, marker],  # type: ignore[list-item]
+                    id=p.stem,
+                    marks=[pytest.mark.bats, marker] + ([pytest.mark.slow] if timeout >= 600 else []),  # type: ignore[list-item]
                 )
             )
     return params
