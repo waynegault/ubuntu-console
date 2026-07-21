@@ -4,11 +4,14 @@ Exports resolve_memory_db_path(), init_graph_db(), load_from_graph_db(),
 and save_to_graph_db() — functions for storing and retrieving graph
 data from SQLite.
 """
+import logging
 import os
 import json
 import sqlite3
 from .constants import MEMORY_DB_CANDIDATES
 from .html import ensure_parent_dir
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_memory_db_path(preferred: str | None = None) -> str | None:
@@ -65,8 +68,8 @@ def load_from_graph_db(dbpath: str) -> dict:
           extra = json.loads(payload)
           if isinstance(extra, dict):
             node.update(extra)
-        except Exception:
-          pass
+        except Exception as exc:
+          logger.warning("Failed to parse node payload JSON: %s", exc)
       graph['nodes'].append(node)
   except sqlite3.Error:
     pass
@@ -80,8 +83,8 @@ def load_from_graph_db(dbpath: str) -> dict:
           extra = json.loads(payload)
           if isinstance(extra, dict):
             edge.update(extra)
-        except Exception:
-          pass
+        except Exception as exc:
+          logger.warning("Failed to parse edge payload JSON: %s", exc)
       graph['edges'].append(edge)
   except sqlite3.Error:
     pass

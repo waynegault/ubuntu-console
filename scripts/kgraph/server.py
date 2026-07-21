@@ -4,6 +4,7 @@ Exports resolve_serve_target() and serve_file() — the HTTP server
 implementation with the nested GraphRequestHandler class that serves
 the Cytoscape frontend and handles graph.json GET/POST.
 """
+import logging
 import os
 import json
 import time
@@ -11,6 +12,8 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 import threading
 import webbrowser
+
+logger = logging.getLogger(__name__)
 from .constants import GRAPH_DB_DEFAULT, SAMPLE_GRAPH
 from .graph_db import resolve_memory_db_path, load_from_graph_db, save_to_graph_db
 from .projection import project_graph
@@ -99,8 +102,8 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
                     graph = load_from_graph_db(path)
                 if graph.get("nodes") or graph.get("edges"):
                     return graph, name
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to load graph source %s: %s", name, exc)
 
         if has_store:
             with open(self.store, "r", encoding="utf-8") as f:
@@ -137,7 +140,8 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
             payload['_meta'] = dict(payload.get('_meta', {}))
             payload['_meta'].update(meta)
             data = json.dumps(payload)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Graph projection failed, falling back to sample: %s", exc)
             # final fallback to sample graph
             fallback = project_graph(SAMPLE_GRAPH, mode=req_view_mode, semantic_threshold=req_semantic)
             fallback['_meta'] = {

@@ -11,8 +11,11 @@ merging into the main kgraph.
 Supported languages: bash, python (add via extra grammar install).
 """
 
+import logging
 import re
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _AST_AVAILABLE = False
 try:
@@ -508,5 +511,6 @@ def _resolve_import_edges(file_node_ids, graph, add_edge):
 def _node_text(node, code: bytes) -> str:
     try:
         return code[node.start_byte:node.end_byte].decode('utf-8')
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to decode node text from source bytes: %s", exc)
         return ''

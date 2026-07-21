@@ -5,9 +5,12 @@ and generates an HTML dashboard showing recent work, file changes,
 and how they connect to the knowledge graph.
 """
 
+import logging
 import os
 import subprocess
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 def generate_pr_dashboard(repo_root: str, **kwargs) -> str:
@@ -108,8 +111,8 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
                     'date': parts[3],
                     'subject': parts[4],
                 })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to parse recent merges for dashboard: %s", exc)
 
     # Files changed recently
     diff_cmd = [
@@ -129,8 +132,8 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
                     'status': parts[0],
                     'path': parts[1],
                 })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to list recently changed files: %s", exc)
 
     # Active branches
     branch_cmd = ['git', 'branch', '-a', '--sort=-committerdate']
@@ -146,8 +149,8 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
                     'name': line.lstrip('* ').strip(),
                     'current': is_current,
                 })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to list active branches: %s", exc)
 
     # Authors
     author_cmd = [
@@ -166,8 +169,8 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
                 name = parts[0].strip()
                 email = parts[1].strip() if len(parts) > 1 else ''
                 authors[name] = email
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to get authors list: %s", exc)
 
     return {
         'merges': merges,

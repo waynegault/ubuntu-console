@@ -4,6 +4,7 @@ Exports resolve_life_root(), load_life_index(), load_relations(), and
 merge_relations() — functions that load canonical concept data from the
 OpenClaw life directory and inject explicit relation edges into graphs.
 """
+import logging
 import os
 import re
 import json
@@ -13,7 +14,10 @@ from .constants import (
     LIFE_ROOT_DEFAULT,
     load_canonical_data,
     normalize_canonical_name,
+
 )
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_life_root(preferred: str | None = None) -> str:
@@ -57,8 +61,8 @@ def load_life_index(life_root: str | None = None) -> dict:
             index['title_aliases'][norm] = rec['title']
       if index['records']:
         return index
-    except Exception:
-      pass
+    except Exception as exc:
+      logger.warning("Failed to load canonical concepts from '%s': %s", root, exc)
 
   if not os.path.isdir(root):
     return index
@@ -76,7 +80,8 @@ def load_life_index(life_root: str | None = None) -> dict:
       path = os.path.join(base, name)
       try:
         text = open(path, 'r', encoding='utf-8').read()
-      except Exception:
+      except Exception as exc:
+        logger.warning("Failed to read life index file '%s': %s", path, exc)
         continue
       lines = text.splitlines()
       title = ''
@@ -131,7 +136,8 @@ def load_relations(life_root: str | None = None) -> dict:
     with open(rel_path, 'r', encoding='utf-8') as f:
       data = json.load(f)
     return {'relations': data.get('relations', [])}
-  except Exception:
+  except Exception as exc:
+    logger.warning("Failed to load relations from '%s': %s", rel_path, exc)
     return {'relations': []}
 
 

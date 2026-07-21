@@ -7,6 +7,10 @@ concepts that bridge otherwise disconnected groups.
 Uses networkx as the graph engine under the hood. Pure offline.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 try:
     import networkx as nx
@@ -72,7 +76,8 @@ def detect_communities(graph: dict, method: str = "leiden_like", **kwargs) -> di
             comms = list(louvain_communities(G, weight='weight', seed=42))
         else:
             comms = list(greedy_modularity_communities(G, weight='weight'))
-    except Exception:
+    except Exception as exc:
+        logger.warning("Community detection failed, returning unclustered graph: %s", exc)
         return graph
 
     _meta = dict(graph.get('_meta', {}))
@@ -140,15 +145,18 @@ def compute_centrality(graph: dict) -> dict:
     degree = dict(G.degree())
     try:
         betweenness = nx.betweenness_centrality(G, weight='weight', k=min(200, G.number_of_nodes()))
-    except Exception:
+    except Exception as exc:
+        logger.warning("Betweenness centrality computation failed: %s", exc)
         betweenness = {}
 
     try:
         eigenvector = nx.eigenvector_centrality_numpy(G, weight='weight')
-    except Exception:
+    except Exception as exc:
+        logger.warning("Eigenvector centrality (numpy) failed, trying fallback: %s", exc)
         try:
             eigenvector = nx.eigenvector_centrality(G, max_iter=200)
-        except Exception:
+        except Exception as exc2:
+            logger.warning("Eigenvector centrality fallback also failed: %s", exc2)
             eigenvector = {}
 
     for nid in G.nodes():

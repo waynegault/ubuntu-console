@@ -18,10 +18,13 @@ Exposes:
 - kgraph --install-hook / --uninstall-hook (git hooks)
 """
 import argparse
+import logging
 import os
 import json
 import sys
 import tempfile
+
+logger = logging.getLogger(__name__)
 from .constants import GRAPH_DB_DEFAULT, SAMPLE_GRAPH
 from .graph_db import resolve_memory_db_path, load_from_graph_db
 from .html import generate_html
@@ -54,16 +57,16 @@ def _load_graph(args) -> dict:
             if g.get('nodes') or g.get('edges'):
                 graph = g
                 return graph
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to load graph from graph DB '%s': %s", graph_db, exc)
 
     if memory_db and os.path.exists(memory_db):
         try:
             g = load_from_memory_db(memory_db)
             if g.get('nodes') or g.get('edges'):
                 graph = g
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to load graph from memory DB '%s': %s", memory_db, exc)
 
     return graph
 
