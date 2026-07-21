@@ -32,9 +32,12 @@ from typing import BinaryIO
 
 # ── Constants ──────────────────────────────────────────────────────────
 
-LLAMA_SERVER = Path(os.path.expanduser("~/llama.cpp/build/bin/llama-server"))
+LLAMA_SERVER = Path(os.environ.get(
+    "LLAMA_SERVER_BIN",
+    str(Path.home() / "llama.cpp" / "build" / "bin" / "llama-server"),
+))
 REGISTRY = Path(os.environ.get("LLM_REGISTRY", os.path.expanduser("~/.llm/models.conf")))
-MODEL_DIR = Path("/mnt/m/active")
+MODEL_DIR = Path(os.environ.get("LLAMA_MODEL_DIR", "/mnt/m/active"))
 
 # Short burst for ctx discovery — TPS accuracy isn't the goal, we just need to
 # confirm the model can generate at a given ctx size without crashing.
