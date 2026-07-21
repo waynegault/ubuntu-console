@@ -1,11 +1,46 @@
 ---
-title: PowerShell Tactical Console — AI Build Prompt
+title: PowerShell Tactical Console — Translation & AI Build Prompt
 description: >
-  Complete, self-contained prompt for an AI agent to build the Windows PowerShell
-  equivalent of the Bash Tactical Console profile.
+  Translation strategy, workflow, and complete self-contained prompt for an AI
+  agent to build the Windows PowerShell equivalent of the Bash Tactical Console.
 ---
 
-# PowerShell Tactical Console — AI Build Prompt
+# PowerShell Tactical Console — Translation & AI Build Prompt
+
+## Translation Strategy
+
+Low-risk process for translating tactical-console from Bash to PowerShell
+without changing current runtime behavior.
+
+**Goals:**
+- Preserve user-visible behavior and command contracts.
+- Separate platform-specific adapters from business logic.
+- Validate parity with golden fixtures, not implementation details.
+- Keep Bash code untouched while preparing translation inputs.
+
+**Artifacts:**
+- `docs/contracts/command-contracts.yaml` — command behavioral contracts
+- `docs/contracts/state-contracts.yaml` — shared variables and cache files
+- `tools/capture-golden-fixtures.sh` — snapshot command outputs for parity checks
+- `tests/fixtures/golden/README.md` — fixture format and extension guidance
+
+**Workflow:**
+1. Freeze contracts.
+2. Capture golden fixtures in a representative environment.
+3. Translate one command family at a time (maintenance, OpenClaw, LLM, UI).
+4. Re-run fixture capture against PowerShell commands.
+5. Compare normalized outputs and resolve parity gaps.
+
+**Adapter design:** Prefer thin wrappers for external dependencies (port checks,
+cache freshness, journals/logs, WSL/Windows bridge calls). Keep adapters isolated
+so translation is mechanical and testable.
+
+**Non-interactive contract:** Automation path must expose the full command library
+without interactive side effects. Bash reference: `env.sh` and `bin/tac-exec`.
+
+---
+
+## AI Build Prompt
 
 Copy the block below in full when starting a new AI session to build the profile.
 Do not abbreviate it; every requirement here was included deliberately.
@@ -39,13 +74,13 @@ Before writing any code, read and internalise the following files from the repo.
 They are the source of truth; do not infer behavior that contradicts them.
 
 1. README.md                               — project overview, feature list, design principles
-2. docs/pwsh-translation-prep.md          — translation strategy and non-negotiable constraints
+2. docs/pwsh-build-prompt.md (this file)   — translation strategy and non-negotiable constraints
 3. docs/contracts/command-contracts.yaml  — every user-facing command and its behavioral contract
 4. docs/contracts/state-contracts.yaml    — all shared variables and /dev/shm cache files
 5. tests/fixtures/golden/README.md        — fixture format and normalization guidance
 6. tests/fixtures/golden/*.txt            — captured Bash output baselines (parity targets)
 7. tests/fixtures/golden/*.norm           — normalized baselines (use for automated diff)
-8. inspection.md                          — audit checklist; derive the PowerShell equivalent
+8. docs/inspection.md                    — audit checklist; derive the PowerShell equivalent
 
 
 ARCHITECTURE REQUIREMENTS

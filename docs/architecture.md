@@ -402,7 +402,7 @@ extra source commands.
 ├── config/
 │   └── quant-guide.conf               # Quantization priority ratings (editable)
 ├── README.md                          # Repository documentation
-├── inspection.md                      # Audit checklist
+├── docs/inspection.md                  # Audit checklist
 ├── bin/
 │   ├── tac-exec                       # Bootstrap: source env.sh + exec "$@"
 │   ├── tac_hostmetrics.sh             # Host CPU + iGPU + NVIDIA dGPU load/engines

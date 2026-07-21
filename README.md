@@ -52,7 +52,7 @@ tools, AI agents, cron jobs, and automation scripts via `tac-exec`.
 This repository now includes non-invasive prep artifacts to make AI-assisted
 translation to PowerShell deterministic and easier to validate:
 
-- `docs/pwsh-translation-prep.md` — Translation strategy and prompt-ready checklist
+- `docs/pwsh-build-prompt.md` — Translation strategy, workflow, and AI build prompt
 - `docs/contracts/command-contracts.yaml` — Starter command behavior contract
 - `docs/contracts/state-contracts.yaml` — Cross-module state contracts
 - `tools/capture-golden-fixtures.sh` — Snapshot selected command outputs for parity checks
