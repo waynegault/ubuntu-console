@@ -440,4 +440,8 @@ function wsl-up() {
     timeout 30 powershell.exe -NoProfile -NonInteractive -Command "wsl --update" 2>/dev/null || true
 }
 
+# token-plan-quota — Quick alias for `model tp-quota`.
+function token-plan-quota() { model tp-quota "$@"; }
+alias tpq='token-plan-quota'
+
 # end of file

@@ -590,6 +590,7 @@ function tactical_help() {
     __hRow "serve N" "Alias for model use N"
     __hRow "halt" "Stop llama-server"
     __hRow "mlogs" "Open llama-server log"
+    __hRow "model tp-quota" "Check Token Plan quota & reset time"
     __hRow "burn" "Token stress test (~1300)"
     __hRow "docs-sync" "Check README drift"
     __tac_info "Autotune knob" "LLM_AUTOTUNE_MIN_CTX_FRACTION (default 0.60): minimum selected ctx as fraction of max stable ctx" "$C_Dim"

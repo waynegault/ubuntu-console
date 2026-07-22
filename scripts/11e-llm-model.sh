@@ -2966,6 +2966,10 @@ function model() {
             __model_archive "$@"
             ;;
 
+        token-plan-quota|tp-quota|tpq)
+            __model_token_plan_quota
+            ;;
+
         *)
             __model_usage
             ;;
@@ -3078,6 +3082,91 @@ function llm-build() {
     else
         __tac_info "Error" "Built binary not found at ${bin}" "$C_Error"
         return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __model_token_plan_quota — Check remaining Token Plan quota and reset time.
+#
+# Probes the Token Plan global endpoint with a 1-token chat request.
+# Uses __os_fetch_cached (60s TTL) so repeated queries don't burn quota.
+# Parses the 429 response for the reset timestamp.
+#
+# Output: human-readable status via __tac_info lines.
+# Returns: 0 if quota available, 1 if exhausted, 2 if unreachable.
+# ---------------------------------------------------------------------------
+function __model_token_plan_quota() {
+    local cache_file="${TAC_CACHE_DIR}/tac_token_plan_quota"
+    local cache_ttl=60
+
+    local result
+    result=$(__os_fetch_cached "$cache_file" "$cache_ttl" \
+        curl -s -w "\n%{http_code}" \
+            "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions" \
+            -H "Authorization: Bearer ${BAILIAN_TOKEN_PLAN_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"qwen3.7-plus","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' \
+            --connect-timeout 10 --max-time 20 2>/dev/null) || result=""
+
+    local http_code
+    http_code=$(echo "$result" | tail -1)
+    local body
+    body=$(echo "$result" | sed '$d')
+
+    local console_url="https://modelstudio.console.alibabacloud.com/ap-southeast-1"
+
+    if [[ "$http_code" == "429" ]]; then
+        # Extract reset time from the error message
+        local reset_msg
+        reset_msg=$(echo "$body" | jq -r '.error.message // empty' 2>/dev/null)
+        if [[ -n "$reset_msg" ]]; then
+            # Parse: "Your token-plan 5-hour quota has been exhausted. The quota will reset at 07-22 14:44:00 UTC."
+            local reset_date
+            reset_date=$(echo "$reset_msg" | grep -oP 'reset at \K[0-9]{2}-[0-9]{2} [0-9\:]+')
+            if [[ -n "$reset_date" ]]; then
+                local current_year
+                current_year=$(date +%Y)
+                local reset_epoch
+                reset_epoch=$(date -d "${current_year}-${reset_date} UTC" +%s 2>/dev/null || echo "")
+                local now_epoch
+                now_epoch=$(date +%s)
+                if [[ -n "$reset_epoch" && -n "$now_epoch" ]]; then
+                    local remaining=$(( reset_epoch - now_epoch ))
+                    if (( remaining > 0 )); then
+                        local hours=$(( remaining / 3600 ))
+                        local mins=$(( (remaining % 3600) / 60 ))
+                        __tac_info "Token Plan" "Quota exhausted — resets in ${hours}h ${mins}m (${reset_date} UTC)" "$C_Warning"
+                    else
+                        __tac_info "Token Plan" "Quota exhausted — resetting shortly" "$C_Warning"
+                    fi
+                else
+                    __tac_info "Token Plan" "Quota exhausted — ${reset_date} UTC" "$C_Warning"
+                fi
+            else
+                __tac_info "Token Plan" "Quota exhausted" "$C_Error"
+            fi
+            __tac_info "Console" "Top up at ${console_url}" "$C_Dim"
+        else
+            __tac_info "Token Plan" "Quota exhausted (unknown reset)" "$C_Error"
+            __tac_info "Console" "Check at ${console_url}" "$C_Dim"
+        fi
+        return 1
+
+    elif [[ "$http_code" == "200" ]]; then
+        __tac_info "Token Plan" "Quota available ✓" "$C_Success"
+        return 0
+
+    elif [[ "$http_code" == "401" ]]; then
+        __tac_info "Token Plan" "Invalid API key — check BAILIAN_TOKEN_PLAN_API_KEY env var" "$C_Error"
+        return 2
+
+    elif [[ "$http_code" == "000" || -z "$http_code" ]]; then
+        __tac_info "Token Plan" "Endpoint unreachable (network/VPN?)" "$C_Error"
+        return 2
+
+    else
+        __tac_info "Token Plan" "HTTP ${http_code} — unexpected response" "$C_Warning"
+        return 2
     fi
 }
 
