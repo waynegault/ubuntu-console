@@ -63,6 +63,8 @@ export ErrorLogPath="$OC_LOGS/bash-errors.log"
 export OC_TMP_LOG="/tmp/openclaw/openclaw.log"
 
 # ---- LLM / llama.cpp ----
+# Upstream: https://github.com/ggml-org/llama.cpp
+# Build:    cmake -B build -DGGML_CUDA=ON && cmake --build build --target llama-server
 export LLAMA_ROOT="$AI_STORAGE_ROOT/llama.cpp"
 # LLAMA_DRIVE_ROOT is user-configurable at the top of this file.
 export LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active"

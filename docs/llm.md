@@ -8,10 +8,13 @@ description: Complete guide to the local LLM inference stack — model registry,
 ## Overview
 
 The profile provides a complete local inference stack built on
+[llama.cpp](https://github.com/ggml-org/llama.cpp) (compiled from source
+with CUDA — see `$LLAMA_SERVER_BIN`) and
 [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) (pinned to
 `0.3.23`) with CUDA acceleration. Models are stored as GGUF files, managed
-through a pipe-delimited registry, and served via `python -m llama_cpp.server`
-on port 8081. The system exposes an OpenAI-compatible API at
+through a pipe-delimited registry, and served via the native `llama-server`
+binary (or `python -m llama_cpp.server` as fallback) on port 8081. The
+system exposes an OpenAI-compatible API at
 `http://127.0.0.1:8081/v1/chat/completions`.
 
 > **AUTOTUNE_PORT:** The autotune process (`scripts/autotune-model.sh`)
@@ -242,7 +245,7 @@ unnecessary API errors.
 
 | Path | Purpose |
 |---|---|
-| `~/llama.cpp/` | llama.cpp installation root (`$LLAMA_ROOT`) |
+| `~/llama.cpp/` | llama.cpp installation root (`$LLAMA_ROOT`) — upstream: [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) |
 | `/mnt/m/active/` | Active GGUF model files (`$LLAMA_MODEL_DIR`) |
 | `/mnt/m/archive/` | Archived/discouraged models (`$LLAMA_ARCHIVE_DIR`) |
 | `~/llama.cpp/build/bin/llama-server` | Server binary (`$LLAMA_SERVER_BIN`) |
