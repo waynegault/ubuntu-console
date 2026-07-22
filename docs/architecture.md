@@ -262,6 +262,7 @@ subshells). The `__strip_ansi` function is pure bash regex — no `sed`, no
 forks — critical because it is called 20+ times per dashboard render.
 
 Layout constants are derived from `UIWidth` (default 80):
+
 - `__fRow` value column: `UIWidth - 20` characters
 - `__hRow` description column: `UIWidth - 22` characters
 - Values exceeding their column width are truncated with `...`
@@ -534,4 +535,4 @@ git add -A && git commit -m "description" && git push
 
 ← [Back to README](../README.md)
 
-# end of file
+end of file

@@ -1,4 +1,4 @@
-Bash Script Inspection, Improvement & Validation Audit
+# Bash Script Inspection, Improvement & Audit Checklist
 
 A comprehensive, repeatable checklist for auditing the Tactical Console Profile
 and its modular architecture. Covers the thin loader (tactical-console.bashrc),
@@ -515,6 +515,7 @@ bg processes only inside explicit user-invoked functions
 head -10 <file>
 
 Strict mode requirements vary by file type:
+
 - **Loader + sourced modules** (`tactical-console.bashrc`, `scripts/[0-9][0-9]-*.sh`): MUST NOT use `set -euo pipefail` (breaks interactive shell — see 3.8).
 - **`install.sh`**: SHOULD use `set -euo pipefail`.
 - **`bin/*.sh`** (sourced into environment via `install.sh` symlinks): MUST NOT use `set -e`.
@@ -714,7 +715,9 @@ Each if, then, else, elif, fi on its own line for readability
 
 🔧 No compressed for/while on single lines
 
+```bash
 grep -nE 'for .* do .* done' <file>
+```
 
 Loop body on separate lines; do/done on their own lines
 
@@ -1092,9 +1095,13 @@ Expected
 
 🔍 Shebang is correct
 
+```bash
 head -1 <file>
+```
 
+```bash
 #!/usr/bin/env bash
+```
 
 7.2
 
