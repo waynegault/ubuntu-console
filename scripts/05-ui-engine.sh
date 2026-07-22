@@ -433,33 +433,50 @@ function __hRow() {
     local cmd="${1:-}"
     local desc="${2:-}"
     local cmd_width=16
-    local desc_width=$(( UIWidth - 21 ))  # 2 borders + 2 indent + 16 cmd + 1 spacer
+    local indent=$(( cmd_width + 3 ))  # 16 cmd + 2 indent + 1 spacer
+    local desc_width=$(( UIWidth - indent - 2 ))  # minus borders
 
-    local first_line=1
-    while [[ -n "$cmd" || -n "$desc" || $first_line -eq 1 ]]
-    do
-        local cmd_chunk="${cmd:0:$cmd_width}"
-        local desc_chunk="${desc:0:$desc_width}"
-        cmd="${cmd:$cmd_width}"
-        desc="${desc:$desc_width}"
-
-        local cmd_pad=$(( cmd_width - ${#cmd_chunk} ))
-        local desc_pad=$(( desc_width - ${#desc_chunk} ))
+    if (( ${#cmd} > cmd_width )); then
+        # Long command: show on its own line, desc indented on next line
+        local cmd_pad=$(( desc_width + indent - ${#cmd} - 2 ))
         local cmd_pad_str=""
-        local desc_pad_str=""
         (( cmd_pad > 0 )) && printf -v cmd_pad_str '%*s' "$cmd_pad" ""
-        (( desc_pad > 0 )) && printf -v desc_pad_str '%*s' "$desc_pad" ""
-
-        printf "%b%s%s%b%s%s%b\n" \
+        printf "%b%s%s%s%b\n" \
             "${C_BoxBg}${BOX_V}  " \
-            "${C_Highlight}" "$cmd_chunk" \
-            "${C_Text}" "$cmd_pad_str $desc_chunk" \
+            "${C_Highlight}" "$cmd" \
+            "$cmd_pad_str" \
+            "${C_BoxBg}${BOX_V}${C_Reset}"
+        # Description on next line, indented
+        local indent_str; printf -v indent_str '%*s' "$((indent))" ""
+        while [[ -n "$desc" ]]; do
+            local desc_chunk="${desc:0:$desc_width}"
+            desc="${desc:$desc_width}"
+            local desc_pad=$(( desc_width - ${#desc_chunk} ))
+            local desc_pad_str=""
+            (( desc_pad > 0 )) && printf -v desc_pad_str '%*s' "$desc_pad" ""
+            printf "%b%s%b%s%s%b\n" \
+                "${C_BoxBg}${BOX_V}${C_Reset}" \
+                "$indent_str" \
+                "${C_Text}" "$desc_chunk" \
+                "$desc_pad_str" \
+                "${C_BoxBg}${BOX_V}${C_Reset}"
+            [[ -n "$desc" ]] || break
+        done
+    else
+        # Short command: show cmd + desc on one line
+        local desc_pad=$(( desc_width - ${#desc} ))
+        local desc_pad_str=""
+        (( desc_pad > 0 )) && printf -v desc_pad_str '%*s' "$desc_pad" ""
+        local cmd_pad=$(( cmd_width - ${#cmd} ))
+        local cmd_pad_str=""
+        (( cmd_pad > 0 )) && printf -v cmd_pad_str '%*s' "$cmd_pad" ""
+        printf "%b%s%s%b%s %s%s%b\n" \
+            "${C_BoxBg}${BOX_V}  " \
+            "${C_Highlight}" "$cmd" \
+            "${C_Text}" "$cmd_pad_str" "$desc" \
             "$desc_pad_str" \
             "${C_BoxBg}${BOX_V}${C_Reset}"
-
-        first_line=0
-        [[ -n "$cmd" || -n "$desc" ]] || break
-    done
+    fi
 }
 
 # ---------------------------------------------------------------------------
