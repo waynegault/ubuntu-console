@@ -2053,24 +2053,24 @@ function __model_bench_trend() {
 
             # First file (old): build lookup
             NR == FNR {
-                if (FNR == 1 || \$1 == "#") next
-                old_tps[\$2] = tps_num(\$4)
-                old_ctx[\$2] = \$5  # ctx
+                if (FNR == 1 || $1 == "#") next
+                old_tps[$2] = tps_num($4)
+                old_ctx[$2] = $5  # ctx
                 next
             }
 
             # Second file (new): compare
             {
-                if (FNR == 1 || \$1 == "#") next
-                if (\$1 == "") next
-                new_t = tps_num(\$4)
-                old_t = old_tps[\$2]
+                if (FNR == 1 || $1 == "#") next
+                if ($1 == "") next
+                new_t = tps_num($4)
+                old_t = old_tps[$2]
                 if (old_t > 0 && new_t > 0) {
                     pct = (new_t - old_t) / old_t * 100
                     if (pct < -15) {
-                        printf "FLAG|%s|%.1f|%.1f|%.0f%%|%s\n", \$2, old_t, new_t, pct, \$5
+                        printf "FLAG|%s|%.1f|%.1f|%.0f%%|%s\n", $2, old_t, new_t, pct, $5
                     } else if (pct < -5) {
-                        printf "WARN|%s|%.1f|%.1f|%.0f%%|%s\n", \$2, old_t, new_t, pct, \$5
+                        printf "WARN|%s|%.1f|%.1f|%.0f%%|%s\n", $2, old_t, new_t, pct, $5
                     }
                 }
             }
