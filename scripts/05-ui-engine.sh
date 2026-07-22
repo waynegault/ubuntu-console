@@ -433,37 +433,56 @@ function __hRow() {
     local cmd="${1:-}"
     local desc="${2:-}"
     local cmd_width=22
-    local indent=$(( cmd_width + 3 ))  # 22 cmd + 2 indent + 1 spacer
+    local indent=$(( cmd_width + 3 ))
     local desc_width=$(( UIWidth - indent - 2 ))
-
-    local cmd_pad=$(( cmd_width - ${#cmd} ))
-    local cmd_pad_str=""
-    (( cmd_pad > 0 )) && printf -v cmd_pad_str '%*s' "$cmd_pad" ""
-
-    # Command on its own line
-    printf "%b%s%s%b%s%b\n" \
-        "${C_BoxBg}${BOX_V}  " \
-        "${C_Highlight}" "$cmd" \
-        "${C_Text}" "$cmd_pad_str" \
-        "${C_BoxBg}${BOX_V}${C_Reset}"
-
-    # Description indented below, character-wrapped at desc_width
-    # (character-wrap is fine here — indentation makes it readable)
     local indent_str; printf -v indent_str '%*s' "$((indent))" ""
-    while [[ -n "$desc" ]]; do
-        local chunk="${desc:0:$desc_width}"
-        local pad=$(( desc_width - ${#chunk} ))
-        local pad_str=""
-        (( pad > 0 )) && printf -v pad_str '%*s' "$pad" ""
-        printf "%b%s%b%s%s%b\n" \
-            "${C_BoxBg}${BOX_V}${C_Reset}" \
-            "$indent_str" \
-            "${C_Text}" "$chunk" \
-            "$pad_str" \
+
+    if (( ${#cmd} > cmd_width )); then
+        # Long command: show on its own line, full desc below
+        local cmd_pad=$(( desc_width + indent - ${#cmd} - 2 ))
+        local cmd_pad_str=""
+        (( cmd_pad > 0 )) && printf -v cmd_pad_str '%*s' "$cmd_pad" ""
+        printf "%s%s%s%s%s\n" \
+            "${C_BoxBg}${BOX_V}  " \
+            "${C_Highlight}" "$cmd" \
+            "$cmd_pad_str" \
             "${C_BoxBg}${BOX_V}${C_Reset}"
-        desc="${desc:$desc_width}"
-        [[ -n "$desc" ]] || break
-    done
+        local remaining="$desc"
+    else
+        # Short command: show cmd + start of desc on same line
+        local cmd_pad=$(( cmd_width - ${#cmd} ))
+        local cmd_pad_str=""
+        (( cmd_pad > 0 )) && printf -v cmd_pad_str '%*s' "$cmd_pad" ""
+        local line1="${desc:0:$desc_width}"
+        local line1_pad=$(( desc_width - ${#line1} ))
+        local line1_pad_str=""
+        (( line1_pad > 0 )) && printf -v line1_pad_str '%*s' "$line1_pad" ""
+        printf "%s%s%s%s%s %s%s%s\n" \
+            "${C_BoxBg}${BOX_V}  " \
+            "${C_Highlight}" "$cmd" \
+            "${C_Text}" "$cmd_pad_str" "$line1" \
+            "$line1_pad_str" \
+            "${C_BoxBg}${BOX_V}${C_Reset}"
+        local remaining="${desc:$desc_width}"
+    fi
+
+    # Continuation lines for long descriptions
+    if [[ -n "$remaining" ]]; then
+        while [[ -n "$remaining" ]]; do
+            local chunk="${remaining:0:$desc_width}"
+            local pad=$(( desc_width - ${#chunk} ))
+            local pad_str=""
+            (( pad > 0 )) && printf -v pad_str '%*s' "$pad" ""
+            printf "%s%s%s%s%s%s\n" \
+                "${C_BoxBg}${BOX_V}${C_Reset}" \
+                "$indent_str" \
+                "${C_Text}" "$chunk" \
+                "$pad_str" \
+                "${C_BoxBg}${BOX_V}${C_Reset}"
+            remaining="${remaining:$desc_width}"
+            if [[ -n "$remaining" ]]; then continue; else break; fi
+        done
+    fi
 }
 
 # ---------------------------------------------------------------------------
