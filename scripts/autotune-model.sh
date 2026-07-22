@@ -202,6 +202,7 @@ bench_once() {
     local tag="/tmp/at-vram-${MODEL}-${c}"
     local effective_ngl="${override_ngl:-${BENCH_NGL:-999}}"
 
+    _BENCH_FAIL_TYPE=""  # global: "load_fail" or "oom"; reset before each bench
     cleanup_gpu 2>/dev/null || { echo ""; return 1; }
 
     if [[ ! -f $tag ]]; then
@@ -230,12 +231,12 @@ bench_once() {
     local hw=0
     while [[ $hw -lt 90 ]]; do
         sleep 1; hw=$((hw + 1))
-        kill -0 "$pid" 2>/dev/null || { echo ""; return 1; }
+        kill -0 "$pid" 2>/dev/null || { echo ""; _BENCH_FAIL_TYPE="load_fail"; return 1; }
         curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q 'ok' && break
     done
     if [[ $hw -ge 90 ]]; then
         kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
-        echo ""; return 1
+        echo ""; _BENCH_FAIL_TYPE="load_fail"; return 1
     fi
 
     # Pre-flight: confirm model slot is actually ready to serve.
@@ -254,7 +255,7 @@ bench_once() {
     done
     if [[ $pf_ok -ne 1 ]]; then
         kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
-        echo ""; return 1
+        echo ""; _BENCH_FAIL_TYPE="oom"; return 1
     fi
 
     # GPU warmup: wake clocks from power-save (P5/P8 → P0).
@@ -287,7 +288,7 @@ except: print(0)" 2>/dev/null) || tokens=0
         echo "scale=2; $tokens * 1000 / $elapsed_ms" | bc 2>/dev/null || echo "0"
         return 0
     fi
-    echo ""
+    echo ""; _BENCH_FAIL_TYPE="oom"
     return 1
 }
 
@@ -297,6 +298,7 @@ except: print(0)" 2>/dev/null) || tokens=0
 # ---------------------------------------------------------------------------
 bench_ctx() {
     local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}" override_ngl="${6:-}"
+    _BENCH_FAIL_TYPE=""
 
     if [[ $samples -eq 1 ]]; then
         local tps; tps=$(bench_once "$c" "$b" "$u" "$mmap_mode" "$override_ngl") || { echo ""; return 1; }
@@ -400,19 +402,24 @@ for combo in "${COMBOS[@]}"; do
             echo "  ctx $(fmt "$BEST_CTX") - ${tps} tps"
             ANY_OK=true; record_best "$BEST_CTX" "$tps" "$b" "$u"
         else
-            echo "  ctx $(fmt "$BEST_CTX") - OOM with batch $(fmt "$b")/$(fmt "$u")"
+            fail_label="OOM"
+            [[ $_BENCH_FAIL_TYPE == "load_fail" ]] && fail_label="unsupported model"
+            echo "  ctx $(fmt "$BEST_CTX") - ${fail_label} with batch $(fmt "$b")/$(fmt "$u")"
         fi
         continue
     fi
-    test_num=0; c=$c0; found=false
+    test_num=0; c=$c0; found=false; _ALL_LOAD_FAIL=true
     while [[ $c -ge $MIN_CTX ]]; do
         test_num=$((test_num + 1))
         tps=$(bench_ctx "$c" "$b" "$u" 1) || {
-            echo "  Test $test_num: ctx $(fmt "$c") - OOM: dropping to $(fmt $((c/2)))"
+            fail_label="OOM"
+            [[ $_BENCH_FAIL_TYPE == "load_fail" ]] && fail_label="unsupported model"
+            echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label}: dropping to $(fmt $((c/2)))"
+            [[ $_BENCH_FAIL_TYPE != "load_fail" ]] && _ALL_LOAD_FAIL=false
             c=$((c/2)); [[ $c -lt $MIN_CTX ]] && break; continue
         }
         echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps"
-        found=true; ANY_OK=true
+        found=true; ANY_OK=true; _ALL_LOAD_FAIL=false
         record_best "$c" "$tps" "$b" "$u"
 
         # Phase 2: step up 50%, stop if TPS stable for 3 steps
@@ -427,10 +434,12 @@ for combo in "${COMBOS[@]}"; do
             # classification in the binary probe.
             if [[ $rc -ne 0 ]] || [[ -z "$tps" || "$tps" == "0" || "$tps" == "0.00" || "$tps" == "0,00" ]]; then
                 hi=$c
+                fail_label="OOM"
+                [[ $_BENCH_FAIL_TYPE == "load_fail" ]] && fail_label="unsupported model"
                 if [[ -n "$tps" && "$tps" == "0" ]]; then
-                    echo "  Test $test_num: ctx $(fmt "$c") - 0 tps (OOM): binary probe $(fmt $(( (lo+hi)/2/512*512 )))"
+                    echo "  Test $test_num: ctx $(fmt "$c") - 0 tps (${fail_label}): binary probe $(fmt $(( (lo+hi)/2/512*512 )))"
                 else
-                    echo "  Test $test_num: ctx $(fmt "$c") - OOM: binary probe $(fmt $(( (lo+hi)/2/512*512 )))"
+                    echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label}: binary probe $(fmt $(( (lo+hi)/2/512*512 )))"
                 fi
                 break
             fi
@@ -468,7 +477,9 @@ for combo in "${COMBOS[@]}"; do
             tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
             if [[ $rc -ne 0 ]]; then
                 hi=$c
-                echo "  Test $test_num: ctx $(fmt "$c") - OOM"
+                fail_label="OOM"
+                [[ $_BENCH_FAIL_TYPE == "load_fail" ]] && fail_label="unsupported model"
+                echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label}"
             else
                 lo=$c; record_best "$lo" "$tps" "$b" "$u"
                 echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps"
@@ -477,7 +488,18 @@ for combo in "${COMBOS[@]}"; do
         fi
         break
     done
-    [[ $found == false ]] && echo "  Test $test_num: ctx $(fmt "$c") - OOM - model cannot run at any ctx"
+    if [[ $found == false ]]; then
+        fail_label="OOM"
+        [[ $_ALL_LOAD_FAIL == true ]] && fail_label="unsupported model"
+        echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label} - model cannot run at any ctx"
+        # Early abort: if the model never loaded at any ctx (load_fail at every
+        # step), skip remaining combos — stepping down won't make the GGUF
+        # load. Go straight to the --no-mmap fallback.
+        if [[ $_ALL_LOAD_FAIL == true ]]; then
+            echo "  (model cannot be loaded — skipping remaining combos)"
+            break
+        fi
+    fi
 done
 
 # --- mmap fallback ---
@@ -487,6 +509,7 @@ if [[ $ANY_OK == false ]]; then
     echo ""
     echo "  --mmap failed at all ctx — retrying with --no-mmap"
     echo ""
+    _ALL_LOAD_FAIL=true
     for combo in "${COMBOS[@]}"; do
         IFS=':' read -r b u <<< "$combo"
         echo "  batch $(fmt "$b")/$(fmt "$u")  (--no-mmap)"
@@ -495,11 +518,14 @@ if [[ $ANY_OK == false ]]; then
         c=$START_CTX; found=false
         while [[ $c -ge $MIN_CTX ]]; do
             tps=$(bench_ctx "$c" "$b" "$u" 1 "off") || {
-                echo "  ctx $(fmt "$c") - OOM: dropping to $(fmt $((c/2)))"
+                fail_label="OOM"
+                [[ $_BENCH_FAIL_TYPE == "load_fail" ]] && fail_label="unsupported model"
+                echo "  ctx $(fmt "$c") - ${fail_label}: dropping to $(fmt $((c/2)))"
+                [[ $_BENCH_FAIL_TYPE != "load_fail" ]] && _ALL_LOAD_FAIL=false
                 c=$((c/2)); [[ $c -lt $MIN_CTX ]] && break; continue
             }
             echo "  ctx $(fmt "$c") - ${tps} tps"
-            found=true; ANY_OK=true
+            found=true; ANY_OK=true; _ALL_LOAD_FAIL=false
             record_best "$c" "$tps" "$b" "$u"
             # Phase 2: step up, stop at first OOM (fallback path — keep it simple)
             lo=$c; c=$((c * 3 / 2))
@@ -507,7 +533,9 @@ if [[ $ANY_OK == false ]]; then
                 bench_ctx "$c" "$b" "$u" 1 "off" > /tmp/at-tps-$$; rc=$?
                 tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
                 if [[ $rc -ne 0 ]]; then
-                    echo "  ctx $(fmt "$c") - OOM"
+                    fail_label="OOM"
+                    [[ $_BENCH_FAIL_TYPE == "load_fail" ]] && fail_label="unsupported model"
+                    echo "  ctx $(fmt "$c") - ${fail_label}"
                     break
                 fi
                 lo=$c; record_best "$lo" "$tps" "$b" "$u"
@@ -516,6 +544,11 @@ if [[ $ANY_OK == false ]]; then
             done
             break
         done
+        # Likewise early-abort remaining combos in the fallback path
+        if [[ $_ALL_LOAD_FAIL == true ]]; then
+            echo "  (model cannot be loaded even with --no-mmap — aborting)"
+            break
+        fi
     done
 fi
 
@@ -533,7 +566,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             echo "  ubatch $ub - ${tps} tps"
             record_best "$BEST_CTX" "$tps" "$BEST_B" "$ub"
         else
-            echo "  ubatch $ub - OOM"
+            fail_label="OOM"
+            [[ $_BENCH_FAIL_TYPE == "load_fail" ]] && fail_label="unsupported model"
+            echo "  ubatch $ub - ${fail_label}"
         fi
     done
 fi
@@ -561,7 +596,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $(echo "$BEST_TPS < $MIN_TPS" |
             echo "  ctx $(fmt "$next") - ${tps} tps"
             BEST_CTX=$next; BEST_TPS=$tps
         else
-            echo "  ctx $(fmt "$next") - OOM"
+            fail_label="OOM"
+            [[ $_BENCH_FAIL_TYPE == "load_fail" ]] && fail_label="unsupported model"
+            echo "  ctx $(fmt "$next") - ${fail_label}"
         fi
         _dc=$next
     done
@@ -601,7 +638,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     echo "  done"
     exit 0
 else
-    echo "  failed: no working config"
+    echo "  failed: unsupported model — model could not be loaded at any ctx"
     exit 1
 fi
 

@@ -485,7 +485,7 @@ extra source commands.
 │   ├── test_model_autotune.py         # Python tests for autotune logic
 │   ├── test_kgraph.py                 # Python tests for kgraph package
 │   ├── audit_report.md                # Test infrastructure audit
-│   ├── unit/                          # BATS unit tests (33 tests)
+│   ├── unit/                          # BATS unit tests (39 tests)
 │   └── integration/                   # BATS integration tests (109 tests)
 └── systemd/
     ├── llama-watchdog.service         # systemd unit for watchdog

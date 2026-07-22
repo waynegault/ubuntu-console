@@ -84,7 +84,7 @@ Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice 
 | `model recommend` | Rank scanned models for a 4 GB VRAM system using quant, size, architecture, and saved TPS |
 | `model info N` | Display full details for model #N including on-disk status and `quant_rating` |
 | `model bench` | Benchmark all on-disk models: if a model row has `autotuned=no`, `bench` runs autotune first (full legitimate parameter sweep for that model), then starts model, runs burn-in, and records TPS. Discouraged quants from `quant-guide.conf` are skipped for auto-autotune unless `LLM_ALLOW_AUTOTUNE_DISCOURAGED=1` is set. Once `autotuned=yes`, bench will not auto-retune that model unless the row is reset. Results persist to `$LLAMA_DRIVE_ROOT/.llm/bench_*.tsv` (default `/mnt/m/.llm/bench_*.tsv`). |
-| `model autotune N [--backend native|python] [--quick] [--ctx-size N] [--trials N]` | Auto-tune runtime config with objective priority: **1) no OOM, 2) maximum context, 3) maximum TPS**. Saves per-model profile for future `model use` and `model bench`. |
+| `model autotune N [--backend native|python] [--quick] [--ctx-size N] [--trials N]` | Auto-tune runtime config with objective priority: **1) no OOM, 2) maximum context, 3) maximum TPS**. Saves per-model profile for future `model use` and `model bench`. Models whose GGUF cannot be loaded (unsupported architecture, corrupted file) are reported as **unsupported model** and autotune aborts early instead of grinding through all combos. |
 | `model bench-diff` / `model bench-compare` | Compare two benchmark TSV runs |
 | `model bench-history` | Summarise recent saved benchmark TSV runs |
 | `model delete N` | Permanently delete model #N from disk and deregister. Supports `--dry-run`. |

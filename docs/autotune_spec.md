@@ -77,8 +77,16 @@ while c >= 4096:
         record_best(c, tps)         // track by the success metric (see Scoring)
         → Phase 2
     else:
+        if FAIL_LOAD:               // server PID died before health check
+            _ALL_LOAD_FAIL = true   // model GGUF cannot be loaded at any ctx
         c = c / 2
         continue
+
+// Early abort: if every ctx size in this combo failed with FAIL_LOAD,
+// skip remaining combos and go straight to the --no-mmap fallback.
+// If --no-mmap also fails with FAIL_LOAD at every ctx, the model is
+// unsupported on this hardware and autotune exits with:
+//   "failed: unsupported model — model could not be loaded at any ctx"
 ```
 
 ### Phase 2 — Probe the ceiling (refinement zone uses double-sample)
@@ -238,11 +246,14 @@ Start server in background. Poll `http://127.0.0.1:8081/health` every 1s up to 9
 |---|---|---|
 | FAIL-crash | Server PID died during health check | OOM on model load, bad params, or port conflict. Phase 1 halves ctx, retries. |
 | FAIL-timeout | Health check exceeded 90s | Model load stalled (unlikely on this mount, but possible for very large CPU-only models). Phase 1 halves ctx, retries. |
+| FAIL-load | Server PID died before health check returned *any* `ok` response | Model GGUF cannot be loaded on this hardware — unsupported architecture, corrupted file, or incompatible ops. Triggers **early abort**: if this occurs at every ctx size for a combo, remaining combos and the `--no-mmap` fallback are skipped. The script exits with `failed: unsupported model — model could not be loaded at any ctx`. |
 | FAIL-0tokens | Server responded but produced 0 completion tokens | Bench curl timed out or empty response. Probably OOM during generation. Treated as failure. |
 | FAIL-port-busy | VRAM or port didn't clear after kill | Previous server left state behind. Retry after longer wait. |
 | below floor | Server worked but TPS < `LLM_MIN_TPS` | Model is swapping to system RAM. Phase 4 downshifts ctx (smaller KV cache → higher TPS) until the floor is met or min ctx is reached. If still below at min ctx, the best-effort config is saved and the model is reported as too slow. |
 
-None of these errors are fatal. Phase 1 handles them by stepping down. Phase 2 handles them by narrowing the binary probe.
+FAIL-load is the only error that terminates autotune early. The rest are handled
+by stepping down (Phase 1), narrowing the probe (Phase 2), or downshifting
+(Phase 4).
 
 ---
 
@@ -355,4 +366,4 @@ complex with no current runtime impact. Deferred.
 
 ---
 
-*Spec written 2026-06-06. Updated 2026-07-22 (v3: uniform `LLM_MIN_TPS=10` floor, lexicographic success metric, Phase 4 downshift-to-recover, honest capability profiling). Corresponding code in `~/ubuntu-console/scripts/autotune-model.sh` and `~/ubuntu-console/scripts/run-autotune-batch.sh`.*
+*Spec written 2026-06-06. Updated 2026-07-22 (v3: uniform `LLM_MIN_TPS=10` floor, lexicographic success metric, Phase 4 downshift-to-recover, honest capability profiling, load_fail/unsupported model classification & early abort). Corresponding code in `~/ubuntu-console/scripts/autotune-model.sh` and `~/ubuntu-console/scripts/run-autotune-batch.sh`.*
