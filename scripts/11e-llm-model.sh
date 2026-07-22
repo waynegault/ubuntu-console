@@ -2973,4 +2973,112 @@ function model() {
 }
 
 # serve/halt/mlogs — convenience wrappers for the model manager.
-# end of file
+
+# ---------------------------------------------------------------------------
+# __llm_build — Build or rebuild llama-server from source with CUDA.
+#
+# Pulls the latest upstream llama.cpp, configures with the optimal CMake
+# flags for this hardware (RTX 3050 Ti SM 86, i9-12900HK), builds the
+# llama-server binary, and updates the convenience symlink.
+#
+# Usage:   llm-build [--quick] [--no-pull]
+# Options:
+#   --quick     Skip cmake reconfigure when the build dir already exists
+#              (just rebuild the binary with existing CMake cache)
+#   --no-pull   Skip git pull (rebuild the current checkout only)
+# ---------------------------------------------------------------------------
+function llm-build() {
+    local quick=false no_pull=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --quick) quick=true; shift ;;
+            --no-pull) no_pull=true; shift ;;
+            *) __tac_info "Usage" "llm-build [--quick] [--no-pull]" "$C_Warn"; return 1 ;;
+        esac
+    done
+
+    local root="${LLAMA_ROOT:-$HOME/llama.cpp}"
+    if [[ ! -d "$root" ]]; then
+        __tac_info "Clone" "Cloning llama.cpp from github.com/ggml-org/llama.cpp ..." "$C_Info"
+        git clone https://github.com/ggml-org/llama.cpp.git "$root" || {
+            __tac_info "Error" "Clone failed" "$C_Error"; return 1
+        }
+        no_pull=true  # already on latest after clone
+    fi
+
+    cd "$root" || return 1
+
+    # Pull latest upstream
+    if [[ "$no_pull" != "true" ]]; then
+        __tac_info "Pull" "Fetching latest upstream ..." "$C_Info"
+        git pull --ff-only || {
+            __tac_info "Error" "git pull failed (force-push? try: git fetch && git reset --hard origin/master)" "$C_Error"
+            return 1
+        }
+    fi
+
+    # Detect available parallelism
+    local jobs
+    jobs=$(nproc 2>/dev/null || echo 4)
+
+    # Configure with CMake (skip if --quick and CMakeCache exists)
+    if [[ "$quick" != "true" || ! -f "$root/build/CMakeCache.txt" ]]; then
+        __tac_info "Configure" "Running CMake with CUDA flags ..." "$C_Info"
+        cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CUDA_ARCHITECTURES=86 \
+            -DGGML_CUDA=ON \
+            -DGGML_CUDA_FA=ON \
+            -DGGML_CUDA_FA_ALL_QUANTS=ON \
+            -DGGML_CUDA_GRAPHS=ON \
+            -DGGML_CUDA_NCCL=ON \
+            -DGGML_CUDA_COMPRESSION_MODE=size \
+            -DGGML_NATIVE=ON \
+            -DGGML_OPENMP=ON \
+            -DGGML_CCACHE=ON \
+            -DBUILD_SHARED_LIBS=ON \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            2>&1 | tail -5 || {
+            __tac_info "Error" "CMake configuration failed" "$C_Error"; return 1
+        }
+    else
+        __tac_info "Configure" "Using existing CMake cache (--quick)" "$C_Dim"
+    fi
+
+    # Build
+    __tac_info "Build" "Compiling llama-server (${jobs} threads) ..." "$C_Info"
+    cmake --build build --target llama-server -j"$jobs" 2>&1 | tail -5
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        __tac_info "Error" "Build failed (exit=$rc)" "$C_Error"
+        return $rc
+    fi
+
+    # Verify
+    local bin="$root/build/bin/llama-server"
+    if [[ -x "$bin" ]]; then
+        local size; size=$(stat --format=%s "$bin" 2>/dev/null)
+        local human_size
+        if [[ -n "$size" ]]; then
+            human_size=$(numfmt --to=iec "$size" 2>/dev/null || echo "${size}B")
+        else
+            human_size="?"
+        fi
+        local commit; commit=$(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo "?")
+        __tac_info "Done" "llama-server built: commit ${commit}, ${human_size}" "$C_Success"
+
+        # Update convenience symlink
+        ln -sf "$bin" "$HOME/.local/bin/llama-server-cuda" 2>/dev/null || true
+        __tac_info "Symlink" "${HOME}/.local/bin/llama-server-cuda → ${bin}" "$C_Dim"
+
+        # Update LLAMA_BUILD_VERSION for model status display
+        export LLAMA_BUILD_VERSION="$commit"
+    else
+        __tac_info "Error" "Built binary not found at ${bin}" "$C_Error"
+        return 1
+    fi
+}
+
+# @llm-build

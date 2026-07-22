@@ -567,6 +567,7 @@ function tactical_help() {
 
     __hSection "LLM — MODEL MANAGEMENT"
     __hRow "wake" "Lock GPU persistence mode"
+    __hRow "llm-build [--quick] [--no-pull]" "Build/rebuild llama-server with CUDA from source (see docs/llama-cpp-build-guide.md)"
     __hRow "gpu-status" "NVIDIA GPU: util, VRAM, temp"
     __hRow "gpu-check" "Quick CUDA verification"
     __hRow "llmconf" "Open models.conf in VS Code"
