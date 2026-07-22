@@ -476,7 +476,7 @@ function tactical_help() {
     printf "${C_BoxBg}║${C_Reset}${C_Warning}%s%s%s${C_Reset}${C_BoxBg}║${C_Reset}\n" "$__ls" "$__title" "$__rs"
     __hRow "m" "Open Tactical Dashboard with live system stats"
     __hRow "h" "Display this command reference"
-    __hRow "up" "Run 15-step system maintenance"
+    __hRow "up" "Run 20-step system maintenance"
     __hRow "sysinfo" "One-line summary: CPU, RAM, disk, GPU"
     __hRow "get-ip" "Show WSL and WAN IP addresses"
     __hRow "cls" "Clear screen"
@@ -489,6 +489,7 @@ function tactical_help() {
     __hRow "oedit" "Open tactical-console.bashrc in VS Code"
     __hRow "code <path>" "Open any file or directory in VS Code"
     __hRow "pwsh" "PowerShell 7 (Linux native; shared profile via OneDrive symlink)"
+    __hRow "wsl-up" "Update WSL kernel and Microsoft distribution"
 
     # OpenClaw sections — only shown if openclaw CLI is installed AND functional
     if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
@@ -511,6 +512,7 @@ function tactical_help() {
         __hRow "oc stop" "Delete agent by ID"
         __hRow "oc mem-index" "Rebuild vector memory index"
         __hRow "oc memory-search" "Semantic memory search"
+        __hRow "oc purge" "Stop gateway and clear all agent sessions"
 
         __hSection "OPENCLAW — CONFIG & LOGS"
         __hRow "oc conf" "Open openclaw.json in VS Code"
@@ -531,6 +533,7 @@ function tactical_help() {
         __hRow "oc doctor-local" "Validate gateway + llama.cpp"
         __hRow "oc failover" "Cloud LLM fallback (on|off)"
         __hRow "oc refresh-keys" "Re-import Windows API keys"
+        __hRow "oc rotate-secrets" "Rotate exposed secrets"
 
         __hSection "OPENCLAW — DATA & EXTENSIONS"
         __hRow "oc wk" "Change to workspace"
@@ -552,6 +555,7 @@ function tactical_help() {
 
         __hSection "OPENCLAW — TOOLS"
         __hRow "oc g" "Launch operational graph browser (overview/topics/files/semantic/raw)"
+        __hRow "oc unittest" "Run OpenClaw structural + protocol tests"
     fi
 
     # gog section — only shown if gog CLI is installed AND functional
@@ -583,6 +587,9 @@ function tactical_help() {
     __hRow "model autotune N" "Tune no-oom/max-ctx/max-tps profile"
     __hRow "model bench [MODEL...]" "Benchmark all or selected models"
     __hRow "model bench-diff" "Compare benchmark runs"
+    __hRow "model bench-compare" "Alias for bench-diff"
+    __hRow "model bench-latest" "Show the newest saved benchmark"
+    __hRow "model bench-trend" "Compare latest TPS vs baseline"
     __hRow "model bench-history" "Summarise benchmarks"
     __hRow "model delete N" "Delete model #N"
     __hRow "model archive N" "Archive model #N"
@@ -591,6 +598,7 @@ function tactical_help() {
     __hRow "halt" "Stop llama-server"
     __hRow "mlogs" "Open llama-server log"
     __hRow "model tp-quota" "Check Token Plan quota & reset time"
+    __hRow "tpq" "Alias for model tp-quota"
     __hRow "burn" "Token stress test (~1300)"
     __hRow "docs-sync" "Check README drift"
     __tac_info "Autotune knob" "LLM_AUTOTUNE_MIN_CTX_FRACTION (default 0.60): minimum selected ctx as fraction of max stable ctx" "$C_Dim"
@@ -677,7 +685,7 @@ function contextual-help() {
             __hRow "h" "Show full command reference (this is extended help)"
             __hRow "so" "Start OpenClaw gateway and local LLM"
             __hRow "model use N" "Start model #N with optimal settings"
-            __hRow "up" "Run 12-step maintenance and health checks"
+            __hRow "up" "Run 20-step maintenance and health checks"
             __tac_info "Tip" "Run 'h' for full command index" "$C_Dim"
             ;;
     esac

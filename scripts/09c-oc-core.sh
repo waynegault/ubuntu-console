@@ -99,6 +99,8 @@ function oc() {
         printf '  %-20s %s\n' "start"        "Dispatch an agent turn (-m '<msg>')"
         printf '  %-20s %s\n' "stop"         "Delete an agent by ID (--agent <id>)"
         printf '  %-20s %s\n' "agent-turn"   "Alias for start"
+        printf '  %-20s %s\n' "mem-index"    "Rebuild OpenClaw vector memory index"
+        printf '  %-20s %s\n' "memory-search" "Semantic search over stored memories"
         printf '  %-20s %s\n' "purge"        "Stop gateway and clear all agent sessions"
         printf '%s\n' ""
         printf '%s\n' "${C_Highlight}Config & Logs${C_Reset}"
@@ -170,6 +172,8 @@ function oc() {
         agent-turn)    ocstart "$@" ;;
         agent-use)     oc-agent-use "$@" ;;
         agent-usage)   oc-agent-use "$@" ;;
+        mem-index)     mem-index "$@" ;;
+        memory-search) oc-memory-search "$@" ;;
         purge)         oc-purge "$@" ;;
         # Config & Logs
         conf)          occonf "$@" ;;
