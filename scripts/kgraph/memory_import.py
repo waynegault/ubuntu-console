@@ -757,4 +757,12 @@ def load_from_memory_db(dbpath: str) -> Graph:
             pass
 
     conn.close()
+
+    # Cross-chunk entity resolution: collapse same-concept nodes discovered
+    # across different chunks (e.g. "Decision: X" from chunk 1 and chunk 2)
+    # into a single canonical node.  Uses life_index aliases for resolution.
+    # Source: rahulnyk/graph_maker review — chunk-independence information loss
+    # mitigation.
+    builder.deduplicate_semantic(life_index=load_life_index())
+
     return builder.build()

@@ -269,6 +269,145 @@ class GraphBuilder:
         for edge in other.edges:
             self.add_edge(edge)
 
+    # ── semantic deduplication ──
+
+    # Note: alias and stopword sets duplicated from projection.py's
+    # _collapse_semantic_duplicates for builder-level dedup.
+    # Source: rahulnyk/graph_maker review — dedup at extraction time
+    # avoids stale duplicates persisting in the database.
+    _SEMANTIC_ALIASES: dict[str, str] = {
+        "graph layout": "graph quality",
+        "layout quality": "graph quality",
+        "semantic graph": "graph quality",
+        "semantic threshold": "semantic filtering",
+        "graph filtering": "graph quality",
+        "semantic edge": "semantic quality",
+        "edge quality": "semantic quality",
+        "god node": "node importance",
+        "node importance": "node importance",
+        "call flow": "call graph",
+        "call graph": "call graph",
+    }
+    _STOPWORDS: frozenset[str] = frozenset({
+        "the", "a", "an", "current", "important", "main", "primary",
+        "semantic", "visual", "layout",
+    })
+
+    def _normalized_label(self, node: GraphNode, life_index: dict | None) -> str:
+        """Produce a normalised key for semantic dedup grouping."""
+        label = (node.label or "").strip().lower()
+        if not label:
+            return ""
+        # Remove stopwords
+        label = re.sub(r"\b(?:%s)\b" % "|".join(self._STOPWORDS), " ", label)
+        label = re.sub(r"[^a-z0-9\s-]", " ", label)
+        label = re.sub(r"\s+", " ", label).strip(" .:-")
+        if not label or len(label) < 4:
+            return ""
+        # Apply alias map
+        for alias, canonical in self._SEMANTIC_ALIASES.items():
+            if label == alias or alias in label:
+                label = canonical
+                break
+        # Life-index alias resolution
+        if life_index:
+            record = life_index.get("aliases", {}).get(label)
+            if record:
+                canonical = str(record.get("title", label)).strip().lower()
+                if canonical and canonical != label:
+                    return canonical
+            canonical_title = life_index.get("title_aliases", {}).get(label)
+            if canonical_title:
+                return str(canonical_title).strip().lower()
+        return label
+
+    def deduplicate_semantic(self,
+                              life_index: dict | None = None,
+                              allowed_types: set[str] | None = None) -> None:
+        """Collapse semantically-equivalent nodes, merging edges.
+
+        Operates on the in-memory builder state — use *before* ``build()``
+        to ensure the persisted graph has no semantic duplicates.  This
+        complements the view-time dedup in ``projection.py`` by catching
+        duplicates at extraction/merge time.
+
+        Only nodes whose ``type`` is in *allowed_types* (default: semantic
+        core types) are candidates for collapse.  AST nodes (function,
+        class, call, etc.) are never collapsed because their identity
+        carries semantic meaning.
+
+        When two nodes match, the canonical (highest-confidence, longest
+        label, non-inferred) node is kept and the other's edges are
+        reconnected to it.  Metadata from dropped nodes is merged into
+        the canonical node's ``description``.
+        """
+        if allowed_types is None:
+            allowed_types = {"topic", "project", "decision", "issue",
+                             "outcome", "organization", "place", "person"}
+
+        # 1. Group nodes by (type, normalized_label)
+        label_groups: dict[tuple[str, str], list[GraphNode]] = {}
+        for node in self._nodes.values():
+            ntype = (node.type or "unknown").lower()
+            if ntype not in allowed_types:
+                continue
+            norm = self._normalized_label(node, life_index)
+            if not norm or len(norm) < 3:
+                continue
+            label_groups.setdefault((ntype, norm), []).append(node)
+
+        if not label_groups:
+            return
+
+        # 2. Within each group, pick the canonical node and build ID map
+        canonical_for: dict[str, str] = {}
+        for members in label_groups.values():
+            if len(members) < 2:
+                continue
+            members.sort(key=lambda n: (
+                bool(n.inferred_type) if n.inferred_type is not None else False,  # non-inferred first
+                -(float(n.type_confidence) if n.type_confidence is not None else 1.0),  # highest confidence first
+                -len(n.label or ""),  # longest label first
+                n.id or "",
+            ))
+            canonical = members[0]
+            cid = canonical.id or ""
+            merged_desc_parts: list[str] = []
+            for node in members[1:]:
+                nid = node.id or ""
+                if nid:
+                    canonical_for[nid] = cid
+                # Merge description from dropped nodes
+                if node.description and node.description != canonical.description:
+                    merged_desc_parts.append(node.description)
+            if merged_desc_parts and canonical.description:
+                canonical.description = "\n".join([canonical.description] + merged_desc_parts)
+            elif merged_desc_parts:
+                canonical.description = "\n".join(merged_desc_parts)
+
+        if not canonical_for:
+            return
+
+        # 3. Remove non-canonical nodes from _nodes
+        for nid in canonical_for:
+            self._nodes.pop(nid, None)
+
+        # 4. Rebuild _edges: remap source/target and deduplicate
+        new_edges: dict[tuple[str, str, str], GraphEdge] = {}
+        for key, edge in self._edges.items():
+            src = canonical_for.get(edge.source, edge.source)
+            dst = canonical_for.get(edge.target, edge.target)
+            if not src or not dst or src == dst:
+                continue  # drop self-loops
+            new_key = (src, dst, edge.label or "related")
+            if new_key in new_edges:
+                continue  # deduplicate edges
+            # Rewrite endpoints on the edge object
+            edge.source = src
+            edge.target = dst
+            new_edges[new_key] = edge
+        self._edges = new_edges
+
     # ── build ──
 
     def build(self) -> Graph:

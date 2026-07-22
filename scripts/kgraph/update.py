@@ -39,6 +39,7 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
     from .confidence import tag_confidence
     from .community import detect_communities
     from .ast_extractor import ast_available, extract_repo_graph
+    from .life_index import load_life_index
 
     builder = GraphBuilder()
 
@@ -72,29 +73,50 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
         except (OSError, ValueError, KeyError) as exc:
             logger.warning("AST extraction failed: %s", exc)
 
+    # 4. Semantic deduplication across all merged sources.
+    # Collapses same-concept nodes (e.g. "decision: X" from different chunks)
+    # before building the final graph.  Uses life_index for alias resolution.
+    # Source: rahulnyk/graph_maker review — dedup at extraction time prevents
+    # stale duplicates in the persisted database.
+    builder.deduplicate_semantic(life_index=load_life_index())
+
     graph = builder.build()
 
-    # 4. Confidence tagging
+    # 5. Confidence tagging
     graph = tag_confidence(graph)
 
-    # 5. Community detection
+    # 6. Community detection
     graph = detect_communities(graph)
 
-    # 6. Save
+    # 7. Save
     if graph_db_path:
         save_to_graph_db(graph_db_path, graph)
 
     return graph
 
 
-def merge_graphs(base: Graph | dict, overlay: Graph | dict) -> Graph:
-    """Merge overlay graph into base, deduplicating by id.
+def merge_graphs(base: Graph | dict, overlay: Graph | dict,
+                 life_index: dict | None = None) -> Graph:
+    """Merge overlay graph into base, deduplicating by id and semantics.
 
     Delegates to ``GraphBuilder`` for consistent dedup logic.
+    A semantic dedup pass runs after the merge to collapse equivalent
+    concept nodes across both sources.
+
+    Args:
+        base: The base graph to merge into.
+        overlay: The overlay graph to merge from.
+        life_index: Optional life_index dict for alias resolution during
+            semantic dedup.  If omitted, dedup runs without alias
+            resolution (exact-normalized only).
+
+    Source: rahulnyk/graph_maker review — dedup at extraction time prevents
+    stale duplicates in the persisted database.
     """
     builder = GraphBuilder()
     builder.merge(base)
     builder.merge(overlay)
+    builder.deduplicate_semantic(life_index=life_index)
     return builder.build()
 
 
