@@ -38,30 +38,36 @@ def _protect_registry_file() -> Generator[None, None, None]:
 
 @pytest.fixture(autouse=True)
 def _serialize_bats_suites(request: pytest.FixtureRequest):
-    """Acquire a per-suite file lock so BATS suites never run concurrently.
+    """Acquire a per-BATS-file lock so BATS suites never run concurrently.
 
     Only gates suites that carry a ``bats`` marker — pure-Python tests are
     not serialised.
+
+    The lock name is derived from the **BATS file's stem** (not the test file's
+    stem), so different BATS files (unit, integration, tactical-console) can
+    run concurrently without blocking each other.
     """
-    is_bats = False
-    for marker in request.node.iter_markers():
-        if marker.name.startswith("bats"):
-            is_bats = True
-            break
+    is_bats = any(
+        marker.name.startswith("bats") for marker in request.node.iter_markers()
+    )
     if not is_bats:
         yield
         return
 
     _LOCK_DIR.mkdir(mode=0o700, exist_ok=True)
-    # Per-file lock: use the test file's stem as the lock name so
-    # unrelated suites (unit, integration, main) can run concurrently.
-    # Only the same bats file is blocked from running twice.
-    lock_name = Path(request.path).stem if hasattr(request, 'path') else "suite"
+
+    # Derive lock name from the actual BATS file being run, not the test file.
+    bats_file: Path | None = None
+    if hasattr(request.node, "callspec") and "bats_file" in request.node.callspec.params:
+        bats_file = request.node.callspec.params["bats_file"]
+    lock_name = Path(bats_file).stem if bats_file else Path(request.path).stem
     lock_path = _LOCK_DIR / f"{lock_name}.lock"
+
     with open(lock_path, "w") as lf:
         # Non-blocking poll so we surface a clear error instead of hanging
         # forever when a previous run left a stuck process holding the lock.
         deadline = time.monotonic() + 60  # 1 min grace for a running suite
+        wait_s = 60
         while True:
             try:
                 fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -69,9 +75,9 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
             except BlockingIOError:
                 if time.monotonic() > deadline:
                     pytest.fail(
-                        "Could not acquire BATS serialisation lock within 300 s — "
-                        "another BATS suite may be hung. Check for stale "
-                        f"processes holding {lock_path}"
+                        f"Could not acquire BATS serialisation lock within "
+                        f"{wait_s}s — another BATS suite may be hung. "
+                        f"Check for stale processes holding {lock_path}"
                     )
                 time.sleep(1)
         try:
