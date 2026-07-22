@@ -18,8 +18,9 @@ SCRIPT_PATH = os.path.join(REPO_ROOT, "bin", "model-autotune.py")
 
 def load_module():
     spec = importlib.util.spec_from_file_location("model_autotune", SCRIPT_PATH)
-    mod = importlib.util.module_from_spec(spec)
+    assert spec is not None, f"Could not find module spec for {SCRIPT_PATH}"
     assert spec.loader is not None, f"Could not load module from {SCRIPT_PATH}"
+    mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
@@ -114,7 +115,7 @@ class RegistryRowParsingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.mod = load_module()
-        cls._orig_registry = cls.mod.REGISTRY  # save for tearDown restore
+        cls._orig_registry = cls.mod.REGISTRY  # type: ignore[attr-defined]  # save for tearDown restore
         # Build a realistic registry fragment (20-col format with flash_attn)
         cls.sample = (
             "# LLM Registry\n"
@@ -132,11 +133,11 @@ class RegistryRowParsingTests(unittest.TestCase):
 
     def tearDown(self):
         os.unlink(self.tmp.name)
-        self.mod.REGISTRY = self._orig_registry  # restore original path
+        self.mod.REGISTRY = self._orig_registry  # type: ignore[attr-defined]  # restore original path
 
     def _patch_registry(self):
         """Point REGISTRY path to our temp file."""
-        self.mod.REGISTRY = type(self.mod.REGISTRY)(self.tmp.name)
+        self.mod.REGISTRY = type(self.mod.REGISTRY)(self.tmp.name)  # type: ignore[attr-defined]
 
     def test_load_row_1(self):
         self._patch_registry()
