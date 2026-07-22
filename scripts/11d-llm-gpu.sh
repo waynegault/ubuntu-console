@@ -250,10 +250,9 @@ function wake() {
         IFS=',' read -r g_util g_used g_total g_temp <<< "$gpu_stat"
         g_util="${g_util// /}"; g_used="${g_used// /}"; g_total="${g_total// /}"; g_temp="${g_temp// /}"
         __tac_info "GPU Util" "${g_util}%" "$C_Text"
-        __tac_info "VRAM" "${g_used} MiB / ${g_total} MiB" "$C_Text"
+        __tac_info "GPU VRAM" "${g_used} MiB / ${g_total} MiB" "$C_Text"
         __tac_info "Temp" "${g_temp}${DEGREE}C" "$C_Text"
     fi
-    printf '%s\n' "${C_Dim}Note: -pm 1 does not survive WSL restarts. Re-run 'wake' after reboot.${C_Reset}"
 }
 
 # ---------------------------------------------------------------------------

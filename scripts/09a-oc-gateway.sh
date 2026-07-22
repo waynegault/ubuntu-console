@@ -297,6 +297,15 @@ function __so_ensure_llm_running() {
 
     _so_elapsed=$(( $(date +%s) - _so_start_ts ))
     __tac_info "Local LLM" "[ONLINE on PORT $LLM_PORT] ${_so_model_name} (${_so_elapsed}s)" "$C_Success"
+
+    # Live VRAM after model load
+    local _so_vram
+    _so_vram=$(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    if [[ -n "$_so_vram" ]]; then
+        local _so_vused _so_vtotal
+        IFS=',' read -r _so_vused _so_vtotal <<< "$_so_vram"
+        __tac_info "LLM VRAM" "${_so_vused} MiB / ${_so_vtotal} MiB" "$C_Text"
+    fi
     return 0
 }
 
@@ -474,6 +483,14 @@ function so() {
         # Auto-create session for default agent (hal) if no sessions exist.
         # Runs silently in background — no UI noise for the user.
         __so_ensure_default_agent_session
+    fi
+
+    # Show configured default ACP agent (always, regardless of whether gateway
+    # was already running or just started)
+    local _so_default_agent
+    _so_default_agent=$(jq -r '.acp.defaultAgent // empty' "$OC_ROOT/openclaw.json" 2>/dev/null)
+    if [[ -n "$_so_default_agent" ]]; then
+        __tac_info "Default Agent" "${_so_default_agent}" "$C_Highlight"
     fi
 }
 
