@@ -432,8 +432,8 @@ function __hSection() {
 function __hRow() {
     local cmd="${1:-}"
     local desc="${2:-}"
-    local cmd_width=16
-    local indent=$(( cmd_width + 3 ))  # 16 cmd + 2 indent + 1 spacer
+    local cmd_width=22
+    local indent=$(( cmd_width + 3 ))  # 22 cmd + 2 indent + 1 spacer
     local desc_width=$(( UIWidth - indent - 2 ))  # minus borders
 
     if (( ${#cmd} > cmd_width )); then

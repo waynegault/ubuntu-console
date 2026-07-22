@@ -601,7 +601,27 @@ function tactical_help() {
     __hRow "tpq" "Alias for model tp-quota"
     __hRow "burn" "Token stress test (~1300)"
     __hRow "docs-sync" "Check README drift"
-    __tac_info "Autotune knob" "LLM_AUTOTUNE_MIN_CTX_FRACTION (default 0.60): minimum selected ctx as fraction of max stable ctx" "$C_Dim"
+    # Autotune knob: dim tip inside the help box, word-wrapped
+    local _at_text="LLM_AUTOTUNE_MIN_CTX_FRACTION (default 0.60): minimum selected ctx as fraction of max stable ctx"
+    local _at_width=$(( UIWidth - 8 ))  # 2 borders + 2 indent + 4 inner padding
+    while [[ -n "$_at_text" ]]; do
+        local _at_chunk="${_at_text:0:$_at_width}"
+        # Try to break at last space before width for word wrapping
+        if [[ "${_at_text:$_at_width:1}" =~ [[:graph:]] && "${_at_chunk}" == *" "* ]]; then
+            _at_chunk="${_at_chunk% *}"
+        fi
+        _at_text="${_at_text:${#_at_chunk}}"
+        _at_text="${_at_text## }"  # strip leading space
+        local _at_pad=$(( _at_width - ${#_at_chunk} ))
+        local _at_pad_str=""
+        (( _at_pad > 0 )) && printf -v _at_pad_str '%*s' "$_at_pad" ""
+        printf "%b%s%s%s%b\n" \
+            "${C_BoxBg}${BOX_V}  " \
+            "${C_Dim}" "$_at_chunk" \
+            "$_at_pad_str  " \
+            "${C_BoxBg}${BOX_V}${C_Reset}"
+        [[ -n "$_at_text" ]] || break
+    done
 
     __hSection "LLM — CHAT & EXPLAIN"
     __hRow "chat: [msg]" "Interactive chat session"
