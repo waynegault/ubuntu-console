@@ -347,3 +347,149 @@ _classify() {
         >&3 echo ""
     fi
 }
+
+# ── Helper: fetch the latest GitHub release tag ──────────────────────────
+# Returns the tag name (e.g. 9371) or empty on failure. Quick timeout so
+# this doesn't block the test suite when offline.
+
+_latest_github_release() {
+    local repo="${1:-ggml-org/llama.cpp}"
+    local tag
+    tag=$(curl -sS --connect-timeout 5 --max-time 15 \
+          "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null \
+          | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "\([^"]*\)".*/\1/') || true
+    # Strip leading 'b' for numeric comparison
+    echo "$tag" | sed 's/^b//'
+}
+
+# ── Helper: quick connectivity check ─────────────────────────────────────
+# Returns 0 when GitHub is reachable, 1 otherwise.
+
+_github_reachable() {
+    curl -sS --connect-timeout 3 --max-time 5 -o /dev/null \
+         "https://github.com" 2>/dev/null
+}
+
+# ── Helper: download and install a generic release ───────────────────────
+# Downloads the latest prebuilt release from GitHub and installs it into
+# ~/.local/opt/llama.cpp/b<N>/ with the canonical symlink at
+# ~/.local/bin/llama-server (backed up before replacement).
+# Requires: curl, unzip, find (for library relocation).
+
+_install_generic_release() {
+    local release_tag="$1" # numeric, e.g. 9371
+    local repo="${2:-ggml-org/llama.cpp}"
+    local dest_dir="$HOME/.local/opt/llama.cpp/b${release_tag}"
+    local zip_url="https://github.com/${repo}/releases/download/b${release_tag}/llama-b${release_tag}-bin-ubuntu-x64.zip"
+
+    >&3 echo "  Downloading b${release_tag} from ${repo}..."
+    mkdir -p "$dest_dir"
+
+    local tmp_zip; tmp_zip=$(mktemp /tmp/llama-b${release_tag}.XXXXXX.zip)
+    if ! curl -sSfL --max-time 120 "$zip_url" -o "$tmp_zip" 2>/dev/null; then
+        >&3 echo "  Download failed — release archive may use a different naming pattern."
+        >&3 echo "  Check: https://github.com/${repo}/releases/tag/b${release_tag}"
+        rm -f "$tmp_zip"
+        return 1
+    fi
+
+    >&3 echo "  Extracting..."
+    unzip -qo "$tmp_zip" -d "$dest_dir" 2>/dev/null || {
+        >&3 echo "  Extraction failed"
+        rm -f "$tmp_zip"
+        return 1
+    }
+    rm -f "$tmp_zip"
+
+    # Make binaries executable
+    chmod +x "$dest_dir"/llama-server "$dest_dir"/llama-cli "$dest_dir"/llama-bench 2>/dev/null || true
+
+    # Relocate shared libraries next to the binary if extracted into a subdirectory
+    if [[ -d "$dest_dir/bin" ]]; then
+        mv "$dest_dir"/bin/* "$dest_dir"/ 2>/dev/null || true
+        rmdir "$dest_dir/bin" 2>/dev/null || true
+    fi
+    # Relocate lib/
+    if [[ -d "$dest_dir/lib" ]]; then
+        mv "$dest_dir"/lib/* "$dest_dir"/ 2>/dev/null || true
+        rmdir "$dest_dir/lib" 2>/dev/null || true
+    fi
+
+    # Update the canonical symlink (back up the current one first)
+    local link_path="$HOME/.local/bin/llama-server"
+    if [[ -L "$link_path" || -f "$link_path" ]]; then
+        cp -P "$link_path" "${link_path}.bak" 2>/dev/null || true
+    fi
+    ln -sf "$dest_dir/llama-server" "$link_path"
+
+    >&3 echo "  Installed: b${release_tag} → ${dest_dir}/llama-server"
+    >&3 echo "  Symlink:   ${link_path} → ${dest_dir}/llama-server"
+    return 0
+}
+
+# ── Test: Update generic prebuilt to latest GitHub release ───────────────
+
+@test "inventory: update generic prebuilt llama-server from GitHub" {
+    # Quick connectivity check so we fail fast when offline.
+    if ! _github_reachable; then
+        >&3 echo "  (skipping — no network)"
+        return 0
+    fi
+
+    # Locate the current generic prebuilt
+    local generic_bin="" generic_dir="" current_tag=""
+    for f in "$HOME/.local/opt/llama.cpp/"*"/llama-server"; do
+        if [[ -f "$f" ]] && ! ls "$(dirname "$f")/libggml-cuda.so" >/dev/null 2>&1; then
+            generic_bin="$f"
+            generic_dir="$(dirname "$f")"
+            # Extract build tag from resolved path
+            local resolved; resolved="$(_resolve "$f")"
+            if [[ "$resolved" =~ b([0-9]+) ]]; then
+                current_tag="${BASH_REMATCH[1]}"
+            fi
+            break
+        fi
+    done
+
+    if [[ -z "$generic_bin" ]]; then
+        >&3 echo "  No generic (prebuilt) llama-server found — installing fresh"
+    else
+        >&3 echo "  Current generic: $generic_bin"
+        >&3 echo "  Current build:   b${current_tag:-?}"
+    fi
+
+    # Fetch latest release tag from GitHub
+    >&3 echo ""
+    >&3 echo "  Checking GitHub releases for ggml-org/llama.cpp..."
+    local latest_tag
+    latest_tag="$(_latest_github_release)" || true
+
+    if [[ -z "$latest_tag" || ! "$latest_tag" =~ ^[0-9]+$ ]]; then
+        >&3 echo "  Could not determine latest release tag (no network or API rate limit)."
+        >&3 echo "  Check manually: https://github.com/ggml-org/llama.cpp/releases"
+        >&3 echo "  (skipping — no network)"
+        return 0
+    fi
+
+    >&3 echo "  Latest release:  b${latest_tag}"
+
+    # Compare versions (numeric)
+    if [[ -n "$current_tag" ]] && [[ "$current_tag" =~ ^[0-9]+$ ]]; then
+        if [[ "$current_tag" -ge "$latest_tag" ]]; then
+            >&3 echo "  Already up to date (b${current_tag} ≥ b${latest_tag})"
+            return 0
+        fi
+    fi
+
+    # Download and install the latest
+    >&3 echo ""
+    >&3 echo "  Updating b${current_tag:-?} → b${latest_tag}..."
+    if _install_generic_release "$latest_tag"; then
+        >&3 echo ""
+        >&3 echo "  Update complete. Run the inventory tests to verify."
+    else
+        >&3 echo ""
+        >&3 echo "  Update failed — release may use a different archive name."
+        >&3 echo "  Manual download: https://github.com/ggml-org/llama.cpp/releases/tag/b${latest_tag}"
+    fi
+}
