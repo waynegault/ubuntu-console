@@ -434,70 +434,36 @@ function __hRow() {
     local desc="${2:-}"
     local cmd_width=22
     local indent=$(( cmd_width + 3 ))  # 22 cmd + 2 indent + 1 spacer
-    local desc_width=$(( UIWidth - indent - 2 ))  # minus borders
+    local desc_width=$(( UIWidth - indent - 2 ))
 
-    # Word-wrap helper: print desc in chunks, each prefixed with indent_str
+    local cmd_pad=$(( cmd_width - ${#cmd} ))
+    local cmd_pad_str=""
+    (( cmd_pad > 0 )) && printf -v cmd_pad_str '%*s' "$cmd_pad" ""
+
+    # Command on its own line
+    printf "%b%s%s%b%s%b\n" \
+        "${C_BoxBg}${BOX_V}  " \
+        "${C_Highlight}" "$cmd" \
+        "${C_Text}" "$cmd_pad_str" \
+        "${C_BoxBg}${BOX_V}${C_Reset}"
+
+    # Description indented below, character-wrapped at desc_width
+    # (character-wrap is fine here — indentation makes it readable)
     local indent_str; printf -v indent_str '%*s' "$((indent))" ""
-    __hrow_print_desc() {
-        local text="$1"
-        while [[ -n "$text" ]]; do
-            local chunk="${text:0:$desc_width}"
-            # Word-break at last space if we're mid-word
-            if [[ "${text:$desc_width:1}" =~ [[:graph:]] && "$chunk" == *" "* ]]; then
-                chunk="${chunk% *}"
-            fi
-            text="${text:${#chunk}}"
-            text="${text## }"
-            local pad=$(( desc_width - ${#chunk} ))
-            local pad_str=""
-            (( pad > 0 )) && printf -v pad_str '%*s' "$pad" ""
-            printf "%b%s%b%s%s%b\n" \
-                "${C_BoxBg}${BOX_V}${C_Reset}" \
-                "$indent_str" \
-                "${C_Text}" "$chunk" \
-                "$pad_str" \
-                "${C_BoxBg}${BOX_V}${C_Reset}"
-            [[ -n "$text" ]] || break
-        done
-    }
-
-    if (( ${#cmd} > cmd_width )); then
-        # Long command: show on its own line, then desc indented below
-        local cmd_pad=$(( desc_width + indent - ${#cmd} - 2 ))
-        local cmd_pad_str=""
-        (( cmd_pad > 0 )) && printf -v cmd_pad_str '%*s' "$cmd_pad" ""
-        printf "%b%s%s%s%b\n" \
-            "${C_BoxBg}${BOX_V}  " \
-            "${C_Highlight}" "$cmd" \
-            "$cmd_pad_str" \
+    while [[ -n "$desc" ]]; do
+        local chunk="${desc:0:$desc_width}"
+        local pad=$(( desc_width - ${#chunk} ))
+        local pad_str=""
+        (( pad > 0 )) && printf -v pad_str '%*s' "$pad" ""
+        printf "%b%s%b%s%s%b\n" \
+            "${C_BoxBg}${BOX_V}${C_Reset}" \
+            "$indent_str" \
+            "${C_Text}" "$chunk" \
+            "$pad_str" \
             "${C_BoxBg}${BOX_V}${C_Reset}"
-        __hrow_print_desc "$desc"
-    else
-        # Short command: try cmd + desc on one line
-        local cmd_pad=$(( cmd_width - ${#cmd} ))
-        local cmd_pad_str=""
-        (( cmd_pad > 0 )) && printf -v cmd_pad_str '%*s' "$cmd_pad" ""
-        if (( ${#desc} <= desc_width )); then
-            # Fits on one line
-            local desc_pad=$(( desc_width - ${#desc} ))
-            local desc_pad_str=""
-            (( desc_pad > 0 )) && printf -v desc_pad_str '%*s' "$desc_pad" ""
-            printf "%b%s%s%b%s %s%s%b\n" \
-                "${C_BoxBg}${BOX_V}  " \
-                "${C_Highlight}" "$cmd" \
-                "${C_Text}" "$cmd_pad_str" "$desc" \
-                "$desc_pad_str" \
-                "${C_BoxBg}${BOX_V}${C_Reset}"
-        else
-            # Doesn't fit: show cmd on first line, desc indented on next
-            printf "%b%s%s%b%s%b\n" \
-                "${C_BoxBg}${BOX_V}  " \
-                "${C_Highlight}" "$cmd" \
-                "${C_Text}" "$cmd_pad_str" \
-                "${C_BoxBg}${BOX_V}${C_Reset}"
-            __hrow_print_desc "$desc"
-        fi
-    fi
+        desc="${desc:$desc_width}"
+        [[ -n "$desc" ]] || break
+    done
 }
 
 # ---------------------------------------------------------------------------
