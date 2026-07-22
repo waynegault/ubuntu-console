@@ -246,10 +246,10 @@ unnecessary API errors.
 
 | Path | Purpose |
 |---|---|
-| `~/llama.cpp/` | llama.cpp installation root (`$LLAMA_ROOT`) — upstream: [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) |
+| `~/llama.cpp/` | llama.cpp installation root (`$LLAMA_ROOT`) — upstream: [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). See [build guide](llama-cpp-build-guide.md) for CUDA compilation instructions. |
 | `/mnt/m/active/` | Active GGUF model files (`$LLAMA_MODEL_DIR`) |
 | `/mnt/m/archive/` | Archived/discouraged models (`$LLAMA_ARCHIVE_DIR`) |
-| `~/llama.cpp/build/bin/llama-server` | Server binary (`$LLAMA_SERVER_BIN`) |
+| `~/llama.cpp/build/bin/llama-server` | Server binary (`$LLAMA_SERVER_BIN`) — custom-tuned CUDA build (guide: [llama-cpp-build-guide.md](llama-cpp-build-guide.md)) |
 | `~/.llm/models.conf` | Model registry — 19-field format (`$LLM_REGISTRY`) |
 | `~/.llm/models.conf` | Also stores autotune winners (`autotuned`, row-level knobs, `mmap_mode`) |
 | `/mnt/m/.llm/bench_*.tsv` | Benchmark history from `model bench` |
