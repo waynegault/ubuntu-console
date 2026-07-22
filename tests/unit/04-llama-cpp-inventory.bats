@@ -493,3 +493,41 @@ _install_generic_release() {
         >&3 echo "  Manual download: https://github.com/ggml-org/llama.cpp/releases/tag/b${latest_tag}"
     fi
 }
+
+# ── Test: llm-build function exists and has correct CMake flags ──────────
+
+@test "llm-build: function is defined and accepts flags" {
+    # Source the profile to load the llm-build function
+    source "$REPO_ROOT/env.sh" >/dev/null 2>&1 || true
+    source "$REPO_ROOT/scripts/01-constants.sh" >/dev/null 2>&1 || true
+    source "$REPO_ROOT/scripts/11e-llm-model.sh" >/dev/null 2>&1 || true
+
+    # Check the function exists
+    run declare -f llm-build
+    [[ "$status" -eq 0 ]] || { echo "FAIL: llm-build function not defined"; return 1; }
+    >&3 echo "  llm-build function is defined"
+
+    # Verify the CMake flags in the function body match the build guide
+    # (Hardware: RTX 3050 Ti SM 86, i9-12900HK)
+    local src; src=$(declare -f llm-build 2>/dev/null)
+
+    # Required CUDA flags
+    echo "$src" | grep -q 'GGML_CUDA=ON' || { echo "FAIL: missing GGML_CUDA=ON"; return 1; }
+    >&3 echo "  ✓ GGML_CUDA=ON"
+
+    echo "$src" | grep -q 'CMAKE_CUDA_ARCHITECTURES=86' || { echo "FAIL: missing CMAKE_CUDA_ARCHITECTURES=86"; return 1; }
+    >&3 echo "  ✓ CMAKE_CUDA_ARCHITECTURES=86 (RTX 3050 Ti Ampere)"
+
+    echo "$src" | grep -q 'GGML_CUDA_FA=ON' || { echo "FAIL: missing GGML_CUDA_FA=ON"; return 1; }
+    >&3 echo "  ✓ GGML_CUDA_FA=ON (Flash Attention)"
+
+    echo "$src" | grep -q 'GGML_NATIVE=ON' || { echo "FAIL: missing GGML_NATIVE=ON"; return 1; }
+    >&3 echo "  ✓ GGML_NATIVE=ON (CPU-specific optimisations for i9-12900HK)"
+
+    # Verify supported CLI flags are parsed
+    echo "$src" | grep -q -- '--quick' || { echo "FAIL: missing --quick flag"; return 1; }
+    >&3 echo "  ✓ --quick flag supported"
+
+    echo "$src" | grep -q -- '--no-pull' || { echo "FAIL: missing --no-pull flag"; return 1; }
+    >&3 echo "  ✓ --no-pull flag supported"
+}
