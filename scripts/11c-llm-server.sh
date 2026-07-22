@@ -2,10 +2,24 @@
 # shellcheck disable=SC2034,SC2059,SC2120,SC2154
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 3
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
+
+# ---- Named constants for model size thresholds (in tenths of GB) ----
+# Idempotent include guard: sub-modules are sourced both by their thin
+# loader and directly by the profile/env loaders, so run the body once.
+[[ -n "${__TAC_MOD_11C_LLM_SERVER_LOADED:-}" ]] && return 0
+__TAC_MOD_11C_LLM_SERVER_LOADED=1
+
+readonly _MODEL_SIZE_LARGE=30       # 3.0GB+ — large model, longer startup
+readonly _MODEL_SIZE_MEDIUM=20      # 2.0GB+ — medium model, moderate startup
+readonly _MODEL_SIZE_SMALL=15       # 1.5GB+ — small model, fast startup
+readonly _GPU_OFFLOAD_DISABLED=0    # gpu_layers = 0 means CPU-only mode
+
+# ---- Special-case model names (for custom settings/behavior) ----
+readonly _MODEL_QWEN35_4B="Qwen3.5-4B"
 
 function __llm_active_entry() {
     [[ -f "$ACTIVE_LLM_FILE" ]] || return 1

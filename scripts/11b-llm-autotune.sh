@@ -2,9 +2,14 @@
 # shellcheck disable=SC2034,SC2059,SC2120,SC2154
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
+# Idempotent include guard: sub-modules are sourced both by their thin
+# loader and directly by the profile/env loaders, so run the body once.
+[[ -n "${__TAC_MOD_11B_LLM_AUTOTUNE_LOADED:-}" ]] && return 0
+__TAC_MOD_11B_LLM_AUTOTUNE_LOADED=1
+
 function __llm_autotune_profiles_file() {
     printf '%s\n' "$LLM_REGISTRY"
 }

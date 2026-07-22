@@ -2,10 +2,15 @@
 # shellcheck disable=SC2034,SC2059,SC2120,SC2154,SC2015,SC2016,SC1090
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
+
+# Idempotent include guard: sub-modules are sourced both by their thin
+# loader and directly by the profile/env loaders, so run the body once.
+[[ -n "${__TAC_MOD_09D_OC_AGENTS_LOADED:-}" ]] && return 0
+__TAC_MOD_09D_OC_AGENTS_LOADED=1
 
 function oc-agent-use() {
     local cache="/dev/shm/oc_agent_use.txt"

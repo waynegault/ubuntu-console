@@ -1727,6 +1727,61 @@ EOF
     declare -f __model_bench_history >/dev/null
 }
 
+@test "llm-manager: timeout named constants are defined" {
+    # Regression: these were lost in the 11-llm-manager split, causing
+    # '_GPU_OFFLOAD_DISABLED: unbound variable' under `set -u` during bench.
+    [ -n "${_GPU_OFFLOAD_DISABLED+x}" ]
+    [ -n "${_MODEL_SIZE_LARGE+x}" ]
+    [ -n "${_MODEL_SIZE_MEDIUM+x}" ]
+    [ -n "${_MODEL_SIZE_SMALL+x}" ]
+    [ -n "${_MODEL_QWEN35_4B+x}" ]
+}
+
+@test "llm-manager: __llm_health_timeout scales by size and gpu offload" {
+    run __llm_health_timeout 1.0G "$_GPU_OFFLOAD_DISABLED" "Some Model"
+    [ "$status" -eq 0 ]
+    [ "$output" = "180" ]
+
+    run __llm_health_timeout 0.5G 99 "tiny"
+    [ "$status" -eq 0 ]
+    [ "$output" = "90" ]
+}
+
+@test "llm-manager: __llm_burn_request_timeout scales by size and gpu offload" {
+    run __llm_burn_request_timeout 1.0G "$_GPU_OFFLOAD_DISABLED" llama
+    [ "$status" -eq 0 ]
+    [ "$output" = "1200" ]
+
+    run __llm_burn_request_timeout 3.5G 99 llama
+    [ "$status" -eq 0 ]
+    [ "$output" = "900" ]
+}
+
+@test "autotune: LLM_MIN_TPS floor defaults to 10 (single source of truth in env.sh)" {
+    run bash -c 'unset LLM_MIN_TPS; eval "$(grep "^export LLM_MIN_TPS=" "$1")"; printf "%s" "$LLM_MIN_TPS"' _ "$REPO_ROOT/env.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "10" ]
+}
+
+@test "autotune: LLM_MIN_TPS respects a pre-set override" {
+    run bash -c 'export LLM_MIN_TPS=12; eval "$(grep "^export LLM_MIN_TPS=" "$1")"; printf "%s" "$LLM_MIN_TPS"' _ "$REPO_ROOT/env.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "12" ]
+}
+
+@test "autotune: autotune-model.sh reads the shared LLM_MIN_TPS floor (default 10)" {
+    grep -q 'MIN_TPS=${LLM_MIN_TPS:-10}' "$REPO_ROOT/scripts/autotune-model.sh"
+}
+
+@test "autotune: autotune-model.sh downshifts ctx to recover TPS below the floor" {
+    grep -q 'Phase 4: TPS floor recovery' "$REPO_ROOT/scripts/autotune-model.sh"
+    grep -q 'downshifting ctx to recover TPS' "$REPO_ROOT/scripts/autotune-model.sh"
+}
+
+@test "autotune: model-autotune.py shares the uniform 10 TPS floor" {
+    grep -q 'MIN_ACCEPTABLE_TPS_DEFAULT = 10.0' "$REPO_ROOT/bin/model-autotune.py"
+}
+
 @test "llm-manager: model status supports json output" {
     run model status --json
     [[ "$output" == \{* ]]

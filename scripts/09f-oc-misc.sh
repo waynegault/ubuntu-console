@@ -2,10 +2,15 @@
 # shellcheck disable=SC2034,SC2059,SC2120,SC2154
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 09f-oc-misc — Miscellaneous OC commands (kgraph, stinger, mem-index)
 # ==============================================================================
+
+# Idempotent include guard: sub-modules are sourced both by their thin
+# loader and directly by the profile/env loaders, so run the body once.
+[[ -n "${__TAC_MOD_09F_OC_MISC_LOADED:-}" ]] && return 0
+__TAC_MOD_09F_OC_MISC_LOADED=1
 
 function oc-kgraph() {
     local KG_PKG="$TACTICAL_REPO_ROOT/scripts/kgraph"

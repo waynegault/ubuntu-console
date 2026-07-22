@@ -209,6 +209,38 @@ class FreeVramParsingTests(unittest.TestCase):
         self.assertEqual(parsed, 4096)
 
 
+class ResolveMinTpsTests(unittest.TestCase):
+    """Tests for resolve_min_tps() — the uniform min-TPS floor policy."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_module()
+
+    def setUp(self):
+        # Ensure a clean environment so the built-in default is observable.
+        os.environ.pop("LLM_MIN_TPS", None)
+
+    def test_default_constant_is_10(self):
+        self.assertEqual(self.mod.MIN_ACCEPTABLE_TPS_DEFAULT, 10.0)
+
+    def test_default_is_uniform_10(self):
+        self.assertEqual(self.mod.resolve_min_tps("qwen2", 1.0, None), 10.0)
+
+    def test_uniform_across_arch_and_size(self):
+        # arch and size no longer relax the floor — every model is held to 10.
+        self.assertEqual(self.mod.resolve_min_tps("phi3", 1.6, None), 10.0)
+        self.assertEqual(self.mod.resolve_min_tps("llama", 8.0, None), 10.0)
+        self.assertEqual(self.mod.resolve_min_tps("qwen35", 3.3, None), 10.0)
+
+    def test_cli_override_wins(self):
+        os.environ["LLM_MIN_TPS"] = "10"
+        self.assertEqual(self.mod.resolve_min_tps("qwen2", 1.0, 12.0), 12.0)
+
+    def test_env_override(self):
+        os.environ["LLM_MIN_TPS"] = "8"
+        self.assertEqual(self.mod.resolve_min_tps("qwen2", 1.0, None), 8.0)
+
+
 class ModuleSmokeTests(unittest.TestCase):
     """Smoke tests that the module loads and key symbols exist."""
 

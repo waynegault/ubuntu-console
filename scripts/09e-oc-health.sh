@@ -2,10 +2,15 @@
 # shellcheck disable=SC2034,SC2059,SC2120,SC2154,SC2015,SC2153,SC1091
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 09e-oc-health
 # ==============================================================================
+
+# Idempotent include guard: sub-modules are sourced both by their thin
+# loader and directly by the profile/env loaders, so run the body once.
+[[ -n "${__TAC_MOD_09E_OC_HEALTH_LOADED:-}" ]] && return 0
+__TAC_MOD_09E_OC_HEALTH_LOADED=1
 
 function oc-health() {
     local output_mode="human"

@@ -49,7 +49,10 @@ STARTUP_HEALTH_TIMEOUT_SEC = int(os.environ.get("LLM_AUTOTUNE_STARTUP_HEALTH_TIM
 STARTUP_PREFLIGHT_TIMEOUT_SEC = int(os.environ.get("LLM_AUTOTUNE_STARTUP_PREFLIGHT_TIMEOUT_SEC", "60"))
 CTX_FLOOR = 4096
 PORT_BASE = 9200
-MIN_ACCEPTABLE_TPS_DEFAULT = 20.0
+# Uniform minimum acceptable generation speed (tokens/second) for every model.
+# Mirrors LLM_MIN_TPS in env.sh; a model that cannot sustain this even at the
+# smallest ctx is recorded as too slow for our purposes.
+MIN_ACCEPTABLE_TPS_DEFAULT = 10.0
 BURN_TIMEOUT_SEC = int(os.environ.get("LLM_AUTOTUNE_BURN_TIMEOUT_SEC", "600"))
 
 # Backward-compatible alias used by tests and older callers.
@@ -67,56 +70,25 @@ OOM_RE = re.compile(r"out of memory|oom|cuda.*(?:failed|error)|failed to allocat
                      re.IGNORECASE)
 
 
-def _parse_arch_tps_overrides(raw: str) -> dict[str, float]:
-    """Parse LLM_AUTOTUNE_MIN_TPS_ARCH mapping like: "phi3=3.0,gemma3n=2.7"."""
-    out: dict[str, float] = {}
-    for item in (raw or "").split(","):
-        token = item.strip()
-        if not token or "=" not in token:
-            continue
-        key, val = token.split("=", 1)
-        key = key.strip().lower()
-        try:
-            out[key] = float(val.strip())
-        except (ValueError, TypeError):
-            continue
-    return out
-
-
 def resolve_min_tps(arch: str, model_size_gb: float, cli_min_tps: float | None) -> float:
-    """Resolve min TPS policy.
+    """Resolve the minimum acceptable TPS — uniform for every model.
+
+    A single floor applies to all models: autotune records the highest ctx that
+    sustains this TPS, and a model that cannot reach it even at minimum ctx is
+    flagged as too slow for our purposes.
 
     Priority:
       1) Explicit --min-tps CLI override.
-      2) Arch override from LLM_AUTOTUNE_MIN_TPS_ARCH (exact/prefix).
-      3) Built-in arch defaults (phi3=3.0).
-      4) Large-model relaxation (>= LLM_AUTOTUNE_LARGE_MODEL_GB => LLM_AUTOTUNE_MIN_TPS_LARGE).
-      5) Global default LLM_AUTOTUNE_MIN_TPS (2.5).
+      2) LLM_MIN_TPS env var (shared with scripts/autotune-model.sh, set in env.sh).
+      3) Built-in default MIN_ACCEPTABLE_TPS_DEFAULT (10.0).
+
+    ``arch`` and ``model_size_gb`` are retained for call-site compatibility but
+    no longer relax the floor — every model is held to the same minimum.
     """
+    del arch, model_size_gb  # uniform policy; params kept for signature stability
     if cli_min_tps is not None:
         return float(cli_min_tps)
-
-    base = float(os.environ.get("LLM_AUTOTUNE_MIN_TPS", MIN_ACCEPTABLE_TPS_DEFAULT))
-    a = (arch or "").strip().lower()
-
-    env_map = _parse_arch_tps_overrides(os.environ.get("LLM_AUTOTUNE_MIN_TPS_ARCH", ""))
-    for k, v in env_map.items():
-        if a == k or a.startswith(k):
-            return float(v)
-
-    builtins = {
-        "phi3": float(os.environ.get("LLM_AUTOTUNE_MIN_TPS_PHI3", "3.0")),
-    }
-    for k, v in builtins.items():
-        if a == k or a.startswith(k):
-            return float(v)
-
-    large_threshold = float(os.environ.get("LLM_AUTOTUNE_LARGE_MODEL_GB", "3.0"))
-    large_floor = float(os.environ.get("LLM_AUTOTUNE_MIN_TPS_LARGE", "2.0"))
-    if model_size_gb >= large_threshold:
-        return float(large_floor)
-
-    return base
+    return float(os.environ.get("LLM_MIN_TPS", MIN_ACCEPTABLE_TPS_DEFAULT))
 
 
 def discovery_profiles_for_arch(arch: str) -> list[dict[str, str]]:
@@ -1148,11 +1120,18 @@ def main() -> None:
         print(f"  ctx {tuned_ctx:,} -> best {best_combo_tps:.1f} tps")
 
     discovered_ctx = tuned_ctx
+    # Capability verdict relative to the floor. We always persist the best
+    # config found (autotuned=yes ⇒ "this model has been profiled"); the
+    # recorded TPS is the honest, machine-readable signal of usability:
+    #   tps >= floor → usable; ctx is the maximum that sustains the floor.
+    #   tps <  floor → too slow for our purposes even at min ctx; the saved
+    #                  config is the fastest one available (best-effort).
     if best_combo_tps < min_tps:
-        print(f"  WARN: No configuration met min TPS floor {min_tps:.1f}; marking row as not autotuned")
-        autotuned_flag = "no"
+        print(f"  ⚠ below floor: {best_combo_tps:.1f} tps < {min_tps:.1f} even at min ctx "
+              f"— too slow for our purposes; recording best-effort config")
     else:
-        autotuned_flag = "yes"
+        print(f"  ✓ meets floor: {best_combo_tps:.1f} tps >= {min_tps:.1f} at max ctx {discovered_ctx:,}")
+    autotuned_flag = "yes"
 
     # ── Phase 5: Registry writeback ─────────────────────────────────────
     print(f"  {_line}")
@@ -1173,9 +1152,6 @@ def main() -> None:
 
     print(f"    Registry row {args.row}: autotuned={autotuned_flag}")
     print()
-
-    if autotuned_flag != "yes":
-        sys.exit(2)
 
 
 if __name__ == "__main__":

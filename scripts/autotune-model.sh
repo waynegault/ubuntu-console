@@ -1,14 +1,18 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
 # Phase 1: step down from start until a ctx works.
 # Phase 2: step up 50% from working ctx until OOM, then binary probe
 #          between the last working ctx and OOM point.
-# Score  : ctx × tps (penalises VRAM-swapping configurations).
+# Phase 4: TPS floor recovery — if the best config is below LLM_MIN_TPS,
+#          step ctx DOWN (less KV cache → higher TPS) until the floor is
+#          met or min ctx is reached. Winner = highest ctx sustaining the
+#          floor; a model that cannot reach it is recorded as too slow.
+# Score  : highest ctx that meets the TPS floor (best-effort max TPS otherwise).
 #
 # Sources tactical-console functions for VRAM budget, stale process cleanup,
 # GGUF metadata, and profile saving — no duplicates.
@@ -54,6 +58,7 @@ echo "  Bench NGL: ${BENCH_NGL}  — max envelope: 999"
 echo ""
 
 MIN_CTX=4096
+# Uniform minimum acceptable generation speed. Sourced from env.sh (default 10).
 MIN_TPS=${LLM_MIN_TPS:-10}
 
 # ---------------------------------------------------------------------------
@@ -340,30 +345,46 @@ bench_ctx() {
 
 BEST_TPS="0"; BEST_COMBO=""; BEST_CTX=0; ANY_OK=false
 
-# Nested function — writes to BEST_TPS/BEST_COMBO/BEST_CTX/ANY_OK globals
+# Writes to BEST_TPS/BEST_COMBO/BEST_CTX/ANY_OK globals.
+#
+# Success metric — lexicographic capability (replaces the old ctx×tps product):
+#   1. A config that meets the TPS floor always beats one that does not.
+#   2. Among configs that meet the floor: highest ctx wins (context is the
+#      capability that keeps paying off once speed is acceptable); tiebreak by
+#      higher TPS.
+#   3. Among configs below the floor (model is too slow): highest TPS wins
+#      (fastest best-effort config); tiebreak by higher ctx.
+# ctx×tps conflated speed and context as interchangeable; once TPS clears the
+# floor, extra speed has diminishing value while extra context does not.
 record_best() {
     local c=$1 tps=$2 b=$3 u=$4
 
-    # Pick the highest ctx that meets the TPS floor.  If no candidate
-    # meets the floor, fall back to the highest ctx regardless of TPS.
     local above; above=$(echo "$tps >= $MIN_TPS" | bc 2>/dev/null || echo "0")
     local best_above; best_above=$(echo "$BEST_TPS >= $MIN_TPS" | bc 2>/dev/null || echo "0")
 
+    # Rule 1: floor-meeting config always wins over a below-floor one.
     if [[ $above == 1 && $best_above == 0 ]]; then
-        # New candidate meets floor, current best does not — immediate win.
-        BEST_TPS=$tps; BEST_COMBO="$b:$u"; BEST_CTX=$c
-    elif [[ $above == 1 && $best_above == 1 ]]; then
-        # Both meet floor: pick the higher ctx.
-        if [[ $(echo "$c > $BEST_CTX" | bc 2>/dev/null || echo "0") == 1 ]]; then
+        BEST_TPS=$tps; BEST_COMBO="$b:$u"; BEST_CTX=$c; return
+    fi
+    if [[ $above == 0 && $best_above == 1 ]]; then
+        return  # keep current — it meets the floor, the candidate does not
+    fi
+
+    if [[ $above == 1 ]]; then
+        # Rule 2: both meet floor → max ctx, tiebreak max TPS.
+        if [[ $(echo "$c > $BEST_CTX" | bc 2>/dev/null || echo "0") == 1 ]] ||
+           { [[ $(echo "$c == $BEST_CTX" | bc 2>/dev/null || echo "0") == 1 ]] &&
+             [[ $(echo "$tps > $BEST_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; }; then
             BEST_TPS=$tps; BEST_COMBO="$b:$u"; BEST_CTX=$c
         fi
-    elif [[ $above == 0 && $best_above == 0 ]]; then
-        # Neither meets floor: pick the higher ctx.
-        if [[ $(echo "$c > $BEST_CTX" | bc 2>/dev/null || echo "0") == 1 ]]; then
+    else
+        # Rule 3: both below floor (best-effort) → max TPS, tiebreak max ctx.
+        if [[ $(echo "$tps > $BEST_TPS" | bc 2>/dev/null || echo "0") == 1 ]] ||
+           { [[ $(echo "$tps == $BEST_TPS" | bc 2>/dev/null || echo "0") == 1 ]] &&
+             [[ $(echo "$c > $BEST_CTX" | bc 2>/dev/null || echo "0") == 1 ]]; }; then
             BEST_TPS=$tps; BEST_COMBO="$b:$u"; BEST_CTX=$c
         fi
     fi
-    # else: new candidate below floor, current best above floor — keep current.
 }
 
 for combo in "${COMBOS[@]}"; do
@@ -517,6 +538,35 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     done
 fi
 
+# --- Phase 4: TPS floor recovery ---
+# The probe maximises ctx, which on a 4 GB card can leave a model swapping at
+# large context (high ctx, low TPS). If the best config is below the floor,
+# step ctx DOWN — a smaller KV cache raises TPS — until we meet the floor or
+# hit MIN_CTX. Descending top-down means the first ctx that meets the floor is
+# the highest ctx that sustains it, which is exactly the capability we want to
+# record. A model still below floor at MIN_CTX is genuinely too slow.
+if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $(echo "$BEST_TPS < $MIN_TPS" | bc 2>/dev/null || echo 0) == 1 ]]; then
+    IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
+    echo ""
+    echo "  TPS ${BEST_TPS} below floor ${MIN_TPS} — downshifting ctx to recover TPS"
+    echo "  ---------------------"
+    _dc=$BEST_CTX
+    while [[ $(echo "$BEST_TPS < $MIN_TPS" | bc 2>/dev/null || echo 0) == 1 ]] && [[ $_dc -gt $MIN_CTX ]]; do
+        next=$(( _dc * 3 / 4 ))
+        next=$(( next / 512 * 512 ))
+        [[ $next -ge $_dc ]] && next=$(( _dc - 512 ))
+        [[ $next -lt $MIN_CTX ]] && next=$MIN_CTX
+        tps=$(bench_ctx "$next" "$BEST_B" "$BEST_U" 1) || tps=""
+        if [[ -n $tps ]]; then
+            echo "  ctx $(fmt "$next") - ${tps} tps"
+            BEST_CTX=$next; BEST_TPS=$tps
+        else
+            echo "  ctx $(fmt "$next") - OOM"
+        fi
+        _dc=$next
+    done
+fi
+
 
 # REF: ubuntu-console card ca23ec0a — cleanup_gpu uses AUTOTUNE_PORT, not 8081
 cleanup_gpu 3 >/dev/null 2>&1 || { echo "ERROR: cleanup_gpu failed after 3 retries — port ${AUTOTUNE_PORT:-18081} still bound" >&2; exit 1; }
@@ -525,11 +575,17 @@ echo ""
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
 
-    # TPS floor check: warn if below floor, but still save the best config.
-    # We've already found the optimal ctx/batch/ubatch — the model is just
-    # too slow for this GPU. Mark it autotuned so the bench can proceed.
-    if [[ $(echo "$BEST_TPS + 1 < $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
-        echo "  TPS ${BEST_TPS} below floor ${MIN_TPS} — saving best config anyway"
+    # Capability verdict relative to the floor. We always persist the best
+    # config we found (autotuned=yes ⇒ "this model has been profiled"), and the
+    # recorded TPS is the honest, machine-readable signal of usability:
+    #   tps >= floor  → usable; ctx is the maximum that sustains the floor.
+    #   tps <  floor  → too slow for our purposes even at min ctx; the saved
+    #                   config is the fastest one available (best-effort).
+    if [[ $(echo "$BEST_TPS >= $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
+        echo "  ✓ meets floor: ${BEST_TPS} tps >= ${MIN_TPS} at max ctx $(fmt "$BEST_CTX")"
+    else
+        echo "  ⚠ below floor: ${BEST_TPS} tps < ${MIN_TPS} even at min ctx — too slow for our purposes"
+        echo "    recording best-effort config (max TPS) for capability profiling"
     fi
 
     END_TS=$(date '+%H:%M:%S')

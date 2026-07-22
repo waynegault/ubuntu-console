@@ -48,6 +48,14 @@ export OPENCLAW_NO_RESPAWN="${OPENCLAW_NO_RESPAWN:-1}"
 # fraction of the max stable ctx discovered per model.
 export LLM_AUTOTUNE_MIN_CTX_FRACTION="${LLM_AUTOTUNE_MIN_CTX_FRACTION:-0.60}"
 
+# Minimum acceptable generation speed (tokens/second), uniform for every model.
+# Autotune seeks the highest ctx that sustains this TPS; a model that cannot
+# reach it even at minimum ctx is recorded as too slow for our purposes.
+# 10 TPS keeps up with agentic/interactive flows while preserving enough ctx
+# for accuracy on context-heavy flows (a higher floor would starve ctx on the
+# 3-4B models that are the sweet spot for this 4GB GPU).
+export LLM_MIN_TPS="${LLM_MIN_TPS:-10}"
+
 _tac_env_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _tac_lib_dir="$_tac_env_root/scripts"
 

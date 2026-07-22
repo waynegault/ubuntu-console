@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2059,SC2120,SC2154,SC1091
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -10,6 +10,11 @@
 # __so_show_errors — Extract and display the most recent gateway errors.
 # Pulls the last 30 log lines and shows up to 5 matching error patterns.
 # ---------------------------------------------------------------------------
+# Idempotent include guard: sub-modules are sourced both by their thin
+# loader and directly by the profile/env loaders, so run the body once.
+[[ -n "${__TAC_MOD_09A_OC_GATEWAY_LOADED:-}" ]] && return 0
+__TAC_MOD_09A_OC_GATEWAY_LOADED=1
+
 function __so_show_errors() {
     local _svc="$1" _errors
     _errors=$(journalctl --user -u "$_svc" --no-pager -n 30 --output=cat 2>&1 \

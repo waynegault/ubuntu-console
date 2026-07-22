@@ -1,7 +1,9 @@
-# Model Autotune — Functional Specification v2
+# Model Autotune — Functional Specification v3
 
 ### Purpose
-For each untuned GGUF model on this machine (RTX 3050 4GB, WSL2 Ubuntu, NTFS mount), discover the optimal context size and batch configuration that maximises `ctx × tokens_per_second` while staying within VRAM limits. Discovery is done through real testing — no VRAM estimates, no hardcoded ceilings, no assumptions about what should or shouldn't fit.
+For each untuned GGUF model on this machine (RTX 3050 4GB, WSL2 Ubuntu, NTFS mount), discover the model's capabilities on our hardware: the **highest context size that sustains the minimum acceptable TPS** (`LLM_MIN_TPS`, default **10**, uniform for every model), plus the best batch configuration. Discovery is done through real testing — no VRAM estimates, no hardcoded ceilings, no assumptions about what should or shouldn't fit.
+
+The goal is honest capability profiling. A model that sustains the floor gets its maximum usable ctx recorded. A model that cannot reach the floor even at the smallest ctx is recorded as **too slow for our purposes** — its fastest (best-effort) config and true TPS are still saved so the registry reflects what the hardware can actually deliver.
 
 ---
 
@@ -11,18 +13,24 @@ For each untuned GGUF model on this machine (RTX 3050 4GB, WSL2 Ubuntu, NTFS mou
   ```
   num|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram
   ```
-- **`LLM_MIN_TPS`** env var (default **20**) — minimum tokens/second. Any ctx that generates below this is treated as OOM (model swapping to system RAM)
+- **`LLM_MIN_TPS`** env var (default **10**, uniform for every model) — minimum acceptable tokens/second, exported in `env.sh`. This is the single source of truth shared by `scripts/autotune-model.sh` (the live mechanism) and `bin/model-autotune.py`. Autotune seeks the highest ctx that sustains this TPS; a ctx that generates below it is treated as swapping/too-slow and autotune downshifts to a smaller ctx to recover TPS (see Phase 4).
+
+  **Why 10:** TPS is a speed metric and does not change a model's accuracy directly — accuracy is governed by the model, quant, and whether ctx is large enough for the flow. The floor only affects accuracy *indirectly*, by capping ctx (a higher floor forces a smaller ctx). 10 TPS is fast enough for agentic/interactive flows (~faster than reading speed) yet low enough that the 3–4B models — the sweet spot on a 4 GB GPU — keep ample ctx for context-heavy flows. A 20 TPS floor would starve ctx on those models (accuracy cost); 5 TPS is fine for batch flows but sluggish interactively. The autotuned profiles feed a separate quality benchmark (in the investigator repo) that picks the best model per flow, so each model is profiled at its maximum usable ctx for a fair accuracy comparison.
 
 ---
 
 ### Outputs
 - Winning config (ctx, batch, ubatch) + measured TPS written back to the registry via `__llm_autotune_profile_save`
 - Registry fields updated:
-  - Field 8 (ctx) → winning context size
+  - Field 8 (ctx) → winning context size (the highest that sustains `LLM_MIN_TPS`, or the fastest best-effort ctx if the floor is unreachable)
   - Field 10 (batch) → winning batch size
   - Field 11 (ubatch) → winning ubatch size
-  - Field 17 (tps) → measured tokens/second
-  - Field 18 (autotuned) → `yes`
+  - Field 17 (tps) → measured tokens/second (the honest usability signal)
+  - Field 18 (autotuned) → `yes` (means "this model has been profiled")
+
+**Reading the result:** `autotuned=yes` means the model was measured, not that it is fast. Compare field 17 (tps) against `LLM_MIN_TPS`:
+- `tps >= LLM_MIN_TPS` → usable; field 8 is the maximum ctx that sustains the floor.
+- `tps <  LLM_MIN_TPS` → too slow for our purposes even at min ctx; field 8/17 are the fastest config the hardware can deliver. Such models are not re-tuned by `model autotune all` (they are already profiled); reset field 18 to `no` to force a re-tune.
 
 ---
 
@@ -66,7 +74,7 @@ c = START_CTX
 while c >= 4096:
     tps = bench(c)                  // single run
     if SUCCESS and tps >= MIN_TPS:
-        record score = ctx × tps
+        record_best(c, tps)         // track by the success metric (see Scoring)
         → Phase 2
     else:
         c = c / 2
@@ -120,11 +128,52 @@ for increment in [working, working/2, working/4, ...] while increment >= 512:
             c = c + increment
 ```
 
-### Scoring
+### Phase 4 — TPS floor recovery (downshift ctx to recover TPS)
 
-Each successful test scores `ctx × tps`. The highest score across Phase 1 and Phase 2 wins. In the refinement zone, TPS is the median of 2 benchmark runs per ctx value to smooth out GPU clock variance. Scores use the full precision TPS value, not the rounded display value.
+Phases 1–2 maximise ctx, which on a 4 GB card can leave a model swapping at large
+context: high ctx, low TPS. Phase 4 enforces the floor. If the best config from
+Phases 1–2 is below `LLM_MIN_TPS`, ctx is stepped **down** (a smaller KV cache
+raises TPS) until the floor is met or the minimum ctx (4096) is reached:
 
-The rolling improvement check prevents the probe from spending 20+ iterations refining ctx values that all give similar ctx×tps scores. If the last 3 tests all scored within 5% of each other, further refinement is pointless.
+```
+if best_tps < MIN_TPS:
+    cursor = best_ctx
+    while best_tps < MIN_TPS and cursor > 4096:
+        cursor = max(4096, floor_to_512(cursor * 0.75))
+        tps = bench(cursor)
+        if tps valid: best_ctx, best_tps = cursor, tps
+```
+
+Because the descent runs top-down, the **first** ctx that meets the floor is the
+highest ctx that sustains it — exactly the capability we record. A model still
+below the floor at 4096 cannot reach it on this hardware; its fastest
+(best-effort) config and true TPS are saved and it is reported as too slow.
+
+### Success metric — lexicographic capability
+
+The objective is **not** `ctx × tps`. That product treats speed and context as
+interchangeable on a multiplicative scale, which does not match how the hardware
+is actually used: once generation speed clears the usability floor, extra speed
+has diminishing returns, while extra context keeps paying off (longer
+conversations and documents). Maximising the product can therefore pick a
+needlessly slow high-ctx config, or a fast tiny-ctx one, in ways that misrepresent
+what a model can do for us.
+
+Instead the winner is chosen by a strict lexicographic order:
+
+1. **Feasibility gate** — a config that sustains `LLM_MIN_TPS` always beats one
+   that does not.
+2. **Maximise context** subject to that gate — the highest ctx that sustains the
+   floor; tiebreak by higher TPS (a snappier config at the same ctx).
+3. **Best-effort fallback** — if no config meets the floor (model is too slow on
+   this hardware), the highest-TPS config wins (fastest available; tiebreak by
+   higher ctx) so the registry still records the model's true capability.
+
+In the refinement zone, TPS is the median of 2 benchmark runs per ctx value to
+smooth out GPU clock variance. Comparisons use the full precision TPS value, not
+the rounded display value.
+
+The rolling improvement check prevents the probe from spending 20+ iterations refining ctx values that all give similar scores. If the last 3 tests all scored within 5% of each other, further refinement is pointless.
 
 ---
 
@@ -138,7 +187,7 @@ Different batch/ubatch sizes affect throughput and VRAM usage. Combos are select
 | 1-2 GB | 1024:256, 2048:512 |
 | ≥2 GB | 1024:256 |
 
-Each combo runs a full independent Phase 1 + Phase 2 probe. The global best `ctx × tps` across all combos wins.
+Each combo runs a full independent Phase 1 + Phase 2 probe. The global best across all combos wins by the success metric above (highest ctx sustaining the floor; best-effort max TPS otherwise).
 
 ---
 
@@ -191,7 +240,7 @@ Start server in background. Poll `http://127.0.0.1:8081/health` every 1s up to 9
 | FAIL-timeout | Health check exceeded 90s | Model load stalled (unlikely on this mount, but possible for very large CPU-only models). Phase 1 halves ctx, retries. |
 | FAIL-0tokens | Server responded but produced 0 completion tokens | Bench curl timed out or empty response. Probably OOM during generation. Treated as failure. |
 | FAIL-port-busy | VRAM or port didn't clear after kill | Previous server left state behind. Retry after longer wait. |
-| below floor | Server worked but TPS < MIN_TPS | Model is swapping to system RAM. Treated same as OOM — halves ctx and retries. |
+| below floor | Server worked but TPS < `LLM_MIN_TPS` | Model is swapping to system RAM. Phase 4 downshifts ctx (smaller KV cache → higher TPS) until the floor is met or min ctx is reached. If still below at min ctx, the best-effort config is saved and the model is reported as too slow. |
 
 None of these errors are fatal. Phase 1 handles them by stepping down. Phase 2 handles them by narrowing the binary probe.
 
@@ -216,7 +265,9 @@ The `__llm_autotune_profile_save` function sets `autotuned=yes` in the registry,
 
 ### Single Mechanism
 
-`model autotune <N>` and `model autotune all` both route to the same standalone script (`~/ubuntu-console/scripts/autotune-model.sh`). The old `__model_autotune` shell function (which had the `--fit on` bug that caused all the batch-2 failures) is marked deprecated and no longer called. `model bench` also routes to the same script when it needs to autotune an untuned model before benchmarking. There is one autotune mechanism.
+`model autotune <N>` and `model autotune all` both route to the same standalone script (`~/ubuntu-console/scripts/autotune-model.sh`). The old `__model_autotune` shell function (which had the `--fit on` bug that caused all the batch-2 failures) is marked deprecated and no longer called. `model bench` also routes to the same script when it needs to autotune an untuned model before benchmarking. There is one live autotune mechanism.
+
+`bin/model-autotune.py` is a parallel implementation kept for experimentation and unit-tested in isolation; it is **not** wired into the CLI. To prevent the two from diverging it shares the same floor policy: it reads the same `LLM_MIN_TPS` env var (default 10, uniform per model) and applies the same downshift-to-recover / honest-profiling semantics described above. If you change the floor policy, change it in `env.sh` (the single source of truth) and both implementations pick it up.
 
 ---
 
@@ -304,4 +355,4 @@ complex with no current runtime impact. Deferred.
 
 ---
 
-*Spec written 2026-06-06. Updated 2026-06-29. Corresponding code in `~/ubuntu-console/scripts/autotune-model.sh` and `~/ubuntu-console/scripts/run-autotune-batch.sh`.*
+*Spec written 2026-06-06. Updated 2026-07-22 (v3: uniform `LLM_MIN_TPS=10` floor, lexicographic success metric, Phase 4 downshift-to-recover, honest capability profiling). Corresponding code in `~/ubuntu-console/scripts/autotune-model.sh` and `~/ubuntu-console/scripts/run-autotune-batch.sh`.*

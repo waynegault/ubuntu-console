@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 
 # ==============================================================================
@@ -138,6 +138,7 @@ fi
 # Registry on local ext4 to avoid 9P atomic-mv corruption on Windows drive.
 # Bench logs remain on drive M: for persistence across WSL rebuilds.
 export LLM_REGISTRY="$HOME/.llm/models.conf"
+export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$HOME/.llm/default_model.conf}"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"
 export LLM_LOG_FILE="/dev/shm/llama-server.log"
 export LLM_TPS_CACHE="/dev/shm/last_tps"

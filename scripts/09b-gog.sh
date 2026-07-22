@@ -3,7 +3,7 @@
 # --- Module: 09b-gog ------------------------------------------------------
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # 9b. GOG (Google CLI) MANAGER
 # ==============================================================================
@@ -18,6 +18,11 @@
 # __TAC_GOG_OK is set to 1 only if gog CLI exists AND responds to --version.
 # This functional check is performed once when this module loads.
 # All code should check __TAC_GOG_OK instead of running `command -v gog`.
+# Idempotent include guard: sub-modules are sourced both by their thin
+# loader and directly by the profile/env loaders, so run the body once.
+[[ -n "${__TAC_MOD_09B_GOG_LOADED:-}" ]] && return 0
+__TAC_MOD_09B_GOG_LOADED=1
+
 if command -v gog >/dev/null 2>&1 && command gog --version >/dev/null 2>&1; then
     __TAC_GOG_OK=1
 else
