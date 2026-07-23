@@ -1,7 +1,4 @@
-h' isnt ideal. eg:
-
-║  oc rotate-secret Rotate exposed secrets                                     ║
-║  s                                              # shellcheck shell=bash
+# shellcheck shell=bash
 # ==============================================================================
 # ~/.bashrc
 # ==============================================================================
