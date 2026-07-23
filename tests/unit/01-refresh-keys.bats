@@ -85,17 +85,17 @@ teardown() {
     __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret'"
     rm -f "$OC_MOCK_LOG"
 
-    export QWEN_TOKEN_PLAN_API_KEY="test-qwen-key"
-    unset GEMINI_API_KEY
+    export GEMINI_API_KEY="test-gemini-key"
+    unset QWEN_TOKEN_PLAN_API_KEY
 
     run oc-refresh-keys
     [ "$status" -eq 0 ]
 
     # Present mapped credential -> SecretRef builder invoked for that path.
-    run grep -F "config set models.providers.qwen-token-plan.apiKey --ref-provider default --ref-source env --ref-id QWEN_TOKEN_PLAN_API_KEY" "$OC_MOCK_LOG"
+    run grep -F "config set plugins.entries.google.config.webSearch.apiKey --ref-provider default --ref-source env --ref-id GEMINI_API_KEY" "$OC_MOCK_LOG"
     [ "$status" -eq 0 ]
 
-    # Absent mapped credential -> no ref written for that path (no unresolved ref).
-    run grep -F "plugins.entries.google.config.webSearch.apiKey" "$OC_MOCK_LOG"
+    # Absent (no longer mapped) credential -> no ref written for that path.
+    run grep -F "models.providers.qwen-token-plan.apiKey" "$OC_MOCK_LOG"
     [ "$status" -ne 0 ]
 }
