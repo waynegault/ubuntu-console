@@ -6,6 +6,10 @@
 # ==============================================================================
 # 09f-oc-misc — Miscellaneous OC commands (kgraph, stinger, mem-index)
 # ==============================================================================
+# @modular-section: openclaw
+# @depends: constants, design-tokens, ui-engine
+# @exports: oc-kgraph, mem-index, oc-memory-search, owk, ologs, ocroot, lc,
+#   oc-update, oc-backup, oc-restore
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.

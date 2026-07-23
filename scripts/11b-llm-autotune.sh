@@ -5,6 +5,11 @@
 # Module Version: 2
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
+# @modular-section: llm-manager
+# @depends: constants, llm-model, llm-runtime
+# @exports: __llm_autotune_profiles_file, __llm_autotune_done_for_model,
+#   __llm_autotune_profile_save, __llm_autotune_verify_winner,
+#   __llm_autotune_estimate_ctx_start, __llm_autotune_profiles_remap_by_registry
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
 [[ -n "${__TAC_MOD_11B_LLM_AUTOTUNE_LOADED:-}" ]] && return 0

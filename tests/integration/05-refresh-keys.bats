@@ -82,6 +82,7 @@ teardown() {
 
     # Assert: function exited successfully
     [ "$status" -eq 0 ]
+    local refresh_output="$output"
 
     # Cache file exists and contains exported matching vars
     [ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]
@@ -100,7 +101,7 @@ teardown() {
     [ "$output" -ge 1 ]
 
     # The stdout should report imported variable count
-    [[ "$output" == *"Windows API Keys"* ]] || true
+    [[ "$refresh_output" == *"imported"* ]]
 }
 
 @test "oc-refresh-keys syncs OpenClaw SecretRefs only for present env credentials" {

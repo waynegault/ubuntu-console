@@ -6,6 +6,9 @@
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
+# @modular-section: openclaw
+# @depends: constants, design-tokens, ui-engine, hooks, oc-gateway, llm-runtime
+# @exports: xo, oc, oc-restart, ocstart, ocstop, oc-purge
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.

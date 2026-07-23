@@ -51,6 +51,29 @@ scripts/dist/
 scripts/*.egg-info/
 scripts/*.egg
 
+# CMake / llama.cpp build output (built locally via llm-build, never tracked)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+DartConfiguration.tcl
+compile_commands.json
+Makefile
+*.pc
+Testing/
+llama-config.cmake
+llama-version.cmake
+license.cpp
+
+# llama.cpp vendored source tree (cloned + built by llm-build, not project code)
+common/
+examples/
+frontend-g6/
+ggml/
+pocs/
+src/
+vendor/
+
 # Logs
 *.log
 logs/

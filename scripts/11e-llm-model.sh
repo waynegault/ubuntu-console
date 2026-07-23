@@ -6,6 +6,12 @@
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
+# @modular-section: llm-manager
+# @depends: constants, design-tokens, ui-engine, hooks, llm-registry,
+#   llm-autotune, llm-server, llm-gpu, llm-runtime
+# @exports: model, __model_scan, __model_list, __model_default, __model_use,
+#   __model_bench, __model_stop, __model_doctor, __model_recommend,
+#   __model_download
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.

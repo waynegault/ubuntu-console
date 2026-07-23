@@ -6,6 +6,11 @@
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
+# @modular-section: llm-manager
+# @depends: constants, design-tokens, ui-engine, hooks, telemetry, llm-server
+# @exports: wake, gpu-status, gpu-check, __gguf_metadata, __calc_gpu_layers,
+#   __calc_ctx_size, __calc_threads, __quant_label, __tac_cleanup_stale_locks,
+#   __gpu_clear_stale_processes
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.

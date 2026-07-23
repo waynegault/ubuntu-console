@@ -25,6 +25,18 @@ jobs:
             bash -n "$f"
           done
 
+      - name: Loader integrity guard
+        run: |
+          # Catch accidental corruption of the loader (e.g. terminal output
+          # prepended to the file — see commit 3a7246a).
+          first_line=$(head -1 tactical-console.bashrc)
+          if [[ "$first_line" != "# shellcheck shell=bash" ]]; then
+            echo "ERROR: tactical-console.bashrc first line is '$first_line'"
+            echo "Expected: '# shellcheck shell=bash'"
+            exit 1
+          fi
+          echo "Loader first-line OK"
+
       - name: ShellCheck
         run: |
           for f in tactical-console.bashrc install.sh env.sh scripts/*.sh bin/*.sh; do
@@ -57,8 +69,33 @@ jobs:
       - name: Run lint script
         run: tools/lint.sh
 
-    # Full suite (371 tests) and integration tests (109 tests) are run
-    # locally via test_bats_bridge.py or: bats tests/tactical-console.bats
+    # Full suite (379 tests) is run locally via: bats tests/tactical-console.bats
+
+  behavioral:
+    name: Behavioral BATS (unit + integration)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: Run unit tests
+        run: |
+          # 04-llama-cpp-inventory excluded: performs live downloads + mutates host
+          bats tests/unit/01-refresh-keys.bats \
+               tests/unit/02-so-startup.bats
+
+      - name: Run integration tests
+        run: |
+          bats tests/integration/01-maintenance.bats \
+               tests/integration/02-model-lifecycle.bats \
+               tests/integration/03-backup-restore.bats \
+               tests/integration/04-watchdog.bats \
+               tests/integration/05-refresh-keys.bats
 
   module-count:
     name: Module Integrity

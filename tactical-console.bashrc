@@ -163,7 +163,7 @@ for _tac_mod in "${_tac_expected_modules[@]}"; do
         if [[ -n "${DEBUG_TAC_STARTUP:-}" ]]; then
             printf 'Sourcing %s ... ' "$_tac_f" >&2
             _tac_start_ns=$(date +%s%N 2>/dev/null || echo 0)
-            source "$_tac_f" 2>/dev/null
+            source "$_tac_f"
             _tac_end_ns=$(date +%s%N 2>/dev/null || echo 0)
             if [[ "$_tac_start_ns" != "0" && "$_tac_end_ns" != "0" ]]; then
                 _tac_ms=$(( (_tac_end_ns - _tac_start_ns) / 1000000 ))
@@ -173,7 +173,7 @@ for _tac_mod in "${_tac_expected_modules[@]}"; do
             fi
             unset _tac_start_ns _tac_end_ns _tac_ms
         else
-            source "$_tac_f" 2>/dev/null
+            source "$_tac_f"
         fi
 
         _tac_mv=$(awk '/^# Module Version:/ {print $NF; exit}' "$_tac_f" 2>/dev/null || true)

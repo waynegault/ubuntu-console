@@ -6,6 +6,12 @@
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================
+# @modular-section: llm-manager
+# @depends: constants, design-tokens, ui-engine, hooks, llm-server, llm-autotune
+# @exports: __save_tps, __save_model_ctx, __require_llm, __llm_json_escape,
+#   __llm_registry_entry_by_num, __llm_registry_entry_by_file,
+#   __llm_default_file, __llm_default_entry, __llm_default_number,
+#   __llm_registry_sync_state, __renumber_registry
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.

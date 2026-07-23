@@ -6,6 +6,11 @@
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
+# @modular-section: llm-manager
+# @depends: constants, design-tokens, ui-engine, llm-registry, llm-server,
+#   llm-model
+# @exports: serve, halt, mlogs, burn, explain, wtf_repl, __llm_sse_core,
+#   __llm_stream, __llm_chat_send, local_chat, chat-context
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.

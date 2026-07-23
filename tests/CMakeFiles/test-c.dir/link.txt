@@ -1,1 +1,0 @@
-/usr/bin/cc -O3 -DNDEBUG "CMakeFiles/test-c.dir/test-c.c.o" -o ../bin/test-c  -Wl,-rpath,/home/wayne/ubuntu-console/bin ../bin/libllama.so.0.0.8289 ../bin/libggml.so.0.9.7 ../bin/libggml-cpu.so.0.9.7 ../bin/libggml-base.so.0.9.7 

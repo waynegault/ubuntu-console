@@ -6,6 +6,10 @@
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
+# @modular-section: openclaw
+# @depends: constants, design-tokens, ui-engine
+# @exports: oc-agent-use, ockeys, ocdoc-fix, oc-refresh-keys,
+#   oc-rotate-exposed-secrets
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.

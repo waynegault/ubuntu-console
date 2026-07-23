@@ -6,6 +6,11 @@
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
+# @modular-section: llm-manager
+# @depends: constants, design-tokens, ui-engine, hooks, telemetry, llm-registry
+# @exports: __llm_active_entry, __llm_is_healthy, __llm_server_running,
+#   __llm_server_stop, __llm_python_bin_resolve, __llm_health_timeout,
+#   __llm_burn_request_timeout, __llm_wait_for_health, __llm_quant_rating
 
 # ---- Named constants for model size thresholds (in tenths of GB) ----
 # Idempotent include guard: sub-modules are sourced both by their thin

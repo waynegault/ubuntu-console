@@ -6,6 +6,10 @@
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
+# @modular-section: openclaw
+# @depends: constants, design-tokens, ui-engine, hooks, llm-registry, llm-server,
+#   llm-gpu, llm-runtime
+# @exports: so, __oc_safe_gateway_shutdown
 
 # __so_show_errors — Extract and display the most recent gateway errors.
 # Pulls the last 30 log lines and shows up to 5 matching error patterns.

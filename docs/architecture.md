@@ -9,8 +9,8 @@ description: Developer guide to the modular profile architecture — module layo
 
 ### Modular Architecture
 
-The profile is split into a thin loader (`tactical-console.bashrc`, ~225 lines)
-and 16 numbered profile modules under `scripts/`. Each module has a metadata block
+The profile is split into a thin loader (`tactical-console.bashrc`, ~233 lines)
+and 26 numbered profile modules under `scripts/`. Each module has a metadata block
 documenting its dependencies and exports:
 
 ```bash
@@ -24,16 +24,12 @@ The loader iterates an **explicit array** of expected module names (not a glob),
 guaranteeing load order and preventing accidental sourcing of utility scripts:
 
 ```bash
-_tac_expected_modules=(
-    01-constants 02-error-handling 03-design-tokens 04-aliases
+_tac_expected_modules=(01-constants 02-error-handling 03-design-tokens 04-aliases
     05-ui-engine 06-hooks 07-telemetry 08-maintenance
-    09-openclaw 09a-oc-gateway 09b-gog 09c-oc-core 09d-oc-agents
-    09e-oc-health 09f-oc-misc
+    09-openclaw 09a-oc-gateway 09b-gog 09c-oc-core 09d-oc-agents 09e-oc-health 09f-oc-misc
     10-deployment
-    11a-llm-registry 11b-llm-autotune 11c-llm-server 11d-llm-gpu
-    11e-llm-model 11f-llm-runtime
-    12-dashboard-help 13-init 14-wsl-extras 15-model-recommender
-)
+    11a-llm-registry 11b-llm-autotune 11c-llm-server 11d-llm-gpu 11e-llm-model 11f-llm-runtime
+    12-dashboard-help 13-init 14-wsl-extras 15-model-recommender)
 
 for _tac_mod in "${_tac_expected_modules[@]}"; do
     _tac_f="$_tac_module_dir/${_tac_mod}.sh"
@@ -43,50 +39,56 @@ unset _tac_mod _tac_expected_modules
 ```
 
 Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
-`15-model-recommender.sh` loads last. Utility scripts live in `tools/`, are
-not profile modules, and are never sourced by either loader.
+`15-model-recommender.sh` loads last. Utility scripts live in `tools/` and
+`scripts/` (see tables below), are not profile modules, and are never sourced
+by either loader.
 
-> **Monolith backup:** The pre-modularisation single-file version is preserved
-> as `tactical-console.bashrc.monolith` (5,184 lines) for reference and
+> **Monolith backup:** The pre-modularisation single-file version
+> (`tactical-console.bashrc.monolith`, 5,184 lines) has been removed from the
+> repository. It is preserved in git history if needed for reference or
 > rollback.
 
 **Profile modules** (sourced in order by the loader):
 
 | Module | File | Lines | Purpose |
 | --- | --- | --- | --- |
-| §0 | `tactical-console.bashrc` | ~225 | Version, AI editor rules, architecture map, array-based module loader, missing module warning |
-| §1 | `scripts/01-constants.sh` | 342 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
-| §2 | `scripts/02-error-handling.sh` | 258 | ERR trap → `bash-errors.log` (exit codes ≥ 2, whitelisted commands excluded) |
-| §3 | `scripts/03-design-tokens.sh` | 48 | ANSI colour constants (`readonly`, re-source safe) |
-| §4 | `scripts/04-aliases.sh` | 421 | Short commands, VS Code wrappers, tactical shortcuts (`c`, `cls`, `le`, `lo` with PIPESTATUS) |
-| §5 | `scripts/05-ui-engine.sh` | 534 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
+| §0 | `tactical-console.bashrc` | ~233 | Version, AI editor rules, architecture map, array-based module loader, missing module warning |
+| §1 | `scripts/01-constants.sh` | 383 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
+| §2 | `scripts/02-error-handling.sh` | 263 | ERR trap → `bash-errors.log` (exit codes ≥ 2, whitelisted commands excluded) |
+| §3 | `scripts/03-design-tokens.sh` | 36 | ANSI colour constants (`readonly`, re-source safe) |
+| §4 | `scripts/04-aliases.sh` | 447 | Short commands, VS Code wrappers, tactical shortcuts (`c`, `cls`, `le`, `lo` with PIPESTATUS) |
+| §5 | `scripts/05-ui-engine.sh` | 558 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
 | §6 | `scripts/06-hooks.sh` | 197 | `cd` override (venv auto-activate), prompt (`PS1`), `__test_port`, admin badge |
-| §7 | `scripts/07-telemetry.sh` | 361 | Host metrics (CPU + dual GPU), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` with trap cleanup |
-| §8 | `scripts/08-maintenance.sh` | 1461 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, `docs-sync`, cooldown system with `flock` |
-| §9 | `scripts/09-openclaw.sh` (thin loader) | 25 | Sources 09a–09f sub-modules in order |
-| §9a | `scripts/09a-oc-gateway.sh` | 619 | Gateway lifecycle: `so()`, start/stop/health, Tailscale cycling, API key bridge |
-| §9b | `scripts/09b-gog.sh` | 165 | Google CLI (`gog`) detection, setup helpers, and integration shims |
-| §9c | `scripts/09c-oc-core.sh` | 332 | Core dispatcher: `oc()`, `xo()`, shortcut commands |
-| §9d | `scripts/09d-oc-agents.sh` | 673 | Agent management, API keys, secrets rotation |
-| §9e | `scripts/09e-oc-health.sh` | 1075 | Health checks, diagnostics, failover, utilities |
-| §9f | `scripts/09f-oc-misc.sh` | 322 | KGraph, stinger, backup/restore, mem-index |
+| §7 | `scripts/07-telemetry.sh` | 411 | Host metrics (CPU + dual GPU), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` with trap cleanup |
+| §8 | `scripts/08-maintenance.sh` | 1657 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, `docs-sync`, cooldown system with `flock` |
+| §9 | `scripts/09-openclaw.sh` (thin loader) | 53 | Sources 09a–09f sub-modules in order |
+| §9a | `scripts/09a-oc-gateway.sh` | 641 | Gateway lifecycle: `so()`, start/stop/health, Tailscale cycling, API key bridge |
+| §9b | `scripts/09b-gog.sh` | 170 | Google CLI (`gog`) detection, setup helpers, and integration shims |
+| §9c | `scripts/09c-oc-core.sh` | 341 | Core dispatcher: `oc()`, `xo()`, shortcut commands |
+| §9d | `scripts/09d-oc-agents.sh` | 746 | Agent management, API keys, secrets rotation |
+| §9e | `scripts/09e-oc-health.sh` | 1079 | Health checks, diagnostics, failover, utilities |
+| §9f | `scripts/09f-oc-misc.sh` | 582 | KGraph, stinger, backup/restore, mem-index |
 | §10 | `scripts/10-deployment.sh` | 460 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified, secret detection) |
-| §11 | `scripts/11-llm-manager.sh` (thin loader) | 43 | Sources 11a–11f sub-modules in order |
-| §11a | `scripts/11a-llm-registry.sh` | 295 | Registry CRUD: `__llm_registry_sync_state`, `__renumber_registry`, entry helpers |
-| §11b | `scripts/11b-llm-autotune.sh` | 585 | Autotune infrastructure: profile save, ctx estimation, blob upsert |
-| §11c | `scripts/11c-llm-server.sh` | 516 | Server lifecycle: start/stop, health checks, Python binary resolution |
-| §11d | `scripts/11d-llm-gpu.sh` | 838 | GPU status, GGUF metadata parsing, calculations (`__calc_gpu_layers`, `__calc_ctx_size`) |
-| §11e | `scripts/11e-llm-model.sh` | 2971 | Model commands: scan, list, use (7 helpers), bench, download, archive, delete, doctor |
-| §11f | `scripts/11f-llm-runtime.sh` | 724 | Runtime: `serve`, `burn`, `local_chat`, SSE streaming, explain, `wtf_repl` |
-| §12 | `scripts/12-dashboard-help.sh` | 681 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` (OpenClaw status) |
-| §13 | `scripts/13-init.sh` | 134 | `mkdir -p` (OpenClaw-aware), completions, loopback fix, bridge call, exit trap (chained) |
+| §11 | `scripts/11-llm-manager.sh` (thin loader) | 44 | Sources 11a–11f sub-modules in order |
+| §11a | `scripts/11a-llm-registry.sh` | 251 | Registry CRUD: `__llm_registry_sync_state`, `__renumber_registry`, entry helpers |
+| §11b | `scripts/11b-llm-autotune.sh` | 578 | Autotune infrastructure: profile save, ctx estimation, blob upsert |
+| §11c | `scripts/11c-llm-server.sh` | 501 | Server lifecycle: start/stop, health checks, Python binary resolution |
+| §11d | `scripts/11d-llm-gpu.sh` | 784 | GPU status, GGUF metadata parsing, calculations (`__calc_gpu_layers`, `__calc_ctx_size`) |
+| §11e | `scripts/11e-llm-model.sh` | 3173 | Model commands: scan, list, use (7 helpers), bench, download, archive, delete, doctor |
+| §11f | `scripts/11f-llm-runtime.sh` | 681 | Runtime: `serve`, `burn`, `local_chat`, SSE streaming, explain, `wtf_repl` |
+| §12 | `scripts/12-dashboard-help.sh` | 695 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` (OpenClaw status) |
+| §13 | `scripts/13-init.sh` | 155 | `mkdir -p` (OpenClaw-aware), completions, loopback fix, bridge call, exit trap (chained) |
 | §14 | `scripts/14-wsl-extras.sh` | 138 | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
-| §15 | `scripts/15-model-recommender.sh` | 194 | AI model recommendations by use case (`bc` fallback for integer math) |
+| §15 | `scripts/15-model-recommender.sh` | 195 | AI model recommendations by use case (`bc` fallback for integer math) |
 
-**Utility scripts** (moved to `tools/`; not profile modules — never sourced by the loader):
+**Utility scripts** (not profile modules — never sourced by the loader):
 
 | File | Purpose |
 | --- | --- |
+| `scripts/autotune-model.sh` | Model autotune runner (standalone). |
+| `scripts/run-autotune-batch.sh` | Batch autotune across multiple models. |
+| `scripts/load-vault-env.sh` | Load vault environment variables (standalone). |
+| `scripts/oc-update-enhanced.sh` | Enhanced OpenClaw update helper. |
 | `tools/check-agent-use.sh` | Agent usage regression checker — CI/tests only. |
 | `tools/import-windows-env.sh` | Standalone script to import Windows user environment variables. |
 | `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety. CI linter. |
@@ -154,7 +156,7 @@ profile. This is intentional — `sftp` and `rsync` must not trigger UI
 side-effects. But AI agents and automation scripts need access to the ~100+
 functions defined in the profile.
 
-**`env.sh`** is a library loader that sources all 16 profile modules (01–15
+**`env.sh`** is a library loader that sources all 26 profile modules (01–15
 plus `09b-gog`), bypassing the interactive guard and skipping `13-init.sh`
 (which runs screen clear, completions, WSL loopback fixes, and EXIT traps)
 and utility scripts in `tools/`. Because `09b-gog.sh` does not match the
@@ -294,8 +296,8 @@ for normal "not found" / "false" conditions. Only exit codes ≥ 2 are logged.
 ## 6. Modular Architecture — Benefits
 
 The profile was modularised in v3.0 (splitting a ~5,184-line monolith). The
-pre-modularisation file is preserved as `tactical-console.bashrc.monolith`
-for reference and emergency rollback.
+pre-modularisation file was preserved as `tactical-console.bashrc.monolith`
+but has since been removed from the repository (it remains in git history).
 
 **Ordering rules:** `01-constants.sh` must load first (everything depends on
 it). `13-init.sh` must load last (runs startup side-effects). All other
@@ -314,14 +316,16 @@ modules can be reordered as long as their `@depends` are satisfied.
 
 ### Monolith Backup
 
-The file `tactical-console.bashrc.monolith` is the last pre-split version of
-the profile. It is kept in the repository for:
+The file `tactical-console.bashrc.monolith` was the last pre-split version of
+the profile. It has been removed from the working tree but remains in git
+history. To restore it for reference or emergency rollback:
 
-- **Reference** — comparing behaviour before and after modularisation.
-- **Emergency rollback** — if the modular loader breaks, `~/.bashrc` can be
-  pointed back at the monolith to restore a working shell immediately.
+```bash
+git show HEAD~N:tactical-console.bashrc.monolith > tactical-console.bashrc.monolith
+```
 
-Do not edit the monolith — it is a frozen snapshot.
+(Replace `N` with the number of commits since removal, or use the commit hash
+where it was last present.)
 
 ### Risks & Mitigations
 
@@ -330,8 +334,8 @@ Do not edit the monolith — it is a frozen snapshot.
 | Source order bugs | Numeric prefixes enforce deterministic ordering. `bash -n` runs on every module in CI. |
 | `readonly` collisions on re-source | Already guarded with `[[ -z "${C_Reset:-}" ]]`. |
 | Missing module breaks shell | The loader warns if expected module count doesn't match; each `[[ -f ]]` guards gracefully. |
-| Performance regression (many `source` calls) | 16 `source` calls add < 10ms total. Measured on this hardware. |
-| Utility scripts accidentally sourced | Array-based loader (not glob) — only the 16 named profile modules are sourced. |
+| Performance regression (many `source` calls) | 26 `source` calls add < 10ms total. Measured on this hardware. |
+| Utility scripts accidentally sourced | Array-based loader (not glob) — only the 26 named profile modules are sourced. |
 
 ---
 
@@ -385,7 +389,7 @@ Do not edit the monolith — it is a frozen snapshot.
 All project files live in a single Git repository at
 `~/ubuntu-console/` (remote: `github.com/waynegault/ubuntu-console`).
 `~/.bashrc` is a thin loader that sources `tactical-console.bashrc`, which in
-turn sources the 16 numbered profile modules from `scripts/` using an
+turn sources the 26 numbered profile modules from `scripts/` using an
 explicit array.
 
 **~/.bashrc enforcement:** The file is read-only (mode 444) and protected by
@@ -397,7 +401,6 @@ extra source commands.
 ```text
 ~/ubuntu-console/
 ├── tactical-console.bashrc            # Thin loader + array-based module sourcing loop
-├── tactical-console.bashrc.monolith   # Pre-modularisation backup (frozen snapshot)
 ├── env.sh                             # Non-interactive library loader (modules 01-15 except 13-init.sh)
 ├── install.sh                         # Idempotent installer for new machines
 ├── config/

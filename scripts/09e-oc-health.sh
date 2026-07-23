@@ -6,6 +6,13 @@
 # ==============================================================================
 # 09e-oc-health
 # ==============================================================================
+# @modular-section: openclaw
+# @depends: constants, design-tokens, ui-engine, hooks, llm-registry, llm-server
+# @exports: oc-health, oc-diag, oc-doctor-local, oc-failover, oc-sec,
+#   oc-cron, oc-skills, oc-plugins, oc-plugin-update, oc-tail, oc-channels,
+#   oc-stinger, oc-tui, oc-config, oc-docs, oc-usage, oc-local-llm,
+#   oc-sync-models, ocms, oc-browser, oc-nodes, oc-sandbox, oc-env,
+#   oc-cache-clear
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
