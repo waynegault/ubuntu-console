@@ -601,7 +601,7 @@ function tactical_help() {
     __hRow "tpq" "Alias for model tp-quota"
     __hRow "burn" "Token stress test (~1300)"
     __hRow "docs-sync" "Check README drift"
-   
+
     __hSection "LLM — CHAT & EXPLAIN"
     __hRow "chat: [msg]" "Interactive chat session"
     __hRow "chat-context" "Load file as context"
@@ -693,3 +693,5 @@ function contextual-help() {
 }
 
 # end of file
+
+# end of file marker

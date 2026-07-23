@@ -17,3 +17,5 @@ else
     exit 1
 fi
 # end of file
+
+# end of file marker

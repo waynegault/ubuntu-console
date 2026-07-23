@@ -168,3 +168,5 @@ echo "LLM backend prerequisite (CUDA):"
 echo "  CMAKE_ARGS='-DGGML_CUDA=on' FORCE_CMAKE=1 pip install 'llama-cpp-python[server]==0.3.23'"
 
 # end of file
+
+# end of file marker

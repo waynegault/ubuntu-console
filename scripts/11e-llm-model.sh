@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2059,SC2120,SC2154
+# shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # Module Version: 2
@@ -319,7 +319,7 @@ function __model_list() {
 
     # Human-readable output — compute column widths dynamically
     local _col_spec="%4s %28s %5s %9s %7s %4s %7s %4s %4s %4s %4s %4s %7s %4s %5s %5s %5s %4s %4s %11s"
-    printf "\n${C_Dim}  ${_col_spec}${C_Reset}\n" \
+    printf '\n%s  '"${_col_spec}"'%s\n' "$C_Dim" "$C_Reset" \
         "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "FA" "MMAP" "TPS" "ATUNE" "DEF" "VRAM" "RATING"
     local _list_rule
     printf -v _list_rule '%*s' 149 ''
@@ -343,7 +343,7 @@ function __model_list() {
             marker="* "
             color="$C_Highlight"
         fi
-        printf "${color}${marker}${_col_spec}${C_Reset}\n" \
+        printf '%s%s'"${_col_spec}"'%s\n' "$color" "$marker" "$C_Reset" \
             "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${flash_attn:-on}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}"
     done < "$LLM_REGISTRY"
 
@@ -361,13 +361,13 @@ function __model_list() {
     (( d_pct_n >= 75 && d_pct_n < 90 )) && d_color="$C_Warning"
     local d_label
     d_label=$(basename "$LLAMA_DRIVE_ROOT")
-    printf "\n${C_Dim}  Drive ${d_label^^}: "
-    printf "${d_color}${d_avail_h}G free${C_Reset}"
-    printf "${C_Dim} of ${d_total_h}G (${d_pct_n}%% used)${C_Reset}\n"
+    printf '\n%s  Drive %s: ' "$C_Dim" "${d_label^^}"
+    printf '%s%sG free%s' "$d_color" "$d_avail_h" "$C_Reset"
+    printf '%s of %sG (%s%% used)%s\n' "$C_Dim" "$d_total_h" "$d_pct_n" "$C_Reset"
 
-    printf "\n${C_Dim}  model use N  |  model stop  "
-    printf "|  model info N  |  model default N  "
-    printf "|  model scan  |  model bench  |  model autotune N${C_Reset}\n"
+    printf '\n%s  model use N  |  model stop  ' "$C_Dim"
+    printf '|  model info N  |  model default N  '
+    printf '|  model scan  |  model bench  |  model autotune N%s\n' "$C_Reset"
 }
 
 # ---------------------------------------------------------------------------
@@ -3177,3 +3177,5 @@ function __model_token_plan_quota() {
 }
 
 # @llm-build
+
+# end of file

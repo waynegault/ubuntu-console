@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC1090,SC1091,SC2015,SC2016,SC2034,SC2059,SC2086,SC2154,SC2317
+# shellcheck disable=SC1090,SC1091,SC2015,SC2016,SC2034,SC2154,SC2317
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
@@ -51,3 +51,5 @@ do
 done
 unset _MOD_DIR _09_mod _09_f
 # end of file
+
+# end of file marker

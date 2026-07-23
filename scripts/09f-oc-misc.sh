@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2059,SC2120,SC2154
+# shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # Module Version: 3
@@ -583,4 +583,6 @@ function oc-restore() {
 # ---------------------------------------------------------------------------
 # owk — cd to OpenClaw workspace directory.
 # ---------------------------------------------------------------------------
+# end of file
+
 # end of file

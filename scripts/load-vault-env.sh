@@ -130,3 +130,5 @@ unset -f _lve_cleanup
 return 0 2>/dev/null || exit 0
 
 # end of file
+
+# end of file marker

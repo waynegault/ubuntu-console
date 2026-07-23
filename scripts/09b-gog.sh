@@ -168,3 +168,5 @@ function gog-help() {
 }
 
 # end of file
+
+# end of file marker

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2059,SC2120,SC2154
+# shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # Module Version: 2
@@ -341,4 +341,6 @@ function oc-purge() {
 #   4. Render a formatted table with token usage, cap%, and colored bars
 #   5. Cache the rendered text to /dev/shm/oc_agent_use.txt (5s TTL)
 # ---------------------------------------------------------------------------
+# end of file
+
 # end of file

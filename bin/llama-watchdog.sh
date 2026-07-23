@@ -291,3 +291,5 @@ log "Restart failed: server did not become healthy in ${health_timeout}s"
 exit 1
 
 # end of file
+
+# end of file marker

@@ -7,6 +7,7 @@ hangs when the thread-based timeout cannot interrupt blocked I/O.
 from __future__ import annotations
 
 import fcntl
+import os
 import shutil
 import tempfile
 import time
@@ -16,6 +17,36 @@ from pathlib import Path
 import pytest
 
 _LOCK_DIR = Path(tempfile.gettempdir()) / "tac-pytest-bats-locks"
+
+
+def _lock_pid_path(lock_path: Path) -> Path:
+    """Return the companion pid file for a BATS lock."""
+    return lock_path.with_suffix(lock_path.suffix + ".pid")
+
+
+def _is_stale_lock(lock_path: Path, pid_path: Path) -> bool:
+    """Return True when a lock owner PID is gone or invalid."""
+    if not pid_path.exists():
+        return False
+
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return True
+
+    if pid <= 0:
+        return True
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    except OSError:
+        return False
+
+    return False
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -58,21 +89,31 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
 
     # Derive lock name from the actual BATS file being run, not the test file.
     bats_file: Path | None = None
-    if hasattr(request.node, "callspec") and "bats_file" in request.node.callspec.params:
-        bats_file = request.node.callspec.params["bats_file"]
+    timeout_s = 60
+    if hasattr(request.node, "callspec"):
+        if "bats_file" in request.node.callspec.params:
+            bats_file = request.node.callspec.params["bats_file"]
+        if "timeout_s" in request.node.callspec.params:
+            timeout_s = int(request.node.callspec.params["timeout_s"])
+
     lock_name = Path(bats_file).stem if bats_file else Path(request.path).stem
     lock_path = _LOCK_DIR / f"{lock_name}.lock"
+    pid_path = _lock_pid_path(lock_path)
 
-    with open(lock_path, "w") as lf:
-        # Non-blocking poll so we surface a clear error instead of hanging
-        # forever when a previous run left a stuck process holding the lock.
-        deadline = time.monotonic() + 60  # 1 min grace for a running suite
-        wait_s = 60
+    with open(lock_path, "w", encoding="utf-8") as lf:
+        pid_path.write_text(str(os.getpid()), encoding="utf-8")
+        wait_s = max(60, timeout_s + 60)
+        deadline = time.monotonic() + wait_s
         while True:
             try:
                 fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
+                if _is_stale_lock(lock_path, pid_path):
+                    lock_path.unlink(missing_ok=True)
+                    pid_path.unlink(missing_ok=True)
+                    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+                    continue
                 if time.monotonic() > deadline:
                     pytest.fail(
                         f"Could not acquire BATS serialisation lock within "
@@ -84,3 +125,4 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
             yield
         finally:
             fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+            pid_path.unlink(missing_ok=True)

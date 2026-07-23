@@ -339,3 +339,5 @@ exit_code=0
 (( _PY_EXIT != 0 )) && exit_code=1
 exit $exit_code
 # end of file
+
+# end of file marker

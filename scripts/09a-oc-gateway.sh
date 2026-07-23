@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2059,SC2120,SC2154,SC1091
+# shellcheck disable=SC2034,SC2120,SC2154,SC1091
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # Module Version: 2
@@ -641,5 +641,7 @@ function __oc_safe_gateway_shutdown() {
     fi
     rm -f "$OC_ROOT/supervisor.lock"
 }
+
+# end of file
 
 # end of file

@@ -135,3 +135,5 @@ fi
 exit "$rc"
 
 # end of file
+
+# end of file marker

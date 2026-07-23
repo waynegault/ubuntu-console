@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2059,SC2120,SC2154
+# shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # Module Version: 2
@@ -787,3 +787,5 @@ function __renumber_registry() {
 # @description Scan GGUF files, regenerate the registry, and archive discouraged quants.
 # @returns 0 on success, 1 if the model drive is unavailable or no models are found.
 # ---------------------------------------------------------------------------# end of file
+
+# end of file

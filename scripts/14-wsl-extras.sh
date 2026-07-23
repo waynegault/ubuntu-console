@@ -136,3 +136,5 @@ fi
 # credential vault at ~/.openclaw/credentials/vault instead.
 
 # end of file
+
+# end of file marker

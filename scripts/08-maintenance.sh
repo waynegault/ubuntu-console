@@ -1655,3 +1655,5 @@ function check-graph-integrity() {
 }
 
 # end of file
+
+# end of file marker

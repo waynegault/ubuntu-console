@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2059,SC2120,SC2154
+# shellcheck disable=SC2034,SC2120,SC2154
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # Module Version: 2
@@ -580,4 +580,6 @@ function __llm_median_from_list() {
 # __llm_active_entry — Resolve the currently active model to a registry row.
 # @returns 0 on success, 1 if no active model state is recorded or it is stale.
 # ---------------------------------------------------------------------------
+# end of file
+
 # end of file

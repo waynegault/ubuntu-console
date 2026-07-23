@@ -132,3 +132,5 @@ __btr_log "INFO" "child exited with code $_wait_exit"
 exit "$_wait_exit"
 
 # end of file
+
+# end of file marker

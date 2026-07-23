@@ -458,3 +458,5 @@ ${diff_body}"
 
 
 # end of file
+
+# end of file marker

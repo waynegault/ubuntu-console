@@ -111,3 +111,5 @@ _print "[oc-update-enhanced] update still failed after repair."
 exit "$retry_rc"
 
 # end of file
+
+# end of file marker

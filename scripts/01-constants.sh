@@ -381,3 +381,5 @@ export HISTIGNORE="ls:ll:la:l:h:m:cls"
 
 
 # end of file
+
+# end of file marker
