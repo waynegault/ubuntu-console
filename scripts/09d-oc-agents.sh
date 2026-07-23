@@ -450,14 +450,23 @@ function __bridge_windows_api_keys() {
     local ttl=3600
     local _warn_once_file="/dev/shm/tac_pwsh_bridge_warned"
 
+    # Session-level guard: if pwsh.exe was previously unavailable or timed
+    # out, skip retrying for the rest of this session. The warning file is
+    # cleared on success so a working bridge is retried.
+    # This avoids a ~5s hang on every shell init when pwsh.exe exists on
+    # PATH but WSL interop is broken (common with WSL mirrored networking).
+    if [[ -f "$_warn_once_file" ]]
+    then
+        # Source stale cache if it exists (from a prior session that worked)
+        [[ -f "$cache" ]] && source "$cache" 2>/dev/null
+        return 0
+    fi
+
     # Stateful downgrade: if pwsh.exe is unavailable, warn once per session.
     if ! command -v pwsh.exe >/dev/null 2>&1
     then
-        if [[ ! -f "$_warn_once_file" ]]
-        then
-            printf '%s\n' "$(date +%s)" > "$_warn_once_file" 2>/dev/null || true
-            echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] __bridge_windows_api_keys: pwsh.exe unavailable; bridge downgraded for this session." >> "$ErrorLogPath" 2>/dev/null
-        fi
+        printf '%s\n' "$(date +%s)" > "$_warn_once_file" 2>/dev/null || true
+        echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] __bridge_windows_api_keys: pwsh.exe unavailable; bridge downgraded for this session." >> "$ErrorLogPath" 2>/dev/null
         return 0
     fi
 
@@ -631,26 +640,54 @@ function oc-refresh-keys() {
     local _nas_user="${OC_NAS_USER:-sshd}"
     local _nas_host="${OC_NAS_HOST:-192.168.33.17}"
     local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
+    local count=0
 
-    # 1. Pull matching vars from Windows User environment
-    if ! command -v pwsh.exe >/dev/null 2>&1
-    then
-        __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — bridge cannot refresh]" "$C_Warning"
-        return 1
+    # 1. Pull matching vars from Windows User environment (if pwsh.exe works).
+    #    If the bridge was previously downgraded (warning file exists), skip
+    #    the retry and fall through to the Linux env var backup below.
+    if command -v pwsh.exe >/dev/null 2>&1 && [[ ! -f /dev/shm/tac_pwsh_bridge_warned ]]; then
+        rm -f "$cache"
+        __bridge_windows_api_keys
+        if [[ -f "$cache" ]]; then
+            count=$(grep -c '^export ' "$cache" || true)
+            __tac_info "Reading Windows User environment" "[$count variable(s) imported]" "$C_Success"
+        fi
     fi
 
-    rm -f "$cache"
-    __bridge_windows_api_keys
-    if [[ ! -f "$cache" ]]; then
-        __tac_info "Reading Windows User environment" "[no vars found — is pwsh.exe available?]" "$C_Warning"
+    # 2. Fallback: always export these Linux-side env vars (MCP server keys,
+    #    gateway token). These are set in the Linux shell but NOT bridged
+    #    from Windows, so pwsh.exe can't see them.
+    {
+        echo "CONTEXT7_API_KEY=${CONTEXT7_API_KEY:-}"
+        echo "DEVIN_API_KEY=${DEVIN_API_KEY:-}"
+        echo "OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-}"
+    } > "$cache.env_linux" 2>/dev/null
+    # Merge Linux-side vars into the cache (create it if pwsh.exe failed)
+    if [[ -f "$cache" ]]; then
+        while IFS='=' read -r _lk _lv; do
+            [[ -z "$_lk" || -z "$_lv" ]] && continue
+            # Only add if not already in cache (Windows source takes priority)
+            grep -q "^export ${_lk}=" "$cache" 2>/dev/null && continue
+            printf 'export %s=%q\n' "$_lk" "$_lv" >> "$cache"
+        done < "$cache.env_linux"
+        count=$(grep -c '^export ' "$cache" || true)
+    elif [[ -n "${CONTEXT7_API_KEY:-}" || -n "${DEVIN_API_KEY:-}" || -n "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
+        : > "$cache" 2>/dev/null
+        chmod 600 "$cache" 2>/dev/null || true
+        while IFS='=' read -r _lk _lv; do
+            [[ -z "$_lk" || -z "$_lv" ]] && continue
+            printf 'export %s=%q\n' "$_lk" "$_lv" >> "$cache"
+            count=$((count + 1))
+        done < "$cache.env_linux"
+        __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — using Linux env vars]" "$C_Warning"
+        __tac_info "Reading Windows User environment" "[$count variable(s) exported]" "$C_Success"
+    else
+        __tac_info "Reading Windows User environment" "[no vars found — pwsh.exe unavailable and no Linux fallback vars set]" "$C_Warning"
         return 1
     fi
+    rm -f "$cache.env_linux"
 
-    local count
-    count=$(grep -c '^export ' "$cache" || true)
-    __tac_info "Reading Windows User environment" "[$count variable(s) imported]" "$C_Success"
-
-    # 2. Write WSL environment.d file and reload systemd user env
+    # 3. Write WSL environment.d file and reload systemd user env
     mkdir -p "$envd_dir"
     awk '/^export / { sub(/^export /, ""); print }' "$cache" > "$envd_file.tmp" 2>/dev/null || true
     mv "$envd_file.tmp" "$envd_file" 2>/dev/null || true
@@ -665,7 +702,7 @@ function oc-refresh-keys() {
     done < "$envd_file"
     __tac_info "Exporting to WSL" "[$envd_file]" "$C_Success"
 
-    # 3. Sync OpenClaw SecretRefs to the refreshed env credentials
+    # 4. Sync OpenClaw SecretRefs to the refreshed env credentials
     __oc_apply_secret_refs
 
     # 4. Mirror vars to NAS via SSH
