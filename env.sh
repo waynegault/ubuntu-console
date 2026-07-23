@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -43,6 +43,13 @@ mkdir -p "$NODE_COMPILE_CACHE" 2>/dev/null || true
 
 # OPENCLAW_NO_RESPAWN: Skip self-respawn overhead
 export OPENCLAW_NO_RESPAWN="${OPENCLAW_NO_RESPAWN:-1}"
+
+# NODE_OPTIONS: Prefer IPv4 DNS — this machine has no IPv6 default route,
+# causing Node.js fetch() to time out on IPv6 connection attempts.
+# (Mirrored from tactical-console.bashrc for non-interactive contexts.)
+if [[ "$NODE_OPTIONS" != *"dns-result-order"* ]]; then
+    export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
+fi
 
 # LLM autotune context retention guardrail: keep selected ctx at or above a
 # fraction of the max stable ctx discovered per model.

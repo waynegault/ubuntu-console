@@ -578,9 +578,17 @@ function __oc_apply_secret_refs() {
     fi
 
     local -a _map=(
-        "models.providers.qwen-token-plan.apiKey::QWEN_TOKEN_PLAN_API_KEY"
+        # Plugin/feature apiKeys (not shadowed by auth profiles)
         "plugins.entries.google.config.webSearch.apiKey::GEMINI_API_KEY"
     )
+    #
+    # Auth profile credentials (github-copilot, deepseek, qwen-token-plan)
+    # are stored with keyRef/tokenRef in each agent's sqlite database.
+    # These are set once and persist through sqlite updates; they are NOT
+    # managed by `openclaw config set`. See 2026-07-23 session: HAL bulk-set
+    # handled deepseek:default.keyRef, qwen-token-plan:default.keyRef,
+    # and github-copilot:github.tokenRef across all 14 agent databases.
+    # Run that sqlite patch again if agent databases are ever rebuilt.
 
     local _entry _path _var _applied=0 _skipped=0 _failed=0
     for _entry in "${_map[@]}"
