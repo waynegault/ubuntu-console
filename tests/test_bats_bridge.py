@@ -22,6 +22,7 @@ BATS_EXECUTABLE = "bats"
 _BATS_SUITE_DEFS: list[tuple[str, pytest.MarkDecorator | pytest.Mark, int]] = [
     ("tests/unit/*.bats",                 pytest.mark.bats_unit,         60),
     ("tests/tactical-console.bats",        pytest.mark.bats_full,       900),
+    ("tests/tactical-console-fast.bats",   pytest.mark.bats_fast,       180),
     ("tests/integration/*.bats",           pytest.mark.bats_integration, 300),
 ]
 

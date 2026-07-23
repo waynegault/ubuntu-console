@@ -222,7 +222,7 @@ export OPENCLAW_LCM_DEEP_RECALL_CMD="$TAC_PYTHON $OC_ROOT/life/deep-recall-provi
 function mem-index() {
     if [[ "$__TAC_OPENCLAW_OK" == "1" ]]
     then
-        command openclaw mem-index "$@"
+        command openclaw memory index "$@"
     else
         __tac_info "OpenClaw" "[NOT INSTALLED]" "$C_Warning"
         return 1

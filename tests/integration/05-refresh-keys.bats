@@ -57,7 +57,8 @@ setup() {
 }
 
 teardown() {
-    rm -rf "$MOCK_BIN_DIR"
+    rm -rf "${MOCK_BIN_DIR:-}" 2>/dev/null || true
+    unset OC_NAS_KEY_PATH OC_NAS_USER OC_NAS_HOST
 }
 
 @test "oc-refresh-keys imports matching Windows vars and attempts NAS sync" {
