@@ -532,7 +532,7 @@ function tactical_help() {
         __hRow "oc diag" "5-point health check"
         __hRow "oc doctor-local" "Validate gateway + llama.cpp"
         __hRow "oc failover" "Cloud LLM fallback (on|off)"
-        __hRow "oc refresh-keys" "Re-import Windows API keys"
+        __hRow "oc refresh-keys" "Re-import keys; sync SecretRefs"
         __hRow "oc rotate-secrets" "Rotate exposed secrets"
 
         __hSection "OPENCLAW — DATA & EXTENSIONS"

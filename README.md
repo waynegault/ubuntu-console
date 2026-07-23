@@ -132,7 +132,7 @@ up             # Run 20-step system maintenance
 | `ocstat` | OpenClaw | Full status |
 | `ocgs` | OpenClaw | Deep gateway status |
 | `ockeys` | OpenClaw | Show API key visibility |
-| `oc-refresh-keys` | OpenClaw | Force re-import API keys from Windows |
+| `oc-refresh-keys` | OpenClaw | Re-import Windows API keys; sync OC SecretRefs |
 | `oc-backup` | OpenClaw | Snapshot config + scripts + systemd units to ZIP |
 | `oc-restore` | OpenClaw | Restore from ZIP (`--dry-run` supported) |
 | `oc-diag` | OpenClaw | 5-point diagnostic |
@@ -355,7 +355,7 @@ For the OpenClaw gateway (systemd, not a shell child), `so()` reads the cache an
 | `xo` | Stop gateway only (use `oc restart` to restart from an AI agent context) |
 | `oc-restart` | Native restart: `openclaw gateway restart` |
 | `oc-health` | Deep probe: checks port 18789, calls `openclaw health --json` |
-| `oc-refresh-keys` | Force re-bridge Windows API keys |
+| `oc-refresh-keys` | Re-bridge Windows API keys + sync OC SecretRefs |
 
 ### Backup & Restore
 

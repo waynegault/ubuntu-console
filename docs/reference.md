@@ -34,7 +34,7 @@ description: Complete quick reference card for every command, the tactical dashb
 | `ocstat` | OpenClaw | Full status |
 | `ocgs` | OpenClaw | Deep gateway status |
 | `ockeys` | OpenClaw | Show API key visibility |
-| `oc-refresh-keys` | OpenClaw | Force re-import API keys |
+| `oc-refresh-keys` | OpenClaw | Re-import API keys; sync OC SecretRefs |
 | `oc-backup` | OpenClaw | Snapshot config, scripts, systemd units to ZIP |
 | `oc-restore` | OpenClaw | Restore from ZIP (validates contents, `--dry-run`) |
 | `oc-diag` | OpenClaw | 5-point diagnostic |

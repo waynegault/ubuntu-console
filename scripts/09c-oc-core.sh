@@ -118,7 +118,7 @@ function oc() {
         printf '  %-20s %s\n' "diag"         "5-point check: doctor, gw, models, env, logs"
         printf '  %-20s %s\n' "doctor-local" "Validate local gateway + llama.cpp path end-to-end"
         printf '  %-20s %s\n' "failover"     "Cloud LLM fallback (on|off|status)"
-        printf '  %-20s %s\n' "refresh-keys" "Re-import Windows API keys into WSL"
+        printf '  %-20s %s\n' "refresh-keys" "Re-import Windows API keys; sync SecretRefs"
         printf '  %-20s %s\n' "rotate-secrets" "Rotate checklist + optional bash log sanitization"
         # 'trust-sync' command removed
         printf '%s\n' ""

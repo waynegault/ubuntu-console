@@ -4,12 +4,11 @@
 ║ SYSTEM TIME :: {{TIME}} {{DAY}} {{DATE}} ║
 ║ UPTIME :: {{UPTIME}} ║
 ║ BATTERY :: A/C POWERED ║
-║ CPU / GPU :: CPU {{CPU_PCT}}% | iGPU {{IGPU_PCT}}% | NVIDIA {{CUDA_PCT}}% ║
+║ CPU / GPU :: CPU {{CPU_PCT}}% | iGPU {{IGPU_PCT}}% | NVIDIA 0% ║
 ║ MEMORY :: {{MEM_USED}} / {{MEM_TOTAL}} Gb ║
 ║ STORAGE :: C: {{C_FREE}} Gb free | WSL: {{WSL_FREE}} Gb free ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║ GPU :: RTX 3050 Ti | {{GPU_LOAD}}% Load | {{TEMP}}°C | {{VRAM_USED}} / {{VRAM_TOTAL}} Mb ║
-║ GPU ENGINES :: {{GPU_ENGINES}} ║
 ║ LOCAL LLM :: OFFLINE ║
 ║ WSL :: ACTIVE Ubuntu-{{UBUNTU_VERSION}} (6.6.87.2-microsoft-standard-WSL2) ║
 ╠══════════════════════════════════════════════════════════════════════════════╣

@@ -7,7 +7,7 @@ description: Complete reference for OpenClaw integration — architecture, API k
 
 ## What Is OpenClaw?
 
-OpenClaw is a Node.js-based AI agent framework (v2026.3.2) that runs as a
+OpenClaw is a Node.js-based AI agent framework (v2026.7.2-beta.3) that runs as a
 **systemd user service** on port 18789. It provides multi-agent orchestration,
 session management, and tool-use capabilities. The Tactical
 Profile wraps the entire OpenClaw CLI with ergonomic shell commands.
@@ -66,12 +66,45 @@ to prevent command injection.
    `export KEY=VALUE` lines (`chmod 600`, tmpfs — never hits disk).
 4. The cache file is `source`d into the shell environment.
 5. Cache TTL is 3600 seconds (1 hour). Run `oc-refresh-keys` to force refresh.
+6. `oc-refresh-keys` then syncs OpenClaw SecretRefs (see below) so config
+   credentials reference the refreshed environment instead of holding
+   plaintext copies.
 
 **For the OpenClaw gateway** (which runs under systemd, not as a child of the
 shell), `so()` reads the cache file and injects each variable into the systemd
 user session via `systemctl --user set-environment KEY=VALUE` before starting
 the service. This ensures the Node.js gateway process has access to all
 bridged API keys.
+
+### SecretRef Sync
+
+`~/.config/environment.d/90-openclaw.conf` remains the **backing store** for
+API keys: a SecretRef does not store a secret, it references an environment
+variable that OpenClaw resolves at gateway activation. Keeping keys in the
+environment (bridged from Windows) and referencing them by name is what lets
+the plaintext copies be removed from `openclaw.json`.
+
+After refreshing the environment, `oc-refresh-keys` maps a small set of
+config-managed credentials to env-backed SecretRefs using the same builder
+`openclaw secrets configure` uses:
+
+```bash
+openclaw config set <config-path> --ref-provider default --ref-source env --ref-id <ENV_VAR>
+```
+
+This writes `{"source":"env","provider":"default","id":"<ENV_VAR>"}` into the
+config field (preflighted and written atomically; skipped when the env var is
+absent, so an unresolved ref is never created). Current mapping (defined in
+`scripts/09d-oc-agents.sh`, `__oc_apply_secret_refs`):
+
+| Config path | Env var |
+|---|---|
+| `models.providers.qwen-token-plan.apiKey` | `QWEN_TOKEN_PLAN_API_KEY` |
+| `plugins.entries.google.config.webSearch.apiKey` | `GEMINI_API_KEY` |
+
+Verify with `openclaw secrets audit --check`. Auth-profile keys stored in the
+per-agent SQLite stores are migrated separately via
+`openclaw secrets configure --agent <id>`.
 
 ## Gateway Lifecycle
 

@@ -35,6 +35,10 @@ setup() {
     mkdir -p "$MOCK_BIN_DIR"
     export PATH="$MOCK_BIN_DIR:$PATH"
 
+    # Mock openclaw so SecretRef sync never touches the real config during tests.
+    export OC_MOCK_LOG="$TAC_TEST_TMPDIR/openclaw_calls.log"
+    __mock_command_local openclaw "echo \"OPENCLAW_CALL: \$*\" >> \"$OC_MOCK_LOG\"; exit 0"
+
     # Source only required modules for oc-refresh-keys to keep the test harness stable.
     # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/01-constants.sh"
@@ -46,6 +50,10 @@ setup() {
     source "$REPO_ROOT/scripts/05-ui-engine.sh"
     # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/09-openclaw.sh"
+
+    # Isolate OC_ROOT so tests never touch the real ~/.openclaw.
+    export OC_ROOT="$TAC_TEST_TMPDIR/.openclaw"
+    mkdir -p "$OC_ROOT"
 }
 
 teardown() {
@@ -93,4 +101,24 @@ teardown() {
 
     # The stdout should report imported variable count
     [[ "$output" == *"Windows API Keys"* ]] || true
+}
+
+@test "oc-refresh-keys syncs OpenClaw SecretRefs only for present env credentials" {
+    # Bridge returns a non-mapped var; the mapped credential is supplied via env.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret'"
+    rm -f "$OC_MOCK_LOG"
+
+    export QWEN_TOKEN_PLAN_API_KEY="test-qwen-key"
+    unset GEMINI_API_KEY
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    # Present mapped credential -> SecretRef builder invoked for that path.
+    run grep -F "config set models.providers.qwen-token-plan.apiKey --ref-provider default --ref-source env --ref-id QWEN_TOKEN_PLAN_API_KEY" "$OC_MOCK_LOG"
+    [ "$status" -eq 0 ]
+
+    # Absent mapped credential -> no ref written for that path (no unresolved ref).
+    run grep -F "plugins.entries.google.config.webSearch.apiKey" "$OC_MOCK_LOG"
+    [ "$status" -ne 0 ]
 }

@@ -465,11 +465,12 @@ function __bridge_windows_api_keys() {
     fi
 
     # Fetch matching vars from Windows User environment via PowerShell.
-    # Intentional narrow match: API key names and token names only.
+    # Intentional narrow match: API key names, token names, and the gateway
+    # password (exact name) so it too is bridged from the canonical Windows env.
     local raw
     raw=$(timeout 5 pwsh.exe -NoProfile -NonInteractive -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() |
-        Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY)" } |
+        Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY|^OPENCLAW_GATEWAY_PASSWORD$)" } |
         ForEach-Object { "$($_.Key)=$($_.Value)" }
     ' 2>/dev/null | tr -d '\r')
 
@@ -543,7 +544,72 @@ function __oc_upsert_env_kv() {
 # (oc-sync-keys-to-bridge removed; behavior merged into oc-refresh-keys)
 
 # ---------------------------------------------------------------------------
-# oc-refresh-keys — Force re-import of Windows API keys into WSL and persist to systemd env
+# __oc_apply_secret_refs — Map imported env credentials to OpenClaw SecretRefs.
+#
+# Mirrors what `openclaw secrets configure` writes for env-backed credentials:
+# each supported config field becomes
+#   { "source": "env", "provider": "default", "id": "<ENV_VAR>" }
+# via `openclaw config set <path> --ref-provider default --ref-source env
+# --ref-id <ENV_VAR>` (the canonical SecretRef builder). The secret itself stays
+# in the env credential store refreshed by oc-refresh-keys; only the plaintext
+# copy in openclaw.json is replaced by a reference.
+#
+# Safety:
+#   - Applies a ref only when its env var is present and non-empty in the
+#     current environment (sourced from the bridge cache), so an unresolved
+#     ref is never created.
+#   - `openclaw config set` runs SecretRef preflight and writes atomically, so
+#     a field is left untouched if the ref would not resolve.
+#   - Idempotent: re-running re-asserts the same refs.
+#
+# Mapping table: "<config dot-path>::<ENV_VAR_NAME>". Extend here when a new
+# env-backed credential is confirmed to match a supported SecretRef field
+# (see: openclaw docs reference/secretref-credential-surface).
+# ---------------------------------------------------------------------------
+function __oc_apply_secret_refs() {
+    if ! command -v openclaw >/dev/null 2>&1
+    then
+        __tac_info "Syncing OpenClaw SecretRefs" "[openclaw not found — skipped]" "$C_Warning"
+        return 0
+    fi
+
+    local -a _map=(
+        "models.providers.qwen-token-plan.apiKey::QWEN_TOKEN_PLAN_API_KEY"
+        "plugins.entries.google.config.webSearch.apiKey::GEMINI_API_KEY"
+    )
+
+    local _entry _path _var _applied=0 _skipped=0 _failed=0
+    for _entry in "${_map[@]}"
+    do
+        _path="${_entry%%::*}"
+        _var="${_entry##*::}"
+        if [[ -z "${!_var:-}" ]]
+        then
+            _skipped=$((_skipped + 1))
+            continue
+        fi
+        if openclaw config set "$_path" --ref-provider default --ref-source env --ref-id "$_var" >/dev/null 2>&1
+        then
+            _applied=$((_applied + 1))
+        else
+            _failed=$((_failed + 1))
+        fi
+    done
+
+    if (( _failed > 0 ))
+    then
+        __tac_info "Syncing OpenClaw SecretRefs" "[$_applied applied, $_skipped skipped, $_failed failed]" "$C_Warning"
+    else
+        __tac_info "Syncing OpenClaw SecretRefs" "[$_applied applied, $_skipped skipped]" "$C_Success"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# oc-refresh-keys — Force re-import of Windows API keys into WSL, persist to
+# systemd env, and sync OpenClaw SecretRefs to the refreshed env credentials.
+# The Windows User environment is the canonical source; local copies (.env,
+# gateway.systemd.env, auth profiles) reference it rather than holding their
+# own plaintext values.
 # ---------------------------------------------------------------------------
 function oc-refresh-keys() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
@@ -587,7 +653,10 @@ function oc-refresh-keys() {
     done < "$envd_file"
     __tac_info "Exporting to WSL" "[$envd_file]" "$C_Success"
 
-    # 3. Mirror vars to NAS via SSH
+    # 3. Sync OpenClaw SecretRefs to the refreshed env credentials
+    __oc_apply_secret_refs
+
+    # 4. Mirror vars to NAS via SSH
     if [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1; then
         local _synced_nas=0
         local _k _v _qv

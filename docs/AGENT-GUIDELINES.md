@@ -107,7 +107,7 @@ These normally open VS Code; with `--read` they output content to stdout:
 | `tac-exec oc start -m "msg"` | Dispatch agent turn |
 | `tac-exec oc stop --agent ID` | Delete agent |
 | `tac-exec oc backup` | Create backup ZIP (config, agents, workspace, scripts, systemd) |
-| `tac-exec oc-refresh-keys` | Force re-bridge Windows API keys |
+| `tac-exec oc-refresh-keys` | Re-bridge Windows API keys + sync OC SecretRefs |
 | `tac-exec oc-cache-clear` | Wipe all `/dev/shm/tac_*` telemetry caches |
 | `tac-exec ockeys` | Show Windows API keys and their WSL visibility |
 | `tac-exec mem-index` | Rebuild OpenClaw memory index |
