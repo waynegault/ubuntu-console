@@ -228,18 +228,22 @@ if [[ "${_MODE:-}" != "fast" ]]; then
         _PYTHON="$REPO_ROOT/.venv/bin/python"
     fi
 
-    # Run pytest with compact output, continuing the test numbering from BATS.
-    # Capture output, parse each test line, and re-format to match BATS style.
-    _PY_OUTPUT=$($_PYTHON -m pytest tests/ --tb=line -q --no-header --no-summary \
+    # Run pytest with verbose output, then strip header/summary lines
+    _PY_OUTPUT=$($_PYTHON -m pytest tests/ --tb=line -v --no-header --no-summary \
         ${_PY_MARKERS:+"$_PY_MARKERS"} \
         --ignore=tests/test_bats_bridge.py 2>&1) || _PY_EXIT=$?
 
-    # Parse pytest output line by line, numbering continues from GRAND count
+    # Parse pytest output line by line, numbering continues from BATS count
     _PY_NUM=$total
     while IFS= read -r _py_line; do
         [[ -z "$_py_line" ]] && continue
-        # pytest line format: "path::TestClass::test_name PASSED/FALED"
-        if [[ "$_py_line" =~ ^(.*)::(.*[A-Za-z].*)\ (PASSED|FAILED|ERROR|SKIP|SKIPPED).*$ ]]; then
+        # Skip header/footer/warning lines (pytest's session header, separator, etc.)
+        case "$_py_line" in
+            ===*|--*|collected*|Platform*|plugins*) continue ;;
+            $'\u26a0'*) continue ;;  # ⚠ duration warning from conftest
+        esac
+        # pytest verbose line format: "path::TestClass::test_name PASSED"
+        if [[ "$_py_line" =~ ^(.*)::([^[]+.*[A-Za-z].*)\ (PASSED|FAILED|ERROR|SKIP|SKIPPED).*$ ]]; then
             _PY_NUM=$(( _PY_NUM + 1 ))
             _status="${BASH_REMATCH[3]}"
             _tname="${BASH_REMATCH[2]}"
