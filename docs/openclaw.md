@@ -99,8 +99,14 @@ absent, so an unresolved ref is never created). Current mapping (defined in
 
 | Config path | Env var |
 |---|---|
-| `models.providers.qwen-token-plan.apiKey` | `QWEN_TOKEN_PLAN_API_KEY` |
 | `plugins.entries.google.config.webSearch.apiKey` | `GEMINI_API_KEY` |
+
+`oc-refresh-keys` also syncs all bridged env vars to
+`~/.openclaw/gateway.systemd.env` (the gateway's `EnvironmentFile`) and
+updates `OPENCLAW_SERVICE_MANAGED_ENV_KEYS` in the systemd unit so the
+running gateway can resolve env-backed SecretRefs referenced by auth
+profiles in each agent's SQLite store. If the gateway is running, it is
+restarted automatically to pick up the refreshed environment.
 
 Verify with `openclaw secrets audit --check`. Auth-profile keys stored in the
 per-agent SQLite stores are migrated separately via
