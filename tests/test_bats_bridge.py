@@ -184,7 +184,12 @@ def _make_test(stem: str, test_name: str, timeout_s: int):
                 prefix += f"  (test #{idx + 1} of {len(bats_tests)} in {stem}.bats)\n"
             pytest.fail(prefix + r["output"])
 
-    _test.__name__ = f"test_{stem}_{test_name[:60]}"
+    # Sanitize: VS Code's vscode_pytest plugin chokes on test IDs with
+    # spaces, colons, slashes, asterisks, or other special characters.
+    safe_stem = re.sub(r'[^a-zA-Z0-9_]', '_', stem)
+    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', test_name[:60])
+    safe_name = re.sub(r'_+', '_', safe_name).strip('_')
+    _test.__name__ = f"test_{safe_stem}_{safe_name}"
     _test.__qualname__ = _test.__name__
     _test.pytest_markers = [pytest.mark.bats, _get_marker_for_timeout(timeout_s)]
     if timeout_s >= 600:
