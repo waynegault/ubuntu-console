@@ -127,7 +127,7 @@ def _run_and_cache_bats(bats_file: Path, timeout_s: int) -> dict[str, dict[str, 
     results: dict[str, dict[str, Any]] = {}
     try:
         result = _run_bats(bats_file, timeout_s)
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         for name in _parse_bats_tests(bats_file):
             results[name] = {"passed": False, "output": f"BATS suite timed out ({timeout_s}s)"}
         _bats_results_cache[stem] = results
@@ -135,6 +135,9 @@ def _run_and_cache_bats(bats_file: Path, timeout_s: int) -> dict[str, dict[str, 
 
     # Parse TAP output: "ok N test_name in Xms" or "not ok N test_name in Xms"
     # Skipped tests have "# skip (reason)" before or after the test name.
+    # Handle both formats:
+    #   ok 165 test_name # skip (reason)   — skip AFTER name
+    #   ok 165 # skip (reason) test_name   — skip BEFORE name
     # Diagnostic context (file/line/assertion) follows failed tests on lines
     # starting with "# " — capture those into per-test diagnostics.
     tap_line_re = re.compile(r'^(ok|not ok)\s+\d+\s+(.*?)(?:\s+in\s+\d+(?:sec|ms))?$')
@@ -144,15 +147,25 @@ def _run_and_cache_bats(bats_file: Path, timeout_s: int) -> dict[str, dict[str, 
     for line in result.stdout.splitlines():
         m = tap_line_re.match(line)
         if m:
-            current_test = m.group(2)
-            skip_marker = current_test.find(" # skip")
+            raw_name: str = m.group(2)
+            # Strip "# skip (reason)" — BATS may put it before or after the name
+            skip_marker = raw_name.find(" # skip")
             if skip_marker >= 0:
-                current_test = current_test[:skip_marker]
+                current_test = raw_name[:skip_marker]
+            elif raw_name.startswith("# skip"):
+                close_paren = raw_name.find(") ", 7)
+                if close_paren >= 0:
+                    current_test = raw_name[close_paren + 2:]
+                else:
+                    current_test = ""
+            else:
+                current_test = raw_name
             status = m.group(1)
-            results[current_test] = {
-                "passed": status == "ok",
-                "output": line,
-            }
+            if current_test is not None:
+                results[current_test] = {
+                    "passed": status == "ok",
+                    "output": line,
+                }
         elif current_test is not None:
             dm = diagnostic_re.match(line)
             if dm:
@@ -218,8 +231,8 @@ def _make_test(stem: str, test_name: str, timeout_s: int):
         _counter += 1
 
     # Expose BATS file and timeout for conftest's lock fixture
-    _test._bats_file = bats_file
-    _test._bats_timeout = timeout_s
+    setattr(_test, "_bats_file", bats_file)
+    setattr(_test, "_bats_timeout", timeout_s)
 
     # Apply markers via decoration so pytest -m filtering works
     _test = pytest.mark.bats(_test)
@@ -231,7 +244,7 @@ def _make_test(stem: str, test_name: str, timeout_s: int):
     return _test
 
 
-def _get_marker_for_timeout(timeout_s: int) -> pytest.MarkDecorator:
+def _get_marker_for_timeout(timeout_s: int) -> pytest.MarkDecorator | pytest.Mark:
     for pattern, marker, to in _BATS_SUITE_DEFS:
         if to == timeout_s:
             return marker
