@@ -430,6 +430,45 @@ Run `up` for the 20-step pipeline:
 
 Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.txt` (Unix timestamps). APT index: 24h; APT upgrade: 7d; most other network steps: 24h. `flock -x` prevents race conditions when `up` runs in parallel.
 
+## Testing
+
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (730 total tests: 550 BATS + 180 Python).
+
+### Running Tests
+
+| Command | What it runs | Est. time |
+|---------|-------------|-----------|
+| `unittest` | All BATS suites + Python tests (via `tools/run-tests.sh`) | 20-40 min |
+| `unittest --fast` | Fast static-analysis BATS only (`tactical-console-fast.bats`) | ~2 min |
+| `pytest tests/` | Python tests only (excludes BATS — run separately) | ~1 min |
+| `pytest tests/test_bats_bridge.py -k "test_tactical_console_fast"` | Single BATS file via bridge | ~2 min |
+| `bats tests/tactical-console-fast.bats --timing` | Single BATS file directly | ~2 min |
+| VS Code Testing panel (flask icon) | All tests unified in one tree — click ► on any test | Varies |
+
+### Test Bridge (`test_bats_bridge.py`)
+
+Each `.bats` file is parsed at collection time to discover all `@test` blocks. One pytest test function is generated per block with a sanitized name (alphanumeric only). Results are cached per file: the first test from a file triggers the full BATS run; subsequent tests read from cache.
+
+For individual test runs (e.g. VS Code clicking one test), `bats --filter` is used to execute only the requested test — dropping per-test runtime from ~900s to ~18s for the large `tactical-console.bats` suite.
+
+### Key Infrastructure Files
+
+- `tests/conftest.py` — BATS suite serialization lock (prevents parallel runs), VS Code discovery guard (`_is_vscode_discovery()`), stale lock cleanup
+- `tests/test_bats_bridge.py` — Dynamic test generation, TAP output parser with diagnostic line capture, marker-based filtering (`-m bats_unit`, `bats_fast`, `bats_full`, `bats_integration`)
+- `tests/test_bats_lock_fixture.py` — Tests for the lock fixture itself
+- `tools/run-tests.sh` — CLI test runner invoked by `unittest` command
+
+### Test Counts
+
+| Suite | File | Count | Timeout |
+|-------|------|-------|---------|
+| Full behavioural | `tactical-console.bats` | 380 | 900s |
+| Fast static analysis | `tactical-console-fast.bats` | 50 | 180s |
+| Unit (refresh-keys, so-startup, llama-cpp-inventory) | `tests/unit/*.bats` | 12 | 120s |
+| Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | ~109 | 300s |
+| Python (kgraph, models, autotune, untested-modules, lock-fixture) | `tests/test_*.py` | ~180 | 200s |
+| **Total** | | **~730** | |
+
 ---
 
 ## Architecture & Developer Guide
@@ -613,16 +652,17 @@ function __get_METRIC() {
 ├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
-│   ├── conftest.py                    # Pytest config — serializes BATS suites
-│   ├── tactical-console.bats          # BATS full suite (371 BATS unit tests)
-│   ├── tactical-console-fast.bats     # Fast subset (50 tests, ~20s)
-│   ├── test_bats_bridge.py            # Pytest parametrize bridge for all BATS suites
-│   ├── test_model_autotune.py         # Python tests for autotune logic
-│   ├── test_kgraph.py                 # Python tests for kgraph package
+│   ├── conftest.py                    # Pytest config — BATS lock serialization, VS Code discovery guard
+│   ├── tactical-console.bats          # BATS full suite (380 tests, ~5-15 min)
+│   ├── tactical-console-fast.bats     # Fast subset (50 tests, ~2 min)
+│   ├── test_bats_bridge.py            # BATS→pytest bridge: exposes each @test as an individual pytest test
+│   ├── test_bats_lock_fixture.py      # Tests for conftest lock fixture
+│   ├── test_model_autotune.py         # Python tests for autotune logic (26 tests)
+│   ├── test_kgraph.py                 # Python tests for kgraph package (88 tests)
 │   ├── test_models.py                 # Pydantic model tests (36 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (33 tests)
-│   └── integration/                   # BATS integration tests (109 tests)
+│   ├── unit/                          # BATS unit tests (12 tests: 2+2+8)
+│   └── integration/                   # BATS integration tests (110 tests: 14+42+10+16+2+26)
 └── systemd/
     ├── llama-watchdog.service
     └── llama-watchdog.timer
