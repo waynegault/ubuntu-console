@@ -1160,9 +1160,15 @@ function cl() {
             __tac_line "Python cache in $PWD" "[CLEAN]" "$C_Success"
         fi
 
-        # Broken symlinks
+        # Broken symlinks (limited depth, exclude known-large caches)
         local broken_links
-        broken_links=$(find ~ -xtype l 2>/dev/null | wc -l)
+        broken_links=$(find ~ -maxdepth 4 -xtype l \
+            -not -path '*/node_modules/*' \
+            -not -path '*/.npm/*' \
+            -not -path '*/.cache/*' \
+            -not -path '*/.openclaw/*' \
+            -not -path '*/__pycache__/*' \
+            2>/dev/null | wc -l)
         if (( broken_links > 0 ))
         then
             __tac_line "Broken symlinks in ~" "[$broken_links found]" "$C_Warning"
