@@ -21,7 +21,7 @@ _LOCK_DIR = Path(tempfile.gettempdir()) / "tac-pytest-bats-locks"
 
 def _is_vscode_discovery() -> bool:
     """Return True when pytest is running discovery (VS Code --collect-only)."""
-    return "--collect-only" in [a for a in __import__("sys").argv if a.startswith("--c")]
+    return "--collect-only" in __import__("sys").argv
 
 
 def _lock_pid_path(lock_path: Path) -> Path:

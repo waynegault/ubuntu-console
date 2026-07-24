@@ -135,21 +135,33 @@ def _run_and_cache_bats(bats_file: Path, timeout_s: int) -> dict[str, dict[str, 
 
     # Parse TAP output: "ok N test_name in Xms" or "not ok N test_name in Xms"
     # Skipped tests have "# skip (reason)" before or after the test name.
+    # Diagnostic context (file/line/assertion) follows failed tests on lines
+    # starting with "# " — capture those into per-test diagnostics.
     tap_line_re = re.compile(r'^(ok|not ok)\s+\d+\s+(.*?)(?:\s+in\s+\d+(?:sec|ms))?$')
+    diagnostic_re = re.compile(r'^#\s+(.*)')
+    current_test: str | None = None
+    diagnostics: dict[str, list[str]] = {}
     for line in result.stdout.splitlines():
         m = tap_line_re.match(line)
         if m:
-            status = m.group(1)
-            name = m.group(2)
-            # Strip "# skip (reason)" suffix if present — BATS appends it for
-            # skipped tests. The name is before the " # skip" marker.
-            skip_marker = name.find(" # skip")
+            current_test = m.group(2)
+            skip_marker = current_test.find(" # skip")
             if skip_marker >= 0:
-                name = name[:skip_marker]
-            results[name] = {
+                current_test = current_test[:skip_marker]
+            status = m.group(1)
+            results[current_test] = {
                 "passed": status == "ok",
                 "output": line,
             }
+        elif current_test is not None:
+            dm = diagnostic_re.match(line)
+            if dm:
+                diagnostics.setdefault(current_test, []).append(dm.group(1))
+
+    # Append diagnostics to the output of failed tests
+    for tname, diags in diagnostics.items():
+        if tname in results and not results[tname]["passed"]:
+            results[tname]["output"] += "\n" + "\n".join(diags)
 
     # Mark any test not found in output as failed
     for name in _parse_bats_tests(bats_file):
