@@ -268,6 +268,10 @@ if [[ "${_MODE:-}" != "fast" ]]; then
         fi
     done <<< "$_PY_OUTPUT"
 
+    # Count Python tests into grand total
+    _py_count=$(( _PY_NUM - total ))
+    GRAND_PASS=$(( GRAND_PASS + _py_count ))
+
     # Show slowest Python test durations (if any)
     if [[ -n "$_PY_DURATIONS" ]]; then
         # Extract tests > 300s (5 min) for highlighting
