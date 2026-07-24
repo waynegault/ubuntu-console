@@ -1870,7 +1870,7 @@ EOF
         skip "openclaw is installed"
     fi
     run oc restart
-    [[ "$status" -ne 0 ]]
+    [[ "$status" -eq 1 ]]
 }
 
 @test "oc: multiple unknown subcommands all return error" {
@@ -2612,7 +2612,7 @@ EOF
 @test "openclaw: oc-health supports json output" {
     # When OpenClaw is installed, oc-health runs the full diagnostic suite
     # which outputs human-readable text, not JSON. Skip in that case.
-    if [[ "$__TAC_OPENCLAW_OK" == "1" ]]
+    if command -v openclaw >/dev/null 2>&1
     then
         skip "OpenClaw installed — enhanced output mode (not JSON fallback)"
     fi
@@ -2623,7 +2623,7 @@ EOF
 }
 
 @test "openclaw: oc-health supports plain output" {
-    if [[ "$__TAC_OPENCLAW_OK" == "1" ]]
+    if command -v openclaw >/dev/null 2>&1
     then
         skip "OpenClaw installed — enhanced output mode (not plain fallback)"
     fi
