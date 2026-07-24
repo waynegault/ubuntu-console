@@ -17,11 +17,9 @@ from pathlib import Path
 import pytest
 
 _LOCK_DIR = Path(tempfile.gettempdir()) / "tac-pytest-bats-locks"
-
-
-def _is_vscode_discovery() -> bool:
-    """Return True when pytest is running discovery (VS Code --collect-only)."""
-    return "--collect-only" in __import__("sys").argv
+# Cap lock wait to 120s — if a lock can't be acquired in 2 minutes the
+# holder is stale or hung, regardless of the suite's configured timeout.
+_MAX_LOCK_WAIT = 120
 
 
 def _lock_pid_path(lock_path: Path) -> Path:
@@ -38,15 +36,12 @@ def _is_stale_lock(lock_path: Path, pid_path: Path) -> bool:
     """Return True when a lock owner PID is gone or invalid."""
     if not pid_path.exists():
         return False
-
     try:
         pid = int(pid_path.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return True
-
     if pid <= 0:
         return True
-
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -55,8 +50,27 @@ def _is_stale_lock(lock_path: Path, pid_path: Path) -> bool:
         return False
     except OSError:
         return False
-
     return False
+
+
+def _cleanup_stale_locks() -> None:
+    """Remove lock files whose owning process is no longer alive."""
+    if not _LOCK_DIR.is_dir():
+        return
+    for f in _LOCK_DIR.iterdir():
+        if f.suffix == ".pid":
+            lock_path = f.with_suffix("")
+            if _is_stale_lock(lock_path, f):
+                lock_path.unlink(missing_ok=True)
+                f.unlink(missing_ok=True)
+
+
+_cleanup_stale_locks()
+
+
+def _is_vscode_discovery() -> bool:
+    """Return True when pytest is running discovery (VS Code --collect-only)."""
+    return "--collect-only" in __import__("sys").argv
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -121,7 +135,7 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
 
     with open(lock_path, "w", encoding="utf-8") as lf:
         pid_path.write_text(str(os.getpid()), encoding="utf-8")
-        wait_s = max(60, timeout_s + 60)
+        wait_s = min(_MAX_LOCK_WAIT, max(60, timeout_s))
         deadline = time.monotonic() + wait_s
         while True:
             try:
