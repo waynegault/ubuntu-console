@@ -109,7 +109,7 @@ def _run_bats(bats_file: Path, timeout_s: int) -> subprocess.CompletedProcess[st
     """
     env = os.environ.copy()
     env.setdefault("TERM", "xterm-256color")
-    cmd = [BATS_EXECUTABLE, "--tap", str(bats_file)]
+    cmd = [BATS_EXECUTABLE, "--tap", "--timing", str(bats_file)]
 
     # Last-resort external timeout: give it a small buffer so the Python
     # timeout fires first and we get a clean process-group kill.
