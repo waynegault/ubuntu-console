@@ -5,7 +5,7 @@ import signal
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
@@ -178,11 +178,8 @@ def _fail_message(bats_file: Path, result: subprocess.CompletedProcess[str]) -> 
     return "\n".join(lines)
 
 
-@pytest.mark.parametrize(
-    "bats_file,timeout_s",
-    BATS_PARAMS,
-)
-def test_bats_suite(bats_file: Path, timeout_s: int) -> None:
+def _run_bats_suite(bats_file: Path, timeout_s: int) -> None:
+    """Run a single BATS suite and fail the test if it times out or errors."""
     try:
         result = _run_bats(bats_file, timeout_s)
     except subprocess.TimeoutExpired as exc:
@@ -199,3 +196,27 @@ def test_bats_suite(bats_file: Path, timeout_s: int) -> None:
 
     if result.returncode != 0:
         pytest.fail(_fail_message(bats_file, result))
+
+
+# Generate individual test functions for each BATS suite.
+# Avoids @pytest.mark.parametrize at module level, which VS Code's test
+# discovery plugin (vscode_pytest) sometimes fails to attach to the file
+# tree for parameterized tests not nested in a class.
+def _make_test(bats_file: Path, timeout_s: int, stem: str) -> Callable[[], None]:
+    def _test() -> None:
+        _run_bats_suite(bats_file, timeout_s)
+
+    _test.__name__ = f"test_bats_{stem}"
+    _test.__qualname__ = _test.__name__
+    # Preserve markers so pytest -m filtering still works
+    _test.pytest_markers = [pytest.mark.bats]
+    if timeout_s >= 600:
+        _test.pytest_markers.append(pytest.mark.slow)
+    return _test
+
+
+for _pattern, _marker, _timeout in _BATS_SUITE_DEFS:
+    for _p in sorted(REPO_ROOT.glob(_pattern)):
+        _stem = _p.stem
+        _fn = _make_test(_p, _timeout, _stem)
+        globals()[_fn.__name__] = _fn
