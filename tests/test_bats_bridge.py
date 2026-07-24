@@ -130,17 +130,20 @@ def _run_and_cache_bats(bats_file: Path, timeout_s: int, test_name: str | None =
 
     When *test_name* is given, only that single test is executed
     (via ``--filter``) instead of the entire file.  The result is
-    still cached by file stem so follow-up tests from the same file
-    can share it, but a cache miss will also use ``--filter``.
+    still cached by file stem so follow-up tests sharing the cache
+    (e.g. from a full pytest run) benefit.
+
+    A cache hit that lacks the requested test is treated as a miss:
+    we run a filtered execution for that one test so individual
+    VS Code test launches never fall back to the full suite.
     """
     stem = bats_file.stem
-    if stem in _bats_results_cache:
+    if stem in _bats_results_cache and test_name in _bats_results_cache[stem]:
         return _bats_results_cache[stem]
 
     results: dict[str, dict[str, Any]] = {}
     filter_ = None
     if test_name is not None:
-        # Escape regex special chars so --filter matches the literal name
         filter_ = re.escape(test_name)
     try:
         result = _run_bats(bats_file, timeout_s, filter_pattern=filter_)
