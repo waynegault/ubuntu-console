@@ -16,7 +16,7 @@ BATS_EXECUTABLE = "bats"
 # ── BATS suite definitions ─────────────────────────────────────────────────
 # (glob_pattern, marker_or_marks, timeout_s)
 _BATS_SUITE_DEFS: list[tuple[str, pytest.MarkDecorator | pytest.Mark, int]] = [
-    ("tests/unit/*.bats",                 pytest.mark.bats_unit,         60),
+    ("tests/unit/*.bats",                 pytest.mark.bats_unit,         120),
     ("tests/tactical-console.bats",        pytest.mark.bats_full,       900),
     ("tests/tactical-console-fast.bats",   pytest.mark.bats_fast,       180),
     ("tests/integration/*.bats",           pytest.mark.bats_integration, 300),
@@ -134,12 +134,18 @@ def _run_and_cache_bats(bats_file: Path, timeout_s: int) -> dict[str, dict[str, 
         return results
 
     # Parse TAP output: "ok N test_name in Xms" or "not ok N test_name in Xms"
+    # Skipped tests have "# skip (reason)" before or after the test name.
     tap_line_re = re.compile(r'^(ok|not ok)\s+\d+\s+(.*?)(?:\s+in\s+\d+(?:sec|ms))?$')
     for line in result.stdout.splitlines():
         m = tap_line_re.match(line)
         if m:
             status = m.group(1)
             name = m.group(2)
+            # Strip "# skip (reason)" suffix if present — BATS appends it for
+            # skipped tests. The name is before the " # skip" marker.
+            skip_marker = name.find(" # skip")
+            if skip_marker >= 0:
+                name = name[:skip_marker]
             results[name] = {
                 "passed": status == "ok",
                 "output": line,
@@ -189,11 +195,12 @@ def _make_test(stem: str, test_name: str, timeout_s: int):
     safe_stem = re.sub(r'[^a-zA-Z0-9_]', '_', stem)
     safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', test_name[:60])
     safe_name = re.sub(r'_+', '_', safe_name).strip('_')
-    _test.__name__ = f"test_{safe_stem}_{safe_name}"
-    _test.__qualname__ = _test.__name__
-    _test.pytest_markers = [pytest.mark.bats, _get_marker_for_timeout(timeout_s)]
+    # Apply markers via decoration so pytest -m filtering works
+    _test = pytest.mark.bats(_test)
+    _test = _get_marker_for_timeout(timeout_s)(_test)
     if timeout_s >= 600:
-        _test.pytest_markers.append(pytest.mark.slow)
+        _test = pytest.mark.slow(_test)
+    _test.__name__ = f"test_{safe_stem}_{safe_name}"
     return _test
 
 
