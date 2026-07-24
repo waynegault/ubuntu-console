@@ -110,17 +110,43 @@ _run_bats_file() {
     local label="$2"  # optional label prefix for display
 
     while IFS= read -r line; do
-        if [[ "$line" =~ ^ok\ [0-9]+\ (.+)$ ]]; then
+        # Parse timing from TAP: "ok N test_name in XXXms" or "not ok N test_name in XXXs"
+        local timing=""
+        if [[ "$line" =~ ^(ok|not\ ok)\ [0-9]+\ (.+)\ in\ ([0-9.]+)(sec|ms)$ ]]; then
+            local status="${BASH_REMATCH[1]}"
+            local test_name="${BASH_REMATCH[2]}"
+            local duration="${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
+            timing=" ${C_Dim}(${duration})${C_Reset}"
+            if [[ "$status" == "ok" ]]; then
+                _LIVE_NUM=$(( _LIVE_NUM + 1 ))
+                _LIVE_PASS=$(( _LIVE_PASS + 1 ))
+                row "  ${C_Dim}${_LIVE_NUM}.${C_Reset} ${label}${test_name} ${C_Green}${PASS_SYMBOL}${C_Reset}${timing}"
+            else
+                _LIVE_NUM=$(( _LIVE_NUM + 1 ))
+                _LIVE_FAIL=$(( _LIVE_FAIL + 1 ))
+                row "  ${C_Dim}${_LIVE_NUM}.${C_Reset} ${label}${test_name} ${C_Red}${FAIL_SYMBOL}${C_Reset}${timing}"
+            fi
+        elif [[ "$line" =~ ^(ok|not\ ok)\ [0-9]+\ (.+)$ ]]; then
+            # Fallback for lines without timing
+            local status="${BASH_REMATCH[1]}"
+            local test_name="${BASH_REMATCH[2]}"
+            if [[ "$status" == "ok" ]]; then
+                _LIVE_NUM=$(( _LIVE_NUM + 1 ))
+                _LIVE_PASS=$(( _LIVE_PASS + 1 ))
+                row "  ${C_Dim}${_LIVE_NUM}.${C_Reset} ${label}${test_name} ${C_Green}${PASS_SYMBOL}${C_Reset}"
+            else
+                _LIVE_NUM=$(( _LIVE_NUM + 1 ))
+                _LIVE_FAIL=$(( _LIVE_FAIL + 1 ))
+                row "  ${C_Dim}${_LIVE_NUM}.${C_Reset} ${label}${test_name} ${C_Red}${FAIL_SYMBOL}${C_Reset}"
+            fi
+        elif [[ "$line" =~ ^#\ skip ]]; then
+            # Skipped test diagnostic line — captured but not displayed inline
             _LIVE_NUM=$(( _LIVE_NUM + 1 ))
-            _LIVE_PASS=$(( _LIVE_PASS + 1 ))
-            row "  ${C_Dim}${_LIVE_NUM}.${C_Reset} ${label}${BASH_REMATCH[1]} ${C_Green}${PASS_SYMBOL}${C_Reset}"
-        elif [[ "$line" =~ ^not\ ok\ [0-9]+\ (.+)$ ]]; then
-            _LIVE_NUM=$(( _LIVE_NUM + 1 ))
-            _LIVE_FAIL=$(( _LIVE_FAIL + 1 ))
-            row "  ${C_Dim}${_LIVE_NUM}.${C_Reset} ${label}${BASH_REMATCH[1]} ${C_Red}${FAIL_SYMBOL}${C_Reset}"
+            _LIVE_SKIP=$(( _LIVE_SKIP + 1 ))
+            _SKIPPED+=("$line")
         fi
         _TAP_OUTPUT+="$line"$'\n'
-    done < <(bats --tap "$bats_file" "${_EXTRA_ARGS[@]}" 2>&1) || true
+    done < <(bats --tap --timing "$bats_file" "${_EXTRA_ARGS[@]}" 2>&1) || true
 }
 
 # ── Parse TAP output into section arrays ─────────────────────────────────────
@@ -175,13 +201,11 @@ declare -A SECTION_NAMES=(
     ["module-version"]="Module Versions"
 )
 
-# ── Collapsed sections (header only, no individual lines) ────────────────────
-COLLAPSED_SECTIONS=("fn-avail" "cross-script")
-
 # ── Main ─────────────────────────────────────────────────────────────────────
 _TAP_OUTPUT=""
-_LIVE_NUM=0 _LIVE_PASS=0 _LIVE_FAIL=0
-GRAND_PASS=0 GRAND_FAIL=0
+_LIVE_NUM=0 _LIVE_PASS=0 _LIVE_FAIL=0 _LIVE_SKIP=0
+_SKIPPED=()
+GRAND_PASS=0 GRAND_FAIL=0 GRAND_SKIP=0
 
 case "${_MODE:-}" in
     fast)  _DESC="fast static-analysis only" ;;
@@ -236,36 +260,10 @@ for p in "${SEC_ORDER[@]}"; do
 
     section_header "$display" "$local_pass" "$local_total"
 
-    # Collapsed sections: header only
-    _collapsed=0
-    for cs in "${COLLAPSED_SECTIONS[@]}"; do
-        [[ "$p" == "$cs" ]] && { _collapsed=1; break; }
-    done
-    if (( _collapsed )); then
-        (( GRAND_PASS += local_pass ))
-        (( GRAND_FAIL += local_total - local_pass ))
-        continue
-    fi
-
-    for (( i = 0; i < total; i++ )); do
-        [[ "${T_PREFIX[$i]}" != "$p" ]] && continue
-        _tname="${T_NAME[$i]#*: }"
-        if [[ "${T_STATUS[$i]}" == "ok" ]]; then
-            (( GRAND_PASS++ ))
-            (( _sum_num++ ))
-            row "  ${C_Dim}${_sum_num}.${C_Reset} ${_tname} ${C_Green}${PASS_SYMBOL}${C_Reset}"
-        else
-            (( GRAND_FAIL++ ))
-            (( _sum_num++ ))
-            row "  ${C_Dim}${_sum_num}.${C_Reset} ${_tname} ${C_Red}${FAIL_SYMBOL}${C_Reset}"
-            if [[ -n "${T_DIAG[$i]:-}" ]]; then
-                while IFS= read -r dline; do
-                    [[ -z "$dline" ]] && continue
-                    row "    ${C_Dim}${dline}${C_Reset}"
-                done <<< "${T_DIAG[$i]}"
-            fi
-        fi
-    done
+    # Collapsed sections: header only — detail is shown in the live stream above
+    (( GRAND_PASS += local_pass ))
+    (( GRAND_FAIL += local_total - local_pass ))
+    continue
 done
 
 # ── Run Python tests via pytest ──────────────────────────────────────────────
@@ -302,9 +300,27 @@ fi
 # ── Summary ──────────────────────────────────────────────────────────────────
 border_mid
 grand_total=$(( GRAND_PASS + GRAND_FAIL ))
+grand_skipped=${GRAND_SKIP:-0}
+
+# Compute total duration from tap timing data
+total_duration_s=0
+for (( i = 0; i < total; i++ )); do
+    tname="${T_NAME[$i]}"
+    # Extract timing from name if present (appended by bats --timing)
+    if [[ "$tname" =~ ^(.+)\ in\ ([0-9.]+)(sec|ms)$ ]]; then
+        val="${BASH_REMATCH[2]}"
+        unit="${BASH_REMATCH[3]}"
+        if [[ "$unit" == "sec" ]]; then
+            total_duration_s=$(echo "$total_duration_s + $val" | bc 2>/dev/null || echo "$total_duration_s")
+        else
+            total_duration_s=$(echo "$total_duration_s + $val / 1000" | bc 2>/dev/null || echo "$total_duration_s")
+        fi
+    fi
+done
 
 if (( GRAND_FAIL == 0 && _PY_EXIT == 0 )); then
     _msg="${C_BoldGreen}ALL ${grand_total} TESTS PASSED ${PASS_SYMBOL}${C_Reset}"
+    [[ "$grand_skipped" -gt 0 ]] && _msg+="  ${C_Dim}(${grand_skipped} skipped)${C_Reset}"
     [[ "${_MODE:-}" != "fast" ]] && _msg+="  ${C_Dim}(+ Python tests OK)${C_Reset}"
     row "  $_msg"
 else
@@ -315,21 +331,82 @@ else
         _summary+="${C_Green}${GRAND_PASS} passed ${PASS_SYMBOL}${C_Reset}"
     fi
     _summary+="  ${C_Dim}|${C_Reset}  ${grand_total} total"
+    if [[ "$grand_skipped" -gt 0 ]]; then
+        _summary+="  ${C_Dim}|${C_Reset}  ${C_Yellow}${grand_skipped} skipped${C_Reset}"
+    fi
     [[ "$_PY_EXIT" != "0" ]] && _summary+="  ${C_Dim}|${C_Reset}  ${C_Red}Python tests FAILED${C_Reset}"
     row "  $_summary"
 
-    # Show failing test details
-    for (( i = 0; i < total; i++ )); do
-        if [[ "${T_STATUS[$i]}" != "ok" ]]; then
-            row "  ${C_Red}${FAIL_SYMBOL}${C_Reset} ${T_NAME[$i]}"
-            if [[ -n "${T_DIAG[$i]:-}" ]]; then
-                while IFS= read -r dline; do
-                    [[ -z "$dline" ]] && continue
-                    row "    ${C_Dim}${dline}${C_Reset}"
-                done <<< "${T_DIAG[$i]}"
+    # Show failing test details with diagnostics
+    if (( GRAND_FAIL > 0 )); then
+        row_empty
+        row "  ${C_BoldRed}Failed Tests:${C_Reset}"
+        for (( i = 0; i < total; i++ )); do
+            if [[ "${T_STATUS[$i]}" != "ok" ]]; then
+                row "  ${C_Red}${FAIL_SYMBOL}${C_Reset} ${C_Bold}${T_NAME[$i]}${C_Reset}"
+                if [[ -n "${T_DIAG[$i]:-}" ]]; then
+                    while IFS= read -r dline; do
+                        [[ -z "$dline" ]] && continue
+                        # Strip ANSI codes for diagnostic lines
+                        dline_clean="${dline//$'\033'[\[0-9;]*m/}"
+                        row "    ${C_Dim}${dline_clean}${C_Reset}"
+                    done <<< "${T_DIAG[$i]}"
+                fi
             fi
-        fi
-    done
+        done
+    fi
+
+    # Show skipped test details
+    if [[ "$grand_skipped" -gt 0 ]]; then
+        row_empty
+        row "  ${C_Yellow}Skipped Tests:${C_Reset}"
+        for sk in "${_SKIPPED[@]}"; do
+            # Extract test name from "# skip (reason) test_name"
+            sk_clean="${sk#\# skip (*) }"
+            sk_clean="${sk_clean#\# skip }"
+            row "  ${C_Yellow}⊘${C_Reset} ${C_Dim}${sk_clean}${C_Reset}"
+        done
+    fi
+fi
+
+# Duration summary
+row_empty
+if command -v bc &>/dev/null && (( total > 0 )); then
+    total_duration_s=$(printf "%.0f" "$total_duration_s" 2>/dev/null || echo "$total")
+    row "  ${C_Dim}Duration: ${total_duration_s}s for ${grand_total} tests${C_Reset}"
+else
+    row "  ${C_Dim}Duration: ${grand_total} tests executed${C_Reset}"
+fi
+
+# Duration anomaly detection (if tac-durations.json exists)
+_dur_file="$REPO_ROOT/.pytest_cache/tac-durations.json"
+if [[ -f "$_dur_file" ]]; then
+    anomalies=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$_dur_file'))
+except: sys.exit(0)
+warnings = []
+for key, times in d.items():
+    if len(times) < 2:
+        continue
+    last = times[-1]
+    median = sorted(times)[len(times)//2]
+    if median > 0 and last > median * 2 and last > 0.5:
+        warnings.append((key, last, median, last/median))
+if warnings:
+    # Show top 3 anomalies
+    warnings.sort(key=lambda x: -x[3])
+    for key, last, median, ratio in warnings[:3]:
+        short = key.split('::')[-1][:80]
+        print(f'  ⚠ {short}  took {last:.1f}s ({ratio:.1f}× median {median:.1f}s)')
+" 2>/dev/null)
+    if [[ -n "$anomalies" ]]; then
+        row "  ${C_Yellow}Duration Anomalies:${C_Reset}"
+        echo "$anomalies" | while IFS= read -r line; do
+            row "  ${C_Yellow}${line}${C_Reset}"
+        done
+    fi
 fi
 
 border_bot
