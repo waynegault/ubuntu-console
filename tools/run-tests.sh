@@ -98,7 +98,7 @@ _run_bats_file() {
             else
                 _LIVE_NUM=$(( _LIVE_NUM + 1 ))
                 _LIVE_FAIL=$(( _LIVE_FAIL + 1 ))
-                test_line "${C_Dim}${_LIVE_NUM}.${C_Reset} ${label}${test_name} ${C_Red}${FAIL_SYMBOL}${C_Reset}${timing}"
+                test_line "${C_Red}${C_Dim}${_LIVE_NUM}.${C_Reset} ${label}${test_name} ${FAIL_SYMBOL}${C_Reset}${timing}"
             fi
         elif [[ "$line" =~ ^(ok|not\ ok)\ [0-9]+\ (.+)$ ]]; then
             # Fallback for lines without timing
@@ -111,7 +111,7 @@ _run_bats_file() {
             else
                 _LIVE_NUM=$(( _LIVE_NUM + 1 ))
                 _LIVE_FAIL=$(( _LIVE_FAIL + 1 ))
-                test_line "${C_Dim}${_LIVE_NUM}.${C_Reset} ${label}${test_name} ${C_Red}${FAIL_SYMBOL}${C_Reset}"
+                test_line "${C_Red}${C_Dim}${_LIVE_NUM}.${C_Reset} ${label}${test_name} ${FAIL_SYMBOL}${C_Reset}"
             fi
         elif [[ "$line" =~ ^#\ skip ]]; then
             # Skipped test diagnostic line — captured but not displayed inline
@@ -244,12 +244,11 @@ if [[ "${_MODE:-}" != "fast" ]]; then
             _status="${BASH_REMATCH[3]}"
             _tname="${BASH_REMATCH[2]}"
             case "$_status" in
-                PASSED) _sym="${C_Green}${PASS_SYMBOL}${C_Reset}" ;;
-                FAILED|ERROR) _sym="${C_Red}${FAIL_SYMBOL}${C_Reset}"; _PY_EXIT=1 ;;
-                SKIP|SKIPPED) _sym="${C_Yellow}⊘${C_Reset}" ;;
-                *) _sym="?" ;;
+                PASSED) _sym="${C_Green}${PASS_SYMBOL}${C_Reset}"; test_line "${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}" ;;
+                FAILED|ERROR) _sym="${FAIL_SYMBOL}"; _PY_EXIT=1; test_line "${C_Red}${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}${C_Reset}" ;;
+                SKIP|SKIPPED) _sym="⊘"; test_line "${C_Yellow}${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}${C_Reset}" ;;
+                *) _sym="?"; test_line "${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}" ;;
             esac
-            test_line "${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}"
         fi
     done <<< "$_PY_OUTPUT"
 fi
@@ -351,6 +350,8 @@ if warnings:
         echo "$anomalies" | while IFS= read -r line; do
             test_line "  ${C_Yellow}${line}${C_Reset}"
         done
+    else
+        subheader "No duration anomalies detected"
     fi
 fi
 
