@@ -1448,13 +1448,13 @@ EOF
     [[ "$result" == "$C_Error" ]]
 }
 
-@test "ui: __require_openclaw returns 1 when openclaw not installed" {
-    # In test env, openclaw is not installed
-    if command -v openclaw >/dev/null 2>&1; then
-        skip "openclaw is installed in this environment"
-    fi
+@test "ui: __require_openclaw handles openclaw presence" {
     run __require_openclaw
-    [ "$status" -eq 1 ]
+    if command -v openclaw >/dev/null 2>&1; then
+        [ "$status" -eq 0 ]
+    else
+        [ "$status" -eq 1 ]
+    fi
 }
 
 @test "ui: __usage outputs Usage: prefix" {
@@ -1865,12 +1865,13 @@ EOF
     alias g >/dev/null 2>&1
 }
 
-@test "oc: oc restart fails gracefully without openclaw" {
-    if command -v openclaw >/dev/null 2>&1; then
-        skip "openclaw is installed"
-    fi
+@test "oc: oc restart handles openclaw presence" {
     run oc restart
-    [[ "$status" -eq 1 ]]
+    if command -v openclaw >/dev/null 2>&1; then
+        [[ "$status" -eq 0 ]]
+    else
+        [[ "$status" -eq 1 ]]
+    fi
 }
 
 @test "oc: multiple unknown subcommands all return error" {
@@ -2610,12 +2611,6 @@ EOF
 }
 
 @test "openclaw: oc-health supports json output" {
-    # When OpenClaw is installed, oc-health runs the full diagnostic suite
-    # which outputs human-readable text, not JSON. Skip in that case.
-    if command -v openclaw >/dev/null 2>&1
-    then
-        skip "OpenClaw installed — enhanced output mode (not JSON fallback)"
-    fi
     run oc-health --json
     [[ "$output" == \{* ]]
     [[ "$output" == *'"port":'* ]]
@@ -2623,10 +2618,6 @@ EOF
 }
 
 @test "openclaw: oc-health supports plain output" {
-    if command -v openclaw >/dev/null 2>&1
-    then
-        skip "OpenClaw installed — enhanced output mode (not plain fallback)"
-    fi
     run oc-health --plain
     [[ "$output" == *"port="* ]]
     [[ "$output" == *"health_status="* ]]

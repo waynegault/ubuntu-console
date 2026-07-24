@@ -642,10 +642,10 @@ function oc-refresh-keys() {
     local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
     local count=0
 
-    # 1. Pull matching vars from Windows User environment (if pwsh.exe works).
-    #    If the bridge was previously downgraded (warning file exists), skip
-    #    the retry and fall through to the Linux env var backup below.
-    if command -v pwsh.exe >/dev/null 2>&1 && [[ ! -f /dev/shm/tac_pwsh_bridge_warned ]]; then
+    # 1. Pull matching vars from Windows User environment.
+    #    __bridge_windows_api_keys has its own early guard for the
+    #    session-level warning file, so we don't need to check it here.
+    if command -v pwsh.exe >/dev/null 2>&1; then
         rm -f "$cache"
         __bridge_windows_api_keys
         if [[ -f "$cache" ]]; then
