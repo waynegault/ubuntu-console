@@ -57,7 +57,8 @@ _build_bats_list() {
 
     case "$mode" in
         fast)
-            files=( "$REPO_ROOT/tests/tactical-console-fast.bats" )
+            files=( "$REPO_ROOT/tests/tactical-console-fast.bats"
+                    "$REPO_ROOT/tests/tactical-console-function-availability.bats" )
             ;;
         all|llm|integration)
             for f in "$REPO_ROOT/tests"/*.bats \
