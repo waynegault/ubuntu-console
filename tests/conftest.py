@@ -159,3 +159,85 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
         finally:
             fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
             pid_path.unlink(missing_ok=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Duration tracking + regression detection
+# ═══════════════════════════════════════════════════════════════════════
+# Stores per-test durations in .pytest_cache/tac-durations.json and
+# warns when a test is >2x slower than its historical baseline.
+
+_DURATIONS_FILE = Path(".pytest_cache/tac-durations.json")
+_DURATIONS: dict[str, list[float]] = {}
+_REGRESSION_THRESHOLD = 2.0  # warn if duration exceeds baseline × this
+
+
+def _load_durations() -> dict[str, list[float]]:
+    """Load historical duration baselines from cache."""
+    path = Path(__file__).resolve().parent.parent / _DURATIONS_FILE
+    if not path.exists():
+        return {}
+    try:
+        import json
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_durations(durations: dict[str, list[float]]) -> None:
+    """Persist duration baselines to cache."""
+    import json
+    path = Path(__file__).resolve().parent.parent / _DURATIONS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(durations, indent=2), encoding="utf-8")
+
+
+def _collect_duration(item: pytest.Item, duration_s: float) -> None:
+    """Record a test duration and flag regressions."""
+    key = f"{item.nodeid.split('::')[0]}::{item.originalname or item.name}"
+    _DURATIONS.setdefault(key, []).append(duration_s)
+
+
+def _check_regression(item: pytest.Item, duration_s: float) -> str | None:
+    """Return a warning string if *duration_s* is a significant regression."""
+    baselines = _load_durations()
+    key = f"{item.nodeid.split('::')[0]}::{item.originalname or item.name}"
+    history = baselines.get(key)
+    if not history or len(history) < 2:
+        return None
+    # Use median of historical runs as the stable baseline
+    sorted_hist = sorted(history)
+    median = sorted_hist[len(sorted_hist) // 2]
+    ratio = duration_s / median if median > 0 else 0
+    if ratio > _REGRESSION_THRESHOLD:
+        return (
+            f"\033[33m⚠ {key} took {duration_s:.1f}s "
+            f"({ratio:.1f}× historical median {median:.1f}s)\033[0m"
+        )
+    return None
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item: pytest.Item) -> object | None:
+    """Wrap each test to capture its wall-clock duration."""
+    import time as _time
+    start = _time.monotonic()
+    yield
+    elapsed = _time.monotonic() - start
+    if not _is_vscode_discovery():
+        _collect_duration(item, elapsed)
+        warning = _check_regression(item, elapsed)
+        if warning:
+            import sys as _sys
+            print(warning, file=_sys.stderr)
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """Persist accumulated durations at the end of a successful run."""
+    if not _is_vscode_discovery() and _DURATIONS:
+        baselines = _load_durations()
+        for key, times in _DURATIONS.items():
+            baselines.setdefault(key, []).extend(times)
+            # Keep only the last 20 runs to avoid unbounded growth
+            baselines[key] = baselines[key][-20:]
+        _save_durations(baselines)
