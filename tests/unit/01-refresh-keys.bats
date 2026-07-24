@@ -20,6 +20,9 @@ setup() {
     mkdir -p "$MOCK_BIN_DIR"
     export PATH="$MOCK_BIN_DIR:$PATH"
 
+    # Clear any stale pwsh bridge warning so the mock is actually tried
+    rm -f /dev/shm/tac_pwsh_bridge_warned
+
     # Mock openclaw so SecretRef sync never touches the real config during tests.
     export OC_MOCK_LOG="$TAC_TEST_TMPDIR/openclaw_calls.log"
     __mock_command_local openclaw "echo \"OPENCLAW_CALL: \$*\" >> \"$OC_MOCK_LOG\"; exit 0"
