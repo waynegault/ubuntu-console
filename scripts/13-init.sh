@@ -122,6 +122,14 @@ if type __bridge_windows_api_keys >/dev/null 2>&1; then
     __bridge_windows_api_keys
 fi
 
+# Auto-activate .venv in the current directory (if present).  The cd()
+# override handles activation on directory change, but the initial shell
+# open lands in PWD without an implicit cd call.  Source silently so no
+# "source .venv/bin/activate" echoes to the terminal.
+if [[ -f ".venv/bin/activate" && -z "${VIRTUAL_ENV:-}" ]]; then
+    source .venv/bin/activate >/dev/null 2>&1 || true
+fi
+
 # Load Hugging Face token from secure file if not already set by bridge
 if [[ -z "${HF_TOKEN:-}" && -f "$HOME/.config/huggingface/token" ]]
 then
