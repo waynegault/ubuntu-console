@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests import conftest as bats_conftest
+# pytest loads conftest.py as a plugin, not the regular Python module.
+# Use a direct import of the test helper rather than going through the
+# module namespace, which can alias differently under pytest's loader.
+from conftest import has_conftest_is_stale_lock  # noqa: F811
 
 
 def test_detects_stale_lock_pid(tmp_path: Path) -> None:
@@ -10,4 +13,4 @@ def test_detects_stale_lock_pid(tmp_path: Path) -> None:
     pid_path = lock_path.with_suffix(lock_path.suffix + ".pid")
     pid_path.write_text("999999")
 
-    assert bats_conftest._is_stale_lock(lock_path, pid_path)
+    assert has_conftest_is_stale_lock(lock_path, pid_path)

@@ -195,12 +195,27 @@ def _make_test(stem: str, test_name: str, timeout_s: int):
     safe_stem = re.sub(r'[^a-zA-Z0-9_]', '_', stem)
     safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', test_name[:60])
     safe_name = re.sub(r'_+', '_', safe_name).strip('_')
+
+    # Ensure uniqueness: if the truncated name collides with an existing
+    # function, append a counter suffix.
+    _base = f"test_{safe_stem}_{safe_name}"
+    _final = _base
+    _counter = 1
+    while _final in globals():
+        _final = f"{_base}_{_counter}"
+        _counter += 1
+
+    # Expose BATS file and timeout for conftest's lock fixture
+    _test._bats_file = bats_file
+    _test._bats_timeout = timeout_s
+
     # Apply markers via decoration so pytest -m filtering works
     _test = pytest.mark.bats(_test)
     _test = _get_marker_for_timeout(timeout_s)(_test)
     if timeout_s >= 600:
         _test = pytest.mark.slow(_test)
-    _test.__name__ = f"test_{safe_stem}_{safe_name}"
+    _test.__name__ = _final
+    _test.__qualname__ = _final
     return _test
 
 

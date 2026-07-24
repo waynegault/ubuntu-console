@@ -19,9 +19,19 @@ import pytest
 _LOCK_DIR = Path(tempfile.gettempdir()) / "tac-pytest-bats-locks"
 
 
+def _is_vscode_discovery() -> bool:
+    """Return True when pytest is running discovery (VS Code --collect-only)."""
+    return "--collect-only" in [a for a in __import__("sys").argv if a.startswith("--c")]
+
+
 def _lock_pid_path(lock_path: Path) -> Path:
     """Return the companion pid file for a BATS lock."""
     return lock_path.with_suffix(lock_path.suffix + ".pid")
+
+
+def has_conftest_is_stale_lock(lock_path: Path, pid_path: Path) -> bool:
+    """Public alias for _is_stale_lock (exported for test_bats_lock_fixture.py)."""
+    return _is_stale_lock(lock_path, pid_path)
 
 
 def _is_stale_lock(lock_path: Path, pid_path: Path) -> bool:
@@ -53,10 +63,13 @@ def _is_stale_lock(lock_path: Path, pid_path: Path) -> bool:
 def _protect_registry_file() -> Generator[None, None, None]:
     """Snapshot-restore ~/.llm/models.conf around the test session.
 
-    Tests must never mutate the real registry file.  This fixture snapshots
-    the file before the session and restores it after, so any test that
-    accidentally writes to ~/.llm/models.conf is automatically rolled back.
+    Skips during VS Code test discovery (--collect-only) to avoid
+    unnecessary I/O on every refresh.
     """
+    if _is_vscode_discovery():
+        yield
+        return
+
     registry_path = Path.home() / ".llm" / "models.conf"
     snapshot_path = Path(tempfile.mktemp(suffix=".models.conf.bak"))
     if registry_path.exists():
@@ -78,6 +91,11 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
     stem), so different BATS files (unit, integration, tactical-console) can
     run concurrently without blocking each other.
     """
+    # Skip entirely during VS Code test discovery
+    if _is_vscode_discovery():
+        yield
+        return
+
     is_bats = any(
         marker.name.startswith("bats") for marker in request.node.iter_markers()
     )
@@ -87,14 +105,15 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
 
     _LOCK_DIR.mkdir(mode=0o700, exist_ok=True)
 
-    # Derive lock name from the actual BATS file being run, not the test file.
-    bats_file: Path | None = None
-    timeout_s = 60
-    if hasattr(request.node, "callspec"):
-        if "bats_file" in request.node.callspec.params:
-            bats_file = request.node.callspec.params["bats_file"]
-        if "timeout_s" in request.node.callspec.params:
-            timeout_s = int(request.node.callspec.params["timeout_s"])
+    # Read _bats_file / _bats_timeout from the test function's own attributes
+    # (set by test_bats_bridge.py's _make_test).  Falls back to the old
+    # callspec.params path for any remaining parametrized BATS tests.
+    fn = request.node.function
+    bats_file: Path | None = getattr(fn, "_bats_file", None)
+    timeout_s: int = getattr(fn, "_bats_timeout", 60)
+    if bats_file is None and hasattr(request.node, "callspec"):
+        bats_file = request.node.callspec.params.get("bats_file")
+        timeout_s = int(request.node.callspec.params.get("timeout_s", 60))
 
     lock_name = Path(bats_file).stem if bats_file else Path(request.path).stem
     lock_path = _LOCK_DIR / f"{lock_name}.lock"
