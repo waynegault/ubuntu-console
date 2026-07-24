@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "jollimemory": {
+      "command": "/home/wayne/.jolli/jollimemory/run-cli",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}
