@@ -229,18 +229,30 @@ if [[ "${_MODE:-}" != "fast" ]]; then
     fi
 
     # Run pytest with verbose output, then strip header/summary lines
-    _PY_OUTPUT=$($_PYTHON -m pytest tests/ --tb=line -v --no-header --no-summary \
+    _PY_OUTPUT=$($_PYTHON -m pytest tests/ --tb=line -v --no-header --durations=5 \
         ${_PY_MARKERS:+"$_PY_MARKERS"} \
         --ignore=tests/test_bats_bridge.py 2>&1) || _PY_EXIT=$?
 
     # Parse pytest output line by line, numbering continues from BATS count
     _PY_NUM=$total
+    _PY_DURATIONS=""
+    _in_durations=0
     while IFS= read -r _py_line; do
         [[ -z "$_py_line" ]] && continue
-        # Skip header/footer/warning lines (pytest's session header, separator, etc.)
+        # Capture slowest test durations section (starts with ===== slowest...)
+        if [[ "$_py_line" == *"slowest test durations"* ]]; then
+            _in_durations=1
+            continue
+        fi
+        if (( _in_durations )); then
+            _PY_DURATIONS+="$_py_line"$'\n'
+            # End when we hit another === boundary
+            [[ "$_py_line" == ===* ]] && _in_durations=0
+            continue
+        fi
+        # Skip remaining header/footer/warning lines
         case "$_py_line" in
-            ===*|--*|collected*|Platform*|plugins*) continue ;;
-            $'\u26a0'*) continue ;;  # ⚠ duration warning from conftest
+            ===*|--*|collected*|Platform*|plugins*|$'\u26a0'*) continue ;;
         esac
         # pytest verbose line format: "path::TestClass::test_name PASSED"
         if [[ "$_py_line" =~ ^(.*)::([^[]+.*[A-Za-z].*)\ (PASSED|FAILED|ERROR|SKIP|SKIPPED).*$ ]]; then
@@ -255,6 +267,26 @@ if [[ "${_MODE:-}" != "fast" ]]; then
             esac
         fi
     done <<< "$_PY_OUTPUT"
+
+    # Show slowest Python test durations (if any)
+    if [[ -n "$_PY_DURATIONS" ]]; then
+        # Extract tests > 300s (5 min) for highlighting
+        _slow_py=""
+        while IFS= read -r _dur_line; do
+            [[ -z "$_dur_line" ]] && continue
+            if [[ "$_dur_line" =~ ^([0-9.]+)s[[:space:]]+(call|setup|teardown)[[:space:]]+(.*) ]]; then
+                _dur_secs="${BASH_REMATCH[1]}"
+                _dur_test="${BASH_REMATCH[3]}"
+                if (( $(echo "$_dur_secs > 300" | bc 2>/dev/null || echo 0) )); then
+                    _slow_py+="  ${C_Red}${_dur_test} took ${_dur_secs}s (>5 min)${C_Reset}"$'\n'
+                fi
+            fi
+        done <<< "$_PY_DURATIONS"
+        if [[ -n "$_slow_py" ]]; then
+            header "Slow Python Tests (>5 min)"
+            echo -n "$_slow_py" | while IFS= read -r _s; do test_line "$_s"; done
+        fi
+    fi
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────
