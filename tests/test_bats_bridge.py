@@ -71,11 +71,18 @@ def _kill_process_group(pid: int) -> None:
         pass
 
 
-def _run_bats(bats_file: Path, timeout_s: int) -> subprocess.CompletedProcess[str]:
-    """Run a BATS file using temp files, returning stdout/stderr."""
+def _run_bats(bats_file: Path, timeout_s: int, filter_pattern: str | None = None) -> subprocess.CompletedProcess[str]:
+    """Run a BATS file (or a single filtered test) using temp files.
+
+    When *filter_pattern* is given, only tests matching that filter
+    (passed via ``--filter``) are executed — much faster than running
+    the entire suite when only one result is needed.
+    """
     env = os.environ.copy()
     env.setdefault("TERM", "xterm-256color")
     cmd = [BATS_EXECUTABLE, "--tap", "--timing", str(bats_file)]
+    if filter_pattern is not None:
+        cmd += ["--filter", filter_pattern]
 
     timeout_bin = "/usr/bin/timeout" if os.path.exists("/usr/bin/timeout") else None
     if timeout_bin is None and os.path.exists("/bin/timeout"):
@@ -118,15 +125,25 @@ def _run_bats(bats_file: Path, timeout_s: int) -> subprocess.CompletedProcess[st
     return subprocess.CompletedProcess(cmd, returncode, stdout_data, stderr_data)
 
 
-def _run_and_cache_bats(bats_file: Path, timeout_s: int) -> dict[str, dict[str, Any]]:
-    """Run a BATS file and return per-test results dict: {name: {"passed": bool, "output": str}}."""
+def _run_and_cache_bats(bats_file: Path, timeout_s: int, test_name: str | None = None) -> dict[str, dict[str, Any]]:
+    """Run a BATS file and return per-test results dict.
+
+    When *test_name* is given, only that single test is executed
+    (via ``--filter``) instead of the entire file.  The result is
+    still cached by file stem so follow-up tests from the same file
+    can share it, but a cache miss will also use ``--filter``.
+    """
     stem = bats_file.stem
     if stem in _bats_results_cache:
         return _bats_results_cache[stem]
 
     results: dict[str, dict[str, Any]] = {}
+    filter_ = None
+    if test_name is not None:
+        # Escape regex special chars so --filter matches the literal name
+        filter_ = re.escape(test_name)
     try:
-        result = _run_bats(bats_file, timeout_s)
+        result = _run_bats(bats_file, timeout_s, filter_pattern=filter_)
     except subprocess.TimeoutExpired:
         for name in _parse_bats_tests(bats_file):
             results[name] = {"passed": False, "output": f"BATS suite timed out ({timeout_s}s)"}
@@ -176,10 +193,13 @@ def _run_and_cache_bats(bats_file: Path, timeout_s: int) -> dict[str, dict[str, 
         if tname in results and not results[tname]["passed"]:
             results[tname]["output"] += "\n" + "\n".join(diags)
 
-    # Mark any test not found in output as failed
-    for name in _parse_bats_tests(bats_file):
-        if name not in results:
-            results[name] = {"passed": False, "output": f"BATS test '{name}' not found in output"}
+    # Mark any test not found in output as failed.
+    # When a specific test was requested (--filter), skip this check
+    # because only that test appears in the output.
+    if test_name is None:
+        for name in _parse_bats_tests(bats_file):
+            if name not in results:
+                results[name] = {"passed": False, "output": f"BATS test '{name}' not found in output"}
 
     _bats_results_cache[stem] = results
     return results
@@ -201,7 +221,7 @@ def _make_test(stem: str, test_name: str, timeout_s: int):
     bats_file = next(p for p in REPO_ROOT.glob(f"**/{stem}.bats"))
 
     def _test():
-        results = _run_and_cache_bats(bats_file, timeout_s)
+        results = _run_and_cache_bats(bats_file, timeout_s, test_name=test_name)
         r = results.get(test_name, {"passed": False, "output": "test not found"})
         if not r["passed"]:
             # Show the failing line + surrounding context
