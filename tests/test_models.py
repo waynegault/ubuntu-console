@@ -23,7 +23,7 @@ from kgraph.models import (
 
 
 class TestGraphNode:
-    def test_minimal_node(self):
+    def test_minimal_node_accepts_id_and_label_only(self):
         node = GraphNode(id="n1", label="Test")
         assert node.id == "n1"
         assert node.label == "Test"
@@ -35,7 +35,7 @@ class TestGraphNode:
         assert node.id == "42"
         assert isinstance(node.id, str)
 
-    def test_full_node(self):
+    def test_full_node_accepts_all_optional_fields(self):
         node = GraphNode(
             id="actor:wayne",
             label="Wayne",
@@ -76,7 +76,7 @@ class TestGraphNode:
 
 
 class TestGraphEdge:
-    def test_minimal_edge(self):
+    def test_minimal_edge_accepts_from_and_to_only(self):
         edge = GraphEdge(source="n1", target="n2")
         assert edge.source == "n1"
         assert edge.target == "n2"
@@ -110,7 +110,7 @@ class TestGraphEdge:
         assert edge.target == "n2"
         assert edge.origin == "ast"
 
-    def test_confidence_enum(self):
+    def test_confidence_defaults_to_extracted(self):
         edge = GraphEdge(source="a", target="b", confidence="EXTRACTED")
         assert edge.confidence == ConfidenceLevel.EXTRACTED
 
@@ -139,7 +139,7 @@ class TestGraphEdge:
 
 
 class TestGraph:
-    def test_empty_graph(self):
+    def test_empty_graph_has_no_nodes_or_edges(self):
         g = Graph()
         assert g.nodes == []
         assert g.edges == []
@@ -161,7 +161,7 @@ class TestGraph:
         assert g.edges[0].source == "1"
         assert g.edges[0].target == "n2"
 
-    def test_node_by_id(self):
+    def test_node_by_id_returns_matching_node(self):
         g = Graph(nodes=[
             GraphNode(id="a", label="A"),
             GraphNode(id="b", label="B"),
@@ -169,7 +169,7 @@ class TestGraph:
         assert g.node_by_id("a").label == "A"
         assert g.node_by_id("z") is None
 
-    def test_node_ids(self):
+    def test_node_ids_returns_all_ids(self):
         g = Graph(nodes=[
             GraphNode(id="a", label="A"),
             GraphNode(id="b", label="B"),
@@ -188,7 +188,7 @@ class TestGraph:
         assert len(restored.edges) == 1
         assert restored.edges[0].source == "n1"
 
-    def test_meta_defaults(self):
+    def test_meta_defaults_have_expected_keys(self):
         g = Graph()
         assert g.meta.view_mode == "overview"
         assert g.meta.semantic_threshold == 0.82
@@ -198,7 +198,7 @@ class TestGraph:
 
 
 class TestGraphBuilder:
-    def test_add_node_dedup(self):
+    def test_add_node_dedup_skips_duplicate_id(self):
         b = GraphBuilder()
         b.add_node({"id": "n1", "label": "First"})
         b.add_node({"id": "n1", "label": "Duplicate"})
@@ -206,7 +206,7 @@ class TestGraphBuilder:
         assert len(g.nodes) == 1
         assert g.nodes[0].label == "First"
 
-    def test_add_edge_dedup(self):
+    def test_add_edge_dedup_skips_duplicate_from_to(self):
         b = GraphBuilder()
         b.add_edge({"from": "a", "to": "b", "label": "links"})
         b.add_edge({"from": "a", "to": "b", "label": "links"})
@@ -220,7 +220,7 @@ class TestGraphBuilder:
         g = b.build()
         assert len(g.edges) == 2
 
-    def test_merge_graphs(self):
+    def test_merge_graphs_combines_nodes_and_edges(self):
         b = GraphBuilder()
         b.add_node({"id": "n1", "label": "Base"})
         overlay = Graph(
@@ -232,25 +232,25 @@ class TestGraphBuilder:
         assert len(g.nodes) == 2
         assert len(g.edges) == 1
 
-    def test_merge_dict(self):
+    def test_merge_dict_updates_graph_from_dict(self):
         b = GraphBuilder()
         b.merge({"nodes": [{"id": "x", "label": "X"}], "edges": []})
         g = b.build()
         assert len(g.nodes) == 1
 
-    def test_has_node(self):
+    def test_has_node_returns_true_for_existing_id(self):
         b = GraphBuilder()
         b.add_node({"id": "n1", "label": "Test"})
         assert b.has_node("n1") is True
         assert b.has_node("n2") is False
 
-    def test_has_edge(self):
+    def test_has_edge_returns_true_for_existing_edge(self):
         b = GraphBuilder()
         b.add_edge({"from": "a", "to": "b", "label": "links"})
         assert b.has_edge("a", "b", "links") is True
         assert b.has_edge("a", "b", "calls") is False
 
-    def test_len(self):
+    def test_len_returns_node_count(self):
         b = GraphBuilder()
         b.add_node({"id": "n1", "label": "A"})
         b.add_edge({"from": "n1", "to": "n2", "label": "x"})

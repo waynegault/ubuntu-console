@@ -146,7 +146,7 @@ class TestLifeIndex(unittest.TestCase):
 
 
 class TestBenchmark(unittest.TestCase):
-    def test_benchmark_basic(self):
+    def test_benchmark_returns_node_edge_and_token_counts(self):
         result = kgraph.benchmark_graph_vs_raw(_SMALL_GRAPH)
         self.assertEqual(result["node_count"], 3)
         self.assertEqual(result["edge_count"], 2)
@@ -172,7 +172,7 @@ class TestBenchmark(unittest.TestCase):
                 data = json.load(f)
             self.assertEqual(data["node_count"], 3)
 
-    def test_print_benchmark(self):
+    def test_print_benchmark_outputs_without_error(self):
         result = kgraph.benchmark_graph_vs_raw(_SMALL_GRAPH)
         # Should not raise
         kgraph.print_benchmark(result)
@@ -182,7 +182,7 @@ class TestBenchmark(unittest.TestCase):
 
 
 class TestMCPServer(unittest.TestCase):
-    def test_serve_mcp_importable(self):
+    def test_serve_mcp_is_callable(self):
         """serve_mcp is importable and callable."""
         self.assertTrue(callable(kgraph.serve_mcp))
 
@@ -227,7 +227,7 @@ class TestValidateExtended(unittest.TestCase):
     def test_sanitize_label_empty(self):
         self.assertEqual(kgraph.sanitize_label(""), "")
 
-    def test_validate_graph_valid(self):
+    def test_validate_graph_valid_payload_returns_true(self):
         errors = kgraph.validate_graph_payload(_SMALL_GRAPH)
         self.assertTrue(errors[0])
 

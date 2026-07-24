@@ -228,7 +228,7 @@ class TestConfidence(unittest.TestCase):
         self.assertEqual(stats['extracted'], 0)
         self.assertEqual(stats['extracted_pct'], 0)
 
-    def test_confidence_stats_counts(self):
+    def test_confidence_stats_counts_by_confidence_level(self):
         graph = {
             'edges': [
                 {'from': 'a', 'to': 'b', 'source': 'ast', 'label': 'calls'},
@@ -410,7 +410,7 @@ class TestQuery(unittest.TestCase):
 
     # ── format_path ─────────────────────────────────────────────────
 
-    def test_format_path_found(self):
+    def test_format_path_returns_path_string_with_nodenames(self):
         path = self.kgraph.find_path(self.small_graph, 'n1', 'n2')
         text = self.kgraph.format_path(path)
         self.assertIn('Path:', text)
@@ -418,7 +418,7 @@ class TestQuery(unittest.TestCase):
         self.assertIn('n2', text)
         self.assertIn('depends on', text)
 
-    def test_format_path_empty(self):
+    def test_format_path_returns_no_path_message(self):
         text = self.kgraph.format_path([])
         self.assertEqual(text, 'No path found')
 
@@ -462,7 +462,7 @@ class TestBenchmark(unittest.TestCase):
         self.assertEqual(result['graph_tokens'], 0)
         self.assertEqual(result['node_count'], 0)
 
-    def test_benchmark_simple_graph(self):
+    def test_benchmark_simple_graph_returns_expected_counts(self):
         _, benchmark_graph_vs_raw = self._get_benchmark()
         graph = {
             'nodes': [{'id': 'n1', 'label': 'Node One'}],
