@@ -478,12 +478,13 @@ function __bridge_windows_api_keys() {
     fi
 
     # Fetch matching vars from Windows User environment via PowerShell.
-    # Intentional narrow match: API key names, token names, and the gateway
-    # password (exact name) so it too is bridged from the canonical Windows env.
+    # Match any variable whose name contains TOKEN, API(_|-)?KEY, or PASSWORD
+    # (case-insensitive). Covers common names like GEMINI_API_KEY,
+    # OPENAI_API_KEY, OPENCLAW_GATEWAY_TOKEN, OPENCLAW_GATEWAY_PASSWORD.
     local raw
     raw=$(timeout 5 pwsh.exe -NoProfile -NonInteractive -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() |
-        Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY|^OPENCLAW_GATEWAY_PASSWORD$)" } |
+        Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY|PASSWORD)" } |
         ForEach-Object { "$($_.Key)=$($_.Value)" }
     ' 2>/dev/null | tr -d '\r')
 
@@ -745,9 +746,10 @@ function oc-refresh-keys() {
             # Match the same patterns the Windows bridge uses
             [[ "$_lk" =~ ^[Tt][Oo][Kk][Ee][Nn] ]] || \
                 [[ "$_lk" =~ ^[Aa][Pp][Ii][_-]?[Kk][Ee][Yy] ]] || \
+                [[ "$_lk" =~ ^[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd] ]] || \
                 [[ "$_lk" =~ [Tt][Oo][Kk][Ee][Nn] ]] || \
                 [[ "$_lk" =~ [Aa][Pp][Ii][_-]?[Kk][Ee][Yy] ]] || \
-                [[ "$_lk" == [Oo][Pp][Ee][Nn][Cc][Ll][Aa][Ww]_[Gg][Aa][Tt][Ee][Ww][Aa][Yy]_[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd] ]] || continue
+                [[ "$_lk" =~ [Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd] ]] || continue
             printf 'export %s=%q\n' "$_lk" "$_lv" >> "$cache"
             count=$((count + 1))
         done < <(env | sort -u)

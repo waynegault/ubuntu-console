@@ -89,8 +89,8 @@ teardown() {
     run grep -E 'TOKEN\|API\(_\|-\)\?KEY' "$pwsh_log"
     [ "$status" -eq 0 ]
 
-    # Bridge also matches the gateway password by exact name.
-    run grep -F 'OPENCLAW_GATEWAY_PASSWORD' "$pwsh_log"
+    # Bridge also matches PASSWORD anywhere in the variable name.
+    run grep -F 'PASSWORD' "$pwsh_log"
     [ "$status" -eq 0 ]
 
     # Gateway env file is created and contains bridged vars.
