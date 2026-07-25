@@ -122,6 +122,13 @@ if type __bridge_windows_api_keys >/dev/null 2>&1; then
     __bridge_windows_api_keys
 fi
 
+# Fallback: source the gateway's systemd environment file (on-disk, survives
+# reboots) so API keys are available even if the bridge hasn't populated the
+# cache yet.
+if [[ -f "$HOME/.openclaw/gateway.systemd.env" ]]; then
+    set -a; source "$HOME/.openclaw/gateway.systemd.env" 2>/dev/null; set +a
+fi
+
 # Auto-activate .venv in the current directory (if present).  The cd()
 # override handles activation on directory change, but the initial shell
 # open lands in PWD without an implicit cd call.  Source silently so no
