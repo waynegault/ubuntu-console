@@ -123,7 +123,7 @@ function __oc_journal_tail() {
     [[ "$_invert" == "1" ]] && _grep_flag="-Eiv"
     journalctl --user -u openclaw-gateway.service --no-pager "${_since_arg[@]}" -n 300 --output=cat 2>&1 \
         | grep "$_grep_flag" "$_pat" \
-        | tail "$_lines"
+        | tail -n "$_lines"
     return "${PIPESTATUS[0]}"
 }
 # le — Show the last 40 lines of the OpenClaw gateway journal (errors only).
