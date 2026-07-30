@@ -842,6 +842,10 @@ function oc-refresh-keys() {
             grep -q "^export ${_lk}=" "$cache" 2>/dev/null && continue
             printf 'export %s=%q\n' "$_lk" "${!_lk}" >> "$cache"
         done
+        # Re-source to pick up any newly appended vars that were not in
+        # the original pwsh.exe export (e.g. Linux-only keys like
+        # OPENCLAW_GATEWAY_TOKEN, DEVIN_API_KEY).
+        source "$cache" 2>/dev/null
         count=$(grep -c '^export ' "$cache" || true)
     else
         : > "$cache" 2>/dev/null
@@ -861,6 +865,7 @@ function oc-refresh-keys() {
             count=$((count + 1))
         done < <(env | sort -u)
         if [[ "$count" -gt 0 ]]; then
+            source "$cache" 2>/dev/null
             __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — using Linux env vars]" "$C_Warning"
             __tac_info "Reading Windows User environment" "[$count variable(s) exported]" "$C_Success"
         else
