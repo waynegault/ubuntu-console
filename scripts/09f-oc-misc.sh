@@ -526,13 +526,21 @@ function oc-restore() {
     then
         [[ -d "$OC_WORKSPACE" ]] && mv "$OC_WORKSPACE" "${OC_WORKSPACE}.bak"
         mv "$tmp_restore/.openclaw/workspace" "$OC_WORKSPACE"
-        rm -rf "${OC_WORKSPACE}.bak"
+        if [[ -z "$OC_WORKSPACE" || "$OC_WORKSPACE" == "/" || ! "$OC_WORKSPACE" =~ ^/home|^/tmp|^/dev/shm ]]; then
+            __tac_info "Backup Cleanup" "[REFUSED - unsafe OC_WORKSPACE: ${OC_WORKSPACE:-EMPTY}]" "$C_Error"
+        else
+            rm -rf "${OC_WORKSPACE}.bak"
+        fi
     fi
     if [[ -d "$tmp_restore/.openclaw/agents" ]]
     then
         [[ -d "$OC_AGENTS" ]] && mv "$OC_AGENTS" "${OC_AGENTS}.bak"
         mv "$tmp_restore/.openclaw/agents" "$OC_AGENTS"
-        rm -rf "${OC_AGENTS}.bak"
+        if [[ -z "$OC_AGENTS" || "$OC_AGENTS" == "/" || ! "$OC_AGENTS" =~ ^/home|^/tmp|^/dev/shm ]]; then
+            __tac_info "Backup Cleanup" "[REFUSED - unsafe OC_AGENTS: ${OC_AGENTS:-EMPTY}]" "$C_Error"
+        else
+            rm -rf "${OC_AGENTS}.bak"
+        fi
     fi
     # Restore config files if they were backed up
     [[ -f "$tmp_restore/.openclaw/openclaw.json" ]] \

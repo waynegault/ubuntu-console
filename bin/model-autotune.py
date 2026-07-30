@@ -1,4 +1,4 @@
-#!/home/wayne/ubuntu-console/.venv/bin/python
+#!/usr/bin/env python3
 """
 model-autotune — Discover optimal llama-server parameters for one GGUF model.
 
