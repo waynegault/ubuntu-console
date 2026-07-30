@@ -807,8 +807,6 @@ function __oc_sync_gateway_env_file() {
 # ---------------------------------------------------------------------------
 function oc-refresh-keys() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
-    local envd_dir="$HOME/.config/environment.d"
-    local envd_file="$envd_dir/90-openclaw.conf"
     local _nas_collectors_env="/mnt/HD/HD_a2/butler/cron/openclaw-collectors.env"
     local _nas_user="${OC_NAS_USER:-sshd}"
     local _nas_host="${OC_NAS_HOST:-192.168.33.17}"
@@ -871,32 +869,17 @@ function oc-refresh-keys() {
         fi
     fi
 
-    # 3. Write WSL environment.d file and reload systemd user env
-    mkdir -p "$envd_dir"
-    awk '/^export / { sub(/^export /, ""); print }' "$cache" > "$envd_file.tmp" 2>/dev/null || true
-    mv "$envd_file.tmp" "$envd_file" 2>/dev/null || true
-    chmod 600 "$envd_file" 2>/dev/null || true
-    systemctl --user daemon-reload 2>/dev/null || true
-    while IFS= read -r _line; do
-        [[ -z "$_line" ]] && continue
-        _name="${_line%%=*}"
-        _val="${_line#*=}"
-        [[ "$_val" == \"*\" ]] && _val="${_val:1:-1}"
-        systemctl --user set-environment "${_name}=${_val}" 2>/dev/null || true
-    done < "$envd_file"
-    __tac_info "Exporting to WSL" "[$envd_file]" "$C_Success"
-
-    # 4. Sync gateway systemd env file and managed env keys so the running
+    # 3. Sync gateway systemd env file and managed env keys so the running
     #    gateway (which reads from gateway.systemd.env) can resolve env-backed
     #    SecretRefs referenced by auth profiles in agent sqlite databases.
     #    Without this, `openclaw doctor` reports "secret reference was not
     #    found" because the gateway process lacks the env vars.
     __oc_sync_gateway_env_file "$cache"
 
-    # 5. Sync OpenClaw SecretRefs to the refreshed env credentials
+    # 4. Sync OpenClaw SecretRefs to the refreshed env credentials
     __oc_apply_secret_refs
 
-    # 6. Restart the gateway if it's running so it picks up the refreshed
+    # 5. Restart the gateway if it's running so it picks up the refreshed
     #    environment and MANAGED_ENV_KEYS.
     if command -v openclaw >/dev/null 2>&1 && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null; then
         if openclaw gateway restart >/dev/null 2>&1; then
@@ -906,7 +889,7 @@ function oc-refresh-keys() {
         fi
     fi
 
-    # 7. Mirror vars to NAS via SSH
+    # 6. Mirror vars to NAS via SSH
     if [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1; then
         local _synced_nas=0
         local _k _v _qv
