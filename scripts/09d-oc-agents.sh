@@ -588,17 +588,57 @@ function __oc_apply_secret_refs() {
     fi
 
     local -a _map=(
-        # Plugin/feature apiKeys (not shadowed by auth profiles)
+        # ================================================================
+        # Web Search Plugin API Keys
+        # Full list from secretref-credential-surface.md:
+        #   plugins.entries.{google,brave,exa,moonshot,perplexity,
+        #                    firecrawl,tavily,mini,xai,parallel}
+        #                    .config.webSearch.apiKey
+        # ================================================================
         "plugins.entries.google.config.webSearch.apiKey::GEMINI_API_KEY"
+        "plugins.entries.brave.config.webSearch.apiKey::BRAVE_API_KEY"
+        "plugins.entries.tavily.config.webSearch.apiKey::TAVILY_API_KEY"
+        "plugins.entries.perplexity.config.webSearch.apiKey::PERPLEXITY_API_KEY"
+        "plugins.entries.xai.config.webSearch.apiKey::XAI_API_KEY"
+        "plugins.entries.moonshot.config.webSearch.apiKey::MOONSHOT_API_KEY"
+        "plugins.entries.firecrawl.config.webSearch.apiKey::FIRECRAWL_API_KEY"
+
+        # ================================================================
+        # Model Provider API Keys (direct-consumption providers)
+        # These set models.providers.<id>.apiKey as an env-backed SecretRef.
+        # Providers using auth profiles (deepseek, github-copilot) are NOT
+        # listed here — their keys live in per-agent SQLite credential stores.
+        # ================================================================
+        "models.providers.openai.apiKey::OPENAI_API_KEY"
+        "models.providers.anthropic.apiKey::ANTHROPIC_API_KEY"
+        "models.providers.groq.apiKey::GROQ_API_KEY"
+        "models.providers.moonshot.apiKey::MOONSHOT_API_KEY"
+        "models.providers.openrouter.apiKey::OPENROUTER_API_KEY"
+        "models.providers.xai.apiKey::XAI_API_KEY"
+        "models.providers.qwen.apiKey::QWEN_API_KEY"
+        "models.providers.nvidia.apiKey::NVIDIA_API_KEY"
+        "models.providers.fireworks.apiKey::FIREWORKS_API_KEY"
+        "models.providers.huggingface.apiKey::HUGGINGFACE_TOKEN"
+
+        # ================================================================
+        # Tool / Platform API Keys
+        # ================================================================
+        "tools.web.fetch.firecrawl.apiKey::FIRECRAWL_API_KEY"
+        "tools.web.search.serp.apiKey::SERP_API_KEY"
+
+        # ================================================================
+        # Auth profile keys (written to agent SQLite credential stores)
+        # These are NOT managed by `openclaw config set`. The keyRef/tokenRef
+        # fields live in per-agent sqlite databases (auth-profiles equivalent).
+        # See 2026-07-23 session: HAL bulk-set handled
+        # deepseek:default.keyRef, qwen-token-plan:default.keyRef,
+        # and github-copilot:github.tokenRef across all 14 agent databases.
+        # Run that sqlite patch again if agent databases are ever rebuilt.
+        #
+        # Future: could also set these via openclaw secrets configure
+        # with agent-scoped plans, but that path is not yet wired here.
+        # ================================================================
     )
-    #
-    # Auth profile credentials (github-copilot, deepseek, qwen-token-plan)
-    # are stored with keyRef/tokenRef in each agent's sqlite database.
-    # These are set once and persist through sqlite updates; they are NOT
-    # managed by `openclaw config set`. See 2026-07-23 session: HAL bulk-set
-    # handled deepseek:default.keyRef, qwen-token-plan:default.keyRef,
-    # and github-copilot:github.tokenRef across all 14 agent databases.
-    # Run that sqlite patch again if agent databases are ever rebuilt.
 
     local _entry _path _var _applied=0 _skipped=0 _failed=0
     for _entry in "${_map[@]}"
@@ -618,11 +658,80 @@ function __oc_apply_secret_refs() {
         fi
     done
 
-    if (( _failed > 0 ))
+    # ================================================================
+    # Auth Profile SecretRef sync (SQLite credential stores)
+    #
+    # Keys managed via auth profiles (not models.providers.<id>.apiKey):
+    #   DEEPSEEK_API_KEY  →  deepseek:default.keyRef
+    #   GITHUB_COPILOT_TOKEN → github-copilot:github.tokenRef
+    #   OLLAMA_API_KEY    →  ollama:default.keyRef
+    #
+    # These live in per-agent `openclaw-agent.sqlite` tables.
+    # ================================================================
+    local -a _auth_map=(
+        "deepseek:default::api_key::DEEPSEEK_API_KEY"
+        "github-copilot:github::token::GITHUB_COPILOT_TOKEN"
+        "ollama:default::api_key::OLLAMA_API_KEY"
+    )
+    local _auth_applied=0 _auth_skipped=0 _auth_failed=0
+    local _agents_root="${OC_AGENTS:-$HOME/.openclaw/agents}"
+
+    for _aentry in "${_auth_map[@]}"
+    do
+        IFS='::' read -r _profile_id _provider _cred_type _env_var <<< "$_aentry"
+        if [[ -z "${!_env_var:-}" ]]
+        then
+            _auth_skipped=$((_auth_skipped + 1))
+            continue
+        fi
+
+        # Build SecretRef JSON using python3 for reliable escaping
+        local _ref_json
+        _ref_json=$(python3 -c "
+import json
+if '$_cred_type' == 'api_key':
+    ref = {'version':1,'profiles':{'$_profile_id':{'type':'api_key','provider':'$_provider','keyRef':{'source':'env','provider':'default','id':'$_env_var'}}}}
+else:
+    ref = {'version':1,'profiles':{'$_profile_id':{'type':'$_cred_type','provider':'$_provider','tokenRef':{'source':'env','provider':'default','id':'$_env_var'}}}}
+print(json.dumps(ref))
+" 2>/dev/null)
+
+        [[ -z "$_ref_json" ]] && { _auth_failed=$((_auth_failed+1)); continue; }
+
+        # Apply to every existing agent SQLite database
+        local _agent_dir _updated_at
+        _updated_at=$(date +%s%3N 2>/dev/null || echo 0)
+        for _agent_dir in "$_agents_root"/*/agent; do
+            local _db="$_agent_dir/openclaw-agent.sqlite"
+            [[ -f "$_db" ]] || continue
+            if sqlite3 "$_db" \
+                "INSERT OR REPLACE INTO auth_profile_store (store_key, store_json, updated_at) VALUES ('primary', '$(printf '%s' "$_ref_json" | sed "s/'/''/g")', $_updated_at);" \
+                2>/dev/null
+            then
+                _auth_applied=$((_auth_applied + 1))
+            else
+                _auth_failed=$((_auth_failed + 1))
+            fi
+        done
+    done
+
+    if (( _auth_failed > 0 ))
     then
-        __tac_info "Syncing OpenClaw SecretRefs" "[$_applied applied, $_skipped skipped, $_failed failed]" "$C_Warning"
+        __tac_info "Syncing Auth Profile SecretRefs" "[$_auth_applied writes, $_auth_skipped skipped, $_auth_failed failed]" "$C_Warning"
+    elif (( _auth_applied > 0 ))
+    then
+        __tac_info "Syncing Auth Profile SecretRefs" "[$_auth_applied writes, $_auth_skipped skipped]" "$C_Success"
+    fi
+
+    # Combined summary
+    local _total_applied=$((_applied + _auth_applied))
+    local _total_skipped=$((_skipped + _auth_skipped))
+    local _total_failed=$((_failed + _auth_failed))
+    if (( _total_failed > 0 ))
+    then
+        __tac_info "Syncing OpenClaw SecretRefs" "[$_total_applied applied, $_total_skipped skipped, $_total_failed failed]" "$C_Warning"
     else
-        __tac_info "Syncing OpenClaw SecretRefs" "[$_applied applied, $_skipped skipped]" "$C_Success"
+        __tac_info "Syncing OpenClaw SecretRefs" "[$_total_applied applied, $_total_skipped skipped]" "$C_Success"
     fi
 }
 
