@@ -806,7 +806,10 @@ function oc-refresh-keys() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
     local _nas_collectors_env="/mnt/HD/HD_a2/butler/cron/openclaw-collectors.env"
     local _nas_user="${OC_NAS_USER:-sshd}"
-    local _nas_host="${OC_NAS_HOST:-192.168.33.17}"
+    # LAN IP (192.168.33.17) has been unroutable from WSL since a network
+    # change; the NAS is reachable via Tailscale. Override with OC_NAS_HOST
+    # if the LAN route is restored.
+    local _nas_host="${OC_NAS_HOST:-mycloudex2ultra.tail99183.ts.net}"
     local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
     local count=0
 
@@ -895,8 +898,18 @@ function oc-refresh-keys() {
     fi
 
     # 6. Mirror vars to NAS via SSH — one connection (was one ssh per var,
-    #    the dominant cost of this whole command).
-    if [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1; then
+    #    the dominant cost of this whole command). Auth: prefer password
+    #    (sshpass + SSH_PASSWORD) since the NAS rejects key auth over
+    #    Tailscale; fall back to key auth if sshpass/password unavailable.
+    local _nas_ssh=()
+    if command -v sshpass >/dev/null 2>&1 && [[ -n "${SSH_PASSWORD:-}" ]]
+    then
+        _nas_ssh=(sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=6 "${_nas_user}@${_nas_host}")
+    elif [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1
+    then
+        _nas_ssh=(ssh -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no "${_nas_user}@${_nas_host}")
+    fi
+    if ((${#_nas_ssh[@]})); then
         local _synced_nas=0
         local _nas_tmp _l _k2 _v2 _qv2
         _nas_tmp="$(mktemp)"
@@ -912,11 +925,9 @@ function oc-refresh-keys() {
                 printf '%s="%s"\n' "$_k2" "$_qv2"
             done < "$cache"
         } > "$_nas_tmp"
-        if ssh -n -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no \
-            "${_nas_user}@${_nas_host}" "cat > \"$_nas_collectors_env.tmp\"" < "$_nas_tmp" >/dev/null 2>&1
+        if "${_nas_ssh[@]}" "cat > \"$_nas_collectors_env.tmp\"" < "$_nas_tmp" >/dev/null 2>&1
         then
-            ssh -n -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no \
-                "${_nas_user}@${_nas_host}" "mv \"$_nas_collectors_env.tmp\" \"$_nas_collectors_env\"" >/dev/null 2>&1 && _synced_nas=1
+            "${_nas_ssh[@]}" "mv \"$_nas_collectors_env.tmp\" \"$_nas_collectors_env\"" >/dev/null 2>&1 && _synced_nas=1
         fi
         rm -f "$_nas_tmp"
         if (( _synced_nas == 1 ))
