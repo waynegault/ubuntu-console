@@ -11,6 +11,7 @@ import importlib.util
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 SCRIPT_PATH = os.path.join(REPO_ROOT, "bin", "model-autotune.py")
@@ -183,6 +184,101 @@ class RegistryRowParsingTests(unittest.TestCase):
         assert row2 is not None
         self.assertEqual(row2["autotuned"], "yes")
         self.assertEqual(row2["name"], "deepseek-coder-1.3b-instruct-q4_k_m.gguf")
+
+
+class RegistryV4SchemaTests(unittest.TestCase):
+    """Tests for the v4 26-column registry schema (prefill + profile 2)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_module()
+        cls._orig_registry = cls.mod.REGISTRY  # type: ignore[attr-defined]
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".conf", delete=False, encoding="utf-8")
+        self.tmp.write(self.sample())
+        self.tmp.close()
+
+    def tearDown(self):
+        os.unlink(self.tmp.name)
+        self.mod.REGISTRY = self._orig_registry  # type: ignore[attr-defined]
+
+    @staticmethod
+    def sample() -> str:
+        return (
+            "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill\n"
+            "1|v4model|v4.gguf|2.3G|Q4_K_M/q4_0/q4_0|llama|999|32768|4|1024|256|1|256|native|auto|on|22.5|yes|no|no|140.2|4096|1024|256|44.1|160.0\n"
+            "2|legacy|legacy.gguf|1.0G|Q4_K_M/q8_0|qwen2|999|4096|4|1024|256|1|256|native|auto|on|0|no|no|no\n"
+        )
+
+    def _patch_registry(self):
+        self.mod.REGISTRY = type(self.mod.REGISTRY)(self.tmp.name)  # type: ignore[attr-defined]
+
+    def test_load_26col_row_parses_new_fields(self):
+        self._patch_registry()
+        row = self.mod.load_registry_row(1)
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(row["prefill_tps"], "140.2")
+        self.assertEqual(row["p2_ctx"], "4096")
+        self.assertEqual(row["p2_batch"], "1024")
+        self.assertEqual(row["p2_ubatch"], "256")
+        self.assertEqual(row["p2_tps"], "44.1")
+        self.assertEqual(row["p2_prefill"], "160.0")
+
+    def test_load_legacy_20col_row_defaults_new_fields(self):
+        self._patch_registry()
+        row = self.mod.load_registry_row(2)
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(row["prefill_tps"], "")
+        self.assertEqual(row["p2_ctx"], "")
+
+    def test_write_pads_legacy_20col_row_to_26(self):
+        self._patch_registry()
+        self.mod.write_registry_row(2, {"ctx": 8192, "autotuned": "yes"})
+        for line in Path(self.tmp.name).read_text(errors="ignore").splitlines():
+            if line.startswith("2|"):
+                self.assertEqual(len(line.split("|")), 26)
+        row = self.mod.load_registry_row(2)
+        assert row is not None
+        self.assertEqual(row["ctx"], "8192")
+        self.assertEqual(row["autotuned"], "yes")
+
+    def test_write_preserves_v4_extra_fields(self):
+        self._patch_registry()
+        self.mod.write_registry_row(1, {"ctx": 16384})
+        row = self.mod.load_registry_row(1)
+        assert row is not None
+        self.assertEqual(row["p2_tps"], "44.1")
+        self.assertEqual(row["prefill_tps"], "140.2")
+        self.assertEqual(row["ctx"], "16384")
+
+    def test_write_updates_v4_fields(self):
+        self._patch_registry()
+        self.mod.write_registry_row(1, {
+            "prefill_tps": "200.0",
+            "p2_tps": "50.0",
+        })
+        row = self.mod.load_registry_row(1)
+        assert row is not None
+        self.assertEqual(row["prefill_tps"], "200.0")
+        self.assertEqual(row["p2_tps"], "50.0")
+
+    def test_rejects_wrong_column_count(self):
+        self._patch_registry()
+        bad = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".conf", delete=False, encoding="utf-8")
+        bad.write("1|too|few|cols|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18\n")
+        bad.close()
+        try:
+            self.mod.REGISTRY = type(self.mod.REGISTRY)(bad.name)  # type: ignore[attr-defined]
+            with self.assertRaises(RuntimeError):
+                self.mod.load_registry_row(1)
+        finally:
+            os.unlink(bad.name)
+            self.mod.REGISTRY = self._orig_registry  # type: ignore[attr-defined]
 
 
 class FreeVramParsingTests(unittest.TestCase):

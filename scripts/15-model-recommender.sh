@@ -3,7 +3,7 @@
 # ─── Module: 15-model-recommender ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 15. MODEL RECOMMENDER
 # ==============================================================================
@@ -68,7 +68,7 @@ function model-recommend() {
     #   +2 for architecture match (qwen/llama for reasoning)
     #   +1 for high TPS (>30)
     # Only show models that fit within 80% of VRAM
-    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
     do
         # Skip comments and empty lines
         [[ -z "$num" || "$num" == "#"* ]] && continue

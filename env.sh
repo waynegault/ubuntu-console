@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -47,7 +47,8 @@ export OPENCLAW_NO_RESPAWN="${OPENCLAW_NO_RESPAWN:-1}"
 # NODE_OPTIONS: Prefer IPv4 DNS — this machine has no IPv6 default route,
 # causing Node.js fetch() to time out on IPv6 connection attempts.
 # (Mirrored from tactical-console.bashrc for non-interactive contexts.)
-if [[ "$NODE_OPTIONS" != *"dns-result-order"* ]]; then
+# ${NODE_OPTIONS:-} keeps env.sh safe under `set -u` callers (autotune-model.sh).
+if [[ "${NODE_OPTIONS:-}" != *"dns-result-order"* ]]; then
     export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
 fi
 
@@ -62,6 +63,36 @@ export LLM_AUTOTUNE_MIN_CTX_FRACTION="${LLM_AUTOTUNE_MIN_CTX_FRACTION:-0.60}"
 # for accuracy on context-heavy flows (a higher floor would starve ctx on the
 # 3-4B models that are the sweet spot for this 4GB GPU).
 export LLM_MIN_TPS="${LLM_MIN_TPS:-10}"
+
+# ── Autotune v4 knobs (scripts/autotune-model.sh) ────────────────────────────
+# The TPS floor is certified at a *filled* KV cache: the scoring bench pre-fills
+# the context with a long prompt (ratio x ctx, capped) before measuring decode,
+# so the recorded TPS reflects sustained throughput at the ctx being certified,
+# not a burst on an empty cache. Prefill tokens/sec is captured from the server
+# timings and persisted in the registry (field 21).
+export LLM_AUTOTUNE_FILL_RATIO="${LLM_AUTOTUNE_FILL_RATIO:-0.75}"
+export LLM_AUTOTUNE_FILL_MAX_TOKENS="${LLM_AUTOTUNE_FILL_MAX_TOKENS:-32768}"
+export LLM_AUTOTUNE_FILL_MIN_TOKENS="${LLM_AUTOTUNE_FILL_MIN_TOKENS:-2048}"
+
+# Optional prefill floor (tokens/sec). 0 = disabled. When set, the Phase 4
+# downshift also steps ctx down if prefill falls below this floor — a model
+# whose prompt ingestion is too slow for long-context agentic use is treated
+# like a below-floor model.
+export LLM_MIN_PREFILL_TPS="${LLM_MIN_PREFILL_TPS:-0}"
+
+# Batch/ubatch beam search at the winning ctx (replaces the fixed ubatch list).
+export LLM_AUTOTUNE_BEAM_WIDTH="${LLM_AUTOTUNE_BEAM_WIDTH:-2}"
+export LLM_AUTOTUNE_BEAM_ROUNDS="${LLM_AUTOTUNE_BEAM_ROUNDS:-2}"
+
+# n_gpu_layers / KV-quant search band: models whose GGUF is at least this
+# fraction of free VRAM are probed with alternate offload counts and cache
+# quantizations (partial offload can beat pure CPU on borderline models).
+export LLM_AUTOTUNE_NGL_BAND_FRAC="${LLM_AUTOTUNE_NGL_BAND_FRAC:-0.55}"
+export LLM_AUTOTUNE_KV_QUANTS="${LLM_AUTOTUNE_KV_QUANTS:-q8_0/q8_0 q4_0/q4_0}"
+
+# Cap on a single scoring bench's wall time (filled-cache prefill is slow on
+# CPU-only models).
+export LLM_AUTOTUNE_BENCH_TIMEOUT="${LLM_AUTOTUNE_BENCH_TIMEOUT:-300}"
 
 _tac_env_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _tac_lib_dir="$_tac_env_root/scripts"

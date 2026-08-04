@@ -1774,8 +1774,8 @@ EOF
 }
 
 @test "autotune: autotune-model.sh downshifts ctx to recover TPS below the floor" {
-    grep -q 'Phase 4: TPS floor recovery' "$REPO_ROOT/scripts/autotune-model.sh"
-    grep -q 'downshifting ctx to recover TPS' "$REPO_ROOT/scripts/autotune-model.sh"
+    grep -q 'Phase 4: filled-cache TPS floor recovery' "$REPO_ROOT/scripts/autotune-model.sh"
+    grep -q 'step ctx DOWN' "$REPO_ROOT/scripts/autotune-model.sh"
 }
 
 @test "autotune: model-autotune.py shares the uniform 10 TPS floor" {
@@ -2952,6 +2952,90 @@ EOF
     # 8GB model: baseline=2048, saved_ctx=65536 lifts it, max_ctx=12288 caps it.
     # No TPS scaling (tps=0), no VRAM-driven floor (kv_budget negative on 4GB GPU).
     [[ "$output" == "12288" ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 35. AUTOTUNE v4 — Filled-cache certification, beam/sweeps, profile 2, 26-col
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "autotune: profile_save writes v4 prefill and profile-2 columns" {
+    local llm_root="$TAC_TEST_TMPDIR/autotune-v4-save"
+    mkdir -p "$llm_root/.llm"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+        '7|V4 Test|v4.gguf|2.0G|Q4_K_M/q8_0|llama|999|4096|4|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
+    LLM_REGISTRY="$llm_root/.llm/models.conf"
+    __llm_autotune_profile_save 7 "native" 16384 2048 512 1 256 45.2 "" 210.5 32768 1024 256 88.3 150.2 "Q4_K_M/q4_0/q4_0" 999
+    local header row
+    header=$(head -1 "$LLM_REGISTRY")
+    row=$(awk -F'|' '$1==7' "$LLM_REGISTRY")
+    [[ "$header" == *"|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill" ]]
+    local kv gpu ctx tps autotuned prefill p2ctx p2tps p2pf
+    IFS='|' read -r _ _ _ _ kv _ gpu ctx _ batch ubatch _ _ _ _ _ tps autotuned _ _ prefill p2ctx _ _ p2tps p2pf <<< "$row"
+    [[ "$kv" == "Q4_K_M/q4_0/q4_0" ]]
+    [[ "$gpu" == "999" ]]
+    [[ "$ctx" == "16384" ]]
+    [[ "$tps" == "45.2" ]]
+    [[ "$autotuned" == "yes" ]]
+    [[ "$prefill" == "210.5" ]]
+    [[ "$p2ctx" == "32768" ]]
+    [[ "$p2tps" == "88.3" ]]
+    [[ "$p2pf" == "150.2" ]]
+    # Legacy 20-col row must have been padded to the v4 26-col schema.
+    [[ $(awk -F'|' '$1==7 {print NF}' "$LLM_REGISTRY") == "26" ]]
+}
+
+@test "autotune: profile_save without v4 args leaves kv/ngl/prefill untouched" {
+    local llm_root="$TAC_TEST_TMPDIR/autotune-v4-legacy-save"
+    mkdir -p "$llm_root/.llm"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+        '8|Legacy|legacy.gguf|1.0G|Q4_K_M/q8_0|llama|16|4096|4|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
+    LLM_REGISTRY="$llm_root/.llm/models.conf"
+    __llm_autotune_profile_save 8 "native" 8192 1024 256 1 256 30.0
+    local kv gpu prefill
+    IFS='|' read -r _ _ _ _ kv _ gpu _ _ _ _ _ _ _ _ _ _ _ _ _ prefill _ _ _ _ _ <<< "$(awk -F'|' '$1==8' "$LLM_REGISTRY")"
+    [[ "$kv" == "Q4_K_M/q8_0" ]]      # kv quant untouched
+    [[ "$gpu" == "16" ]]              # gpu_layers untouched
+    [[ -z "$prefill" ]]               # prefill empty (not provided)
+}
+
+@test "autotune: autotune-model.sh has filled-cache scoring and timings parsing" {
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" == *"gen_fill_payload"* ]]
+    [[ "$src" == *"predicted_per_second"* ]]
+    [[ "$src" == *"prompt_per_second"* ]]
+    [[ "$src" == *"Phase 4: filled-cache TPS floor recovery"* ]]
+    [[ "$src" == *"LLM_MIN_TPS"* ]]
+}
+
+@test "autotune: autotune-model.sh has beam search, band sweeps, and profile 2" {
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" == *"beam search"* ]]
+    [[ "$src" == *"n_gpu_layers sweep"* ]]
+    [[ "$src" == *"KV-quant sweep"* ]]
+    [[ "$src" == *"profile 2"* ]]
+    [[ "$src" == *"probe_upward"* ]]
+}
+
+@test "autotune: env.sh defines the v4 knobs" {
+    grep -q 'LLM_AUTOTUNE_FILL_RATIO' "$REPO_ROOT/env.sh"
+    grep -q 'LLM_AUTOTUNE_FILL_MAX_TOKENS' "$REPO_ROOT/env.sh"
+    grep -q 'LLM_MIN_PREFILL_TPS' "$REPO_ROOT/env.sh"
+    grep -q 'LLM_AUTOTUNE_KV_QUANTS' "$REPO_ROOT/env.sh"
+}
+
+@test "autotune: model use launch reads KV types from quant_cache (field 5)" {
+    local src
+    src=$(< "$REPO_ROOT/scripts/11e-llm-model.sh")
+    [[ "$src" == *'--cache-type-k" "${LLAMA_CACHE_TYPE_K:-${row_kv_k:-q8_0}}"'* ]]
+    [[ "$src" == *'--cache-type-v" "${LLAMA_CACHE_TYPE_V:-${row_kv_v:-q8_0}}"'* ]]
+}
+
+@test "autotune: registry writers emit the v4 26-column header" {
+    grep -q 'in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill' "$REPO_ROOT/scripts/11b-llm-autotune.sh"
+    grep -q 'in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill' "$REPO_ROOT/scripts/11a-llm-registry.sh"
+    grep -q 'in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill' "$REPO_ROOT/scripts/11e-llm-model.sh"
 }
 
 # end of file

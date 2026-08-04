@@ -1,41 +1,57 @@
-# Model Autotune — Functional Specification v3
+# Model Autotune — Functional Specification v4
 
 ### Purpose
-For each untuned GGUF model on this machine (RTX 3050 4GB, WSL2 Ubuntu, NTFS mount), discover the model's capabilities on our hardware: the **highest context size that sustains the minimum acceptable TPS** (`LLM_MIN_TPS`, default **10**, uniform for every model), plus the best batch configuration. Discovery is done through real testing — no VRAM estimates, no hardcoded ceilings, no assumptions about what should or shouldn't fit.
+For each untuned GGUF model on this machine (RTX 3050 4GB, WSL2 Ubuntu, NTFS mount), discover the model's capabilities on our hardware: the **highest context size that sustains the minimum acceptable decode TPS** (`LLM_MIN_TPS`, default **10**, uniform for every model) — certified at a **filled KV cache** — plus the best batch configuration, and a second **max-TPS profile** for interactive flows. Discovery is done through real testing — no VRAM estimates, no hardcoded ceilings, no assumptions about what should or shouldn't fit.
 
 The goal is honest capability profiling. A model that sustains the floor gets its maximum usable ctx recorded. A model that cannot reach the floor even at the smallest ctx is recorded as **too slow for our purposes** — its fastest (best-effort) config and true TPS are still saved so the registry reflects what the hardware can actually deliver.
+
+v4 changes over v3: the TPS floor is certified at a **filled KV cache** (a long prompt pre-fills the context before decode is measured, so the recorded TPS is sustained throughput at the certified ctx, not a burst on an empty cache); **prefill tokens/sec** is captured from the server timings and persisted; a **beam search** over batch/ubatch replaces the fixed ubatch list; models in the "almost fits" band get an **n_gpu_layers and KV-quant sweep** (partial offload / q4_0 KV can beat the 999-or-0 binary); a second **max-TPS profile** is persisted per model (registry schema extended to 26 columns).
 
 ---
 
 ### Inputs
 - **Model number** (1-39), resolved through the registry at `~/.llm/models.conf`
-- **Registry schema** (pipe-delimited, 20 fields):
+- **Registry schema** (pipe-delimited, 26 fields, v4):
   ```
-  num|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram
+  num|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill
   ```
-- **`LLM_MIN_TPS`** env var (default **10**, uniform for every model) — minimum acceptable tokens/second, exported in `env.sh`. This is the single source of truth shared by `scripts/autotune-model.sh` (the live mechanism) and `bin/model-autotune.py`. Autotune seeks the highest ctx that sustains this TPS; a ctx that generates below it is treated as swapping/too-slow and autotune downshifts to a smaller ctx to recover TPS (see Phase 4).
+  Columns 1-20 are unchanged from v3. Column 21 (`prefill_tps`) is profile 1's
+  prompt-eval throughput; columns 22-26 (`p2_*`) are profile 2, the max-decode-
+  TPS config for interactive flows. Legacy 20-column registries are accepted by
+  every reader and padded to 26 columns by every writer (first autotune save
+  converges the file).
+- **`LLM_MIN_TPS`** env var (default **10**, uniform for every model) — minimum acceptable tokens/second, exported in `env.sh`. This is the single source of truth shared by `scripts/autotune-model.sh` (the live mechanism) and `bin/model-autotune.py`. Autotune seeks the highest ctx that sustains this TPS at a filled cache; a ctx that generates below it is treated as swapping/too-slow and autotune downshifts to a smaller ctx to recover TPS (see Phase 4).
 
   **Why 10:** TPS is a speed metric and does not change a model's accuracy directly — accuracy is governed by the model, quant, and whether ctx is large enough for the flow. The floor only affects accuracy *indirectly*, by capping ctx (a higher floor forces a smaller ctx). 10 TPS is fast enough for agentic/interactive flows (~faster than reading speed) yet low enough that the 3–4B models — the sweet spot on a 4 GB GPU — keep ample ctx for context-heavy flows. A 20 TPS floor would starve ctx on those models (accuracy cost); 5 TPS is fine for batch flows but sluggish interactively. The autotuned profiles feed a separate quality benchmark (in the investigator repo) that picks the best model per flow, so each model is profiled at its maximum usable ctx for a fair accuracy comparison.
 
 ---
 
 ### Outputs
-- Winning config (ctx, batch, ubatch) + measured TPS written back to the registry via `__llm_autotune_profile_save`
+- Winning config (ctx, batch, ubatch, ngl, KV quant) + measured decode and prefill TPS written back to the registry via `__llm_autotune_profile_save`
 - Registry fields updated:
-  - Field 8 (ctx) → winning context size (the highest that sustains `LLM_MIN_TPS`, or the fastest best-effort ctx if the floor is unreachable)
+  - Field 5 (quant_cache) → `QUANT/type-k/type-v` (KV cache quantization that won, if the sweep ran)
+  - Field 7 (gpu_layers) → ngl that won the band sweep (else unchanged)
+  - Field 8 (ctx) → winning context size (the highest that sustains `LLM_MIN_TPS` at a filled cache, or the fastest best-effort ctx if the floor is unreachable)
   - Field 10 (batch) → winning batch size
   - Field 11 (ubatch) → winning ubatch size
-  - Field 17 (tps) → measured tokens/second (the honest usability signal)
+  - Field 17 (tps) → measured decode tokens/second (filled-cache; the honest usability signal)
   - Field 18 (autotuned) → `yes` (means "this model has been profiled")
+  - Field 21 (prefill_tps) → prompt-eval tokens/second at the winning config
+  - Fields 22-26 (`p2_*`) → profile 2: the config with the highest decode TPS (interactive flows), with its certified TPS and prefill
 
 **Reading the result:** `autotuned=yes` means the model was measured, not that it is fast. Compare field 17 (tps) against `LLM_MIN_TPS`:
-- `tps >= LLM_MIN_TPS` → usable; field 8 is the maximum ctx that sustains the floor.
+- `tps >= LLM_MIN_TPS` → usable; field 8 is the maximum ctx that sustains the floor at a filled cache.
 - `tps <  LLM_MIN_TPS` → too slow for our purposes even at min ctx; field 8/17 are the fastest config the hardware can deliver. Such models are not re-tuned by `model autotune all` (they are already profiled); reset field 18 to `no` to force a re-tune.
 
 ---
 
 ### Benchmark Payload
-Pure text generation. **No `response_format` constraint** — `json_object` forces grammar-constrained generation that artificially limits throughput on non-JSON-trained models. This was the root cause of the "0 tokens" / low-TPS failures in batch-2.
+Two bench modes share the same pure-text generation payload (no `response_format` constraint — `json_object` forces grammar-constrained generation that artificially limits throughput on non-JSON-trained models; this was the root cause of the "0 tokens" / low-TPS failures in batch-2):
+
+- **Quick mode** (ctx discovery, beam search, sweeps): short prompt, `max_tokens: 256`. Verifies the config runs and gives a rough TPS signal cheaply.
+- **Filled mode** (Phase 4 + final certification): the prompt is a long synthetic text of `LLM_AUTOTUNE_FILL_RATIO` × ctx tokens (default 0.75, capped at `LLM_AUTOTUNE_FILL_MAX_TOKENS`=32768, floored at 2048; CPU-only models cap at 8192), `max_tokens: 256`. Pre-filling the KV cache measures decode under the cache pressure the recorded ctx actually produces — on a 4 GB card decode slows as the cache fills, so a short-prompt measurement overstates sustained throughput at the ctx being certified.
+
+Both modes parse the server `timings` block (`prompt_per_second`, `predicted_per_second`) for prefill and decode throughput, falling back to wall-clock when absent.
 
 ```
 {
@@ -136,26 +152,32 @@ for increment in [working, working/2, working/4, ...] while increment >= 512:
             c = c + increment
 ```
 
-### Phase 4 — TPS floor recovery (downshift ctx to recover TPS)
+### Phase 4 — Filled-cache TPS floor recovery (downshift ctx to recover TPS)
 
-Phases 1–2 maximise ctx, which on a 4 GB card can leave a model swapping at large
-context: high ctx, low TPS. Phase 4 enforces the floor. If the best config from
-Phases 1–2 is below `LLM_MIN_TPS`, ctx is stepped **down** (a smaller KV cache
-raises TPS) until the floor is met or the minimum ctx (4096) is reached:
+Phases 1–2 and the search maximise ctx, which on a 4 GB card can leave a model
+swapping at large context: high ctx, low TPS. Phase 4 enforces the floor at a
+**filled KV cache** — each candidate ctx is benched with a long prompt (see
+Benchmark Payload) so the floor certifies sustained decode speed under the cache
+pressure that ctx produces, not a burst on an empty cache. If the best config is
+below the floor (decode TPS, or the optional `LLM_MIN_PREFILL_TPS` prefill floor
+when set > 0), ctx is stepped **down** (a smaller KV cache raises TPS) until the
+floor is met or the minimum ctx (4096) is reached:
 
 ```
-if best_tps < MIN_TPS:
+if best_tps < floor (decode) or prefill < LLM_MIN_PREFILL_TPS:
     cursor = best_ctx
-    while best_tps < MIN_TPS and cursor > 4096:
+    while best_tps < floor and cursor > 4096:
         cursor = max(4096, floor_to_512(cursor * 0.75))
-        tps = bench(cursor)
-        if tps valid: best_ctx, best_tps = cursor, tps
+        decode, prefill = filled_bench(cursor)
+        if valid: best_ctx, best_tps, best_prefill = cursor, decode, prefill
 ```
 
 Because the descent runs top-down, the **first** ctx that meets the floor is the
 highest ctx that sustains it — exactly the capability we record. A model still
 below the floor at 4096 cannot reach it on this hardware; its fastest
-(best-effort) config and true TPS are saved and it is reported as too slow.
+(best-effort) config and true TPS are saved and it is reported as too slow. The
+winning config is then double-sampled (median of 2 filled benches) for the
+recorded decode and prefill numbers.
 
 ### Success metric — lexicographic capability
 
@@ -197,7 +219,46 @@ Different batch/ubatch sizes affect throughput and VRAM usage. Combos are select
 
 Each combo runs a full independent Phase 1 + Phase 2 probe. The global best across all combos wins by the success metric above (highest ctx sustaining the floor; best-effort max TPS otherwise).
 
----
+### Search — beam search over batch/ubatch at the winning ctx
+
+After the combo loop, a **beam search** (live-path port of the richer Phase 3 in
+`bin/model-autotune.py`) refines batch/ubatch at the discovered ctx. It evaluates
+a small anchor set, then expands ±1-step neighbors of the top-`LLM_AUTOTUNE_BEAM_WIDTH`
+performers (ranked floor-first, then TPS) for `LLM_AUTOTUNE_BEAM_ROUNDS` rounds —
+all quick single-sample benches, ctx-gated (batch > 1024 needs ctx ≥ 8192,
+batch > 1536 needs ctx ≥ 16384, ubatch ≤ batch). The winning combo gets a bounded
+ctx re-climb (`probe_upward`: confirm + up to 2 ×1.5 steps + one binary probe),
+because a smaller ubatch reduces peak VRAM and can extend the ctx ceiling.
+
+### Search — n_gpu_layers / KV-quant sweep (the "almost fits" band)
+
+`__calc_gpu_layers` (11d-llm-gpu.sh) is a 999-or-0 binary: models slightly too
+big for full offload fall to CPU-only. For models whose GGUF is at least
+`LLM_AUTOTUNE_NGL_BAND_FRAC` (default 0.55) of free VRAM, autotune probes:
+
+- **ngl candidates**: 999 (runtime max offload) and half the model's layers,
+  minus whatever the registry already uses. Partial offload can beat pure CPU
+  on borderline models, and freeing weight VRAM leaves more room for KV cache.
+- **KV-quant candidates**: `LLM_AUTOTUNE_KV_QUANTS` (default `q8_0/q8_0 q4_0/q4_0`).
+  KV quantization is the biggest VRAM lever on a 4 GB card — q4_0 halves the
+  cache and can buy substantially more ctx at a small quality cost.
+
+Each candidate is probed at the winning ctx with a bounded re-climb; the
+lexicographic best across candidates wins and is persisted (ngl → field 7,
+KV quant → field 5 as `QUANT/type-k/type-v`). The `__model_use` launch path
+reads the KV types back from field 5 (env overrides still win).
+
+### Profiles — Pareto pair per model
+
+Every run persists **two** profiles:
+
+- **Profile 1 (max-ctx)** — the existing columns: highest ctx sustaining the
+  floor at a filled cache, with certified decode (field 17) and prefill
+  (field 21). Serves long-document / context-heavy flows.
+- **Profile 2 (max-TPS)** — fields 22-26: the config with the highest decode TPS
+  anywhere in the search (tiebreak higher ctx), certified with one filled bench.
+  Serves interactive flows where latency dominates. `model use` continues to
+  launch profile 1 by default; the two numbers let a caller pick per task.
 
 ### Server Configuration (llama-server)
 
@@ -207,13 +268,13 @@ Each combo runs a full independent Phase 1 + Phase 2 probe. The global best acro
 --ctx-size {ctx}
 --batch-size {batch} --ubatch-size {ubatch}
 --threads {nproc or registry threads}
---n-gpu-layers {from registry}
+--n-gpu-layers {registry ngl, or swept candidate}
 --parallel 1
 --fit off                       # projection bug in this build — explicit params only
 --flash-attn on
 --kv-offload
---cache-type-k q8_0
---no-mmap
+--cache-type-k {q8_0 or swept} --cache-type-v {q8_0 or swept}
+--no-mmap                       # only in the --mmap-failed fallback
 ```
 
 ---
@@ -366,4 +427,4 @@ complex with no current runtime impact. Deferred.
 
 ---
 
-*Spec written 2026-06-06. Updated 2026-07-22 (v3: uniform `LLM_MIN_TPS=10` floor, lexicographic success metric, Phase 4 downshift-to-recover, honest capability profiling, load_fail/unsupported model classification & early abort). Corresponding code in `~/ubuntu-console/scripts/autotune-model.sh` and `~/ubuntu-console/scripts/run-autotune-batch.sh`.*
+*Spec written 2026-06-06. Updated 2026-08-04 (v4: filled-cache floor certification, prefill throughput, beam search, ngl/KV-quant band sweep, Pareto profile 2, 26-column registry). Corresponding code in `~/ubuntu-console/scripts/autotune-model.sh` and `~/ubuntu-console/scripts/run-autotune-batch.sh`.*

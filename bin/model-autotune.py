@@ -222,9 +222,11 @@ def load_registry_row(row: int) -> dict | None:
             continue
         parts = line.split("|")
         if parts[0].strip() == str(row):
-            if len(parts) != 20:
+            # v4 schema has 26 columns; legacy rows with 20 are accepted and
+            # the new profile-2 / prefill columns default to empty.
+            if len(parts) not in (20, 26):
                 raise RuntimeError(
-                    f"Invalid registry schema in row {row}: expected 20 columns, got {len(parts)}"
+                    f"Invalid registry schema in row {row}: expected 20 or 26 columns, got {len(parts)}"
                 )
 
             def _get(idx: int, default: str = "") -> str:
@@ -241,6 +243,10 @@ def load_registry_row(row: int) -> dict | None:
                 "autotuned": _get(17, "no"),
                 "is_default": _get(18, "no"),
                 "in_vram": _get(19, "no"),
+                "prefill_tps": _get(20, ""),
+                "p2_ctx": _get(21, ""), "p2_batch": _get(22, ""),
+                "p2_ubatch": _get(23, ""), "p2_tps": _get(24, ""),
+                "p2_prefill": _get(25, ""),
             }
     return None
 
@@ -253,6 +259,8 @@ def write_registry_row(row: int, updates: dict) -> None:
         "ctx": 7, "batch": 9, "ubatch": 10, "parallel": 11,
         "fit_target_mb": 12, "backend": 13, "mmap_mode": 14,
         "flash_attn": 15, "tps": 16, "autotuned": 17,
+        "prefill_tps": 20, "p2_ctx": 21, "p2_batch": 22,
+        "p2_ubatch": 23, "p2_tps": 24, "p2_prefill": 25,
     }
     for line in lines:
         stripped = line.strip()
@@ -261,15 +269,19 @@ def write_registry_row(row: int, updates: dict) -> None:
             continue
         parts = line.split("|")
         if parts[0].strip() == str(row):
-            if len(parts) != 20:
+            if len(parts) not in (20, 26):
                 raise RuntimeError(
-                    f"Invalid registry schema in row {row}: expected 20 columns, got {len(parts)}"
+                    f"Invalid registry schema in row {row}: expected 20 or 26 columns, got {len(parts)}"
                 )
 
             for key, value in updates.items():
                 idx = field_map.get(key)
                 if idx is not None and idx < len(parts):
                     parts[idx] = str(value)
+            # Pad legacy 20-column rows to the v4 26-column schema so the
+            # registry converges on the extended header.
+            while len(parts) < 26:
+                parts.append("")
             new_lines.append("|".join(parts))
         else:
             new_lines.append(line)

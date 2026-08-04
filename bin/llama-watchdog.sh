@@ -174,7 +174,7 @@ then
     exit 1
 fi
 
-IFS='|' read -r _num name file size _quant_cache _arch gpu_layers ctx threads _batch _ubatch _parallel _fit _backend _mmap_mode _tps _autotuned _is_default _in_vram <<< "$entry"
+IFS='|' read -r _num name file size _quant_cache _arch gpu_layers ctx threads _batch _ubatch _parallel _fit _backend _mmap_mode _tps _autotuned _is_default _in_vram _prefill _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill <<< "$entry"
 model_path="$LLAMA_MODEL_DIR/$file"
 
 if [[ ! -f "$model_path" ]]

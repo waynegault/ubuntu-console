@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -11,10 +11,11 @@
 # Interleaves a VRAM-aware drain between each model to prevent OOM cascade.
 # Estimates total run time and reports progress.
 #
-# Timing estimate per model (RTX 3050 4GB, WSL2 NTFS mount):
-#   <2GB models:  ~15-25 min (8 ctx × 2-3 combos × 20-60s each)
-#   >=2GB models: ~10-20 min (8 ctx × 1 combo × 45-60s each)
-#   39 models total:  roughly 8-14 hours
+# Timing estimate per model (RTX 3050 4GB, WSL2 NTFS mount, autotune v4):
+#   quick: ctx discovery + beam search + filled-cache certification
+#   <2GB models:  ~20-30 min (8 ctx × 2-3 combos + beam + cert)
+#   >=2GB models: ~30-50 min (1 combo + beam + ngl/KV sweep + filled cert)
+#   39 models total:  roughly 10-20 hours
 #===============================================================================
 
 set -uo pipefail

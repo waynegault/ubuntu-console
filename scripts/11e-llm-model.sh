@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -57,7 +57,7 @@ function __model_scan() {
         mkdir -p "$_scan_backup_dir"
         cp "$LLM_REGISTRY" "$_scan_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S).pre-scan"
     fi
-    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram" > "$tmpconf"
+    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill" > "$tmpconf"
 
     local num=0
     __tac_info "Reading" "files from $LLAMA_MODEL_DIR..." "$C_Dim"
@@ -105,12 +105,12 @@ function __model_scan() {
             prev_row=$(awk -F'|' -v f="$fname" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
             if [[ -n "$prev_row" ]]
             then
-                IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_flash_attn prev_tps prev_autotuned prev_default prev_active <<< "$prev_row"
+                IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_flash_attn prev_tps prev_autotuned prev_default prev_active prev_prefill prev_p2_ctx prev_p2_batch prev_p2_ubatch prev_p2_tps prev_p2_prefill <<< "$prev_row"
                 [[ -z "${prev_flash_attn:-}" ]] && prev_flash_attn="on"
             fi
         fi
 
-        local quant_cache="${quant}/${LLAMA_CACHE_TYPE_K:-q8_0}"
+        local quant_cache="${quant}/${LLAMA_CACHE_TYPE_K:-q8_0}/${LLAMA_CACHE_TYPE_V:-q8_0}"
 
         # Preserve autotuned ctx: use prev_ctx instead of fresh calc when autotuned
         local _final_ctx="$ctx"
@@ -120,6 +120,7 @@ function __model_scan() {
         fi
         local _reg_line="${num}|${_mname:-$fname}|${fname}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}|${_final_ctx}|${threads}"
         _reg_line+="|${prev_batch}|${prev_ubatch}|${prev_parallel}|${prev_fit}|${prev_backend}|${prev_mmap}|${prev_flash_attn}|${prev_tps}|${prev_autotuned}|${prev_default}|${prev_active}"
+        _reg_line+="|${prev_prefill}|${prev_p2_ctx}|${prev_p2_batch}|${prev_p2_ubatch}|${prev_p2_tps}|${prev_p2_prefill}"
         echo "$_reg_line" >> "$tmpconf"
 
         # Progress: not printing each model individually
@@ -212,7 +213,7 @@ function __model_scan() {
             # until the final mv.
             local clean_tmp="${LLM_REGISTRY}.renum.$$"
             local new_num=0
-            echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram" > "$clean_tmp"
+            echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill" > "$clean_tmp"
             local _cline
             while IFS= read -r _cline
             do
@@ -272,7 +273,7 @@ function __model_list() {
     then
         printf '{\n  "models": [\n'
         local first=1
-        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local quant_rating="unknown"
@@ -305,7 +306,7 @@ function __model_list() {
 
     if [[ "$output_mode" == "plain" ]]
     then
-        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local status="idle"
@@ -326,8 +327,8 @@ function __model_list() {
     _list_rule="${_list_rule// /${BOX_SL}}"
     printf "${C_Dim}  %s${C_Reset}\n" "$_list_rule"
 
-    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
-    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         local quant_rating="unknown"
@@ -476,7 +477,7 @@ function __model_use_resolve_model() {
 
     # These variables are shared with caller via dynamic scope —
     # declared as `local` in __model_use, assigned here.
-    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram <<< "$entry"
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram row_prefill row_p2_ctx row_p2_batch row_p2_ubatch row_p2_tps row_p2_prefill <<< "$entry"
 
     # Allow context size override via TAC_CTX_SIZE environment variable
     # (set by `serve --ctx-size N` or `model use N --ctx-size N`)
@@ -703,6 +704,20 @@ function __model_use_configure_params() {
     fi
 
     type_k_val=$(__llm_type_k_value)
+
+    # KV cache quantization from the registry row (field 5, "QUANT/type-k/type-v").
+    # Env overrides (LLAMA_CACHE_TYPE_K/V) still win at launch; the row value is
+    # the autotune-discovered default. Legacy rows store "QUANT/type-k" — the
+    # missing type-v defaults to q8_0, matching the previous launch behavior.
+    row_kv_k="q8_0"; row_kv_v="q8_0"
+    if [[ "${quant_cache:-}" == */* ]]
+    then
+        local _qc_rest="${quant_cache#*/}"
+        row_kv_k="${_qc_rest%%/*}"
+        [[ "$_qc_rest" == */* ]] && row_kv_v="${_qc_rest#*/}"
+    fi
+    [[ -n "$row_kv_k" ]] || row_kv_k="q8_0"
+    [[ -n "$row_kv_v" ]] || row_kv_v="q8_0"
 }
 
 # ---------------------------------------------------------------------------
@@ -752,7 +767,8 @@ function __model_use_build_command() {
         cmd+=("--flash-attn" "$flash_attn_mode")
         cmd+=("--jinja")
         cmd+=("$kv_offload_flag")
-        cmd+=("--cache-type-k" "${LLAMA_CACHE_TYPE_K:-q8_0}")
+        cmd+=("--cache-type-k" "${LLAMA_CACHE_TYPE_K:-${row_kv_k:-q8_0}}")
+        cmd+=("--cache-type-v" "${LLAMA_CACHE_TYPE_V:-${row_kv_v:-q8_0}}")
         cmd+=("--parallel" "$parallel_slots")
     else
         cmd=("$python_bin" "-m" "$LLM_SERVER_MODULE")
@@ -1016,6 +1032,7 @@ function __model_use() {
     local target num name file size quant_cache arch gpu_layers
     local ctx threads batch_size ubatch_size parallel_slots fit_target_mb
     local row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram
+    local row_kv_k row_kv_v
     local model_path model_bytes quant_rating llm_backend python_bin
     local smi_cmd free_vram_mb type_k_val use_no_mmap
     local cmd model_shell_pid
@@ -1275,7 +1292,7 @@ function __model_info() {
         return 1
     fi
     local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
-    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram <<< "$entry"
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill <<< "$entry"
     local quant_rating="unknown"
     quant_rating=$(__llm_quant_rating "$file")
 
@@ -1594,7 +1611,7 @@ function __model_bench() {
         return 0
     }
     local num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _flash_attn _tps _autotuned _is_default _in_vram
-    while IFS='|' read -r num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _flash_attn _tps _autotuned _is_default _in_vram
+    while IFS='|' read -r num name file size _quant_cache _arch gpu_layers _ctx _threads _batch _ubatch _parallel _fit _backend _mmap _flash_attn _tps _autotuned _is_default _in_vram _prefill _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         [[ ! -f "$LLAMA_MODEL_DIR/$file" ]] && continue
@@ -2145,7 +2162,12 @@ function __model_doctor() {
         registry_exists=1
         local header_line
         header_line=$(head -1 "$LLM_REGISTRY" 2>/dev/null)
-        [[ "$header_line" == "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram" ]] && header_ok=1
+        # Accept both the v4 26-column header and the legacy 20-column header.
+        if [[ "$header_line" == "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill" ]] \
+            || [[ "$header_line" == "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram" ]]
+        then
+            header_ok=1
+        fi
 
         local expected_num=1
         local num _name file _rest
@@ -2295,8 +2317,8 @@ function __model_recommend() {
     fi
 
     local -a ranked=()
-    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
-    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         [[ -f "$LLAMA_MODEL_DIR/$file" ]] || continue

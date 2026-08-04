@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -140,8 +140,15 @@ function __llm_autotune_done_for_model() {
 
 # ---------------------------------------------------------------------------
 # __llm_autotune_profile_save — Persist latest winning autotune as defaults.
-# New signature:
-#   __llm_autotune_profile_save <model> <backend> <ctx> <batch> <ubatch> <parallel> <fit> <tps> [stamp]
+# New signature (26-column registry, schema v4):
+#   __llm_autotune_profile_save <model> <backend> <ctx> <batch> <ubatch>
+#       <parallel> <fit> <tps> [stamp] [prefill_tps] [p2_ctx] [p2_batch]
+#       [p2_ubatch] [p2_tps] [p2_prefill] [kv_quant] [ngl]
+#   Profile 1 (existing columns) = max-ctx config; prefill_tps (col 21) is its
+#   prompt-eval throughput. Profile 2 (cols 22-26) = max-decode-TPS config for
+#   interactive flows. kv_quant (col 5, "QUANT/type-k/type-v") and ngl (col 7)
+#   are only written when explicitly provided — legacy callers that omit them
+#   leave those fields untouched.
 # @returns 0 on success, 1 on validation/write failure.
 # ---------------------------------------------------------------------------
 function __llm_autotune_profile_save() {
@@ -153,6 +160,15 @@ function __llm_autotune_profile_save() {
     local parallel="${6:-}"
     local fit_target_mb="${7:-}"
     local tps="${8:-}"
+    local stamp="${9:-}"
+    local prefill_tps="${10:-}"
+    local p2_ctx="${11:-}"
+    local p2_batch="${12:-}"
+    local p2_ubatch="${13:-}"
+    local p2_tps="${14:-}"
+    local p2_prefill="${15:-}"
+    local kv_quant="${16:-}"
+    local ngl="${17:-}"
     local profile_file="$LLM_REGISTRY"
 
     [[ "$model_num" =~ ^[0-9]+$ ]] || return 1
@@ -163,11 +179,25 @@ function __llm_autotune_profile_save() {
     [[ "$fit_target_mb" =~ ^[0-9]+$ ]] || return 1
     [[ "$tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] || tps="0"
 
+    # Optional profile-2 / measurement fields — empty means "not provided":
+    # keep whatever the row already holds (or pad empty for legacy 20-col rows).
+    [[ "$stamp" =~ ^[0-9]+$ ]] || stamp=""
+    [[ "$prefill_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] || prefill_tps=""
+    [[ "$p2_ctx" =~ ^[0-9]+$ ]] || p2_ctx=""
+    [[ "$p2_batch" =~ ^[0-9]+$ ]] || p2_batch=""
+    [[ "$p2_ubatch" =~ ^[0-9]+$ ]] || p2_ubatch=""
+    [[ "$p2_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] || p2_tps=""
+    [[ "$p2_prefill" =~ ^[0-9]+(\.[0-9]+)?$ ]] || p2_prefill=""
+    kv_quant=$(__llm_autotune_sanitize_token "$kv_quant")
+    [[ "$ngl" =~ ^[0-9]+$ ]] || ngl=""
+
     [[ -f "$profile_file" ]] || return 1
 
     # Update the model row in-place via awk: fields 8 (ctx), 10 (batch),
     # 11 (ubatch), 12 (parallel), 13 (fit), 14 (backend), 16 (flash_attn),
-    # 17 (tps), 18 (autotuned).
+    # 17 (tps), 18 (autotuned); optional 5 (kv quant), 7 (ngl), 21-26
+    # (prefill + profile 2). Legacy 20-column rows are padded to 26 so the
+    # registry converges to the v4 schema on first save.
     # Auto-backup registry before mutating, so 3 days of tuning data
     # is never lost to a single command (model scan, machine reboot, etc.).
     local _backup_dir
@@ -193,11 +223,19 @@ function __llm_autotune_profile_save() {
         -v fit="$fit_target_mb" \
         -v backend="$backend" \
         -v tps_val="$tps" \
+        -v prefill_val="$prefill_tps" \
+        -v p2_ctx_val="$p2_ctx" \
+        -v p2_batch_val="$p2_batch" \
+        -v p2_ubatch_val="$p2_ubatch" \
+        -v p2_tps_val="$p2_tps" \
+        -v p2_prefill_val="$p2_prefill" \
+        -v kv_quant_val="$kv_quant" \
+        -v ngl_val="$ngl" \
         'BEGIN {
             OFS="|"
             # Emit header unconditionally so a headerless registry
             # does not self-perpetuate (same guard as sync_state).
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill"
         }
         $1 == "#" { next }
         {
@@ -206,7 +244,16 @@ function __llm_autotune_profile_save() {
                 $13 = fit; $14 = backend
                 if ($16 == "") $16 = "on"
                 $17 = tps_val; $18 = "yes"
+                if (kv_quant_val != "") $5 = kv_quant_val
+                if (ngl_val != "") $7 = ngl_val
+                if (prefill_val != "") $21 = prefill_val
+                if (p2_ctx_val != "") {
+                    $22 = p2_ctx_val; $23 = p2_batch_val; $24 = p2_ubatch_val
+                    $25 = p2_tps_val; $26 = p2_prefill_val
+                }
             }
+            # Pad legacy 20-column rows to the v4 26-column schema.
+            if (NF == 20) { for (i = 21; i <= 26; i++) $i = "" }
             print
         }' "$profile_file" > "${profile_file}.tmp"
 
@@ -502,27 +549,32 @@ function __llm_autotune_profiles_remap_by_registry() {
             # Always emit the canonical header so a headerless input
             # registry does not self-perpetuate (same guard as in
             # __llm_registry_sync_state).
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram"
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill"
         }
         FNR == NR {
-            if ($1 != "#" && NF == 20) {
+            if ($1 != "#" && (NF == 20 || NF == 26)) {
                 key=$3
                 old_ctx[key]=$8; old_thr[key]=$9; old_batch[key]=$10; old_ub[key]=$11
                 old_par[key]=$12; old_fit[key]=$13; old_be[key]=$14
                 old_mm[key]=$15; old_fa[key]=$16; old_tps[key]=$17; old_done[key]=$18
+                old_pf[key]=$21; old_p2c[key]=$22; old_p2b[key]=$23; old_p2u[key]=$24
+                old_p2t[key]=$25; old_p2pf[key]=$26
             }
             next
         }
         {
-            if ($1 == "#" || NF != 20) { next }
+            if ($1 == "#" || (NF != 20 && NF != 26)) { next }
             key=$3
             if (key in old_ctx) {
                 $8=old_ctx[key]; $9=old_thr[key]; $10=old_batch[key]; $11=old_ub[key]
                 $12=old_par[key]; $13=old_fit[key]; $14=old_be[key]; $15=old_mm[key];
                 $16=old_fa[key]; $17=old_tps[key]; $18=old_done[key]
+                $21=old_pf[key]; $22=old_p2c[key]; $23=old_p2b[key]; $24=old_p2u[key]
+                $25=old_p2t[key]; $26=old_p2pf[key]
             }
             if ($16 == "") $16="on"
-            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
+            if (NF == 20) { for (i=21; i<=26; i++) $i="" }
+            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26
         }
     ' "$old_registry" "$new_registry" > "${new_registry}.tmp" || return 1
 
