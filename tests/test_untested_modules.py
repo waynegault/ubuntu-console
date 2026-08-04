@@ -132,6 +132,16 @@ class TestLifeIndex(unittest.TestCase):
         self.assertEqual(index["records"], [])
         self.assertEqual(index["aliases"], {})
 
+    def test_load_life_index_canonical_from_custom_root(self):
+        # canonical-concepts.json is resolved from the passed root, not the
+        # default ~/.openclaw/life — a custom root must not leak the host's
+        # canonical concepts into the index.
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, "canonical-concepts.json"), "w") as f:
+                json.dump({"records": [{"slug": "alpha", "title": "Alpha", "type": "project"}]}, f)
+            index = kgraph.load_life_index(td)
+            self.assertEqual([r["slug"] for r in index["records"]], ["alpha"])
+
     def test_load_relations_missing_file(self):
         rels = kgraph.load_relations("/tmp/nonexistent-life-dir")
         self.assertEqual(rels["relations"], [])

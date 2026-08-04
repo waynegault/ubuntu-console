@@ -14,7 +14,6 @@ import re
 from pathlib import Path
 
 from .constants import (
-    CANONICAL_CONCEPTS_DEFAULT,
     LIFE_ROOT_DEFAULT,
     load_canonical_data,
     normalize_canonical_name,
@@ -39,7 +38,7 @@ def load_life_index(life_root: str | None = None) -> dict:
         "records": [],
     }
 
-    canonical_json = os.path.expanduser(CANONICAL_CONCEPTS_DEFAULT)
+    canonical_json = os.path.join(root, "canonical-concepts.json")
     if os.path.isfile(canonical_json):
         try:
             payload = (
