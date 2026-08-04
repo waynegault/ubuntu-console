@@ -678,7 +678,17 @@ function __oc_apply_secret_refs() {
 
     for _aentry in "${_auth_map[@]}"
     do
-        IFS='::' read -r _profile_id _provider _cred_type _env_var <<< "$_aentry"
+        # Format: <profile-id>:<provider>::<cred-type>::<env-var>
+        # IFS cannot split on multi-char '::', so parse with a regex.
+        if [[ "$_aentry" =~ ^([^:]+):([^:]+)::([^:]+)::(.+)$ ]]; then
+            _profile_id="${BASH_REMATCH[1]}"
+            _provider="${BASH_REMATCH[2]}"
+            _cred_type="${BASH_REMATCH[3]}"
+            _env_var="${BASH_REMATCH[4]}"
+        else
+            _auth_failed=$((_auth_failed + 1))
+            continue
+        fi
         if [[ -z "${!_env_var:-}" ]]
         then
             _auth_skipped=$((_auth_skipped + 1))
@@ -699,14 +709,26 @@ print(json.dumps(ref))
         [[ -z "$_ref_json" ]] && { _auth_failed=$((_auth_failed+1)); continue; }
 
         # Apply to every existing agent SQLite database
-        local _agent_dir _updated_at
-        _updated_at=$(date +%s%3N 2>/dev/null || echo 0)
+        local _agent_dir
         for _agent_dir in "$_agents_root"/*/agent; do
             local _db="$_agent_dir/openclaw-agent.sqlite"
             [[ -f "$_db" ]] || continue
-            if sqlite3 "$_db" \
-                "INSERT OR REPLACE INTO auth_profile_store (store_key, store_json, updated_at) VALUES ('primary', '$(printf '%s' "$_ref_json" | sed "s/'/''/g")', $_updated_at);" \
-                2>/dev/null
+            # Merge the profile into the existing 'primary' store row instead of
+            # REPLACE-ing it, otherwise each profile write clobbers the previous.
+            if python3 - "$_db" "$_ref_json" <<'PYEOF' 2>/dev/null
+import json, sqlite3, sys, time
+db, ref_json = sys.argv[1], sys.argv[2]
+con = sqlite3.connect(db, timeout=8.0)
+row = con.execute("SELECT store_json FROM auth_profile_store WHERE store_key='primary'").fetchone()
+store = json.loads(row[0]) if row else {"version": 1, "profiles": {}}
+store.setdefault("profiles", {}).update(json.loads(ref_json).get("profiles", {}))
+con.execute(
+    "INSERT OR REPLACE INTO auth_profile_store (store_key, store_json, updated_at) VALUES ('primary', ?, ?)",
+    (json.dumps(store), int(time.time() * 1000)),
+)
+con.commit()
+con.close()
+PYEOF
             then
                 _auth_applied=$((_auth_applied + 1))
             else
@@ -889,6 +911,8 @@ function oc-refresh-keys() {
     if command -v openclaw >/dev/null 2>&1 && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null; then
         if openclaw gateway restart >/dev/null 2>&1; then
             __tac_info "Gateway" "[restarted to pick up refreshed env]" "$C_Success"
+        elif systemctl --user reset-failed openclaw-gateway.service >/dev/null 2>&1 && systemctl --user start openclaw-gateway.service >/dev/null 2>&1; then
+            __tac_info "Gateway" "[restart command failed; recovered via systemctl reset-failed+start]" "$C_Warning"
         else
             __tac_info "Gateway" "[restart failed — run 'so' to apply env changes]" "$C_Warning"
         fi
