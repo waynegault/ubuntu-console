@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -142,15 +142,20 @@ START_CTX=$(( (START_CTX / 1024) * 1024 ))
 [[ $START_CTX -lt $MIN_CTX ]] && START_CTX=$MIN_CTX
 [[ $START_CTX -gt 4194304 ]] && START_CTX=4194304
 
-# Cap START_CTX by native training context to avoid probing into RoPE-extended
-# territory where KV-cache load times explode and generation quality is unknown.
-# Multiplier: 4× for <2 GB models (VRAM headroom), 2× for ≥2 GB (tight VRAM).
+# Cap every ctx probe by native training context to avoid probing into
+# RoPE-extended territory where KV-cache load times explode and generation
+# quality is unknown. Multiplier: 4× for <2 GB models (VRAM headroom), 2× for
+# ≥2 GB (tight VRAM). MAX_CTX is a hard ceiling that every climb below must
+# respect — previously only START_CTX was capped, so Phase-2 climbs could
+# balloon to millions of tokens and record unusable profiles.
+MAX_CTX=$START_CTX
 if [[ -n "${_native_ctx:-}" ]] && [[ "$_native_ctx" =~ ^[0-9]+$ ]] && [[ $_native_ctx -gt 0 ]]; then
     _mult=4
     [[ $MODEL_MB -ge 2000 ]] && _mult=2
-    _ceiling=$(( _native_ctx * _mult ))
-    [[ $START_CTX -gt $_ceiling ]] && START_CTX=$_ceiling
+    MAX_CTX=$(( _native_ctx * _mult ))
+    [[ $START_CTX -gt $MAX_CTX ]] && START_CTX=$MAX_CTX
 fi
+[[ $MAX_CTX -gt 4194304 ]] && MAX_CTX=4194304
 
 # Comma-format numbers (standalone helpers — no outer-scope capture)
 fmt() { printf "%'d" "$1"; }
@@ -559,7 +564,8 @@ probe_upward() {
     _lo=$_pc
     while [[ $_steps -lt 2 ]]; do
         _steps=$((_steps + 1))
-        _pc=$(( _lo * 3 / 2 ))
+        _pc=$(( _lo * 3 / 2 )); [[ $_pc -gt $MAX_CTX ]] && _pc=$MAX_CTX
+        [[ $_pc -eq $_lo ]] && break
         _tps=$(bench_ctx "$_pc" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || { _hi=$_pc; break; }
         _lo=$_pc; record_best "$_lo" "$_tps" "$_pb" "$_pu"
     done
@@ -605,9 +611,12 @@ for combo in "${COMBOS[@]}"; do
         found=true; ANY_OK=true; _ALL_LOAD_FAIL=false
         record_best "$c" "$tps" "$b" "$u"
 
-        # Phase 2: step up 50%, stop if TPS stable for 3 steps
-        lo=$c; hi=0; c=$((c * 3 / 2)); prev_tps=$tps; stable=0
+        # Phase 2: step up 50%, stop if TPS stable for 3 steps. The climb is
+        # clamped at MAX_CTX — probing past the native-ctx ceiling records
+        # RoPE-extended ctx values the machine cannot serve sanely.
+        lo=$c; hi=0; c=$((c * 3 / 2)); [[ $c -gt $MAX_CTX ]] && c=$MAX_CTX; prev_tps=$tps; stable=0
         while true; do
+            [[ $c -eq $lo ]] && break
             test_num=$((test_num + 1))
             bench_ctx "$c" "$b" "$u" 1 > /tmp/at-tps-$$; rc=$?
             tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
@@ -635,11 +644,11 @@ for combo in "${COMBOS[@]}"; do
             fi
             if [[ $stable -ge 3 ]]; then
                 echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps (TPS stable, stopping climb)"
-                hi=$((c * 3 / 2))
+                hi=$((c * 3 / 2)); [[ $hi -gt $MAX_CTX ]] && hi=$MAX_CTX
                 break
             fi
             echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps - climbing to $(fmt $((c*3/2)))"
-            c=$((c * 3 / 2))
+            c=$((c * 3 / 2)); [[ $c -gt $MAX_CTX ]] && c=$MAX_CTX
         done
 
         # If first step-up OOM'd and TPS was marginal (< 25), skip binary probe.
@@ -711,8 +720,9 @@ if [[ $ANY_OK == false ]]; then
             found=true; ANY_OK=true; _ALL_LOAD_FAIL=false; MMAP_FALLBACK_USED=1
             record_best "$c" "$tps" "$b" "$u"
             # Phase 2: step up, stop at first OOM (fallback path — keep it simple)
-            lo=$c; c=$((c * 3 / 2))
+            lo=$c; c=$((c * 3 / 2)); [[ $c -gt $MAX_CTX ]] && c=$MAX_CTX
             while true; do
+                [[ $c -eq $lo ]] && break
                 bench_ctx "$c" "$b" "$u" 1 "off" > /tmp/at-tps-$$; rc=$?
                 tps=$(cat /tmp/at-tps-$$ 2>/dev/null)
                 if [[ $rc -ne 0 ]]; then
@@ -723,7 +733,7 @@ if [[ $ANY_OK == false ]]; then
                 fi
                 lo=$c; record_best "$lo" "$tps" "$b" "$u"
                 echo "  ctx $(fmt "$c") - ${tps} tps - climbing to $(fmt $((c*3/2)))"
-                c=$((c * 3 / 2))
+                c=$((c * 3 / 2)); [[ $c -gt $MAX_CTX ]] && c=$MAX_CTX
             done
             break
         done
