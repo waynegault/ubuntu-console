@@ -750,6 +750,8 @@ function __oc_sync_gateway_env_file() {
 
     # 1. Sync gateway.systemd.env: merge bridged vars into the existing file,
     #    preserving any non-bridged entries (OPENCLAW_NO_AUTO_UPDATE, etc.).
+    #    Only rewrite (and signal a gateway restart) when content actually
+    #    changed — repeat refreshes with unchanged keys stay fast.
     local _tmp="$TAC_CACHE_DIR/gateway.env.$$"
     {
         # Keep non-bridged stanzas from the old file (OPENCLAW_NO_AUTO_UPDATE
@@ -771,8 +773,13 @@ function __oc_sync_gateway_env_file() {
             printf '%s=%s\n' "$_name" "${!_name:-}"
         done
     } > "$_tmp"
-    mv "$_tmp" "$_gw_env"
-    chmod 600 "$_gw_env" 2>/dev/null || true
+    if [[ -f "$_gw_env" ]] && cmp -s "$_tmp" "$_gw_env"; then
+        rm -f "$_tmp"
+    else
+        mv "$_tmp" "$_gw_env"
+        chmod 600 "$_gw_env" 2>/dev/null || true
+        _OC_GW_ENV_CHANGED=1
+    fi
 
     # 2. Update OPENCLAW_SERVICE_MANAGED_ENV_KEYS in the systemd unit so
     #    OpenClaw knows which env vars it can reload without a full restart.
@@ -780,8 +787,11 @@ function __oc_sync_gateway_env_file() {
         local _joined
         printf -v _joined '%s,' "${_var_names[@]}"
         _joined="${_joined%,}"
-        sed -i "s/^Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=.*/Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=$_joined/" "$_unit"
-        systemctl --user daemon-reload 2>/dev/null || true
+        if ! grep -q "^Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=$_joined$" "$_unit"; then
+            sed -i "s/^Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=.*/Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=$_joined/" "$_unit"
+            systemctl --user daemon-reload 2>/dev/null || true
+            _OC_GW_ENV_CHANGED=1
+        fi
     fi
 }
 
@@ -866,14 +876,15 @@ function oc-refresh-keys() {
     #    SecretRefs referenced by auth profiles in agent sqlite databases.
     #    Without this, `openclaw doctor` reports "secret reference was not
     #    found" because the gateway process lacks the env vars.
+    local _OC_GW_ENV_CHANGED=0
     __oc_sync_gateway_env_file "$cache"
 
     # 4. Sync OpenClaw SecretRefs to the refreshed env credentials
     __oc_apply_secret_refs
 
-    # 5. Restart the gateway if it's running so it picks up the refreshed
-    #    environment and MANAGED_ENV_KEYS.
-    if command -v openclaw >/dev/null 2>&1 && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null; then
+    # 5. Restart the gateway only if its env actually changed — repeated
+    #    refreshes with unchanged keys skip the (slow) restart cycle.
+    if (( _OC_GW_ENV_CHANGED == 1 )) && command -v openclaw >/dev/null 2>&1 && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null; then
         if openclaw gateway restart >/dev/null 2>&1; then
             __tac_info "Gateway" "[restarted to pick up refreshed env]" "$C_Success"
         elif systemctl --user reset-failed openclaw-gateway.service >/dev/null 2>&1 && systemctl --user start openclaw-gateway.service >/dev/null 2>&1; then
