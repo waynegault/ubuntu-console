@@ -667,11 +667,20 @@ function __oc_apply_secret_refs() {
     #   OLLAMA_API_KEY    →  ollama:default.keyRef
     #
     # These live in per-agent `openclaw-agent.sqlite` tables.
+    #
+    # Format: <profile-id>:<provider>::<cred-type>::<env-var>
+    # NOTE: the profile's `provider` field must equal the real provider id —
+    # the auth resolver matches profiles via cred.provider === providerId
+    # (listProfilesForProvider). Using "default" makes the keyRef invisible
+    # to resolution (deepseek auth then fails with "No API key found").
+    # github-copilot intentionally stays on "github" (non-matching, inert):
+    # agents use a distinct ghu_ OAuth token and pointing it at
+    # GITHUB_COPILOT_TOKEN would break auth (see openclaw-environment.md).
     # ================================================================
     local -a _auth_map=(
-        "deepseek:default::api_key::DEEPSEEK_API_KEY"
+        "deepseek:deepseek::api_key::DEEPSEEK_API_KEY"
         "github-copilot:github::token::GITHUB_COPILOT_TOKEN"
-        "ollama:default::api_key::OLLAMA_API_KEY"
+        "ollama:ollama::api_key::OLLAMA_API_KEY"
     )
     local _auth_applied=0 _auth_skipped=0 _auth_failed=0
     local _agents_root="${OC_AGENTS:-$HOME/.openclaw/agents}"
