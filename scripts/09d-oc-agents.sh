@@ -723,16 +723,14 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# __oc_sync_gateway_env_file — Sync gateway.systemd.env with the bridged
-# env vars and update OPENCLAW_SERVICE_MANAGED_ENV_KEYS in the systemd unit.
-# The gateway needs env vars for SecretRef resolution (auth profiles, plugin
-# configs) and MCP server keys.  Without this sync, `openclaw doctor` reports
-# "secret reference was not found" because the gateway process can't resolve
-# the env-backed refs that auth profiles in each agent's sqlite store reference.
+# __oc_sync_gateway_env — Push bridged env vars into the systemd user manager
+# environment (the secrets channel) and update OPENCLAW_SERVICE_MANAGED_ENV_KEYS
+# in the systemd unit. The gateway (a user service) inherits the manager env, so
+# no plaintext env file is needed. Restart is signalled only when a value or the
+# managed-keys list actually changed.
 # ---------------------------------------------------------------------------
 function __oc_sync_gateway_env_file() {
     local _cache="$1"
-    local _gw_env="$OC_ROOT/gateway.systemd.env"
     local _unit="$HOME/.config/systemd/user/openclaw-gateway.service"
     [[ -f "$_cache" ]] || return 0
 
@@ -746,45 +744,19 @@ function __oc_sync_gateway_env_file() {
         _var_names+=("$_name")
     done < "$_cache"
 
-    # Canonical (sorted) ordering so identical content yields byte-identical
-    # files — otherwise the bridge's variable order varies per run and the
-    # change-detection below restarts the gateway every time.
     mapfile -t _var_names < <(printf '%s\n' "${_var_names[@]}" | sort -u)
-
     ((${#_var_names[@]})) || return 0
 
-    # 1. Sync gateway.systemd.env: merge bridged vars into the existing file,
-    #    preserving any non-bridged entries (OPENCLAW_NO_AUTO_UPDATE, etc.).
-    #    Only rewrite (and signal a gateway restart) when content actually
-    #    changed — repeat refreshes with unchanged keys stay fast.
-    local _tmp="$TAC_CACHE_DIR/gateway.env.$$"
-    {
-        # Keep non-bridged stanzas from the old file (OPENCLAW_NO_AUTO_UPDATE
-        # and similar gateway-level settings that aren't API keys).
-        if [[ -f "$_gw_env" ]]; then
-            while IFS= read -r _line; do
-                [[ -n "$_line" ]] || continue
-                local _stanza_name="${_line%%=*}"
-                # Only keep stanzas whose names are NOT in the bridged set.
-                local _bridged=0
-                for _name in "${_var_names[@]}"; do
-                    [[ "$_stanza_name" == "$_name" ]] && { _bridged=1; break; }
-                done
-                (( _bridged )) || printf '%s\n' "$_line"
-            done < "$_gw_env"
-        fi
-        # Append current bridged values.
-        for _name in "${_var_names[@]}"; do
-            printf '%s=%s\n' "$_name" "${!_name:-}"
-        done
-    } > "$_tmp"
-    if [[ -f "$_gw_env" ]] && cmp -s "$_tmp" "$_gw_env"; then
-        rm -f "$_tmp"
-    else
-        mv "$_tmp" "$_gw_env"
-        chmod 600 "$_gw_env" 2>/dev/null || true
+    # 1. Push bridged values into the systemd user manager environment.
+    #    Compare each value before/after so a no-op refresh skips the restart.
+    local _name _before _after
+    for _name in "${_var_names[@]}"; do
+        _before=$(systemctl --user show-environment 2>/dev/null | sed -n "s/^$_name=//p" | head -1)
+        _after="${!_name:-}"
+        [[ "$_before" == "$_after" ]] && continue
+        systemctl --user set-environment "$_name=$_after" 2>/dev/null
         _OC_GW_ENV_CHANGED=1
-    fi
+    done
 
     # 2. Update OPENCLAW_SERVICE_MANAGED_ENV_KEYS in the systemd unit so
     #    OpenClaw knows which env vars it can reload without a full restart.
