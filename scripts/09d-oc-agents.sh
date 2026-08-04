@@ -587,76 +587,61 @@ function __oc_apply_secret_refs() {
         return 0
     fi
 
-    local -a _map=(
-        # ================================================================
-        # Web Search Plugin API Keys
-        # Full list from secretref-credential-surface.md:
-        #   plugins.entries.{google,brave,exa,moonshot,perplexity,
-        #                    firecrawl,tavily,mini,xai,parallel}
-        #                    .config.webSearch.apiKey
-        # ================================================================
-        "plugins.entries.google.config.webSearch.apiKey::GEMINI_API_KEY"
-        "plugins.entries.brave.config.webSearch.apiKey::BRAVE_API_KEY"
-        "plugins.entries.tavily.config.webSearch.apiKey::TAVILY_API_KEY"
-        "plugins.entries.perplexity.config.webSearch.apiKey::PERPLEXITY_API_KEY"
-        "plugins.entries.xai.config.webSearch.apiKey::XAI_API_KEY"
-        "plugins.entries.moonshot.config.webSearch.apiKey::MOONSHOT_API_KEY"
-        "plugins.entries.firecrawl.config.webSearch.apiKey::FIRECRAWL_API_KEY"
+    # Batch all env-backed SecretRefs into ONE `openclaw config patch` (single
+    # validated write) instead of one `config set` per entry — the per-entry
+    # gateway round-trip was the slow path.
+    local _patch_info _patch _applied=0 _skipped=0 _failed=0
+    _patch_info=$(python3 - <<'PYEOF' 2>/dev/null
+import json, os
+entries = [
+    # Web Search Plugin API Keys
+    ("plugins.entries.google.config.webSearch.apiKey", "GEMINI_API_KEY"),
+    ("plugins.entries.brave.config.webSearch.apiKey", "BRAVE_API_KEY"),
+    ("plugins.entries.tavily.config.webSearch.apiKey", "TAVILY_API_KEY"),
+    ("plugins.entries.perplexity.config.webSearch.apiKey", "PERPLEXITY_API_KEY"),
+    ("plugins.entries.xai.config.webSearch.apiKey", "XAI_API_KEY"),
+    ("plugins.entries.moonshot.config.webSearch.apiKey", "MOONSHOT_API_KEY"),
+    ("plugins.entries.firecrawl.config.webSearch.apiKey", "FIRECRAWL_API_KEY"),
+    # Model Provider API Keys (direct-consumption providers; deepseek and
+    # github-copilot use auth profiles below, not models.providers refs)
+    ("models.providers.openai.apiKey", "OPENAI_API_KEY"),
+    ("models.providers.anthropic.apiKey", "ANTHROPIC_API_KEY"),
+    ("models.providers.groq.apiKey", "GROQ_API_KEY"),
+    ("models.providers.moonshot.apiKey", "MOONSHOT_API_KEY"),
+    ("models.providers.openrouter.apiKey", "OPENROUTER_API_KEY"),
+    ("models.providers.xai.apiKey", "XAI_API_KEY"),
+    ("models.providers.qwen.apiKey", "QWEN_API_KEY"),
+    ("models.providers.nvidia.apiKey", "NVIDIA_API_KEY"),
+    ("models.providers.fireworks.apiKey", "FIREWORKS_API_KEY"),
+    ("models.providers.huggingface.apiKey", "HUGGINGFACE_TOKEN"),
+    # Tool / Platform API Keys
+    ("tools.web.fetch.firecrawl.apiKey", "FIRECRAWL_API_KEY"),
+    ("tools.web.search.serp.apiKey", "SERP_API_KEY"),
+]
 
-        # ================================================================
-        # Model Provider API Keys (direct-consumption providers)
-        # These set models.providers.<id>.apiKey as an env-backed SecretRef.
-        # Providers using auth profiles (deepseek, github-copilot) are NOT
-        # listed here — their keys live in per-agent SQLite credential stores.
-        # ================================================================
-        "models.providers.openai.apiKey::OPENAI_API_KEY"
-        "models.providers.anthropic.apiKey::ANTHROPIC_API_KEY"
-        "models.providers.groq.apiKey::GROQ_API_KEY"
-        "models.providers.moonshot.apiKey::MOONSHOT_API_KEY"
-        "models.providers.openrouter.apiKey::OPENROUTER_API_KEY"
-        "models.providers.xai.apiKey::XAI_API_KEY"
-        "models.providers.qwen.apiKey::QWEN_API_KEY"
-        "models.providers.nvidia.apiKey::NVIDIA_API_KEY"
-        "models.providers.fireworks.apiKey::FIREWORKS_API_KEY"
-        "models.providers.huggingface.apiKey::HUGGINGFACE_TOKEN"
+def set_path(node, path, value):
+    parts = path.split(".")
+    for p in parts[:-1]:
+        node = node.setdefault(p, {})
+    node[parts[-1]] = value
 
-        # ================================================================
-        # Tool / Platform API Keys
-        # ================================================================
-        "tools.web.fetch.firecrawl.apiKey::FIRECRAWL_API_KEY"
-        "tools.web.search.serp.apiKey::SERP_API_KEY"
-
-        # ================================================================
-        # Auth profile keys (written to agent SQLite credential stores)
-        # These are NOT managed by `openclaw config set`. The keyRef/tokenRef
-        # fields live in per-agent sqlite databases (auth-profiles equivalent).
-        # See 2026-07-23 session: HAL bulk-set handled
-        # deepseek:default.keyRef, qwen-token-plan:default.keyRef,
-        # and github-copilot:github.tokenRef across all 14 agent databases.
-        # Run that sqlite patch again if agent databases are ever rebuilt.
-        #
-        # Future: could also set these via openclaw secrets configure
-        # with agent-scoped plans, but that path is not yet wired here.
-        # ================================================================
-    )
-
-    local _entry _path _var _applied=0 _skipped=0 _failed=0
-    for _entry in "${_map[@]}"
-    do
-        _path="${_entry%%::*}"
-        _var="${_entry##*::}"
-        if [[ -z "${!_var:-}" ]]
-        then
-            _skipped=$((_skipped + 1))
-            continue
-        fi
-        if openclaw config set "$_path" --ref-provider default --ref-source env --ref-id "$_var" >/dev/null 2>&1
-        then
-            _applied=$((_applied + 1))
-        else
-            _failed=$((_failed + 1))
-        fi
-    done
+patch, applied, skipped = {}, 0, 0
+for path, var in entries:
+    if not os.environ.get(var):
+        skipped += 1
+        continue
+    set_path(patch, path, {"source": "env", "provider": "default", "id": var})
+    applied += 1
+print(json.dumps({"patch": patch, "applied": applied, "skipped": skipped}))
+PYEOF
+)
+    _patch=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['patch']))" 2>/dev/null)
+    _applied=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['applied'])" 2>/dev/null)
+    _skipped=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['skipped'])" 2>/dev/null)
+    if (( _applied > 0 )) && ! printf '%s' "$_patch" | openclaw config patch --stdin >/dev/null 2>&1; then
+        _failed=$_applied
+        _applied=0
+    fi
 
     # ================================================================
     # Auth Profile SecretRef sync (SQLite credential stores)
@@ -677,92 +662,63 @@ function __oc_apply_secret_refs() {
     # agents use a distinct ghu_ OAuth token and pointing it at
     # GITHUB_COPILOT_TOKEN would break auth (see openclaw-environment.md).
     # ================================================================
-    local -a _auth_map=(
-        "deepseek:deepseek::api_key::DEEPSEEK_API_KEY"
-        "github-copilot:github::token::GITHUB_COPILOT_TOKEN"
-        "ollama:ollama::api_key::OLLAMA_API_KEY"
-    )
-    local _auth_applied=0 _auth_skipped=0 _auth_failed=0
     local _agents_root="${OC_AGENTS:-$HOME/.openclaw/agents}"
-
-    for _aentry in "${_auth_map[@]}"
-    do
-        # Format: <profile-id>:<provider>::<cred-type>::<env-var>
-        # IFS cannot split on multi-char '::', so parse with a regex.
-        if [[ "$_aentry" =~ ^([^:]+):([^:]+)::([^:]+)::(.+)$ ]]; then
-            _profile_id="${BASH_REMATCH[1]}"
-            _provider="${BASH_REMATCH[2]}"
-            _cred_type="${BASH_REMATCH[3]}"
-            _env_var="${BASH_REMATCH[4]}"
-        else
-            _auth_failed=$((_auth_failed + 1))
+    # One python process for ALL agents x profiles (was one subprocess per
+    # agent per profile — 45 spawns). Merges into each store's 'primary' row.
+    local _auth_info _auth_applied=0 _auth_skipped=0 _auth_failed=0
+    _auth_info=$(python3 - "$_agents_root" <<'PYEOF' 2>/dev/null
+import json, os, sqlite3, sys, time
+agents_root = sys.argv[1]
+# Format: (profile_id, provider, cred_type, env_var)
+auth_map = [
+    ("deepseek", "deepseek", "api_key", "DEEPSEEK_API_KEY"),
+    ("github-copilot", "github", "token", "GITHUB_COPILOT_TOKEN"),
+    ("ollama", "ollama", "api_key", "OLLAMA_API_KEY"),
+]
+applied = skipped = 0
+for name in sorted(os.listdir(agents_root)):
+    db = os.path.join(agents_root, name, "agent", "openclaw-agent.sqlite")
+    if not os.path.isfile(db):
+        continue
+    con = sqlite3.connect(db, timeout=8.0)
+    row = con.execute("SELECT store_json FROM auth_profile_store WHERE store_key='primary'").fetchone()
+    store = json.loads(row[0]) if row else {"version": 1, "profiles": {}}
+    for pid, provider, ctype, var in auth_map:
+        if not os.environ.get(var):
+            skipped += 1
             continue
-        fi
-        if [[ -z "${!_env_var:-}" ]]
-        then
-            _auth_skipped=$((_auth_skipped + 1))
-            continue
-        fi
-
-        # Build SecretRef JSON using python3 for reliable escaping
-        local _ref_json
-        _ref_json=$(python3 -c "
-import json
-if '$_cred_type' == 'api_key':
-    ref = {'version':1,'profiles':{'$_profile_id':{'type':'api_key','provider':'$_provider','keyRef':{'source':'env','provider':'default','id':'$_env_var'}}}}
-else:
-    ref = {'version':1,'profiles':{'$_profile_id':{'type':'$_cred_type','provider':'$_provider','tokenRef':{'source':'env','provider':'default','id':'$_env_var'}}}}
-print(json.dumps(ref))
-" 2>/dev/null)
-
-        [[ -z "$_ref_json" ]] && { _auth_failed=$((_auth_failed+1)); continue; }
-
-        # Apply to every existing agent SQLite database
-        local _agent_dir
-        for _agent_dir in "$_agents_root"/*/agent; do
-            local _db="$_agent_dir/openclaw-agent.sqlite"
-            [[ -f "$_db" ]] || continue
-            # Merge the profile into the existing 'primary' store row instead of
-            # REPLACE-ing it, otherwise each profile write clobbers the previous.
-            if python3 - "$_db" "$_ref_json" <<'PYEOF' 2>/dev/null
-import json, sqlite3, sys, time
-db, ref_json = sys.argv[1], sys.argv[2]
-con = sqlite3.connect(db, timeout=8.0)
-row = con.execute("SELECT store_json FROM auth_profile_store WHERE store_key='primary'").fetchone()
-store = json.loads(row[0]) if row else {"version": 1, "profiles": {}}
-store.setdefault("profiles", {}).update(json.loads(ref_json).get("profiles", {}))
-con.execute(
-    "INSERT OR REPLACE INTO auth_profile_store (store_key, store_json, updated_at) VALUES ('primary', ?, ?)",
-    (json.dumps(store), int(time.time() * 1000)),
-)
-con.commit()
-con.close()
+        ref = {"source": "env", "provider": "default", "id": var}
+        profile = {"type": ctype, "provider": provider}
+        if ctype == "api_key":
+            profile["keyRef"] = ref
+        else:
+            profile["tokenRef"] = ref
+        store.setdefault("profiles", {})[pid] = profile
+        applied += 1
+    con.execute(
+        "INSERT OR REPLACE INTO auth_profile_store (store_key, store_json, updated_at) VALUES ('primary', ?, ?)",
+        (json.dumps(store), int(time.time() * 1000)),
+    )
+    con.commit()
+    con.close()
+print(json.dumps({"applied": applied, "skipped": skipped}))
 PYEOF
-            then
-                _auth_applied=$((_auth_applied + 1))
-            else
-                _auth_failed=$((_auth_failed + 1))
-            fi
-        done
-    done
+)
+    _auth_applied=$(printf '%s' "$_auth_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['applied'])" 2>/dev/null)
+    _auth_skipped=$(printf '%s' "$_auth_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['skipped'])" 2>/dev/null)
 
-    if (( _auth_failed > 0 ))
-    then
-        __tac_info "Syncing Auth Profile SecretRefs" "[$_auth_applied writes, $_auth_skipped skipped, $_auth_failed failed]" "$C_Warning"
-    elif (( _auth_applied > 0 ))
+    if (( _auth_applied > 0 ))
     then
         __tac_info "Syncing Auth Profile SecretRefs" "[$_auth_applied writes, $_auth_skipped skipped]" "$C_Success"
     fi
 
-    # Combined summary
-    local _total_applied=$((_applied + _auth_applied))
-    local _total_skipped=$((_skipped + _auth_skipped))
-    local _total_failed=$((_failed + _auth_failed))
-    if (( _total_failed > 0 ))
+    # Combined summary — report config refs and auth-profile writes separately
+    # so the counts are not conflated with the number of imported env vars.
+    if (( _failed > 0 ))
     then
-        __tac_info "Syncing OpenClaw SecretRefs" "[$_total_applied applied, $_total_skipped skipped, $_total_failed failed]" "$C_Warning"
+        __tac_info "Syncing OpenClaw SecretRefs" "[config refs: $_applied applied, $_skipped skipped, $_failed failed | auth profiles: $_auth_applied writes]" "$C_Warning"
     else
-        __tac_info "Syncing OpenClaw SecretRefs" "[$_total_applied applied, $_total_skipped skipped]" "$C_Success"
+        __tac_info "Syncing OpenClaw SecretRefs" "[config refs: $_applied applied, $_skipped skipped | auth profiles: $_auth_applied writes]" "$C_Success"
     fi
 }
 
@@ -927,28 +883,37 @@ function oc-refresh-keys() {
         fi
     fi
 
-    # 6. Mirror vars to NAS via SSH
+    # 6. Mirror vars to NAS via SSH — one connection (was one ssh per var,
+    #    the dominant cost of this whole command).
     if [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1; then
         local _synced_nas=0
-        local _k _v _qv
-        while IFS= read -r _line; do
-            [[ "$_line" =~ ^export[[:space:]]+ ]] || continue
-            _k="${_line#export }"; _k="${_k%%=*}"
-            [[ "$_k" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
-            _v="${!_k:-}"
-            [[ -n "$_v" ]] || continue
-            printf -v _qv '%q' "$_v"
-            if ssh -n -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no \
-                "${_nas_user}@${_nas_host}" \
-                "sh -c 'f=\"$_nas_collectors_env\"; [ -f \"\$f\" ] || : > \"\$f\"; \
-                 if grep -q \"^$_k=\" \"\$f\"; then \
-                     sed -i \"s|^$_k=.*|$_k=\\\"${_qv}\\\"|\" \"\$f\"; \
-                 else printf \"%s\\n\" \"$_k=\\\"${_qv}\\\"\" >> \"\$f\"; fi'" >/dev/null 2>&1
-            then
-                ((_synced_nas++))
-            fi
-        done < "$cache"
-        __tac_info "Exporting to NAS" "[$_nas_collectors_env]" "$C_Success"
+        local _nas_tmp _l _k2 _v2 _qv2
+        _nas_tmp="$(mktemp)"
+        {
+            printf '# regenerated by oc refresh-keys %s\n' "$(date -Iseconds)"
+            while IFS= read -r _l; do
+                [[ "$_l" =~ ^export[[:space:]]+ ]] || continue
+                _k2="${_l#export }"; _k2="${_k2%%=*}"
+                [[ "$_k2" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
+                _v2="${!_k2:-}"
+                [[ -n "$_v2" ]] || continue
+                printf -v _qv2 '%q' "$_v2"
+                printf '%s="%s"\n' "$_k2" "$_qv2"
+            done < "$cache"
+        } > "$_nas_tmp"
+        if ssh -n -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no \
+            "${_nas_user}@${_nas_host}" "cat > \"$_nas_collectors_env.tmp\"" < "$_nas_tmp" >/dev/null 2>&1
+        then
+            ssh -n -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no \
+                "${_nas_user}@${_nas_host}" "mv \"$_nas_collectors_env.tmp\" \"$_nas_collectors_env\"" >/dev/null 2>&1 && _synced_nas=1
+        fi
+        rm -f "$_nas_tmp"
+        if (( _synced_nas == 1 ))
+        then
+            __tac_info "Exporting to NAS" "[$_nas_collectors_env]" "$C_Success"
+        else
+            __tac_info "Exporting to NAS" "[failed — NAS unreachable]" "$C_Warning"
+        fi
     else
         local _reason=""
         if ! command -v ssh >/dev/null 2>&1
