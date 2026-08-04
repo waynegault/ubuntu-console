@@ -588,8 +588,8 @@ function __oc_apply_secret_refs() {
     fi
 
     # Batch all env-backed SecretRefs into ONE `openclaw config patch` (single
-    # validated write) instead of one `config set` per entry — the per-entry
-    # gateway round-trip was the slow path.
+    # validated write) — and skip the patch entirely when nothing changed, so a
+    # no-op refresh performs no config writes at all.
     local _patch_info _patch _applied=0 _skipped=0 _failed=0
     _patch_info=$(python3 - <<'PYEOF' 2>/dev/null
 import json, os
@@ -625,18 +625,35 @@ def set_path(node, path, value):
         node = node.setdefault(p, {})
     node[parts[-1]] = value
 
-patch, applied, skipped = {}, 0, 0
+def get_path(node, path):
+    for p in path.split("."):
+        if not isinstance(node, dict) or p not in node:
+            return None
+        node = node[p]
+    return node
+
+cfg = {}
+try:
+    with open(os.path.expanduser("~/.openclaw/openclaw.json")) as f:
+        cfg = json.load(f)
+except Exception:
+    pass
+
+patch, changed, skipped = {}, 0, 0
 for path, var in entries:
     if not os.environ.get(var):
         skipped += 1
         continue
-    set_path(patch, path, {"source": "env", "provider": "default", "id": var})
-    applied += 1
-print(json.dumps({"patch": patch, "applied": applied, "skipped": skipped}))
+    ref = {"source": "env", "provider": "default", "id": var}
+    if get_path(cfg, path) == ref:
+        continue  # already correct — no write needed
+    set_path(patch, path, ref)
+    changed += 1
+print(json.dumps({"patch": patch, "changed": changed, "skipped": skipped}))
 PYEOF
 )
     _patch=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['patch']))" 2>/dev/null)
-    _applied=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['applied'])" 2>/dev/null)
+    _applied=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['changed'])" 2>/dev/null)
     _skipped=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['skipped'])" 2>/dev/null)
     if (( _applied > 0 )) && ! printf '%s' "$_patch" | openclaw config patch --stdin >/dev/null 2>&1; then
         _failed=$_applied
@@ -675,7 +692,7 @@ auth_map = [
     ("github-copilot", "github", "token", "GITHUB_COPILOT_TOKEN"),
     ("ollama", "ollama", "api_key", "OLLAMA_API_KEY"),
 ]
-applied = skipped = 0
+changed = unchanged = skipped = 0
 for name in sorted(os.listdir(agents_root)):
     db = os.path.join(agents_root, name, "agent", "openclaw-agent.sqlite")
     if not os.path.isfile(db):
@@ -694,22 +711,31 @@ for name in sorted(os.listdir(agents_root)):
         else:
             profile["tokenRef"] = ref
         store.setdefault("profiles", {})[pid] = profile
-        applied += 1
+    # Write only when the merged store actually differs — no-op refreshes
+    # perform zero sqlite writes. Compare parsed dicts (order-insensitive).
+    new_json = json.dumps(store, sort_keys=True)
+    if row and json.loads(row[0]) == store:
+        unchanged += 1
+        con.close()
+        continue
     con.execute(
         "INSERT OR REPLACE INTO auth_profile_store (store_key, store_json, updated_at) VALUES ('primary', ?, ?)",
-        (json.dumps(store), int(time.time() * 1000)),
+        (new_json, int(time.time() * 1000)),
     )
     con.commit()
     con.close()
-print(json.dumps({"applied": applied, "skipped": skipped}))
+    changed += 1
+print(json.dumps({"stores_written": changed, "stores_unchanged": unchanged, "skipped": skipped}))
 PYEOF
 )
-    _auth_applied=$(printf '%s' "$_auth_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['applied'])" 2>/dev/null)
-    _auth_skipped=$(printf '%s' "$_auth_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['skipped'])" 2>/dev/null)
+    _auth_applied=$(printf '%s' "$_auth_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['stores_written'])" 2>/dev/null)
+    _auth_unchanged=$(printf '%s' "$_auth_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['stores_unchanged'])" 2>/dev/null)
 
     if (( _auth_applied > 0 ))
     then
-        __tac_info "Syncing Auth Profile SecretRefs" "[$_auth_applied writes, $_auth_skipped skipped]" "$C_Success"
+        __tac_info "Syncing Auth Profile SecretRefs" "[$_auth_applied store(s) written, $_auth_unchanged unchanged]" "$C_Success"
+    else
+        __tac_info "Syncing Auth Profile SecretRefs" "[no stores changed ($_auth_unchanged verified)]" "$C_Dim"
     fi
 
     # Combined summary — report config refs and auth-profile writes separately
@@ -717,8 +743,11 @@ PYEOF
     if (( _failed > 0 ))
     then
         __tac_info "Syncing OpenClaw SecretRefs" "[config refs: $_applied applied, $_skipped skipped, $_failed failed | auth profiles: $_auth_applied writes]" "$C_Warning"
-    else
+    elif (( _applied > 0 || _auth_applied > 0 ))
+    then
         __tac_info "Syncing OpenClaw SecretRefs" "[config refs: $_applied applied, $_skipped skipped | auth profiles: $_auth_applied writes]" "$C_Success"
+    else
+        __tac_info "Syncing OpenClaw SecretRefs" "[nothing to update — all refs current]" "$C_Dim"
     fi
 }
 
@@ -726,12 +755,15 @@ PYEOF
 # __oc_sync_gateway_env — Push bridged env vars into the systemd user manager
 # environment (the secrets channel) and update OPENCLAW_SERVICE_MANAGED_ENV_KEYS
 # in the systemd unit. The gateway (a user service) inherits the manager env, so
-# no plaintext env file is needed. Restart is signalled only when a value or the
-# managed-keys list actually changed.
+# no plaintext env file is needed. Restart is signalled only when the bridged
+# values actually changed (content-hash comparison — comparing against
+# `systemctl --user show-environment` is unreliable because it ANSI-quotes
+# values that contain special characters).
 # ---------------------------------------------------------------------------
 function __oc_sync_gateway_env_file() {
     local _cache="$1"
     local _unit="$HOME/.config/systemd/user/openclaw-gateway.service"
+    local _hash_file="$TAC_CACHE_DIR/tac_win_api_keys.hash"
     [[ -f "$_cache" ]] || return 0
 
     # Collect all var names from the cache that the gateway may need.
@@ -747,19 +779,23 @@ function __oc_sync_gateway_env_file() {
     mapfile -t _var_names < <(printf '%s\n' "${_var_names[@]}" | sort -u)
     ((${#_var_names[@]})) || return 0
 
-    # 1. Push bridged values into the systemd user manager environment.
-    #    Compare each value before/after so a no-op refresh skips the restart.
-    local _name _before _after
-    for _name in "${_var_names[@]}"; do
-        _before=$(systemctl --user show-environment 2>/dev/null | sed -n "s/^$_name=//p" | head -1)
-        _after="${!_name:-}"
-        [[ "$_before" == "$_after" ]] && continue
-        systemctl --user set-environment "$_name=$_after" 2>/dev/null
+    # 1. Change detection: content hash of the sorted bridged values. On a
+    #    real change, push the whole set to the manager env and signal a
+    #    restart. On a no-op refresh, do nothing (no writes, no restart).
+    local _hash _prev_hash
+    _hash=$(grep '^export ' "$_cache" | sort | sha256sum | awk '{print $1}')
+    _prev_hash=$(cat "$_hash_file" 2>/dev/null || echo none)
+    if [[ "$_hash" != "$_prev_hash" ]]; then
+        for _name in "${_var_names[@]}"; do
+            systemctl --user set-environment "$_name=${!_name:-}" 2>/dev/null
+        done
         _OC_GW_ENV_CHANGED=1
-    done
+    fi
 
     # 2. Update OPENCLAW_SERVICE_MANAGED_ENV_KEYS in the systemd unit so
     #    OpenClaw knows which env vars it can reload without a full restart.
+    #    A change to this list alone does NOT require a restart — only actual
+    #    value changes (step 1) signal one.
     if [[ -f "$_unit" ]]; then
         local _joined
         printf -v _joined '%s,' "${_var_names[@]}"
@@ -767,9 +803,11 @@ function __oc_sync_gateway_env_file() {
         if ! grep -q "^Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=$_joined$" "$_unit"; then
             sed -i "s/^Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=.*/Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=$_joined/" "$_unit"
             systemctl --user daemon-reload 2>/dev/null || true
-            _OC_GW_ENV_CHANGED=1
         fi
     fi
+
+    # Persist the hash for the next run.
+    printf '%s\n' "$_hash" > "$_hash_file"
 }
 
 # ---------------------------------------------------------------------------
@@ -790,12 +828,12 @@ function oc-refresh-keys() {
     local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
     local count=0
 
+    local _canonical_names="$TAC_CACHE_DIR/tac_win_api_key_names"
+    local _prev_cache="$TAC_CACHE_DIR/tac_win_api_keys.prev"
+
     # 1. Pull matching vars from Windows User environment.
-    #    Clear the session-level guard BEFORE the bridge call so oc-refresh-keys
-    #    (an explicit user-triggered refresh) always attempts pwsh.exe instead of
-    #    being silently skipped by a stale guard from an earlier shell init where
-    #    pwsh.exe timed out. __bridge_windows_api_keys recreates the guard on
-    #    failure, so shell-init speed is still protected on the next source.
+    #    Preserve last-good values so a pwsh.exe outage can't change the var set.
+    [[ -f "$cache" ]] && cp "$cache" "$_prev_cache" 2>/dev/null || true
     if command -v pwsh.exe >/dev/null 2>&1; then
         rm -f "$cache" /dev/shm/tac_pwsh_bridge_warned
         __bridge_windows_api_keys
@@ -805,37 +843,46 @@ function oc-refresh-keys() {
         fi
     fi
 
-    # 2. Fallback (pwsh.exe unavailable — native Linux): scan the shell
-    #    environment for any variable whose name matches the same patterns
-    #    the Windows bridge would find:
-    #    - Contains TOKEN (case-insensitive)
-    #    - Contains API_KEY, API-KEY, or APIKEY (case-insensitive)
-    #    - Exactly OPENCLAW_GATEWAY_PASSWORD (case-insensitive)
+    # 2a. pwsh.exe succeeded — merge Linux-side vars and persist the canonical
+    #     key-name set (used to keep the fallback var set identical).
     if [[ -f "$cache" ]]; then
-        # pwsh.exe succeeded — merge in a few commonly expected Linux-side
-        # env vars that pwsh.exe can't see (MCP server keys, gateway token).
         for _lk in CONTEXT7_API_KEY DEVIN_API_KEY OPENCLAW_GATEWAY_TOKEN; do
             [[ -n "${!_lk:-}" ]] || continue
             grep -q "^export ${_lk}=" "$cache" 2>/dev/null && continue
             printf 'export %s=%q\n' "$_lk" "${!_lk}" >> "$cache"
         done
-        # Re-source to pick up any newly appended vars that were not in
-        # the original pwsh.exe export (e.g. Linux-only keys like
-        # OPENCLAW_GATEWAY_TOKEN, DEVIN_API_KEY).
         source "$cache" 2>/dev/null
         count=$(grep -c '^export ' "$cache" || true)
+        grep -oE '^export [A-Z_]+' "$cache" | sed 's/^export //' | sort -u > "$_canonical_names"
+
+    # 2b. Fallback (pwsh.exe unavailable): rebuild the cache using ONLY the
+    #     canonical key names — values from the Linux env, falling back to the
+    #     last-good values. Keeps the variable set identical across runs (no
+    #     pwsh up/down flip-flop), so the gateway restart gate stays quiet.
+    elif [[ -f "$_canonical_names" ]]; then
+        : > "$cache"
+        chmod 600 "$cache" 2>/dev/null || true
+        while IFS= read -r _lk; do
+            [[ -n "$_lk" ]] || continue
+            _lv="${!_lk:-}"
+            if [[ -z "$_lv" && -f "$_prev_cache" ]]; then
+                _lv=$(sed -n "s/^export ${_lk}=//p" "$_prev_cache" | head -1)
+            fi
+            [[ -n "$_lv" ]] && printf 'export %s=%q\n' "$_lk" "$_lv"
+        done < "$_canonical_names" > "$cache"
+        source "$cache" 2>/dev/null
+        count=$(grep -c '^export ' "$cache" || true)
+        __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — using last-good env ($count vars)]" "$C_Warning"
+
     else
+        # No canonical list yet (first run) — scan the Linux env with the
+        # same patterns the Windows bridge uses.
         : > "$cache" 2>/dev/null
         chmod 600 "$cache" 2>/dev/null || true
         while IFS='=' read -r _lk _lv; do
             [[ -z "$_lk" || -z "$_lv" ]] && continue
-            # Skip bash internal names and positional params
             [[ "$_lk" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
-            # Match the same patterns the Windows bridge uses
-            [[ "$_lk" =~ ^[Tt][Oo][Kk][Ee][Nn] ]] || \
-                [[ "$_lk" =~ ^[Aa][Pp][Ii][_-]?[Kk][Ee][Yy] ]] || \
-                [[ "$_lk" =~ ^[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd] ]] || \
-                [[ "$_lk" =~ [Tt][Oo][Kk][Ee][Nn] ]] || \
+            [[ "$_lk" =~ [Tt][Oo][Kk][Ee][Nn] ]] || \
                 [[ "$_lk" =~ [Aa][Pp][Ii][_-]?[Kk][Ee][Yy] ]] || \
                 [[ "$_lk" =~ [Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd] ]] || continue
             printf 'export %s=%q\n' "$_lk" "$_lv" >> "$cache"
@@ -843,8 +890,8 @@ function oc-refresh-keys() {
         done < <(env | sort -u)
         if [[ "$count" -gt 0 ]]; then
             source "$cache" 2>/dev/null
-            __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — using Linux env vars]" "$C_Warning"
-            __tac_info "Reading Windows User environment" "[$count variable(s) exported]" "$C_Success"
+            grep -oE '^export [A-Z_]+' "$cache" | sed 's/^export //' | sort -u > "$_canonical_names"
+            __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — using Linux env vars ($count exported)]" "$C_Warning"
         else
             __tac_info "Reading Windows User environment" "[no vars found — pwsh.exe unavailable and no Linux fallback vars set]" "$C_Warning"
             return 1
