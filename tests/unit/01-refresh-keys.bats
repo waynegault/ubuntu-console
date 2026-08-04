@@ -24,8 +24,11 @@ setup() {
     rm -f /dev/shm/tac_pwsh_bridge_warned
 
     # Mock openclaw so SecretRef sync & gateway restart never touch the real config.
+    # Capture the `config patch --stdin` payload so tests can assert SecretRefs
+    # without invoking the real CLI (refs are batched into one patch call).
     export OC_MOCK_LOG="$TAC_TEST_TMPDIR/openclaw_calls.log"
-    __mock_command_local openclaw "echo \"OPENCLAW_CALL: \$*\" >> \"$OC_MOCK_LOG\"; exit 0"
+    export OC_MOCK_PATCH_FILE="$TAC_TEST_TMPDIR/openclaw_patch_stdin.json"
+    __mock_command_local openclaw "if [ \"\$*\" = 'config patch --stdin' ]; then cat > \"$OC_MOCK_PATCH_FILE\"; fi; echo \"OPENCLAW_CALL: \$*\" >> \"$OC_MOCK_LOG\"; exit 0"
 
     # Mock systemctl so we don't touch the real systemd.
     export SYSTEMCTL_LOG="$TAC_TEST_TMPDIR/systemctl_calls.log"
@@ -46,6 +49,23 @@ setup() {
     # Isolate OC_ROOT so tests never touch the real ~/.openclaw.
     export OC_ROOT="$TAC_TEST_TMPDIR/.openclaw"
     mkdir -p "$OC_ROOT"
+
+    # Re-assert sandboxed paths AFTER sourcing: 01-constants.sh unconditionally
+    # exports TAC_CACHE_DIR=/dev/shm and derives OC_AGENTS/ErrorLogPath from the
+    # real $HOME, so without this the tests would read/write the live bridge
+    # cache in /dev/shm and the real error log.
+    export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
+    export OC_AGENTS="$OC_ROOT/agents"
+    export OC_LOGS="$OC_ROOT/logs"
+    export ErrorLogPath="$OC_LOGS/bash-errors.log"
+    mkdir -p "$TAC_CACHE_DIR"
+
+    # Keep the harness hermetic: drop anything inherited from the real shell
+    # that oc-refresh-keys would act on (NAS mirror preflight, Linux-side merge
+    # vars) so the tests never reach the network or depend on host env.
+    unset OC_NAS_KEY_PATH OC_NAS_USER OC_NAS_HOST SSH_PASSWORD
+    unset CONTEXT7_API_KEY DEVIN_API_KEY OPENCLAW_GATEWAY_TOKEN
+    unset QWEN_TOKEN_PLAN_API_KEY
 
     # Create a minimal systemd unit file so MANAGED_ENV_KEYS can be updated.
     mkdir -p "$TAC_TEST_TMPDIR/.config/systemd/user"
@@ -93,12 +113,11 @@ teardown() {
     run grep -F 'PASSWORD' "$pwsh_log"
     [ "$status" -eq 0 ]
 
-    # Gateway env file is created and contains bridged vars.
-    local gw_env="$OC_ROOT/gateway.systemd.env"
-    [ -f "$gw_env" ]
-    run grep '^WIN_API_KEY=winsecret' "$gw_env"
+    # Bridged vars were pushed to the systemd user manager env — the gateway's
+    # secrets channel (the plaintext gateway.systemd.env file is no longer used).
+    run grep -F "set-environment WIN_API_KEY=winsecret" "$SYSTEMCTL_LOG"
     [ "$status" -eq 0 ]
-    run grep '^WIN_TOKEN=tok123' "$gw_env"
+    run grep -F "set-environment WIN_TOKEN=tok123" "$SYSTEMCTL_LOG"
     [ "$status" -eq 0 ]
 
     # MANAGED_ENV_KEYS in the systemd unit was updated.
@@ -130,22 +149,93 @@ teardown() {
     run oc-refresh-keys
     [ "$status" -eq 0 ]
 
-    # Present mapped credential -> SecretRef builder invoked for that path.
-    run grep -F "config set plugins.entries.google.config.webSearch.apiKey --ref-provider default --ref-source env --ref-id GEMINI_API_KEY" "$OC_MOCK_LOG"
+    # Present mapped credential -> one batched `openclaw config patch --stdin`
+    # carries the env-backed SecretRef (payload is nested JSON, not dotted paths).
+    run grep -F "OPENCLAW_CALL: config patch --stdin" "$OC_MOCK_LOG"
+    [ "$status" -eq 0 ]
+    run grep -F '"google": {"config": {"webSearch": {"apiKey": {"source": "env", "provider": "default", "id": "GEMINI_API_KEY"' "$OC_MOCK_PATCH_FILE"
     [ "$status" -eq 0 ]
 
     # Absent (no longer mapped) credential -> no ref written for that path.
-    run grep -F "models.providers.qwen-token-plan.apiKey" "$OC_MOCK_LOG"
+    run grep -F 'qwen-token-plan' "$OC_MOCK_LOG" "$OC_MOCK_PATCH_FILE"
     [ "$status" -ne 0 ]
 
-    # Gateway env file contains the bridged var.
-    local gw_env="$OC_ROOT/gateway.systemd.env"
-    [ -f "$gw_env" ]
-    run grep '^WIN_API_KEY=winsecret' "$gw_env"
+    # Bridged vars were pushed to the systemd user manager env.
+    run grep -F "set-environment WIN_API_KEY=winsecret" "$SYSTEMCTL_LOG"
     [ "$status" -eq 0 ]
-    run grep '^GEMINI_API_KEY=test-gemini-key' "$gw_env"
+    run grep -F "set-environment GEMINI_API_KEY=test-gemini-key" "$SYSTEMCTL_LOG"
     [ "$status" -eq 0 ]
-    # QWEN_TOKEN_PLAN_API_KEY is unset; it should not appear in the file.
-    run grep '^QWEN_TOKEN_PLAN_API_KEY=' "$gw_env"
+
+    # MANAGED_ENV_KEYS in the unit covers the bridged vars, not the unset one.
+    local unit="$HOME/.config/systemd/user/openclaw-gateway.service"
+    run grep 'OPENCLAW_SERVICE_MANAGED_ENV_KEYS=' "$unit"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *WIN_API_KEY* ]]
+    [[ "$output" == *GEMINI_API_KEY* ]]
+    [[ "$output" != *QWEN_TOKEN_PLAN_API_KEY* ]]
+}
+
+@test "oc-refresh-keys skips gateway restart and NAS export when nothing changed" {
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret' 'GEMINI_API_KEY=test-gemini-key'"
+    export GEMINI_API_KEY="test-gemini-key"
+
+    local nas_key="$TAC_TEST_TMPDIR/nas_key"
+    touch "$nas_key" && chmod 600 "$nas_key"
+    export OC_NAS_KEY_PATH="$nas_key"
+    export OC_NAS_USER="testuser"
+    export OC_NAS_HOST="nas.example"
+
+    local ssh_log="$TAC_TEST_TMPDIR/ssh_calls.log"
+    __mock_command_local ssh "echo \"SSH_CALL: \$*\" >> \"$ssh_log\"; exit 0"
+
+    # First refresh: env push + gateway restart + NAS upload + nas hash marker.
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    run grep -F "gateway restart" "$OC_MOCK_LOG"
+    [ "$status" -eq 0 ]
+    run grep -c '^SSH_CALL:' "$ssh_log"
+    [ "$status" -eq 0 ]
+    [ "$output" -ge 1 ]
+    [ -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
+
+    # Second refresh with identical bridge output: zero side effects — no env
+    # push, no restart, no NAS upload.
+    : > "$OC_MOCK_LOG"
+    : > "$SYSTEMCTL_LOG"
+    : > "$ssh_log"
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    run grep -F "gateway restart" "$OC_MOCK_LOG"
     [ "$status" -ne 0 ]
+    run grep -F "set-environment" "$SYSTEMCTL_LOG"
+    [ "$status" -ne 0 ]
+    [ ! -s "$ssh_log" ]
+}
+
+@test "oc-refresh-keys retries NAS export after a failed upload" {
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret' 'GEMINI_API_KEY=test-gemini-key'"
+    export GEMINI_API_KEY="test-gemini-key"
+
+    local nas_key="$TAC_TEST_TMPDIR/nas_key"
+    touch "$nas_key" && chmod 600 "$nas_key"
+    export OC_NAS_KEY_PATH="$nas_key"
+    export OC_NAS_USER="testuser"
+    export OC_NAS_HOST="nas.example"
+
+    local ssh_log="$TAC_TEST_TMPDIR/ssh_calls.log"
+    __mock_command_local ssh "echo \"SSH_CALL: \$*\" >> \"$ssh_log\"; exit 1"
+
+    # NAS unreachable: no marker persisted, refresh still exits 0.
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [ ! -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
+
+    # NAS back: the failed upload is retried and the marker is persisted.
+    __mock_command_local ssh "echo \"SSH_CALL: \$*\" >> \"$ssh_log\"; exit 0"
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [ -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
+    run grep -c '^SSH_CALL:' "$ssh_log"
+    [ "$status" -eq 0 ]
+    [ "$output" -ge 1 ]
 }

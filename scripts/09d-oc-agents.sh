@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154,SC2015,SC2016,SC1090
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -925,6 +925,11 @@ function oc-refresh-keys() {
     #    the dominant cost of this whole command). Auth: prefer key auth
     #    (jarvis_sshd_key is installed in the NAS authorized_keys); fall back
     #    to password (sshpass + SSH_PASSWORD) if the key isn't accepted.
+    #    Change detection: the upload is skipped when the var content is
+    #    unchanged since the last SUCCESSFUL sync (the regenerated-by header is
+    #    excluded from the hash), so no-op refreshes do zero ssh calls. The
+    #    marker is persisted only after a successful upload, so a failed sync
+    #    is retried on the next refresh.
     local _nas_ssh=()
     if [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1
     then
@@ -934,7 +939,7 @@ function oc-refresh-keys() {
         _nas_ssh=(sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=6 "${_nas_user}@${_nas_host}")
     fi
     if ((${#_nas_ssh[@]})); then
-        local _synced_nas=0
+        local _synced_nas=0 _nas_skipped=0
         local _nas_tmp _l _k2 _v2 _qv2
         _nas_tmp="$(mktemp)"
         {
@@ -949,14 +954,25 @@ function oc-refresh-keys() {
                 printf '%s="%s"\n' "$_k2" "$_qv2"
             done < "$cache"
         } > "$_nas_tmp"
-        if "${_nas_ssh[@]}" "cat > \"$_nas_collectors_env.tmp\"" < "$_nas_tmp" >/dev/null 2>&1
+        local _nas_hash _prev_nas_hash
+        _nas_hash=$(sed '1d' "$_nas_tmp" | sort | sha256sum | awk '{print $1}')
+        _prev_nas_hash=$(cat "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" 2>/dev/null || echo none)
+        if [[ "$_nas_hash" == "$_prev_nas_hash" ]]
         then
-            "${_nas_ssh[@]}" "mv \"$_nas_collectors_env.tmp\" \"$_nas_collectors_env\"" >/dev/null 2>&1 && _synced_nas=1
+            _nas_skipped=1
+        elif "${_nas_ssh[@]}" "cat > \"$_nas_collectors_env.tmp\"" < "$_nas_tmp" >/dev/null 2>&1 \
+            && "${_nas_ssh[@]}" "mv \"$_nas_collectors_env.tmp\" \"$_nas_collectors_env\"" >/dev/null 2>&1
+        then
+            _synced_nas=1
+            printf '%s\n' "$_nas_hash" > "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash"
         fi
         rm -f "$_nas_tmp"
         if (( _synced_nas == 1 ))
         then
             __tac_info "Exporting to NAS" "[$_nas_collectors_env]" "$C_Success"
+        elif (( _nas_skipped == 1 ))
+        then
+            __tac_info "Exporting to NAS" "[no changes — skipped]" "$C_Dim"
         else
             __tac_info "Exporting to NAS" "[failed — NAS unreachable]" "$C_Warning"
         fi
