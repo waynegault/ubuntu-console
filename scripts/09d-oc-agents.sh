@@ -898,16 +898,16 @@ function oc-refresh-keys() {
     fi
 
     # 6. Mirror vars to NAS via SSH — one connection (was one ssh per var,
-    #    the dominant cost of this whole command). Auth: prefer password
-    #    (sshpass + SSH_PASSWORD) since the NAS rejects key auth over
-    #    Tailscale; fall back to key auth if sshpass/password unavailable.
+    #    the dominant cost of this whole command). Auth: prefer key auth
+    #    (jarvis_sshd_key is installed in the NAS authorized_keys); fall back
+    #    to password (sshpass + SSH_PASSWORD) if the key isn't accepted.
     local _nas_ssh=()
-    if command -v sshpass >/dev/null 2>&1 && [[ -n "${SSH_PASSWORD:-}" ]]
-    then
-        _nas_ssh=(sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=6 "${_nas_user}@${_nas_host}")
-    elif [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1
+    if [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1
     then
         _nas_ssh=(ssh -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no "${_nas_user}@${_nas_host}")
+    elif command -v sshpass >/dev/null 2>&1 && [[ -n "${SSH_PASSWORD:-}" ]]
+    then
+        _nas_ssh=(sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=6 "${_nas_user}@${_nas_host}")
     fi
     if ((${#_nas_ssh[@]})); then
         local _synced_nas=0
