@@ -746,6 +746,11 @@ function __oc_sync_gateway_env_file() {
         _var_names+=("$_name")
     done < "$_cache"
 
+    # Canonical (sorted) ordering so identical content yields byte-identical
+    # files — otherwise the bridge's variable order varies per run and the
+    # change-detection below restarts the gateway every time.
+    mapfile -t _var_names < <(printf '%s\n' "${_var_names[@]}" | sort -u)
+
     ((${#_var_names[@]})) || return 0
 
     # 1. Sync gateway.systemd.env: merge bridged vars into the existing file,
