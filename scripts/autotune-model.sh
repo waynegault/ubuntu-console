@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -71,7 +71,7 @@ MIN_TPS=${LLM_MIN_TPS:-10}
 
 # ── Autotune v4 knobs (documented in env.sh) ────────────────────────────────
 FILL_RATIO=${LLM_AUTOTUNE_FILL_RATIO:-0.75}
-FILL_MAX_TOKENS=${LLM_AUTOTUNE_FILL_MAX_TOKENS:-32768}
+FILL_MAX_TOKENS=${LLM_AUTOTUNE_FILL_MAX_TOKENS:-16384}
 FILL_MIN_TOKENS=${LLM_AUTOTUNE_FILL_MIN_TOKENS:-2048}
 MIN_PREFILL_TPS=${LLM_MIN_PREFILL_TPS:-0}
 BEAM_WIDTH=${LLM_AUTOTUNE_BEAM_WIDTH:-2}
@@ -82,7 +82,7 @@ KV_QUANTS=${LLM_AUTOTUNE_KV_QUANTS:-"q8_0/q8_0 q4_0/q4_0"}
 
 # Sanitize the numeric knobs so a bad env value can't produce garbage math.
 [[ "$FILL_RATIO" =~ ^0(\.[0-9]+)?$|^1(\.0+)?$ ]] || FILL_RATIO=0.75
-[[ "$FILL_MAX_TOKENS" =~ ^[0-9]+$ ]] && [[ $FILL_MAX_TOKENS -gt 0 ]] || FILL_MAX_TOKENS=32768
+[[ "$FILL_MAX_TOKENS" =~ ^[0-9]+$ ]] && [[ $FILL_MAX_TOKENS -gt 0 ]] || FILL_MAX_TOKENS=16384
 [[ "$FILL_MIN_TOKENS" =~ ^[0-9]+$ ]] && [[ $FILL_MIN_TOKENS -gt 0 ]] || FILL_MIN_TOKENS=2048
 [[ "$MIN_PREFILL_TPS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || MIN_PREFILL_TPS=0
 [[ "$BEAM_WIDTH" =~ ^[0-9]+$ ]] && [[ $BEAM_WIDTH -ge 1 ]] || BEAM_WIDTH=2

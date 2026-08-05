@@ -70,8 +70,16 @@ export LLM_MIN_TPS="${LLM_MIN_TPS:-10}"
 # so the recorded TPS reflects sustained throughput at the ctx being certified,
 # not a burst on an empty cache. Prefill tokens/sec is captured from the server
 # timings and persisted in the registry (field 21).
+#
+# FILL_MAX_TOKENS caps that pre-fill. 16384 was chosen (was 32768) to halve the
+# wall time of Phase-4 descent benches at huge ctx, where the KV cache spills
+# into host RAM and prefill crawls (~50 tok/s => 11 min/bench at 32K). The
+# tradeoff: at recorded ctx above ~22K the certification runs with less cache
+# pressure, so descents stop slightly higher and the floor check is a bit
+# looser. On a 4 GB card that is the right balance for a full-fleet overnight
+# sweep.
 export LLM_AUTOTUNE_FILL_RATIO="${LLM_AUTOTUNE_FILL_RATIO:-0.75}"
-export LLM_AUTOTUNE_FILL_MAX_TOKENS="${LLM_AUTOTUNE_FILL_MAX_TOKENS:-32768}"
+export LLM_AUTOTUNE_FILL_MAX_TOKENS="${LLM_AUTOTUNE_FILL_MAX_TOKENS:-16384}"
 export LLM_AUTOTUNE_FILL_MIN_TOKENS="${LLM_AUTOTUNE_FILL_MIN_TOKENS:-2048}"
 
 # Optional prefill floor (tokens/sec). 0 = disabled. When set, the Phase 4
