@@ -950,7 +950,7 @@ function oc-refresh-keys() {
                 _v2="${!_k2:-}"
                 [[ -n "$_v2" ]] || continue
                 printf -v _qv2 '%q' "$_v2"
-                printf '%s="%s"\n' "$_k2" "$_qv2"
+                printf 'export %s="%s"\n' "$_k2" "$_qv2"
             done < "$cache"
         } > "$_nas_tmp"
         local _nas_hash _prev_nas_hash
