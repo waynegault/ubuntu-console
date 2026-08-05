@@ -821,9 +821,8 @@ function oc-refresh-keys() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
     local _nas_collectors_env="/mnt/HD/HD_a2/butler/cron/openclaw-collectors.env"
     local _nas_user="${OC_NAS_USER:-sshd}"
-    # LAN IP (192.168.33.17) has been unroutable from WSL since a network
-    # change; the NAS is reachable via Tailscale. Override with OC_NAS_HOST
-    # if the LAN route is restored.
+    # LAN SSH to 192.168.33.20 times out from WSL; the NAS is reachable via
+    # Tailscale. Override with OC_NAS_HOST if the LAN route is restored.
     local _nas_host="${OC_NAS_HOST:-mycloudex2ultra.tail99183.ts.net}"
     local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
     local count=0
@@ -974,7 +973,7 @@ function oc-refresh-keys() {
         then
             __tac_info "Exporting to NAS" "[no changes — skipped]" "$C_Dim"
         else
-            __tac_info "Exporting to NAS" "[failed — NAS unreachable]" "$C_Warning"
+            __tac_info "Exporting to NAS" "[failed — SSH sync error (auth or connectivity)]" "$C_Warning"
         fi
     else
         local _reason=""
