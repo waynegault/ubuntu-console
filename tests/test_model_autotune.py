@@ -263,8 +263,32 @@ class RegistryV4SchemaTests(unittest.TestCase):
         })
         row = self.mod.load_registry_row(1)
         assert row is not None
-        self.assertEqual(row["prefill_tps"], "200.0")
-        self.assertEqual(row["p2_tps"], "50.0")
+        self.assertEqual(row["prefill_tps"], "200")      # trailing zeros stripped
+        self.assertEqual(row["p2_tps"], "50")
+
+    def test_write_rounds_floats_to_max_2_decimals(self):
+        self._patch_registry()
+        self.mod.write_registry_row(1, {
+            "tps": "22.556",
+            "prefill_tps": "143.09630118625265",
+            "p2_tps": "44.10",
+            "p2_prefill": "0",
+        })
+        row = self.mod.load_registry_row(1)
+        assert row is not None
+        self.assertEqual(row["tps"], "22.56")            # rounded up
+        self.assertEqual(row["prefill_tps"], "143.1")    # trailing zero stripped
+        self.assertEqual(row["p2_tps"], "44.1")          # 44.10 -> 44.1
+        self.assertEqual(row["p2_prefill"], "0")         # 0 stays 0
+
+    def test_write_rounds_non_float_fields_verbatim(self):
+        self._patch_registry()
+        self.mod.write_registry_row(1, {"ctx": "16384", "autotuned": "yes"})
+        row = self.mod.load_registry_row(1)
+        assert row is not None
+        self.assertEqual(row["ctx"], "16384")            # ints untouched
+        self.assertEqual(row["autotuned"], "yes")        # flags untouched
+        self.assertEqual(row["prefill_tps"], "140.2")    # unlisted field preserved
 
     def test_rejects_wrong_column_count(self):
         self._patch_registry()

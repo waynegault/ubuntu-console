@@ -274,9 +274,18 @@ def write_registry_row(row: int, updates: dict) -> None:
                     f"Invalid registry schema in row {row}: expected 20 or 26 columns, got {len(parts)}"
                 )
 
+            # Registry hygiene: measured floats are persisted at a maximum of
+            # 2 decimal places — the server timings carry full float64
+            # precision otherwise (e.g. prefill 143.09630118625265).
+            float_fields = {"tps", "prefill_tps", "p2_tps", "p2_prefill"}
             for key, value in updates.items():
                 idx = field_map.get(key)
                 if idx is not None and idx < len(parts):
+                    if key in float_fields:
+                        try:
+                            value = f"{float(value):.2f}".rstrip("0").rstrip(".")
+                        except ValueError:
+                            pass  # non-numeric (e.g. empty) — write verbatim
                     parts[idx] = str(value)
             # Pad legacy 20-column rows to the v4 26-column schema so the
             # registry converges on the extended header.

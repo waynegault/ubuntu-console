@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -190,6 +190,15 @@ function __llm_autotune_profile_save() {
     [[ "$p2_prefill" =~ ^[0-9]+(\.[0-9]+)?$ ]] || p2_prefill=""
     kv_quant=$(__llm_autotune_sanitize_token "$kv_quant")
     [[ "$ngl" =~ ^[0-9]+$ ]] || ngl=""
+
+    # Registry hygiene: persist measured floats at a maximum of 2 decimal
+    # places. The server timings carry full float64 precision (e.g. prefill
+    # 143.09630118625265), which is noise in a config file consumers parse.
+    _round2() { awk -v v="$1" 'BEGIN { printf "%.2f", v }' 2>/dev/null | sed -E 's/0+$//; s/\.$//'; }
+    tps=$(_round2 "$tps")
+    [[ -n "$prefill_tps" ]] && prefill_tps=$(_round2 "$prefill_tps")
+    [[ -n "$p2_tps" ]] && p2_tps=$(_round2 "$p2_tps")
+    [[ -n "$p2_prefill" ]] && p2_prefill=$(_round2 "$p2_prefill")
 
     [[ -f "$profile_file" ]] || return 1
 

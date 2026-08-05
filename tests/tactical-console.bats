@@ -2998,6 +2998,21 @@ EOF
     [[ -z "$prefill" ]]               # prefill empty (not provided)
 }
 
+@test "autotune: profile_save rounds floats to a maximum of 2 decimals" {
+    local llm_root="$TAC_TEST_TMPDIR/autotune-rounding"
+    mkdir -p "$llm_root/.llm"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
+        '9|Round|round.gguf|1.0G|Q4_K_M/q8_0|llama|999|4096|4|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
+    LLM_REGISTRY="$llm_root/.llm/models.conf"
+    __llm_autotune_profile_save 9 "native" 16384 1024 256 1 256 22.556 "" 143.09630118625265 32768 1024 256 44.10 0
+    local tps prefill p2tps p2pf
+    IFS='|' read -r _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ tps _ _ _ prefill _ _ _ p2tps p2pf <<< "$(awk -F'|' '$1==9' "$LLM_REGISTRY")"
+    [[ "$tps" == "22.56" ]]
+    [[ "$prefill" == "143.1" ]]
+    [[ "$p2tps" == "44.1" ]]
+    [[ "$p2pf" == "0" ]]
+}
+
 @test "autotune: autotune-model.sh has filled-cache scoring and timings parsing" {
     local src
     src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
