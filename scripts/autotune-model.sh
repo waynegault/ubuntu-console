@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -353,8 +353,12 @@ bench_once() {
     if [[ $mode == filled ]]; then
         payload_file="/tmp/at-fill-${MODEL}-${c}.json"
         [[ -f $payload_file ]] || gen_fill_payload "$c" "$payload_file"
-        # Filled prefill can be slow on CPU-only models — give it headroom.
-        [[ $bench_timeout -lt 600 ]] && bench_timeout=600
+        # Filled prefill can be slow: with the KV cache spilling into host RAM
+        # at huge ctx, prefill can drop below 55 tok/s, so a 32768-token fill
+        # exceeds 600s. Give generous headroom so slow-but-real prefills
+        # complete and are measured instead of timing out and being
+        # misclassified as OOM (which forces unnecessary Phase-4 descents).
+        [[ $bench_timeout -lt 1200 ]] && bench_timeout=1200
     fi
 
     local start_ns; start_ns=$(date +%s%N)
