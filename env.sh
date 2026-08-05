@@ -52,10 +52,6 @@ if [[ "${NODE_OPTIONS:-}" != *"dns-result-order"* ]]; then
     export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
 fi
 
-# LLM autotune context retention guardrail: keep selected ctx at or above a
-# fraction of the max stable ctx discovered per model.
-export LLM_AUTOTUNE_MIN_CTX_FRACTION="${LLM_AUTOTUNE_MIN_CTX_FRACTION:-0.60}"
-
 # Minimum acceptable generation speed (tokens/second), uniform for every model.
 # Autotune seeks the highest ctx that sustains this TPS; a model that cannot
 # reach it even at minimum ctx is recorded as too slow for our purposes.

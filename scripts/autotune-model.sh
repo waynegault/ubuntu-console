@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -159,12 +159,13 @@ fi
 
 # Comma-format numbers (standalone helpers — no outer-scope capture)
 fmt() { printf "%'d" "$1"; }
-fmts() { local _s; _s=$(printf "%'d" "${1%%:*}"); printf "%s:%'d" "$_s" "${1##*:}"; }
+# fmts — comma-format each "batch:ubatch" combo passed as args.
+fmts() { local _c _out=""; for _c in "$@"; do _out+="$(printf "%'d:%'d " "${_c%%:*}" "${_c##*:}")"; done; printf '%s' "${_out% }"; }
 
 echo "============================================="
 echo ""
 echo "  threads=$(fmt "$TUNE_THREADS")  cpu=$(fmt "$CPU_COUNT")"
-echo "  combos: $(fmts "${COMBOS[*]}")"
+echo "  combos: $(fmts "${COMBOS[@]}")"
 echo "  probe:  start=$(fmt "$START_CTX") min_tps=${MIN_TPS}"
 START_TS=$(date '+%H:%M:%S')
 echo "  start:  ${START_TS}"
@@ -354,8 +355,8 @@ bench_once() {
         payload_file="/tmp/at-fill-${MODEL}-${c}.json"
         [[ -f $payload_file ]] || gen_fill_payload "$c" "$payload_file"
         # Filled prefill can be slow: with the KV cache spilling into host RAM
-        # at huge ctx, prefill can drop below 55 tok/s, so a 32768-token fill
-        # exceeds 600s. Give generous headroom so slow-but-real prefills
+        # at huge ctx, prefill can drop below 55 tok/s, and lower still under
+        # concurrent load. Give generous headroom so slow-but-real prefills
         # complete and are measured instead of timing out and being
         # misclassified as OOM (which forces unnecessary Phase-4 descents).
         [[ $bench_timeout -lt 1200 ]] && bench_timeout=1200

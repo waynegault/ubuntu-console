@@ -260,26 +260,6 @@ Located at `~/.llm/models.conf` (`$LLM_REGISTRY`) — 20-field pipe-delimited, a
 | `-t` (threads) | dynamic | CPU-only: 80%, partial offload: 70%, full GPU: 50% of `nproc` |
 | `--batch-size` | 4096 (GPU) / 512 (CPU) | Larger batches improve prompt eval speed on GPU |
 | `--flash-attn on` | GPU only | Reduces VRAM bandwidth — critical for 4 GB GPUs |
-
-### Autotune Context Guardrail
-
-`LLM_AUTOTUNE_MIN_CTX_FRACTION` sets a minimum retained context length when
-autotune compares profile candidates.
-
-- Default: `0.60`
-- Meaning: selected context must be at least `60%` of the max stable context
-    discovered for the model (rounded to 512-token boundaries).
-- Why: prevents "fast but too-small context" winners on edge cases.
-
-Examples:
-
-```bash
-# Keep more context (stricter)
-export LLM_AUTOTUNE_MIN_CTX_FRACTION=0.75
-
-# Allow more speed bias (looser)
-export LLM_AUTOTUNE_MIN_CTX_FRACTION=0.50
-```
 | `--no-mmap` | adaptive (`LLAMA_NO_MMAP_MODE`) | Improves stability under low VRAM / WSL / MoE workloads by reducing mmap paging stalls |
 | `--jinja` | always | Enables Jinja2 chat templates from GGUF metadata |
 | Bind address | `127.0.0.1` | Loopback only — no LAN exposure |
