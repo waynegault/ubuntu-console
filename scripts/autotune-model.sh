@@ -305,7 +305,7 @@ bench_once() {
     local pid="" hw=0
     _launch_server() {
         local -a fa_args=()
-        [[ $flash_attn == "on" ]] && fa_args=(--flash-attn on) || fa_args=(--no-flash-attn)
+        [[ $flash_attn == "on" ]] && fa_args=(--flash-attn on) || fa_args=(--flash-attn off)
         "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
             --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
@@ -323,7 +323,7 @@ bench_once() {
     }
     _launch_server || {
         if [[ $flash_attn == "on" ]]; then
-            echo "  flash-attn load failure — retrying with --no-flash-attn" >&2
+            echo "  flash-attn load failure — retrying with --flash-attn off" >&2
             kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
             flash_attn="off"
             _launch_server || true
