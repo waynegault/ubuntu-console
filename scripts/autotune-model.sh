@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -298,20 +298,37 @@ bench_once() {
     local autotune_port="${AUTOTUNE_PORT:-18081}"
     # Update all curl/http references to use the same port
     local health_url="http://127.0.0.1:$autotune_port"
-    "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
-        --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
-        --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
-        --parallel 1 --fit off --flash-attn on --kv-offload \
-        --cache-type-k "$kv_k" --cache-type-v "$kv_v" $mmap_flag \
-        > "/tmp/at-${MODEL}-c${c}-b${b}.log" 2>&1 &
-    local pid=$!
-
-    local hw=0
-    while [[ $hw -lt 90 ]]; do
-        sleep 1; hw=$((hw + 1))
-        kill -0 "$pid" 2>/dev/null || { echo "0|0|load_fail" > "/tmp/at-metrics-$$"; echo ""; _BENCH_FAIL_TYPE="load_fail"; return 1; }
-        curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q 'ok' && break
-    done
+    # Flash-attn can hang or crash model load for some architectures (e.g.
+    # qwen35 / certain Q8/F16 quants) — retry once with it off before
+    # declaring the model unloadable.
+    local flash_attn="on"
+    local pid="" hw=0
+    _launch_server() {
+        local -a fa_args=()
+        [[ $flash_attn == "on" ]] && fa_args=(--flash-attn on) || fa_args=(--no-flash-attn)
+        "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
+            --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
+            --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
+            --parallel 1 --fit off "${fa_args[@]}" --kv-offload \
+            --cache-type-k "$kv_k" --cache-type-v "$kv_v" $mmap_flag \
+            > "/tmp/at-${MODEL}-c${c}-b${b}.log" 2>&1 &
+        pid=$!
+        hw=0
+        while [[ $hw -lt 90 ]]; do
+            sleep 1; hw=$((hw + 1))
+            kill -0 "$pid" 2>/dev/null || return 1
+            curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q 'ok' && return 0
+        done
+        return 1
+    }
+    _launch_server || {
+        if [[ $flash_attn == "on" ]]; then
+            echo "  flash-attn load failure — retrying with --no-flash-attn" >&2
+            kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+            flash_attn="off"
+            _launch_server || true
+        fi
+    }
     if [[ $hw -ge 90 ]]; then
         kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
         echo "0|0|load_fail" > "/tmp/at-metrics-$$"; echo ""; _BENCH_FAIL_TYPE="load_fail"; return 1
