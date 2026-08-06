@@ -14,7 +14,7 @@ Profile wraps the entire OpenClaw CLI with ergonomic shell commands.
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │  Windows 11 Pro                                     │
 │  ┌───────────────────────────────────────────────┐  │
@@ -98,7 +98,7 @@ absent, so an unresolved ref is never created). Current mapping (defined in
 `scripts/09d-oc-agents.sh`, `__oc_apply_secret_refs`):
 
 | Config path | Env var |
-|---|---|
+| --- | --- |
 | `plugins.entries.google.config.webSearch.apiKey` | `GEMINI_API_KEY` |
 
 `oc-refresh-keys` also syncs all bridged env vars to
@@ -115,7 +115,7 @@ per-agent SQLite stores are migrated separately via
 ## Gateway Lifecycle
 
 | Command | What It Does |
-|---|---|
+| --- | --- |
 | `so` | Start the OpenClaw gateway. Injects API keys into systemd, ensures Local LLM is running (auto-starts from default/first registry model when needed), then starts gateway and waits for port 18789 readiness. **Fails gracefully if OpenClaw not installed.** |
 | `xo` | Stop the gateway (**stop only — does not restart**). Runs `openclaw gateway stop`, then `systemctl --user stop openclaw-gateway.service`, removes supervisor lock. When called from an AI agent context, prints a warning to use `openclaw gateway restart` instead. **Fails gracefully if OpenClaw not installed.** |
 | `oc-restart` | Restart gateway (native: `openclaw gateway restart`). **Fails gracefully if OpenClaw not installed.** |
@@ -125,7 +125,7 @@ per-agent SQLite stores are migrated separately via
 ## Logs
 
 | Command | What It Does |
-|---|---|
+| --- | --- |
 | `le` | Show last 40 lines of gateway stderr from `journalctl --user -u openclaw-gateway.service` |
 | `lo` | Show last 120 lines of gateway stdout from `journalctl` |
 | `lc` | Rotate and vacuum the gateway journal logs |
@@ -135,7 +135,7 @@ per-agent SQLite stores are migrated separately via
 ## Agent & Session Management
 
 | Command | What It Does |
-|---|---|
+| --- | --- |
 | `os` | List active sessions (`openclaw sessions`) |
 | `oa` | List registered agents (`openclaw agents list`) |
 | `ocstart` | Send an agent turn: `ocstart -m "message" [--to E.164] [--agent id]` |
@@ -151,7 +151,7 @@ per-agent SQLite stores are migrated separately via
 ## Configuration & Diagnostics
 
 | Command | What It Does |
-|---|---|
+| --- | --- |
 | `occonf` | Open `~/.openclaw/openclaw.json` in VS Code |
 | `oc-config` | Get/set config values: `oc-config get <key>`, `oc-config set <key> <val>` |
 | `oc-env` | Dump all OC and LLM environment variables in a box-drawn panel |
@@ -167,14 +167,14 @@ per-agent SQLite stores are migrated separately via
 ## Backup & Restore
 
 | Command | What It Does |
-|---|---|
+| --- | --- |
 | `oc-backup` | ZIP snapshot of OpenClaw config (`openclaw.json`, `auth.json`), `workspace/`, `agents/`, `models.conf`, `~/.bashrc` loader, `tactical-console.bashrc`, standalone scripts (`~/.local/bin/oc-*`, `llama-watchdog.sh`, `tac_hostmetrics.sh`), and systemd units. Saved to `~/.openclaw/backups/snapshot_YYYYMMDD_HHMMSS.zip`. |
 | `oc-restore` | Restore from the most recent snapshot (destructive — prompts for confirmation). Validates ZIP contents, accepts config-only backups, and supports `--dry-run`. |
 
 ## Extensions & Advanced
 
 | Command | What It Does |
-|---|---|
+| --- | --- |
 | `oc-update` | Update OpenClaw CLI to latest version |
 | `ocv` | Print CLI version |
 | `oc-tui` | Launch the OpenClaw interactive terminal UI |
@@ -211,7 +211,7 @@ The `kgraph` CLI is installable as a standalone tool via `uv tool install ./scri
 from the repo root. It exposes all features as subcommands:
 
 | Command | Description |
-|---------|------------|
+| --- | --- |
 | `kgraph --serve` | Launch interactive viewer (same as `oc g`) |
 | `kgraph --ast --repo .` | Extract AST code concepts from a repo |
 | `kgraph --update --source-dir .` | Incremental rebuild (memory DB → AST → communities) |
@@ -262,6 +262,7 @@ Also computes degree, betweenness, and eigenvector centrality to identify
 ### Confidence Tagging (`kgraph --confidence`)
 
 Every graph edge is tagged with one of:
+
 - **EXTRACTED** — directly from source (AST parse, explicit DB relation)
 - **INFERRED** — derived via co-occurrence or semantic similarity
 - **AMBIGUOUS** — low-confidence, needs verification
@@ -269,6 +270,7 @@ Every graph edge is tagged with one of:
 ### MCP Server (`kgraph --mcp`)
 
 Exposes 5 tools via JSON-RPC over HTTP (binds localhost only):
+
 - `kgraph_query` — search nodes by pattern
 - `kgraph_path` — shortest path between two nodes
 - `kgraph_explain` — node description with connections
@@ -299,7 +301,7 @@ uv tool install ./scripts --extra ast
 ## Key Paths
 
 | Path | Purpose |
-|---|---|
+| --- | --- |
 | `~/.openclaw/` | OpenClaw root (`$OC_ROOT`) |
 | `~/.openclaw/workspace/` | Active workspace |
 | `~/.openclaw/agents/` | Agent definitions |
@@ -323,4 +325,4 @@ uv tool install ./scripts --extra ast
 
 ← [Back to README](../README.md)
 
-# end of file
+<!-- end of file -->
