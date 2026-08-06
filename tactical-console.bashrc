@@ -4,7 +4,7 @@
 # ==============================================================================
 # Purpose:        Tactical Console Profile (Interactive shell configuration)
 # Author:         Wayne
-# Last modified:  2026-04-22
+# Last modified:  2026-08-06
 # Environment:    WSL2 (Ubuntu 24.04) / RTX 3050 Ti
 #
 # Prerequisites:  bash >= 4.0
@@ -68,7 +68,7 @@ esac
 # TACTICAL_PROFILE_VERSION is auto-computed after sourcing all modules:
 #   TACTICAL_PROFILE_VERSION = _TAC_LOADER_VERSION . sum(all module versions)
 #   Example: v3.63 = loader v3 + 63 total module versions
-_TAC_LOADER_VERSION="5"
+_TAC_LOADER_VERSION="6"
 
 # AI INSTRUCTION: Follow these terminal formatting rules strictly:
 # 1. A blank line must exist between the bottom of any UI border and the command prompt.
@@ -202,6 +202,18 @@ export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
 # shellcheck disable=SC1091
 if [[ -f "$HOME/.openclaw/secrets.env" ]]; then
     source "$HOME/.openclaw/secrets.env"
+fi
+
+# Windows-bridged env store (~/.config/environment.d/90-openclaw.conf) is the
+# canonical backing store refreshed by `oc-refresh-keys`. Source it as well so
+# env-backed gateway SecretRefs (OPENCLAW_GATEWAY_PASSWORD/OPENCLAW_GATEWAY_TOKEN)
+# resolve for CLI commands even when the /dev/shm bridge cache is stale or
+# pwsh is unavailable at shell start.
+if [[ -f "$HOME/.config/environment.d/90-openclaw.conf" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$HOME/.config/environment.d/90-openclaw.conf"
+    set +a
 fi
 
 # ==============================================================================
