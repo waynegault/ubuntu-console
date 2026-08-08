@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -469,21 +469,31 @@ bench_ctx() {
         return 0
     fi
 
-    local t1; t1=$(bench_once "$c" "$b" "$u" "$mmap_mode" "$override_ngl" "$mode" "$kv_k" "$kv_v") || t1=""
-    t1=$(echo "$t1" | bc 2>/dev/null || echo "0")
-    local t2; t2=$(bench_once "$c" "$b" "$u" "$mmap_mode" "$override_ngl" "$mode" "$kv_k" "$kv_v") || t2=""
-    t2=$(echo "$t2" | bc 2>/dev/null || echo "0")
-
-    local o=0
-    [[ $(echo "$t1 <= 0" | bc 2>/dev/null || echo "1") == 1 ]] && o=$((o+1))
-    [[ $(echo "$t2 <= 0" | bc 2>/dev/null || echo "1") == 1 ]] && o=$((o+1))
-    if [[ $o -ge 2 ]]; then echo ""; return 1; fi
+    # Multi-sample (samples >= 2): drop OOM samples, then combine the rest.
+    # For N >= 3 the verdict is the MEDIAN of the surviving samples — a single
+    # unlucky low read cannot flip a Phase 4 floor verdict. N == 2 keeps the
+    # historical mean (a "median of 2" is just a mean). bench_once already
+    # warms up the server inside each call, so no extra warmup discard is
+    # needed here.
+    local -a vals=()
+    local _i _v
+    for ((_i = 0; _i < samples; _i++)); do
+        _v=$(bench_once "$c" "$b" "$u" "$mmap_mode" "$override_ngl" "$mode" "$kv_k" "$kv_v") || _v=""
+        _v=$(echo "$_v" | bc 2>/dev/null || echo "0")
+        if [[ $(echo "$_v > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
+            vals+=("$_v")
+        fi
+    done
+    if [[ ${#vals[@]} -eq 0 ]]; then echo ""; return 1; fi
 
     local tps
-    if [[ $o -eq 0 ]]; then
-        tps=$(echo "($t1+$t2)/2" | bc -l 2>/dev/null || echo "$t1")
+    if [[ ${#vals[@]} -eq 1 ]]; then
+        tps="${vals[0]}"
+    elif [[ $samples -eq 2 ]]; then
+        tps=$(echo "scale=2; (${vals[0]}+${vals[1]})/${#vals[@]}" | bc -l 2>/dev/null || echo "${vals[0]}")
     else
-        [[ $(echo "$t1 > 0" | bc 2>/dev/null || echo "0") == 1 ]] && tps=$t1 || tps=$t2
+        # Median of the survivors (LC_ALL=C sort keeps decimals locale-safe).
+        tps=$(printf '%s\n' "${vals[@]}" | LC_ALL=C sort -n | awk '{a[NR]=$1} END { if (NR%2) print a[(NR+1)/2]; else printf "%.2f\n", (a[NR/2]+a[NR/2+1])/2 }')
     fi
     tps=$(echo "scale=2; $tps / 1" | bc -l 2>/dev/null || echo "$tps"); [ -z "$tps" ] && tps=0
     # Refinement: only check for actual OOM (0 tokens). TPS floor is applied
@@ -917,14 +927,24 @@ BAND_MIN_MB=$(awk -v f="$FREE_VRAM" -v fr="$NGL_BAND_FRAC" 'BEGIN{printf "%d", f
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
 
-    # ngl candidates: runtime-max offload (999) and half the layers, minus
-    # whatever the registry already uses.
+    # ngl candidates: runtime-max offload (999) plus a short ladder down the
+    # GGUF layer count (3/4, 1/2, 1/4) — on a 4 GB card partial offload can
+    # win anywhere in that band, and 999-or-half alone skips it. Dedup against
+    # the registry's current value and against each other.
     NGL_CANDIDATES=()
     [[ "$BENCH_NGL" != "999" ]] && NGL_CANDIDATES+=("999")
     if [[ -n "${_n_layers:-}" ]] && [[ "$_n_layers" =~ ^[0-9]+$ ]] && [[ $_n_layers -gt 1 ]]; then
-        _half=$(( _n_layers / 2 ))
-        [[ $_half -lt 1 ]] && _half=1
-        [[ "$_half" != "$BENCH_NGL" ]] && NGL_CANDIDATES+=("$_half")
+        for _frac in 3 2 1; do
+            _ngl_cand=$(( _n_layers * _frac / 4 ))
+            [[ $_ngl_cand -lt 1 ]] && _ngl_cand=1
+            [[ "$_ngl_cand" != "$BENCH_NGL" ]] || continue
+            _dup=0
+            for _existing in "${NGL_CANDIDATES[@]:-}"; do
+                [[ "$_existing" == "$_ngl_cand" ]] && _dup=1 && break
+            done
+            (( _dup )) || NGL_CANDIDATES+=("$_ngl_cand")
+        done
+        unset _frac _ngl_cand _dup _existing
     fi
 
     if [[ ${#NGL_CANDIDATES[@]} -gt 0 ]]; then
@@ -984,7 +1004,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     _dc=$BEST_CTX
     _ft=""
     while true; do
-        _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
+        # 3-sample median verdict: one unlucky low read must not permanently
+        # cost context (single-sample descent drove real decisions before).
+        _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
         if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
             _fp="0"
             IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -1009,12 +1031,19 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         _dc=$_next
     done
 
-    # Final certification: double-sample at the winner for the recorded number.
-    _cert=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 2 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert=""
+    # Final certification: triple-sample (median) at the winner for the
+    # recorded number — the persisted TPS is a robust estimate, not a burst.
+    _cert=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert=""
     if [[ -n $_cert ]] && [[ $(echo "$_cert > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
         BEST_TPS=$_cert
         IFS='|' read -r _fd2 _fp2 _ff2 < "/tmp/at-metrics-$$" 2>/dev/null || true
         BEST_PREFILL="${_fp2:-0}"
+    fi
+    # Record GPU thermal/clock state alongside the certified number — heat
+    # soak on a laptop biases later benches; the temp explains outliers.
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        _gpu_thermal=$(nvidia-smi --query-gpu=temperature.gpu,clocks.sm --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        echo "  thermal at certification: GPU ${_gpu_thermal:-n/a} (temp °C, SM MHz)"
     fi
 fi
 
@@ -1023,7 +1052,7 @@ fi
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
     if [[ "$P2_CTX|$P2_B:$P2_U" != "$BEST_CTX|$BEST_B:$BEST_U" ]]; then
         echo "  certifying profile 2 (interactive) at ctx=$(fmt "$P2_CTX")  $(fmt "$P2_B")/$(fmt "$P2_U")"
-        _p2t=$(bench_ctx "$P2_CTX" "$P2_B" "$P2_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _p2t=""
+        _p2t=$(bench_ctx "$P2_CTX" "$P2_B" "$P2_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _p2t=""
         if [[ -n $_p2t ]] && [[ $(echo "$_p2t > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
             P2_TPS=$_p2t
             IFS='|' read -r _pd3 _pp3 _pf3 < "/tmp/at-metrics-$$" 2>/dev/null || true
