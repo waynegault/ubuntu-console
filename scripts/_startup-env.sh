@@ -3,6 +3,9 @@
 # ==============================================================================
 # _startup-env.sh — Shared startup environment optimizations.
 # ==============================================================================
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
+#
 # Single source of truth for the NODE_COMPILE_CACHE / OPENCLAW_NO_RESPAWN /
 # NODE_OPTIONS startup blocks. Sourced by BOTH:
 #   - tactical-console.bashrc (interactive profile)
