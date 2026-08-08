@@ -68,7 +68,7 @@ esac
 # TACTICAL_PROFILE_VERSION is auto-computed after sourcing all modules:
 #   TACTICAL_PROFILE_VERSION = _TAC_LOADER_VERSION . sum(all module versions)
 #   Example: v3.63 = loader v3 + 63 total module versions
-_TAC_LOADER_VERSION="6"
+_TAC_LOADER_VERSION="7"
 
 # AI INSTRUCTION: Follow these terminal formatting rules strictly:
 # 1. A blank line must exist between the bottom of any UI border and the command prompt.
@@ -219,18 +219,9 @@ fi
 # ==============================================================================
 #  Startup Optimizations (faster CLI performance)
 # ==============================================================================
-# NODE_COMPILE_CACHE: Cache compiled JS for repeated CLI runs (~30-50% faster)
-export NODE_COMPILE_CACHE="${NODE_COMPILE_CACHE:-/var/tmp/openclaw-compile-cache}"
-mkdir -p "$NODE_COMPILE_CACHE" 2>/dev/null || true
-
-# OPENCLAW_NO_RESPAWN: Skip self-respawn overhead
-export OPENCLAW_NO_RESPAWN="${OPENCLAW_NO_RESPAWN:-1}"
-
-# NODE_OPTIONS: Prefer IPv4 DNS — this machine has no IPv6 default route,
-# causing Node.js fetch() to time out on IPv6 connection attempts.
-if [[ "$NODE_OPTIONS" != *"dns-result-order"* ]]; then
-    export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
-fi
+# Shared fragment — single source of truth for NODE_COMPILE_CACHE /
+# OPENCLAW_NO_RESPAWN / NODE_OPTIONS, also sourced by env.sh (library mode).
+source "$_tac_repo_root/scripts/_startup-env.sh"
 
 unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv _tac_repo_root _tac_expected_modules _tac_found_count
 

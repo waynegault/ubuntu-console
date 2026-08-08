@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 29
+# Module Version: 30
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -69,6 +69,9 @@ function __check_cooldown() {
     esac
 
     # Use flock for exclusive access to prevent race conditions
+    # Ensure the cooldown DB directory exists before opening the lock FD —
+    # a first-ever check may run before any __set_cooldown created it.
+    mkdir -p "$(dirname "$CooldownDB")" 2>/dev/null || true
     local last_run diff
     {
         flock -x 200 || return 1
@@ -115,29 +118,18 @@ function __set_cooldown() {
 # ---------------------------------------------------------------------------
 # __docs_sync_check — Compare a few generated repo facts against README.md.
 # Lightweight guardrail only: warns on obvious drift, does not rewrite docs.
+# Delegates to tools/docs-sync-check.sh — the single source of truth for the
+# README drift check, also run by CI (which fails the build on drift).
 # @returns 0 if the tracked facts match, 1 if README drift is detected.
 # ---------------------------------------------------------------------------
 function __docs_sync_check() {
-    local readme_path="$TACTICAL_REPO_ROOT/README.md"
-    local bats_path="$TACTICAL_REPO_ROOT/tests/tactical-console.bats"
-    local env_path="$TACTICAL_REPO_ROOT/env.sh"
-    [[ -f "$readme_path" && -f "$bats_path" && -f "$env_path" ]] || return 1
-
-    local expected_tests readme_ok=0
-    expected_tests=$(rg -c '^@test ' "$bats_path" 2>/dev/null || grep -c '^@test ' "$bats_path" 2>/dev/null)
-    expected_tests=${expected_tests:-0}
-
-    local expected_test_phrase="${expected_tests} BATS unit tests"
-    local expected_env_phrase="Non-interactive library loader (all modules except 13-init.sh)"
-
-    if grep -qF "$expected_test_phrase" "$readme_path" \
-        && grep -qF "$expected_env_phrase" "$readme_path" \
-        && grep -q '\[0-9\]\[0-9\]-\*\.sh' "$env_path"
+    local check_script="${TACTICAL_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/tools/docs-sync-check.sh"
+    if [[ -x "$check_script" ]]
     then
-        readme_ok=1
+        "$check_script" >/dev/null 2>&1
+        return $?
     fi
-
-    (( readme_ok == 1 ))
+    return 1
 }
 
 # ---------------------------------------------------------------------------

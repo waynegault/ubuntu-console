@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -36,21 +36,11 @@ __TAC_ENV_LOADED=1
 # set PS1, register completions) can check this variable to skip them.
 export TAC_LIBRARY_MODE=1
 
-# Startup optimizations for faster CLI performance
-# NODE_COMPILE_CACHE: Cache compiled JS for repeated CLI runs
-export NODE_COMPILE_CACHE="${NODE_COMPILE_CACHE:-/var/tmp/openclaw-compile-cache}"
-mkdir -p "$NODE_COMPILE_CACHE" 2>/dev/null || true
-
-# OPENCLAW_NO_RESPAWN: Skip self-respawn overhead
-export OPENCLAW_NO_RESPAWN="${OPENCLAW_NO_RESPAWN:-1}"
-
-# NODE_OPTIONS: Prefer IPv4 DNS — this machine has no IPv6 default route,
-# causing Node.js fetch() to time out on IPv6 connection attempts.
-# (Mirrored from tactical-console.bashrc for non-interactive contexts.)
-# ${NODE_OPTIONS:-} keeps env.sh safe under `set -u` callers (autotune-model.sh).
-if [[ "${NODE_OPTIONS:-}" != *"dns-result-order"* ]]; then
-    export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
-fi
+# Startup optimizations (NODE_COMPILE_CACHE / OPENCLAW_NO_RESPAWN / NODE_OPTIONS).
+# Shared fragment — single source of truth, also sourced by tactical-console.bashrc.
+_tac_env_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1090
+source "$_tac_env_root/scripts/_startup-env.sh"
 
 # Minimum acceptable generation speed (tokens/second), uniform for every model.
 # Autotune seeks the highest ctx that sustains this TPS; a model that cannot
@@ -98,7 +88,6 @@ export LLM_AUTOTUNE_KV_QUANTS="${LLM_AUTOTUNE_KV_QUANTS:-q8_0/q8_0 q4_0/q4_0}"
 # CPU-only models).
 export LLM_AUTOTUNE_BENCH_TIMEOUT="${LLM_AUTOTUNE_BENCH_TIMEOUT:-300}"
 
-_tac_env_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _tac_lib_dir="$_tac_env_root/scripts"
 
 for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh "$_tac_lib_dir"/[0-9][0-9][a-z]-*.sh; do

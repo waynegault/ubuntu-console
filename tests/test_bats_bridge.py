@@ -31,7 +31,10 @@ def _parse_bats_tests(bats_file: Path) -> list[str]:
     """Extract individual @test names from a .bats file."""
     text = bats_file.read_text(encoding="utf-8")
     names: list[str] = []
-    for m in re.finditer(r'@test\s+["\'](.*)["\']\s+{', text):
+    # Non-greedy name match; tolerates `{` on the next line and extra
+    # whitespace. A name containing an embedded quote still terminates at the
+    # first unescaped closing quote (bats test names must quote-escape anyway).
+    for m in re.finditer(r'@test\s+["\'](.*?)["\']\s*\{?', text):
         names.append(m.group(1))
     return names
 
@@ -161,7 +164,7 @@ def _run_and_cache_bats(bats_file: Path, timeout_s: int, test_name: str | None =
     #   ok 165 # skip (reason) test_name   — skip BEFORE name
     # Diagnostic context (file/line/assertion) follows failed tests on lines
     # starting with "# " — capture those into per-test diagnostics.
-    tap_line_re = re.compile(r'^(ok|not ok)\s+\d+\s+(.*?)(?:\s+in\s+\d+(?:sec|ms))?$')
+    tap_line_re = re.compile(r'^(ok|not ok)\s+\d+\s+(.*?)(?:\s+in\s+\d+(?:\.\d+)?(?:sec|ms|s))?$')
     diagnostic_re = re.compile(r'^#\s+(.*)')
     current_test: str | None = None
     diagnostics: dict[str, list[str]] = {}

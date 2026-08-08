@@ -1,0 +1,64 @@
+name: Nightly Full Suite
+
+on:
+  schedule:
+    # 3:23 AM UTC daily — off the :00/:30 marks to spread load
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  full-suite:
+    name: Full BATS + Python Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: Run full behavioural suite
+        run: bats tests/tactical-console.bats
+
+      - name: Run fast + function-availability suites
+        run: |
+          bats tests/tactical-console-fast.bats
+          bats tests/tactical-console-function-availability.bats
+
+      - name: Run unit suites
+        run: |
+          # 04-llama-cpp-inventory.bats excluded: performs live downloads + mutates host
+          bats tests/unit/01-refresh-keys.bats \
+               tests/unit/02-so-startup.bats
+
+      - name: Run integration suites
+        run: |
+          bats tests/integration/01-maintenance.bats \
+               tests/integration/02-model-lifecycle.bats \
+               tests/integration/03-backup-restore.bats \
+               tests/integration/04-watchdog.bats \
+               tests/integration/05-refresh-keys.bats
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest pytest-timeout pydantic networkx
+          pip install tree-sitter tree-sitter-bash tree-sitter-python
+
+      - name: Ruff lint
+        run: ruff check scripts/kgraph/
+
+      - name: Run Python tests
+        run: python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_model_autotune.py tests/test_untested_modules.py -x --timeout=120 -q
+
+      - name: Docs sync check
+        run: tools/docs-sync-check.sh
+
+# end of file

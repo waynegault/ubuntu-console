@@ -9,7 +9,7 @@
 
 The **Tactical Console Profile** is a modular Bash environment that turns a
 WSL2 Ubuntu shell into a unified command-and-control console. A thin loader
-(`tactical-console.bashrc`) sources 16 numbered profile modules from `scripts/`
+(`tactical-console.bashrc`) sources 26 numbered profile modules from `scripts/`
 in dependency order.
 
 **Non-interactive access:** `env.sh` is a library loader that sources all
@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (730 total tests: 550 BATS + 180 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (750 total tests: 562 BATS + 188 Python).
 
 ### Running Tests
 
@@ -442,12 +442,12 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 
 | Suite | File | Count | Timeout |
 |-------|------|-------|---------|
-| Full behavioural | `tactical-console.bats` | 380 | 900s |
+| Full behavioural | `tactical-console.bats` | 387 | 900s |
 | Fast static analysis | `tactical-console-fast.bats` | 50 | 180s |
-| Unit (refresh-keys, so-startup, llama-cpp-inventory) | `tests/unit/*.bats` | 12 | 120s |
-| Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | ~109 | 300s |
-| Python (kgraph, models, autotune, untested-modules, lock-fixture) | `tests/test_*.py` | ~180 | 200s |
-| **Total** | | **~730** | |
+| Unit (refresh-keys, so-startup, llama-cpp-inventory) | `tests/unit/*.bats` | 14 | 120s |
+| Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 109 | 300s |
+| Python (kgraph, models, autotune, untested-modules, lock-fixture) | `tests/test_*.py` | 188 | 200s |
+| **Total** | | **750** | |
 
 ---
 
@@ -455,35 +455,54 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 
 ### Module Architecture
 
-The profile is a thin loader (~225 lines) that sources 16 numbered profile modules from `scripts/` via an explicit array (not a glob) to guarantee load order:
+The profile is a thin loader that sources 26 numbered profile modules from `scripts/` via an explicit array (not a glob) to guarantee load order:
 
 ```bash
 _tac_expected_modules=(
     01-constants 02-error-handling 03-design-tokens 04-aliases
-    05-ui-engine 06-hooks 07-telemetry 08-maintenance 09-openclaw 09b-gog
-    10-deployment 11-llm-manager 12-dashboard-help 13-init 14-wsl-extras
-    15-model-recommender
+    05-ui-engine 06-hooks 07-telemetry 08-maintenance
+    09-openclaw 09a-oc-gateway 09b-gog 09c-oc-core 09d-oc-agents 09e-oc-health 09f-oc-misc
+    10-deployment
+    11a-llm-registry 11b-llm-autotune 11c-llm-server 11d-llm-gpu 11e-llm-model 11f-llm-runtime
+    12-dashboard-help 13-init 14-wsl-extras 15-model-recommender
 )
 ```
 
-| Module | Lines | Purpose |
-|---|---|---|
-| `01-constants.sh` | 372 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
-| `02-error-handling.sh` | 258 | ERR trap → `bash-errors.log` (exit codes ≥ 2; exit 1 filtered) |
-| `03-design-tokens.sh` | 48 | ANSI colour constants (`readonly`, re-source safe) |
-| `04-aliases.sh` | 496 | Short commands, VS Code wrappers, tactical shortcuts |
-| `05-ui-engine.sh` | 534 | Box-drawing: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
-| `06-hooks.sh` | 197 | `cd` override (venv auto-activate), prompt (PS1), `__test_port`, admin badge |
-| `07-telemetry.sh` | 411 | CPU + dual GPU, NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots |
-| `08-maintenance.sh` | 1480 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system with flock |
-| `09-openclaw.sh` | 3208 | Full OpenClaw wrapper suite (gateway, backup, bridge, `oc-failover`, wacli, `oc-kgraph`) |
-| `09b-gog.sh` | 165 | Google CLI (gog) detection and helpers |
-| `10-deployment.sh` | 460 | `mkproj` (disk space check), `commit_deploy`, `commit_auto` |
-| `11-llm-manager.sh` | 5948 | Model management, streaming chat, burn, bench, explain, `__calc_gpu_layers`, `__gguf_metadata` |
-| `12-dashboard-help.sh` | 686 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` |
-| `13-init.sh` | 134 | `mkdir -p`, completions, WSL loopback fix, bridge call, EXIT trap (chained) |
-| `14-wsl-extras.sh` | 138 | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
-| `15-model-recommender.sh` | 194 | AI model recommendations by use case (`bc` fallback for integer math) |
+`09-openclaw.sh` and `11-llm-manager.sh` are thin loaders that source their
+`09a-f` / `11a-f` sub-modules in dependency order; the loader also sources each
+sub-module directly, so both load paths are guarded and idempotent. Module
+counts and line counts are verified by `tools/docs-sync-check.sh` in CI — this
+table intentionally omits line counts because they drift.
+
+| Module | Purpose |
+|---|---|
+| `01-constants.sh` | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
+| `02-error-handling.sh` | ERR trap → `bash-errors.log` (exit codes ≥ 2; exit 1 filtered) |
+| `03-design-tokens.sh` | ANSI colour constants (`readonly`, re-source safe) |
+| `04-aliases.sh` | Short commands, VS Code wrappers, tactical shortcuts |
+| `05-ui-engine.sh` | Box-drawing: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
+| `06-hooks.sh` | `cd` override (venv auto-activate), prompt (PS1), `__test_port`, admin badge |
+| `07-telemetry.sh` | CPU + dual GPU, NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots |
+| `08-maintenance.sh` | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, cooldown system with flock |
+| `09-openclaw.sh` | Thin loader → sources `09a-f` sub-modules |
+| `09a-oc-gateway.sh` | OpenClaw gateway: `so`, `xo`, `oc`, `oc-restart`, `ocstart`, `ocstop`, `oc-purge`, `ockeys`, `oc-refresh-keys` |
+| `09b-gog.sh` | Google CLI (gog) detection and helpers |
+| `09c-oc-core.sh` | Core `oc` wrappers: backup/restore, `oc-agent-use`, `oc-diag`, `oc-doctor-local`, `oc-failover`, `wacli` |
+| `09d-oc-agents.sh` | Agent helpers: `oc-kgraph`, `owk`, `ologs`, `ocroot`, `lc`, `oc-update`, `oc-cron`, `oc-skills` |
+| `09e-oc-health.sh` | Health suite: `oc-health`, `oc-plugins`, `oc-plugin-update`, `oc-tail`, `oc-channels`, `oc-sec` |
+| `09f-oc-misc.sh` | Misc: `oc-stinger`, `oc-tui`, `oc-config`, `oc-docs`, `oc-usage`, `oc-local-llm`, `oc-sync-models`, `ocms`, `oc-browser`, `oc-nodes`, `oc-sandbox`, `oc-env`, `oc-cache-clear`, `oc-trust-sync`, `mem-index`, `oc-memory-search` |
+| `10-deployment.sh` | `mkproj` (disk space check), `commit_deploy`, `commit_auto` |
+| `11-llm-manager.sh` | Thin loader → sources `11a-f` sub-modules |
+| `11a-llm-registry.sh` | Registry CRUD, sync, renumber |
+| `11b-llm-autotune.sh` | Autotune infrastructure for optimal model parameters |
+| `11c-llm-server.sh` | LLM server lifecycle, health, Python resolution |
+| `11d-llm-gpu.sh` | GPU status, GGUF metadata, calculations |
+| `11e-llm-model.sh` | Model management, streaming chat, burn, bench, explain |
+| `11f-llm-runtime.sh` | Runtime helpers: `wake`, `model`, `serve`, `halt`, `mlogs`, `local_chat`, `chat-context` |
+| `12-dashboard-help.sh` | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` |
+| `13-init.sh` | `mkdir -p`, completions, WSL loopback fix, bridge call, EXIT trap (chained) |
+| `14-wsl-extras.sh` | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
+| `15-model-recommender.sh` | AI model recommendations by use case (`bc` fallback for integer math) |
 
 **Utility scripts** (in `tools/`, not sourced as profile modules):
 
@@ -506,10 +525,10 @@ _tac_expected_modules=(
 06-hooks             ← 01, 03                                  │
 07-telemetry         ← 01, 03, 05                              │
 08-maintenance       ← 01, 03, 05, 07                          │
-09-openclaw          ← 01, 03, 05, 06                          │
+09-openclaw          ← 01, 03, 05, 06   (thin loader → 09a-f)  │
 09b-gog              ← 01                                      │
 10-deployment        ← 01, 03, 05, 06                          │
-11-llm-manager       ← 01, 03, 05, 06                          │
+11-llm-manager       ← 01, 03, 05, 06   (thin loader → 11a-f)  │
 12-dashboard-help    ← 01, 03, 05, 06, 07, 09, 11             │
 13-init              ← all above                               │
 14-wsl-extras        ← 01 (optional startup helpers) ──────────┘
@@ -528,7 +547,7 @@ Never use PascalCase or camelCase for function names.
 
 ### Version System
 
-`TACTICAL_PROFILE_VERSION` is auto-computed: `_TAC_LOADER_VERSION . sum(all module versions)`. Each module has a `# Module Version: N` comment that is incremented on any change. The loader is currently v5.
+`TACTICAL_PROFILE_VERSION` is auto-computed: `_TAC_LOADER_VERSION . sum(all module versions)`. Each module has a `# Module Version: N` comment that is incremented on any change. The loader is currently v7.
 
 ### Telemetry Caching
 
@@ -567,7 +586,7 @@ function __get_METRIC() {
 
 ### Non-Interactive Access
 
-`env.sh` sources modules `01-15` (skipping `13-init.sh`; utility scripts live in `tools/` and are never sourced). It is idempotent (`__TAC_ENV_LOADED` guard) and sets `TAC_LIBRARY_MODE=1`.
+`env.sh` sources all numbered modules (including the `09a-f` / `11a-f` sub-modules) via glob, skipping only `13-init.sh` (interactive side-effects) and `18-lint.sh` (standalone script); utility scripts live in `tools/` and are never sourced. It is idempotent (`__TAC_ENV_LOADED` guard) and sets `TAC_LIBRARY_MODE=1`.
 
 `bin/tac-exec` sources `env.sh` then runs `"$@"`, symlinked to `~/.local/bin/tac-exec`.
 
@@ -592,7 +611,7 @@ function __get_METRIC() {
 │   ├── oc-model-switch                # Thin wrapper → tac-exec serve
 │   ├── oc-quick-diag                  # Thin wrapper → tac-exec oc diag
 │   └── oc-wake                        # Thin wrapper → tac-exec wake
-├── scripts/                           # Profile modules (01-15, 09b) + kgraph package
+├── scripts/                           # Profile modules (01-15, 09a-f, 11a-f) + kgraph package
 │   ├── 01-constants.sh                #   All paths, ports, env vars
 │   ├── 02-error-handling.sh           #   ERR trap
 │   ├── 03-design-tokens.sh            #   ANSI colour constants
@@ -601,19 +620,32 @@ function __get_METRIC() {
 │   ├── 06-hooks.sh                    #   cd override, prompt, port test
 │   ├── 07-telemetry.sh                #   CPU, GPU, battery, git, disk, tokens
 │   ├── 08-maintenance.sh              #   up (20 steps), cl, get-ip, sysinfo
-│   ├── 09-openclaw.sh                 #   Gateway, backup, kgraph, wacli
+│   ├── 09-openclaw.sh                 #   Thin loader → 09a-f sub-modules
+│   ├── 09a-oc-gateway.sh              #     Gateway: so, xo, oc, ockeys, oc-refresh-keys
 │   ├── 09b-gog.sh                     #   Google CLI (gog) detection and helpers
+│   ├── 09c-oc-core.sh                 #     Core: backup/restore, oc-agent-use, oc-failover
+│   ├── 09d-oc-agents.sh               #     Agents: oc-kgraph, owk, oc-update, oc-cron
+│   ├── 09e-oc-health.sh               #     Health: oc-health, oc-plugins, oc-sec
+│   ├── 09f-oc-misc.sh                 #     Misc: oc-stinger, oc-env, oc-cache-clear, mem-index
 │   ├── 10-deployment.sh               #   mkproj, git commit+push, deploy
-│   ├── 11-llm-manager.sh              #   Model mgmt, chat, burn, bench
+│   ├── 11-llm-manager.sh              #   Thin loader → 11a-f sub-modules
+│   ├── 11a-llm-registry.sh            #     Registry CRUD, sync, renumber
+│   ├── 11b-llm-autotune.sh            #     Autotune infrastructure
+│   ├── 11c-llm-server.sh              #     Server lifecycle, health
+│   ├── 11d-llm-gpu.sh                 #     GPU status, GGUF metadata, calc
+│   ├── 11e-llm-model.sh               #     Model mgmt, chat, burn, bench
+│   ├── 11f-llm-runtime.sh             #     Runtime: wake, serve, halt, mlogs
 │   ├── 12-dashboard-help.sh           #   Dashboard ('m') and Help ('h')
 │   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
 │   ├── 14-wsl-extras.sh               #   WSL/X11 helpers, completions, vault env
 │   ├── 15-model-recommender.sh        #   AI model recommendations by use case
+│   ├── startup-env.sh                 #   Shared startup env fragment (sourced by loader + env.sh)
 │   └── kgraph/                        #   Knowledge graph Python package (Pydantic models)
 │       ├── models.py                  #     GraphNode, GraphEdge, Graph, GraphBuilder
 │       └── templates/kgraph.html      #     Cytoscape.js viewer template
 ├── tools/                             # Standalone utility scripts (not sourced)
 │   ├── check-agent-use.sh             #   Agent usage regression checker
+│   ├── docs-sync-check.sh             #   README drift guard (module count, version, test totals)
 │   ├── import-windows-env.sh          #   Import Windows user environment variables
 │   ├── lint.sh                        #   bash -n + shellcheck + Unicode safety
 │   ├── mirror-vault.sh                #   Sync Obsidian vault to Windows
@@ -794,10 +826,12 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 50 tests)
-- **Full tests:** `bats tests/tactical-console.bats` (371 BATS unit tests)
-- **Unit tests:** `bats tests/unit/*.bats` (33 tests)
+- **Full tests:** `bats tests/tactical-console.bats` (387 BATS unit tests)
+- **Unit tests:** `bats tests/unit/*.bats` (14 tests)
 - **Integration tests:** `bats tests/integration/*.bats` (109 tests)
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety)
+- **Docs sync:** `tools/docs-sync-check.sh` (README drift guard — fails CI on stale module counts, versions, or test totals)
+- **Nightly:** full suite runs nightly via `.github/workflows/nightly.yml` (scheduled + manual dispatch)
 
 Run locally:
 

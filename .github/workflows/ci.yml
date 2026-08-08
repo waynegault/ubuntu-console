@@ -69,7 +69,18 @@ jobs:
       - name: Run lint script
         run: tools/lint.sh
 
-    # Full suite (379 tests) is run locally via: bats tests/tactical-console.bats
+    # Full suite (387 tests) is run locally via: bats tests/tactical-console.bats
+    # and nightly via .github/workflows/nightly.yml.
+
+  docs-sync:
+    name: Docs Sync Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify README matches repo facts
+        run: tools/docs-sync-check.sh
 
   behavioral:
     name: Behavioral BATS (unit + integration)
