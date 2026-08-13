@@ -3,7 +3,7 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================
@@ -37,6 +37,14 @@ fi
 # Load completions safely (only once — guarded with -f check)
 [[ -f "$BASH_COMPLETION_SCRIPT" ]] && . "$BASH_COMPLETION_SCRIPT"
 [[ -f "$OC_ROOT/completions/openclaw.bash" ]] && source "$OC_ROOT/completions/openclaw.bash"
+
+# Grok CLI — PATH + completions (moved here from ~/.bashrc to keep the
+# loader thin; guarded the same way the installer generated it).
+if [[ -d "$HOME/.grok/bin" && ":$PATH:" != *":$HOME/.grok/bin:"* ]]
+then
+    export PATH="$HOME/.grok/bin:$PATH"
+fi
+[[ -r "$HOME/.grok/completions/bash/grok.bash" ]] && source "$HOME/.grok/completions/bash/grok.bash"
 
 # Homebrew Node@24 — specific Node version (before general Homebrew PATH)
 if [[ -d "/home/linuxbrew/.linuxbrew/opt/node@24/bin" ]] \

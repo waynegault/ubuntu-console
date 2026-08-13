@@ -34,7 +34,9 @@ LLM_PORT="${LLM_PORT:-8081}"
 # a different port, leaving the watchdog untouched.
 # This works because __model_bench stops the service before autotune, and
 # bench_run_with_timeout uses LLM_PORT (preserving the watchdog's port).
-AUTOTUNE_PORT="${AUTOTUNE_PORT:-18081}"
+# 2026-08-11: production now runs as llama-server.service on 18081, so
+# autotune's scratch port moved to 18082 to avoid colliding with it.
+AUTOTUNE_PORT="${AUTOTUNE_PORT:-18082}"
 ACTIVE_LLM_FILE="${ACTIVE_LLM_FILE:-/dev/shm/active_llm}"
 LLM_LOG_FILE="${LLM_LOG_FILE:-/dev/shm/llama-server.log}"
 export LLM_REGISTRY="${LLM_REGISTRY:-$HOME/.llm/models.conf}"

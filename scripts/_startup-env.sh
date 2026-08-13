@@ -4,7 +4,7 @@
 # _startup-env.sh — Shared startup environment optimizations.
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 #
 # Single source of truth for the NODE_COMPILE_CACHE / OPENCLAW_NO_RESPAWN /
 # NODE_OPTIONS startup blocks. Sourced by BOTH:
@@ -22,6 +22,15 @@
 # NODE_COMPILE_CACHE: Cache compiled JS for repeated CLI runs
 export NODE_COMPILE_CACHE="${NODE_COMPILE_CACHE:-/var/tmp/openclaw-compile-cache}"
 mkdir -p "$NODE_COMPILE_CACHE" 2>/dev/null || true
+
+# Homebrew Node@24 — pin the specific Node version used by openclaw/gateway
+# (moved here from ~/.bashrc so the loader stays thin). 13-init re-checks the
+# same path for interactive shells; the guard makes this idempotent.
+if [[ -d "/home/linuxbrew/.linuxbrew/opt/node@24/bin" ]] \
+    && [[ ":$PATH:" != *":/home/linuxbrew/.linuxbrew/opt/node@24/bin:"* ]]
+then
+    export PATH="/home/linuxbrew/.linuxbrew/opt/node@24/bin:$PATH"
+fi
 
 # OPENCLAW_NO_RESPAWN: Skip self-respawn overhead
 export OPENCLAW_NO_RESPAWN="${OPENCLAW_NO_RESPAWN:-1}"

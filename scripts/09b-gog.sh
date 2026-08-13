@@ -3,7 +3,7 @@
 # --- Module: 09b-gog ------------------------------------------------------
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 9b. GOG (Google CLI) MANAGER
 # ==============================================================================
@@ -16,14 +16,17 @@
 # GOG INSTALLATION CHECK (Evaluated once at profile load time)
 # ==============================================================================
 # __TAC_GOG_OK is set to 1 only if gog CLI exists AND responds to --version.
-# This functional check is performed once when this module loads.
+# Uses a 300s TTL cache in /dev/shm (see __tac_probe_ok, §1) so the Go CLI is
+# not forked on every shell start. This functional check is performed once
+# when this module loads (or from cache).
 # All code should check __TAC_GOG_OK instead of running `command -v gog`.
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
 [[ -n "${__TAC_MOD_09B_GOG_LOADED:-}" ]] && return 0
 __TAC_MOD_09B_GOG_LOADED=1
 
-if command -v gog >/dev/null 2>&1 && command gog --version >/dev/null 2>&1; then
+if __tac_probe_ok tac_gog_ok 300 gog --version
+then
     __TAC_GOG_OK=1
 else
     __TAC_GOG_OK=0

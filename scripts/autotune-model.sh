@@ -247,7 +247,7 @@ cleanup_gpu() {
         sleep 1
 
         local waited=0
-    local cleanup_port="${AUTOTUNE_PORT:-18081}"
+    local cleanup_port="${AUTOTUNE_PORT:-18082}"
         while [[ $waited -lt 20 ]]; do
             if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$cleanup_port\$"; then return 0; fi
             sleep 1; waited=$((waited + 1))
@@ -292,10 +292,10 @@ bench_once() {
     local mmap_flag=""
     [[ $mmap_mode == off ]] && mmap_flag="--no-mmap"
 
-    # REF: ubuntu-console card ca23ec0a — Use AUTOTUNE_PORT (default 18081)
-    # to avoid conflicting with the watchdog daemon on LLM_PORT (8081).
+    # REF: ubuntu-console card ca23ec0a — Use AUTOTUNE_PORT (default 18082)
+    # to avoid conflicting with llama-server.service (production, 18081).
     # The bench uses LLM_PORT which preserves the watchdog's port.
-    local autotune_port="${AUTOTUNE_PORT:-18081}"
+    local autotune_port="${AUTOTUNE_PORT:-18082}"
     # Update all curl/http references to use the same port
     local health_url="http://127.0.0.1:$autotune_port"
     # Flash-attn can hang or crash model load for some architectures (e.g.
@@ -1064,8 +1064,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
 fi
 
 
-# REF: ubuntu-console card ca23ec0a — cleanup_gpu uses AUTOTUNE_PORT, not 8081
-cleanup_gpu 3 >/dev/null 2>&1 || { echo "ERROR: cleanup_gpu failed after 3 retries — port ${AUTOTUNE_PORT:-18081} still bound" >&2; exit 1; }
+# REF: ubuntu-console card ca23ec0a — cleanup_gpu uses AUTOTUNE_PORT (18082), not the production port 18081
+cleanup_gpu 3 >/dev/null 2>&1 || { echo "ERROR: cleanup_gpu failed after 3 retries — port ${AUTOTUNE_PORT:-18082} still bound" >&2; exit 1; }
 echo ""
 
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then

@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 22
+# Module Version: 23
 # ==============================================================================
 # 9. OPENCLAW MANAGER (THIN LOADER)
 # ==============================================================================
@@ -25,9 +25,12 @@
 
 # ── OpenClaw installation check ───────────────────────────────────────
 # __TAC_OPENCLAW_OK is set to 1 only if openclaw CLI exists and responds.
-# Uses `command openclaw` to bypass the wrapper function defined in §4,
-# which itself depends on __TAC_OPENCLAW_OK (circular dependency at load time).
-if command -v openclaw >/dev/null 2>&1 && command openclaw --version >/dev/null 2>&1; then
+# Uses a 300s TTL cache in /dev/shm (see __tac_probe_ok, §1) so the Node CLI
+# is not forked on every shell start. `command openclaw` bypasses the wrapper
+# function defined in §4, which itself depends on __TAC_OPENCLAW_OK
+# (circular dependency at load time).
+if __tac_probe_ok tac_openclaw_ok 300 openclaw --version
+then
     __TAC_OPENCLAW_OK=1
 else
     __TAC_OPENCLAW_OK=0

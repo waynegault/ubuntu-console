@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 
 # ==============================================================================
@@ -199,6 +199,37 @@ function __resolve_vscode_bin() {
     fi
 }
 
+# __tac_probe_ok — Cached functional probe: returns 0 if <cmd...> succeeds.
+# The result is cached in /dev/shm for <ttl> seconds so slow CLI version
+# checks (openclaw, gog) don't fork a subprocess on every shell start.
+# Runs via `command` so shell wrapper functions (e.g. the openclaw() shim
+# in §4) are bypassed — those wrappers may depend on the very flag being
+# computed here.
+# Usage: __tac_probe_ok <cache_name> <ttl_seconds> <cmd...>
+function __tac_probe_ok() {
+    local cache_name="$1" ttl="$2"
+    shift 2
+    local cache_file="$TAC_CACHE_DIR/$cache_name"
+    if [[ -f "$cache_file" ]]
+    then
+        local now mtime
+        now=$(date +%s)
+        mtime=$(stat -c %Y "$cache_file" 2>/dev/null || echo 0)
+        if (( now - mtime < ttl ))
+        then
+            [[ "$(< "$cache_file")" == "1" ]]
+            return
+        fi
+    fi
+    local rc=1
+    if command -v "$1" >/dev/null 2>&1 && command "$@" >/dev/null 2>&1
+    then
+        rc=0
+    fi
+    printf '%d' "$(( rc == 0 ))" > "$cache_file" 2>/dev/null
+    return "$rc"
+}
+
 export WSL_NVIDIA_SMI="/usr/lib/wsl/lib/nvidia-smi"
 
 # ---- GitHub Copilot CLI ----
@@ -209,6 +240,10 @@ export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
 
 # ---- Network & API ----
 export LLM_PORT=8081
+# Production LLM runs as the systemd user service llama-server.service on this
+# port (gateway baseUrl: http://127.0.0.1:18081/v1). 'so' treats a healthy
+# server here as "LLM running" instead of loading a duplicate on LLM_PORT.
+export LLM_SERVICE_PORT="${LLM_SERVICE_PORT:-18081}"
 export OC_PORT=18789
 export LOCAL_LLM_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
 

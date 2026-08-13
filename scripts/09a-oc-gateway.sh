@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154,SC1091
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 5
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -221,6 +221,56 @@ function __so_push_api_keys() {
 # Returns 0 if LLM is running and healthy, 1 on failure.
 # ---------------------------------------------------------------------------
 function __so_ensure_llm_running() {
+    # Production LLM runs as systemd llama-server.service on LLM_SERVICE_PORT
+    # (the port the gateway's llama-cpp provider is wired to). If it is
+    # healthy, treat as running — avoids loading a duplicate model on LLM_PORT
+    # that nothing consumes. The port probe is authoritative: in environments
+    # where systemctl --user cannot see the unit (nested/agent shells, IDE
+    # companions such as the VSCode qwen-cli), a live LISTEN socket on
+    # LLM_SERVICE_PORT still means the production server is up and must NOT be
+    # stopped by the fallback start path below.
+    if __test_port "${LLM_SERVICE_PORT:-18081}"
+    then
+        if systemctl --user is-active --quiet llama-server.service 2>/dev/null
+        then
+            __tac_info "Local LLM" "[RUNNING on PORT $LLM_SERVICE_PORT — llama-server.service]" "$C_Success"
+        else
+            __tac_info "Local LLM" "[RUNNING on PORT $LLM_SERVICE_PORT — production server detected]" "$C_Success"
+        fi
+        return 0
+    fi
+
+    # Production port is down. If the systemd unit exists, start the service —
+    # it is the single source of truth for the model the gateway consumes.
+    # This replaces the legacy pkill-and-serve-on-LLM_PORT path, which loaded
+    # a duplicate model and killed every llama-server (including this very
+    # service), driving the repeated restart cycles that made 'so' slow.
+    if systemctl --user list-unit-files llama-server.service >/dev/null 2>&1
+    then
+        # Stop any legacy profile-managed instance and stale keepers so VRAM
+        # is free for the service (the service itself is down here, so this
+        # cannot kill it).
+        __model_stop >/dev/null 2>&1 || true
+        if systemctl --user start llama-server.service 2>/dev/null
+        then
+            local _so_svc_wait=0
+            while (( _so_svc_wait < 180 ))
+            do
+                if __test_port "$LLM_SERVICE_PORT" \
+                    && curl -sf --max-time 2 "http://127.0.0.1:$LLM_SERVICE_PORT/health" >/dev/null 2>&1
+                then
+                    __tac_info "Local LLM" "[ONLINE on PORT $LLM_SERVICE_PORT — llama-server.service] (${_so_svc_wait}s)" "$C_Success"
+                    return 0
+                fi
+                sleep 1
+                (( _so_svc_wait++ ))
+            done
+            __tac_info "Local LLM" "[SERVICE START TIMEOUT — check: journalctl --user -u llama-server.service]" "$C_Error"
+            return 1
+        fi
+        __tac_info "Local LLM" "[SERVICE START FAILED — falling back to port $LLM_PORT]" "$C_Warning"
+    fi
+
     if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1 && __test_port "$LLM_PORT"
     then
         # LLM already running — show which model

@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -85,6 +85,17 @@ function __llm_server_stop() {
     _tries=$((_grace * 5))
     ((_tries < 5)) && _tries=5
 
+    # Protected PID: the production llama-server.service (LLM_SERVICE_PORT
+    # owner). It is gateway-managed and self-healing; TAC-side stop logic
+    # must never TERM/KILL it, even when the pattern sweep below matches it.
+    local _svc_pid=""
+    _svc_pid=$(systemctl --user show -p MainPID --value llama-server.service 2>/dev/null | tr -d ' \n' || true)
+    if ! [[ "$_svc_pid" =~ ^[0-9]+$ ]] || (( _svc_pid == 0 ))
+    then
+        _svc_pid=$(ss -tlnp "sport = :${LLM_SERVICE_PORT:-18081}" 2>/dev/null | awk 'match($0, /pid=([0-9]+)/, m) { print m[1]; exit }' || true)
+    fi
+    [[ "$_svc_pid" =~ ^[0-9]+$ ]] || _svc_pid=""
+
     # Collect PIDs — avoid mapfile + process substitution (crashes nested context)
     local _pg_out=""
     if [[ -n "$_llm_user" ]]
@@ -96,13 +107,14 @@ function __llm_server_stop() {
     while IFS= read -r _pid
     do
         [[ -z "$_pid" ]] && continue
+        [[ -n "$_svc_pid" && "$_pid" == "$_svc_pid" ]] && continue
         _pids+=("$_pid")
     done <<< "$_pg_out"
 
     _llm_pid=$(ss -tlnp "sport = :${LLM_PORT}" 2>/dev/null | awk 'match($0, /pid=([0-9]+)/, m) { print m[1]; exit }')
     if [[ "$_llm_pid" =~ ^[0-9]+$ ]]
     then
-        _pids+=("$_llm_pid")
+        [[ "$_llm_pid" == "$_svc_pid" ]] || _pids+=("$_llm_pid")
     fi
 
     if (( ${#_pids[@]} == 0 ))
@@ -113,6 +125,7 @@ function __llm_server_stop() {
     for _pid in "${_pids[@]}"
     do
         [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        [[ -n "$_svc_pid" && "$_pid" == "$_svc_pid" ]] && continue
         kill -TERM "$_pid" 2>/dev/null || true
     done
 
@@ -128,6 +141,7 @@ function __llm_server_stop() {
         while IFS= read -r _pid
         do
             [[ -z "$_pid" ]] && continue
+            [[ -n "$_svc_pid" && "$_pid" == "$_svc_pid" ]] && continue
             _pids+=("$_pid")
         done <<< "$_pg_out"
         (( ${#_pids[@]} == 0 )) && return 0
@@ -137,6 +151,7 @@ function __llm_server_stop() {
     for _pid in "${_pids[@]}"
     do
         [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        [[ -n "$_svc_pid" && "$_pid" == "$_svc_pid" ]] && continue
         kill -KILL "$_pid" 2>/dev/null || true
     done
 
