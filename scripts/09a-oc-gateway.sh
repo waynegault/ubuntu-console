@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154,SC1091
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -245,7 +245,10 @@ function __so_ensure_llm_running() {
     # This replaces the legacy pkill-and-serve-on-LLM_PORT path, which loaded
     # a duplicate model and killed every llama-server (including this very
     # service), driving the repeated restart cycles that made 'so' slow.
-    if systemctl --user list-unit-files llama-server.service >/dev/null 2>&1
+    # TAC_SKIP_SERVICE_LLM=1 (CI/unit tests) bypasses systemd management so
+    # the legacy registry-based fallback below stays unit-testable.
+    if [[ -z "${TAC_SKIP_SERVICE_LLM:-}" ]] \
+        && systemctl --user list-unit-files llama-server.service >/dev/null 2>&1
     then
         # Stop any legacy profile-managed instance and stale keepers so VRAM
         # is free for the service (the service itself is down here, so this
