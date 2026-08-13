@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_memory_db_path(preferred: str | None = None) -> str | None:
-    """Resolve the path to an OpenClaw memory database."""
+    """Resolve the path to an OpenClaw memory database (first existing candidate)."""
     if preferred:
         p = os.path.expanduser(preferred)
         return p if os.path.exists(p) else None
@@ -29,6 +29,20 @@ def resolve_memory_db_path(preferred: str | None = None) -> str | None:
         if os.path.exists(p):
             return p
     return None
+
+
+def resolve_all_memory_db_paths() -> list[str]:
+    """Resolve ALL existing memory database candidates (multi-registry support).
+
+    Returns every candidate path that exists, in declaration order.  Used by
+    the update pipeline so all registries (home, rook, …) merge into one graph.
+    """
+    found: list[str] = []
+    for candidate in MEMORY_DB_CANDIDATES:
+        p = os.path.expanduser(candidate)
+        if os.path.exists(p):
+            found.append(p)
+    return found
 
 
 def init_graph_db(dbpath: str) -> None:

@@ -48,13 +48,19 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
         user_graph = load_from_graph_db(graph_db_path)
         builder.merge(user_graph)
 
-    # 2. Merge memory DB data
+    # 2. Merge memory DB data (all registries; multi-DB support)
+    memory_dbs = []
     if mem_db_path and os.path.exists(mem_db_path):
+        memory_dbs.append(os.path.expanduser(mem_db_path))
+    else:
+        from .graph_db import resolve_all_memory_db_paths
+        memory_dbs = resolve_all_memory_db_paths()
+    for mdb in memory_dbs:
         try:
-            mem_graph = load_from_memory_db(mem_db_path)
+            mem_graph = load_from_memory_db(mdb, include_all=kwargs.get("include_all", False))
             builder.merge(mem_graph)
         except (OSError, ValueError, KeyError) as exc:
-            logger.warning("Memory DB import failed: %s", exc)
+            logger.warning("Memory DB import failed (%s): %s", mdb, exc)
 
     # 3. AST extraction
     ast_run = kwargs.get("ast", True)

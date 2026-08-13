@@ -98,6 +98,8 @@ def main() -> None:
     parser.add_argument("--store", help="Path to persistent graph JSON store")
     parser.add_argument("--graph-db", default=GRAPH_DB_DEFAULT, help=f"SQLite graph DB path (default: {GRAPH_DB_DEFAULT})")
     parser.add_argument("--import-db", help="Memory SQLite DB path (overrides auto-detect)")
+    parser.add_argument("--include-all", action="store_true",
+                        help="Skip registry filter (import stale/low-value memories too)")
     parser.add_argument("--host", default="127.0.0.1", help="Server bind host")
     parser.add_argument("--port", type=int, default=0, help="Server port (0 = ephemeral)")
     parser.add_argument("--view", choices=["overview", "topics", "files", "semantic", "raw"], default="overview")
@@ -195,11 +197,14 @@ def main() -> None:
     # ── Update mode ──
     if args.update:
         graph_db = os.path.expanduser(args.graph_db)
-        mem_db = args.import_db or resolve_memory_db_path()
+        # Explicit --import-db overrides auto-detect; otherwise pass None so
+        # incremental_update resolves ALL memory DB candidates (multi-registry).
+        mem_db = args.import_db or None
         src = args.source_dir or args.repo
         g = incremental_update(graph_db, mem_db_path=mem_db, source_dir=src,
                                ast=bool(src), ast_vars=args.ast_vars,
-                               ast_max_files=args.ast_max_files, ast_subdirs=args.ast_subdirs)
+                               ast_max_files=args.ast_max_files, ast_subdirs=args.ast_subdirs,
+                               include_all=args.include_all)
         s = confidence_stats(g)
         node_count = len(g.nodes) if hasattr(g, "nodes") else len(g.get("nodes", []))
         edge_count = len(g.edges) if hasattr(g, "edges") else len(g.get("edges", []))

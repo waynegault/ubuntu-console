@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -903,3 +904,146 @@ class SanitizeLabelTests(unittest.TestCase):
         self.assertIn('safe text', result)
 
 
+
+
+class TestRegistryAdapter(unittest.TestCase):
+    """T-ROOK-006: memory registry schema adapter tests.
+
+    Mirrors live registry row counts (memory_entities empty, native chunks
+    present, NULL value_score, stale syntheses) per design §6.
+    """
+
+    def _make_registry(self, path):
+        conn = sqlite3.connect(path)
+        cur = conn.cursor()
+        cur.execute("""CREATE TABLE memories (
+            id TEXT, type TEXT, content TEXT, source_agent TEXT, scope TEXT,
+            tags TEXT, confidence REAL, created_at TEXT, concept TEXT,
+            value_score REAL, value_label TEXT, source_layer TEXT, status TEXT)""")
+        cur.execute("""CREATE TABLE memory_native_chunks (
+            chunk_id TEXT, source_path TEXT, source_kind TEXT, section TEXT,
+            line_start TEXT, line_end TEXT, content TEXT, scope TEXT, status TEXT)""")
+        cur.execute("""CREATE TABLE memory_entities (
+            entity_id TEXT, kind TEXT, display_name TEXT, normalized_name TEXT,
+            status TEXT, confidence REAL, aliases TEXT)""")
+        cur.execute("""CREATE TABLE memory_entity_mentions (
+            memory_id TEXT, entity_key TEXT, entity_display TEXT, role TEXT,
+            confidence REAL, scope TEXT)""")
+        cur.execute("""CREATE TABLE memory_entity_relationships (
+            entity_id_a TEXT, entity_id_b TEXT, relationship_type TEXT,
+            evidence_count INT, source_memory_ids TEXT, confidence REAL)""")
+        cur.execute("""CREATE TABLE memory_syntheses (
+            synthesis_id TEXT, kind TEXT, subject_type TEXT, subject_id TEXT,
+            content TEXT, stale INT, confidence REAL, generated_at TEXT)""")
+        cur.execute("""CREATE TABLE memory_claims (
+            memory_id TEXT, memory_tier TEXT, claim_slot TEXT,
+            consolidation_op TEXT, source_strength REAL,
+            surface_candidate TEXT)""")
+        cur.execute("""CREATE TABLE memory_beliefs (
+            belief_id TEXT, entity_id TEXT, type TEXT, content TEXT,
+            status TEXT, confidence REAL, source_memory_id TEXT,
+            source_layer TEXT)""")
+        cur.execute("""CREATE TABLE memory_open_loops (
+            loop_id TEXT, kind TEXT, title TEXT, status TEXT, priority TEXT,
+            related_entity_id TEXT)""")
+        cur.execute("""CREATE TABLE memory_events (
+            event_id TEXT, timestamp TEXT, component TEXT, action TEXT,
+            reason_codes TEXT, memory_id TEXT, payload TEXT)""")
+        # memories: NULL value_score must survive the filter (live case)
+        cur.execute(
+            "INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ('mem-1', 'CONTEXT', 'NAS SSH access available', 'jarvis', 'jarvis',
+             '[]', 0.9, '2026-04-01', None, None, None, 'registry', 'active'))
+        cur.execute(
+            "INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ('mem-2', 'FACT', 'Low value stale memory', 'rook', 'rook',
+             '[]', 0.3, '2026-04-01', None, 0.3, None, 'registry', 'active'))
+        # native chunks → memory:native:{chunk_id}
+        cur.execute(
+            "INSERT INTO memory_native_chunks VALUES (?,?,?,?,?,?,?,?,?)",
+            ('chunk-1', '/mem/MEMORY.md', 'memory_md', 'KG', '4', '4',
+             'Integrity checks: Weekly Sunday 04:00', 'profile:main', 'active'))
+        # memory_entities stays EMPTY (live condition) → synthesis from mentions
+        # mentions: hal survives (agent), database dropped (noise)
+        cur.execute(
+            "INSERT INTO memory_entity_mentions VALUES (?,?,?,?,?,?)",
+            ('native:chunk-1', 'hal', 'hal', 'general', 0.8, 'profile:main'))
+        cur.execute(
+            "INSERT INTO memory_entity_mentions VALUES (?,?,?,?,?,?)",
+            ('native:chunk-1', 'database', 'database', 'general', 0.8, 'profile:main'))
+        # syntheses: one stale=0 (kept), one stale=1 (dropped unless include_all)
+        cur.execute(
+            "INSERT INTO memory_syntheses VALUES (?,?,?,?,?,?,?,?)",
+            ('synth:ok', 'current_state', 'global', 'global', 'Current State', 0, 0.9, '2026-04-01'))
+        cur.execute(
+            "INSERT INTO memory_syntheses VALUES (?,?,?,?,?,?,?,?)",
+            ('synth:stale', 'old_report', 'global', 'global', 'Old', 1, 0.8, '2026-04-01'))
+        cur.execute(
+            "INSERT INTO memory_claims VALUES (?,?,?,?,?,?)",
+            ('mem-1', 'durable', 'slot-1', 'op', 0.9, 'claim text'))
+        cur.execute(
+            "INSERT INTO memory_events VALUES (?,?,?,?,?,?,?)",
+            ('evt-1', '2026-04-01', 'capture', 'capture_inserted', '[]', 'mem-1', '{}'))
+        conn.commit()
+        conn.close()
+
+    def _run(self, path, include_all=False):
+        import kgraph.memory_import as mi
+        from kgraph.models import GraphBuilder
+        conn = sqlite3.connect(path)
+        builder = GraphBuilder()
+        mi._load_from_registry_db(conn, builder, registry='home', include_all=include_all)
+        conn.close()
+        g = builder.build()
+        return (g.nodes if hasattr(g, 'nodes') else g['nodes'],
+                g.edges if hasattr(g, 'edges') else g['edges'])
+
+    def test_basic_import_and_filter(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'registry.sqlite')
+            self._make_registry(path)
+            nodes, edges = self._run(path)
+            nids = [n.id for n in nodes]
+            # memories: mem-1 kept (NULL value_score), mem-2 dropped (0.3 < 0.5)
+            self.assertIn('memory:mem-1', nids)
+            self.assertNotIn('memory:mem-2', nids)
+            # native chunk mapped
+            self.assertIn('memory:native:chunk-1', nids)
+            # syntheses: ok kept, stale dropped
+            self.assertIn('synthesis:synth:ok', nids)
+            self.assertNotIn('synthesis:synth:stale', nids)
+            # claim + event skipped
+            self.assertIn('claim:mem-1:slot-1', nids)
+            # entity synthesis: hal kept, database (noise) dropped
+            ent_ids = [n.id for n in nodes if n.type == 'entity']
+            self.assertIn('entity:hal', ent_ids)
+            self.assertNotIn('entity:database', ent_ids)
+            # mentions edge resolves native: → memory:native:chunk-1
+            self.assertTrue(any(e.source == 'memory:native:chunk-1' and e.target == 'entity:hal'
+                                for e in edges))
+
+    def test_include_all_bypasses_filter(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'registry.sqlite')
+            self._make_registry(path)
+            nodes, _ = self._run(path, include_all=True)
+            nids = [n.id for n in nodes]
+            self.assertIn('memory:mem-2', nids)          # low value now included
+            self.assertIn('synthesis:synth:stale', nids)  # stale now included
+
+    def test_entity_row_preferred_over_mention_synthesis(self):
+        """Jarvis note 1: when memory_entities has a row, edge targets its id."""
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'registry.sqlite')
+            self._make_registry(path)
+            conn = sqlite3.connect(path)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO memory_entities VALUES (?,?,?,?,?,?,?)",
+                ('e-1', 'person', 'Hal', 'hal', 'active', 0.95, '[]'))
+            conn.commit()
+            conn.close()
+            nodes, edges = self._run(path)
+            ent_ids = [n.id for n in nodes if n.type == 'entity']
+            self.assertIn('entity:person:hal', ent_ids)
+            self.assertTrue(any(e.target == 'entity:person:hal' for e in edges))

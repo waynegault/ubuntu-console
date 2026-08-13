@@ -11,6 +11,7 @@ Returns a ``Graph`` model.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -18,6 +19,8 @@ import sqlite3
 from .constants import normalize_canonical_name
 from .life_index import load_life_index
 from .models import Graph, GraphBuilder, slugify
+
+logger = logging.getLogger(__name__)
 
 # ── Concept configuration ──────────────────────────────────────────────
 
@@ -42,8 +45,12 @@ WRAPPER_TERMS = frozenset(_concept_config.get("canonical_wrapper_terms", []))
 AGENT_ROLES = _concept_config.get("agent_roles", {})
 
 
-def load_from_memory_db(dbpath: str) -> Graph:
-    """Load nodes/edges from an OpenClaw memory SQLite DB into a Graph model."""
+def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
+    """Load nodes/edges from an OpenClaw memory SQLite DB into a Graph model.
+
+    ``include_all`` skips the default registry filter (status/value_score/stale)
+    — used by ``kgraph --update --include-all`` for audit runs.
+    """
     conn = sqlite3.connect(os.path.expanduser(dbpath))
     cur = conn.cursor()
     builder = GraphBuilder()
@@ -756,6 +763,12 @@ def load_from_memory_db(dbpath: str) -> Graph:
         except sqlite3.Error:
             pass
 
+    # OpenClaw memory registry schema: memories/memory_entities/memory_syntheses
+    # tables (distinct from the files/chunks memory-store schema above).
+    elif has_table('memories') and has_table('memory_entities'):
+        registry = 'rook' if 'workspace-rook' in os.path.expanduser(dbpath) else 'home'
+        _load_from_registry_db(conn, builder, registry=registry, include_all=include_all)
+
     conn.close()
 
     # Cross-chunk entity resolution: collapse same-concept nodes discovered
@@ -766,3 +779,430 @@ def load_from_memory_db(dbpath: str) -> Graph:
     builder.deduplicate_semantic(life_index=load_life_index())
 
     return builder.build()
+
+
+# ── Registry-schema adapter (T-ROOK-006) ────────────────────────────────
+
+# Agent/known-person names that must survive mention filtering even when
+# they appear in LOW_VALUE_CONCEPTS (verified: 'hal', 'wayne' are in the
+# low-value list but are real entities the graph should keep).
+_AGENT_NAMES = frozenset({
+    'hal', 'wayne', 'rook', 'jarvis', 'sarah', 'finn', 'aris', 'kai',
+    'juno', 'marlowe', 'vigil', 'nexus', 'del', 'chief', 'lyra', 'don',
+})
+
+# Mention entity_keys that are keyword noise (verified from live registries:
+# "database", "integrity", "weekly", "sunday", "dislikes", "relations"...).
+_MENTION_NOISE_WORDS = frozenset({
+    'database', 'integrity', 'weekly', 'sunday', 'dislikes', 'relations',
+    'values', 'wants', 'report', 'research', 'share', 'review', 'remove',
+    'cite', 'connect', 'workspace', 'gateway', 'linux', 'ubuntu', 'windows',
+    'wsl', 'wsl2', 'systemd', 'openclaw', 'engram', 'memory', 'profile',
+    'current', 'state', 'context', 'summary', 'notes', 'overview', 'status',
+    'general', 'none', 'todo', 'todos', 'task', 'tasks', 'issue', 'issues',
+    'item', 'items', 'file', 'files', 'chunk', 'chunks', 'line', 'lines',
+    'section', 'content', 'text', 'data', 'info', 'information', 'details',
+    'list', 'lists', 'thing', 'things', 'stuff', 'something', 'someone',
+    'anyone', 'everyone', 'nobody', 'people', 'person', 'group', 'team',
+    'work', 'working', 'works', 'done', 'doing', 'go', 'going', 'went',
+    'get', 'got', 'make', 'made', 'take', 'took', 'put', 'set', 'let',
+    'look', 'see', 'show', 'tell', 'ask', 'help', 'need', 'want', 'like',
+    'know', 'think', 'say', 'said', 'use', 'used', 'using', 'find', 'found',
+    'keep', 'kept', 'start', 'started', 'stop', 'stopped', 'try', 'tried',
+    'call', 'called', 'give', 'gave', 'send', 'sent', 'come', 'came',
+    'leave', 'left', 'turn', 'turned', 'bring', 'brought', 'hold', 'held',
+    'run', 'ran', 'running', 'move', 'moved', 'open', 'opened', 'close',
+    'closed', 'add', 'added', 'remove', 'removed', 'change', 'changed',
+    'fix', 'fixed', 'broken', 'error', 'errors', 'bug', 'bugs', 'test',
+    'tests', 'tested', 'build', 'built', 'deploy', 'deployed', 'push',
+    'pushed', 'pull', 'pulled', 'merge', 'merged', 'commit', 'committed',
+    'branch', 'branches', 'repo', 'repos', 'code', 'codes', 'function',
+    'functions', 'class', 'classes', 'module', 'modules', 'import',
+    'imports', 'export', 'exports', 'return', 'returns', 'value', 'values',
+    'bool', 'int', 'str', 'list', 'dict', 'tuple', 'none', 'true', 'false',
+    'null', 'undefined', 'ok', 'okay', 'yes', 'no', 'maybe', 'perhaps',
+    'later', 'now', 'today', 'tomorrow', 'yesterday', 'week', 'month',
+    'year', 'day', 'days', 'time', 'times', 'hour', 'hours', 'minute',
+    'minutes', 'second', 'seconds', 'new', 'old', 'good', 'bad', 'best',
+    'worst', 'better', 'worse', 'great', 'nice', 'fine', 'cool', 'awesome',
+    'amazing', 'interesting', 'important', 'main', 'primary', 'secondary',
+    'key', 'major', 'minor', 'big', 'small', 'large', 'little', 'high',
+    'low', 'top', 'bottom', 'left', 'right', 'front', 'back', 'middle',
+    'center', 'inside', 'outside', 'above', 'below', 'over', 'under',
+    'between', 'among', 'during', 'before', 'after', 'since', 'until',
+    'while', 'because', 'although', 'though', 'unless', 'whether', 'either',
+    'neither', 'both', 'all', 'any', 'each', 'every', 'few', 'more', 'most',
+    'other', 'some', 'such', 'only', 'own', 'same', 'so', 'than', 'too',
+    'very', 'just', 'also', 'again', 'then', 'there', 'here', 'where',
+    'when', 'why', 'how', 'what', 'which', 'who', 'whom', 'whose', 'this',
+    'that', 'these', 'those', 'i', 'me', 'my', 'mine', 'we', 'us', 'our',
+    'ours', 'you', 'your', 'yours', 'he', 'him', 'his', 'she', 'her',
+    'hers', 'it', 'its', 'they', 'them', 'their', 'theirs', 'a', 'an',
+    'the', 'and', 'or', 'but', 'if', 'else', 'for', 'with', 'without',
+    'by', 'from', 'to', 'into', 'onto', 'at', 'in', 'on', 'off', 'out',
+    'up', 'down', 'about', 'across', 'against', 'along', 'around',
+    'behind', 'beside', 'beyond', 'near', 'past', 'through', 'toward',
+    'towards', 'underneath', 'upon', 'via', 'per', 'am', 'is', 'are',
+    'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having',
+    'do', 'does', 'did', 'done', 'will', 'would', 'shall', 'should',
+    'can', 'could', 'may', 'might', 'must', 'ought', 'need', 'needs',
+    'dare', 'dared', 'shall', 'am', 'not', 'no', 'nor', 'never',
+    'don', 'cannot', "can't", "won't", "don't", "doesn't", "didn't",
+    "isn't", "aren't", "wasn't", "weren't", "haven't", "hasn't", "hadn't",
+    "won't", "wouldn't", "shouldn't", "couldn't", "mightn't", "mustn't",
+    'etc', 'eg', 'ie', 'vs', 'via', 'per', 'etcetera', 'example',
+    'examples', 'case', 'cases', 'point', 'points', 'part', 'parts',
+    'piece', 'pieces', 'bit', 'bits', 'way', 'ways', 'kind', 'kinds',
+    'type', 'types', 'sort', 'sorts', 'form', 'forms', 'method',
+    'methods', 'approach', 'approaches', 'strategy', 'strategies',
+    'plan', 'plans', 'goal', 'goals', 'objective', 'objectives',
+    'target', 'targets', 'aim', 'aims', 'purpose', 'purposes', 'reason',
+    'reasons', 'cause', 'causes', 'effect', 'effects', 'result',
+    'results', 'outcome', 'outcomes', 'impact', 'impacts', 'benefit',
+    'benefits', 'cost', 'costs', 'price', 'prices', 'value', 'values',
+})
+
+
+def _registry_db_path_label(dbpath: str) -> str:
+    """Return 'home' or 'rook' based on the registry path."""
+    expanded = os.path.expanduser(dbpath)
+    if 'workspace-rook' in expanded:
+        return 'rook'
+    return 'home'
+
+
+def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
+                           registry: str, include_all: bool = False) -> None:
+    """Adapter for the OpenClaw memory registry schema.
+
+    Maps registry tables → Graph nodes/edges (T-ROOK-006 design v2):
+      memories                → memory:{uuid} nodes
+      memory_native_chunks    → memory:native:{chunk_id} nodes
+      memory_entities         → entity:{kind}:{slug} nodes (0 rows today; coded)
+      memory_entity_mentions  → synthesized entity:{slug} nodes + mentions edges
+      memory_entity_relationships → entity→entity edges
+      memory_syntheses        → synthesis:{id} nodes (stale=0 unless include_all)
+      memory_claims           → claim:{memory_id}:{slot} nodes
+      memory_beliefs          → belief:{id} nodes
+      memory_open_loops       → open_loop:{id} nodes
+      memory_events           → skipped (provenance/audit noise)
+
+    Logs node/edge counts at INFO (Hal review note §3.3a) so a future
+    "KG is empty" alarm has a trace.
+    """
+    # Registry branch consumes rows as dicts; the files/chunks branch uses
+    # tuple indexing on the same connection — Row supports both, so set it
+    # before creating the cursor (idempotent).
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    nodes_added = 0
+    edges_added = 0
+    events_skipped = 0
+
+    def _has_table(name: str) -> bool:
+        cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (name,))
+        return cur.fetchone() is not None
+
+    def _preview_text(value, limit: int = 72) -> str:
+        if not isinstance(value, str):
+            value = str(value or '')
+        text = value.replace('\n', ' ').replace('\r', ' ').strip()
+        text = ' '.join(text.split())
+        if len(text) > limit:
+            return text[: limit - 1] + '…'
+        return text
+
+    def _add_node(node: dict) -> None:
+        nonlocal nodes_added
+        node_id = node.get('id')
+        if node_id and not builder.has_node(node_id):
+            nodes_added += 1
+        builder.add_node(node)
+
+    def _add_edge(edge: dict) -> None:
+        nonlocal edges_added
+        builder.add_edge(edge)
+        edges_added += 1
+
+    def _filtered_row(row: dict) -> bool:
+        """Jarvis ruling 3: status='active' AND (value_score IS NULL OR >= 0.5)."""
+        if include_all:
+            return True
+        if str(row.get('status') or 'active') != 'active':
+            return False
+        vs = row.get('value_score')
+        if vs is not None:
+            try:
+                if float(vs) < 0.5:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        return True
+
+    # ── memories → memory:{uuid} ──
+    if _has_table('memories'):
+        for row in cur.execute(
+            "SELECT id, type, content, source_agent, scope, tags, confidence, created_at,"
+            "       concept, value_score, value_label, source_layer, status"
+            "  FROM memories"
+        ):
+            d = dict(row)
+            if not _filtered_row(d):
+                continue
+            _add_node({
+                'id': f"memory:{d['id']}",
+                'label': _preview_text(d.get('content')),
+                'type': 'memory',
+                'origin': 'memory_db',
+                'registry': registry,
+                'row_scope': d.get('scope'),
+                'content': d.get('content'),
+                'source_agent': d.get('source_agent'),
+                'tags': d.get('tags'),
+                'confidence': str(d.get('confidence')) if d.get('confidence') is not None else None,
+                'created_at': d.get('created_at'),
+                'concept': d.get('concept'),
+                'value_score': d.get('value_score'),
+                'value_label': d.get('value_label'),
+                'source_layer': d.get('source_layer'),
+                'memory_type': d.get('type'),
+            })
+
+    # ── memory_native_chunks → memory:native:{chunk_id} ──
+    if _has_table('memory_native_chunks'):
+        for row in cur.execute(
+            "SELECT chunk_id, source_path, source_kind, section, line_start, line_end,"
+            "       content, scope, status"
+            "  FROM memory_native_chunks"
+        ):
+            d = dict(row)
+            if not _filtered_row(d):
+                continue
+            _add_node({
+                'id': f"memory:native:{d['chunk_id']}",
+                'label': _preview_text(d.get('content')),
+                'type': 'memory',
+                'origin': 'memory_db',
+                'registry': registry,
+                'row_scope': d.get('scope'),
+                'content': d.get('content'),
+                'source_path': d.get('source_path'),
+                'source_kind': d.get('source_kind'),
+                'section': d.get('section'),
+                'line_start': d.get('line_start'),
+                'line_end': d.get('line_end'),
+            })
+
+    # ── memory_entities → entity:{kind}:{slug} (0 rows today; coded for future) ──
+    entity_row_ids: dict[str, str] = {}  # normalized_name → preferred id
+    if _has_table('memory_entities'):
+        for row in cur.execute(
+            "SELECT entity_id, kind, display_name, normalized_name, status, confidence, aliases"
+            "  FROM memory_entities"
+        ):
+            d = dict(row)
+            display = (d.get('display_name') or '').strip()
+            if not display:
+                continue
+            kind = (d.get('kind') or 'entity').strip().lower() or 'entity'
+            nid = f"entity:{kind}:{slugify(display)}"
+            _add_node({
+                'id': nid,
+                'label': display,
+                'type': 'entity',
+                'origin': 'memory_db',
+                'registry': registry,
+                'row_scope': None,
+                'kind': kind,
+                'aliases': d.get('aliases'),
+                'confidence': str(d.get('confidence')) if d.get('confidence') is not None else None,
+                'status': d.get('status'),
+            })
+            key = normalize_canonical_name(d.get('normalized_name') or display)
+            entity_row_ids.setdefault(key, nid)
+
+    # ── memory_entity_mentions → entity nodes + mentions edges ──
+    if _has_table('memory_entity_mentions'):
+        mention_entity_ids: dict[str, str] = {}
+        for row in cur.execute(
+            "SELECT memory_id, entity_key, entity_display, role, confidence, scope"
+            "  FROM memory_entity_mentions"
+        ):
+            d = dict(row)
+            key = (d.get('entity_key') or '').strip().lower()
+            display = (d.get('entity_display') or key).strip()
+            if not key or not display:
+                continue
+            # Noise filter: agent names survive even if in LOW_VALUE_CONCEPTS;
+            # everything keyword-like is dropped (Jarvis gap fix 1 + review).
+            if key in _AGENT_NAMES:
+                pass
+            elif key in _MENTION_NOISE_WORDS or key in LOW_VALUE_CONCEPTS or len(key) < 3:
+                continue
+            # Prefer a real memory_entities row id if one exists (Jarvis note 1);
+            # otherwise synthesize entity:{slug}.
+            ent_id = entity_row_ids.get(key)
+            if ent_id is None:
+                ent_id = f"entity:{slugify(key)}"
+            if ent_id not in mention_entity_ids:
+                mention_entity_ids[ent_id] = display
+                _add_node({
+                    'id': ent_id,
+                    'label': display,
+                    'type': 'entity',
+                    'origin': 'memory_db',
+                    'registry': registry,
+                    'row_scope': d.get('scope'),
+                    'kind': 'mention-derived',
+                    'role': str(d.get('role')) if d.get('role') is not None else None,
+                })
+            # Resolve source memory id: native:{chunk_id} → memory:native:{chunk_id}
+            mem_id = d.get('memory_id') or ''
+            if mem_id.startswith('native:'):
+                src = f"memory:native:{mem_id[len('native:'):]}"
+            else:
+                src = f"memory:{mem_id}"
+            _add_edge({
+                'from': src,
+                'to': ent_id,
+                'label': 'mentions',
+                'origin': 'memory_db',
+                'registry': registry,
+                'role': d.get('role'),
+                'metadata': {'confidence': d.get('confidence')},
+            })
+
+    # ── memory_entity_relationships → entity→entity edges ──
+    if _has_table('memory_entity_relationships'):
+        for row in cur.execute(
+            "SELECT entity_id_a, entity_id_b, relationship_type, evidence_count,"
+            "       source_memory_ids, confidence"
+            "  FROM memory_entity_relationships"
+        ):
+            d = dict(row)
+            src = d.get('entity_id_a')
+            tgt = d.get('entity_id_b')
+            rel = (d.get('relationship_type') or 'related').strip() or 'related'
+            if not src or not tgt:
+                continue
+            _add_edge({
+                'from': f"entity:{src}",
+                'to': f"entity:{tgt}",
+                'label': rel,
+                'origin': 'memory_db',
+                'registry': registry,
+                'evidence_count': d.get('evidence_count'),
+                'metadata': {
+                    'source_memory_ids': d.get('source_memory_ids'),
+                    'confidence': d.get('confidence'),
+                },
+            })
+
+    # ── memory_syntheses → synthesis:{id} (stale=0 unless include_all) ──
+    if _has_table('memory_syntheses'):
+        for row in cur.execute(
+            "SELECT synthesis_id, kind, subject_type, subject_id, content, stale,"
+            "       confidence, generated_at"
+            "  FROM memory_syntheses"
+        ):
+            d = dict(row)
+            if not include_all and d.get('stale'):
+                continue
+            kind = (d.get('kind') or 'synthesis').strip()
+            subject = f"{d.get('subject_type') or '?'}:{d.get('subject_id') or '?'}"
+            _add_node({
+                'id': f"synthesis:{d['synthesis_id']}",
+                'label': f"{kind} · {subject}"[:72],
+                'type': 'synthesis',
+                'origin': 'memory_db',
+                'registry': registry,
+                'kind': kind,
+                'subject_type': d.get('subject_type'),
+                'subject_id': d.get('subject_id'),
+                'content': d.get('content'),
+                'confidence': str(d.get('confidence')) if d.get('confidence') is not None else None,
+                'generated_at': d.get('generated_at'),
+                'stale': d.get('stale'),
+            })
+
+    # ── memory_claims → claim:{memory_id}:{slot} ──
+    if _has_table('memory_claims'):
+        for row in cur.execute(
+            "SELECT memory_id, memory_tier, claim_slot, consolidation_op,"
+            "       source_strength, surface_candidate"
+            "  FROM memory_claims"
+        ):
+            d = dict(row)
+            mem_id = d.get('memory_id') or 'unknown'
+            slot = d.get('claim_slot') or 'unknown'
+            candidate = d.get('surface_candidate')
+            label = _preview_text(candidate)
+            if not label:
+                label = f"claim {slot}"[:72]
+            _add_node({
+                'id': f"claim:{mem_id}:{slot}",
+                'label': label,
+                'type': 'claim',
+                'origin': 'memory_db',
+                'registry': registry,
+                'memory_tier': d.get('memory_tier'),
+                'consolidation_op': d.get('consolidation_op'),
+                'source_strength': d.get('source_strength'),
+            })
+
+    # ── memory_beliefs → belief:{id} ──
+    if _has_table('memory_beliefs'):
+        for row in cur.execute(
+            "SELECT belief_id, entity_id, type, content, status, confidence,"
+            "       source_memory_id, source_layer"
+            "  FROM memory_beliefs"
+        ):
+            d = dict(row)
+            if not include_all and str(d.get('status') or 'active') != 'active':
+                continue
+            _add_node({
+                'id': f"belief:{d['belief_id']}",
+                'label': _preview_text(d.get('content')),
+                'type': 'belief',
+                'origin': 'memory_db',
+                'registry': registry,
+                'entity_id': d.get('entity_id'),
+                'belief_type': d.get('type'),
+                'confidence': str(d.get('confidence')) if d.get('confidence') is not None else None,
+                'source_memory_id': d.get('source_memory_id'),
+                'source_layer': d.get('source_layer'),
+            })
+
+    # ── memory_open_loops → open_loop:{id} ──
+    if _has_table('memory_open_loops'):
+        for row in cur.execute(
+            "SELECT loop_id, kind, title, status, priority, related_entity_id"
+            "  FROM memory_open_loops"
+        ):
+            d = dict(row)
+            if not include_all and str(d.get('status') or 'open') != 'active':
+                continue
+            _add_node({
+                'id': f"open_loop:{d['loop_id']}",
+                'label': _preview_text(d.get('title')),
+                'type': 'open_loop',
+                'origin': 'memory_db',
+                'registry': registry,
+                'kind': d.get('kind'),
+                'status': d.get('status'),
+                'priority': d.get('priority'),
+                'related_entity_id': d.get('related_entity_id'),
+            })
+
+    # ── memory_events → skipped (provenance/audit noise) ──
+    if _has_table('memory_events'):
+        try:
+            events_skipped = cur.execute("SELECT COUNT(*) FROM memory_events").fetchone()[0]
+        except sqlite3.Error:
+            events_skipped = -1
+
+    logger.info(
+        "registry import (registry=%s, include_all=%s): %d nodes, %d edges, "
+        "%d events skipped",
+        registry, include_all, nodes_added, edges_added, events_skipped,
+    )

@@ -14,6 +14,8 @@ def normalize_canonical_name(text: str) -> str:
 MEMORY_DB_CANDIDATES = [
     '~/.openclaw/memory-system/data/memory.db',
     '~/.openclaw/memory/main.sqlite',
+    '~/memory/registry.sqlite',
+    '~/.openclaw/workspace-rook/memory/registry.sqlite',
 ]
 
 GRAPH_DB_DEFAULT = '~/.openclaw/kgraph.sqlite'
