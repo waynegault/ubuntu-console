@@ -22,7 +22,7 @@ function __model_scan() {
     if (( ! __LLAMA_DRIVE_MOUNTED ))
     then
         __tac_info "Error" \
-            "[Model drive $LLAMA_DRIVE_ROOT is not mounted - run: sudo mount -t drvfs M: $LLAMA_DRIVE_ROOT]" \
+            "[Model drive $LLAMA_DRIVE_ROOT is not mounted - run: sudo mount $LLAMA_DRIVE_ROOT (fstab: bind of /srv/models)]" \
             "$C_Error"
         return 1
     fi
@@ -1814,10 +1814,10 @@ function __model_bench() {
         # enter the override block._bench_safe_overrides only tracks whether
         # //WE// set them, but another iteration may have set them earlier.
         unset LLAMA_GPU_LAYERS TAC_CTX_SIZE LLAMA_BATCH_SIZE LLAMA_UBATCH_SIZE LLAMA_PARALLEL_SLOTS
-        # Cooldown: let WSL2 9p drvfs flush cached file handles and release
-        # any lingering locks on the previous model's GGUF before the next
-        # model starts. Without this, rapid model cycling causes curl 52
-        # (empty reply) as llama-server stalls on congested I/O.
+        # Cooldown: flush cached file handles and release any lingering locks
+        # on the previous model's GGUF before the next model starts. Without
+        # this, rapid model cycling causes curl 52 (empty reply) as
+        # llama-server stalls on congested I/O.
         local _cooldown_s="${LLM_BENCH_COOLDOWN_SEC:-4}"
         [[ "$_cooldown_s" =~ ^[0-9]+$ ]] || _cooldown_s=4
         if (( _cooldown_s > 0 )); then
@@ -2517,7 +2517,7 @@ function __model_download() {
     if (( ! __LLAMA_DRIVE_MOUNTED ))
     then
         __tac_info "Error" \
-            "[Model drive $LLAMA_DRIVE_ROOT is not mounted - run: sudo mount -t drvfs M: $LLAMA_DRIVE_ROOT]" \
+            "[Model drive $LLAMA_DRIVE_ROOT is not mounted - run: sudo mount $LLAMA_DRIVE_ROOT (fstab: bind of /srv/models)]" \
             "$C_Error"
         return 1
     fi

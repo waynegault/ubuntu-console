@@ -335,8 +335,9 @@ bench_once() {
     fi
 
     # Pre-flight: confirm model slot is actually ready to serve.
-    # WSL2 drvfs: /health returns OK before the GGUF memory-map completes,
-    # so the first real completion can stall or return 0 tokens.
+    # /health can return OK before the GGUF memory-map completes, so the
+    # first real completion may stall or return 0 tokens (worst on slow
+    # mounts); probe one real completion before benchmarking.
     local pf_ok=0 pf_w=0
     while [[ $pf_w -lt 60 ]]; do
         if curl -sS --max-time 5 "$health_url/v1/chat/completions" \

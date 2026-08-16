@@ -114,7 +114,7 @@ function burn() {
 
     # Wait for the model to finish loading before sending the completion request.
     # The port may be open (passes __require_llm) but the server returns 503
-    # "Loading model" while mmap-ing large files over drvfs (up to 90s for CPU).
+    # "Loading model" while the GGUF memory-map completes (up to 90s for CPU).
     if ! __llm_is_healthy
     then
         local burn_ready_timeout="${LLM_BURN_READY_TIMEOUT:-180}"
