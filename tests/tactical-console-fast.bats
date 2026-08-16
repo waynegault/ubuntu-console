@@ -264,12 +264,11 @@ setup_file() {
     done
 }
 
-@test "cross-script: watchdog LLM_PORT default matches bashrc" {
+@test "cross-script: watchdog LLM_SERVICE_PORT default is parseable" {
     local wd_port
-    wd_port=$(grep -oP 'LLM_PORT="\$\{LLAMA_ROOT:-\K[0-9]+' \
+    wd_port=$(grep -oP 'LLM_SERVICE_PORT="\$\{LLM_SERVICE_PORT:-\K[0-9]+' \
         "$REPO_ROOT/bin/llama-watchdog.sh" || true)
-    # Just verify it's parseable
-    [[ "$wd_port" =~ ^[0-9]+$ ]] || [[ -z "$wd_port" ]]
+    [[ "$wd_port" =~ ^[0-9]+$ ]]
 }
 
 @test "cross-script: env.sh uses glob to source numbered modules" {

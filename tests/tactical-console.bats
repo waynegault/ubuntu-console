@@ -1056,22 +1056,10 @@ EOF
 # 16. CROSS-SCRIPT CONSISTENCY
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "cross-script: watchdog LLM_PORT default matches bashrc" {
+@test "cross-script: watchdog LLM_SERVICE_PORT default matches bashrc" {
     local wd_port
-    wd_port=$(grep -oP 'LLM_PORT="\$\{LLM_PORT:-\K[0-9]+' "$REPO_ROOT/bin/llama-watchdog.sh")
-    [[ "$wd_port" == "$LLM_PORT" ]]
-}
-
-@test "cross-script: watchdog LLAMA_ROOT default resolves to bashrc" {
-    local wd_root
-    wd_root=$(grep -oP 'LLAMA_ROOT="\$\{LLAMA_ROOT:-\K[^}]+' "$REPO_ROOT/bin/llama-watchdog.sh")
-    wd_root="${wd_root/\$HOME/$HOME}"
-    [[ "$wd_root" == "$LLAMA_ROOT" ]]
-}
-
-@test "cross-script: watchdog LLAMA_SERVER_BIN default is derived from LLAMA_ROOT" {
-    grep -q 'LLAMA_SERVER_BIN="\${LLAMA_SERVER_BIN:-\$LLAMA_ROOT/build/bin/llama-server}"' \
-        "$REPO_ROOT/bin/llama-watchdog.sh"
+    wd_port=$(grep -oP 'LLM_SERVICE_PORT="\$\{LLM_SERVICE_PORT:-\K[0-9]+' "$REPO_ROOT/bin/llama-watchdog.sh")
+    [[ "$wd_port" == "$LLM_SERVICE_PORT" ]]
 }
 
 @test "cross-script: all scripts have VERSION variable or Module Version comment" {
@@ -1284,13 +1272,6 @@ EOF
     local last
     last=$(grep -v '^[[:space:]]*$' "$HOME/.bashrc" | tail -1)
     [[ "$last" == "# end of file" ]]
-}
-
-@test "cross-script: watchdog ACTIVE_LLM_FILE matches bashrc constant" {
-    local wd_file
-    wd_file=$(sed -nE 's/^ACTIVE_LLM_FILE="\$\{ACTIVE_LLM_FILE:-([^"]+)\}"/\1/p; s/^ACTIVE_LLM_FILE="([^"]+)"/\1/p' \
-        "$REPO_ROOT/bin/llama-watchdog.sh" | head -n1)
-    [[ "$wd_file" == "$ACTIVE_LLM_FILE" ]]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

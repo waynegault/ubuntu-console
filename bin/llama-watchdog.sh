@@ -8,7 +8,7 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="2.7"  # Recovery via systemctl restart of llama-server.service (probe LLM_SERVICE_PORT).
+VERSION="2.9"  # GPU-busy gate: defer restart while bench/foreign workload uses GPU.
 set -euo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -52,6 +52,23 @@ then
     exit 0
 fi
 
+# GPU gate (2026-08-16): if the GPU is actually in use by a foreign workload
+# (investigator bench, autotune, clear_vram) or utilization is high, defer the
+# restart — llama-server would just be killed/evicted again (bench does
+# pkill -9 between models). Restart only when the GPU is truly free.
+# Note: gpu-busy.sh exits 1 when busy, so judge the JSON output — with
+# pipefail the pipeline exit status would mask the match.
+GPU_BUSY_SH="${GPU_BUSY_SH:-$HOME/.local/bin/gpu-busy.sh}"
+if [[ -x "$GPU_BUSY_SH" ]]
+then
+    gpu_busy_json=$("$GPU_BUSY_SH" --json 2>/dev/null || true)
+    if grep -q '"busy":true' <<< "$gpu_busy_json"
+    then
+        log "GPU busy (bench/foreign workload) — deferring restart until GPU is clear"
+        exit 0
+    fi
+fi
+
 # Read the unit state. "activating" means systemd is already restarting the
 # unit (Restart=always crash loop) — do not stack a second restart on top.
 state=$(systemctl --user show "$LLM_SERVICE_UNIT.service" -p ActiveState --value 2>/dev/null || true)
@@ -92,3 +109,5 @@ done
 
 log "Recovery failed: server did not become healthy in ${health_timeout}s"
 exit 1
+
+# end of file

@@ -2,7 +2,9 @@
 # ==============================================================================
 # Integration Tests — Llama Watchdog
 # ==============================================================================
-# Tests llama-watchdog.sh crash detection and auto-recovery
+# Tests llama-watchdog.sh health probing, GPU-busy gating, and systemd-based
+# recovery. All external commands (curl, systemctl, gpu-busy.sh) are mocked so
+# the suite is hermetic and never touches the live llama-server.service.
 # Run: bats tests/integration/04-watchdog.bats
 # ==============================================================================
 
@@ -12,41 +14,80 @@ setup_file() {
     export WATCHDOG_SCRIPT="$REPO_ROOT/bin/llama-watchdog.sh"
     export TAC_TEST_TMPDIR
     TAC_TEST_TMPDIR="$(mktemp -d)"
-    export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
-    export ACTIVE_LLM_FILE="$TAC_TEST_TMPDIR/active_llm"
-    export LLM_LOG_FILE="$TAC_TEST_TMPDIR/llama-server.log"
-    export LLM_REGISTRY="$TAC_TEST_TMPDIR/models.conf"
-    export LLAMA_MODEL_DIR="$TAC_TEST_TMPDIR/models"
-    export LLAMA_ROOT="$TAC_TEST_TMPDIR/llama.cpp"
-    export LLAMA_SERVER_BIN="$LLAMA_ROOT/build/bin/llama-server"
+    export WATCHDOG_MOCK_BIN="$TAC_TEST_TMPDIR/mock-bin"
+    export WATCHDOG_MOCK_STATE="$TAC_TEST_TMPDIR/state"
+    export SYSTEMCTL_MOCK_LOG="$TAC_TEST_TMPDIR/systemctl.log"
+    export SYSTEMCTL_MOCK_STATE="$WATCHDOG_MOCK_STATE"
+    mkdir -p "$WATCHDOG_MOCK_BIN" "$WATCHDOG_MOCK_STATE"
 
-    mkdir -p "$TAC_CACHE_DIR" "$LLAMA_MODEL_DIR" "$LLAMA_ROOT/build/bin"
-
-    # Create fake llama-server binary
-    cat > "$LLAMA_SERVER_BIN" << 'FAKEBIN'
+    # Mock curl: /health and /v1/models succeed only once the "healthy" marker
+    # exists (set manually, or by the mock systemctl on restart).
+    cat > "$WATCHDOG_MOCK_BIN/curl" <<'MOCK'
 #!/usr/bin/env bash
-echo "Fake llama-server"
-sleep 300
-FAKEBIN
-    chmod +x "$LLAMA_SERVER_BIN"
+if [[ "$*" == *"/health"* || "$*" == *"/v1/models"* ]]
+then
+    [[ -f "$SYSTEMCTL_MOCK_STATE/healthy" ]] && exit 0
+    exit 22
+fi
+exit 22
+MOCK
+    chmod +x "$WATCHDOG_MOCK_BIN/curl"
 
-    # Create test model registry entry
-    echo "1|TestModel|test.gguf|2.5G|Q4_K_M/q8_0|llama|0|4096|8|1024|256|1|256|llama_server|auto|0|no|no|no" > "$LLM_REGISTRY"
+    # Mock systemctl --user: records every call; `show` prints the unit state
+    # from the active_state file; `restart` marks the unit healthy (and fails
+    # if fail_restart is set); `reset-failed` records itself.
+    cat > "$WATCHDOG_MOCK_BIN/systemctl" <<'MOCK'
+#!/usr/bin/env bash
+set -uo pipefail
+if [[ "${1:-}" == "--user" ]]; then shift; fi
+op="${1:-}"; shift || true
+case "$op" in
+    show)
+        cat "$SYSTEMCTL_MOCK_STATE/active_state" 2>/dev/null || echo "inactive"
+        ;;
+    restart)
+        echo "restart $*" >> "$SYSTEMCTL_MOCK_LOG"
+        if [[ -f "$SYSTEMCTL_MOCK_STATE/fail_restart" ]]; then
+            exit 1
+        fi
+        touch "$SYSTEMCTL_MOCK_STATE/restart_called"
+        touch "$SYSTEMCTL_MOCK_STATE/healthy"
+        ;;
+    reset-failed)
+        echo "reset-failed $*" >> "$SYSTEMCTL_MOCK_LOG"
+        touch "$SYSTEMCTL_MOCK_STATE/reset_failed_called"
+        ;;
+    *)
+        echo "unhandled: $op $*" >> "$SYSTEMCTL_MOCK_LOG"
+        ;;
+esac
+MOCK
+    chmod +x "$WATCHDOG_MOCK_BIN/systemctl"
 
-    # Create test model file
-    touch "$LLAMA_MODEL_DIR/test.gguf"
+    # Mock gpu-busy.sh: free unless the "busy" marker exists.
+    cat > "$WATCHDOG_MOCK_BIN/gpu-busy" <<'MOCK'
+#!/usr/bin/env bash
+if [[ -f "$SYSTEMCTL_MOCK_STATE/busy" ]]; then
+    echo '{"busy":true,"reasons":["mock"]}'
+    exit 1
+fi
+echo '{"busy":false,"reasons":[]}'
+exit 0
+MOCK
+    chmod +x "$WATCHDOG_MOCK_BIN/gpu-busy"
 }
 
 teardown_file() {
-    # Clean up any running fake servers
-    pkill -f "Fake llama-server" 2>/dev/null || true
     rm -rf "${TAC_TEST_TMPDIR:-/tmp/bats-noop}"
 }
 
 setup() {
-    # Clear state before each test
-    rm -f "$ACTIVE_LLM_FILE"
+    # Reset mock state, mock log, and the watchdog lock before each test.
+    : > "$SYSTEMCTL_MOCK_LOG" 2>/dev/null || true
+    rm -f "$WATCHDOG_MOCK_STATE"/*
     rm -f /dev/shm/llama-watchdog.lock 2>/dev/null || true
+    export PATH="$WATCHDOG_MOCK_BIN:$PATH"
+    export GPU_BUSY_SH="$WATCHDOG_MOCK_BIN/gpu-busy"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -58,213 +99,102 @@ setup() {
     [[ -x "$WATCHDOG_SCRIPT" ]] || return 1
 }
 
-@test "integration: watchdog exits cleanly with no active model" {
-    # Ensure no active model file
-    rm -f "$ACTIVE_LLM_FILE"
-    
-    run "$WATCHDOG_SCRIPT"
-    
-    # Should exit cleanly (nothing to do)
-    [[ "$status" -eq 0 ]]
-}
-
 @test "integration: watchdog exits cleanly when healthy" {
-    # Create active model file
-    echo "1" > "$ACTIVE_LLM_FILE"
-    
-    # Create fake healthy endpoint (mock curl)
-    MOCK_DIR="$TAC_TEST_TMPDIR/mocks"
-    mkdir -p "$MOCK_DIR"
-    cat > "$MOCK_DIR/mock_curl_healthy" << 'MOCK'
-#!/usr/bin/env bash
-if [[ "$*" == *"/health"* ]]; then
-    echo '{"status":"ok"}'
-    exit 0
-fi
-/usr/bin/curl "$@"
-MOCK
-    chmod +x "$MOCK_DIR/mock_curl_healthy"
-
-    # Temporarily override curl
-    local orig_curl
-    orig_curl=$(command -v curl)
-    export PATH="$MOCK_DIR:$PATH"
-    cp "$MOCK_DIR/mock_curl_healthy" "$MOCK_DIR/curl"
+    touch "$WATCHDOG_MOCK_STATE/healthy"
 
     run "$WATCHDOG_SCRIPT"
 
-    # Restore curl
-    rm "$MOCK_DIR/curl"
-    export PATH=$(echo "$PATH" | sed "s|$MOCK_DIR:||")
-    
-    # Should exit cleanly (healthy)
     [[ "$status" -eq 0 ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
 }
 
-@test "integration: watchdog handles invalid model number" {
-    # Create active model file with invalid number
-    echo "invalid" > "$ACTIVE_LLM_FILE"
+@test "integration: watchdog recovers via systemctl restart when unhealthy" {
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    grep -q "restart llama-server.service" "$SYSTEMCTL_MOCK_LOG"
+    [[ "$output" == *"Recovery successful"* ]]
+}
+
+@test "integration: watchdog defers restart while GPU is busy" {
+    touch "$WATCHDOG_MOCK_STATE/busy"
 
     run "$WATCHDOG_SCRIPT"
 
-    # Should report error or exit non-zero (health check may pass in some envs)
-    [[ "$output" == *"Invalid"* ]] || [[ "$status" -ne 0 ]]
+    [[ "$status" -eq 0 ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    [[ "$output" == *"deferring restart"* ]]
 }
 
-@test "integration: watchdog handles missing model file" {
-    # Create active model file pointing to non-existent model
-    echo "1" > "$ACTIVE_LLM_FILE"
-
-    # Remove model from registry
-    > "$LLM_REGISTRY"
+@test "integration: watchdog skips when bench lock is present" {
+    touch /tmp/llm-bench.lock
 
     run "$WATCHDOG_SCRIPT"
 
-    # Should report model not found or exit non-zero
-    [[ "$output" == *"not found"* ]] || [[ "$status" -ne 0 ]]
+    rm -f /tmp/llm-bench.lock
+    [[ "$status" -eq 0 ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    [[ "$output" == *"Bench lock present"* ]]
 }
 
-@test "integration: watchdog restarts native backend with tuned native flags" {
-    local mock_bin="$TAC_TEST_TMPDIR/mock-bin-native"
-    local state_dir="$TAC_TEST_TMPDIR/native-state"
-    mkdir -p "$mock_bin" "$state_dir"
+@test "integration: watchdog skips while systemd is already activating" {
+    echo "activating" > "$WATCHDOG_MOCK_STATE/active_state"
 
-    cat > "$mock_bin/curl" <<'MOCK'
-#!/usr/bin/env bash
-if [[ "$*" == *"/health"* ]] || [[ "$*" == *"/v1/models"* ]]
-then
-    [[ -f "$WATCHDOG_TEST_STATE/healthy" ]] && exit 0
-    exit 22
-fi
-exit 22
-MOCK
-    chmod +x "$mock_bin/curl"
-
-    cat > "$LLAMA_SERVER_BIN" <<'MOCK'
-#!/usr/bin/env bash
-printf '%s\n' "$*" > "$WATCHDOG_TEST_CMD_LOG"
-touch "$WATCHDOG_TEST_STATE/healthy"
-exit 0
-MOCK
-    chmod +x "$LLAMA_SERVER_BIN"
-
-    printf '%s\n' "1|TestModel|test.gguf|2.5G|Q4_K_M/q8_0|llama|7|8192|11|2048|512|3|1536|native|auto|0|yes|no|no" > "$LLM_REGISTRY"
-    echo "1" > "$ACTIVE_LLM_FILE"
-
-    run env PATH="$mock_bin:$PATH" \
-        WATCHDOG_TEST_STATE="$state_dir" \
-        WATCHDOG_TEST_CMD_LOG="$state_dir/cmd.log" \
-        "$WATCHDOG_SCRIPT"
+    run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
-    [[ -f "$state_dir/cmd.log" ]]
-    local cmd_args
-    cmd_args=$(< "$state_dir/cmd.log")
-    [[ "$cmd_args" == *"--ctx-size 8192"* ]]
-    [[ "$cmd_args" == *"--batch-size 2048 --ubatch-size 512"* ]]
-    [[ "$cmd_args" == *"--parallel 3"* ]]
-    [[ "$cmd_args" == *"--fit-target 1536"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    [[ "$output" == *"already activating"* ]]
 }
 
-@test "integration: watchdog restarts python backend with tuned python flags" {
-    local mock_bin="$TAC_TEST_TMPDIR/mock-bin-python"
-    local state_dir="$TAC_TEST_TMPDIR/python-state"
-    local fake_python="$TAC_TEST_TMPDIR/fake-python"
-    mkdir -p "$mock_bin" "$state_dir"
+@test "integration: watchdog resets a failed unit before restarting" {
+    echo "failed" > "$WATCHDOG_MOCK_STATE/active_state"
 
-    cat > "$mock_bin/curl" <<'MOCK'
-#!/usr/bin/env bash
-if [[ "$*" == *"/health"* ]] || [[ "$*" == *"/v1/models"* ]]
-then
-    [[ -f "$WATCHDOG_TEST_STATE/healthy" ]] && exit 0
-    exit 22
-fi
-exit 22
-MOCK
-    chmod +x "$mock_bin/curl"
-
-    cat > "$fake_python" <<'MOCK'
-#!/usr/bin/env bash
-if [[ "${1:-}" == "-" ]]
-then
-    exit 0
-fi
-printf '%s\n' "$*" > "$WATCHDOG_TEST_CMD_LOG"
-touch "$WATCHDOG_TEST_STATE/healthy"
-exit 0
-MOCK
-    chmod +x "$fake_python"
-
-    printf '%s\n' "1|TestModel|test.gguf|2.5G|Q4_K_M/q8_0|llama|5|6144|9|1536|384|2|1024|python|auto|0|yes|no|no" > "$LLM_REGISTRY"
-    echo "1" > "$ACTIVE_LLM_FILE"
-
-    run env PATH="$mock_bin:$PATH" \
-        WATCHDOG_TEST_STATE="$state_dir" \
-        WATCHDOG_TEST_CMD_LOG="$state_dir/cmd.log" \
-        LLM_SERVER_PYTHON_BIN="$fake_python" \
-        "$WATCHDOG_SCRIPT"
+    run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
-    [[ -f "$state_dir/cmd.log" ]]
-    local cmd_args
-    cmd_args=$(< "$state_dir/cmd.log")
-    [[ "$cmd_args" == *"-m llama_cpp.server"* ]]
-    [[ "$cmd_args" == *"--n_ctx 6144"* ]]
-    [[ "$cmd_args" == *"--n_batch 1536 --n_ubatch 384"* ]]
-    [[ "$cmd_args" == *"--n_threads 9"* ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/reset_failed_called" ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    grep -q "reset-failed llama-server.service" "$SYSTEMCTL_MOCK_LOG"
+}
+
+@test "integration: watchdog exits non-zero when systemd restart fails" {
+    touch "$WATCHDOG_MOCK_STATE/fail_restart"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"manual intervention required"* ]]
 }
 
 @test "integration: watchdog script has version" {
     run head -10 "$WATCHDOG_SCRIPT"
-    
+
     [[ "$output" == *"VERSION"* ]]
 }
 
 @test "integration: watchdog uses flock for locking" {
     run grep -c "flock" "$WATCHDOG_SCRIPT"
-    
+
     [[ "$output" -gt 0 ]]
 }
 
 @test "integration: watchdog has cleanup trap" {
     run grep -c "trap.*cleanup" "$WATCHDOG_SCRIPT"
-    
+
     [[ "$output" -gt 0 ]]
 }
 
 @test "integration: watchdog checks health endpoint" {
     run grep -c "/health" "$WATCHDOG_SCRIPT"
-    
+
     [[ "$output" -gt 0 ]]
 }
 
 @test "integration: watchdog has timeout logic" {
     run grep -c "timeout\|max-time" "$WATCHDOG_SCRIPT"
-    
-    [[ "$output" -gt 0 ]]
-}
 
-@test "integration: watchdog kills zombie processes" {
-    run grep -c "pkill.*llama-server" "$WATCHDOG_SCRIPT"
-    
-    [[ "$output" -gt 0 ]]
-}
-
-@test "integration: watchdog reads active model file" {
-    run grep -c "ACTIVE_LLM_FILE" "$WATCHDOG_SCRIPT"
-    
-    [[ "$output" -gt 0 ]]
-}
-
-@test "integration: watchdog reads model registry" {
-    run grep -c "LLM_REGISTRY" "$WATCHDOG_SCRIPT"
-    
-    [[ "$output" -gt 0 ]]
-}
-
-@test "integration: watchdog logs to file" {
-    run grep -c "LLM_LOG_FILE" "$WATCHDOG_SCRIPT"
-    
     [[ "$output" -gt 0 ]]
 }
 
