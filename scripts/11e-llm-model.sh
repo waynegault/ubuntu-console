@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -57,7 +57,7 @@ function __model_scan() {
         mkdir -p "$_scan_backup_dir"
         cp "$LLM_REGISTRY" "$_scan_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S).pre-scan"
     fi
-    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill" > "$tmpconf"
+    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len" > "$tmpconf"
 
     local num=0
     __tac_info "Reading" "files from $LLAMA_MODEL_DIR..." "$C_Dim"
@@ -99,13 +99,14 @@ function __model_scan() {
         local prev_autotuned="no"
         local prev_default="no"
         local prev_active="no"
+        local prev_spec_type="" prev_spec_draft_model="" prev_spec_n_max="" prev_spec_ngl="" prev_spec_device="" prev_spec_accept_len=""
         if [[ -f "$LLM_REGISTRY" ]]
         then
             local prev_row
             prev_row=$(awk -F'|' -v f="$fname" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
             if [[ -n "$prev_row" ]]
             then
-                IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_flash_attn prev_tps prev_autotuned prev_default prev_active prev_prefill prev_p2_ctx prev_p2_batch prev_p2_ubatch prev_p2_tps prev_p2_prefill <<< "$prev_row"
+                IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_flash_attn prev_tps prev_autotuned prev_default prev_active prev_prefill prev_p2_ctx prev_p2_batch prev_p2_ubatch prev_p2_tps prev_p2_prefill prev_spec_type prev_spec_draft_model prev_spec_n_max prev_spec_ngl prev_spec_device prev_spec_accept_len <<< "$prev_row"
                 [[ -z "${prev_flash_attn:-}" ]] && prev_flash_attn="on"
             fi
         fi
@@ -121,6 +122,7 @@ function __model_scan() {
         local _reg_line="${num}|${_mname:-$fname}|${fname}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}|${_final_ctx}|${threads}"
         _reg_line+="|${prev_batch}|${prev_ubatch}|${prev_parallel}|${prev_fit}|${prev_backend}|${prev_mmap}|${prev_flash_attn}|${prev_tps}|${prev_autotuned}|${prev_default}|${prev_active}"
         _reg_line+="|${prev_prefill}|${prev_p2_ctx}|${prev_p2_batch}|${prev_p2_ubatch}|${prev_p2_tps}|${prev_p2_prefill}"
+        _reg_line+="|${prev_spec_type:-}|${prev_spec_draft_model:-}|${prev_spec_n_max:-}|${prev_spec_ngl:-}|${prev_spec_device:-}|${prev_spec_accept_len:-}"
         echo "$_reg_line" >> "$tmpconf"
 
         # Progress: not printing each model individually
@@ -477,7 +479,7 @@ function __model_use_resolve_model() {
 
     # These variables are shared with caller via dynamic scope —
     # declared as `local` in __model_use, assigned here.
-    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram row_prefill row_p2_ctx row_p2_batch row_p2_ubatch row_p2_tps row_p2_prefill <<< "$entry"
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram row_prefill row_p2_ctx row_p2_batch row_p2_ubatch row_p2_tps row_p2_prefill row_spec_type row_spec_draft_model row_spec_n_max row_spec_ngl row_spec_device row_spec_accept_len <<< "$entry"
 
     # Allow context size override via TAC_CTX_SIZE environment variable
     # (set by `serve --ctx-size N` or `model use N --ctx-size N`)
@@ -776,6 +778,11 @@ function __model_use_build_command() {
         cmd+=("--cache-type-k" "${LLAMA_CACHE_TYPE_K:-${row_kv_k:-q8_0}}")
         cmd+=("--cache-type-v" "${LLAMA_CACHE_TYPE_V:-${row_kv_v:-q8_0}}")
         cmd+=("--parallel" "$parallel_slots")
+        # Speculative decoding (SPEC-DEC-004): verified llama.cpp flags from
+        # the registry row / env overrides; empty when disabled.  CPU draft
+        # placement by default on the 4 GB card — see __spec_launch_flags.
+        mapfile -t _spec_flags < <(__spec_launch_flags)
+        (( ${#_spec_flags[@]} > 0 )) && cmd+=("${_spec_flags[@]}")
     else
         cmd=("$python_bin" "-m" "$LLM_SERVER_MODULE")
         cmd+=("--model" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")

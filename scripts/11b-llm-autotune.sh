@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -140,15 +140,21 @@ function __llm_autotune_done_for_model() {
 
 # ---------------------------------------------------------------------------
 # __llm_autotune_profile_save — Persist latest winning autotune as defaults.
-# New signature (26-column registry, schema v4):
+# Registry schema v5 (32 columns): the v4 26 columns plus the SPEC-DEC-004
+# speculative-decoding fields spec_type(27), spec_draft_model(28),
+# spec_draft_n_max(29), spec_draft_ngl(30), spec_draft_device(31),
+# spec_accept_len(32).
+# Signature:
 #   __llm_autotune_profile_save <model> <backend> <ctx> <batch> <ubatch>
 #       <parallel> <fit> <tps> [stamp] [prefill_tps] [p2_ctx] [p2_batch]
 #       [p2_ubatch] [p2_tps] [p2_prefill] [kv_quant] [ngl]
+#       [spec_type] [spec_draft_model] [spec_n_max] [spec_ngl] [spec_device]
+#       [spec_accept_len]
 #   Profile 1 (existing columns) = max-ctx config; prefill_tps (col 21) is its
 #   prompt-eval throughput. Profile 2 (cols 22-26) = max-decode-TPS config for
-#   interactive flows. kv_quant (col 5, "QUANT/type-k/type-v") and ngl (col 7)
-#   are only written when explicitly provided — legacy callers that omit them
-#   leave those fields untouched.
+#   interactive flows. kv_quant (col 5, "QUANT/type-k/type-v"), ngl (col 7)
+#   and the spec fields (cols 27-32) are only written when explicitly
+#   provided — legacy callers that omit them leave those fields untouched.
 # @returns 0 on success, 1 on validation/write failure.
 # ---------------------------------------------------------------------------
 function __llm_autotune_profile_save() {
@@ -169,6 +175,12 @@ function __llm_autotune_profile_save() {
     local p2_prefill="${15:-}"
     local kv_quant="${16:-}"
     local ngl="${17:-}"
+    local spec_type="${18:-}"
+    local spec_draft_model="${19:-}"
+    local spec_n_max="${20:-}"
+    local spec_ngl="${21:-}"
+    local spec_device="${22:-}"
+    local spec_accept_len="${23:-}"
     local profile_file="$LLM_REGISTRY"
 
     [[ "$model_num" =~ ^[0-9]+$ ]] || return 1
@@ -180,7 +192,7 @@ function __llm_autotune_profile_save() {
     [[ "$tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] || tps="0"
 
     # Optional profile-2 / measurement fields — empty means "not provided":
-    # keep whatever the row already holds (or pad empty for legacy 20-col rows).
+    # keep whatever the row already holds (or pad empty for legacy rows).
     [[ "$stamp" =~ ^[0-9]+$ ]] || stamp=""
     [[ "$prefill_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]] || prefill_tps=""
     [[ "$p2_ctx" =~ ^[0-9]+$ ]] || p2_ctx=""
@@ -190,6 +202,12 @@ function __llm_autotune_profile_save() {
     [[ "$p2_prefill" =~ ^[0-9]+(\.[0-9]+)?$ ]] || p2_prefill=""
     kv_quant=$(__llm_autotune_sanitize_token "$kv_quant")
     [[ "$ngl" =~ ^[0-9]+$ ]] || ngl=""
+    spec_type=$(__llm_autotune_sanitize_token "$spec_type")
+    spec_draft_model=$(__llm_autotune_sanitize_token "$spec_draft_model")
+    [[ "$spec_n_max" =~ ^[0-9]+$ ]] || spec_n_max=""
+    [[ "$spec_ngl" =~ ^[0-9]+$ ]] || spec_ngl=""
+    spec_device=$(__llm_autotune_sanitize_token "$spec_device")
+    [[ "$spec_accept_len" =~ ^[0-9]+(\.[0-9]+)?$ ]] || spec_accept_len=""
 
     # Registry hygiene: persist measured floats at a maximum of 2 decimal
     # places. The server timings carry full float64 precision (e.g. prefill
@@ -240,11 +258,17 @@ function __llm_autotune_profile_save() {
         -v p2_prefill_val="$p2_prefill" \
         -v kv_quant_val="$kv_quant" \
         -v ngl_val="$ngl" \
+        -v spec_type_val="$spec_type" \
+        -v spec_draft_model_val="$spec_draft_model" \
+        -v spec_n_max_val="$spec_n_max" \
+        -v spec_ngl_val="$spec_ngl" \
+        -v spec_device_val="$spec_device" \
+        -v spec_accept_len_val="$spec_accept_len" \
         'BEGIN {
             OFS="|"
             # Emit header unconditionally so a headerless registry
             # does not self-perpetuate (same guard as sync_state).
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill"
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len"
         }
         $1 == "#" { next }
         {
@@ -260,13 +284,20 @@ function __llm_autotune_profile_save() {
                     $22 = p2_ctx_val; $23 = p2_batch_val; $24 = p2_ubatch_val
                     $25 = p2_tps_val; $26 = p2_prefill_val
                 }
+                if (spec_type_val != "") $27 = spec_type_val
+                if (spec_draft_model_val != "") $28 = spec_draft_model_val
+                if (spec_n_max_val != "") $29 = spec_n_max_val
+                if (spec_ngl_val != "") $30 = spec_ngl_val
+                if (spec_device_val != "") $31 = spec_device_val
+                if (spec_accept_len_val != "") $32 = spec_accept_len_val
             }
             # SPEC-DEC-002: clamp the stored thread count to the i9-12900HK
             # P-core ceiling (6) on every registry write — a pre-cap row must
             # not survive the save with an E-core-spilling value.
             if ($9 != "" && $9 + 0 > 6) $9 = 6
-            # Pad legacy 20-column rows to the v4 26-column schema.
-            if (NF == 20) { for (i = 21; i <= 26; i++) $i = "" }
+            # Pad legacy 20/26-column rows to the v5 32-column schema.
+            if (NF == 20) { for (i = 21; i <= 32; i++) $i = "" }
+            if (NF == 26) { for (i = 27; i <= 32; i++) $i = "" }
             print
         }' "$profile_file" > "${profile_file}.tmp"
 
@@ -562,21 +593,23 @@ function __llm_autotune_profiles_remap_by_registry() {
             # Always emit the canonical header so a headerless input
             # registry does not self-perpetuate (same guard as in
             # __llm_registry_sync_state).
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill"
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len"
         }
         FNR == NR {
-            if ($1 != "#" && (NF == 20 || NF == 26)) {
+            if ($1 != "#" && (NF == 20 || NF == 26 || NF == 32)) {
                 key=$3
                 old_ctx[key]=$8; old_thr[key]=$9; old_batch[key]=$10; old_ub[key]=$11
                 old_par[key]=$12; old_fit[key]=$13; old_be[key]=$14
                 old_mm[key]=$15; old_fa[key]=$16; old_tps[key]=$17; old_done[key]=$18
                 old_pf[key]=$21; old_p2c[key]=$22; old_p2b[key]=$23; old_p2u[key]=$24
                 old_p2t[key]=$25; old_p2pf[key]=$26
+                old_st[key]=$27; old_sdm[key]=$28; old_snm[key]=$29
+                old_snl[key]=$30; old_sdv[key]=$31; old_sal[key]=$32
             }
             next
         }
         {
-            if ($1 == "#" || (NF != 20 && NF != 26)) { next }
+            if ($1 == "#" || (NF != 20 && NF != 26 && NF != 32)) { next }
             key=$3
             if (key in old_ctx) {
                 $8=old_ctx[key]; $9=old_thr[key]; $10=old_batch[key]; $11=old_ub[key]
@@ -584,14 +617,21 @@ function __llm_autotune_profiles_remap_by_registry() {
                 $16=old_fa[key]; $17=old_tps[key]; $18=old_done[key]
                 $21=old_pf[key]; $22=old_p2c[key]; $23=old_p2b[key]; $24=old_p2u[key]
                 $25=old_p2t[key]; $26=old_p2pf[key]
+                if (old_st[key] != "") $27=old_st[key]
+                if (old_sdm[key] != "") $28=old_sdm[key]
+                if (old_snm[key] != "") $29=old_snm[key]
+                if (old_snl[key] != "") $30=old_snl[key]
+                if (old_sdv[key] != "") $31=old_sdv[key]
+                if (old_sal[key] != "") $32=old_sal[key]
             }
             if ($16 == "") $16="on"
             # SPEC-DEC-002: clamp the carried thread count to the i9-12900HK
             # P-core ceiling (6) — a pre-cap registry must not reintroduce
             # E-core-spilling threads through a remap.
             if ($9 != "" && $9 + 0 > 6) $9 = 6
-            if (NF == 20) { for (i=21; i<=26; i++) $i="" }
-            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26
+            if (NF == 20) { for (i=21; i<=32; i++) $i="" }
+            if (NF == 26) { for (i=27; i<=32; i++) $i="" }
+            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
         }
     ' "$old_registry" "$new_registry" > "${new_registry}.tmp" || return 1
 

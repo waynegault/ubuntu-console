@@ -44,7 +44,7 @@ source scripts/11-llm-manager.sh 2>/dev/null || true
 ENTRY=$(grep "^${MODEL}|" "$LLM_REGISTRY" 2>/dev/null) || {
     echo "Error: Model #${MODEL} not found in registry"; exit 1; }
 
-IFS='|' read -r _num name file size _qc _arch gpu_layers _ctx _thr _ba _ub _pa _fi _be _mm _fa _tps _autotuned _isdef _vram _prefill _p2ctx _p2b _p2u _p2tps _p2pf <<< "$ENTRY"
+IFS='|' read -r _num name file size _qc _arch gpu_layers _ctx _thr _ba _ub _pa _fi _be _mm _fa _tps _autotuned _isdef _vram _prefill _p2ctx _p2b _p2u _p2tps _p2pf _stype _sdmodel _snmax _sngl _sdevice _sacceptlen <<< "$ENTRY"
 
 MODEL_PATH="$LLAMA_MODEL_DIR/$file"
 [[ -f "$MODEL_PATH" ]] || { echo "Error: File not found: $MODEL_PATH"; exit 1; }
@@ -323,11 +323,28 @@ bench_once() {
     _launch_server() {
         local -a fa_args=()
         [[ $flash_attn == "on" ]] && fa_args=(--flash-attn on) || fa_args=(--flash-attn off)
+        # SPEC-DEC-004: the block-size sweep drives spec-decode via these
+        # globals (BENCH_SPEC_TYPE / BENCH_SPEC_N_MAX / BENCH_SPEC_DRAFT_MODEL);
+        # "off" (the default during the ctx/batch search) passes no flags.
+        # Flags use the VERIFIED llama.cpp @1692f9e50 names — the removed
+        # --draft-model / --speculative-ngram crash the server.
+        # REF: DFlash TDS article (Intel, 2026).
+        local -a spec_args=()
+        if [[ "${BENCH_SPEC_TYPE:-off}" == "ngram" ]]; then
+            local _block="${BENCH_SPEC_N_MAX:-16}"
+            spec_args=(--spec-type ngram-mod \
+                --spec-ngram-mod-n-max "$_block" \
+                --spec-ngram-mod-n-min "$_block")
+        elif [[ -n "${BENCH_SPEC_DRAFT_MODEL:-}" ]]; then
+            spec_args=(--spec-draft-model "$BENCH_SPEC_DRAFT_MODEL" --spec-draft-device none)
+            [[ -n "${BENCH_SPEC_N_MAX:-}" ]] && spec_args+=(--spec-draft-n-max "$BENCH_SPEC_N_MAX")
+        fi
         "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
             --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
             --parallel 1 --fit off "${fa_args[@]}" --kv-offload \
             --cache-type-k "$kv_k" --cache-type-v "$kv_v" $mmap_flag \
+            "${spec_args[@]}" \
             > "/tmp/at-${MODEL}-c${c}-b${b}.log" 2>&1 &
         pid=$!
         hw=0
@@ -428,13 +445,35 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
     [[ "$tokens" =~ ^[0-9]+$ ]] || tokens=0
     [[ "$prompt_tokens" =~ ^[0-9]+$ ]] || prompt_tokens=0
 
+    # SPEC-DEC-003: counter-inflation guard — usage.completion_tokens can
+    # count accepted final-block tokens discarded at max_tokens, so the TPS
+    # the floor is judged on uses DELIVERED tokens (capped at the bench's
+    # requested output budget).  max_tokens is parsed from the payload file.
+    local _req_max
+    _req_max=$(grep -oE '"max_tokens"[[:space:]]*:[[:space:]]*[0-9]+' "$payload_file" 2>/dev/null | head -1 | grep -oE '[0-9]+$')
+    [[ "$_req_max" =~ ^[0-9]+$ ]] || _req_max=0
+    local delivered_tokens="$tokens"
+    if (( _req_max > 0 && delivered_tokens > _req_max )); then
+        delivered_tokens="$_req_max"
+    fi
+
+    # SPEC-DEC-003: parse acceptance length + rate from this bench's server
+    # log (one stats line per completed request; the last is this request).
+    local _acc_len="0" _acc_rate="0"
+    if declare -f __spec_decode_stats &>/dev/null; then
+        IFS='|' read -r _acc_rate _acc_n _acc_g _acc_len _acc_present \
+            <<< "$(__spec_decode_stats "/tmp/at-${MODEL}-c${c}-b${b}.log")"
+    fi
+    local _spec_block="${BENCH_SPEC_N_MAX:-0}"
+    [[ "$_spec_block" =~ ^[0-9]+$ ]] || _spec_block=0
+
     if [[ $tokens -gt 0 ]]; then
         # Prefer the server's own decode timing; fall back to wall-clock.
         if [[ $(echo "${decode_tps:-0} > 0" | bc 2>/dev/null || echo "0") != 1 ]]; then
             if [[ $(echo "${pred_ms:-0} > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
-                decode_tps=$(echo "scale=2; $tokens * 1000 / $pred_ms" | bc 2>/dev/null || echo "0")
+                decode_tps=$(echo "scale=2; $delivered_tokens * 1000 / $pred_ms" | bc 2>/dev/null || echo "0")
             elif [[ $elapsed_ms -gt 0 ]]; then
-                decode_tps=$(echo "scale=2; $tokens * 1000 / $elapsed_ms" | bc 2>/dev/null || echo "0")
+                decode_tps=$(echo "scale=2; $delivered_tokens * 1000 / $elapsed_ms" | bc 2>/dev/null || echo "0")
             fi
         fi
         if [[ $(echo "${prefill_tps:-0} > 0" | bc 2>/dev/null || echo "0") != 1 ]] && [[ $prompt_tokens -gt 0 ]]; then
@@ -445,11 +484,11 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
         fi
     fi
 
-    # Persist decode|prefill|failtype for callers (survives the subshell that
-    # bench_ctx runs in — globals do not).
-    echo "${decode_tps:-0}|${prefill_tps:-0}|" > "/tmp/at-metrics-$$"
+    # Persist decode|prefill|failtype|accept_len|accept_rate|block for
+    # callers (survives the subshell that bench_ctx runs in — globals do not).
+    echo "${decode_tps:-0}|${prefill_tps:-0}||${_acc_len}|${_acc_rate}|${_spec_block}" > "/tmp/at-metrics-$$"
 
-    if [[ $elapsed_ms -gt 0 && $tokens -gt 0 ]] && [[ $(echo "${decode_tps:-0} > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
+    if [[ $elapsed_ms -gt 0 && $delivered_tokens -gt 0 ]] && [[ $(echo "${decode_tps:-0} > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
         echo "scale=2; $decode_tps / 1" | bc 2>/dev/null || echo "0"
         return 0
     fi
@@ -1081,6 +1120,52 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
     fi
 fi
 
+# ── SPEC-DEC-004: speculative-decoding block-size sweep ─────────────────────
+# The article's central tuning rule: optimal block size
+# (num_speculative_tokens) depends on hardware + concurrency, so it must be
+# tuned empirically per model and the winner recorded.  On the 4 GB card the
+# sweep uses VRAM-free ngram spec-decode (no extra model, --spec-type
+# ngram-mod) with the verified llama.cpp flags; a CPU-placed draft model
+# (BENCH_SPEC_DRAFT_MODEL) is honoured when the user provides one.  The TPS
+# comparison uses the de-inflated delivered-token TPS (SPEC-DEC-003) and the
+# acceptance LENGTH of the winning block is recorded alongside.
+# REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation with
+# DFlash" (Intel, TDS 2026)
+# https://towardsdatascience.com/speculative-decoding-on-cpus-nearly-4x-faster-token-generation-with-dflash/
+WIN_SPEC_TYPE=""; WIN_SPEC_N_MAX=""; WIN_SPEC_ACCEPT_LEN=""
+SPEC_N_MAX_LIST=${LLM_AUTOTUNE_SPEC_N_MAX_LIST:-"4 8 16 32"}
+if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
+    IFS=':' read -r _sb_b _sb_u <<< "$BEST_COMBO"
+    echo ""
+    echo "  spec-decode block-size sweep (ngram, VRAM-free)  [${SPEC_N_MAX_LIST}]"
+    echo "  -------------------------------------"
+    _sb_best_tps="0"
+    for _sb_block in $SPEC_N_MAX_LIST
+    do
+        if [[ ! "$_sb_block" =~ ^[0-9]+$ ]] || (( _sb_block <= 0 )); then
+            continue
+        fi
+        BENCH_SPEC_TYPE="ngram"; BENCH_SPEC_N_MAX="$_sb_block"
+        _sb_t=$(bench_ctx "$BEST_CTX" "$_sb_b" "$_sb_u" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _sb_t=""
+        _sb_t=$(echo "$_sb_t" | bc 2>/dev/null || echo "0"); [ -z "$_sb_t" ] && _sb_t=0
+        _sb_al="0"; _sb_ar="0"
+        IFS='|' read -r _sb_d _sb_p _sb_f _sb_al _sb_ar _sb_bl < "/tmp/at-metrics-$$" 2>/dev/null || true
+        echo "  block ${_sb_block}: ${_sb_t} tps (accept len ${_sb_al:-0}, rate ${_sb_ar:-0})"
+        if [[ $(echo "$_sb_t > $_sb_best_tps" | bc 2>/dev/null || echo "0") == 1 ]]; then
+            _sb_best_tps="$_sb_t"
+            WIN_SPEC_TYPE="ngram"; WIN_SPEC_N_MAX="$_sb_block"; WIN_SPEC_ACCEPT_LEN="$_sb_al"
+        fi
+    done
+    BENCH_SPEC_TYPE="off"; BENCH_SPEC_N_MAX=""; BENCH_SPEC_DRAFT_MODEL=""
+    if [[ -n "$WIN_SPEC_N_MAX" ]]; then
+        echo "  spec-decode winner: block ${WIN_SPEC_N_MAX} (${_sb_best_tps} tps, accept len ${WIN_SPEC_ACCEPT_LEN:-0})"
+        echo "  spec-decode is LOSSLESS (rejects preserve the target distribution) — preferred over"
+        echo "  lossy quantization for quality-critical paths; ngram needs no extra model on 4 GB."
+    else
+        echo "  spec-decode: no block beat the no-spec baseline — leaving spec-decode off"
+    fi
+fi
+
 
 # REF: ubuntu-console card ca23ec0a — cleanup_gpu uses AUTOTUNE_PORT (18082), not the production port 18081
 cleanup_gpu 3 >/dev/null 2>&1 || { echo "ERROR: cleanup_gpu failed after 3 retries — port ${AUTOTUNE_PORT:-18082} still bound" >&2; exit 1; }
@@ -1130,10 +1215,14 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         KV_QUANT_SAVE="${_qc%%/*}/${WIN_KVK}/${WIN_KVV}"
     fi
     if declare -f __llm_autotune_profile_save &>/dev/null; then
+        # SPEC-DEC-004: record the winning spec block + measured acceptance
+        # length (registry fields 27/29/32) alongside the ctx/batch winner.
         __llm_autotune_profile_save "$MODEL" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "1" "256" "$BEST_TPS" \
-            "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" || echo "  warning: profile save failed"
+            "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
+            "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
+            || echo "  warning: profile save failed"
     fi
-    grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s tps=%s prefill=%s autotuned=%s\n", $8, $10, $11, $17, $21, $18}'
+    grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s\n", $8, $10, $11, $17, $21, $18, $27, $29, $32}'
     echo ""
     echo "============================================="
     echo "  done"

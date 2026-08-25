@@ -749,15 +749,98 @@ function __spec_decode_stats() {
 
 # ---------------------------------------------------------------------------
 # __spec_block_size — Resolve the active speculative-decode block size.
-# Priority: LLM_SPEC_DRAFT_N_MAX env > LLM_SPECULATIVE_NGRAM env > 16 (the
-# llama.cpp --spec-draft-n-max default).  SPEC-DEC-004 extends this with the
-# per-model registry fields (spec_draft_n_max).  Prints the integer.
+# Priority: LLM_SPEC_DRAFT_N_MAX env > LLM_SPECULATIVE_NGRAM env > the active
+# model's registry spec_draft_n_max (field 29, written by SPEC-DEC-004
+# autotune) > 16 (the llama.cpp --spec-draft-n-max default).  Prints int.
 function __spec_block_size() {
     local _n_max="${LLM_SPEC_DRAFT_N_MAX:-}"
     [[ "$_n_max" =~ ^[0-9]+$ ]] && [[ $_n_max -gt 0 ]] && { echo "$_n_max"; return 0; }
     local _ngram="${LLM_SPECULATIVE_NGRAM:-}"
     [[ "$_ngram" =~ ^[0-9]+$ ]] && [[ $_ngram -gt 0 ]] && { echo "$_ngram"; return 0; }
+    if [[ -f "${ACTIVE_LLM_FILE:-}" && -f "$LLM_REGISTRY" ]]; then
+        local _act_num _act_row _reg_n_max
+        _act_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null || true)
+        if [[ "$_act_num" =~ ^[0-9]+$ ]]; then
+            _act_row=$(awk -F'|' -v n="$_act_num" '$1 == n {print; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
+            _reg_n_max=$(echo "$_act_row" | cut -d'|' -f29)
+            [[ "$_reg_n_max" =~ ^[0-9]+$ ]] && [[ $_reg_n_max -gt 0 ]] && { echo "$_reg_n_max"; return 0; }
+        fi
+    fi
     echo "16"
+}
+
+# ---------------------------------------------------------------------------
+# __spec_launch_flags — Emit speculative-decoding launch flags (VERIFIED
+# llama.cpp @1692f9e50 names — the removed --draft-model / --speculative-ngram
+# crash llama-server at launch, common/arg.cpp:825).
+#
+# Resolution priority: LLM_SPEC_* env overrides > registry row_spec_* fields
+# (dynamic scope) > defaults.  Reads: LLM_SPEC_DRAFT_ENABLED, LLM_SPEC_TYPE,
+# LLM_SPEC_DRAFT_MODEL, LLM_SPEC_DRAFT_N_MAX, LLM_SPEC_DRAFT_NGL,
+# LLM_SPEC_DRAFT_DEVICE, LLM_SPECULATIVE_NGRAM and the row_spec_* variables.
+#
+# 4 GB VRAM rule: a draft model must NEVER steal VRAM from the target, so the
+# default draft placement is CPU-only (--spec-draft-device none) unless the
+# user explicitly sets LLM_SPEC_DRAFT_NGL>0 or LLM_SPEC_DRAFT_DEVICE.
+#
+# Speculative decoding is LOSSLESS (rejection sampling recovers the target
+# distribution exactly) — preferred over lossy quantization for
+# quality-critical paths (legal evidence); ngram spec-decode needs no extra
+# model and is the natural first step on a 4 GB card.
+#
+# Output: one flag per line on stdout (paths may contain spaces); empty when
+# spec-decode is disabled or nothing is configured.
+#
+# REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation
+# with DFlash" (Intel, TDS 2026)
+# https://towardsdatascience.com/speculative-decoding-on-cpus-nearly-4x-faster-token-generation-with-dflash/
+function __spec_launch_flags() {
+    # SPEC-DEC-005 knob: disable draft decoding under load (per-server).
+    case "${LLM_SPEC_DRAFT_ENABLED:-1}" in
+        0|false|FALSE|no|NO|off|OFF) return 0 ;;
+    esac
+
+    local _type="${LLM_SPEC_TYPE:-${row_spec_type:-}}"
+    local _draft="${LLM_SPEC_DRAFT_MODEL:-${row_spec_draft_model:-}}"
+    local _n_max="${LLM_SPEC_DRAFT_N_MAX:-${row_spec_n_max:-0}}"
+    [[ "$_n_max" =~ ^[0-9]+$ ]] || _n_max=0
+    local _ngl="${LLM_SPEC_DRAFT_NGL:-${row_spec_ngl:-0}}"
+    [[ "$_ngl" =~ ^[0-9]+$ ]] || _ngl=0
+    local _device="${LLM_SPEC_DRAFT_DEVICE:-${row_spec_device:-}}"
+    local _ngram="${LLM_SPECULATIVE_NGRAM:-0}"
+    [[ "$_ngram" =~ ^[0-9]+$ ]] || _ngram=0
+
+    [[ -n "$_draft" || "$_type" == "ngram" || $_ngram -gt 0 ]] || return 0
+
+    if [[ -n "$_draft" ]]
+    then
+        printf '%s\n' "--spec-draft-model" "$_draft"
+        if [[ -n "$_device" ]]
+        then
+            printf '%s\n' "--spec-draft-device" "$_device"
+        elif (( _ngl > 0 ))
+        then
+            printf '%s\n' "--spec-draft-ngl" "$_ngl"
+        else
+            # CPU-only draft: never steal VRAM from the target on 4 GB.
+            printf '%s\n' "--spec-draft-device" "none"
+        fi
+    fi
+
+    if [[ "$_type" == "ngram" || $_ngram -gt 0 ]]
+    then
+        local _block="$_n_max"
+        (( _block > 0 )) || _block="$_ngram"
+        (( _block > 0 )) || _block=16
+        # n_min pinned to the block so a small block is actually drafted
+        # (the ngram-mod default n_min=48 would swallow smaller blocks).
+        printf '%s\n' "--spec-type" "ngram-mod" \
+            "--spec-ngram-mod-n-max" "$_block" \
+            "--spec-ngram-mod-n-min" "$_block"
+    elif (( _n_max > 0 ))
+    then
+        printf '%s\n' "--spec-draft-n-max" "$_n_max"
+    fi
 }
 
 # __calc_threads — CPU threads based on how much spills to CPU.
@@ -837,7 +920,7 @@ function __renumber_registry() {
     awk -F'|' -v n="$target" '$1 != n && $1 != "#"' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
     local newnum=0
     {
-        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill"
+        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len"
         while IFS='|' read -r _num rest
         do
             ((++newnum))
