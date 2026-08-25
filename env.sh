@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -87,6 +87,40 @@ export LLM_AUTOTUNE_KV_QUANTS="${LLM_AUTOTUNE_KV_QUANTS:-q8_0/q8_0 q4_0/q4_0}"
 # Cap on a single scoring bench's wall time (filled-cache prefill is slow on
 # CPU-only models).
 export LLM_AUTOTUNE_BENCH_TIMEOUT="${LLM_AUTOTUNE_BENCH_TIMEOUT:-300}"
+
+# ── Speculative decoding (SPEC-DEC-001..006) ────────────────────────────────
+# Speculative decoding trades spare CPU compute for saved memory bandwidth and
+# is LOSSLESS (rejection sampling recovers the target distribution exactly) —
+# preferred over lossy quantization for quality-critical paths (legal
+# evidence).  It is a net LOSS once concurrency consumes the spare compute
+# (DFlash article pitfall #1); the SPEC-DEC-005 policy is: ON for
+# low-concurrency latency-bound paths (agentic loops, interactive), OFF under
+# concurrent load.  The knobs below mirror the per-model registry fields
+# (schema v5, columns 27-32) which `model use` and autotune read.
+#
+# LLM_SPEC_DRAFT_ENABLED: 0 disables ALL speculative-decoding flags at launch
+# (per-server knob; restart the model after flipping).
+export LLM_SPEC_DRAFT_ENABLED="${LLM_SPEC_DRAFT_ENABLED:-1}"
+# LLM_SPEC_TYPE: "ngram" = VRAM-free ngram spec-decode (no extra model — the
+# natural first step on the 4 GB card); empty = draft-model spec-decode when
+# LLM_SPEC_DRAFT_MODEL is set.
+export LLM_SPEC_TYPE="${LLM_SPEC_TYPE:-}"
+# LLM_SPEC_DRAFT_MODEL: draft GGUF path.  A draft model must NEVER steal VRAM
+# from the target on the 4 GB RTX 3050 Ti — the default placement is CPU-only
+# (--spec-draft-device none); set LLM_SPEC_DRAFT_NGL>0 or LLM_SPEC_DRAFT_DEVICE
+# to override explicitly.
+export LLM_SPEC_DRAFT_MODEL="${LLM_SPEC_DRAFT_MODEL:-}"
+# LLM_SPEC_DRAFT_N_MAX: block size (num_speculative_tokens).  Autotune sweeps
+# this (LLM_AUTOTUNE_SPEC_N_MAX_LIST) and records the winner per model.
+export LLM_SPEC_DRAFT_N_MAX="${LLM_SPEC_DRAFT_N_MAX:-}"
+export LLM_SPEC_DRAFT_NGL="${LLM_SPEC_DRAFT_NGL:-0}"
+export LLM_SPEC_DRAFT_DEVICE="${LLM_SPEC_DRAFT_DEVICE:-}"
+# Autotune block-size sweep candidates (SPEC-DEC-004).
+export LLM_AUTOTUNE_SPEC_N_MAX_LIST="${LLM_AUTOTUNE_SPEC_N_MAX_LIST:-4 8 16 32}"
+#
+# REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation with
+# DFlash" (Intel, TDS 2026)
+# https://towardsdatascience.com/speculative-decoding-on-cpus-nearly-4x-faster-token-generation-with-dflash/
 
 _tac_lib_dir="$_tac_env_root/scripts"
 
