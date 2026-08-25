@@ -2782,7 +2782,7 @@ function __model_archive() {
         then
             __tac_info "File" "[MOVED]" "$C_Success"
         else
-            __tac_info "File" "[MOVE FAILED - try: sudo chmod 755 $archive_dir]" "$C_Error"
+            __tac_info "File" "[MOVE FAILED - drive root not writable: sudo chown -R \$USER $LLAMA_DRIVE_ROOT]" "$C_Error"
             return 1
         fi
     else
