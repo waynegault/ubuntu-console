@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -704,6 +704,60 @@ function __llm_thread_cap() {
     else
         echo "$_raw"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __spec_decode_stats — Parse llama-server speculative-decode stats from a log.
+# Usage: __spec_decode_stats <logfile>
+# Output: rate|accepted|generated|mean_len|present
+#   rate      acceptance ratio (accepted/generated draft tokens)
+#   accepted  draft tokens accepted by the target model
+#   generated draft tokens proposed
+#   mean_len  mean acceptance LENGTH = accepted-per-round + 1 (the article's
+#             tuning metric — do NOT compare runs on rate alone)
+#   present   "yes" when a stats line was found, "no" otherwise
+# The server emits one "draft acceptance = ..." line per completed request
+# (tools/server/server-context.cpp @1692f9e50); the LAST line is the most
+# recent request.  SPEC-DEC-003: counter inflation — usage.completion_tokens
+# can count accepted final-block tokens discarded at max_tokens, so TPS must
+# be recomputed from delivered tokens when spec-decode is on.
+#
+# REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation
+# with DFlash" (Intel, TDS 2026)
+# https://towardsdatascience.com/speculative-decoding-on-cpus-nearly-4x-faster-token-generation-with-dflash/
+function __spec_decode_stats() {
+    local _log="${1:-}"
+    [[ -f "$_log" ]] || { echo "0|0|0|0|no"; return 1; }
+    local _line
+    _line=$(grep -oE 'draft acceptance = [0-9.]+ \( *[0-9]+ accepted / *[0-9]+ generated\), mean len = *[0-9.]+' \
+        "$_log" 2>/dev/null | tail -1)
+    [[ -n "$_line" ]] || { echo "0|0|0|0|no"; return 1; }
+
+    # shellcheck disable=SC2001
+    local _clean
+    _clean=$(echo "$_line" | sed -E \
+        -e 's/draft acceptance = //' \
+        -e 's/ *\( *([0-9]+) accepted \/ *([0-9]+) generated\), mean len = */|\1|\2|/')
+    local _rate _accepted _generated _mean_len
+    IFS='|' read -r _rate _accepted _generated _mean_len <<< "$_clean"
+    [[ "$_rate" =~ ^[0-9.]+$ ]] || _rate=0
+    [[ "$_accepted" =~ ^[0-9]+$ ]] || _accepted=0
+    [[ "$_generated" =~ ^[0-9]+$ ]] || _generated=0
+    [[ "$_mean_len" =~ ^[0-9.]+$ ]] || _mean_len=0
+    echo "${_rate}|${_accepted}|${_generated}|${_mean_len}|yes"
+}
+
+# ---------------------------------------------------------------------------
+# __spec_block_size — Resolve the active speculative-decode block size.
+# Priority: LLM_SPEC_DRAFT_N_MAX env > LLM_SPECULATIVE_NGRAM env > 16 (the
+# llama.cpp --spec-draft-n-max default).  SPEC-DEC-004 extends this with the
+# per-model registry fields (spec_draft_n_max).  Prints the integer.
+function __spec_block_size() {
+    local _n_max="${LLM_SPEC_DRAFT_N_MAX:-}"
+    [[ "$_n_max" =~ ^[0-9]+$ ]] && [[ $_n_max -gt 0 ]] && { echo "$_n_max"; return 0; }
+    local _ngram="${LLM_SPECULATIVE_NGRAM:-}"
+    [[ "$_ngram" =~ ^[0-9]+$ ]] && [[ $_ngram -gt 0 ]] && { echo "$_ngram"; return 0; }
+    echo "16"
 }
 
 # __calc_threads — CPU threads based on how much spills to CPU.

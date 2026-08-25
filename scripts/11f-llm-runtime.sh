@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11f-llm-runtime ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
@@ -391,10 +391,19 @@ function burn() {
         tokens=$(printf '%s' "$response" | jq -r '.choices[0].message.content // ""' 2>/dev/null | wc -w)
     fi
 
+    # SPEC-DEC-003: counter-inflation guard.  With speculative decoding,
+    # usage.completion_tokens counts accepted final-block tokens discarded at
+    # the max_tokens limit, inflating TPS.  Report TPS over DELIVERED tokens
+    # (capped at the requested output budget).
+    local requested_max=1500
+    [[ "$bench_tokens" =~ ^[0-9]+$ ]] && requested_max="$bench_tokens"
+    local delivered_tokens="$tokens"
+    (( delivered_tokens > requested_max )) && delivered_tokens="$requested_max"
+
     local tps_int=0 tps_dec=0
-    if (( elapsed_ms > 0 && tokens > 0 ))
+    if (( elapsed_ms > 0 && delivered_tokens > 0 ))
     then
-        local tps_x10=$(( tokens * 10000 / elapsed_ms ))
+        local tps_x10=$(( delivered_tokens * 10000 / elapsed_ms ))
         tps_int=$(( tps_x10 / 10 ))
         tps_dec=$(( tps_x10 % 10 ))
     fi
@@ -405,7 +414,22 @@ function burn() {
     fi
     printf '%s\n' \
         "${C_Success}Burn complete: ${tps_int}.${tps_dec} tps" \
-        "(${tokens} tokens in ${elapsed_s}.${elapsed_dec}s)${C_Reset}"
+        "(${delivered_tokens} tokens delivered in ${elapsed_s}.${elapsed_dec}s)${C_Reset}"
+
+    # SPEC-DEC-003: report acceptance length + block size when the server ran
+    # with speculative decoding enabled (the log carries one stats line per
+    # completed request).
+    local _sd_rate _sd_acc _sd_gen _sd_len _sd_present
+    IFS='|' read -r _sd_rate _sd_acc _sd_gen _sd_len _sd_present \
+        <<< "$(__spec_decode_stats "$LLM_LOG_FILE")"
+    if [[ "$_sd_present" == "yes" ]]
+    then
+        local _sd_block
+        _sd_block=$(__spec_block_size)
+        printf '%s\n' \
+            "${C_Dim}spec-decode: acceptance len ${_sd_len} (rate ${_sd_rate}, ${_sd_acc}/${_sd_gen} accepted/drafted, block ${_sd_block})${C_Reset}"
+    fi
+
     echo "${tps_int}.${tps_dec} tps" > "${LLM_TPS_CACHE}.tmp" && mv "${LLM_TPS_CACHE}.tmp" "$LLM_TPS_CACHE"
     __save_tps "${tps_int}.${tps_dec}"
 
