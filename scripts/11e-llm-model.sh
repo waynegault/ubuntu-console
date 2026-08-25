@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -619,6 +619,12 @@ function __model_use_select_backend() {
 function __model_use_configure_params() {
     # Prefer per-model registry values from model scan; fall back to global defaults.
     [[ "$threads" =~ ^[0-9]+$ ]] || threads="${LLAMA_CPU_THREADS:-6}"
+    # SPEC-DEC-002: hard-cap at the i9-12900HK P-core count (6).  Registry
+    # rows written before the cap (or a manual LLAMA_CPU_THREADS > 6) must
+    # not spawn E-core-spilling thread counts; nproc-derived values from
+    # __calc_threads are already capped, this guards every other entry path.
+    # REF: DFlash TDS article (Intel, 2026) — hybrid-architecture pitfall.
+    threads=$(__llm_thread_cap "$threads")
     if [[ -z "${TAC_CTX_SIZE:-}" ]]
     then
         [[ "$ctx" =~ ^[0-9]+$ ]] || ctx="${LLAMA_CTX_SIZE:-4096}"

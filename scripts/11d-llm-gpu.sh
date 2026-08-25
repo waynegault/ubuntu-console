@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -683,11 +683,37 @@ function __bench_latest_file() {
         -printf '%T@ %p\n' 2>/dev/null | sort -n -r | head -1 | cut -d' ' -f2-
 }
 
+# ---------------------------------------------------------------------------
+# __llm_thread_cap — Clamp a compute-thread count to the i9-12900HK P-cores.
+# Usage: __llm_thread_cap <threads>  ->  prints min(threads, 6)
+#
+# On the i9-12900HK (6 P-cores / 8 E-cores) any thread count above 6 spills
+# onto the efficiency cores and SLOWS generation via sync latency — the
+# DFlash article's hybrid-architecture pitfall.  WSL2 exposes 12 CPUs
+# (`processors=12` in .wslconfig → `nproc` = 12), so every nproc-derived
+# count must be capped here or it silently exceeds the P-core ceiling.
+#
+# REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation
+# with DFlash" (Intel, TDS 2026)
+# https://towardsdatascience.com/speculative-decoding-on-cpus-nearly-4x-faster-token-generation-with-dflash/
+function __llm_thread_cap() {
+    local _raw="${1:-6}"
+    [[ "$_raw" =~ ^[0-9]+$ ]] || _raw=6
+    if (( _raw > 6 )); then
+        echo "6"
+    else
+        echo "$_raw"
+    fi
+}
+
 # __calc_threads — CPU threads based on how much spills to CPU.
 # Uses nproc to detect available threads, then scales:
 #   CPU-only  → 80% (all layers on CPU, maximise parallelism)
 #   Partial   → 70% (CPU handles remaining layers + KV-cache)
 #   Full GPU  → 50% (CPU only does prompt processing + sampling)
+# Result is hard-capped at 6 (__llm_thread_cap): on the i9-12900HK hybrid
+# architecture, more than 6 compute threads (the P-core count) spill onto
+# E-cores and slow generation (SPEC-DEC-002).
 function __calc_threads() {
     local _gpu_layers=$1 _total_layers=$2
     local ncpu pct
@@ -705,7 +731,7 @@ function __calc_threads() {
 
     local threads=$(( ncpu * pct / 100 ))
     (( threads < 1 )) && threads=1
-    echo "$threads"
+    __llm_thread_cap "$threads"
 }
 
 # __quant_label — Map GGUF file_type int to human-readable quant label.

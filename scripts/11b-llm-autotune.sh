@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -261,6 +261,10 @@ function __llm_autotune_profile_save() {
                     $25 = p2_tps_val; $26 = p2_prefill_val
                 }
             }
+            # SPEC-DEC-002: clamp the stored thread count to the i9-12900HK
+            # P-core ceiling (6) on every registry write — a pre-cap row must
+            # not survive the save with an E-core-spilling value.
+            if ($9 != "" && $9 + 0 > 6) $9 = 6
             # Pad legacy 20-column rows to the v4 26-column schema.
             if (NF == 20) { for (i = 21; i <= 26; i++) $i = "" }
             print
@@ -582,6 +586,10 @@ function __llm_autotune_profiles_remap_by_registry() {
                 $25=old_p2t[key]; $26=old_p2pf[key]
             }
             if ($16 == "") $16="on"
+            # SPEC-DEC-002: clamp the carried thread count to the i9-12900HK
+            # P-core ceiling (6) — a pre-cap registry must not reintroduce
+            # E-core-spilling threads through a remap.
+            if ($9 != "" && $9 + 0 > 6) $9 = 6
             if (NF == 20) { for (i=21; i<=26; i++) $i="" }
             print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26
         }

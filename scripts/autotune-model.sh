@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -53,13 +53,30 @@ SIZE_INT=${size%G}; SIZE_INT=${SIZE_INT%.*}; SIZE_INT=${SIZE_INT:-1}
 [[ "$SIZE_INT" =~ ^[0-9]+$ ]] || SIZE_INT=1
 
 CPU_COUNT=$(nproc 2>/dev/null || echo 6)
+# SPEC-DEC-002: the thread count is hard-capped at the i9-12900HK P-core
+# count (6).  nproc inside WSL2 returns 12 (processors=12 in .wslconfig);
+# using it uncapped spills decode onto the E-cores and slows generation
+# (DFlash article hardware pitfall).  The cap is applied to registry reads
+# AND fallbacks so the registry can never hold a >6 value from here.
+# REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation
+# with DFlash" (Intel, TDS 2026)
+# https://towardsdatascience.com/speculative-decoding-on-cpus-nearly-4x-faster-token-generation-with-dflash/
+if ! declare -f __llm_thread_cap &>/dev/null; then
+    # Standalone fallback (11d-llm-gpu.sh not sourced): same P-core clamp.
+    __llm_thread_cap() {
+        local _raw="${1:-6}"
+        [[ "$_raw" =~ ^[0-9]+$ ]] || _raw=6
+        (( _raw > 6 )) && _raw=6
+        echo "$_raw"
+    }
+fi
 if [[ "$_thr" =~ ^[0-9]+$ ]] && [[ $_thr -gt 0 ]] && [[ $_thr -le $CPU_COUNT ]]; then
-    TUNE_THREADS="$_thr"
+    TUNE_THREADS=$(__llm_thread_cap "$_thr")
 else
-    TUNE_THREADS="$CPU_COUNT"
+    TUNE_THREADS=$(__llm_thread_cap "$CPU_COUNT")
 fi
 BENCH_NGL="${gpu_layers:-999}"
-[[ ${gpu_layers:-999} -eq 0 ]] && TUNE_THREADS="$CPU_COUNT"
+[[ ${gpu_layers:-999} -eq 0 ]] && TUNE_THREADS=$(__llm_thread_cap "$CPU_COUNT")
 
 echo "[${MODEL}] ${name} (${size}, ${gpu_layers:-0} gpu layers)"
 echo "  Bench NGL: ${BENCH_NGL}  — max envelope: 999"
