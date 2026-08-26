@@ -57,7 +57,7 @@ function __model_scan() {
         mkdir -p "$_scan_backup_dir"
         cp "$LLM_REGISTRY" "$_scan_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S).pre-scan"
     fi
-    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len" > "$tmpconf"
+    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens" > "$tmpconf"
 
     local num=0
     __tac_info "Reading" "files from $LLAMA_MODEL_DIR..." "$C_Dim"
@@ -100,13 +100,14 @@ function __model_scan() {
         local prev_default="no"
         local prev_active="no"
         local prev_spec_type="" prev_spec_draft_model="" prev_spec_n_max="" prev_spec_ngl="" prev_spec_device="" prev_spec_accept_len=""
+        local prev_workload="" prev_ttft="" prev_bench_ctx="" prev_bench_max_chunks="" prev_bench_avg_prompt_tokens=""
         if [[ -f "$LLM_REGISTRY" ]]
         then
             local prev_row
             prev_row=$(awk -F'|' -v f="$fname" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
             if [[ -n "$prev_row" ]]
             then
-                IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_flash_attn prev_tps prev_autotuned prev_default prev_active prev_prefill prev_p2_ctx prev_p2_batch prev_p2_ubatch prev_p2_tps prev_p2_prefill prev_spec_type prev_spec_draft_model prev_spec_n_max prev_spec_ngl prev_spec_device prev_spec_accept_len <<< "$prev_row"
+                IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_flash_attn prev_tps prev_autotuned prev_default prev_active prev_prefill prev_p2_ctx prev_p2_batch prev_p2_ubatch prev_p2_tps prev_p2_prefill prev_spec_type prev_spec_draft_model prev_spec_n_max prev_spec_ngl prev_spec_device prev_spec_accept_len prev_workload prev_ttft prev_bench_ctx prev_bench_max_chunks prev_bench_avg_prompt_tokens <<< "$prev_row"
                 [[ -z "${prev_flash_attn:-}" ]] && prev_flash_attn="on"
             fi
         fi
@@ -123,6 +124,10 @@ function __model_scan() {
         _reg_line+="|${prev_batch}|${prev_ubatch}|${prev_parallel}|${prev_fit}|${prev_backend}|${prev_mmap}|${prev_flash_attn}|${prev_tps}|${prev_autotuned}|${prev_default}|${prev_active}"
         _reg_line+="|${prev_prefill}|${prev_p2_ctx}|${prev_p2_batch}|${prev_p2_ubatch}|${prev_p2_tps}|${prev_p2_prefill}"
         _reg_line+="|${prev_spec_type:-}|${prev_spec_draft_model:-}|${prev_spec_n_max:-}|${prev_spec_ngl:-}|${prev_spec_device:-}|${prev_spec_accept_len:-}"
+        # AUTOTUNE-001/003/005: preserve the v6 measurement columns on scan
+        # (workload 33, ttft_ms 34, bench_* input-profile 35-37) so a rescan
+        # never truncates the schema back to 32 columns.
+        _reg_line+="|${prev_workload:-}|${prev_ttft:-}|${prev_bench_ctx:-}|${prev_bench_max_chunks:-}|${prev_bench_avg_prompt_tokens:-}"
         echo "$_reg_line" >> "$tmpconf"
 
         # Progress: not printing each model individually

@@ -179,21 +179,22 @@ function __llm_registry_sync_state() {
             # registry has lost its header line (e.g. after an interrupted
             # model-scan renumbering pass).  This prevents a headerless
             # registry from self-perpetuating across every sync_state call.
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len"
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens"
         }
         $1 == "#" { next }
-        (NF != 20 && NF != 26 && NF != 32) { next }
+        (NF != 20 && NF != 26 && NF != 32 && NF != 37) { next }
         {
             d = ($3 == def ? "yes" : "no")
             a = (run == 1 && af != "" && $3 == af ? "yes" : "no")
             $19=d; $20=a
             if ($15 == "") $15="auto"
             if ($16 == "") $16="on"
-            # Pad legacy 20/26-column rows to the v5 32-column schema so the
-            # registry converges on the extended header.
-            if (NF == 20) { for (i = 21; i <= 32; i++) $i = "" }
-            if (NF == 26) { for (i = 27; i <= 32; i++) $i = "" }
-            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
+            # Pad legacy 20/26/32-column rows to the v6 37-column schema so
+            # the registry converges on the extended header (AUTOTUNE-001/003/005).
+            if (NF == 20) { for (i = 21; i <= 37; i++) $i = "" }
+            if (NF == 26) { for (i = 27; i <= 37; i++) $i = "" }
+            if (NF == 32) { for (i = 33; i <= 37; i++) $i = "" }
+            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37
         }
     ' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" || return 1
 
@@ -228,7 +229,7 @@ function __renumber_registry() {
     awk -F'|' -v n="$target" '$1 != n && $1 != "#"' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
     local newnum=0
     {
-        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len"
+        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens"
         while IFS='|' read -r _num rest
         do
             ((++newnum))
