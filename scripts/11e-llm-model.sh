@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -481,6 +481,12 @@ function __model_use_resolve_model() {
     # declared as `local` in __model_use, assigned here.
     IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram row_prefill row_p2_ctx row_p2_batch row_p2_ubatch row_p2_tps row_p2_prefill row_spec_type row_spec_draft_model row_spec_n_max row_spec_ngl row_spec_device row_spec_accept_len <<< "$entry"
 
+    # AUTOTUNE-004: the registry parallel column carries the measured
+    # (ctx, parallel) KV-headroom envelope at the tuned ctx.  Capture it
+    # before any env/CLI override so an over-subscribed --parallel N launch
+    # can be flagged.
+    row_parallel_envelope="$parallel_slots"
+
     # Allow context size override via TAC_CTX_SIZE environment variable
     # (set by `serve --ctx-size N` or `model use N --ctx-size N`)
     if [[ -n "${TAC_CTX_SIZE:-}" ]]
@@ -704,6 +710,20 @@ function __model_use_configure_params() {
     if [[ "${LLAMA_PARALLEL_SLOTS:-}" =~ ^[0-9]+$ ]] && (( LLAMA_PARALLEL_SLOTS > 0 ))
     then
         parallel_slots="$LLAMA_PARALLEL_SLOTS"
+    fi
+
+    # AUTOTUNE-004: validate the effective --parallel against the measured
+    # (ctx, parallel) KV-headroom envelope recorded by autotune-model.sh.
+    # Over-subscribing parallel slots re-allocates the KV cache per slot —
+    # N slots at the tuned single-slot ctx over-commit VRAM.  Loud warning,
+    # never suppressed; the launch proceeds (the operator may have changed
+    # ctx/batch to free headroom).
+    if [[ "${row_parallel_envelope:-}" =~ ^[0-9]+$ ]] && (( row_parallel_envelope > 0 )) \
+        && (( parallel_slots > row_parallel_envelope ))
+    then
+        __tac_info "Warning" \
+            "[--parallel ${parallel_slots} exceeds the autotuned envelope ${row_parallel_envelope} at ctx ${ctx} (AUTOTUNE-004) - KV cache is re-allocated per slot and VRAM will be over-subscribed. Re-run 'model autotune' to re-certify the envelope, or lower --parallel.]" \
+            "$C_Warning"
     fi
 
     if (( ubatch_size > batch_size ))
@@ -1046,6 +1066,9 @@ function __model_use() {
     local ctx threads batch_size ubatch_size parallel_slots fit_target_mb
     local row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram
     local row_kv_k row_kv_v
+    # AUTOTUNE-004: the registry row's parallel value = the measured
+    # (ctx, parallel) KV-headroom envelope at the tuned ctx.
+    local row_parallel_envelope
     local model_path model_bytes quant_rating llm_backend python_bin
     local smi_cmd free_vram_mb type_k_val use_no_mmap
     local cmd model_shell_pid

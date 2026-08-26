@@ -107,3 +107,30 @@ EOF
     [[ "$src" == *"TTFT_MS"* ]]
     [[ "$src" == *"ttft_ms=%s"* ]]
 }
+
+@test "autotune-004: profile-save records the parallel envelope (field 6)" {
+    cat > "$LLM_REGISTRY" <<'EOF'
+#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram
+1|Model One|model-one.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|1024|llama_server|auto|on|0|no|no|no
+EOF
+    __llm_autotune_profile_save "1" "native" "4608" "1024" "256" "2" "256" "12.3" \
+        "" "" "" "" "" "" "" "Q4_K_M/q8_0/q8_0" "24" \
+        "" "" "" "" "" "" "legal"
+    local row
+    row=$(grep "^1|" "$LLM_REGISTRY")
+    # parallel column (field 12 incl. model number) = the measured envelope.
+    [[ "$(echo "$row" | cut -d'|' -f12)" == "2" ]]
+}
+
+@test "autotune-004: autotune-model.sh sweeps the parallel envelope and 11e warns when over-subscribed" {
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" == *"parallel envelope"* ]]
+    [[ "$src" == *"BENCH_PARALLEL"* ]]
+    [[ "$src" == *"WIN_PARALLEL"* ]]
+    local e11
+    e11=$(< "$REPO_ROOT/scripts/11e-llm-model.sh")
+    [[ "$e11" == *"AUTOTUNE-004"* ]]
+    [[ "$e11" == *"row_parallel_envelope"* ]]
+    [[ "$e11" == *"exceeds the autotuned envelope"* ]]
+}

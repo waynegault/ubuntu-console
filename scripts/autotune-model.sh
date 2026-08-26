@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -416,7 +416,7 @@ bench_once() {
         "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
             --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
-            --parallel 1 --fit off "${fa_args[@]}" --kv-offload \
+            --parallel "${BENCH_PARALLEL:-1}" --fit off "${fa_args[@]}" --kv-offload \
             --cache-type-k "$kv_k" --cache-type-v "$kv_v" $mmap_flag \
             "${spec_args[@]}" \
             > "/tmp/at-${MODEL}-c${c}-b${b}.log" 2>&1 &
@@ -1431,6 +1431,37 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     fi
 fi
 
+# ── AUTOTUNE-004: multi-slot / --parallel KV headroom envelope ──────────────
+# The tune certifies single-slot context; the registry parallel column held
+# the stale tuning-time value (1) and nothing accounted for the KV headroom
+# of N parallel slots (SPEC-DEC-005's concurrency policy needs the envelope —
+# launching --parallel N with the tuned single-slot ctx over-subscribes VRAM).
+# Sweep N at the winning ctx: the largest N that loads AND serves a real
+# completion is the sustainable (ctx, parallel) envelope, recorded in the
+# parallel column.  Launchers validate --parallel N against it (AUTOTUNE-004
+# warning in 11e-llm-model.sh).
+WIN_PARALLEL=1
+if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
+    echo ""
+    echo "  parallel envelope at ctx=$(fmt "$BEST_CTX")  (KV headroom sweep)"
+    echo "  ---------------------"
+    _last_ok=1
+    for _pp in 2 4 8 16; do
+        BENCH_PARALLEL="$_pp"
+        _pt=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "quick" "$WIN_KVK" "$WIN_KVV") || _pt=""
+        if [[ -n "$_pt" ]]; then
+            echo "  parallel ${_pp}: ${_pt} tps (serves)"
+            _last_ok="$_pp"
+        else
+            echo "  parallel ${_pp}: over-subscribed (no serve)"
+            break
+        fi
+    done
+    BENCH_PARALLEL="1"
+    WIN_PARALLEL="$_last_ok"
+    echo "  envelope: ctx=$(fmt "$BEST_CTX") fits ${WIN_PARALLEL} parallel slot(s)"
+fi
+
 # REF: ubuntu-console card ca23ec0a — cleanup_gpu uses AUTOTUNE_PORT (18082), not the production port 18081
 cleanup_gpu 3 >/dev/null 2>&1 || { echo "ERROR: cleanup_gpu failed after 3 retries — port ${AUTOTUNE_PORT:-18082} still bound" >&2; exit 1; }
 echo ""
@@ -1472,6 +1503,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     if [[ $TTFT_MS -gt 0 ]]; then
         echo "  ttft:    ${TTFT_MS} ms at ctx=$(fmt "$BEST_CTX")  (per-step decode ${TTFT_PER_STEP} ms/token)"
     fi
+    echo "  envelope: ctx=$(fmt "$BEST_CTX") / parallel ${WIN_PARALLEL}"
 
     # Profile-2 fields only when profile 2 exists (BEST exists ⇒ P2 exists).
     _P2ARGS=("" "" "" "" "")
@@ -1487,13 +1519,16 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # AUTOTUNE-001: the scoring workload rides in field 33 so consumers
         # know which prompt distribution certified the winner.
         # AUTOTUNE-003: the median TTFT at the winning ctx rides in field 34.
-        __llm_autotune_profile_save "$MODEL" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "1" "256" "$BEST_TPS" \
+        # AUTOTUNE-004: the measured (ctx, parallel) envelope rides in the
+        # parallel column (field 6) — launches validate --parallel N against
+        # it and warn when over-subscribed (11e-llm-model.sh).
+        __llm_autotune_profile_save "$MODEL" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
             || echo "  warning: profile save failed"
     fi
-    grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s ttft_ms=%s\n", $8, $10, $11, $17, $21, $18, $27, $29, $32, $33, $34}'
+    grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s parallel=%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s ttft_ms=%s\n", $8, $10, $11, $12, $17, $21, $18, $27, $29, $32, $33, $34}'
     echo ""
     echo "============================================="
     echo "  done"
