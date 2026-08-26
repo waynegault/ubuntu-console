@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -140,21 +140,32 @@ function __llm_autotune_done_for_model() {
 
 # ---------------------------------------------------------------------------
 # __llm_autotune_profile_save — Persist latest winning autotune as defaults.
-# Registry schema v5 (32 columns): the v4 26 columns plus the SPEC-DEC-004
-# speculative-decoding fields spec_type(27), spec_draft_model(28),
-# spec_draft_n_max(29), spec_draft_ngl(30), spec_draft_device(31),
-# spec_accept_len(32).
+# Registry schema v6 (37 columns): the v5 32 columns plus the AUTOTUNE-001/003
+# measurement columns workload(33), ttft_ms(34) and the AUTOTUNE-005
+# investigator-observed input profile bench_ctx(35), bench_max_chunks(36),
+# bench_avg_prompt_tokens(37).
+#   v4 (26 cols)   — pre-spec-decode schema
+#   v5 (32 cols)   — SPEC-DEC-004 speculative-decoding fields spec_type(27),
+#                    spec_draft_model(28), spec_draft_n_max(29),
+#                    spec_draft_ngl(30), spec_draft_device(31),
+#                    spec_accept_len(32)
+#   v6 (37 cols)   — AUTOTUNE workload(33) + ttft_ms(34) + bench_*(35-37)
 # Signature:
 #   __llm_autotune_profile_save <model> <backend> <ctx> <batch> <ubatch>
 #       <parallel> <fit> <tps> [stamp] [prefill_tps] [p2_ctx] [p2_batch]
 #       [p2_ubatch] [p2_tps] [p2_prefill] [kv_quant] [ngl]
 #       [spec_type] [spec_draft_model] [spec_n_max] [spec_ngl] [spec_device]
-#       [spec_accept_len]
+#       [spec_accept_len] [workload] [ttft_ms]
 #   Profile 1 (existing columns) = max-ctx config; prefill_tps (col 21) is its
 #   prompt-eval throughput. Profile 2 (cols 22-26) = max-decode-TPS config for
 #   interactive flows. kv_quant (col 5, "QUANT/type-k/type-v"), ngl (col 7)
 #   and the spec fields (cols 27-32) are only written when explicitly
 #   provided — legacy callers that omit them leave those fields untouched.
+#   workload (col 33) records which scoring prompt set certified the winner
+#   (chat|legal|agentic|mix, AUTOTUNE-001); ttft_ms (col 34) is the measured
+#   time-to-first-token at the winning ctx (AUTOTUNE-003).  The bench_*
+#   columns (35-37) are written by the investigator's bench companion
+#   (AUTOTUNE-005), never by this function.
 # @returns 0 on success, 1 on validation/write failure.
 # ---------------------------------------------------------------------------
 function __llm_autotune_profile_save() {
@@ -181,6 +192,8 @@ function __llm_autotune_profile_save() {
     local spec_ngl="${21:-}"
     local spec_device="${22:-}"
     local spec_accept_len="${23:-}"
+    local workload="${24:-}"
+    local ttft_ms="${25:-}"
     local profile_file="$LLM_REGISTRY"
 
     [[ "$model_num" =~ ^[0-9]+$ ]] || return 1
@@ -208,6 +221,8 @@ function __llm_autotune_profile_save() {
     [[ "$spec_ngl" =~ ^[0-9]+$ ]] || spec_ngl=""
     spec_device=$(__llm_autotune_sanitize_token "$spec_device")
     [[ "$spec_accept_len" =~ ^[0-9]+(\.[0-9]+)?$ ]] || spec_accept_len=""
+    workload=$(__llm_autotune_sanitize_token "$workload")
+    [[ "$ttft_ms" =~ ^[0-9]+(\.[0-9]+)?$ ]] || ttft_ms=""
 
     # Registry hygiene: persist measured floats at a maximum of 2 decimal
     # places. The server timings carry full float64 precision (e.g. prefill
@@ -264,14 +279,21 @@ function __llm_autotune_profile_save() {
         -v spec_ngl_val="$spec_ngl" \
         -v spec_device_val="$spec_device" \
         -v spec_accept_len_val="$spec_accept_len" \
+        -v workload_val="$workload" \
+        -v ttft_ms_val="$ttft_ms" \
         'BEGIN {
             OFS="|"
             # Emit header unconditionally so a headerless registry
             # does not self-perpetuate (same guard as sync_state).
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len"
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens"
         }
         $1 == "#" { next }
         {
+            # Pad legacy 20/26/32-column rows to the v6 37-column schema
+            # BEFORE any field writes — awk extends NF only as far as the
+            # highest assigned column, so a later $33 write would otherwise
+            # cap the padded row at 33 columns.
+            if (NF >= 20 && NF < 37) { for (i = NF + 1; i <= 37; i++) $i = "" }
             if ($1 == n) {
                 $8 = ctx; $10 = batch; $11 = ubatch; $12 = parallel
                 $13 = fit; $14 = backend
@@ -290,14 +312,13 @@ function __llm_autotune_profile_save() {
                 if (spec_ngl_val != "") $30 = spec_ngl_val
                 if (spec_device_val != "") $31 = spec_device_val
                 if (spec_accept_len_val != "") $32 = spec_accept_len_val
+                if (workload_val != "") $33 = workload_val
+                if (ttft_ms_val != "") $34 = ttft_ms_val
             }
             # SPEC-DEC-002: clamp the stored thread count to the i9-12900HK
             # P-core ceiling (6) on every registry write — a pre-cap row must
             # not survive the save with an E-core-spilling value.
             if ($9 != "" && $9 + 0 > 6) $9 = 6
-            # Pad legacy 20/26-column rows to the v5 32-column schema.
-            if (NF == 20) { for (i = 21; i <= 32; i++) $i = "" }
-            if (NF == 26) { for (i = 27; i <= 32; i++) $i = "" }
             print
         }' "$profile_file" > "${profile_file}.tmp"
 

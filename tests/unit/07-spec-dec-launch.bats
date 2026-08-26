@@ -84,16 +84,16 @@ EOF
         "ngram" "" "16" "" "" "6.67"
     local row
     row=$(grep "^1|" "$LLM_REGISTRY")
-    # v5 schema: 32 fields.
-    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "32" ]]
+    # v6 schema: 37 fields (v5's 32 + workload/ttft_ms/bench_*).
+    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "37" ]]
     # spec_type(27), spec_draft_n_max(29), spec_accept_len(32).
     [[ "$(echo "$row" | cut -d'|' -f27)" == "ngram" ]]
     [[ "$(echo "$row" | cut -d'|' -f29)" == "16" ]]
     [[ "$(echo "$row" | cut -d'|' -f32)" == "6.67" ]]
-    # Legacy 20-col row padded to 32.
+    # Legacy 20-col row padded to 37.
     local header
     header=$(head -1 "$LLM_REGISTRY")
-    [[ "$(echo "$header" | awk -F'|' '{print NF}')" == "32" ]]
+    [[ "$(echo "$header" | awk -F'|' '{print NF}')" == "37" ]]
 }
 
 @test "spec-dec-004: remap carries the spec fields across a renumber" {

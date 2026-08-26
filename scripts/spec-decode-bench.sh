@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1091,SC2034
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 #===============================================================================
 # spec-decode-bench.sh — Per-prompt speculative-decoding acceptance bench.
 #
@@ -37,6 +37,9 @@ cd "$_SELF_DIR/.." || exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
 source scripts/01-constants.sh 2>/dev/null || true
 source scripts/11-llm-manager.sh 2>/dev/null || true
+# SPEC-DEC-006 prompt sets (AUTOTUNE-001: single source shared with
+# autotune-model.sh's scoring payload — do not redefine prompts here).
+source scripts/prompt-sets.sh 2>/dev/null || true
 
 MAX_TOKENS=256
 PROMPT_SET="all"
@@ -52,39 +55,13 @@ done
 # ── Prompt sets (SPEC-DEC-006) ───────────────────────────────────────────────
 # Acceptance varies by content domain and collapses when the drafter's domain
 # does not match the prompt; these are the investigator's real workloads.
+# The arrays live in scripts/prompt-sets.sh (shared with autotune-model.sh).
 # REF: DFlash TDS article, pitfall #7 (domain mismatch).
 
-PROMPTS_PHYSICS=(
-    "Explain the complete theory of special relativity in extreme detail, including the mathematical derivations for time dilation."
-)
-
-PROMPTS_LEGAL=(
-    "Analyse whether the employer engaged with the mediation process in good faith, attending the scheduled mediation meeting and responding substantively to Alex Morgan's formal mediation request, which set out four reasonable expectations consistent with the National Health Services Workforce Governance Standard. Cite the passages that support your verdict."
-    "Does the respondent have a prima facie case for constructive dismissal? Consider the implied term of mutual trust and confidence, the final straw doctrine, and whether the employee resigned in response to a repudiatory breach. Assess each element against the evidence and state which allegations are VALIDATED, CONTRADICTED, or UNVERIFIED."
-    "The tribunal found the employer's failure to make reasonable adjustments caused the claimant's detriment, but the employer argues the claimant's own delay contributed 40%. Weigh the causation evidence against the contributory-conduct evidence and determine the appropriate reduction, citing the relevant case law on apportionment."
-    "In this indirect discrimination claim the burden shifts once a prima facie case is established. Assess whether the PCP (presence requirement) put the claimant at a particular disadvantage, whether the employer's justification evidence meets the proportionality test, and who bears the evidential burden at each stage."
-    "Section 111 of the Employment Rights Act 1996 provides that a complaint of unfair dismissal must be presented within three months. Interpret 'such other period as the tribunal considers reasonable' in the context of the ACAS early-conciliation extension, and explain how the time limit is calculated when conciliation certificates are involved."
-)
-
-PROMPTS_AGENTIC=(
-    "You have tools: search_corpus(query), fetch_document(id), summarize(text). Plan the minimal sequence of tool calls to determine whether the workplace policy on annual leave was amended between March and September 2023. Return a JSON array of tool calls with arguments."
-    "You are investigating whether a respondent fabricated meeting minutes. Step 1: search the corpus for 'meeting minutes March 2023'. Step 2: fetch the top result and extract the attendees. Step 3: cross-reference the attendees against the HR system export. Step 4: decide whether the minutes are consistent with the export and output a structured finding."
-    "Answer the question: was the disciplinary hearing held within a reasonable time after the alleged misconduct? Use the ReAct pattern: first think about what evidence you need, then call search_corpus('disciplinary hearing date'), then reason about the gap between the incident date (12 March) and the hearing date you found, then conclude."
-    "A witness statement claims the claimant was 'pressured to resign'. Retrieve the full statement, identify the three passages that support or contradict the pressure claim, and produce a verdict for the allegation '[FACT] The claimant was pressured to resign' with a confidence score."
-    "You have a 200-token output budget. Given the retrieved chunk pool on the 'reasonable adjustments' claim, select the three most decision-relevant chunks, then answer whether the employer's step-down of the claimant's duties constituted a reasonable adjustment. Do not exceed the budget."
-)
-
-case "$PROMPT_SET" in
-    all)      PROMPT_NAMES=("physics: special-relativity burn" "legal: mediation good-faith assessment" "legal: constructive dismissal elements" "legal: causation vs contribution" "legal: burden of proof in discrimination" "legal-RAG: statutory interpretation" "agentic: tool-call planning" "agentic: multi-step retrieval loop" "agentic: ReAct reasoning" "agentic: summarise-and-decide" "agentic: budget-aware dispatch")
-              PROMPTS=("${PROMPTS_PHYSICS[@]}" "${PROMPTS_LEGAL[@]}" "${PROMPTS_AGENTIC[@]}") ;;
-    physics)  PROMPT_NAMES=("physics: special-relativity burn")
-              PROMPTS=("${PROMPTS_PHYSICS[@]}") ;;
-    legal)    PROMPT_NAMES=("legal: mediation good-faith assessment" "legal: constructive dismissal elements" "legal: causation vs contribution" "legal: burden of proof in discrimination" "legal-RAG: statutory interpretation")
-              PROMPTS=("${PROMPTS_LEGAL[@]}") ;;
-    agentic)  PROMPT_NAMES=("agentic: tool-call planning" "agentic: multi-step retrieval loop" "agentic: ReAct reasoning" "agentic: summarise-and-decide" "agentic: budget-aware dispatch")
-              PROMPTS=("${PROMPTS_AGENTIC[@]}") ;;
-    *) echo "Unknown --set '$PROMPT_SET' (all|physics|legal|agentic)" >&2; exit 1 ;;
-esac
+__resolve_prompt_set "$PROMPT_SET" || {
+    echo "Unknown --set '$PROMPT_SET' (all|physics|legal|agentic)" >&2
+    exit 1
+}
 
 # ── Pre-flight ───────────────────────────────────────────────────────────────
 if ! __llm_is_healthy

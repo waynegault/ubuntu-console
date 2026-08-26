@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -28,14 +28,39 @@
 
 set -uo pipefail
 
-MODEL="${1:?Usage: autotune-model.sh MODEL_NUM}"
+MODEL="${1:?Usage: autotune-model.sh MODEL_NUM [--workload chat|legal|agentic|mix]}"
 [[ "$MODEL" =~ ^[0-9]+$ ]] || { echo "Error: MODEL_NUM must be a number"; exit 1; }
+
+# AUTOTUNE-001: workload-selectable scoring payload.  The ctx/batch/TPS
+# winner is certified against the workload that matters — legal-RAG for the
+# investigator (long, structured, tool-call-shaped prompts), agentic loops,
+# the classic chat/physics burn (default), or a mix (interpolation across
+# sets).  The workload used is recorded in the registry row so a later
+# consumer knows which distribution scored the winner.
+# Env: LLM_AUTOTUNE_WORKLOAD (default chat) — the batch runner / investigator
+# profile sets it to "legal".
+WORKLOAD="${LLM_AUTOTUNE_WORKLOAD:-chat}"
+shift  # drop MODEL_NUM
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --workload) WORKLOAD="${2:-}"; shift 2 ;;
+        *) echo "Unknown arg: $1 (usage: autotune-model.sh MODEL_NUM [--workload chat|legal|agentic|mix])" >&2; exit 1 ;;
+    esac
+done
+case "$WORKLOAD" in
+    chat|legal|agentic|mix) ;;
+    *) echo "Error: --workload must be one of chat|legal|agentic|mix (got '$WORKLOAD')"; exit 1 ;;
+esac
 
 _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$_SELF_DIR/.." || exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
 source scripts/01-constants.sh 2>/dev/null || true
 source scripts/11-llm-manager.sh 2>/dev/null || true
+# AUTOTUNE-001: the SPEC-DEC-006 legal/agentic prompt sets (shared with
+# spec-decode-bench.sh) — the scoring payload is built from the workload's
+# prompts, so the TPS floor is certified on the real input distribution.
+source scripts/prompt-sets.sh 2>/dev/null || true
 
 # Source the tactical console for shared functions (__gguf_metadata, __kv_mb_per_1k,
 # __gpu_clear_stale_processes, __llm_autotune_profile_save)
@@ -183,27 +208,76 @@ echo "============================================="
 echo ""
 echo "  threads=$(fmt "$TUNE_THREADS")  cpu=$(fmt "$CPU_COUNT")"
 echo "  combos: $(fmts "${COMBOS[@]}")"
-echo "  probe:  start=$(fmt "$START_CTX") min_tps=${MIN_TPS}"
+echo "  probe:  start=$(fmt "$START_CTX") min_tps=${MIN_TPS}  workload=${WORKLOAD}"
 START_TS=$(date '+%H:%M:%S')
 echo "  start:  ${START_TS}"
 echo ""
 START_EPOCH=$(date +%s)
 
 LLAMA_BIN="${LLAMA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}"
+
+# ── Workload scoring payload (AUTOTUNE-001) ─────────────────────────────────
+# The scoring payload is built from the selected workload's SPEC-DEC-006
+# prompt set so the ctx/batch/TPS winner (and the filled-cache TPS floor) is
+# certified against the workload that matters.  chat = the classic physics
+# burn (default, unchanged for generic use); legal = the investigator's
+# legal-RAG prompts; agentic = tool-call loops; mix = interpolation across
+# sets (legal prompt under an agentic tool-call system instruction).
+# The workload used is recorded in the registry row.
+__workload_payload_json() {
+    local _w="$1" _system=""
+    case "$_w" in
+        legal)
+            _prompt="${PROMPTS_LEGAL[0]:-}"
+            ;;
+        agentic)
+            _prompt="${PROMPTS_AGENTIC[0]:-}"
+            ;;
+        mix)
+            _system="You have tools: search_corpus(query), fetch_document(id), summarize(text). Plan and execute the minimal sequence of tool calls, then return a structured verdict."
+            _prompt="${PROMPTS_LEGAL[0]:-} ${PROMPTS_AGENTIC[0]:-}"
+            ;;
+        chat|*)
+            _prompt="Explain special relativity: time dilation, length contraction, mass-energy equivalence."
+            ;;
+    esac
+    "$TAC_PYTHON" - "$_system" "$_prompt" << 'PYEOF'
+import json, sys
+system, prompt = sys.argv[1], sys.argv[2]
+messages = []
+if system:
+    messages.append({"role": "system", "content": system})
+messages.append({"role": "user", "content": prompt})
+payload = {"messages": messages, "max_tokens": 256, "temperature": 0}
+print(json.dumps(payload))
+PYEOF
+}
+# __workload_prompt_text <chat|legal|agentic|mix> — @stdout the plain prompt
+# text (without the system wrapper) used to pre-fill the KV cache, so the
+# fill distribution matches the scoring distribution.
+__workload_prompt_text() {
+    case "$1" in
+        legal)   printf '%s\n' "${PROMPTS_LEGAL[0]:-}" ;;
+        agentic) printf '%s\n' "${PROMPTS_AGENTIC[0]:-}" ;;
+        mix)     printf '%s\n' "${PROMPTS_LEGAL[0]:-} ${PROMPTS_AGENTIC[0]:-}" ;;
+        chat|*)  printf '%s\n' "Explain special relativity: time dilation, length contraction, mass-energy equivalence." ;;
+    esac
+}
+
 PAYLOAD_FILE="/tmp/autotune-payload-${MODEL}.json"
-cat > "$PAYLOAD_FILE" << 'PAYLOAD'
-{"messages":[{"role":"user","content":"Explain special relativity: time dilation, length contraction, mass-energy equivalence."}],"max_tokens":256,"temperature":0}
-PAYLOAD
+__workload_payload_json "$WORKLOAD" > "$PAYLOAD_FILE"
 
 # Filled-cache payload generator — pre-fills the KV cache with a long prompt
 # (FILL_RATIO x ctx, capped by LLM_AUTOTUNE_FILL_MAX_TOKENS) so the scoring
 # bench measures sustained decode at the ctx being certified instead of a burst
 # on an empty cache, and yields a real prefill tok/s measurement. On CPU-only
 # models prefill is slow, so the cap is tightened to keep a bench bounded.
+# The fill repeats the WORKLOAD prompt (not a generic sentence) so the cache
+# pressure matches the workload's token distribution (AUTOTUNE-001).
 # args: ctx payload_file
 gen_fill_payload() {
     local _ctx="$1" _out="$2"
-    local _fill_tokens
+    local _fill_tokens _source
     _fill_tokens=$(awk -v c="$_ctx" -v r="$FILL_RATIO" 'BEGIN{printf "%d", c*r}')
     [[ $_fill_tokens -gt $FILL_MAX_TOKENS ]] && _fill_tokens=$FILL_MAX_TOKENS
     [[ $_fill_tokens -lt $FILL_MIN_TOKENS ]] && _fill_tokens=$FILL_MIN_TOKENS
@@ -211,14 +285,14 @@ gen_fill_payload() {
         local _cpu_cap=8192
         [[ $_fill_tokens -gt $_cpu_cap ]] && _fill_tokens=$_cpu_cap
     fi
-    "$TAC_PYTHON" - "$_fill_tokens" "$_out" << 'PYEOF'
+    _source="$(__workload_prompt_text "$WORKLOAD")"
+    "$TAC_PYTHON" - "$_fill_tokens" "$_out" "$_source" << 'PYEOF'
 import json, sys
 tokens = int(sys.argv[1])
 out = sys.argv[2]
-sentence = ("Explain special relativity: time dilation, length contraction, "
-            "mass-energy equivalence. ")
-count = tokens * 4 // len(sentence) + 1
-content = (sentence * count)[: tokens * 5]
+source = sys.argv[3]
+count = tokens * 4 // max(1, len(source)) + 1
+content = (source * count)[: tokens * 5]
 payload = {
     "messages": [{"role": "user", "content": content}],
     "max_tokens": 256,
@@ -1204,7 +1278,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     END_TS=$(date '+%H:%M:%S')
     DURATION=$(( $(date +%s) - START_EPOCH ))
     printf '  time:    %s \u2192 %s  (%dm %ds)\n' "$START_TS" "$END_TS" $((DURATION/60)) $((DURATION%60))
-    echo "  winner:  ctx=$(fmt "$BEST_CTX")  batch=$(fmt "$BEST_B")/$(fmt "$BEST_U")  ${BEST_TPS} tps"
+    echo "  winner:  ctx=$(fmt "$BEST_CTX")  batch=$(fmt "$BEST_B")/$(fmt "$BEST_U")  ${BEST_TPS} tps  (workload ${WORKLOAD})"
 
     # Profile-2 fields only when profile 2 exists (BEST exists ⇒ P2 exists).
     _P2ARGS=("" "" "" "" "")
@@ -1217,12 +1291,15 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     if declare -f __llm_autotune_profile_save &>/dev/null; then
         # SPEC-DEC-004: record the winning spec block + measured acceptance
         # length (registry fields 27/29/32) alongside the ctx/batch winner.
+        # AUTOTUNE-001: the scoring workload rides in field 33 so consumers
+        # know which prompt distribution certified the winner.
         __llm_autotune_profile_save "$MODEL" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "1" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
+            "$WORKLOAD" \
             || echo "  warning: profile save failed"
     fi
-    grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s\n", $8, $10, $11, $17, $21, $18, $27, $29, $32}'
+    grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s\n", $8, $10, $11, $17, $21, $18, $27, $29, $32, $33}'
     echo ""
     echo "============================================="
     echo "  done"

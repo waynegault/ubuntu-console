@@ -88,6 +88,14 @@ export LLM_AUTOTUNE_KV_QUANTS="${LLM_AUTOTUNE_KV_QUANTS:-q8_0/q8_0 q4_0/q4_0}"
 # CPU-only models).
 export LLM_AUTOTUNE_BENCH_TIMEOUT="${LLM_AUTOTUNE_BENCH_TIMEOUT:-300}"
 
+# AUTOTUNE-001: scoring workload for autotune-model.sh (chat|legal|agentic|
+# mix).  The ctx/batch/TPS winner and the sustained-TPS floor are certified
+# against the payload of THIS workload's SPEC-DEC-006 prompt set — the
+# investigator-relevant profile sets this to "legal" (legal-RAG); the chat
+# default is unchanged for generic use.  Recorded per-model in the registry
+# (column 33).
+export LLM_AUTOTUNE_WORKLOAD="${LLM_AUTOTUNE_WORKLOAD:-chat}"
+
 # ── Speculative decoding (SPEC-DEC-001..006) ────────────────────────────────
 # Speculative decoding trades spare CPU compute for saved memory bandwidth and
 # is LOSSLESS (rejection sampling recovers the target distribution exactly) —

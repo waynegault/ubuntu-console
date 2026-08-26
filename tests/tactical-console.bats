@@ -2949,9 +2949,11 @@ EOF
     local header row
     header=$(head -1 "$LLM_REGISTRY")
     row=$(awk -F'|' '$1==7' "$LLM_REGISTRY")
-    [[ "$header" == *"|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill" ]]
+    # v6 header still carries the v4 prefill/profile-2 columns (plus spec
+    # fields and the AUTOTUNE-001/003/005 columns after them).
+    [[ "$header" == *"|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens" ]]
     local kv gpu ctx tps autotuned prefill p2ctx p2tps p2pf
-    IFS='|' read -r _ _ _ _ kv _ gpu ctx _ batch ubatch _ _ _ _ _ tps autotuned _ _ prefill p2ctx _ _ p2tps p2pf <<< "$row"
+    IFS='|' read -r _ _ _ _ kv _ gpu ctx _ batch ubatch _ _ _ _ _ tps autotuned _ _ prefill p2ctx _ _ p2tps p2pf _ _ _ _ _ _ _ _ _ _ _ <<< "$row"
     [[ "$kv" == "Q4_K_M/q4_0/q4_0" ]]
     [[ "$gpu" == "999" ]]
     [[ "$ctx" == "16384" ]]
@@ -2961,8 +2963,8 @@ EOF
     [[ "$p2ctx" == "32768" ]]
     [[ "$p2tps" == "88.3" ]]
     [[ "$p2pf" == "150.2" ]]
-    # Legacy 20-col row must have been padded to the v4 26-col schema.
-    [[ $(awk -F'|' '$1==7 {print NF}' "$LLM_REGISTRY") == "26" ]]
+    # Legacy 20-col row must have been padded to the v6 37-col schema.
+    [[ $(awk -F'|' '$1==7 {print NF}' "$LLM_REGISTRY") == "37" ]]
 }
 
 @test "autotune: profile_save without v4 args leaves kv/ngl/prefill untouched" {
@@ -2987,7 +2989,7 @@ EOF
     LLM_REGISTRY="$llm_root/.llm/models.conf"
     __llm_autotune_profile_save 9 "native" 16384 1024 256 1 256 22.556 "" 143.09630118625265 32768 1024 256 44.10 0
     local tps prefill p2tps p2pf
-    IFS='|' read -r _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ tps _ _ _ prefill _ _ _ p2tps p2pf <<< "$(awk -F'|' '$1==9' "$LLM_REGISTRY")"
+    IFS='|' read -r _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ tps _ _ _ prefill _ _ _ p2tps p2pf _ _ _ _ _ _ _ _ _ _ _ <<< "$(awk -F'|' '$1==9' "$LLM_REGISTRY")"
     [[ "$tps" == "22.56" ]]
     [[ "$prefill" == "143.1" ]]
     [[ "$p2tps" == "44.1" ]]
