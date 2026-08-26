@@ -32,10 +32,11 @@ def _parse_bats_tests(bats_file: Path) -> list[str]:
     text = bats_file.read_text(encoding="utf-8")
     names: list[str] = []
     # Non-greedy name match; tolerates `{` on the next line and extra
-    # whitespace. A name containing an embedded quote still terminates at the
-    # first unescaped closing quote (bats test names must quote-escape anyway).
-    for m in re.finditer(r'@test\s+["\'](.*?)["\']\s*\{?', text):
-        names.append(m.group(1))
+    # whitespace. The closing quote must match the opening quote (backreference)
+    # so a name containing an apostrophe inside double quotes — e.g. "...last
+    # request's stats" — is not truncated at the inner quote.
+    for m in re.finditer(r'@test\s+(["\'])(.*?)\1\s*\{?', text):
+        names.append(m.group(2))
     return names
 
 

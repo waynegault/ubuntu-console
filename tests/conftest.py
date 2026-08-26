@@ -133,32 +133,47 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
     lock_path = _LOCK_DIR / f"{lock_name}.lock"
     pid_path = _lock_pid_path(lock_path)
 
-    with open(lock_path, "w", encoding="utf-8") as lf:
-        pid_path.write_text(str(os.getpid()), encoding="utf-8")
-        wait_s = min(_MAX_LOCK_WAIT, max(60, timeout_s))
-        deadline = time.monotonic() + wait_s
-        while True:
-            try:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if _is_stale_lock(lock_path, pid_path):
-                    lock_path.unlink(missing_ok=True)
-                    pid_path.unlink(missing_ok=True)
-                    pid_path.write_text(str(os.getpid()), encoding="utf-8")
-                    continue
-                if time.monotonic() > deadline:
-                    pytest.fail(
-                        f"Could not acquire BATS serialisation lock within "
-                        f"{wait_s}s — another BATS suite may be hung. "
-                        f"Check for stale processes holding {lock_path}"
-                    )
-                time.sleep(1)
+    wait_s = min(_MAX_LOCK_WAIT, max(60, timeout_s))
+    deadline = time.monotonic() + wait_s
+    fd: int | None = None
+    while True:
+        # Open a fresh fd every attempt so a stale-cleanup unlink below never
+        # leaves us flocking an unlinked inode that a third process has since
+        # replaced with a new file (which would break mutual exclusion).
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
         try:
-            yield
-        finally:
-            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-            pid_path.unlink(missing_ok=True)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            os.close(fd)
+            fd = None
+            if _is_stale_lock(lock_path, pid_path):
+                lock_path.unlink(missing_ok=True)
+                pid_path.unlink(missing_ok=True)
+                continue
+            if time.monotonic() > deadline:
+                holder_pid = "unknown"
+                try:
+                    holder_pid = pid_path.read_text(encoding="utf-8").strip()
+                except OSError:
+                    pass
+                pytest.fail(
+                    f"Could not acquire BATS serialisation lock within "
+                    f"{wait_s}s — another BATS suite may be hung. "
+                    f"Check for stale processes holding {lock_path} "
+                    f"(lock owner pid: {holder_pid})"
+                )
+            time.sleep(1)
+    # Record the holder only after acquisition, so the pid file identifies
+    # the actual lock owner for stale detection and error messages.
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    try:
+        yield
+    finally:
+        if fd is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        pid_path.unlink(missing_ok=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════
