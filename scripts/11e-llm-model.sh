@@ -635,7 +635,16 @@ function __model_use_configure_params() {
     threads=$(__llm_thread_cap "$threads")
     if [[ -z "${TAC_CTX_SIZE:-}" ]]
     then
-        [[ "$ctx" =~ ^[0-9]+$ ]] || ctx="${LLAMA_CTX_SIZE:-4096}"
+        # AUTOTUNE-002: ctx is registry-driven — no hardwired LLAMA_CTX_SIZE /
+        # LLM_CONTEXT_SIZE fallback.  A model without an autotuned registry
+        # ctx and without an explicit --ctx-size override fails loudly so the
+        # operator runs the autotune (or passes --ctx-size) instead of
+        # silently launching an un-certified context.
+        if [[ ! "$ctx" =~ ^[0-9]+$ ]]
+        then
+            echo "Error: No context for model: the models.conf row has no autotuned ctx and no --ctx-size was given. Run 'model autotune N' or pass --ctx-size (AUTOTUNE-002)." >&2
+            return 21
+        fi
     fi
     smi_cmd=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$smi_cmd" ]]

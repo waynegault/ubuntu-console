@@ -254,7 +254,10 @@ export LOCAL_LLM_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
 # If the last three fields are missing or empty, these defaults are used.
 export LLAMA_GPU_LAYERS=24   # Keep baseline offload under 4GB total VRAM usage on RTX 3050 Ti 4GB.
 export LLAMA_CPU_THREADS=6   # Pin heavy compute to P-cores for better throughput/thermals on i9-12900HK.
-export LLAMA_CTX_SIZE=4096   # Default context window size
+# AUTOTUNE-002: ctx is registry-driven — the per-model ctx comes from
+# ~/.llm/models.conf (autotuned rows); there is deliberately NO
+# LLAMA_CTX_SIZE / LLM_CONTEXT_SIZE default here.  The launch resolves
+# registry-ctx > --ctx-size override > loud error (no hardwired value).
 export LLAMA_FLASH_ATTN="${LLAMA_FLASH_ATTN:-true}"
 export LLAMA_OFFLOAD_KQV="${LLAMA_OFFLOAD_KQV:-true}"
 export LLAMA_CACHE_TYPE_K="${LLAMA_CACHE_TYPE_K:-q8_0}"
