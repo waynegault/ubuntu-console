@@ -159,6 +159,7 @@ aggregate_throughput() {
     local _start_ns _end_ns
     _start_ns=$(date +%s%N)
     local _i _pi
+    local -a _curl_pids=()
     for (( _i = 0; _i < REQUESTS; _i++ )); do
         _pi=$(( _i % ${#PROMPT_POOL[@]} ))
         "$TAC_PYTHON" - "$_port" "$_pi" "$MAX_TOKENS" "$WORKDIR/resp-p${_parallel}-spec${_spec_on}-${_i}.json" << 'PYEOF' &
@@ -193,8 +194,14 @@ except Exception as exc:
     with open(out, "w") as f:
         json.dump({"ok": False, "error": str(exc)}, f)
 PYEOF
+        _curl_pids+=("$!")
     done
-    wait
+    # Wait for the CONCURRENT REQUESTS only — a bare `wait` would also wait
+    # on the never-exiting llama-server job and deadlock.
+    local _cp
+    for _cp in "${_curl_pids[@]}"; do
+        wait "$_cp"
+    done
     _end_ns=$(date +%s%N)
 
     kill "$_pid" 2>/dev/null; sleep 1; kill -9 "$_pid" 2>/dev/null
