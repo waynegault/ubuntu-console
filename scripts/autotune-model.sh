@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1241,6 +1241,196 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
 fi
 
 
+# ---------------------------------------------------------------------------
+# ttft_probe — time-to-first-token at a config (AUTOTUNE-003).
+#   args: ctx batch ubatch [mmap] [ngl] [kv_k] [kv_v]
+# Launches the server exactly like the scoring bench, then sends a STREAMING
+# completion shaped like an agentic step — the WORKLOAD prompt pre-filling the
+# KV cache (FILL_RATIO x ctx), a short 64-token budget — and times the first
+# content token (the SSE stream delivers the first `delta.content` when the
+# first token is generated; TPS-style burst measurements cannot see this).
+# Also computes the per-step decode latency (ms/token after the first token).
+# Prints "ttft_ms|per_step_ms" on stdout; empty on failure.
+# ---------------------------------------------------------------------------
+ttft_probe() {
+    local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}"
+    local kv_k="${6:-q8_0}" kv_v="${7:-q8_0}"
+    local effective_ngl="${override_ngl:-${BENCH_NGL:-999}}"
+    local autotune_port="${AUTOTUNE_PORT:-18082}"
+    local health_url="http://127.0.0.1:$autotune_port"
+    local flash_attn="on" pid="" hw=0
+
+    cleanup_gpu 2>/dev/null || { echo ""; return 1; }
+
+    local mmap_flag=""
+    [[ $mmap_mode == off ]] && mmap_flag="--no-mmap"
+
+    _launch_ttft_server() {
+        local -a fa_args=()
+        [[ $flash_attn == "on" ]] && fa_args=(--flash-attn on) || fa_args=(--flash-attn off)
+        "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
+            --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
+            --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
+            --parallel 1 --fit off "${fa_args[@]}" --kv-offload \
+            --cache-type-k "$kv_k" --cache-type-v "$kv_v" $mmap_flag \
+            > "/tmp/at-ttft-${MODEL}-c${c}.log" 2>&1 &
+        pid=$!
+        hw=0
+        while [[ $hw -lt 90 ]]; do
+            sleep 1; hw=$((hw + 1))
+            kill -0 "$pid" 2>/dev/null || return 1
+            curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q 'ok' && return 0
+        done
+        return 1
+    }
+    _launch_ttft_server || {
+        if [[ $flash_attn == "on" ]]; then
+            kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+            flash_attn="off"
+            _launch_ttft_server || true
+        fi
+    }
+    if [[ $hw -ge 90 ]]; then
+        kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+        echo ""; return 1
+    fi
+
+    # Pre-flight: one real completion confirms the slot is actually serving
+    # (the same guard the scoring bench uses).
+    local pf_ok=0 pf_w=0
+    while [[ $pf_w -lt 60 ]]; do
+        if curl -sS --max-time 5 "$health_url/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}' \
+            2>/dev/null | "$TAC_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))" 2>/dev/null | grep -q '[1-9]'; then
+            pf_ok=1; break
+        fi
+        kill -0 "$pid" 2>/dev/null || { echo ""; return 1; }
+        sleep 1; pf_w=$((pf_w + 1))
+    done
+    if [[ $pf_ok -ne 1 ]]; then
+        kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+        echo ""; return 1
+    fi
+
+    # Streaming payload: the workload prompt fills the cache (same length
+    # policy as the scoring fill) with a short 64-token completion budget.
+    local ttft_payload="/tmp/at-ttft-${MODEL}-${c}.json"
+    local _fill_tokens
+    _fill_tokens=$(awk -v cc="$c" -v r="$FILL_RATIO" 'BEGIN{printf "%d", cc*r}')
+    [[ $_fill_tokens -gt $FILL_MAX_TOKENS ]] && _fill_tokens=$FILL_MAX_TOKENS
+    [[ $_fill_tokens -lt $FILL_MIN_TOKENS ]] && _fill_tokens=$FILL_MIN_TOKENS
+    if [[ "${BENCH_NGL:-999}" == "0" ]]; then
+        local _cpu_cap=8192
+        [[ $_fill_tokens -gt $_cpu_cap ]] && _fill_tokens=$_cpu_cap
+    fi
+    local _fill_source
+    _fill_source="$(__workload_prompt_text "$WORKLOAD")"
+    "$TAC_PYTHON" - "$_fill_tokens" "$ttft_payload" "$_fill_source" << 'PYEOF'
+import json, sys
+tokens = int(sys.argv[1])
+out = sys.argv[2]
+source = sys.argv[3]
+count = tokens * 4 // max(1, len(source)) + 1
+content = (source * count)[: tokens * 5]
+payload = {
+    "messages": [{"role": "user", "content": content}],
+    "max_tokens": 64,
+    "temperature": 0,
+    "stream": True,
+}
+with open(out, "w") as f:
+    json.dump(payload, f)
+PYEOF
+
+    local start_ns; start_ns=$(date +%s%N)
+    local body="/tmp/at-ttft-body-$$"
+    local parsed
+    parsed=$("$TAC_PYTHON" - "$health_url" "$ttft_payload" "$start_ns" "$body" << 'PYEOF'
+import json, sys, time, urllib.request
+url, payload_path, start_ns, body_path = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+with open(payload_path, "rb") as f:
+    data = f.read()
+req = urllib.request.Request(
+    url,
+    data=data,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+ttft_ms = 0
+count = 0
+try:
+    with urllib.request.urlopen(req, timeout=1200) as resp:
+        with open(body_path, "wb") as out:
+            for raw in resp:
+                out.write(raw)
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(payload)
+                except Exception:
+                    continue
+                delta = (obj.get("choices") or [{}])[0].get("delta") or {}
+                if delta.get("content"):
+                    if ttft_ms == 0:
+                        ttft_ms = (time.time_ns() - start_ns) // 1_000_000
+                    count += 1
+except Exception:
+    pass
+print("%s|%s" % (ttft_ms, count))
+PYEOF
+    ) || parsed="0|0"
+    local end_ns; end_ns=$(date +%s%N)
+    kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+
+    local total_ms=$(( (end_ns - start_ns) / 1000000 ))
+    local ttft_ms delivered per_step
+    IFS='|' read -r ttft_ms delivered <<< "$parsed"
+    [[ "$ttft_ms" =~ ^[0-9]+$ ]] || ttft_ms=0
+    [[ "$delivered" =~ ^[0-9]+$ ]] || delivered=0
+    if [[ $ttft_ms -gt 0 ]] && [[ $delivered -gt 0 ]] && [[ $total_ms -gt $ttft_ms ]]; then
+        per_step=$(awk -v t="$total_ms" -v f="$ttft_ms" -v d="$delivered" 'BEGIN{printf "%.1f", (t-f)/d}')
+    else
+        per_step=0
+    fi
+    echo "${ttft_ms}|${per_step}"
+}
+
+# ── AUTOTUNE-003: time-to-first-token at the winning config ─────────────────
+# Agentic steps are latency-bound (long prompt, short completion) — TTFT is
+# the decisive metric and the burst TPS floor cannot see it.  Three streaming
+# samples at the winning config; the median TTFT is recorded in the registry
+# (column 34) and surfaced next to TPS in the summary.
+TTFT_MS=0; TTFT_PER_STEP=0
+if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
+    IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
+    echo ""
+    echo "  TTFT probe at ctx=$(fmt "$BEST_CTX")  (workload ${WORKLOAD}, 3 samples)"
+    echo "  ---------------------"
+    _tt_samples=()
+    _ps_samples=()
+    for _ti in 1 2 3; do
+        _tt=$(ttft_probe "$BEST_CTX" "$BEST_B" "$BEST_U" "$EFFECTIVE_MMAP" "$WIN_NGL" "$WIN_KVK" "$WIN_KVV") || _tt=""
+        if [[ -n "$_tt" ]]; then
+            IFS='|' read -r _ttv _psv <<< "$_tt"
+            echo "  sample ${_ti}: ttft ${_ttv:-0} ms (per-step decode ${_psv:-0} ms/token)"
+            [[ "$_ttv" =~ ^[0-9]+$ ]] && _tt_samples+=("$_ttv")
+            [[ "$_psv" =~ ^[0-9]+(\.[0-9]+)?$ ]] && _ps_samples+=("$_psv")
+        else
+            echo "  sample ${_ti}: failed"
+        fi
+    done
+    if [[ ${#_tt_samples[@]} -ge 1 ]]; then
+        TTFT_MS=$(printf '%s\n' "${_tt_samples[@]}" | LC_ALL=C sort -n | awk '{a[NR]=$1} END { if (NR%2) print a[(NR+1)/2]; else printf "%.0f\n", (a[NR/2]+a[NR/2+1])/2 }')
+        TTFT_PER_STEP=$(printf '%s\n' "${_ps_samples[@]}" | LC_ALL=C sort -n | awk '{a[NR]=$1} END { if (NR%2) print a[(NR+1)/2]; else printf "%.1f\n", (a[NR/2]+a[NR/2+1])/2 }')
+        echo "  ttft: ${TTFT_MS} ms (median)  per-step decode: ${TTFT_PER_STEP} ms/token"
+    fi
+fi
+
 # REF: ubuntu-console card ca23ec0a — cleanup_gpu uses AUTOTUNE_PORT (18082), not the production port 18081
 cleanup_gpu 3 >/dev/null 2>&1 || { echo "ERROR: cleanup_gpu failed after 3 retries — port ${AUTOTUNE_PORT:-18082} still bound" >&2; exit 1; }
 echo ""
@@ -1279,6 +1469,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     DURATION=$(( $(date +%s) - START_EPOCH ))
     printf '  time:    %s \u2192 %s  (%dm %ds)\n' "$START_TS" "$END_TS" $((DURATION/60)) $((DURATION%60))
     echo "  winner:  ctx=$(fmt "$BEST_CTX")  batch=$(fmt "$BEST_B")/$(fmt "$BEST_U")  ${BEST_TPS} tps  (workload ${WORKLOAD})"
+    if [[ $TTFT_MS -gt 0 ]]; then
+        echo "  ttft:    ${TTFT_MS} ms at ctx=$(fmt "$BEST_CTX")  (per-step decode ${TTFT_PER_STEP} ms/token)"
+    fi
 
     # Profile-2 fields only when profile 2 exists (BEST exists ⇒ P2 exists).
     _P2ARGS=("" "" "" "" "")
@@ -1293,13 +1486,14 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # length (registry fields 27/29/32) alongside the ctx/batch winner.
         # AUTOTUNE-001: the scoring workload rides in field 33 so consumers
         # know which prompt distribution certified the winner.
+        # AUTOTUNE-003: the median TTFT at the winning ctx rides in field 34.
         __llm_autotune_profile_save "$MODEL" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "1" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
-            "$WORKLOAD" \
+            "$WORKLOAD" "$TTFT_MS" \
             || echo "  warning: profile save failed"
     fi
-    grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s\n", $8, $10, $11, $17, $21, $18, $27, $29, $32, $33}'
+    grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s ttft_ms=%s\n", $8, $10, $11, $17, $21, $18, $27, $29, $32, $33, $34}'
     echo ""
     echo "============================================="
     echo "  done"

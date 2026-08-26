@@ -83,3 +83,27 @@ EOF
     [[ "$src" == *'"$WORKLOAD"'* ]]
     [[ "$src" == *"workload=%s"* ]]
 }
+
+@test "autotune-003: profile-save records ttft_ms (col 34, v6 schema)" {
+    cat > "$LLM_REGISTRY" <<'EOF'
+#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram
+1|Model One|model-one.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|1024|llama_server|auto|on|0|no|no|no
+EOF
+    __llm_autotune_profile_save "1" "native" "4608" "1024" "256" "1" "256" "12.3" \
+        "" "" "" "" "" "" "" "Q4_K_M/q8_0/q8_0" "24" \
+        "" "" "" "" "" "" "legal" "145.5"
+    local row
+    row=$(grep "^1|" "$LLM_REGISTRY")
+    [[ "$(echo "$row" | cut -d'|' -f34)" == "145.5" ]]
+    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "37" ]]
+}
+
+@test "autotune-003: autotune-model.sh measures TTFT via a streaming probe" {
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" == *"ttft_probe"* ]]
+    [[ "$src" == *'"stream": True'* ]]
+    [[ "$src" == *"time_starttransfer"* ]] || [[ "$src" == *"delta.get(\"content\")"* ]]
+    [[ "$src" == *"TTFT_MS"* ]]
+    [[ "$src" == *"ttft_ms=%s"* ]]
+}
