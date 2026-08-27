@@ -762,25 +762,25 @@ EOF
 }
 
 @test "calc: __calc_threads CPU-only uses 80% of nproc" {
-    local ncpu
+    local ncpu expected
     ncpu=$(nproc 2>/dev/null || echo 16)
-    local expected=$(( ncpu * 80 / 100 ))
+    expected=$(__llm_thread_cap "$(( ncpu * 80 / 100 ))")
     result=$(__calc_threads 0 32)
     [[ "$result" -eq "$expected" ]]
 }
 
 @test "calc: __calc_threads full GPU uses 50% of nproc" {
-    local ncpu
+    local ncpu expected
     ncpu=$(nproc 2>/dev/null || echo 16)
-    local expected=$(( ncpu * 50 / 100 ))
+    expected=$(__llm_thread_cap "$(( ncpu * 50 / 100 ))")
     result=$(__calc_threads 32 32)
     [[ "$result" -eq "$expected" ]]
 }
 
 @test "calc: __calc_threads partial GPU uses 70% of nproc" {
-    local ncpu
+    local ncpu expected
     ncpu=$(nproc 2>/dev/null || echo 16)
-    local expected=$(( ncpu * 70 / 100 ))
+    expected=$(__llm_thread_cap "$(( ncpu * 70 / 100 ))")
     result=$(__calc_threads 16 32)
     [[ "$result" -eq "$expected" ]]
 }
@@ -1892,9 +1892,9 @@ EOF
 }
 
 @test "calc: __calc_threads with equal gpu_layers and total returns 50% nproc" {
-    local ncpu
+    local ncpu expected
     ncpu=$(nproc 2>/dev/null || echo 16)
-    local expected=$(( ncpu * 50 / 100 ))
+    expected=$(__llm_thread_cap "$(( ncpu * 50 / 100 ))")
     result=$(__calc_threads 999 999)
     [[ "$result" -eq "$expected" ]]
 }
