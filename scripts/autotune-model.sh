@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1388,7 +1388,12 @@ try:
                     except Exception:
                         continue
                     delta = (obj.get("choices") or [{}])[0].get("delta") or {}
-                    if delta.get("content"):
+                    # AUTOTUNE-003: reasoning models (R1 distills,
+                    # MiniCPM-thinking) can stream the whole 64-token budget
+                    # as reasoning_content with no content delta at all —
+                    # the first token of EITHER field marks generation start
+                    # (2026-08-27: TTFT stayed 0 for such models).
+                    if delta.get("content") or delta.get("reasoning_content"):
                         if ttft_ms == 0:
                             ttft_ms = (time.time_ns() - start_ns) // 1_000_000
                         count += 1
