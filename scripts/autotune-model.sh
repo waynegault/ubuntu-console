@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1359,26 +1359,38 @@ req = urllib.request.Request(
 )
 ttft_ms = 0
 count = 0
+buf = b""
 try:
     with urllib.request.urlopen(req, timeout=1200) as resp:
         with open(body_path, "wb") as out:
             for raw in resp:
                 out.write(raw)
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data: "):
+                # SSE events are newline-delimited, but socket reads are NOT
+                # line-aligned: a chunk can hold a partial event, several
+                # events, or a split line. Buffer and split on "\n" so the
+                # first content delta is actually seen (AUTOTUNE-003: TTFT
+                # was always 0 because coalesced/split events never parsed).
+                buf += raw
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    line = line.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:]
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(payload)
+                    except Exception:
+                        continue
+                    delta = (obj.get("choices") or [{}])[0].get("delta") or {}
+                    if delta.get("content"):
+                        if ttft_ms == 0:
+                            ttft_ms = (time.time_ns() - start_ns) // 1_000_000
+                        count += 1
+                else:
                     continue
-                payload = line[6:]
-                if payload == "[DONE]":
-                    break
-                try:
-                    obj = json.loads(payload)
-                except Exception:
-                    continue
-                delta = (obj.get("choices") or [{}])[0].get("delta") or {}
-                if delta.get("content"):
-                    if ttft_ms == 0:
-                        ttft_ms = (time.time_ns() - start_ns) // 1_000_000
-                    count += 1
+                break
 except Exception:
     pass
 print("%s|%s" % (ttft_ms, count))
