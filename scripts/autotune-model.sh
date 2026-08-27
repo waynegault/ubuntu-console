@@ -134,12 +134,42 @@ KV_QUANTS=${LLM_AUTOTUNE_KV_QUANTS:-"q8_0/q8_0 q4_0/q4_0"}
 [[ $FILL_MAX_TOKENS -lt $FILL_MIN_TOKENS ]] && FILL_MAX_TOKENS=$FILL_MIN_TOKENS
 
 # ---------------------------------------------------------------------------
-# VRAM-based start ctx using shared __kv_mb_per_1k when available
-# Falls back to simple size-class factor if functions unavailable.
+# VRAM-baseline guarantee: the KV-math START_CTX below is only trustworthy
+# if FREE_VRAM reflects a CLEARED GPU.  A concurrent llama-server or stale
+# CUDA process silently shrinks BUDGET and collapses START_CTX to MIN_CTX
+# (2026-08-27: Llama-3.2-3B certified 4096 while a parallel run held the
+# card — the machine had headroom for far more once VRAM was fully cleared).
+# Kill llama-server + stale GPU processes + WSL2 ghost-VRAM double-kill
+# BEFORE the baseline read, then verify free VRAM against the card total.
 # ---------------------------------------------------------------------------
-MODEL_BYTES=$(stat --format=%s "$MODEL_PATH" 2>/dev/null || echo 0)
+pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
+sleep 1
+if declare -f __gpu_clear_stale_processes &>/dev/null; then
+    __gpu_clear_stale_processes || true
+fi
+# WSL2 ghost-VRAM release — same double-kill trick cleanup_gpu uses later.
+pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
+sleep 1
+sync 2>/dev/null || true
+if [[ -w /proc/sys/vm/drop_caches ]]; then
+    echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+fi
+nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits >/dev/null 2>&1 || true
+pkill -9 -u "$(id -un)" -x nvidia-smi 2>/dev/null || true
+sleep 1
+VRAM_TOTAL=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+VRAM_TOTAL=${VRAM_TOTAL:-4096}
 FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
 FREE_VRAM=${FREE_VRAM:-3965}
+# Trust check: after clearing, free VRAM must sit ~at the card total.  A
+# large gap means a foreign process still holds the GPU — a certification
+# against that baseline would be untrustworthy, so fail loudly instead.
+BASELINE_GAP=$(( VRAM_TOTAL - FREE_VRAM ))
+if (( BASELINE_GAP > 400 )); then
+    echo "ERROR: VRAM baseline not cleared — ${FREE_VRAM} MiB free of ${VRAM_TOTAL} MiB (${BASELINE_GAP} MiB still held). Refusing to autotune against an untrustworthy baseline." >&2
+    exit 1
+fi
+MODEL_BYTES=$(stat --format=%s "$MODEL_PATH" 2>/dev/null || echo 0)
 MODEL_MB=$(( MODEL_BYTES / 1048576 ))
 
 # Combos — selected by GGUF file size to avoid guaranteed-OOM combos on large models
@@ -655,6 +685,19 @@ if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
         echo "8.5"
         return 0
     }
+    # TTFT probe stubbed too — it launches a real server at the certified
+    # ctx (multi-minute load at >250K ctx); the selftest must stay a
+    # server-free decision-logic regression (2026-08-27).
+    ttft_probe() {
+        echo "250.0|120.0"
+        return 0
+    }
+    # cleanup_gpu stubbed — its ~4s of kill/sleep/drop-cache cycles per call
+    # dominate the selftest runtime (20+ calls through the beam search and
+    # sweeps); there is no real server to clean in the selftest.
+    cleanup_gpu() {
+        return 0
+    }
 fi
 
 #==============================================================================
@@ -798,6 +841,16 @@ for combo in "${COMBOS[@]}"; do
         found=true; ANY_OK=true; _ALL_LOAD_FAIL=false
         record_best "$c" "$tps" "$b" "$u"
 
+        # Fast convergence (2026-08-27, Wayne): START_CTX is the KV-math
+        # ceiling (BUDGET / kv-per-1k, from cleared VRAM).  When it loads
+        # directly, that IS the capacity — climbing 50% above the computed
+        # ceiling wastes server loads on values the KV budget cannot fit.
+        # Only when the estimate over-shot (we descended) do we climb back
+        # up to confirm, and the binary probe refines lo/hi below.
+        if [[ $c -eq $c0 ]]; then
+            echo "  ctx $(fmt "$c") - capacity confirmed at the KV-math ceiling (no climb needed)"
+            break
+        fi
         # Phase 2: step up 50% — capacity-first (2026-08-27), climbs to
         # MAX_CTX or OOM. The climb is clamped at MAX_CTX — probing past the
         # native-ctx ceiling records RoPE-extended ctx values the machine
@@ -1154,53 +1207,44 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     echo "  ---------------------"
     _dc=$BEST_CTX
     _ft=""
-    # Track the highest ctx that returned a working FILLED measurement — when
-    # the TPS floor is never met (model below floor at every ctx), the
-    # certification must be that capacity, NOT the MIN_CTX floor artifact
-    # (2026-08-27, Wayne: a 4GB-card model can load 131K ctx at 8 tps and get
-    # certified at 4096 because the floor was never reached).
-    _CAPACITY_CTX=0; _CAPACITY_TPS=""
-    while true; do
-        # 3-sample median verdict: one unlucky low read must not permanently
-        # cost context (single-sample descent drove real decisions before).
-        _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
-        if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
-            _fp="0"
-            IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
-            echo "  ctx $(fmt "$_dc") - filled ${_ft} tps (prefill ${_fp:-0} tok/s)"
-            BEST_CTX=$_dc; BEST_TPS=$_ft; BEST_PREFILL="${_fp:-0}"
-            if [[ $_dc -gt $_CAPACITY_CTX ]]; then
-                _CAPACITY_CTX=$_dc; _CAPACITY_TPS=$_ft
-            fi
-            _dok=0; _pok=0
-            [[ $(echo "$_ft >= $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]] && _dok=1
-            if [[ $MIN_PREFILL_TPS == 0 ]] \
-                || [[ $(echo "${_fp:-0} >= $MIN_PREFILL_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
-                _pok=1
-            fi
-            [[ $_dok == 1 && $_pok == 1 ]] && break
-        else
-            fail_label="OOM"
-            [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
-            echo "  ctx $(fmt "$_dc") - filled ${fail_label}"
+    # Capacity-first (2026-08-27, Wayne): certify the max-capacity ctx with
+    # ONE filled test — the multi-point descent existed to find 'the highest
+    # ctx sustaining the TPS floor', but the floor is now advisory
+    # (below-floor models certify their capacity, flagged).  Saves ~5 filled
+    # server loads per model.
+    _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
+    if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
+        _fp="0"
+        IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
+        echo "  ctx $(fmt "$_dc") - filled ${_ft} tps (prefill ${_fp:-0} tok/s)"
+        BEST_CTX=$_dc; BEST_TPS=$_ft; BEST_PREFILL="${_fp:-0}"
+        _dok=0; _pok=0
+        [[ $(echo "$_ft >= $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]] && _dok=1
+        if [[ $MIN_PREFILL_TPS == 0 ]] \
+            || [[ $(echo "${_fp:-0} >= $MIN_PREFILL_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
+            _pok=1
         fi
-        [[ $_dc -le $MIN_CTX ]] && break
-        _next=$(( _dc * 3 / 4 )); _next=$(( _next / 512 * 512 ))
-        [[ $_next -ge $_dc ]] && _next=$(( _dc - 512 ))
-        [[ $_next -lt $MIN_CTX ]] && _next=$MIN_CTX
-        _dc=$_next
-    done
-
-    # Below the floor at EVERY ctx (the descent bottomed out at MIN_CTX):
-    # certify the highest ctx that returned a working FILLED measurement —
-    # the hardware capacity — instead of the MIN_CTX floor artifact.  The
-    # floor is an advisory threshold; it must not discard the maximum
-    # VRAM-fitting context the model can actually serve.
-    if [[ $_CAPACITY_CTX -gt $MIN_CTX ]] \
-        && [[ $BEST_CTX -le $MIN_CTX ]]; then
-        BEST_CTX=$_CAPACITY_CTX
-        BEST_TPS=$_CAPACITY_TPS
-        echo "  below TPS floor at all ctx — certifying max capacity ctx $(fmt "$BEST_CTX") at ${BEST_TPS} tps"
+        if [[ $_dok == 0 || $_pok == 0 ]]; then
+            echo "  below TPS floor at capacity ctx $(fmt "$_dc") — certifying capacity with the below-floor flag"
+        fi
+    else
+        fail_label="OOM"
+        [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
+        echo "  ctx $(fmt "$_dc") - filled ${fail_label} (capacity ctx failed the filled load — descending once)"
+        # The capacity ctx failed the FILLED load (memory pressure at fill) —
+        # fall back to a quick halving descent for a working filled ctx.
+        _dc=$(( _dc * 3 / 4 )); _dc=$(( _dc / 512 * 512 ))
+        while [[ $_dc -ge $MIN_CTX ]]; do
+            _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
+            if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
+                IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
+                echo "  ctx $(fmt "$_dc") - filled ${_ft} tps (prefill ${_fp:-0} tok/s)"
+                BEST_CTX=$_dc; BEST_TPS=$_ft; BEST_PREFILL="${_fp:-0}"
+                break
+            fi
+            _dc=$(( _dc * 3 / 4 )); _dc=$(( _dc / 512 * 512 ))
+            [[ $_dc -lt $MIN_CTX ]] && _dc=$MIN_CTX
+        done
     fi
 
     # Final certification: triple-sample (median) at the winner for the
@@ -1293,6 +1337,7 @@ fi
 # Also computes the per-step decode latency (ms/token after the first token).
 # Prints "ttft_ms|per_step_ms" on stdout; empty on failure.
 # ---------------------------------------------------------------------------
+if [[ "${AUTOTUNE_SELFTEST:-0}" != "1" ]]; then
 ttft_probe() {
     local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}"
     local kv_k="${6:-q8_0}" kv_v="${7:-q8_0}"
@@ -1461,6 +1506,7 @@ PYEOF
     fi
     echo "${ttft_ms}|${per_step}"
 }
+fi  # AUTOTUNE_SELFTEST guard — the stub defined in the selftest block wins.
 
 # ── AUTOTUNE-003: time-to-first-token at the winning config ─────────────────
 # Agentic steps are latency-bound (long prompt, short completion) — TTFT is
@@ -1575,7 +1621,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     if [[ -n "${_qc%%/*}" ]]; then
         KV_QUANT_SAVE="${_qc%%/*}/${WIN_KVK}/${WIN_KVV}"
     fi
-    if declare -f __llm_autotune_profile_save &>/dev/null; then
+    # AUTOTUNE_SELFTEST never persists — the canned curve is a decision-logic
+    # regression, not a measurement (2026-08-27: a selftest run wrote its
+    # 524288/8.5 into registry row 3, polluting the real profile).
+    if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
+        echo "  (selftest — registry write skipped)"
+    elif declare -f __llm_autotune_profile_save &>/dev/null; then
         # SPEC-DEC-004: record the winning spec block + measured acceptance
         # length (registry fields 27/29/32) alongside the ctx/batch winner.
         # AUTOTUNE-001: the scoring workload rides in field 33 so consumers
