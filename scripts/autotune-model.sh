@@ -774,10 +774,11 @@ for combo in "${COMBOS[@]}"; do
         found=true; ANY_OK=true; _ALL_LOAD_FAIL=false
         record_best "$c" "$tps" "$b" "$u"
 
-        # Phase 2: step up 50%, stop if TPS stable for 3 steps. The climb is
-        # clamped at MAX_CTX — probing past the native-ctx ceiling records
-        # RoPE-extended ctx values the machine cannot serve sanely.
-        lo=$c; hi=0; c=$((c * 3 / 2)); [[ $c -gt $MAX_CTX ]] && c=$MAX_CTX; prev_tps=$tps; stable=0
+        # Phase 2: step up 50% — capacity-first (2026-08-27), climbs to
+        # MAX_CTX or OOM. The climb is clamped at MAX_CTX — probing past the
+        # native-ctx ceiling records RoPE-extended ctx values the machine
+        # cannot serve sanely.
+        lo=$c; hi=0; c=$((c * 3 / 2)); [[ $c -gt $MAX_CTX ]] && c=$MAX_CTX
         while true; do
             [[ $c -eq $lo ]] && break
             test_num=$((test_num + 1))
@@ -799,17 +800,12 @@ for combo in "${COMBOS[@]}"; do
                 break
             fi
             lo=$c; record_best "$lo" "$tps" "$b" "$u"
-            drop=$(echo "scale=4; ($prev_tps - $tps) / $prev_tps" | bc 2>/dev/null || echo "0")
-            if [[ $(echo "$drop < 0.10" | bc 2>/dev/null || echo "0") == 1 ]]; then
-                stable=$((stable + 1))
-            else
-                stable=0; prev_tps=$tps
-            fi
-            if [[ $stable -ge 3 ]]; then
-                echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps (TPS stable, stopping climb)"
-                hi=$((c * 3 / 2)); [[ $hi -gt $MAX_CTX ]] && hi=$MAX_CTX
-                break
-            fi
+            # Capacity-first (2026-08-27, Wayne): the climb does NOT stop on
+            # "TPS stable" — a slight TPS decline as ctx grows is normal, and
+            # the goal is the maximum VRAM-fitting context, not the fastest
+            # one. Only OOM/load-fail or the native-ctx cap (MAX_CTX) ends
+            # the climb; the filled-cache floor (Phase 4) still filters for
+            # sustained throughput afterwards.
             echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps - climbing to $(fmt $((c*3/2)))"
             c=$((c * 3 / 2)); [[ $c -gt $MAX_CTX ]] && c=$MAX_CTX
         done
@@ -1134,6 +1130,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     echo "  ---------------------"
     _dc=$BEST_CTX
     _ft=""
+    # Track the highest ctx that returned a working FILLED measurement — when
+    # the TPS floor is never met (model below floor at every ctx), the
+    # certification must be that capacity, NOT the MIN_CTX floor artifact
+    # (2026-08-27, Wayne: a 4GB-card model can load 131K ctx at 8 tps and get
+    # certified at 4096 because the floor was never reached).
+    _CAPACITY_CTX=0; _CAPACITY_TPS=""
     while true; do
         # 3-sample median verdict: one unlucky low read must not permanently
         # cost context (single-sample descent drove real decisions before).
@@ -1143,6 +1145,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
             echo "  ctx $(fmt "$_dc") - filled ${_ft} tps (prefill ${_fp:-0} tok/s)"
             BEST_CTX=$_dc; BEST_TPS=$_ft; BEST_PREFILL="${_fp:-0}"
+            if [[ $_dc -gt $_CAPACITY_CTX ]]; then
+                _CAPACITY_CTX=$_dc; _CAPACITY_TPS=$_ft
+            fi
             _dok=0; _pok=0
             [[ $(echo "$_ft >= $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]] && _dok=1
             if [[ $MIN_PREFILL_TPS == 0 ]] \
@@ -1161,6 +1166,18 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         [[ $_next -lt $MIN_CTX ]] && _next=$MIN_CTX
         _dc=$_next
     done
+
+    # Below the floor at EVERY ctx (the descent bottomed out at MIN_CTX):
+    # certify the highest ctx that returned a working FILLED measurement —
+    # the hardware capacity — instead of the MIN_CTX floor artifact.  The
+    # floor is an advisory threshold; it must not discard the maximum
+    # VRAM-fitting context the model can actually serve.
+    if [[ $_CAPACITY_CTX -gt $MIN_CTX ]] \
+        && [[ $BEST_CTX -le $MIN_CTX ]]; then
+        BEST_CTX=$_CAPACITY_CTX
+        BEST_TPS=$_CAPACITY_TPS
+        echo "  below TPS floor at all ctx — certifying max capacity ctx $(fmt "$BEST_CTX") at ${BEST_TPS} tps"
+    fi
 
     # Final certification: triple-sample (median) at the winner for the
     # recorded number — the persisted TPS is a robust estimate, not a burst.
