@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1346,7 +1346,11 @@ PYEOF
     local start_ns; start_ns=$(date +%s%N)
     local body="/tmp/at-ttft-body-$$"
     local parsed
-    parsed=$("$TAC_PYTHON" - "$health_url" "$ttft_payload" "$start_ns" "$body" << 'PYEOF'
+    # AUTOTUNE-003: the stream probe must POST to the chat-completions
+    # endpoint — the bare server root (health_url without the path) answers
+    # with a non-SSE error in milliseconds, so TTFT was always 0 no matter
+    # how the SSE body was parsed (2026-08-27: 15/15 rows ttft_ms=0).
+    parsed=$("$TAC_PYTHON" - "$health_url/v1/chat/completions" "$ttft_payload" "$start_ns" "$body" << 'PYEOF'
 import json, sys, time, urllib.request
 url, payload_path, start_ns, body_path = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 with open(payload_path, "rb") as f:
