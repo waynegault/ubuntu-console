@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1091,SC2154
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
 #===============================================================================
 # spec_dec_crossover.sh — SPEC-DEC-005 concurrency crossover measurement.
 #
