@@ -633,6 +633,24 @@ bench_ctx() {
     return 0
 }
 
+# --- AUTOTUNE_SELFTEST: canned bench_ctx for decision-logic regression ---
+# With AUTOTUNE_SELFTEST=1, bench_ctx returns a deterministic curve that
+# reproduces the Llama-3.2-3B below-floor case: the model "loads" at every
+# ctx up to MAX_CTX with a slight TPS decline, always below MIN_TPS.  The
+# fixed logic must certify the MAX probed ctx (capacity), NOT the MIN_CTX
+# floor artifact (2026-08-27, Wayne).  Runs without any server spawn —
+# validates the climb + floor-recovery decision path in seconds.
+if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
+    bench_ctx() {
+        local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}" override_ngl="${6:-}"
+        local mode="${7:-quick}"
+        _BENCH_FAIL_TYPE=""
+        echo "8.5|500.0|0" > "/tmp/at-metrics-$$"
+        echo "8.5"
+        return 0
+    }
+fi
+
 #==============================================================================
 # Probe
 #==============================================================================
