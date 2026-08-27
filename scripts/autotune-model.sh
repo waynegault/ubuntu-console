@@ -645,6 +645,12 @@ if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
         local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}" override_ngl="${6:-}"
         local mode="${7:-quick}"
         _BENCH_FAIL_TYPE=""
+        # Optional OOM ceiling: _SELFTEST_OOM_ABOVE makes ctx beyond the
+        # threshold fail (returns OOM), reproducing the real binary-probe /
+        # floor-recovery OOM path deterministically (default: no OOM).
+        if [[ -n "${_SELFTEST_OOM_ABOVE:-}" ]] && [[ $c -gt ${_SELFTEST_OOM_ABOVE} ]]; then
+            echo ""; return 1
+        fi
         echo "8.5|500.0|0" > "/tmp/at-metrics-$$"
         echo "8.5"
         return 0
