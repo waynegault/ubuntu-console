@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 
 # ==============================================================================
@@ -42,7 +42,8 @@ export WINDOWS_USER_ROOT="${WINDOWS_USER_ROOT:-/mnt/c/Users}"
 #   LLM_REGISTRY, ACTIVE_LLM_FILE, QUANT_GUIDE,
 #   LLM_LOG_FILE, LLM_TPS_CACHE, TAC_CACHE_DIR, VENV_DIR, UIWidth, LAST_TPS,
 #   LLM_PORT, OC_PORT, LOCAL_LLM_URL, __TAC_HAS_BATTERY, __resolve_vscode_bin,
-#   VSCODE_BIN, WSL_NVIDIA_SMI, PATH, HISTCONTROL, WINDOWS_USER_ROOT
+#   VSCODE_BIN, WSL_NVIDIA_SMI, PATH, HISTCONTROL, WINDOWS_USER_ROOT,
+#   PYOPENCL_CTX, OCL_ICD_VENDORS
 
 # ---- Storage Roots ----
 export AI_STORAGE_ROOT="$HOME"
@@ -273,6 +274,12 @@ export LLAMA_FIT_TARGET_MB="${LLAMA_FIT_TARGET_MB:-1024}"
 #   on            : always enable --no-mmap
 #   off           : never enable --no-mmap
 export LLAMA_NO_MMAP_MODE="${LLAMA_NO_MMAP_MODE:-auto}"
+
+# ---- Intel Xe iGPU Compute Environment ----
+# PyOpenCL platform selection + the system ICD vendor directory expose the
+# Intel Iris Xe iGPU to OpenCL compute workloads (pyopencl, clinfo, etc.).
+export PYOPENCL_CTX='0'
+export OCL_ICD_VENDORS=/etc/OpenCL/vendors
 
 # ---- Named Constants (avoid magic numbers scattered through functions) ----
 if [[ -z "${VRAM_TOTAL_BYTES+x}" ]]; then
