@@ -143,6 +143,11 @@ KV_QUANTS=${LLM_AUTOTUNE_KV_QUANTS:-"q8_0/q8_0 q4_0/q4_0"}
 # BEFORE the baseline read, then verify free VRAM against the card total.
 # ---------------------------------------------------------------------------
 pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
+# The OpenClaw gateway's local embedding workers each hold ~430 MiB VRAM
+# (embeddinggemma-300m on CUDA); the gateway respawns them on demand, so
+# killing them here is safe and self-healing. Bracket the pattern so
+# pkill -f cannot match this script's own cmdline (2026-08-28).
+pkill -9 -u "$(id -un)" -f "memory-core-local-embedding-worker[.]js" 2>/dev/null || true
 sleep 1
 if declare -f __gpu_clear_stale_processes &>/dev/null; then
     __gpu_clear_stale_processes || true
