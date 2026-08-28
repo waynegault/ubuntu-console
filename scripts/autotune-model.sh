@@ -164,8 +164,15 @@ FREE_VRAM=${FREE_VRAM:-3965}
 # Trust check: after clearing, free VRAM must sit ~at the card total.  A
 # large gap means a foreign process still holds the GPU — a certification
 # against that baseline would be untrustworthy, so fail loudly instead.
+# Tolerance is generous (default 800 MiB) because the guard runs AFTER
+# pkill llama-server — a surviving hold is either ghost VRAM or a stable
+# non-llama service (e.g. the OpenClaw memory embedding worker, ~430 MiB on
+# this box, 2026-08-28) that FREE_VRAM reflects deterministically and the
+# KV-math BUDGET accounts for.  A concurrent autotune/serving server would
+# hold >1 GB, still caught.
+BASELINE_GAP_MAX=${LLM_AUTOTUNE_BASELINE_GAP_MAX:-800}
 BASELINE_GAP=$(( VRAM_TOTAL - FREE_VRAM ))
-if (( BASELINE_GAP > 400 )); then
+if (( BASELINE_GAP > BASELINE_GAP_MAX )); then
     echo "ERROR: VRAM baseline not cleared — ${FREE_VRAM} MiB free of ${VRAM_TOTAL} MiB (${BASELINE_GAP} MiB still held). Refusing to autotune against an untrustworthy baseline." >&2
     exit 1
 fi
