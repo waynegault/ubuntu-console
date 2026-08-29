@@ -693,6 +693,21 @@ if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
         if [[ -n "${_SELFTEST_OOM_ABOVE:-}" ]] && [[ $c -gt ${_SELFTEST_OOM_ABOVE} ]]; then
             echo ""; return 1
         fi
+        # Optional TPS-floor threshold: _SELFTEST_FLOOR_ABOVE makes ctx above
+        # it return below-floor TPS and ctx at/below it return above-floor
+        # TPS — reproducing the TPS-first descent that finds the highest ctx
+        # sustaining MIN_TPS (2026-08-29).  Without it the canned curve is
+        # below-floor at every ctx (the "too slow for our purposes" path).
+        if [[ -n "${_SELFTEST_FLOOR_ABOVE:-}" ]]; then
+            if [[ $c -gt ${_SELFTEST_FLOOR_ABOVE} ]]; then
+                echo "5.0|500.0|0" > "/tmp/at-metrics-$$"
+                echo "5.0"
+            else
+                echo "12.0|500.0|0" > "/tmp/at-metrics-$$"
+                echo "12.0"
+            fi
+            return 0
+        fi
         echo "8.5|500.0|0" > "/tmp/at-metrics-$$"
         echo "8.5"
         return 0
@@ -1219,11 +1234,10 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     echo "  ---------------------"
     _dc=$BEST_CTX
     _ft=""
-    # Capacity-first (2026-08-27, Wayne): certify the max-capacity ctx with
-    # ONE filled test — the multi-point descent existed to find 'the highest
-    # ctx sustaining the TPS floor', but the floor is now advisory
-    # (below-floor models certify their capacity, flagged).  Saves ~5 filled
-    # server loads per model.
+    # TPS-first (2026-08-29, Wayne): the certified ctx is the highest ctx
+    # that sustains MIN_TPS at a FILLED cache. A model below the floor at
+    # its capacity ctx is NOT certified at capacity — it descends until the
+    # floor is met (or MIN_CTX), so the recorded ctx is the usable one.
     _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
     if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
         _fp="0"
@@ -1237,7 +1251,35 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             _pok=1
         fi
         if [[ $_dok == 0 || $_pok == 0 ]]; then
-            echo "  below TPS floor at capacity ctx $(fmt "$_dc") — certifying capacity with the below-floor flag"
+            echo "  below TPS floor at capacity ctx $(fmt "$_dc") — descending to the highest ctx that sustains ${MIN_TPS} tps"
+            _dc=$(( _dc * 3 / 4 )); _dc=$(( _dc / 512 * 512 ))
+            [[ $_dc -lt $MIN_CTX ]] && _dc=$MIN_CTX
+            while :; do
+                _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
+                if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
+                    IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
+                    echo "  ctx $(fmt "$_dc") - filled ${_ft} tps (prefill ${_fp:-0} tok/s)"
+                    BEST_CTX=$_dc; BEST_TPS=$_ft; BEST_PREFILL="${_fp:-0}"
+                    _dok=0; _pok=0
+                    [[ $(echo "$_ft >= $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]] && _dok=1
+                    if [[ $MIN_PREFILL_TPS == 0 ]] \
+                        || [[ $(echo "${_fp:-0} >= $MIN_PREFILL_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
+                        _pok=1
+                    fi
+                    if [[ $_dok == 1 && $_pok == 1 ]]; then
+                        echo "  ✓ floor met at ctx $(fmt "$_dc") — certifying this as the usable ctx"
+                        break
+                    fi
+                fi
+                if [[ $_dc -le $MIN_CTX ]]; then
+                    break
+                fi
+                _dc=$(( _dc * 3 / 4 )); _dc=$(( _dc / 512 * 512 ))
+                [[ $_dc -lt $MIN_CTX ]] && _dc=$MIN_CTX
+            done
+            if [[ $_dok == 0 || $_pok == 0 ]]; then
+                echo "  ⚠ below floor even at min ctx — too slow for our purposes; recording best-effort config"
+            fi
         fi
     else
         fail_label="OOM"
@@ -1289,6 +1331,13 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
     else
         P2_TPS=$BEST_TPS; P2_PREFILL=$BEST_PREFILL
     fi
+fi
+
+# After a TPS-floor descent, the interactive profile must never exceed the
+# certified ctx (a below-floor model's P2 was probed at its old capacity).
+if [[ $P2_CTX -gt $BEST_CTX ]]; then
+    echo "  profile 2 ctx $(fmt "$P2_CTX") clamped to certified $(fmt "$BEST_CTX")"
+    P2_CTX=$BEST_CTX
 fi
 
 # ── SPEC-DEC-004: speculative-decoding block-size sweep ─────────────────────
@@ -1597,7 +1646,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     #   tps <  floor  → too slow for our purposes even at min ctx; the saved
     #                   config is the fastest one available (best-effort).
     if [[ $(echo "$BEST_TPS >= $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
-        echo "  ✓ meets floor: ${BEST_TPS} tps >= ${MIN_TPS} at max ctx $(fmt "$BEST_CTX")"
+        echo "  ✓ meets floor: ${BEST_TPS} tps >= ${MIN_TPS} at ctx $(fmt "$BEST_CTX")"
     else
         echo "  ⚠ below floor: ${BEST_TPS} tps < ${MIN_TPS} even at min ctx — too slow for our purposes"
         echo "    recording best-effort config (max TPS) for capability profiling"
