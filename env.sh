@@ -68,11 +68,17 @@ export LLM_AUTOTUNE_FILL_RATIO="${LLM_AUTOTUNE_FILL_RATIO:-0.75}"
 export LLM_AUTOTUNE_FILL_MAX_TOKENS="${LLM_AUTOTUNE_FILL_MAX_TOKENS:-16384}"
 export LLM_AUTOTUNE_FILL_MIN_TOKENS="${LLM_AUTOTUNE_FILL_MIN_TOKENS:-2048}"
 
-# Optional prefill floor (tokens/sec). 0 = disabled. When set, the Phase 4
-# downshift also steps ctx down if prefill falls below this floor — a model
-# whose prompt ingestion is too slow for long-context agentic use is treated
-# like a below-floor model.
-export LLM_MIN_PREFILL_TPS="${LLM_MIN_PREFILL_TPS:-0}"
+# Prefill floor (tokens/sec), enabled by default. A model whose prompt
+# ingestion is too slow for long-context use is treated like a below-floor
+# model — Phase 4 descends ctx until prefill meets this floor too.
+# HARNESS-PREFILL-001 (2026-08-31): the bench's phase-4 main-generation
+# prompt is ~14K tokens; with the 65536 certified ctx on a 4 GB card the KV
+# cache spills to host RAM and prefill crawls below ~50 tok/s — >5 min to
+# the first token, which killed every case with FirstTokenTimeout.  The
+# decode TPS floor alone certified these configs because it measures a
+# short decode, not the prefill.  Default 50 tok/s (~4.7 min for a 14K
+# prompt) keeps the certified ctx usable end-to-end; set 0 to disable.
+export LLM_MIN_PREFILL_TPS="${LLM_MIN_PREFILL_TPS:-50}"
 
 # Batch/ubatch beam search at the winning ctx (replaces the fixed ubatch list).
 export LLM_AUTOTUNE_BEAM_WIDTH="${LLM_AUTOTUNE_BEAM_WIDTH:-2}"

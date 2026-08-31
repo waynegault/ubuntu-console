@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -115,7 +115,7 @@ MIN_TPS=${LLM_MIN_TPS:-10}
 FILL_RATIO=${LLM_AUTOTUNE_FILL_RATIO:-0.75}
 FILL_MAX_TOKENS=${LLM_AUTOTUNE_FILL_MAX_TOKENS:-16384}
 FILL_MIN_TOKENS=${LLM_AUTOTUNE_FILL_MIN_TOKENS:-2048}
-MIN_PREFILL_TPS=${LLM_MIN_PREFILL_TPS:-0}
+MIN_PREFILL_TPS=${LLM_MIN_PREFILL_TPS:-50}
 BEAM_WIDTH=${LLM_AUTOTUNE_BEAM_WIDTH:-2}
 BEAM_ROUNDS=${LLM_AUTOTUNE_BEAM_ROUNDS:-2}
 NGL_BAND_FRAC=${LLM_AUTOTUNE_NGL_BAND_FRAC:-0.55}
