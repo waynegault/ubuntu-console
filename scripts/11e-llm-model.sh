@@ -327,8 +327,8 @@ function __model_list() {
 
     # Human-readable output — compute column widths dynamically
     local _col_spec="%4s %28s %5s %9s %7s %4s %7s %4s %4s %4s %4s %4s %7s %4s %5s %5s %5s %4s %4s %11s"
-    printf '\n%s  '"${_col_spec}"'%s\n' "$C_Dim" "$C_Reset" \
-        "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "FA" "MMAP" "TPS" "ATUNE" "DEF" "VRAM" "RATING"
+    printf '\n%s  '"${_col_spec}"'%s\n' "$C_Dim" \
+        "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "FA" "MMAP" "TPS" "ATUNE" "DEF" "VRAM" "RATING" "$C_Reset"
     local _list_rule
     printf -v _list_rule '%*s' 149 ''
     _list_rule="${_list_rule// /${BOX_SL}}"
@@ -351,8 +351,8 @@ function __model_list() {
             marker="* "
             color="$C_Highlight"
         fi
-        printf '%s%s'"${_col_spec}"'%s\n' "$color" "$marker" "$C_Reset" \
-            "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${flash_attn:-on}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}"
+        printf '%s%s'"${_col_spec}"'%s\n' "$color" "$marker" \
+            "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${flash_attn:-on}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}" "$C_Reset"
     done < "$LLM_REGISTRY"
 
     local d_used_bytes d_total_bytes d_avail_bytes d_pct_n
