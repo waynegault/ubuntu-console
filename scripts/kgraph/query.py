@@ -36,18 +36,18 @@ def query_nodes(graph: Graph | dict, pattern: str, **kwargs) -> list[dict]:
     pattern_lower = pattern.strip().lower()
     results: list[dict] = []
 
-    for n in graph.nodes:
-        label = n.label.lower()
-        ntype = n.type.lower()
+    for node in graph.nodes:
+        label = node.label.lower()
+        ntype = node.type.lower()
 
         if match_type in ("label", "any"):
             if pattern_lower in label or re.search(pattern, label, re.IGNORECASE):
-                results.append(n.model_dump(mode="json", exclude_none=True))
+                results.append(node.model_dump(mode="json", exclude_none=True))
                 continue
         if match_type in ("type", "any"):
             if pattern_lower in ntype or re.search(pattern, ntype, re.IGNORECASE):
-                if not results or results[-1].get("id") != n.id:
-                    results.append(n.model_dump(mode="json", exclude_none=True))
+                if not results or results[-1].get("id") != node.id:
+                    results.append(node.model_dump(mode="json", exclude_none=True))
                     continue
 
     # Deduplicate

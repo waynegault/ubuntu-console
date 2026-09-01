@@ -199,6 +199,23 @@ class Graph(BaseModel):
     def node_ids(self) -> set[str]:
         return {n.id for n in self.nodes}
 
+    def prune_ast_nodes(self) -> None:
+        """Drop AST-derived nodes (id prefix ``ast_``) and their edges.
+
+        AST nodes are derived data owned by the most recent extraction
+        (``extract_repo_graph``).  Stale copies from earlier builds — old
+        slug formats, deleted files, or other source directories — would
+        otherwise accumulate across incremental rebuilds.
+        """
+        ast_ids = {n.id for n in self.nodes if n.id and n.id.startswith("ast_")}
+        if not ast_ids:
+            return
+        self.nodes = [n for n in self.nodes if n.id not in ast_ids]
+        self.edges = [
+            e for e in self.edges
+            if e.source not in ast_ids and e.target not in ast_ids
+        ]
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict (for JSON output, SQLite storage)."""
         return self.model_dump(mode="json", exclude_none=True)

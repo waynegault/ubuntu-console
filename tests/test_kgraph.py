@@ -64,6 +64,92 @@ class KGraphTests(unittest.TestCase):
         self.assertEqual(loaded.edges[0].source, 'n1')
         self.assertEqual(loaded.edges[0].semantic_score, 0.82)
 
+    def test_prune_ast_nodes_drops_stale_ast_and_keeps_user_nodes(self):
+        """prune_ast_nodes removes ast_* nodes/edges but keeps user data."""
+        kgraph = load_kgraph_module()
+        graph = kgraph.Graph.from_dict({
+            'nodes': [
+                {'id': 'ast_file:scripts-03-design-tokens-sh', 'label': '03-design-tokens.sh', 'type': 'file'},
+                {'id': 'ast_file:scripts_03_design_tokens_sh', 'label': '03-design-tokens.sh', 'type': 'file'},
+                {'id': 'ast_func:hello', 'label': 'hello', 'type': 'function'},
+                {'id': 'memory:keep', 'label': 'keep', 'type': 'memory'},
+                {'id': 'plain', 'label': 'plain'},
+            ],
+            'edges': [
+                {'from': 'ast_file:scripts-03-design-tokens-sh', 'to': 'ast_func:hello', 'label': 'defines'},
+                {'from': 'ast_func:hello', 'to': 'memory:keep', 'label': 'calls'},
+                {'from': 'memory:keep', 'to': 'plain', 'label': 'relates'},
+            ],
+        })
+        graph.prune_ast_nodes()
+        ids = graph.node_ids()
+        self.assertNotIn('ast_file:scripts-03-design-tokens-sh', ids)
+        self.assertNotIn('ast_file:scripts_03_design_tokens_sh', ids)
+        self.assertNotIn('ast_func:hello', ids)
+        self.assertIn('memory:keep', ids)
+        self.assertIn('plain', ids)
+        # edges incident to AST nodes are dropped; user edges survive
+        edge_pairs = {(e.source, e.target) for e in graph.edges}
+        self.assertNotIn(('ast_file:scripts-03-design-tokens-sh', 'ast_func:hello'), edge_pairs)
+        self.assertNotIn(('ast_func:hello', 'memory:keep'), edge_pairs)
+        self.assertIn(('memory:keep', 'plain'), edge_pairs)
+
+    def test_incremental_update_prunes_stale_ast_nodes(self):
+        """a rebuild drops stale ast_* nodes and re-derives them from source."""
+        kgraph = load_kgraph_module()
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, 'repo')
+            os.makedirs(src)
+            with open(os.path.join(src, 'main.sh'), 'w', encoding='utf-8') as f:
+                f.write('function hello() { echo hi; }\n')
+            db_path = os.path.join(td, 'graph.sqlite')
+            kgraph.save_to_graph_db(db_path, {
+                'nodes': [
+                    {'id': 'ast_file:stale', 'label': 'stale.sh', 'type': 'file',
+                     'path': '/gone/stale.sh', 'rel_path': 'stale.sh'},
+                    {'id': 'memory:keep', 'label': 'keep', 'type': 'memory'},
+                ],
+                'edges': [
+                    {'from': 'ast_file:stale', 'to': 'memory:keep', 'label': 'calls'},
+                ],
+            })
+            from kgraph.update import incremental_update
+            incremental_update(
+                db_path,
+                mem_db_path=os.path.join(td, 'missing.sqlite'),
+                source_dir=src,
+                ast=True,
+                include_all=True,
+            )
+            loaded = kgraph.load_from_graph_db(db_path)
+            ids = loaded.node_ids()
+            self.assertNotIn('ast_file:stale', ids)
+            self.assertIn('memory:keep', ids)
+            # fresh AST from the temp repo is present
+            self.assertTrue(
+                any(i.startswith('ast_file:') for i in ids),
+                f'no fresh ast nodes in {sorted(ids)}',
+            )
+            edge_pairs = {(e.source, e.target) for e in loaded.edges}
+            self.assertNotIn(('ast_file:stale', 'memory:keep'), edge_pairs)
+
+    def test_ast_call_links_to_function_definition(self):
+        """call nodes resolve to their function definitions ('who calls X')."""
+        kgraph = load_kgraph_module()
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, 'repo')
+            os.makedirs(src)
+            with open(os.path.join(src, 'lib.sh'), 'w', encoding='utf-8') as f:
+                f.write('function helper() { echo hi; }\n')
+            with open(os.path.join(src, 'main.sh'), 'w', encoding='utf-8') as f:
+                f.write('helper\n')
+                f.write('undefined_cmd\n')
+            g = kgraph.extract_repo_graph(src)
+        edges = {(e['source'], e['target'], e.get('label')) for e in g['edges']}
+        self.assertIn(('ast_call:helper', 'ast_func:helper', 'calls'), edges)
+        # calls to names with no definition are not linked
+        self.assertNotIn(('ast_call:undefined-cmd', 'ast_func:undefined-cmd', 'calls'), edges)
+
     def test_graph_db_round_trip_supports_basename_path(self):
         kgraph = load_kgraph_module()
 
@@ -151,6 +237,7 @@ class TestConfidence(unittest.TestCase):
         }
         result = self.kgraph.tag_confidence(graph)
         for e in result.edges:
+            assert e.confidence is not None
             self.assertEqual(e.confidence.value, 'EXTRACTED')
 
     def test_tag_confidence_inferred_semantic_edges(self):
@@ -162,6 +249,7 @@ class TestConfidence(unittest.TestCase):
         }
         result = self.kgraph.tag_confidence(graph)
         for e in result.edges:
+            assert e.confidence is not None
             self.assertEqual(e.confidence.value, 'INFERRED')
 
     def test_tag_confidence_ambiguous_low_semantic(self):
@@ -173,6 +261,7 @@ class TestConfidence(unittest.TestCase):
         }
         result = self.kgraph.tag_confidence(graph)
         for e in result.edges:
+            assert e.confidence is not None
             self.assertEqual(e.confidence.value, 'AMBIGUOUS')
 
     def test_tag_confidence_explicit_flag(self):
@@ -182,7 +271,9 @@ class TestConfidence(unittest.TestCase):
             ],
         }
         result = self.kgraph.tag_confidence(graph)
-        self.assertEqual(result.edges[0].confidence.value, 'EXTRACTED')
+        conf = result.edges[0].confidence
+        assert conf is not None
+        self.assertEqual(conf.value, 'EXTRACTED')
 
     def test_tag_confidence_inferred_flag(self):
         graph = {
@@ -191,7 +282,9 @@ class TestConfidence(unittest.TestCase):
             ],
         }
         result = self.kgraph.tag_confidence(graph)
-        self.assertEqual(result.edges[0].confidence.value, 'INFERRED')
+        conf = result.edges[0].confidence
+        assert conf is not None
+        self.assertEqual(conf.value, 'INFERRED')
 
     def test_tag_confidence_cooccurrence_threshold(self):
         graph = {
@@ -201,8 +294,12 @@ class TestConfidence(unittest.TestCase):
             ],
         }
         result = self.kgraph.tag_confidence(graph)
-        self.assertEqual(result.edges[0].confidence.value, 'INFERRED')
-        self.assertEqual(result.edges[1].confidence.value, 'AMBIGUOUS')
+        conf0 = result.edges[0].confidence
+        conf1 = result.edges[1].confidence
+        assert conf0 is not None
+        assert conf1 is not None
+        self.assertEqual(conf0.value, 'INFERRED')
+        self.assertEqual(conf1.value, 'AMBIGUOUS')
 
     def test_tag_confidence_ambiguous_fallback_related_label(self):
         graph = {
@@ -211,7 +308,9 @@ class TestConfidence(unittest.TestCase):
             ],
         }
         result = self.kgraph.tag_confidence(graph)
-        self.assertEqual(result.edges[0].confidence.value, 'AMBIGUOUS')
+        conf = result.edges[0].confidence
+        assert conf is not None
+        self.assertEqual(conf.value, 'AMBIGUOUS')
 
     def test_tag_confidence_preserves_existing_fields(self):
         graph = {
@@ -220,8 +319,10 @@ class TestConfidence(unittest.TestCase):
         }
         result = self.kgraph.tag_confidence(graph)
         self.assertEqual(result.nodes[0].label, 'A')
-        self.assertEqual(result.edges[0].extra, 'keep')
-        self.assertEqual(result.edges[0].confidence.value, 'EXTRACTED')
+        self.assertEqual((result.edges[0].model_extra or {}).get('extra'), 'keep')
+        conf = result.edges[0].confidence
+        assert conf is not None
+        self.assertEqual(conf.value, 'EXTRACTED')
 
     def test_confidence_stats_empty_graph(self):
         stats = self.kgraph.confidence_stats({'edges': []})
@@ -640,8 +741,9 @@ class CommunityDetectionTests(unittest.TestCase):
         graph = dict(_SMALL_CONNECTED_GRAPH)
         graph['_meta'] = {'source': 'test', 'version': 1}
         result = kgraph.detect_communities(graph, method='greedy')
-        self.assertEqual(result.meta.source, 'test')
-        self.assertEqual(result.meta.version, 1)
+        meta_extra = result.meta.model_extra or {}
+        self.assertEqual(meta_extra.get('source'), 'test')
+        self.assertEqual(meta_extra.get('version'), 1)
         self.assertGreater(len(result.meta.communities), 0)
 
     # ── compute_centrality ──────────────────────────────────────────
@@ -717,6 +819,46 @@ class CommunityDetectionTests(unittest.TestCase):
         self.assertEqual(scores, sorted(scores, reverse=True))
         # 'a' (Hub) has 3 edges — should be top
         self.assertEqual(result[0]['id'], 'a')
+
+    def test_compute_centrality_disconnected_graph(self):
+        """disconnected graphs must not raise AmbiguousSolution; all nodes get keys."""
+        graph = {
+            'nodes': [
+                {'id': 'a', 'label': 'A'}, {'id': 'b', 'label': 'B'},
+                {'id': 'x', 'label': 'X'}, {'id': 'y', 'label': 'Y'},
+                {'id': 'solo', 'label': 'Solo'},
+            ],
+            'edges': [
+                {'from': 'a', 'to': 'b', 'weight': 1.0},
+                {'from': 'x', 'to': 'y', 'weight': 1.0},
+            ],
+        }
+        result = kgraph.compute_centrality(graph)
+        self.assertEqual(set(result), {'a', 'b', 'x', 'y', 'solo'})
+        for nid, data in result.items():
+            for key in ('id', 'label', 'degree', 'betweenness', 'eigenvector'):
+                self.assertIn(key, data)
+        # Singleton component has no adjacency → eigenvector and degree are 0.
+        self.assertEqual(result['solo']['eigenvector'], 0.0)
+        self.assertEqual(result['solo']['degree'], 0)
+
+    def test_find_god_nodes_disconnected_graph(self):
+        """god nodes on a disconnected graph do not raise."""
+        graph = {
+            'nodes': [
+                {'id': 'hub', 'label': 'Hub'},
+                {'id': 'b', 'label': 'B'},
+                {'id': 'c', 'label': 'C'},
+                {'id': 'lone', 'label': 'Lone'},
+            ],
+            'edges': [
+                {'from': 'hub', 'to': 'b', 'weight': 1.0},
+                {'from': 'hub', 'to': 'c', 'weight': 1.0},
+            ],
+        }
+        result = kgraph.find_god_nodes(graph, top_n=5)
+        self.assertGreater(len(result), 0)
+        self.assertEqual(result[0]['id'], 'hub')
 
     def test_find_god_nodes_top_n_limit(self):
         """find_god_nodes respects the top_n parameter."""
@@ -995,8 +1137,7 @@ class TestRegistryAdapter(unittest.TestCase):
         mi._load_from_registry_db(conn, builder, registry='home', include_all=include_all)
         conn.close()
         g = builder.build()
-        return (g.nodes if hasattr(g, 'nodes') else g['nodes'],
-                g.edges if hasattr(g, 'edges') else g['edges'])
+        return (g.nodes, g.edges)
 
     def test_basic_import_and_filter(self):
         with tempfile.TemporaryDirectory() as td:

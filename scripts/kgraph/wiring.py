@@ -128,8 +128,9 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
                     import_deps[m].add(a.name)
             elif isinstance(node, ast.ImportFrom):
                 if node.module:
-                    target = (_resolve_relative(node.level, node.module, pkg)
-                              if node.level else node.module)
+                    target: str | None = node.module
+                    if node.level:
+                        target = _resolve_relative(node.level, target or "", pkg)
                     if target:
                         import_deps[m].add(target)
                         for a in node.names:
@@ -220,7 +221,10 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
             continue
         if rel.parts and rel.parts[0] in entry_dirs:
             continue
-        loc = _line_count(p)
+        try:
+            loc = sum(1 for _ in p.open(encoding="utf-8"))
+        except OSError:
+            loc = 0
         orphans.append({"module": m, "path": rel.as_posix(), "lines": loc})
     orphans.sort(key=lambda d: (-d["lines"], d["module"]))
 
@@ -239,7 +243,10 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
         imp = importers.get(m, set())
         if imp and all(i.startswith("tests.") for i in imp):
             p = module_to_path[m]
-            loc = _line_count(p)
+            try:
+                loc = sum(1 for _ in p.open(encoding="utf-8"))
+            except OSError:
+                loc = 0
             weak.append({"module": m, "path": p.relative_to(root).as_posix(),
                          "lines": loc, "importers": sorted(imp)})
     weak.sort(key=lambda d: (-d["lines"], d["module"]))
@@ -252,7 +259,10 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
             continue
         if m in importers:
             continue
-        loc = _line_count(p)
+        try:
+            loc = sum(1 for _ in p.open(encoding="utf-8"))
+        except OSError:
+            loc = 0
         submodules = {k for k, v in module_to_path.items()
                       if k.startswith(m + ".") and v.name != "__init__.py"}
         facades.append({"package": m, "path": p.relative_to(root).as_posix(),

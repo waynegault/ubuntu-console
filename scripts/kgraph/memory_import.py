@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import sqlite3
+from typing import Any
 
 from .constants import normalize_canonical_name
 from .life_index import load_life_index
@@ -69,8 +70,8 @@ def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
     if has_table('files') and has_table('chunks'):
         life_index = load_life_index()
         file_paths = set()
-        file_node_ids = {}
-        file_path_by_basename = {}
+        file_node_ids: dict[str, str] = {}
+        file_path_by_basename: dict[str, list[str]] = {}
 
         def _preview_text(value: str, limit: int = 72) -> str:
             text = (value or '').replace('\n', ' ').replace('\r', ' ').strip()
@@ -275,7 +276,7 @@ def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
             return found
 
         def build_chunk_semantic_summary(concept_ids: list[str], chunk_text: str) -> tuple[str, list[str], dict[str, str]]:
-            buckets = {
+            buckets: dict[str, list[str]] = {
                 'project': [],
                 'issue': [],
                 'decision': [],
@@ -290,14 +291,14 @@ def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
                 node = builder.get_node(cid)
                 if not node:
                     continue
-                label = (node.label if hasattr(node, 'label') else str(node.get('label', '') or '')).strip()
-                ntype = (node.type if hasattr(node, 'type') else str(node.get('type', '') or '')).lower()
+                label = (node.label or '').strip()
+                ntype = (node.type or '').lower()
                 if not label or ntype not in buckets:
                     continue
-                key = (ntype, label.lower())
-                if key in seen:
+                pair = (ntype, label.lower())
+                if pair in seen:
                     continue
-                seen.add(key)
+                seen.add(pair)
                 buckets[ntype].append(label)
             typed = {}
             for key in ('project', 'issue', 'decision', 'outcome', 'actor', 'organization', 'place', 'person'):
@@ -442,8 +443,8 @@ def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
                 'actor outcome': 0.6,
                 'related concept': 0.22,
             }
-            semantic_pair_stats = {}
-            node_type_cache = {}
+            semantic_pair_stats: dict[tuple[str, str], dict[str, Any]] = {}
+            node_type_cache: dict[str, str] = {}
 
             def node_type_for(node_id: str) -> str:
                 if node_id in node_type_cache:
@@ -468,7 +469,7 @@ def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
                         if not a_type or not b_type:
                             continue
                         label = semantic_link_labels.get((a_type, b_type)) or semantic_link_labels.get((b_type, a_type)) or 'related concept'
-                        pair = tuple(sorted((a, b)))
+                        pair = (a, b) if a <= b else (b, a)
                         stat = semantic_pair_stats.setdefault(pair, {'count': 0, 'score': 0.0, 'labels': {}})
                         stat['count'] += 1
                         stat['score'] += semantic_link_weights.get(label, 0.4)
@@ -1080,9 +1081,9 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
             "  FROM memory_entity_relationships"
         ):
             d = dict(row)
-            src = d.get('entity_id_a')
-            tgt = d.get('entity_id_b')
-            rel = (d.get('relationship_type') or 'related').strip() or 'related'
+            src = d.get('entity_id_a') or ''
+            tgt = d.get('entity_id_b') or ''
+            rel = str(d.get('relationship_type') or '').strip() or 'related'
             if not src or not tgt:
                 continue
             _add_edge({

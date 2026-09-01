@@ -28,13 +28,14 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
     consider using the official MCP Python SDK.
     """
     graph_db_path = os.path.expanduser(graph_db or GRAPH_DB_DEFAULT)
-    raw = load_from_graph_db(graph_db_path) if os.path.exists(graph_db_path) else {'nodes': [], 'edges': []}
-    graph = raw.to_dict() if hasattr(raw, 'to_dict') else raw
+    graph_payload: dict = {'nodes': [], 'edges': []}
+    if os.path.exists(graph_db_path):
+        graph_payload = load_from_graph_db(graph_db_path).to_dict()
 
     from http.server import HTTPServer, BaseHTTPRequestHandler
 
     class MCPHandler(BaseHTTPRequestHandler):
-        graph = graph
+        graph: dict = graph_payload
         graph_db = graph_db_path
 
         # ── Inline rate limiter (class-level, shared) ──
@@ -62,8 +63,7 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
 
         def _reload_graph(self):
             if os.path.exists(self.graph_db):
-                raw = load_from_graph_db(self.graph_db)
-                self.graph = raw.to_dict() if hasattr(raw, 'to_dict') else raw
+                self.graph = load_from_graph_db(self.graph_db).to_dict()
             return True
 
         def do_POST(self):
@@ -150,7 +150,7 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
             elif method == 'kgraph_stats':
                 nodes = self.graph.get('nodes', [])
                 edges = self.graph.get('edges', [])
-                node_types = {}
+                node_types: dict[str, int] = {}
                 for n in nodes:
                     t = str(n.get('type', 'unknown'))
                     node_types[t] = node_types.get(t, 0) + 1
@@ -200,7 +200,11 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                 return {'error': f'Unknown method: {method}'}
 
     httpd = HTTPServer((host, port), MCPHandler)
-    addr, used_port = httpd.server_address
+    # server_address host may be bytes per typeshed; only used for display.
+    addr = httpd.server_address[0]
+    used_port = httpd.server_address[1]
+    if isinstance(addr, (bytes, bytearray)):
+        addr = addr.decode()
     print(f'MCP server listening on {addr}:{used_port}')
     print('  Tools: kgraph_query, kgraph_path, kgraph_explain, kgraph_report, kgraph_stats')
     try:

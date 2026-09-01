@@ -12,13 +12,14 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 from .constants import (
     LIFE_ROOT_DEFAULT,
     load_canonical_data,
     normalize_canonical_name,
 )
-from .models import Graph
+from .models import Graph, GraphEdge
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ def load_life_index(life_root: str | None = None) -> dict:
                 else json.loads(Path(canonical_json).read_text(encoding="utf-8"))
             )
             for record in payload.get("records", []):
-                rec = {
+                rec: dict[str, Any] = {
                     "slug": str(record.get("slug") or "").strip().lower(),
                     "title": str(record.get("title") or "").strip(),
                     "type": str(record.get("type") or "").strip().lower(),
@@ -178,13 +179,13 @@ def merge_relations(graph: Graph | dict, life_root: str | None = None) -> Graph:
         if not src_id or not tgt_id:
             continue
         if (src_id, tgt_id, rel_type) not in existing_edges:
-            graph.edges.append({
-                "source": src_id,
-                "target": tgt_id,
-                "label": rel_type,
-                "origin": rel.get("source", ""),
-                "explicit": True,
-            })
+            graph.edges.append(GraphEdge(
+                source=src_id,
+                target=tgt_id,
+                label=rel_type,
+                origin=str(rel.get("source", "")),
+                explicit=True,
+            ))
             existing_edges.add((src_id, tgt_id, rel_type))
 
     return graph

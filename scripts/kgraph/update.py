@@ -46,6 +46,10 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
     # 1. Load existing user graph
     if graph_db_path and os.path.exists(os.path.expanduser(graph_db_path)):
         user_graph = load_from_graph_db(graph_db_path)
+        # AST nodes are derived from this build's extraction: drop stale ast_*
+        # nodes (old slug formats, deleted files, other source dirs) so they
+        # do not accumulate across rebuilds. Memory/user nodes are preserved.
+        user_graph.prune_ast_nodes()
         builder.merge(user_graph)
 
     # 2. Merge memory DB data (all registries; multi-DB support)

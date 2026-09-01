@@ -26,6 +26,8 @@ all = [
 dev = [
     "pytest>=7.0",
     "pytest-timeout>=2.0",
+    "mypy>=1.10",
+    "pyright>=1.1",
 ]
 
 [project.urls]
@@ -39,4 +41,6 @@ kgraph = "kgraph.cli:main"
 include = ["kgraph*"]
 
 [tool.setuptools.package-data]
-kgraph = ["audit_security.md"]
+# templates/kgraph.html is loaded at import time by html.py; without it the
+# installed tool silently serves a "Template not found" viewer.
+kgraph = ["templates/*.html", "*.md", "audit_security.md"]

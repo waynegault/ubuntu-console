@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from typing import Any
 import sys
 
 from pydantic import ValidationError
@@ -146,7 +147,7 @@ def validate_graph_file(filepath: str) -> list[dict]:
     return errors
 
 
-def validate_graph_payload(payload: bytes | str | dict) -> tuple[bool, str]:
+def validate_graph_payload(payload: Any) -> tuple[bool, str]:
     """Validate an incoming graph payload for safety.
 
     Returns (True, '') or (False, error_reason).
@@ -171,7 +172,7 @@ def validate_graph_payload(payload: bytes | str | dict) -> tuple[bool, str]:
     return True, ""
 
 
-def sanitize_label(label: str) -> str:
+def sanitize_label(label: str | None) -> str:
     """Strip dangerous content from a label string."""
     if not label:
         return ""

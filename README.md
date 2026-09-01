@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (770 total tests: 579 BATS + 191 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (781 total tests: 579 BATS + 202 Python).
 
 ### Running Tests
 
@@ -423,6 +423,8 @@ The project uses two test frameworks: **BATS** (bash automated testing) for shel
 | `pytest tests/` | Python tests only (excludes BATS — run separately) | ~1 min |
 | `pytest tests/test_bats_bridge.py -k "test_tactical_console_fast"` | Single BATS file via bridge | ~2 min |
 | `bats tests/tactical-console-fast.bats --timing` | Single BATS file directly | ~2 min |
+| `.venv/bin/python3 -m mypy` | Type checks (mypy; config in `pyproject.toml`) | ~30s |
+| `.venv/bin/pyright` | Type checks (pyright; config in `pyproject.toml`) | ~30s |
 | VS Code Testing panel (flask icon) | All tests unified in one tree — click ► on any test | Varies |
 
 ### Test Bridge (`test_bats_bridge.py`)

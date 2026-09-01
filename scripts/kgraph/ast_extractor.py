@@ -12,19 +12,26 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from .models import Graph, GraphBuilder, slugify
 
 logger = logging.getLogger(__name__)
 
 _AST_AVAILABLE = False
+# Pre-declared so the optional tree-sitter import can fall back to None
+# without sprinkling `type: ignore` on every use site.
+Language: Any
+Parser: Any
+Query: Any
+QueryCursor: Any
 try:
     from tree_sitter import Language, Parser, Query, QueryCursor
     _AST_AVAILABLE = True
 except ImportError:
-    Parser = None  # type: ignore[assignment,misc]
+    _AST_AVAILABLE = False
 
-_LANGUAGES: dict[str, object] = {}
+_LANGUAGES: dict[str, Any] = {}
 
 
 def _load_grammars() -> dict:
@@ -45,7 +52,7 @@ def _load_grammars() -> dict:
 # ── helpers ─────────────────────────────────────────────────────────────
 
 
-def _query_captures(lang: Language, query_text: str, root_node) -> list[tuple]:
+def _query_captures(lang: Any, query_text: str, root_node) -> list[tuple]:
     """Run a tree-sitter query and return (node, capture_name) tuples."""
     q = Query(lang, query_text)
     cursor = QueryCursor(q)
@@ -176,7 +183,7 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
         source_files = source_files[:max_files]
 
     # ── per-file extraction ──
-    parsers: dict[str, Parser] = {}
+    parsers: dict[str, Any] = {}
     file_node_ids: dict[str, str] = {}
 
     for fpath, lang in source_files:
@@ -219,6 +226,7 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
     # ── inter-file refs from imports ──
     graph = builder.build()
     _resolve_import_edges(file_node_ids, graph, builder)
+    _link_call_defs(builder)
     graph = builder.build()
 
     result = graph.to_dict()
@@ -360,3 +368,28 @@ def _resolve_import_edges(file_node_ids: dict[str, str], graph: Graph,
             if label == rel_stem or label.endswith("." + rel_stem):
                 builder.add_edge({"source": n.id, "target": fid, "label": "resolves_to", "confidence": "INFERRED"})
                 break
+
+
+def _link_call_defs(builder: GraphBuilder) -> None:
+    """Link each ``ast_call:X`` node to its ``ast_func:X`` definition.
+
+    ``_extract_calls`` records which files call a name but never connects the
+    call node to the function it resolves to, so "who calls X" is
+    untraversable in the graph.  This pass adds ``ast_call:X -> ast_func:X``
+    edges (labeled "calls") when the definition exists; calls to external
+    commands / undefined names are left unlinked.
+    """
+    for node in builder.nodes_list:
+        if node.type != "call":
+            continue
+        name = (node.label or "").strip()
+        if not name:
+            continue
+        func_id = f"ast_func:{slugify(name)}"
+        if builder.has_node(func_id):
+            builder.add_edge({
+                "source": node.id,
+                "target": func_id,
+                "label": "calls",
+                "confidence": "INFERRED",
+            })

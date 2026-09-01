@@ -39,9 +39,6 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
   serve_dir, filename, using_built_frontend = resolve_serve_target(path, force_embed=force_embed)
 
   # ── Rate limiter (class-level, shared across requests) ──
-  _rl_requests: list[float] = []
-  _rl_max = 30
-
   _CORS_HEADERS = [
     ('Access-Control-Allow-Origin', '*'),
     ('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'),
@@ -52,6 +49,10 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
   initial_semantic_threshold = float(semantic_threshold)
 
   class GraphRequestHandler(SimpleHTTPRequestHandler):
+    # Rate limiter state lives on the class so all request instances share it.
+    _rl_requests: list[float] = []
+    _rl_max = 30
+
     def __init__(self, *args, directory=None, **kwargs):
       super().__init__(*args, directory=directory or serve_dir, **kwargs)
 
@@ -98,12 +99,10 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
         for name, path, is_memory in sources:
             try:
                 if is_memory:
-                    graph = load_from_memory_db(path)
+                    loaded = load_from_memory_db(path)
                 else:
-                    graph = load_from_graph_db(path)
-                # Normalise Graph models to dicts for project_graph()
-                if hasattr(graph, "to_dict"):
-                    graph = graph.to_dict()
+                    loaded = load_from_graph_db(path)
+                graph = loaded.to_dict()
                 if graph.get("nodes") or graph.get("edges"):
                     return graph, name
             except (OSError, ValueError, KeyError) as exc:
@@ -200,12 +199,17 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
           self.end_headers()
           self.wfile.write(str(e).encode())
         return
-      return super().do_POST()
+      # SimpleHTTPRequestHandler has no do_POST — respond 404 for unknown paths.
+      self.send_error(404, "Not Found")
 
   handler = partial(GraphRequestHandler, directory=serve_dir)
   httpd = HTTPServer((host, port), handler)
-  addr, used_port = httpd.server_address
-  # If serving the built frontend, point root to index.html
+  # server_address may be a 4-tuple (IPv6) and the host may be bytes per
+  # typeshed; only host/port are used here.
+  addr = httpd.server_address[0]
+  used_port = httpd.server_address[1]
+  if isinstance(addr, (bytes, bytearray)):
+    addr = addr.decode()
   if using_built_frontend:
     url = f'http://{addr}:{used_port}/'
   else:

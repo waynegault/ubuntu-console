@@ -10,6 +10,12 @@ A knowledge graph server, AST extractor, community detection, MCP server, and CL
 uv pip install -e scripts/kgraph
 ```
 
+> **Non-editable installs are snapshots.** `uv tool install scripts/kgraph` (or
+> `pipx install`) copies the source at install time; after repo changes, resync
+> with `uv tool install --force scripts/kgraph`. The package ships
+> `templates/kgraph.html` as package data — an install missing it serves a
+> "Template not found" viewer.
+
 ### Using pip
 
 ```bash

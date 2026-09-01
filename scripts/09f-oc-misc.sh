@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 5
 # ==============================================================================
 # 09f-oc-misc — Miscellaneous OC commands (kgraph, stinger, mem-index)
 # ==============================================================================
@@ -60,9 +60,11 @@ from kgraph import (
 from kgraph.update import merge_graphs
 from kgraph.confidence import confidence_stats
 
-# Load existing graph DB (preserving user edits)
+# Load existing graph DB (preserving user edits); drop stale AST nodes
+# (old slug formats / other source dirs) — they are re-derived below.
 graph_db = os.path.expanduser('~/.openclaw/kgraph.sqlite')
 graph = load_from_graph_db(graph_db)
+graph.prune_ast_nodes()
 
 # Merge memory DB
 memory_db = resolve_memory_db_path()
@@ -102,7 +104,11 @@ PY
     fi
     sleep 0.3
     set +m
-    setsid "$TAC_PYTHON" -m kgraph --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
+    # kgraph is not installed in the project venv; resolve it from the repo's
+    # scripts/ dir (same source the --reindex path uses) so the server launch
+    # does not fail silently with ModuleNotFoundError.
+    PYTHONPATH="$TACTICAL_REPO_ROOT/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+        setsid "$TAC_PYTHON" -m kgraph --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
     disown
     set -m
 

@@ -14,7 +14,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 SCRIPT_DIR = os.path.join(REPO_ROOT, 'scripts')
 sys.path.insert(0, SCRIPT_DIR)
 
-from kgraph.wiring import (
+from kgraph.wiring import (  # noqa: E402  (sys.path hack above)
     analyze_wiring,
     format_wiring_report,
     wiring_summary,

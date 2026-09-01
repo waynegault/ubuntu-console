@@ -89,6 +89,10 @@ by either loader.
 | `scripts/run-autotune-batch.sh` | Batch autotune across multiple models. |
 | `scripts/load-vault-env.sh` | Load vault environment variables (standalone). |
 | `scripts/oc-update-enhanced.sh` | Enhanced OpenClaw update helper. |
+| `scripts/spec-decode-bench.sh` | SPEC-DEC-003/006 per-prompt acceptance bench (standalone). |
+| `scripts/spec_dec_crossover.sh` | SPEC-DEC-005 concurrency crossover measurement (standalone). |
+| `scripts/prompt-sets.sh` | Shared SPEC-DEC-006 workload prompt sets (sourced by the benches). |
+| `scripts/18-lint.sh` | Repo static-analysis wrapper — delegates to `tools/lint.sh`. |
 | `tools/check-agent-use.sh` | Agent usage regression checker — CI/tests only. |
 | `tools/import-windows-env.sh` | Standalone script to import Windows user environment variables. |
 | `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety. CI linter. |

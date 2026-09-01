@@ -10,30 +10,43 @@ models or legacy dicts.
 
 from __future__ import annotations
 
+import importlib
 import logging
+import time
 import warnings
+from typing import Any
 
 from .models import Graph
 
 logger = logging.getLogger(__name__)
 
+# networkx is an optional dependency with no type stubs: pre-declare the
+# names as Any so the fallback path needs no `type: ignore` comments and both
+# mypy and pyright stay happy.
+nx: Any
+greedy_modularity_communities: Any
+louvain_communities: Any
 try:
-    import networkx as nx
-    from networkx.algorithms.community import (
-        greedy_modularity_communities,
-        louvain_communities,
-    )
+    nx = importlib.import_module("networkx")
+    _community_mod = importlib.import_module("networkx.algorithms.community")
+    greedy_modularity_communities = _community_mod.greedy_modularity_communities
+    louvain_communities = _community_mod.louvain_communities
     _NX_AVAILABLE = True
 except ImportError:
-    nx = None  # type: ignore[assignment]
     _NX_AVAILABLE = False
+
+# Louvain is expensive on large graphs (quadratic-ish refinement passes).
+# Above this node count, requests for Louvain fall back to greedy modularity
+# so `kgraph --update` / `--communities` cannot stall silently on a huge
+# merged graph.
+LOUVAIN_MAX_NODES = 10_000
 
 
 def communities_available() -> bool:
     return _NX_AVAILABLE
 
 
-def _build_nx_graph(graph: Graph) -> "nx.Graph":
+def _build_nx_graph(graph: Graph) -> Any:
     """Build a networkx Graph from a kgraph Graph model."""
     G = nx.Graph()
     for n in graph.nodes:
@@ -70,22 +83,39 @@ def detect_communities(graph: Graph | dict, method: str = "leiden_like", **kwarg
 
     node_labels = {n.id: (n.label or n.id) for n in graph.nodes}
 
+    # Louvain on a huge merged graph is what makes builds appear hung: fall
+    # back to greedy modularity (still good clusters, far faster) above the
+    # size threshold, and always report elapsed time.
+    effective_method = method
+    if method == "louvain" and G.number_of_nodes() > LOUVAIN_MAX_NODES:
+        logger.warning(
+            "Graph has %d nodes — Louvain too slow at this size; using greedy modularity",
+            G.number_of_nodes(),
+        )
+        effective_method = "greedy"
+
+    started = time.monotonic()
     try:
-        if method == "louvain":
+        if effective_method == "louvain":
             comms = list(louvain_communities(G, weight="weight", seed=42))
         else:
             comms = list(greedy_modularity_communities(G, weight="weight"))
     except (ValueError, ZeroDivisionError) as exc:
         logger.warning("Community detection failed, returning unclustered graph: %s", exc)
         return graph
+    elapsed = time.monotonic() - started
+    logger.info(
+        "Community detection (%s) on %d nodes, %d edges: %.1fs",
+        effective_method, G.number_of_nodes(), G.number_of_edges(), elapsed,
+    )
 
-    graph.meta.community_method = method
+    graph.meta.community_method = effective_method
     community_list = []
     for idx, members in enumerate(comms):
         if len(members) < min_community_size:
             continue
         mlist = sorted(members)
-        labels = [node_labels.get(m, m) for m in mlist[:3]]
+        labels = [str(node_labels.get(m, m) or m) for m in mlist[:3]]
         label = " · ".join(labels) if len(labels) >= 2 else (labels[0] if labels else f"community_{idx}")
         if len(mlist) > 3:
             label += f" (+{len(mlist) - 3})"
@@ -131,13 +161,30 @@ def compute_centrality(graph: Graph | dict) -> dict:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             eigenvector = nx.eigenvector_centrality_numpy(G, weight="weight")
-    except (ValueError, TypeError, ZeroDivisionError, ArithmeticError) as exc:
-        logger.warning("Eigenvector centrality (numpy) failed, trying fallback: %s", exc)
-        try:
-            eigenvector = nx.eigenvector_centrality(G, max_iter=200)
-        except (ValueError, TypeError, ZeroDivisionError, ArithmeticError) as exc2:
-            logger.warning("Eigenvector centrality fallback also failed: %s", exc2)
-            eigenvector = {}
+    except (nx.AmbiguousSolution, ValueError, TypeError, ZeroDivisionError, ArithmeticError) as exc:
+        # numpy eigenvector centrality is undefined for disconnected graphs
+        # (nx.AmbiguousSolution). Fall back to per-component power iteration:
+        # each connected component is scored on its own dominant-eigenvector
+        # scale; isolated nodes stay at 0.0.
+        logger.warning(
+            "Eigenvector centrality (numpy) failed (%s); using per-component fallback", exc
+        )
+        eigenvector = {}
+        for component in nx.connected_components(G):
+            if len(component) < 2:
+                continue
+            try:
+                ev = nx.eigenvector_centrality(
+                    G.subgraph(component), max_iter=200, weight="weight"
+                )
+            except (nx.PowerIterationFailedConvergence, ValueError, TypeError,
+                    ZeroDivisionError, ArithmeticError) as exc2:
+                logger.warning(
+                    "Eigenvector centrality fallback failed for component of %d nodes: %s",
+                    len(component), exc2,
+                )
+                continue
+            eigenvector.update(ev)
 
     for nid in G.nodes():
         result[nid] = {

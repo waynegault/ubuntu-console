@@ -10,6 +10,58 @@ __version__ = "2.0.0"
 
 import typing as _t
 
+if _t.TYPE_CHECKING:
+    # Mirror of the lazy registrations below: gives type checkers real
+    # definitions for `from kgraph import X` / `kgraph.X` without paying the
+    # runtime import cost (the __getattr__ shim handles execution).
+    from .ast_extractor import ast_available, extract_repo_graph
+    from .benchmark import benchmark_graph_vs_raw, print_benchmark
+    from .call_flow import generate_call_flow_html, generate_call_flow_mermaid
+    from .cli import main
+    from .community import (
+        communities_available,
+        compute_centrality,
+        detect_communities,
+        find_god_nodes,
+    )
+    from .confidence import confidence_stats, tag_confidence
+    from .constants import (
+        CANONICAL_CONCEPTS_DEFAULT,
+        GRAPH_DB_DEFAULT,
+        LIFE_ROOT_DEFAULT,
+        MEMORY_DB_CANDIDATES,
+        SAMPLE_GRAPH,
+        load_canonical_data,
+        normalize_canonical_name,
+    )
+    from .graph_db import (
+        init_graph_db,
+        load_from_graph_db,
+        resolve_memory_db_path,
+        save_to_graph_db,
+    )
+    from .html import HTML_TMPL, ensure_parent_dir, generate_html
+    from .life_index import load_life_index, load_relations, merge_relations, resolve_life_root
+    from .mcp_server import serve_mcp
+    from .memory_import import load_from_memory_db
+    from .models import (
+        ConfidenceLevel,
+        Graph,
+        GraphBuilder,
+        GraphEdge,
+        GraphMeta,
+        GraphNode,
+        estimate_tokens,
+        slugify,
+    )
+    from .pr_dashboard import generate_pr_dashboard
+    from .projection import project_graph
+    from .query import explain_node, find_path, format_explain, format_path, query_nodes
+    from .report import generate_report
+    from .server import resolve_serve_target, serve_file
+    from .update import incremental_update, merge_graphs, start_watch
+    from .validate import sanitize_label, validate_graph_payload
+
 _MODULES: dict[str,
                  _t.Callable[[], object]] = {}
 
@@ -29,7 +81,9 @@ def __getattr__(name: str) -> object:
 def _lazy(mod_path: str, attrs: list[str]) -> None:
     """Register a lazy loader for *attrs* that imports *mod_path*."""
     for a in attrs:
-        _MODULES[a] = _memo(lambda mp=mod_path, al=a: _import_one(mp, al))
+        def _loader(mp: str = mod_path, al: str = a) -> object:
+            return _import_one(mp, al)
+        _MODULES[a] = _memo(_loader)
 
 
 _imported_cache: dict[str, object] = {}

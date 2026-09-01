@@ -45,8 +45,7 @@ def _load_graph(args: argparse.Namespace) -> dict:
 
     if os.path.exists(os.path.expanduser(graph_db)):
         try:
-            g = load_from_graph_db(graph_db)
-            d = g.to_dict() if hasattr(g, "to_dict") else g
+            d = load_from_graph_db(graph_db).to_dict()
             if d.get("nodes") or d.get("edges"):
                 return d
         except (OSError, ValueError) as exc:
@@ -54,8 +53,7 @@ def _load_graph(args: argparse.Namespace) -> dict:
 
     if memory_db and os.path.exists(memory_db):
         try:
-            g = load_from_memory_db(memory_db)
-            d = g.to_dict() if hasattr(g, "to_dict") else g
+            d = load_from_memory_db(memory_db).to_dict()
             if d.get("nodes") or d.get("edges"):
                 return d
         except (OSError, ValueError) as exc:
@@ -76,6 +74,8 @@ def main() -> None:
     parser.add_argument("--watch", action="store_true", help="Watch files and auto-rebuild")
     parser.add_argument("--report", action="store_true", help="Generate GRAPH_REPORT.md")
     parser.add_argument("--ast", action="store_true", help="Extract AST code concepts from a repo")
+    parser.add_argument("--wiring", action="store_true", help="Analyze source-tree wiring (stdlib AST import graph)")
+    parser.add_argument("--wiring-all", action="store_true", help="Show full wiring report without truncation")
     parser.add_argument("--communities", action="store_true", help="Detect communities/clusters")
     parser.add_argument("--god-nodes", action="store_true", help="List most central nodes")
     parser.add_argument("--call-flow", action="store_true", help="Generate call-flow HTML/Mermaid")
@@ -148,21 +148,32 @@ def main() -> None:
         if not ast_available():
             print("Error: tree-sitter not available. Install with: pip install tree-sitter tree-sitter-bash tree-sitter-python", file=sys.stderr)
             sys.exit(1)
-        g = extract_repo_graph(args.repo, include_variables=args.ast_vars,
-                               max_files=args.ast_max_files, subdirs=args.ast_subdirs)
-        g = tag_confidence(g)
+        raw = extract_repo_graph(args.repo, include_variables=args.ast_vars,
+                                 max_files=args.ast_max_files, subdirs=args.ast_subdirs)
+        g = tag_confidence(raw)
         s = confidence_stats(g)
-        node_count = len(g.nodes) if hasattr(g, "nodes") else len(g.get("nodes", []))
-        edge_count = len(g.edges) if hasattr(g, "edges") else len(g.get("edges", []))
+        node_count = len(g.nodes)
+        edge_count = len(g.edges)
         print(f"AST extraction: {node_count} nodes, {edge_count} edges")
         print(f'Confidence: {s["extracted"]} EXTRACTED, {s["inferred"]} INFERRED, {s["ambiguous"]} AMBIGUOUS')
-        out_data = g.to_dict() if hasattr(g, "to_dict") else g
+        out_data = g.to_dict()
         if args.output:
             with open(args.output, "w", encoding="utf-8") as f:
                 json.dump(out_data, f, indent=2)
             print(f"Saved to {args.output}")
         else:
             print(json.dumps(out_data, indent=2))
+        return
+
+    # ── Wiring analysis ──
+    if args.wiring:
+        if not args.repo:
+            print("Error: --repo is required for wiring analysis", file=sys.stderr)
+            sys.exit(1)
+        from .wiring import analyze_wiring, format_wiring_report, wiring_summary
+        report = analyze_wiring(args.repo)
+        print(format_wiring_report(report, show_all=args.wiring_all))
+        print(f"\nSUMMARY: {wiring_summary(report)}")
         return
 
     # ── Git hooks ──
@@ -206,12 +217,12 @@ def main() -> None:
                                ast_max_files=args.ast_max_files, ast_subdirs=args.ast_subdirs,
                                include_all=args.include_all)
         s = confidence_stats(g)
-        node_count = len(g.nodes) if hasattr(g, "nodes") else len(g.get("nodes", []))
-        edge_count = len(g.edges) if hasattr(g, "edges") else len(g.get("edges", []))
+        node_count = len(g.nodes)
+        edge_count = len(g.edges)
         print(f"Update complete: {node_count} nodes, {edge_count} edges")
         print(f'  EXTRACTED: {s["extracted"]}, INFERRED: {s["inferred"]}, AMBIGUOUS: {s["ambiguous"]}')
         if args.output:
-            out_data = g.to_dict() if hasattr(g, "to_dict") else g
+            out_data = g.to_dict()
             with open(args.output, "w", encoding="utf-8") as f:
                 json.dump(out_data, f, indent=2)
         return
@@ -258,7 +269,7 @@ def main() -> None:
             print("Error: networkx not available. pip install networkx", file=sys.stderr)
             sys.exit(1)
         g = detect_communities(graph, method=args.community_method, min_community_size=args.min_community_size)
-        clusters = g.meta.communities if hasattr(g, "meta") else (g.get("_meta") or {}).get("communities", [])
+        clusters = g.meta.communities if hasattr(g.meta, "communities") else []
         if not clusters:
             print("No communities detected")
         else:
@@ -335,9 +346,9 @@ def main() -> None:
         return
 
     # ── Default: generate HTML + optionally serve ──
-    g = _load_graph(args)
+    graph_data = _load_graph(args)
     outpath = args.output or os.path.join(tempfile.gettempdir(), "kgraph.html")
-    generate_html(g, outpath)
+    generate_html(graph_data, outpath)
     print("Wrote", outpath)
 
     if args.serve:

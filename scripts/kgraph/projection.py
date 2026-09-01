@@ -117,8 +117,11 @@ def _is_curated_edge(edge: dict, effective_threshold: float) -> bool:
     if label in CURATED_EDGE_LABELS or label == "semantic summary" or label.startswith("summarizes "):
         return True
     if label.startswith("related") and edge.get("semantic_score") is not None:
+        score = edge.get("semantic_score")
+        if score is None:
+            return False
         try:
-            return float(edge.get("semantic_score")) >= effective_threshold
+            return float(score) >= effective_threshold
         except (TypeError, ValueError):
             return False
     return False
@@ -395,6 +398,8 @@ def _filter_semantic_edges(out: dict, current_mode: str, life_index: dict) -> No
     scored_edges = []
     for edge in semantic_edges:
         src, dst = _edge_endpoints(edge)
+        if not src or not dst:
+            continue
         strength = _edge_strength_value(edge)
         src_node = node_lookup.get(src, {})
         dst_node = node_lookup.get(dst, {})
@@ -434,7 +439,7 @@ def _filter_semantic_edges(out: dict, current_mode: str, life_index: dict) -> No
         src, dst = _edge_endpoints(edge)
         if not src or not dst:
             continue
-        pair = tuple(sorted((src, dst)))
+        pair = (src, dst) if src <= dst else (dst, src)
         if pair in seen_pairs:
             continue
         src_deg = degree.get(src, 0)
@@ -464,7 +469,7 @@ def _filter_semantic_edges(out: dict, current_mode: str, life_index: dict) -> No
             src, dst = _edge_endpoints(edge)
             if not src or not dst:
                 continue
-            pair = tuple(sorted((src, dst)))
+            pair = (src, dst) if src <= dst else (dst, src)
             if pair in fallback_pairs:
                 continue
             if fallback_counts.get(src, 0) >= 3 or fallback_counts.get(dst, 0) >= 3:
@@ -835,7 +840,7 @@ def _project_semantic(node_by_id, edges, effective_threshold, semantic_threshold
         member_list = sorted(members)
         for i, a in enumerate(member_list):
             for b in member_list[i + 1:]:
-                pair = tuple(sorted((a, b)))
+                pair = (a, b) if a <= b else (b, a)
                 inferred_scores.setdefault(pair, {"summary": 0, "chunk": 0})
                 inferred_scores[pair]["summary"] += 1
 
@@ -843,7 +848,7 @@ def _project_semantic(node_by_id, edges, effective_threshold, semantic_threshold
         member_list = sorted(members)
         for i, a in enumerate(member_list):
             for b in member_list[i + 1:]:
-                pair = tuple(sorted((a, b)))
+                pair = (a, b) if a <= b else (b, a)
                 inferred_scores.setdefault(pair, {"summary": 0, "chunk": 0})
                 inferred_scores[pair]["chunk"] += 1
 
