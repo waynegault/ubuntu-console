@@ -86,6 +86,81 @@ class WiringAnalysisTests(unittest.TestCase):
             facades = {f_['path'] for f_ in report['unused_facades']}
             self.assertIn('facade/__init__.py', facades)
 
+    def test_root_conftest_not_orphaned(self):
+        """A root-level conftest.py is pytest infra, never an orphan."""
+        with tempfile.TemporaryDirectory() as td:
+            build_fixture(td)
+            with open(os.path.join(td, 'conftest.py'), 'w', encoding='utf-8') as f:
+                f.write('"""pytest fixtures."""\n')
+            report = analyze_wiring(td)
+            orphans = {o['path'] for o in report['orphan_modules']}
+            self.assertNotIn('conftest.py', orphans)
+
+    def test_main_guard_module_not_orphan_or_weak(self):
+        """An ``if __name__ == "__main__":`` module is an entry point."""
+        with tempfile.TemporaryDirectory() as td:
+            build_fixture(td)
+            with open(os.path.join(td, 'pkg', 'cli_tool.py'), 'w', encoding='utf-8') as f:
+                f.write(
+                    '"""Interpreter-launched tool, not imported by prod."""\n'
+                    'def main() -> None:\n    pass\n'
+                    'if __name__ == "__main__":\n    main()\n'
+                )
+            report = analyze_wiring(td)
+            orphans = {o['path'] for o in report['orphan_modules']}
+            weak = {w['module'] for w in report['weak_wiring']}
+            self.assertNotIn('pkg/cli_tool.py', orphans)
+            self.assertNotIn('pkg.cli_tool', weak)
+
+    def test_subprocess_consumed_module_not_orphaned(self):
+        """A module launched via a subprocess path string is not an orphan."""
+        with tempfile.TemporaryDirectory() as td:
+            build_fixture(td)
+            os.makedirs(os.path.join(td, 'taxonomy'))
+            with open(os.path.join(td, 'taxonomy', 'rebuild.py'), 'w', encoding='utf-8') as f:
+                f.write('"""Rebuild helper, run via subprocess."""\n')
+            with open(os.path.join(td, 'pkg', 'runner.py'), 'w', encoding='utf-8') as f:
+                f.write(
+                    '"""Launches rebuild.py as a subprocess."""\n'
+                    'import subprocess\n'
+                    'subprocess.run(["python", "taxonomy/rebuild.py"])\n'
+                )
+            report = analyze_wiring(td)
+            orphans = {o['path'] for o in report['orphan_modules']}
+            self.assertNotIn('taxonomy/rebuild.py', orphans)
+
+    def test_facade_with_external_submodule_importer_is_used(self):
+        """A facade whose submodule is imported elsewhere is NOT unused.
+
+        Importing ``pkg.sub`` executes ``pkg/__init__.py`` — a package with
+        a live submodule importer must not be flagged as an unused facade.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            build_fixture(td)
+            os.makedirs(os.path.join(td, 'lib'))
+            with open(os.path.join(td, 'lib', '__init__.py'), 'w', encoding='utf-8') as f:
+                f.write('"""lib facade."""\n')
+            with open(os.path.join(td, 'lib', '_impl.py'), 'w', encoding='utf-8') as f:
+                f.write('"""impl."""\ndef f() -> None:\n    pass\n')
+            with open(os.path.join(td, 'pkg', 'consumer.py'), 'w', encoding='utf-8') as f:
+                f.write('"""consumes lib._impl."""\nfrom lib._impl import f\n')
+            report = analyze_wiring(td)
+            facades = {f_['path'] for f_ in report['unused_facades']}
+            self.assertNotIn('lib/__init__.py', facades)
+
+    def test_facade_self_import_not_counted_as_consumer(self):
+        """A package importing its OWN submodule is not a consumer."""
+        with tempfile.TemporaryDirectory() as td:
+            build_fixture(td)
+            os.makedirs(os.path.join(td, 'facade'))
+            with open(os.path.join(td, 'facade', '__init__.py'), 'w', encoding='utf-8') as f:
+                f.write('"""facade package."""\nfrom facade._impl import f as f\n')
+            with open(os.path.join(td, 'facade', '_impl.py'), 'w', encoding='utf-8') as f:
+                f.write('"""impl."""\ndef f() -> None:\n    pass\n')
+            report = analyze_wiring(td)
+            facades = {f_['path'] for f_ in report['unused_facades']}
+            self.assertIn('facade/__init__.py', facades)
+
     def test_entry_dir_facade_imported_by_relative_name_not_flagged(self):
         """A package under an entry dir imported via its sys.path name is used."""
         with tempfile.TemporaryDirectory() as td:

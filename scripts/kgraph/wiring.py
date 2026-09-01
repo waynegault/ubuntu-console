@@ -69,12 +69,56 @@ def _line_count(path: Path) -> int:
 
 
 def _is_entry(rel: str, rel_parts: tuple[str, ...]) -> bool:
+    """True for files pytest/interpreter auto-discover (never "orphans").
+
+    Covers ``conftest.py`` at ANY depth (pytest imports it via discovery,
+    not via ``import``), plus the classic entry names — the stem check
+    handles a root-level ``conftest.py`` that the ``/conftest.py`` suffix
+    form misses.
+    """
     last = rel_parts[-1]
-    if last in ENTRY_NAME_HINTS:
+    stem = last[:-3] if last.endswith(".py") else last
+    if stem in ENTRY_NAME_HINTS:
         return True
     if last == "__init__.py":
         return True
     return rel.endswith(ENTRY_SUFFIXES)
+
+
+def _has_main_guard(tree: ast.AST) -> bool:
+    """True when the module has an ``if __name__ == "__main__":`` guard.
+
+    Such modules are interpreter-launched entry points (``python -m mod``
+    or ``python path/mod.py``) — by design they have no importers, so they
+    must not be reported as orphans or test-only weak wiring.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If):
+            test = node.test
+            if (
+                isinstance(test, ast.Compare)
+                and isinstance(test.left, ast.Name)
+                and test.left.id == "__name__"
+                and len(test.ops) == 1
+                and isinstance(test.ops[0], (ast.Eq, ast.Is))
+                and len(test.comparators) == 1
+                and isinstance(test.comparators[0], ast.Constant)
+                and test.comparators[0].value == "__main__"
+            ):
+                return True
+    return False
+
+
+def _is_subprocess_consumed(rel_path: str, sources: dict[str, str]) -> bool:
+    """True when another file references *rel_path* as a string.
+
+    Covers scripts launched via ``subprocess.run([... "path/to/mod.py"])``
+    or path-constructed references (``Path(...) / "mod.py"``) — the static
+    import graph cannot see subprocess wiring, so a string reference to the
+    module's relative path elsewhere in the tree counts as a consumer.
+    """
+    needle = rel_path.as_posix()
+    return any(needle in text for path, text in sources.items() if path != rel_path)
 
 
 # ── analysis ───────────────────────────────────────────────────────────
@@ -111,16 +155,24 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
     symbol_deps: dict[str, set[str]] = defaultdict(set)
     dynamic: dict[str, list[str]] = defaultdict(list)
     parse_failures: list[str] = []
+    #: rel_path -> source text (for subprocess-consumed string references).
+    source_texts: dict[Path, str] = {}
+    #: modules with an ``if __name__ == "__main__":`` guard (entry points).
+    main_guard_modules: set[str] = set()
 
     for p in files:
         m = path_to_module.get(p)
         if not m:
             continue
         try:
-            tree = ast.parse(p.read_text(encoding="utf-8"))
+            text = p.read_text(encoding="utf-8")
+            tree = ast.parse(text)
         except (OSError, SyntaxError, UnicodeDecodeError) as exc:
             parse_failures.append(f"{p.relative_to(root)}: {exc}")
             continue
+        source_texts[p] = text
+        if _has_main_guard(tree):
+            main_guard_modules.add(m)
         pkg = _package_of(p.relative_to(root).parts)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -217,6 +269,19 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
     for m, mods in local_dep.items():
         for d in mods:
             importers[d].add(m)
+            # Importing ``pkg.sub`` executes ``pkg/__init__.py`` too —
+            # record every ancestor package as imported so package facades
+            # with live submodule importers are not flagged as unused.
+            # Never add the importer to its OWN ancestor chain: a package
+            # importing its own submodule is a self-reference, not an
+            # external consumer.
+            prefix = d
+            while "." in prefix:
+                prefix = prefix.rsplit(".", 1)[0]
+                if prefix == m:
+                    break
+                if prefix in module_to_path or prefix in package_names:
+                    importers[prefix].add(m)
 
     def _reachable(start: str) -> set[str]:
         seen: set[str] = set()
@@ -231,10 +296,25 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
                     stack.append(dep)
         return seen
 
+    def _is_interpreter_entry(m: str) -> bool:
+        """True when *m* is launched by the interpreter, not imported.
+
+        A ``__main__`` guard (``python -m mod`` / ``python path/mod.py``)
+        or a string reference to its file path from another module
+        (subprocess execution) means the module is deliberately wired
+        outside the import graph.
+        """
+        if m in main_guard_modules:
+            return True
+        p = module_to_path[m]
+        return _is_subprocess_consumed(p.relative_to(root), source_texts)
+
     # 1. orphan source modules
     orphans: list[dict[str, Any]] = []
     for m in sorted(module_to_path):
         if m in importers or m.startswith("tests."):
+            continue
+        if _is_interpreter_entry(m):
             continue
         p = module_to_path[m]
         rel = p.relative_to(root)
@@ -256,6 +336,9 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
     weak: list[dict[str, Any]] = []
     for m in sorted(module_to_path):
         if m.startswith(("tests.", "scripts.", "config.")):
+            continue
+        if m in main_guard_modules:
+            # interpreter-launched entry point (python -m), not weak wiring
             continue
         imp = importers.get(m, set())
         if imp and all(i.startswith("tests.") for i in imp):
