@@ -1761,10 +1761,6 @@ EOF
     grep -q 'step ctx DOWN' "$REPO_ROOT/scripts/autotune-model.sh"
 }
 
-@test "autotune: model-autotune.py shares the uniform 10 TPS floor" {
-    grep -q 'MIN_ACCEPTABLE_TPS_DEFAULT = 10.0' "$REPO_ROOT/bin/model-autotune.py"
-}
-
 @test "llm-manager: model status supports json output" {
     run model status --json
     [[ "$output" == \{* ]]

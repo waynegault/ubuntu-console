@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (781 total tests: 579 BATS + 202 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (750 total tests: 578 BATS + 172 Python).
 
 ### Running Tests
 
@@ -667,11 +667,10 @@ function __get_METRIC() {
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
 │   ├── conftest.py                    # Pytest config — BATS lock serialization, VS Code discovery guard
-│   ├── tactical-console.bats          # BATS full suite (380 tests, ~5-15 min)
+│   ├── tactical-console.bats          # BATS full suite (383 tests, ~5-15 min)
 │   ├── tactical-console-fast.bats     # Fast subset (50 tests, ~2 min)
 │   ├── test_bats_bridge.py            # BATS→pytest bridge: exposes each @test as an individual pytest test
 │   ├── test_bats_lock_fixture.py      # Tests for conftest lock fixture
-│   ├── test_model_autotune.py         # Python tests for autotune logic (26 tests)
 │   ├── test_kgraph.py                 # Python tests for kgraph package (88 tests)
 │   ├── test_models.py                 # Pydantic model tests (36 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
@@ -828,7 +827,7 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 50 tests)
-- **Full tests:** `bats tests/tactical-console.bats` (384 BATS unit tests)
+- **Full tests:** `bats tests/tactical-console.bats` (383 BATS unit tests)
 - **Unit tests:** `bats tests/unit/*.bats` (37 tests)
 - **Integration tests:** `bats tests/integration/*.bats` (106 tests)
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety)

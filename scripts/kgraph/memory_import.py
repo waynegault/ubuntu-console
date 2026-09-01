@@ -767,7 +767,7 @@ def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
     # OpenClaw memory registry schema: memories/memory_entities/memory_syntheses
     # tables (distinct from the files/chunks memory-store schema above).
     elif has_table('memories') and has_table('memory_entities'):
-        registry = 'rook' if 'workspace-rook' in os.path.expanduser(dbpath) else 'home'
+        registry = _registry_db_path_label(dbpath)
         _load_from_registry_db(conn, builder, registry=registry, include_all=include_all)
 
     conn.close()
@@ -970,6 +970,15 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
             })
 
     # ── memory_native_chunks → memory:native:{chunk_id} ──
+    # A promoted memory (memories.source_layer='promoted_native') and its raw
+    # native chunk are the same fact in two tables; importing both creates an
+    # unconnected duplicate.  Skip chunks already imported as memories.
+    promoted_contents: set[str] = set()
+    if _has_table('memories'):
+        for r in cur.execute("SELECT content FROM memories"):
+            content = (r['content'] or '').strip()
+            if content:
+                promoted_contents.add(normalize_canonical_name(content))
     if _has_table('memory_native_chunks'):
         for row in cur.execute(
             "SELECT chunk_id, source_path, source_kind, section, line_start, line_end,"
@@ -978,6 +987,9 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
         ):
             d = dict(row)
             if not _filtered_row(d):
+                continue
+            chunk_content = (d.get('content') or '').strip()
+            if chunk_content and normalize_canonical_name(chunk_content) in promoted_contents:
                 continue
             _add_node({
                 'id': f"memory:native:{d['chunk_id']}",
@@ -1140,8 +1152,9 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
             label = _preview_text(candidate)
             if not label:
                 label = f"claim {slot}"[:72]
+            claim_id = f"claim:{mem_id}:{slot}"
             _add_node({
-                'id': f"claim:{mem_id}:{slot}",
+                'id': claim_id,
                 'label': label,
                 'type': 'claim',
                 'origin': 'memory_db',
@@ -1150,6 +1163,13 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
                 'consolidation_op': d.get('consolidation_op'),
                 'source_strength': d.get('source_strength'),
             })
+            # Link the claim to the memory it was consolidated from; the
+            # claim id embeds the memory uuid but the edge makes the
+            # relationship traversable ("who claims what").
+            memory_id = f"memory:{mem_id}"
+            if builder.has_node(memory_id):
+                _add_edge({'from': memory_id, 'to': claim_id, 'label': 'claims',
+                           'confidence': 'EXTRACTED'})
 
     # ── memory_beliefs → belief:{id} ──
     if _has_table('memory_beliefs'):

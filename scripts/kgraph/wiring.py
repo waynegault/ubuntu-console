@@ -160,15 +160,34 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
             package_names.add(".".join(parts[:i]))
     top_packages = {m.split(".")[0] for m in package_names}
 
+    # Modules under an entry dir (e.g. scripts/) are importable by their
+    # name relative to that dir — "kgraph", not "scripts.kgraph" — because
+    # the entry dir sits on sys.path.  Map entry-relative names back to the
+    # path-based module names so imports resolve against the real namespace.
+    entry_relative: dict[str, str] = {}
+    for mod in module_to_path:
+        first, _sep, rest = mod.partition(".")
+        if first in entry_dirs and rest:
+            entry_relative[rest] = mod
+
     def _resolve_local(mod: str) -> str | None:
-        """Resolve a module name to the longest local module/package prefix."""
+        """Resolve a module name to the longest local module/package prefix.
+
+        Consults both the path-based namespace (``scripts.kgraph``) and the
+        entry-relative namespace (``kgraph``) so ``from kgraph.query import
+        query_nodes`` resolves to ``scripts.kgraph.query``.
+        """
         if mod in module_to_path or mod in package_names:
             return mod
+        if mod in entry_relative:
+            return entry_relative[mod]
         prefix = mod
         while "." in prefix:
             prefix = prefix.rsplit(".", 1)[0]
             if prefix in module_to_path or prefix in package_names:
                 return prefix
+            if prefix in entry_relative:
+                return entry_relative[prefix]
         return None
 
     # Real import targets must exist exactly (as a module or namespace
@@ -180,6 +199,8 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
         for mod in mods:
             if mod in module_to_path or mod in package_names:
                 local_dep[m].add(mod)
+            elif mod in entry_relative:
+                local_dep[m].add(entry_relative[mod])
             elif mod.split(".")[0] in top_packages:
                 broken[m].add(mod)
 
@@ -221,11 +242,7 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
             continue
         if rel.parts and rel.parts[0] in entry_dirs:
             continue
-        try:
-            loc = sum(1 for _ in p.open(encoding="utf-8"))
-        except OSError:
-            loc = 0
-        orphans.append({"module": m, "path": rel.as_posix(), "lines": loc})
+        orphans.append({"module": m, "path": rel.as_posix(), "lines": _line_count(p)})
     orphans.sort(key=lambda d: (-d["lines"], d["module"]))
 
     # 2. broken internal imports
@@ -243,12 +260,8 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
         imp = importers.get(m, set())
         if imp and all(i.startswith("tests.") for i in imp):
             p = module_to_path[m]
-            try:
-                loc = sum(1 for _ in p.open(encoding="utf-8"))
-            except OSError:
-                loc = 0
             weak.append({"module": m, "path": p.relative_to(root).as_posix(),
-                         "lines": loc, "importers": sorted(imp)})
+                         "lines": _line_count(p), "importers": sorted(imp)})
     weak.sort(key=lambda d: (-d["lines"], d["module"]))
 
     # 4. unused package facades — package __init__ never imported directly
@@ -259,14 +272,10 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
             continue
         if m in importers:
             continue
-        try:
-            loc = sum(1 for _ in p.open(encoding="utf-8"))
-        except OSError:
-            loc = 0
         submodules = {k for k, v in module_to_path.items()
                       if k.startswith(m + ".") and v.name != "__init__.py"}
         facades.append({"package": m, "path": p.relative_to(root).as_posix(),
-                        "lines": loc, "submodules": len(submodules)})
+                        "lines": _line_count(p), "submodules": len(submodules)})
     facades.sort(key=lambda d: (-d["lines"], d["package"]))
 
     # 5. cross-file call gaps — call to a name defined elsewhere with no

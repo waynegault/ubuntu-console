@@ -190,6 +190,6 @@ jobs:
         run: ruff check scripts/kgraph/
 
       - name: Run Python tests
-        run: python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_model_autotune.py tests/test_untested_modules.py -x --timeout=120 -q
+        run: python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_untested_modules.py -x --timeout=120 -q
 
 # end of file

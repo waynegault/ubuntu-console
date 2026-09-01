@@ -1010,8 +1010,7 @@ fi
 
 # --- Beam search over batch/ubatch at the winning ctx ---
 # Replaces the fixed 128/256/512 ubatch pass. Evaluates a small anchor set,
-# then expands neighbors of the top performers (beam search) — the live-path
-# equivalent of the richer Phase 3 in bin/model-autotune.py. All evals are
+# then expands neighbors of the top performers (beam search). All evals are
 # quick single-sample benches at BEST_CTX; the floor itself is certified
 # later with a filled-cache bench.
 EFFECTIVE_MMAP="auto"

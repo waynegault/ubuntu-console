@@ -86,6 +86,45 @@ class WiringAnalysisTests(unittest.TestCase):
             facades = {f_['path'] for f_ in report['unused_facades']}
             self.assertIn('facade/__init__.py', facades)
 
+    def test_entry_dir_facade_imported_by_relative_name_not_flagged(self):
+        """A package under an entry dir imported via its sys.path name is used."""
+        with tempfile.TemporaryDirectory() as td:
+            build_fixture(td)
+            os.makedirs(os.path.join(td, 'scripts', 'pkg2'))
+            with open(os.path.join(td, 'scripts', 'pkg2', '__init__.py'), 'w', encoding='utf-8') as f:
+                f.write('"""pkg2 facade."""\n')
+            with open(os.path.join(td, 'scripts', 'pkg2', 'mod.py'), 'w', encoding='utf-8') as f:
+                f.write('"""mod."""\n')
+            with open(os.path.join(td, 'tests', 'test_pkg2.py'), 'w', encoding='utf-8') as f:
+                f.write('"""imports the facade by its entry-relative name."""\nimport pkg2\n')
+            report = analyze_wiring(td)
+            facades = {f_['path'] for f_ in report['unused_facades']}
+            self.assertNotIn('scripts/pkg2/__init__.py', facades)
+
+    def test_entry_dir_submodule_and_symbol_imports_resolve(self):
+        """``from pkg2.mod import helper`` resolves via the entry-relative namespace."""
+        with tempfile.TemporaryDirectory() as td:
+            build_fixture(td)
+            os.makedirs(os.path.join(td, 'scripts', 'pkg2'))
+            with open(os.path.join(td, 'scripts', 'pkg2', '__init__.py'), 'w', encoding='utf-8') as f:
+                f.write('"""pkg2 facade."""\n')
+            with open(os.path.join(td, 'scripts', 'pkg2', 'mod.py'), 'w', encoding='utf-8') as f:
+                f.write('"""mod."""\ndef helper() -> int:\n    return 1\n')
+            with open(os.path.join(td, 'scripts', 'consumer.py'), 'w', encoding='utf-8') as f:
+                f.write('"""consumes pkg2 via entry-relative imports."""\n'
+                        'from pkg2 import helper\n'
+                        'from pkg2.mod import helper as h2\n')
+            report = analyze_wiring(td)
+            facades = {f_['path'] for f_ in report['unused_facades']}
+            self.assertNotIn('scripts/pkg2/__init__.py', facades)
+            # both entry-relative imports resolved locally (no broken entries
+            # involving pkg2; the fixture's own pkg.missing stays broken)
+            self.assertFalse(
+                any('pkg2' in b['module'] or 'pkg2' in b['import']
+                    for b in report['broken_imports']),
+                f'pkg2 imports wrongly flagged broken: {report["broken_imports"]}',
+            )
+
     def test_summary_counts(self):
         with tempfile.TemporaryDirectory() as td:
             build_fixture(td)

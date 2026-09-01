@@ -20,7 +20,7 @@ v4 changes over v3: the TPS floor is certified at a **filled KV cache** (a long 
   TPS config for interactive flows. Legacy 20-column registries are accepted by
   every reader and padded to 26 columns by every writer (first autotune save
   converges the file).
-- **`LLM_MIN_TPS`** env var (default **10**, uniform for every model) — minimum acceptable tokens/second, exported in `env.sh`. This is the single source of truth shared by `scripts/autotune-model.sh` (the live mechanism) and `bin/model-autotune.py`. Autotune seeks the highest ctx that sustains this TPS at a filled cache; a ctx that generates below it is treated as swapping/too-slow and autotune downshifts to a smaller ctx to recover TPS (see Phase 4).
+- **`LLM_MIN_TPS`** env var (default **10**, uniform for every model) — minimum acceptable tokens/second, exported in `env.sh`. This is the single source of truth read by `scripts/autotune-model.sh` (the live mechanism). Autotune seeks the highest ctx that sustains this TPS at a filled cache; a ctx that generates below it is treated as swapping/too-slow and autotune downshifts to a smaller ctx to recover TPS (see Phase 4).
 
   **Why 10:** TPS is a speed metric and does not change a model's accuracy directly — accuracy is governed by the model, quant, and whether ctx is large enough for the flow. The floor only affects accuracy *indirectly*, by capping ctx (a higher floor forces a smaller ctx). 10 TPS is fast enough for agentic/interactive flows (~faster than reading speed) yet low enough that the 3–4B models — the sweet spot on a 4 GB GPU — keep ample ctx for context-heavy flows. A 20 TPS floor would starve ctx on those models (accuracy cost); 5 TPS is fine for batch flows but sluggish interactively. The autotuned profiles feed a separate quality benchmark (in the investigator repo) that picks the best model per flow, so each model is profiled at its maximum usable ctx for a fair accuracy comparison.
 
@@ -221,8 +221,7 @@ Each combo runs a full independent Phase 1 + Phase 2 probe. The global best acro
 
 ### Search — beam search over batch/ubatch at the winning ctx
 
-After the combo loop, a **beam search** (live-path port of the richer Phase 3 in
-`bin/model-autotune.py`) refines batch/ubatch at the discovered ctx. It evaluates
+After the combo loop, a **beam search** refines batch/ubatch at the discovered ctx. It evaluates
 a small anchor set, then expands ±1-step neighbors of the top-`LLM_AUTOTUNE_BEAM_WIDTH`
 performers (ranked floor-first, then TPS) for `LLM_AUTOTUNE_BEAM_ROUNDS` rounds —
 all quick single-sample benches, ctx-gated (batch > 1024 needs ctx ≥ 8192,
@@ -339,7 +338,7 @@ The `__llm_autotune_profile_save` function sets `autotuned=yes` in the registry,
 
 `model autotune <N>` and `model autotune all` both route to the same standalone script (`~/ubuntu-console/scripts/autotune-model.sh`). The old `__model_autotune` shell function (which had the `--fit on` bug that caused all the batch-2 failures) is marked deprecated and no longer called. `model bench` also routes to the same script when it needs to autotune an untuned model before benchmarking. There is one live autotune mechanism.
 
-`bin/model-autotune.py` is a parallel implementation kept for experimentation and unit-tested in isolation; it is **not** wired into the CLI. To prevent the two from diverging it shares the same floor policy: it reads the same `LLM_MIN_TPS` env var (default 10, uniform per model) and applies the same downshift-to-recover / honest-profiling semantics described above. If you change the floor policy, change it in `env.sh` (the single source of truth) and both implementations pick it up.
+The former parallel Python implementation (`bin/model-autotune.py`) was removed on 2026-09-01 to eliminate the second, unwired implementation — the shell script is the single source of truth for the whole flow, and `env.sh`'s `LLM_MIN_TPS` is the single source of truth for the floor policy.
 
 ---
 

@@ -1188,3 +1188,37 @@ class TestRegistryAdapter(unittest.TestCase):
             ent_ids = [n.id for n in nodes if n.type == 'entity']
             self.assertIn('entity:person:hal', ent_ids)
             self.assertTrue(any(e.target == 'entity:person:hal' for e in edges))
+
+    def test_claim_linked_to_its_memory(self):
+        """claims nodes get an edge to the memory they were consolidated from."""
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'registry.sqlite')
+            self._make_registry(path)
+            nodes, edges = self._run(path)
+            nids = [n.id for n in nodes]
+            self.assertIn('claim:mem-1:slot-1', nids)
+            self.assertTrue(
+                any(e.source == 'memory:mem-1' and e.target == 'claim:mem-1:slot-1'
+                    and e.label == 'claims' for e in edges),
+                f'no claims edge from memory:mem-1 in {[(e.source, e.target, e.label) for e in edges]}',
+            )
+
+    def test_promoted_native_chunk_not_duplicated(self):
+        """a native chunk whose content matches an imported memory is skipped."""
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'registry.sqlite')
+            self._make_registry(path)
+            conn = sqlite3.connect(path)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO memory_native_chunks VALUES (?,?,?,?,?,?,?,?,?)",
+                ('chunk-dup', '/mem/MEMORY.md', 'memory_md', 'KG', '1', '1',
+                 'NAS SSH access available', 'profile:main', 'active'))
+            conn.commit()
+            conn.close()
+            nodes, _ = self._run(path)
+            nids = [n.id for n in nodes]
+            self.assertIn('memory:mem-1', nids)
+            self.assertNotIn('memory:native:chunk-dup', nids)
+            # unrelated chunks still import
+            self.assertIn('memory:native:chunk-1', nids)

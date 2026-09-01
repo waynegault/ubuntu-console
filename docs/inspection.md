@@ -24,7 +24,6 @@ The following file classes are in-scope for every audit pass:
 - `tests/unit/*.bats` — BATS unit test files
 - `tests/integration/*.bats` — BATS integration test files
 - `tests/test_bats_bridge.py` — Pytest parametrize bridge for BATS suites
-- `tests/test_model_autotune.py` — Python tests for autotune logic
 - `tests/test_kgraph.py` — Python tests for kgraph package
 - `tests/test_models.py` — Pydantic model tests (GraphNode, GraphEdge, Graph, GraphBuilder)
 - `tests/test_untested_modules.py` — Tests for call_flow, update, life_index, benchmark, mcp_server, pr_dashboard, validate
@@ -1587,7 +1586,7 @@ All checks passed — no bare excepts (BLE001), no unused imports (F401), no imp
 
 🔧 Python tests pass
 
-`.venv/bin/python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_model_autotune.py tests/test_untested_modules.py --timeout=60 -q`
+`.venv/bin/python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_untested_modules.py --timeout=60 -q`
 
 173 tests pass, 0 failures
 
@@ -1619,7 +1618,7 @@ Check `.github/workflows/ci.yml`
 
 🔍 Python .venv compliance
 
-Check shebangs in `bin/model-autotune.py` and `scripts/oc-health-check.py`
+Check shebangs in `scripts/oc-health-check.py`
 
 Shebangs point to `.venv/bin/python`, not system `python3`
 

@@ -7,18 +7,12 @@
 [tool.mypy]
 python_version = "3.14"
 files = [
-    "bin/model-autotune.py",
     "scripts/kgraph",
     "scripts/oc-health-check.py",
     "tests",
 ]
 warn_unused_configs = true
 show_error_codes = true
-
-# networkx ships no type stubs; its usage is guarded at runtime.
-[[tool.mypy.overrides]]
-module = ["networkx", "networkx.*"]
-ignore_missing_imports = true
 
 [tool.pyright]
 include = ["bin", "scripts", "tests"]

@@ -490,7 +490,6 @@ extra source commands.
 │   ├── tactical-console.bats          # BATS full suite (497 tests)
 │   ├── tactical-console-fast.bats     # Fast subset (50 tests, ~20s)
 │   ├── test_bats_bridge.py            # Pytest parametrize bridge for all BATS suites
-│   ├── test_model_autotune.py         # Python tests for autotune logic
 │   ├── test_kgraph.py                 # Python tests for kgraph package
 │   ├── audit_report.md                # Test infrastructure audit
 │   ├── unit/                          # BATS unit tests (39 tests)
