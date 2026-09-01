@@ -35,6 +35,7 @@ kgraph --help               # All commands
 kgraph --serve              # Start web viewer
 kgraph --output graph.html  # Generate static HTML
 kgraph --update             # Incremental rebuild
+kgraph --wiring --repo DIR   # Analyze source-tree wiring (orphans, broken imports, weak wiring, facades)
 kgraph --watch              # Watch mode (auto-rebuild on file changes)
 kgraph --mcp                # MCP server for LLM tool-call access
 kgraph --validate file.json # Validate graph JSON
@@ -54,6 +55,7 @@ kgraph --uninstall-hook     # Remove git hook
 | `kgraph-pr-dashboard`| PR dashboard generator    |
 | `kgraph-benchmark`   | Token-reduction benchmark |
 | `kgraph-audit`       | Security audit            |
+| `kgraph-wiring`      | Source-tree wiring analysis  |
 
 ## Dependencies
 
