@@ -28,7 +28,7 @@ import time
 import urllib.request
 import urllib.error
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO, TypedDict
 
 # ── Constants ──────────────────────────────────────────────────────────
 
@@ -64,7 +64,14 @@ BURN_PROMPT = (
 )
 
 # Conservative params for ctx discovery (smallest VRAM footprint)
-CONSERVATIVE = dict(batch=512, ubatch=128, parallel=1, mmap="off")
+CONSERVATIVE: dict[str, Any] = dict(batch=512, ubatch=128, parallel=1, mmap="off")
+
+
+class _TunedRecord(TypedDict):
+    """One param-tuning candidate's scorecard."""
+    combo: dict[str, int]
+    score: float
+    tps: float
 
 OOM_RE = re.compile(r"out of memory|oom|cuda.*(?:failed|error)|failed to allocate|cannot allocate",
                      re.IGNORECASE)
@@ -505,7 +512,7 @@ def test_config(model_path: str, ctx: int, batch: int, ubatch: int,
                 pass
         return ("load_fail", [])
 
-    tps_samples = []
+    tps_samples: list[float] = []
     for i in range(max(1, int(samples))):
         tps = run_burn(port, warmup=(warmup and i == 0), max_tokens=burn_tokens)
         if tps is None:
@@ -1002,7 +1009,7 @@ def main() -> None:
             return (dict(CONSERVATIVE), 0.0, 0, 0, [])
 
         seen: set[tuple[int, int, int]] = set()
-        records: dict[tuple[int, int, int], dict[str, float | dict[str, int]]] = {}
+        records: dict[tuple[int, int, int], _TunedRecord] = {}
         load_fail_local = 0
         ok_local = 0
 

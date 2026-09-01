@@ -9,6 +9,7 @@ require a running llama-server and GPU.
 
 import importlib.util
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -80,13 +81,15 @@ class EstimateVramCeilingTests(unittest.TestCase):
 class OomRegexTests(unittest.TestCase):
     """Tests for the OOM_RE pattern used to detect OOM in server logs."""
 
+    pattern: re.Pattern[str]  # set in setUpClass
+
     @classmethod
     def setUpClass(cls):
         cls.mod = load_module()
-        cls.re = cls.mod.OOM_RE
+        cls.pattern = cls.mod.OOM_RE
 
     def matches(self, text: str) -> bool:
-        return bool(self.re.search(text))
+        return bool(self.pattern.search(text))
 
     def test_out_of_memory(self):
         self.assertTrue(self.matches("out of memory"))

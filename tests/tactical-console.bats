@@ -530,9 +530,11 @@ EOF
     [[ "$LLAMA_CPU_THREADS" -gt 0 ]]
 }
 
-@test "constants: LLAMA_CTX_SIZE is a positive integer" {
-    [[ "$LLAMA_CTX_SIZE" =~ ^[0-9]+$ ]]
-    [[ "$LLAMA_CTX_SIZE" -gt 0 ]]
+@test "constants: LLAMA_CTX_SIZE has no hardwired default (registry-driven)" {
+    # AUTOTUNE-002: per-model ctx comes from the model registry
+    # (~/.llm/models.conf); there is deliberately NO LLAMA_CTX_SIZE default.
+    # Assert the invariant so a regression that re-adds a default is caught.
+    [[ -z "${LLAMA_CTX_SIZE:-}" ]]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1848,8 +1850,12 @@ EOF
 
 @test "oc: oc restart handles openclaw presence" {
     run oc restart
-    if command -v openclaw >/dev/null 2>&1; then
-        [[ "$status" -eq 0 ]]
+    if command -v openclaw >/dev/null 2>&1 && [[ "${__TAC_OPENCLAW_OK:-0}" == "1" ]]; then
+        # openclaw detected: restart takes the gateway path, not the
+        # "not installed" error path. The gateway start itself may fail in
+        # the sandboxed test HOME — openclaw refuses service management for
+        # a non-account HOME — so only the dispatch contract is asserted.
+        [[ "$output" != *"NOT INSTALLED"* ]]
     else
         [[ "$status" -eq 1 ]]
     fi

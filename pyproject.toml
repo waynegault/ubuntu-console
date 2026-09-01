@@ -1,0 +1,31 @@
+# Repository-wide tool configuration for mypy and pyright.
+# Python sources live under bin/, scripts/ (kgraph package + helpers), and tests/.
+# Type-check everything with:
+#   .venv/bin/python3 -m mypy            (or: mypy)
+#   .venv/bin/pyright
+
+[tool.mypy]
+python_version = "3.14"
+files = [
+    "bin/model-autotune.py",
+    "scripts/kgraph",
+    "scripts/oc-health-check.py",
+    "tests",
+]
+warn_unused_configs = true
+show_error_codes = true
+
+# networkx ships no type stubs; its usage is guarded at runtime.
+[[tool.mypy.overrides]]
+module = ["networkx", "networkx.*"]
+ignore_missing_imports = true
+
+[tool.pyright]
+include = ["bin", "scripts", "tests"]
+exclude = ["**/__pycache__", "**/frontend-g6/**", "scripts/build/**"]
+pythonVersion = "3.14"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"
+# tests/ import kgraph via a runtime sys.path insertion pyright cannot see.
+extraPaths = ["scripts"]

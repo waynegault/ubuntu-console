@@ -31,7 +31,7 @@ class TestGraphNode:
         assert node.content_preview == ""
 
     def test_integer_id_coerced_to_str(self):
-        node = GraphNode(id=42, label="Numeric")
+        node = GraphNode.model_validate({"id": 42, "label": "Numeric"})
         assert node.id == "42"
         assert isinstance(node.id, str)
 
@@ -51,13 +51,14 @@ class TestGraphNode:
         assert node.type_confidence == 0.96
 
     def test_extra_fields_allowed(self):
-        node = GraphNode(id="n1", label="Test", degree=5, importance=10)
-        assert node.degree == 5
-        assert node.importance == 10
+        node = GraphNode.model_validate({"id": "n1", "label": "Test", "degree": 5, "importance": 10})
+        extra = node.model_extra or {}
+        assert extra.get("degree") == 5
+        assert extra.get("importance") == 10
 
     def test_missing_id_raises(self):
         with pytest.raises(ValidationError):
-            GraphNode(label="No ID")
+            GraphNode.model_validate({"label": "No ID"})
 
     def test_missing_label_defaults_empty(self):
         node = GraphNode(id="n1")
@@ -111,7 +112,7 @@ class TestGraphEdge:
         assert edge.origin == "ast"
 
     def test_confidence_defaults_to_extracted(self):
-        edge = GraphEdge(source="a", target="b", confidence="EXTRACTED")
+        edge = GraphEdge.model_validate({"source": "a", "target": "b", "confidence": "EXTRACTED"})
         assert edge.confidence == ConfidenceLevel.EXTRACTED
 
     def test_confidence_none_default(self):
@@ -123,16 +124,16 @@ class TestGraphEdge:
         assert edge.semantic_score == 0.85
 
     def test_extra_fields_allowed(self):
-        edge = GraphEdge(source="a", target="b", _strength=0.9)
-        assert edge._strength == 0.9
+        edge = GraphEdge.model_validate({"source": "a", "target": "b", "_strength": 0.9})
+        assert (edge.model_extra or {}).get("_strength") == 0.9
 
     def test_missing_source_raises(self):
         with pytest.raises(ValidationError):
-            GraphEdge(target="b")
+            GraphEdge.model_validate({"target": "b"})
 
     def test_missing_target_raises(self):
         with pytest.raises(ValidationError):
-            GraphEdge(source="a")
+            GraphEdge.model_validate({"source": "a"})
 
 
 # ── Graph ──────────────────────────────────────────────────────────────
@@ -166,7 +167,9 @@ class TestGraph:
             GraphNode(id="a", label="A"),
             GraphNode(id="b", label="B"),
         ])
-        assert g.node_by_id("a").label == "A"
+        found = g.node_by_id("a")
+        assert found is not None
+        assert found.label == "A"
         assert g.node_by_id("z") is None
 
     def test_node_ids_returns_all_ids(self):

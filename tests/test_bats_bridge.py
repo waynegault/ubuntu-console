@@ -15,7 +15,7 @@ BATS_EXECUTABLE = "bats"
 
 # ── BATS suite definitions ─────────────────────────────────────────────────
 # (glob_pattern, marker_or_marks, timeout_s)
-_BATS_SUITE_DEFS: list[tuple[str, pytest.MarkDecorator | pytest.Mark, int]] = [
+_BATS_SUITE_DEFS: list[tuple[str, pytest.MarkDecorator, int]] = [
     ("tests/unit/*.bats",                 pytest.mark.bats_unit,         120),
     ("tests/tactical-console.bats",        pytest.mark.bats_full,       900),
     ("tests/tactical-console-fast.bats",   pytest.mark.bats_fast,       180),
@@ -272,7 +272,7 @@ def _make_test(stem: str, test_name: str, timeout_s: int):
     return _test
 
 
-def _get_marker_for_timeout(timeout_s: int) -> pytest.MarkDecorator | pytest.Mark:
+def _get_marker_for_timeout(timeout_s: int) -> pytest.MarkDecorator:
     for pattern, marker, to in _BATS_SUITE_DEFS:
         if to == timeout_s:
             return marker

@@ -19,6 +19,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from typing import Any
 
 
 def _check_tcp_port(host: str, port: int, timeout: float = 1.5) -> bool:
@@ -235,7 +236,7 @@ def _symbol(status: str) -> str:
     }.get(status, "[FAIL]")
 
 
-def print_human(report: dict[str, object], verbose: bool = False) -> None:
+def print_human(report: dict[str, Any], verbose: bool = False) -> None:
     summary = str(report.get("summary", "fail")).upper()
     print(f"OpenClaw Health Summary: {summary}")
     print("")

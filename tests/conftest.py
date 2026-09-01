@@ -209,14 +209,14 @@ def _save_durations(durations: dict[str, list[float]]) -> None:
 
 def _collect_duration(item: pytest.Item, duration_s: float) -> None:
     """Record a test duration and flag regressions."""
-    key = f"{item.nodeid.split('::')[0]}::{item.originalname or item.name}"
+    key = f"{item.nodeid.split('::')[0]}::{getattr(item, 'originalname', None) or item.name}"
     _DURATIONS.setdefault(key, []).append(duration_s)
 
 
 def _check_regression(item: pytest.Item, duration_s: float) -> str | None:
     """Return a warning string if *duration_s* is a significant regression."""
     baselines = _load_durations()
-    key = f"{item.nodeid.split('::')[0]}::{item.originalname or item.name}"
+    key = f"{item.nodeid.split('::')[0]}::{getattr(item, 'originalname', None) or item.name}"
     history = baselines.get(key)
     if not history or len(history) < 2:
         return None
@@ -233,7 +233,7 @@ def _check_regression(item: pytest.Item, duration_s: float) -> str | None:
 
 
 @pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_protocol(item: pytest.Item) -> object | None:
+def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, None, None]:
     """Wrap each test to capture its wall-clock duration."""
     import time as _time
     start = _time.monotonic()
