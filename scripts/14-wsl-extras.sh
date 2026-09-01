@@ -3,7 +3,7 @@
 # Module: 14-wsl-extras
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 6
 # 14. WSL EXTRAS & STARTUP HELPERS
 # -----------------------------------------------------------------------------
 # Purpose: Move WSL/X11 and OpenClaw startup helpers out of the thin loader.
@@ -12,34 +12,13 @@
 # and guarded so it won't break interactive shells.
 # @modular-section: wsl-extras
 # @depends: constants
-# @exports: (none — side-effects only: loads completions, sets up X11/WSL env)
+# @exports: (none — side-effects only: sets up X11/WSL env)
 
 # Interactive guard — many modules are sourced only for interactive shells
 case $- in
     *i*) ;;
       *) return ;;
 esac
-
-# Source OpenClaw completions if they exist
-if [[ -f "$HOME/.openclaw/completions/openclaw.bash" ]]; then
-    if [[ -n "${DEBUG_TAC_STARTUP:-}" ]]; then
-        _t0=$(date +%s%N 2>/dev/null || echo 0)
-        printf '14: sourcing openclaw completions... ' >&2
-    fi
-    # Use a guarded source to avoid errors when the file is missing.
-    # shellcheck disable=SC1091
-    source "$HOME/.openclaw/completions/openclaw.bash" 2>/dev/null || true
-    if [[ -n "${DEBUG_TAC_STARTUP:-}" ]]; then
-        _t1=$(date +%s%N 2>/dev/null || echo 0)
-        if [[ "$_t0" != "0" && "$_t1" != "0" ]]; then
-            _ms=$(( (_t1 - _t0) / 1000000 ))
-            printf 'done (%d ms)\n' "$_ms" >&2
-        else
-            printf 'done\n' >&2
-        fi
-        unset _t0 _t1 _ms
-    fi
-fi
 
 # Optional helper: load credential vault exports if present (the loader will perform
 # safe decryption and export only valid variable names). This keeps

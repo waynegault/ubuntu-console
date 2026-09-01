@@ -310,7 +310,7 @@ uv tool install ./scripts --extra ast
 | `~/.openclaw/openclaw.json` | Global configuration |
 | `~/.openclaw/bash-errors.log` | ERR trap log |
 | `~/.openclaw/maintenance_cooldowns.txt` | Cooldown timestamps |
-| `~/.openclaw/completions/openclaw.bash` | Bash completions |
+| `scripts/completions/openclaw.bash` | Bash completions (repo-versioned, generated via `tools/sync-openclaw-completion.sh`) |
 | `~/.openclaw/.env.bridge` | Generated env bridge consumed by the gateway service |
 | `~/.openclaw/kgraph.json` | JSON mirror of the editable knowledge graph |
 | `~/.openclaw/kgraph.sqlite` | Primary persisted SQLite store for `oc g` |

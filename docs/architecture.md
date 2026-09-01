@@ -77,8 +77,8 @@ by either loader.
 | §11e | `scripts/11e-llm-model.sh` | 3173 | Model commands: scan, list, use (7 helpers), bench, download, archive, delete, doctor |
 | §11f | `scripts/11f-llm-runtime.sh` | 681 | Runtime: `serve`, `burn`, `local_chat`, SSE streaming, explain, `wtf_repl` |
 | §12 | `scripts/12-dashboard-help.sh` | 695 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` (OpenClaw status) |
-| §13 | `scripts/13-init.sh` | 155 | `mkdir -p` (OpenClaw-aware), completions, loopback fix, bridge call, exit trap (chained) |
-| §14 | `scripts/14-wsl-extras.sh` | 138 | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
+| §13 | `scripts/13-init.sh` | 183 | `mkdir -p` (OpenClaw-aware), completions, loopback fix, bridge call, exit trap (chained) |
+| §14 | `scripts/14-wsl-extras.sh` | 119 | WSL/X11 startup helpers, vault env loading |
 | §15 | `scripts/15-model-recommender.sh` | 195 | AI model recommendations by use case (`bc` fallback for integer math) |
 
 **Utility scripts** (not profile modules — never sourced by the loader):
@@ -443,7 +443,7 @@ extra source commands.
 │   ├── 11f-llm-runtime.sh           #   Serve, burn, chat, SSE streaming
 │   ├── 12-dashboard-help.sh           #   Dashboard ('m') and Help ('h'), bashrc_diagnose
 │   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
-│   ├── 14-wsl-extras.sh               #   WSL/X11 helpers, completions, vault env
+│   ├── 14-wsl-extras.sh               #   WSL/X11 helpers, vault env
 │   ├── 15-model-recommender.sh        #   AI model recommendations by use case
 │   └── kgraph/                        #   Knowledge graph Python package (24 modules)
 │       ├── cli.py                      #     CLI entry point (all --commands)

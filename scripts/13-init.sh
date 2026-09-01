@@ -3,7 +3,7 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================
@@ -36,7 +36,10 @@ fi
 
 # Load completions safely (only once — guarded with -f check)
 [[ -f "$BASH_COMPLETION_SCRIPT" ]] && . "$BASH_COMPLETION_SCRIPT"
-[[ -f "$OC_ROOT/completions/openclaw.bash" ]] && source "$OC_ROOT/completions/openclaw.bash"
+# OpenClaw completions — generated file versioned in the repo; regenerate with
+# tools/sync-openclaw-completion.sh after `openclaw update`.
+[[ -f "$TACTICAL_REPO_ROOT/scripts/completions/openclaw.bash" ]] \
+    && source "$TACTICAL_REPO_ROOT/scripts/completions/openclaw.bash"
 
 # Grok CLI — PATH + completions (moved here from ~/.bashrc to keep the
 # loader thin; guarded the same way the installer generated it).

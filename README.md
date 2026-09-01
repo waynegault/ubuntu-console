@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (750 total tests: 562 BATS + 188 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (770 total tests: 579 BATS + 191 Python).
 
 ### Running Tests
 
@@ -547,7 +547,7 @@ Never use PascalCase or camelCase for function names.
 
 ### Version System
 
-`TACTICAL_PROFILE_VERSION` is auto-computed: `_TAC_LOADER_VERSION . sum(all module versions)`. Each module has a `# Module Version: N` comment that is incremented on any change. The loader is currently v7.
+`TACTICAL_PROFILE_VERSION` is auto-computed: `_TAC_LOADER_VERSION . sum(all module versions)`. Each module has a `# Module Version: N` comment that is incremented on any change. The loader is currently v8.
 
 ### Telemetry Caching
 
@@ -673,8 +673,8 @@ function __get_METRIC() {
 │   ├── test_kgraph.py                 # Python tests for kgraph package (88 tests)
 │   ├── test_models.py                 # Pydantic model tests (36 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (12 tests: 2+2+8)
-│   └── integration/                   # BATS integration tests (110 tests: 14+42+10+16+2+26)
+│   ├── unit/                          # BATS unit tests (37 tests: 4+2+8+5+5+6+7)
+│   └── integration/                   # BATS integration tests (106 tests: 14+42+10+13+1+26)
 └── systemd/
     ├── llama-watchdog.service
     └── llama-watchdog.timer
@@ -826,9 +826,9 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 50 tests)
-- **Full tests:** `bats tests/tactical-console.bats` (387 BATS unit tests)
-- **Unit tests:** `bats tests/unit/*.bats` (14 tests)
-- **Integration tests:** `bats tests/integration/*.bats` (109 tests)
+- **Full tests:** `bats tests/tactical-console.bats` (384 BATS unit tests)
+- **Unit tests:** `bats tests/unit/*.bats` (37 tests)
+- **Integration tests:** `bats tests/integration/*.bats` (106 tests)
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety)
 - **Docs sync:** `tools/docs-sync-check.sh` (README drift guard — fails CI on stale module counts, versions, or test totals)
 - **Nightly:** full suite runs nightly via `.github/workflows/nightly.yml` (scheduled + manual dispatch)
