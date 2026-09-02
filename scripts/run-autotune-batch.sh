@@ -46,7 +46,12 @@ echo ""
 drain_vram() {
     local before after
     before=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}')
-    pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
+    # CUDA-scoped llama kill — never the Xe fleet / persistent units.
+    if declare -f __llm_kill_cuda_llama_servers &>/dev/null; then
+        __llm_kill_cuda_llama_servers || true
+    else
+        echo "WARN: __llm_kill_cuda_llama_servers not loaded — skipping llama cleanup" >&2
+    fi
     local waited=0
     while [ "$waited" -lt 15 ]; do
         sleep 1

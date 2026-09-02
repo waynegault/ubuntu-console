@@ -139,10 +139,16 @@ KV_QUANTS=${LLM_AUTOTUNE_KV_QUANTS:-"q8_0/q8_0 q4_0/q4_0"}
 # CUDA process silently shrinks BUDGET and collapses START_CTX to MIN_CTX
 # (2026-08-27: Llama-3.2-3B certified 4096 while a parallel run held the
 # card — the machine had headroom for far more once VRAM was fully cleared).
-# Kill llama-server + stale GPU processes + WSL2 ghost-VRAM double-kill
-# BEFORE the baseline read, then verify free VRAM against the card total.
+# Kill CUDA-held llama.cpp servers (the Xe fleet and the persistent llama
+# systemd units are structurally spared — they hold no CUDA VRAM) + stale
+# GPU processes + WSL2 ghost-VRAM double-kill BEFORE the baseline read, then
+# verify free VRAM against the card total.
 # ---------------------------------------------------------------------------
-pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
+if declare -f __llm_kill_cuda_llama_servers &>/dev/null; then
+    __llm_kill_cuda_llama_servers || true
+else
+    echo "WARN: __llm_kill_cuda_llama_servers not loaded — skipping llama cleanup (a name-based pkill would evict the Xe fleet)" >&2
+fi
 # The OpenClaw gateway's local embedding workers each hold ~430 MiB VRAM
 # (embeddinggemma-300m on CUDA); the gateway respawns them on demand, so
 # killing them here is safe and self-healing. Bracket the pattern so
@@ -170,9 +176,9 @@ FREE_VRAM=${FREE_VRAM:-3965}
 # large gap means a foreign process still holds the GPU — a certification
 # against that baseline would be untrustworthy, so fail loudly instead.
 # Tolerance is generous (default 800 MiB) because the guard runs AFTER
-# pkill llama-server — a surviving hold is either ghost VRAM or a stable
-# non-llama service (e.g. the OpenClaw memory embedding worker, ~430 MiB on
-# this box, 2026-08-28) that FREE_VRAM reflects deterministically and the
+# the CUDA-scoped llama cleanup — a surviving hold is either ghost VRAM or a
+# stable non-llama service (e.g. the OpenClaw memory embedding worker, ~430 MiB
+# on this box, 2026-08-28) that FREE_VRAM reflects deterministically and the
 # KV-math BUDGET accounts for.  A concurrent autotune/serving server would
 # hold >1 GB, still caught.
 BASELINE_GAP_MAX=${LLM_AUTOTUNE_BASELINE_GAP_MAX:-800}
@@ -358,12 +364,13 @@ cleanup_gpu() {
     local max_retries="${1:-1}"
     local attempt=0
     while [[ $attempt -lt $max_retries ]]; do
+        # CUDA-scoped llama kill — never the Xe fleet / persistent units.
+        if declare -f __llm_kill_cuda_llama_servers &>/dev/null; then
+            __llm_kill_cuda_llama_servers || true
+        fi
+        sleep 1
         if declare -f __gpu_clear_stale_processes &>/dev/null; then
-            pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
-            sleep 1
             __gpu_clear_stale_processes
-        else
-            pkill -9 -u "$(id -un)" -x llama-server 2>/dev/null || true
         fi
 
         # WSL2 ghost-VRAM workaround: kill nvidia-smi to recycle the CUDA

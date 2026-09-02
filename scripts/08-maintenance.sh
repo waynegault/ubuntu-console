@@ -922,27 +922,72 @@ function __up_stale_processes() {
     # Per-PID check: only kill processes with NO active socket listener on LLM_PORT.
     # Use /proc/PID/fd to check real socket bind, not connect-timeout (which
     # fails when llama-server is busy processing — not orphaned).
+    #
+    # Never reap systemd-managed llama units (fleet Xe :18081, embed :18080,
+    # NVIDIA :18083, phi4 :18082) — they share the llama-server process name
+    # but are gateway-managed and self-healing, and killing them here restarts
+    # the restart-storm cycle.
     local stale_pids
     stale_pids=$(pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null)
     local stale_count=0
+    local _unit _protect_pid _pid _p _skip _has_port _fdlink
+    local -a _protect=()
+    for _unit in llama-server.service llama-embed-server.service \
+                 llama-server-nvidia.service llama-server-phi4.service
+    do
+        _protect_pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
+        if [[ "$_protect_pid" =~ ^[0-9]+$ ]] && (( _protect_pid > 0 ))
+        then
+            _protect+=("$_protect_pid")
+        fi
+    done
     if [[ -n "$stale_pids" ]]
     then
         # Filter out PIDs that still own the port socket (busy processing, not orphaned)
         local true_orphans=""
         while IFS= read -r pid; do
-            # shellcheck disable=SC2010  # ls -l needed to resolve symlink targets, not filenames
-            if [[ -d "/proc/$pid/fd" ]] && ls -l "/proc/$pid/fd/" 2>/dev/null | grep -q ":$LLM_PORT"; then
-                :  # port socket active — not orphaned
-            else
-                true_orphans="$true_orphans $pid"
+            _skip=0
+            for _p in "${_protect[@]:-}"
+            do
+                [[ "$pid" == "$_p" ]] && { _skip=1; break; }
+            done
+            (( _skip == 1 )) && continue
+            # Socket check via readlink: still owns the LLM_PORT socket →
+            # busy processing, not orphaned.
+            _has_port=0
+            if [[ -d "/proc/$pid/fd" ]]
+            then
+                for _fdlink in "/proc/$pid/fd/"*
+                do
+                    [[ -e "$_fdlink" ]] || continue
+                    if readlink "$_fdlink" 2>/dev/null | grep -q ":$LLM_PORT"
+                    then
+                        _has_port=1
+                        break
+                    fi
+                done
             fi
+            (( _has_port == 0 )) && true_orphans="$true_orphans $pid"
         done <<< "$stale_pids"
 
         true_orphans=$(echo "$true_orphans" | xargs)
         if [[ -n "$true_orphans" ]]
         then
             stale_count=$(echo "$true_orphans" | wc -w)
-            pkill -u "$USER" -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null || true
+            # Per-PID TERM/KILL — a name-based pkill would also evict the
+            # systemd-managed llama units filtered out above.
+            for _pid in $true_orphans
+            do
+                kill -TERM "$_pid" 2>/dev/null || true
+            done
+            sleep 1
+            for _pid in $true_orphans
+            do
+                if kill -0 "$_pid" 2>/dev/null
+                then
+                    kill -KILL "$_pid" 2>/dev/null || true
+                fi
+            done
             rm -f "$ACTIVE_LLM_FILE"
             __tac_line "[17/20] Stale Processes" "[$stale_count ORPHAN(S) KILLED]" "$C_Warning"
         else

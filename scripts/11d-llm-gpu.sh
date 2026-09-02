@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -10,7 +10,7 @@
 # @depends: constants, design-tokens, ui-engine, hooks, telemetry, llm-server
 # @exports: wake, gpu-status, gpu-check, __gguf_metadata, __calc_gpu_layers,
 #   __calc_ctx_size, __calc_threads, __quant_label, __tac_cleanup_stale_locks,
-#   __gpu_clear_stale_processes
+#   __gpu_clear_stale_processes, __llm_kill_cuda_llama_servers
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
@@ -208,6 +208,85 @@ function __gpu_clear_stale_processes() {
     done < <(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null || true)
     if (( count > 0 )); then
         __tac_info "VRAM" "killed ${count} stale GPU process(es)" "$C_Warning"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __llm_kill_cuda_llama_servers — Kill ONLY CUDA-held llama.cpp processes.
+#
+# Two-card machine: the Xe fleet server (llama-server.service, :18081) and
+# the embed server (llama-embed-server.service, :18080) run the SAME
+# llama-server binary on the Intel Xe via OpenCL as every CUDA server.  A
+# name-based pkill (pkill -x/-f llama-server) therefore collateral-kills the
+# Xe fleet even though it holds NO CUDA VRAM.  This helper kills only
+# llama.cpp processes that hold a CUDA compute context
+# (nvidia-smi --query-compute-apps) and, as a second guard, excludes the
+# MainPIDs of the persistent llama systemd units (a live NVIDIA unit must
+# never be evicted by an autotune/bench cleanup either).
+#
+# Prints nothing on stdout (bench harnesses parse it); warnings go to stderr.
+# ---------------------------------------------------------------------------
+function __llm_kill_cuda_llama_servers() {
+    local _unit _svc_pid _pid _comm _smi _skip _p
+    local -a _protected=() _cuda_pids=() _kill_pids=()
+
+    # Protected: MainPIDs of the persistent llama systemd units.
+    for _unit in llama-server.service llama-embed-server.service \
+                 llama-server-nvidia.service llama-server-phi4.service
+    do
+        _svc_pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
+        if [[ "$_svc_pid" =~ ^[0-9]+$ ]] && (( _svc_pid > 0 ))
+        then
+            _protected+=("$_svc_pid")
+        fi
+    done
+
+    # CUDA attribution: only llama.cpp processes holding a CUDA compute
+    # context are candidates.  When nvidia-smi cannot attribute (absent or
+    # probe failure) we kill NOTHING rather than fall back to a name sweep —
+    # a name sweep would reintroduce the Xe collateral this helper exists to
+    # prevent.
+    _smi=$(command -v nvidia-smi 2>/dev/null || true)
+    if [[ -z "$_smi" ]]
+    then
+        echo "[llm-kill] nvidia-smi unavailable — skipping llama cleanup (no CUDA attribution)" >&2
+        return 0
+    fi
+    while read -r _pid
+    do
+        [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        _comm=$(cat "/proc/$_pid/comm" 2>/dev/null || echo "")
+        [[ "$_comm" == llama* ]] || continue
+        _cuda_pids+=("$_pid")
+    done < <("$_smi" --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null || true)
+
+    if [[ ${#_cuda_pids[@]} -eq 0 ]]
+    then
+        return 0
+    fi
+
+    for _pid in "${_cuda_pids[@]}"
+    do
+        _skip=0
+        for _p in "${_protected[@]:-}"
+        do
+            [[ "$_pid" == "$_p" ]] && { _skip=1; break; }
+        done
+        (( _skip == 0 )) && _kill_pids+=("$_pid")
+    done
+
+    if [[ ${#_kill_pids[@]} -gt 0 ]]
+    then
+        echo "[llm-kill] killing CUDA llama-server PIDs: ${_kill_pids[*]}" >&2
+        kill -TERM "${_kill_pids[@]}" 2>/dev/null || true
+        sleep 1
+        for _pid in "${_kill_pids[@]}"
+        do
+            if kill -0 "$_pid" 2>/dev/null
+            then
+                kill -KILL "$_pid" 2>/dev/null || true
+            fi
+        done
     fi
 }
 

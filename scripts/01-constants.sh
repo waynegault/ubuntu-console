@@ -80,7 +80,7 @@ else
 fi
 export LLM_SERVER_MODULE="${LLM_SERVER_MODULE:-llama_cpp.server}"
 export LLAMA_CPP_PYTHON_VERSION="${LLAMA_CPP_PYTHON_VERSION:-0.3.23}"
-export LLM_SERVER_PROC_PATTERN="${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}"
+export LLM_SERVER_PROC_PATTERN="${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server|llama-xe|llama-embed|llama-nv|llama-phi4|llama-bench}"
 # Quantization priority guide — editable config controlling download warnings.
 # See ~/ubuntu-console/config/quant-guide.conf for rating/description of each quant.
 export QUANT_GUIDE="$TACTICAL_REPO_ROOT/config/quant-guide.conf"
