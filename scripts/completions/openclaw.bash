@@ -9,7 +9,7 @@ _openclaw_completion() {
     local choice_flag choice_prefix choice_completion_prefix short_group short_flag short_index
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
-    opts="completion setup crestodian onboard configure config backup database migrate doctor triage dashboard reset uninstall message mcp transcripts agent agents audit status health sessions tasks acp gateway daemon logs system models promos telemetry infer capability approvals exec-approvals exec-policy nodes devices users node connect worker sandbox fleet worktrees attach resume tui terminal chat cron automations dns docs proxy hooks webhooks qr clawbot pairing plugins channels directory security secrets skills update browser file-transfer memory workboard -V --version --container --dev --profile --log-level --no-color"
+    opts="acp agent agents approvals exec-approvals attach audit backup browser channels clawbot completion config configure connect cron automations daemon dashboard database devices directory dns docs doctor exec-policy file-transfer fleet gateway health hooks infer capability logs mcp memory message migrate models node nodes onboard pairing plugins promos proxy qr reset resume sandbox secrets security sessions setup skills status system tasks telemetry transcripts triage tui terminal chat uninstall update users webhooks workboard worker worktrees -V --version --container --dev --profile --log-level --no-color"
     value_options="--container --profile --log-level"
     command_path=""
 
@@ -30,7 +30,7 @@ _openclaw_completion() {
         fi
 
         case "${candidate_path}" in
-          "completion"|"setup"|"crestodian"|"onboard"|"onboard recommendations"|"onboard recommendations acknowledge"|"onboard recommendations refresh"|"configure"|"config"|"config get"|"config set"|"config patch"|"config unset"|"config file"|"config schema"|"config validate"|"backup"|"backup create"|"backup verify"|"backup restore"|"backup sqlite"|"backup sqlite create"|"backup sqlite list"|"backup sqlite verify"|"backup sqlite restore"|"backup git"|"backup git init"|"backup git create"|"backup git log"|"backup git verify"|"backup git restore"|"backup enable"|"backup disable"|"database"|"database preflight"|"database ownership"|"database ownership status"|"database ownership claim"|"migrate"|"migrate list"|"migrate plan"|"migrate apply"|"doctor"|"triage"|"dashboard"|"reset"|"uninstall"|"message"|"message send"|"message broadcast"|"message poll"|"message react"|"message reactions"|"message read"|"message edit"|"message delete"|"message pin"|"message unpin"|"message pins"|"message permissions"|"message search"|"message thread"|"message thread create"|"message thread list"|"message thread reply"|"message emoji"|"message emoji list"|"message emoji upload"|"message sticker"|"message sticker send"|"message sticker upload"|"message role"|"message role info"|"message role add"|"message role remove"|"message channel"|"message channel info"|"message channel list"|"message member"|"message member info"|"message voice"|"message voice status"|"message event"|"message event list"|"message event create"|"message timeout"|"message kick"|"message ban"|"mcp"|"mcp serve"|"mcp list"|"mcp show"|"mcp status"|"mcp probe"|"mcp doctor"|"mcp add"|"mcp set"|"mcp tools"|"mcp configure"|"mcp login"|"mcp logout"|"mcp reload"|"mcp unset"|"transcripts"|"transcripts list"|"transcripts show"|"transcripts path"|"agent"|"agent exec"|"agents"|"agents list"|"agents bindings"|"agents bind"|"agents unbind"|"agents add"|"agents set-identity"|"agents delete"|"audit"|"status"|"health"|"sessions"|"sessions list"|"sessions cleanup"|"sessions tail"|"sessions export-trajectory"|"sessions archive"|"sessions delete"|"sessions compact"|"tasks"|"tasks list"|"tasks audit"|"tasks maintenance"|"tasks show"|"tasks notify"|"tasks cancel"|"tasks retry"|"tasks dismiss"|"tasks flow"|"tasks flow list"|"tasks flow show"|"tasks flow cancel"|"acp"|"acp client"|"gateway"|"gateway run"|"gateway status"|"gateway install"|"gateway uninstall"|"gateway start"|"gateway stop"|"gateway restart"|"gateway restart-handoff"|"gateway restart-handoff capabilities"|"gateway restart-handoff consume"|"gateway auth-token"|"gateway call"|"gateway suspend"|"gateway resume"|"gateway usage-cost"|"gateway health"|"gateway stability"|"gateway diagnostics"|"gateway diagnostics export"|"gateway probe"|"gateway discover"|"daemon"|"daemon status"|"daemon install"|"daemon uninstall"|"daemon start"|"daemon stop"|"daemon restart"|"logs"|"system"|"system event"|"system heartbeat"|"system heartbeat last"|"system heartbeat enable"|"system heartbeat disable"|"system presence"|"models"|"models list"|"models status"|"models refresh"|"models set"|"models set-image"|"models aliases"|"models aliases list"|"models aliases add"|"models aliases remove"|"models fallbacks"|"models fallbacks list"|"models fallbacks add"|"models fallbacks remove"|"models fallbacks clear"|"models image-fallbacks"|"models image-fallbacks list"|"models image-fallbacks add"|"models image-fallbacks remove"|"models image-fallbacks clear"|"models scan"|"models auth"|"models auth list"|"models auth add"|"models auth logout"|"models auth login"|"models auth setup-token"|"models auth paste-token"|"models auth paste-api-key"|"models auth login-github-copilot"|"models auth order"|"models auth order get"|"models auth order set"|"models auth order clear"|"promos"|"promos list"|"promos claim"|"telemetry"|"telemetry show"|"telemetry on"|"telemetry off"|"infer"|"capability"|"infer list"|"capability list"|"infer inspect"|"capability inspect"|"infer model"|"capability model"|"infer model run"|"capability model run"|"infer model list"|"capability model list"|"infer model inspect"|"capability model inspect"|"infer model providers"|"capability model providers"|"infer model auth"|"capability model auth"|"infer model auth login"|"capability model auth login"|"infer model auth logout"|"capability model auth logout"|"infer model auth status"|"capability model auth status"|"infer image"|"capability image"|"infer image generate"|"capability image generate"|"infer image edit"|"capability image edit"|"infer image describe"|"capability image describe"|"infer image describe-many"|"capability image describe-many"|"infer image providers"|"capability image providers"|"infer audio"|"capability audio"|"infer audio transcribe"|"capability audio transcribe"|"infer audio providers"|"capability audio providers"|"infer tts"|"capability tts"|"infer tts convert"|"capability tts convert"|"infer tts voices"|"capability tts voices"|"infer tts providers"|"capability tts providers"|"infer tts personas"|"capability tts personas"|"infer tts status"|"capability tts status"|"infer tts enable"|"capability tts enable"|"infer tts disable"|"capability tts disable"|"infer tts set-provider"|"capability tts set-provider"|"infer tts set-persona"|"capability tts set-persona"|"infer video"|"capability video"|"infer video generate"|"capability video generate"|"infer video describe"|"capability video describe"|"infer video providers"|"capability video providers"|"infer web"|"capability web"|"infer web search"|"capability web search"|"infer web fetch"|"capability web fetch"|"infer web providers"|"capability web providers"|"infer embedding"|"capability embedding"|"infer embedding create"|"capability embedding create"|"infer embedding providers"|"capability embedding providers"|"approvals"|"exec-approvals"|"approvals pending"|"exec-approvals pending"|"approvals resolve"|"exec-approvals resolve"|"approvals grants"|"exec-approvals grants"|"approvals grants list"|"exec-approvals grants list"|"approvals grants revoke"|"exec-approvals grants revoke"|"approvals get"|"exec-approvals get"|"approvals set"|"exec-approvals set"|"approvals allowlist"|"exec-approvals allowlist"|"approvals allowlist add"|"exec-approvals allowlist add"|"approvals allowlist remove"|"exec-approvals allowlist remove"|"exec-policy"|"exec-policy show"|"exec-policy preset"|"exec-policy set"|"nodes"|"nodes status"|"nodes describe"|"nodes list"|"nodes pending"|"nodes approve"|"nodes reject"|"nodes remove"|"nodes rename"|"nodes invoke"|"nodes notify"|"nodes push"|"nodes camera"|"nodes camera list"|"nodes camera snap"|"nodes camera clip"|"nodes screen"|"nodes screen record"|"nodes location"|"nodes location get"|"devices"|"devices list"|"devices join-code"|"devices remove"|"devices clear"|"devices approve"|"devices reject"|"devices rename"|"devices rotate"|"devices revoke"|"users"|"users list"|"users link-email"|"node"|"node worker"|"node run"|"node status"|"node identity"|"node install"|"node uninstall"|"node stop"|"node start"|"node restart"|"connect"|"worker"|"sandbox"|"sandbox list"|"sandbox recreate"|"sandbox explain"|"fleet"|"fleet create"|"fleet backup"|"fleet restore"|"fleet doctor"|"fleet list"|"fleet ls"|"fleet status"|"fleet logs"|"fleet start"|"fleet stop"|"fleet restart"|"fleet upgrade"|"fleet rm"|"worktrees"|"worktrees list"|"worktrees create"|"worktrees remove"|"worktrees restore"|"worktrees gc"|"attach"|"resume"|"tui"|"terminal"|"chat"|"cron"|"automations"|"cron status"|"automations status"|"cron list"|"automations list"|"cron add"|"cron create"|"automations add"|"automations create"|"cron rm"|"cron remove"|"cron delete"|"automations rm"|"automations remove"|"automations delete"|"cron enable"|"automations enable"|"cron disable"|"automations disable"|"cron get"|"automations get"|"cron show"|"automations show"|"cron runs"|"automations runs"|"cron run"|"automations run"|"cron scratch"|"automations scratch"|"cron edit"|"automations edit"|"dns"|"dns setup"|"docs"|"proxy"|"proxy start"|"proxy run"|"proxy validate"|"proxy coverage"|"proxy sessions"|"proxy query"|"proxy blob"|"proxy purge"|"hooks"|"hooks list"|"hooks info"|"hooks check"|"hooks enable"|"hooks disable"|"hooks relay"|"hooks install"|"hooks update"|"webhooks"|"webhooks gmail"|"webhooks gmail setup"|"webhooks gmail run"|"qr"|"clawbot"|"clawbot qr"|"pairing"|"pairing list"|"pairing approve"|"plugins"|"plugins list"|"plugins search"|"plugins inspect"|"plugins info"|"plugins enable"|"plugins disable"|"plugins uninstall"|"plugins install"|"plugins update"|"plugins registry"|"plugins doctor"|"plugins build"|"plugins validate"|"plugins init"|"plugins marketplace"|"plugins marketplace entries"|"plugins marketplace refresh"|"plugins marketplace list"|"channels"|"channels list"|"channels status"|"channels capabilities"|"channels resolve"|"channels logs"|"channels dead-letters"|"channels dead-letters list"|"channels dead-letters resubmit"|"channels add"|"channels remove"|"channels login"|"channels logout"|"directory"|"directory self"|"directory peers"|"directory peers list"|"directory groups"|"directory groups list"|"directory groups members"|"security"|"security audit"|"secrets"|"secrets store"|"secrets store list"|"secrets store set"|"secrets store get"|"secrets store rm"|"secrets store import"|"secrets reload"|"secrets audit"|"secrets configure"|"secrets apply"|"skills"|"skills search"|"skills install"|"skills update"|"skills verify"|"skills curator"|"skills curator status"|"skills curator pin"|"skills curator unpin"|"skills curator restore"|"skills workshop"|"skills workshop list"|"skills workshop inspect"|"skills workshop propose-create"|"skills workshop propose-update"|"skills workshop revise"|"skills workshop evaluate"|"skills workshop apply"|"skills workshop reject"|"skills workshop quarantine"|"skills list"|"skills info"|"skills check"|"update"|"update repair"|"update finalize"|"update wizard"|"update status"|"browser"|"browser status"|"browser start"|"browser stop"|"browser reset-profile"|"browser tabs"|"browser tab"|"browser open"|"browser focus"|"browser close"|"browser profiles"|"browser system-profiles"|"browser import-profile"|"browser create-profile"|"browser delete-profile"|"browser doctor"|"browser cookie-sync"|"browser screenshot"|"browser snapshot"|"browser navigate"|"browser resize"|"browser click"|"browser click-coords"|"browser type"|"browser press"|"browser hover"|"browser scrollintoview"|"browser drag"|"browser select"|"browser upload"|"browser waitfordownload"|"browser download"|"browser dialog"|"browser fill"|"browser wait"|"browser evaluate"|"browser batch"|"browser console"|"browser pdf"|"browser responsebody"|"browser highlight"|"browser errors"|"browser requests"|"browser trace"|"browser cookies"|"browser storage"|"browser set"|"browser extension"|"file-transfer"|"file-transfer approvals"|"file-transfer approvals migrate"|"memory"|"memory status"|"memory index"|"memory search"|"memory forget"|"memory promote"|"memory promote-explain"|"memory rem-harness"|"memory rem-backfill"|"memory session-backfill"|"workboard"|"workboard list"|"workboard create"|"workboard show"|"workboard move"|"workboard dispatch")
+          "completion"|"setup"|"crestodian"|"onboard"|"onboard recommendations"|"onboard recommendations acknowledge"|"onboard recommendations refresh"|"configure"|"config"|"config get"|"config set"|"config patch"|"config unset"|"config file"|"config schema"|"config validate"|"backup"|"backup create"|"backup verify"|"backup restore"|"backup sqlite"|"backup sqlite create"|"backup sqlite list"|"backup sqlite verify"|"backup sqlite restore"|"backup git"|"backup git init"|"backup git create"|"backup git log"|"backup git verify"|"backup git restore"|"backup enable"|"backup disable"|"database"|"database preflight"|"database ownership"|"database ownership status"|"database ownership claim"|"migrate"|"migrate list"|"migrate plan"|"migrate apply"|"doctor"|"triage"|"dashboard"|"reset"|"uninstall"|"message"|"message send"|"message broadcast"|"message poll"|"message react"|"message reactions"|"message read"|"message edit"|"message delete"|"message pin"|"message unpin"|"message pins"|"message permissions"|"message search"|"message thread"|"message thread create"|"message thread list"|"message thread reply"|"message emoji"|"message emoji list"|"message emoji upload"|"message sticker"|"message sticker send"|"message sticker upload"|"message role"|"message role info"|"message role add"|"message role remove"|"message channel"|"message channel info"|"message channel list"|"message member"|"message member info"|"message voice"|"message voice status"|"message event"|"message event list"|"message event create"|"message timeout"|"message kick"|"message ban"|"mcp"|"mcp serve"|"mcp list"|"mcp show"|"mcp status"|"mcp probe"|"mcp doctor"|"mcp add"|"mcp set"|"mcp tools"|"mcp configure"|"mcp login"|"mcp logout"|"mcp reload"|"mcp unset"|"transcripts"|"transcripts list"|"transcripts show"|"transcripts path"|"agent"|"agent exec"|"agents"|"agents list"|"agents bindings"|"agents bind"|"agents unbind"|"agents add"|"agents set-identity"|"agents delete"|"audit"|"status"|"health"|"sessions"|"sessions list"|"sessions cleanup"|"sessions tail"|"sessions export-trajectory"|"sessions archive"|"sessions delete"|"sessions compact"|"tasks"|"tasks list"|"tasks audit"|"tasks maintenance"|"tasks show"|"tasks notify"|"tasks cancel"|"tasks retry"|"tasks dismiss"|"tasks flow"|"tasks flow list"|"tasks flow show"|"tasks flow cancel"|"acp"|"acp client"|"gateway"|"gateway run"|"gateway status"|"gateway install"|"gateway uninstall"|"gateway start"|"gateway stop"|"gateway restart"|"gateway restart-handoff"|"gateway restart-handoff capabilities"|"gateway restart-handoff consume"|"gateway auth-token"|"gateway call"|"gateway suspend"|"gateway resume"|"gateway usage-cost"|"gateway health"|"gateway stability"|"gateway diagnostics"|"gateway diagnostics export"|"gateway probe"|"gateway discover"|"daemon"|"daemon status"|"daemon install"|"daemon uninstall"|"daemon start"|"daemon stop"|"daemon restart"|"logs"|"system"|"system event"|"system heartbeat"|"system heartbeat last"|"system heartbeat enable"|"system heartbeat disable"|"system presence"|"models"|"models list"|"models status"|"models refresh"|"models set"|"models set-image"|"models aliases"|"models aliases list"|"models aliases add"|"models aliases remove"|"models fallbacks"|"models fallbacks list"|"models fallbacks add"|"models fallbacks remove"|"models fallbacks clear"|"models image-fallbacks"|"models image-fallbacks list"|"models image-fallbacks add"|"models image-fallbacks remove"|"models image-fallbacks clear"|"models scan"|"models auth"|"models auth list"|"models auth add"|"models auth logout"|"models auth login"|"models auth setup-token"|"models auth paste-token"|"models auth paste-api-key"|"models auth login-github-copilot"|"models auth order"|"models auth order get"|"models auth order set"|"models auth order clear"|"promos"|"promos list"|"promos claim"|"telemetry"|"telemetry show"|"telemetry on"|"telemetry off"|"infer"|"capability"|"infer list"|"capability list"|"infer inspect"|"capability inspect"|"infer model"|"capability model"|"infer model run"|"capability model run"|"infer model list"|"capability model list"|"infer model inspect"|"capability model inspect"|"infer model providers"|"capability model providers"|"infer model auth"|"capability model auth"|"infer model auth login"|"capability model auth login"|"infer model auth logout"|"capability model auth logout"|"infer model auth status"|"capability model auth status"|"infer image"|"capability image"|"infer image generate"|"capability image generate"|"infer image edit"|"capability image edit"|"infer image describe"|"capability image describe"|"infer image describe-many"|"capability image describe-many"|"infer image providers"|"capability image providers"|"infer audio"|"capability audio"|"infer audio transcribe"|"capability audio transcribe"|"infer audio providers"|"capability audio providers"|"infer tts"|"capability tts"|"infer tts convert"|"capability tts convert"|"infer tts voices"|"capability tts voices"|"infer tts providers"|"capability tts providers"|"infer tts personas"|"capability tts personas"|"infer tts status"|"capability tts status"|"infer tts enable"|"capability tts enable"|"infer tts disable"|"capability tts disable"|"infer tts set-provider"|"capability tts set-provider"|"infer tts set-persona"|"capability tts set-persona"|"infer video"|"capability video"|"infer video generate"|"capability video generate"|"infer video describe"|"capability video describe"|"infer video providers"|"capability video providers"|"infer web"|"capability web"|"infer web search"|"capability web search"|"infer web fetch"|"capability web fetch"|"infer web providers"|"capability web providers"|"infer embedding"|"capability embedding"|"infer embedding create"|"capability embedding create"|"infer embedding providers"|"capability embedding providers"|"approvals"|"exec-approvals"|"approvals pending"|"exec-approvals pending"|"approvals resolve"|"exec-approvals resolve"|"approvals grants"|"exec-approvals grants"|"approvals grants list"|"exec-approvals grants list"|"approvals grants revoke"|"exec-approvals grants revoke"|"approvals get"|"exec-approvals get"|"approvals set"|"exec-approvals set"|"approvals allowlist"|"exec-approvals allowlist"|"approvals allowlist add"|"exec-approvals allowlist add"|"approvals allowlist remove"|"exec-approvals allowlist remove"|"exec-policy"|"exec-policy show"|"exec-policy preset"|"exec-policy set"|"nodes"|"nodes status"|"nodes describe"|"nodes list"|"nodes pending"|"nodes approve"|"nodes reject"|"nodes remove"|"nodes rename"|"nodes invoke"|"nodes notify"|"nodes push"|"nodes camera"|"nodes camera list"|"nodes camera snap"|"nodes camera clip"|"nodes screen"|"nodes screen record"|"nodes location"|"nodes location get"|"devices"|"devices list"|"devices join-code"|"devices remove"|"devices clear"|"devices approve"|"devices reject"|"devices rename"|"devices rotate"|"devices revoke"|"users"|"users list"|"users link-email"|"node"|"node worker"|"node run"|"node status"|"node identity"|"node install"|"node uninstall"|"node stop"|"node start"|"node restart"|"connect"|"worker"|"sandbox"|"sandbox list"|"sandbox recreate"|"sandbox explain"|"fleet"|"fleet create"|"fleet backup"|"fleet restore"|"fleet doctor"|"fleet list"|"fleet ls"|"fleet status"|"fleet logs"|"fleet start"|"fleet stop"|"fleet restart"|"fleet upgrade"|"fleet rm"|"worktrees"|"worktrees list"|"worktrees create"|"worktrees remove"|"worktrees restore"|"worktrees gc"|"attach"|"resume"|"tui"|"terminal"|"chat"|"cron"|"automations"|"cron status"|"automations status"|"cron list"|"automations list"|"cron add"|"cron create"|"automations add"|"automations create"|"cron rm"|"cron remove"|"cron delete"|"automations rm"|"automations remove"|"automations delete"|"cron enable"|"automations enable"|"cron disable"|"automations disable"|"cron get"|"automations get"|"cron show"|"automations show"|"cron runs"|"automations runs"|"cron run"|"automations run"|"cron scratch"|"automations scratch"|"cron edit"|"automations edit"|"dns"|"dns setup"|"docs"|"proxy"|"proxy start"|"proxy run"|"proxy validate"|"proxy coverage"|"proxy sessions"|"proxy query"|"proxy blob"|"proxy purge"|"hooks"|"hooks list"|"hooks info"|"hooks check"|"hooks enable"|"hooks disable"|"hooks relay"|"hooks install"|"hooks update"|"webhooks"|"webhooks gmail"|"webhooks gmail setup"|"webhooks gmail run"|"qr"|"clawbot"|"clawbot qr"|"pairing"|"pairing list"|"pairing approve"|"plugins"|"plugins list"|"plugins search"|"plugins inspect"|"plugins info"|"plugins enable"|"plugins disable"|"plugins uninstall"|"plugins install"|"plugins update"|"plugins registry"|"plugins doctor"|"plugins build"|"plugins validate"|"plugins init"|"plugins marketplace"|"plugins marketplace entries"|"plugins marketplace refresh"|"plugins marketplace list"|"channels"|"channels list"|"channels status"|"channels capabilities"|"channels resolve"|"channels logs"|"channels dead-letters"|"channels dead-letters list"|"channels dead-letters resubmit"|"channels add"|"channels remove"|"channels login"|"channels logout"|"directory"|"directory self"|"directory peers"|"directory peers list"|"directory groups"|"directory groups list"|"directory groups members"|"security"|"security audit"|"secrets"|"secrets store"|"secrets store list"|"secrets store set"|"secrets store get"|"secrets store rm"|"secrets store import"|"secrets reload"|"secrets audit"|"secrets configure"|"secrets apply"|"skills"|"skills search"|"skills install"|"skills update"|"skills verify"|"skills curator"|"skills curator status"|"skills curator pin"|"skills curator unpin"|"skills curator restore"|"skills workshop"|"skills workshop list"|"skills workshop inspect"|"skills workshop propose-create"|"skills workshop propose-update"|"skills workshop revise"|"skills workshop evaluate"|"skills workshop apply"|"skills workshop reject"|"skills workshop quarantine"|"skills list"|"skills info"|"skills check"|"update"|"update cleanup"|"update repair"|"update finalize"|"update wizard"|"update status"|"browser"|"browser status"|"browser start"|"browser stop"|"browser reset-profile"|"browser tabs"|"browser tab"|"browser open"|"browser focus"|"browser close"|"browser profiles"|"browser system-profiles"|"browser import-profile"|"browser create-profile"|"browser delete-profile"|"browser doctor"|"browser cookie-sync"|"browser screenshot"|"browser snapshot"|"browser navigate"|"browser resize"|"browser click"|"browser click-coords"|"browser type"|"browser press"|"browser hover"|"browser scrollintoview"|"browser drag"|"browser select"|"browser upload"|"browser waitfordownload"|"browser download"|"browser dialog"|"browser fill"|"browser wait"|"browser evaluate"|"browser batch"|"browser console"|"browser pdf"|"browser responsebody"|"browser highlight"|"browser errors"|"browser requests"|"browser trace"|"browser cookies"|"browser storage"|"browser set"|"browser extension"|"file-transfer"|"file-transfer approvals"|"file-transfer approvals migrate"|"memory"|"memory status"|"memory index"|"memory search"|"memory forget"|"memory promote"|"memory promote-explain"|"memory rem-harness"|"memory rem-backfill"|"memory session-backfill"|"workboard"|"workboard list"|"workboard create"|"workboard show"|"workboard move"|"workboard dispatch")
             command_path="${candidate_path}"
             case "${command_path}" in
               "completion")
@@ -38,7 +38,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level -s --shell"
                 ;;
               "setup")
-                opts="--workspace --agent-name --wizard --baseline --reset --reset-scope --non-interactive --classic --tui --accept-risk --flow --mode --auth-choice --token-provider --token --token-profile-id --token-expires-in --secret-input-mode --cloudflare-ai-gateway-account-id --cloudflare-ai-gateway-gateway-id --alibaba-model-studio-api-key --anthropic-api-key --clawrouter-api-key --fal-api-key --github-copilot-token --gemini-api-key --huggingface-api-key --litellm-api-key --lmstudio-api-key --minimax-api-key --nvidia-api-key --ollama-cloud-api-key --openai-api-key --opencode-go-api-key --openrouter-api-key --runway-api-key --together-api-key --xai-api-key --deepseek-api-key --fireworks-api-key --groq-api-key --llama-server-api-key --moonshot-api-key --modelstudio-standard-api-key-cn --modelstudio-standard-api-key --modelstudio-api-key-cn --modelstudio-api-key --qwen-oauth-token --arceeai-api-key --baseten-api-key --byteplus-api-key --cerebras-api-key --chutes-api-key --cohere-api-key --cloudflare-ai-gateway-api-key --comfy-api-key --deepinfra-api-key --featherless-api-key --gmi-api-key --longcat-api-key --meta-api-key --mistral-api-key --novita-api-key --opencode-zen-api-key --kilocode-api-key --kimi-code-api-key --pixverse-api-key --qianfan-api-key --qwen-token-plan-api-key --qwen-token-plan-api-key-cn --tokenhub-api-key --tokenplan-api-key --venice-api-key --ai-gateway-api-key --vydra-api-key --xiaomi-api-key --xiaomi-token-plan-api-key --zai-api-key --synthetic-api-key --volcengine-api-key --stepfun-api-key --custom-base-url --custom-api-key --custom-model-id --custom-provider-id --custom-compatibility --custom-image-input --custom-text-input --gateway-port --gateway-bind --gateway-auth --gateway-token --gateway-token-ref-env --gateway-password --tailscale --tailscale-reset-on-exit --no-tailscale-reset-on-exit --install-daemon --no-install-daemon --skip-daemon --daemon-runtime --skip-channels --skip-skills --skip-bootstrap --skip-search --skip-health --skip-ui --suppress-gateway-token-output --skip-hooks --node-manager --import-from --import-source --import-secrets --remote-url --remote-token --remote-password -m --message --yes --json"
+                opts="--workspace --agent-name --wizard --baseline --reset --reset-scope --non-interactive --classic --tui --accept-risk --flow --mode --auth-choice --token-provider --token --token-profile-id --token-expires-in --secret-input-mode --cloudflare-ai-gateway-account-id --cloudflare-ai-gateway-gateway-id --alibaba-model-studio-api-key --anthropic-api-key --clawrouter-api-key --fal-api-key --github-copilot-token --gemini-api-key --huggingface-api-key --litellm-api-key --lmstudio-api-key --minimax-api-key --nvidia-api-key --ollama-cloud-api-key --openai-api-key --opencode-go-api-key --openrouter-api-key --runway-api-key --together-api-key --xai-api-key --deepseek-api-key --fireworks-api-key --groq-api-key --llama-server-api-key --moonshot-api-key --modelstudio-standard-api-key-cn --modelstudio-standard-api-key --modelstudio-api-key-cn --modelstudio-api-key --qwen-oauth-token --arceeai-api-key --baseten-api-key --byteplus-api-key --cerebras-api-key --chutes-api-key --cohere-api-key --cloudflare-ai-gateway-api-key --comfy-api-key --deepinfra-api-key --featherless-api-key --gmi-api-key --longcat-api-key --meta-api-key --mistral-api-key --novita-api-key --opencode-zen-api-key --kilocode-api-key --kimi-code-api-key --pixverse-api-key --qianfan-api-key --qwen-token-plan-api-key --qwen-token-plan-api-key-cn --tokenhub-api-key --tokenplan-api-key --venice-api-key --ai-gateway-api-key --vydra-api-key --xiaomi-api-key --xiaomi-token-plan-api-key --zai-api-key --synthetic-api-key --volcengine-api-key --stepfun-api-key --custom-base-url --custom-api-key --custom-model-id --custom-provider-id --custom-compatibility --custom-image-input --custom-text-input --gateway-port --gateway-bind --gateway-auth --gateway-token --gateway-token-ref-env --gateway-password --tailscale --install-daemon --no-install-daemon --skip-daemon --daemon-runtime --skip-channels --skip-skills --skip-bootstrap --skip-search --skip-health --skip-ui --suppress-gateway-token-output --skip-hooks --node-manager --import-from --import-source --import-secrets --remote-url --remote-token --remote-password -m --message --yes --json"
                 value_options="--container --profile --log-level --workspace --agent-name --reset-scope --flow --mode --auth-choice --token-provider --token --token-profile-id --token-expires-in --secret-input-mode --cloudflare-ai-gateway-account-id --cloudflare-ai-gateway-gateway-id --alibaba-model-studio-api-key --anthropic-api-key --clawrouter-api-key --fal-api-key --github-copilot-token --gemini-api-key --huggingface-api-key --litellm-api-key --lmstudio-api-key --minimax-api-key --nvidia-api-key --ollama-cloud-api-key --openai-api-key --opencode-go-api-key --openrouter-api-key --runway-api-key --together-api-key --xai-api-key --deepseek-api-key --fireworks-api-key --groq-api-key --llama-server-api-key --moonshot-api-key --modelstudio-standard-api-key-cn --modelstudio-standard-api-key --modelstudio-api-key-cn --modelstudio-api-key --qwen-oauth-token --arceeai-api-key --baseten-api-key --byteplus-api-key --cerebras-api-key --chutes-api-key --cohere-api-key --cloudflare-ai-gateway-api-key --comfy-api-key --deepinfra-api-key --featherless-api-key --gmi-api-key --longcat-api-key --meta-api-key --mistral-api-key --novita-api-key --opencode-zen-api-key --kilocode-api-key --kimi-code-api-key --pixverse-api-key --qianfan-api-key --qwen-token-plan-api-key --qwen-token-plan-api-key-cn --tokenhub-api-key --tokenplan-api-key --venice-api-key --ai-gateway-api-key --vydra-api-key --xiaomi-api-key --xiaomi-token-plan-api-key --zai-api-key --synthetic-api-key --volcengine-api-key --stepfun-api-key --custom-base-url --custom-api-key --custom-model-id --custom-provider-id --custom-compatibility --gateway-port --gateway-bind --gateway-auth --gateway-token --gateway-token-ref-env --gateway-password --tailscale --daemon-runtime --node-manager --import-from --import-source --remote-url --remote-token --remote-password -m --message"
                 ;;
               "crestodian")
@@ -46,7 +46,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level -m --message"
                 ;;
               "onboard")
-                opts="recommendations --workspace --agent-name --reset --reset-scope --non-interactive --modern --classic --tui --accept-risk --flow --mode --auth-choice --token-provider --token --token-profile-id --token-expires-in --secret-input-mode --cloudflare-ai-gateway-account-id --cloudflare-ai-gateway-gateway-id --alibaba-model-studio-api-key --anthropic-api-key --clawrouter-api-key --fal-api-key --github-copilot-token --gemini-api-key --huggingface-api-key --litellm-api-key --lmstudio-api-key --minimax-api-key --nvidia-api-key --ollama-cloud-api-key --openai-api-key --opencode-go-api-key --openrouter-api-key --runway-api-key --together-api-key --xai-api-key --deepseek-api-key --fireworks-api-key --groq-api-key --llama-server-api-key --moonshot-api-key --modelstudio-standard-api-key-cn --modelstudio-standard-api-key --modelstudio-api-key-cn --modelstudio-api-key --qwen-oauth-token --arceeai-api-key --baseten-api-key --byteplus-api-key --cerebras-api-key --chutes-api-key --cohere-api-key --cloudflare-ai-gateway-api-key --comfy-api-key --deepinfra-api-key --featherless-api-key --gmi-api-key --longcat-api-key --meta-api-key --mistral-api-key --novita-api-key --opencode-zen-api-key --kilocode-api-key --kimi-code-api-key --pixverse-api-key --qianfan-api-key --qwen-token-plan-api-key --qwen-token-plan-api-key-cn --tokenhub-api-key --tokenplan-api-key --venice-api-key --ai-gateway-api-key --vydra-api-key --xiaomi-api-key --xiaomi-token-plan-api-key --zai-api-key --synthetic-api-key --volcengine-api-key --stepfun-api-key --custom-base-url --custom-api-key --custom-model-id --custom-provider-id --custom-compatibility --custom-image-input --custom-text-input --gateway-port --gateway-bind --gateway-auth --gateway-token --gateway-token-ref-env --gateway-password --remote-url --remote-token --remote-password --tailscale --tailscale-reset-on-exit --no-tailscale-reset-on-exit --install-daemon --no-install-daemon --skip-daemon --daemon-runtime --skip-channels --skip-skills --skip-bootstrap --skip-search --skip-health --skip-ui --suppress-gateway-token-output --skip-hooks --node-manager --import-from --import-source --import-secrets --json"
+                opts="recommendations --workspace --agent-name --reset --reset-scope --non-interactive --modern --classic --tui --accept-risk --flow --mode --auth-choice --token-provider --token --token-profile-id --token-expires-in --secret-input-mode --cloudflare-ai-gateway-account-id --cloudflare-ai-gateway-gateway-id --alibaba-model-studio-api-key --anthropic-api-key --clawrouter-api-key --fal-api-key --github-copilot-token --gemini-api-key --huggingface-api-key --litellm-api-key --lmstudio-api-key --minimax-api-key --nvidia-api-key --ollama-cloud-api-key --openai-api-key --opencode-go-api-key --openrouter-api-key --runway-api-key --together-api-key --xai-api-key --deepseek-api-key --fireworks-api-key --groq-api-key --llama-server-api-key --moonshot-api-key --modelstudio-standard-api-key-cn --modelstudio-standard-api-key --modelstudio-api-key-cn --modelstudio-api-key --qwen-oauth-token --arceeai-api-key --baseten-api-key --byteplus-api-key --cerebras-api-key --chutes-api-key --cohere-api-key --cloudflare-ai-gateway-api-key --comfy-api-key --deepinfra-api-key --featherless-api-key --gmi-api-key --longcat-api-key --meta-api-key --mistral-api-key --novita-api-key --opencode-zen-api-key --kilocode-api-key --kimi-code-api-key --pixverse-api-key --qianfan-api-key --qwen-token-plan-api-key --qwen-token-plan-api-key-cn --tokenhub-api-key --tokenplan-api-key --venice-api-key --ai-gateway-api-key --vydra-api-key --xiaomi-api-key --xiaomi-token-plan-api-key --zai-api-key --synthetic-api-key --volcengine-api-key --stepfun-api-key --custom-base-url --custom-api-key --custom-model-id --custom-provider-id --custom-compatibility --custom-image-input --custom-text-input --gateway-port --gateway-bind --gateway-auth --gateway-token --gateway-token-ref-env --gateway-password --remote-url --remote-token --remote-password --tailscale --install-daemon --no-install-daemon --skip-daemon --daemon-runtime --skip-channels --skip-skills --skip-bootstrap --skip-search --skip-health --skip-ui --suppress-gateway-token-output --skip-hooks --node-manager --import-from --import-source --import-secrets --json"
                 value_options="--container --profile --log-level --workspace --agent-name --reset-scope --flow --mode --auth-choice --token-provider --token --token-profile-id --token-expires-in --secret-input-mode --cloudflare-ai-gateway-account-id --cloudflare-ai-gateway-gateway-id --alibaba-model-studio-api-key --anthropic-api-key --clawrouter-api-key --fal-api-key --github-copilot-token --gemini-api-key --huggingface-api-key --litellm-api-key --lmstudio-api-key --minimax-api-key --nvidia-api-key --ollama-cloud-api-key --openai-api-key --opencode-go-api-key --openrouter-api-key --runway-api-key --together-api-key --xai-api-key --deepseek-api-key --fireworks-api-key --groq-api-key --llama-server-api-key --moonshot-api-key --modelstudio-standard-api-key-cn --modelstudio-standard-api-key --modelstudio-api-key-cn --modelstudio-api-key --qwen-oauth-token --arceeai-api-key --baseten-api-key --byteplus-api-key --cerebras-api-key --chutes-api-key --cohere-api-key --cloudflare-ai-gateway-api-key --comfy-api-key --deepinfra-api-key --featherless-api-key --gmi-api-key --longcat-api-key --meta-api-key --mistral-api-key --novita-api-key --opencode-zen-api-key --kilocode-api-key --kimi-code-api-key --pixverse-api-key --qianfan-api-key --qwen-token-plan-api-key --qwen-token-plan-api-key-cn --tokenhub-api-key --tokenplan-api-key --venice-api-key --ai-gateway-api-key --vydra-api-key --xiaomi-api-key --xiaomi-token-plan-api-key --zai-api-key --synthetic-api-key --volcengine-api-key --stepfun-api-key --custom-base-url --custom-api-key --custom-model-id --custom-provider-id --custom-compatibility --gateway-port --gateway-bind --gateway-auth --gateway-token --gateway-token-ref-env --gateway-password --remote-url --remote-token --remote-password --tailscale --daemon-runtime --node-manager --import-from --import-source"
                 ;;
               "onboard recommendations")
@@ -66,7 +66,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --section"
                 ;;
               "config")
-                opts="get set patch unset file schema validate --section"
+                opts="file get patch schema set unset validate --section"
                 value_options="--container --profile --log-level --section"
                 ;;
               "config get")
@@ -98,7 +98,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --section"
                 ;;
               "backup")
-                opts="create verify restore sqlite git enable disable"
+                opts="create disable enable git restore sqlite verify"
                 value_options="--container --profile --log-level"
                 ;;
               "backup create")
@@ -114,7 +114,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --target"
                 ;;
               "backup sqlite")
-                opts="create list verify restore"
+                opts="create list restore verify"
                 value_options="--container --profile --log-level"
                 ;;
               "backup sqlite create")
@@ -134,7 +134,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --target"
                 ;;
               "backup git")
-                opts="init create log verify restore"
+                opts="create init log restore verify"
                 value_options="--container --profile --log-level"
                 ;;
               "backup git init")
@@ -166,7 +166,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --url --port --token --password --timeout"
                 ;;
               "database")
-                opts="preflight ownership"
+                opts="ownership preflight"
                 value_options="--container --profile --log-level"
                 ;;
               "database preflight")
@@ -174,7 +174,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level"
                 ;;
               "database ownership")
-                opts="status claim"
+                opts="claim status"
                 value_options="--container --profile --log-level"
                 ;;
               "database ownership status")
@@ -186,7 +186,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --manager"
                 ;;
               "migrate")
-                opts="list plan apply --from --agent --include-secrets --no-auth-credentials --overwrite --dry-run --yes --skill --plugin --item --backup-output --no-backup --force --json --verify-plugin-apps"
+                opts="apply list plan --from --agent --include-secrets --no-auth-credentials --overwrite --dry-run --yes --skill --plugin --item --backup-output --no-backup --force --json --verify-plugin-apps"
                 value_options="--container --profile --log-level --from --agent --skill --plugin --item --backup-output"
                 ;;
               "migrate list")
@@ -222,7 +222,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level"
                 ;;
               "message")
-                opts="send broadcast poll react reactions read edit delete pin unpin pins permissions search thread emoji sticker role channel member voice event timeout kick ban"
+                opts="ban broadcast channel delete edit emoji event kick member permissions pin pins poll react reactions read role search send sticker thread timeout unpin voice"
                 value_options="--container --profile --log-level"
                 ;;
               "message send")
@@ -246,7 +246,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level -t --target --channel --account --message-id --limit"
                 ;;
               "message read")
-                opts="-t --target --channel --account --json --dry-run --verbose --limit --message-id --before --after --around --thread-id --include-thread"
+                opts="-t --target --channel --account --json --dry-run --verbose --limit --message-id --before --after --around --thread-id"
                 value_options="--container --profile --log-level -t --target --channel --account --limit --message-id --before --after --around --thread-id"
                 ;;
               "message edit")
@@ -318,7 +318,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --guild-id --channel --account --sticker-name --sticker-desc --sticker-tags --media"
                 ;;
               "message role")
-                opts="info add remove"
+                opts="add info remove"
                 value_options="--container --profile --log-level"
                 ;;
               "message role info")
@@ -362,7 +362,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --guild-id --user-id --channel --account"
                 ;;
               "message event")
-                opts="list create"
+                opts="create list"
                 value_options="--container --profile --log-level"
                 ;;
               "message event list")
@@ -386,7 +386,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --guild-id --user-id --channel --account --reason --delete-days"
                 ;;
               "mcp")
-                opts="serve list show status probe doctor add set tools configure login logout reload unset"
+                opts="add configure doctor list login logout probe reload serve set show status tools unset"
                 value_options="--container --profile --log-level"
                 ;;
               "mcp serve")
@@ -446,7 +446,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level"
                 ;;
               "transcripts")
-                opts="list show path"
+                opts="list path show"
                 value_options="--container --profile --log-level"
                 ;;
               "transcripts list")
@@ -470,7 +470,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level -m --message --message-file -t --to --session-key --session-id --agent --model --thinking --verbose --channel --reply-to --reply-channel --reply-account --timeout --cwd --state-dir --config --code-mode --fallback"
                 ;;
               "agents")
-                opts="list bindings bind unbind add set-identity delete"
+                opts="add bind bindings delete list set-identity unbind"
                 value_options="--container --profile --log-level"
                 ;;
               "agents list")
@@ -514,7 +514,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --timeout"
                 ;;
               "sessions")
-                opts="list cleanup tail export-trajectory archive delete compact --json --verbose --store --agent --all-agents --active --limit"
+                opts="archive cleanup compact delete export-trajectory list tail --json --verbose --store --agent --all-agents --active --limit"
                 value_options="--container --profile --log-level --store --agent --active --limit"
                 ;;
               "sessions list")
@@ -546,7 +546,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --store --agent --active --limit --url --token --password --timeout --max-lines"
                 ;;
               "tasks")
-                opts="list audit maintenance show notify cancel retry dismiss flow --json --runtime --status"
+                opts="audit cancel dismiss flow list maintenance notify retry show --json --runtime --status"
                 value_options="--container --profile --log-level --runtime --status"
                 ;;
               "tasks list")
@@ -582,7 +582,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --runtime --status"
                 ;;
               "tasks flow")
-                opts="list show cancel --json"
+                opts="cancel list show --json"
                 value_options="--container --profile --log-level --runtime --status"
                 ;;
               "tasks flow list")
@@ -606,11 +606,11 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --url --token --token-file --password --password-file --session --session-label --provenance --cwd --server --server-args"
                 ;;
               "gateway")
-                opts="run status install uninstall start stop restart restart-handoff auth-token call suspend resume usage-cost health stability diagnostics probe discover --port --bind --token --auth --password --password-file --tailscale --tailscale-reset-on-exit --allow-unconfigured --dev --ambient-channels --dev-ambient-channels --reset --force --verbose --cli-backend-logs --claude-cli-logs --ws-log --compact --raw-stream --raw-stream-path"
+                opts="auth-token call diagnostics discover health install probe restart resume run stability start status stop suspend uninstall usage-cost --port --bind --token --auth --password --password-file --tailscale --allow-unconfigured --dev --ambient-channels --dev-ambient-channels --reset --force --verbose --cli-backend-logs --claude-cli-logs --ws-log --compact --raw-stream --raw-stream-path"
                 value_options="--container --profile --log-level --port --bind --token --auth --password --password-file --tailscale --ws-log --raw-stream-path"
                 ;;
               "gateway run")
-                opts="--port --bind --token --auth --password --password-file --tailscale --tailscale-reset-on-exit --allow-unconfigured --dev --ambient-channels --dev-ambient-channels --reset --force --verbose --cli-backend-logs --claude-cli-logs --ws-log --compact --raw-stream --raw-stream-path"
+                opts="--port --bind --token --auth --password --password-file --tailscale --allow-unconfigured --dev --ambient-channels --dev-ambient-channels --reset --force --verbose --cli-backend-logs --claude-cli-logs --ws-log --compact --raw-stream --raw-stream-path"
                 value_options="--container --profile --log-level --port --bind --token --auth --password --password-file --tailscale --ws-log --raw-stream-path"
                 ;;
               "gateway status")
@@ -694,7 +694,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --port --bind --token --auth --password --password-file --tailscale --ws-log --raw-stream-path --timeout"
                 ;;
               "daemon")
-                opts="status install uninstall start stop restart --json"
+                opts="install restart start status stop uninstall --json"
                 value_options="--container --profile --log-level"
                 ;;
               "daemon status")
@@ -734,7 +734,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --text --mode --session-key --url --port --token --password --timeout"
                 ;;
               "system heartbeat")
-                opts="last enable disable"
+                opts="disable enable last"
                 value_options="--container --profile --log-level"
                 ;;
               "system heartbeat last")
@@ -754,7 +754,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --url --port --token --password --timeout"
                 ;;
               "models")
-                opts="list status refresh set set-image aliases fallbacks image-fallbacks scan auth --json --status-json --status-plain --agent"
+                opts="aliases auth fallbacks image-fallbacks list refresh scan set set-image status --json --status-json --status-plain --agent"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "models list")
@@ -778,7 +778,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent"
                 ;;
               "models aliases")
-                opts="list add remove"
+                opts="add list remove"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "models aliases list")
@@ -794,7 +794,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent"
                 ;;
               "models fallbacks")
-                opts="list add remove clear"
+                opts="add clear list remove"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "models fallbacks list")
@@ -814,7 +814,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent"
                 ;;
               "models image-fallbacks")
-                opts="list add remove clear"
+                opts="add clear list remove"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "models image-fallbacks list")
@@ -838,7 +838,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent --min-params --max-age-days --provider --max-candidates --timeout --concurrency"
                 ;;
               "models auth")
-                opts="list add logout login setup-token paste-token paste-api-key login-github-copilot order --agent"
+                opts="add list login login-github-copilot logout order paste-api-key paste-token setup-token --agent"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "models auth list")
@@ -874,7 +874,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent"
                 ;;
               "models auth order")
-                opts="get set clear"
+                opts="clear get set"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "models auth order get")
@@ -890,7 +890,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent --provider"
                 ;;
               "promos")
-                opts="list claim"
+                opts="claim list"
                 value_options="--container --profile --log-level"
                 ;;
               "promos list")
@@ -902,7 +902,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --api-key"
                 ;;
               "telemetry")
-                opts="show on off"
+                opts="off on show"
                 value_options="--container --profile --log-level"
                 ;;
               "telemetry show")
@@ -918,7 +918,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level"
                 ;;
               "infer"|"capability")
-                opts="list inspect model image audio tts video web embedding"
+                opts="audio embedding image inspect list model tts video web"
                 value_options="--container --profile --log-level"
                 ;;
               "infer list"|"capability list")
@@ -930,7 +930,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --name"
                 ;;
               "infer model"|"capability model")
-                opts="run list inspect providers auth --agent"
+                opts="auth inspect list providers run --agent"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "infer model run"|"capability model run")
@@ -966,7 +966,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent"
                 ;;
               "infer image"|"capability image")
-                opts="generate edit describe describe-many providers --agent"
+                opts="describe describe-many edit generate providers --agent"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "infer image generate"|"capability image generate")
@@ -990,7 +990,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent"
                 ;;
               "infer audio"|"capability audio")
-                opts="transcribe providers --agent"
+                opts="providers transcribe --agent"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "infer audio transcribe"|"capability audio transcribe")
@@ -1002,7 +1002,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent"
                 ;;
               "infer tts"|"capability tts")
-                opts="convert voices providers personas status enable disable set-provider set-persona"
+                opts="convert disable enable personas providers set-persona set-provider status voices"
                 value_options="--container --profile --log-level"
                 ;;
               "infer tts convert"|"capability tts convert")
@@ -1042,7 +1042,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --persona"
                 ;;
               "infer video"|"capability video")
-                opts="generate describe providers --agent"
+                opts="describe generate providers --agent"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "infer video generate"|"capability video generate")
@@ -1058,7 +1058,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent"
                 ;;
               "infer web"|"capability web")
-                opts="search fetch providers"
+                opts="fetch providers search"
                 value_options="--container --profile --log-level"
                 ;;
               "infer web search"|"capability web search")
@@ -1086,7 +1086,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent"
                 ;;
               "approvals"|"exec-approvals")
-                opts="pending resolve grants get set allowlist"
+                opts="allowlist get grants pending resolve set"
                 value_options="--container --profile --log-level"
                 ;;
               "approvals pending"|"exec-approvals pending")
@@ -1130,7 +1130,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --node --agent --url --token --timeout"
                 ;;
               "exec-policy")
-                opts="show preset set"
+                opts="preset set show"
                 value_options="--container --profile --log-level"
                 ;;
               "exec-policy show")
@@ -1146,7 +1146,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --host --security --ask --ask-fallback"
                 ;;
               "nodes")
-                opts="status describe list pending approve reject remove rename invoke notify push camera screen location"
+                opts="approve camera describe invoke list location notify pending push reject remove rename screen status"
                 value_options="--container --profile --log-level"
                 ;;
               "nodes status")
@@ -1194,7 +1194,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --node --title --body --environment --url --token --timeout"
                 ;;
               "nodes camera")
-                opts="list snap clip"
+                opts="clip list snap"
                 value_options="--container --profile --log-level"
                 ;;
               "nodes camera list")
@@ -1226,7 +1226,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --node --max-age --accuracy --location-timeout --invoke-timeout --url --token --timeout"
                 ;;
               "devices")
-                opts="list join-code remove clear approve reject rename rotate revoke"
+                opts="approve clear join-code list reject remove rename revoke rotate"
                 value_options="--container --profile --log-level"
                 ;;
               "devices list")
@@ -1266,7 +1266,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --device --role --url --token --password --timeout"
                 ;;
               "users")
-                opts="list link-email"
+                opts="link-email list"
                 value_options="--container --profile --log-level"
                 ;;
               "users list")
@@ -1278,7 +1278,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --to --url --token --timeout"
                 ;;
               "node")
-                opts="worker run status identity install uninstall stop start restart"
+                opts="identity install restart run start status stop uninstall"
                 value_options="--container --profile --log-level"
                 ;;
               "node worker")
@@ -1286,7 +1286,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level"
                 ;;
               "node run")
-                opts="--pair --host --port --context-path --tls --no-tls --tls-fingerprint --node-id --display-name --ephemeral --share-installed-apps --no-share-installed-apps"
+                opts="--pair --host --port --context-path --tls --no-tls --tls-fingerprint --node-id --display-name --share-installed-apps --no-share-installed-apps"
                 value_options="--container --profile --log-level --pair --host --port --context-path --tls-fingerprint --node-id --display-name"
                 ;;
               "node status")
@@ -1322,11 +1322,11 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --target-file --display-name"
                 ;;
               "worker")
-                opts="--internal-worker-ipc"
+                opts=""
                 value_options="--container --profile --log-level"
                 ;;
               "sandbox")
-                opts="list recreate explain"
+                opts="explain list recreate"
                 value_options="--container --profile --log-level"
                 ;;
               "sandbox list")
@@ -1342,7 +1342,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --session --agent"
                 ;;
               "fleet")
-                opts="create backup restore doctor list ls status logs start stop restart upgrade rm"
+                opts="backup create doctor list ls logs restart restore rm start status stop upgrade"
                 value_options="--container --profile --log-level"
                 ;;
               "fleet create")
@@ -1394,7 +1394,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level"
                 ;;
               "worktrees")
-                opts="list create remove restore gc"
+                opts="create gc list remove restore"
                 value_options="--container --profile --log-level"
                 ;;
               "worktrees list")
@@ -1430,7 +1430,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --url --token --password --tls-fingerprint --session --thinking --message --timeout-ms --history-limit"
                 ;;
               "cron"|"automations")
-                opts="status list add create rm remove delete enable disable get show runs run scratch edit --url --port --token --password --timeout --expect-final"
+                opts="add create disable edit enable get list rm remove delete run runs scratch show status --url --port --token --password --timeout --expect-final"
                 value_options="--container --profile --log-level --url --port --token --password --timeout"
                 ;;
               "cron status"|"automations status")
@@ -1494,7 +1494,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level"
                 ;;
               "proxy")
-                opts="start run validate coverage sessions query blob purge"
+                opts="blob coverage purge query run sessions start validate"
                 value_options="--container --profile --log-level"
                 ;;
               "proxy start")
@@ -1530,7 +1530,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level"
                 ;;
               "hooks")
-                opts="list info check enable disable relay install update --agent --json"
+                opts="check disable enable info install list update --agent --json"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "hooks list")
@@ -1570,7 +1570,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level"
                 ;;
               "webhooks gmail")
-                opts="setup run"
+                opts="run setup"
                 value_options="--container --profile --log-level"
                 ;;
               "webhooks gmail setup")
@@ -1594,7 +1594,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --url --public-url --token --password"
                 ;;
               "pairing")
-                opts="list approve"
+                opts="approve list"
                 value_options="--container --profile --log-level"
                 ;;
               "pairing list")
@@ -1606,7 +1606,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --channel --account"
                 ;;
               "plugins")
-                opts="list search inspect info enable disable uninstall install update registry doctor build validate init marketplace"
+                opts="build disable doctor enable init inspect info install list marketplace registry search uninstall update validate"
                 value_options="--container --profile --log-level"
                 ;;
               "plugins list")
@@ -1662,7 +1662,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --directory --name --type"
                 ;;
               "plugins marketplace")
-                opts="entries refresh list"
+                opts="entries list refresh"
                 value_options="--container --profile --log-level"
                 ;;
               "plugins marketplace entries")
@@ -1678,7 +1678,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level"
                 ;;
               "channels")
-                opts="list status capabilities resolve logs dead-letters add remove login logout --agent"
+                opts="add capabilities dead-letters list login logout logs remove resolve status --agent"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "channels list")
@@ -1730,7 +1730,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent --channel --account"
                 ;;
               "directory")
-                opts="self peers groups"
+                opts="groups peers self"
                 value_options="--container --profile --log-level"
                 ;;
               "directory self")
@@ -1766,11 +1766,11 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --auth --token --password"
                 ;;
               "secrets")
-                opts="store reload audit configure apply"
+                opts="apply audit configure reload store"
                 value_options="--container --profile --log-level"
                 ;;
               "secrets store")
-                opts="list set get rm import"
+                opts="get import list rm set"
                 value_options="--container --profile --log-level"
                 ;;
               "secrets store list")
@@ -1810,7 +1810,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --from"
                 ;;
               "skills")
-                opts="search install update verify curator workshop list info check --agent --json"
+                opts="check curator info install list search update verify workshop --agent --json"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "skills search")
@@ -1830,7 +1830,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent --version --tag"
                 ;;
               "skills curator")
-                opts="status pin unpin restore --json"
+                opts="pin restore status unpin --json"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "skills curator status")
@@ -1850,7 +1850,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent"
                 ;;
               "skills workshop")
-                opts="list inspect propose-create propose-update revise evaluate apply reject quarantine --agent"
+                opts="apply evaluate inspect list propose-create propose-update quarantine reject revise --agent"
                 value_options="--container --profile --log-level --agent"
                 ;;
               "skills workshop list")
@@ -1902,7 +1902,11 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent"
                 ;;
               "update")
-                opts="repair finalize wizard status --json --no-restart --dry-run --channel --tag --timeout --yes --accept-capabilities"
+                opts="cleanup repair status wizard --json --no-restart --dry-run --channel --tag --timeout --yes --accept-capabilities"
+                value_options="--container --profile --log-level --channel --tag --timeout"
+                ;;
+              "update cleanup")
+                opts="--dry-run --json --yes"
                 value_options="--container --profile --log-level --channel --tag --timeout"
                 ;;
               "update repair")
@@ -1922,7 +1926,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --channel --tag --timeout"
                 ;;
               "browser")
-                opts="status start stop reset-profile tabs tab open focus close profiles system-profiles import-profile create-profile delete-profile doctor cookie-sync screenshot snapshot navigate resize click click-coords type press hover scrollintoview drag select upload waitfordownload download dialog fill wait evaluate batch console pdf responsebody highlight errors requests trace cookies storage set extension --browser-profile --json --url --port --token --password --timeout --expect-final"
+                opts="batch click click-coords close console cookie-sync cookies create-profile delete-profile dialog doctor download drag errors evaluate extension fill focus highlight hover import-profile navigate open pdf press profiles requests reset-profile resize responsebody screenshot scrollintoview select set snapshot start status stop storage system-profiles tab tabs trace type upload wait waitfordownload --browser-profile --json --url --port --token --password --timeout --expect-final"
                 value_options="--container --profile --log-level --browser-profile --url --port --token --password --timeout"
                 ;;
               "browser status")
@@ -2126,7 +2130,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level"
                 ;;
               "memory")
-                opts="status index search forget promote promote-explain rem-harness rem-backfill session-backfill"
+                opts="forget index promote promote-explain rem-backfill rem-harness search session-backfill status"
                 value_options="--container --profile --log-level"
                 ;;
               "memory status")
@@ -2166,7 +2170,7 @@ _openclaw_completion() {
                 value_options="--container --profile --log-level --agent --from --to --limit-days --archive-files"
                 ;;
               "workboard")
-                opts="list create show move dispatch"
+                opts="create dispatch list move show"
                 value_options="--container --profile --log-level"
                 ;;
               "workboard list")
