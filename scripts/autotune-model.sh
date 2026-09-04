@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1678,6 +1678,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     else
         echo "  ⚠ below floor: ${BEST_TPS} tps < ${MIN_TPS} even at min ctx — too slow for our purposes"
         echo "    recording best-effort config (max TPS) for capability profiling"
+        echo "    NOTE: below-floor can also be WSL2 GPU degradation (dxgkrnl tps collapse,"
+        echo "          not just model slowness) — if the tps is implausibly low for this"
+        echo "          model, restart WSL (wsl --shutdown) and re-tune to disambiguate."
     fi
     echo "      prefill: ${BEST_PREFILL:-0} tok/s"
     if [[ $MIN_PREFILL_TPS != 0 ]] && [[ $(echo "${BEST_PREFILL:-0} < $MIN_PREFILL_TPS" | bc 2>/dev/null || echo 0) == 1 ]]; then
