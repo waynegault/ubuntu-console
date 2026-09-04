@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -69,6 +69,22 @@ drain_vram() {
     done
 }
 
+#------------------------------------------------------------------------------
+# WSL2 GPU health — warn between models if dxgkrnl degradation is suspected.
+# The investigator repo's check_wsl_gpu.py reads the dmesg reserve_gpu_va
+# EOVERFLOW signature; when degraded, measured tps collapses and llama-server
+# may die silently mid-run.  The only fix is a WSL restart (wsl --shutdown).
+#------------------------------------------------------------------------------
+check_wsl_gpu_health() {
+    local script="$HOME/investigator/scripts/check_wsl_gpu.py" rc
+    [ -f "$script" ] || return 0
+    sh "$script" >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq 1 ]; then
+        echo "WARN: WSL2 GPU paravirtualization may be degraded — measured tps may collapse and llama-server may die silently. Restart WSL (wsl --shutdown) and re-run." >&2
+    fi
+}
+
 # Initial drain
 drain_vram
 
@@ -81,6 +97,7 @@ for m in $MODELS; do
         printf 'failed\n'
     fi
     drain_vram
+    check_wsl_gpu_health
 done
 
 echo ""
