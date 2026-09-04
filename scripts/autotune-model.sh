@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1165,13 +1165,16 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; 
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
 
     # ngl candidates: runtime-max offload (999) plus a short ladder down the
-    # GGUF layer count (3/4, 1/2, 1/4) — on a 4 GB card partial offload can
-    # win anywhere in that band, and 999-or-half alone skips it. Dedup against
-    # the registry's current value and against each other.
+    # GGUF layer count (3/4, 1/4) — on a 4 GB card partial offload can win
+    # anywhere in that band, and 999-or-half alone skips it.  The 1/2 midpoint
+    # is dropped to cut load/unload cycles: every candidate spawns a fresh CUDA
+    # context, which accelerates the WSL2 dxgkrnl degradation; 3/4 and 1/4
+    # still bracket the useful partial-offload band. Dedup against the
+    # registry's current value and against each other.
     NGL_CANDIDATES=()
     [[ "$BENCH_NGL" != "999" ]] && NGL_CANDIDATES+=("999")
     if [[ -n "${_n_layers:-}" ]] && [[ "$_n_layers" =~ ^[0-9]+$ ]] && [[ $_n_layers -gt 1 ]]; then
-        for _frac in 3 2 1; do
+        for _frac in 3 1; do
             _ngl_cand=$(( _n_layers * _frac / 4 ))
             [[ $_ngl_cand -lt 1 ]] && _ngl_cand=1
             [[ "$_ngl_cand" != "$BENCH_NGL" ]] || continue
@@ -1320,6 +1323,25 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     if command -v nvidia-smi >/dev/null 2>&1; then
         _gpu_thermal=$(nvidia-smi --query-gpu=temperature.gpu,clocks.sm --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         echo "  thermal at certification: GPU ${_gpu_thermal:-n/a} (temp °C, SM MHz)"
+    fi
+
+    # tps-collapse guard (WSL2 dxgkrnl degradation): the dmesg EOVERFLOW proxy
+    # can miss a leak, but the reliable symptom is a model re-certifying at a
+    # large factor below its previously-recorded filled-cache tps (registry
+    # field 17).  The OpenClaw gateway marks tiny/instant models with a
+    # sentinel 1000000, so a recorded value is only compared when it is a
+    # plausible measured decode (0 < tps < 1000).  Warn only — a drop can also
+    # be a genuine hardware/quant regression, so never abort.
+    if [[ "${_tps:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
+        && [[ "${BEST_TPS:-0}" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
+        && [[ $(echo "${_tps:-0} > 0" | bc 2>/dev/null || echo "0") == 1 ]] \
+        && [[ $(echo "${_tps:-0} < 1000" | bc 2>/dev/null || echo "0") == 1 ]] \
+        && [[ $(echo "${_tps:-0} >= 2 * ${BEST_TPS:-0}" | bc 2>/dev/null || echo "0") == 1 ]]; then
+        echo ""
+        echo "  ⚠ WARN: tps collapse — certified ${BEST_TPS} tps vs recorded ${_tps} tps (>=2x drop)."
+        echo "           GPU may be degraded (WSL2 dxgkrnl leak); the re-certified numbers are untrustworthy."
+        echo "           Restart WSL (wsl --shutdown) before trusting this re-tune."
+        echo ""
     fi
 fi
 
