@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -380,18 +380,24 @@ function __llm_autotune_verify_winner() {
 
 # ---------------------------------------------------------------------------
 # __kv_mb_per_1k M-bM-^@M-^T Estimate KV cache cost per 1K tokens (G-5 audit).
-# Uses n_layers when available (from GGUF metadata), falls back to 12.0 MB/1K.
+# Uses n_layers when available (from GGUF metadata), falls back to 48.0 MB/1K.
 # The old sqrt(model_mb)*0.08 heuristic was 8-48x too optimistic.
 # Reference: llama.cpp KV cache = (K_dtype + V_dtype) * n_embd_head * n_kv_heads * n_layers
-# For q8_0 K + f16 V with 128 head dim and 4 KV heads: ~0.5 MB/layer/1K
+# The autotune runs --cache-type-k/v q8_0 (both K and V quantized), so the cost
+# per layer per 1K tokens is 2 * n_kv_heads * head_dim bytes. For a 3B-class
+# model (8 KV heads, 128 head dim) that is ~2.1 MB/layer/1K. The prior 0.5
+# assumed only 2 KV heads and under-estimated ~4x, so START_CTX overshot into
+# the KV-spill regime (a 2.5GB model got 109K when its filled-cache ceiling is
+# ~27K) — which wasted Phase-4 descent levels AND leaked GPU VA on every
+# huge-ctx CUDA context (WSL2 dxgkrnl degradation, 2026-09-05).
 # ---------------------------------------------------------------------------
 function __kv_mb_per_1k() {
     local n_layers="${1:-0}"
     [[ "$n_layers" =~ ^[0-9]+$ ]] || n_layers=0
     if (( n_layers > 0 )); then
-        awk -v L="$n_layers" 'BEGIN{printf "%.2f", L * 0.5}'
+        awk -v L="$n_layers" 'BEGIN{printf "%.2f", L * 2.0}'
     else
-        echo "12.0"
+        echo "48.0"
     fi
 }
 

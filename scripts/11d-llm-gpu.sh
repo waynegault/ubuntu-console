@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -188,7 +188,7 @@ function __tac_cleanup_stale_locks() {
 # REF: G-5 audit — VRAM clearing gap
 # ---------------------------------------------------------------------------
 function __gpu_clear_stale_processes() {
-    local _gpu_pid _keep_pid _keep_pids count=0
+    local _gpu_pid _keep_pid _keep_pids _stale_wait count=0
     _keep_pid="$$"
     _keep_pids=" $PPID $_keep_pid "
     while IFS= read -r _gpu_pid; do
@@ -201,8 +201,15 @@ function __gpu_clear_stale_processes() {
         [[ "$_gpu_cmd" == *llama* ]] && continue
         if [[ "$_gpu_cmd" == python* ]]; then
             kill -TERM "$_gpu_pid" 2>/dev/null || true
-            sleep 1
-            kill -KILL "$_gpu_pid" 2>/dev/null || true
+            # Graceful wait (WSL2 dxgkrnl): SIGKILL orphans the process's CUDA
+            # handles; poll up to 15s for a clean exit before escalating.
+            _stale_wait=0
+            while kill -0 "$_gpu_pid" 2>/dev/null && (( _stale_wait < 15 )); do
+                sleep 1; _stale_wait=$((_stale_wait + 1))
+            done
+            if kill -0 "$_gpu_pid" 2>/dev/null; then
+                kill -KILL "$_gpu_pid" 2>/dev/null || true
+            fi
             count=$((count + 1))
         fi
     done < <(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null || true)
@@ -227,7 +234,7 @@ function __gpu_clear_stale_processes() {
 # Prints nothing on stdout (bench harnesses parse it); warnings go to stderr.
 # ---------------------------------------------------------------------------
 function __llm_kill_cuda_llama_servers() {
-    local _unit _svc_pid _pid _comm _smi _skip _p
+    local _unit _svc_pid _pid _comm _smi _skip _p _llm_wait _alive
     local -a _protected=() _cuda_pids=() _kill_pids=()
 
     # Protected: MainPIDs of the persistent llama systemd units.
@@ -279,7 +286,17 @@ function __llm_kill_cuda_llama_servers() {
     then
         echo "[llm-kill] killing CUDA llama-server PIDs: ${_kill_pids[*]}" >&2
         kill -TERM "${_kill_pids[@]}" 2>/dev/null || true
-        sleep 1
+        # Graceful wait (WSL2 dxgkrnl): SIGKILL orphans the servers' CUDA
+        # handles; poll up to 15s for a clean exit before escalating.
+        _llm_wait=0
+        while (( _llm_wait < 15 )); do
+            _alive=0
+            for _pid in "${_kill_pids[@]}"; do
+                if kill -0 "$_pid" 2>/dev/null; then _alive=1; break; fi
+            done
+            (( _alive == 0 )) && break
+            sleep 1; _llm_wait=$((_llm_wait + 1))
+        done
         for _pid in "${_kill_pids[@]}"
         do
             if kill -0 "$_pid" 2>/dev/null

@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 25
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -153,6 +153,14 @@ fi
 # (embeddinggemma-300m on CUDA); the gateway respawns them on demand, so
 # killing them here is safe and self-healing. Bracket the pattern so
 # pkill -f cannot match this script's own cmdline (2026-08-28).
+# Graceful first — SIGKILL orphans the worker's CUDA handles in WSL2's dxgkrnl
+# VMBus channel; SIGTERM lets it exit and release them cleanly, escalating to
+# SIGKILL only if it does not exit within 10s.
+pkill -u "$(id -un)" -f "memory-core-local-embedding-worker[.]js" 2>/dev/null || true
+_ew_wait=0
+while pgrep -u "$(id -un)" -f "memory-core-local-embedding-worker[.]js" >/dev/null 2>&1 && [[ $_ew_wait -lt 10 ]]; do
+    sleep 1; _ew_wait=$((_ew_wait + 1))
+done
 pkill -9 -u "$(id -un)" -f "memory-core-local-embedding-worker[.]js" 2>/dev/null || true
 sleep 1
 if declare -f __gpu_clear_stale_processes &>/dev/null; then
@@ -246,6 +254,16 @@ if [[ -n "${_native_ctx:-}" ]] && [[ "$_native_ctx" =~ ^[0-9]+$ ]] && [[ $_nativ
     [[ $START_CTX -gt $MAX_CTX ]] && START_CTX=$MAX_CTX
 fi
 [[ $MAX_CTX -gt 4194304 ]] && MAX_CTX=4194304
+
+# VRAM-fit cap (2026-09-05): the native-ctx ceiling (e.g. 524K for a 256K-native
+# model) lets the Phase-2 climb probe ctx far above where the KV cache fits in
+# VRAM — the model SPILLS instead of OOMing, so the climb marches to native×2.
+# Above ~2× the KV-fit estimate the filled-cache decode collapses AND each
+# huge-ctx CUDA context leaks proportionally more GPU VA (WSL2 dxgkrnl
+# degradation, measured knee ~26 cycles at 109K ctx). Cap the climb at 2× the
+# KV-fit estimate.
+_vram_cap=$(( START_CTX * 2 ))
+[[ $MAX_CTX -gt $_vram_cap ]] && MAX_CTX=$_vram_cap
 
 # Comma-format numbers (standalone helpers — no outer-scope capture)
 fmt() { printf "%'d" "$1"; }
@@ -351,6 +369,33 @@ with open(out, "w") as f:
 PYEOF
 }
 
+# Fast-reject payload generator — a SMALL prefill (2048 tokens) + tiny decode
+# budget (32 tokens) so the Phase-4 descent can classify a ctx as above/below
+# the TPS floor in ~1-2 min instead of the ~30 min a full 16K-token fill costs
+# at a spilling ctx. The spill signature (KV cache paging to host RAM) shows
+# within the first ~1K prefill tokens and collapses decode, so the small sample
+# is a faithful above/below-floor vote. The recorded number still comes from
+# the full-fill certification, so this never weakens the final result.
+gen_fast_fill_payload() {
+    local _out="$1"
+    local _source; _source="$(__workload_prompt_text "$WORKLOAD")"
+    "$TAC_PYTHON" - "$_out" "$_source" << 'PYEOF'
+import json, sys
+out = sys.argv[1]
+source = sys.argv[2]
+tokens = 2048
+count = tokens * 4 // max(1, len(source)) + 1
+content = (source * count)[: tokens * 5]
+payload = {
+    "messages": [{"role": "user", "content": content}],
+    "max_tokens": 32,
+    "temperature": 0,
+}
+with open(out, "w") as f:
+    json.dump(payload, f)
+PYEOF
+}
+
 #==============================================================================
 # Helpers
 #==============================================================================
@@ -417,48 +462,50 @@ cleanup_gpu() {
 }
 
 # ---------------------------------------------------------------------------
-# bench_once — start server, run benchmark, return decode TPS on stdout.
-#   args: ctx batch ubatch [mmap_mode] [ngl] [mode] [kv_k] [kv_v]
-#   mmap_mode: "auto" (--mmap, default) or "off" (--no-mmap)
-#   mode: "quick" (short prompt, discovery) or "filled" (scoring: pre-fills
-#         the KV cache with a FILL_RATIO x ctx prompt and measures sustained
-#         decode + prefill from the server timings)
-#   kv_k/kv_v: cache-type-k / cache-type-v (default q8_0)
-#   Writes "decode|prefill" (tok/s) to /tmp/at-metrics-$$ for callers that
-#   need the prefill half; stdout stays the decode TPS so existing callers
-#   are unchanged. Defaults to --mmap to avoid CUDA malloc ghost-VRAM OOM on
-#   WSL2.
+# _bench_stop <pid> — graceful llama-server shutdown (WSL2 dxgkrnl leak fix).
+#   SIGKILL bypasses llama-server's clean teardown and orphans its CUDA/DirectX
+#   handles in the host dxgkrnl VMBus channel; the orphaned contexts accumulate
+#   until dxgkio_destroy_allocation fails with -512.  SIGTERM lets llama-server
+#   run its destructor (ggml_backend_free → cudaFree) and release the handles
+#   cleanly.  Poll up to 15s for a graceful exit, escalating to SIGKILL only if
+#   the process is genuinely stuck.  A clean exit normally lands in 1-3s.
 # ---------------------------------------------------------------------------
-# Nested function — captures $MODEL from parent scope for temp-tag naming
-bench_once() {
-    local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}"
-    local mode="${6:-quick}" kv_k="${7:-q8_0}" kv_v="${8:-q8_0}"
-    local tag="/tmp/at-vram-${MODEL}-${c}"
+_bench_stop() {
+    local _p="$1" _w=0
+    [[ "$_p" =~ ^[0-9]+$ ]] || return 0
+    kill "$_p" 2>/dev/null || true
+    while [[ $_w -lt 15 ]]; do
+        kill -0 "$_p" 2>/dev/null || return 0
+        sleep 1; _w=$((_w + 1))
+    done
+    kill -9 "$_p" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# _bench_spawn — launch llama-server once (flash-attn retry), pre-flight, and
+#   warm up the GPU.  On success sets the module globals _BENCH_PID,
+#   _BENCH_HEALTH_URL and _BENCH_LOG and returns 0; on failure writes the
+#   "0|0|<type>" metric line and returns 1.  Split out of bench_once so a
+#   multi-sample bench can spawn ONE server and reuse its CUDA context across
+#   every sample instead of creating/destroying a context per sample (WSL2
+#   dxgkrnl leaks GPU VA on each context create/destroy — see bench_once_multi).
+#   args: ctx batch ubatch [mmap_mode] [ngl] [kv_k] [kv_v]
+# ---------------------------------------------------------------------------
+_bench_spawn() {
+    local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}" kv_k="${6:-q8_0}" kv_v="${7:-q8_0}"
     local effective_ngl="${override_ngl:-${BENCH_NGL:-999}}"
-
-    _BENCH_FAIL_TYPE=""  # global: "load_fail" or "oom"; reset before each bench
-    cleanup_gpu 2>/dev/null || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
-
-    if [[ ! -f $tag ]]; then
-        local g; g=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-        echo "  VRAM cleared: $(fmt "${g:-?}") MiB free" >&2
-        touch "$tag"
-    fi
+    local autotune_port="${AUTOTUNE_PORT:-18082}"
+    local health_url="http://127.0.0.1:$autotune_port"
+    _BENCH_PID="" _BENCH_HEALTH_URL="$health_url" _BENCH_LOG="/tmp/at-${MODEL}-c${c}-b${b}.log"
 
     local mmap_flag=""
     [[ $mmap_mode == off ]] && mmap_flag="--no-mmap"
 
-    # REF: ubuntu-console card ca23ec0a — Use AUTOTUNE_PORT (default 18082)
-    # to avoid conflicting with llama-server.service (production, 18081).
-    # The bench uses LLM_PORT which preserves the watchdog's port.
-    local autotune_port="${AUTOTUNE_PORT:-18082}"
-    # Update all curl/http references to use the same port
-    local health_url="http://127.0.0.1:$autotune_port"
     # Flash-attn can hang or crash model load for some architectures (e.g.
     # qwen35 / certain Q8/F16 quants) — retry once with it off before
     # declaring the model unloadable.
     local flash_attn="on"
-    local pid="" hw=0
+    local hw=0
     _launch_server() {
         local -a fa_args=()
         [[ $flash_attn == "on" ]] && fa_args=(--flash-attn on) || fa_args=(--flash-attn off)
@@ -484,13 +531,13 @@ bench_once() {
             --parallel "${BENCH_PARALLEL:-1}" --fit off "${fa_args[@]}" --kv-offload \
             --cache-type-k "$kv_k" --cache-type-v "$kv_v" $mmap_flag \
             "${spec_args[@]}" \
-            > "/tmp/at-${MODEL}-c${c}-b${b}.log" 2>&1 &
-        pid=$!
+            > "$_BENCH_LOG" 2>&1 &
+        _BENCH_PID=$!
         _bump_cuda_cycle
         hw=0
         while [[ $hw -lt 90 ]]; do
             sleep 1; hw=$((hw + 1))
-            kill -0 "$pid" 2>/dev/null || return 1
+            kill -0 "$_BENCH_PID" 2>/dev/null || return 1
             curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q 'ok' && return 0
         done
         return 1
@@ -498,14 +545,14 @@ bench_once() {
     _launch_server || {
         if [[ $flash_attn == "on" ]]; then
             echo "  flash-attn load failure — retrying with --flash-attn off" >&2
-            kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+            _bench_stop "$_BENCH_PID"
             flash_attn="off"
             _launch_server || true
         fi
     }
     if [[ $hw -ge 90 ]]; then
-        kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
-        echo "0|0|load_fail" > "/tmp/at-metrics-$$"; echo ""; _BENCH_FAIL_TYPE="load_fail"; return 1
+        _bench_stop "$_BENCH_PID"
+        echo "0|0|load_fail" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="load_fail"; return 1
     fi
 
     # Pre-flight: confirm model slot is actually ready to serve.
@@ -520,12 +567,12 @@ bench_once() {
             2>/dev/null | "$TAC_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))" 2>/dev/null | grep -q '[1-9]'; then
             pf_ok=1; break
         fi
-        kill -0 "$pid" 2>/dev/null || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
+        kill -0 "$_BENCH_PID" 2>/dev/null || { echo "0|0|oom" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="oom"; return 1; }
         sleep 1; pf_w=$((pf_w + 1))
     done
     if [[ $pf_ok -ne 1 ]]; then
-        kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
-        echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; _BENCH_FAIL_TYPE="oom"; return 1
+        _bench_stop "$_BENCH_PID"
+        echo "0|0|oom" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="oom"; return 1
     fi
 
     # GPU warmup: wake clocks from power-save (P5/P8 → P0).
@@ -541,24 +588,53 @@ bench_once() {
         -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Warmup\"}],\"max_tokens\":${warmup_tokens},\"temperature\":0}" \
         > /dev/null 2>&1 || true
 
-    local payload_file="$PAYLOAD_FILE"
-    local bench_timeout="$BENCH_TIMEOUT"
-    if [[ $mode == filled ]]; then
-        payload_file="/tmp/at-fill-${MODEL}-${c}.json"
-        [[ -f $payload_file ]] || gen_fill_payload "$c" "$payload_file"
-        # Filled prefill can be slow: with the KV cache spilling into host RAM
-        # at huge ctx, prefill can drop below 55 tok/s, and lower still under
-        # concurrent load. Give generous headroom so slow-but-real prefills
-        # complete and are measured instead of timing out and being
-        # misclassified as OOM (which forces unnecessary Phase-4 descents).
-        [[ $bench_timeout -lt 1200 ]] && bench_timeout=1200
-    fi
+    return 0
+}
 
+# ---------------------------------------------------------------------------
+# _bench_resolve_payload — echo "payload_file|bench_timeout" for a bench at
+#   the given ctx + mode (quick / filled / filled fast-reject).  Resolved once
+#   so every sample of a multi-sample bench reuses the same payload file.
+# ---------------------------------------------------------------------------
+_bench_resolve_payload() {
+    local c="$1" mode="$2"
+    local payload_file="$PAYLOAD_FILE" bench_timeout="$BENCH_TIMEOUT"
+    if [[ $mode == filled ]]; then
+        if [[ "${_FAST_REJECT:-0}" == "1" ]]; then
+            payload_file="/tmp/at-fast-${MODEL}-${c}.json"
+            [[ -f $payload_file ]] || gen_fast_fill_payload "$payload_file"
+            # Fast-reject (Phase-4 descent): a 2K fill + 32-token decode is
+            # enough to vote above/below floor; keep the timeout tight so a
+            # hung spill fails fast instead of burning the descent.
+            [[ $bench_timeout -lt 180 ]] && bench_timeout=180
+        else
+            payload_file="/tmp/at-fill-${MODEL}-${c}.json"
+            [[ -f $payload_file ]] || gen_fill_payload "$c" "$payload_file"
+            # Filled prefill can be slow: with the KV cache spilling into host RAM
+            # at huge ctx, prefill can drop below 55 tok/s, and lower still under
+            # concurrent load. Give generous headroom so slow-but-real prefills
+            # complete and are measured instead of timing out and being
+            # misclassified as OOM (which forces unnecessary Phase-4 descents).
+            [[ $bench_timeout -lt 1200 ]] && bench_timeout=1200
+        fi
+    fi
+    echo "${payload_file}|${bench_timeout}"
+}
+
+# ---------------------------------------------------------------------------
+# _bench_request_once — one completion request against the spawned server.
+#   args: mode payload_file bench_timeout
+#   Returns decode TPS on stdout (empty + rc 1 on OOM/sentinel); writes the
+#   metrics file.  Does NOT kill the server — the caller owns the lifecycle so
+#   multiple samples can share one CUDA context (see bench_once_multi).
+# ---------------------------------------------------------------------------
+_bench_request_once() {
+    local mode="$1" payload_file="$2" bench_timeout="$3"
+    local health_url="${_BENCH_HEALTH_URL:-http://127.0.0.1:${AUTOTUNE_PORT:-18082}}"
     local start_ns; start_ns=$(date +%s%N)
     local resp; resp=$(curl -sS --max-time "$bench_timeout" "$health_url/v1/chat/completions" \
         -H "Content-Type: application/json" -d @"$payload_file" 2>/dev/null) || true
     local end_ns; end_ns=$(date +%s%N)
-    kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
 
     local elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
 
@@ -602,7 +678,7 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
     local _acc_len="0" _acc_rate="0"
     if declare -f __spec_decode_stats &>/dev/null; then
         IFS='|' read -r _acc_rate _acc_n _acc_g _acc_len _acc_present \
-            <<< "$(__spec_decode_stats "/tmp/at-${MODEL}-c${c}-b${b}.log")"
+            <<< "$(__spec_decode_stats "${_BENCH_LOG}")"
     fi
     local _spec_block="${BENCH_SPEC_N_MAX:-0}"
     [[ "$_spec_block" =~ ^[0-9]+$ ]] || _spec_block=0
@@ -646,6 +722,109 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
 }
 
 # ---------------------------------------------------------------------------
+# bench_once — start server, run one benchmark, return decode TPS on stdout.
+#   args: ctx batch ubatch [mmap_mode] [ngl] [mode] [kv_k] [kv_v]
+#   mmap_mode: "auto" (--mmap, default) or "off" (--no-mmap)
+#   mode: "quick" (short prompt, discovery) or "filled" (scoring: pre-fills
+#         the KV cache with a FILL_RATIO x ctx prompt and measures sustained
+#         decode + prefill from the server timings)
+#   kv_k/kv_v: cache-type-k / cache-type-v (default q8_0)
+#   Writes "decode|prefill" (tok/s) to /tmp/at-metrics-$$ for callers that
+#   need the prefill half; stdout stays the decode TPS so existing callers
+#   are unchanged. Defaults to --mmap to avoid CUDA malloc ghost-VRAM OOM on
+#   WSL2.
+# ---------------------------------------------------------------------------
+bench_once() {
+    local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}"
+    local mode="${6:-quick}" kv_k="${7:-q8_0}" kv_v="${8:-q8_0}"
+    local tag="/tmp/at-vram-${MODEL}-${c}"
+
+    _BENCH_FAIL_TYPE=""  # global: "load_fail" or "oom"; reset before each bench
+    cleanup_gpu 2>/dev/null || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
+
+    if [[ ! -f $tag ]]; then
+        local g; g=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        echo "  VRAM cleared: $(fmt "${g:-?}") MiB free" >&2
+        touch "$tag"
+    fi
+
+    local pf_info; pf_info=$(_bench_resolve_payload "$c" "$mode")
+    local payload_file bench_timeout
+    IFS='|' read -r payload_file bench_timeout <<< "$pf_info"
+
+    _bench_spawn "$c" "$b" "$u" "$mmap_mode" "$override_ngl" "$kv_k" "$kv_v" || {
+        _bench_stop "$_BENCH_PID"
+        echo ""; return 1
+    }
+
+    local tps; tps=$(_bench_request_once "$mode" "$payload_file" "$bench_timeout") || tps=""
+    _bench_stop "$_BENCH_PID"
+    [[ -n "$tps" ]] || { echo ""; return 1; }
+    echo "$tps"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# bench_once_multi — single-server multi-sample bench (WSL2 dxgkrnl fix).
+#   Spawn ONE llama-server and issue N requests against it, returning the
+#   median decode TPS.  Every spawn/kill is a CUDA context create/destroy
+#   cycle; WSL2's dxgkrnl leaks GPU VA on each one and eventually fails
+#   dxgkio_destroy_allocation with -512, deadlocking the adapter until
+#   `wsl --shutdown`.  Collapsing N cycles into one directly reduces the
+#   degradation the autotune causes (single-process context reuse).
+#   args: samples ctx batch ubatch [mmap_mode] [ngl] [mode] [kv_k] [kv_v]
+# ---------------------------------------------------------------------------
+bench_once_multi() {
+    local samples="$1" c="$2" b="$3" u="$4" mmap_mode="${5:-auto}" override_ngl="${6:-}"
+    local mode="${7:-quick}" kv_k="${8:-q8_0}" kv_v="${9:-q8_0}"
+    local tag="/tmp/at-vram-${MODEL}-${c}"
+
+    _BENCH_FAIL_TYPE=""
+    cleanup_gpu 2>/dev/null || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
+
+    if [[ ! -f $tag ]]; then
+        local g; g=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+        echo "  VRAM cleared: $(fmt "${g:-?}") MiB free" >&2
+        touch "$tag"
+    fi
+
+    local pf_info; pf_info=$(_bench_resolve_payload "$c" "$mode")
+    local payload_file bench_timeout
+    IFS='|' read -r payload_file bench_timeout <<< "$pf_info"
+
+    _bench_spawn "$c" "$b" "$u" "$mmap_mode" "$override_ngl" "$kv_k" "$kv_v" || {
+        _bench_stop "$_BENCH_PID"
+        echo ""; return 1
+    }
+
+    local -a vals=()
+    local _i _v
+    for ((_i = 0; _i < samples; _i++)); do
+        _v=$(_bench_request_once "$mode" "$payload_file" "$bench_timeout") || _v=""
+        _v=$(echo "$_v" | bc 2>/dev/null || echo "0")
+        if [[ $(echo "$_v > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
+            vals+=("$_v")
+        fi
+    done
+    _bench_stop "$_BENCH_PID"
+
+    if [[ ${#vals[@]} -eq 0 ]]; then echo ""; return 1; fi
+
+    local tps
+    if [[ ${#vals[@]} -eq 1 ]]; then
+        tps="${vals[0]}"
+    elif [[ $samples -eq 2 ]]; then
+        tps=$(echo "scale=2; (${vals[0]}+${vals[1]})/${#vals[@]}" | bc -l 2>/dev/null || echo "${vals[0]}")
+    else
+        # Median of the survivors (LC_ALL=C sort keeps decimals locale-safe).
+        tps=$(printf '%s\n' "${vals[@]}" | LC_ALL=C sort -n | awk '{a[NR]=$1} END { if (NR%2) print a[(NR+1)/2]; else printf "%.2f\n", (a[NR/2]+a[NR/2+1])/2 }')
+    fi
+    tps=$(echo "scale=2; $tps / 1" | bc -l 2>/dev/null || echo "$tps"); [ -z "$tps" ] && tps=0
+    echo "$tps"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # bench_ctx — returns decode TPS on stdout, empty on failure. RC 0/1.
 #   args: ctx batch ubatch [samples] [mmap_mode] [ngl] [mode] [kv_k] [kv_v]
 #   Also refreshes /tmp/at-metrics-$$ with "decode|prefill" from the last
@@ -675,33 +854,12 @@ bench_ctx() {
         return 0
     fi
 
-    # Multi-sample (samples >= 2): drop OOM samples, then combine the rest.
-    # For N >= 3 the verdict is the MEDIAN of the surviving samples — a single
-    # unlucky low read cannot flip a Phase 4 floor verdict. N == 2 keeps the
-    # historical mean (a "median of 2" is just a mean). bench_once already
-    # warms up the server inside each call, so no extra warmup discard is
-    # needed here.
-    local -a vals=()
-    local _i _v
-    for ((_i = 0; _i < samples; _i++)); do
-        _v=$(bench_once "$c" "$b" "$u" "$mmap_mode" "$override_ngl" "$mode" "$kv_k" "$kv_v") || _v=""
-        _v=$(echo "$_v" | bc 2>/dev/null || echo "0")
-        if [[ $(echo "$_v > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
-            vals+=("$_v")
-        fi
-    done
-    if [[ ${#vals[@]} -eq 0 ]]; then echo ""; return 1; fi
-
-    local tps
-    if [[ ${#vals[@]} -eq 1 ]]; then
-        tps="${vals[0]}"
-    elif [[ $samples -eq 2 ]]; then
-        tps=$(echo "scale=2; (${vals[0]}+${vals[1]})/${#vals[@]}" | bc -l 2>/dev/null || echo "${vals[0]}")
-    else
-        # Median of the survivors (LC_ALL=C sort keeps decimals locale-safe).
-        tps=$(printf '%s\n' "${vals[@]}" | LC_ALL=C sort -n | awk '{a[NR]=$1} END { if (NR%2) print a[(NR+1)/2]; else printf "%.2f\n", (a[NR/2]+a[NR/2+1])/2 }')
-    fi
-    tps=$(echo "scale=2; $tps / 1" | bc -l 2>/dev/null || echo "$tps"); [ -z "$tps" ] && tps=0
+    # Multi-sample (samples >= 2): spawn ONE server and issue N requests
+    # against it, returning the median of surviving samples.  Reusing one CUDA
+    # context across samples is the WSL2 dxgkrnl fix — each spawn/kill is a
+    # context create/destroy that leaks GPU VA and eventually fails
+    # dxgkio_destroy_allocation with -512 (see bench_once_multi).
+    local tps; tps=$(bench_once_multi "$samples" "$c" "$b" "$u" "$mmap_mode" "$override_ngl" "$mode" "$kv_k" "$kv_v") || { echo ""; return 1; }
     # Refinement: only check for actual OOM (0 tokens). TPS floor is applied
     # at the final check — rejecting here hides the true ceiling.
     echo "$tps"
@@ -1273,7 +1431,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     # that sustains MIN_TPS at a FILLED cache. A model below the floor at
     # its capacity ctx is NOT certified at capacity — it descends until the
     # floor is met (or MIN_CTX), so the recorded ctx is the usable one.
-    _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
+    _FAST_REJECT=1
+    _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
     if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
         _fp="0"
         IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -1290,7 +1449,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             _dc=$(( _dc * 3 / 4 )); _dc=$(( _dc / 512 * 512 ))
             [[ $_dc -lt $MIN_CTX ]] && _dc=$MIN_CTX
             while :; do
-                _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
+                _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
                 if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
                     IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
                     echo "  ctx $(fmt "$_dc") - filled ${_ft} tps (prefill ${_fp:-0} tok/s)"
@@ -1317,6 +1476,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             fi
         fi
     else
+        _FAST_REJECT=0
         fail_label="OOM"
         [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
         echo "  ctx $(fmt "$_dc") - filled ${fail_label} (capacity ctx failed the filled load — descending once)"
@@ -1338,6 +1498,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
 
     # Final certification: triple-sample (median) at the winner for the
     # recorded number — the persisted TPS is a robust estimate, not a burst.
+    _FAST_REJECT=0
     _cert=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert=""
     if [[ -n $_cert ]] && [[ $(echo "$_cert > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
         BEST_TPS=$_cert
@@ -1376,7 +1537,9 @@ fi
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
     if [[ "$P2_CTX|$P2_B:$P2_U" != "$BEST_CTX|$BEST_B:$BEST_U" ]]; then
         echo "  certifying profile 2 (interactive) at ctx=$(fmt "$P2_CTX")  $(fmt "$P2_B")/$(fmt "$P2_U")"
-        _p2t=$(bench_ctx "$P2_CTX" "$P2_B" "$P2_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _p2t=""
+        # samples=1: profile 2 is a secondary (interactive) profile; one sample
+        # keeps churn to a single launch (WSL2 dxgkrnl VA leak, 2026-09-05).
+        _p2t=$(bench_ctx "$P2_CTX" "$P2_B" "$P2_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _p2t=""
         if [[ -n $_p2t ]] && [[ $(echo "$_p2t > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
             P2_TPS=$_p2t
             IFS='|' read -r _pd3 _pp3 _pf3 < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -1420,7 +1583,11 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             continue
         fi
         BENCH_SPEC_TYPE="ngram"; BENCH_SPEC_N_MAX="$_sb_block"
-        _sb_t=$(bench_ctx "$BEST_CTX" "$_sb_b" "$_sb_u" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _sb_t=""
+        # samples=1 (not 3): the block sweep is a *selection*, not a recorded
+        # number — a single sample per block keeps the CUDA-context churn to
+        # 4 launches instead of 12, which matters because WSL2 dxgkrnl leaks
+        # GPU VA per launch (~26-cycle knee at huge ctx, measured 2026-09-05).
+        _sb_t=$(bench_ctx "$BEST_CTX" "$_sb_b" "$_sb_u" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _sb_t=""
         _sb_t=$(echo "$_sb_t" | bc 2>/dev/null || echo "0"); [ -z "$_sb_t" ] && _sb_t=0
         _sb_al="0"; _sb_ar="0"
         IFS='|' read -r _sb_d _sb_p _sb_f _sb_al _sb_ar _sb_bl < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -1487,13 +1654,13 @@ ttft_probe() {
     }
     _launch_ttft_server || {
         if [[ $flash_attn == "on" ]]; then
-            kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+            _bench_stop "$pid"
             flash_attn="off"
             _launch_ttft_server || true
         fi
     }
     if [[ $hw -ge 90 ]]; then
-        kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+        _bench_stop "$pid"
         echo ""; return 1
     fi
 
@@ -1511,7 +1678,7 @@ ttft_probe() {
         sleep 1; pf_w=$((pf_w + 1))
     done
     if [[ $pf_ok -ne 1 ]]; then
-        kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+        _bench_stop "$pid"
         echo ""; return 1
     fi
 
@@ -1608,7 +1775,7 @@ print("%s|%s" % (ttft_ms, count))
 PYEOF
     ) || parsed="0|0"
     local end_ns; end_ns=$(date +%s%N)
-    kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+    _bench_stop "$pid"
 
     local total_ms=$(( (end_ns - start_ns) / 1000000 ))
     local ttft_ms delivered per_step
@@ -1626,28 +1793,28 @@ fi  # AUTOTUNE_SELFTEST guard — the stub defined in the selftest block wins.
 
 # ── AUTOTUNE-003: time-to-first-token at the winning config ─────────────────
 # Agentic steps are latency-bound (long prompt, short completion) — TTFT is
-# the decisive metric and the burst TPS floor cannot see it.  Three streaming
-# samples at the winning config; the median TTFT is recorded in the registry
+# the decisive metric and the burst TPS floor cannot see it.  One streaming
+# sample at the winning config; the TTFT is recorded in the registry
 # (column 34) and surfaced next to TPS in the summary.
 TTFT_MS=0; TTFT_PER_STEP=0
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r BEST_B BEST_U <<< "$BEST_COMBO"
     echo ""
-    echo "  TTFT probe at ctx=$(fmt "$BEST_CTX")  (workload ${WORKLOAD}, 3 samples)"
+    # 1 sample (not 3): TTFT is a secondary latency metric; a single sample
+    # keeps the CUDA-context churn to one launch (WSL2 dxgkrnl VA leak).
+    echo "  TTFT probe at ctx=$(fmt "$BEST_CTX")  (workload ${WORKLOAD}, 1 sample)"
     echo "  ---------------------"
     _tt_samples=()
     _ps_samples=()
-    for _ti in 1 2 3; do
-        _tt=$(ttft_probe "$BEST_CTX" "$BEST_B" "$BEST_U" "$EFFECTIVE_MMAP" "$WIN_NGL" "$WIN_KVK" "$WIN_KVV") || _tt=""
-        if [[ -n "$_tt" ]]; then
-            IFS='|' read -r _ttv _psv <<< "$_tt"
-            echo "  sample ${_ti}: ttft ${_ttv:-0} ms (per-step decode ${_psv:-0} ms/token)"
-            [[ "$_ttv" =~ ^[0-9]+$ ]] && _tt_samples+=("$_ttv")
-            [[ "$_psv" =~ ^[0-9]+(\.[0-9]+)?$ ]] && _ps_samples+=("$_psv")
-        else
-            echo "  sample ${_ti}: failed"
-        fi
-    done
+    _tt=$(ttft_probe "$BEST_CTX" "$BEST_B" "$BEST_U" "$EFFECTIVE_MMAP" "$WIN_NGL" "$WIN_KVK" "$WIN_KVV") || _tt=""
+    if [[ -n "$_tt" ]]; then
+        IFS='|' read -r _ttv _psv <<< "$_tt"
+        echo "  sample 1: ttft ${_ttv:-0} ms (per-step decode ${_psv:-0} ms/token)"
+        [[ "$_ttv" =~ ^[0-9]+$ ]] && _tt_samples+=("$_ttv")
+        [[ "$_psv" =~ ^[0-9]+(\.[0-9]+)?$ ]] && _ps_samples+=("$_psv")
+    else
+        echo "  sample 1: failed"
+    fi
     if [[ ${#_tt_samples[@]} -ge 1 ]]; then
         TTFT_MS=$(printf '%s\n' "${_tt_samples[@]}" | LC_ALL=C sort -n | awk '{a[NR]=$1} END { if (NR%2) print a[(NR+1)/2]; else printf "%.0f\n", (a[NR/2]+a[NR/2+1])/2 }')
         TTFT_PER_STEP=$(printf '%s\n' "${_ps_samples[@]}" | LC_ALL=C sort -n | awk '{a[NR]=$1} END { if (NR%2) print a[(NR+1)/2]; else printf "%.1f\n", (a[NR/2]+a[NR/2+1])/2 }')

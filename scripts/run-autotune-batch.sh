@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -54,7 +54,12 @@ HALT_REASON=""
 # the boot ID). Override via env to tune for a different GPU / WSL build.
 _AUTOTUNE_BOOT_ID="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
 CUDA_CYCLE_FILE="${CUDA_CYCLE_FILE:-/tmp/autotune-cuda-cycles-${_AUTOTUNE_BOOT_ID:-unknown}}"
-CUDA_CYCLE_BUDGET="${CUDA_CYCLE_BUDGET:-250}"       # CUDA context create/destroy cycles before halt
+CUDA_CYCLE_BUDGET="${CUDA_CYCLE_BUDGET:-60}"        # CUDA context create/destroy cycles before halt
+# The 60 default (was 250) reflects the measured degradation knee: ~26
+# launch/kill cycles at 109K ctx collapsed tps ~16 -> ~3.8 (2026-09-05). With
+# the ctx probe now capped at ~2x the KV-fit estimate (~54K), each cycle leaks
+# ~2x less VA, so ~60 is a safe margin below the ~70-100-cycle threshold at
+# that ctx. Override via env for a different GPU / WSL build.
 MAX_MODELS_PER_CHUNK="${MAX_MODELS_PER_CHUNK:-0}"   # 0 = unlimited; else halt after this many models
 export CUDA_CYCLE_FILE
 
