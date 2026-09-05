@@ -611,6 +611,15 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
     # callers (survives the subshell that bench_ctx runs in — globals do not).
     echo "${decode_tps:-0}|${prefill_tps:-0}||${_acc_len}|${_acc_rate}|${_spec_block}" > "/tmp/at-metrics-$$"
 
+    # TPS sentinel guard: llama.cpp clamps t_gen_us to a 1 us floor, so a
+    # filled-cache decode that emits EOS in the same microsecond reports a
+    # degenerate 1e6 tps (1000000.00), not real throughput. Reject it so the
+    # caller keeps the real beam-search tps instead of certifying the sentinel.
+    if [[ $mode == filled ]] && [[ $(echo "${decode_tps:-0} >= 1000" | bc 2>/dev/null || echo "0") == 1 ]]; then
+        echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; _BENCH_FAIL_TYPE="oom"
+        return 1
+    fi
+
     if [[ $elapsed_ms -gt 0 && $delivered_tokens -gt 0 ]] && [[ $(echo "${decode_tps:-0} > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
         echo "scale=2; $decode_tps / 1" | bc 2>/dev/null || echo "0"
         return 0
