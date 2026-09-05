@@ -355,6 +355,22 @@ PYEOF
 # Helpers
 #==============================================================================
 
+# CUDA context-cycle counter — WSL2 dxgkrnl leaks GPU VA on every CUDA
+# context create/destroy, so the batch (run-autotune-batch.sh) halts when the
+# count exceeds its budget. Namespaced by boot ID: a WSL restart is the only
+# leak reset and it changes the boot ID, starting a fresh counter.
+_AUTOTUNE_BOOT_ID="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
+_CUDA_CYCLE_FILE="${CUDA_CYCLE_FILE:-/tmp/autotune-cuda-cycles-${_AUTOTUNE_BOOT_ID:-unknown}}"
+
+_bump_cuda_cycle() {
+    local n=0
+    [[ -f "$_CUDA_CYCLE_FILE" ]] && n=$(cat "$_CUDA_CYCLE_FILE" 2>/dev/null || echo 0)
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    n=$((n + 1))
+    echo "$n" > "$_CUDA_CYCLE_FILE"
+    return 0
+}
+
 # Shared cleanup — kills llama-server, stale processes, and forces WSL2
 # ghost-VRAM release via nvidia-smi query-context reset (double-kill trick).
 # This is the fast path (~2 s). The full nvidia-uvm reload (clear_vram.sh)
@@ -470,6 +486,7 @@ bench_once() {
             "${spec_args[@]}" \
             > "/tmp/at-${MODEL}-c${c}-b${b}.log" 2>&1 &
         pid=$!
+        _bump_cuda_cycle
         hw=0
         while [[ $hw -lt 90 ]]; do
             sleep 1; hw=$((hw + 1))
@@ -1459,6 +1476,7 @@ ttft_probe() {
             --cache-type-k "$kv_k" --cache-type-v "$kv_v" $mmap_flag \
             > "/tmp/at-ttft-${MODEL}-c${c}.log" 2>&1 &
         pid=$!
+        _bump_cuda_cycle
         hw=0
         while [[ $hw -lt 90 ]]; do
             sleep 1; hw=$((hw + 1))
