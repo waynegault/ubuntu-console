@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 12
+# Module Version: 13
 # ==============================================================================
 
 # ==============================================================================
@@ -174,8 +174,16 @@ function __resolve_vscode_bin() {
         ts=$(< "$timestamp_file")
         if (( now - ts < __VSCODE_CACHE_TTL ))
         then
-            VSCODE_BIN=$(< "$cache_file")
-            return
+            local cached
+            cached=$(< "$cache_file")
+            # Re-validate: a stale value such as a bare command name ("code"
+            # from a prior command -v resolution that matched the shell
+            # function) is not an executable path and must be re-resolved.
+            if [[ -n "$cached" && -x "$cached" ]]
+            then
+                VSCODE_BIN="$cached"
+                return
+            fi
         fi
     fi
     # Cache miss or expired — resolve path
@@ -189,8 +197,16 @@ function __resolve_vscode_bin() {
     if [[ -n "$win_user" ]]
     then
         VSCODE_BIN="$WINDOWS_USER_ROOT/${win_user}/AppData/Local/Programs/Microsoft VS Code/bin/code"
-    else
-        VSCODE_BIN=$(command -v code 2>/dev/null || echo "")
+        # Validate the Windows-side path still resolves; fall back to PATH
+        # `code` (the WSL VS Code Server remote-cli) if it is missing.
+        [[ -x "$VSCODE_BIN" ]] || VSCODE_BIN=""
+    fi
+    if [[ -z "$VSCODE_BIN" ]]
+    then
+        # type -P resolves the PATH executable while ignoring the `code` shell
+        # function defined in §4 (command -v would return the bare function
+        # name "code" instead of the binary path).
+        VSCODE_BIN=$(type -P code 2>/dev/null || echo "")
     fi
     if [[ -n "$VSCODE_BIN" ]]
     then
