@@ -1,10 +1,11 @@
 #!/usr/bin/env bats
 # ==============================================================================
-# Integration Tests — Llama Watchdog
+# Integration Tests — Llama Watchdog (v3.0, dual-lane)
 # ==============================================================================
-# Tests llama-watchdog.sh health probing, GPU-busy gating, and systemd-based
-# recovery. All external commands (curl, systemctl, gpu-busy.sh) are mocked so
-# the suite is hermetic and never touches the live llama-server.service.
+# Tests llama-watchdog.sh v3.0: health probing, 2-strike recovery, the
+# always-on Xe lane, and the GPU-gated CUDA lane. All external commands (curl,
+# systemctl, gpu-busy.sh) are mocked so the suite is hermetic and never touches
+# the live llama-server.service.
 # Run: bats tests/integration/04-watchdog.bats
 # ==============================================================================
 
@@ -16,12 +17,17 @@ setup_file() {
     TAC_TEST_TMPDIR="$(mktemp -d)"
     export WATCHDOG_MOCK_BIN="$TAC_TEST_TMPDIR/mock-bin"
     export WATCHDOG_MOCK_STATE="$TAC_TEST_TMPDIR/state"
+    export WATCHDOG_MOCK_HOME="$TAC_TEST_TMPDIR/home"
     export SYSTEMCTL_MOCK_LOG="$TAC_TEST_TMPDIR/systemctl.log"
     export SYSTEMCTL_MOCK_STATE="$WATCHDOG_MOCK_STATE"
-    mkdir -p "$WATCHDOG_MOCK_BIN" "$WATCHDOG_MOCK_STATE"
+    mkdir -p "$WATCHDOG_MOCK_BIN" "$WATCHDOG_MOCK_STATE" "$WATCHDOG_MOCK_HOME/.local/bin"
+
+    # v3.0 resolves gpu-busy.sh as $HOME/.local/bin/gpu-busy.sh (GPU_BUSY_SH is
+    # no longer honoured), so point HOME at the sandbox and drop the mock there.
+    export HOME="$WATCHDOG_MOCK_HOME"
 
     # Mock curl: /health and /v1/models succeed only once the "healthy" marker
-    # exists (set manually, or by the mock systemctl on restart).
+    # exists (set by the mock systemctl on restart/start).
     cat > "$WATCHDOG_MOCK_BIN/curl" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "$*" == *"/health"* || "$*" == *"/v1/models"* ]]
@@ -33,9 +39,9 @@ exit 22
 MOCK
     chmod +x "$WATCHDOG_MOCK_BIN/curl"
 
-    # Mock systemctl --user: records every call; `show` prints the unit state
-    # from the active_state file; `restart` marks the unit healthy (and fails
-    # if fail_restart is set); `reset-failed` records itself.
+    # Mock systemctl --user. `show` reports per-unit state from xe_state/nv_state;
+    # restart/start mark the lane healthy (unless fail_restart/fail_start is set);
+    # stop and reset-failed record themselves.
     cat > "$WATCHDOG_MOCK_BIN/systemctl" <<'MOCK'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -43,15 +49,26 @@ if [[ "${1:-}" == "--user" ]]; then shift; fi
 op="${1:-}"; shift || true
 case "$op" in
     show)
-        cat "$SYSTEMCTL_MOCK_STATE/active_state" 2>/dev/null || echo "inactive"
+        unit="${1:-}"
+        case "$unit" in
+            *nvidia*) cat "$SYSTEMCTL_MOCK_STATE/nv_state" 2>/dev/null || echo "inactive" ;;
+            *)        cat "$SYSTEMCTL_MOCK_STATE/xe_state" 2>/dev/null || echo "inactive" ;;
+        esac
         ;;
     restart)
         echo "restart $*" >> "$SYSTEMCTL_MOCK_LOG"
-        if [[ -f "$SYSTEMCTL_MOCK_STATE/fail_restart" ]]; then
-            exit 1
-        fi
-        touch "$SYSTEMCTL_MOCK_STATE/restart_called"
-        touch "$SYSTEMCTL_MOCK_STATE/healthy"
+        [[ -f "$SYSTEMCTL_MOCK_STATE/fail_restart" ]] && exit 1
+        touch "$SYSTEMCTL_MOCK_STATE/restart_called" "$SYSTEMCTL_MOCK_STATE/healthy"
+        ;;
+    start)
+        echo "start $*" >> "$SYSTEMCTL_MOCK_LOG"
+        [[ -f "$SYSTEMCTL_MOCK_STATE/fail_start" ]] && exit 1
+        touch "$SYSTEMCTL_MOCK_STATE/start_called" "$SYSTEMCTL_MOCK_STATE/healthy"
+        ;;
+    stop)
+        echo "stop $*" >> "$SYSTEMCTL_MOCK_LOG"
+        touch "$SYSTEMCTL_MOCK_STATE/stop_called"
+        rm -f "$SYSTEMCTL_MOCK_STATE/healthy"
         ;;
     reset-failed)
         echo "reset-failed $*" >> "$SYSTEMCTL_MOCK_LOG"
@@ -65,7 +82,7 @@ MOCK
     chmod +x "$WATCHDOG_MOCK_BIN/systemctl"
 
     # Mock gpu-busy.sh: free unless the "busy" marker exists.
-    cat > "$WATCHDOG_MOCK_BIN/gpu-busy" <<'MOCK'
+    cat > "$WATCHDOG_MOCK_HOME/.local/bin/gpu-busy.sh" <<'MOCK'
 #!/usr/bin/env bash
 if [[ -f "$SYSTEMCTL_MOCK_STATE/busy" ]]; then
     echo '{"busy":true,"reasons":["mock"]}'
@@ -74,7 +91,7 @@ fi
 echo '{"busy":false,"reasons":[]}'
 exit 0
 MOCK
-    chmod +x "$WATCHDOG_MOCK_BIN/gpu-busy"
+    chmod +x "$WATCHDOG_MOCK_HOME/.local/bin/gpu-busy.sh"
 }
 
 teardown_file() {
@@ -82,12 +99,15 @@ teardown_file() {
 }
 
 setup() {
-    # Reset mock state, mock log, and the watchdog lock before each test.
+    # Reset mock state, mock log, the 2-strike counters, and the bench lock
+    # before each test (the strike files are real /dev/shm state that persists).
     : > "$SYSTEMCTL_MOCK_LOG" 2>/dev/null || true
     rm -f "$WATCHDOG_MOCK_STATE"/*
-    rm -f /dev/shm/llama-watchdog.lock 2>/dev/null || true
+    rm -f /dev/shm/llama-watchdog.lock \
+          /dev/shm/llama-watchdog-xe.strikes \
+          /dev/shm/llama-watchdog-nv.strikes 2>/dev/null || true
+    rm -f /tmp/llm-bench.lock 2>/dev/null || true
     export PATH="$WATCHDOG_MOCK_BIN:$PATH"
-    export GPU_BUSY_SH="$WATCHDOG_MOCK_BIN/gpu-busy"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -101,6 +121,8 @@ setup() {
 
 @test "integration: watchdog exits cleanly when healthy" {
     touch "$WATCHDOG_MOCK_STATE/healthy"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
 
     run "$WATCHDOG_SCRIPT"
 
@@ -108,70 +130,94 @@ setup() {
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
 }
 
-@test "integration: watchdog recovers via systemctl restart when unhealthy" {
-    run "$WATCHDOG_SCRIPT"
+@test "integration: watchdog restarts the Xe lane on the 2nd consecutive failure" {
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
 
+    # First failure: strike 1, no restart yet.
+    run "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"strike 1/2"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+
+    # Second failure: strike 2, recovery via systemctl restart.
+    run "$WATCHDOG_SCRIPT"
     [[ "$status" -eq 0 ]]
     [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
     grep -q "restart llama-server.service" "$SYSTEMCTL_MOCK_LOG"
     [[ "$output" == *"Recovery successful"* ]]
 }
 
-@test "integration: watchdog defers restart while GPU is busy" {
+@test "integration: watchdog stops the CUDA lane while the GPU is busy" {
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
     touch "$WATCHDOG_MOCK_STATE/busy"
 
     run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
+    [[ "$output" == *"GPU busy — stopping llama-server-nvidia"* ]]
+    grep -q "stop llama-server-nvidia.service" "$SYSTEMCTL_MOCK_LOG"
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
-    [[ "$output" == *"deferring restart"* ]]
 }
 
-@test "integration: watchdog skips when bench lock is present" {
+@test "integration: watchdog skips the Xe lane when the bench lock is present" {
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
     touch /tmp/llm-bench.lock
 
     run "$WATCHDOG_SCRIPT"
 
-    rm -f /tmp/llm-bench.lock
     [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Xe down but bench lock present"* ]]
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
-    [[ "$output" == *"Bench lock present"* ]]
 }
 
-@test "integration: watchdog skips while systemd is already activating" {
-    echo "activating" > "$WATCHDOG_MOCK_STATE/active_state"
+@test "integration: watchdog skips the Xe lane while systemd is already activating" {
+    echo "activating" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
 
     run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Xe unit activating"* ]]
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
-    [[ "$output" == *"already activating"* ]]
 }
 
-@test "integration: watchdog resets a failed unit before restarting" {
-    echo "failed" > "$WATCHDOG_MOCK_STATE/active_state"
+@test "integration: watchdog resets a failed Xe unit before restarting" {
+    echo "failed" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+
+    # First failure only strikes; reset-failed happens inside recovery (strike 2).
+    run "$WATCHDOG_SCRIPT"
+    [[ ! -f "$WATCHDOG_MOCK_STATE/reset_failed_called" ]]
 
     run "$WATCHDOG_SCRIPT"
-
     [[ "$status" -eq 0 ]]
     [[ -f "$WATCHDOG_MOCK_STATE/reset_failed_called" ]]
     [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
     grep -q "reset-failed llama-server.service" "$SYSTEMCTL_MOCK_LOG"
 }
 
-@test "integration: watchdog exits non-zero when systemd restart fails" {
+@test "integration: watchdog logs a failed recovery without a non-zero exit" {
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
     touch "$WATCHDOG_MOCK_STATE/fail_restart"
+    touch "$WATCHDOG_MOCK_STATE/fail_start"
 
     run "$WATCHDOG_SCRIPT"
+    run "$WATCHDOG_SCRIPT"
 
-    [[ "$status" -eq 1 ]]
-    [[ "$output" == *"manual intervention required"* ]]
+    # v3.0 always exits 0 (the user timer should not latch failed); a recovery
+    # that cannot come up is reported on stdout instead.
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"recover failed for llama-server"* ]]
 }
 
 @test "integration: watchdog script has version" {
-    run head -10 "$WATCHDOG_SCRIPT"
+    run grep -c '^VERSION=' "$WATCHDOG_SCRIPT"
 
-    [[ "$output" == *"VERSION"* ]]
+    [[ "$output" -gt 0 ]]
 }
 
 @test "integration: watchdog uses flock for locking" {
@@ -180,8 +226,8 @@ setup() {
     [[ "$output" -gt 0 ]]
 }
 
-@test "integration: watchdog has cleanup trap" {
-    run grep -c "trap.*cleanup" "$WATCHDOG_SCRIPT"
+@test "integration: watchdog has an EXIT trap for lock cleanup" {
+    run grep -c "trap.*EXIT" "$WATCHDOG_SCRIPT"
 
     [[ "$output" -gt 0 ]]
 }

@@ -1,113 +1,172 @@
 #!/usr/bin/env bash
-# llama-watchdog.sh - Check llama-server health; restart the llama-server.service
-# unit if down. Called by systemd user timer.
-# Recovery goes through systemctl --user restart so the unit's ExecStartPre
-# GPU-clear and tuned parameters are preserved. Never pkill/spawn directly.
-# The unit is boot-enabled and gateway-managed (always-on); a deliberate stop
-# is not a normal flow, so stop the timer first if a sustained stop is needed.
+# llama-watchdog.sh - Check local llama-server lanes; recover when unhealthy.
+# v3.0 (2026-09-09): dual-unit management + 2-strike restart + GPU-gated CUDA lane.
+#   - llama-server.service        (Xe OpenCL,  :18081)  always-on baseline lane
+#   - llama-server-nvidia.service (CUDA,       :18083)  runs ONLY while GPU is free;
+#     stopped when GPU busy (foreign workload) so VRAM is freed and gateway
+#     requests fail fast to the Xe lane (per Wayne 09-09: "if cuda is not being
+#     used, it can be used; if it is being used, use xe").
+# Recovery goes through systemctl --user restart/stop/start so the unit's
+# ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
+# directly. The Xe unit is boot-enabled and gateway-managed (always-on).
+# LIMITATION: llama.cpp /health answers 200 while a decode thread is hung on a
+# GPU fault, so decode-hangs are bounded by gateway provider timeouts (idea 2),
+# not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="2.9"  # GPU-busy gate: defer restart while bench/foreign workload uses GPU.
-set -euo pipefail
+VERSION="3.0"
+set -uo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
-# Lock in /dev/shm (tmpfs) - cleared on reboot, no stale lock persistence.
-
-# Cleanup function to release lock explicitly on exit/interrupt
-# shellcheck disable=SC2317  # Called via trap, not directly invoked
-cleanup() {
-    flock -u 200 2>/dev/null || true
-    rm -f /dev/shm/llama-watchdog.lock 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
+# Cleanup is inlined into the trap (rather than a named function) so shellcheck
+# does not flag the body as unreachable (SC2317) for a function invoked only by
+# trap; a suppression comment would be the wrong fix.
+trap 'flock -u 200 2>/dev/null || true; rm -f /dev/shm/llama-watchdog.lock 2>/dev/null || true' EXIT INT TERM
 
 exec 200>/dev/shm/llama-watchdog.lock
 flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance running - skipping"; exit 0; }
 
-# -- Shared constants (canonical values live in tactical-console.bashrc §1) --
-# Production runs as systemd llama-server.service on LLM_SERVICE_PORT (18081).
-# Autotune's scratch port (AUTOTUNE_PORT, 18082) is separate — never probed here.
+# -- Shared constants --
+# Canonical port default kept in the LLM_SERVICE_PORT=... form the cross-script
+# contract check parses; the lanes alias it below.
 LLM_SERVICE_PORT="${LLM_SERVICE_PORT:-18081}"
-LLM_SERVICE_UNIT="${LLM_SERVICE_UNIT:-llama-server}"
+XE_PORT="$LLM_SERVICE_PORT"
+XE_UNIT="llama-server"
+NV_PORT="${LLM_NVIDIA_PORT:-18083}"
+NV_UNIT="llama-server-nvidia"
+STRIKE_XE="/dev/shm/llama-watchdog-xe.strikes"
+STRIKE_NV="/dev/shm/llama-watchdog-nv.strikes"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] $*"; }
 
-llm_healthy() {
-    curl -sf --max-time 5 "http://127.0.0.1:${LLM_SERVICE_PORT}/health" >/dev/null 2>&1 ||
-        curl -sf --max-time 5 "http://127.0.0.1:${LLM_SERVICE_PORT}/v1/models" >/dev/null 2>&1
+# health: 0=ok, 1=down/fail, 2=still loading (503) — treat 2 as "not ready, don't touch"
+health() {
+    local port="$1" code body
+    body=$(curl -s --max-time 5 -w '\n%{http_code}' "http://127.0.0.1:${port}/health" 2>/dev/null)
+    code=$(printf '%s' "$body" | tail -1)
+    case "$code" in
+        200) return 0 ;;
+        503) return 2 ;;
+        *)   curl -sf --max-time 5 "http://127.0.0.1:${port}/v1/models" >/dev/null 2>&1 && return 0 || return 1 ;;
+    esac
 }
 
-# If healthy, nothing to do
-if llm_healthy
-then
-    exit 0
-fi
+strike_get() { cat "$1" 2>/dev/null || echo 0; }
+strike_reset() { printf '0\n' > "$1" 2>/dev/null || true; }
+strike_inc() {
+    local f="$1" n; n=$(strike_get "$f"); n=$((n+1)); printf '%s\n' "$n" > "$f" 2>/dev/null || true
+}
 
-# If bench/autotune is running, skip restart to avoid port conflict (ca23ec0a)
-bench_lock="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
-if [[ -f "$bench_lock" ]]
-then
-    log "Bench lock present ($bench_lock) — skipping restart (port may be claimed by autotune)"
-    exit 0
-fi
+gpu_busy() {
+    local j; j=$("$HOME/.local/bin/gpu-busy.sh" --json 2>/dev/null || true)
+    grep -q '"busy":true' <<< "$j"
+}
 
-# GPU gate (2026-08-16): if the GPU is actually in use by a foreign workload
-# (investigator bench, autotune, clear_vram) or utilization is high, defer the
-# restart — llama-server would just be killed/evicted again (bench does
-# pkill -9 between models). Restart only when the GPU is truly free.
-# Note: gpu-busy.sh exits 1 when busy, so judge the JSON output — with
-# pipefail the pipeline exit status would mask the match.
-GPU_BUSY_SH="${GPU_BUSY_SH:-$HOME/.local/bin/gpu-busy.sh}"
-if [[ -x "$GPU_BUSY_SH" ]]
-then
-    gpu_busy_json=$("$GPU_BUSY_SH" --json 2>/dev/null || true)
-    if grep -q '"busy":true' <<< "$gpu_busy_json"
-    then
-        log "GPU busy (bench/foreign workload) — deferring restart until GPU is clear"
-        exit 0
+bench_lock() { [[ -f "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}" ]]; }
+
+# wait_healthy <unit> <port> <timeout_s> — 0 healthy, 1 not
+wait_healthy() {
+    local unit="$1" port="$2" t="$3" i h
+    for (( i=0; i<t; i++ )); do
+        if health "$port"; then return 0; fi
+        # loading (503) is fine, keep waiting; only give up on hard timeout
+        sleep 1
+    done
+    return 1
+}
+
+# recover <unit> <port> — issue restart (or start if inactive/failed), then wait
+recover() {
+    local unit="$1" port="$2" state
+    state=$(systemctl --user show "$unit.service" -p ActiveState --value 2>/dev/null || true)
+    if [[ "$state" == "failed" ]]; then
+        systemctl --user reset-failed "$unit.service" 2>/dev/null || true
+    fi
+    if ! systemctl --user restart "$unit.service" 2>/dev/null; then
+        systemctl --user start "$unit.service" 2>/dev/null || { log "recover failed for $unit"; return 1; }
+    fi
+    log "Restart issued: $unit"
+    if wait_healthy "$unit" "$port" 150; then
+        log "Recovery successful — $unit healthy on :${port}"
+        return 0
+    fi
+    log "Recovery failed: $unit not healthy on :${port} within 150s"
+    return 1
+}
+
+# ============================================================
+# LANE 1: Xe llama-server — always-on
+# ============================================================
+xe_state=$(systemctl --user show "$XE_UNIT.service" -p ActiveState --value 2>/dev/null || true)
+if health "$XE_PORT"; then
+    strike_reset "$STRIKE_XE"
+else
+    if [[ "$xe_state" == "activating" ]]; then
+        log "Xe unit activating — systemd handling recovery; skipping"
+        strike_reset "$STRIKE_XE"
+    elif health "$XE_PORT" >/dev/null; then
+        :
+    else
+        if bench_lock; then
+            log "Xe down but bench lock present — skipping restart (port may be claimed)"
+        else
+            strike_inc "$STRIKE_XE"
+            s=$(strike_get "$STRIKE_XE")
+            log "Xe health check failed on :${XE_PORT} (unit=${xe_state:-unknown}, strike ${s}/2)"
+            if [[ "$s" -ge 2 ]]; then
+                if recover "$XE_UNIT" "$XE_PORT"; then strike_reset "$STRIKE_XE"; fi
+            else
+                log "Xe strike 1/2 — will restart if next check also fails"
+            fi
+        fi
     fi
 fi
 
-# Read the unit state. "activating" means systemd is already restarting the
-# unit (Restart=always crash loop) — do not stack a second restart on top.
-state=$(systemctl --user show "$LLM_SERVICE_UNIT.service" -p ActiveState --value 2>/dev/null || true)
-log "Health check failed on :${LLM_SERVICE_PORT} (unit ActiveState=${state:-unknown}). Attempting recovery..."
-
-if [[ "$state" == "activating" ]]
-then
-    log "Unit already activating — systemd is handling recovery; skipping"
-    exit 0
-fi
-
-# A failed unit means systemd gave up (start-limit hit) — clear the limit
-# before restarting, otherwise the restart is refused.
-if [[ "$state" == "failed" ]]
-then
-    systemctl --user reset-failed "$LLM_SERVICE_UNIT.service" 2>/dev/null || true
-fi
-
-if ! systemctl --user restart "$LLM_SERVICE_UNIT.service"
-then
-    log "systemctl restart failed — unit not recoverable; manual intervention required"
-    exit 1
-fi
-log "Restart issued: systemctl --user restart $LLM_SERVICE_UNIT.service"
-
-# Wait for health. GPU models usually load in <30s; be generous (the unit
-# itself allows 600s), and let the next timer tick re-check on failure.
-health_timeout="${LLM_WATCHDOG_HEALTH_TIMEOUT:-120}"
-for (( _hw=0; _hw < health_timeout; _hw++ ))
-do
-    if llm_healthy
-    then
-        log "Recovery successful — llama-server healthy on :${LLM_SERVICE_PORT}"
-        exit 0
+# ============================================================
+# LANE 2: CUDA llama-server-nvidia — runs only while GPU free
+# ============================================================
+nv_state=$(systemctl --user show "$NV_UNIT.service" -p ActiveState --value 2>/dev/null || true)
+if gpu_busy; then
+    # GPU in use by foreign workload -> Xe lane serves (Wayne policy)
+    if [[ "$nv_state" == "active" ]]; then
+        log "GPU busy — stopping $NV_UNIT (freeing VRAM; Xe lane serves)"
+        systemctl --user stop "$NV_UNIT.service" 2>/dev/null || true
     fi
-    sleep 1
-done
+    strike_reset "$STRIKE_NV"
+elif [[ "$nv_state" == "active" ]]; then
+    if health "$NV_PORT"; then
+        strike_reset "$STRIKE_NV"
+    else
+        strike_inc "$STRIKE_NV"
+        s=$(strike_get "$STRIKE_NV")
+        log "CUDA health check failed on :${NV_PORT} (unit=${nv_state}, strike ${s}/2)"
+        if [[ "$s" -ge 2 ]]; then
+            if recover "$NV_UNIT" "$NV_PORT"; then strike_reset "$STRIKE_NV"; fi
+        fi
+    fi
+else
+    # GPU free but CUDA unit not active -> bring it up (it is the preferred lane when free)
+    if bench_lock; then
+        log "GPU free but bench lock present — not starting $NV_UNIT yet"
+    else
+        if [[ "$nv_state" == "failed" ]]; then
+            systemctl --user reset-failed "$NV_UNIT.service" 2>/dev/null || true
+        fi
+        log "GPU free and $NV_UNIT not active — starting CUDA lane"
+        if systemctl --user start "$NV_UNIT.service" 2>/dev/null; then
+            if wait_healthy "$NV_UNIT" "$NV_PORT" 150; then
+                log "CUDA lane healthy on :${NV_PORT}"
+            else
+                log "CUDA lane started but not healthy on :${NV_PORT} within 150s"
+            fi
+        else
+            log "Failed to start $NV_UNIT"
+        fi
+        strike_reset "$STRIKE_NV"
+    fi
+fi
 
-log "Recovery failed: server did not become healthy in ${health_timeout}s"
-exit 1
+exit 0
 
 # end of file
