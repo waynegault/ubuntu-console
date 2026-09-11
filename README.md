@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (750 total tests: 578 BATS + 172 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (756 total tests: 579 BATS + 177 Python).
 
 ### Running Tests
 
@@ -444,12 +444,13 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 
 | Suite | File | Count | Timeout |
 |-------|------|-------|---------|
-| Full behavioural | `tactical-console.bats` | 387 | 900s |
+| Full behavioural | `tactical-console.bats` | 383 | 900s |
 | Fast static analysis | `tactical-console-fast.bats` | 50 | 180s |
-| Unit (refresh-keys, so-startup, llama-cpp-inventory) | `tests/unit/*.bats` | 14 | 120s |
-| Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 109 | 300s |
-| Python (kgraph, models, autotune, untested-modules, lock-fixture) | `tests/test_*.py` | 188 | 200s |
-| **Total** | | **750** | |
+| Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
+| Unit (refresh-keys, so-startup, llama-cpp-inventory) | `tests/unit/*.bats` | 38 | 120s |
+| Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 106 | 300s |
+| Python (kgraph, models, autotune, untested-modules, lock-fixture) | `tests/test_*.py` | 177 | 200s |
+| **Total** | | **756** | |
 
 ---
 
@@ -674,7 +675,7 @@ function __get_METRIC() {
 │   ├── test_kgraph.py                 # Python tests for kgraph package (88 tests)
 │   ├── test_models.py                 # Pydantic model tests (36 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (37 tests: 4+2+8+5+5+6+7)
+│   ├── unit/                          # BATS unit tests (38 tests: 5+2+8+5+5+6+7)
 │   └── integration/                   # BATS integration tests (106 tests: 14+42+10+13+1+26)
 └── systemd/
     ├── llama-watchdog.service

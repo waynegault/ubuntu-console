@@ -408,7 +408,7 @@ function ockeys() {
             printf '%s\n' "  ${C_Dim}$name${C_Reset}  $masked  $oc_visible"
             ((found++))
         fi
-    done < <(timeout 5 pwsh.exe -NoProfile -Command '
+    done < <(timeout 20 pwsh.exe -NoProfile -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }
     ' 2>/dev/null | tr -d '\r')
     if (( found == 0 ))
@@ -453,7 +453,7 @@ function __bridge_windows_api_keys() {
     # Session-level guard: if pwsh.exe was previously unavailable or timed
     # out, skip retrying for the rest of this session. The warning file is
     # cleared on success so a working bridge is retried.
-    # This avoids a ~5s hang on every shell init when pwsh.exe exists on
+    # This avoids a ~20s hang on every shell init when pwsh.exe exists on
     # PATH but WSL interop is broken (common with WSL mirrored networking).
     if [[ -f "$_warn_once_file" ]]
     then
@@ -482,7 +482,10 @@ function __bridge_windows_api_keys() {
     # (case-insensitive). Covers common names like GEMINI_API_KEY,
     # OPENAI_API_KEY, OPENCLAW_GATEWAY_TOKEN, OPENCLAW_GATEWAY_PASSWORD.
     local raw
-    raw=$(timeout 5 pwsh.exe -NoProfile -NonInteractive -Command '
+    # 20s, not 5s: a cold pwsh.exe start plus the User-env enumeration has been
+    # measured at 3-10s over WSL interop, and a 5s cap silently returned a
+    # truncated variable set (partial cache) instead of failing cleanly.
+    raw=$(timeout 20 pwsh.exe -NoProfile -NonInteractive -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() |
         Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY|PASSWORD)" } |
         ForEach-Object { "$($_.Key)=$($_.Value)" }
@@ -821,9 +824,12 @@ function oc-refresh-keys() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
     local _nas_collectors_env="/mnt/HD/HD_a2/butler/cron/openclaw-collectors.env"
     local _nas_user="${OC_NAS_USER:-sshd}"
-    # LAN SSH to 192.168.33.20 times out from WSL; the NAS is reachable via
-    # Tailscale. Override with OC_NAS_HOST if the LAN route is restored.
-    local _nas_host="${OC_NAS_HOST:-mycloudex2ultra.tail99183.ts.net}"
+    # LAN SSH to 192.168.33.20 times out from WSL. The NAS is reachable via
+    # Tailscale, but its MagicDNS name (mycloudex2ultra.tail99183.ts.net) does
+    # not resolve while Tailscale DNS is off (`tailscale set --accept-dns`), so
+    # use the stable Tailscale IP. Override with OC_NAS_HOST if the LAN route is
+    # restored or MagicDNS is re-enabled.
+    local _nas_host="${OC_NAS_HOST:-100.106.225.96}"
     local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
     local count=0
 
@@ -913,6 +919,13 @@ function oc-refresh-keys() {
     if (( _OC_GW_ENV_CHANGED == 1 )) && command -v openclaw >/dev/null 2>&1 && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null; then
         if openclaw gateway restart >/dev/null 2>&1; then
             __tac_info "Gateway" "[restarted to pick up refreshed env]" "$C_Success"
+        elif [[ "$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)" =~ ^(active|activating|reloading)$ ]]; then
+            # openclaw's restart actually happened — only its readiness probe
+            # (/healthz + /readyz, 45s deadline on Linux) timed out on a slow
+            # cold start, so the unit is active or still activating. Don't stack
+            # a redundant reset-failed + start: that start would also block until
+            # the unit finishes activating (the visible "hang").
+            __tac_info "Gateway" "[restart issued; readiness probe timed out but unit is up/starting — env applied]" "$C_Warning"
         elif systemctl --user reset-failed openclaw-gateway.service >/dev/null 2>&1 && systemctl --user start openclaw-gateway.service >/dev/null 2>&1; then
             __tac_info "Gateway" "[restart command failed; recovered via systemctl reset-failed+start]" "$C_Warning"
         else

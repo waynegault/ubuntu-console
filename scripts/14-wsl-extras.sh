@@ -110,6 +110,18 @@ exec '/mnt/c/Program Files/PowerShell/7/pwsh.exe' "$@"
 EOF
     chmod +x "$HOME/.local/bin/pwsh"
 fi
+# The bridge (__bridge_windows_api_keys / ockeys / oc-refresh-keys) resolves
+# PowerShell as `pwsh.exe`, so it needs a wrapper under that exact name too.
+# /etc/wsl.conf sets [interop] appendWindowsPath = false, so a bare `pwsh.exe`
+# never resolves; this wrapper is what makes `command -v pwsh.exe` succeed.
+if [[ ! -x "$HOME/.local/bin/pwsh.exe" ]]; then
+    mkdir -p "$HOME/.local/bin"
+    cat > "$HOME/.local/bin/pwsh.exe" <<'EOF'
+#!/usr/bin/env bash
+exec '/mnt/c/Program Files/PowerShell/7/pwsh.exe' "$@"
+EOF
+    chmod +x "$HOME/.local/bin/pwsh.exe"
+fi
 
 # NOTE: Do NOT place secrets (API keys, passwords) in this file. Use the
 # credential vault at ~/.openclaw/credentials/vault instead.

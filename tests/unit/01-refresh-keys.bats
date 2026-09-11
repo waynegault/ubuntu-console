@@ -32,7 +32,7 @@ setup() {
 
     # Mock systemctl so we don't touch the real systemd.
     export SYSTEMCTL_LOG="$TAC_TEST_TMPDIR/systemctl_calls.log"
-    __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; exit 0"
+    __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; case \"\$*\" in *is-active*) echo active;; esac; exit 0"
 
     # Source only required modules for oc-refresh-keys to keep the harness stable.
     # shellcheck disable=SC1090
@@ -238,4 +238,29 @@ teardown() {
     run grep -c '^SSH_CALL:' "$ssh_log"
     [ "$status" -eq 0 ]
     [ "$output" -ge 1 ]
+}
+
+@test "oc-refresh-keys reports a readiness timeout (not recovery) when restart fails but the unit is active" {
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret'"
+
+    # openclaw: config patch succeeds, but `gateway restart` exits non-zero —
+    # simulating the 45s /healthz+/readyz readiness probe timing out on a slow
+    # cold start. The unit stays active (systemctl mock returns 0 for is-active).
+    __mock_command_local openclaw "if [ \"\$*\" = 'config patch --stdin' ]; then cat > \"$OC_MOCK_PATCH_FILE\"; fi; echo \"OPENCLAW_CALL: \$*\" >> \"$OC_MOCK_LOG\"; case \"\$1 \$2\" in 'gateway restart') exit 1 ;; esac; exit 0"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    local refresh_out="$output"
+
+    # The restart was attempted...
+    run grep -F "OPENCLAW_CALL: gateway restart" "$OC_MOCK_LOG"
+    [ "$status" -eq 0 ]
+
+    # ...and because the unit is still active, the message must name the
+    # readiness-probe timeout rather than claim a recovery.
+    [[ "$refresh_out" == *"readiness probe timed out"* ]]
+
+    # No redundant reset-failed+start was stacked on an already-active unit.
+    run grep -F "reset-failed" "$SYSTEMCTL_LOG"
+    [ "$status" -ne 0 ]
 }
