@@ -159,7 +159,9 @@ export BASH_COMPLETION_SCRIPT="/usr/share/bash-completion/bash_completion"
 VSCODE_BIN=""
 # Cache TTL: 7 days (604800 seconds) — VS Code path rarely changes but may
 # need refresh after Windows user rename or VS Code reinstallation.
-readonly __VSCODE_CACHE_TTL=604800
+# Guarded so re-sourcing env.sh in an already-initialised shell does not error
+# on the readonly reassignment (same pattern as the BOX_* constants below).
+if [[ -z "${__VSCODE_CACHE_TTL:-}" ]]; then readonly __VSCODE_CACHE_TTL=604800; fi
 # Resolve the VS Code binary path, caching the result for subsequent calls.
 # Uses a timestamp file to implement TTL-based cache expiry.
 function __resolve_vscode_bin() {

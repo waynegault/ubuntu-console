@@ -12,10 +12,15 @@
 # @exports: mkproj, commit_deploy, commit_auto
 
 # ---- Constants for LLM-powered commit messages ----
-readonly _COMMIT_DIFF_MAX_LINES=500       # Cap diff at 500 lines for context window
-readonly _COMMIT_DIFF_MAX_CHARS=3000      # Cap diff at 3000 chars for small models
-readonly _COMMIT_MAX_TOKENS=80            # Commit messages ≤72 chars; 80 gives buffer
-readonly _COMMIT_TEMPERATURE=0.3          # Low creativity for deterministic summaries
+# Guarded so re-sourcing env.sh in an already-initialised shell does not error
+# on the readonly reassignment.
+if [[ -z "${_COMMIT_DIFF_MAX_LINES:-}" ]]
+then
+    readonly _COMMIT_DIFF_MAX_LINES=500    # Cap diff at 500 lines for context window
+    readonly _COMMIT_DIFF_MAX_CHARS=3000   # Cap diff at 3000 chars for small models
+    readonly _COMMIT_MAX_TOKENS=80         # Commit messages ≤72 chars; 80 gives buffer
+    readonly _COMMIT_TEMPERATURE=0.3       # Low creativity for deterministic summaries
+fi
 
 # ---------------------------------------------------------------------------
 # __scan_diff_for_secrets — Scan git diff for API keys, tokens, and secrets.
