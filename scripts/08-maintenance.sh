@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 30
+# Module Version: 31
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -1167,6 +1167,215 @@ function up() {
 #   --report: Show what could be cleaned (no deletion)
 #   --yes:    Skip confirmation prompts
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# __cl_report* — the cl --report body, split into helpers under the
+# 100-line guidance: local debris, system caches, and the Windows fix script.
+# ---------------------------------------------------------------------------
+function __cl_report() {
+__tac_header "CLEANUP REPORT" "open"
+    __cl_report_local
+    __cl_report_system
+    __tac_footer
+    __cl_report_win_fix
+}
+
+function __cl_report_local() {
+
+    # Current directory debris
+    local pwd_debris=0
+    if [[ -d .pytest_cache ]] || compgen -G "python-*.exe" > /dev/null
+    then
+        pwd_debris=1
+        __tac_line "Python cache in $PWD" "[FOUND]" "$C_Warning"
+    else
+        __tac_line "Python cache in $PWD" "[CLEAN]" "$C_Success"
+    fi
+
+    # Broken symlinks (limited depth, exclude known-large caches)
+    local broken_links
+    broken_links=$(find ~ -maxdepth 4 -xtype l \
+        -not -path '*/node_modules/*' \
+        -not -path '*/.npm/*' \
+        -not -path '*/.cache/*' \
+        -not -path '*/.openclaw/*' \
+        -not -path '*/__pycache__/*' \
+        2>/dev/null | wc -l)
+    if (( broken_links > 0 ))
+    then
+        __tac_line "Broken symlinks in ~" "[$broken_links found]" "$C_Warning"
+    else
+        __tac_line "Broken symlinks in ~" "[NONE]" "$C_Success"
+    fi
+
+    # PATH ghosts (Linux side)
+    local path_ghosts=0
+    local IFS=':'
+    local ghost_paths=()
+    for p in $PATH
+    do
+        if [[ -n "$p" && ! -d "$p" ]]
+        then
+            ((path_ghosts++))
+            ghost_paths+=("$p")
+        fi
+    done
+    if (( path_ghosts > 0 ))
+    then
+        __tac_line "Non-existent PATH entries" "[$path_ghosts ghosts]" "$C_Warning"
+        # Show first 3 ghost paths as examples
+        local i
+        for (( i=0; i<path_ghosts && i<3; i++ ))
+        do
+            __tac_info "  Ghost" "${ghost_paths[$i]}" "$C_Dim"
+        done
+        if (( path_ghosts > 3 ))
+        then
+            __tac_info "  ..." "+$((path_ghosts - 3)) more" "$C_Dim"
+        fi
+        # Find where PATH is set (check common locations)
+        local path_source=""
+        if grep -q "export PATH=" "$HOME/.bashrc" 2>/dev/null
+        then
+            path_source="$HOME/.bashrc"
+        elif grep -q "export PATH=" "$TACTICAL_REPO_ROOT/scripts/"*.sh 2>/dev/null
+        then
+            path_source=$(grep -l "export PATH=" "$TACTICAL_REPO_ROOT/scripts/"*.sh 2>/dev/null | head -1)
+        fi
+        if [[ -n "$path_source" ]]
+        then
+            __tac_info "  PATH set in" "$path_source" "$C_Dim"
+            __tac_info "  Fix" "Edit $path_source manually" "$C_Dim"
+        else
+            __tac_info "  Fix" "Search for 'export PATH=' in profile files" "$C_Dim"
+        fi
+    else
+        __tac_line "Non-existent PATH entries" "[NONE]" "$C_Success"
+    fi
+
+}
+
+function __cl_report_system() {
+    # Windows System PATH ghosts (WSL-specific check)
+    local __CL_WIN_GHOSTS=()
+    local IFS=':'
+    for p in $PATH
+    do
+        if [[ "$p" == "/mnt/c/"* ]] && [[ ! -d "$p" ]]
+        then
+            # Convert to Windows format
+            local win_path
+            win_path="${p/\/mnt\/c\//C:\\}"
+            win_path="${win_path//\//\\}"
+            __CL_WIN_GHOSTS+=("$win_path")
+        fi
+    done
+    if (( ${#__CL_WIN_GHOSTS[@]} > 0 ))
+    then
+        __tac_line "Windows System PATH ghosts" "[${#__CL_WIN_GHOSTS[@]} found]" "$C_Warning"
+        for wg in "${__CL_WIN_GHOSTS[@]}"
+        do
+            __tac_info "  Windows" "$wg" "$C_Dim"
+        done
+        __tac_info "  Fix" "Run PowerShell script below (admin)" "$C_Dim"
+    fi
+
+    # Systemd ghost units
+    if command -v systemctl >/dev/null 2>&1
+    then
+        local systemd_ghosts
+        systemd_ghosts=$(systemctl --user list-units --all --state=not-found 2>/dev/null \
+            | grep -c "not-found" || echo 0)
+        if (( systemd_ghosts > 0 ))
+        then
+            __tac_line "Systemd ghost units" "[$systemd_ghosts not-found]" "$C_Warning"
+        else
+            __tac_line "Systemd ghost units" "[NONE]" "$C_Success"
+        fi
+    fi
+
+    # APT cache
+    if command -v apt-get >/dev/null 2>&1
+    then
+        local apt_size
+        apt_size=$(du -sh /var/cache/apt/archives 2>/dev/null | cut -f1 || echo "0")
+        __tac_line "APT cache size" "[$apt_size]" "$C_Text"
+    fi
+
+    # Brew cache
+    if command -v brew >/dev/null 2>&1
+    then
+        local brew_size
+        brew_size=$(brew cleanup --dry-run 2>&1 | grep -oP '[\d.]+[MGK]B' | head -1 || echo "0")
+        __tac_line "Brew reclaimable" "[$brew_size]" "$C_Text"
+    fi
+
+    # Journal logs
+    if command -v journalctl >/dev/null 2>&1
+    then
+        local journal_size
+        journal_size=$(journalctl --disk-usage 2>&1 | grep -oP '[\d.]+[MGK]B' || echo "0")
+        __tac_line "Journal logs" "[$journal_size]" "$C_Text"
+    fi
+
+    # Docker (if installed)
+    if command -v docker >/dev/null 2>&1
+    then
+        local docker_size
+        docker_size=$(docker system df 2>&1 | grep "Images" | awk '{print $4}' || echo "0")
+        __tac_line "Docker images" "[$docker_size]" "$C_Text"
+    fi
+
+
+}
+
+function __cl_report_win_fix() {
+    # If Windows ghosts found, show PowerShell cleanup script
+    if (( ${#__CL_WIN_GHOSTS[@]} > 0 ))
+    then
+        printf '\n%s\n' "${C_Highlight}--- PowerShell Cleanup (Run as ADMIN) ---${C_Reset}"
+        printf '%s\n' "${C_Dim}Copy and paste this into Windows PowerShell (Admin):${C_Reset}"
+        printf '\n%s\n' "\$GhostList = @("
+
+        # Build ghost list for PowerShell
+        local first=1
+        for wg in "${__CL_WIN_GHOSTS[@]}"
+        do
+            if (( first ))
+            then
+                printf "'%s'" "$wg"
+                first=0
+            else
+                printf ",'%s'" "$wg"
+            fi
+        done
+        printf '%s\n\n' ");"
+
+        printf '%s\n' "# Function to clean a specific registry path"
+        printf '%s\n' "function Clean-RegistryPath (\$RegPath) {"
+        printf '%s\n' "    \$Current = (Get-ItemProperty -Path \$RegPath -ErrorAction SilentlyContinue).Path"
+        printf '%s\n' "    if (\$Current) {"
+        printf '%s\n' "        \$New = (\$Current -split ';' | Where-Object { \
+\$_ -and \$GhostList -notcontains \$_ }) -join ';'"
+        printf '%s\n' "        Set-ItemProperty -Path \$RegPath -Name 'Path' -Value \$New"
+        printf '%s\n' "        return \$true"
+        printf '%s\n' "    }"
+        printf '%s\n' "    return \$false"
+        printf '%s\n' "}"
+        printf '\n%s\n' "# Clean User PATH"
+        printf '%s\n' "if (Clean-RegistryPath 'Registry::HKEY_CURRENT_USER\Environment') {"
+        printf '%s\n' "    Write-Host \"✓ User PATH cleaned.\" -ForegroundColor Green"
+        printf '%s\n' "}"
+        printf '\n%s\n' "# Clean System PATH"
+        printf '%s\n' "if (Clean-RegistryPath 'Registry::HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\
+Session Manager\Environment') {"
+        printf '%s\n' "    Write-Host \"✓ System PATH cleaned.\" -ForegroundColor Green"
+        printf '%s\n' "}"
+        printf '\n%s\n\n' "Write-Host \"DONE! Run 'wsl --shutdown' in Windows to see changes in WSL.\" \
+            -ForegroundColor Cyan"
+    fi
+}
+
+
 function cl() {
     local light_mode=0 report_mode=0 yes_mode=0
 
@@ -1185,196 +1394,7 @@ function cl() {
     # Report mode: show what could be cleaned without deleting
     if (( report_mode == 1 ))
     then
-        __tac_header "CLEANUP REPORT" "open"
-
-        # Current directory debris
-        local pwd_debris=0
-        if [[ -d .pytest_cache ]] || compgen -G "python-*.exe" > /dev/null
-        then
-            pwd_debris=1
-            __tac_line "Python cache in $PWD" "[FOUND]" "$C_Warning"
-        else
-            __tac_line "Python cache in $PWD" "[CLEAN]" "$C_Success"
-        fi
-
-        # Broken symlinks (limited depth, exclude known-large caches)
-        local broken_links
-        broken_links=$(find ~ -maxdepth 4 -xtype l \
-            -not -path '*/node_modules/*' \
-            -not -path '*/.npm/*' \
-            -not -path '*/.cache/*' \
-            -not -path '*/.openclaw/*' \
-            -not -path '*/__pycache__/*' \
-            2>/dev/null | wc -l)
-        if (( broken_links > 0 ))
-        then
-            __tac_line "Broken symlinks in ~" "[$broken_links found]" "$C_Warning"
-        else
-            __tac_line "Broken symlinks in ~" "[NONE]" "$C_Success"
-        fi
-
-        # PATH ghosts (Linux side)
-        local path_ghosts=0
-        local IFS=':'
-        local ghost_paths=()
-        for p in $PATH
-        do
-            if [[ -n "$p" && ! -d "$p" ]]
-            then
-                ((path_ghosts++))
-                ghost_paths+=("$p")
-            fi
-        done
-        if (( path_ghosts > 0 ))
-        then
-            __tac_line "Non-existent PATH entries" "[$path_ghosts ghosts]" "$C_Warning"
-            # Show first 3 ghost paths as examples
-            local i
-            for (( i=0; i<path_ghosts && i<3; i++ ))
-            do
-                __tac_info "  Ghost" "${ghost_paths[$i]}" "$C_Dim"
-            done
-            if (( path_ghosts > 3 ))
-            then
-                __tac_info "  ..." "+$((path_ghosts - 3)) more" "$C_Dim"
-            fi
-            # Find where PATH is set (check common locations)
-            local path_source=""
-            if grep -q "export PATH=" "$HOME/.bashrc" 2>/dev/null
-            then
-                path_source="$HOME/.bashrc"
-            elif grep -q "export PATH=" "$TACTICAL_REPO_ROOT/scripts/"*.sh 2>/dev/null
-            then
-                path_source=$(grep -l "export PATH=" "$TACTICAL_REPO_ROOT/scripts/"*.sh 2>/dev/null | head -1)
-            fi
-            if [[ -n "$path_source" ]]
-            then
-                __tac_info "  PATH set in" "$path_source" "$C_Dim"
-                __tac_info "  Fix" "Edit $path_source manually" "$C_Dim"
-            else
-                __tac_info "  Fix" "Search for 'export PATH=' in profile files" "$C_Dim"
-            fi
-        else
-            __tac_line "Non-existent PATH entries" "[NONE]" "$C_Success"
-        fi
-
-        # Windows System PATH ghosts (WSL-specific check)
-        local win_ghosts=()
-        local IFS=':'
-        for p in $PATH
-        do
-            if [[ "$p" == "/mnt/c/"* ]] && [[ ! -d "$p" ]]
-            then
-                # Convert to Windows format
-                local win_path
-                win_path="${p/\/mnt\/c\//C:\\}"
-                win_path="${win_path//\//\\}"
-                win_ghosts+=("$win_path")
-            fi
-        done
-        if (( ${#win_ghosts[@]} > 0 ))
-        then
-            __tac_line "Windows System PATH ghosts" "[${#win_ghosts[@]} found]" "$C_Warning"
-            for wg in "${win_ghosts[@]}"
-            do
-                __tac_info "  Windows" "$wg" "$C_Dim"
-            done
-            __tac_info "  Fix" "Run PowerShell script below (admin)" "$C_Dim"
-        fi
-
-        # Systemd ghost units
-        if command -v systemctl >/dev/null 2>&1
-        then
-            local systemd_ghosts
-            systemd_ghosts=$(systemctl --user list-units --all --state=not-found 2>/dev/null \
-                | grep -c "not-found" || echo 0)
-            if (( systemd_ghosts > 0 ))
-            then
-                __tac_line "Systemd ghost units" "[$systemd_ghosts not-found]" "$C_Warning"
-            else
-                __tac_line "Systemd ghost units" "[NONE]" "$C_Success"
-            fi
-        fi
-
-        # APT cache
-        if command -v apt-get >/dev/null 2>&1
-        then
-            local apt_size
-            apt_size=$(du -sh /var/cache/apt/archives 2>/dev/null | cut -f1 || echo "0")
-            __tac_line "APT cache size" "[$apt_size]" "$C_Text"
-        fi
-
-        # Brew cache
-        if command -v brew >/dev/null 2>&1
-        then
-            local brew_size
-            brew_size=$(brew cleanup --dry-run 2>&1 | grep -oP '[\d.]+[MGK]B' | head -1 || echo "0")
-            __tac_line "Brew reclaimable" "[$brew_size]" "$C_Text"
-        fi
-
-        # Journal logs
-        if command -v journalctl >/dev/null 2>&1
-        then
-            local journal_size
-            journal_size=$(journalctl --disk-usage 2>&1 | grep -oP '[\d.]+[MGK]B' || echo "0")
-            __tac_line "Journal logs" "[$journal_size]" "$C_Text"
-        fi
-
-        # Docker (if installed)
-        if command -v docker >/dev/null 2>&1
-        then
-            local docker_size
-            docker_size=$(docker system df 2>&1 | grep "Images" | awk '{print $4}' || echo "0")
-            __tac_line "Docker images" "[$docker_size]" "$C_Text"
-        fi
-
-        __tac_footer
-
-        # If Windows ghosts found, show PowerShell cleanup script
-        if (( ${#win_ghosts[@]} > 0 ))
-        then
-            printf '\n%s\n' "${C_Highlight}--- PowerShell Cleanup (Run as ADMIN) ---${C_Reset}"
-            printf '%s\n' "${C_Dim}Copy and paste this into Windows PowerShell (Admin):${C_Reset}"
-            printf '\n%s\n' "\$GhostList = @("
-
-            # Build ghost list for PowerShell
-            local first=1
-            for wg in "${win_ghosts[@]}"
-            do
-                if (( first ))
-                then
-                    printf "'%s'" "$wg"
-                    first=0
-                else
-                    printf ",'%s'" "$wg"
-                fi
-            done
-            printf '%s\n\n' ");"
-
-            printf '%s\n' "# Function to clean a specific registry path"
-            printf '%s\n' "function Clean-RegistryPath (\$RegPath) {"
-            printf '%s\n' "    \$Current = (Get-ItemProperty -Path \$RegPath -ErrorAction SilentlyContinue).Path"
-            printf '%s\n' "    if (\$Current) {"
-            printf '%s\n' "        \$New = (\$Current -split ';' | Where-Object { \
-\$_ -and \$GhostList -notcontains \$_ }) -join ';'"
-            printf '%s\n' "        Set-ItemProperty -Path \$RegPath -Name 'Path' -Value \$New"
-            printf '%s\n' "        return \$true"
-            printf '%s\n' "    }"
-            printf '%s\n' "    return \$false"
-            printf '%s\n' "}"
-            printf '\n%s\n' "# Clean User PATH"
-            printf '%s\n' "if (Clean-RegistryPath 'Registry::HKEY_CURRENT_USER\Environment') {"
-            printf '%s\n' "    Write-Host \"✓ User PATH cleaned.\" -ForegroundColor Green"
-            printf '%s\n' "}"
-            printf '\n%s\n' "# Clean System PATH"
-            printf '%s\n' "if (Clean-RegistryPath 'Registry::HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\
-Session Manager\Environment') {"
-            printf '%s\n' "    Write-Host \"✓ System PATH cleaned.\" -ForegroundColor Green"
-            printf '%s\n' "}"
-            printf '\n%s\n\n' "Write-Host \"DONE! Run 'wsl --shutdown' in Windows to see changes in WSL.\" \
-                -ForegroundColor Cyan"
-        fi
-
+        __cl_report
         return 0
     fi
 
