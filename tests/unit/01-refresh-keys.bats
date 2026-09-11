@@ -264,3 +264,30 @@ teardown() {
     run grep -F "reset-failed" "$SYSTEMCTL_LOG"
     [ "$status" -ne 0 ]
 }
+
+@test "oc-refresh-keys escapes NAS env values with %q only (no double-quote wrap)" {
+    # A value containing '!' must round-trip: %q alone yields win\!secret, which
+    # sources back to win!secret. Wrapping it in double quotes (the old bug)
+    # produced "win\!secret" -> a literal backslash, breaking the NAS collector.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=win!secret'"
+
+    local nas_key="$TAC_TEST_TMPDIR/nas_key"
+    touch "$nas_key" && chmod 600 "$nas_key"
+    export OC_NAS_KEY_PATH="$nas_key"
+    export OC_NAS_USER="testuser"
+    export OC_NAS_HOST="nas.example"
+
+    # Capture the first ssh call's stdin (the generated env file).
+    local cap="$TAC_TEST_TMPDIR/nas_stdin.txt"
+    __mock_command_local ssh "if [ -f \"$cap\" ]; then exit 0; fi; cat > \"$cap\"; exit 0"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [ -f "$cap" ]
+
+    run grep -F 'export WIN_API_KEY=win\!secret' "$cap"
+    [ "$status" -eq 0 ]
+
+    run grep -F '"win\!secret"' "$cap"
+    [ "$status" -ne 0 ]
+}
