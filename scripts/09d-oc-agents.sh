@@ -908,7 +908,10 @@ function oc-refresh-keys() {
     #    SecretRefs referenced by auth profiles in agent sqlite databases.
     #    Without this, `openclaw doctor` reports "secret reference was not
     #    found" because the gateway process lacks the env vars.
+    #    Also re-assert env.shellEnv (worker-side secret resolution) — see
+    #    __so_ensure_shell_env.
     local _OC_GW_ENV_CHANGED=0
+    if type -t __so_ensure_shell_env >/dev/null 2>&1; then __so_ensure_shell_env; fi
     __oc_sync_gateway_env_file "$cache"
 
     # 4. Sync OpenClaw SecretRefs to the refreshed env credentials

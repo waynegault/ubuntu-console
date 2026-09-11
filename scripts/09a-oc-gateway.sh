@@ -461,6 +461,29 @@ function __so_start_gateway() {
 }
 
 # ---------------------------------------------------------------------------
+# __so_ensure_shell_env — Ensure env.shellEnv.enabled=true in the OpenClaw config.
+# Auth-profile SecretRefs are resolved in worker processes that do NOT inherit
+# the gateway's environment; the shellEnv fallback is what lets them resolve
+# env-backed refs. It is lost on reinstall, which silently breaks model auth
+# with SECRETS_OWNER_UNAVAILABLE ("secret reference was not found"), so
+# re-assert it on gateway start. Cheap: reads the config with jq and only
+# invokes the CLI when it is not already enabled.
+# ---------------------------------------------------------------------------
+function __so_ensure_shell_env() {
+    local _cfg="$OC_ROOT/openclaw.json"
+    [[ -f "$_cfg" ]] || return 0
+    if command -v jq >/dev/null 2>&1 \
+        && [[ "$(jq -r '.env.shellEnv.enabled // false' "$_cfg" 2>/dev/null)" == "true" ]]; then
+        return 0
+    fi
+    if openclaw config set env.shellEnv.enabled true >/dev/null 2>&1; then
+        __tac_info "Gateway" "[enabled env.shellEnv fallback (worker secret resolution)]" "$C_Success"
+    else
+        __tac_info "Gateway" "[could not enable env.shellEnv — env-backed secret refs may fail]" "$C_Warning"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # so — Start the OpenClaw gateway (systemd-managed service).
 # Injects bridged API keys into the systemd user session before starting.
 # If gateway is already running, only starts the LLM without restarting gateway.
@@ -470,6 +493,7 @@ function so() {
         __tac_info "OpenClaw" "[NOT INSTALLED - cannot start gateway]" "$C_Error"
         return 1
     fi
+    __so_ensure_shell_env
     local _svc="openclaw-gateway.service"
     local _ts_serve_active=0
     local _gateway_already_running=0

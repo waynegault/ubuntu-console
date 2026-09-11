@@ -417,4 +417,14 @@ setup_file() {
     [[ -f "$REPO_ROOT/tools/run-tests.sh" ]]
 }
 
+@test "cross-script: so re-asserts env.shellEnv (worker secret resolution)" {
+    # Auth-profile SecretRefs resolve in worker processes that do not inherit
+    # the gateway env; env.shellEnv.enabled is what makes them resolve and is
+    # lost on reinstall, so `so` must re-assert it.
+    grep -q '__so_ensure_shell_env' "$REPO_ROOT/scripts/09a-oc-gateway.sh"
+    grep -q 'env.shellEnv.enabled' "$REPO_ROOT/scripts/09a-oc-gateway.sh"
+    # ...and oc-refresh-keys calls it too
+    grep -q '__so_ensure_shell_env' "$REPO_ROOT/scripts/09d-oc-agents.sh"
+}
+
 # end of file
