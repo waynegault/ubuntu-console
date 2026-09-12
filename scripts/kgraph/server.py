@@ -37,6 +37,19 @@ def resolve_serve_target(path: str, force_embed: bool = False) -> tuple[str, str
   return dirname, filename, False
 
 
+def _redacted_label(node: dict) -> str:
+  """Return a non-content label for a memory/summary node.
+
+  Such a node's stored label IS a preview of its memory text — memory_import
+  sets ``label = _preview_text(content)`` — so it cannot be served on the
+  wildcard-CORS read path. The node id is a stable, non-content identifier
+  (e.g. ``memory:<uuid>``), so it supplies the redacted label.
+  """
+  kind = str(node.get('type') or 'memory').lower()
+  _, _, tail = str(node.get('id') or '').partition(':')
+  return f"{kind} {tail[:8]}" if tail else kind
+
+
 def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: str | None = None, force_embed: bool = False, graph_db_path: str | None = None, view_mode: str = 'overview', semantic_threshold: float = 0.82):
   serve_dir, filename, using_built_frontend = resolve_serve_target(path, force_embed=force_embed)
 
@@ -177,17 +190,23 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
             payload['_meta'] = dict(payload.get('_meta', {}))
             payload['_meta'].update(meta)
             # The GET path sends wildcard CORS (for the Vite dev frontend), so
-            # strip the raw memory free-text fields from the served payload.
-            # NOTE: this is NOT a full redaction — a memory node's LABEL is
-            # itself a short content preview (memory_import sets
-            # label = _preview_text(content)), and topic/summary nodes also carry
-            # `content_preview`. A page the user visits can therefore still read
-            # memory text. Accepted while the read server binds 127.0.0.1 on an
-            # ephemeral port; see scripts/kgraph/audit_security.md §8.
+            # strip memory-derived free text from the served payload:
+            # `content`, `tags` and `content_preview`. A memory/summary node's
+            # LABEL is itself a content preview (memory_import sets
+            # label = _preview_text(content)), so it is replaced with a
+            # non-content identifier built from the node id. Stripping
+            # content/tags alone did NOT close this channel.
             for _node in payload.get('nodes', []):
-                if isinstance(_node, dict):
-                    _node.pop('content', None)
-                    _node.pop('tags', None)
+                if not isinstance(_node, dict):
+                    continue
+                _node.pop('content', None)
+                _node.pop('tags', None)
+                _node.pop('content_preview', None)
+                if str(_node.get('type') or '').lower() in ('memory', 'summary'):
+                    _label = _redacted_label(_node)
+                    _node['label'] = _label
+                    if 'display_label' in _node:
+                        _node['display_label'] = _label
             data = json.dumps(payload)
         except (ValueError, KeyError, TypeError) as exc:
             logger.warning("Graph projection failed, falling back to sample: %s", exc)

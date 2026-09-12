@@ -96,13 +96,13 @@ Both write surfaces bind to `127.0.0.1` by default (localhost only).
 
 ### 8. GET read path CORS (accepted risk)
 **Severity:** Low
-**Status:** Accepted (by design)
+**Status:** Accepted (by design), with read-path redaction
 
-`GET /graph.json` returns `Access-Control-Allow-Origin: *`. The served projection drops the `content` and `tags` fields — but that is **not** a full redaction: a memory node's `label` is itself a short preview of its content (`memory_import.py` sets `label = _preview_text(content)`), and topic/summary nodes also carry `content_preview`. A page the user visits can therefore still read memory text through those channels (verified against the live DB: 18 memory nodes ship content-derived labels despite the strip).
+`GET /graph.json` returns `Access-Control-Allow-Origin: *`. The served projection is now redacted on the read path: `content`, `tags` and `content_preview` are dropped, and a `memory`/`summary` node's `label` — which IS a preview of its content (`memory_import.py` sets `label = _preview_text(content)`) — is replaced with a non-content identifier built from the node id (e.g. `memory abc12345`). A page the user visits therefore sees graph structure and concept labels, not raw memory text.
 
-*Correction (2026-09-12):* an earlier revision of this section said the served payload exposed "`content`, `tags`, source paths" and deferred stripping; that was superseded by the strip, but the strip alone does not close the exposure — the label remains a content preview.
+*Correction (2026-09-12):* two earlier revisions of this section understated the exposure. The first said the payload served "`content`, `tags`, source paths" and deferred stripping; the second claimed stripping `content`/`tags` was sufficient. It was not — the label is itself a content preview (verified against the live DB: 18 memory nodes still shipped content-derived labels after that strip). The label and `content_preview` are now redacted too, and `server.py` carries a regression test (`tests/test_untested_modules.py::TestGraphServerPost::test_get_redacts_memory_text`) that fails against the pre-redaction code.
 
-This is deliberate: the Vite dev frontend (`frontend-g6`, port 5173) fetches the API cross-origin, while the embedded Cytoscape viewer is same-origin and needs no CORS. The read server uses an ephemeral port unless `--port` is given, which limits exposure. To close the remaining channel: serve a non-content `label` for `memory`/`summary` nodes (and drop `content_preview`), or restrict the read-path origin. Both change what the viewer shows, so they are deferred as a product decision.
+This is deliberate: the Vite dev frontend (`frontend-g6`, port 5173) fetches the API cross-origin, while the embedded Cytoscape viewer is same-origin and needs no CORS. The read server uses an ephemeral port unless `--port` is given, which further limits exposure. Residual: the redaction is by node `type`, so a future content-derived node type that is not `memory`/`summary` would need adding to `server.py`'s redaction; the fields stripped unconditionally (`content`, `tags`, `content_preview`) are the durable part.
 
 ## Summary
 
@@ -115,13 +115,13 @@ This is deliberate: the Vite dev frontend (`frontend-g6`, port 5173) fetches the
 | SQL injection | Low | ✅ Mitigated | Parameterized queries always |
 | SSRF | Low | ✅ Mitigated | No outbound fetch capability |
 | MCP / REST write path | Medium | ✅ Mitigated | JSON Content-Type + same-origin + preflight refusal + rate limit |
-| GET read CORS | Low | ⚠️ Accepted | Wildcard CORS for the dev frontend; ephemeral port; memory labels are content previews (§8) |
+| GET read CORS | Low | ⚠️ Accepted | Wildcard CORS for the dev frontend; ephemeral port; read path redacts memory text (§8) |
 
 ## Recommendations
 
 1. **CSP header** — present in the HTML template (see §1).
 2. **`sanitize_label()`** — removed (had no production caller). If node `path`/`id` values are ever used to touch the filesystem, add explicit id validation.
-3. **Memory free text** — `content`/`tags` are stripped from the served GET payload, but memory **labels are content previews** and still ship (§8). To close it fully, serve a non-content `label` for `memory`/`summary` nodes (and drop `content_preview`), or restrict the read-path origin. Deferred: it changes what the viewer displays.
+3. **Memory free text** — closed. `content`, `tags` and `content_preview` are stripped from the served GET payload and `memory`/`summary` labels are redacted to a node-id-derived identifier (§8), with a regression test that fails against the pre-redaction code. Residual: redaction is keyed on node `type`, so a new content-derived type must be added to the list in `server.py`.
 4. **Consider MCP auth** if the MCP server is ever exposed beyond localhost. (`kgraph_report`'s `outpath` is already confined to the reports directory.)
 
 # end of file

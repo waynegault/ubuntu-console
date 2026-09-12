@@ -359,6 +359,48 @@ class TestGraphServerPost(unittest.TestCase):
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*")
         self.assertIn("nodes", json.loads(body))
 
+    def test_get_redacts_memory_text(self):
+        # A memory node's stored label IS a preview of its content
+        # (memory_import sets label = _preview_text(content)), so the
+        # wildcard-CORS read path must not serve it, nor the content fields.
+        graph = {
+            "nodes": [
+                {"id": "memory:abc12345-6789-4abc",
+                 "label": "NAS SSH access available for storage management",
+                 "type": "memory",
+                 "content": "NAS SSH access available for storage management",
+                 "tags": "infra",
+                 "content_preview": "NAS SSH access available ..."},
+                {"id": "summary:def99999-1111",
+                 "label": "Weekly legal briefing",
+                 "type": "summary",
+                 "content_preview": "Weekly legal briefing body"},
+                {"id": "topic:keep", "label": "Legal research", "type": "topic",
+                 "content_preview": "Legal research notes"},
+            ],
+            "edges": [],
+        }
+        kgraph.save_to_graph_db(self.db_path, graph)
+
+        status, body, _ = self._request("GET", "/graph.json?view=raw")
+        self.assertEqual(status, 200)
+        nodes = {n["id"]: n for n in json.loads(body)["nodes"]}
+
+        mem = nodes["memory:abc12345-6789-4abc"]
+        self.assertEqual(mem["label"], "memory abc12345")
+        self.assertNotIn("content", mem)
+        self.assertNotIn("tags", mem)
+        self.assertNotIn("content_preview", mem)
+
+        summary = nodes["summary:def99999-1111"]
+        self.assertEqual(summary["label"], "summary def99999")
+        self.assertNotIn("content_preview", summary)
+
+        # A non-memory node keeps its label, but still loses the content preview.
+        topic = nodes["topic:keep"]
+        self.assertEqual(topic["label"], "Legal research")
+        self.assertNotIn("content_preview", topic)
+
     def test_valid_post_replaces_graph(self):
         payload = {"nodes": [{"id": "only", "label": "Only"}], "edges": []}
         status, body, _ = self._post(json.dumps(payload))
