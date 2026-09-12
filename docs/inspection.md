@@ -74,6 +74,8 @@ AI Agent Access — High
 
 Final Validation
 
+New Insights & Standards (2026-09-12)
+
 1. Pre-Flight
 
 Before making any changes, establish a baseline and ensure foundational rules are met.
@@ -1962,7 +1964,7 @@ Expected
 
 grep -rn 'shellcheck' scripts/ bin/ tactical-console.bashrc
 
-Each module has `# shellcheck shell=bash` at line 1. SC disable codes are minimal and per-file (only the codes that file actually triggers). No blanket disables covering unrelated issues.
+Each module has `# shellcheck shell=bash` at line 1. Existing `disable=` codes are legacy debt: remove them and fix the cause (17.1). New files must not add any. No blanket disables covering unrelated issues.
 
 13.3.2
 
@@ -2268,7 +2270,7 @@ Exit 0 for the loader and all 16 profile modules plus bin/ scripts
 
 shellcheck tactical-console.bashrc scripts/[0-9][0-9]-*.sh
 
-Zero findings (all SC codes either clean or suppressed with documented directives)
+Zero findings. Suppression directives are not a fix — see 17.1: remove the directive and fix the cause.
 
 16.3
 
@@ -2316,7 +2318,7 @@ All BATS tests pass (0 failures). Verify count matches `grep -c '^@test' tests/t
 
 ls scripts/[0-9][0-9]-*.sh | wc -l
 
-15 numbered profile modules present (01-15) plus scripts/09b-gog.sh = 16 total. If a module was added or removed, update the architecture map in the loader and the BATS structure tests.
+16 files match the numbered glob — 15 profile modules (01-15) plus the `18-lint.sh` utility — and `scripts/_module-list.sh` lists 16 profile modules (01-15 + 09b-gog). If a module is added or removed, update `scripts/_module-list.sh` (the shared list) and the drift-guard BATS test; `tools/docs-sync-check.sh` derives the count from that list, and README.md must be updated with it.
 
 16.9
 
@@ -2325,5 +2327,143 @@ ls scripts/[0-9][0-9]-*.sh | wc -l
 Review audit todo list
 
 All findings from this inspection documented with severity, location, and remediation plan
+
+17. New Insights & Standards (2026-09-12)
+
+#
+
+Check
+
+Command
+
+Expected
+
+17.1
+
+🔧 No suppression comments anywhere
+
+grep -rnE '# *noqa|# *type: *ignore|shellcheck disable=SC' scripts/ bin/ tools/ tests/ tactical-console.bashrc env.sh
+
+No new suppressions — fix the cause instead. A suppression is only acceptable for genuinely third-party, unpatchable output: one narrowly scoped filter, owned, with a comment naming the emitting package and `file:line` plus the tracking path. Never for our own code. Current residue: three `# noqa: E402` in tests/test_kgraph.py, tests/test_kgraph_wiring.py and tests/test_untested_modules.py — each supports a standalone `python tests/x.py` run, so remediate by centralising the `scripts/` path insert (e.g. a shared tests/_paths.py) rather than deleting them blind.
+
+17.2
+
+🔧 Both loaders read one shared module list
+
+grep -l '_module-list\.sh' env.sh tactical-console.bashrc; tools/docs-sync-check.sh
+
+Both loaders source `scripts/_module-list.sh` (via `__tac_module_list`), and docs-sync-check exits 0 with the module count derived from that list. Interactive and library shells must expose the same module functions; the profile adds only 13-init's completion/direnv machinery.
+
+17.3
+
+🔧 Loaders never hardcode or glob the module set
+
+! grep -q '_tac_expected_modules=(' tactical-console.bashrc; ! grep -q '\[0-9\]\[0-9\]-\*\.sh' env.sh
+
+No hardcoded array and no module glob in either loader — add modules to `scripts/_module-list.sh` only. A numbered module missing from the list fails the drift-guard BATS test.
+
+17.4
+
+🔧 Never exec inside a shell function
+
+grep -rnE '^[[:space:]]*exec [^0-9{]' scripts/*.sh tactical-console.bashrc
+
+None. `exec` in a function dispatched by the interactive shell replaces (and on exit kills) the user's shell — this was oc-update's bug. Use a plain call and `return $?`. `exec {fd}>file` redirections and standalone wrappers under `bin/` are fine.
+
+17.5
+
+🔧 Health probes match the JSON/HTTP status
+
+grep -rn "grep -q 'ok'" scripts/ bin/
+
+None. A bare `ok` substring also matches "token"/"blocked". Match `"status":"ok"` or use the HTTP status code (llama-watchdog's `health()` returns 0 ok / 1 down / 2 still-loading).
+
+17.6
+
+🔧 A loading (503) server is never struck or restarted
+
+inspect the lanes in bin/llama-watchdog.sh
+
+`health()` returning 2 must skip both the strike increment and the restart — bouncing a unit that is still loading only lengthens the outage (and can trip the start-limit).
+
+17.7
+
+🔧 Anchor every alternative in path-safety regexes
+
+grep -rn '=~ \^/' scripts/
+
+Group and anchor: `=~ ^(/home|/tmp|/dev/shm)`. In an unanchored alternation only the first branch is anchored, so `/etc/tmp` would pass an `rm -rf` guard.
+
+17.8
+
+🔧 Never append a fallback echo to grep -c
+
+grep -rn 'grep -c .*|| echo' scripts/ bin/ tools/
+
+None. `grep -c` already prints 0 on no match; `|| echo 0` yields "0\n0" and breaks the following arithmetic.
+
+17.9
+
+🔍 Registry schema field numbers are contractual
+
+compare column consumers against the header in scripts/11e-llm-model.sh
+
+Consumers use the documented field numbers (tps = 17, mmap_mode = 15, …). Rows whose field count is unexpected are preserved verbatim by `__llm_registry_sync_state`, never silently dropped.
+
+17.10
+
+🔧 The kgraph write path validates before it writes
+
+POST probes against /graph.json
+
+Requires `Content-Type: application/json`; rejects cross-origin Origins and POST preflights; no wildcard CORS on write responses; enforces `MAX_PAYLOAD_SIZE` before reading the body; runs `validate_graph_payload` before `save_to_graph_db`, so no malformed or hostile body can wipe the graph.
+
+17.11
+
+🔧 Generated HTML escapes interpolated data
+
+inspect scripts/kgraph/pr_dashboard.py, call_flow.py, html.py
+
+Every interpolated value passes through `html.escape()`; JSON embedded in a `<script>` element escapes `<`, `>` and `&`, so a `</script>` in a label cannot break out.
+
+17.12
+
+🔍 BATS serialisation lock tolerates contention
+
+inspect tests/conftest.py; hold the lock externally for >2 min, then run one bridge test
+
+The wait is bounded by the BATS file's own timeout (never a fixed 120s cap), and stale detection is PID + process start-time aware so a recycled PID is not mistaken for a live holder. A legitimate holder must produce a wait, not an `ERROR at setup`.
+
+17.13
+
+🔧 Extracted bash helpers document dynamic-scope dependencies
+
+inspect helpers called from functions (e.g. `__cl_step` in 08-maintenance.sh)
+
+A helper that reads or mutates the caller's locals (`yes_mode`, `deep_count`) must say so in its doc block — bash dynamic scope makes it work but leaves it invisible otherwise.
+
+17.14
+
+🔍 Shared fragments use the `_` prefix
+
+ls scripts/_*.sh
+
+`_startup-env.sh` and `_module-list.sh` are skipped by the module globs, the hygiene checks and the docs-sync module count. A new shared fragment must use the prefix.
+
+17.15
+
+🔧 Bench runs abort after 2 consecutive errors
+
+inspect the bench loops (autotune-model.sh, spec-decode benches)
+
+A bench stops after 2 consecutive case *errors* (exception, timeout, empty generation) and diagnoses rather than grinding through the whole set; a merely wrong verdict is data, not a failure.
+
+17.16
+
+🔍 Graph and wiring health
+
+PYTHONPATH=scripts python3 -m kgraph --update --repo .; PYTHONPATH=scripts python3 -m kgraph --wiring --repo .
+
+The update completes with a node/edge count, and wiring reports 0 orphans, 0 broken internal imports, 0 weak-wiring-only-from-tests, 0 unused facades, 0 cross-file call gaps.
 
 <!-- # end of file -->
