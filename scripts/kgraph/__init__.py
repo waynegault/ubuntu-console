@@ -60,7 +60,7 @@ if _t.TYPE_CHECKING:
     from .report import generate_report
     from .server import resolve_serve_target, serve_file
     from .update import incremental_update, merge_graphs, start_watch
-    from .validate import sanitize_label, validate_graph_payload
+    from .validate import validate_graph_payload
 
 _MODULES: dict[str,
                  _t.Callable[[], object]] = {}
@@ -133,7 +133,7 @@ _lazy(".query", ["query_nodes", "find_path", "explain_node", "format_explain", "
 _lazy(".call_flow", ["generate_call_flow_mermaid", "generate_call_flow_html"])
 _lazy(".update", ["incremental_update", "start_watch", "merge_graphs"])
 _lazy(".mcp_server", ["serve_mcp"])
-_lazy(".validate", ["validate_graph_payload", "sanitize_label"])
+_lazy(".validate", ["validate_graph_payload"])
 _lazy(".pr_dashboard", ["generate_pr_dashboard"])
 _lazy(".benchmark", ["benchmark_graph_vs_raw", "print_benchmark"])
 _lazy(".cli", ["main"])
@@ -160,7 +160,7 @@ __all__ = [
     "generate_call_flow_mermaid", "generate_call_flow_html",
     "incremental_update", "start_watch", "merge_graphs",
     "serve_mcp",
-    "validate_graph_payload", "sanitize_label",
+    "validate_graph_payload",
     "generate_pr_dashboard",
     "benchmark_graph_vs_raw", "print_benchmark",
 ]

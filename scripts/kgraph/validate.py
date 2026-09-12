@@ -25,7 +25,6 @@ from .models import Graph
 MAX_NODES = 500_000
 MAX_EDGES = 1_000_000
 MAX_JSON_DEPTH = 20
-MAX_LABEL_LENGTH = 500
 MAX_PAYLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 
 DANGEROUS_PATTERNS = re.compile(
@@ -180,17 +179,6 @@ def validate_graph_payload(payload: Any) -> tuple[bool, str]:
     if any(e.get("severity") == "error" for e in errors):
         return False, errors[0].get("message", "Validation failed")
     return True, ""
-
-
-def sanitize_label(label: str | None) -> str:
-    """Strip dangerous content from a label string."""
-    if not label:
-        return ""
-    label = re.sub(r"<[^>]*>", "", label)
-    label = DANGEROUS_PATTERNS.sub("", label)
-    if len(label) > MAX_LABEL_LENGTH:
-        label = label[:MAX_LABEL_LENGTH]
-    return label.strip()
 
 
 def main() -> None:

@@ -267,20 +267,6 @@ class TestPRDashboard(unittest.TestCase):
 
 
 class TestValidateExtended(unittest.TestCase):
-    def test_sanitize_label_strips_html(self):
-        self.assertEqual(kgraph.sanitize_label("<b>bold</b>"), "bold")
-
-    def test_sanitize_label_strips_xss(self):
-        result = kgraph.sanitize_label('<script>alert(1)</script>')
-        self.assertNotIn("script", result.lower())
-
-    def test_sanitize_label_truncates(self):
-        long = "x" * 600
-        self.assertLessEqual(len(kgraph.sanitize_label(long)), 500)
-
-    def test_sanitize_label_empty(self):
-        self.assertEqual(kgraph.sanitize_label(""), "")
-
     def test_validate_graph_valid_payload_returns_true(self):
         valid, reason = kgraph.validate_graph_payload(_SMALL_GRAPH)
         self.assertTrue(valid)

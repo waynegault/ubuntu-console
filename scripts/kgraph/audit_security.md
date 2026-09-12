@@ -21,10 +21,11 @@ The HTML template in `html.py` (`HTML_TMPL`) embeds graph data via `%s` printf-s
 - The HTML template uses `textContent` for all dynamic label display (not `innerHTML`)
 - `detail-body` is a `<textarea readonly>` not a `<div>` — prevents script injection
 - The `d3` line color assignment uses `rgb(...)` — hardcoded
+- The template ships a Content-Security-Policy meta (`default-src 'self' https://unpkg.com; script-src https://unpkg.com 'unsafe-inline'`)
 
-*Correction (2026-09-12):* an earlier revision claimed `validate.py` sanitizes labels via `sanitize_label()`. That is not true — `sanitize_label()` has **no production caller** (it is only exported and unit-tested). The actual write-path defence is `_check_xss()` inside `validate_graph_payload()`. There is likewise **no** node-id validation for `/` or `\0` (see §4).
+*Correction (2026-09-12):* an earlier revision claimed `validate.py` sanitizes labels via `sanitize_label()`. That is not true — `sanitize_label()` had **no production caller** (it was only exported and unit-tested) and has since been removed. The actual write-path defence is `_check_xss()` inside `validate_graph_payload()`. There is likewise **no** node-id validation for `/` or `\0` (see §4).
 
-**Recommendation:** Add a CSP header in the HTML template. Either wire `sanitize_label()` into the write path or remove it, so the module does not imply a sanitizer that is not applied.
+**Recommendation:** None outstanding — the CSP header is present, and the dead `sanitize_label()` was removed rather than left implying a sanitizer that is not applied.
 
 ### 2. Graph JSON bomb
 **Severity:** Medium
@@ -50,9 +51,9 @@ The HTML template in `html.py` (`HTML_TMPL`) embeds graph data via `%s` printf-s
 **Mitigation:**
 - `validate_graph_payload()` rejects labels containing `DANGEROUS_PATTERNS`
 - Confidence tagging makes all label content explicit (EXTRACTED/INFERRED/AMBIGUOUS)
-- `MAX_LABEL_LENGTH = 500` bounds label length — but only inside `sanitize_label()`, which is not called on the write path
+- Label length is not blanket-capped (the unused `sanitize_label()` / `MAX_LABEL_LENGTH` were removed); oversized payloads are bounded by `MAX_NODES`/`MAX_PAYLOAD_SIZE`
 
-*Correction (2026-09-12):* the earlier claim that `sanitize_label()` "strips HTML and script patterns" as a mitigation was misleading for the same reason as §1: the function is not wired in.
+*Correction (2026-09-12):* the earlier claim that `sanitize_label()` "strips HTML and script patterns" was misleading — the function had no production caller and has been removed (§1).
 
 ### 4. Path traversal in file references
 **Severity:** Low
@@ -116,8 +117,8 @@ This is deliberate: the React dev frontend (`frontend-g6`, Vite on port 5173) an
 
 ## Recommendations
 
-1. **Add CSP header** to the HTML template for defense-in-depth.
-2. **Wire `sanitize_label()` into the write path** (or delete it) and, if node `path`/`id` values are ever used to touch the filesystem, add explicit id validation.
+1. **CSP header** — present in the HTML template (see §1).
+2. **`sanitize_label()`** — removed (had no production caller). If node `path`/`id` values are ever used to touch the filesystem, add explicit id validation.
 3. **Memory free text** (`content`/`tags`) is already stripped from the served GET payload; revisit only if the read server is bound to a fixed port.
 4. **Consider MCP auth** if the MCP server is ever exposed beyond localhost. (`kgraph_report`'s `outpath` is already confined to the reports directory.)
 
