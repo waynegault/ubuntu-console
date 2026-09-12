@@ -38,6 +38,18 @@ _TYPE_SINGULAR = {
 }
 
 
+def _singular_type(type_dir: str) -> str:
+    """Singular type for a life-index directory name.
+
+    Irregular names come from ``_TYPE_SINGULAR``; a regular plural keeps the
+    historical "drop the trailing s" behaviour, so a newly added directory
+    (e.g. ``notes/``) still yields a sensible singular.
+    """
+    if type_dir in _TYPE_SINGULAR:
+        return _TYPE_SINGULAR[type_dir]
+    return type_dir[:-1] if type_dir.endswith("s") else type_dir
+
+
 def resolve_life_root(preferred: str | None = None) -> str:
     root = os.path.expanduser(preferred or LIFE_ROOT_DEFAULT)
     return os.path.abspath(root)
@@ -127,7 +139,7 @@ def load_life_index(life_root: str | None = None) -> dict:
                 if line.strip() and not line.startswith("  -"):
                     in_aliases = False
             slug = os.path.splitext(name)[0].strip().lower()
-            rec_type = (metadata.get("type") or _TYPE_SINGULAR.get(type_dir, type_dir)).strip().lower()
+            rec_type = (metadata.get("type") or _singular_type(type_dir)).strip().lower()
             record = {
                 "slug": slug,
                 "title": title or slug,

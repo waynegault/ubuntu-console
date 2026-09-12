@@ -44,20 +44,30 @@ Disk: SSD (WSL2 on NTFS via drvfs)
 
 | Package | Purpose | Verification |
 |---|---|---|
-| CUDA Toolkit ≥ 13.1 | nvcc, cuBLAS, cuSOLVER | `ls /usr/local/cuda/bin/nvcc` |
-| NVIDIA driver ≥ 596 | Runtime CUDA support | `nvidia-smi` |
+| CUDA Toolkit ≥ 13.1 | nvcc, cuBLAS, cuSOLVER | `nvcc --version` |
+| NVIDIA Windows driver with CUDA 13.3–13.4 runtime support | Runtime CUDA support | `nvidia-smi` (Windows side) |
 | CMake ≥ 3.28 | Build system | `cmake --version` |
 | GCC ≥ 13 | C++17 host compiler | `gcc --version` |
 | ccache | Accelerate rebuilds | `which ccache` |
 | curl | HTTP health checks in autotune | `which curl` |
 | OpenSSL dev | TLS for llama-server | `dpkg -l \| grep libssl` |
 
+> **CUDA versions on this machine** (as of 2026-09-12): the Windows/WSL GPU
+> driver supports the **CUDA 13.3 and 13.4** runtimes. The toolkits installed
+> under `/usr/local` are **12.4, 13.1 and 13.3**, and `/usr/local/cuda` points at
+> **13.3** (`nvcc` reports `release 13.3, V13.3.73`), which is what the build
+> below uses. Any toolkit ≥ 13.1 is supported by this driver, so 13.4 works too —
+> pin it with `CUDACXX=/usr/local/cuda-13.4/bin/nvcc` (or swap the
+> `/usr/local/cuda` symlink) if you want that specific release.
+
 On Ubuntu 24.04 (WSL2):
 
 ```bash
 # CUDA Toolkit is typically installed at /usr/local/cuda by the NVIDIA
-# WSL2 driver package.  Verify it:
+# WSL2 driver package.  Verify the toolkit AND its version:
 ls /usr/local/cuda/bin/nvcc
+nvcc --version            # expect: release 13.3, V13.3.73
+ls -d /usr/local/cuda-*   # 12.4, 13.1, 13.3 (and 13.4 if installed)
 # GCC and build tools:
 sudo apt install build-essential cmake ccache libssl-dev
 ```

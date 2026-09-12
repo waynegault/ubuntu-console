@@ -1056,6 +1056,15 @@ class TestLifeIndexScan(unittest.TestCase):
             index = kgraph.load_life_index(td)
             self.assertEqual(index["by_slug"]["wayne"]["type"], "person")
 
+    def test_singular_type_handles_irregular_and_regular_names(self):
+        from kgraph import life_index
+
+        self.assertEqual(life_index._singular_type("people"), "person")
+        self.assertEqual(life_index._singular_type("projects"), "project")
+        # A directory not in the map still singularises a regular plural.
+        self.assertEqual(life_index._singular_type("notes"), "note")
+        self.assertEqual(life_index._singular_type("misc"), "misc")
+
     def test_dir_scan_title_falls_back_to_the_slug(self):
         with tempfile.TemporaryDirectory() as td:
             self._write(os.path.join(td, "systems", "nas.md"), "- type: system\n")
