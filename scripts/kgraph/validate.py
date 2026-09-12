@@ -5,7 +5,7 @@ This module adds security validation (payload size, nesting depth,
 XSS pattern detection) on top of the Pydantic schema.
 
 CLI:
-    kgraph --validate <graph.json>
+    python -m kgraph.validate <graph.json>
 """
 
 from __future__ import annotations

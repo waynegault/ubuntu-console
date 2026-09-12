@@ -1,6 +1,6 @@
 ---
 name: tactical-console
-description: 'Use the Tactical Console for local LLM management, gateway control, and system diagnostics. Commands: model (list/use/status/stop), so/xo (gateway start/stop), serve/halt (LLM start/stop), llmconf (edit registry), mlogs (view logs), reload (refresh profile). All commands run via: tac-exec <command>'
+description: 'Use the Tactical Console for local LLM management, gateway control, and system diagnostics. Commands: model (list/use/status/stop), so/xo (gateway start/stop), serve/halt (LLM start/stop), llmconf (edit registry), mlogs (view logs). All commands run via: tac-exec <command>'
 metadata:
   {
     "openclaw":
@@ -30,7 +30,6 @@ Use **tac-exec** to run tactical console commands for managing your local llama.
 | `tac-exec halt` | Stop LLM | Kill llama-server |
 | `tac-exec llmconf` | Edit models.conf | Open registry in VS Code |
 | `tac-exec mlogs` | View LLM logs | Open llama-server.log |
-| `tac-exec reload` | Reload shell profile | Refresh functions |
 
 ## Common Patterns
 

@@ -145,12 +145,14 @@ commands:
 
   - name: cl
     family: utility
-    summary: Remove temporary artifacts in current workspace
+    summary: Deep system cleanup (apt, brew, journal, docker, npm, caches)
     contract:
       args:
-        - --dry-run
+        - --light
+        - --report
+        - --yes
       side_effects:
-        - file deletions unless dry-run
+        - file deletions unless --report
       output_shape:
         - itemized cleanup report
       exit_code: non-zero on deletion errors

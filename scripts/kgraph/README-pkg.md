@@ -4,10 +4,13 @@ A knowledge graph server, AST extractor, community detection, MCP server, and CL
 
 ## Installation
 
+The package root is `scripts/` — its `pyproject.toml` builds the
+`openclaw-kgraph` distribution and installs the `kgraph` console script.
+
 ### Using uv (recommended)
 
 ```bash
-uv pip install -e scripts/kgraph
+uv pip install -e scripts
 ```
 
 > **Non-editable installs are snapshots.** `uv tool install './scripts[ast]'` (or
@@ -22,7 +25,7 @@ uv pip install -e scripts/kgraph
 ### Using pip
 
 ```bash
-pip install -e scripts/kgraph
+pip install -e scripts
 ```
 
 ### Using pipx
@@ -34,7 +37,7 @@ pipx install './scripts[ast]'
 Or directly from the source tree:
 
 ```bash
-cd scripts/kgraph && pip install -e .
+cd scripts && pip install -e .
 ```
 
 ## Usage
@@ -44,31 +47,31 @@ kgraph --help               # All commands
 kgraph --serve              # Start web viewer
 kgraph --output graph.html  # Generate static HTML
 kgraph --update             # Incremental rebuild
-kgraph --wiring --repo DIR   # Analyze source-tree wiring (orphans, broken imports, weak wiring, facades)
+kgraph --wiring --repo DIR  # Analyze source-tree wiring (orphans, broken imports, weak wiring, facades)
 kgraph --watch              # Watch mode (auto-rebuild on file changes)
 kgraph --mcp                # MCP server for LLM tool-call access
-kgraph --validate file.json # Validate graph JSON
-kgraph --security-check file.json  # Security scan
+kgraph --report             # Write GRAPH_REPORT.md
+kgraph --audit              # Show security audit report
 kgraph --pr-dashboard       # Generate PR dashboard
 kgraph --install-hook       # Install git post-commit hook
 kgraph --uninstall-hook     # Remove git hook
 ```
 
+Graph JSON validation is a module entry point, not a CLI flag:
+
+```bash
+python -m kgraph.validate graph.json
+```
+
 ## CLI Entry Points
 
-| Command              | Function                  |
-|----------------------|---------------------------|
-| `kgraph`             | Main CLI                  |
-| `kgraph-validate`    | Graph JSON validation     |
-| `kgraph-security`    | Security checks           |
-| `kgraph-pr-dashboard`| PR dashboard generator    |
-| `kgraph-benchmark`   | Token-reduction benchmark |
-| `kgraph-audit`       | Security audit            |
-| `kgraph-wiring`      | Source-tree wiring analysis  |
+| Command  | Function |
+|----------|----------|
+| `kgraph` | Main CLI (`kgraph.cli:main`) — every feature is a flag on this one command |
 
 ## Dependencies
 
-- Python ≥ 3.10
-- No external dependencies required (stdlib only)
-- tree-sitter (optional: for AST extraction)
-- gh CLI (optional: for PR dashboard)
+- Python ≥ 3.12
+- `networkx` ≥ 3.0 and `pydantic` ≥ 2.0 (required — installed automatically)
+- `tree-sitter` (extra: `pip install './scripts[ast]'`) — required for AST extraction
+- `git` on `PATH` (for `--pr-dashboard`)

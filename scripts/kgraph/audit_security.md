@@ -20,8 +20,8 @@ The HTML template in `html.py` (`HTML_TMPL`) embeds graph data via `%s` printf-s
 - `validate_graph_payload()` → `validate_graph()` → `_check_xss()` rejects any node/edge string (including nested containers) matching `DANGEROUS_PATTERNS` (`<script>`, `javascript:`, `on*=`, `data:text/html`, `vbscript:`, `file://`, `document.`/`window.`, `eval(`, `setTimeout(`, `setInterval(`)
 - The HTML template uses `textContent` for all dynamic label display (not `innerHTML`)
 - `detail-body` is a `<textarea readonly>` not a `<div>` — prevents script injection
-- The `d3` line color assignment uses `rgb(...)` — hardcoded
-- The template ships a Content-Security-Policy meta (`default-src 'self' https://unpkg.com; script-src https://unpkg.com 'unsafe-inline'`)
+- Node/edge styling comes from a static Cytoscape style block — colours are not derived from node data
+- The template ships a Content-Security-Policy meta (`default-src 'self' https://unpkg.com; script-src https://unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://unpkg.com`)
 
 *Correction (2026-09-12):* an earlier revision claimed `validate.py` sanitizes labels via `sanitize_label()`. That is not true — `sanitize_label()` had **no production caller** (it was only exported and unit-tested) and has since been removed. The actual write-path defence is `_check_xss()` inside `validate_graph_payload()`. There is likewise **no** node-id validation for `/` or `\0` (see §4).
 
@@ -98,15 +98,15 @@ Both write surfaces bind to `127.0.0.1` by default (localhost only).
 **Severity:** Low
 **Status:** Accepted (by design)
 
-`GET /graph.json` returns `Access-Control-Allow-Origin: *`, and the projection includes memory-derived node fields (`content`, `tags`, source paths). Any page the user visits could therefore read the local knowledge base.
+`GET /graph.json` returns `Access-Control-Allow-Origin: *`. The served projection is stripped of the memory-derived free-text fields (`content`, `tags`), so a page the user visits can read graph structure (node ids, labels, and other non-free-text fields) but not the raw memory text.
 
-This is deliberate: the React dev frontend (`frontend-g6`, Vite on port 5173) and the embedded viewer fetch the API cross-origin. The read server uses an ephemeral port unless `--port` is given, which limits exposure. Revisit if the payload is ever served on a fixed, guessable port — strip the memory `content`/`tags` extras from the served payload and/or restrict the origin.
+This is deliberate: the Vite dev frontend (`frontend-g6`, port 5173) fetches the API cross-origin, while the embedded Cytoscape viewer is same-origin and needs no CORS. The read server uses an ephemeral port unless `--port` is given, which limits exposure. Revisit if the payload is ever served on a fixed, guessable port — restrict the origin and/or trim the remaining non-free-text fields.
 
 ## Summary
 
 | Attack Vector | Severity | Status | Notes |
 |--------------|----------|--------|-------|
-| File:// redirect XSS | Medium | ✅ Mitigated | CSP recommended for defense-in-depth |
+| File:// redirect XSS | Medium | ✅ Mitigated | CSP meta present in the template |
 | JSON bomb | Medium | ✅ Mitigated | Pre-read size check + depth/node/edge caps |
 | Label injection | Low | ✅ Mitigated | `DANGEROUS_PATTERNS` rejection on the write path |
 | Path traversal | Low | ✅ Mitigated | Serve-root restriction (no id validation) |
