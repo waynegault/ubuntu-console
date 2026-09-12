@@ -146,6 +146,11 @@ _tac_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TACTICAL_REPO_ROOT="${TACTICAL_REPO_ROOT:-$_tac_repo_root}"
 _tac_module_dir="$TACTICAL_REPO_ROOT/scripts"
 
+# Shared startup environment (NODE_COMPILE_CACHE / OPENCLAW_NO_RESPAWN /
+# NODE_OPTIONS) plus the __tac_source_submodules helper the thin loaders
+# (09-openclaw, 11-llm-manager) use — must load BEFORE the module loop.
+source "$_tac_repo_root/scripts/_startup-env.sh"
+
 # Canonical module list, shared with env.sh (the library loader) so the two
 # module sets can never drift. Each thin loader (09-openclaw, 11-llm-manager)
 # sources its own sub-modules. Losing the list would silently disable every
@@ -233,9 +238,8 @@ fi
 # ==============================================================================
 #  Startup Optimizations (faster CLI performance)
 # ==============================================================================
-# Shared fragment — single source of truth for NODE_COMPILE_CACHE /
-# OPENCLAW_NO_RESPAWN / NODE_OPTIONS, also sourced by env.sh (library mode).
-source "$_tac_repo_root/scripts/_startup-env.sh"
+# _startup-env.sh is sourced above, before the module loop (the thin loaders
+# need __tac_source_submodules); see the "Shared startup environment" block.
 
 unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv _tac_line _tac_version_files _tac_repo_root _tac_expected_modules _tac_found_count
 

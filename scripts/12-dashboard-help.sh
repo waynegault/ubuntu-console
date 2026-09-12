@@ -3,7 +3,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 12
+# Module Version: 13
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -27,11 +27,14 @@ function tactical_dashboard() {
     local systime
     systime=$(date +"%H:%M %A %d/%m/%Y")
     local uptime
-    uptime=$(__get_uptime)
+    _telemetry __get_uptime
+    uptime=$_telemetry_out
     local batt
-    batt=$(__get_battery)
+    _telemetry __get_battery
+    batt=$_telemetry_out
     local host_raw
-    host_raw=$(__get_host_metrics)
+    _telemetry __get_host_metrics
+    host_raw=$_telemetry_out
     local cpu gpu0 gpu1
     IFS='|' read -r cpu gpu0 gpu1 <<< "$host_raw"
     # Ensure numeric values for arithmetic (guard against stale/malformed cache)
@@ -39,7 +42,8 @@ function tactical_dashboard() {
     [[ "$gpu0" =~ ^[0-9]+$ ]] || gpu0=0
     [[ "$gpu1" =~ ^[0-9]+$ ]] || gpu1=0
     local disk
-    disk=$(__get_disk)
+    _telemetry __get_disk
+    disk=$_telemetry_out
     local _mem_raw
     _mem_raw=$(free -m | awk 'NR==2{printf "%.2f / %.2f Gb|%d", $3/1024, $2/1024, $3*100/$2}')
     local mem="${_mem_raw%|*}"
@@ -86,9 +90,11 @@ function tactical_dashboard() {
     __fRow "BATTERY" "$batt_detail" "$batt_color"
 
     local gpu_raw
-    gpu_raw=$(__get_gpu)
+    _telemetry __get_gpu
+    gpu_raw=$_telemetry_out
     local gpu_engines
-    gpu_engines=$(__get_gpu_engines)
+    _telemetry __get_gpu_engines
+    gpu_engines=$_telemetry_out
 
     # CPU/GPU colour: >90% red, >75% yellow, else green
     local cpu_gpu_color
@@ -150,7 +156,8 @@ function tactical_dashboard() {
 
         # LLM context utilisation via async-cached /slots query
         local slots_json
-        slots_json=$(__get_llm_slots)
+        _telemetry __get_llm_slots
+        slots_json=$_telemetry_out
         if [[ -n "$slots_json" ]]
         then
             local ctx_used ctx_total
@@ -183,7 +190,8 @@ function tactical_dashboard() {
         __test_port "$OC_PORT" && { oc_stat="ONLINE"; oc_active=1; }
 
         local metrics
-        metrics=$(__get_oc_metrics)
+        _telemetry __get_oc_metrics
+        metrics=$_telemetry_out
         local m_sess m_age m_ver
         IFS='|' read -r m_sess m_age m_ver <<< "$metrics"
         m_sess=${m_sess%$'\r'}; m_age=${m_age%$'\r'}; m_ver=${m_ver%$'\r'}
@@ -327,7 +335,8 @@ function tactical_dashboard() {
     fi
 
     local gitStat
-    gitStat=$(__get_git)
+    _telemetry __get_git
+    gitStat=$_telemetry_out
     if [[ -n "$gitStat" ]]
     then
         printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"

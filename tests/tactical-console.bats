@@ -97,9 +97,11 @@ _build_test_profile() {
         [[ -f "$_f" ]] || continue
         sed "${_sed_args[@]}" "$_f" > "$patched_scripts/$(basename "$_f")"
     done
-    # Shared module list: underscore-prefixed, so not matched by the copy loop
-    # above, but the loader sources it from the patched scripts dir.
+    # Shared underscore fragments: not matched by the copy loop above, but the
+    # loader sources them from the patched scripts dir (and the thin loaders
+    # need __tac_source_submodules from _startup-env.sh).
     cp "$REPO_ROOT/scripts/_module-list.sh" "$patched_scripts/_module-list.sh"
+    cp "$REPO_ROOT/scripts/_startup-env.sh" "$patched_scripts/_startup-env.sh"
     # Replace 13-init with a minimal stub — skip expensive runtime
     # side-effects (pwsh.exe bridge, loopback, sha256, completions)
     # that are irrelevant to unit tests.
@@ -199,7 +201,7 @@ _TAC_NEEDS_PROFILE=(
         __get_host_metrics \
         __get_oc_version \
         __get_oc_metrics \
-        __get_tokens \
+        _telemetry \
         __get_llm_slots \
         __check_cooldown \
         __set_cooldown \

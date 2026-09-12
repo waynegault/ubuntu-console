@@ -3,18 +3,36 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
 # @modular-section: telemetry
 # @depends: constants, design-tokens, ui-engine
-# @exports: __cache_fresh, __get_uptime, __get_disk, __get_host_metrics,
-#   __get_gpu_engines, __get_gpu, __get_battery, __get_git, __get_tokens,
-#   __get_oc_version, __get_oc_metrics, __get_llm_slots
+# @exports: _telemetry, __cache_fresh, __get_uptime, __get_disk,
+#   __get_host_metrics, __get_gpu_engines, __get_gpu, __get_battery,
+#   __get_git, __get_oc_version, __get_oc_metrics, __get_llm_slots
 #
 # All telemetry functions use /dev/shm caching and background subshells to avoid
 # blocking the dashboard render. Cache TTLs are tuned per metric volatility.
+
+# ---------------------------------------------------------------------------
+# _telemetry <getter> [args...] — run a telemetry getter in the CURRENT shell
+# and capture its printed value in the global _telemetry_out.
+#
+# A command substitution (`x=$(__get_y)`) runs the getter in a subshell, so the
+# background cache refreshes it launches become children of that subshell and
+# their PIDs never reach __TAC_BG_PIDS — the EXIT cleanup would then kill
+# nothing. Running the getter here keeps those jobs children of the interactive
+# shell, so the PID tracking and cleanup are real.
+# ---------------------------------------------------------------------------
+function _telemetry() {
+    local _tel_out
+    _tel_out=$(mktemp)
+    "$@" > "$_tel_out"
+    _telemetry_out=$(< "$_tel_out")
+    rm -f "$_tel_out"
+}
 
 # ---------------------------------------------------------------------------
 # __cache_fresh — Check if a cache file exists and is younger than TTL seconds.
@@ -266,59 +284,6 @@ function __get_git() {
 }
 
 # ---------------------------------------------------------------------------
-# __get_tokens — Read token usage from the most-recent OpenClaw session (30s TTL).
-# Scans agents/*/sessions/sessions.json for the newest session with inputTokens.
-# Returns "used|limit" or "N/A|0".
-# ---------------------------------------------------------------------------
-# Performance note (I2): Uses `jq -s` (slurp) to process all session files
-# in a single jq invocation, avoiding the previous N+1 pattern (one jq per file).
-# The background subshell ensures the dashboard never blocks.
-function __get_tokens() {
-    local cache="$TAC_CACHE_DIR/tac_tokens"
-    local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
-    if __cache_fresh "$cache" 30
-    then
-        cat "$cache"; return
-    fi
-    (
-        local files=()
-        while IFS= read -r f
-        do
-            files+=("$f")
-        done < <(find "$OC_AGENTS" -name "sessions.json" -type f \
-            -printf '%T@ %p\n' 2>/dev/null | \
-            sort -n -r | head -n 10 | cut -d' ' -f2-)
-
-        local result=""
-        if (( ${#files[@]} > 0 ))
-        then
-            result=$(jq -s -r '
-                [ .[]
-                  | to_entries[].value
-                  | select(.inputTokens != null and .inputTokens > 0
-                          and .contextTokens != null and .contextTokens > 0) ]
-                | sort_by(.updatedAt) | last
-                | "\(.inputTokens)|\(.contextTokens)"
-            ' "${files[@]}" 2>/dev/null)
-        fi
-
-        if [[ -n "$result" && "$result" != "null|null" ]]
-        then
-            echo "$result" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
-        else
-            echo "N/A|0" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
-        fi
-    ) &>/dev/null &
-    __TAC_BG_PIDS+=("$!")
-    if [[ -f "$cache" ]]
-    then
-        cat "$cache"
-    else
-        echo "Querying...|0"
-    fi
-}
-
-# ---------------------------------------------------------------------------
 # __get_oc_version — Fetch OpenClaw CLI version (24h TTL — barely changes).
 #
 # Race condition fix: Uses PID-suffixed temp file to avoid conflicts if
@@ -360,7 +325,8 @@ function __get_oc_version() {
 # ---------------------------------------------------------------------------
 function __get_oc_metrics() {
     local ver
-    ver=$(__get_oc_version)
+    _telemetry __get_oc_version
+    ver=$_telemetry_out
 
     local cache="$TAC_CACHE_DIR/tac_ocmetrics"
     local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions

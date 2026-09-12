@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 25
+# Module Version: 26
 # ==============================================================================
 # 9. OPENCLAW MANAGER (THIN LOADER)
 # ==============================================================================
@@ -37,30 +37,19 @@ else
 fi
 
 # ── Source sub-modules in dependency order ──────────────────────────────
-_MOD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-for _09_mod in \
-    09a-oc-gateway \
-    09c-oc-core \
-    09d-oc-agents \
-    09e-oc-health \
-    09f-oc-misc
-do
-    _09_f="$_MOD_DIR/${_09_mod}.sh"
-    if [[ -f "$_09_f" ]]; then
-        # A sub-module that exists but fails to source must not load silently.
-        _09_rc=0
-        # shellcheck disable=SC1090
-        source "$_09_f" || _09_rc=$?
-        if (( _09_rc != 0 )); then
-            printf '%s\n' "[tac] 09-openclaw: sub-module $_09_f failed to load (rc=$_09_rc)" >&2
-            [[ -n "${ErrorLogPath:-}" ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') [SOURCE-FAILED] $_09_f rc=$_09_rc" >> "$ErrorLogPath" 2>/dev/null
-        fi
-    else
-        printf '%s\n' "[tac] 09-openclaw: missing sub-module $_09_f" >&2
-    fi
-done
-unset _MOD_DIR _09_mod _09_f _09_rc
+# Shared helper (scripts/_startup-env.sh) — reports missing files and files
+# that exist but fail to source.
+if declare -F __tac_source_submodules >/dev/null 2>&1
+then
+    __tac_source_submodules "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "09-openclaw" \
+        09a-oc-gateway \
+        09c-oc-core \
+        09d-oc-agents \
+        09e-oc-health \
+        09f-oc-misc
+else
+    printf '%s\n' "[tac] 09-openclaw: __tac_source_submodules unavailable (startup fragment not loaded)" >&2
+fi
 # end of file
 
 # end of file marker

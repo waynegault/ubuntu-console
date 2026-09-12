@@ -4,7 +4,7 @@
 # _startup-env.sh — Shared startup environment optimizations.
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 #
 # Single source of truth for the NODE_COMPILE_CACHE / OPENCLAW_NO_RESPAWN /
 # NODE_OPTIONS startup blocks. Sourced by BOTH:
@@ -18,6 +18,37 @@
 #
 # shellcheck disable=SC1090,SC1091
 # ==============================================================================
+
+# __tac_source_submodules <dir> <label> <name...> — Source a thin loader's
+# sub-modules in order, one level deep. Reports a missing file AND a file that
+# exists but fails to source, so a broken sub-module never loads silently.
+# Shared by the 09-openclaw and 11-llm-manager thin loaders so their loops
+# cannot drift. (SC1090 — a dynamic source path — is covered by the file-level
+# disable above; no per-line suppression is needed.)
+function __tac_source_submodules() {
+    local _dir="$1" _label="$2"
+    shift 2
+    local _name _file _rc
+    for _name in "$@"
+    do
+        _file="$_dir/${_name}.sh"
+        if [[ ! -f "$_file" ]]
+        then
+            printf '%s\n' "[tac] ${_label}: missing sub-module $_file" >&2
+            continue
+        fi
+        _rc=0
+        source "$_file" || _rc=$?
+        if (( _rc != 0 ))
+        then
+            printf '%s\n' "[tac] ${_label}: sub-module $_file failed to load (rc=$_rc)" >&2
+            if [[ -n "${ErrorLogPath:-}" ]]
+            then
+                echo "$(date +'%Y-%m-%d %H:%M:%S') [SOURCE-FAILED] $_file rc=$_rc" >> "$ErrorLogPath" 2>/dev/null
+            fi
+        fi
+    done
+}
 
 # NODE_COMPILE_CACHE: Cache compiled JS for repeated CLI runs
 export NODE_COMPILE_CACHE="${NODE_COMPILE_CACHE:-/var/tmp/openclaw-compile-cache}"

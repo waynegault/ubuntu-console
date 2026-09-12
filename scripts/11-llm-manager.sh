@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 98
+# Module Version: 99
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP (THIN LOADER)
 # ==============================================================================
@@ -24,31 +24,20 @@
 : "${__LLAMA_DRIVE_MOUNTED:=0}"
 
 # ── Source sub-modules in dependency order ──────────────────────────────
-_MOD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-for _11_mod in \
-    11a-llm-registry \
-    11b-llm-autotune \
-    11c-llm-server \
-    11d-llm-gpu \
-    11e-llm-model \
-    11f-llm-runtime
-do
-    _11_f="$_MOD_DIR/${_11_mod}.sh"
-    if [[ -f "$_11_f" ]]; then
-        # A sub-module that exists but fails to source must not load silently.
-        _11_rc=0
-        # shellcheck disable=SC1090
-        source "$_11_f" || _11_rc=$?
-        if (( _11_rc != 0 )); then
-            printf '%s\n' "[tac] 11-llm-manager: sub-module $_11_f failed to load (rc=$_11_rc)" >&2
-            [[ -n "${ErrorLogPath:-}" ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') [SOURCE-FAILED] $_11_f rc=$_11_rc" >> "$ErrorLogPath" 2>/dev/null
-        fi
-    else
-        printf '%s\n' "[tac] 11-llm-manager: missing sub-module $_11_f" >&2
-    fi
-done
-unset _MOD_DIR _11_mod _11_f _11_rc
+# Shared helper (scripts/_startup-env.sh) — reports missing files and files
+# that exist but fail to source.
+if declare -F __tac_source_submodules >/dev/null 2>&1
+then
+    __tac_source_submodules "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "11-llm-manager" \
+        11a-llm-registry \
+        11b-llm-autotune \
+        11c-llm-server \
+        11d-llm-gpu \
+        11e-llm-model \
+        11f-llm-runtime
+else
+    printf '%s\n' "[tac] 11-llm-manager: __tac_source_submodules unavailable (startup fragment not loaded)" >&2
+fi
 # end of file
 
 # end of file marker
