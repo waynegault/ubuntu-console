@@ -276,8 +276,20 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                     },
                     {
                         'name': 'kgraph_report',
-                        'description': 'Generate a graph report',
-                        'parameters': {'outpath': 'optional output path'},
+                        'description': (
+                            'Generate a graph report. Over HTTP this tool is reached as a '
+                            'JSON-RPC POST and is accepted ONLY with '
+                            'Content-Type: application/json (a cross-origin, '
+                            'form-encoded or oversized request is refused); the file is '
+                            'written inside the kgraph reports directory.'
+                        ),
+                        'parameters': {
+                            'outpath': (
+                                'optional path RELATIVE to the kgraph reports directory '
+                                '(KG_REPORTS_DIR, default ~/.openclaw/kgraph-reports); '
+                                'absolute paths and ".." are rejected'
+                            ),
+                        },
                     },
                     {
                         'name': 'kgraph_stats',

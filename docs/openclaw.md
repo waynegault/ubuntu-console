@@ -281,6 +281,15 @@ Exposes 5 tools via JSON-RPC over HTTP (binds localhost only):
 
 Clients connect to `http://127.0.0.1:8331` (configurable port).
 
+Write requests (`kgraph_report`) are accepted **only** with
+`Content-Type: application/json` — a cross-origin `Origin`, a form-encoded
+body (what plain `curl -d` sends), or an oversized payload is refused, and the
+written file must be a path *relative to* the reports directory
+(`KG_REPORTS_DIR`, default `~/.openclaw/kgraph-reports`; absolute paths and
+`..` are rejected). The read path (`GET /graph.json`) is served with wildcard
+CORS for the Vite dev frontend and redacts memory text (`content`, `tags`,
+`content_preview`, and content-derived `memory`/`summary` labels).
+
 ### Git Hooks (`kgraph --install-hook`)
 
 Installs post-commit and post-merge hooks that auto-rebuild the graph
@@ -316,7 +325,7 @@ uv tool install ./scripts --extra ast
 | `~/.openclaw/.env.bridge` | Generated env bridge consumed by the gateway service |
 | `~/.openclaw/kgraph.json` | Optional read-only fallback graph source (`--store`); not written |
 | `~/.openclaw/kgraph.sqlite` | Primary persisted SQLite store for `oc g` |
-| `~/.openclaw/state/memory/gigabrain-workspace/obsidian-vault/` | Gigabrain-exported Obsidian vault root |
+| `~/.openclaw/obsidian-vault/` | Gigabrain-exported Obsidian vault root (notes nest under `Gigabrain/`); `tools/mirror-vault.sh` copies it to `C:\Users\wayne\Obsidian\Gigabrain` |
 | `~/.config/systemd/user/openclaw-gateway.service` | systemd unit file |
 | `~/.config/systemd/user/openclaw-gateway.service.d/env-bridge.conf` | Gateway env-bridge drop-in (ExecStartPre + EnvironmentFile) |
 | `~/.config/systemd/user/llama-watchdog.service` | Watchdog systemd unit |
