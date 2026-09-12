@@ -20,16 +20,12 @@ documenting its dependencies and exports:
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 ```
 
-The loader iterates an **explicit array** of expected module names (not a glob),
-guaranteeing load order and preventing accidental sourcing of utility scripts:
+Both loaders read one **shared list** of module names (not a glob), guaranteeing
+load order and keeping the interactive and library paths identical:
 
 ```bash
-_tac_expected_modules=(01-constants 02-error-handling 03-design-tokens 04-aliases
-    05-ui-engine 06-hooks 07-telemetry 08-maintenance
-    09-openclaw 09a-oc-gateway 09b-gog 09c-oc-core 09d-oc-agents 09e-oc-health 09f-oc-misc
-    10-deployment
-    11a-llm-registry 11b-llm-autotune 11c-llm-server 11d-llm-gpu 11e-llm-model 11f-llm-runtime
-    12-dashboard-help 13-init 14-wsl-extras 15-model-recommender)
+source "$_tac_module_dir/_module-list.sh"
+mapfile -t _tac_expected_modules < <(__tac_module_list)
 
 for _tac_mod in "${_tac_expected_modules[@]}"; do
     _tac_f="$_tac_module_dir/${_tac_mod}.sh"
@@ -37,6 +33,9 @@ for _tac_mod in "${_tac_expected_modules[@]}"; do
 done
 unset _tac_mod _tac_expected_modules
 ```
+
+`env.sh` iterates the same list and skips `13-init.sh`, whose side-effects are
+interactive-only.
 
 Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
 `15-model-recommender.sh` loads last. Utility scripts live in `tools/` and

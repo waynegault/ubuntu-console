@@ -9,8 +9,8 @@
 
 The **Tactical Console Profile** is a modular Bash environment that turns a
 WSL2 Ubuntu shell into a unified command-and-control console. A thin loader
-(`tactical-console.bashrc`) sources 26 numbered profile modules from `scripts/`
-in dependency order.
+(`tactical-console.bashrc`) sources its 16 profile modules from `scripts/` in
+dependency order, driven by the shared list in `scripts/_module-list.sh`.
 
 **Non-interactive access:** `env.sh` is a library loader that sources all
 modules except `13-init.sh`, making ~100+ shell functions available to MCP
@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (758 total tests: 581 BATS + 177 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (786 total tests: 585 BATS + 201 Python).
 
 ### Running Tests
 
@@ -458,24 +458,20 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 
 ### Module Architecture
 
-The profile is a thin loader that sources 26 numbered profile modules from `scripts/` via an explicit array (not a glob) to guarantee load order:
+The profile is a thin loader that sources 16 profile modules from `scripts/`. The order lives in one shared list (`scripts/_module-list.sh`, via `__tac_module_list`) that **both** `tactical-console.bashrc` and `env.sh` read, so the interactive and library loaders can never drift:
 
 ```bash
-_tac_expected_modules=(
-    01-constants 02-error-handling 03-design-tokens 04-aliases
-    05-ui-engine 06-hooks 07-telemetry 08-maintenance
-    09-openclaw 09a-oc-gateway 09b-gog 09c-oc-core 09d-oc-agents 09e-oc-health 09f-oc-misc
-    10-deployment
-    11a-llm-registry 11b-llm-autotune 11c-llm-server 11d-llm-gpu 11e-llm-model 11f-llm-runtime
-    12-dashboard-help 13-init 14-wsl-extras 15-model-recommender
-)
+source "$_tac_module_dir/_module-list.sh"
+mapfile -t _tac_expected_modules < <(__tac_module_list)
 ```
 
-`09-openclaw.sh` and `11-llm-manager.sh` are thin loaders that source their
-`09a-f` / `11a-f` sub-modules in dependency order; the loader also sources each
-sub-module directly, so both load paths are guarded and idempotent. Module
-counts and line counts are verified by `tools/docs-sync-check.sh` in CI — this
-table intentionally omits line counts because they drift.
+`09-openclaw.sh` and `11-llm-manager.sh` are thin loaders listed in that shared
+list: each sources its `09a/c-f` / `11a-f` sub-modules in dependency order and
+also carries load-time logic (the OpenClaw availability probe, the
+`__LLAMA_DRIVE_MOUNTED` fallback). Listing the thin loaders (rather than their
+sub-modules) means nothing is sourced twice. Module counts and line counts are
+verified by `tools/docs-sync-check.sh` in CI — this table intentionally omits
+line counts because they drift.
 
 | Module | Purpose |
 |---|---|
@@ -550,7 +546,7 @@ Never use PascalCase or camelCase for function names.
 
 ### Version System
 
-`TACTICAL_PROFILE_VERSION` is auto-computed: `_TAC_LOADER_VERSION . sum(all module versions)`. Each module has a `# Module Version: N` comment that is incremented on any change. The loader is currently v8.
+`TACTICAL_PROFILE_VERSION` is auto-computed: `_TAC_LOADER_VERSION . sum(all module versions)`. Each module has a `# Module Version: N` comment that is incremented on any change. The loader is currently v9.
 
 ### Telemetry Caching
 

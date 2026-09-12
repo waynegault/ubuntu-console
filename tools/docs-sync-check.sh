@@ -14,7 +14,7 @@
 # Usage: tools/docs-sync-check.sh
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 set -u
 
@@ -34,15 +34,15 @@ check_phrase() { # <description> <grep -F pattern>
     fi
 }
 
-# ── 1. Module count: entries in the loader's explicit array ────────────────
+# ── 1. Module count: entries in the shared module list ─────────────────────
+modules_file="$REPO_ROOT/scripts/_module-list.sh"
 module_count=$(awk '
-    /^_tac_expected_modules=\(/ { f=1; sub(/^_tac_expected_modules=\(/, "") }
-    f {
-        if ($0 ~ /\)/) { sub(/\).*/, ""); f=0 }
-        print
-    }
-' "$LOADER" | wc -w | tr -d ' ')
-check_phrase "module count ($module_count)" "${module_count} numbered profile modules"
+    /^function __tac_module_list/ { f=1; next }
+    f && /^}/ { f=0 }
+    f && /printf/ { next }
+    f { gsub(/\\/, ""); print }
+' "$modules_file" | wc -w | tr -d ' ')
+check_phrase "module count ($module_count)" "${module_count} profile modules"
 
 # ── 2. Loader version ──────────────────────────────────────────────────────
 loader_version=$(sed -n 's/^_TAC_LOADER_VERSION="\([0-9][0-9]*\)"/\1/p' "$LOADER")
@@ -78,11 +78,12 @@ check_phrase "full BATS suite count ($bats_full)" "${bats_full} BATS unit tests"
 # ── 4. env.sh library-loader phrase (unchanged from the old inline check) ──
 check_phrase "env.sh library-loader description" "Non-interactive library loader (all modules except 13-init.sh)"
 
-# ── 5. env.sh module glob (must still discover modules) ────────────────────
-if grep -q '\[0-9\]\[0-9\]-\*\.sh' "$REPO_ROOT/env.sh"; then
-    echo "  OK: env.sh module glob present"
+# ── 5. Shared module list (both loaders must read it) ──────────────────────
+if grep -q '_module-list\.sh' "$REPO_ROOT/env.sh" \
+   && grep -q '_module-list\.sh' "$LOADER"; then
+    echo "  OK: loaders share scripts/_module-list.sh"
 else
-    echo "  DRIFT: env.sh module glob '[0-9][0-9]-*.sh' missing"
+    echo "  DRIFT: loaders do not both source scripts/_module-list.sh"
     drift=1
 fi
 
