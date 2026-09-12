@@ -1,9 +1,8 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2059,SC2120,SC2154
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 99
+# Module Version: 100
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP (THIN LOADER)
 # ==============================================================================

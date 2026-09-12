@@ -1,9 +1,9 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2059,SC2154,SC2317
+# shellcheck disable=SC2154
 # --- Module: 09b-gog ------------------------------------------------------
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 9b. GOG (Google CLI) MANAGER
 # ==============================================================================

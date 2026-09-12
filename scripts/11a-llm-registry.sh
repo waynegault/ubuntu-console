@@ -1,8 +1,8 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2120,SC2154
+# shellcheck disable=SC2154
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================

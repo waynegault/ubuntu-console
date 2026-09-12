@@ -1,9 +1,9 @@
 # shellcheck shell=bash
-# shellcheck disable=SC1090,SC1091,SC2034,SC2154
+# shellcheck disable=SC1090,SC1091,SC2154
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================

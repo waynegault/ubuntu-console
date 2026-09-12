@@ -1,8 +1,8 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2120,SC2154,SC2015,SC2153,SC1091
+# shellcheck disable=SC1091,SC2015,SC2119,SC2120,SC2153,SC2154
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 09e-oc-health
 # ==============================================================================

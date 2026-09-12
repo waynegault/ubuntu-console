@@ -1,8 +1,8 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2120,SC2154
+# shellcheck disable=SC2154
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 09f-oc-misc — Miscellaneous OC commands (kgraph, stinger, mem-index)
 # ==============================================================================

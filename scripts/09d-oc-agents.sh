@@ -1,8 +1,8 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2120,SC2154,SC2015,SC2016,SC1090
+# shellcheck disable=SC1090,SC2015,SC2016,SC2034,SC2154
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1091,SC2034
+# shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
 #===============================================================================
 # spec-decode-bench.sh — Per-prompt speculative-decoding acceptance bench.
 #

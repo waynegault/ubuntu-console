@@ -1,9 +1,9 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2154
+# shellcheck disable=SC2154
 # ─── Module: 02-error-handling ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 2. ERROR HANDLING
 # ==============================================================================

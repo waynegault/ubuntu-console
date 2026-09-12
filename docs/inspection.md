@@ -182,7 +182,14 @@ Last non-blank line is `# end of file`
 
 grep 'shellcheck disable' <file>
 
-Each disabled rule has a rationale comment on the line above or same line
+Each disabled rule has a rationale comment on the line above or same line.
+File-level `# shellcheck disable=...` lists must be MINIMAL: only the codes the
+file actually produces. Audit by removing the line and reading what shellcheck
+reports, then declaring exactly that set — 2026-09-12 narrowed every module
+this way (07-telemetry, 09-openclaw and 11-llm-manager need no file-level
+suppression at all). Note `-x`/`external-sources=true` does not help here:
+these are structural cross-module findings (a var owned by another module →
+SC2034/SC2154) that no source-following can resolve.
 
 2. Security — Critical
 

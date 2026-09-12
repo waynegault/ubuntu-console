@@ -1,9 +1,9 @@
 # shellcheck shell=bash
-# shellcheck disable=SC1091,SC2034,SC2059,SC2154
+# shellcheck disable=SC1091,SC2034
 # ─── Module: 06-hooks ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 6. SYSTEM HOOKS & OVERRIDES
 # ==============================================================================

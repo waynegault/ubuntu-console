@@ -1,9 +1,8 @@
 # shellcheck shell=bash
-# shellcheck disable=SC1090,SC1091,SC2015,SC2016,SC2034,SC2154,SC2317
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 26
+# Module Version: 27
 # ==============================================================================
 # 9. OPENCLAW MANAGER (THIN LOADER)
 # ==============================================================================

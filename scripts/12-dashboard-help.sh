@@ -1,9 +1,9 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2059,SC2154
+# shellcheck disable=SC2059,SC2154
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 13
+# Module Version: 14
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
