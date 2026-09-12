@@ -1603,5 +1603,1679 @@ class TestPRDashboardHtml(unittest.TestCase):
         self.assertIn("a.py", html)
 
 
+# ── memory_import: files/chunks memory-store branch ─────────────────────
+
+# Synthetic life index pinned into the module so the import never reads the
+# host's ~/.openclaw/life tree.  "openclaw" proves canonical-type mapping,
+# "gateway token rotation" proves alias → canonical record resolution, and the
+# last two entries prove non-entity types and sub-3-char aliases never become
+# canonical entity patterns.
+_LIFE_INDEX = {
+    "by_slug": {}, "by_type": {}, "records": [], "title_aliases": {},
+    "aliases": {
+        "openclaw": {"slug": "openclaw", "title": "OpenClaw", "type": "organization",
+                     "path": "/life/organizations/openclaw.md", "aliases": [], "status": "active"},
+        "gateway token rotation": {"slug": "gateway-token-rotation",
+                                   "title": "Gateway Token Rotation", "type": "system",
+                                   "path": "/life/systems/gateway-token-rotation.md",
+                                   "aliases": [], "status": "active"},
+        "notes": {"slug": "notes", "title": "Notes", "type": "note",
+                  "path": "/life/notes/notes.md", "aliases": [], "status": "active"},
+        "gw": {"slug": "gw", "title": "Gateway Watch", "type": "system",
+               "path": "/life/systems/gateway-watch.md", "aliases": [], "status": "active"},
+    },
+}
+
+_STORE_NOTES = """# Operations Notes
+## Project: Launcher reliability
+Project: Launcher reliability
+Decision: token rotation
+Decision: issue: gateway flapping | resolve by rotation
+Jarvis (Operations Director) reviewed the launcher.
+Finance Director (Marlowe) approved the budget.
+We decided to keep the semantic naming.
+Issue: duplicated nodes in graph
+Outcome: launcher reliability validated
+Work on gateway token rotation
+The main issue is shallow topic labels
+Result was launcher reliability validated
+See `memory/notes.md` for details and also unknown/thing.md.
+gateway openclaw wsl2 ubuntu linux
+OpenClaw runs the registry here.
+"""
+
+_STORE_REPORT = """# Hal-Activate Report
+## A
+## Notes
+## Status
+We decided to rotate the gateway token
+"""
+
+_STORE_LINKS = "Links back to `memory/notes.md` for context.\nVigil (Sentinel) monitors the desk.\n"
+
+_STORE_TERMS = """Decision: status
+Project: profile.md
+Decision: 2026-01-02
+Issue: gateway
+Outcome: results
+Decision: raw!
+Decision: 1 2 3 4
+Decision: alpha bravo charlie delta echo
+grep -n foo bar
+gw
+
+This line is deliberately made far longer than one hundred and twenty characters so that the concept_worthy_line length guard rejects it outright.
+Sarah (Marketing) owns the launch.
+See other.md and notes.md for context.
+"""
+
+_STORE_ACTIVATION = "# Lyra-Activate Report\nNothing much to report today.\n"
+
+_STORE_FILES = ["memory/notes.md", "/abs/docs/other.md", "/docs/notes.md", None, ""]
+
+# (id, path, start_line, end_line, text, embedding)
+_STORE_CHUNKS = [
+    ("c1", "memory/notes.md", 1, 5, _STORE_NOTES, "[1.0, 0.0, 0.0]"),
+    ("c2", "memory/notes.md", 7, None, _STORE_REPORT, "[1.0, 0.0, 0.0]"),
+    ("c3", "/abs/docs/other.md", None, None, _STORE_LINKS, "[1.0, 0.0, 0.0]"),
+    ("c4", None, None, None, None, None),
+    ("c5", "/abs/docs/third.md", 3, None, _STORE_TERMS, "not-json"),
+    ("c6", "/abs/docs/fourth.md", None, None, "nothing to see", "[1.0, 0.0]"),
+    ("c7", "/abs/docs/fifth.md", None, None, "zero vector", "[0.0, 0.0]"),
+    ("c8", "/abs/docs/sixth.md", None, None, "bad element", '[1.0, "x"]'),
+    ("c9", "/abs/docs/seventh.md", None, None, _STORE_ACTIVATION, '{"a": 1}'),
+    ("c10", "/abs/docs/eighth.md", None, None, "empty vector", "[]"),
+]
+
+
+def _create_store_db(path):
+    """Create a synthetic files/chunks memory-store DB with the live schema."""
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    try:
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE files (path TEXT)")
+        cur.execute("CREATE TABLE chunks (id TEXT, path TEXT, start_line INT,"
+                    " end_line INT, text TEXT, embedding TEXT)")
+        cur.executemany("INSERT INTO files VALUES (?)", [(p,) for p in _STORE_FILES])
+        cur.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?)", _STORE_CHUNKS)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _node_ids(graph):
+    return {n.id for n in graph.nodes}
+
+
+def _edge_keys(graph):
+    return {(e.source, e.target, e.label) for e in graph.edges}
+
+
+def _node(graph, node_id):
+    return next(n for n in graph.nodes if n.id == node_id)
+
+
+class TestMemoryImportStore(unittest.TestCase):
+    """files/chunks memory-store import against a real synthetic SQLite DB."""
+
+    def _graph(self, include_all=False):
+        """Import the standard synthetic store DB, cleaning up the temp DB."""
+        from kgraph import memory_import
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "store.db")
+            _create_store_db(db)
+            with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
+                return memory_import.load_from_memory_db(db, include_all=include_all)
+
+    def test_files_chunks_nodes_containment_and_references(self):
+        graph = self._graph()
+        ids = _node_ids(graph)
+        edges = _edge_keys(graph)
+
+        self.assertIn("file:memory/notes.md", ids)
+        self.assertIn("file:/abs/docs/other.md", ids)
+        self.assertNotIn("file:", ids)  # NULL/blank paths are skipped, not nodes
+        # Label carries file + line range + whitespace-collapsed preview.
+        c1 = _node(graph, "chunk:c1")
+        self.assertTrue(c1.label.startswith("notes.md L1-5: # Operations Notes"))
+        self.assertTrue(c1.label.endswith("…"), c1.label)
+        # Only start_line is an int → single-ended range.
+        self.assertTrue(_node(graph, "chunk:c2").label.startswith("notes.md L7:"))
+        # No path and no text → bare "chunk" label, still a node.
+        self.assertEqual(_node(graph, "chunk:c4").label, "chunk")
+        self.assertIn(("file:memory/notes.md", "chunk:c1", "contains chunk"), edges)
+        # A chunk path absent from `files` still gets a containing file node.
+        self.assertIn("file:/abs/docs/third.md", ids)
+        self.assertIn(("file:/abs/docs/third.md", "chunk:c5", "contains chunk"), edges)
+        # File references: explicit path, unique basename, ambiguous, self, unknown.
+        self.assertIn(("chunk:c3", "file:memory/notes.md", "references file"), edges)
+        self.assertIn(("file:/abs/docs/other.md", "file:memory/notes.md", "references file"), edges)
+        self.assertIn(("chunk:c5", "file:/abs/docs/other.md", "references file"), edges)
+        self.assertNotIn(("chunk:c5", "file:memory/notes.md", "references file"), edges)
+        self.assertNotIn(("chunk:c1", "file:memory/notes.md", "references file"), edges)
+        self.assertNotIn("file:unknown/thing.md", ids)
+
+    def test_actor_mentions_and_activation_authorship(self):
+        graph = self._graph()
+        edges = _edge_keys(graph)
+
+        self.assertEqual(_node(graph, "actor:jarvis").role, "Operations Director")
+        # Reverse pattern "Finance Director (Marlowe)" also yields an actor.
+        self.assertEqual(_node(graph, "actor:marlowe").label, "Marlowe")
+        # "# Hal-Activate Report" → role from AGENT_ROLES; unknown H1 → 'Agent'.
+        self.assertEqual(_node(graph, "actor:hal").role, "CEO")
+        self.assertEqual(_node(graph, "actor:lyra").role, "Agent")
+        self.assertIn(("chunk:c1", "actor:jarvis", "mentions actor"), edges)
+        self.assertIn(("file:memory/notes.md", "actor:jarvis", "mentions actor"), edges)
+        self.assertIn(("chunk:c2", "actor:hal", "authored by"), edges)
+
+    def test_theme_canonicalization_aliases_and_rejections(self):
+        graph = self._graph()
+        ids = _node_ids(graph)
+
+        self.assertEqual(_node(graph, "project:launcher-reliability").label, "launcher reliability")
+        # CONCEPT_ALIASES maps "token rotation" → "gateway token rotation", and
+        # the life index remaps it to a system node with canonical provenance.
+        gw = _node(graph, "system:gateway-token-rotation")
+        self.assertEqual(gw.label, "Gateway Token Rotation")
+        self.assertEqual(gw.canonical_slug, "gateway-token-rotation")
+        self.assertEqual(gw.type_confidence, 0.96)
+        # Pipe alternatives, morphological flattening, stopword stripping,
+        # 4-word truncation, and heading-derived topic nodes.
+        for present in ("decision:resolve-by-rotation", "issue:deduplication-nodes-in-graph",
+                        "decision:keep-the-naming", "issue:shallow-topic-naming",
+                        "decision:alpha-bravo-charlie-delta", "topic:project-launcher-reliability"):
+            self.assertIn(present, ids)
+        self.assertNotIn("topic:a", ids)  # 1-char heading produces no topic
+        # Rejected: scaffolding, file/date labels, numeric-only labels, low-value
+        # concepts, and aliases excluded from entity patterns by type/length.
+        for absent in ("issue:gateway", "decision:raw", "decision:1-2-3-4",
+                       "note:notes", "system:gateway-watch"):
+            self.assertNotIn(absent, ids)
+        labels = {n.label for n in graph.nodes}
+        for rejected in ("status", "results", "gateway", "profile.md", "2026-01-02"):
+            self.assertNotIn(rejected, labels)
+
+    def test_semantic_summary_and_scored_pair_edges(self):
+        graph = self._graph()
+
+        summaries = [n for n in graph.nodes if n.id.startswith("summary:c1:")]
+        self.assertEqual(len(summaries), 1)
+        summary = summaries[0]
+        self.assertEqual(
+            summary.label,
+            "launcher reliability | issue: deduplication nodes in graph | "
+            "decision: resolve by rotation | outcome: launcher reliability validation",
+        )
+        self.assertEqual(summary.visibility, "semantic")
+        self.assertEqual(summary.model_extra["summary_labels"][0], "launcher reliability")
+        summary_edges = [e for e in graph.edges if e.source == summary.id]
+        self.assertIn("summarizes project", {e.label for e in summary_edges})
+        self.assertTrue(all(e.visibility == "semantic" for e in summary_edges))
+        semantic = [e for e in graph.edges if e.source == "chunk:c1" and e.label == "semantic summary"]
+        self.assertEqual([(e.visibility, e.quality_tier) for e in semantic],
+                         [("semantic", "semantic")])
+        # Fallback path: an actor-only chunk still summarises from its actor.
+        fallback = [n for n in graph.nodes if n.id.startswith("summary:c3:")]
+        self.assertEqual([n.label for n in fallback], ["vigil"])
+        # A single co-occurrence of strongly-linked types is scored and kept.
+        scored = [e for e in graph.edges if e.source == "decision:resolve-by-rotation"
+                  and e.target == "project:launcher-reliability"]
+        self.assertEqual([(e.label, e.semantic_score, e.cooccurrence_count) for e in scored],
+                         [("project decision", 0.85, 1)])
+        self.assertEqual(scored[0].model_extra["label_visibility"], "hover")
+
+    def test_embedding_similarity_links_cross_file_chunks_only(self):
+        graph = self._graph()
+        edges = _edge_keys(graph)
+
+        self.assertIn(("chunk:c1", "chunk:c3", "related (1.00)"), edges)
+        self.assertIn(("file:memory/notes.md", "file:/abs/docs/other.md", "related (1.00)"), edges)
+        sim = next(e for e in graph.edges if e.source == "chunk:c1" and e.target == "chunk:c3")
+        self.assertEqual(sim.semantic_score, 1.0)
+        # Same file → no similarity edge, even at identical vectors.
+        self.assertNotIn(("chunk:c1", "chunk:c2", "related (1.00)"), edges)
+        # Malformed ('not-json', '[1.0, "x"]'), non-list ('{"a": 1}'), empty
+        # ('[]'), zero-magnitude and mismatched-dimension vectors are skipped
+        # without aborting the import.
+        skipped = {"chunk:c5", "chunk:c6", "chunk:c7", "chunk:c8", "chunk:c9", "chunk:c10"}
+        similarity = [e for e in graph.edges if e.label.startswith("related (")
+                      and (e.source in skipped or e.target in skipped)]
+        self.assertEqual(similarity, [])
+        self.assertIn("chunk:c8", _node_ids(graph))
+
+    def test_unmigrated_store_schema_degrades_to_empty_graph(self):
+        import sqlite3
+
+        from kgraph import memory_import
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "unmigrated.db")
+            conn = sqlite3.connect(db)
+            conn.execute("CREATE TABLE files (name TEXT)")
+            conn.execute("CREATE TABLE chunks (id TEXT)")
+            conn.commit()
+            conn.close()
+            with (
+                mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX),
+                self.assertLogs("kgraph.memory_import", level="WARNING") as logs,
+            ):
+                graph = memory_import.load_from_memory_db(db)
+        self.assertEqual(graph.nodes, [])
+        self.assertEqual(graph.edges, [])
+        self.assertTrue(any("Failed to read 'files' table" in line for line in logs.output),
+                        logs.output)
+        self.assertTrue(any("Failed to import chunks" in line for line in logs.output),
+                        logs.output)
+
+
+class TestMemoryImportSchemaDetection(unittest.TestCase):
+    """Behaviour on DBs that are not a memory registry at all."""
+
+    def _load(self, db):
+        from kgraph import memory_import
+
+        with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
+            return memory_import.load_from_memory_db(db)
+
+    def test_empty_or_missing_db_yields_empty_graph(self):
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as td:
+            empty = os.path.join(td, "empty.db")
+            with open(empty, "w", encoding="utf-8"):
+                pass
+            missing = os.path.join(td, "does-not-exist.db")
+            for db in (empty, missing):
+                graph = self._load(db)
+                self.assertEqual(graph.nodes, [], db)
+                self.assertEqual(graph.edges, [], db)
+            # sqlite3.connect() creates the file; a bogus path is not an error.
+            self.assertTrue(os.path.exists(missing))
+            # A directory is not an openable database.
+            with self.assertRaises(sqlite3.OperationalError):
+                self._load(td)
+
+    def test_partial_schema_needs_both_files_and_chunks(self):
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as td:
+            for name, ddl, insert in (
+                ("only_files.db", "CREATE TABLE files (path TEXT)",
+                 "INSERT INTO files VALUES ('memory/notes.md')"),
+                ("only_chunks.db", "CREATE TABLE chunks (id TEXT)",
+                 "INSERT INTO chunks VALUES ('c1')"),
+            ):
+                db = os.path.join(td, name)
+                conn = sqlite3.connect(db)
+                conn.execute(ddl)
+                conn.execute(insert)
+                conn.commit()
+                conn.close()
+                graph = self._load(db)
+                self.assertEqual(graph.nodes, [], name)
+                self.assertEqual(graph.edges, [], name)
+
+
+class TestMemoryImportConceptConfig(unittest.TestCase):
+    """_load_concept_config() must warn loudly, not fail silently."""
+
+    def test_unreadable_or_malformed_config_warns_and_disables_filtering(self):
+        from kgraph import memory_import
+
+        with tempfile.TemporaryDirectory() as td:
+            bad = os.path.join(td, "concept-aliases.json")
+            with open(bad, "w", encoding="utf-8") as fh:
+                fh.write('{"scaffolding_labels": [')
+            for path in (os.path.join(td, "absent.json"), bad):
+                with (
+                    mock.patch("kgraph.memory_import._CONFIG_PATH", path),
+                    self.assertLogs("kgraph.memory_import", level="WARNING") as logs,
+                ):
+                    self.assertEqual(memory_import._load_concept_config(), {})
+                self.assertIn("concept config unavailable", logs.output[0])
+
+
+# ── memory_import: registry branch rows ─────────────────────────────────
+
+_LONG_MEMORY_CONTENT = "Long " + ("memory content " * 8)
+
+_REGISTRY_DDL = [
+    "CREATE TABLE memories (id TEXT, type TEXT, content TEXT, source_agent TEXT, scope TEXT, tags TEXT, confidence REAL, created_at TEXT, concept TEXT, value_score REAL, value_label TEXT, source_layer TEXT, status TEXT)",
+    "CREATE TABLE memory_native_chunks (chunk_id TEXT, source_path TEXT, source_kind TEXT, section TEXT, line_start TEXT, line_end TEXT, content TEXT, scope TEXT, status TEXT)",
+    "CREATE TABLE memory_entities (entity_id TEXT, kind TEXT, display_name TEXT, normalized_name TEXT, status TEXT, confidence REAL, aliases TEXT)",
+    "CREATE TABLE memory_entity_mentions (memory_id TEXT, entity_key TEXT, entity_display TEXT, role TEXT, confidence REAL, scope TEXT)",
+    "CREATE TABLE memory_entity_relationships (entity_id_a TEXT, entity_id_b TEXT, relationship_type TEXT, evidence_count INT, source_memory_ids TEXT, confidence REAL)",
+    "CREATE TABLE memory_syntheses (synthesis_id TEXT, kind TEXT, subject_type TEXT, subject_id TEXT, content TEXT, stale INT, confidence REAL, generated_at TEXT)",
+    "CREATE TABLE memory_claims (memory_id TEXT, memory_tier TEXT, claim_slot TEXT, consolidation_op TEXT, source_strength REAL, surface_candidate TEXT)",
+    "CREATE TABLE memory_beliefs (belief_id TEXT, entity_id TEXT, type TEXT, content TEXT, status TEXT, confidence REAL, source_memory_id TEXT, source_layer TEXT)",
+    "CREATE TABLE memory_open_loops (loop_id TEXT, kind TEXT, title TEXT, status TEXT, priority TEXT, related_entity_id TEXT)",
+    "CREATE TABLE memory_events (event_id TEXT, timestamp TEXT, component TEXT, action TEXT, reason_codes TEXT, memory_id TEXT, payload TEXT)",
+]
+
+_REGISTRY_ROWS = [
+    ("INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+        ("mem-1", "FACT", "Live memory", "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, None, None, "registry", "active"),
+        ("mem-2", "FACT", "Archived memory", "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, None, None, "registry", "archived"),
+        ("mem-3", "FACT", "Odd score memory", "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, "high", None, "registry", "active"),
+        ("mem-4", "FACT", None, "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, None, None, "registry", "active"),
+        ("mem-5", "FACT", "Low value memory", "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, 0.3, None, "registry", "active"),
+        ("mem-6", "FACT", _LONG_MEMORY_CONTENT, "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, None, None, "registry", "active"),
+    ]),
+    ("INSERT INTO memory_native_chunks VALUES (?,?,?,?,?,?,?,?,?)", [
+        ("chunk-1", "/mem/MEMORY.md", "memory_md", "KG", "4", "4", "Native fact", "profile:main", "active"),
+        ("chunk-2", "/mem/MEMORY.md", "memory_md", "KG", "5", "5", "Archived native fact", "profile:main", "archived"),
+        ("chunk-3", "/mem/MEMORY.md", "memory_md", "KG", "6", "6", "Live memory", "profile:main", "active"),
+    ]),
+    ("INSERT INTO memory_entities VALUES (?,?,?,?,?,?,?)", [
+        ("e-blank", "person", None, "blank", "active", 0.5, "[]"),
+        ("e-1", "person", "Rook", "rook", "active", 0.9, "[]"),
+    ]),
+    ("INSERT INTO memory_entity_mentions VALUES (?,?,?,?,?,?)", [
+        (None, None, None, "general", 0.8, "profile:main"),
+        ("mem-1", "database", "database", "general", 0.8, "profile:main"),
+        ("mem-1", "rook", "Rook", "general", 0.9, "profile:main"),
+        ("mem-1", "vigil", "Vigil", "general", 0.9, "profile:main"),
+        ("native:chunk-1", "juno", "Juno", "general", 0.9, "profile:main"),
+    ]),
+    ("INSERT INTO memory_entity_relationships VALUES (?,?,?,?,?,?)", [
+        ("a", "b", "depends_on", 2, '["mem-1"]', 0.8),
+        (None, "b", "depends_on", 1, None, 0.5),
+        ("c", None, "depends_on", 1, None, 0.5),
+    ]),
+    ("INSERT INTO memory_syntheses VALUES (?,?,?,?,?,?,?,?)", [
+        ("synth-ok", "current_state", "global", "global", "Current State", 0, 0.9, "2026-04-01"),
+        ("synth-stale", "old_report", "global", "global", "Old", 1, 0.8, "2026-04-01"),
+    ]),
+    ("INSERT INTO memory_claims VALUES (?,?,?,?,?,?)", [
+        ("mem-1", "durable", "slot-1", "op", 0.9, "Claim text"),
+        ("mem-missing", "durable", "slot-2", "op", 0.9, None),
+    ]),
+    ("INSERT INTO memory_beliefs VALUES (?,?,?,?,?,?,?,?)", [
+        ("bel-1", "e-1", "fact", "Live belief", "current", 0.9, "mem-1", "registry"),
+        ("bel-2", "e-1", "fact", "Superseded belief", "superseded", 0.9, "mem-1", "registry"),
+    ]),
+    ("INSERT INTO memory_open_loops VALUES (?,?,?,?,?,?)", [
+        ("loop-1", "followup", "Rotate gateway token", "open", "high", None),
+        ("loop-2", "followup", "Old closed item", "closed", "low", None),
+    ]),
+    ("INSERT INTO memory_events VALUES (?,?,?,?,?,?,?)", [
+        ("evt-1", "2026-04-01", "capture", "capture_inserted", "[]", "mem-1", "{}"),
+        ("evt-2", "2026-04-01", "capture", "capture_inserted", "[]", "mem-1", "{}"),
+    ]),
+]
+
+
+def _create_registry_db(path):
+    """Synthetic memory-registry DB exercising every filter/skip path."""
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    try:
+        cur = conn.cursor()
+        for statement in _REGISTRY_DDL:
+            cur.execute(statement)
+        for statement, rows in _REGISTRY_ROWS:
+            cur.executemany(statement, rows)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class TestMemoryImportRegistryRows(unittest.TestCase):
+    """Registry rows: status/value filters, entity resolution, provenance."""
+
+    def _graph(self, include_all=False, subdir="registry.db"):
+        from kgraph import memory_import
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, subdir)
+            os.makedirs(os.path.dirname(db), exist_ok=True)
+            _create_registry_db(db)
+            with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
+                return memory_import.load_from_memory_db(db, include_all=include_all)
+
+    def test_filters_drop_non_live_rows(self):
+        with self.assertLogs("kgraph.memory_import", level="INFO") as logs:
+            graph = self._graph()
+        ids = _node_ids(graph)
+
+        # status != 'active' drops memories and native chunks; a native chunk
+        # duplicating an imported memory is suppressed; low value_score drops;
+        # stale syntheses, superseded beliefs and closed loops drop.
+        for present in ("memory:mem-1", "memory:native:chunk-1", "memory:mem-3",
+                        "synthesis:synth-ok", "belief:bel-1", "open_loop:loop-1"):
+            self.assertIn(present, ids)
+        for absent in ("memory:mem-2", "memory:native:chunk-2", "memory:native:chunk-3",
+                       "memory:mem-5", "synthesis:synth-stale", "belief:bel-2",
+                       "open_loop:loop-2"):
+            self.assertNotIn(absent, ids)
+        # Blank content becomes an empty label without crashing.
+        self.assertEqual(_node(graph, "memory:mem-4").label, "")
+        # Long content is truncated to 72 chars including the ellipsis.
+        long_label = _node(graph, "memory:mem-6").label
+        self.assertEqual(len(long_label), 72)
+        self.assertTrue(long_label.endswith("…"))
+        self.assertTrue(any("2 events skipped" in line for line in logs.output), logs.output)
+
+    def test_include_all_keeps_filtered_rows(self):
+        graph = self._graph(include_all=True)
+        ids = _node_ids(graph)
+
+        for node_id in ("memory:mem-2", "memory:mem-5", "memory:native:chunk-2",
+                        "synthesis:synth-stale", "belief:bel-2", "open_loop:loop-2"):
+            self.assertIn(node_id, ids)
+        # Promoted-content suppression is unconditional, not a status filter.
+        self.assertNotIn("memory:native:chunk-3", ids)
+
+    def test_entity_and_claim_resolution(self):
+        graph = self._graph()
+        ids = _node_ids(graph)
+
+        # memory_entities with a blank display name creates no node; the noise
+        # keyword mention is dropped; unknown keys are synthesized and native:
+        # sources are rewritten to the memory:native: node.
+        self.assertNotIn("", ids)
+        self.assertIn("entity:person:rook", ids)
+        self.assertNotIn("entity:database", ids)
+        mentions = sorted((e.source, e.target) for e in graph.edges if e.label == "mentions")
+        self.assertEqual(mentions, [("memory:mem-1", "entity:person:rook"),
+                                    ("memory:mem-1", "entity:vigil"),
+                                    ("memory:native:chunk-1", "entity:juno")])
+        # Relationships with a missing endpoint are skipped.
+        rel = [(e.source, e.target) for e in graph.edges if e.label == "depends_on"]
+        self.assertEqual(rel, [("entity:a", "entity:b")])
+        # Claims link to their source memory when it survived the filter, and
+        # fall back to a slot label when no surface candidate exists.
+        self.assertIn(("memory:mem-1", "claim:mem-1:slot-1", "claims"), _edge_keys(graph))
+        self.assertEqual(_node(graph, "claim:mem-missing:slot-2").label, "claim slot-2")
+        self.assertNotIn(("memory:mem-missing", "claim:mem-missing:slot-2", "claims"),
+                         _edge_keys(graph))
+
+    def test_registry_provenance_follows_db_path(self):
+        self.assertEqual(_node(self._graph(), "memory:mem-1").model_extra["registry"], "home")
+        rook = self._graph(subdir=os.path.join("workspace-rook", "registry.db"))
+        self.assertEqual(_node(rook, "memory:mem-1").model_extra["registry"], "rook")
+
+    def test_damaged_events_table_degrades_to_minus_one(self):
+        # A corrupted memory_events table must not abort the import: the
+        # provenance count degrades to -1 and the rest of the registry lands.
+        import sqlite3
+
+        from kgraph import memory_import
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "registry.db")
+            _create_registry_db(db)
+            conn = sqlite3.connect(db)
+            conn.execute("PRAGMA writable_schema=ON")
+            conn.execute("UPDATE sqlite_master SET rootpage=0 WHERE name='memory_events'")
+            conn.commit()
+            conn.execute("PRAGMA writable_schema=OFF")
+            conn.close()
+            with (
+                mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX),
+                self.assertLogs("kgraph.memory_import", level="INFO") as logs,
+            ):
+                graph = memory_import.load_from_memory_db(db)
+        self.assertIn("memory:mem-1", _node_ids(graph))
+        self.assertTrue(any("-1 events skipped" in line for line in logs.output), logs.output)
+
+
+# ── projection.py ──────────────────────────────────────────────────────
+
+# Fixed life index so these tests never read the host's ~/.openclaw/life.
+_PROJECTION_LIFE_INDEX = {
+    "aliases": {"graph layout": {"title": "Graph Quality", "type": "project",
+                                 "slug": "graph-quality", "path": "life/projects/graph-quality.md"}},
+    "title_aliases": {"alpha project": "Alpha Canonical"},
+    "by_slug": {}, "by_type": {}, "records": [],
+}
+
+
+def _n(node_id, label, node_type, **extra):
+    return {"id": node_id, "label": label, "type": node_type, **extra}
+
+
+def _e(source, target, label, **extra):
+    return {"from": source, "to": target, "label": label, **extra}
+
+
+def _project(graph, **kwargs):
+    """project_graph with the host life-index load replaced by _PROJECTION_LIFE_INDEX."""
+    with mock.patch("kgraph.projection.load_life_index", return_value=_PROJECTION_LIFE_INDEX):
+        return kgraph.project_graph(graph, **kwargs)
+
+
+class TestProjectionHelpers(unittest.TestCase):
+    def test_threshold_label_and_strength_helpers(self):
+        from kgraph import projection
+        for given, expected in [(0.0, 0.58), (0.5, 0.58), (0.82, 0.772), (1.0, 0.88), (2.0, 0.90)]:
+            self.assertAlmostEqual(projection._effective_semantic_threshold(given), expected, msg=given)
+        for label, expected in [("The Current Graph Layout", "graph"), ("Topic cleanup", "topic structure"),
+                                ("Alpha Project", "alpha canonical"), ("!!!", ""), ("", "")]:
+            self.assertEqual(projection._normalized_semantic_label(_n("x", label, "topic"), _PROJECTION_LIFE_INDEX),
+                             expected, msg=label)
+        alias = {"aliases": {"widget": {"title": "Widget Canonical"}}, "title_aliases": {"gadget": "Gadget C"}}
+        self.assertEqual(projection._normalized_semantic_label(_n("x", "Widget", "topic"), alias), "widget canonical")
+        self.assertEqual(projection._normalized_semantic_label(_n("x", "Gadget", "topic"), alias), "gadget c")
+        for edge, expected in [(_e("a", "b", "project decision", semantic_score=0.1), 0.95),
+                               (_e("a", "b", "project outcome"), 0.88),
+                               (_e("a", "b", "actor issue"), 0.76),
+                               (_e("a", "b", "related", semantic_score=0.5, cooccurrence_count=3), 0.56),
+                               (_e("a", "b", "x", semantic_score="bad", cooccurrence_count="no"), 0.0)]:
+            self.assertEqual(projection._edge_strength_value(edge), expected, msg=edge["label"])
+        self.assertLessEqual(projection._edge_strength_value(
+            _e("a", "b", "project decision", semantic_score=0.99, cooccurrence_count=9)), 0.99)
+
+    def test_visibility_curation_endpoint_helpers(self):
+        from kgraph import projection
+        self.assertEqual((projection._node_visibility({"view_visibility": "RAW"}),
+                          projection._node_visibility({})), ("raw", "both"))
+        self.assertEqual((projection._node_quality({"quality": "Supporting"}),
+                          projection._node_quality({})), ("supporting", "semantic"))
+        self.assertEqual((projection._edge_visibility({"view_visibility": "Raw"}),
+                          projection._edge_quality({"quality": "SUPPORTING"})), ("raw", "supporting"))
+        self.assertTrue(projection._is_weak_label("  Summary "))
+        self.assertFalse(projection._is_weak_label("Real Thing"))
+        for node, expected in [(_n("x", "summary", "note"), False),
+                               (_n("x", "f", "file", visibility="raw"), False),
+                               (_n("x", "t", "topic", quality_tier="supporting"), False),
+                               (_n("x", "f", "file", path="life/decision-x.md"), False),
+                               (_n("x", "anything", "topic"), True),
+                               (_n("x", "f", "file", path="src/a.py"), True),
+                               (_n("x", "Real Thing", "note"), True)]:
+            self.assertEqual(projection._is_curated_node(node), expected, msg=str(node))
+        for edge, expected in [(_e("a", "b", "covers topic"), True),
+                               (_e("a", "b", "summarizes project"), True),
+                               (_e("a", "b", "related (0.9)", semantic_score=0.9), True),
+                               (_e("a", "b", "related (0.5)", semantic_score=0.5), False),
+                               (_e("a", "b", "related x", semantic_score="nope"), False),
+                               (_e("a", "b", "calls"), False),
+                               (_e("a", "b", "covers topic", visibility="raw"), False)]:
+            self.assertEqual(projection._is_curated_edge(edge, 0.77), expected, msg=str(edge))
+        self.assertEqual(projection._edge_endpoints({"source": "s", "target": "t"}), ("s", "t"))
+        self.assertEqual(projection._edge_endpoints(_e("f", "g", "x")), ("f", "g"))
+        self.assertEqual(projection._edge_endpoints({}), (None, None))
+        out, seen = [], set()
+        projection._dedupe_append(out, seen, None, "b", "x")
+        projection._dedupe_append(out, seen, "a", None, "x")
+        projection._dedupe_append(out, seen, "a", "b", "x")
+        projection._dedupe_append(out, seen, "a", "b", "x")
+        projection._dedupe_append(out, seen, "a", "b", "y", {"semantic_score": 0.5})
+        self.assertEqual(out, [_e("a", "b", "x"), _e("a", "b", "y", semantic_score=0.5)])
+
+    def test_set_display_label_per_mode(self):
+        from kgraph import projection
+        long_label = "x" * 90
+        cases = [
+            (_n("f1", "a.md", "file"), "f1", "file", "overview", set(), "", "provenance"),
+            (_n("p1", long_label, "project"), "p1", "project", "overview", set(), long_label[:56], None),
+            (_n("p1", long_label, "project", importance=9), "p1", "project", "semantic", {"p1"}, long_label[:34], None),
+            (_n("p1", long_label, "project", importance=1), "p1", "project", "semantic", set(), "", None),
+            (_n("s1", long_label, "summary", importance=9), "s1", "summary", "semantic", {"s1"}, long_label[:40], None),
+            (_n("t1", long_label, "topic", importance=9), "t1", "topic", "semantic", {"t1"}, long_label[:22], None),
+            (_n("c1", long_label, "chunk", importance=9), "c1", "chunk", "semantic", {"c1"}, long_label[:26], None),
+            (_n("t1", long_label, "topic", importance=9), "t1", "topic", "topics", {"t1"}, long_label[:24], None),
+            (_n("t2", long_label, "topic", importance=2), "t2", "topic", "topics", {"t1"}, "", None),
+        ]
+        for node, nid, ntype, mode, top, expected, role in cases:
+            projection._set_display_label(node, nid, ntype, mode, top)
+            self.assertEqual(node["display_label"], expected, msg=(mode, ntype))
+            if role:
+                self.assertEqual(node["visual_role"], role)
+        for label in ("2024-01-01.md", "memory.md", "profile.md"):
+            node = _n("m", label, "topic")
+            projection._set_display_label(node, "m", "topic", "semantic", {"m"})
+            self.assertEqual((node["display_label"], node["visual_role"]), ("", "provenance"), msg=label)
+
+    def test_collapse_semantic_duplicates_merges_and_drops_self_loops(self):
+        from kgraph import projection
+        out = {"nodes": [_n("a1", "The Graph Layout", "topic"),
+                         _n("a2", "Graph Layout", "topic", inferred_type=True),
+                         _n("b1", "Other", "topic")],
+               "edges": [_e("a1", "a2", "covers topic"), _e("a1", "b1", "covers topic"),
+                         _e("a2", "b1", "covers topic")]}
+        projection._collapse_semantic_duplicates(out, {"topic"}, _PROJECTION_LIFE_INDEX)
+        # The non-inferred duplicate survives as canonical; its self-loop and the
+        # parallel a2 -> b1 edge are dropped.
+        self.assertEqual([n["id"] for n in out["nodes"]], ["a1", "b1"])
+        self.assertEqual(out["edges"], [_e("a1", "b1", "covers topic")])
+
+    def test_build_cluster_suggestions_labels_and_fallbacks(self):
+        from kgraph import projection
+        def cluster(nodes, edges):
+            return projection._build_cluster_suggestions({"nodes": nodes, "edges": edges})
+        bases = [_n("a", "Alpha", "project", degree=2, semantic_degree=2),
+                 _n("b", "Beta", "decision", degree=2, semantic_degree=2),
+                 _n("c", "Gamma", "issue", degree=2, semantic_degree=2)]
+        strong = [_e("a", "b", "project decision", semantic_score=0.9),
+                  _e("b", "c", "decision addresses issue", semantic_score=0.9),
+                  _e("a", "c", "project issue", semantic_score=0.9)]
+        self.assertEqual([(s["label"], s["size"]) for s in cluster(bases, strong)], [("Alpha · Gamma", 3)])
+        # Unknown endpoints are ignored; a two-node component is not a cluster.
+        self.assertEqual(len(cluster(bases, strong + [_e("a", "ghost", "project decision")])), 1)
+        self.assertEqual(cluster(bases[:2], strong), [])
+        # Weak labels and bad numeric fields fall through to a generic name.
+        weak = [_n("w1", "Repo cleanup", "topic", degree=2), _n("w2", "Env bridge", "topic", degree=2),
+                _n("w3", "Copilot token", "topic", degree=2)]
+        weak_edges = [_e("w1", "w2", "related (0.9)", semantic_score=0.9),
+                      _e("w2", "w3", "related (0.9)", semantic_score=0.9),
+                      _e("w1", "w3", "related (0.9)", semantic_score=0.9)]
+        self.assertEqual([s["label"] for s in cluster(weak, weak_edges)], ["cluster 1"])
+        chunk_edges = [_e("c1", "c2", "related (0.9)", semantic_score=0.9),
+                       _e("c2", "c3", "related (0.9)", semantic_score=0.9),
+                       _e("c1", "c3", "related (0.9)", semantic_score=0.9)]
+        chunks = [_n("c1", "Chunk one", "chunk", degree=2), _n("c2", "Chunk two", "chunk", degree=2),
+                  _n("c3", "Chunk three", "chunk", degree=2)]
+        self.assertEqual([s["label"] for s in cluster(chunks, chunk_edges)], ["Chunk three · Chunk one"])
+        single = [_n("a", "Alpha", "project", degree=2), _n("b", "Graph quality", "topic", degree=2),
+                  _n("c", "Env bridge", "decision", degree=2)]
+        bad_numeric = [_e("a", "b", "project decision", semantic_score="bad", cooccurrence_count="bad"),
+                       _e("b", "c", "decision addresses issue", cooccurrence_count=3),
+                       _e("a", "c", "project issue", cooccurrence_count=2)]
+        self.assertEqual([s["label"] for s in cluster(single, bad_numeric)], ["Alpha (cluster)"])
+        repeated = [_n("a", "Same", "project", degree=2), _n("b", "Same", "decision", degree=2),
+                    _n("c", "Graph quality", "issue", degree=2)]
+        self.assertEqual([s["label"] for s in cluster(repeated, strong)], ["Same (issue)"])
+        # Cooccurrence-only relations stay below the 0.74 cluster bar.
+        self.assertEqual(cluster(single, [_e("a", "b", "related", cooccurrence_count=3),
+                                          _e("b", "c", "related", cooccurrence_count=2)]), [])
+
+    def test_filter_semantic_edges_selection_rules(self):
+        from kgraph import projection
+        gateway = {"nodes": [_n("s1", "Gateway", "topic"), _n("p1", "Proj", "project")],
+                   "edges": [_e("s1", "p1", "semantic related", semantic_score=0.9)]}
+        projection._filter_semantic_edges(gateway, "topics", _PROJECTION_LIFE_INDEX)
+        # The topic->gateway cap drops the edge; topics mode keeps both nodes.
+        self.assertEqual(gateway["edges"], [])
+        self.assertEqual({n["id"] for n in gateway["nodes"]}, {"s1", "p1"})
+        unknown = {"nodes": [_n("t1", "Topic one", "topic")], "edges": [_e("ghost", "t1", "covers topic")]}
+        projection._filter_semantic_edges(unknown, "semantic", _PROJECTION_LIFE_INDEX)
+        self.assertEqual(unknown["edges"], [])
+        reverse = {"nodes": [_n("p1", "Proj", "project"), _n("d1", "Dec", "decision")],
+                   "edges": [_e("p1", "d1", "project decision", semantic_score=0.9),
+                             _e("d1", "p1", "project decision", semantic_score=0.9)]}
+        projection._filter_semantic_edges(reverse, "topics", _PROJECTION_LIFE_INDEX)
+        self.assertEqual(len(reverse["edges"]), 1)  # reverse pairs dedupe
+        hub = [_n("h", "Hub project", "project")] + [_n(f"l{i}", f"Leaf {i}", "topic") for i in range(12)]
+        budget = {"nodes": list(hub),
+                  "edges": [_e("h", f"l{i}", "related", semantic_score=0.8) for i in range(12)]}
+        projection._filter_semantic_edges(budget, "semantic", _PROJECTION_LIFE_INDEX)
+        # Degree >= 10 gives budget 4 and strength 0.86, under the 0.88 override.
+        self.assertEqual(len(budget["edges"]), 4)
+        medium = {"nodes": hub[:9],
+                  "edges": [_e("h", f"l{i}", "related", semantic_score=0.8) for i in range(8)]}
+        projection._filter_semantic_edges(medium, "topics", _PROJECTION_LIFE_INDEX)
+        self.assertEqual(len(medium["edges"]), 6)  # medium-degree budget
+        sparse = {"nodes": [_n(f"t{i:02d}", f"Topic {i:02d}", "topic") for i in range(20)],
+                  "edges": [_e(f"t{i:02d}", f"t{i + 1:02d}", "related (0.5)", semantic_score=0.5)
+                            for i in range(0, 20, 2)] +
+                           [_e("t00", "t01", "related (0.55)", semantic_score=0.55)]}
+        projection._filter_semantic_edges(sparse, "semantic", _PROJECTION_LIFE_INDEX)
+        # All edges are sub-threshold, so the sparse fallback rescues them: the
+        # duplicate pair is skipped and the result stops at the ten-edge cap.
+        pairs = [(e["from"], e["to"]) for e in sparse["edges"]]
+        self.assertEqual((len(pairs), len(set(pairs))), (10, 10))
+        unanchored = {"nodes": [_n("p1", "Alpha project", "project"), _n("t1", "Topic one", "topic"),
+                                _n("t2", "Topic two", "topic")],
+                      "edges": [_e("t1", "t2", "semantic related", semantic_score=0.9),
+                                _e("t1", "p1", "project topic", semantic_score=0.9)]}
+        projection._filter_semantic_edges(unanchored, "topics", _PROJECTION_LIFE_INDEX)
+        self.assertEqual({(e["from"], e["to"]) for e in unanchored["edges"]}, {("t1", "p1")})
+
+
+class TestProjectGraphModes(unittest.TestCase):
+    def test_raw_and_empty_modes(self):
+        graph = {"nodes": [_n("a", "A", "topic")], "edges": []}
+        self.assertIs(kgraph.project_graph(graph, mode="raw"), graph)
+        for mode in ("overview", "files", "topics", "semantic"):
+            out = _project({"nodes": [], "edges": []}, mode=mode)
+            self.assertEqual((out["nodes"], out["edges"], out["_meta"]["nodeCount"]), ([], [], 0), mode)
+
+    def test_overview_filters_nodes_and_lifts_chunk_edges(self):
+        out = _project({"nodes": [_n("n1", "Custom", "custom", visibility="raw"),
+                                  _n("n2", "Custom2", "custom"), _n("n3", "summary", "note"),
+                                  _n("n4", "T", "topic", visibility="raw"), _n("f1", "A.md", "file"),
+                                  _n("c1", "chunk", "chunk"), _n("p1", "P", "project")],
+                        "edges": [_e("f1", "c1", "contains chunk"), _e("c1", "p1", "has project"),
+                                  _e("f1", "n4", "covers topic"), _e("n2", "p1", "links")]},
+                       mode="overview")
+        # Weak/raw nodes go, chunks go, the chunk edge lifts to the file, and
+        # file->topic curated plus uncurated edges are dropped.
+        self.assertEqual({n["id"] for n in out["nodes"]}, {"n2", "n4", "f1", "p1"})
+        self.assertEqual([(e["from"], e["to"], e["label"]) for e in out["edges"]], [("f1", "p1", "has project")])
+        self.assertEqual(out["_meta"]["edgeCount"], 1)
+
+    def test_overview_keeps_ast_structure_and_reports_meta(self):
+        out = _project(_AST_GRAPH, mode="overview")
+        self.assertEqual({n["id"] for n in out["nodes"]}, {
+            "ast_file:main_py", "ast_func:hello", "ast_class:greeter",
+            "ast_module:os", "ast_call:print"})
+        self.assertEqual(len(out["edges"]), 5)
+        file_node = next(n for n in out["nodes"] if n["id"] == "ast_file:main_py")
+        self.assertEqual((file_node["display_label"], file_node["visual_role"]), ("", "provenance"))
+        self.assertEqual((out["_meta"]["nodeCount"], out["_meta"]["edgeCount"]), (5, 5))
+        self.assertEqual((out["_meta"]["typeCounts"]["function"], out["_meta"]["typeCounts"]["file"]), (1, 1))
+
+    def test_overview_edge_selection_and_lifting(self):
+        scored = _project({"nodes": [_n("t1", "Topic one", "topic"), _n("t2", "Topic two", "topic")],
+                           "edges": [_e("t1", "t2", "related (0.9)", semantic_score=0.9)]}, mode="overview")
+        self.assertEqual([(e["from"], e["to"], e["label"], e["semantic_score"]) for e in scored["edges"]],
+                         [("t1", "t2", "related (0.9)", 0.9)])
+        # Without a "contains chunk" parent edge the chunk edge cannot be lifted,
+        # and endpoint-less/unknown/non-curated edges are all skipped.
+        dangling = _project({"nodes": [_n("c1", "chunk", "chunk"), _n("t1", "Topic one", "topic")],
+                             "edges": [{"label": "covers topic"}, _e("c1", "t1", "covers topic"),
+                                       _e("ghost", "t1", "covers topic")]}, mode="overview")
+        self.assertEqual(dangling["edges"], [])
+        self.assertEqual({n["id"] for n in dangling["nodes"]}, {"t1"})
+        non_curated = _project({"nodes": [_n("t1", "Topic one", "topic"), _n("t2", "Topic two", "topic")],
+                                "edges": [_e("t1", "t2", "links")]}, mode="overview")
+        self.assertEqual(non_curated["edges"], [])
+        lifted = _project({"nodes": [_n("f1", "a.md", "file"), _n("c1", "chunk", "chunk"),
+                                     _n("a1", "Actor", "actor")],
+                           "edges": [_e("f1", "c1", "contains chunk"), _e("c1", "a1", "mentions actor")]},
+                          mode="overview")
+        self.assertEqual([(e["from"], e["to"], e["label"]) for e in lifted["edges"]],
+                         [("f1", "a1", "file mentions actor")])
+
+    def test_files_and_topics_modes_filter_by_type(self):
+        ast = dict(_AST_GRAPH)
+        files = _project({"nodes": ast["nodes"] + [_n("topic:x", "T", "topic")],
+                          "edges": ast["edges"] + [_e("ast_file:main_py", "topic:x", "covers topic")]},
+                         mode="files")
+        self.assertEqual({n["id"] for n in files["nodes"]}, {
+            "ast_file:main_py", "ast_func:hello", "ast_class:greeter",
+            "ast_module:os", "ast_call:print"})
+        self.assertEqual(len(files["edges"]), 5)
+        pair = _project({"nodes": [_n("f1", "a.py", "file"), _n("f2", "b.sh", "file")],
+                         "edges": [_e("f1", "f2", "references")]}, mode="files")
+        self.assertEqual([(e["from"], e["to"], e["label"]) for e in pair["edges"]],
+                         [("f1", "f2", "references")])
+        topics = _project({"nodes": [_n("t1", "Topic one", "topic"), _n("p1", "Proj", "project"),
+                                     _n("f1", "f.py", "file"), _n("a1", "Actor", "actor")],
+                           "edges": [_e("p1", "t1", "project topic", semantic_score=0.9),
+                                     _e("t1", "a1", "covers topic"), _e("f1", "t1", "covers topic")]},
+                          mode="topics")
+        self.assertEqual({n["id"] for n in topics["nodes"]}, {"t1", "p1", "a1"})
+        self.assertEqual([(e["from"], e["to"], e["label"]) for e in topics["edges"]],
+                         [("p1", "t1", "project topic"), ("t1", "a1", "covers topic")])
+
+    def test_project_graph_accepts_graph_model(self):
+        from kgraph.models import Graph
+        out = _project(Graph.from_dict(_AST_GRAPH), mode="overview")
+        self.assertEqual((out["_meta"]["nodeCount"], out["_meta"]["edgeCount"]), (5, 5))
+
+    def test_semantic_mode_curated_edges_and_canonical_bias(self):
+        out = _project({"nodes": [_n("t1", "Graph Layout", "topic"), _n("p1", "Proj", "project")],
+                        "edges": [_e("p1", "t1", "project topic", semantic_score=0.9)]}, mode="semantic")
+        topic = next(n for n in out["nodes"] if n["id"] == "t1")
+        # The life-index alias rewrites label/type and flags the inference.
+        self.assertEqual((topic["label"], topic["type"], topic["inferred_type"]), ("Graph Quality", "project", True))
+        self.assertEqual((topic["canonical_slug"], topic["canonical_path"]),
+                         ("graph-quality", "life/projects/graph-quality.md"))
+        self.assertEqual([(e["from"], e["to"], e["label"]) for e in out["edges"]],
+                         [("p1", "t1", "project topic")])
+        empty = _project({"nodes": [_n("p1", "", "project"), _n("p2", "Beta project", "project")],
+                          "edges": [_e("p1", "p2", "project decision", semantic_score=0.9)]}, mode="semantic")
+        self.assertEqual(({n["id"] for n in empty["nodes"]}, len(empty["edges"])), ({"p1", "p2"}, 1))
+
+    def test_semantic_mode_infers_cooccurrence_edges(self):
+        out = _project({"nodes": [_n("s1", "Weekly", "summary"), _n("p1", "Alpha project", "project"),
+                                  _n("d1", "Beta decision", "decision"), _n("i1", "Gamma issue", "issue")],
+                        "edges": [_e("s1", "p1", "summarizes project"),
+                                  _e("s1", "d1", "summarizes decision"),
+                                  _e("s1", "i1", "summarizes issue")]}, mode="semantic")
+        # The summary is support, never emitted; its concepts form inferred edges.
+        self.assertEqual({n["id"] for n in out["nodes"]}, {"p1", "d1", "i1"})
+        for edge in out["edges"]:
+            self.assertEqual((edge["label"], edge["inferred"], edge["cooccurrence_count"],
+                              edge["support_summary_count"]), ("semantic related", True, 1, 1))
+
+    def test_semantic_mode_summary_and_chunk_support(self):
+        out = _project({"nodes": [_n("p1", "Alpha project", "project"), _n("p2", "Beta project", "project"),
+                                  _n("p3", "Gamma project", "project"), _n("p4", "Delta project", "project"),
+                                  _n("s1", "Weekly notes", "summary"), _n("c1", "summary", "chunk")],
+                        "edges": [_e("s1", "p1", "summarizes project"), _e("s1", "p2", "summarizes project"),
+                                  _e("c1", "p3", "covers topic"), _e("p4", "c1", "covers topic"),
+                                  _e("p1", "p2", "project decision", semantic_score=0.9)]}, mode="semantic")
+        self.assertEqual({n["id"] for n in out["nodes"]}, {"p1", "p2", "p3", "p4"})
+        edge = next(e for e in out["edges"] if {e["from"], e["to"]} == {"p3", "p4"})
+        # p3/p4 co-occur only through the chunk, traversed in both directions.
+        self.assertEqual((edge["label"], edge["support_summary_count"], edge["support_chunk_count"]),
+                         ("semantic related", 0, 1))
+        # A concept can also be reached through the summary in either direction.
+        linked = _project({"nodes": [_n("p1", "Alpha project", "project"), _n("p2", "Beta project", "project"),
+                                     _n("s1", "Weekly notes", "summary")],
+                           "edges": [_e("p1", "s1", "summarizes project"), _e("s1", "p2", "summarizes project"),
+                                     _e("p1", "p2", "project decision", semantic_score=0.9)]}, mode="semantic")
+        self.assertEqual(({n["id"] for n in linked["nodes"]}, len(linked["edges"])), ({"p1", "p2"}, 1))
+
+    def test_semantic_mode_topic_penalty_and_unknown_endpoints(self):
+        nodes = [_n("t1", "Topic one", "topic"), _n("t2", "Topic two", "topic"), _n("t3", "Topic three", "topic"),
+                 _n("p1", "Alpha project", "project")] + \
+                [_n(f"s{i}", f"Notes {i}", "summary") for i in range(3)]
+        edges = []
+        for summary in ("s0", "s1", "s2"):
+            edges += [_e(summary, "t1", "summarizes topic"),
+                      _e(summary, "t2", "summarizes topic"),
+                      _e(summary, "p1", "summarizes project")]
+        edges.append(_e("s0", "t3", "summarizes topic"))
+        out = _project({"nodes": nodes, "edges": edges}, mode="semantic")
+        related = {(e["from"], e["to"]): e for e in out["edges"] if e["label"] == "semantic related"}
+        self.assertIn(("t1", "t2"), related)
+        # Two topics cost an extra penalty, so they score below the anchor pair.
+        self.assertLess(related[("t1", "t2")]["semantic_score"],
+                        related[("p1", "t1")]["semantic_score"])
+        bad = _project({"nodes": [_n("p1", "Alpha project", "project"), _n("d1", "Beta decision", "decision")],
+                        "edges": [_e("ghost", "d1", "project decision", semantic_score=0.9),
+                                  _e("p1", "d1", "project decision", semantic_score="bad")]}, mode="semantic")
+        self.assertEqual([(e["from"], e["to"], e["label"]) for e in bad["edges"]],
+                         [("p1", "d1", "project decision")])
+
+    def test_semantic_mode_filters_unconnected_and_weak_nodes(self):
+        out = _project({"nodes": [_n("p1", "Alpha project", "project"), _n("t1", "Topic one", "topic"),
+                                  _n("p2", "Graph quality", "topic"), _n("p3", "Beta project", "project"),
+                                  _n("z1", "Lonely thing", "topic"), _n("a1", "Alice Actor", "actor")],
+                        "edges": [_e("p1", "t1", "project topic", semantic_score=0.9),
+                                  _e("p1", "a1", "project owner", semantic_score=0.9)]}, mode="semantic")
+        # p2 (weak label) and z1 (unconnected topic) go; anchors and actors stay.
+        self.assertEqual({n["id"] for n in out["nodes"]}, {"p1", "t1", "p3", "a1"})
+
+    def test_semantic_mode_fallback_and_threshold(self):
+        two = {"nodes": [_n("p1", "Alpha project", "project"), _n("p2", "Beta project", "project")], "edges": []}
+        low = _project(two, mode="semantic", semantic_threshold=0.4)
+        self.assertEqual([(e["from"], e["to"], e["label"], e["semantic_score"], e["fallback"])
+                          for e in low["edges"]], [("p1", "p2", "semantic related", 0.42, True)])
+        high = _project(two, mode="semantic", semantic_threshold=0.95)
+        self.assertEqual((high["edges"], {n["id"] for n in high["nodes"]}), ([], {"p1", "p2"}))
+        many = _project({"nodes": [_n(f"p{i:02d}", f"Project {i:02d}", "project") for i in range(10)],
+                         "edges": []}, mode="semantic", semantic_threshold=0.4)
+        self.assertLessEqual(len(many["edges"]), 10)  # strong-node fallback caps pairs
+        self.assertGreater(len(many["edges"]), 0)
+
+    def test_semantic_mode_applies_inferred_neighbor_budget(self):
+        nodes = [_n("p1", "Alpha project", "project")] + \
+                [_n(f"d{i}", f"Decision {i}", "decision") for i in range(6)] + \
+                [_n(f"s{i}", f"Notes {i}", "summary") for i in range(6)]
+        edges = []
+        for i in range(6):
+            edges += [_e(f"s{i}", "p1", "summarizes project"), _e(f"s{i}", f"d{i}", "summarizes decision")]
+        out = _project({"nodes": nodes, "edges": edges}, mode="semantic")
+        # Every decision co-occurs only with p1; its inferred-neighbour budget
+        # caps how many of these weak 0.5 pairs survive.
+        self.assertEqual(len(out["edges"]), 3)
+        self.assertTrue(all("p1" in (e["from"], e["to"]) and e["semantic_score"] == 0.5
+                            for e in out["edges"]))
+
+    def test_semantic_mode_small_graph(self):
+        out = _project(_SMALL_GRAPH, mode="semantic")
+        self.assertEqual({n["id"] for n in out["nodes"]}, {"a", "b", "c"})
+        self.assertEqual({(e["from"], e["to"]) for e in out["edges"]}, {("a", "b"), ("b", "c")})
+        self.assertTrue(all(n["importance"] >= 1 for n in out["nodes"]))
+        suggestions = out["_meta"]["clusterSuggestions"]
+        self.assertEqual([(s["id"], s["size"], set(s["members"])) for s in suggestions],
+                         [("semantic_cluster_1", 3, {"a", "b", "c"})])
+
+
+# ── ast_extractor.py ───────────────────────────────────────────────────
+
+
+class TestAstExtractor(unittest.TestCase):
+    """Exercise tree-sitter extraction on a synthetic repo.
+
+    The parser is an optional extra; without it these tests skip rather than
+    asserting parser output that cannot exist.
+    """
+
+    def setUp(self):
+        if not kgraph.ast_available():
+            self.skipTest("tree-sitter grammars not installed")
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.root = td.name
+        self._write("main.py", "import os\nimport helper\n\n"
+                               "class Greeter:\n    pass\n\n"
+                               "def hello(name):\n    print(name)\n    return len(name)\n\n"
+                               "async def aio():\n    pass\n")
+        self._write("helper.py", "def hello():\n    return 1\n")
+        self._write("run.sh", "#!/bin/bash\nMY_VAR=1\ngreet() {\n  echo hi\n}\ngreet\n")
+        self._write("pkg/mod.py", "def pkgfunc():\n    pass\n")
+        self._write("pkg/sub/deep.py", "def deepfunc():\n    pass\n")
+        self._write(".hidden/h.py", "def hiddenfunc():\n    pass\n")
+
+    def _write(self, rel, text):
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _ids(self, result):
+        return {n["id"] for n in result["nodes"]}
+
+    def _edges(self, result):
+        return {(e["source"], e["target"], e["label"]) for e in result["edges"]}
+
+    def test_extracts_python_definitions_imports_and_calls(self):
+        result = kgraph.extract_repo_graph(self.root)
+        ids = self._ids(result)
+        for nid in ("ast_file:main-py", "ast_func:hello", "ast_class:greeter", "ast_module:os",
+                    "ast_module:helper", "ast_call:print"):
+            self.assertIn(nid, ids)
+        edges = self._edges(result)
+        for edge in (("ast_file:main-py", "ast_func:hello", "defines"),
+                     ("ast_file:main-py", "ast_class:greeter", "defines"),
+                     ("ast_file:main-py", "ast_module:os", "imports"),
+                     ("ast_file:main-py", "ast_call:print", "calls")):
+            self.assertIn(edge, edges)
+        by_id = {n["id"]: n for n in result["nodes"]}
+        self.assertTrue(by_id["ast_func:aio"]["async"])
+        self.assertFalse(by_id["ast_func:hello"]["async"])
+        # Two identical calls collapse onto one node and one edge.
+        self._write("twice.py", "def go():\n    pass\n\ngo()\ngo()\n")
+        calls = [(e["source"], e["target"], e["label"])
+                 for e in kgraph.extract_repo_graph(self.root)["edges"]
+                 if e["source"] == "ast_file:twice-py" and e["label"] == "calls"]
+        self.assertEqual(calls, [("ast_file:twice-py", "ast_call:go", "calls")])
+
+    def test_extracts_bash_variables_imports_and_call_links(self):
+        result = kgraph.extract_repo_graph(self.root, include_variables=True)
+        self.assertIn("ast_func:greet", self._ids(result))
+        self.assertIn("ast_var:my-var", self._ids(result))
+        self.assertNotIn("ast_var:my-var", self._ids(kgraph.extract_repo_graph(self.root)))
+        edges = self._edges(result)
+        self.assertIn(("ast_file:run-sh", "ast_func:greet", "defines"), edges)
+        self.assertIn(("ast_module:helper", "ast_file:helper-py", "resolves_to"), edges)
+        self.assertIn(("ast_call:greet", "ast_func:greet", "calls"), edges)
+        # print() has no definition in the tree, so it stays unlinked.
+        self.assertNotIn(("ast_call:print", "ast_func:print", "calls"), edges)
+
+    def test_maps_extra_extensions_and_skips_hidden_and_unreadable(self):
+        self._write("script.zsh", "greet_zsh() {\n  echo hi\n}\n")
+        self._write("thing.pyw", "def pywfunc():\n    pass\n")
+        self._write("locked.py", "def locked():\n    pass\n")
+        locked = os.path.join(self.root, "locked.py")
+        os.chmod(locked, 0o000)
+        self.addCleanup(os.chmod, locked, 0o644)
+        ids = self._ids(kgraph.extract_repo_graph(self.root))
+        self.assertIn("ast_func:greet-zsh", ids)  # .zsh maps to the bash grammar
+        self.assertIn("ast_func:pywfunc", ids)  # .pyw maps to the python grammar
+        self.assertNotIn("ast_func:locked", ids)  # unreadable file is skipped
+        self.assertIn("ast_func:hello", ids)  # other files still parse
+        self.assertNotIn("ast_func:hiddenfunc", ids)  # .hidden/ is ignored
+
+    def test_subdirs_max_files_empty_and_meta(self):
+        subdirs = kgraph.extract_repo_graph(self.root, subdirs=["pkg"])
+        self.assertIn("ast_func:pkgfunc", self._ids(subdirs))
+        self.assertIn("ast_func:deepfunc", self._ids(subdirs))
+        self.assertNotIn("ast_func:hello", self._ids(subdirs))
+        self.assertEqual(kgraph.extract_repo_graph(self.root, max_files=1)["_meta"]["files_parsed"], 1)
+        with tempfile.TemporaryDirectory() as empty:
+            result = kgraph.extract_repo_graph(empty)
+        self.assertEqual((result["nodes"], result["_meta"]["files_parsed"]), ([], 0))
+        full = kgraph.extract_repo_graph(self.root)
+        self.assertEqual((full["_meta"]["source"], set(full["_meta"]["languages"])),
+                         ("ast", {"python", "bash"}))
+
+    def test_skips_files_whose_grammar_is_not_loaded(self):
+        from kgraph import ast_extractor
+        with mock.patch.object(ast_extractor, "_LANGUAGES", {"bash": ast_extractor._LANGUAGES["bash"]}):
+            ids = self._ids(kgraph.extract_repo_graph(self.root))
+        self.assertNotIn("ast_func:hello", ids)  # python grammar dropped
+        self.assertIn("ast_func:greet", ids)
+
+
+class TestAstExtractorWithoutParser(unittest.TestCase):
+    def test_node_text_returns_empty_on_decode_failure(self):
+        from kgraph import ast_extractor
+        fake = type("N", (), {"start_byte": 0, "end_byte": 2})()
+        self.assertEqual(ast_extractor._node_text(fake, b"\xff\xfe"), "")
+
+    def test_ast_available_false_without_grammars(self):
+        from kgraph import ast_extractor
+        with mock.patch.object(ast_extractor, "_LANGUAGES", {}), \
+                mock.patch.object(ast_extractor, "_load_grammars", return_value={}):
+            self.assertFalse(ast_extractor.ast_available())
+
+    def test_grammar_import_failure_disables_availability(self):
+        from kgraph import ast_extractor
+        with mock.patch.object(ast_extractor, "_LANGUAGES", {}), \
+                mock.patch.object(ast_extractor, "_AST_AVAILABLE", True), \
+                mock.patch.dict(sys.modules, {"tree_sitter_bash": None}):
+            self.assertFalse(ast_extractor.ast_available())
+
+    def test_extract_repo_graph_without_parser_returns_error(self):
+        from kgraph import ast_extractor
+        with mock.patch.object(ast_extractor, "_AST_AVAILABLE", False), \
+                mock.patch.object(ast_extractor, "_LANGUAGES", {}):
+            result = kgraph.extract_repo_graph("/tmp/does-not-exist-kgraph")
+        self.assertEqual((result["nodes"], result["_meta"]["error"]), ([], "tree-sitter not available"))
+
+    def test_extraction_helpers_guard_missing_grammars_and_languages(self):
+        from kgraph import ast_extractor
+        from kgraph.models import GraphBuilder
+        builder = GraphBuilder()
+        with mock.patch.object(ast_extractor, "_LANGUAGES", {}):
+            ast_extractor._extract_bash_defs(None, b"", "a.sh", "f", builder, True)
+            ast_extractor._extract_python_defs(None, b"", "a.py", "f", builder, True)
+            ast_extractor._extract_calls(None, b"", "python", "a.py", "f", builder)
+        self.assertEqual(builder.nodes_list, [])
+        with mock.patch.object(ast_extractor, "_LANGUAGES", {"ruby": object()}):
+            ast_extractor._extract_calls(None, b"", "ruby", "a.rb", "f", builder)
+        self.assertEqual(builder.nodes_list, [])
+
+    def test_link_call_defs_skips_unnamed_call_nodes(self):
+        from kgraph import ast_extractor
+        from kgraph.models import GraphBuilder
+        builder = GraphBuilder()
+        builder.add_node({"id": "ast_call:x", "label": "  ", "type": "call"})
+        ast_extractor._link_call_defs(builder)
+        self.assertFalse(builder.has_edge("ast_call:x", "ast_func:", "calls"))
+
+
+# ══════════════ mcp_server: JSON-RPC dispatch ══════════════
+
+
+class _MCPHarness(unittest.TestCase):
+    """The real handler on an ephemeral port; one handler class per test, so
+    the class-level rate limiter cannot leak between tests."""
+
+    def setUp(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.tmp = td.name
+        self.db = os.path.join(self.tmp, "graph.sqlite")
+        self.reports = os.path.join(self.tmp, "reports")
+        os.makedirs(self.reports)
+        kgraph.save_to_graph_db(self.db, _SMALL_GRAPH)
+        env = mock.patch.dict(os.environ, {"KG_REPORTS_DIR": self.reports})
+        env.start()
+        self.addCleanup(env.stop)
+
+        from kgraph import mcp_server
+
+        captured: dict = {}
+        _FakeHTTPServer.captured = captured
+        stdout = io.StringIO()
+        # mcp_server imports HTTPServer *inside* serve_mcp (no module-level name
+        # to patch), so http.server, which owns the symbol, is stubbed for this
+        # synchronous call only; the stub hands back the real handler class,
+        # which is then served for real on an ephemeral port below.
+        with (mock.patch("http.server.HTTPServer", _FakeHTTPServer),
+              contextlib.redirect_stdout(stdout)):
+            mcp_server.serve_mcp(host="127.0.0.1", graph_db=self.db)
+        self.serve_stdout = stdout.getvalue()
+
+        httpd = HTTPServer(("127.0.0.1", 0), captured["handler"])
+        self.addCleanup(httpd.server_close)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        self.port = httpd.server_address[1]
+
+    def _post(self, body, content_type="application/json", origin=None, length=None):
+        headers = {}
+        if content_type is not None:
+            headers["Content-Type"] = content_type
+        if origin is not None:
+            headers["Origin"] = origin
+        if length is not None:
+            headers["Content-Length"] = str(length)
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            conn.request("POST", "/", body=body, headers=headers)
+            resp = conn.getresponse()
+            return resp.status, resp.read(), dict(resp.getheaders())
+        finally:
+            conn.close()
+
+    def _call(self, method, params=None, req_id=1):
+        status, raw, _ = self._post(json.dumps(
+            {"jsonrpc": "2.0", "method": method, "params": params or {}, "id": req_id}))
+        self.assertEqual(status, 200)
+        return json.loads(raw)
+
+
+class TestMCPServerTools(_MCPHarness):
+    def test_banner_unknown_method_and_tool_list(self):
+        self.assertIn("MCP server listening on 127.0.0.1:", self.serve_stdout)
+        self.assertIn("kgraph_query, kgraph_path, kgraph_explain", self.serve_stdout)
+        self.assertEqual(self._call("initialize")["result"],
+                         {"error": "Unknown method: initialize"})
+        tools = {t["name"]: t for t in self._call("list_tools")["result"]}
+        self.assertEqual(set(tools), {"kgraph_query", "kgraph_path", "kgraph_explain",
+                                      "kgraph_report", "kgraph_stats"})
+        self.assertIn("pattern", tools["kgraph_query"]["parameters"])
+        self.assertIn("source", tools["kgraph_path"]["parameters"])
+        self.assertIn("node_id", tools["kgraph_explain"]["parameters"])
+        self.assertIn("KG_REPORTS_DIR", tools["kgraph_report"]["parameters"]["outpath"])
+        self.assertEqual(tools["kgraph_stats"]["parameters"], {})
+
+    def test_query_path_and_explain(self):
+        result = self._call("kgraph_query", {"pattern": "Alpha"})["result"]
+        self.assertEqual([{k: result[0][k] for k in ("id", "label", "type")}],
+                         [{"id": "a", "label": "Alpha", "type": "topic"}])
+        # An empty pattern matches every node, so max_results decides the cap.
+        self.assertEqual(len(self._call("kgraph_query", {"pattern": ""})["result"]), 3)
+        self.assertEqual(self._call("kgraph_query", {"pattern": "", "max_results": 0})["result"], [])
+        found = self._call("kgraph_path", {"source": "a", "target": "c"})["result"]
+        self.assertEqual([(e["source"], e["target"]) for e in found["edges"]],
+                         [("a", "b"), ("b", "c")])
+        self.assertEqual(self._call("kgraph_path", {"source": "a", "target": "zzz"})["result"],
+                         {"path_found": False, "edges": []})
+        explained = self._call("kgraph_explain", {"node_id": "a"})["result"]
+        self.assertEqual(explained["node"]["id"], "a")
+        self.assertEqual((explained["outbound_count"], explained["inbound_count"]), (1, 0))
+        self.assertEqual(explained["outbound_connections"][0]["target_label"], "Beta")
+
+    def test_report_inline_confined_and_rejected(self):
+        result = self._call("kgraph_report")["result"]
+        self.assertTrue(result["report"].startswith("# Knowledge Graph Report"))
+        self.assertIn("- **Nodes:** 3", result["report"])
+        self.assertEqual(os.listdir(self.reports), [])
+        result = self._call("kgraph_report", {"outpath": "sub/r.md"})["result"]
+        with open(os.path.join(self.reports, "sub", "r.md"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), result["report"])
+        message = {"error": "outpath must be a relative path inside the kgraph reports directory"}
+        for bad in ("../escape.md", "/tmp/kgraph-abs-escape.md", "sub/../../escape.md"):
+            self.assertEqual(self._call("kgraph_report", {"outpath": bad})["result"], message)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "escape.md")))
+
+    def test_stats_counts_types_and_reloads_the_db_per_request(self):
+        self.assertEqual(self._call("kgraph_stats")["result"],
+                         {"nodes": 3, "edges": 2,
+                          "node_types": {"topic": 1, "project": 1, "decision": 1}})
+        kgraph.save_to_graph_db(self.db, {"nodes": [{"id": "only", "label": "Only",
+                                                    "type": "topic"}], "edges": []})
+        self.assertEqual(self._call("kgraph_stats")["result"]["node_types"], {"topic": 1})
+
+    def test_a_tool_failure_becomes_a_jsonrpc_error(self):
+        with (mock.patch("kgraph.mcp_server.query_nodes", side_effect=RuntimeError("boom")),
+              mock.patch("kgraph.mcp_server.logger") as log):
+            status, raw, _ = self._post(json.dumps(
+                {"jsonrpc": "2.0", "method": "kgraph_query", "params": {}, "id": 7}))
+        self.assertEqual((status, json.loads(raw)),
+                         (200, {"jsonrpc": "2.0", "id": 7,
+                                "error": {"code": -32603, "message": "boom"}}))
+        log.error.assert_called_once()
+
+    def test_rate_limiter_refuses_the_thirty_first_post(self):
+        self.assertEqual([self._call("kgraph_stats")["id"] for _ in range(30)], [1] * 30)
+        status, raw, headers = self._post(json.dumps(
+            {"jsonrpc": "2.0", "method": "kgraph_stats", "id": 31}))
+        self.assertEqual((status, headers.get("Retry-After")), (429, "60"))
+        self.assertEqual((json.loads(raw)["error"]["code"], json.loads(raw)["id"]), (-32000, None))
+
+
+class TestMCPServerPostGuards(_MCPHarness):
+    def test_content_type_guard(self):
+        status, raw, _ = self._post("{}", content_type="text/plain")
+        self.assertEqual((status, json.loads(raw)["error"]),
+                         (415, "Unsupported Media Type: expected application/json"))
+        self.assertEqual(self._post('{"method": "kgraph_stats", "id": 1}',
+                                    content_type="application/json; charset=utf-8")[0], 200)
+
+    def test_origin_guard(self):
+        body = '{"jsonrpc": "2.0", "method": "kgraph_stats", "id": 1}'
+        status, raw, _ = self._post(body, origin="http://evil.example")
+        self.assertEqual(status, 403)
+        self.assertIn("cross-origin", json.loads(raw)["error"])
+        self.assertEqual(self._post(body, origin=f"http://127.0.0.1:{self.port}")[0], 200)
+        self.assertEqual(self._post(body)[0], 200)  # no Origin (MCP client)
+
+    def test_content_length_oversized_and_malformed_bodies(self):
+        status, raw, _ = self._post(None, length=-1)
+        self.assertEqual((status, json.loads(raw)), (400, {"error": "Invalid Content-Length"}))
+        # A non-numeric length becomes 0, so the empty body cannot be parsed.
+        status, raw, _ = self._post("{", length="not-a-number")
+        self.assertEqual((status, json.loads(raw)), (400, {"error": "Invalid JSON"}))
+        with mock.patch("kgraph.mcp_server.MAX_PAYLOAD_SIZE", 10):
+            status, raw, _ = self._post("x" * 100)
+        self.assertEqual((status, json.loads(raw)), (413, {"error": "Payload too large"}))
+        status, raw, _ = self._post("{ not json")
+        self.assertEqual((status, json.loads(raw)), (400, {"error": "Invalid JSON"}))
+
+    def test_options_refuses_post_preflight(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            conn.request("OPTIONS", "/", headers={
+                "Origin": "http://evil.example", "Access-Control-Request-Method": "POST"})
+            self.assertEqual(conn.getresponse().status, 403)
+            conn.request("OPTIONS", "/", headers={
+                "Origin": f"http://127.0.0.1:{self.port}",
+                "Access-Control-Request-Method": "GET"})
+            self.assertEqual(conn.getresponse().status, 204)
+        finally:
+            conn.close()
+
+
+class TestMCPReportsPath(unittest.TestCase):
+    def test_trailing_slash_tilde_empty_and_traversing_report_dirs(self):
+        from kgraph.mcp_server import _reports_dir, _safe_report_path
+        with mock.patch.dict(os.environ, {"KG_REPORTS_DIR": "/tmp/kg-reports/"}):
+            self.assertEqual(_safe_report_path("r.md"), "/tmp/kg-reports/r.md")
+            self.assertEqual(_safe_report_path("sub/r.md"), "/tmp/kg-reports/sub/r.md")
+            self.assertIsNone(_safe_report_path("../escape.md"))
+        with mock.patch.dict(os.environ, {"KG_REPORTS_DIR": "~/kg-reports"}):
+            self.assertEqual(_reports_dir(), os.path.join(os.path.expanduser("~"), "kg-reports"))
+        with mock.patch.dict(os.environ, {"KG_REPORTS_DIR": "/tmp/kg-reports"}):
+            for bad in ("a\\..\\b.md", "sub/..", "", None):
+                self.assertIsNone(_safe_report_path(bad))
+        # "" normalises to ".", which can never prefix a joined name: the tool
+        # refuses rather than resolving a report path against the cwd.
+        with mock.patch.dict(os.environ, {"KG_REPORTS_DIR": ""}):
+            self.assertIsNone(_safe_report_path("r.md"))
+
+
+class TestMCPServerShutdown(unittest.TestCase):
+    def test_keyboard_interrupt_shuts_the_server_down(self):
+        from kgraph import mcp_server
+
+        class _InterruptingHTTPServer:
+            last = None
+
+            def __init__(self, addr, handler):
+                type(self).last = self
+                self.server_address = (b"127.0.0.1", addr[1] or 1)  # bytes host
+                self.shutdown_called = False
+
+            def serve_forever(self):
+                raise KeyboardInterrupt
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+        stdout = io.StringIO()
+        with (mock.patch("http.server.HTTPServer", _InterruptingHTTPServer),
+              contextlib.redirect_stdout(stdout)):
+            mcp_server.serve_mcp(host="127.0.0.1", port=9999,
+                                 graph_db=os.path.join(tempfile.gettempdir(),
+                                                       "kgraph-missing.sqlite"))
+        self.assertTrue(_InterruptingHTTPServer.last.shutdown_called)
+        self.assertIn("MCP server listening on 127.0.0.1:9999", stdout.getvalue())
+
+
+# ══════════════ cli: graph loading and main() dispatch ══════════════
+
+
+class _CliHarness(unittest.TestCase):
+    """Drives cli.main() directly; no subprocess."""
+
+    def _run(self, argv):
+        from kgraph import cli
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        # cli.main() takes no argv and argparse reads sys.argv itself, so the
+        # sys.argv *list* is swapped for the duration of the call (restored on
+        # exit); nothing else in this process reads argv while it is patched.
+        with (mock.patch.object(sys, "argv", argv),
+              contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr)):
+            try:
+                cli.main()
+            except SystemExit as exc:
+                return exc.code, stdout.getvalue(), stderr.getvalue()
+        return 0, stdout.getvalue(), stderr.getvalue()
+
+    def _graph_file(self, td, graph=None):
+        path = os.path.join(td, "graph.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(_SMALL_GRAPH if graph is None else graph, f)
+        return path
+
+
+class TestCliLoadGraphFallbacks(unittest.TestCase):
+    def _args(self, graph=None, graph_db=None, import_db=None):
+        import argparse
+
+        from kgraph.cli import _load_graph
+
+        return _load_graph(argparse.Namespace(graph=graph, graph_db=graph_db,
+                                             import_db=import_db))
+
+    def test_a_graph_file_wins_and_the_graph_db_is_the_fallback(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "g.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(_AST_GRAPH, f)
+            db = os.path.join(td, "graph.sqlite")
+            kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+            from_file = self._args(graph=path, graph_db=db)
+            from_db = self._args(graph_db=db, import_db=os.path.join(td, "no-mem.db"))
+        self.assertEqual({n["id"] for n in from_file["nodes"]},
+                         {n["id"] for n in _AST_GRAPH["nodes"]})
+        self.assertEqual({n["id"] for n in from_db["nodes"]}, {"a", "b", "c"})
+
+    def test_an_empty_graph_db_falls_through_to_the_memory_db(self):
+        from kgraph import cli
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "graph.sqlite")
+            kgraph.save_to_graph_db(db, {"nodes": [], "edges": []})
+            mem = os.path.join(td, "mem.sqlite")
+            with open(mem, "w", encoding="utf-8") as f:
+                f.write("")
+            with (mock.patch.object(cli, "resolve_memory_db_path", return_value=mem),
+                  mock.patch.object(cli, "load_from_memory_db",
+                                    return_value=kgraph.Graph.from_dict(_AST_GRAPH))):
+                loaded = self._args(graph_db=db, import_db=None)
+        self.assertEqual(len(loaded["nodes"]), len(_AST_GRAPH["nodes"]))
+
+    def test_failing_sources_are_logged_and_the_sample_graph_is_used(self):
+        from kgraph import cli
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "graph.sqlite")
+            mem = os.path.join(td, "mem.sqlite")
+            for path in (db, mem):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("not a sqlite db")
+            with (mock.patch.object(cli, "load_from_graph_db", side_effect=OSError("locked")),
+                  mock.patch.object(cli, "resolve_memory_db_path", return_value=mem),
+                  mock.patch.object(cli, "load_from_memory_db", side_effect=ValueError("bad db")),
+                  self.assertLogs("kgraph.cli", level="WARNING") as captured):
+                loaded = self._args(graph_db=db, import_db=None)
+            self.assertTrue(any("Failed to load graph from graph DB" in m for m in captured.output))
+            self.assertTrue(any("Failed to load graph from memory DB" in m for m in captured.output))
+            # Nothing exists and nothing is resolvable: the sample graph.
+            loaded = self._args(graph_db=os.path.join(td, "missing.sqlite"),
+                                import_db=os.path.join(td, "missing-mem.db"))
+        self.assertEqual({n["id"] for n in loaded["nodes"]},
+                         {n["id"] for n in kgraph.SAMPLE_GRAPH["nodes"]})
+
+
+class TestCliMainModes(_CliHarness):
+    def test_reporting_modes_print_and_write_expected_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            graph = self._graph_file(td)
+            bench, report, html = (os.path.join(td, n) for n in
+                                   ("bench.json", "r.md", "flow.html"))
+            cases = [
+                (["--query", "Alpha"], ["1 matching nodes:", "[topic] Alpha (a)"]),
+                (["--query", "zzz-nope"], ['No nodes matching "zzz-nope"']),
+                (["--path", "a", "c"], ["Path:", "a → b: project topic [0.9]"]),
+                (["--explain", "a"], ["Node: Alpha (a)", "Connections: 1 (1 out, 0 in)"]),
+                (["--confidence"], ["Edge confidence:", "INFERRED:  2 (100.0%)"]),
+                (["--communities"], ["1 communities:", "Alpha · Beta · Gamma — 3 members"]),
+                (["--god-nodes", "--top-god-nodes", "2"], ["Top 2 god nodes:", "Beta"]),
+                (["--call-flow"], ["```mermaid"]),
+                (["--call-flow", "--output", html], [f"Written to {html}"]),
+                (["--benchmark", "--output", bench], ["Token-Reduction Benchmark"]),
+                (["--report", "--report-path", report], ["# Knowledge Graph Report"]),
+                (["--audit"], ["# Security Audit — kgraph"]),
+            ]
+            for extra, expected in cases:
+                with self.subTest(flag=extra[0]):
+                    code, out, _ = self._run(["kgraph", *extra, "--graph", graph])
+                    self.assertEqual(code, 0)
+                    for want in expected:
+                        self.assertIn(want, out)
+            self.assertTrue(os.path.exists(html))
+            with open(bench, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["node_count"], 3)
+            with open(report, encoding="utf-8") as f:
+                self.assertIn("- **Edges:** 2", f.read())
+
+    def test_communities_and_god_nodes_edge_cases(self):
+        from kgraph import cli
+
+        with tempfile.TemporaryDirectory() as td:
+            graph = self._graph_file(td)
+            empty = self._graph_file(td, {"nodes": [], "edges": []})
+            _, out, _ = self._run(["kgraph", "--communities", "--graph", empty])
+            self.assertIn("No communities detected", out)
+            _, out, _ = self._run(["kgraph", "--god-nodes", "--graph", empty])
+            self.assertIn("No god nodes found", out)
+            for flag in ("--communities", "--god-nodes"):
+                with mock.patch.object(cli, "communities_available", return_value=False):
+                    code, _, err = self._run(["kgraph", flag, "--graph", graph])
+                self.assertEqual(code, 1)
+                self.assertIn("networkx not available", err)
+
+    def test_audit_reports_a_missing_file(self):
+        from kgraph import cli
+
+        # cli's own `os` binding is swapped so the audit file looks absent;
+        # os.path.join (which builds the path) still runs for real.
+        fake_os = mock.MagicMock(wraps=os)
+        fake_os.path.exists.return_value = False
+        with mock.patch.object(cli, "os", fake_os):
+            _, out, _ = self._run(["kgraph", "--audit"])
+        self.assertIn("Security audit report not found at", out)
+
+    def test_pr_dashboard_forwards_options(self):
+        with tempfile.TemporaryDirectory() as td:
+            graph = self._graph_file(td)
+            target = os.path.join(td, "dash.html")
+            with mock.patch("kgraph.pr_dashboard.generate_pr_dashboard") as build:
+                code, out, _ = self._run([
+                    "kgraph", "--pr-dashboard", "--graph", graph, "--output", target,
+                    "--days", "7", "--author", "Wayne", "--max-prs", "5"])
+            self.assertEqual(code, 0)
+            self.assertIn(f"Written to {target}", out)
+            kwargs = build.call_args.kwargs
+            self.assertEqual((kwargs["output_path"], kwargs["days"], kwargs["author"],
+                              kwargs["max_prs"]), (target, 7, "Wayne", 5))
+            self.assertEqual(len(kwargs["graph_data"]["nodes"]), 3)
+
+    def test_update_and_watch_forward_their_options(self):
+        from kgraph import cli
+
+        with tempfile.TemporaryDirectory() as td:
+            db, mem = (os.path.join(td, n) for n in ("graph.sqlite", "mem.sqlite"))
+            out_json = os.path.join(td, "updated.json")
+            graph = kgraph.Graph.from_dict(_SMALL_GRAPH)
+            with mock.patch.object(cli, "incremental_update", return_value=graph) as upd:
+                code, out, _ = self._run([
+                    "kgraph", "--update", "--graph-db", db, "--import-db", mem,
+                    "--source-dir", td, "--ast-vars", "--ast-max-files", "5",
+                    "--include-all", "--output", out_json])
+            self.assertEqual(code, 0)
+            self.assertIn("Update complete: 3 nodes, 2 edges", out)
+            self.assertIn("EXTRACTED: 0, INFERRED: 2, AMBIGUOUS: 0", out)
+            kwargs = upd.call_args.kwargs
+            self.assertEqual((upd.call_args.args[0], kwargs["mem_db_path"], kwargs["source_dir"]),
+                             (db, mem, td))
+            self.assertTrue((kwargs["ast"], kwargs["ast_vars"], kwargs["include_all"]))
+            self.assertEqual(kwargs["ast_max_files"], 5)
+            with open(out_json, encoding="utf-8") as f:
+                self.assertEqual(len(json.load(f)["nodes"]), 3)
+            with mock.patch.object(cli, "incremental_update", return_value=graph) as upd:
+                self._run(["kgraph", "--update", "--graph-db", db, "--import-db", mem])
+            # No source dir means no AST pass, and no --output means no file.
+            self.assertEqual((upd.call_args.kwargs["ast"],
+                              upd.call_args.kwargs["source_dir"]), (False, None))
+            with mock.patch.object(cli, "start_watch") as watch:
+                self.assertEqual(self._run([
+                    "kgraph", "--watch", "--graph-db", db, "--import-db", mem,
+                    "--source-dir", td, "--watch-interval", "7", "--ast-vars",
+                    "--ast-max-files", "3", "--ast-subdirs", "sub"])[0], 0)
+            kwargs = watch.call_args.kwargs
+            self.assertEqual((watch.call_args.args[0], kwargs["mem_db_path"],
+                              kwargs["source_dir"], kwargs["interval"]), (db, mem, td, 7))
+            self.assertTrue((kwargs["ast"], kwargs["ast_vars"]))
+            self.assertEqual((kwargs["ast_max_files"], kwargs["ast_subdirs"]), (3, ["sub"]))
+
+    def test_mcp_default_and_explicit_port(self):
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch("kgraph.mcp_server.serve_mcp") as serve:
+                self.assertEqual(self._run(["kgraph", "--mcp"])[0], 0)
+            self.assertEqual((serve.call_args.kwargs["port"], serve.call_args.kwargs["graph_db"]),
+                             (8331, kgraph.GRAPH_DB_DEFAULT))
+            with mock.patch("kgraph.mcp_server.serve_mcp") as serve:
+                self._run(["kgraph", "--mcp", "--host", "0.0.0.0", "--port", "9000",
+                           "--graph-db", os.path.join(td, "g.sqlite")])
+        self.assertEqual((serve.call_args.kwargs["host"], serve.call_args.kwargs["port"],
+                          serve.call_args.kwargs["graph_db"]),
+                         ("0.0.0.0", 9000, os.path.join(td, "g.sqlite")))
+
+    def test_ast_errors_and_a_real_extraction(self):
+        from kgraph import cli
+
+        code, _, err = self._run(["kgraph", "--ast"])
+        self.assertEqual(code, 1)
+        self.assertIn("--repo is required for AST extraction", err)
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.object(cli, "ast_available", return_value=False):
+                code, _, err = self._run(["kgraph", "--ast", "--repo", td])
+            self.assertEqual((code, "tree-sitter not available" in err), (1, True))
+            os.makedirs(os.path.join(td, "parser"))
+            with open(os.path.join(td, "parser", "mod.py"), "w", encoding="utf-8") as f:
+                f.write("def hello():\n    print('hi')\n")
+            with open(os.path.join(td, "other.py"), "w", encoding="utf-8") as f:
+                f.write("def other():\n    pass\n")
+            _, out, _ = self._run(["kgraph", "--ast", "--repo", td])
+            self.assertIn('"ast_func:hello"', out)
+            target = os.path.join(td, "ast.json")
+            _, out, _ = self._run(["kgraph", "--ast", "--repo", td, "--ast-vars",
+                                   "--ast-max-files", "5", "--ast-subdirs", "parser",
+                                   "--output", target])
+            self.assertIn(f"Saved to {target}", out)
+            with open(target, encoding="utf-8") as f:
+                ids = {n["id"] for n in json.load(f)["nodes"]}
+        self.assertIn("ast_func:hello", ids)
+        self.assertNotIn("ast_func:other", ids)  # --ast-subdirs restricted the scan
+
+    def test_wiring_errors_summary_and_show_all(self):
+        from kgraph import wiring
+
+        code, _, err = self._run(["kgraph", "--wiring"])
+        self.assertEqual((code, "--repo is required" in err), (1, True))
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, "mod.py"), "w", encoding="utf-8") as f:
+                f.write("x = 1\n")
+            _, out, _ = self._run(["kgraph", "--wiring", "--repo", td])
+            self.assertIn("Wiring analysis:", out)
+            self.assertIn("'orphans': 1", out)
+            with mock.patch.object(wiring, "format_wiring_report",
+                                   return_value="FULL REPORT") as fmt:
+                _, out, _ = self._run(["kgraph", "--wiring", "--repo", td, "--wiring-all"])
+        self.assertIn("FULL REPORT", out)
+        self.assertTrue(fmt.call_args.kwargs["show_all"])
+
+    def test_default_mode_writes_html_and_serve_flag_serves_it(self):
+        from kgraph import cli
+
+        with tempfile.TemporaryDirectory() as td:
+            graph = self._graph_file(td)
+            target = os.path.join(td, "out.html")
+            code, out, _ = self._run(["kgraph", "--graph", graph, "--output", target])
+            self.assertEqual((code, out.splitlines()[0]), (0, f"Wrote {target}"))
+            self.assertIn("usage: kgraph", out)
+            with mock.patch.object(cli, "serve_file") as serve:
+                code, out, _ = self._run([
+                    "kgraph", "--graph", graph, "--output", target, "--serve",
+                    "--host", "0.0.0.0", "--port", "8123", "--store",
+                    os.path.join(td, "store.json"), "--embed", "--view", "topics",
+                    "--semantic-threshold", "0.5"])
+            self.assertEqual(code, 0)
+            self.assertNotIn("usage: kgraph", out)
+            kwargs = serve.call_args.kwargs
+            self.assertEqual(serve.call_args.args[0], target)
+            self.assertEqual((kwargs["host"], kwargs["port"], kwargs["store_path"]),
+                             ("0.0.0.0", 8123, os.path.join(td, "store.json")))
+            self.assertTrue(kwargs["force_embed"])
+            self.assertEqual((kwargs["view_mode"], kwargs["semantic_threshold"]), ("topics", 0.5))
+            self.assertEqual(kwargs["graph_db_path"], os.path.expanduser(kgraph.GRAPH_DB_DEFAULT))
+
+
+class TestCliGitHooks(_CliHarness):
+    def _hooks_dir(self, td):
+        hooks = os.path.join(td, "hooks")
+        os.makedirs(hooks)
+        return hooks
+
+    def test_install_writes_executable_hooks_and_respects_existing_ones(self):
+        from kgraph import cli
+
+        with tempfile.TemporaryDirectory() as td:
+            hooks = self._hooks_dir(td)
+            with mock.patch.object(cli, "_find_git_hooks_dir", return_value=hooks):
+                code, out, err = self._run(["kgraph", "--install-hook"])
+                self.assertEqual((code, err), (0, ""))
+                self.assertIn(f"Installed post-commit hook in {hooks}", out)
+                for name in ("post-commit", "post-merge"):
+                    path = os.path.join(hooks, name)
+                    self.assertEqual(os.stat(path).st_mode & 0o777, 0o755)
+                    with open(path, encoding="utf-8") as f:
+                        content = f.read()
+                    self.assertIn("kgraph auto-rebuild", content)
+                    self.assertIn("kgraph --update --source-dir", content)
+                # A pre-existing kgraph hook is rewritten, not refused.
+                self.assertNotIn("not installed by kgraph",
+                                 self._run(["kgraph", "--install-hook"])[2])
+
+            foreign = os.path.join(hooks, "post-commit")
+            with open(foreign, "w", encoding="utf-8") as f:
+                f.write("#!/bin/bash\n# husky\n")
+            os.remove(os.path.join(hooks, "post-merge"))
+            os.makedirs(os.path.join(hooks, "post-merge"))  # unreadable (a dir)
+            with mock.patch.object(cli, "_find_git_hooks_dir", return_value=hooks):
+                code, _, err = self._run(["kgraph", "--install-hook"])
+            self.assertEqual(code, 0)
+            with open(foreign, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "#!/bin/bash\n# husky\n")
+            self.assertIn("existing hook was not installed by kgraph", err)
+            self.assertIn("cannot read existing hook", err)
+            self.assertTrue(os.path.isdir(os.path.join(hooks, "post-merge")))
+
+    def test_uninstall_removes_only_its_own_hooks(self):
+        from kgraph import cli
+
+        with tempfile.TemporaryDirectory() as td:
+            hooks = self._hooks_dir(td)
+            ours, theirs = (os.path.join(hooks, n) for n in ("post-commit", "post-merge"))
+            with open(ours, "w", encoding="utf-8") as f:
+                f.write("#!/bin/bash\n# kgraph auto-rebuild\n")
+            with open(theirs, "w", encoding="utf-8") as f:
+                f.write("#!/bin/bash\n# husky\n")
+            with mock.patch.object(cli, "_find_git_hooks_dir", return_value=hooks):
+                code, out, err = self._run(["kgraph", "--uninstall-hook"])
+            self.assertEqual(code, 0)
+            self.assertEqual((os.path.exists(ours), os.path.exists(theirs)), (False, True))
+            self.assertIn(f"Removed {ours}", out)
+            self.assertIn("not a kgraph hook", err)
+
+        with tempfile.TemporaryDirectory() as td:
+            hooks = self._hooks_dir(td)
+            unreadable = os.path.join(hooks, "post-commit")
+            os.makedirs(unreadable)
+            with mock.patch.object(cli, "_find_git_hooks_dir", return_value=hooks):
+                code, _, err = self._run(["kgraph", "--uninstall-hook"])
+            self.assertEqual((code, "cannot read hook" in err, os.path.isdir(unreadable)),
+                             (0, True, True))
+
+    def test_hook_commands_exit_when_not_in_a_git_repo(self):
+        from kgraph import cli
+
+        for flag in ("--install-hook", "--uninstall-hook"):
+            with mock.patch.object(cli, "_find_git_hooks_dir", return_value=None):
+                code, _, err = self._run(["kgraph", flag])
+            self.assertEqual(code, 1)
+            self.assertIn("not in a git repository", err)
+
+
+class TestCliFindGitHooksDir(unittest.TestCase):
+    def setUp(self):
+        self._cwd = os.getcwd()
+        self.addCleanup(os.chdir, self._cwd)
+
+    def test_walks_up_to_the_git_hooks_directory_and_none_without_one(self):
+        from kgraph.cli import _find_git_hooks_dir
+
+        with tempfile.TemporaryDirectory() as td:
+            hooks = os.path.join(td, ".git", "hooks")
+            nested = os.path.join(td, "a", "b")
+            os.makedirs(hooks)
+            os.makedirs(nested)
+            os.chdir(nested)
+            self.assertEqual(_find_git_hooks_dir(), hooks)
+        with tempfile.TemporaryDirectory() as td:
+            os.chdir(td)
+            self.assertIsNone(_find_git_hooks_dir())
+
+
 if __name__ == "__main__":
     unittest.main()
