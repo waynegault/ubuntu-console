@@ -2344,7 +2344,7 @@ Expected
 
 grep -rnE '# *noqa|# *type: *ignore|shellcheck disable=SC' scripts/ bin/ tools/ tests/ tactical-console.bashrc env.sh
 
-No new suppressions — fix the cause instead. A suppression is only acceptable for genuinely third-party, unpatchable output: one narrowly scoped filter, owned, with a comment naming the emitting package and `file:line` plus the tracking path. Never for our own code. Current residue: three `# noqa: E402` in tests/test_kgraph.py, tests/test_kgraph_wiring.py and tests/test_untested_modules.py — each supports a standalone `python tests/x.py` run, so remediate by centralising the `scripts/` path insert (e.g. a shared tests/_paths.py) rather than deleting them blind.
+No new suppressions — fix the cause instead. A suppression is only acceptable for genuinely third-party, unpatchable output: one narrowly scoped filter, owned, with a comment naming the emitting package and `file:line` plus the tracking path. Never for our own code. Residue cleared (2026-09-12): the `scripts/` path insert now lives in `tests/_paths.py`, and the three `# noqa: E402` suppressions in `tests/test_kgraph.py`, `tests/test_kgraph_wiring.py` and `tests/test_untested_modules.py` are gone (standalone `python tests/x.py` runs still work).
 
 17.2
 

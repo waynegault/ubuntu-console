@@ -116,7 +116,7 @@ up             # Run 20-step system maintenance
 | `sysinfo` | System | One-line hardware summary |
 | `get-ip` | Network | WSL + WAN IP addresses |
 | `cpwd` | Utility | Copy path to Windows clipboard |
-| `cl` | Utility | Quick temp cleanup (`--dry-run` supported) |
+| `cl` | Utility | Quick temp cleanup (`--report` shows a dry run) |
 | `logtrim` | Utility | Trim logs > 1 MB to last 1000 lines |
 | `oedit` | Editor | Open `tactical-console.bashrc` in VS Code |
 | `code` | Editor | Open anything in VS Code |
@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (786 total tests: 585 BATS + 201 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (788 total tests: 585 BATS + 203 Python).
 
 ### Running Tests
 
@@ -420,7 +420,7 @@ The project uses two test frameworks: **BATS** (bash automated testing) for shel
 |---------|-------------|-----------|
 | `unittest` | All BATS suites + Python tests (via `tools/run-tests.sh`) | 20-40 min |
 | `unittest --fast` | Fast static-analysis BATS only (`tactical-console-fast.bats`) | ~2 min |
-| `pytest tests/` | Python tests only (excludes BATS — run separately) | ~1 min |
+| `pytest tests/` | Python tests + the BATS bridge (add `--ignore=tests/test_bats_bridge.py` for Python only) | varies |
 | `pytest tests/test_bats_bridge.py -k "test_tactical_console_fast"` | Single BATS file via bridge | ~2 min |
 | `bats tests/tactical-console-fast.bats --timing` | Single BATS file directly | ~2 min |
 | `.venv/bin/python3 -m mypy` | Type checks (mypy; config in `pyproject.toml`) | ~30s |
@@ -445,12 +445,12 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 | Suite | File | Count | Timeout |
 |-------|------|-------|---------|
 | Full behavioural | `tactical-console.bats` | 383 | 900s |
-| Fast static analysis | `tactical-console-fast.bats` | 51 | 180s |
+| Fast static analysis | `tactical-console-fast.bats` | 52 | 180s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
-| Unit (refresh-keys, so-startup, llama-cpp-inventory) | `tests/unit/*.bats` | 39 | 120s |
-| Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 106 | 300s |
-| Python (kgraph, models, autotune, untested-modules, lock-fixture) | `tests/test_*.py` | 177 | 200s |
-| **Total** | | **758** | |
+| Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune) | `tests/unit/*.bats` | 39 | 120s |
+| Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 109 | 300s |
+| Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 203 | 200s |
+| **Total** | | **788** | |
 
 ---
 
@@ -507,11 +507,17 @@ line counts because they drift.
 
 | Script | Purpose |
 |---|---|
-| `tools/check-agent-use.sh` | Agent usage regression checker (CI/tests) |
+| `tools/capture-golden-fixtures.sh` | Snapshot selected command output for PowerShell parity checks |
+| `tools/check-agent-use.sh` | Manual agent-usage regression check (reads live `/dev/shm` caches) |
+| `tools/check-repo-boundaries.sh` | Repo ownership boundary guard (CI) |
+| `tools/clean-orphans.sh` | Kill orphaned bench/llama-server keeper processes (refuses while a bench/autotune is live) |
+| `tools/docs-sync-check.sh` | README drift guard: module count, loader version, test totals (CI) |
 | `tools/import-windows-env.sh` | Import Windows user environment variables |
 | `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety |
 | `tools/mirror-vault.sh` | Sync Obsidian vault to Windows |
+| `tools/normalize-fixture.sh` | Normalise captured golden fixtures |
 | `tools/run-tests.sh` | Pretty-printed BATS test runner |
+| `tools/sync-openclaw-completion.sh` | Refresh OpenClaw bash completion word lists |
 
 ### Dependency Graph
 
@@ -605,6 +611,7 @@ function __get_METRIC() {
 │   ├── tac-exec                       # Bootstrap: source env.sh + exec "$@"
 │   ├── tac_hostmetrics.sh             # Host CPU + iGPU + NVIDIA dGPU load/engines
 │   ├── llama-watchdog.sh              # Watchdog: auto-restart with -ngl 999, --prio 2
+│   ├── bench-timeout-runner.sh        # Bench subprocess runner with PID tracking + cleanup
 │   ├── oc-gpu-status                  # Thin wrapper → tac-exec gpu-status
 │   ├── oc-model-status                # Thin wrapper → tac-exec ocms
 │   ├── oc-model-switch                # Thin wrapper → tac-exec serve
@@ -638,17 +645,23 @@ function __get_METRIC() {
 │   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
 │   ├── 14-wsl-extras.sh               #   WSL/X11 helpers, completions, vault env
 │   ├── 15-model-recommender.sh        #   AI model recommendations by use case
-│   ├── startup-env.sh                 #   Shared startup env fragment (sourced by loader + env.sh)
+│   ├── _module-list.sh                #   Canonical module load order (shared by both loaders)
+│   ├── _startup-env.sh                #   Shared startup env fragment (sourced by loader + env.sh)
 │   └── kgraph/                        #   Knowledge graph Python package (Pydantic models)
 │       ├── models.py                  #     GraphNode, GraphEdge, Graph, GraphBuilder
 │       └── templates/kgraph.html      #     Cytoscape.js viewer template
 ├── tools/                             # Standalone utility scripts (not sourced)
-│   ├── check-agent-use.sh             #   Agent usage regression checker
+│   ├── capture-golden-fixtures.sh     #   Snapshot command output for PowerShell parity checks
+│   ├── check-agent-use.sh             #   Manual agent-usage regression check (live /dev/shm)
+│   ├── check-repo-boundaries.sh       #   Repo ownership boundary guard
+│   ├── clean-orphans.sh               #   Kill orphaned bench/llama-server processes
 │   ├── docs-sync-check.sh             #   README drift guard (module count, version, test totals)
 │   ├── import-windows-env.sh          #   Import Windows user environment variables
 │   ├── lint.sh                        #   bash -n + shellcheck + Unicode safety
 │   ├── mirror-vault.sh                #   Sync Obsidian vault to Windows
-│   └── run-tests.sh                   #   BATS test runner
+│   ├── normalize-fixture.sh           #   Normalise captured fixtures
+│   ├── run-tests.sh                   #   BATS test runner
+│   └── sync-openclaw-completion.sh    #   Refresh OpenClaw bash completions
 ├── docs/                              # Reference documentation
 │   ├── AGENT-GUIDELINES.md            #   AI agent operating manual
 │   ├── architecture.md                #   Developer guide and module details
@@ -660,19 +673,22 @@ function __get_METRIC() {
 │   ├── reference.md                   #   Command reference + dashboard
 │   ├── troubleshooting.md             #   Diagnostics and fixes
 │   └── contracts/                     #   PowerShell translation contracts (YAML)
-├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
+├── frontend-g6/                       # React + AntV G6 dev frontend (untracked; optional)
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
 │   ├── conftest.py                    # Pytest config — BATS lock serialization, VS Code discovery guard
+│   ├── _paths.py                      # Shared sys.path bootstrap for kgraph imports
 │   ├── tactical-console.bats          # BATS full suite (383 tests, ~5-15 min)
-│   ├── tactical-console-fast.bats     # Fast subset (50 tests, ~2 min)
+│   ├── tactical-console-fast.bats     # Fast subset (52 tests, ~2 min)
+│   ├── tactical-console-function-availability.bats  # Function availability checks (2 tests)
 │   ├── test_bats_bridge.py            # BATS→pytest bridge: exposes each @test as an individual pytest test
 │   ├── test_bats_lock_fixture.py      # Tests for conftest lock fixture
-│   ├── test_kgraph.py                 # Python tests for kgraph package (88 tests)
-│   ├── test_models.py                 # Pydantic model tests (36 tests)
+│   ├── test_kgraph.py                 # Python tests for kgraph package (102 tests)
+│   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
+│   ├── test_models.py                 # Pydantic model tests (37 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (38 tests: 5+2+8+5+5+6+7)
-│   └── integration/                   # BATS integration tests (106 tests: 14+42+10+13+1+26)
+│   ├── unit/                          # BATS unit tests (39 tests: 6+2+8+5+5+6+7)
+│   └── integration/                   # BATS integration tests (109 tests: 14+42+10+16+1+26)
 └── systemd/
     ├── llama-watchdog.service
     └── llama-watchdog.timer
@@ -683,16 +699,10 @@ function __get_METRIC() {
 | System Path | Source |
 |---|---|
 | `~/.bashrc` | Thin loader (not in repo — sources `tactical-console.bashrc`) |
-| `~/.local/bin/tac-exec` | `bin/tac-exec` |
-| `~/.local/bin/llama-watchdog.sh` | `bin/llama-watchdog.sh` |
-| `~/.local/bin/tac_hostmetrics.sh` | `bin/tac_hostmetrics.sh` |
-| `~/.local/bin/oc-quick-diag` | `bin/oc-quick-diag` |
-| `~/.local/bin/oc-gpu-status` | `bin/oc-gpu-status` |
-| `~/.local/bin/oc-model-status` | `bin/oc-model-status` |
-| `~/.local/bin/oc-model-switch` | `bin/oc-model-switch` |
-| `~/.local/bin/oc-wake` | `bin/oc-wake` |
-| `~/.config/systemd/user/llama-watchdog.service` | `systemd/llama-watchdog.service` |
-| `~/.config/systemd/user/llama-watchdog.timer` | `systemd/llama-watchdog.timer` |
+| `~/.local/bin/<name>` | Every file in `bin/` — `tac-exec`, `tac_hostmetrics.sh`, `llama-watchdog.sh`, `bench-timeout-runner.sh`, `oc-*` wrappers |
+| `~/.local/bin/load-vault-env.sh` | `scripts/load-vault-env.sh` |
+| `~/.local/bin/oc-update-enhanced.sh` | `scripts/oc-update-enhanced.sh` |
+| `~/.config/systemd/user/<unit>` | Every file in `systemd/` — `llama-watchdog.service`, `llama-watchdog.timer` |
 
 ---
 
@@ -823,10 +833,10 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
-- **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 50 tests)
+- **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 52 tests)
 - **Full tests:** `bats tests/tactical-console.bats` (383 BATS unit tests)
-- **Unit tests:** `bats tests/unit/*.bats` (37 tests)
-- **Integration tests:** `bats tests/integration/*.bats` (106 tests)
+- **Unit tests:** `bats tests/unit/*.bats` (39 tests)
+- **Integration tests:** `bats tests/integration/*.bats` (109 tests)
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety)
 - **Docs sync:** `tools/docs-sync-check.sh` (README drift guard — fails CI on stale module counts, versions, or test totals)
 - **Nightly:** full suite runs nightly via `.github/workflows/nightly.yml` (scheduled + manual dispatch)

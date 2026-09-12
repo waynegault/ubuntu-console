@@ -174,5 +174,5 @@ fixture_priority:
   - oc-health --plain
   - model list
   - model status --plain
-  - cl --dry-run
+  - cl --report
   - logtrim

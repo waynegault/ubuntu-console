@@ -92,11 +92,17 @@ by either loader.
 | `scripts/spec_dec_crossover.sh` | SPEC-DEC-005 concurrency crossover measurement (standalone). |
 | `scripts/prompt-sets.sh` | Shared SPEC-DEC-006 workload prompt sets (sourced by the benches). |
 | `scripts/18-lint.sh` | Repo static-analysis wrapper — delegates to `tools/lint.sh`. |
-| `tools/check-agent-use.sh` | Agent usage regression checker — CI/tests only. |
+| `tools/capture-golden-fixtures.sh` | Capture baseline command outputs for PowerShell parity checks. |
+| `tools/check-agent-use.sh` | Manual agent-usage regression check (reads live `/dev/shm` caches; not run in CI). |
+| `tools/check-repo-boundaries.sh` | Enforce the repo ownership boundary contract. CI guard. |
+| `tools/clean-orphans.sh` | Kill orphaned bench/llama-server keeper processes. |
+| `tools/docs-sync-check.sh` | Verify README matches current repo facts (counts/version). CI guard. |
 | `tools/import-windows-env.sh` | Standalone script to import Windows user environment variables. |
 | `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety. CI linter. |
 | `tools/mirror-vault.sh` | Sync Obsidian vault from WSL to Windows. |
+| `tools/normalize-fixture.sh` | Normalise captured golden fixtures (strip dynamic fields). |
 | `tools/run-tests.sh` | Pretty-printed BATS test runner. |
+| `tools/sync-openclaw-completion.sh` | Refresh the OpenClaw bash completion word lists. |
 
 ### Repository Boundaries
 
@@ -469,12 +475,13 @@ extra source commands.
 │       ├── life_index.py               #     Canonical concept / life index
 │       └── constants.py                #     Shared constants & defaults
 ├── tools/                             # Standalone utility scripts (not sourced)
-│   ├── check-agent-use.sh             #   Agent usage regression checker (CI)
+│   ├── check-agent-use.sh             #   Manual agent-usage check (live /dev/shm)
+│   ├── docs-sync-check.sh             #   README drift guard
 │   ├── import-windows-env.sh          #   Import Windows user env vars (standalone)
 │   ├── lint.sh                        #   bash -n + shellcheck + Unicode safety
 │   ├── mirror-vault.sh                #   Sync Obsidian vault to Windows
-│   ├── run-tests.sh                   #   BATS test runner
-├── frontend-g6/                       # React + AntV G6 knowledge graph frontend
+│   └── run-tests.sh                   #   BATS test runner
+├── frontend-g6/                       # React + AntV G6 dev frontend (untracked; optional)
 │   ├── package.json                   #   Vite 5 + React 18 + G6 5.0
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── docs/                              # Reference documentation
@@ -486,11 +493,17 @@ extra source commands.
 │   └── troubleshooting.md             #   Diagnostics and fixes
 ├── tests/
 │   ├── conftest.py                    # Pytest config — serializes BATS suites
-│   ├── tactical-console.bats          # BATS full suite (497 tests)
-│   ├── tactical-console-fast.bats     # Fast subset (50 tests, ~20s)
+│   ├── _paths.py                      # Shared sys.path bootstrap for kgraph imports
+│   ├── tactical-console.bats          # BATS full suite (383 tests)
+│   ├── tactical-console-fast.bats     # Fast subset (52 tests, ~20s)
+│   ├── tactical-console-function-availability.bats  # Function availability (2 tests)
 │   ├── test_bats_bridge.py            # Pytest parametrize bridge for all BATS suites
+│   ├── test_bats_lock_fixture.py      # Tests for the conftest lock fixture
 │   ├── test_kgraph.py                 # Python tests for kgraph package
-│   ├── audit_report.md                # Test infrastructure audit
+│   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests
+│   ├── test_models.py                 # Pydantic model tests
+│   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, …
+│   ├── fixtures/golden/               # Captured command-output fixtures
 │   ├── unit/                          # BATS unit tests (39 tests)
 │   └── integration/                   # BATS integration tests (109 tests)
 └── systemd/

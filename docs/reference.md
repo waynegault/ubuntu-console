@@ -17,7 +17,7 @@ description: Complete quick reference card for every command, the tactical dashb
 | `sysinfo` | System | One-line hardware summary |
 | `get-ip` | Network | WSL + WAN IP addresses |
 | `cpwd` | Utility | Copy path to clipboard |
-| `cl` | Utility | Quick temp cleanup (`--dry-run` supported) |
+| `cl` | Utility | Quick temp cleanup (`--report` shows a dry run) |
 | `docs-sync` | Utility | Check README drift against current repo facts |
 | `logtrim` | Utility | Trim logs > 1 MB |
 | `oedit` | Editor | Open `tactical-console.bashrc` in VS Code |
