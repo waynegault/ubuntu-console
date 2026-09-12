@@ -40,8 +40,10 @@ REGISTRY
 }
 
 teardown() {
+    # Everything lives under $TAC_TEST_TMPDIR (the setup overrides
+    # LLM_BENCH_LOCK_FILE / LLM_AUTOTUNE_LOCK_FILE / LLM_BENCH_PID_FILE);
+    # do NOT touch the real /tmp/llm-* host locks here.
     rm -rf "$TAC_TEST_TMPDIR" 2>/dev/null || true
-    rm -f /tmp/llm-bench.lock /tmp/llm-autotune.lock /tmp/llm-bench.pid 2>/dev/null || true
 }
 
 _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
@@ -253,7 +255,6 @@ LLM_BENCH_LOCK_WAIT_SECONDS=1"
         [[ \"\$pt2\" == \"\$pt\" ]] || { echo 'TERM LEAK'; exit 1; }; \
         echo 'TRAPS_OK'"
     [[ "$output" == "TRAPS_OK" ]]
-    rm -f /tmp/.bench_trap_registry
 }
 
 # ===== G) REGRESSION: EXISTING SUITE ALIGNMENT ===============================
@@ -264,7 +265,10 @@ LLM_BENCH_LOCK_WAIT_SECONDS=1"
 }
 
 @test "[G2] Regression: existing bench unit tests pass" {
-    run bats --tap "$REPO_ROOT/tests/tactical-console.bats" --filter "bench\|Bench" 2>&1
+    run bats --tap "$REPO_ROOT/tests/tactical-console.bats" --filter "bench|Bench" 2>&1
+    # A filter that matches nothing would exit 0 with no tests — require a real
+    # selection so the test cannot pass vacuously.
+    [[ "$output" == *"ok "* ]]
     [[ "$status" -eq 0 ]] && [[ "$output" != *"not ok"* ]]
 }
 

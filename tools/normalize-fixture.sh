@@ -118,8 +118,12 @@ case "${1:---}" in
         tmp_b=$(mktemp)
         normalize "$a" > "$tmp_a"
         normalize "$b" > "$tmp_b"
-        diff --color=always -u "$tmp_a" "$tmp_b" || true
+        diff_rc=0
+        diff --color=always -u "$tmp_a" "$tmp_b" || diff_rc=$?
         rm -f "$tmp_a" "$tmp_b"
+        # Propagate diff's status (0 = identical, 1 = differences, 2 = error);
+        # otherwise --diff always looks "clean".
+        exit "$diff_rc"
         ;;
     -)
         normalize -

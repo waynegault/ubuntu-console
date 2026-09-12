@@ -47,6 +47,33 @@ if (( AUTOTUNE_ACTIVE == 1 )) && [[ "${CLEAN_ORPHANS_IGNORE_ACTIVE_AUTOTUNE:-0}"
     exit 2
 fi
 
+# Safety guard 2: do not reap (or delete the lock/PID of) a live bench. The
+# bench holds /tmp/llm-bench.lock (content = owner PID) and /tmp/llm-bench.pid;
+# deleting the lock file merely for existing would drop the flock and let a
+# second bench start concurrently.
+BENCH_LOCK_FILE="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
+BENCH_PID_FILE="${LLM_BENCH_PID_FILE:-/tmp/llm-bench.pid}"
+BENCH_ACTIVE=0
+if [[ -f "$BENCH_LOCK_FILE" ]]; then
+    _bench_lock_owner=$(< "$BENCH_LOCK_FILE")
+    if [[ "$_bench_lock_owner" =~ ^[0-9]+$ ]] && kill -0 "$_bench_lock_owner" 2>/dev/null; then
+        BENCH_ACTIVE=1
+    fi
+fi
+if (( BENCH_ACTIVE == 0 )) && [[ -f "$BENCH_PID_FILE" ]]; then
+    _bench_pid=$(< "$BENCH_PID_FILE")
+    if [[ "$_bench_pid" =~ ^[0-9]+$ ]] && kill -0 "$_bench_pid" 2>/dev/null; then
+        BENCH_ACTIVE=1
+    fi
+fi
+
+if (( BENCH_ACTIVE == 1 )) && [[ "${CLEAN_ORPHANS_IGNORE_ACTIVE_BENCH:-0}" != "1" ]]; then
+    echo "[clean-orphans] Active bench detected (lock/PID owner alive, lock=$BENCH_LOCK_FILE)."
+    echo "[clean-orphans] Refusing cleanup to avoid killing a live run."
+    echo "[clean-orphans] If this is definitely stale, rerun with CLEAN_ORPHANS_IGNORE_ACTIVE_BENCH=1."
+    exit 2
+fi
+
 # Gather orphan processes
 declare -a ORPHANS=()
 declare -A SEEN_PIDS=()
@@ -107,9 +134,19 @@ while read -r pid cmd; do
     fi
 done < <(pgrep -af 'sleep 3600' 2>/dev/null || true)
 
-# 3. llama-server instances spawned by bench (have --no-mmap, no terminal)
+# 3. llama-server instances spawned by bench (have --no-mmap, no terminal).
+# NOTE: ordinary `model use` servers also launch with --no-mmap on WSL, so this
+# must never reap the live port owner or a child of a live model shell.
+LLM_PORT="${LLM_PORT:-18081}"
+PORT_OWNER=""
+if command -v ss >/dev/null 2>&1; then
+    PORT_OWNER=$(ss -ltnpH "sport = :$LLM_PORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true)
+fi
 while read -r pid cmd; do
     if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"llama-server"*"no-mmap"* ]]; then
+        [[ -n "$PORT_OWNER" && "$pid" == "$PORT_OWNER" ]] && continue
+        server_ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+        [[ -n "$server_ppid" && " ${LIVE_MODEL_SHELLS[*]:-} " == *" ${server_ppid} "* ]] && continue
         add_orphan "$pid" "$cmd"
     fi
 done < <(pgrep -af 'llama-server.*no-mmap' 2>/dev/null || true)
@@ -176,8 +213,18 @@ for entry in "${ORPHANS[@]}"; do
     fi
 done
 
-# Clean stale files
-rm -f /tmp/llm-bench.lock /tmp/llm-bench.pid /tmp/llm-keeper.*.pid
+# Clean stale files — never remove a live bench's lock/PID (gate on BENCH_ACTIVE),
+# and only remove keeper PID files whose process is actually gone.
+if (( BENCH_ACTIVE == 0 )); then
+    rm -f "$BENCH_LOCK_FILE" "$BENCH_PID_FILE"
+fi
+for keeper_file in /tmp/llm-keeper.*.pid; do
+    [[ -f "$keeper_file" ]] || continue
+    keeper_pid=$(< "$keeper_file")
+    if [[ ! "$keeper_pid" =~ ^[0-9]+$ ]] || ! kill -0 "$keeper_pid" 2>/dev/null; then
+        rm -f "$keeper_file"
+    fi
+done
 echo "[clean-orphans] Stale files removed."
 
 echo "[clean-orphans] Done."

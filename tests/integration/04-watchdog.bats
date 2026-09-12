@@ -20,6 +20,11 @@ setup_file() {
     export WATCHDOG_MOCK_HOME="$TAC_TEST_TMPDIR/home"
     export SYSTEMCTL_MOCK_LOG="$TAC_TEST_TMPDIR/systemctl.log"
     export SYSTEMCTL_MOCK_STATE="$WATCHDOG_MOCK_STATE"
+    # Sandbox the watchdog's lock/strike files and the bench lock so the suite
+    # never mutates live /dev/shm or /tmp state (env overrides in the script).
+    export LLAMA_WATCHDOG_LOCK_FILE="$TAC_TEST_TMPDIR/llama-watchdog.lock"
+    export LLAMA_WATCHDOG_STRIKE_DIR="$TAC_TEST_TMPDIR"
+    export LLM_BENCH_LOCK_FILE="$TAC_TEST_TMPDIR/llm-bench.lock"
     mkdir -p "$WATCHDOG_MOCK_BIN" "$WATCHDOG_MOCK_STATE" "$WATCHDOG_MOCK_HOME/.local/bin"
 
     # v3.0 resolves gpu-busy.sh as $HOME/.local/bin/gpu-busy.sh (GPU_BUSY_SH is
@@ -112,13 +117,13 @@ teardown_file() {
 
 setup() {
     # Reset mock state, mock log, the 2-strike counters, and the bench lock
-    # before each test (the strike files are real /dev/shm state that persists).
+    # before each test (all sandboxed under $TAC_TEST_TMPDIR).
     : > "$SYSTEMCTL_MOCK_LOG" 2>/dev/null || true
     rm -f "$WATCHDOG_MOCK_STATE"/*
-    rm -f /dev/shm/llama-watchdog.lock \
-          /dev/shm/llama-watchdog-xe.strikes \
-          /dev/shm/llama-watchdog-nv.strikes 2>/dev/null || true
-    rm -f /tmp/llm-bench.lock 2>/dev/null || true
+    rm -f "$LLAMA_WATCHDOG_LOCK_FILE" \
+          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes" \
+          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-nv.strikes" 2>/dev/null || true
+    rm -f "$LLM_BENCH_LOCK_FILE" 2>/dev/null || true
     export PATH="$WATCHDOG_MOCK_BIN:$PATH"
 }
 
@@ -174,7 +179,7 @@ setup() {
     run "$WATCHDOG_SCRIPT"
     [[ "$status" -eq 0 ]]
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
-    [[ "$(cat /dev/shm/llama-watchdog-xe.strikes 2>/dev/null || echo 0)" == "0" ]]
+    [[ "$(cat "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes" 2>/dev/null || echo 0)" == "0" ]]
 }
 
 @test "integration: watchdog leaves a still-loading (503) CUDA lane alone" {
@@ -187,7 +192,7 @@ setup() {
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"CUDA unit still loading (503)"* ]]
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
-    [[ "$(cat /dev/shm/llama-watchdog-nv.strikes 2>/dev/null || echo 0)" == "0" ]]
+    [[ "$(cat "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-nv.strikes" 2>/dev/null || echo 0)" == "0" ]]
 }
 
 @test "integration: watchdog stops the CUDA lane while the GPU is busy" {
@@ -206,7 +211,7 @@ setup() {
 @test "integration: watchdog skips the Xe lane when the bench lock is present" {
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
     echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
-    touch /tmp/llm-bench.lock
+    touch "$LLM_BENCH_LOCK_FILE"
 
     run "$WATCHDOG_SCRIPT"
 

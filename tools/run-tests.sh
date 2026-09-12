@@ -17,6 +17,15 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Fail fast: without bats every suite silently produces zero results, which the
+# summary would otherwise report as "ALL N TESTS PASSED".
+if ! command -v bats >/dev/null 2>&1
+then
+    echo "ERROR: 'bats' is not installed or not on PATH; cannot run BATS suites." >&2
+    echo "       Install it (sudo apt install bats, or npm i -g bats) and retry." >&2
+    exit 2
+fi
+
 # ── Parse flags ──────────────────────────────────────────────────────────────
 _MODE="all"
 _EXTRA_ARGS=()
@@ -68,7 +77,7 @@ _build_bats_list() {
             done
             ;;
         *)
-            # default: unit & fast — exclude full suite, LLM, and integration
+            # Defensive: unknown/empty mode falls back to the unit & fast subset.
             for f in "$REPO_ROOT/tests"/unit/*.bats \
                      "$REPO_ROOT/tests"/tactical-console-fast.bats; do
                 [[ -f "$f" ]] && files+=("$f")
@@ -87,7 +96,13 @@ _run_bats_file() {
     while IFS= read -r line; do
         # Parse timing from TAP: "ok N test_name in XXXms" or "not ok N test_name in XXXs"
         local timing=""
-        if [[ "$line" =~ ^(ok|not\ ok)\ [0-9]+\ (.+)\ in\ ([0-9.]+)(sec|ms)$ ]]; then
+        if [[ "$line" =~ ^(ok|not\ ok)\ [0-9]+\ .*#\ skip ]]; then
+            # bats emits skips inline ("ok N name in Xms # skip reason"), not as
+            # a separate "# skip" line — count them as skips, not passes.
+            _LIVE_NUM=$(( _LIVE_NUM + 1 ))
+            _LIVE_SKIP=$(( _LIVE_SKIP + 1 ))
+            _SKIPPED+=("$line")
+        elif [[ "$line" =~ ^(ok|not\ ok)\ [0-9]+\ (.+)\ in\ ([0-9.]+)(sec|ms)$ ]]; then
             local status="${BASH_REMATCH[1]}"
             local test_name="${BASH_REMATCH[2]}"
             local duration="${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
@@ -139,7 +154,11 @@ _parse_tap() {
         if [[ "$line" =~ ^(ok|not\ ok)\ [0-9]+\ (.+)$ ]]; then
             if (( total > 0 )); then T_DIAG[total - 1]="$diag_buf"; fi
             diag_buf=""
-            T_STATUS+=("${BASH_REMATCH[1]}")
+            local status="${BASH_REMATCH[1]}"
+            # A skipped test is reported by bats as "ok N name # skip reason";
+            # keep it distinct from a real pass so it is not counted as one.
+            if [[ "${BASH_REMATCH[2]}" == *"# skip"* ]]; then status="skip"; fi
+            T_STATUS+=("$status")
             T_NAME+=("${BASH_REMATCH[2]}")
             T_PREFIX+=("${BASH_REMATCH[2]%%:*}")
             (( total++ ))
@@ -154,6 +173,7 @@ _parse_tap() {
 _TAP_OUTPUT=""
 _LIVE_NUM=0 _LIVE_PASS=0 _LIVE_FAIL=0 _LIVE_SKIP=0
 _SKIPPED=()
+_BATS_EMPTY=0
 GRAND_PASS=0 GRAND_FAIL=0 GRAND_SKIP=0
 
 case "${_MODE:-}" in
@@ -177,7 +197,14 @@ for bf in "${BATS_FILES[@]}"; do
     bf_rel="${bf#"$REPO_ROOT"/}"
     spacer
     subheader "${bf_rel}"
+    _before_count=$_LIVE_NUM
     _run_bats_file "$bf" ""
+    if (( _LIVE_NUM == _before_count )); then
+        # A bats file that emitted no TAP results failed to run (missing tool,
+        # syntax error, crash) — count it instead of silently passing.
+        _BATS_EMPTY=1
+        test_line "  ${C_Red}${FAIL_SYMBOL}${C_Reset} ${bf_rel}: no TAP results produced"
+    fi
 done
 
 # ── Part 2: Aggregate section counts (no display) ───────────────────────────
@@ -185,25 +212,29 @@ _parse_tap "$_TAP_OUTPUT"
 total=${#T_STATUS[@]}
 GRAND_SKIP=$_LIVE_SKIP
 
-declare -A SEC_PASS=() SEC_TOTAL=()
+declare -A SEC_PASS=() SEC_TOTAL=() SEC_SKIP=()
 declare -a SEC_ORDER=()
 
 for (( i = 0; i < total; i++ )); do
     p="${T_PREFIX[$i]}"
     if [[ -z "${SEC_TOTAL[$p]+x}" ]]; then
-        SEC_TOTAL[$p]=0; SEC_PASS[$p]=0
+        SEC_TOTAL[$p]=0; SEC_PASS[$p]=0; SEC_SKIP[$p]=0
         SEC_ORDER+=("$p")
     fi
     (( SEC_TOTAL[$p]++ ))
-    [[ "${T_STATUS[$i]}" == "ok" ]] && (( SEC_PASS[$p]++ ))
+    case "${T_STATUS[$i]}" in
+        ok)   (( SEC_PASS[$p]++ )) ;;
+        skip) (( SEC_SKIP[$p]++ )) ;;
+    esac
 done
 
 _sum_num=0
 for p in "${SEC_ORDER[@]}"; do
     local_pass=${SEC_PASS[$p]}
     local_total=${SEC_TOTAL[$p]}
+    local_skip=${SEC_SKIP[$p]:-0}
     (( GRAND_PASS += local_pass ))
-    (( GRAND_FAIL += local_total - local_pass ))
+    (( GRAND_FAIL += local_total - local_pass - local_skip ))
 done
 
 # ── Run Python tests via pytest ──────────────────────────────────────────────
@@ -214,8 +245,9 @@ if [[ "${_MODE:-}" != "fast" ]]; then
 
     _PY_MARKERS=""
     case "${_MODE:-}" in
-        all)   ;;
-        *)     _PY_MARKERS="-m not bats_integration" ;;
+        # `all` and `integration` both include integration-marked tests;
+        # only `llm` narrows the selection.
+        llm) _PY_MARKERS="-m not bats_integration" ;;
     esac
 
     cd "$REPO_ROOT" || exit 1
@@ -236,6 +268,7 @@ if [[ "${_MODE:-}" != "fast" ]]; then
 
     # Parse pytest output line by line, numbering continues from BATS count
     _PY_NUM=$total
+    _PY_PASS=0 _PY_FAIL=0 _PY_SKIP=0
     _PY_DURATIONS=""
     _in_durations=0
     while IFS= read -r _py_line; do
@@ -261,17 +294,19 @@ if [[ "${_MODE:-}" != "fast" ]]; then
             _status="${BASH_REMATCH[3]}"
             _tname="${BASH_REMATCH[2]}"
             case "$_status" in
-                PASSED) _sym="${C_Green}${PASS_SYMBOL}${C_Reset}"; test_line "${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}" ;;
-                FAILED|ERROR) _sym="${FAIL_SYMBOL}"; _PY_EXIT=1; test_line "${C_Red}${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}${C_Reset}" ;;
-                SKIP|SKIPPED) _sym="⊘"; test_line "${C_Yellow}${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}${C_Reset}" ;;
+                PASSED) _PY_PASS=$(( _PY_PASS + 1 )); _sym="${C_Green}${PASS_SYMBOL}${C_Reset}"; test_line "${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}" ;;
+                FAILED|ERROR) _PY_FAIL=$(( _PY_FAIL + 1 )); _PY_EXIT=1; _sym="${FAIL_SYMBOL}"; test_line "${C_Red}${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}${C_Reset}" ;;
+                SKIP|SKIPPED) _PY_SKIP=$(( _PY_SKIP + 1 )); _sym="⊘"; test_line "${C_Yellow}${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}${C_Reset}" ;;
                 *) _sym="?"; test_line "${C_Dim}${_PY_NUM}.${C_Reset} ${_tname} ${_sym}" ;;
             esac
         fi
     done <<< "$_PY_OUTPUT"
 
-    # Count Python tests into grand total
-    _py_count=$(( _PY_NUM - total ))
-    GRAND_PASS=$(( GRAND_PASS + _py_count ))
+    # Fold Python results into the grand totals by outcome (previously every
+    # collected Python test was counted as a pass).
+    GRAND_PASS=$(( GRAND_PASS + _PY_PASS ))
+    GRAND_FAIL=$(( GRAND_FAIL + _PY_FAIL ))
+    GRAND_SKIP=$(( GRAND_SKIP + _PY_SKIP ))
 
     # Show slowest Python test durations (if any)
     if [[ -n "$_PY_DURATIONS" ]]; then
@@ -314,13 +349,15 @@ for (( i = 0; i < total; i++ )); do
     fi
 done
 
-if (( GRAND_FAIL == 0 && _PY_EXIT == 0 )); then
+if (( GRAND_FAIL == 0 && _PY_EXIT == 0 && _BATS_EMPTY == 0 )); then
     _msg="${C_BoldGreen}ALL ${grand_total} TESTS PASSED ${PASS_SYMBOL}${C_Reset}"
     [[ "$grand_skipped" -gt 0 ]] && _msg+="  ${C_Dim}(${grand_skipped} skipped)${C_Reset}"
     summary "$_msg"
 else
     if (( GRAND_FAIL > 0 )); then
         summary "${C_BoldRed}${GRAND_FAIL} FAILED  ${C_Dim}|${C_Reset}  ${grand_total} total${C_Reset}"
+    elif (( _BATS_EMPTY == 1 )); then
+        summary "${C_BoldRed}BATS SUITE PRODUCED NO RESULTS${C_Reset}"
     else
         summary "${C_Green}${GRAND_PASS} passed${C_Reset}"
     fi
@@ -330,7 +367,7 @@ else
         spacer
         header "Failed Tests"
         for (( i = 0; i < total; i++ )); do
-            if [[ "${T_STATUS[$i]}" != "ok" ]]; then
+            if [[ "${T_STATUS[$i]}" == "not ok" ]]; then
                 test_line "  ${C_Red}${FAIL_SYMBOL}${C_Reset} ${T_NAME[$i]}"
                 if [[ -n "${T_DIAG[$i]:-}" ]]; then
                     while IFS= read -r dline; do
@@ -342,17 +379,18 @@ else
             fi
         done
     fi
+fi
 
-    # Show skipped test details
-    if [[ "$grand_skipped" -gt 0 ]]; then
-        spacer
-        header "Skipped Tests"
-        for sk in "${_SKIPPED[@]}"; do
-            sk_clean="${sk#\# skip (*) }"
-            sk_clean="${sk_clean#\# skip }"
-            test_line "  ${C_Yellow}⊘${C_Reset} ${C_Dim}${sk_clean}${C_Reset}"
-        done
-    fi
+# Show skipped test details (regardless of pass/fail)
+if [[ "$grand_skipped" -gt 0 ]]; then
+    spacer
+    header "Skipped Tests"
+    for sk in "${_SKIPPED[@]}"; do
+        sk_clean="${sk#not ok }"
+        sk_clean="${sk_clean#ok }"
+        sk_clean="${sk_clean#[0-9]* }"
+        test_line "  ${C_Yellow}⊘${C_Reset} ${C_Dim}${sk_clean}${C_Reset}"
+    done
 fi
 
 # Duration summary
@@ -399,7 +437,7 @@ fi
 exit_code=0
 (( GRAND_FAIL > 0 )) && exit_code=1
 (( _PY_EXIT != 0 )) && exit_code=1
+(( _BATS_EMPTY == 1 )) && exit_code=1
 exit $exit_code
-# end of file
 
-# end of file marker
+# end of file

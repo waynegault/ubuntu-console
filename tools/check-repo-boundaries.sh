@@ -24,15 +24,24 @@ declare -a FORBIDDEN_PATTERNS=(
 )
 
 status=0
+hit_file=$(mktemp)
 for pattern in "${FORBIDDEN_PATTERNS[@]}"; do
-    if rg -n -S --glob '!tools/check-repo-boundaries.sh' "$pattern" "${SEARCH_PATHS[@]}" >/tmp/ubuntu-console-boundary-hit.txt 2>/dev/null; then
+    rg_rc=0
+    rg -n -S --glob '!tools/check-repo-boundaries.sh' "$pattern" "${SEARCH_PATHS[@]}" >"$hit_file" 2>/dev/null || rg_rc=$?
+    if (( rg_rc == 0 )); then
         echo "Boundary violation in ubuntu-console: pattern '$pattern' is present in source files:"
-        cat /tmp/ubuntu-console-boundary-hit.txt
+        cat "$hit_file"
         echo
         status=1
+    elif (( rg_rc > 1 )); then
+        # rc 2 = ripgrep error (bad pattern, unreadable target): fail closed
+        # rather than reporting "clean" when the scan could not run.
+        echo "ERROR: ripgrep failed (rc=$rg_rc) scanning pattern '$pattern'" >&2
+        rm -f "$hit_file"
+        exit 2
     fi
 done
-rm -f /tmp/ubuntu-console-boundary-hit.txt
+rm -f "$hit_file"
 
 if (( status == 0 )); then
     echo "Boundary check passed (ubuntu-console)."

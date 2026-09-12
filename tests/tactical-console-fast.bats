@@ -161,10 +161,10 @@ setup_file() {
     done
 }
 
-@test "hygiene: no lines exceed 120 characters in core scripts" {
-    # Known exceptions: UI formatting lines (box-drawing, tabular output)
-    # and complex jq pipelines. These are acceptable because they are
-    # display-oriented code, not logic paths.
+@test "hygiene: no lines exceed 200 characters in core scripts" {
+    # Advisory check: reports long lines but deliberately does NOT fail the
+    # suite. UI formatting lines (box-drawing, tabular output) and complex jq
+    # pipelines are display-oriented and intentionally exceed the limit.
     local max_width=200  # relaxed limit for UI/jq display lines
     for f in "$PROFILE_PATH" \
              "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh \

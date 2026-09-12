@@ -1,0 +1,13 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ - CLEANUP REPORT - ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║ Python cache in /home/wayne [FOUND] ║
+║ Broken symlinks in ~ [1 found] ║
+║ Non-existent PATH entries [NONE] ║
+║ Systemd ghost units [8 not-found] ║
+║ APT cache size [484K
+0] ║
+║ Brew reclaimable [0] ║
+║ Journal logs [0] ║
+║ Docker images [36.94kB] ║
+╚══════════════════════════════════════════════════════════════════════════════╝

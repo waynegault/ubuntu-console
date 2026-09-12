@@ -60,8 +60,9 @@ echo ""
 echo "=== ShellCheck ==="
 if ! command -v shellcheck >/dev/null 2>&1
 then
-    echo "  shellcheck not installed - skipping (sudo apt install shellcheck)"
-    exit "$rc"
+    echo "  FAIL  shellcheck not installed - cannot run static analysis" >&2
+    echo "        Install it (sudo apt install shellcheck) and retry." >&2
+    exit 2
 fi
 
 for f in "$REPO_ROOT"/tactical-console.bashrc \

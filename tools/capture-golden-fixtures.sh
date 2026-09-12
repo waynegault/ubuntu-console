@@ -81,7 +81,7 @@ capture "help_h" tactical_help
 capture "model_list" model list
 capture "model_status_plain" model status --plain
 capture "oc_health_plain" oc-health --plain
-capture "cleanup_dry_run" cl --dry-run
+capture "cleanup_report" cl --report
 capture "logtrim" logtrim
 
 # Dashboard render can include dynamic timestamps/metrics; still useful as shape fixture.
