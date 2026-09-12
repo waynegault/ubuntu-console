@@ -271,10 +271,10 @@ Located at `~/.llm/models.conf` (`$LLM_REGISTRY`) — 37-column pipe-delimited (
 | Rating | Quants |
 |---|---|
 | **recommended** | Q4_K_M, Q4_K_S |
-| **acceptable** | Q3_K_M/L/S, Q5_K_M/S, Q2_K, IQ variants |
-| **discouraged** | Q6_K, Q8_0, F16, F32, BF16 — too large for 4 GB VRAM |
+| **acceptable** | Q3_K_M/L/S, Q5_K_M/S, Q2_K, IQ variants, Q8_0, F16 |
+| **discouraged** | Q6_K, F32, BF16 — too large for 4 GB VRAM |
 
-`model scan` auto-archives discouraged quants. `model download` warns (does not block) when downloading a discouraged quant.
+`model scan` auto-archives discouraged quants. `model download` warns (does not block) when downloading a discouraged quant. The rating is matched against the filename, so it is not size-aware: `Q8_0`/`F16` are *acceptable* because they fit small (1–3B) models, even though a 7–8B `Q8_0`/`F16` is CPU-only on this GPU.
 
 ### Chat & Inference
 
@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (783 total tests: 593 BATS + 190 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (784 total tests: 593 BATS + 191 Python).
 
 ### Running Tests
 
@@ -449,8 +449,8 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 | Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
 | Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use, clean-orphans) | `tests/unit/*.bats` | 47 | 120s |
 | Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 109 | 300s |
-| Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 190 | 200s |
-| **Total** | | **783** | |
+| Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 191 | 200s |
+| **Total** | | **784** | |
 
 ---
 

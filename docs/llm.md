@@ -75,8 +75,10 @@ configuration that rates GGUF quantizations for the RTX 3050 Ti (4 GB VRAM):
 | Rating | Quants | Meaning |
 |---|---|---|
 | **recommended** | Q4_K_M, Q4_K_S | Best balance of speed, quality, and GPU fit. |
-| **acceptable** | Q3_K_M/L/S, Q5_K_M/S, Q2_K, IQ variants | Works but may reduce GPU offload or be slower. |
-| **discouraged** | Q6_K, Q8_0, F16, F32, BF16 | Too large for 4 GB VRAM — most layers stay on CPU. |
+| **acceptable** | Q3_K_M/L/S, Q5_K_M/S, Q2_K, IQ variants, Q8_0, F16 | Works but may reduce GPU offload or be slower. |
+| **discouraged** | Q6_K, F32, BF16 | Too large for 4 GB VRAM — most layers stay on CPU. |
+
+The rating is matched against the filename, so it is not size-aware: `Q8_0`/`F16` are *acceptable* because they fit small (1–3B) models, even though a 7–8B `Q8_0`/`F16` is CPU-only on this GPU.
 
 **Integration points:**
 
