@@ -11,6 +11,10 @@
 #   swallow a recovery without resetting strikes.
 # v3.2 (2026-09-12): NV lane skips a unit that systemd is already activating
 #   (mirrors the Xe lane) instead of issuing a start on a mid-start unit.
+# v3.3 (2026-09-12): gpu_busy FAILS CLOSED — a failed/empty probe is treated as
+#   BUSY, so the CUDA lane is never started on a GPU we cannot prove free; strike
+#   read/write failures now warn instead of silently disabling recovery; add
+#   --version (also removes the now-unneeded SC2034 suppression for VERSION).
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -19,8 +23,13 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="3.2"
+VERSION="3.3"
+
+# --version works without taking the lock (diagnostic; also keeps VERSION used).
+if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
+    echo "llama-watchdog $VERSION"
+    exit 0
+fi
 set -uo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -70,14 +79,57 @@ health() {
     esac
 }
 
-strike_get() { cat "$1" 2>/dev/null || echo 0; }
-strike_reset() { printf '0\n' > "$1" 2>/dev/null || true; }
+# Strike counters. A read/write failure must NEVER silently disable recovery —
+# warn loudly so a mistyped WATCHDOG_STRIKE_DIR surfaces instead of the watchdog
+# logging "strike 1/2" forever. A missing file is the normal first-run case.
+strike_get() {
+    local f="$1" v
+    if [[ ! -e "$f" ]]; then
+        echo 0
+        return 0
+    fi
+    if ! v=$(cat "$f" 2>/dev/null); then
+        log "WARNING: cannot read strike file $f — treating as 0 strikes"
+        echo 0
+        return 0
+    fi
+    if [[ ! "$v" =~ ^[0-9]+$ ]]; then
+        log "WARNING: strike file $f has non-numeric content ('$v') — treating as 0 strikes"
+        echo 0
+        return 0
+    fi
+    printf '%s\n' "$v"
+}
+strike_reset() {
+    printf '0\n' > "$1" 2>/dev/null || log "WARNING: cannot write strike file $1 (strikes not reset)"
+}
 strike_inc() {
-    local f="$1" n; n=$(strike_get "$f"); n=$((n+1)); printf '%s\n' "$n" > "$f" 2>/dev/null || true
+    local f="$1" n
+    n=$(strike_get "$f")
+    n=$((n+1))
+    printf '%s\n' "$n" > "$f" 2>/dev/null || log "WARNING: cannot write strike file $f (strike not persisted)"
 }
 
+# gpu_busy — 0 (busy) when a foreign workload holds the GPU. FAILS CLOSED: if the
+# probe is missing/fails/returns nothing we cannot prove the GPU is free, so we
+# treat it as BUSY and the CUDA lane is not started (matches the policy above).
+GPU_BUSY_PROBE_WARNED=0
 gpu_busy() {
-    local j; j=$("$HOME/.local/bin/gpu-busy.sh" --json 2>/dev/null || true)
+    local j
+    if ! j=$("$HOME/.local/bin/gpu-busy.sh" --json 2>/dev/null); then
+        if (( GPU_BUSY_PROBE_WARNED == 0 )); then
+            log "WARNING: gpu-busy.sh probe failed — treating GPU as BUSY (CUDA lane will not start)"
+            GPU_BUSY_PROBE_WARNED=1
+        fi
+        return 0
+    fi
+    if [[ -z "$j" ]]; then
+        if (( GPU_BUSY_PROBE_WARNED == 0 )); then
+            log "WARNING: gpu-busy.sh returned no output — treating GPU as BUSY (CUDA lane will not start)"
+            GPU_BUSY_PROBE_WARNED=1
+        fi
+        return 0
+    fi
     grep -q '"busy":true' <<< "$j"
 }
 
