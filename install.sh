@@ -4,7 +4,7 @@
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034
-VERSION="1.1"
+VERSION="1.2"
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
@@ -115,9 +115,32 @@ fi
 LOADER
     echo "  ~/.bashrc - created thin loader"
 else
-    # Skip only if ~/.bashrc already sources a tactical-console.bashrc loader
-    # (any path). Matching the bare filename would false-positive on a comment.
-    if grep -qE '^[[:space:]]*(source|\.)[[:space:]]+.*tactical-console\.bashrc' "$HOME/.bashrc" 2>/dev/null
+    # Which profile does ~/.bashrc already load, if any? Only a `source`/`.`
+    # line counts (matching the bare filename would false-positive on prose).
+    _loader_ref=$(grep -E '^[[:space:]]*(source|\.)[[:space:]]+' "$HOME/.bashrc" 2>/dev/null \
+                  | grep -oE '[^"[:space:]]*tactical-console\.bashrc' | head -1 || true)
+    if [[ -n "$_loader_ref" && "$_loader_ref" != "$PROFILE_PATH" \
+          && "$_loader_ref" != *'$'* && ! -f "$_loader_ref" ]]
+    then
+        # A LITERAL path that no longer exists: the repo moved, so refresh the
+        # line — otherwise every new shell warns "not found at <old path>" and a
+        # re-run of this installer would keep skipping it. A variable-based path
+        # (e.g. "$HOME/ubuntu-console/…") is deliberate and is left untouched.
+        chmod 600 "$HOME/.bashrc" 2>/dev/null || true
+        _tmp_bashrc=$(mktemp) || _tmp_bashrc=""
+        if [[ -n "$_tmp_bashrc" ]]
+        then
+            while IFS= read -r _line || [[ -n "$_line" ]]
+            do
+                printf '%s\n' "${_line//"$_loader_ref"/$PROFILE_PATH}"
+            done < "$HOME/.bashrc" > "$_tmp_bashrc"
+            cat "$_tmp_bashrc" > "$HOME/.bashrc"
+            rm -f "$_tmp_bashrc"
+            echo "  ~/.bashrc - refreshed stale loader path"
+        else
+            echo "  WARNING: could not refresh the stale loader path in ~/.bashrc" >&2
+        fi
+    elif [[ -n "$_loader_ref" ]]
     then
         echo "  ~/.bashrc - loader already present (skipped)"
     else

@@ -2381,6 +2381,59 @@ EOF
     [ "$after" = "$before" ]
 }
 
+@test "install: refreshes a stale absolute loader path" {
+    # A literal path that no longer exists means the repo moved. Re-running the
+    # installer must repair the line, not skip it — otherwise every new shell
+    # keeps warning "not found at <old path>".
+    local home_dir="$TAC_TEST_TMPDIR/install-home-stale"
+    mkdir -p "$home_dir"
+    cat > "$home_dir/.bashrc" << 'EOF'
+# existing config
+if [[ -f "/old/nowhere/ubuntu-console/tactical-console.bashrc" ]]
+then
+    source "/old/nowhere/ubuntu-console/tactical-console.bashrc"
+fi
+EOF
+
+    run env HOME="$home_dir" bash "$REPO_ROOT/install.sh"
+    [ "$status" -eq 0 ]
+
+    grep -Fq "$REPO_ROOT/tactical-console.bashrc" "$home_dir/.bashrc"
+    ! grep -q '/old/nowhere/' "$home_dir/.bashrc"
+    grep -q '# existing config' "$home_dir/.bashrc"
+    # Refreshed in place: exactly the two original mentions, nothing appended.
+    [ "$(grep -c 'tactical-console\.bashrc' "$home_dir/.bashrc")" -eq 2 ]
+}
+
+@test "wsl-extras: installs complete PowerShell shims atomically" {
+    local home_dir="$TAC_TEST_TMPDIR/wsl-extras-shims"
+    mkdir -p "$home_dir"
+
+    # 14-wsl-extras returns early in a non-interactive shell, so call the shim
+    # installer directly (it is defined above the interactive guard for exactly
+    # this) and check the wrappers are complete, readable and executable — a
+    # truncated stub would otherwise be mistaken for "already installed".
+    run env HOME="$home_dir" bash -c '
+        source "$0" >/dev/null 2>&1
+        __tac_install_pwsh_shims
+        for s in powershell.exe pwsh pwsh.exe; do
+            f="$HOME/.local/bin/$s"
+            [[ -x "$f" ]] || { echo "NOT_EXECUTABLE: $s"; exit 1; }
+            [[ -r "$f" ]] || { echo "NOT_READABLE: $s"; exit 1; }
+            grep -q "^exec " "$f" || { echo "TRUNCATED: $s"; exit 1; }
+        done
+        echo SHIMS_OK
+    ' "$REPO_ROOT/scripts/14-wsl-extras.sh"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *SHIMS_OK* ]]
+    # The atomic write must leave no temp files beside the shims.
+    local stray
+    stray=$(find "$home_dir/.local/bin" -maxdepth 1 -type f \
+        ! -name powershell.exe ! -name pwsh ! -name 'pwsh.exe' | wc -l)
+    [ "$stray" -eq 0 ]
+}
+
 @test "install: reloads user systemd units when systemctl is available" {
     local home_dir="$TAC_TEST_TMPDIR/install-home-systemd"
     local stub_dir="$TAC_TEST_TMPDIR/install-stubs"

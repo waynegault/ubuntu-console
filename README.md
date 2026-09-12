@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (857 total tests: 595 BATS + 262 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (859 total tests: 597 BATS + 262 Python).
 
 ### Running Tests
 
@@ -444,13 +444,13 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 
 | Suite | File | Count | Timeout |
 |-------|------|-------|---------|
-| Full behavioural | `tactical-console.bats` | 383 | 900s |
+| Full behavioural | `tactical-console.bats` | 385 | 900s |
 | Fast static analysis | `tactical-console-fast.bats` | 52 | 180s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
 | Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use, clean-orphans) | `tests/unit/*.bats` | 47 | 120s |
 | Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 111 | 300s |
 | Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 262 | 200s |
-| **Total** | | **857** | |
+| **Total** | | **859** | |
 
 ---
 
@@ -678,7 +678,7 @@ function __get_METRIC() {
 ├── tests/
 │   ├── conftest.py                    # Pytest config — BATS lock serialization, VS Code discovery guard
 │   ├── _paths.py                      # Shared sys.path bootstrap for kgraph imports
-│   ├── tactical-console.bats          # BATS full suite (383 tests, ~5-15 min)
+│   ├── tactical-console.bats          # BATS full suite (385 tests, ~5-15 min)
 │   ├── tactical-console-fast.bats     # Fast subset (52 tests, ~2 min)
 │   ├── tactical-console-function-availability.bats  # Function availability checks (2 tests)
 │   ├── test_bats_bridge.py            # BATS→pytest bridge: exposes each @test as an individual pytest test
@@ -831,7 +831,7 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 52 tests)
-- **Full tests:** `bats tests/tactical-console.bats` (383 BATS unit tests)
+- **Full tests:** `bats tests/tactical-console.bats` (385 BATS unit tests)
 - **Unit tests:** `bats tests/unit/*.bats` (39 tests)
 - **Integration tests:** `bats tests/integration/*.bats` (109 tests)
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety)

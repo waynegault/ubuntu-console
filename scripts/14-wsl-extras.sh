@@ -3,7 +3,7 @@
 # Module: 14-wsl-extras
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 6
+# Module Version: 7
 # 14. WSL EXTRAS & STARTUP HELPERS
 # -----------------------------------------------------------------------------
 # Purpose: Move WSL/X11 and OpenClaw startup helpers out of the thin loader.
@@ -12,7 +12,61 @@
 # and guarded so it won't break interactive shells.
 # @modular-section: wsl-extras
 # @depends: constants
-# @exports: (none — side-effects only: sets up X11/WSL env)
+# @exports: __tac_install_shim, __tac_install_pwsh_shims (internal helpers — the module is otherwise side-effects only)
+
+# __tac_install_shim <dest> — write an executable wrapper from stdin, atomically.
+# Writing straight to the destination (`cat > dest && chmod +x dest`) is not
+# atomic: an interrupted write leaves an executable but truncated stub, and the
+# `[[ ! -x <dest> ]]` guard would then treat it as already installed. Write a
+# temp file beside the target, make it executable, then rename it into place.
+function __tac_install_shim() {
+    local _dest="$1" _tmp
+    _tmp=$(mktemp "$_dest.XXXXXX") || {
+        printf '%s\n' "[wsl-extras] warning: cannot create a temp file beside $_dest" >&2
+        return 1
+    }
+    # 755 explicitly: mktemp creates 600, and `chmod +x` on that yields 711 —
+    # which drops the read bit a script needs, so other users could not run it.
+    if cat > "$_tmp" && chmod 755 "$_tmp" && mv -f "$_tmp" "$_dest"
+    then
+        return 0
+    fi
+    rm -f "$_tmp"
+    printf '%s\n' "[wsl-extras] warning: failed to install the shim at $_dest" >&2
+    return 1
+}
+
+# __tac_install_pwsh_shims — install the PowerShell wrappers (idempotent).
+# Defined outside the interactive guard so it can be exercised directly; it is
+# only CALLED from the interactive section below.
+function __tac_install_pwsh_shims() {
+    # PowerShell wrappers so WSL shells can reliably call Windows PowerShell / pwsh.
+    if [[ ! -x "$HOME/.local/bin/powershell.exe" ]]; then
+        mkdir -p "$HOME/.local/bin"
+        __tac_install_shim "$HOME/.local/bin/powershell.exe" <<'EOF'
+#!/usr/bin/env bash
+exec /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "$@"
+EOF
+    fi
+    if [[ ! -x "$HOME/.local/bin/pwsh" ]]; then
+        mkdir -p "$HOME/.local/bin"
+        __tac_install_shim "$HOME/.local/bin/pwsh" <<'EOF'
+#!/usr/bin/env bash
+exec '/mnt/c/Program Files/PowerShell/7/pwsh.exe' "$@"
+EOF
+    fi
+    # The bridge (__bridge_windows_api_keys / ockeys / oc-refresh-keys) resolves
+    # PowerShell as `pwsh.exe`, so it needs a wrapper under that exact name too.
+    # /etc/wsl.conf sets [interop] appendWindowsPath = false, so a bare `pwsh.exe`
+    # never resolves; this wrapper is what makes `command -v pwsh.exe` succeed.
+    if [[ ! -x "$HOME/.local/bin/pwsh.exe" ]]; then
+        mkdir -p "$HOME/.local/bin"
+        __tac_install_shim "$HOME/.local/bin/pwsh.exe" <<'EOF'
+#!/usr/bin/env bash
+exec '/mnt/c/Program Files/PowerShell/7/pwsh.exe' "$@"
+EOF
+    fi
+}
 
 # Interactive guard — many modules are sourced only for interactive shells
 case $- in
@@ -91,35 +145,9 @@ fi
 #     . "$NVM_DIR/bash_completion"
 # fi
 
-# PowerShell wrappers so WSL shells can reliably call Windows PowerShell / pwsh.
-if [[ ! -x "$HOME/.local/bin/powershell.exe" ]]; then
-    mkdir -p "$HOME/.local/bin"
-    cat > "$HOME/.local/bin/powershell.exe" <<'EOF'
-#!/usr/bin/env bash
-exec /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "$@"
-EOF
-    chmod +x "$HOME/.local/bin/powershell.exe"
-fi
-if [[ ! -x "$HOME/.local/bin/pwsh" ]]; then
-    mkdir -p "$HOME/.local/bin"
-    cat > "$HOME/.local/bin/pwsh" <<'EOF'
-#!/usr/bin/env bash
-exec '/mnt/c/Program Files/PowerShell/7/pwsh.exe' "$@"
-EOF
-    chmod +x "$HOME/.local/bin/pwsh"
-fi
-# The bridge (__bridge_windows_api_keys / ockeys / oc-refresh-keys) resolves
-# PowerShell as `pwsh.exe`, so it needs a wrapper under that exact name too.
-# /etc/wsl.conf sets [interop] appendWindowsPath = false, so a bare `pwsh.exe`
-# never resolves; this wrapper is what makes `command -v pwsh.exe` succeed.
-if [[ ! -x "$HOME/.local/bin/pwsh.exe" ]]; then
-    mkdir -p "$HOME/.local/bin"
-    cat > "$HOME/.local/bin/pwsh.exe" <<'EOF'
-#!/usr/bin/env bash
-exec '/mnt/c/Program Files/PowerShell/7/pwsh.exe' "$@"
-EOF
-    chmod +x "$HOME/.local/bin/pwsh.exe"
-fi
+# Install the PowerShell wrappers (defined above the interactive guard so they
+# can be unit-tested).
+__tac_install_pwsh_shims
 
 # NOTE: Do NOT place secrets (API keys, passwords) in this file. Use the
 # credential vault at ~/.openclaw/credentials/vault instead.
