@@ -35,7 +35,8 @@ jobs:
                tests/unit/05-spec-dec-threads.bats \
                tests/unit/06-spec-dec-stats.bats \
                tests/unit/07-spec-dec-launch.bats \
-               tests/unit/08-autotune-workload.bats
+               tests/unit/08-autotune-workload.bats \
+               tests/unit/09-check-agent-use.bats
 
       - name: Run integration suites
         run: |

@@ -3,10 +3,10 @@
 # ==============================================================================
 # 16. CHECK-OC-AGENT-USE — Agent usage regression checker
 # ==============================================================================
-# AI INSTRUCTION: This script is a manual diagnostics utility that reads the
-# live /dev/shm caches; it is NOT run by CI or the test suite (those files do
-# not exist in a CI runner). Runs on demand on a live machine.
-# Module Version: 1
+# AI INSTRUCTION: Regression checker. It reads $TAC_CACHE_DIR (default /dev/shm);
+# tests/unit/09-check-agent-use.bats points that at a fixture dir so it runs
+# hermetically in CI. Run it on a live machine for a real check.
+# Module Version: 2
 # @modular-section: check-oc-agent-use
 # @depends: none (standalone; reads TAC_CACHE_DIR files)
 # @exports: (none — standalone script, not sourced)

@@ -93,7 +93,7 @@ by either loader.
 | `scripts/prompt-sets.sh` | Shared SPEC-DEC-006 workload prompt sets (sourced by the benches). |
 | `scripts/18-lint.sh` | Repo static-analysis wrapper — delegates to `tools/lint.sh`. |
 | `tools/capture-golden-fixtures.sh` | Capture baseline command outputs for PowerShell parity checks. |
-| `tools/check-agent-use.sh` | Manual agent-usage regression check (reads live `/dev/shm` caches; not run in CI). |
+| `tools/check-agent-use.sh` | Agent-usage regression check (`$TAC_CACHE_DIR`; CI runs it via fixtures). |
 | `tools/check-repo-boundaries.sh` | Enforce the repo ownership boundary contract. CI guard. |
 | `tools/clean-orphans.sh` | Kill orphaned bench/llama-server keeper processes. |
 | `tools/docs-sync-check.sh` | Verify README matches current repo facts (counts/version). CI guard. |
@@ -475,7 +475,7 @@ extra source commands.
 │       ├── life_index.py               #     Canonical concept / life index
 │       └── constants.py                #     Shared constants & defaults
 ├── tools/                             # Standalone utility scripts (not sourced)
-│   ├── check-agent-use.sh             #   Manual agent-usage check (live /dev/shm)
+│   ├── check-agent-use.sh             #   Agent-usage regression check (CI via fixtures)
 │   ├── docs-sync-check.sh             #   README drift guard
 │   ├── import-windows-env.sh          #   Import Windows user env vars (standalone)
 │   ├── lint.sh                        #   bash -n + shellcheck + Unicode safety

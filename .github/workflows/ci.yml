@@ -98,7 +98,8 @@ jobs:
         run: |
           # 04-llama-cpp-inventory excluded: performs live downloads + mutates host
           bats tests/unit/01-refresh-keys.bats \
-               tests/unit/02-so-startup.bats
+               tests/unit/02-so-startup.bats \
+               tests/unit/09-check-agent-use.bats
 
       - name: Run integration tests
         run: |

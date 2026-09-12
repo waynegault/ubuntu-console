@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (775 total tests: 585 BATS + 190 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (779 total tests: 589 BATS + 190 Python).
 
 ### Running Tests
 
@@ -447,10 +447,10 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 | Full behavioural | `tactical-console.bats` | 383 | 900s |
 | Fast static analysis | `tactical-console-fast.bats` | 52 | 180s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
-| Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune) | `tests/unit/*.bats` | 39 | 120s |
+| Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use) | `tests/unit/*.bats` | 43 | 120s |
 | Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 109 | 300s |
 | Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 190 | 200s |
-| **Total** | | **775** | |
+| **Total** | | **779** | |
 
 ---
 
@@ -508,7 +508,7 @@ line counts because they drift.
 | Script | Purpose |
 |---|---|
 | `tools/capture-golden-fixtures.sh` | Snapshot selected command output for PowerShell parity checks |
-| `tools/check-agent-use.sh` | Manual agent-usage regression check (reads live `/dev/shm` caches) |
+| `tools/check-agent-use.sh` | Agent-usage regression check (CI via fixtures; live `/dev/shm` on demand) |
 | `tools/check-repo-boundaries.sh` | Repo ownership boundary guard (CI) |
 | `tools/clean-orphans.sh` | Kill orphaned bench/llama-server keeper processes (refuses while a bench/autotune is live) |
 | `tools/docs-sync-check.sh` | README drift guard: module count, loader version, test totals (CI) |
@@ -652,7 +652,7 @@ function __get_METRIC() {
 │       └── templates/kgraph.html      #     Cytoscape.js viewer template
 ├── tools/                             # Standalone utility scripts (not sourced)
 │   ├── capture-golden-fixtures.sh     #   Snapshot command output for PowerShell parity checks
-│   ├── check-agent-use.sh             #   Manual agent-usage regression check (live /dev/shm)
+│   ├── check-agent-use.sh             #   Agent-usage regression check (CI via fixtures)
 │   ├── check-repo-boundaries.sh       #   Repo ownership boundary guard
 │   ├── clean-orphans.sh               #   Kill orphaned bench/llama-server processes
 │   ├── docs-sync-check.sh             #   README drift guard (module count, version, test totals)
