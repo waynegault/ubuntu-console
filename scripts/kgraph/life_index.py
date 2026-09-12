@@ -23,6 +23,20 @@ from .models import Graph, GraphEdge
 
 logger = logging.getLogger(__name__)
 
+# Singular type for each life-index directory. `people` is irregular — a blind
+# `type_dir[:-1]` yields "peopl" — and the rest of the codebase's type
+# vocabulary spells it "person" (models.py, projection.py, memory_import.py).
+_TYPE_SINGULAR = {
+    "people": "person",
+    "agents": "agent",
+    "projects": "project",
+    "systems": "system",
+    "repos": "repo",
+    "decisions": "decision",
+    "preferences": "preference",
+    "workflows": "workflow",
+}
+
 
 def resolve_life_root(preferred: str | None = None) -> str:
     root = os.path.expanduser(preferred or LIFE_ROOT_DEFAULT)
@@ -113,7 +127,7 @@ def load_life_index(life_root: str | None = None) -> dict:
                 if line.strip() and not line.startswith("  -"):
                     in_aliases = False
             slug = os.path.splitext(name)[0].strip().lower()
-            rec_type = (metadata.get("type") or type_dir[:-1]).strip().lower()
+            rec_type = (metadata.get("type") or _TYPE_SINGULAR.get(type_dir, type_dir)).strip().lower()
             record = {
                 "slug": slug,
                 "title": title or slug,
