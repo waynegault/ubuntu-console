@@ -3,7 +3,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -16,8 +16,10 @@
 # ---------------------------------------------------------------------------
 function tactical_dashboard() {
     command clear
-    # Reset the background PID tracker (best-effort: the telemetry getters run
-    # in command substitutions, so their refresh PIDs do not reach this array).
+    # Reset the background PID tracker. The getters run through `_telemetry`,
+    # which runs them in this shell, so each background cache refresh's `$!` IS
+    # appended to __TAC_BG_PIDS; clearing here drops the previous render's
+    # (usually already-exited) PIDs before the new ones accumulate.
     __TAC_BG_PIDS=()
     local line; printf -v line '%*s' "$((UIWidth - 2))" ''; line="${line// /═}"
 

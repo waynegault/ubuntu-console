@@ -2,7 +2,7 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
@@ -27,7 +27,16 @@
 # ---------------------------------------------------------------------------
 function _telemetry() {
     local _tel_out
-    _tel_out=$(mktemp)
+    if ! _tel_out=$(mktemp 2>/dev/null); then
+        # mktemp failed (e.g. an unusable TMPDIR). Falling through would run the
+        # getter with `> ""`, printing its output into the middle of the
+        # dashboard while _telemetry_out stayed empty. Fall back to a plain
+        # command substitution so the value is still captured — at the cost of
+        # the background-refresh PID tracking this helper exists to preserve.
+        printf '%s\n' "[telemetry] warning: mktemp failed; falling back to command substitution" >&2
+        _telemetry_out=$("$@")
+        return 0
+    fi
     "$@" > "$_tel_out"
     _telemetry_out=$(< "$_tel_out")
     rm -f "$_tel_out"

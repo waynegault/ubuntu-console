@@ -3,7 +3,7 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================
@@ -179,18 +179,18 @@ fi
 # Clean up background telemetry subshells on shell exit.
 # Chains with any pre-existing EXIT trap to avoid silently overwriting it.
 #
-# NOTE: the telemetry getters are called via command substitution
-# (`host_raw=$(__get_host_metrics)`), so a `$!` recorded inside them belongs to
-# the substitution subshell, not this shell — the refresh jobs are short-lived
-# (1-5s) and reparent on exit, so __TAC_BG_PIDS is effectively empty here. The
-# array is kept (and reset per render) for getters run in the current shell and
-# the trap still chains other cleanup. Making this authoritative would require
-# the dashboard to read the caches directly instead of capturing stdout.
+# The dashboard calls the getters through `_telemetry` (07-telemetry.sh), which
+# runs them in THIS shell specifically so the `$!` of each background cache
+# refresh reaches __TAC_BG_PIDS (a plain `$(...)` would swallow it). The refresh
+# jobs are short-lived (1-5s), so by exit the array usually holds PIDs that have
+# already finished — harmless, since kill on a dead PID is a no-op. PIDs are
+# validated as numeric before signalling (matching env.sh's trap).
 __TAC_BG_PIDS=()
 function __tac_exit_cleanup() {
     local pid
-    for pid in "${__TAC_BG_PIDS[@]}"
+    for pid in "${__TAC_BG_PIDS[@]:-}"
     do
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
         kill "$pid" 2>/dev/null
     done
 }
