@@ -252,7 +252,6 @@ Cache TTLs per metric:
 | Host Metrics (CPU + iGPU + NVIDIA) | 10s | iGPU from `typeperf.exe` 3D engine, NVIDIA dGPU from Windows engine counters with `nvidia-smi` compute fallback |
 | GPU (NVIDIA detail) | 10s | nvidia-smi is slow (~1.2s) |
 | Battery | 120s | Changes slowly |
-| Context Used | 30s | Scans `agents/*/sessions/sessions.json` for token usage via `jq` |
 | OC Sessions | 60s | Uses `openclaw sessions --all-agents --json`; displays cache age |
 | OC Version | 86400s (24h) | CLI version barely changes |
 | LLM Slots | 5s | Async query to llama.cpp `/slots` endpoint |

@@ -800,9 +800,6 @@ Full AI agent operating manual: [docs/AGENT-GUIDELINES.md](docs/AGENT-GUIDELINES
 **Dashboard shows stale or missing data**
 Run `oc-cache-clear` to wipe all `/dev/shm/tac_*` caches, then `m` again.
 
-**CONTEXT USED shows "No data"**
-No agent sessions with non-zero `totalTokens` exist yet. The row scans `agents/*/sessions/sessions.json` for the newest entry. Create an agent session to populate it.
-
 **`so` shows "CRASHED - CHECK LOGS"**
 Run `le` for gateway errors. Most common cause: missing API keys — run `oc-refresh-keys` then `so` again.
 
