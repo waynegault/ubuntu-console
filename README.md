@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (779 total tests: 589 BATS + 190 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (783 total tests: 593 BATS + 190 Python).
 
 ### Running Tests
 
@@ -447,10 +447,10 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 | Full behavioural | `tactical-console.bats` | 383 | 900s |
 | Fast static analysis | `tactical-console-fast.bats` | 52 | 180s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
-| Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use) | `tests/unit/*.bats` | 43 | 120s |
+| Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use, clean-orphans) | `tests/unit/*.bats` | 47 | 120s |
 | Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 109 | 300s |
 | Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 190 | 200s |
-| **Total** | | **779** | |
+| **Total** | | **783** | |
 
 ---
 
@@ -687,7 +687,7 @@ function __get_METRIC() {
 │   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
 │   ├── test_models.py                 # Pydantic model tests (37 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (39 tests: 6+2+8+5+5+6+7)
+│   ├── unit/                          # BATS unit tests (47 tests: 6+2+8+5+5+6+7+4+4)
 │   └── integration/                   # BATS integration tests (109 tests: 14+42+10+16+1+26)
 └── systemd/
     ├── llama-watchdog.service
