@@ -15,6 +15,8 @@
 #   BUSY, so the CUDA lane is never started on a GPU we cannot prove free; strike
 #   read/write failures now warn instead of silently disabling recovery; add
 #   --version (also removes the now-unneeded SC2034 suppression for VERSION).
+# v3.4 (2026-09-12): gpu_busy honours gpu-busy.sh's exit contract — exit 1 is a
+#   normal BUSY answer, no longer logged as a probe failure every 60s.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -23,7 +25,7 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-VERSION="3.3"
+VERSION="3.4"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -115,22 +117,25 @@ strike_inc() {
 # treat it as BUSY and the CUDA lane is not started (matches the policy above).
 GPU_BUSY_PROBE_WARNED=0
 gpu_busy() {
-    local j
-    if ! j=$("$HOME/.local/bin/gpu-busy.sh" --json 2>/dev/null); then
-        if (( GPU_BUSY_PROBE_WARNED == 0 )); then
-            log "WARNING: gpu-busy.sh probe failed — treating GPU as BUSY (CUDA lane will not start)"
-            GPU_BUSY_PROBE_WARNED=1
-        fi
+    local j rc
+    j=$("$HOME/.local/bin/gpu-busy.sh" --json 2>/dev/null)
+    rc=$?
+    # gpu-busy.sh contract: exit 0 = FREE, exit 1 = BUSY, anything else = error.
+    # Exit 1 is a NORMAL "busy" answer (the GPU is held), not a probe failure, so
+    # it must not be logged as one -- it fires on every busy tick otherwise.
+    if (( rc == 0 )) && [[ -n "$j" ]]; then
+        grep -q '"busy":true' <<< "$j"
+        return
+    fi
+    if (( rc == 1 )); then
         return 0
     fi
-    if [[ -z "$j" ]]; then
-        if (( GPU_BUSY_PROBE_WARNED == 0 )); then
-            log "WARNING: gpu-busy.sh returned no output — treating GPU as BUSY (CUDA lane will not start)"
-            GPU_BUSY_PROBE_WARNED=1
-        fi
-        return 0
+    # Genuine probe failure (unexpected rc, or rc 0 with no JSON) -- FAIL CLOSED.
+    if (( GPU_BUSY_PROBE_WARNED == 0 )); then
+        log "WARNING: gpu-busy.sh probe failed (rc=$rc, ${#j} bytes) — treating GPU as BUSY (CUDA lane will not start)"
+        GPU_BUSY_PROBE_WARNED=1
     fi
-    grep -q '"busy":true' <<< "$j"
+    return 0
 }
 
 bench_lock() { [[ -f "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}" ]]; }

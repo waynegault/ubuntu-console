@@ -98,9 +98,15 @@ esac
 MOCK
     chmod +x "$WATCHDOG_MOCK_BIN/systemctl"
 
-    # Mock gpu-busy.sh: free unless the "busy" marker exists.
+    # Mock gpu-busy.sh. Mirrors the real contract: exit 0 = FREE, exit 1 = BUSY
+    # (with the JSON on stdout), exit 2 = a probe ERROR — the watchdog must
+    # treat a BUSY answer as normal (no warning) and only fail closed on errors.
     cat > "$WATCHDOG_MOCK_HOME/.local/bin/gpu-busy.sh" <<'MOCK'
 #!/usr/bin/env bash
+if [[ -f "$SYSTEMCTL_MOCK_STATE/gpu-probe-error" ]]; then
+    echo "mock probe exploded" >&2
+    exit 2
+fi
 if [[ -f "$SYSTEMCTL_MOCK_STATE/busy" ]]; then
     echo '{"busy":true,"reasons":["mock"]}'
     exit 1
@@ -206,6 +212,35 @@ setup() {
     [[ "$output" == *"GPU busy — stopping llama-server-nvidia"* ]]
     grep -q "stop llama-server-nvidia.service" "$SYSTEMCTL_MOCK_LOG"
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+}
+
+@test "integration: a busy GPU is not misreported as a probe failure" {
+    # gpu-busy.sh signals BUSY with exit 1 (the JSON goes to stdout). That is a
+    # normal answer, so the watchdog must not log its probe-failure warning —
+    # otherwise a held GPU spams the journal on every tick.
+    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    touch "$WATCHDOG_MOCK_STATE/busy"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"GPU busy — stopping llama-server-nvidia"* ]]
+    [[ "$output" != *"probe failed"* ]]
+}
+
+@test "integration: a gpu-busy probe error fails closed and warns" {
+    # exit 2 is a real probe error: the GPU cannot be proven free, so it must be
+    # treated as BUSY (CUDA lane stopped) and reported once.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    touch "$WATCHDOG_MOCK_STATE/gpu-probe-error"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"probe failed"* ]]
+    [[ "$output" == *"GPU busy — stopping llama-server-nvidia"* ]]
+    grep -q "stop llama-server-nvidia.service" "$SYSTEMCTL_MOCK_LOG"
 }
 
 @test "integration: watchdog skips the Xe lane when the bench lock is present" {
