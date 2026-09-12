@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 # 09f-oc-misc — Miscellaneous OC commands (kgraph, stinger, mem-index)
 # ==============================================================================
@@ -48,7 +48,7 @@ function oc-kgraph() {
 
     if $do_reindex; then
         __tac_info "kgraph" "[SYNCING MEMORY DB + AST — GRAPH DB]" "$C_Info"
-        "$TAC_PYTHON" - <<'PY' >/dev/null 2>&1 || true
+        "$TAC_PYTHON" - <<'PY' >/dev/null || true
 import sys, os
 repo_root = os.environ.get('TACTICAL_REPO_ROOT', '/home/wayne/ubuntu-console')
 if repo_root:
@@ -72,16 +72,16 @@ if memory_db:
     try:
         mem = load_from_memory_db(memory_db)
         graph = merge_graphs(graph, mem)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[kgraph] warning: memory DB import failed: {exc}", file=sys.stderr)
 
 # Run AST extraction on ubuntu-console repo
 if repo_root:
     try:
         ast = extract_repo_graph(repo_root, max_files=100)
         graph = merge_graphs(graph, ast)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[kgraph] warning: AST extraction failed: {exc}", file=sys.stderr)
 
 graph = tag_confidence(graph)
 save_to_graph_db(graph_db, graph)

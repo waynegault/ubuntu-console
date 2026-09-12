@@ -3,7 +3,7 @@
 # load-vault-env — Optional Windows-backed vault env loader
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
 # Optional helper loaded by scripts/14-wsl-extras.sh.
 #
 # Source (repo):   scripts/load-vault-env.sh
@@ -134,7 +134,8 @@ for fp in files:
         try:
             tokens = shlex.split(raw, posix=True)
             value = tokens[0] if len(tokens) == 1 else raw
-        except Exception:
+        except Exception as exc:
+            print(f"[load-vault-env] WARNING: could not parse value for {key}: {exc}", file=sys.stderr)
             value = raw
         env[key] = value
 

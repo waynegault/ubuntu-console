@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154,SC2015,SC2016,SC1090
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -596,8 +596,8 @@ function __oc_apply_secret_refs() {
     # validated write) — and skip the patch entirely when nothing changed, so a
     # no-op refresh performs no config writes at all.
     local _patch_info _patch _applied=0 _skipped=0 _failed=0
-    _patch_info=$(python3 - <<'PYEOF' 2>/dev/null
-import json, os
+    _patch_info=$(python3 - <<'PYEOF'
+import json, os, sys
 entries = [
     # Web Search Plugin API Keys
     ("plugins.entries.google.config.webSearch.apiKey", "GEMINI_API_KEY"),
@@ -641,8 +641,8 @@ cfg = {}
 try:
     with open(os.path.expanduser("~/.openclaw/openclaw.json")) as f:
         cfg = json.load(f)
-except Exception:
-    pass
+except Exception as exc:
+    print(f"[tac] warning: could not read openclaw.json ({exc}); patching from an empty config", file=sys.stderr)
 
 patch, changed, skipped = {}, 0, 0
 for path, var in entries:

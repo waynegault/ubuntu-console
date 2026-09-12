@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 27
+# Module Version: 28
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -656,7 +656,8 @@ _bench_request_once() {
 import sys, json
 try:
     d = json.load(sys.stdin)
-except Exception:
+except Exception as exc:
+    print(f'[tac] warning: could not parse chat response JSON: {exc}', file=sys.stderr)
     print('0|0|0|0|0'); sys.exit(0)
 u = d.get('usage', {}) or {}
 ct = u.get('completion_tokens', 0) or 0
@@ -1765,7 +1766,8 @@ try:
                         break
                     try:
                         obj = json.loads(payload)
-                    except Exception:
+                    except Exception as exc:
+                        print(f'[autotune] warning: skipping malformed SSE chunk: {exc}', file=sys.stderr)
                         continue
                     delta = (obj.get("choices") or [{}])[0].get("delta") or {}
                     # AUTOTUNE-003: reasoning models (R1 distills,
@@ -1780,8 +1782,8 @@ try:
                 else:
                     continue
                 break
-except Exception:
-    pass
+except Exception as exc:
+    print(f'[autotune] warning: ttft probe stream failed: {exc}', file=sys.stderr)
 print("%s|%s" % (ttft_ms, count))
 PYEOF
     ) || parsed="0|0"
