@@ -99,66 +99,51 @@ setup() {
 @test "integration: up checks connectivity" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    local step_src
-    step_src="$(declare -f __up_connectivity 2>/dev/null || true)"
-    # Check that up() delegates to the connectivity helper
-    [[ "$up_src" == *"__up_connectivity"* ]] || [[ "$step_src" == *"ping"* ]]
+    # Assert the orchestrator calls the helper. (The old helper-body fallback
+    # let the test pass even after the call was removed from up().)
+    [[ "$up_src" == *"__up_connectivity"* ]]
 }
 
 @test "integration: up runs APT update" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    local step_src
-    step_src="$(declare -f __up_apt_update 2>/dev/null || true)"
-    [[ "$up_src" == *"__up_apt_update"* ]] || [[ "$step_src" == *"apt"* ]]
+    [[ "$up_src" == *"__up_apt_update"* ]]
 }
 
 @test "integration: up checks NPM" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    local step_src
-    step_src="$(declare -f __up_npm_cargo 2>/dev/null || true)"
-    [[ "$up_src" == *"__up_npm_cargo"* ]] || [[ "$step_src" == *"NPM"* ]]
+    [[ "$up_src" == *"__up_npm_cargo"* ]]
 }
 
 @test "integration: up checks R packages" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    local step_src
-    step_src="$(declare -f __up_r_packages 2>/dev/null || true)"
-    [[ "$up_src" == *"__up_r_packages"* ]] || [[ "$step_src" == *"Rscript"* ]]
+    [[ "$up_src" == *"__up_r_packages"* ]]
 }
 
 @test "integration: up checks OpenClaw" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    local step_src
-    step_src="$(declare -f __up_openclaw_doctor 2>/dev/null || true)"
-    [[ "$up_src" == *"__up_openclaw_doctor"* ]] || [[ "$step_src" == *"openclaw doctor"* ]]
+    [[ "$up_src" == *"__up_openclaw_doctor"* ]]
 }
 
 @test "integration: up checks Python fleet" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    local step_src
-    step_src="$(declare -f __up_python_fleet 2>/dev/null || true)"
-    [[ "$up_src" == *"__up_python_fleet"* ]] || [[ "$step_src" == *"python3"* ]]
+    [[ "$up_src" == *"__up_python_fleet"* ]]
 }
 
 @test "integration: up checks GPU" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    local step_src
-    step_src="$(declare -f __up_gpu_status 2>/dev/null || true)"
-    [[ "$up_src" == *"__up_gpu_status"* ]] || [[ "$step_src" == *"nvidia"* ]]
+    [[ "$up_src" == *"__up_gpu_status"* ]]
 }
 
 @test "integration: up checks disk space" {
     local up_src
     up_src=$(declare -f up 2>/dev/null)
-    local step_src
-    step_src="$(declare -f __up_disk_audit 2>/dev/null || true)"
-    [[ "$up_src" == *"__up_disk_audit"* ]] || [[ "$step_src" == *"disk"* ]]
+    [[ "$up_src" == *"__up_disk_audit"* ]]
 }
 
 @test "integration: up has cooldown support" {

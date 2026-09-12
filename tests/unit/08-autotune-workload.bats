@@ -108,7 +108,7 @@ EOF
     [[ "$src" == *"ttft_ms=%s"* ]]
 }
 
-@test "autotune-004: profile-save records the parallel envelope (field 6)" {
+@test "autotune-004: profile-save records the parallel envelope (field 12)" {
     cat > "$LLM_REGISTRY" <<'EOF'
 #|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram
 1|Model One|model-one.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|1024|llama_server|auto|on|0|no|no|no
