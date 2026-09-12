@@ -3,27 +3,40 @@
 # mirror-vault.sh — Sync Obsidian vault to Windows
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 # @modular-section: mirror-vault
 # @depends: none (standalone; uses rsync / cp)
 # @exports: (none — standalone script, not sourced)
 #
-# Purpose: Mirror gigabrain workspace vault from WSL to Windows Obsidian folder
-# Usage:   ./tools/mirror-vault.sh [--dry-run] [src] [dest]
+# Purpose: Mirror the gigabrain-exported Obsidian vault from WSL to Windows.
+# Usage:   ./tools/mirror-vault.sh [--dry-run] [--delete] [src] [dest]
+#
+# Layout: the source vault root nests its notes under `Gigabrain/`, and the
+# destination is the Obsidian vault root (it holds `.obsidian/` plus that same
+# `Gigabrain/` folder), so `rsync SRC/ DEST/` reproduces the nesting exactly.
+#
+# Deletion is OPT-IN (`--delete`): a mirror that prunes by default would erase
+# Windows-only note folders on the first run, which is not recoverable. Without
+# it, files absent from the source are left in place.
 # ==============================================================================
 set -euo pipefail
 
-SRC_DEFAULT="/home/wayne/.openclaw/state/memory/gigabrain-workspace/obsidian-vault"
+# Confirmed on this machine: the exported vault is ~/.openclaw/obsidian-vault.
+# The older …/state/memory/gigabrain-workspace/obsidian-vault path was stale —
+# with it as the default the script could only ever exit "source not found".
+SRC_DEFAULT="/home/wayne/.openclaw/obsidian-vault"
 WIN_USERPROFILE_DEFAULT="/mnt/c/Users/wayne"
 DEST_DEFAULT="$WIN_USERPROFILE_DEFAULT/Obsidian/Gigabrain"
 # Confirmed Windows profile path via PowerShell: C:\Users\wayne
 
 DRY_RUN=0
+DELETE=0
 POSITIONAL=()
 for arg in "$@"; do
   case "$arg" in
     --dry-run|-n) DRY_RUN=1 ;;
-    -*) echo "Unknown option: $arg (usage: mirror-vault.sh [--dry-run] [src] [dest])" >&2; exit 2 ;;
+    --delete|--prune) DELETE=1 ;;
+    -*) echo "Unknown option: $arg (usage: mirror-vault.sh [--dry-run] [--delete] [src] [dest])" >&2; exit 2 ;;
     *) POSITIONAL+=("$arg") ;;
   esac
 done
@@ -62,10 +75,15 @@ case "$dest_fstype" in
     ;;
 esac
 
-rsync_args=(-a --delete
-  --exclude '.obsidian/workspace.json'
+rsync_args=(-a
+  # The source carries no Obsidian config, so a prune would otherwise strip the
+  # Windows vault's own .obsidian/ (workspace state, plugins, theme).
+  --exclude '.obsidian/'
   --exclude '.trash/'
   --exclude '.DS_Store')
+if (( DELETE == 1 )); then
+  rsync_args+=(--delete)
+fi
 if (( DRY_RUN == 1 )); then
   rsync_args+=(--dry-run --itemize-changes)
 fi
@@ -74,6 +92,9 @@ rsync "${rsync_args[@]}" "$SRC"/ "$DEST"/
 
 if (( DRY_RUN == 1 )); then
   echo "Dry run — no changes written."
+fi
+if (( DELETE == 0 )); then
+  echo "Note: files present only in $DEST were kept (pass --delete to prune them)."
 fi
 echo "Mirrored Gigabrain vault"
 echo "  from: $SRC"
