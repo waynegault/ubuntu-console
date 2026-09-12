@@ -3277,5 +3277,18 @@ class TestCliFindGitHooksDir(unittest.TestCase):
             self.assertIsNone(_find_git_hooks_dir())
 
 
+class TestKgrapModuleEntryPoint(unittest.TestCase):
+    """`python -m kgraph` — the __main__.py shim into cli.main()."""
+
+    def test_module_entry_point_prints_usage(self):
+        # __main__.py is only reachable in a subprocess, so coverage cannot
+        # attribute it in-process; this proves the entry point at least works.
+        env = dict(os.environ, PYTHONPATH=os.path.join(REPO_ROOT, "scripts"))
+        proc = subprocess.run([sys.executable, "-m", "kgraph", "--help"],
+                              capture_output=True, text=True, env=env, cwd=REPO_ROOT)
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("usage: kgraph", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
