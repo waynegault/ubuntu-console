@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Thin wrapper — delegates to 'openclaw model status --live' via tac-exec
+# Thin wrapper — delegates to the 'ocms' function (OpenClaw model-registry sync)
+# via tac-exec. NOTE: despite the file name, this does NOT read live model
+# status; use `tac-exec model status` for that.
 set -euo pipefail
 _tac_bin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec "$_tac_bin_dir/tac-exec" ocms "$@"

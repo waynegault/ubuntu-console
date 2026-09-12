@@ -3,14 +3,14 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 25
+# Module Version: 26
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
 # @modular-section: aliases
 # @depends: constants
 # @exports: code, oedit, llmconf, oclogs, le, lo, ocui, occhat, occonf, os, oa, ocstat,
-#   ocgs, ocv, status, ocms, cop, cop-ask, cop-init (plus standard shell aliases)
+#   ocgs, ocv, status, cop, cop-ask, cop-init (plus standard shell aliases)
 #   Note: owk → 'oc wk', ologs → 'oc log-dir'
 
 # __os_fetch_cached — Fetch JSON with TTL cache.
@@ -419,10 +419,9 @@ function status() {
     export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-}"
     openclaw status
 }
-# ocms — Show OpenClaw model status with live probe.
-function ocms() {
-    oc-sync-models "$@"
-}
+# ocms lives in 09e-oc-health.sh (beside oc-sync-models, which it aliases). It
+# was previously defined here too; that second definition shadowed nothing but
+# confused ownership, so it was removed in favour of the single canonical one.
 
 # ---- GitHub Copilot CLI ----
 alias '??'='copilot -p'
