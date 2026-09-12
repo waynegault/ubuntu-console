@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -176,6 +176,11 @@ __TAC_BG_PIDS=()
 # Library mode skips 13-init.sh, so install a lightweight cleanup trap here.
 # Chain with any pre-existing EXIT trap instead of clobbering it, matching the
 # interactive loader (13-init.sh) so tac-exec callers keep their own cleanup.
+#
+# The previous action is reused VERBATIM: `trap -p` prints it single-quoted by
+# bash, so we inject our call just before that closing quote and let eval
+# re-read the line.  The body's own quoting (embedded ' " ; newlines) is never
+# re-parsed, unlike naively stripping quotes and re-composing the trap.
 function __tac_env_cleanup_bg_pids() {
     local _pid
     for _pid in "${__TAC_BG_PIDS[@]:-}"
@@ -184,9 +189,17 @@ function __tac_env_cleanup_bg_pids() {
         kill "$_pid" 2>/dev/null || true
     done
 }
-_tac_env_prev_exit_trap=$(trap -p EXIT | sed "s/trap -- '//;s/' EXIT//")
-trap '__tac_env_cleanup_bg_pids; '"${_tac_env_prev_exit_trap:-}" EXIT
-unset _tac_env_prev_exit_trap
+_tac_env_prev_exit=$(trap -p EXIT)
+if [[ -z "$_tac_env_prev_exit" ]] \
+   || [[ "${_tac_env_prev_exit#trap -- }" == "'' EXIT" ]]; then
+    # No prior trap, or one with an empty action: ours is the whole handler.
+    trap __tac_env_cleanup_bg_pids EXIT
+else
+    _tac_env_prev_head="${_tac_env_prev_exit% EXIT}"
+    eval "${_tac_env_prev_head%\'}; __tac_env_cleanup_bg_pids' EXIT"
+    unset _tac_env_prev_head
+fi
+unset _tac_env_prev_exit
 
 unset _tac_env_root _tac_lib_f _tac_lib_dir
 

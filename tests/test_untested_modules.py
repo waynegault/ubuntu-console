@@ -506,6 +506,21 @@ class TestCliGraphLoad(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("failed to load graph file", stderr.getvalue())
 
+    def test_schema_invalid_graph_file_exits_with_message(self):
+        # A provenance tag in `source` with no `from` has no real endpoint; the
+        # CLI must report it cleanly rather than letting a pydantic traceback
+        # escape from a renderer.
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "bad-schema.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"nodes": [], "edges": [{"source": "ast", "target": "n2"}]}, f)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as ctx:
+                    self._load(path)
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("invalid graph", stderr.getvalue())
+
     def test_malformed_graph_file_exits_with_message(self):
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "bad.json")

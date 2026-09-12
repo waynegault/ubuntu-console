@@ -218,11 +218,24 @@ setup() {
 @test "integration: watchdog skips the Xe lane while systemd is already activating" {
     echo "activating" > "$WATCHDOG_MOCK_STATE/xe_state"
     echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
-
     run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"Xe unit activating"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+}
+
+@test "integration: watchdog skips the CUDA lane while systemd is already activating" {
+    touch "$WATCHDOG_MOCK_STATE/healthy"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "activating" > "$WATCHDOG_MOCK_STATE/nv_state"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"CUDA unit activating"* ]]
+    # Must not start (or restart) a unit that systemd is mid-start on.
+    [[ ! -f "$WATCHDOG_MOCK_STATE/start_called" ]]
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
 }
 

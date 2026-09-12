@@ -3,7 +3,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 23
+# Module Version: 24
 # ==============================================================================
 # 9. OPENCLAW MANAGER (THIN LOADER)
 # ==============================================================================
@@ -50,6 +50,8 @@ do
     if [[ -f "$_09_f" ]]; then
         # shellcheck disable=SC1090
         source "$_09_f"
+    else
+        printf '%s\n' "[tac] 09-openclaw: missing sub-module $_09_f" >&2
     fi
 done
 unset _MOD_DIR _09_mod _09_f

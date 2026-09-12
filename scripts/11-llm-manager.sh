@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 96
+# Module Version: 97
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP (THIN LOADER)
 # ==============================================================================
@@ -38,6 +38,8 @@ do
     if [[ -f "$_11_f" ]]; then
         # shellcheck disable=SC1090
         source "$_11_f"
+    else
+        printf '%s\n' "[tac] 11-llm-manager: missing sub-module $_11_f" >&2
     fi
 done
 unset _MOD_DIR _11_mod _11_f

@@ -9,6 +9,8 @@
 # v3.1 (2026-09-11): honour health()'s 503 "still loading" signal — a loading
 #   lane is neither struck nor restarted; drop a redundant re-probe that could
 #   swallow a recovery without resetting strikes.
+# v3.2 (2026-09-12): NV lane skips a unit that systemd is already activating
+#   (mirrors the Xe lane) instead of issuing a start on a mid-start unit.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -18,7 +20,7 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="3.1"
+VERSION="3.2"
 set -uo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -153,6 +155,11 @@ elif [[ "$nv_state" == "active" ]]; then
             if recover "$NV_UNIT" "$NV_PORT"; then strike_reset "$STRIKE_NV"; fi
         fi
     fi
+elif [[ "$nv_state" == "activating" ]]; then
+    # systemd is already bringing the unit up (mirrors the Xe lane): issuing a
+    # start would act on a unit that is mid-start.
+    log "CUDA unit activating — systemd handling recovery; skipping"
+    strike_reset "$STRIKE_NV"
 else
     # GPU free but CUDA unit not active -> bring it up (it is the preferred lane when free)
     if bench_lock; then

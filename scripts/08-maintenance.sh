@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 33
+# Module Version: 34
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -1411,7 +1411,14 @@ function __cl_step() {
             return 1
         fi
     fi
-    "$@" >/dev/null 2>&1
+    if ! "$@" >/dev/null 2>&1
+    then
+        # Report the real outcome: a failing apt/brew/docker prune previously
+        # showed [COMPLETE].  (Command output — including a sudo password
+        # prompt — stays suppressed, as before.)
+        __tac_info "$label" "[FAILED]" "$C_Error"
+        return 1
+    fi
     __tac_info "$label" "[COMPLETE]" "$C_Success"
     ((deep_count++))
     return 0

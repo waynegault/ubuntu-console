@@ -15,6 +15,8 @@ import os
 import sys
 import tempfile
 
+from pydantic import ValidationError
+
 from .constants import GRAPH_DB_DEFAULT, SAMPLE_GRAPH
 from .graph_db import load_from_graph_db, resolve_memory_db_path
 from .html import generate_html
@@ -27,6 +29,7 @@ from .ast_extractor import ast_available, extract_repo_graph
 from .query import explain_node, find_path, format_explain, format_path, query_nodes
 from .call_flow import generate_call_flow_html, generate_call_flow_mermaid
 from .update import incremental_update, start_watch
+from .models import Graph
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +42,19 @@ def _load_graph(args: argparse.Namespace) -> dict:
     if args.graph:
         try:
             with open(args.graph, "r", encoding="utf-8") as gf:
-                return json.load(gf)
+                data = json.load(gf)
         except (OSError, json.JSONDecodeError) as exc:
             print(f"Error: failed to load graph file '{args.graph}': {exc}", file=sys.stderr)
             sys.exit(1)
+        # Validate here so a single malformed edge (e.g. a provenance tag left
+        # in `source` with no endpoint) fails with a clear message instead of a
+        # pydantic traceback deep inside a renderer.
+        try:
+            Graph.from_dict(data)
+        except ValidationError as exc:
+            print(f"Error: invalid graph in '{args.graph}': {exc}", file=sys.stderr)
+            sys.exit(1)
+        return data
 
     graph_db = args.graph_db or os.path.expanduser(GRAPH_DB_DEFAULT)
     memory_db = args.import_db or resolve_memory_db_path()

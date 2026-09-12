@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -240,8 +240,9 @@ import os
 import sys
 
 expected = os.environ.get("LLAMA_CPP_PYTHON_VERSION", "0.3.23")
-import llama_cpp  # type: ignore
-import uvicorn  # type: ignore
+# No type checker analyses this heredoc, so no suppression comments are needed.
+import llama_cpp
+import uvicorn
 if getattr(llama_cpp, "__version__", "unknown") != expected:
     raise SystemExit(1)
 PY
