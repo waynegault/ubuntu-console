@@ -45,7 +45,7 @@ jobs:
             shellcheck -s bash "$f"
           done
 
-      - name: Unicode safety (advisory)
+      - name: Unicode safety
         run: SKIP_UNICODE_CHECK=0 tools/lint.sh
 
       - name: Repo boundary guard

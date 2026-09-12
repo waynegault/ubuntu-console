@@ -6,7 +6,7 @@
 # Usage: ./tools/lint.sh
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -83,9 +83,37 @@ do
 done
 
 echo ""
-echo "=== Unicode Safety (non-ASCII in executable code) ==="
+echo "=== Unicode Safety ==="
+# Always-on FAIL: invisible codepoints that can hide code or forge identifiers —
+# a BOM, zero-width characters, and bidirectional controls (Trojan Source).
+# These are never legitimate here, so any hit fails the build.
+dangerous_rc=0
+for f in "$REPO_ROOT"/tactical-console.bashrc \
+         "$REPO_ROOT"/install.sh \
+         "$REPO_ROOT"/scripts/*.sh \
+         "$REPO_ROOT"/tools/*.sh \
+         "$REPO_ROOT"/bin/*.sh
+do
+    hits=$(grep -Pn '[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]' "$f" 2>/dev/null || true)
+    if [[ -n "$hits" ]]
+    then
+        echo "  FAIL  ${f#"$REPO_ROOT"/}  - invisible/dangerous Unicode:"
+        echo "$hits" | head -5
+        dangerous_rc=1
+    fi
+done
+if (( dangerous_rc == 0 ))
+then
+    echo "  PASS  no BOM / zero-width / bidi control characters"
+else
+    echo "  FAIL  BOM / zero-width / bidi control characters are never allowed"
+    rc=1
+fi
+
+# Advisory WARN: other non-ASCII on executable lines (often false positives from
+# author names and display glyphs), reported for review but non-fatal.
 if [[ "${SKIP_UNICODE_CHECK:-0}" == "1" ]]; then
-    echo "  SKIPPED - non-ASCII check disabled by SKIP_UNICODE_CHECK=1"
+    echo "  (advisory non-ASCII check skipped: SKIP_UNICODE_CHECK=1)"
 else
     unicode_rc=0
     for f in "$REPO_ROOT"/tactical-console.bashrc \
@@ -107,12 +135,12 @@ else
             unicode_rc=1
         fi
     done
-    # Don't fail the build for Unicode warnings (they're often false positives
-    # from author names, comments, etc.), but report them for review.
+    # Advisory only: non-ASCII here is often a false positive, so it is reported
+    # (WARN) but never fails the build.
     if (( unicode_rc == 0 ))
     then
         echo ""
-        echo "  All files passed Unicode check."
+        echo "  All files passed the advisory non-ASCII check."
     fi
 fi
 
