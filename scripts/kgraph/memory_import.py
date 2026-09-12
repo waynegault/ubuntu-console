@@ -34,7 +34,10 @@ def _load_concept_config() -> dict:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        # Without this config all concept filtering (scaffolding labels,
+        # aliases, low-value concepts, agent roles) is silently disabled.
+        logger.warning("concept config unavailable at %s: %s — filtering disabled", path, exc)
         return {}
 
 
@@ -567,12 +570,20 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
                 if emb_blob and isinstance(emb_blob, str):
                     try:
                         vec = json.loads(emb_blob)
-                        if isinstance(vec, list) and len(vec) > 0:
+                        if isinstance(vec, list) and vec:
+                            # Coerce to floats so non-numeric elements raise
+                            # here (and are skipped) rather than corrupting the
+                            # dot product later.
+                            vec = [float(x) for x in vec]
                             mag = sum(x * x for x in vec) ** 0.5
                             if mag > 0:
                                 chunk_embeddings.append((f'chunk:{chunk_key}', path or '', vec, mag))
-                    except (json.JSONDecodeError, ValueError):
-                        pass
+                    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+                        # One malformed embedding must not abort the whole import.
+                        logger.debug(
+                            "skipping malformed embedding for chunk %s: %s",
+                            chunk_key, exc, exc_info=True,
+                        )
 
                 # Extract H2/H3 headings as topic nodes
                 for hm in heading_pattern.finditer(chunk_text or ''):
@@ -751,6 +762,10 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
                 for j in range(i + 1, len(chunk_embeddings)):
                     cid_b, path_b, vec_b, mag_b = chunk_embeddings[j]
                     if path_a == path_b:
+                        continue
+                    # Cosine similarity is undefined for mismatched dimensions
+                    # (zip() would silently truncate and yield a bogus score).
+                    if len(vec_a) != len(vec_b):
                         continue
                     dot = sum(a * b for a, b in zip(vec_a, vec_b))
                     sim = dot / (mag_a * mag_b)
@@ -1207,7 +1222,7 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
             "  FROM memory_open_loops"
         ):
             d = dict(row)
-            if not include_all and str(d.get('status') or 'open') != 'active':
+            if not include_all and str(d.get('status') or 'open') != 'open':
                 continue
             _add_node({
                 'id': f"open_loop:{d['loop_id']}",

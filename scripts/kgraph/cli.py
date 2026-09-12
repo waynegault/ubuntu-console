@@ -199,6 +199,7 @@ def main() -> None:
             print("Error: not in a git repository", file=sys.stderr)
             sys.exit(1)
 
+        marker = "kgraph auto-rebuild"
         if args.install_hook:
             hook = (
                 "#!/bin/bash\n"
@@ -209,6 +210,19 @@ def main() -> None:
             )
             for name in ("post-commit", "post-merge"):
                 path = os.path.join(hook_dir, name)
+                if os.path.exists(path):
+                    # Never clobber a hook kgraph did not install (pre-commit,
+                    # husky, …): overwriting one would silently break the
+                    # user's existing tooling.
+                    try:
+                        with open(path, "r", encoding="utf-8", errors="replace") as existing:
+                            current = existing.read()
+                    except OSError as exc:
+                        print(f"Skipped {name}: cannot read existing hook ({exc})", file=sys.stderr)
+                        continue
+                    if marker not in current:
+                        print(f"Skipped {name}: existing hook was not installed by kgraph (left untouched)", file=sys.stderr)
+                        continue
                 with open(path, "w") as f:
                     f.write(hook)
                 os.chmod(path, 0o755)
@@ -216,9 +230,20 @@ def main() -> None:
         else:
             for name in ("post-commit", "post-merge"):
                 path = os.path.join(hook_dir, name)
-                if os.path.exists(path):
-                    os.remove(path)
-                    print(f"Removed {path}")
+                if not os.path.exists(path):
+                    continue
+                try:
+                    with open(path, "r", encoding="utf-8", errors="replace") as existing:
+                        current = existing.read()
+                except OSError as exc:
+                    # Fail closed: if we cannot prove it is ours, keep it.
+                    print(f"Skipped {name}: cannot read hook ({exc})", file=sys.stderr)
+                    continue
+                if marker not in current:
+                    print(f"Skipped {name}: not a kgraph hook (left untouched)", file=sys.stderr)
+                    continue
+                os.remove(path)
+                print(f"Removed {path}")
         return
 
     # ── Update mode ──

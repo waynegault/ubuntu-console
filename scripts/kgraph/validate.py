@@ -65,6 +65,11 @@ def _check_xss(data: dict) -> list[dict]:
     errors: list[dict] = []
     for kind, items in (("nodes", data.get("nodes", [])),
                         ("edges", data.get("edges", []))):
+        if not isinstance(items, list):
+            # A non-list nodes/edges value is already reported by
+            # validate_graph; skip the scan instead of raising TypeError
+            # (which would escape callers and drop the HTTP response).
+            continue
         for idx, item in enumerate(items):
             if not isinstance(item, dict):
                 continue

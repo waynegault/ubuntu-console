@@ -41,6 +41,12 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
     from .ast_extractor import ast_available, extract_repo_graph
     from .life_index import load_life_index
 
+    # Expand a user-supplied memory-DB path once, up front: otherwise the
+    # `os.path.exists` check below fails for a literal "~/…" path and the
+    # request silently falls through to merging every auto-resolved registry.
+    if mem_db_path:
+        mem_db_path = os.path.expanduser(mem_db_path)
+
     builder = GraphBuilder()
 
     # 1. Load existing user graph
@@ -137,6 +143,8 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
     Polls for file changes at the given interval.  When detected,
     runs incremental_update().
     """
+    if mem_db_path:
+        mem_db_path = os.path.expanduser(mem_db_path)
     file_hashes: dict[str, str] = {}
 
     def _hash_files(directory: str) -> dict[str, str]:
@@ -150,8 +158,10 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
                 try:
                     data = fpath.read_bytes()
                     result[str(fpath)] = hashlib.sha256(data).hexdigest()
-                except OSError:
-                    pass
+                except OSError as exc:
+                    # An unreadable file is dropped from the watch set, so
+                    # changes to it would never trigger a rebuild — log it.
+                    logger.debug("skipping unreadable file %s: %s", fpath, exc, exc_info=True)
         return result
 
     if source_dir:
@@ -173,8 +183,8 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
     for _p in _mem_watch_paths():
         try:
             last_mem_mtimes[_p] = os.path.getmtime(_p)
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug("cannot stat watched memory DB %s: %s", _p, exc, exc_info=True)
 
     print("  Watch mode active. Press Ctrl+C to stop.")
     while True:
@@ -190,7 +200,8 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
         for _p in _mem_watch_paths():
             try:
                 _mt = os.path.getmtime(_p)
-            except OSError:
+            except OSError as exc:
+                logger.debug("cannot stat watched memory DB %s: %s", _p, exc, exc_info=True)
                 continue
             if _mt != last_mem_mtimes.get(_p):
                 changed = True

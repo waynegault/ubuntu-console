@@ -6,19 +6,20 @@ package facades.
 """
 
 import os
-import sys
 import tempfile
 import unittest
 
-REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
-SCRIPT_DIR = os.path.join(REPO_ROOT, 'scripts')
-sys.path.insert(0, SCRIPT_DIR)
+from _paths import SCRIPT_DIR
 
-from kgraph.wiring import (  # noqa: E402  (sys.path hack above)
+from kgraph.wiring import (
     analyze_wiring,
     format_wiring_report,
     wiring_summary,
 )
+
+# Guard: the _paths bootstrap must have made scripts/ importable.
+if not os.path.isdir(SCRIPT_DIR):
+    raise RuntimeError(f"kgraph scripts/ dir not found: {SCRIPT_DIR}")
 
 FIXTURE_FILES = {
     'pkg/__init__.py': '"""pkg package."""\n',

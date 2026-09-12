@@ -54,7 +54,14 @@ def _build_nx_graph(graph: Graph) -> Any:
     for e in graph.edges:
         if G.has_node(e.source) and G.has_node(e.target):
             weight = e.semantic_score if e.semantic_score is not None else e.weight
-            G.add_edge(e.source, e.target, weight=weight)
+            # `weight` is a similarity/strength (higher = stronger tie) and is
+            # used as tie-strength by Louvain/eigenvector. networkx shortest-path
+            # algorithms instead treat a `weight` attribute as a *distance*, so
+            # store an explicit `distance` (stronger = shorter) and use that for
+            # betweenness; otherwise a strong-linked hub is scored as a weak
+            # bridge.
+            G.add_edge(e.source, e.target, weight=weight,
+                       distance=1.0 / max(float(weight), 1e-9))
     return G
 
 
@@ -152,39 +159,50 @@ def compute_centrality(graph: Graph | dict) -> dict:
 
     degree = dict(G.degree())
     try:
-        betweenness = nx.betweenness_centrality(G, weight="weight", k=min(200, G.number_of_nodes()))
+        betweenness = nx.betweenness_centrality(G, weight="distance", k=min(200, G.number_of_nodes()))
     except (ValueError, ZeroDivisionError) as exc:
         logger.warning("Betweenness centrality computation failed: %s", exc)
         betweenness = {}
 
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
+    # Capture — and log — any warnings numpy emits for ill-conditioned /
+    # disconnected graphs rather than hiding them behind a blanket filter.
+    # (A `simplefilter("ignore")` would silence a real signal; here every
+    # captured warning is logged with its source location.)  The exception
+    # path below still falls back to per-component power iteration.
+    eigenvector: dict[str, float] = {}
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
+        try:
             eigenvector = nx.eigenvector_centrality_numpy(G, weight="weight")
-    except (nx.AmbiguousSolution, ValueError, TypeError, ZeroDivisionError, ArithmeticError) as exc:
-        # numpy eigenvector centrality is undefined for disconnected graphs
-        # (nx.AmbiguousSolution). Fall back to per-component power iteration:
-        # each connected component is scored on its own dominant-eigenvector
-        # scale; isolated nodes stay at 0.0.
+        except (nx.AmbiguousSolution, ValueError, TypeError, ZeroDivisionError, ArithmeticError) as exc:
+            # numpy eigenvector centrality is undefined for disconnected graphs
+            # (nx.AmbiguousSolution). Fall back to per-component power iteration:
+            # each connected component is scored on its own dominant-eigenvector
+            # scale; isolated nodes stay at 0.0.
+            logger.warning(
+                "Eigenvector centrality (numpy) failed (%s); using per-component fallback", exc
+            )
+            eigenvector = {}
+            for component in nx.connected_components(G):
+                if len(component) < 2:
+                    continue
+                try:
+                    ev = nx.eigenvector_centrality(
+                        G.subgraph(component), max_iter=200, weight="weight"
+                    )
+                except (nx.PowerIterationFailedConvergence, ValueError, TypeError,
+                        ZeroDivisionError, ArithmeticError) as exc2:
+                    logger.warning(
+                        "Eigenvector centrality fallback failed for component of %d nodes: %s",
+                        len(component), exc2,
+                    )
+                    continue
+                eigenvector.update(ev)
+    for warning in caught_warnings:
         logger.warning(
-            "Eigenvector centrality (numpy) failed (%s); using per-component fallback", exc
+            "eigenvector_centrality_numpy warning at %s:%s: %s",
+            warning.filename, warning.lineno, warning.message,
         )
-        eigenvector = {}
-        for component in nx.connected_components(G):
-            if len(component) < 2:
-                continue
-            try:
-                ev = nx.eigenvector_centrality(
-                    G.subgraph(component), max_iter=200, weight="weight"
-                )
-            except (nx.PowerIterationFailedConvergence, ValueError, TypeError,
-                    ZeroDivisionError, ArithmeticError) as exc2:
-                logger.warning(
-                    "Eigenvector centrality fallback failed for component of %d nodes: %s",
-                    len(component), exc2,
-                )
-                continue
-            eigenvector.update(ev)
 
     for nid in G.nodes():
         result[nid] = {

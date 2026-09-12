@@ -8,7 +8,10 @@ to inject graph data and write the output file.
 from __future__ import annotations
 
 import json
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 _TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "kgraph.html")
 
@@ -17,7 +20,10 @@ def _load_template() -> str:
     try:
         with open(_TEMPLATE_PATH, "r", encoding="utf-8") as f:
             return f.read()
-    except OSError:
+    except OSError as exc:
+        # A packaging regression here renders a broken viewer; log loudly so
+        # it is not mistaken for a normal "empty graph" page.
+        logger.error("kgraph viewer template missing or unreadable at %s: %s", _TEMPLATE_PATH, exc)
         return "<html><body><h1>Template not found</h1><p>Expected at %s</p></body></html>" % _TEMPLATE_PATH
 
 

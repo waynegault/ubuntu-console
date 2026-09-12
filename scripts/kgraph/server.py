@@ -134,8 +134,17 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
                 logger.warning("Failed to load graph source %s: %s", name, exc)
 
         if has_store:
-            with open(self.store, "r", encoding="utf-8") as f:
-                return json.load(f), "json-store"
+            # An unreadable/corrupt store must not break the fallback chain:
+            # OSError (permissions, EIO) and JSONDecodeError (a ValueError)
+            # both fall through to the sample graph with a log.
+            try:
+                with open(self.store, "r", encoding="utf-8") as f:
+                    return json.load(f), "json-store"
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "Failed to load graph store %s: %s; falling back to sample graph",
+                    self.store, exc,
+                )
 
         return SAMPLE_GRAPH, "sample"
 

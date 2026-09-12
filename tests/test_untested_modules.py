@@ -9,18 +9,15 @@ import http.client
 import io
 import json
 import os
-import sys
 import tempfile
 import threading
 import unittest
 from http.server import HTTPServer
 from unittest import mock
 
-REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
-SCRIPT_DIR = os.path.join(REPO_ROOT, "scripts")
-sys.path.insert(0, SCRIPT_DIR)
+from _paths import REPO_ROOT
 
-import kgraph  # noqa: E402
+import kgraph
 
 
 # ── Shared fixtures ────────────────────────────────────────────────────

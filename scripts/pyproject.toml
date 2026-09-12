@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "openclaw-kgraph"
 version = "2.0.0"
 description = "Knowledge graph — AST extractor, community detection, MCP server, CLI tools"
-readme = "README.md"
+readme = "kgraph/README-pkg.md"
 license = {text = "MIT"}
 requires-python = ">=3.12"
 dependencies = [
@@ -43,4 +43,4 @@ include = ["kgraph*"]
 [tool.setuptools.package-data]
 # templates/kgraph.html is loaded at import time by html.py; without it the
 # installed tool silently serves a "Template not found" viewer.
-kgraph = ["templates/*.html", "*.md", "audit_security.md"]
+kgraph = ["templates/*.html", "*.md"]

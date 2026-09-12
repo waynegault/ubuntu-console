@@ -790,7 +790,9 @@ def _project_semantic(node_by_id, edges, effective_threshold, semantic_threshold
         current_type = str(updated.get("type", "") or "").lower()
         if record_type in concept_types and current_type == "topic":
             updated["type"] = record_type
-            updated["inferred_type"] = record_type
+            # GraphNode.inferred_type is a bool, and the field is only ever
+            # tested for truthiness; the canonical kind lives in `type`.
+            updated["inferred_type"] = True
             updated["type_confidence"] = max(float(updated.get("type_confidence", 0.0) or 0.0), 0.96)
         updated["canonical_slug"] = str(record.get("slug") or "")
         updated["canonical_path"] = str(record.get("path") or "")
@@ -964,6 +966,10 @@ def _project_semantic(node_by_id, edges, effective_threshold, semantic_threshold
             keep_nodes.add(nid)
 
     return enrich({
-        "nodes": [node_by_id[nid] for nid in keep_nodes if nid in node_by_id],
+        # Emit the canonical-biased copies (canonical label/type/slug/path
+        # computed by apply_canonical_bias).  Using node_by_id here discarded
+        # that work, so the served graph never showed canonical labels.
+        "nodes": [concept_nodes.get(nid) or node_by_id[nid]
+                  for nid in keep_nodes if nid in node_by_id],
         "edges": keep_edges,
     }, "semantic")

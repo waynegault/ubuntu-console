@@ -5,13 +5,11 @@ import sys
 import tempfile
 import unittest
 
+from _paths import SCRIPT_DIR
 
-REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
-SCRIPT_DIR = os.path.join(REPO_ROOT, 'scripts')
 # Import the kgraph package directly; the backward-compatibility shim
 # (scripts/kgraph.py) was removed during cleanup.
-sys.path.insert(0, SCRIPT_DIR)
-import kgraph  # noqa: E402
+import kgraph
 
 
 def load_kgraph_module():
@@ -1134,6 +1132,15 @@ class TestRegistryAdapter(unittest.TestCase):
         cur.execute(
             "INSERT INTO memory_events VALUES (?,?,?,?,?,?,?)",
             ('evt-1', '2026-04-01', 'capture', 'capture_inserted', '[]', 'mem-1', '{}'))
+        # open loops: status 'open' survives the default filter;
+        # 'closed' is dropped unless include_all (regression: the filter
+        # compared a 'open' default against 'active' and dropped everything).
+        cur.execute(
+            "INSERT INTO memory_open_loops VALUES (?,?,?,?,?,?)",
+            ('loop-1', 'followup', 'Rotate gateway token', 'open', 'high', None))
+        cur.execute(
+            "INSERT INTO memory_open_loops VALUES (?,?,?,?,?,?)",
+            ('loop-2', 'followup', 'Old closed item', 'closed', 'low', None))
         conn.commit()
         conn.close()
 
@@ -1230,3 +1237,23 @@ class TestRegistryAdapter(unittest.TestCase):
             self.assertNotIn('memory:native:chunk-dup', nids)
             # unrelated chunks still import
             self.assertIn('memory:native:chunk-1', nids)
+
+    def test_open_loop_open_status_survives_filter(self):
+        """A loop with status='open' is kept by default (not silently dropped)."""
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'registry.sqlite')
+            self._make_registry(path)
+            nodes, _ = self._run(path)
+            nids = [n.id for n in nodes]
+            self.assertIn('open_loop:loop-1', nids)
+            self.assertNotIn('open_loop:loop-2', nids)
+
+    def test_open_loop_include_all_keeps_closed(self):
+        """include_all keeps closed loops too."""
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'registry.sqlite')
+            self._make_registry(path)
+            nodes, _ = self._run(path, include_all=True)
+            nids = [n.id for n in nodes]
+            self.assertIn('open_loop:loop-1', nids)
+            self.assertIn('open_loop:loop-2', nids)

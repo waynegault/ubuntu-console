@@ -44,7 +44,10 @@ def _load_grammars() -> dict:
         import tree_sitter_python
         _LANGUAGES["bash"] = Language(tree_sitter_bash.language())
         _LANGUAGES["python"] = Language(tree_sitter_python.language())
-    except ImportError:
+    except ImportError as exc:
+        # A partial/absent grammar set disables AST extraction entirely; log it
+        # so the graph silently losing all code nodes is visible.
+        logger.warning("tree-sitter grammars unavailable (%s); AST extraction disabled", exc)
         _AST_AVAILABLE = False
     return _LANGUAGES
 
@@ -196,7 +199,8 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
 
         try:
             code = fpath.read_bytes()
-        except OSError:
+        except OSError as exc:
+            logger.debug("skipping unreadable source file %s: %s", fpath, exc, exc_info=True)
             continue
 
         rel_path = fpath.relative_to(root).as_posix()

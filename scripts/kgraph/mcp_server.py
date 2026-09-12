@@ -12,13 +12,19 @@ Provides tools:
 """
 
 import json
+import logging
 import os
 import time
+from urllib.parse import urlsplit
+
 from .query import query_nodes, find_path, explain_node
 from .report import generate_report
 from .graph_db import load_from_graph_db
 from .constants import GRAPH_DB_DEFAULT
+from .validate import MAX_PAYLOAD_SIZE
 # Lazy imports to avoid circular dependency via __init__.py
+
+logger = logging.getLogger(__name__)
 
 
 def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = None):
@@ -53,7 +59,6 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                 })
                 self.send_response(429)
                 self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
                 self.send_header('Retry-After', '60')
                 self.end_headers()
                 self.wfile.write(resp.encode('utf-8'))
@@ -66,20 +71,48 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                 self.graph = load_from_graph_db(self.graph_db).to_dict()
             return True
 
+        def _origin_is_same(self) -> bool:
+            """True when the request Origin matches the Host it was sent to.
+
+            Browsers set Origin themselves and script cannot forge it, so this
+            blocks cross-site POSTs.  Requests without an Origin header (MCP
+            clients, curl) are not browser-originated and stay allowed.
+            """
+            origin = self.headers.get('Origin')
+            if not origin:
+                return True
+            host = self.headers.get('Host', '')
+            return bool(host) and urlsplit(origin).netloc == host
+
         def do_POST(self):
-            length = int(self.headers.get('Content-Length', 0))
+            # Only JSON bodies are accepted.  `application/json` is not a
+            # CORS-safelisted content type, so a cross-origin caller would have
+            # to preflight — and do_OPTIONS refuses POST preflights.  Without
+            # this a visited web page could reach kgraph_report, which writes
+            # to an attacker-chosen path.
+            content_type = self.headers.get('Content-Type', '')
+            if content_type.split(';', 1)[0].strip().lower() != 'application/json':
+                self._send_error(415, 'Unsupported Media Type: expected application/json')
+                return
+            if not self._origin_is_same():
+                self._send_error(403, 'Forbidden: cross-origin writes are not allowed')
+                return
+
+            try:
+                length = int(self.headers.get('Content-Length', 0) or 0)
+            except (TypeError, ValueError):
+                length = 0
+            # Refuse an oversized body before reading it: otherwise a caller
+            # can force a multi-GB allocation that the size check below would
+            # never get the chance to refuse.
+            if length > MAX_PAYLOAD_SIZE:
+                self._send_error(413, 'Payload too large')
+                return
             body = self.rfile.read(length)
 
-            # Reject oversized payloads
-            body_size = len(body)
-            if body_size > 100 * 1024 * 1024:  # 100 MB max
-                self.send_response(413)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({
-                    'error': 'Payload too large',
-                }).encode('utf-8'))
+            # Backstop: the header may under-declare the actual body size.
+            if len(body) > MAX_PAYLOAD_SIZE:
+                self._send_error(413, 'Payload too large')
                 return
 
             # Rate limiting
@@ -97,26 +130,39 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
             req_id = req.get('id', 0)
 
             self._reload_graph()
-            result = self._dispatch(method, params)
+            try:
+                result = self._dispatch(method, params)
+            except Exception as exc:
+                # A tool error must yield a JSON-RPC error, not a dropped
+                # connection plus a traceback on the server.
+                logger.error("MCP dispatch failed for %s: %s", method, exc, exc_info=True)
+                self._send_json(200, json.dumps({
+                    'jsonrpc': '2.0',
+                    'error': {'code': -32603, 'message': str(exc)},
+                    'id': req_id,
+                }))
+                return
 
-            resp = json.dumps({'jsonrpc': '2.0', 'result': result, 'id': req_id})
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(resp.encode('utf-8'))
+            self._send_json(200, json.dumps({'jsonrpc': '2.0', 'result': result, 'id': req_id}))
 
         def do_OPTIONS(self):
+            # Cross-origin writes are not supported: never approve a POST
+            # preflight, so a visited web page can never POST to a tool.
+            if self.headers.get('Access-Control-Request-Method', '').upper() == 'POST':
+                self.send_response(403)
+                self.end_headers()
+                return
             self.send_response(204)
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
             self.end_headers()
 
-        def _send_error(self, code, msg):
+        def _send_json(self, code, payload):
             self.send_response(code)
+            self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({'error': msg}).encode())
+            self.wfile.write(payload.encode('utf-8'))
+
+        def _send_error(self, code, msg):
+            self._send_json(code, json.dumps({'error': msg}))
 
         def _dispatch(self, method: str, params: dict):
             if method == 'kgraph_query':

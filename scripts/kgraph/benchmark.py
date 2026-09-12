@@ -8,9 +8,12 @@ dicts.
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 from .models import Graph, estimate_tokens
+
+logger = logging.getLogger(__name__)
 
 
 def benchmark_graph_vs_raw(graph: Graph | dict, source_files: list[str] | None = None, **kwargs) -> dict:
@@ -58,8 +61,10 @@ def benchmark_graph_vs_raw(graph: Graph | dict, source_files: list[str] | None =
                     "size_bytes": len(content.encode("utf-8")),
                     "tokens": tokens,
                 })
-            except OSError:
-                pass
+            except OSError as exc:
+                # Skipping a file under-counts raw_tokens/files_scanned, i.e.
+                # corrupts the very number this benchmark reports — log it.
+                logger.warning("cannot read %s for benchmark: %s", fpath, exc)
 
     # ── Compare ──
     result: dict = {
