@@ -10,7 +10,7 @@ description: Developer guide to the modular profile architecture — module layo
 ### Modular Architecture
 
 The profile is split into a thin loader (`tactical-console.bashrc`, ~233 lines)
-and 26 numbered profile modules under `scripts/`. Each module has a metadata block
+and 16 numbered profile modules under `scripts/`. Each module has a metadata block
 documenting its dependencies and exports:
 
 ```bash
@@ -165,13 +165,14 @@ profile. This is intentional — `sftp` and `rsync` must not trigger UI
 side-effects. But AI agents and automation scripts need access to the ~100+
 functions defined in the profile.
 
-**`env.sh`** is a library loader that sources all 26 profile modules (01–15
+**`env.sh`** is a library loader that sources all 16 profile modules (01–15
 plus `09b-gog`), bypassing the interactive guard and skipping `13-init.sh`
 (which runs screen clear, completions, WSL loopback fixes, and EXIT traps)
-and utility scripts in `tools/`. Because `09b-gog.sh` does not match the
-`[0-9][0-9]-*.sh` glob it is sourced explicitly after the main loop. It is
-idempotent (guarded by `__TAC_ENV_LOADED`) and sets `TAC_LIBRARY_MODE=1`
-so functions can detect non-interactive sourcing if needed.
+and utility scripts in `tools/`. It reads the canonical load order from
+`scripts/_module-list.sh` — the same list the interactive loader uses — so the
+two module sets can never drift. It is idempotent (guarded by
+`__TAC_ENV_LOADED`) and sets `TAC_LIBRARY_MODE=1` so functions can detect
+non-interactive sourcing if needed.
 
 **`bin/tac-exec`** sources `env.sh` then runs `"$@"`. It is symlinked to
 `~/.local/bin/tac-exec` for PATH access.
@@ -280,7 +281,7 @@ Layout constants are derived from `UIWidth` (default 80):
 
 ### Error Handling
 
-The ERR trap logs to `~/.openclaw/bash-errors.log` with timestamps:
+The ERR trap logs to `~/.openclaw/logs/bash-errors.log` with timestamps:
 
 ```text
 2026-03-07 14:32:01 [EXIT 127] some_missing_command --flag
@@ -309,8 +310,11 @@ pre-modularisation file was preserved as `tactical-console.bashrc.monolith`
 but has since been removed from the repository (it remains in git history).
 
 **Ordering rules:** `01-constants.sh` must load first (everything depends on
-it). `13-init.sh` must load last (runs startup side-effects). All other
-modules can be reordered as long as their `@depends` are satisfied.
+it). `13-init.sh` runs the interactive startup side-effects (screen clear,
+completions, WSL loopback fixes, EXIT traps); the canonical order in
+`scripts/_module-list.sh` places it near the end, followed only by
+`14-wsl-extras.sh` and `15-model-recommender.sh`. All other modules can be
+reordered as long as their `@depends` are satisfied.
 
 ### Benefits Realised
 
@@ -343,8 +347,8 @@ where it was last present.)
 | Source order bugs | Numeric prefixes enforce deterministic ordering. `bash -n` runs on every module in CI. |
 | `readonly` collisions on re-source | Already guarded with `[[ -z "${C_Reset:-}" ]]`. |
 | Missing module breaks shell | The loader warns if expected module count doesn't match; each `[[ -f ]]` guards gracefully. |
-| Performance regression (many `source` calls) | 26 `source` calls add < 10ms total. Measured on this hardware. |
-| Utility scripts accidentally sourced | Array-based loader (not glob) — only the 26 named profile modules are sourced. |
+| Performance regression (many `source` calls) | 16 `source` calls add < 10ms total. Measured on this hardware. |
+| Utility scripts accidentally sourced | Array-based loader (not glob) — only the 16 named profile modules are sourced. |
 
 ---
 
@@ -398,7 +402,7 @@ where it was last present.)
 All project files live in a single Git repository at
 `~/ubuntu-console/` (remote: `github.com/waynegault/ubuntu-console`).
 `~/.bashrc` is a thin loader that sources `tactical-console.bashrc`, which in
-turn sources the 26 numbered profile modules from `scripts/` using an
+turn sources the 16 numbered profile modules from `scripts/` using an
 explicit array.
 
 **~/.bashrc enforcement:** The file is read-only (mode 444) and protected by

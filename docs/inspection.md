@@ -3,8 +3,8 @@
 A comprehensive, repeatable checklist for auditing the Tactical Console Profile
 and its modular architecture. Covers the thin loader (tactical-console.bashrc),
 16 profile modules under scripts/ (01-constants through 15-model-recommender,
-plus 09b-gog), 5 utility scripts (16-20), standalone scripts in bin/, and
-companion files. Derived from real-world production audits.
+plus 09b-gog), the numbered utility `scripts/18-lint.sh`, standalone scripts in
+bin/, and companion files. Derived from real-world production audits.
 Each item includes the rationale, a concrete test command, and the expected outcome.
 
 Scope
@@ -12,9 +12,12 @@ Scope
 The following file classes are in-scope for every audit pass:
 
 - `tactical-console.bashrc` — thin loader
-- `scripts/[0-9][0-9]-*.sh` — 16 profile modules (01-constants through 15-model-recommender)
-  and 5 utility scripts in `tools/` (check-agent-use, import-windows-env, lint, mirror-vault, run-tests);
-  including `scripts/09b-gog.sh` (the 16th profile module, non-numeric name)
+- `scripts/[0-9][0-9]-*.sh` — the 15 numbered profile modules (01-constants
+  through 15-model-recommender) plus the `18-lint.sh` utility
+- `scripts/09b-gog.sh` — the 16th profile module (non-numeric name)
+- `tools/*.sh` — 11 utility scripts (check-agent-use, check-repo-boundaries,
+  clean-orphans, docs-sync-check, import-windows-env, lint, mirror-vault,
+  normalize-fixture, run-tests, sync-openclaw-completion, capture-golden-fixtures)
 - `bin/*.sh` — standalone helper scripts
 - `bin/tac-exec` — non-interactive function runner (symlinked to `~/.local/bin/`)
 - `env.sh` — library loader for non-interactive shells
@@ -110,7 +113,7 @@ For the loader: `_TAC_LOADER_VERSION="N"` near the top; `TACTICAL_PROFILE_VERSIO
 
 grep 'AI INSTRUCTION' <file>
 
-For the loader: `# AI INSTRUCTION: Increment version on significant changes.` above the version variable. For each module: a multi-line AI instruction block stating (a) increment the module's `_TAC_*_VERSION`, and (b) always also increment `TACTICAL_PROFILE_VERSION` in `tactical-console.bashrc`.
+For the loader: `# AI INSTRUCTION: Increment version on significant changes.` above the version variable. For each module: an AI instruction block stating that on any change the module's `# Module Version: N` comment must be incremented (`TACTICAL_PROFILE_VERSION` then auto-computes from the sum of all module versions).
 
 1.4
 
@@ -1345,7 +1348,7 @@ Difficult regex, file-descriptor manipulation, or Bash-specific tricks have comm
 
 ls scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh
 
-16 profile module files exist under scripts/ (01-constants through 15-model-recommender + 09b-gog). 5 utility scripts live in tools/. The loader (tactical-console.bashrc) sources the profile modules in numeric order. Each module has `@modular-section`, `@depends`, and `@exports` annotations below its header.
+16 profile module files exist under scripts/ (01-constants through 15-model-recommender + 09b-gog). 11 utility scripts live in tools/. The loaders (tactical-console.bashrc, env.sh) source the profile modules in the order given by scripts/_module-list.sh. Each module has `@modular-section`, `@depends`, and `@exports` annotations below its header.
 
 9.4.1
 
@@ -1361,15 +1364,15 @@ Every module's @depends lists only modules with a lower numeric prefix. No circu
 
 grep 'Module Version:' scripts/[0-9][0-9]-*.sh
 
-Each module has a `# Module Version: N` comment in its header. When a module is modified, its version number is incremented AND `_TAC_LOADER_VERSION` in `tactical-console.bashrc` is also incremented (which auto-bumps `TACTICAL_PROFILE_VERSION`).
+Each module has a `# Module Version: N` comment in its header. When a module is modified, its version number is incremented; `TACTICAL_PROFILE_VERSION` then auto-computes from the sum of all module versions. `_TAC_LOADER_VERSION` in `tactical-console.bashrc` is bumped only when the loader itself changes.
 
 9.4.3
 
 🔍 Loader sources all modules
 
-grep 'for _tac_f in' tactical-console.bashrc
+grep '_module-list' tactical-console.bashrc
 
-The loader uses a glob `[0-9][0-9]-*.sh` to source all modules. Adding a new module only requires creating a file with the right numeric prefix — no loader edits needed.
+Both loaders read the canonical module list from `scripts/_module-list.sh` (via `__tac_module_list`). The loader does NOT glob `scripts/`; adding or removing a module means editing that shared list, which keeps the interactive and library loaders in sync.
 
 9.4.4
 
@@ -1377,7 +1380,7 @@ The loader uses a glob `[0-9][0-9]-*.sh` to source all modules. Adding a new mod
 
 Inspect tactical-console.bashrc
 
-The loader contains only: header comments, interactive guard, TACTICAL_PROFILE_VERSION, the sourcing loop, and `unset` cleanup. All logic lives in modules.
+The loader contains only: header comments, interactive guard, sourcing of the shared fragments (`_startup-env.sh`, `_module-list.sh`), TACTICAL_PROFILE_VERSION, the module loop, and `unset` cleanup. All logic lives in modules.
 
 9.5
 
@@ -1587,7 +1590,7 @@ A test verifies that sourcing tactical-console.bashrc in a clean environment com
 
 🔧 Python lint (ruff) passes
 
-`.venv/bin/python -m ruff check scripts/kgraph/ bin/model-autotune.py scripts/oc-health-check.py tests/`
+`.venv/bin/python -m ruff check scripts/kgraph/ scripts/oc-health-check.py tests/`
 
 All checks passed — no bare excepts (BLE001), no unused imports (F401), no import order violations (E402)
 
@@ -1597,7 +1600,7 @@ All checks passed — no bare excepts (BLE001), no unused imports (F401), no imp
 
 `.venv/bin/python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_untested_modules.py --timeout=60 -q`
 
-173 tests pass, 0 failures
+174 passed
 
 11.10
 
@@ -1619,7 +1622,7 @@ Check `.github/workflows/ci.yml`
 
 🔍 No bare `except Exception:` in Python
 
-`.venv/bin/python -m ruff check --select BLE001,S110,S112 scripts/kgraph/ bin/model-autotune.py scripts/oc-health-check.py`
+`.venv/bin/python -m ruff check --select BLE001,S110,S112 scripts/kgraph/ scripts/oc-health-check.py`
 
 0 violations — all exception handlers use specific types
 
@@ -2074,7 +2077,7 @@ Zero output — every module contains a `# Module Version: N` comment in its hea
 
 for f in scripts/[0-9][0-9]-*.sh; do grep -q 'AI INSTRUCTION' "$f" || echo "MISSING: $f"; done
 
-Zero output — every module contains the AI instruction to bump both module and profile versions
+Zero output — every module contains the AI instruction to bump its Module Version on any change
 
 13.4.3
 
@@ -2082,15 +2085,15 @@ Zero output — every module contains the AI instruction to bump both module and
 
 grep -h '^# Module Version:' scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh | sort -t: -k3 -n
 
-13 unique variable names, one per module, all following `_TAC_<SECTION>_VERSION` pattern
+One `# Module Version: N` line per module (16 modules) with a plain integer N
 
 13.4.4
 
-🔍 Profile version >= all module versions
+🔍 Profile version reflects module versions
 
-Compare TACTICAL_PROFILE_VERSION with module versions
+Inspect TACTICAL_PROFILE_VERSION composition
 
-TACTICAL_PROFILE_VERSION major.minor is >= every module version major.minor — indicates profile was bumped when modules changed
+`TACTICAL_PROFILE_VERSION` is `<loader version>.<sum of all module versions>`; its sum component changes automatically whenever any module version is incremented, so no manual cross-check between it and individual module versions is required.
 
 13.4.5
 

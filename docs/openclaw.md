@@ -201,8 +201,10 @@ and CLI tools for graph navigation.
 ### Interactive Viewer (`oc g`)
 
 `oc g` (or `oc-kgraph`) launches the Cytoscape.js graph viewer. Graph data is
-persisted to `~/.openclaw/kgraph.sqlite` (primary) and mirrored to
-`~/.openclaw/kgraph.json`. A React + AntV G6 frontend lives in `frontend-g6/`
+persisted to `~/.openclaw/kgraph.sqlite`. `~/.openclaw/kgraph.json` is an
+optional read-only fallback source (served via `--store`) used only when the
+memory DB and the SQLite graph DB are absent — nothing writes it. A React + AntV
+G6 frontend lives in `frontend-g6/`
 for development (`npm run dev` on port 5173). Both read the same persisted graph.
 
 ### CLI Mode (`kgraph`)
@@ -308,11 +310,11 @@ uv tool install ./scripts --extra ast
 | `~/.openclaw/logs/` | Log files |
 | `~/.openclaw/backups/` | ZIP snapshots |
 | `~/.openclaw/openclaw.json` | Global configuration |
-| `~/.openclaw/bash-errors.log` | ERR trap log |
+| `~/.openclaw/logs/bash-errors.log` | ERR trap log |
 | `~/.openclaw/maintenance_cooldowns.txt` | Cooldown timestamps |
 | `scripts/completions/openclaw.bash` | Bash completions (repo-versioned, generated via `tools/sync-openclaw-completion.sh`) |
 | `~/.openclaw/.env.bridge` | Generated env bridge consumed by the gateway service |
-| `~/.openclaw/kgraph.json` | JSON mirror of the editable knowledge graph |
+| `~/.openclaw/kgraph.json` | Optional read-only fallback graph source (`--store`); not written |
 | `~/.openclaw/kgraph.sqlite` | Primary persisted SQLite store for `oc g` |
 | `~/.openclaw/state/memory/gigabrain-workspace/obsidian-vault/` | Gigabrain-exported Obsidian vault root |
 | `~/.config/systemd/user/openclaw-gateway.service` | systemd unit file |
