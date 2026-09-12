@@ -145,10 +145,17 @@ class GraphEdge(BaseModel):
         _PROVENANCE_VALUES = {"ast", "memory_db", "json_store", "user", "life_index"}
         if src is not None and isinstance(src, str) and src.lower() in _PROVENANCE_VALUES:
             data["origin"] = src
-            # source was a provenance tag, not an endpoint — clear it
-            # so the endpoint comes from 'from'
             if frm is not None:
+                # source was a provenance tag, not an endpoint — the real
+                # endpoint comes from 'from'
                 data["source"] = str(frm)
+            else:
+                # Provenance-only 'source' with no endpoint: leaving it as the
+                # endpoint would point the edge at a literal "ast" node.
+                raise ValueError(
+                    "edge 'source' is a provenance tag but no endpoint was "
+                    "given (use 'from'/'to' or an explicit source id)"
+                )
 
         return data
 

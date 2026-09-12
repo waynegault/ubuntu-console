@@ -271,8 +271,27 @@ setup_file() {
     [[ "$wd_port" =~ ^[0-9]+$ ]]
 }
 
-@test "cross-script: env.sh uses glob to source numbered modules" {
-    grep -q '\[0-9\]\[0-9\]-\*\.sh' "$REPO_ROOT/env.sh"
+@test "cross-script: env.sh loads modules from the shared list" {
+    # Both loaders read scripts/_module-list.sh so their module sets cannot
+    # drift (env.sh previously globbed while the profile hardcoded a list).
+    grep -q '_module-list.sh' "$REPO_ROOT/env.sh"
+    grep -q '_module-list.sh' "$PROFILE_PATH"
+}
+
+@test "loader: shared list covers every numbered module (drift guard)" {
+    # A numbered module added to scripts/ but missing from _module-list.sh
+    # would load in neither the profile nor env.sh — catch that here.
+    # 18-lint.sh is a standalone utility, not a profile module.
+    local base
+    for f in "$REPO_ROOT"/scripts/[0-9][0-9]-*.sh; do
+        [[ -f "$f" ]] || continue
+        base=$(basename "$f" .sh)
+        [[ "$base" == "18-lint" ]] && continue
+        grep -qw "$base" "$REPO_ROOT/scripts/_module-list.sh" || {
+            echo "NOT IN SHARED LIST: $base" >&3
+            return 1
+        }
+    done
 }
 
 @test "cross-script: watchdog has correct health endpoint" {
@@ -394,8 +413,8 @@ setup_file() {
     [[ -f "$REPO_ROOT/scripts/09b-gog.sh" ]]
 }
 
-@test "gog: env.sh explicitly sources 09b-gog.sh" {
-    grep -q '09b-gog.sh' "$REPO_ROOT/env.sh"
+@test "gog: shared module list includes 09b-gog" {
+    grep -qw '09b-gog' "$REPO_ROOT/scripts/_module-list.sh"
 }
 
 @test "env.sh: skips 13-init.sh in library mode" {

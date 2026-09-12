@@ -3,7 +3,7 @@
 # ─── Module: 06-hooks ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 6. SYSTEM HOOKS & OVERRIDES
 # ==============================================================================
@@ -35,8 +35,11 @@ function cd() {
         if ! source "$VENV_DIR/bin/activate" 2>/dev/null
         then
             printf '%sWarning: .venv/bin/activate failed to source%s\n' "$C_Warning" "$C_Reset" >&2
-            # Clear VIRTUAL_ENV to avoid confusion (activation didn't happen)
-            unset VIRTUAL_ENV PS1
+            # Clear VIRTUAL_ENV to avoid confusion (activation didn't happen).
+            # PS1 is left alone: custom_prompt_command rebuilds it on the next
+            # prompt, and clearing it here makes the prompt fall back to the
+            # bash default until then.
+            unset VIRTUAL_ENV
         fi
         return
     fi

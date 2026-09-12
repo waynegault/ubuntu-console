@@ -53,6 +53,14 @@ def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
     — used by ``kgraph --update --include-all`` for audit runs.
     """
     conn = sqlite3.connect(os.path.expanduser(dbpath))
+    try:
+        return _load_from_memory_db_conn(conn, dbpath, include_all)
+    finally:
+        conn.close()
+
+
+def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all: bool) -> Graph:
+    """Build a Graph from an open memory-DB connection (caller closes it)."""
     cur = conn.cursor()
     builder = GraphBuilder()
 
@@ -405,8 +413,8 @@ def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
                     'path': path,
                     'content_preview': f'File: {path}',
                 })
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as exc:
+            logger.warning("Failed to read 'files' table from memory DB: %s", exc)
 
         chunk_embeddings = []
         try:
@@ -761,16 +769,14 @@ def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
                                 'label': f'related ({sim:.2f})',
                                 'semantic_score': rounded,
                             })
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as exc:
+            logger.warning("Failed to import chunks from memory DB: %s", exc)
 
     # OpenClaw memory registry schema: memories/memory_entities/memory_syntheses
     # tables (distinct from the files/chunks memory-store schema above).
     elif has_table('memories') and has_table('memory_entities'):
         registry = _registry_db_path_label(dbpath)
         _load_from_registry_db(conn, builder, registry=registry, include_all=include_all)
-
-    conn.close()
 
     # Cross-chunk entity resolution: collapse same-concept nodes discovered
     # across different chunks (e.g. "Decision: X" from chunk 1 and chunk 2)

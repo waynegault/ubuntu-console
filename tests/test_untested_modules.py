@@ -1,13 +1,20 @@
 """Tests for previously untested kgraph modules.
 
-Covers: call_flow, update, life_index, benchmark, mcp_server, pr_dashboard.
+Covers: call_flow, update, life_index, benchmark, mcp_server, pr_dashboard,
+and the server's POST /graph.json write path.
 """
 
+import contextlib
+import http.client
+import io
 import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import HTTPServer
+from unittest import mock
 
 REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 SCRIPT_DIR = os.path.join(REPO_ROOT, "scripts")
@@ -78,6 +85,20 @@ class TestCallFlow(unittest.TestCase):
         html = kgraph.generate_call_flow_html(_AST_GRAPH)
         self.assertIn("hello", html)
         self.assertIn("python", html)
+
+    def test_html_escapes_injected_node_label(self):
+        graph = {
+            "nodes": [{
+                "id": "ast_func:x",
+                "label": "</script><script>alert(1)</script>",
+                "type": "function",
+                "source": "ast",
+            }],
+            "edges": [],
+        }
+        html = kgraph.generate_call_flow_html(graph)
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertIn("&lt;/script&gt;", html)
 
 
 # ── update ─────────────────────────────────────────────────────────────
@@ -150,6 +171,21 @@ class TestLifeIndex(unittest.TestCase):
         graph = kgraph.merge_relations(_SMALL_GRAPH, life_root="/tmp/nonexistent")
         # Should return unchanged (as Graph model)
         self.assertEqual(len(graph.edges), 2)
+
+    def test_merge_relations_marks_origin_life_index(self):
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, "relations.json"), "w") as f:
+                json.dump({"relations": [{"source": "alpha", "target": "beta", "rel": "related"}]}, f)
+            graph = kgraph.merge_relations(
+                {"nodes": [{"id": "n1", "label": "Alpha", "slug": "alpha"},
+                           {"id": "n2", "label": "Beta", "slug": "beta"}],
+                 "edges": []},
+                life_root=td,
+            )
+        self.assertEqual(len(graph.edges), 1)
+        # origin is a provenance tag, never the source slug.
+        self.assertEqual(graph.edges[0].origin, "life_index")
+        self.assertTrue(graph.edges[0].explicit)
 
 
 # ── benchmark ──────────────────────────────────────────────────────────
@@ -238,13 +274,271 @@ class TestValidateExtended(unittest.TestCase):
         self.assertEqual(kgraph.sanitize_label(""), "")
 
     def test_validate_graph_valid_payload_returns_true(self):
-        errors = kgraph.validate_graph_payload(_SMALL_GRAPH)
-        self.assertTrue(errors[0])
+        valid, reason = kgraph.validate_graph_payload(_SMALL_GRAPH)
+        self.assertTrue(valid)
+        self.assertEqual(reason, "")
 
     def test_validate_graph_payload_too_large(self):
         valid, msg = kgraph.validate_graph_payload(b"x" * (101 * 1024 * 1024))
         self.assertFalse(valid)
         self.assertIn("too large", msg.lower())
+
+
+# ── server POST /graph.json ────────────────────────────────────────────
+
+
+class _FakeHTTPServer:
+    """Captures the handler class serve_file builds, without listening."""
+
+    captured: dict = {}
+
+    def __init__(self, addr, handler):
+        _FakeHTTPServer.captured["handler"] = handler
+        self.server_address = (addr[0], addr[1] or 1)
+
+    def serve_forever(self):
+        pass
+
+    def shutdown(self):
+        pass
+
+
+class TestGraphServerPost(unittest.TestCase):
+    """Hermetic coverage of the POST /graph.json write path.
+
+    ``serve_file`` blocks in serve_forever, so its (module-local)
+    HTTPServer is replaced with a capturing stub to obtain the real handler
+    class; a real server is then started on an ephemeral port for the test.
+    Only the module-local names are patched, so no global object is mocked.
+    """
+
+    def setUp(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.db_path = os.path.join(td.name, "graph.sqlite")
+        self.store_path = os.path.join(td.name, "store.json")
+        with open(self.store_path, "w", encoding="utf-8") as f:
+            json.dump({"nodes": [], "edges": []}, f)
+        kgraph.save_to_graph_db(self.db_path, _SMALL_GRAPH)
+
+        from kgraph import server as kgraph_server
+
+        captured: dict = {}
+        _FakeHTTPServer.captured = captured
+        with (
+            mock.patch.object(kgraph_server, "HTTPServer", _FakeHTTPServer),
+            mock.patch.object(kgraph_server, "webbrowser"),
+            mock.patch.object(kgraph_server, "resolve_memory_db_path", return_value=None),
+        ):
+            kgraph_server.serve_file(
+                self.store_path, host="127.0.0.1", force_embed=True,
+                graph_db_path=self.db_path, store_path=self.store_path,
+            )
+
+        httpd = HTTPServer(("127.0.0.1", 0), captured["handler"])
+        self.addCleanup(httpd.server_close)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        self.port = httpd.server_address[1]
+
+    def _request(self, method, path, body=None, headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            conn.request(method, path, body=body, headers=headers or {})
+            resp = conn.getresponse()
+            return resp.status, resp.read(), dict(resp.getheaders())
+        finally:
+            conn.close()
+
+    def _post(self, body, content_type="application/json", origin=None):
+        headers = {"Content-Type": content_type} if content_type else {}
+        if origin:
+            headers["Origin"] = origin
+        return self._request("POST", "/graph.json", body=body, headers=headers)
+
+    def _node_ids(self):
+        return {n.id for n in kgraph.load_from_graph_db(self.db_path).nodes}
+
+    def test_get_read_path_still_served_with_cors(self):
+        status, body, headers = self._request("GET", "/graph.json?view=raw")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*")
+        self.assertIn("nodes", json.loads(body))
+
+    def test_valid_post_replaces_graph(self):
+        payload = {"nodes": [{"id": "only", "label": "Only"}], "edges": []}
+        status, body, _ = self._post(json.dumps(payload))
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"OK")
+        self.assertEqual(self._node_ids(), {"only"})
+
+    def test_malformed_body_does_not_wipe_graph(self):
+        status, _, _ = self._post(b"{ this is not json")
+        self.assertEqual(status, 400)
+        self.assertEqual(self._node_ids(), {"a", "b", "c"})
+
+    def test_schema_invalid_body_does_not_wipe_graph(self):
+        status, _, _ = self._post(json.dumps({"nodes": "not-a-list"}))
+        self.assertEqual(status, 400)
+        self.assertEqual(self._node_ids(), {"a", "b", "c"})
+
+    def test_non_json_content_type_rejected(self):
+        status, _, _ = self._post(json.dumps({"nodes": []}), content_type="text/plain")
+        self.assertEqual(status, 415)
+        self.assertEqual(self._node_ids(), {"a", "b", "c"})
+
+    def test_cross_origin_post_rejected(self):
+        status, _, _ = self._post(
+            json.dumps({"nodes": []}), origin="http://evil.example",
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self._node_ids(), {"a", "b", "c"})
+
+    def test_write_response_omits_wildcard_cors(self):
+        status, _, headers = self._post(
+            json.dumps({"nodes": [{"id": "x", "label": "X"}], "edges": []}),
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNone(headers.get("Access-Control-Allow-Origin"))
+
+    def test_options_refuses_post_preflight(self):
+        status, _, headers = self._request(
+            "OPTIONS", "/graph.json",
+            headers={"Origin": "http://evil.example", "Access-Control-Request-Method": "POST"},
+        )
+        self.assertEqual(status, 403)
+        self.assertIsNone(headers.get("Access-Control-Allow-Origin"))
+
+    def test_oversized_body_rejected(self):
+        from kgraph import server as kgraph_server
+
+        big = json.dumps({"nodes": [{"id": "big", "label": "x" * 200}], "edges": []})
+        with mock.patch.object(kgraph_server, "MAX_PAYLOAD_SIZE", 10):
+            status, _, _ = self._post(big)
+        self.assertEqual(status, 413)
+        self.assertEqual(self._node_ids(), {"a", "b", "c"})
+
+    def test_xss_label_rejected_and_graph_intact(self):
+        payload = {"nodes": [{"id": "x", "label": "<script>alert(1)</script>"}], "edges": []}
+        status, _, _ = self._post(json.dumps(payload))
+        self.assertEqual(status, 400)
+        self.assertEqual(self._node_ids(), {"a", "b", "c"})
+
+    def test_nested_xss_rejected_and_graph_intact(self):
+        payload = {
+            "nodes": [{"id": "x", "label": "ok",
+                       "payload": {"note": "<script>alert(1)</script>"}}],
+            "edges": [],
+        }
+        status, _, _ = self._post(json.dumps(payload))
+        self.assertEqual(status, 400)
+        self.assertEqual(self._node_ids(), {"a", "b", "c"})
+
+
+# ── report HTML escaping ───────────────────────────────────────────────
+
+
+class TestReportEscaping(unittest.TestCase):
+    def test_generate_html_guards_against_script_breakout(self):
+        graph = {
+            "nodes": [{"id": "x", "label": "</script><script>alert(1)</script>"}],
+            "edges": [],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, "graph.html")
+            kgraph.generate_html(graph, out)
+            with open(out, encoding="utf-8") as f:
+                text = f.read()
+        self.assertNotIn("</script><script>alert(1)", text)
+        self.assertIn("\\u003c/script\\u003e", text)
+
+    def test_pr_dashboard_escapes_git_metadata(self):
+        from kgraph.pr_dashboard import _build_dashboard_html
+
+        git_data = {
+            "merges": [{
+                "hash": "abc12345",
+                "author_name": "<script>alert(1)</script>",
+                "subject": "</td><script>alert(2)</script>",
+                "date": "2026-09-11",
+            }],
+            "commits": [],
+            "recent_files": [{"status": "M", "path": "<img src=x onerror=alert(3)>"}],
+            "branches": [{"name": "<script>alert(5)</script>", "current": True}],
+            "authors": {"<script>alert(6)</script>": "a@b.c"},
+            "total_commits": 0,
+            "total_merges": 1,
+            "total_files_changed": 1,
+            "total_branches": 1,
+        }
+        html = _build_dashboard_html(git_data, [], "/tmp/<script>repo", 30)
+        for injected in (
+            "<script>alert(1)</script>",
+            "<script>alert(2)</script>",
+            "<script>alert(5)</script>",
+            "<script>alert(6)</script>",
+            "<img src=x onerror=alert(3)>",
+        ):
+            self.assertNotIn(injected, html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+
+
+# ── cli --graph loading ────────────────────────────────────────────────
+
+
+class TestCliGraphLoad(unittest.TestCase):
+    def _load(self, graph_path):
+        import argparse
+
+        from kgraph.cli import _load_graph
+
+        args = argparse.Namespace(
+            graph=graph_path, graph_db=os.path.join(tempfile.gettempdir(), "kgraph-missing.sqlite"),
+            import_db=None,
+        )
+        return _load_graph(args)
+
+    def test_missing_graph_file_exits_with_message(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                self._load("/nonexistent/definitely-not-here.json")
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("failed to load graph file", stderr.getvalue())
+
+    def test_malformed_graph_file_exits_with_message(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "bad.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{ not valid json")
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as ctx:
+                    self._load(path)
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("bad.json", stderr.getvalue())
+
+
+# ── memory_import connection lifecycle ─────────────────────────────────
+
+
+class TestMemoryImportConnection(unittest.TestCase):
+    def test_connection_closed_when_import_raises(self):
+        from kgraph import memory_import
+
+        fake_conn = mock.MagicMock()
+        fake_sqlite = mock.MagicMock()
+        fake_sqlite.connect.return_value = fake_conn
+        with (
+            mock.patch.object(memory_import, "sqlite3", fake_sqlite),
+            mock.patch.object(
+                memory_import, "_load_from_memory_db_conn",
+                side_effect=RuntimeError("boom"),
+            ),
+        ):
+            with self.assertRaises(RuntimeError):
+                memory_import.load_from_memory_db("/tmp/whatever.db")
+        fake_conn.close.assert_called_once()
 
 
 if __name__ == "__main__":

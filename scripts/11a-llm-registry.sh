@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================
@@ -182,7 +182,10 @@ function __llm_registry_sync_state() {
             print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens"
         }
         $1 == "#" { next }
-        (NF != 20 && NF != 26 && NF != 32 && NF != 37) { next }
+        # Preserve rows of unexpected width verbatim rather than dropping
+        # them: a stray pipe character in a value (or a partially-written
+        # row) must not make a model silently vanish from the registry.
+        (NF != 20 && NF != 26 && NF != 32 && NF != 37) { print; next }
         {
             d = ($3 == def ? "yes" : "no")
             a = (run == 1 && af != "" && $3 == af ? "yes" : "no")

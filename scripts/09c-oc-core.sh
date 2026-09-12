@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
@@ -284,7 +284,7 @@ function oc-purge() {
     fi
 
     # Validate OC_AGENTS path — prevent catastrophic rm -rf
-    if [[ -z "$OC_AGENTS" || "$OC_AGENTS" == "/" || ! "$OC_AGENTS" =~ ^/home|^/dev/shm|^/tmp ]]; then
+    if [[ -z "$OC_AGENTS" || "$OC_AGENTS" == "/" || ! "$OC_AGENTS" =~ ^(/home|/dev/shm|/tmp) ]]; then
         __tac_info "Purge" "[REFUSED - unsafe OC_AGENTS path: ${OC_AGENTS:-(empty)}]" "$C_Error"
         return 1
     fi
@@ -327,7 +327,6 @@ function oc-purge() {
     else
         __tac_info "Purge Complete" "[No sessions found]" "$C_Dim"
     fi
-    set -m
 }
 
 # ---------------------------------------------------------------------------

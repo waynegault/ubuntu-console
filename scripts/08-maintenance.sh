@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 31
+# Module Version: 33
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -1168,11 +1168,31 @@ function up() {
 #   --yes:    Skip confirmation prompts
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
+# __find_broken_links — Broken symlinks under ~, bounded by depth with
+# known-large caches excluded. Shared by the `cl --report` preview and the
+# deep clean so both agree on the count; an unbounded `find ~ -xtype l` is far
+# too slow to run as a preview and would report a different set.
+# ---------------------------------------------------------------------------
+function __find_broken_links() {
+    find ~ -maxdepth 4 -xtype l \
+        -not -path '*/node_modules/*' \
+        -not -path '*/.npm/*' \
+        -not -path '*/.cache/*' \
+        -not -path '*/.openclaw/*' \
+        -not -path '*/__pycache__/*' \
+        2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
 # __cl_report* — the cl --report body, split into helpers under the
 # 100-line guidance: local debris, system caches, and the Windows fix script.
+# __CL_WIN_GHOSTS is declared by __cl_report, filled by __cl_report_system,
+# and read by __cl_report_win_fix. It must live in the caller: a `local` in
+# __cl_report_system is gone by the time its sibling helper runs.
 # ---------------------------------------------------------------------------
 function __cl_report() {
-__tac_header "CLEANUP REPORT" "open"
+    local __CL_WIN_GHOSTS=()
+    __tac_header "CLEANUP REPORT" "open"
     __cl_report_local
     __cl_report_system
     __tac_footer
@@ -1182,10 +1202,8 @@ __tac_header "CLEANUP REPORT" "open"
 function __cl_report_local() {
 
     # Current directory debris
-    local pwd_debris=0
     if [[ -d .pytest_cache ]] || compgen -G "python-*.exe" > /dev/null
     then
-        pwd_debris=1
         __tac_line "Python cache in $PWD" "[FOUND]" "$C_Warning"
     else
         __tac_line "Python cache in $PWD" "[CLEAN]" "$C_Success"
@@ -1193,13 +1211,7 @@ function __cl_report_local() {
 
     # Broken symlinks (limited depth, exclude known-large caches)
     local broken_links
-    broken_links=$(find ~ -maxdepth 4 -xtype l \
-        -not -path '*/node_modules/*' \
-        -not -path '*/.npm/*' \
-        -not -path '*/.cache/*' \
-        -not -path '*/.openclaw/*' \
-        -not -path '*/__pycache__/*' \
-        2>/dev/null | wc -l)
+    broken_links=$(__find_broken_links | wc -l)
     if (( broken_links > 0 ))
     then
         __tac_line "Broken symlinks in ~" "[$broken_links found]" "$C_Warning"
@@ -1255,8 +1267,8 @@ function __cl_report_local() {
 }
 
 function __cl_report_system() {
-    # Windows System PATH ghosts (WSL-specific check)
-    local __CL_WIN_GHOSTS=()
+    # Windows System PATH ghosts (WSL-specific check) — fills the array
+    # declared by __cl_report so __cl_report_win_fix can read it afterwards.
     local IFS=':'
     for p in $PATH
     do
@@ -1283,8 +1295,11 @@ function __cl_report_system() {
     if command -v systemctl >/dev/null 2>&1
     then
         local systemd_ghosts
+        # grep -c already prints 0 (and exits 1) when nothing matches; a
+        # trailing `|| echo 0` would append a second "0", turning the value
+        # into "0\n0" and the arithmetic test below into a syntax error.
         systemd_ghosts=$(systemctl --user list-units --all --state=not-found 2>/dev/null \
-            | grep -c "not-found" || echo 0)
+            | grep -c "not-found")
         if (( systemd_ghosts > 0 ))
         then
             __tac_line "Systemd ghost units" "[$systemd_ghosts not-found]" "$C_Warning"
@@ -1376,6 +1391,32 @@ Session Manager\Environment') {"
 }
 
 
+# ---------------------------------------------------------------------------
+# __cl_step — Prompt-and-run helper for the cl() deep-clean steps.
+# Prompts unless --yes was given; on decline it reports [SKIPPED] and returns 1.
+# Run from cl() only: it reads yes_mode and bumps deep_count through the
+# caller's dynamic scope.
+# Usage: __cl_step <label> <prompt> <command...>
+# ---------------------------------------------------------------------------
+function __cl_step() {
+    local label="$1" prompt="$2"
+    shift 2
+    if (( yes_mode == 0 ))
+    then
+        local confirm
+        read -r -e -p "$prompt [y/N]: " confirm
+        if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
+        then
+            __tac_info "$label" "[SKIPPED]" "$C_Dim"
+            return 1
+        fi
+    fi
+    "$@" >/dev/null 2>&1
+    __tac_info "$label" "[COMPLETE]" "$C_Success"
+    ((deep_count++))
+    return 0
+}
+
 function cl() {
     local light_mode=0 report_mode=0 yes_mode=0
 
@@ -1410,88 +1451,31 @@ function cl() {
     # Default: Full deep cleanup
     local deep_count=0
 
-    # APT cleanup
+    # APT cleanup (autoremove + autoclean run as one step)
     if command -v sudo >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1
     then
-        if (( yes_mode == 0 ))
-        then
-            read -r -e -p "Clean APT cache? [y/N]: " confirm
-            if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
-            then
-                __tac_info "APT cleanup" "[SKIPPED]" "$C_Dim"
-            else
-                sudo apt-get autoremove -y >/dev/null 2>&1 && sudo apt-get autoclean >/dev/null 2>&1
-                __tac_info "APT cleanup" "[COMPLETE]" "$C_Success"
-                ((deep_count++))
-            fi
-        else
-            sudo apt-get autoremove -y >/dev/null 2>&1 && sudo apt-get autoclean >/dev/null 2>&1
-            __tac_info "APT cleanup" "[COMPLETE]" "$C_Success"
-            ((deep_count++))
-        fi
+        __cl_step "APT cleanup" "Clean APT cache?" \
+            bash -c 'sudo apt-get autoremove -y && sudo apt-get autoclean'
     fi
 
     # Brew cleanup
     if command -v brew >/dev/null 2>&1
     then
-        if (( yes_mode == 0 ))
-        then
-            read -r -e -p "Run brew cleanup? [y/N]: " confirm
-            if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
-            then
-                __tac_info "Brew cleanup" "[SKIPPED]" "$C_Dim"
-            else
-                brew cleanup --prune=all >/dev/null 2>&1
-                __tac_info "Brew cleanup" "[COMPLETE]" "$C_Success"
-                ((deep_count++))
-            fi
-        else
-            brew cleanup --prune=all >/dev/null 2>&1
-            __tac_info "Brew cleanup" "[COMPLETE]" "$C_Success"
-            ((deep_count++))
-        fi
+        __cl_step "Brew cleanup" "Run brew cleanup?" brew cleanup --prune=all
     fi
 
     # Journal vacuum
     if command -v journalctl >/dev/null 2>&1
     then
-        if (( yes_mode == 0 ))
-        then
-            read -r -e -p "Vacuum journal logs (>3 days)? [y/N]: " confirm
-            if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
-            then
-                __tac_info "Journal vacuum" "[SKIPPED]" "$C_Dim"
-            else
-                journalctl --vacuum-time=3d >/dev/null 2>&1
-                __tac_info "Journal vacuum" "[COMPLETE]" "$C_Success"
-                ((deep_count++))
-            fi
-        else
-            journalctl --vacuum-time=3d >/dev/null 2>&1
-            __tac_info "Journal vacuum" "[COMPLETE]" "$C_Success"
-            ((deep_count++))
-        fi
+        __cl_step "Journal vacuum" "Vacuum journal logs (>3 days)?" \
+            journalctl --vacuum-time=3d
     fi
 
     # Docker cleanup
     if command -v docker >/dev/null 2>&1
     then
-        if (( yes_mode == 0 ))
-        then
-            read -r -e -p "Prune Docker system? [y/N]: " confirm
-            if [[ "${confirm,,}" != "y" && "${confirm,,}" != "yes" ]]
-            then
-                __tac_info "Docker prune" "[SKIPPED]" "$C_Dim"
-            else
-                docker system prune -f --volumes >/dev/null 2>&1
-                __tac_info "Docker prune" "[COMPLETE]" "$C_Success"
-                ((deep_count++))
-            fi
-        else
-            docker system prune -f --volumes >/dev/null 2>&1
-            __tac_info "Docker prune" "[COMPLETE]" "$C_Success"
-            ((deep_count++))
-        fi
+        __cl_step "Docker prune" "Prune Docker system?" \
+            docker system prune -f --volumes
     fi
 
     # Systemd ghost reset (safe - just clears failed state)
@@ -1528,13 +1512,13 @@ function cl() {
 
     # Broken symlinks (list only, don't auto-delete)
     local broken_links
-    broken_links=$(find ~ -xtype l 2>/dev/null | wc -l)
+    broken_links=$(__find_broken_links | wc -l)
     if (( broken_links > 0 ))
     then
         __tac_info "Broken symlinks" "[$broken_links found]" "$C_Warning"
         # Show first 3 as examples
         local broken_sample
-        broken_sample=$(find ~ -xtype l -print 2>/dev/null | head -3)
+        broken_sample=$(__find_broken_links | head -3)
         while IFS= read -r link
         do
             __tac_info "  Example" "$link" "$C_Dim"

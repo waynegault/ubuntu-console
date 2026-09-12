@@ -97,6 +97,9 @@ _build_test_profile() {
         [[ -f "$_f" ]] || continue
         sed "${_sed_args[@]}" "$_f" > "$patched_scripts/$(basename "$_f")"
     done
+    # Shared module list: underscore-prefixed, so not matched by the copy loop
+    # above, but the loader sources it from the patched scripts dir.
+    cp "$REPO_ROOT/scripts/_module-list.sh" "$patched_scripts/_module-list.sh"
     # Replace 13-init with a minimal stub — skip expensive runtime
     # side-effects (pwsh.exe bridge, loopback, sha256, completions)
     # that are irrelevant to unit tests.
@@ -2264,9 +2267,11 @@ EOF
     done
 }
 
-@test "cross-script: env.sh uses glob to source numbered modules" {
-    # env.sh sources modules via a [0-9][0-9]-*.sh glob pattern
-    grep -q '\[0-9\]\[0-9\]-\*\.sh' "$REPO_ROOT/env.sh"
+@test "cross-script: env.sh loads modules from the shared list" {
+    # env.sh and the interactive profile both read scripts/_module-list.sh so
+    # their module sets cannot drift.
+    grep -q '_module-list.sh' "$REPO_ROOT/env.sh"
+    grep -q '_module-list.sh' "$PROFILE_PATH"
 }
 
 @test "cross-script: watchdog has correct health endpoint" {
@@ -2512,12 +2517,14 @@ EOF
     declare -f gog-help >/dev/null
 }
 
-@test "gog: 09b-gog.sh loaded by tactical-console.bashrc array" {
-    grep -q '09b-gog' "$REPO_ROOT/tactical-console.bashrc"
+@test "gog: 09b-gog.sh loaded via the shared module list" {
+    grep -q '_module-list.sh' "$REPO_ROOT/tactical-console.bashrc"
+    grep -qw '09b-gog' "$REPO_ROOT/scripts/_module-list.sh"
 }
 
-@test "gog: env.sh explicitly sources 09b-gog.sh" {
-    grep -q '09b-gog.sh' "$REPO_ROOT/env.sh"
+@test "gog: env.sh loads the shared module list (incl. 09b-gog)" {
+    grep -q '_module-list.sh' "$REPO_ROOT/env.sh"
+    grep -qw '09b-gog' "$REPO_ROOT/scripts/_module-list.sh"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

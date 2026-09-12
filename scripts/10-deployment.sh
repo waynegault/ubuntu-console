@@ -3,7 +3,7 @@
 # ─── Module: 10-deployment ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 10. DEPLOYMENT & SCAFFOLDING
 # ==============================================================================
@@ -411,8 +411,12 @@ ${diff_body}"
         -H "Content-Type: application/json" \
         -d "$payload" 2>/dev/null)
     local msg
+    # Normalise the model's reply: drop markdown fences/backticks and stray
+    # quotes, skip leading blank lines, keep the first line, trim surrounding
+    # whitespace, then cap at 72 chars.
     msg=$(printf '%s' "$raw_response" | jq -r '.choices[0].message.content // empty' 2>/dev/null | \
-        tr -d '"' | head -c 72 | head -1)
+        tr -d '`"' | sed '/^[[:space:]]*$/d' | head -1 | \
+        sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | cut -c1-72)
 
     if [[ -z "$msg" || "$msg" == "null" ]]
     then

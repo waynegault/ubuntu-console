@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 8
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -220,7 +220,7 @@ function __model_scan() {
             # until the final mv.
             local clean_tmp="${LLM_REGISTRY}.renum.$$"
             local new_num=0
-            echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill" > "$clean_tmp"
+            echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens" > "$clean_tmp"
             local _cline
             while IFS= read -r _cline
             do
@@ -1646,6 +1646,11 @@ function __model_bench() {
 
     local -a b_num=() b_name=() b_file=() b_size=() b_gpu=() b_tps=()
 
+    # NOTE: the __bench_* helpers below are deliberately global.  Bash has no
+    # function-local functions, so defining them here registers them for the
+    # whole shell; that is required because they are invoked from EXIT/INT/TERM
+    # traps and exported into the timeout wrapper's child shell.  They resolve
+    # this function's locals through dynamic scope while it is on the stack.
     # shellcheck disable=SC2317  # invoked indirectly via timeout wrapper in child shell
     __bench_run_single_model() {
         export __BENCH_MODE=1
@@ -2385,9 +2390,13 @@ function __model_recommend() {
             *)           score=$(( score + 10 )) ;;
         esac
 
-        if [[ "$size" =~ ^([0-9]+)(\.([0-9]))?G$ ]]
+        if [[ "$size" =~ ^([0-9]+)(\.([0-9]+))?G$ ]]
         then
-            size_tenths=$(( BASH_REMATCH[1] * 10 + ${BASH_REMATCH[3]:-0} ))
+            # Use the first fractional digit as "tenths" so a multi-decimal
+            # size (e.g. 1.75G) still ranks; the old single-digit regex
+            # rejected it and defaulted to the max small-size bonus.
+            local _frac="${BASH_REMATCH[3]:-0}"
+            size_tenths=$(( BASH_REMATCH[1] * 10 + ${_frac:0:1} ))
         fi
         if (( size_tenths <= 15 ))
         then

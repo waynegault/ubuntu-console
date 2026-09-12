@@ -211,6 +211,9 @@ def find_god_nodes(graph: Graph | dict, top_n: int = 10) -> list[dict]:
     scored = []
     for nid, data in centralities.items():
         degree_norm = min(1.0, data["degree"] / 20.0)
+        # NB: btw_norm/eig_norm are unbounded multipliers, so composite_score
+        # is a relative ranking value, not a normalised 0–1 metric — even
+        # though the report prints it with 3 decimals.
         btw_norm = data["betweenness"] * 5.0
         eig_norm = data["eigenvector"] * 3.0
         composite = round((degree_norm * 0.3 + btw_norm * 0.4 + eig_norm * 0.3), 4)

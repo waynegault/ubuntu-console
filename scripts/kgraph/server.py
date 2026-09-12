@@ -12,11 +12,13 @@ import time
 import webbrowser
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from urllib.parse import urlsplit
 
 from .constants import GRAPH_DB_DEFAULT, SAMPLE_GRAPH
 from .graph_db import load_from_graph_db, resolve_memory_db_path, save_to_graph_db
 from .memory_import import load_from_memory_db
 from .projection import project_graph
+from .validate import MAX_PAYLOAD_SIZE, validate_graph_payload
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +65,34 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
     # Path to OpenClaw memory DB to use as fallback source.
     memory_db = resolve_memory_db_path()
 
-    def _send_cors_headers(self):
+    def _send_cors_headers(self, allow_any_origin: bool = True):
       for name, value in _CORS_HEADERS:
+        if not allow_any_origin and name == 'Access-Control-Allow-Origin':
+          continue
         self.send_header(name, value)
 
+    def _origin_is_same(self) -> bool:
+      """True when the request Origin matches the Host it was sent to.
+
+      Browsers set Origin themselves and script cannot forge it, so this
+      blocks cross-site POSTs.  Requests without an Origin header (curl,
+      CLI, MCP clients) are not browser-originated and stay allowed.
+      """
+      origin = self.headers.get('Origin')
+      if not origin:
+        return True
+      host = self.headers.get('Host', '')
+      return bool(host) and urlsplit(origin).netloc == host
+
     def do_OPTIONS(self):
+      # Cross-origin writes are not supported: refuse to approve a POST
+      # preflight so a visited web page can never POST to /graph.json.
+      # Same-origin requests never preflight, so the bundled frontend is
+      # unaffected.
+      if self.headers.get('Access-Control-Request-Method', '').upper() == 'POST':
+        self.send_response(403)
+        self.end_headers()
+        return
       self.send_response(204)
       self._send_cors_headers()
       self.end_headers()
@@ -163,6 +188,25 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
 
     def do_POST(self):
       if self.path == '/graph.json':
+        # Only JSON bodies are accepted.  `application/json` is not a
+        # CORS-safelisted content type, so a cross-origin caller would have
+        # to preflight — and do_OPTIONS refuses POST preflights.  This
+        # stops a visited web page from silently overwriting the graph DB.
+        content_type = self.headers.get('Content-Type', '')
+        if content_type.split(';', 1)[0].strip().lower() != 'application/json':
+          self.send_response(415)
+          self.send_header('Content-Type', 'text/plain')
+          self.end_headers()
+          self.wfile.write(b'Unsupported Media Type: expected application/json')
+          return
+        # Cross-site requests are rejected outright (defence in depth for
+        # the safelisted-content-type case above).
+        if not self._origin_is_same():
+          self.send_response(403)
+          self.send_header('Content-Type', 'text/plain')
+          self.end_headers()
+          self.wfile.write(b'Forbidden: cross-origin writes are not allowed')
+          return
         # ── Rate limit: max 30 POSTs per 60s sliding window ──
         now = time.monotonic()
         cutoff = now - 60.0
@@ -177,7 +221,20 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
           return
         self.__class__._rl_requests.append(now)
 
-        length = int(self.headers.get('Content-Length', 0))
+        try:
+          length = int(self.headers.get('Content-Length', 0) or 0)
+        except (TypeError, ValueError):
+          length = 0
+        # Reject an oversized body before reading it: without this a caller
+        # can force a multi-GB allocation that the size validator (which runs
+        # on the parsed object) would never get the chance to refuse.
+        if length > MAX_PAYLOAD_SIZE:
+          self.send_response(413)
+          self.send_header('Content-Type', 'text/plain')
+          self._send_cors_headers(allow_any_origin=False)
+          self.end_headers()
+          self.wfile.write(b'Payload too large')
+          return
         body = self.rfile.read(length)
         try:
           payload = json.loads(body.decode('utf-8'))
@@ -186,16 +243,27 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
           payload.setdefault('nodes', [])
           payload.setdefault('edges', [])
 
+          # Security validation (size, node/edge caps, nesting depth, XSS
+          # patterns) before any DB write.  save_to_graph_db then validates
+          # the schema (Graph.from_dict) before its DELETE, so neither a
+          # malformed nor a hostile body can wipe the existing graph.
+          ok, reason = validate_graph_payload(payload)
+          if not ok:
+            raise ValueError(reason)
+
           # Primary persistence target: dedicated SQLite graph DB.
           save_to_graph_db(self.graph_db, payload)
 
           self.send_response(200)
-          self._send_cors_headers()
+          # No wildcard CORS on write responses: cross-origin callers must
+          # not be able to read the result either.
+          self._send_cors_headers(allow_any_origin=False)
           self.end_headers()
           self.wfile.write(b'OK')
         except (json.JSONDecodeError, ValueError, OSError) as e:
-          self.send_response(500)
-          self._send_cors_headers()
+          self.send_response(400)
+          self.send_header('Content-Type', 'text/plain')
+          self._send_cors_headers(allow_any_origin=False)
           self.end_headers()
           self.wfile.write(str(e).encode())
         return

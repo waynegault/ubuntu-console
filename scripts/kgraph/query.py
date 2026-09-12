@@ -10,10 +10,13 @@ All functions accept ``Graph`` models or legacy dicts.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import deque
 
 from .models import Graph, GraphEdge, GraphNode
+
+logger = logging.getLogger(__name__)
 
 
 def query_nodes(graph: Graph | dict, pattern: str, **kwargs) -> list[dict]:
@@ -34,6 +37,15 @@ def query_nodes(graph: Graph | dict, pattern: str, **kwargs) -> list[dict]:
     max_results = kwargs.get("max_results", 50)
 
     pattern_lower = pattern.strip().lower()
+
+    # The pattern is user-supplied: an invalid regex (e.g. "[") must not
+    # crash the query.  Fall back to the literal substring test below.
+    try:
+        regex = re.compile(pattern, re.IGNORECASE)
+    except re.error as exc:
+        logger.warning("Invalid regex pattern %r, matching literally instead: %s", pattern, exc)
+        regex = None
+
     results: list[dict] = []
 
     for node in graph.nodes:
@@ -41,11 +53,11 @@ def query_nodes(graph: Graph | dict, pattern: str, **kwargs) -> list[dict]:
         ntype = node.type.lower()
 
         if match_type in ("label", "any"):
-            if pattern_lower in label or re.search(pattern, label, re.IGNORECASE):
+            if pattern_lower in label or (regex is not None and regex.search(label)):
                 results.append(node.model_dump(mode="json", exclude_none=True))
                 continue
         if match_type in ("type", "any"):
-            if pattern_lower in ntype or re.search(pattern, ntype, re.IGNORECASE):
+            if pattern_lower in ntype or (regex is not None and regex.search(ntype)):
                 if not results or results[-1].get("id") != node.id:
                     results.append(node.model_dump(mode="json", exclude_none=True))
                     continue

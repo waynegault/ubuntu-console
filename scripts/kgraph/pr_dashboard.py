@@ -9,6 +9,7 @@ import logging
 import os
 import subprocess
 from datetime import datetime, timezone
+from html import escape
 
 logger = logging.getLogger(__name__)
 
@@ -114,24 +115,26 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("Failed to parse recent merges for dashboard: %s", exc)
 
-    # Files changed recently
-    diff_cmd = [
-        'git', 'diff', '--name-status',
-        f'@{days}.days.ago',
-    ]
+    # Files changed recently.  Use the same date window as the commit queries
+    # above via `git log --name-status`: `git diff @{N.days.ago}` is a reflog
+    # selector, which resolves to the wrong commit (or errors) on a fresh
+    # clone / CI checkout and after reflog expiry.
     recent_files = []
+    seen_paths: set[str] = set()
     try:
-        result = subprocess.run(diff_cmd, capture_output=True, text=True,
-                                cwd=repo_root, check=False)
-        for line in result.stdout.strip().split('\n'):
-            if not line.strip():
-                continue
+        result = subprocess.run(
+            ['git', 'log', since, '--name-status', '--no-renames', '--format='],
+            capture_output=True, text=True, cwd=repo_root, check=False,
+        )
+        for line in result.stdout.splitlines():
             parts = line.split('\t', 1)
-            if len(parts) == 2:
-                recent_files.append({
-                    'status': parts[0],
-                    'path': parts[1],
-                })
+            if len(parts) != 2 or not parts[1].strip():
+                continue
+            path = parts[1].strip()
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            recent_files.append({'status': parts[0].strip(), 'path': path})
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("Failed to list recently changed files: %s", exc)
 
@@ -219,27 +222,27 @@ def _correlate_with_graph(git_data: dict, graph: dict) -> list[dict]:
 
 def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, days: int) -> str:
     """Generate the full HTML dashboard."""
-    repo_name = os.path.basename(repo_root)
+    repo_name = escape(os.path.basename(repo_root))
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
     merges_table = ''
     for m in git_data.get('merges', [])[:20]:
         merges_table += f'''
         <tr>
-            <td><code>{m.get('hash', '')[:8]}</code></td>
-            <td>{m.get('author_name', '')}</td>
-            <td>{m.get('subject', '')[:80]}</td>
-            <td>{m.get('date', '')[:10]}</td>
+            <td><code>{escape(m.get('hash', '')[:8])}</code></td>
+            <td>{escape(m.get('author_name', ''))}</td>
+            <td>{escape(m.get('subject', '')[:80])}</td>
+            <td>{escape(m.get('date', '')[:10])}</td>
         </tr>'''
 
     commits_table = ''
     for c in git_data.get('commits', [])[:30]:
         commits_table += f'''
         <tr>
-            <td><code>{c.get('hash', '')[:8]}</code></td>
-            <td>{c.get('author_name', '')}</td>
-            <td>{c.get('subject', '')[:80]}</td>
-            <td>{c.get('date', '')[:10]}</td>
+            <td><code>{escape(c.get('hash', '')[:8])}</code></td>
+            <td>{escape(c.get('author_name', ''))}</td>
+            <td>{escape(c.get('subject', '')[:80])}</td>
+            <td>{escape(c.get('date', '')[:10])}</td>
         </tr>'''
 
     files_list = ''
@@ -254,26 +257,26 @@ def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, da
         elif status_class.startswith('R'):
             badge = '<span class="badge renamed">→</span>'
         else:
-            badge = f'<span class="badge">{status_class}</span>'
-        files_list += f'<li>{badge} {f.get("path", "")}</li>'
+            badge = f'<span class="badge">{escape(status_class)}</span>'
+        files_list += f'<li>{badge} {escape(f.get("path", ""))}</li>'
 
     branches_list = ''
     for b in git_data.get('branches', [])[:15]:
         marker = '<strong>▶</strong> ' if b.get('current') else ''
-        branches_list += f'<li>{marker}{b.get("name", "")}</li>'
+        branches_list += f'<li>{marker}{escape(b.get("name", ""))}</li>'
 
     correlations_table = ''
     for c in correlations[:20]:
         correlations_table += f'''
         <tr>
-            <td><code>{c.get('file', '')}</code></td>
-            <td>{c.get('node_label', '')}</td>
-            <td>{c.get('node_type', '')}</td>
+            <td><code>{escape(str(c.get('file', '')))}</code></td>
+            <td>{escape(str(c.get('node_label', '')))}</td>
+            <td>{escape(str(c.get('node_type', '')))}</td>
         </tr>'''
 
     authors_list = ''
     for name, email in git_data.get('authors', {}).items():
-        authors_list += f'<li>{name} &lt;{email}&gt;</li>'
+        authors_list += f'<li>{escape(str(name))} &lt;{escape(str(email))}&gt;</li>'
 
     html = f'''<!doctype html>
 <html>

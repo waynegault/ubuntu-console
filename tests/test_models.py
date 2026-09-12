@@ -111,6 +111,12 @@ class TestGraphEdge:
         assert edge.target == "n2"
         assert edge.origin == "ast"
 
+    def test_provenance_source_without_endpoint_rejected(self):
+        # source="ast" with no 'from' has no real endpoint; it must not be
+        # silently kept as the endpoint (which would point at an "ast" node).
+        with pytest.raises(ValidationError):
+            GraphEdge.model_validate({"source": "ast", "target": "n2"})
+
     def test_confidence_defaults_to_extracted(self):
         edge = GraphEdge.model_validate({"source": "a", "target": "b", "confidence": "EXTRACTED"})
         assert edge.confidence == ConfidenceLevel.EXTRACTED

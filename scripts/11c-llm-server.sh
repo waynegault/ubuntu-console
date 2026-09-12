@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -532,11 +532,5 @@ function __llm_tps_number() {
         printf '%s\n' "0"
     fi
 }
-
-# ---------------------------------------------------------------------------
-# wake — Lock the GPU into persistent mode to prevent WDDM sleep in WSL2.
-# NOTE: Persistence mode (-pm 1) is a runtime setting and does NOT survive
-# WSL restarts. You must re-run 'wake' after each 'wsl --shutdown'.
-# ---------------------------------------------------------------------------# end of file
 
 # end of file

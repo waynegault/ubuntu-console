@@ -3,7 +3,7 @@
 # ─── Module: 05-ui-engine ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 5. UI HELPER ENGINE
 # ==============================================================================
@@ -426,7 +426,7 @@ function __hSection() {
 
 # ---------------------------------------------------------------------------
 # __hRow — Help index row renderer with safe wrapping for long command/help text.
-# Layout derived from UIWidth: cmd_width=16, desc_width = UIWidth - 21.
+# Layout derived from UIWidth: cmd_width=22, desc_width = UIWidth - 25.
 # Usage: __hRow "command" "Description of what it does"
 # ---------------------------------------------------------------------------
 function __hRow() {

@@ -33,6 +33,9 @@ setup_file() {
         [[ -f "$_f" ]] || continue
         sed "${_sed_args[@]}" "$_f" > "$patched_scripts/$(basename "$_f")"
     done
+    # Shared module list: underscore-prefixed, so not matched by the
+    # [0-9][0-9]-*.sh loop above, but the loader sources it.
+    cp "$REPO_ROOT/scripts/_module-list.sh" "$patched_scripts/_module-list.sh"
     # Replace 13-init with minimal stub
     cat > "$patched_scripts/13-init.sh" << 'STUB'
 # Minimal test stub

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1091,SC2154
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 #===============================================================================
 # spec_dec_crossover.sh — SPEC-DEC-005 concurrency crossover measurement.
 #
@@ -94,6 +94,7 @@ mkdir -p "$WORKDIR"
 # workload distribution for this measurement.
 declare -a PROMPT_POOL=("${PROMPTS_LEGAL[@]:-}")
 if [[ ${#PROMPT_POOL[@]} -eq 0 ]]; then
+    echo "warning: scripts/prompt-sets.sh did not load — falling back to built-in legal prompts" >&2
     PROMPT_POOL=(
         "Analyse whether the employer engaged with the mediation process in good faith, citing the passages that support your verdict."
         "Does the respondent have a prima facie case for constructive dismissal? Assess each element against the evidence."
@@ -132,7 +133,7 @@ aggregate_throughput() {
     while [[ $_hw -lt 90 ]]; do
         sleep 1; _hw=$((_hw + 1))
         kill -0 "$_pid" 2>/dev/null || { echo "server died at launch" >&2; return 1; }
-        curl -sS --max-time 2 "http://127.0.0.1:$_port/health" 2>/dev/null | grep -q 'ok' && break
+        curl -sS --max-time 2 "http://127.0.0.1:$_port/health" 2>/dev/null | grep -q '"status":"ok"' && break
     done
     if [[ $_hw -ge 90 ]]; then
         echo "server failed to become healthy (parallel=$_parallel spec=$_spec_on)" >&2
@@ -164,20 +165,15 @@ aggregate_throughput() {
     local -a _curl_pids=()
     for (( _i = 0; _i < REQUESTS; _i++ )); do
         _pi=$(( _i % ${#PROMPT_POOL[@]} ))
-        "$TAC_PYTHON" - "$_port" "$_pi" "$MAX_TOKENS" "$WORKDIR/resp-p${_parallel}-spec${_spec_on}-${_i}.json" << 'PYEOF' &
+        # The prompt text is passed as argv (not re-embedded here) so
+        # scripts/prompt-sets.sh stays the single source of truth for the pool.
+        "$TAC_PYTHON" - "$_port" "${PROMPT_POOL[$_pi]}" "$MAX_TOKENS" "$WORKDIR/resp-p${_parallel}-spec${_spec_on}-${_i}.json" << 'PYEOF' &
 import json, sys, urllib.request
-port, idx, max_tokens, out = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
-pool = [
-    "Analyse whether the employer engaged with the mediation process in good faith, citing the passages that support your verdict.",
-    "Does the respondent have a prima facie case for constructive dismissal? Assess each element against the evidence.",
-    "Weigh the causation evidence against the contributory-conduct evidence and determine the appropriate reduction.",
-    "Assess whether the PCP put the claimant at a particular disadvantage and whether the justification meets the proportionality test.",
-    "Interpret 'such other period as the tribunal considers reasonable' in the context of the ACAS early-conciliation extension.",
-]
+port, prompt, max_tokens, out = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 payload = json.dumps({
     "messages": [
         {"role": "system", "content": "You are a legal analyst. Respond concisely."},
-        {"role": "user", "content": pool[idx % len(pool)]},
+        {"role": "user", "content": prompt},
     ],
     "max_tokens": max_tokens,
     "temperature": 0,

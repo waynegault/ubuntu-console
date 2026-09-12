@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 13
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -12,19 +12,16 @@
 # Usage:    source ~/ubuntu-console/env.sh
 #     or:   ~/ubuntu-console/bin/tac-exec <command> [args...]
 #
-# Modules loaded:  01-constants through 15-model-recommender (including 09b-gog)
-# Standalone executables under scripts/ (for example 18-lint) are skipped.
+# Modules loaded:  the canonical list in scripts/_module-list.sh, shared with
+#                  tactical-console.bashrc so the two can never drift.
+# Standalone executables under scripts/ (for example 18-lint) are not listed.
 # Modules skipped: 13-init (interactive side-effects: clear screen,
 #                  completions, WSL loopback, EXIT trap)
-#                  Utility scripts (tools/) are not in scripts/ so are never
-#                  picked up by the glob — no explicit exclusions needed.
 #
-# SC1090/SC1091: Dynamic sourcing by design — modules discovered at runtime
-#
-# AI INSTRUCTION: Keep this file in sync with tactical-console.bashrc's module
-# sourcing loop. When modules are added or removed from scripts/, update the
-# skip list below. This file must never contain interactive side-effects
-# (clear screen, prompt changes, completions, EXIT trap, WSL loopback).
+# AI INSTRUCTION: Add/remove modules in scripts/_module-list.sh (NOT here) so
+# the interactive and library loaders stay in sync. This file must never
+# contain interactive side-effects (clear screen, prompt changes, completions,
+# EXIT trap, WSL loopback).
 # ==============================================================================
 
 # Prevent double-sourcing
@@ -138,14 +135,23 @@ export LLM_AUTOTUNE_SPEC_N_MAX_LIST="${LLM_AUTOTUNE_SPEC_N_MAX_LIST:-4 8 16 32}"
 
 _tac_lib_dir="$_tac_env_root/scripts"
 
-for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh "$_tac_lib_dir"/[0-9][0-9][a-z]-*.sh; do
+# Canonical, shared module order — the same list tactical-console.bashrc uses,
+# so the interactive and library module sets can never drift.
+if ! source "$_tac_lib_dir/_module-list.sh"
+then
+    echo "[tac-env] cannot load the shared module list: $_tac_lib_dir/_module-list.sh" >&2
+    return 1
+fi
+mapfile -t _tac_modules < <(__tac_module_list)
+
+for _tac_mod in "${_tac_modules[@]}"; do
+    _tac_lib_f="$_tac_lib_dir/${_tac_mod}.sh"
     # Skip 13-init.sh — it runs interactive side-effects (clear, completions,
-    # WSL loopback fix, trusted sync loader, and UI traps) not needed in library mode.
-    # Utility scripts under tools/ are not matched by this glob.
+    # WSL loopback fix, trusted sync loader, and UI traps) not needed in
+    # library mode. 09b-gog is in the shared list, so it loads here too.
     case "$_tac_lib_f" in
-        *18-lint.sh) continue ;;
         *13-init.sh) continue ;;
-        *) ;;  # all other modules loaded normally
+        *) ;;
     esac
     if [[ -f "$_tac_lib_f" ]]
     then
@@ -156,20 +162,7 @@ for _tac_lib_f in "$_tac_lib_dir"/[0-9][0-9]-*.sh "$_tac_lib_dir"/[0-9][0-9][a-z
         fi
     fi
 done
-
-# Sub-modules with non-numeric prefixes are matched by the glob above
-# (e.g. 11a-llm-registry.sh).  Only truly numeric-module names need
-# explicit sourcing: 09b-gog.sh is kept here for backward compat.
-
-# 09b-gog.sh is handled by the [0-9][0-9][a-z]-*.sh glob above.
-# if [[ -f "$_tac_lib_dir/09b-gog.sh" ]]
-# then
-#     if ! source "$_tac_lib_dir/09b-gog.sh"
-#     then
-#         echo "[tac-env] failed sourcing module: $_tac_lib_dir/09b-gog.sh" >&2
-#         return 1
-#     fi
-# fi
+unset _tac_modules _tac_mod
 
 # Library mode skips 13-init, but core helpers still expect the OpenClaw
 # state directories to exist for cooldown and error-log writes.
@@ -181,6 +174,8 @@ mkdir -p "$OC_ROOT" "$OC_LOGS" "$OC_BACKUPS" 2>/dev/null || true
 __TAC_BG_PIDS=()
 
 # Library mode skips 13-init.sh, so install a lightweight cleanup trap here.
+# Chain with any pre-existing EXIT trap instead of clobbering it, matching the
+# interactive loader (13-init.sh) so tac-exec callers keep their own cleanup.
 function __tac_env_cleanup_bg_pids() {
     local _pid
     for _pid in "${__TAC_BG_PIDS[@]:-}"
@@ -189,7 +184,9 @@ function __tac_env_cleanup_bg_pids() {
         kill "$_pid" 2>/dev/null || true
     done
 }
-trap __tac_env_cleanup_bg_pids EXIT
+_tac_env_prev_exit_trap=$(trap -p EXIT | sed "s/trap -- '//;s/' EXIT//")
+trap '__tac_env_cleanup_bg_pids; '"${_tac_env_prev_exit_trap:-}" EXIT
+unset _tac_env_prev_exit_trap
 
 unset _tac_env_root _tac_lib_f _tac_lib_dir
 

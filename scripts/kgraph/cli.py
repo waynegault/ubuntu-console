@@ -37,8 +37,12 @@ def _load_graph(args: argparse.Namespace) -> dict:
     Fallback chain: --graph file → graph DB → memory DB → sample.
     """
     if args.graph:
-        with open(args.graph, "r", encoding="utf-8") as gf:
-            return json.load(gf)
+        try:
+            with open(args.graph, "r", encoding="utf-8") as gf:
+                return json.load(gf)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Error: failed to load graph file '{args.graph}': {exc}", file=sys.stderr)
+            sys.exit(1)
 
     graph_db = args.graph_db or os.path.expanduser(GRAPH_DB_DEFAULT)
     memory_db = args.import_db or resolve_memory_db_path()

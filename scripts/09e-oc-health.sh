@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154,SC2015,SC2153,SC1091
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # 09e-oc-health
 # ==============================================================================
@@ -230,13 +230,21 @@ function oc-plugin-update() {
             current_remote=$(git -C "$plugin_dir" remote get-url origin 2>/dev/null || echo "")
             if [[ "$current_remote" == *"$repo_url"* ]]
             then
-                if git -C "$plugin_dir" pull --ff-only >/dev/null 2>&1
+                local pull_out
+                if pull_out=$(git -C "$plugin_dir" pull --ff-only 2>&1)
                 then
-                    __tac_line "$id" "[UPDATED]" "$C_Success"
+                    if [[ "$pull_out" == *"Already up to date"* || "$pull_out" == *"Already up-to-date"* ]]
+                    then
+                        __tac_line "$id" "[UP TO DATE]" "$C_Dim"
+                    else
+                        __tac_line "$id" "[UPDATED]" "$C_Success"
+                    fi
                     return 0
                 else
-                    __tac_line "$id" "[UP TO DATE]" "$C_Dim"
-                    return 0
+                    # A failed pull must not read as "up to date": surface it.
+                    __tac_line "$id" "[UPDATE FAILED]" "$C_Error"
+                    printf '%s\n' "  ${C_Dim}${pull_out}${C_Reset}"
+                    return 1
                 fi
             else
                 __tac_line "$id" "[SKIP - different remote]" "$C_Warning"
@@ -361,6 +369,10 @@ function oc-stinger() {
             then
                 __tac_line "MCP Server" "[ALREADY RUNNING]" "$C_Dim"
             else
+                # Save/restore PWD: oc-stinger start is a shell function, so a
+                # bare `cd "$os_dir"` would leave the user's shell in the
+                # vendor directory after the command returns.
+                local _prev_pwd="$PWD"
                 set +m
                 cd "$os_dir" || { __tac_line "MCP Server" "[FAILED - dir not found: $os_dir]" "$C_Error"; return 1; }
                 source "$os_dir/.venv/bin/activate" && \
@@ -368,6 +380,7 @@ function oc-stinger() {
                     > "$os_dir/.openstinger/openstinger.log" 2>&1 &
                 disown
                 set -m
+                cd "$_prev_pwd" 2>/dev/null || true
                 sleep 3
                 if pgrep -f "openstinger.gradient.mcp.server" >/dev/null 2>&1
                 then
@@ -918,9 +931,13 @@ function oc-doctor-local() {
     then
         local _oc_health_json=""
         _oc_health_json=$(oc-health --json 2>/dev/null || true)
-        # Parse new health check format: look for API Health check status
+        # Accept both oc-health --json shapes: the enhanced Python checker
+        # emits {"checks":[{"name":...,"status":...}]}, but the built-in
+        # fallback emits a flat {"health_status":...} object. Reading only
+        # .checks[] forced gateway_health to "unknown" (a spurious issue) on
+        # hosts without the enhanced checker.
         local api_health_status=""
-        api_health_status=$(jq -r '.checks[] | select(.name == "API Health") | .status' <<< "$_oc_health_json" 2>/dev/null || echo "unknown")
+        api_health_status=$(jq -r '((.checks[]? | select(.name == "API Health") | .status) // .health_status) // empty' <<< "$_oc_health_json" 2>/dev/null || true)
         if [[ "$api_health_status" == "OK" || "$api_health_status" == "ok" ]]
         then
             gateway_health="ok"
@@ -1072,17 +1089,5 @@ function wacli() {
     fi
 }
 export -f wacli
-
-# ---------------------------------------------------------------------------
-# oc-kgraph — Launch the kgraph knowledge-graph server and open in browser.
-# Starts the kgraph package on localhost:46139, waits for it to bind, then
-# opens the page in the default browser.
-#
-# Options:
-#   --reindex   Rebuild OpenClaw memory index and sync graph DB before launch
-#   --restart   Force-restart kgraph server before launch
-#   -h|--help   Show usage
-# ---------------------------------------------------------------------------
-# end of file
 
 # end of file

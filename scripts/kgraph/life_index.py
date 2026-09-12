@@ -183,7 +183,9 @@ def merge_relations(graph: Graph | dict, life_root: str | None = None) -> Graph:
                 source=src_id,
                 target=tgt_id,
                 label=rel_type,
-                origin=str(rel.get("source", "")),
+                # origin records the edge's PROVENANCE, not its endpoint:
+                # downstream confidence logic keys off origin == "ast" etc.
+                origin="life_index",
                 explicit=True,
             ))
             existing_edges.add((src_id, tgt_id, rel_type))

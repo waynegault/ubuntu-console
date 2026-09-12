@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 09f-oc-misc — Miscellaneous OC commands (kgraph, stinger, mem-index)
 # ==============================================================================
@@ -187,7 +187,10 @@ PY
         local b
         for b in "${browsers[@]}"; do
             if command -v "$b" >/dev/null 2>&1; then
-                if "$b" "$URL" >/dev/null 2>&1 & then
+                # No trailing `&`: backgrounding would make the if test the
+                # fork's success, not the launcher's, so a browser that fails
+                # to start would still be reported as the opener.
+                if "$b" "$URL" >/dev/null 2>&1; then
                     opened=0
                     opener_used="$b"
                     break
@@ -295,7 +298,10 @@ function oc-update() {
     # Use enhanced update script if available
     if [[ -f "$enhanced_script" ]]
     then
-        exec "$enhanced_script"
+        # Run it as a child process: oc-update is a shell function dispatched
+        # from the interactive `oc`, so `exec` here would replace (and on exit
+        # kill) the user's shell. A plain call returns control instead.
+        "$enhanced_script"
         return $?
     fi
 
@@ -532,7 +538,7 @@ function oc-restore() {
     then
         [[ -d "$OC_WORKSPACE" ]] && mv "$OC_WORKSPACE" "${OC_WORKSPACE}.bak"
         mv "$tmp_restore/.openclaw/workspace" "$OC_WORKSPACE"
-        if [[ -z "$OC_WORKSPACE" || "$OC_WORKSPACE" == "/" || ! "$OC_WORKSPACE" =~ ^/home|^/tmp|^/dev/shm ]]; then
+        if [[ -z "$OC_WORKSPACE" || "$OC_WORKSPACE" == "/" || ! "$OC_WORKSPACE" =~ ^(/home|/tmp|/dev/shm) ]]; then
             __tac_info "Backup Cleanup" "[REFUSED - unsafe OC_WORKSPACE: ${OC_WORKSPACE:-EMPTY}]" "$C_Error"
         else
             rm -rf "${OC_WORKSPACE}.bak"
@@ -542,7 +548,7 @@ function oc-restore() {
     then
         [[ -d "$OC_AGENTS" ]] && mv "$OC_AGENTS" "${OC_AGENTS}.bak"
         mv "$tmp_restore/.openclaw/agents" "$OC_AGENTS"
-        if [[ -z "$OC_AGENTS" || "$OC_AGENTS" == "/" || ! "$OC_AGENTS" =~ ^/home|^/tmp|^/dev/shm ]]; then
+        if [[ -z "$OC_AGENTS" || "$OC_AGENTS" == "/" || ! "$OC_AGENTS" =~ ^(/home|/tmp|/dev/shm) ]]; then
             __tac_info "Backup Cleanup" "[REFUSED - unsafe OC_AGENTS: ${OC_AGENTS:-EMPTY}]" "$C_Error"
         else
             rm -rf "${OC_AGENTS}.bak"

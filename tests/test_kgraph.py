@@ -418,6 +418,14 @@ class TestQuery(unittest.TestCase):
         results = self.kgraph.query_nodes(graph, 'x', match_type='any')
         self.assertEqual(len(results), 1)
 
+    def test_query_nodes_invalid_regex_falls_back_to_literal(self):
+        # An invalid regex must not raise; literal substring matching applies.
+        self.assertEqual(self.kgraph.query_nodes(self.small_graph, '['), [])
+
+    def test_query_nodes_valid_regex_still_matches(self):
+        results = self.kgraph.query_nodes(self.small_graph, r'^jwt')
+        self.assertEqual([r['id'] for r in results], ['n3'])
+
     # ── find_path ───────────────────────────────────────────────────
 
     def test_find_path_direct_edge(self):

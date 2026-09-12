@@ -19,7 +19,8 @@
 #                 ~/.bashrc must remain a THIN LOADER that only sources this file:
 #                   source "$HOME/ubuntu-console/tactical-console.bashrc"
 #                 Modular sections live under:
-#                   ~/ubuntu-console/scripts/[01-15]-*.sh + 09b-gog.sh  (sourced in numeric order)
+#                   ~/ubuntu-console/scripts/[01-15]-*.sh + 09b-gog.sh
+#                   (load order: scripts/_module-list.sh, shared with env.sh)
 #
 # HELP INDEX:     See the HELP INDEX section below for functions, aliases, and
 #                 sections with one-line descriptions and usage notes.
@@ -68,7 +69,7 @@ esac
 # TACTICAL_PROFILE_VERSION is auto-computed after sourcing all modules:
 #   TACTICAL_PROFILE_VERSION = _TAC_LOADER_VERSION . sum(all module versions)
 #   Example: v3.63 = loader v3 + 63 total module versions
-_TAC_LOADER_VERSION="8"
+_TAC_LOADER_VERSION="9"
 
 # AI INSTRUCTION: Follow these terminal formatting rules strictly:
 # 1. A blank line must exist between the bottom of any UI border and the command prompt.
@@ -135,22 +136,26 @@ _TAC_LOADER_VERSION="8"
 # ==============================================================================
 # SOURCE MODULES
 # ==============================================================================
-# Modules are numbered 01-15 (plus 09b-gog). Numeric prefixes enforce load order and match
-# the dependency chain declared in each module's @depends annotation.
-# Design-tokens (03) loads before aliases (04) so that hooks (06) can read
-# C_* variables at source time when setting _TAC_ADMIN_BADGE.
+# The module list lives in scripts/_module-list.sh (shared with env.sh) so the
+# interactive and library loaders can never drift. Order enforces the
+# dependency chain declared in each module's @depends annotation: design-tokens
+# (03) loads before aliases (04) so hooks (06) can read C_* variables at source
+# time when setting _TAC_ADMIN_BADGE.
 
 _tac_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TACTICAL_REPO_ROOT="${TACTICAL_REPO_ROOT:-$_tac_repo_root}"
 _tac_module_dir="$TACTICAL_REPO_ROOT/scripts"
 
-# Expected modules (for warning if any are missing)
-_tac_expected_modules=(01-constants 02-error-handling 03-design-tokens 04-aliases
-    05-ui-engine 06-hooks 07-telemetry 08-maintenance
-    09-openclaw 09a-oc-gateway 09b-gog 09c-oc-core 09d-oc-agents 09e-oc-health 09f-oc-misc
-    10-deployment
-    11a-llm-registry 11b-llm-autotune 11c-llm-server 11d-llm-gpu 11e-llm-model 11f-llm-runtime
-    12-dashboard-help 13-init 14-wsl-extras 15-model-recommender)
+# Canonical module list, shared with env.sh (the library loader) so the two
+# module sets can never drift. Each thin loader (09-openclaw, 11-llm-manager)
+# sources its own sub-modules. Losing the list would silently disable every
+# function below, so report it loudly.
+if ! source "$_tac_module_dir/_module-list.sh"
+then
+    printf '%s\n' "${C_Warning:-}[Tactical Profile]${C_Reset:-}" \
+        "cannot load the shared module list: $_tac_module_dir/_module-list.sh" >&2
+fi
+mapfile -t _tac_expected_modules < <(__tac_module_list 2>/dev/null)
 
 # Source modules (timed when DEBUG_TAC_STARTUP is set) and accumulate
 # module versions from their "# Module Version: N" comment.

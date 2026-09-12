@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 21
+# Module Version: 23
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -69,7 +69,7 @@ function unittest() {
             command "$repo_root/unittest" "$@"; return $?
         fi
         if [[ -x "$repo_root/.venv/bin/investigator" ]]; then
-            command "$repo_root/.venv/bin/investigator" unittest "$@"; return "${PIPESTATUS[0]}"
+            command "$repo_root/.venv/bin/investigator" unittest "$@"; return $?
         fi
     fi
 
@@ -298,6 +298,10 @@ function os() {
 
     # Print sessions table header with underline
     if (( session_count > 0 )); then
+        # Column widths, kept in one place: used by the row format below and by
+        # the total-cost footer offset, which must line up with the Cost column.
+        local w_agent=12 w_label=40 w_key=25 w_age=9 w_model=14 w_tokens=22
+        local cost_col=$(( w_agent + w_label + w_key + w_age + w_model + w_tokens + 6 * 3 ))
         printf '\n%s\n' "${C_Dim}Agent          Label                                      Key                         Age         Model            Tokens      (ctx %)      Cost    Status  ${C_Reset}"
         printf '%s\n' "${C_Dim}────────────   ────────────────────────────────────────   ─────────────────────────   ─────────   ──────────────   ─────────────────────   ──────   ────────${C_Reset}"
 
@@ -333,9 +337,14 @@ function os() {
             else
                 cost_str="\$0.00"
             fi
-            # Truncate/pad fields for display (Tokens column: 22 chars, right-aligned for bracket alignment)
-            printf '%-12s   %-40s   %-25s   %-9s   %-14s   %-22s   %-6s   %s\n' \
-                "${agent_name:0:12}" "${display_label:0:40}" "${key:0:25}" "${age_str:0:9}" "${model:0:14}" "$tokens" "$cost_str" "$session_status"
+            # Truncate/pad fields for display (widths shared with the footer).
+            printf '%-*s   %-*s   %-*s   %-*s   %-*s   %-*s   %-6s   %s\n' \
+                "$w_agent" "${agent_name:0:$w_agent}" \
+                "$w_label" "${display_label:0:$w_label}" \
+                "$w_key" "${key:0:$w_key}" \
+                "$w_age" "${age_str:0:$w_age}" \
+                "$w_model" "${model:0:$w_model}" \
+                "$w_tokens" "$tokens" "$cost_str" "$session_status"
             # Accumulate total cost (no subprocess — bash integer arithmetic on micro-cents)
             if [[ "$session_cost" =~ ^[0-9]*\.[0-9]+$ ]]; then
                 total_cost=$(awk "BEGIN {printf \"%.6f\", $total_cost + $session_cost}")
@@ -350,8 +359,8 @@ function os() {
         local total_underline=""
         for ((i=0; i<total_len; i++)); do total_underline+="─"; done
         printf '\n'
-        printf '%128s%s\n' "" "${total_label}"
-        printf '%128s%s\n' "" "${total_underline}"
+        printf '%*s%s\n' "$cost_col" "" "${total_label}"
+        printf '%*s%s\n' "$cost_col" "" "${total_underline}"
     else
         printf '%s\n' "${C_Dim}No sessions found.${C_Reset}"
     fi

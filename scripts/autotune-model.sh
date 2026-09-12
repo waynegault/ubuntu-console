@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 25
+# Module Version: 26
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -538,7 +538,7 @@ _bench_spawn() {
         while [[ $hw -lt 90 ]]; do
             sleep 1; hw=$((hw + 1))
             kill -0 "$_BENCH_PID" 2>/dev/null || return 1
-            curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q 'ok' && return 0
+            curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q '"status":"ok"' && return 0
         done
         return 1
     }
@@ -1648,7 +1648,7 @@ ttft_probe() {
         while [[ $hw -lt 90 ]]; do
             sleep 1; hw=$((hw + 1))
             kill -0 "$pid" 2>/dev/null || return 1
-            curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q 'ok' && return 0
+            curl -sS --max-time 2 "$health_url/health" 2>/dev/null | grep -q '"status":"ok"' && return 0
         done
         return 1
     }

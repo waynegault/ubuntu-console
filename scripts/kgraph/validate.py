@@ -49,31 +49,36 @@ def _json_depth(obj: object, d: int = 0) -> int:
     return d
 
 
+def _scan_dangerous(value: object) -> bool:
+    """True when any string anywhere inside *value* matches a dangerous pattern."""
+    if isinstance(value, str):
+        return bool(DANGEROUS_PATTERNS.search(value))
+    if isinstance(value, dict):
+        return any(_scan_dangerous(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_scan_dangerous(v) for v in value)
+    return False
+
+
 def _check_xss(data: dict) -> list[dict]:
-    """Scan all string values for dangerous patterns."""
+    """Scan node/edge string values, including nested ones, for dangerous patterns."""
     errors: list[dict] = []
-    for idx, node in enumerate(data.get("nodes", [])):
-        if not isinstance(node, dict):
-            continue
-        for key, value in node.items():
-            if isinstance(value, str) and DANGEROUS_PATTERNS.search(value):
-                errors.append({
-                    "severity": "error",
-                    "message": f"nodes[{idx}]: field '{key}' contains dangerous patterns",
-                    "node_idx": idx,
-                    "field": key,
-                })
-    for idx, edge in enumerate(data.get("edges", [])):
-        if not isinstance(edge, dict):
-            continue
-        for key, value in edge.items():
-            if isinstance(value, str) and DANGEROUS_PATTERNS.search(value):
-                errors.append({
-                    "severity": "error",
-                    "message": f"edges[{idx}]: field '{key}' contains dangerous patterns",
-                    "edge_idx": idx,
-                    "field": key,
-                })
+    for kind, items in (("nodes", data.get("nodes", [])),
+                        ("edges", data.get("edges", []))):
+        for idx, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            for key, value in item.items():
+                # Recurse into nested containers (payload, typed_summary,
+                # summary_labels, …) — scanning only top-level strings let a
+                # dangerous value one level down pass validation.
+                if _scan_dangerous(value):
+                    errors.append({
+                        "severity": "error",
+                        "message": f"{kind}[{idx}]: field '{key}' contains dangerous patterns",
+                        f"{kind[:-1]}_idx": idx,
+                        "field": key,
+                    })
     return errors
 
 

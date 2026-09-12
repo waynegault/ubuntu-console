@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11f-llm-runtime ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
@@ -10,7 +10,7 @@
 # @depends: constants, design-tokens, ui-engine, llm-registry, llm-server,
 #   llm-model
 # @exports: serve, halt, mlogs, burn, explain, wtf_repl, __llm_sse_core,
-#   __llm_stream, __llm_chat_send, local_chat, chat-context
+#   __llm_stream, __llm_chat_send, local_chat, chat-context, chat-pipe
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.

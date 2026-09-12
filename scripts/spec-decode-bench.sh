@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1091,SC2034
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 #===============================================================================
 # spec-decode-bench.sh — Per-prompt speculative-decoding acceptance bench.
 #
@@ -73,8 +73,10 @@ fi
 local_url="http://127.0.0.1:${LLM_PORT:-8080}/v1/chat/completions"
 
 # Snapshot the count of stats lines already in the log so per-prompt
-# attribution only sees this run's requests.
-before_count=$(grep -c 'draft acceptance = ' "$LLM_LOG_FILE" 2>/dev/null || echo 0)
+# attribution only sees this run's requests.  grep -c prints "0" AND exits
+# non-zero on no match, and prints nothing when the log is unreadable — both
+# must collapse to a single integer or the later arithmetic fails.
+before_count=$(grep -c 'draft acceptance = ' "$LLM_LOG_FILE" 2>/dev/null) || before_count=0
 
 block_size=$(__spec_block_size)
 printf 'spec-decode bench: %s prompts, max_tokens=%s, block size=%s\n' \
@@ -110,7 +112,7 @@ for (( i = 0; i < ${#PROMPTS[@]}; i++ )); do
 done
 
 # ── Acceptance stats: pair new stats lines with prompts by request order ─────
-after_count=$(grep -c 'draft acceptance = ' "$LLM_LOG_FILE" 2>/dev/null || echo 0)
+after_count=$(grep -c 'draft acceptance = ' "$LLM_LOG_FILE" 2>/dev/null) || after_count=0
 new_count=$(( after_count - before_count ))
 if (( new_count < ${#PROMPTS[@]} )); then
     printf '\nnote: %s/%s requests have acceptance stats (spec-decode must be enabled on the server)\n' \

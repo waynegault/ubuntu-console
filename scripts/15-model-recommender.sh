@@ -3,7 +3,7 @@
 # ─── Module: 15-model-recommender ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 15. MODEL RECOMMENDER
 # ==============================================================================
@@ -51,7 +51,8 @@ function model-recommend() {
         vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         if [[ "$vram_mb" =~ ^[0-9]+$ ]]
         then
-            vram_gb=$(( vram_mb / 1024 ))
+            # Round to the nearest GB: 4095 MB is a 4 GB card, not 3.
+            vram_gb=$(( (vram_mb + 512) / 1024 ))
         fi
     fi
 

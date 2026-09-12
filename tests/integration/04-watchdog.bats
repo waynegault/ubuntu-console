@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
 # ==============================================================================
-# Integration Tests — Llama Watchdog (v3.0, dual-lane)
+# Integration Tests — Llama Watchdog (v3.1, dual-lane)
 # ==============================================================================
-# Tests llama-watchdog.sh v3.0: health probing, 2-strike recovery, the
-# always-on Xe lane, and the GPU-gated CUDA lane. All external commands (curl,
-# systemctl, gpu-busy.sh) are mocked so the suite is hermetic and never touches
-# the live llama-server.service.
+# Tests llama-watchdog.sh v3.1: health probing (including the 503 "loading"
+# signal), 2-strike recovery, the always-on Xe lane, and the GPU-gated CUDA
+# lane. All external commands (curl, systemctl, gpu-busy.sh) are mocked so the
+# suite is hermetic and never touches the live llama-server.service.
 # Run: bats tests/integration/04-watchdog.bats
 # ==============================================================================
 
@@ -26,11 +26,23 @@ setup_file() {
     # no longer honoured), so point HOME at the sandbox and drop the mock there.
     export HOME="$WATCHDOG_MOCK_HOME"
 
-    # Mock curl: /health and /v1/models succeed only once the "healthy" marker
-    # exists (set by the mock systemctl on restart/start).
+    # Mock curl: /health answers 503 while the "loading" marker exists (model
+    # still loading), 200 once "healthy" exists, else connection failure (22).
     cat > "$WATCHDOG_MOCK_BIN/curl" <<'MOCK'
 #!/usr/bin/env bash
-if [[ "$*" == *"/health"* || "$*" == *"/v1/models"* ]]
+if [[ "$*" == *"/health"* ]]
+then
+    if [[ -f "$SYSTEMCTL_MOCK_STATE/healthy" ]]; then
+        printf '{"status":"ok"}\n200\n'
+        exit 0
+    fi
+    if [[ -f "$SYSTEMCTL_MOCK_STATE/loading" ]]; then
+        printf '{"status":"loading model"}\n503\n'
+        exit 0
+    fi
+    exit 22
+fi
+if [[ "$*" == *"/v1/models"* ]]
 then
     [[ -f "$SYSTEMCTL_MOCK_STATE/healthy" ]] && exit 0
     exit 22
@@ -146,6 +158,36 @@ setup() {
     [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
     grep -q "restart llama-server.service" "$SYSTEMCTL_MOCK_LOG"
     [[ "$output" == *"Recovery successful"* ]]
+}
+
+@test "integration: watchdog leaves a still-loading (503) Xe lane alone" {
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    touch "$WATCHDOG_MOCK_STATE/loading"
+
+    run "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Xe unit still loading (503)"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+
+    # A second loading tick must not accrue the 2nd strike either.
+    run "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    [[ "$(cat /dev/shm/llama-watchdog-xe.strikes 2>/dev/null || echo 0)" == "0" ]]
+}
+
+@test "integration: watchdog leaves a still-loading (503) CUDA lane alone" {
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    touch "$WATCHDOG_MOCK_STATE/loading"
+
+    run "$WATCHDOG_SCRIPT"
+    run "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"CUDA unit still loading (503)"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    [[ "$(cat /dev/shm/llama-watchdog-nv.strikes 2>/dev/null || echo 0)" == "0" ]]
 }
 
 @test "integration: watchdog stops the CUDA lane while the GPU is busy" {

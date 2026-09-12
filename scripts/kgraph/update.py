@@ -158,10 +158,23 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
         file_hashes = _hash_files(source_dir)
         print(f"  Watching {source_dir} ({len(file_hashes)} files, interval={interval}s)")
 
-    # Track memory DB mtime for change detection
-    last_mem_mtime: float = 0.0
-    if mem_db_path and os.path.exists(mem_db_path):
-        last_mem_mtime = os.path.getmtime(mem_db_path)
+    # Track memory DB mtimes for change detection.  With no explicit path,
+    # incremental_update merges every auto-resolved registry, so watch those
+    # too — otherwise --watch rebuilds on source changes but silently ignores
+    # memory changes.
+    last_mem_mtimes: dict[str, float] = {}
+
+    def _mem_watch_paths() -> list[str]:
+        if mem_db_path:
+            return [mem_db_path] if os.path.exists(mem_db_path) else []
+        from .graph_db import resolve_all_memory_db_paths
+        return resolve_all_memory_db_paths()
+
+    for _p in _mem_watch_paths():
+        try:
+            last_mem_mtimes[_p] = os.path.getmtime(_p)
+        except OSError:
+            pass
 
     print("  Watch mode active. Press Ctrl+C to stop.")
     while True:
@@ -174,11 +187,14 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
                 changed = True
                 file_hashes = current
 
-        if mem_db_path and os.path.exists(mem_db_path):
-            current_mtime = os.path.getmtime(mem_db_path)
-            if current_mtime != last_mem_mtime:
+        for _p in _mem_watch_paths():
+            try:
+                _mt = os.path.getmtime(_p)
+            except OSError:
+                continue
+            if _mt != last_mem_mtimes.get(_p):
                 changed = True
-                last_mem_mtime = current_mtime
+                last_mem_mtimes[_p] = _mt
 
         if changed:
             print(f"  [{time.strftime('%H:%M:%S')}] File changes detected, rebuilding...")

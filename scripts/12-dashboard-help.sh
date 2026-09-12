@@ -3,7 +3,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -142,7 +142,10 @@ function tactical_dashboard() {
         local tps
         tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
         if [[ -z "$tps" && -n "$_entry" ]]; then
-            tps=$(awk -F'|' '{print $15}' <<< "$_entry")
+            # Field 17 is tps; field 15 is mmap_mode (see the registry header
+            # in 11e-llm-model.sh). Reading $15 printed "auto tps" whenever the
+            # TPS cache was cold.
+            tps=$(awk -F'|' '{print $17}' <<< "$_entry")
             [[ -n "$tps" && "$tps" != "0" ]] && tps="${tps} tps"
         fi
         __fRow "LOCAL LLM" "ACTIVE $act_mod | ${tps:-$LAST_TPS}" "$C_Success"

@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 10
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -29,6 +29,14 @@ function __llm_autotune_sanitize_token() {
     token="${token//;/_}"
     token="${token//,/_}"
     printf '%s\n' "$token"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_round2 — Render a numeric value to at most 2 decimals, dropping
+# trailing zeros/dot (e.g. 143.0963 → 143.1, 88.00 → 88).
+# ---------------------------------------------------------------------------
+function __llm_round2() {
+    awk -v v="$1" 'BEGIN { printf "%.2f", v }' 2>/dev/null | sed -E 's/0+$//; s/\.$//'
 }
 
 # ---------------------------------------------------------------------------
@@ -227,11 +235,10 @@ function __llm_autotune_profile_save() {
     # Registry hygiene: persist measured floats at a maximum of 2 decimal
     # places. The server timings carry full float64 precision (e.g. prefill
     # 143.09630118625265), which is noise in a config file consumers parse.
-    _round2() { awk -v v="$1" 'BEGIN { printf "%.2f", v }' 2>/dev/null | sed -E 's/0+$//; s/\.$//'; }
-    tps=$(_round2 "$tps")
-    [[ -n "$prefill_tps" ]] && prefill_tps=$(_round2 "$prefill_tps")
-    [[ -n "$p2_tps" ]] && p2_tps=$(_round2 "$p2_tps")
-    [[ -n "$p2_prefill" ]] && p2_prefill=$(_round2 "$p2_prefill")
+    tps=$(__llm_round2 "$tps")
+    [[ -n "$prefill_tps" ]] && prefill_tps=$(__llm_round2 "$prefill_tps")
+    [[ -n "$p2_tps" ]] && p2_tps=$(__llm_round2 "$p2_tps")
+    [[ -n "$p2_prefill" ]] && p2_prefill=$(__llm_round2 "$p2_prefill")
 
     [[ -f "$profile_file" ]] || return 1
 
@@ -405,7 +412,7 @@ function __kv_mb_per_1k() {
 # __llm_autotune_estimate_ctx_start — Estimate a useful initial ctx probe.
 # Uses saved ctx/TPS plus rough model-size and free-VRAM heuristics so autotune
 # starts near the likely throughput-stable range instead of a flat default.
-# @args <saved_ctx> <saved_tps> <min_tps> <max_ctx> <model_bytes> <free_vram_mb>
+# @args <saved_ctx> <saved_tps> <min_tps> <max_ctx> <model_bytes> <free_vram_mb> <n_layers>
 # @stdout Estimated ctx rounded to 512.
 # ---------------------------------------------------------------------------
 function __llm_autotune_estimate_ctx_start() {
@@ -415,6 +422,7 @@ function __llm_autotune_estimate_ctx_start() {
     local max_ctx="${4:-8192}"
     local model_bytes="${5:-0}"
     local free_vram_mb="${6:-0}"
+    local n_layers="${7:-0}"
 
     local estimate=4096
     local model_baseline_ctx=4096
@@ -711,11 +719,5 @@ function __llm_median_from_list() {
             }
         '
 }
-
-# ---------------------------------------------------------------------------
-# __llm_active_entry — Resolve the currently active model to a registry row.
-# @returns 0 on success, 1 if no active model state is recorded or it is stale.
-# ---------------------------------------------------------------------------
-# end of file
 
 # end of file

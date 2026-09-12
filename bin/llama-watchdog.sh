@@ -6,6 +6,9 @@
 #     stopped when GPU busy (foreign workload) so VRAM is freed and gateway
 #     requests fail fast to the Xe lane (per Wayne 09-09: "if cuda is not being
 #     used, it can be used; if it is being used, use xe").
+# v3.1 (2026-09-11): honour health()'s 503 "still loading" signal — a loading
+#   lane is neither struck nor restarted; drop a redundant re-probe that could
+#   swallow a recovery without resetting strikes.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -15,7 +18,7 @@
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
 # shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="3.0"
+VERSION="3.1"
 set -uo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
@@ -65,9 +68,9 @@ gpu_busy() {
 
 bench_lock() { [[ -f "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}" ]]; }
 
-# wait_healthy <unit> <port> <timeout_s> — 0 healthy, 1 not
+# wait_healthy <port> <timeout_s> — 0 healthy, 1 not
 wait_healthy() {
-    local unit="$1" port="$2" t="$3" i h
+    local port="$1" t="$2" i
     for (( i=0; i<t; i++ )); do
         if health "$port"; then return 0; fi
         # loading (503) is fine, keep waiting; only give up on hard timeout
@@ -87,7 +90,7 @@ recover() {
         systemctl --user start "$unit.service" 2>/dev/null || { log "recover failed for $unit"; return 1; }
     fi
     log "Restart issued: $unit"
-    if wait_healthy "$unit" "$port" 150; then
+    if wait_healthy "$port" 150; then
         log "Recovery successful — $unit healthy on :${port}"
         return 0
     fi
@@ -99,27 +102,27 @@ recover() {
 # LANE 1: Xe llama-server — always-on
 # ============================================================
 xe_state=$(systemctl --user show "$XE_UNIT.service" -p ActiveState --value 2>/dev/null || true)
-if health "$XE_PORT"; then
+health "$XE_PORT"; xe_health=$?
+if (( xe_health == 0 )); then
     strike_reset "$STRIKE_XE"
+elif [[ "$xe_state" == "activating" ]]; then
+    log "Xe unit activating — systemd handling recovery; skipping"
+    strike_reset "$STRIKE_XE"
+elif (( xe_health == 2 )); then
+    # 503 = process up, model still loading. Striking or bouncing a loading
+    # unit only lengthens the outage (and can trip the start-limit).
+    log "Xe unit still loading (503) — leaving alone"
+    strike_reset "$STRIKE_XE"
+elif bench_lock; then
+    log "Xe down but bench lock present — skipping restart (port may be claimed)"
 else
-    if [[ "$xe_state" == "activating" ]]; then
-        log "Xe unit activating — systemd handling recovery; skipping"
-        strike_reset "$STRIKE_XE"
-    elif health "$XE_PORT" >/dev/null; then
-        :
+    strike_inc "$STRIKE_XE"
+    s=$(strike_get "$STRIKE_XE")
+    log "Xe health check failed on :${XE_PORT} (unit=${xe_state:-unknown}, strike ${s}/2)"
+    if [[ "$s" -ge 2 ]]; then
+        if recover "$XE_UNIT" "$XE_PORT"; then strike_reset "$STRIKE_XE"; fi
     else
-        if bench_lock; then
-            log "Xe down but bench lock present — skipping restart (port may be claimed)"
-        else
-            strike_inc "$STRIKE_XE"
-            s=$(strike_get "$STRIKE_XE")
-            log "Xe health check failed on :${XE_PORT} (unit=${xe_state:-unknown}, strike ${s}/2)"
-            if [[ "$s" -ge 2 ]]; then
-                if recover "$XE_UNIT" "$XE_PORT"; then strike_reset "$STRIKE_XE"; fi
-            else
-                log "Xe strike 1/2 — will restart if next check also fails"
-            fi
-        fi
+        log "Xe strike 1/2 — will restart if next check also fails"
     fi
 fi
 
@@ -135,7 +138,12 @@ if gpu_busy; then
     fi
     strike_reset "$STRIKE_NV"
 elif [[ "$nv_state" == "active" ]]; then
-    if health "$NV_PORT"; then
+    health "$NV_PORT"; nv_health=$?
+    if (( nv_health == 0 )); then
+        strike_reset "$STRIKE_NV"
+    elif (( nv_health == 2 )); then
+        # Still loading (503) — do not strike or restart the CUDA lane.
+        log "CUDA unit still loading (503) — leaving alone"
         strike_reset "$STRIKE_NV"
     else
         strike_inc "$STRIKE_NV"
@@ -155,7 +163,7 @@ else
         fi
         log "GPU free and $NV_UNIT not active — starting CUDA lane"
         if systemctl --user start "$NV_UNIT.service" 2>/dev/null; then
-            if wait_healthy "$NV_UNIT" "$NV_PORT" 150; then
+            if wait_healthy "$NV_PORT" 150; then
                 log "CUDA lane healthy on :${NV_PORT}"
             else
                 log "CUDA lane started but not healthy on :${NV_PORT} within 150s"

@@ -109,7 +109,7 @@ def _has_main_guard(tree: ast.AST) -> bool:
     return False
 
 
-def _is_subprocess_consumed(rel_path: str, sources: dict[str, str]) -> bool:
+def _is_subprocess_consumed(rel_path: Path, sources: dict[Path, str]) -> bool:
     """True when another file references *rel_path* as a string.
 
     Covers scripts launched via ``subprocess.run([... "path/to/mod.py"])``

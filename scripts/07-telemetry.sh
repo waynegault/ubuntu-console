@@ -3,7 +3,7 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 7
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
@@ -50,13 +50,16 @@ function __get_disk() {
     local __unit_fix='s/\([0-9.]\)G/\1 Gb/;s/\([0-9.]\)M/\1 Mb/;s/\([0-9.]\)T/\1 Tb/'
     local c_drive
     c_drive=$(df -h /mnt/c 2>/dev/null | awk 'NR==2 {print $4" free"}' | sed "$__unit_fix")
-    local wsl_drive
-    wsl_drive=$(df -h / | awk 'NR==2 {print $4" free"}' | sed "$__unit_fix")
+    # One df for the WSL root, capturing free space and use% together, so the
+    # fallback branch does not re-run df (it previously forked it twice).
+    local wsl_free wsl_pct
+    read -r wsl_free wsl_pct < <(df -h / | awk 'NR==2 {print $4, $5}')
+    wsl_free=$(printf '%s' "$wsl_free" | sed "$__unit_fix")
     if [[ -n "$c_drive" ]]
     then
-        echo "C: $c_drive | WSL: $wsl_drive"
+        echo "C: $c_drive | WSL: ${wsl_free} free"
     else
-        df -h / | awk 'NR==2 {print $4" free ("$5" used)"}' | sed "$__unit_fix"
+        echo "${wsl_free} free (${wsl_pct} used)"
     fi
 }
 
@@ -67,9 +70,14 @@ function __get_disk() {
 # ---------------------------------------------------------------------------
 function __refresh_host_metrics() {
     local cache="$TAC_CACHE_DIR/tac_hostmetrics"
-    local cache_tmp="${cache}.$$"
     local engines_cache="$TAC_CACHE_DIR/tac_gpu_engines"
-    local engines_tmp="${engines_cache}.$$"
+    # PID alone is insufficient: __get_host_metrics, __get_gpu_engines and
+    # __get_gpu can each call this during one dashboard render while the cache
+    # is still stale, so two same-shell refreshes would target the same temp
+    # path and clobber each other mid-write. $RANDOM makes each call unique.
+    local _tmp_token="$$.$RANDOM"
+    local cache_tmp="${cache}.${_tmp_token}"
+    local engines_tmp="${engines_cache}.${_tmp_token}"
     if ! __cache_fresh "$cache" 10 || ! __cache_fresh "$engines_cache" 10
     then
         ( trap 'rm -f "$cache_tmp" "$engines_tmp"' EXIT; \
@@ -90,8 +98,9 @@ function __refresh_host_metrics() {
 # This avoids blocking the dashboard render on slow Windows IPC.
 # Falls back to "0|0|0" on first boot when no cache exists yet.
 #
-# Race condition fix: Uses PID-suffixed temp file to avoid conflicts if
-# multiple shells refresh simultaneously. Temp file is cleaned up on exit.
+# Race condition fix: temp files carry a PID + random token to avoid conflicts
+# if multiple shells — or multiple calls in one shell — refresh simultaneously.
+# Temp files are cleaned up on exit.
 # ---------------------------------------------------------------------------
 function __get_host_metrics() {
     local cache="$TAC_CACHE_DIR/tac_hostmetrics"
