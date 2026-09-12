@@ -26,6 +26,31 @@ from .validate import MAX_PAYLOAD_SIZE
 
 logger = logging.getLogger(__name__)
 
+# kgraph_report writes a file; confine it to a dedicated directory so a caller
+# cannot pick an arbitrary path (e.g. ~/.bashrc). Overridable via KG_REPORTS_DIR.
+_REPORTS_DIR_DEFAULT = '~/.openclaw/kgraph-reports'
+
+
+def _reports_dir() -> str:
+    """Directory that kgraph_report may write into."""
+    return os.path.expanduser(os.environ.get('KG_REPORTS_DIR', _REPORTS_DIR_DEFAULT))
+
+
+def _safe_report_path(name: str) -> str | None:
+    """Resolve *name* inside the reports dir, or None if it escapes it.
+
+    Rejects absolute paths and any ``..`` traversal.
+    """
+    if not name or os.path.isabs(name):
+        return None
+    if '..' in name.replace('\\', '/').split('/'):
+        return None
+    base = _reports_dir()
+    target = os.path.normpath(os.path.join(base, name))
+    if target != base and not target.startswith(base + os.sep):
+        return None
+    return target
+
 
 def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = None):
     """Serve MCP-style JSON-RPC over HTTP.
@@ -190,6 +215,11 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
 
             elif method == 'kgraph_report':
                 outpath = params.get('outpath', None)
+                if outpath:
+                    safe = _safe_report_path(str(outpath))
+                    if safe is None:
+                        return {'error': 'outpath must be a relative path inside the kgraph reports directory'}
+                    outpath = safe
                 report = generate_report(self.graph, outpath=outpath)
                 return {'report': report}
 

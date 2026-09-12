@@ -1132,6 +1132,15 @@ class TestRegistryAdapter(unittest.TestCase):
         cur.execute(
             "INSERT INTO memory_events VALUES (?,?,?,?,?,?,?)",
             ('evt-1', '2026-04-01', 'capture', 'capture_inserted', '[]', 'mem-1', '{}'))
+        # beliefs: schema default status 'current' survives the default filter;
+        # 'superseded' is dropped unless include_all (regression: the filter
+        # compared against 'active' and dropped default-status beliefs).
+        cur.execute(
+            "INSERT INTO memory_beliefs VALUES (?,?,?,?,?,?,?,?)",
+            ('bel-1', 'e-1', 'fact', 'Live belief', 'current', 0.9, 'mem-1', 'registry'))
+        cur.execute(
+            "INSERT INTO memory_beliefs VALUES (?,?,?,?,?,?,?,?)",
+            ('bel-2', 'e-1', 'fact', 'Superseded belief', 'superseded', 0.9, 'mem-1', 'registry'))
         # open loops: status 'open' survives the default filter;
         # 'closed' is dropped unless include_all (regression: the filter
         # compared a 'open' default against 'active' and dropped everything).
@@ -1170,6 +1179,9 @@ class TestRegistryAdapter(unittest.TestCase):
             self.assertNotIn('synthesis:synth:stale', nids)
             # claim + event skipped
             self.assertIn('claim:mem-1:slot-1', nids)
+            # beliefs: default status 'current' kept, 'superseded' dropped
+            self.assertIn('belief:bel-1', nids)
+            self.assertNotIn('belief:bel-2', nids)
             # entity synthesis: hal kept, database (noise) dropped
             ent_ids = [n.id for n in nodes if n.type == 'entity']
             self.assertIn('entity:hal', ent_ids)

@@ -1200,7 +1200,9 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
             "  FROM memory_beliefs"
         ):
             d = dict(row)
-            if not include_all and str(d.get('status') or 'active') != 'active':
+            # Schema default is 'current' (memory_beliefs.status), so a belief
+            # with the default status is live; only superseded/retracted drop.
+            if not include_all and str(d.get('status') or 'current') != 'current':
                 continue
             _add_node({
                 'id': f"belief:{d['belief_id']}",

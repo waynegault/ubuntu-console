@@ -229,6 +229,17 @@ class TestMCPServer(unittest.TestCase):
         """serve_mcp is importable and callable."""
         self.assertTrue(callable(kgraph.serve_mcp))
 
+    def test_safe_report_path_confines_writes(self):
+        """kgraph_report outpath stays inside the reports directory."""
+        from kgraph.mcp_server import _safe_report_path
+        with mock.patch.dict(os.environ, {"KG_REPORTS_DIR": "/tmp/kg-reports"}):
+            self.assertEqual(_safe_report_path("r.md"), "/tmp/kg-reports/r.md")
+            self.assertEqual(_safe_report_path("sub/r.md"), "/tmp/kg-reports/sub/r.md")
+            self.assertIsNone(_safe_report_path("/etc/passwd"))
+            self.assertIsNone(_safe_report_path(""))
+            self.assertIsNone(_safe_report_path("../escape.md"))
+            self.assertIsNone(_safe_report_path("a/../../escape.md"))
+
 
 # ── pr_dashboard ───────────────────────────────────────────────────────
 
