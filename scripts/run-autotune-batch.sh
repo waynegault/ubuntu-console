@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -78,8 +78,14 @@ echo ""
 # (WSL2's nvidia-smi process listing doesn't expose process names)
 #------------------------------------------------------------------------------
 drain_vram() {
-    local before after
+    local before="" after=""
     before=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}')
+    if ! [[ "$before" =~ ^[0-9]+$ ]]; then
+        # Empty operands compare equal in bash, which would look like a
+        # completed drain after a single sleep — wait the full window instead.
+        echo "WARN: nvidia-smi returned no VRAM reading; waiting the full drain window" >&2
+        before=""
+    fi
     # CUDA-scoped llama kill — never the Xe fleet / persistent units.
     if declare -f __llm_kill_cuda_llama_servers &>/dev/null; then
         __llm_kill_cuda_llama_servers || true
@@ -87,11 +93,15 @@ drain_vram() {
         echo "WARN: __llm_kill_cuda_llama_servers not loaded — skipping llama cleanup" >&2
     fi
     local waited=0
-    while [ "$waited" -lt 15 ]; do
+    while [[ $waited -lt 15 ]]; do
         sleep 1
         waited=$((waited + 1))
         after=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null | awk '{print $1}')
-        [[ "$after" -le "$before" ]] && break
+        # Break only on a strict drop; "unchanged" means the server is not
+        # actually gone; an unreadable value means keep waiting.
+        if [[ "$after" =~ ^[0-9]+$ ]] && [[ -n "$before" ]] && (( after < before )); then
+            break
+        fi
     done
     waited=0
     while [ "$waited" -lt 10 ]; do

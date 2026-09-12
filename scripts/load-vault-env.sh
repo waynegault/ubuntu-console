@@ -3,11 +3,13 @@
 # load-vault-env — Optional Windows-backed vault env loader
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
 # Optional helper loaded by scripts/14-wsl-extras.sh.
 #
 # Source (repo):   scripts/load-vault-env.sh
-# Install target:  ~/.openclaw/credentials/vault/load-vault-env.sh
+# Install targets: ~/.local/bin/load-vault-env.sh                  (install.sh link)
+#                  ~/.openclaw/credentials/vault/load-vault-env.sh  (sourced by
+#                  14-wsl-extras.sh when present — place it there to auto-load)
 #
 # Purpose:
 # - Import Windows-backed credential exports into the current shell.

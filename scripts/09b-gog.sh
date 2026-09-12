@@ -3,13 +3,13 @@
 # --- Module: 09b-gog ------------------------------------------------------
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 9b. GOG (Google CLI) MANAGER
 # ==============================================================================
 # @modular-section: gog
 # @depends: constants, design-tokens, ui-engine
-# @exports: gog-status, gog-login, gog-logout, gog-version,
+# @exports: gog-status, gog-login, gog-logout, gog-version, gog-help,
 #   __is_gog_installed
 
 # ==============================================================================

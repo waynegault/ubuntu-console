@@ -16,10 +16,8 @@
 # ---------------------------------------------------------------------------
 function tactical_dashboard() {
     command clear
-    # Reset the background PID tracker. Telemetry __get_* functions append
-    # subshell PIDs here; the EXIT trap (__tac_exit_cleanup in §13) kills
-    # any still running when the shell exits. Clearing prevents unbounded
-    # growth across multiple dashboard renders in a single session.
+    # Reset the background PID tracker (best-effort: the telemetry getters run
+    # in command substitutions, so their refresh PIDs do not reach this array).
     __TAC_BG_PIDS=()
     local line; printf -v line '%*s' "$((UIWidth - 2))" ''; line="${line// /═}"
 

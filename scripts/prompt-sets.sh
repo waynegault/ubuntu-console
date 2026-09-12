@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2034
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # ─── Module: prompt-sets ─────────────────────────────────────────────────────
 # Shared SPEC-DEC-006 workload prompt sets — the investigator's real
 # workloads: legal-RAG (structured, long, tool-call-shaped prompts with a
@@ -65,7 +65,7 @@ PROMPT_NAMES_AGENTIC=(
 #   chat     — alias for physics (autotune scoring default)
 #   legal    — SPEC-DEC-006 legal-RAG set
 #   agentic  — SPEC-DEC-006 agentic tool-call set
-#   mix      — interpolation across all three sets (autotune scoring)
+#   mix      — currently identical to `all` (all three sets)
 # @sets PROMPT_NAMES, PROMPTS
 # @returns 0 on a known set, 1 otherwise (globals left untouched).
 # ---------------------------------------------------------------------------

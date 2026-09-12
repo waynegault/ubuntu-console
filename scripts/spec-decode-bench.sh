@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1091,SC2034
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 #===============================================================================
 # spec-decode-bench.sh — Per-prompt speculative-decoding acceptance bench.
 #
@@ -114,13 +114,15 @@ done
 # ── Acceptance stats: pair new stats lines with prompts by request order ─────
 after_count=$(grep -c 'draft acceptance = ' "$LLM_LOG_FILE" 2>/dev/null) || after_count=0
 new_count=$(( after_count - before_count ))
-if (( new_count < ${#PROMPTS[@]} )); then
-    printf '\nnote: %s/%s requests have acceptance stats (spec-decode must be enabled on the server)\n' \
+if (( new_count != ${#PROMPTS[@]} )); then
+    # With the counts unequal a missing stats line would silently re-label
+    # every later prompt, so no per-prompt table is rendered at all.
+    printf '\nnote: %s/%s requests have acceptance stats — per-prompt acceptance table skipped (cannot attribute by order; is spec-decode enabled?)\n' \
         "$new_count" "${#PROMPTS[@]}"
 fi
 
-# Re-run the table with acceptance data when available.
-if (( new_count > 0 )); then
+# Re-run the table with acceptance data — only when every prompt has a line.
+if (( new_count > 0 )) && (( new_count == ${#PROMPTS[@]} )); then
     mapfile -t stat_lines < <(grep 'draft acceptance = ' "$LLM_LOG_FILE" 2>/dev/null | tail -n "$new_count")
     printf '\n%-44s %10s %8s %6s %8s %8s\n' "prompt" "accept_len" "rate" "block" "tps" "tok(del/use)"
     for (( i = 0; i < ${#PROMPTS[@]}; i++ )); do

@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 13
+# Module Version: 14
 # ==============================================================================
 
 # ==============================================================================
@@ -93,10 +93,15 @@ if ! mountpoint -q "$LLAMA_DRIVE_ROOT" 2>/dev/null
 then
     __LLAMA_DRIVE_MOUNTED=0
 fi
+# 200 GB assumed-size fallback, declared here (before first use) so the magic
+# number lives in exactly one place; re-source-guarded like the block below.
+if [[ -z "${LLAMA_DRIVE_FALLBACK_BYTES+x}" ]]; then
+    declare -ri LLAMA_DRIVE_FALLBACK_BYTES=$((200 * 1024 * 1024 * 1024))
+fi
 LLAMA_DRIVE_SIZE=$(df -B1 --output=size "$LLAMA_DRIVE_ROOT" 2>/dev/null | awk 'NR==2{print $1+0}')
 if [[ -z "$LLAMA_DRIVE_SIZE" || "$LLAMA_DRIVE_SIZE" == "0" ]]
 then
-    LLAMA_DRIVE_SIZE=$((200 * 1024 * 1024 * 1024))
+    LLAMA_DRIVE_SIZE=$LLAMA_DRIVE_FALLBACK_BYTES
 fi
 export LLAMA_DRIVE_SIZE
 export LLAMA_SERVER_BIN="$LLAMA_ROOT/build/bin/llama-server"
@@ -245,7 +250,12 @@ function __tac_probe_ok() {
     then
         rc=0
     fi
-    printf '%d' "$(( rc == 0 ))" > "$cache_file" 2>/dev/null
+    # Atomic write: a reader must never observe a truncated (empty) cache and
+    # then latch "CLI unavailable" for the rest of the session.
+    if printf '%d' "$(( rc == 0 ))" > "${cache_file}.$$" 2>/dev/null
+    then
+        mv -f "${cache_file}.$$" "$cache_file" 2>/dev/null || true
+    fi
     return "$rc"
 }
 
@@ -320,9 +330,6 @@ declare -ri LOG_MAX_BYTES=1048576    # 1 MB - logtrim threshold
 fi
 if [[ -z "${MOE_DEFAULT_CTX+x}" ]]; then
 declare -ri MOE_DEFAULT_CTX=8192     # Default context size for MoE models
-fi
-if [[ -z "${LLAMA_DRIVE_FALLBACK_BYTES+x}" ]]; then
-declare -ri LLAMA_DRIVE_FALLBACK_BYTES=$((200 * 1024 * 1024 * 1024))  # 200 GB
 fi
 
 # ---- Battery detection (cached once at startup to skip pwsh fallback on desktops) ----

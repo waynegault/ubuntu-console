@@ -3,7 +3,7 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================
@@ -85,6 +85,13 @@ then
         sudo ip link add loopback0 type dummy 2>/dev/null
         sudo ip link set loopback0 up 2>/dev/null
         sudo ip addr add 127.0.0.2/8 dev loopback0 2>/dev/null
+        if ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
+        then
+            printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset}" \
+                "127.0.0.2 loopback unavailable — OpenClaw node-to-node traffic may fail"
+            echo "$(date +"%Y-%m-%d %H:%M:%S") [LOOPBACK-FAILED] could not set up loopback0/127.0.0.2" \
+                >> "$ErrorLogPath" 2>/dev/null
+        fi
     fi
 elif ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
 then
@@ -92,6 +99,11 @@ then
     if (( _sudo_check ))
     then
         sudo ip addr add 127.0.0.2/8 dev loopback0 2>/dev/null
+        if ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
+        then
+            printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset}" \
+                "127.0.0.2 loopback address missing — OpenClaw node-to-node traffic may fail"
+        fi
     fi
 fi
 unset _sudo_check
@@ -109,11 +121,20 @@ then
                 "${C_Warning}[Tactical Profile]${C_Reset}" \
                     "oc-llm-sync.sh hash mismatch — skipped (run 'oc-trust-sync' if update is expected)"
         else
-            # C7: stderr suppressed because oc-llm-sync.sh may emit harmless
-            # warnings (e.g., unbound variables from older versions). The || true
-            # prevents a failing sync from aborting shell init. Errors are still
-            # logged above via the SHA256 entry in bash-errors.log.
-            source "$OC_WORKSPACE/oc-llm-sync.sh" 2>/dev/null || true
+            # stderr suppressed because oc-llm-sync.sh may emit harmless
+            # warnings (e.g., unbound variables from older versions), but a
+            # failed source is logged and surfaced — the SHA256 entry above
+            # records no outcome on its own.
+            _sync_src_rc=0
+            source "$OC_WORKSPACE/oc-llm-sync.sh" 2>/dev/null || _sync_src_rc=$?
+            if (( _sync_src_rc != 0 ))
+            then
+                printf '%s\n' \
+                    "${C_Warning}[Tactical Profile]${C_Reset}" \
+                    "oc-llm-sync.sh failed to load (rc=$_sync_src_rc) — continuing"
+                echo "$(date +"%Y-%m-%d %H:%M:%S") [SOURCE-FAILED] oc-llm-sync.sh rc=$_sync_src_rc" \
+                    >> "$ErrorLogPath" 2>/dev/null
+            fi
         fi
     else
         # No trusted hash — refuse to source. Run 'oc-trust-sync' first.
@@ -122,7 +143,7 @@ then
             "oc-llm-sync.sh has no trusted hash — skipped (run 'oc-trust-sync' to establish trust)"
     fi
     # Always clean up hash variables regardless of code path
-    unset _sync_hash _trusted_hash
+    unset _sync_hash _trusted_hash _sync_src_rc
 fi
 
 # Bridge Windows User API keys into WSL so OpenClaw fallback providers work.
@@ -156,16 +177,16 @@ then
 fi
 
 # Clean up background telemetry subshells on shell exit.
-# Only kills PIDs we spawned for caching — not user-started background jobs.
 # Chains with any pre-existing EXIT trap to avoid silently overwriting it.
 #
-# Lifecycle:
-#   1. Each __get_* telemetry function appends its background PID to __TAC_BG_PIDS
-#   2. tactical_dashboard resets the array at the start of each render
-#   3. On shell exit, __tac_exit_cleanup kills any lingering background subshells
-#   4. The trap chains with any prior EXIT trap so other cleanup still runs
+# NOTE: the telemetry getters are called via command substitution
+# (`host_raw=$(__get_host_metrics)`), so a `$!` recorded inside them belongs to
+# the substitution subshell, not this shell — the refresh jobs are short-lived
+# (1-5s) and reparent on exit, so __TAC_BG_PIDS is effectively empty here. The
+# array is kept (and reset per render) for getters run in the current shell and
+# the trap still chains other cleanup. Making this authoritative would require
+# the dashboard to read the caches directly instead of capturing stdout.
 __TAC_BG_PIDS=()
-# Clean up background telemetry subshells on shell exit.
 function __tac_exit_cleanup() {
     local pid
     for pid in "${__TAC_BG_PIDS[@]}"

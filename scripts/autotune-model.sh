@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 26
+# Module Version: 27
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -304,7 +304,7 @@ __workload_payload_json() {
             _prompt="${PROMPTS_LEGAL[0]:-} ${PROMPTS_AGENTIC[0]:-}"
             ;;
         chat|*)
-            _prompt="Explain special relativity: time dilation, length contraction, mass-energy equivalence."
+            _prompt="${PROMPTS_PHYSICS[0]:-Explain special relativity: time dilation, length contraction, mass-energy equivalence.}"
             ;;
     esac
     "$TAC_PYTHON" - "$_system" "$_prompt" << 'PYEOF'
@@ -326,7 +326,7 @@ __workload_prompt_text() {
         legal)   printf '%s\n' "${PROMPTS_LEGAL[0]:-}" ;;
         agentic) printf '%s\n' "${PROMPTS_AGENTIC[0]:-}" ;;
         mix)     printf '%s\n' "${PROMPTS_LEGAL[0]:-} ${PROMPTS_AGENTIC[0]:-}" ;;
-        chat|*)  printf '%s\n' "Explain special relativity: time dilation, length contraction, mass-energy equivalence." ;;
+        chat|*)  printf '%s\n' "${PROMPTS_PHYSICS[0]:-Explain special relativity: time dilation, length contraction, mass-energy equivalence.}" ;;
     esac
 }
 
@@ -542,6 +542,17 @@ _bench_spawn() {
         done
         return 1
     }
+    # Classify a failed startup from the server log: a hard load failure
+    # (unsupported/corrupt GGUF, missing file) must not be mistaken for OOM —
+    # OOM descends to a smaller ctx, a load failure aborts the remaining
+    # combos. When the process dies, only the log tells the two apart.
+    _startup_fail_type() {
+        if grep -qiE 'unknown model architecture|failed to load model|error loading model|unsupported (model|architecture)|failed to open|no such file' "$_BENCH_LOG" 2>/dev/null; then
+            printf 'load_fail'
+        else
+            printf 'oom'
+        fi
+    }
     _launch_server || {
         if [[ $flash_attn == "on" ]]; then
             echo "  flash-attn load failure — retrying with --flash-attn off" >&2
@@ -567,7 +578,7 @@ _bench_spawn() {
             2>/dev/null | "$TAC_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('usage',{}).get('completion_tokens',0))" 2>/dev/null | grep -q '[1-9]'; then
             pf_ok=1; break
         fi
-        kill -0 "$_BENCH_PID" 2>/dev/null || { echo "0|0|oom" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="oom"; return 1; }
+        kill -0 "$_BENCH_PID" 2>/dev/null || { local _sft; _sft=$(_startup_fail_type); echo "0|0|$_sft" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="$_sft"; return 1; }
         sleep 1; pf_w=$((pf_w + 1))
     done
     if [[ $pf_ok -ne 1 ]]; then
@@ -1919,7 +1930,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # know which prompt distribution certified the winner.
         # AUTOTUNE-003: the median TTFT at the winning ctx rides in field 34.
         # AUTOTUNE-004: the measured (ctx, parallel) envelope rides in the
-        # parallel column (field 6) — launches validate --parallel N against
+        # parallel column (field 12) — launches validate --parallel N against
         # it and warn when over-subscribed (11e-llm-model.sh).
         __llm_autotune_profile_save "$MODEL" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
