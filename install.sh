@@ -8,7 +8,6 @@ VERSION="1.1"
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
-LOADER_MARKER='tactical-console.bashrc'
 PROFILE_PATH="$REPO/tactical-console.bashrc"
 
 append_loader_block() {
@@ -116,7 +115,9 @@ fi
 LOADER
     echo "  ~/.bashrc - created thin loader"
 else
-    if grep -q "$LOADER_MARKER" "$HOME/.bashrc" 2>/dev/null
+    # Skip only if ~/.bashrc already sources a tactical-console.bashrc loader
+    # (any path). Matching the bare filename would false-positive on a comment.
+    if grep -qE '^[[:space:]]*(source|\.)[[:space:]]+.*tactical-console\.bashrc' "$HOME/.bashrc" 2>/dev/null
     then
         echo "  ~/.bashrc - loader already present (skipped)"
     else

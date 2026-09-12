@@ -27,10 +27,23 @@ set -uo pipefail
 # Cleanup is inlined into the trap (rather than a named function) so shellcheck
 # does not flag the body as unreachable (SC2317) for a function invoked only by
 # trap; a suppression comment would be the wrong fix.
-trap 'flock -u 200 2>/dev/null || true; rm -f /dev/shm/llama-watchdog.lock 2>/dev/null || true' EXIT INT TERM
+# Lock/strike paths are env-overridable so the integration suite can sandbox
+# them; the defaults keep production on /dev/shm.
+WATCHDOG_LOCK_FILE="${LLAMA_WATCHDOG_LOCK_FILE:-/dev/shm/llama-watchdog.lock}"
+WATCHDOG_STRIKE_DIR="${LLAMA_WATCHDOG_STRIKE_DIR:-/dev/shm}"
+# Only the lock HOLDER may unlink the lock file: a non-holder removing it would
+# drop the inode the holder still has locked, letting a third instance in.
+WATCHDOG_HOLDS_LOCK=0
+trap 'if [[ "$WATCHDOG_HOLDS_LOCK" == 1 ]]; then rm -f "$WATCHDOG_LOCK_FILE" 2>/dev/null; fi; flock -u 200 2>/dev/null || true' EXIT INT TERM
 
-exec 200>/dev/shm/llama-watchdog.lock
-flock -n 200 || { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance running - skipping"; exit 0; }
+exec 200>"$WATCHDOG_LOCK_FILE"
+if flock -n 200
+then
+    WATCHDOG_HOLDS_LOCK=1
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] Another instance running - skipping"
+    exit 0
+fi
 
 # -- Shared constants --
 # Canonical port default kept in the LLM_SERVICE_PORT=... form the cross-script
@@ -40,8 +53,8 @@ XE_PORT="$LLM_SERVICE_PORT"
 XE_UNIT="llama-server"
 NV_PORT="${LLM_NVIDIA_PORT:-18083}"
 NV_UNIT="llama-server-nvidia"
-STRIKE_XE="/dev/shm/llama-watchdog-xe.strikes"
-STRIKE_NV="/dev/shm/llama-watchdog-nv.strikes"
+STRIKE_XE="$WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes"
+STRIKE_NV="$WATCHDOG_STRIKE_DIR/llama-watchdog-nv.strikes"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] $*"; }
 

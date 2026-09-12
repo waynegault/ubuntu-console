@@ -740,7 +740,7 @@ bench_once() {
     local tag="/tmp/at-vram-${MODEL}-${c}"
 
     _BENCH_FAIL_TYPE=""  # global: "load_fail" or "oom"; reset before each bench
-    cleanup_gpu 2>/dev/null || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
+    cleanup_gpu >&2 || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
 
     if [[ ! -f $tag ]]; then
         local g; g=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
@@ -780,7 +780,7 @@ bench_once_multi() {
     local tag="/tmp/at-vram-${MODEL}-${c}"
 
     _BENCH_FAIL_TYPE=""
-    cleanup_gpu 2>/dev/null || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
+    cleanup_gpu >&2 || { echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; return 1; }
 
     if [[ ! -f $tag ]]; then
         local g; g=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
@@ -1628,7 +1628,7 @@ ttft_probe() {
     local health_url="http://127.0.0.1:$autotune_port"
     local flash_attn="on" pid="" hw=0
 
-    cleanup_gpu 2>/dev/null || { echo ""; return 1; }
+    cleanup_gpu >&2 || { echo ""; return 1; }
 
     local mmap_flag=""
     [[ $mmap_mode == off ]] && mmap_flag="--no-mmap"

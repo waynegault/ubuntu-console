@@ -14,9 +14,25 @@
 VERSION="1.1"
 set -euo pipefail
 
-raw=$(timeout 15 typeperf.exe "\Processor(_Total)\% Processor Time" \
-  "\GPU Engine(*)\Utilization Percentage" \
-      -sc 1 2>/dev/null | tr -d '\r"')
+# Resolve typeperf.exe absolutely first: many WSL setups disable
+# appendWindowsPath, so the bare name is not on PATH even though the Windows
+# binary exists (same reason WSL_NVIDIA_SMI below uses an absolute path).
+WSL_TYPERF_EXE="/mnt/c/Windows/System32/typeperf.exe"
+typerf_cmd="$WSL_TYPERF_EXE"
+if [[ ! -x "$typerf_cmd" ]]
+then
+    typerf_cmd=$(command -v typeperf.exe 2>/dev/null || true)
+fi
+
+raw=""
+if [[ -n "$typerf_cmd" && -x "$typerf_cmd" ]]
+then
+    raw=$(timeout 15 "$typerf_cmd" "\Processor(_Total)\% Processor Time" \
+      "\GPU Engine(*)\Utilization Percentage" \
+          -sc 1 2>/dev/null | tr -d '\r"' || true)
+else
+    echo "[tac_hostmetrics] typeperf.exe not found; host CPU/iGPU metrics unavailable" >&2
+fi
 
 # typeperf CSV structure: line 1 = blank, line 2 = column headers,
 # line 3 = data values.  Column 2 = CPU %.  +0.5 rounds to nearest int.
@@ -96,13 +112,17 @@ END {
 # that Windows engine counters in WSL can miss or lag.
 WSL_NVIDIA_SMI="/usr/lib/wsl/lib/nvidia-smi"
 smi_cmd="$WSL_NVIDIA_SMI"
-[[ ! -x "$smi_cmd" ]] && smi_cmd=$(command -v nvidia-smi 2>/dev/null)
+if [[ ! -x "$smi_cmd" ]]
+then
+    smi_cmd=$(command -v nvidia-smi 2>/dev/null || true)
+fi
 if [[ -n "$smi_cmd" && -x "$smi_cmd" ]]
 then
     gpu1_smi=$("$smi_cmd" \
         --query-gpu=utilization.gpu \
         --format=csv,noheader,nounits 2>/dev/null \
-        | awk '{printf "%d", $1+0.5}')
+        | awk '{printf "%d", $1+0.5}' || true)
+    gpu1_smi=${gpu1_smi:-0}
     if (( gpu1_smi > gpu1_windows ))
     then
         gpu1=$gpu1_smi
@@ -189,5 +209,3 @@ END {
 fi
 
 # end of file
-
-# end of file marker

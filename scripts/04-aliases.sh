@@ -32,7 +32,8 @@ function __os_fetch_cached() {
     local _result
     _result=$("$@" 2>/dev/null) || true
     if [[ -n "$_result" ]] && echo "$_result" | jq empty 2>/dev/null; then
-        printf '%s' "$_result" > "$cache_file"
+        # Atomic write: readers must never observe a truncated cache file.
+        printf '%s' "$_result" > "${cache_file}.$$" && mv -f "${cache_file}.$$" "$cache_file"
     fi
     printf '%s' "$_result"
 }
@@ -208,6 +209,8 @@ function openclaw() {
     if [[ -t 1 ]] && [[ "$1" != "tui" && "$1" != "logs" ]]
     then
         command openclaw "$@" | sed '1{/^$/d}'
+        # Propagate the CLI's status, not sed's (no pipefail is set in the profile).
+        return "${PIPESTATUS[0]}"
     else
         command openclaw "$@"
     fi

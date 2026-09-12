@@ -63,13 +63,6 @@ function cd() {
     return 0
 }
 
-if [[ " $(id -nG 2>/dev/null) " == *" sudo "* ]]
-then
-    _TAC_ADMIN_BADGE=" \[${C_Warning}\]${TRI_DOWN}\[${C_Reset}\]"
-else
-    _TAC_ADMIN_BADGE=""
-fi
-
 # Ensure design tokens and glyphs exist so PS1 builds reliably.
 # Some environments or partial sources can leave C_* or glyph vars empty;
 # provide conservative fallbacks here to avoid producing an empty prompt.
@@ -91,6 +84,15 @@ fi
 : "${CHECK_MARK:=$'\u2713'}"
 : "${CROSS_MARK:=$'\u2717'}"
 : "${TRI_DOWN:=$'\u25BC'}"
+
+# Build the admin badge AFTER the C_*/glyph fallbacks above so a partial source
+# does not produce a badge with empty colour/glyph codes.
+if [[ " $(id -nG 2>/dev/null) " == *" sudo "* ]]
+then
+    _TAC_ADMIN_BADGE=" \[${C_Warning}\]${TRI_DOWN}\[${C_Reset}\]"
+else
+    _TAC_ADMIN_BADGE=""
+fi
 
 # ---------------------------------------------------------------------------
 # __check_api_key_rotation — Warn if API keys haven't been rotated in 30+ days.

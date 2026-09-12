@@ -248,13 +248,23 @@ for _p in $PARALLEL_LIST; do
     IFS='|' read -r _off_d _off_u _off_ms _off_tps _off_ok _off_err <<< "$_off"
     _ratio=$(awk -v on="$_on_tps" -v off="$_off_tps" 'BEGIN { if (off > 0) printf "%.2f", on/off; else print "inf" }')
     echo "  parallel ${_p}: spec-ON ${_on_tps} t/s (${_on_d}/${_on_u} tok, ${_on_ms} ms)  spec-OFF ${_off_tps} t/s (${_off_d}/${_off_u} tok, ${_off_ms} ms)  ratio ${_ratio}"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$_p" "$_on_tps" "$_off_tps" "$_ratio" "$_on_d" "$_off_d" >> "$RESULTS_FILE"
+    if (( _on_err > 0 || _off_err > 0 )); then
+        echo "  parallel ${_p}: WARNING — ${_on_err} spec-ON / ${_off_err} spec-OFF request error(s); throughput may be unreliable" >&2
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$_p" "$_on_tps" "$_off_tps" "$_ratio" "$_on_d" "$_off_d" "$_on_ok" "$_on_err" "$_off_ok" "$_off_err" >> "$RESULTS_FILE"
 done
 
 echo ""
 # ── verdict: smallest parallel where spec-OFF >= spec-ON ─────────────────────
 CROSSOVER=""
-while IFS=$'\t' read -r _p _on _off _ratio _on_d _off_d; do
+while IFS=$'\t' read -r _p _on _off _ratio _on_d _off_d _on_ok _on_err _off_ok _off_err; do
+    # A level with request errors has unreliable throughput — never let it set
+    # the crossover verdict.
+    if (( _on_err > 0 || _off_err > 0 )); then
+        echo "  crossover: skipping parallel=${_p} (request errors: on=${_on_err} off=${_off_err})" >&2
+        continue
+    fi
     if [[ -z "$CROSSOVER" ]] && awk -v on="$_on" -v off="$_off" 'BEGIN { exit !(off >= on) }'; then
         CROSSOVER="$_p"
     fi
@@ -279,10 +289,13 @@ if [[ -n "$OUT" ]]; then
         echo "  \"crossover_parallel\": \"${CROSSOVER}\","
         echo "  \"levels\": ["
         _first=1
-        while IFS=$'\t' read -r _p _on _off _ratio _on_d _off_d; do
+        while IFS=$'\t' read -r _p _on _off _ratio _on_d _off_d _on_ok _on_err _off_ok _off_err; do
             [[ $_first -eq 1 ]] || echo ","
-            printf '    {"parallel": %s, "spec_on_tps": %s, "spec_off_tps": %s, "ratio": %s, "spec_on_delivered": %s, "spec_off_delivered": %s}' \
-                "$_p" "$_on" "$_off" "$_ratio" "$_on_d" "$_off_d"
+            # "inf" is not valid JSON; emit null instead.
+            _ratio_json="$_ratio"
+            [[ "$_ratio" == "inf" ]] && _ratio_json="null"
+            printf '    {"parallel": %s, "spec_on_tps": %s, "spec_off_tps": %s, "ratio": %s, "spec_on_delivered": %s, "spec_off_delivered": %s, "spec_on_ok": %s, "spec_on_errors": %s, "spec_off_ok": %s, "spec_off_errors": %s}' \
+                "$_p" "$_on" "$_off" "$_ratio_json" "$_on_d" "$_off_d" "$_on_ok" "$_on_err" "$_off_ok" "$_off_err"
             _first=0
         done < "$RESULTS_FILE"
         echo ""

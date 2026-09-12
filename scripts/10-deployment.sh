@@ -277,9 +277,10 @@ function commit_deploy() {
     __tac_line "Staging $modCount file(s)..." "[WORKING]" "$C_Dim"
     git add .
 
-    # SECURITY: Scan staged diff for secrets before committing
+    # SECURITY: Scan the FULL staged diff for secrets before committing —
+    # truncating first let a secret added beyond the cap commit unscanned.
     local diff_body
-    diff_body=$(git diff --cached 2>/dev/null | head -"$_COMMIT_DIFF_MAX_LINES")
+    diff_body=$(git diff --cached 2>/dev/null)
     if ! __scan_diff_for_secrets "$diff_body"
     then
         git reset HEAD >/dev/null 2>&1
@@ -373,14 +374,17 @@ function commit_auto() {
     # Both read the same index snapshot so there is no consistency issue.
     local diff_stat
     diff_stat=$(git diff --cached --stat 2>/dev/null)
+    local diff_body_full
+    diff_body_full=$(git diff --cached 2>/dev/null)
     local diff_body
-    diff_body=$(git diff --cached 2>/dev/null | head -"$_COMMIT_DIFF_MAX_LINES")
+    diff_body=$(printf '%s' "$diff_body_full" | head -"$_COMMIT_DIFF_MAX_LINES")
     local diff="${diff_stat}
 ---
 ${diff_body}"
 
-    # SECURITY: Scan diff for secrets before any commit (blocks accidental leaks)
-    if ! __scan_diff_for_secrets "$diff_body"
+    # SECURITY: Scan the FULL staged diff for secrets before any commit. The
+    # line cap above applies only to the LLM prompt context.
+    if ! __scan_diff_for_secrets "$diff_body_full"
     then
         git reset HEAD >/dev/null 2>&1
         return 1
@@ -450,7 +454,11 @@ ${diff_body}"
         esac
     done
 
-    git commit -m "$msg" --quiet
+    if ! git commit -m "$msg" --quiet
+    then
+        __tac_info "Commit" "[FAILED - not pushed]" "$C_Error"
+        return 1
+    fi
     __tac_info "Committed" "[$msg]" "$C_Success"
     git push --quiet
     local push_rc=$?

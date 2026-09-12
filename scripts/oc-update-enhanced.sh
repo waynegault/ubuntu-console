@@ -73,8 +73,10 @@ then
 fi
 
 _print "[oc-update-enhanced] checking for updates..."
-update_output="$(_run_update)"
-update_rc=$?
+update_rc=0
+# `|| update_rc=$?` keeps `set -e` from aborting on a failed update, so the
+# permission-repair-and-retry path below is actually reachable.
+update_output="$(_run_update)" || update_rc=$?
 printf '%s\n' "$update_output"
 
 if (( update_rc == 0 ))
@@ -97,8 +99,8 @@ then
 fi
 
 _print "[oc-update-enhanced] retrying update after repair..."
-retry_output="$(_run_update)"
-retry_rc=$?
+retry_rc=0
+retry_output="$(_run_update)" || retry_rc=$?
 printf '%s\n' "$retry_output"
 
 if (( retry_rc == 0 ))

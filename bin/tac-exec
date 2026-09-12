@@ -21,7 +21,10 @@
 # How:      Sources env.sh (which loads modules 01-15 except 13-init, plus 09b), then executes the
 #           given command with all arguments.
 # ==============================================================================
-set -eo pipefail
+# No `set -e`: the console functions use the `((var++))` idiom, which returns 1
+# while its value is 0 and would abort mid-operation under errexit. The exit
+# status of the invoked command is propagated explicitly below.
+set -o pipefail
 
 _tac_exec_bin="$(readlink -f "${BASH_SOURCE[0]}")"
 _tac_exec_root="$(cd "$(dirname "$_tac_exec_bin")/.." && pwd)"
@@ -100,9 +103,12 @@ if [[ $# -eq 0 ]]; then
     exit 1
 fi
 
-# Execute command and capture all output
+# Execute the command (stderr merged into stdout for the agent's benefit).
 "$@" 2>&1
+_rc=$?
 
 unset _tac_exec_bin _tac_exec_root
+
+exit "$_rc"
 
 # end of file

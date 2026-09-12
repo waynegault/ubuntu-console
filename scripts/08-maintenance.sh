@@ -207,11 +207,24 @@ function __up_apt_update() {
         then
             apt_did_update=1
             __set_cooldown "apt_index" "$now"
+        else
+            __tac_line "[2/20] Linux Update" "[INDEX UPDATE FAILED]" "$C_Warning"
+            ((_up_err++))
         fi
     fi
     if __check_cooldown "apt" "$now" hours_left "$force_mode"
     then
-        (( apt_did_update )) || sudo apt update >/dev/null 2>&1
+        if (( apt_did_update == 0 ))
+        then
+            if sudo apt update >/dev/null 2>&1
+            then
+                apt_did_update=1
+                __set_cooldown "apt_index" "$now"
+            else
+                __tac_line "[2/20] Linux Update" "[INDEX UPDATE FAILED]" "$C_Warning"
+                ((_up_err++))
+            fi
+        fi
         # Check for upgradable packages first
         local upgradable
         upgradable=$(apt list --upgradable 2>/dev/null | grep -cv "^Listing")
@@ -234,7 +247,9 @@ function __up_apt_update() {
                     __tac_line "[2/20] Linux Update" "[ALREADY UP TO DATE]" "$C_Success"
                 fi
                 __set_cooldown "apt" "$now"
-                __set_cooldown "apt_index" "$now"  # upgrade implies fresh index
+                # apt upgrade does not refresh the package index — only mark the
+                # index fresh when this run actually refreshed it.
+                (( apt_did_update == 1 )) && __set_cooldown "apt_index" "$now"
             else
                 __tac_line "[2/20] Linux Update" "[FAILED]" "$C_Error"
                 ((_up_err++))
@@ -608,13 +623,23 @@ function __up_oc_plugins() {
                 fi
             fi
 
-            # No local changes — check if there are upstream updates
-            git -C "$_path" fetch origin >/dev/null 2>&1
-            local _ahead_behind
+            # No local changes — check if there are upstream updates.
+            # A failed fetch (offline / no origin) must NOT read as "up to date":
+            # empty operands compare equal to 0 in bash, so validate first.
+            local _ahead_behind _ahead _behind
+            if ! git -C "$_path" fetch origin >/dev/null 2>&1
+            then
+                __tac_line "$_status_line" "[CHECK FAILED - fetch]" "$C_Warning"
+                return 1
+            fi
             _ahead_behind=$(git -C "$_path" rev-list --left-right --count HEAD...origin/HEAD 2>/dev/null)
-            local _ahead _behind
             _ahead=$(echo "$_ahead_behind" | cut -f1)
             _behind=$(echo "$_ahead_behind" | cut -f2)
+            if ! [[ "$_ahead" =~ ^[0-9]+$ && "$_behind" =~ ^[0-9]+$ ]]
+            then
+                __tac_line "$_status_line" "[CHECK FAILED - no upstream]" "$C_Warning"
+                return 1
+            fi
 
             if [[ "$_behind" -eq 0 && "$_ahead" -eq 0 ]]
             then
@@ -917,6 +942,19 @@ function __up_stale_processes() {
     local now="$1" force_mode="$2"
     local -n _up_err="$3"
 
+    # Boot guard: never reap while the active model was launched < 60s ago
+    # (still booting). ACTIVE_LLM_FILE's mtime is the documented signal.
+    if [[ -f "$ACTIVE_LLM_FILE" ]]
+    then
+        local _active_age
+        _active_age=$(( $(date +%s) - $(stat -c %Y "$ACTIVE_LLM_FILE" 2>/dev/null || echo 0) ))
+        if (( _active_age < 60 ))
+        then
+            __tac_line "[17/20] Stale Processes" "[SKIP - MODEL BOOTING]" "$C_Dim"
+            return 0
+        fi
+    fi
+
     # [17/20] Stale Process Cleanup — kill orphaned llama-server instances.
     # Skip if the active model state file was touched < 60s ago (still booting).
     # Per-PID check: only kill processes with NO active socket listener on LLM_PORT.
@@ -930,7 +968,7 @@ function __up_stale_processes() {
     local stale_pids
     stale_pids=$(pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null)
     local stale_count=0
-    local _unit _protect_pid _pid _p _skip _has_port _fdlink
+    local _unit _protect_pid _pid _p _skip _has_port
     local -a _protect=()
     for _unit in llama-server.service llama-embed-server.service \
                  llama-server-nvidia.service llama-server-phi4.service
@@ -943,6 +981,39 @@ function __up_stale_processes() {
     done
     if [[ -n "$stale_pids" ]]
     then
+        # Resolve the PID that owns the LLM_PORT LISTEN socket, once. `ss` is
+        # preferred; /proc/net/tcp inode matching is the fallback. A TCP fd's
+        # readlink target is "socket:[inode]" with no port, so the port must be
+        # resolved separately — the old per-fd `grep ":$LLM_PORT"` never matched
+        # and reaped the live user-launched server.
+        local _port_owner=""
+        if command -v ss >/dev/null 2>&1
+        then
+            _port_owner=$(ss -ltnpH "sport = :$LLM_PORT" 2>/dev/null \
+                | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true)
+        fi
+        if [[ -z "$_port_owner" ]]
+        then
+            local _phex _inode _pdir _fd
+            _phex=$(printf '%04X' "$LLM_PORT")
+            _inode=$(awk -v p="$_phex" '$4 == "0A" { n=split($2,a,":"); if (a[n] == p) { print $10; exit } }' /proc/net/tcp 2>/dev/null || true)
+            if [[ -n "$_inode" ]]
+            then
+                for _pdir in /proc/[0-9]*
+                do
+                    [[ -d "$_pdir/fd" ]] || continue
+                    for _fd in "$_pdir"/fd/*
+                    do
+                        if [[ "$(readlink "$_fd" 2>/dev/null)" == "socket:[$_inode]" ]]
+                        then
+                            _port_owner="${_pdir#/proc/}"
+                            break 2
+                        fi
+                    done
+                done
+            fi
+        fi
+
         # Filter out PIDs that still own the port socket (busy processing, not orphaned)
         local true_orphans=""
         while IFS= read -r pid; do
@@ -952,20 +1023,11 @@ function __up_stale_processes() {
                 [[ "$pid" == "$_p" ]] && { _skip=1; break; }
             done
             (( _skip == 1 )) && continue
-            # Socket check via readlink: still owns the LLM_PORT socket →
-            # busy processing, not orphaned.
+            # Still the owner of the LLM_PORT listener → live, not orphaned.
             _has_port=0
-            if [[ -d "/proc/$pid/fd" ]]
+            if [[ -n "$_port_owner" && "$pid" == "$_port_owner" ]]
             then
-                for _fdlink in "/proc/$pid/fd/"*
-                do
-                    [[ -e "$_fdlink" ]] || continue
-                    if readlink "$_fdlink" 2>/dev/null | grep -q ":$LLM_PORT"
-                    then
-                        _has_port=1
-                        break
-                    fi
-                done
+                _has_port=1
             fi
             (( _has_port == 0 )) && true_orphans="$true_orphans $pid"
         done <<< "$stale_pids"

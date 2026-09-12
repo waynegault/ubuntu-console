@@ -225,11 +225,9 @@ function tactical_dashboard() {
             local mtime
             mtime=$(stat -c %Y "$cache" 2>/dev/null || echo 0)
             if (( $(date +%s) - mtime > cache_ttl )); then
-                if command -v setsid >/dev/null 2>&1; then
-                    setsid oc agent-use >/dev/null 2>&1 </dev/null || true
-                else
-                    oc agent-use >/dev/null 2>&1 </dev/null &>/dev/null &
-                fi
+                # `oc` is a shell function: it must run in a subshell, not via
+                # `setsid`/an external command (which cannot see functions).
+                ( oc agent-use >/dev/null 2>&1 ) &>/dev/null &
             fi
             agent_use_out=$(cat "$cache" 2>/dev/null || true)
             # Sanitize output: remove control characters (except newlines) to prevent
@@ -238,11 +236,8 @@ function tactical_dashboard() {
         else
             # Kick off a background refresh so the cache is populated for
             # subsequent renders, but do not block the dashboard render now.
-            if command -v setsid >/dev/null 2>&1; then
-                setsid oc agent-use >/dev/null 2>&1 </dev/null || true
-            else
-                ( oc agent-use >/dev/null 2>&1 ) &>/dev/null &
-            fi
+            # `oc` is a shell function, so it must run in a subshell.
+            ( oc agent-use >/dev/null 2>&1 ) &>/dev/null &
         fi
         if [[ -z "$agent_use_out" ]]
         then
@@ -262,13 +257,16 @@ function tactical_dashboard() {
                 [[ "$l" =~ ^ACTIVE[[:space:]]+AGENT ]] && continue
                 [[ "$l" =~ ^ACTIVE[[:space:]]+AGENTS ]] && continue
                 if (( first == 1 )); then
-                    # Insert a colon after the agent name before the numeric data
-                    # Ensure a colon follows the agent name. Split at the first
-                    # numeric token (the percentages/counts) and insert ':' after
-                    # the name if not already present.
-                    if [[ "$l" =~ ^(.+?)[[:space:]]+([0-9].*)$ ]]; then
-                        name_part="${BASH_REMATCH[1]}"
-                        rest_part="${BASH_REMATCH[2]}"
+                    # Normalise the row to "name: <stats>": split on the first
+                    # ": " the writer emits and re-join, so the agent name and
+                    # its stats render on the ACTIVE AGENT row.
+                    if [[ "$l" == *": "* ]]; then
+                        # Split on the FIRST ": ". The writer emits
+                        # "name: 42% (…) ⬆ … ⬇ …"; the old greedy ERE
+                        # `^(.+?)[[:space:]]+([0-9].*)$` split at the last
+                        # whitespace-digit and mangled every row.
+                        name_part="${l%%: *}"
+                        rest_part="${l#*: }"
                         name_part="${name_part%:}"
                         formatted="${name_part}: ${rest_part}"
                     else
@@ -286,9 +284,9 @@ function tactical_dashboard() {
                     # Split using the original line (preserve ANSI sequences in the
                     # remainder so percent colouring is retained). Use __strip_ansi
                     # only for width calculation below.
-                    if [[ "$l" =~ ^(.+?)[[:space:]]+([0-9].*)$ ]]; then
-                        name_part="${BASH_REMATCH[1]}"
-                        rest_part="${BASH_REMATCH[2]}"
+                    if [[ "$l" == *": "* ]]; then
+                        name_part="${l%%: *}"
+                        rest_part="${l#*: }"
                         name_part="${name_part%:}"
                         # Apply colouring to the leading percent token in rest_part
                         if [[ "$rest_part" =~ ^([0-9]{1,3})% ]]; then

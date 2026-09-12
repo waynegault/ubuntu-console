@@ -64,7 +64,17 @@ _lve_candidate_files=(
 _lve_existing_files=()
 for _lve_f in "${_lve_candidate_files[@]}"
 do
-    [[ -f "$_lve_f" ]] && _lve_existing_files+=("$_lve_f")
+    [[ -f "$_lve_f" ]] || continue
+    # A /dev/shm candidate is only trusted when it is ours and mode 600 —
+    # /dev/shm is world-writable and sourcing it executes its contents.
+    if [[ "$_lve_f" == /dev/shm/* ]]
+    then
+        if [[ ! -O "$_lve_f" ]] || [[ "$(stat -c '%a' "$_lve_f" 2>/dev/null)" != "600" ]]
+        then
+            continue
+        fi
+    fi
+    _lve_existing_files+=("$_lve_f")
 done
 
 if (( ${#_lve_existing_files[@]} == 0 ))

@@ -70,10 +70,8 @@ if [[ -r /etc/resolv.conf ]]; then
     fi
 fi
 
-# Ensure local user bin is on PATH without polluting the thin ~/.bashrc loader.
-if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-    export PATH="$HOME/.local/bin:$PATH"
-fi
+# Ensure local user bin is on PATH — already handled in 01-constants.sh, which
+# always loads first; kept out of here to avoid a dead duplicate branch.
 
 # WSL-friendly credential storage workaround for Electron-based tooling
 # (for example VS Code launched from this shell). In headless/WSL sessions,
