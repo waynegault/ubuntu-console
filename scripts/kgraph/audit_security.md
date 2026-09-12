@@ -91,7 +91,7 @@ Both write surfaces bind to `127.0.0.1` by default (localhost only).
 - Write responses omit the wildcard `Access-Control-Allow-Origin`.
 - Sliding-window rate limit: 30 POSTs / 60s.
 
-*Correction (2026-09-12):* the MCP server previously performed **no** Content-Type or Origin check and returned `Access-Control-Allow-Origin: *`, so any visited page could POST a `text/plain` (CORS-safelisted, no preflight) request invoking `kgraph_report` with an attacker-chosen `outpath` — an arbitrary local file write. This is now closed by the checks above. `kgraph_report` still writes to a caller-supplied `outpath`; that is only reachable by trusted local (non-browser) clients. Consider constraining `outpath` to a safe directory if the server is ever exposed beyond localhost.
+*Correction (2026-09-12):* the MCP server previously performed **no** Content-Type or Origin check and returned `Access-Control-Allow-Origin: *`, so any visited page could POST a `text/plain` (CORS-safelisted, no preflight) request invoking `kgraph_report` with an attacker-chosen `outpath` — an arbitrary local file write. This is closed by the checks above, and `kgraph_report`'s `outpath` is now confined to a reports directory (`KG_REPORTS_DIR`, default `~/.openclaw/kgraph-reports`): absolute paths and any `..` traversal are rejected.
 
 ### 8. GET read path CORS (accepted risk)
 **Severity:** Low
@@ -118,7 +118,7 @@ This is deliberate: the React dev frontend (`frontend-g6`, Vite on port 5173) an
 
 1. **Add CSP header** to the HTML template for defense-in-depth.
 2. **Wire `sanitize_label()` into the write path** (or delete it) and, if node `path`/`id` values are ever used to touch the filesystem, add explicit id validation.
-3. **Strip memory `content`/`tags` from the served GET payload** (labels only) if the read server is ever bound to a fixed port.
-4. **Consider MCP auth** if the MCP server is ever exposed beyond localhost, and constrain `kgraph_report`'s `outpath`.
+3. **Memory free text** (`content`/`tags`) is already stripped from the served GET payload; revisit only if the read server is bound to a fixed port.
+4. **Consider MCP auth** if the MCP server is ever exposed beyond localhost. (`kgraph_report`'s `outpath` is already confined to the reports directory.)
 
 # end of file
