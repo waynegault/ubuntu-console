@@ -655,13 +655,19 @@
         document.getElementById('zoom-reset').addEventListener('click', () => { cy.zoom(0.94); cy.center(); setZoomLabel(); });
         cy.on('zoom', setZoomLabel);
 
-        // autosave
+        // autosave — ONLY after a user edit. The GET payload is a (lossy,
+        // content/tags-stripped) projection, so autosaving it on mere view
+        // would overwrite the stored graph with the projection. Mutations
+        // (add/remove/data) set `dirty`; nothing else writes.
         let last = null;
+        let dirty = false;
+        cy.on('add remove data', () => { dirty = true; });
         setInterval(async () => {
+          if (!dirty) return;
           const out = serializeGraph(cy);
           out.nodes.forEach(n => delete n.display_label);
           const j = JSON.stringify(out);
-          if (j !== last) { last = j; try { await fetch('/graph.json', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: j }); console.log('autosaved'); } catch (e) { console.warn('autosave failed', e); } }
+          if (j !== last) { last = j; try { await fetch('/graph.json', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: j }); dirty = false; console.log('autosaved'); } catch (e) { console.warn('autosave failed', e); } }
         }, 5000);
 
         // Controls
