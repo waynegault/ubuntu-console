@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (842 total tests: 593 BATS + 249 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (854 total tests: 593 BATS + 261 Python).
 
 ### Running Tests
 
@@ -449,8 +449,8 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 | Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
 | Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use, clean-orphans) | `tests/unit/*.bats` | 47 | 120s |
 | Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 109 | 300s |
-| Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 249 | 200s |
-| **Total** | | **842** | |
+| Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 261 | 200s |
+| **Total** | | **854** | |
 
 ---
 

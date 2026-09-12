@@ -85,6 +85,9 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
                     'subject': parts[4],
                 })
     except (OSError, subprocess.SubprocessError) as e:
+        # Surface it in the returned data AND the log: a dashboard that silently
+        # shows zero merges looks identical to a repo that has none.
+        logger.warning("Failed to list merges for dashboard: %s", e)
         merges = [{'error': str(e)}]
 
     # Recent commits (non-merge)
@@ -113,7 +116,7 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
                     'subject': parts[4],
                 })
     except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning("Failed to parse recent merges for dashboard: %s", exc)
+        logger.warning("Failed to list recent commits for dashboard: %s", exc)
 
     # Files changed recently.  Use the same date window as the commit queries
     # above via `git log --name-status`: `git diff @{N.days.ago}` is a reflog
@@ -155,9 +158,12 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("Failed to list active branches: %s", exc)
 
-    # Authors
+    # Authors. NOTE: `git shortlog -sne --format=...` ignores --format and prints
+    # "count<TAB>Name <email>", and with no revision range it reads STDIN — empty
+    # for a subprocess with a closed stdin, which left the authors map empty.
+    # `git log --format` is deterministic and needs no parsing.
     author_cmd = [
-        'git', 'shortlog', since, '-sne',
+        'git', 'log', since,
         '--format=%an|%ae',
     ]
     authors = {}
@@ -167,11 +173,10 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
         for line in result.stdout.strip().split('\n'):
             if not line.strip():
                 continue
-            parts = line.strip().split('|', 1)
-            if len(parts) >= 1:
-                name = parts[0].strip()
-                email = parts[1].strip() if len(parts) > 1 else ''
-                authors[name] = email
+            name, _, email = line.strip().partition('|')
+            name = name.strip()
+            if name:
+                authors[name] = email.strip()
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("Failed to get authors list: %s", exc)
 
