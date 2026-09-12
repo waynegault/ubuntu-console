@@ -17,6 +17,8 @@ setup() {
     # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/05-ui-engine.sh"
     # shellcheck disable=SC1090
+    source "$REPO_ROOT/scripts/_startup-env.sh"   # provides __tac_source_submodules
+    # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/09-openclaw.sh"
 
     # Override paths AFTER sourcing so we don't touch the real registry.

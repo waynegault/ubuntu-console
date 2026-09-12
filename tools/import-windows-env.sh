@@ -3,7 +3,7 @@
 # import-windows-env.sh — Windows environment variable importer
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 6
+# Module Version: 7
 # @modular-section: import-windows-user-env
 # @depends: none (standalone; calls pwsh.exe / tasklist.exe)
 # @exports: (none — standalone script, writes to output-file)
@@ -17,6 +17,11 @@
 #   QWEN_PORTAL_ACCESS / QWEN_PORTAL_REFRESH when env vars are absent
 
 set -euo pipefail
+
+# The output file holds secrets; create it 0600 from the start. (The trailing
+# chmod 600 alone left a world-readable window and no protection if the write
+# failed midway.)
+umask 077
 
 # Use project .venv Python when available
 _TAC_PY=$(command -v python3)
@@ -85,7 +90,8 @@ try:
     data = json.loads(raw_windows)
     if not isinstance(data, dict):
         data = {}
-except Exception:
+except Exception as exc:
+    print(f"[import-windows-env] WARNING: could not parse the Windows env JSON: {exc}", file=sys.stderr)
     data = {}
 
 needs_qwen_access = 'QWEN_PORTAL_ACCESS' in requested
@@ -103,8 +109,8 @@ if needs_qwen and qwen_path.is_file():
             value = qwen.get('refresh_token')
             if isinstance(value, str) and value.strip():
                 data['QWEN_PORTAL_REFRESH'] = value
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[import-windows-env] WARNING: could not read {qwen_path}: {exc}", file=sys.stderr)
 
 with out.open('w', encoding='utf-8') as f:
     for key in requested:

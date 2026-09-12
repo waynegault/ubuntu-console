@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154,SC2015,SC2016,SC1090
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -448,7 +448,9 @@ function ocdoc-fix() {
 function __bridge_windows_api_keys() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
     local ttl=3600
-    local _warn_once_file="/dev/shm/tac_pwsh_bridge_warned"
+    # Honor TAC_CACHE_DIR so a sandboxed shell (tests) never touches the real
+    # /dev/shm flag; production TAC_CACHE_DIR is /dev/shm, so behaviour is the same.
+    local _warn_once_file="${TAC_CACHE_DIR:-/dev/shm}/tac_pwsh_bridge_warned"
 
     # Session-level guard: if pwsh.exe was previously unavailable or timed
     # out, skip retrying for the rest of this session. The warning file is
@@ -840,7 +842,7 @@ function oc-refresh-keys() {
     #    Preserve last-good values so a pwsh.exe outage can't change the var set.
     [[ -f "$cache" ]] && cp "$cache" "$_prev_cache" 2>/dev/null || true
     if command -v pwsh.exe >/dev/null 2>&1; then
-        rm -f "$cache" /dev/shm/tac_pwsh_bridge_warned
+        rm -f "$cache" "${TAC_CACHE_DIR:-/dev/shm}/tac_pwsh_bridge_warned"
         __bridge_windows_api_keys
         if [[ -f "$cache" ]]; then
             count=$(grep -c '^export ' "$cache" || true)

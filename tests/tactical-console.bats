@@ -2683,9 +2683,6 @@ EOF
     declare -f oc | grep -q 'case.*in'
 }
 
-# end of file
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 30. ADDITIONAL OPENCLAW TESTS (functions not yet tested)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2815,8 +2812,6 @@ EOF
     [ "$status" -eq 1 ]
     [[ "$output" == *"NOT INSTALLED"* ]]
 }
-
-# end of file
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 34. AUTOTUNE — Context persistence, profile save, bench interactions

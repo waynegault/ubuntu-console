@@ -133,7 +133,8 @@ fi
 # Lock ~/.bashrc read-only so no one accidentally adds config to it directly.
 # The canonical profile lives in tactical-console.bashrc; ~/.bashrc is a thin
 # loader only.  chmod 600 before any write, chmod 444 after.
-chmod 444 "$HOME/.bashrc"
+chmod 444 "$HOME/.bashrc" 2>/dev/null \
+    || echo "  WARNING: could not set ~/.bashrc read-only (continuing)" >&2
 echo "  ~/.bashrc - set read-only (mode 444)"
 
 # Standalone scripts → ~/.local/bin/

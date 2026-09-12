@@ -21,7 +21,8 @@ setup() {
     export PATH="$MOCK_BIN_DIR:$PATH"
 
     # Clear any stale pwsh bridge warning so the mock is actually tried
-    rm -f /dev/shm/tac_pwsh_bridge_warned
+    # (sandboxed under TAC_CACHE_DIR — never the real /dev/shm flag).
+    rm -f "$TAC_CACHE_DIR/tac_pwsh_bridge_warned"
 
     # Mock openclaw so SecretRef sync & gateway restart never touch the real config.
     # Capture the `config patch --stdin` payload so tests can assert SecretRefs
@@ -43,6 +44,8 @@ setup() {
     source "$REPO_ROOT/scripts/03-design-tokens.sh"
     # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/05-ui-engine.sh"
+    # shellcheck disable=SC1090
+    source "$REPO_ROOT/scripts/_startup-env.sh"   # provides __tac_source_submodules
     # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/09-openclaw.sh"
 
