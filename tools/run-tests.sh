@@ -129,6 +129,11 @@ _run_bats_file() {
                 _LIVE_FAIL=$(( _LIVE_FAIL + 1 ))
                 test_line "${C_Red}${C_Dim}${_LIVE_NUM}.${C_Reset} ${label}${test_name} ${FAIL_SYMBOL}${C_Reset}"
             fi
+        elif [[ "$line" =~ ^1\.\.0$ ]]; then
+            # bats printed an empty TAP plan: every test in this file was
+            # filtered out (e.g. `run-tests.sh -- --filter X`). That is not a
+            # crash — nothing was selected to run.
+            _LIVE_EMPTY_PLAN=1
         elif [[ "$line" =~ ^#\ skip ]]; then
             # Skipped test diagnostic line — captured but not displayed inline
             _LIVE_NUM=$(( _LIVE_NUM + 1 ))
@@ -174,6 +179,7 @@ _TAP_OUTPUT=""
 _LIVE_NUM=0 _LIVE_PASS=0 _LIVE_FAIL=0 _LIVE_SKIP=0
 _SKIPPED=()
 _BATS_EMPTY=0
+_LIVE_EMPTY_PLAN=0
 GRAND_PASS=0 GRAND_FAIL=0 GRAND_SKIP=0
 
 case "${_MODE:-}" in
@@ -198,12 +204,18 @@ for bf in "${BATS_FILES[@]}"; do
     spacer
     subheader "${bf_rel}"
     _before_count=$_LIVE_NUM
+    _LIVE_EMPTY_PLAN=0
     _run_bats_file "$bf" ""
     if (( _LIVE_NUM == _before_count )); then
-        # A bats file that emitted no TAP results failed to run (missing tool,
-        # syntax error, crash) — count it instead of silently passing.
-        _BATS_EMPTY=1
-        test_line "  ${C_Red}${FAIL_SYMBOL}${C_Reset} ${bf_rel}: no TAP results produced"
+        if (( _LIVE_EMPTY_PLAN == 1 )); then
+            # Empty TAP plan (1..0): the filter selected nothing in this file.
+            test_line "  ${C_Dim}(no tests selected in ${bf_rel})${C_Reset}"
+        else
+            # No TAP results AND no plan: the file failed to run (missing tool,
+            # syntax error, crash) — count it instead of silently passing.
+            _BATS_EMPTY=1
+            test_line "  ${C_Red}${FAIL_SYMBOL}${C_Reset} ${bf_rel}: no TAP results produced"
+        fi
     fi
 done
 
