@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -1106,7 +1106,7 @@ function __model_use() {
 # @returns 0 always.
 # ---------------------------------------------------------------------------
 function __model_autotune_help() {
-    echo "Usage: model autotune <N>"
+    echo "Usage: model autotune <N> [--workload chat|legal|agentic|mix]"
     echo "       model autotune all"
     echo ""
     echo "Tests a range of context sizes and batch/ubatch combos to find the"
@@ -1125,6 +1125,7 @@ function __model_autotune_help() {
     echo ""
     echo "Examples:"
     echo "  model autotune 3"
+    echo "  model autotune 3 --workload legal"
     echo "  model autotune all"
     return 0
 }
@@ -3022,8 +3023,9 @@ function model() {
                 __model_autotune_help
                 return 0
             fi
-            # Route to the standalone autotune script (proven, no --fit bug)
-            bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "$1" 2>&1
+            # Route to the standalone autotune script (proven, no --fit bug).
+            # Forward all remaining args so flags like --workload reach it.
+            bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "$@" 2>&1
             ;;
 
         bench-diff)
