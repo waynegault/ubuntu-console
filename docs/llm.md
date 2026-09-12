@@ -91,7 +91,7 @@ Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice 
 |---|---|
 | `model scan` | Scan `$LLAMA_MODEL_DIR` for GGUF files, read metadata, auto-calculate optimal gpu_layers/ctx/threads, rebuild registry, and auto-archive discouraged quants via `quant-guide.conf`. |
 | `model list` | Show numbered model registry with name, file, size, arch, quant, layers, TPS, autotune status/settings, and quant `RATING` from `quant-guide.conf`. Active model marked with ▶. |
-| `model use N` | Start model #N with the row's `gpu_layers` (auto-calculated, default 24), dynamic threads, `--flash-attn on`, `--jinja`, `--kv-offload`. Batch sizes: 4096/1024 for GPU, 512/512 for CPU-only. Reports actual GPU offload count after boot. Uses shared adaptive health polling. |
+| `model use N` | Start model #N with `--n-gpu-layers` from the resolved GPU-layer count (`999` = full offload, `0` = CPU-only; MoE stores its total layer count; baseline `LLAMA_GPU_LAYERS=24`), clamped for large models on 4 GB VRAM by the quant rating, dynamic threads, `--flash-attn on`, `--jinja`, `--kv-offload`. Batch sizes: 4096/1024 for GPU, 512/512 for CPU-only. Reports actual GPU offload count after boot. Uses shared adaptive health polling. |
 | `model stop` | `pkill` the llama-server process, remove state file |
 | `model status` | Show currently running model details. Supports `--json` and `--plain`. |
 | `model doctor` | Validate registry integrity, default model wiring, GPU visibility, watchdog state, and local ports |
