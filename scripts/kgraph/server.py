@@ -177,8 +177,13 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
             payload['_meta'] = dict(payload.get('_meta', {}))
             payload['_meta'].update(meta)
             # The GET path sends wildcard CORS (for the Vite dev frontend), so
-            # memory-derived free text must not be exposed: strip node content
-            # and tags from the served payload (labels only).
+            # strip the raw memory free-text fields from the served payload.
+            # NOTE: this is NOT a full redaction — a memory node's LABEL is
+            # itself a short content preview (memory_import sets
+            # label = _preview_text(content)), and topic/summary nodes also carry
+            # `content_preview`. A page the user visits can therefore still read
+            # memory text. Accepted while the read server binds 127.0.0.1 on an
+            # ephemeral port; see scripts/kgraph/audit_security.md §8.
             for _node in payload.get('nodes', []):
                 if isinstance(_node, dict):
                     _node.pop('content', None)

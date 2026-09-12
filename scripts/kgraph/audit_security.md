@@ -98,9 +98,11 @@ Both write surfaces bind to `127.0.0.1` by default (localhost only).
 **Severity:** Low
 **Status:** Accepted (by design)
 
-`GET /graph.json` returns `Access-Control-Allow-Origin: *`. The served projection is stripped of the memory-derived free-text fields (`content`, `tags`), so a page the user visits can read graph structure (node ids, labels, and other non-free-text fields) but not the raw memory text.
+`GET /graph.json` returns `Access-Control-Allow-Origin: *`. The served projection drops the `content` and `tags` fields — but that is **not** a full redaction: a memory node's `label` is itself a short preview of its content (`memory_import.py` sets `label = _preview_text(content)`), and topic/summary nodes also carry `content_preview`. A page the user visits can therefore still read memory text through those channels (verified against the live DB: 18 memory nodes ship content-derived labels despite the strip).
 
-This is deliberate: the Vite dev frontend (`frontend-g6`, port 5173) fetches the API cross-origin, while the embedded Cytoscape viewer is same-origin and needs no CORS. The read server uses an ephemeral port unless `--port` is given, which limits exposure. Revisit if the payload is ever served on a fixed, guessable port — restrict the origin and/or trim the remaining non-free-text fields.
+*Correction (2026-09-12):* an earlier revision of this section said the served payload exposed "`content`, `tags`, source paths" and deferred stripping; that was superseded by the strip, but the strip alone does not close the exposure — the label remains a content preview.
+
+This is deliberate: the Vite dev frontend (`frontend-g6`, port 5173) fetches the API cross-origin, while the embedded Cytoscape viewer is same-origin and needs no CORS. The read server uses an ephemeral port unless `--port` is given, which limits exposure. To close the remaining channel: serve a non-content `label` for `memory`/`summary` nodes (and drop `content_preview`), or restrict the read-path origin. Both change what the viewer shows, so they are deferred as a product decision.
 
 ## Summary
 
@@ -113,13 +115,13 @@ This is deliberate: the Vite dev frontend (`frontend-g6`, port 5173) fetches the
 | SQL injection | Low | ✅ Mitigated | Parameterized queries always |
 | SSRF | Low | ✅ Mitigated | No outbound fetch capability |
 | MCP / REST write path | Medium | ✅ Mitigated | JSON Content-Type + same-origin + preflight refusal + rate limit |
-| GET read CORS | Low | ⚠️ Accepted | Wildcard CORS for the dev frontend; ephemeral port |
+| GET read CORS | Low | ⚠️ Accepted | Wildcard CORS for the dev frontend; ephemeral port; memory labels are content previews (§8) |
 
 ## Recommendations
 
 1. **CSP header** — present in the HTML template (see §1).
 2. **`sanitize_label()`** — removed (had no production caller). If node `path`/`id` values are ever used to touch the filesystem, add explicit id validation.
-3. **Memory free text** (`content`/`tags`) is already stripped from the served GET payload; revisit only if the read server is bound to a fixed port.
+3. **Memory free text** — `content`/`tags` are stripped from the served GET payload, but memory **labels are content previews** and still ship (§8). To close it fully, serve a non-content `label` for `memory`/`summary` nodes (and drop `content_preview`), or restrict the read-path origin. Deferred: it changes what the viewer displays.
 4. **Consider MCP auth** if the MCP server is ever exposed beyond localhost. (`kgraph_report`'s `outpath` is already confined to the reports directory.)
 
 # end of file

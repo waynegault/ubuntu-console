@@ -45,7 +45,10 @@ def _safe_report_path(name: str) -> str | None:
         return None
     if '..' in name.replace('\\', '/').split('/'):
         return None
-    base = _reports_dir()
+    # normpath the base too: a KG_REPORTS_DIR with a trailing slash would make
+    # `base + os.sep` a doubled separator, so no normalised target could ever
+    # match the prefix and every legitimate name would be rejected.
+    base = os.path.normpath(_reports_dir())
     target = os.path.normpath(os.path.join(base, name))
     if target != base and not target.startswith(base + os.sep):
         return None
@@ -117,9 +120,13 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
             # to an attacker-chosen path.
             content_type = self.headers.get('Content-Type', '')
             if content_type.split(';', 1)[0].strip().lower() != 'application/json':
+                # Not draining the body would leave it queued on a keep-alive
+                # connection and desync the next request, so close it.
+                self.close_connection = True
                 self._send_error(415, 'Unsupported Media Type: expected application/json')
                 return
             if not self._origin_is_same():
+                self.close_connection = True
                 self._send_error(403, 'Forbidden: cross-origin writes are not allowed')
                 return
 
@@ -127,10 +134,17 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                 length = int(self.headers.get('Content-Length', 0) or 0)
             except (TypeError, ValueError):
                 length = 0
-            # Refuse an oversized body before reading it: otherwise a caller
-            # can force a multi-GB allocation that the size check below would
-            # never get the chance to refuse.
+            # Refuse a negative or oversized body BEFORE reading it. A negative
+            # length must not reach rfile.read(-1), which reads until EOF —
+            # unbounded and blocking.
+            if length < 0:
+                self.close_connection = True
+                self._send_error(400, 'Invalid Content-Length')
+                return
+            # A caller could otherwise force a multi-GB allocation that the
+            # backstop size check below would never get the chance to refuse.
             if length > MAX_PAYLOAD_SIZE:
+                self.close_connection = True
                 self._send_error(413, 'Payload too large')
                 return
             body = self.rfile.read(length)
