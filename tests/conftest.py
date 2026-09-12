@@ -17,9 +17,11 @@ from pathlib import Path
 import pytest
 
 _LOCK_DIR = Path(tempfile.gettempdir()) / "tac-pytest-bats-locks"
-# Cap lock wait to 120s — if a lock can't be acquired in 2 minutes the
-# holder is stale or hung, regardless of the suite's configured timeout.
-_MAX_LOCK_WAIT = 120
+# Floor for the lock wait.  The wait is bounded by the BATS file's own timeout
+# (see _serialize_bats_suites): concurrent runs of the same file must
+# serialise, and a single invocation is allowed to run for up to that timeout.
+# A shorter cap turned legitimate contention into spurious setup errors.
+_MIN_LOCK_WAIT = 60
 
 
 def _lock_pid_path(lock_path: Path) -> Path:
@@ -32,14 +34,43 @@ def has_conftest_is_stale_lock(lock_path: Path, pid_path: Path) -> bool:
     return _is_stale_lock(lock_path, pid_path)
 
 
+def _proc_start_time(pid: int) -> str:
+    """Return field 22 (starttime) from /proc/<pid>/stat, or '' if unavailable.
+
+    The comm field can contain spaces and parentheses, so parse from the last
+    ')' in the line rather than splitting the whole record.
+    """
+    try:
+        data = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    rparen = data.rfind(")")
+    if rparen < 0:
+        return ""
+    fields = data[rparen + 2:].split()
+    return fields[19] if len(fields) > 19 else ""
+
+
+def _read_holder(pid_path: Path) -> tuple[int, str]:
+    """Parse a holder record: '<pid>' (legacy) or '<pid> <starttime>'."""
+    try:
+        parts = pid_path.read_text(encoding="utf-8").split()
+    except OSError:
+        return 0, ""
+    if not parts:
+        return 0, ""
+    try:
+        pid = int(parts[0])
+    except ValueError:
+        return 0, ""
+    return pid, (parts[1] if len(parts) > 1 else "")
+
+
 def _is_stale_lock(lock_path: Path, pid_path: Path) -> bool:
-    """Return True when a lock owner PID is gone or invalid."""
+    """Return True when the lock owner is gone, invalid, or a recycled PID."""
     if not pid_path.exists():
         return False
-    try:
-        pid = int(pid_path.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return True
+    pid, recorded_start = _read_holder(pid_path)
     if pid <= 0:
         return True
     try:
@@ -50,6 +81,14 @@ def _is_stale_lock(lock_path: Path, pid_path: Path) -> bool:
         return False
     except OSError:
         return False
+    # The PID is alive, but is it still the process that took the lock? PIDs
+    # are recycled (notably across reboots, since the lock dir lives in /tmp);
+    # a recorded start time that no longer matches means the original holder is
+    # gone and its PID now belongs to an unrelated process.
+    if recorded_start:
+        current_start = _proc_start_time(pid)
+        if current_start and current_start != recorded_start:
+            return True
     return False
 
 
@@ -85,13 +124,15 @@ def _protect_registry_file() -> Generator[None, None, None]:
         return
 
     registry_path = Path.home() / ".llm" / "models.conf"
-    snapshot_path = Path(tempfile.mktemp(suffix=".models.conf.bak"))
-    if registry_path.exists():
-        shutil.copy2(registry_path, snapshot_path)
-    yield
-    if snapshot_path.exists():
-        shutil.copy2(snapshot_path, registry_path)
-        snapshot_path.unlink(missing_ok=True)
+    # A TemporaryDirectory owns the snapshot path (no mktemp TOCTOU window)
+    # and removes the whole directory when the fixture finishes.
+    with tempfile.TemporaryDirectory(prefix="models-conf-snapshot-") as tmpdir:
+        snapshot_path = Path(tmpdir) / "models.conf.bak"
+        if registry_path.exists():
+            shutil.copy2(registry_path, snapshot_path)
+        yield
+        if snapshot_path.exists():
+            shutil.copy2(snapshot_path, registry_path)
 
 
 @pytest.fixture(autouse=True)
@@ -133,7 +174,7 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
     lock_path = _LOCK_DIR / f"{lock_name}.lock"
     pid_path = _lock_pid_path(lock_path)
 
-    wait_s = min(_MAX_LOCK_WAIT, max(60, timeout_s))
+    wait_s = max(_MIN_LOCK_WAIT, timeout_s)
     deadline = time.monotonic() + wait_s
     fd: int | None = None
     while True:
@@ -165,8 +206,13 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
                 )
             time.sleep(1)
     # Record the holder only after acquisition, so the pid file identifies
-    # the actual lock owner for stale detection and error messages.
-    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    # the actual lock owner for stale detection and error messages.  The
+    # process start time is stored alongside the pid so a recycled PID is
+    # detected as stale rather than mistaken for a live holder.
+    _self_pid = os.getpid()
+    pid_path.write_text(
+        f"{_self_pid} {_proc_start_time(_self_pid)}".strip(), encoding="utf-8"
+    )
     try:
         yield
     finally:
