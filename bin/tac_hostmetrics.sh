@@ -10,9 +10,26 @@
 # Typical runtime: ~5s from WSL
 # AI: Output format is a contract — callers split on '|'. Do not change it.
 # AI INSTRUCTION: Increment version on significant changes.
-# shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="1.1"
+VERSION="1.2"
 set -euo pipefail
+
+# --version (diagnostic; also keeps VERSION referenced so the repo's no-unused
+# lint rule holds without a suppression comment).
+if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
+    echo "tac_hostmetrics $VERSION"
+    exit 0
+fi
+
+# gawk is REQUIRED: the GPU parsers below use gawk-only match(re, m) (3-arg) and
+# strtonum(); mawk (Ubuntu's default awk) cannot stand in. Without a probe, a
+# host missing gawk aborts mid-script under `set -e` and emits NO contract line,
+# leaving the dashboard stuck at 0|0|0 with no visible cause. Degrade explicitly
+# instead: warn and still print a well-formed cpu|gpu0|gpu1 line.
+if ! command -v gawk >/dev/null 2>&1; then
+    echo "[tac_hostmetrics] warning: gawk not found — host CPU/GPU metrics unavailable (install gawk)" >&2
+    echo "0|0|0"
+    exit 0
+fi
 
 # Resolve typeperf.exe absolutely first: many WSL setups disable
 # appendWindowsPath, so the bare name is not on PATH even though the Windows
@@ -27,9 +44,17 @@ fi
 raw=""
 if [[ -n "$typerf_cmd" && -x "$typerf_cmd" ]]
 then
-    raw=$(timeout 15 "$typerf_cmd" "\Processor(_Total)\% Processor Time" \
+    # NOTE: the GPU Engine(*) wildcard expands to one column per engine instance,
+    # so the header alone can be ~100 KB and the query can take >15s on a busy
+    # GPU. Too tight a timeout truncates the sample and every metric silently
+    # reads 0, so allow 25s and warn when no data row comes back.
+    raw=$(timeout 25 "$typerf_cmd" "\Processor(_Total)\% Processor Time" \
       "\GPU Engine(*)\Utilization Percentage" \
           -sc 1 2>/dev/null | tr -d '\r"' || true)
+    raw_rows=$(printf '%s\n' "$raw" | grep -c . || true)
+    if (( raw_rows < 2 )); then
+        echo "[tac_hostmetrics] warning: typeperf returned no data row (slow/truncated GPU enumerator query) — CPU/iGPU metrics report 0" >&2
+    fi
 else
     echo "[tac_hostmetrics] typeperf.exe not found; host CPU/iGPU metrics unavailable" >&2
 fi

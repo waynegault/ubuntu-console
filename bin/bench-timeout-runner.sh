@@ -45,19 +45,18 @@
 # (lock file cleanup, model stop) from being bypassed.
 
 # AI INSTRUCTION: Increment version on significant changes.
-# shellcheck disable=SC2034  # VERSION is read by external tooling, not this script
-VERSION="1.0"  # Extracted from __bench_run_with_timeout (card #0967f11c).
-# shellcheck disable=SC2317  # trap handlers are called by trap, not directly
+VERSION="1.1"  # Extracted from __bench_run_with_timeout (card #0967f11c).
 set -euo pipefail
 
 # --- Parse options -----------------------------------------------------------
 pidfile=""
 logfile=""
 
-while getopts ":p:l:" _opt; do
+while getopts ":p:l:V" _opt; do
     case "$_opt" in
         p) pidfile="$OPTARG" ;;
         l) logfile="$OPTARG" ;;
+        V) echo "bench-timeout-runner $VERSION"; exit 0 ;;
         *) echo "bench-timeout-runner: unknown option -$OPTARG" >&2
            exit 2 ;;
     esac
@@ -79,7 +78,7 @@ __btr_log() {
 
 # --- Cleanup trap ------------------------------------------------------------
 child_pid=""
-# shellcheck disable=SC2317  # trap handlers are called by trap, not directly
+# shellcheck disable=SC2317  # false positive: shellcheck 0.9.0 flags this trap-only function's whole body as unreachable INSIDE this file (the identical function lints clean in isolation; see the getopts loop above). Remove when shellcheck is upgraded.
 __btr_cleanup() {
     local _exit_code=$?
     set +e
@@ -103,7 +102,9 @@ trap __btr_cleanup EXIT INT TERM
 if [[ -n "$profile_path" && "$profile_path" != "none" && -f "$profile_path" ]]; then
     __btr_log "INFO" "sourcing profile: $profile_path"
     # shellcheck disable=SC1090
-    source "$profile_path" 2>/dev/null || true
+    if ! source "$profile_path" 2>/dev/null; then
+        __btr_log "WARNING" "profile source failed: $profile_path (continuing without it)"
+    fi
 fi
 
 # --- Run the command ----------------------------------------------------------
@@ -120,12 +121,13 @@ fi
 
 # Guard against empty child_pid (process already exited) which would
 # cause wait "" to hang indefinitely waiting for non-existent children.
+# `wait` returns the child's exit status; capture it WITHOUT letting errexit
+# abort first, or the diagnostic line below (the reason this wrapper exists)
+# would never run for exactly the failure case it is meant to trace.
 if [[ -n "$child_pid" ]] && [[ "$child_pid" =~ ^[0-9]+$ ]]; then
-    wait "$child_pid"
-    _wait_exit=$?
+    if wait "$child_pid"; then _wait_exit=0; else _wait_exit=$?; fi
 else
-    wait
-    _wait_exit=$?
+    if wait; then _wait_exit=0; else _wait_exit=$?; fi
 fi
 
 __btr_log "INFO" "child exited with code $_wait_exit"
