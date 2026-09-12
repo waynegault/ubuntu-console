@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
 # ==============================================================================
 # clean-orphans.sh — Kill orphaned model bench infrastructure.
 #
@@ -102,71 +104,131 @@ for modelshell_file in /tmp/llm-modelshell.*.pid /tmp/llm-modelshell.pid; do
     fi
 done
 
-# 1. Stdin keepers: processes holding open /tmp/llm-stdin.* FIFOs
-while read -r pid cmd; do
-    if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"llm-stdin"* ]]; then
-        add_orphan "$pid" "$cmd"
-    fi
-done < <(pgrep -af 'llm-stdin' 2>/dev/null || true)
+# True when $1 is this process or one of its ancestors — a cleanup tool must
+# never target its own process tree.
+is_self_or_ancestor() {
+    local pid="$1" cur="$$" hops=0
+    while [[ -n "$cur" && "$cur" != "0" ]] && (( hops < 20 )); do
+        if [[ "$cur" == "$pid" ]]; then
+            return 0
+        fi
+        cur=$(ps -o ppid= -p "$cur" 2>/dev/null | tr -d '[:space:]') || cur=""
+        if [[ -z "$cur" ]]; then
+            return 1
+        fi
+        hops=$(( hops + 1 ))
+    done
+    return 1
+}
 
-# 2. Keeper sleep loops from known keeper PID files.
-# This is intentionally strict to avoid killing unrelated sleep processes on a
-# shared host.
+# True when $1 is (or descends from) a live model-shell wrapper, i.e. a keeper
+# that belongs to an active `model use` session. The keeper's `sleep 3600` is a
+# grandchild of the model shell (model shell -> keeper subshell -> sleep), so the
+# walk covers several hops; the live list holds only the model-shell PID.
+is_live_owned() {
+    local pid="$1" parent hops=0
+    [[ -n "$pid" ]] || return 1
+    while [[ -n "$pid" && "$pid" != "0" ]] && (( hops < 4 )); do
+        if [[ " ${LIVE_MODEL_SHELLS[*]:-} " == *" ${pid} "* ]]; then
+            return 0
+        fi
+        parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]') || parent=""
+        if [[ -z "$parent" ]]; then
+            return 1
+        fi
+        pid="$parent"
+        hops=$(( hops + 1 ))
+    done
+    return 1
+}
+
+# 1. Processes actually holding an open /tmp/llm-stdin.* FIFO (the keeper's fd 3
+#    and the server's stdin). `find -lname` resolves the fd symlinks in C — a
+#    per-fd bash `readlink` loop over all of /proc is ~400x slower on WSL — so a
+#    shell that merely MENTIONS "llm-stdin" on its command line is not a target,
+#    and a live session's server/keeper is spared by the ownership guard.
+while IFS= read -r fd_path; do
+    pid="${fd_path#/proc/}"
+    pid="${pid%%/*}"
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if is_self_or_ancestor "$pid"; then continue; fi
+    if is_live_owned "$pid"; then continue; fi
+    add_orphan "$pid" "$(ps -p "$pid" -o args= 2>/dev/null || true)"
+done < <(find /proc/[0-9]*/fd -lname '*llm-stdin*' 2>/dev/null || true)
+
+# 2. Keeper subshells named by a keeper PID file. The PID file holds the keeper
+# SUBSHELL, whose argv is inherited from the model shell — so it never reads
+# "sleep 3600". Identify it by its cwd (the keeper `cd`s to KEEPER_DIR) and take
+# ownership from its parent, which is the model-shell wrapper for a live run.
 for keeper_file in "$KEEPER_DIR"/llm-keeper.*.pid; do
     [[ -f "$keeper_file" ]] || continue
-    keeper_pid=$(< "$keeper_file")
+    keeper_pid=$(cat "$keeper_file" 2>/dev/null || true)
     [[ "$keeper_pid" =~ ^[0-9]+$ ]] || continue
-    if kill -0 "$keeper_pid" 2>/dev/null; then
-        keeper_cmd=$(ps -p "$keeper_pid" -o args= 2>/dev/null || true)
-        keeper_ppid=$(ps -o ppid= -p "$keeper_pid" 2>/dev/null | tr -d '[:space:]')
-        if [[ "$keeper_cmd" == *"sleep 3600"* ]] && {
-            [[ "$keeper_ppid" == "1" ]] || ! [[ " ${LIVE_MODEL_SHELLS[*]} " == *" ${keeper_ppid} "* ]];
-        }; then
-            add_orphan "$keeper_pid" "$keeper_cmd"
-        fi
-    fi
+    kill -0 "$keeper_pid" 2>/dev/null || continue
+    [[ "$(readlink "/proc/$keeper_pid/cwd" 2>/dev/null || true)" == "$KEEPER_DIR" ]] || continue
+    if is_self_or_ancestor "$keeper_pid"; then continue; fi
+    if is_live_owned "$keeper_pid"; then continue; fi
+    add_orphan "$keeper_pid" "keeper subshell (orphaned; pid file $keeper_file)"
 done
 
-# 2b. Keeper sleep loops that lost their PID file or were reparented to an
-# unexpected shell by the terminal relay.
+# 2b. Keeper sleep loops that lost their PID file, or were reparented. The
+# matched process is the keeper's `sleep 3600`; ownership is decided from its
+# ancestry (is_live_owned walks up to the model-shell wrapper).
 while read -r pid cmd; do
     if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"sleep 3600"* ]]; then
         # Only keepers whose cwd is THIS keeper dir (see LLM_KEEPER_DIR).
         [[ "$(readlink "/proc/$pid/cwd" 2>/dev/null || true)" == "$KEEPER_DIR" ]] || continue
-        ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
-        if [[ -z "$ppid" ]] || [[ "$ppid" == "1" ]] || ! [[ " ${LIVE_MODEL_SHELLS[*]} " == *" ${ppid} "* ]]; then
-            add_orphan "$pid" "$cmd"
-        fi
+        if is_self_or_ancestor "$pid"; then continue; fi
+        if is_live_owned "$pid"; then continue; fi
+        add_orphan "$pid" "$cmd"
     fi
 done < <(pgrep -af 'sleep 3600' 2>/dev/null || true)
 
 # 3. llama-server instances spawned by bench (have --no-mmap, no terminal).
-# NOTE: ordinary `model use` servers also launch with --no-mmap on WSL, so this
-# must never reap the live port owner or a child of a live model shell.
-LLM_PORT="${LLM_PORT:-18081}"
-PORT_OWNER=""
+# NOTE: ordinary `model use` servers also launch with --no-mmap on WSL. Protect
+# the live port owner on BOTH the interactive and service ports, skip any server
+# owned by a live model shell, and fail closed (skip the reaper) when the port
+# owner cannot be resolved — never risk killing a live server.
+LLM_PORT="${LLM_PORT:-8081}"
+LLM_SERVICE_PORT="${LLM_SERVICE_PORT:-18081}"
+PORT_OWNERS=""
 if command -v ss >/dev/null 2>&1; then
-    PORT_OWNER=$(ss -ltnpH "sport = :$LLM_PORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true)
+    for _port in "$LLM_PORT" "$LLM_SERVICE_PORT"; do
+        _o=$(ss -ltnpH "sport = :$_port" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true)
+        if [[ -n "$_o" ]]; then
+            PORT_OWNERS+=" $_o"
+        fi
+    done
+else
+    echo "[clean-orphans] Warning: 'ss' not found — cannot resolve the live port owner; skipping the server reaper." >&2
 fi
 while read -r pid cmd; do
     if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"llama-server"*"no-mmap"* ]]; then
-        [[ -n "$PORT_OWNER" && "$pid" == "$PORT_OWNER" ]] && continue
-        server_ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
-        [[ -n "$server_ppid" && " ${LIVE_MODEL_SHELLS[*]:-} " == *" ${server_ppid} "* ]] && continue
+        if is_self_or_ancestor "$pid"; then continue; fi
+        if is_live_owned "$pid"; then continue; fi
+        if [[ -z "$PORT_OWNERS" ]]; then continue; fi
+        [[ " $PORT_OWNERS " == *" $pid "* ]] && continue
         add_orphan "$pid" "$cmd"
     fi
 done < <(pgrep -af 'llama-server.*no-mmap' 2>/dev/null || true)
 
-# 4. Stale bench PID and lock files
+# 4. Stale bench PID and lock files (honour the configurable paths — the same
+#    variables the rest of the script and the deletion step use).
 STALE_LOCK=0
 STALE_PID=0
-[[ -f /tmp/llm-bench.lock ]] && STALE_LOCK=1
-[[ -f /tmp/llm-bench.pid ]] && STALE_PID=1
+[[ -f "$BENCH_LOCK_FILE" ]] && STALE_LOCK=1
+[[ -f "$BENCH_PID_FILE" ]] && STALE_PID=1
 
-# 5. Stale keeper PID files
+# 5. Stale keeper PID files — only those whose recorded keeper is actually gone
+#    (a live keeper's file is not stale and must be preserved).
 STALE_KEEPERS=0
 for f in "$KEEPER_DIR"/llm-keeper.*.pid; do
-    [[ -f "$f" ]] && STALE_KEEPERS=1 && break
+    [[ -f "$f" ]] || continue
+    _kp=$(cat "$f" 2>/dev/null || true)
+    if [[ ! "$_kp" =~ ^[0-9]+$ ]] || ! kill -0 "$_kp" 2>/dev/null; then
+        STALE_KEEPERS=1
+        break
+    fi
 done
 
 # Report
@@ -183,8 +245,8 @@ if (( ${#ORPHANS[@]} > 0 )); then
         echo "    PID=$pid  CMD=${cmd:0:100}"
     done
 fi
-(( STALE_LOCK == 1 )) && echo "  Stale lock: /tmp/llm-bench.lock"
-(( STALE_PID == 1 )) && echo "  Stale PID:  /tmp/llm-bench.pid"
+(( STALE_LOCK == 1 )) && echo "  Stale lock: $BENCH_LOCK_FILE"
+(( STALE_PID == 1 )) && echo "  Stale PID:  $BENCH_PID_FILE"
 (( STALE_KEEPERS == 1 )) && echo "  Stale keeper PID files in $KEEPER_DIR/llm-keeper.*.pid"
 
 if (( CHECK == 1 )); then
@@ -193,10 +255,18 @@ fi
 
 if (( FORCE == 0 )); then
     echo ""
-    read -r -p "Kill these processes and clean up? [y/N] " reply
+    # A closed/absent stdin must not abort under `set -e` before the explicit
+    # cancel path runs (non-TTY callers: MCP tools, agents, cron, systemd).
+    if ! read -r -p "Kill these processes and clean up? [y/N] " reply; then
+        echo "[clean-orphans] No input available — not cleaning up (use --force to skip the prompt)." >&2
+        exit 1
+    fi
     case "$reply" in
         y|Y|yes|YES) ;;
-        *) echo "[clean-orphans] Cancelled."; exit 1 ;;
+        *)
+            echo "[clean-orphans] Cancelled."
+            exit 1
+            ;;
     esac
 fi
 
@@ -226,7 +296,7 @@ if (( BENCH_ACTIVE == 0 )); then
 fi
 for keeper_file in "$KEEPER_DIR"/llm-keeper.*.pid; do
     [[ -f "$keeper_file" ]] || continue
-    keeper_pid=$(< "$keeper_file")
+    keeper_pid=$(cat "$keeper_file" 2>/dev/null || true)
     if [[ ! "$keeper_pid" =~ ^[0-9]+$ ]] || ! kill -0 "$keeper_pid" 2>/dev/null; then
         rm -f "$keeper_file"
     fi

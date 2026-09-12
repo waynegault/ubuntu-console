@@ -232,6 +232,39 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     ! kill -0 "$keeper_pid" 2>/dev/null
     kill -0 "$stranger_pid" 2>/dev/null
     kill "$stranger_pid" 2>/dev/null || true
+
+    # A keeper that BELONGS to a live model shell must be SPARED even though its
+    # cwd is the keeper dir. Topology: model shell -> keeper subshell -> sleep.
+    # The live registry holds only the model-shell PID, so an ownership check
+    # against the sleep's PARENT (the keeper subshell) wrongly reaps a live
+    # keeper and closes the FIFO that keeps llama-server's stdin open.
+    cat > "$TAC_TEST_TMPDIR/live-keeper.sh" <<EOS
+cd "$LLM_KEEPER_DIR" || exit 1
+sleep 3600
+EOS
+    ( bash "$TAC_TEST_TMPDIR/live-keeper.sh" & wait ) &
+    local ms_pid=$!
+    echo "$ms_pid" > "/tmp/llm-modelshell.e2e-test-$$.pid"
+    local keeper_sub="" live_sleep="" _i
+    for _i in $(seq 1 40); do
+        keeper_sub=$(pgrep -P "$ms_pid" -f 'live-keeper' 2>/dev/null | head -1)
+        if [[ -n "$keeper_sub" ]]; then
+            live_sleep=$(pgrep -P "$keeper_sub" -f 'sleep 3600' 2>/dev/null | head -1)
+        fi
+        [[ -n "$live_sleep" ]] && break
+        sleep 0.2
+    done
+    [[ -n "$live_sleep" ]]
+
+    __tac_cleanup_stale_locks
+
+    # Live keeper spared.
+    kill -0 "$live_sleep" 2>/dev/null
+
+    kill "$live_sleep" 2>/dev/null || true
+    kill "$keeper_sub" 2>/dev/null || true
+    kill "$ms_pid" 2>/dev/null || true
+    rm -f "/tmp/llm-modelshell.e2e-test-$$.pid"
 }
 
 # ===== F) STATE RESTORATION ==================================================

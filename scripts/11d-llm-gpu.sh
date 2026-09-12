@@ -2,7 +2,7 @@
 # shellcheck disable=SC2154
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -19,7 +19,8 @@ __TAC_MOD_11D_LLM_GPU_LOADED=1
 
 function __tac_cleanup_stale_locks() {
     # shellcheck disable=SC2034
-    local _c_lock _c_pid _c_kf _c_sp _c_my_pid _c_ppid _c_cmd
+    local _c_lock _c_pid _c_kf _c_sp _c_my_pid _c_ppid _c_cmd _c_owner
+    local _c_fd_path
     local -a _c_live_model_shells=()
 
     # Track currently live model-shell wrappers so we do not kill keepers that
@@ -90,24 +91,30 @@ function __tac_cleanup_stale_locks() {
         fi
     fi
 
-    # orphaned stdin keepers
+    # orphaned stdin keepers: only processes actually holding a /tmp/llm-stdin.*
+    # FIFO open (fd-based). `find -lname` resolves the fd symlinks in C — a
+    # per-fd bash readlink loop over /proc is ~400x slower on WSL. A shell that
+    # merely MENTIONS "llm-stdin" on its command line is never a target, and a
+    # live session's server/keeper is spared by the parent-ownership guard. self
+    # is skipped.
     _c_my_pid=$$
-    for _c_sp in $(pgrep -a bash 2>/dev/null | awk '/llm-stdin/{print $1}' || true)
+    while IFS= read -r _c_fd_path
     do
-        if [[ "$_c_sp" =~ ^[0-9]+$ ]] && [[ "$_c_sp" != "$_c_my_pid" ]]
+        [[ -n "$_c_fd_path" ]] || continue
+        _c_sp="${_c_fd_path#/proc/}"
+        _c_sp="${_c_sp%%/*}"
+        [[ "$_c_sp" =~ ^[0-9]+$ ]] || continue
+        [[ "$_c_sp" == "$_c_my_pid" ]] && continue
+        # Only kill true orphans: a live keeper/server has a live model-shell
+        # parent, so it belongs to an active model run in some other shell.
+        _c_ppid=$(ps -o ppid= -p "$_c_sp" 2>/dev/null | tr -d '[:space:]')
+        if [[ -n "$_c_ppid" && "$_c_ppid" != "1" ]] \
+           && [[ " ${_c_live_model_shells[*]:-} " == *" $_c_ppid "* ]]
         then
-            # Only kill true orphans. Live keepers can belong to an active
-            # model run in another shell.
-            _c_ppid=$(ps -o ppid= -p "$_c_sp" 2>/dev/null | tr -d '[:space:]')
-            _c_cmd=$(ps -o args= -p "$_c_sp" 2>/dev/null || true)
-            if [[ "$_c_cmd" == *"llm-stdin"* ]] && {
-                [[ "$_c_ppid" == "1" ]] || ! [[ " ${_c_live_model_shells[*]} " == *" $_c_ppid "* ]];
-            }
-            then
-                kill -TERM "$_c_sp" 2>/dev/null || true
-            fi
+            continue
         fi
-    done
+        kill -TERM "$_c_sp" 2>/dev/null || true
+    done < <(find /proc/[0-9]*/fd -lname '*llm-stdin*' 2>/dev/null || true)
 
     # orphaned bench timeout wrappers (left behind after interrupted runs)
     # Only reap when no active bench owner exists.
@@ -130,27 +137,31 @@ function __tac_cleanup_stale_locks() {
 
     # orphaned keeper PID files. The directory is env-overridable so tests can
     # sandbox it; the default keeps production on /tmp.
+    #
+    # The PID file holds the keeper SUBSHELL (`{ sleep 3600; } &`), whose argv is
+    # inherited from the model shell — so it never reads "sleep 3600". Identify
+    # it by its cwd (the keeper `cd`s to LLM_KEEPER_DIR) and decide ownership
+    # from its PARENT, which is the model-shell wrapper for a live session.
     for _c_kf in "${LLM_KEEPER_DIR:-/tmp}"/llm-keeper.*.pid
     do
         [[ -f "$_c_kf" ]] || continue
         local _c_remove_kf=1
         # shellcheck disable=SC2188
         _c_pid=$(<"$_c_kf" 2>/dev/null || true)
-        if [[ "$_c_pid" =~ ^[0-9]+$ ]]
+        if [[ "$_c_pid" =~ ^[0-9]+$ ]] && kill -0 "$_c_pid" 2>/dev/null
         then
-            if kill -0 "$_c_pid" 2>/dev/null
+            # Identity guard against PID reuse: only a keeper has this cwd.
+            if [[ "$(readlink "/proc/$_c_pid/cwd" 2>/dev/null || true)" == "${LLM_KEEPER_DIR:-/tmp}" ]]
             then
                 _c_ppid=$(ps -o ppid= -p "$_c_pid" 2>/dev/null | tr -d '[:space:]')
-                _c_cmd=$(ps -o args= -p "$_c_pid" 2>/dev/null || true)
-                if [[ "$_c_cmd" == *"sleep 3600"* ]] && {
-                    [[ "$_c_ppid" == "1" ]] || ! [[ " ${_c_live_model_shells[*]} " == *" $_c_ppid "* ]];
-                }
+                if [[ -n "$_c_ppid" && "$_c_ppid" != "1" ]] \
+                   && [[ " ${_c_live_model_shells[*]:-} " == *" $_c_ppid "* ]]
                 then
-                    kill -TERM "$_c_pid" 2>/dev/null || true
-                else
                     # Live non-orphan keeper: keep its PID file so active
                     # model-stop flows still have the right target.
                     _c_remove_kf=0
+                else
+                    kill -TERM "$_c_pid" 2>/dev/null || true
                 fi
             fi
         fi
@@ -160,6 +171,10 @@ function __tac_cleanup_stale_locks() {
     # Fallback: if a keeper lost its PID file, reap any remaining sleep-loop
     # helpers that are no longer attached to a live model shell. Scoped to THIS
     # directory via /proc/PID/cwd, so an unrelated `sleep 3600` is never killed.
+    #
+    # The matched process is the keeper's `sleep 3600`, whose parent is the
+    # keeper subshell and whose GRANDparent is the model-shell wrapper — the
+    # only PID the live list contains. Compare the grandparent, not the parent.
     while IFS= read -r _c_line
     do
         [[ -n "$_c_line" ]] || continue
@@ -169,7 +184,14 @@ function __tac_cleanup_stale_locks() {
         [[ "$_c_cmd" == *"sleep 3600"* ]] || continue
         [[ "$(readlink "/proc/$_c_sp/cwd" 2>/dev/null || true)" == "${LLM_KEEPER_DIR:-/tmp}" ]] || continue
         _c_ppid=$(ps -o ppid= -p "$_c_sp" 2>/dev/null | tr -d '[:space:]')
-        if [[ -z "$_c_ppid" ]] || [[ "$_c_ppid" == "1" ]] || ! [[ " ${_c_live_model_shells[*]} " == *" $_c_ppid "* ]]
+        if [[ -n "$_c_ppid" && "$_c_ppid" != "1" ]]
+        then
+            _c_owner=$(ps -o ppid= -p "$_c_ppid" 2>/dev/null | tr -d '[:space:]')
+        else
+            _c_owner=""
+        fi
+        if [[ -z "$_c_owner" ]] || [[ "$_c_owner" == "1" ]] \
+           || ! [[ " ${_c_live_model_shells[*]:-} " == *" $_c_owner "* ]]
         then
             kill -TERM "$_c_sp" 2>/dev/null || true
         fi
