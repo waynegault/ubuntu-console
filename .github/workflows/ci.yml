@@ -14,8 +14,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Install shellcheck (pinned)
+        run: sudo tools/install-shellcheck.sh
 
       - name: Bash syntax check
         run: |
@@ -63,7 +63,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bats
 
-      - name: Run fast tests (52 smoke tests)
+      # The fast suite's shellcheck tests skip when shellcheck is absent, so
+      # install the same pinned version the lint job uses rather than no-op them.
+      - name: Install shellcheck (pinned)
+        run: sudo tools/install-shellcheck.sh
+
+      - name: Run fast tests (53 smoke tests)
         run: bats tests/tactical-console-fast.bats
 
       - name: Run lint script
@@ -109,7 +114,8 @@ jobs:
                tests/integration/02-model-lifecycle.bats \
                tests/integration/03-backup-restore.bats \
                tests/integration/04-watchdog.bats \
-               tests/integration/05-refresh-keys.bats
+               tests/integration/05-refresh-keys.bats \
+               tests/integration/e2e-bench-autotune.bats
 
   module-count:
     name: Module Integrity

@@ -61,8 +61,8 @@ kgraph --uninstall-hook     # Remove git hook
 (`kgraph_report`) is accepted **only** with `Content-Type: application/json`,
 must not carry a cross-origin `Origin`, and writes only inside
 `KG_REPORTS_DIR` (default `~/.openclaw/kgraph-reports`) via a path relative to
-it — absolute paths and `..` are rejected. `GET /graph.json` is served with
-wildcard CORS for the Vite dev frontend and redacts memory text.
+it — absolute paths and `..` are rejected. `GET /graph.json` echoes CORS only
+for the Vite dev frontend's origin and redacts memory text.
 
 Graph JSON validation is a module entry point, not a CLI flag:
 

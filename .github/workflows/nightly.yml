@@ -19,6 +19,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bats
 
+      - name: Install shellcheck (pinned)
+        run: sudo tools/install-shellcheck.sh
+
       - name: Run full behavioural suite
         run: bats tests/tactical-console.bats
 

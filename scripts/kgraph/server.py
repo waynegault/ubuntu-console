@@ -42,7 +42,7 @@ def _redacted_label(node: dict) -> str:
 
   Such a node's stored label IS a preview of its memory text — memory_import
   sets ``label = _preview_text(content)`` — so it cannot be served on the
-  wildcard-CORS read path. The node id is a stable, non-content identifier
+  cross-origin read path. The node id is a stable, non-content identifier
   (e.g. ``memory:<uuid>``), so it supplies the redacted label.
   """
   kind = str(node.get('type') or 'memory').lower()
@@ -53,9 +53,16 @@ def _redacted_label(node: dict) -> str:
 def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: str | None = None, force_embed: bool = False, graph_db_path: str | None = None, view_mode: str = 'overview', semantic_threshold: float = 0.82):
   serve_dir, filename, using_built_frontend = resolve_serve_target(path, force_embed=force_embed)
 
-  # ── Rate limiter (class-level, shared across requests) ──
+  # ── CORS ──
+  # Only the Vite dev frontend may read the graph cross-origin; the bundled
+  # frontend is served same-origin and needs no CORS at all. A wildcard here
+  # let any page the user visited read the graph, so the response now echoes
+  # Access-Control-Allow-Origin only for an exact match on this allowlist.
+  _ALLOWED_ORIGINS = (
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+  )
   _CORS_HEADERS = [
-    ('Access-Control-Allow-Origin', '*'),
     ('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'),
     ('Access-Control-Allow-Headers', 'Content-Type'),
   ]
@@ -78,11 +85,32 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
     # Path to OpenClaw memory DB to use as fallback source.
     memory_db = resolve_memory_db_path()
 
-    def _send_cors_headers(self, allow_any_origin: bool = True):
+    def _allowed_origin(self) -> str | None:
+      """The request Origin when it is an allowlisted dev frontend, else None.
+
+      Browsers set Origin themselves and script cannot forge it, so echoing it
+      back only for a known origin is what makes the read path safe: any other
+      page gets no Access-Control-Allow-Origin and cannot read the response.
+      Requests without an Origin header (curl, MCP clients) are unaffected —
+      CORS is enforced by the browser, not by this server.
+      """
+      origin = self.headers.get('Origin')
+      if not origin:
+        return None
+      return origin if origin in _ALLOWED_ORIGINS else None
+
+    def _send_cors_headers(self, allow_origin: str | None = None):
+      """Send the CORS headers for this response.
+
+      `allow_origin` is echoed as Access-Control-Allow-Origin when set; when it
+      is None no origin is approved, so the browser blocks a cross-origin read.
+      `Vary: Origin` is sent because the response depends on the request Origin.
+      """
       for name, value in _CORS_HEADERS:
-        if not allow_any_origin and name == 'Access-Control-Allow-Origin':
-          continue
         self.send_header(name, value)
+      if allow_origin is not None:
+        self.send_header('Access-Control-Allow-Origin', allow_origin)
+      self.send_header('Vary', 'Origin')
 
     def _origin_is_same(self) -> bool:
       """True when the request Origin matches the Host it was sent to.
@@ -107,7 +135,7 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
         self.end_headers()
         return
       self.send_response(204)
-      self._send_cors_headers()
+      self._send_cors_headers(self._allowed_origin())
       self.end_headers()
 
     def _resolve_graph(self, prefer_memory: bool) -> tuple[dict, str]:
@@ -189,8 +217,9 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
             payload = dict(projected)
             payload['_meta'] = dict(payload.get('_meta', {}))
             payload['_meta'].update(meta)
-            # The GET path sends wildcard CORS (for the Vite dev frontend), so
-            # strip memory-derived free text from the served payload:
+            # The GET path is readable cross-origin by the allowlisted Vite
+            # dev frontend, so strip memory-derived free text from the served
+            # payload:
             # `content`, `tags` and `content_preview`. A memory/summary node's
             # LABEL is itself a content preview (memory_import sets
             # label = _preview_text(content)), so it is replaced with a
@@ -220,7 +249,7 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
             data = json.dumps(fallback)
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self._send_cors_headers()
+        self._send_cors_headers(self._allowed_origin())
         self.end_headers()
         self.wfile.write(data.encode('utf-8'))
         return
@@ -271,7 +300,7 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
         if length > MAX_PAYLOAD_SIZE:
           self.send_response(413)
           self.send_header('Content-Type', 'text/plain')
-          self._send_cors_headers(allow_any_origin=False)
+          self._send_cors_headers()
           self.end_headers()
           self.wfile.write(b'Payload too large')
           return
@@ -295,15 +324,15 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
           save_to_graph_db(self.graph_db, payload)
 
           self.send_response(200)
-          # No wildcard CORS on write responses: cross-origin callers must
-          # not be able to read the result either.
-          self._send_cors_headers(allow_any_origin=False)
+          # No Access-Control-Allow-Origin on write responses: a cross-origin
+          # caller must not be able to read the result either.
+          self._send_cors_headers()
           self.end_headers()
           self.wfile.write(b'OK')
         except (json.JSONDecodeError, ValueError, OSError) as e:
           self.send_response(400)
           self.send_header('Content-Type', 'text/plain')
-          self._send_cors_headers(allow_any_origin=False)
+          self._send_cors_headers()
           self.end_headers()
           self.wfile.write(str(e).encode())
         return

@@ -1,8 +1,6 @@
 """Constants and import-time setup for the kgraph package."""
 import re
 
-load_canonical_data = None
-
 
 def normalize_canonical_name(text: str) -> str:
     norm = re.sub(r'\s+', ' ', str(text or '').strip().lower())

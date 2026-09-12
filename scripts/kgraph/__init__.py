@@ -31,7 +31,6 @@ if _t.TYPE_CHECKING:
         LIFE_ROOT_DEFAULT,
         MEMORY_DB_CANDIDATES,
         SAMPLE_GRAPH,
-        load_canonical_data,
         normalize_canonical_name,
     )
     from .graph_db import (
@@ -116,8 +115,7 @@ _lazy(".models", [
 ])
 _lazy(".constants", [
     "MEMORY_DB_CANDIDATES", "GRAPH_DB_DEFAULT", "LIFE_ROOT_DEFAULT",
-    "CANONICAL_CONCEPTS_DEFAULT", "SAMPLE_GRAPH", "load_canonical_data",
-    "normalize_canonical_name",
+    "CANONICAL_CONCEPTS_DEFAULT", "SAMPLE_GRAPH", "normalize_canonical_name",
 ])
 _lazy(".html", ["HTML_TMPL", "ensure_parent_dir", "generate_html"])
 _lazy(".projection", ["project_graph"])
@@ -143,8 +141,7 @@ __all__ = [
     "ConfidenceLevel", "GraphNode", "GraphEdge", "GraphMeta", "Graph",
     "GraphBuilder", "slugify", "estimate_tokens",
     "MEMORY_DB_CANDIDATES", "GRAPH_DB_DEFAULT", "LIFE_ROOT_DEFAULT",
-    "CANONICAL_CONCEPTS_DEFAULT", "SAMPLE_GRAPH", "load_canonical_data",
-    "normalize_canonical_name",
+    "CANONICAL_CONCEPTS_DEFAULT", "SAMPLE_GRAPH", "normalize_canonical_name",
     "HTML_TMPL", "ensure_parent_dir", "generate_html",
     "project_graph",
     "resolve_life_root", "load_life_index", "load_relations", "merge_relations",

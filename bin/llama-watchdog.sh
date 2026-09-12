@@ -36,8 +36,8 @@ set -uo pipefail
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
 # Cleanup is inlined into the trap (rather than a named function) so shellcheck
-# does not flag the body as unreachable (SC2317) for a function invoked only by
-# trap; a suppression comment would be the wrong fix.
+# does not flag a function invoked only by trap — SC2317 on 0.9.0, SC2329 on
+# 0.11.0; a suppression comment would be the wrong fix.
 # Lock/strike paths are env-overridable so the integration suite can sandbox
 # them; the defaults keep production on /dev/shm.
 WATCHDOG_LOCK_FILE="${LLAMA_WATCHDOG_LOCK_FILE:-/dev/shm/llama-watchdog.lock}"

@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (934 total tests: 598 BATS + 336 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (935 total tests: 598 BATS + 337 Python).
 
 ### Running Tests
 
@@ -449,8 +449,8 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 | Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
 | Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use, clean-orphans) | `tests/unit/*.bats` | 47 | 120s |
 | Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 111 | 300s |
-| Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 336 | 200s |
-| **Total** | | **934** | |
+| Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 337 | 200s |
+| **Total** | | **935** | |
 
 ---
 
@@ -833,8 +833,8 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 53 tests)
 - **Full tests:** `bats tests/tactical-console.bats` (385 BATS unit tests)
 - **Unit suites (47 tests overall):** CI runs `tests/unit/01`, `02`, `09`, `10`; nightly adds `05`–`08`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host.
-- **Integration suites (111 tests overall):** both run `tests/integration/01`–`05`; nightly also runs `e2e-bench-autotune`.
-- **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety)
+- **Integration suites (111 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
+- **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety); shellcheck is pinned to 0.11.0 via `tools/install-shellcheck.sh`, which CI runs so local and CI diagnostics cannot drift (0.9.0 reported SC2317 where 0.11.0 reports SC2329 for the same code).
 - **Docs sync:** `tools/docs-sync-check.sh` (README drift guard — fails CI on stale module counts, versions, or test totals)
 - **Nightly:** full suite runs nightly via `.github/workflows/nightly.yml` (scheduled + manual dispatch)
 

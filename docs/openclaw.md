@@ -286,8 +286,8 @@ Write requests (`kgraph_report`) are accepted **only** with
 body (what plain `curl -d` sends), or an oversized payload is refused, and the
 written file must be a path *relative to* the reports directory
 (`KG_REPORTS_DIR`, default `~/.openclaw/kgraph-reports`; absolute paths and
-`..` are rejected). The read path (`GET /graph.json`) is served with wildcard
-CORS for the Vite dev frontend and redacts memory text (`content`, `tags`,
+`..` are rejected). The read path (`GET /graph.json`) echoes CORS only for the
+Vite dev frontend's origin and redacts memory text (`content`, `tags`,
 `content_preview`, and content-derived `memory`/`summary` labels).
 
 ### Git Hooks (`kgraph --install-hook`)

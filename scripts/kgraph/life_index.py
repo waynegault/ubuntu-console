@@ -16,7 +16,6 @@ from typing import Any
 
 from .constants import (
     LIFE_ROOT_DEFAULT,
-    load_canonical_data,
     normalize_canonical_name,
 )
 from .models import Graph, GraphEdge
@@ -68,11 +67,7 @@ def load_life_index(life_root: str | None = None) -> dict:
     canonical_json = os.path.join(root, "canonical-concepts.json")
     if os.path.isfile(canonical_json):
         try:
-            payload = (
-                load_canonical_data()
-                if load_canonical_data
-                else json.loads(Path(canonical_json).read_text(encoding="utf-8"))
-            )
+            payload = json.loads(Path(canonical_json).read_text(encoding="utf-8"))
             for record in payload.get("records", []):
                 rec: dict[str, Any] = {
                     "slug": str(record.get("slug") or "").strip().lower(),

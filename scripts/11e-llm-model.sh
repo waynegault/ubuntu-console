@@ -1595,7 +1595,9 @@ function __model_bench() {
             trap - EXIT
         fi
     }
-    # shellcheck disable=SC2317  # called indirectly via trap
+    # shellcheck disable=SC2329  # false positive: only referenced from the
+    # quoted EXIT/INT/TERM traps below, never called directly. Shellcheck 0.9.0
+    # raised the same false positive as SC2317.
     __bench_cleanup() {
         local _exit_code=$?
         if (( __bench_cleaned == 1 ))
@@ -1661,7 +1663,9 @@ function __model_bench() {
     # whole shell; that is required because they are invoked from EXIT/INT/TERM
     # traps and exported into the timeout wrapper's child shell.  They resolve
     # this function's locals through dynamic scope while it is on the stack.
-    # shellcheck disable=SC2317  # invoked indirectly via timeout wrapper in child shell
+    # shellcheck disable=SC2329  # false positive: passed by name to
+    # __bench_run_with_timeout, which runs it in a child shell, so there is no
+    # direct call site. Shellcheck 0.9.0 raised the same false positive as SC2317.
     __bench_run_single_model() {
         export __BENCH_MODE=1
         local bench_num="$1"

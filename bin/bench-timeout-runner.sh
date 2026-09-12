@@ -78,7 +78,11 @@ __btr_log() {
 
 # --- Cleanup trap ------------------------------------------------------------
 child_pid=""
-# shellcheck disable=SC2317  # false positive: shellcheck 0.9.0 flags this trap-only function's whole body as unreachable INSIDE this file (the identical function lints clean in isolation; see the getopts loop above). Remove when shellcheck is upgraded.
+# shellcheck disable=SC2329  # false positive: __btr_cleanup is invoked only by
+# the EXIT/INT/TERM trap below. SC2329 stops crediting a trap-only reference once
+# the main flow ends with an explicit `exit` (verified: the same function lints
+# clean until a trailing `exit 0` is appended). Shellcheck 0.9.0 raised the same
+# false positive as SC2317. Re-check on the next shellcheck bump.
 __btr_cleanup() {
     local _exit_code=$?
     set +e

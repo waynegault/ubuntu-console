@@ -89,20 +89,20 @@ Both write surfaces bind to `127.0.0.1` by default (localhost only).
 **Mitigation (POST handlers):**
 - Only `Content-Type: application/json` bodies are accepted. `application/json` is not a CORS-safelisted content type, so a cross-origin caller must preflight; both handlers refuse a POST preflight in `do_OPTIONS` (403), so a visited web page cannot POST.
 - Defence in depth: an `Origin` header that does not match `Host` is rejected (403). Non-browser callers (MCP clients, curl) send no `Origin` and stay allowed.
-- Write responses omit the wildcard `Access-Control-Allow-Origin`.
+- Write responses send no `Access-Control-Allow-Origin`.
 - Sliding-window rate limit: 30 POSTs / 60s.
 
 *Correction (2026-09-12):* the MCP server previously performed **no** Content-Type or Origin check and returned `Access-Control-Allow-Origin: *`, so any visited page could POST a `text/plain` (CORS-safelisted, no preflight) request invoking `kgraph_report` with an attacker-chosen `outpath` — an arbitrary local file write. This is closed by the checks above, and `kgraph_report`'s `outpath` is now confined to a reports directory (`KG_REPORTS_DIR`, default `~/.openclaw/kgraph-reports`): absolute paths and any `..` traversal are rejected.
 
-### 8. GET read path CORS (accepted risk)
+### 8. GET read path CORS
 **Severity:** Low
-**Status:** Accepted (by design), with read-path redaction
+**Status:** Mitigated (origin allowlist), with read-path redaction
 
-`GET /graph.json` returns `Access-Control-Allow-Origin: *`. The served projection is now redacted on the read path: `content`, `tags` and `content_preview` are dropped, and a `memory`/`summary` node's `label` — which IS a preview of its content (`memory_import.py` sets `label = _preview_text(content)`) — is replaced with a non-content identifier built from the node id (e.g. `memory abc12345`). A page the user visits therefore sees graph structure and concept labels, not raw memory text.
+`GET /graph.json` echoes `Access-Control-Allow-Origin` only for an exact match on an origin allowlist (`http://localhost:5173`, `http://127.0.0.1:5173` — the Vite dev frontend) and sends `Vary: Origin`. Any other origin, and a request with no `Origin` at all, gets no allow-origin header, so a page the user visits can no longer read the graph. The served projection is also redacted on the read path: `content`, `tags` and `content_preview` are dropped, and a `memory`/`summary` node's `label` — which IS a preview of its content (`memory_import.py` sets `label = _preview_text(content)`) — is replaced with a non-content identifier built from the node id (e.g. `memory abc12345`).
 
 *Correction (2026-09-12):* two earlier revisions of this section understated the exposure. The first said the payload served "`content`, `tags`, source paths" and deferred stripping; the second claimed stripping `content`/`tags` was sufficient. It was not — the label is itself a content preview (verified against the live DB: 18 memory nodes still shipped content-derived labels after that strip). The label and `content_preview` are now redacted too, and `server.py` carries a regression test (`tests/test_untested_modules.py::TestGraphServerPost::test_get_redacts_memory_text`) that fails against the pre-redaction code.
 
-This is deliberate: the Vite dev frontend (`frontend-g6`, port 5173) fetches the API cross-origin, while the embedded Cytoscape viewer is same-origin and needs no CORS. The read server uses an ephemeral port unless `--port` is given, which further limits exposure. Residual: the redaction is by node `type`, so a future content-derived node type that is not `memory`/`summary` would need adding to `server.py`'s redaction; the fields stripped unconditionally (`content`, `tags`, `content_preview`) are the durable part.
+*Correction (2026-09-12, read-path CORS):* this section previously recorded the wildcard `Access-Control-Allow-Origin: *` as an accepted risk, justified by the Vite dev frontend (`frontend-g6`, port 5173) fetching the API cross-origin while the embedded Cytoscape viewer is same-origin. The wildcard still let any page the user visited read the graph, so it is replaced by the origin allowlist above; `server.py` carries regression tests (`test_get_read_path_withholds_cors_from_foreign_origin` and `…_echoes_allowlisted_origin`) that fail against the wildcard. The read server uses an ephemeral port unless `--port` is given, which further limits exposure. Residual: the redaction is by node `type`, so a future content-derived node type that is not `memory`/`summary` would need adding to `server.py`'s redaction; the fields stripped unconditionally (`content`, `tags`, `content_preview`) are the durable part.
 
 ## Summary
 
@@ -115,7 +115,7 @@ This is deliberate: the Vite dev frontend (`frontend-g6`, port 5173) fetches the
 | SQL injection | Low | ✅ Mitigated | Parameterized queries always |
 | SSRF | Low | ✅ Mitigated | No outbound fetch capability |
 | MCP / REST write path | Medium | ✅ Mitigated | JSON Content-Type + same-origin + preflight refusal + rate limit |
-| GET read CORS | Low | ⚠️ Accepted | Wildcard CORS for the dev frontend; ephemeral port; read path redacts memory text (§8) |
+| GET read CORS | Low | ✅ Mitigated | Origin allowlist (Vite dev frontend only); ephemeral port; read path redacts memory text (§8) |
 
 ## Recommendations
 

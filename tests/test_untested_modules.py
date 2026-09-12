@@ -355,16 +355,43 @@ class TestGraphServerPost(unittest.TestCase):
     def _node_ids(self):
         return {n.id for n in kgraph.load_from_graph_db(self.db_path).nodes}
 
-    def test_get_read_path_still_served_with_cors(self):
+    def test_get_read_path_echoes_allowlisted_origin(self):
+        # The Vite dev frontend is the one cross-origin reader the read path is
+        # meant to serve, so its Origin is echoed back.
+        status, body, headers = self._request(
+            "GET", "/graph.json?view=raw",
+            headers={"Origin": "http://localhost:5173"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"),
+                         "http://localhost:5173")
+        self.assertEqual(headers.get("Vary"), "Origin")
+        self.assertIn("nodes", json.loads(body))
+
+    def test_get_read_path_withholds_cors_from_foreign_origin(self):
+        # No allowlisted match => no Access-Control-Allow-Origin, so a page the
+        # user visits cannot read the graph. Regression guard for the old
+        # `Access-Control-Allow-Origin: *`.
+        status, body, headers = self._request(
+            "GET", "/graph.json?view=raw",
+            headers={"Origin": "http://evil.example"},
+        )
+        self.assertEqual(status, 200)
+        self.assertIsNone(headers.get("Access-Control-Allow-Origin"))
+        self.assertIn("nodes", json.loads(body))
+
+    def test_get_read_path_without_origin_needs_no_cors(self):
+        # curl and MCP clients send no Origin; CORS is browser-enforced, so the
+        # read path still serves them — just with no allow-origin header.
         status, body, headers = self._request("GET", "/graph.json?view=raw")
         self.assertEqual(status, 200)
-        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*")
+        self.assertIsNone(headers.get("Access-Control-Allow-Origin"))
         self.assertIn("nodes", json.loads(body))
 
     def test_get_redacts_memory_text(self):
         # A memory node's stored label IS a preview of its content
         # (memory_import sets label = _preview_text(content)), so the
-        # wildcard-CORS read path must not serve it, nor the content fields.
+        # cross-origin read path must not serve it, nor the content fields.
         graph = {
             "nodes": [
                 {"id": "memory:abc12345-6789-4abc",
@@ -432,7 +459,7 @@ class TestGraphServerPost(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertEqual(self._node_ids(), {"a", "b", "c"})
 
-    def test_write_response_omits_wildcard_cors(self):
+    def test_write_response_omits_cors_header(self):
         status, _, headers = self._post(
             json.dumps({"nodes": [{"id": "x", "label": "X"}], "edges": []}),
         )
@@ -1098,18 +1125,6 @@ class TestLifeIndexScan(unittest.TestCase):
                 index = kgraph.load_life_index(td)
             log.warning.assert_called()
             self.assertEqual([r["slug"] for r in index["records"]], ["alpha"])
-
-    def test_canonical_loader_hook_is_used_when_available(self):
-        # constants.load_canonical_data is None today, so the file is read
-        # directly; the hook branch must still work when one is supplied.
-        payload = {"records": [{"slug": "gamma", "title": "Gamma", "type": "system"}]}
-        with tempfile.TemporaryDirectory() as td:
-            self._write(os.path.join(td, "canonical-concepts.json"), "{}")
-            with mock.patch("kgraph.life_index.load_canonical_data",
-                            return_value=payload) as loader:
-                index = kgraph.load_life_index(td)
-            loader.assert_called_once()
-            self.assertEqual(index["by_slug"]["gamma"]["type"], "system")
 
     def test_canonical_record_without_a_slug_is_skipped(self):
         with tempfile.TemporaryDirectory() as td:
