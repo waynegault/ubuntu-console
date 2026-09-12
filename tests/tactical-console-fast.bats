@@ -446,4 +446,23 @@ setup_file() {
     grep -q '__so_ensure_shell_env' "$REPO_ROOT/scripts/09d-oc-agents.sh"
 }
 
+@test "ci: every runnable test suite is referenced by a workflow" {
+    # A suite no workflow runs silently rots — e2e-bench-autotune.bats sat
+    # unreferenced until this guard was added, and a newly added unit suite has
+    # the same trap. Only 04-llama-cpp-inventory is deliberately excluded (it
+    # performs live downloads and mutates the host).
+    local missing="" f rel
+    for f in "$REPO_ROOT"/tests/unit/*.bats "$REPO_ROOT"/tests/integration/*.bats; do
+        [[ -f "$f" ]] || continue
+        rel="tests/${f#"$REPO_ROOT"/tests/}"
+        [[ "$rel" == "tests/unit/04-llama-cpp-inventory.bats" ]] && continue
+        grep -qF "$rel" "$REPO_ROOT"/.github/workflows/*.yml || missing="$missing $rel"
+    done
+    if [[ -n "$missing" ]]
+    then
+        echo "reference these in a workflow (ci.yml or nightly.yml):$missing"
+        return 1
+    fi
+}
+
 # end of file

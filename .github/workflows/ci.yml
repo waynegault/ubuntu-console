@@ -69,7 +69,7 @@ jobs:
       - name: Run lint script
         run: tools/lint.sh
 
-    # Full suite (383 tests) is run locally via: bats tests/tactical-console.bats
+    # Full suite (385 tests) is run locally via: bats tests/tactical-console.bats
     # and nightly via .github/workflows/nightly.yml.
 
   docs-sync:
@@ -96,10 +96,12 @@ jobs:
 
       - name: Run unit tests
         run: |
-          # 04-llama-cpp-inventory excluded: performs live downloads + mutates host
+          # Fast smoke subset. 04-llama-cpp-inventory is excluded (live downloads
+          # + host mutation); the remaining unit suites run nightly.
           bats tests/unit/01-refresh-keys.bats \
                tests/unit/02-so-startup.bats \
-               tests/unit/09-check-agent-use.bats
+               tests/unit/09-check-agent-use.bats \
+               tests/unit/10-clean-orphans.bats
 
       - name: Run integration tests
         run: |

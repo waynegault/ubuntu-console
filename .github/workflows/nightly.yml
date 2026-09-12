@@ -36,7 +36,8 @@ jobs:
                tests/unit/06-spec-dec-stats.bats \
                tests/unit/07-spec-dec-launch.bats \
                tests/unit/08-autotune-workload.bats \
-               tests/unit/09-check-agent-use.bats
+               tests/unit/09-check-agent-use.bats \
+               tests/unit/10-clean-orphans.bats
 
       - name: Run integration suites
         run: |
@@ -44,7 +45,8 @@ jobs:
                tests/integration/02-model-lifecycle.bats \
                tests/integration/03-backup-restore.bats \
                tests/integration/04-watchdog.bats \
-               tests/integration/05-refresh-keys.bats
+               tests/integration/05-refresh-keys.bats \
+               tests/integration/e2e-bench-autotune.bats
 
       - name: Set up Python
         uses: actions/setup-python@v5
