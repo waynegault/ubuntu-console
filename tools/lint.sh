@@ -6,13 +6,18 @@
 # Usage: ./tools/lint.sh
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
-# shellcheck disable=SC2034
-VERSION="1.1"
+VERSION="1.2"
 set -euo pipefail
+
+# --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
+if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
+    echo "lint.sh $VERSION"
+    exit 0
+fi
 
 # Unicode safety check: detect non-ASCII characters in executable code lines.
 # Default: enabled (SKIP_UNICODE_CHECK=0).
@@ -85,28 +90,45 @@ done
 echo ""
 echo "=== Unicode Safety ==="
 # Always-on FAIL: invisible codepoints that can hide code or forge identifiers —
-# a BOM, zero-width characters, and bidirectional controls (Trojan Source).
-# These are never legitimate here, so any hit fails the build.
+# a BOM, zero-width characters, and bidirectional controls (Trojan Source:
+# U+061C ALM plus the LRE/RLE/PDF/LRO/RLO and isolate ranges). These are never
+# legitimate here, so any hit fails the build.
 dangerous_rc=0
-for f in "$REPO_ROOT"/tactical-console.bashrc \
-         "$REPO_ROOT"/install.sh \
-         "$REPO_ROOT"/scripts/*.sh \
-         "$REPO_ROOT"/tools/*.sh \
-         "$REPO_ROOT"/bin/*.sh
-do
-    hits=$(grep -Pn '[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]' "$f" 2>/dev/null || true)
-    if [[ -n "$hits" ]]
-    then
-        echo "  FAIL  ${f#"$REPO_ROOT"/}  - invisible/dangerous Unicode:"
-        echo "$hits" | head -5
-        dangerous_rc=1
-    fi
-done
+pcre_ok=1
+# The guard needs PCRE (`grep -P`). Without that engine `hits` would be empty for
+# every file and the check would silently pass, so treat a missing engine as a
+# failure of the check itself rather than a green result.
+if ! printf 'x\n' | grep -P 'x' >/dev/null 2>&1
+then
+    pcre_ok=0
+    dangerous_rc=1
+    echo "  FAIL  grep -P (PCRE) is unavailable — the dangerous-codepoint guard cannot run"
+fi
+if (( pcre_ok == 1 ))
+then
+    for f in "$REPO_ROOT"/tactical-console.bashrc \
+             "$REPO_ROOT"/install.sh \
+             "$REPO_ROOT"/scripts/*.sh \
+             "$REPO_ROOT"/tools/*.sh \
+             "$REPO_ROOT"/bin/*.sh
+    do
+        hits=$(grep -Pn '[\x{061C}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]' "$f" 2>/dev/null || true)
+        if [[ -n "$hits" ]]
+        then
+            echo "  FAIL  ${f#"$REPO_ROOT"/}  - invisible/dangerous Unicode:"
+            echo "$hits" | head -5
+            dangerous_rc=1
+        fi
+    done
+fi
 if (( dangerous_rc == 0 ))
 then
     echo "  PASS  no BOM / zero-width / bidi control characters"
 else
-    echo "  FAIL  BOM / zero-width / bidi control characters are never allowed"
+    if (( pcre_ok == 1 ))
+    then
+        echo "  FAIL  BOM / zero-width / bidi control characters are never allowed"
+    fi
     rc=1
 fi
 
