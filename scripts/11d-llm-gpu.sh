@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -128,11 +128,9 @@ function __tac_cleanup_stale_locks() {
         done
     fi
 
-    # orphaned keeper PID files. The directory is overridable so tests can
-    # sandbox it; the default keeps production on /tmp. (The fallback reap
-    # below is global by necessity — pgrep cannot scope by PID-file dir.)
-    local _c_keeper_dir="${LLM_KEEPER_DIR:-/tmp}"
-    for _c_kf in "$_c_keeper_dir"/llm-keeper.*.pid
+    # orphaned keeper PID files. The directory is env-overridable so tests can
+    # sandbox it; the default keeps production on /tmp.
+    for _c_kf in "${LLM_KEEPER_DIR:-/tmp}"/llm-keeper.*.pid
     do
         [[ -f "$_c_kf" ]] || continue
         local _c_remove_kf=1
@@ -160,7 +158,8 @@ function __tac_cleanup_stale_locks() {
     done
 
     # Fallback: if a keeper lost its PID file, reap any remaining sleep-loop
-    # helpers that are no longer attached to a live model shell.
+    # helpers that are no longer attached to a live model shell. Scoped to THIS
+    # directory via /proc/PID/cwd, so an unrelated `sleep 3600` is never killed.
     while IFS= read -r _c_line
     do
         [[ -n "$_c_line" ]] || continue
@@ -168,6 +167,7 @@ function __tac_cleanup_stale_locks() {
         _c_cmd=${_c_line#* }
         [[ "$_c_sp" =~ ^[0-9]+$ ]] || continue
         [[ "$_c_cmd" == *"sleep 3600"* ]] || continue
+        [[ "$(readlink "/proc/$_c_sp/cwd" 2>/dev/null || true)" == "${LLM_KEEPER_DIR:-/tmp}" ]] || continue
         _c_ppid=$(ps -o ppid= -p "$_c_sp" 2>/dev/null | tr -d '[:space:]')
         if [[ -z "$_c_ppid" ]] || [[ "$_c_ppid" == "1" ]] || ! [[ " ${_c_live_model_shells[*]} " == *" $_c_ppid "* ]]
         then

@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -176,7 +176,7 @@ function __llm_server_stop() {
 
     # Kill any lingering stdin keeper processes (orphaned sleep loops).
     local _kp
-    for _kf in /tmp/llm-keeper.*.pid
+    for _kf in "${LLM_KEEPER_DIR:-/tmp}"/llm-keeper.*.pid
     do
         [[ -f "$_kf" ]] || continue
         _kp=$(< "$_kf")

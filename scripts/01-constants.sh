@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 
 # ==============================================================================
@@ -150,6 +150,10 @@ export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$HOME/.llm/default_model.conf}"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"
 export LLM_LOG_FILE="/dev/shm/llama-server.log"
 export LLM_TPS_CACHE="/dev/shm/last_tps"
+# Directory holding stdin-keeper PID files. The keeper also runs with this as
+# its cwd, so orphan keepers can be attributed to it (/proc/PID/cwd) — never
+# reap a `sleep 3600` that belongs to a different directory.
+export LLM_KEEPER_DIR="${LLM_KEEPER_DIR:-/tmp}"
 
 # ---- (Python SSE helper removed — all streaming is now pure bash + curl + jq) ----
 

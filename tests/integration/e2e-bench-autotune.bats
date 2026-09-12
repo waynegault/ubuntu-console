@@ -219,15 +219,19 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 }
 
 @test "[E8] Lock: __tac_cleanup_stale_locks reaps keeper sleeps outside live model shells" {
-    sleep 3600 &
+    # A keeper for THIS directory: cwd = LLM_KEEPER_DIR, and NO PID file, so it
+    # can only be reaped by the cwd-scoped fallback.
+    ( cd "$LLM_KEEPER_DIR" && exec sleep 3600 ) &
     local keeper_pid=$!
-    local keeper_file="${LLM_KEEPER_DIR:-/tmp}/llm-keeper.$BASHPID.pid"
-    echo "$keeper_pid" > "$keeper_file"
+    # An unrelated sleep in a different directory must NOT be reaped.
+    ( cd / && exec sleep 3600 ) &
+    local stranger_pid=$!
 
     __tac_cleanup_stale_locks
 
     ! kill -0 "$keeper_pid" 2>/dev/null
-    [[ ! -f "$keeper_file" ]]
+    kill -0 "$stranger_pid" 2>/dev/null
+    kill "$stranger_pid" 2>/dev/null || true
 }
 
 # ===== F) STATE RESTORATION ==================================================

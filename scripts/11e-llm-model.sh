@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -931,7 +931,7 @@ function __model_use_launch_server() {
         # Clean up orphan FIFOs and keepers from any previous llama-server
         # instance that was killed without running __model_stop.
         local _okf
-        for _okf in /tmp/llm-keeper.*.pid; do
+        for _okf in "$LLM_KEEPER_DIR"/llm-keeper.*.pid; do
             [[ -f "$_okf" ]] || continue
             _okp=$(< "$_okf")
             if [[ "$_okp" =~ ^[0-9]+$ ]]; then
@@ -964,8 +964,11 @@ function __model_use_launch_server() {
         # The keeper self-destructs after 1 hour if orphaned (reparented to
         # init by a SIGKILL on its parent tree). This is a safety net: in
         # normal operation __model_stop kills the keeper directly.
-        local stdin_keeper_pid_file="/tmp/llm-keeper.$$.pid"
+        local stdin_keeper_pid_file="$LLM_KEEPER_DIR/llm-keeper.$$.pid"
         {
+            # Run with cwd = keeper dir so an orphan keeper can be attributed
+            # back to this console (the fallback reaper matches /proc/PID/cwd).
+            cd "$LLM_KEEPER_DIR" 2>/dev/null || true
             exec 3>"$stdin_fifo"
             # The PID file is written by the parent after $! is captured.
             # We just need to keep the FIFO open.
@@ -1136,7 +1139,7 @@ function __model_stop() {
     # Kill any lingering stdin keeper processes (sleep-loop bash children)
     # that were orphaned when llama-server was killed.
     local _keeper_pid
-    for _keeper_file in /tmp/llm-keeper.*.pid
+    for _keeper_file in "$LLM_KEEPER_DIR"/llm-keeper.*.pid
     do
         [[ -f "$_keeper_file" ]] || continue
         _keeper_pid=$(< "$_keeper_file")
@@ -1147,7 +1150,8 @@ function __model_stop() {
         rm -f "$_keeper_file"
     done
     # Fallback for keepers that lost their PID file or were reparented to an
-    # unexpected shell by the VS Code terminal relay.
+    # unexpected shell by the VS Code terminal relay. Only keepers whose cwd is
+    # THIS directory are reaped — a `sleep 3600` belonging elsewhere is left alone.
     local _keeper_line _keeper_ppid _keeper_cmd
     while IFS= read -r _keeper_line
     do
@@ -1156,6 +1160,7 @@ function __model_stop() {
         _keeper_cmd=${_keeper_line#* }
         [[ "$_keeper_pid" =~ ^[0-9]+$ ]] || continue
         [[ "$_keeper_cmd" == *"sleep 3600"* ]] || continue
+        [[ "$(readlink "/proc/$_keeper_pid/cwd" 2>/dev/null || true)" == "$LLM_KEEPER_DIR" ]] || continue
         _keeper_ppid=$(ps -o ppid= -p "$_keeper_pid" 2>/dev/null | tr -d '[:space:]')
         if [[ -z "$_keeper_ppid" ]] || [[ "$_keeper_ppid" == "1" ]]
         then

@@ -28,6 +28,10 @@ for arg in "$@"; do
     esac
 done
 
+# Keeper PID files live in LLM_KEEPER_DIR (production /tmp); the keeper also
+# runs with that as its cwd, which is how the fallback reaper attributes one.
+KEEPER_DIR="${LLM_KEEPER_DIR:-/tmp}"
+
 # Safety guard: do not reap processes while an active autotune session owns the
 # lock. This prevents accidental termination of legitimate in-flight probes.
 AUTOTUNE_LOCK_FILE="${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}"
@@ -108,7 +112,7 @@ done < <(pgrep -af 'llm-stdin' 2>/dev/null || true)
 # 2. Keeper sleep loops from known keeper PID files.
 # This is intentionally strict to avoid killing unrelated sleep processes on a
 # shared host.
-for keeper_file in /tmp/llm-keeper.*.pid; do
+for keeper_file in "$KEEPER_DIR"/llm-keeper.*.pid; do
     [[ -f "$keeper_file" ]] || continue
     keeper_pid=$(< "$keeper_file")
     [[ "$keeper_pid" =~ ^[0-9]+$ ]] || continue
@@ -127,6 +131,8 @@ done
 # unexpected shell by the terminal relay.
 while read -r pid cmd; do
     if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"sleep 3600"* ]]; then
+        # Only keepers whose cwd is THIS keeper dir (see LLM_KEEPER_DIR).
+        [[ "$(readlink "/proc/$pid/cwd" 2>/dev/null || true)" == "$KEEPER_DIR" ]] || continue
         ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
         if [[ -z "$ppid" ]] || [[ "$ppid" == "1" ]] || ! [[ " ${LIVE_MODEL_SHELLS[*]} " == *" ${ppid} "* ]]; then
             add_orphan "$pid" "$cmd"
@@ -159,7 +165,7 @@ STALE_PID=0
 
 # 5. Stale keeper PID files
 STALE_KEEPERS=0
-for f in /tmp/llm-keeper.*.pid; do
+for f in "$KEEPER_DIR"/llm-keeper.*.pid; do
     [[ -f "$f" ]] && STALE_KEEPERS=1 && break
 done
 
@@ -179,7 +185,7 @@ if (( ${#ORPHANS[@]} > 0 )); then
 fi
 (( STALE_LOCK == 1 )) && echo "  Stale lock: /tmp/llm-bench.lock"
 (( STALE_PID == 1 )) && echo "  Stale PID:  /tmp/llm-bench.pid"
-(( STALE_KEEPERS == 1 )) && echo "  Stale keeper PID files in /tmp/llm-keeper.*.pid"
+(( STALE_KEEPERS == 1 )) && echo "  Stale keeper PID files in $KEEPER_DIR/llm-keeper.*.pid"
 
 if (( CHECK == 1 )); then
     exit 0
@@ -218,7 +224,7 @@ done
 if (( BENCH_ACTIVE == 0 )); then
     rm -f "$BENCH_LOCK_FILE" "$BENCH_PID_FILE"
 fi
-for keeper_file in /tmp/llm-keeper.*.pid; do
+for keeper_file in "$KEEPER_DIR"/llm-keeper.*.pid; do
     [[ -f "$keeper_file" ]] || continue
     keeper_pid=$(< "$keeper_file")
     if [[ ! "$keeper_pid" =~ ^[0-9]+$ ]] || ! kill -0 "$keeper_pid" 2>/dev/null; then
