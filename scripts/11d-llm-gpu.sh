@@ -2,7 +2,7 @@
 # shellcheck disable=SC2154
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -20,8 +20,14 @@ __TAC_MOD_11D_LLM_GPU_LOADED=1
 function __tac_cleanup_stale_locks() {
     # shellcheck disable=SC2034
     local _c_lock _c_pid _c_kf _c_sp _c_my_pid _c_ppid _c_cmd _c_owner
-    local _c_fd_path
+    local _c_fd_path _c_keeper_dir
     local -a _c_live_model_shells=()
+
+    # /proc/PID/cwd is ALREADY canonical (no trailing slash, symlinks resolved),
+    # so comparing it to a raw LLM_KEEPER_DIR that has a trailing slash or is a
+    # symlinked path would never match, and the keeper guards below would
+    # silently reap nothing. Normalise the comparison target once.
+    _c_keeper_dir=$(realpath -m -- "${LLM_KEEPER_DIR:-/tmp}" 2>/dev/null || printf '%s' "${LLM_KEEPER_DIR:-/tmp}")
 
     # Track currently live model-shell wrappers so we do not kill keepers that
     # still belong to an active model session.
@@ -151,7 +157,7 @@ function __tac_cleanup_stale_locks() {
         if [[ "$_c_pid" =~ ^[0-9]+$ ]] && kill -0 "$_c_pid" 2>/dev/null
         then
             # Identity guard against PID reuse: only a keeper has this cwd.
-            if [[ "$(readlink "/proc/$_c_pid/cwd" 2>/dev/null || true)" == "${LLM_KEEPER_DIR:-/tmp}" ]]
+            if [[ "$(readlink "/proc/$_c_pid/cwd" 2>/dev/null || true)" == "$_c_keeper_dir" ]]
             then
                 _c_ppid=$(ps -o ppid= -p "$_c_pid" 2>/dev/null | tr -d '[:space:]')
                 if [[ -n "$_c_ppid" && "$_c_ppid" != "1" ]] \
@@ -182,7 +188,7 @@ function __tac_cleanup_stale_locks() {
         _c_cmd=${_c_line#* }
         [[ "$_c_sp" =~ ^[0-9]+$ ]] || continue
         [[ "$_c_cmd" == *"sleep 3600"* ]] || continue
-        [[ "$(readlink "/proc/$_c_sp/cwd" 2>/dev/null || true)" == "${LLM_KEEPER_DIR:-/tmp}" ]] || continue
+        [[ "$(readlink "/proc/$_c_sp/cwd" 2>/dev/null || true)" == "$_c_keeper_dir" ]] || continue
         _c_ppid=$(ps -o ppid= -p "$_c_sp" 2>/dev/null | tr -d '[:space:]')
         if [[ -n "$_c_ppid" && "$_c_ppid" != "1" ]]
         then

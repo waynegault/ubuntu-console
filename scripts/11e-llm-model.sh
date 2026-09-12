@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -1153,7 +1153,11 @@ function __model_stop() {
     # Fallback for keepers that lost their PID file or were reparented to an
     # unexpected shell by the VS Code terminal relay. Only keepers whose cwd is
     # THIS directory are reaped — a `sleep 3600` belonging elsewhere is left alone.
-    local _keeper_line _keeper_ppid _keeper_cmd
+    local _keeper_line _keeper_ppid _keeper_cmd _keeper_dir
+    # /proc/PID/cwd is ALREADY canonical (no trailing slash, symlinks resolved),
+    # so a raw LLM_KEEPER_DIR with a trailing slash or a symlinked path would
+    # never match and this guard would silently reap nothing. Normalise it once.
+    _keeper_dir=$(realpath -m -- "${LLM_KEEPER_DIR:-/tmp}" 2>/dev/null || printf '%s' "${LLM_KEEPER_DIR:-/tmp}")
     while IFS= read -r _keeper_line
     do
         [[ -n "$_keeper_line" ]] || continue
@@ -1161,7 +1165,7 @@ function __model_stop() {
         _keeper_cmd=${_keeper_line#* }
         [[ "$_keeper_pid" =~ ^[0-9]+$ ]] || continue
         [[ "$_keeper_cmd" == *"sleep 3600"* ]] || continue
-        [[ "$(readlink "/proc/$_keeper_pid/cwd" 2>/dev/null || true)" == "$LLM_KEEPER_DIR" ]] || continue
+        [[ "$(readlink "/proc/$_keeper_pid/cwd" 2>/dev/null || true)" == "$_keeper_dir" ]] || continue
         _keeper_ppid=$(ps -o ppid= -p "$_keeper_pid" 2>/dev/null | tr -d '[:space:]')
         if [[ -z "$_keeper_ppid" ]] || [[ "$_keeper_ppid" == "1" ]]
         then

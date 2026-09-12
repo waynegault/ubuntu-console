@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # clean-orphans.sh — Kill orphaned model bench infrastructure.
 #
@@ -32,7 +32,11 @@ done
 
 # Keeper PID files live in LLM_KEEPER_DIR (production /tmp); the keeper also
 # runs with that as its cwd, which is how the fallback reaper attributes one.
+# /proc/PID/cwd is ALREADY canonical (no trailing slash, symlinks resolved), so
+# normalise the configured dir the same way — otherwise a trailing slash or a
+# symlinked path makes every comparison fail and the guards reap nothing.
 KEEPER_DIR="${LLM_KEEPER_DIR:-/tmp}"
+KEEPER_DIR=$(realpath -m -- "$KEEPER_DIR" 2>/dev/null || printf '%s' "$KEEPER_DIR")
 
 # Safety guard: do not reap processes while an active autotune session owns the
 # lock. This prevents accidental termination of legitimate in-flight probes.
