@@ -3,7 +3,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 23
+# Module Version: 24
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -274,16 +274,17 @@ function os() {
         | .[]? | "\(.id)\t\(.name)"' 2>/dev/null)
 
     # Build session key -> label, cost, status mapping from sessions.json files
+    # in a single `jq -s` pass (not one jq per file — the N+1 pattern the
+    # telemetry module already replaced).
     local -A session_labels session_costs session_statuses
-    for _sessions_file in "$OC_AGENTS"/*/sessions/sessions.json; do
-        if [[ -f "$_sessions_file" ]]; then
-            while IFS='|' read -r _skey _label _cost _status; do
-                [[ -n "$_skey" ]] && session_labels["$_skey"]="$_label"
-                [[ -n "$_skey" ]] && session_costs["$_skey"]="$_cost"
-                [[ -n "$_skey" ]] && session_statuses["$_skey"]="$_status"
-            done < <(jq -r 'to_entries[] | [.key, (.value.label // "N/A"), (.value.estimatedCostUsd // 0), (.value.status // "unknown")] | join("|")' "$_sessions_file" 2>/dev/null)
-        fi
-    done
+    while IFS='|' read -r _skey _label _cost _status; do
+        [[ -n "$_skey" ]] || continue
+        session_labels["$_skey"]="$_label"
+        session_costs["$_skey"]="$_cost"
+        session_statuses["$_skey"]="$_status"
+    done < <(jq -sr '.[] | to_entries[]
+        | [.key, (.value.label // "N/A"), (.value.estimatedCostUsd // 0), (.value.status // "unknown")]
+        | join("|")' "$OC_AGENTS"/*/sessions/sessions.json 2>/dev/null)
 
     # Build set of agents with sessions
     local -A agents_with_sessions
@@ -348,7 +349,8 @@ function os() {
                 "$w_age" "${age_str:0:$w_age}" \
                 "$w_model" "${model:0:$w_model}" \
                 "$w_tokens" "$tokens" "$cost_str" "$session_status"
-            # Accumulate total cost (no subprocess — bash integer arithmetic on micro-cents)
+            # Accumulate total cost. Costs are decimal dollars, which bash
+            # integer arithmetic cannot sum, so awk performs the addition.
             if [[ "$session_cost" =~ ^[0-9]*\.[0-9]+$ ]]; then
                 total_cost=$(awk "BEGIN {printf \"%.6f\", $total_cost + $session_cost}")
             fi

@@ -3,7 +3,7 @@
 # ─── Module: 11-llm-manager ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 97
+# Module Version: 98
 # ==============================================================================
 # 11. LLM MODEL MANAGER & OPENCLAW INTEROP (THIN LOADER)
 # ==============================================================================
@@ -36,13 +36,19 @@ for _11_mod in \
 do
     _11_f="$_MOD_DIR/${_11_mod}.sh"
     if [[ -f "$_11_f" ]]; then
+        # A sub-module that exists but fails to source must not load silently.
+        _11_rc=0
         # shellcheck disable=SC1090
-        source "$_11_f"
+        source "$_11_f" || _11_rc=$?
+        if (( _11_rc != 0 )); then
+            printf '%s\n' "[tac] 11-llm-manager: sub-module $_11_f failed to load (rc=$_11_rc)" >&2
+            [[ -n "${ErrorLogPath:-}" ]] && echo "$(date +'%Y-%m-%d %H:%M:%S') [SOURCE-FAILED] $_11_f rc=$_11_rc" >> "$ErrorLogPath" 2>/dev/null
+        fi
     else
         printf '%s\n' "[tac] 11-llm-manager: missing sub-module $_11_f" >&2
     fi
 done
-unset _MOD_DIR _11_mod _11_f
+unset _MOD_DIR _11_mod _11_f _11_rc
 # end of file
 
 # end of file marker

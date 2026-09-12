@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2120,SC2154
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -128,8 +128,11 @@ function __tac_cleanup_stale_locks() {
         done
     fi
 
-    # orphaned keeper PID files
-    for _c_kf in /tmp/llm-keeper.*.pid
+    # orphaned keeper PID files. The directory is overridable so tests can
+    # sandbox it; the default keeps production on /tmp. (The fallback reap
+    # below is global by necessity — pgrep cannot scope by PID-file dir.)
+    local _c_keeper_dir="${LLM_KEEPER_DIR:-/tmp}"
+    for _c_kf in "$_c_keeper_dir"/llm-keeper.*.pid
     do
         [[ -f "$_c_kf" ]] || continue
         local _c_remove_kf=1

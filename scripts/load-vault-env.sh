@@ -3,7 +3,7 @@
 # load-vault-env — Optional Windows-backed vault env loader
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 # Optional helper loaded by scripts/14-wsl-extras.sh.
 #
 # Source (repo):   scripts/load-vault-env.sh
@@ -89,15 +89,27 @@ fi
 
 _lve_tmp_file=$(mktemp)
 
+# Restrict exports to the known credential names (the same allowlist the bridge
+# uses) so a stray key in a vault file is not exported, and so
+# TAC_VAULT_EXPORT_NAMES means what its name says. An empty allowlist disables
+# filtering.
+if [[ -n "${TAC_VAULT_EXPORT_NAMES:-}" ]]
+then
+    _lve_allow_csv="$TAC_VAULT_EXPORT_NAMES"
+else
+    _lve_allow_csv="$(IFS=','; echo "${_lve_default_names[*]}")"
+fi
+
 # Parse KEY=VALUE files and emit validated export lines.
-"${TAC_PYTHON:-python3}" - "$_lve_tmp_file" "${_lve_existing_files[@]}" <<'PY'
+"${TAC_PYTHON:-python3}" - "$_lve_tmp_file" "$_lve_allow_csv" "${_lve_existing_files[@]}" <<'PY'
 import pathlib
 import re
 import shlex
 import sys
 
 out_path = pathlib.Path(sys.argv[1])
-files = [pathlib.Path(p) for p in sys.argv[2:]]
+allow = {k.strip() for k in sys.argv[2].split(',') if k.strip()}
+files = [pathlib.Path(p) for p in sys.argv[3:]]
 name_re = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 env = {}
 
@@ -113,6 +125,8 @@ for fp in files:
         key, raw = s.split('=', 1)
         key = key.strip()
         if not name_re.match(key):
+            continue
+        if allow and key not in allow:
             continue
         raw = raw.strip()
         if raw == '':
@@ -135,7 +149,7 @@ source "$_lve_tmp_file" 2>/dev/null || true
 _lve_cleanup
 
 unset _lve_f _lve_candidate_files _lve_existing_files _lve_bridge_script _lve_bridge_file
-unset _lve_default_names _lve_names _lve_tmp_file
+unset _lve_default_names _lve_names _lve_tmp_file _lve_allow_csv
 unset -f _lve_cleanup
 
 # shellcheck disable=SC2317

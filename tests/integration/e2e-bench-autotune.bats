@@ -33,6 +33,7 @@ REGISTRY
     export LLM_AUTOTUNE_LOCK_FILE="$TAC_TEST_TMPDIR/.llm/autotune.lock"
     export LLM_BENCH_LOCK_FILE="$TAC_TEST_TMPDIR/.llm/bench.lock"
     export LLM_BENCH_PID_FILE="$TAC_TEST_TMPDIR/.llm/bench.pid"
+    export LLM_KEEPER_DIR="$TAC_TEST_TMPDIR"
     export LLAMA_DRIVE_ROOT="$TAC_TEST_TMPDIR"
     export LLM_BENCH_MODEL_TIMEOUT=10
     export LLM_BENCH_LOCK_WAIT_SECONDS=1
@@ -220,7 +221,7 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 @test "[E8] Lock: __tac_cleanup_stale_locks reaps keeper sleeps outside live model shells" {
     sleep 3600 &
     local keeper_pid=$!
-    local keeper_file="/tmp/llm-keeper.$BASHPID.pid"
+    local keeper_file="${LLM_KEEPER_DIR:-/tmp}/llm-keeper.$BASHPID.pid"
     echo "$keeper_pid" > "$keeper_file"
 
     __tac_cleanup_stale_locks

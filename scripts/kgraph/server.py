@@ -176,6 +176,13 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
             payload = dict(projected)
             payload['_meta'] = dict(payload.get('_meta', {}))
             payload['_meta'].update(meta)
+            # The GET path sends wildcard CORS (for the Vite dev frontend), so
+            # memory-derived free text must not be exposed: strip node content
+            # and tags from the served payload (labels only).
+            for _node in payload.get('nodes', []):
+                if isinstance(_node, dict):
+                    _node.pop('content', None)
+                    _node.pop('tags', None)
             data = json.dumps(payload)
         except (ValueError, KeyError, TypeError) as exc:
             logger.warning("Graph projection failed, falling back to sample: %s", exc)

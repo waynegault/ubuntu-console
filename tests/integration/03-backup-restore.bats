@@ -2,7 +2,9 @@
 # ==============================================================================
 # Integration Tests — Backup and Restore
 # ==============================================================================
-# Tests oc-backup and oc-restore function structure
+# Behavioural tests for oc-backup / oc-restore: build a sandboxed storage root
+# and backups dir, run the real functions, and assert on the resulting snapshot
+# and restore behaviour — not on substrings of the functions' own bodies.
 # Run: bats tests/integration/03-backup-restore.bats
 # ==============================================================================
 
@@ -31,8 +33,28 @@ setup() {
     source "$REPO_ROOT/env.sh" 2>/dev/null || true
 }
 
+# _make_storage — build the sandboxed "storage root" that oc-backup archives
+# (AI_STORAGE_ROOT) plus a fresh OC_BACKUPS. Sets the global STORAGE_ROOT.
+# MUST be called directly (not via $(...) — exports would not propagate).
+STORAGE_ROOT=""
+_make_storage() {
+    STORAGE_ROOT="$TAC_TEST_TMPDIR/ai"
+    rm -rf "$STORAGE_ROOT"
+    mkdir -p "$STORAGE_ROOT/.openclaw/workspace"
+    echo "workspace payload" > "$STORAGE_ROOT/.openclaw/workspace/note.txt"
+    echo "# fake bashrc" > "$STORAGE_ROOT/.bashrc"
+    export AI_STORAGE_ROOT="$STORAGE_ROOT"
+    export OC_BACKUPS="$TAC_TEST_TMPDIR/backups"
+    rm -rf "$OC_BACKUPS"
+    return 0
+}
+
+_newest_snapshot() {
+    ls -1t "$OC_BACKUPS"/snapshot_*.zip 2>/dev/null | head -1
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Tests — Static analysis of function structure (fast, reliable)
+# Existence
 # ─────────────────────────────────────────────────────────────────────────────
 
 @test "integration: oc-backup function exists" {
@@ -43,70 +65,95 @@ setup() {
     declare -f oc-restore >/dev/null 2>&1
 }
 
-@test "integration: oc-backup has proper structure" {
-    local fn_src
-    fn_src=$(declare -f oc-backup 2>/dev/null)
-    
-    # Should contain key backup operations
-    [[ "$fn_src" == *"backup"* ]] || [[ "$fn_src" == *"snapshot"* ]] || [[ "$fn_src" == *"zip"* ]]
-    [[ "$fn_src" == *"OC_BACKUPS"* ]] || [[ "$fn_src" == *"backups"* ]]
+# ─────────────────────────────────────────────────────────────────────────────
+# oc-backup — behaviour
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "integration: oc-backup writes a snapshot containing the workspace" {
+    _make_storage
+    run oc-backup
+    [[ "$status" -eq 0 ]]
+    local snap
+    snap=$(_newest_snapshot)
+    [[ -n "$snap" ]]
+    unzip -l "$snap" | grep -q '\.openclaw/workspace/note\.txt'
 }
 
-@test "integration: oc-restore has proper structure" {
-    local fn_src
-    fn_src=$(declare -f oc-restore 2>/dev/null)
-    
-    # Should contain key restore operations
-    [[ "$fn_src" == *"restore"* ]] || [[ "$fn_src" == *"unzip"* ]] || [[ "$fn_src" == *"extract"* ]]
-    [[ "$fn_src" == *"OC_BACKUPS"* ]] || [[ "$fn_src" == *"backups"* ]]
+@test "integration: oc-backup snapshot passes an integrity check" {
+    _make_storage
+    run oc-backup
+    [[ "$status" -eq 0 ]]
+    local snap
+    snap=$(_newest_snapshot)
+    [[ -n "$snap" ]]
+    unzip -tq "$snap" >/dev/null 2>&1
 }
 
-@test "integration: oc-backup validates backup integrity" {
-    local fn_src
-    fn_src=$(declare -f oc-backup 2>/dev/null)
-    
-    # Should contain validation logic
-    [[ "$fn_src" == *"verify"* ]] || [[ "$fn_src" == *"VERIFIED"* ]] || [[ "$fn_src" == *"zip"* ]]
+@test "integration: oc-backup includes the shell profile when present" {
+    _make_storage
+    run oc-backup
+    [[ "$status" -eq 0 ]]
+    local snap
+    snap=$(_newest_snapshot)
+    unzip -l "$snap" | grep -qE '[[:space:]]\.bashrc$'
 }
 
-@test "integration: oc-backup handles empty workspace" {
-    local fn_src
-    fn_src=$(declare -f oc-backup 2>/dev/null)
-    
-    # Should handle missing files gracefully
-    [[ "$fn_src" == *"-f"* ]] || [[ "$fn_src" == *"exists"* ]] || [[ "$fn_src" == *"empty"* ]]
+@test "integration: oc-backup prunes to the 10 most recent snapshots" {
+    _make_storage
+    mkdir -p "$OC_BACKUPS"
+    local i
+    for (( i = 0; i < 11; i++ )); do
+        local f="$OC_BACKUPS/snapshot_2020010${i}_000000.zip"
+        : > "$f"
+        touch -d "2020-01-0$(( (i % 9) + 1 ))" "$f"
+    done
+    run oc-backup
+    [[ "$status" -eq 0 ]]
+    local count
+    count=$(ls -1 "$OC_BACKUPS"/snapshot_*.zip 2>/dev/null | wc -l)
+    [[ "$count" -le 10 ]]
 }
 
-@test "integration: oc-restore has dry-run support" {
-    local fn_src
-    fn_src=$(declare -f oc-restore 2>/dev/null)
-    
-    # Should support dry-run mode
-    [[ "$fn_src" == *"--dry-run"* ]] || [[ "$fn_src" == *"dry_run"* ]] || [[ "$fn_src" == *"DRY"* ]]
+# ─────────────────────────────────────────────────────────────────────────────
+# oc-restore — behaviour
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "integration: oc-restore --dry-run reports the snapshot" {
+    _make_storage
+    mkdir -p "$OC_BACKUPS"
+    ( cd "$STORAGE_ROOT" && zip -r -q "$OC_BACKUPS/snapshot_test.zip" ".openclaw/workspace" )
+    run oc-restore --dry-run
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"DRY RUN"* ]]
 }
 
-@test "integration: oc-backup prunes old snapshots" {
-    local fn_src
-    fn_src=$(declare -f oc-backup 2>/dev/null)
-    
-    # Should contain pruning logic
-    [[ "$fn_src" == *"prune"* ]] || [[ "$fn_src" == *"old"* ]] || [[ "$fn_src" == *"rm "* ]]
+@test "integration: oc-restore --dry-run leaves current state untouched" {
+    _make_storage
+    mkdir -p "$OC_BACKUPS"
+    ( cd "$STORAGE_ROOT" && zip -r -q "$OC_BACKUPS/snapshot_test.zip" ".openclaw/workspace" )
+    local before
+    before=$(cat "$STORAGE_ROOT/.openclaw/workspace/note.txt")
+    run oc-restore --dry-run
+    [[ "$status" -eq 0 ]]
+    [[ "$(cat "$STORAGE_ROOT/.openclaw/workspace/note.txt")" == "$before" ]]
 }
 
-@test "integration: oc-backup includes profile in backup" {
-    local fn_src
-    fn_src=$(declare -f oc-backup 2>/dev/null)
-    
-    # Should include bashrc/tactical-console files
-    [[ "$fn_src" == *"bashrc"* ]] || [[ "$fn_src" == *"tactical"* ]] || [[ "$fn_src" == *".bashrc"* ]]
+@test "integration: oc-restore errors when no snapshot exists" {
+    _make_storage
+    mkdir -p "$OC_BACKUPS"
+    run oc-restore --dry-run
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"NONE FOUND"* ]]
 }
 
-@test "integration: oc-backup includes model registry" {
-    local fn_src
-    fn_src=$(declare -f oc-backup 2>/dev/null)
-    
-    # Should include model registry
-    [[ "$fn_src" == *"models"* ]] || [[ "$fn_src" == *"registry"* ]] || [[ "$fn_src" == *"models.conf"* ]]
+@test "integration: oc-restore rejects an archive with no recognisable content" {
+    _make_storage
+    mkdir -p "$OC_BACKUPS" "$TAC_TEST_TMPDIR/junk"
+    echo "junk" > "$TAC_TEST_TMPDIR/junk/random.txt"
+    ( cd "$TAC_TEST_TMPDIR/junk" && zip -q "$OC_BACKUPS/snapshot_test.zip" "random.txt" )
+    run oc-restore --dry-run
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"no recognisable content"* ]]
 }
 
 # end of file

@@ -150,6 +150,15 @@ do
     link "scripts/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")"
 done
 
+# 14-wsl-extras.sh sources load-vault-env.sh from the vault directory, so place
+# it there too — otherwise `TAC_LOAD_VAULT=1` silently loads nothing after a
+# fresh install.
+if [[ -f "$REPO/scripts/load-vault-env.sh" ]]
+then
+    mkdir -p "$HOME/.openclaw/credentials/vault"
+    link "scripts/load-vault-env.sh" "$HOME/.openclaw/credentials/vault/load-vault-env.sh"
+fi
+
 # Systemd units
 for f in "$REPO"/systemd/*
 do
