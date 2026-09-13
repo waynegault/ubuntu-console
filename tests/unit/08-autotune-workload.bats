@@ -134,3 +134,19 @@ EOF
     [[ "$e11" == *"row_parallel_envelope"* ]]
     [[ "$e11" == *"exceeds the autotuned envelope"* ]]
 }
+
+@test "autotune: a missing profile-save helper fails loudly, never as a no-op" {
+    # Regression (2026-09-13): the completion block ran the save only inside
+    # `elif declare -f __llm_autotune_profile_save` with NO else.  When the
+    # console's llm-manager sub-modules failed to load, neither branch ran and
+    # the unchanged `saved:` line was still printed from the registry — a whole
+    # sweep "completed" while certifying nothing.  The else must exist and must
+    # exit non-zero so the caller marks the row failed.
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" == *"the winner was NOT saved"* ]]
+
+    run grep -A2 'the winner was NOT saved' "$REPO_ROOT/scripts/autotune-model.sh"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"exit 1"* ]]
+}

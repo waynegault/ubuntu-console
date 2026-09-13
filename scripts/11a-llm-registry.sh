@@ -2,13 +2,14 @@
 # shellcheck disable=SC2154
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================
 # @modular-section: llm-manager
 # @depends: constants, design-tokens, ui-engine, hooks, llm-server, llm-autotune
-# @exports: __save_tps, __save_model_ctx, __require_llm, __llm_json_escape,
+# @exports: __save_tps, __save_model_ctx, __llm_registry_set_field, __require_llm,
+#   __llm_json_escape,
 #   __llm_registry_entry_by_num, __llm_registry_entry_by_file,
 #   __llm_default_file, __llm_default_entry, __llm_default_number,
 #   __llm_registry_sync_state, __renumber_registry
@@ -18,6 +19,34 @@
 [[ -n "${__TAC_MOD_11A_LLM_REGISTRY_LOADED:-}" ]] && return 0
 __TAC_MOD_11A_LLM_REGISTRY_LOADED=1
 
+# ---------------------------------------------------------------------------
+# __llm_registry_set_field <row_num> <field_index> <value> — Rewrite one field of
+# one registry row, atomically.  Shared by __save_tps (field 17) and
+# __save_model_ctx (field 8), which were copy-paste identical apart from the
+# field index and the awk variable names.
+#
+# A failed or empty awk run must never truncate the registry, so the rewrite
+# lands in <registry>.tmp and is moved into place only when it is non-empty AND
+# still carries the header plus at least one data row (>= 2 lines).
+# @returns 0 on commit, 1 when the row/field were unusable or the rewrite was
+#   refused.  Callers keep their historical best-effort contract and do not
+#   distinguish the two.
+# ---------------------------------------------------------------------------
+function __llm_registry_set_field() {
+    local row_num="$1" field_index="$2" value="$3"
+    [[ "$row_num" =~ ^[0-9]+$ && "$field_index" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return 1
+    awk -F'|' -v n="$row_num" -v i="$field_index" -v v="$value" \
+        'BEGIN{OFS="|"} $1 == n {$i = v} {print}' \
+        "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
+    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 2 ]]
+    then
+        mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
+    else
+        rm -f "${LLM_REGISTRY}.tmp"
+        return 1
+    fi
+}
+
 function __save_tps() {
     local tps_val="$1"
     [[ -z "$tps_val" || ! -f "$ACTIVE_LLM_FILE" || ! -f "$LLM_REGISTRY" ]] && return
@@ -25,38 +54,21 @@ function __save_tps() {
     local active_num
     active_num=$(< "$ACTIVE_LLM_FILE")
     [[ -z "$active_num" ]] && return
-    awk -F'|' -v n="$active_num" -v t="$tps_val" 'BEGIN{OFS="|"} $1 == n {$17 = t} {print}' \
-        "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
-    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 2 ]]
-    then
-        mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
-    else
-        rm -f "${LLM_REGISTRY}.tmp"
-    fi
+    __llm_registry_set_field "$active_num" 17 "$tps_val" || true
 }
 
 # ---------------------------------------------------------------------------
 # __save_model_ctx — Persist autotune winner ctx to registry.
-# Enforces a minimum context floor (24000) so autotune doesn't save
-# suspiciously small values. Caps are not applied on the high end —
-# autotune's binary search already finds the VRAM-stable maximum.
+# Writes the value verbatim: there is no floor clamp here (autotune's own
+# search decides the winner, and a small ctx is a legitimate outcome on a
+# VRAM-limited card).
 # ---------------------------------------------------------------------------
 function __save_model_ctx() {
     local model_num="$1"
     local ctx_val="$2"
     [[ "$model_num" =~ ^[0-9]+$ && "$ctx_val" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return
     __llm_registry_sync_state >/dev/null 2>&1 || true
-
-    local saved="$ctx_val"
-
-    awk -F'|' -v n="$model_num" -v c="$saved" 'BEGIN{OFS="|"} $1 == n {$8 = c} {print}' \
-        "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
-    if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 2 ]]
-    then
-        mv "${LLM_REGISTRY}.tmp" "$LLM_REGISTRY"
-    else
-        rm -f "${LLM_REGISTRY}.tmp"
-    fi
+    __llm_registry_set_field "$model_num" 8 "$ctx_val" || true
 }
 
 # ---------------------------------------------------------------------------

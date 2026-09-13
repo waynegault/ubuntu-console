@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 28
+# Module Version: 29
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1939,6 +1939,15 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
             || echo "  warning: profile save failed"
+    else
+        # A missing helper used to take NEITHER branch and then still print the
+        # `saved:` line below straight out of the unchanged registry row — a run
+        # that certified nothing while reading as success (2026-09-13: an entire
+        # sweep "completed" this way after the console's llm-manager sub-modules
+        # failed to load).  Fail loudly and non-zero so the caller marks the row.
+        echo "  ERROR: __llm_autotune_profile_save is not loaded — the winner was NOT saved." >&2
+        echo "         The console's llm-manager helpers failed to load; look for 'missing sub-module' above." >&2
+        exit 1
     fi
     grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s parallel=%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s ttft_ms=%s\n", $8, $10, $11, $12, $17, $21, $18, $27, $29, $32, $33, $34}'
     echo ""
