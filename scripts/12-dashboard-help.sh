@@ -1,9 +1,9 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2059,SC2154
+# shellcheck disable=SC2154
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 15
+# Module Version: 16
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -315,7 +315,7 @@ function tactical_dashboard() {
                     (( valPad < 0 )) && valPad=0
                     local vPadStr=""; (( valPad > 0 )) && printf -v vPadStr '%*s' "$valPad" ""
                     local labelPad=""; printf -v labelPad '%*s' 12 ""
-                    printf "${C_BoxBg}║${C_Reset}"
+                    printf '%s' "${C_BoxBg}║${C_Reset}"
                     printf "  ${C_Dim}%s${C_Reset}" "$labelPad"
                     # Reserve the same 4-character separator width as __fRow (" :: ")
                     printf "    %s%s${C_BoxBg}║${C_Reset}\n" "$formatted" "$vPadStr"
