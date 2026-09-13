@@ -683,7 +683,7 @@ function __get_METRIC() {
 │   ├── tactical-console-function-availability.bats  # Function availability checks (2 tests)
 │   ├── test_bats_bridge.py            # BATS→pytest bridge: exposes each @test as an individual pytest test
 │   ├── test_bats_lock_fixture.py      # Tests for conftest lock fixture
-│   ├── test_kgraph.py                 # Python tests for kgraph package (102 tests)
+│   ├── test_kgraph.py                 # Python tests for kgraph package (92 tests)
 │   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
 │   ├── test_models.py                 # Pydantic model tests (37 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
