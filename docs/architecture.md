@@ -47,38 +47,38 @@ by either loader.
 > repository. It is preserved in git history if needed for reference or
 > rollback.
 
-**Profile modules** (sourced in order by the loader — `wc -l` line counts):
+**Profile modules** (sourced in order by the loader — approximate `wc -l` line counts):
 
 | Module | File | Lines | Purpose |
 | --- | --- | --- | --- |
 | §0 | `tactical-console.bashrc` | ~253 | Version, AI editor rules, architecture map, array-based module loader, missing module warning |
-| §1 | `scripts/01-constants.sh` | 459 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
-| §2 | `scripts/02-error-handling.sh` | 265 | ERR trap → `bash-errors.log` (exit codes ≥ 2, whitelisted commands excluded) |
-| §3 | `scripts/03-design-tokens.sh` | 38 | ANSI colour constants (`readonly`, re-source safe) |
-| §4 | `scripts/04-aliases.sh` | 462 | Short commands, VS Code wrappers, tactical shortcuts (`c`, `cls`, `le`, `lo` with PIPESTATUS) |
-| §5 | `scripts/05-ui-engine.sh` | 560 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
-| §6 | `scripts/06-hooks.sh` | 174 | `cd` override (venv auto-activate), prompt (`PS1`), `__test_port`, admin badge |
-| §7 | `scripts/07-telemetry.sh` | 396 | Host metrics (CPU + dual GPU), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` with trap cleanup |
-| §8 | `scripts/08-maintenance.sh` | 1775 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, `docs-sync`, cooldown system with `flock` |
-| §9 | `scripts/09-openclaw.sh` (thin loader) | 54 | Sources 09a–09f sub-modules in order |
-| §9a | `scripts/09a-oc-gateway.sh` | 724 | Gateway lifecycle: `so()`, start/stop/health, Tailscale cycling, API key bridge |
-| §9b | `scripts/09b-gog.sh` | 175 | Google CLI (`gog`) detection, setup helpers, and integration shims |
-| §9c | `scripts/09c-oc-core.sh` | 345 | Core dispatcher: `oc()`, `xo()`, shortcut commands |
-| §9d | `scripts/09d-oc-agents.sh` | 1065 | Agent management, API keys, secrets rotation |
-| §9e | `scripts/09e-oc-health.sh` | 1093 | Health checks, diagnostics, failover, utilities |
-| §9f | `scripts/09f-oc-misc.sh` | 608 | KGraph, stinger, backup/restore, mem-index |
-| §10 | `scripts/10-deployment.sh` | 479 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified, secret detection) |
-| §11 | `scripts/11-llm-manager.sh` (thin loader) | 42 | Sources 11a–11f sub-modules in order |
-| §11a | `scripts/11a-llm-registry.sh` | 267 | Registry CRUD: `__llm_registry_sync_state`, `__renumber_registry`, entry helpers |
-| §11b | `scripts/11b-llm-autotune.sh` | 723 | Autotune infrastructure: profile save, ctx estimation, blob upsert |
-| §11c | `scripts/11c-llm-server.sh` | 537 | Server lifecycle: start/stop, health checks, Python binary resolution |
-| §11d | `scripts/11d-llm-gpu.sh` | 1081 | GPU status, GGUF metadata parsing, calculations (`__calc_gpu_layers`, `__calc_ctx_size`) |
-| §11e | `scripts/11e-llm-model.sh` | 3277 | Model commands: scan, list, use (7 helpers), bench, download, archive, delete, doctor |
-| §11f | `scripts/11f-llm-runtime.sh` | 712 | Runtime: `serve`, `burn`, `local_chat`, SSE streaming, explain, `wtf_repl` |
-| §12 | `scripts/12-dashboard-help.sh` | 707 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` (OpenClaw status) |
-| §13 | `scripts/13-init.sh` | 204 | `mkdir -p` (OpenClaw-aware), completions, loopback fix, bridge call, exit trap (chained) |
-| §14 | `scripts/14-wsl-extras.sh` | 157 | WSL/X11 startup helpers, vault env loading |
-| §15 | `scripts/15-model-recommender.sh` | 198 | AI model recommendations by use case (`bc` fallback for integer math) |
+| §1 | `scripts/01-constants.sh` | ~459 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
+| §2 | `scripts/02-error-handling.sh` | ~265 | ERR trap → `bash-errors.log` (exit codes ≥ 2, whitelisted commands excluded) |
+| §3 | `scripts/03-design-tokens.sh` | ~38 | ANSI colour constants (`readonly`, re-source safe) |
+| §4 | `scripts/04-aliases.sh` | ~462 | Short commands, VS Code wrappers, tactical shortcuts (`c`, `cls`, `le`, `lo` with PIPESTATUS) |
+| §5 | `scripts/05-ui-engine.sh` | ~560 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
+| §6 | `scripts/06-hooks.sh` | ~174 | `cd` override (venv auto-activate), prompt (`PS1`), `__test_port`, admin badge |
+| §7 | `scripts/07-telemetry.sh` | ~396 | Host metrics (CPU + dual GPU), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` with trap cleanup |
+| §8 | `scripts/08-maintenance.sh` | ~1775 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, `docs-sync`, cooldown system with `flock` |
+| §9 | `scripts/09-openclaw.sh` (thin loader) | ~54 | Sources 09a–09f sub-modules in order |
+| §9a | `scripts/09a-oc-gateway.sh` | ~724 | Gateway lifecycle: `so()`, start/stop/health, Tailscale cycling, API key bridge |
+| §9b | `scripts/09b-gog.sh` | ~175 | Google CLI (`gog`) detection, setup helpers, and integration shims |
+| §9c | `scripts/09c-oc-core.sh` | ~345 | Core dispatcher: `oc()`, `xo()`, shortcut commands |
+| §9d | `scripts/09d-oc-agents.sh` | ~1065 | Agent management, API keys, secrets rotation |
+| §9e | `scripts/09e-oc-health.sh` | ~1093 | Health checks, diagnostics, failover, utilities |
+| §9f | `scripts/09f-oc-misc.sh` | ~608 | KGraph, stinger, backup/restore, mem-index |
+| §10 | `scripts/10-deployment.sh` | ~479 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified, secret detection) |
+| §11 | `scripts/11-llm-manager.sh` (thin loader) | ~42 | Sources 11a–11f sub-modules in order |
+| §11a | `scripts/11a-llm-registry.sh` | ~267 | Registry CRUD: `__llm_registry_sync_state`, `__renumber_registry`, entry helpers |
+| §11b | `scripts/11b-llm-autotune.sh` | ~723 | Autotune infrastructure: profile save, ctx estimation, blob upsert |
+| §11c | `scripts/11c-llm-server.sh` | ~537 | Server lifecycle: start/stop, health checks, Python binary resolution |
+| §11d | `scripts/11d-llm-gpu.sh` | ~1081 | GPU status, GGUF metadata parsing, calculations (`__calc_gpu_layers`, `__calc_ctx_size`) |
+| §11e | `scripts/11e-llm-model.sh` | ~3277 | Model commands: scan, list, use (7 helpers), bench, download, archive, delete, doctor |
+| §11f | `scripts/11f-llm-runtime.sh` | ~712 | Runtime: `serve`, `burn`, `local_chat`, SSE streaming, explain, `wtf_repl` |
+| §12 | `scripts/12-dashboard-help.sh` | ~707 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` (OpenClaw status) |
+| §13 | `scripts/13-init.sh` | ~204 | `mkdir -p` (OpenClaw-aware), completions, loopback fix, bridge call, exit trap (chained) |
+| §14 | `scripts/14-wsl-extras.sh` | ~157 | WSL/X11 startup helpers, vault env loading |
+| §15 | `scripts/15-model-recommender.sh` | ~198 | AI model recommendations by use case (`bc` fallback for integer math) |
 
 **Utility scripts** (not profile modules — never sourced by the loader):
 
