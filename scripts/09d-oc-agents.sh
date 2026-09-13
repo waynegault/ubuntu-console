@@ -756,6 +756,69 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
+# __oc_gateway_resolved_env_names — print the env var names the OpenClaw gateway
+# actually resolves as secrets, one per line, sorted and unique:
+#   * env-backed SecretRefs in openclaw.json   ({"source":"env",...,"id":NAME})
+#   * env-backed refs in every agent's auth-profile store (auth_profile_store)
+#
+# 2026-09-13: so()/oc-refresh-keys used to push EVERY bridged Windows var into the
+# systemd user manager environment, so every user unit (dbus, pipewire, the llama
+# servers, ...) inherited ~45 secrets it never reads — readable by any same-user
+# process via /proc/<pid>/environ. Injection is now narrowed to this set. Prints
+# nothing if the set cannot be computed (callers warn and fall back).
+# ---------------------------------------------------------------------------
+function __oc_gateway_resolved_env_names() {
+    local _cfg="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
+    local _state="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+    python3 - "$_cfg" "$_state" <<'PY' 2>/dev/null
+import glob, json, os, re, shutil, sqlite3, sys, tempfile
+
+cfg_path, state = sys.argv[1], sys.argv[2]
+names = set()
+
+raw = None
+if os.path.exists(cfg_path):
+    with open(cfg_path, encoding='utf-8') as fh:
+        raw = fh.read()
+if raw is not None:
+    doc = None
+    try:
+        doc = json.loads(raw)
+    except Exception:
+        # openclaw.json is JSON5 (comments + trailing commas allowed)
+        try:
+            stripped = re.sub(r'^\s*//.*$', '', raw, flags=re.M)
+            doc = json.loads(re.sub(r',(\s*[}\]])', r'\1', stripped))
+        except Exception:
+            doc = None
+    if doc is not None:
+        stack = [doc]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, dict):
+                if node.get('source') == 'env' and isinstance(node.get('id'), str):
+                    names.add(node['id'])
+                stack.extend(node.values())
+            elif isinstance(node, list):
+                stack.extend(node)
+
+for db in glob.glob(os.path.join(state, 'agents', '*', 'agent', 'openclaw-agent.sqlite')):
+    tmp = os.path.join(tempfile.mkdtemp(), 'store.sqlite')
+    try:
+        shutil.copy(db, tmp)
+        conn = sqlite3.connect(f'file:{tmp}?mode=ro', uri=True)
+        for (blob,) in conn.execute('select store_json from auth_profile_store'):
+            for hit in re.finditer(r'"id"\s*:\s*"([A-Z_][A-Z0-9_]*)"', blob or ''):
+                names.add(hit.group(1))
+        conn.close()
+    except Exception:
+        continue
+
+print('\n'.join(sorted(names)))
+PY
+}
+
+# ---------------------------------------------------------------------------
 # __oc_sync_gateway_env — Push bridged env vars into the systemd user manager
 # environment (the secrets channel) and update OPENCLAW_SERVICE_MANAGED_ENV_KEYS
 # in the systemd unit. The gateway (a user service) inherits the manager env, so
@@ -780,6 +843,23 @@ function __oc_sync_gateway_env_file() {
     done < "$_cache"
 
     mapfile -t _var_names < <(printf '%s\n' "${_var_names[@]}" | sort -u)
+    ((${#_var_names[@]})) || return 0
+
+    # 2026-09-13: narrow the manager-env push to the vars the gateway actually
+    # resolves (see __oc_gateway_resolved_env_names). Fail-open with a warning if
+    # the set cannot be computed — a config/DB hiccup must not silently starve
+    # the gateway of a key it needs.
+    local _resolved _kept=() _n
+    _resolved="$(__oc_gateway_resolved_env_names)"
+    if [[ -n "$_resolved" ]]; then
+        while IFS= read -r _n; do
+            [[ -n "$_n" ]] || continue
+            grep -qxF "$_n" <<< "$_resolved" && _kept+=("$_n")
+        done < <(printf '%s\n' "${_var_names[@]}")
+        _var_names=("${_kept[@]}")
+    else
+        __tac_info "Security" "[WARN: resolved-env set unavailable — pushing the full bridged set]" "$C_Warning"
+    fi
     ((${#_var_names[@]})) || return 0
 
     # 1. Change detection: content hash of the sorted bridged values. On a

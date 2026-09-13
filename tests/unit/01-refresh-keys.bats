@@ -302,3 +302,47 @@ teardown() {
     run grep -F '"win\!secret"' "$cap"
     [ "$status" -ne 0 ]
 }
+
+@test "oc-refresh-keys pushes ONLY gateway-resolved vars into the manager env (2026-09-13 narrowing)" {
+    # Regression test for the narrowing: the manager env used to receive every
+    # bridged Windows var, so every user unit inherited ~45 secrets it never
+    # reads (readable by any same-user process via /proc/<pid>/environ). It must
+    # now receive only the vars the gateway resolves as secret refs.
+    mkdir -p "$HOME/.openclaw"
+    cat > "$HOME/.openclaw/openclaw.json" << 'CFG'
+{
+  "plugins": {
+    "entries": {
+      "google": {
+        "config": {
+          "webSearch": {
+            "apiKey": { "source": "env", "provider": "default", "id": "GEMINI_API_KEY" }
+          }
+        }
+      }
+    }
+  }
+}
+CFG
+
+    # Bridge offers one resolved var (GEMINI_API_KEY) and one that nothing
+    # resolves (WIN_API_KEY).
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret' 'GEMINI_API_KEY=test-gemini-key'"
+    export GEMINI_API_KEY="test-gemini-key"
+    rm -f "$SYSTEMCTL_LOG"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    # The resolved var is pushed...
+    run grep -F "set-environment GEMINI_API_KEY=test-gemini-key" "$SYSTEMCTL_LOG"
+    [ "$status" -eq 0 ]
+
+    # ...and the unresolved one is NOT.
+    run grep -F "set-environment WIN_API_KEY=" "$SYSTEMCTL_LOG"
+    [ "$status" -ne 0 ]
+
+    # Nothing else leaked into the manager env either.
+    run grep -cE 'set-environment (WIN_TOKEN|SSH_PASSWORD|TAILSCALE_API_KEY)=' "$SYSTEMCTL_LOG"
+    [ "$status" -ne 0 ]
+}

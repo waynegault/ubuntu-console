@@ -200,19 +200,29 @@ function __so_push_api_keys() {
             return 1
         }
     fi
+    # 2026-09-13: push ONLY the vars the gateway actually resolves (env-backed
+    # SecretRefs in openclaw.json + agent auth profiles). Pushing the whole
+    # bridged set put ~45 secrets into the systemd user manager environment, so
+    # every user unit (dbus, pipewire, the llama servers, ...) inherited them and
+    # any same-user process could read them via /proc/<pid>/environ.
+    local _resolved
+    _resolved="$(__oc_gateway_resolved_env_names)"
+    if [[ -z "$_resolved" ]]; then
+        __tac_info "Security" "[WARN: gateway SecretRefs unresolved — pushing the full bridged set (manager env broader than intended)]" "$C_Warning"
+        _resolved="$(grep '^export ' "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null | sed -E 's/^export ([A-Z_][A-Z0-9_]*)=.*/\1/')"
+    fi
     local _key
-    while IFS= read -r _line
+    while IFS= read -r _key
     do
-        _key="${_line#export }"
-        _key="${_key%%=*}"
+        [[ -n "$_key" ]] || continue
         # SECURITY: Validate key name matches safe pattern before indirect expansion
         if [[ ! "$_key" =~ ^[A-Z_][A-Z0-9_]*$ ]]
         then
             __tac_info "Security" "[SKIP invalid key name: $_key]" "$C_Warning"
             continue
         fi
-        [[ -n "$_key" && -n "${!_key:-}" ]] && systemctl --user set-environment "${_key}=${!_key}" 2>/dev/null
-    done < <(grep '^export ' "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null)
+        [[ -n "${!_key:-}" ]] && systemctl --user set-environment "${_key}=${!_key}" 2>/dev/null
+    done <<< "$_resolved"
 }
 
 # ---------------------------------------------------------------------------

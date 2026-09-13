@@ -73,8 +73,17 @@ to prevent command injection.
 **For the OpenClaw gateway** (which runs under systemd, not as a child of the
 shell), `so()` reads the cache file and injects each variable into the systemd
 user session via `systemctl --user set-environment KEY=VALUE` before starting
-the service. This ensures the Node.js gateway process has access to all
-bridged API keys.
+the service.
+
+**Only the variables the gateway actually resolves are injected** (2026-09-13):
+the env-backed SecretRefs in `openclaw.json` plus those in every agent's
+auth-profile store — computed by `__oc_gateway_resolved_env_names()`
+(`scripts/09d-oc-agents.sh`). Pushing the *whole* bridged set put ~45 secrets
+into the user-manager environment, so every user unit (`dbus`, `pipewire`, the
+llama servers, …) inherited secrets it never reads, readable by any same-user
+process via `/proc/<pid>/environ`. Measured effect: 45 bridged → 19 injected.
+If the resolved set cannot be computed, injection falls back to the full
+bridged set **with a warning** rather than starving the gateway.
 
 ### SecretRef Sync
 

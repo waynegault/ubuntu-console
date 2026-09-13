@@ -325,7 +325,7 @@ WSL2 Ubuntu 24.04
 
 On shell start, `__bridge_windows_api_keys()` calls `pwsh.exe` (5s timeout) to read Windows environment variables matching `API[_-]?KEY|TOKEN`. Results are written to `/dev/shm/tac_win_api_keys` (`chmod 600`, tmpfs — never hits disk). Cache TTL: 3600s. Force refresh with `oc-refresh-keys`.
 
-For the OpenClaw gateway (systemd, not a shell child), `so()` reads the cache and injects keys via `systemctl --user set-environment` before starting the service.
+For the OpenClaw gateway (systemd, not a shell child), `so()` reads the cache and injects keys via `systemctl --user set-environment` before starting the service — narrowed (2026-09-13) to only the vars the gateway resolves as SecretRefs (config + agent auth profiles), not the whole bridged set.
 
 ### Gateway Lifecycle
 
@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (944 total tests: 607 BATS + 337 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (945 total tests: 608 BATS + 337 Python).
 
 ### Running Tests
 
@@ -447,10 +447,10 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 | Full behavioural | `tactical-console.bats` | 386 | 900s |
 | Fast static analysis | `tactical-console-fast.bats` | 53 | 180s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
-| Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use, clean-orphans) | `tests/unit/*.bats` | 47 | 120s |
+| Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use, clean-orphans) | `tests/unit/*.bats` | 48 | 120s |
 | Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 119 | 300s |
 | Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 337 | 200s |
-| **Total** | | **944** | |
+| **Total** | | **945** | |
 
 ---
 
@@ -687,7 +687,7 @@ function __get_METRIC() {
 │   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
 │   ├── test_models.py                 # Pydantic model tests (37 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (47 tests: 6+2+8+5+5+6+7+4+4)
+│   ├── unit/                          # BATS unit tests (48 tests: 7+2+8+5+5+6+7+4+4)
 │   └── integration/                   # BATS integration tests (119 tests: 14+42+10+22+5+26)
 └── systemd/
     ├── llama-watchdog.service
@@ -832,7 +832,7 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 53 tests)
 - **Full tests:** `bats tests/tactical-console.bats` (386 BATS unit tests)
-- **Unit suites (47 tests overall):** CI runs `tests/unit/01`, `02`, `09`, `10`; nightly adds `05`–`08`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host.
+- **Unit suites (48 tests overall):** CI runs `tests/unit/01`, `02`, `09`, `10`; nightly adds `05`–`08`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host.
 - **Integration suites (119 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety); shellcheck is pinned to 0.11.0 via `tools/install-shellcheck.sh`, which CI runs so local and CI diagnostics cannot drift (0.9.0 reported SC2317 where 0.11.0 reports SC2329 for the same code).
 - **Docs sync:** `tools/docs-sync-check.sh` (README drift guard — fails CI on stale module counts, versions, or test totals)
