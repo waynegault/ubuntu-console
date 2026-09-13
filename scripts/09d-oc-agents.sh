@@ -611,8 +611,8 @@ entries = [
     ("plugins.entries.xai.config.webSearch.apiKey", "XAI_API_KEY"),
     ("plugins.entries.moonshot.config.webSearch.apiKey", "MOONSHOT_API_KEY"),
     ("plugins.entries.firecrawl.config.webSearch.apiKey", "FIRECRAWL_API_KEY"),
-    # Model Provider API Keys (direct-consumption providers; deepseek and
-    # github-copilot use auth profiles below, not models.providers refs)
+    # Model Provider API Keys (direct-consumption providers; deepseek uses an
+    # auth profile below, not a models.providers ref)
     ("models.providers.openai.apiKey", "OPENAI_API_KEY"),
     ("models.providers.anthropic.apiKey", "ANTHROPIC_API_KEY"),
     ("models.providers.groq.apiKey", "GROQ_API_KEY"),
@@ -674,7 +674,6 @@ PYEOF
     #
     # Keys managed via auth profiles (not models.providers.<id>.apiKey):
     #   DEEPSEEK_API_KEY  →  deepseek:default.keyRef
-    #   GITHUB_COPILOT_TOKEN → github-copilot:github.tokenRef
     #   OLLAMA_API_KEY    →  ollama:default.keyRef
     #
     # These live in per-agent `openclaw-agent.sqlite` tables.
@@ -684,9 +683,6 @@ PYEOF
     # the auth resolver matches profiles via cred.provider === providerId
     # (listProfilesForProvider). Using "default" makes the keyRef invisible
     # to resolution (deepseek auth then fails with "No API key found").
-    # github-copilot intentionally stays on "github" (non-matching, inert):
-    # agents use a distinct ghu_ OAuth token and pointing it at
-    # GITHUB_COPILOT_TOKEN would break auth (see openclaw-environment.md).
     # ================================================================
     local _agents_root="${OC_AGENTS:-$HOME/.openclaw/agents}"
     # One python process for ALL agents x profiles (was one subprocess per
@@ -698,7 +694,6 @@ agents_root = sys.argv[1]
 # Format: (profile_id, provider, cred_type, env_var)
 auth_map = [
     ("deepseek", "deepseek", "api_key", "DEEPSEEK_API_KEY"),
-    ("github-copilot", "github", "token", "GITHUB_COPILOT_TOKEN"),
     ("ollama", "ollama", "api_key", "OLLAMA_API_KEY"),
 ]
 changed = unchanged = skipped = 0
