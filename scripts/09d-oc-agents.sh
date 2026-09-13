@@ -771,7 +771,6 @@ PYEOF
 # ---------------------------------------------------------------------------
 function __oc_sync_gateway_env_file() {
     local _cache="$1"
-    local _unit="$HOME/.config/systemd/user/openclaw-gateway.service"
     local _hash_file="$TAC_CACHE_DIR/tac_win_api_keys.hash"
     [[ -f "$_cache" ]] || return 0
 
@@ -801,19 +800,23 @@ function __oc_sync_gateway_env_file() {
         _OC_GW_ENV_CHANGED=1
     fi
 
-    # 2. Update OPENCLAW_SERVICE_MANAGED_ENV_KEYS in the systemd unit so
-    #    OpenClaw knows which env vars it can reload without a full restart.
-    #    A change to this list alone does NOT require a restart — only actual
-    #    value changes (step 1) signal one.
-    if [[ -f "$_unit" ]]; then
-        local _joined
-        printf -v _joined '%s,' "${_var_names[@]}"
-        _joined="${_joined%,}"
-        if ! grep -q "^Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=$_joined$" "$_unit"; then
-            sed -i "s/^Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=.*/Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=$_joined/" "$_unit"
-            systemctl --user daemon-reload 2>/dev/null || true
-        fi
-    fi
+    # 2. Do NOT rewrite the systemd unit. OpenClaw fingerprints its own unit
+    #    definition (path + bytes + manager uid) before it stops the service
+    #    for an update/repair, then re-validates it afterwards; an in-place
+    #    edit of the Environment= line changes that fingerprint and the repair
+    #    aborts with "Gateway service ownership or manager identity changed"
+    #    (observed 2026-09-13: `openclaw doctor --fix` could not complete
+    #    maintenance after this script rewrote the line at 10:50). The list is
+    #    read from the process environment
+    #    (readManagedServiceEnvKeysFromEnvironment), so it does not need to
+    #    live in the unit at all. Values already reach the gateway through
+    #    step 1 (`systemctl --user set-environment`) and the unit's
+    #    `EnvironmentFile=-…/gateway.systemd.env`; this list only tunes
+    #    hot-reload bookkeeping, and oc-refresh-keys restarts the gateway on
+    #    any real value change (steps 5–7) — so nothing is lost by leaving
+    #    OpenClaw's own list alone. Reconcile a drifted list by letting
+    #    OpenClaw re-author the unit (`openclaw gateway install --force`,
+    #    owner action), never by editing it here.
 
     # Persist the hash for the next run.
     printf '%s\n' "$_hash" > "$_hash_file"
