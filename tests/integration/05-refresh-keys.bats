@@ -185,3 +185,40 @@ teardown() {
     run grep -F "started" "$TAC_CACHE_DIR/tac_gateway_restart.log"
     [ "$status" -eq 0 ]
 }
+
+@test "oc-refresh-keys detaches the restart when the caller is inside the gateway" {
+    # Regression: a gateway-hosted caller that waits on the restart stalls the
+    # drain until TimeoutStopSec (5m30s) and still loses the outcome. It must
+    # fire a detached transient unit and return at once instead.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'DETACH_PROBE_API_KEY=probe'"
+
+    # Report the caller's own cgroup as the gateway's, so this test asserts the
+    # gateway-hosted branch wherever it runs (the suite may itself be inside the
+    # gateway cgroup, as it is when driven by the agent).
+    export SELF_CG="$(awk -F: '/^0::/{print $3}' /proc/self/cgroup)"
+    __mock_command_local systemctl 'if [[ "$*" == *"show -p ControlGroup --value openclaw-gateway.service"* ]]; then printf "%s\n" "$SELF_CG"; fi; exit 0'
+
+    # Record how systemd-run was invoked; do NOT run the payload, standing in
+    # for a transient service that is started and immediately returns.
+    export SYSTEMD_RUN_LOG="$TAC_TEST_TMPDIR/systemd_run_calls.log"
+    rm -f "$SYSTEMD_RUN_LOG"
+    __mock_command_local systemd-run "echo \"SYSTEMD_RUN: \$*\" >> \"$SYSTEMD_RUN_LOG\"; exit 0"
+
+    export GEMINI_API_KEY="test-gemini-key"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    # Assert the message first: every later `run` overwrites $output.
+    [[ "$output" == *"restart issued (detached"* ]]
+
+    # Detached: a transient --unit, never a blocking --scope.
+    run grep -F -- "--unit=" "$SYSTEMD_RUN_LOG"
+    [ "$status" -eq 0 ]
+    run grep -F -- "--scope" "$SYSTEMD_RUN_LOG"
+    [ "$status" -ne 0 ]
+
+    # The service cannot see openclaw without the caller's PATH.
+    run grep -F -- "--setenv=PATH=" "$SYSTEMD_RUN_LOG"
+    [ "$status" -eq 0 ]
+}

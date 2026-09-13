@@ -1011,22 +1011,36 @@ function oc-refresh-keys() {
     fi
 
     # 7. Restart the gateway LAST, once every durable side effect (manager env,
-    #    SecretRefs, NAS mirror) is committed. It runs in a transient systemd
-    #    scope so the restart sits OUTSIDE openclaw-gateway.service's cgroup: a
-    #    gateway-hosted caller lives in that cgroup, so an in-cgroup restart
-    #    kills the caller mid-flight. `setsid` is NOT sufficient — it escapes
-    #    the session, not the cgroup.
+    #    SecretRefs, NAS mirror) is committed. It always runs OUTSIDE
+    #    openclaw-gateway.service's cgroup: a gateway-hosted caller lives in that
+    #    cgroup, so an in-cgroup restart kills the caller mid-flight. `setsid` is
+    #    NOT sufficient — it escapes the session, not the cgroup.
     #
-    #    A scope, not a detached transient service, is deliberate: a user
-    #    service runs with systemd's minimal PATH, which has no `openclaw`
-    #    (measured 2026-09-13 — PATH=/usr/local/sbin:...:/snap/bin, openclaw
-    #    NOT-FOUND), whereas a scope inherits this shell's full environment.
+    #    Two invocation modes, chosen by where the caller lives:
     #
-    #    The body persists its OWN outcome to $_restart_log. The caller can be
-    #    torn down by the very restart it issued (the gateway drains active
-    #    work, and a gateway-hosted caller is part of it), so anything written
-    #    after systemd-run returns may never land. A trailing "started" with no
-    #    outcome is therefore meaningful evidence, not a lost record.
+    #    * Gateway-hosted (our cgroup IS the gateway's): waiting DEADLOCKS. The
+    #      gateway cannot finish draining while this caller is still pending, and
+    #      the caller waits on the restart, so it resolves only at TimeoutStopSec
+    #      (5m30s, measured 2026-09-13) — and even then the outcome goes
+    #      unobserved. So detach: a transient *service* returns in ~0.1s, and the
+    #      caller exiting lets the drain finish immediately.
+    #
+    #    * Anywhere else (interactive shell, cron outside the gateway): no pending
+    #      request blocks the drain, so wait in a transient *scope* and report the
+    #      real outcome. An unreadable cgroup query keeps this conservative path.
+    #
+    #    Why a scope for the waiting path: it inherits this shell's full
+    #    environment, whereas a service sees systemd's minimal PATH, which has no
+    #    `openclaw` (measured 2026-09-13: openclaw NOT-FOUND). The detached path
+    #    therefore passes --setenv=PATH; the user manager already supplies HOME
+    #    and XDG_RUNTIME_DIR (verified: openclaw resolves and `openclaw gateway
+    #    restart` is reachable from the service).
+    #
+    #    The body persists its OWN outcome to $_restart_log, because a waiting
+    #    caller can be torn down by the very restart it issued. The detached
+    #    caller must NOT read that log — the service truncates it on start, so
+    #    reading would race. A trailing "started" with no outcome is therefore
+    #    meaningful evidence, not a lost record.
     if (( _gw_restart_needed == 1 ))
     then
         local _restart_log="$TAC_CACHE_DIR/tac_gateway_restart.log"
@@ -1055,20 +1069,37 @@ function oc-refresh-keys() {
         local _restart_out=""
         if command -v systemd-run >/dev/null 2>&1
         then
-            _restart_out=$(systemd-run --user --scope --collect --quiet \
-                bash -c "$_restart_body" _ "$_restart_log" 2>/dev/null) || true
-            # Prefer the scope's own stdout; if the caller died mid-restart,
-            # fall back to the record the scope left behind.
-            if [[ -z "$_restart_out" && -r "$_restart_log" ]]; then
-                _restart_out=$(tail -n 1 "$_restart_log" 2>/dev/null | awk '{print $1}')
+            # Are we inside the gateway's own cgroup, i.e. a gateway-hosted run?
+            local _self_cg _gw_cg
+            _self_cg=$(awk -F: '/^0::/{print $3}' /proc/self/cgroup 2>/dev/null)
+            _gw_cg=$(systemctl --user show -p ControlGroup --value openclaw-gateway.service 2>/dev/null)
+            if [[ -n "$_gw_cg" && ( "$_self_cg" == "$_gw_cg" || "$_self_cg" == "$_gw_cg"/* ) ]]
+            then
+                # Detach: waiting here would stall the drain until TimeoutStopSec.
+                if systemd-run --user --unit="oc-refresh-restart-$$" --collect --quiet \
+                        --setenv=PATH="$PATH" \
+                        bash -c "$_restart_body" _ "$_restart_log" >/dev/null 2>&1
+                then
+                    __tac_info "Gateway" "[restart issued (detached — a gateway-hosted caller cannot wait for the drain); outcome in $_restart_log]" "$C_Success"
+                else
+                    __tac_info "Gateway" "[restart NOT issued — see $_restart_log; run 'so' to apply env changes]" "$C_Warning"
+                fi
+            else
+                _restart_out=$(systemd-run --user --scope --collect --quiet \
+                    bash -c "$_restart_body" _ "$_restart_log" 2>/dev/null) || true
+                # Prefer the scope's own stdout; if the caller died mid-restart,
+                # fall back to the record the scope left behind.
+                if [[ -z "$_restart_out" && -r "$_restart_log" ]]; then
+                    _restart_out=$(tail -n 1 "$_restart_log" 2>/dev/null | awk '{print $1}')
+                fi
+                case "$_restart_out" in
+                    restarted)   __tac_info "Gateway" "[restarted to pick up refreshed env]" "$C_Success" ;;
+                    issued-slow) __tac_info "Gateway" "[restart issued; readiness probe timed out but unit is up/starting — env applied]" "$C_Warning" ;;
+                    recovered)   __tac_info "Gateway" "[restart command failed; recovered via systemctl reset-failed+start]" "$C_Warning" ;;
+                    started)     __tac_info "Gateway" "[restart issued — outcome unobserved (caller torn down); see $_restart_log]" "$C_Warning" ;;
+                    *)           __tac_info "Gateway" "[restart not confirmed — see $_restart_log; run 'so' if the gateway is stale]" "$C_Warning" ;;
+                esac
             fi
-            case "$_restart_out" in
-                restarted)   __tac_info "Gateway" "[restarted to pick up refreshed env]" "$C_Success" ;;
-                issued-slow) __tac_info "Gateway" "[restart issued; readiness probe timed out but unit is up/starting — env applied]" "$C_Warning" ;;
-                recovered)   __tac_info "Gateway" "[restart command failed; recovered via systemctl reset-failed+start]" "$C_Warning" ;;
-                started)     __tac_info "Gateway" "[restart issued — outcome unobserved (caller torn down); see $_restart_log]" "$C_Warning" ;;
-                *)           __tac_info "Gateway" "[restart not confirmed — see $_restart_log; run 'so' if the gateway is stale]" "$C_Warning" ;;
-            esac
         else
             __tac_info "Gateway" "[restart deferred — systemd-run unavailable; run 'so' to apply env changes]" "$C_Warning"
         fi
