@@ -480,16 +480,20 @@ function __bridge_windows_api_keys() {
     fi
 
     # Fetch matching vars from Windows User environment via PowerShell.
-    # Match any variable whose name contains TOKEN, API(_|-)?KEY, or PASSWORD
-    # (case-insensitive). Covers common names like GEMINI_API_KEY,
-    # OPENAI_API_KEY, OPENCLAW_GATEWAY_TOKEN, OPENCLAW_GATEWAY_PASSWORD.
+    # Match any variable whose name is credential-shaped: TOKEN, API_KEY /
+    # API-KEY, PASSWORD, a *_KEY / *_SECRET suffix, *_CLIENT_ID, or a bare
+    # *_API (case-insensitive). Covers GEMINI_API_KEY, OPENAI_API_KEY,
+    # OPENCLAW_GATEWAY_TOKEN, OPENCLAW_GATEWAY_PASSWORD, plus the names the
+    # earlier narrower pattern silently missed: OPENCLAW_WEB_SEARCH_KEY,
+    # MICROSOFT_CLIENT_ID, HERE_NOW_API. Non-credential vars (Path, TEMP,
+    # TMP, NODE_OPTIONS, OneDrive*, Chocolatey*, *DIR, *HOME) stay excluded.
     local raw
     # 20s, not 5s: a cold pwsh.exe start plus the User-env enumeration has been
     # measured at 3-10s over WSL interop, and a 5s cap silently returned a
     # truncated variable set (partial cache) instead of failing cleanly.
     raw=$(timeout 20 pwsh.exe -NoProfile -NonInteractive -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() |
-        Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY|PASSWORD)" } |
+        Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY|PASSWORD|_KEY$|_SECRET|_CLIENT_ID$|_API$)" } |
         ForEach-Object { "$($_.Key)=$($_.Value)" }
     ' 2>/dev/null | tr -d '\r')
 
@@ -860,7 +864,7 @@ function oc-refresh-keys() {
         done
         source "$cache" 2>/dev/null
         count=$(grep -c '^export ' "$cache" || true)
-        grep -oE '^export [A-Z_]+' "$cache" | sed 's/^export //' | sort -u > "$_canonical_names"
+        grep -oE '^export [A-Z0-9_]+' "$cache" | sed 's/^export //' | sort -u > "$_canonical_names"
 
     # 2b. Fallback (pwsh.exe unavailable): rebuild the cache using ONLY the
     #     canonical key names — values from the Linux env, falling back to the
@@ -891,13 +895,17 @@ function oc-refresh-keys() {
             [[ "$_lk" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
             [[ "$_lk" =~ [Tt][Oo][Kk][Ee][Nn] ]] || \
                 [[ "$_lk" =~ [Aa][Pp][Ii][_-]?[Kk][Ee][Yy] ]] || \
-                [[ "$_lk" =~ [Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd] ]] || continue
+                [[ "$_lk" =~ [Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd] ]] || \
+                [[ "$_lk" =~ [Ss][Ee][Cc][Rr][Ee][Tt] ]] || \
+                [[ "$_lk" =~ [Cc][Ll][Ii][Ee][Nn][Tt]_[Ii][Dd]$ ]] || \
+                [[ "$_lk" =~ [Aa][Pp][Ii]$ ]] || \
+                [[ "$_lk" =~ _[Kk][Ee][Yy]$ ]] || continue
             printf 'export %s=%q\n' "$_lk" "$_lv" >> "$cache"
             count=$((count + 1))
         done < <(env | sort -u)
         if [[ "$count" -gt 0 ]]; then
             source "$cache" 2>/dev/null
-            grep -oE '^export [A-Z_]+' "$cache" | sed 's/^export //' | sort -u > "$_canonical_names"
+            grep -oE '^export [A-Z0-9_]+' "$cache" | sed 's/^export //' | sort -u > "$_canonical_names"
             __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — using Linux env vars ($count exported)]" "$C_Warning"
         else
             __tac_info "Reading Windows User environment" "[no vars found — pwsh.exe unavailable and no Linux fallback vars set]" "$C_Warning"
@@ -919,23 +927,16 @@ function oc-refresh-keys() {
     # 4. Sync OpenClaw SecretRefs to the refreshed env credentials
     __oc_apply_secret_refs
 
-    # 5. Restart the gateway only if its env actually changed — repeated
-    #    refreshes with unchanged keys skip the (slow) restart cycle.
-    if (( _OC_GW_ENV_CHANGED == 1 )) && command -v openclaw >/dev/null 2>&1 && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null; then
-        if openclaw gateway restart >/dev/null 2>&1; then
-            __tac_info "Gateway" "[restarted to pick up refreshed env]" "$C_Success"
-        elif [[ "$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)" =~ ^(active|activating|reloading)$ ]]; then
-            # openclaw's restart actually happened — only its readiness probe
-            # (/healthz + /readyz, 45s deadline on Linux) timed out on a slow
-            # cold start, so the unit is active or still activating. Don't stack
-            # a redundant reset-failed + start: that start would also block until
-            # the unit finishes activating (the visible "hang").
-            __tac_info "Gateway" "[restart issued; readiness probe timed out but unit is up/starting — env applied]" "$C_Warning"
-        elif systemctl --user reset-failed openclaw-gateway.service >/dev/null 2>&1 && systemctl --user start openclaw-gateway.service >/dev/null 2>&1; then
-            __tac_info "Gateway" "[restart command failed; recovered via systemctl reset-failed+start]" "$C_Warning"
-        else
-            __tac_info "Gateway" "[restart failed — run 'so' to apply env changes]" "$C_Warning"
-        fi
+    # 5. Decide whether the gateway needs a restart (its env changed). The
+    #    restart is DEFERRED to step 7, after the NAS mirror: a gateway-hosted
+    #    run (automation or agent-spawned exec) lives inside THIS service's
+    #    cgroup, so restarting the gateway kills this script mid-flight and
+    #    silently drops every later step (observed 2026-09-13: the NAS mirror
+    #    never ran because the helper died at the restart).
+    local _gw_restart_needed=0
+    if (( _OC_GW_ENV_CHANGED == 1 )) && command -v openclaw >/dev/null 2>&1 && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null
+    then
+        _gw_restart_needed=1
     fi
 
     # 6. Mirror vars to NAS via SSH — one connection (was one ssh per var,
@@ -1007,6 +1008,47 @@ function oc-refresh-keys() {
             _reason="preflight failed"
         fi
         __tac_info "Exporting to NAS" "[skipped — ${_reason}]" "$C_Warning"
+    fi
+
+    # 7. Restart the gateway LAST, once every durable side effect (manager env,
+    #    SecretRefs, NAS mirror) is committed. It runs in a transient systemd
+    #    scope so the restart sits OUTSIDE openclaw-gateway.service's cgroup: a
+    #    gateway-hosted caller lives in that cgroup, so an in-cgroup restart
+    #    kills the caller mid-flight. `setsid` is NOT sufficient — it escapes
+    #    the session, not the cgroup. Output is captured because the caller may
+    #    still be torn down before this function returns.
+    if (( _gw_restart_needed == 1 ))
+    then
+        local _restart_log="$TAC_CACHE_DIR/tac_gateway_restart.log"
+        local _restart_body='
+            if openclaw gateway restart >/dev/null 2>&1; then
+                echo restarted
+            elif [[ "$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)" =~ ^(active|activating|reloading)$ ]]; then
+                # The restart did happen; only the readiness probe (/healthz +
+                # /readyz, 45s deadline) timed out on a slow cold start. Do not
+                # stack a redundant reset-failed + start: that start would also
+                # block until the unit finishes activating (the visible hang).
+                echo issued-slow
+            elif systemctl --user reset-failed openclaw-gateway.service >/dev/null 2>&1 && systemctl --user start openclaw-gateway.service >/dev/null 2>&1; then
+                echo recovered
+            else
+                echo failed
+            fi
+        '
+        local _restart_out=""
+        if command -v systemd-run >/dev/null 2>&1 \
+            && _restart_out=$(systemd-run --user --scope --collect --quiet bash -c "$_restart_body" 2>/dev/null)
+        then
+            case "$_restart_out" in
+                restarted)   __tac_info "Gateway" "[restarted to pick up refreshed env]" "$C_Success" ;;
+                issued-slow) __tac_info "Gateway" "[restart issued; readiness probe timed out but unit is up/starting — env applied]" "$C_Warning" ;;
+                recovered)   __tac_info "Gateway" "[restart command failed; recovered via systemctl reset-failed+start]" "$C_Warning" ;;
+                *)           __tac_info "Gateway" "[restart failed — run 'so' to apply env changes]" "$C_Warning" ;;
+            esac
+        else
+            __tac_info "Gateway" "[restart deferred — run 'so' to apply env changes]" "$C_Warning"
+        fi
+        printf '%s\n' "${_restart_out:-no-output}" > "$_restart_log" 2>/dev/null || true
     fi
 }
 

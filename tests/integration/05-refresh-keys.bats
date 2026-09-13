@@ -51,6 +51,10 @@ setup() {
     export SYSTEMCTL_LOG="$TAC_TEST_TMPDIR/systemctl_calls.log"
     __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; exit 0"
 
+    # Mock systemd-run so the deferred gateway restart (step 7) runs its
+    # payload inline instead of creating a real transient scope on the host.
+    __mock_command_local systemd-run 'while [[ "${1:-}" == --* ]]; do shift; done; exec "$@"'
+
     # Source only required modules for oc-refresh-keys to keep the test harness stable.
     # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/01-constants.sh"
@@ -121,5 +125,24 @@ teardown() {
 
     # Absent (no longer mapped) credential -> no ref written for that path.
     run grep -F 'qwen-token-plan' "$OC_MOCK_LOG" "$OC_MOCK_PATCH_FILE"
+    [ "$status" -ne 0 ]
+}
+
+@test "oc-refresh-keys preserves digits in the canonical key-name set" {
+    # Regression: the canonical-names file was built with an [A-Z_]+ filter,
+    # which silently truncated digit-bearing names (CONTEXT7_API_KEY -> CONTEXT)
+    # and broke the pwsh-unavailable fallback that rebuilds from that list.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GEMINI_API_KEY=test-gemini-key' 'CONTEXT7_API_KEY=ctx7secret'"
+
+    export GEMINI_API_KEY="test-gemini-key"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    run grep -Fx "CONTEXT7_API_KEY" "$TAC_CACHE_DIR/tac_win_api_key_names"
+    [ "$status" -eq 0 ]
+
+    # The truncated name must not appear.
+    run grep -Fx "CONTEXT" "$TAC_CACHE_DIR/tac_win_api_key_names"
     [ "$status" -ne 0 ]
 }
