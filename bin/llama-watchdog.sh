@@ -17,6 +17,13 @@
 #   --version (also removes the now-unneeded SC2034 suppression for VERSION).
 # v3.4 (2026-09-12): gpu_busy honours gpu-busy.sh's exit contract — exit 1 is a
 #   normal BUSY answer, no longer logged as a probe failure every 60s.
+# v3.5 (2026-09-13): add an NV-ONLY suspend flag
+#   (LLAMA_WATCHDOG_NV_SUSPEND_FILE, default /dev/shm/llama-watchdog-nv.suspend).
+#   While it exists the CUDA lane is left down (and stopped if up) WITHOUT
+#   touching the Xe lane or this timer.  A bench/autotune run that needs the card
+#   to itself previously had to stop the watchdog outright for its whole duration,
+#   which left the Xe lane unmonitored; now it suspends just the CUDA lane.  This
+#   is deliberately narrower than bench_lock, which also suppresses Xe recovery.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -25,7 +32,7 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-VERSION="3.4"
+VERSION="3.5"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -66,6 +73,9 @@ NV_PORT="${LLM_NVIDIA_PORT:-18083}"
 NV_UNIT="llama-server-nvidia"
 STRIKE_XE="$WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes"
 STRIKE_NV="$WATCHDOG_STRIKE_DIR/llama-watchdog-nv.strikes"
+# Presence of this file suspends ONLY the CUDA lane (see nv_suspended).  Kept
+# env-overridable like the lock/strike paths so the integration suite sandboxes it.
+NV_SUSPEND_FILE="${LLAMA_WATCHDOG_NV_SUSPEND_FILE:-/dev/shm/llama-watchdog-nv.suspend}"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] $*"; }
 
@@ -140,6 +150,11 @@ gpu_busy() {
 
 bench_lock() { [[ -f "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}" ]]; }
 
+# nv_suspended — the CUDA lane is held down on purpose (a bench/autotune run is
+# measuring TPS and wants the card to itself).  Scoped to the CUDA lane only:
+# unlike bench_lock it must NOT suppress Xe recovery.
+nv_suspended() { [[ -f "$NV_SUSPEND_FILE" ]]; }
+
 # wait_healthy <port> <timeout_s> — 0 healthy, 1 not
 wait_healthy() {
     local port="$1" t="$2" i
@@ -202,7 +217,18 @@ fi
 # LANE 2: CUDA llama-server-nvidia — runs only while GPU free
 # ============================================================
 nv_state=$(systemctl --user show "$NV_UNIT.service" -p ActiveState --value 2>/dev/null || true)
-if gpu_busy; then
+if nv_suspended; then
+    # NV-only suspend: keep the CUDA lane down (and take it down if it is up).
+    # Strikes reset so a resumed lane does not inherit strikes accrued while it
+    # was deliberately stopped.
+    if [[ "$nv_state" == "active" ]]; then
+        log "CUDA lane suspended — stopping $NV_UNIT (freeing VRAM; Xe lane serves)"
+        systemctl --user stop "$NV_UNIT.service" 2>/dev/null || true
+    else
+        log "CUDA lane suspended ($NV_SUSPEND_FILE present) — not starting $NV_UNIT yet"
+    fi
+    strike_reset "$STRIKE_NV"
+elif gpu_busy; then
     # GPU in use by foreign workload -> Xe lane serves (Wayne policy)
     if [[ "$nv_state" == "active" ]]; then
         log "GPU busy — stopping $NV_UNIT (freeing VRAM; Xe lane serves)"

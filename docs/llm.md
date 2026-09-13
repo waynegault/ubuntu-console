@@ -176,7 +176,7 @@ displayed in a box-drawn summary table.
 
 ### Strategy Details
 
-- Locking: serializes runs with `flock` (see `LLM_AUTOTUNE_LOCK_FILE`) to avoid overlapping autotune jobs.
+- Locking: serializes runs with `flock` (see `LLM_AUTOTUNE_LOCK_FILE`) to avoid overlapping autotune jobs. To take the **CUDA lane** out of the way while measuring, a run instead creates `LLAMA_WATCHDOG_NV_SUSPEND_FILE` (see below) — narrower than a bench lock, which would also suppress Xe recovery.
 - Context strategy: climbs ctx until startup fails, then binary-probes between the last working ctx and the failure point.
 - Candidate pruning: skips risky combos based on free VRAM, model size, and the quant rating from `quant-guide.conf`.
 - Search: a beam search over batch/ubatch at the winning ctx (see `LLM_AUTOTUNE_BEAM_*`); models in the "almost fits" band also sweep n_gpu_layers and KV quant.
@@ -201,6 +201,7 @@ displayed in a box-drawn summary table.
 | `LLM_AUTOTUNE_SPEC_N_MAX_LIST` | `4 8 16 32` | Speculative-decoding draft lengths to try |
 | `LLM_AUTOTUNE_BASELINE_GAP_MAX` | `800` | Max MiB of held VRAM tolerated before refusing to run |
 | `LLM_AUTOTUNE_LOCK_FILE` | `/tmp/llm-autotune.lock` | Run serialization lock path |
+| `LLAMA_WATCHDOG_NV_SUSPEND_FILE` | `/dev/shm/llama-watchdog-nv.suspend` | While this file exists the watchdog keeps the **CUDA** lane (`llama-server-nvidia.service`) down and stops it if up; the Xe lane and the watchdog's own health checks are untouched. The lane returns automatically when the file is removed |
 | `LLM_ALLOW_AUTOTUNE_DISCOURAGED` | `0` | Allow bench to auto-run autotune for discouraged quants |
 
 ### Profile Persistence
