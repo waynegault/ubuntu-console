@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (935 total tests: 598 BATS + 337 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (936 total tests: 599 BATS + 337 Python).
 
 ### Running Tests
 
@@ -444,13 +444,13 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 
 | Suite | File | Count | Timeout |
 |-------|------|-------|---------|
-| Full behavioural | `tactical-console.bats` | 385 | 900s |
+| Full behavioural | `tactical-console.bats` | 386 | 900s |
 | Fast static analysis | `tactical-console-fast.bats` | 53 | 180s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
 | Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use, clean-orphans) | `tests/unit/*.bats` | 47 | 120s |
 | Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 111 | 300s |
 | Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 337 | 200s |
-| **Total** | | **935** | |
+| **Total** | | **936** | |
 
 ---
 
@@ -678,8 +678,8 @@ function __get_METRIC() {
 ├── tests/
 │   ├── conftest.py                    # Pytest config — BATS lock serialization, VS Code discovery guard
 │   ├── _paths.py                      # Shared sys.path bootstrap for kgraph imports
-│   ├── tactical-console.bats          # BATS full suite (385 tests, ~5-15 min)
-│   ├── tactical-console-fast.bats     # Fast subset (52 tests, ~2 min)
+│   ├── tactical-console.bats          # BATS full suite (386 tests, ~5-15 min)
+│   ├── tactical-console-fast.bats     # Fast subset (53 tests, ~2 min)
 │   ├── tactical-console-function-availability.bats  # Function availability checks (2 tests)
 │   ├── test_bats_bridge.py            # BATS→pytest bridge: exposes each @test as an individual pytest test
 │   ├── test_bats_lock_fixture.py      # Tests for conftest lock fixture
@@ -831,7 +831,7 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 53 tests)
-- **Full tests:** `bats tests/tactical-console.bats` (385 BATS unit tests)
+- **Full tests:** `bats tests/tactical-console.bats` (386 BATS unit tests)
 - **Unit suites (47 tests overall):** CI runs `tests/unit/01`, `02`, `09`, `10`; nightly adds `05`–`08`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host.
 - **Integration suites (111 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety); shellcheck is pinned to 0.11.0 via `tools/install-shellcheck.sh`, which CI runs so local and CI diagnostics cannot drift (0.9.0 reported SC2317 where 0.11.0 reports SC2329 for the same code).

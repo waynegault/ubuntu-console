@@ -3,7 +3,7 @@
 # ─── Module: 06-hooks ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 6. SYSTEM HOOKS & OVERRIDES
 # ==============================================================================
@@ -45,7 +45,10 @@ function cd() {
     fi
 
     # Auto-deactivate if we left the project root
-    if [[ -n "$VIRTUAL_ENV" ]]
+    # `${VIRTUAL_ENV:-}` — env.sh is sourced under `set -u` by non-interactive
+    # launchers, where VIRTUAL_ENV is unset; an unguarded read there makes every
+    # `$(cd ... && pwd)` in a thin loader expand to EMPTY.
+    if [[ -n "${VIRTUAL_ENV:-}" ]]
     then
         local venv_root
         venv_root=$(dirname "$VIRTUAL_ENV")
@@ -116,7 +119,7 @@ function custom_prompt_command() {
     (( lastExit == 0 )) && exit_badge=" \[${C_Success}\]${CHECK_MARK}\[${C_Reset}\] "
     local ps1_path="\[${C_Info}\]\w\[${C_Reset}\]"
     local ps1_venv=""
-    [[ -n "$VIRTUAL_ENV" ]] && ps1_venv=" \[${C_Success}\]($(basename "$VIRTUAL_ENV"))\[${C_Reset}\]"
+    [[ -n "${VIRTUAL_ENV:-}" ]] && ps1_venv=" \[${C_Success}\]($(basename "${VIRTUAL_ENV:-}"))\[${C_Reset}\]"
 
     PS1="\n${ps1_user}${_TAC_ADMIN_BADGE}${exit_badge}${ps1_path}${ps1_venv} \[${C_Dim}\]> \[${C_Reset}\]"
 }

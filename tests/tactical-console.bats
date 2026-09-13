@@ -2127,6 +2127,27 @@ EOF
     cd "$before"
 }
 
+@test "hooks: cd override tolerates unset VIRTUAL_ENV under set -u (env.sh load regression)" {
+    # Regression (2026-09-13): the `cd` override read $VIRTUAL_ENV unguarded.  A
+    # non-interactive launcher sources env.sh under `set -u` with VIRTUAL_ENV
+    # unset, so every `$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)` in the thin
+    # loaders expanded to EMPTY — "[tac] 11-llm-manager: missing sub-module
+    # /11a-llm-registry.sh" — the llm-manager helpers never loaded, and
+    # autotune-model.sh certified nothing while still reporting success.
+    run env -u VIRTUAL_ENV bash -uc '
+        set -uo pipefail
+        source "$1" || { echo "env.sh failed to source" >&2; exit 1; }
+        # The override must not break directory resolution under nounset.
+        resolved="$(cd /tmp && pwd)"
+        [[ -n "$resolved" ]] || { echo "cd-substitution-empty" >&2; exit 1; }
+        declare -F __llm_autotune_profile_save >/dev/null || { echo "save-fn-missing" >&2; exit 1; }
+        declare -F __llm_kill_cuda_llama_servers >/dev/null || { echo "kill-fn-missing" >&2; exit 1; }
+    ' _ "$REPO_ROOT/env.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"missing sub-module"* ]]
+    [[ "$output" != *"unbound variable"* ]]
+}
+
 @test "hooks: PROMPT_COMMAND is set" {
     [[ -n "$PROMPT_COMMAND" ]]
 }
