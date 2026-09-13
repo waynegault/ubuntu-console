@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (936 total tests: 599 BATS + 337 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (939 total tests: 602 BATS + 337 Python).
 
 ### Running Tests
 
@@ -448,9 +448,9 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 | Fast static analysis | `tactical-console-fast.bats` | 53 | 180s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
 | Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use, clean-orphans) | `tests/unit/*.bats` | 47 | 120s |
-| Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 111 | 300s |
+| Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 114 | 300s |
 | Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 337 | 200s |
-| **Total** | | **936** | |
+| **Total** | | **939** | |
 
 ---
 
@@ -688,7 +688,7 @@ function __get_METRIC() {
 │   ├── test_models.py                 # Pydantic model tests (37 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
 │   ├── unit/                          # BATS unit tests (47 tests: 6+2+8+5+5+6+7+4+4)
-│   └── integration/                   # BATS integration tests (111 tests: 14+42+10+18+1+26)
+│   └── integration/                   # BATS integration tests (114 tests: 14+42+10+18+4+26)
 └── systemd/
     ├── llama-watchdog.service
     └── llama-watchdog.timer
@@ -833,7 +833,7 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 53 tests)
 - **Full tests:** `bats tests/tactical-console.bats` (386 BATS unit tests)
 - **Unit suites (47 tests overall):** CI runs `tests/unit/01`, `02`, `09`, `10`; nightly adds `05`–`08`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host.
-- **Integration suites (111 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
+- **Integration suites (114 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety); shellcheck is pinned to 0.11.0 via `tools/install-shellcheck.sh`, which CI runs so local and CI diagnostics cannot drift (0.9.0 reported SC2317 where 0.11.0 reports SC2329 for the same code).
 - **Docs sync:** `tools/docs-sync-check.sh` (README drift guard — fails CI on stale module counts, versions, or test totals)
 - **Nightly:** full suite runs nightly via `.github/workflows/nightly.yml` (scheduled + manual dispatch)
