@@ -6,7 +6,7 @@
 # Usage: ./tools/lint.sh
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -34,13 +34,14 @@ SKIP_UNICODE_CHECK=${SKIP_UNICODE_CHECK:-0}
 #  \x{2026}           Horizontal ellipsis
 #  \x{2192}           Right arrow
 #  \x{2264}           Less-than-or-equal
+#  \x{2298}           Circled division slash  (⊘ — the skip marker in run-tests.sh)
 #  \x{2500}-\x{2570}  Box Drawing  (─ ═ ║ ╔ ╗ ╚ ╝ ╟ ╠ ╢ ╣ …)
 #  \x{25CB}-\x{25CF}  Geometric Shapes subset  (○ ●)
 #  \x{26A0}           Warning sign  (⚠)
 #  \x{2713}           Check mark  (✓)
 #  \x{2717}           Ballot X  (✗)
 #  \x{2800}-\x{28FF}  Braille Patterns  (spinner glyphs)
-_UNICODE_ALLOWED='\x{00A0}-\x{00FF}\x{2014}\x{2026}\x{2192}\x{2264}\x{2500}-\x{2570}\x{25CB}-\x{25CF}\x{26A0}\x{2713}\x{2717}\x{2800}-\x{28FF}'
+_UNICODE_ALLOWED='\x{00A0}-\x{00FF}\x{2014}\x{2026}\x{2192}\x{2264}\x{2298}\x{2500}-\x{2570}\x{25CB}-\x{25CF}\x{26A0}\x{2713}\x{2717}\x{2800}-\x{28FF}'
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 rc=0
