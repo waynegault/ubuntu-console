@@ -70,7 +70,9 @@ setup() {
     unset CONTEXT7_API_KEY DEVIN_API_KEY OPENCLAW_GATEWAY_TOKEN
     unset QWEN_TOKEN_PLAN_API_KEY
 
-    # Create a minimal systemd unit file so MANAGED_ENV_KEYS can be updated.
+    # OpenClaw-as-authored unit fixture. The refresh must never rewrite it:
+    # OpenClaw fingerprints its own unit before a repair and aborts
+    # maintenance if the bytes changed.
     mkdir -p "$TAC_TEST_TMPDIR/.config/systemd/user"
     cat > "$TAC_TEST_TMPDIR/.config/systemd/user/openclaw-gateway.service" << 'UNIT'
 [Service]
@@ -123,12 +125,17 @@ teardown() {
     run grep -F "set-environment WIN_TOKEN=tok123" "$SYSTEMCTL_LOG"
     [ "$status" -eq 0 ]
 
-    # MANAGED_ENV_KEYS in the systemd unit was updated.
+    # The unit is left exactly as OpenClaw authored it (no rewrite, no
+    # daemon-reload): bridged values reach the gateway via the manager env
+    # asserted above, so the managed-key list never gains WIN_API_KEY/WIN_TOKEN.
     local unit="$HOME/.config/systemd/user/openclaw-gateway.service"
     run grep 'OPENCLAW_SERVICE_MANAGED_ENV_KEYS=' "$unit"
     [ "$status" -eq 0 ]
-    [[ "$output" == *WIN_API_KEY* ]]
-    [[ "$output" == *WIN_TOKEN* ]]
+    [[ "$output" == *GEMINI_API_KEY* ]]
+    [[ "$output" != *WIN_API_KEY* ]]
+    [[ "$output" != *WIN_TOKEN* ]]
+    run grep -F "daemon-reload" "$SYSTEMCTL_LOG"
+    [ "$status" -ne 0 ]
 
     # Gateway restart was triggered (mock systemctl is-active returns 0).
     run grep -F "gateway restart" "$OC_MOCK_LOG"
@@ -169,11 +176,12 @@ teardown() {
     run grep -F "set-environment GEMINI_API_KEY=test-gemini-key" "$SYSTEMCTL_LOG"
     [ "$status" -eq 0 ]
 
-    # MANAGED_ENV_KEYS in the unit covers the bridged vars, not the unset one.
+    # The unit is never rewritten, so its managed-key list keeps OpenClaw's
+    # own value and gains neither the bridged nor the unset var.
     local unit="$HOME/.config/systemd/user/openclaw-gateway.service"
     run grep 'OPENCLAW_SERVICE_MANAGED_ENV_KEYS=' "$unit"
     [ "$status" -eq 0 ]
-    [[ "$output" == *WIN_API_KEY* ]]
+    [[ "$output" != *WIN_API_KEY* ]]
     [[ "$output" == *GEMINI_API_KEY* ]]
     [[ "$output" != *QWEN_TOKEN_PLAN_API_KEY* ]]
 }
