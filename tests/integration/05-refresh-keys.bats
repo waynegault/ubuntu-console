@@ -146,3 +146,42 @@ teardown() {
     run grep -Fx "CONTEXT" "$TAC_CACHE_DIR/tac_win_api_key_names"
     [ "$status" -ne 0 ]
 }
+
+@test "oc-refresh-keys records the deferred gateway restart outcome" {
+    # Regression: step 7's outcome used to be written by the caller AFTER
+    # systemd-run returned, so a caller torn down by its own restart lost the
+    # record. The restart body must persist its own outcome.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'RESTART_PROBE_API_KEY=probe'"
+    rm -f "$TAC_CACHE_DIR/tac_gateway_restart.log"
+
+    export GEMINI_API_KEY="test-gemini-key"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    local _rlog="$TAC_CACHE_DIR/tac_gateway_restart.log"
+    [ -f "$_rlog" ]
+    run grep -F "started" "$_rlog"
+    [ "$status" -eq 0 ]
+    run grep -F "restarted" "$_rlog"
+    [ "$status" -eq 0 ]
+}
+
+@test "oc-refresh-keys reports an unobserved restart from the scope's own log" {
+    # A caller killed mid-restart sees no stdout. It must still report the
+    # outcome, read back from the log the scope wrote for itself.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'TORN_DOWN_API_KEY=t'"
+    __mock_command_local systemd-run 'while [[ "${1:-}" == --* ]]; do shift; done; printf "started 123 2026-01-01T00:00:00+00:00\\n" > "${!#}"'
+    rm -f "$TAC_CACHE_DIR/tac_gateway_restart.log"
+
+    export GEMINI_API_KEY="test-gemini-key"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    # The caller saw no stdout, so it read the scope's log and reported the
+    # unobserved outcome rather than claiming success or losing the record.
+    [[ "$output" == *"outcome unobserved"* ]]
+    run grep -F "started" "$TAC_CACHE_DIR/tac_gateway_restart.log"
+    [ "$status" -eq 0 ]
+}
