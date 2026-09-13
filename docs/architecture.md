@@ -57,7 +57,7 @@ by either loader.
 | §3 | `scripts/03-design-tokens.sh` | ~38 | ANSI colour constants (`readonly`, re-source safe) |
 | §4 | `scripts/04-aliases.sh` | ~462 | Short commands, VS Code wrappers, tactical shortcuts (`c`, `cls`, `le`, `lo` with PIPESTATUS) |
 | §5 | `scripts/05-ui-engine.sh` | ~560 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
-| §6 | `scripts/06-hooks.sh` | ~174 | `cd` override (venv auto-activate), prompt (`PS1`), `__test_port`, admin badge |
+| §6 | `scripts/06-hooks.sh` | ~177 | `cd` override (venv auto-activate), prompt (`PS1`), `__test_port`, admin badge |
 | §7 | `scripts/07-telemetry.sh` | ~396 | Host metrics (CPU + dual GPU), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` with trap cleanup |
 | §8 | `scripts/08-maintenance.sh` | ~1775 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, `docs-sync`, cooldown system with `flock` |
 | §9 | `scripts/09-openclaw.sh` (thin loader) | ~54 | Sources 09a–09f sub-modules in order |

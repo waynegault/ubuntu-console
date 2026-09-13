@@ -3,7 +3,7 @@
 # ─── Module: 06-hooks ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 # 6. SYSTEM HOOKS & OVERRIDES
 # ==============================================================================
@@ -101,7 +101,10 @@ fi
 function custom_prompt_command() {
     local lastExit=$?
     __tac_preexec_fired=0
-    history -a
+    # Guard HISTFILE: when it is unset there is no file to append to, and
+    # `history -a` fails with "HISTFILE: parameter null or not set" on every
+    # prompt.
+    [[ -n "${HISTFILE:-}" ]] && history -a
 
     # If history number hasn't changed, user pressed Enter with no command —
     # clear the error badge so × doesn't persist across empty prompts.
