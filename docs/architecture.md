@@ -64,7 +64,7 @@ by either loader.
 | §9a | `scripts/09a-oc-gateway.sh` | ~724 | Gateway lifecycle: `so()`, start/stop/health, Tailscale cycling, API key bridge |
 | §9b | `scripts/09b-gog.sh` | ~175 | Google CLI (`gog`) detection, setup helpers, and integration shims |
 | §9c | `scripts/09c-oc-core.sh` | ~345 | Core dispatcher: `oc()`, `xo()`, shortcut commands |
-| §9d | `scripts/09d-oc-agents.sh` | ~1065 | Agent management, API keys, secrets rotation |
+| §9d | `scripts/09d-oc-agents.sh` | ~1159 | Agent management, API keys, secrets rotation |
 | §9e | `scripts/09e-oc-health.sh` | ~1093 | Health checks, diagnostics, failover, utilities |
 | §9f | `scripts/09f-oc-misc.sh` | ~608 | KGraph, stinger, backup/restore, mem-index |
 | §10 | `scripts/10-deployment.sh` | ~479 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified, secret detection) |
