@@ -40,7 +40,8 @@ jobs:
                tests/unit/07-spec-dec-launch.bats \
                tests/unit/08-autotune-workload.bats \
                tests/unit/09-check-agent-use.bats \
-               tests/unit/10-clean-orphans.bats
+               tests/unit/10-clean-orphans.bats \
+               tests/unit/11-module-versions.bats
 
       - name: Run integration suites
         run: |
