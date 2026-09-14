@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -3097,19 +3097,28 @@ function model() {
 # flags for this hardware (RTX 3050 Ti SM 86, i9-12900HK), builds the
 # llama-server binary, and updates the convenience symlink.
 #
-# Usage:   llm-build [--quick] [--no-pull]
+# Usage:   llm-build [--quick] [--no-pull] [--yes]
 # Options:
 #   --quick     Skip cmake reconfigure when the build dir already exists
 #              (just rebuild the binary with existing CMake cache)
 #   --no-pull   Skip git pull (rebuild the current checkout only)
+#   --yes       Skip the pre-flight confirmation (for deliberate, scripted use)
+#
+# A pull is NOT free (2026-09-14): it moves the source under a tree the live
+# CUDA lane may be serving, and a reconfiguration is a 40-60 min rebuild.  One
+# such gap silently removed --mmap/--no-mmap/--mlock and broke every launch path
+# that passed them.  So the plan (pull from → commit, flag churn, rebuild path,
+# lane impact) is printed first and confirmed; with no terminal to confirm on,
+# it FAILS CLOSED rather than pulling — pass --yes or --no-pull.
 # ---------------------------------------------------------------------------
 function llm-build() {
-    local quick=false no_pull=false
+    local quick=false no_pull=false yes=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --quick) quick=true; shift ;;
             --no-pull) no_pull=true; shift ;;
-            *) __tac_info "Usage" "llm-build [--quick] [--no-pull]" "$C_Warn"; return 1 ;;
+            --yes|-y) yes=true; shift ;;
+            *) __tac_info "Usage" "llm-build [--quick] [--no-pull] [--yes]" "$C_Warn"; return 1 ;;
         esac
     done
 
@@ -3123,6 +3132,63 @@ function llm-build() {
     fi
 
     cd "$root" || return 1
+
+    # ---- Pre-flight plan: what would actually change, and what does it affect?
+    local lane_target="" lane_impact="nothing live serves this tree"
+    if [[ -L "$HOME/.local/bin/cuda-llama-server" ]]; then
+        lane_target=$(readlink -f "$HOME/.local/bin/cuda-llama-server" 2>/dev/null || true)
+        if [[ "$lane_target" == "$root/build/"* ]]; then
+            lane_impact="the LIVE CUDA lane (llama-server-nvidia.service) serves $lane_target - a rebuild replaces the binary under it (the running process keeps its copy; the next restart picks up the new one)"
+        fi
+    fi
+
+    local upstream="" behind="" target="" churn="" build_mode="full reconfigure"
+    [[ "$quick" == "true" ]] && build_mode="--quick: reuse the existing CMake cache"
+    if [[ "$no_pull" == "true" ]]; then
+        upstream="(skipped: --no-pull)"
+    else
+        git fetch --quiet origin 2>/dev/null || true
+        upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+        if [[ -n "$upstream" ]]; then
+            behind=$(git rev-list --count "HEAD..$upstream" 2>/dev/null || echo "?")
+            target=$(git rev-parse --short "$upstream" 2>/dev/null || echo "?")
+            # The hazard class that has actually bitten us: flag/default churn.
+            churn=$(git diff --stat "HEAD..$upstream" -- common/arg.cpp common/common.h 2>/dev/null | tail -1)
+            [[ -z "$churn" ]] && churn="none (no changes to common/arg.cpp or common/common.h)"
+        else
+            upstream="(no upstream tracking branch)"
+        fi
+    fi
+
+    echo ""
+    __tac_info "Plan" "llama.cpp build plan - nothing has changed yet" "$C_Info"
+    echo "  source:   $root   @ $(git rev-parse --short HEAD 2>/dev/null || echo '?')"
+    if [[ "$no_pull" == "true" ]]; then
+        echo "  pull:     $upstream"
+    else
+        echo "  pull:     ${upstream} -> ${target:-?}   (${behind:-?} commits behind)"
+        echo "  flags:    ${churn:-?}"
+    fi
+    echo "  build:    $root/build   ($build_mode)"
+    echo "  lane:     $lane_impact"
+    echo ""
+
+    if [[ "$no_pull" != "true" && "$yes" != "true" ]]; then
+        if [[ -t 0 ]]; then
+            local _ans=""
+            read -r -p "  Proceed with this pull and rebuild? [y/N] " _ans
+            if [[ ! "$_ans" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+                __tac_info "Aborted" "nothing pulled, nothing built" "$C_Warning"
+                return 1
+            fi
+        else
+            # No terminal to confirm on (a script, or an agent).  FAIL CLOSED:
+            # silently moving the source under a live lane is the exact failure
+            # this guard exists for.
+            __tac_info "Refusing" "no terminal to confirm the pull on - nothing pulled, nothing built. Re-run with --yes to pull, or --no-pull to build the current checkout." "$C_Error"
+            return 1
+        fi
+    fi
 
     # Pull latest upstream
     if [[ "$no_pull" != "true" ]]; then

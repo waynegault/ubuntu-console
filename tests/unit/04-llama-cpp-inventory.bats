@@ -557,4 +557,22 @@ _install_generic_release() {
 
     echo "$src" | grep -q -- '--no-pull' || { echo "FAIL: missing --no-pull flag"; return 1; }
     >&3 echo "  ✓ --no-pull flag supported"
+
+    # 2026-09-14: llm-build must state its plan and confirm before pulling.  A
+    # pull moves the source under a tree the live CUDA lane serves, and one such
+    # gap silently removed --mmap/--no-mmap/--mlock from the build.
+    echo "$src" | grep -q -- '--yes' || { echo "FAIL: missing --yes flag"; return 1; }
+    >&3 echo "  ✓ --yes flag supported (explicit consent for a pull)"
+
+    echo "$src" | grep -q 'llama.cpp build plan' \
+        || { echo "FAIL: llm-build does not print a pre-flight plan before pulling"; return 1; }
+    >&3 echo "  ✓ pre-flight plan is printed"
+
+    echo "$src" | grep -q 'Proceed with this pull and rebuild?' \
+        || { echo "FAIL: llm-build does not confirm before pulling"; return 1; }
+    >&3 echo "  ✓ confirmation prompt present"
+
+    echo "$src" | grep -q 'no terminal to confirm the pull on' \
+        || { echo "FAIL: llm-build does not fail closed when it cannot ask"; return 1; }
+    >&3 echo "  ✓ fails closed when it cannot ask"
 }

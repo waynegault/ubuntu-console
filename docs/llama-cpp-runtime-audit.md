@@ -412,6 +412,19 @@ validated commit is a legitimate steady state, not drift.
 the source to upstream's tip and rebuilds**, not just the target named. To stay pinned at a
 known-good commit, use `llm-build --no-pull`, and prefer it during any validation window.
 
+**GUARDED 2026-09-14 [measured].** `llm-build` now prints its plan before changing anything —
+source and current commit, `pull: <remote> -> <target> (N commits behind)`, the **flag/default
+churn** probe (`common/arg.cpp` + `common/common.h`), the rebuild path, and the **lane impact**
+(whether the live CUDA lane serves a binary inside the tree about to be rebuilt) — and then
+asks. It **fails closed**: with no terminal to confirm on (a script, an agent) it refuses and
+says how to proceed, so a pull cannot arrive through a command that looks like it is just
+building. `--yes` gives explicit consent; `--no-pull` skips the pull entirely.
+
+Verified live: `llm-build --quick` with no terminal printed the plan, refused, and left both
+`HEAD` and the binary's mtime untouched. The plan in that run reported `origin/master ->
+391fac164 (14 commits behind)` with `flags: none` — the reader gets the answer to "is this pull
+safe" *before* deciding.
+
 ---
 
 ## 8. Repoint of the CUDA lane — DONE 2026-09-14 **[measured]**
