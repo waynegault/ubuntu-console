@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 31
+# Module Version: 32
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1181,7 +1181,11 @@ done
 # --- mmap fallback ---
 # If --mmap (default) failed at all ctx for all combos, retry with --no-mmap.
 # Some architectures (phi3, gemma3n) need --no-mmap for stable VRAM allocation.
-if [[ $ANY_OK == false ]]; then
+# Extracted from the top-level flow with its body unchanged: a self-contained
+# pass that re-runs the probe with mmap off and shares the same globals.  `b`/`u`
+# stay global exactly as before, so the move is behaviour-preserving (a later
+# step can unify this with probe_upward, whose loop it duplicates).
+probe_no_mmap() {
     echo ""
     echo "  --mmap failed at all ctx — retrying with --no-mmap"
     echo ""
@@ -1227,6 +1231,10 @@ if [[ $ANY_OK == false ]]; then
             break
         fi
     done
+}
+
+if [[ $ANY_OK == false ]]; then
+    probe_no_mmap
 fi
 
 # --- Beam search over batch/ubatch at the winning ctx ---
