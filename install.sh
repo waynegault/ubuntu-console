@@ -31,6 +31,14 @@ link() {
     echo "  $dest -> $src"
 }
 
+launcher() {
+    local src="$REPO/$1" dest="$2"
+    mkdir -p "$(dirname "$dest")"
+    printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$src" > "$dest"
+    chmod 755 "$dest"
+    echo "  $dest -> launcher for $src"
+}
+
 echo "Installing Tactical Console from $REPO ..."
 echo ""
 
@@ -164,7 +172,12 @@ echo "  ~/.bashrc - set read-only (mode 444)"
 for f in "$REPO"/bin/*
 do
     [[ -f "$f" ]] || continue
-    link "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")"
+    if [[ "$(basename "$f")" == "llama-gpu-clear.sh" ]]
+    then
+        launcher "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")"
+    else
+        link "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")"
+    fi
 done
 
 # Additional utility scripts that are expected to be directly executable.

@@ -24,10 +24,10 @@
 #
 # Only files that CARRY the marker are checked, so a bare VERSION="x.y" helper
 # (whose own contract is "increment on significant changes") is skipped.  The
-# three bin/*.sh scripts that matter operationally — llama-watchdog,
-# bench-timeout-runner, tac_hostmetrics — carry the marker deliberately, so they
-# ARE gated.  A brand-new file has no previous version to compare against and is
-# skipped.
+# four bin/*.sh scripts that matter operationally — llama-watchdog,
+# llama-gpu-clear, bench-timeout-runner, tac_hostmetrics — carry the marker
+# deliberately, so they ARE gated. A brand-new file has no previous version to
+# compare against and is skipped.
 #
 # Usage:
 #   tools/check-module-versions.sh                  # staged vs HEAD (pre-commit)
@@ -41,7 +41,7 @@
 # Exit 2 = bad invocation / not a git repository.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
 #   (The marker is independent of the `--version` string below, which prints a
 #    separate tool version — same two-notion split as the bin/*.sh helpers.)
 set -uo pipefail
