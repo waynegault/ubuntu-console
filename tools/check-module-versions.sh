@@ -4,15 +4,28 @@
 # check-module-versions.sh — Fail when a changed module's Module Version did not
 # move.
 # ==============================================================================
-# TACTICAL_PROFILE_VERSION is the SUM of every module's `# Module Version: N`
-# (see scripts/01-constants.sh), so a forgotten bump mislabels every version
-# derived from it — and nothing else notices: the module still loads and its
-# tests still pass.
+# The marker does two jobs.
 #
-# Only files that CARRY the marker are checked, so the VERSION="x.y" helpers
-# (bin/*.sh, whose contract is "increment on significant changes") are
-# unaffected.  A brand-new file has no previous version to compare against and
-# is skipped.
+# (1) It IS the change-detection contract: bump it whenever the file changes,
+#     and this guard enforces exactly that.
+# (2) It is the right-hand component of TACTICAL_PROFILE_VERSION.
+#     scripts/05-ui-engine.sh:509-513 reads the marker of the file being sourced
+#     and exports "${loader_version}.${module_version}".
+#     CORRECTED 2026-09-14: that is a PER-FILE value, NOT a sum over every
+#     module.  The line that stood here — and the "auto-computes from the sum of
+#     all module versions" boilerplate carried by ~13 modules, starting with
+#     01-constants.sh:5 — both said "sum"; nothing in the repo sums markers
+#     (05-ui-engine.sh:509, :528 are the only readers, and they read
+#     BASH_SOURCE's own marker).  A forgotten bump therefore mislabels the
+#     profile version, and nothing else notices: the module still loads and its
+#     tests still pass.
+#
+# Only files that CARRY the marker are checked, so a bare VERSION="x.y" helper
+# (whose own contract is "increment on significant changes") is skipped.  The
+# three bin/*.sh scripts that matter operationally — llama-watchdog,
+# bench-timeout-runner, tac_hostmetrics — carry the marker deliberately, so they
+# ARE gated.  A brand-new file has no previous version to compare against and is
+# skipped.
 #
 # Usage:
 #   tools/check-module-versions.sh                  # staged vs HEAD (pre-commit)
@@ -26,7 +39,9 @@
 # Exit 2 = bad invocation / not a git repository.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   (The marker is independent of the `--version` string below, which prints a
+#    separate tool version — same two-notion split as the bin/*.sh helpers.)
 set -uo pipefail
 
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then

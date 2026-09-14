@@ -54,6 +54,16 @@ teardown() {
     run "$GUARD" --staged --repo "$TMPREPO"
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"no changed module versions to check"* ]]
+
+    # ...but the "ignored" class must not quietly grow to cover the scripts that
+    # matter.  Every bin/*.sh is deliberately INSIDE the guard (2026-09-14: the
+    # watchdog, bench-timeout-runner and tac_hostmetrics were all outside it, so
+    # an edit to any of them passed review unnoticed).
+    local f
+    for f in "$REPO_ROOT"/bin/*.sh; do
+        grep -q '^# Module Version:' "$f" \
+            || { echo "FAIL: ${f##*/} carries no Module Version marker"; return 1; }
+    done
 }
 
 @test "module-versions: a brand-new module file is skipped (no previous version)" {

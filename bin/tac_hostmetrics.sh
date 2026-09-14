@@ -10,6 +10,11 @@
 # Typical runtime: ~5s from WSL
 # AI: Output format is a contract — callers split on '|'. Do not change it.
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 1
+#   Bump counter for tools/check-module-versions.sh, which parses exactly this
+#   line — any edit here must move it, or the pre-commit guard rejects the
+#   commit.  Deliberately separate from VERSION= below (significant edits only).
+#   Added 2026-09-14: this script was outside the version guard until then.
 VERSION="1.2"
 set -euo pipefail
 

@@ -45,6 +45,11 @@
 # (lock file cleanup, model stop) from being bypassed.
 
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 1
+#   Bump counter for tools/check-module-versions.sh, which parses exactly this
+#   line — any edit here must move it, or the pre-commit guard rejects the
+#   commit.  Deliberately separate from VERSION= below (significant edits only).
+#   Added 2026-09-14: this script was outside the version guard until then.
 VERSION="1.1"  # Extracted from __bench_run_with_timeout (card #0967f11c).
 set -euo pipefail
 
