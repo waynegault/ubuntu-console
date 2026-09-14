@@ -1,8 +1,17 @@
 # shellcheck shell=bash
-# shellcheck disable=SC1090,SC2015,SC2016,SC2034,SC2154
+# File-level disables here are only for codes bash cannot fix in a sourced
+# module:
+#   SC1090  dynamic `source` path (shellcheck cannot follow it)
+#   SC2034  tokens/constants exported for other modules to consume
+#   SC2154  variables assigned in an earlier-sourced module (01-constants, …)
+# SC2015 was listed but fires nowhere (no `a && b || c` in this file) and has
+# been dropped.  SC2016 is NOT disabled at file level: it is scoped to the three
+# embedded-script sites below, so a genuinely mis-quoted expansion anywhere else
+# in this file still gets flagged.
+# shellcheck disable=SC1090,SC2034,SC2154
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -390,6 +399,9 @@ function oc-agent-use() {
 function ockeys() {
     printf '%s\n' "${C_Highlight}API Keys & Tokens (Windows Environment → WSL):${C_Reset}"
     local found=0
+    # SC2016: the `-Command` payload inside this loop is PowerShell, not bash —
+    # `$($_.Key)` must reach pwsh unexpanded, so the single quoting is correct.
+    # shellcheck disable=SC2016
     while IFS='=' read -r name val
     do
         [[ -z "$name" ]] && continue
@@ -491,6 +503,9 @@ function __bridge_windows_api_keys() {
     # 20s, not 5s: a cold pwsh.exe start plus the User-env enumeration has been
     # measured at 3-10s over WSL interop, and a 5s cap silently returned a
     # truncated variable set (partial cache) instead of failing cleanly.
+    # SC2016: PowerShell payload (see the ockeys loop above) — `$($_.Key)` must
+    # not be expanded by bash.
+    # shellcheck disable=SC2016
     raw=$(timeout 20 pwsh.exe -NoProfile -NonInteractive -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() |
         Where-Object { $_.Key -match "(?i)(TOKEN|API(_|-)?KEY|PASSWORD|_KEY$|_SECRET|_CLIENT_ID$|_API$)" } |
@@ -1122,6 +1137,10 @@ function oc-refresh-keys() {
     if (( _gw_restart_needed == 1 ))
     then
         local _restart_log="$TAC_CACHE_DIR/tac_gateway_restart.log"
+        # SC2016: delayed expansion — this multi-line body is a bash script
+        # handed to a later interpreter, so its `$rl`/`$1` must survive
+        # unevaluated at definition time.
+        # shellcheck disable=SC2016
         local _restart_body='
             _rl="$1"
             # Log every step; echo only the final outcome (the caller captures
