@@ -103,7 +103,7 @@ cmake -B build \
   -DCMAKE_CUDA_ARCHITECTURES=86 \
   -DGGML_CUDA=ON \
   -DGGML_CUDA_FA=ON \
-  -DGGML_CUDA_FA_ALL_QUANTS=ON \
+  -DGGML_CUDA_FA_QUANTS="q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16" \
   -DGGML_CUDA_GRAPHS=ON \
   -DGGML_CUDA_NCCL=ON \
   -DGGML_CUDA_FORCE_MMQ=OFF \
@@ -125,11 +125,11 @@ cmake -B build \
 | `CMAKE_CUDA_ARCHITECTURES` | `86` | Compile CUDA kernels for Ampere GA107 (RTX 3050 Ti) |
 | `GGML_CUDA` | `ON` | Enable NVIDIA CUDA GPU backend (the key flag) |
 | `GGML_CUDA_FA` | `ON` | Flash Attention v2 CUDA kernels — ~2× prompt processing speedup. Reduces memory bandwidth usage for the attention mechanism. |
-| `GGML_CUDA_FA_ALL_QUANTS` | `ON` | Apply flash attention to all quantisation types, not just high-bit ones |
+| `GGML_CUDA_FA_QUANTS` | `q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16` | FlashAttention K-V type combinations to compile (upstream's default list, pinned here so a future default change cannot silently alter our FA coverage). Replaces the deprecated `GGML_CUDA_FA_ALL_QUANTS=ON`, which warns on every configure (`ggml/cmake/common.cmake:59`) and compiles 49 pairs — our KV matrix needs `q8_0-q8_0` (every registry row) plus the autotune sweep's `q4_0-q4_0`. Quote the value: the `;` is a shell separator otherwise. |
 | `GGML_CUDA_GRAPHS` | `ON` | CUDA Graph capture — launches repeated inference patterns as a single graph kernel, reducing kernel launch overhead for batched/continuous batching |
 | `GGML_CUDA_NCCL` | `ON` | NCCL multi-GPU support (harmless when only one GPU is present) |
 | `GGML_CUDA_FORCE_MMQ` | `OFF` | Keep the default cuBLAS matmul path (MMQ is slower on Ampere) |
-| `GGML_CUDA_COMPRESSION_MODE` | `size` | Compress CUDA model weights in VRAM to save memory. Trade-off: slightly higher TPS cost, significantly more VRAM headroom for larger context. |
+| `GGML_CUDA_COMPRESSION_MODE` | `size` | Compresses the compiled CUDA **binary** (`nvcc -compress-mode`). It does **not** touch model weights and buys **no** VRAM headroom — see the note below. |
 | `GGML_NATIVE` | `ON` | Detect host CPU and enable all available instruction sets (AVX2, FMA, BMI2 on i9-12900HK). Without this flag, only a portable baseline is used. |
 | `GGML_OPENMP` | `ON` | OpenMP parallelisation for CPU fallback layers. Essential when VRAM is tight and some layers land on CPU. |
 | `GGML_CCACHE` | `ON` | Cache compiled object files. With only 12 vCPUs this is marginal for clean builds but **significantly** speeds up incremental rebuilds after `git pull`. The cache lives at `~/.cache/ccache`; `ccache -s` reports ~0.9 GiB in use against a 5 GiB cap, so the cap is not a constraint at this scale. |
@@ -240,8 +240,13 @@ The RTX 3050 Ti's 4 GB VRAM is the primary constraint. The build flags above
 are chosen to squeeze every token out of this limited budget:
 
 **`-DGGML_CUDA_COMPRESSION_MODE=size`**
-Compresses model weights in VRAM at a small TPS cost. On a 4 GB card this can
-be the difference between fitting a 3B model at 8K context vs 4K context.
+Compresses the compiled CUDA **binary** (`nvcc -compress-mode`, plumbed at
+`ggml/src/ggml-cuda/CMakeLists.txt:199`), not model weights. It therefore has no
+effect on VRAM residency and cannot change how much context fits — it trades
+artifact size against a little code-decompression work at load/first launch.
+Earlier revisions of this guide claimed it compressed weights "in VRAM ... the
+difference between fitting a 3B model at 8K context vs 4K context"; that was
+wrong, and it is corrected here rather than left standing.
 
 **`-DGGML_CUDA_FA=ON` (Flash Attention)**
 Flash Attention reduces the memory footprint of the KV cache's attention

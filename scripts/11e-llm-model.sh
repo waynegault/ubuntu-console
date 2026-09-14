@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -3135,7 +3135,7 @@ function llm-build() {
             -DCMAKE_CUDA_ARCHITECTURES=86 \
             -DGGML_CUDA=ON \
             -DGGML_CUDA_FA=ON \
-            -DGGML_CUDA_FA_ALL_QUANTS=ON \
+            -DGGML_CUDA_FA_QUANTS="q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16" \
             -DGGML_CUDA_GRAPHS=ON \
             -DGGML_CUDA_NCCL=ON \
             -DGGML_CUDA_COMPRESSION_MODE=size \

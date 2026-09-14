@@ -521,6 +521,21 @@ _install_generic_release() {
     echo "$src" | grep -q 'GGML_CUDA_FA=ON' || { echo "FAIL: missing GGML_CUDA_FA=ON"; return 1; }
     >&3 echo "  ✓ GGML_CUDA_FA=ON (Flash Attention)"
 
+    # 2026-09-14: FA_ALL_QUANTS is deprecated (ggml/cmake/common.cmake:59 warns
+    # on every configure) and refers to a flag that no longer exists; the
+    # replacement pins the K-V pair list instead.  Assert BOTH directions — the
+    # new flag present and the deprecated one gone — so the warning cannot
+    # creep back in with the next edit.
+    if echo "$src" | grep -q 'GGML_CUDA_FA_ALL_QUANTS'; then
+        echo "FAIL: deprecated GGML_CUDA_FA_ALL_QUANTS still in the recipe (warns on every configure)"
+        return 1
+    fi
+    >&3 echo "  ✓ deprecated GGML_CUDA_FA_ALL_QUANTS removed"
+
+    echo "$src" | grep -q 'GGML_CUDA_FA_QUANTS="q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16"' \
+        || { echo "FAIL: missing the pinned GGML_CUDA_FA_QUANTS K-V list (quote it: ';' is a shell separator)"; return 1; }
+    >&3 echo "  ✓ GGML_CUDA_FA_QUANTS pinned"
+
     echo "$src" | grep -q 'GGML_NATIVE=ON' || { echo "FAIL: missing GGML_NATIVE=ON"; return 1; }
     >&3 echo "  ✓ GGML_NATIVE=ON (CPU-specific optimisations for i9-12900HK)"
 
