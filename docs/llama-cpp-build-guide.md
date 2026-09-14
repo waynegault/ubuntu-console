@@ -27,11 +27,21 @@ release gives the best performance for this specific hardware:
 ## Hardware
 
 ```text
-CPU:  12th Gen Intel Core i9-12900HK (16 cores, Alder Lake)
-GPU:  NVIDIA GeForce RTX 3050 Ti Laptop GPU  (4 GB VRAM, Compute Capability 8.6)
-RAM:  45 GB
-Disk: SSD (WSL2 on NTFS via drvfs)
+Host (Windows): 12th Gen Intel Core i9-12900HK — 14 cores (6 P-cores + 8 E-cores), 20 logical processors, 63.7 GB RAM
+WSL2 guest:     12 logical processors, 19.5 GiB RAM   ← the build runs here
+GPU:            NVIDIA GeForce RTX 3050 Ti Laptop GPU (4 GB VRAM, Compute Capability 8.6)
+Disk:           build tree on the WSL2 ext4 VHD (/dev/sdd, 1 TB)
+                /mnt/m (models) is a bind mount of /srv/models on that same ext4 volume
+                Windows drives (/mnt/c, /mnt/d) are 9p — keep compiles off them
 ```
+
+> **Guest vs host — use the guest numbers.** The WSL2 guest is deliberately capped
+> by `C:\Users\<you>\.wslconfig` (`processors=12`, `memory=20GB`), so `nproc`
+> reports **12**, not the host's 20, and only ~20 GiB of the host's 63.7 GB is
+> visible. Every build-time decision — `-j`, and the memory available to parallel
+> CUDA translation units — must be sized against the *guest*, not the host CPU
+> name. This guide builds with `-j8`: `-j$(nproc)` (= 12) has hit
+> `cc1plus: out of memory` here (see Troubleshooting).
 
 > **Why SM 86?** The RTX 3050 Ti is an Ampere GA107 chip with compute capability
 > 8.6 (not 8.0 like A100 or 8.9 like Ada). Setting `CMAKE_CUDA_ARCHITECTURES=86`
@@ -120,7 +130,7 @@ cmake -B build \
 | `GGML_CUDA_COMPRESSION_MODE` | `size` | Compress CUDA model weights in VRAM to save memory. Trade-off: slightly higher TPS cost, significantly more VRAM headroom for larger context. |
 | `GGML_NATIVE` | `ON` | Detect host CPU and enable all available instruction sets (AVX2, FMA, BMI2 on i9-12900HK). Without this flag, only a portable baseline is used. |
 | `GGML_OPENMP` | `ON` | OpenMP parallelisation for CPU fallback layers. Essential when VRAM is tight and some layers land on CPU. |
-| `GGML_CCACHE` | `ON` | Cache compiled object files. On a 16-core machine this is marginal for clean builds but **significantly** speeds up incremental rebuilds after `git pull`. |
+| `GGML_CCACHE` | `ON` | Cache compiled object files. With only 12 vCPUs this is marginal for clean builds but **significantly** speeds up incremental rebuilds after `git pull`. The cache lives at `~/.cache/ccache`; check `ccache -s` and raise `CCACHE_MAXSIZE` if it is near the cap (it was ~963 MB at the last build), because a cold CUDA rebuild is the expensive case. |
 | `BUILD_SHARED_LIBS` | `ON` | Build GPU backends as shared libraries (`libggml-cuda.so`). Keeps `llama-server` small and allows updating the CUDA backend independently. The generic prebuilt release also uses this layout. |
 | `LLAMA_BUILD_SERVER` | `ON` | Build `llama-server` (the HTTP API binary used by the Tactical Console) |
 | `LLAMA_BUILD_EXAMPLES` | `ON` | Build `llama-cli`, `llama-bench`, and other utility tools |
@@ -134,10 +144,15 @@ cmake -B build \
 ### 3. Build
 
 ```bash
-cmake --build build --target llama-server -j$(nproc)
+cmake --build build --target llama-server -j8
 ```
 
-Build time on the i9-12900HK with 16 threads and ccache:
+`-j8`, not `-j$(nproc)` (= 12): parallel CUDA translation units have exhausted the
+guest's 20 GiB (see Troubleshooting).
+
+Approximate build times on this guest (`-j8`, warm ccache). These are rough
+figures carried over from earlier builds and have **not** been re-measured since
+the guest was capped at 12 vCPUs / 20 GiB — treat them as order-of-magnitude:
 
 | Scenario | Time |
 |---|---|
@@ -148,7 +163,7 @@ Build time on the i9-12900HK with 16 threads and ccache:
 To build all targets (for benchmarking and testing):
 
 ```bash
-cmake --build build -j$(nproc)
+cmake --build build -j8
 ```
 
 ### 4. Verify
@@ -199,7 +214,7 @@ cd ~/llama.cpp
 git pull --ff-only
 
 # 2. Rebuild (CMake re-configures automatically if CMakeLists.txt changed)
-cmake --build build --target llama-server -j$(nproc)
+cmake --build build --target llama-server -j8
 
 # 3. Verify
 ls -lh build/bin/llama-server
@@ -233,7 +248,7 @@ context.
 
 **`-DLLAMA_BUILD_SERVER=ON` only**
 Building only `llama-server` (not all examples) saves ~5 minutes of build time.
-The full `cmake --build build -j$(nproc)` builds all tools including
+The full `cmake --build build -j8` builds all tools including
 `llama-bench` (useful for regression testing) and `llama-cli` (useful for
 quick tests), but they are not needed for normal operation.
 
