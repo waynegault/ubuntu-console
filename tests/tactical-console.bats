@@ -2146,6 +2146,17 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" != *"missing sub-module"* ]]
     [[ "$output" != *"unbound variable"* ]]
+
+    # The CUDA kill helper must scope by EXECUTABLE, never by comm (corrected
+    # 2026-09-14).  comm is the INVOKED name: the CUDA lane reads
+    # "cuda-llama-serv" and the Xe fleet reads "xe-llama-server" /
+    # "xe-llama-embed" - all three contain "llama", so any comm match would
+    # evict the fleet this helper exists to leave alone.  Verified live: a CUDA
+    # bench server classifies KILL, an OpenCL lane server classifies SKIP.
+    local _src
+    _src=$(< "$REPO_ROOT/scripts/11d-llm-gpu.sh")
+    [[ "$_src" != *'_comm'* ]]
+    [[ "$_src" == *'build-opencl*/bin/llama-server'* ]]
 }
 
 @test "hooks: PROMPT_COMMAND is set" {

@@ -2,7 +2,7 @@
 # shellcheck disable=SC2154
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 14
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -265,7 +265,7 @@ function __gpu_clear_stale_processes() {
 # Prints nothing on stdout (bench harnesses parse it); warnings go to stderr.
 # ---------------------------------------------------------------------------
 function __llm_kill_cuda_llama_servers() {
-    local _unit _svc_pid _pid _comm _smi _skip _p _llm_wait _alive
+    local _unit _svc_pid _pid _exe _smi _skip _p _llm_wait _alive
     local -a _protected=() _cuda_pids=() _kill_pids=()
 
     # Protected: MainPIDs of the persistent llama systemd units.
@@ -293,9 +293,22 @@ function __llm_kill_cuda_llama_servers() {
     while read -r _pid
     do
         [[ "$_pid" =~ ^[0-9]+$ ]] || continue
-        _comm=$(cat "/proc/$_pid/comm" 2>/dev/null || echo "")
-        [[ "$_comm" == llama* ]] || continue
-        _cuda_pids+=("$_pid")
+        # Scope by the EXECUTABLE, never by comm (corrected 2026-09-14).
+        # /proc/PID/comm is the INVOKED name, truncated to 15 bytes: the CUDA
+        # lane (a symlink launcher) reads "cuda-llama-serv", while the Xe fleet
+        # reads "xe-llama-server" and "xe-llama-embed" — all three contain
+        # "llama", so ANY comm substring match evicts the Xe fleet this helper
+        # exists to leave alone.  The executable distinguishes the builds
+        # instead: the CUDA trees vs build-opencl.
+        _exe=$(readlink -f "/proc/$_pid/exe" 2>/dev/null || echo "")
+        case "$_exe" in
+            */llama.cpp/build-opencl*/bin/llama-server)
+                continue ;;   # the Xe / embed fleet — never touched
+            */llama.cpp/build*/bin/llama-server)
+                _cuda_pids+=("$_pid") ;;
+            *)
+                continue ;;
+        esac
     done < <("$_smi" --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null || true)
 
     if [[ ${#_cuda_pids[@]} -eq 0 ]]
