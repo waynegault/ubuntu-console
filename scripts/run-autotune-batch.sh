@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -49,11 +49,15 @@ HALT_REASON=""
 
 # --- WSL2 dxgkrnl cycle-budget knobs ---
 # The leak is proportional to the number of CUDA context create/destroy cycles;
-# a batch that runs too long in one WSL session hangs the VM. The counter file
-# is namespaced by boot ID (a WSL restart is the only leak reset, and it changes
-# the boot ID). Override via env to tune for a different GPU / WSL build.
+# a batch that runs too long in one WSL session hangs the VM. The ledger is
+# namespaced by boot ID — a WSL restart is the only leak reset, and it changes
+# the boot ID — and lives in /dev/shm, NOT /tmp: /tmp is cleaned aggressively on
+# this box, and a mid-boot clean would silently reset the budget while the leak
+# persists (2026-09-14). autotune-model.sh reads the same file and enforces the
+# same budget, so a batch and a directly-driven row share one ledger. Override
+# via env to tune for a different GPU / WSL build.
 _AUTOTUNE_BOOT_ID="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
-CUDA_CYCLE_FILE="${CUDA_CYCLE_FILE:-/tmp/autotune-cuda-cycles-${_AUTOTUNE_BOOT_ID:-unknown}}"
+CUDA_CYCLE_FILE="${CUDA_CYCLE_FILE:-/dev/shm/autotune-cuda-cycles-${_AUTOTUNE_BOOT_ID:-unknown}}"
 CUDA_CYCLE_BUDGET="${CUDA_CYCLE_BUDGET:-60}"        # CUDA context create/destroy cycles before halt
 # The 60 default (was 250) reflects the measured degradation knee: ~26
 # launch/kill cycles at 109K ctx collapsed tps ~16 -> ~3.8 (2026-09-05). With

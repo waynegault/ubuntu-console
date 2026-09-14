@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 32
+# Module Version: 33
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -204,6 +204,8 @@ if (( BASELINE_GAP > BASELINE_GAP_MAX )); then
     echo "ERROR: VRAM baseline not cleared — ${FREE_VRAM} MiB free of ${VRAM_TOTAL} MiB (${BASELINE_GAP} MiB still held). Refusing to autotune against an untrustworthy baseline." >&2
     exit 1
 fi
+# Refuse before the first spawn if the dxgkrnl ledger is already exhausted.
+_cuda_guard_or_exit
 MODEL_BYTES=$(stat --format=%s "$MODEL_PATH" 2>/dev/null || echo 0)
 MODEL_MB=$(( MODEL_BYTES / 1048576 ))
 
@@ -409,19 +411,78 @@ PYEOF
 # Helpers
 #==============================================================================
 
-# CUDA context-cycle counter — WSL2 dxgkrnl leaks GPU VA on every CUDA
-# context create/destroy, so the batch (run-autotune-batch.sh) halts when the
-# count exceeds its budget. Namespaced by boot ID: a WSL restart is the only
-# leak reset and it changes the boot ID, starting a fresh counter.
+# --- WSL2 dxgkrnl leak accounting (CUDA context-cycle ledger) ---
+# dxgkrnl leaks GPU VA on every CUDA context create/destroy, and a fresh
+# llama-server per bench is one create/destroy: probe + beam + sweeps + Phase 4
+# are ~10-20 cycles per row, so a 10-row sweep is ~150-200 in one WSL session.
+# Leaking enough VA hangs the VM, and only `wsl --shutdown` clears it — so the
+# ledger is ENFORCED here, not merely counted (it used to be written and never
+# read, while the batch runner's own guard went unapplied whenever a row was
+# driven directly, as the 2026-09-13 sweep's ad-hoc driver did).
+#
+# /dev/shm, not /tmp: this is the leak's ledger, and /tmp is cleaned aggressively
+# on this box — a mid-boot clean would silently reset the budget while the leak
+# persists (observed 2026-09-14). Namespaced by boot ID because a WSL restart is
+# the only leak reset. Exported so rows, batches and children share one ledger.
 _AUTOTUNE_BOOT_ID="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
-_CUDA_CYCLE_FILE="${CUDA_CYCLE_FILE:-/tmp/autotune-cuda-cycles-${_AUTOTUNE_BOOT_ID:-unknown}}"
+_CUDA_CYCLE_FILE="${CUDA_CYCLE_FILE:-/dev/shm/autotune-cuda-cycles-${_AUTOTUNE_BOOT_ID:-unknown}}"
+_CUDA_STALL_FILE="${CUDA_STALL_FILE:-/dev/shm/autotune-degrade-stalls-${_AUTOTUNE_BOOT_ID:-unknown}}"
+export CUDA_CYCLE_FILE
+# Halting budget, same default and same counter file as run-autotune-batch.sh:
+# the batch runner derived 60 from the measured knee (~26 launch/kill cycles at
+# 109K ctx collapsed tps ~16 -> ~3.8, 2026-09-05); the probe is now capped near
+# 54K so each cycle leaks less, and 60 sits below the ~70-100 threshold there.
+CUDA_CYCLE_BUDGET="${CUDA_CYCLE_BUDGET:-60}"
+# Consecutive launches that stall (health never ready, process still alive, no
+# architecture error) — the dxgkrnl degradation signature — before halting.
+# 0 disables. Two matches the standing bench rule: 2 consecutive failures and
+# stop for diagnosis. A legitimately over-large start ctx has the same shape,
+# which is why it takes two rather than one.
+CUDA_DEGRADE_CONSECUTIVE_STALLS="${CUDA_DEGRADE_CONSECUTIVE_STALLS:-2}"
 
-_bump_cuda_cycle() {
+_cuda_cycles() {
     local n=0
     [[ -f "$_CUDA_CYCLE_FILE" ]] && n=$(cat "$_CUDA_CYCLE_FILE" 2>/dev/null || echo 0)
     [[ "$n" =~ ^[0-9]+$ ]] || n=0
-    n=$((n + 1))
-    echo "$n" > "$_CUDA_CYCLE_FILE"
+    printf '%s\n' "$n"
+}
+
+_cuda_stalls() {
+    local n=0
+    [[ -f "$_CUDA_STALL_FILE" ]] && n=$(cat "$_CUDA_STALL_FILE" 2>/dev/null || echo 0)
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    printf '%s\n' "$n"
+}
+
+_cuda_stall_bump() { printf '%s\n' "$(( $(_cuda_stalls) + 1 ))" > "$_CUDA_STALL_FILE" 2>/dev/null; }
+_cuda_stall_reset() { : > "$_CUDA_STALL_FILE" 2>/dev/null; }
+
+_bump_cuda_cycle() {
+    printf '%s\n' "$(( $(_cuda_cycles) + 1 ))" > "$_CUDA_CYCLE_FILE" 2>/dev/null
+    return 0
+}
+
+# _cuda_guard_or_exit — halt BEFORE the next spawn when the ledger says the
+# adapter is at risk. Called at top level (the pre-flight and ahead of every
+# phase), so a refusal stops the run instead of degrading into "one more failed
+# bench", and the overshoot is bounded by a single phase — well inside the
+# budget's margin. exit 3 is distinct so a driver can halt its whole sweep.
+_cuda_guard_or_exit() {
+    local c s
+    c=$(_cuda_cycles)
+    if (( c >= CUDA_CYCLE_BUDGET )); then
+        echo "ERROR: CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}) — WSL2 dxgkrnl leaks GPU VA on every llama-server spawn and an exhausted adapter hangs the VM." >&2
+        echo "       Restart WSL from Windows ('wsl --shutdown') to reset the ledger; nothing was certified this run." >&2
+        exit 3
+    fi
+    if (( CUDA_DEGRADE_CONSECUTIVE_STALLS > 0 )); then
+        s=$(_cuda_stalls)
+        if (( s >= CUDA_DEGRADE_CONSECUTIVE_STALLS )); then
+            echo "ERROR: ${s} consecutive launches stalled (health never ready while the process stayed alive) — the dxgkrnl degradation signature, at ${c}/${CUDA_CYCLE_BUDGET} cycles." >&2
+            echo "       Restart WSL from Windows ('wsl --shutdown'); nothing was certified this run." >&2
+            exit 3
+        fi
+    fi
     return 0
 }
 
@@ -571,6 +632,17 @@ _bench_spawn() {
         fi
     }
     if [[ $hw -ge 90 ]]; then
+        # Tell a *stall* apart from a real load failure: the process is still
+        # alive and the log has no architecture/GGUF error, so the server simply
+        # never became healthy — the dxgkrnl degradation signature.  (A
+        # legitimately over-large start ctx looks the same, hence the
+        # consecutive threshold rather than a single trip.)
+        local _sft; _sft=$(_startup_fail_type)
+        if kill -0 "$_BENCH_PID" 2>/dev/null && [[ "$_sft" != "load_fail" ]]; then
+            _cuda_stall_bump
+        else
+            _cuda_stall_reset
+        fi
         _bench_stop "$_BENCH_PID"
         echo "0|0|load_fail" > "/tmp/at-metrics-$$"; _BENCH_FAIL_TYPE="load_fail"; return 1
     fi
@@ -608,6 +680,7 @@ _bench_spawn() {
         -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Warmup\"}],\"max_tokens\":${warmup_tokens},\"temperature\":0}" \
         > /dev/null 2>&1 || true
 
+    _cuda_stall_reset   # a healthy launch breaks the consecutive-stall chain
     return 0
 }
 
@@ -1237,6 +1310,8 @@ if [[ $ANY_OK == false ]]; then
     probe_no_mmap
 fi
 
+_cuda_guard_or_exit
+
 # --- Beam search over batch/ubatch at the winning ctx ---
 # Replaces the fixed 128/256/512 ubatch pass. Evaluates a small anchor set,
 # then expands neighbors of the top performers (beam search). All evals are
@@ -1376,6 +1451,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $BEST_CTX -gt 0 ]]; then
     fi
 fi
 
+_cuda_guard_or_exit
+
 # --- n_gpu_layers / KV-quant sweep (the "almost fits" band) ---
 # The registry's __calc_gpu_layers is 999-or-0: models slightly too big for
 # full offload fall to CPU-only. In the band (model is a meaningful fraction
@@ -1448,6 +1525,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; 
         done
     fi
 fi
+
+_cuda_guard_or_exit
 
 # --- Phase 4: filled-cache TPS floor recovery ---
 # The probe maximises ctx, which on a 4 GB card can leave a model swapping at
@@ -1570,6 +1649,8 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     fi
 fi
 
+_cuda_guard_or_exit
+
 # Profile 2 (interactive) certification: one filled bench at the max-TPS
 # config so the persisted numbers are honest sustained throughput.
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
@@ -1612,10 +1693,20 @@ SPEC_N_MAX_LIST=${LLM_AUTOTUNE_SPEC_N_MAX_LIST:-"4 8 16 32"}
 if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     IFS=':' read -r _sb_b _sb_u <<< "$BEST_COMBO"
     echo ""
+    _cuda_guard_or_exit
     echo "  spec-decode block-size sweep (ngram, VRAM-free)  [${SPEC_N_MAX_LIST}]"
     echo "  -------------------------------------"
     _sb_best_tps="0"
-    for _sb_block in $SPEC_N_MAX_LIST
+    # AUTOTUNE_SPEC_SWEEP=0 skips the sweep: it is FOUR launches per row and its
+    # result feeds only the recorded spec block.  Default is ON — for a slow
+    # model spec-decode is exactly the lever that raises tps, so this is an
+    # opt-out for a run that must conserve CUDA context cycles, not a saving.
+    _sb_list="$SPEC_N_MAX_LIST"
+    if [[ "${AUTOTUNE_SPEC_SWEEP:-1}" == "0" ]]; then
+        _sb_list=""
+        echo "  (AUTOTUNE_SPEC_SWEEP=0 — skipping the sweep to conserve CUDA cycles)"
+    fi
+    for _sb_block in $_sb_list
     do
         if [[ ! "$_sb_block" =~ ^[0-9]+$ ]] || (( _sb_block <= 0 )); then
             continue

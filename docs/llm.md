@@ -200,9 +200,38 @@ displayed in a box-drawn summary table.
 | `LLM_AUTOTUNE_BENCH_TIMEOUT` | `300` | Per-bench server timeout (seconds) |
 | `LLM_AUTOTUNE_SPEC_N_MAX_LIST` | `4 8 16 32` | Speculative-decoding draft lengths to try |
 | `LLM_AUTOTUNE_BASELINE_GAP_MAX` | `800` | Max MiB of held VRAM tolerated before refusing to run |
+| `CUDA_CYCLE_BUDGET` | `60` | CUDA context create/destroy cycles allowed in one WSL boot before the run halts (exit 3). See the WSL2 leak note below |
+| `CUDA_DEGRADE_CONSECUTIVE_STALLS` | `2` | Consecutive launches that stay alive but never report healthy before halting as the dxgkrnl degradation signature (`0` disables) |
+| `CUDA_CYCLE_FILE` | `/dev/shm/autotune-cuda-cycles-<boot-id>` | Cycle-ledger path; namespaced by boot ID so a WSL restart starts a fresh counter |
+| `CUDA_STALL_FILE` | `/dev/shm/autotune-degrade-stalls-<boot-id>` | Consecutive-stall counter path |
+| `AUTOTUNE_SPEC_SWEEP` | `1` | `0` skips the spec-decode block-size sweep, which costs four launches per row and is the single largest cycle consumer |
 | `LLM_AUTOTUNE_LOCK_FILE` | `/tmp/llm-autotune.lock` | Run serialization lock path |
 | `LLAMA_WATCHDOG_NV_SUSPEND_FILE` | `/dev/shm/llama-watchdog-nv.suspend` | While this file exists the watchdog keeps the **CUDA** lane (`llama-server-nvidia.service`) down and stops it if up; the Xe lane and the watchdog's own health checks are untouched. The lane returns automatically when the file is removed |
 | `LLM_ALLOW_AUTOTUNE_DISCOURAGED` | `0` | Allow bench to auto-run autotune for discouraged quants |
+
+### WSL2 CUDA Cycle Budget (dxgkrnl leak)
+
+Under WSL2 each `llama-server` spawn creates and destroys a CUDA context, and the
+NVIDIA paravirtualization layer leaks the GPU virtual-address reservation rather
+than returning it. Autotune is the worst offender because every ctx probe, beam
+combination, sweep entry, and certification is a separate spawn. As the leaked VA
+accumulates, `dxgkio_reserve_gpu_va` starts failing (`-75`), measured TPS
+collapses, and the VM eventually hangs hard enough to drop the VS Code remote
+connection and kill the run mid-model. Only `wsl --shutdown` from Windows resets
+it.
+
+Both `autotune-model.sh` and `run-autotune-batch.sh` therefore share one
+boot-scoped ledger in `/dev/shm` and halt (exit 3) with a resume hint when:
+
+- the cycle count reaches `CUDA_CYCLE_BUDGET`, or
+- `CUDA_DEGRADE_CONSECUTIVE_STALLS` launches in a row come up alive but never
+  report healthy — the signature of an already-degraded adapter.
+
+The ledger lives in `/dev/shm`, not `/tmp`: `/tmp` is cleaned aggressively on
+this box, and a mid-boot clean would reset the budget while the leak persists.
+Because the file is scoped by boot ID, a WSL restart is the only action that
+clears it. Set `AUTOTUNE_SPEC_SWEEP=0` (or raise the budget knowingly) to spend
+fewer cycles per row.
 
 ### Profile Persistence
 

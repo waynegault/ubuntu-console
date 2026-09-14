@@ -186,6 +186,7 @@ _selftest_run() {
         printf '%s\n' '1|Stub Model|stub.gguf|0.1G|Q4_K_M/q8_0|llama|0|4096|4|1024|256|1|256|native|auto|on|0|no|no|no'
     } > "$sandbox/home/.llm/models.conf"
     env -u VIRTUAL_ENV HOME="$sandbox/home" LLAMA_DRIVE_ROOT="$sandbox/drive" \
+        CUDA_CYCLE_FILE="$sandbox/cycles" CUDA_STALL_FILE="$sandbox/stalls" \
         LLM_AUTOTUNE_BASELINE_GAP_MAX=999999 AUTOTUNE_SELFTEST=1 "$@" \
         bash "$REPO_ROOT/scripts/autotune-model.sh" 1 --workload chat 2>&1
 }
@@ -218,4 +219,48 @@ _selftest_run() {
     run _selftest_run "$BATS_TEST_TMPDIR/unloadable" _SELFTEST_OOM_ABOVE=2048
     [[ "$status" -eq 1 ]]
     [[ "$output" == *"cannot be loaded"* || "$output" == *"unsupported"* ]]
+}
+
+# ── WSL2 dxgkrnl leak ledger (2026-09-14) ────────────────────────────────────
+# Every bench spawns a llama-server, which is one CUDA context create/destroy;
+# dxgkrnl leaks GPU VA per cycle until the VM hangs.  The ledger is a FILE, so
+# the guard is testable without a GPU — which is the point: the bug was that the
+# counter was written and never read.
+
+@test "autotune-dxg: an exhausted cycle ledger refuses before any spawn" {
+    local sb="$BATS_TEST_TMPDIR/exhausted"
+    mkdir -p "$sb"
+    printf '60\n' > "$sb/cycles"
+    : > "$sb/stalls"
+    run _selftest_run "$sb" CUDA_CYCLE_FILE="$sb/cycles" CUDA_STALL_FILE="$sb/stalls"
+    [[ "$status" -eq 3 ]]
+    [[ "$output" == *"CUDA context-cycle budget reached"* ]]
+    [[ "$output" == *"wsl --shutdown"* ]]
+}
+
+@test "autotune-dxg: consecutive launch stalls halt as the degradation signature" {
+    local sb="$BATS_TEST_TMPDIR/stalled"
+    mkdir -p "$sb"
+    printf '12\n' > "$sb/cycles"
+    printf '2\n' > "$sb/stalls"
+    run _selftest_run "$sb" CUDA_CYCLE_FILE="$sb/cycles" CUDA_STALL_FILE="$sb/stalls"
+    [[ "$status" -eq 3 ]]
+    [[ "$output" == *"consecutive launches stalled"* ]]
+}
+
+@test "autotune-dxg: a clean ledger still certifies (the guard is not a blanket halt)" {
+    local sb="$BATS_TEST_TMPDIR/clean"
+    mkdir -p "$sb"
+    printf '3\n' > "$sb/cycles"
+    : > "$sb/stalls"
+    run _selftest_run "$sb" CUDA_CYCLE_FILE="$sb/cycles" CUDA_STALL_FILE="$sb/stalls"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"winner:"* ]]
+}
+
+@test "autotune-dxg: AUTOTUNE_SPEC_SWEEP=0 skips the 4-launch sweep without losing the cert" {
+    run _selftest_run "$BATS_TEST_TMPDIR/nospec" AUTOTUNE_SPEC_SWEEP=0
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"skipping the sweep to conserve CUDA cycles"* ]]
+    [[ "$output" == *"winner:"* ]]
 }
