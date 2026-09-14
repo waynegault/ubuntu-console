@@ -108,6 +108,7 @@ cmake -B build \
   -DGGML_CUDA_NCCL=ON \
   -DGGML_CUDA_FORCE_MMQ=OFF \
   -DGGML_CUDA_COMPRESSION_MODE=size \
+  -DGGML_CUDA_NO_VMM=ON \
   -DGGML_NATIVE=ON \
   -DGGML_OPENMP=ON \
   -DGGML_CCACHE=ON \
@@ -130,6 +131,7 @@ cmake -B build \
 | `GGML_CUDA_NCCL` | `ON` | NCCL multi-GPU support (harmless when only one GPU is present) |
 | `GGML_CUDA_FORCE_MMQ` | `OFF` | Keep the default cuBLAS matmul path (MMQ is slower on Ampere) |
 | `GGML_CUDA_COMPRESSION_MODE` | `size` | Compresses the compiled CUDA **binary** (`nvcc -compress-mode`). It does **not** touch model weights and buys **no** VRAM headroom — see the note below. |
+| `GGML_CUDA_NO_VMM` | `ON` | Builds the CUDA backend without the virtual-memory-management pool, removing a 32 GiB per-process VA reservation by construction (runtime-verifiable as `NO_VMM = 1`). Present in the deployed `build/` — verified in `build/CMakeCache.txt`. Its benefit is **unproven, mechanism-justified, cheap**: it has not been shown to change the dxgkrnl counter or the failure rate. See `docs/llama-cpp-runtime-audit.md` §4. |
 | `GGML_NATIVE` | `ON` | Detect host CPU and enable all available instruction sets (AVX2, FMA, BMI2 on i9-12900HK). Without this flag, only a portable baseline is used. |
 | `GGML_OPENMP` | `ON` | OpenMP parallelisation for CPU fallback layers. Essential when VRAM is tight and some layers land on CPU. |
 | `GGML_CCACHE` | `ON` | Cache compiled object files. With only 12 vCPUs this is marginal for clean builds but **significantly** speeds up incremental rebuilds after `git pull`. The cache lives at `~/.cache/ccache`; `ccache -s` reports ~0.9 GiB in use against a 5 GiB cap, so the cap is not a constraint at this scale. |
@@ -142,6 +144,14 @@ cmake -B build \
 > HIP (AMD), Metal (Apple), SYCL (Intel), and OpenCL disabled because this
 > machine uses NVIDIA CUDA. They can be enabled by adding their `-DGGML_*=ON`
 > flags if needed, but they increase build time and binary size.
+> (The separate Xe lane is a **different** tree,
+> `~/llama.cpp/build-opencl`, built with `GGML_OPENCL=ON` — see the runtime
+> audit's appendix. `build/` is CUDA-only.)
+
+> **Provenance:** this recipe is what produced the currently deployed binary —
+> cross-checked field by field against `~/llama.cpp/build/CMakeCache.txt` on
+> 2026-09-14. Note that `build/` carries no `LLAMA-CPP-SOURCE-COMMIT.txt`; that
+> file exists only under `build-opencl/`.
 
 ### 3. Build
 
@@ -206,6 +216,17 @@ ln -sf ~/llama.cpp/build/bin/llama-server ~/.local/bin/llama-server-cuda
 This is the **custom-tuned** binary. The generic prebuilt release lives at
 `~/.local/bin/llama-server` → `~/.local/opt/llama.cpp/b<N>/llama-server`.
 
+> **Live state, 2026-09-14 — read this before trusting the `ln -sf` above.**
+> The symlink the **CUDA lane** actually execs is
+> `~/.local/bin/cuda-llama-server`, and it points at `build/bin/llama-server`
+> (build 10955 / `2f539596c`) since the §8 repoint. `~/.local/bin/llama-server-cuda`
+> is a *different* symlink and still points at `build-cuda133/bin/llama-server`
+> (build 10432 / `ab5ce4658`), the pre-repoint target — running the `ln -sf`
+> above would move it onto `build/` and quietly change which binary that name
+> means. Check with `ls -l ~/.local/bin/ | grep llama` and
+> `readlink -f /proc/$(systemctl --user show llama-server-nvidia.service -p MainPID --value)/exe`
+> before relying on either name. See `docs/llama-cpp-runtime-audit.md` §8.
+
 ---
 
 ## Updating
@@ -231,6 +252,16 @@ ln -sf ~/llama.cpp/build/bin/llama-server ~/.local/bin/llama-server-cuda
 > force-pushes to `master`. `git pull --ff-only` will refuse to pull if a
 > force-push requires a rebase, alerting you to check the upstream before
 > proceeding.
+
+> **Before you pull, read `docs/llama-cpp-runtime-audit.md` §7.** A pull is not
+> free: it moves the artifact out from under every validation result and can
+> silently break invocations (that is how the `--no-mmap` removal arrived).
+> §7 has the flag/default-churn probe (`git diff HEAD..origin/master -- common/arg.cpp common/common.h`),
+> the removed-flag re-scan, and the reason the rebuild must be a wipe rather
+> than an in-place reconfigure. Note also that `llm-build` (`11e-llm-model.sh`)
+> runs its own `git pull --ff-only` before configuring and now refuses to
+> proceed without confirmation — the manual steps above bypass that guard, so
+> prefer `llm-build --no-pull` inside a validation window.
 
 ---
 
@@ -289,7 +320,7 @@ it. See `docs/llama-cpp-runtime-audit.md` §2.2.
 | `CUDA error: out of memory` during inference | Model + KV cache exceeds 4 GB VRAM | Use a smaller quant (Q3_K_M instead of Q4_K_M), reduce `--ctx-size`, or reduce `--n-gpu-layers` |
 | `GGML_ASSERT` failure at startup | Corrupted or incompatible GGUF file | Re-download the model or check it with `llama.cpp/build/bin/llama-cli --model <file> --check-tensors` |
 | Server binds but `/health` never returns OK | Port conflict (watchdog on 8081) | The Tactical Console uses `AUTOTUNE_PORT` (18081) for autotune and `LLM_PORT` (8081) for the watchdog. The `model use` command manages port allocation automatically. |
-| `error: invalid argument: --no-mmap` at server start | Flag removed upstream (gone in build 10955; the previous binary accepted it with a DEPRECATED warning) | Use `--load-mode none`. Likewise `--mmap` → `--load-mode mmap`, `--mlock` → `--load-mode mlock`. See `docs/llama-cpp-runtime-audit.md` §1 |
+| `error: invalid argument: --no-mmap` at server start | Flag removed upstream (gone in build 10955; the previous binary accepted it with a DEPRECATED warning) | Use `--load-mode none`. Likewise `--mmap` → `--load-mode mmap`, `--mlock` → `--load-mode mlock`. **Two tokens**: `--load-mode=none` is rejected too (the parser never splits on `=`). See `docs/llama-cpp-runtime-audit.md` §1 |
 | Advertised context window ≠ served window (requests rejected mid-prompt with 400) | `--parallel N` **divides** the context by N unless `--kv-unified` is passed; `kv_unified` defaults to `false` | Pin `--parallel 1`, or set the window explicitly with `--kv-unified-per-slot <n>`. Assert `advertised contextWindow == n_ctx_slot` via `/props`. See `docs/llama-cpp-runtime-audit.md` §2.1 |
 | Xe lane serves but is orders of magnitude slower | The lane found no OpenCL device and fell back to CPU (check for `warning: no usable GPU found`) | Do not run an OpenCL server from a shell that exports `OCL_ICD_VENDORS`; verify with `--list-devices` or the cpu/wall ratio, not by `/health` alone |
 | `dmesg` shows 0 GPU faults but the journal shows many | The kernel ring buffer evicts entries | Count from `journalctl -k -b` |

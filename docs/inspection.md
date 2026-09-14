@@ -1724,11 +1724,11 @@ GPU layers set to 999 (all) for small models; documented if partial offload is i
 
 12.2.5
 
-🔍 --mlock used consciously
+🔍 --load-mode mlock used consciously
 
-grep -n '\-\-mlock' <file>
+grep -n 'load-mode' <file>
 
---mlock present to prevent swapping; documented trade-off with system memory pressure
+`--load-mode mlock` pins the model in RAM; document the trade-off with system memory pressure. Build 10955 removed `--mlock`/`--mmap`/`--no-mmap` — passing the old spelling is a fatal `invalid argument`, not a warning.
 
 12.2.6
 
@@ -1856,11 +1856,11 @@ config/quant-guide.conf consulted or referenced when selecting/recommending mode
 
 12.4.4
 
-🔍 --no-mmap available as fallback
+🔍 --load-mode none available as fallback
 
 Inspect model load error handling
 
-If model loading hangs or fails, --no-mmap documented as a recovery option
+If model loading hangs or fails, `--load-mode none` documented as a recovery option (the removed `--no-mmap` spelling is fatal on build 10955)
 
 12.4.5
 

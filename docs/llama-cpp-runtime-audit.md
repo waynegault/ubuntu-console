@@ -52,18 +52,28 @@ model. This is not a warning to be scrolled past.
 | `mmap+mlock` | both |
 | `dio` | use DirectIO if available |
 
-### Call sites that must be migrated
+**Pass `--load-mode` as TWO tokens — `--load-mode none`, never `--load-mode=none`.** The parser
+matches whole argv tokens against its option table and only normalises `_` → `-` for `--`
+arguments (`common/arg.cpp:813-824`); it never splits on `=`, so the joined form fails with
+`error: invalid argument: --load-mode=none`. This is why both launchers build an argv **array**
+rather than a string (`11e-llm-model.sh:862`, `autotune-model.sh:574`).
 
-| repo | file:line | passes | must become |
+### Call sites — all migrated 2026-09-14
+
+| repo | file:line | was | now |
 |---|---|---|---|
-| console | `scripts/11e-llm-model.sh:864` | `--no-mmap` | `--load-mode none` |
-| console | `scripts/autotune-model.sh:572` | `--no-mmap` | `--load-mode none` |
-| console | `scripts/autotune-model.sh:1763` | `--no-mmap` | `--load-mode none` |
-| investigator | `pipeline/cli/_app.py:506` | `--no-mmap` | `--load-mode none` |
-| investigator | `pipeline/cli/_app.py:508` | `--mmap` | `--load-mode mmap` (or omit; `auto` already means mmap) |
-| investigator | `pipeline/benchmark/server.py:330` | `--no-mmap` | `--load-mode none` |
-| investigator | `pipeline/benchmark/server.py:332` | `--mlock` | `--load-mode mlock` |
-| investigator | `pipeline/benchmark/_worker_server.py:48` | `--mmap` | `--load-mode mmap` (or omit) |
+| console | `scripts/11e-llm-model.sh:862` | `--no-mmap` | ✅ `--load-mode none` (native branch). `:864` is the *python* backend's `--use_mmap false` — deliberately untouched, see below and §5 |
+| console | `scripts/autotune-model.sh:574` | `--no-mmap` | ✅ `--load-mode none` |
+| console | `scripts/autotune-model.sh:1779` | `--no-mmap` | ✅ `--load-mode none` (was `:1763` before the pass was extracted into `probe_no_mmap()`) |
+| investigator | `pipeline/cli/_app.py:506` | `--no-mmap` | ✅ `--load-mode none` |
+| investigator | `pipeline/cli/_app.py:508` | `--mmap` | ✅ `--load-mode mmap` (or omit; `auto` already means mmap) |
+| investigator | `pipeline/benchmark/server.py:330` | `--no-mmap` | ✅ `--load-mode none` |
+| investigator | `pipeline/benchmark/server.py:332` | `--mlock` | ✅ `--load-mode mlock` |
+| investigator | `pipeline/benchmark/_worker_server.py:48` | `--mmap` | ✅ `--load-mode mmap` (or omit) |
+
+Console: `421435909` (autotune) and `43074055` (11e). Investigator: `4abb46497`. Every row
+above was re-grepped on 2026-09-14 — no site in either repo passes a removed flag, and the
+lines still match. Keep this table as the re-scan baseline for §7 step 2.
 
 `--use_mmap false` at `11e-llm-model.sh:864` is deliberately **not** in this table: it belongs
 to the *python* backend and is correct there — see §5. It was flagged as a tenth call site on
@@ -75,11 +85,12 @@ were running* — the old binary printed the deprecation on every launch that us
 warning was visible in server logs and unactioned. That is precisely the class of signal
 this project's "never silence a warning" rule exists for.
 
-**Severity:** latent, not yet firing. The live service units do not pass these flags, and
-the selection bench does not either — which is why everything currently works. The
-`model use` path (`11e-llm-model.sh:864`, on WSL the flag is appended unconditionally in
-`auto` mode) and any `mmap_mode == off` autotune row would fail on first use with the new
-binary. **Migrate before the new binary takes over any serving path.**
+**Severity:** latent, not yet firing when this was written. The live service units do not pass
+these flags, and the selection bench does not either — which is why everything currently works.
+The `model use` path (`11e-llm-model.sh:862` after migration, on WSL the flag is appended
+unconditionally in `auto` mode) and any `mmap_mode == off` autotune row would have failed on
+first use with the new binary. **Migrated the same day — see the table above — before the new
+binary took over a serving path (§8).**
 
 ---
 
@@ -111,7 +122,7 @@ could not fit a 4 GB card, so the sweep recording 16 in 34/35 rows is itself the
 falsification of its premise: those rows could only "serve" because each slot silently
 received `ctx/16`.
 
-Consequences today:
+Consequences it had before the fix (the RESOLVED block below removes every one):
 
 - **All five service units pin `--parallel 1`**, so the live lanes are correct. Verified:
   `:18081 /props` reports `n_ctx=65536, total_slots=1`.
@@ -262,8 +273,9 @@ same case.
 
 ## 4. The dxgkrnl counter is an odometer, not a leak meter
 
-`docs/llm.md` describes `dxgkio_reserve_gpu_va: -75` accumulating as GPU VA leaks, with the
-boot-scoped `CUDA_CYCLE_BUDGET` halting autotune when it reaches 60. Four measurements say
+`docs/llm.md` previously described `dxgkio_reserve_gpu_va: -75` accumulating as GPU VA leaks,
+with the boot-scoped `CUDA_CYCLE_BUDGET` halting autotune when it reaches 60. That section was
+corrected in the same pass — it now carries the measurement table below. Four measurements say
 the counter does not behave that way:
 
 | activity | delta in `dxgkio_reserve_gpu_va: -75` |
@@ -309,7 +321,8 @@ unreliable — the same binary on the same prompt spanned **45–67 tps** across
   and the runtime CPU list shows no AVX-512.
 - `--threads 6` — matches the 6 P-cores; the console caps every `nproc`-derived path at 6
   (`01-constants.sh:289`, `11d-llm-gpu.sh:814`). The *unit files* outside the repo are the
-  exception: the CUDA lane once ran `--threads 4` and the Xe lane `--threads 8`.
+  exception, and it is current, not historical: as of 2026-09-14 the CUDA lane runs
+  `--threads 4` and the Xe lane `--threads 8` (the 8081 unit runs `--threads 6`).
 - `--reasoning off` — current flag (`arg.cpp:3677`, `[on|off|auto]`, default `auto`).
 - `--cache-type-k/v q8_0` — current and appropriate.
 - Removed spec-decode flags are already documented and not used.
@@ -463,17 +476,25 @@ fallback at `:51`. It killed this session's shell during the restart. Match the 
 Live trees:
 
 ```
-~/llama.cpp/build/bin/llama-server   0.4.0-dev (build 10955, commit 2f539596c)   NO_VMM=ON, FA_QUANTS=list
-~/llama.cpp/build-cuda133/...        0.1.0-dev (build 10432, commit ab5ce4658)   VMM, FA_QUANTS=all  [CUDA lane]
+~/llama.cpp/build/bin/llama-server   0.4.0-dev (build 10955, commit 2f539596c)   NO_VMM=ON, FA_QUANTS=list  [CUDA lane since §8]
+~/llama.cpp/build-cuda133/...        0.1.0-dev (build 10432, commit ab5ce4658)   VMM, FA_QUANTS=all  [rollback only — no longer serving]
 ~/llama.cpp/build-opencl/...         cannot print --version; tarball b6b003d2    [Xe + embed lanes]
 ~/.local/opt/llama.cpp/b9371/...     0.4.0-dev (build 10216, commit 876a43211)   PATH install, not a lane
 ```
 
 Convenience symlinks, so nobody assumes a bare `llama-server` is a lane:
-`cuda-llama-server` → `build-cuda133`, `llama-server-cuda` → `build-cuda133`,
+`cuda-llama-server` → `build` (repointed in §8; this is the CUDA lane's pointer),
+`llama-server-cuda` → `build-cuda133` (the pre-repoint target, still live),
 `cuda-llama-phi4` → `build`, `cuda-llama-bench` → *(wrapper script)* → `build`,
 `xe-llama-server`/`xe-llama-embed` → `build-opencl`, `llama-server`/`llama-cli` →
 `~/.local/opt/llama.cpp/b9371`.
+
+Provenance note: `LLAMA-CPP-SOURCE-COMMIT.txt` exists in **`build-opencl/` only** (it records
+the tarball sha and the lane). `build/` has no such file — its exact configure line is
+recoverable from `build/CMakeCache.txt` (`GGML_CUDA=ON`, `GGML_CUDA_FA_QUANTS` = the four
+pinned pairs, `GGML_CUDA_FA_ALL_QUANTS=OFF`, `GGML_CUDA_NO_VMM=ON`, `GGML_NATIVE=ON`,
+`GGML_CCACHE=ON`, `BUILD_SHARED_LIBS=ON`, `GGML_OPENCL=OFF`, `CMAKE_BUILD_TYPE=Release`,
+`CMAKE_CUDA_ARCHITECTURES=86`).
 
 ### Removed 2026-09-14 (~5.7 GB of the ~8.5 GB that had accumulated)
 
@@ -490,8 +511,9 @@ are not lost:
 | `build-sycl` | 1.1G | Intel SYCL experiment (2026-08-28), referenced by nothing. |
 
 **The rollback path is now "rebuild", not "restore a directory".** `build/` is reproducible
-from the checkout using the exact configure line recorded in
-`~/llama.cpp/build/LLAMA-CPP-SOURCE-COMMIT.txt`; the ccache is warm, so a clean rebuild took
+from the checkout using the configure line recorded in the build guide, cross-checked against
+`~/llama.cpp/build/CMakeCache.txt` (there is no `LLAMA-CPP-SOURCE-COMMIT.txt` in `build/` —
+that file exists only under `build-opencl/`); the ccache is warm, so a clean rebuild took
 under ten minutes when measured. Note also that a build tree cannot simply be renamed into
 place — `RPATH` is baked at configure time (§6).
 

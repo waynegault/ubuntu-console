@@ -103,8 +103,8 @@ while c >= 4096:
         continue
 
 // Early abort: if every ctx size in this combo failed with FAIL_LOAD,
-// skip remaining combos and go straight to the --no-mmap fallback.
-// If --no-mmap also fails with FAIL_LOAD at every ctx, the model is
+// skip remaining combos and go straight to the --load-mode none fallback.
+// If --load-mode none also fails with FAIL_LOAD at every ctx, the model is
 // unsupported on this hardware and autotune exits with:
 //   "failed: unsupported model — model could not be loaded at any ctx"
 ```
@@ -273,11 +273,11 @@ Every run persists **two** profiles:
 --threads {nproc or registry threads}
 --n-gpu-layers {registry ngl, or swept candidate}
 --parallel 1
---fit off                       # projection bug in this build — explicit params only
+--fit off                       # --fit defaults to on; pin it or the window can shrink silently
 --flash-attn on
 --kv-offload
 --cache-type-k {q8_0 or swept} --cache-type-v {q8_0 or swept}
---no-mmap                       # only in the --mmap-failed fallback
+--load-mode none                # only in the load-failed fallback (build 10955 removed --no-mmap/--mmap/--mlock)
 ```
 
 ---
@@ -310,7 +310,7 @@ Start server in background. Poll `http://127.0.0.1:8081/health` every 1s up to 9
 |---|---|---|
 | FAIL-crash | Server PID died during health check | OOM on model load, bad params, or port conflict. Phase 1 halves ctx, retries. |
 | FAIL-timeout | Health check exceeded 90s | Model load stalled (unlikely on this mount, but possible for very large CPU-only models). Phase 1 halves ctx, retries. |
-| FAIL-load | Server PID died before health check returned *any* `ok` response | Model GGUF cannot be loaded on this hardware — unsupported architecture, corrupted file, or incompatible ops. Triggers **early abort**: if this occurs at every ctx size for a combo, remaining combos and the `--no-mmap` fallback are skipped. The script exits with `failed: unsupported model — model could not be loaded at any ctx`. |
+| FAIL-load | Server PID died before health check returned *any* `ok` response | Model GGUF cannot be loaded on this hardware — unsupported architecture, corrupted file, or incompatible ops. Triggers **early abort**: if this occurs at every ctx size for a combo, remaining combos and the `--load-mode none` fallback are skipped. The script exits with `failed: unsupported model — model could not be loaded at any ctx`. |
 | FAIL-0tokens | Server responded but produced 0 completion tokens | Bench curl timed out or empty response. Probably OOM during generation. Treated as failure. |
 | FAIL-port-busy | VRAM or port didn't clear after kill | Previous server left state behind. Retry after longer wait. |
 | below floor | Server worked but TPS < `LLM_MIN_TPS` | Model is swapping to system RAM. Phase 4 downshifts ctx (smaller KV cache → higher TPS) until the floor is met or min ctx is reached. If still below at min ctx, the best-effort config is saved and the model is reported as too slow. |

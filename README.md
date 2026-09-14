@@ -260,7 +260,7 @@ Located at `~/.llm/models.conf` (`$LLM_REGISTRY`) — 37-column pipe-delimited (
 | `-t` (threads) | dynamic | CPU-only: 80%, partial offload: 70%, full GPU: 50% of `nproc` |
 | `--batch-size` | 4096 (GPU) / 512 (CPU) | Larger batches improve prompt eval speed on GPU |
 | `--flash-attn on` | GPU only | Reduces VRAM bandwidth — critical for 4 GB GPUs |
-| `--no-mmap` | adaptive (`LLAMA_NO_MMAP_MODE`) | Improves stability under low VRAM / WSL / MoE workloads by reducing mmap paging stalls |
+| `--load-mode none` | adaptive (`LLAMA_NO_MMAP_MODE`) | Improves stability under low VRAM / WSL / MoE workloads by reducing mmap paging stalls. `--no-mmap` was **removed** upstream (build 10955 rejects it as a fatal `invalid argument`) — see `docs/llama-cpp-runtime-audit.md` §1 |
 | `--jinja` | always | Enables Jinja2 chat templates from GGUF metadata |
 | Bind address | `127.0.0.1` | Loopback only — no LAN exposure |
 

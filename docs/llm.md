@@ -63,7 +63,7 @@ per-model overrides (`auto|on|off`).
 | `--jinja` | always | Enables Jinja2 chat template processing from GGUF metadata (Qwen3, Phi-4, Gemma3). |
 | `--kv-offload` | always (default) | Offloads the KV cache to the GPU; `--no-kv-offload` when `LLAMA_OFFLOAD_KQV=false`. |
 | `--cache-type-k` / `--cache-type-v` | `q8_0` | KV-cache quantization to reduce VRAM pressure (per-model overrides via the registry row). |
-| `--no-mmap` | auto | Applied for MoE models, tight VRAM, WSL, or ≥3 GB models (see Memory Mapping below). |
+| `--load-mode none` | auto (`LLAMA_NO_MMAP_MODE`) | Applied for MoE models, tight VRAM, WSL, or ≥3 GB models. Build 10955 **removed** `--no-mmap`, `--mmap` and `--mlock` — passing any of them is now a fatal `error: invalid argument`. The launcher passes `--load-mode none` on the native backend and `--use_mmap false` on the python backend (see [llama-cpp-runtime-audit.md](llama-cpp-runtime-audit.md) §1). |
 | Bind address | `127.0.0.1` | Prevents LAN exposure — loopback only. |
 | Health poll | adaptive 45–180s | Shared readiness logic is used by both `model use` and `model bench`, with longer timeouts for CPU-only and larger models. |
 
@@ -170,7 +170,7 @@ displayed in a box-drawn summary table.
 
 - Row-level runtime defaults in `models.conf`
 - Context-aware profiles (`ctx` key)
-- Runtime knobs: `batch`, `ubatch`, `parallel`, `fit_target_mb`
+- Runtime knobs: `batch`, `ubatch`, `parallel`, `fit_target_mb` — note `parallel` is **no longer read for launch** (2026-09-14): the launcher pins `--parallel 1`, because N slots divide the served window by N while `kv_unified` defaults to false. The column is kept, but always records `1`. See [llama-cpp-runtime-audit.md](llama-cpp-runtime-audit.md) §2.1.
 - Stability score: median TPS with jitter penalty
 - Final winner verification burn (optional)
 
@@ -200,7 +200,7 @@ displayed in a box-drawn summary table.
 | `LLM_AUTOTUNE_BENCH_TIMEOUT` | `300` | Per-bench server timeout (seconds) |
 | `LLM_AUTOTUNE_SPEC_N_MAX_LIST` | `4 8 16 32` | Speculative-decoding draft lengths to try |
 | `LLM_AUTOTUNE_BASELINE_GAP_MAX` | `800` | Max MiB of held VRAM tolerated before refusing to run |
-| `CUDA_CYCLE_BUDGET` | `60` | CUDA context create/destroy cycles allowed in one WSL boot before the run halts (exit 3). See the WSL2 leak note below |
+| `CUDA_CYCLE_BUDGET` | `60` | CUDA context create/destroy cycles allowed in one WSL boot before the run halts (exit 3). See the WSL2 cycle-budget note below |
 | `CUDA_DEGRADE_CONSECUTIVE_STALLS` | `2` | Consecutive launches that stay alive but never report healthy before halting as the dxgkrnl degradation signature (`0` disables) |
 | `CUDA_CYCLE_FILE` | `/dev/shm/autotune-cuda-cycles-<boot-id>` | Cycle-ledger path; namespaced by boot ID so a WSL restart starts a fresh counter |
 | `CUDA_STALL_FILE` | `/dev/shm/autotune-degrade-stalls-<boot-id>` | Consecutive-stall counter path |
@@ -258,7 +258,8 @@ boot-scoped ledger in `/dev/shm` and halt (exit 3) with a resume hint when:
   report healthy — the signature of an already-degraded adapter.
 
 The ledger lives in `/dev/shm`, not `/tmp`: `/tmp` is cleaned aggressively on
-this box, and a mid-boot clean would reset the budget while the leak persists.
+this box, and a mid-boot clean would reset the budget while the condition it
+guards against persists.
 Because the file is scoped by boot ID, a WSL restart is the only action that
 clears it. Set `AUTOTUNE_SPEC_SWEEP=0` (or raise the budget knowingly) to spend
 fewer cycles per row.
