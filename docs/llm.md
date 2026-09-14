@@ -209,16 +209,46 @@ displayed in a box-drawn summary table.
 | `LLAMA_WATCHDOG_NV_SUSPEND_FILE` | `/dev/shm/llama-watchdog-nv.suspend` | While this file exists the watchdog keeps the **CUDA** lane (`llama-server-nvidia.service`) down and stops it if up; the Xe lane and the watchdog's own health checks are untouched. The lane returns automatically when the file is removed |
 | `LLM_ALLOW_AUTOTUNE_DISCOURAGED` | `0` | Allow bench to auto-run autotune for discouraged quants |
 
-### WSL2 CUDA Cycle Budget (dxgkrnl leak)
+### WSL2 CUDA Cycle Budget (dxgkrnl degradation)
 
-Under WSL2 each `llama-server` spawn creates and destroys a CUDA context, and the
-NVIDIA paravirtualization layer leaks the GPU virtual-address reservation rather
-than returning it. Autotune is the worst offender because every ctx probe, beam
-combination, sweep entry, and certification is a separate spawn. As the leaked VA
-accumulates, `dxgkio_reserve_gpu_va` starts failing (`-75`), measured TPS
-collapses, and the VM eventually hangs hard enough to drop the VS Code remote
-connection and kill the run mid-model. Only `wsl --shutdown` from Windows resets
-it.
+> **Corrected 2026-09-14.** This section previously asserted that the quantity
+> leaking is the GPU virtual-address reservation and that the counter rises with
+> spawn count. Measurement contradicts the second claim and does not support the
+> first. Full evidence: [llama-cpp-runtime-audit.md](llama-cpp-runtime-audit.md) §4.
+
+Under WSL2 the dxgkrnl paravirtualization layer degrades under sustained GPU work.
+The symptom that matters is a **collapse in measured TPS** — the same model
+dropping roughly 4x (observed as 15 → 3.66 tps on 2026-09-05) — followed by a
+silent `llama-server` death mid-run. A VM hang severe enough to drop the VS Code
+remote connection has also been seen. Only `wsl --shutdown` from Windows resets
+the adapter state.
+
+The `dxgkio_reserve_gpu_va: -75` count is used as a cheap canary, but **it is an
+odometer of inference volume — not a spawn counter, and not a leak meter.**
+Measured on this box:
+
+| activity | delta in the counter |
+|---|---|
+| 24 clean `llama-server` spawn/kill cycles, 8-token completions | 0 |
+| 2 sessions doing 512-token generations | +28 |
+| 5x SIGKILLed `nvidia-smi` | 0 |
+| 1 bench run of 3 assess cases (+ lane restarts) | +14 |
+
+A high since-boot count is therefore expected after heavy work and is not by
+itself evidence of degradation. `CUDA_CYCLE_BUDGET` (60) and
+`CUDA_DEGRADE_CONSECUTIVE_STALLS` (2) remain useful as backstops, but the count
+threshold has no measured baseline behind it and the probe currently reports
+`degraded` on a healthy box. **Judge degradation by TPS collapse and silent server
+death, not by the count.**
+
+Always count from `journalctl -k -b`, never `dmesg` — the ring buffer evicts:
+measured minutes apart here, `dmesg` said 2 while the journal said 30.
+
+Note also that "the leak" itself remains unmeasured. Disabling the CUDA VMM pool
+(`-DGGML_CUDA_NO_VMM=ON`) removes a 32 GiB per-process VA reservation by
+construction and is runtime-verifiable as `NO_VMM = 1`, but no test has yet shown
+it changes the counter or the failure rate. Its status is **unproven,
+mechanism-justified, cheap** — do not record it as either a fix or a myth.
 
 Both `autotune-model.sh` and `run-autotune-batch.sh` therefore share one
 boot-scoped ledger in `/dev/shm` and halt (exit 3) with a resume hint when:

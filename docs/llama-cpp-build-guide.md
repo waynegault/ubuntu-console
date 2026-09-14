@@ -267,10 +267,14 @@ model at Q4_K_M (~2 GB GGUF), all layers fit on GPU. For larger models,
 partial offload keeps context size high at the cost of some CPU fallback
 layers — the function finds this balance automatically.
 
-**`--fit off` in autotune**
-llama.cpp build b8210 has a projection bug when `--fit on` is combined with
-explicit `--ctx-size`, `--batch-size`, and `--ubatch-size` flags. The autotune
-script always passes `--fit off` to avoid OOM projection errors.
+**`--fit off` — required, and the reason has changed**
+`--fit` now defaults to **`on`** (`common/common.h:476 bool fit_params = true`), so a
+launch that omits it lets llama.cpp *adjust unset arguments to fit device memory* and
+silently shrink the context window — the floor is `common/common.h:478
+fit_params_min_ctx = 4096`. Any serving path must pass `--fit off` explicitly, or accept
+that the advertised window and the served window can diverge. The historical note here
+cited a projection bug in build b8210; the flag's **default** is the durable reason to pin
+it. See `docs/llama-cpp-runtime-audit.md` §2.2.
 
 ---
 
@@ -285,6 +289,10 @@ script always passes `--fit off` to avoid OOM projection errors.
 | `CUDA error: out of memory` during inference | Model + KV cache exceeds 4 GB VRAM | Use a smaller quant (Q3_K_M instead of Q4_K_M), reduce `--ctx-size`, or reduce `--n-gpu-layers` |
 | `GGML_ASSERT` failure at startup | Corrupted or incompatible GGUF file | Re-download the model or check it with `llama.cpp/build/bin/llama-cli --model <file> --check-tensors` |
 | Server binds but `/health` never returns OK | Port conflict (watchdog on 8081) | The Tactical Console uses `AUTOTUNE_PORT` (18081) for autotune and `LLM_PORT` (8081) for the watchdog. The `model use` command manages port allocation automatically. |
+| `error: invalid argument: --no-mmap` at server start | Flag removed upstream (gone in build 10955; the previous binary accepted it with a DEPRECATED warning) | Use `--load-mode none`. Likewise `--mmap` → `--load-mode mmap`, `--mlock` → `--load-mode mlock`. See `docs/llama-cpp-runtime-audit.md` §1 |
+| Advertised context window ≠ served window (requests rejected mid-prompt with 400) | `--parallel N` **divides** the context by N unless `--kv-unified` is passed; `kv_unified` defaults to `false` | Pin `--parallel 1`, or set the window explicitly with `--kv-unified-per-slot <n>`. Assert `advertised contextWindow == n_ctx_slot` via `/props`. See `docs/llama-cpp-runtime-audit.md` §2.1 |
+| Xe lane serves but is orders of magnitude slower | The lane found no OpenCL device and fell back to CPU (check for `warning: no usable GPU found`) | Do not run an OpenCL server from a shell that exports `OCL_ICD_VENDORS`; verify with `--list-devices` or the cpu/wall ratio, not by `/health` alone |
+| `dmesg` shows 0 GPU faults but the journal shows many | The kernel ring buffer evicts entries | Count from `journalctl -k -b` |
 | Performance regression after update | New commit changed default behaviour | Check `git log --oneline HEAD..HEAD@{1}` to see what changed. Common culprits: flash-attn defaults, batch size heuristics, GPU layer count algorithms. |
 | Generic symlink broken after update | The `~/.local/bin/llama-server` symlink points to a stale release dir | Re-run `bats tests/unit/04-llama-cpp-inventory.bats --filter "update generic"` (with network) to auto-download the latest release, or manually: `ln -sf ~/.local/opt/llama.cpp/b<N>/llama-server ~/.local/bin/llama-server` |
 
