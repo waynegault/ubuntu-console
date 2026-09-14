@@ -133,6 +133,26 @@ card's reality), or keep N and set the window explicitly with
 `--kv-unified-per-slot <n>` (`common/arg.cpp:1647`, "max context per parallel slot") so it
 is **set**, not derived.
 
+**RESOLVED 2026-09-14 — option (a): the launcher pins `--parallel 1`.** [measured]
+
+- `11e-llm-model.sh` no longer reads the registry parallel column for launch and sets
+  `parallel_slots=1`. `LLAMA_PARALLEL_SLOTS>1` is now **refused loudly** rather than honoured
+  (silently dividing the window is what we are removing); real concurrency must be set
+  explicitly with `--kv-unified-per-slot`.
+- The vacuous AUTOTUNE-004 guard is gone, replaced by the runtime assertion above: after a
+  launch the launcher curls `/props` and warns when
+  `default_generation_settings.n_ctx != ` the advertised ctx.
+- The envelope sweep in `autotune-model.sh` (2/4/8/16 slots at the winning ctx) is retired;
+  the column records `1`. Retiring it also removes **four** llama-server launches per row
+  from the WSL2 dxgkrnl context-cycle budget.
+- All 35 registry rows migrated: column 12 is now `1` for every row (34 held 16). Verified
+  that every *other* field is byte-identical; backup at
+  `~/.llm/models.conf.bak-20260914-parallel1`.
+
+Rejected alternative: keeping N and advertising `ctx/N`. It would require re-certifying all
+34 rows — their recorded ctx was measured at one slot — and on a 4 GB card a second full
+window does not fit beside a 3B model anyway.
+
 ### 2.2 `--fit` defaults to ON, and can shrink the window to 4096 **[measured]**
 
 `common/common.h:476 bool fit_params = true` — so a launch that omits `--fit` lets
@@ -326,6 +346,58 @@ and renamed to `build` dies with `cannot open shared object file`. And always wi
 than reconfigure a tree that came from a different source or flag set — a reused tree
 silently absorbed 150 objects from a five-day-old build here, producing an artifact that
 looked fine and was half-swapped.
+
+## 7. Upgrading llama.cpp — checklist
+
+A pull is not free. It changes the artifact, invalidates every validation result pinned to the
+previous commit, and can silently break invocations. On 2026-09-14 the 13-commit gap between the
+deployed binary and upstream contained **zero** changes to `common/arg.cpp` or `common/common.h`
+— the flag hazard was absent — and nothing addressing any open finding. **Check that before
+pulling, not after.**
+
+### Before pulling — is there a reason?
+
+```bash
+cd ~/llama.cpp
+git fetch origin
+git log --oneline HEAD..origin/master | wc -l                      # how far behind
+git diff HEAD..origin/master -- common/arg.cpp common/common.h     # FLAG/DEFAULT CHURN - check first
+git log --oneline HEAD..origin/master -- \
+    ggml/src/ggml-cuda ggml/src/ggml-cpu ggml/src common src tools/server \
+    ggml/CMakeLists.txt CMakeLists.txt                             # what would actually rebuild
+git log --oneline HEAD..origin/master | grep -iE \
+    "vmm|wsl|dxgk|repet|dry|parallel|mmap|load-mode|fit"            # anything relevant to us
+```
+
+If nothing in the gap addresses a problem we actually have, **do not pull.** Staying pinned at a
+validated commit is a legitimate steady state, not drift.
+
+### When pulling
+
+1. `git pull --ff-only`.
+2. **Re-run the removed-flag scan across both repos** (§1). A removed flag is fatal, and this is
+   the failure that has actually happened here. Do it *before* rebuilding so the migration lands
+   in the same change.
+3. **Rebuild properly**: wipe the tree, do not reconfigure in place, and configure it **as
+   `build`** (§6). A version bump changes the `.so` sonames, and a build-system change (e.g.
+   removing precompiled headers) invalidates broadly — expect a full rebuild (~40-60 min at
+   `-j6`), not the ~10 min a warm incremental one takes.
+4. **Verify the artifact, not the cache**: `--version`; the runtime feature line at `-lv 4`
+   (`ARCHS`, `NO_VMM`, `FA_QUANTS`, `USE_GRAPHS`); every object dated today.
+5. **Re-run the behaviour checks the upgrade invalidated**: the output-identity A/B against the
+   previous binary, and TPS **with repeats** — the run-to-run spread on this box is ~±15%, so a
+   single sample proves nothing.
+6. **Reconcile the version string.** The console reads `LLAMA_BUILD_VERSION` from
+   `git -C ~/llama.cpp rev-parse --short HEAD`, so after a pull it advertises the new commit while
+   the installed binary is still the old one — until you rebuild. Keep the two in step.
+
+### The trap: a build pulls for you
+
+`11e-llm-model.sh:3120` runs `git pull --ff-only` before configuring, so **any `llm-build` moves
+the source to upstream's tip and rebuilds**, not just the target named. To stay pinned at a
+known-good commit, use `llm-build --no-pull`, and prefer it during any validation window.
+
+---
 
 ## Appendix — provenance, and what was removed
 

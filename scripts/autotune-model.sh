@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 34
+# Module Version: 35
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1958,36 +1958,19 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     fi
 fi
 
-# ── AUTOTUNE-004: multi-slot / --parallel KV headroom envelope ──────────────
-# The tune certifies single-slot context; the registry parallel column held
-# the stale tuning-time value (1) and nothing accounted for the KV headroom
-# of N parallel slots (SPEC-DEC-005's concurrency policy needs the envelope —
-# launching --parallel N with the tuned single-slot ctx over-subscribes VRAM).
-# Sweep N at the winning ctx: the largest N that loads AND serves a real
-# completion is the sustainable (ctx, parallel) envelope, recorded in the
-# parallel column.  Launchers validate --parallel N against it (AUTOTUNE-004
-# warning in 11e-llm-model.sh).
+# ── AUTOTUNE-004 retired (2026-09-14): there is no envelope to measure ──────
+# The sweep that lived here tried 2/4/8/16 slots at the winning ctx and
+# recorded the largest that "served", on the premise that N slots at the full
+# ctx over-commit VRAM (unified-KV semantics).  The launcher never passed
+# --kv-unified, so kv_unified stayed false and each slot silently received
+# ctx/N — which is exactly why this recorded the MAXIMUM (16) in 34 of 35 rows:
+# under the premise it assumed, 16 x ~1.2 GB of KV could not fit a 4 GB card,
+# so its own result falsified its premise.  It certified the one property
+# nobody doubted (that it loads) and could not see the one that mattered (at
+# what window).  --parallel is now pinned to 1 in the launcher, so the column
+# records 1.  Retiring the sweep also removes FOUR llama-server launches per
+# row from the WSL2 dxgkrnl context-cycle budget.
 WIN_PARALLEL=1
-if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
-    echo ""
-    echo "  parallel envelope at ctx=$(fmt "$BEST_CTX")  (KV headroom sweep)"
-    echo "  ---------------------"
-    _last_ok=1
-    for _pp in 2 4 8 16; do
-        BENCH_PARALLEL="$_pp"
-        _pt=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "quick" "$WIN_KVK" "$WIN_KVV") || _pt=""
-        if [[ -n "$_pt" ]]; then
-            echo "  parallel ${_pp}: ${_pt} tps (serves)"
-            _last_ok="$_pp"
-        else
-            echo "  parallel ${_pp}: over-subscribed (no serve)"
-            break
-        fi
-    done
-    BENCH_PARALLEL="1"
-    WIN_PARALLEL="$_last_ok"
-    echo "  envelope: ctx=$(fmt "$BEST_CTX") fits ${WIN_PARALLEL} parallel slot(s)"
-fi
 
 # REF: ubuntu-console card ca23ec0a — cleanup_gpu uses AUTOTUNE_PORT (18082), not the production port 18081
 cleanup_gpu 3 >/dev/null 2>&1 || { echo "ERROR: cleanup_gpu failed after 3 retries — port ${AUTOTUNE_PORT:-18082} still bound" >&2; exit 1; }

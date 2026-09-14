@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -486,11 +486,11 @@ function __model_use_resolve_model() {
     # declared as `local` in __model_use, assigned here.
     IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram row_prefill row_p2_ctx row_p2_batch row_p2_ubatch row_p2_tps row_p2_prefill row_spec_type row_spec_draft_model row_spec_n_max row_spec_ngl row_spec_device row_spec_accept_len <<< "$entry"
 
-    # AUTOTUNE-004: the registry parallel column carries the measured
-    # (ctx, parallel) KV-headroom envelope at the tuned ctx.  Capture it
-    # before any env/CLI override so an over-subscribed --parallel N launch
-    # can be flagged.
-    row_parallel_envelope="$parallel_slots"
+    # AUTOTUNE-004 retired (2026-09-14): the registry parallel column is no
+    # longer read for launch, and --parallel is pinned to 1 below.  The column
+    # used to hold a "KV headroom envelope" from a sweep whose premise
+    # (unified-KV) was false: without --kv-unified, N slots DIVIDE the served
+    # window by N, so a stale 16 served ctx/16 while the row advertised ctx.
 
     # Allow context size override via TAC_CTX_SIZE environment variable
     # (set by `serve --ctx-size N` or `model use N --ctx-size N`)
@@ -721,24 +721,22 @@ function __model_use_configure_params() {
     then
         ubatch_size="$batch_size"
     fi
-    if [[ "${LLAMA_PARALLEL_SLOTS:-}" =~ ^[0-9]+$ ]] && (( LLAMA_PARALLEL_SLOTS > 0 ))
-    then
-        parallel_slots="$LLAMA_PARALLEL_SLOTS"
-    fi
-
-    # AUTOTUNE-004: validate the effective --parallel against the measured
-    # (ctx, parallel) KV-headroom envelope recorded by autotune-model.sh.
-    # Over-subscribing parallel slots re-allocates the KV cache per slot —
-    # N slots at the tuned single-slot ctx over-commit VRAM.  Loud warning,
-    # never suppressed; the launch proceeds (the operator may have changed
-    # ctx/batch to free headroom).
-    if [[ "${row_parallel_envelope:-}" =~ ^[0-9]+$ ]] && (( row_parallel_envelope > 0 )) \
-        && (( parallel_slots > row_parallel_envelope ))
+    # --parallel is pinned to 1 (2026-09-14).  N slots do NOT give N windows:
+    # kv_unified defaults to false, so --parallel N DIVIDES the served window by
+    # N — the row would serve ctx/N per request while advertising ctx (21504 ->
+    # 1344).  Every live unit already pins 1, and on a 4 GB card there is no
+    # room for a second full window anyway.
+    #
+    # A caller that explicitly asks for more is refused loudly rather than
+    # silently divided.  Real concurrency, if ever wanted, must set the window
+    # explicitly with --kv-unified-per-slot — never derive it.
+    if [[ "${LLAMA_PARALLEL_SLOTS:-}" =~ ^[0-9]+$ ]] && (( LLAMA_PARALLEL_SLOTS > 1 ))
     then
         __tac_info "Warning" \
-            "[--parallel ${parallel_slots} exceeds the autotuned envelope ${row_parallel_envelope} at ctx ${ctx} (AUTOTUNE-004) - KV cache is re-allocated per slot and VRAM will be over-subscribed. Re-run 'model autotune' to re-certify the envelope, or lower --parallel.]" \
+            "[--parallel ${LLAMA_PARALLEL_SLOTS} ignored (AUTOTUNE-004): --parallel N DIVIDES the served window by N because kv_unified is off, so the row would serve ctx/${LLAMA_PARALLEL_SLOTS} while advertising ctx. The launcher pins --parallel 1; use --kv-unified-per-slot explicitly if real concurrency is wanted.]" \
             "$C_Warning"
     fi
+    parallel_slots=1
 
     if (( ubatch_size > batch_size ))
     then
@@ -1052,6 +1050,21 @@ function __model_use_wait_healthy() {
                 done
             fi
         fi
+        # Window invariant (2026-09-14): the window a request actually gets must
+        # equal the ctx this launch advertises.  --parallel N divides it
+        # (kv_unified defaults to false), a --fit reduction can shrink it, and a
+        # KV-type change moves it.  Semantics-independent form — advertised ctx
+        # == n_ctx_slot — which holds whether or not -kvu is ever enabled.
+        # Loud, never suppressed.
+        local _props_json _slot_ctx
+        _props_json=$(curl -s --max-time 10 "http://127.0.0.1:$LLM_PORT/props" 2>/dev/null || true)
+        _slot_ctx=$(printf '%s' "$_props_json" | jq -r '.default_generation_settings.n_ctx // empty' 2>/dev/null || true)
+        if [[ "$_slot_ctx" =~ ^[0-9]+$ ]] && (( _slot_ctx != ctx ))
+        then
+            __tac_info "Warning" \
+                "[window mismatch: advertising ctx ${ctx} but the server serves ${_slot_ctx} per request (n_ctx_slot from /props). Check --parallel (N slots DIVIDE the window unless --kv-unified) and --fit.]" \
+                "$C_Warning"
+        fi
         [[ -n "${__BENCH_MODE:-}" ]] || __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
         local offload_info
         offload_info=$(grep -oiE 'offload(ing|ed) [0-9]+ .* layers' "$LLM_LOG_FILE" 2>/dev/null | tail -1)
@@ -1083,9 +1096,6 @@ function __model_use() {
     local ctx threads batch_size ubatch_size parallel_slots fit_target_mb
     local row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram
     local row_kv_k row_kv_v
-    # AUTOTUNE-004: the registry row's parallel value = the measured
-    # (ctx, parallel) KV-headroom envelope at the tuned ctx.
-    local row_parallel_envelope
     local model_path model_bytes quant_rating llm_backend python_bin
     local smi_cmd free_vram_mb type_k_val use_no_mmap
     local cmd model_shell_pid

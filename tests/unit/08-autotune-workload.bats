@@ -122,17 +122,27 @@ EOF
     [[ "$(echo "$row" | cut -d'|' -f12)" == "2" ]]
 }
 
-@test "autotune-004: autotune-model.sh sweeps the parallel envelope and 11e warns when over-subscribed" {
+@test "autotune-004: --parallel is pinned to 1 and the window invariant is asserted" {
+    # Retired 2026-09-14.  The old sweep recorded the largest N that "served",
+    # but kv_unified defaults to false, so --parallel N DIVIDES the served
+    # window by N — which is why it recorded the MAXIMUM (16) in 34 of 35 rows:
+    # under the premise it assumed, 16 x ~1.2 GB of KV cannot fit a 4 GB card,
+    # so its own result falsified its premise.
     local src
     src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
-    [[ "$src" == *"parallel envelope"* ]]
-    [[ "$src" == *"BENCH_PARALLEL"* ]]
-    [[ "$src" == *"WIN_PARALLEL"* ]]
+    [[ "$src" == *"WIN_PARALLEL=1"* ]]
+    [[ "$src" != *"for _pp in 2 4 8 16"* ]]
+
     local e11
     e11=$(< "$REPO_ROOT/scripts/11e-llm-model.sh")
     [[ "$e11" == *"AUTOTUNE-004"* ]]
-    [[ "$e11" == *"row_parallel_envelope"* ]]
-    [[ "$e11" == *"exceeds the autotuned envelope"* ]]
+    [[ "$e11" == *"parallel_slots=1"* ]]
+    [[ "$e11" != *"row_parallel_envelope"* ]]
+    # ...and the invariant that actually protects the window:
+    # advertised ctx == n_ctx_slot from /props.
+    [[ "$e11" == *"/props"* ]]
+    [[ "$e11" == *".default_generation_settings.n_ctx"* ]]
+    [[ "$e11" == *"window mismatch"* ]]
 }
 
 @test "autotune: a missing profile-save helper fails loudly, never as a no-op" {
