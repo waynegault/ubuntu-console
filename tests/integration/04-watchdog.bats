@@ -373,6 +373,12 @@ setup() {
     run grep -c '^VERSION=' "$WATCHDOG_SCRIPT"
 
     [[ "$output" -gt 0 ]]
+
+    # ...and the marker tools/check-module-versions.sh parses, so a future edit
+    # cannot quietly take this file back out of the version guard.  Until
+    # 2026-09-14 it was the only GPU-adjacent script outside it.
+    run grep -c '^# Module Version:' "$WATCHDOG_SCRIPT"
+    [[ "$output" -eq 1 ]]
 }
 
 @test "integration: watchdog uses flock for locking" {

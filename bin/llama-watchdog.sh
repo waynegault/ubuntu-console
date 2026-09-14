@@ -24,6 +24,12 @@
 #   to itself previously had to stop the watchdog outright for its whole duration,
 #   which left the Xe lane unmonitored; now it suspends just the CUDA lane.  This
 #   is deliberately narrower than bench_lock, which also suppresses Xe recovery.
+# v3.6 (2026-09-14): assert the WINDOW INVARIANT on every lane that is up —
+#   advertised --ctx-size (from the unit's ExecStart) must equal /props
+#   n_ctx_slot.  --parallel N DIVIDES the served window by N (kv_unified defaults
+#   to false) and --fit can shrink it, both silently; the registry carried
+#   parallel=16 for 34 of 35 rows.  Logged, never acted on: a window mismatch is
+#   not a crash, so it must not consume a strike or restart a lane.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -32,7 +38,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-VERSION="3.5"
+# Module Version: 1
+#   Bump counter for tools/check-module-versions.sh, which parses exactly this
+#   line (it is what makes an edit here fail the pre-commit guard until the
+#   number moves).  Deliberately separate from VERSION= below: the marker
+#   changes on ANY edit, VERSION= on significant ones (it is what --version
+#   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
+#   script in the repo outside the version guard.
+VERSION="3.6"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
