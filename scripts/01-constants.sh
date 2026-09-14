@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 15
+# Module Version: 16
 # ==============================================================================
 
 # ==============================================================================
@@ -43,7 +43,7 @@ export WINDOWS_USER_ROOT="${WINDOWS_USER_ROOT:-/mnt/c/Users}"
 #   LLM_LOG_FILE, LLM_TPS_CACHE, TAC_CACHE_DIR, VENV_DIR, UIWidth, LAST_TPS,
 #   LLM_PORT, OC_PORT, LOCAL_LLM_URL, __TAC_HAS_BATTERY, __resolve_vscode_bin,
 #   VSCODE_BIN, WSL_NVIDIA_SMI, PATH, HISTCONTROL, WINDOWS_USER_ROOT,
-#   PYOPENCL_CTX, OCL_ICD_VENDORS
+#   PYOPENCL_CTX (OCL_ICD_VENDORS deliberately unset - see below)
 
 # ---- Storage Roots ----
 export AI_STORAGE_ROOT="$HOME"
@@ -308,10 +308,18 @@ export LLAMA_FIT_TARGET_MB="${LLAMA_FIT_TARGET_MB:-1024}"
 export LLAMA_NO_MMAP_MODE="${LLAMA_NO_MMAP_MODE:-auto}"
 
 # ---- Intel Xe iGPU Compute Environment ----
-# PyOpenCL platform selection + the system ICD vendor directory expose the
-# Intel Iris Xe iGPU to OpenCL compute workloads (pyopencl, clinfo, etc.).
+# PYOPENCL_CTX selects the pyopencl platform non-interactively. pyopencl ships
+# its own bundled ICD loader, so it finds the Xe iGPU with or without the
+# variables below (verified 2026-09-14, all four combinations enumerated the
+# same 30 GiB Intel(R) Graphics [0x46a6] device).
+# Do NOT export OCL_ICD_VENDORS. clinfo and llama.cpp's OpenCL backend link the
+# CUDA stub /usr/local/cuda/targets/x86_64-linux/lib/libOpenCL.so.1; explicitly
+# pointing that loader at the vendor dir makes it enumerate ZERO platforms and
+# the Xe iGPU disappears (reproduced 2026-09-14 with any value of the variable).
+# The loader's default search path already includes /etc/OpenCL/vendors, so
+# leaving it unset is both correct and sufficient.
+#   removed 2026-09-14: export OCL_ICD_VENDORS=/etc/OpenCL/vendors
 export PYOPENCL_CTX='0'
-export OCL_ICD_VENDORS=/etc/OpenCL/vendors
 
 # ---- Named Constants (avoid magic numbers scattered through functions) ----
 if [[ -z "${VRAM_TOTAL_BYTES+x}" ]]; then
