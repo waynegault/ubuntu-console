@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -22,7 +22,9 @@
 # real fix for an exhausted adapter is `wsl --shutdown` from Windows; the cycle
 # counter is namespaced by boot ID, so a restart starts a fresh counter.
 #
-# Timing estimate per model (RTX 3050 4GB, WSL2 NTFS mount, autotune v4):
+# Timing estimate per model (RTX 3050 4GB, autotune v4). The figures date from
+# 2026-06, when the model drive was still a Windows mount — it became native ext4
+# on 2026-08-16 — so they are likely pessimistic today:
 #   quick: ctx discovery + beam search + filled-cache certification
 #   <2GB models:  ~20-30 min (8 ctx × 2-3 combos + beam + cert)
 #   >=2GB models: ~30-50 min (1 combo + beam + ngl/KV sweep + filled cert)

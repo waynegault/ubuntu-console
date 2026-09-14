@@ -1,7 +1,7 @@
 # Model Autotune — Functional Specification v4
 
 ### Purpose
-For each untuned GGUF model on this machine (RTX 3050 4GB, WSL2 Ubuntu, NTFS mount), discover the model's capabilities on our hardware: the **highest context size that sustains the minimum acceptable decode TPS** (`LLM_MIN_TPS`, default **10**, uniform for every model) — certified at a **filled KV cache** — plus the best batch configuration, and a second **max-TPS profile** for interactive flows. Discovery is done through real testing — no VRAM estimates, no hardcoded ceilings, no assumptions about what should or shouldn't fit.
+For each untuned GGUF model on this machine (RTX 3050 4GB, WSL2 Ubuntu, native ext4 model drive), discover the model's capabilities on our hardware: the **highest context size that sustains the minimum acceptable decode TPS** (`LLM_MIN_TPS`, default **10**, uniform for every model) — certified at a **filled KV cache** — plus the best batch configuration, and a second **max-TPS profile** for interactive flows. Discovery is done through real testing — no VRAM estimates, no hardcoded ceilings, no assumptions about what should or shouldn't fit.
 
 The goal is honest capability profiling. A model that sustains the floor gets its maximum usable ctx recorded. A model that cannot reach the floor even at the smallest ctx is recorded as **too slow for our purposes** — its fastest (best-effort) config and true TPS are still saved so the registry reflects what the hardware can actually deliver.
 
@@ -348,7 +348,7 @@ The former parallel Python implementation (`bin/model-autotune.py`) was removed 
 
 ### Single-Model Timing Estimates
 
-Measured on RTX 3050 4GB, WSL2, NTFS mount. Cold load from disk dominates per-test time.
+Measured on RTX 3050 4GB, WSL2. The figures date from 2026-06, when the model drive was still a Windows mount — it became native ext4 on 2026-08-16 — so the load times below are likely pessimistic today. Cold load from disk dominates per-test time.
 
 | Model size | Load time | Bench time | Per-test total | Phase 1 | Phase 2 | Worst-case total |
 |---|---|---|---|---|---|---|
