@@ -167,3 +167,55 @@ EOF
     [[ "$auto" == *"TAC_LOAD_DEGRADED"* ]]
     [[ "$auto" == *"refusing to autotune"* ]]
 }
+
+# ── AUTOTUNE decision-logic regression harness ───────────────────────────────
+# AUTOTUNE_SELFTEST replaces bench_ctx/ttft_probe/cleanup_gpu with canned curves
+# and skips persistence, so the probe -> descent -> certification path runs
+# server-free in seconds.  Isolation notes:
+#   * 01-constants assigns LLM_REGISTRY="$HOME/.llm/models.conf" and
+#     LLAMA_MODEL_DIR="$LLAMA_DRIVE_ROOT/active" UNCONDITIONALLY, so exporting
+#     those directly is ignored — HOME and LLAMA_DRIVE_ROOT are the levers.
+#   * the documented LLM_AUTOTUNE_BASELINE_GAP_MAX knob tolerates the CUDA lane
+#     holding the card, which would otherwise refuse the run before any logic.
+_selftest_run() {
+    local sandbox="$1"; shift
+    mkdir -p "$sandbox/home/.llm" "$sandbox/drive/active"
+    printf 'not-a-real-gguf' > "$sandbox/drive/active/stub.gguf"
+    {
+        printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram'
+        printf '%s\n' '1|Stub Model|stub.gguf|0.1G|Q4_K_M/q8_0|llama|0|4096|4|1024|256|1|256|native|auto|on|0|no|no|no'
+    } > "$sandbox/home/.llm/models.conf"
+    env -u VIRTUAL_ENV HOME="$sandbox/home" LLAMA_DRIVE_ROOT="$sandbox/drive" \
+        LLM_AUTOTUNE_BASELINE_GAP_MAX=999999 AUTOTUNE_SELFTEST=1 "$@" \
+        bash "$REPO_ROOT/scripts/autotune-model.sh" 1 --workload chat 2>&1
+}
+
+@test "autotune-selftest: a below-floor model descends and records best-effort" {
+    # TPS-first policy (2026-08-29): below the floor at capacity -> descend to
+    # MIN_CTX, then record the best-effort config.  This is the case the stale
+    # 2026-08-27 note insisted had to certify capacity instead.
+    run _selftest_run "$BATS_TEST_TMPDIR/below"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"recording best-effort config"* ]]
+    [[ "$output" == *"8.5 tps"* ]]
+}
+
+@test "autotune-selftest: a capacity that meets the floor is certified at capacity" {
+    run _selftest_run "$BATS_TEST_TMPDIR/floor" _SELFTEST_FLOOR_ABOVE=32768
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"12.0 tps"* ]]
+    [[ "$output" != *"recording best-effort config"* ]]
+}
+
+@test "autotune-selftest: a ceiling above the probed capacity forces the filled-load descent" {
+    run _selftest_run "$BATS_TEST_TMPDIR/oom" _SELFTEST_OOM_ABOVE=8192
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"descending to the highest ctx that sustains"* ]]
+    [[ "$output" == *"recording best-effort config"* ]]
+}
+
+@test "autotune-selftest: a model that cannot load at any ctx exits non-zero" {
+    run _selftest_run "$BATS_TEST_TMPDIR/unloadable" _SELFTEST_OOM_ABOVE=2048
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"cannot be loaded"* || "$output" == *"unsupported"* ]]
+}

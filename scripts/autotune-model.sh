@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 30
+# Module Version: 31
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -888,12 +888,21 @@ bench_ctx() {
 }
 
 # --- AUTOTUNE_SELFTEST: canned bench_ctx for decision-logic regression ---
-# With AUTOTUNE_SELFTEST=1, bench_ctx returns a deterministic curve that
-# reproduces the Llama-3.2-3B below-floor case: the model "loads" at every
-# ctx up to MAX_CTX with a slight TPS decline, always below MIN_TPS.  The
-# fixed logic must certify the MAX probed ctx (capacity), NOT the MIN_CTX
-# floor artifact (2026-08-27, Wayne).  Runs without any server spawn —
-# validates the climb + floor-recovery decision path in seconds.
+# With AUTOTUNE_SELFTEST=1, bench_ctx returns a deterministic curve (8.5 tps at
+# every ctx by default), ttft_probe and cleanup_gpu are stubbed, and nothing is
+# persisted — so the whole probe -> descent -> certification decision path runs
+# SERVER-FREE in seconds.  Optional knobs:
+#   _SELFTEST_FLOOR_ABOVE=<ctx>  12.0 tps at/below, 5.0 above (floor descent)
+#   _SELFTEST_OOM_ABOVE=<ctx>    load fails above the ceiling (OOM path)
+# Exercised by tests/unit/08-autotune-workload.bats.
+#
+# Policy under test — TPS-FIRST (2026-08-29, Wayne), which SUPERSEDES the
+# 2026-08-27 "certify the max probed ctx" decision this comment used to cite: a
+# model below the floor at its capacity ctx is NOT certified at capacity; Phase 4
+# descends until the floor is met, or to MIN_CTX, and then records the
+# best-effort config.  The stale 2026-08-27 note is why this harness was never
+# wired to a test: it asserted the opposite of what the code had been changed to
+# do.
 if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
     bench_ctx() {
         local c="$1" b="$2" u="$3" samples="${4:-1}" mmap_mode="${5:-auto}" override_ngl="${6:-}"
