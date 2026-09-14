@@ -53,8 +53,20 @@ _classify() {
         has_cuda="yes"
     fi
 
-    # Build tag: check RESOLVED path for b<N> (generic prebuilt releases).
-    if [[ "$resolved" =~ b([0-9]+) ]]; then
+    # Build tag for a generic prebuilt release.  Ask the BINARY, not the
+    # install directory: the directory name is only a label and can be stale
+    # (2026-09-14: ~/.local/opt/llama.cpp/b9371/llama-server reports
+    # "build 10216, commit 876a43211", so the path-derived tag named a build
+    # that is not there).  --version is cheap and spawns no CUDA context
+    # (measured: 5 invocations, dxgkrnl counter delta 0).  Fall back to the
+    # path label only when the binary cannot answer.
+    local _vtag=""
+    if [[ -x "$resolved" ]]; then
+        _vtag="$("$resolved" --version 2>&1 | sed -nE 's/.*\(build ([0-9]+).*/b\1/p' | head -1)"
+    fi
+    if [[ -n "$_vtag" ]]; then
+        build_tag="$_vtag"
+    elif [[ "$resolved" =~ b([0-9]+) ]]; then
         build_tag="b${BASH_REMATCH[1]}"
     fi
 
