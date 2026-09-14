@@ -65,6 +65,11 @@ model. This is not a warning to be scrolled past.
 | investigator | `pipeline/benchmark/server.py:332` | `--mlock` | `--load-mode mlock` |
 | investigator | `pipeline/benchmark/_worker_server.py:48` | `--mmap` | `--load-mode mmap` (or omit) |
 
+`--use_mmap false` at `11e-llm-model.sh:864` is deliberately **not** in this table: it belongs
+to the *python* backend and is correct there — see §5. It was flagged as a tenth call site on
+2026-09-14 after being tested against `llama-server` rather than the server that receives it;
+checked and refuted.
+
 **Why this was not caught earlier:** the flag was already deprecated *in the binary we
 were running* — the old binary printed the deprecation on every launch that used it. The
 warning was visible in server logs and unactioned. That is precisely the class of signal
@@ -308,6 +313,16 @@ unreliable — the same binary on the same prompt spanned **45–67 tps** across
 - `--reasoning off` — current flag (`arg.cpp:3677`, `[on|off|auto]`, default `auto`).
 - `--cache-type-k/v q8_0` — current and appropriate.
 - Removed spec-decode flags are already documented and not used.
+- **`--use_mmap false` (`11e-llm-model.sh:864`) is correct — do NOT "migrate" it to
+  `--load-mode`.** It is passed only on the **python** backend, which builds
+  `("$python_bin" "-m" "$LLM_SERVER_MODULE")` (`11e:819`) — i.e. `llama_cpp.server`, not
+  `llama-server`. That server *does* accept `--use_mmap USE_MMAP` (default `True`); verified
+  against the installed llama-cpp-python 0.3.23. The native branch passes `--load-mode none`
+  instead, and the two branches are mutually exclusive, so `llama-server` never receives
+  `--use_mmap` (it would reject it: `error: invalid argument`). Rewriting this site to
+  `--load-mode` would break the python backend, which has no such flag.
+  No registry row selects the python backend today — 34 `native` + 1 `llama_server`, and
+  `11e:589-599` maps both to native — so the site is also unexercised.
 
 **Two GPU lanes are on different source revisions** and that is worth knowing before anyone
 "unifies" them: `build-opencl` is built from the `~/llama-src/b6b003d2…` tarball (b10944),
@@ -399,6 +414,37 @@ known-good commit, use `llm-build --no-pull`, and prefer it during any validatio
 
 ---
 
+## 8. Repoint of the CUDA lane — DONE 2026-09-14 **[measured]**
+
+`~/.local/bin/cuda-llama-server` now points at `build/bin/llama-server` (b10955 /
+`2f539596c`), and `llama-server-nvidia.service` was restarted onto it.
+
+| | before | after |
+|---|---|---|
+| symlink | `build-cuda133/bin/llama-server` | `build/bin/llama-server` |
+| running exe | `build-cuda133/bin/llama-server` | `build/bin/llama-server` |
+| `/props` `build_info` | `b10432-ab5ce4658` | **`b10955-2f539596c`** |
+| `/props` `n_ctx` / `total_slots` | 21504 / 1 | **21504 / 1** (unchanged — the invariant holds) |
+| VRAM used / free | 3376 / 590 MiB | **3376 / 590 MiB** (identical) |
+| state | — | active, `NRestarts=0`, `/health` ok, served a generation |
+
+The serving regime was the one unverified case (a 3B model at ctx 21504 on a 4 GB card): the
+NO_VMM `cudaMalloc` allocator shows **the same VRAM footprint** as the VMM build, so no
+fragmentation penalty at this window. Rollback: point the symlink back at
+`build-cuda133/bin/llama-server` and restart, per
+`~/.local/bin/.cuda-lane-repoint-20260913`.
+
+Note the lane was already **down** when this was done (stopped cleanly at 18:08:39 by the
+watchdog's busy-GPU policy, `Result=success`), so the restart also restored service.
+
+**Hazard found while repointing:** `~/.local/bin/llama-gpu-clear.sh:43` selects victims with
+`pgrep -f 'llama.cpp/build/bin/llama-server|...'` — a match on the **command line**, so any
+shell whose text mentions that path (including an agent's) is killed, with a `kill -KILL`
+fallback at `:51`. It killed this session's shell during the restart. Match the executable
+(`readlink /proc/<pid>/exe`) instead of the command line to remove the self-match.
+
+---
+
 ## Appendix — provenance, and what was removed
 
 Live trees:
@@ -435,33 +481,4 @@ from the checkout using the exact configure line recorded in
 `~/llama.cpp/build/LLAMA-CPP-SOURCE-COMMIT.txt`; the ccache is warm, so a clean rebuild took
 under ten minutes when measured. Note also that a build tree cannot simply be renamed into
 place — `RPATH` is baked at configure time (§6).
-
-## 7. Repoint of the CUDA lane — DONE 2026-09-14 **[measured]**
-
-`~/.local/bin/cuda-llama-server` now points at `build/bin/llama-server` (b10955 /
-`2f539596c`), and `llama-server-nvidia.service` was restarted onto it.
-
-| | before | after |
-|---|---|---|
-| symlink | `build-cuda133/bin/llama-server` | `build/bin/llama-server` |
-| running exe | `build-cuda133/bin/llama-server` | `build/bin/llama-server` |
-| `/props` `build_info` | `b10432-ab5ce4658` | **`b10955-2f539596c`** |
-| `/props` `n_ctx` / `total_slots` | 21504 / 1 | **21504 / 1** (unchanged — the invariant holds) |
-| VRAM used / free | 3376 / 590 MiB | **3376 / 590 MiB** (identical) |
-| state | — | active, `NRestarts=0`, `/health` ok, served a generation |
-
-The serving regime was the one unverified case (a 3B model at ctx 21504 on a 4 GB card): the
-NO_VMM `cudaMalloc` allocator shows **the same VRAM footprint** as the VMM build, so no
-fragmentation penalty at this window. Rollback: point the symlink back at
-`build-cuda133/bin/llama-server` and restart, per
-`~/.local/bin/.cuda-lane-repoint-20260913`.
-
-Note the lane was already **down** when this was done (stopped cleanly at 18:08:39 by the
-watchdog's busy-GPU policy, `Result=success`), so the restart also restored service.
-
-**Hazard found while repointing:** `~/.local/bin/llama-gpu-clear.sh:43` selects victims with
-`pgrep -f 'llama.cpp/build/bin/llama-server|...'` — a match on the **command line**, so any
-shell whose text mentions that path (including an agent's) is killed, with a `kill -KILL`
-fallback at `:51`. It killed this session's shell during the restart. Match the executable
-(`readlink /proc/<pid>/exe`) instead of the command line to remove the self-match.
 
