@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -861,7 +861,7 @@ function __model_use_build_command() {
     then
         if [[ "$llm_backend" == "native" ]]
         then
-            cmd+=("--no-mmap")
+            cmd+=("--load-mode" "none")
         else
             cmd+=("--use_mmap" "false")
         fi
