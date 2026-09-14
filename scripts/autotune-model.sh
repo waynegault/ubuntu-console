@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 35
+# Module Version: 36
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1617,10 +1617,17 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         done
     fi
 
-    # Final certification: triple-sample (median) at the winner for the
+    # Final certification: multi-sample (median) at the winner for the
     # recorded number — the persisted TPS is a robust estimate, not a burst.
+    # 5 samples (2026-09-14, was 3): this box spans ~45-67 tps on the same
+    # binary, prompt and n_predict (±15%), and a median-of-3 of that still
+    # carries ~10% standard error — enough to flip a row that sits near a role
+    # admission threshold.  bench_once_multi spawns ONE server and issues N
+    # requests against it, so the extra samples cost no extra CUDA contexts,
+    # only wall-clock.  Median SE falls as 1/sqrt(n): 5 gives ~29% less
+    # spread than 3.
     _FAST_REJECT=0
-    _cert=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert=""
+    _cert=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 5 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert=""
     if [[ -n $_cert ]] && [[ $(echo "$_cert > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
         BEST_TPS=$_cert
         IFS='|' read -r _fd2 _fp2 _ff2 < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -1660,9 +1667,12 @@ _cuda_guard_or_exit
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
     if [[ "$P2_CTX|$P2_B:$P2_U" != "$BEST_CTX|$BEST_B:$BEST_U" ]]; then
         echo "  certifying profile 2 (interactive) at ctx=$(fmt "$P2_CTX")  $(fmt "$P2_B")/$(fmt "$P2_U")"
-        # samples=1: profile 2 is a secondary (interactive) profile; one sample
-        # keeps churn to a single launch (WSL2 dxgkrnl VA leak, 2026-09-05).
-        _p2t=$(bench_ctx "$P2_CTX" "$P2_B" "$P2_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _p2t=""
+        # 3 samples (2026-09-14, was 1).  The old "one sample keeps churn to a
+        # single launch" reasoning was wrong: N samples reuse ONE spawn
+        # (bench_once_multi issues N requests against one server), so more
+        # samples cost no extra CUDA contexts — while a single sample of a
+        # ±15% measurement is not evidence at all.
+        _p2t=$(bench_ctx "$P2_CTX" "$P2_B" "$P2_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _p2t=""
         if [[ -n $_p2t ]] && [[ $(echo "$_p2t > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
             P2_TPS=$_p2t
             IFS='|' read -r _pd3 _pp3 _pf3 < "/tmp/at-metrics-$$" 2>/dev/null || true

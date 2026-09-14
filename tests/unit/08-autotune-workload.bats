@@ -145,6 +145,30 @@ EOF
     [[ "$e11" == *"window mismatch"* ]]
 }
 
+@test "autotune-samples: certified numbers are medians of >=3 samples, never one" {
+    # 2026-09-14: the same binary, prompt and n_predict spans ~45-67 tps on this
+    # box (+/-15%), so a single sample is not evidence.  bench_once_multi spawns
+    # ONE server and issues N requests against it, so extra samples cost no
+    # extra CUDA contexts - the spawn-churn reasoning that justified samples=1
+    # for profile 2 did not apply.  Pin the floors: lowering either is a
+    # deliberate edit, not a tidy-up.
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    # winner certification: 5 samples, filled cache
+    [[ "$src" == *'"$BEST_U" 5 "$EFFECTIVE_MMAP"'* ]]
+    # profile 2: 3 samples, filled cache
+    [[ "$src" == *'"$P2_U" 3 "$EFFECTIVE_MMAP"'* ]]
+    # and the two PERSISTED numbers must not come from a single sample.
+    # Deliberately scoped: Phase 4's descent probes (autotune-model.sh:1556,
+    # :1573) and the spec-decode block sweep (:1733) still run one sample each
+    # because they SELECT a candidate and do not persist a number — raising
+    # those multiplies the descend loop and is a separate decision.
+    if echo "$src" | grep -E '^[[:space:]]*_(cert|p2t)=\$\(' | grep -q '" 1 '; then
+        echo "FAIL: a persisted TPS is certified from a single sample"
+        return 1
+    fi
+}
+
 @test "autotune: a missing profile-save helper fails loudly, never as a no-op" {
     # Regression (2026-09-13): the completion block ran the save only inside
     # `elif declare -f __llm_autotune_profile_save` with NO else.  When the
