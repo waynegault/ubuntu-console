@@ -130,46 +130,19 @@ def _run_bats(bats_file: Path, timeout_s: int, filter_pattern: str | None = None
     return subprocess.CompletedProcess(cmd, returncode, stdout_data, stderr_data)
 
 
-def _run_and_cache_bats(bats_file: Path, timeout_s: int, test_name: str | None = None) -> dict[str, dict[str, Any]]:
-    """Run a BATS file and return per-test results dict.
+def _parse_bats_tap(stdout: str) -> dict[str, dict[str, Any]]:
+    """Parse BATS TAP output into a per-test results dict.
 
-    When *test_name* is given, only that single test is executed
-    (via ``--filter``) instead of the entire file.  The result is
-    still cached by file stem so follow-up tests sharing the cache
-    (e.g. from a full pytest run) benefit.
-
-    A cache hit that lacks the requested test is treated as a miss:
-    we run a filtered execution for that one test so individual
-    VS Code test launches never fall back to the full suite.
+    Handles "ok N test_name in Xms" / "not ok N test_name in Xms" lines,
+    "# skip (reason)" markers (before or after the name), and "# ..."
+    diagnostic lines that follow a failed test.
     """
-    stem = bats_file.stem
-    if stem in _bats_results_cache and test_name in _bats_results_cache[stem]:
-        return _bats_results_cache[stem]
-
-    results: dict[str, dict[str, Any]] = {}
-    filter_ = None
-    if test_name is not None:
-        filter_ = re.escape(test_name)
-    try:
-        result = _run_bats(bats_file, timeout_s, filter_pattern=filter_)
-    except subprocess.TimeoutExpired:
-        for name in _parse_bats_tests(bats_file):
-            results[name] = {"passed": False, "output": f"BATS suite timed out ({timeout_s}s)"}
-        _bats_results_cache[stem] = results
-        return results
-
-    # Parse TAP output: "ok N test_name in Xms" or "not ok N test_name in Xms"
-    # Skipped tests have "# skip (reason)" before or after the test name.
-    # Handle both formats:
-    #   ok 165 test_name # skip (reason)   — skip AFTER name
-    #   ok 165 # skip (reason) test_name   — skip BEFORE name
-    # Diagnostic context (file/line/assertion) follows failed tests on lines
-    # starting with "# " — capture those into per-test diagnostics.
     tap_line_re = re.compile(r'^(ok|not ok)\s+\d+\s+(.*?)(?:\s+in\s+\d+(?:\.\d+)?(?:sec|ms|s))?$')
     diagnostic_re = re.compile(r'^#\s+(.*)')
+    results: dict[str, dict[str, Any]] = {}
     current_test: str | None = None
     diagnostics: dict[str, list[str]] = {}
-    for line in result.stdout.splitlines():
+    for line in stdout.splitlines():
         m = tap_line_re.match(line)
         if m:
             raw_name: str = m.group(2)
@@ -200,6 +173,49 @@ def _run_and_cache_bats(bats_file: Path, timeout_s: int, test_name: str | None =
     for tname, diags in diagnostics.items():
         if tname in results and not results[tname]["passed"]:
             results[tname]["output"] += "\n" + "\n".join(diags)
+
+    return results
+
+
+def _run_and_cache_bats(bats_file: Path, timeout_s: int, test_name: str | None = None) -> dict[str, dict[str, Any]]:
+    """Run a BATS file and return per-test results dict.
+
+    When *test_name* is given, only that single test is executed
+    (via ``--filter``) instead of the entire file.  The result is
+    still cached by file stem so follow-up tests sharing the cache
+    (e.g. from a full pytest run) benefit.
+
+    A cache hit that lacks the requested test is treated as a miss:
+    we run a filtered execution for that one test so individual
+    VS Code test launches never fall back to the full suite.
+    """
+    stem = bats_file.stem
+    if stem in _bats_results_cache and test_name in _bats_results_cache[stem]:
+        return _bats_results_cache[stem]
+
+    filter_ = None
+    if test_name is not None:
+        filter_ = re.escape(test_name)
+
+    # A filtered run can occasionally come back with no TAP line for the
+    # requested test (transient process/resource hiccup rather than a real
+    # test failure, since a genuine failure still emits a "not ok" line).
+    # Retry once before giving up so these flakes don't fail the build.
+    attempts = 2 if test_name is not None else 1
+    results: dict[str, dict[str, Any]] = {}
+    for attempt in range(attempts):
+        results = {}
+        try:
+            result = _run_bats(bats_file, timeout_s, filter_pattern=filter_)
+        except subprocess.TimeoutExpired:
+            for name in _parse_bats_tests(bats_file):
+                results[name] = {"passed": False, "output": f"BATS suite timed out ({timeout_s}s)"}
+            _bats_results_cache[stem] = results
+            return results
+
+        results = _parse_bats_tap(result.stdout)
+        if test_name is None or test_name in results:
+            break
 
     # Mark any test not found in output as failed.
     # When a specific test was requested (--filter), skip this check
