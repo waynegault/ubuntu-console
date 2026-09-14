@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -163,6 +163,17 @@ for _tac_mod in "${_tac_modules[@]}"; do
     fi
 done
 unset _tac_modules _tac_mod
+
+# A degraded load must be impossible to miss.  Module-level failures already
+# `return 1` above, but a thin loader whose *sub-modules* are missing keeps
+# going (a broken module must not lock you out of a shell) and used to leave
+# only stderr lines behind — on 2026-09-13 a sweep certified nothing against
+# exactly that.  Report once, prominently, and export a sentinel so
+# non-interactive callers (autotune-model.sh, benches) can refuse to run.
+if (( ${__TAC_SUBMODULE_FAILURES:-0} > 0 )); then
+    export TAC_LOAD_DEGRADED=1
+    echo "[tac-env] DEGRADED: ${__TAC_SUBMODULE_FAILURES} console sub-module(s) failed to load — functions may be missing (see the lines above)" >&2
+fi
 
 # Library mode skips 13-init, but core helpers still expect the OpenClaw
 # state directories to exist for cooldown and error-log writes.

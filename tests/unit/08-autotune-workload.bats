@@ -150,3 +150,20 @@ EOF
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"exit 1"* ]]
 }
+
+@test "autotune: refuses to run against a degraded console (load sentinel)" {
+    # Regression (2026-09-13): a console whose sub-modules failed to load still
+    # reached the certification phase.  The guard is three-part and all three
+    # must stay wired together: the loader counts the failures, env.sh exports a
+    # sentinel, and autotune refuses before touching the GPU.  (autotune's own
+    # `source env.sh 2>/dev/null` discards the human-readable report, so the
+    # sentinel is the only signal that survives.)
+    local loader envsrc auto
+    loader=$(< "$REPO_ROOT/scripts/_startup-env.sh")
+    envsrc=$(< "$REPO_ROOT/env.sh")
+    auto=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$loader" == *"__TAC_SUBMODULE_FAILURES"* ]]
+    [[ "$envsrc" == *"TAC_LOAD_DEGRADED"* ]]
+    [[ "$auto" == *"TAC_LOAD_DEGRADED"* ]]
+    [[ "$auto" == *"refusing to autotune"* ]]
+}

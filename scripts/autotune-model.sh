@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 29
+# Module Version: 30
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -55,6 +55,15 @@ esac
 _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$_SELF_DIR/.." || exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
+# env.sh's degraded-load report goes to stderr, which the line above discards —
+# so the exported sentinel is the reliable signal here.  Refuse before any GPU
+# work rather than spending a whole bench on a console whose helpers are
+# missing (2026-09-13: a sweep "certified" ten rows this way, changing nothing).
+if [[ "${TAC_LOAD_DEGRADED:-0}" == "1" ]]; then
+    echo "Error: the console loaded degraded (sub-modules failed to load) — refusing to autotune."
+    echo "       Run 'source env.sh' in a shell to see which; nothing was benchmarked."
+    exit 1
+fi
 source scripts/01-constants.sh 2>/dev/null || true
 source scripts/11-llm-manager.sh 2>/dev/null || true
 # AUTOTUNE-001: the SPEC-DEC-006 legal/agentic prompt sets (shared with

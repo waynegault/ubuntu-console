@@ -4,7 +4,7 @@
 # _startup-env.sh — Shared startup environment optimizations.
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 #
 # Single source of truth for the NODE_COMPILE_CACHE / OPENCLAW_NO_RESPAWN /
 # NODE_OPTIONS startup blocks. Sourced by BOTH:
@@ -25,6 +25,13 @@
 # Shared by the 09-openclaw and 11-llm-manager thin loaders so their loops
 # cannot drift. (SC1090 — a dynamic source path — is covered by the file-level
 # disable above; no per-line suppression is needed.)
+#
+# Failures are also COUNTED into __TAC_SUBMODULE_FAILURES (deliberately not
+# `local`, so it survives this function): the loader keeps going — a broken
+# sub-module must not lock you out of a shell — but callers that can act on it
+# (env.sh, autotune-model.sh) need a signal. Before this counter existed, a
+# half-loaded console was visible only as stderr lines: on 2026-09-13 a sweep
+# "completed" ten rows against a console whose llm-manager helpers never loaded.
 function __tac_source_submodules() {
     local _dir="$1" _label="$2"
     shift 2
@@ -35,6 +42,7 @@ function __tac_source_submodules() {
         if [[ ! -f "$_file" ]]
         then
             printf '%s\n' "[tac] ${_label}: missing sub-module $_file" >&2
+            __TAC_SUBMODULE_FAILURES=$(( ${__TAC_SUBMODULE_FAILURES:-0} + 1 ))
             continue
         fi
         _rc=0
@@ -42,6 +50,7 @@ function __tac_source_submodules() {
         if (( _rc != 0 ))
         then
             printf '%s\n' "[tac] ${_label}: sub-module $_file failed to load (rc=$_rc)" >&2
+            __TAC_SUBMODULE_FAILURES=$(( ${__TAC_SUBMODULE_FAILURES:-0} + 1 ))
             if [[ -n "${ErrorLogPath:-}" ]]
             then
                 echo "$(date +'%Y-%m-%d %H:%M:%S') [SOURCE-FAILED] $_file rc=$_rc" >> "$ErrorLogPath" 2>/dev/null
