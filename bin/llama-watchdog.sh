@@ -91,6 +91,31 @@ health() {
     esac
 }
 
+# Window invariant (2026-09-14).  The window a request actually gets must equal
+# the ctx the unit advertises: "--parallel N" DIVIDES it (kv_unified defaults to
+# false, measured 2026-09-14) and a "--fit" reduction can shrink it, both
+# silently.  The semantics-independent form — advertised --ctx-size == the
+# /props n_ctx_slot — holds whether or not -kvu is ever enabled, unlike
+# total_slots x n_ctx_slot == ctx (which breaks under -kvu).
+# Logged, never acted on: a window mismatch is not a crash, so it must not
+# consume a strike or restart a lane.
+window_check() {
+    local unit="$1" port="$2" advertised served
+    health "$port" >/dev/null 2>&1 || return 0   # down or still loading: nothing to assert
+    advertised=$(systemctl --user show "${unit}.service" -p ExecStart --value 2>/dev/null \
+        | sed -nE 's/.*--ctx-size ([0-9]+).*/\1/p' | head -1)
+    served=$(curl -s --max-time 5 "http://127.0.0.1:${port}/props" 2>/dev/null \
+        | jq -r '.default_generation_settings.n_ctx // empty' 2>/dev/null)
+    if [[ -z "$advertised" || -z "$served" ]]; then
+        log "window check :${port} (${unit}) — could not read the ctx (ExecStart --ctx-size='${advertised}', /props n_ctx='${served}')"
+        return 0
+    fi
+    if [[ "$advertised" != "$served" ]]; then
+        log "WARNING window mismatch :${port} (${unit}) — advertises ctx ${advertised} but serves ${served} per request; check --parallel (N slots DIVIDE the window unless --kv-unified) and --fit"
+    fi
+    return 0
+}
+
 # Strike counters. A read/write failure must NEVER silently disable recovery —
 # warn loudly so a mistyped WATCHDOG_STRIKE_DIR surfaces instead of the watchdog
 # logging "strike 1/2" forever. A missing file is the normal first-run case.
@@ -277,6 +302,12 @@ else
         strike_reset "$STRIKE_NV"
     fi
 fi
+
+# Assert the window invariant on every lane that is up (2026-09-14).  This is
+# the check that would have caught the registry's parallel=16 dividing every
+# served window, and that catches a --fit or --parallel drift on a unit.
+window_check "$XE_UNIT" "$XE_PORT"
+window_check "$NV_UNIT" "$NV_PORT"
 
 exit 0
 

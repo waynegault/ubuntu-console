@@ -387,10 +387,27 @@ setup() {
     [[ "$output" -gt 0 ]]
 }
 
-@test "integration: watchdog checks health endpoint" {
+@test "integration: watchdog checks the health and window endpoints" {
     run grep -c "/health" "$WATCHDOG_SCRIPT"
 
     [[ "$output" -gt 0 ]]
+
+    # Window invariant (2026-09-14): the window a request actually gets must
+    # equal the ctx a unit advertises.  --parallel N DIVIDES it (kv_unified
+    # defaults to false) and --fit can shrink it, both silently — the registry
+    # carried parallel=16 for 34 of 35 rows, so `model use` served ctx/16 while
+    # advertising ctx.  This check lives here because the three units do not
+    # source the launcher that carries the other copy.
+    run grep -c "window_check" "$WATCHDOG_SCRIPT"
+    [[ "$output" -ge 3 ]]                       # defined once, called once per lane
+
+    run grep -q "default_generation_settings.n_ctx" "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]                       # the semantics-independent field
+
+    run grep -qF -- '--ctx-size ([0-9]+)' "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]                       # advertised ctx read from the unit
+                                                # (-F: that text is a REGEX source,
+                                                #  so [0-9] would mean "a digit")
 }
 
 @test "integration: watchdog has timeout logic" {
