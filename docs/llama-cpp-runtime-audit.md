@@ -435,3 +435,33 @@ from the checkout using the exact configure line recorded in
 `~/llama.cpp/build/LLAMA-CPP-SOURCE-COMMIT.txt`; the ccache is warm, so a clean rebuild took
 under ten minutes when measured. Note also that a build tree cannot simply be renamed into
 place — `RPATH` is baked at configure time (§6).
+
+## 7. Repoint of the CUDA lane — DONE 2026-09-14 **[measured]**
+
+`~/.local/bin/cuda-llama-server` now points at `build/bin/llama-server` (b10955 /
+`2f539596c`), and `llama-server-nvidia.service` was restarted onto it.
+
+| | before | after |
+|---|---|---|
+| symlink | `build-cuda133/bin/llama-server` | `build/bin/llama-server` |
+| running exe | `build-cuda133/bin/llama-server` | `build/bin/llama-server` |
+| `/props` `build_info` | `b10432-ab5ce4658` | **`b10955-2f539596c`** |
+| `/props` `n_ctx` / `total_slots` | 21504 / 1 | **21504 / 1** (unchanged — the invariant holds) |
+| VRAM used / free | 3376 / 590 MiB | **3376 / 590 MiB** (identical) |
+| state | — | active, `NRestarts=0`, `/health` ok, served a generation |
+
+The serving regime was the one unverified case (a 3B model at ctx 21504 on a 4 GB card): the
+NO_VMM `cudaMalloc` allocator shows **the same VRAM footprint** as the VMM build, so no
+fragmentation penalty at this window. Rollback: point the symlink back at
+`build-cuda133/bin/llama-server` and restart, per
+`~/.local/bin/.cuda-lane-repoint-20260913`.
+
+Note the lane was already **down** when this was done (stopped cleanly at 18:08:39 by the
+watchdog's busy-GPU policy, `Result=success`), so the restart also restored service.
+
+**Hazard found while repointing:** `~/.local/bin/llama-gpu-clear.sh:43` selects victims with
+`pgrep -f 'llama.cpp/build/bin/llama-server|...'` — a match on the **command line**, so any
+shell whose text mentions that path (including an agent's) is killed, with a `kill -KILL`
+fallback at `:51`. It killed this session's shell during the restart. Match the executable
+(`readlink /proc/<pid>/exe`) instead of the command line to remove the self-match.
+
