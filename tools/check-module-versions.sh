@@ -8,17 +8,19 @@
 #
 # (1) It IS the change-detection contract: bump it whenever the file changes,
 #     and this guard enforces exactly that.
-# (2) It is the right-hand component of TACTICAL_PROFILE_VERSION.
-#     scripts/05-ui-engine.sh:509-513 reads the marker of the file being sourced
-#     and exports "${loader_version}.${module_version}".
-#     CORRECTED 2026-09-14: that is a PER-FILE value, NOT a sum over every
-#     module.  The line that stood here — and the "auto-computes from the sum of
-#     all module versions" boilerplate carried by ~13 modules, starting with
-#     01-constants.sh:5 — both said "sum"; nothing in the repo sums markers
-#     (05-ui-engine.sh:509, :528 are the only readers, and they read
-#     BASH_SOURCE's own marker).  A forgotten bump therefore mislabels the
-#     profile version, and nothing else notices: the module still loads and its
+# (2) It is what TACTICAL_PROFILE_VERSION is computed FROM.  The interactive
+#     loader sums the markers of every module in the load list
+#     (tactical-console.bashrc:166-202, `_tac_mod_sum`) and exports
+#     "${loader_version}.${sum}".  So a forgotten bump mislabels the summed
+#     profile version — and nothing else notices: the module still loads and its
 #     tests still pass.
+#     CORRECTED 2026-09-14: the citation that stood here named
+#     scripts/01-constants.sh, which only carries the boilerplate itself.  The
+#     real computation is tactical-console.bashrc.  scripts/05-ui-engine.sh:
+#     509-513 is the FALLBACK for a shell where the variable is not already set,
+#     and that path reads only the CURRENT file's marker — it is not the sum, so
+#     do not conclude from it that the sum is not real (that mistake was made
+#     here once and reverted).
 #
 # Only files that CARRY the marker are checked, so a bare VERSION="x.y" helper
 # (whose own contract is "increment on significant changes") is skipped.  The
@@ -39,7 +41,7 @@
 # Exit 2 = bad invocation / not a git repository.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 #   (The marker is independent of the `--version` string below, which prints a
 #    separate tool version — same two-notion split as the bin/*.sh helpers.)
 set -uo pipefail
