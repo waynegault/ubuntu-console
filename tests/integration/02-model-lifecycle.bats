@@ -250,12 +250,21 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
     [[ "$fn_src" == *"source scripts/11-llm-manager.sh"* ]]
 }
 
-@test "integration: autotune-model.sh has mmap fallback" {
+@test "integration: autotune-model.sh has an mmap fallback via --load-mode" {
     local fn_src
     fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
     [[ "$fn_src" == *"mmap"* ]]
-    [[ "$fn_src" == *"no-mmap"* ]]
+    # 2026-09-14: llama.cpp build 10955 REMOVED --mmap/--no-mmap/--mlock.  A
+    # launch carrying them dies with "error: invalid argument" and the server
+    # never starts, so pin the replacement AND the absence of the old spelling
+    # as an *assignment* (the prose above deliberately names the removed flags,
+    # so only the assignment form is checked).  The regression is fatal.
+    [[ "$fn_src" == *'mmap_flag=(--load-mode none)'* ]]
+    if echo "$fn_src" | grep -qE 'mmap_flag=\(?"?(--no-mmap|--mmap|--mlock)"?\)?'; then
+        echo "FAIL: mmap_flag assigns a flag that build 10955 rejects (fatal at launch)"
+        return 1
+    fi
 }
 
 @test "integration: autotune-model.sh handles LLM_AUTOTUNE_SKIP_LOCK" {

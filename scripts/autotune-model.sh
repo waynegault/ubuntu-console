@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 33
+# Module Version: 34
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -568,8 +568,10 @@ _bench_spawn() {
     local health_url="http://127.0.0.1:$autotune_port"
     _BENCH_PID="" _BENCH_HEALTH_URL="$health_url" _BENCH_LOG="/tmp/at-${MODEL}-c${c}-b${b}.log"
 
-    local mmap_flag=""
-    [[ $mmap_mode == off ]] && mmap_flag="--no-mmap"
+    # build 10955 removed --no-mmap; an array (not a string) so the two words
+    # stay two argv entries and shellcheck's SC2086 stays quiet.
+    local -a mmap_flag=()
+    [[ $mmap_mode == off ]] && mmap_flag=(--load-mode none)
 
     # Flash-attn can hang or crash model load for some architectures (e.g.
     # qwen35 / certain Q8/F16 quants) — retry once with it off before
@@ -599,7 +601,7 @@ _bench_spawn() {
             --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
             --parallel "${BENCH_PARALLEL:-1}" --fit off "${fa_args[@]}" --kv-offload \
-            --cache-type-k "$kv_k" --cache-type-v "$kv_v" $mmap_flag \
+            --cache-type-k "$kv_k" --cache-type-v "$kv_v" "${mmap_flag[@]}" \
             "${spec_args[@]}" \
             > "$_BENCH_LOG" 2>&1 &
         _BENCH_PID=$!
@@ -818,15 +820,15 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
 # ---------------------------------------------------------------------------
 # bench_once — start server, run one benchmark, return decode TPS on stdout.
 #   args: ctx batch ubatch [mmap_mode] [ngl] [mode] [kv_k] [kv_v]
-#   mmap_mode: "auto" (--mmap, default) or "off" (--no-mmap)
+#   mmap_mode: "auto" (default: mmap) or "off" (--load-mode none)
 #   mode: "quick" (short prompt, discovery) or "filled" (scoring: pre-fills
 #         the KV cache with a FILL_RATIO x ctx prompt and measures sustained
 #         decode + prefill from the server timings)
 #   kv_k/kv_v: cache-type-k / cache-type-v (default q8_0)
 #   Writes "decode|prefill" (tok/s) to /tmp/at-metrics-$$ for callers that
 #   need the prefill half; stdout stays the decode TPS so existing callers
-#   are unchanged. Defaults to --mmap to avoid CUDA malloc ghost-VRAM OOM on
-#   WSL2.
+#   are unchanged. Defaults to mmap (no flag) to avoid CUDA malloc ghost-VRAM
+#   OOM on WSL2.
 # ---------------------------------------------------------------------------
 bench_once() {
     local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}"
@@ -1031,7 +1033,7 @@ BEST_PREFILL="0"
 # Profile 2 (interactive): config with the highest decode TPS anywhere in the
 # search, tiebreak higher ctx. Certified later with a filled-cache bench.
 P2_TPS="0"; P2_CTX=0; P2_B=""; P2_U=""; P2_PREFILL="0"
-# Set to 1 when the --no-mmap fallback produced the winner; the beam search,
+# Set to 1 when the --load-mode none fallback produced the winner; the beam search,
 # sweeps, and Phase 4 must then bench with mmap off too.
 MMAP_FALLBACK_USED=0
 
@@ -1243,7 +1245,7 @@ for combo in "${COMBOS[@]}"; do
         echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label} - model cannot run at any ctx"
         # Early abort: if the model never loaded at any ctx (load_fail at every
         # step), skip remaining combos — stepping down won't make the GGUF
-        # load. Go straight to the --no-mmap fallback.
+        # load. Go straight to the --load-mode none fallback.
         if [[ $_ALL_LOAD_FAIL == true ]]; then
             echo "  (model cannot be loaded — skipping remaining combos)"
             break
@@ -1252,20 +1254,22 @@ for combo in "${COMBOS[@]}"; do
 done
 
 # --- mmap fallback ---
-# If --mmap (default) failed at all ctx for all combos, retry with --no-mmap.
-# Some architectures (phi3, gemma3n) need --no-mmap for stable VRAM allocation.
+# If the default (mmap) load failed at all ctx for all combos, retry with
+# --load-mode none.  (build 10955 removed --mmap/--no-mmap/--mlock; the old
+# spelling is a fatal "invalid argument", not a deprecation.)
+# Some architectures (phi3, gemma3n) need --load-mode none for stable VRAM allocation.
 # Extracted from the top-level flow with its body unchanged: a self-contained
 # pass that re-runs the probe with mmap off and shares the same globals.  `b`/`u`
 # stay global exactly as before, so the move is behaviour-preserving (a later
 # step can unify this with probe_upward, whose loop it duplicates).
 probe_no_mmap() {
     echo ""
-    echo "  --mmap failed at all ctx — retrying with --no-mmap"
+    echo "  default (mmap) load failed at all ctx — retrying with --load-mode none"
     echo ""
     _ALL_LOAD_FAIL=true
     for combo in "${COMBOS[@]}"; do
         IFS=':' read -r b u <<< "$combo"
-        echo "  batch $(fmt "$b")/$(fmt "$u")  (--no-mmap)"
+        echo "  batch $(fmt "$b")/$(fmt "$u")  (--load-mode none)"
         echo "  ---------------------"
 
         c=$START_CTX; found=false
@@ -1300,7 +1304,7 @@ probe_no_mmap() {
         done
         # Likewise early-abort remaining combos in the fallback path
         if [[ $_ALL_LOAD_FAIL == true ]]; then
-            echo "  (model cannot be loaded even with --no-mmap — aborting)"
+            echo "  (model cannot be loaded even with --load-mode none — aborting)"
             break
         fi
     done
@@ -1759,8 +1763,10 @@ ttft_probe() {
 
     cleanup_gpu >&2 || { echo ""; return 1; }
 
-    local mmap_flag=""
-    [[ $mmap_mode == off ]] && mmap_flag="--no-mmap"
+    # build 10955 removed --no-mmap; an array (not a string) so the two words
+    # stay two argv entries and shellcheck's SC2086 stays quiet.
+    local -a mmap_flag=()
+    [[ $mmap_mode == off ]] && mmap_flag=(--load-mode none)
 
     _launch_ttft_server() {
         local -a fa_args=()
@@ -1769,7 +1775,7 @@ ttft_probe() {
             --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
             --parallel 1 --fit off "${fa_args[@]}" --kv-offload \
-            --cache-type-k "$kv_k" --cache-type-v "$kv_v" $mmap_flag \
+            --cache-type-k "$kv_k" --cache-type-v "$kv_v" "${mmap_flag[@]}" \
             > "/tmp/at-ttft-${MODEL}-c${c}.log" 2>&1 &
         pid=$!
         _bump_cuda_cycle
