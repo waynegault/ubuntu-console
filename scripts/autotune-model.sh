@@ -1,7 +1,7 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 36
+# Module Version: 40
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -141,6 +141,87 @@ KV_QUANTS=${LLM_AUTOTUNE_KV_QUANTS:-"q8_0/q8_0 q4_0/q4_0"}
 [[ "$NGL_BAND_FRAC" =~ ^0(\.[0-9]+)?$|^1(\.0+)?$ ]] || NGL_BAND_FRAC=0.55
 [[ "$BENCH_TIMEOUT" =~ ^[0-9]+$ ]] && [[ $BENCH_TIMEOUT -gt 0 ]] || BENCH_TIMEOUT=300
 [[ $FILL_MAX_TOKENS -lt $FILL_MIN_TOKENS ]] && FILL_MAX_TOKENS=$FILL_MIN_TOKENS
+
+# --- WSL2 dxgkrnl leak accounting (CUDA context-cycle ledger) ---
+# dxgkrnl leaks GPU VA on every CUDA context create/destroy, and a fresh
+# llama-server per bench is one create/destroy: probe + beam + sweeps + Phase 4
+# are ~10-20 cycles per row, so a 10-row sweep is ~150-200 in one WSL session.
+# Leaking enough VA hangs the VM, and only `wsl --shutdown` clears it — so the
+# ledger is ENFORCED here, not merely counted (it used to be written and never
+# read, while the batch runner's own guard went unapplied whenever a row was
+# driven directly, as the 2026-09-13 sweep's ad-hoc driver did).
+#
+# Defined ahead of the pre-flight VRAM-baseline guard below (which calls
+# _cuda_guard_or_exit before any spawn) — bash resolves function calls at
+# runtime, not at parse time, so calling it before this block executes is a
+# "command not found" (2026-09-14: `autotune-model.sh` line 208 called the
+# guard while its definition sat ~250 lines further down, unreached).
+#
+# /dev/shm, not /tmp: this is the leak's ledger, and /tmp is cleaned aggressively
+# on this box — a mid-boot clean would silently reset the budget while the leak
+# persists (observed 2026-09-14). Namespaced by boot ID because a WSL restart is
+# the only leak reset. Exported so rows, batches and children share one ledger.
+_AUTOTUNE_BOOT_ID="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
+_CUDA_CYCLE_FILE="${CUDA_CYCLE_FILE:-/dev/shm/autotune-cuda-cycles-${_AUTOTUNE_BOOT_ID:-unknown}}"
+_CUDA_STALL_FILE="${CUDA_STALL_FILE:-/dev/shm/autotune-degrade-stalls-${_AUTOTUNE_BOOT_ID:-unknown}}"
+export CUDA_CYCLE_FILE
+# Halting budget, same default and same counter file as run-autotune-batch.sh:
+# the batch runner derived 60 from the measured knee (~26 launch/kill cycles at
+# 109K ctx collapsed tps ~16 -> ~3.8, 2026-09-05); the probe is now capped near
+# 54K so each cycle leaks less, and 60 sits below the ~70-100 threshold there.
+CUDA_CYCLE_BUDGET="${CUDA_CYCLE_BUDGET:-60}"
+# Consecutive launches that stall (health never ready, process still alive, no
+# architecture error) — the dxgkrnl degradation signature — before halting.
+# 0 disables. Two matches the standing bench rule: 2 consecutive failures and
+# stop for diagnosis. A legitimately over-large start ctx has the same shape,
+# which is why it takes two rather than one.
+CUDA_DEGRADE_CONSECUTIVE_STALLS="${CUDA_DEGRADE_CONSECUTIVE_STALLS:-2}"
+
+_cuda_cycles() {
+    local n=0
+    [[ -f "$_CUDA_CYCLE_FILE" ]] && n=$(cat "$_CUDA_CYCLE_FILE" 2>/dev/null || echo 0)
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    printf '%s\n' "$n"
+}
+
+_cuda_stalls() {
+    local n=0
+    [[ -f "$_CUDA_STALL_FILE" ]] && n=$(cat "$_CUDA_STALL_FILE" 2>/dev/null || echo 0)
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    printf '%s\n' "$n"
+}
+
+_cuda_stall_bump() { printf '%s\n' "$(( $(_cuda_stalls) + 1 ))" > "$_CUDA_STALL_FILE" 2>/dev/null; }
+_cuda_stall_reset() { : > "$_CUDA_STALL_FILE" 2>/dev/null; }
+
+_bump_cuda_cycle() {
+    printf '%s\n' "$(( $(_cuda_cycles) + 1 ))" > "$_CUDA_CYCLE_FILE" 2>/dev/null
+    return 0
+}
+
+# _cuda_guard_or_exit — halt BEFORE the next spawn when the ledger says the
+# adapter is at risk. Called at top level (the pre-flight and ahead of every
+# phase), so a refusal stops the run instead of degrading into "one more failed
+# bench", and the overshoot is bounded by a single phase — well inside the
+# budget's margin. exit 3 is distinct so a driver can halt its whole sweep.
+_cuda_guard_or_exit() {
+    local c s
+    c=$(_cuda_cycles)
+    if (( c >= CUDA_CYCLE_BUDGET )); then
+        echo "ERROR: CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}) — WSL2 dxgkrnl leaks GPU VA on every llama-server spawn and an exhausted adapter hangs the VM." >&2
+        echo "       Restart WSL from Windows ('wsl --shutdown') to reset the ledger; nothing was certified this run." >&2
+        exit 3
+    fi
+    if (( CUDA_DEGRADE_CONSECUTIVE_STALLS > 0 )); then
+        s=$(_cuda_stalls)
+        if (( s >= CUDA_DEGRADE_CONSECUTIVE_STALLS )); then
+            echo "ERROR: ${s} consecutive launches stalled (health never ready while the process stayed alive) — the dxgkrnl degradation signature, at ${c}/${CUDA_CYCLE_BUDGET} cycles." >&2
+            echo "       Restart WSL from Windows ('wsl --shutdown'); nothing was certified this run." >&2
+            exit 3
+        fi
+    fi
+    return 0
+}
 
 # ---------------------------------------------------------------------------
 # VRAM-baseline guarantee: the KV-math START_CTX below is only trustworthy
@@ -410,81 +491,6 @@ PYEOF
 #==============================================================================
 # Helpers
 #==============================================================================
-
-# --- WSL2 dxgkrnl leak accounting (CUDA context-cycle ledger) ---
-# dxgkrnl leaks GPU VA on every CUDA context create/destroy, and a fresh
-# llama-server per bench is one create/destroy: probe + beam + sweeps + Phase 4
-# are ~10-20 cycles per row, so a 10-row sweep is ~150-200 in one WSL session.
-# Leaking enough VA hangs the VM, and only `wsl --shutdown` clears it — so the
-# ledger is ENFORCED here, not merely counted (it used to be written and never
-# read, while the batch runner's own guard went unapplied whenever a row was
-# driven directly, as the 2026-09-13 sweep's ad-hoc driver did).
-#
-# /dev/shm, not /tmp: this is the leak's ledger, and /tmp is cleaned aggressively
-# on this box — a mid-boot clean would silently reset the budget while the leak
-# persists (observed 2026-09-14). Namespaced by boot ID because a WSL restart is
-# the only leak reset. Exported so rows, batches and children share one ledger.
-_AUTOTUNE_BOOT_ID="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | cut -c1-12)"
-_CUDA_CYCLE_FILE="${CUDA_CYCLE_FILE:-/dev/shm/autotune-cuda-cycles-${_AUTOTUNE_BOOT_ID:-unknown}}"
-_CUDA_STALL_FILE="${CUDA_STALL_FILE:-/dev/shm/autotune-degrade-stalls-${_AUTOTUNE_BOOT_ID:-unknown}}"
-export CUDA_CYCLE_FILE
-# Halting budget, same default and same counter file as run-autotune-batch.sh:
-# the batch runner derived 60 from the measured knee (~26 launch/kill cycles at
-# 109K ctx collapsed tps ~16 -> ~3.8, 2026-09-05); the probe is now capped near
-# 54K so each cycle leaks less, and 60 sits below the ~70-100 threshold there.
-CUDA_CYCLE_BUDGET="${CUDA_CYCLE_BUDGET:-60}"
-# Consecutive launches that stall (health never ready, process still alive, no
-# architecture error) — the dxgkrnl degradation signature — before halting.
-# 0 disables. Two matches the standing bench rule: 2 consecutive failures and
-# stop for diagnosis. A legitimately over-large start ctx has the same shape,
-# which is why it takes two rather than one.
-CUDA_DEGRADE_CONSECUTIVE_STALLS="${CUDA_DEGRADE_CONSECUTIVE_STALLS:-2}"
-
-_cuda_cycles() {
-    local n=0
-    [[ -f "$_CUDA_CYCLE_FILE" ]] && n=$(cat "$_CUDA_CYCLE_FILE" 2>/dev/null || echo 0)
-    [[ "$n" =~ ^[0-9]+$ ]] || n=0
-    printf '%s\n' "$n"
-}
-
-_cuda_stalls() {
-    local n=0
-    [[ -f "$_CUDA_STALL_FILE" ]] && n=$(cat "$_CUDA_STALL_FILE" 2>/dev/null || echo 0)
-    [[ "$n" =~ ^[0-9]+$ ]] || n=0
-    printf '%s\n' "$n"
-}
-
-_cuda_stall_bump() { printf '%s\n' "$(( $(_cuda_stalls) + 1 ))" > "$_CUDA_STALL_FILE" 2>/dev/null; }
-_cuda_stall_reset() { : > "$_CUDA_STALL_FILE" 2>/dev/null; }
-
-_bump_cuda_cycle() {
-    printf '%s\n' "$(( $(_cuda_cycles) + 1 ))" > "$_CUDA_CYCLE_FILE" 2>/dev/null
-    return 0
-}
-
-# _cuda_guard_or_exit — halt BEFORE the next spawn when the ledger says the
-# adapter is at risk. Called at top level (the pre-flight and ahead of every
-# phase), so a refusal stops the run instead of degrading into "one more failed
-# bench", and the overshoot is bounded by a single phase — well inside the
-# budget's margin. exit 3 is distinct so a driver can halt its whole sweep.
-_cuda_guard_or_exit() {
-    local c s
-    c=$(_cuda_cycles)
-    if (( c >= CUDA_CYCLE_BUDGET )); then
-        echo "ERROR: CUDA context-cycle budget reached (${c} >= ${CUDA_CYCLE_BUDGET}) — WSL2 dxgkrnl leaks GPU VA on every llama-server spawn and an exhausted adapter hangs the VM." >&2
-        echo "       Restart WSL from Windows ('wsl --shutdown') to reset the ledger; nothing was certified this run." >&2
-        exit 3
-    fi
-    if (( CUDA_DEGRADE_CONSECUTIVE_STALLS > 0 )); then
-        s=$(_cuda_stalls)
-        if (( s >= CUDA_DEGRADE_CONSECUTIVE_STALLS )); then
-            echo "ERROR: ${s} consecutive launches stalled (health never ready while the process stayed alive) — the dxgkrnl degradation signature, at ${c}/${CUDA_CYCLE_BUDGET} cycles." >&2
-            echo "       Restart WSL from Windows ('wsl --shutdown'); nothing was certified this run." >&2
-            exit 3
-        fi
-    fi
-    return 0
-}
 
 # Shared cleanup — kills llama-server, stale processes, and forces WSL2
 # ghost-VRAM release via nvidia-smi query-context reset (double-kill trick).
@@ -1110,22 +1116,41 @@ last_fail_type() {
 probe_upward() {
     local _pc="$1" _pb="$2" _pu="$3" _pm="${4:-auto}" _pngl="${5:-$BENCH_NGL}"
     local _pkk="${6:-q8_0}" _pkv="${7:-q8_0}"
-    local _tps _lo _hi=0 _steps=0 _mid
+    local _tps _lo _hi=0 _steps=0 _mid _fail_label
 
-    _tps=$(bench_ctx "$_pc" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || return 1
+    _tps=$(bench_ctx "$_pc" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || {
+        _fail_label="OOM"
+        [[ $(last_fail_type) == "load_fail" ]] && _fail_label="unsupported model"
+        echo "    ctx $(fmt "$_pc") - ${_fail_label}"
+        return 1
+    }
+    echo "    ctx $(fmt "$_pc") - ${_tps} tps"
     record_best "$_pc" "$_tps" "$_pb" "$_pu"
     _lo=$_pc
     while [[ $_steps -lt 2 ]]; do
         _steps=$((_steps + 1))
         _pc=$(( _lo * 3 / 2 )); [[ $_pc -gt $MAX_CTX ]] && _pc=$MAX_CTX
         [[ $_pc -eq $_lo ]] && break
-        _tps=$(bench_ctx "$_pc" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || { _hi=$_pc; break; }
+        _tps=$(bench_ctx "$_pc" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || {
+            _hi=$_pc
+            _fail_label="OOM"
+            [[ $(last_fail_type) == "load_fail" ]] && _fail_label="unsupported model"
+            echo "    ctx $(fmt "$_pc") - ${_fail_label}: binary probe"
+            break
+        }
+        echo "    ctx $(fmt "$_pc") - ${_tps} tps - climbing"
         _lo=$_pc; record_best "$_lo" "$_tps" "$_pb" "$_pu"
     done
     if [[ $_hi -gt 0 ]] && [[ $(( _hi - _lo )) -ge 512 ]]; then
         _mid=$(( ( _lo + _hi ) / 2 / 512 * 512 ))
         [[ $_mid -eq $_lo ]] && return 0
-        _tps=$(bench_ctx "$_mid" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || return 0
+        _tps=$(bench_ctx "$_mid" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || {
+            _fail_label="OOM"
+            [[ $(last_fail_type) == "load_fail" ]] && _fail_label="unsupported model"
+            echo "    ctx $(fmt "$_mid") - ${_fail_label}"
+            return 0
+        }
+        echo "    ctx $(fmt "$_mid") - ${_tps} tps"
         record_best "$_mid" "$_tps" "$_pb" "$_pu"
     fi
     return 0
@@ -1164,16 +1189,14 @@ for combo in "${COMBOS[@]}"; do
         found=true; ANY_OK=true; _ALL_LOAD_FAIL=false
         record_best "$c" "$tps" "$b" "$u"
 
-        # Fast convergence (2026-08-27, Wayne): START_CTX is the KV-math
-        # ceiling (BUDGET / kv-per-1k, from cleared VRAM).  When it loads
-        # directly, that IS the capacity — climbing 50% above the computed
-        # ceiling wastes server loads on values the KV budget cannot fit.
-        # Only when the estimate over-shot (we descended) do we climb back
-        # up to confirm, and the binary probe refines lo/hi below.
-        if [[ $c -eq $c0 ]]; then
-            echo "  ctx $(fmt "$c") - capacity confirmed at the KV-math ceiling (no climb needed)"
-            break
-        fi
+        # Always climb past the first success (fixed 2026-09-14): START_CTX
+        # is only an ESTIMATE of the KV-fit ceiling (kv-per-1k model, ignores
+        # GQA head-count and runtime KV-quant nuances) — a first-try success
+        # does not prove MAX_CTX is unreachable. Skipping the climb here
+        # silently capped every model at its KV-math guess instead of the
+        # empirically confirmed max, defeating the tool's purpose (find the
+        # highest ctx meeting the TPS floor). The climb below is still
+        # bounded by MAX_CTX and stops on the first OOM/load-fail.
         # Phase 2: step up 50% — capacity-first (2026-08-27), climbs to
         # MAX_CTX or OOM. The climb is clamped at MAX_CTX — probing past the
         # native-ctx ceiling records RoPE-extended ctx values the machine
@@ -1917,11 +1940,21 @@ try:
                 break
 except Exception as exc:
     print(f'[autotune] warning: ttft probe stream failed: {exc}', file=sys.stderr)
+    sys.exit(1)
 print("%s|%s" % (ttft_ms, count))
 PYEOF
-    ) || parsed="0|0"
+    )
+    local _tt_rc=$?
     local end_ns; end_ns=$(date +%s%N)
     _bench_stop "$pid"
+    if [[ $_tt_rc -ne 0 ]] || [[ -z "$parsed" ]]; then
+        # A request/stream failure (HTTP 400, connection reset, etc.) is NOT
+        # a 0ms TTFT — the old fallback (`parsed="0|0"`) recorded a failed
+        # probe as an instantaneous response, which then persisted a
+        # fabricated ttft_ms=0 into the saved profile (2026-09-14). Propagate
+        # the failure so the caller reports it as "failed" instead.
+        return 1
+    fi
 
     local total_ms=$(( (end_ns - start_ns) / 1000000 ))
     local ttft_ms delivered per_step

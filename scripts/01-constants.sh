@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 16
+# Module Version: 17
 # ==============================================================================
 
 # ==============================================================================
@@ -150,6 +150,11 @@ export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$HOME/.llm/default_model.conf}"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"
 export LLM_LOG_FILE="/dev/shm/llama-server.log"
 export LLM_TPS_CACHE="/dev/shm/last_tps"
+# Sidecar for the window-invariant check (11e-llm-model.sh): a non-destructive
+# per-run note, never written back into LLM_REGISTRY — a bench-time mismatch
+# reflects whatever else shared the GPU during that run, not a re-certified
+# capability, so it must never overwrite the registry's autotune-certified ctx.
+export LLM_WINDOW_MISMATCH_CACHE="/dev/shm/last_window_mismatch"
 # Directory holding stdin-keeper PID files. The keeper also runs with this as
 # its cwd, so orphan keepers can be attributed to it (/proc/PID/cwd) — never
 # reap a `sleep 3600` that belongs to a different directory.

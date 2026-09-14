@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -1064,6 +1064,14 @@ function __model_use_wait_healthy() {
             __tac_info "Warning" \
                 "[window mismatch: advertising ctx ${ctx} but the server serves ${_slot_ctx} per request (n_ctx_slot from /props). Check --parallel (N slots DIVIDE the window unless --kv-unified) and --fit.]" \
                 "$C_Warning"
+            # Non-destructive: a bench-time sidecar note, never a registry write.
+            # The mismatch reflects THIS run's GPU contention (other loaded
+            # servers eating VRAM), not a re-certified capability — writing it
+            # into LLM_REGISTRY would contaminate the autotune-certified ctx
+            # with a value that can flap between runs for reasons unrelated to
+            # the model itself (2026-09-14).
+            [[ -n "${__BENCH_MODE:-}" ]] && \
+                printf 'advertised=%s served=%s\n' "$ctx" "$_slot_ctx" > "$LLM_WINDOW_MISMATCH_CACHE" 2>/dev/null
         fi
         [[ -n "${__BENCH_MODE:-}" ]] || __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
         local offload_info
@@ -1666,7 +1674,7 @@ function __model_bench() {
         __tac_info "Bench" "[Ignoring LLM_BENCH_AUTOTUNE_ENGINE=${LLM_BENCH_AUTOTUNE_ENGINE}; single autotuner mode uses shell]" "$C_Dim"
     fi
 
-    local -a b_num=() b_name=() b_file=() b_size=() b_gpu=() b_tps=()
+    local -a b_num=() b_name=() b_file=() b_size=() b_gpu=() b_tps=() b_notes=()
 
     # NOTE: the __bench_* helpers below are deliberately global.  Bash has no
     # function-local functions, so defining them here registers them for the
@@ -1852,7 +1860,7 @@ function __model_bench() {
             fi
         fi
 
-        rm -f "$LLM_TPS_CACHE"
+        rm -f "$LLM_TPS_CACHE" "$LLM_WINDOW_MISMATCH_CACHE"
         # Timeout guard: force-bound full model run (__model_use + burn).
         local bench_model_timeout="${LLM_BENCH_MODEL_TIMEOUT:-600}"
         local bench_model_rc=0
@@ -1884,6 +1892,9 @@ function __model_bench() {
         local tps="FAIL"
         [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")
         b_tps+=("$tps")
+        local win_note=""
+        [[ -f "$LLM_WINDOW_MISMATCH_CACHE" ]] && win_note="window mismatch: $(< "$LLM_WINDOW_MISMATCH_CACHE")"
+        b_notes+=("$win_note")
         __model_stop 2>/dev/null
         printf "\nClearing VRAM\n"
         sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
@@ -1915,16 +1926,17 @@ function __model_bench() {
     for i in "${!b_num[@]}"
     do
         printf "  %-4s %-30s %-7s %s\n" "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}"
+        [[ -n "${b_notes[$i]:-}" ]] && printf "       ${C_Warning}⚠ %s${C_Reset}\n" "${b_notes[$i]}"
     done
 
     local bench_file
     bench_file="$HOME/.llm/bench_$(date +%Y%m%d_%H%M%S).tsv"
     {
-        printf "#\tmodel\tsize\ttps\n"
+        printf "#\tmodel\tsize\ttps\tnotes\n"
         for i in "${!b_num[@]}"
         do
-            printf "%s\t%s\t%s\t%s\n" \
-                "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}"
+            printf "%s\t%s\t%s\t%s\t%s\n" \
+                "${b_num[$i]}" "${b_name[$i]}" "${b_size[$i]}" "${b_tps[$i]}" "${b_notes[$i]:-}"
         done
     } > "$bench_file"
     __tac_info "Saved" "$bench_file" "$C_Dim"
