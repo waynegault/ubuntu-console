@@ -37,6 +37,17 @@ def resolve_serve_target(path: str, force_embed: bool = False) -> tuple[str, str
   return dirname, filename, False
 
 
+# Types whose stored LABEL is a preview of the node's own content.  The GET read
+# path replaces it with a non-content identifier (see _redacted_label).
+# memory_import sets label = _preview_text(content) for these, so serving the
+# label would serve the memory text.  This tuple is the single source of truth
+# for that decision, and tests/test_untested_modules.py carries a canary that
+# fails when an importer starts emitting a type not classified here or in its
+# non-content list (audit_security.md: keying on the type alone leaks a future
+# content-derived type).
+_REDACTED_LABEL_TYPES = ("memory", "summary")
+
+
 def _redacted_label(node: dict) -> str:
   """Return a non-content label for a memory/summary node.
 
@@ -231,7 +242,7 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
                 _node.pop('content', None)
                 _node.pop('tags', None)
                 _node.pop('content_preview', None)
-                if str(_node.get('type') or '').lower() in ('memory', 'summary'):
+                if str(_node.get('type') or '').lower() in _REDACTED_LABEL_TYPES:
                     _label = _redacted_label(_node)
                     _node['label'] = _label
                     if 'display_label' in _node:

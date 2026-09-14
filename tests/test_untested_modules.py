@@ -1773,6 +1773,43 @@ class TestMemoryImportStore(unittest.TestCase):
         self.assertNotIn(("chunk:c1", "file:memory/notes.md", "references file"), edges)
         self.assertNotIn("file:unknown/thing.md", ids)
 
+    def test_every_emitted_node_type_is_classified_for_label_redaction(self):
+        # audit_security.md residual: the GET read path redacts a node's LABEL
+        # only when its type is in server._REDACTED_LABEL_TYPES, because for
+        # those types label IS a preview of the node's own content
+        # (memory_import sets label = _preview_text(content)).  A future
+        # importer type that is content-derived but not listed there would leak
+        # it.  This drives the real importer and requires every type it emits to
+        # be classified — content-derived (redacted) or explicitly not — so a
+        # new type fails here until someone decides.
+        from kgraph import server as kgraph_server
+
+        redacted = set(kgraph_server._REDACTED_LABEL_TYPES)
+        # Types whose label cannot reconstruct their content (file paths, ids,
+        # slugs, display names, short editorial titles).
+        label_is_not_content = {
+            "actor", "chunk", "decision", "file", "issue", "organization",
+            "outcome", "person", "project", "system", "topic",
+        }
+
+        # The known content-derived types must stay redacted, and the two
+        # classifications must not overlap.
+        self.assertIn("memory", redacted)
+        self.assertIn("summary", redacted)
+        self.assertEqual(redacted & label_is_not_content, set())
+
+        emitted = {
+            str(getattr(n, "type", "") or "").lower()
+            for n in self._graph(include_all=True).nodes
+        }
+        unclassified = sorted(emitted - redacted - label_is_not_content)
+        self.assertEqual(
+            unclassified, [],
+            "importer node type(s) not classified for label redaction: "
+            f"{unclassified} — add to server._REDACTED_LABEL_TYPES if the label "
+            "is content-derived, otherwise to label_is_not_content here",
+        )
+
     def test_actor_mentions_and_activation_authorship(self):
         graph = self._graph()
         edges = _edge_keys(graph)
