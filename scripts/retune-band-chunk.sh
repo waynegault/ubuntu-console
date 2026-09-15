@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # retune-band-chunk.sh — run ONE chunk of the threshold-band re-tune.
 #
 # The row set is whatever the registry's band criterion selects NOW.  Derive it,
 # never reuse a written-down list: the registry has been renumbered twice in a
 # day (35 rows -> 27, rows deleted from the middle), so a hardcoded table is
-# stale by the time it is read.  The criterion is field 17 (the profile-2
-# decode-TPS ratio p2_tps/tps) inside [2.5, 9.0]:
+# stale by the time it is read.  The criterion is field 17 — the certified decode
+# `tps` — inside [2.5, 9.0]: rows near the TPS floor, where the ~10% measurement
+# error the bench carries is enough to flip role admission.  (Corrected
+# 2026-09-15: this header called field 17 "the p2_tps/tps ratio", which it never
+# was.)
 #
 #   awk -F'|' '$1 ~ /^[0-9]+$/ && $17+0>=2.5 && $17+0<=9.0 {print $1, $2, $17, $25}' \
 #       ~/.llm/models.conf
