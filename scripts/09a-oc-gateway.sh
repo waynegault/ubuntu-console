@@ -2,7 +2,7 @@
 # shellcheck disable=SC1091,SC2154
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -231,7 +231,7 @@ function __so_push_api_keys() {
 # Returns 0 if LLM is running and healthy, 1 on failure.
 # ---------------------------------------------------------------------------
 function __so_ensure_llm_running() {
-    # Production LLM runs as systemd llama-server.service on LLM_SERVICE_PORT
+    # Production LLM runs as systemd llama-xe-minicpm5-1b-chat.service on LLM_SERVICE_PORT
     # (the port the gateway's llama-cpp provider is wired to). If it is
     # healthy, treat as running — avoids loading a duplicate model on LLM_PORT
     # that nothing consumes. The port probe is authoritative: in environments
@@ -241,9 +241,9 @@ function __so_ensure_llm_running() {
     # stopped by the fallback start path below.
     if __test_port "${LLM_SERVICE_PORT:-18081}"
     then
-        if systemctl --user is-active --quiet llama-server.service 2>/dev/null
+        if systemctl --user is-active --quiet llama-xe-minicpm5-1b-chat.service 2>/dev/null
         then
-            __tac_info "Local LLM" "[RUNNING on PORT $LLM_SERVICE_PORT — llama-server.service]" "$C_Success"
+            __tac_info "Local LLM" "[RUNNING on PORT $LLM_SERVICE_PORT — llama-xe-minicpm5-1b-chat.service]" "$C_Success"
         else
             __tac_info "Local LLM" "[RUNNING on PORT $LLM_SERVICE_PORT — production server detected]" "$C_Success"
         fi
@@ -258,13 +258,13 @@ function __so_ensure_llm_running() {
     # TAC_SKIP_SERVICE_LLM=1 (CI/unit tests) bypasses systemd management so
     # the legacy registry-based fallback below stays unit-testable.
     if [[ -z "${TAC_SKIP_SERVICE_LLM:-}" ]] \
-        && systemctl --user list-unit-files llama-server.service >/dev/null 2>&1
+        && systemctl --user list-unit-files llama-xe-minicpm5-1b-chat.service >/dev/null 2>&1
     then
         # Stop any legacy profile-managed instance and stale keepers so VRAM
         # is free for the service (the service itself is down here, so this
         # cannot kill it).
         __model_stop >/dev/null 2>&1 || true
-        if systemctl --user start llama-server.service 2>/dev/null
+        if systemctl --user start llama-xe-minicpm5-1b-chat.service 2>/dev/null
         then
             local _so_svc_wait=0
             while (( _so_svc_wait < 180 ))
@@ -272,13 +272,13 @@ function __so_ensure_llm_running() {
                 if __test_port "$LLM_SERVICE_PORT" \
                     && curl -sf --max-time 2 "http://127.0.0.1:$LLM_SERVICE_PORT/health" >/dev/null 2>&1
                 then
-                    __tac_info "Local LLM" "[ONLINE on PORT $LLM_SERVICE_PORT — llama-server.service] (${_so_svc_wait}s)" "$C_Success"
+                    __tac_info "Local LLM" "[ONLINE on PORT $LLM_SERVICE_PORT — llama-xe-minicpm5-1b-chat.service] (${_so_svc_wait}s)" "$C_Success"
                     return 0
                 fi
                 sleep 1
                 (( _so_svc_wait++ ))
             done
-            __tac_info "Local LLM" "[SERVICE START TIMEOUT — check: journalctl --user -u llama-server.service]" "$C_Error"
+            __tac_info "Local LLM" "[SERVICE START TIMEOUT — check: journalctl --user -u llama-xe-minicpm5-1b-chat.service]" "$C_Error"
             return 1
         fi
         __tac_info "Local LLM" "[SERVICE START FAILED — falling back to port $LLM_PORT]" "$C_Warning"
@@ -384,7 +384,11 @@ function __so_start_gateway() {
     local _svc="$1"
     openclaw gateway start >/dev/null 2>&1
 
-    local ready=0 elapsed=0 max_wait=20
+    # 2026-09-15 (Hal): 20s was far too short. Measured cold start on this host is
+    # 3.5-4 min (12:03:42 unit start -> 12:06:16 config load -> 12:07:52 ready),
+    # so 'so' always printed a false '[STARTING - finalizing]' and users retried
+    # a healthy-but-slow gateway. Budget now covers a real cold start.
+    local ready=0 elapsed=0 max_wait=300
     local _restarts_before _spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
     _restarts_before=$(systemctl --user show -p NRestarts --value "$_svc" 2>/dev/null || echo 0)
 
@@ -425,9 +429,11 @@ function __so_start_gateway() {
         sleep 1
         (( elapsed++ ))
 
-        if (( elapsed == 15 && !ready ))
+        # Only shorten the budget if the unit has genuinely gone away; a healthy
+        # gateway that is merely slow to bind must keep the full budget.
+        if (( elapsed == 15 && !ready )) && ! systemctl --user is-active --quiet "$_svc" 2>/dev/null
         then
-            systemctl --user is-active --quiet "$_svc" 2>/dev/null && max_wait=30
+            max_wait=30
         fi
     done
     printf '\r%s\r' "$(printf '%*s' 40 '')"
@@ -440,7 +446,7 @@ function __so_start_gateway() {
     elif systemctl --user is-active --quiet "$_svc" 2>/dev/null
     then
         # Final grace check to avoid false negatives on slow bind/port probe races.
-        local _grace_s=0 _grace_max=6
+        local _grace_s=0 _grace_max=45
         while (( _grace_s < _grace_max ))
         do
             if __test_port "$OC_PORT"
