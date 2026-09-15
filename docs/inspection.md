@@ -244,16 +244,31 @@ SC2034/SC2154) that no source-following can resolve.
 
 🔍 Host shell integrity
 
-`ls -la /usr/bin/bash /bin/bash; dpkg --verify bash`
+`ls -la /usr/bin/bash /usr/bin/bash.distrib; dpkg-divert --list | grep 'usr/bin/bash'; dpkg --verify bash`
 
-`/usr/bin/bash` should be the PACKAGED bash that dpkg owns. If it is a symlink
-somewhere else, `dpkg --verify bash` reports `M` for that path and every script on
-the box is running a substituted interpreter — and an `apt upgrade bash` (or a
-reinstall) will silently restore the packaged one, changing which bash the console,
-its hooks and its benches all run. Measured 2026-09-16: `/usr/bin/bash` and
-`/bin/bash` both point at `/home/linuxbrew/.linuxbrew/bin/bash` (Homebrew 5.3.9)
-while dpkg owns `bash 5.2.21-2ubuntu4`. A substitution like that is acceptable only
-as a known, deliberate choice — it must never be a surprise.
+`/usr/bin/bash` must be a KNOWN, DELIBERATE interpreter rather than whatever dpkg
+last happened to write. On this box it is a symlink to
+`/home/linuxbrew/.linuxbrew/bin/bash` (Homebrew 5.3.9), replacing the packaged
+`bash 5.2.21-2ubuntu4`. Because the replacement is deliberate it is registered as a
+dpkg diversion, and that is what makes it survive:
+
+    local diversion of /usr/bin/bash to /usr/bin/bash.distrib
+
+so an `apt upgrade bash` writes the new binary to `/usr/bin/bash.distrib` and leaves
+the symlink alone. Proven 2026-09-16 by reinstalling the package: the symlink
+survived, and `dpkg --verify bash` went from reporting `?M5?????? /usr/bin/bash` to
+silent — the substitution stopped being a modified package file. `/bin` is a symlink
+to `usr/bin` here, so this one path covers both.
+
+dpkg warns that diverting a file from an Essential package is dangerous, so this
+check exists to catch the two ways it can still go wrong:
+
+  * `/usr/bin/bash` DANGLING (Homebrew removed) — the system's shell is missing.
+  * `/usr/bin/bash.distrib` NEWER than the running bash — apt shipped a bash update
+    that is installed but NOT in effect, so packaged fixes are sitting unused.
+
+Revert the arrangement entirely with:
+`sudo rm -f /usr/bin/bash && sudo dpkg-divert --local --rename --remove /usr/bin/bash`
 
 2. Security — Critical
 
@@ -2656,5 +2671,29 @@ is deliberately not worth fixing, and what was still open when this pass ended.
     `#!/home/linuxbrew/.linuxbrew/bin/bash` were switched on 2026-09-16: nothing in
     them needs more than 5.2, and every caller runs `bash <script>`, so the shebang
     was never read in the first place.
+
+18.5 The host shell substitution, made deliberate (2026-09-16)
+
+Found by this pass and fixed the same day. `/usr/bin/bash` and `/bin/bash` were
+symlinks to Homebrew's bash 5.3.9 while dpkg still owned `bash 5.2.21-2ubuntu4`, and
+`dpkg --verify bash` reported the packaged file as MODIFIED. The arrangement worked,
+but nothing announced it: any `apt upgrade bash` would have restored the packaged
+binary and changed the interpreter under the console, its hooks, kgraph and the
+benches — a 5.3.9 → 5.2.21 change the console tolerates, which is exactly why nobody
+would have noticed it happening.
+
+Wayne chose to keep Homebrew bash as the system shell and make it durable, so it is
+now a registered dpkg diversion (`of /usr/bin/bash to /usr/bin/bash.distrib`), which
+is the mechanism dpkg provides for deliberately replacing a packaged file. Verified
+by reinstalling the package twice: the symlink survives and the diversion keeps the
+packaged binary available as a real, runnable fallback.
+
+The one genuine cost, recorded here because dpkg warns about exactly this: apt's bash
+security updates now land in `/usr/bin/bash.distrib` and are NOT in effect — the box
+runs Homebrew's newer bash instead. That is a deliberate trade, and 1.13 is the check
+that keeps it from becoming silent: it fails if the symlink dangles or if `.distrib`
+becomes newer than the running interpreter. Revert is one command, recorded in 1.13.
+If a second machine ever needs this, the three commands belong in `install.sh`
+alongside its other host steps rather than in a runbook.
 
 <!-- end of file -->
