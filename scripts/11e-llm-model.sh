@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 23
+# Module Version: 24
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -3139,14 +3139,20 @@ function model() {
             if [[ "${1:-}" == "all" ]]
             then
                 shift
-                # The batch's exit code is the verdict: it returns non-zero when any
-                # row failed (2026-09-15 — it used to return 0 even on a 2-of-2
-                # failure, and this line then announced "[Complete]" over it).
-                if bash "$HOME/ubuntu-console/scripts/run-autotune-batch.sh" 2>&1
+                # The batch's exit code is the verdict: 3 = stopped for the adapter,
+                # 1 = rows failed, 0 = clean (2026-09-15 — it used to return 0 even on
+                # a 2-of-2 failure, and this line then announced "[Complete]" over it).
+                _at_rc=0
+                bash "$HOME/ubuntu-console/scripts/run-autotune-batch.sh" 2>&1 || _at_rc=$?
+                if (( _at_rc == 0 ))
                 then
                     __tac_info "Autotune All" "[Complete — all untuned models processed]" "$C_Success"
+                elif (( _at_rc == 3 ))
+                then
+                    __tac_info "Autotune All" "[STOPPED for the adapter (exit 3) — see the HALTED line above; restart WSL before re-running the printed resume command]" "$C_Error"
+                    return 1
                 else
-                    __tac_info "Autotune All" "[INCOMPLETE — rows failed; see the FAILED line above and re-run the printed resume command]" "$C_Error"
+                    __tac_info "Autotune All" "[INCOMPLETE — see the FAILED line above, then re-run the printed resume command]" "$C_Error"
                     return 1
                 fi
                 return 0

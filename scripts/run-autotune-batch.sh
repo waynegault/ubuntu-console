@@ -1,6 +1,6 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -25,6 +25,13 @@
 # On halt it prints the remaining models and the exact resume command. The only
 # real fix for an exhausted adapter is `wsl --shutdown` from Windows; the cycle
 # counter is namespaced by boot ID, so a restart starts a fresh counter.
+#
+# Exit codes are a contract shared with autotune-model.sh (docs/llm.md):
+#   0  every requested row certified
+#   1  at least one row failed
+#   3  stopped for the ADAPTER — the cycle budget, or a row that exited 3 for
+#      consecutive stalls.  Outranks 1: it is the case that needs a WSL restart.
+#   (a chunk-cap or foreign-owner halt exits 0 or 1 by whether rows failed)
 #
 # Timing estimate per model (RTX 3050 4GB, autotune v4). The figures date from
 # 2026-06, when the model drive was still a Windows mount — it became native ext4
@@ -70,6 +77,11 @@ CONSECUTIVE_FAILURES=0
 MAX_CONSECUTIVE_FAILURES="${MAX_CONSECUTIVE_FAILURES:-2}"
 # One warning per batch is enough for a host-state flag that no longer halts.
 _GPU_HEALTH_WARNED=0
+# The batch's exit code is a contract (docs/llm.md, and autotune-model.sh's own
+# exit 3): 3 = stopped for the ADAPTER, 1 = rows failed, 0 = clean.  A budget halt
+# outranks a failed row because it is the condition that needs a WSL restart and it
+# explains any failures alongside it.
+HALT_EXIT=0
 
 # --- WSL2 dxgkrnl cycle-budget knobs ---
 # The leak is proportional to the number of CUDA context create/destroy cycles;
@@ -177,6 +189,7 @@ for ((i = 0; i < TOTAL; i++)); do
     _cyc=$(cuda_cycles)
     if [[ "$_cyc" =~ ^[0-9]+$ ]] && [[ "$_cyc" -ge "$CUDA_CYCLE_BUDGET" ]]; then
         HALT_REASON="CUDA context-cycle budget reached (${_cyc} >= ${CUDA_CYCLE_BUDGET})"
+        HALT_EXIT=3
         HALT_NEEDS_WSL_RESTART=1
         break
     fi
@@ -196,14 +209,28 @@ for ((i = 0; i < TOTAL; i++)); do
 
     COUNT=$((COUNT + 1))
     printf '\n[%d/%d] model #%s (cyc %s/%s) ... ' "$COUNT" "$TOTAL" "$m" "$(cuda_cycles)" "$CUDA_CYCLE_BUDGET"
-    if bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "$m" 2>&1; then
+    _row_rc=0
+    bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "$m" 2>&1 || _row_rc=$?
+    if (( _row_rc == 0 )); then
         printf 'done\n'
         TUNED_COUNT=$((TUNED_COUNT + 1))
         CONSECUTIVE_FAILURES=0
     else
-        printf 'failed\n'
+        printf 'failed (exit %s)\n' "$_row_rc"
         FAILED_ROWS+=("$m")
         CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+        # autotune-model.sh exits 3 for the ADAPTER backstops (the cycle budget, or
+        # CUDA_DEGRADE_CONSECUTIVE_STALLS launches alive but never healthy).  One row
+        # carrying that signature is enough to stop — it names the adapter, not the
+        # model, and a WSL restart is the only fix.  docs/llm.md states this as a
+        # contract ("both ... halt (exit 3)"); the batch used to swallow the code and
+        # count the row as an ordinary failure.
+        if (( _row_rc == 3 )); then
+            HALT_REASON="model #${m} exited 3 — the adapter backstop fired (cycle budget or consecutive stalls)"
+            HALT_EXIT=3
+            HALT_NEEDS_WSL_RESTART=1
+            break
+        fi
     fi
     drain_vram
     # WARN, do not halt: see the header.  Said once per batch, loudly.
@@ -260,6 +287,9 @@ __rab_footer() {
         echo "  (or run with no args to auto-resume every still-untuned model)"
     fi
 
+    if [[ "${HALT_EXIT:-0}" != "0" ]]; then
+        return "$HALT_EXIT"
+    fi
     (( ${#FAILED_ROWS[@]} > 0 )) && return 1
     return 0
 }

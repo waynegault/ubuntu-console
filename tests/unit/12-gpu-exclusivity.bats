@@ -431,6 +431,7 @@ case "$2" in
     failures) MODEL_ARRAY=(5 7 18 27); COUNT=2; TOTAL=4; TUNED_COUNT=0; FAILED_ROWS=(5 7) ;;
     clean)    MODEL_ARRAY=(1 5);       COUNT=1; TOTAL=2; TUNED_COUNT=1; FAILED_ROWS=() ;;
     allfail)  MODEL_ARRAY=(5 7);       COUNT=2; TOTAL=2; TUNED_COUNT=0; FAILED_ROWS=(5 7) ;;
+    budget)   MODEL_ARRAY=(5 7);       COUNT=1; TOTAL=2; TUNED_COUNT=0; FAILED_ROWS=(5); HALT_EXIT=3 ;;
 esac
 __rab_footer "halt" 0
 echo "RC=$?"
@@ -451,6 +452,13 @@ EOS
     run bash "$TAC_TEST_TMPDIR/footer-probe.sh" "$TAC_TEST_TMPDIR/footer.sh" allfail
     [[ "$output" == *"REMAINING=5 7"* ]]
     [[ "$output" == *"RC=1"* ]]
+
+    # Stopped for the ADAPTER: exit 3, which outranks the failed row beside it.
+    # docs/llm.md states this as a contract shared with autotune-model.sh, and the
+    # batch used to have no exit 3 at all.
+    run bash "$TAC_TEST_TMPDIR/footer-probe.sh" "$TAC_TEST_TMPDIR/footer.sh" budget
+    [[ "$output" == *"RC=3"* ]]
+    [[ "$output" == *"REMAINING=5 7"* ]]
 }
 
 # The dxgkrnl EOVERFLOW count WARNS, it does not halt (Wayne, 2026-09-15).  It
