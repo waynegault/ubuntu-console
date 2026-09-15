@@ -1,6 +1,6 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -16,7 +16,12 @@
 # now halts GRACEFULLY — instead of crashing WSL — when any of:
 #   (a) the CUDA context-cycle budget is exceeded (CUDA_CYCLE_BUDGET),
 #   (b) a chunk size is reached (MAX_MODELS_PER_CHUNK), or
-#   (c) the WSL2 GPU health detector reports degradation.
+#   (c) rows fail CONSECUTIVELY (MAX_CONSECUTIVE_FAILURES), which is the batch's
+#       own corroboration that something is wrong with the run.
+# The WSL2 GPU health detector WARNS rather than halting (changed 2026-09-15,
+# Wayne): its dxg EOVERFLOW count tracks HOST state, not this batch's activity —
+# last boot it read 22 while the ledger read 18, and at 20 cycles this boot it
+# still read 4.  Gating on it cost one WSL restart per row while measuring nothing.
 # On halt it prints the remaining models and the exact resume command. The only
 # real fix for an exhausted adapter is `wsl --shutdown` from Windows; the cycle
 # counter is namespaced by boot ID, so a restart starts a fresh counter.
@@ -63,6 +68,8 @@ CONSECUTIVE_FAILURES=0
 # broken, and every further row spends GPU time reproducing it.  Chunk 2 is the
 # shape: two rows, both refused on a baseline no row could have passed.
 MAX_CONSECUTIVE_FAILURES="${MAX_CONSECUTIVE_FAILURES:-2}"
+# One warning per batch is enough for a host-state flag that no longer halts.
+_GPU_HEALTH_WARNED=0
 
 # --- WSL2 dxgkrnl cycle-budget knobs ---
 # The leak is proportional to the number of CUDA context create/destroy cycles;
@@ -135,23 +142,24 @@ drain_vram() {
 }
 
 #------------------------------------------------------------------------------
-# WSL2 GPU health — HARD gate (2026-09-05): returns non-zero when degraded so
-# the batch halts instead of warning and continuing into a VM hang. The
-# investigator repo's check_wsl_gpu.py reads the dmesg reserve_gpu_va EOVERFLOW
-# signature; when degraded, measured tps collapses and llama-server may die
-# silently mid-run. The only fix is a WSL restart (wsl --shutdown).
+# wsl_gpu_health_suspect — 0 when the dxgkrnl EOVERFLOW count is HIGH.
+#
+# A WARNING signal, not a verdict (was a hard gate until 2026-09-15).  The
+# investigator repo's check_wsl_gpu.py counts the dmesg reserve_gpu_va EOVERFLOW
+# signature, and its own module says to treat a high count as "suspect,
+# corroborate with tps" — while this batch used it as a hard halt.  The measured
+# data does not support a hard halt: the count tracks host state, not our own
+# activity (22 at 18 cycles one boot; 4 at 20 cycles the next).  The batch's
+# corroboration is the tps it already measures: a genuinely degraded adapter shows
+# up as rows that FAIL, which is what MAX_CONSECUTIVE_FAILURES halts on.
+# A real degradation is still fixed only by a WSL restart.
 #------------------------------------------------------------------------------
-check_wsl_gpu_health() {
+wsl_gpu_health_suspect() {
     local script="$HOME/investigator/scripts/check_wsl_gpu.py" rc
-    [ -f "$script" ] || return 0
+    [ -f "$script" ] || return 1
     sh "$script" >/dev/null 2>&1
     rc=$?
-    if [ "$rc" -eq 1 ]; then
-        echo "HALT: WSL2 GPU paravirtualization degraded — measured tps may collapse and llama-server may die silently." >&2
-        echo "      Restart WSL (wsl --shutdown), then re-run the remaining models below." >&2
-        return 1
-    fi
-    return 0
+    [ "$rc" -eq 1 ]
 }
 
 # Initial drain — skipped when another agent owns the card: there is nothing of
@@ -198,13 +206,15 @@ for ((i = 0; i < TOTAL; i++)); do
         CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
     fi
     drain_vram
-    if ! check_wsl_gpu_health; then
-        HALT_REASON="WSL2 GPU paravirtualization degraded"
-        HALT_NEEDS_WSL_RESTART=1
-        break
+    # WARN, do not halt: see the header.  Said once per batch, loudly.
+    if (( _GPU_HEALTH_WARNED == 0 )) && wsl_gpu_health_suspect; then
+        echo "WARN: the WSL2 GPU health probe reports a high dxg EOVERFLOW count." >&2
+        echo "      That count tracks HOST state, not this batch's activity, so it is a SUSPECT flag and not a halt." >&2
+        echo "      Continuing. A genuinely degraded adapter shows up as rows that FAIL with collapsing tps." >&2
+        _GPU_HEALTH_WARNED=1
     fi
     if (( MAX_CONSECUTIVE_FAILURES > 0 && CONSECUTIVE_FAILURES >= MAX_CONSECUTIVE_FAILURES )); then
-        HALT_REASON="${CONSECUTIVE_FAILURES} consecutive row failures — stopping to fix the cause rather than burning more rows"
+        HALT_REASON="${CONSECUTIVE_FAILURES} consecutive row failures — stopping to fix the cause (a degraded adapter is one candidate: check the dxg count and the tps in the failed rows)"
         break
     fi
 done

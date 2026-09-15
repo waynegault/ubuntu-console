@@ -452,3 +452,19 @@ EOS
     [[ "$output" == *"REMAINING=5 7"* ]]
     [[ "$output" == *"RC=1"* ]]
 }
+
+# The dxgkrnl EOVERFLOW count WARNS, it does not halt (Wayne, 2026-09-15).  It
+# tracks host state rather than this batch's activity — 22 events at 18 cycles on
+# one boot, 4 events at 20 cycles on the next — so gating on it halted a chunk
+# while measuring nothing, at the cost of a WSL restart per row.  The batch's own
+# corroboration is MAX_CONSECUTIVE_FAILURES.  Pinned statically because the
+# behaviour is "do not halt", which no output assertion can capture directly.
+@test "autotune: the dxg health count warns, it does not halt the batch" {
+    ! grep -q 'check_wsl_gpu_health' "$REPO_ROOT/scripts/run-autotune-batch.sh"
+    grep -q 'wsl_gpu_health_suspect' "$REPO_ROOT/scripts/run-autotune-batch.sh"
+    # ...and it must not be a halt reason any more.
+    ! grep -qE 'HALT_REASON=.*(degrad|paravirtuali)' "$REPO_ROOT/scripts/run-autotune-batch.sh"
+    # The hard stops that remain:
+    grep -q 'CONSECUTIVE_FAILURES >= MAX_CONSECUTIVE_FAILURES' "$REPO_ROOT/scripts/run-autotune-batch.sh"
+    grep -q 'CUDA_CYCLE_BUDGET' "$REPO_ROOT/scripts/run-autotune-batch.sh"
+}
