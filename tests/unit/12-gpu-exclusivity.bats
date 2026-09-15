@@ -298,3 +298,26 @@ EOS
         [[ -x "$f" ]] || { echo "FAIL: bin/${f##*/} is not executable"; return 1; }
     done
 }
+
+# The 2026-09-15 regression: the declared-workload check ran
+# `pgrep -f "llama-bench|autotune"`, which matched the CALLER's own command line,
+# so the probe answered BUSY and the watchdog took a healthy, serving CUDA lane
+# down on a free card.  A false BUSY is not the safe direction — it stops a lane —
+# so the patterns must name a real artefact and the probe's own chain is excluded.
+@test "gpu-exclusivity: a shell that merely mentions autotune is not a declared workload" {
+    printf 'REASONS=()\n' > "$TAC_TEST_TMPDIR/decl.sh"
+    awk '/^_self_chain\(\)/,/^}/'          "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
+    awk '/^_any_foreign_process\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
+    awk '/^declared_workload_busy\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
+    grep -q 'declared_workload_busy' "$TAC_TEST_TMPDIR/decl.sh" || return 1
+
+    cat > "$TAC_TEST_TMPDIR/decl-probe.sh" <<'EOS'
+set -uo pipefail
+source "$1"
+if declared_workload_busy; then echo "BUSY ${REASONS[*]}"; else echo FREE; fi
+EOS
+
+    # The calling shell's command line names the bare words the old pattern used.
+    run bash -c "bash '$TAC_TEST_TMPDIR/decl-probe.sh' '$TAC_TEST_TMPDIR/decl.sh'  # llama-bench autotune"
+    [[ "$output" == "FREE" ]]
+}

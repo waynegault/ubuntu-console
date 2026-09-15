@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
-# Version: 1.2.0 (2026-09-15: tracked in this repo; another run's GPU ownership
-#          lock now counts as busy — signal 5)
-# Module Version: 1
+# Version: 1.3.0 (2026-09-15: the declared-workload patterns name real artefacts
+#          instead of bare words, and this probe's own process chain is excluded —
+#          a shell that merely mentioned "autotune" was read as a bench and the
+#          watchdog took a healthy CUDA lane down)
+# Module Version: 2
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
 #
 # CARD DISCIPLINE: this script is about the CUDA card only.  The Xe card is a
@@ -94,18 +96,69 @@ foreign_apps_busy() {
 }
 
 declared_workload_busy() {
-    if pgrep -f "model_selection_bench.py" >/dev/null 2>&1; then
-        REASONS+=("declared:model_selection_bench")
+    local _why=""
+    # Patterns here name a real artefact — a script PATH or an executable — and
+    # never a bare word.  A bare word matches any process whose command line
+    # merely contains it: on 2026-09-15 `pgrep -f "llama-bench|autotune"` matched
+    # a human's interactive `grep -iE 'llama|autotune'`, this probe reported BUSY,
+    # and the watchdog STOPPED a healthy, serving CUDA lane on a free card.  A
+    # false BUSY is not the safe direction here: it takes the lane down.
+    if _any_foreign_process 'model_selection_bench\.py'; then
+        _why="model_selection_bench"
+    fi
+    # llama.cpp's bench tool, matched on COMM: a mention in someone's command line
+    # cannot produce a comm match, so this one cannot self-match at all.
+    if [[ -z "$_why" ]] && pgrep -x llama-bench >/dev/null 2>&1; then
+        _why="llama-bench"
+    fi
+    # A console autotune/bench run — by script path, not by the word "autotune".
+    if [[ -z "$_why" ]] \
+        && _any_foreign_process '/(autotune-model|run-autotune-batch|retune-band-chunk)\.sh'; then
+        _why="autotune"
+    fi
+    # The investigator's path-pinned bench wrapper (~/.local/bin/cuda-llama-bench).
+    if [[ -z "$_why" ]] && _any_foreign_process '/cuda-llama-bench'; then
+        _why="cuda-llama-bench"
+    fi
+    # A VRAM-clearing helper.
+    if [[ -z "$_why" ]] && _any_foreign_process 'clear_vram\.sh'; then
+        _why="clear_vram"
+    fi
+    if [[ -n "$_why" ]]; then
+        REASONS+=("declared:$_why")
         return 0
     fi
-    if pgrep -f "llama-bench|autotune" >/dev/null 2>&1; then
-        REASONS+=("declared:bench/autotune")
+    return 1
+}
+
+# PIDs of this probe and its ancestry, bounded.  A `pgrep -f` runs against every
+# process on the box, including the shell that asked the question, so the probe's
+# own chain is excluded from the declared-workload match — otherwise the check can
+# answer "busy" because of how the caller happened to be invoked.
+_self_chain() {
+    local p=$$ n=0
+    while [[ "$p" =~ ^[0-9]+$ ]] && (( p > 1 )) && (( n < 8 )); do
+        printf '%s\n' "$p"
+        p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' \n')
+        n=$((n + 1))
+    done
+}
+
+# _any_foreign_process <pgrep -f pattern> — 0 when a match exists outside this
+# probe's own process chain, 1 otherwise.
+_any_foreign_process() {
+    local _pat="$1" _pid _s _is_self
+    local -a _self=()
+    mapfile -t _self < <(_self_chain)
+    while read -r _pid; do
+        [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        _is_self=0
+        for _s in "${_self[@]}"; do
+            [[ "$_pid" == "$_s" ]] && _is_self=1
+        done
+        (( _is_self )) && continue
         return 0
-    fi
-    if pgrep -f "clear_vram.sh" >/dev/null 2>&1; then
-        REASONS+=("declared:clear_vram")
-        return 0
-    fi
+    done < <(pgrep -f "$_pat" 2>/dev/null)
     return 1
 }
 
