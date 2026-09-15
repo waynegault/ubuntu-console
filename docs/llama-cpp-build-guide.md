@@ -201,31 +201,23 @@ ls -lh build/libggml-cuda.so
 
 ## Installing the Built Binary
 
-The Tactical Console's `LLAMA_SERVER_BIN` points to
-`~/llama.cpp/build/bin/llama-server` by default (set in
-`scripts/01-constants.sh`). No installation step is needed — the binary is used
-directly from the build directory.
+The Tactical Console's `LLAMA_CUDA_SERVER_BIN` points to
+`~/llama.cpp/build/bin/llama-server` (`scripts/01-constants.sh`), and the CUDA
+lane's launcher `~/.local/bin/llama-cuda-server` resolves it. No installation step
+is needed — the binary is used directly from the build directory.
 
-A convenience symlink is also maintained:
+There is deliberately **no `llama-server-cuda` convenience symlink any more.**
+Retired 2026-09-15: it was a third CUDA name, and its target was `build-cuda133`
+(the pre-repoint build, since made rollback-only), so the name told you neither
+which card nor which build it meant. `install.sh` removes it and `llm-build` no
+longer recreates it. "Which build serves the CUDA card?" is answered by the
+launcher (`llama-cuda-server`) and the constants (`LLAMA_CUDA_SERVER_BIN`), and
+`tests/unit/12-gpu-exclusivity.bats` asserts the two agree so a one-sided repoint
+fails the suite.
 
-```bash
-# ~/.local/bin/llama-server-cuda -> ~/llama.cpp/build/bin/llama-server
-ln -sf ~/llama.cpp/build/bin/llama-server ~/.local/bin/llama-server-cuda
-```
-
-This is the **custom-tuned** binary. The generic prebuilt release lives at
-`~/.local/bin/llama-server` → `~/.local/opt/llama.cpp/b<N>/llama-server`.
-
-> **Live state, 2026-09-14 — read this before trusting the `ln -sf` above.**
-> The symlink the **CUDA lane** actually execs is
-> `~/.local/bin/cuda-llama-server`, and it points at `build/bin/llama-server`
-> (build 10955 / `2f539596c`) since the §8 repoint. `~/.local/bin/llama-server-cuda`
-> is a *different* symlink and still points at `build-cuda133/bin/llama-server`
-> (build 10432 / `ab5ce4658`), the pre-repoint target — running the `ln -sf`
-> above would move it onto `build/` and quietly change which binary that name
-> means. Check with `ls -l ~/.local/bin/ | grep llama` and
-> `readlink -f /proc/$(systemctl --user show llama-cuda-llama32-3b-chat.service -p MainPID --value)/exe`
-> before relying on either name. See `docs/llama-cpp-runtime-audit.md` §8.
+The generic prebuilt release is `~/.local/opt/llama.cpp/b<N>/llama-server`. It is
+**not** on PATH under a bare `llama-server` name, because nothing records which card
+that older build serves — see the card map in `docs/llm.md`.
 
 ---
 
@@ -244,8 +236,8 @@ cmake --build build --target llama-server -j$(nproc)
 ls -lh build/bin/llama-server
 build/bin/llama-cli --help 2>&1 | grep -i cuda
 
-# 4. Update the convenience symlink
-ln -sf ~/llama.cpp/build/bin/llama-server ~/.local/bin/llama-server-cuda
+# 4. Confirm the launcher resolves the build you just made
+readlink -f /proc/"$(systemctl --user show llama-cuda-llama32-3b-chat.service -p MainPID --value)"/exe
 ```
 
 > **Why `--ff-only`?** The llama.cpp project moves fast and occasionally
@@ -319,7 +311,7 @@ it. See `docs/llama-cpp-runtime-audit.md` §2.2.
 | `libggml-cuda.so` not found at runtime | `LD_LIBRARY_PATH` doesn't include build dir | `export LD_LIBRARY_PATH=$HOME/llama.cpp/build:$LD_LIBRARY_PATH` |
 | `CUDA error: out of memory` during inference | Model + KV cache exceeds 4 GB VRAM | Use a smaller quant (Q3_K_M instead of Q4_K_M), reduce `--ctx-size`, or reduce `--n-gpu-layers` |
 | `GGML_ASSERT` failure at startup | Corrupted or incompatible GGUF file | Re-download the model or check it with `llama.cpp/build/bin/llama-cli --model <file> --check-tensors` |
-| Server binds but `/health` never returns OK | Port conflict (watchdog on 8081) | The Tactical Console uses `AUTOTUNE_PORT` (18081) for autotune and `LLM_PORT` (8081) for the watchdog. The `model use` command manages port allocation automatically. |
+| Server binds but `/health` never returns OK | Port conflict — something else already owns that port | Ports in use: 18080 Xe embed, 18081 Xe chat (production), 18082 autotune (`AUTOTUNE_PORT`), 18083 CUDA chat, 8081 the interactive `model use` lane. `model use` allocates 8081; autotune takes 18082. See the card map in `docs/llm.md`. |
 | `error: invalid argument: --no-mmap` at server start | Flag removed upstream (gone in build 10955; the previous binary accepted it with a DEPRECATED warning) | Use `--load-mode none`. Likewise `--mmap` → `--load-mode mmap`, `--mlock` → `--load-mode mlock`. **Two tokens**: `--load-mode=none` is rejected too (the parser never splits on `=`). See `docs/llama-cpp-runtime-audit.md` §1 |
 | Advertised context window ≠ served window (requests rejected mid-prompt with 400) | `--parallel N` **divides** the context by N unless `--kv-unified` is passed; `kv_unified` defaults to `false` | Pin `--parallel 1`, or set the window explicitly with `--kv-unified-per-slot <n>`. Assert `advertised contextWindow == n_ctx_slot` via `/props`. See `docs/llama-cpp-runtime-audit.md` §2.1 |
 | Xe lane serves but is orders of magnitude slower | The lane found no OpenCL device and fell back to CPU (check for `warning: no usable GPU found`) | Do not run an OpenCL server from a shell that exports `OCL_ICD_VENDORS`; verify with `--list-devices` or the cpu/wall ratio, not by `/health` alone |

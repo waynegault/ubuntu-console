@@ -17,10 +17,11 @@ binary (or `python -m llama_cpp.server` as fallback) on port 8081. The
 system exposes an OpenAI-compatible API at
 `http://127.0.0.1:8081/v1/chat/completions`.
 
-> **AUTOTUNE_PORT:** The autotune process (`scripts/autotune-model.sh`)
-> uses a separate port (`${AUTOTUNE_PORT:-18081}`) to avoid conflicting
-> with the watchdog daemon on the default 8081. The benchmark continues
-> to use `LLM_PORT` (8081).
+> **AUTOTUNE_PORT:** the autotune process (`scripts/autotune-model.sh`) runs its
+> own server on `${AUTOTUNE_PORT:-18082}`, so a bench can never land on a lane's
+> port. 18082 was the retired Phi-4-mini lane's port and is now the bench's — do
+> not stand a lane up there without moving `AUTOTUNE_PORT` first. The benchmark
+> itself uses `LLM_PORT` (8081).
 
 All LLM functions are **pure bash + curl + jq** — no Python dependency.
 

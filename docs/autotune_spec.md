@@ -267,7 +267,7 @@ Every run persists **two** profiles:
 
 ```
 --model {GGUF file}
---port ${AUTOTUNE_PORT:-18081} --host 127.0.0.1   # Uses AUTOTUNE_PORT to avoid conflict with watchdog (8081)
+--port ${AUTOTUNE_PORT:-18082} --host 127.0.0.1   # AUTOTUNE_PORT keeps the bench off every lane's port
 --ctx-size {ctx}
 --batch-size {batch} --ubatch-size {ubatch}
 --threads {nproc or registry threads}
@@ -381,16 +381,26 @@ Measured on RTX 3050 4GB, WSL2. The figures date from 2026-06, when the model dr
 ## Fixes and edge cases
 
 ### AUTOTUNE_PORT isolation (card ca23ec0a)
-The watchdog daemon (`bin/llama-watchdog.sh`) binds `LLM_PORT` (default 8081).
-Autotune originally also bound port 8081, causing a race condition when both
-ran simultaneously. Fixed by introducing `AUTOTUNE_PORT` (default 18081):
+Autotune originally bound the same port as the interactive server, causing a race
+when both ran at once. That is what `AUTOTUNE_PORT` fixes — and its current value
+is **18082**, not the 18081 this section claimed until 2026-09-15. 18081 had since
+become the production Xe lane, so following the old text would have pointed the
+bench at the live lane it exists to avoid.
 
-- `bin/llama-watchdog.sh` declares `AUTOTUNE_PORT` as a documented env var
-- `scripts/autotune-model.sh` uses it for all server, curl, health, and
-  cleanup operations — 6 HTTP endpoints, the server bind, and the port
-  check in `cleanup_gpu` all route through it.
-- The bench (`__bench_run_with_timeout`) continues to use `LLM_PORT` (8081),
-  so the benchmark is unaffected.
+- `scripts/autotune-model.sh` is the only thing that declares it, and it routes
+  every server, curl, health and cleanup operation through it — 6 HTTP endpoints,
+  the server bind, and the port check in `cleanup_gpu`. (The watchdog does **not**
+  name it; an earlier version of this section said it did.)
+- **18082 is not free by accident.** It was the Phi-4-mini `decomposition` lane's
+  port until that lane was retired on 2026-09-15. The bench keeps using it, so do
+  not stand a lane up on 18082 without moving `AUTOTUNE_PORT` first.
+- The benchmark (`__bench_run_with_timeout`) continues to use `LLM_PORT` (8081),
+  so it is unaffected.
+
+Every port in play, so none of them has to be guessed: **18080** Xe embed,
+**18081** Xe chat (the production lane the OpenClaw gateway consumes), **18082**
+this bench, **18083** CUDA chat, **8081** the interactive `model use` lane and the
+investigator pipeline's endpoint.
 
 ### Post-autotune VRAM clearing (card 1b from merged b9ba4596)
 The autotune **failure** path always called `clear_vram.sh`. The **success**

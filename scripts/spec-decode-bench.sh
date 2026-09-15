@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 #===============================================================================
 # spec-decode-bench.sh — Per-prompt speculative-decoding acceptance bench.
 #
@@ -66,11 +66,11 @@ __resolve_prompt_set "$PROMPT_SET" || {
 # ── Pre-flight ───────────────────────────────────────────────────────────────
 if ! __llm_is_healthy
 then
-    echo "No healthy llama-server on port ${LLM_PORT:-8080} — start a model first (model N) or launch with spec-decode flags." >&2
+    echo "No healthy llama-server on port ${LLM_PORT:-8081} — start a model first (model N) or launch with spec-decode flags." >&2
     exit 1
 fi
 
-local_url="http://127.0.0.1:${LLM_PORT:-8080}/v1/chat/completions"
+local_url="http://127.0.0.1:${LLM_PORT:-8081}/v1/chat/completions"
 
 # Snapshot the count of stats lines already in the log so per-prompt
 # attribution only sees this run's requests.  grep -c prints "0" AND exits

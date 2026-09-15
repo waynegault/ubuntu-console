@@ -7,8 +7,8 @@
 # released by the driver - use a short grace period instead of the full 30s
 # drain wait so recovery isn't delayed.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 5
-VERSION="1.4.1"   # 1.4.1: drop the retired phi4 lane's unit and launcher from the recovery/evict lists.
+# Module Version: 6
+VERSION="1.4.2"   # 1.4.2: drop the retired llama-server-cuda name from the CUDA evict set.
 
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
     echo "llama-gpu-clear $VERSION"
@@ -71,7 +71,7 @@ esac
 #
 #      CUDA card: llama.cpp/build/         (LLAMA_SERVER_BIN; cuda-llama-server,
 #                                           cuda-llama-bench)
-#                 llama.cpp/build-cuda*/   (llama-server-cuda)
+#                 llama.cpp/build-cuda*/   (LLAMA_CUDA_SERVER_BIN)
 #      Xe card:   llama.cpp/build-opencl*/ (xe-llama-server, xe-llama-embed)
 #                 — matched only to be explicitly skipped below.
 #
@@ -93,7 +93,7 @@ _cuda_stale_pids() {
             # The CUDA card.
             */llama.cpp/build/bin/llama-server|*/llama.cpp/build-cuda*/bin/llama-server)
                 printf '%s\n' "${pid#/proc/}" ;;
-            */.local/bin/cuda-llama-server|*/.local/bin/cuda-llama-bench|*/.local/bin/llama-server-cuda)
+            */.local/bin/cuda-llama-server|*/.local/bin/cuda-llama-bench)
                 printf '%s\n' "${pid#/proc/}" ;;
         esac
     done

@@ -511,7 +511,7 @@ line counts because they drift.
 | `tools/check-agent-use.sh` | Agent-usage regression check (CI via fixtures; live `/dev/shm` on demand) |
 | `tools/check-repo-boundaries.sh` | Repo ownership boundary guard (CI) |
 | `tools/clean-orphans.sh` | Kill orphaned bench/llama-server keeper processes (refuses while a bench/autotune is live) |
-| `tools/docs-sync-check.sh` | README drift guard: module count, loader version, test totals (CI) |
+| `tools/docs-sync-check.sh` | Docs drift guard: module count, loader version, test totals, per-directory breakdowns — in README, `docs/architecture.md` and `pytest.ini` (CI) |
 | `tools/import-windows-env.sh` | Import Windows user environment variables |
 | `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety |
 | `tools/mirror-vault.sh` | Sync Obsidian vault to Windows |
@@ -655,7 +655,7 @@ function __get_METRIC() {
 │   ├── check-agent-use.sh             #   Agent-usage regression check (CI via fixtures)
 │   ├── check-repo-boundaries.sh       #   Repo ownership boundary guard
 │   ├── clean-orphans.sh               #   Kill orphaned bench/llama-server processes
-│   ├── docs-sync-check.sh             #   README drift guard (module count, version, test totals)
+│   ├── docs-sync-check.sh             #   Docs drift guard (counts in README, architecture.md, pytest.ini)
 │   ├── import-windows-env.sh          #   Import Windows user environment variables
 │   ├── lint.sh                        #   bash -n + shellcheck + Unicode safety
 │   ├── mirror-vault.sh                #   Sync Obsidian vault to Windows
@@ -836,11 +836,11 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 53 tests)
 - **Full tests:** `bats tests/tactical-console.bats` (386 BATS unit tests)
-- **Unit suites (80 tests overall):** CI runs `tests/unit/01`, `02`, `09`, `10`, `11`, `12`; nightly adds `05`–`08`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host.
+- **Unit suites (86 tests overall):** CI runs `tests/unit/01`, `02`, `09`, `10`, `11`, `12`; nightly adds `05`–`08`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host.
 - **Integration suites (119 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety) with three modes — whole repo (default), `--staged` (staged `.sh`, used by the pre-commit hook) and `--files F...` (an explicit list, used by the BATS suites) — so the shellcheck flags live in exactly one place, and shellcheck runs `-x --source-path` so the source-following SC1090/SC1091 class resolves instead of being suppressed. shellcheck itself is pinned to 0.11.0 via `tools/install-shellcheck.sh`, which CI runs so local and CI diagnostics cannot drift (0.9.0 reported SC2317 where 0.11.0 reports SC2329 for the same code).
 - **Git hooks:** tracked in `tools/hooks/` (`pre-commit`, `post-commit`, `post-merge`) and activated by `git config core.hooksPath <repo>/tools/hooks`, which `install.sh` sets. They are tracked because `.git/hooks/` is not version-controlled — an inlined copy of the shellcheck loop there drifted from `tools/lint.sh` on 2026-09-15, when only one of the two copies of the flags was updated.
-- **Docs sync:** `tools/docs-sync-check.sh` (README drift guard — fails CI on stale module counts, versions, or test totals)
+- **Docs sync:** `tools/docs-sync-check.sh` (docs drift guard — fails CI on stale module counts, versions, or test totals, wherever they are stated)
 - **Nightly:** full suite runs nightly via `.github/workflows/nightly.yml` (scheduled + manual dispatch)
 
 Run locally:

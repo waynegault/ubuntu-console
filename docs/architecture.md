@@ -480,7 +480,7 @@ extra source commands.
 │       └── constants.py                #     Shared constants & defaults
 ├── tools/                             # Standalone utility scripts (not sourced)
 │   ├── check-agent-use.sh             #   Agent-usage regression check (CI via fixtures)
-│   ├── docs-sync-check.sh             #   README drift guard
+│   ├── docs-sync-check.sh             #   Docs drift guard (counts in README, architecture.md, pytest.ini)
 │   ├── import-windows-env.sh          #   Import Windows user env vars (standalone)
 │   ├── lint.sh                        #   bash -n + shellcheck + Unicode safety
 │   ├── mirror-vault.sh                #   Sync Obsidian vault to Windows
@@ -511,26 +511,33 @@ extra source commands.
 │   ├── unit/                          # BATS unit tests (94 tests)
 │   └── integration/                   # BATS integration tests (119 tests)
 └── systemd/
-    ├── llama-watchdog.service         # systemd unit for watchdog
-    └── llama-watchdog.timer           # systemd timer (runs every 60s)
+    ├── llama-watchdog.service         # oneshot health pass (the timer runs it)
+    ├── llama-watchdog.timer           # every 300s (OnBootSec 120s)
+    ├── llama-xe-minicpm5-1b-chat.service
+    ├── llama-xe-embeddinggemma-embed.service
+    ├── llama-cuda-llama32-3b-chat.service
+    └── llama-cuda-qwen35-4b-pipeline.service
 ```
 
 ### Symlink Map
 
+Every file in `systemd/` is linked into `~/.config/systemd/user/`, and the legacy
+unit names are **relative** alias symlinks to them (`llama-server.service` →
+`llama-xe-minicpm5-1b-chat.service` and four others). Relative on purpose: the
+units are themselves symlinks into this repo, so systemd's `[Install] Alias=` would
+be materialised with an ABSOLUTE target and loaded as a second unit.
+
+`~/.local/bin/` follows the same rule, with one exception: the four paths a lane
+start depends on (`llama-cuda-server`, `llama-xe-server`, `llama-gpu-clear.sh`,
+`gpu-busy.sh`) are installed as one-line `exec` shims rather than symlinks, so the
+stable path stays real and the repo file remains the implementation.
+
 | System Path | Repo Path |
 | --- | --- |
 | `~/.bashrc` | thin loader (not in repo — sources `tactical-console.bashrc`) |
-| `~/.llm/models.conf` | `llm/models.conf` (not currently in repo) |
-| `~/.local/bin/tac-exec` | `bin/tac-exec` |
-| `~/.local/bin/llama-watchdog.sh` | `bin/llama-watchdog.sh` |
-| `~/.local/bin/tac_hostmetrics.sh` | `bin/tac_hostmetrics.sh` |
-| `~/.local/bin/oc-quick-diag` | `bin/oc-quick-diag` |
-| `~/.local/bin/oc-gpu-status` | `bin/oc-gpu-status` |
-| `~/.local/bin/oc-model-status` | `bin/oc-model-status` |
-| `~/.local/bin/oc-model-switch` | `bin/oc-model-switch` |
-| `~/.local/bin/oc-wake` | `bin/oc-wake` |
-| `~/.config/systemd/user/llama-watchdog.service` | `systemd/llama-watchdog.service` |
-| `~/.config/systemd/user/llama-watchdog.timer` | `systemd/llama-watchdog.timer` |
+| `~/.local/bin/<name>` | every file in `bin/` (symlink, or shim for the four above) |
+| `~/.config/systemd/user/<unit>` | every file in `systemd/`, plus the relative legacy aliases |
+| `~/.llm/models.conf` | **not in this repo** — the model registry is host state, deliberately not version-controlled |
 
 ### Setup on a New Machine
 

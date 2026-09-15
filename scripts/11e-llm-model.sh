@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 24
+# Module Version: 25
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -3372,9 +3372,19 @@ function llm-build() {
         local commit; commit=$(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo "?")
         __tac_info "Done" "llama-server built: commit ${commit}, ${human_size}" "$C_Success"
 
-        # Update convenience symlink
-        ln -sf "$bin" "$HOME/.local/bin/llama-server-cuda" 2>/dev/null || true
-        __tac_info "Symlink" "${HOME}/.local/bin/llama-server-cuda → ${bin}" "$C_Dim"
+        # No convenience symlink any more.  This used to create
+        # ~/.local/bin/llama-server-cuda, which was retired on 2026-09-15 as a third
+        # CUDA name pointing at a build that serves nothing (install.sh removes it) —
+        # recreating it on every build quietly undid that, and it was redundant: this
+        # builds $root/build, which IS LLAMA_CUDA_SERVER_BIN's default.  What matters
+        # instead is that the two still agree, so say so — or say loudly that they
+        # do not, which is the one-sided repoint the launcher test also guards.
+        local launcher_bin="${LLAMA_CUDA_SERVER_BIN:-$bin}"
+        if [[ "$launcher_bin" == "$bin" ]]; then
+            __tac_info "Launcher" "llama-cuda-server resolves this build (${bin})" "$C_Dim"
+        else
+            __tac_info "Warning" "[llama-cuda-server resolves ${launcher_bin}, NOT the build just made — one of the two is stale]" "$C_Warning"
+        fi
 
         # Update LLAMA_BUILD_VERSION for model status display
         export LLAMA_BUILD_VERSION="$commit"

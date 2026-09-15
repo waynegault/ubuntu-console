@@ -1691,9 +1691,9 @@ Expected
 
 🔍 llama.cpp version tracked
 
-Inspect LLAMA_VERSION or build metadata
+grep -rn 'LLAMA_BUILD_VERSION' scripts/01-constants.sh
 
-Build version or commit hash stored/displayed so regressions can be traced to specific builds
+Build version or commit hash stored/displayed so a regression can be traced to a specific build. The variable is `LLAMA_BUILD_VERSION` — 01-constants.sh derives it from the llama.cpp checkout's short commit (`unknown` when that tree is not a git repo), `model status` renders it for a running server (JSON `"build"`, plain `build=`), and `llm-build` refreshes it after a build. There is no `LLAMA_VERSION`: an earlier version of this row named that, and it never existed
 
 12.1.2
 
@@ -1921,15 +1921,15 @@ Expected
 
 grep -rn 'LLM_PORT\|8081' scripts/ bin/ tactical-console.bashrc
 
-Port number defined once in 01-constants.sh; other files reference the variable, never hardcode the literal
+Defined once in 01-constants.sh; every other file references the variable. Three sanctioned literals, and nothing else: `scripts/oc-health-check.py` (Python cannot source the bash constants, so it carries the same default), `scripts/run-autotune-batch.sh` (an `ss` grep pattern for the interactive port, not a bind), and comment prose. Note that the autotune bench binds `AUTOTUNE_PORT` (18082), never 8081
 
 13.1.2
 
 🔍 ACTIVE_LLM_FILE consistent
 
-grep -rn 'ACTIVE_LLM_FILE\|active_model' scripts/ bin/ tactical-console.bashrc
+grep -rn '/dev/shm/active_llm' scripts/ bin/ tactical-console.bashrc
 
-File path identical across 01-constants.sh and llama-watchdog.sh
+Zero matches outside `01-constants.sh` — the literal path appears in exactly one place, and the eleven modules that track the active model all go through `$ACTIVE_LLM_FILE`. Do NOT check `bin/llama-watchdog.sh` for this variable: since the lane units replaced the single managed server, the watchdog supervises unit states and no longer reads this file (it did when this check was written)
 
 13.1.3
 
@@ -1937,7 +1937,7 @@ File path identical across 01-constants.sh and llama-watchdog.sh
 
 grep -rn 'LLAMA_BIN\|llama-server' scripts/ bin/ tactical-console.bashrc
 
-Binary path resolved identically; not hardcoded to different locations
+`01-constants.sh` is the single source (`LLAMA_SERVER_BIN`, `LLAMA_CUDA_SERVER_BIN`, `LLAMA_XE_SERVER_BIN`). The two card launchers (`bin/llama-cuda-server`, `bin/llama-xe-server`) REPEAT the CUDA/Xe default deliberately — a lane start must not depend on the module tree — and `tests/unit/12-gpu-exclusivity.bats` asserts the launcher default and the constants agree, so a one-sided repoint fails the suite. Anything that hardcodes a third location is drift
 
 13.1.4
 

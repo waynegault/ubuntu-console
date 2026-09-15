@@ -251,8 +251,9 @@ rejected `unique_word_ratio = 0.028 < 0.25` on `nexus-legal-q4_k_m.gguf`; I repr
 same class of failure independently (`0.0693` on a short prompt) at `temperature 0` with
 `top_k 1` and no penalty — **on both binaries**, so it is not the engine.
 
-The investigator already has detection (`docs/design/ANTIDOOM-REPETITION-ANALYSIS.md`, and a
-`min_repeats=4, max_period=1024` detector) but no prevention at the sampler.
+The investigator already has detection (`~/investigator/docs/design/ANTIDOOM-REPETITION-ANALYSIS.md`
+— their repo, not this one — and a `min_repeats=4, max_period=1024` detector) but no prevention at the
+sampler.
 
 **This is the highest-value unexplored lever on the degeneracy question.** It is a
 configuration change, not a model or binary change, and it is cheap to test:
@@ -355,7 +356,8 @@ c() { journalctl -k -b --no-pager -q | grep -c "dxgkio_reserve_gpu_va: Ioctl fai
 ~/llama.cpp/build/bin/llama-server --NAME --model /nonexistent.gguf 2>&1 | grep -i "invalid argument"
 
 # Is the running lane what you think it is? (pgrep -f SELF-MATCHES your own shell)
-P=$(systemctl --user show llama-server-nvidia.service -p MainPID --value); readlink -f /proc/$P/exe
+# Canonical name; the legacy `llama-server-nvidia.service` is a relative alias.
+P=$(systemctl --user show llama-cuda-llama32-3b-chat.service -p MainPID --value); readlink -f /proc/$P/exe
 
 # Is the lane really GPU-offloaded, and at what window? (semantics-independent)
 curl -s :18083/props | jq '{n_ctx: .default_generation_settings.n_ctx, total_slots, build_info}'
