@@ -1,17 +1,16 @@
 # shellcheck shell=bash
 # File-level disables here are only for codes bash cannot fix in a sourced
 # module:
-#   SC1091           dynamic `source` path (shellcheck cannot follow it)
 #   SC2119 / SC2120  `ocms` is a deliberate pass-through wrapper forwarding "$@"
 #                    to oc-sync-models, so it "references arguments" by design
 #                    and is legitimately called bare from the dashboard
 #   SC2153           LLM_PORT is assigned in 01-constants.sh (cross-file, like SC2154)
 #   SC2154           variables assigned in an earlier-sourced module
-# SC2015 was listed but fires nowhere in this file and has been dropped.
-# shellcheck disable=SC1091,SC2119,SC2120,SC2153,SC2154
+# SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
+# shellcheck disable=SC2119,SC2120,SC2153,SC2154
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 09e-oc-health
 # ==============================================================================

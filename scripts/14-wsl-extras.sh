@@ -3,7 +3,7 @@
 # Module: 14-wsl-extras
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 7
+# Module Version: 8
 # 14. WSL EXTRAS & STARTUP HELPERS
 # -----------------------------------------------------------------------------
 # Purpose: Move WSL/X11 and OpenClaw startup helpers out of the thin loader.
@@ -137,11 +137,9 @@ fi
 # NVM loading disabled - OpenClaw uses Homebrew, not NVM
 # export NVM_DIR="$HOME/.nvm"
 # if [[ -s "$NVM_DIR/nvm.sh" ]]; then
-#     # shellcheck disable=SC1091
 #     . "$NVM_DIR/nvm.sh"
 # fi
 # if [[ -s "$NVM_DIR/bash_completion" ]]; then
-#     # shellcheck disable=SC1091
 #     . "$NVM_DIR/bash_completion"
 # fi
 

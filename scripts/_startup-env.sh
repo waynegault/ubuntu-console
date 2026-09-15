@@ -4,7 +4,7 @@
 # _startup-env.sh — Shared startup environment optimizations.
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
 #
 # Single source of truth for the NODE_COMPILE_CACHE / OPENCLAW_NO_RESPAWN /
 # NODE_OPTIONS startup blocks. Sourced by BOTH:
@@ -16,7 +16,7 @@
 # ([0-9][0-9]-*.sh / [0-9][0-9][a-z]-*.sh), so it is only ever sourced
 # explicitly by the two loaders above.
 #
-# shellcheck disable=SC1090,SC1091
+# shellcheck disable=SC1090  # __tac_source_submodules sources sub-modules by name (non-constant path)
 # ==============================================================================
 
 # __tac_source_submodules <dir> <label> <name...> — Source a thin loader's

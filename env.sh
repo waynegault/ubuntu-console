@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1090,SC1091
+# shellcheck disable=SC1090,SC1091  # the module loop sources _module-list.sh entries by name
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -36,7 +36,7 @@ export TAC_LIBRARY_MODE=1
 # Startup optimizations (NODE_COMPILE_CACHE / OPENCLAW_NO_RESPAWN / NODE_OPTIONS).
 # Shared fragment — single source of truth, also sourced by tactical-console.bashrc.
 _tac_env_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC1090
+# shellcheck source=scripts/_startup-env.sh
 source "$_tac_env_root/scripts/_startup-env.sh"
 
 # Minimum acceptable generation speed (tokens/second), uniform for every model.
