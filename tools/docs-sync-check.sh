@@ -5,10 +5,9 @@
 # ==============================================================================
 # Computes ground-truth values from the repo (module count, loader version,
 # BATS/Python test totals, per-directory breakdowns) and greps for the matching
-# phrases in every file that states them: README.md, docs/architecture.md and
-# pytest.ini's marker descriptions.  A count asserted in three places and checked
-# in one is wrong in the other two eventually — that is exactly what happened
-# (2026-09-15).
+# phrases in every file that states them: README.md and pytest.ini's marker
+# descriptions.  (docs/architecture.md stated them too until it was consolidated
+# into README on 2026-09-15.)
 # Exits 0 when every guarded file is in sync, 1 when drift is detected.
 #
 # Single source of truth for the docs-sync guardrail. Used by:
@@ -18,7 +17,7 @@
 # Usage: tools/docs-sync-check.sh
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 set -u
 
@@ -107,13 +106,16 @@ do
 done
 
 # ── 3c. The same facts, stated anywhere else ───────────────────────────────
-# Up to 2026-09-15 only README.md was guarded, and the docs tree had drifted a
-# long way behind the same numbers: docs/architecture.md claimed 39 unit tests
-# against 94, 383 full-suite tests against 386 and 109 integration against 119,
-# while pytest.ini's `bats_full` marker description also said 383.  A count that
-# is asserted in three places and checked in one is a fact that is wrong twice as
-# often as it is right, so each place is now checked against the same computed
-# value.
+# Up to 2026-09-15 only README.md was guarded, and the other file stating the same
+# numbers had drifted a long way behind them (docs/architecture.md claimed 39 unit
+# tests against 94, 383 full-suite tests against 386 and 109 integration against
+# 119, while pytest.ini's `bats_full` marker description also said 383).  A count
+# asserted in three places and checked in one is wrong in the other two eventually,
+# so each place is checked against the same computed value.
+#
+# docs/architecture.md was CONSOLIDATED INTO README on 2026-09-15 (12 docs -> 6):
+# its counts now live in the README tree, so the checks below point there.  Keep
+# this list in step with wherever the same fact is next asserted.
 check_in_file() { # <file> <description> <grep -F pattern>
     local file="$1" desc="$2" pattern="$3"
     if grep -qF "$pattern" "$file"; then
@@ -124,14 +126,16 @@ check_in_file() { # <file> <description> <grep -F pattern>
     fi
 }
 
-ARCH="$REPO_ROOT/docs/architecture.md"
-check_in_file "$ARCH" "architecture.md full-suite count" "BATS full suite (${bats_full} tests)"
-check_in_file "$ARCH" "architecture.md fast-suite count" "Fast subset (${bats_fast} tests"
-check_in_file "$ARCH" "architecture.md unit count" "BATS unit tests (${unit_sum} tests)"
-check_in_file "$ARCH" "architecture.md integration count" "BATS integration tests (${integration_sum} tests)"
-check_in_file "$REPO_ROOT/pytest.ini" "pytest.ini bats_full marker" "behavioural BATS suite (${bats_full} tests)"
-check_in_file "$ARCH" "architecture.md kgraph module count" \
+MAIN="$REPO_ROOT/README.md"
+# The README annotates these counts ("(386 tests, ~5-15 min)"), so the patterns stop
+# at "tests" rather than demanding a closing paren the README does not use.
+check_in_file "$MAIN" "README full-suite count" "BATS full suite (${bats_full} tests"
+check_in_file "$MAIN" "README fast-suite count" "Fast subset (${bats_fast} tests"
+check_in_file "$MAIN" "README unit count" "BATS unit tests (${unit_sum} tests"
+check_in_file "$MAIN" "README integration count" "BATS integration tests (${integration_sum} tests"
+check_in_file "$MAIN" "README kgraph module count" \
     "Knowledge graph Python package ($(find "$REPO_ROOT/scripts/kgraph" -name '*.py' | wc -l | tr -d ' ') modules)"
+check_in_file "$REPO_ROOT/pytest.ini" "pytest.ini bats_full marker" "behavioural BATS suite (${bats_full} tests)"
 
 # ── 4. env.sh library-loader phrase (unchanged from the old inline check) ──
 check_phrase "env.sh library-loader description" "Non-interactive library loader (all modules except 13-init.sh)"

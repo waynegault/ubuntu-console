@@ -74,7 +74,7 @@ Before writing any code, read and internalise the following files from the repo.
 They are the source of truth; do not infer behavior that contradicts them.
 
 1. README.md                               — project overview, feature list, design principles
-2. docs/pwsh-build-prompt.md (this file)   — translation strategy and non-negotiable constraints
+2. .agents/pwsh-build-prompt.md (this file) — translation strategy and non-negotiable constraints
 3. docs/contracts/command-contracts.yaml  — every user-facing command and its behavioral contract
 4. docs/contracts/state-contracts.yaml    — all shared variables and /dev/shm cache files
 5. tests/fixtures/golden/README.md        — fixture format and normalization guidance

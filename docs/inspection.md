@@ -2507,4 +2507,4 @@ PYTHONPATH=scripts python3 -m kgraph --update --repo .; PYTHONPATH=scripts pytho
 
 The update completes with a node/edge count, and wiring reports 0 orphans, 0 broken internal imports, 0 weak-wiring-only-from-tests, 0 unused facades, 0 cross-file call gaps.
 
-<!-- # end of file -->
+<!-- end of file -->

@@ -21,14 +21,16 @@ tools, AI agents, cron jobs, and automation scripts via `tac-exec`.
 ## Contents
 
 - [Features](#features)
+- [PowerShell Translation Prep](#powershell-translation-prep)
+- [Design Principles](#design-principles)
 - [Installation](#installation)
 - [Command Reference](#command-reference)
 - [Dashboard & Shell Interface](#dashboard--shell-interface)
 - [Local LLM System](#local-llm-system)
 - [OpenClaw Integration](#openclaw-integration)
 - [Maintenance Pipeline](#maintenance-pipeline)
+- [Testing](#testing)
 - [Architecture & Developer Guide](#architecture--developer-guide)
-- [PowerShell Translation Prep](#powershell-translation-prep)
 - [Repository Layout](#repository-layout)
 - [Dependencies](#dependencies)
 - [AI Agent Access (tac-exec)](#ai-agent-access-tac-exec)
@@ -52,7 +54,7 @@ tools, AI agents, cron jobs, and automation scripts via `tac-exec`.
 This repository now includes non-invasive prep artifacts to make AI-assisted
 translation to PowerShell deterministic and easier to validate:
 
-- `docs/pwsh-build-prompt.md` — Translation strategy, workflow, and AI build prompt
+- `.agents/pwsh-build-prompt.md` — Translation strategy, workflow, and AI build prompt
 - `docs/contracts/command-contracts.yaml` — Starter command behavior contract
 - `docs/contracts/state-contracts.yaml` — Cross-module state contracts
 - `tools/capture-golden-fixtures.sh` — Snapshot selected command outputs for parity checks
@@ -104,7 +106,7 @@ up             # Run 20-step system maintenance
 
 ## Command Reference
 
-> Quick overview of the most common commands. For the complete reference, see [docs/reference.md](docs/reference.md).
+> Quick overview of the most common commands. The complete reference is this section — `docs/reference.md` was consolidated into it on 2026-09-15.
 
 | Command | Category | Description |
 |---|---|---|
@@ -174,6 +176,16 @@ up             # Run 20-step system maintenance
 
 ---
 
+
+| `cls` | Shell | Clear screen + banner |
+| `docs-sync` | Utility | Check the docs for drift against current repo facts |
+| `oc-env` | OpenClaw | Dump env vars |
+| `oc-config` | OpenClaw | Get/set config |
+| `model bench` | LLM | Benchmark all on-disk models, persist TSV; auto-runs autotune when missing and skips discouraged quant auto-autotune unless `LLM_ALLOW_AUTOTUNE_DISCOURAGED=1` |
+| `model bench-diff` / `model bench-compare` | LLM | Compare two benchmark runs |
+| `commit:` / `commit_deploy` | Git | Stage all + commit with YOUR message + push |
+| `commit` | Git | Alias for `commit_auto` — LLM-generated message (PID-verified, secret detection) + push |
+
 ## Dashboard & Shell Interface
 
 ### The Dashboard (`m`)
@@ -237,6 +249,74 @@ The `cd` override automatically sources `.venv/bin/activate` when entering a pro
 | `oedit` | Open `tactical-console.bashrc` in VS Code |
 
 ---
+
+<!-- merged from docs/reference.md on 2026-09-15 -->
+
+#### The Dashboard (`m`)
+
+Type `m` at any prompt to render the full-screen Tactical Dashboard:
+
+```text
+(sample output — values vary with machine state)
+|                      TACTICAL DASHBOARD                      (ver.: 2.12) |
+|  SYSTEM TIME  :: Saturday 03:04 07/03/2026                                |
+|  UPTIME       :: 0d 0h 24m                                                |
+|  BATTERY      :: A/C POWERED                                              |
+|  CPU / GPU    :: CPU 3% | iGPU 2% | NVIDIA 0%                              |
+|  MEMORY       :: 2.77 / 47.04 Gb                                          |
+|  STORAGE      :: C: 995 Gb free | WSL: 877 Gb free                        |
+|  GPU          :: RTX 3050 Ti | 0% Load | 62°C | 3897 / 4096 Mb            |
+|  GPU ENGINES  :: 3D 0% | VDec 0%                                          |
+|  LOCAL LLM    :: ACTIVE Llama-3.2-3B-Q4_K_M | 12.6 t/s                    |
+|  WSL          :: ACTIVE  Ubuntu-24.04  (6.6.87.2-microsoft-standard-WSL2) |
+|  OPENCLAW     :: [ONLINE]  v2026.3.2    (or [NOT INSTALLED] if missing)   |
+|  SESSIONS     :: 8 Active (cached 34s ago)  (hidden if not installed)     |
+|  ACTIVE AGENT :: 14% (18k of 128k)        (hidden if not installed)       |
+|  TARGET REPO  :: main                                                     |
+|  SEC STATUS   :: SECURE                                                   |
+|            up | xo | serve <n> | halt | chat: | commit | g | h | pwsh      |
+```
+
+Colour thresholds: **Green** < 75% · **Yellow** 75–90% · **Red** > 90%.
+
+#### Help (`h`)
+
+Type `h` to render the full command reference inside a box-drawn panel.
+**OpenClaw-aware:** when OpenClaw is not installed, all OpenClaw-related
+sections are hidden to reduce clutter.
+
+#### Navigation & Convenience
+
+|---|---|
+| `c` or `cls` | Clear screen and redraw the startup banner |
+| `cl` | Quick cleanup of `python-*.exe` and `.pytest_cache` in `$PWD` |
+| `sysinfo` | One-line: `CPU: 12% RAM: 5.2/15.4 Gb Disk: 142 Gb iGPU: 3%/47°C CUDA: 12%` |
+| `get-ip` | Show WSL IP and external WAN IP |
+| `code <path>` | Open anything in VS Code (lazy-resolved path) |
+
+
+The `cd` command is overridden. When you enter a directory containing
+`.venv/bin/activate`, it is automatically sourced; when you leave the project
+tree, `deactivate` is called automatically. The dashboard shows active venvs
+under the "CLOAKING" row.
+
+If venv activation fails, a warning is printed and `VIRTUAL_ENV` is cleared
+to prevent confusion.
+
+#### Shell Prompt
+
+```
+```
+
+- **▼** — Present if user is in the `sudo` group (admin badge).
+- **✓ / ×** — Green checkmark or red cross for last command exit status.
+- **(myenv)** — Active Python virtual environment name.
+- Empty-enter detection: pressing Enter with no command clears the error badge.
+
+**Inter-prompt spacing:** A single blank line separates consecutive prompts via
+PS1's leading `\n`. PS0 is intentionally unset — using both PS0 and PS1
+newlines produces a double blank line after silent commands like `cd`.
+
 
 ## Local LLM System
 
@@ -402,7 +482,7 @@ Run `up` for the 20-step pipeline:
 | 15. Disk Space Audit | Warns if any mount exceeds 90% |
 | 16. Systemd Units | Verifies OpenClaw gateway user unit presence |
 | 17. Stale Processes | Kills orphaned `llama-server` instances |
-| 18. Docs Sync | Checks tracked repo facts for documentation drift (README, architecture.md, pytest.ini) |
+| 18. Docs Sync | Checks tracked repo facts for documentation drift (README, pytest.ini) |
 | 19. Docker Prune | Runs `docker system prune` when Docker is installed |
 | 20. NPM Cache Clean | Verifies/cleans npm cache (24h cooldown) |
 
@@ -511,7 +591,7 @@ line counts because they drift.
 | `tools/check-agent-use.sh` | Agent-usage regression check (CI via fixtures; live `/dev/shm` on demand) |
 | `tools/check-repo-boundaries.sh` | Repo ownership boundary guard (CI) |
 | `tools/clean-orphans.sh` | Kill orphaned bench/llama-server keeper processes (refuses while a bench/autotune is live) |
-| `tools/docs-sync-check.sh` | Docs drift guard: module count, loader version, test totals, per-directory breakdowns — in README, `docs/architecture.md` and `pytest.ini` (CI) |
+| `tools/docs-sync-check.sh` | Docs drift guard: module count, loader version, test totals, per-directory breakdowns — in README and `pytest.ini` (CI) |
 | `tools/import-windows-env.sh` | Import Windows user environment variables |
 | `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety |
 | `tools/mirror-vault.sh` | Sync Obsidian vault to Windows |
@@ -597,6 +677,334 @@ function __get_METRIC() {
 
 ---
 
+<!-- merged from docs/architecture.md on 2026-09-15 -->
+
+#### Modular Architecture
+
+The profile is split into a thin loader (`tactical-console.bashrc`, ~253 lines)
+and 16 numbered profile modules under `scripts/`. Each module has a metadata block
+documenting its dependencies and exports:
+
+```bash
+```
+
+Both loaders read one **shared list** of module names (not a glob), guaranteeing
+load order and keeping the interactive and library paths identical:
+
+```bash
+
+for _tac_mod in "${_tac_expected_modules[@]}"; do
+    _tac_f="$_tac_module_dir/${_tac_mod}.sh"
+    [[ -f "$_tac_f" ]] && source "$_tac_f"
+done
+unset _tac_mod _tac_expected_modules
+```
+
+`env.sh` iterates the same list and skips `13-init.sh`, whose side-effects are
+interactive-only.
+
+Numeric prefixes enforce the dependency chain — `01-constants.sh` loads first,
+`15-model-recommender.sh` loads last. Utility scripts live in `tools/` and
+`scripts/` (see tables below), are not profile modules, and are never sourced
+by either loader.
+
+> **Monolith backup:** The pre-modularisation single-file version
+> (`tactical-console.bashrc.monolith`, 5,184 lines) has been removed from the
+> repository. It is preserved in git history if needed for reference or
+> rollback.
+
+**Profile modules** (sourced in order by the loader — approximate `wc -l` line counts):
+
+| Module | File | Lines | Purpose |
+| --- | --- | --- | --- |
+| §0 | `tactical-console.bashrc` | ~253 | Version, AI editor rules, architecture map, array-based module loader, missing module warning |
+| §1 | `scripts/01-constants.sh` | ~459 | All paths, ports, env vars. Single source of truth. `__TAC_OPENCLAW_OK` functional check. |
+| §2 | `scripts/02-error-handling.sh` | ~265 | ERR trap → `bash-errors.log` (exit codes ≥ 2, whitelisted commands excluded) |
+| §3 | `scripts/03-design-tokens.sh` | ~38 | ANSI colour constants (`readonly`, re-source safe) |
+| §4 | `scripts/04-aliases.sh` | ~462 | Short commands, VS Code wrappers, tactical shortcuts (`c`, `cls`, `le`, `lo` with PIPESTATUS) |
+| §5 | `scripts/05-ui-engine.sh` | ~560 | Box-drawing primitives: `__tac_header`, `__fRow`, `__hRow`, `__strip_ansi`, `__threshold_color` |
+| §6 | `scripts/06-hooks.sh` | ~177 | `cd` override (venv auto-activate), prompt (`PS1`), `__test_port`, admin badge |
+| §7 | `scripts/07-telemetry.sh` | ~396 | Host metrics (CPU + dual GPU), NVIDIA detail, battery, git, disk, tokens, OC version, LLM slots — all background-cached via `__cache_fresh` with trap cleanup |
+| §8 | `scripts/08-maintenance.sh` | ~1775 | `up` (20 steps), `cl`, `get-ip`, `sysinfo`, `logtrim`, `docs-sync`, cooldown system with `flock` |
+| §9 | `scripts/09-openclaw.sh` (thin loader) | ~54 | Sources 09a–09f sub-modules in order |
+| §9a | `scripts/09a-oc-gateway.sh` | ~724 | Gateway lifecycle: `so()`, start/stop/health, Tailscale cycling, API key bridge |
+| §9b | `scripts/09b-gog.sh` | ~175 | Google CLI (`gog`) detection, setup helpers, and integration shims |
+| §9c | `scripts/09c-oc-core.sh` | ~345 | Core dispatcher: `oc()`, `xo()`, shortcut commands |
+| §9d | `scripts/09d-oc-agents.sh` | ~1159 | Agent management, API keys, secrets rotation |
+| §9e | `scripts/09e-oc-health.sh` | ~1093 | Health checks, diagnostics, failover, utilities |
+| §9f | `scripts/09f-oc-misc.sh` | ~608 | KGraph, stinger, backup/restore, mem-index |
+| §10 | `scripts/10-deployment.sh` | ~479 | `mkproj` (disk space check), `deploy_sync`, `commit_deploy`, `commit_auto` (PID-verified, secret detection) |
+| §11 | `scripts/11-llm-manager.sh` (thin loader) | ~42 | Sources 11a–11f sub-modules in order |
+| §11a | `scripts/11a-llm-registry.sh` | ~267 | Registry CRUD: `__llm_registry_sync_state`, `__renumber_registry`, entry helpers |
+| §11b | `scripts/11b-llm-autotune.sh` | ~723 | Autotune infrastructure: profile save, ctx estimation, blob upsert |
+| §11c | `scripts/11c-llm-server.sh` | ~537 | Server lifecycle: start/stop, health checks, Python binary resolution |
+| §11d | `scripts/11d-llm-gpu.sh` | ~1081 | GPU status, GGUF metadata parsing, calculations (`__calc_gpu_layers`, `__calc_ctx_size`) |
+| §11e | `scripts/11e-llm-model.sh` | ~3277 | Model commands: scan, list, use (7 helpers), bench, download, archive, delete, doctor |
+| §11f | `scripts/11f-llm-runtime.sh` | ~712 | Runtime: `serve`, `burn`, `local_chat`, SSE streaming, explain, `wtf_repl` |
+| §12 | `scripts/12-dashboard-help.sh` | ~707 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` (OpenClaw status) |
+| §13 | `scripts/13-init.sh` | ~204 | `mkdir -p` (OpenClaw-aware), completions, loopback fix, bridge call, exit trap (chained) |
+| §14 | `scripts/14-wsl-extras.sh` | ~157 | WSL/X11 startup helpers, vault env loading |
+| §15 | `scripts/15-model-recommender.sh` | ~198 | AI model recommendations by use case (`bc` fallback for integer math) |
+
+**Utility scripts** (not profile modules — never sourced by the loader):
+
+| File | Purpose |
+| --- | --- |
+| `scripts/autotune-model.sh` | Model autotune runner (standalone). |
+| `scripts/run-autotune-batch.sh` | Batch autotune across multiple models. |
+| `scripts/retune-band-chunk.sh` | Run one chunk of the threshold-band re-tune (suspends the CUDA lane, derives the row set from the registry). |
+| `scripts/load-vault-env.sh` | Load vault environment variables (standalone). |
+| `scripts/oc-update-enhanced.sh` | Enhanced OpenClaw update helper. |
+| `scripts/spec-decode-bench.sh` | SPEC-DEC-003/006 per-prompt acceptance bench (standalone). |
+| `scripts/spec_dec_crossover.sh` | SPEC-DEC-005 concurrency crossover measurement (standalone). |
+| `scripts/prompt-sets.sh` | Shared SPEC-DEC-006 workload prompt sets (sourced by the benches). |
+| `scripts/18-lint.sh` | Repo static-analysis wrapper — delegates to `tools/lint.sh`. |
+| `tools/capture-golden-fixtures.sh` | Capture baseline command outputs for PowerShell parity checks. |
+| `tools/check-agent-use.sh` | Agent-usage regression check (`$TAC_CACHE_DIR`; CI runs it via fixtures). |
+| `tools/check-repo-boundaries.sh` | Enforce the repo ownership boundary contract. CI guard. |
+| `tools/clean-orphans.sh` | Kill orphaned bench/llama-server keeper processes. |
+| `tools/docs-sync-check.sh` | Verify README matches current repo facts (counts/version). CI guard. |
+| `tools/import-windows-env.sh` | Standalone script to import Windows user environment variables. |
+| `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety. CI linter. |
+| `tools/mirror-vault.sh` | Sync Obsidian vault from WSL to Windows. |
+| `tools/normalize-fixture.sh` | Normalise captured golden fixtures (strip dynamic fields). |
+| `tools/run-tests.sh` | Pretty-printed BATS test runner. |
+| `tools/sync-openclaw-completion.sh` | Refresh the OpenClaw bash completion word lists. |
+
+#### Repository Boundaries
+
+This repository intentionally excludes investigator/pipeline implementation code.
+If feedback references symbols like `pipeline/model_benchmark.py`,
+`BenchmarkCase`, `BenchmarkResult`, or `_normalize_confidence_label`, treat that
+as out-of-scope for this repo unless those files are explicitly introduced.
+
+Use `tools/check-repo-boundaries.sh` to enforce this contract. The check scans
+`scripts/`, `tools/`, `bin/`, and `tests/` for forbidden cross-repo symbols and
+fails fast when boundaries are violated.
+
+#### Dependency Graph
+
+```text
+01-constants.sh ────────────────────────────────────────────┐
+02-error-handling.sh       ← 01                             │
+03-design-tokens.sh        (standalone)                     │
+04-aliases.sh              ← 01                             │
+05-ui-engine.sh            ← 01, 03                         │
+06-hooks.sh                ← 01, 03                         │
+07-telemetry.sh            ← 01, 03, 05                     │
+08-maintenance.sh          ← 01, 03, 05, 07                 │
+09-openclaw.sh (thin)     ─┐                                │
+  09a-oc-gateway.sh       ← 01, 03, 05, 06                 │
+  09b-gog.sh              ← 01                             │
+  09c-oc-core.sh          ← 09a                             │
+  09d-oc-agents.sh        ← 09c                             │
+  09e-oc-health.sh        ← 09c                             │
+  09f-oc-misc.sh          ← 09c                             │
+10-deployment.sh           ← 01, 03, 05                     │
+11-llm-manager.sh (thin) ─┐                                │
+  11a-llm-registry.sh     ← 01                              │
+  11b-llm-autotune.sh     ← 11a                             │
+  11c-llm-server.sh       ← 01, 11a                         │
+  11d-llm-gpu.sh          ← 01, 03                          │
+  11e-llm-model.sh        ← 11a, 11b, 11c, 11d             │
+  11f-llm-runtime.sh      ← 11e                             │
+12-dashboard-help.sh       ← 01, 03, 05, 07, 06, 09, 11    │
+13-init.sh                 ← all above                      │
+14-wsl-extras.sh           ← 01 (optional startup helpers) ─┘
+15-model-recommender.sh    ← 01, 11
+```
+
+#### Naming Conventions
+
+| --- | --- | --- |
+
+**Never** use PascalCase or camelCase for function names.
+
+#### Non-Interactive Access (`env.sh` + `tac-exec`)
+
+The interactive guard in `tactical-console.bashrc` (`case $-`) prevents
+non-interactive shells (exec environments, cron, AI agents) from loading the
+profile. This is intentional — `sftp` and `rsync` must not trigger UI
+side-effects. But AI agents and automation scripts need access to the ~100+
+functions defined in the profile.
+
+**`env.sh`** is a library loader that sources all 16 profile modules (01–15
+plus `09b-gog`), bypassing the interactive guard and skipping `13-init.sh`
+(which runs screen clear, completions, WSL loopback fixes, and EXIT traps)
+and utility scripts in `tools/`. It reads the canonical load order from
+`scripts/_module-list.sh` — the same list the interactive loader uses — so the
+two module sets can never drift. It is idempotent (guarded by
+`__TAC_ENV_LOADED`) and sets `TAC_LIBRARY_MODE=1` so functions can detect
+non-interactive sourcing if needed.
+
+**`bin/tac-exec`** sources `env.sh` then runs `"$@"`. It is symlinked to
+`~/.local/bin/tac-exec` for PATH access.
+
+```bash
+tac-exec oc health
+tac-exec model list
+tac-exec so
+tac-exec serve 4
+
+```
+
+Thin wrappers in `~/.local/bin/` (`so`, `xo`, `serve`, `oc-backup`, etc.)
+delegate to `tac-exec` rather than re-implementing function logic. This
+ensures all callers use the canonical function definitions with full error
+handling, pre-flight checks, and UI formatting.
+
+**Rule:** Never extract bash functions as standalone scripts. Always
+delegate through `tac-exec`.
+
+#### Cross-Cutting State
+
+These variables are written in one section and read by another. They are the
+coupling points that must be preserved during modularisation:
+
+| Variable | Written By | Read By | Medium |
+| --- | --- | --- | --- |
+| `LAST_TPS` | `burn`, `__llm_stream` (§11) | `tactical_dashboard` (§12) | `/dev/shm/last_tps` |
+| `__LAST_LLM_RESPONSE` | `__llm_chat_send` (§11) | `local_chat` (§11) | Shell variable |
+| `ACTIVE_LLM_FILE` | `model use` (§11) | `oc-local-llm` (§9), dashboard (§12) | `/dev/shm/active_llm` |
+| Host metrics cache | `tac_hostmetrics.sh` (external) | `__get_host_metrics` (§7), dashboard (§12) | `/dev/shm/tac_hostmetrics` |
+| LLM slots cache | `__get_llm_slots` (§7) | `tactical_dashboard` (§12) | `/dev/shm/tac_llm_slots` |
+| OC version cache | `__get_oc_version` (§7) | `tactical_dashboard` (§12) | `/dev/shm/tac_oc_version` |
+| `VSCODE_BIN` | `__resolve_vscode_bin` (§1) | aliases (§4) | Shell variable + `/dev/shm/vscode_path` |
+| `_TAC_ADMIN_BADGE` | hooks (§6) | `custom_prompt_command` (§6) | Shell variable |
+| `CooldownDB` | constants (§1) | maintenance (§8) | `~/.openclaw/maintenance_cooldowns.txt` |
+| `__TAC_HAS_BATTERY` | constants (§1) | `__get_battery` (§7) | Shell variable |
+| `__TAC_INITIALIZED` | init (§13) | init (§13) | Shell variable |
+| `__TAC_BG_PIDS` | `tactical_dashboard` (§12) | EXIT trap (§13) | Shell array (reset per render) |
+| `_TAC_LOADER_VERSION` | `tactical-console.bashrc` (§0) | version computation (§0) | Shell variable |
+| `TACTICAL_PROFILE_VERSION` | computed: `loader_ver.sum(module_versions)` | dashboard (§12), env info (§9) | Shell export |
+
+#### Telemetry Caching Strategy
+
+All telemetry functions follow the same pattern to avoid blocking the UI.
+The shared helper `__cache_fresh <path> <ttl>` centralises the freshness
+check:
+
+```bash
+__cache_fresh() {
+    [[ -f "$1" ]] && (( $(date +%s) - $(stat -c %Y "$1") < $2 ))
+}
+
+    # 1. Return cached data if fresh
+    if __cache_fresh "$cache" TTL; then
+        cat "$cache"; return
+    fi
+    # 2. Launch background subshell to refresh
+    (
+        # ... compute new value ...
+        echo "$value" > "${cache}.tmp" && mv "${cache}.tmp" "$cache"
+    ) &>/dev/null &
+    # 3. Return stale data (or placeholder) immediately
+}
+```
+
+Cache TTLs per metric:
+
+| Metric | TTL | Rationale |
+| --- | --- | --- |
+| Host Metrics (CPU + iGPU + NVIDIA) | 10s | iGPU from `typeperf.exe` 3D engine, NVIDIA dGPU from Windows engine counters with `nvidia-smi` compute fallback |
+| GPU (NVIDIA detail) | 10s | nvidia-smi is slow (~1.2s) |
+| OC Sessions | 60s | Uses `openclaw sessions --all-agents --json`; displays cache age |
+| OC Version | 86400s (24h) | CLI version barely changes |
+| LLM Slots | 5s | Async query to llama.cpp `/slots` endpoint |
+
+All caches use **atomic writes** (`write .tmp` → `mv .tmp final`) to prevent
+partial reads by concurrent dashboard renders.
+
+#### Port Checking
+
+`__test_port` uses `ss -tln "sport = :PORT"` to query the kernel socket
+table. This returns in ~20ms and never hangs, unlike the previous
+`/dev/tcp` approach which would block indefinitely on closed ports in WSL2
+(no TCP RST sent for refused connections).
+
+#### UI Engine
+
+All box-drawing functions use `printf -v` for padding generation (zero
+subshells). The `__strip_ansi` function is pure bash regex — no `sed`, no
+forks — critical because it is called 20+ times per dashboard render.
+
+Layout constants are derived from `UIWidth` (default 80):
+
+- `__fRow` value column: `UIWidth - 20` characters
+- `__hRow` description column: `UIWidth - 22` characters
+- Values exceeding their column width are truncated with `...`
+
+#### Error Handling
+
+The ERR trap logs to `~/.openclaw/logs/bash-errors.log` with timestamps:
+
+```text
+2026-03-07 14:32:01 [EXIT 127] some_missing_command --flag
+```
+
+Exit code 1 is **filtered out** because `grep`, `test`, and `[[ ]]` return 1
+for normal "not found" / "false" conditions. Only exit codes ≥ 2 are logged.
+
+#### Security Measures
+
+1. **LLM loopback binding** — `llama-server` binds to `127.0.0.1`, not `0.0.0.0`.
+2. **API key cache** — `chmod 600` on tmpfs (`/dev/shm`). Never written to disk.
+3. **Commit auto guard** — `commit_auto` blocks sending git diffs to non-localhost LLM URLs and verifies `llama-server` PID is actually running before sending.
+4. **oc-llm-sync.sh integrity** — SHA256 hash is verified before sourcing. Mismatches skip the source and warn. Use `oc-trust-sync` to record a new trusted hash.
+5. **ERR trap** — All failed commands (exit ≥ 2) are logged with timestamps.
+6. **Bridge timeout** — `pwsh.exe` calls have a 5-second `timeout` to prevent hangs.
+7. **Sudo guard** — WSL loopback fix uses `sudo -n` (non-interactive only).
+8. **Variable name validation** — Bridge skips vars with non-`[a-zA-Z0-9_]` characters.
+
+---
+
+The profile was modularised in v3.0 (splitting a ~5,184-line monolith). The
+pre-modularisation file was preserved as `tactical-console.bashrc.monolith`
+but has since been removed from the repository (it remains in git history).
+
+**Ordering rules:** `01-constants.sh` must load first (everything depends on
+it). `13-init.sh` runs the interactive startup side-effects (screen clear,
+completions, WSL loopback fixes, EXIT traps); the canonical order in
+`scripts/_module-list.sh` places it near the end, followed only by
+`14-wsl-extras.sh` and `15-model-recommender.sh`. All other modules can be
+reordered as long as their `@depends` are satisfied.
+
+#### Benefits Realised
+
+| Benefit | Detail |
+| --- | --- |
+| **Faster iteration** | Edit `11e-llm-model.sh` without scrolling past 500 lines of unrelated server or GPU code. |
+| **Targeted testing** | `bash -n scripts/09a-oc-gateway.sh` checks only gateway functions. |
+| **Selective loading** | On a server with no GPU, skip `11d-llm-gpu.sh`. On a headless box, skip `12-dashboard-help.sh`. |
+| **Reduced merge conflicts** | Edits to OpenClaw and LLM code never touch the same file. |
+| **Git blame clarity** | `git log scripts/09c-oc-core.sh` shows only core dispatcher changes. |
+| **Easier onboarding** | A new developer reads one 200-line module instead of a 5,184-line monolith. |
+
+#### Monolith Backup
+
+The file `tactical-console.bashrc.monolith` was the last pre-split version of
+the profile. It has been removed from the working tree but remains in git
+history. To restore it for reference or emergency rollback:
+
+```bash
+git show HEAD~N:tactical-console.bashrc.monolith > tactical-console.bashrc.monolith
+```
+
+(Replace `N` with the number of commits since removal, or use the commit hash
+where it was last present.)
+
+#### Risks & Mitigations
+
+| Risk | Mitigation |
+| --- | --- |
+| Source order bugs | Numeric prefixes enforce deterministic ordering. `bash -n` runs on every module in CI. |
+| `readonly` collisions on re-source | Already guarded with `[[ -z "${C_Reset:-}" ]]`. |
+| Missing module breaks shell | The loader warns if expected module count doesn't match; each `[[ -f ]]` guards gracefully. |
+| Performance regression (many `source` calls) | 16 `source` calls add < 10ms total. Measured on this hardware. |
+| Utility scripts accidentally sourced | Array-based loader (not glob) — only the 16 named profile modules are sourced. |
+
+---
+
 ## Repository Layout
 
 ```
@@ -647,7 +1055,7 @@ function __get_METRIC() {
 │   ├── 15-model-recommender.sh        #   AI model recommendations by use case
 │   ├── _module-list.sh                #   Canonical module load order (shared by both loaders)
 │   ├── _startup-env.sh                #   Shared startup env fragment (sourced by loader + env.sh)
-│   └── kgraph/                        #   Knowledge graph Python package (Pydantic models)
+│   └── kgraph/                        #   Knowledge graph Python package (23 modules)
 │       ├── models.py                  #     GraphNode, GraphEdge, Graph, GraphBuilder
 │       └── templates/kgraph.html      #     Cytoscape.js viewer template
 ├── tools/                             # Standalone utility scripts (not sourced)
@@ -655,7 +1063,7 @@ function __get_METRIC() {
 │   ├── check-agent-use.sh             #   Agent-usage regression check (CI via fixtures)
 │   ├── check-repo-boundaries.sh       #   Repo ownership boundary guard
 │   ├── clean-orphans.sh               #   Kill orphaned bench/llama-server processes
-│   ├── docs-sync-check.sh             #   Docs drift guard (counts in README, architecture.md, pytest.ini)
+│   ├── docs-sync-check.sh             #   Docs drift guard (counts in README and pytest.ini)
 │   ├── import-windows-env.sh          #   Import Windows user environment variables
 │   ├── lint.sh                        #   bash -n + shellcheck + Unicode safety
 │   ├── mirror-vault.sh                #   Sync Obsidian vault to Windows
@@ -664,15 +1072,13 @@ function __get_METRIC() {
 │   └── sync-openclaw-completion.sh    #   Refresh OpenClaw bash completions
 ├── docs/                              # Reference documentation
 │   ├── AGENT-GUIDELINES.md            #   AI agent operating manual
-│   ├── architecture.md                #   Developer guide and module details
-│   ├── autotune_spec.md               #   Model autotune functional spec
 │   ├── inspection.md                  #   Audit checklist
-│   ├── llm.md                         #   Local LLM stack reference
+│   ├── llm.md                         #   Local LLM stack: registry, tuning, autotune, build
+│   ├── llama-cpp-runtime-audit.md     #   Measured findings + evidence appendix
 │   ├── openclaw.md                    #   OpenClaw integration guide
-│   ├── pwsh-build-prompt.md           #   PowerShell translation strategy + AI build prompt
-│   ├── reference.md                   #   Command reference + dashboard
-│   ├── troubleshooting.md             #   Diagnostics and fixes
 │   └── contracts/                     #   PowerShell translation contracts (YAML)
+├── .agents/
+│   └── pwsh-build-prompt.md           #   PowerShell translation strategy + AI build prompt
 ├── frontend-g6/                       # React + AntV G6 dev frontend (untracked; optional)
 │   └── src/                           #   App.jsx, G6App.jsx, CytoscapeApp.jsx
 ├── tests/
@@ -710,6 +1116,34 @@ function __get_METRIC() {
 
 ---
 
+<!-- merged from docs/architecture.md §10 on 2026-09-15: its Directory Structure and Symlink Map duplicated this section and were dropped -->
+
+### Setup on a New Machine
+
+```bash
+git clone https://github.com/waynegault/ubuntu-console.git ~/ubuntu-console
+cd ~/ubuntu-console
+./install.sh     # creates thin ~/.bashrc loader + symlinks
+exec bash        # reload profile
+```
+
+### Workflow
+
+Use `oedit` to open the profile in VS Code. After saving changes, run
+`reload` to apply. All edits go in `~/ubuntu-console/scripts/*.sh`
+(or `tactical-console.bashrc` for version/loader changes) — never edit
+`~/.bashrc` directly.
+
+Commit and push:
+
+```bash
+cd ~/ubuntu-console
+git add -A && git commit -m "description" && git push
+```
+
+
+end of file
+
 ## Dependencies
 
 ### System Requirements
@@ -746,6 +1180,16 @@ function __get_METRIC() {
 
 **Not required for LLM streaming:** Python (streaming is pure bash + curl + jq), Ruby, Docker.
 **Required for `oc g` / kgraph tooling:** Python 3.12+, `pydantic>=2.0`, `networkx>=3.0` (declared in `scripts/pyproject.toml`).
+
+---
+
+<!-- merged from docs/architecture.md §9 -->
+
+### What Is NOT Required
+
+- **Python** — All LLM streaming is pure bash + curl + jq.
+- **Ruby** — Never used.
+- **Docker** — The gateway runs as a native systemd service.
 
 ---
 
@@ -830,6 +1274,74 @@ The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs
 
 ---
 
+<!-- merged from docs/troubleshooting.md on 2026-09-15 -->
+
+---
+title: Troubleshooting
+description: Common issues and solutions — stale dashboard data, gateway crashes, API key bridging, LLM offline, slow rendering, commit failures, sync hash mismatches, cooldown issues, and slow shell startup.
+---
+
+
+### Dashboard shows stale or missing data
+
+First render after clearing will show "Querying..." for some metrics while
+background refreshes run.
+
+### `so` shows "CRASHED - CHECK LOGS"
+
+1. Run `le` to see gateway startup errors from journalctl.
+2. Common cause: missing API keys. Run `oc-refresh-keys` then `so` again.
+3. Check the systemd service: `systemctl --user status openclaw-gateway.service`
+
+### `ockeys` shows WSL ✗ for keys
+
+API keys are bridged from Windows but haven't been exported in this shell.
+Run `oc-refresh-keys`. If still failing, check `pwsh.exe` is accessible:
+`command -v pwsh.exe` should return a path.
+
+### LLM shows OFFLINE
+
+1. Check if a model is running: `model status`
+2. Start one: `model use 1` (or any model number from `model list`)
+3. If it fails to boot, check `cat /dev/shm/llama-server.log`
+4. Run `wake` first to prevent GPU WDDM sleep issues.
+
+### Dashboard takes > 1 second to render
+
+All telemetry functions use background subshells with `&>/dev/null &` to
+detach from the calling command substitution. If the dashboard blocks, check
+that every `( ... ) &` background refresh includes `&>/dev/null` before `&`
+— without it, the `$()` capture waits for the child's inherited pipe FD.
+The `typeperf.exe` call in `tac_hostmetrics.sh` takes ~4s cold, so it relies
+on this pattern to return stale data instantly while refreshing in the
+background.
+
+### `commit` fails with "LLM URL is not localhost"
+
+The `commit_auto` function blocks sending git diffs to non-local LLM
+endpoints as a security measure. Ensure `LOCAL_LLM_URL` points to
+`http://127.0.0.1:8081/v1/chat/completions`. It also verifies the
+`llama-server` process is actually running (PID check) before sending.
+
+### `oc-llm-sync.sh hash mismatch — skipped`
+
+The startup sequence verifies the SHA256 hash of `oc-llm-sync.sh` before
+sourcing it. If the file has been modified, sourcing is skipped for safety.
+Run `oc-trust-sync` to record the current file's hash as trusted.
+
+### `up` shows everything as CACHED
+
+Each maintenance step has a cooldown (APT index: 24h, APT upgrade and others:
+7d). Wait for the cooldown to expire, or delete
+`~/.openclaw/maintenance_cooldowns.txt` to force all steps to run.
+
+### Shell starts slowly
+
+The only potentially slow operation at startup is `__bridge_windows_api_keys`
+(calls `pwsh.exe` with 5s timeout). The key cache lasts 1 hour, so this only
+runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
+
+
 ## CI Status
 
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
@@ -853,4 +1365,4 @@ bats tests/integration/*.bats           # Integration tests
 tools/lint.sh                           # Static analysis
 ```
 
-# end of file
+<!-- end of file -->
