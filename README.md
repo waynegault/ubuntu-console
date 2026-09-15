@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (983 total tests: 643 BATS + 340 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (986 total tests: 646 BATS + 340 Python).
 
 ### Running Tests
 
@@ -687,11 +687,15 @@ function __get_METRIC() {
 │   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
 │   ├── test_models.py                 # Pydantic model tests (37 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (66 tests: 7+2+8+5+5+6+18+4+4+7)
+│   ├── unit/                          # BATS unit tests (86 tests: 7+2+8+5+5+6+19+4+8+7+15)
 │   └── integration/                   # BATS integration tests (119 tests: 14+42+10+22+5+26)
 └── systemd/
     ├── llama-watchdog.service
-    └── llama-watchdog.timer
+    ├── llama-watchdog.timer
+    ├── llama-xe-minicpm5-1b-chat.service
+    ├── llama-xe-embeddinggemma-embed.service
+    ├── llama-cuda-llama32-3b-chat.service
+    └── llama-cuda-qwen35-4b-pipeline.service
 ```
 
 ### Symlink Map
@@ -699,10 +703,10 @@ function __get_METRIC() {
 | System Path | Source |
 |---|---|
 | `~/.bashrc` | Thin loader (not in repo — sources `tactical-console.bashrc`) |
-| `~/.local/bin/<name>` | Every file in `bin/` — `tac-exec`, `tac_hostmetrics.sh`, `llama-watchdog.sh`, `bench-timeout-runner.sh`, `oc-*` wrappers |
+| `~/.local/bin/<name>` | Every file in `bin/` — `tac-exec`, `tac_hostmetrics.sh`, `llama-watchdog.sh`, `bench-timeout-runner.sh`, `oc-*` wrappers — **symlinked**, except the four the card launchers and their helpers occupy (`llama-cuda-server`, `llama-xe-server`, `llama-gpu-clear.sh`, `gpu-busy.sh`), which are installed as one-line `exec` shims so the stable path stays real |
 | `~/.local/bin/load-vault-env.sh` | `scripts/load-vault-env.sh` |
 | `~/.local/bin/oc-update-enhanced.sh` | `scripts/oc-update-enhanced.sh` |
-| `~/.config/systemd/user/<unit>` | Every file in `systemd/` — `llama-watchdog.service`, `llama-watchdog.timer` |
+| `~/.config/systemd/user/<unit>` | Every file in `systemd/`, plus **relative** legacy-name symlinks (`llama-server.service` → `llama-xe-minicpm5-1b-chat.service`, …). Relative on purpose: an absolute alias makes systemd load a second unit for the same service |
 
 ---
 

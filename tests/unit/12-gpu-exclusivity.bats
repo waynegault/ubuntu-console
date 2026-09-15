@@ -226,3 +226,75 @@ EOS
     # And the signal is actually part of the busy chain, not dead code.
     grep -q 'lock_busy || cuda_owner_busy' "$REPO_ROOT/bin/gpu-busy.sh"
 }
+
+# The launchers repeat the build path as a LITERAL (they are standalone — a lane
+# start cannot assume a sourced shell), while 01-constants derives it from
+# LLAMA_ROOT.  Nothing made the two agree until now, and a one-sided repoint is
+# the BENCH-ENGINE-ID-001 hazard (docs/llama-cpp-runtime-audit.md) seen from this
+# side: the lane and the bench would measure different builds and nothing would say
+# so.
+@test "gpu-exclusivity: each launcher's build default agrees with 01-constants' LLAMA_ROOT" {
+    # 01-constants: AI_STORAGE_ROOT=$HOME, LLAMA_ROOT=$AI_STORAGE_ROOT/llama.cpp,
+    # LLAMA_CUDA_SERVER_BIN=$LLAMA_SERVER_BIN ($LLAMA_ROOT/build/bin/llama-server),
+    # LLAMA_XE_SERVER_BIN=$LLAMA_ROOT/build-opencl/bin/llama-server.
+    local cuda_default xe_default
+    cuda_default=$(sed -nE 's/.*LLAMA_CUDA_SERVER_BIN:-([^}]*)\}.*/\1/p' "$REPO_ROOT/bin/llama-cuda-server")
+    xe_default=$(sed -nE 's/.*LLAMA_XE_SERVER_BIN:-([^}]*)\}.*/\1/p' "$REPO_ROOT/bin/llama-xe-server")
+
+    [[ -n "$cuda_default" && -n "$xe_default" ]] \
+        || { echo "FAIL: could not read a build default from a launcher"; return 1; }
+    [[ "$cuda_default" == "$HOME/llama.cpp/build/bin/llama-server" ]] \
+        || { echo "CUDA launcher default '$cuda_default' != 01-constants' LLAMA_CUDA_SERVER_BIN"; return 1; }
+    [[ "$xe_default" == "$HOME/llama.cpp/build-opencl/bin/llama-server" ]] \
+        || { echo "Xe launcher default '$xe_default' != 01-constants' LLAMA_XE_SERVER_BIN"; return 1; }
+}
+
+# A lane that named a historical forwarding shim (or the other card's launcher)
+# would still start, and the card map would then describe something other than what
+# runs — which is how "which build serves this card?" became unanswerable before.
+@test "gpu-exclusivity: every lane unit runs its own card's canonical launcher" {
+    local -a lanes=(
+        llama-xe-minicpm5-1b-chat.service
+        llama-xe-embeddinggemma-embed.service
+        llama-cuda-llama32-3b-chat.service
+        llama-cuda-qwen35-4b-pipeline.service
+    )
+    local u launcher
+
+    for u in "${lanes[@]}"; do
+        launcher=$(sed -nE 's/^ExecStart=([^ ]+).*/\1/p' "$REPO_ROOT/systemd/$u")
+        case "$u" in
+            llama-xe-*)   [[ "$launcher" == */llama-xe-server ]] \
+                              || { echo "FAIL: $u runs '${launcher:-<none>}'"; return 1; } ;;
+            llama-cuda-*) [[ "$launcher" == */llama-cuda-server ]] \
+                              || { echo "FAIL: $u runs '${launcher:-<none>}'"; return 1; } ;;
+        esac
+    done
+
+    # ...and no OTHER llama unit serves a port, so a new lane cannot be added
+    # without landing in the list above.
+    local listed
+    for u in "$REPO_ROOT"/systemd/llama-*.service; do
+        listed=""
+        for launcher in "${lanes[@]}"; do
+            [[ "${u##*/}" == "$launcher" ]] && listed=1
+        done
+        [[ -n "$listed" ]] && continue
+        grep -q -- '--port' "$u" \
+            && { echo "FAIL: ${u##*/} serves a port but is not in the lane list"; return 1; }
+    done
+    return 0
+}
+
+# The launchers are invoked by systemd as ExecStart and by the installed shims as a
+# target, so a missing exec bit breaks a LANE START, far from here — the same
+# failure the installer's fail-closed check exists to catch.  git records the bit,
+# so this is cheap to hold.
+@test "gpu-exclusivity: every bin/* entry is executable" {
+    local f
+    for f in "$REPO_ROOT"/bin/*
+    do
+        [[ -f "$f" ]] || continue
+        [[ -x "$f" ]] || { echo "FAIL: bin/${f##*/} is not executable"; return 1; }
+    done
+}

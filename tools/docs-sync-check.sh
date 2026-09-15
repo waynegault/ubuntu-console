@@ -14,7 +14,7 @@
 # Usage: tools/docs-sync-check.sh
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 set -u
 
@@ -74,6 +74,26 @@ grand_total=$((bats_total + python_total))
 
 check_phrase "total tests ($grand_total)" "${grand_total} total tests: ${bats_total} BATS + ${python_total} Python"
 check_phrase "full BATS suite count ($bats_full)" "${bats_full} BATS unit tests"
+
+# ── 3b. Per-directory test breakdown ───────────────────────────────────────
+# The totals above were guarded; the per-directory breakdown in the README tree
+# was not, and it had drifted by 20 tests before anyone noticed (2026-09-15).
+# Same counts, same filename order, so the parenthetical can be written from the
+# repo instead of from memory.
+for _dir in unit integration
+do
+    _counts=""
+    _sum=0
+    for f in "$REPO_ROOT"/tests/"$_dir"/*.bats
+    do
+        [[ -f "$f" ]] || continue
+        n=$(grep -c '^@test ' "$f" || true)
+        _sum=$((_sum + n))
+        _counts="${_counts:+$_counts+}$n"
+    done
+    check_phrase "tests/$_dir breakdown ($_sum tests: $_counts)" \
+        "${_dir} tests (${_sum} tests: ${_counts})"
+done
 
 # ── 4. env.sh library-loader phrase (unchanged from the old inline check) ──
 check_phrase "env.sh library-loader description" "Non-interactive library loader (all modules except 13-init.sh)"
