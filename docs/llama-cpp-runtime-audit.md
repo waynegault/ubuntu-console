@@ -482,12 +482,16 @@ Live trees:
 ~/.local/opt/llama.cpp/b9371/...     0.4.0-dev (build 10216, commit 876a43211)   PATH install, not a lane
 ```
 
-Convenience symlinks, so nobody assumes a bare `llama-server` is a lane:
-`cuda-llama-server` → `build` (repointed in §8; this is the CUDA lane's pointer),
-`llama-server-cuda` → `build-cuda133` (the pre-repoint target, still live),
-`cuda-llama-phi4` → `build`, `cuda-llama-bench` → *(wrapper script)* → `build`,
-`xe-llama-server`/`xe-llama-embed` → `build-opencl`, `llama-server`/`llama-cli` →
-`~/.local/opt/llama.cpp/b9371`.
+Convenience links, so nobody assumes a bare `llama-server` is a lane.  As of
+2026-09-15 these are one-line forwarding shims to the canonical card launchers
+rather than symlinks to a build: `cuda-llama-server` → `llama-cuda-server` → `build`
+(repointed in §8; this is the CUDA lane's pointer), `xe-llama-server` and
+`xe-llama-embed` → `llama-xe-server` → `build-opencl`, `cuda-llama-bench` →
+*(wrapper script)* → `build`.  Removed on 2026-09-15: `llama-server-cuda` (the
+pre-repoint target `build-cuda133`, now rollback-only), `cuda-llama-phi4` (the
+retired Phi-4-mini lane), and `llama-cli` (the unrecorded `~/.local/opt` build).
+A bare `llama-server` is deliberately **not** on PATH: `~/.local/opt/llama.cpp/b9371`
+serves an unrecorded card, so it was a coin-flip.
 
 Checked again 2026-09-15, because the repoint marker made this read like a live
 divergence: it is **history, not current state**.  The CUDA lane's pointer and the bench
@@ -501,8 +505,12 @@ One hazard survives that check: `cuda-llama-bench` is a **path-pinned wrapper** 
 would silently leave the bench measuring the old build.  Its only caller is the
 investigator's screen, whose rows now record the engine they actually ran
 (BENCH-ENGINE-ID-001), so the divergence is observable rather than silent.  A check on
-this side that the lane pointer and the wrapper still agree is the remaining gap — it
-belongs with versioning the launcher/shim set.
+this side that the launcher, the constants' build and the units' `ExecStart` still
+agree now exists —
+`tests/unit/12-gpu-exclusivity.bats` asserts the two launcher defaults match
+`LLAMA_CUDA_SERVER_BIN` / `LLAMA_XE_SERVER_BIN` and that every lane unit's
+`ExecStart` names a canonical card launcher (2026-09-15).  The bench wrapper's own
+binary resolution stays with the investigator under `WRAPPER-CUDA-BENCH-001`.
 
 Provenance note: `LLAMA-CPP-SOURCE-COMMIT.txt` exists in **`build-opencl/` only** (it records
 the tarball sha and the lane). `build/` has no such file — its exact configure line is

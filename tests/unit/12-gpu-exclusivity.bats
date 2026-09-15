@@ -192,7 +192,7 @@ _hold_lock() {
     # It refuses a foreign owner and displaces our own CUDA lanes...
     [[ "$_claim" == *"__llm_gpu_foreign_owner"* ]]
     [[ "$_claim" == *"llama-cuda-llama32-3b-chat.service"* ]]
-    [[ "$_claim" == *"llama-cuda-phi4-mini-decompose.service"* ]]
+    [[ "$_claim" == *"llama-cuda-qwen35-4b-pipeline.service"* ]]
     # ...and never the Xe card's units.
     [[ "$_claim" != *"llama-xe-minicpm5-1b-chat.service"* ]]
     [[ "$_claim" != *"llama-xe-embeddinggemma-embed.service"* ]]

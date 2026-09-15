@@ -16,7 +16,7 @@ StartLimitBurst=6
 
 [Service]
 ExecStartPre=/home/wayne/.local/bin/llama-gpu-clear.sh
-ExecStart=/home/wayne/.local/bin/cuda-llama-server -m /mnt/m/active/Qwen3.5-4B.Q4_K_M.gguf --port 8081 --host 127.0.0.1 --ctx-size 16384 --batch-size 1024 --ubatch-size 512 --threads 6 --n-gpu-layers 99 --parallel 1 --fit off --flash-attn on --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off
+ExecStart=/home/wayne/.local/bin/llama-cuda-server -m /mnt/m/active/Qwen3.5-4B.Q4_K_M.gguf --port 8081 --host 127.0.0.1 --ctx-size 16384 --batch-size 1024 --ubatch-size 512 --threads 6 --n-gpu-layers 99 --parallel 1 --fit off --flash-attn on --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off
 Restart=on-failure
 RestartSec=15
 TimeoutStartSec=600

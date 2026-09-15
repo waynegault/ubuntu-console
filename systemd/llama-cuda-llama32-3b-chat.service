@@ -11,7 +11,7 @@ StartLimitBurst=6
 # Clears the CUDA card before this lane loads, and REFUSES to start while another
 # run owns the card — one LLM on the CUDA card, ever.  See docs/llm.md.
 ExecStartPre=/home/wayne/.local/bin/llama-gpu-clear.sh
-ExecStart=/home/wayne/.local/bin/cuda-llama-server -m /mnt/m/active/Llama-3.2-3B-Instruct-Q4_K_M.gguf --port 18083 --host 127.0.0.1 --ctx-size 21504 --batch-size 512 --ubatch-size 256 --threads 4 --n-gpu-layers 99 --parallel 1 --fit off --flash-attn on --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off
+ExecStart=/home/wayne/.local/bin/llama-cuda-server -m /mnt/m/active/Llama-3.2-3B-Instruct-Q4_K_M.gguf --port 18083 --host 127.0.0.1 --ctx-size 21504 --batch-size 512 --ubatch-size 256 --threads 4 --n-gpu-layers 99 --parallel 1 --fit off --flash-attn on --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off
 Restart=on-failure
 # 15s, not the Xe lanes' 5s: a model load on the 4 GB card takes tens of seconds,
 # so a short retry would pile a second load onto a card still freeing the first.

@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 36
+# Module Version: 37
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -962,16 +962,16 @@ function __up_stale_processes() {
     # fails when llama-server is busy processing — not orphaned).
     #
     # Never reap systemd-managed llama units (fleet Xe :18081, embed :18080,
-    # NVIDIA :18083, phi4 :18082) — they share the llama-server process name
-    # but are gateway-managed and self-healing, and killing them here restarts
-    # the restart-storm cycle.
+    # CUDA chat :18083) — they share the llama-server process name but are
+    # gateway-managed and self-healing, and killing them here restarts the
+    # restart-storm cycle.
     local stale_pids
     stale_pids=$(pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null)
     local stale_count=0
     local _unit _protect_pid _pid _p _skip _has_port
     local -a _protect=()
     for _unit in llama-xe-minicpm5-1b-chat.service llama-xe-embeddinggemma-embed.service \
-                 llama-cuda-llama32-3b-chat.service llama-cuda-phi4-mini-decompose.service
+                 llama-cuda-llama32-3b-chat.service
     do
         _protect_pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
         if [[ "$_protect_pid" =~ ^[0-9]+$ ]] && (( _protect_pid > 0 ))

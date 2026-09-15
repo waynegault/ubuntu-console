@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -818,7 +818,7 @@ function __model_use_claim_cuda_card() {
 
     # 2. Displace our own CUDA service lanes.  Never the Xe ones.
     local _unit
-    for _unit in llama-cuda-llama32-3b-chat.service llama-cuda-phi4-mini-decompose.service llama-cuda-qwen35-4b-pipeline.service
+    for _unit in llama-cuda-llama32-3b-chat.service llama-cuda-qwen35-4b-pipeline.service
     do
         if systemctl --user is-active --quiet "$_unit" 2>/dev/null
         then

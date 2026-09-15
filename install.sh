@@ -3,7 +3,7 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
-VERSION="1.5"
+VERSION="1.6"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -212,7 +212,7 @@ done
 # a symlink writes THROUGH it — overwriting the build binary it points at.  That
 # is not hypothetical: it is the same shape as the cp-through-symlink that ate
 # bin/llama-gpu-clear.sh earlier the same day.
-for _alias in cuda-llama-server:cuda cuda-llama-phi4:cuda xe-llama-server:xe xe-llama-embed:xe
+for _alias in cuda-llama-server:cuda xe-llama-server:xe xe-llama-embed:xe
 do
     _name="${_alias%%:*}"; _card="${_alias##*:}"
     if [[ -x "$HOME/.local/bin/llama-${_card}-server" ]]; then
@@ -229,15 +229,22 @@ do
     fi
 done
 
-# Retired 2026-09-15 (Wayne): llama-server-cuda pointed at build-cuda133, a third
-# CUDA name on a build that serves nothing (documented rollback-only instead), and
-# llama-cli used the unrecorded ~/.local/opt build.  Neither is a lane, and each
-# invited "which build is this?".  Only symlinks are removed.
-for _retired in llama-server-cuda llama-cli
+# Retired launchers (2026-09-15, Wayne): llama-server-cuda pointed at
+# build-cuda133, a third CUDA name on a build that serves nothing (documented
+# rollback-only instead); llama-cli used the unrecorded ~/.local/opt build; and
+# cuda-llama-phi4 served the retired Phi-4-mini lane, so it has no caller.  None
+# is a lane, and each invited "which build is this?".  A symlink is removed
+# outright; a generated one-line shim is removed only when its shebang proves it
+# is ours, so a real binary that happened to take the name is left alone.
+for _retired in llama-server-cuda llama-cli cuda-llama-phi4
 do
     if [[ -L "$HOME/.local/bin/$_retired" ]]; then
         rm -f "$HOME/.local/bin/$_retired"
         echo "  removed retired launcher $_retired"
+    elif [[ -f "$HOME/.local/bin/$_retired" ]] \
+         && [[ "$(head -1 "$HOME/.local/bin/$_retired" 2>/dev/null)" == '#!/usr/bin/env bash' ]]; then
+        rm -f "$HOME/.local/bin/$_retired"
+        echo "  removed retired launcher shim $_retired"
     fi
 done
 
@@ -249,11 +256,13 @@ done
 # put a live CUDA lane down — their name-keyed check read the lane as inactive, and
 # ours could have added a second server to the card.  A relative symlink to the unit
 # NAME merges the two: one Id, one state, both names.
+#
+# llama-server-phi4.service is absent by design: its unit (the retired Phi-4-mini
+# decomposition lane) was removed on 2026-09-15, so there is nothing to alias.
 for _pair in llama-server.service:llama-xe-minicpm5-1b-chat.service \
              llama-embed-server.service:llama-xe-embeddinggemma-embed.service \
              llama-server-nvidia.service:llama-cuda-llama32-3b-chat.service \
-             llama-server-8081.service:llama-cuda-qwen35-4b-pipeline.service \
-             llama-server-phi4.service:llama-cuda-phi4-mini-decompose.service
+             llama-server-8081.service:llama-cuda-qwen35-4b-pipeline.service
 do
     _old="${_pair%%:*}"; _new="${_pair##*:}"
     if [[ -e "$HOME/.config/systemd/user/$_new" ]]; then
@@ -283,6 +292,19 @@ for f in "$REPO"/systemd/*
 do
     [[ -f "$f" ]] || continue
     link "systemd/$(basename "$f")" "$HOME/.config/systemd/user/$(basename "$f")"
+done
+
+# Retired UNIT names (2026-09-15): the Phi-4-mini decomposition lane was removed
+# from the repo, so its installed unit link and its legacy alias both dangle.
+# Remove them explicitly — the alias target is a BARE name, so a "prune links whose
+# target left the repo" pass cannot see it, and `systemctl --user list-unit-files`
+# would keep listing a name nothing resolves to.
+for _stale in llama-cuda-phi4-mini-decompose.service llama-server-phi4.service
+do
+    if [[ -L "$HOME/.config/systemd/user/$_stale" ]]; then
+        rm -f "$HOME/.config/systemd/user/$_stale"
+        echo "  removed retired unit $_stale"
+    fi
 done
 
 if command -v systemctl >/dev/null 2>&1

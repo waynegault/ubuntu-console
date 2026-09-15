@@ -233,11 +233,12 @@ either historical or wrong.
 | **Xe** | `llama-xe-embeddinggemma-embed.service` | `llama-xe-server` | 18080 | embeddings (`--embedding`) |
 | **CUDA** | `llama-cuda-llama32-3b-chat.service` | `llama-cuda-server` | 18083 | the enabled CUDA lane |
 | **CUDA** | `llama-cuda-qwen35-4b-pipeline.service` | `llama-cuda-server` | 8081 | parked lane (disabled) |
-| **CUDA** | `llama-cuda-phi4-mini-decompose.service` | `llama-cuda-server` | 18082 | parked lane (disabled) |
 
 **One launcher per card, not per lane.**  Lanes differ in *arguments* (model, port,
-ctx); the *build* is what a launcher selects, and the phi4 lane and the chat lane
-run the same binary.  `bin/llama-cuda-server` and `bin/llama-xe-server` are tracked
+ctx); the *build* is what a launcher selects, and the CUDA chat and pipeline lanes
+run the same binary.  Each unit's `ExecStart` names the canonical card launcher
+(`llama-cuda-server` / `llama-xe-server`) directly, never a historical forwarding
+shim.  `bin/llama-cuda-server` and `bin/llama-xe-server` are tracked
 in this repo and read `LLAMA_CUDA_SERVER_BIN` / `LLAMA_XE_SERVER_BIN` from
 `01-constants.sh`, so **which build serves which card is a reviewed line in git**,
 not a symlink repointable in place — the 2026-09-13 repoint did exactly that, and
@@ -251,12 +252,13 @@ launchers are now card-first throughout.  The build trees keep their own split �
 `build-cuda133/` is rollback-only: not a lane, and deliberately given no name on
 PATH.
 
-The historical launcher names — `cuda-llama-server`, `cuda-llama-phi4`,
-`xe-llama-server`, `xe-llama-embed` — are installed as one-line forwarding shims,
-because the investigator's `pipeline/gpu/_llama_procs.py` knows them by name.
-Retired on 2026-09-15: `llama-server-cuda` (a third CUDA name pointing at
-`build-cuda133`, which serves nothing) and `llama-cli` (the unrecorded
-`~/.local/opt` build).
+The historical launcher names — `cuda-llama-server`, `xe-llama-server`,
+`xe-llama-embed` — are installed as one-line forwarding shims, because the
+investigator's `pipeline/gpu/_llama_procs.py` resolves them by name.  Retired on
+2026-09-15: `llama-server-cuda` (a third CUDA name pointing at `build-cuda133`,
+which serves nothing), `llama-cli` (the unrecorded `~/.local/opt` build), and
+`cuda-llama-phi4` and the lane it served (`llama-cuda-phi4-mini-decompose.service`,
+the Phi-4-mini "decomposition" role, which had no remaining caller in either repo).
 
 **One LLM on the CUDA card at a time, ever.**  `model use` claims the card
 (`__model_use_claim_cuda_card`: refuse a foreign owner, displace the other CUDA

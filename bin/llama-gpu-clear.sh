@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # llama-gpu-clear.sh - Ensure the GPU is cleared before llama-server loads.
-# Called as ExecStartPre by llama-cuda-llama32-3b-chat.service / llama-cuda-phi4-mini-decompose.service.
+# Called as ExecStartPre by llama-cuda-llama32-3b-chat.service (the CUDA lane).
 # Kills stale llama-server processes (crash orphans holding VRAM) and waits
 # for VRAM to drain. Restart-aware: on a crash-recovery start (previous run
 # failed) with no orphan to kill, the dead server's VRAM is already being
 # released by the driver - use a short grace period instead of the full 30s
 # drain wait so recovery isn't delayed.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
-VERSION="1.4.0"   # 1.4.0: refuse to start when the CUDA card is owned elsewhere (one LLM per card).
+# Module Version: 5
+VERSION="1.4.1"   # 1.4.1: drop the retired phi4 lane's unit and launcher from the recovery/evict lists.
 
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
     echo "llama-gpu-clear $VERSION"
@@ -48,23 +48,18 @@ _inv_gpu_foreign_owner() {
 #    in a failure (crash/signal/timeout/...) rather than a clean stop?
 #    During ExecStartPre the unit's own process isn't running yet, so Result
 #    still reflects the last completed run.
-result=""
-for unit in llama-cuda-llama32-3b-chat.service llama-cuda-phi4-mini-decompose.service; do
-    r=$(systemctl --user show "$unit" -p Result --value 2>/dev/null | tr -d ' \n' || true)
-    case "$r" in
-        exit-code|signal|core-dump|timeout|watchdog|resources|oom-kill|start-limit-hit)
-            result="$r"
-            break
-            ;;
-    esac
-done
-case "$result" in
-    "")
-        RECOVERY=0
+#
+#    One unit calls this script (the CUDA chat lane), so it is read directly.
+#    Only a failure Result sets RECOVERY=1: a clean `success` is not a recovery
+#    start, and the crash-recovery short grace period must not apply to it.
+_unit_result=$(systemctl --user show llama-cuda-llama32-3b-chat.service -p Result --value 2>/dev/null | tr -d ' \n' || true)
+case "$_unit_result" in
+    exit-code|signal|core-dump|timeout|watchdog|resources|oom-kill|start-limit-hit)
+        RECOVERY=1
+        log "recovery start (previous run: $_unit_result)"
         ;;
     *)
-        RECOVERY=1
-        log "recovery start (previous run: $result)"
+        RECOVERY=0
         ;;
 esac
 
@@ -75,7 +70,7 @@ esac
 #    leave the other serving.
 #
 #      CUDA card: llama.cpp/build/         (LLAMA_SERVER_BIN; cuda-llama-server,
-#                                           cuda-llama-phi4, cuda-llama-bench)
+#                                           cuda-llama-bench)
 #                 llama.cpp/build-cuda*/   (llama-server-cuda)
 #      Xe card:   llama.cpp/build-opencl*/ (xe-llama-server, xe-llama-embed)
 #                 — matched only to be explicitly skipped below.
@@ -98,7 +93,7 @@ _cuda_stale_pids() {
             # The CUDA card.
             */llama.cpp/build/bin/llama-server|*/llama.cpp/build-cuda*/bin/llama-server)
                 printf '%s\n' "${pid#/proc/}" ;;
-            */.local/bin/cuda-llama-server|*/.local/bin/cuda-llama-phi4|*/.local/bin/cuda-llama-bench|*/.local/bin/llama-server-cuda)
+            */.local/bin/cuda-llama-server|*/.local/bin/cuda-llama-bench|*/.local/bin/llama-server-cuda)
                 printf '%s\n' "${pid#/proc/}" ;;
         esac
     done

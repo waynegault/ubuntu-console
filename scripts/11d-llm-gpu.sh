@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -352,7 +352,7 @@ function __llm_kill_cuda_llama_servers() {
 
     # Protected: MainPIDs of the persistent llama systemd units.
     for _unit in llama-xe-minicpm5-1b-chat.service llama-xe-embeddinggemma-embed.service \
-                 llama-cuda-llama32-3b-chat.service llama-cuda-phi4-mini-decompose.service
+                 llama-cuda-llama32-3b-chat.service
     do
         _svc_pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
         if [[ "$_svc_pid" =~ ^[0-9]+$ ]] && (( _svc_pid > 0 ))
