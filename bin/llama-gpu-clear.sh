@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # llama-gpu-clear.sh - Ensure the GPU is cleared before llama-server loads.
-# Called as ExecStartPre by llama-server-nvidia.service / llama-server-phi4.service.
+# Called as ExecStartPre by llama-cuda-llama32-3b-chat.service / llama-cuda-phi4-mini-decompose.service.
 # Kills stale llama-server processes (crash orphans holding VRAM) and waits
 # for VRAM to drain. Restart-aware: on a crash-recovery start (previous run
 # failed) with no orphan to kill, the dead server's VRAM is already being
 # released by the driver - use a short grace period instead of the full 30s
 # drain wait so recovery isn't delayed.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
 VERSION="1.4.0"   # 1.4.0: refuse to start when the CUDA card is owned elsewhere (one LLM per card).
 
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -49,7 +49,7 @@ _inv_gpu_foreign_owner() {
 #    During ExecStartPre the unit's own process isn't running yet, so Result
 #    still reflects the last completed run.
 result=""
-for unit in llama-server-nvidia.service llama-server-phi4.service; do
+for unit in llama-cuda-llama32-3b-chat.service llama-cuda-phi4-mini-decompose.service; do
     r=$(systemctl --user show "$unit" -p Result --value 2>/dev/null | tr -d ' \n' || true)
     case "$r" in
         exit-code|signal|core-dump|timeout|watchdog|resources|oom-kill|start-limit-hit)

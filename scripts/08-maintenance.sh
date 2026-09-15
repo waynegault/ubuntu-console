@@ -3,7 +3,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 35
+# Module Version: 36
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -970,8 +970,8 @@ function __up_stale_processes() {
     local stale_count=0
     local _unit _protect_pid _pid _p _skip _has_port
     local -a _protect=()
-    for _unit in llama-server.service llama-embed-server.service \
-                 llama-server-nvidia.service llama-server-phi4.service
+    for _unit in llama-xe-minicpm5-1b-chat.service llama-xe-embeddinggemma-embed.service \
+                 llama-cuda-llama32-3b-chat.service llama-cuda-phi4-mini-decompose.service
     do
         _protect_pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
         if [[ "$_protect_pid" =~ ^[0-9]+$ ]] && (( _protect_pid > 0 ))

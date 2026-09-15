@@ -224,7 +224,7 @@ This is the **custom-tuned** binary. The generic prebuilt release lives at
 > (build 10432 / `ab5ce4658`), the pre-repoint target — running the `ln -sf`
 > above would move it onto `build/` and quietly change which binary that name
 > means. Check with `ls -l ~/.local/bin/ | grep llama` and
-> `readlink -f /proc/$(systemctl --user show llama-server-nvidia.service -p MainPID --value)/exe`
+> `readlink -f /proc/$(systemctl --user show llama-cuda-llama32-3b-chat.service -p MainPID --value)/exe`
 > before relying on either name. See `docs/llama-cpp-runtime-audit.md` §8.
 
 ---

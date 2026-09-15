@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2154
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -86,11 +86,11 @@ function __llm_server_stop() {
     ((_tries < 5)) && _tries=5
 
     # Protected PIDs: every systemd-managed llama unit — fleet Xe
-    # (llama-server.service, LLM_SERVICE_PORT owner), embed, NVIDIA and phi4.
+    # (llama-xe-minicpm5-1b-chat.service, LLM_SERVICE_PORT owner), embed, NVIDIA and phi4.
     # They are gateway-managed and self-healing; TAC-side stop logic must
     # never TERM/KILL them, even when the pattern sweep below matches them.
-    for _unit in llama-server.service llama-embed-server.service \
-                 llama-server-nvidia.service llama-server-phi4.service
+    for _unit in llama-xe-minicpm5-1b-chat.service llama-xe-embeddinggemma-embed.service \
+                 llama-cuda-llama32-3b-chat.service llama-cuda-phi4-mini-decompose.service
     do
         _upid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
         if [[ "$_upid" =~ ^[0-9]+$ ]] && (( _upid > 0 ))

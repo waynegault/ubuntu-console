@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # llama-watchdog.sh - Check local llama-server lanes; recover when unhealthy.
 # v3.0 (2026-09-09): dual-unit management + 2-strike restart + GPU-gated CUDA lane.
-#   - llama-server.service        (Xe OpenCL,  :18081)  always-on baseline lane
-#   - llama-server-nvidia.service (CUDA,       :18083)  runs ONLY while GPU is free;
+#   - llama-xe-minicpm5-1b-chat.service        (Xe OpenCL,  :18081)  always-on baseline lane
+#   - llama-cuda-llama32-3b-chat.service (CUDA,       :18083)  runs ONLY while GPU is free;
 #     stopped when GPU busy (foreign workload) so VRAM is freed and gateway
 #     requests fail fast to the Xe lane (per Wayne 09-09: "if cuda is not being
 #     used, it can be used; if it is being used, use xe").
@@ -38,7 +38,7 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line (it is what makes an edit here fail the pre-commit guard until the
 #   number moves).  Deliberately separate from VERSION= below: the marker
@@ -81,9 +81,12 @@ fi
 # contract check parses; the lanes alias it below.
 LLM_SERVICE_PORT="${LLM_SERVICE_PORT:-18081}"
 XE_PORT="$LLM_SERVICE_PORT"
-XE_UNIT="llama-server"
+# Card-first unit names (see docs/llm.md's card map).  Kept suffix-less because
+# systemd resolves a bare name to its .service, and these are used both as
+# `systemctl` arguments and in log lines.
+XE_UNIT="llama-xe-minicpm5-1b-chat"
 NV_PORT="${LLM_NVIDIA_PORT:-18083}"
-NV_UNIT="llama-server-nvidia"
+NV_UNIT="llama-cuda-llama32-3b-chat"
 STRIKE_XE="$WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes"
 STRIKE_NV="$WATCHDOG_STRIKE_DIR/llama-watchdog-nv.strikes"
 # Presence of this file suspends ONLY the CUDA lane (see nv_suspended).  Kept
@@ -252,7 +255,7 @@ else
 fi
 
 # ============================================================
-# LANE 2: CUDA llama-server-nvidia — runs only while GPU free
+# LANE 2: CUDA card — llama-cuda-llama32-3b-chat — runs only while GPU free
 # ============================================================
 nv_state=$(systemctl --user show "$NV_UNIT.service" -p ActiveState --value 2>/dev/null || true)
 if nv_suspended; then

@@ -6,7 +6,7 @@
 # signal), 2-strike recovery, the always-on Xe lane, the GPU-gated CUDA lane,
 # and the v3.5 NV-only suspend flag. All external commands (curl, systemctl,
 # gpu-busy.sh) are mocked so the suite is hermetic and never touches the live
-# llama-server.service.
+# llama-xe-minicpm5-1b-chat.service.
 # Run: bats tests/integration/04-watchdog.bats
 # ==============================================================================
 
@@ -70,7 +70,7 @@ case "$op" in
     show)
         unit="${1:-}"
         case "$unit" in
-            *nvidia*) cat "$SYSTEMCTL_MOCK_STATE/nv_state" 2>/dev/null || echo "inactive" ;;
+            *cuda*) cat "$SYSTEMCTL_MOCK_STATE/nv_state" 2>/dev/null || echo "inactive" ;;
             *)        cat "$SYSTEMCTL_MOCK_STATE/xe_state" 2>/dev/null || echo "inactive" ;;
         esac
         ;;
@@ -169,7 +169,7 @@ setup() {
     run "$WATCHDOG_SCRIPT"
     [[ "$status" -eq 0 ]]
     [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
-    grep -q "restart llama-server.service" "$SYSTEMCTL_MOCK_LOG"
+    grep -q "restart llama-xe-minicpm5-1b-chat.service" "$SYSTEMCTL_MOCK_LOG"
     [[ "$output" == *"Recovery successful"* ]]
 }
 
@@ -211,8 +211,8 @@ setup() {
     run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"GPU busy — stopping llama-server-nvidia"* ]]
-    grep -q "stop llama-server-nvidia.service" "$SYSTEMCTL_MOCK_LOG"
+    [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]]
+    grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
 }
 
@@ -226,7 +226,7 @@ setup() {
     run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"GPU busy — stopping llama-server-nvidia"* ]]
+    [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]]
     [[ "$output" != *"probe failed"* ]]
 }
 
@@ -241,8 +241,8 @@ setup() {
 
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"probe failed"* ]]
-    [[ "$output" == *"GPU busy — stopping llama-server-nvidia"* ]]
-    grep -q "stop llama-server-nvidia.service" "$SYSTEMCTL_MOCK_LOG"
+    [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]]
+    grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
 }
 
 @test "integration: watchdog skips the Xe lane when the bench lock is present" {
@@ -281,9 +281,9 @@ setup() {
     run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"CUDA lane suspended — stopping llama-server-nvidia"* ]]
-    grep -q "stop llama-server-nvidia.service" "$SYSTEMCTL_MOCK_LOG"
-    grep -qv "stop llama-server.service" "$SYSTEMCTL_MOCK_LOG"
+    [[ "$output" == *"CUDA lane suspended — stopping llama-cuda-llama32-3b-chat"* ]]
+    grep -q "stop llama-cuda-llama32-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+    grep -qv "stop llama-xe-minicpm5-1b-chat.service" "$SYSTEMCTL_MOCK_LOG"
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
 }
 
@@ -300,7 +300,7 @@ setup() {
     [[ "$status" -eq 0 ]]
     [[ "$output" != *"bench lock present"* ]]
     [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
-    grep -q "restart llama-server.service" "$SYSTEMCTL_MOCK_LOG"
+    grep -q "restart llama-xe-minicpm5-1b-chat.service" "$SYSTEMCTL_MOCK_LOG"
 }
 
 @test "integration: NV suspend resets CUDA strikes so a resumed lane starts clean" {
@@ -351,7 +351,7 @@ setup() {
     [[ "$status" -eq 0 ]]
     [[ -f "$WATCHDOG_MOCK_STATE/reset_failed_called" ]]
     [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
-    grep -q "reset-failed llama-server.service" "$SYSTEMCTL_MOCK_LOG"
+    grep -q "reset-failed llama-xe-minicpm5-1b-chat.service" "$SYSTEMCTL_MOCK_LOG"
 }
 
 @test "integration: watchdog logs a failed recovery without a non-zero exit" {
@@ -366,7 +366,7 @@ setup() {
     # v3.0 always exits 0 (the user timer should not latch failed); a recovery
     # that cannot come up is reported on stdout instead.
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"recover failed for llama-server"* ]]
+    [[ "$output" == *"recover failed for llama-xe-minicpm5-1b-chat"* ]]
 }
 
 @test "integration: watchdog script has version" {

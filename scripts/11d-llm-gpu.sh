@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -324,8 +324,8 @@ function __llm_gpu_foreign_owner() {
 # ---------------------------------------------------------------------------
 # __llm_kill_cuda_llama_servers — Kill ONLY CUDA-held llama.cpp processes.
 #
-# Two-card machine: the Xe fleet server (llama-server.service, :18081) and
-# the embed server (llama-embed-server.service, :18080) run the SAME
+# Two-card machine: the Xe fleet server (llama-xe-minicpm5-1b-chat.service, :18081) and
+# the embed server (llama-xe-embeddinggemma-embed.service, :18080) run the SAME
 # llama-server binary on the Intel Xe via OpenCL as every CUDA server.  A
 # name-based pkill (pkill -x/-f llama-server) therefore collateral-kills the
 # Xe fleet even though it holds NO CUDA VRAM.  This helper kills only
@@ -351,8 +351,8 @@ function __llm_kill_cuda_llama_servers() {
     fi
 
     # Protected: MainPIDs of the persistent llama systemd units.
-    for _unit in llama-server.service llama-embed-server.service \
-                 llama-server-nvidia.service llama-server-phi4.service
+    for _unit in llama-xe-minicpm5-1b-chat.service llama-xe-embeddinggemma-embed.service \
+                 llama-cuda-llama32-3b-chat.service llama-cuda-phi4-mini-decompose.service
     do
         _svc_pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
         if [[ "$_svc_pid" =~ ^[0-9]+$ ]] && (( _svc_pid > 0 ))

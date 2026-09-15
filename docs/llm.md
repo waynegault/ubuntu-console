@@ -228,11 +228,11 @@ names below are historic and will not do it for you.
 
 | Card | Unit | Launcher | Port | Notes |
 |---|---|---|---|---|
-| **Xe** | `llama-server.service` | `xe-llama-server` | 18081 | the fleet server |
-| **Xe** | `llama-embed-server.service` | `xe-llama-embed` | 18080 | embeddings |
-| **CUDA** | `llama-server-nvidia.service` | `cuda-llama-server` | 18083 | the enabled CUDA lane |
-| **CUDA** | `llama-server-8081.service` | `cuda-llama-server` | 8081 | parked lane (disabled) |
-| **CUDA** | `llama-server-phi4.service` | `cuda-llama-phi4` | 18082 | parked lane (disabled) |
+| **Xe** | `llama-xe-minicpm5-1b-chat.service` | `xe-llama-server` | 18081 | the fleet server |
+| **Xe** | `llama-xe-embeddinggemma-embed.service` | `xe-llama-embed` | 18080 | embeddings |
+| **CUDA** | `llama-cuda-llama32-3b-chat.service` | `cuda-llama-server` | 18083 | the enabled CUDA lane |
+| **CUDA** | `llama-cuda-qwen35-4b-pipeline.service` | `cuda-llama-server` | 8081 | parked lane (disabled) |
+| **CUDA** | `llama-cuda-phi4-mini-decompose.service` | `cuda-llama-phi4` | 18082 | parked lane (disabled) |
 
 The naming is the trap: the CUDA lane is `nvidia` in its unit and `cuda` in its
 launcher; the **Xe** fleet carries the plainest unit name; one CUDA lane is named
@@ -271,7 +271,7 @@ a coin-flip.  Use the card-explicit launchers.
 | `CUDA_STALL_FILE` | `/dev/shm/autotune-degrade-stalls-<boot-id>` | Consecutive-stall counter path |
 | `AUTOTUNE_SPEC_SWEEP` | `1` | `0` skips the spec-decode block-size sweep, which costs four launches per row and is the single largest cycle consumer |
 | `LLM_AUTOTUNE_LOCK_FILE` | `/tmp/llm-autotune.lock` | Run serialization lock path |
-| `LLAMA_WATCHDOG_NV_SUSPEND_FILE` | `/dev/shm/llama-watchdog-nv.suspend` | While this file exists the watchdog keeps the **CUDA** lane (`llama-server-nvidia.service`) down and stops it if up; the Xe lane and the watchdog's own health checks are untouched. The lane returns automatically when the file is removed |
+| `LLAMA_WATCHDOG_NV_SUSPEND_FILE` | `/dev/shm/llama-watchdog-nv.suspend` | While this file exists the watchdog keeps the **CUDA** lane (`llama-cuda-llama32-3b-chat.service`) down and stops it if up; the Xe lane and the watchdog's own health checks are untouched. The lane returns automatically when the file is removed |
 | `LLM_ALLOW_AUTOTUNE_DISCOURAGED` | `0` | Allow bench to auto-run autotune for discouraged quants |
 
 ### WSL2 CUDA Cycle Budget (dxgkrnl degradation)

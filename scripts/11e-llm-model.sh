@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -789,7 +789,7 @@ function __model_use_configure_params() {
 # @description Take the CUDA card for this interactive lane — ONE LLM PER CARD.
 #
 #   `model use` serves from the CUDA build (LLAMA_SERVER_BIN =
-#   $LLAMA_ROOT/build/bin/llama-server), and llama-server-nvidia/-phi4/-8081
+#   $LLAMA_ROOT/build/bin/llama-server), and the other CUDA lanes (llama-cuda-*)
 #   .service serve the SAME card from the same trees.  Nothing used to stop them,
 #   and nothing told the watchdog the card had been taken, so `model use` could
 #   share the card with a service lane — two llama-servers on a 4 GB card, which
@@ -818,7 +818,7 @@ function __model_use_claim_cuda_card() {
 
     # 2. Displace our own CUDA service lanes.  Never the Xe ones.
     local _unit
-    for _unit in llama-server-nvidia.service llama-server-phi4.service llama-server-8081.service
+    for _unit in llama-cuda-llama32-3b-chat.service llama-cuda-phi4-mini-decompose.service llama-cuda-qwen35-4b-pipeline.service
     do
         if systemctl --user is-active --quiet "$_unit" 2>/dev/null
         then
@@ -3244,7 +3244,7 @@ function llm-build() {
     if [[ -L "$HOME/.local/bin/cuda-llama-server" ]]; then
         lane_target=$(readlink -f "$HOME/.local/bin/cuda-llama-server" 2>/dev/null || true)
         if [[ "$lane_target" == "$root/build/"* ]]; then
-            lane_impact="the LIVE CUDA lane (llama-server-nvidia.service) serves $lane_target - a rebuild replaces the binary under it (the running process keeps its copy; the next restart picks up the new one)"
+            lane_impact="the LIVE CUDA lane (llama-cuda-llama32-3b-chat.service) serves $lane_target - a rebuild replaces the binary under it (the running process keeps its copy; the next restart picks up the new one)"
         fi
     fi
 

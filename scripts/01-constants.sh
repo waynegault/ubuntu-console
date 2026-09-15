@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 17
+# Module Version: 18
 # ==============================================================================
 
 # ==============================================================================
@@ -278,7 +278,7 @@ export HF_HOME="${HF_HOME:-$HOME/hf_cache}"
 
 # ---- Network & API ----
 export LLM_PORT=8081
-# Production LLM runs as the systemd user service llama-server.service on this
+# Production LLM runs as the systemd user service llama-xe-minicpm5-1b-chat.service on this
 # port (gateway baseUrl: http://127.0.0.1:18081/v1). 'so' treats a healthy
 # server here as "LLM running" instead of loading a duplicate on LLM_PORT.
 export LLM_SERVICE_PORT="${LLM_SERVICE_PORT:-18081}"

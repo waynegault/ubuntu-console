@@ -191,11 +191,11 @@ _hold_lock() {
     [[ "$_stop" == *"card released"* ]]
     # It refuses a foreign owner and displaces our own CUDA lanes...
     [[ "$_claim" == *"__llm_gpu_foreign_owner"* ]]
-    [[ "$_claim" == *"llama-server-nvidia.service"* ]]
-    [[ "$_claim" == *"llama-server-phi4.service"* ]]
+    [[ "$_claim" == *"llama-cuda-llama32-3b-chat.service"* ]]
+    [[ "$_claim" == *"llama-cuda-phi4-mini-decompose.service"* ]]
     # ...and never the Xe card's units.
-    [[ "$_claim" != *"llama-server.service"* ]]
-    [[ "$_claim" != *"llama-embed-server.service"* ]]
+    [[ "$_claim" != *"llama-xe-minicpm5-1b-chat.service"* ]]
+    [[ "$_claim" != *"llama-xe-embeddinggemma-embed.service"* ]]
 }
 
 # The watchdog can only stand down for another run if gpu-busy.sh knows about it,

@@ -27,7 +27,7 @@ setup() {
     export LLM_PORT=8081
     export OC_PORT=18789
 
-    # Bypass the systemd llama-server.service management branch in
+    # Bypass the systemd llama-xe-minicpm5-1b-chat.service management branch in
     # __so_ensure_llm_running (see 09a-oc-gateway.sh): unit tests exercise
     # the legacy registry-based fallback, not live systemd + a real model.
     export TAC_SKIP_SERVICE_LLM=1
