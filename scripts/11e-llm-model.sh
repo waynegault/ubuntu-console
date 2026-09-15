@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -761,6 +761,58 @@ function __model_use_configure_params() {
 }
 
 # ---------------------------------------------------------------------------
+# __model_use_claim_cuda_card
+# @description Take the CUDA card for this interactive lane — ONE LLM PER CARD.
+#
+#   `model use` serves from the CUDA build (LLAMA_SERVER_BIN =
+#   $LLAMA_ROOT/build/bin/llama-server), and llama-server-nvidia/-phi4/-8081
+#   .service serve the SAME card from the same trees.  Nothing used to stop them,
+#   and nothing told the watchdog the card had been taken, so `model use` could
+#   share the card with a service lane — two llama-servers on a 4 GB card, which
+#   must never happen.
+#
+#   Claiming it means three things: refuse when another agent's run owns the card,
+#   stop our own CUDA service lanes, and hold the CUDA lane down for as long as
+#   this server runs (the file the watchdog already honours — stopping the unit
+#   alone is not enough, because the watchdog would start it again on its next
+#   tick, and the card reads "free" to it while an idle server serves).
+#
+#   CARD DISCIPLINE: the Xe card is a DIFFERENT card and is never touched here.
+#   xe-llama-server (:18081) and xe-llama-embed (:18080) keep serving throughout.
+#
+# @returns 0 when the card is ours, 1 when another run owns it.
+# ---------------------------------------------------------------------------
+function __model_use_claim_cuda_card() {
+    local _cuda_suspend="${LLAMA_WATCHDOG_NV_SUSPEND_FILE:-/dev/shm/llama-watchdog-nv.suspend}"
+
+    # 1. Another agent's run owns the card: refuse rather than load a second LLM.
+    if declare -f __llm_gpu_foreign_owner &>/dev/null && __llm_gpu_foreign_owner
+    then
+        __tac_info "Error" "[CUDA card is owned by another run (pid $(__llm_gpu_lock_holder 2>/dev/null)) — not adding a second LLM to it]" "$C_Error"
+        return 1
+    fi
+
+    # 2. Displace our own CUDA service lanes.  Never the Xe ones.
+    local _unit
+    for _unit in llama-server-nvidia.service llama-server-phi4.service llama-server-8081.service
+    do
+        if systemctl --user is-active --quiet "$_unit" 2>/dev/null
+        then
+            __tac_info "CUDA" "stopping $_unit (one LLM per card; this lane takes it)" "$C_Dim"
+            systemctl --user stop "$_unit" 2>/dev/null || true
+        fi
+    done
+
+    # 3. Hold the CUDA lane down for the life of this server.  `model stop`
+    #    releases it; a bench/autotune run that already owns the card keeps it.
+    if ! touch "$_cuda_suspend" 2>/dev/null
+    then
+        __tac_info "Warning" "[could not mark the CUDA card as taken ($_cuda_suspend)]" "$C_Warning"
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __model_use_build_command
 # @description Build the server command array and configure mmap behavior.
 # @uses llm_backend, model_path, ctx, batch_size, ubatch_size, threads,
@@ -1111,6 +1163,7 @@ function __model_use() {
     __model_use_resolve_model "$@" || return 1
     __model_use_ensure_downloaded || return 1
     __model_use_select_backend || return 1
+    __model_use_claim_cuda_card || return 1
     __model_use_configure_params
     __model_use_build_command
     __model_use_launch_server
@@ -1155,6 +1208,19 @@ function __model_autotune_help() {
 # ---------------------------------------------------------------------------
 function __model_stop() {
     __llm_server_stop
+    # Release the CUDA card mark this lane took (__model_use_claim_cuda_card) so
+    # the watchdog may bring the CUDA lane back.  Left in place when a bench or
+    # autotune run owns the card: clearing it would let a second LLM load
+    # alongside that run.
+    local _cuda_suspend="${LLAMA_WATCHDOG_NV_SUSPEND_FILE:-/dev/shm/llama-watchdog-nv.suspend}"
+    if [[ -f "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}" || -f "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}" ]]
+    then
+        __tac_info "CUDA" "card mark left in place (a bench/autotune run owns the card)" "$C_Dim"
+    elif [[ -f "$_cuda_suspend" ]]
+    then
+        rm -f "$_cuda_suspend" 2>/dev/null || true
+        __tac_info "CUDA" "card released — the CUDA lane may start again" "$C_Dim"
+    fi
     # Kill any lingering stdin keeper processes (sleep-loop bash children)
     # that were orphaned when llama-server was killed.
     local _keeper_pid

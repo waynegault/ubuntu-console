@@ -7,8 +7,8 @@
 # released by the driver - use a short grace period instead of the full 30s
 # drain wait so recovery isn't delayed.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
-VERSION="1.3.0"   # 1.3.0: honour the investigator GPU lock — never reap a foreign bench.
+# Module Version: 3
+VERSION="1.4.0"   # 1.4.0: refuse to start when the CUDA card is owned elsewhere (one LLM per card).
 
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
     echo "llama-gpu-clear $VERSION"
@@ -68,32 +68,55 @@ case "$result" in
         ;;
 esac
 
-# 2. Kill stale CUDA llama-server processes. Scoped to the CUDA build and its
-#    per-role launchers (llama-nv / llama-phi4 / llama-bench) so the Xe fleet
-#    (llama-xe / llama-embed, OpenCL build) is never touched. Processes are
-#    matched on their executable, not command line: a shell can mention one of
+# 2. Kill stale CUDA-card llama-server processes.
+#
+#    CARD DISCIPLINE: match the CUDA build trees and CUDA launchers, and never
+#    touch the Xe fleet.  The two cards are independent — clearing this one must
+#    leave the other serving.
+#
+#      CUDA card: llama.cpp/build/         (LLAMA_SERVER_BIN; cuda-llama-server,
+#                                           cuda-llama-phi4, cuda-llama-bench)
+#                 llama.cpp/build-cuda*/   (llama-server-cuda)
+#      Xe card:   llama.cpp/build-opencl*/ (xe-llama-server, xe-llama-embed)
+#                 — matched only to be explicitly skipped below.
+#
+#    Matched on the executable, not the command line: a shell can mention one of
 #    these paths in its arguments, but its executable is still bash.
+#
+#    Deliberately NOT matched: ~/.local/opt/llama.cpp/*/bin/llama-server (the
+#    plain `llama-server` on PATH).  Nothing records which card that older build
+#    serves, so reaping it would be guessing about the card.  See the card map in
+#    docs/llm.md.
 _cuda_stale_pids() {
     local pid exe
     for pid in /proc/[0-9]*; do
         exe=$(readlink -f "/proc/${pid#/proc/}/exe" 2>/dev/null) || continue
         case "$exe" in
-            */llama.cpp/build/bin/llama-server|*/.local/bin/llama-nv|*/.local/bin/llama-phi4|*/.local/bin/llama-bench)
-                printf '%s\n' "${pid#/proc/}"
-                ;;
+            # The Xe card — never touched, whichever CUDA lane is being cleared.
+            */llama.cpp/build-opencl*/bin/llama-server|*/.local/bin/xe-llama-server|*/.local/bin/xe-llama-embed)
+                continue ;;
+            # The CUDA card.
+            */llama.cpp/build/bin/llama-server|*/llama.cpp/build-cuda*/bin/llama-server)
+                printf '%s\n' "${pid#/proc/}" ;;
+            */.local/bin/cuda-llama-server|*/.local/bin/cuda-llama-phi4|*/.local/bin/cuda-llama-bench|*/.local/bin/llama-server-cuda)
+                printf '%s\n' "${pid#/proc/}" ;;
         esac
     done
 }
 
-GPU_HELD=0
 if _inv_gpu_foreign_owner; then
-    # The card belongs to another agent's run: its llama-server is not a stale
-    # orphan of ours, and reaping it would destroy a bench in flight.  The lane
-    # still starts — whether it should run at all is the watchdog's busy-GPU
-    # policy, not this script's to overrule.
-    GPU_HELD=1
-    STALE=""
-    log "GPU lock held by another agent's run - NOT reaping CUDA llama processes"
+    # REFUSE. Only ever one LLM on the CUDA card: if another agent's run owns it,
+    # this unit must not start at all.  Starting anyway would put a second
+    # llama-server on a 4 GB card, and skipping only the reap (the earlier
+    # behaviour) was not enough — the card would be doubly loaded.
+    #
+    # Exiting non-zero fails the ExecStartPre, so systemd does not start the
+    # unit.  The watchdog will not fight it either: it treats a foreign owner as
+    # "card busy" (bin/gpu-busy.sh), so it stands down instead of restarting, and
+    # the lane returns by itself once the lock is released.
+    log "CUDA card is owned by another run (investigator GPU lock) - NOT starting this lane"
+    log "  remedy: wait for the holder to finish, or stop it deliberately; do not force-start"
+    exit 1
 else
     STALE=$(_cuda_stale_pids || true)
     if [[ -n "$STALE" ]]; then
@@ -118,12 +141,7 @@ fi
 #    previous server is already gone, so give the driver a short grace period.
 if command -v nvidia-smi >/dev/null 2>&1; then
     MAX_ITER=15
-    if [[ "$GPU_HELD" -eq 1 ]]; then
-        # A foreign holder's VRAM will not drain however long we wait, so spend
-        # the full window only on our own orphans.
-        MAX_ITER=3
-        log "foreign GPU holder - short VRAM grace (${MAX_ITER} iters)"
-    elif [[ "$RECOVERY" -eq 1 && -z "${STALE:-}" ]]; then
+    if [[ "$RECOVERY" -eq 1 && -z "${STALE:-}" ]]; then
         MAX_ITER=3
         log "recovery start with no stale process - short VRAM grace (${MAX_ITER} iters)"
     fi

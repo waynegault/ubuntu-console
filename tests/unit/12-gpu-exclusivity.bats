@@ -156,3 +156,39 @@ _hold_lock() {
     # Batch: the drain and the per-row gate both consult it.
     grep -q '__llm_gpu_foreign_owner' "$REPO_ROOT/scripts/run-autotune-batch.sh"
 }
+
+# ONE LLM ON THE CUDA CARD, EVER.  When another run owns the card the lane must
+# not start at all — a second llama-server on a 4 GB card is the failure mode, and
+# skipping only the reap was not enough.  Only the REFUSAL path is exercised here:
+# with the lock held the script exits before its reap, so this cannot reach a real
+# server.  (The free path deliberately is not run — it kills CUDA servers.)
+@test "gpu-exclusivity: llama-gpu-clear REFUSES to start the lane when the card is owned" {
+    command -v flock >/dev/null || skip "flock unavailable"
+    _hold_lock || skip "could not take the lock in this environment"
+
+    run "$REPO_ROOT/bin/llama-gpu-clear.sh"
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"CUDA card is owned by another run"* ]]
+    [[ "$output" == *"NOT starting this lane"* ]]
+}
+
+# A claim that is never consulted protects nothing, and a mark that is never
+# released leaves the CUDA lane down for good.
+@test "gpu-exclusivity: model use claims the CUDA card and model stop releases it" {
+    local _claim _use _stop
+    _claim=$(awk '/^function __model_use_claim_cuda_card\(\)/,/^}/' "$REPO_ROOT/scripts/11e-llm-model.sh")
+    _use=$(awk '/^function __model_use\(\)/,/^}/' "$REPO_ROOT/scripts/11e-llm-model.sh")
+    _stop=$(awk '/^function __model_stop\(\)/,/^}/' "$REPO_ROOT/scripts/11e-llm-model.sh")
+
+    # Wired in, and released.
+    [[ "$_use" == *"__model_use_claim_cuda_card"* ]]
+    [[ "$_stop" == *"card released"* ]]
+    # It refuses a foreign owner and displaces our own CUDA lanes...
+    [[ "$_claim" == *"__llm_gpu_foreign_owner"* ]]
+    [[ "$_claim" == *"llama-server-nvidia.service"* ]]
+    [[ "$_claim" == *"llama-server-phi4.service"* ]]
+    # ...and never the Xe card's units.
+    [[ "$_claim" != *"llama-server.service"* ]]
+    [[ "$_claim" != *"llama-embed-server.service"* ]]
+}
