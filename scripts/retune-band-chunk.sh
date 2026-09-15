@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 # retune-band-chunk.sh — run ONE chunk of the threshold-band re-tune.
 #
@@ -46,6 +46,10 @@ _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Same env override and default as bin/llama-watchdog.sh — keep the two in step.
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 
+# The CUDA lane this chunk needs down.  The same unit bin/llama-watchdog.sh owns
+# as CUDA_UNIT — a test asserts the two agree, so the name cannot drift apart.
+CUDA_LANE_UNIT="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
+
 if [[ $# -eq 0 ]]
 then
     echo "usage: $0 <row> [row ...]" >&2
@@ -61,6 +65,47 @@ cycle_now() { [[ -f "$_cycle_file" ]] && cat "$_cycle_file" 2>/dev/null || echo 
 
 touch "$SUSPEND" || { echo "Cannot set $SUSPEND - refusing to start" >&2; exit 1; }
 echo "[retune] CUDA lane suspended for this chunk ($SUSPEND)"
+
+# The suspension file only tells the WATCHDOG to stand the lane down, and the
+# watchdog runs on a 300s timer — so for up to five minutes the lane still holds
+# ~3.5 GB of the 4 GB card.  The batch's own drain will not evict it either: a
+# systemd unit's server is PROTECTED there by design, so it is never reaped.  The
+# result is rows that burn on "VRAM baseline not cleared" and measure nothing, which
+# is exactly what chunk 2 did (2026-09-15: rows 5 and 7, 3506 MiB still held,
+# ledger 0/60).  So stand the lane down HERE, and refuse to start a chunk if the
+# card cannot be freed.
+release_lane() {
+    if rm -f "$SUSPEND" 2>/dev/null; then
+        echo "[retune] CUDA lane released ($SUSPEND removed) - the watchdog may start it again"
+    else
+        echo "[retune] WARNING: could not remove $SUSPEND - the CUDA lane stays down" >&2
+    fi
+}
+
+if systemctl --user is-active --quiet "$CUDA_LANE_UNIT" 2>/dev/null; then
+    echo "[retune] stopping $CUDA_LANE_UNIT (the suspension file alone leaves it up until the watchdog's next tick)"
+    systemctl --user stop "$CUDA_LANE_UNIT" 2>/dev/null || true
+fi
+
+# Wait for the lane to actually be down (systemd stop is not instant: the server
+# unwinds its CUDA context first, which is the whole reason the card is not free
+# the moment the unit is stopped).
+_waited=0
+while (( _waited < 60 ))
+do
+    systemctl --user is-active --quiet "$CUDA_LANE_UNIT" 2>/dev/null || break
+    sleep 5
+    _waited=$((_waited + 5))
+done
+
+if systemctl --user is-active --quiet "$CUDA_LANE_UNIT" 2>/dev/null; then
+    echo "[retune] REFUSING: $CUDA_LANE_UNIT is still active after ${_waited}s, so the bench would refuse its VRAM baseline and measure nothing." >&2
+    release_lane
+    exit 1
+fi
+
+_free_mib="$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | tr -dc '0-9' || true)"
+echo "[retune] CUDA lane down (${_waited}s); card free: ${_free_mib:-unknown} MiB"
 echo "[retune] cycle budget before: $(cycle_now)/60"
 echo
 
@@ -70,11 +115,7 @@ rc=$?
 
 echo
 echo "[retune] batch exit=${rc} ; cycle budget after: $(cycle_now)/60"
-if rm -f "$SUSPEND" 2>/dev/null; then
-    echo "[retune] CUDA lane released ($SUSPEND removed) - the watchdog may start it again"
-else
-    echo "[retune] WARNING: could not remove $SUSPEND - the CUDA lane stays down" >&2
-fi
+release_lane
 exit "$rc"
 
 # end of file

@@ -304,22 +304,50 @@ EOS
 # so the probe answered BUSY and the watchdog took a healthy, serving CUDA lane
 # down on a free card.  A false BUSY is not the safe direction — it stops a lane —
 # so the patterns must name a real artefact and the probe's own chain is excluded.
-@test "gpu-exclusivity: a shell that merely mentions autotune is not a declared workload" {
+#
+# Tested with a SYNTHETIC token rather than the real patterns: the first version
+# of this test asserted `declared_workload_busy` returned FREE, which is simply
+# false while a real re-tune runs — it failed during chunk 3 of the 2026-09-15
+# sweep, reporting the truth about the box rather than the mechanism.  The
+# mechanism is what needs pinning, and it must not depend on a quiet machine.
+@test "gpu-exclusivity: the declared-workload check excludes the caller's own chain" {
     printf 'REASONS=()\n' > "$TAC_TEST_TMPDIR/decl.sh"
-    awk '/^_self_chain\(\)/,/^}/'          "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
-    awk '/^_any_foreign_process\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
-    awk '/^declared_workload_busy\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
-    grep -q 'declared_workload_busy' "$TAC_TEST_TMPDIR/decl.sh" || return 1
+    awk '/^_self_chain\(\)/,/^}/'            "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
+    awk '/^_any_foreign_process\(\)/,/^}/'   "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
+    grep -q '_any_foreign_process' "$TAC_TEST_TMPDIR/decl.sh" || return 1
 
-    cat > "$TAC_TEST_TMPDIR/decl-probe.sh" <<'EOS'
+    cat > "$TAC_TEST_TMPDIR/chain-probe.sh" <<'EOS'
 set -uo pipefail
 source "$1"
-if declared_workload_busy; then echo "BUSY ${REASONS[*]}"; else echo FREE; fi
+if _any_foreign_process "$2"; then echo FOREIGN; else echo OWN; fi
 EOS
 
-    # The calling shell's command line names the bare words the old pattern used.
-    run bash -c "bash '$TAC_TEST_TMPDIR/decl-probe.sh' '$TAC_TEST_TMPDIR/decl.sh'  # llama-bench autotune"
-    [[ "$output" == "FREE" ]]
+    local tok="tac-chain-probe-$RANDOM$RANDOM"
+
+    # A carrier that is genuinely foreign (spawned by this test, outside the
+    # probe's ancestry) must be seen.  It is a shell LOOP, not `bash -c 'sleep 30'
+    # "$tok"`: bash execs a single-command -c body, so the token — which was only
+    # the shell's $0 — would vanish from the cmdline and the pattern would match
+    # nothing.  A loop keeps the shell alive with its argv intact.
+    bash -c 'while :; do sleep 1; done' "$tok" &
+    local _carrier=$!
+    sleep 0.3
+    run bash "$TAC_TEST_TMPDIR/chain-probe.sh" "$TAC_TEST_TMPDIR/decl.sh" "$tok"
+    [[ "$output" == "FOREIGN" ]]
+    kill "$_carrier" 2>/dev/null || true
+    wait "$_carrier" 2>/dev/null || true
+
+    # ...and when the only carrier is the CALLER's own command line, it must not be.
+    run bash -c "bash '$TAC_TEST_TMPDIR/chain-probe.sh' '$TAC_TEST_TMPDIR/decl.sh' '$tok'  # $tok"
+    [[ "$output" == "OWN" ]]
+}
+
+# The static half of the same contract: the patterns name an artefact.  This is
+# what failed on 2026-09-15 — a bare word matches any shell that mentions it.
+@test "gpu-exclusivity: the declared-workload patterns name a path, not a bare word" {
+    ! grep -q 'pgrep -f "llama-bench|autotune"' "$REPO_ROOT/bin/gpu-busy.sh"
+    grep -q "_any_foreign_process '/(autotune-model|run-autotune-batch|retune-band-chunk)" "$REPO_ROOT/bin/gpu-busy.sh"
+    grep -q 'pgrep -x llama-bench' "$REPO_ROOT/bin/gpu-busy.sh"
 }
 
 # __llm_proc_is_server replaced `pgrep -f "$LLM_SERVER_PROC_PATTERN"` for every
@@ -369,4 +397,19 @@ EOS
     [[ "$output" == "NOT" ]]
 
     kill "$_backend" "$_launcher" "$_pybackend" "$_plain" "$_mentioner" 2>/dev/null || true
+}
+
+# retune-band-chunk.sh stops the CUDA lane itself before handing the card to the
+# bench (the suspension file alone leaves it up until the watchdog's next 300s
+# tick, and the batch's drain never evicts a systemd unit's server — chunk 2 of
+# the 2026-09-15 re-tune burned two rows on exactly that).  It therefore names the
+# lane a second time, and the two names must be the one unit.
+@test "gpu-exclusivity: the re-tune wrapper and the watchdog name the same CUDA lane" {
+    local from_wrapper from_watchdog
+    from_wrapper=$(sed -nE 's/.*LLAMA_CUDA_LANE_UNIT:-([^}]*)\}.*/\1/p' "$REPO_ROOT/scripts/retune-band-chunk.sh")
+    from_watchdog=$(sed -nE 's/^CUDA_UNIT="([^"]*)".*/\1/p' "$REPO_ROOT/bin/llama-watchdog.sh")
+    [[ -n "$from_wrapper" && -n "$from_watchdog" ]] \
+        || { echo "FAIL: could not read a lane name (wrapper='$from_wrapper' watchdog='$from_watchdog')"; return 1; }
+    [[ "${from_wrapper%.service}" == "$from_watchdog" ]] \
+        || { echo "drifted: wrapper '${from_wrapper%.service}' vs watchdog '$from_watchdog'"; return 1; }
 }
