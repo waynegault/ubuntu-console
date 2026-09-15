@@ -1,7 +1,6 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
-# shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 40
+# Module Version: 42
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1685,6 +1684,23 @@ fi
 
 _cuda_guard_or_exit
 
+# After a TPS-floor descent, the interactive profile must never exceed the
+# certified ctx (a below-floor model's P2 was probed at its old capacity).
+#
+# Clamped BEFORE the certification below, deliberately — not after it. Applying
+# the clamp afterwards rewrote P2_CTX while leaving P2_TPS as measured at the
+# un-clamped ctx, so the persisted (p2_ctx, p2_tps) pair described a measurement
+# that was never taken at the ctx it names. That is how a row came to carry a
+# p2_tps several times BELOW a tps measured at the very same config (7.7x,
+# 2026-09-15), which no consumer could distinguish from a real regression.
+# Clamping first means the pair written to the registry is always one real
+# measurement at the ctx it reports, so nothing needs a "was it clamped?"
+# caveat to know whether p2_tps is trustworthy.
+if [[ $P2_CTX -gt $BEST_CTX ]]; then
+    echo "  profile 2 ctx $(fmt "$P2_CTX") clamped to certified $(fmt "$BEST_CTX")"
+    P2_CTX=$BEST_CTX
+fi
+
 # Profile 2 (interactive) certification: one filled bench at the max-TPS
 # config so the persisted numbers are honest sustained throughput.
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
@@ -1704,13 +1720,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $P2_CTX -gt 0 ]]; then
     else
         P2_TPS=$BEST_TPS; P2_PREFILL=$BEST_PREFILL
     fi
-fi
-
-# After a TPS-floor descent, the interactive profile must never exceed the
-# certified ctx (a below-floor model's P2 was probed at its old capacity).
-if [[ $P2_CTX -gt $BEST_CTX ]]; then
-    echo "  profile 2 ctx $(fmt "$P2_CTX") clamped to certified $(fmt "$BEST_CTX")"
-    P2_CTX=$BEST_CTX
 fi
 
 # ── SPEC-DEC-004: speculative-decoding block-size sweep ─────────────────────

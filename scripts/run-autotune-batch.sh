@@ -1,7 +1,6 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
-# shellcheck disable=SC1091
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 10
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -139,8 +138,13 @@ check_wsl_gpu_health() {
     return 0
 }
 
-# Initial drain
-drain_vram
+# Initial drain — skipped when another agent owns the card: there is nothing of
+# ours to reap, and waiting for a foreign holder's VRAM to drop cannot succeed.
+if declare -f __llm_gpu_foreign_owner &>/dev/null && __llm_gpu_foreign_owner; then
+    echo "GPU owned by another agent's run (investigator GPU lock) — skipping the initial drain"
+else
+    drain_vram
+fi
 
 for ((i = 0; i < TOTAL; i++)); do
     m="${MODEL_ARRAY[$i]}"
@@ -153,6 +157,15 @@ for ((i = 0; i < TOTAL; i++)); do
     fi
     if [[ "$MAX_MODELS_PER_CHUNK" -gt 0 && "$COUNT" -ge "$MAX_MODELS_PER_CHUNK" ]]; then
         HALT_REASON="chunk size reached (${MAX_MODELS_PER_CHUNK} models this WSL session)"
+        break
+    fi
+    # Exclusivity bridge (BENCH-GPU-EXCLUSIVITY-001): another agent can own the
+    # card through the investigator's flock.  The cleanup helper honours that
+    # lock, so nothing would be killed — but with the card still held every row
+    # would fail its VRAM baseline after a wasted spawn.  Halt up front and let
+    # the standard footer print the real resume command.
+    if declare -f __llm_gpu_foreign_owner &>/dev/null && __llm_gpu_foreign_owner; then
+        HALT_REASON="GPU owned by another agent's run (investigator GPU lock, pid $(__llm_gpu_lock_holder 2>/dev/null || true))"
         break
     fi
 

@@ -133,3 +133,65 @@ EOS
 
     [[ "$output" != *"PID=$SLEEP_PID"* ]]
 }
+
+# _stub_systemctl <is-active> <is-enabled> — answer the watchdog probe and record
+# every invocation, so the restart can be asserted without touching the real
+# user manager.
+_stub_systemctl() {
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    cat > "$TAC_TEST_TMPDIR/bin/systemctl" <<EOS
+#!/usr/bin/env bash
+echo "\$*" >> "$TAC_TEST_TMPDIR/systemctl.calls"
+case "\$*" in
+    *is-active*) echo "$1" ;;
+    *is-enabled*) echo "$2" ;;
+    *start*) exit 0 ;;
+esac
+exit 0
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/systemctl"
+    PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+    export PATH
+}
+
+# A bench stops llama-watchdog.timer and restores it in a `finally` — which a
+# SIGKILL skips. The lock it also leaves behind is the proof the kill happened.
+@test "clean-orphans: a stopped watchdog is reported when leftovers prove a kill" {
+    : > "$LLM_BENCH_LOCK_FILE"
+    _stub_systemctl inactive enabled
+
+    run "$SCRIPT" --check
+
+    [[ "$output" == *"Stopped unit: llama-watchdog.timer"* ]]
+}
+
+# The protection that matters: a deliberate `systemctl --user stop` looks exactly
+# like this, so with no other evidence the tool must not touch the unit.
+@test "clean-orphans: a stopped watchdog with no leftovers is left alone" {
+    _stub_systemctl inactive enabled
+
+    run "$SCRIPT" --check
+
+    [[ "$output" == *"No orphan processes or stale files found."* ]]
+    [[ "$output" != *"Stopped unit"* ]]
+}
+
+@test "clean-orphans: --force restarts the stopped watchdog a kill left behind" {
+    : > "$LLM_BENCH_LOCK_FILE"
+    _stub_systemctl inactive enabled
+
+    run "$SCRIPT" --force
+
+    [[ "$output" == *"Restarted llama-watchdog.timer"* ]]
+    grep -q 'start llama-watchdog.timer' "$TAC_TEST_TMPDIR/systemctl.calls"
+}
+
+@test "clean-orphans: an ACTIVE watchdog is neither reported nor restarted" {
+    : > "$LLM_BENCH_LOCK_FILE"
+    _stub_systemctl active enabled
+
+    run "$SCRIPT" --force
+
+    [[ "$output" != *"Stopped unit"* ]]
+    [[ "$output" != *"Restarted llama-watchdog.timer"* ]]
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # ==============================================================================
 # clean-orphans.sh — Kill orphaned model bench infrastructure.
 #
@@ -13,6 +13,15 @@
 #      that gets reparented to init/1 when the parent is killed.
 #   2. The bench lock file /tmp/llm-bench.lock survives SIGKILL.
 #   3. Sleeping keeper processes can accumulate across VS Code terminal sessions.
+#   4. A bench stops llama-watchdog.timer for its duration and restarts it in a
+#      finally block — which SIGKILL skips, leaving the CUDA lane unmanaged with
+#      nothing to show that anything is wrong.
+#
+# Restoring the watchdog timer (item 4) is deliberately gated on leftovers
+# actually being found. "Enabled but inactive" is ambiguous on its own — it is
+# also exactly what a deliberate `systemctl --user stop` looks like — so this
+# tool only concludes that a killed bench left it stopped when that same kill
+# left other evidence behind (a stale lock, stale keeper files, or orphans).
 #
 # Usage:    clean-orphans          — Show matching processes, prompt before kill
 #           clean-orphans --force  — Kill without prompting
@@ -235,6 +244,22 @@ for f in "$KEEPER_DIR"/llm-keeper.*.pid; do
     fi
 done
 
+# 6. A killed bench stops llama-watchdog.timer and restarts it in a `finally`,
+#    which SIGKILL skips. On its own, "enabled but inactive" proves nothing — it
+#    is also what a deliberate `systemctl --user stop` looks like — so this is
+#    only acted on when something above proves a kill actually happened.
+WATCHDOG_TIMER="${LLAMA_WATCHDOG_TIMER_UNIT:-llama-watchdog.timer}"
+WATCHDOG_STOPPED=0
+if command -v systemctl >/dev/null 2>&1; then
+    _wd_active=$(systemctl --user is-active "$WATCHDOG_TIMER" 2>/dev/null | tr -d ' \n' || true)
+    if [[ "$_wd_active" != "active" ]]; then
+        _wd_enabled=$(systemctl --user is-enabled "$WATCHDOG_TIMER" 2>/dev/null | tr -d ' \n' || true)
+        if [[ "$_wd_enabled" == "enabled" ]]; then
+            WATCHDOG_STOPPED=1
+        fi
+    fi
+fi
+
 # Report
 if (( ${#ORPHANS[@]} == 0 )) && (( STALE_LOCK == 0 )) && (( STALE_PID == 0 )) && (( STALE_KEEPERS == 0 )); then
     echo "[clean-orphans] No orphan processes or stale files found."
@@ -252,6 +277,9 @@ fi
 (( STALE_LOCK == 1 )) && echo "  Stale lock: $BENCH_LOCK_FILE"
 (( STALE_PID == 1 )) && echo "  Stale PID:  $BENCH_PID_FILE"
 (( STALE_KEEPERS == 1 )) && echo "  Stale keeper PID files in $KEEPER_DIR/llm-keeper.*.pid"
+if (( WATCHDOG_STOPPED == 1 )); then
+    echo "  Stopped unit: $WATCHDOG_TIMER (enabled, so a kill left it off rather than a deliberate stop)"
+fi
 
 if (( CHECK == 1 )); then
     exit 0
@@ -306,6 +334,16 @@ for keeper_file in "$KEEPER_DIR"/llm-keeper.*.pid; do
     fi
 done
 echo "[clean-orphans] Stale files removed."
+
+# Restore the watchdog a killed bench left stopped. Reached only when leftovers
+# were found above, so a deliberate `systemctl --user stop` is never overridden.
+if (( WATCHDOG_STOPPED == 1 )); then
+    if systemctl --user start "$WATCHDOG_TIMER" 2>/dev/null; then
+        echo "[clean-orphans] Restarted $WATCHDOG_TIMER (a kill had left it stopped)."
+    else
+        echo "[clean-orphans] WARNING: could not restart $WATCHDOG_TIMER — start it by hand: systemctl --user start $WATCHDOG_TIMER" >&2
+    fi
+fi
 
 echo "[clean-orphans] Done."
 # end of file

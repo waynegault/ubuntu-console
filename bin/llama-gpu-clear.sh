@@ -7,8 +7,8 @@
 # released by the driver - use a short grace period instead of the full 30s
 # drain wait so recovery isn't delayed.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
-VERSION="1.2.0"
+# Module Version: 2
+VERSION="1.3.0"   # 1.3.0: honour the investigator GPU lock — never reap a foreign bench.
 
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
     echo "llama-gpu-clear $VERSION"
@@ -18,6 +18,31 @@ fi
 set -uo pipefail
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [gpu-clear] $*"; }
+
+# The investigator pipeline holds a cross-process GPU flock for the whole
+# duration of a local-model run (pipeline/gpu/_lock.py).  Nothing on the
+# console side honoured it, so this ExecStartPre — evictor #1 in the
+# investigator's own list (BENCH-GPU-EXCLUSIVITY-001) — reaped a foreign
+# bench's llama-server mid-run.  Deliberately a local copy of
+# scripts/11d-llm-gpu.sh::__llm_gpu_lock_path/__llm_gpu_foreign_owner: this
+# script runs as an ExecStartPre and must not depend on the console's module
+# tree, which is why it stands alone at all.  tests/unit/12-gpu-exclusivity.bats
+# asserts the two copies agree, so they cannot drift.
+#
+# Path precedence mirrors config/paths.gpu_lock_path() exactly.  The probe is
+# existence-gated: `flock -n` also fails on a missing path, and reading that as
+# "held" would stop the lane from ever starting on a box that never took it.
+_inv_gpu_lock_path() {
+    printf '%s\n' "${INVESTIGATOR_GPU_LOCK:-${INVESTIGATOR_PRODUCTION_OUTPUT:-$HOME/investigator/production}/runtime/gpu.lock}"
+}
+
+_inv_gpu_foreign_owner() {
+    local _lock_path
+    _lock_path=$(_inv_gpu_lock_path)
+    [[ -e "$_lock_path" ]] || return 1
+    flock -n "$_lock_path" -c true 2>/dev/null && return 1
+    return 0
+}
 
 # 1. Detect recovery context: did the previous run of the calling unit end
 #    in a failure (crash/signal/timeout/...) rather than a clean stop?
@@ -60,21 +85,32 @@ _cuda_stale_pids() {
     done
 }
 
-STALE=$(_cuda_stale_pids || true)
-if [[ -n "$STALE" ]]; then
-    log "stale CUDA llama-server processes found: $STALE - sending SIGTERM"
-    read -r -a stale_pids <<< "$STALE"
-    kill -TERM "${stale_pids[@]}" 2>/dev/null || true
-    sleep 3
-    STALE2=$(_cuda_stale_pids || true)
-    if [[ -n "$STALE2" ]]; then
-        log "still alive after SIGTERM: $STALE2 - sending SIGKILL"
-        read -r -a stale_pids <<< "$STALE2"
-        kill -KILL "${stale_pids[@]}" 2>/dev/null || true
-        sleep 1
-    fi
+GPU_HELD=0
+if _inv_gpu_foreign_owner; then
+    # The card belongs to another agent's run: its llama-server is not a stale
+    # orphan of ours, and reaping it would destroy a bench in flight.  The lane
+    # still starts — whether it should run at all is the watchdog's busy-GPU
+    # policy, not this script's to overrule.
+    GPU_HELD=1
+    STALE=""
+    log "GPU lock held by another agent's run - NOT reaping CUDA llama processes"
 else
-    log "no stale CUDA llama-server processes"
+    STALE=$(_cuda_stale_pids || true)
+    if [[ -n "$STALE" ]]; then
+        log "stale CUDA llama-server processes found: $STALE - sending SIGTERM"
+        read -r -a stale_pids <<< "$STALE"
+        kill -TERM "${stale_pids[@]}" 2>/dev/null || true
+        sleep 3
+        STALE2=$(_cuda_stale_pids || true)
+        if [[ -n "$STALE2" ]]; then
+            log "still alive after SIGTERM: $STALE2 - sending SIGKILL"
+            read -r -a stale_pids <<< "$STALE2"
+            kill -KILL "${stale_pids[@]}" 2>/dev/null || true
+            sleep 1
+        fi
+    else
+        log "no stale CUDA llama-server processes"
+    fi
 fi
 
 # 3. Wait for VRAM to drain (nvidia-smi memory.used < 100 MiB). Full 30s wait
@@ -82,7 +118,12 @@ fi
 #    previous server is already gone, so give the driver a short grace period.
 if command -v nvidia-smi >/dev/null 2>&1; then
     MAX_ITER=15
-    if [[ "$RECOVERY" -eq 1 && -z "${STALE:-}" ]]; then
+    if [[ "$GPU_HELD" -eq 1 ]]; then
+        # A foreign holder's VRAM will not drain however long we wait, so spend
+        # the full window only on our own orphans.
+        MAX_ITER=3
+        log "foreign GPU holder - short VRAM grace (${MAX_ITER} iters)"
+    elif [[ "$RECOVERY" -eq 1 && -z "${STALE:-}" ]]; then
         MAX_ITER=3
         log "recovery start with no stale process - short VRAM grace (${MAX_ITER} iters)"
     fi

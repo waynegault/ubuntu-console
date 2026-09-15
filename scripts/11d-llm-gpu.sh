@@ -1,8 +1,7 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2154
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 16
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -10,12 +9,28 @@
 # @depends: constants, design-tokens, ui-engine, hooks, telemetry, llm-server
 # @exports: wake, gpu-status, gpu-check, __gguf_metadata, __calc_gpu_layers,
 #   __calc_ctx_size, __calc_threads, __quant_label, __tac_cleanup_stale_locks,
-#   __gpu_clear_stale_processes, __llm_kill_cuda_llama_servers
+#   __gpu_clear_stale_processes, __llm_kill_cuda_llama_servers,
+#   __llm_gpu_lock_path, __llm_gpu_lock_holder, __llm_gpu_foreign_owner
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
 [[ -n "${__TAC_MOD_11D_LLM_GPU_LOADED:-}" ]] && return 0
 __TAC_MOD_11D_LLM_GPU_LOADED=1
+
+# Design-token colours, assigned by 03-design-tokens.sh at source time (as
+# `readonly`).  Naming them here replaces the file-wide `disable=SC2154` this
+# module used to carry: shellcheck lints each module in isolation and cannot see
+# an assignment made by a sibling, so the module declares what it consumes
+# (docs/inspection.md 17.1 — remove the disable and fix the cause).
+# `:=` assigns ONLY when the variable is unset, so this is a runtime no-op, and
+# it is safe against the `readonly` in 03 — a plain C_Dim="$C_Dim" would abort.
+: "${C_Text:=}"
+: "${C_Reset:=}"
+: "${C_Dim:=}"
+: "${C_Warning:=}"
+: "${C_Error:=}"
+: "${C_Success:=}"
+: "${C_Highlight:=}"
 
 function __tac_cleanup_stale_locks() {
     # shellcheck disable=SC2034
@@ -58,8 +73,11 @@ function __tac_cleanup_stale_locks() {
                 rm -f "$_c_lock"
             fi
         else
-            # shellcheck disable=SC2188
-            _c_pid=$(<"$_c_lock" 2>/dev/null || true)
+            # cat, not the $(<file) builtin: the `2>/dev/null || true` tail turns
+            # a bare redirection into a command-less one (SC2188), and the
+            # failure path is wanted. The rest of this module already reads this
+            # way.
+            _c_pid=$(cat "$_c_lock" 2>/dev/null || true)
             if [[ -z "$_c_pid" ]] || ! kill -0 "$_c_pid" 2>/dev/null
             then
                 rm -f "$_c_lock"
@@ -72,8 +90,7 @@ function __tac_cleanup_stale_locks() {
     local _c_bench_active=0
     if [[ -f "$_c_pid_file" ]]
     then
-        # shellcheck disable=SC2188
-        _c_pid=$(<"$_c_pid_file" 2>/dev/null || true)
+        _c_pid=$(cat "$_c_pid_file" 2>/dev/null || true)
         if [[ -z "$_c_pid" ]] || ! kill -0 "$_c_pid" 2>/dev/null
         then
             rm -f "$_c_pid_file"
@@ -88,7 +105,6 @@ function __tac_cleanup_stale_locks() {
     local _c_bench_lock="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
     if [[ -f "$_c_bench_lock" ]]
     then
-        # shellcheck disable=SC2188
         local _c_lock_owner
         _c_lock_owner=$(cat "$_c_bench_lock" 2>/dev/null || true)
         if [[ "$_c_lock_owner" =~ ^[0-9]+$ ]] && kill -0 "$_c_lock_owner" 2>/dev/null
@@ -152,8 +168,7 @@ function __tac_cleanup_stale_locks() {
     do
         [[ -f "$_c_kf" ]] || continue
         local _c_remove_kf=1
-        # shellcheck disable=SC2188
-        _c_pid=$(<"$_c_kf" 2>/dev/null || true)
+        _c_pid=$(cat "$_c_kf" 2>/dev/null || true)
         if [[ "$_c_pid" =~ ^[0-9]+$ ]] && kill -0 "$_c_pid" 2>/dev/null
         then
             # Identity guard against PID reuse: only a keeper has this cwd.
@@ -250,6 +265,51 @@ function __gpu_clear_stale_processes() {
 }
 
 # ---------------------------------------------------------------------------
+# __llm_gpu_lock_path / __llm_gpu_lock_holder / __llm_gpu_foreign_owner
+#
+# The investigator pipeline holds a cross-process GPU flock for the whole
+# duration of a local-model run (pipeline/gpu/_lock.py, claimed by
+# pipeline/gpu/_exclusive.py) and stops the watchdog + CUDA lanes while it
+# holds it.  Nothing on the console side honoured that lock, so this module's
+# cleanup evicted another agent's in-flight run whenever the two overlapped
+# (BENCH-GPU-EXCLUSIVITY-001 — the exclusivity-bridge gap).
+#
+# Path precedence mirrors config/paths.gpu_lock_path() exactly, including its
+# env overrides, so the console and the investigator always agree on the file:
+#   $INVESTIGATOR_GPU_LOCK, else
+#   $INVESTIGATOR_PRODUCTION_OUTPUT/runtime/gpu.lock, else
+#   $HOME/investigator/production/runtime/gpu.lock
+#
+# The probe is EXISTENCE-GATED deliberately: `flock -n` also fails when the
+# path does not exist, so reading a failed probe as "held" would refuse every
+# run on a box where the investigator has never taken the lock.  A lock file
+# that exists but cannot be probed fails closed (see the caller's log line).
+# ---------------------------------------------------------------------------
+function __llm_gpu_lock_path() {
+    printf '%s\n' \
+        "${INVESTIGATOR_GPU_LOCK:-${INVESTIGATOR_PRODUCTION_OUTPUT:-$HOME/investigator/production}/runtime/gpu.lock}"
+}
+
+function __llm_gpu_lock_holder() {
+    local _lock_path
+    _lock_path=$(__llm_gpu_lock_path)
+    [[ -r "$_lock_path" ]] || return 0
+    tr -dc '0-9' < "$_lock_path" 2>/dev/null || true
+}
+
+# Returns 0 when a FOREIGN process holds the GPU lock, 1 when the card is free.
+function __llm_gpu_foreign_owner() {
+    local _lock_path
+    _lock_path=$(__llm_gpu_lock_path)
+    [[ -e "$_lock_path" ]] || return 1
+    if flock -n "$_lock_path" -c true 2>/dev/null
+    then
+        return 1   # we took it, so nobody else holds it
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __llm_kill_cuda_llama_servers — Kill ONLY CUDA-held llama.cpp processes.
 #
 # Two-card machine: the Xe fleet server (llama-server.service, :18081) and
@@ -267,6 +327,16 @@ function __gpu_clear_stale_processes() {
 function __llm_kill_cuda_llama_servers() {
     local _unit _svc_pid _pid _exe _smi _skip _p _llm_wait _alive
     local -a _protected=() _cuda_pids=() _kill_pids=()
+
+    # Never evict another agent's in-flight run.  When the investigator holds
+    # the GPU lock the card belongs to that run and its llama-server is not
+    # ours to reap; the autotune VRAM gate then refuses the row, so a batch
+    # fails closed instead of stealing the card out from under a bench.
+    if __llm_gpu_foreign_owner
+    then
+        echo "[llm-kill] GPU lock held by another agent's run (pid $(__llm_gpu_lock_holder)) — skipping CUDA llama cleanup" >&2
+        return 0
+    fi
 
     # Protected: MainPIDs of the persistent llama systemd units.
     for _unit in llama-server.service llama-embed-server.service \

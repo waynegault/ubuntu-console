@@ -14,13 +14,9 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 TMPDIR_BATS="$(mktemp -d)"
 
 setup() {
-    # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/01-constants.sh"
-    # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
-    # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/11b-llm-autotune.sh"
-    # shellcheck disable=SC1090
     source "$REPO_ROOT/scripts/prompt-sets.sh"
     export LLM_REGISTRY="$TMPDIR_BATS/models.conf"
 }
@@ -297,4 +293,20 @@ _selftest_run() {
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"skipping the sweep to conserve CUDA cycles"* ]]
     [[ "$output" == *"winner:"* ]]
+}
+
+# The (p2_ctx, p2_tps) pair written to the registry must describe ONE real
+# measurement. Applying the ctx clamp after the certification rewrote P2_CTX
+# while leaving P2_TPS measured at the un-clamped ctx, so a row could carry a
+# p2_tps several times below a tps taken at the very same config (7.7x,
+# 2026-09-15) and no consumer could tell that from a genuine regression.
+# Clamp first, then certify — this pins the order.
+@test "autotune-p2: the ctx clamp runs BEFORE the profile-2 certification" {
+    local clamp_line cert_line
+    clamp_line=$(grep -nF 'P2_CTX=$BEST_CTX' "$REPO_ROOT/scripts/autotune-model.sh" | head -1 | cut -d: -f1)
+    cert_line=$(grep -nF '_p2t=$(bench_ctx' "$REPO_ROOT/scripts/autotune-model.sh" | head -1 | cut -d: -f1)
+    # Both constructs must exist, or this test is silently asserting nothing.
+    [[ -n "$clamp_line" ]]
+    [[ -n "$cert_line" ]]
+    (( clamp_line < cert_line ))
 }

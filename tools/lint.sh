@@ -3,10 +3,11 @@
 # ==============================================================================
 # lint.sh — Static analysis for the ubuntu-console repository.
 # Runs bash -n syntax checks and shellcheck on all shell files.
-# Usage: ./tools/lint.sh
+# Usage: ./tools/lint.sh            (whole repo)
+#        ./tools/lint.sh --staged   (only .sh files staged for commit)
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 5
+# Module Version: 7
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -46,6 +47,56 @@ _UNICODE_ALLOWED='\x{00A0}-\x{00FF}\x{2014}\x{2026}\x{2192}\x{2264}\x{2298}\x{25
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 rc=0
 
+# --staged: bash -n + shellcheck on ONLY the .sh files staged for commit — what
+# the pre-commit hook needs, and nothing else.
+#
+# This mode exists because the hook used to inline that loop.  The hook is not
+# version-controlled, so the shellcheck flags then lived in two places and
+# drifted the first time one of them changed (2026-09-15: -x was added here and
+# the hook went on rejecting the very files this mode had just cleared).  The
+# module-version check already delegates to tools/check-module-versions.sh for
+# exactly this reason; the persistent check belongs in a tracked, tested tool.
+if [[ "${1:-}" == "--staged" ]]
+then
+    staged=$(git -C "$REPO_ROOT" diff --cached --name-only --diff-filter=ACM 2>/dev/null | grep '\.sh$' || true)
+    if [[ -z "$staged" ]]
+    then
+        echo "  (no staged .sh files)"
+        exit 0
+    fi
+    if ! command -v shellcheck >/dev/null 2>&1
+    then
+        echo "  FAIL  shellcheck not installed - cannot run static analysis" >&2
+        echo "        Install it (sudo apt install shellcheck) and retry." >&2
+        exit 2
+    fi
+    echo "=== ShellCheck (staged) ==="
+    while IFS= read -r f
+    do
+        [[ -z "$f" ]] && continue
+        if ! bash -n "$REPO_ROOT/$f" 2>&1
+        then
+            echo "  FAIL  $f  (syntax)"
+            rc=1
+            continue
+        fi
+        if shellcheck -s bash -x --source-path="$REPO_ROOT" "$REPO_ROOT/$f" 2>&1
+        then
+            echo "  PASS  $f"
+        else
+            echo "  FAIL  $f  (shellcheck)"
+            rc=1
+        fi
+    done <<< "$staged"
+    if (( rc == 0 ))
+    then
+        echo "  All staged .sh files passed."
+    else
+        echo "  Some staged .sh files failed." >&2
+    fi
+    exit "$rc"
+fi
+
 echo "=== Bash Syntax Check (bash -n) ==="
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
@@ -78,7 +129,12 @@ for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/bin/*.sh
 do
     local_rc=0
-    shellcheck -s bash "$f" 2>&1 || local_rc=$?
+    # -x with --source-path: let shellcheck actually FOLLOW the repo's own
+    # sources, so the SC1090/SC1091 class ("Not following: env.sh was not
+    # specified as input") is RESOLVED rather than hidden behind a
+    # `disable=SC1091` directive. Sourced modules carry no shebang, so -s bash
+    # sets the dialect too.
+    shellcheck -s bash -x --source-path="$REPO_ROOT" "$f" 2>&1 || local_rc=$?
     if (( local_rc == 0 ))
     then
         echo "  PASS  ${f#"$REPO_ROOT"/}"
