@@ -17,6 +17,10 @@ Restart=on-failure
 # so a short retry would pile a second load onto a card still freeing the first.
 RestartSec=15
 TimeoutStartSec=600
+# Cgroup caps from the old llama-server-nvidia.service.d/memory.conf, folded in so
+# the effective config is one reviewable file per unit.
+MemoryMax=7G
+MemoryHigh=5G
 
 [Install]
 WantedBy=default.target
