@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 38
+# Module Version: 39
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -158,10 +158,10 @@ function __docs_sync_check() {
 function docs-sync() {
     if __docs_sync_check
     then
-        __tac_info "README Sync" "[OK]" "$C_Success"
+        __tac_info "Docs Sync" "[OK]" "$C_Success"
         return 0
     fi
-    __tac_info "README Sync" "[DRIFT DETECTED - update README.md]" "$C_Warning"
+    __tac_info "Docs Sync" "[DRIFT DETECTED - update the file the check named]" "$C_Warning"
     return 1
 }
 
@@ -1088,14 +1088,14 @@ function __up_docs_sync() {
     then
         if __docs_sync_check
         then
-            __tac_line "[18/20] README Sync" "[OK]" "$C_Success"
+            __tac_line "[18/20] Docs Sync" "[OK]" "$C_Success"
         else
-            __tac_line "[18/20] README Sync" "[DRIFT DETECTED]" "$C_Warning"
+            __tac_line "[18/20] Docs Sync" "[DRIFT DETECTED]" "$C_Warning"
             ((_up_err++))
         fi
         __set_cooldown "docs_sync" "$now"
     else
-        __tac_line "[18/20] README Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
+        __tac_line "[18/20] Docs Sync" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 }
 

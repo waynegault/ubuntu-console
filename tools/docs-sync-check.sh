@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # ==============================================================================
-# docs-sync-check.sh — Verify README.md matches current repo facts.
+# docs-sync-check.sh — Verify the docs match current repo facts.
 # ==============================================================================
 # Computes ground-truth values from the repo (module count, loader version,
-# BATS/Python test totals) and greps README.md for the matching phrases.
-# Exits 0 when README is in sync, 1 when drift is detected.
+# BATS/Python test totals, per-directory breakdowns) and greps for the matching
+# phrases in every file that states them: README.md, docs/architecture.md and
+# pytest.ini's marker descriptions.  A count asserted in three places and checked
+# in one is wrong in the other two eventually — that is exactly what happened
+# (2026-09-15).
+# Exits 0 when every guarded file is in sync, 1 when drift is detected.
 #
-# Single source of truth for the readme-sync guardrail. Used by:
-#   - CI (fails the build on README drift)
+# Single source of truth for the docs-sync guardrail. Used by:
+#   - CI (fails the build on drift)
 #   - `up` step 18 / `docs-sync` command (via 08-maintenance.sh)
 #
 # Usage: tools/docs-sync-check.sh
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version.
-# Module Version: 3
+# Module Version: 4
 # ==============================================================================
 set -u
 
@@ -55,6 +59,7 @@ fi
 
 # ── 3. Test totals: every suite the BATS bridge discovers ─────────────────
 bats_full=0
+bats_fast=0
 bats_total=0
 for f in "$REPO_ROOT"/tests/unit/*.bats \
          "$REPO_ROOT"/tests/tactical-console.bats \
@@ -65,9 +70,10 @@ do
     [[ -f "$f" ]] || continue
     n=$(grep -c '^@test ' "$f" || true)
     bats_total=$((bats_total + n))
-    if [[ "$(basename "$f")" == "tactical-console.bats" ]]; then
-        bats_full=$n
-    fi
+    case "$(basename "$f")" in
+        tactical-console.bats)      bats_full=$n ;;
+        tactical-console-fast.bats) bats_fast=$n ;;
+    esac
 done
 python_total=$(grep -hcE '^\s*def test_' "$REPO_ROOT"/tests/test_*.py | awk '{s+=$1} END {print s+0}')
 grand_total=$((bats_total + python_total))
@@ -91,9 +97,41 @@ do
         _sum=$((_sum + n))
         _counts="${_counts:+$_counts+}$n"
     done
+    # Named, because 3c checks the same sums in another file.
+    case "$_dir" in
+        unit)        unit_sum=$_sum ;;
+        integration) integration_sum=$_sum ;;
+    esac
     check_phrase "tests/$_dir breakdown ($_sum tests: $_counts)" \
         "${_dir} tests (${_sum} tests: ${_counts})"
 done
+
+# ── 3c. The same facts, stated anywhere else ───────────────────────────────
+# Up to 2026-09-15 only README.md was guarded, and the docs tree had drifted a
+# long way behind the same numbers: docs/architecture.md claimed 39 unit tests
+# against 94, 383 full-suite tests against 386 and 109 integration against 119,
+# while pytest.ini's `bats_full` marker description also said 383.  A count that
+# is asserted in three places and checked in one is a fact that is wrong twice as
+# often as it is right, so each place is now checked against the same computed
+# value.
+check_in_file() { # <file> <description> <grep -F pattern>
+    local file="$1" desc="$2" pattern="$3"
+    if grep -qF "$pattern" "$file"; then
+        echo "  OK: $desc"
+    else
+        echo "  DRIFT: $desc — expected '$pattern' in ${file#"$REPO_ROOT"/}"
+        drift=1
+    fi
+}
+
+ARCH="$REPO_ROOT/docs/architecture.md"
+check_in_file "$ARCH" "architecture.md full-suite count" "BATS full suite (${bats_full} tests)"
+check_in_file "$ARCH" "architecture.md fast-suite count" "Fast subset (${bats_fast} tests"
+check_in_file "$ARCH" "architecture.md unit count" "BATS unit tests (${unit_sum} tests)"
+check_in_file "$ARCH" "architecture.md integration count" "BATS integration tests (${integration_sum} tests)"
+check_in_file "$REPO_ROOT/pytest.ini" "pytest.ini bats_full marker" "behavioural BATS suite (${bats_full} tests)"
+check_in_file "$ARCH" "architecture.md kgraph module count" \
+    "Knowledge graph Python package ($(find "$REPO_ROOT/scripts/kgraph" -name '*.py' | wc -l | tr -d ' ') modules)"
 
 # ── 4. env.sh library-loader phrase (unchanged from the old inline check) ──
 check_phrase "env.sh library-loader description" "Non-interactive library loader (all modules except 13-init.sh)"
@@ -109,10 +147,10 @@ fi
 
 echo ""
 if (( drift == 0 )); then
-    echo "README.md is in sync with repo facts."
+    echo "Docs are in sync with repo facts."
     exit 0
 fi
-echo "README.md DRIFT DETECTED — update README.md to match the repo."
+echo "DOCS DRIFT DETECTED — update the file named above to match the repo."
 exit 1
 
 # end of file

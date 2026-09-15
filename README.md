@@ -402,7 +402,7 @@ Run `up` for the 20-step pipeline:
 | 15. Disk Space Audit | Warns if any mount exceeds 90% |
 | 16. Systemd Units | Verifies OpenClaw gateway user unit presence |
 | 17. Stale Processes | Kills orphaned `llama-server` instances |
-| 18. README Sync | Checks tracked repo facts for documentation drift |
+| 18. Docs Sync | Checks tracked repo facts for documentation drift (README, architecture.md, pytest.ini) |
 | 19. Docker Prune | Runs `docker system prune` when Docker is installed |
 | 20. NPM Cache Clean | Verifies/cleans npm cache (24h cooldown) |
 

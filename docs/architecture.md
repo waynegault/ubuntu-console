@@ -458,7 +458,7 @@ extra source commands.
 │   ├── 13-init.sh                     #   mkdir, completions, WSL loopback, exit trap
 │   ├── 14-wsl-extras.sh               #   WSL/X11 helpers, vault env
 │   ├── 15-model-recommender.sh        #   AI model recommendations by use case
-│   └── kgraph/                        #   Knowledge graph Python package (24 modules)
+│   └── kgraph/                        #   Knowledge graph Python package (23 modules)
 │       ├── cli.py                      #     CLI entry point (all --commands)
 │       ├── ast_extractor.py            #     tree-sitter AST parser (Bash/Python)
 │       ├── community.py                #     Louvain/greedy clustering, god nodes
@@ -498,8 +498,8 @@ extra source commands.
 ├── tests/
 │   ├── conftest.py                    # Pytest config — serializes BATS suites
 │   ├── _paths.py                      # Shared sys.path bootstrap for kgraph imports
-│   ├── tactical-console.bats          # BATS full suite (383 tests)
-│   ├── tactical-console-fast.bats     # Fast subset (52 tests, ~20s)
+│   ├── tactical-console.bats          # BATS full suite (386 tests)
+│   ├── tactical-console-fast.bats     # Fast subset (53 tests, ~20s)
 │   ├── tactical-console-function-availability.bats  # Function availability (2 tests)
 │   ├── test_bats_bridge.py            # Pytest parametrize bridge for all BATS suites
 │   ├── test_bats_lock_fixture.py      # Tests for the conftest lock fixture
@@ -508,8 +508,8 @@ extra source commands.
 │   ├── test_models.py                 # Pydantic model tests
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, …
 │   ├── fixtures/golden/               # Captured command-output fixtures
-│   ├── unit/                          # BATS unit tests (39 tests)
-│   └── integration/                   # BATS integration tests (109 tests)
+│   ├── unit/                          # BATS unit tests (94 tests)
+│   └── integration/                   # BATS integration tests (119 tests)
 └── systemd/
     ├── llama-watchdog.service         # systemd unit for watchdog
     └── llama-watchdog.timer           # systemd timer (runs every 60s)
