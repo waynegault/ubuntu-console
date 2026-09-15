@@ -18,7 +18,7 @@ description: Complete quick reference card for every command, the tactical dashb
 | `get-ip` | Network | WSL + WAN IP addresses |
 | `cpwd` | Utility | Copy path to clipboard |
 | `cl` | Utility | Quick temp cleanup (`--report` shows a dry run) |
-| `docs-sync` | Utility | Check README drift against current repo facts |
+| `docs-sync` | Utility | Check the docs for drift against current repo facts |
 | `logtrim` | Utility | Trim logs > 1 MB |
 | `oedit` | Editor | Open `tactical-console.bashrc` in VS Code |
 | `code` | Editor | Open anything in VS Code |
@@ -65,15 +65,14 @@ description: Complete quick reference card for every command, the tactical dashb
 | `serve N` / `halt` | LLM | Aliases for use/stop |
 | `wake` | GPU | Lock persistence mode |
 | `burn` | LLM | Stress test + TPS benchmark |
-| `chatl` | LLM | Multi-turn chat REPL |
+| `chat:` | LLM | Multi-turn chat REPL (`local_chat`; type `end-chat` or Ctrl-C to exit) |
 | `chat-context` | LLM | File context → LLM |
 | `chat-pipe` | LLM | Stdin context → LLM |
 | `explain` | LLM | Explain last command |
 | `wtf` | LLM | Topic explanation REPL |
 | `mkproj` | Dev | Scaffold Python project |
-| `commit: "msg"` | Git | Stage all + commit with YOUR message + push |
+| `commit:` / `commit_deploy` | Git | Stage all + commit with YOUR message + push |
 | `commit` | Git | Alias for `commit_auto` — LLM-generated message (PID-verified, secret detection) + push |
-| `deploy` | Deploy | Rsync to production workspace |
 
 ---
 
@@ -83,7 +82,8 @@ description: Complete quick reference card for every command, the tactical dashb
 
 Type `m` at any prompt to render the full-screen Tactical Dashboard:
 
-```
+```text
+(sample output — values vary with machine state)
 +------------------------------------------------------------------------------+
 |                      TACTICAL DASHBOARD                      (ver.: 2.12) |
 |------------------------------------------------------------------------------|
@@ -96,7 +96,7 @@ Type `m` at any prompt to render the full-screen Tactical Dashboard:
 |------------------------------------------------------------------------------|
 |  GPU          :: RTX 3050 Ti | 0% Load | 62°C | 3897 / 4096 Mb            |
 |  GPU ENGINES  :: 3D 0% | VDec 0%                                          |
-|  LOCAL LLM    :: ACTIVE Phi-4-mini-Q6_K | 14.2 t/s                        |
+|  LOCAL LLM    :: ACTIVE Llama-3.2-3B-Q4_K_M | 12.6 t/s                    |
 |  WSL          :: ACTIVE  Ubuntu-24.04  (6.6.87.2-microsoft-standard-WSL2) |
 |------------------------------------------------------------------------------|
 |  OPENCLAW     :: [ONLINE]  v2026.3.2    (or [NOT INSTALLED] if missing)   |
@@ -106,7 +106,7 @@ Type `m` at any prompt to render the full-screen Tactical Dashboard:
 |  TARGET REPO  :: main                                                     |
 |  SEC STATUS   :: SECURE                                                   |
 |------------------------------------------------------------------------------|
-|            up | xo | serve | halt | chatl | commitd | status | h           |
+|            up | xo | serve <n> | halt | chat: | commit | g | h | pwsh      |
 +------------------------------------------------------------------------------+
 ```
 

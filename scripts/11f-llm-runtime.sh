@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC2154
 # --- Module: 11f-llm-runtime ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
@@ -596,7 +596,9 @@ function __llm_chat_send() {
 # Accumulates user and assistant messages so the LLM has context of the full
 # conversation. First argument (if any) becomes the opening message.
 # Type 'end-chat' or press Ctrl-C to return to the shell.
-# Aliased as 'chatl' in section 3.
+# Aliased as 'chat:' in scripts/04-aliases.sh.  (This comment said 'chatl'; there
+# has been no such alias for some time, and docs/reference.md repeated the stale
+# name as if it were the command.)
 # ---------------------------------------------------------------------------
 function local_chat() {
     __require_llm || return 1
