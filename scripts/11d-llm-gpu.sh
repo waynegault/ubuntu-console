@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -233,6 +233,19 @@ function __tac_cleanup_stale_locks() {
 # REF: G-5 audit — VRAM clearing gap
 # ---------------------------------------------------------------------------
 function __gpu_clear_stale_processes() {
+    # Never clear VRAM by killing another run's processes.  This function targets
+    # python processes holding a CUDA context, and a foreign owner (the
+    # investigator's flock) runs its bench as exactly that: their own
+    # _is_own_process docstring says the bench and the assess processes it spawns
+    # hold CUDA contexts.  It skips comm matching *llama*, so it was never a
+    # candidate for killing their server — but it could kill their bench process
+    # mid-run.  Skipping is right here, unlike a lane start, which refuses: this
+    # is a cleanup helper, and the caller's VRAM baseline then fails closed.
+    if __llm_gpu_foreign_owner
+    then
+        echo "[gpu-clear] CUDA card owned by another run (pid $(__llm_gpu_lock_holder)) — skipping the stale-process clear" >&2
+        return 0
+    fi
     local _gpu_pid _keep_pid _keep_pids _stale_wait count=0
     _keep_pid="$$"
     _keep_pids=" $PPID $_keep_pid "

@@ -147,9 +147,14 @@ _hold_lock() {
 }
 
 # A guard that is defined but never consulted protects nothing.
-@test "gpu-exclusivity: both reap paths consult the guard before killing" {
-    # Module: the killer short-circuits when a foreign owner holds the lock.
+@test "gpu-exclusivity: every CUDA reap path consults the guard before killing" {
+    # Module: both killers short-circuit when a foreign owner holds the lock —
+    # __llm_kill_cuda_llama_servers (llama servers by exe) and
+    # __gpu_clear_stale_processes (python CUDA holders, which is what the
+    # investigator's bench runs as).
     awk '/^function __llm_kill_cuda_llama_servers/,/^}/' "$MODULE" \
+        | grep -q '__llm_gpu_foreign_owner'
+    awk '/^function __gpu_clear_stale_processes/,/^}/' "$MODULE" \
         | grep -q '__llm_gpu_foreign_owner'
     # Clear script: the reap is inside the guard's else branch.
     grep -q 'if _inv_gpu_foreign_owner; then' "$CLEAR"
