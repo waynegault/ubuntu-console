@@ -21,6 +21,3 @@ TimeoutStartSec=600
 
 [Install]
 WantedBy=default.target
-# Historical name.  The investigator repo hardcodes this one too
-# (pipeline/gpu/_exclusive.py CUDA_LANE_UNITS), so the alias covers their migration.
-Alias=llama-server-phi4.service

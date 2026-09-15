@@ -3,8 +3,12 @@ Description=Llama Server Health Watchdog Timer
 Requires=llama-watchdog.service
 
 [Timer]
-# Run every 60 seconds
-OnUnitActiveSec=60s
+# 300s, folded in from the local llama-watchdog.timer.d/slow.conf drop-in
+# (Wayne, 2026-09-13: "the watchdog still restores a died llama-server, it just
+# stops waking the box every minute while idle").  Folded in so a re-install
+# cannot silently drop it — the same local-drop-in trap the lane units had, where
+# the effective config lived off to the side of a versioned file.
+OnUnitActiveSec=300s
 OnBootSec=120s
 
 [Install]

@@ -29,6 +29,3 @@ MemoryHigh=4G
 
 [Install]
 WantedBy=default.target
-# Historical name, kept so existing callers keep resolving.  New code must use
-# the card-explicit name in the filename.
-Alias=llama-server.service

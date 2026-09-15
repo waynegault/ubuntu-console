@@ -24,7 +24,3 @@ MemoryHigh=5G
 
 [Install]
 WantedBy=default.target
-# Historical name.  The investigator repo hardcodes this one (see their
-# pipeline/gpu/_exclusive.py and _llama_procs.py), so the alias is what lets them
-# migrate on their own schedule rather than in lockstep with us.
-Alias=llama-server-nvidia.service

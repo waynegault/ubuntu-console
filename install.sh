@@ -241,6 +241,27 @@ do
     fi
 done
 
+# Legacy UNIT names, as RELATIVE alias symlinks — deliberately not systemd's
+# [Install] Alias=.  Because the unit files are themselves symlinks into this repo,
+# `systemctl enable` materialises its alias with an ABSOLUTE target, and systemd
+# then loads that as a SEPARATE unit: two units for one service, with is-active
+# lying about both.  The investigator found this on 2026-09-15, after it had already
+# put a live CUDA lane down — their name-keyed check read the lane as inactive, and
+# ours could have added a second server to the card.  A relative symlink to the unit
+# NAME merges the two: one Id, one state, both names.
+for _pair in llama-server.service:llama-xe-minicpm5-1b-chat.service \
+             llama-embed-server.service:llama-xe-embeddinggemma-embed.service \
+             llama-server-nvidia.service:llama-cuda-llama32-3b-chat.service \
+             llama-server-8081.service:llama-cuda-qwen35-4b-pipeline.service \
+             llama-server-phi4.service:llama-cuda-phi4-mini-decompose.service
+do
+    _old="${_pair%%:*}"; _new="${_pair##*:}"
+    if [[ -e "$HOME/.config/systemd/user/$_new" ]]; then
+        ln -sfn "$_new" "$HOME/.config/systemd/user/$_old"
+        echo "  ~/.config/systemd/user/$_old -> $_new (relative alias)"
+    fi
+done
+
 # Additional utility scripts that are expected to be directly executable.
 for f in "$REPO"/scripts/load-vault-env.sh "$REPO"/scripts/oc-update-enhanced.sh
 do

@@ -23,6 +23,3 @@ TimeoutStartSec=600
 
 [Install]
 WantedBy=default.target
-# Historical name (it was named after the port).  The investigator repo does not
-# hardcode this one, but keep the alias while the rename settles.
-Alias=llama-server-8081.service
