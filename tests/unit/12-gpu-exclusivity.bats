@@ -192,3 +192,32 @@ _hold_lock() {
     [[ "$_claim" != *"llama-server.service"* ]]
     [[ "$_claim" != *"llama-embed-server.service"* ]]
 }
+
+# The watchdog can only stand down for another run if gpu-busy.sh knows about it,
+# and its foreign-app signal CANNOT tell the two apart (same binary name).  The
+# ownership signal is evaluated in isolation here — gpu-busy.sh itself runs its
+# whole main flow at the bottom, so it cannot be sourced for this.
+@test "gpu-exclusivity: gpu-busy's card-ownership signal fires only when the lock is held" {
+    command -v flock >/dev/null || skip "flock unavailable"
+    printf 'REASONS=()\n' > "$TAC_TEST_TMPDIR/owner.sh"
+    awk '/^cuda_owner_busy\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/owner.sh"
+    grep -q 'cuda_owner_busy' "$TAC_TEST_TMPDIR/owner.sh"
+
+    cat > "$TAC_TEST_TMPDIR/owner-probe.sh" <<'EOS'
+set -uo pipefail
+source "$1"
+if cuda_owner_busy; then echo "BUSY ${REASONS[*]}"; else echo FREE; fi
+EOS
+
+    # No lock file at all: free (existence-gated — a missing path is not "held").
+    run bash "$TAC_TEST_TMPDIR/owner-probe.sh" "$TAC_TEST_TMPDIR/owner.sh"
+    [[ "$output" == "FREE" ]]
+
+    # Lock held by another process: busy, with the card named in the reason.
+    _hold_lock
+    run bash "$TAC_TEST_TMPDIR/owner-probe.sh" "$TAC_TEST_TMPDIR/owner.sh"
+    [[ "$output" == BUSY*cuda-owned-by-another-run* ]]
+
+    # And the signal is actually part of the busy chain, not dead code.
+    grep -q 'lock_busy || cuda_owner_busy' "$REPO_ROOT/bin/gpu-busy.sh"
+}

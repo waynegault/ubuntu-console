@@ -1,8 +1,7 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2154
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -17,6 +16,25 @@
 # loader and directly by the profile/env loaders, so run the body once.
 [[ -n "${__TAC_MOD_11E_LLM_MODEL_LOADED:-}" ]] && return 0
 __TAC_MOD_11E_LLM_MODEL_LOADED=1
+
+# Globals assigned by sibling modules at source time, named here instead of
+# relying on a file-wide `disable=SC2154`: shellcheck lints each module in
+# isolation and cannot see an assignment made elsewhere, so the module declares
+# what it consumes.
+#   colours  — 03-design-tokens.sh (as `readonly`)
+#   UIWidth  — 01-constants.sh
+# `:=` assigns ONLY when the variable is unset, so this is a runtime no-op and is
+# safe against the `readonly` in 03 (a plain C_Dim="$C_Dim" would abort).
+: "${C_Text:=}"
+: "${C_Reset:=}"
+: "${C_Dim:=}"
+: "${C_Warning:=}"
+: "${C_Error:=}"
+: "${C_Success:=}"
+: "${C_Highlight:=}"
+: "${C_Warn:=}"
+: "${C_Info:=}"
+: "${UIWidth:=}"
 
 function __model_scan() {
     if (( ! __LLAMA_DRIVE_MOUNTED ))
@@ -280,7 +298,7 @@ function __model_list() {
     then
         printf '{\n  "models": [\n'
         local first=1
-        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local quant_rating="unknown"
@@ -313,7 +331,7 @@ function __model_list() {
 
     if [[ "$output_mode" == "plain" ]]
     then
-        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local status="idle"
@@ -334,8 +352,9 @@ function __model_list() {
     _list_rule="${_list_rule// /${BOX_SL}}"
     printf "${C_Dim}  %s${C_Reset}\n" "$_list_rule"
 
-    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
-    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
+    # Trailing fields bound for position only, marked unread (SC2034).
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         local quant_rating="unknown"
@@ -484,7 +503,10 @@ function __model_use_resolve_model() {
 
     # These variables are shared with caller via dynamic scope —
     # declared as `local` in __model_use, assigned here.
-    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram row_prefill row_p2_ctx row_p2_batch row_p2_ubatch row_p2_tps row_p2_prefill row_spec_type row_spec_draft_model row_spec_n_max row_spec_ngl row_spec_device row_spec_accept_len <<< "$entry"
+    # Every field is bound, unused ones included: the registry row is positional,
+    # so dropping a name would shift every field after it.  The `_` prefix marks
+    # the field as deliberately unread for SC2034 — do not delete these.
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch_size ubatch_size parallel_slots fit_target_mb row_backend row_mmap_mode row_flash_attn tps autotuned is_default in_vram _row_prefill _row_p2_ctx _row_p2_batch _row_p2_ubatch _row_p2_tps _row_p2_prefill _row_spec_type _row_spec_draft_model _row_spec_n_max _row_spec_ngl _row_spec_device _row_spec_accept_len <<< "$entry"
 
     # AUTOTUNE-004 retired (2026-09-14): the registry parallel column is no
     # longer read for launch, and --parallel is pinned to 1 below.  The column
@@ -609,7 +631,9 @@ function __model_use_select_backend() {
             __tac_info "Install" "[CMAKE_ARGS='-DGGML_CUDA=on' FORCE_CMAKE=1 pip install 'llama-cpp-python[server]==${LLAMA_CPP_PYTHON_VERSION}']" "$C_Dim"
             return 1
         fi
-        LLM_SERVER_PYTHON_BIN="$python_bin"
+        # Read by 11c-llm-server.sh (server-binary resolution), so this is a
+        # cross-module output rather than module-local state.
+        export LLM_SERVER_PYTHON_BIN="$python_bin"
     else
         if [[ ! -x "$LLAMA_SERVER_BIN" ]]
         then
@@ -1435,8 +1459,10 @@ function __model_info() {
         __tac_info "Error" "[Model #$target not found]" "$C_Error"
         return 1
     fi
-    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram
-    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill <<< "$entry"
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
+    # The trailing fields are bound for position only, and marked unread (SC2034)
+    # so the positional binding needs no suppression.
+    IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill <<< "$entry"
     local quant_rating="unknown"
     quant_rating=$(__llm_quant_rating "$file")
 
@@ -2474,8 +2500,10 @@ function __model_recommend() {
     fi
 
     local -a ranked=()
-    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
-    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
+    # Unused fields keep their position and take a `_` prefix — the registry line
+    # is positional, so dropping a name would shift every field after it.
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         [[ -f "$LLAMA_MODEL_DIR/$file" ]] || continue

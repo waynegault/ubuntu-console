@@ -318,7 +318,7 @@ WSL2 Ubuntu 24.04
     ├── __bridge_windows_api_keys() → /dev/shm/tac_win_api_keys (chmod 600)
     │   └── systemctl --user set-environment KEY=VALUE (for gateway)
     ├── openclaw-gateway.service (port 18789)
-    └── llama-server (port 8081)
+    └── cuda-llama-server (CUDA card, port 18083)
 ```
 
 ### API Key Bridge
@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (982 total tests: 642 BATS + 340 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (983 total tests: 643 BATS + 340 Python).
 
 ### Running Tests
 

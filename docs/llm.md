@@ -202,12 +202,41 @@ else `~/investigator/production/runtime/gpu.lock`. The probe is
 failed probe as "held" would refuse every run on a box that never took the lock.
 `docs/AGENT-GUIDELINES.md` has the agent-facing check.
 
-**Current behaviour, and the open question.** The guard stops the console from
-*killing* a foreign run; it does not stop the CUDA lane from *starting* while one
-holds the card — whether it should refuse to start is the watchdog's busy-GPU
-policy, not the cleanup paths'. Brief contention is therefore still possible.
-Whether the console should stand down entirely during a foreign run is an open
-decision, not an oversight.
+**Both directions are now closed.** The guard stops the console *killing* a
+foreign run, and it also stops the CUDA lane from *starting* while one holds the
+card: `llama-gpu-clear.sh` refuses — the ExecStartPre fails, so the unit does not
+start — `gpu-busy.sh` reports the card busy so the watchdog stands down instead of
+retrying, and `model use` refuses rather than adding a second LLM to the card.
+When the owner's run ends the lock is released and the lane returns by itself.
+
+### The two cards, and what runs on each
+
+Two independent GPUs.  Nothing on one card's path may stop, gate or clear the
+other: the Xe card keeps serving while the CUDA card is cleared, and vice versa.
+**Name the card explicitly** in code, comments, messages and docs — the unit
+names below are historic and will not do it for you.
+
+| Card | Unit | Launcher | Port | Notes |
+|---|---|---|---|---|
+| **Xe** | `llama-server.service` | `xe-llama-server` | 18081 | the fleet server |
+| **Xe** | `llama-embed-server.service` | `xe-llama-embed` | 18080 | embeddings |
+| **CUDA** | `llama-server-nvidia.service` | `cuda-llama-server` | 18083 | the enabled CUDA lane |
+| **CUDA** | `llama-server-8081.service` | `cuda-llama-server` | 8081 | parked lane (disabled) |
+| **CUDA** | `llama-server-phi4.service` | `cuda-llama-phi4` | 18082 | parked lane (disabled) |
+
+The naming is the trap: the CUDA lane is `nvidia` in its unit and `cuda` in its
+launcher; the **Xe** fleet carries the plainest unit name; one CUDA lane is named
+after a port and another after a model.  The build trees split the same way —
+`llama.cpp/build/` and `build-cuda133/` are the CUDA card, `build-opencl*/` is the
+Xe card.
+
+**One LLM on the CUDA card at a time, ever.**  `model use` claims the card
+(`__model_use_claim_cuda_card`: refuse a foreign owner, displace the other CUDA
+lanes, hold the lane down for the life of the server), and `llama-gpu-clear.sh`
+refuses to start a CUDA unit while another run owns the card.  The Xe lanes are
+untouched by all of it.  A bare `llama-server` is deliberately **not** on PATH:
+the old `~/.local/opt/llama.cpp/*` build served on an unrecorded card, so it was
+a coin-flip.  Use the card-explicit launchers.
 
 ### Autotune Environment Knobs
 

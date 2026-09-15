@@ -3,7 +3,7 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
-VERSION="1.3"
+VERSION="1.4"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -175,15 +175,19 @@ chmod 444 "$HOME/.bashrc" 2>/dev/null \
 echo "  ~/.bashrc - set read-only (mode 444)"
 
 # Standalone scripts → ~/.local/bin/
+# Scripts in this list are installed as a short `exec` SHIM at the stable path
+# rather than a symlink into the repo: they are invoked by systemd units and by
+# the watchdog, and a shim keeps the stable path real (no symlink to rely on)
+# while the implementation stays repo-owned.
 for f in "$REPO"/bin/*
 do
     [[ -f "$f" ]] || continue
-    if [[ "$(basename "$f")" == "llama-gpu-clear.sh" ]]
-    then
-        launcher "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")"
-    else
-        link "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")"
-    fi
+    case "$(basename "$f")" in
+        llama-gpu-clear.sh|gpu-busy.sh)
+            launcher "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")" ;;
+        *)
+            link "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")" ;;
+    esac
 done
 
 # Additional utility scripts that are expected to be directly executable.
