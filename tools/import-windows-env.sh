@@ -3,7 +3,7 @@
 # import-windows-env.sh — Windows environment variable importer
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 7
+# Module Version: 8
 # @modular-section: import-windows-user-env
 # @depends: none (standalone; calls pwsh.exe / tasklist.exe)
 # @exports: (none — standalone script, writes to output-file)
@@ -73,7 +73,12 @@ foreach (\$name in \$names) {
 PS_EOF
 )
 
-WINDOWS_ENV_JSON=$("$PS_BIN" -NoProfile -Command "$PS_SCRIPT")
+WINDOWS_ENV_JSON=$(timeout 60 "$PS_BIN" -NoProfile -Command "$PS_SCRIPT") || {
+    # A bare call hung the whole bridge after sleep/hibernate with no timeout to
+    # end it; PowerShell interop calls elsewhere in this repo are all wrapped.
+    echo "ERROR: PowerShell env bridge failed or timed out after 60s" >&2
+    exit 1
+}
 
 "$_TAC_PY" - "$OUT" "$WINDOWS_ENV_JSON" "$HOME/.qwen/oauth_creds.json" "${NAMES[@]}" <<'PY'
 import json

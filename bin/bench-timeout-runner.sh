@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # bench-timeout-runner.sh — Subprocess runner with PID tracking and cleanup.
 #
 # Extracted from __bench_run_with_timeout() in scripts/11-llm-manager.sh
@@ -45,7 +45,7 @@
 # (lock file cleanup, model stop) from being bypassed.
 
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line — any edit here must move it, or the pre-commit guard rejects the
 #   commit.  Deliberately separate from VERSION= below (significant edits only).

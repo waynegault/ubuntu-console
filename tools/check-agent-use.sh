@@ -6,7 +6,7 @@
 # AI INSTRUCTION: Regression checker. It reads $TAC_CACHE_DIR (default /dev/shm);
 # tests/unit/09-check-agent-use.bats points that at a fixture dir so it runs
 # hermetically in CI. Run it on a live machine for a real check.
-# Module Version: 2
+# Module Version: 3
 # @modular-section: check-oc-agent-use
 # @depends: none (standalone; reads TAC_CACHE_DIR files)
 # @exports: (none — standalone script, not sourced)
@@ -28,7 +28,12 @@ if [[ ! -f "$STATS_FILE" ]]; then
     exit 2
 fi
 
-sessions_total=$(jq '(.sessions // []) | map(.totalTokens // 0) | add // 0' "$SESSION_FILE")
+sessions_total=$(jq '(.sessions // []) | map(.totalTokens // 0) | add // 0' "$SESSION_FILE" 2>&1) || {
+    # Without this the failure surfaced as "integer expression expected" from the
+    # comparison below, naming neither the file nor the cause.
+    echo "ERROR: could not read $SESSION_FILE: $sessions_total" >&2
+    exit 2
+}
 stats_total=$(awk '{s += ($4+0)} END {print (s+0)}' "$STATS_FILE")
 
 echo "sessions_total=$sessions_total"

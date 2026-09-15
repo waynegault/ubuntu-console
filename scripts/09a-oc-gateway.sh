@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -186,7 +186,9 @@ function __so_clear_wslrelay() {
 
     if command -v taskkill.exe &>/dev/null
     then
-        taskkill.exe /PID "$_pid_only" /F &>/dev/null
+        # Wrapped like the probes either side of it: a Windows interop call can
+        # hang indefinitely after sleep/hibernate.
+        timeout 5 taskkill.exe /PID "$_pid_only" /F &>/dev/null
         sleep 1
 
         # Verify the port is now free
@@ -718,7 +720,9 @@ function __so_check_win_port() {
             return 0
         fi
         __tac_info "Gateway" "[KILLING Windows PID ${_pid_only}]" "$C_Warning"
-        taskkill.exe /PID "$_pid_only" /F &>/dev/null
+        # Wrapped like the probes either side of it: a Windows interop call can
+        # hang indefinitely after sleep/hibernate.
+        timeout 5 taskkill.exe /PID "$_pid_only" /F &>/dev/null
         sleep 1
         # Verify the port is now free
         local _still_held

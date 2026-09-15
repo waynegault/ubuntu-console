@@ -7,7 +7,7 @@
 # Last modified:  2026-08-06
 # Environment:    WSL2 (Ubuntu 24.04) / RTX 3050 Ti
 #
-# Prerequisites:  bash >= 4.0
+# Prerequisites:  bash >= 5.2
 #                 Required tools: git; Optional tools: fzf
 #
 # Safety:         Do NOT store secrets or credentials in this file.

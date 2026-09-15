@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # post-merge hook: auto-rebuild the knowledge graph after a merge.
 # TRACKED: tools/hooks/ is the source of truth for this repo's hooks (install
 # with `git config core.hooksPath <repo>/tools/hooks`; install.sh does that).

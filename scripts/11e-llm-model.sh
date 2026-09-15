@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 25
+# Module Version: 26
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -1043,7 +1043,14 @@ function __model_use_launch_server() {
         {
             # Run with cwd = keeper dir so an orphan keeper can be attributed
             # back to this console (the fallback reaper matches /proc/PID/cwd).
-            cd "$LLM_KEEPER_DIR" 2>/dev/null || true
+            # Make sure the directory exists, then do not swallow a failed cd:
+            # `|| true` left the keeper in the caller's cwd, where the reaper
+            # cannot attribute it.  A failed cd must not END the keeper either
+            # (closing fd 3 would EOF llama-server's stdin), so it reports.
+            mkdir -p "$LLM_KEEPER_DIR" 2>/dev/null \
+                || echo "WARN: could not create keeper dir $LLM_KEEPER_DIR" >&2
+            cd "$LLM_KEEPER_DIR" 2>/dev/null \
+                || echo "WARN: keeper could not enter $LLM_KEEPER_DIR — the orphan reaper matches /proc/PID/cwd and cannot attribute this keeper" >&2
             exec 3>"$stdin_fifo"
             # The PID file is written by the parent after $! is captured.
             # We just need to keep the FIFO open.

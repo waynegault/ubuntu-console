@@ -18,7 +18,7 @@
 #        tools/install-shellcheck.sh -p "$HOME/.local/bin"
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
 VERSION="1.0"
 set -euo pipefail
 
@@ -50,7 +50,10 @@ workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
 echo "Downloading shellcheck ${SHELLCHECK_VERSION} ..."
-curl -fsSL --retry 3 --retry-delay 2 -o "$workdir/$tarball" "$url"
+# --connect-timeout/--max-time: without them a stalled connection blocks the
+# installer indefinitely, and this runs before shellcheck exists to check anything.
+curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 300 \
+    -o "$workdir/$tarball" "$url"
 
 echo "${SHELLCHECK_SHA256}  $workdir/$tarball" | sha256sum -c - >/dev/null
 echo "sha256 verified."
