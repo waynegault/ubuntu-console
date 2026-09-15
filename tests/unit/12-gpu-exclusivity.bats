@@ -413,3 +413,42 @@ EOS
     [[ "${from_wrapper%.service}" == "$from_watchdog" ]] \
         || { echo "drifted: wrapper '${from_wrapper%.service}' vs watchdog '$from_watchdog'"; return 1; }
 }
+
+# run-autotune-batch.sh's footer is where a failed row used to disappear: it sliced
+# the remaining list from COUNT, so rows that FAILED were dropped from the resume
+# line (chunk 2 of the 2026-09-15 re-tune printed "remaining models: 18 27" while 5
+# and 7 had failed and still needed doing), and the batch exited 0 on a 2-of-2
+# failure, which read as progress.  The footer reads global state, not arguments, so
+# its contract can be exercised without a GPU.
+@test "gpu-exclusivity: a failed row stays in the resume list, and certifying nothing is not exit 0" {
+    awk '/^__rab_footer\(\)/,/^}/' "$REPO_ROOT/scripts/run-autotune-batch.sh" > "$TAC_TEST_TMPDIR/footer.sh"
+    grep -q '__rab_footer' "$TAC_TEST_TMPDIR/footer.sh" || return 1
+
+    cat > "$TAC_TEST_TMPDIR/footer-probe.sh" <<'EOS'
+set -uo pipefail
+source "$1"
+case "$2" in
+    failures) MODEL_ARRAY=(5 7 18 27); COUNT=2; TOTAL=4; TUNED_COUNT=0; FAILED_ROWS=(5 7) ;;
+    clean)    MODEL_ARRAY=(1 5);       COUNT=1; TOTAL=2; TUNED_COUNT=1; FAILED_ROWS=() ;;
+    allfail)  MODEL_ARRAY=(5 7);       COUNT=2; TOTAL=2; TUNED_COUNT=0; FAILED_ROWS=(5 7) ;;
+esac
+__rab_footer "halt" 0
+echo "RC=$?"
+echo "REMAINING=${REMAINING[*]:-}"
+EOS
+
+    # Both failed rows are owed a run, and they must come back in the resume list.
+    run bash "$TAC_TEST_TMPDIR/footer-probe.sh" "$TAC_TEST_TMPDIR/footer.sh" failures
+    [[ "$output" == *"REMAINING=5 7 18 27"* ]]
+    [[ "$output" == *"RC=1"* ]]
+
+    # A chunk-cap halt after one good row is a clean exit.
+    run bash "$TAC_TEST_TMPDIR/footer-probe.sh" "$TAC_TEST_TMPDIR/footer.sh" clean
+    [[ "$output" == *"REMAINING=5"* ]]
+    [[ "$output" == *"RC=0"* ]]
+
+    # Every row failed: non-zero, and nothing is dropped from the resume list.
+    run bash "$TAC_TEST_TMPDIR/footer-probe.sh" "$TAC_TEST_TMPDIR/footer.sh" allfail
+    [[ "$output" == *"REMAINING=5 7"* ]]
+    [[ "$output" == *"RC=1"* ]]
+}

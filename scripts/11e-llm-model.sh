@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 22
+# Module Version: 23
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -3139,8 +3139,16 @@ function model() {
             if [[ "${1:-}" == "all" ]]
             then
                 shift
-                bash "$HOME/ubuntu-console/scripts/run-autotune-batch.sh" 2>&1
-                __tac_info "Autotune All" "[Complete — all untuned models processed]" "$C_Success"
+                # The batch's exit code is the verdict: it returns non-zero when any
+                # row failed (2026-09-15 — it used to return 0 even on a 2-of-2
+                # failure, and this line then announced "[Complete]" over it).
+                if bash "$HOME/ubuntu-console/scripts/run-autotune-batch.sh" 2>&1
+                then
+                    __tac_info "Autotune All" "[Complete — all untuned models processed]" "$C_Success"
+                else
+                    __tac_info "Autotune All" "[INCOMPLETE — rows failed; see the FAILED line above and re-run the printed resume command]" "$C_Error"
+                    return 1
+                fi
                 return 0
             fi
             if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || "${1:-}" == "help" ]]

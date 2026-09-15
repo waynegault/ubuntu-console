@@ -1,6 +1,6 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -52,6 +52,17 @@ HALT_REASON=""
 # ledger.  The footer therefore distinguishes the halt reasons instead of
 # printing "wsl --shutdown" for a deliberate chunk-cap stop (2026-09-15).
 HALT_NEEDS_WSL_RESTART=0
+# A row that FAILED is still owed a run, and the batch must not exit 0 when it
+# certified nothing: chunk 2 of the 2026-09-15 re-tune logged `batch exit=0` on a
+# 2-of-2 failure, which read as progress.  Both are tracked here.
+FAILED_ROWS=()
+TUNED_COUNT=0
+CONSECUTIVE_FAILURES=0
+# Fail-fast (Wayne, 2026-09-10): after this many consecutive row failures, stop and
+# fix the cause instead of grinding on — consecutive failures mean something is
+# broken, and every further row spends GPU time reproducing it.  Chunk 2 is the
+# shape: two rows, both refused on a baseline no row could have passed.
+MAX_CONSECUTIVE_FAILURES="${MAX_CONSECUTIVE_FAILURES:-2}"
 
 # --- WSL2 dxgkrnl cycle-budget knobs ---
 # The leak is proportional to the number of CUDA context create/destroy cycles;
@@ -179,8 +190,12 @@ for ((i = 0; i < TOTAL; i++)); do
     printf '\n[%d/%d] model #%s (cyc %s/%s) ... ' "$COUNT" "$TOTAL" "$m" "$(cuda_cycles)" "$CUDA_CYCLE_BUDGET"
     if bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "$m" 2>&1; then
         printf 'done\n'
+        TUNED_COUNT=$((TUNED_COUNT + 1))
+        CONSECUTIVE_FAILURES=0
     else
         printf 'failed\n'
+        FAILED_ROWS+=("$m")
+        CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
     fi
     drain_vram
     if ! check_wsl_gpu_health; then
@@ -188,16 +203,45 @@ for ((i = 0; i < TOTAL; i++)); do
         HALT_NEEDS_WSL_RESTART=1
         break
     fi
+    if (( MAX_CONSECUTIVE_FAILURES > 0 && CONSECUTIVE_FAILURES >= MAX_CONSECUTIVE_FAILURES )); then
+        HALT_REASON="${CONSECUTIVE_FAILURES} consecutive row failures — stopping to fix the cause rather than burning more rows"
+        break
+    fi
 done
 
 echo ""
 
-if [[ -n "$HALT_REASON" ]]; then
-    REMAINING=("${MODEL_ARRAY[@]:COUNT}")
-    echo "=== HALTED: ${HALT_REASON} ==="
+# ---------------------------------------------------------------------------
+# __rab_footer <halt_reason> <needs_wsl_restart> — print the summary, and return
+# the exit code the batch should use.
+#
+# Two contracts live here, both broken before 2026-09-15:
+#   * a row that FAILED is still owed a run, and the un-attempted slice starts at
+#     COUNT — so failed rows must be prepended or the resume line silently skips
+#     them (chunk 2 printed "remaining models: 18 27" while 5 and 7 had failed and
+#     still needed doing);
+#   * a batch that certified nothing must not return 0 (chunk 2 logged
+#     `batch exit=0` on a 2-of-2 failure, which read as progress in the log).
+#
+# It reads global state rather than arguments for the row bookkeeping, so the
+# contract can be exercised without a GPU (see tests/unit/12-gpu-exclusivity.bats).
+# ---------------------------------------------------------------------------
+__rab_footer() {
+    local _halt_reason="$1" _needs_restart="$2"
+    # Failed rows FIRST: they are owed a run.
+    REMAINING=("${FAILED_ROWS[@]}" "${MODEL_ARRAY[@]:COUNT}")
+
+    if [[ -n "$_halt_reason" ]]; then
+        echo "=== HALTED: ${_halt_reason} ==="
+    else
+        echo "=== finished: ${TUNED_COUNT}/${TOTAL} tuned, ${#FAILED_ROWS[@]} failed ==="
+    fi
+    if [[ ${#FAILED_ROWS[@]} -gt 0 ]]; then
+        echo "  FAILED (still untuned, and NOT counted as done): ${FAILED_ROWS[*]}"
+    fi
     if [[ ${#REMAINING[@]} -gt 0 ]]; then
         echo "  remaining models: ${REMAINING[*]}"
-        if [[ "$HALT_NEEDS_WSL_RESTART" == 1 ]]; then
+        if [[ "$_needs_restart" == 1 ]]; then
             echo "  resume:  wsl --shutdown (from Windows), then:"
         else
             echo "  resume:"
@@ -205,8 +249,13 @@ if [[ -n "$HALT_REASON" ]]; then
         echo "    bash ~/ubuntu-console/scripts/run-autotune-batch.sh ${REMAINING[*]}"
         echo "  (or run with no args to auto-resume every still-untuned model)"
     fi
-else
-    echo "=== done: ${TOTAL} models tuned ==="
-fi
+
+    (( ${#FAILED_ROWS[@]} > 0 )) && return 1
+    return 0
+}
+
+__rab_footer "$HALT_REASON" "$HALT_NEEDS_WSL_RESTART"
+rc=$?
+exit "$rc"
 
 # end of file marker
