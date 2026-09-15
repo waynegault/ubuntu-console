@@ -3,7 +3,7 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
-VERSION="1.4"
+VERSION="1.5"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -39,6 +39,16 @@ link() {
 
 launcher() {
     local src="$REPO/$1" dest="$2"
+    # Fail closed on a non-executable source.  The shim execs it, so a missing exec
+    # bit produces "Permission denied" at RUN time — on a lane start, from systemd,
+    # far from here.  git records the exec bit, so the fix is chmod +x + commit the
+    # mode; catching it here is the difference between a loud install and a silent
+    # breakage discovered by a lane that will not come up.
+    if [[ ! -x "$src" ]]; then
+        echo "  ERROR: $src is not executable — refusing to install a broken shim" >&2
+        echo "         Fix: chmod +x $src  (and commit the mode change)" >&2
+        return 1
+    fi
     mkdir -p "$(dirname "$dest")"
     printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$src" > "$dest"
     chmod 755 "$dest"
@@ -179,15 +189,56 @@ echo "  ~/.bashrc - set read-only (mode 444)"
 # rather than a symlink into the repo: they are invoked by systemd units and by
 # the watchdog, and a shim keeps the stable path real (no symlink to rely on)
 # while the implementation stays repo-owned.
+#
+# llama-cuda-server / llama-xe-server are the card launchers: they decide, from
+# the constants, which BUILD serves which card, so that answer is a reviewed line
+# in git instead of a repointable symlink.
 for f in "$REPO"/bin/*
 do
     [[ -f "$f" ]] || continue
     case "$(basename "$f")" in
-        llama-gpu-clear.sh|gpu-busy.sh)
+        llama-gpu-clear.sh|gpu-busy.sh|llama-cuda-server|llama-xe-server)
             launcher "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")" ;;
         *)
             link "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")" ;;
     esac
+done
+
+# Historical launcher names, forwarding to the canonical card launchers.  The
+# investigator's pipeline/gpu/_llama_procs.py knows these names, so they must keep
+# resolving; new work uses llama-cuda-server / llama-xe-server.
+#
+# rm -f FIRST, every time: these paths are currently symlinks, and a redirect into
+# a symlink writes THROUGH it — overwriting the build binary it points at.  That
+# is not hypothetical: it is the same shape as the cp-through-symlink that ate
+# bin/llama-gpu-clear.sh earlier the same day.
+for _alias in cuda-llama-server:cuda cuda-llama-phi4:cuda xe-llama-server:xe xe-llama-embed:xe
+do
+    _name="${_alias%%:*}"; _card="${_alias##*:}"
+    if [[ -x "$HOME/.local/bin/llama-${_card}-server" ]]; then
+        rm -f "$HOME/.local/bin/$_name"
+        {
+            printf '#!/usr/bin/env bash\n'
+            printf '# Historical name — forwards to llama-%s-server (see docs/llm.md).\n' "$_card"
+            printf 'exec %q "$@"\n' "$HOME/.local/bin/llama-${_card}-server"
+        } > "$HOME/.local/bin/$_name"
+        chmod 755 "$HOME/.local/bin/$_name"
+        echo "  ~/.local/bin/$_name -> llama-${_card}-server"
+    else
+        echo "  WARNING: llama-${_card}-server not installed — skipped $_name" >&2
+    fi
+done
+
+# Retired 2026-09-15 (Wayne): llama-server-cuda pointed at build-cuda133, a third
+# CUDA name on a build that serves nothing (documented rollback-only instead), and
+# llama-cli used the unrecorded ~/.local/opt build.  Neither is a lane, and each
+# invited "which build is this?".  Only symlinks are removed.
+for _retired in llama-server-cuda llama-cli
+do
+    if [[ -L "$HOME/.local/bin/$_retired" ]]; then
+        rm -f "$HOME/.local/bin/$_retired"
+        echo "  removed retired launcher $_retired"
+    fi
 done
 
 # Additional utility scripts that are expected to be directly executable.

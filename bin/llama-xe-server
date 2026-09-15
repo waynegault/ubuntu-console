@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# llama-xe-server — the Xe card's server launcher.
+#
+# CARD: Xe (Intel OpenCL)   PURPOSE: the Xe card's llama-server, on whichever
+#                                 build we serve — the fleet lane and the embed
+#                                 lane both come through here.
+#
+# Same reasoning as llama-cuda-server: the build is a reviewed line in this repo,
+# not a symlink that can be repointed in place.  The OpenCL build tree is the only
+# Xe build, so this is mostly a guard rail — it makes "which build serves the Xe
+# card" answerable by reading git.
+#
+# The historical launcher names forward here — xe-llama-server, xe-llama-embed —
+# because the investigator's _llama_procs.py knows them by name.  install.sh
+# creates those forwarding shims.
+#
+# end of file
+
+set -uo pipefail
+
+# Keep this default in step with LLAMA_XE_SERVER_BIN in scripts/01-constants.sh.
+# Repeated rather than sourced on purpose — see llama-cuda-server.
+_bin="${LLAMA_XE_SERVER_BIN:-/home/wayne/llama.cpp/build-opencl/bin/llama-server}"
+
+if [[ ! -x "$_bin" ]]; then
+    echo "llama-xe-server: Xe build not executable: $_bin" >&2
+    exit 1
+fi
+
+exec "$_bin" "$@"

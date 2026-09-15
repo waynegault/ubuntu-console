@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# llama-cuda-server — the CUDA card's server launcher.
+#
+# CARD: CUDA   PURPOSE: the CUDA card's llama-server, on whichever build we serve
+#
+# This file exists so that WHICH BUILD SERVES THE CUDA CARD is a reviewed line in
+# this repo instead of a symlink that can be repointed in place.  The 2026-09-13
+# repoint did exactly that to cuda-llama-server, and its only record was a dotfile
+# marker (see docs/llama-cpp-runtime-audit.md).
+#
+# The historical launcher names forward here — cuda-llama-server, cuda-llama-phi4 —
+# because the investigator's _llama_procs.py knows them by name.  install.sh
+# creates those forwarding shims.
+#
+# end of file
+
+set -uo pipefail
+
+# Keep this default in step with LLAMA_CUDA_SERVER_BIN in scripts/01-constants.sh.
+# It is repeated rather than sourced on purpose: bin/ launchers are standalone and
+# must not depend on the console's module tree (an ExecStartPre or a lane start
+# cannot assume a fully sourced shell).
+_bin="${LLAMA_CUDA_SERVER_BIN:-/home/wayne/llama.cpp/build/bin/llama-server}"
+
+if [[ ! -x "$_bin" ]]; then
+    echo "llama-cuda-server: CUDA build not executable: $_bin" >&2
+    exit 1
+fi
+
+exec "$_bin" "$@"

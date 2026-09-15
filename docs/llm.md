@@ -223,22 +223,40 @@ When the owner's run ends the lock is released and the lane returns by itself.
 
 Two independent GPUs.  Nothing on one card's path may stop, gate or clear the
 other: the Xe card keeps serving while the CUDA card is cleared, and vice versa.
-**Name the card explicitly** in code, comments, messages and docs — the unit
-names below are historic and will not do it for you.
+**Name the card explicitly** in code, comments, messages and docs — the names below
+are card-first as of 2026-09-15, so a name that does not say `cuda` or `xe` is
+either historical or wrong.
 
 | Card | Unit | Launcher | Port | Notes |
 |---|---|---|---|---|
-| **Xe** | `llama-xe-minicpm5-1b-chat.service` | `xe-llama-server` | 18081 | the fleet server |
-| **Xe** | `llama-xe-embeddinggemma-embed.service` | `xe-llama-embed` | 18080 | embeddings |
-| **CUDA** | `llama-cuda-llama32-3b-chat.service` | `cuda-llama-server` | 18083 | the enabled CUDA lane |
-| **CUDA** | `llama-cuda-qwen35-4b-pipeline.service` | `cuda-llama-server` | 8081 | parked lane (disabled) |
-| **CUDA** | `llama-cuda-phi4-mini-decompose.service` | `cuda-llama-phi4` | 18082 | parked lane (disabled) |
+| **Xe** | `llama-xe-minicpm5-1b-chat.service` | `llama-xe-server` | 18081 | the fleet server |
+| **Xe** | `llama-xe-embeddinggemma-embed.service` | `llama-xe-server` | 18080 | embeddings (`--embedding`) |
+| **CUDA** | `llama-cuda-llama32-3b-chat.service` | `llama-cuda-server` | 18083 | the enabled CUDA lane |
+| **CUDA** | `llama-cuda-qwen35-4b-pipeline.service` | `llama-cuda-server` | 8081 | parked lane (disabled) |
+| **CUDA** | `llama-cuda-phi4-mini-decompose.service` | `llama-cuda-server` | 18082 | parked lane (disabled) |
 
-The naming is the trap: the CUDA lane is `nvidia` in its unit and `cuda` in its
-launcher; the **Xe** fleet carries the plainest unit name; one CUDA lane is named
-after a port and another after a model.  The build trees split the same way —
-`llama.cpp/build/` and `build-cuda133/` are the CUDA card, `build-opencl*/` is the
-Xe card.
+**One launcher per card, not per lane.**  Lanes differ in *arguments* (model, port,
+ctx); the *build* is what a launcher selects, and the phi4 lane and the chat lane
+run the same binary.  `bin/llama-cuda-server` and `bin/llama-xe-server` are tracked
+in this repo and read `LLAMA_CUDA_SERVER_BIN` / `LLAMA_XE_SERVER_BIN` from
+`01-constants.sh`, so **which build serves which card is a reviewed line in git**,
+not a symlink repointable in place — the 2026-09-13 repoint did exactly that, and
+its only record was a dotfile.
+
+The naming trap is closed as of 2026-09-15: the CUDA lane was `nvidia` in its unit
+but `cuda` in its launcher, the **Xe** fleet carried the plainest name, and one
+CUDA lane was named after a port while another was named after a model.  Units and
+launchers are now card-first throughout.  The build trees keep their own split —
+`llama.cpp/build/` is the CUDA card and `build-opencl*/` is the Xe card, while
+`build-cuda133/` is rollback-only: not a lane, and deliberately given no name on
+PATH.
+
+The historical launcher names — `cuda-llama-server`, `cuda-llama-phi4`,
+`xe-llama-server`, `xe-llama-embed` — are installed as one-line forwarding shims,
+because the investigator's `pipeline/gpu/_llama_procs.py` knows them by name.
+Retired on 2026-09-15: `llama-server-cuda` (a third CUDA name pointing at
+`build-cuda133`, which serves nothing) and `llama-cli` (the unrecorded
+`~/.local/opt` build).
 
 **One LLM on the CUDA card at a time, ever.**  `model use` claims the card
 (`__model_use_claim_cuda_card`: refuse a foreign owner, displace the other CUDA
