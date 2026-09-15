@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -45,27 +45,6 @@ function __so_show_errors() {
             printf '%s\n' "    ${C_Dim}${_line}${C_Reset}"
         done <<< "$_errors"
     fi
-}
-
-# ---------------------------------------------------------------------------
-# __so_check_healthy — Check if gateway is already running and healthy.
-# Returns 0 if healthy (nothing to do), 1 if needs startup.
-# ---------------------------------------------------------------------------
-function __so_check_healthy() {
-    if __test_port "$OC_PORT"
-    then
-        if __llm_server_running && __test_port "${LLM_PORT:-8081}"
-        then
-            __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT]" "$C_Success"
-        else
-            # Gateway is up but LLM is not — this is NOT healthy state
-            __tac_info "Local LLM" "[OFFLINE — will start]" "$C_Warning"
-            return 1
-        fi
-        __tac_info "Gateway" "[RUNNING on PORT $OC_PORT]" "$C_Success"
-        return 0
-    fi
-    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -536,10 +515,24 @@ function so() {
     if __test_port "$OC_PORT"
     then
         _gateway_already_running=1
-        # Check if LLM is also running
-        if __llm_server_running && __test_port "${LLM_PORT:-8081}"
+        # A gateway bound but not serving is invisible here: the port answers, so
+        # this printed all-green and exited 0.  Probe it — but stay
+        # non-destructive, because 'so' answers "is it up?" while
+        # 'openclaw gateway restart' is what kicks it.
+        if ! timeout 5 openclaw gateway health >/dev/null 2>&1
         then
-            __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT]" "$C_Success"
+            __tac_info "Gateway" "[RUNNING but UNHEALTHY — run: openclaw gateway restart]" "$C_Warning"
+            return 1
+        fi
+        # Check if LLM is also running.  The LLM the gateway consumes is the
+        # production lane on LLM_SERVICE_PORT; testing LLM_PORT here (the legacy
+        # registry-managed fallback port) meant this early return essentially
+        # never fired.  LLM_PORT stays the fallback for a box running that path.
+        local _so_llm_port="${LLM_SERVICE_PORT:-18081}"
+        __test_port "$_so_llm_port" || _so_llm_port="${LLM_PORT:-8081}"
+        if __llm_server_running && __test_port "$_so_llm_port"
+        then
+            __tac_info "Local LLM" "[RUNNING on PORT $_so_llm_port]" "$C_Success"
             __tac_info "Gateway" "[RUNNING on PORT $OC_PORT]" "$C_Success"
             return 0
         fi
