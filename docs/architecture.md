@@ -86,6 +86,7 @@ by either loader.
 | --- | --- |
 | `scripts/autotune-model.sh` | Model autotune runner (standalone). |
 | `scripts/run-autotune-batch.sh` | Batch autotune across multiple models. |
+| `scripts/retune-band-chunk.sh` | Run one chunk of the threshold-band re-tune (suspends the CUDA lane, derives the row set from the registry). |
 | `scripts/load-vault-env.sh` | Load vault environment variables (standalone). |
 | `scripts/oc-update-enhanced.sh` | Enhanced OpenClaw update helper. |
 | `scripts/spec-decode-bench.sh` | SPEC-DEC-003/006 per-prompt acceptance bench (standalone). |

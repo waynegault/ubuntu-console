@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 21
+# Module Version: 22
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -802,12 +802,13 @@ function __model_use_configure_params() {
 #   tick, and the card reads "free" to it while an idle server serves).
 #
 #   CARD DISCIPLINE: the Xe card is a DIFFERENT card and is never touched here.
-#   xe-llama-server (:18081) and xe-llama-embed (:18080) keep serving throughout.
+#   Both Xe lanes keep serving throughout — llama-xe-minicpm5-1b-chat (:18081)
+#   and llama-xe-embeddinggemma-embed (:18080).
 #
 # @returns 0 when the card is ours, 1 when another run owns it.
 # ---------------------------------------------------------------------------
 function __model_use_claim_cuda_card() {
-    local _cuda_suspend="${LLAMA_WATCHDOG_NV_SUSPEND_FILE:-/dev/shm/llama-watchdog-nv.suspend}"
+    local _cuda_suspend="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 
     # 1. Another agent's run owns the card: refuse rather than load a second LLM.
     if declare -f __llm_gpu_foreign_owner &>/dev/null && __llm_gpu_foreign_owner
@@ -1236,7 +1237,7 @@ function __model_stop() {
     # the watchdog may bring the CUDA lane back.  Left in place when a bench or
     # autotune run owns the card: clearing it would let a second LLM load
     # alongside that run.
-    local _cuda_suspend="${LLAMA_WATCHDOG_NV_SUSPEND_FILE:-/dev/shm/llama-watchdog-nv.suspend}"
+    local _cuda_suspend="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
     if [[ -f "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}" || -f "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}" ]]
     then
         __tac_info "CUDA" "card mark left in place (a bench/autotune run owns the card)" "$C_Dim"

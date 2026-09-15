@@ -9,16 +9,16 @@
 # v3.1 (2026-09-11): honour health()'s 503 "still loading" signal — a loading
 #   lane is neither struck nor restarted; drop a redundant re-probe that could
 #   swallow a recovery without resetting strikes.
-# v3.2 (2026-09-12): NV lane skips a unit that systemd is already activating
-#   (mirrors the Xe lane) instead of issuing a start on a mid-start unit.
+# v3.2 (2026-09-12): the CUDA lane skips a unit that systemd is already
+#   activating (mirrors the Xe lane) instead of issuing a start on a mid-start unit.
 # v3.3 (2026-09-12): gpu_busy FAILS CLOSED — a failed/empty probe is treated as
 #   BUSY, so the CUDA lane is never started on a GPU we cannot prove free; strike
 #   read/write failures now warn instead of silently disabling recovery; add
 #   --version (also removes the now-unneeded SC2034 suppression for VERSION).
 # v3.4 (2026-09-12): gpu_busy honours gpu-busy.sh's exit contract — exit 1 is a
 #   normal BUSY answer, no longer logged as a probe failure every 60s.
-# v3.5 (2026-09-13): add an NV-ONLY suspend flag
-#   (LLAMA_WATCHDOG_NV_SUSPEND_FILE, default /dev/shm/llama-watchdog-nv.suspend).
+# v3.5 (2026-09-13): add a CUDA-ONLY suspend flag
+#   (LLAMA_WATCHDOG_CUDA_SUSPEND_FILE, default /dev/shm/llama-watchdog-cuda.suspend).
 #   While it exists the CUDA lane is left down (and stopped if up) WITHOUT
 #   touching the Xe lane or this timer.  A bench/autotune run that needs the card
 #   to itself previously had to stop the watchdog outright for its whole duration,
@@ -30,6 +30,15 @@
 #   to false) and --fit can shrink it, both silently; the registry carried
 #   parallel=16 for 34 of 35 rows.  Logged, never acted on: a window mismatch is
 #   not a crash, so it must not consume a strike or restart a lane.
+# v3.7 (2026-09-15): the CUDA lane's internals are card-first.  The old vendor
+#   names — NV_UNIT, NV_PORT, STRIKE_NV, nv_suspended() and NV_SUSPEND_FILE —
+#   become CUDA_UNIT / CUDA_PORT / STRIKE_CUDA / cuda_suspended() /
+#   CUDA_SUSPEND_FILE; the strike and suspend files move to llama-watchdog-cuda.*;
+#   and LLM_NVIDIA_PORT becomes LLM_CUDA_PORT.  "nv" named the VENDOR, not the card
+#   every other artifact in the fleet names, so in a log the two lanes read as one
+#   card under two names; the rename makes the CUDA lane and the Xe lane
+#   distinguishable at a glance, which is the whole point of the card-first scheme
+#   (docs/llm.md).
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -38,14 +47,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line (it is what makes an edit here fail the pre-commit guard until the
 #   number moves).  Deliberately separate from VERSION= below: the marker
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.6"
+VERSION="3.7"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -85,13 +94,13 @@ XE_PORT="$LLM_SERVICE_PORT"
 # systemd resolves a bare name to its .service, and these are used both as
 # `systemctl` arguments and in log lines.
 XE_UNIT="llama-xe-minicpm5-1b-chat"
-NV_PORT="${LLM_NVIDIA_PORT:-18083}"
-NV_UNIT="llama-cuda-llama32-3b-chat"
+CUDA_PORT="${LLM_CUDA_PORT:-18083}"
+CUDA_UNIT="llama-cuda-llama32-3b-chat"
 STRIKE_XE="$WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes"
-STRIKE_NV="$WATCHDOG_STRIKE_DIR/llama-watchdog-nv.strikes"
-# Presence of this file suspends ONLY the CUDA lane (see nv_suspended).  Kept
+STRIKE_CUDA="$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes"
+# Presence of this file suspends ONLY the CUDA lane (see cuda_suspended).  Kept
 # env-overridable like the lock/strike paths so the integration suite sandboxes it.
-NV_SUSPEND_FILE="${LLAMA_WATCHDOG_NV_SUSPEND_FILE:-/dev/shm/llama-watchdog-nv.suspend}"
+CUDA_SUSPEND_FILE="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] $*"; }
 
@@ -191,10 +200,10 @@ gpu_busy() {
 
 bench_lock() { [[ -f "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}" ]]; }
 
-# nv_suspended — the CUDA lane is held down on purpose (a bench/autotune run is
+# cuda_suspended — the CUDA lane is held down on purpose (a bench/autotune run is
 # measuring TPS and wants the card to itself).  Scoped to the CUDA lane only:
 # unlike bench_lock it must NOT suppress Xe recovery.
-nv_suspended() { [[ -f "$NV_SUSPEND_FILE" ]]; }
+cuda_suspended() { [[ -f "$CUDA_SUSPEND_FILE" ]]; }
 
 # wait_healthy <port> <timeout_s> — 0 healthy, 1 not
 wait_healthy() {
@@ -257,65 +266,65 @@ fi
 # ============================================================
 # LANE 2: CUDA card — llama-cuda-llama32-3b-chat — runs only while GPU free
 # ============================================================
-nv_state=$(systemctl --user show "$NV_UNIT.service" -p ActiveState --value 2>/dev/null || true)
-if nv_suspended; then
-    # NV-only suspend: keep the CUDA lane down (and take it down if it is up).
+cuda_state=$(systemctl --user show "$CUDA_UNIT.service" -p ActiveState --value 2>/dev/null || true)
+if cuda_suspended; then
+    # CUDA-only suspend: keep the CUDA lane down (and take it down if it is up).
     # Strikes reset so a resumed lane does not inherit strikes accrued while it
     # was deliberately stopped.
-    if [[ "$nv_state" == "active" ]]; then
-        log "CUDA lane suspended — stopping $NV_UNIT (freeing VRAM; Xe lane serves)"
-        systemctl --user stop "$NV_UNIT.service" 2>/dev/null || true
+    if [[ "$cuda_state" == "active" ]]; then
+        log "CUDA lane suspended — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)"
+        systemctl --user stop "$CUDA_UNIT.service" 2>/dev/null || true
     else
-        log "CUDA lane suspended ($NV_SUSPEND_FILE present) — not starting $NV_UNIT yet"
+        log "CUDA lane suspended ($CUDA_SUSPEND_FILE present) — not starting $CUDA_UNIT yet"
     fi
-    strike_reset "$STRIKE_NV"
+    strike_reset "$STRIKE_CUDA"
 elif gpu_busy; then
     # GPU in use by foreign workload -> Xe lane serves (Wayne policy)
-    if [[ "$nv_state" == "active" ]]; then
-        log "GPU busy — stopping $NV_UNIT (freeing VRAM; Xe lane serves)"
-        systemctl --user stop "$NV_UNIT.service" 2>/dev/null || true
+    if [[ "$cuda_state" == "active" ]]; then
+        log "GPU busy — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)"
+        systemctl --user stop "$CUDA_UNIT.service" 2>/dev/null || true
     fi
-    strike_reset "$STRIKE_NV"
-elif [[ "$nv_state" == "active" ]]; then
-    health "$NV_PORT"; nv_health=$?
-    if (( nv_health == 0 )); then
-        strike_reset "$STRIKE_NV"
-    elif (( nv_health == 2 )); then
+    strike_reset "$STRIKE_CUDA"
+elif [[ "$cuda_state" == "active" ]]; then
+    health "$CUDA_PORT"; cuda_health=$?
+    if (( cuda_health == 0 )); then
+        strike_reset "$STRIKE_CUDA"
+    elif (( cuda_health == 2 )); then
         # Still loading (503) — do not strike or restart the CUDA lane.
         log "CUDA unit still loading (503) — leaving alone"
-        strike_reset "$STRIKE_NV"
+        strike_reset "$STRIKE_CUDA"
     else
-        strike_inc "$STRIKE_NV"
-        s=$(strike_get "$STRIKE_NV")
-        log "CUDA health check failed on :${NV_PORT} (unit=${nv_state}, strike ${s}/2)"
+        strike_inc "$STRIKE_CUDA"
+        s=$(strike_get "$STRIKE_CUDA")
+        log "CUDA health check failed on :${CUDA_PORT} (unit=${cuda_state}, strike ${s}/2)"
         if [[ "$s" -ge 2 ]]; then
-            if recover "$NV_UNIT" "$NV_PORT"; then strike_reset "$STRIKE_NV"; fi
+            if recover "$CUDA_UNIT" "$CUDA_PORT"; then strike_reset "$STRIKE_CUDA"; fi
         fi
     fi
-elif [[ "$nv_state" == "activating" ]]; then
+elif [[ "$cuda_state" == "activating" ]]; then
     # systemd is already bringing the unit up (mirrors the Xe lane): issuing a
     # start would act on a unit that is mid-start.
     log "CUDA unit activating — systemd handling recovery; skipping"
-    strike_reset "$STRIKE_NV"
+    strike_reset "$STRIKE_CUDA"
 else
     # GPU free but CUDA unit not active -> bring it up (it is the preferred lane when free)
     if bench_lock; then
-        log "GPU free but bench lock present — not starting $NV_UNIT yet"
+        log "GPU free but bench lock present — not starting $CUDA_UNIT yet"
     else
-        if [[ "$nv_state" == "failed" ]]; then
-            systemctl --user reset-failed "$NV_UNIT.service" 2>/dev/null || true
+        if [[ "$cuda_state" == "failed" ]]; then
+            systemctl --user reset-failed "$CUDA_UNIT.service" 2>/dev/null || true
         fi
-        log "GPU free and $NV_UNIT not active — starting CUDA lane"
-        if systemctl --user start "$NV_UNIT.service" 2>/dev/null; then
-            if wait_healthy "$NV_PORT" 150; then
-                log "CUDA lane healthy on :${NV_PORT}"
+        log "GPU free and $CUDA_UNIT not active — starting CUDA lane"
+        if systemctl --user start "$CUDA_UNIT.service" 2>/dev/null; then
+            if wait_healthy "$CUDA_PORT" 150; then
+                log "CUDA lane healthy on :${CUDA_PORT}"
             else
-                log "CUDA lane started but not healthy on :${NV_PORT} within 150s"
+                log "CUDA lane started but not healthy on :${CUDA_PORT} within 150s"
             fi
         else
-            log "Failed to start $NV_UNIT"
+            log "Failed to start $CUDA_UNIT"
         fi
-        strike_reset "$STRIKE_NV"
+        strike_reset "$STRIKE_CUDA"
     fi
 fi
 
@@ -323,7 +332,7 @@ fi
 # the check that would have caught the registry's parallel=16 dividing every
 # served window, and that catches a --fit or --parallel drift on a unit.
 window_check "$XE_UNIT" "$XE_PORT"
-window_check "$NV_UNIT" "$NV_PORT"
+window_check "$CUDA_UNIT" "$CUDA_PORT"
 
 exit 0
 

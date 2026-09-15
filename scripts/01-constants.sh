@@ -3,7 +3,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 19
+# Module Version: 20
 # ==============================================================================
 
 # ==============================================================================
@@ -80,7 +80,14 @@ else
 fi
 export LLM_SERVER_MODULE="${LLM_SERVER_MODULE:-llama_cpp.server}"
 export LLAMA_CPP_PYTHON_VERSION="${LLAMA_CPP_PYTHON_VERSION:-0.3.23}"
-export LLM_SERVER_PROC_PATTERN="${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server|llama-xe|llama-embed|llama-nv|llama-phi4|llama-bench}"
+# Process-name detection for llama.cpp servers, deliberately broad: besides the
+# bare binary it matches a server INVOKED under a launcher name, whose argv[0] is
+# the launcher path rather than build/bin/llama-server (true for every lane
+# started before the 2026-09-15 shim change).  `llama-nv` and `llama-phi4` were
+# dropped on 2026-09-15: the first was the vendor spelling of the CUDA lane and
+# the second named the retired Phi-4-mini lane, and neither names anything that
+# exists now.
+export LLM_SERVER_PROC_PATTERN="${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server|llama-xe|llama-embed|llama-bench}"
 # Quantization priority guide — editable config controlling download warnings.
 # See ~/ubuntu-console/config/quant-guide.conf for rating/description of each quant.
 export QUANT_GUIDE="$TACTICAL_REPO_ROOT/config/quant-guide.conf"

@@ -176,7 +176,7 @@ displayed in a box-drawn summary table.
 
 ### Strategy Details
 
-- Locking: serializes runs with `flock` (see `LLM_AUTOTUNE_LOCK_FILE`) to avoid overlapping autotune jobs. To take the **CUDA lane** out of the way while measuring, a run instead creates `LLAMA_WATCHDOG_NV_SUSPEND_FILE` (see below) — narrower than a bench lock, which would also suppress Xe recovery.
+- Locking: serializes runs with `flock` (see `LLM_AUTOTUNE_LOCK_FILE`) to avoid overlapping autotune jobs. To take the **CUDA lane** out of the way while measuring, a run instead creates `LLAMA_WATCHDOG_CUDA_SUSPEND_FILE` (see below) — narrower than a bench lock, which would also suppress Xe recovery.
 - Context strategy: climbs ctx until startup fails, then binary-probes between the last working ctx and the failure point.
 - Candidate pruning: skips risky combos based on free VRAM, model size, and the quant rating from `quant-guide.conf`.
 - Search: a beam search over batch/ubatch at the winning ctx (see `LLM_AUTOTUNE_BEAM_*`); models in the "almost fits" band also sweep n_gpu_layers and KV quant.
@@ -291,7 +291,7 @@ a coin-flip.  Use the card-explicit launchers.
 | `CUDA_STALL_FILE` | `/dev/shm/autotune-degrade-stalls-<boot-id>` | Consecutive-stall counter path |
 | `AUTOTUNE_SPEC_SWEEP` | `1` | `0` skips the spec-decode block-size sweep, which costs four launches per row and is the single largest cycle consumer |
 | `LLM_AUTOTUNE_LOCK_FILE` | `/tmp/llm-autotune.lock` | Run serialization lock path |
-| `LLAMA_WATCHDOG_NV_SUSPEND_FILE` | `/dev/shm/llama-watchdog-nv.suspend` | While this file exists the watchdog keeps the **CUDA** lane (`llama-cuda-llama32-3b-chat.service`) down and stops it if up; the Xe lane and the watchdog's own health checks are untouched. The lane returns automatically when the file is removed |
+| `LLAMA_WATCHDOG_CUDA_SUSPEND_FILE` | `/dev/shm/llama-watchdog-cuda.suspend` | While this file exists the watchdog keeps the **CUDA** lane (`llama-cuda-llama32-3b-chat.service`) down and stops it if up; the Xe lane and the watchdog's own health checks are untouched. The lane returns automatically when the file is removed. Renamed from `LLAMA_WATCHDOG_NV_SUSPEND_FILE` / `...-nv.suspend` on 2026-09-15, when the watchdog's CUDA internals went card-first (`NV_*` → `CUDA_*`); the old path is not honoured |
 | `LLM_ALLOW_AUTOTUNE_DISCOURAGED` | `0` | Allow bench to auto-run autotune for discouraged quants |
 
 ### WSL2 CUDA Cycle Budget (dxgkrnl degradation)

@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
 # ==============================================================================
-# Integration Tests — Llama Watchdog (v3.5, dual-lane)
+# Integration Tests — Llama Watchdog (v3.7, dual-lane)
 # ==============================================================================
-# Tests llama-watchdog.sh v3.5: health probing (including the 503 "loading"
+# Tests llama-watchdog.sh v3.7: health probing (including the 503 "loading"
 # signal), 2-strike recovery, the always-on Xe lane, the GPU-gated CUDA lane,
-# and the v3.5 NV-only suspend flag. All external commands (curl, systemctl,
+# and the v3.5 CUDA-only suspend flag. All external commands (curl, systemctl,
 # gpu-busy.sh) are mocked so the suite is hermetic and never touches the live
 # llama-xe-minicpm5-1b-chat.service.
 # Run: bats tests/integration/04-watchdog.bats
@@ -26,7 +26,7 @@ setup_file() {
     export LLAMA_WATCHDOG_LOCK_FILE="$TAC_TEST_TMPDIR/llama-watchdog.lock"
     export LLAMA_WATCHDOG_STRIKE_DIR="$TAC_TEST_TMPDIR"
     export LLM_BENCH_LOCK_FILE="$TAC_TEST_TMPDIR/llm-bench.lock"
-    export LLAMA_WATCHDOG_NV_SUSPEND_FILE="$TAC_TEST_TMPDIR/llama-watchdog-nv.suspend"
+    export LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$TAC_TEST_TMPDIR/llama-watchdog-cuda.suspend"
     mkdir -p "$WATCHDOG_MOCK_BIN" "$WATCHDOG_MOCK_STATE" "$WATCHDOG_MOCK_HOME/.local/bin"
 
     # v3.0 resolves gpu-busy.sh as $HOME/.local/bin/gpu-busy.sh (GPU_BUSY_SH is
@@ -58,7 +58,7 @@ exit 22
 MOCK
     chmod +x "$WATCHDOG_MOCK_BIN/curl"
 
-    # Mock systemctl --user. `show` reports per-unit state from xe_state/nv_state;
+    # Mock systemctl --user. `show` reports per-unit state from xe_state/cuda_state;
     # restart/start mark the lane healthy (unless fail_restart/fail_start is set);
     # stop and reset-failed record themselves.
     cat > "$WATCHDOG_MOCK_BIN/systemctl" <<'MOCK'
@@ -70,7 +70,7 @@ case "$op" in
     show)
         unit="${1:-}"
         case "$unit" in
-            *cuda*) cat "$SYSTEMCTL_MOCK_STATE/nv_state" 2>/dev/null || echo "inactive" ;;
+            *cuda*) cat "$SYSTEMCTL_MOCK_STATE/cuda_state" 2>/dev/null || echo "inactive" ;;
             *)        cat "$SYSTEMCTL_MOCK_STATE/xe_state" 2>/dev/null || echo "inactive" ;;
         esac
         ;;
@@ -130,8 +130,8 @@ setup() {
     rm -f "$WATCHDOG_MOCK_STATE"/*
     rm -f "$LLAMA_WATCHDOG_LOCK_FILE" \
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes" \
-          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-nv.strikes" 2>/dev/null || true
-    rm -f "$LLM_BENCH_LOCK_FILE" "$LLAMA_WATCHDOG_NV_SUSPEND_FILE" 2>/dev/null || true
+          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes" 2>/dev/null || true
+    rm -f "$LLM_BENCH_LOCK_FILE" "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE" 2>/dev/null || true
     export PATH="$WATCHDOG_MOCK_BIN:$PATH"
 }
 
@@ -147,7 +147,7 @@ setup() {
 @test "integration: watchdog exits cleanly when healthy" {
     touch "$WATCHDOG_MOCK_STATE/healthy"
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
 
     run "$WATCHDOG_SCRIPT"
 
@@ -157,7 +157,7 @@ setup() {
 
 @test "integration: watchdog restarts the Xe lane on the 2nd consecutive failure" {
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
 
     # First failure: strike 1, no restart yet.
     run "$WATCHDOG_SCRIPT"
@@ -175,7 +175,7 @@ setup() {
 
 @test "integration: watchdog leaves a still-loading (503) Xe lane alone" {
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
     touch "$WATCHDOG_MOCK_STATE/loading"
 
     run "$WATCHDOG_SCRIPT"
@@ -192,7 +192,7 @@ setup() {
 
 @test "integration: watchdog leaves a still-loading (503) CUDA lane alone" {
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
     touch "$WATCHDOG_MOCK_STATE/loading"
 
     run "$WATCHDOG_SCRIPT"
@@ -200,12 +200,12 @@ setup() {
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"CUDA unit still loading (503)"* ]]
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
-    [[ "$(cat "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-nv.strikes" 2>/dev/null || echo 0)" == "0" ]]
+    [[ "$(cat "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes" 2>/dev/null || echo 0)" == "0" ]]
 }
 
 @test "integration: watchdog stops the CUDA lane while the GPU is busy" {
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
     touch "$WATCHDOG_MOCK_STATE/busy"
 
     run "$WATCHDOG_SCRIPT"
@@ -220,7 +220,7 @@ setup() {
     # gpu-busy.sh signals BUSY with exit 1 (the JSON goes to stdout). That is a
     # normal answer, so the watchdog must not log its probe-failure warning —
     # otherwise a held GPU spams the journal on every tick.
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
     touch "$WATCHDOG_MOCK_STATE/busy"
 
     run "$WATCHDOG_SCRIPT"
@@ -234,7 +234,7 @@ setup() {
     # exit 2 is a real probe error: the GPU cannot be proven free, so it must be
     # treated as BUSY (CUDA lane stopped) and reported once.
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
     touch "$WATCHDOG_MOCK_STATE/gpu-probe-error"
 
     run "$WATCHDOG_SCRIPT"
@@ -247,7 +247,7 @@ setup() {
 
 @test "integration: watchdog skips the Xe lane when the bench lock is present" {
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
     touch "$LLM_BENCH_LOCK_FILE"
 
     run "$WATCHDOG_SCRIPT"
@@ -257,12 +257,12 @@ setup() {
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
 }
 
-@test "integration: NV suspend keeps the CUDA lane down while the GPU is free" {
+@test "integration: CUDA suspend keeps the CUDA lane down while the GPU is free" {
     # The v3.5 suspend flag is the whole point: hold the CUDA lane down on a GPU
     # the probe reports FREE, because a bench is measuring TPS and wants the card.
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "inactive" > "$WATCHDOG_MOCK_STATE/nv_state"
-    touch "$LLAMA_WATCHDOG_NV_SUSPEND_FILE"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    touch "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
 
     run "$WATCHDOG_SCRIPT"
 
@@ -272,11 +272,11 @@ setup() {
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
 }
 
-@test "integration: NV suspend stops an active CUDA lane and leaves Xe alone" {
+@test "integration: CUDA suspend stops an active CUDA lane and leaves Xe alone" {
     touch "$WATCHDOG_MOCK_STATE/healthy"
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
-    touch "$LLAMA_WATCHDOG_NV_SUSPEND_FILE"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    touch "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
 
     run "$WATCHDOG_SCRIPT"
 
@@ -287,12 +287,12 @@ setup() {
     [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
 }
 
-@test "integration: NV suspend does NOT suppress Xe recovery (unlike bench_lock)" {
-    # bench_lock skips Xe restarts too; the NV-only flag must not, otherwise
+@test "integration: CUDA suspend does NOT suppress Xe recovery (unlike bench_lock)" {
+    # bench_lock skips Xe restarts too; the CUDA-only flag must not, otherwise
     # suspending the CUDA lane would quietly disable Xe self-healing.
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "inactive" > "$WATCHDOG_MOCK_STATE/nv_state"
-    touch "$LLAMA_WATCHDOG_NV_SUSPEND_FILE"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    touch "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
 
     run "$WATCHDOG_SCRIPT"
     run "$WATCHDOG_SCRIPT"
@@ -303,21 +303,21 @@ setup() {
     grep -q "restart llama-xe-minicpm5-1b-chat.service" "$SYSTEMCTL_MOCK_LOG"
 }
 
-@test "integration: NV suspend resets CUDA strikes so a resumed lane starts clean" {
+@test "integration: CUDA suspend resets CUDA strikes so a resumed lane starts clean" {
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "inactive" > "$WATCHDOG_MOCK_STATE/nv_state"
-    printf '2\n' > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-nv.strikes"
-    touch "$LLAMA_WATCHDOG_NV_SUSPEND_FILE"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    printf '2\n' > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes"
+    touch "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
 
     run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
-    [[ "$(cat "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-nv.strikes")" == "0" ]]
+    [[ "$(cat "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes")" == "0" ]]
 }
 
 @test "integration: watchdog skips the Xe lane while systemd is already activating" {
     echo "activating" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
     run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
@@ -328,7 +328,7 @@ setup() {
 @test "integration: watchdog skips the CUDA lane while systemd is already activating" {
     touch "$WATCHDOG_MOCK_STATE/healthy"
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "activating" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "activating" > "$WATCHDOG_MOCK_STATE/cuda_state"
 
     run "$WATCHDOG_SCRIPT"
 
@@ -341,7 +341,7 @@ setup() {
 
 @test "integration: watchdog resets a failed Xe unit before restarting" {
     echo "failed" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
 
     # First failure only strikes; reset-failed happens inside recovery (strike 2).
     run "$WATCHDOG_SCRIPT"
@@ -356,7 +356,7 @@ setup() {
 
 @test "integration: watchdog logs a failed recovery without a non-zero exit" {
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
-    echo "active" > "$WATCHDOG_MOCK_STATE/nv_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
     touch "$WATCHDOG_MOCK_STATE/fail_restart"
     touch "$WATCHDOG_MOCK_STATE/fail_start"
 
