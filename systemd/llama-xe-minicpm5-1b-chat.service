@@ -1,0 +1,28 @@
+[Unit]
+# CARD: Xe (Intel OpenCL)   MODEL: MiniCPM5-1B   FUNCTION: chat/serving
+# The fleet/lane server.  Card is Xe — see docs/llm.md "The two cards".
+Description=llama.cpp server — Xe card, MiniCPM5-1B, chat (port 18081)
+After=network-online.target
+Wants=network-online.target
+# Flood protection: present on every llama unit so a crash-looping lane cannot
+# spin forever (the Xe pair used to lack it).
+StartLimitIntervalSec=600
+StartLimitBurst=6
+
+[Service]
+Environment=LD_LIBRARY_PATH=/home/wayne/llama.cpp/build-opencl/bin
+Environment=GGML_OPENCL_PLATFORM=0
+Environment=GGML_OPENCL_DEVICE=0
+# No ExecStartPre GPU-clear here: that script clears the CUDA card, and this lane
+# is on the Xe card.  The two cards are independent.
+ExecStart=/home/wayne/.local/bin/xe-llama-server -m /mnt/m/active/MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-F16.gguf --port 18081 --host 127.0.0.1 --ctx-size 65536 --batch-size 512 --ubatch-size 512 --threads 8 --n-gpu-layers 99 --parallel 1 --fit off --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off
+Restart=on-failure
+# 5s: an Xe load is quick.  The CUDA lanes use 15s because a 4 GB-card load is not.
+RestartSec=5
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target
+# Historical name, kept so existing callers keep resolving.  New code must use
+# the card-explicit name in the filename.
+Alias=llama-server.service

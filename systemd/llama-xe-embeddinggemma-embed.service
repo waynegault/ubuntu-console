@@ -1,0 +1,27 @@
+[Unit]
+# CARD: Xe (Intel OpenCL)   MODEL: embeddinggemma-300m   FUNCTION: embed
+Description=llama.cpp embedding server — Xe card, embeddinggemma-300m, embed (port 18080)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=6
+
+[Service]
+Environment=LD_LIBRARY_PATH=/home/wayne/llama.cpp/build-opencl/bin
+Environment=GGML_OPENCL_PLATFORM=0
+Environment=GGML_OPENCL_DEVICE=0
+# No ExecStartPre GPU-clear: this lane is on the Xe card, not the CUDA card.
+ExecStart=/home/wayne/.local/bin/xe-llama-embed -m /home/wayne/.node-llama-cpp/models/hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf --embedding --port 18080 --host 127.0.0.1 --ctx-size 2048 --batch-size 2048 --ubatch-size 2048 --n-gpu-layers 99 --alias embeddinggemma --api-key-file /home/wayne/.config/llama/embed-api-keys.txt
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=600
+# The embed server authenticates from --api-key-file; it has no business inheriting the
+# gateway's client-side embedding key from the shared user-manager environment (2026-09-13:
+# key was readable via /proc/<pid>/environ by any same-user process).
+UnsetEnvironment=OPENCLAW_EMBEDDING_API_KEY
+
+[Install]
+WantedBy=default.target
+# Historical name, kept so existing callers (docs, scripts, other agents) keep
+# resolving.  New code must use the card-explicit name in the filename.
+Alias=llama-embed-server.service

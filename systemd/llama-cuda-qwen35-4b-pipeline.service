@@ -1,0 +1,28 @@
+[Unit]
+# CARD: CUDA (NVIDIA)   MODEL: Qwen3.5-4B   FUNCTION: investigator pipeline endpoint
+# This is the endpoint the investigator pipeline points at: their
+# pipeline/benchmark/phases.py sets LLM_SERVER_BASE_URL=http://127.0.0.1:8081.
+# Parked by default (see the enable list in install.sh) — it is started when that
+# pipeline needs it, not at boot.
+#
+# SHARES PORT 8081 with the console's interactive lane (`tac-exec model use`;
+# LLM_PORT in 01-constants.sh).  Only one can bind it, which is correct — one LLM
+# on the CUDA card, ever.  `model use` claims the card and displaces this lane.
+Description=llama.cpp server — CUDA card, Qwen3.5-4B, investigator pipeline (port 8081)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=6
+
+[Service]
+ExecStartPre=/home/wayne/.local/bin/llama-gpu-clear.sh
+ExecStart=/home/wayne/.local/bin/cuda-llama-server -m /mnt/m/active/Qwen3.5-4B.Q4_K_M.gguf --port 8081 --host 127.0.0.1 --ctx-size 16384 --batch-size 1024 --ubatch-size 512 --threads 6 --n-gpu-layers 99 --parallel 1 --fit off --flash-attn on --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target
+# Historical name (it was named after the port).  The investigator repo does not
+# hardcode this one, but keep the alias while the rename settles.
+Alias=llama-server-8081.service
