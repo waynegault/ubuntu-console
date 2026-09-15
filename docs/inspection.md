@@ -56,6 +56,39 @@ to shell-specific checks.
 Usage: Work through each section top-to-bottom. Mark items [x] as you
 go. Items marked 🔧 require code changes; items marked 🔍 are read-only checks.
 
+How to run a full pass (added 2026-09-16, after the first complete one)
+
+A full pass is 252 items and is not one sitting. What worked:
+
+* Split it by section across parallel auditors, then verify every FAIL yourself
+  with the command that produced it. An auditor's report is evidence, not truth:
+  the first full pass produced real findings and also two that did not survive
+  re-running the command that was supposed to prove them.
+* Audit read-only. Fixes land afterwards as their own commits. Editing files while
+  the pass is still reading them makes the remaining sections describe a tree that
+  no longer exists, and any finding touching an edited file must be re-derived.
+* Re-run the pass after fixing. "Fixed" is not "verified fixed".
+
+Four rules the first pass earned:
+
+* **A check whose command cannot run is a FAILURE of the check, not a pass.** Three
+  commands in this document had never executed: 5.4's was a BRE in which `|` is
+  literal, 6.2's had a literal newline inside a character class, and 6.3's was
+  matching 245 arithmetic lines instead of the ~52 subshell openings it aimed at.
+  All three were corrected on 2026-09-16. Treat "grep: Invalid regular expression"
+  or a conspicuously empty result as the finding.
+* **Every clean result needs a control.** Prove the probe CAN fail before believing
+  it passed. Worked example: `bash -n` against `/usr/bin/bash` appeared to confirm
+  the autotune benches parse under Bash 5.2 — but `/usr/bin/bash` is a symlink to
+  the Homebrew bash 5.3.9, so the probe ran the very interpreter it claimed to rule
+  out. A green that cannot go red is worth nothing.
+* **Re-derive every count from the repo.** A number asserted in two places and
+  checked in one drifts in the other — which is why `tools/docs-sync-check.sh`
+  exists, and it caught README's test totals going stale by four on 2026-09-16.
+* **Measure the artefact, not the label.** `/proc/PID/exe` over `comm`,
+  `dpkg --verify` over a version string, `grep -c '^@test'` over a documented
+  test count.
+
 Table of Contents
 
 Pre-Flight
@@ -89,6 +122,8 @@ AI Agent Access — High
 Final Validation
 
 New Insights & Standards (2026-09-12)
+
+Field Notes — the 2026-09-16 pass
 
 1. Pre-Flight
 
@@ -204,6 +239,21 @@ this way (07-telemetry, 09-openclaw and 11-llm-manager need no file-level
 suppression at all). Note `-x`/`external-sources=true` does not help here:
 these are structural cross-module findings (a var owned by another module →
 SC2034/SC2154) that no source-following can resolve.
+
+1.13
+
+🔍 Host shell integrity
+
+`ls -la /usr/bin/bash /bin/bash; dpkg --verify bash`
+
+`/usr/bin/bash` should be the PACKAGED bash that dpkg owns. If it is a symlink
+somewhere else, `dpkg --verify bash` reports `M` for that path and every script on
+the box is running a substituted interpreter — and an `apt upgrade bash` (or a
+reinstall) will silently restore the packaged one, changing which bash the console,
+its hooks and its benches all run. Measured 2026-09-16: `/usr/bin/bash` and
+`/bin/bash` both point at `/home/linuxbrew/.linuxbrew/bin/bash` (Homebrew 5.3.9)
+while dpkg owns `bash 5.2.21-2ubuntu4`. A substitution like that is acceptable only
+as a known, deliberate choice — it must never be a surprise.
 
 2. Security — Critical
 
@@ -901,9 +951,15 @@ Critical paths have explicit default values
 
 🔍 Error messages to stderr
 
-grep -n 'echo.*error|printf.*error' <file>
+`grep -rnE '(echo|printf)[^;]*(\[FAIL\]|Error:|ERROR:)' <file> | grep -v '>&2'`
 
-Error output uses >&2
+Diagnostics in STANDALONE scripts go to stderr. Two deliberate exemptions, both
+verified 2026-09-16: this repo's UI engine renders to stdout by design, so the
+styled `[FAIL]`/`[WARN]` lines in the sourced modules ARE the interface and moving
+them to stderr changes what callers capture; and `install.sh`'s `[WARNING]` lines
+are progress output, not errors. Read the hits and judge them — do not expect zero.
+The previous command here was a BRE, in which `|` is literal, so it matched nothing
+and could never fail.
 
 5.5
 
@@ -935,7 +991,12 @@ All file reads preceded by [[ -f "$file" ]] guard
 
 grep -n '\bcd\b' <file>
 
-All cd calls use cd ... || return (or || exit) to prevent operating in wrong directory
+No `cd` may silently proceed in the wrong directory. `|| return` / `|| exit` is the
+usual remedy — but check what follows before applying it: where the continuation is
+load-bearing, ending the shell is worse than the wrong cwd. The stdin keeper in
+`scripts/11e-llm-model.sh` is the worked example (2026-09-16) — exiting the subshell
+closes fd 3 and EOFs llama-server's stdin, so the fix creates the directory and
+reports instead. The requirement is that the failure be neither silent nor fatal.
 
 5.9
 
@@ -943,7 +1004,11 @@ All cd calls use cd ... || return (or || exit) to prevent operating in wrong dir
 
 grep -n 'pipefail' <file>
 
-Either set -o pipefail is active OR each pipe segment is explicitly checked
+Applies to STANDALONE scripts only: `set -o pipefail` must NOT be set in a sourced
+module, where it leaks into the user's interactive shell. For modules the
+requirement is that the segment whose status matters is captured explicitly —
+`${PIPESTATUS[0]}`, with `scripts/04-aliases.sh:212` as the reference. "pipefail
+absent" in `scripts/` is therefore correct behaviour, not a finding.
 
 5.10
 
@@ -1015,17 +1080,25 @@ Replaced with native Bash ${var//find/replace} or ${var#prefix}
 
 🔧 No Useless Use of Cat (UUOC)
 
-`grep -nE 'cat [^
+`grep -nE '\bcat [^|]*\|[[:space:]]*[a-z]' <file>`
 
-]*|' `
+No `cmd <file> | cmd` where `<file` or `<<<` would do. Expect **two known false
+positives**, not zero: `journalctl --output=cat | grep` (`scripts/09a-oc-gateway.sh:488`,
+where `cat` is a flag value) and a usage comment (`scripts/11f-llm-runtime.sh:691`).
+The previous command here had a literal newline inside its character class plus an
+empty alternative, so grep rejected it rather than reporting anything.
 
 6.3
 
 🔧 No unnecessary subshells
 
-grep -nE '^\s*\(' <file>
+`grep -nE '^\s*\([^(]' <file>`
 
-{ } grouping where subshell isn't needed
+`{ }` grouping where a subshell is not needed. The `[^(]` is what makes this
+discriminating: `^\s*\(` alone also matches every `(( ... ))` arithmetic line — 245
+of them at the 2026-09-16 audit, against 52 real subshell openings. Most of the 52
+are justified (background groups, `( trap ... EXIT; ... )`, `( umask 077; ... )`),
+so read the hits rather than counting them.
 
 6.4
 
@@ -1129,6 +1202,14 @@ head -1 <file>
 #!/usr/bin/env bash
 ```
 
+`#!/usr/bin/env bash` for every executable; a sourced module uses
+`# shellcheck shell=bash` and no shebang. A machine-specific absolute interpreter
+path — `#!/home/linuxbrew/.linuxbrew/bin/bash` — needs a stated reason in the file
+or the commit, and is justified only when the script genuinely needs that
+interpreter: check for a version-specific construct before assuming it does. Note
+also that a shebang is IGNORED whenever the caller runs `bash <script>`, which is
+how every in-repo caller of the autotune benches invokes them (added 2026-09-16).
+
 7.2
 
 🔍 GNU extensions documented
@@ -1149,9 +1230,15 @@ Minimum required Bash version stated (e.g., 5.1+ for ${var@Q}, mapfile -d)
 
 🔍 WSL-specific paths guarded
 
-grep -nE '/mnt/[c-z]|wslpath|wsl\.exe|clip\.exe|pwsh\.exe' <file>
+grep -rnE '/mnt/[c-z]|wslpath|wsl\.exe|clip\.exe|pwsh\.exe' --include='*.sh' .
 
-WSL interop calls wrapped in a WSL detection guard (e.g., [[ -n "${WSL_DISTRO_NAME:-}" ]])
+Every interop call must fail predictably off-WSL. Two acceptable forms, in this
+order of preference: an explicit detection guard (`[[ -n "${WSL_DISTRO_NAME:-}" ]]`,
+or `grep -qi microsoft /proc/version` as `scripts/09f-oc-misc.sh:157` does), or an
+availability probe on the binary itself (`command -v pwsh.exe`), which is what most
+call sites use because it answers the question that matters — can this call work at
+all. What is NOT acceptable is an unconditional `/mnt/c` path. Measured 2026-09-16:
+one site detects WSL; the rest rely on availability probes.
 
 7.5
 
@@ -2506,5 +2593,68 @@ A bench stops after 2 consecutive case *errors* (exception, timeout, empty gener
 PYTHONPATH=scripts python3 -m kgraph --update --repo .; PYTHONPATH=scripts python3 -m kgraph --wiring --repo .
 
 The update completes with a node/edge count, and wiring reports 0 orphans, 0 broken internal imports, 0 weak-wiring-only-from-tests, 0 unused facades, 0 cross-file call gaps.
+
+18. Field Notes — the 2026-09-16 pass
+
+Read this before starting the next pass: what the checklist itself got wrong, what
+is deliberately not worth fixing, and what was still open when this pass ended.
+
+18.1 Checks corrected as a result
+
+  5.4   the command was a BRE (in which `|` is literal) and could never match
+        anything; replaced, and the UI-engine's stdout rendering exempted
+  5.8   the literal remedy (`|| exit`) is harmful where the continuation is
+        load-bearing; the requirement is now "neither silent nor fatal"
+  5.9   scope narrowed to standalone scripts — pipefail in a sourced module leaks
+        into the user's interactive shell; `${PIPESTATUS[0]}` is the module idiom
+  6.2   the command had a literal newline inside its character class and the item
+        had no expected outcome at all; both supplied
+  6.3   the command matched `(( ))` arithmetic; `[^(]` makes it discriminating
+  7.4   both acceptable guard forms stated, ranked — an availability probe on the
+        binary is legitimate, not a lesser substitute
+
+18.2 Open findings — verified, not yet fixed
+
+  * `scripts/spec-decode-bench.sh` has no consecutive-error abort (item 17.15). It
+    coerces a non-numeric token count to 0, so a curl timeout or an empty generation
+    is scored as a zero and the bench continues through every remaining prompt.
+    `autotune-model.sh`'s `CUDA_DEGRADE_CONSECUTIVE_STALLS` counts health-never-ready
+    stalls — a different signal from case errors. This is the bench fail-fast rule
+    with one implementation for the autotune bench and none for the spec benches.
+  * Suppression residue (item 17.1): 68 occurrences across 36 files, 30 of them in
+    `.bats`. The Python residue is cleared — zero `# noqa` / `# type: ignore`. Most
+    of what remains is the SC2034/SC2154 class, and that is not a directive problem:
+    see 1.12, these are structural cross-module findings. `tools/lint.sh` lints each
+    file as its own entry, so a module's interface looks unused to itself. The fix is
+    to lint the module graph from a generated entry that sources the modules by
+    literal name — and note that linting `env.sh` alone does NOT achieve it, because
+    its module loop is `source "$_tac_lib_f"`, which shellcheck cannot follow.
+  * Item 7.4: only one call site actually detects WSL (`09f-oc-misc.sh:157`). The
+    rest rely on `command -v pwsh.exe`-style probes, which the corrected item now
+    accepts. Left as-is deliberately.
+
+18.3 Migration backlog — count it, do not fix it during a correctness pass
+
+  Five items are repo-wide style migrations rather than defects. They were
+  deliberately not actioned in the 2026-09-16 pass, because the churn would have
+  buried the findings that mattered. Baselines, measured that day:
+
+    6.1   sed/awk/grep on non-comment lines ....................... 230
+    6.4   `while read` where `mapfile -t` applies ................... 6
+    6.7   single-bracket `[ ]` ..................................... 20
+    6.8   `[[ n -gt m ]]` where `(( ))` applies ................... 245
+    6.9   `echo "$var" | cmd` where `<<<` applies .................. 78
+
+  This belongs in a ratchet — a guard that fails when the count RISES — not in a
+  per-pass to-do list. A number with no owner and no enforcement only grows.
+
+18.4 Checks this pass added
+
+  * 1.13 — host shell integrity. `/usr/bin/bash` may not be the packaged bash.
+  * 7.1 — a machine-specific absolute interpreter path in a tracked file now needs a
+    stated reason; `#!/usr/bin/env bash` is the default. The two benches carrying
+    `#!/home/linuxbrew/.linuxbrew/bin/bash` were switched on 2026-09-16: nothing in
+    them needs more than 5.2, and every caller runs `bash <script>`, so the shebang
+    was never read in the first place.
 
 <!-- end of file -->
