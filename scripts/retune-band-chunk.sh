@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # ==============================================================================
 # retune-band-chunk.sh — run ONE chunk of the threshold-band re-tune.
 #
@@ -21,6 +21,11 @@
 #   * /dev/shm is wiped by a WSL restart, so the suspension file must be re-set
 #     after every reboot.  That is the step that is easy to forget, so it lives
 #     here next to the run.
+#   * the suspension is scoped to a CHUNK and released on the way out.  It used
+#     to be left behind, which held the CUDA lane down for as long as nobody
+#     remembered to delete the file — the same "silently down" failure the flag
+#     exists to prevent.  If a bench lock survived a failed batch, the watchdog
+#     still holds the lane down on its own.
 #
 # The chunk size is small (2 rows) on purpose: the WSL2 dxgkrnl context-cycle
 # budget (CUDA_CYCLE_BUDGET=60, boot-scoped) is consumed by every bench spawn,
@@ -62,7 +67,11 @@ rc=$?
 
 echo
 echo "[retune] batch exit=${rc} ; cycle budget after: $(cycle_now)/60"
-echo "[retune] the lane stays suspended until the file is removed (a WSL restart wipes /dev/shm)"
+if rm -f "$SUSPEND" 2>/dev/null; then
+    echo "[retune] CUDA lane released ($SUSPEND removed) - the watchdog may start it again"
+else
+    echo "[retune] WARNING: could not remove $SUSPEND - the CUDA lane stays down" >&2
+fi
 exit "$rc"
 
 # end of file
