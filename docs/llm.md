@@ -202,6 +202,16 @@ else `~/investigator/production/runtime/gpu.lock`. The probe is
 failed probe as "held" would refuse every run on a box that never took the lock.
 `docs/AGENT-GUIDELINES.md` has the agent-facing check.
 
+**What "free" does and does not mean.**  The flock is a *claim*: it is how an
+investigator run says it has taken the card, and it is the only signal that can,
+because a shared build makes their server and ours indistinguishable by name or by
+exe.  It is therefore only as strong as their coverage — the investigator's
+GPU-LOCK-COVERAGE-001 records that not every one of their entry points claims it yet
+(the per-role benchmark and the serve/CLI paths are unverified).  Read "free" as
+**"no claiming investigator run"**, never as "no investigator run": if a CUDA
+llama-server appears on this card without a `cuda-owned-by-another-run` reason, that
+is their coverage gap, not a fault in this probe.
+
 **Both directions are now closed.** The guard stops the console *killing* a
 foreign run, and it also stops the CUDA lane from *starting* while one holds the
 card: `llama-gpu-clear.sh` refuses — the ExecStartPre fails, so the unit does not

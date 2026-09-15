@@ -489,6 +489,21 @@ Convenience symlinks, so nobody assumes a bare `llama-server` is a lane:
 `xe-llama-server`/`xe-llama-embed` → `build-opencl`, `llama-server`/`llama-cli` →
 `~/.local/opt/llama.cpp/b9371`.
 
+Checked again 2026-09-15, because the repoint marker made this read like a live
+divergence: it is **history, not current state**.  The CUDA lane's pointer and the bench
+wrapper agree — both `build/bin/llama-server` — the symlink was re-pointed back from
+`build-cuda133` on 2026-09-14 18:09, and the running lane's own `/proc/PID/exe` is
+`build/bin/llama-server` (the investigator's engine-identity field reports b10955 /
+2f539596c for it).
+
+One hazard survives that check: `cuda-llama-bench` is a **path-pinned wrapper** (Hal,
+2026-09-11) whose `REAL` is a literal path, so a future repoint of the lane's symlink
+would silently leave the bench measuring the old build.  Its only caller is the
+investigator's screen, whose rows now record the engine they actually ran
+(BENCH-ENGINE-ID-001), so the divergence is observable rather than silent.  A check on
+this side that the lane pointer and the wrapper still agree is the remaining gap — it
+belongs with versioning the launcher/shim set.
+
 Provenance note: `LLAMA-CPP-SOURCE-COMMIT.txt` exists in **`build-opencl/` only** (it records
 the tarball sha and the lane). `build/` has no such file — its exact configure line is
 recoverable from `build/CMakeCache.txt` (`GGML_CUDA=ON`, `GGML_CUDA_FA_QUANTS` = the four
