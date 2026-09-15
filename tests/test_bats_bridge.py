@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import signal
@@ -232,17 +233,24 @@ def _run_and_cache_bats(bats_file: Path, timeout_s: int, test_name: str | None =
 # ── Generate one pytest test per individual BATS @test block ──────────────
 
 _INDIVIDUAL_TESTS: list[tuple[str, str, int]] = []  # (stem, test_name, timeout_s)
+# stem -> file, resolved in ONE pass.  `_make_test` used to search with a recursive
+# glob per test (654 of them); `**/` walks the whole repo, so the search was already
+# wasteful and making it deterministic with sorted() turned that into 654 full-tree
+# walks — collection appeared to hang.  Every BATS file comes from the suite
+# patterns above, and stems are unique, so one indexed pass is exact.
+_BATS_BY_STEM: dict[str, Path] = {}
 
 for _pattern, _marker, _timeout in _BATS_SUITE_DEFS:
     for _p in sorted(REPO_ROOT.glob(_pattern)):
         _stem = _p.stem
+        _BATS_BY_STEM.setdefault(_stem, _p)
         for _tname in _parse_bats_tests(_p):
             _INDIVIDUAL_TESTS.append((_stem, _tname, _timeout))
 
 
 def _make_test(stem: str, test_name: str, timeout_s: int):
     """Generate a pytest test function for a single BATS test case."""
-    bats_file = next(p for p in REPO_ROOT.glob(f"**/{stem}.bats"))
+    bats_file = _BATS_BY_STEM[stem]
 
     def _test():
         results = _run_and_cache_bats(bats_file, timeout_s, test_name=test_name)
@@ -262,17 +270,26 @@ def _make_test(stem: str, test_name: str, timeout_s: int):
     # Sanitize: VS Code's vscode_pytest plugin chokes on test IDs with
     # spaces, colons, slashes, asterisks, or other special characters.
     safe_stem = re.sub(r'[^a-zA-Z0-9_]', '_', stem)
-    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', test_name[:60])
-    safe_name = re.sub(r'_+', '_', safe_name).strip('_')
+    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', test_name)
+    safe_name = re.sub(r'_+', '_', safe_name).strip('_') or "unnamed"
 
-    # Ensure uniqueness: if the truncated name collides with an existing
-    # function, append a counter suffix.
-    _base = f"test_{safe_stem}_{safe_name}"
-    _final = _base
-    _counter = 1
-    while _final in globals():
-        _final = f"{_base}_{_counter}"
-        _counter += 1
+    # Long names are truncated for readability, but the truncation must NOT be the
+    # only thing distinguishing two tests.  It used to be: the name was cut at 60
+    # characters and a collision was broken by an appended counter, which depends on
+    # DEFINITION ORDER.  Two consequences, both real:
+    #   * inserting a test whose truncated name shared a prefix renumbered unrelated
+    #     tests, so a saved node id could silently point at a DIFFERENT test
+    #     (12-gpu-exclusivity has such a pair today);
+    #   * any rename changed the id, so an editor's cached node id went stale — on
+    #     2026-09-15 VS Code asked for `..._is_no`, a 60-character cut of a name that
+    #     no longer existed, and its test runner errored out.
+    # A digest of the FULL name makes every id depend only on the file stem and the
+    # test's own name: unique, order-independent, and still readable.
+    if len(safe_name) > 60:
+        _digest = hashlib.sha1(test_name.encode("utf-8")).hexdigest()[:8]
+        safe_name = f"{safe_name[:60]}_{_digest}"
+
+    _final = f"test_{safe_stem}_{safe_name}"
 
     # Expose BATS file and timeout for conftest's lock fixture
     setattr(_test, "_bats_file", bats_file)
@@ -297,4 +314,55 @@ def _get_marker_for_timeout(timeout_s: int) -> pytest.MarkDecorator:
 
 for _stem, _tname, _timeout in _INDIVIDUAL_TESTS:
     _fn = _make_test(_stem, _tname, _timeout)
+    if _fn.__name__ in globals():
+        # Ids are unique by construction (unique file stems + a digest of the full
+        # name), so this can only fire if two @test blocks in one file share a name —
+        # where a silent overwrite would drop one of them from the suite entirely.
+        raise RuntimeError(
+            f"duplicate generated test id {_fn.__name__!r}: two @test blocks in one "
+            f"file share a name. Give them distinct names — the id is derived from "
+            f"stem + name, so a duplicate collides and would silently overwrite."
+        )
     globals()[_fn.__name__] = _fn
+
+
+# ── The generated ids are an interface: keep them unique and order-independent ──
+# VS Code's test explorer, `pytest <node-id>`, and every saved "run this test"
+# action key off these strings.  They were derived from a 60-character cut plus a
+# position-dependent counter, which is what broke on 2026-09-15.
+
+def _generated_tests() -> dict[str, Any]:
+    """The bridge's generated per-BATS-case tests (identified by their attributes)."""
+    return {
+        name: obj
+        for name, obj in globals().items()
+        if name.startswith("test_") and callable(obj) and hasattr(obj, "_bats_file")
+    }
+
+
+def test_bridge_generates_one_distinct_test_per_bats_case() -> None:
+    """Every @test block gets its own id — no silent overwrite."""
+    generated = _generated_tests()
+    assert len(generated) == len(_INDIVIDUAL_TESTS), (
+        f"{len(_INDIVIDUAL_TESTS)} BATS cases but {len(generated)} generated tests: "
+        f"ids collided and one test overwrote another"
+    )
+
+
+def test_bridge_long_name_ids_carry_a_digest_of_the_full_name() -> None:
+    """A truncated id still depends on the WHOLE name, not on definition order.
+
+    Two of these names share their first 60 characters, so a bare truncation makes
+    the id ambiguous and the tie-break was previously "whichever is defined first".
+    """
+    generated = _generated_tests()
+    checked = 0
+    for stem, test_name, _timeout in _INDIVIDUAL_TESTS:
+        safe_name = re.sub(r"_+", "_", re.sub(r"[^a-zA-Z0-9_]", "_", test_name)).strip("_")
+        if len(safe_name) <= 60:
+            continue
+        digest = hashlib.sha1(test_name.encode("utf-8")).hexdigest()[:8]
+        expected = f"test_{re.sub(r'[^a-zA-Z0-9_]', '_', stem)}_{safe_name[:60]}_{digest}"
+        assert expected in generated, f"missing generated id {expected!r} for {test_name!r}"
+        checked += 1
+    assert checked, "expected some BATS test names longer than 60 characters"

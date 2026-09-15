@@ -412,7 +412,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (994 total tests: 654 BATS + 340 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (996 total tests: 654 BATS + 342 Python).
 
 ### Running Tests
 
