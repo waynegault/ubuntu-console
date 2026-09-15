@@ -1,6 +1,6 @@
 #!/home/linuxbrew/.linuxbrew/bin/bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -47,6 +47,11 @@ read -r -a MODEL_ARRAY <<< "$MODELS"
 TOTAL=${#MODEL_ARRAY[@]}
 COUNT=0
 HALT_REASON=""
+# Only an exhausted adapter (cycle budget) or a degraded paravirtualization is
+# fixed by restarting WSL — and a restart also clears the boot-scoped cycle
+# ledger.  The footer therefore distinguishes the halt reasons instead of
+# printing "wsl --shutdown" for a deliberate chunk-cap stop (2026-09-15).
+HALT_NEEDS_WSL_RESTART=0
 
 # --- WSL2 dxgkrnl cycle-budget knobs ---
 # The leak is proportional to the number of CUDA context create/destroy cycles;
@@ -153,6 +158,7 @@ for ((i = 0; i < TOTAL; i++)); do
     _cyc=$(cuda_cycles)
     if [[ "$_cyc" =~ ^[0-9]+$ ]] && [[ "$_cyc" -ge "$CUDA_CYCLE_BUDGET" ]]; then
         HALT_REASON="CUDA context-cycle budget reached (${_cyc} >= ${CUDA_CYCLE_BUDGET})"
+        HALT_NEEDS_WSL_RESTART=1
         break
     fi
     if [[ "$MAX_MODELS_PER_CHUNK" -gt 0 && "$COUNT" -ge "$MAX_MODELS_PER_CHUNK" ]]; then
@@ -179,6 +185,7 @@ for ((i = 0; i < TOTAL; i++)); do
     drain_vram
     if ! check_wsl_gpu_health; then
         HALT_REASON="WSL2 GPU paravirtualization degraded"
+        HALT_NEEDS_WSL_RESTART=1
         break
     fi
 done
@@ -190,7 +197,11 @@ if [[ -n "$HALT_REASON" ]]; then
     echo "=== HALTED: ${HALT_REASON} ==="
     if [[ ${#REMAINING[@]} -gt 0 ]]; then
         echo "  remaining models: ${REMAINING[*]}"
-        echo "  resume:  wsl --shutdown (from Windows), then:"
+        if [[ "$HALT_NEEDS_WSL_RESTART" == 1 ]]; then
+            echo "  resume:  wsl --shutdown (from Windows), then:"
+        else
+            echo "  resume:"
+        fi
         echo "    bash ~/ubuntu-console/scripts/run-autotune-batch.sh ${REMAINING[*]}"
         echo "  (or run with no args to auto-resume every still-untuned model)"
     fi
