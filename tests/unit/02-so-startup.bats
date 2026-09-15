@@ -75,4 +75,34 @@ EOF
     [[ "$output" == *"Local LLM offline and no models available"* ]]
 }
 
+# A hold disables gateway-guard.sh's recovery, so an orphaned one leaves the
+# gateway down with nothing to bring it back — and nothing logs it.  `so` clears
+# one, but ONLY past the guard's own age limit: a younger hold belongs to a
+# maintenance/compaction script that is mid-flight, and the guard is honouring it
+# deliberately.  The threshold is the guard's variable so there is one policy.
+@test "so: a fresh gateway hold is left alone (a maintenance script may own it)" {
+    mkdir -p "$TAC_TEST_TMPDIR/oc"
+    export OC_ROOT="$TAC_TEST_TMPDIR/oc"
+    touch "$OC_ROOT/.gateway-hold"
+
+    run __so_check_stale_hold
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"recovery guard deliberately paused"* ]]
+    [ -e "$OC_ROOT/.gateway-hold" ]
+}
+
+@test "so: a stale gateway hold is cleared (the guard cannot recover while it exists)" {
+    mkdir -p "$TAC_TEST_TMPDIR/oc"
+    export OC_ROOT="$TAC_TEST_TMPDIR/oc"
+    export OPENCLAW_GUARD_HOLD_MAX_AGE=600
+    touch -d '700 seconds ago' "$OC_ROOT/.gateway-hold"
+
+    run __so_check_stale_hold
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"STALE HOLD"* ]]
+    [ ! -e "$OC_ROOT/.gateway-hold" ]
+}
+
 # end of file

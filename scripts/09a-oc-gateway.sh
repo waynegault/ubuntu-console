@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -45,6 +45,38 @@ function __so_show_errors() {
             printf '%s\n' "    ${C_Dim}${_line}${C_Reset}"
         done <<< "$_errors"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# __so_check_stale_hold — Clear a hold file left behind by a dead maintenance run.
+# Returns 0 if a stale hold was cleared, 1 if there is nothing to clear.
+#
+# A hold (`$OC_ROOT/.gateway-hold`) disables gateway-guard.sh's recovery, so one
+# left behind by a run that died leaves the gateway down with nothing to bring it
+# back — no crash and no log line, which is why it is worth surfacing from `so`,
+# the command you reach for when things are down.
+#
+# The AGE is the safety property: a hold younger than the guard's own limit is a
+# maintenance/compaction script mid-flight, and the guard is honouring it
+# deliberately, so it must not be touched.  Only a hold past that limit can be one
+# nothing owns.  The limit is read from the guard's own variable, so there is ONE
+# threshold shared with the guard rather than two that can disagree.
+# ---------------------------------------------------------------------------
+function __so_check_stale_hold() {
+    local _hold="${OC_ROOT:-$HOME/.openclaw}/.gateway-hold"
+    [[ -e "$_hold" ]] || return 1
+    local _limit="${OPENCLAW_GUARD_HOLD_MAX_AGE:-600}"
+    local _now _mtime _age
+    _now=$(date +%s)
+    _mtime=$(stat -c %Y "$_hold" 2>/dev/null || echo 0)
+    _age=$(( _now - _mtime ))
+    if (( _age <= _limit )); then
+        __tac_info "Gateway" "[hold present ${_age}s — recovery guard deliberately paused]" "$C_Dim"
+        return 1
+    fi
+    __tac_info "Gateway" "[STALE HOLD ${_age}s — recovery guard disabled, clearing]" "$C_Warning"
+    rm -f "$_hold"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -543,7 +575,9 @@ function so() {
         # Pre-flight: clear wslrelay port conflicts (WSL2 networking issue)
         __so_clear_wslrelay "$OC_PORT"
 
-        # Pre-flight: clear stale state
+        # Pre-flight: clear an orphaned recovery hold (the guard cannot recover
+        # while one is present), then stale systemd state.
+        __so_check_stale_hold
         __so_clear_stale_state "$_svc"
 
         # Pre-flight: free port if held
