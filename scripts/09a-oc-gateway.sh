@@ -1,8 +1,7 @@
 # shellcheck shell=bash
-# shellcheck disable=SC1091,SC2154
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -10,6 +9,21 @@
 # @depends: constants, design-tokens, ui-engine, hooks, llm-registry, llm-server,
 #   llm-gpu, llm-runtime
 # @exports: so, __oc_safe_gateway_shutdown
+
+# Globals assigned by sibling modules at source time, named here instead of
+# relying on a file-wide `disable=SC2154` (removed 2026-09-15): shellcheck lints
+# each module in isolation and cannot see an assignment made elsewhere, so the
+# module declares what it consumes.
+#   colours — 03-design-tokens.sh (as `readonly`)
+# `:=` assigns ONLY when the variable is unset, so this is a runtime no-op and is
+# safe against the `readonly` in 03 (a plain C_Dim="$C_Dim" would abort).
+: "${C_Text:=}"
+: "${C_Reset:=}"
+: "${C_Dim:=}"
+: "${C_Warning:=}"
+: "${C_Error:=}"
+: "${C_Success:=}"
+: "${C_Highlight:=}"
 
 # __so_show_errors — Extract and display the most recent gateway errors.
 # Pulls the last 30 log lines and shows up to 5 matching error patterns.
@@ -40,7 +54,7 @@ function __so_show_errors() {
 function __so_check_healthy() {
     if __test_port "$OC_PORT"
     then
-        if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1 && __test_port "${LLM_PORT:-8081}"
+        if __llm_server_running && __test_port "${LLM_PORT:-8081}"
         then
             __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT]" "$C_Success"
         else
@@ -195,6 +209,10 @@ function __so_push_api_keys() {
             __tac_info "Security" "[SKIP api keys - unsafe permissions $_file_perms]" "$C_Warning"
             return 1
         fi
+        # Runtime-generated cache file: it does not exist at lint time and cannot,
+        # so shellcheck is told not to read it rather than the whole file being
+        # exempted from SC1091.
+        # shellcheck source=/dev/null
         source "$TAC_CACHE_DIR/tac_win_api_keys" 2>/dev/null || {
             __tac_info "Security" "[SKIP api keys - source failed]" "$C_Warning"
             return 1
@@ -284,7 +302,7 @@ function __so_ensure_llm_running() {
         __tac_info "Local LLM" "[SERVICE START FAILED — falling back to port $LLM_PORT]" "$C_Warning"
     fi
 
-    if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1 && __test_port "$LLM_PORT"
+    if __llm_server_running && __test_port "$LLM_PORT"
     then
         # LLM already running — show which model
         local _so_active_num=""
@@ -519,7 +537,7 @@ function so() {
     then
         _gateway_already_running=1
         # Check if LLM is also running
-        if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1 && __test_port "${LLM_PORT:-8081}"
+        if __llm_server_running && __test_port "${LLM_PORT:-8081}"
         then
             __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT]" "$C_Success"
             __tac_info "Gateway" "[RUNNING on PORT $OC_PORT]" "$C_Success"

@@ -1,14 +1,26 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2154
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
 # @modular-section: openclaw
 # @depends: constants, design-tokens, ui-engine, hooks, oc-gateway, llm-runtime
 # @exports: xo, oc, oc-restart, ocstart, ocstop, oc-purge
+
+# Globals assigned by sibling modules at source time, named here instead of
+# relying on a file-wide `disable=SC2154` (removed 2026-09-15): shellcheck lints
+# each module in isolation and cannot see an assignment made elsewhere, so the
+# module declares what it consumes.
+#   colours — 03-design-tokens.sh (as `readonly`)
+# `:=` assigns ONLY when the variable is unset, so this is a runtime no-op and is
+# safe against the `readonly` in 03 (a plain C_Dim="$C_Dim" would abort).
+: "${C_Reset:=}"
+: "${C_Dim:=}"
+: "${C_Error:=}"
+: "${C_Success:=}"
+: "${C_Highlight:=}"
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
@@ -41,7 +53,7 @@ function xo() {
     # auto-die with the gateway. Otherwise a subsequent process (e.g.
     # investigator ingest) finds only ~150 MB free and fails to load its
     # embedder.
-    if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1; then
+    if __llm_server_running; then
         printf '%s\n' "${C_Dim}Stopping LLM server ...${C_Reset}"
         halt 2>/dev/null || true
     fi

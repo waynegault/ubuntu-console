@@ -1,8 +1,7 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2154
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -10,7 +9,18 @@
 # @depends: constants, design-tokens, ui-engine, hooks, telemetry, llm-registry
 # @exports: __llm_active_entry, __llm_is_healthy, __llm_server_running,
 #   __llm_server_stop, __llm_python_bin_resolve, __llm_health_timeout,
-#   __llm_burn_request_timeout, __llm_wait_for_health, __llm_quant_rating
+#   __llm_burn_request_timeout, __llm_wait_for_health, __llm_quant_rating,
+#   __llm_proc_is_server, __llm_server_pids
+
+# Globals assigned by sibling modules at source time, named here instead of
+# relying on a file-wide `disable=SC2154` (removed 2026-09-15): shellcheck lints
+# each module in isolation and cannot see an assignment made elsewhere, so the
+# module declares what it consumes.
+#   colours — 03-design-tokens.sh (as `readonly`)
+# `:=` assigns ONLY when the variable is unset, so this is a runtime no-op and is
+# safe against the `readonly` in 03 (a plain C_Dim="$C_Dim" would abort).
+: "${C_Dim:=}"
+: "${C_Reset:=}"
 
 # ---- Named constants for model size thresholds (in tenths of GB) ----
 # Idempotent include guard: sub-modules are sourced both by their thin
@@ -60,26 +70,72 @@ function __llm_is_healthy() {
 
 # ---------------------------------------------------------------------------
 # __llm_server_running / __llm_server_stop — Backend process helpers.
-# Supports both legacy llama-server and llama-cpp-python server module names.
+#
+# A llama backend is identified by the ARTEFACT it runs (/proc/PID/exe), not by
+# its command line.  Command-line matching was the old way, and it is unfaithful
+# in both directions:
+#
+#   * it matches processes that are not the backend — ANY process whose argv
+#     merely mentions the pattern.  On 2026-09-15 a human's
+#     `grep -iE 'llama|autotune'` was read as a bench workload and the watchdog
+#     stopped a healthy CUDA lane; the same shape in this module would have made
+#     `__llm_server_running` report a server that does not exist;
+#   * it misses the backend itself once a card launcher is involved — the
+#     launchers `exec` the build binary, so the command line and comm are
+#     `llama-server` with nothing card- or launcher-specific left in them.
+#
+# exe is the artefact that is actually running and an argument cannot forge it.
+# The one shape it cannot show is the python backend
+# (`python3 -m llama_cpp.server`), whose exe is the interpreter — so the module
+# name is read from the command line for an interpreter exe ONLY.
 # ---------------------------------------------------------------------------
+function __llm_proc_exe() { readlink -f "/proc/${1}/exe" 2>/dev/null; }
+
+# __llm_proc_is_server <pid> — 0 when the pid runs a llama backend.
+function __llm_proc_is_server() {
+    local _pid="$1" _exe _base _cmd
+    [[ "$_pid" =~ ^[0-9]+$ ]] || return 1
+    _exe=$(__llm_proc_exe "$_pid") || return 1
+    _base="${_exe##*/}"
+    case "$_base" in
+        llama-server|llama-bench|llama-embedding|llama-cli|llama-quantize|llama-perplexity)
+            return 0 ;;
+        python|python3|python3.*|pypy3) ;;
+        *) return 1 ;;
+    esac
+    _cmd=$(tr '\0' ' ' < "/proc/${_pid}/cmdline" 2>/dev/null || true)
+    [[ "$_cmd" == *"${LLM_SERVER_MODULE:-llama_cpp.server}"* ]]
+}
+
+# __llm_server_pids [user] — every llama backend owned by <user> (default: the
+# current user), one pid per line.  Replaces `pgrep -u <user> -f <pattern>`.
+function __llm_server_pids() {
+    local _user="${1-${USER:-}}" _dir _pid _owner
+    for _dir in /proc/[0-9]*
+    do
+        _pid="${_dir#/proc/}"
+        if [[ -n "$_user" ]]
+        then
+            _owner=$(stat -c %U "$_dir" 2>/dev/null) || continue
+            [[ "$_owner" == "$_user" ]] || continue
+        fi
+        __llm_proc_is_server "$_pid" && printf '%s\n' "$_pid"
+    done
+}
+
 function __llm_server_running() {
-    local _llm_user
+    local _llm_user _pids
     _llm_user="${USER:-$(id -un 2>/dev/null || true)}"
-    if [[ -n "$_llm_user" ]]
-    then
-        pgrep -u "$_llm_user" -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
-    else
-        pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
-    fi
+    _pids=$(__llm_server_pids "$_llm_user")
+    [[ -n "$_pids" ]]
 }
 
 function __llm_server_stop() {
-    local _llm_user _proc_re _grace _tries _i
+    local _llm_user _grace _tries _i
     local _llm_pid _pid _unit _upid _sport_pid
     local -a _pids=() _svc_pids=()
 
     _llm_user="${USER:-$(id -un 2>/dev/null || true)}"
-    _proc_re="${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}"
     _grace="${LLM_SERVER_STOP_GRACE_SECONDS:-8}"
     [[ "$_grace" =~ ^[0-9]+$ ]] || _grace=8
     _tries=$((_grace * 5))
@@ -118,12 +174,7 @@ function __llm_server_stop() {
 
     # Collect PIDs — avoid mapfile + process substitution (crashes nested context)
     local _pg_out=""
-    if [[ -n "$_llm_user" ]]
-    then
-        _pg_out=$(pgrep -u "$_llm_user" -f "$_proc_re" 2>/dev/null || true)
-    else
-        _pg_out=$(pgrep -f "$_proc_re" 2>/dev/null || true)
-    fi
+    _pg_out=$(__llm_server_pids "$_llm_user")
     while IFS= read -r _pid
     do
         [[ -z "$_pid" ]] && continue
@@ -152,12 +203,7 @@ function __llm_server_stop() {
     for ((_i=0; _i<_tries; _i++))
     do
         _pids=()
-        if [[ -n "$_llm_user" ]]
-        then
-            _pg_out=$(pgrep -u "$_llm_user" -f "$_proc_re" 2>/dev/null || true)
-        else
-            _pg_out=$(pgrep -f "$_proc_re" 2>/dev/null || true)
-        fi
+        _pg_out=$(__llm_server_pids "$_llm_user")
         while IFS= read -r _pid
         do
             [[ -z "$_pid" ]] && continue
@@ -218,7 +264,8 @@ function __llm_server_stop() {
 # @returns 0 and prints the python path on success; 1 on failure.
 # ---------------------------------------------------------------------------
 function __llm_python_bin_resolve() {
-    local expected="${LLAMA_CPP_PYTHON_VERSION:-0.3.23}"
+    # The version is read from LLAMA_CPP_PYTHON_VERSION by the probe below, so
+    # there is deliberately no shell copy of it to drift.
     local cand resolved
     local -a candidates=()
 

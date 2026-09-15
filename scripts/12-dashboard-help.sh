@@ -1,15 +1,34 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2154
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 16
+# Module Version: 17
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
 # @modular-section: dashboard-help
 # @depends: constants, design-tokens, ui-engine, telemetry, hooks, openclaw, llm-manager
 # @exports: tactical_dashboard, tactical_help
+
+# Globals assigned by sibling modules at source time, named here instead of
+# relying on a file-wide `disable=SC2154` (removed 2026-09-15): shellcheck lints
+# each module in isolation and cannot see an assignment made elsewhere, so the
+# module declares what it consumes.
+#   colours      — 03-design-tokens.sh (as `readonly`)
+#   UIWidth      — 01-constants.sh
+#   _telemetry_out — 07-telemetry.sh (set by its `local -n` out-params)
+# `:=` assigns ONLY when the variable is unset, so this is a runtime no-op and is
+# safe against the `readonly` in 03 (a plain C_Dim="$C_Dim" would abort).
+: "${C_Text:=}"
+: "${C_Reset:=}"
+: "${C_Dim:=}"
+: "${C_Warning:=}"
+: "${C_Error:=}"
+: "${C_Success:=}"
+: "${C_Highlight:=}"
+: "${C_BoxBg:=}"
+: "${UIWidth:=}"
+: "${_telemetry_out:=}"
 
 # ---------------------------------------------------------------------------
 # tactical_dashboard — Full-screen system status panel.
@@ -646,7 +665,7 @@ function contextual-help() {
     # Auto-detect context
     if [[ "$context" == "auto" ]]
     then
-            if pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" >/dev/null 2>&1
+        if __llm_server_running
         then
             context="llm-active"
         elif [[ -n "$VIRTUAL_ENV" ]]

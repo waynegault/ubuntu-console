@@ -321,3 +321,52 @@ EOS
     run bash -c "bash '$TAC_TEST_TMPDIR/decl-probe.sh' '$TAC_TEST_TMPDIR/decl.sh'  # llama-bench autotune"
     [[ "$output" == "FREE" ]]
 }
+
+# __llm_proc_is_server replaced `pgrep -f "$LLM_SERVER_PROC_PATTERN"` for every
+# "is a llama backend running / is this pid one of ours?" check in the console.
+# Real processes, real /proc: the matcher must accept a backend whatever it was
+# invoked as, accept the python backend whose exe is the INTERPRETER, and reject
+# a process that merely mentions the names in its arguments (that last one is the
+# shape that stopped a serving CUDA lane on 2026-09-15).
+@test "gpu-exclusivity: a llama backend is identified by exe, not by its command line" {
+    awk '/^function __llm_proc_exe/,/^}/'        "$REPO_ROOT/scripts/11c-llm-server.sh" >  "$TAC_TEST_TMPDIR/proc.sh"
+    awk '/^function __llm_proc_is_server/,/^}/'  "$REPO_ROOT/scripts/11c-llm-server.sh" >> "$TAC_TEST_TMPDIR/proc.sh"
+    grep -q '__llm_proc_is_server' "$TAC_TEST_TMPDIR/proc.sh" || return 1
+
+    cat > "$TAC_TEST_TMPDIR/is-server.sh" <<'EOS'
+set -uo pipefail
+source "$1"
+if __llm_proc_is_server "$2"; then echo LLAMA; else echo NOT; fi
+EOS
+
+    # A compiled llama.cpp binary, invoked under its own name.
+    cp "$(command -v sleep)" "$TAC_TEST_TMPDIR/llama-server" || skip "cannot copy a binary here"
+    "$TAC_TEST_TMPDIR/llama-server" 60 &
+    local _backend=$!
+    # A backend started through a differently-named LAUNCHER (the legacy symlink
+    # shape): exe resolves to the real artefact, so it is still identified.
+    ln -s "$TAC_TEST_TMPDIR/llama-server" "$TAC_TEST_TMPDIR/cuda-llama-server"
+    "$TAC_TEST_TMPDIR/cuda-llama-server" 60 &
+    local _launcher=$!
+    python3 -c 'import time; time.sleep(60)' llama_cpp.server &
+    local _pybackend=$!
+    # Neither of these is a backend: a plain process, and a shell whose ARGUMENTS
+    # name the binaries the old command-line pattern matched on.
+    sleep 60 &
+    local _plain=$!
+    bash -c 'sleep 60' llama-server llama-bench cuda-llama-bench &
+    local _mentioner=$!
+
+    run bash "$TAC_TEST_TMPDIR/is-server.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_backend"
+    [[ "$output" == "LLAMA" ]]
+    run bash "$TAC_TEST_TMPDIR/is-server.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_launcher"
+    [[ "$output" == "LLAMA" ]]
+    run bash "$TAC_TEST_TMPDIR/is-server.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_pybackend"
+    [[ "$output" == "LLAMA" ]]
+    run bash "$TAC_TEST_TMPDIR/is-server.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_plain"
+    [[ "$output" == "NOT" ]]
+    run bash "$TAC_TEST_TMPDIR/is-server.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_mentioner"
+    [[ "$output" == "NOT" ]]
+
+    kill "$_backend" "$_launcher" "$_pybackend" "$_plain" "$_mentioner" 2>/dev/null || true
+}

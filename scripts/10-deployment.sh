@@ -1,15 +1,27 @@
 # shellcheck shell=bash
-# shellcheck disable=SC1091,SC2154
 # ─── Module: 10-deployment ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 10. DEPLOYMENT & SCAFFOLDING
 # ==============================================================================
 # @modular-section: deployment
 # @depends: constants, design-tokens, ui-engine, hooks
 # @exports: mkproj, commit_deploy, commit_auto
+
+# Globals assigned by sibling modules at source time, named here instead of
+# relying on a file-wide `disable=SC2154` (removed 2026-09-15): shellcheck lints
+# each module in isolation and cannot see an assignment made elsewhere, so the
+# module declares what it consumes.
+#   colours — 03-design-tokens.sh (as `readonly`)
+# `:=` assigns ONLY when the variable is unset, so this is a runtime no-op and is
+# safe against the `readonly` in 03 (a plain C_Dim="$C_Dim" would abort).
+: "${C_Reset:=}"
+: "${C_Dim:=}"
+: "${C_Error:=}"
+: "${C_Success:=}"
+: "${C_Highlight:=}"
 
 # ---- Constants for LLM-powered commit messages ----
 # Guarded so re-sourcing env.sh in an already-initialised shell does not error
@@ -354,7 +366,7 @@ function commit_auto() {
     # Verify the process listening on $LLM_PORT is a local LLM backend.
     local _llm_pid
     _llm_pid=$(ss -tlnp "sport = :$LLM_PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+')
-    if [[ -z "$_llm_pid" ]] || ! grep -Eq "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" "/proc/$_llm_pid/cmdline" 2>/dev/null
+    if [[ -z "$_llm_pid" ]] || ! __llm_proc_is_server "$_llm_pid"
     then
         __tac_info "SECURITY" "[BLOCKED: port $LLM_PORT is not the local LLM backend]" "$C_Error"
         return 1

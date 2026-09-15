@@ -1,9 +1,8 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2154
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 37
+# Module Version: 38
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -11,6 +10,26 @@
 # @depends: constants, design-tokens, ui-engine, telemetry
 # @exports: __cleanup_temps, __check_cooldown, __set_cooldown, get-ip, up, cl,
 #   copy_path, sysinfo, logtrim, docs-sync
+
+# Globals assigned by sibling modules at source time, named here instead of
+# relying on a file-wide `disable=SC2154` (removed 2026-09-15): shellcheck lints
+# each module in isolation and cannot see an assignment made elsewhere, so the
+# module declares what it consumes.
+#   colours      — 03-design-tokens.sh (as `readonly`)
+#   CooldownDB   — 07-telemetry.sh
+#   ErrorLogPath — 01-constants.sh
+# `:=` assigns ONLY when the variable is unset, so this is a runtime no-op and is
+# safe against the `readonly` in 03 (a plain C_Dim="$C_Dim" would abort).
+: "${C_Text:=}"
+: "${C_Reset:=}"
+: "${C_Dim:=}"
+: "${C_Warning:=}"
+: "${C_Error:=}"
+: "${C_Success:=}"
+: "${C_Highlight:=}"
+: "${C_Info:=}"
+: "${CooldownDB:=}"
+: "${ErrorLogPath:=}"
 
 # ---------------------------------------------------------------------------
 # __cleanup_temps — Remove temp files from known safe locations only.
@@ -386,8 +405,6 @@ function __up_r_packages() {
     # Updates R packages in both system and user libraries.
     if __check_cooldown "r_pkgs" "$now" hours_left "$force_mode"
     then
-        local r_err=0 r_did_update=0
-
         # Find R installation (Windows or WSL)
         local _rscript=""
         if command -v Rscript >/dev/null 2>&1
@@ -421,7 +438,6 @@ function __up_r_packages() {
             if [[ "$update_output" == *"HAS_UPDATES"* ]]
             then
                 __tac_line "[5/20] R Packages" "[PACKAGES UPDATED]" "$C_Success"
-                r_did_update=1
                 # Check if any packages failed due to missing compilers
                 if [[ "$update_output" == *"gcc"*"No such file"* ]] || [[ "$update_output" == *"g++"*"No such file"* ]] || [[ "$update_output" == *"compilation failed"* ]]
                 then
@@ -432,10 +448,8 @@ function __up_r_packages() {
             elif [[ "$update_output" == *"NONE"* ]]
             then
                 __tac_line "[5/20] R Packages" "[ALREADY UP TO DATE]" "$C_Success"
-                r_did_update=1
             else
                 __tac_line "[5/20] R Packages" "[FAILED]" "$C_Warning"
-                r_err=1
             fi
             __set_cooldown "r_pkgs" "$now"
         else
@@ -500,7 +514,7 @@ function __up_oc_plugins() {
     # Offers interactive choice when local changes are detected.
     if __check_cooldown "oc_plugins" "$now" hours_left "$force_mode"
     then
-        local plugin_updated=0 plugin_err=0 openstinger_updated=0
+        local plugin_updated=0 openstinger_updated=0
         local plugins_dir="$HOME/.openclaw/extensions"
         local vendor_dir="$HOME/.openclaw/vendor"
         local post_update_check_script="$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
@@ -966,7 +980,7 @@ function __up_stale_processes() {
     # gateway-managed and self-healing, and killing them here restarts the
     # restart-storm cycle.
     local stale_pids
-    stale_pids=$(pgrep -f "${LLM_SERVER_PROC_PATTERN:-llama_cpp.server|llama-server}" 2>/dev/null)
+    stale_pids=$(__llm_server_pids)
     local stale_count=0
     local _unit _protect_pid _pid _p _skip _has_port
     local -a _protect=()
