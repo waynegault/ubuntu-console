@@ -15,9 +15,12 @@ The following file classes are in-scope for every audit pass:
 - `scripts/[0-9][0-9]-*.sh` — the 15 numbered profile modules (01-constants
   through 15-model-recommender) plus the `18-lint.sh` utility
 - `scripts/09b-gog.sh` — the 16th profile module (non-numeric name)
-- `tools/*.sh` — 11 utility scripts (check-agent-use, check-repo-boundaries,
-  clean-orphans, docs-sync-check, import-windows-env, lint, mirror-vault,
-  normalize-fixture, run-tests, sync-openclaw-completion, capture-golden-fixtures)
+- `tools/*.sh` — 13 utility scripts (capture-golden-fixtures, check-agent-use,
+  check-module-versions, check-repo-boundaries, clean-orphans, docs-sync-check,
+  import-windows-env, install-shellcheck, lint, mirror-vault, normalize-fixture,
+  run-tests, sync-openclaw-completion)
+- `tools/hooks/*` — the repo's git hooks. Tracked here, NOT in `.git/hooks/`
+  (which holds only git's own samples); activated via `core.hooksPath`
 - `bin/*.sh` — standalone helper scripts
 - `bin/tac-exec` — non-interactive function runner (symlinked to `~/.local/bin/`)
 - `env.sh` — library loader for non-interactive shells
@@ -35,7 +38,15 @@ The following file classes are in-scope for every audit pass:
 - `scripts/kgraph/models.py` — Pydantic models (GraphNode, GraphEdge, Graph, GraphBuilder, ConfidenceLevel)
 - `scripts/kgraph/templates/kgraph.html` — Cytoscape.js viewer template
 - `config/concept-aliases.json` — kgraph concept classification data
-- `.git/hooks/pre-commit` — Pre-commit hook (staged-file lint only)
+- `tools/hooks/pre-commit` — pre-commit hook: runs `tools/lint.sh --staged`
+  (bash -n + shellcheck on staged `.sh`) then
+  `tools/check-module-versions.sh --staged`. Bypass: `git commit --no-verify`
+- `tools/hooks/post-commit`, `tools/hooks/post-merge` — kgraph auto-update
+- Activate all three with `git config core.hooksPath <repo>/tools/hooks`;
+  `install.sh` does it. The hooks are tracked (reviewable, diffable) precisely
+  because `.git/hooks/` is not version-controlled — a hook inlined there drifted
+  from `tools/lint.sh` on 2026-09-15 when only one copy of its shellcheck flags
+  was updated. Keep persistent checks in `tools/`, never inline in a hook.
 - `systemd/*` — systemd unit files
 
 Files excluded by `.gitignore` are out of scope. Companion config files
@@ -143,7 +154,7 @@ head -1 <file>
 
 🔍 Record baseline error count
 
-shellcheck -s bash <file> 2>&1 | grep -c 'In '
+shellcheck -s bash -x --source-path="$PWD" <file> 2>&1 | grep -c 'In '
 
 Note baseline finding count for before/after comparison
 
@@ -644,9 +655,13 @@ Exit code 0, no output
 
 🔍 ShellCheck passes (all severities)
 
-shellcheck -s bash <file> (no `-S` severity filter)
+shellcheck -s bash -x --source-path="$PWD" <file> (no `-S` severity filter)
 
-Zero findings at all severity levels (error, warning, info, style), or each suppressed with a rationale comment
+Zero findings at all severity levels (error, warning, info, style). This repo
+does not carry `# shellcheck disable=` directives: fix the cause instead
+(§17.1). The invocation above is the canonical one — the same flags
+`tools/lint.sh` runs, where `-x --source-path` resolves the
+source-following SC1090/SC1091 class rather than hiding it.
 
 4.1.3
 
@@ -1348,7 +1363,7 @@ Difficult regex, file-descriptor manipulation, or Bash-specific tricks have comm
 
 ls scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh
 
-16 profile module files exist under scripts/ (01-constants through 15-model-recommender + 09b-gog). 11 utility scripts live in tools/. The loaders (tactical-console.bashrc, env.sh) source the profile modules in the order given by scripts/_module-list.sh. Each module has `@modular-section`, `@depends`, and `@exports` annotations below its header.
+16 profile module files exist under scripts/ (01-constants through 15-model-recommender + 09b-gog). 13 utility scripts live in tools/. The loaders (tactical-console.bashrc, env.sh) source the profile modules in the order given by scripts/_module-list.sh. Each module has `@modular-section`, `@depends`, and `@exports` annotations below its header.
 
 9.4.1
 
@@ -1534,9 +1549,20 @@ Expected
 
 🔧 Lint script exists
 
-Check tools/lint.sh
+`tools/lint.sh` — three modes: whole repo (default), `--staged` (the staged
+`.sh` files, used by the pre-commit hook), and `--files F...` (an explicit list,
+used by the BATS suites)
 
-bash -n + shellcheck executed automatically
+bash -n + shellcheck executed automatically, with the flags defined in exactly
+one place. shellcheck runs `-x --source-path` so the SC1090/SC1091
+source-following class resolves instead of being suppressed; callers must not
+re-invoke shellcheck with their own flags.
+
+⚠ A comment line must never BEGIN with the directive word (the `#` + the tool
+name): shellcheck parses any such line as a directive and fails the file with
+SC1072/SC1073. A wrapped sentence is enough to trigger it — hit 2026-09-15 by a
+comment in `install.sh` whose continuation line started that way. Wrap earlier,
+or reword.
 
 11.2
 
@@ -1574,9 +1600,14 @@ Each disable has an inline comment explaining why; no blanket disables at file l
 
 🔧 CI runs on commit
 
-Check .github/workflows/ or pre-commit hooks
+`tools/hooks/pre-commit` — tracked, and activated by `core.hooksPath` (which
+`install.sh` sets) — plus `.github/workflows/`
 
-Linting and bash -n run automatically before commits land
+Linting and bash -n run automatically before commits land. The hook must CALL the
+tracked tools (`tools/lint.sh --staged`, `tools/check-module-versions.sh --staged`)
+rather than inlining them: an inlined copy drifted from `tools/lint.sh` on
+2026-09-15 because `.git/hooks/` is not version-controlled, so one of the two
+copies of the shellcheck flags was never updated. Hooks live in `tools/hooks/`.
 
 11.7
 

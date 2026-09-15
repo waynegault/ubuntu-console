@@ -5,9 +5,10 @@
 # Runs bash -n syntax checks and shellcheck on all shell files.
 # Usage: ./tools/lint.sh            (whole repo)
 #        ./tools/lint.sh --staged   (only .sh files staged for commit)
+#        ./tools/lint.sh --files F  (an explicit list of files)
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 7
+# Module Version: 9
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -97,11 +98,62 @@ then
     exit "$rc"
 fi
 
+# --files <path>...: lint an explicit set of shell files with the canonical
+# flags, for callers that used to invoke shellcheck themselves.  The bats suites
+# replicated `shellcheck -s bash` at ~12 sites, which drifted from this file the
+# same way the pre-commit hook did (2026-09-15): the flags existed in two places
+# and only one of them was updated.  Tests call this instead.
+if [[ "${1:-}" == "--files" ]]
+then
+    shift
+    if [[ $# -eq 0 ]]
+    then
+        echo "usage: $0 --files <path>..." >&2
+        exit 2
+    fi
+    if ! command -v shellcheck >/dev/null 2>&1
+    then
+        echo "  FAIL  shellcheck not installed - cannot run static analysis" >&2
+        exit 2
+    fi
+    echo "=== ShellCheck (explicit files) ==="
+    for f in "$@"
+    do
+        if [[ ! -f "$f" ]]
+        then
+            echo "  FAIL  $f  (not a file)"
+            rc=1
+            continue
+        fi
+        if ! bash -n "$f" 2>&1
+        then
+            echo "  FAIL  ${f#"$REPO_ROOT"/}  (syntax)"
+            rc=1
+            continue
+        fi
+        if shellcheck -s bash -x --source-path="$REPO_ROOT" "$f" 2>&1
+        then
+            echo "  PASS  ${f#"$REPO_ROOT"/}"
+        else
+            echo "  FAIL  ${f#"$REPO_ROOT"/}  (shellcheck)"
+            rc=1
+        fi
+    done
+    if (( rc == 0 ))
+    then
+        echo "  All listed files passed."
+    else
+        echo "  Some listed files failed." >&2
+    fi
+    exit "$rc"
+fi
+
 echo "=== Bash Syntax Check (bash -n) ==="
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
          "$REPO_ROOT"/scripts/*.sh \
          "$REPO_ROOT"/tools/*.sh \
+         "$REPO_ROOT"/tools/hooks/* \
          "$REPO_ROOT"/bin/*.sh
 do
     if bash -n "$f" 2>&1
@@ -126,6 +178,7 @@ for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
          "$REPO_ROOT"/scripts/*.sh \
          "$REPO_ROOT"/tools/*.sh \
+         "$REPO_ROOT"/tools/hooks/* \
          "$REPO_ROOT"/bin/*.sh
 do
     local_rc=0

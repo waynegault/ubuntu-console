@@ -183,6 +183,32 @@ displayed in a box-drawn summary table.
 - Failure classes: `oom` (VRAM), `load_fail` (unsupported/corrupt GGUF), `timeout`, and below-floor TPS.
 - VRAM guard: refuses to run unless the pre-run VRAM baseline is cleared (see `LLM_AUTOTUNE_BASELINE_GAP_MAX`).
 
+### Shared card — the investigator GPU lock
+
+The GPU is shared with the `investigator` repo, whose pipeline takes a
+cross-process **flock** for the whole duration of a local-model run. The console
+honours it (2026-09-15, BENCH-GPU-EXCLUSIVITY-001):
+
+* both CUDA-reap paths — `11d-llm-gpu.sh::__llm_kill_cuda_llama_servers` (the
+  autotune/bench drain) and `bin/llama-gpu-clear.sh` (the CUDA lane's
+  `ExecStartPre`) — skip their reap while a foreign owner holds the lock;
+* `run-autotune-batch.sh` skips the initial drain and halts per row, naming the
+  holder and printing the standard resume line.
+
+The path mirrors `investigator/config/paths.py:gpu_lock_path()`:
+`$INVESTIGATOR_GPU_LOCK`, else `$INVESTIGATOR_PRODUCTION_OUTPUT/runtime/gpu.lock`,
+else `~/investigator/production/runtime/gpu.lock`. The probe is
+**existence-gated**: `flock -n` also fails on a *missing* path, so reading a
+failed probe as "held" would refuse every run on a box that never took the lock.
+`docs/AGENT-GUIDELINES.md` has the agent-facing check.
+
+**Current behaviour, and the open question.** The guard stops the console from
+*killing* a foreign run; it does not stop the CUDA lane from *starting* while one
+holds the card — whether it should refuse to start is the watchdog's busy-GPU
+policy, not the cleanup paths'. Brief contention is therefore still possible.
+Whether the console should stand down entirely during a foreign run is an open
+decision, not an oversight.
+
 ### Autotune Environment Knobs
 
 | Variable | Default | Purpose |

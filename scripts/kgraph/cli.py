@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -197,6 +198,9 @@ def main() -> None:
         hook_dir = _find_git_hooks_dir()
         if not hook_dir:
             print("Error: not in a git repository", file=sys.stderr)
+            sys.exit(1)
+        if not os.path.isdir(hook_dir):
+            print(f"Error: hooks directory {hook_dir} does not exist", file=sys.stderr)
             sys.exit(1)
 
         marker = "kgraph auto-rebuild"
@@ -401,13 +405,47 @@ def main() -> None:
         parser.print_help()
 
 
+def _hooks_path_from_config(repo_root: str) -> str | None:
+    """``core.hooksPath`` for *repo_root* as an absolute path, or None when unset.
+
+    A repo that tracks its hooks (e.g. ubuntu-console's ``tools/hooks/``) sets
+    this, and git then ignores ``.git/hooks`` entirely — so installing a hook
+    there writes one git never runs.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo_root, "config", "--get", "core.hooksPath"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("core.hooksPath probe failed for %s", repo_root, exc_info=True)
+        return None
+    configured = result.stdout.strip()
+    if not configured:
+        return None
+    if os.path.isabs(configured):
+        return configured
+    return os.path.join(repo_root, configured)
+
+
 def _find_git_hooks_dir() -> str | None:
-    """Walk up from cwd to find .git/hooks."""
+    """Locate the ACTIVE git hooks directory for the repository containing cwd.
+
+    Honours ``core.hooksPath`` first and falls back to walking up for
+    ``.git/hooks``; git uses the configured path and ignores ``.git/hooks`` when
+    it is set.
+    """
     cwd = os.getcwd()
     while cwd:
-        hooks = os.path.join(cwd, ".git", "hooks")
-        if os.path.isdir(hooks):
-            return hooks
+        gitdir = os.path.join(cwd, ".git")
+        if os.path.isdir(gitdir):
+            configured = _hooks_path_from_config(cwd)
+            if configured:
+                return configured
+            return os.path.join(gitdir, "hooks")
         parent = os.path.dirname(cwd)
         if parent == cwd:
             break

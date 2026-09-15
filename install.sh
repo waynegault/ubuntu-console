@@ -3,9 +3,15 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
-# shellcheck disable=SC2034
-VERSION="1.2"
+VERSION="1.3"
 set -euo pipefail
+
+# --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
+if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]
+then
+    echo "install.sh $VERSION"
+    exit 0
+fi
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
 PROFILE_PATH="$REPO/tactical-console.bashrc"
@@ -206,6 +212,25 @@ done
 if command -v systemctl >/dev/null 2>&1
 then
     systemctl --user daemon-reload >/dev/null 2>&1 || true
+fi
+
+# Git hooks — tracked in tools/hooks/ and activated through core.hooksPath, so
+# the hooks are version-controlled and reviewable.  They used to live untracked
+# in .git/hooks/, where they could not be diffed, reviewed, or shared between
+# clones; the pre-commit hook and tools/lint.sh then drifted apart — their
+# flags for shellcheck lived in two places and only one was ever updated.
+if [[ -d "$REPO/tools/hooks" ]]
+then
+    if [[ "$(git -C "$REPO" config --get core.hooksPath 2>/dev/null || true)" == "$REPO/tools/hooks" ]]
+    then
+        echo "  hooks - core.hooksPath already points at tools/hooks (skipped)"
+    elif git -C "$REPO" config core.hooksPath "$REPO/tools/hooks"
+    then
+        chmod +x "$REPO"/tools/hooks/* 2>/dev/null || true
+        echo "  hooks - core.hooksPath set to tools/hooks"
+    else
+        echo "  WARNING: could not set core.hooksPath — git hooks will not run" >&2
+    fi
 fi
 
 echo ""

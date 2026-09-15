@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# pre-commit hook — bash -n + shellcheck on staged .sh files, then the module
+# version guard.
+#
+# TRACKED: tools/hooks/ is the source of truth for this repo's hooks.  Install
+# with `git config core.hooksPath <repo>/tools/hooks`; install.sh does that, and
+# docs/inspection.md documents the convention.
+# To bypass in an emergency: git commit --no-verify
+# Whole-repo lint is a separate run: tools/lint.sh
+set -euo pipefail
+
+# tools/hooks/ sits at the same depth as .git/hooks/, so this resolves to the
+# repo root either way.
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# Staged shell files (added, modified, or copied — not deleted).  Nothing staged
+# means nothing to guard, and the early exit keeps a docs-only commit cheap.
+staged=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null | grep '\.sh$' || true)
+
+if [[ -z "$staged" ]]; then
+    echo "pre-commit: no staged .sh files — skipping lint"
+    exit 0
+fi
+
+rc=0
+
+# ── Staged-file lint ───────────────────────────────────────────────────────
+# The bash -n + shellcheck loop lives in tools/lint.sh --staged and is never
+# inlined here: the flags must exist in exactly one place.  They were inlined
+# once, and the two copies drifted the first time one of them changed
+# (2026-09-15: -x was added to lint.sh, and this hook went on rejecting the very
+# files lint.sh had just cleared).
+echo "=== pre-commit: staged .sh lint ==="
+if ! "$REPO_ROOT/tools/lint.sh" --staged; then
+    rc=1
+fi
+
+# ── Module Version discipline ──────────────────────────────────────────────
+# TACTICAL_PROFILE_VERSION is the SUM of every module's `# Module Version: N`,
+# so a forgotten bump mislabels every version derived from it.  The check is
+# tools/check-module-versions.sh (tracked, tested, unit-covered).
+if ! "$REPO_ROOT/tools/check-module-versions.sh" --staged; then
+    rc=1
+fi
+
+if (( rc == 0 )); then
+    echo "pre-commit: all staged .sh files passed"
+else
+    echo "pre-commit: some checks failed — commit aborted"
+fi
+exit "$rc"

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -33,7 +33,6 @@ __TAC_MOD_11D_LLM_GPU_LOADED=1
 : "${C_Highlight:=}"
 
 function __tac_cleanup_stale_locks() {
-    # shellcheck disable=SC2034
     local _c_lock _c_pid _c_kf _c_sp _c_my_pid _c_ppid _c_cmd _c_owner
     local _c_fd_path _c_keeper_dir
     local -a _c_live_model_shells=()
@@ -943,7 +942,6 @@ function __spec_decode_stats() {
         "$_log" 2>/dev/null | tail -1)
     [[ -n "$_line" ]] || { echo "0|0|0|0|no"; return 1; }
 
-    # shellcheck disable=SC2001
     local _clean
     _clean=$(echo "$_line" | sed -E \
         -e 's/draft acceptance = //' \

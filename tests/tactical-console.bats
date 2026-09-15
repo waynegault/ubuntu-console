@@ -367,29 +367,29 @@ EOF
 
 @test "shellcheck: tactical-console.bashrc has no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    shellcheck -s bash "$PROFILE_PATH"
+    "$REPO_ROOT/tools/lint.sh" --files "$PROFILE_PATH"
 }
 
 @test "shellcheck: companion bin scripts have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    shellcheck -s bash "$REPO_ROOT"/bin/*.sh
+    "$REPO_ROOT/tools/lint.sh" --files "$REPO_ROOT"/bin/*.sh
 }
 
 @test "shellcheck: companion scripts 0x have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    shellcheck -s bash "$REPO_ROOT"/scripts/0*.sh
+    "$REPO_ROOT/tools/lint.sh" --files "$REPO_ROOT"/scripts/0*.sh
 }
 
 @test "shellcheck: companion scripts 10 and 12 have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    shellcheck -s bash \
+    "$REPO_ROOT/tools/lint.sh" --files \
         "$REPO_ROOT"/scripts/10-deployment.sh \
         "$REPO_ROOT"/scripts/12-dashboard-help.sh
 }
 
 @test "shellcheck: companion scripts 13-15 and extras have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    shellcheck -s bash \
+    "$REPO_ROOT/tools/lint.sh" --files \
         "$REPO_ROOT"/scripts/1[3-5]-*.sh \
         "$REPO_ROOT"/scripts/18-lint.sh \
         "$REPO_ROOT"/scripts/load-vault-env.sh \

@@ -3328,6 +3328,36 @@ class TestCliFindGitHooksDir(unittest.TestCase):
             os.chdir(td)
             self.assertIsNone(_find_git_hooks_dir())
 
+    def test_core_hooks_path_wins_over_the_git_dir(self):
+        """A repo that tracks its hooks sets core.hooksPath, and git then
+        ignores .git/hooks — so a hook installed there would never run."""
+        from kgraph.cli import _find_git_hooks_dir
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = os.path.join(td, "repo")
+            os.makedirs(repo)
+            subprocess.run(["git", "-C", repo, "init", "-q"], check=True, capture_output=True)
+            tracked = os.path.join(td, "tracked-hooks")
+            os.makedirs(tracked)
+            subprocess.run(["git", "-C", repo, "config", "core.hooksPath", tracked],
+                           check=True, capture_output=True)
+            os.chdir(repo)
+            self.assertEqual(_find_git_hooks_dir(), tracked)
+
+    def test_relative_core_hooks_path_resolves_against_the_repo(self):
+        """git accepts a relative core.hooksPath; it must not be read as a
+        path relative to whatever directory the process happens to be in."""
+        from kgraph.cli import _find_git_hooks_dir
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = os.path.join(td, "repo")
+            os.makedirs(repo)
+            subprocess.run(["git", "-C", repo, "init", "-q"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", repo, "config", "core.hooksPath", "tools/hooks"],
+                           check=True, capture_output=True)
+            os.chdir(repo)
+            self.assertEqual(_find_git_hooks_dir(), os.path.join(repo, "tools", "hooks"))
+
 
 class TestKgrapModuleEntryPoint(unittest.TestCase):
     """`python -m kgraph` — the __main__.py shim into cli.main()."""
