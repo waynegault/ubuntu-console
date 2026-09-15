@@ -476,3 +476,94 @@ EOS
     grep -q 'CONSECUTIVE_FAILURES >= MAX_CONSECUTIVE_FAILURES' "$REPO_ROOT/scripts/run-autotune-batch.sh"
     grep -q 'CUDA_CYCLE_BUDGET' "$REPO_ROOT/scripts/run-autotune-batch.sh"
 }
+
+# Signal 2 of gpu-busy.sh identified a resident by the NAME "llama-server" — via
+# comm or cmdline — so a process that merely MENTIONED the string was treated as
+# ours, and so was a real server from any other build path.  gpu-busy.sh is the
+# CUDA lane's start gate, so reading a foreign resident as "ours" reads the card as
+# FREE and the watchdog may then put a second server on it — the exact failure the
+# card-discipline section exists to prevent.  It now keys on /proc/PID/exe resolved
+# against the two sanctioned binaries, the same discriminator the repo settled on
+# for the `so` probe.
+#
+# These drive the extracted foreign_apps_busy() with a stub nvidia-smi, so nothing
+# touches the GPU and the "server" is a copy of sleep carrying the right name.
+_foreign_apps_fixture() {
+    mkdir -p "$TAC_TEST_TMPDIR/bin" "$TAC_TEST_TMPDIR/allowed" "$TAC_TEST_TMPDIR/other"
+    # Stand-ins for the two builds: the same binary NAME at different paths — the
+    # case a name-based match cannot separate.
+    cp "$(command -v sleep)" "$TAC_TEST_TMPDIR/allowed/llama-server"
+    cp "$(command -v sleep)" "$TAC_TEST_TMPDIR/other/llama-server"
+
+    cat > "$TAC_TEST_TMPDIR/bin/nvidia-smi" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in
+    *--query-compute-apps*) printf '%s\n' "${STUB_SMI_PIDS:-}" ;;
+    *) printf '0\n' ;;
+esac
+EOS
+    chmod +x "$TAC_TEST_TMPDIR/bin/nvidia-smi"
+
+    printf 'REASONS=()\n' > "$TAC_TEST_TMPDIR/fab.sh"
+    awk '/^foreign_apps_busy\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/fab.sh"
+    grep -q 'foreign_apps_busy' "$TAC_TEST_TMPDIR/fab.sh"
+
+    cat > "$TAC_TEST_TMPDIR/fab-probe.sh" <<'EOS'
+set -uo pipefail
+source "$1"
+if foreign_apps_busy; then echo "BUSY ${REASONS[*]}"; else echo FREE; fi
+EOS
+}
+
+@test "gpu-exclusivity: a same-named server from another build path is FOREIGN" {
+    _foreign_apps_fixture
+    "$TAC_TEST_TMPDIR/other/llama-server" 30 &
+    local spid=$!
+    run env PATH="$TAC_TEST_TMPDIR/bin:$PATH" \
+        LLAMA_CUDA_SERVER_BIN="$TAC_TEST_TMPDIR/allowed/llama-server" \
+        LLAMA_XE_SERVER_BIN="$TAC_TEST_TMPDIR/absent/llama-server" \
+        STUB_SMI_PIDS="$spid" \
+        bash "$TAC_TEST_TMPDIR/fab-probe.sh" "$TAC_TEST_TMPDIR/fab.sh"
+    kill "$spid" 2>/dev/null || true
+    [[ "$output" == BUSY*"foreign-app pid=$spid"* ]] \
+        || { echo "expected BUSY for $spid, got: $output"; return 1; }
+    [[ "$output" == *"exe=$TAC_TEST_TMPDIR/other/llama-server"* ]] \
+        || { echo "reason did not name the exe: $output"; return 1; }
+}
+
+@test "gpu-exclusivity: the sanctioned CUDA binary is skipped, not reported" {
+    _foreign_apps_fixture
+    "$TAC_TEST_TMPDIR/allowed/llama-server" 30 &
+    local spid=$!
+    run env PATH="$TAC_TEST_TMPDIR/bin:$PATH" \
+        LLAMA_CUDA_SERVER_BIN="$TAC_TEST_TMPDIR/allowed/llama-server" \
+        LLAMA_XE_SERVER_BIN="$TAC_TEST_TMPDIR/absent/llama-server" \
+        STUB_SMI_PIDS="$spid" \
+        bash "$TAC_TEST_TMPDIR/fab-probe.sh" "$TAC_TEST_TMPDIR/fab.sh"
+    kill "$spid" 2>/dev/null || true
+    [[ "$output" == "FREE" ]] || { echo "expected FREE, got: $output"; return 1; }
+}
+
+@test "gpu-exclusivity: a mere mention of llama-server in argv is FOREIGN" {
+    _foreign_apps_fixture
+    # argv[0] is "llama-server" but the executable is sleep. The old comm/cmdline
+    # match skipped precisely this, which is how a mention hid a real resident.
+    bash -c 'exec -a llama-server sleep 30' &
+    local spid=$!
+    run env PATH="$TAC_TEST_TMPDIR/bin:$PATH" \
+        LLAMA_CUDA_SERVER_BIN="$TAC_TEST_TMPDIR/allowed/llama-server" \
+        LLAMA_XE_SERVER_BIN="$TAC_TEST_TMPDIR/absent/llama-server" \
+        STUB_SMI_PIDS="$spid" \
+        bash "$TAC_TEST_TMPDIR/fab-probe.sh" "$TAC_TEST_TMPDIR/fab.sh"
+    kill "$spid" 2>/dev/null || true
+    [[ "$output" == BUSY*"foreign-app pid=$spid"* ]] \
+        || { echo "a mention must not hide a resident, got: $output"; return 1; }
+}
+
+@test "gpu-exclusivity: signal 2 matches on exe, and keeps the embedding-worker exception" {
+    ! grep -q '\*llama-server\*) continue' "$REPO_ROOT/bin/gpu-busy.sh"
+    grep -q 'readlink -f "/proc/\$pid/exe"' "$REPO_ROOT/bin/gpu-busy.sh"
+    grep -q 'LLAMA_CUDA_SERVER_BIN' "$REPO_ROOT/bin/gpu-busy.sh"
+    grep -q 'LLAMA_XE_SERVER_BIN' "$REPO_ROOT/bin/gpu-busy.sh"
+    grep -q 'memory-core-local-embedding-worker' "$REPO_ROOT/bin/gpu-busy.sh"
+}

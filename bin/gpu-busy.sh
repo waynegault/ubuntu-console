@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.4.0 (2026-09-16: signal 2 identifies a resident by its /proc/PID/exe
+#          resolved against the sanctioned CUDA/Xe binaries, instead of by the
+#          NAME "llama-server" — which any process that merely MENTIONS the string
+#          could satisfy, so a stray server from another build path was read as
+#          ours and the card looked free)
 # Version: 1.3.0 (2026-09-15: the declared-workload patterns name real artefacts
 #          instead of bare words, and this probe's own process chain is excluded —
 #          a shell that merely mentioned "autotune" was read as a bench and the
 #          watchdog took a healthy CUDA lane down)
-# Module Version: 2
+# Module Version: 3
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
 #
 # CARD DISCIPLINE: this script is about the CUDA card only.  The Xe card is a
@@ -18,8 +23,10 @@
 # card). So we combine five signals; ANY true => CUDA card BUSY:
 #
 #   1. Utilization samples — max over N samples exceeds threshold (actually computing)
-#   2. Foreign compute-app PIDs — a process other than llama-server / embedding
-#      workers holds a CUDA context (someone else is loaded on the GPU)
+#   2. Foreign compute-app PIDs — a resident whose /proc/PID/exe is not one of the
+#      two sanctioned llama-server binaries holds a CUDA context (someone else is
+#      loaded on the GPU).  Both are allowed: the Xe binary is ours, and the Xe
+#      lane must go on serving whether or not CUDA is clear.
 #   3. Declared GPU workloads — known GPU-hungry processes are alive
 #      (model_selection_bench, autotune, llama-bench, clear_vram)
 #   4. Lock files — /tmp/llm-bench.lock (bench/autotune convention; watchdog
@@ -66,7 +73,7 @@ util_busy() {
 }
 
 foreign_apps_busy() {
-    local pid comm cmdline smi_out smi_rc
+    local pid comm cmdline exe smi_out smi_rc _a
     # When the driver/NVML blocks GPU access, nvidia-smi exits non-zero AND prints
     # its error text on STDOUT. Without this guard that text was read as a pid,
     # yielding the nonsense reason "foreign-app pid=Failed to initialize NVML...".
@@ -77,6 +84,20 @@ foreign_apps_busy() {
         REASONS+=("nvidia-smi-unavailable")
         return 0
     fi
+    # The residents this probe must not report as foreign, resolved to their real
+    # paths. Matched on /proc/PID/exe — never on comm or cmdline: a NAME matches
+    # any process that merely MENTIONS the string (a `tail -f llama-server.log`, a
+    # shell running `grep llama-server`), and the Xe build carries the same binary
+    # NAME as the CUDA one, so a name cannot tell the two cards' servers apart
+    # either. These defaults mirror 01-constants.sh (LLAMA_CUDA_SERVER_BIN /
+    # LLAMA_XE_SERVER_BIN); this probe is standalone and does not source the
+    # console, so they are repeated here rather than imported.
+    local -a _allowed=()
+    for _a in "${LLAMA_CUDA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}" \
+              "${LLAMA_XE_SERVER_BIN:-$HOME/llama.cpp/build-opencl/bin/llama-server}"
+    do
+        _allowed+=("$(readlink -f "$_a" 2>/dev/null || true)")
+    done
     while IFS= read -r pid; do
         pid="${pid%$'\r'}"
         [ -z "$pid" ] && continue
@@ -84,12 +105,22 @@ foreign_apps_busy() {
         [ "$pid" = "$$" ] && continue
         comm=$(cat "/proc/$pid/comm" 2>/dev/null || echo "")
         cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || echo "")
-        # Known-good GPU residents: our llama-server + OpenClaw embedding workers
-        case "$comm:$cmdline" in
-            *llama-server*) continue ;;
+        # A sanctioned server holding the card is expected: skip only if the
+        # RESOLVED binary is one of the two above, so a same-named server from any
+        # other build path stays foreign and still reports busy.
+        exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
+        if [ -n "$exe" ]; then
+            for _a in "${_allowed[@]}"; do
+                [ -n "$_a" ] && [ "$exe" = "$_a" ] && continue 2
+            done
+        fi
+        # OpenClaw embedding workers are a node/python process, so their exe is an
+        # interpreter rather than the worker itself: they are identified by the
+        # name in the command line that launched them.
+        case "$cmdline" in
             *memory-core-local-embedding-worker*) continue ;;
         esac
-        REASONS+=("foreign-app pid=$pid $comm")
+        REASONS+=("foreign-app pid=$pid $comm exe=${exe:-unreadable}")
         return 0
     done <<< "$smi_out"
     return 1
