@@ -10,7 +10,9 @@
 #   bats --tap tests/tactical-console.bats
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# shellcheck disable=SC2034
+# shellcheck disable=SC2034  # this file's version header is read by people and by
+#                             # git history, never by the file itself — SC2034 is the
+#                             # one diagnostic that cannot describe a header.
 VERSION="1.6"
 
 # ==============================================================================
@@ -147,7 +149,8 @@ _tac_ensure_profile() {
     export PS1="$ "
     # Skip expensive pwsh.exe calls in test environment
     export TAC_SKIP_PWSH=1
-    # shellcheck disable=SC1090
+    # shellcheck disable=SC1090  # the target is a sed-patched copy generated at run
+    #                             # time under $TAC_TEST_TMPDIR — no static file to follow.
     source "$TAC_TEST_TMPDIR/profile_patched.bash" &>/dev/null || true
     _TAC_PROFILE_SOURCED=1
 }

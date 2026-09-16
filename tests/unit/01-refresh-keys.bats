@@ -36,17 +36,17 @@ setup() {
     __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; case \"\$*\" in *is-active*) echo active;; esac; exit 0"
 
     # Source only required modules for oc-refresh-keys to keep the harness stable.
-    # shellcheck disable=SC1090
+    # shellcheck source=scripts/01-constants.sh
     source "$REPO_ROOT/scripts/01-constants.sh"
-    # shellcheck disable=SC1090
+    # shellcheck source=scripts/02-error-handling.sh
     source "$REPO_ROOT/scripts/02-error-handling.sh"
-    # shellcheck disable=SC1090
+    # shellcheck source=scripts/03-design-tokens.sh
     source "$REPO_ROOT/scripts/03-design-tokens.sh"
-    # shellcheck disable=SC1090
+    # shellcheck source=scripts/05-ui-engine.sh
     source "$REPO_ROOT/scripts/05-ui-engine.sh"
-    # shellcheck disable=SC1090
+    # shellcheck source=scripts/_startup-env.sh
     source "$REPO_ROOT/scripts/_startup-env.sh"   # provides __tac_source_submodules
-    # shellcheck disable=SC1090
+    # shellcheck source=scripts/09-openclaw.sh
     source "$REPO_ROOT/scripts/09-openclaw.sh"
 
     # Isolate OC_ROOT so tests never touch the real ~/.openclaw.

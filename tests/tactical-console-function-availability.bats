@@ -24,7 +24,7 @@ teardown_file() {
 
 # Source the profile so all functions are available.
 setup() {
-    # shellcheck disable=SC1090
+    # shellcheck source=env.sh
     source "$REPO_ROOT/env.sh" >/dev/null 2>&1 || true
 }
 

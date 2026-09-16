@@ -2966,9 +2966,9 @@ DECISIONS, because the honest options are "build the missing thing" or "change w
 the checklist asks", and neither is a doc edit. Each has its measured evidence.
 
 RE-CHECKED 2026-09-16 (late): most of this list had already been settled IN ITS ITEM
-while the summary below kept describing it as open. Only TWO entries are still real
-work — 12.4.1 (a one-line fix) and 11.5 (a migration). The others are kept here with
-what actually happened, because a stale summary reads exactly like an open decision.
+while the summary below kept describing it as open. Only ONE entry is still real work —
+11.5, the suppression migration. The others are kept here with what actually happened,
+because a stale summary reads exactly like an open decision.
 
   * 12.2.3 — SETTLED as a design choice (item updated 2026-09-16), with one
     correction: the FLAGS DO EXIST in this build — `-cmoe/--cpu-moe`,
@@ -2988,9 +2988,12 @@ what actually happened, because a stale summary reads exactly like an open decis
   * 12.3.3 — WITHDRAWN in the item itself: no measured baseline for slot saturation
     exists on this box, and saturation is already judged by TPS collapse plus the
     health status code. Adding the parse would create a signal nobody can calibrate.
-  * 12.4.1 — STILL OPEN, and the smallest thing on this list: model-file existence is
-    checked before launch and size is read, but READABILITY is not. A one-line
-    `[[ -r ]]` closes it.
+  * 12.4.1 — DONE (8c4216ff), and this bullet was stale in BOTH directions. The check
+    landed in `11e-llm-model.sh` ("Readability, not just existence … the last gate
+    before launch") while an earlier pass recorded it as open, and the pass that
+    re-checked this list then repeated it as open WITHOUT READING THE CODE — which is
+    precisely the failure this section exists to catch. What it did not have is a test;
+    that gap is closed in `tests/tactical-console-fast.bats`.
   * 11.7 — RESOLVED 2026-09-16 (c16bec50): `tests/tactical-console-fast.bats` now
     sources the loader under `env -i` and asserts the half with teeth — `env.sh`
     defines the interface. The item records why "it exits 0" alone was a green that

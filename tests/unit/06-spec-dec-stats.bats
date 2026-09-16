@@ -18,9 +18,9 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 TMPDIR_BATS="$(mktemp -d)"
 
 setup() {
-    # shellcheck disable=SC1090
+    # shellcheck source=scripts/01-constants.sh
     source "$REPO_ROOT/scripts/01-constants.sh"
-    # shellcheck disable=SC1090
+    # shellcheck source=scripts/11d-llm-gpu.sh
     source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
 }
 

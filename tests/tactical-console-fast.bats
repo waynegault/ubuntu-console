@@ -11,7 +11,8 @@
 # For full runtime behaviour tests, use: bats tests/tactical-console.bats
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# shellcheck disable=SC2034
+# shellcheck disable=SC2034  # version header, as in tactical-console.bats: read by
+#                             # people and by git history, not by the file.
 VERSION="1.0"
 
 # ==============================================================================
@@ -124,6 +125,53 @@ setup_file() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"cannot parse .bats"* ]]
     [[ "$output" != *"bash -n"* ]]
+}
+
+@test "model launch: the gate requires READABILITY, not only existence (12.4.1)" {
+    # The check landed in 8c4216ff with no test of its own, so nothing held it: an
+    # unreadable model fails INSIDE llama-server with an opaque error that reads as a
+    # bad file rather than a permissions problem. Pin the test, the message and the
+    # failure — a gate that reports but returns 0 is not a gate.
+    run grep -A4 'if \[\[ ! -r "\$model_path" \]\]' "$REPO_ROOT/scripts/11e-llm-model.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NOT READABLE"* ]]
+    [[ "$output" == *"return 1"* ]]
+}
+
+@test "hygiene: shellcheck suppressions ratchet DOWN, and each states why (11.5 / §18.3)" {
+    # §18.3: "a number with no owner and no enforcement only grows" — so this is a
+    # RATCHET, not a to-do entry. Baselines at 2026-09-16: 16 shell, 4 bats. The 26
+    # that were muting SC1090 above a STATIC source are now `# shellcheck source=`
+    # directives, which resolve the diagnostic instead of hiding it; what is left has
+    # no static target (runtime-generated files) or cannot be expressed otherwise.
+    #
+    # The pattern is bracketed (`disabl[e]=`) ON PURPOSE: written literally, this
+    # test's own grep arguments match themselves and inflate every count — which is
+    # exactly what the first version did (7 bats, not 4).
+    local shell_count bats_count bare
+    shell_count=$(grep -r --include='*.sh' --include='*.bashrc' '# shellcheck disabl[e]=' \
+        "$REPO_ROOT"/scripts "$REPO_ROOT"/bin "$REPO_ROOT"/tools "$REPO_ROOT"/install.sh 2>/dev/null | wc -l)
+    bats_count=$(grep -r '# shellcheck disabl[e]=' \
+        "$REPO_ROOT"/tests/*.bats "$REPO_ROOT"/tests/unit/*.bats \
+        "$REPO_ROOT"/tests/integration/*.bats 2>/dev/null | wc -l)
+    (( shell_count <= 16 )) || {
+        echo "FAIL: $shell_count shell suppressions (baseline 16) — fix the cause, or lower this number deliberately; do not raise it"
+        return 1
+    }
+    (( bats_count <= 4 )) || {
+        echo "FAIL: $bats_count bats suppressions (baseline 4)"
+        return 1
+    }
+    # `|| true`: grep -c exits 1 on a ZERO count, which would fail this test for the
+    # very reason it is checking for. The status is not the signal here — the number is.
+    bare=$(grep -rh --include='*.sh' --include='*.bashrc' --include='*.bats' '# shellcheck disabl[e]=' \
+        "$REPO_ROOT"/scripts "$REPO_ROOT"/bin "$REPO_ROOT"/tools "$REPO_ROOT"/install.sh \
+        "$REPO_ROOT"/tests/*.bats "$REPO_ROOT"/tests/unit/*.bats "$REPO_ROOT"/tests/integration/*.bats 2>/dev/null \
+        | grep -vc '  #' || true)
+    (( bare == 0 )) || {
+        echo "FAIL: $bare suppression(s) state no reason — one that says nothing is indistinguishable from a mistake"
+        return 1
+    }
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -62,7 +62,8 @@ teardown_file() {
 
 setup() {
     export PS1="$ "
-    # shellcheck disable=SC1090
+    # shellcheck disable=SC1090  # the target is a sed-patched copy generated at run
+    #                             # time under $TAC_TEST_TMPDIR — no static file to follow.
     source "$TAC_TEST_TMPDIR/profile_patched.bash" &>/dev/null || true
 }
 
