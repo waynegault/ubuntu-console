@@ -2964,23 +2964,33 @@ Two items were simply corrected in the document on 2026-09-16 (11.1 and 11.9 —
 their text for the CI flag drift and the stale pass-count). The rest below were
 DECISIONS, because the honest options are "build the missing thing" or "change what
 the checklist asks", and neither is a doc edit. Each has its measured evidence.
-TWO of them (11.7 and 11.14) were then built and tested the same day; their entries
-keep the original reasoning and say what landed.
 
-  * 12.2.3 — no expert-offload flag exists anywhere (`--cpu-moe`, `-ot exps=CPU`: zero
-    hits). MoE rows are handled by LAYER-COUNT heuristics instead (11d-llm-gpu.sh
-    returns total_layers because "expert weights stay on CPU anyway"). Satisfied in
-    spirit, not in letter — say which.
+RE-CHECKED 2026-09-16 (late): most of this list had already been settled IN ITS ITEM
+while the summary below kept describing it as open. Only TWO entries are still real
+work — 12.4.1 (a one-line fix) and 11.5 (a migration). The others are kept here with
+what actually happened, because a stale summary reads exactly like an open decision.
+
+  * 12.2.3 — SETTLED as a design choice (item updated 2026-09-16), with one
+    correction: the FLAGS DO EXIST in this build — `-cmoe/--cpu-moe`,
+    `-ncmoe/--n-cpu-moe` and `-ot/--override-tensor` are all in `llama-server --help`
+    (verified 2026-09-16). What is true is that the repo passes none of them and
+    handles MoE by LAYER COUNT instead. "No flag exists" was wrong; "no flag is
+    passed, deliberately" is the claim the item defends.
   * 12.2.7 — CORRECTED, not decided: the flag the item named (`--reasoning-budget`)
     does not exist in this build, and ``--reasoning off`` IS passed — in the systemd
     units, which that pass's grep did not cover. See the item. No measurement is
     outstanding here.
-  * 12.2.10 — `--cont-batching` is never passed; concurrency is expressed through
-    `--parallel` (registry column, pinned to 1 at 11e-llm-model.sh).
-  * 12.3.3 — nothing parses `slots_idle`/`slots_processing`. The only slot code is a
-    5s-TTL cached `GET /slots`, so saturation is not detected the way the item assumes.
-  * 12.4.1 — existence is checked before launch and size is read, but READABILITY is
-    not. A one-line `[[ -r ]]` would satisfy it.
+  * 12.2.10 — SETTLED as deliberate (item updated 2026-09-16). `--cont-batching` is
+    never passed and is not wanted: the build's `-cb` default IS "enabled", but
+    `--parallel` is pinned to 1, so there is one slot and batching has nothing to
+    batch. Raising `--parallel` would divide the served window (`ctx/N`) unless
+    `--kv-unified-per-slot` sets it explicitly.
+  * 12.3.3 — WITHDRAWN in the item itself: no measured baseline for slot saturation
+    exists on this box, and saturation is already judged by TPS collapse plus the
+    health status code. Adding the parse would create a signal nobody can calibrate.
+  * 12.4.1 — STILL OPEN, and the smallest thing on this list: model-file existence is
+    checked before launch and size is read, but READABILITY is not. A one-line
+    `[[ -r ]]` closes it.
   * 11.7 — RESOLVED 2026-09-16 (c16bec50): `tests/tactical-console-fast.bats` now
     sources the loader under `env -i` and asserts the half with teeth — `env.sh`
     defines the interface. The item records why "it exits 0" alone was a green that
@@ -2988,19 +2998,24 @@ keep the original reasoning and say what landed.
   * 11.14 — RESOLVED 2026-09-16 (49507347): the three copies are one. The config
     absorbed `models.py`'s divergent keys plus `stopwords`; `constants.py` owns the
     loader and the three modules import it. See the item.
-  * 11.6 — the two kgraph hooks call `python3`/`kgraph` from PATH with no
-    `set -euo pipefail` and no `.venv` pin; the fallback path would silently do
-    nothing under a system Python.
-  * 12.2.8 — batch/ubatch are passed per-model and documented, but docs/llm.md's
-    headline defaults ("4096 (GPU) / 512 (CPU)") match neither the code fallback
-    (1024/256) nor the live registry (27 rows, widest group 1024/256). One of the
-    three is wrong, and the docs are the likeliest.
+  * 11.6 — ADDRESSED 2026-09-16: the two kgraph hooks now prefer this repo's OWN
+    `kgraph` through `.venv/bin/python3` and warn loudly when they fall back to the
+    PATH install, so the silent no-op under a system Python is gone (verified in
+    `tools/hooks/post-commit` and `post-merge`). Remaining nit: neither sets
+    `set -uo pipefail`. NOTE: this bullet's subject does not match §11.6's own text,
+    which is about the CI-on-commit hook — the numbering needs checking.
+  * 12.2.8 — FIXED in docs/llm.md, which now records the measured split rather than a
+    fixed pair: "There is NO fixed GPU/CPU pair — measured across the 27 live rows on
+    2026-09-16: 1024 ×14, 512 ×7, 2048 ×6", and that the old "4096 (GPU)" figure was
+    a stale copy of the bench's candidate ladder.
 
-  11.5 is a documentation migration, not a decision: 46 `# shellcheck disable=` lines
-  exist (16 shell, 30 `.bats`; recounted 2026-09-16 — the shell count has fallen from
-  20 as file-wide disables were removed) and 41 of the 46 end the line stating no
-  reason — the 30 `.bats` ones are all bare `disable=SC1090`. Add the reason, or
-  remove what the graph has made unnecessary, but do not leave a suppression that says
-  nothing.
+  11.5 remains the other open item, and it is a documentation migration rather than a
+  decision: 46 `# shellcheck disable=` lines exist (16 shell, 30 `.bats`; recounted
+  2026-09-16 — the shell count has fallen from 20 as file-wide disables were removed)
+  and 41 of the 46 end the line stating no reason — the 30 `.bats` ones are all bare
+  `disable=SC1090`. Fix the cause where a fix exists (a `# shellcheck source=` directive
+  resolves SC1090 rather than muting it), remove what the module graph made
+  unnecessary, and see §18.3: this belongs in a RATCHET that fails when the count
+  rises, not in a per-pass to-do list.
 
 <!-- end of file -->
