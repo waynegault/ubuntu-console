@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 30
+# Module Version: 31
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -155,6 +155,14 @@ function __model_scan() {
         local prev_active="no"
         local prev_spec_type="" prev_spec_draft_model="" prev_spec_n_max="" prev_spec_ngl="" prev_spec_device="" prev_spec_accept_len=""
         local prev_workload="" prev_ttft="" prev_bench_ctx="" prev_bench_max_chunks="" prev_bench_avg_prompt_tokens=""
+        # prefill/p2_* are ALSO read from the previous row — they must be declared and
+        # initialised here like the rest.  They used to be assigned only by the `read`
+        # below, which is skipped when the model has no previous row, so a newly added
+        # model silently inherited the PREVIOUS MODEL'S measurements: on 2026-09-16 the
+        # new Spark-X2.5-4B row was written with smollm3's exact prefill (23.56) and p2
+        # profile (26624/512/128/27.56/944.55) — measurements it had never earned, and
+        # which the next scan would then re-read from its own row and make permanent.
+        local prev_prefill="" prev_p2_ctx="" prev_p2_batch="" prev_p2_ubatch="" prev_p2_tps="" prev_p2_prefill=""
         if [[ -f "$LLM_REGISTRY" ]]
         then
             local prev_row
