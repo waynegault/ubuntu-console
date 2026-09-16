@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 27
+# Module Version: 28
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -35,6 +35,39 @@ __TAC_MOD_11E_LLM_MODEL_LOADED=1
 : "${C_Warn:=}"
 : "${C_Info:=}"
 : "${UIWidth:=}"
+
+# __model_scan_row_bytes <model-dir> <basename> — the byte size this file should be
+# scanned as, or EMPTY when it must not become a row at all.
+#
+# Split GGUFs: __model_scan iterates over FILES, so a 2-shard model used to become two
+# rows — and a later shard is a fragment whose header lives in shard 1, so it scanned as
+# `arch=unknown` with a guessed ctx and size, then failed every launch.  Measured
+# 2026-09-16: registry row 19 was exactly that (0.6G, arch=unknown) and one autotune row
+# spent 12 CUDA cycles discovering it.
+#
+# Only the FIRST shard becomes a row, and its size is the SUM over the group: the
+# VRAM-fit maths downstream must see the whole model, and shard 1 alone under-reports by
+# the size of every later shard (3.7G reported for a 4.4G model on this box).
+#
+# Pure on purpose — no logging, no profile dependencies — so a test can extract this body
+# and exercise it against fixture shards without sourcing the console.
+function __model_scan_row_bytes() {
+    local _dir="$1" _fname="$2" _fbytes _shard _shard_bytes _total=0
+    _fbytes=$(stat --format=%s "$_dir/$_fname" 2>/dev/null || stat -f%z "$_dir/$_fname" 2>/dev/null)
+    [[ "$_fbytes" =~ ^[0-9]+$ ]] || return 0
+    if [[ "$_fname" =~ -([0-9]{5})-of-([0-9]{5})\.gguf$ ]]
+    then
+        [[ "${BASH_REMATCH[1]}" != "00001" ]] && return 0
+        for _shard in "$_dir/${_fname%-[0-9][0-9][0-9][0-9][0-9]-of-*}"-*-of-"${BASH_REMATCH[2]}".gguf
+        do
+            [[ -f "$_shard" ]] || continue
+            _shard_bytes=$(stat --format=%s "$_shard" 2>/dev/null || stat -f%z "$_shard" 2>/dev/null)
+            [[ "$_shard_bytes" =~ ^[0-9]+$ ]] && _total=$(( _total + _shard_bytes ))
+        done
+        (( _total > 0 )) && _fbytes=$_total
+    fi
+    printf '%s\n' "$_fbytes"
+}
 
 function __model_scan() {
     if (( ! __LLAMA_DRIVE_MOUNTED ))
@@ -86,7 +119,10 @@ function __model_scan() {
         local fname
         fname=$(basename "$gguf")
         local fbytes
-        fbytes=$(stat --format=%s "$gguf" 2>/dev/null || stat -f%z "$gguf" 2>/dev/null)
+        fbytes=$(__model_scan_row_bytes "$LLAMA_MODEL_DIR" "$fname")
+        # Empty byte count = a LATER shard of a split GGUF: it gets no row of its own, and
+        # the first shard's row carries the group's summed size (see the helper above).
+        [[ -n "$fbytes" ]] || continue
         (( fbytes < 300000000 )) && continue
 
         local meta

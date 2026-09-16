@@ -184,6 +184,32 @@ setup_file() {
     [[ "$output" == *"CONTENDED"* ]]
 }
 
+@test "11e model scan: a split GGUF becomes ONE row, sized by the whole group" {
+    # A 2-shard model used to become TWO rows, and the fragment — whose header lives in
+    # shard 1 — scanned as arch=unknown with a guessed ctx and size, then failed every
+    # launch. On 2026-09-16 that was registry row 19, and one autotune row spent 12 CUDA
+    # cycles discovering it. The helper is pure, so extract and eval its body rather than
+    # sourcing the console: this exercises the real implementation, not a copy of it.
+    local src="$REPO_ROOT/scripts/11e-llm-model.sh"
+    eval "$(sed -n '/^function __model_scan_row_bytes()/,/^}/p' "$src")"
+    declare -F __model_scan_row_bytes >/dev/null || { echo "helper not extracted from $src"; return 1; }
+
+    local dir="$BATS_TEST_TMPDIR/fake-shards"
+    mkdir -p "$dir"
+    dd if=/dev/zero of="$dir/m-00001-of-00002.gguf" bs=1M count=3 status=none
+    dd if=/dev/zero of="$dir/m-00002-of-00002.gguf" bs=1M count=1 status=none
+    dd if=/dev/zero of="$dir/solo.gguf" bs=1M count=2 status=none
+
+    # The first shard is a row, sized as the SUM of the group (3 + 1 MiB).
+    [[ "$(__model_scan_row_bytes "$dir" "m-00001-of-00002.gguf")" -eq $((4 * 1024 * 1024)) ]]
+    # A later shard is not a row of its own.
+    [[ -z "$(__model_scan_row_bytes "$dir" "m-00002-of-00002.gguf")" ]]
+    # An ordinary single-file model is unchanged.
+    [[ "$(__model_scan_row_bytes "$dir" "solo.gguf")" -eq $((2 * 1024 * 1024)) ]]
+    # A file that does not exist yields nothing rather than an error.
+    [[ -z "$(__model_scan_row_bytes "$dir" "absent.gguf")" ]]
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. PROFILE STRUCTURE
 # ─────────────────────────────────────────────────────────────────────────────
