@@ -96,6 +96,32 @@ setup_file() {
 # 2. PROFILE STRUCTURE
 # ─────────────────────────────────────────────────────────────────────────────
 
+@test "profile: sources in a clean environment without error or hang" {
+    # Item 11.7.  `env -i` drops every inherited variable — including
+    # TACTICAL_PROFILE_VERSION and TAC_LIBRARY_MODE — so the loader is exercised
+    # from nothing, and the timeout turns a hang into a test failure rather than a
+    # stuck suite.
+    #
+    # TWO assertions, because either alone is a green that cannot go red.  Sourcing
+    # tactical-console.bashrc NON-interactively returns at its interactive guard:
+    # rc 0, nothing defined, TACTICAL_PROFILE_VERSION left unset.  So "it exits 0"
+    # is true even of a no-op, and the meaningful half is env.sh — the library
+    # loader for exactly this case — which from the SAME empty environment must
+    # define the function interface.  Both halves can fail for real.
+    command -v timeout >/dev/null 2>&1 || skip "timeout not available"
+    [[ -f "$PROFILE_PATH" ]] || skip "profile not found"
+
+    run timeout 60 env -i HOME="$HOME" PATH="/usr/bin:/bin" \
+        bash --noprofile --norc -c 'source "$1"' _ "$PROFILE_PATH"
+    [[ "$status" -eq 0 ]]
+
+    run timeout 60 env -i HOME="$HOME" PATH="/usr/bin:/bin" \
+        bash --noprofile --norc -c \
+        'source "$1" >/dev/null 2>&1 || exit 1; declare -F model >/dev/null || exit 2; declare -F so >/dev/null || exit 3' \
+        _ "$REPO_ROOT/env.sh"
+    [[ "$status" -eq 0 ]]
+}
+
 @test "structure: file contains TACTICAL_PROFILE_VERSION export" {
     grep -q 'export TACTICAL_PROFILE_VERSION=' "$PROFILE_PATH"
 }

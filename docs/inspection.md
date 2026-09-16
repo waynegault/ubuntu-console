@@ -1835,9 +1835,21 @@ copies of the shellcheck flags was never updated. Hooks live in `tools/hooks/`.
 
 🔍 Integration test for source cycle
 
-Check for test that sources bashrc
+`grep -rn 'env -i' tests/*.bats tests/unit/*.bats tests/integration/*.bats`
 
-A test verifies that sourcing tactical-console.bashrc in a clean environment completes without error or hang
+A test sources the loader in a CLEAN environment (`env -i`) and fails if it errors or
+hangs. Added 2026-09-16 to `tests/tactical-console-fast.bats`; before it, the only
+sourcing of the profile in any suite was a sed-patched derivative run with
+`&>/dev/null || true`, so nothing failed if sourcing broke.
+
+TWO assertions are required, and the reason matters:
+
+  * `source tactical-console.bashrc` non-interactively returns at its interactive guard —
+    rc 0, nothing defined, `TACTICAL_PROFILE_VERSION` left unset. So "it exits 0" is true
+    even of a no-op, and an item satisfied by that alone is a green that cannot go red.
+  * `source env.sh` from the SAME empty environment must define the interface
+    (`declare -F model`, `declare -F so`). That is the half with teeth, and it is the
+    library loader rather than the interactive profile — verified 2026-09-16.
 
 11.8
 

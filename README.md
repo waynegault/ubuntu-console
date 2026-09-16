@@ -492,7 +492,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1001 total tests: 659 BATS + 342 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1002 total tests: 660 BATS + 342 Python).
 
 ### Running Tests
 
@@ -1085,7 +1085,7 @@ where it was last present.)
 │   ├── conftest.py                    # Pytest config — BATS lock serialization, VS Code discovery guard
 │   ├── _paths.py                      # Shared sys.path bootstrap for kgraph imports
 │   ├── tactical-console.bats          # BATS full suite (386 tests, ~5-15 min)
-│   ├── tactical-console-fast.bats     # Fast subset (53 tests, ~2 min)
+│   ├── tactical-console-fast.bats     # Fast subset (54 tests, ~2 min)
 │   ├── tactical-console-function-availability.bats  # Function availability checks (2 tests)
 │   ├── test_bats_bridge.py            # BATS→pytest bridge: exposes each @test as an individual pytest test
 │   ├── test_bats_lock_fixture.py      # Tests for conftest lock fixture
