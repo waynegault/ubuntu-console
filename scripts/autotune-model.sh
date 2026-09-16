@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 49
+# Module Version: 50
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -355,9 +355,23 @@ fi
 # VRAM — the model SPILLS instead of OOMing, so the climb marches to native×2.
 # Above ~2× the KV-fit estimate the filled-cache decode collapses AND each
 # huge-ctx CUDA context leaks proportionally more GPU VA (WSL2 dxgkrnl
-# degradation, measured knee ~26 cycles at 109K ctx). Cap the climb at 2× the
-# KV-fit estimate.
-_vram_cap=$(( START_CTX * 2 ))
+# degradation, measured knee ~26 cycles at 109K ctx). Cap the climb at
+# LLM_AUTOTUNE_VRAM_CAP_MULT × the KV-fit estimate (default 2).
+#
+# The knob exists because 2× is an estimate of where the decode collapses, and
+# for a model whose real window is larger it under-probes BY DESIGN — which is
+# how a certifier ends up recording a floor as if it were a ceiling.  Measured
+# 2026-09-16: Phi-3.5-mini (native 131072) serves 32768 FULL in 9 s on this
+# card, while a 2× cap stops its probe near 15360.  A raised cap is NOT a licence
+# to certify a slow window: Phase 4's TPS-first descent still refuses anything
+# that cannot hold MIN_TPS at a filled cache, and it descends until it can.  The
+# only real costs of raising it are CUDA cycles and wall-clock on the climb.
+_vram_mult=${LLM_AUTOTUNE_VRAM_CAP_MULT:-2}
+if ! [[ "$_vram_mult" =~ ^[0-9]+$ ]] || (( _vram_mult < 1 )); then
+    echo "WARN: LLM_AUTOTUNE_VRAM_CAP_MULT='${LLM_AUTOTUNE_VRAM_CAP_MULT}' is not a positive integer — using 2" >&2
+    _vram_mult=2
+fi
+_vram_cap=$(( START_CTX * _vram_mult ))
 [[ $MAX_CTX -gt $_vram_cap ]] && MAX_CTX=$_vram_cap
 
 # Comma-format numbers (standalone helpers — no outer-scope capture)
@@ -627,8 +641,17 @@ _bench_spawn() {
     # (unsupported/corrupt GGUF, missing file) must not be mistaken for OOM —
     # OOM descends to a smaller ctx, a load failure aborts the remaining
     # combos. When the process dies, only the log tells the two apart.
+    #
+    # The matched line goes to stderr as well as the label going to stdout: the
+    # server log is deleted when the spawn unwinds, so a bare "unsupported model"
+    # left no evidence at all behind it.  Two consecutive row-4 failures on
+    # 2026-09-16 (legalparam, which loads fine in 3 s under the same flags) were
+    # un-diagnosable for exactly that reason — the one line that named the cause
+    # had already been thrown away.  Never discard the only witness.
     _startup_fail_type() {
-        if grep -qiE 'unknown model architecture|failed to load model|error loading model|unsupported (model|architecture)|failed to open|no such file' "$_BENCH_LOG" 2>/dev/null; then
+        local _pat='unknown model architecture|failed to load model|error loading model|unsupported (model|architecture)|failed to open|no such file'
+        if grep -qiE "$_pat" "$_BENCH_LOG" 2>/dev/null; then
+            echo "  server log said: $(grep -iE "$_pat" "$_BENCH_LOG" 2>/dev/null | tail -1)" >&2
             printf 'load_fail'
         else
             printf 'oom'
@@ -651,6 +674,12 @@ _bench_spawn() {
         local _sft; _sft=$(_startup_fail_type)
         if kill -0 "$_BENCH_PID" 2>/dev/null && [[ "$_sft" != "load_fail" ]]; then
             _cuda_stall_bump
+            # Say it out loud.  The metrics field below keeps writing load_fail
+            # because that value is what makes the callers ABORT the remaining
+            # combos instead of descending — the right response for a stall too —
+            # but a stall is not an unsupported model, and the operator reading
+            # "unsupported model" is sent to the wrong place entirely.
+            echo "  the server never became healthy in 90s while the process stayed alive — dxgkrnl degradation, NOT an unsupported model" >&2
         else
             _cuda_stall_reset
         fi
