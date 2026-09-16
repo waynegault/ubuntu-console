@@ -7,7 +7,7 @@
 # released by the driver - use a short grace period instead of the full 30s
 # drain wait so recovery isn't delayed.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 7
+# Module Version: 8
 VERSION="1.4.2"   # 1.4.2: drop the retired llama-server-cuda name from the CUDA evict set.
 
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
