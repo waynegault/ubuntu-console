@@ -2017,11 +2017,23 @@ If present, documented why context shift is disabled (avoids silent truncation; 
 
 12.2.7
 
-🔍 --reasoning-budget configured for thinking models
+🔍 Thinking models are controlled by `--reasoning`, not a "budget"
 
-grep -n '\-\-reasoning-budget' <file>
+`grep -rn -- '--reasoning' scripts/ bin/ tools/ systemd/ config/`
 
-Thinking models (Qwen3, QwQ) have explicit reasoning budget; -1 for unlimited documented
+Thinking models are controlled by `--reasoning on|off|auto`, plus `--reasoning-effort
+LEVEL` and `--reasoning-format FORMAT`. There is **no `--reasoning-budget` in this
+build** — `llama-server --help` lists exactly the three above and nothing containing
+"budget" — so the wording this item used to carry named a flag that does not exist.
+
+And something IS passed: every lane unit pins `--reasoning off` in its ExecStart
+(`systemd/llama-cuda-llama32-3b-chat.service`, `llama-cuda-qwen35-4b-pipeline.service`,
+`llama-xe-minicpm5-1b-chat.service`), confirmed against the live processes. That is the
+deliberate choice — thinking traces off for the served lanes.
+
+A 2026-09-16 audit pass reported "no `--reasoning*` flag is passed" and was WRONG: its
+grep covered `scripts/ bin/ tools/ .github/` and missed `systemd/`, which is where these
+flags live. Read the units, not only the scripts.
 
 12.2.8
 
@@ -2949,8 +2961,10 @@ the checklist asks", and neither is a doc edit. Each has its measured evidence.
     hits). MoE rows are handled by LAYER-COUNT heuristics instead (11d-llm-gpu.sh
     returns total_layers because "expert weights stay on CPU anyway"). Satisfied in
     spirit, not in letter — say which.
-  * 12.2.7 — no `--reasoning*` flag is passed, though rows 7 and 21-24 are thinking
-    models (qwen3 / qwen35).
+  * 12.2.7 — CORRECTED, not decided: the flag the item named (`--reasoning-budget`)
+    does not exist in this build, and ``--reasoning off`` IS passed — in the systemd
+    units, which that pass's grep did not cover. See the item. No measurement is
+    outstanding here.
   * 12.2.10 — `--cont-batching` is never passed; concurrency is expressed through
     `--parallel` (registry column, pinned to 1 at 11e-llm-model.sh).
   * 12.3.3 — nothing parses `slots_idle`/`slots_processing`. The only slot code is a
