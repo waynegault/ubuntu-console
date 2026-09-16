@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# shellcheck disable=SC2034
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # ─── Module: prompt-sets ─────────────────────────────────────────────────────
 # Shared SPEC-DEC-006 workload prompt sets — the investigator's real
 # workloads: legal-RAG (structured, long, tool-call-shaped prompts with a

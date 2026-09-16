@@ -1,9 +1,8 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 21
+# Module Version: 22
 # ==============================================================================
 
 # ==============================================================================

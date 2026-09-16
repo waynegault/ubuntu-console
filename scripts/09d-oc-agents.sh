@@ -1,17 +1,13 @@
 # shellcheck shell=bash
-# File-level disables here are only for codes bash cannot fix in a sourced
-# module:
-#   SC1090  dynamic `source` path (shellcheck cannot follow it)
-#   SC2034  tokens/constants exported for other modules to consume
-#   SC2154  variables assigned in an earlier-sourced module (01-constants, …)
-# SC2015 was listed but fires nowhere (no `a && b || c` in this file) and has
-# been dropped.  SC2016 is NOT disabled at file level: it is scoped to the three
-# embedded-script sites below, so a genuinely mis-quoted expansion anywhere else
-# in this file still gets flagged.
-# shellcheck disable=SC1090,SC2034,SC2154
+# No file-level disables any more.  This module is analysed as part of the module
+# graph (tools/lint.sh), so the constants it exports for other modules and the
+# variables it reads from an earlier-loaded one both resolve honestly, and its
+# sources are followed.  SC2016 is NOT disabled at file level — it is scoped to
+# the three embedded-script sites below, so a genuinely mis-quoted expansion
+# anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================

@@ -1,9 +1,8 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034,SC2154
 # ─── Module: 15-model-recommender ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 4
+# Module Version: 5
 # ==============================================================================
 # 15. MODEL RECOMMENDER
 # ==============================================================================
