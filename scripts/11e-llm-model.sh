@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 28
+# Module Version: 29
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -924,7 +924,20 @@ function __model_use_build_command() {
         cmd+=("--threads" "$threads")
         cmd+=("--n-gpu-layers" "$gpu_layers")
         if [[ -n "${__BENCH_MODE:-}" ]]; then
-            cmd+=("--fit" "on" "--fit-target" "256")
+            # Bench mode fits by default so an exploratory model still LOADS on the 4 GB
+            # card.  That changes what is measured: --fit shrinks the served window
+            # (measured 2026-09-16: advertised 8192 served 2048 on a 1.7G model, and the
+            # bench correctly flagged the mismatch), and the autotune certifies with
+            # `--fit off`.  So a bench of a CERTIFIED row must be able to ask for the
+            # certified configuration, or its tps is not comparable with the number in
+            # the registry — that is what TAC_BENCH_FIT=off is for (bench-rows.sh sets
+            # it).  Unset keeps today's behaviour.
+            case "${TAC_BENCH_FIT:-on}" in
+                off|OFF|false|FALSE|0|no|NO)
+                    cmd+=("--fit" "off") ;;
+                *)
+                    cmd+=("--fit" "on" "--fit-target" "256") ;;
+            esac
         else
             cmd+=("--fit" "on" "--fit-target" "$fit_target_mb")
         fi

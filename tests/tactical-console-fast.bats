@@ -210,6 +210,19 @@ setup_file() {
     [[ -z "$(__model_scan_row_bytes "$dir" "absent.gguf")" ]]
 }
 
+@test "11e bench: bench mode can measure the CERTIFIED configuration (--fit off)" {
+    # Bench mode fits by default so an exploratory model still loads on the 4 GB card —
+    # but --fit changes WHAT is measured. On 2026-09-16 the control row benched at 9.9 tps
+    # against the autotune's 29.13 because BOTH branches of the launch passed `--fit on`,
+    # and the served window was fitted down to 2048 while 8192 was advertised. The
+    # override restores comparability for a validation; the default must stay `on` so a
+    # bench of an oversized model still fits rather than failing to load.
+    run grep -A12 'if \[\[ -n "${__BENCH_MODE:-}" \]\]' "$REPO_ROOT/scripts/11e-llm-model.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"TAC_BENCH_FIT"* ]]
+    [[ "$output" == *'"--fit" "off"'* ]]
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. PROFILE STRUCTURE
 # ─────────────────────────────────────────────────────────────────────────────
