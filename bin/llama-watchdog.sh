@@ -49,6 +49,13 @@
 #   ASKED it to stop (SIGTERM — the clean "cleaning up before exit" line), not a
 #   crash, which is the discrimination that took a journal dive to make on
 #   2026-09-16.  Restarting is still the right action; the silence was the bug.
+# v3.9 (2026-09-16): past the flap threshold, STOP restarting and hold the lane down for
+#   a cooling-off window (LLAMA_WATCHDOG_FLAP_HOLD_S, default 30min).  Every restart is a
+#   CUDA context create/destroy cycle and the dxgkrnl leak is proportional to those, so a
+#   lane killed every few minutes is not something to restart forever — and while the
+#   hold is live the chain serves from the tier below rather than churning the card.  The
+#   hold announces itself as POLICY, not as a fault, so a reader does not go hunting for
+#   a broken lane that was deliberately taken out.  Delete the hold file to lift it early.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -57,14 +64,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line (it is what makes an edit here fail the pre-commit guard until the
 #   number moves).  Deliberately separate from VERSION= below: the marker
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.8"
+VERSION="3.9"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -115,6 +122,14 @@ STRIKE_CUDA="$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes"
 FLAP_CUDA="${LLAMA_WATCHDOG_CUDA_FLAP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps}"
 FLAP_WINDOW_S="${LLAMA_WATCHDOG_FLAP_WINDOW_S:-3600}"
 FLAP_THRESHOLD="${LLAMA_WATCHDOG_FLAP_THRESHOLD:-3}"
+# Cooling-off after repeated flaps (v3.9).  Every restart is a CUDA context create/
+# destroy cycle, and the dxgkrnl leak is proportional to those cycles — so a lane being
+# killed every few minutes is not something to restart forever.  Past the threshold the
+# lane is HELD DOWN until this expires, and the log says so: the chain then serves from
+# the next tier (CPU, then the API) instead of churning the card.  Deleting the file
+# lifts the hold early, which is the deliberate escape hatch.
+FLAP_HOLD_FILE="${LLAMA_WATCHDOG_CUDA_FLAP_HOLD_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold}"
+FLAP_HOLD_S="${LLAMA_WATCHDOG_FLAP_HOLD_S:-1800}"
 # Presence of this file suspends ONLY the CUDA lane (see cuda_suspended).  Kept
 # env-overridable like the lock/strike paths so the integration suite sandboxes it.
 CUDA_SUSPEND_FILE="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
@@ -234,6 +249,27 @@ flap_alert() {
     status=$(systemctl --user show "$unit.service" -p ExecMainStatus --value 2>/dev/null || true)
     log "WARNING flap: $unit died ${n}x in $((FLAP_WINDOW_S / 60))min (threshold ${FLAP_THRESHOLD}) — restarting it, but this is NOT normal operation"
     log "WARNING flap: systemd last saw Result=${verdict:-unknown} ExecMainStatus=${status:-unknown}; success/0 means something ASKED it to stop — check bin/gpu-busy.sh --json for a foreign GPU owner, and the unit journal, before trusting this lane"
+}
+
+# --- cooling-off (v3.9) ---
+# flap_hold_active — inside the cooling-off window?
+flap_hold_active() {
+    local until
+    [[ -e "$FLAP_HOLD_FILE" ]] || return 1
+    until=$(cat "$FLAP_HOLD_FILE" 2>/dev/null || true)
+    [[ "$until" =~ ^[0-9]+$ ]] || return 1
+    (( $(date +%s) < until ))
+}
+
+# flap_hold_enter — enter (or extend) the cooling-off window.  What it means matters as
+# much as what it does: the lane is deliberately OFFLINE, not broken, and the tier below
+# is serving — so a reader does not go hunting a fault that is a policy.
+flap_hold_enter() {
+    local until
+    until=$(( $(date +%s) + FLAP_HOLD_S ))
+    printf '%s\n' "$until" > "$FLAP_HOLD_FILE" 2>/dev/null \
+        || log "WARNING: cannot write the flap hold file $FLAP_HOLD_FILE (cooling-off not persisted)"
+    log "WARNING flap: holding $CUDA_UNIT down for $((FLAP_HOLD_S / 60))min after repeated deaths — the CUDA tier is deliberately OFFLINE and the chain serves from the next tier; delete $FLAP_HOLD_FILE to lift this early"
 }
 
 # gpu_busy — 0 (busy) when a foreign workload holds the GPU. FAILS CLOSED: if the
@@ -376,23 +412,32 @@ else
         log "GPU free but bench lock present — not starting $CUDA_UNIT yet"
     else
         # An unexpected death: down, card free, nothing suspending us.  Count it
-        # BEFORE the restart below so the alert and the recovery appear together.
+        # BEFORE any recovery below so the alert and the action appear together.
         flap_record "$FLAP_CUDA"
         flap_alert "$CUDA_UNIT"
-        if [[ "$cuda_state" == "failed" ]]; then
-            systemctl --user reset-failed "$CUDA_UNIT.service" 2>/dev/null || true
-        fi
-        log "GPU free and $CUDA_UNIT not active — starting CUDA lane"
-        if systemctl --user start "$CUDA_UNIT.service" 2>/dev/null; then
-            if wait_healthy "$CUDA_PORT" 150; then
-                log "CUDA lane healthy on :${CUDA_PORT}"
-            else
-                log "CUDA lane started but not healthy on :${CUDA_PORT} within 150s"
-            fi
+        if flap_hold_active; then
+            log "CUDA lane held down after repeated flaps — not starting $CUDA_UNIT (cooling-off; delete $FLAP_HOLD_FILE to lift it early)"
+        elif (( $(flap_count "$FLAP_CUDA") >= FLAP_THRESHOLD )); then
+            # At the threshold the restart STOPS.  A lane dying every few minutes is
+            # either being evicted by something outside our control or is broken; in
+            # both cases another context cycle makes it worse, not better.
+            flap_hold_enter
         else
-            log "Failed to start $CUDA_UNIT"
+            if [[ "$cuda_state" == "failed" ]]; then
+                systemctl --user reset-failed "$CUDA_UNIT.service" 2>/dev/null || true
+            fi
+            log "GPU free and $CUDA_UNIT not active — starting CUDA lane"
+            if systemctl --user start "$CUDA_UNIT.service" 2>/dev/null; then
+                if wait_healthy "$CUDA_PORT" 150; then
+                    log "CUDA lane healthy on :${CUDA_PORT}"
+                else
+                    log "CUDA lane started but not healthy on :${CUDA_PORT} within 150s"
+                fi
+            else
+                log "Failed to start $CUDA_UNIT"
+            fi
+            strike_reset "$STRIKE_CUDA"
         fi
-        strike_reset "$STRIKE_CUDA"
     fi
 fi
 

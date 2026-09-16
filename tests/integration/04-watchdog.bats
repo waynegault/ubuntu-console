@@ -131,7 +131,8 @@ setup() {
     rm -f "$LLAMA_WATCHDOG_LOCK_FILE" \
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes" \
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes" \
-          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" 2>/dev/null || true
+          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" \
+          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold" 2>/dev/null || true
     rm -f "$LLM_BENCH_LOCK_FILE" "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE" 2>/dev/null || true
     export PATH="$WATCHDOG_MOCK_BIN:$PATH"
 }
@@ -431,22 +432,63 @@ setup() {
     # The failure this exists for: on 2026-09-16 the lane died 11 times in 4h and
     # every death produced one "CUDA lane healthy" line from the restart below it.
     # A lane dying every few minutes was indistinguishable from one that never
-    # missed a beat, so nobody looked.  Restarting stays; the silence goes.
+    # missed a beat, so nobody looked.  Below the threshold the restart stays; the
+    # silence goes.  AT the threshold v3.9 stops restarting (see the next test).
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
     echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
 
     run "$WATCHDOG_SCRIPT"
     [[ "$output" != *"WARNING flap"* ]]          # 1st death: below threshold
+    [[ -f "$WATCHDOG_MOCK_STATE/start_called" ]] # ...and it is restarted
+    rm -f "$WATCHDOG_MOCK_STATE/start_called"
     run "$WATCHDOG_SCRIPT"
     [[ "$output" != *"WARNING flap"* ]]          # 2nd: still below
+    [[ -f "$WATCHDOG_MOCK_STATE/start_called" ]] # ...still restarted
 
     run "$WATCHDOG_SCRIPT"
 
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"WARNING flap: llama-cuda-llama32-3b-chat died 3x"* ]]
-    # The alert must not replace the recovery — the lane is still brought up.
-    [[ -f "$WATCHDOG_MOCK_STATE/start_called" ]]
     [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 3 ]]
+}
+
+@test "integration: at the threshold the watchdog STOPS restarting and holds the lane down" {
+    # v3.9: every restart is a CUDA context cycle and the dxgkrnl leak scales with those,
+    # so a lane killed every few minutes must not be restarted forever. The hold is
+    # announced as POLICY — "deliberately OFFLINE", not a fault — and it has an escape
+    # hatch (delete the file).
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+
+    run "$WATCHDOG_SCRIPT"   # 1
+    run "$WATCHDOG_SCRIPT"   # 2
+    rm -f "$WATCHDOG_MOCK_STATE/start_called"
+    run "$WATCHDOG_SCRIPT"   # 3 -> threshold
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"deliberately OFFLINE"* ]]
+    [[ "$output" != *"starting CUDA lane"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/start_called" ]]
+    [[ -f "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold" ]]
+
+    # ...and while the hold is live, further runs leave it alone rather than retrying.
+    run "$WATCHDOG_SCRIPT"
+    [[ "$output" == *"held down after repeated flaps"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/start_called" ]]
+}
+
+@test "integration: an EXPIRED hold lets the lane start again" {
+    # The cooling-off must not become a silent permanent outage: once it lapses the
+    # watchdog resumes normal recovery without anyone having to intervene.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    printf '%s\n' "$(( $(date +%s) - 5 ))" > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"starting CUDA lane"* ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/start_called" ]]
 }
 
 @test "integration: a deliberately suspended CUDA lane is not counted as a flap" {
