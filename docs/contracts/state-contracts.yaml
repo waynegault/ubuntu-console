@@ -48,7 +48,9 @@ files:
       - scripts/09-openclaw.sh
       - scripts/12-dashboard-help.sh
     format: plain text
-    semantics: active model number
+    semantics: active model FILE name (the registry row identity — NOT the row number,
+      which `model scan` reassigns; consumers resolve the row by file name and read the
+      number from it for display)
 
   - path: /dev/shm/last_tps
     producer: scripts/11-llm-manager.sh

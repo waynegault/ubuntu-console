@@ -23,6 +23,8 @@ setup() {
     source "$REPO_ROOT/scripts/01-constants.sh"
     # shellcheck source=scripts/11d-llm-gpu.sh
     source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
+    # shellcheck source=scripts/11a-llm-registry.sh
+    source "$REPO_ROOT/scripts/11a-llm-registry.sh"
     # shellcheck source=scripts/11b-llm-autotune.sh
     source "$REPO_ROOT/scripts/11b-llm-autotune.sh"
 }

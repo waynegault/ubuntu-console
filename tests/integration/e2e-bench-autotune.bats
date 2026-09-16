@@ -37,7 +37,8 @@ REGISTRY
     export LLAMA_DRIVE_ROOT="$TAC_TEST_TMPDIR"
     export LLM_BENCH_MODEL_TIMEOUT=10
     export LLM_BENCH_LOCK_WAIT_SECONDS=1
-    echo "1" > "$ACTIVE_LLM_FILE"
+    # The pointer holds the model FILE name (the row's identity), not a row number.
+    echo "tuned.gguf" > "$ACTIVE_LLM_FILE"
 }
 
 teardown() {

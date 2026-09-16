@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -318,14 +318,14 @@ function __so_ensure_llm_running() {
     if __llm_server_running && __test_port "$LLM_PORT"
     then
         # LLM already running — show which model
-        local _so_active_num=""
-        [[ -f "$ACTIVE_LLM_FILE" ]] && _so_active_num=$(< "$ACTIVE_LLM_FILE")
+        local _so_active_file=""
+        [[ -f "$ACTIVE_LLM_FILE" ]] && _so_active_file=$(< "$ACTIVE_LLM_FILE")
         local _so_entry=""
-        [[ -n "$_so_active_num" ]] && _so_entry=$(__llm_active_entry 2>/dev/null || true)
-        if [[ -n "$_so_active_num" && -n "$_so_entry" ]]
+        [[ -n "$_so_active_file" ]] && _so_entry=$(__llm_active_entry 2>/dev/null || true)
+        if [[ -n "$_so_active_file" && -n "$_so_entry" ]]
         then
-            local _so_mname
-            IFS='|' read -r _ _so_mname _ <<< "$_so_entry"
+            local _so_mname _so_active_num
+            IFS='|' read -r _so_active_num _so_mname _ <<< "$_so_entry"
             __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT] #${_so_active_num} ${_so_mname}" "$C_Success"
         else
             __tac_info "Local LLM" "[RUNNING on PORT $LLM_PORT]" "$C_Success"

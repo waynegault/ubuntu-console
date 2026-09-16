@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11f-llm-runtime ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
@@ -161,10 +161,11 @@ function burn() {
     local request_timeout=360
     if [[ -f "$ACTIVE_LLM_FILE" && -f "$LLM_REGISTRY" ]]
     then
-        local _burn_num _burn_entry _burn_gpu _burn_size
-        _burn_num=$(< "$ACTIVE_LLM_FILE")
-        _burn_entry=$(awk -F'|' -v n="$_burn_num" '$1 == n {print; exit}' \
-            "$LLM_REGISTRY" 2>/dev/null)
+        local _burn_file _burn_entry _burn_gpu _burn_size
+        # The pointer holds the model FILE name; the number form would pick up another
+        # model's size/gpu-layers — and so a wrong request timeout — after a rescan.
+        _burn_file=$(< "$ACTIVE_LLM_FILE")
+        _burn_entry=$(__llm_registry_entry_by_file "$_burn_file" 2>/dev/null || true)
         if [[ -n "$_burn_entry" ]]
         then
             IFS='|' read -r _n _name _file _burn_size _arch _quant _layers \

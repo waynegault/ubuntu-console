@@ -88,7 +88,15 @@ Models are numbered in registry (`~/.llm/models.conf`):
   2  Llama 3.2 3B Instruct          1.9G   Q4_K_M   999
 ```
 
-Use the number for `tac-exec model use N`.
+Use the number for `tac-exec model use N` — it is a **selector**, nothing more.
+
+**A number is not a durable identifier.** `model scan` reassigns numbers whenever a model
+is added or removed (2026-09-16: registering one new model moved every row after it, so a
+model that was 26 became 27). Anything that must survive a rescan — a queued row, a saved
+target, a note in a report — cites the **GGUF file name** (registry field 3), which is the
+row's identity. The autotune path already works that way: `run-autotune-batch.sh`,
+`autotune-rows.sh` and `autotune-model.sh` all accept a file name, and a save is matched to
+the file it tuned. `/dev/shm/active_llm` records the active model by file name too.
 
 ## When to Use
 

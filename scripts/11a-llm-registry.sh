@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================
@@ -186,7 +186,6 @@ function __llm_registry_sync_state() {
     [[ -f "$LLM_REGISTRY" ]] || return 0
 
     local default_file=""
-    local active_num=""
     local active_file=""
     local running=0
 
@@ -196,10 +195,13 @@ function __llm_registry_sync_state() {
         running=1
     fi
 
+    # The pointer holds the model FILE name — the row's identity — so the default/in-VRAM
+    # flags below land on the right row whatever the numbering does.  It used to hold a row
+    # NUMBER, which `model scan` reassigns: a value captured before a rescan silently
+    # flagged a DIFFERENT filename as the default/in-VRAM.
     if [[ -f "$ACTIVE_LLM_FILE" ]]
     then
-        active_num=$(< "$ACTIVE_LLM_FILE")
-        active_file=$(awk -F'|' -v n="$active_num" '$1==n {print $3; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
+        active_file=$(< "$ACTIVE_LLM_FILE")
     fi
 
     awk -F'|' -v def="$default_file" -v af="$active_file" -v run="$running" 'BEGIN {

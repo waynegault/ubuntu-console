@@ -376,7 +376,7 @@ Located at `~/.llm/models.conf` (`$LLM_REGISTRY`) — 37-column pipe-delimited (
 | `~/.llm/models.conf` | Model registry (`$LLM_REGISTRY`) |
 | `/mnt/m/.llm/bench_*.tsv` | Benchmark history |
 | `~/ubuntu-console/config/quant-guide.conf` | Quantization ratings (`$QUANT_GUIDE`) |
-| `/dev/shm/active_llm` | Active model number (integer) |
+| `/dev/shm/active_llm` | Active model FILE name (the row's identity; not a row number) |
 | `/dev/shm/llama-server.log` | Server stdout/stderr |
 | `/dev/shm/last_tps` | Last measured tokens/sec |
 

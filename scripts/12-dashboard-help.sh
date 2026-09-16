@@ -2,7 +2,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 18
+# Module Version: 19
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -155,12 +155,16 @@ function tactical_dashboard() {
     if __test_port "$LLM_PORT"
     then
         local act_mod="ONLINE"
-        local _anum
-        _anum=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
-        if [[ -n "$_anum" && -f "$LLM_REGISTRY" ]]
+        local _afile
+        _afile=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+        if [[ -n "$_afile" && -f "$LLM_REGISTRY" ]]
         then
-            local _entry
-            _entry=$(awk -F'|' -v n="$_anum" '$1 == n' "$LLM_REGISTRY" 2>/dev/null)
+            local _entry _anum
+            # The pointer holds the model FILE name; the row is resolved by file and the
+            # NUMBER comes from the row, so the banner cannot print a number that now
+            # belongs to a different model.
+            _entry=$(__llm_registry_entry_by_file "$_afile" 2>/dev/null || true)
+            _anum=$(printf '%s' "$_entry" | cut -d'|' -f1)
             IFS='|' read -r _ _aname _ <<< "$_entry"
             [[ -n "$_aname" ]] && act_mod="#${_anum} ${_aname}"
         fi

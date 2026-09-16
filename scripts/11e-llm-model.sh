@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 31
+# Module Version: 32
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -229,15 +229,15 @@ function __model_scan() {
 
     if [[ -f "$QUANT_GUIDE" ]]
     then
-        local active_num
-        active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+        local active_file
+        active_file=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
         local archived=0
         local to_archive=()
         local _qnum _qname _qfile _qsize _qqcache _qarch _qgpu _qctx _qthr _qb _qub _qp _qfit _qbe _qmm _qfa _qtps _qautotuned _qdefault _qactive
         while IFS='|' read -r _qnum _qname _qfile _qsize _qqcache _qarch _qgpu _qctx _qthr _qb _qub _qp _qfit _qbe _qmm _qfa _qtps _qautotuned _qdefault _qactive
         do
             [[ "$_qnum" == "#"* || -z "$_qname" ]] && continue
-            [[ "$_qnum" == "$active_num" ]] && continue
+            [[ "$_qfile" == "$active_file" ]] && continue
             local _qrating=""
             local _r _pat _d
             while IFS='|' read -r _r _pat _d
@@ -333,8 +333,8 @@ function __model_list() {
 
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
-    local active_num=""
-    [[ -f "$ACTIVE_LLM_FILE" ]] && active_num=$(< "$ACTIVE_LLM_FILE")
+    # (The active model is flagged by __llm_registry_sync_state above, by FILE name.  This
+    # function used to read the pointer into an `active_num` local that nothing used.)
     local default_file=""
     default_file=$(__llm_default_file 2>/dev/null || true)
 
@@ -1156,7 +1156,12 @@ function __model_use_launch_server() {
     # Include our own PID to prevent stale PIDs from overlapping runs.
     echo "$model_shell_pid" > "/tmp/llm-modelshell.$$.pid"
 
-    if ! { echo "$num" > "${ACTIVE_LLM_FILE}.tmp" 2>/dev/null && mv "${ACTIVE_LLM_FILE}.tmp" "$ACTIVE_LLM_FILE"; }
+    # The pointer holds the model FILE NAME — the row's identity.  It used to hold the row
+    # NUMBER, which `model scan` reassigns: a scan between a launch and a later read
+    # silently re-pointed every consumer (status, burn timeout, spec block size, dashboard,
+    # the gateway) at a DIFFERENT model, and the scan's own archive pass could then move
+    # the model that was actually serving.
+    if ! { echo "$file" > "${ACTIVE_LLM_FILE}.tmp" 2>/dev/null && mv "${ACTIVE_LLM_FILE}.tmp" "$ACTIVE_LLM_FILE"; }
     then
         __tac_info "Warning" "[Could not save state]" "$C_Warning"
     fi
@@ -1428,13 +1433,16 @@ function __model_status() {
 
     if __llm_server_running && __test_port "$LLM_PORT"
     then
-        local active_num=""
-        [[ -f "$ACTIVE_LLM_FILE" ]] && active_num=$(< "$ACTIVE_LLM_FILE")
+        # The pointer names the model FILE; the row number is resolved from the row for
+        # display and for the JSON/plain contract, which still reports active_num.
+        local active_num="" active_file=""
+        [[ -f "$ACTIVE_LLM_FILE" ]] && active_file=$(< "$ACTIVE_LLM_FILE")
         local entry=""
         local name="" file="" size=""
-        if [[ -n "$active_num" ]]
+        if [[ -n "$active_file" ]]
         then
             entry=$(__llm_active_entry 2>/dev/null || true)
+            [[ -n "$entry" ]] && active_num=$(printf '%s' "$entry" | cut -d'|' -f1)
         fi
         if [[ -n "$entry" ]]
         then
@@ -1832,8 +1840,11 @@ function __model_bench() {
         __tac_info "Watchdog" "Suspended for bench (will restore)" "$C_Dim"
     fi
 
-    local _bench_prev_model=""
-    [[ -f "$ACTIVE_LLM_FILE" ]] && _bench_prev_model=$(< "$ACTIVE_LLM_FILE")
+    # Capture the model to restore afterwards as its FILE name (the stable identity): a
+    # bench is exactly the window in which a rescan is plausible, and "restore whatever
+    # sits at row 26 now" is how the wrong model gets started afterwards.
+    local _bench_prev_file=""
+    [[ -f "$ACTIVE_LLM_FILE" ]] && _bench_prev_file=$(< "$ACTIVE_LLM_FILE")
     local bench_backend=""
     bench_backend=$(__llm_backend_normalize "${LLM_SERVER_BACKEND:-native}")
     local bench_autotune_mode="unified"
@@ -2124,10 +2135,14 @@ function __model_bench() {
         fi
     fi
 
-    if [[ -n "$_bench_prev_model" ]]
+    if [[ -n "$_bench_prev_file" ]]
     then
-        __tac_info "Restoring" "Model #${_bench_prev_model}" "$C_Dim"
-        __model_use "$_bench_prev_model" 2>/dev/null
+        # Resolve the row number NOW, from the captured file name (__model_use still takes
+        # a number; the identity that survives the wait is the file).
+        local _bench_prev_num=""
+        _bench_prev_num=$(__llm_registry_row_for_file "$_bench_prev_file" 2>/dev/null || true)
+        __tac_info "Restoring" "Model #${_bench_prev_num:-?} ${_bench_prev_file}" "$C_Dim"
+        [[ -n "$_bench_prev_num" ]] && __model_use "$_bench_prev_num" 2>/dev/null
     fi
 
     if (( _bench_watchdog_was_active ))
@@ -2470,12 +2485,12 @@ function __model_doctor() {
     local active_entry=""
     if [[ -f "$ACTIVE_LLM_FILE" ]]
     then
-        active_num=$(< "$ACTIVE_LLM_FILE")
+        # The pointer holds the model FILE; the number and name come from the resolved row.
         active_entry=$(__llm_active_entry 2>/dev/null || true)
         if [[ -n "$active_entry" ]]
         then
             active_known=1
-            IFS='|' read -r _ active_name _ <<< "$active_entry"
+            IFS='|' read -r active_num active_name _ <<< "$active_entry"
         fi
     fi
 
@@ -2750,9 +2765,12 @@ function __model_delete() {
         return 0
     fi
 
-    local active_num
-    active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
-    if [[ "$target" == "$active_num" ]]
+    # Compare by FILE, not by number: the pointer names the model that is actually
+    # serving, and after a rescan the number would match a different row — either leaving
+    # this server running on a file about to be removed, or stopping the wrong one.
+    local active_file=""
+    active_file=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+    if [[ -n "$active_file" && "$file" == "$active_file" ]]
     then
         __model_stop
     fi
@@ -3033,9 +3051,10 @@ function __model_archive() {
         return 0
     fi
 
-    local active_num
-    active_num=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
-    if [[ "$target" == "$active_num" ]]
+    # Same reasoning as delete: the running model is identified by FILE name.
+    local active_file=""
+    active_file=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null)
+    if [[ -n "$active_file" && "$file" == "$active_file" ]]
     then
         __model_stop
     fi

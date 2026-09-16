@@ -22,6 +22,8 @@ setup() {
     source "$REPO_ROOT/scripts/01-constants.sh"
     # shellcheck source=scripts/11d-llm-gpu.sh
     source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
+    # shellcheck source=scripts/11a-llm-registry.sh
+    source "$REPO_ROOT/scripts/11a-llm-registry.sh"
     # shellcheck source=scripts/11b-llm-autotune.sh
     source "$REPO_ROOT/scripts/11b-llm-autotune.sh"
     export LLM_REGISTRY="$TMPDIR_BATS/models.conf"
@@ -115,7 +117,7 @@ EOF
 #|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len
 1|Model One|model-one.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|1024|llama_server|auto|on|0|yes|no|no|||||||ngram||16|||6.67
 EOF
-    echo "1" > "$TMPDIR_BATS/active_llm"
+    echo "model-one.gguf" > "$TMPDIR_BATS/active_llm"
     run bash -c '
         source "$1/scripts/11d-llm-gpu.sh"
         export LLM_REGISTRY="$2/models.conf"

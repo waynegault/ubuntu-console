@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -38,10 +38,12 @@ readonly _MODEL_QWEN35_4B="Qwen3.5-4B"
 
 function __llm_active_entry() {
     [[ -f "$ACTIVE_LLM_FILE" ]] || return 1
-    local active_num
-    active_num=$(< "$ACTIVE_LLM_FILE")
-    [[ -n "$active_num" ]] || return 1
-    __llm_registry_entry_by_num "$active_num"
+    local active_file
+    active_file=$(< "$ACTIVE_LLM_FILE")
+    [[ -n "$active_file" ]] || return 1
+    # The pointer names the model FILE: resolving it by number would re-target this
+    # lookup whenever a scan renumbers the registry.
+    __llm_registry_entry_by_file "$active_file"
 }
 
 # ---------------------------------------------------------------------------

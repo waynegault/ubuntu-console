@@ -249,7 +249,7 @@ cat ~/.openclaw/logs/bash-errors.log | tail -20
 | OpenClaw config | `tac-exec --read occonf` → `~/.openclaw/openclaw.json` |
 | Gateway journal | `tac-exec le` / `tac-exec lo` |
 | Shell profile | `tac-exec --read oedit` → `~/ubuntu-console/tactical-console.bashrc` |
-| Active model number | `/dev/shm/active_llm` |
+| Active model FILE name (not a row number) | `/dev/shm/active_llm` |
 | Last TPS measurement | `/dev/shm/last_tps` |
 | API key cache | `/dev/shm/tac_win_api_keys` (chmod 600, tmpfs) |
 

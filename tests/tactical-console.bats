@@ -2922,7 +2922,8 @@ EOF
         '1|Test Model|test.gguf|1.0G|Q4_K_M/q8_0|llama|24|16384|6|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
     LLM_REGISTRY="$llm_root/.llm/models.conf"
     ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
-    echo "1" > "$ACTIVE_LLM_FILE"
+    # The pointer holds the model FILE name (the row's identity), not a row number.
+    echo "test.gguf" > "$ACTIVE_LLM_FILE"
     __save_model_ctx 1 16384
     local saved_ctx
     saved_ctx=$(awk -F'|' '$1==1 {print $8}' "$LLM_REGISTRY")
@@ -2937,7 +2938,7 @@ EOF
         '2|Tiny Model|tiny.gguf|0.5G|Q4_K_M/q8_0|llama|32|4096|6|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
     LLM_REGISTRY="$llm_root/.llm/models.conf"
     ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
-    echo "2" > "$ACTIVE_LLM_FILE"
+    echo "tiny.gguf" > "$ACTIVE_LLM_FILE"
     __save_model_ctx 2 2048
     local saved_ctx
     saved_ctx=$(awk -F'|' '$1==2 {print $8}' "$LLM_REGISTRY")
@@ -2951,7 +2952,7 @@ EOF
         '3|Profile Test|profile.gguf|2.0G|Q4_K_M/q8_0|llama|24|4096|6|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
     LLM_REGISTRY="$llm_root/.llm/models.conf"
     ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
-    echo "3" > "$ACTIVE_LLM_FILE"
+    echo "profile.gguf" > "$ACTIVE_LLM_FILE"
     __llm_autotune_profile_save 3 "native" 16384 2048 512 2 512 45.2
     local row
     row=$(awk -F'|' '$1==3' "$LLM_REGISTRY")
@@ -2973,7 +2974,7 @@ EOF
         '4|GpuLayer Test|gpu.gguf|2.0G|Q4_K_M/q8_0|llama|16|4096|6|1024|256|1|256|native|auto|on|0|no|no|no' > "$llm_root/.llm/models.conf"
     LLM_REGISTRY="$llm_root/.llm/models.conf"
     ACTIVE_LLM_FILE="$llm_root/.llm/active_llm"
-    echo "4" > "$ACTIVE_LLM_FILE"
+    echo "gpu.gguf" > "$ACTIVE_LLM_FILE"
     __llm_autotune_profile_save 4 "native" 8192 1024 256 1 256 30.0
     local gpu_layers
     gpu_layers=$(awk -F'|' '$1==4 {print $7}' "$LLM_REGISTRY")

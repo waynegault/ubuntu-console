@@ -114,9 +114,11 @@ Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice 
 
 ## State File
 
-When `model use N` starts a model, the **model number** (integer) is written
-atomically (`.tmp` → `mv`) to `/dev/shm/active_llm`. The dashboard and
-watchdog look up the full registry entry by this number.
+When `model use N` starts a model, the **model FILE name** (the registry row's
+identity — not the row number, which `model scan` reassigns) is written
+atomically (`.tmp` → `mv`) to `/dev/shm/active_llm`. The dashboard, the gateway and
+the burn path resolve the full registry entry by that file name; where they need the
+row number for display they read it FROM the resolved row.
 
 After boot, the actual GPU layer offload count is extracted from the
 llama-server log and displayed (e.g., `GPU Offload: [offloading 24 layers to GPU]`).
@@ -436,7 +438,7 @@ unnecessary API errors.
 | `~/.llm/models.conf` | Also stores autotune winners (`autotuned`, row-level knobs, `mmap_mode`) |
 | `/mnt/m/.llm/bench_*.tsv` | Benchmark history from `model bench` |
 | `~/ubuntu-console/config/quant-guide.conf` | Quantization priority ratings (`$QUANT_GUIDE`) |
-| `/dev/shm/active_llm` | Active model number (integer) |
+| `/dev/shm/active_llm` | Active model FILE name (the row's identity; not a row number) |
 | `/dev/shm/llama-server.log` | Server stdout/stderr log |
 | `/dev/shm/last_tps` | Last measured tokens/sec |
 | `/dev/shm/tac_llm_slots` | Async-cached `/slots` endpoint data (5s TTL) |

@@ -16,6 +16,9 @@ TMPDIR_BATS="$(mktemp -d)"
 setup() {
     source "$REPO_ROOT/scripts/01-constants.sh"
     source "$REPO_ROOT/scripts/11d-llm-gpu.sh"
+    # 11b resolves the model reference to a FILE name through the registry helpers in 11a
+    # (the row identity is the file, not the number), so 11a must be loaded first.
+    source "$REPO_ROOT/scripts/11a-llm-registry.sh"
     source "$REPO_ROOT/scripts/11b-llm-autotune.sh"
     source "$REPO_ROOT/scripts/prompt-sets.sh"
     export LLM_REGISTRY="$TMPDIR_BATS/models.conf"
