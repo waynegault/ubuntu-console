@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 45
+# Module Version: 46
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -2108,6 +2108,22 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         exit 1
     fi
     grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s parallel=%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s ttft_ms=%s\n", $8, $10, $11, $12, $17, $21, $18, $27, $29, $32, $33, $34}'
+
+    # Measurement context (2026-09-16).  A certified tps is only comparable to another
+    # row if the box was quiet when it was taken.  On 2026-09-16 this sweep ran at load
+    # 20-26 on 12 cores and row 2 recorded .96 tps mid-run, with NOTHING in the output
+    # saying so — the number reads as a property of the model.  Printing the load beside
+    # it is the cheap half of the fix; the warning is for the case where it is not cheap.
+    # (Not `local`: this block is script scope, not a function — SC2168.)
+    _row_load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo "?")
+    _row_cores=$(nproc 2>/dev/null || echo "?")
+    if [[ "$_row_load" =~ ^[0-9.]+$ && "$_row_cores" =~ ^[0-9]+$ ]] \
+        && awk -v l="$_row_load" -v c="$_row_cores" 'BEGIN{exit !(l > c)}'
+    then
+        echo "  WARNING: measured at load ${_row_load} on ${_row_cores} cores — the box was CONTENDED, so this row's tps is indicative, not certified. Re-run it on a quiet box before trusting it."
+    else
+        echo "  measured at load ${_row_load} on ${_row_cores} cores"
+    fi
     echo ""
     echo "============================================="
     echo "  done"

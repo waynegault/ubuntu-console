@@ -174,6 +174,16 @@ setup_file() {
     }
 }
 
+@test "autotune: a certified row carries the load it was measured under" {
+    # 2026-09-16: row 2 recorded .96 tps while the box ran at load 20-26 on 12 cores, and
+    # nothing in the output said so — the figure reads as a property of the model. The
+    # summary must name the load, and must say CONTENDED once it exceeds the core count.
+    run grep -A14 'saved:   ctx=' "$REPO_ROOT/scripts/autotune-model.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/proc/loadavg"* ]]
+    [[ "$output" == *"CONTENDED"* ]]
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. PROFILE STRUCTURE
 # ─────────────────────────────────────────────────────────────────────────────
