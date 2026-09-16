@@ -92,6 +92,40 @@ setup_file() {
     "$REPO_ROOT/tools/lint.sh" --files "$REPO_ROOT/install.sh"
 }
 
+@test "lint --files: a .bats suite is parsed by bats, not accused as broken bash" {
+    # Regression (2026-09-16): --files sent a .bats path through `bash -n`, which
+    # cannot parse `@test "name" {`, and answered a perfectly good suite with
+    # "FAIL (syntax)".  The verdict for that dialect must come from bats itself.
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    command -v bats >/dev/null 2>&1 || skip "bats not installed"
+    run "$REPO_ROOT/tools/lint.sh" --files "$REPO_ROOT/tests/integration/04-watchdog.bats"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"bats suite:"* ]]
+    [[ "$output" != *"(syntax)"* ]]
+}
+
+@test "lint --files: a malformed .bats suite still FAILS" {
+    # ...and the fix is not a rubber stamp: a suite bats cannot parse must fail.
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    command -v bats >/dev/null 2>&1 || skip "bats not installed"
+    local bad="$BATS_TEST_TMPDIR/broken.bats"
+    printf '@test "unterminated" {\n  echo hi\n' > "$bad"
+    run "$REPO_ROOT/tools/lint.sh" --files "$bad"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"bats suite"* ]]
+}
+
+@test "lint --files: the .bats branch has no bash fallback when bats is missing" {
+    # Fail closed, like the shellcheck-missing guard at the top of this mode: a
+    # verdict this gate cannot reach must never be dressed up as a pass.
+    # -A16 is exactly the case block (label through ";;"): one line more would
+    # reach the `bash -n` that follows it and make this assertion meaningless.
+    run grep -F -A16 '*.bats)' "$REPO_ROOT/tools/lint.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"cannot parse .bats"* ]]
+    [[ "$output" != *"bash -n"* ]]
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. PROFILE STRUCTURE
 # ─────────────────────────────────────────────────────────────────────────────

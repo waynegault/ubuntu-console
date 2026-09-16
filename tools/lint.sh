@@ -8,11 +8,11 @@
 #        ./tools/lint.sh --files F  (an explicit list of files)
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 11
+# Module Version: 12
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
-VERSION="1.4"
+VERSION="1.5"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -290,6 +290,32 @@ then
             rc=1
             continue
         fi
+        # A .bats suite is NOT bash: `@test "name" {` has no bash equivalent, so
+        # `bash -n` and shellcheck both report a syntax error on a perfectly valid
+        # suite — this branch used to answer a BATS_TEST_FILENAME-style call with
+        # "FAIL (syntax)" and accuse a healthy file.  The correct parser for that
+        # dialect is bats itself: `bats --count` gathers the tests and diagnoses a
+        # malformed suite with file:line.  When bats is absent, refuse — never fall
+        # back to a bash verdict, which would be a lie about the file.
+        case "$f" in
+            *.bats)
+                if command -v bats >/dev/null 2>&1
+                then
+                    if _bats_n=$(bats --count "$f" 2>&1)
+                    then
+                        echo "  PASS  ${f#"$REPO_ROOT"/}  (bats suite: ${_bats_n} tests)"
+                    else
+                        echo "  FAIL  ${f#"$REPO_ROOT"/}  (bats suite)" >&2
+                        printf '%s\n' "$_bats_n" >&2
+                        rc=1
+                    fi
+                else
+                    echo "  FAIL  ${f#"$REPO_ROOT"/}  (bats suite, and bats is not installed — this gate cannot parse .bats)" >&2
+                    rc=1
+                fi
+                continue
+                ;;
+        esac
         if ! bash -n "$f" 2>&1
         then
             echo "  FAIL  ${f#"$REPO_ROOT"/}  (syntax)"
