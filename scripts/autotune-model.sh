@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 51
+# Module Version: 52
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -331,59 +331,37 @@ START_CTX=$(( (START_CTX / 1024) * 1024 ))
 [[ $START_CTX -lt $MIN_CTX ]] && START_CTX=$MIN_CTX
 [[ $START_CTX -gt 4194304 ]] && START_CTX=4194304
 
-# Cap every ctx probe by NATIVE TRAINING CONTEXT.  The old ceiling was native×4
-# (<2 GB models) / native×2 (≥2 GB), on the theory that some headroom was
-# probeable; it is not.  llama.cpp caps the served window to
-# <arch>.context_length at load and says so — "exceeds the training context of the
-# model (2048) - capping" — so a probe above native measures the SAME window under
-# a bigger label, and everything sized from that label is then rejected:
-# "exceeds the available context size (4096 tokens), try increasing it" (a 400
-# mid-request, measured on rows 3 and 4 on 2026-09-16).  That 400 killed the
-# filled-cache certification and the TTFT probe on both rows and left each one
-# recorded at a ctx (8192) that its server served as 4096 and 2048.  Probing above
-# the native window cannot discover anything and costs a CUDA cycle per attempt.
-# MAX_CTX stays a hard ceiling every climb must respect.
-MAX_CTX=$START_CTX
-if [[ -n "${_native_ctx:-}" ]] && [[ "$_native_ctx" =~ ^[0-9]+$ ]] && [[ $_native_ctx -gt 0 ]]; then
-    MAX_CTX=$_native_ctx
-    [[ $START_CTX -gt $MAX_CTX ]] && START_CTX=$MAX_CTX
-fi
-[[ $MAX_CTX -gt 4194304 ]] && MAX_CTX=4194304
-
-# VRAM-fit cap (2026-09-05): the native-ctx ceiling (e.g. 524K for a 256K-native
-# model) lets the Phase-2 climb probe ctx far above where the KV cache fits in
-# VRAM — the model SPILLS instead of OOMing, so the climb marches to native×2.
-# Above ~2× the KV-fit estimate the filled-cache decode collapses AND each
-# huge-ctx CUDA context leaks proportionally more GPU VA (WSL2 dxgkrnl
-# degradation, measured knee ~26 cycles at 109K ctx). Cap the climb at
-# LLM_AUTOTUNE_VRAM_CAP_MULT × the KV-fit estimate (default 2).
+# Probe bounds — floor AND ceiling — come from __autotune_ctx_bounds in
+# scripts/11b-llm-autotune.sh: a pure function, so the arithmetic is unit-tested
+# without a GPU (tests/unit/13-gguf-ctx-bounds.bats).  It is REQUIRED, not
+# best-effort: the console's modules are already mandatory for this script to record
+# anything (see the profile-save guard further down), so a standalone run only ever
+# burned card time and then refused to save.  Failing here is the same verdict before
+# the cost.  What the bounds encode (all measured 2026-09-16):
 #
-# The knob exists because 2× is an estimate of where the decode collapses, and
-# for a model whose real window is larger it under-probes BY DESIGN — which is
-# how a certifier ends up recording a floor as if it were a ceiling.  Measured
-# 2026-09-16: Phi-3.5-mini (native 131072) serves 32768 FULL in 9 s on this
-# card, while a 2× cap stops its probe near 15360.  A raised cap is NOT a licence
-# to certify a slow window: Phase 4's TPS-first descent still refuses anything
-# that cannot hold MIN_TPS at a filled cache, and it descends until it can.  The
-# only real costs of raising it are CUDA cycles and wall-clock on the climb.
-_vram_mult=${LLM_AUTOTUNE_VRAM_CAP_MULT:-2}
-if ! [[ "$_vram_mult" =~ ^[0-9]+$ ]] || (( _vram_mult < 1 )); then
-    echo "WARN: LLM_AUTOTUNE_VRAM_CAP_MULT='${LLM_AUTOTUNE_VRAM_CAP_MULT}' is not a positive integer — using 2" >&2
-    _vram_mult=2
+#   * ceiling = the model NATIVE window.  llama.cpp caps the served window to
+#     <arch>.context_length at load ("exceeds the training context of the model
+#     (2048) - capping"), so a probe above it measures the SAME window under a bigger
+#     label — and everything sized from that label is then rejected mid-request
+#     ("exceeds the available context size (4096 tokens)"), a 400 that killed the
+#     filled-cache certification and the TTFT probe on every clamped row.
+#   * ceiling, second cap = LLM_AUTOTUNE_VRAM_CAP_MULT × the KV-fit estimate (default
+#     2).  2× is an estimate of where the filled-cache decode collapses, and for a
+#     model whose real window is larger it under-probes BY DESIGN: Phi-3.5-mini
+#     (native 131072) serves 32768 FULL in 9 s while a 2× cap stops the probe near
+#     15360.  Raising it is not a licence to certify a slow window — Phase 4's
+#     TPS-first descent still refuses anything that cannot hold MIN_TPS.
+#   * floor = MIN_CTX, but it FOLLOWS THE CEILING DOWN.  A model whose window is below
+#     MIN_CTX (legalparam's 2048) must still be searchable; otherwise the phase-1 loop
+#     `while [[ $c -ge $MIN_CTX ]]` runs ZERO iterations and the row is aborted as an
+#     "unsupported model" having attempted nothing (three runs lost to that on
+#     2026-09-16).
+if ! declare -f __autotune_ctx_bounds &>/dev/null; then
+    echo "ERROR: __autotune_ctx_bounds is not loaded (scripts/11b-llm-autotune.sh missing?) — refusing to autotune without tested ctx bounds." >&2
+    exit 1
 fi
-_vram_cap=$(( START_CTX * _vram_mult ))
-[[ $MAX_CTX -gt $_vram_cap ]] && MAX_CTX=$_vram_cap
-
-# MIN_CTX (4096) is our floor for a USABLE context, not a licence to ask a model for
-# more than it has.  A model whose own window is BELOW it (legalparam's is 2048) must
-# still be searchable at that window, so the floor follows the ceiling down.
-# Without this the phase-1 loop — `while [[ $c -ge $MIN_CTX ]]` with c=START_CTX —
-# never runs a single iteration: found stays false, the initialiser _ALL_LOAD_FAIL=true
-# is then misread as "failed at every ctx", and the row aborts as an "unsupported
-# model" having attempted NOTHING.  That cost three consecutive legalparam runs on
-# 2026-09-16 (30 s each, zero CUDA cycles, no spawn log) before the arithmetic was
-# traced — the row is loadable and serves its 2048 window happily.
-[[ $MIN_CTX -gt $MAX_CTX ]] && MIN_CTX=$MAX_CTX
+read -r START_CTX MAX_CTX MIN_CTX < <(__autotune_ctx_bounds \
+    "$START_CTX" "${_native_ctx:-}" "${LLM_AUTOTUNE_VRAM_CAP_MULT:-2}" "$MIN_CTX")
 
 # Comma-format numbers (standalone helpers — no outer-scope capture)
 fmt() { printf "%'d" "$1"; }

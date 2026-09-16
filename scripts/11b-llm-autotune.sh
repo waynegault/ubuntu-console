@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -36,6 +36,55 @@ function __llm_autotune_sanitize_token() {
 # ---------------------------------------------------------------------------
 function __llm_round2() {
     awk -v v="$1" 'BEGIN { printf "%.2f", v }' 2>/dev/null | sed -E 's/0+$//; s/\.$//'
+}
+
+# ---------------------------------------------------------------------------
+# __autotune_ctx_bounds — the ctx-probe floor/ceiling arithmetic, as a pure function.
+#   args: start_raw native_ctx vram_mult [min_ctx]
+#   stdout: "start_ctx max_ctx min_ctx"
+# Every input is an argument and nothing here touches the card, the registry or the
+# ledger, so the bounds are testable without a GPU (tests/unit/13-gguf-ctx-bounds.bats).
+# That matters because this failure mode is arithmetic, not hardware: on 2026-09-16 a
+# ceiling that landed BELOW the floor — MAX_CTX = the model's native window (2048 for
+# legalparam) against MIN_CTX = 4096 — made autotune-model.sh's phase-1 loop
+# `while [[ $c -ge $MIN_CTX ]]` run ZERO iterations, so the row aborted as an
+# "unsupported model" having attempted nothing (three runs, 30 s each, no spawn).
+# The invariant callers rely on: 1 <= min_ctx <= start_ctx <= max_ctx.
+# native_ctx may be empty/"0" when the GGUF did not yield one.  Then max_ctx stays at
+# start_ctx (the climb cannot exceed the KV-math start — pre-existing behaviour, kept
+# deliberately: without a native window the only thing above start is the VRAM cap,
+# which cannot raise a ceiling).  vram_mult is validated here so a typo cannot reach
+# the arithmetic — a bad value warns and becomes 2.
+# ---------------------------------------------------------------------------
+function __autotune_ctx_bounds() {
+    local start="${1:-0}" native="${2:-}" mult="${3:-2}" min_ctx="${4:-4096}"
+    local max cap
+
+    if ! [[ "$mult" =~ ^[0-9]+$ ]] || (( mult < 1 )); then
+        echo "WARN: vram cap multiplier '$mult' is not a positive integer — using 2" >&2
+        mult=2
+    fi
+
+    (( start < 1 )) && start=$min_ctx
+    start=$(( (start / 1024) * 1024 ))
+    (( start < min_ctx )) && start=$min_ctx
+    (( start > 4194304 )) && start=4194304
+
+    max=$start
+    if [[ "$native" =~ ^[0-9]+$ ]] && (( native > 0 )); then
+        max=$native
+        (( start > max )) && start=$max
+    fi
+    (( max > 4194304 )) && max=4194304
+
+    cap=$(( start * mult ))
+    (( max > cap )) && max=$cap
+
+    # The floor follows the ceiling down: MIN_CTX is a floor for a USABLE context,
+    # not a licence to ask a model for more than it has.
+    (( min_ctx > max )) && min_ctx=$max
+
+    printf '%s %s %s\n' "$start" "$max" "$min_ctx"
 }
 
 # ---------------------------------------------------------------------------
