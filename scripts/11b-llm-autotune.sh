@@ -1,22 +1,23 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
 # @depends: constants, llm-model, llm-runtime
-# @exports: __llm_autotune_profiles_file, __llm_autotune_done_for_model,
+# @exports: __llm_autotune_done_for_model,
 #   __llm_autotune_profile_save, __llm_autotune_verify_winner,
-#   __llm_autotune_estimate_ctx_start, __llm_autotune_profiles_remap_by_registry
+#   __llm_autotune_estimate_ctx_start, __llm_autotune_profiles_remap_by_registry,
+#   __autotune_ctx_bounds
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
 [[ -n "${__TAC_MOD_11B_LLM_AUTOTUNE_LOADED:-}" ]] && return 0
 __TAC_MOD_11B_LLM_AUTOTUNE_LOADED=1
 
-function __llm_autotune_profiles_file() {
-    printf '%s\n' "$LLM_REGISTRY"
-}
+# (Removed 2026-09-16, both unreferenced repo-wide: __llm_autotune_blob_upsert — a
+# backend-keyed encoded blob — and __llm_autotune_profiles_file, which only ever returned
+# $LLM_REGISTRY.  The "profile store" is the registry row itself; the blob predated that.)
 
 # ---------------------------------------------------------------------------
 # __llm_autotune_sanitize_token — Remove registry delimiters from profile values.
@@ -88,64 +89,6 @@ function __autotune_ctx_bounds() {
 }
 
 # ---------------------------------------------------------------------------
-# __llm_autotune_blob_upsert — Upsert backend winner into encoded blob.
-# Blob format (per entry, comma-separated; entries separated by ';'):
-# backend,ctx,batch,ubatch,parallel,fit,tps,stamp,score,stddev,samples,
-# failures,ctx_min,ctx_max,verified,objective
-# Keeps at most one profile entry per backend (latest winner wins).
-# @returns 0 always.
-# ---------------------------------------------------------------------------
-function __llm_autotune_blob_upsert() {
-    local blob="${1:-}"
-    local backend="${2:-}"
-    local ctx_size="${3:-}"
-    local batch="${4:-}"
-    local ubatch="${5:-}"
-    local parallel="${6:-}"
-    local fit_target_mb="${7:-}"
-    local tps="${8:-}"
-    local stamp="${9:-}"
-    local score="${10:-0}"
-    local stddev="${11:-0}"
-    local samples="${12:-0}"
-    local failures="${13:-0}"
-    local ctx_min="${14:-$ctx_size}"
-    local ctx_max="${15:-$ctx_size}"
-    local verified="${16:-0}"
-    local objective="${17:-no-oom>max-ctx>max-tps}"
-
-    objective=$(__llm_autotune_sanitize_token "$objective")
-
-    local out=""
-    local rec
-    local -a entries=()
-    IFS=';' read -r -a entries <<< "$blob"
-    for rec in "${entries[@]}"
-    do
-        [[ -z "$rec" ]] && continue
-        local rb rc _rest
-        IFS=',' read -r rb rc _rest <<< "$rec"
-        if [[ "$rb" == "$backend" ]]
-        then
-            continue
-        fi
-        if [[ -n "$out" ]]
-        then
-            out+=";"
-        fi
-        out+="$rec"
-    done
-
-    local new_entry="${backend},${ctx_size},${batch},${ubatch},${parallel},${fit_target_mb},${tps},${stamp},${score},${stddev},${samples},${failures},${ctx_min},${ctx_max},${verified},${objective}"
-    if [[ -n "$out" ]]
-    then
-        out+=";"
-    fi
-    out+="$new_entry"
-    printf '%s\n' "$out"
-}
-
-# ---------------------------------------------------------------------------
 # __llm_backend_normalize — Normalize backend labels to native/python.
 # @returns 0 and prints normalized backend label.
 # ---------------------------------------------------------------------------
@@ -165,9 +108,20 @@ function __llm_backend_normalize() {
 # @returns 0 when autotuned=yes for the requested backend, 1 otherwise.
 # ---------------------------------------------------------------------------
 function __llm_autotune_done_for_model() {
-    local model_num="${1:-}"
+    local model_ref="${1:-}"
     local requested_backend="${2:-}"
-    [[ "$model_num" =~ ^[0-9]+$ ]] || return 1
+    [[ -n "$model_ref" ]] || return 1
+
+    # A model FILE name is the row's identity; a row NUMBER is accepted and resolved, but
+    # the row is matched on the FILE, so a rescan cannot make this report another model's
+    # autotune status (it gates the auto-autotune path).
+    local model_file=""
+    if [[ "$model_ref" =~ ^[0-9]+$ ]]; then
+        model_file="$(__llm_registry_file_for_row "$model_ref")"
+    else
+        model_file="$model_ref"
+    fi
+    [[ -n "$model_file" ]] || return 1
 
     if [[ -n "$requested_backend" ]]
     then
@@ -178,13 +132,13 @@ function __llm_autotune_done_for_model() {
     # backend, 1 if not found or not yet tuned for that runtime.
     # Default awk exit code is 0 (pattern never matched), so we must force
     # exit 1 when the model row doesn't exist at all.
-    awk -F'|' -v n="$model_num" -v want_backend="$requested_backend" '
+    awk -F'|' -v f="$model_file" -v want_backend="$requested_backend" '
         function norm_backend(raw) {
             if (raw == "native" || raw == "binary" || raw == "llama-server" || raw == "llama_server") return "native"
             if (raw == "python" || raw == "llama-cpp-python" || raw == "module" || raw == "") return "python"
             return raw
         }
-        $1==n {
+        $3==f {
             found=1
             row_backend=norm_backend($14)
             if ($18 == "yes" && (want_backend == "" || row_backend == want_backend)) exit 0

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================
@@ -19,12 +19,16 @@
 __TAC_MOD_11A_LLM_REGISTRY_LOADED=1
 
 # ---------------------------------------------------------------------------
-# __llm_registry_set_field <row_num> <field_index> <value> — Rewrite one field of
-# one registry row, atomically.  Used by __save_model_ctx (field 8).  Its field-17
-# twin (__save_tps) was deleted on 2026-09-16: the runtime's burn path called it
-# after EVERY request, so it overwrote the autotune's certification with whatever
+# __llm_registry_set_field <row_num|model_file> <field_index> <value> — Rewrite one
+# field of one registry row, atomically.  Used by __save_model_ctx (field 8).  Its
+# field-17 twin (__save_tps) was deleted on 2026-09-16: the runtime's burn path called
+# it after EVERY request, so it overwrote the autotune's certification with whatever
 # the last chat or bench had just measured — which is how a validation came to
 # compare a measured number against itself.
+#
+# The model FILE name is the row's identity, so it is the preferred key; a row NUMBER is
+# accepted and resolved, but the rewrite is matched on the FILE — a `model scan` between
+# the call and the write then cannot land the value on a different model.
 #
 # A failed or empty awk run must never truncate the registry, so the rewrite
 # lands in <registry>.tmp and is moved into place only when it is non-empty AND
@@ -34,10 +38,21 @@ __TAC_MOD_11A_LLM_REGISTRY_LOADED=1
 #   distinguish the two.
 # ---------------------------------------------------------------------------
 function __llm_registry_set_field() {
-    local row_num="$1" field_index="$2" value="$3"
-    [[ "$row_num" =~ ^[0-9]+$ && "$field_index" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return 1
-    awk -F'|' -v n="$row_num" -v i="$field_index" -v v="$value" \
-        'BEGIN{OFS="|"} $1 == n {$i = v} {print}' \
+    local row_ref="$1" field_index="$2" value="$3"
+    [[ -n "$row_ref" && "$field_index" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return 1
+
+    local row_file="" _row=""
+    if [[ "$row_ref" =~ ^[0-9]+$ ]]; then
+        _row="$row_ref"
+        row_file="$(__llm_registry_file_for_row "$row_ref")"
+    else
+        row_file="$row_ref"
+        _row="$(__llm_registry_row_for_file "$row_ref")"
+    fi
+    [[ -n "$row_file" && -n "$_row" ]] || return 1
+
+    awk -F'|' -v f="$row_file" -v i="$field_index" -v v="$value" \
+        'BEGIN{OFS="|"} $3 == f {$i = v} {print}' \
         "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
     if [[ -s "${LLM_REGISTRY}.tmp" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp")" -ge 2 ]]
     then

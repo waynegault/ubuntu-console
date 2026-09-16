@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 32
+# Module Version: 33
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -1981,8 +1981,10 @@ function __model_bench() {
         local _bench_quant_rating="unknown"
         _bench_quant_rating=$(__llm_quant_rating "${b_file[$i]}")
 
-        # Auto-autotune only if this model/backend has never been autotuned.
-        if ! __llm_autotune_done_for_model "${b_num[$i]}" "$bench_backend"
+        # Auto-autotune only if this model/backend has never been autotuned.  Keyed by FILE
+        # (b_file[$i]): the row number is resolved from it inside, so a rescan during a
+        # bench run cannot make this read another model's status.
+        if ! __llm_autotune_done_for_model "${b_file[$i]}" "$bench_backend"
         then
             if [[ "$_bench_quant_rating" == "discouraged" && "${LLM_ALLOW_AUTOTUNE_DISCOURAGED:-0}" != "1" ]]
             then
