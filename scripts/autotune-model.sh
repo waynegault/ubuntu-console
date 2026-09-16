@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 48
+# Module Version: 49
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -331,17 +331,21 @@ START_CTX=$(( (START_CTX / 1024) * 1024 ))
 [[ $START_CTX -lt $MIN_CTX ]] && START_CTX=$MIN_CTX
 [[ $START_CTX -gt 4194304 ]] && START_CTX=4194304
 
-# Cap every ctx probe by native training context to avoid probing into
-# RoPE-extended territory where KV-cache load times explode and generation
-# quality is unknown. Multiplier: 4× for <2 GB models (VRAM headroom), 2× for
-# ≥2 GB (tight VRAM). MAX_CTX is a hard ceiling that every climb below must
-# respect — previously only START_CTX was capped, so Phase-2 climbs could
-# balloon to millions of tokens and record unusable profiles.
+# Cap every ctx probe by NATIVE TRAINING CONTEXT.  The old ceiling was native×4
+# (<2 GB models) / native×2 (≥2 GB), on the theory that some headroom was
+# probeable; it is not.  llama.cpp caps the served window to
+# <arch>.context_length at load and says so — "exceeds the training context of the
+# model (2048) - capping" — so a probe above native measures the SAME window under
+# a bigger label, and everything sized from that label is then rejected:
+# "exceeds the available context size (4096 tokens), try increasing it" (a 400
+# mid-request, measured on rows 3 and 4 on 2026-09-16).  That 400 killed the
+# filled-cache certification and the TTFT probe on both rows and left each one
+# recorded at a ctx (8192) that its server served as 4096 and 2048.  Probing above
+# the native window cannot discover anything and costs a CUDA cycle per attempt.
+# MAX_CTX stays a hard ceiling every climb must respect.
 MAX_CTX=$START_CTX
 if [[ -n "${_native_ctx:-}" ]] && [[ "$_native_ctx" =~ ^[0-9]+$ ]] && [[ $_native_ctx -gt 0 ]]; then
-    _mult=4
-    [[ $MODEL_MB -ge 2000 ]] && _mult=2
-    MAX_CTX=$(( _native_ctx * _mult ))
+    MAX_CTX=$_native_ctx
     [[ $START_CTX -gt $MAX_CTX ]] && START_CTX=$MAX_CTX
 fi
 [[ $MAX_CTX -gt 4194304 ]] && MAX_CTX=4194304
@@ -814,6 +818,14 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
         | jq -r '.default_generation_settings.n_ctx // empty' 2>/dev/null || true)
     [[ "$_served_ctx" =~ ^[0-9]+$ ]] || _served_ctx=""
     echo "${decode_tps:-0}|${prefill_tps:-0}||${_acc_len}|${_acc_rate}|${_spec_block}|${_served_ctx}" > "/tmp/at-metrics-$$"
+    # ...and to its OWN file, on a successful read only.  Every failure path below
+    # rewrites the metrics line as "0|0|oom", which would erase a served ctx we HAD
+    # read: a request rejected mid-prompt (400) is enough to do it, and it cost the
+    # certification its served ctx on rows 3 and 4 (2026-09-16) even though earlier
+    # samples of the same server had answered.  The save site reads (and clears) this
+    # file around the certification, so a failure cannot erase the value and a stale
+    # one from an earlier probe cannot leak in.
+    [[ -n "$_served_ctx" ]] && echo "$_served_ctx" > "/tmp/at-served-ctx-$$"
 
     # TPS sentinel guard: llama.cpp clamps t_gen_us to a 1 us floor, so a
     # filled-cache decode that emits EOS in the same microsecond reports a
@@ -1659,15 +1671,22 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     # only wall-clock.  Median SE falls as 1/sqrt(n): 5 gives ~29% less
     # spread than 3.
     _FAST_REJECT=0
+    : > "/tmp/at-served-ctx-$$" 2>/dev/null || rm -f "/tmp/at-served-ctx-$$" 2>/dev/null || true
     _cert=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 5 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert=""
+    # The ctx the server ACTUALLY served, captured by bench_ctx from its live server.
+    # Carried to the save site, which has no server of its own to ask.  Read from the
+    # dedicated file FIRST: it holds the last successful /props read of this server, so a
+    # sample rejected mid-prompt (400) cannot drop it — the metrics line would have been
+    # rewritten as "0|0|oom".  Captured whether or not the tps sample survived, because
+    # the served window is a fact about the live server, not about the measurement.
+    _served_now=$(cat "/tmp/at-served-ctx-$$" 2>/dev/null || true)
+    IFS='|' read -r _fd2 _fp2 _ff2 _fa2 _fr2 _fb2 _served2 < "/tmp/at-metrics-$$" 2>/dev/null || true
+    [[ -n "${_served_now:-}" ]] && _served2="$_served_now"
+    if [[ "${_served2:-}" =~ ^[0-9]+$ ]] && (( _served2 > 0 )); then
+        AUTOTUNE_SERVED_CTX=$_served2
+    fi
     if [[ -n $_cert ]] && [[ $(echo "$_cert > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
         BEST_TPS=$_cert
-        IFS='|' read -r _fd2 _fp2 _ff2 _fa2 _fr2 _fb2 _served2 < "/tmp/at-metrics-$$" 2>/dev/null || true
-        # The ctx the server ACTUALLY served, captured by bench_ctx from its live server.
-        # Carried to the save site, which has no server of its own to ask.
-        if [[ "${_served2:-}" =~ ^[0-9]+$ ]] && (( _served2 > 0 )); then
-            AUTOTUNE_SERVED_CTX=$_served2
-        fi
         BEST_PREFILL="${_fp2:-0}"
     fi
     # Record GPU thermal/clock state alongside the certified number — heat
