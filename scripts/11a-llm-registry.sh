@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================
@@ -117,6 +117,32 @@ function __llm_registry_entry_by_file() {
     local target_file="${1:-}"
     [[ -n "$target_file" && -f "$LLM_REGISTRY" ]] || return 1
     awk -F'|' -v f="$target_file" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# __llm_registry_file_for_row / __llm_registry_row_for_file — the two DIRECTIONS
+# between a row NUMBER and a model FILE name, built on the entry lookups above.
+#
+# The FILE name (field 3) is the row's definitive identity.  Row numbers are assigned by
+# `model scan` and shift whenever a model is added or removed — on 2026-09-16
+# registering one new model moved every model after it down a row (26 became 27), which
+# silently invalidated a queued list of row numbers, and a number captured before a scan
+# points at a different model afterwards.  So anything that must survive a rescan — a
+# save target, a queued row, a stored selection — keys on the file name and resolves to
+# a number only for display.  These wrappers exist so callers do not each re-invent the
+# awk (and cannot pick the wrong field).
+#   stdout: the value, or empty when the row/file is not in the registry.
+# ---------------------------------------------------------------------------
+function __llm_registry_file_for_row() {
+    local entry
+    entry=$(__llm_registry_entry_by_num "${1:-}") || return 0
+    printf '%s\n' "$(printf '%s' "$entry" | cut -d'|' -f3)"
+}
+
+function __llm_registry_row_for_file() {
+    local entry
+    entry=$(__llm_registry_entry_by_file "${1:-}") || return 0
+    printf '%s\n' "$(printf '%s' "$entry" | cut -d'|' -f1)"
 }
 
 # ---------------------------------------------------------------------------

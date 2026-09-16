@@ -22,6 +22,9 @@ TMPDIR_BATS="$(mktemp -d)"
 
 setup() {
     source "$REPO_ROOT/scripts/01-constants.sh"
+    # The two-direction resolvers live in 11a beside the canonical entry lookups; the
+    # autotune save that consumes them lives in 11b.
+    source "$REPO_ROOT/scripts/11a-llm-registry.sh"
     source "$REPO_ROOT/scripts/11b-llm-autotune.sh"
     export LLM_REGISTRY="$TMPDIR_BATS/models.conf"
     cat > "$LLM_REGISTRY" <<'EOF'

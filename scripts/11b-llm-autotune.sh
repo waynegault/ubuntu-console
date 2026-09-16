@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -36,31 +36,6 @@ function __llm_autotune_sanitize_token() {
 # ---------------------------------------------------------------------------
 function __llm_round2() {
     awk -v v="$1" 'BEGIN { printf "%.2f", v }' 2>/dev/null | sed -E 's/0+$//; s/\.$//'
-}
-
-# ---------------------------------------------------------------------------
-# __llm_registry_file_for_row / __llm_registry_row_for_file — the two directions
-# between a registry row NUMBER and a model FILE name.
-#
-# The FILE name (field 3) is the row's definitive identity.  Row numbers are
-# assigned by `model scan` and SHIFT whenever a model is added or removed —
-# 2026-09-16: registering one new model moved every model after it down a row, which
-# silently invalidated a list of queued row numbers (a row that was 26 became 27) and
-# sent work at the wrong entries.  So anything that must survive a rescan — a save
-# target, a queued row, a stored selection — keys on the file name and resolves to a
-# number only for display.
-#   stdout: the value, or empty when the row/file is not in the registry.
-# ---------------------------------------------------------------------------
-function __llm_registry_file_for_row() {
-    local n="${1:-}"
-    [[ "$n" =~ ^[0-9]+$ ]] || return 0
-    awk -F'|' -v n="$n" '$1 == n {print $3; exit}' "$LLM_REGISTRY" 2>/dev/null || true
-}
-
-function __llm_registry_row_for_file() {
-    local f="${1:-}"
-    [[ -n "$f" ]] || return 0
-    awk -F'|' -v f="$f" '$3 == f {print $1; exit}' "$LLM_REGISTRY" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
