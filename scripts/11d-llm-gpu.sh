@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 21
+# Module Version: 22
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -697,7 +697,14 @@ function __gguf_metadata() {
                 val = u32(off); off += 4
                 if (key == "general.file_type")  { ftype  = val; found++ }
                 if (key ~ /block_count/)         { blocks = val; found++ }
-                if (key ~ /context_length/)      { ctx    = val; found++ }
+                # Anchored, because unanchored this also matched
+                # phi3.rope.scaling.original_context_length (the LongRoPE original
+                # window, 4096) and — that key being written AFTER
+                # <arch>.context_length, with a last-wins assignment — overwrote
+                # the real 131072 with 4096 for the whole phi3 family (found
+                # 2026-09-16: those rows reported a 4096 window, so their ctx
+                # estimates and KV-math ceilings were capped at 4096 too).
+                if (key ~ /^[A-Za-z0-9_-]+\.context_length$/ || key == "general.context_length") { ctx = val; found++ }
             }
             # -- Types 10,11,12: UINT64, INT64, FLOAT64 (8 bytes) --
             else if (vt == 10 || vt == 11 || vt == 12) {
@@ -705,7 +712,7 @@ function __gguf_metadata() {
                 val = u32(off); off += 8
                 if (key == "general.file_type")  { ftype  = val; found++ }
                 if (key ~ /block_count/)         { blocks = val; found++ }
-                if (key ~ /context_length/)      { ctx    = val; found++ }
+                if (key ~ /^[A-Za-z0-9_-]+\.context_length$/ || key == "general.context_length") { ctx = val; found++ }
             }
             # -- Type 6: FLOAT32 (4 bytes) --
             else if (vt == 6) { off += 4 }
