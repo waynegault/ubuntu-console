@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11f-llm-runtime ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
@@ -161,15 +161,19 @@ function burn() {
     local request_timeout=360
     if [[ -f "$ACTIVE_LLM_FILE" && -f "$LLM_REGISTRY" ]]
     then
-        local _burn_file _burn_entry _burn_gpu _burn_size
+        local _burn_file _burn_entry _burn_gpu _burn_size _burn_num=""
         # The pointer holds the model FILE name; the number form would pick up another
         # model's size/gpu-layers — and so a wrong request timeout — after a rescan.
         _burn_file=$(< "$ACTIVE_LLM_FILE")
         _burn_entry=$(__llm_registry_entry_by_file "$_burn_file" 2>/dev/null || true)
         if [[ -n "$_burn_entry" ]]
         then
-            IFS='|' read -r _n _name _file _burn_size _arch _quant _layers \
-                _burn_gpu _ctx _threads _tps <<< "$_burn_entry"
+            # Field POSITIONS matter: 1=#, 2=name, 3=file, 4=size_gb, 5=quant_cache,
+            # 6=arch, 7=gpu_layers, 8=ctx, 9=threads.  This read used to name 11 variables
+            # for fields 4-11, so from the fifth onward every one was off by one: the
+            # timeout helper was handed ctx as gpu_layers and quant_cache as arch, which
+            # silently disabled its CPU-only and qwen35 branches (fixed 2026-09-17).
+            IFS='|' read -r _burn_num _name _file _burn_size _qc _arch _burn_gpu _ctx _threads _batch _ubatch <<< "$_burn_entry"
             request_timeout=$(__llm_burn_request_timeout "${_burn_size:-0G}" "${_burn_gpu:-0}" "${_arch:-}" "${__BENCH_MODE:-}")
         fi
     fi

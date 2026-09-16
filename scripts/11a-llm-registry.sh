@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================
@@ -70,11 +70,13 @@ function __llm_registry_set_field() {
 # VRAM-limited card).
 # ---------------------------------------------------------------------------
 function __save_model_ctx() {
-    local model_num="$1"
+    local model_ref="$1"
     local ctx_val="$2"
-    [[ "$model_num" =~ ^[0-9]+$ && "$ctx_val" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return
+    # The model may be named by row NUMBER or by FILE name; __llm_registry_set_field
+    # resolves either and matches the row by file (the row's identity).
+    [[ -n "$model_ref" && "$ctx_val" =~ ^[0-9]+$ && -f "$LLM_REGISTRY" ]] || return
     __llm_registry_sync_state >/dev/null 2>&1 || true
-    __llm_registry_set_field "$model_num" 8 "$ctx_val" || true
+    __llm_registry_set_field "$model_ref" 8 "$ctx_val" || true
 }
 
 # ---------------------------------------------------------------------------

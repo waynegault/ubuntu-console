@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 33
+# Module Version: 34
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -1865,7 +1865,21 @@ function __model_bench() {
     # direct call site. Shellcheck 0.9.0 raised the same false positive as SC2317.
     __bench_run_single_model() {
         export __BENCH_MODE=1
-        local bench_num="$1"
+        # The bench loop hands over the model FILE name — the identity that survives the
+        # wait between selection and this run; __model_use takes a row number, so resolve
+        # it HERE rather than carrying a selection-time number across the boundary.
+        local bench_ref="$1" bench_num=""
+        if [[ "$bench_ref" =~ ^[0-9]+$ ]]
+        then
+            bench_num="$bench_ref"
+        else
+            bench_num=$(__llm_registry_row_for_file "$bench_ref" 2>/dev/null || true)
+        fi
+        if [[ -z "$bench_num" ]]
+        then
+            __tac_info "Bench" "[Model not in the registry any more: $bench_ref]" "$C_Error"
+            return 2
+        fi
         if ! __model_use "$bench_num"
         then
             return 2
@@ -2006,7 +2020,7 @@ function __model_bench() {
                 local _autotune_rc=0
                 # Single autotuner policy: bench and interactive flows both
                 # use the standalone autotune script (no --fit bug, verified).
-                bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "${b_num[$i]}" 2>&1 || _autotune_rc=$?
+                bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "${b_file[$i]}" 2>&1 || _autotune_rc=$?
                 if (( _autotune_rc != 0 ))
                 then
                     # Clear any lifted/safe overrides before skipping this model so
@@ -2046,7 +2060,7 @@ function __model_bench() {
         local bench_model_timeout="${LLM_BENCH_MODEL_TIMEOUT:-600}"
         local bench_model_rc=0
         # Use || to capture non-zero exit codes safely under set -e.
-        __bench_run_with_timeout "$bench_model_timeout" __bench_run_single_model "${b_num[$i]}" || bench_model_rc=$?
+        __bench_run_with_timeout "$bench_model_timeout" __bench_run_single_model "${b_file[$i]}" || bench_model_rc=$?
         if [[ "${__BENCH_TIMEOUT_LAST_PID:-}" =~ ^[0-9]+$ ]]
         then
             bench_cleanup_spawned_pids+=("$__BENCH_TIMEOUT_LAST_PID")
@@ -2068,7 +2082,10 @@ function __model_bench() {
         fi
         if [[ -f "$LLM_LOG_FILE" ]]
         then
-            cp "$LLM_LOG_FILE" "$bench_log_dir/${b_num[$i]}_${b_name[$i]//[^A-Za-z0-9._-]/_}.log" 2>/dev/null
+            # Named by FILE, not by selection-time number: the run-id directory bounds the
+            # ambiguity either way, but a number in the name is a claim about a row that a
+            # rescan can reassign.
+            cp "$LLM_LOG_FILE" "$bench_log_dir/${b_file[$i]//[^A-Za-z0-9._-]/_}.log" 2>/dev/null
         fi
         local tps="FAIL"
         [[ -f "$LLM_TPS_CACHE" ]] && tps=$(< "$LLM_TPS_CACHE")

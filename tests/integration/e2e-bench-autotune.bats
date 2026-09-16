@@ -77,10 +77,10 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     [[ "$src" != *'rm -f "${LLM_AUTOTUNE_LOCK_FILE'* ]]
 }
 
-@test "[B2] Autotune: autotune-model.sh validates model number input" {
+@test "[B2] Autotune: autotune-model.sh validates the model reference (number or file)" {
     local src; src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
-    [[ "$src" == *"MODEL_NUM must be a number"* ]]
-    [[ "$src" == *"Usage: autotune-model.sh MODEL_NUM"* ]]
+    [[ "$src" == *"Usage: autotune-model.sh MODEL_NUM|MODEL_FILE"* ]]
+    [[ "$src" == *"is not a model file in the registry"* ]]
 }
 
 @test "[B3] Autotune: autotune-model.sh sources shared helpers" {
@@ -123,10 +123,10 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     [[ "$output" == *"Usage"* || "$output" == *"MODEL_NUM"* ]]
 }
 
-@test "[D3] Failure: autotune invalid model number" {
+@test "[D3] Failure: autotune invalid model reference" {
     run timeout 3 bash "$REPO_ROOT/scripts/autotune-model.sh" notanumber
     [[ "$status" -ne 124 ]]
-    [[ "$output" == *"must be a number"* ]]
+    [[ "$output" == *"not a model file in the registry"* ]]
 }
 
 @test "[D4] Failure: autotune exits on missing registry" {

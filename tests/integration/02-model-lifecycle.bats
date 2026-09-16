@@ -210,12 +210,16 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
     [[ "$fn_src" == *"__bench_prev_exit_trap"* ]]
 }
 
-@test "integration: autotune-model.sh validates required model number" {
+@test "integration: autotune-model.sh accepts a row number OR a model file name" {
     local fn_src
     fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
-    [[ "$fn_src" == *"MODEL_NUM must be a number"* ]]
-    [[ "$fn_src" == *"Usage: autotune-model.sh MODEL_NUM"* ]]
+    # The model reference is a row number OR a GGUF file name; the FILE name is the row's
+    # identity and is what is carried to the save, so a rescan cannot re-point a run
+    # (2026-09-16).  This used to assert "MODEL_NUM must be a number".
+    [[ "$fn_src" == *"Usage: autotune-model.sh MODEL_NUM|MODEL_FILE"* ]]
+    [[ "$fn_src" == *"is not a model file in the registry"* ]]
+    [[ "$fn_src" == *'__llm_registry_file_for_row'* ]]
 }
 
 @test "integration: autotune-model.sh preserves lock file on early exit" {
@@ -232,10 +236,10 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
     [[ "$output" == *"Usage"* || "$output" == *"MODEL_NUM"* ]]
 }
 
-@test "integration: autotune invalid model number exits quickly" {
+@test "integration: autotune invalid model reference exits quickly" {
     run timeout 3 bash "$REPO_ROOT/scripts/autotune-model.sh" notanumber
     [[ "$status" -ne 124 ]]
-    [[ "$output" == *"must be a number"* ]]
+    [[ "$output" == *"not a model file in the registry"* ]]
 }
 
 @test "integration: autotune nonexistent model exits quickly" {
