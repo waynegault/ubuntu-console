@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 50
+# Module Version: 51
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -373,6 +373,17 @@ if ! [[ "$_vram_mult" =~ ^[0-9]+$ ]] || (( _vram_mult < 1 )); then
 fi
 _vram_cap=$(( START_CTX * _vram_mult ))
 [[ $MAX_CTX -gt $_vram_cap ]] && MAX_CTX=$_vram_cap
+
+# MIN_CTX (4096) is our floor for a USABLE context, not a licence to ask a model for
+# more than it has.  A model whose own window is BELOW it (legalparam's is 2048) must
+# still be searchable at that window, so the floor follows the ceiling down.
+# Without this the phase-1 loop — `while [[ $c -ge $MIN_CTX ]]` with c=START_CTX —
+# never runs a single iteration: found stays false, the initialiser _ALL_LOAD_FAIL=true
+# is then misread as "failed at every ctx", and the row aborts as an "unsupported
+# model" having attempted NOTHING.  That cost three consecutive legalparam runs on
+# 2026-09-16 (30 s each, zero CUDA cycles, no spawn log) before the arithmetic was
+# traced — the row is loadable and serves its 2048 window happily.
+[[ $MIN_CTX -gt $MAX_CTX ]] && MIN_CTX=$MAX_CTX
 
 # Comma-format numbers (standalone helpers — no outer-scope capture)
 fmt() { printf "%'d" "$1"; }
@@ -1315,6 +1326,15 @@ for combo in "${COMBOS[@]}"; do
     if [[ $found == false ]]; then
         fail_label="OOM"
         [[ $_ALL_LOAD_FAIL == true ]] && fail_label="unsupported model"
+        # No attempt at all is NOT a model verdict.  _ALL_LOAD_FAIL is initialised
+        # true and cleared by a non-load failure, so a loop that never ran leaves it
+        # true and libels the model as unsupported.  The floor fix above should make
+        # this unreachable; if it ever fires again, the bug is in the probe bounds
+        # (START_CTX vs MIN_CTX), not in the GGUF — say so instead of accusing it.
+        if [[ $test_num -eq 0 ]]; then
+            fail_label="PROBE BUG (no ctx attempted)"
+            echo "  WARNING: START_CTX=$(fmt "$START_CTX") < MIN_CTX=$(fmt "$MIN_CTX") — the probe never ran. This is a probe-bounds bug, NOT an unsupported model." >&2
+        fi
         echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label} - model cannot run at any ctx"
         # Early abort: if the model never loaded at any ctx (load_fail at every
         # step), skip remaining combos — stepping down won't make the GGUF
