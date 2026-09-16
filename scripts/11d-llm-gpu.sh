@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -1125,51 +1125,13 @@ function __quant_label() {
 }
 
 # ---------------------------------------------------------------------------
-# __renumber_registry — Remove a model entry by number and renumber the rest.
-# Usage: __renumber_registry <model_number>
-# Shared by model delete and model archive to avoid duplicated renumber logic.
+# __renumber_registry lives in 11a-llm-registry.sh, which the 11-llm-manager thin
+# loader sources before this module. It used to be duplicated here verbatim — 36
+# identical lines under the same name — so an edit to one copy silently diverged
+# from the other (docs/inspection.md 10.1). Do not re-add it.
+#
+# The `__model_scan` doc block that used to sit here was orphaned: that function
+# is defined in 11e-llm-model.sh.
 # ---------------------------------------------------------------------------
-function __renumber_registry() {
-    local target="$1"
-    local old_registry_snapshot
-    old_registry_snapshot=$(mktemp "${LLM_REGISTRY}.old.XXXXXX") || return 1
-    cp "$LLM_REGISTRY" "$old_registry_snapshot" 2>/dev/null || {
-        rm -f "$old_registry_snapshot"
-        return 1
-    }
-
-    awk -F'|' -v n="$target" '$1 != n && $1 != "#"' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
-    local newnum=0
-    {
-        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens"
-        while IFS='|' read -r _num rest
-        do
-            ((++newnum))
-            echo "${newnum}|${rest}"
-        done < "${LLM_REGISTRY}.tmp"
-    } > "${LLM_REGISTRY}.tmp2"
-    rm -f "${LLM_REGISTRY}.tmp"
-    # Safety: refuse to replace registry with header-only output.
-    if [[ -s "${LLM_REGISTRY}.tmp2" ]] && [[ "$(wc -l < "${LLM_REGISTRY}.tmp2")" -ge 2 ]]
-    then
-        mv "${LLM_REGISTRY}.tmp2" "$LLM_REGISTRY"
-    else
-        __tac_info "Registry" "[Refusing to overwrite — would leave $(wc -l < "${LLM_REGISTRY}.tmp2") lines]" "$C_Error"
-        rm -f "${LLM_REGISTRY}.tmp2"
-        rm -f "$old_registry_snapshot"
-        return 1
-    fi
-    __llm_autotune_profiles_remap_by_registry "$old_registry_snapshot" "$LLM_REGISTRY" >/dev/null 2>&1 || true
-    rm -f "$old_registry_snapshot"
-    rm -f "$ACTIVE_LLM_FILE"
-    __llm_registry_sync_state >/dev/null 2>&1 || true
-    echo "$newnum"
-}
-
-# ---------------------------------------------------------------------------
-# __model_scan
-# @description Scan GGUF files, regenerate the registry, and archive discouraged quants.
-# @returns 0 on success, 1 if the model drive is unavailable or no models are found.
-# ---------------------------------------------------------------------------# end of file
 
 # end of file

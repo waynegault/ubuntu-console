@@ -1343,17 +1343,23 @@ Zero matches.
 
 🔧 No compressed if/then on one line
 
-grep -nE 'if .*;.*then|;.*fi$' <file>
+`grep -nE ';.*fi$' <file>`
 
-if/then/else/fi each on their own line; no semicolons to compress
+A whole `if/then/else/fi` compressed onto one line is not allowed; the body goes on
+its own line. Measured 2026-09-16: 48 lines. The command that used to be here —
+`if .*;.*then|;.*fi$` — ALSO matched 627 ordinary `if [[ … ]]; then` headers, the
+idiomatic form with the body on the next line, so its output was never a clean
+signal and its count was unusable.
 
 8.1.6
 
 🔧 No compressed for/while/do on one line
 
-grep -nE 'for .*;.*do|while .*;.*do|;.*done$' <file>
+`grep -nE ';.*done$' <file>`
 
-for/do/done and while/do/done each on their own line
+A whole `for/do/done` or `while/do/done` compressed onto one line is not allowed.
+Measured 2026-09-16: 9 lines. As in 8.1.5, the command that used to be here also
+matched normal `for …; do` headers — 144 of them — so it over-reported by ~15x.
 
 8.1.7
 
@@ -1373,11 +1379,18 @@ Lines under 120 characters; long strings broken with backslash continuation. No 
 
 8.1.9
 
-🔧 Heredocs indented with tabs (<<-)
+🔧 No <<- heredocs (tabs are banned)
 
-grep -n '<<[^-]' <file>
+`grep -n '<<-' <file>`
 
-Indented heredocs use <<- with tab indentation for readability
+Zero, and none is wanted. `<<-` only strips TAB indentation, and 8.1.3 forbids tabs
+outright — so the two rules cannot both hold, and this one loses. Heredoc bodies here
+are indented with spaces and the delimiter sits at column 0. Measured 2026-09-16: 0
+occurrences of `<<-`; 27 real heredocs and 98 `<<<` herestrings.
+
+The command that used to be here, `grep -n '<<[^-]'`, had two faults: it matched
+`<<<` herestrings (98 of its 125 hits), so ordinary herestrings were reported as a
+heredoc-style violation, and its expectation (`<<-` with tabs) contradicted 8.1.3.
 
 8.2 Declarations
 
@@ -1511,7 +1524,13 @@ Both loaders read the canonical module list from `scripts/_module-list.sh` (via 
 
 Inspect tactical-console.bashrc
 
-The loader contains only: header comments, interactive guard, sourcing of the shared fragments (`_startup-env.sh`, `_module-list.sh`), TACTICAL_PROFILE_VERSION, the module loop, and `unset` cleanup. All logic lives in modules.
+The loader contains only: header comments, the interactive guard, sourcing of the
+shared fragments (`_startup-env.sh`, `_module-list.sh`), `TACTICAL_PROFILE_VERSION`,
+the module loop, `unset` cleanup — PLUS two blocks this item originally omitted: the
+`-f`-guarded host-env sources (`~/.openclaw/secrets.env`, wrapped in `set -a`/`set +a`,
+and `~/.config/environment.d/90-openclaw.conf`) and the optional display banner
+(`__TAC_DISPLAY_BANNER`, which calls `clear_tactical`). All LOGIC lives in modules.
+Measured 2026-09-16: those are the loader's only non-comment lines — nothing else.
 
 9.5
 
@@ -1607,9 +1626,25 @@ Script includes a --dry-run or validation mode
 
 🔍 Function length reasonable
 
-awk '/^[a-z_].*\(\)/{name=$1; start=NR} /^}/{if(NR-start>100) print name, NR-start}' <file>
+`grep -cE '^(function )?[A-Za-z_][A-Za-z0-9_]*\(\)' <file>` for the definition count,
+then read the long ones — there is NO reliable one-liner for the length itself
 
-Functions under 100 lines; longer functions have subsection comments or are candidates for splitting
+Functions under 100 lines; longer ones carry subsection comments or are split
+candidates. Measured 2026-09-16, brace-matched parse over 63 files (287 definitions):
+**21 functions exceed 100 lines**, longest `ockeys` (`scripts/09d-oc-agents.sh:399`)
+at 436.
+
+Two warnings, both measured, because the obvious commands do not work:
+
+  * The command that used to be here,
+    `awk '/^[a-z_].*\(\)/{name=$1; start=NR} /^}/{…}'`, reports `$1`. For `foo() {`
+    that is the name, but for `function foo() {` — the repo's dominant style, 301 of
+    385 defs — it prints the literal word `function`, so every hit was
+    unattributable. Do not restore it.
+  * Brace counting is not a safe substitute either: heredocs in this repo contain
+    braces, so depth never returns to zero and the span runs away — the candidate
+    probe reported one "function" as **16,452 lines**. An over-100-line hit from
+    that method is noise, not a finding.
 
 10.5
 
@@ -2699,6 +2734,33 @@ is deliberately not worth fixing, and what was still open when this pass ended.
     6.7   single-bracket `[ ]` ..................................... 20
     6.8   `[[ n -gt m ]]` where `(( ))` applies ................... 245
     6.9   `echo "$var" | cmd` where `<<<` applies .................. 78
+    8.1.5 if/then/fi compressed onto one line ...................... 48
+    8.1.6 for/while/done compressed onto one line ................... 9
+    8.1.7 lines carrying both `&&` and `||` ....................... 143
+    8.1.8 lines over 120 characters (longest 513) ................. 240
+    8.2.2 `readonly` names not in ALL_CAPS ......................... 10
+    8.2.4 distinct section-divider forms ........................... 10
+    9.1   files carrying an Author / Purpose / Date header ....... 1 / 9 / 14
+    9.3   Bash-specific constructs with no explanatory comment:
+          `printf -v` 36/0, process substitution 43/2, `mapfile` 13/1,
+          indirect `${!` 14/0, `set -a` 2/0  (total/commented)
+    9.5   functions with no comment above them ..................... 67
+    9.7   non-0/1 exit codes with no explanation ................... 34
+    9.8   functions setting a global with no note .................. 30
+    10.2  non-comment lines holding a 4+-digit literal ............ 202
+    10.5  functions nested deeper than 4 levels .................... 43
+    10.7  ad-hoc `echo/printf … >&2` rather than a helper ......... 125
+    10.4  functions over 100 lines ................................. 21
+
+  The §8–§10 figures come from that pass's own parsers and it flagged 8.2.3, 9.5,
+  9.6, 9.8, 10.1, 10.4 and 10.5 as approximations; treat them as a starting count,
+  not a verdict.
+
+  ONE ITEM IS A STANDARDS DECISION, NOT A MIGRATION: 8.2.1 asks for `name() {` style
+  while the repo is 301 `function name` to 84 `name()` — the majority uses the style
+  the item does not prefer. No file mixes them. Either the item changes to match the
+  code or a migration is decided on purpose; it should not be silently "fixed" a
+  file at a time.
 
   This belongs in a ratchet — a guard that fails when the count RISES — not in a
   per-pass to-do list. A number with no owner and no enforcement only grows.

@@ -29,7 +29,7 @@
 #                 Admin: Wayne | Environment: WSL2 (Ubuntu 24.04)
 #
 # FILE LAYOUT:    - Keep ~/.bashrc as a thin loader only.
-#                 - This file sources ~/ubuntu-console/scripts/*.sh modules.
+#                 - This file sources the module list in scripts/_module-list.sh (never a glob).
 #                 - Use the 'reload' alias to re-source the loader.
 #                 - Use the 'oedit' alias to open the canonical file in VS Code.
 #

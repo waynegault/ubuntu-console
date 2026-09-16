@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 44
+# Module Version: 45
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1234,7 +1234,7 @@ for combo in "${COMBOS[@]}"; do
 
         # If first step-up OOM'd and TPS was marginal (< 25), skip binary probe.
         if [[ $hi -gt 0 ]] && [[ $(echo "$BEST_TPS < 25" | bc 2>/dev/null || echo "0") == 1 ]]; then
-            echo "  (TPS marginal, no binary probe needed)" 
+            echo "  (TPS marginal, no binary probe needed)"
         else
         # Binary probe between lo (working) and hi (OOM) — max 5 steps
         prev_c=-1; probe_count=0

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================
@@ -227,9 +227,11 @@ function __llm_registry_sync_state() {
 }
 
 # ---------------------------------------------------------------------------
-# __llm_autotune_profiles_file — Return registry path for autotune persistence.
-# Autotune winners are persisted directly into flat tuning columns in models.conf.
-# @returns 0 always.
+# __renumber_registry — Remove a model entry by number and renumber the rest.
+# Usage: __renumber_registry <model_number>
+# This is the single definition: 11d-llm-gpu.sh carried a verbatim copy of it
+# until 2026-09-16 (docs/inspection.md 10.1). The block that used to sit here
+# described __llm_autotune_profiles_file, which lives in 11b-llm-autotune.sh.
 # ---------------------------------------------------------------------------
 function __renumber_registry() {
     local target="$1"
