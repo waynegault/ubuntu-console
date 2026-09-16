@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 43
+# Module Version: 44
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -43,7 +43,7 @@ shift  # drop MODEL_NUM
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --workload) WORKLOAD="${2:-}"; shift 2 ;;
-        *) echo "Unknown arg: $1 (usage: autotune-model.sh MODEL_NUM [--workload chat|legal|agentic|mix])" >&2; exit 1 ;;
+        *) echo "Unknown arg: $1 (usage: autotune-model.sh MODEL_NUM [--workload chat|legal|agentic|mix])" >&2; exit 2 ;;
     esac
 done
 case "$WORKLOAD" in

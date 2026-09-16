@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
 #===============================================================================
 # spec_dec_crossover.sh — SPEC-DEC-005 concurrency crossover measurement.
 #
@@ -51,11 +51,11 @@ while [[ $# -gt 0 ]]; do
         --max-tokens) MAX_TOKENS="${2:-256}"; shift 2 ;;
         --port) PORT="${2:-18083}"; shift 2 ;;
         --out) OUT="${2:-}"; shift 2 ;;
-        *) echo "Unknown arg: $1" >&2; exit 1 ;;
+        *) echo "Unknown arg: $1" >&2; exit 2 ;;
     esac
 done
 
-[[ -n "$MODEL" ]] || { echo "Error: --model NUM required" >&2; exit 1; }
+[[ -n "$MODEL" ]] || { echo "Error: --model NUM required" >&2; exit 2; }
 
 source env.sh 2>/dev/null || { echo "Failed to source env.sh" >&2; exit 1; }
 source scripts/prompt-sets.sh 2>/dev/null || true

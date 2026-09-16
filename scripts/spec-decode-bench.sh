@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
 #===============================================================================
 # spec-decode-bench.sh — Per-prompt speculative-decoding acceptance bench.
 #
@@ -31,7 +31,8 @@
 #                             A merely WRONG verdict is still data; this counts
 #                             errors only.
 #
-# Exit: 0 ok, 1 usage/pre-flight failure, 3 aborted after consecutive case errors.
+# Exit: 0 ok; 1 general or pre-flight failure; 2 usage error; 3 aborted after
+#       consecutive case errors.
 #
 # REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation
 # with DFlash" (Intel, TDS 2026)
@@ -58,7 +59,7 @@ while [[ $# -gt 0 ]]; do
         --max-tokens) MAX_TOKENS="$2"; shift 2 ;;
         --set) PROMPT_SET="$2"; shift 2 ;;
         --max-consecutive-errors) MAX_CONSECUTIVE_ERRORS="$2"; shift 2 ;;
-        *) echo "Unknown arg: $1" >&2; exit 1 ;;
+        *) echo "Unknown arg: $1" >&2; exit 2 ;;
     esac
 done
 [[ "$MAX_TOKENS" =~ ^[0-9]+$ ]] && [[ $MAX_TOKENS -gt 0 ]] || MAX_TOKENS=256

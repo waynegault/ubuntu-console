@@ -2023,7 +2023,16 @@ Expected
 
 grep -rn 'LLM_PORT\|8081' scripts/ bin/ tactical-console.bashrc
 
-Defined once in 01-constants.sh; every other file references the variable. Three sanctioned literals, and nothing else: `scripts/oc-health-check.py` (Python cannot source the bash constants, so it carries the same default), `scripts/run-autotune-batch.sh` (an `ss` grep pattern for the interactive port, not a bind), and comment prose. Note that the autotune bench binds `AUTOTUNE_PORT` (18082), never 8081
+Defined once in 01-constants.sh; every other file references the variable. Every
+literal must agree on 8081 — a disagreement is the finding, not the existence of a
+literal. The sanctioned sites are: `scripts/oc-health-check.py` (Python cannot source
+the bash constants, so it carries the same default), `scripts/run-autotune-batch.sh`
+(an `ss` grep pattern for the interactive port, not a bind), `${LLM_PORT:-8081}`
+DEFAULT EXPRESSIONS (`scripts/spec-decode-bench.sh`, `scripts/09a-oc-gateway.sh` —
+a fallback, not a second definition), and comment prose. Note that the autotune bench
+binds `AUTOTUNE_PORT` (18082), never 8081. Measured 2026-09-16: 5 code sites, all
+agreeing. (The old enumeration here listed three and called them exhaustive; it
+missed the two fallbacks — an incomplete list reads as a finding when it is not.)
 
 13.1.2
 
@@ -2152,7 +2161,12 @@ Expected
 
 `grep -c 'continue' ~/ubuntu-console/env.sh`
 
-Returns 1. env.sh sources all 16 profile modules (01-15 + 09b), skipping only `13-init.sh` via a `case/continue` pattern. Note: `14-wsl-extras.sh` has an interactive guard (`case $- in`) and returns early in library mode, so its side-effects don’t run.
+Returns 2, and the count is not the signal. Line 153 is the documented
+`case/continue` skip of `13-init.sh`; line 199 is a PID-validation `continue` inside
+`__tac_env_cleanup_bg_pids`. What matters is that env.sh loads the 16 canonical
+modules from `scripts/_module-list.sh` and skips ONLY `13-init.sh`. Note:
+`14-wsl-extras.sh` has an interactive guard (`case $- in`) and returns early in
+library mode, so its side-effects don’t run.
 
 13.5.2
 
@@ -2218,7 +2232,11 @@ Zero output — every module contains the AI instruction to bump its Module Vers
 
 grep -h '^# Module Version:' scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh | sort -t: -k3 -n
 
-One `# Module Version: N` line per module (16 modules) with a plain integer N
+One `# Module Version: N` line per module, with a plain integer N. The command's glob
+also matches `scripts/18-lint.sh` — a standalone utility, NOT a profile module (env.sh
+lists only the 16 held in `scripts/_module-list.sh`) — so it prints 17 lines, not 16.
+Count the canonical modules from `_module-list.sh`, not from the glob. Measured
+2026-09-16: 17 lines, 16 of them canonical.
 
 13.4.4
 
@@ -2234,7 +2252,15 @@ Inspect TACTICAL_PROFILE_VERSION composition
 
 head -8 scripts/[0-9][0-9]-*.sh
 
-Each module starts with: `# shellcheck shell=bash`, shellcheck disable line, `# ─── Module: <name>` divider, AI instruction block (3 lines), version variable
+Each module starts with `# shellcheck shell=bash`, a `# ─── Module: <name>` (or
+`# --- Module:`) divider, a 3-line AI instruction block and the version line.
+
+The shellcheck disable line is NOT part of the standard: it belongs only to files
+that still need one, and most file-wide disables were removed on 2026-09-15/16. The
+cross-module SC2034/SC2154 class is now resolved by analysing the module graph in
+`tools/lint.sh`, so a module no longer needs a disable to describe an interface its
+consumers use. Never "fix" a module by ADDING a disable to match this item. Measured
+2026-09-16: 6 of 17 files carry no file-wide disable, deliberately.
 
 15. AI Agent Access — High
 
