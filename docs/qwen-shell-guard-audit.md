@@ -7,13 +7,27 @@ found, the local patch applied, and what to ask upstream.
 ## What it is, and where
 
 The "Daemon shell guard" that prefixes denials with `Daemon shell guard denied …` is
-part of the Qwen Code **VS Code IDE companion**, bundled:
+part of the Qwen Code **VS Code IDE companion**, bundled as
+`dist/qwen-cli/chunks/daemon-git-worktree-guard-<hash>.js` (0.23.4 first audited: 2337
+lines, 84 KB, obfuscated identifiers, readable strings; 0.24.0 is the same shape at 84.9
+KB).
 
-    ~/.vscode-server/extensions/qwenlm.qwen-code-vscode-ide-companion-<ver>/dist/qwen-cli/chunks/daemon-git-worktree-guard-<hash>.js
+**There are up to three copies, and the one that matters is the Windows-side one.** At
+2026-09-16 17:00 this box had:
 
-(0.23.4 at the time of writing: 2337 lines, 84 KB, obfuscated identifiers, readable
-strings.) It is **not configurable**: no guard-related setting id exists anywhere in
-the extension's `dist`, and the chunk reads no `settings.*` or `QWEN_*` value. The
+    ~/.vscode-server/extensions/…-0.23.4/…/daemon-git-worktree-guard-QU2CCJIE.js      (patched first — and USELESS)
+    ~/.vscode-server/extensions/…-0.24.0/…/daemon-git-worktree-guard-BULXRIDA.js
+    /mnt/c/Users/wayne/.vscode/extensions/…-0.24.0-win32-x64/…/daemon-git-worktree-guard-ER5WRHNU.js
+
+The daemon that evaluates commands does **not** run inside WSL: a WSL reboot happened and
+this session survived it, and the guard stayed unpatched afterwards. It is the
+**Windows-side** extension that enforces the guard, which is why patching the Linux copies
+alone changed nothing. `~/.local/bin/qwen-guard-patch.sh` now globs **both** install roots,
+and the 0.24.0 update is a standing reminder that an update replaces the chunk — the stock
+2-verb allowlist was still present in 0.24.0, so the upstream gap is unaddressed.
+
+It is **not configurable**: no guard-related setting id exists anywhere in the
+extension's `dist`, and the chunk reads no `settings.*` or `QWEN_*` value. The
 only interface is the source.
 
 Its own docs (`dist/qwen-cli/bundled/qc-helper/docs/qwen-serve.md`) describe it as a
@@ -87,8 +101,10 @@ Two hunks in the chunk, at the guard's own extension points — no logic rewritt
   if `node --check` fails): `~/.local/bin/qwen-guard-patch.sh [--check]`
 - Revert: restore the `.orig-*` backup over the chunk, then reload.
 
-Taking effect requires a daemon/extension reload — **the running daemon still
-executes the unpatched code**, so nothing about the live behaviour is verified yet.
+Taking effect requires a **VS Code window reload** (Developer: Reload Window), not a WSL
+restart: the guard runs in the Windows-side extension host, and a WSL reboot on 2026-09-16
+demonstrably did not reload it. Until that reload, the running daemon still executes the
+unpatched code — so the 12/12 harness below describes the *file*, not live behaviour.
 
 ## Verification
 
@@ -96,8 +112,9 @@ executes the unpatched code**, so nothing about the live behaviour is verified y
 a syntax error here breaks the whole CLI).
 
 Behavioural verification uses the chunk's own exported entry point
-(`createDaemonToolGuard(null)` → an async evaluator over a request), so the patched
-file is exercised without a reload — 12 cases, 12 as expected:
+(`createDaemonToolGuard(null)` → an async evaluator over a request), so a patched
+file is exercised without a reload — re-run on 2026-09-16 17:42 against the
+Windows-side 0.24.0 chunk (`…ER5WRHNU.js`, the copy the daemon loads) and again 12/12:
 
 | Command | Expected | Result |
 |---|---|---|
