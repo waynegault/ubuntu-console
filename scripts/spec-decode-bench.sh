@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 #===============================================================================
 # spec-decode-bench.sh — Per-prompt speculative-decoding acceptance bench.
 #
@@ -20,8 +20,18 @@
 # capped at the requested budget (counter-inflation guard, SPEC-DEC-003).
 #
 # Usage:  spec-decode-bench.sh [--max-tokens N] [--set all|physics|legal|agentic]
+#                           [--max-consecutive-errors N]
 #   --set      prompt set (default all)
 #   --max-tokens  output budget per prompt (default 256)
+#   --max-consecutive-errors  stop after N consecutive case ERRORS (default 2;
+#                             0 disables).  A case that errors is not data — a
+#                             timeout, a dead server or an empty generation would
+#                             otherwise be recorded as a zero and the bench would
+#                             grind through every remaining prompt scoring zeros.
+#                             A merely WRONG verdict is still data; this counts
+#                             errors only.
+#
+# Exit: 0 ok, 1 usage/pre-flight failure, 3 aborted after consecutive case errors.
 #
 # REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation
 # with DFlash" (Intel, TDS 2026)
@@ -42,14 +52,17 @@ source scripts/prompt-sets.sh 2>/dev/null || true
 
 MAX_TOKENS=256
 PROMPT_SET="all"
+MAX_CONSECUTIVE_ERRORS=2
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --max-tokens) MAX_TOKENS="$2"; shift 2 ;;
         --set) PROMPT_SET="$2"; shift 2 ;;
+        --max-consecutive-errors) MAX_CONSECUTIVE_ERRORS="$2"; shift 2 ;;
         *) echo "Unknown arg: $1" >&2; exit 1 ;;
     esac
 done
 [[ "$MAX_TOKENS" =~ ^[0-9]+$ ]] && [[ $MAX_TOKENS -gt 0 ]] || MAX_TOKENS=256
+[[ "$MAX_CONSECUTIVE_ERRORS" =~ ^[0-9]+$ ]] || MAX_CONSECUTIVE_ERRORS=2
 
 # ── Prompt sets (SPEC-DEC-006) ───────────────────────────────────────────────
 # Acceptance varies by content domain and collapses when the drafter's domain
@@ -84,6 +97,11 @@ printf 'spec-decode bench: %s prompts, max_tokens=%s, block size=%s\n' \
 results_delivered=()
 results_usage=()
 results_tps=()
+# Consecutive-error guard (Wayne's bench rule, 2026-09-10): after N consecutive
+# case ERRORS, stop and diagnose rather than grind through the rest scoring
+# zeros — the calme probe run burned hours producing a row that was an artifact.
+consecutive_errors=0
+last_error=""
 for (( i = 0; i < ${#PROMPTS[@]}; i++ )); do
     name="${PROMPT_NAMES[$i]}"
     prompt="${PROMPTS[$i]}"
@@ -93,12 +111,50 @@ for (( i = 0; i < ${#PROMPTS[@]}; i++ )); do
         '{messages: [{role: "system", content: "You are a legal analyst. Respond concisely."}, {role: "user", content: $p}], max_tokens: $mt, temperature: 0}')
 
     start_ns=$(date +%s%N)
-    resp=$(curl -sS --max-time 300 "$local_url" -H "Content-Type: application/json" -d "$payload" 2>/dev/null) || true
+    curl_rc=0
+    resp=$(curl -sS --max-time 300 "$local_url" -H "Content-Type: application/json" -d "$payload" 2>/dev/null) || curl_rc=$?
     end_ns=$(date +%s%N)
     elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
 
-    tokens_usage=$(printf '%s' "$resp" | jq -r '.usage.completion_tokens // 0' 2>/dev/null)
-    [[ "$tokens_usage" =~ ^[0-9]+$ ]] || tokens_usage=0
+    # Classify BEFORE recording anything: an errored case must never be scored.
+    tokens_usage=""
+    _err=""
+    if (( curl_rc != 0 )); then
+        _err="request failed (curl exit ${curl_rc} — 300s max-time elapsed, or the server is down)"
+    elif [[ -z "$resp" ]]; then
+        _err="empty response body"
+    else
+        tokens_usage=$(printf '%s' "$resp" | jq -r '.usage.completion_tokens // empty' 2>/dev/null)
+        if ! [[ "$tokens_usage" =~ ^[0-9]+$ ]]; then
+            _err="no numeric usage.completion_tokens in the response (not a completion?)"
+        elif (( tokens_usage == 0 )); then
+            _err="empty generation (completion_tokens = 0)"
+        fi
+    fi
+
+    if [[ -n "$_err" ]]; then
+        consecutive_errors=$((consecutive_errors + 1))
+        last_error="prompt '${name}': ${_err}"
+        printf '  case %s/%s ERROR (%s consecutive): %s\n' \
+            "$((i + 1))" "${#PROMPTS[@]}" "$consecutive_errors" "$_err" >&2
+        results_delivered[i]="-"
+        results_usage[i]="-"
+        results_tps[i]="-"
+        if (( MAX_CONSECUTIVE_ERRORS > 0 && consecutive_errors >= MAX_CONSECUTIVE_ERRORS )); then
+            printf '\nABORTED after %s consecutive case errors (threshold %s); %s prompt(s) not run.\n' \
+                "$consecutive_errors" "$MAX_CONSECUTIVE_ERRORS" \
+                "$(( ${#PROMPTS[@]} - i - 1 ))" >&2
+            printf 'Last error: %s\n' "$last_error" >&2
+            printf 'Nothing is recorded, rather than a row of zeros. Diagnose first:\n' >&2
+            printf '  model status --plain          # is the server up and healthy?\n' >&2
+            printf '  grep -c "draft acceptance" %s   # is speculative decoding enabled?\n' \
+                "${LLM_LOG_FILE:-/dev/shm/llama-server.log}" >&2
+            exit 3
+        fi
+        continue
+    fi
+    consecutive_errors=0
+
     delivered=$tokens_usage
     (( delivered > MAX_TOKENS )) && delivered=$MAX_TOKENS
     tps=0

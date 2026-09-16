@@ -567,3 +567,26 @@ EOS
     grep -q 'LLAMA_XE_SERVER_BIN' "$REPO_ROOT/bin/gpu-busy.sh"
     grep -q 'memory-core-local-embedding-worker' "$REPO_ROOT/bin/gpu-busy.sh"
 }
+
+# A bench case that ERRORS is not data.  spec-decode-bench.sh coerced a curl
+# failure, a dead server and an empty generation alike to delivered=0 / tps=0 and
+# ground on through every remaining prompt — the calme probe's failure mode, and
+# the opposite of Wayne's bench rule (stop after 2 consecutive failures, then
+# fix).  Pinned statically because the point IS the guard's existence and its
+# default, which no output assertion can capture without standing up a server;
+# the abort itself was verified against a stub returning empty generations
+# (exit 3 after two cases, and the full set with --max-consecutive-errors 0).
+@test "bench: the spec-decode bench stops after 2 consecutive case errors" {
+    local f="$REPO_ROOT/scripts/spec-decode-bench.sh"
+    grep -q 'MAX_CONSECUTIVE_ERRORS=2' "$f"
+    grep -q -- '--max-consecutive-errors' "$f"
+    # Each error class is classified rather than coerced to zero.
+    grep -q 'empty generation (completion_tokens = 0)' "$f"
+    grep -q 'empty response body' "$f"
+    grep -q 'request failed (curl exit' "$f"
+    # The abort is loud and carries its own exit code.
+    grep -q 'ABORTED after' "$f"
+    grep -q 'exit 3' "$f"
+    # ...and the silent coercion that hid all of it must be gone.
+    ! grep -q 'completion_tokens // 0' "$f"
+}
