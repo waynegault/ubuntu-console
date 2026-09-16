@@ -1984,8 +1984,11 @@ class TestMemoryImportConceptConfig(unittest.TestCase):
                 fh.write('{"scaffolding_labels": [')
             for path in (os.path.join(td, "absent.json"), bad):
                 with (
-                    mock.patch("kgraph.memory_import._CONFIG_PATH", path),
-                    self.assertLogs("kgraph.memory_import", level="WARNING") as logs,
+                    # The loader now lives in constants.py, which owns the single
+                    # source for concept classification (item 11.14) — so the path
+                    # to patch and the logger to watch moved there with it.
+                    mock.patch("kgraph.constants._CONCEPT_CONFIG_PATH", path),
+                    self.assertLogs("kgraph.constants", level="WARNING") as logs,
                 ):
                     self.assertEqual(memory_import._load_concept_config(), {})
                 self.assertIn("concept config unavailable", logs.output[0])

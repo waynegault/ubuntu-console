@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 
+from .constants import CONCEPT_ALIASES, STOPWORDS
 from .life_index import load_life_index
 from .models import Graph
 
@@ -264,18 +265,18 @@ def _normalized_semantic_label(node: dict, life_index: dict) -> str:
     label = str(node.get("label", "") or "").strip().lower()
     if not label:
         return ""
-    label = re.sub(r"\b(?:the|a|an)\b", " ", label)
-    label = re.sub(r"\b(?:current|important|main|primary|semantic|visual|layout)\b", " ", label)
+    # Stopwords and aliases come from config/concept-aliases.json via constants.py,
+    # the single source for concept classification (item 11.14).  Both were literals
+    # here: the alias map duplicated models.py's with a DIFFERENT set of entries
+    # (this one was a narrow subset of the JSON while models.py held seven keys the
+    # JSON lacked), and the stopwords were the same ten words spelled as two inline
+    # regexes.  One combined alternation is equivalent to the two sequential subs it
+    # replaces — the alternative sets are disjoint and re.sub is global — and
+    # `sorted` keeps the generated pattern deterministic across runs.
+    label = re.sub(r"\b(?:%s)\b" % "|".join(sorted(STOPWORDS)), " ", label)
     label = re.sub(r"[^a-z0-9\s-]", " ", label)
     label = re.sub(r"\s+", " ", label).strip(" .:-")
-    semantic_aliases = {
-        "graph layout": "graph quality", "layout quality": "graph quality",
-        "semantic graph": "graph quality", "semantic threshold": "semantic filtering",
-        "semantic thresholding": "semantic filtering", "topic cleanup": "topic structure",
-        "topics projection": "topic structure", "topics mode": "topic structure",
-        "label cleanup": "semantic naming", "naming cleanup": "semantic naming",
-    }
-    for alias, canonical in semantic_aliases.items():
+    for alias, canonical in CONCEPT_ALIASES.items():
         if label == alias or alias in label:
             label = canonical
             break

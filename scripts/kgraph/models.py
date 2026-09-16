@@ -16,6 +16,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .constants import CONCEPT_ALIASES, STOPWORDS
+
 
 # ── Confidence ─────────────────────────────────────────────────────────
 
@@ -295,27 +297,16 @@ class GraphBuilder:
 
     # ── semantic deduplication ──
 
-    # Note: alias and stopword sets duplicated from projection.py's
-    # _collapse_semantic_duplicates for builder-level dedup.
-    # Source: rahulnyk/graph_maker review — dedup at extraction time
-    # avoids stale duplicates persisting in the database.
-    _SEMANTIC_ALIASES: dict[str, str] = {
-        "graph layout": "graph quality",
-        "layout quality": "graph quality",
-        "semantic graph": "graph quality",
-        "semantic threshold": "semantic filtering",
-        "graph filtering": "graph quality",
-        "semantic edge": "semantic quality",
-        "edge quality": "semantic quality",
-        "god node": "node importance",
-        "node importance": "node importance",
-        "call flow": "call graph",
-        "call graph": "call graph",
-    }
-    _STOPWORDS: frozenset[str] = frozenset({
-        "the", "a", "an", "current", "important", "main", "primary",
-        "semantic", "visual", "layout",
-    })
+    # Single-sourced from config/concept-aliases.json via constants.py (item 11.14).
+    # These were literal copies: the alias dict duplicated projection.py's, and SEVEN
+    # of its keys were absent from the JSON entirely — so this module and
+    # projection.py classified those labels DIFFERENTLY.  The seven were folded into
+    # the JSON on 2026-09-16 (with self-entries for the canonical targets they
+    # referenced) and every consumer now reads the one set.
+    # Source: rahulnyk/graph_maker review — dedup at extraction time avoids stale
+    # duplicates persisting in the database.
+    _SEMANTIC_ALIASES: dict[str, str] = CONCEPT_ALIASES
+    _STOPWORDS: frozenset[str] = STOPWORDS
 
     def _normalized_label(self, node: GraphNode, life_index: dict | None) -> str:
         """Produce a normalised key for semantic dedup grouping."""

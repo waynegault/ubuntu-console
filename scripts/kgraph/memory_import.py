@@ -17,36 +17,26 @@ import re
 import sqlite3
 from typing import Any
 
-from .constants import normalize_canonical_name
+from .constants import (
+    AGENT_ROLES,
+    CONCEPT_ALIASES,
+    LOW_VALUE_CONCEPTS,
+    SCAFFOLDING_LABELS,
+    WRAPPER_TERMS,
+    load_concept_config,
+    normalize_canonical_name,
+)
 from .life_index import load_life_index
 from .models import Graph, GraphBuilder, slugify
 
 logger = logging.getLogger(__name__)
 
 # ── Concept configuration ──────────────────────────────────────────────
-
-_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config", "concept-aliases.json")
-
-
-def _load_concept_config() -> dict:
-    """Load concept aliases and classification data from config/concept-aliases.json."""
-    path = os.path.normpath(_CONFIG_PATH)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError) as exc:
-        # Without this config all concept filtering (scaffolding labels,
-        # aliases, low-value concepts, agent roles) is silently disabled.
-        logger.warning("concept config unavailable at %s: %s — filtering disabled", path, exc)
-        return {}
-
-
-_concept_config = _load_concept_config()
-SCAFFOLDING_LABELS = frozenset(_concept_config.get("scaffolding_labels", []))
-CONCEPT_ALIASES = _concept_config.get("concept_aliases", {})
-LOW_VALUE_CONCEPTS = frozenset(_concept_config.get("low_value_semantic_concepts", []))
-WRAPPER_TERMS = frozenset(_concept_config.get("canonical_wrapper_terms", []))
-AGENT_ROLES = _concept_config.get("agent_roles", {})
+# Owned by constants.py now: ONE loader for config/concept-aliases.json, shared
+# with models.py and projection.py, which each used to carry their own hardcoded
+# subset (item 11.14).  The names stay module-level so existing readers of
+# `memory_import.SCAFFOLDING_LABELS` and friends keep working.
+_load_concept_config = load_concept_config
 
 
 def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
