@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 52
+# Module Version: 53
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -27,8 +27,11 @@
 
 set -uo pipefail
 
-MODEL="${1:?Usage: autotune-model.sh MODEL_NUM [--workload chat|legal|agentic|mix]}"
-[[ "$MODEL" =~ ^[0-9]+$ ]] || { echo "Error: MODEL_NUM must be a number"; exit 1; }
+# The model may be given as a registry row NUMBER or as a model FILE name.  Both are
+# accepted; the FILE name is the authoritative identity, and a number is resolved to one
+# ONCE (see the resolution below, which must run AFTER the console's registry helpers are
+# sourced — the reason it is not here).
+MODEL_REF="${1:?Usage: autotune-model.sh MODEL_NUM|MODEL_FILE [--workload chat|legal|agentic|mix]}"
 
 # AUTOTUNE-001: workload-selectable scoring payload.  The ctx/batch/TPS
 # winner is certified against the workload that matters — legal-RAG for the
@@ -74,10 +77,28 @@ source scripts/prompt-sets.sh 2>/dev/null || true
 # __gpu_clear_stale_processes, __llm_autotune_profile_save)
 # Falls back to standalone mode if sourcing fails.
 
-ENTRY=$(grep "^${MODEL}|" "$LLM_REGISTRY" 2>/dev/null) || {
-    echo "Error: Model #${MODEL} not found in registry"; exit 1; }
+# Resolve the model reference to a FILE NAME — the row's definitive identity — now that
+# the registry helpers are loaded.  Every idempotent use below (the row lookup, the save,
+# the temp-file names) hangs off this, so a `model scan` mid-run cannot make this run's
+# numbers land on a different model.  MODEL is then taken from the row itself, so the
+# display number is always the current one.
+MODEL=""
+MODEL_FILE=""
+if [[ "$MODEL_REF" =~ ^[0-9]+$ ]]; then
+    MODEL_FILE="$(__llm_registry_file_for_row "$MODEL_REF" 2>/dev/null || true)"
+    [[ -n "$MODEL_FILE" ]] || { echo "Error: registry row $MODEL_REF does not exist" >&2; exit 1; }
+else
+    MODEL_FILE="$MODEL_REF"
+fi
+
+ENTRY=$(awk -F'|' -v f="$MODEL_FILE" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null) || true
+[[ -n "$ENTRY" ]] || {
+    echo "Error: '$MODEL_REF' is not a model file in the registry — pass a row number or the .gguf file name" >&2
+    exit 1; }
 
 IFS='|' read -r _num name file size _qc _arch gpu_layers _ctx _thr _ba _ub _pa _fi _be _mm _fa _tps _autotuned _isdef _vram _prefill _p2ctx _p2b _p2u _p2tps _p2pf _stype _sdmodel _snmax _sngl _sdevice _sacceptlen <<< "$ENTRY"
+MODEL="$_num"
+[[ -n "$MODEL" ]] || { echo "Error: registry row for '$MODEL_FILE' has no number" >&2; exit 1; }
 
 MODEL_PATH="$LLAMA_MODEL_DIR/$file"
 [[ -f "$MODEL_PATH" ]] || { echo "Error: File not found: $MODEL_PATH"; exit 1; }
@@ -2182,7 +2203,9 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # AUTOTUNE-004: the measured (ctx, parallel) envelope rides in the
         # parallel column (field 12) — launches validate --parallel N against
         # it and warn when over-subscribed (11e-llm-model.sh).
-        __llm_autotune_profile_save "$MODEL" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
+        # The FILE name, not the row number: this run tuned MODEL_PATH, so this run's
+        # numbers belong to that file whatever the row numbering does meanwhile.
+        __llm_autotune_profile_save "$MODEL_FILE" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
@@ -2197,7 +2220,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         echo "         The console's llm-manager helpers failed to load; look for 'missing sub-module' above." >&2
         exit 1
     fi
-    grep "^${MODEL}|" "$LLM_REGISTRY" | awk -F'|' '{printf "  saved:   ctx=%s batch=%s/%s parallel=%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s ttft_ms=%s\n", $8, $10, $11, $12, $17, $21, $18, $27, $29, $32, $33, $34}'
+    awk -F'|' -v f="$MODEL_FILE" '$3 == f {printf "  saved:   ctx=%s batch=%s/%s parallel=%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s ttft_ms=%s\n", $8, $10, $11, $12, $17, $21, $18, $27, $29, $32, $33, $34}' "$LLM_REGISTRY"
 
     # Measurement context (2026-09-16).  A certified tps is only comparable to another
     # row if the box was quiet when it was taken.  On 2026-09-16 this sweep ran at load

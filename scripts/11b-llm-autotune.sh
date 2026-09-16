@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -36,6 +36,31 @@ function __llm_autotune_sanitize_token() {
 # ---------------------------------------------------------------------------
 function __llm_round2() {
     awk -v v="$1" 'BEGIN { printf "%.2f", v }' 2>/dev/null | sed -E 's/0+$//; s/\.$//'
+}
+
+# ---------------------------------------------------------------------------
+# __llm_registry_file_for_row / __llm_registry_row_for_file — the two directions
+# between a registry row NUMBER and a model FILE name.
+#
+# The FILE name (field 3) is the row's definitive identity.  Row numbers are
+# assigned by `model scan` and SHIFT whenever a model is added or removed —
+# 2026-09-16: registering one new model moved every model after it down a row, which
+# silently invalidated a list of queued row numbers (a row that was 26 became 27) and
+# sent work at the wrong entries.  So anything that must survive a rescan — a save
+# target, a queued row, a stored selection — keys on the file name and resolves to a
+# number only for display.
+#   stdout: the value, or empty when the row/file is not in the registry.
+# ---------------------------------------------------------------------------
+function __llm_registry_file_for_row() {
+    local n="${1:-}"
+    [[ "$n" =~ ^[0-9]+$ ]] || return 0
+    awk -F'|' -v n="$n" '$1 == n {print $3; exit}' "$LLM_REGISTRY" 2>/dev/null || true
+}
+
+function __llm_registry_row_for_file() {
+    local f="${1:-}"
+    [[ -n "$f" ]] || return 0
+    awk -F'|' -v f="$f" '$3 == f {print $1; exit}' "$LLM_REGISTRY" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -252,7 +277,24 @@ function __llm_autotune_profile_save() {
     local ttft_ms="${25:-}"
     local profile_file="$LLM_REGISTRY"
 
-    [[ "$model_num" =~ ^[0-9]+$ ]] || return 1
+    # $1 is a row NUMBER or a model FILE name; both are accepted so existing callers
+    # keep working, but the row is MATCHED by file name.  A rescan between a run and
+    # its save cannot then write one model's measurements onto another (2026-09-16:
+    # adding a model moved every row after it, so a number captured before the scan
+    # pointed at a different model afterwards).
+    local model_file="" _model_row=""
+    if [[ "$model_num" =~ ^[0-9]+$ ]]; then
+        _model_row="$model_num"
+        model_file="$(__llm_registry_file_for_row "$model_num")"
+    else
+        model_file="$model_num"
+        _model_row="$(__llm_registry_row_for_file "$model_num")"
+    fi
+    # Both must resolve.  A name that is not in the registry used to fall through to an
+    # awk that matched nothing: it changed no row and returned 0, so a typo read as a
+    # successful save.  Fail loudly instead.
+    [[ -n "$model_file" && -n "$_model_row" ]] || return 1
+
     [[ "$ctx_size" =~ ^[0-9]+$ ]] || return 1
     [[ "$batch" =~ ^[0-9]+$ ]] || return 1
     [[ "$ubatch" =~ ^[0-9]+$ ]] || return 1
@@ -312,7 +354,7 @@ function __llm_autotune_profile_save() {
             | cut -d'|' -f2-
     )
 
-    awk -F'|' -v n="$model_num" \
+    awk -F'|' -v f="$model_file" \
         -v ctx="$ctx_size" \
         -v batch="$batch" \
         -v ubatch="$ubatch" \
@@ -349,7 +391,7 @@ function __llm_autotune_profile_save() {
             # highest assigned column, so a later $33 write would otherwise
             # cap the padded row at 33 columns.
             if (NF >= 20 && NF < 37) { for (i = NF + 1; i <= 37; i++) $i = "" }
-            if ($1 == n) {
+            if ($3 == f) {
                 $8 = ctx; $10 = batch; $11 = ubatch; $12 = parallel
                 $13 = fit; $14 = backend
                 if ($16 == "") $16 = "on"

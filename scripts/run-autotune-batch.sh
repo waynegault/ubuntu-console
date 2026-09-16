@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -48,9 +48,14 @@ _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$_SELF_DIR/.." || exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
 
-# Parse model list
+# Parse model list.
+# The list is MODEL FILE NAMES, not row numbers: a row number is only a view of the
+# registry, reassigned by every `model scan`, so a number captured here can point at a
+# different model by the time its turn comes (2026-09-16: one new model moved every row
+# after it).  Numbers are still accepted from the caller — autotune-model.sh resolves
+# them once and then works from the file name throughout.
 if [ $# -eq 0 ]; then
-    MODELS=$(awk -F'|' '$1 ~ /^[0-9]+$/ && $18 != "yes" {print $1}' "$LLM_REGISTRY" | sort -n | tr '\n' ' ')
+    MODELS=$(awk -F'|' '$1 ~ /^[0-9]+$/ && $18 != "yes" {print $3}' "$LLM_REGISTRY" | sort | tr '\n' ' ')
 else
     MODELS="$*"
 fi
@@ -208,7 +213,10 @@ for ((i = 0; i < TOTAL; i++)); do
     fi
 
     COUNT=$((COUNT + 1))
-    printf '\n[%d/%d] model #%s (cyc %s/%s) ... ' "$COUNT" "$TOTAL" "$m" "$(cuda_cycles)" "$CUDA_CYCLE_BUDGET"
+    # Identity is the file name; the row number is resolved for DISPLAY only, so the
+    # line stays useful to a human reading the log without carrying a stale identity.
+    printf '\n[%d/%d] model %s (row %s, cyc %s/%s) ... ' "$COUNT" "$TOTAL" "$m" \
+        "$(__llm_registry_row_for_file "$m" 2>/dev/null || echo '?')" "$(cuda_cycles)" "$CUDA_CYCLE_BUDGET"
     _row_rc=0
     bash "$HOME/ubuntu-console/scripts/autotune-model.sh" "$m" 2>&1 || _row_rc=$?
     if (( _row_rc == 0 )); then
