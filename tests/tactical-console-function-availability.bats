@@ -51,7 +51,7 @@ setup() {
         __model_info __model_bench __model_doctor __model_recommend
         __llm_registry_entry_by_num __llm_default_entry
         __llm_wait_for_health __model_bench_history
-        __gguf_metadata __save_tps __renumber_registry
+        __gguf_metadata __renumber_registry
         __save_model_ctx
         # OpenClaw
         oc so xo oc-doctor-local

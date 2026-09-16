@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 29
+# Module Version: 30
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -3092,7 +3092,7 @@ bench-compare|bench-latest|bench-history|delete|archive|download}"
 
 # @extractable: model() is the largest function (~500 lines). When splitting
 # into modules, extract it into its own file (e.g. ~/.bashrc.d/11-llm-model.sh)
-# along with __renumber_registry, __quant_label, and __save_tps.
+# along with __renumber_registry, __quant_label, and __save_model_ctx.
 function model() {
     local action="${1:-}"
     (( $# > 0 )) && shift

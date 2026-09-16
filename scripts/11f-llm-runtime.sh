@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11f-llm-runtime ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
@@ -429,8 +429,13 @@ function burn() {
             "${C_Dim}spec-decode: acceptance len ${_sd_len} (rate ${_sd_rate}, ${_sd_acc}/${_sd_gen} accepted/drafted, block ${_sd_block})${C_Reset}"
     fi
 
+    # The measured rate belongs to the RUNTIME, not the registry.  Field 17 is the
+    # autotune's CERTIFICATION, and this path used to overwrite it after every request:
+    # measured 2026-09-16, a 25-row bench rewrote every benched row's tps, so a
+    # validation that compared the bench against "the recorded value" was comparing a
+    # number with itself.  LLM_TPS_CACHE / LAST_TPS is where the last observed rate
+    # lives — the registry keeps what the autotune certified.
     echo "${tps_int}.${tps_dec} tps" > "${LLM_TPS_CACHE}.tmp" && mv "${LLM_TPS_CACHE}.tmp" "$LLM_TPS_CACHE"
-    __save_tps "${tps_int}.${tps_dec}"
 
     [[ -f "$LLM_TPS_CACHE" ]] && LAST_TPS=$(< "$LLM_TPS_CACHE")
     return 0
@@ -537,8 +542,9 @@ function __llm_sse_core() {
         local tps_dec=$(( tps_x10 % 10 ))
         local elapsed_s=$(( elapsed_ms / 1000 ))
         printf '\n%s(%s.%s tps)%s\n' "$C_Dim" "$tps_int" "$tps_dec" "$C_Reset"
+        # Runtime only — see the note on the other burn site: the certification in
+        # registry field 17 is the autotune's, and this path must not overwrite it.
         echo "${tps_int}.${tps_dec} tps" > "${LLM_TPS_CACHE}.tmp" && mv "${LLM_TPS_CACHE}.tmp" "$LLM_TPS_CACHE"
-        __save_tps "${tps_int}.${tps_dec}"
     else
         echo
     fi

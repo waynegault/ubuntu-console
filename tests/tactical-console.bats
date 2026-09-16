@@ -215,7 +215,6 @@ _TAC_NEEDS_PROFILE=(
         __quant_label \
         __gguf_metadata \
         __renumber_registry \
-        __save_tps \
         __llm_chat_send \
         __llm_sse_core \
         __llm_stream \
@@ -2852,8 +2851,15 @@ EOF
 }
 
 
-@test "llm-manager: __save_tps function is defined" {
-    declare -f __save_tps >/dev/null
+@test "llm-manager: the runtime does not overwrite the autotune's certified tps" {
+    # 2026-09-16: the runtime's burn path called __save_tps after EVERY request, so a
+    # 25-row bench rewrote every benched row's tps — and a validation ended up comparing a
+    # measured number against itself.  Field 17 belongs to the autotune; the last observed
+    # rate lives in LLM_TPS_CACHE / LAST_TPS, which this path still writes.
+    run grep -c '__save_tps' "$REPO_ROOT/scripts/11f-llm-runtime.sh"
+    [ "$output" -eq 0 ]
+    run grep -c '__llm_registry_set_field.*17' "$REPO_ROOT/scripts/11f-llm-runtime.sh"
+    [ "$output" -eq 0 ]
 }
 
 @test "llm-manager: __renumber_registry function is defined" {

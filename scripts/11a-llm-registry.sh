@@ -1,13 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================
 # @modular-section: llm-manager
 # @depends: constants, design-tokens, ui-engine, hooks, llm-server, llm-autotune
-# @exports: __save_tps, __save_model_ctx, __llm_registry_set_field, __require_llm,
+# @exports: __save_model_ctx, __llm_registry_set_field, __require_llm,
 #   __llm_json_escape,
 #   __llm_registry_entry_by_num, __llm_registry_entry_by_file,
 #   __llm_default_file, __llm_default_entry, __llm_default_number,
@@ -20,9 +20,11 @@ __TAC_MOD_11A_LLM_REGISTRY_LOADED=1
 
 # ---------------------------------------------------------------------------
 # __llm_registry_set_field <row_num> <field_index> <value> — Rewrite one field of
-# one registry row, atomically.  Shared by __save_tps (field 17) and
-# __save_model_ctx (field 8), which were copy-paste identical apart from the
-# field index and the awk variable names.
+# one registry row, atomically.  Used by __save_model_ctx (field 8).  Its field-17
+# twin (__save_tps) was deleted on 2026-09-16: the runtime's burn path called it
+# after EVERY request, so it overwrote the autotune's certification with whatever
+# the last chat or bench had just measured — which is how a validation came to
+# compare a measured number against itself.
 #
 # A failed or empty awk run must never truncate the registry, so the rewrite
 # lands in <registry>.tmp and is moved into place only when it is non-empty AND
@@ -44,16 +46,6 @@ function __llm_registry_set_field() {
         rm -f "${LLM_REGISTRY}.tmp"
         return 1
     fi
-}
-
-function __save_tps() {
-    local tps_val="$1"
-    [[ -z "$tps_val" || ! -f "$ACTIVE_LLM_FILE" || ! -f "$LLM_REGISTRY" ]] && return
-    __llm_registry_sync_state >/dev/null 2>&1 || true
-    local active_num
-    active_num=$(< "$ACTIVE_LLM_FILE")
-    [[ -z "$active_num" ]] && return
-    __llm_registry_set_field "$active_num" 17 "$tps_val" || true
 }
 
 # ---------------------------------------------------------------------------
