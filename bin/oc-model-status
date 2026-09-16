@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Thin wrapper — delegates to the 'ocms' function (OpenClaw registry sync) via tac-exec.
-# NOTE: despite the filename it does NOT read live status; use `model status`.
-exec ~/ubuntu-console/bin/tac-exec ocms "$@"
+# Thin wrapper — delegates to 'ocms' via tac-exec. NOT live status; use `model status`.
+set -euo pipefail
+_tac_bin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$_tac_bin_dir/tac-exec" ocms "$@"
 # end of file
