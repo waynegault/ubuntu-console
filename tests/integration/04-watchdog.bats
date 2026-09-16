@@ -1,12 +1,12 @@
 #!/usr/bin/env bats
 # ==============================================================================
-# Integration Tests — Llama Watchdog (v3.7, dual-lane)
+# Integration Tests — Llama Watchdog (v3.8, dual-lane)
 # ==============================================================================
-# Tests llama-watchdog.sh v3.7: health probing (including the 503 "loading"
+# Tests llama-watchdog.sh v3.8: health probing (including the 503 "loading"
 # signal), 2-strike recovery, the always-on Xe lane, the GPU-gated CUDA lane,
-# and the v3.5 CUDA-only suspend flag. All external commands (curl, systemctl,
-# gpu-busy.sh) are mocked so the suite is hermetic and never touches the live
-# llama-xe-minicpm5-1b-chat.service.
+# the v3.5 CUDA-only suspend flag, and the v3.8 CUDA flap counter. All external
+# commands (curl, systemctl, gpu-busy.sh) are mocked so the suite is hermetic and
+# never touches the live llama-xe-minicpm5-1b-chat.service.
 # Run: bats tests/integration/04-watchdog.bats
 # ==============================================================================
 
@@ -130,7 +130,8 @@ setup() {
     rm -f "$WATCHDOG_MOCK_STATE"/*
     rm -f "$LLAMA_WATCHDOG_LOCK_FILE" \
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes" \
-          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes" 2>/dev/null || true
+          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes" \
+          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" 2>/dev/null || true
     rm -f "$LLM_BENCH_LOCK_FILE" "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE" 2>/dev/null || true
     export PATH="$WATCHDOG_MOCK_BIN:$PATH"
 }
@@ -420,6 +421,67 @@ setup() {
     run grep -c "timeout\|max-time" "$WATCHDOG_SCRIPT"
 
     [[ "$output" -gt 0 ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CUDA flap counter (v3.8)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "integration: a repeated CUDA death is counted, and past the threshold it shouts" {
+    # The failure this exists for: on 2026-09-16 the lane died 11 times in 4h and
+    # every death produced one "CUDA lane healthy" line from the restart below it.
+    # A lane dying every few minutes was indistinguishable from one that never
+    # missed a beat, so nobody looked.  Restarting stays; the silence goes.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+
+    run "$WATCHDOG_SCRIPT"
+    [[ "$output" != *"WARNING flap"* ]]          # 1st death: below threshold
+    run "$WATCHDOG_SCRIPT"
+    [[ "$output" != *"WARNING flap"* ]]          # 2nd: still below
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"WARNING flap: llama-cuda-llama32-3b-chat died 3x"* ]]
+    # The alert must not replace the recovery — the lane is still brought up.
+    [[ -f "$WATCHDOG_MOCK_STATE/start_called" ]]
+    [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 3 ]]
+}
+
+@test "integration: a deliberately suspended CUDA lane is not counted as a flap" {
+    # A hold-down (bench/autotune wants the card) is not a death. Counting it
+    # would manufacture a warning that sends the next reader hunting a killer
+    # that does not exist — and the suspend flag is precisely how a bench holds
+    # the lane down for hours.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    touch "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
+
+    run "$WATCHDOG_SCRIPT"
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"CUDA lane suspended"* ]]
+    [[ "$output" != *"WARNING flap"* ]]
+    [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" ]]
+}
+
+@test "integration: flap stamps outside the window are pruned, not counted" {
+    # It is a ROLLING window: three deaths an hour apart is a lane being restarted
+    # for unrelated reasons over a working day; three in ten minutes is a flap.
+    # Stale stamps must not accumulate into a warning about a lane that has since
+    # been healthy for hours.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    local old
+    old=$(( $(date +%s) - 7200 ))
+    printf '%s\n%s\n%s\n' "$old" "$old" "$old" > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$output" != *"WARNING flap"* ]]
+    [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 1 ]]
 }
 
 # end of file

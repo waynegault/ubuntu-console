@@ -39,6 +39,16 @@
 #   card under two names; the rename makes the CUDA lane and the Xe lane
 #   distinguishable at a glance, which is the whole point of the card-first scheme
 #   (docs/llm.md).
+# v3.8 (2026-09-16): COUNT CUDA-LANE FLAPS AND SHOUT ABOUT THEM.  The lane died 11
+#   times in 4h and the only trace was this watchdog logging "healthy" after each
+#   restart, so a lane dying every few minutes read exactly like a lane that never
+#   missed a beat.  A flap is a death the watchdog did NOT ask for (unit down, card
+#   free, nothing suspended): each one is recorded with a timestamp, held to a
+#   rolling window, and past the threshold a WARNING names the count and systemd's
+#   verdict for the exit.  Result=success with ExecMainStatus=0 means something
+#   ASKED it to stop (SIGTERM — the clean "cleaning up before exit" line), not a
+#   crash, which is the discrimination that took a journal dive to make on
+#   2026-09-16.  Restarting is still the right action; the silence was the bug.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -47,14 +57,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line (it is what makes an edit here fail the pre-commit guard until the
 #   number moves).  Deliberately separate from VERSION= below: the marker
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.7"
+VERSION="3.8"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -98,6 +108,13 @@ CUDA_PORT="${LLM_CUDA_PORT:-18083}"
 CUDA_UNIT="llama-cuda-llama32-3b-chat"
 STRIKE_XE="$WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes"
 STRIKE_CUDA="$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes"
+# CUDA flap detection (v3.8).  One epoch-seconds stamp per unexpected CUDA-lane
+# death, pruned to FLAP_WINDOW_S; nothing else reads this file.  Env-overridable
+# like the strike/lock paths so the integration suite can sandbox it — a flap
+# count that leaked between test cases would make the warnings untrustworthy.
+FLAP_CUDA="${LLAMA_WATCHDOG_CUDA_FLAP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps}"
+FLAP_WINDOW_S="${LLAMA_WATCHDOG_FLAP_WINDOW_S:-3600}"
+FLAP_THRESHOLD="${LLAMA_WATCHDOG_FLAP_THRESHOLD:-3}"
 # Presence of this file suspends ONLY the CUDA lane (see cuda_suspended).  Kept
 # env-overridable like the lock/strike paths so the integration suite sandboxes it.
 CUDA_SUSPEND_FILE="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
@@ -170,6 +187,53 @@ strike_inc() {
     n=$(strike_get "$f")
     n=$((n+1))
     printf '%s\n' "$n" > "$f" 2>/dev/null || log "WARNING: cannot write strike file $f (strike not persisted)"
+}
+
+# --- flap bookkeeping (v3.8) ---
+# flap_record — stamp an unexpected CUDA-lane death, pruning stamps older than the
+# window in the same write so the file cannot grow without bound.  A stamp is only
+# ever written where the watchdog concludes "down, card free, nothing suspended".
+flap_record() {
+    local f="$1" now cutoff kept="" ts
+    now=$(date +%s)
+    cutoff=$((now - FLAP_WINDOW_S))
+    if [[ -e "$f" ]]; then
+        while IFS= read -r ts; do
+            [[ "$ts" =~ ^[0-9]+$ ]] || continue
+            if (( ts >= cutoff )); then kept+="$ts"$'\n'; fi
+        done < "$f"
+    fi
+    kept+="$now"$'\n'
+    printf '%s' "$kept" > "$f" 2>/dev/null \
+        || log "WARNING: cannot write flap file $f (flap history not persisted)"
+}
+
+# flap_count — unexpected deaths currently inside the rolling window.
+flap_count() {
+    local f="$1" now cutoff n=0 ts
+    [[ -e "$f" ]] || { echo 0; return 0; }
+    now=$(date +%s)
+    cutoff=$((now - FLAP_WINDOW_S))
+    while IFS= read -r ts; do
+        [[ "$ts" =~ ^[0-9]+$ ]] || continue
+        if (( ts >= cutoff )); then n=$((n+1)); fi
+    done < "$f"
+    echo "$n"
+}
+
+# flap_alert — once a lane is dying repeatedly, say so.  Restarting is still
+# correct, and that is exactly what hid this on 2026-09-16: every death produced a
+# "healthy" line and nothing else.  systemd's verdict discriminates the two cases
+# that matter — Result=success with ExecMainStatus=0 is a CLEAN stop (something
+# sent SIGTERM), not a crash.
+flap_alert() {
+    local unit="$1" n verdict status
+    n=$(flap_count "$FLAP_CUDA")
+    if (( n < FLAP_THRESHOLD )); then return 0; fi
+    verdict=$(systemctl --user show "$unit.service" -p Result --value 2>/dev/null || true)
+    status=$(systemctl --user show "$unit.service" -p ExecMainStatus --value 2>/dev/null || true)
+    log "WARNING flap: $unit died ${n}x in $((FLAP_WINDOW_S / 60))min (threshold ${FLAP_THRESHOLD}) — restarting it, but this is NOT normal operation"
+    log "WARNING flap: systemd last saw Result=${verdict:-unknown} ExecMainStatus=${status:-unknown}; success/0 means something ASKED it to stop — check bin/gpu-busy.sh --json for a foreign GPU owner, and the unit journal, before trusting this lane"
 }
 
 # gpu_busy — 0 (busy) when a foreign workload holds the GPU. FAILS CLOSED: if the
@@ -311,6 +375,10 @@ else
     if bench_lock; then
         log "GPU free but bench lock present — not starting $CUDA_UNIT yet"
     else
+        # An unexpected death: down, card free, nothing suspending us.  Count it
+        # BEFORE the restart below so the alert and the recovery appear together.
+        flap_record "$FLAP_CUDA"
+        flap_alert "$CUDA_UNIT"
         if [[ "$cuda_state" == "failed" ]]; then
             systemctl --user reset-failed "$CUDA_UNIT.service" 2>/dev/null || true
         fi
