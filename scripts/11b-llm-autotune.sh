@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -677,46 +677,6 @@ function __llm_autotune_profiles_remap_by_registry() {
         return 1
     fi
     return 0
-}
-
-# ---------------------------------------------------------------------------
-
-function __llm_stddev_from_list() {
-    awk '/^[0-9]+(\.[0-9]+)?$/ { x[NR]=$1; sum+=$1 }
-        END {
-            if (NR == 0) {
-                exit 1
-            }
-            mean = sum / NR
-            for (i=1; i<=NR; i++) {
-                d = x[i] - mean
-                sq += d * d
-            }
-            printf "%.4f\n", sqrt(sq / NR)
-        }'
-}
-
-# ---------------------------------------------------------------------------
-# __llm_median_from_list — Print median value from numeric stdin lines.
-# Even count returns arithmetic mean of the two middle values.
-# @returns 0 when a median is emitted, 1 when input has no numeric rows.
-# ---------------------------------------------------------------------------
-function __llm_median_from_list() {
-    awk '/^[0-9]+(\.[0-9]+)?$/ { print $0 }' \
-        | sort -n \
-        | awk '
-            { a[NR] = $1 }
-            END {
-                if (NR == 0) {
-                    exit 1
-                }
-                if (NR % 2 == 1) {
-                    print a[(NR + 1) / 2]
-                } else {
-                    printf "%.2f\n", (a[NR / 2] + a[(NR / 2) + 1]) / 2
-                }
-            }
-        '
 }
 
 # end of file

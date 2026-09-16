@@ -619,8 +619,17 @@ Strict mode requirements vary by file type:
 
 - **Loader + sourced modules** (`tactical-console.bashrc`, `scripts/[0-9][0-9]-*.sh`): MUST NOT use `set -euo pipefail` (breaks interactive shell — see 3.8).
 - **`install.sh`**: SHOULD use `set -euo pipefail`.
-- **`bin/*.sh`** (sourced into environment via `install.sh` symlinks): MUST NOT use `set -e`.
-- **`tools/lint.sh`, `tools/run-tests.sh`**: Document intentional omission with a comment if `set -e` is absent (e.g., bare `(( ))` operators return exit 1 on zero).
+- **`bin/*.sh`**: MAY use `set -euo pipefail`. The premise that used to be here —
+  "sourced into the environment via install.sh symlinks, so MUST NOT use `set -e`" —
+  is wrong on both halves: `install.sh` installs them as `exec` shims (`launcher()`)
+  or symlinks that are invoked as COMMANDS, never sourced. Two of them,
+  `bin/bench-timeout-runner.sh:54` and `bin/tac_hostmetrics.sh:19`, legitimately use
+  `set -euo pipefail` (verified 2026-09-16).
+- **`tools/lint.sh`, `tools/run-tests.sh`**: document an intentional omission with a
+  comment if `set -e` is absent (e.g., bare `(( ))` operators return exit 1 on zero).
+  `tools/lint.sh` has `-e`; `tools/run-tests.sh:16` deliberately omits it so that one
+  failing suite cannot abort the run before the summary is printed — that reason is
+  now stated in the file (2026-09-16) rather than left to be guessed.
 
 3.4
 
@@ -736,11 +745,19 @@ Exit code 0, no output
 
 shellcheck -s bash -x --source-path="$PWD" <file> (no `-S` severity filter)
 
-Zero findings at all severity levels (error, warning, info, style). This repo
-does not carry `# shellcheck disable=` directives: fix the cause instead
-(§17.1). The invocation above is the canonical one — the same flags
-`tools/lint.sh` runs, where `-x --source-path` resolves the
-source-following SC1090/SC1091 class rather than hiding it.
+Zero findings at all severity levels (error, warning, info, style). The invocation
+above is the canonical one — the same flags `tools/lint.sh` runs, where
+`-x --source-path` resolves the source-following SC1090/SC1091 class rather than
+hiding it.
+
+Directives: this repo DOES carry `# shellcheck disable=` lines — **22 across 12 files**
+when measured on 2026-09-16, down from 37 across 25 before the module-graph change in
+`tools/lint.sh` (§17.1). The wording that used to be here claimed the repo carried
+none, which made this item unpassable and meant the count was never tracked. What the
+repo requires is not zero directives but MINIMAL, REASONED ones: narrow where the
+cause is local, with a note saying why. (The instruction that `disable=SC2034` /
+`SC2154` be removed by "fixing the cause" per file is what led to linting the module
+graph instead — a module's interface is only visible alongside its consumers.)
 
 4.1.3
 
@@ -2751,16 +2768,34 @@ is deliberately not worth fixing, and what was still open when this pass ended.
     10.5  functions nested deeper than 4 levels .................... 43
     10.7  ad-hoc `echo/printf … >&2` rather than a helper ......... 125
     10.4  functions over 100 lines ................................. 21
+    4.2.1 `cmd && success || failure` lines ........................ 41
+    4.2.2 lines chaining commands with `;` ........................ 262
+    4.2.4 `case` blocks with no `*)` and no comment ............. 9 of 94
+    4.2.5 same-line `if …; then` headers (idiomatic, not a defect) 576
+    4.2.6 one-line `for/do/done` loops .............................. 8
+    4.2.8 nested functions with no dynamic-scope note ............ 18 of 20
+    4.3.6 mixedCase `local` names .................................. 20
+
+  ACTIONED, not backlogged — 4.3.4's dead code. `__llm_median_from_list` and
+  `__llm_stddev_from_list` had no caller anywhere in the tree and neither is in
+  11b's `@exports`; only a tautological existence assertion kept them alive. Both
+  were removed, with that assertion, on 2026-09-16. The pass named only the stddev
+  one — its median sibling had the same problem and the same single reference.
 
   The §8–§10 figures come from that pass's own parsers and it flagged 8.2.3, 9.5,
   9.6, 9.8, 10.1, 10.4 and 10.5 as approximations; treat them as a starting count,
-  not a verdict.
+  not a verdict. The §3–§4 figures are direct counts (grep/parse), except 4.2.4,
+  which that pass read a block at a time.
 
-  ONE ITEM IS A STANDARDS DECISION, NOT A MIGRATION: 8.2.1 asks for `name() {` style
-  while the repo is 301 `function name` to 84 `name()` — the majority uses the style
-  the item does not prefer. No file mixes them. Either the item changes to match the
-  code or a migration is decided on purpose; it should not be silently "fixed" a
-  file at a time.
+  TWO ITEMS ARE STANDARDS DECISIONS, NOT MIGRATIONS:
+
+    * 8.2.1 asks for `name() {` while the repo is 301 `function name` to 84 `name()`
+      — the majority uses the style the item does not prefer, and no file mixes them.
+    * 4.3.8 asks counters to use `declare -i`; the repo uses ZERO of them anywhere and
+      writes `local count=0; (( count++ ))` throughout.
+
+  For both, either the item changes to match the code or a migration is decided on
+  purpose. Neither should be silently "fixed" a file at a time.
 
   This belongs in a ratchet — a guard that fails when the count RISES — not in a
   per-pass to-do list. A number with no owner and no enforcement only grows.

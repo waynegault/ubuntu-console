@@ -153,10 +153,12 @@ setup() {
     [[ "$fn_src" != *'LLAMA_MODEL_DIR/$name'* ]]
 }
 
-@test "integration: autotune profile helpers exist" {
+# __llm_median_from_list and __llm_stddev_from_list were asserted here too, but
+# nothing in the module tree ever called them and neither appears in 11b's
+# @exports — this assertion was the only thing keeping them alive. Removed with
+# the functions on 2026-09-16 (docs/inspection.md 4.3.4).
+@test "integration: autotune profile save helper exists" {
     declare -f __llm_autotune_profile_save >/dev/null 2>&1
-    declare -f __llm_median_from_list >/dev/null 2>&1
-    declare -f __llm_stddev_from_list >/dev/null 2>&1
 }
 
 test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {

@@ -12,7 +12,11 @@
 #   tools/run-tests.sh --integration      # with integration tests
 #   tools/run-tests.sh -- --filter "bash" # pass extra args to bats
 # ==============================================================================
-# Module Version: 3
+# Module Version: 4
+# No -e on purpose: the runner must execute every suite and print the summary even
+# when one fails. With -e the first failing suite would abort the run and the
+# summary — the thing this script exists to produce — would never be printed.
+# (docs/inspection.md 3.3)
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
