@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 47
+# Module Version: 48
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -803,10 +803,12 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
 
     # Persist decode|prefill|failtype|accept_len|accept_rate|block|served_ctx for
     # callers (survives the subshell that bench_ctx runs in — globals do not).  served_ctx
-    # is read from THIS function's live server: llama.cpp reduces the window at load when
-    # the KV cache will not fit the card, and the reduction is VRAM-dependent, so the ctx
-    # we ASK for is not necessarily the ctx a client receives.  Recording the request made
-    # 16 of 26 registry rows advertise a window no server serves (measured 2026-09-16).
+    # is read from THIS function's live server: llama.cpp clamps the window to the model's
+    # own <arch>.context_length at load, so the ctx we ASK for is not necessarily the ctx a
+    # client receives.  Recording the request made 11 of 26 registry rows advertise a
+    # window no server serves (measured 2026-09-16).  The clamp is to the GGUF native
+    # window, NOT to what fits in VRAM: measured 2026-09-16 every reduced row served its
+    # native value exactly, and the same value came back across ngl 24/999 and --fit on/off.
     local _served_ctx=""
     _served_ctx=$(curl -s --max-time 5 "http://127.0.0.1:${AUTOTUNE_PORT:-18082}/props" 2>/dev/null \
         | jq -r '.default_generation_settings.n_ctx // empty' 2>/dev/null || true)
@@ -2074,14 +2076,17 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         echo "  profile 2: ctx=$(fmt "$P2_CTX")  batch=$(fmt "$P2_B")/$(fmt "$P2_U")  ${P2_TPS} tps (prefill ${P2_PREFILL:-0})"
     fi
 
-    # Record what the server ACTUALLY served, not what we asked for.  llama.cpp reduces
-    # the served window at load when the KV cache will not fit the card, and the
-    # reduction is VRAM-dependent, so no arithmetic reproduces it: measured 2026-09-16,
-    # ctx 47104 served as 32768 and 476928 as 262144, while every row with a small native
-    # window served the full request.  Sixteen of 26 rows carried a ctx no client would
-    # ever get — the 400-mid-prompt hazard docs/llm.md names — because the winner was
-    # recorded from the value the probe ASKED for.  Reading /props is the only honest
-    # source; when it cannot be read the run keeps the requested ctx and SAYS SO.
+    # Record what the server ACTUALLY served, not what we asked for.  llama.cpp clamps
+    # the served window to the model's own <arch>.context_length at load — measured
+    # 2026-09-16: requests of 47104, 65536, 100352 and 131072 all served 32768, 147456
+    # served 131072, and 476928 and 373248 served 262144, each exactly that model's native
+    # window.  It is NOT a VRAM-dependent reduction: the same values came back at ngl 24
+    # and ngl 999 and with --fit on and off, while every row asking for LESS than its native
+    # window served the full request.  Eleven of 26 rows carried a ctx no client would ever
+    # get — the 400-mid-prompt hazard docs/llm.md names, observed live as "ttft probe stream
+    # failed: HTTP Error 400" on a row asking 8192 of a 2048-native model — because the
+    # winner was recorded from the value the probe ASKED for.  Reading /props is the only
+    # honest source; when it cannot be read the run keeps the requested ctx and SAYS SO.
     if [[ $BEST_CTX -gt 0 ]]
     then
         # AUTOTUNE_SERVED_CTX was captured by bench_ctx from ITS live server, via the
