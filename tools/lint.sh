@@ -8,11 +8,11 @@
 #        ./tools/lint.sh --files F  (an explicit list of files)
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 10
+# Module Version: 11
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
-VERSION="1.3"
+VERSION="1.4"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -329,6 +329,7 @@ fi
 echo "=== Bash Syntax Check (bash -n) ==="
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
+         "$REPO_ROOT"/env.sh \
          "$REPO_ROOT"/scripts/*.sh \
          "$REPO_ROOT"/tools/*.sh \
          "$REPO_ROOT"/tools/hooks/* \
@@ -354,6 +355,7 @@ fi
 
 for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/install.sh \
+         "$REPO_ROOT"/env.sh \
          "$REPO_ROOT"/scripts/*.sh \
          "$REPO_ROOT"/tools/*.sh \
          "$REPO_ROOT"/tools/hooks/* \

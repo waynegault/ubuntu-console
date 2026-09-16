@@ -17,14 +17,6 @@ jobs:
       - name: Install shellcheck (pinned)
         run: sudo tools/install-shellcheck.sh
 
-      - name: Bash syntax check
-        run: |
-          for f in tactical-console.bashrc install.sh env.sh scripts/*.sh bin/*.sh; do
-            [[ -f "$f" ]] || continue
-            echo "Checking $f ..."
-            bash -n "$f"
-          done
-
       - name: Loader integrity guard
         run: |
           # Catch accidental corruption of the loader (e.g. terminal output
@@ -37,19 +29,24 @@ jobs:
           fi
           echo "Loader first-line OK"
 
-      - name: ShellCheck
-        run: |
-          for f in tactical-console.bashrc install.sh env.sh scripts/*.sh bin/*.sh; do
-            [[ -f "$f" ]] || continue
-            echo "Checking $f ..."
-            shellcheck -s bash "$f"
-          done
-
-      - name: Unicode safety
-        run: SKIP_UNICODE_CHECK=0 tools/lint.sh
-
-      - name: Repo boundary guard
-        run: tools/check-repo-boundaries.sh
+      # ONE canonical invocation.  Three hand-rolled steps used to live here — a
+      # `bash -n` loop, a shellcheck loop, and a `SKIP_UNICODE_CHECK=0 tools/lint.sh`
+      # call — and the shellcheck loop had drifted from the others: it ran
+      # `shellcheck -s bash "$f"`, WITHOUT `-x --source-path`, so CI analysed every
+      # module STANDALONE.  That is the one analysis a sourced module cannot
+      # satisfy: its interface is only visible alongside the modules that consume
+      # it, so it reports SC2034/SC2154 for variables that are in fact used.  On
+      # 2026-09-16 that made CI fail on a tree `tools/lint.sh` passed, and it went
+      # unnoticed because it passed only by virtue of the file-wide disables that
+      # the module-graph change removed.
+      #
+      # tools/lint.sh already covers a superset of all three steps — bash -n,
+      # shellcheck per file PLUS the module graph as one set, the Unicode guards
+      # (always-on dangerous-codepoint FAIL, advisory non-ASCII), and the repo
+      # boundary guard — with the flags in exactly one place.  Calling it is the
+      # point of that script; a second copy of the flags is what drifted.
+      - name: "Lint & static analysis (canonical: tools/lint.sh)"
+        run: tools/lint.sh
 
   test:
     name: Fast Test Suite
