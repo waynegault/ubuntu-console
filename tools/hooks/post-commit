@@ -2,12 +2,29 @@
 # post-commit hook: auto-rebuild the knowledge graph after commits.
 # TRACKED: tools/hooks/ is the source of truth for this repo's hooks (install
 # with `git config core.hooksPath <repo>/tools/hooks`; install.sh does that).
-if command -v kgraph &>/dev/null; then
-    kgraph --update --source-dir "$(git rev-parse --show-toplevel)" 2>&1 | \
-        sed 's/^/[kgraph-auto] /'
-elif python3 -c "from kgraph.update import incremental_update" 2>/dev/null; then
-    python3 -m kgraph --update --source-dir "$(git rev-parse --show-toplevel)" 2>&1 | \
-        sed 's/^/[kgraph-auto] /'
+#
+# Prefer this repo's OWN module over an installed `kgraph`.  `kgraph` on PATH is a
+# separate uv-tool install (~/.local/share/uv/tools/openclaw-kgraph), so using it
+# rebuilt the graph from a DIFFERENT codebase than the one being committed — the
+# graph could describe a version of scripts/kgraph that is not in this tree.  The
+# repo module needs PYTHONPATH=scripts and an interpreter that can import it.
+#
+# No `set -e`: a hook must never abort a commit.
+set -uo pipefail
+
+_repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+
+if [[ -x "$_repo_root/.venv/bin/python3" ]] \
+    && PYTHONPATH="$_repo_root/scripts" "$_repo_root/.venv/bin/python3" -c 'import kgraph' >/dev/null 2>&1
+then
+    PYTHONPATH="$_repo_root/scripts" "$_repo_root/.venv/bin/python3" -m kgraph \
+        --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /'
+elif command -v kgraph >/dev/null 2>&1
+then
+    # Fallback: the installed copy.  Its code is NOT tied to this tree, so say so
+    # rather than presenting a graph built from something else as this repo's.
+    printf '[kgraph-auto] WARNING: using the installed kgraph, not this repo copy\n' >&2
+    kgraph --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /'
 fi
 
 # end of file

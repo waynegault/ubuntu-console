@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 26
+# Module Version: 27
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -593,6 +593,17 @@ function __model_use_ensure_downloaded() {
             __tac_info "Hint" "Run 'model download $file' to download manually" "$C_Dim"
             return 1
         fi
+    fi
+
+    # Readability, not just existence.  A model the process cannot READ fails inside
+    # llama-server with an opaque error, which reads as "bad model file" rather than a
+    # permissions problem — and the size read below would silently see 0.  Existence is
+    # checked above; this is the last gate before launch (docs/inspection.md 12.4.1).
+    if [[ ! -r "$model_path" ]]
+    then
+        __tac_info "Model File" "[NOT READABLE - $file]" "$C_Error"
+        __tac_info "Hint" "Check ownership and permissions on $model_path" "$C_Dim"
+        return 1
     fi
 
     model_bytes=$(stat --format=%s "$model_path" 2>/dev/null || echo 0)
