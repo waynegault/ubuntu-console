@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# llama-cpu-server — the CPU tier's server launcher.
+#
+# CARD: none   PURPOSE: the CPU-only tier — the chain's step between the CUDA card
+# and the hosted API (Xe GPU -> CUDA GPU -> CPU -> deepseek-flash).
+#
+# The build this names lives at $LLAMA_ROOT/build-cpu/, deliberately OUTSIDE both
+# path sets that bin/llama-gpu-clear.sh reaps by /proc/PID/exe:
+#
+#   CUDA card: */llama.cpp/build/bin/llama-server | */llama.cpp/build-cuda*/bin/llama-server
+#   Xe card:   */llama.cpp/build-opencl*/bin/llama-server | */.local/bin/xe-llama-server
+#
+# A CPU tier launched from either set is killed by the next bench or autotune
+# drain: the sweep clears the card between models, and the kill is by executable
+# path, so it takes any server built there with it.  A CPU-only build is also the
+# only one that CANNOT take a card: it links neither libcuda nor libOpenCL, so it
+# creates no context and the WSL2 dxgkrnl context-cycle ledger never moves.
+#
+# end of file
+
+set -uo pipefail
+
+# Keep this default in step with LLAMA_CPU_SERVER_BIN in scripts/01-constants.sh.
+# It is repeated rather than sourced on purpose: bin/ launchers are standalone and
+# must not depend on the console's module tree (a lane start cannot assume a fully
+# sourced shell).
+_bin="${LLAMA_CPU_SERVER_BIN:-/home/wayne/llama.cpp/build-cpu/bin/llama-server}"
+
+if [[ ! -x "$_bin" ]]; then
+    echo "llama-cpu-server: CPU build not executable: $_bin" >&2
+    exit 1
+fi
+
+exec "$_bin" "$@"

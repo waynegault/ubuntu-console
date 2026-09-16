@@ -1,0 +1,31 @@
+[Unit]
+# CARD: none (CPU-only)   MODEL: Qwen2.5-3B-Instruct   FUNCTION: chat/serving
+# The chain's tier between the CUDA card and the hosted API (port 18084).  See
+# docs/llm.md.
+Description=llama.cpp server — CPU tier, Qwen2.5-3B, chat (port 18084)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=6
+
+[Service]
+# No ExecStartPre GPU clear, and none is wanted: this tier holds no GPU context,
+# so there is no card for it to clear and no card it could take from a lane that
+# needs one.  The build links no libcuda/libOpenCL, so neither card's reap can
+# match it either (see bin/llama-cpu-server).
+#
+# --ctx-size 8192 deliberately departs from the registry row (model 16, tuned to
+# 47104 on the CUDA card).  That figure is a GPU-server result: on this tier it
+# would size a KV cache far past MemoryMax for a lane whose job is a heartbeat
+# turn, and it is the CUDA lane, not this one, that serves the long-context work.
+ExecStart=/home/wayne/.local/bin/llama-cpu-server -m /mnt/m/active/qwen2.5-3b-instruct-q4_k_m.gguf --port 18084 --host 127.0.0.1 --ctx-size 8192 --threads 8 --parallel 1 --jinja --reasoning off
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=300
+# Caps in the same shape as the CUDA lane's, sized for a CPU-only 3B: the weights
+# are ~2 GiB and the KV cache at 8k is small.
+MemoryMax=6G
+MemoryHigh=4G
+
+[Install]
+WantedBy=default.target

@@ -236,17 +236,24 @@ EOS
 @test "gpu-exclusivity: each launcher's build default agrees with 01-constants' LLAMA_ROOT" {
     # 01-constants: AI_STORAGE_ROOT=$HOME, LLAMA_ROOT=$AI_STORAGE_ROOT/llama.cpp,
     # LLAMA_CUDA_SERVER_BIN=$LLAMA_SERVER_BIN ($LLAMA_ROOT/build/bin/llama-server),
-    # LLAMA_XE_SERVER_BIN=$LLAMA_ROOT/build-opencl/bin/llama-server.
-    local cuda_default xe_default
+    # LLAMA_XE_SERVER_BIN=$LLAMA_ROOT/build-opencl/bin/llama-server,
+    # LLAMA_CPU_SERVER_BIN=$LLAMA_ROOT/build-cpu/bin/llama-server.
+    local cuda_default xe_default cpu_default
     cuda_default=$(sed -nE 's/.*LLAMA_CUDA_SERVER_BIN:-([^}]*)\}.*/\1/p' "$REPO_ROOT/bin/llama-cuda-server")
     xe_default=$(sed -nE 's/.*LLAMA_XE_SERVER_BIN:-([^}]*)\}.*/\1/p' "$REPO_ROOT/bin/llama-xe-server")
+    cpu_default=$(sed -nE 's/.*LLAMA_CPU_SERVER_BIN:-([^}]*)\}.*/\1/p' "$REPO_ROOT/bin/llama-cpu-server")
 
-    [[ -n "$cuda_default" && -n "$xe_default" ]] \
+    [[ -n "$cuda_default" && -n "$xe_default" && -n "$cpu_default" ]] \
         || { echo "FAIL: could not read a build default from a launcher"; return 1; }
     [[ "$cuda_default" == "$HOME/llama.cpp/build/bin/llama-server" ]] \
         || { echo "CUDA launcher default '$cuda_default' != 01-constants' LLAMA_CUDA_SERVER_BIN"; return 1; }
     [[ "$xe_default" == "$HOME/llama.cpp/build-opencl/bin/llama-server" ]] \
         || { echo "Xe launcher default '$xe_default' != 01-constants' LLAMA_XE_SERVER_BIN"; return 1; }
+    # The CPU tier's build lives outside build/ and build-opencl*/ on purpose: the
+    # card reaps match llama-server by executable path, so a CPU tier built there
+    # would die at the next bench or autotune drain (see bin/llama-cpu-server).
+    [[ "$cpu_default" == "$HOME/llama.cpp/build-cpu/bin/llama-server" ]] \
+        || { echo "CPU launcher default '$cpu_default' != 01-constants' LLAMA_CPU_SERVER_BIN"; return 1; }
 }
 
 # A lane that named a historical forwarding shim (or the other card's launcher)
@@ -258,6 +265,7 @@ EOS
         llama-xe-embeddinggemma-embed.service
         llama-cuda-llama32-3b-chat.service
         llama-cuda-qwen35-4b-pipeline.service
+        llama-cpu-qwen25-3b-chat.service
     )
     local u launcher
 
@@ -267,6 +275,8 @@ EOS
             llama-xe-*)   [[ "$launcher" == */llama-xe-server ]] \
                               || { echo "FAIL: $u runs '${launcher:-<none>}'"; return 1; } ;;
             llama-cuda-*) [[ "$launcher" == */llama-cuda-server ]] \
+                              || { echo "FAIL: $u runs '${launcher:-<none>}'"; return 1; } ;;
+            llama-cpu-*)  [[ "$launcher" == */llama-cpu-server ]] \
                               || { echo "FAIL: $u runs '${launcher:-<none>}'"; return 1; } ;;
         esac
     done

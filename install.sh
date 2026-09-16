@@ -190,14 +190,15 @@ echo "  ~/.bashrc - set read-only (mode 444)"
 # the watchdog, and a shim keeps the stable path real (no symlink to rely on)
 # while the implementation stays repo-owned.
 #
-# llama-cuda-server / llama-xe-server are the card launchers: they decide, from
-# the constants, which BUILD serves which card, so that answer is a reviewed line
-# in git instead of a repointable symlink.
+# llama-cuda-server / llama-xe-server / llama-cpu-server are the lane launchers:
+# they decide, from the constants, which BUILD serves which card (and, for the CPU
+# tier, that no card is involved at all), so that answer is a reviewed line in git
+# instead of a repointable symlink.
 for f in "$REPO"/bin/*
 do
     [[ -f "$f" ]] || continue
     case "$(basename "$f")" in
-        llama-gpu-clear.sh|gpu-busy.sh|llama-cuda-server|llama-xe-server)
+        llama-gpu-clear.sh|gpu-busy.sh|llama-cuda-server|llama-xe-server|llama-cpu-server)
             launcher "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")" ;;
         *)
             link "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")" ;;

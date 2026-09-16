@@ -2,7 +2,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 22
+# Module Version: 23
 # ==============================================================================
 
 # ==============================================================================
@@ -111,13 +111,17 @@ then
 fi
 export LLAMA_DRIVE_SIZE
 export LLAMA_SERVER_BIN="$LLAMA_ROOT/build/bin/llama-server"
-# The two cards' launcher builds.  This is the single place that answers "which
-# build serves which card": bin/llama-cuda-server and bin/llama-xe-server read
-# these, and their own fallbacks name this file.  CUDA derives from
+# The launcher builds.  This is the single place that answers "which build serves
+# which card": bin/llama-cuda-server, bin/llama-xe-server and bin/llama-cpu-server
+# read these, and their own fallbacks name this file.  CUDA derives from
 # LLAMA_SERVER_BIN so there is one source for it; the Xe tree is a separate
-# OpenCL build and had no constant before.
+# OpenCL build and had no constant before.  The CPU tree is CPU-only and is kept
+# OUTSIDE build/ and build-cuda*/ deliberately — bin/llama-gpu-clear.sh reaps GPU
+# servers by executable path, so a CPU tier built there would be killed by the
+# next bench or autotune drain.
 export LLAMA_CUDA_SERVER_BIN="${LLAMA_CUDA_SERVER_BIN:-$LLAMA_SERVER_BIN}"
 export LLAMA_XE_SERVER_BIN="${LLAMA_XE_SERVER_BIN:-$LLAMA_ROOT/build-opencl/bin/llama-server}"
+export LLAMA_CPU_SERVER_BIN="${LLAMA_CPU_SERVER_BIN:-$LLAMA_ROOT/build-cpu/bin/llama-server}"
 export LLAMA_BUILD_VERSION
 if [[ -d "$LLAMA_ROOT" ]]; then
     LLAMA_BUILD_VERSION=$(git -C "$LLAMA_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")

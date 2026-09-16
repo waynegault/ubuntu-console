@@ -226,7 +226,7 @@ Two independent GPUs.  Nothing on one card's path may stop, gate or clear the
 other: the Xe card keeps serving while the CUDA card is cleared, and vice versa.
 **Name the card explicitly** in code, comments, messages and docs — the names below
 are card-first as of 2026-09-15, so a name that does not say `cuda` or `xe` is
-either historical or wrong.
+either historical, the card-less CPU tier, or wrong.
 
 | Card | Unit | Launcher | Port | Notes |
 |---|---|---|---|---|
@@ -234,24 +234,48 @@ either historical or wrong.
 | **Xe** | `llama-xe-embeddinggemma-embed.service` | `llama-xe-server` | 18080 | embeddings (`--embedding`) |
 | **CUDA** | `llama-cuda-llama32-3b-chat.service` | `llama-cuda-server` | 18083 | the enabled CUDA lane |
 | **CUDA** | `llama-cuda-qwen35-4b-pipeline.service` | `llama-cuda-server` | 8081 | parked lane (disabled) |
+| **none (CPU)** | `llama-cpu-qwen25-3b-chat.service` | `llama-cpu-server` | 18084 | CPU-only chain tier (no card) |
 
 **One launcher per card, not per lane.**  Lanes differ in *arguments* (model, port,
 ctx); the *build* is what a launcher selects, and the CUDA chat and pipeline lanes
-run the same binary.  Each unit's `ExecStart` names the canonical card launcher
-(`llama-cuda-server` / `llama-xe-server`) directly, never a historical forwarding
-shim.  `bin/llama-cuda-server` and `bin/llama-xe-server` are tracked
-in this repo and read `LLAMA_CUDA_SERVER_BIN` / `LLAMA_XE_SERVER_BIN` from
+run the same binary.  Each unit's `ExecStart` names the canonical lane launcher
+(`llama-cuda-server` / `llama-xe-server` / `llama-cpu-server`) directly, never a
+historical forwarding shim.  `bin/llama-cuda-server`, `bin/llama-xe-server` and
+`bin/llama-cpu-server` are tracked in this repo and read
+`LLAMA_CUDA_SERVER_BIN` / `LLAMA_XE_SERVER_BIN` / `LLAMA_CPU_SERVER_BIN` from
 `01-constants.sh`, so **which build serves which card is a reviewed line in git**,
 not a symlink repointable in place — the 2026-09-13 repoint did exactly that, and
 its only record was a dotfile.
+
+**The CPU tier is the one lane with no card**, which is why its build lives at
+`llama.cpp/build-cpu/` rather than beside the CUDA tree.  `llama-gpu-clear.sh` reaps
+GPU servers by `/proc/PID/exe`, matching `build/bin/` and `build-cuda*/` (CUDA) and
+`build-opencl*/` (Xe); a CPU tier launched from any of those is killed by the next
+bench or autotune drain — the first attempt at this lane was, in ~1 s, before the
+separate build existed.  A CPU-only build removes the class of bug rather than
+dodging it: it links neither `libcuda` nor `libOpenCL`, so it cannot create a
+context, cannot take a card from a lane that needs one, and leaves the dxgkrnl
+context-cycle ledger untouched (`--list-devices` reports none).
+
+`llm-build` builds only the CUDA tree (`-DGGML_CUDA=ON` into `build/`), so this one
+is configured directly.  Reproduce it with:
+
+    cmake -S ~/llama.cpp -B ~/llama.cpp/build-cpu \
+        -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DGGML_OPENMP=ON \
+        -DBUILD_SHARED_LIBS=ON -DLLAMA_BUILD_SERVER=ON
+    cmake --build ~/llama.cpp/build-cpu --target llama-server -j"$(nproc)"
+
+Verify it is card-less before trusting it: `ldd …/build-cpu/bin/llama-server` must
+list no `libcuda`/`libcudart`/`libOpenCL`, and `llama-server --list-devices` must
+report none.
 
 The naming trap is closed as of 2026-09-15: the CUDA lane was `nvidia` in its unit
 but `cuda` in its launcher, the **Xe** fleet carried the plainest name, and one
 CUDA lane was named after a port while another was named after a model.  Units and
 launchers are now card-first throughout.  The build trees keep their own split —
-`llama.cpp/build/` is the CUDA card and `build-opencl*/` is the Xe card, while
-`build-cuda133/` is rollback-only: not a lane, and deliberately given no name on
-PATH.
+`llama.cpp/build/` is the CUDA card, `build-opencl*/` is the Xe card and
+`build-cpu/` is the card-less CPU tier, while `build-cuda133/` is rollback-only:
+not a lane, and deliberately given no name on PATH.
 
 The historical launcher names — `cuda-llama-server`, `xe-llama-server`,
 `xe-llama-embed` — are installed as one-line forwarding shims, because the
@@ -824,8 +848,8 @@ bench at the live lane it exists to avoid.
 
 Every port in play, so none of them has to be guessed: **18080** Xe embed,
 **18081** Xe chat (the production lane the OpenClaw gateway consumes), **18082**
-this bench, **18083** CUDA chat, **8081** the interactive `model use` lane and the
-investigator pipeline's endpoint.
+this bench, **18083** CUDA chat, **18084** the CPU-only tier, **8081** the
+interactive `model use` lane and the investigator pipeline's endpoint.
 
 ### Post-autotune VRAM clearing (card 1b from merged b9ba4596)
 The autotune **failure** path always called `clear_vram.sh`. The **success**
@@ -1173,7 +1197,7 @@ it. See `docs/llama-cpp-runtime-audit.md` §2.2.
 | `libggml-cuda.so` not found at runtime | `LD_LIBRARY_PATH` doesn't include build dir | `export LD_LIBRARY_PATH=$HOME/llama.cpp/build:$LD_LIBRARY_PATH` |
 | `CUDA error: out of memory` during inference | Model + KV cache exceeds 4 GB VRAM | Use a smaller quant (Q3_K_M instead of Q4_K_M), reduce `--ctx-size`, or reduce `--n-gpu-layers` |
 | `GGML_ASSERT` failure at startup | Corrupted or incompatible GGUF file | Re-download the model or check it with `llama.cpp/build/bin/llama-cli --model <file> --check-tensors` |
-| Server binds but `/health` never returns OK | Port conflict — something else already owns that port | Ports in use: 18080 Xe embed, 18081 Xe chat (production), 18082 autotune (`AUTOTUNE_PORT`), 18083 CUDA chat, 8081 the interactive `model use` lane. `model use` allocates 8081; autotune takes 18082. See the card map in `docs/llm.md`. |
+| Server binds but `/health` never returns OK | Port conflict — something else already owns that port | Ports in use: 18080 Xe embed, 18081 Xe chat (production), 18082 autotune (`AUTOTUNE_PORT`), 18083 CUDA chat, 18084 the CPU-only tier, 8081 the interactive `model use` lane. `model use` allocates 8081; autotune takes 18082. See the card map in `docs/llm.md`. |
 | `error: invalid argument: --no-mmap` at server start | Flag removed upstream (gone in build 10955; the previous binary accepted it with a DEPRECATED warning) | Use `--load-mode none`. Likewise `--mmap` → `--load-mode mmap`, `--mlock` → `--load-mode mlock`. **Two tokens**: `--load-mode=none` is rejected too (the parser never splits on `=`). See `docs/llama-cpp-runtime-audit.md` §1 |
 | Advertised context window ≠ served window (requests rejected mid-prompt with 400) | `--parallel N` **divides** the context by N unless `--kv-unified` is passed; `kv_unified` defaults to `false` | Pin `--parallel 1`, or set the window explicitly with `--kv-unified-per-slot <n>`. Assert `advertised contextWindow == n_ctx_slot` via `/props`. See `docs/llama-cpp-runtime-audit.md` §2.1 |
 | Xe lane serves but is orders of magnitude slower | The lane found no OpenCL device and fell back to CPU (check for `warning: no usable GPU found`) | Do not run an OpenCL server from a shell that exports `OCL_ICD_VENDORS`; verify with `--list-devices` or the cpu/wall ratio, not by `/health` alone |
