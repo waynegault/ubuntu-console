@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 46
+# Module Version: 47
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -801,9 +801,17 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
         fi
     fi
 
-    # Persist decode|prefill|failtype|accept_len|accept_rate|block for
-    # callers (survives the subshell that bench_ctx runs in — globals do not).
-    echo "${decode_tps:-0}|${prefill_tps:-0}||${_acc_len}|${_acc_rate}|${_spec_block}" > "/tmp/at-metrics-$$"
+    # Persist decode|prefill|failtype|accept_len|accept_rate|block|served_ctx for
+    # callers (survives the subshell that bench_ctx runs in — globals do not).  served_ctx
+    # is read from THIS function's live server: llama.cpp reduces the window at load when
+    # the KV cache will not fit the card, and the reduction is VRAM-dependent, so the ctx
+    # we ASK for is not necessarily the ctx a client receives.  Recording the request made
+    # 16 of 26 registry rows advertise a window no server serves (measured 2026-09-16).
+    local _served_ctx=""
+    _served_ctx=$(curl -s --max-time 5 "http://127.0.0.1:${AUTOTUNE_PORT:-18082}/props" 2>/dev/null \
+        | jq -r '.default_generation_settings.n_ctx // empty' 2>/dev/null || true)
+    [[ "$_served_ctx" =~ ^[0-9]+$ ]] || _served_ctx=""
+    echo "${decode_tps:-0}|${prefill_tps:-0}||${_acc_len}|${_acc_rate}|${_spec_block}|${_served_ctx}" > "/tmp/at-metrics-$$"
 
     # TPS sentinel guard: llama.cpp clamps t_gen_us to a 1 us floor, so a
     # filled-cache decode that emits EOS in the same microsecond reports a
@@ -1652,7 +1660,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     _cert=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 5 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert=""
     if [[ -n $_cert ]] && [[ $(echo "$_cert > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
         BEST_TPS=$_cert
-        IFS='|' read -r _fd2 _fp2 _ff2 < "/tmp/at-metrics-$$" 2>/dev/null || true
+        IFS='|' read -r _fd2 _fp2 _ff2 _fa2 _fr2 _fb2 _served2 < "/tmp/at-metrics-$$" 2>/dev/null || true
+        # The ctx the server ACTUALLY served, captured by bench_ctx from its live server.
+        # Carried to the save site, which has no server of its own to ask.
+        if [[ "${_served2:-}" =~ ^[0-9]+$ ]] && (( _served2 > 0 )); then
+            AUTOTUNE_SERVED_CTX=$_served2
+        fi
         BEST_PREFILL="${_fp2:-0}"
     fi
     # Record GPU thermal/clock state alongside the certified number — heat
@@ -2059,6 +2072,32 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     fi
     if [[ $P2_CTX -gt 0 ]]; then
         echo "  profile 2: ctx=$(fmt "$P2_CTX")  batch=$(fmt "$P2_B")/$(fmt "$P2_U")  ${P2_TPS} tps (prefill ${P2_PREFILL:-0})"
+    fi
+
+    # Record what the server ACTUALLY served, not what we asked for.  llama.cpp reduces
+    # the served window at load when the KV cache will not fit the card, and the
+    # reduction is VRAM-dependent, so no arithmetic reproduces it: measured 2026-09-16,
+    # ctx 47104 served as 32768 and 476928 as 262144, while every row with a small native
+    # window served the full request.  Sixteen of 26 rows carried a ctx no client would
+    # ever get — the 400-mid-prompt hazard docs/llm.md names — because the winner was
+    # recorded from the value the probe ASKED for.  Reading /props is the only honest
+    # source; when it cannot be read the run keeps the requested ctx and SAYS SO.
+    if [[ $BEST_CTX -gt 0 ]]
+    then
+        # AUTOTUNE_SERVED_CTX was captured by bench_ctx from ITS live server, via the
+        # metrics line (the subshell does not export globals).  This site has no server of
+        # its own — the winner is a configuration, not a running process — which is why the
+        # first version of this check could only ever warn.
+        if [[ "${AUTOTUNE_SERVED_CTX:-}" =~ ^[0-9]+$ ]] && (( AUTOTUNE_SERVED_CTX > 0 ))
+        then
+            if (( AUTOTUNE_SERVED_CTX != BEST_CTX ))
+            then
+                echo "  served:  ctx=$(fmt "$AUTOTUNE_SERVED_CTX")  (the server reduced the requested ctx=$(fmt "$BEST_CTX") at load — recording what a client receives)"
+            fi
+            BEST_CTX=$AUTOTUNE_SERVED_CTX
+        else
+            echo "  WARNING: the served ctx was never captured from a live server — recording the requested ctx=$(fmt "$BEST_CTX"), which may be larger than this server serves" >&2
+        fi
     fi
 
     END_TS=$(date '+%H:%M:%S')
