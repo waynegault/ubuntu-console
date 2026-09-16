@@ -1726,6 +1726,30 @@ one place. shellcheck runs `-x --source-path` so the SC1090/SC1091
 source-following class resolves instead of being suppressed; callers must not
 re-invoke shellcheck with their own flags.
 
+Measured 2026-09-16: `.github/workflows/ci.yml` was the LAST caller doing exactly
+that — `shellcheck -s bash "$f"`, no `-x`, so CI analysed every module STANDALONE and
+failed on `01-constants.sh` (SC2034 for `VENV_DIR`, `LAST_TPS` — both used by other
+modules) while `tools/lint.sh` passed on the same tree. It had passed only because of
+the file-wide disables the module-graph change removed. CI now calls `tools/lint.sh`
+and nothing else. Add a future caller as `tools/lint.sh --files`, never as a fresh
+shellcheck invocation.
+
+Two facts to preserve. (1) lint.sh's `bash -n` and shellcheck loops cover `env.sh` —
+they did NOT until 2026-09-16, while CI's hand-rolled loops did, so removing those
+without adding it here would have dropped 218 lines from every check. (2) A sourced
+MODULE is only analysed correctly through the graph: a bare
+`shellcheck -s bash <module>.sh` reports its interface (SC2034/SC2154 for variables
+that other modules use) BY DESIGN, and that is not a finding.
+
+CI YAML is covered by NO check — shellcheck cannot read it and lint.sh never looks at
+it. Validate it explicitly after editing:
+
+    .venv/bin/python3 -c "import yaml;yaml.safe_load(open('.github/workflows/ci.yml'))"
+
+A colon+space inside an unquoted step name is a YAML syntax error, and nothing in this
+repo will tell you: on 2026-09-16 a step named `Lint & static analysis (canonical:
+tools/lint.sh)` broke the whole workflow silently.
+
 ⚠ A comment line must never BEGIN with the directive word (the `#` + the tool
 name): shellcheck parses any such line as a directive and fails the file with
 SC1072/SC1073. A wrapped sentence is enough to trigger it — hit 2026-09-15 by a
@@ -1799,7 +1823,12 @@ All checks passed — no bare excepts (BLE001), no unused imports (F401), no imp
 
 `.venv/bin/python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_untested_modules.py --timeout=60 -q`
 
-174 passed
+All collected tests pass. Do not trust a written-down count: derive it with
+`--collect-only -q` before quoting one. Measured 2026-09-16 by collection: **324**
+tests (92 + 37 + 195), with ZERO skip/xfail markers — so the "174 passed" this item
+used to state cannot describe the command any more (that would require ~150 failures,
+which would itself be the finding). A stale pass-count is worse than none: it reads as
+a target and quietly stops being checked.
 
 11.10
 
@@ -2832,5 +2861,43 @@ that keeps it from becoming silent: it fails if the symlink dangles or if `.dist
 becomes newer than the running interpreter. Revert is one command, recorded in 1.13.
 If a second machine ever needs this, the three commands belong in `install.sh`
 alongside its other host steps rather than in a runbook.
+
+18.6 §11–§12: items whose expectation does not match the product
+
+Two items were simply corrected in the document on 2026-09-16 (11.1 and 11.9 — see
+their text for the CI flag drift and the stale pass-count). The rest below are
+DECISIONS, because the honest options are "build the missing thing" or "change what
+the checklist asks", and neither is a doc edit. Each has its measured evidence.
+
+  * 12.2.3 — no expert-offload flag exists anywhere (`--cpu-moe`, `-ot exps=CPU`: zero
+    hits). MoE rows are handled by LAYER-COUNT heuristics instead (11d-llm-gpu.sh
+    returns total_layers because "expert weights stay on CPU anyway"). Satisfied in
+    spirit, not in letter — say which.
+  * 12.2.7 — no `--reasoning*` flag is passed, though rows 7 and 21-24 are thinking
+    models (qwen3 / qwen35).
+  * 12.2.10 — `--cont-batching` is never passed; concurrency is expressed through
+    `--parallel` (registry column, pinned to 1 at 11e-llm-model.sh).
+  * 12.3.3 — nothing parses `slots_idle`/`slots_processing`. The only slot code is a
+    5s-TTL cached `GET /slots`, so saturation is not detected the way the item assumes.
+  * 12.4.1 — existence is checked before launch and size is read, but READABILITY is
+    not. A one-line `[[ -r ]]` would satisfy it.
+  * 11.7 — no test sources the profile in a CLEAN environment. The only source is a
+    sed-patched derivative run with `&>/dev/null || true`, and `_TAC_PROFILE_SOURCED`
+    is then set unconditionally — nothing fails if sourcing breaks.
+  * 11.14 — `config/concept-aliases.json` is loaded, but hardcoded classification
+    dicts remain and models.py itself notes they are DUPLICATED from projection.py.
+    The same data lives in three places.
+  * 11.6 — the two kgraph hooks call `python3`/`kgraph` from PATH with no
+    `set -euo pipefail` and no `.venv` pin; the fallback path would silently do
+    nothing under a system Python.
+  * 12.2.8 — batch/ubatch are passed per-model and documented, but docs/llm.md's
+    headline defaults ("4096 (GPU) / 512 (CPU)") match neither the code fallback
+    (1024/256) nor the live registry (27 rows, widest group 1024/256). One of the
+    three is wrong, and the docs are the likeliest.
+
+  11.5 is a documentation migration, not a decision: 50 `# shellcheck disable=` lines
+  exist (20 shell, 30 `.bats`) and 38 carry no explanation — the 30 `.bats` ones are
+  all bare `disable=SC1090`. Add the reason, or remove what the graph has made
+  unnecessary, but do not leave a suppression that says nothing.
 
 <!-- end of file -->
