@@ -9,3 +9,5 @@ elif python3 -c "from kgraph.update import incremental_update" 2>/dev/null; then
     python3 -m kgraph --update --source-dir "$(git rev-parse --show-toplevel)" 2>&1 | \
         sed 's/^/[kgraph-auto] /'
 fi
+
+# end of file

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
 # ─── Module: prompt-sets ─────────────────────────────────────────────────────
 # Shared SPEC-DEC-006 workload prompt sets — the investigator's real
 # workloads: legal-RAG (structured, long, tool-call-shaped prompts with a
@@ -93,3 +93,5 @@ function __resolve_prompt_set() {
     esac
     return 0
 }
+
+# end of file

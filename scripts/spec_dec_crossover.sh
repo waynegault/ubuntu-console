@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 #===============================================================================
 # spec_dec_crossover.sh — SPEC-DEC-005 concurrency crossover measurement.
 #
@@ -305,3 +305,5 @@ if [[ -n "$OUT" ]]; then
 fi
 
 rm -rf "$WORKDIR"
+
+# end of file

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
 #===============================================================================
 # spec-decode-bench.sh — Per-prompt speculative-decoding acceptance bench.
 #
@@ -198,3 +198,5 @@ if (( new_count > 0 )) && (( new_count == ${#PROMPTS[@]} )); then
         fi
     done
 fi
+
+# end of file

@@ -223,7 +223,21 @@ Last byte is 0x0a (newline)
 
 grep -v '^[[:space:]]*$' <file> | tail -1
 
-Last non-blank line is `# end of file`
+Last non-blank line must mention `end of file`, AND the file must end with a newline
+(`tail -c 1 <file> | xxd -p` prints `0a`). Two accepted forms: the plain
+`# end of file`, and the older two-line trailer (`# end of file`, blank,
+`# end of file marker`) that 23 files still carry. In the two-line form the last
+non-blank line is the `marker` one, which is why the check greps for the phrase
+rather than matching the line exactly. Both halves are checked because they rot
+independently: `bin/llama-gpu-clear.sh` had the comment but no final newline, and six
+files had neither — all fixed 2026-09-16.
+
+COVERAGE GAP worth knowing, because it is how those six drifted unnoticed: the
+automated hygiene test (`tests/tactical-console.bats`, "hygiene: all scripts end
+with …") globs `scripts/[0-9][0-9]-*.sh`, `bin/*.sh`, `install.sh` and `tools/*.sh`.
+That MISSES `scripts/prompt-sets.sh`, `scripts/spec-decode-bench.sh`,
+`scripts/spec_dec_crossover.sh` and everything under `tools/hooks/*`. A new script
+outside those globs has nothing watching it but this item.
 
 1.12
 

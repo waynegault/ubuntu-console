@@ -49,3 +49,5 @@ else
     echo "pre-commit: some checks failed — commit aborted"
 fi
 exit "$rc"
+
+# end of file
