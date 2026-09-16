@@ -1912,6 +1912,14 @@ Check `config/concept-aliases.json` exists and `scripts/kgraph/memory_import.py`
 
 No hardcoded alias dicts in Python source; all classification data in JSON config
 
+Resolved 2026-09-16. The copies had diverged, so the JSON gained the seven `models.py`
+keys it never had plus a `stopwords` section, and `scripts/kgraph/constants.py` is now
+the single loader: `SCAFFOLDING_LABELS`, `CONCEPT_ALIASES`, `LOW_VALUE_CONCEPTS`,
+`WRAPPER_TERMS`, `AGENT_ROLES` and `STOPWORDS` all come from `load_concept_config()`.
+`memory_import.py`, `models.py` and `projection.py` import them instead of keeping
+their own dicts, and the test that patched the config path patches
+`kgraph.constants._CONCEPT_CONFIG_PATH` now.
+
 12. llama.cpp Integration — Medium
 
 Audit llama-server CLI flags, model management, health monitoring, and inference configuration for correctness against current llama.cpp best practices.
@@ -2953,9 +2961,11 @@ alongside its other host steps rather than in a runbook.
 18.6 §11–§12: items whose expectation does not match the product
 
 Two items were simply corrected in the document on 2026-09-16 (11.1 and 11.9 — see
-their text for the CI flag drift and the stale pass-count). The rest below are
+their text for the CI flag drift and the stale pass-count). The rest below were
 DECISIONS, because the honest options are "build the missing thing" or "change what
 the checklist asks", and neither is a doc edit. Each has its measured evidence.
+TWO of them (11.7 and 11.14) were then built and tested the same day; their entries
+keep the original reasoning and say what landed.
 
   * 12.2.3 — no expert-offload flag exists anywhere (`--cpu-moe`, `-ot exps=CPU`: zero
     hits). MoE rows are handled by LAYER-COUNT heuristics instead (11d-llm-gpu.sh
@@ -2971,12 +2981,13 @@ the checklist asks", and neither is a doc edit. Each has its measured evidence.
     5s-TTL cached `GET /slots`, so saturation is not detected the way the item assumes.
   * 12.4.1 — existence is checked before launch and size is read, but READABILITY is
     not. A one-line `[[ -r ]]` would satisfy it.
-  * 11.7 — no test sources the profile in a CLEAN environment. The only source is a
-    sed-patched derivative run with `&>/dev/null || true`, and `_TAC_PROFILE_SOURCED`
-    is then set unconditionally — nothing fails if sourcing breaks.
-  * 11.14 — `config/concept-aliases.json` is loaded, but hardcoded classification
-    dicts remain and models.py itself notes they are DUPLICATED from projection.py.
-    The same data lives in three places.
+  * 11.7 — RESOLVED 2026-09-16 (c16bec50): `tests/tactical-console-fast.bats` now
+    sources the loader under `env -i` and asserts the half with teeth — `env.sh`
+    defines the interface. The item records why "it exits 0" alone was a green that
+    could not go red.
+  * 11.14 — RESOLVED 2026-09-16 (49507347): the three copies are one. The config
+    absorbed `models.py`'s divergent keys plus `stopwords`; `constants.py` owns the
+    loader and the three modules import it. See the item.
   * 11.6 — the two kgraph hooks call `python3`/`kgraph` from PATH with no
     `set -euo pipefail` and no `.venv` pin; the fallback path would silently do
     nothing under a system Python.
@@ -2985,9 +2996,11 @@ the checklist asks", and neither is a doc edit. Each has its measured evidence.
     (1024/256) nor the live registry (27 rows, widest group 1024/256). One of the
     three is wrong, and the docs are the likeliest.
 
-  11.5 is a documentation migration, not a decision: 50 `# shellcheck disable=` lines
-  exist (20 shell, 30 `.bats`) and 38 carry no explanation — the 30 `.bats` ones are
-  all bare `disable=SC1090`. Add the reason, or remove what the graph has made
-  unnecessary, but do not leave a suppression that says nothing.
+  11.5 is a documentation migration, not a decision: 46 `# shellcheck disable=` lines
+  exist (16 shell, 30 `.bats`; recounted 2026-09-16 — the shell count has fallen from
+  20 as file-wide disables were removed) and 41 of the 46 end the line stating no
+  reason — the 30 `.bats` ones are all bare `disable=SC1090`. Add the reason, or
+  remove what the graph has made unnecessary, but do not leave a suppression that says
+  nothing.
 
 <!-- end of file -->
