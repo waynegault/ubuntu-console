@@ -59,8 +59,8 @@ per-model overrides (`auto|on|off`).
 | `cache_type_k` | `q8_0` | KV cache key quantization to reduce VRAM pressure while preserving quality. |
 | `flash_attn` | `true` | Explicitly enabled for Ampere GPUs to reduce attention memory overhead. |
 | `offload_kqv` | `true` | Explicitly enabled to improve CUDA-side attention path efficiency. |
-| `--batch-size` | 4096 (GPU) / 512 (CPU) | Larger batches improve prompt eval speed when GPU is active. CPU-only uses smaller batches to avoid memory pressure. |
-| `--ubatch-size` | 1024 (GPU) / 512 (CPU) | Micro-batch size for continuous batching. |
+| `--batch-size` | per row, from the registry (fallback 1024) | Registry field 10; overridable with `LLAMA_BATCH_SIZE`. There is NO fixed GPU/CPU pair — measured across the 27 live rows on 2026-09-16: **1024 ×14, 512 ×7, 2048 ×6**. The old "4096 (GPU)" figure here was a stale copy of the autotune bench's candidate ladder (1024:256 → 2048:512 → 4096:1024, chosen by model size); `4096:1024` is a BENCH CANDIDATE and no row on this 4 GB card has ever certified it. |
+| `--ubatch-size` | per row, from the registry (fallback 256) | Registry field 11, clamped to `≤ batch-size`; overridable with `LLAMA_UBATCH_SIZE`. Measured spread: **256 ×15, 128 ×9, 512 ×3**. This is the prompt-processing micro-batch, not a "continuous batching" setting: `--cont-batching` is never passed, and `--parallel` is pinned to 1 (see the `model use` row). |
 | `--jinja` | always | Enables Jinja2 chat template processing from GGUF metadata (Qwen3, Phi-4, Gemma3). |
 | `--kv-offload` | always (default) | Offloads the KV cache to the GPU; `--no-kv-offload` when `LLAMA_OFFLOAD_KQV=false`. |
 | `--cache-type-k` / `--cache-type-v` | `q8_0` | KV-cache quantization to reduce VRAM pressure (per-model overrides via the registry row). |
@@ -94,7 +94,7 @@ Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice 
 |---|---|
 | `model scan` | Scan `$LLAMA_MODEL_DIR` for GGUF files, read metadata, auto-calculate optimal gpu_layers/ctx/threads, rebuild registry, and auto-archive discouraged quants via `quant-guide.conf`. |
 | `model list` | Show numbered model registry with name, file, size, arch, quant, layers, TPS, autotune status/settings, and quant `RATING` from `quant-guide.conf`. Active model marked with ▶. |
-| `model use N` | Start model #N with `--n-gpu-layers` from the resolved GPU-layer count (`999` = full offload, `0` = CPU-only; MoE stores its total layer count; baseline `LLAMA_GPU_LAYERS=24`), clamped for large models on 4 GB VRAM by the quant rating, dynamic threads, `--flash-attn on`, `--jinja`, `--kv-offload`. Batch sizes: 4096/1024 for GPU, 512/512 for CPU-only. Reports actual GPU offload count after boot. Uses shared adaptive health polling. |
+| `model use N` | Start model #N with `--n-gpu-layers` from the resolved GPU-layer count (`999` = full offload, `0` = CPU-only; MoE stores its total layer count; baseline `LLAMA_GPU_LAYERS=24`), clamped for large models on 4 GB VRAM by the quant rating, dynamic threads, `--flash-attn on`, `--jinja`, `--kv-offload`. Batch sizes come per row from the registry (values and fallbacks in the flag table above). Reports actual GPU offload count after boot. Uses shared adaptive health polling. |
 | `model stop` | `pkill` the llama-server process, remove state file |
 | `model status` | Show currently running model details. Supports `--json` and `--plain`. |
 | `model doctor` | Validate registry integrity, default model wiring, GPU visibility, watchdog state, and local ports |

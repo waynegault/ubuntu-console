@@ -927,11 +927,22 @@ Variables used only inside one function should be local to that function
 
 4.3.8
 
-🔧 Integer variables use declare -i where appropriate
+🔍 Arithmetic variables (no declare -i requirement)
 
 Inspect arithmetic variables
 
-Counter variables and numeric accumulators benefit from declare -i
+No requirement here, deliberately — this item was WITHDRAWN rather than met. It used to
+ask that counters and numeric accumulators use `declare -i`; the repo uses **zero** of
+them (measured 2026-09-16) and writes `local n=0; (( n++ ))` throughout.
+
+That idiom is the better one, which is why the rule went: `declare -i` makes every
+assignment to the variable an ARITHMETIC one, so `x=08` becomes an octal error, `x=abc`
+silently becomes 0, and `x="1+1"` becomes 2. Assignments stop being assignments, and
+that is a subtle trap rather than a safety feature. `(( ))` already gives integer
+semantics in the places that need them.
+
+A check that makes code harder to read and harder to reason about is not a standard
+worth meeting.
 
 4.3.9
 
@@ -1423,9 +1434,18 @@ Expected
 
 🔍 Functions named consistently
 
-grep -cE '^function |^[a-z_].*\(\)' <file>
+`grep -cE '^function ' <file>` and `grep -cE '^[a-z_][A-Za-z0-9_]*\(\)' <file>`
 
-Prefer func_name() { ... } style; one style used throughout
+House style is `function name() {`. Measured 2026-09-16: **298** definitions use the
+`function` keyword and **92** use the bare `name()`, and **no file mixes the two** —
+each file is internally consistent, which is the property that actually matters. The 92
+sit in a handful of files (autotune-model, llama-watchdog, gpu-busy, run-tests, and the
+installer/standalone tools).
+
+So the requirement is ONE STYLE PER FILE. The previous wording ("prefer func_name() { }")
+implied migrating the 298, and that is not wanted: it is churn that buries findings, and
+`function` is the more greppable and unambiguous of the two. Do not unify them, and do
+not mix styles inside a file.
 
 8.2.2
 
@@ -1591,11 +1611,21 @@ Each tag has an owner or date; stale tags (>6 months) flagged for resolution
 
 9.10
 
-🔧 Version changelog maintained
+🔍 Significant changes are recorded
 
-Inspect file header
+`git log --oneline`
 
-A CHANGELOG section or external file tracks significant changes with dates
+NO separate CHANGELOG, by design. The commit history IS the changelog here, and unlike a
+hand-maintained file it carries the WHY: each commit states what was wrong, what the
+evidence was, and what was deliberately left alone. Measured 2026-09-16: no CHANGELOG
+file or section exists anywhere in the repo, and `README.md`'s "Version System" section
+documents the versioning scheme instead.
+
+A hand-written CHANGELOG would be a SECOND record of the same facts, maintained by hand,
+that drifts — the exact failure mode this repo keeps hitting (test counts asserted in
+three places, shellcheck flags in three places, ci.yml's copy of the lint flags). If a
+user-facing artifact is ever wanted, GENERATE it from git (release notes / `git log`);
+never maintain it by hand.
 
 9.11
 
@@ -1936,11 +1966,18 @@ grep -n '\-\-flash-attn\|--fa' <file>
 
 12.2.3
 
-🔍 --cpu-moe / -ot configured for MoE models
+🔍 MoE rows are handled deliberately, without an expert-offload flag
 
-grep -nE '\-\-cpu-moe|\-ot' <file>
+`grep -rnE 'cpu-moe|override-tensor|-ot |exps=' scripts/ bin/ tools/ config/` → expect ZERO
 
-For Mixture-of-Experts models (Qwen3 MoE, Mixtral), expert layers offloaded to CPU with --cpu-moe or -ot exps=CPU
+For Mixture-of-Experts models the repo does NOT pass `--cpu-moe` or `-ot exps=CPU`.
+Measured 2026-09-16: zero occurrences of either anywhere. The deliberate treatment is by
+LAYER COUNT — `11d-llm-gpu.sh` returns the model's total layer count for MoE rows because
+"expert weights stay on CPU anyway", and `01-constants.sh` sets `MOE_DEFAULT_CTX`.
+
+That is a design choice, not an omission: naming the experts explicitly buys nothing when
+the placement heuristic already keeps them off the card. Change this item only if a
+measurement shows expert offload behaves differently.
 
 12.2.4
 
@@ -1992,11 +2029,19 @@ Context size doesn't exceed model's training context; VRAM impact documented
 
 12.2.10
 
-🔍 --cont-batching enabled
+🔍 Concurrency is expressed through --parallel, not --cont-batching
 
-grep -n '\-\-cont-batching' <file>
+`grep -rn 'cont-batching' scripts/ bin/ tools/ .github/` → expect ZERO
 
-Continuous batching enabled for concurrent request handling
+`--cont-batching` is never passed (measured 2026-09-16: zero occurrences) and is not
+wanted. Concurrency is configured per row through the registry's `parallel` column, and
+`11e-llm-model.sh` PINS it to 1 with a loud warning, because `kv_unified` is off by
+default: `--parallel N` DIVIDES the served window by N, so a row would serve `ctx/N` per
+request while advertising `ctx` (21504 → 1344). Real concurrency must set the window
+explicitly with `--kv-unified-per-slot`, never derive it.
+
+The governing decision is one LLM per card with one full window, so this item's original
+expectation described a flag the design does not need.
 
 12.3 Health & Monitoring
 
@@ -2018,19 +2063,38 @@ Uses /health endpoint (not /v1/models) for liveness checks; checks HTTP 200 AND 
 
 12.3.2
 
-🔍 Health check has timeout
+🔍 Health check is time-bounded
 
-Inspect health polling code
+`grep -rn '/health' scripts/*.sh bin/* | grep -c connect-timeout` → 0, and that is correct
 
-curl calls to /health have --connect-timeout and --max-time to prevent blocking on hung server
+Every `/health` curl carries `--max-time` (2-5s) and NONE carries `--connect-timeout`
+(measured 2026-09-16: zero). That is right rather than a gap: the probes target
+`127.0.0.1`, where a TCP connect cannot hang — there is no network to wait on — so
+`--max-time` alone bounds the call, which is the property this item is about.
+`--connect-timeout` is used everywhere it matters, on the outbound calls (`08-maintenance`,
+`09e-oc-health`, `09f-oc-misc`, `11e-llm-model`, `tools/install-shellcheck`).
+
+The old wording required BOTH flags on health calls, which no amount of diligence would
+have produced, because the second one had nothing to do.
 
 12.3.3
 
-🔍 Slot availability checked
+🔍 Slot counts are NOT used for saturation (item WITHDRAWN)
 
 Inspect health response parsing
 
-Health response's slots_idle / slots_processing parsed to detect overloaded server
+Nothing parses `slots_idle` or `slots_processing`, and this item was withdrawn rather
+than met. Measured 2026-09-16: zero occurrences of either name; the only slot-related code
+is a 5s-TTL cached `GET /slots` used for display (`07-telemetry.sh`).
+
+The reason is the one that demoted the dxgkrnl counter (item §18, card WSL-GATE-001): a
+probe is only worth acting on when its threshold has a measured baseline behind it, and
+there is none for slot saturation on this box. Saturation is judged by what the repo
+already measures — TPS collapse and the health status code (200 ok / 503 loading / down),
+which `docs/llm.md` argues for explicitly.
+
+Adding the parse without that baseline would create a signal nobody can calibrate, which
+is exactly how the counter it replaced became a gate that stopped healthy lanes.
 
 12.3.4
 
