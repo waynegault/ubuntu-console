@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 54
+# Module Version: 55
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -106,6 +106,12 @@ MODEL="$_num"
 
 MODEL_PATH="$LLAMA_MODEL_DIR/$file"
 [[ -f "$MODEL_PATH" ]] || { echo "Error: File not found: $MODEL_PATH"; exit 1; }
+
+# The ctx this row currently has recorded, captured before anything can mutate it.  The
+# phase-4 descent adds it as a candidate, so a run cannot certify a DIFFERENT window from the
+# one the registry holds without having MEASURED the held value — the x3/4 ladder steps over
+# values (row 12, 2026-09-17: ... 12288 -> 9216 -> 6656 skipped the recorded 8,192).
+PREV_CERT_CTX="${_ctx:-0}"
 
 SIZE_INT=${size%G}; SIZE_INT=${SIZE_INT%.*}; SIZE_INT=${SIZE_INT:-1}
 [[ "$SIZE_INT" =~ ^[0-9]+$ ]] || SIZE_INT=1
@@ -381,8 +387,8 @@ START_CTX=$(( (START_CTX / 1024) * 1024 ))
 #     `while [[ $c -ge $MIN_CTX ]]` runs ZERO iterations and the row is aborted as an
 #     "unsupported model" having attempted nothing (three runs lost to that on
 #     2026-09-16).
-if ! declare -f __autotune_ctx_bounds &>/dev/null; then
-    echo "ERROR: __autotune_ctx_bounds is not loaded (scripts/11b-llm-autotune.sh missing?) — refusing to autotune without tested ctx bounds." >&2
+if ! declare -f __autotune_ctx_bounds &>/dev/null || ! declare -f __autotune_descent_candidates &>/dev/null; then
+    echo "ERROR: __autotune_ctx_bounds / __autotune_descent_candidates are not loaded (scripts/11b-llm-autotune.sh missing?) — refusing to autotune without tested ctx bounds." >&2
     exit 1
 fi
 read -r START_CTX MAX_CTX MIN_CTX < <(__autotune_ctx_bounds \
@@ -1663,9 +1669,10 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         fi
         if [[ $_dok == 0 || $_pok == 0 ]]; then
             echo "  below TPS floor at capacity ctx $(fmt "$_dc") — descending to the highest ctx that sustains ${MIN_TPS} tps"
-            _dc=$(( _dc * 3 / 4 )); _dc=$(( _dc / 512 * 512 ))
-            [[ $_dc -lt $MIN_CTX ]] && _dc=$MIN_CTX
-            while :; do
+            # Candidates are pre-built (descending, and including this row's PREVIOUS
+            # certification) so the walk cannot step over a value the row is known to hold —
+            # see __autotune_descent_candidates.
+            for _dc in $(__autotune_descent_candidates "$_dc" "$MIN_CTX" "$PREV_CERT_CTX"); do
                 _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 1 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
                 if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
                     IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -1682,11 +1689,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                         break
                     fi
                 fi
-                if [[ $_dc -le $MIN_CTX ]]; then
-                    break
-                fi
-                _dc=$(( _dc * 3 / 4 )); _dc=$(( _dc / 512 * 512 ))
-                [[ $_dc -lt $MIN_CTX ]] && _dc=$MIN_CTX
             done
             if [[ $_dok == 0 || $_pok == 0 ]]; then
                 echo "  ⚠ below floor even at min ctx — too slow for our purposes; recording best-effort config"
@@ -1697,10 +1699,10 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         fail_label="OOM"
         [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
         echo "  ctx $(fmt "$_dc") - filled ${fail_label} (capacity ctx failed the filled load — descending once)"
-        # The capacity ctx failed the FILLED load (memory pressure at fill) —
-        # fall back to a quick halving descent for a working filled ctx.
-        _dc=$(( _dc * 3 / 4 )); _dc=$(( _dc / 512 * 512 ))
-        while [[ $_dc -ge $MIN_CTX ]]; do
+        # The capacity ctx failed the FILLED load (memory pressure at fill) — fall back to a
+        # quick descent for a working filled ctx.  Same candidate list, so it also cannot step
+        # below a window this row already holds without testing it.
+        for _dc in $(__autotune_descent_candidates "$_dc" "$MIN_CTX" "$PREV_CERT_CTX"); do
             _ft=$(bench_ctx "$_dc" "$BEST_B" "$BEST_U" 3 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _ft=""
             if [[ -n $_ft ]] && [[ $(echo "$_ft > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
                 IFS='|' read -r _fd _fp _ff < "/tmp/at-metrics-$$" 2>/dev/null || true
@@ -1708,8 +1710,6 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
                 BEST_CTX=$_dc; BEST_TPS=$_ft; BEST_PREFILL="${_fp:-0}"
                 break
             fi
-            _dc=$(( _dc * 3 / 4 )); _dc=$(( _dc / 512 * 512 ))
-            [[ $_dc -lt $MIN_CTX ]] && _dc=$MIN_CTX
         done
     fi
 

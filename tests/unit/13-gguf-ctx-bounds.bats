@@ -19,8 +19,23 @@
 #      as an "unsupported model" having attempted nothing — three consecutive
 #      runs, 30 s each, zero CUDA cycles.
 #
-# Neither needs a GPU: a GGUF header is metadata, so a zero-tensor fixture is
-# enough (tests/helpers/make-gguf-fixture.py), and the bounds are arithmetic.
+#   3. The Phase-4 TPS-floor descent walked a fixed x3/4 ladder and could step
+#      OVER the value the registry held.  Row 12 (Phi-3.5-mini, native 131072)
+#      went 9216 -> 6656, skipping 8192 — the value that row had recorded — and
+#      certified 6,656 without ever measuring 8,192.  The filled-cache tps is
+#      flat (5.05 -> 6.05 from 131K down to 9216) and then jumps to 25.65 at
+#      6,656, so 8,192 sits exactly where the answer changes and the run settled
+#      it by arithmetic instead of by measurement.  (That recorded 8,192 was
+#      itself an artifact of the parser bug in (1) — never a measurement — which
+#      is the point: a registry value nothing had verified.)
+#      __autotune_descent_candidates now builds the candidate list up front and
+#      injects the previously recorded ctx into it, so the walk still descends (a
+#      genuinely unusable value is rejected on its own merits) but can no longer
+#      skip a value without testing it.
+#
+# None of the three needs a GPU: a GGUF header is metadata, so a zero-tensor
+# fixture is enough (tests/helpers/make-gguf-fixture.py), the bounds are
+# arithmetic, and the descent candidates are pure integer arithmetic.
 # The metadata tests are pinned against the fixtures that REPRODUCE the failure —
 # verified to fail on the pre-fix parser (6a8b4e1a^) and pass after it, so they
 # assert the bug rather than the current output.
@@ -166,6 +181,84 @@ __bounds() { __autotune_ctx_bounds "$1" "$2" "$3" 4096; }
                 (( min >= 1 ))     || { echo "min < 1 for $start_raw/$native/$mult: '$out'"; return 1; }
                 (( min <= start )) || { echo "min > start for $start_raw/$native/$mult: '$out'"; return 1; }
                 (( start <= max )) || { echo "start > max for $start_raw/$native/$mult: '$out'"; return 1; }
+            done
+        done
+    done
+}
+
+# --- Phase-4 descent candidates ---------------------------------------------
+# __autotune_descent_candidates <from> <min_ctx> <prev> -> descending ctx list.
+# Every value is below `from`, none below `min_ctx`, none repeated; a `prev`
+# inside [min_ctx, from) is merged IN (that is the bug-3 fix), anything outside
+# is ignored.
+
+@test "descent-candidates: a previously recorded ctx is merged into the ladder" {
+    # The measured row-12 walk, with the ctx that row had recorded (8192) added —
+    # the value the ladder used to step over between 9216 and 6656.
+    local out; out="$(__autotune_descent_candidates 131072 4096 8192 | tr '\n' ' ')"
+    [[ "$out" == "98304 73728 55296 41472 30720 23040 16896 12288 9216 8192 6656 4608 4096 " ]]
+}
+
+@test "descent-candidates: without a held value it is the plain x3/4 walk" {
+    local out; out="$(__autotune_descent_candidates 131072 4096 0 | tr '\n' ' ')"
+    [[ "$out" == "98304 73728 55296 41472 30720 23040 16896 12288 9216 6656 4608 4096 " ]]
+    # and 8192 is genuinely absent from that walk — the regression this guards.
+    [[ "$out" != *" 8192 "* ]]
+}
+
+@test "descent-candidates: the start value is never itself a candidate" {
+    # The walk starts BELOW the value that already failed the floor; repeating it
+    # would burn a CUDA cycle re-testing the window that triggered the descent.
+    local out; out="$(__autotune_descent_candidates 16384 4096 16384)"
+    [[ "$(printf '%s\n' "$out" | grep -c '^16384$')" == "0" ]]
+    # a prev equal to `from` is likewise not injected as a duplicate.
+    [[ "$(printf '%s\n' "$out" | grep -c '^16384$')" == "0" ]]
+}
+
+@test "descent-candidates: a prev outside [min_ctx, from) is ignored" {
+    local below above
+    below="$(__autotune_descent_candidates 16384 4096 2048)"
+    [[ "$below" != *"2048"* ]]
+    above="$(__autotune_descent_candidates 16384 4096 65536)"
+    [[ "$above" != *"65536"* ]]
+}
+
+@test "descent-candidates: a malformed min_ctx falls back to the 4096 floor" {
+    local out; out="$(__autotune_descent_candidates 8192 "" 0 | tr '\n' ' ')"
+    [[ "$out" == "6144 4608 4096 " ]]
+    out="$(__autotune_descent_candidates 8192 0 0 | tr '\n' ' ')"
+    [[ "$out" == "6144 4608 4096 " ]]
+}
+
+@test "descent-candidates: a malformed start value yields nothing and succeeds" {
+    local junk
+    for junk in "" "bogus" 0 "-4096"; do
+        run __autotune_descent_candidates "$junk" 4096 8192
+        [[ "$status" -eq 0 ]] || { echo "non-zero exit for from='$junk'"; return 1; }
+        [[ -z "$output" ]] || { echo "output for from='$junk': '$output'"; return 1; }
+    done
+}
+
+@test "descent-candidates: strictly descending and duplicate-free everywhere" {
+    # The property the whole fix rests on: each rung is strictly lower than the
+    # last, so the walk advances monotonically and never re-tests a window.
+    local from min prev out last cur
+    for from in 512 4096 8192 65536 131072; do
+        for min in 512 4096 8192; do
+            for prev in 0 512 4096 8192 65536 131072; do
+                out="$(__autotune_descent_candidates "$from" "$min" "$prev")"
+                [[ -z "$out" ]] && continue
+                [[ "$(printf '%s\n' "$out" | grep -c "^${from}$")" == "0" ]] \
+                    || { echo "contains from for $from/$min/$prev: '$out'"; return 1; }
+                last=""
+                while IFS= read -r cur; do
+                    [[ "$cur" =~ ^[0-9]+$ ]] || { echo "non-numeric '$cur' for $from/$min/$prev"; return 1; }
+                    [[ "$cur" -ge "$min" ]] || { echo "below min for $from/$min/$prev: '$out'"; return 1; }
+                    if [[ -n "$last" ]]; then
+                        (( cur < last )) || { echo "not strictly descending for $from/$min/$prev: '$out'"; return 1; }
+                    fi
+                    last="$cur"
+                done <<< "$out"
             done
         done
     done

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -86,6 +86,54 @@ function __autotune_ctx_bounds() {
     (( min_ctx > max )) && min_ctx=$max
 
     printf '%s %s %s\n' "$start" "$max" "$min_ctx"
+}
+
+# ---------------------------------------------------------------------------
+# __autotune_descent_candidates <from_ctx> <min_ctx> <prev_ctx>
+#   stdout: the ctx candidates for a TPS-floor descent, descending, one per line.
+#
+# The phase-4 descent walks DOWN from the capacity ctx by x3/4 until the filled-cache decode
+# holds MIN_TPS.  That ladder can step clean over a value that matters.  Measured 2026-09-17
+# on row 12 (Phi-3.5-mini-instruct-Q4_K_M, native 131072): 131072 -> 98304 -> 73728 -> 55296
+# -> 41472 -> 30720 -> 23040 -> 16896 -> 12288 -> 9216 -> 6656.  It stepped over 8,192 and
+# certified 6,656 without ever testing 8,192.  The filled-cache decode is 5.05 tps at 131072
+# and only 6.05 at 9216, then 25.65 at 6,656 — so the 8,192 question sits exactly where the
+# answer changes, and the run answered it by arithmetic instead of by measurement.
+#
+# 8,192 was the value the registry then held for that row, and it was itself an artifact of
+# the old GGUF-parser bug (MAX_CTX = 4096 x 2), never a measurement.  That is the failure this
+# guards against: a registry value nothing ever verified.  So the previous value is added as a
+# candidate, and a run can no longer certify a DIFFERENT window from the one the registry
+# holds without having measured the held one — whether that value was a real certification or
+# a stale artifact, the new number is now backed by evidence rather than by the ladder's step.
+#
+# <from_ctx> is EXCLUDED: every caller has just measured it and it failed (the floor, or the
+# load), so re-testing would burn a CUDA cycle to re-learn that.  Pure arithmetic — no card,
+# no registry — so the ladder is unit-testable (tests/unit/13-gguf-ctx-bounds.bats).
+# ---------------------------------------------------------------------------
+function __autotune_descent_candidates() {
+    local from="${1:-0}" min_ctx="${2:-4096}" prev="${3:-0}"
+    [[ "$from" =~ ^[0-9]+$ ]] && (( from > 0 )) || return 0
+    [[ "$min_ctx" =~ ^[0-9]+$ ]] && (( min_ctx > 0 )) || min_ctx=4096
+
+    local -a cands=()
+    local c="$from" x dup
+    while (( c > min_ctx )); do
+        c=$(( c * 3 / 4 )); c=$(( c / 512 * 512 ))
+        (( c < min_ctx )) && c=$min_ctx
+        dup=0
+        for x in ${cands[@]+"${cands[@]}"}; do [[ "$x" == "$c" ]] && dup=1; done
+        (( dup )) || cands+=("$c")
+    done
+    # The previously certified window, when it is a real candidate (inside the range and not
+    # already on the ladder).
+    if [[ "$prev" =~ ^[0-9]+$ ]] && (( prev >= min_ctx && prev < from )); then
+        dup=0
+        for x in ${cands[@]+"${cands[@]}"}; do [[ "$x" == "$prev" ]] && dup=1; done
+        (( dup )) || cands+=("$prev")
+    fi
+    (( ${#cands[@]} )) || return 0
+    printf '%s\n' "${cands[@]}" | LC_ALL=C sort -nr | awk '!seen[$0]++'
 }
 
 # ---------------------------------------------------------------------------

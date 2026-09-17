@@ -65,13 +65,13 @@ jobs:
       - name: Install shellcheck (pinned)
         run: sudo tools/install-shellcheck.sh
 
-      - name: Run fast tests (53 smoke tests)
+      - name: Run fast tests (62 smoke tests)
         run: bats tests/tactical-console-fast.bats
 
       - name: Run lint script
         run: tools/lint.sh
 
-    # Full suite (385 tests) is run locally via: bats tests/tactical-console.bats
+    # Full suite (386 tests) is run locally via: bats tests/tactical-console.bats
     # and nightly via .github/workflows/nightly.yml.
 
   docs-sync:
