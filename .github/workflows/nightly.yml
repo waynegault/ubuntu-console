@@ -9,7 +9,7 @@ on:
 jobs:
   full-suite:
     name: Full BATS + Python Suite
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, wsl-console]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
