@@ -354,4 +354,53 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
     declare -f docs-sync >/dev/null 2>&1
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# A rescan must not discard curated/measured registry fields
+# ─────────────────────────────────────────────────────────────────────────────
+# `model scan` recomposes EVERY row from the GGUF, so any field it does not
+# deliberately carry forward is silently lost.  Two were measured on 2026-09-17:
+#   * the display name — the operator curates it because Unsloth/HF merges write
+#     junk into `general.name` (rows displayed as "Unsloth_Gguf_Swgaw2A2",
+#     "Hf Model", "Merged"); the scan re-derived that junk over the curation.
+#   * the KV cache types (field 5's /k/v) — decided by the autotune's KV-quant
+#     sweep and NOT derivable from the GGUF; the scan reset three rows from
+#     q4_0/q4_0 to the q8_0/q8_0 env default, ~doubling KV bytes per token and
+#     invalidating the ctx each row was certified at (row 26: 139,264).
+# Both now carry forward from the previous row for the same FILE name.
+
+@test "integration: a rescan keeps the curated name and the measured KV quant" {
+    local sb="$TAC_TEST_TMPDIR/scan"
+    mkdir -p "$sb/models"
+    "$TAC_PYTHON" "$REPO_ROOT/tests/helpers/make-gguf-fixture.py" \
+        junk-name "$sb/models/Curated-Test.Q4_K_M.gguf" >/dev/null
+    # The scan skips files under 300 MB.  Pad sparsely: only the GGUF header is read, so
+    # the tail costs no real disk, and the quant label comes from the FILE name.
+    truncate -s 400M "$sb/models/Curated-Test.Q4_K_M.gguf"
+
+    export LLAMA_MODEL_DIR="$sb/models"
+    export LLM_REGISTRY="$sb/models.conf"
+    {
+        printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram'
+        printf '%s\n' '1|Curated Name|Curated-Test.Q4_K_M.gguf|0.4G|Q4_K_M/q4_0/q4_0|qwen2|999|32768|6|1024|256|1|256|native|auto|on|22.5|yes|no|no'
+    } > "$LLM_REGISTRY"
+
+    # `model scan` refuses unless the drive root is a MOUNTPOINT, and 01-constants decided
+    # that at SOURCE time from the inherited LLAMA_DRIVE_ROOT — so it cannot be fixed by
+    # exporting a different root here.  The e2e suite points LLAMA_DRIVE_ROOT at a temp dir,
+    # which made this test pass standalone and fail when G3 ran the suite nested.  The gate
+    # exists to stop model downloads filling the WSL rootfs; this sandbox contains none, so
+    # satisfy the precondition directly instead of inheriting the ambient answer.
+    __LLAMA_DRIVE_MOUNTED=1
+
+    run __model_scan
+    [[ "$status" -eq 0 ]]
+    # The operator's name survives the fixture's junk general.name
+    # ("Unsloth_Gguf_JunkFixture") instead of being overwritten by it ...
+    grep -q '^[0-9]*|Curated Name|Curated-Test.Q4_K_M.gguf|' "$LLM_REGISTRY"
+    # ... and the junk name does NOT appear in the row at all ...
+    ! grep -q 'Unsloth_Gguf_JunkFixture' "$LLM_REGISTRY"
+    # ... and the measured K/V cache types carry across (pre-fix: q8_0/q8_0).
+    grep -q '/q4_0/q4_0' "$LLM_REGISTRY"
+}
+
 # end of file

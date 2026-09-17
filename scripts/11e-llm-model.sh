@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 34
+# Module Version: 35
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -174,7 +174,22 @@ function __model_scan() {
             fi
         fi
 
-        local quant_cache="${quant}/${LLAMA_CACHE_TYPE_K:-q8_0}/${LLAMA_CACHE_TYPE_V:-q8_0}"
+        # Carry the K/V cache types across a rescan.  They are NOT derivable from the GGUF
+        # — only the autotune's KV-quant sweep decides them — so taking them from the env
+        # defaults silently resets a measured choice.  Measured 2026-09-17: a scan took
+        # three rows from q4_0/q4_0 back to q8_0/q8_0, roughly doubling KV bytes per token,
+        # which invalidates the ctx each row was certified at (row 26 at 139,264).  A prev
+        # row whose quant LABEL still matches keeps its whole field-5 value.
+        local kv_k="${LLAMA_CACHE_TYPE_K:-q8_0}"
+        local kv_v="${LLAMA_CACHE_TYPE_V:-q8_0}"
+        if [[ -n "${_pqc:-}" ]] && [[ "${_pqc%%/*}" == "$quant" ]]
+        then
+            local _pq _pk _pv _prest
+            IFS='/' read -r _pq _pk _pv _prest <<< "$_pqc"
+            [[ -n "${_pk:-}" ]] && kv_k="$_pk"
+            [[ -n "${_pv:-}" ]] && kv_v="$_pv"
+        fi
+        local quant_cache="${quant}/${kv_k}/${kv_v}"
 
         # Preserve autotuned ctx: use prev_ctx instead of fresh calc when autotuned
         local _final_ctx="$ctx"
@@ -182,7 +197,13 @@ function __model_scan() {
         then
             _final_ctx="$_pctx"
         fi
-        local _reg_line="${num}|${_mname:-$fname}|${fname}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}|${_final_ctx}|${threads}"
+        # The previous row's NAME wins when there is one.  It is a curation, not a
+        # derivation: the GGUF's own `general.name` is junk for Unsloth/HF merges (rows
+        # displayed as "Unsloth_Gguf_Swgaw2A2", "Hf Model", "Merged"), so a rescan must not
+        # undo a name the operator set.  A genuinely new file still takes the GGUF's name
+        # on its first scan, which is what makes the name editable at all.
+        local _row_name="${_pname:-${_mname:-$fname}}"
+        local _reg_line="${num}|${_row_name}|${fname}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}|${_final_ctx}|${threads}"
         _reg_line+="|${prev_batch}|${prev_ubatch}|${prev_parallel}|${prev_fit}|${prev_backend}|${prev_mmap}|${prev_flash_attn}|${prev_tps}|${prev_autotuned}|${prev_default}|${prev_active}"
         _reg_line+="|${prev_prefill}|${prev_p2_ctx}|${prev_p2_batch}|${prev_p2_ubatch}|${prev_p2_tps}|${prev_p2_prefill}"
         _reg_line+="|${prev_spec_type:-}|${prev_spec_draft_model:-}|${prev_spec_n_max:-}|${prev_spec_ngl:-}|${prev_spec_device:-}|${prev_spec_accept_len:-}"

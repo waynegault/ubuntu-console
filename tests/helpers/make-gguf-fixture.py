@@ -14,7 +14,7 @@ fixture with zero tensors is sufficient, tiny, and text-free of binaries — gen
 test time rather than committed.
 
 Usage: make-gguf-fixture.py <case> <out-path>
-Cases: both-keys | rope-only | general-ctx | plain-ctx | no-ctx
+Cases: both-keys | rope-only | general-ctx | plain-ctx | no-ctx | junk-name
 """
 import struct
 import sys
@@ -55,6 +55,16 @@ CASES = {
     "no-ctx": [
         ("general.architecture", TYPE_STRING, "llama"),
         ("llama.block_count", TYPE_U32, 24),
+    ],
+    # A GGUF whose own metadata carries a junk `general.name` — what Unsloth/HF merges
+    # write into a file ("Unsloth_Gguf_Bs7Prgf5", "Hf Model", "Merged").  `model scan`
+    # composes each registry row from these, so the scan tests need a fixture whose name
+    # must NOT replace an operator-curated registry name (measured 2026-09-17).
+    "junk-name": [
+        ("general.architecture", TYPE_STRING, "qwen2"),
+        ("general.name", TYPE_STRING, "Unsloth_Gguf_JunkFixture"),
+        ("qwen2.context_length", TYPE_U32, 32768),
+        ("qwen2.block_count", TYPE_U32, 28),
     ],
 }
 
