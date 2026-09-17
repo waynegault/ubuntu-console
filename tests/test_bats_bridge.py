@@ -29,14 +29,24 @@ _bats_results_cache: dict[str, dict[str, dict[str, Any]]] = {}
 
 
 def _parse_bats_tests(bats_file: Path) -> list[str]:
-    """Extract individual @test names from a .bats file."""
+    """Extract individual @test names from a .bats file.
+
+    Anchored to the start of a line, with the opening `{` REQUIRED.  An unanchored
+    match also captures @test text that is not a declaration, and two real cases in
+    tests/tactical-console-fast.bats proved it: line 98 is a comment about
+    `@test "name" {`, and line 113 prints `@test "unterminated" {` into a fixture
+    file.  Both fabricated a pytest test for a BATS case that does not exist, so the
+    bridge reported "test not found" for two tests that never ran — and made the
+    suite look like 64 cases when `bats --count` says 62.  The oracle that catches
+    this class is `bats --count`; see test_bridge_parse_matches_bats_count.
+
+    The closing quote must match the opening quote (backreference) so a name
+    containing an apostrophe inside double quotes — e.g. "...last request's stats" —
+    is not truncated at the inner quote.
+    """
     text = bats_file.read_text(encoding="utf-8")
     names: list[str] = []
-    # Non-greedy name match; tolerates `{` on the next line and extra
-    # whitespace. The closing quote must match the opening quote (backreference)
-    # so a name containing an apostrophe inside double quotes — e.g. "...last
-    # request's stats" — is not truncated at the inner quote.
-    for m in re.finditer(r'@test\s+(["\'])(.*?)\1\s*\{?', text):
+    for m in re.finditer(r'^[ \t]*@test[ \t]+(["\'])(.*?)\1[ \t]*\{', text, re.MULTILINE):
         names.append(m.group(2))
     return names
 
@@ -347,6 +357,39 @@ def test_bridge_generates_one_distinct_test_per_bats_case() -> None:
         f"{len(_INDIVIDUAL_TESTS)} BATS cases but {len(generated)} generated tests: "
         f"ids collided and one test overwrote another"
     )
+
+
+def test_bridge_parse_matches_bats_count() -> None:
+    """The parser's case count must equal `bats --count` for every suite.
+
+    This is the oracle for the whole class: the bridge decides what to generate from
+    its OWN regex, so a parser that invents a case produces a pytest test for a BATS
+    case that does not exist, and running it fails "test not found" (the real
+    2026-09-17 failure: tactical-console-fast parsed 64 cases against bats' 62 —
+    a comment about `@test "name" {` and a printf string `@test "unterminated" {`
+    were both counted as declarations).  Comparing against the runner makes any such
+    parse drift a test failure instead of a phantom test.
+    """
+    checked = 0
+    for _pattern, _marker, _timeout in _BATS_SUITE_DEFS:
+        for bats_file in sorted(REPO_ROOT.glob(_pattern)):
+            real = int(
+                subprocess.run(
+                    [BATS_EXECUTABLE, "--count", str(bats_file)],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.strip()
+            )
+            parsed = len(_parse_bats_tests(bats_file))
+            assert parsed == real, (
+                f"{bats_file.relative_to(REPO_ROOT)}: parsed {parsed} @test cases but "
+                f"bats --count says {real} — the parser is matching text that is not a "
+                f"declaration (comment, string, or heredoc)"
+            )
+            checked += 1
+    assert checked, "expected at least one BATS suite to compare against"
 
 
 def test_bridge_long_name_ids_carry_a_digest_of_the_full_name() -> None:
