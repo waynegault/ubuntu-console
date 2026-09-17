@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 56
+# Module Version: 57
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1084,18 +1084,28 @@ if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
         # TPS — reproducing the TPS-first descent that finds the highest ctx
         # sustaining MIN_TPS (2026-08-29).  Without it the canned curve is
         # below-floor at every ctx (the "too slow for our purposes" path).
+        local _st_tps="8.5"
         if [[ -n "${_SELFTEST_FLOOR_ABOVE:-}" ]]; then
             if [[ $c -gt ${_SELFTEST_FLOOR_ABOVE} ]]; then
-                echo "5.0|500.0|0" > "/tmp/at-metrics-$$"
-                echo "5.0"
+                _st_tps="5.0"
             else
-                echo "12.0|500.0|0" > "/tmp/at-metrics-$$"
-                echo "12.0"
+                _st_tps="12.0"
             fi
-            return 0
         fi
-        echo "8.5|500.0|0" > "/tmp/at-metrics-$$"
-        echo "8.5"
+        # _SELFTEST_CERT_GAP_ABOVE / _SELFTEST_CERT_GAP_FACTOR model the 2026-09-17 defect:
+        # at large ctx a SINGLE sample overstates the sustained rate, so the 5-sample
+        # certification lands FACTOR x lower AT THE SAME ctx.  Measured: rows 13/14 read
+        # 13.89 / 14.57 tps on one sample at ctx 131,072 and certified 2.95 / 3.12, while
+        # rows 2/12 at 4.6-6.6K agreed within 1.2-1.4x.  Ctx at or below the threshold is
+        # unaffected, which is what gives the post-certification descent a window that
+        # genuinely holds the floor to adopt.
+        if [[ -n "${_SELFTEST_CERT_GAP_ABOVE:-}" ]] \
+            && (( c >= _SELFTEST_CERT_GAP_ABOVE )) \
+            && (( samples >= 5 )); then
+            _st_tps=$(echo "scale=2; $_st_tps / ${_SELFTEST_CERT_GAP_FACTOR:-4}" | bc -l 2>/dev/null || echo "$_st_tps")
+        fi
+        echo "${_st_tps}|500.0|0" > "/tmp/at-metrics-$$"
+        echo "$_st_tps"
         return 0
     }
     # TTFT probe stubbed too — it launches a real server at the certified
@@ -1754,6 +1764,44 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     if [[ -n $_cert ]] && [[ $(echo "$_cert > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
         BEST_TPS=$_cert
         BEST_PREFILL="${_fp2:-0}"
+    fi
+
+    # POST-CERTIFICATION FLOOR DESCENT (2026-09-17).  Phase 4's floor gate judges every rung
+    # from ONE sample, and at large ctx a single sample overstates the SUSTAINED rate by
+    # 3.6-4.7x.  Rows 13 and 14 passed the gate at ctx 131,072 (13.89 / 14.57 tps on one
+    # sample, reproduced on a cold boot) and then certified at 2.95 / 3.12 tps with the
+    # 5-sample median, with the ttft probe independently agreeing with the CERTIFICATION
+    # (3.28 vs 3.12).  So the gate passed windows the rows cannot hold, the descent never
+    # ran, and each was left advertising a ctx it cannot sustain.  It is ctx-dependent —
+    # rows 2 and 12 at 4.6-6.6K certify within 1.2-1.4x of their rungs — which is why it
+    # went unnoticed: only huge-context fills pay the cache pressure that depresses the
+    # later samples.
+    #
+    # Descending HERE, at the CERTIFICATION'S OWN sample count, makes the gate and the
+    # recorded value the same measurement.  The cost falls only on rows that fail the gate,
+    # and one bench_ctx call is one CUDA cycle per rung (N requests against one server).
+    if [[ $BEST_CTX -gt $MIN_CTX ]] \
+        && [[ $(echo "${BEST_TPS:-0} < $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
+        echo "  certified ${BEST_TPS} tps is below the floor at ctx $(fmt "$BEST_CTX") — descending at the certification's sample count"
+        for _cert_dc in $(__autotune_descent_candidates "$BEST_CTX" "$MIN_CTX" "$PREV_CERT_CTX"); do
+            : > "/tmp/at-served-ctx-$$" 2>/dev/null || rm -f "/tmp/at-served-ctx-$$" 2>/dev/null || true
+            _cert_t=$(bench_ctx "$_cert_dc" "$BEST_B" "$BEST_U" 5 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert_t=""
+            if [[ -z "$_cert_t" ]] || [[ $(echo "${_cert_t:-0} > 0" | bc 2>/dev/null || echo "0") != 1 ]]; then
+                echo "  ctx $(fmt "$_cert_dc") — filled load failed, continuing down"
+                continue
+            fi
+            IFS='|' read -r _cert_d _cert_p _cert_f < "/tmp/at-metrics-$$" 2>/dev/null || true
+            echo "  ctx $(fmt "$_cert_dc") - filled ${_cert_t} tps (prefill ${_cert_p:-0} tok/s)"
+            if [[ $(echo "$_cert_t >= $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
+                BEST_CTX=$_cert_dc; BEST_TPS=$_cert_t; BEST_PREFILL="${_cert_p:-0}"
+                _cert_served=$(cat "/tmp/at-served-ctx-$$" 2>/dev/null || true)
+                if [[ "${_cert_served:-}" =~ ^[0-9]+$ ]] && (( _cert_served > 0 )); then
+                    AUTOTUNE_SERVED_CTX=$_cert_served
+                fi
+                echo "  ✓ floor met at ctx $(fmt "$_cert_dc") — certifying this as the usable ctx"
+                break
+            fi
+        done
     fi
     # Record GPU thermal/clock state alongside the certified number — heat
     # soak on a laptop biases later benches; the temp explains outliers.

@@ -213,7 +213,21 @@ EOF
 _selftest_run() {
     local sandbox="$1"; shift
     mkdir -p "$sandbox/home/.llm" "$sandbox/drive/active"
-    printf 'not-a-real-gguf' > "$sandbox/drive/active/stub.gguf"
+    # _SELFTEST_FIXTURE=<case> plants a REAL metadata fixture (make-gguf-fixture.py) instead
+    # of the unparseable stub.  The capacity ctx comes from the GGUF's <arch>.context_length,
+    # so a test that needs a ceiling ABOVE MIN_CTX must use one: 'plain-ctx' declares
+    # qwen2/32768 with 28 blocks, which the ctx bounds clamp to 32768.
+    local _fixture=""
+    local _a
+    for _a in "$@"; do
+        [[ "$_a" == _SELFTEST_FIXTURE=* ]] && _fixture="${_a#*=}"
+    done
+    if [[ -n "$_fixture" ]]; then
+        "$TAC_PYTHON" "$REPO_ROOT/tests/helpers/make-gguf-fixture.py" \
+            "$_fixture" "$sandbox/drive/active/stub.gguf" >/dev/null
+    else
+        printf 'not-a-real-gguf' > "$sandbox/drive/active/stub.gguf"
+    fi
     {
         printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram'
         printf '%s\n' '1|Stub Model|stub.gguf|0.1G|Q4_K_M/q8_0|llama|0|4096|4|1024|256|1|256|native|auto|on|0|no|no|no'
@@ -238,6 +252,26 @@ _selftest_run() {
     run _selftest_run "$BATS_TEST_TMPDIR/floor" _SELFTEST_FLOOR_ABOVE=32768
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"12.0 tps"* ]]
+    [[ "$output" != *"recording best-effort config"* ]]
+}
+
+@test "autotune-selftest: a certification below the floor descends at the certification's sample count" {
+    # The 2026-09-17 defect: Phase 4's floor gate judges each rung from ONE sample, so a
+    # config can PASS it and then certify far below the floor with the 5-sample median —
+    # and pre-fix the run recorded that ctx anyway (rows 13/14 advertised 131,072 at ~3 tps
+    # while their own Phase-4 rungs read ~14, reproduced across a cold boot, with the ttft
+    # probe agreeing with the certification).  Here the capacity ctx is 32768: one sample
+    # reads 12.0 (gate passes) and five read 3.0 (= 12 / FACTOR 4, gate would fail), so the
+    # run must descend and adopt a smaller window that holds the floor under the SAME
+    # measurement — and must NOT be written off as too slow.
+    run _selftest_run "$BATS_TEST_TMPDIR/certgap" \
+        _SELFTEST_FIXTURE=plain-ctx \
+        _SELFTEST_FLOOR_ABOVE=32768 \
+        _SELFTEST_CERT_GAP_ABOVE=32768 \
+        _SELFTEST_CERT_GAP_FACTOR=4
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"descending at the certification's sample count"* ]]
+    [[ "$output" == *"floor met at ctx"* ]]
     [[ "$output" != *"recording best-effort config"* ]]
 }
 
