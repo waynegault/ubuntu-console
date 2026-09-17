@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 35
+# Module Version: 36
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -203,7 +203,8 @@ function __model_scan() {
         # undo a name the operator set.  A genuinely new file still takes the GGUF's name
         # on its first scan, which is what makes the name editable at all.
         local _row_name="${_pname:-${_mname:-$fname}}"
-        local _reg_line="${num}|${_row_name}|${fname}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}|${_final_ctx}|${threads}"
+        local _reg_line="${num}|${_row_name}|${fname}|${size_gb}G|${quant_cache}|${march}|${gpu_layers}"
+        _reg_line+="|${_final_ctx}|${threads}"
         _reg_line+="|${prev_batch}|${prev_ubatch}|${prev_parallel}|${prev_fit}|${prev_backend}|${prev_mmap}|${prev_flash_attn}|${prev_tps}|${prev_autotuned}|${prev_default}|${prev_active}"
         _reg_line+="|${prev_prefill}|${prev_p2_ctx}|${prev_p2_batch}|${prev_p2_ubatch}|${prev_p2_tps}|${prev_p2_prefill}"
         _reg_line+="|${prev_spec_type:-}|${prev_spec_draft_model:-}|${prev_spec_n_max:-}|${prev_spec_ngl:-}|${prev_spec_device:-}|${prev_spec_accept_len:-}"

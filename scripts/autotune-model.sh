@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 57
+# Module Version: 58
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1782,10 +1782,12 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     # and one bench_ctx call is one CUDA cycle per rung (N requests against one server).
     if [[ $BEST_CTX -gt $MIN_CTX ]] \
         && [[ $(echo "${BEST_TPS:-0} < $MIN_TPS" | bc 2>/dev/null || echo "0") == 1 ]]; then
-        echo "  certified ${BEST_TPS} tps is below the floor at ctx $(fmt "$BEST_CTX") — descending at the certification's sample count"
+        echo "  certified ${BEST_TPS} tps is below the floor at ctx $(fmt "$BEST_CTX")" \
+            "— descending at the certification's sample count"
         for _cert_dc in $(__autotune_descent_candidates "$BEST_CTX" "$MIN_CTX" "$PREV_CERT_CTX"); do
             : > "/tmp/at-served-ctx-$$" 2>/dev/null || rm -f "/tmp/at-served-ctx-$$" 2>/dev/null || true
-            _cert_t=$(bench_ctx "$_cert_dc" "$BEST_B" "$BEST_U" 5 "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert_t=""
+            _cert_t=$(bench_ctx "$_cert_dc" "$BEST_B" "$BEST_U" 5 \
+                "$EFFECTIVE_MMAP" "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _cert_t=""
             if [[ -z "$_cert_t" ]] || [[ $(echo "${_cert_t:-0} > 0" | bc 2>/dev/null || echo "0") != 1 ]]; then
                 echo "  ctx $(fmt "$_cert_dc") — filled load failed, continuing down"
                 continue

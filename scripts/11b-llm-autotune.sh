@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -113,26 +113,50 @@ function __autotune_ctx_bounds() {
 # ---------------------------------------------------------------------------
 function __autotune_descent_candidates() {
     local from="${1:-0}" min_ctx="${2:-4096}" prev="${3:-0}"
-    [[ "$from" =~ ^[0-9]+$ ]] && (( from > 0 )) || return 0
-    [[ "$min_ctx" =~ ^[0-9]+$ ]] && (( min_ctx > 0 )) || min_ctx=4096
+
+    # Explicit if/then, never `cond && action || fallback`: when `action` fails that form
+    # silently runs the fallback instead of the branch you read (repo style checklist 4.2.1).
+    if [[ ! "$from" =~ ^[0-9]+$ ]] || (( from <= 0 )); then
+        return 0
+    fi
+    if [[ ! "$min_ctx" =~ ^[0-9]+$ ]] || (( min_ctx <= 0 )); then
+        min_ctx=4096
+    fi
 
     local -a cands=()
     local c="$from" x dup
     while (( c > min_ctx )); do
-        c=$(( c * 3 / 4 )); c=$(( c / 512 * 512 ))
-        (( c < min_ctx )) && c=$min_ctx
+        c=$(( c * 3 / 4 ))
+        c=$(( c / 512 * 512 ))
+        if (( c < min_ctx )); then
+            c=$min_ctx
+        fi
         dup=0
-        for x in ${cands[@]+"${cands[@]}"}; do [[ "$x" == "$c" ]] && dup=1; done
-        (( dup )) || cands+=("$c")
+        for x in ${cands[@]+"${cands[@]}"}; do
+            if [[ "$x" == "$c" ]]; then
+                dup=1
+            fi
+        done
+        if (( dup == 0 )); then
+            cands+=("$c")
+        fi
     done
     # The previously certified window, when it is a real candidate (inside the range and not
     # already on the ladder).
     if [[ "$prev" =~ ^[0-9]+$ ]] && (( prev >= min_ctx && prev < from )); then
         dup=0
-        for x in ${cands[@]+"${cands[@]}"}; do [[ "$x" == "$prev" ]] && dup=1; done
-        (( dup )) || cands+=("$prev")
+        for x in ${cands[@]+"${cands[@]}"}; do
+            if [[ "$x" == "$prev" ]]; then
+                dup=1
+            fi
+        done
+        if (( dup == 0 )); then
+            cands+=("$prev")
+        fi
     fi
-    (( ${#cands[@]} )) || return 0
+    if (( ${#cands[@]} == 0 )); then
+        return 0
+    fi
     printf '%s\n' "${cands[@]}" | LC_ALL=C sort -nr | awk '!seen[$0]++'
 }
 
