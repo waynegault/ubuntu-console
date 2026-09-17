@@ -192,10 +192,10 @@ The GPU is shared with the `investigator` repo, whose pipeline takes a
 cross-process **flock** for the whole duration of a local-model run. The console
 honours it (2026-09-15, BENCH-GPU-EXCLUSIVITY-001):
 
-* both CUDA-reap paths — `11d-llm-gpu.sh::__llm_kill_cuda_llama_servers` (the
+- both CUDA-reap paths — `11d-llm-gpu.sh::__llm_kill_cuda_llama_servers` (the
   autotune/bench drain) and `bin/llama-gpu-clear.sh` (the CUDA lane's
   `ExecStartPre`) — skip their reap while a foreign owner holds the lock;
-* `run-autotune-batch.sh` skips the initial drain and halts per row, naming the
+- `run-autotune-batch.sh` skips the initial drain and halts per row, naming the
   holder and printing the standard resume line.
 
 The path mirrors `investigator/config/paths.py:gpu_lock_path()`:
@@ -262,10 +262,12 @@ context-cycle ledger untouched (`--list-devices` reports none).
 `llm-build` builds only the CUDA tree (`-DGGML_CUDA=ON` into `build/`), so this one
 is configured directly.  Reproduce it with:
 
-    cmake -S ~/llama.cpp -B ~/llama.cpp/build-cpu \
-        -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DGGML_OPENMP=ON \
-        -DBUILD_SHARED_LIBS=ON -DLLAMA_BUILD_SERVER=ON
-    cmake --build ~/llama.cpp/build-cpu --target llama-server -j"$(nproc)"
+```bash
+cmake -S ~/llama.cpp -B ~/llama.cpp/build-cpu \
+    -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DGGML_OPENMP=ON \
+    -DBUILD_SHARED_LIBS=ON -DLLAMA_BUILD_SERVER=ON
+cmake --build ~/llama.cpp/build-cpu --target llama-server -j"$(nproc)"
+```
 
 Verify it is card-less before trusting it: `ldd …/build-cpu/bin/llama-server` must
 list no `libcuda`/`libcudart`/`libOpenCL`, and `llama-server --list-devices` must
@@ -453,6 +455,7 @@ unnecessary API errors.
 <!-- merged from docs/autotune_spec.md on 2026-09-15 -->
 
 ### Purpose
+
 For each untuned GGUF model on this machine (RTX 3050 4GB, WSL2 Ubuntu, native ext4 model drive), discover the model's capabilities on our hardware: the **highest context size that sustains the minimum acceptable decode TPS** (`LLM_MIN_TPS`, default **10**, uniform for every model) — certified at a **filled KV cache** — plus the best batch configuration, and a second **max-TPS profile** for interactive flows. Discovery is done through real testing — no VRAM estimates, no hardcoded ceilings, no assumptions about what should or shouldn't fit.
 
 The goal is honest capability profiling. A model that sustains the floor gets its maximum usable ctx recorded. A model that cannot reach the floor even at the smallest ctx is recorded as **too slow for our purposes** — its fastest (best-effort) config and true TPS are still saved so the registry reflects what the hardware can actually deliver.
@@ -462,11 +465,14 @@ v4 changes over v3: the TPS floor is certified at a **filled KV cache** (a long 
 ---
 
 ### Inputs
+
 - **Model number** (1-39), resolved through the registry at `~/.llm/models.conf`
 - **Registry schema** (pipe-delimited, 37 fields, schema v6):
-  ```
+
+  ```text
   num|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens
   ```
+
   Columns 1-20 are the model's runtime config (unchanged from v3). Column 21
   (`prefill_tps`) is profile 1's prompt-eval throughput; columns 22-26 (`p2_*`)
   are profile 2, the max-decode-TPS config for interactive flows. Columns 27-32
@@ -483,6 +489,7 @@ v4 changes over v3: the TPS floor is certified at a **filled KV cache** (a long 
 ---
 
 ### Outputs
+
 - Winning config (ctx, batch, ubatch, ngl, KV quant) + measured decode and prefill TPS written back to the registry via `__llm_autotune_profile_save`
 - Registry fields updated:
   - Field 5 (quant_cache) → `QUANT/type-k/type-v` (KV cache quantization that won, if the sweep ran)
@@ -496,12 +503,14 @@ v4 changes over v3: the TPS floor is certified at a **filled KV cache** (a long 
   - Fields 22-26 (`p2_*`) → profile 2: the config with the highest decode TPS (interactive flows), with its certified TPS and prefill
 
 **Reading the result:** `autotuned=yes` means the model was measured, not that it is fast. Compare field 17 (tps) against `LLM_MIN_TPS`:
+
 - `tps >= LLM_MIN_TPS` → usable; field 8 is the maximum ctx that sustains the floor at a filled cache.
 - `tps <  LLM_MIN_TPS` → too slow for our purposes even at min ctx; field 8/17 are the fastest config the hardware can deliver. Such models are not re-tuned by `model autotune all` (they are already profiled); reset field 18 to `no` to force a re-tune.
 
 ---
 
 ### Benchmark Payload
+
 Two bench modes share the same pure-text generation payload (no `response_format` constraint — `json_object` forces grammar-constrained generation that artificially limits throughput on non-JSON-trained models; this was the root cause of the "0 tokens" / low-TPS failures in batch-2):
 
 - **Quick mode** (ctx discovery, beam search, sweeps): short prompt, `max_tokens: 256`. Verifies the config runs and gives a rough TPS signal cheaply.
@@ -509,7 +518,7 @@ Two bench modes share the same pure-text generation payload (no `response_format
 
 Both modes parse the server `timings` block (`prompt_per_second`, `predicted_per_second`) for prefill and decode throughput, falling back to wall-clock when absent.
 
-```
+```json
 {
   "messages": [{
     "role": "user",
@@ -525,7 +534,9 @@ Both modes parse the server `timings` block (`prompt_per_second`, `predicted_per
 ### Probe Algorithm
 
 #### START_CTX
+
 Take `_ctx` from the registry and multiply by a **size-aware multiplier**:
+
 - Models under 2GB GGUF (high VRAM headroom) → **4×**
 - Models 2GB and over (limited VRAM headroom) → **2×**
 
@@ -541,7 +552,7 @@ After combo 1 finds BEST_CTX, subsequent combos use that value as their START_CT
 
 Phase 1 is coarse exploration — find any working ctx. Single sample per test is sufficient.
 
-```
+```text
 c = START_CTX
 while c >= 4096:
     tps = bench(c)                  // single run
@@ -570,7 +581,7 @@ If it OOMs at the same ctx **twice in a row** (confirming a fuzzy OOM boundary),
 1. The increment drops below 512
 2. The ctx×tps score hasn't improved by more than 5% over the last 3 tests
 
-```
+```text
 working = ctx found in Phase 1
 scores = []                        // rolling window of last 3 scores
 samples = 1                        // single sample for climbing phase
@@ -619,7 +630,7 @@ below the floor (decode TPS, or the optional `LLM_MIN_PREFILL_TPS` prefill floor
 when set > 0), ctx is stepped **down** (a smaller KV cache raises TPS) until the
 floor is met or the minimum ctx (4096) is reached:
 
-```
+```text
 if best_tps < floor (decode) or prefill < LLM_MIN_PREFILL_TPS:
     cursor = best_ctx
     while best_tps < floor and cursor > 4096:
@@ -717,7 +728,7 @@ Every run persists **two** profiles:
 
 ### Server Configuration (llama-server)
 
-```
+```text
 --model {GGUF file}
 --port ${AUTOTUNE_PORT:-18082} --host 127.0.0.1   # AUTOTUNE_PORT keeps the bench off every lane's port
 --ctx-size {ctx}
@@ -737,6 +748,7 @@ Every run persists **two** profiles:
 ### VRAM Management
 
 **Between tests within a model:**
+
 1. `pkill -9 -x llama-server` (ignore if no process found)
 2. Poll `nvidia-smi --query-gpu=memory.used` every 1s until it drops to ≤ pre-kill baseline (max 15s)
 3. Poll `ss -ltn` until port 8081 is not LISTENing (max 10s)
@@ -777,7 +789,7 @@ by stepping down (Phase 1), narrowing the probe (Phase 2), or downshifting
 
 `model autotune all` reads the registry, filters for models where field 18 (`autotuned`) != `yes`, and calls the standalone script for each. VRAM is drained between models. The batch runner prints minimal progress:
 
-```
+```text
 model autotune all
   models: 35 untuned
   start:  14:45
@@ -833,6 +845,7 @@ Measured on RTX 3050 4GB, WSL2. The figures date from 2026-06, when the model dr
 ## Fixes and edge cases
 
 ### AUTOTUNE_PORT isolation (card ca23ec0a)
+
 Autotune originally bound the same port as the interactive server, causing a race
 when both ran at once. That is what `AUTOTUNE_PORT` fixes — and its current value
 is **18082**, not the 18081 this section claimed until 2026-09-15. 18081 had since
@@ -855,12 +868,14 @@ this bench, **18083** CUDA chat, **18084** the CPU-only tier, **8081** the
 interactive `model use` lane and the investigator pipeline's endpoint.
 
 ### Post-autotune VRAM clearing (card 1b from merged b9ba4596)
+
 The autotune **failure** path always called `clear_vram.sh`. The **success**
 path jumped straight to the bench, inheriting any VRAM fragmentation from
 autotune's 6 OOM tests. Fixed by adding `clear_vram.sh` between autotune
 completion and `__bench_run_with_timeout` on the success path.
 
 ### Burn auto-recover step-down (card 658c3efe)
+
 `burn()` in `11-llm-manager.sh` auto-recovers from transport failures by
 calling `__model_use` with the exact same params that caused the crash.
 On repeated failures, this thrash-loops the GPU. Fixed by tracking
@@ -869,6 +884,7 @@ On repeated failures, this thrash-loops the GPU. Fixed by tracking
 is printed showing the step-down attempt number and resulting ctx/batch.
 
 ### 0-tps OOM classification (card b564d801)
+
 The binary probe in `bench_ctx` checks `$rc -ne 0` to detect OOM. An edge
 case occurred where `bench_ctx` returned exit code 0 but produced literally
 zero tokens (`tps=0`) — the server responded with 0 completion tokens.
@@ -877,6 +893,7 @@ explicit `tps == "0" / "0.00" / empty` check alongside the exit code check
 in the binary probe loop.
 
 ### Duplicate stale-locks call not a bug (card 902f30a7)
+
 `__tac_cleanup_stale_locks` appears twice in `__model_bench`. Investigation
 confirmed both calls are purposeful: the first runs at function entry (before
 trap restoration from a prior interrupted run), and the second runs after
@@ -884,6 +901,7 @@ trap setup (before bench work begins). Different safety domains. No change
 needed.
 
 ### `__bench_run_with_timeout` refactor deferred (card 0967f11c)
+
 The 40-line heredoc with inline traps and PID tracking was assessed for
 standalone script extraction. The subprocess isolation is complex because
 shell-scoped variables (`__bench_signal_rc`, `__bench_cleanup`, `run_id`)
@@ -894,18 +912,11 @@ complex with no current runtime impact. Deferred.
 
 *Spec written 2026-06-06. Updated 2026-08-04 (v4: filled-cache floor certification, prefill throughput, beam search, ngl/KV-quant band sweep, Pareto profile 2, 26-column registry). Updated 2026-09-12 (schema realigned to v6/37 columns — speculative-decoding (27-32) and `workload`/`ttft_ms`/`bench_*` (33-37) fields — and the knob defaults matched to `env.sh`). Corresponding code in `~/ubuntu-console/scripts/autotune-model.sh` and `~/ubuntu-console/scripts/run-autotune-batch.sh`.*
 
-
 ---
 
 ## Building llama.cpp
 
 <!-- merged from docs/llama-cpp-build-guide.md on 2026-09-15 -->
-
----
-title: llama.cpp CUDA Build Guide
-description: Definitive guide to building a custom-tuned llama.cpp from source with CUDA acceleration for the Tactical Console's RTX 3050 Ti 4GB system.
----
-
 
 ## Purpose
 
@@ -946,7 +957,7 @@ Disk:           build tree on the WSL2 ext4 VHD (/dev/sdd, 1 TB)
 > guest (2026-09-13). If parallel CUDA translation units exhaust the 20 GiB you
 > will see `cc1plus: out of memory`; drop to `-j8` or `-j4` (see Troubleshooting).
 > That failure mode is environment-dependent, not a property of this setup.
-
+>
 > **Why SM 86?** The RTX 3050 Ti is an Ampere GA107 chip with compute capability
 > 8.6 (not 8.0 like A100 or 8.9 like Ada). Setting `CMAKE_CUDA_ARCHITECTURES=86`
 > ensures CUDA kernels are compiled for this exact SM rather than falling back to
@@ -1046,7 +1057,7 @@ cmake -B build \
 > (The separate Xe lane is a **different** tree,
 > `~/llama.cpp/build-opencl`, built with `GGML_OPENCL=ON` — see the runtime
 > audit's appendix. `build/` is CUDA-only.)
-
+>
 > **Provenance:** this recipe is what produced the currently deployed binary —
 > cross-checked field by field against `~/llama.cpp/build/CMakeCache.txt` on
 > 2026-09-14. Note that `build/` carries no `LLAMA-CPP-SOURCE-COMMIT.txt`; that
@@ -1133,7 +1144,7 @@ readlink -f /proc/"$(systemctl --user show llama-cuda-llama32-3b-chat.service -p
 > force-pushes to `master`. `git pull --ff-only` will refuse to pull if a
 > force-push requires a rebase, alerting you to check the upstream before
 > proceeding.
-
+>
 > **Before you pull, read `docs/llama-cpp-runtime-audit.md` §7.** A pull is not
 > free: it moves the artifact out from under every validation result and can
 > silently break invocations (that is how the `--no-mmap` removal arrived).
