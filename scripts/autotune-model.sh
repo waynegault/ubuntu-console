@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 55
+# Module Version: 56
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -970,15 +970,29 @@ bench_once_multi() {
     }
 
     local -a vals=()
-    local _i _v
+    local _i _v _cold_metrics=""
     for ((_i = 0; _i < samples; _i++)); do
         _v=$(_bench_request_once "$mode" "$payload_file" "$bench_timeout") || _v=""
+        # Sample 1 is the only COLD one.  llama.cpp caches the prompt prefix, so
+        # samples 2..N re-send the same filled prompt as a cache hit and their
+        # `timings` are not a prefill rate at all — while _bench_request_once
+        # overwrites /tmp/at-metrics-$$ on EVERY request, so without this capture
+        # the callers downstream record the last sample's cache-hit figure as
+        # `prefill_tps`.  Measured 2026-09-17: row 12 persisted prefill 17.87 tok/s
+        # where its own 1-sample rungs at the SAME ctx measured 934.73, and 17.87
+        # tracked its decode tps (18.45).  Decode still uses the median of ALL
+        # samples — prompt caching does not distort generated-token timing.
+        if (( _i == 0 )); then
+            _cold_metrics="$(cat "/tmp/at-metrics-$$" 2>/dev/null || true)"
+        fi
         _v=$(echo "$_v" | bc 2>/dev/null || echo "0")
         if [[ $(echo "$_v > 0" | bc 2>/dev/null || echo "0") == 1 ]]; then
             vals+=("$_v")
         fi
     done
     _bench_stop "$_BENCH_PID"
+    # Restore the cold sample's metrics (decode|prefill|accept...) for the callers.
+    [[ -n "$_cold_metrics" ]] && printf '%s\n' "$_cold_metrics" > "/tmp/at-metrics-$$"
 
     if [[ ${#vals[@]} -eq 0 ]]; then echo ""; return 1; fi
 
