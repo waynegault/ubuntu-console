@@ -1328,6 +1328,31 @@ iteration count is not statically knowable, so read the hits and apply the >10×
 `do`/`done` pair inside a heredoc that *generates* a script is counted, so a file's own `do`/`done`
 totals can differ by a few — that difference is the probe's uncertainty, not a finding.
 
+**Read on 2026-09-18 at `f7403d24`, and the item's own remedy applies to none of the 63.** Split by
+tool: grep 24, awk 15, basename 10, date 8, sed 4, cut 3, dirname 2, sort 0.
+
+- **Nothing is hoistable.** All 8 `date` calls are per-iteration by construction —
+  `start_ns=$(date +%s%N)` / `end_ns=$(date +%s%N)` timing a measurement
+  (`11f-llm-runtime.sh:205,210`, `spec-decode-bench.sh:114,117`, `tactical-console.bashrc:177,179`),
+  a filename stamp (`chat_$(date +%Y%m%d_%H%M%S).json`), and a per-event log timestamp. Hoisting any
+  of them breaks the thing it measures. The grep/awk/sed/cut sites are per-iteration by necessity
+  too — each filters or parses the item the loop is currently on, so there is no invariant to cache.
+- **The 10 `basename` sites were the work**: a fork per iteration with an exact native equivalent,
+  converted to `${f##*/}` (module versions 08-maintenance 40→41, 11e-llm-model 40→41,
+  docs-sync-check 5→6). Each takes its path from a glob, an array or `find`, so a trailing slash is
+  impossible and the two forms agree — that qualifier is load-bearing, since `basename a/b/` is `b`
+  where `${a/b/##*/}` is empty.
+- **Left alone with reasons**: the 2 `dirname` sites (`09f-oc-misc.sh:575,587`) — `${x%/*}` is *not*
+  its equivalent, verified: `dirname c.sh` is `.` where the expansion is `c.sh`, and `dirname a//b`
+  is `a` where the expansion is `a/`; and the 3 `cut` sites, where bash has no single-step delimiter
+  split.
+
+The item's enumeration says `date, grep, awk, cut`; the probe also matches `sed`, `sort`, `basename`
+and `dirname`, and that is what let it find the 10 real sites. Its two apparent misses were checked
+rather than assumed: `basename` also appears at `08-maintenance.sh:780` and `11e-llm-model.sh:456`,
+but both sit outside any loop (an `if` block and straight-line code), so excluding them was correct
+and the 63 stands.
+
 6.7
 
 🔧 String tests prefer [[ ]]
@@ -1353,6 +1378,25 @@ matches, `[[ ${#a[@]} -gt 0 ]]` matches, and `(( n > 5 ))` does not — it canno
 this item asks for. Re-derived 2026-09-18 at `f7403d24`: **232** comments excluded, 234 raw, and the
 loose pattern agrees at 232 once it too excludes comments — that agreement is the cross-check that
 the operand class is now right.
+
+**Read on 2026-09-18, and this item saves nothing — it is syntax, not cost.** Unlike 6.1 and 6.6 there
+is no fork to remove: `[[ ]]` and `(( ))` are both shell builtins. And the two forms are
+behaviourally identical, not merely similar: tested across 11 operand values — `5`, `0`, `-1`, `5.5`,
+`abc`, `" 5"`, `0x10`, `1e3`, empty, whitespace, `007` — the comparison status *and* the stderr text
+matched every time, including the errors (`5.5` and `1e3` produce the same "invalid arithmetic
+operator" / "value too great for base" from both). `[[ x -gt y ]]` evaluates its operands
+arithmetically exactly as `(( ))` does, so there is no loud-failure-versus-silent-coercion trade
+either — the reason to replace one with the other is spelling alone. The operator split is `-eq` 82,
+`-gt` 79, `-lt` 40, `-ge` 23, `-ne` 13, `-le` 2.
+
+Converting 232 sites across 8 files — 100 of them in `scripts/autotune-model.sh` — therefore buys a
+shorter spelling and nothing else, at the cost of eight module-version bumps and eight
+re-verifications. It is not even uniformly possible: mixed tests such as
+`[[ "$_behind" -eq 0 && "$_ahead" -eq 0 ]]` (`08-maintenance.sh:658`) and
+`[[ "$RECOVERY" -eq 1 && -z "${STALE:-}" ]]` (`bin/llama-gpu-clear.sh:139`) must stay `[[ ]]` or be
+split into two statements, because a string test cannot live inside `(( ))`. Read this item as
+guidance for new code whose operand is provably numeric; it is not a migration, and the count should
+not be chased.
 
 6.9
 
@@ -3131,8 +3175,10 @@ is deliberately not worth fixing, and what was still open when this pass ended.
           `mapfile` candidates (the table's 6 was the bare `while read` spelling only). All 41
           were read on 2026-09-18 and none ingests a large input, so the item reads as satisfied
           — see 6.4 for the sizes and the two streaming sites that must not change
-    6.6   63 forking-tool calls inside a `do…done` body      (was: no command)
-    6.8   232 `[[ … ]]` arithmetic comparisons, comments excluded
+    6.6   63 forking-tool calls inside a `do…done` body (was: no command). Read 2026-09-18: none
+          is hoistable and 10 were in-loop `basename`s, now converted — see 6.6
+    6.8   232 `[[ … ]]` arithmetic comparisons, comments excluded. Read 2026-09-18: no action —
+          both forms are builtins that behave identically, so there is nothing to save (see 6.8)
     6.9   89 `echo … | cmd` sites. The item's own command returns 179 and the table's 78 is
           reproducible under no scope of it at either revision — see 6.9 for the breakdown
     6.11  23 `mktemp` sites, comments excluded — 27 for the bare `grep -n mktemp` (was: no command)
