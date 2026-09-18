@@ -197,7 +197,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff pytest pytest-timeout pydantic networkx
+          # ruff is PINNED, for the same reason shellcheck is (tools/install-shellcheck.sh):
+          # an unpinned linter drifts from the developer's venv and fails CI on code the local
+          # run passes.  Measured 2026-09-18: `pip install ruff` took a newer release whose rule
+          # set flags code that passes under the venv's 0.15.20.  The pin makes the two agree by
+          # AGREEMENT rather than by disabling a rule; a future bump should be a deliberate change
+          # with its new findings fixed.
+          pip install "ruff==0.15.20" pytest pytest-timeout pydantic networkx
           pip install tree-sitter tree-sitter-bash tree-sitter-python
 
       - name: Ruff lint
