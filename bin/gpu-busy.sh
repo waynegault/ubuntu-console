@@ -9,7 +9,7 @@
 #          instead of bare words, and this probe's own process chain is excluded —
 #          a shell that merely mentioned "autotune" was read as a bench and the
 #          watchdog took a healthy CUDA lane down)
-# Module Version: 3
+# Module Version: 4
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
 #
 # CARD DISCIPLINE: this script is about the CUDA card only.  The Xe card is a
@@ -50,7 +50,7 @@ SAMPLE_INTERVAL="${GPU_BUSY_SAMPLE_INTERVAL:-1.5}"
 BENCH_LOCK="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
 LOG_FILE="${GPU_BUSY_LOG:-}"
 
-log() { [ -n "$LOG_FILE" ] && printf '%s [gpu-busy] %s\n' "$(date -Iseconds)" "$*" >> "$LOG_FILE"; }
+log() { [[ -n "$LOG_FILE" ]] && printf '%s [gpu-busy] %s\n' "$(date -Iseconds)" "$*" >> "$LOG_FILE"; }
 
 REASONS=()
 
@@ -64,9 +64,9 @@ util_busy() {
         # foreign_apps_busy() fail closed with reason nvidia-smi-unavailable.
         (( rc != 0 )) && return 1
         s=$(tr -dc '0-9' <<<"$out")
-        [ -z "$s" ] && s=0
-        [ "$s" -gt "$max_util" ] && max_util=$s
-        [ "$s" -ge "$UTIL_THRESHOLD" ] && { REASONS+=("util=${s}%>=${UTIL_THRESHOLD}%"); return 0; }
+        [[ -z "$s" ]] && s=0
+        (( s > max_util )) && max_util=$s
+        (( s >= UTIL_THRESHOLD )) && { REASONS+=("util=${s}%>=${UTIL_THRESHOLD}%"); return 0; }
         sleep "$SAMPLE_INTERVAL"
     done
     return 1
@@ -100,18 +100,18 @@ foreign_apps_busy() {
     done
     while IFS= read -r pid; do
         pid="${pid%$'\r'}"
-        [ -z "$pid" ] && continue
+        [[ -z "$pid" ]] && continue
         [[ "$pid" =~ ^[0-9]+$ ]] || continue
-        [ "$pid" = "$$" ] && continue
+        [[ "$pid" == "$$" ]] && continue
         comm=$(cat "/proc/$pid/comm" 2>/dev/null || echo "")
         cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || echo "")
         # A sanctioned server holding the card is expected: skip only if the
         # RESOLVED binary is one of the two above, so a same-named server from any
         # other build path stays foreign and still reports busy.
         exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-        if [ -n "$exe" ]; then
+        if [[ -n "$exe" ]]; then
             for _a in "${_allowed[@]}"; do
-                [ -n "$_a" ] && [ "$exe" = "$_a" ] && continue 2
+                [[ -n "$_a" && "$exe" == "$_a" ]] && continue 2
             done
         fi
         # OpenClaw embedding workers are a node/python process, so their exe is an
