@@ -23,17 +23,21 @@ jobs:
         run: sudo tools/install-shellcheck.sh
 
       - name: Run full behavioural suite
-        run: bats tests/tactical-console.bats
+        # --print-output-on-failure on every bats invocation here: a failed
+        # `run ...; [ "$status" -eq 0 ]` assertion otherwise prints only the failed line and
+        # discards the captured output, which is where a script-under-test names the cause.
+        # Verified 2026-09-18 with a two-arm control (markers absent without, present with).
+        run: bats --print-output-on-failure tests/tactical-console.bats
 
       - name: Run fast + function-availability suites
         run: |
-          bats tests/tactical-console-fast.bats
-          bats tests/tactical-console-function-availability.bats
+          bats --print-output-on-failure tests/tactical-console-fast.bats
+          bats --print-output-on-failure tests/tactical-console-function-availability.bats
 
       - name: Run unit suites
         run: |
           # 04-llama-cpp-inventory.bats excluded: performs live downloads + mutates host
-          bats tests/unit/01-refresh-keys.bats \
+          bats --print-output-on-failure tests/unit/01-refresh-keys.bats \
                tests/unit/02-so-startup.bats \
                tests/unit/05-spec-dec-threads.bats \
                tests/unit/06-spec-dec-stats.bats \
@@ -46,7 +50,7 @@ jobs:
 
       - name: Run integration suites
         run: |
-          bats tests/integration/01-maintenance.bats \
+          bats --print-output-on-failure tests/integration/01-maintenance.bats \
                tests/integration/02-model-lifecycle.bats \
                tests/integration/03-backup-restore.bats \
                tests/integration/04-watchdog.bats \
