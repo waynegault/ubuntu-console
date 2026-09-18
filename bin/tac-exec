@@ -80,7 +80,6 @@ then
     fi
 fi
 
-# shellcheck disable=SC1091
 if ! source "$_tac_exec_root/env.sh"
 then
   echo "[tac-exec] failed to load environment from $_tac_exec_root/env.sh" >&2

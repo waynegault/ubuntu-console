@@ -789,8 +789,10 @@ hiding it.
 
 Directives: this repo DOES carry `# shellcheck disable=` lines — **25 across 14 files** at the
 2026-09-16-era tip (`4381948d`), down from 37 across 25 before the module-graph change in
-`tools/lint.sh` (§17.1), and **23 across 14** when re-derived on 2026-09-18 (two were removed by
-fixing their cause, not by adjusting the count). The "22 across 12 files" that used to be here
+`tools/lint.sh` (§17.1), and **20 across 13** when re-derived on 2026-09-18 — five were removed by
+fixing their cause or proving them redundant, not by adjusting the count (two cause-fixes in
+§17.1, `bin/tac-exec`'s and the two in `tactical-console.bashrc` that its file-wide directive at
+`:47` already covered). The "22 across 12 files" that used to be here
 reproduces under NO scope of the command, at either revision — measured with
 `git grep -c 'shellcheck disable=SC' <rev> -- scripts bin tools tests tactical-console.bashrc env.sh`.
 The wording before that claimed the repo carried
@@ -2760,11 +2762,11 @@ Expected
 
 No new suppressions — fix the cause instead. A suppression is only acceptable for genuinely third-party, unpatchable output: one narrowly scoped filter, owned, with a comment naming the emitting package and `file:line` plus the tracking path. Never for our own code. Residue cleared (2026-09-12): the `scripts/` path insert now lives in `tests/_paths.py`, and the three `# noqa: E402` suppressions in `tests/test_kgraph.py`, `tests/test_kgraph_wiring.py` and `tests/test_untested_modules.py` are gone (standalone `python tests/x.py` runs still work).
 
-Re-measured 2026-09-18 with this item's own command: **23 directive lines across 14 files**
-(25 at the start of that day — this item's own two cause-fixes removed two of them), down from
-68, and **0** in the `noqa` / `type: ignore` class. Every remaining line's code is structural rather than noise — SC1090/SC1091 (computed source paths: the loaders' own module loop, the optional files they source, the tests' run-time generated copies), SC2016 (single-quoted pwsh payloads that must reach Windows unexpanded), SC2317/SC2329 (functions referenced only from quoted trap strings; quoting the trap instead changes when bash expands it, so that fix is not available), SC2034 (version headers read by people and by `tools/check-module-versions.sh`), SC2086/SC2188/SC2221/SC2222. Two causes were FIXED rather than suppressed on 2026-09-18: `__bench_cleanup`'s `return $_exit_code` is now quoted (SC2086), and the bench status line's `$(<file || echo unknown)` — which never ran its fallback, because bash's `$(<file)` takes no trailing command — became a plain assignment (SC2188). Both directives are gone and `tools/lint.sh` stays green.
+Re-measured 2026-09-18 with this item's own command: **20 directive lines across 13 files**
+(25 at the start of that day — this item's own two cause-fixes removed two, and three more went
+as redundant), down from 68, and **0** in the `noqa` / `type: ignore` class. Every remaining line's code is structural rather than noise — SC1090/SC1091 (computed source paths: the loaders' own module loop, the optional files they source, the tests' run-time generated copies), SC2016 (single-quoted pwsh payloads that must reach Windows unexpanded), SC2317/SC2329 (functions referenced only from quoted trap strings; quoting the trap instead changes when bash expands it, so that fix is not available), SC2034 (version headers read by people and by `tools/check-module-versions.sh`), SC2086/SC2188/SC2221/SC2222. Two causes were FIXED rather than suppressed on 2026-09-18: `__bench_cleanup`'s `return $_exit_code` is now quoted (SC2086), and the bench status line's `$(<file || echo unknown)` — which never ran its fallback, because bash's `$(<file)` takes no trailing command — became a plain assignment (SC2188). Both directives are gone and `tools/lint.sh` stays green.
 
-**Control for this count, because a looser grep over-counts.** Several module headers *document* a removed file-wide disable ("relying on a file-wide `disable=SC2154` (removed 2026-09-15)") without carrying one, so an unanchored `grep -rhoE 'disable=SC[0-9]+'` reports 35 where this item's command reports 23. Use the command above, and never write a comment that reproduces the directive text verbatim — it becomes a phantom hit for every grep-based audit, including this one — and never let a prose line *begin* with the word `shellcheck`, because the directive parser reads it as a malformed directive and fails the file (measured 2026-09-18: one such comment cost a full lint cycle with SC1073/SC1072).
+**Control for this count, because a looser grep over-counts.** Several module headers *document* a removed file-wide disable ("relying on a file-wide `disable=SC2154` (removed 2026-09-15)") without carrying one, so an unanchored `grep -rhoE 'disable=SC[0-9]+'` reports 35 where this item's command reports 20. Use the command above, and never write a comment that reproduces the directive text verbatim — it becomes a phantom hit for every grep-based audit, including this one — and never let a prose line *begin* with the word `shellcheck`, because the directive parser reads it as a malformed directive and fails the file (measured 2026-09-18: one such comment cost a full lint cycle with SC1073/SC1072).
 
 17.2
 

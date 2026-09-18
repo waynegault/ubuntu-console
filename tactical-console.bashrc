@@ -218,7 +218,6 @@ export TACTICAL_PROFILE_VERSION="${_TAC_LOADER_VERSION}.${_tac_mod_sum}"
 # Credentials are NOT stored here. Set OPENCLAW_TOKEN, OPENCLAW_PASSWORD, and
 # OPENCLAW_GATEWAY_PASSWORD in ~/.openclaw/secrets.env (chmod 600, not tracked
 # by git). This file is sourced below if it exists.
-# shellcheck disable=SC1091
 if [[ -f "$HOME/.openclaw/secrets.env" ]]; then
     source "$HOME/.openclaw/secrets.env"
 fi
@@ -230,7 +229,6 @@ fi
 # pwsh is unavailable at shell start.
 if [[ -f "$HOME/.config/environment.d/90-openclaw.conf" ]]; then
     set -a
-    # shellcheck disable=SC1091
     source "$HOME/.config/environment.d/90-openclaw.conf"
     set +a
 fi
