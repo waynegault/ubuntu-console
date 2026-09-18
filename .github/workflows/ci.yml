@@ -98,14 +98,18 @@ jobs:
 
       - name: Run unit tests
         run: |
-          # Fast smoke subset. 04-llama-cpp-inventory is excluded (live downloads
-          # + host mutation); the remaining unit suites run nightly.
+          # Fast smoke subset.  04-llama-cpp-inventory is excluded (live downloads +
+          # host mutation).  12-gpu-exclusivity is excluded for the same reason ON A
+          # SELF-HOSTED RUNNER: it takes the CUDA card lock, and this box also runs
+          # investigator's GPU pipelines.  Measured 2026-09-18, a validation bench was
+          # refused with "CUDA card is owned by another run" while a CI job held it — CI
+          # must never be the reason a measurement is refused.  It still runs locally and
+          # in any explicitly-listed run; it is not part of the nightly legacy suite.
           bats tests/unit/01-refresh-keys.bats \
                tests/unit/02-so-startup.bats \
                tests/unit/09-check-agent-use.bats \
                tests/unit/10-clean-orphans.bats \
                tests/unit/11-module-versions.bats \
-               tests/unit/12-gpu-exclusivity.bats \
                tests/unit/13-gguf-ctx-bounds.bats \
                tests/unit/14-registry-identity.bats
 
