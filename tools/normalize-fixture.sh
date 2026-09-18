@@ -101,7 +101,7 @@ case "${1:---}" in
             [[ -f "$f" ]] || continue
             local_out="${f%.txt}.norm"
             normalize "$f" > "$local_out"
-            echo "normalized: $(basename "$local_out")"
+            echo "normalized: ${local_out##*/}"
             count=$(( count + 1 ))
         done
         echo "Done: $count fixtures normalized."

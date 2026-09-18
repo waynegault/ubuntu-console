@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 40
+# Module Version: 41
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -831,7 +831,7 @@ function __up_python_fleet() {
             local v_list=()
             for py in "${py_versions[@]}"
             do
-                v_list+=("$(basename "$py")")
+                v_list+=("${py##*/}")
             done
             __tac_line "[12/20] Python Fleet" "[${v_list[*]} INSTALLED]" "$C_Success"
             __set_cooldown "pyfleet" "$now"

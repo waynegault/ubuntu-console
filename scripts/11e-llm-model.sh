@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 40
+# Module Version: 41
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -117,7 +117,7 @@ function __model_scan() {
     do
         [[ ! -f "$gguf" ]] && continue
         local fname
-        fname=$(basename "$gguf")
+        fname="${gguf##*/}"
         local fbytes
         fbytes=$(__model_scan_row_bytes "$LLAMA_MODEL_DIR" "$fname")
         # Empty byte count = a LATER shard of a split GGUF: it gets no row of its own, and
@@ -2339,7 +2339,7 @@ function __model_bench_history() {
     for bench_file in "${bench_files[@]}"
     do
         local bench_label
-        bench_label=$(basename "$bench_file")
+        bench_label="${bench_file##*/}"
         bench_label="${bench_label#bench_}"
         bench_label="${bench_label%.tsv}"
         local summary

@@ -17,7 +17,7 @@
 # Usage: tools/docs-sync-check.sh
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 set -u
 
@@ -69,7 +69,7 @@ do
     [[ -f "$f" ]] || continue
     n=$(grep -c '^@test ' "$f" || true)
     bats_total=$((bats_total + n))
-    case "$(basename "$f")" in
+    case "${f##*/}" in
         tactical-console.bats)      bats_full=$n ;;
         tactical-console-fast.bats) bats_fast=$n ;;
     esac

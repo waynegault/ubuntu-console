@@ -197,11 +197,12 @@ echo "  ~/.bashrc - set read-only (mode 444)"
 for f in "$REPO"/bin/*
 do
     [[ -f "$f" ]] || continue
-    case "$(basename "$f")" in
+    _bn="${f##*/}"
+    case "$_bn" in
         llama-gpu-clear.sh|gpu-busy.sh|llama-cuda-server|llama-xe-server|llama-cpu-server)
-            launcher "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")" ;;
+            launcher "bin/$_bn" "$HOME/.local/bin/$_bn" ;;
         *)
-            link "bin/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")" ;;
+            link "bin/$_bn" "$HOME/.local/bin/$_bn" ;;
     esac
 done
 
@@ -276,7 +277,8 @@ done
 for f in "$REPO"/scripts/load-vault-env.sh "$REPO"/scripts/oc-update-enhanced.sh
 do
     [[ -f "$f" ]] || continue
-    link "scripts/$(basename "$f")" "$HOME/.local/bin/$(basename "$f")"
+    _bn="${f##*/}"
+    link "scripts/$_bn" "$HOME/.local/bin/$_bn"
 done
 
 # 14-wsl-extras.sh sources load-vault-env.sh from the vault directory, so place
@@ -292,7 +294,8 @@ fi
 for f in "$REPO"/systemd/*
 do
     [[ -f "$f" ]] || continue
-    link "systemd/$(basename "$f")" "$HOME/.config/systemd/user/$(basename "$f")"
+    _bn="${f##*/}"
+    link "systemd/$_bn" "$HOME/.config/systemd/user/$_bn"
 done
 
 # Retired UNIT names (2026-09-15): the Phi-4-mini decomposition lane was removed
