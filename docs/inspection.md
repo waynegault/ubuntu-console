@@ -319,9 +319,18 @@ Zero matches, or each use verified safe
 
 🔧 No source of untrusted paths
 
-grep -n '\bsource\b|\. ' <file>
+`grep -nE '(^|[;&|!]|\bif\b|\belif\b|\bthen\b|\bdo\b)[[:space:]]*(source|\.)[[:space:]]+["$~./]' <file>`
 
-All source targets are trusted/validated
+All source targets are trusted/validated. **The command that used to be here could not fail:**
+`grep -n '\bsource\b|\. '` is a BRE, so `|` is literal and it matched *nothing* — not even in
+`env.sh` (3 real sites) or `tactical-console.bashrc` (6). That is a green that cannot go red, the
+same defect class the preamble records as fixed for 5.4, 6.2 and 6.3 (2026-09-16). The replacement
+above is anchored at a command position and requires a path-like target; re-verified both ways on
+2026-09-18 — it finds `env.sh`'s sites *including* `if ! source "$_tac_lib_f"`, returns 0 on a
+prose-only markdown file, and matches a synthetic `if ! source "$x/y"`. Re-derived same day:
+**100 sites** across `*.sh`/`*.bashrc`/`*.bats`. A first attempt at the fix (just adding `-E`)
+was ALSO wrong, silently matching ordinary prose — `. The`, `. A`, `. This` — which is why the
+target must look like a path; anchoring is what makes this discriminate.
 
 2.2 Secrets & Credentials
 
