@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 37
+# Module Version: 38
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -781,8 +781,17 @@ function __model_use_configure_params() {
         gpu_layers=0
     fi
 
-    # Quant-guide-aware launch tuning for 4GB VRAM systems
-    if (( gpu_layers > 0 ))
+    # Quant-guide-aware launch tuning for 4GB VRAM systems.  Its purpose is to keep an
+    # UNVALIDATED row out of VRAM trouble, so it applies ONLY when the row has never been
+    # autotuned.  A row with field 18 = yes already carries a measured, VRAM-validated
+    # configuration — the autotune's own benches unset the global overrides and its logs record
+    # "Bench NGL: 999" — yet this block replaced it at launch with a guess from the quant's
+    # name: measured 2026-09-18, a validation bench of row 2 (Q5_K_M, rated "acceptable" in
+    # config/quant-guide.conf) logged `ngl 20` against a registry value of 999, so its burn
+    # could never be compared with its certified tps.  Same defect class as the
+    # LLAMA_GPU_LAYERS override fixed in the previous step of this file: a global policy
+    # silently replacing a per-row measurement.
+    if (( gpu_layers > 0 )) && [[ "${autotuned:-no}" != "yes" ]]
     then
         case "$quant_rating" in
             discouraged)
