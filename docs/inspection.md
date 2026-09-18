@@ -2700,6 +2700,10 @@ Expected
 
 No new suppressions — fix the cause instead. A suppression is only acceptable for genuinely third-party, unpatchable output: one narrowly scoped filter, owned, with a comment naming the emitting package and `file:line` plus the tracking path. Never for our own code. Residue cleared (2026-09-12): the `scripts/` path insert now lives in `tests/_paths.py`, and the three `# noqa: E402` suppressions in `tests/test_kgraph.py`, `tests/test_kgraph_wiring.py` and `tests/test_untested_modules.py` are gone (standalone `python tests/x.py` runs still work).
 
+Re-measured 2026-09-18 with this item's own command: **25 directive lines across 14 files**, down from 68, and **0** in the `noqa` / `type: ignore` class. Every remaining line's code is structural rather than noise — SC1090/SC1091 (computed source paths: the loaders' own module loop, the optional files they source, the tests' run-time generated copies), SC2016 (single-quoted pwsh payloads that must reach Windows unexpanded), SC2317/SC2329 (functions referenced only from quoted trap strings; quoting the trap instead changes when bash expands it, so that fix is not available), SC2034 (version headers read by people and by `tools/check-module-versions.sh`), SC2086/SC2188/SC2221/SC2222. Two causes were FIXED rather than suppressed on 2026-09-18: `__bench_cleanup`'s `return $_exit_code` is now quoted (SC2086), and the bench status line's `$(<file || echo unknown)` — which never ran its fallback, because bash's `$(<file)` takes no trailing command — became a plain assignment (SC2188). Both directives are gone and `tools/lint.sh` stays green.
+
+**Control for this count, because a looser grep over-counts.** Several module headers *document* a removed file-wide disable ("relying on a file-wide `disable=SC2154` (removed 2026-09-15)") without carrying one, so an unanchored `grep -rhoE 'disable=SC[0-9]+'` reports 35 where this item's command reports 25. Use the command above, and never write a comment that reproduces the directive text verbatim — it becomes a phantom hit for every grep-based audit, including this one — and never let a prose line *begin* with the word `shellcheck`, because the directive parser reads it as a malformed directive and fails the file (measured 2026-09-18: one such comment cost a full lint cycle with SC1073/SC1072).
+
 17.2
 
 🔧 Both loaders read one shared module list
@@ -2839,25 +2843,32 @@ is deliberately not worth fixing, and what was still open when this pass ended.
   7.4   both acceptable guard forms stated, ranked — an availability probe on the
         binary is legitimate, not a lesser substitute
 
-18.2 Open findings — verified, not yet fixed
+18.2 Findings from that pass — re-derived 2026-09-18 (one was stale, one fixed, one wrong)
 
-- `scripts/spec-decode-bench.sh` has no consecutive-error abort (item 17.15). It
-    coerces a non-numeric token count to 0, so a curl timeout or an empty generation
-    is scored as a zero and the bench continues through every remaining prompt.
-    `autotune-model.sh`'s `CUDA_DEGRADE_CONSECUTIVE_STALLS` counts health-never-ready
-    stalls — a different signal from case errors. This is the bench fail-fast rule
-    with one implementation for the autotune bench and none for the spec benches.
-- Suppression residue (item 17.1): 68 occurrences across 36 files, 30 of them in
-    `.bats`. The Python residue is cleared — zero `# noqa` / `# type: ignore`. Most
-    of what remains is the SC2034/SC2154 class, and that is not a directive problem:
-    see 1.12, these are structural cross-module findings. `tools/lint.sh` lints each
-    file as its own entry, so a module's interface looks unused to itself. The fix is
-    to lint the module graph from a generated entry that sources the modules by
-    literal name — and note that linting `env.sh` alone does NOT achieve it, because
-    its module loop is `source "$_tac_lib_f"`, which shellcheck cannot follow.
-- Item 7.4: only one call site actually detects WSL (`09f-oc-misc.sh:157`). The
-    rest rely on `command -v pwsh.exe`-style probes, which the corrected item now
-    accepts. Left as-is deliberately.
+- `scripts/spec-decode-bench.sh` HAD no consecutive-error abort (item 17.15) — **FIXED since
+    this note was written.** Re-derived 2026-09-18: the bench carries
+    `MAX_CONSECUTIVE_ERRORS=2` (line 56), a `--max-consecutive-errors N` flag (line 61) and
+    enforcement at line 144, so a curl timeout or an empty generation still scores a zero, but
+    the run stops after two in a row instead of grinding through every remaining prompt.
+    `autotune-model.sh`'s `CUDA_DEGRADE_CONSECUTIVE_STALLS` remains a *different* signal
+    (health-never-ready stalls). Item 17.15 is therefore satisfied, and this entry is the
+    worked example of why a pass must re-derive rather than trust its own notes.
+- Suppression residue (item 17.1): re-derived 2026-09-18 as **25 directive lines across 14
+    files** — this line said 68 across 36 — and zero `# noqa` / `# type: ignore`. Item 17.1
+    now carries the per-class breakdown, the two causes fixed on 2026-09-18 (SC2086, SC2188),
+    and the control that makes the count reproducible: an unanchored grep reports 35, because
+    several module headers *document* a removed file-wide disable without carrying one. The
+    SC2154 half of this note is obsolete — those file-wide disables were removed on
+    2026-09-15 in favour of each module declaring the globals it consumes. Still true and
+    still the reason the loader cannot be linted alone: `tools/lint.sh` lints each
+    file as its own entry, so a module's interface looks unused to itself, and `env.sh`'s
+    module loop is `source "$_tac_lib_f"`, which shellcheck cannot follow.
+- Item 7.4: this line said "only one call site actually detects WSL (`09f-oc-misc.sh:157`)".
+    Re-derived 2026-09-18: there are **three** `/proc/version` greps — `09f-oc-misc.sh:157`,
+    `11e-llm-model.sh:1038`, `14-wsl-extras.sh:133` — plus `12-dashboard-help.sh:204` reading
+    `$WSL_DISTRO_NAME`. The item's corrected text already accepts env-var and
+    `command -v pwsh.exe` probes, so the conclusion ("no call site needs changing") stands,
+    but the count in this line was wrong.
 
 18.3 Migration backlog — count it, do not fix it during a correctness pass
 

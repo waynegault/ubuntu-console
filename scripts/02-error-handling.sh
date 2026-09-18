@@ -2,7 +2,7 @@
 # ─── Module: 02-error-handling ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 2. ERROR HANDLING
 # ==============================================================================
@@ -205,7 +205,11 @@ function __tac_err_handler() {
         return
     fi
 
-    # Skip logging for whitelisted commands that return non-zero as normal behavior
+    # Skip logging for whitelisted commands that return non-zero as normal behavior.
+    # The arms below intentionally overlap: the `[` alternative also matches `[[ ...`.
+    # A per-file lint reports SC2221/SC2222 for that, while the module-graph pass in
+    # tools/lint.sh does not — and the pre-commit hook lints STAGED files per-file, so
+    # dropping the directive below would refuse a commit that touches this file.
     # shellcheck disable=SC2221,SC2222
     case "$_raw_cmd" in
         grep*|fgrep*|egrep*) return ;;  # No match is normal

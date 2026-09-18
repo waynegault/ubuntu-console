@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 39
+# Module Version: 40
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -1869,8 +1869,7 @@ function __model_bench() {
         fi
         rm -f "$bench_lock_file"
         __bench_restore_traps
-        # shellcheck disable=SC2086
-        return $_exit_code
+        return "$_exit_code"
     }
     trap '__bench_cleanup' EXIT
     trap '__bench_signal_rc=130; __bench_cleanup; return 130' INT
@@ -3279,8 +3278,13 @@ function model() {
                     then
                         if command -v lsof >/dev/null 2>&1 && lsof "$_bench_lock" >/dev/null 2>&1
                         then
-                            # shellcheck disable=SC2188
-                            __tac_info "Bench" "[RUNNING — lock held by PID $(<"$_bench_lock" 2>/dev/null || echo unknown)]" "$C_Warning"
+                            # Read the owner through a plain assignment: `$(<file || cmd)` is
+                            # not the read-then-fallback it looks like.  Bash's `$(<file)` takes
+                            # no trailing command, so the `|| echo unknown` never ran and an
+                            # unreadable lock reported an empty PID instead of `unknown`.
+                            local _bench_owner
+                            _bench_owner=$(< "$_bench_lock" 2>/dev/null) || _bench_owner=""
+                            __tac_info "Bench" "[RUNNING — lock held by PID ${_bench_owner:-unknown}]" "$C_Warning"
                             return 0
                         else
                             __tac_info "Bench" "[STALE — lock file exists but no active holder]" "$C_Warning"
