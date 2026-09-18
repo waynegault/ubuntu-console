@@ -2,7 +2,7 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================
@@ -69,43 +69,30 @@ then
     fi
 fi
 
-# Fix Loopback for WSL Mirrored Networking (Idempotent & Pulse-Free).
-# WSL2 mirrored networking mode doesn't create a loopback0 dummy interface.
-# Without it, OpenClaw's node-to-node communication on 127.0.0.2 fails.
+# Loopback for WSL Mirrored Networking — CHECKED here, REPAIRED on demand.
+# WSL2 mirrored networking mode doesn't create a loopback0 dummy interface, and
+# without it OpenClaw's node-to-node communication on 127.0.0.2 fails.
+#
+# This runs at source time in every interactive shell, so it no longer REPAIRS:
+# privileged work does not belong in the startup path (item 2.3.1 of
+# docs/inspection.md, re-derived 2026-09-18 — five `sudo` calls used to live here,
+# guarded by `sudo -n` so they could never prompt, but still privileged commands in
+# a path that every shell executes).  The repair is __tac_fix_loopback below; here
+# we only read state and say what is missing.
 # Uses 'command ip' to call /usr/bin/ip directly, avoiding any function shadow.
-# Checks both interface existence AND the specific address to be truly idempotent.
-_sudo_check=0
-sudo -n true 2>/dev/null && _sudo_check=1
-
 if ! command ip link show loopback0 >/dev/null 2>&1
 then
-    if (( _sudo_check ))
-    then
-        sudo ip link add loopback0 type dummy 2>/dev/null
-        sudo ip link set loopback0 up 2>/dev/null
-        sudo ip addr add 127.0.0.2/8 dev loopback0 2>/dev/null
-        if ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
-        then
-            printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset}" \
-                "127.0.0.2 loopback unavailable — OpenClaw node-to-node traffic may fail"
-            echo "$(date +"%Y-%m-%d %H:%M:%S") [LOOPBACK-FAILED] could not set up loopback0/127.0.0.2" \
-                >> "$ErrorLogPath" 2>/dev/null
-        fi
-    fi
+    printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset}" \
+        "loopback0 missing — OpenClaw node-to-node traffic may fail; run 'up' or 'tac-exec __tac_fix_loopback' to create it"
 elif ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
 then
-    # Interface exists but address is missing (e.g., after network reset)
-    if (( _sudo_check ))
-    then
-        sudo ip addr add 127.0.0.2/8 dev loopback0 2>/dev/null
-        if ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
-        then
-            printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset}" \
-                "127.0.0.2 loopback address missing — OpenClaw node-to-node traffic may fail"
-        fi
-    fi
+    # Interface exists but the address is missing (e.g. after a network reset)
+    printf '%s\n' "${C_Warning}[Tactical Profile]${C_Reset}" \
+        "loopback0 is up but 127.0.0.2/8 is missing — OpenClaw node-to-node traffic may fail; run 'up' or 'tac-exec __tac_fix_loopback'"
 fi
-unset _sudo_check
+# The repair itself (__tac_fix_loopback) lives in scripts/08-maintenance.sh: this
+# module is excluded from the library loader, so a definition here would be
+# unreachable from `tac-exec`, and privileged work belongs on the maintenance path.
 if [[ -f "$OC_WORKSPACE/oc-llm-sync.sh" ]]
 then
     _sync_hash=$(sha256sum "$OC_WORKSPACE/oc-llm-sync.sh" 2>/dev/null | cut -d' ' -f1)

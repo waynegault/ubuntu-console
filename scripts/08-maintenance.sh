@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 39
+# Module Version: 40
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -1161,6 +1161,45 @@ function __up_npm_cache() {
 }
 
 # ---------------------------------------------------------------------------
+# __tac_fix_loopback — create the WSL mirrored-networking loopback (privileged).
+#
+# Moved here on 2026-09-18 out of scripts/13-init.sh, which runs at source time in
+# every interactive shell: privileged work does not belong in the startup path
+# (item 2.3.1 of docs/inspection.md).  13-init still CHECKS and warns; this is the
+# repair, reachable from `up` and from `tac-exec __tac_fix_loopback`.
+#
+# Idempotent and quiet.  Returns 0 when 127.0.0.2/8 is present afterwards, and 1
+# when it cannot get there (no passwordless sudo, or the interface refuses),
+# logging the latter to ErrorLogPath.
+# ---------------------------------------------------------------------------
+function __tac_fix_loopback() {
+    local _lb_sudo=0
+    sudo -n true 2>/dev/null && _lb_sudo=1
+    if (( _lb_sudo == 0 ))
+    then
+        printf '%s\n' "[loopback] cannot repair without passwordless sudo (sudo -n failed)" >&2
+        return 1
+    fi
+    if ! command ip link show loopback0 >/dev/null 2>&1
+    then
+        sudo ip link add loopback0 type dummy 2>/dev/null
+        sudo ip link set loopback0 up 2>/dev/null
+    fi
+    if ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
+    then
+        sudo ip addr add 127.0.0.2/8 dev loopback0 2>/dev/null
+    fi
+    if ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
+    then
+        printf '%s\n' "[loopback] 127.0.0.2 unavailable — OpenClaw node-to-node traffic may fail" >&2
+        echo "$(date +"%Y-%m-%d %H:%M:%S") [LOOPBACK-FAILED] could not set up loopback0/127.0.0.2" \
+            >> "${ErrorLogPath:-/dev/null}" 2>/dev/null
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # up — Run 20-step system maintenance with cooldowns per step.
 # Usage: up [--force]
 #   --force: Suspend all cooldowns for testing purposes
@@ -1186,6 +1225,12 @@ function up() {
 
     command clear
     __tac_header "SYSTEM MAINTENANCE" "open"
+
+    # Keep the WSL mirrored-networking loopback alive.  This used to happen at shell
+    # start-up; it is privileged, so it belongs on the maintenance path (item 2.3.1),
+    # and it is non-fatal: a missing loopback0 must not abort the other 20 steps.
+    __tac_fix_loopback || true
+
     local errCount=0
     local now
     now=$(date +%s)
