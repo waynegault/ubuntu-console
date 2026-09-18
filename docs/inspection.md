@@ -1139,9 +1139,10 @@ Replaced with native Bash ${var//find/replace} or ${var#prefix}
 
 No `cmd <file> | cmd` where `<file` or `<<<` would do. Expect **two known false
 positives**, not zero: `journalctl --output=cat | grep` (`scripts/09a-oc-gateway.sh:488`,
-where `cat` is a flag value) and a usage comment (`scripts/11f-llm-runtime.sh:691`).
-The previous command here had a literal newline inside its character class plus an
-empty alternative, so grep rejected it rather than reporting anything.
+where `cat` is a flag value) and a usage comment (`scripts/11f-llm-runtime.sh:701` —
+re-derived 2026-09-18; this line said `:691`, and the file has moved since the 2026-09-16
+audit while the citation did not). The previous command here had a literal newline inside its
+character class plus an empty alternative, so grep rejected it rather than reporting anything.
 
 6.3
 
@@ -1151,9 +1152,13 @@ empty alternative, so grep rejected it rather than reporting anything.
 
 `{ }` grouping where a subshell is not needed. The `[^(]` is what makes this
 discriminating: `^\s*\(` alone also matches every `(( ... ))` arithmetic line — 245
-of them at the 2026-09-16 audit, against 52 real subshell openings. Most of the 52
-are justified (background groups, `( trap ... EXIT; ... )`, `( umask 077; ... )`),
-so read the hits rather than counting them.
+of them at the 2026-09-16 audit, against 52 real subshell openings then. Re-derived
+2026-09-18 with this item's command: **53**, i.e. the tree gained one subshell while the
+number here stayed put. The arithmetic figure is scope-sensitive and I could not reproduce
+245 under my globs (`*.sh` + `*.bashrc`, excluding `.venv`/`examples` → 198), so it is left
+attributed to that audit rather than overwritten with a number I cannot defend. Most of the
+subshell hits are justified (background groups, `( trap ... EXIT; ... )`,
+`( umask 077; ... )`), so read them rather than counting them.
 
 6.4
 
