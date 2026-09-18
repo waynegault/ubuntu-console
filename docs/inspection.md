@@ -1221,9 +1221,20 @@ subshell hits are justified (background groups, `( trap ... EXIT; ... )`,
 
 🔧 Optimize file reading
 
-grep -n 'while read' <file>
+`grep -nE '^[[:space:]]*while[[:space:]]+(IFS=[^[:space:]]*[[:space:]]+)?read([^[:alnum:]_]|$)' <file | grep -vE ':[0-9]+:[[:space:]]*#'`
 
-mapfile -t used for array ingestion instead of while-loops
+`mapfile -t` used for array ingestion instead of while-loops. **The probe that used to be here was
+blind in the direction that matters:** `grep -n 'while read'` misses every `while IFS= read` site —
+the standard whole-line idiom, and where most of these sites live — while also matching prose,
+because `while read` is a substring of "while reading" (`scripts/autotune-model.sh:2284` is a comment
+the old probe counted). Measured at `f7403d24` (2026-09-18, comments excluded): the old spelling
+returns **7**, the anchored probe **75**. Those 75 are two populations and only one is this item's
+business: **46** read a whole line (`while read`, `while IFS= read`) and **29** split fields
+(`while IFS='|' read -r a b`), where `mapfile -t` is *not* equivalent and must not be used. Narrow
+again to whole-line reads whose matching `done` carries a redirection — `done < file` or
+`done < <(cmd)` — and the worklist is **41**. A loop fed by `cmd | while` is not in it: converting
+one means moving the command into the process substitution, which is a different change. Read the
+41; do not chase zero.
 
 6.5
 
@@ -1233,13 +1244,27 @@ grep -nE '\bpython\b|\bperl\b|\bnode\b' <file>
 
 Used strictly for templating/specialized tasks. Core logic stays native.
 
-6.6
+    awk '
+    { if ($0 ~ /^[[:space:]]*#/) next
+      if ($0 ~ /(^|[;&|[:space:]])do[[:space:]]*$/) { d++; next }
+      if ($0 ~ /(^|[;&|[:space:]])done([^[:alnum:]_]|$)/) { if (d>0) d--; next }
+      if (d>0 && $0 ~ /(^|[^[:alnum:]_-])(date|grep|awk|cut|sed|sort|basename|dirname)[[:space:]]/) print FILENAME":"FNR": "$0 }
+    ' <file>
 
-🔧 Avoid repeated forks in loops
-
-Inspect for/while bodies
-
-Loops that iterate >10× must not call date, grep, awk, cut inside the body; hoist or cache the result beforehand
+Loops that iterate >10× must not call `date`, `grep`, `awk`, `cut` inside the body; hoist or cache
+the result beforehand. The old cell said only "Inspect for/while bodies", so every pass invented its
+own probe and published its own number. **The tracker above keys on `do`/`done`, not on
+`for`/`while`, and that is what makes it discriminating:** a shell script that embeds an AWK program
+(`bin/tac_hostmetrics.sh`, `scripts/09d-oc-agents.sh`, `scripts/11d-llm-gpu.sh`) contains AWK
+`for (luid in sums) { … }` loops that close with `}`, so keying on the shell keyword counts them as
+loop headers and never closes them — a leak across files that inflated a first attempt at this
+probe to 383 before it was caught. AWK has no `do…done`, so `do` cannot be an AWK header. Controls:
+a `date` call inside a `for …; do` body matches, the same call outside any loop does not.
+Re-derived 2026-09-18 at `f7403d24` (comments excluded): **63** calls inside a loop body, headed by
+`scripts/11e-llm-model.sh` (10) and `tools/lint.sh` (7). Two limits, stated rather than hidden:
+iteration count is not statically knowable, so read the hits and apply the >10× test by eye; and a
+`do`/`done` pair inside a heredoc that *generates* a script is counted, so a file's own `do`/`done`
+totals can differ by a few — that difference is the probe's uncertainty, not a finding.
 
 6.7
 
@@ -1253,9 +1278,19 @@ Use [[ ]] instead of [ ] for string/regex tests — no word-splitting, supports 
 
 🔧 Arithmetic tests prefer (( ))
 
-Inspect numeric comparisons
+`grep -nE '\[\[.*[[:space:]]-(gt|lt|ge|le|eq|ne)[[:space:]].*\]\]' <file | grep -vE ':[0-9]+:[[:space:]]*#'`
 
-Use (( n > 5 )) instead of [[ $n -gt 5 ]] for numeric comparisons
+Use `(( n > 5 ))` instead of `[[ $n -gt 5 ]]` for numeric comparisons. The old cell said only
+"Inspect numeric comparisons", so three passes produced three numbers for the same tree — 245 at the
+2026-09-16 audit, 240 later, and 234 from a loose `\[\[.*-(gt|…)\b` — none of them reproducible from
+the item. One way to get this wrong is worth recording, because the first attempt here did: writing
+the operand as `[^]]*` ("no `]` before the operator") silently drops every test whose left side is an
+array length, since `${#arr[@]}` contains a `]` — 17 sites, which is the whole gap to the loose
+pattern. The probe above closes on `]]` without constraining the operand. Controls: `[[ "$n" -gt 5 ]]`
+matches, `[[ ${#a[@]} -gt 0 ]]` matches, and `(( n > 5 ))` does not — it cannot report the very form
+this item asks for. Re-derived 2026-09-18 at `f7403d24`: **232** comments excluded, 234 raw, and the
+loose pattern agrees at 232 once it too excludes comments — that agreement is the cross-check that
+the operand class is now right.
 
 6.9
 
@@ -1277,9 +1312,17 @@ printf is portable and unambiguous; echo -e behavior varies across shells
 
 🔧 Process substitution over temp files
 
-Inspect mktemp usage
+`grep -nE '\bmktemp\b' <file | grep -vE ':[0-9]+:[[:space:]]*#'`
 
-Use <(cmd) or >(cmd) instead of writing to temp files when data is consumed once
+Use `<(cmd)` or `>(cmd)` instead of writing to temp files when data is consumed once. The old cell
+said only "Inspect mktemp usage", so it carried no command and no count at all. Re-derived
+2026-09-18 at `f7403d24`: **23** sites, against 27 for the bare `grep -n mktemp` — the four extra are
+comments that mention it (`scripts/07-telemetry.sh:31`, `scripts/09f-oc-misc.sh:485` and `:487`,
+`scripts/14-wsl-extras.sh:28`). The distribution is concentrated: `scripts/09d-oc-agents.sh` holds
+6, then two each in `tools/sync-openclaw-completion.sh`, `tools/normalize-fixture.sh`,
+`scripts/11e-llm-model.sh` and `scripts/07-telemetry.sh`. A `mktemp` that a `trap … EXIT` deletes
+and several commands write to is legitimate; the item's test is "consumed once", which the probe
+cannot see, so read the 23 rather than counting them.
 
 6.12
 
@@ -1293,9 +1336,24 @@ du -sb on /mnt/c (drvfs) is extremely slow; use stat --printf='%s' or wc -c inst
 
 🔧 Cache expensive lookups
 
-Inspect repeated calls to same command
+    for L in 'command -v' uname lsb_release hostname nproc getconf; do
+        for f in <files>; do
+            c=$(grep -nE "(^|[^[:alnum:]_])${L// / }([^[:alnum:]_]|$)" "$f" | grep -vcE ':[0-9]+:[[:space:]]*#')
+            [ "$c" -gt 1 ] && echo "$L: $f ($c)"
+        done
+    done
 
-Results of command -v, uname, lsb_release, etc. called once and stored in a variable
+Results of `command -v`, `uname`, `lsb_release`, etc. called once and stored in a variable. The old
+cell said only "Inspect repeated calls to same command", so like 6.6 it had no command and no count.
+The item's claim is *repetition within one file*, and that has to be the probe or it answers a
+different question: word-bounded and comments excluded, this tree holds **100** lookup call sites,
+but only **23** (file, lookup) pairs where one lookup appears more than once. The boundaries are a
+correctness guard rather than a number-changer here — measured both ways, the bare substring returns
+the same 23 — but they are what keeps `my_command -v` and `nproc_file` from counting as lookups. The
+distribution is the finding: `scripts/08-maintenance.sh` alone holds **23** `command -v` calls,
+then `scripts/09d-oc-agents.sh` (8), `scripts/09f-oc-misc.sh` (7), and `scripts/09a-oc-gateway.sh`
+and `scripts/11e-llm-model.sh` (6 each); `nproc` repeats in three files. A lookup whose answer
+genuinely varies between calls is not a candidate — read the pairs.
 
 7. Portability — Medium
 
@@ -2969,6 +3027,18 @@ is deliberately not worth fixing, and what was still open when this pass ended.
     4.2.6 one-line `for/do/done` loops .............................. 8
     4.2.8 nested functions with no dynamic-scope note ............ 18 of 20
     4.3.6 mixedCase `local` names .................................. 20
+
+  RE-DERIVED 2026-09-18 — 6.4, 6.6, 6.8, 6.11, 6.13. Four of these five items had no probe at all
+  ("Inspect …" stood in the Command cell) and 6.4's probe was blind to `while IFS= read`, which is
+  why successive passes produced different numbers for an unchanged tree. Each item now carries a
+  command with a control, and the figures below are that command's output at `f7403d24`:
+
+    6.4   75 `while`-`read` sites — 46 whole-line, 29 splitting fields — of which 41 are real
+          `mapfile` candidates (the table's 6 was the bare `while read` spelling only)
+    6.6   63 forking-tool calls inside a `do…done` body      (was: no command)
+    6.8   232 `[[ … ]]` arithmetic comparisons, comments excluded
+    6.11  23 `mktemp` sites, comments excluded — 27 for the bare `grep -n mktemp` (was: no command)
+    6.13  100 lookup call sites, but only 23 (file, lookup) pairs repeated within one file (was: no command)
 
   ACTIONED, not backlogged — 4.3.4's dead code. `__llm_median_from_list` and
   `__llm_stddev_from_list` had no caller anywhere in the tree and neither is in
