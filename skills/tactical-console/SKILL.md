@@ -34,6 +34,7 @@ Use **tac-exec** to run tactical console commands for managing your local llama.
 ## Common Patterns
 
 ### Check System Status
+
 ```bash
 # Quick health check
 tac-exec model status
@@ -41,6 +42,7 @@ tac-exec so
 ```
 
 ### Switch Models
+
 ```bash
 # List available, then switch
 tac-exec model list
@@ -48,6 +50,7 @@ tac-exec model use 2
 ```
 
 ### Gateway Management
+
 ```bash
 # Full restart
 tac-exec xo
@@ -55,6 +58,7 @@ tac-exec so
 ```
 
 ### Diagnostics
+
 ```bash
 # Check logs
 tac-exec mlogs
@@ -72,7 +76,8 @@ tac-exec model doctor
 ## Output Format
 
 Commands use `__tac_info` format:
-```
+
+```text
 Local LLM    [RUNNING on PORT 8081]
 Gateway      [RUNNING on PORT 18789]
 ```
@@ -82,7 +87,8 @@ Colors: Green = running, Red = offline/error, Yellow = warning
 ## Model Numbers
 
 Models are numbered in registry (`~/.llm/models.conf`):
-```
+
+```text
 #  MODEL                          SIZE   QUANT    GPU
 > 1  Deepseek-R1-Distill-Qwen-1.5B  1.0G   Q4_K_M   999
   2  Llama 3.2 3B Instruct          1.9G   Q4_K_M   999
@@ -101,6 +107,7 @@ the file it tuned. `/dev/shm/active_llm` records the active model by file name t
 ## When to Use
 
 ✅ **Use tactical-console when:**
+
 - User asks to "start the LLM" or "check if model is running"
 - Need to switch between models
 - Gateway needs restart
@@ -108,6 +115,7 @@ the file it tuned. `/dev/shm/active_llm` records the active model by file name t
 - Viewing LLM logs or config
 
 ❌ **Don't use when:**
+
 - OpenClaw agent operations (use OpenClaw CLI directly)
 - File editing (use coding agents or VS Code)
 - Web browsing (use browser tools)

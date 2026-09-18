@@ -30,7 +30,7 @@ the running binary.
 
 `--mmap`, `--no-mmap` and `--mlock` no longer exist. The current binary rejects them:
 
-```
+```text
 build-cuda133 (build 10432):  W DEPRECATED: --mmap and --no-mmap are deprecated. use --load-mode mmap instead
                               W DEPRECATED: --mlock is deprecated. use --load-mode mlock instead
 build        (build 10955):   error: invalid argument: --no-mmap
@@ -137,7 +137,7 @@ Consequences it had before the fix (the RESOLVED block below removes every one):
 
 **The assertion that catches this, whichever semantics is chosen:**
 
-```
+```text
 advertised contextWindow == n_ctx_slot
 ```
 
@@ -157,7 +157,7 @@ is **set**, not derived.
   explicitly with `--kv-unified-per-slot`.
 - The vacuous AUTOTUNE-004 guard is gone, replaced by the runtime assertion above: after a
   launch the launcher curls `/props` and warns when
-  `default_generation_settings.n_ctx != ` the advertised ctx.
+  `default_generation_settings.n_ctx !=` the advertised ctx.
 - The envelope sweep in `autotune-model.sh` (2/4/8/16 slots at the winning ctx) is retired;
   the column records `1`. Retiring it also removes **four** llama-server launches per row
   from the WSL2 dxgkrnl context-cycle budget.
@@ -204,7 +204,7 @@ system `ocl-icd` loader — confirmed by `ldd` on `build-opencl/bin/llama-server
 **Proven consequence, not inferred:** launching the Xe lane from a console-sourced shell
 loses the device and **serves from CPU**:
 
-```
+```text
 E ggml_opencl: platform IDs not available.
 warning: no usable GPU found, --gpu-layers option will be ignored
 ```
@@ -477,7 +477,7 @@ fallback at `:51`. It killed this session's shell during the restart. Match the 
 
 Live trees:
 
-```
+```text
 ~/llama.cpp/build/bin/llama-server   0.4.0-dev (build 10955, commit 2f539596c)   NO_VMM=ON, FA_QUANTS=list  [CUDA lane since §8]
 ~/llama.cpp/build-cuda133/...        0.1.0-dev (build 10432, commit ab5ce4658)   VMM, FA_QUANTS=all  [rollback only — no longer serving]
 ~/llama.cpp/build-opencl/...         cannot print --version; tarball b6b003d2    [Xe + embed lanes]
@@ -541,4 +541,3 @@ from the checkout using the configure line recorded in the build guide, cross-ch
 that file exists only under `build-opencl/`); the ccache is warm, so a clean rebuild took
 under ten minutes when measured. Note also that a build tree cannot simply be renamed into
 place — `RPATH` is baked at configure time (§6).
-

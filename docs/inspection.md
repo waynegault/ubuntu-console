@@ -60,32 +60,32 @@ How to run a full pass (added 2026-09-16, after the first complete one)
 
 A full pass is 252 items and is not one sitting. What worked:
 
-* Split it by section across parallel auditors, then verify every FAIL yourself
+- Split it by section across parallel auditors, then verify every FAIL yourself
   with the command that produced it. An auditor's report is evidence, not truth:
   the first full pass produced real findings and also two that did not survive
   re-running the command that was supposed to prove them.
-* Audit read-only. Fixes land afterwards as their own commits. Editing files while
+- Audit read-only. Fixes land afterwards as their own commits. Editing files while
   the pass is still reading them makes the remaining sections describe a tree that
   no longer exists, and any finding touching an edited file must be re-derived.
-* Re-run the pass after fixing. "Fixed" is not "verified fixed".
+- Re-run the pass after fixing. "Fixed" is not "verified fixed".
 
 Four rules the first pass earned:
 
-* **A check whose command cannot run is a FAILURE of the check, not a pass.** Three
+- **A check whose command cannot run is a FAILURE of the check, not a pass.** Three
   commands in this document had never executed: 5.4's was a BRE in which `|` is
   literal, 6.2's had a literal newline inside a character class, and 6.3's was
   matching 245 arithmetic lines instead of the ~52 subshell openings it aimed at.
   All three were corrected on 2026-09-16. Treat "grep: Invalid regular expression"
   or a conspicuously empty result as the finding.
-* **Every clean result needs a control.** Prove the probe CAN fail before believing
+- **Every clean result needs a control.** Prove the probe CAN fail before believing
   it passed. Worked example: `bash -n` against `/usr/bin/bash` appeared to confirm
   the autotune benches parse under Bash 5.2 — but `/usr/bin/bash` is a symlink to
   the Homebrew bash 5.3.9, so the probe ran the very interpreter it claimed to rule
   out. A green that cannot go red is worth nothing.
-* **Re-derive every count from the repo.** A number asserted in two places and
+- **Re-derive every count from the repo.** A number asserted in two places and
   checked in one drifts in the other — which is why `tools/docs-sync-check.sh`
   exists, and it caught README's test totals going stale by four on 2026-09-16.
-* **Measure the artefact, not the label.** `/proc/PID/exe` over `comm`,
+- **Measure the artefact, not the label.** `/proc/PID/exe` over `comm`,
   `dpkg --verify` over a version string, `grep -c '^@test'` over a documented
   test count.
 
@@ -277,8 +277,8 @@ to `usr/bin` here, so this one path covers both.
 dpkg warns that diverting a file from an Essential package is dangerous, so this
 check exists to catch the two ways it can still go wrong:
 
-  * `/usr/bin/bash` DANGLING (Homebrew removed) — the system's shell is missing.
-  * `/usr/bin/bash.distrib` NEWER than the running bash — apt shipped a bash update
+- `/usr/bin/bash` DANGLING (Homebrew removed) — the system's shell is missing.
+- `/usr/bin/bash.distrib` NEWER than the running bash — apt shipped a bash update
     that is installed but NOT in effect, so packaged fixes are sitting unused.
 
 Revert the arrangement entirely with:
@@ -837,9 +837,7 @@ Each if, then, else, elif, fi on its own line for readability
 
 🔧 No compressed for/while on single lines
 
-```bash
-grep -nE 'for .* do .* done' <file>
-```
+    grep -nE 'for .* do .* done' <file>
 
 Loop body on separate lines; do/done on their own lines
 
@@ -1251,13 +1249,9 @@ Expected
 
 🔍 Shebang is correct
 
-```bash
-head -1 <file>
-```
+    head -1 <file>
 
-```bash
-#!/usr/bin/env bash
-```
+    #!/usr/bin/env bash
 
 `#!/usr/bin/env bash` for every executable; a sourced module uses
 `# shellcheck shell=bash` and no shebang. A machine-specific absolute interpreter
@@ -1683,12 +1677,12 @@ at 436.
 
 Two warnings, both measured, because the obvious commands do not work:
 
-  * The command that used to be here,
+- The command that used to be here,
     `awk '/^[a-z_].*\(\)/{name=$1; start=NR} /^}/{…}'`, reports `$1`. For `foo() {`
     that is the name, but for `function foo() {` — the repo's dominant style, 301 of
     385 defs — it prints the literal word `function`, so every hit was
     unattributable. Do not restore it.
-  * Brace counting is not a safe substitute either: heredocs in this repo contain
+- Brace counting is not a safe substitute either: heredocs in this repo contain
     braces, so depth never returns to zero and the span runs away — the candidate
     probe reported one "function" as **16,452 lines**. An over-100-line hit from
     that method is noise, not a finding.
@@ -1844,10 +1838,10 @@ sourcing of the profile in any suite was a sed-patched derivative run with
 
 TWO assertions are required, and the reason matters:
 
-  * `source tactical-console.bashrc` non-interactively returns at its interactive guard —
+- `source tactical-console.bashrc` non-interactively returns at its interactive guard —
     rc 0, nothing defined, `TACTICAL_PROFILE_VERSION` left unset. So "it exits 0" is true
     even of a no-op, and an item satisfied by that alone is a green that cannot go red.
-  * `source env.sh` from the SAME empty environment must define the interface
+- `source env.sh` from the SAME empty environment must define the interface
     (`declare -F model`, `declare -F so`). That is the half with teeth, and it is the
     library loader rather than the interactive profile — verified 2026-09-16.
 
@@ -2702,7 +2696,7 @@ Expected
 
 🔧 No suppression comments anywhere
 
-grep -rnE '# *noqa|# *type: *ignore|shellcheck disable=SC' scripts/ bin/ tools/ tests/ tactical-console.bashrc env.sh
+`grep -rnE '# *noqa|# *type: *ignore|shellcheck disable=SC' scripts/ bin/ tools/ tests/ tactical-console.bashrc env.sh`
 
 No new suppressions — fix the cause instead. A suppression is only acceptable for genuinely third-party, unpatchable output: one narrowly scoped filter, owned, with a comment naming the emitting package and `file:line` plus the tracking path. Never for our own code. Residue cleared (2026-09-12): the `scripts/` path insert now lives in `tests/_paths.py`, and the three `# noqa: E402` suppressions in `tests/test_kgraph.py`, `tests/test_kgraph_wiring.py` and `tests/test_untested_modules.py` are gone (standalone `python tests/x.py` runs still work).
 
@@ -2847,13 +2841,13 @@ is deliberately not worth fixing, and what was still open when this pass ended.
 
 18.2 Open findings — verified, not yet fixed
 
-  * `scripts/spec-decode-bench.sh` has no consecutive-error abort (item 17.15). It
+- `scripts/spec-decode-bench.sh` has no consecutive-error abort (item 17.15). It
     coerces a non-numeric token count to 0, so a curl timeout or an empty generation
     is scored as a zero and the bench continues through every remaining prompt.
     `autotune-model.sh`'s `CUDA_DEGRADE_CONSECUTIVE_STALLS` counts health-never-ready
     stalls — a different signal from case errors. This is the bench fail-fast rule
     with one implementation for the autotune bench and none for the spec benches.
-  * Suppression residue (item 17.1): 68 occurrences across 36 files, 30 of them in
+- Suppression residue (item 17.1): 68 occurrences across 36 files, 30 of them in
     `.bats`. The Python residue is cleared — zero `# noqa` / `# type: ignore`. Most
     of what remains is the SC2034/SC2154 class, and that is not a directive problem:
     see 1.12, these are structural cross-module findings. `tools/lint.sh` lints each
@@ -2861,7 +2855,7 @@ is deliberately not worth fixing, and what was still open when this pass ended.
     to lint the module graph from a generated entry that sources the modules by
     literal name — and note that linting `env.sh` alone does NOT achieve it, because
     its module loop is `source "$_tac_lib_f"`, which shellcheck cannot follow.
-  * Item 7.4: only one call site actually detects WSL (`09f-oc-misc.sh:157`). The
+- Item 7.4: only one call site actually detects WSL (`09f-oc-misc.sh:157`). The
     rest rely on `command -v pwsh.exe`-style probes, which the corrected item now
     accepts. Left as-is deliberately.
 
@@ -2927,8 +2921,8 @@ is deliberately not worth fixing, and what was still open when this pass ended.
 
 18.4 Checks this pass added
 
-  * 1.13 — host shell integrity. `/usr/bin/bash` may not be the packaged bash.
-  * 7.1 — a machine-specific absolute interpreter path in a tracked file now needs a
+- 1.13 — host shell integrity. `/usr/bin/bash` may not be the packaged bash.
+- 7.1 — a machine-specific absolute interpreter path in a tracked file now needs a
     stated reason; `#!/usr/bin/env bash` is the default. The two benches carrying
     `#!/home/linuxbrew/.linuxbrew/bin/bash` were switched on 2026-09-16: nothing in
     them needs more than 5.2, and every caller runs `bash <script>`, so the shebang
@@ -2970,44 +2964,44 @@ while the summary below kept describing it as open. Only ONE entry is still real
 11.5, the suppression migration. The others are kept here with what actually happened,
 because a stale summary reads exactly like an open decision.
 
-  * 12.2.3 — SETTLED as a design choice (item updated 2026-09-16), with one
+- 12.2.3 — SETTLED as a design choice (item updated 2026-09-16), with one
     correction: the FLAGS DO EXIST in this build — `-cmoe/--cpu-moe`,
     `-ncmoe/--n-cpu-moe` and `-ot/--override-tensor` are all in `llama-server --help`
     (verified 2026-09-16). What is true is that the repo passes none of them and
     handles MoE by LAYER COUNT instead. "No flag exists" was wrong; "no flag is
     passed, deliberately" is the claim the item defends.
-  * 12.2.7 — CORRECTED, not decided: the flag the item named (`--reasoning-budget`)
+- 12.2.7 — CORRECTED, not decided: the flag the item named (`--reasoning-budget`)
     does not exist in this build, and ``--reasoning off`` IS passed — in the systemd
     units, which that pass's grep did not cover. See the item. No measurement is
     outstanding here.
-  * 12.2.10 — SETTLED as deliberate (item updated 2026-09-16). `--cont-batching` is
+- 12.2.10 — SETTLED as deliberate (item updated 2026-09-16). `--cont-batching` is
     never passed and is not wanted: the build's `-cb` default IS "enabled", but
     `--parallel` is pinned to 1, so there is one slot and batching has nothing to
     batch. Raising `--parallel` would divide the served window (`ctx/N`) unless
     `--kv-unified-per-slot` sets it explicitly.
-  * 12.3.3 — WITHDRAWN in the item itself: no measured baseline for slot saturation
+- 12.3.3 — WITHDRAWN in the item itself: no measured baseline for slot saturation
     exists on this box, and saturation is already judged by TPS collapse plus the
     health status code. Adding the parse would create a signal nobody can calibrate.
-  * 12.4.1 — DONE (8c4216ff), and this bullet was stale in BOTH directions. The check
+- 12.4.1 — DONE (8c4216ff), and this bullet was stale in BOTH directions. The check
     landed in `11e-llm-model.sh` ("Readability, not just existence … the last gate
     before launch") while an earlier pass recorded it as open, and the pass that
     re-checked this list then repeated it as open WITHOUT READING THE CODE — which is
     precisely the failure this section exists to catch. What it did not have is a test;
     that gap is closed in `tests/tactical-console-fast.bats`.
-  * 11.7 — RESOLVED 2026-09-16 (c16bec50): `tests/tactical-console-fast.bats` now
+- 11.7 — RESOLVED 2026-09-16 (c16bec50): `tests/tactical-console-fast.bats` now
     sources the loader under `env -i` and asserts the half with teeth — `env.sh`
     defines the interface. The item records why "it exits 0" alone was a green that
     could not go red.
-  * 11.14 — RESOLVED 2026-09-16 (49507347): the three copies are one. The config
+- 11.14 — RESOLVED 2026-09-16 (49507347): the three copies are one. The config
     absorbed `models.py`'s divergent keys plus `stopwords`; `constants.py` owns the
     loader and the three modules import it. See the item.
-  * 11.6 — ADDRESSED 2026-09-16: the two kgraph hooks now prefer this repo's OWN
+- 11.6 — ADDRESSED 2026-09-16: the two kgraph hooks now prefer this repo's OWN
     `kgraph` through `.venv/bin/python3` and warn loudly when they fall back to the
     PATH install, so the silent no-op under a system Python is gone (verified in
     `tools/hooks/post-commit` and `post-merge`). Remaining nit: neither sets
     `set -uo pipefail`. NOTE: this bullet's subject does not match §11.6's own text,
     which is about the CI-on-commit hook — the numbering needs checking.
-  * 12.2.8 — FIXED in docs/llm.md, which now records the measured split rather than a
+- 12.2.8 — FIXED in docs/llm.md, which now records the measured split rather than a
     fixed pair: "There is NO fixed GPU/CPU pair — measured across the 27 live rows on
     2026-09-16: 1024 ×14, 512 ×7, 2048 ×6", and that the old "4096 (GPU)" figure was
     a stale copy of the bench's candidate ladder.

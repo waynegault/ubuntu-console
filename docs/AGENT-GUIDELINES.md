@@ -214,10 +214,12 @@ tac-exec le
 ## Error Handling
 
 All commands return:
+
 - **Exit 0** = Success
 - **Exit 1** = Failure (check output for details)
 
 Common error strings:
+
 - `[OFFLINE]` — LLM not running → `tac-exec serve`
 - `[NOT FOUND]` — File missing → check path or run `tac-exec model scan`
 - `[FAILED TO START]` — Model failed to boot → `tac-exec --read mlogs`
@@ -303,7 +305,7 @@ The GPU is shared with the `investigator` repo's pipeline, which takes a
 cross-process **flock** for the whole duration of a local-model run. The lock
 path mirrors `investigator/config/paths.py:gpu_lock_path()`:
 
-```
+```text
 $INVESTIGATOR_GPU_LOCK
 else $INVESTIGATOR_PRODUCTION_OUTPUT/runtime/gpu.lock
 else ~/investigator/production/runtime/gpu.lock
@@ -321,9 +323,9 @@ fi
 
 Two traps, both learned the hard way (2026-09-15):
 
-* `flock -n` **also fails when the path does not exist**, so a probe without an
+- `flock -n` **also fails when the path does not exist**, so a probe without an
   existence gate reads "cannot open the file" as "held" and refuses every run.
-* The file's *contents* (the owning PID) are a diagnostic only; the **flock** is
+- The file's *contents* (the owning PID) are a diagnostic only; the **flock** is
   the authority, and the OS releases it automatically when the owner dies.
 
 The console honours the lock in both CUDA-reap paths
@@ -334,25 +336,25 @@ and `run-autotune-batch.sh` halts up front when the card is held. **Never
 
 ## Conventions when working *in* this repo
 
-* **Git hooks are tracked** in `tools/hooks/` and activated with
+- **Git hooks are tracked** in `tools/hooks/` and activated with
   `git config core.hooksPath <repo>/tools/hooks` (which `install.sh` sets).
   Never inline a check in `.git/hooks/` — it is not version-controlled, and an
   inlined copy of the shellcheck loop there drifted from `tools/lint.sh` on
   2026-09-15 when only one of the two copies of the flags was updated.
-* **Lint:** `tools/lint.sh` in three modes — whole repo (default), `--staged`
+- **Lint:** `tools/lint.sh` in three modes — whole repo (default), `--staged`
   (what the pre-commit hook runs) and `--files F...` (an explicit list).
   The shellcheck flags live there and nowhere else. Do **not** add
   `# shellcheck disable=` directives: fix the cause — have the module declare
   what it consumes, and let `-x --source-path` resolve the source-following
   SC1090/SC1091 class.
-* **Module versions:** `tools/check-module-versions.sh` examines `*.sh` files
+- **Module versions:** `tools/check-module-versions.sh` examines `*.sh` files
   only (so `tools/hooks/*` is exempt) and enforces a bump only for files that
   already carry `# Module Version: N`; a brand-new file is taken as a baseline.
   Every `bin/*.sh` carries one. Bump it on ANY edit, or the commit is refused.
-* **Docs:** `tools/docs-sync-check.sh` fails on stale module counts, loader
+- **Docs:** `tools/docs-sync-check.sh` fails on stale module counts, loader
   version, or test totals — README must match the repo. Update `README.md` and
   `docs/inspection.md` when you change structure, counts or conventions.
-* **Tests before a hand-back:** `bats tests/tactical-console-fast.bats` for
+- **Tests before a hand-back:** `bats tests/tactical-console-fast.bats` for
   quick feedback, then all `tests/unit/*.bats` plus `tests/tactical-console.bats`
   (386) and the integration suites.
 

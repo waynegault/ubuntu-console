@@ -13,18 +13,21 @@ Low-risk process for translating tactical-console from Bash to PowerShell
 without changing current runtime behavior.
 
 **Goals:**
+
 - Preserve user-visible behavior and command contracts.
 - Separate platform-specific adapters from business logic.
 - Validate parity with golden fixtures, not implementation details.
 - Keep Bash code untouched while preparing translation inputs.
 
 **Artifacts:**
+
 - `docs/contracts/command-contracts.yaml` — command behavioral contracts
 - `docs/contracts/state-contracts.yaml` — shared variables and cache files
 - `tools/capture-golden-fixtures.sh` — snapshot command outputs for parity checks
 - `tests/fixtures/golden/README.md` — fixture format and extension guidance
 
 **Workflow:**
+
 1. Freeze contracts.
 2. Capture golden fixtures in a representative environment.
 3. Translate one command family at a time (maintenance, OpenClaw, LLM, UI).
@@ -49,7 +52,7 @@ Do not abbreviate it; every requirement here was included deliberately.
 
 ## Prompt
 
-```
+```text
 TASK
 ====
 Rebuild my PowerShell 7+ profile as a full, production-quality equivalent of my
