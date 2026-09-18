@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -863,10 +863,14 @@ function __oc_sync_gateway_env_file() {
     local _resolved _kept=() _n
     _resolved="$(__oc_gateway_resolved_env_names)"
     if [[ -n "$_resolved" ]]; then
-        while IFS= read -r _n; do
+        # Iterate the array directly. This used to read it back through
+        # `done < <(printf '%s\n' "${_var_names[@]}")`, which forks a printf and
+        # a subshell to hand an already-in-memory array to `read` one line at a
+        # time — item 6.4's shape without the file it was written for.
+        for _n in "${_var_names[@]}"; do
             [[ -n "$_n" ]] || continue
             grep -qxF "$_n" <<< "$_resolved" && _kept+=("$_n")
-        done < <(printf '%s\n' "${_var_names[@]}")
+        done
         _var_names=("${_kept[@]}")
     else
         __tac_info "Security" "[WARN: resolved-env set unavailable — pushing the full bridged set]" "$C_Warning"
