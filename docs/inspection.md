@@ -434,9 +434,26 @@ Zero or justified
 
 🔍 Temp files use mktemp
 
-grep -nE 'tmp|temp' <file>
+`grep -nE '>[[:space:]]*"?[$]?[{]?(TMPDIR|/tmp|/dev/shm)' <file | grep -vE ':[0-9]+:[[:space:]]*#'`
 
-All temp files created via mktemp or atomic .tmp → mv
+All temp files created via mktemp or atomic .tmp → mv. **The probe that used to be here asked for a
+substring rather than for the thing:** `grep -nE 'tmp|temp'` returns **375** lines over the corpus,
+25 of them prose ("attempt", "template"), so it could neither find a write to a temp path nor tell
+one from a comment about it. The probe above asks the actual question — a redirection *into* a temp
+location — and returns **21** sites. They are one design, not 21 oversights: 18 are in
+`scripts/autotune-model.sh`, `$$`-suffixed scratch files (`/tmp/at-metrics-$$`, `/tmp/at-tps-$$`,
+`/tmp/at-served-ctx-$$`) whose name the reader reconstructs from the same `$$` — a documented
+in-process hand-off (the helper's own comment: it writes `decode|prefill` in tok/s to
+`/tmp/at-metrics-$$` "for callers that …", `autotune-model.sh:904`) — so `mktemp` would mean
+threading a variable to every reader to buy an unpredictability the `$$` already provides per run.
+(Those 18 include one name keyed by model rather than PID, `/tmp/at-ttft-${MODEL}-c${c}.log` at
+`:1971`.) The other three sites are `/tmp/llm-modelshell.$$.pid`
+(`scripts/11e-llm-model.sh:1202`, the documented PID-file protocol),
+`/tmp/autotune_verify_use_${model_num}.log` (`scripts/11b-llm-autotune.sh:457`), and
+`/tmp/burn_transport_recover_use.log` (`scripts/11f-llm-runtime.sh:302`) — the last carrying no key
+at all, and the only one a concurrent run could clobber. All three are on the autotune/bench path,
+which the GPU lock serializes, so none has collided. Noted, not changed: this is a read-only check,
+and making those names unique is a behaviour change on the bench path rather than a cleanup.
 
 2.3.5
 
@@ -1184,9 +1201,30 @@ was non-discriminating:** `grep -nE 'echo.*|.*awk|echo.*|.*sed|echo.*|.*grep'` i
 `echo|awk|sed|grep` — proved by running both and getting the same 2,201 lines repo-wide — so it
 counted every line that merely mentions `echo`. The contrast is stark per file: on
 `scripts/11e-llm-model.sh` the old pattern returns 203 lines and the anchored one 18.
-Re-derived 2026-09-18 over the tracked shell corpus (`*.sh`, `*.bashrc`, `bin/*`, comments
-excluded): **256** uses stand where parameter expansion would do. That is a migration backlog,
-not a crash — read the hits rather than chasing the number to zero.
+Re-derived 2026-09-18 over the tracked shell corpus (`*.sh`, `*.bashrc`, `bin/*`): **228** uses
+with comments excluded, **256** with them — so "comments excluded: 256" was quoting the count the
+exclusion is meant to remove, which is why re-running this item's own command does not reproduce it.
+That is a migration backlog, not a crash — read the hits rather than chasing the number to zero.
+
+**Read on 2026-09-18 at `f7403d24`, and the number is not a worklist.** Parameter expansion replaces
+a *simple string* operation; the 228 are three different jobs — sed 34, awk 94, grep 115
+(overlapping, since a line can hold more than one):
+
+- **awk (94)** is the tool item 6.5 exists to sanction: "only if doing complex templating or math
+  that Bash cannot natively handle". Field extraction and `printf "%.2f"` rounding are that.
+- **sed (34)** does per-line and stream work parameter expansion cannot express: `sed 's/^/  /'`
+  (indent every line), `sed '$d'`, `sed '/^[[:space:]]*$/d'` (drop blanks), `sed -n 's/^port=//p'`
+  (pull one field out of a stream), `sed "$__unit_fix"` (a script held in a variable). `sed -i` — the
+  only form that edits a file — is **0** sites.
+- **grep (115)** searches files and streams rather than testing a variable. Only a `grep` fed by a
+  here-string can become `[[ ]]`, and there are **4**. One of them,
+  `grep -qvE '^[0-9]*$' <<< "${smi_out:-0}"` (`bin/gpu-busy.sh:83`), is *not* equivalent — tested,
+  `123\n456` gives exit 1 from grep ("every line is numeric") where `[[ ! $x =~ ^[0-9]*$ ]]` is true —
+  and `smi_out` is multi-line nvidia-smi output by construction.
+
+Two sites were the real thing and were changed on 2026-09-18 (`scripts/04-aliases.sh:168`,
+`bin/llama-watchdog.sh:287`). That is this item's shape: a number in the hundreds, a worklist in the
+single digits.
 
 6.2
 
