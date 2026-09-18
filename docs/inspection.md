@@ -1296,9 +1296,39 @@ the operand class is now right.
 
 🔧 Here-strings over echo | pipe
 
-grep -nE 'echo.*\|' <file>
+    awk '
+    { s = $0
+      gsub(/"[^"]*"/, "Q", s); gsub(/'[^']*'/, "Q", s)
+      if (s !~ /(^|[;&({]|do[[:space:]]|then[[:space:]])[[:space:]]*echo([^[:alnum:]_]|$)/) next
+      if (s !~ /echo[^|]*\|[^|]/) next
+      print FILENAME":"FNR": "$0 }
+    ' <file>
 
-Use <<< "$var" instead of echo "$var" | cmd where possible; avoids a fork
+Use `<<< "$var"` instead of `echo "$var" | cmd` where possible; avoids a fork. **The item's own
+command counts the wrong thing**, in both directions: `grep -nE 'echo.*\|'` asks only that an `echo`
+appear somewhere before a `|`, so `echo "0|0|0"`, the `… ; echo true || echo false` form (the `||` of
+the `&&`/`||` idiom) and `case` alternations such as `…|echo|enable|…` all count. Re-derived
+2026-09-18 at `f7403d24`, comments excluded: the item's command returns **179**, the probe above
+**89** — and that 90-line difference decomposes cleanly, which is the check that the probe is right.
+56 of the 90 have no `echo` at command position at all (13 of those are `||` or a `case`
+alternation), and 34 are command-position echoes with no pipe to feed, most of them the
+`[[ … ]] && echo a || echo b` idiom. The probe strips quoted text before testing, so a literal `|`
+in the message neither counts nor hides a real pipe behind it, and it requires `echo` to be *at
+command position*, so `cmd | echo …` (echo as the consumer) is not a candidate. Controls:
+`echo "$x" | wc`, `echo "a|b" | wc`, `x=$(echo "$y" | …)` and `…; then echo q | cat` match;
+`echo "0|0|0"`, `foo || echo hi`, `ls | grep "$(echo x)"`, `cmd | echo x` and a `case` alternation
+do not.
+
+**The 78 in §18.3 is unattributable**, the same shape as §4.1.2, where no scope of an item's own
+command reproduced its stated count. Re-derived at both `4381948d` (the 2026-09-16-era tip) and
+`f7403d24`: raw 177 → 179; "a command letter follows the pipe" 106 → 110; "pipe then non-space"
+89 → 87; "the argument is a variable" 92 → 96; numbered modules only 89; `scripts/` only 164;
+`tools/` + `bin/` only 15. Nothing lands on 78, and the tree did not grow into it — 69 shell files
+at both revisions, 35 commits apart.
+
+The concentration is real and worth reading: `scripts/autotune-model.sh` holds 53 of the 89, then
+`scripts/08-maintenance.sh` (7) and `scripts/11e-llm-model.sh` (6). For scale, `<<<` is already used
+**98** times, so this is a partial migration rather than an untouched one.
 
 6.10
 
@@ -3028,15 +3058,19 @@ is deliberately not worth fixing, and what was still open when this pass ended.
     4.2.8 nested functions with no dynamic-scope note ............ 18 of 20
     4.3.6 mixedCase `local` names .................................. 20
 
-  RE-DERIVED 2026-09-18 — 6.4, 6.6, 6.8, 6.11, 6.13. Four of these five items had no probe at all
-  ("Inspect …" stood in the Command cell) and 6.4's probe was blind to `while IFS= read`, which is
-  why successive passes produced different numbers for an unchanged tree. Each item now carries a
-  command with a control, and the figures below are that command's output at `f7403d24`:
+  RE-DERIVED 2026-09-18 — 6.4, 6.6, 6.8, 6.9, 6.11, 6.13. Four of these six items carried no command
+  at all ("Inspect …" stood in the Command cell), and the two that had one were both defective in
+  opposite directions: 6.4's missed every `while IFS= read`, 6.9's counted any line with an `echo`
+  anywhere before a `|`. That is why successive passes produced different numbers for an unchanged
+  tree. Each item now carries a command with controls, and the figures below are that command's
+  output at `f7403d24`:
 
     6.4   75 `while`-`read` sites — 46 whole-line, 29 splitting fields — of which 41 are real
           `mapfile` candidates (the table's 6 was the bare `while read` spelling only)
     6.6   63 forking-tool calls inside a `do…done` body      (was: no command)
     6.8   232 `[[ … ]]` arithmetic comparisons, comments excluded
+    6.9   89 `echo … | cmd` sites. The item's own command returns 179 and the table's 78 is
+          reproducible under no scope of it at either revision — see 6.9 for the breakdown
     6.11  23 `mktemp` sites, comments excluded — 27 for the bare `grep -n mktemp` (was: no command)
     6.13  100 lookup call sites, but only 23 (file, lookup) pairs repeated within one file (was: no command)
 
