@@ -1233,8 +1233,32 @@ business: **46** read a whole line (`while read`, `while IFS= read`) and **29** 
 (`while IFS='|' read -r a b`), where `mapfile -t` is *not* equivalent and must not be used. Narrow
 again to whole-line reads whose matching `done` carries a redirection — `done < file` or
 `done < <(cmd)` — and the worklist is **41**. A loop fed by `cmd | while` is not in it: converting
-one means moving the command into the process substitution, which is a different change. Read the
-41; do not chase zero.
+one means moving the command into the process substitution, which is a different change.
+
+**The 41 were then read, on 2026-09-18 at `f7403d24`, and reading them closes the item: not one
+ingests a large input.** The item's rationale is "for processing large files", and the measured
+sizes are 1–45 lines — `$HOME/.bashrc` 27 (`install.sh:157`), `~/.llm/models.conf` 28
+(`scripts/11e-llm-model.sh:309`), `/dev/shm/tac_win_api_keys` 45 (`scripts/09d-oc-agents.sh:849`),
+`find /proc/*/fd -lname '*llm-stdin*'` 0 (`tools/clean-orphans.sh:163`, `scripts/11d-llm-gpu.sh:122`),
+`pgrep -af 'sleep 3600'` 3 (`clean-orphans:190`, `11d:198`, `11e:1395`),
+`nvidia-smi --query-compute-apps` 1 (`11d:375`), and 22 `bench_*.tsv` files. A `while read` over 27
+lines is not the cost this item exists to remove, and `mapfile -t` would add an array to save
+nothing.
+
+Two of the 41 are streams, where the conversion is not merely pointless but wrong — and both say so
+in their own code:
+
+- `tools/run-tests.sh:100` calls `test_line` per TAP line so a 386-test suite is seen to advance.
+  Buffering it into an array shows nothing for 5–15 minutes and then everything at once.
+- `scripts/11f-llm-runtime.sh:512` reads `curl --no-buffer` SSE chunks, `printf`s each delta as it
+  arrives and `break`s on `[DONE]`. `mapfile` would hold a whole generation back until it finished.
+
+The one site in this family worth touching has been touched, and it was a change *away* from the
+pattern rather than toward `mapfile`: `scripts/09d-oc-agents.sh:866` read an already-in-memory array
+back through `done < <(printf '%s\n' "${_var_names[@]}")`, forking a `printf` and a subshell to hand
+`read` one line at a time. It is a plain `for` loop now (2026-09-18, module version 8 → 9). So the
+item is satisfied by the tree as it stands, and re-opening it requires a site that actually reads
+something large.
 
 6.5
 
@@ -3066,7 +3090,9 @@ is deliberately not worth fixing, and what was still open when this pass ended.
   output at `f7403d24`:
 
     6.4   75 `while`-`read` sites — 46 whole-line, 29 splitting fields — of which 41 are real
-          `mapfile` candidates (the table's 6 was the bare `while read` spelling only)
+          `mapfile` candidates (the table's 6 was the bare `while read` spelling only). All 41
+          were read on 2026-09-18 and none ingests a large input, so the item reads as satisfied
+          — see 6.4 for the sizes and the two streaming sites that must not change
     6.6   63 forking-tool calls inside a `do…done` body      (was: no command)
     6.8   232 `[[ … ]]` arithmetic comparisons, comments excluded
     6.9   89 `echo … | cmd` sites. The item's own command returns 179 and the table's 78 is
