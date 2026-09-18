@@ -19,7 +19,15 @@ Environment=GGML_OPENCL_DEVICE=0
 # is on the Xe card.  The two cards are independent.
 # ctx left at 65536 (2026-09-18): a 16k trial caused a hard 'Context overflow: prompt too large'
 # on a normal agent session, so the lane needs the full window. Do not shrink it for the heartbeat load.
-ExecStart=/home/wayne/.local/bin/llama-xe-server -m /mnt/m/active/MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-F16.gguf --port 18081 --host 127.0.0.1 --ctx-size 65536 --batch-size 512 --ubatch-size 512 --threads 8 --n-gpu-layers 99 --parallel 1 --fit off --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off
+# --jinja ADDED 2026-09-18 (this lane omitted it — a bug): the GGUF carries a 9062-char Jinja
+# template whose {%- if tools %} branch is the ONLY place the model is told its tool schemas and
+# the <function name=..><param name=..> call syntax. Without --jinja that branch never renders, so
+# heartbeat runs saw no tool definitions and llama-server could not parse the XML back into
+# tool_calls — surfacing as 'Provider returned an incomplete or malformed tool call' (chief
+# 10:57) and as hollow/absent reports (aris 10:02). docs/llm.md lists --jinja as 'always', and
+# docs/inspection.md calls it mandatory for models with Jinja chat templates. The Qwen lane
+# (:18085) already had it; this lane was the outlier.
+ExecStart=/home/wayne/.local/bin/llama-xe-server -m /mnt/m/active/MiniCPM5-1B-Claude-Opus-Fable5-V2-Thinking-F16.gguf --port 18081 --host 127.0.0.1 --ctx-size 65536 --batch-size 512 --ubatch-size 512 --threads 8 --n-gpu-layers 99 --parallel 1 --fit off --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --jinja --reasoning off
 # always, not on-failure: the fleet server is expected to be up; this matches the
 # drop-in that was in force before the rename.
 Restart=always
