@@ -139,7 +139,10 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     # Create a fake registry entry pointing to non-existent file
     local fake_registry="$TAC_TEST_TMPDIR/fake-registry.conf"
     echo "999|FakeModel|nonexistent.gguf|1.0G|Q4_K_M/q8_0|llama|999|4096|4|1024|256|1|256|native|auto|on|0|no|no|no" > "$fake_registry"
-    run timeout 5 bash -c "LLM_REGISTRY='$fake_registry' LLAMA_MODEL_DIR='$TAC_TEST_TMPDIR' bash '$REPO_ROOT/scripts/autotune-model.sh' 999 2>/dev/null || true"
+    # Capture stderr: the refusal under test is an ERROR, so it belongs on stderr (style
+    # checklist 5.4, Wayne's ruling 2026-09-17).  This test asserts the refusal is REPORTED,
+    # and `2>/dev/null` here discarded exactly the output it was checking for.
+    run timeout 5 bash -c "LLM_REGISTRY='$fake_registry' LLAMA_MODEL_DIR='$TAC_TEST_TMPDIR' bash '$REPO_ROOT/scripts/autotune-model.sh' 999 2>&1 || true"
     [[ "$status" -ne 124 ]]
     [[ "$output" == *"not found"* || "$output" == *"Error"* ]]
 }
