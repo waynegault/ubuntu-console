@@ -2,7 +2,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 27
+# Module Version: 28
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -165,7 +165,7 @@ function occhat() {
     local _session="${1:-agent:hal:main}"
     local _encoded_session
 
-    _encoded_session=$(printf '%s' "$_session" | sed 's/:/%3A/g')
+    _encoded_session="${_session//:/%3A}"
     __oc_open_local_url "http://127.0.0.1:${_port}/chat?gatewayUrl=ws%3A%2F%2F127.0.0.1%3A${_port}&session=${_encoded_session}"
 }
 # occonf — Open the OpenClaw config (openclaw.json) in VS Code.

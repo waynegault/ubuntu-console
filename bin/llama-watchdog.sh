@@ -64,7 +64,7 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 5
+# Module Version: 6
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line (it is what makes an edit here fail the pre-commit guard until the
 #   number moves).  Deliberately separate from VERSION= below: the marker
@@ -284,7 +284,7 @@ gpu_busy() {
     # Exit 1 is a NORMAL "busy" answer (the GPU is held), not a probe failure, so
     # it must not be logged as one -- it fires on every busy tick otherwise.
     if (( rc == 0 )) && [[ -n "$j" ]]; then
-        grep -q '"busy":true' <<< "$j"
+        [[ "$j" == *'"busy":true'* ]]
         return
     fi
     if (( rc == 1 )); then
