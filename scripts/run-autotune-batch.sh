@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -173,10 +173,10 @@ drain_vram() {
 #------------------------------------------------------------------------------
 wsl_gpu_health_suspect() {
     local script="$HOME/investigator/scripts/check_wsl_gpu.py" rc
-    [ -f "$script" ] || return 1
+    [[ -f "$script" ]] || return 1
     sh "$script" >/dev/null 2>&1
     rc=$?
-    [ "$rc" -eq 1 ]
+    (( rc == 1 ))
 }
 
 # Initial drain — skipped when another agent owns the card: there is nothing of
