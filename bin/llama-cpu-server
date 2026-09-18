@@ -15,8 +15,6 @@
 # path, so it takes any server built there with it.  A CPU-only build is also the
 # only one that CANNOT take a card: it links neither libcuda nor libOpenCL, so it
 # creates no context and the WSL2 dxgkrnl context-cycle ledger never moves.
-#
-# end of file
 
 set -uo pipefail
 
@@ -32,3 +30,5 @@ if [[ ! -x "$_bin" ]]; then
 fi
 
 exec "$_bin" "$@"
+
+# end of file

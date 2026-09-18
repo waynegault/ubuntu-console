@@ -8,7 +8,7 @@
 #        ./tools/lint.sh --files F  (an explicit list of files)
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 12
+# Module Version: 13
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -359,7 +359,7 @@ for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/scripts/*.sh \
          "$REPO_ROOT"/tools/*.sh \
          "$REPO_ROOT"/tools/hooks/* \
-         "$REPO_ROOT"/bin/*.sh
+         "$REPO_ROOT"/bin/*
 do
     if bash -n "$f" 2>&1
     then
@@ -385,7 +385,7 @@ for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/scripts/*.sh \
          "$REPO_ROOT"/tools/*.sh \
          "$REPO_ROOT"/tools/hooks/* \
-         "$REPO_ROOT"/bin/*.sh
+         "$REPO_ROOT"/bin/*
 do
     local_rc=0
     # Graph members are analysed once, as a set, below — see the note above.
@@ -433,7 +433,7 @@ then
              "$REPO_ROOT"/install.sh \
              "$REPO_ROOT"/scripts/*.sh \
              "$REPO_ROOT"/tools/*.sh \
-             "$REPO_ROOT"/bin/*.sh
+             "$REPO_ROOT"/bin/*
     do
         hits=$(grep -Pn '[\x{061C}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]' "$f" 2>/dev/null || true)
         if [[ -n "$hits" ]]
@@ -465,7 +465,7 @@ else
              "$REPO_ROOT"/install.sh \
              "$REPO_ROOT"/scripts/*.sh \
              "$REPO_ROOT"/tools/*.sh \
-             "$REPO_ROOT"/bin/*.sh
+             "$REPO_ROOT"/bin/*
     do
         # Find non-ASCII outside the approved glyph allowlist.
         # Comment lines (# ...) are always excluded from the check.

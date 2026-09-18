@@ -13,8 +13,6 @@
 # The historical launcher names forward here — xe-llama-server, xe-llama-embed —
 # because the investigator's _llama_procs.py knows them by name.  install.sh
 # creates those forwarding shims.
-#
-# end of file
 
 set -uo pipefail
 
@@ -28,3 +26,5 @@ if [[ ! -x "$_bin" ]]; then
 fi
 
 exec "$_bin" "$@"
+
+# end of file

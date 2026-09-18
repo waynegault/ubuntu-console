@@ -354,6 +354,17 @@ and `run-autotune-batch.sh` halts up front when the card is held. **Never
 - **Docs:** `tools/docs-sync-check.sh` fails on stale module counts, loader
   version, or test totals — README must match the repo. Update `README.md` and
   `docs/inspection.md` when you change structure, counts or conventions.
+- **Running the audit checklist:** `docs/inspection.md` is the ~250-item audit, and its
+  preamble section "Added 2026-09-18" is written for an agent running it — freeze the
+  revision and name the commit, never edit the document mid-pass, attach a failing control
+  to every claim, date every count (fixing moves it), and suspect the probe before the code.
+  Treat a delegated auditor's report as evidence, not truth, and re-run its FAILs yourself.
+  `tools/lint.sh` and `tools/docs-sync-check.sh` are the canonical gates; §4.3.3 and §1.12
+  explain why per-file shellcheck findings (SC2034/SC2154) are not defects here.
+- **What `tools/lint.sh` covers:** `tactical-console.bashrc`, `install.sh`, `env.sh`,
+  `scripts/*.sh`, `tools/*.sh`, `tools/hooks/*` and **all of `bin/`** — including the
+  extensionless launchers (`llama-cpu-server`, `llama-cuda-server`, `llama-xe-server`) and
+  wrappers (`tac-exec`, `oc-*`), which nothing linted before 2026-09-18 (item §1.11).
 - **Tests before a hand-back:** `bats tests/tactical-console-fast.bats` for
   quick feedback, then all `tests/unit/*.bats` plus `tests/tactical-console.bats`
   (386) and the integration suites.
