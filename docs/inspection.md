@@ -606,9 +606,15 @@ Expected
 
 🔧 Interactive shell guard
 
-grep -n "case \$- in" <file>
+`grep -n "case \$- in" <file>`
 
-Non-interactive shells exit early in profiles
+Non-interactive shells exit early in profiles — the loader (`tactical-console.bashrc:53`) and
+`scripts/14-wsl-extras.sh:72`. Expect **one known false positive**, not zero:
+`scripts/12-dashboard-help.sh:412` *echoes* the idiom (`$(case $- in (*i*) …)`) to print the
+interactive state, so three hits are two guards. Re-derived 2026-09-18: 2 guards across
+`*.sh`/`*.bashrc`. This item is about PROFILES, not every module — a reading that demanded a
+guard in each of the 16 numbered modules would report 14 false failures (they define
+functions and are sourced by the guarded loader).
 
 3.2
 
