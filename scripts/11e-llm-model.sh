@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 36
+# Module Version: 37
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -755,13 +755,27 @@ function __model_use_configure_params() {
     smi_cmd=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$smi_cmd" ]]
     then
-        [[ "$gpu_layers" =~ ^[0-9]+$ ]] || gpu_layers="${LLAMA_GPU_LAYERS:-${LLM_GPU_LAYERS:-24}}"
-        if [[ -n "${LLAMA_GPU_LAYERS:-}" && "${LLAMA_GPU_LAYERS}" =~ ^[0-9]+$ ]]
+        # LLAMA_GPU_LAYERS / LLM_GPU_LAYERS are FALLBACKS for a row that carries no usable
+        # offload count — they must never override a per-row value.  Measured 2026-09-18: this
+        # block applied them AFTER the registry value, so every launch that did not unset them
+        # ran at the global default (LLAMA_GPU_LAYERS=24, exported by 01-constants.sh) instead
+        # of the row's certified ngl — a validation bench logged "ngl 24" against a registry
+        # 999, and six rows came in a uniform 35-80% below their recorded tps.  The autotune's
+        # own benches UNSET these around their launches (see below), which is why the
+        # certifications were sound and the validation was not.  It also silently re-offloaded
+        # layers for a row pinned to 0 (a 4.4G model on a 4 GB card): the registry had already
+        # made that fit decision, and this block reversed it.
+        if [[ ! "$gpu_layers" =~ ^[0-9]+$ ]]
         then
-            gpu_layers="${LLAMA_GPU_LAYERS}"
-        elif [[ -n "${LLM_GPU_LAYERS:-}" && "${LLM_GPU_LAYERS}" =~ ^[0-9]+$ ]]
-        then
-            gpu_layers="${LLM_GPU_LAYERS}"
+            if [[ -n "${LLAMA_GPU_LAYERS:-}" && "${LLAMA_GPU_LAYERS}" =~ ^[0-9]+$ ]]
+            then
+                gpu_layers="${LLAMA_GPU_LAYERS}"
+            elif [[ -n "${LLM_GPU_LAYERS:-}" && "${LLM_GPU_LAYERS}" =~ ^[0-9]+$ ]]
+            then
+                gpu_layers="${LLM_GPU_LAYERS}"
+            else
+                gpu_layers=24
+            fi
         fi
     else
         gpu_layers=0
