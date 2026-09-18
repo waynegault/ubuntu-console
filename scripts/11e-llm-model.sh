@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 38
+# Module Version: 39
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -1774,6 +1774,11 @@ function __model_bench() {
     local bench_pid_file="${LLM_BENCH_PID_FILE:-/tmp/llm-bench.pid}"
     local bench_lock_file="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
     local bench_lock_wait_seconds="${LLM_BENCH_LOCK_WAIT_SECONDS:-5}"
+    # The timer suspended for the duration of a bench.  Overridable so a test CAN point it
+    # at a name that cannot exist: this bench used to stop and start the REAL user service,
+    # and a test run (measured 2026-09-18 14:17:53, journalctl -u llama-watchdog.timer) that
+    # starts the scheduler mid-run can disturb a foreign GPU owner's run.
+    local bench_watchdog_timer="${LLM_BENCH_WATCHDOG_TIMER:-llama-watchdog.timer}"
 
     # Clean up any orphaned locks, keepers, and processes from prior runs
     # before attempting to acquire the bench lock.
@@ -1878,10 +1883,10 @@ function __model_bench() {
     mkdir -p "$bench_log_dir" 2>/dev/null
 
     local _bench_watchdog_was_active=0
-    if systemctl --user is-active --quiet llama-watchdog.timer 2>/dev/null
+    if systemctl --user is-active --quiet "$bench_watchdog_timer" 2>/dev/null
     then
         _bench_watchdog_was_active=1
-        systemctl --user stop llama-watchdog.timer 2>/dev/null
+        systemctl --user stop "$bench_watchdog_timer" 2>/dev/null
         __tac_info "Watchdog" "Suspended for bench (will restore)" "$C_Dim"
     fi
 
@@ -1977,14 +1982,14 @@ function __model_bench() {
         __tac_info "Bench" "[No on-disk models]" "$C_Warning"
         if (( _bench_watchdog_was_active ))
         then
-            systemctl --user start llama-watchdog.timer 2>/dev/null
+            systemctl --user start "$bench_watchdog_timer" 2>/dev/null
             __tac_info "Watchdog" "Restored" "$C_Dim"
         fi
         if [[ -n "$bench_lock_fd" ]]
         then
             flock -u "$bench_lock_fd" 2>/dev/null || true
             exec {bench_lock_fd}>&-
-            rm -f "$bench_lock_file"
+            rm -f "$bench_lock_file" "$bench_pid_file"
         fi
         __bench_restore_traps
         return 1
@@ -2211,14 +2216,14 @@ function __model_bench() {
 
     if (( _bench_watchdog_was_active ))
     then
-        systemctl --user start llama-watchdog.timer 2>/dev/null
+        systemctl --user start "$bench_watchdog_timer" 2>/dev/null
         __tac_info "Watchdog" "Restored" "$C_Dim"
     fi
     if [[ -n "$bench_lock_fd" ]]
     then
         flock -u "$bench_lock_fd" 2>/dev/null || true
         exec {bench_lock_fd}>&-
-        rm -f "$bench_lock_file"
+        rm -f "$bench_lock_file" "$bench_pid_file"
     fi
     __bench_restore_traps
     __tac_footer

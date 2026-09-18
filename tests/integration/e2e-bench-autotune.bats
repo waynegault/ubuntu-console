@@ -33,6 +33,12 @@ REGISTRY
     export LLM_AUTOTUNE_LOCK_FILE="$TAC_TEST_TMPDIR/.llm/autotune.lock"
     export LLM_BENCH_LOCK_FILE="$TAC_TEST_TMPDIR/.llm/bench.lock"
     export LLM_BENCH_PID_FILE="$TAC_TEST_TMPDIR/.llm/bench.pid"
+    # The bench suspends llama-watchdog.timer for its duration and restores it on exit.
+    # Pointing that at a name that cannot exist keeps a TEST from stopping and starting
+    # the real user service: measured 2026-09-18 14:17:53, journalctl -u llama-watchdog.timer
+    # showed Stopped+Started around one [F1] run, and a test that can start the scheduler
+    # mid-run can disturb someone else's GPU run (the investigator's 18th briefing).
+    export LLM_BENCH_WATCHDOG_TIMER="$TAC_TEST_TMPDIR/fake-watchdog.timer"
     export LLM_KEEPER_DIR="$TAC_TEST_TMPDIR"
     export LLAMA_DRIVE_ROOT="$TAC_TEST_TMPDIR"
     export LLM_BENCH_MODEL_TIMEOUT=10
@@ -75,6 +81,14 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     [[ "$src" == *"__bench_restore_traps"* ]]
     [[ "$src" == *'rm -f "$bench_lock_file"'* ]]
     [[ "$src" != *'rm -f "${LLM_AUTOTUNE_LOCK_FILE'* ]]
+    # The guard-file removals must take the PID file with them.  Both explicit exit paths
+    # used to remove only the lock and then call __bench_restore_traps — which discards
+    # __bench_cleanup, the ONLY place the PID file was removed.  Measured 2026-09-18: a
+    # completed bench left /tmp/llm-bench.pid holding dead PID 1217528, with no lock file
+    # beside it, which is what made 10-clean-orphans state-dependent.  The success path
+    # cannot be exercised without a real model load, so it is pinned structurally here;
+    # the early-exit path is covered behaviourally by [F2].
+    [[ "$src" == *'rm -f "$bench_lock_file" "$bench_pid_file"'* ]]
 }
 
 @test "[B2] Autotune: autotune-model.sh validates the model reference (number or file)" {
@@ -297,6 +311,61 @@ LLM_BENCH_LOCK_WAIT_SECONDS=1"
         [[ \"\$pt2\" == \"\$pt\" ]] || { echo 'TERM LEAK'; exit 1; }; \
         echo 'TRAPS_OK'"
     [[ "$output" == "TRAPS_OK" ]]
+}
+
+@test "[F2] Restoration: a bench leaves no lock or PID guard file behind" {
+    # An empty registry takes the bench's early-exit path ("[No on-disk models]"), which
+    # removed the lock file and then called __bench_restore_traps — discarding
+    # __bench_cleanup, the only thing that removed the PID file.  The normal exit path had
+    # the same omission.  Measured 2026-09-18: a completed bench left /tmp/llm-bench.pid
+    # holding dead PID 1217528 with no lock beside it, which is what made 10-clean-orphans
+    # state-dependent.
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' > "$TAC_TEST_TMPDIR/.empty_registry"
+
+    run bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
+        LLM_REGISTRY='$TAC_TEST_TMPDIR/.empty_registry' \
+        LLM_BENCH_LOCK_FILE='$LLM_BENCH_LOCK_FILE' \
+        LLM_BENCH_PID_FILE='$LLM_BENCH_PID_FILE' \
+        LLM_BENCH_WATCHDOG_TIMER='$LLM_BENCH_WATCHDOG_TIMER' \
+        __model_bench >/dev/null 2>&1 || true"
+
+    [[ ! -f "$LLM_BENCH_PID_FILE" ]]
+    [[ ! -f "$LLM_BENCH_LOCK_FILE" ]]
+}
+
+@test "[F3] Bench addresses the watchdog timer only through LLM_BENCH_WATCHDOG_TIMER" {
+    # The suite used to stop and restart the REAL llama-watchdog.timer: measured
+    # 2026-09-18 14:17:53, journalctl -u llama-watchdog.timer showed Stopped+Started around
+    # a single [F1] run.  A test that can start the scheduler mid-run can disturb someone
+    # else's GPU run, so the unit name is an override and the stub below records every
+    # systemctl argument this bench makes.
+    local bin="$TAC_TEST_TMPDIR/stubbin"
+    mkdir -p "$bin"
+    cat > "$bin/systemctl" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SYSTEMCTL_LOG"
+exit 0
+EOS
+    chmod +x "$bin/systemctl"
+    local calls="$TAC_TEST_TMPDIR/systemctl.calls"
+    : > "$calls"
+    printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' > "$TAC_TEST_TMPDIR/.empty_registry"
+
+    run env PATH="$bin:$PATH" SYSTEMCTL_LOG="$calls" bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
+        LLM_REGISTRY='$TAC_TEST_TMPDIR/.empty_registry' \
+        LLM_BENCH_LOCK_FILE='$LLM_BENCH_LOCK_FILE' \
+        LLM_BENCH_PID_FILE='$LLM_BENCH_PID_FILE' \
+        LLM_BENCH_WATCHDOG_TIMER='$LLM_BENCH_WATCHDOG_TIMER' \
+        __model_bench >/dev/null 2>&1 || true"
+
+    # A stub that answered nothing would prove nothing about which name is used.
+    local seen; seen=$(cat "$calls" 2>/dev/null || true)
+    if [[ "$seen" != *fake-watchdog.timer* || "$seen" == *llama-watchdog.timer* ]]
+    then
+        printf 'systemctl calls the bench made:\n%s\n' "${seen:-<none>}"
+    fi
+    [[ "$seen" == *fake-watchdog.timer* ]]
+    [[ "$seen" != *llama-watchdog.timer* ]]
 }
 
 # ===== G) REGRESSION: EXISTING SUITE ALIGNMENT ===============================

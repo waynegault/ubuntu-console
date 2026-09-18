@@ -489,7 +489,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1044 total tests: 701 BATS + 343 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1046 total tests: 703 BATS + 343 Python).
 
 ### Running Tests
 
@@ -1091,7 +1091,7 @@ where it was last present.)
 │   ├── test_models.py                 # Pydantic model tests (37 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
 │   ├── unit/                          # BATS unit tests (126 tests: 7+4+8+5+5+6+20+4+8+7+26+19+7)
-│   └── integration/                   # BATS integration tests (125 tests: 14+43+10+27+5+26)
+│   └── integration/                   # BATS integration tests (127 tests: 14+43+10+27+5+28)
 └── systemd/
     ├── llama-watchdog.service
     ├── llama-watchdog.timer
@@ -1344,7 +1344,7 @@ runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 62 tests)
 - **Full tests:** `bats tests/tactical-console.bats` (386 BATS unit tests)
 - **Unit suites (82 tests in CI):** CI runs `tests/unit/01`, `02`, `09`–`14`; nightly adds `05`–`08`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host.
-- **Integration suites (125 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
+- **Integration suites (127 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety) with three modes — whole repo (default), `--staged` (staged `.sh`, used by the pre-commit hook) and `--files F...` (an explicit list, used by the BATS suites) — so the shellcheck flags live in exactly one place, and shellcheck runs `-x --source-path` so the source-following SC1090/SC1091 class resolves instead of being suppressed. shellcheck itself is pinned to 0.11.0 via `tools/install-shellcheck.sh`, which CI runs so local and CI diagnostics cannot drift (0.9.0 reported SC2317 where 0.11.0 reports SC2329 for the same code).
 - **Git hooks:** tracked in `tools/hooks/` (`pre-commit`, `post-commit`, `post-merge`) and activated by `git config core.hooksPath <repo>/tools/hooks`, which `install.sh` sets. They are tracked because `.git/hooks/` is not version-controlled — an inlined copy of the shellcheck loop there drifted from `tools/lint.sh` on 2026-09-15, when only one of the two copies of the flags was updated.
 - **Docs sync:** `tools/docs-sync-check.sh` (docs drift guard — fails CI on stale module counts, versions, or test totals, wherever they are stated)
