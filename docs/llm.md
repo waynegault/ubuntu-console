@@ -100,7 +100,7 @@ Edit `config/quant-guide.conf` directly to adjust ratings as hardware or advice 
 | `model doctor` | Validate registry integrity, default model wiring, GPU visibility, watchdog state, and local ports |
 | `model recommend` | Rank scanned models for a 4 GB VRAM system using quant, size, architecture, and saved TPS |
 | `model info N` | Display full details for model #N including on-disk status and `quant_rating` |
-| `model bench` | Benchmark all on-disk models: if a model row has `autotuned=no`, `bench` runs autotune first (full legitimate parameter sweep for that model), then starts model, runs burn-in, and records TPS. Discouraged quants from `quant-guide.conf` are skipped for auto-autotune unless `LLM_ALLOW_AUTOTUNE_DISCOURAGED=1` is set. Once `autotuned=yes`, bench will not auto-retune that model unless the row is reset. Results persist to `$LLAMA_DRIVE_ROOT/.llm/bench_*.tsv` (default `/mnt/m/.llm/bench_*.tsv`). |
+| `model bench` | Benchmark all on-disk models: if a model row has `autotuned=no`, `bench` runs autotune first (full legitimate parameter sweep for that model), then starts model, runs burn-in, and records TPS. Discouraged quants from `quant-guide.conf` are skipped for auto-autotune unless `LLM_ALLOW_AUTOTUNE_DISCOURAGED=1` is set. Once `autotuned=yes`, bench will not auto-retune that model unless the row is reset. Results persist to `~/.llm/bench_*.tsv` (under `$HOME`, beside the registry — NOT on `$LLAMA_DRIVE_ROOT`). |
 | `model autotune N [--workload chat&#124;legal&#124;agentic&#124;mix]` / `model autotune all` | Auto-tune runtime config for model #N (or every untuned model). Objective priority: **1) no OOM, 2) maximum context, 3) maximum TPS**. Saves the per-model profile for `model use` and `model bench`. Models whose GGUF cannot be loaded (unsupported architecture, corrupted file) are reported as **unsupported model** and autotune aborts early instead of grinding through all combos. |
 | `model bench-diff` / `model bench-compare` | Compare two benchmark TSV runs |
 | `model bench-history` | Summarise recent saved benchmark TSV runs |
@@ -157,8 +157,8 @@ models and GPU states.
 `model bench` extends this: it iterates over all on-disk models, checks each
 model row for `autotuned=no` (running autotune first when missing), boots each
 one, runs the burn prompt, collects TPS, and writes a TSV file to
-`$LLAMA_DRIVE_ROOT/.llm/bench_YYYYMMDD_HHMMSS.tsv` (default
-`/mnt/m/.llm/bench_YYYYMMDD_HHMMSS.tsv`) for historical comparison. Results are
+`$HOME/.llm/bench_YYYYMMDD_HHMMSS.tsv` — beside the registry, not on the model
+drive — for historical comparison. Results are
 displayed in a box-drawn summary table.
 
 ## Autotune Optimizer
@@ -218,8 +218,10 @@ is their coverage gap, not a fault in this probe.
 **Both directions are now closed.** The guard stops the console *killing* a
 foreign run, and it also stops the CUDA lane from *starting* while one holds the
 card: `llama-gpu-clear.sh` refuses — the ExecStartPre fails, so the unit does not
-start — `gpu-busy.sh` reports the card busy so the watchdog stands down instead of
-retrying, and `model use` refuses rather than adding a second LLM to the card.
+start — `gpu-busy.sh` reports the card busy so the watchdog stops the CUDA lane
+instead of retrying it, and `model use` refuses rather than adding a second LLM
+to the card. Stopping a lane invokes no reaper (the lane units carry no
+`ExecStop`), so a watchdog tick can free VRAM but cannot evict a foreign run.
 When the owner's run ends the lock is released and the lane returns by itself.
 
 ### The two cards, and what runs on each
@@ -439,7 +441,7 @@ unnecessary API errors.
 | `~/llama.cpp/build/bin/llama-server` | Server binary (`$LLAMA_SERVER_BIN`) — custom-tuned CUDA build (see [Building llama.cpp](#building-llamacpp) below) |
 | `~/.llm/models.conf` | Model registry — 37-column format, schema v6 (`$LLM_REGISTRY`) |
 | `~/.llm/models.conf` | Also stores autotune winners (`autotuned`, row-level knobs, `mmap_mode`) |
-| `/mnt/m/.llm/bench_*.tsv` | Benchmark history from `model bench` |
+| `~/.llm/bench_*.tsv` | Benchmark history from `model bench` |
 | `~/ubuntu-console/config/quant-guide.conf` | Quantization priority ratings (`$QUANT_GUIDE`) |
 | `/dev/shm/active_llm` | Active model FILE name (the row's identity; not a row number) |
 | `/dev/shm/llama-server.log` | Server stdout/stderr log |

@@ -54,7 +54,7 @@ openclaw skills enable tactical-console
 | `tac-exec model info N` | Full details for model #N | Config + on-disk status |
 | `tac-exec model scan` | Rescan model directory, rebuild registry | Updates `models.conf` |
 | `tac-exec model doctor` | Health diagnostic | Checklist: registry, GPU, watchdog, ports |
-| `tac-exec model bench` | Benchmark all models | TSV written to `/mnt/m/.llm/bench_*.tsv` |
+| `tac-exec model bench` | Benchmark all models | TSV written to `~/.llm/bench_*.tsv` |
 | `tac-exec model recommend` | Rank models for 4 GB VRAM | Sorted recommendation table |
 
 ### Gateway Control
