@@ -1495,6 +1495,33 @@ comments that mention it (`scripts/07-telemetry.sh:31`, `scripts/09f-oc-misc.sh:
 and several commands write to is legitimate; the item's test is "consumed once", which the probe
 cannot see, so read the 23 rather than counting them.
 
+**Read on 2026-09-18 at `f7403d24`. By the item's own test — "consumed once" — 21 of the 23 are not
+candidates**, and the reasons are structural:
+
+- **3 are `mktemp -d`** — `09f-oc-misc.sh:489`, `11e-llm-model.sh:1133` and
+  `tools/install-shellcheck.sh:49`, a work directory for a download-and-extract and a directory to
+  hold the keeper FIFO. `<(cmd)` yields a *file*, never a directory, so the remedy cannot apply.
+- **4 are the atomic-replace form** — `11b-llm-autotune.sh:681` (`${store}.tmp.XXXXXX`),
+  `14-wsl-extras.sh:24` (`$_dest.XXXXXX`) and the two registry snapshots
+  (`11a-llm-registry.sh:276`, `11e-llm-model.sh:99`, both `"${LLM_REGISTRY}.old.XXXXXX"`). These are
+  what §2.3.4 *asks for* ("atomic .tmp → mv"), and a snapshot is kept so a failed rescan can restore
+  it — a path that must survive, not a stream.
+- **2 need a real file for a reason the item cannot see** — `scripts/07-telemetry.sh:30` exists to
+  keep the getter a child of the interactive shell so background-refresh PID tracking works, and its
+  own comment records that the command-substitution fallback costs exactly that; and
+  `tools/sync-openclaw-completion.sh:23` stages new completions for `cmp`/`cp` into place.
+- **the remainder accumulate output from several commands, or are read repeatedly** —
+  `tools/check-repo-boundaries.sh:27` (ripgrep output per pattern, then `cat`ed), `load-vault-env.sh:90`,
+  `tools/lint.sh:182`, `install.sh:154` (a rewritten `.bashrc`), `tools/sync-openclaw-completion.sh:22`
+  and `09d-oc-agents.sh:91,92,147,278,318,1055`. For every one of these, the variable holding the path
+  is referenced more than once in its file.
+
+**One site is the item's case: `tools/normalize-fixture.sh --diff`.** Two temps were written by
+`normalize` and read once each by `diff`; it is now
+`diff --color=always -u <(normalize "$a") <(normalize "$b")`, which also removes the `rm -f` pair.
+Changed 2026-09-18. So 6.11 is a two-site item: the count is a census of `mktemp` uses, and the
+precondition it turns on holds for one pair of them.
+
 6.12
 
 🔧 Avoid du on drvfs mounts
@@ -1525,6 +1552,19 @@ distribution is the finding: `scripts/08-maintenance.sh` alone holds **23** `com
 then `scripts/09d-oc-agents.sh` (8), `scripts/09f-oc-misc.sh` (7), and `scripts/09a-oc-gateway.sh`
 and `scripts/11e-llm-model.sh` (6 each); `nproc` repeats in three files. A lookup whose answer
 genuinely varies between calls is not a candidate — read the pairs.
+
+**Read on 2026-09-18, and the item's premise fails on its own dominant case: `command -v` is a shell
+builtin.** It resolves in-process, so there is no fork and nothing to cache — and `command -v` is
+**20 of the 23** pairs. Measured rather than assumed: 2000 iterations of `command -v bash` take
+**0.038 s** against **1.895 s** for 2000 iterations of `nproc` — the same loop over a builtin and an
+external, ~50× apart. So `scripts/08-maintenance.sh`'s 23 `command -v` calls, spread across its 20
+numbered steps, cost nothing, and "caching" them would mean threading a global through the module to
+save zero.
+
+The other 3 pairs are `nproc` (`11d-llm-gpu.sh` 3, `11e-llm-model.sh` 2, `autotune-model.sh` 3 — 8
+calls in all). Those are real forks, so a memoising global is *possible*, but it would add a
+declaration and an initialization to three modules to save about eight milliseconds on a run
+measured in minutes. No action taken; the item is recorded as read.
 
 7. Portability — Medium
 
@@ -3216,8 +3256,13 @@ is deliberately not worth fixing, and what was still open when this pass ended.
           both forms are builtins that behave identically, so there is nothing to save (see 6.8)
     6.9   89 `echo … | cmd` sites. The item's own command returns 179 and the table's 78 is
           reproducible under no scope of it at either revision — see 6.9 for the breakdown
-    6.11  23 `mktemp` sites, comments excluded — 27 for the bare `grep -n mktemp` (was: no command)
-    6.13  100 lookup call sites, but only 23 (file, lookup) pairs repeated within one file (was: no command)
+    6.11  23 `mktemp` sites, comments excluded — 27 for the bare `grep -n mktemp` (was: no command).
+          Read 2026-09-18: 21 are structurally not the case (3 are `mktemp -d`, 4 are the atomic
+          form §2.3.4 itself asks for, 2 need a durable path, the rest accumulate or are re-read);
+          one pair was converted, `normalize-fixture.sh --diff` — see 6.11
+    6.13  100 lookup call sites, but only 23 (file, lookup) pairs repeated within one file (was: no
+          command). Read 2026-09-18: no action — 20 of the 23 pairs are `command -v`, a builtin
+          with no fork to save, and the 3 `nproc` pairs would need a global to save ~8 ms; see 6.13
 
   ACTIONED, not backlogged — 4.3.4's dead code. `__llm_median_from_list` and
   `__llm_stddev_from_list` had no caller anywhere in the tree and neither is in
