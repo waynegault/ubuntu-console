@@ -459,9 +459,21 @@ and making those names unique is a behaviour change on the bench path rather tha
 
 🔧 No world-writable output files
 
-grep -n 'chmod.*o+w|chmod.*666' <file>
+`grep -nE 'chmod[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*[0-7][0-7][2367]([[:space:]]|$)|chmod[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*((o|a|ugo|go|uo)[+]?|\+)[rwxXst]*w([[:space:]]|$)|umask[[:space:]]+0{1,4}([[:space:]]|$)' <file | grep -vE ':[0-9]+:[[:space:]]*#'`
 
-Zero matches
+Zero matches. **The probe that used to be here could never match anything:** it was written without
+`-E`, so in a BRE both `|` and `+` are literal, and the pattern required the literal text
+`chmod.*o+w|chmod.*666`. Proved by control — `chmod o+w file` does not match it. Its "Zero matches"
+was therefore not evidence. This is the same defect §5.4 records having been fixed in the 2026-09-16
+sweep; this instance was missed in it.
+
+Re-derived 2026-09-18 at `f7403d24` with a probe that can fail: **0 sites**, against **17**
+`chmod`/`umask` lines actually present in the corpus — that coverage count is what makes the zero
+mean something rather than being vacuous. The probe reads the world permission as the *last* octal
+digit, so `666`/`777` are flagged and `755`/`700`/`644`/`600` are not; symbolically it accepts
+`o+w`, `a+w`, `ugo+w`, `go+w` and bare `+w`, and rejects `u+w`, `g+w` and `ug+w` — the last of which
+was a false positive in the first draft of this probe, found by adding it to the must-not-match set.
+Controls: 9/9 must-match samples match, 0/10 must-not-match samples do not.
 
 2.3.6
 
