@@ -275,6 +275,21 @@ Verify it is card-less before trusting it: `ldd …/build-cpu/bin/llama-server` 
 list no `libcuda`/`libcudart`/`libOpenCL`, and `llama-server --list-devices` must
 report none.
 
+**Supervision (2026-09-19): this lane had none, and now the watchdog manages it.**
+The unit ran `Restart=on-failure`, which a clean stop never undoes, and
+`llama-watchdog.sh` covered only the Xe and CUDA units — so the four direct kills
+on record (Sep 17 15:43 and 16:54, Sep 18 23:46, Sep 19 01:14; each a clean
+`cleaning up before exit` with no systemd `Stopping` line) each left the tier dead,
+twice for hours, silently gutting the tail of the chain.  Nothing in this repo
+sweeps `build-cpu/`, so a card sweep cannot explain them, and the signaller was
+never identified.  The unit is now `Restart=always` — a single kill is systemd's
+to undo, while an explicit `systemctl --user stop` is still honoured — and the
+watchdog runs it as LANE 3 in the Xe lane's shape: 2-strike, bench-lock aware, and
+deliberately with no `gpu_busy` or suspend gate, because no card is involved.  It
+is the one lane with a flap counter but **no cooling-off hold**: the hold exists
+for the dxgkrnl leak that repeated CUDA context cycles cause, and holding the
+chain's tail down would remove the tier rather than protect it.
+
 The naming trap is closed as of 2026-09-15: the CUDA lane was `nvidia` in its unit
 but `cuda` in its launcher, the **Xe** fleet carried the plainest name, and one
 CUDA lane was named after a port while another was named after a model.  Units and
@@ -324,6 +339,7 @@ a coin-flip.  Use the card-explicit launchers.
 | `AUTOTUNE_SPEC_SWEEP` | `1` | `0` skips the spec-decode block-size sweep, which costs four launches per row and is the single largest cycle consumer |
 | `LLM_AUTOTUNE_LOCK_FILE` | `/tmp/llm-autotune.lock` | Run serialization lock path |
 | `LLAMA_WATCHDOG_CUDA_SUSPEND_FILE` | `/dev/shm/llama-watchdog-cuda.suspend` | While this file exists the watchdog keeps the **CUDA** lane (`llama-cuda-llama32-3b-chat.service`) down and stops it if up; the Xe lane and the watchdog's own health checks are untouched. The lane returns automatically when the file is removed. Renamed from `LLAMA_WATCHDOG_NV_SUSPEND_FILE` / `...-nv.suspend` on 2026-09-15, when the watchdog's CUDA internals went card-first (`NV_*` → `CUDA_*`); the old path is not honoured |
+| `LLAMA_WATCHDOG_CPU_FLAP_FILE` | `/dev/shm/llama-watchdog-cpu.flaps` | One epoch-seconds stamp per unexpected **CPU-tier** death (`llama-cpu-qwen25-3b-chat.service`), pruned to the shared rolling window. Past the threshold the watchdog warns with systemd's `Result`/`ExecMainStatus` — `success`/`0` means something sent SIGTERM — and **keeps restarting**: unlike the CUDA lane this tier has no `...flaphold` cooling-off, because the hold guards the dxgkrnl leak from repeated CUDA context cycles and the CPU tier's only job is to stay up |
 | `LLM_ALLOW_AUTOTUNE_DISCOURAGED` | `0` | Allow bench to auto-run autotune for discouraged quants |
 
 ### WSL2 CUDA Cycle Budget (dxgkrnl degradation)

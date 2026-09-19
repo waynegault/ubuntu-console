@@ -56,6 +56,22 @@
 #   hold is live the chain serves from the tier below rather than churning the card.  The
 #   hold announces itself as POLICY, not as a fault, so a reader does not go hunting for
 #   a broken lane that was deliberately taken out.  Delete the hold file to lift it early.
+# v3.10 (2026-09-19): manage the CPU tier as well — llama-cpu-qwen25-3b-chat.service
+#   (:18084), the tail of the fallback chain.  It had NO supervisor at all: this
+#   script covered only the Xe and CUDA units, and because the unit ran
+#   Restart=on-failure a clean stop was never undone — so four direct kills
+#   (Sep 17 15:43, Sep 17 16:54, Sep 18 23:46, Sep 19 01:14; each a clean
+#   "cleaning up before exit" with no systemd "Stopping" line) left the tier dead
+#   for hours (Sep 17 16:54 -> Sep 18 18:42, and again from Sep 19 01:14) and
+#   silently gutted the chain.  The unit is now Restart=always, which covers a
+#   single kill; this lane is the backstop for what `always` cannot: the unit
+#   parked in `failed` after StartLimitBurst (6 in 600s), or simply down.
+#   No card is involved, so there is no gpu_busy or suspend gate — only the bench
+#   lock, as for the Xe lane.  It gets its own flap counter (a silently-restarted
+#   lane reads exactly like one that never missed a beat — the v3.8 lesson,
+#   applied to CPU) but NOT the CUDA cooling-off hold: that exists for the
+#   dxgkrnl leak repeated CUDA context cycles cause, a CPU lane has no such cost,
+#   and holding the chain's tail down would remove the tier rather than protect it.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -64,14 +80,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 6
+# Module Version: 7
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line (it is what makes an edit here fail the pre-commit guard until the
 #   number moves).  Deliberately separate from VERSION= below: the marker
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.9"
+VERSION="3.10"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -113,13 +129,21 @@ XE_PORT="$LLM_SERVICE_PORT"
 XE_UNIT="llama-xe-minicpm5-1b-chat"
 CUDA_PORT="${LLM_CUDA_PORT:-18083}"
 CUDA_UNIT="llama-cuda-llama32-3b-chat"
+# The CPU tier (v3.10) holds no card — it is the tail of the chain — so it takes
+# no gpu_busy/suspend gate, but it is bench-lock aware like the Xe lane.
+CPU_PORT="${LLM_CPU_PORT:-18084}"
+CPU_UNIT="llama-cpu-qwen25-3b-chat"
 STRIKE_XE="$WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes"
 STRIKE_CUDA="$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes"
+STRIKE_CPU="$WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.strikes"
 # CUDA flap detection (v3.8).  One epoch-seconds stamp per unexpected CUDA-lane
 # death, pruned to FLAP_WINDOW_S; nothing else reads this file.  Env-overridable
 # like the strike/lock paths so the integration suite can sandbox it — a flap
 # count that leaked between test cases would make the warnings untrustworthy.
 FLAP_CUDA="${LLAMA_WATCHDOG_CUDA_FLAP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps}"
+# The CPU lane's own counter.  Same rolling window and threshold; no hold file —
+# see the v3.10 note in the header for why the CUDA cooling-off must not be copied.
+FLAP_CPU="${LLAMA_WATCHDOG_CPU_FLAP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.flaps}"
 FLAP_WINDOW_S="${LLAMA_WATCHDOG_FLAP_WINDOW_S:-3600}"
 FLAP_THRESHOLD="${LLAMA_WATCHDOG_FLAP_THRESHOLD:-3}"
 # Cooling-off after repeated flaps (v3.9).  Every restart is a CUDA context create/
@@ -236,19 +260,20 @@ flap_count() {
     echo "$n"
 }
 
-# flap_alert — once a lane is dying repeatedly, say so.  Restarting is still
-# correct, and that is exactly what hid this on 2026-09-16: every death produced a
-# "healthy" line and nothing else.  systemd's verdict discriminates the two cases
-# that matter — Result=success with ExecMainStatus=0 is a CLEAN stop (something
-# sent SIGTERM), not a crash.
+# flap_alert <unit> <flaps_file> <hint> — once a lane is dying repeatedly, say so.
+# Restarting is still correct, and that is exactly what hid this on 2026-09-16:
+# every death produced a "healthy" line and nothing else.  systemd's verdict
+# discriminates the two cases that matter — Result=success with ExecMainStatus=0
+# is a CLEAN stop (something sent SIGTERM), not a crash — and that discrimination
+# is shared by every lane, so only the trailing hint is per-lane.
 flap_alert() {
-    local unit="$1" n verdict status
-    n=$(flap_count "$FLAP_CUDA")
+    local unit="$1" flaps="$2" hint="${3:-}" n verdict status
+    n=$(flap_count "$flaps")
     if (( n < FLAP_THRESHOLD )); then return 0; fi
     verdict=$(systemctl --user show "$unit.service" -p Result --value 2>/dev/null || true)
     status=$(systemctl --user show "$unit.service" -p ExecMainStatus --value 2>/dev/null || true)
     log "WARNING flap: $unit died ${n}x in $((FLAP_WINDOW_S / 60))min (threshold ${FLAP_THRESHOLD}) — restarting it, but this is NOT normal operation"
-    log "WARNING flap: systemd last saw Result=${verdict:-unknown} ExecMainStatus=${status:-unknown}; success/0 means something ASKED it to stop — check bin/gpu-busy.sh --json for a foreign GPU owner, and the unit journal, before trusting this lane"
+    log "WARNING flap: systemd last saw Result=${verdict:-unknown} ExecMainStatus=${status:-unknown}; success/0 means something ASKED it to stop — check ${hint:-the unit journal}, and the unit journal, before trusting this lane"
 }
 
 # --- cooling-off (v3.9) ---
@@ -414,7 +439,7 @@ else
         # An unexpected death: down, card free, nothing suspending us.  Count it
         # BEFORE any recovery below so the alert and the action appear together.
         flap_record "$FLAP_CUDA"
-        flap_alert "$CUDA_UNIT"
+        flap_alert "$CUDA_UNIT" "$FLAP_CUDA" "bin/gpu-busy.sh --json for a foreign GPU owner"
         if flap_hold_active; then
             log "CUDA lane held down after repeated flaps — not starting $CUDA_UNIT (cooling-off; delete $FLAP_HOLD_FILE to lift it early)"
         elif (( $(flap_count "$FLAP_CUDA") >= FLAP_THRESHOLD )); then
@@ -441,11 +466,48 @@ else
     fi
 fi
 
+# ============================================================
+# LANE 3: CPU — llama-cpu-qwen25-3b-chat — the chain's tail, no card
+# ============================================================
+# Deliberately the same shape as the Xe lane (always-on, 2-strike, bench-lock
+# aware) and not the CUDA lane's: there is no card to gate on, no VRAM to free
+# and no foreign owner to defer to, so "is it up?" is the whole question.  What
+# this lane exists for is the case systemd CANNOT cover — Restart=always returns
+# the process after a kill, but systemd stops trying once the unit trips
+# StartLimitBurst and parks it in `failed`, which is exactly the state this tier
+# was found in after its four kills, with nothing left to lift it.
+cpu_state=$(systemctl --user show "$CPU_UNIT.service" -p ActiveState --value 2>/dev/null || true)
+health "$CPU_PORT"; cpu_health=$?
+if (( cpu_health == 0 )); then
+    strike_reset "$STRIKE_CPU"
+elif [[ "$cpu_state" == "activating" ]]; then
+    log "CPU unit activating — systemd handling recovery; skipping"
+    strike_reset "$STRIKE_CPU"
+elif (( cpu_health == 2 )); then
+    log "CPU unit still loading (503) — leaving alone"
+    strike_reset "$STRIKE_CPU"
+elif bench_lock; then
+    log "CPU down but bench lock present — skipping restart"
+else
+    strike_inc "$STRIKE_CPU"
+    s=$(strike_get "$STRIKE_CPU")
+    # An unexpected death: down, not mid-start, not loading, nothing holding us off.
+    flap_record "$FLAP_CPU"
+    flap_alert "$CPU_UNIT" "$FLAP_CPU" "the unit journal for the signaller (this lane holds no card, so a GPU sweep cannot explain it)"
+    log "CPU health check failed on :${CPU_PORT} (unit=${cpu_state:-unknown}, strike ${s}/2)"
+    if [[ "$s" -ge 2 ]]; then
+        if recover "$CPU_UNIT" "$CPU_PORT"; then strike_reset "$STRIKE_CPU"; fi
+    else
+        log "CPU strike 1/2 — will restart if next check also fails"
+    fi
+fi
+
 # Assert the window invariant on every lane that is up (2026-09-14).  This is
 # the check that would have caught the registry's parallel=16 dividing every
 # served window, and that catches a --fit or --parallel drift on a unit.
 window_check "$XE_UNIT" "$XE_PORT"
 window_check "$CUDA_UNIT" "$CUDA_PORT"
+window_check "$CPU_UNIT" "$CPU_PORT"
 
 exit 0
 
