@@ -22,6 +22,17 @@ from .validate import MAX_PAYLOAD_SIZE, validate_graph_payload
 
 logger = logging.getLogger(__name__)
 
+# A rejection that is sent before the request body has been read leaves that body
+# unread in the socket.  Closing a socket while it still holds unread data makes
+# the kernel send RST rather than FIN, and an RST can discard the response that
+# was just written — the client then reports ECONNRESET instead of the status
+# code.  The 413 path raced intermittently for exactly this reason (2026-09-19).
+# Bounded on both axes: DRAIN_LIMIT is far more than a real graph payload needs,
+# and the timeout exists because this server is single-threaded, so a client that
+# declares a large body and then stalls must not be able to hold up the handler.
+DRAIN_LIMIT = 1024 * 1024
+DRAIN_TIMEOUT_S = 2.0
+
 
 def resolve_serve_target(path: str, force_embed: bool = False) -> tuple[str, str, bool]:
   """Return the directory, filename, and frontend mode used for serving."""
@@ -122,6 +133,63 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
       if allow_origin is not None:
         self.send_header('Access-Control-Allow-Origin', allow_origin)
       self.send_header('Vary', 'Origin')
+
+    def _declared_content_length(self) -> int:
+      """The request's Content-Length, or 0 when it is absent or malformed."""
+      raw = self.headers.get('Content-Length')
+      try:
+        return int(raw or 0)
+      except (TypeError, ValueError):
+        logger.debug('ignoring a malformed Content-Length header: %r', raw, exc_info=True)
+        return 0
+
+    def _drain_request_body(self, length: int) -> None:
+      """Consume a request body this handler is not going to use.
+
+      Closing a socket that still holds unread request data makes the kernel
+      send RST rather than FIN, and an RST can discard a response already in
+      flight.  Every branch that reads the body for its own reasons is safe;
+      only the early rejections were exposed.  A body larger than DRAIN_LIMIT
+      necessarily stays partly unread, which is the residual of the bound.
+      """
+      remaining = min(length, DRAIN_LIMIT)
+      if remaining <= 0:
+        return
+      previous_timeout = self.connection.gettimeout()
+      self.connection.settimeout(DRAIN_TIMEOUT_S)
+      try:
+        while remaining > 0:
+          chunk = self.rfile.read(min(65536, remaining))
+          if not chunk:
+            return
+          remaining -= len(chunk)
+      except OSError:
+        # The client stalled or vanished mid-body.  The response is already
+        # written, so there is nothing left to correct — but say so.
+        logger.debug('draining a rejected request body ended early', exc_info=True)
+      finally:
+        self.connection.settimeout(previous_timeout)
+
+    def _reject_post(self, code: int, message: bytes, *,
+                     cors: bool = False, extra_headers: tuple = ()) -> None:
+      """Answer a POST with a short body and leave the connection clean.
+
+      Two things must both hold or the client can lose the response.  The body
+      needs an explicit Content-Length, because without one the client reads to
+      EOF to find where the body ends; and the request body must be drained
+      before the caller returns, because a socket closed with unread data in it
+      resets.  See the note above DRAIN_LIMIT.
+      """
+      self.send_response(code)
+      self.send_header('Content-Type', 'text/plain')
+      self.send_header('Content-Length', str(len(message)))
+      for name, value in extra_headers:
+        self.send_header(name, value)
+      if cors:
+        self._send_cors_headers()
+      self.end_headers()
+      self.wfile.write(message)
+      self._drain_request_body(self._declared_content_length())
 
     def _origin_is_same(self) -> bool:
       """True when the request Origin matches the Host it was sent to.
@@ -274,46 +342,33 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
         # stops a visited web page from silently overwriting the graph DB.
         content_type = self.headers.get('Content-Type', '')
         if content_type.split(';', 1)[0].strip().lower() != 'application/json':
-          self.send_response(415)
-          self.send_header('Content-Type', 'text/plain')
-          self.end_headers()
-          self.wfile.write(b'Unsupported Media Type: expected application/json')
+          self._reject_post(415, b'Unsupported Media Type: expected application/json')
           return
         # Cross-site requests are rejected outright (defence in depth for
         # the safelisted-content-type case above).
         if not self._origin_is_same():
-          self.send_response(403)
-          self.send_header('Content-Type', 'text/plain')
-          self.end_headers()
-          self.wfile.write(b'Forbidden: cross-origin writes are not allowed')
+          self._reject_post(403, b'Forbidden: cross-origin writes are not allowed')
           return
+        # Parsed before the early rejections, which drain the body they never
+        # read (see _drain_request_body).
+        length = self._declared_content_length()
         # ── Rate limit: max 30 POSTs per 60s sliding window ──
         now = time.monotonic()
         cutoff = now - 60.0
         self.__class__._rl_requests = [t for t in self.__class__._rl_requests if t > cutoff]
         if len(self.__class__._rl_requests) >= self.__class__._rl_max:
-          self.send_response(429)
-          self.send_header('Content-Type', 'text/plain')
-          self.send_header('Retry-After', '60')
-          self._send_cors_headers()
-          self.end_headers()
-          self.wfile.write(b'Rate limit exceeded. Max 30 POST requests per 60 seconds.')
+          self._reject_post(
+            429,
+            b'Rate limit exceeded. Max 30 POST requests per 60 seconds.',
+            cors=True, extra_headers=(('Retry-After', '60'),))
           return
         self.__class__._rl_requests.append(now)
 
-        try:
-          length = int(self.headers.get('Content-Length', 0) or 0)
-        except (TypeError, ValueError):
-          length = 0
         # Reject an oversized body before reading it: without this a caller
         # can force a multi-GB allocation that the size validator (which runs
         # on the parsed object) would never get the chance to refuse.
         if length > MAX_PAYLOAD_SIZE:
-          self.send_response(413)
-          self.send_header('Content-Type', 'text/plain')
-          self._send_cors_headers()
-          self.end_headers()
-          self.wfile.write(b'Payload too large')
+          self._reject_post(413, b'Payload too large', cors=True)
           return
         body = self.rfile.read(length)
         try:
