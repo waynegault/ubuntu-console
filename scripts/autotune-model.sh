@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 60
+# Module Version: 61
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -335,8 +335,8 @@ if declare -f __kv_mb_per_1k &>/dev/null && declare -f __gguf_metadata &>/dev/nu
     # Shared function path — architecture-aware estimate
     _meta=$(__gguf_metadata "$MODEL_PATH" 2>/dev/null || true)
     if [[ -n "$_meta" ]]; then
-        _n_layers=$(echo "$_meta" | cut -d'|' -f3)
-        _native_ctx=$(echo "$_meta" | cut -d'|' -f4)
+        _n_layers=$(cut -d'|' -f3 <<< "$_meta")
+        _native_ctx=$(cut -d'|' -f4 <<< "$_meta")
         _kv_mb=$(__kv_mb_per_1k "${_n_layers:-0}")
     else
         _native_ctx=""

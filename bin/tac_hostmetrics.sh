@@ -10,7 +10,7 @@
 # Typical runtime: ~5s from WSL
 # AI: Output format is a contract — callers split on '|'. Do not change it.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line — any edit here must move it, or the pre-commit guard rejects the
 #   commit.  Deliberately separate from VERSION= below (significant edits only).
@@ -66,7 +66,7 @@ fi
 
 # typeperf CSV structure: line 1 = blank, line 2 = column headers,
 # line 3 = data values.  Column 2 = CPU %.  +0.5 rounds to nearest int.
-cpu=$(echo "$raw" | awk -F',' 'NR==3 { printf "%d", $2+0.5 }')
+cpu=$(awk -F',' 'NR==3 { printf "%d", $2+0.5 }' <<< "$raw")
 
 # Intel iGPU (gpu0) from typeperf.
 # Each GPU engine counter embeds a LUID (Locally Unique Identifier) in its

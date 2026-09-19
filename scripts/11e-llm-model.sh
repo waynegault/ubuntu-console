@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 41
+# Module Version: 42
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -3585,20 +3585,20 @@ function __model_token_plan_quota() {
             --connect-timeout 10 --max-time 20 2>/dev/null) || result=""
 
     local http_code
-    http_code=$(echo "$result" | tail -1)
+    http_code=$(tail -1 <<< "$result")
     local body
-    body=$(echo "$result" | sed '$d')
+    body=$(sed '$d' <<< "$result")
 
     local console_url="https://modelstudio.console.alibabacloud.com/ap-southeast-1"
 
     if [[ "$http_code" == "429" ]]; then
         # Extract reset time from the error message
         local reset_msg
-        reset_msg=$(echo "$body" | jq -r '.error.message // empty' 2>/dev/null)
+        reset_msg=$(jq -r '.error.message // empty' <<< "$body" 2>/dev/null)
         if [[ -n "$reset_msg" ]]; then
             # Parse: "Your token-plan 5-hour quota has been exhausted. The quota will reset at 07-22 14:44:00 UTC."
             local reset_date
-            reset_date=$(echo "$reset_msg" | grep -oP 'reset at \K[0-9]{2}-[0-9]{2} [0-9\:]+')
+            reset_date=$(grep -oP 'reset at \K[0-9]{2}-[0-9]{2} [0-9\:]+' <<< "$reset_msg")
             if [[ -n "$reset_date" ]]; then
                 local current_year
                 current_year=$(date +%Y)

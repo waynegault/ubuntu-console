@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 41
+# Module Version: 42
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -561,7 +561,7 @@ function __up_oc_plugins() {
                     echo "$_local_changes" | head -5 | while read -r line; do
                         printf '║   %-70s ║\n' "${line:0:70}"
                     done
-                    [[ $(echo "$_local_changes" | wc -l) -gt 5 ]] && printf '║   %-70s ║\n' "... and more"
+                    [[ $(wc -l <<< "$_local_changes") -gt 5 ]] && printf '║   %-70s ║\n' "... and more"
                     printf '%s\n' "║$(printf '─%.0s' {1..76})║"
                     printf '║ %-70s ║\n' "Choose an option:"
                     printf '║   %-70s ║\n' "[1] Keep local changes (stash → pull → reapply)"
@@ -647,8 +647,8 @@ function __up_oc_plugins() {
                 return 1
             fi
             _ahead_behind=$(git -C "$_path" rev-list --left-right --count HEAD...origin/HEAD 2>/dev/null)
-            _ahead=$(echo "$_ahead_behind" | cut -f1)
-            _behind=$(echo "$_ahead_behind" | cut -f2)
+            _ahead=$(cut -f1 <<< "$_ahead_behind")
+            _behind=$(cut -f2 <<< "$_ahead_behind")
             if ! [[ "$_ahead" =~ ^[0-9]+$ && "$_behind" =~ ^[0-9]+$ ]]
             then
                 __tac_line "$_status_line" "[CHECK FAILED - no upstream]" "$C_Warning"
@@ -1046,10 +1046,10 @@ function __up_stale_processes() {
             (( _has_port == 0 )) && true_orphans="$true_orphans $pid"
         done <<< "$stale_pids"
 
-        true_orphans=$(echo "$true_orphans" | xargs)
+        true_orphans=$(xargs <<< "$true_orphans")
         if [[ -n "$true_orphans" ]]
         then
-            stale_count=$(echo "$true_orphans" | wc -w)
+            stale_count=$(wc -w <<< "$true_orphans")
             # Per-PID TERM/KILL — a name-based pkill would also evict the
             # systemd-managed llama units filtered out above.
             for _pid in $true_orphans
@@ -1143,7 +1143,7 @@ function __up_npm_cache() {
             if [[ "$npm_cache_result" == *"Cache cleaned"* ]]
             then
                 local cleaned_size
-                cleaned_size=$(echo "$npm_cache_result" | grep -oP '[\d.]+[MGK]B' || echo "unknown")
+                cleaned_size=$(grep -oP '[\d.]+[MGK]B' <<< "$npm_cache_result" || echo "unknown")
                 __tac_line "[20/20] NPM Cache Clean" "[FREED $cleaned_size]" "$C_Success"
             elif [[ "$npm_cache_result" == *"Cache size"* ]]
             then

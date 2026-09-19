@@ -2,7 +2,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 28
+# Module Version: 29
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -30,7 +30,7 @@ function __os_fetch_cached() {
     fi
     local _result
     _result=$("$@" 2>/dev/null) || true
-    if [[ -n "$_result" ]] && echo "$_result" | jq empty 2>/dev/null; then
+    if [[ -n "$_result" ]] && jq empty <<< "$_result" 2>/dev/null; then
         # Atomic write: readers must never observe a truncated cache file.
         printf '%s' "$_result" > "${cache_file}.$$" && mv -f "${cache_file}.$$" "$cache_file"
     fi
@@ -256,9 +256,9 @@ function os() {
     # Count sessions and get agent list from session_data
     local session_count=0 store_count=0 agents_list=""
     if [[ -n "$session_data" ]]; then
-        session_count=$(echo "$session_data" | wc -l)
-        store_count=$(echo "$session_data" | awk -F'\t' '{print $1}' | sort -u | wc -l)
-        agents_list=$(echo "$session_data" | awk -F'\t' '{print $1}' | sort -u | paste -sd',' | sed 's/,/, /g')
+        session_count=$(wc -l <<< "$session_data")
+        store_count=$(awk -F'\t' '{print $1}' <<< "$session_data" | sort -u | wc -l)
+        agents_list=$(awk -F'\t' '{print $1}' <<< "$session_data" | sort -u | paste -sd',' | sed 's/,/, /g')
     fi
 
     # Build agent id -> name mapping (single jq call)

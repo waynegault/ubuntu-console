@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 23
+# Module Version: 24
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -993,7 +993,7 @@ function __spec_block_size() {
         _act_file=$(cat "$ACTIVE_LLM_FILE" 2>/dev/null || true)
         if [[ -n "$_act_file" ]]; then
             _act_row=$(__llm_registry_entry_by_file "$_act_file" 2>/dev/null || true)
-            _reg_n_max=$(echo "$_act_row" | cut -d'|' -f29)
+            _reg_n_max=$(cut -d'|' -f29 <<< "$_act_row")
             [[ "$_reg_n_max" =~ ^[0-9]+$ ]] && [[ $_reg_n_max -gt 0 ]] && { echo "$_reg_n_max"; return 0; }
         fi
     fi

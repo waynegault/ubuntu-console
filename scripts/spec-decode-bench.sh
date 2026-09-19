@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
 #===============================================================================
 # spec-decode-bench.sh — Per-prompt speculative-decoding acceptance bench.
 #
@@ -186,8 +186,8 @@ if (( new_count > 0 )) && (( new_count == ${#PROMPTS[@]} )); then
         if (( i < ${#stat_lines[@]} )); then
             _line="${stat_lines[$i]}"
             # draft acceptance = RATE (  N accepted /  M generated), mean len =  LEN
-            _rate=$(echo "$_line" | sed -E 's/draft acceptance = ([0-9.]+).*/\1/')
-            _len=$(echo "$_line" | sed -E 's/.*mean len = *([0-9.]+).*/\1/')
+            _rate=$(sed -E 's/draft acceptance = ([0-9.]+).*/\1/' <<< "$_line")
+            _len=$(sed -E 's/.*mean len = *([0-9.]+).*/\1/' <<< "$_line")
             printf '%-44s %10s %8s %6s %8s %8s\n' \
                 "$name" "$_len" "$_rate" "$block_size" \
                 "${results_tps[$i]}" "${results_delivered[$i]}/${results_usage[$i]}"

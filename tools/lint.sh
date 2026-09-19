@@ -8,7 +8,7 @@
 #        ./tools/lint.sh --files F  (an explicit list of files)
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 13
+# Module Version: 14
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -439,7 +439,7 @@ then
         if [[ -n "$hits" ]]
         then
             echo "  FAIL  ${f#"$REPO_ROOT"/}  - invisible/dangerous Unicode:"
-            echo "$hits" | head -5
+            head -5 <<< "$hits"
             dangerous_rc=1
         fi
     done
@@ -476,7 +476,7 @@ else
             echo "  PASS  ${f#"$REPO_ROOT"/}"
         else
             echo "  WARN  ${f#"$REPO_ROOT"/}  - non-ASCII on executable lines:"
-            echo "$hits" | head -5
+            head -5 <<< "$hits"
             unicode_rc=1
         fi
     done

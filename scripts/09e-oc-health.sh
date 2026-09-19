@@ -9,7 +9,7 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 09e-oc-health
 # ==============================================================================
@@ -830,7 +830,7 @@ function oc-diag() {
         if [[ -n "$hresp" ]]
         then
             local hstatus
-            hstatus=$(echo "$hresp" | jq -r '.status // .ok // "unknown"' 2>/dev/null)
+            hstatus=$(jq -r '.status // .ok // "unknown"' <<< "$hresp" 2>/dev/null)
             [[ "$hstatus" == "true" ]] && hstatus="ok"
             printf '  %s\n' "${C_Info}  Status: ${hstatus^^}${C_Reset}"
         fi

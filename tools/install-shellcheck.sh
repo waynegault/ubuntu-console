@@ -18,7 +18,7 @@
 #        tools/install-shellcheck.sh -p "$HOME/.local/bin"
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 VERSION="1.0"
 set -euo pipefail
 
@@ -55,7 +55,7 @@ echo "Downloading shellcheck ${SHELLCHECK_VERSION} ..."
 curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 300 \
     -o "$workdir/$tarball" "$url"
 
-echo "${SHELLCHECK_SHA256}  $workdir/$tarball" | sha256sum -c - >/dev/null
+sha256sum -c - <<< "${SHELLCHECK_SHA256}  $workdir/$tarball" >/dev/null
 echo "sha256 verified."
 
 tar -xJf "$workdir/$tarball" -C "$workdir"
