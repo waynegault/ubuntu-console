@@ -236,6 +236,7 @@ either historical, the card-less CPU tier, or wrong.
 |---|---|---|---|---|
 | **Xe** | `llama-xe-minicpm5-1b-chat.service` | `llama-xe-server` | 18081 | the fleet server |
 | **Xe** | `llama-xe-embeddinggemma-embed.service` | `llama-xe-server` | 18080 | embeddings (`--embedding`) |
+| **Xe** | `llama-xe-qwen25-3b-chat.service` | `llama-xe-server` | 18085 | second Xe lane (Qwen2.5-3B chat) |
 | **CUDA** | `llama-cuda-llama32-3b-chat.service` | `llama-cuda-server` | 18083 | the enabled CUDA lane |
 | **CUDA** | `llama-cuda-qwen35-4b-pipeline.service` | `llama-cuda-server` | 8081 | parked lane (disabled) |
 | **none (CPU)** | `llama-cpu-qwen25-3b-chat.service` | `llama-cpu-server` | 18084 | CPU-only chain tier (no card) |
@@ -290,6 +291,25 @@ is the one lane with a flap counter but **no cooling-off hold**: the hold exists
 for the dxgkrnl leak that repeated CUDA context cycles cause, and holding the
 chain's tail down would remove the tier rather than protect it.
 
+**Second Xe lane (2026-09-19): also supervised now — LANE 4.**
+`llama-xe-qwen25-3b-chat.service` (:18085) is the other Xe/OpenCL lane and the one
+that shares the card with the fleet server, so it takes the **Xe lane's** shape and
+not the CUDA lane's: always-on, 2-strike, bench-lock aware, and deliberately with
+no `gpu_busy` or suspend gate, because that gate asks whether the *NVIDIA* card is
+free and this lane never touches it.  It sat `failed` for 22h
+(Sep 18 10:48 → Sep 19 10:09) as `start-limit-hit` — the unit was enabled with
+`Restart=always` and still stayed down, because `StartLimitBurst` (6 in 600s) parks
+it and nothing lifted it.  Every one of those deaths carried the clean-stop
+signature (`Result=success`, `ExecMainStatus=0`, `cleaning up before exit`, no
+systemd `Stopping` line of its own) while a hosted bench session was sweeping the
+box and stopping lanes, and the lane starts and stays healthy now that session is
+over — so the deaths were a **deliberate sweep, not a fault in the lane**.  A sweep
+is the expected killer here, and sweeps take the bench lock (`/tmp/llm-bench.lock`,
+taken by `scripts/11d-llm-gpu.sh` and `scripts/11e-llm-model.sh`), which this lane
+honours.  Like the CPU tier it gets a flap counter and **no cooling-off hold** —
+the hold guards the dxgkrnl leak from CUDA context cycles and this lane holds no
+CUDA context.
+
 The naming trap is closed as of 2026-09-15: the CUDA lane was `nvidia` in its unit
 but `cuda` in its launcher, the **Xe** fleet carried the plainest name, and one
 CUDA lane was named after a port while another was named after a model.  Units and
@@ -340,6 +360,7 @@ a coin-flip.  Use the card-explicit launchers.
 | `LLM_AUTOTUNE_LOCK_FILE` | `/tmp/llm-autotune.lock` | Run serialization lock path |
 | `LLAMA_WATCHDOG_CUDA_SUSPEND_FILE` | `/dev/shm/llama-watchdog-cuda.suspend` | While this file exists the watchdog keeps the **CUDA** lane (`llama-cuda-llama32-3b-chat.service`) down and stops it if up; the Xe lane and the watchdog's own health checks are untouched. The lane returns automatically when the file is removed. Renamed from `LLAMA_WATCHDOG_NV_SUSPEND_FILE` / `...-nv.suspend` on 2026-09-15, when the watchdog's CUDA internals went card-first (`NV_*` → `CUDA_*`); the old path is not honoured |
 | `LLAMA_WATCHDOG_CPU_FLAP_FILE` | `/dev/shm/llama-watchdog-cpu.flaps` | One epoch-seconds stamp per unexpected **CPU-tier** death (`llama-cpu-qwen25-3b-chat.service`), pruned to the shared rolling window. Past the threshold the watchdog warns with systemd's `Result`/`ExecMainStatus` — `success`/`0` means something sent SIGTERM — and **keeps restarting**: unlike the CUDA lane this tier has no `...flaphold` cooling-off, because the hold guards the dxgkrnl leak from repeated CUDA context cycles and the CPU tier's only job is to stay up |
+| `LLAMA_WATCHDOG_XE3B_FLAP_FILE` | `/dev/shm/llama-watchdog-xe3b.flaps` | Same, for the **second Xe lane** (`llama-xe-qwen25-3b-chat.service`, :18085). Its expected killer is a bench session or VRAM sweep stopping lanes by name — sweeps take `/tmp/llm-bench.lock`, which the lane honours, so a flap counted here means the death was *not* one of those. No `...flaphold`: the lane holds no CUDA context, so the dxgkrnl argument for the CUDA cooling-off does not apply |
 | `LLM_ALLOW_AUTOTUNE_DISCOURAGED` | `0` | Allow bench to auto-run autotune for discouraged quants |
 
 ### WSL2 CUDA Cycle Budget (dxgkrnl degradation)
@@ -882,7 +903,8 @@ bench at the live lane it exists to avoid.
 
 Every port in play, so none of them has to be guessed: **18080** Xe embed,
 **18081** Xe chat (the production lane the OpenClaw gateway consumes), **18082**
-this bench, **18083** CUDA chat, **18084** the CPU-only tier, **8081** the
+this bench, **18083** CUDA chat, **18084** the CPU-only tier, **18085** the second
+Xe lane (Qwen2.5-3B chat), **8081** the
 interactive `model use` lane and the investigator pipeline's endpoint.
 
 ### Post-autotune VRAM clearing (card 1b from merged b9ba4596)
@@ -1229,7 +1251,7 @@ it. See `docs/llama-cpp-runtime-audit.md` §2.2.
 | `libggml-cuda.so` not found at runtime | `LD_LIBRARY_PATH` doesn't include build dir | `export LD_LIBRARY_PATH=$HOME/llama.cpp/build:$LD_LIBRARY_PATH` |
 | `CUDA error: out of memory` during inference | Model + KV cache exceeds 4 GB VRAM | Use a smaller quant (Q3_K_M instead of Q4_K_M), reduce `--ctx-size`, or reduce `--n-gpu-layers` |
 | `GGML_ASSERT` failure at startup | Corrupted or incompatible GGUF file | Re-download the model or check it with `llama.cpp/build/bin/llama-cli --model <file> --check-tensors` |
-| Server binds but `/health` never returns OK | Port conflict — something else already owns that port | Ports in use: 18080 Xe embed, 18081 Xe chat (production), 18082 autotune (`AUTOTUNE_PORT`), 18083 CUDA chat, 18084 the CPU-only tier, 8081 the interactive `model use` lane. `model use` allocates 8081; autotune takes 18082. See the card map in `docs/llm.md`. |
+| Server binds but `/health` never returns OK | Port conflict — something else already owns that port | Ports in use: 18080 Xe embed, 18081 Xe chat (production), 18082 autotune (`AUTOTUNE_PORT`), 18083 CUDA chat, 18084 the CPU-only tier, 18085 the second Xe lane (Qwen2.5-3B chat), 8081 the interactive `model use` lane. `model use` allocates 8081; autotune takes 18082. See the card map in `docs/llm.md`. |
 | `error: invalid argument: --no-mmap` at server start | Flag removed upstream (gone in build 10955; the previous binary accepted it with a DEPRECATED warning) | Use `--load-mode none`. Likewise `--mmap` → `--load-mode mmap`, `--mlock` → `--load-mode mlock`. **Two tokens**: `--load-mode=none` is rejected too (the parser never splits on `=`). See `docs/llama-cpp-runtime-audit.md` §1 |
 | Advertised context window ≠ served window (requests rejected mid-prompt with 400) | Two independent causes. (1) `--parallel N` **divides** the context by N unless `--kv-unified` is passed; `kv_unified` defaults to `false`. (2) The advertised `ctx` exceeds the model's own `<arch>.context_length`: llama.cpp clamps the served window to that native value at load, so a probe that ASKED for more is served less. Measured 2026-09-16: requests of 47104/65536/100352/131072 on 32768-native models all served 32768, 147456 served 131072, and 476928/373248 served 262144 — at ngl 24 and 999 and with `--fit` on and off, so it is not a VRAM effect — while every row asking for *less* than its native window served the full request. | Pin `--parallel 1`, or set the window explicitly with `--kv-unified-per-slot <n>`; and never advertise a `ctx` above the model's native window (the autotune now records the served value read from `/props`, 2026-09-16, so a stale row predates that fix). Assert `advertised contextWindow == n_ctx_slot` via `/props`. See `docs/llama-cpp-runtime-audit.md` §2.1 |
 | Xe lane serves but is orders of magnitude slower | The lane found no OpenCL device and fell back to CPU (check for `warning: no usable GPU found`) | Do not run an OpenCL server from a shell that exports `OCL_ICD_VENDORS`; verify with `--list-devices` or the cpu/wall ratio, not by `/health` alone |

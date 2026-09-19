@@ -72,6 +72,21 @@
 #   applied to CPU) but NOT the CUDA cooling-off hold: that exists for the
 #   dxgkrnl leak repeated CUDA context cycles cause, a CPU lane has no such cost,
 #   and holding the chain's tail down would remove the tier rather than protect it.
+# v3.11 (2026-09-19): manage the SECOND Xe lane as well —
+#   llama-xe-qwen25-3b-chat.service (:18085).  Same card as LANE 1, so it takes
+#   LANE 1's shape (always-on, 2-strike, bench-lock aware) and NOT the CUDA
+#   lane's gpu_busy/suspend gate: that gate asks whether the NVIDIA card is free,
+#   which is not a question this lane's card can answer.  It had sat `failed`
+#   since 2026-09-18 10:48 (start-limit-hit, 7 restarts inside 600s); every death
+#   carried the clean-stop signature (Result=success, ExecMainStatus=0, the
+#   "cleaning up before exit" line, no systemd "Stopping" line of its own) at a
+#   moment when a hosted bench session was sweeping the box and stopping lanes,
+#   and the lane starts and stays healthy now that session is over — so the
+#   deaths were a deliberate sweep, not a fault in the lane.  It gets its own
+#   flap counter (the v3.8 lesson) and NO cooling-off hold, for the CPU lane's
+#   reason: the hold guards the dxgkrnl leak from CUDA context cycles, and this
+#   lane holds no CUDA context.  Bench sweeps are the expected killer, and those
+#   take the bench lock, which this lane honours.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -80,14 +95,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 7
+# Module Version: 8
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line (it is what makes an edit here fail the pre-commit guard until the
 #   number moves).  Deliberately separate from VERSION= below: the marker
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.10"
+VERSION="3.11"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -133,9 +148,14 @@ CUDA_UNIT="llama-cuda-llama32-3b-chat"
 # no gpu_busy/suspend gate, but it is bench-lock aware like the Xe lane.
 CPU_PORT="${LLM_CPU_PORT:-18084}"
 CPU_UNIT="llama-cpu-qwen25-3b-chat"
+# The second Xe lane (v3.11).  Card-first sibling of XE_UNIT: same Xe/OpenCL card,
+# different model, so it takes the Xe lane's shape rather than the CUDA lane's.
+XE3B_PORT="${LLM_XE3B_PORT:-18085}"
+XE3B_UNIT="llama-xe-qwen25-3b-chat"
 STRIKE_XE="$WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes"
 STRIKE_CUDA="$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes"
 STRIKE_CPU="$WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.strikes"
+STRIKE_XE3B="$WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.strikes"
 # CUDA flap detection (v3.8).  One epoch-seconds stamp per unexpected CUDA-lane
 # death, pruned to FLAP_WINDOW_S; nothing else reads this file.  Env-overridable
 # like the strike/lock paths so the integration suite can sandbox it — a flap
@@ -144,6 +164,9 @@ FLAP_CUDA="${LLAMA_WATCHDOG_CUDA_FLAP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-
 # The CPU lane's own counter.  Same rolling window and threshold; no hold file —
 # see the v3.10 note in the header for why the CUDA cooling-off must not be copied.
 FLAP_CPU="${LLAMA_WATCHDOG_CPU_FLAP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.flaps}"
+# The second Xe lane's counter.  Same rolling window and threshold; no hold file —
+# see the v3.11 note in the header for why the CUDA cooling-off must not be copied.
+FLAP_XE3B="${LLAMA_WATCHDOG_XE3B_FLAP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.flaps}"
 FLAP_WINDOW_S="${LLAMA_WATCHDOG_FLAP_WINDOW_S:-3600}"
 FLAP_THRESHOLD="${LLAMA_WATCHDOG_FLAP_THRESHOLD:-3}"
 # Cooling-off after repeated flaps (v3.9).  Every restart is a CUDA context create/
@@ -502,12 +525,51 @@ else
     fi
 fi
 
+# ============================================================
+# LANE 4: Xe (second lane) — llama-xe-qwen25-3b-chat — always-on, same card as LANE 1
+# ============================================================
+# LANE 1's shape, deliberately, and not the CUDA lane's: this unit is on the SAME
+# Xe/OpenCL card as LANE 1, so the gpu_busy/suspend gate is the wrong question — it
+# asks whether the NVIDIA card is free, and a lane that never touches that card
+# cannot be deferred to by it.  There is no VRAM to free here either, so "is it up?"
+# is again the whole question, with the bench lock as the one gate.  The unit ran
+# enabled with Restart=always and still sat `failed` for 22h because StartLimitBurst
+# (6 in 600s) parks it and nothing lifted it — the same gap LANE 3 exists to close.
+xe3b_state=$(systemctl --user show "$XE3B_UNIT.service" -p ActiveState --value 2>/dev/null || true)
+health "$XE3B_PORT"; xe3b_health=$?
+if (( xe3b_health == 0 )); then
+    strike_reset "$STRIKE_XE3B"
+elif [[ "$xe3b_state" == "activating" ]]; then
+    log "Xe3B unit activating — systemd handling recovery; skipping"
+    strike_reset "$STRIKE_XE3B"
+elif (( xe3b_health == 2 )); then
+    log "Xe3B unit still loading (503) — leaving alone"
+    strike_reset "$STRIKE_XE3B"
+elif bench_lock; then
+    log "Xe3B down but bench lock present — skipping restart"
+else
+    strike_inc "$STRIKE_XE3B"
+    s=$(strike_get "$STRIKE_XE3B")
+    # An unexpected death: down, not mid-start, not loading, no bench holding us off.
+    # The hint names the two sweeps on record for this box; a clean stop (success/0) is
+    # what a hosted bench or a VRAM sweep looks like, and neither is a fault in the lane.
+    flap_record "$FLAP_XE3B"
+    flap_alert "$XE3B_UNIT" "$FLAP_XE3B" "docs/llm.md's bench-vs-lane note (a hosted bench session or a VRAM sweep stops lanes by name)"
+    log "Xe3B health check failed on :${XE3B_PORT} (unit=${xe3b_state:-unknown}, strike ${s}/2)"
+    if [[ "$s" -ge 2 ]]; then
+        if recover "$XE3B_UNIT" "$XE3B_PORT"; then strike_reset "$STRIKE_XE3B"; fi
+    else
+        log "Xe3B strike 1/2 — will restart if next check also fails"
+    fi
+fi
+
 # Assert the window invariant on every lane that is up (2026-09-14).  This is
 # the check that would have caught the registry's parallel=16 dividing every
 # served window, and that catches a --fit or --parallel drift on a unit.
 window_check "$XE_UNIT" "$XE_PORT"
 window_check "$CUDA_UNIT" "$CUDA_PORT"
 window_check "$CPU_UNIT" "$CPU_PORT"
+window_check "$XE3B_UNIT" "$XE3B_PORT"
 
 exit 0
 

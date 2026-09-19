@@ -1,13 +1,13 @@
 #!/usr/bin/env bats
 # ==============================================================================
-# Integration Tests — Llama Watchdog (v3.10, three-lane)
+# Integration Tests — Llama Watchdog (v3.11, four-lane)
 # ==============================================================================
-# Tests llama-watchdog.sh v3.10: health probing (including the 503 "loading"
+# Tests llama-watchdog.sh v3.11: health probing (including the 503 "loading"
 # signal), 2-strike recovery, the always-on Xe lane, the GPU-gated CUDA lane,
-# the card-free CPU tail lane, the v3.5 CUDA-only suspend flag, and the v3.8/
-# v3.10 per-lane flap counters. All external commands (curl, systemctl,
-# gpu-busy.sh) are mocked so the suite is hermetic and never touches the live
-# llama-xe-minicpm5-1b-chat.service.
+# the card-free CPU tail lane, the second Xe lane (:18085), the v3.5 CUDA-only
+# suspend flag, and the v3.8/v3.10/v3.11 per-lane flap counters. All external
+# commands (curl, systemctl, gpu-busy.sh) are mocked so the suite is hermetic and
+# never touches the live llama-xe-minicpm5-1b-chat.service.
 # Run: bats tests/integration/04-watchdog.bats
 # ==============================================================================
 
@@ -60,10 +60,14 @@ MOCK
     chmod +x "$WATCHDOG_MOCK_BIN/curl"
 
     # Mock systemctl --user. `show` reports per-unit state from xe_state/cuda_state/
-    # cpu_state; restart/start mark the lane healthy (unless fail_restart/fail_start
-    # is set); stop and reset-failed record themselves. The CPU branch MUST precede
-    # the catch-all: "llama-cpu-qwen25-3b-chat" does not match *cuda*, so without it
-    # the CPU lane would silently read the Xe lane's state.
+    # cpu_state/xe3b_state; restart/start mark the lane healthy (unless fail_restart/
+    # fail_start is set); stop and reset-failed record themselves. The CPU branch MUST
+    # precede the catch-all: "llama-cpu-qwen25-3b-chat" does not match *cuda*, so
+    # without it the CPU lane would silently read the Xe lane's state. The Xe3B branch
+    # has the same requirement and for a sharper reason: BOTH Xe lanes end in
+    # "-chat".service and so would otherwise fall through to xe_state together, making
+    # one lane's state answer for the other. It is matched on *qwen25-3b*, which also
+    # matches the CPU unit's name — CPU is matched first above, deliberately.
     cat > "$WATCHDOG_MOCK_BIN/systemctl" <<'MOCK'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -73,9 +77,10 @@ case "$op" in
     show)
         unit="${1:-}"
         case "$unit" in
-            *cuda*) cat "$SYSTEMCTL_MOCK_STATE/cuda_state" 2>/dev/null || echo "inactive" ;;
-            *cpu*)  cat "$SYSTEMCTL_MOCK_STATE/cpu_state" 2>/dev/null || echo "inactive" ;;
-            *)      cat "$SYSTEMCTL_MOCK_STATE/xe_state" 2>/dev/null || echo "inactive" ;;
+            *cuda*)        cat "$SYSTEMCTL_MOCK_STATE/cuda_state" 2>/dev/null || echo "inactive" ;;
+            *cpu*)         cat "$SYSTEMCTL_MOCK_STATE/cpu_state" 2>/dev/null || echo "inactive" ;;
+            *qwen25-3b*)   cat "$SYSTEMCTL_MOCK_STATE/xe3b_state" 2>/dev/null || echo "inactive" ;;
+            *)             cat "$SYSTEMCTL_MOCK_STATE/xe_state" 2>/dev/null || echo "inactive" ;;
         esac
         ;;
     restart)
@@ -136,9 +141,19 @@ setup() {
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe.strikes" \
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes" \
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.strikes" \
+          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.strikes" \
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" \
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.flaps" \
+          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.flaps" \
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold" 2>/dev/null || true
+    # Park LANE 4 in `activating` for every test that does not ask for it. The three
+    # pre-existing lanes' tests were written against a two/three-lane script and assert
+    # on the ABSENCE of restart/start/stop calls; a fourth lane sitting `inactive` down
+    # a live port would take a second strike inside their second run and touch the
+    # shared markers. `activating` is the script's own "systemd is already on it" state:
+    # skipped, no strike, no action — so LANE 4 is inert until a test writes
+    # `inactive`/`failed` itself. Reset it BEFORE the state wipe above, not after.
+    echo "activating" > "$WATCHDOG_MOCK_STATE/xe3b_state"
     rm -f "$LLM_BENCH_LOCK_FILE" "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE" 2>/dev/null || true
     export PATH="$WATCHDOG_MOCK_BIN:$PATH"
 }
@@ -641,6 +656,148 @@ setup() {
     [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.flaps")" -eq 4 ]]
     [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
     [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.flaphold" ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Second Xe lane (v3.11) — llama-xe-qwen25-3b-chat (:18085)
+# ─────────────────────────────────────────────────────────────────────────────
+# These tests neutralise the other three lanes on purpose: the Xe lane and the CPU
+# lane are put in `activating` (skipped without a strike) and the GPU is reported
+# busy with the CUDA unit inactive (strike reset, no stop/start) — so none of them
+# can touch the shared `healthy` marker and mask this lane's own behaviour.
+
+@test "integration: the two Xe lanes are tracked independently" {
+    # The trap this lane walked into: both Xe units end in "-chat".service, so a mock
+    # (and any real code) that classified units by *cuda*/*cpu*/catch-all made one
+    # lane's state answer for the other. Assert the two disagree on the same run.
+    echo "activating" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "failed" > "$WATCHDOG_MOCK_STATE/xe3b_state"
+    echo "activating" > "$WATCHDOG_MOCK_STATE/cpu_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    touch "$WATCHDOG_MOCK_STATE/busy"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Xe unit activating"* ]]
+    [[ "$output" == *"Xe3B health check failed on :18085 (unit=failed, strike 1/2)"* ]]
+}
+
+@test "integration: watchdog restarts the second Xe lane on the 2nd consecutive failure" {
+    # Before v3.11 this unit was enabled, Restart=always, and still sat `failed` for
+    # 22h: StartLimitBurst (6 in 600s) parks it and nothing lifted it.
+    echo "activating" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    echo "activating" > "$WATCHDOG_MOCK_STATE/cpu_state"
+    touch "$WATCHDOG_MOCK_STATE/busy"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/xe3b_state"
+
+    run "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Xe3B health check failed on :18085 (unit=inactive, strike 1/2)"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+
+    run "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    grep -q "restart llama-xe-qwen25-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+    [[ "$output" == *"Recovery successful — llama-xe-qwen25-3b-chat healthy on :18085"* ]]
+}
+
+@test "integration: watchdog leaves a still-loading (503) second Xe lane alone" {
+    echo "activating" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    echo "activating" > "$WATCHDOG_MOCK_STATE/cpu_state"
+    touch "$WATCHDOG_MOCK_STATE/busy"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/xe3b_state"
+    touch "$WATCHDOG_MOCK_STATE/loading"
+
+    run "$WATCHDOG_SCRIPT"
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Xe3B unit still loading (503)"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    [[ "$(cat "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.strikes" 2>/dev/null || echo 0)" == "0" ]]
+}
+
+@test "integration: watchdog skips the second Xe lane while systemd is already activating" {
+    echo "activating" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    echo "activating" > "$WATCHDOG_MOCK_STATE/cpu_state"
+    touch "$WATCHDOG_MOCK_STATE/busy"
+    echo "activating" > "$WATCHDOG_MOCK_STATE/xe3b_state"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Xe3B unit activating"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+}
+
+@test "integration: watchdog resets a failed second Xe unit before restarting" {
+    # The live state this lane was found in (start-limit-hit): `restart` alone would
+    # not clear it, so reset-failed must come first.
+    echo "activating" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    echo "activating" > "$WATCHDOG_MOCK_STATE/cpu_state"
+    touch "$WATCHDOG_MOCK_STATE/busy"
+    echo "failed" > "$WATCHDOG_MOCK_STATE/xe3b_state"
+
+    run "$WATCHDOG_SCRIPT"
+    [[ ! -f "$WATCHDOG_MOCK_STATE/reset_failed_called" ]]
+
+    run "$WATCHDOG_SCRIPT"
+    [[ "$status" -eq 0 ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/reset_failed_called" ]]
+    grep -q "reset-failed llama-xe-qwen25-3b-chat.service" "$SYSTEMCTL_MOCK_LOG"
+}
+
+@test "integration: watchdog skips the second Xe lane when the bench lock is present" {
+    # A hosted bench session stopping lanes is the documented killer of this lane, and
+    # benches take the lock — so the lock is the gate that keeps us from fighting one.
+    echo "activating" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    echo "activating" > "$WATCHDOG_MOCK_STATE/cpu_state"
+    touch "$WATCHDOG_MOCK_STATE/busy"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/xe3b_state"
+    touch "$LLM_BENCH_LOCK_FILE"
+
+    run "$WATCHDOG_SCRIPT"
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Xe3B down but bench lock present — skipping restart"* ]]
+    [[ ! -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    [[ "$(cat "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.strikes" 2>/dev/null || echo 0)" == "0" ]]
+}
+
+@test "integration: a repeated second-Xe death is counted, and the lane still restarts (no CUDA hold)" {
+    # Same reasoning as the CPU tier: a lane the watchdog silently restarts reads
+    # exactly like one that never missed a beat. The CUDA cooling-off must NOT be
+    # copied here — it exists for the dxgkrnl leak that repeated CUDA context cycles
+    # cause, this lane holds no CUDA context, and holding it down would delete the
+    # chain tier rather than protect it.
+    echo "activating" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    echo "activating" > "$WATCHDOG_MOCK_STATE/cpu_state"
+    touch "$WATCHDOG_MOCK_STATE/busy"
+    # Must be set explicitly: setup() parks LANE 4 in `activating`, which the script
+    # skips without a strike, so a flap could never be recorded.
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/xe3b_state"
+
+    local now
+    now=$(date +%s)
+    printf '%s\n%s\n%s\n' "$now" "$now" "$now" > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.flaps"
+    printf '1\n' > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.strikes"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"WARNING flap: llama-xe-qwen25-3b-chat died 4x"* ]]
+    [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.flaps")" -eq 4 ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/restart_called" ]]
+    [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.flaphold" ]]
 }
 
 # end of file
