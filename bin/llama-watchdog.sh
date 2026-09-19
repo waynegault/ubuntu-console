@@ -87,6 +87,18 @@
 #   reason: the hold guards the dxgkrnl leak from CUDA context cycles, and this
 #   lane holds no CUDA context.  Bench sweeps are the expected killer, and those
 #   take the bench lock, which this lane honours.
+# v3.12 (2026-09-19): a stop WE made for a foreign GPU owner is no longer counted as
+#   a flap.  v3.8 counts "down, card free, nothing suspending us" as an unexpected
+#   death, which is right for a lane that fell over -- but wrong for a lane this
+#   watchdog stopped two ticks earlier because gpu-busy said so.  Three such designed
+#   stops inside the 1h window tripped the threshold and entered the v3.9 cooling-off:
+#   the CUDA tier sat OFFLINE on an idle card while the log said "NOT normal
+#   operation" and blamed a foreign GPU owner for deaths that never happened
+#   (2026-09-18 17:47+17:58+18:09 -> 18:14, and again at 14:03).  The GPU-busy branch
+#   now writes a marker, renewed on every busy tick; the free tick consumes it instead
+#   of recording a flap.  Single-use and TTL-bounded, so a stale marker cannot mask a
+#   genuine dxgkrnl death.  The busy line also carries the probe's own reasons, since
+#   "GPU busy" alone cannot say which of the five signals fired.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -95,14 +107,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 8
+# Module Version: 9
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line (it is what makes an edit here fail the pre-commit guard until the
 #   number moves).  Deliberately separate from VERSION= below: the marker
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.11"
+VERSION="3.12"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -180,6 +192,13 @@ FLAP_HOLD_S="${LLAMA_WATCHDOG_FLAP_HOLD_S:-1800}"
 # Presence of this file suspends ONLY the CUDA lane (see cuda_suspended).  Kept
 # env-overridable like the lock/strike paths so the integration suite sandboxes it.
 CUDA_SUSPEND_FILE="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
+# Marker written when the GPU-busy branch stops the CUDA lane on purpose (v3.12).
+# It tells the next free tick that this down unit is OURS, not a flap.  Renewed on
+# every busy tick, so the TTL only has to outlive the 10min timer rather than the
+# whole foreign workload; consumed (single-use) by the free tick, so it can explain
+# exactly one restart and never mask a genuine death after that.
+CUDA_GPUSTOP_FILE="${LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.gpustop}"
+CUDA_GPUSTOP_TTL_S="${LLAMA_WATCHDOG_CUDA_GPUSTOP_TTL_S:-1800}"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] $*"; }
 
@@ -250,6 +269,26 @@ strike_inc() {
     n=$((n+1))
     printf '%s\n' "$n" > "$f" 2>/dev/null || log "WARNING: cannot write strike file $f (strike not persisted)"
 }
+
+# --- GPU-busy stop marker (v3.12) ---
+# gpustop_mark -- record that WE stopped the CUDA lane for a foreign GPU owner, so
+# the next free tick restarts it without counting a flap.  Renewed on every busy
+# tick: the TTL bounds staleness, it does not have to outlive the workload.
+gpustop_mark() {
+    local until
+    until=$(( $(date +%s) + CUDA_GPUSTOP_TTL_S ))
+    printf '%s\n' "$until" > "$CUDA_GPUSTOP_FILE" 2>/dev/null \
+        || log "WARNING: cannot write the GPU-stop marker $CUDA_GPUSTOP_FILE (a designed stop may be counted as a flap)"
+}
+# gpustop_active -- is that marker live (present, numeric, not expired)?
+gpustop_active() {
+    local until
+    [[ -e "$CUDA_GPUSTOP_FILE" ]] || return 1
+    until=$(cat "$CUDA_GPUSTOP_FILE" 2>/dev/null || true)
+    [[ "$until" =~ ^[0-9]+$ ]] || return 1
+    (( $(date +%s) < until ))
+}
+gpustop_clear() { rm -f "$CUDA_GPUSTOP_FILE" 2>/dev/null || true; }
 
 # --- flap bookkeeping (v3.8) ---
 # flap_record — stamp an unexpected CUDA-lane death, pruning stamps older than the
@@ -324,18 +363,37 @@ flap_hold_enter() {
 # probe is missing/fails/returns nothing we cannot prove the GPU is free, so we
 # treat it as BUSY and the CUDA lane is not started (matches the policy above).
 GPU_BUSY_PROBE_WARNED=0
+# Reasons from the last probe, for the busy log line.  Set by gpu_busy(), read only
+# where that line is emitted; empty when the probe reported none.
+GPU_BUSY_REASONS=""
+
+# Pull the "reasons":[...] entries out of the probe's JSON for the log line.
+# Deliberately no jq: the shape is fixed, this runs on every tick, and a parsing
+# miss must never change the busy/free verdict.
+gpu_busy_reasons() {
+    local inner="${1#*\"reasons\":[}"
+    inner="${inner%%]*}"
+    inner="${inner//\",\"/, }"
+    GPU_BUSY_REASONS="${inner//\"/}"
+}
+
 gpu_busy() {
     local j rc
+    GPU_BUSY_REASONS=""
     j=$("$HOME/.local/bin/gpu-busy.sh" --json 2>/dev/null)
     rc=$?
     # gpu-busy.sh contract: exit 0 = FREE, exit 1 = BUSY, anything else = error.
     # Exit 1 is a NORMAL "busy" answer (the GPU is held), not a probe failure, so
     # it must not be logged as one -- it fires on every busy tick otherwise.
     if (( rc == 0 )) && [[ -n "$j" ]]; then
-        [[ "$j" == *'"busy":true'* ]]
-        return
+        if [[ "$j" == *'"busy":true'* ]]; then
+            gpu_busy_reasons "$j"
+            return 0
+        fi
+        return 1
     fi
     if (( rc == 1 )); then
+        gpu_busy_reasons "$j"
         return 0
     fi
     # Genuine probe failure (unexpected rc, or rc 0 with no JSON) -- FAIL CLOSED.
@@ -425,15 +483,26 @@ if cuda_suspended; then
     else
         log "CUDA lane suspended ($CUDA_SUSPEND_FILE present) — not starting $CUDA_UNIT yet"
     fi
+    # A suspend is its own deliberate stop; a stale GPU-busy marker must not
+    # survive it and explain away the first real death after a resume.
+    gpustop_clear
     strike_reset "$STRIKE_CUDA"
 elif gpu_busy; then
     # GPU in use by foreign workload -> Xe lane serves (Wayne policy)
     if [[ "$cuda_state" == "active" ]]; then
-        log "GPU busy — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)"
+        log "GPU busy — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)${GPU_BUSY_REASONS:+ [probe: $GPU_BUSY_REASONS]}"
         systemctl --user stop "$CUDA_UNIT.service" 2>/dev/null || true
     fi
+    # Mark the stop as OURS, renewed on every busy tick.  Without this the next
+    # tick where the card frees sees a down unit and counts the stop as an
+    # UNEXPECTED death (v3.8), so three deliberate stops in an hour tripped the
+    # flap alert and the 30min cooling-off — leaving the CUDA tier offline on an
+    # idle card while the log blamed a dead lane that never died.
+    gpustop_mark
     strike_reset "$STRIKE_CUDA"
 elif [[ "$cuda_state" == "active" ]]; then
+    # The lane is up, so any pending marker has served its purpose (or is stale).
+    gpustop_clear
     health "$CUDA_PORT"; cuda_health=$?
     if (( cuda_health == 0 )); then
         strike_reset "$STRIKE_CUDA"
@@ -453,16 +522,26 @@ elif [[ "$cuda_state" == "activating" ]]; then
     # systemd is already bringing the unit up (mirrors the Xe lane): issuing a
     # start would act on a unit that is mid-start.
     log "CUDA unit activating — systemd handling recovery; skipping"
+    gpustop_clear
     strike_reset "$STRIKE_CUDA"
 else
     # GPU free but CUDA unit not active -> bring it up (it is the preferred lane when free)
     if bench_lock; then
         log "GPU free but bench lock present — not starting $CUDA_UNIT yet"
     else
-        # An unexpected death: down, card free, nothing suspending us.  Count it
-        # BEFORE any recovery below so the alert and the action appear together.
-        flap_record "$FLAP_CUDA"
-        flap_alert "$CUDA_UNIT" "$FLAP_CUDA" "bin/gpu-busy.sh --json for a foreign GPU owner"
+        # Down with a free card is USUALLY an unexpected death (v3.8) — but not if
+        # WE stopped it for a foreign GPU owner and the card has since freed.  The
+        # marker is SINGLE-USE: consuming it here means it can explain exactly one
+        # restart and can never mask a genuine death afterwards.
+        if gpustop_active; then
+            log "GPU free; the stop was ours for a foreign owner — restarting $CUDA_UNIT without recording a flap"
+            gpustop_clear
+        else
+            # An unexpected death: down, card free, nothing suspending us.  Count it
+            # BEFORE any recovery below so the alert and the action appear together.
+            flap_record "$FLAP_CUDA"
+            flap_alert "$CUDA_UNIT" "$FLAP_CUDA" "bin/gpu-busy.sh --json for a foreign GPU owner"
+        fi
         if flap_hold_active; then
             log "CUDA lane held down after repeated flaps — not starting $CUDA_UNIT (cooling-off; delete $FLAP_HOLD_FILE to lift it early)"
         elif (( $(flap_count "$FLAP_CUDA") >= FLAP_THRESHOLD )); then

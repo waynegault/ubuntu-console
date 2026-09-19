@@ -1,11 +1,13 @@
 #!/usr/bin/env bats
 # ==============================================================================
-# Integration Tests — Llama Watchdog (v3.11, four-lane)
+# Integration Tests — Llama Watchdog (v3.12, four-lane)
 # ==============================================================================
-# Tests llama-watchdog.sh v3.11: health probing (including the 503 "loading"
+# Tests llama-watchdog.sh v3.12: health probing (including the 503 "loading"
 # signal), 2-strike recovery, the always-on Xe lane, the GPU-gated CUDA lane,
 # the card-free CPU tail lane, the second Xe lane (:18085), the v3.5 CUDA-only
-# suspend flag, and the v3.8/v3.10/v3.11 per-lane flap counters. All external
+# suspend flag, and the v3.8/v3.10/v3.11 per-lane flap counters. v3.12 adds the
+# GPU-busy stop marker: a stop the watchdog made itself must not be counted as a
+# flap. All external
 # commands (curl, systemctl, gpu-busy.sh) are mocked so the suite is hermetic and
 # never touches the live llama-xe-minicpm5-1b-chat.service.
 # Run: bats tests/integration/04-watchdog.bats
@@ -28,6 +30,9 @@ setup_file() {
     export LLAMA_WATCHDOG_STRIKE_DIR="$TAC_TEST_TMPDIR"
     export LLM_BENCH_LOCK_FILE="$TAC_TEST_TMPDIR/llm-bench.lock"
     export LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$TAC_TEST_TMPDIR/llama-watchdog-cuda.suspend"
+    # v3.12: the "we stopped it for a foreign GPU owner" marker, sandboxed like
+    # the rest (a live marker leaking between cases would mask real flaps).
+    export LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE="$TAC_TEST_TMPDIR/llama-watchdog-cuda.gpustop"
     mkdir -p "$WATCHDOG_MOCK_BIN" "$WATCHDOG_MOCK_STATE" "$WATCHDOG_MOCK_HOME/.local/bin"
 
     # v3.0 resolves gpu-busy.sh as $HOME/.local/bin/gpu-busy.sh (GPU_BUSY_SH is
@@ -145,7 +150,8 @@ setup() {
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" \
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cpu.flaps" \
           "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-xe3b.flaps" \
-          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold" 2>/dev/null || true
+          "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold" \
+          "$LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE" 2>/dev/null || true
     # Park LANE 4 in `activating` for every test that does not ask for it. The three
     # pre-existing lanes' tests were written against a two/three-lane script and assert
     # on the ABSENCE of restart/start/stop calls; a fourth lane sitting `inactive` down
@@ -545,6 +551,97 @@ setup() {
 
     [[ "$output" != *"WARNING flap"* ]]
     [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 1 ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GPU-busy stop marker (v3.12)
+# ─────────────────────────────────────────────────────────────────────────────
+# The 2026-09-18 repro: the watchdog stopped the CUDA lane for a foreign GPU owner
+# three times in an hour, and each stop was then found again by the NEXT free tick
+# and counted as an unexpected death — so a lane the watchdog itself had parked was
+# declared to be flapping, held offline for 30min on an idle card, and the log
+# blamed a killer that never existed. The marker says "that stop was mine".
+
+@test "integration: three deliberate GPU-busy stops do not trip the flap alert or the hold" {
+    touch "$WATCHDOG_MOCK_STATE/healthy"   # keep the Xe lane quiet for the whole run
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+
+    for _ in 1 2 3; do
+        # A foreign owner takes the card: the watchdog stops OUR lane on purpose.
+        echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+        touch "$WATCHDOG_MOCK_STATE/busy"
+        run "$WATCHDOG_SCRIPT"
+        [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]]
+        [[ -f "$LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE" ]]
+
+        # The card frees; the unit is down because WE stopped it, not because it died.
+        rm -f "$WATCHDOG_MOCK_STATE/busy"
+        echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+        rm -f "$WATCHDOG_MOCK_STATE/start_called"
+        run "$WATCHDOG_SCRIPT"
+        [[ "$output" == *"the stop was ours for a foreign owner"* ]]
+        [[ -f "$WATCHDOG_MOCK_STATE/start_called" ]]
+    done
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" != *"WARNING flap"* ]]
+    [[ "$output" != *"deliberately OFFLINE"* ]]
+    [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" ]]
+    [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaphold" ]]
+}
+
+@test "integration: the GPU-busy marker is single-use — a later death still counts" {
+    # The marker explains exactly ONE restart. Once consumed, the next death must
+    # be counted normally, or a genuinely broken lane could hide behind a stale
+    # "we stopped it ourselves" note for as long as the marker lives.
+    touch "$WATCHDOG_MOCK_STATE/healthy"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    touch "$WATCHDOG_MOCK_STATE/busy"
+    run "$WATCHDOG_SCRIPT"                       # our stop -> marker written
+    [[ -f "$LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE" ]]
+
+    rm -f "$WATCHDOG_MOCK_STATE/busy"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    run "$WATCHDOG_SCRIPT"                       # free tick -> marker consumed
+    [[ ! -e "$LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE" ]]
+    [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" ]]
+
+    # Now a real death: down, card free, nothing suspending us, no marker left.
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$output" != *"the stop was ours"* ]]
+    [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 1 ]]
+}
+
+@test "integration: an EXPIRED GPU-busy marker does not suppress a flap" {
+    # The TTL is the second bound: a marker whose lane never came back (so no free
+    # tick ever consumed it) must stop explaining things once it goes stale.
+    touch "$WATCHDOG_MOCK_STATE/healthy"
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    printf '%s\n' "$(( $(date +%s) - 5 ))" > "$LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" != *"the stop was ours"* ]]
+    [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 1 ]]
+}
+
+@test "integration: the GPU-busy line carries the probe's own reasons" {
+    # "GPU busy" alone cannot say which of the five signals fired, so a bench
+    # holding the card, a foreign app on it and a util spike all read the same —
+    # which is why the 2026-09-19 stop could not be attributed after the fact.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    touch "$WATCHDOG_MOCK_STATE/busy"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"GPU busy — stopping llama-cuda-llama32-3b-chat"* ]]
+    [[ "$output" == *"[probe: mock]"* ]]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

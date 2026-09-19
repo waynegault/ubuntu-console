@@ -310,6 +310,22 @@ honours.  Like the CPU tier it gets a flap counter and **no cooling-off hold** �
 the hold guards the dxgkrnl leak from CUDA context cycles and this lane holds no
 CUDA context.
 
+**A stop we make is not a flap (v3.12, 2026-09-19).**  The CUDA lane's flap counter
+(v3.8) reads "unit down, card free, nothing suspended" as an unexpected death —
+correct for a lane that fell over, wrong for one this watchdog parked two minutes
+earlier.  The GPU-busy branch now writes `/dev/shm/llama-watchdog-cuda.gpustop`,
+renewed on **every** busy tick, and the next free tick consumes it and restarts the
+lane **without** recording a flap.  It is single-use and TTL-bounded, so a stale
+marker cannot mask a genuine dxgkrnl death.  Before this, three deliberate stops
+inside the 1h window tripped the threshold and entered the 30-minute cooling-off:
+the CUDA tier sat **offline on an idle card** while the log declared "NOT normal
+operation" and blamed a foreign GPU owner for deaths that never happened
+(Sep 18 17:47+17:58+18:09 → 18:14, and again at 14:03).  The busy line now also
+carries the probe's own reasons (`[probe: util=62%>=50%, foreign-app pid=…]`)
+instead of the bare verdict, because "GPU busy" cannot say which of gpu-busy.sh's
+five signals fired — which is why the Sep 19 10:35 stop could not be attributed
+after the fact.
+
 The naming trap is closed as of 2026-09-15: the CUDA lane was `nvidia` in its unit
 but `cuda` in its launcher, the **Xe** fleet carried the plainest name, and one
 CUDA lane was named after a port while another was named after a model.  Units and
@@ -359,6 +375,8 @@ a coin-flip.  Use the card-explicit launchers.
 | `AUTOTUNE_SPEC_SWEEP` | `1` | `0` skips the spec-decode block-size sweep, which costs four launches per row and is the single largest cycle consumer |
 | `LLM_AUTOTUNE_LOCK_FILE` | `/tmp/llm-autotune.lock` | Run serialization lock path |
 | `LLAMA_WATCHDOG_CUDA_SUSPEND_FILE` | `/dev/shm/llama-watchdog-cuda.suspend` | While this file exists the watchdog keeps the **CUDA** lane (`llama-cuda-llama32-3b-chat.service`) down and stops it if up; the Xe lane and the watchdog's own health checks are untouched. The lane returns automatically when the file is removed. Renamed from `LLAMA_WATCHDOG_NV_SUSPEND_FILE` / `...-nv.suspend` on 2026-09-15, when the watchdog's CUDA internals went card-first (`NV_*` → `CUDA_*`); the old path is not honoured |
+| `LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE` | `/dev/shm/llama-watchdog-cuda.gpustop` | Marker the watchdog writes when **it** stops the CUDA lane for a foreign GPU owner, renewed on every busy tick. The next tick that finds the card free consumes it and restarts the lane **without counting a flap** (v3.12) — a stop we made is not a death. Single-use and TTL-bounded, so it can explain exactly one restart and never mask a genuine dxgkrnl death. Delete it to make the next free tick count a flap again |
+| `LLAMA_WATCHDOG_CUDA_GPUSTOP_TTL_S` | `1800` | How long that marker stays valid after the last busy tick. It only has to outlive the 10-minute timer, because each busy tick rewrites it — so a foreign workload holding the card for hours still has a fresh marker at the moment the card frees |
 | `LLAMA_WATCHDOG_CPU_FLAP_FILE` | `/dev/shm/llama-watchdog-cpu.flaps` | One epoch-seconds stamp per unexpected **CPU-tier** death (`llama-cpu-qwen25-3b-chat.service`), pruned to the shared rolling window. Past the threshold the watchdog warns with systemd's `Result`/`ExecMainStatus` — `success`/`0` means something sent SIGTERM — and **keeps restarting**: unlike the CUDA lane this tier has no `...flaphold` cooling-off, because the hold guards the dxgkrnl leak from repeated CUDA context cycles and the CPU tier's only job is to stay up |
 | `LLAMA_WATCHDOG_XE3B_FLAP_FILE` | `/dev/shm/llama-watchdog-xe3b.flaps` | Same, for the **second Xe lane** (`llama-xe-qwen25-3b-chat.service`, :18085). Its expected killer is a bench session or VRAM sweep stopping lanes by name — sweeps take `/tmp/llm-bench.lock`, which the lane honours, so a flap counted here means the death was *not* one of those. No `...flaphold`: the lane holds no CUDA context, so the dxgkrnl argument for the CUDA cooling-off does not apply |
 | `LLM_ALLOW_AUTOTUNE_DISCOURAGED` | `0` | Allow bench to auto-run autotune for discouraged quants |
