@@ -114,13 +114,8 @@ case "${1:---}" in
             echo "Usage: normalize-fixture.sh --diff <file_a> <file_b>" >&2
             exit 1
         fi
-        tmp_a=$(mktemp)
-        tmp_b=$(mktemp)
-        normalize "$a" > "$tmp_a"
-        normalize "$b" > "$tmp_b"
         diff_rc=0
-        diff --color=always -u "$tmp_a" "$tmp_b" || diff_rc=$?
-        rm -f "$tmp_a" "$tmp_b"
+        diff --color=always -u <(normalize "$a") <(normalize "$b") || diff_rc=$?
         # Propagate diff's status (0 = identical, 1 = differences, 2 = error);
         # otherwise --diff always looks "clean".
         exit "$diff_rc"
