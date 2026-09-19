@@ -1436,6 +1436,34 @@ The concentration is real and worth reading: `scripts/autotune-model.sh` holds 5
 `scripts/08-maintenance.sh` (7) and `scripts/11e-llm-model.sh` (6). For scale, `<<<` is already used
 **98** times, so this is a partial migration rather than an untouched one.
 
+**Read on 2026-09-18 at `f7403d24`, and for more than half the sites the prescribed remedy is the
+wrong one.** Splitting the 89 by what is actually on the left of the pipe:
+
+- **46 of the 53 in `scripts/autotune-model.sh` are `echo "<arithmetic expression>" | bc`** — for
+  example `[[ $(echo "${decode_tps:-0} > 0" | bc 2>/dev/null || echo "0") == 1 ]]`. Here `echo` is a
+  shell builtin, so what the pipe costs is the subshell on its left; the fork that actually costs is
+  **`bc`**, and `bc` is what item 6.5 exists to sanction ("templating or math that Bash cannot
+  natively handle" — these are float comparisons and 2-decimal rounding). Rewriting these to
+  `bc <<< "…"` would remove one subshell per site and leave the expensive fork in place. The real
+  change, if any is wanted, is to delete `bc` and compare after `${x%.*}` — that is item 6.1's
+  question, not this one, and it is decision logic where a typo is *silent*: this file documents
+  past silent-wrong-number defects (`autotune-model.sh:979` exists because a value was overwritten
+  every request). Left alone deliberately.
+- **~35 are `echo "$var" | <text tool>`** (`cut`, `sed`, `wc`, `jq`, `awk`, `head`, `grep`, `tail`),
+  where the transformation is clean and correct: the here-string attaches to the first command, so a
+  chain becomes `awk … <<< "$x" | sort | wc -l`. One subshell each, and — as with 6.6's `basename`
+  sites — the saving is real but unmeasurable in cold code. Worth doing as a batch; not done in the
+  2026-09-18 pass, which stopped at the reading.
+- **4 are `echo "$x" | while read …`** (`08-maintenance.sh:561`, `run-tests.sh:343` and `:445`) and
+  must **not** be converted: a here-string on the loop would move the body out of the subshell the
+  pipe creates today, silently changing which variables survive. That is item 6.4's shape, and it is
+  a behaviour change, not a cleanup.
+- **1 carries `echo -n`** (`run-tests.sh:343`), where `<<<` is not equivalent at all: a here-string
+  appends a newline that `-n` suppresses.
+- **1 is a false positive of this item's own probe** — `11e-llm-model.sh:3155`, a multi-line quoted
+  usage string whose `|` characters are inside the message. The probe strips quoted text *per line*,
+  so a quoted string spanning lines defeats it. Known limit, not a site.
+
 6.10
 
 🔧 printf over echo -e
