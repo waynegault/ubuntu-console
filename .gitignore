@@ -102,3 +102,6 @@ benchmark*.html
 *_sanitized.json
 GRAPH_REPORT*.md
 .graphignore_*audit*.md
+
+# graphify knowledge-graph output (generated; rebuilt by `graphify update .`)
+graphify-out/
