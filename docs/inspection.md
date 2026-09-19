@@ -1449,11 +1449,18 @@ wrong one.** Splitting the 89 by what is actually on the left of the pipe:
   question, not this one, and it is decision logic where a typo is *silent*: this file documents
   past silent-wrong-number defects (`autotune-model.sh:979` exists because a value was overwritten
   every request). Left alone deliberately.
-- **~35 are `echo "$var" | <text tool>`** (`cut`, `sed`, `wc`, `jq`, `awk`, `head`, `grep`, `tail`),
-  where the transformation is clean and correct: the here-string attaches to the first command, so a
-  chain becomes `awk … <<< "$x" | sort | wc -l`. One subshell each, and — as with 6.6's `basename`
-  sites — the saving is real but unmeasurable in cold code. Worth doing as a batch; not done in the
-  2026-09-18 pass, which stopped at the reading.
+- **24 are `echo "$var" | <text tool>` in-line**, where the transformation is a straight
+  substitution: the here-string attaches to the first command, so a chain becomes
+  `awk -F'\t' '{print $1}' <<< "$session_data" | sort -u | wc -l`. **Converted** (2026-09-18, ten
+  files, module versions bumped): 04-aliases 4, `08-maintenance.sh` 6, `11e-llm-model.sh` 4,
+  `tools/lint.sh` 2, `spec-decode-bench.sh` 2, `autotune-model.sh` 2, and one each in
+  `bin/tac_hostmetrics.sh`, `09e-oc-health.sh`, `11d-llm-gpu.sh`, `tools/install-shellcheck.sh`.
+  One subshell each — real, and unmeasurable in cold code, exactly as with 6.6's `basename` sites;
+  the item is a style migration and this is the part of it that is unambiguously correct. **5 more
+  are deliberately left**: `tac_hostmetrics.sh:77,109,170`, `11d-llm-gpu.sh:967` and
+  `autotune-model.sh:797` are multi-line invocations, where the redirect would have to move to the
+  end of the command — a restructure rather than a substitution, not worth the risk to save one
+  subshell. With those five, the item's own probe returns **65** where it returned 89.
 - **4 are `echo "$x" | while read …`** (`08-maintenance.sh:561`, `run-tests.sh:343` and `:445`) and
   must **not** be converted: a here-string on the loop would move the body out of the subshell the
   pipe creates today, silently changing which variables survive. That is item 6.4's shape, and it is
