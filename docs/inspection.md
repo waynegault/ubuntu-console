@@ -3276,6 +3276,42 @@ is deliberately not worth fixing, and what was still open when this pass ended.
           command). Read 2026-09-18: no action — 20 of the 23 pairs are `command -v`, a builtin
           with no fork to save, and the 3 `nproc` pairs would need a global to save ~8 ms; see 6.13
 
+  §4–§5 DEAD-PROBE SWEEP, 2026-09-18. All 38 items were extracted from the document and their
+  Command cells tested against the tracked shell corpus (`*.sh`, `*.bashrc`, `bin/*`, comments
+  excluded). The first question is the one §5.4 and §2.3.5 both failed: *can this command run at
+  all, and can its control go red?*
+
+    **22 of 38 carry no command** — "Inspect …", "Address each finding" — so they cannot fail;
+    that is the item's shape rather than a defect, but it means none of them is evidence either
+    (§3.1's rule). The 16 runnable ones include two that are already the canonical gates —
+    `bash -n` (4.1.1) and shellcheck (4.1.2), both inside `tools/lint.sh`, which 4.3.3 names
+    directly — so **14 were swept**.
+
+    **None errored.** The 2.3.5/6.2/6.3 invalid-regex class does not recur here. Three findings
+    came out of reading what they returned:
+
+    * **4.2.1 is non-discriminating.** `grep -nE '&&.*\|\||.*&&[^&]'` returns **844** lines, of
+      which **731** match only the second alternative — an ordinary `cmd && cmd2` — because
+      `.*&&[^&]` means precisely "contains `&&` not followed by `&`". The item is about *golfed*
+      `&&`/`||` branching and §18.3 baselines it at 41, so the probe cannot tell the 41 from the
+      844 and that baseline is not reproducible from it. Read the hits as `&&` uses, not defects.
+    * **4.2.8 is non-discriminating the same way.** `grep -n 'function.*function\|function.*()'`
+      returns **303** lines while **316** lines in the corpus contain `function`: the second
+      alternative matches any line with `function` before a later `()` — a plain definition —
+      where the item asks about *nested* functions.
+    * **4.1.5's single hit is a false positive**, and it is the same line that defeated §6.9's
+      probe: `scripts/05-ui-engine.sh:200` is a case-style list of shell builtin *names*
+      (`…|echo|enable|help|let|mapfile|…`), where `let` is a name being compared, not a deprecated
+      `let` construct. The item's real answer is zero deprecated constructs.
+
+    Two non-zero results are *correct* and are recorded so a later pass does not "fix" them:
+    **4.3.11 returns 2** OPENCLAW_ROOT occurrences, which is exactly what the item describes — the
+    compatibility alias (`01-constants.sh:56`, carrying an explicit `# DEPRECATION:` comment naming
+    OC_ROOT) and the display at `09e-oc-health.sh:727` that labels it deprecated. And 4.2.5, 4.2.6,
+    4.2.4, 5.1, 5.2, 5.8, 5.9 and 5.12 are **listers, not deciders**: they enumerate candidate
+    lines, while each item's Expected is a judgement the probe cannot make. 4.3.4 is hybrid
+    (`grep … then search usages`) and was not run as a single command.
+
   ACTIONED, not backlogged — 4.3.4's dead code. `__llm_median_from_list` and
   `__llm_stddev_from_list` had no caller anywhere in the tree and neither is in
   11b's `@exports`; only a tautological existence assertion kept them alive. Both
