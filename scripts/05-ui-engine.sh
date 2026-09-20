@@ -2,7 +2,7 @@
 # ─── Module: 05-ui-engine ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 5. UI HELPER ENGINE
 # ==============================================================================
@@ -466,7 +466,7 @@ function __hRow() {
             "${C_Text}" "$cmd_pad_str" "$line1" \
             "$line1_pad_str" \
             "${C_BoxBg}${BOX_V}${C_Reset}"
-        local remaining="${desc:$desc_width}"
+        local remaining="${desc:desc_width}"
     fi
 
     # Continuation lines for long descriptions
@@ -482,7 +482,7 @@ function __hRow() {
                 "${C_Text}" "$chunk" \
                 "$pad_str" \
                 "${C_BoxBg}${BOX_V}${C_Reset}"
-            remaining="${remaining:$desc_width}"
+            remaining="${remaining:desc_width}"
             if [[ -n "$remaining" ]]; then continue; else break; fi
         done
     fi

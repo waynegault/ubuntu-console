@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 42
+# Module Version: 43
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -2754,7 +2754,7 @@ function __model_recommend() {
             score_display=$(( -10#${score_padded#-} ))
         elif [[ "$score_padded" =~ ^[0-9]+$ ]]
         then
-            score_display=$((10#$score_padded))
+            score_display=$((10#${score_padded}))
         fi
         printf "  %-4s %-28s %-7s %-8s %-9s %-7s %s (%s)\n" \
             "$rec_num" "${rec_name:0:28}" "$rec_size" "$rec_quant" "${rec_arch:0:9}" \

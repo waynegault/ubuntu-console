@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091  # the module loop sources _module-list.sh entries by name
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -207,8 +207,12 @@ if [[ -z "$_tac_env_prev_exit" ]] \
     trap __tac_env_cleanup_bg_pids EXIT
 else
     _tac_env_prev_head="${_tac_env_prev_exit% EXIT}"
-    eval "${_tac_env_prev_head%\'}; __tac_env_cleanup_bg_pids' EXIT"
-    unset _tac_env_prev_head
+    # A literal ' (or \') inside a parameter-expansion pattern defeats
+    # tree-sitter-bash and cost this whole file its parse; the quote is held in a
+    # variable instead, which parses identically.
+    _tac_env_sq="'"
+    eval "${_tac_env_prev_head%"${_tac_env_sq}"}; __tac_env_cleanup_bg_pids' EXIT"
+    unset _tac_env_prev_head _tac_env_sq
 fi
 unset _tac_env_prev_exit
 
