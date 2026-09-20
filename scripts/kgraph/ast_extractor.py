@@ -329,6 +329,57 @@ def _extract_python_defs(root_node, code: bytes, rel_path: str, file_id: str,
                     builder.add_edge({"source": file_id, "target": nid, "label": "imports", "confidence": "EXTRACTED"})
 
 
+# Bash functions that invoke a function NAME handed to them as an argument.  Such a
+# call sits in argument position, so the `command_name` query never sees it and the
+# dispatched function reads as uncalled — that shape accounted for most of this
+# repo's call-orphans.  Only names listed here are treated this way: inferring "this
+# function runs its argument" in general would over-connect, because plenty of
+# functions take a name they never invoke.  Each entry is verified by reading it:
+#   scripts/07-telemetry.sh  _telemetry              — runs "$@"
+#   scripts/11e-llm-model.sh __bench_run_with_timeout — declares and runs "$1"
+_BASH_DISPATCHERS = {
+    "_telemetry",
+    "__bench_run_with_timeout",
+}
+
+
+def _extract_dispatched_calls(grammar_lang: Any, root_node, code: bytes, file_id: str,
+                              builder: GraphBuilder, seen_calls: set[str]) -> None:
+    """Record function names passed to a known dispatcher as call references.
+
+    The edge is deliberately the ordinary call shape — file -> ast_call -> ast_func —
+    so `_link_call_defs` resolves it against the whole corpus by name and no new
+    resolution machinery is needed.
+    """
+    for node, tag in _query_captures(grammar_lang, BASH_QUERIES["function_call"], root_node):
+        if tag != "call":
+            continue
+        dispatcher = _node_text(node, code).strip()
+        if dispatcher not in _BASH_DISPATCHERS or node.parent is None:
+            continue
+        command = node.parent.parent
+        if command is None:
+            continue
+        for child in command.children:
+            if child.type != "word":
+                continue
+            name = _node_text(child, code).strip()
+            # Bare words only: a quoted/variable/substituted argument is not a
+            # function name we can resolve statically.
+            if not name or name == dispatcher or name in seen_calls:
+                continue
+            if any(ch in name for ch in "$`|;&<>()'\" "):
+                continue
+            seen_calls.add(name)
+            nid = f"ast_call:{slugify(name)}"
+            builder.add_node({
+                "id": nid, "label": name, "type": "call",
+                "language": "bash", "source": "ast", "confidence": "EXTRACTED",
+            })
+            builder.add_edge({"source": file_id, "target": nid, "label": "calls",
+                              "confidence": "EXTRACTED"})
+
+
 def _extract_calls(root_node, code: bytes, lang: str, rel_path: str,
                    file_id: str, builder: GraphBuilder) -> None:
     """Extract function/method call references."""
@@ -358,6 +409,9 @@ def _extract_calls(root_node, code: bytes, lang: str, rel_path: str,
                 "language": lang, "source": "ast", "confidence": "EXTRACTED",
             })
             builder.add_edge({"source": file_id, "target": nid, "label": "calls", "confidence": "EXTRACTED"})
+
+    if lang == "bash":
+        _extract_dispatched_calls(grammar_lang, root_node, code, file_id, builder, seen_calls)
 
 
 def _resolve_import_edges(file_node_ids: dict[str, str], graph: Graph,

@@ -1204,3 +1204,47 @@ class TestRegistryAdapter(unittest.TestCase):
             nids = [n.id for n in nodes]
             self.assertIn('open_loop:loop-1', nids)
             self.assertIn('open_loop:loop-2', nids)
+
+
+class TestDispatcherCallEdges(unittest.TestCase):
+    """A function name handed to a known dispatcher is a real call — in argument position.
+
+    `command_name` capture cannot see it, so before the dispatcher allowlist these
+    functions read as uncalled; that shape accounted for part of this repo's
+    call-orphan set. The edge is the ordinary file -> ast_call -> ast_func chain, so
+    the existing whole-corpus name resolution binds it with no extra machinery.
+    """
+
+    def test_dispatched_name_is_recorded_and_resolved(self):
+        from kgraph.ast_extractor import _BASH_DISPATCHERS, extract_repo_graph
+
+        dispatcher = sorted(_BASH_DISPATCHERS)[0]
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, 'mod.sh'), 'w') as f:
+                f.write(
+                    '#!/usr/bin/env bash\n'
+                    f'{dispatcher}() {{ "$@"; }}\n'
+                    '__target_fn() { echo t; }\n'
+                    f'run() {{ {dispatcher} __target_fn; }}\n'
+                )
+            graph = extract_repo_graph(td)
+        edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
+        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:target-fn'), edges)
+        self.assertIn(('ast_call:target-fn', 'calls', 'ast_func:target-fn'), edges)
+
+    def test_only_bare_word_arguments_become_calls(self):
+        """A quoted or substituted argument is not statically resolvable, so no edge."""
+        from kgraph.ast_extractor import _BASH_DISPATCHERS, extract_repo_graph
+
+        dispatcher = sorted(_BASH_DISPATCHERS)[0]
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, 'mod.sh'), 'w') as f:
+                f.write(
+                    '#!/usr/bin/env bash\n'
+                    f'{dispatcher}() {{ "$@"; }}\n'
+                    'fn_name=some_thing\n'
+                    f'run() {{ {dispatcher} "$fn_name"; }}\n'
+                )
+            graph = extract_repo_graph(td)
+        targets = {e['target'] for e in graph['edges'] if e['label'] == 'calls'}
+        self.assertNotIn('ast_call:some-thing', targets)
