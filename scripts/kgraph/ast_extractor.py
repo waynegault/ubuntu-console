@@ -11,6 +11,7 @@ suitable for merging into the main kgraph via ``GraphBuilder``.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -380,6 +381,83 @@ def _extract_dispatched_calls(grammar_lang: Any, root_node, code: bytes, file_id
                               "confidence": "EXTRACTED"})
 
 
+# A trap handler is shell code held in a STRING, so the `command_name` capture never
+# saw the commands inside it.  scripts/11e-llm-model.sh's __bench_cleanup is the case
+# that surfaced: it is defined inside another function and invoked ONLY from
+# `trap '...; __bench_cleanup; ...' INT|TERM`, so it read as a call-orphan with no
+# caller anywhere.  Handler text is re-parsed with the bash grammar and its command
+# names recorded as ordinary calls, so the existing whole-corpus name resolution
+# binds them with no extra machinery.
+_TRAP_STRING_NODES = {"raw_string", "string"}
+_BASH_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+
+
+def _trap_handler_node(command):
+    """The handler argument of a `trap` command: its first child after the name."""
+    seen_name = False
+    for child in command.children:
+        if not seen_name:
+            seen_name = child.type == "command_name"
+            continue
+        if child.type in (";", "comment"):
+            continue
+        return child
+    return None
+
+
+def _shell_command_names(grammar_lang: Any, source: str) -> list[str]:
+    """The command-position words in a snippet of shell source (a trap handler)."""
+    if not source.strip():
+        return []
+    snippet = source.encode("utf-8")
+    parser = Parser(grammar_lang)
+    names = []
+    for node, tag in _query_captures(grammar_lang, BASH_QUERIES["function_call"],
+                                     parser.parse(snippet).root_node):
+        if tag != "call":
+            continue
+        name = _node_text(node, snippet).strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _extract_trap_handlers(grammar_lang: Any, root_node, code: bytes, file_id: str,
+                           builder: GraphBuilder, seen_calls: set[str]) -> None:
+    """Record the calls made from `trap '<handler>' SIGNAL` handler strings."""
+    for node, tag in _query_captures(grammar_lang, BASH_QUERIES["function_call"], root_node):
+        if tag != "call" or _node_text(node, code).strip() != "trap" or node.parent is None:
+            continue
+        command = node.parent.parent
+        if command is None:
+            continue
+        handler = _trap_handler_node(command)
+        if handler is None:
+            continue
+        if handler.type in _TRAP_STRING_NODES:
+            # An expansion inside the quotes is a name that cannot be resolved
+            # statically — same rule as a quoted dispatcher argument.
+            if any("expansion" in child.type for child in handler.children):
+                continue
+            raw = _node_text(handler, code)
+            inner = raw[1:-1] if len(raw) >= 2 else ""
+        elif handler.type == "word":
+            inner = _node_text(handler, code).strip()
+        else:
+            continue
+        for name in _shell_command_names(grammar_lang, inner):
+            if name in seen_calls or not _BASH_NAME_RE.match(name):
+                continue
+            seen_calls.add(name)
+            nid = f"ast_call:{slugify(name)}"
+            builder.add_node({
+                "id": nid, "label": name, "type": "call",
+                "language": "bash", "source": "ast", "confidence": "EXTRACTED",
+            })
+            builder.add_edge({"source": file_id, "target": nid, "label": "calls",
+                              "confidence": "EXTRACTED"})
+
+
 def _extract_calls(root_node, code: bytes, lang: str, rel_path: str,
                    file_id: str, builder: GraphBuilder) -> None:
     """Extract function/method call references."""
@@ -412,6 +490,7 @@ def _extract_calls(root_node, code: bytes, lang: str, rel_path: str,
 
     if lang == "bash":
         _extract_dispatched_calls(grammar_lang, root_node, code, file_id, builder, seen_calls)
+        _extract_trap_handlers(grammar_lang, root_node, code, file_id, builder, seen_calls)
 
 
 def _resolve_import_edges(file_node_ids: dict[str, str], graph: Graph,

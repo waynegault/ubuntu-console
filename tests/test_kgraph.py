@@ -1248,3 +1248,73 @@ class TestDispatcherCallEdges(unittest.TestCase):
             graph = extract_repo_graph(td)
         targets = {e['target'] for e in graph['edges'] if e['label'] == 'calls'}
         self.assertNotIn('ast_call:some-thing', targets)
+
+
+class TestTrapHandlerCallEdges(unittest.TestCase):
+    """A call inside a `trap '<handler>' SIGNAL` string is still a call.
+
+    The handler is shell code held in a string, so a `command_name` capture never
+    saw it. scripts/11e-llm-model.sh's __bench_cleanup is defined inside another
+    function and invoked only from a trap, so it read as a call-orphan with no
+    caller anywhere. The edge is again file -> ast_call -> ast_func, so the
+    existing whole-corpus name resolution binds it with no extra machinery.
+    """
+
+    def test_quoted_handler_commands_are_recorded_and_resolved(self):
+        from kgraph.ast_extractor import extract_repo_graph
+
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, 'mod.sh'), 'w') as f:
+                f.write(
+                    '#!/usr/bin/env bash\n'
+                    '__bench_cleanup() { :; }\n'
+                    "run() { trap '__rc=0; __bench_cleanup; return 130' INT; }\n"
+                )
+            graph = extract_repo_graph(td)
+        edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
+        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:bench-cleanup'), edges)
+        self.assertIn(('ast_call:bench-cleanup', 'calls', 'ast_func:bench-cleanup'), edges)
+
+    def test_bare_word_handler_is_recorded(self):
+        from kgraph.ast_extractor import extract_repo_graph
+
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, 'mod.sh'), 'w') as f:
+                f.write(
+                    '#!/usr/bin/env bash\n'
+                    'cleanup() { :; }\n'
+                    'trap cleanup EXIT\n'
+                )
+            graph = extract_repo_graph(td)
+        edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
+        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:cleanup'), edges)
+
+    def test_signal_arguments_are_not_recorded_as_calls(self):
+        """Only the handler is a call site — the signal names are arguments."""
+        from kgraph.ast_extractor import extract_repo_graph
+
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, 'mod.sh'), 'w') as f:
+                f.write(
+                    '#!/usr/bin/env bash\n'
+                    "trap 'echo hi' INT TERM\n"
+                )
+            graph = extract_repo_graph(td)
+        targets = {e['target'] for e in graph['edges'] if e['label'] == 'calls'}
+        self.assertNotIn('ast_call:int', targets)
+        self.assertNotIn('ast_call:term', targets)
+
+    def test_substituted_handler_is_not_resolved(self):
+        """A handler held in a variable is not statically resolvable."""
+        from kgraph.ast_extractor import extract_repo_graph
+
+        with tempfile.TemporaryDirectory() as td:
+            with open(os.path.join(td, 'mod.sh'), 'w') as f:
+                f.write(
+                    '#!/usr/bin/env bash\n'
+                    'handler=cleanup_thing\n'
+                    'trap "$handler" INT\n'
+                )
+            graph = extract_repo_graph(td)
+        targets = {e['target'] for e in graph['edges'] if e['label'] == 'calls'}
+        self.assertNotIn('ast_call:cleanup-thing', targets)
