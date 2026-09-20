@@ -232,9 +232,17 @@ _selftest_run() {
         printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram'
         printf '%s\n' '1|Stub Model|stub.gguf|0.1G|Q4_K_M/q8_0|llama|0|4096|4|1024|256|1|256|native|auto|on|0|no|no|no'
     } > "$sandbox/home/.llm/models.conf"
+    # LLM_AUTOTUNE_VRAM_CAP_MULT is pinned so the probe ceiling is the fixture's
+    # DECLARED ctx and not host-dependent.  The real ceiling is min(native, start x mult),
+    # and `start` comes from live free-VRAM heuristics; on a box with less free VRAM the
+    # cap lands BELOW the fixture's window (observed: 12,288 vs the 32,768 this file's
+    # _SELFTEST_CERT_GAP_* case is written against), so the canned curve never fires and
+    # the case silently asserts nothing.  Lifting the multiplier off the native window
+    # makes the ceiling the model's own context_length on every host.
     env -u VIRTUAL_ENV HOME="$sandbox/home" LLAMA_DRIVE_ROOT="$sandbox/drive" \
         CUDA_CYCLE_FILE="$sandbox/cycles" CUDA_STALL_FILE="$sandbox/stalls" \
-        LLM_AUTOTUNE_BASELINE_GAP_MAX=999999 AUTOTUNE_SELFTEST=1 "$@" \
+        LLM_AUTOTUNE_BASELINE_GAP_MAX=999999 AUTOTUNE_SELFTEST=1 \
+        LLM_AUTOTUNE_VRAM_CAP_MULT=4194304 "$@" \
         bash "$REPO_ROOT/scripts/autotune-model.sh" 1 --workload chat 2>&1
 }
 
