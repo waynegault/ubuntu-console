@@ -1,13 +1,13 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
 # @depends: constants, llm-model, llm-runtime
 # @exports: __llm_autotune_done_for_model,
-#   __llm_autotune_profile_save, __llm_autotune_verify_winner,
+#   __llm_autotune_profile_save,
 #   __llm_autotune_estimate_ctx_start, __llm_autotune_profiles_remap_by_registry,
 #   __autotune_ctx_bounds
 # Idempotent include guard: sub-modules are sourced both by their thin
@@ -432,51 +432,8 @@ function __llm_autotune_profile_save() {
     fi
 }
 
-# ---------------------------------------------------------------------------
-# __llm_autotune_verify_winner — Final verification burn for the chosen winner.
-# Loads the winning config, runs a burn, and reports TPS.
-# @args  <model_num> <ctx> <batch> <ubatch> <parallel> <fit>
-# @stdout The measured TPS value, or empty string on failure.
-# @returns 0 when the verification burn succeeded, 1 otherwise.
-# ---------------------------------------------------------------------------
-function __llm_autotune_verify_winner() {
-    local model_num="$1"
-    local ctx="$2"
-    local batch="$3"
-    local ubatch="$4"
-    local parallel="$5"
-    local fit_target="$6"
-
-    export TAC_CTX_SIZE="$ctx"
-    export LLAMA_BATCH_SIZE="$batch"
-    export LLAMA_UBATCH_SIZE="$ubatch"
-    export LLAMA_PARALLEL_SLOTS="$parallel"
-    export LLAMA_FIT_TARGET_MB="$fit_target"
-
-    local verify_log="/tmp/autotune_verify_${model_num}.log"
-    if ! __model_use "$model_num" >"/tmp/autotune_verify_use_${model_num}.log" 2>&1
-    then
-        __model_stop >/dev/null 2>&1 || true
-        return 1
-    fi
-
-    if ! burn >"$verify_log" 2>&1
-    then
-        __model_stop >/dev/null 2>&1 || true
-        return 1
-    fi
-
-    local verify_tps
-    verify_tps=$(sed -n 's/.*Burn complete: \([0-9][0-9]*\(\.[0-9][0-9]*\)\?\) tps.*/\1/p' "$verify_log" | tail -n1)
-    __model_stop >/dev/null 2>&1 || true
-
-    if [[ "$verify_tps" =~ ^[0-9]+(\.[0-9]+)?$ ]]
-    then
-        printf '%s' "$verify_tps"
-        return 0
-    fi
-    return 1
-}
+# (Removed 2026-09-20: __llm_autotune_verify_winner — its only caller was deleted in
+# b48e8dbe ("remove dead autotune code"), leaving the definition unreferenced.)
 
 # ---------------------------------------------------------------------------
 # __kv_mb_per_1k M-bM-^@M-^T Estimate KV cache cost per 1K tokens (G-5 audit).
@@ -633,79 +590,9 @@ function __llm_autotune_estimate_ctx_start() {
     printf '%s\n' "$estimate"
 }
 
-# ---------------------------------------------------------------------------
-# __llm_autotune_overhead_file — Storage for learned model overhead fractions.
-# Format: model_file|backend|frac|samples
-# ---------------------------------------------------------------------------
-function __llm_autotune_overhead_file() {
-    printf '%s\n' "${LLM_AUTOTUNE_OVERHEAD_FILE:-$HOME/.llm/autotune-overhead.tsv}"
-}
-
-# ---------------------------------------------------------------------------
-# __llm_autotune_get_overhead_frac — Read learned overhead fraction.
-# @args <model_file> <backend>
-# @stdout Fraction (e.g. 0.83) or empty when unavailable.
-# ---------------------------------------------------------------------------
-function __llm_autotune_get_overhead_frac() {
-    local model_file="${1:-}"
-    local backend="${2:-native}"
-    local store
-    store=$(__llm_autotune_overhead_file)
-    [[ -n "$model_file" && -f "$store" ]] || return 0
-
-    awk -F'|' -v m="$model_file" -v b="$backend" '
-        $1 == m && $2 == b && $3 ~ /^[0-9]+(\.[0-9]+)?$/ {print $3; found=1; exit}
-        END {if (!found) exit 0}
-    ' "$store" 2>/dev/null || true
-}
-
-# ---------------------------------------------------------------------------
-# __llm_autotune_record_overhead_frac — Update learned overhead fraction.
-# @args <model_file> <backend> <frac>
-# ---------------------------------------------------------------------------
-function __llm_autotune_record_overhead_frac() {
-    local model_file="${1:-}"
-    local backend="${2:-native}"
-    local frac="${3:-}"
-    local store
-    store=$(__llm_autotune_overhead_file)
-
-    [[ -n "$model_file" ]] || return 0
-    [[ "$frac" =~ ^[0-9]+(\.[0-9]+)?$ ]] || return 0
-
-    # Clamp to a practical range.
-    frac=$(awk -v f="$frac" 'BEGIN{if (f < 0.20) f=0.20; if (f > 1.20) f=1.20; printf "%.4f", f}')
-
-    mkdir -p "$(dirname "$store")" 2>/dev/null || return 0
-    local tmp
-    tmp=$(mktemp "${store}.tmp.XXXXXX") || return 0
-
-    awk -F'|' -v m="$model_file" -v b="$backend" -v f="$frac" 'BEGIN{OFS="|"; done=0}
-        {
-            if ($1 == m && $2 == b) {
-                oldf=($3 ~ /^[0-9]+(\.[0-9]+)?$/) ? $3+0 : f+0
-                olds=($4 ~ /^[0-9]+$/) ? $4+0 : 0
-                news=olds+1
-                newf=((oldf*olds)+(f+0))/news
-                printf "%s|%s|%.4f|%d\n", m, b, newf, news
-                done=1
-                next
-            }
-            print
-        }
-        END {
-            if (!done) {
-                printf "%s|%s|%.4f|1\n", m, b, f+0
-            }
-        }
-    ' "$store" 2>/dev/null > "$tmp" || {
-        rm -f "$tmp"
-        return 0
-    }
-
-    mv "$tmp" "$store" 2>/dev/null || rm -f "$tmp"
-    return 0
-}
+# (Removed 2026-09-20: the learned-overhead-fraction trio — __llm_autotune_overhead_file,
+# __llm_autotune_get_overhead_frac, __llm_autotune_record_overhead_frac — all unreferenced.
+# Nothing ever read the overhead store; record's only caller went with b48e8dbe.)
 
 # ---------------------------------------------------------------------------
 # __llm_autotune_profiles_remap_by_registry — Carry tuning columns by filename.

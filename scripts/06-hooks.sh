@@ -2,7 +2,7 @@
 # ─── Module: 06-hooks ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 6. SYSTEM HOOKS & OVERRIDES
 # ==============================================================================
@@ -154,21 +154,8 @@ function __test_port() {
     ss -tln "sport = :$1" 2>/dev/null | grep -q LISTEN
 }
 
-# ---------------------------------------------------------------------------
-# __wait_for_port — Wait for a port to become available (or timeout).
-# Usage: __wait_for_port <port> <timeout_seconds>
-# Returns: 0 if port becomes available, 1 on timeout
-# ---------------------------------------------------------------------------
-function __wait_for_port() {
-    local port=$1 timeout=${2:-10} elapsed=0
-    while (( elapsed < timeout ))
-    do
-        __test_port "$port" && return 0
-        sleep 1
-        ((elapsed++))
-    done
-    return 1
-}
+# (Removed 2026-09-20: __wait_for_port — unreferenced repo-wide; callers poll with
+# the __test_port primitive or a supervisor instead.)
 
 
 # end of file

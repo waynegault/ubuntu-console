@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -535,45 +535,8 @@ function __bridge_windows_api_keys() {
     rm -f "$_warn_once_file" 2>/dev/null || true
 }
 
-# ---------------------------------------------------------------------------
-# __oc_upsert_env_kv — Create or update KEY="value" entry in an env file.
-# Preserves other lines exactly; rewrites only the matching key line.
-# ---------------------------------------------------------------------------
-function __oc_upsert_env_kv() {
-    local _file="$1"
-    local _key="$2"
-    local _val="$3"
-
-    [[ -z "$_file" || -z "$_key" ]] && return 1
-    [[ ! "$_key" =~ ^[A-Z_][A-Z0-9_]*$ ]] && return 1
-
-    mkdir -p "$(dirname "$_file")"
-    [[ -f "$_file" ]] || : > "$_file"
-
-    local _tmp
-    _tmp="${_file}.tmp.$$"
-
-    awk -v k="$_key" -v v="$_val" '
-        BEGIN { done=0 }
-        {
-            if ($0 ~ "^" k "=") {
-                gsub(/\\/, "\\\\", v)
-                gsub(/"/, "\\\"", v)
-                print k "=\"" v "\""
-                done=1
-            } else {
-                print $0
-            }
-        }
-        END {
-            if (!done) {
-                gsub(/\\/, "\\\\", v)
-                gsub(/"/, "\\\"", v)
-                print k "=\"" v "\""
-            }
-        }
-    ' "$_file" > "$_tmp" && mv "$_tmp" "$_file"
-}
+# (Removed 2026-09-20: __oc_upsert_env_kv — unreferenced repo-wide; env-file writes
+# go through __oc_sync_gateway_env_file.)
 
 # (oc-sync-keys-to-bridge removed; behavior merged into oc-refresh-keys)
 
