@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
 #===============================================================================
 # spec_dec_crossover.sh — SPEC-DEC-005 concurrency crossover measurement.
 #
@@ -166,7 +166,7 @@ aggregate_throughput() {
         _pi=$(( _i % ${#PROMPT_POOL[@]} ))
         # The prompt text is passed as argv (not re-embedded here) so
         # scripts/prompt-sets.sh stays the single source of truth for the pool.
-        "$TAC_PYTHON" - "$_port" "${PROMPT_POOL[$_pi]}" "$MAX_TOKENS" "$WORKDIR/resp-p${_parallel}-spec${_spec_on}-${_i}.json" << 'PYEOF' &
+        ( "$TAC_PYTHON" - "$_port" "${PROMPT_POOL[$_pi]}" "$MAX_TOKENS" "$WORKDIR/resp-p${_parallel}-spec${_spec_on}-${_i}.json" << 'PYEOF'
 import json, sys, urllib.request
 port, prompt, max_tokens, out = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 payload = json.dumps({
@@ -191,6 +191,7 @@ except Exception as exc:
     with open(out, "w") as f:
         json.dump({"ok": False, "error": str(exc)}, f)
 PYEOF
+        ) &
         _curl_pids+=("$!")
     done
     # Wait for the CONCURRENT REQUESTS only — a bare `wait` would also wait

@@ -3,7 +3,7 @@
 # import-windows-env.sh — Windows environment variable importer
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 8
+# Module Version: 9
 # @modular-section: import-windows-user-env
 # @depends: none (standalone; calls pwsh.exe / tasklist.exe)
 # @exports: (none — standalone script, writes to output-file)
@@ -57,21 +57,26 @@ done
 PS_ARRAY=$(printf "'%s', " "${NAMES[@]}" | sed 's/, $//')
 
 # Build PowerShell script with embedded array
-PS_SCRIPT=$(cat <<PS_EOF
-\$names = @($PS_ARRAY)
-\$result = @{}
-foreach (\$name in \$names) {
-  \$v = [Environment]::GetEnvironmentVariable(\$name, "User")
-  if ([string]::IsNullOrWhiteSpace(\$v)) {
-    \$v = [Environment]::GetEnvironmentVariable(\$name, "Machine")
+PS_SCRIPT=$(cat <<'PS_EOF'
+$names = @(__PS_ARRAY__)
+$result = @{}
+foreach ($name in $names) {
+  $v = [Environment]::GetEnvironmentVariable($name, "User")
+  if ([string]::IsNullOrWhiteSpace($v)) {
+    $v = [Environment]::GetEnvironmentVariable($name, "Machine")
   }
-  if (-not [string]::IsNullOrWhiteSpace(\$v)) {
-    \$result[\$name] = [string]\$v
+  if (-not [string]::IsNullOrWhiteSpace($v)) {
+    $result[$name] = [string]$v
   }
 }
-\$result | ConvertTo-Json -Compress
+$result | ConvertTo-Json -Compress
 PS_EOF
 )
+# Quoted delimiter, so no \$ escaping anywhere: tree-sitter-bash cannot parse an
+# escaped '$' on the same line as an array subscript, and that parse break cost
+# this file its call edges.  The names array is injected by substitution instead,
+# which emits byte-identical PowerShell.
+PS_SCRIPT="${PS_SCRIPT/__PS_ARRAY__/$PS_ARRAY}"
 
 WINDOWS_ENV_JSON=$(timeout 60 "$PS_BIN" -NoProfile -Command "$PS_SCRIPT") || {
     # A bare call hung the whole bridge after sleep/hibernate with no timeout to
