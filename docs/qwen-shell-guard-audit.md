@@ -82,6 +82,46 @@ included and nothing else is. Twelve distinct reasons exist, but the message nev
 names the **verb** or the **rule** that fired, which is why a read-only inspection
 looked identical to a mutating one.
 
+## Gap 3 — a relocated git inside a quoted substitution is denied (found 2026-09-21)
+
+Found while working on the 0.24.3 WSL-side chunk (`…LQ3XGSBU.js`), not the 0.24.0 copy
+audited above. This one is **not** the read-only allowlist, and the local patch neither
+touches it nor should: it is the `UNRECOGNIZED_PROGRAM` branch, the fail-closed case for
+programs the guard cannot model.
+
+    $ echo "$(git -C /home/wayne/investigator log --oneline -1)"
+    Daemon shell guard denied a shell command that may run a relocated Git command through an unrecognized program.
+
+Measured — every row below was run, none inferred:
+
+| Command | Result |
+|---|---|
+| `git -C <other> log --oneline -1` (top level) | ALLOW |
+| `bash <script>; git -C <other> log --oneline -1` | ALLOW |
+| `echo "<label> git"; git -C <other> log --oneline -1` | ALLOW |
+| `q=$(git -C <other> log --oneline -1); echo "$q"` | ALLOW |
+| `echo "$(git rev-parse --short HEAD)"` (session repo) | ALLOW |
+| `echo "$(git -C <other> log --oneline -1)"` | **DENY** |
+| `echo "<label>: $(git -C <other> log --oneline -1)"` | **DENY** |
+| `echo "<label vcs>: $(git -C <other> log --oneline -1)"` | **DENY** |
+
+**The trigger is the shape, not the word.** Three plausible readings were tested and
+falsified: it is not the word "git" appearing in output text (row 3 allows; row 8 denies
+without it), not command substitution as such (row 4 allows), and not nesting as such
+(row 5 allows). What is refused is a *relocated* git command inside a substitution that
+forms part of a **quoted word**, so the whole word becomes one token carrying both `git`
+and `-C`.
+
+In the chunk: `UNRECOGNIZED_PROGRAM_DENIAL` (`…LQ3XGSBU.js:347`) is raised by
+`evaluateUnrecognizedRun` (line 1570) when a run that is not a modelled relocation holds
+a token matching `GIT_WORD_PATTERN = /\bgit\b/i` (line 665) while the command carries a
+relocation marker — `TEXT_RELOCATION_MARKER_PATTERN` matches a bare `-C`.
+
+**The working shape** is capture-then-use: `q=$(git -C <other> log -1); echo "$q"`, or
+run the git command at top level. The same rule is recorded in `~/.qwen/QWEN.md` so
+sessions do not have to rediscover it. Nothing here wants a patch — the fix is the
+command.
+
 ## Local patch (applied 2026-09-16)
 
 Two hunks in the chunk, at the guard's own extension points — no logic rewritten:
@@ -135,6 +175,12 @@ The last row is the negative control that matters: the relocation control's non-
 path is untouched. Note the eleventh — the patch also allows a *cwd-relocated*
 read-only git command, which is a real widening of what the exemption covers.
 
+The Gap 3 table was measured a different way: in a live 0.24.3 session on 2026-09-21,
+against the WSL-side chunk (`…LQ3XGSBU.js`) *with this patch applied*, by running each
+command and reading the guard's verdict — not through the harness above. That is why its
+results are a statement about the shipped, patched behaviour rather than about the
+evaluator in isolation.
+
 ## Upstream asks
 
 1. **Widen `RELOCATED_READ_ONLY_GIT_SUBCOMMANDS`** to the standard read-only verbs
@@ -147,6 +193,12 @@ read-only git command, which is a real widening of what the exemption covers.
    verb>` is fine once the allowlist covers it, but a *cwd relocation into another
    repository* is refused even for `cat .git/HEAD`. That sentence would have saved
    this audit.
+4. **Model — or name — the quoted-substitution shape.** `echo "$(git -C <other> …)"` is
+   the natural way to print one field of another repository's state, and no allowlist
+   can reach it: it dies in `UNRECOGNIZED_PROGRAM` because the whole quoted word is one
+   token carrying both `git` and `-C`. Either model a substitution whose only command is
+   a read-only relocated git command, or make the refusal say that the quoted
+   substitution is what triggered it.
 
-None of these weaken the control; the first two make it usable, the third makes its
-behaviour predictable.
+None of these weaken the control; the first two make it usable, and the last two make
+its behaviour predictable.
