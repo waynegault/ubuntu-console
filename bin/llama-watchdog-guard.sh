@@ -24,6 +24,9 @@
 #
 # OPT-OUT: `touch /dev/shm/llama-watchdog-guard.pause` suspends the guard for a
 #   deliberate, non-bench stop.  `rm` the file to resume.
+#
+# AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 1
 
 set -euo pipefail
 
@@ -103,3 +106,5 @@ with open(path, "w") as fh:
 PY
 rm -f "$STRIKES"
 exit 0
+
+# end of file
