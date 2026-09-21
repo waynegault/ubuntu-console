@@ -8,7 +8,7 @@
 #        ./tools/lint.sh --files F  (an explicit list of files)
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 16
+# Module Version: 17
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -300,6 +300,7 @@ then
     if ! command -v shellcheck >/dev/null 2>&1
     then
         echo "  FAIL  shellcheck not installed - cannot run static analysis" >&2
+        echo "        Install the PINNED release: sudo tools/install-shellcheck.sh" >&2
         exit 2
     fi
     echo "=== ShellCheck (explicit files) ==="
