@@ -3323,6 +3323,40 @@ is deliberately not worth fixing, and what was still open when this pass ended.
   not a verdict. The §3–§4 figures are direct counts (grep/parse), except 4.2.4,
   which that pass read a block at a time.
 
+  RE-DERIVED 2026-09-21 — 4.2.4, 8.2.2, 4.2.1, after the "do not fix it during a
+  correctness pass" instruction above was lifted for these three. All three come back
+  as no-action, and in each case the table's own figure is wrong:
+
+    4.2.4   10 case blocks have no `*)` arm, not 9 — counted after applying the item's
+            own criterion, under which a comment explaining the absence satisfies it
+            (run-tests.sh:263 carries one). The first probe got this wrong twice: it
+            missed that comment, and separately credited `Platform*`-style globs as
+            defaults. All 10 are deliberate filters or early-returns — an interpreter
+            allow-list (bin/gpu-busy.sh:203), a case-style name reject list
+            (05-ui-engine.sh:194), an `--json/--wait` parser (gpu-busy.sh:316), two
+            offset tables (docs-sync-check.sh:72,100), a `*.bats` dispatch
+            (tools/lint.sh:300), two skip-lists (gpu-busy.sh:132, run-tests.sh:304)
+            and a status counter (run-tests.sh:241) — and each already carries an
+            explanatory comment immediately above, so a `*)` arm would be a no-op or
+            a behaviour change. No action. Note the item's probe (`grep -A5 'case.*in'`)
+            cannot answer its own question: it never looks for `*`.
+    8.2.2   19 `readonly` names are not ALL_CAPS, not 10, and they are two populations.
+            Ten are the `C_*` design tokens (03-design-tokens.sh:22-31) — a documented,
+            repo-wide API with 2,649 references and a README note about its `readonly`
+            collision guard — so renaming them is a 2,649-site breaking change for no
+            benefit. The other nine are private constants that *are* ALL_CAPS apart from
+            a leading `_` (`_COMMIT_MAX_TOKENS`, `_MODEL_SIZE_LARGE`). No action.
+    4.2.1   112 lines carry both `&&` and `||`, against this table's 41. Read rather
+            than counted: the corpus already uses the braced-group form
+            (`echo … > "$t" && { mv "$t" "$f" || rm -f "$t"; }`) which keeps the `||`
+            from firing when the middle command fails — the fragile `a && b || c` shape
+            this item exists to catch is not what is there. No action.
+
+  The four figures this block corrects (9→10, 10→19, 41→112, and 6.4/6.8/6.13 above)
+  are themselves the argument for the order these items should be taken in: re-derive
+  one at a time with a probe that has a control that can go red, then read what it
+  returns, then decide — exactly as the 2026-09-18 block had to do.
+
   TWO ITEMS ARE STANDARDS DECISIONS, NOT MIGRATIONS:
 
     * 8.2.1 asks for `name() {` while the repo is 301 `function name` to 84 `name()`
