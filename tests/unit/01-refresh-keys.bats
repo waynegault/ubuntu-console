@@ -355,3 +355,22 @@ CFG
     run grep -cE 'set-environment (WIN_TOKEN|SSH_PASSWORD|TAILSCALE_API_KEY)=' "$SYSTEMCTL_LOG"
     [ "$status" -ne 0 ]
 }
+
+@test "oc-refresh-keys reports an UNCONFIRMED restart rather than a silent no-op" {
+    # The runner's real failure mode (2026-09-21): `systemd-run --user` cannot reach a
+    # user bus — "Failed to connect to bus: No medium found" — so the restart body never
+    # executes and the gateway is left stale.  The refresh must SAY the restart is
+    # unconfirmed rather than report success.  Before setup() mocked systemd-run this
+    # path could not be reached from here at all, which is exactly why the file's three
+    # restart assertions passed locally and failed on CI: the mock always ran the
+    # payload, so the bus-less reality was invisible.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret' 'GEMINI_API_KEY=test-gemini-key'"
+    export GEMINI_API_KEY="test-gemini-key"
+    # A systemd-run that accepts the call and runs nothing — what a failed bus
+    # connection looks like to the caller.
+    __mock_command_local systemd-run 'exit 0'
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"restart not confirmed"* ]]
+}

@@ -106,9 +106,43 @@ config field (preflighted and written atomically; skipped when the env var is
 absent, so an unresolved ref is never created). Current mapping (defined in
 `scripts/09d-oc-agents.sh`, `__oc_apply_secret_refs`):
 
+**Web search plugins**
+
 | Config path | Env var |
 | --- | --- |
 | `plugins.entries.google.config.webSearch.apiKey` | `GEMINI_API_KEY` |
+| `plugins.entries.brave.config.webSearch.apiKey` | `BRAVE_API_KEY` |
+| `plugins.entries.tavily.config.webSearch.apiKey` | `TAVILY_API_KEY` |
+| `plugins.entries.perplexity.config.webSearch.apiKey` | `PERPLEXITY_API_KEY` |
+| `plugins.entries.xai.config.webSearch.apiKey` | `XAI_API_KEY` |
+| `plugins.entries.moonshot.config.webSearch.apiKey` | `MOONSHOT_API_KEY` |
+| `plugins.entries.firecrawl.config.webSearch.apiKey` | `FIRECRAWL_API_KEY` |
+
+**Model providers** (direct-consumption; `deepseek` authenticates through an auth
+profile instead, so it has no `models.providers` ref)
+
+| Config path | Env var |
+| --- | --- |
+| `models.providers.openai.apiKey` | `OPENAI_API_KEY` |
+| `models.providers.anthropic.apiKey` | `ANTHROPIC_API_KEY` |
+| `models.providers.groq.apiKey` | `GROQ_API_KEY` |
+| `models.providers.moonshot.apiKey` | `MOONSHOT_API_KEY` |
+| `models.providers.openrouter.apiKey` | `OPENROUTER_API_KEY` |
+| `models.providers.xai.apiKey` | `XAI_API_KEY` |
+| `models.providers.qwen.apiKey` | `QWEN_API_KEY` |
+| `models.providers.nvidia.apiKey` | `NVIDIA_API_KEY` |
+| `models.providers.fireworks.apiKey` | `FIREWORKS_API_KEY` |
+| `models.providers.huggingface.apiKey` | `HUGGINGFACE_TOKEN` |
+
+**Tools**
+
+| Config path | Env var |
+| --- | --- |
+| `tools.web.fetch.firecrawl.apiKey` | `FIRECRAWL_API_KEY` |
+| `tools.web.search.serp.apiKey` | `SERP_API_KEY` |
+
+19 mappings in total. Keep this list in step with `entries` in
+`scripts/09d-oc-agents.sh` (`__oc_apply_secret_refs`) — that list is the source.
 
 `oc-refresh-keys` also syncs all bridged env vars to
 `~/.openclaw/gateway.systemd.env` (the gateway's `EnvironmentFile`) and

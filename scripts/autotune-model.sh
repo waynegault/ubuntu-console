@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 61
+# Module Version: 62
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1057,8 +1057,18 @@ bench_ctx() {
 # every ctx by default), ttft_probe and cleanup_gpu are stubbed, and nothing is
 # persisted — so the whole probe -> descent -> certification decision path runs
 # SERVER-FREE in seconds.  Optional knobs:
+#   _SELFTEST_FIXTURE=<case>      plant a REAL metadata fixture (make-gguf-fixture.py)
+#                                 instead of the unparseable stub, so the capacity ctx
+#                                 comes from the fixture's <arch>.context_length
 #   _SELFTEST_FLOOR_ABOVE=<ctx>  12.0 tps at/below, 5.0 above (floor descent)
 #   _SELFTEST_OOM_ABOVE=<ctx>    load fails above the ceiling (OOM path)
+#   _SELFTEST_CERT_GAP_ABOVE=<ctx>   with _SELFTEST_CERT_GAP_FACTOR=<n>: a SINGLE sample
+#                                 reads the full rate at/above <ctx> while a 5-sample
+#                                 certification reads rate/<n> — the 2026-09-17 defect the
+#                                 post-certification descent exists to catch
+# Note the probe ceiling is min(native, start x LLM_AUTOTUNE_VRAM_CAP_MULT) and `start`
+# comes from live free-VRAM heuristics, so a case that needs a specific capacity ctx must
+# pin LLM_AUTOTUNE_VRAM_CAP_MULT as well, or its canned curve never fires.
 # Exercised by tests/unit/08-autotune-workload.bats.
 #
 # Policy under test — TPS-FIRST (2026-08-29, Wayne), which SUPERSEDES the
