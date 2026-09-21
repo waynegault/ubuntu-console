@@ -57,10 +57,28 @@ def _load_grammars() -> dict:
 # ── helpers ─────────────────────────────────────────────────────────────
 
 
+# Compiled queries, keyed by (language, pattern text).  Compiling a pattern into a state
+# machine is the most expensive thing this module does: measured 2026-09-21, one
+# compilation costs ~7ms and a single extraction performed 522 of them — 3.7s of a 4.9s
+# run — because every consumer recompiled the same text, once per file.  `Language` is
+# hashable, so the key is the object itself rather than id(), which would be unsound if a
+# language were ever rebuilt.
+_QUERY_CACHE: dict[tuple[Any, str], Any] = {}
+
+
+def _compiled_query(lang: Any, query_text: str) -> Any:
+    """`Query(lang, query_text)`, compiled once per (language, pattern)."""
+    key = (lang, query_text)
+    query = _QUERY_CACHE.get(key)
+    if query is None:
+        query = Query(lang, query_text)
+        _QUERY_CACHE[key] = query
+    return query
+
+
 def _query_captures(lang: Any, query_text: str, root_node) -> list[tuple]:
     """Run a tree-sitter query and return (node, capture_name) tuples."""
-    q = Query(lang, query_text)
-    cursor = QueryCursor(q)
+    cursor = QueryCursor(_compiled_query(lang, query_text))
     results = []
     for _pattern_index, captures_dict in cursor.matches(root_node):
         for cap_name, nodes in captures_dict.items():
@@ -432,17 +450,17 @@ _BASH_DISPATCHERS = {
 }
 
 
-def _extract_dispatched_calls(grammar_lang: Any, root_node, code: bytes, file_id: str,
+def _extract_dispatched_calls(command_nodes: list, code: bytes, file_id: str,
                               builder: GraphBuilder, seen_calls: set[str]) -> None:
     """Record function names passed to a known dispatcher as call references.
 
     The edge is deliberately the ordinary call shape — file -> ast_call -> ast_func —
     so `_link_call_defs` resolves it against the whole corpus by name and no new
-    resolution machinery is needed.
+    resolution machinery is needed.  `command_nodes` is the file's `command_name` words,
+    captured once by `_extract_calls`: each consumer used to re-run this same query, which
+    recompiled it as well.
     """
-    for node, tag in _query_captures(grammar_lang, BASH_QUERIES["function_call"], root_node):
-        if tag != "call":
-            continue
+    for node in command_nodes:
         dispatcher = _node_text(node, code).strip()
         if dispatcher not in _BASH_DISPATCHERS or node.parent is None:
             continue
@@ -510,11 +528,14 @@ def _shell_command_names(grammar_lang: Any, source: str) -> list[str]:
     return names
 
 
-def _extract_trap_handlers(grammar_lang: Any, root_node, code: bytes, file_id: str,
+def _extract_trap_handlers(grammar_lang: Any, command_nodes: list, code: bytes, file_id: str,
                            builder: GraphBuilder, seen_calls: set[str]) -> None:
-    """Record the calls made from `trap '<handler>' SIGNAL` handler strings."""
-    for node, tag in _query_captures(grammar_lang, BASH_QUERIES["function_call"], root_node):
-        if tag != "call" or _node_text(node, code).strip() != "trap" or node.parent is None:
+    """Record the calls made from `trap '<handler>' SIGNAL` handler strings.
+
+    `command_nodes` is the file's `command_name` words, captured once by `_extract_calls`.
+    """
+    for node in command_nodes:
+        if _node_text(node, code).strip() != "trap" or node.parent is None:
             continue
         command = node.parent.parent
         if command is None:
@@ -561,10 +582,12 @@ def _extract_calls(root_node, code: bytes, lang: str, rel_path: str,
         return
 
     seen_calls: set[str] = set()
+    command_nodes: list = []
     for qtext in queries:
         for node, tag in _query_captures(grammar_lang, qtext, root_node):
             if tag != "call":
                 continue
+            command_nodes.append(node)
             name = _node_text(node, code)
             if not name or not name.strip() or name.strip() in seen_calls:
                 continue
@@ -577,8 +600,9 @@ def _extract_calls(root_node, code: bytes, lang: str, rel_path: str,
             builder.add_edge({"source": file_id, "target": nid, "label": "calls", "confidence": "EXTRACTED"})
 
     if lang == "bash":
-        _extract_dispatched_calls(grammar_lang, root_node, code, file_id, builder, seen_calls)
-        _extract_trap_handlers(grammar_lang, root_node, code, file_id, builder, seen_calls)
+        # One capture, three consumers: each used to re-run (and recompile) this query.
+        _extract_dispatched_calls(command_nodes, code, file_id, builder, seen_calls)
+        _extract_trap_handlers(grammar_lang, command_nodes, code, file_id, builder, seen_calls)
 
 
 def _resolve_import_edges(file_node_ids: dict[str, str], graph: Graph,
