@@ -342,6 +342,7 @@ CFG
 
     run oc-refresh-keys
     [ "$status" -eq 0 ]
+    local refresh_out="$output"   # every later `run` clobbers $output
 
     # The resolved var is pushed...
     run grep -F "set-environment GEMINI_API_KEY=test-gemini-key" "$SYSTEMCTL_LOG"
@@ -354,6 +355,14 @@ CFG
     # Nothing else leaked into the manager env either.
     run grep -cE 'set-environment (WIN_TOKEN|SSH_PASSWORD|TAILSCALE_API_KEY)=' "$SYSTEMCTL_LOG"
     [ "$status" -ne 0 ]
+
+    # ...and the unresolved var is NAMED in the report, not silently dropped: an
+    # import that exposes nothing must not look like a failed refresh
+    # (2026-09-21: TYPESAFE_API_KEY was imported and then read as "refresh-keys
+    # did not pick it up"). Assert against the saved run output — by this point
+    # $output holds the last grep's result, not the refresh's.
+    [[ "$refresh_out" == *"reach no SecretRef"* ]]
+    [[ "$refresh_out" == *"WIN_API_KEY"* ]]
 }
 
 @test "oc-refresh-keys reports an UNCONFIRMED restart rather than a silent no-op" {

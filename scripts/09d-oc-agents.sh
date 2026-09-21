@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -800,7 +800,8 @@ PY
 # --force`. Restart is signalled only when the bridged
 # values actually changed (content-hash comparison — comparing against
 # `systemctl --user show-environment` is unreliable because it ANSI-quotes
-# values that contain special characters).
+# values that contain special characters). It also NAMES the bridged vars it
+# does not inject, so the narrowing is visible instead of silent (2026-09-21).
 # ---------------------------------------------------------------------------
 function __oc_sync_gateway_env_file() {
     local _cache="$1"
@@ -824,7 +825,7 @@ function __oc_sync_gateway_env_file() {
     # resolves (see __oc_gateway_resolved_env_names). Fail-open with a warning if
     # the set cannot be computed — a config/DB hiccup must not silently starve
     # the gateway of a key it needs.
-    local _resolved _kept=() _n
+    local _resolved _kept=() _unexposed=() _n
     _resolved="$(__oc_gateway_resolved_env_names)"
     if [[ -n "$_resolved" ]]; then
         # Iterate the array directly. This used to read it back through
@@ -833,11 +834,28 @@ function __oc_sync_gateway_env_file() {
         # time — item 6.4's shape without the file it was written for.
         for _n in "${_var_names[@]}"; do
             [[ -n "$_n" ]] || continue
-            grep -qxF "$_n" <<< "$_resolved" && _kept+=("$_n")
+            if grep -qxF "$_n" <<< "$_resolved"; then
+                _kept+=("$_n")
+            else
+                _unexposed+=("$_n")
+            fi
         done
         _var_names=("${_kept[@]}")
     else
         __tac_info "Security" "[WARN: resolved-env set unavailable — pushing the full bridged set]" "$C_Warning"
+    fi
+
+    # 2026-09-21: name the bridged vars that reach no SecretRef. They are not
+    # lost — the cache and the NAS mirror keep every one — but a refresh that
+    # imports a key and then exposes nothing is indistinguishable from a refresh
+    # that failed, so the drop has to be visible. TYPESAFE_API_KEY was imported
+    # this way and read as "refresh-keys did not pick it up"; a key reaches the
+    # gateway only once something consumes it as an env-backed SecretRef.
+    # Reported before the early return below, so the all-dropped case reports too.
+    if ((${#_unexposed[@]})); then
+        local _unexposed_names
+        printf -v _unexposed_names '%s, ' "${_unexposed[@]}"
+        __tac_info "Gateway env" "[${#_unexposed[@]} bridged var(s) reach no SecretRef — not injected: ${_unexposed_names%, }]" "$C_Warning"
     fi
     ((${#_var_names[@]})) || return 0
 
