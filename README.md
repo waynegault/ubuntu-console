@@ -489,7 +489,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1077 total tests: 723 BATS + 354 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1078 total tests: 724 BATS + 354 Python).
 
 ### Running Tests
 
@@ -1083,7 +1083,7 @@ where it was last present.)
 ├── tests/
 │   ├── conftest.py                    # Pytest config — BATS lock serialization, VS Code discovery guard
 │   ├── _paths.py                      # Shared sys.path bootstrap for kgraph imports
-│   ├── tactical-console.bats          # BATS full suite (386 tests, ~5-15 min)
+│   ├── tactical-console.bats          # BATS full suite (387 tests, ~5-15 min)
 │   ├── tactical-console-fast.bats     # Fast subset (62 tests, ~2 min)
 │   ├── tactical-console-function-availability.bats  # Function availability checks (2 tests)
 │   ├── test_bats_bridge.py            # BATS→pytest bridge: exposes each @test as an individual pytest test
@@ -1344,7 +1344,7 @@ runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 62 tests)
-- **Full tests:** `bats tests/tactical-console.bats` (386 BATS unit tests)
+- **Full tests:** `bats tests/tactical-console.bats` (387 BATS unit tests)
 - **Unit suites (82 tests in CI):** CI runs `tests/unit/01`, `02`, `09`–`14`; nightly adds `05`–`08`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host.
 - **Integration suites (127 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety) with three modes — whole repo (default), `--staged` (staged `.sh`, used by the pre-commit hook) and `--files F...` (an explicit list, used by the BATS suites) — so the shellcheck flags live in exactly one place, and shellcheck runs `-x --source-path`, which lets the module-graph pass follow the modules by name so the SC1090/SC1091 class needs no suppression *there* — the loaders' own computed paths, the optional files they source, and the tests' run-time generated copies still carry one narrow directive each (item 17.1 of `docs/inspection.md` counts 20 such lines across 13 files as of 2026-09-18, down from 68; re-measure with that item's own command, and note a looser grep over-counts, because several module headers *document* a removed file-wide disable without carrying one). shellcheck itself is pinned to 0.11.0 via `tools/install-shellcheck.sh`, which CI runs so local and CI diagnostics cannot drift (0.9.0 reported SC2317 where 0.11.0 reports SC2329 for the same code). The Python side is pinned the same way: CI installs `ruff==0.15.20`, because an unpinned `ruff` took a newer release whose rule set flagged code the venv's 0.15.20 passes — pinning the version, rather than disabling a rule, is what makes local and CI agree. There is no `[tool.ruff]` config in the repo, so ruff's default rule set is what runs.
