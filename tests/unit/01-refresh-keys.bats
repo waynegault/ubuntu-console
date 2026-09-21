@@ -35,6 +35,15 @@ setup() {
     export SYSTEMCTL_LOG="$TAC_TEST_TMPDIR/systemctl_calls.log"
     __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; case \"\$*\" in *is-active*) echo active;; esac; exit 0"
 
+    # Mock systemd-run so the deferred gateway restart (step 7) actually runs its
+    # payload here.  The real command needs a LIVE user systemd session: without
+    # XDG_RUNTIME_DIR + DBUS_SESSION_BUS_ADDRESS it fails with "Failed to connect to
+    # bus: No medium found", the restart body never runs, and the mocked openclaw is
+    # never invoked — so this file's restart assertions passed only on a machine with
+    # a session bus and failed on the CI runner, whose .env sets only LANG.  Same mock
+    # as tests/integration/05-refresh-keys.bats.
+    __mock_command_local systemd-run 'while [[ "${1:-}" == --* ]]; do shift; done; exec "$@"'
+
     # Source only required modules for oc-refresh-keys to keep the harness stable.
     # shellcheck source=scripts/01-constants.sh
     source "$REPO_ROOT/scripts/01-constants.sh"
