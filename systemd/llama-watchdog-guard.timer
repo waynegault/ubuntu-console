@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the llama-watchdog supervision guard every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=Llama Watchdog Supervision Guard (re-arm the watchdog when nothing claims the GPU)
+Documentation=file:%h/ubuntu-console/systemd/llama-watchdog-guard.README.md
+After=llama-watchdog.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/llama-watchdog-guard.sh
