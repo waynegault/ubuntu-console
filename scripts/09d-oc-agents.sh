@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -793,10 +793,11 @@ PY
 }
 
 # ---------------------------------------------------------------------------
-# __oc_sync_gateway_env — Push bridged env vars into the systemd user manager
-# environment (the secrets channel) and update OPENCLAW_SERVICE_MANAGED_ENV_KEYS
-# in the systemd unit. The gateway (a user service) inherits the manager env, so
-# no plaintext env file is needed. Restart is signalled only when the bridged
+# __oc_sync_gateway_env_file — Push bridged env vars into the systemd user manager
+# environment (the secrets channel), which the gateway (a user service) inherits.
+# It deliberately does NOT rewrite the unit or gateway.systemd.env — see step 2 for
+# why, and reconcile a drifted managed-key list with `openclaw gateway install
+# --force`. Restart is signalled only when the bridged
 # values actually changed (content-hash comparison — comparing against
 # `systemctl --user show-environment` is unreliable because it ANSI-quotes
 # values that contain special characters).
@@ -969,9 +970,11 @@ function oc-refresh-keys() {
         fi
     fi
 
-    # 3. Sync gateway systemd env file and managed env keys so the running
-    #    gateway (which reads from gateway.systemd.env) can resolve env-backed
-    #    SecretRefs referenced by auth profiles in agent sqlite databases.
+    # 3. Push the gateway-resolved bridged vars into the systemd user manager
+    #    environment so the running gateway can resolve env-backed SecretRefs
+    #    referenced by auth profiles in agent sqlite databases. The unit and
+    #    gateway.systemd.env are left alone (see __oc_sync_gateway_env_file,
+    #    step 2 — OpenClaw fingerprints its own unit).
     #    Without this, `openclaw doctor` reports "secret reference was not
     #    found" because the gateway process lacks the env vars.
     #    Also re-assert env.shellEnv (worker-side secret resolution) — see
