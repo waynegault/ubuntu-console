@@ -11,20 +11,22 @@ from __future__ import annotations
 
 import re
 
-from .constants import CONCEPT_ALIASES, STOPWORDS
+from .constants import (
+    AST_EDGE_LABELS,
+    AST_NODE_TYPES,
+    CONCEPT_ALIASES,
+    CURATED_EDGE_LABELS,
+    STOPWORDS,
+)
 from .life_index import load_life_index
 from .models import Graph
 
 # ── Label / type constants ─────────────────────────────────────────────
-
-CURATED_EDGE_LABELS = frozenset({
-    "covers topic", "mentions actor", "authored by", "references file",
-    "file mentions actor", "file authored by", "has project", "has decision",
-    "has issue", "has outcome",
-})
-
-AST_EDGE_LABELS = frozenset({"defines", "calls", "imports", "resolves_to"})
-AST_NODE_TYPES = frozenset({"function", "class", "call", "module", "variable"})
+# CURATED_EDGE_LABELS, AST_EDGE_LABELS and AST_NODE_TYPES are declared once in
+# constants.py and imported above rather than redefined here.  They used to be
+# module-level frozensets in this file, which is how the concept-alias sets
+# drifted apart once already; validate.py checks the same objects this module
+# uses, so a divergent copy is no longer possible.
 
 WEAK_NODE_LABELS = frozenset({
     "created", "updated", "watched", "watch", "identified", "audited",

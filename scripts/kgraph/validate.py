@@ -18,6 +18,12 @@ import sys
 
 from pydantic import ValidationError
 
+from .constants import (
+    EDGE_LABEL_PREFIXES,
+    EDGE_LABELS,
+    NODE_TYPES,
+    VOCABULARY_VERSION,
+)
 from .models import Graph
 
 # ── Security limits ─────────────────────────────────────────────────────
@@ -86,6 +92,59 @@ def _check_xss(data: dict) -> list[dict]:
     return errors
 
 
+# ── Vocabulary ──────────────────────────────────────────────────────────
+
+
+def _check_vocabulary(graph: dict) -> list[dict]:
+    """Report node types and edge labels outside the declared vocabulary.
+
+    REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural Patterns"
+         (Partha Sarkar, TDS, 2026-09-20) — https://towardsdatascience.com/graphrag-a-practitioners-guide-to-6-advanced-architectural-patterns/
+
+    Challenge 2 of the article: "a minimal, rigid ontology ... version control
+    and strict governance ... the LLM should be restricted from inventing new
+    node labels on the fly".  Before this check the graph could carry a label no
+    module understood, and the only symptom was that the element silently
+    dropped out of whichever view applied the matching rule — the same way the
+    concept-alias sets drifted here undetected.
+
+    Reported at WARNING, not error, on purpose: an unrecognised label does not
+    make a payload unsafe, and failing here would reject an otherwise valid
+    graph instead of making the drift visible.  validate_graph_payload() still
+    rejects only severity == "error", so the MCP pre-flight contract is
+    unchanged.
+    """
+    findings: list[dict] = []
+    checks = (
+        ("nodes", "type", NODE_TYPES, ()),
+        ("edges", "label", EDGE_LABELS, EDGE_LABEL_PREFIXES),
+    )
+    for collection, field, declared, prefixes in checks:
+        items = graph.get(collection, [])
+        if not isinstance(items, list):
+            continue
+        counts: dict[str, int] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+            if not isinstance(value, str) or not value:
+                continue
+            if value in declared or (prefixes and value.startswith(prefixes)):
+                continue
+            counts[value] = counts.get(value, 0) + 1
+        for value, count in sorted(counts.items()):
+            findings.append({
+                "severity": "warning",
+                "message": (
+                    f"{collection}[{field}] '{value}' ({count}x) is not in the "
+                    f"declared vocabulary v{VOCABULARY_VERSION} — no projection "
+                    f"or confidence rule will match it"
+                ),
+            })
+    return findings
+
+
 # ── Validation ──────────────────────────────────────────────────────────
 
 
@@ -122,6 +181,9 @@ def validate_graph(graph: dict) -> list[dict]:
 
     # XSS check on raw data
     errors.extend(_check_xss(graph))
+
+    # Vocabulary membership — the declared set lives in constants.py
+    errors.extend(_check_vocabulary(graph))
 
     # Pydantic schema validation
     try:

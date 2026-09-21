@@ -74,3 +74,58 @@ LOW_VALUE_CONCEPTS = frozenset(_concept_config.get("low_value_semantic_concepts"
 WRAPPER_TERMS = frozenset(_concept_config.get("canonical_wrapper_terms", []))
 AGENT_ROLES: dict[str, str] = _concept_config.get("agent_roles", {})
 STOPWORDS = frozenset(_concept_config.get("stopwords", []))
+
+# ── Node/edge vocabulary — ONE declaration, ONE home ────────────────────────
+# REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural Patterns"
+#      (Partha Sarkar, TDS, 2026-09-20) — https://towardsdatascience.com/graphrag-a-practitioners-guide-to-6-advanced-architectural-patterns/
+#
+# The article's Challenge 2 discipline is "a minimal, rigid ontology ... version
+# control and strict governance ... the LLM should be restricted from inventing
+# new node labels on the fly".  The console had the algorithm and none of the
+# governance: CURATED_EDGE_LABELS, AST_EDGE_LABELS and AST_NODE_TYPES lived in
+# projection.py while label literals sat in memory_import.py, confidence.py and
+# query.py, and nothing checked membership.  That is the same shape that already
+# cost a real drift incident here — the concept-alias sets were duplicated across
+# models.py, projection.py and memory_import.py and diverged by seven keys (see
+# the loader note above; docs/inspection.md 11.14).
+#
+# Declared in constants.py for the same reason the alias loader is: this module
+# imports nothing local, so no consumer can create an import cycle.  validate.py
+# now checks membership against these sets, so a fourth consumer or a new
+# extractor path cannot introduce a label that no other module understands and
+# have the node silently drop out of derived views.
+#
+# Bump VOCABULARY_VERSION whenever a member is added or removed, and write it
+# into the graph DB at build time, so a graph built under an older label set is
+# identifiable rather than merely wrong.
+VOCABULARY_VERSION = "1"
+
+CURATED_EDGE_LABELS = frozenset({
+    "covers topic", "mentions actor", "authored by", "references file",
+    "file mentions actor", "file authored by", "has project", "has decision",
+    "has issue", "has outcome",
+})
+
+AST_EDGE_LABELS = frozenset({"defines", "calls", "imports", "resolves_to"})
+AST_NODE_TYPES = frozenset({"function", "class", "call", "module", "variable"})
+
+# Node types seen in the projected graph: the curated memory-derived set, the
+# AST set, and "unknown" — which models.py assigns by default, so it is a
+# member rather than a finding (a node with no type is worth seeing, but it is
+# expected, and flagging every one would bury the labels that are not).
+NODE_TYPES = frozenset({
+    "actor", "chunk", "decision", "file", "issue", "memory", "organization",
+    "outcome", "person", "place", "project", "topic", "unknown",
+}) | AST_NODE_TYPES
+
+# Labels that are families rather than fixed strings, e.g. "summarizes <topic>".
+# Kept separate from EDGE_LABELS because a prefix cannot be a set member, but it
+# still has to be declared or every summarises-edge reads as unknown.
+EDGE_LABEL_PREFIXES = ("summarizes ",)
+
+# Everything an edge label may be: the curated set, the AST set, and the two
+# literals projection/confidence match by name.
+EDGE_LABELS = frozenset(
+    CURATED_EDGE_LABELS | AST_EDGE_LABELS | {"semantic summary", "semantic related"}
+)
+

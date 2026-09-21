@@ -1412,3 +1412,85 @@ class TestShebangDiscovery(unittest.TestCase):
         defines = [e for e in graph['edges']
                    if e['source'] == 'ast_file:mod-sh' and e['label'] == 'defines']
         self.assertEqual(len(defines), 1)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class VocabularyValidationTests(unittest.TestCase):
+    """validate.py reports node types / edge labels outside the declared vocabulary.
+
+    REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural Patterns"
+    (Partha Sarkar, TDS, 2026-09-20) — https://towardsdatascience.com/graphrag-a-practitioners-guide-to-6-advanced-architectural-patterns/
+    The article's Challenge 2 discipline: one minimal, rigid ontology, so a label
+    that no module understands cannot enter the graph unnoticed.
+    """
+
+    @staticmethod
+    def _vocabulary_findings(graph):
+        from kgraph.validate import validate_graph
+
+        return [e for e in validate_graph(graph)
+                if 'vocabulary' in e.get('message', '')]
+
+    def test_unknown_edge_label_is_reported_once_per_label_with_a_count(self):
+        findings = self._vocabulary_findings({
+            'nodes': [{'id': 1, 'label': 'a'}, {'id': 2, 'label': 'b'}],
+            'edges': [{'from': 1, 'to': 2, 'label': 'teleports to'},
+                      {'from': 2, 'to': 1, 'label': 'teleports to'}],
+        })
+        self.assertEqual(len(findings), 1)
+        self.assertIn("'teleports to' (2x)", findings[0]['message'])
+        self.assertEqual(findings[0]['severity'], 'warning')
+
+    def test_unknown_node_type_is_reported(self):
+        findings = self._vocabulary_findings({
+            'nodes': [{'id': 1, 'label': 'a', 'type': 'gadget'}],
+            'edges': [],
+        })
+        self.assertEqual(len(findings), 1)
+        self.assertIn('gadget', findings[0]['message'])
+
+    def test_declared_vocabulary_is_not_reported(self):
+        """Curated, AST, the two literals and the prefix family all stay quiet."""
+        findings = self._vocabulary_findings({
+            'nodes': [
+                {'id': 1, 'label': 'a', 'type': 'file'},
+                {'id': 2, 'label': 'b', 'type': 'topic'},
+                {'id': 3, 'label': 'c', 'type': 'function'},
+            ],
+            'edges': [
+                {'from': 1, 'to': 2, 'label': 'covers topic'},
+                {'from': 1, 'to': 3, 'label': 'defines'},
+                {'from': 3, 'to': 2, 'label': 'semantic summary'},
+                {'from': 3, 'to': 1, 'label': 'summarizes releases'},
+            ],
+        })
+        self.assertEqual(findings, [])
+
+    def test_vocabulary_sets_are_one_object_across_modules(self):
+        """The drift guard: the sets validate.py checks are the ones projection uses.
+
+        This is the assertion that would have caught the concept-alias incident,
+        where models.py, projection.py and memory_import.py each carried a copy
+        and the copies diverged by seven keys before anyone noticed.
+        """
+        import kgraph.constants as constants
+        import kgraph.projection as projection
+
+        self.assertIs(projection.CURATED_EDGE_LABELS, constants.CURATED_EDGE_LABELS)
+        self.assertIs(projection.AST_EDGE_LABELS, constants.AST_EDGE_LABELS)
+        self.assertIs(projection.AST_NODE_TYPES, constants.AST_NODE_TYPES)
+        for label_set in (constants.CURATED_EDGE_LABELS, constants.AST_EDGE_LABELS):
+            self.assertTrue(label_set <= constants.EDGE_LABELS)
+
+    def test_unknown_label_does_not_reject_the_payload(self):
+        """A warning, not an error: the MCP pre-flight contract is unchanged."""
+        from kgraph.validate import validate_graph_payload
+
+        valid, msg = validate_graph_payload({
+            'nodes': [{'id': 1, 'label': 'a'}],
+            'edges': [{'from': 1, 'to': 1, 'label': 'teleports to'}],
+        })
+        self.assertTrue(valid)
+        self.assertEqual(msg, '')
