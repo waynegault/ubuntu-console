@@ -12,7 +12,7 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install shellcheck (pinned)
         run: sudo tools/install-shellcheck.sh
@@ -53,7 +53,7 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install bats
         run: |
@@ -83,7 +83,7 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Verify README matches repo facts
         run: tools/docs-sync-check.sh
@@ -93,7 +93,7 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install bats
         run: |
@@ -131,7 +131,7 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Numbered modules discovered
         run: |
@@ -191,10 +191,10 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 

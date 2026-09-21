@@ -12,7 +12,7 @@ jobs:
     runs-on: [self-hosted, wsl-console]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install bats
         run: |
@@ -58,7 +58,7 @@ jobs:
                tests/integration/e2e-bench-autotune.bats
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
