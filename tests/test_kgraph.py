@@ -144,12 +144,12 @@ class KGraphTests(unittest.TestCase):
                 f.write('undefined_cmd\n')
             g = kgraph.extract_repo_graph(src)
         edges = {(e['source'], e['target'], e.get('label')) for e in g['edges']}
-        self.assertIn(('ast_call:helper', 'ast_func:helper', 'calls'), edges)
-        # calls to names with no definition are not linked.  The id now carries the
-        # name verbatim, so this must name `undefined_cmd` exactly — a slugged
+        self.assertIn(('ast_call:bash:helper', 'ast_func:bash:helper', 'calls'), edges)
+        # calls to names with no definition are not linked.  The id carries the language
+        # AND the name verbatim, so this must name `undefined_cmd` exactly — a slugged
         # `undefined-cmd` can no longer be produced, and asserting NotIn on it would
         # pass for the wrong reason.
-        self.assertNotIn(('ast_call:undefined_cmd', 'ast_func:undefined_cmd', 'calls'), edges)
+        self.assertNotIn(('ast_call:bash:undefined_cmd', 'ast_func:bash:undefined_cmd', 'calls'), edges)
 
     def test_graph_db_round_trip_supports_basename_path(self):
         kgraph = load_kgraph_module()
@@ -1232,8 +1232,8 @@ class TestDispatcherCallEdges(unittest.TestCase):
                 )
             graph = extract_repo_graph(td)
         edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
-        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:__target_fn'), edges)
-        self.assertIn(('ast_call:__target_fn', 'calls', 'ast_func:__target_fn'), edges)
+        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:bash:__target_fn'), edges)
+        self.assertIn(('ast_call:bash:__target_fn', 'calls', 'ast_func:bash:__target_fn'), edges)
 
     def test_only_bare_word_arguments_become_calls(self):
         """A quoted or substituted argument is not statically resolvable, so no edge."""
@@ -1250,7 +1250,7 @@ class TestDispatcherCallEdges(unittest.TestCase):
                 )
             graph = extract_repo_graph(td)
         targets = {e['target'] for e in graph['edges'] if e['label'] == 'calls'}
-        self.assertNotIn('ast_call:some_thing', targets)
+        self.assertNotIn('ast_call:bash:some_thing', targets)
 
 
 class TestTrapHandlerCallEdges(unittest.TestCase):
@@ -1275,8 +1275,8 @@ class TestTrapHandlerCallEdges(unittest.TestCase):
                 )
             graph = extract_repo_graph(td)
         edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
-        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:__bench_cleanup'), edges)
-        self.assertIn(('ast_call:__bench_cleanup', 'calls', 'ast_func:__bench_cleanup'), edges)
+        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:bash:__bench_cleanup'), edges)
+        self.assertIn(('ast_call:bash:__bench_cleanup', 'calls', 'ast_func:bash:__bench_cleanup'), edges)
 
     def test_bare_word_handler_is_recorded(self):
         from kgraph.ast_extractor import extract_repo_graph
@@ -1290,7 +1290,7 @@ class TestTrapHandlerCallEdges(unittest.TestCase):
                 )
             graph = extract_repo_graph(td)
         edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
-        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:cleanup'), edges)
+        self.assertIn(('ast_file:mod-sh', 'calls', 'ast_call:bash:cleanup'), edges)
 
     def test_signal_arguments_are_not_recorded_as_calls(self):
         """Only the handler is a call site — the signal names are arguments."""
@@ -1304,8 +1304,8 @@ class TestTrapHandlerCallEdges(unittest.TestCase):
                 )
             graph = extract_repo_graph(td)
         targets = {e['target'] for e in graph['edges'] if e['label'] == 'calls'}
-        self.assertNotIn('ast_call:INT', targets)
-        self.assertNotIn('ast_call:TERM', targets)
+        self.assertNotIn('ast_call:bash:INT', targets)
+        self.assertNotIn('ast_call:bash:TERM', targets)
 
     def test_substituted_handler_is_not_resolved(self):
         """A handler held in a variable is not statically resolvable."""
@@ -1320,7 +1320,7 @@ class TestTrapHandlerCallEdges(unittest.TestCase):
                 )
             graph = extract_repo_graph(td)
         targets = {e['target'] for e in graph['edges'] if e['label'] == 'calls'}
-        self.assertNotIn('ast_call:cleanup_thing', targets)
+        self.assertNotIn('ast_call:bash:cleanup_thing', targets)
 
 
 class TestSymbolIdsDoNotCollide(unittest.TestCase):
@@ -1346,11 +1346,11 @@ class TestSymbolIdsDoNotCollide(unittest.TestCase):
                 )
             graph = extract_repo_graph(td)
         ids = {n['id'] for n in graph['nodes']}
-        self.assertIn('ast_func:__model_recommend', ids)
-        self.assertIn('ast_func:model-recommend', ids)
+        self.assertIn('ast_func:bash:__model_recommend', ids)
+        self.assertIn('ast_func:bash:model-recommend', ids)
         edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
-        self.assertIn(('ast_call:__model_recommend', 'calls', 'ast_func:__model_recommend'), edges)
-        self.assertIn(('ast_call:model-recommend', 'calls', 'ast_func:model-recommend'), edges)
+        self.assertIn(('ast_call:bash:__model_recommend', 'calls', 'ast_func:bash:__model_recommend'), edges)
+        self.assertIn(('ast_call:bash:model-recommend', 'calls', 'ast_func:bash:model-recommend'), edges)
 
     def test_case_is_preserved_in_ids(self):
         from kgraph.ast_extractor import extract_repo_graph
@@ -1360,8 +1360,8 @@ class TestSymbolIdsDoNotCollide(unittest.TestCase):
                 f.write('#!/usr/bin/env bash\nLOG_ONE() { :; }\nlog_one() { :; }\n')
             graph = extract_repo_graph(td)
         ids = {n['id'] for n in graph['nodes']}
-        self.assertIn('ast_func:LOG_ONE', ids)
-        self.assertIn('ast_func:log_one', ids)
+        self.assertIn('ast_func:bash:LOG_ONE', ids)
+        self.assertIn('ast_func:bash:log_one', ids)
 
     def test_unsafe_characters_are_escaped_not_dropped(self):
         """The `:` builtin used to land on the empty id ``ast_call:``."""
@@ -1372,8 +1372,8 @@ class TestSymbolIdsDoNotCollide(unittest.TestCase):
                 f.write('#!/usr/bin/env bash\n: "noop"\n')
             graph = extract_repo_graph(td)
         ids = {n['id'] for n in graph['nodes']}
-        self.assertNotIn('ast_call:', ids)
-        self.assertIn('ast_call:~_3a', ids)
+        self.assertNotIn('ast_call:bash:', ids)
+        self.assertIn('ast_call:bash:~_3a', ids)
 
 
 class TestShebangDiscovery(unittest.TestCase):
@@ -1400,7 +1400,7 @@ class TestShebangDiscovery(unittest.TestCase):
         self.assertIn('ast_file:bin-wrapper', ids)
         self.assertNotIn('ast_file:bin-not-a-script', ids)
         edges = {(e['source'], e['label'], e['target']) for e in graph['edges']}
-        self.assertIn(('ast_file:bin-wrapper', 'calls', 'ast_call:helper_fn'), edges)
+        self.assertIn(('ast_file:bin-wrapper', 'calls', 'ast_call:bash:helper_fn'), edges)
 
     def test_a_file_its_extension_already_claims_is_not_added_twice(self):
         from kgraph.ast_extractor import extract_repo_graph

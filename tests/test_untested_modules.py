@@ -2618,41 +2618,45 @@ class TestAstExtractor(unittest.TestCase):
     def test_extracts_python_definitions_imports_and_calls(self):
         result = kgraph.extract_repo_graph(self.root)
         ids = self._ids(result)
-        # The fixture declares `class Greeter`; ids keep the name verbatim (case
-        # included), so this is Greeter — not the old lowercased 'greeter' slug.
-        for nid in ("ast_file:main-py", "ast_func:hello", "ast_class:Greeter", "ast_module:os",
-                    "ast_module:helper", "ast_call:print"):
+        # The fixture declares `class Greeter`.  Ids carry the language AND the name
+        # verbatim, so this is ast_class:python:Greeter — not the old lowercased
+        # 'greeter' slug, which also refused to round-trip.
+        for nid in ("ast_file:main-py", "ast_func:python:hello", "ast_class:python:Greeter",
+                    "ast_module:python:os", "ast_module:python:helper", "ast_call:python:print"):
             self.assertIn(nid, ids)
         edges = self._edges(result)
-        for edge in (("ast_file:main-py", "ast_func:hello", "defines"),
-                     ("ast_file:main-py", "ast_class:Greeter", "defines"),
-                     ("ast_file:main-py", "ast_module:os", "imports"),
-                     ("ast_file:main-py", "ast_call:print", "calls")):
+        for edge in (("ast_file:main-py", "ast_func:python:hello", "defines"),
+                     ("ast_file:main-py", "ast_class:python:Greeter", "defines"),
+                     ("ast_file:main-py", "ast_module:python:os", "imports"),
+                     ("ast_file:main-py", "ast_call:python:print", "calls")):
             self.assertIn(edge, edges)
         by_id = {n["id"]: n for n in result["nodes"]}
-        self.assertTrue(by_id["ast_func:aio"]["async"])
-        self.assertFalse(by_id["ast_func:hello"]["async"])
+        self.assertTrue(by_id["ast_func:python:aio"]["async"])
+        self.assertFalse(by_id["ast_func:python:hello"]["async"])
         # Two identical calls collapse onto one node and one edge.
         self._write("twice.py", "def go():\n    pass\n\ngo()\ngo()\n")
         calls = [(e["source"], e["target"], e["label"])
                  for e in kgraph.extract_repo_graph(self.root)["edges"]
                  if e["source"] == "ast_file:twice-py" and e["label"] == "calls"]
-        self.assertEqual(calls, [("ast_file:twice-py", "ast_call:go", "calls")])
+        self.assertEqual(calls, [("ast_file:twice-py", "ast_call:python:go", "calls")])
 
     def test_extracts_bash_variables_imports_and_call_links(self):
         result = kgraph.extract_repo_graph(self.root, include_variables=True)
-        self.assertIn("ast_func:greet", self._ids(result))
-        # The fixture declares MY_VAR.  Ids now keep the name verbatim — case and
-        # underscores included — so this is MY_VAR, not the old lowercased 'my-var'
-        # slug, which could not round-trip.
-        self.assertIn("ast_var:MY_VAR", self._ids(result))
-        self.assertNotIn("ast_var:MY_VAR", self._ids(kgraph.extract_repo_graph(self.root)))
+        self.assertIn("ast_func:bash:greet", self._ids(result))
+        # The fixture declares MY_VAR.  Ids carry the language and keep the name verbatim
+        # — case and underscores included — so this is ast_var:bash:MY_VAR, not the old
+        # lowercased 'my-var' slug, which could not round-trip.
+        self.assertIn("ast_var:bash:MY_VAR", self._ids(result))
+        self.assertNotIn("ast_var:bash:MY_VAR", self._ids(kgraph.extract_repo_graph(self.root)))
         edges = self._edges(result)
-        self.assertIn(("ast_file:run-sh", "ast_func:greet", "defines"), edges)
-        self.assertIn(("ast_module:helper", "ast_file:helper-py", "resolves_to"), edges)
-        self.assertIn(("ast_call:greet", "ast_func:greet", "calls"), edges)
-        # print() has no definition in the tree, so it stays unlinked.
-        self.assertNotIn(("ast_call:print", "ast_func:print", "calls"), edges)
+        self.assertIn(("ast_file:run-sh", "ast_func:bash:greet", "defines"), edges)
+        self.assertIn(("ast_module:python:helper", "ast_file:helper-py", "resolves_to"), edges)
+        self.assertIn(("ast_call:bash:greet", "ast_func:bash:greet", "calls"), edges)
+        # print() has no definition in the tree, so it stays unlinked — and a Python call
+        # can only ever resolve to a Python definition, which is the point of the
+        # language segment.
+        self.assertNotIn(("ast_call:python:print", "ast_func:python:print", "calls"), edges)
+        self.assertNotIn(("ast_call:python:print", "ast_func:bash:print", "calls"), edges)
 
     def test_maps_extra_extensions_and_skips_hidden_and_unreadable(self):
         self._write("script.zsh", "greet_zsh() {\n  echo hi\n}\n")
@@ -2662,17 +2666,17 @@ class TestAstExtractor(unittest.TestCase):
         os.chmod(locked, 0o000)
         self.addCleanup(os.chmod, locked, 0o644)
         ids = self._ids(kgraph.extract_repo_graph(self.root))
-        self.assertIn("ast_func:greet_zsh", ids)  # .zsh maps to the bash grammar
-        self.assertIn("ast_func:pywfunc", ids)  # .pyw maps to the python grammar
-        self.assertNotIn("ast_func:locked", ids)  # unreadable file is skipped
-        self.assertIn("ast_func:hello", ids)  # other files still parse
-        self.assertNotIn("ast_func:hiddenfunc", ids)  # .hidden/ is ignored
+        self.assertIn("ast_func:bash:greet_zsh", ids)  # .zsh maps to the bash grammar
+        self.assertIn("ast_func:python:pywfunc", ids)  # .pyw maps to the python grammar
+        self.assertNotIn("ast_func:python:locked", ids)  # unreadable file is skipped
+        self.assertIn("ast_func:python:hello", ids)  # other files still parse
+        self.assertNotIn("ast_func:python:hiddenfunc", ids)  # .hidden/ is ignored
 
     def test_subdirs_max_files_empty_and_meta(self):
         subdirs = kgraph.extract_repo_graph(self.root, subdirs=["pkg"])
-        self.assertIn("ast_func:pkgfunc", self._ids(subdirs))
-        self.assertIn("ast_func:deepfunc", self._ids(subdirs))
-        self.assertNotIn("ast_func:hello", self._ids(subdirs))
+        self.assertIn("ast_func:python:pkgfunc", self._ids(subdirs))
+        self.assertIn("ast_func:python:deepfunc", self._ids(subdirs))
+        self.assertNotIn("ast_func:python:hello", self._ids(subdirs))
         self.assertEqual(kgraph.extract_repo_graph(self.root, max_files=1)["_meta"]["files_parsed"], 1)
         with tempfile.TemporaryDirectory() as empty:
             result = kgraph.extract_repo_graph(empty)
@@ -2685,8 +2689,8 @@ class TestAstExtractor(unittest.TestCase):
         from kgraph import ast_extractor
         with mock.patch.object(ast_extractor, "_LANGUAGES", {"bash": ast_extractor._LANGUAGES["bash"]}):
             ids = self._ids(kgraph.extract_repo_graph(self.root))
-        self.assertNotIn("ast_func:hello", ids)  # python grammar dropped
-        self.assertIn("ast_func:greet", ids)
+        self.assertNotIn("ast_func:python:hello", ids)  # python grammar dropped
+        self.assertIn("ast_func:bash:greet", ids)
 
 
 class TestAstExtractorWithoutParser(unittest.TestCase):
@@ -3187,7 +3191,7 @@ class TestCliMainModes(_CliHarness):
             with open(os.path.join(td, "other.py"), "w", encoding="utf-8") as f:
                 f.write("def other():\n    pass\n")
             _, out, _ = self._run(["kgraph", "--ast", "--repo", td])
-            self.assertIn('"ast_func:hello"', out)
+            self.assertIn('"ast_func:python:hello"', out)
             target = os.path.join(td, "ast.json")
             _, out, _ = self._run(["kgraph", "--ast", "--repo", td, "--ast-vars",
                                    "--ast-max-files", "5", "--ast-subdirs", "parser",
@@ -3195,8 +3199,8 @@ class TestCliMainModes(_CliHarness):
             self.assertIn(f"Saved to {target}", out)
             with open(target, encoding="utf-8") as f:
                 ids = {n["id"] for n in json.load(f)["nodes"]}
-        self.assertIn("ast_func:hello", ids)
-        self.assertNotIn("ast_func:other", ids)  # --ast-subdirs restricted the scan
+        self.assertIn("ast_func:python:hello", ids)
+        self.assertNotIn("ast_func:python:other", ids)  # --ast-subdirs restricted the scan
 
     def test_wiring_errors_summary_and_show_all(self):
         from kgraph import wiring
