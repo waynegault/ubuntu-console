@@ -203,12 +203,53 @@ def c_funcs_over_100(text):
     return n
 
 
+EXIT_LITERAL = re.compile(r"\b(?:exit|return)\s+([2-9]|[1-9][0-9]+)\b")
+LOCAL_DECL = re.compile(r"^\s*(?:local|declare)\s+([A-Za-z_][A-Za-z0-9_]*)")
+MIXED_CASE = re.compile(r"^[a-z][A-Za-z0-9_]*[A-Z]")
+
+
+def c_unexplained_exit_codes(text):
+    """9.7 — a literal exit/return code other than 0/1 with no comment on or above it.
+
+    An exit code is part of a function's interface, so an unexplained non-0/1 code is the
+    one item in the style set that a reader actually needs; the repo's own style is a
+    comment on the line or directly above it.
+    """
+    lines = _lines(text)
+    n = 0
+    for i, line in enumerate(lines):
+        if COMMENT.match(line) or not EXIT_LITERAL.search(line):
+            continue
+        if "#" in line:
+            continue
+        if i and COMMENT.match(lines[i - 1]):
+            continue
+        n += 1
+    return n
+
+
+def c_mixedcase_locals(text):
+    """4.3.6 — a `local`/`declare` name in mixedCase rather than snake_case.
+
+    ALL_CAPS locals are not counted: those are constants-as-locals, which the item is not
+    about (it asks for lower_snake_case for ordinary locals).
+    """
+    n = 0
+    for line in _code_lines(text):
+        m = LOCAL_DECL.match(line)
+        if m and MIXED_CASE.match(m.group(1)):
+            n += 1
+    return n
+
+
 COUNTERS = [
     ("4.2.4", "case blocks with neither a *) arm nor an explanatory comment", c_case_no_default),
     ("4.2.6", "whole `for … do … done` loop on one line", c_for_oneline),
+    ("4.3.6", "`local`/`declare` names in mixedCase", c_mixedcase_locals),
     ("6.7", "`[ … ]` instead of `[[ … ]]`", c_single_bracket),
     ("8.1.8", "non-comment lines over 120 characters", c_long_lines),
     ("9.5", "function definitions with no comment directly above", c_funcs_without_comment),
+    ("9.7", "literal exit/return codes other than 0/1 with no comment", c_unexplained_exit_codes),
     ("10.4", "functions longer than 100 lines", c_funcs_over_100),
     ("10.7", "hand-written `>&2` on echo/printf instead of a helper", c_adhoc_stderr),
 ]
@@ -216,9 +257,11 @@ COUNTERS = [
 FIXTURES = {
     "4.2.4": ("case $x in\na) : ;;\nesac\n", 1),
     "4.2.6": ("for i in 1 2; do echo $i; done\n", 1),
+    "4.3.6": ("f() {\n    local camelCase=1\n    local snake_case=2\n    local UPPER=3\n}\n", 1),
     "6.7": ("[ -f x ] && echo y\n[[ -f x ]] && echo y\n", 1),
     "8.1.8": ("x=" + "a" * 130 + "\n" + "y=short\n", 1),
     "9.5": ("# noted\nnoted() { :; }\nbare() { :; }\n", 1),
+    "9.7": ("exit 0\nreturn 1\nexit 3\n# justified above\nreturn 4\nexit 5 # inline\n", 1),
     "10.4": ("f() {\n" + "\n".join(["  :"] * 105) + "\n}\n", 1),
     "10.7": ("echo bad >&2\nhelper warn\n", 1),
 }

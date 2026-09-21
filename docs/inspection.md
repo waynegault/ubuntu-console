@@ -3367,11 +3367,11 @@ is deliberately not worth fixing, and what was still open when this pass ended.
 
   The counters are deliberately simple, stable patterns over the tracked shell corpus
   (`*.sh`, `*.bashrc`, `bin/*`, comment-only lines excluded): comparable across revisions,
-  not a semantic measurement of quality. Seven items are ratcheted, and their baselines —
-  which supersede the table above wherever they differ — are 4.2.4 10, 4.2.6 12, 6.7 14,
-  8.1.8 254, 9.5 90, 10.4 61, 10.7 156. The §8–§10 figures above were already flagged as
-  approximations by the 2026-09-16 pass, so most of these being higher is expected rather
-  than new drift.
+  not a semantic measurement of quality. Nine items are ratcheted, and their baselines —
+  which supersede the table above wherever they differ — are 4.2.4 10, 4.2.6 12, 4.3.6 31,
+  6.7 14, 8.1.8 254, 9.5 90, 9.7 45, 10.4 61, 10.7 156. The §8–§10 figures above were
+  already flagged as approximations by the 2026-09-16 pass, so most of these being higher
+  is expected rather than new drift.
 
   Three of the ten items first counted are deliberately NOT ratcheted — 4.2.1 (`&&` with
   `||`), 4.2.5 (`if …; then` one-liners) and 8.2.2 (`readonly` not ALL_CAPS) — because
@@ -3392,18 +3392,57 @@ is deliberately not worth fixing, and what was still open when this pass ended.
   INLINE comment — a `#` preceded by a space anywhere in the line — so it under-counted.
   The counter's rule (drop comment-only lines, keep inline ones) is the recorded one.
 
-  TWO ITEMS ARE STANDARDS DECISIONS, NOT MIGRATIONS:
+  THE TWO STANDARDS DECISIONS ARE MADE (2026-09-21), and in both cases the ITEM is
+  withdrawn rather than the code migrated: the item's expectation is the minority or the
+  unused idiom, so a migration would be churn without a beneficiary.
 
-    * 8.2.1 asks for `name() {` while the repo is 301 `function name` to 84 `name()`
-      — the majority uses the style the item does not prefer, and no file mixes them.
-    * 4.3.8 asks counters to use `declare -i`; the repo uses ZERO of them anywhere and
-      writes `local count=0; (( count++ ))` throughout.
+    * 8.2.1 — withdrawn. It asks for `name() {`; the repo is 302 `function name` to 126
+      `name()` (re-derived 2026-09-21 — the note here said 301/84, and the second figure
+      has moved), and no file mixes the two. The majority style is the house style.
+    * 4.3.8 — withdrawn. It asks counters to use `declare -i`; the repo uses ZERO anywhere
+      and writes `local x=0; (( x++ ))` throughout, which is a builtin either way.
 
-  For both, either the item changes to match the code or a migration is decided on
-  purpose. Neither should be silently "fixed" a file at a time.
+  DISPOSITION OF EVERY REMAINING ITEM (2026-09-21). Nothing is left ownerless. Of the
+  table's 27: nine ratcheted, three withdrawn, fifteen closed with a reason. The 2026-09-18
+  set (6.6, 6.11, 6.13) was closed then, and both standards decisions above are withdrawn.
 
-  This belongs in a ratchet — a guard that fails when the count RISES — not in a
-  per-pass to-do list. A number with no owner and no enforcement only grows.
+    RATCHETED (9) — baselines as listed above; growth is now a build failure:
+      4.2.4, 4.2.6, 4.3.6, 6.7, 8.1.8, 9.5, 9.7, 10.4, 10.7
+
+    WITHDRAWN (3 of the table's, 5 in total) — the expectation contradicts a deliberate
+    convention:
+      4.2.1  the population is the SAFE braced `X && { a || b; }` form
+      4.2.5  this table's own 576 sites, which it calls "idiomatic, not a defect"
+      8.2.2  the population is the documented `C_*` design-token API (2,649 references)
+      8.2.1, 4.3.8   the two standards decisions, above
+
+    CLOSED (15) — counted, read, no action:
+      6.1    no counter: the figure tracks how much text work the repo does, so any new
+             script that greps raises it — a ratchet would fail on ordinary code
+      6.4, 6.8, 6.9   closed 2026-09-18, see the block above
+      8.1.5  the same population as 4.2.5 — one pattern, one disposition
+      8.1.6  the same population as the ratcheted 4.2.6 — not counted twice
+      8.1.7  the same population as the withdrawn 4.2.1 — likewise
+      8.2.4  the three divider tiers are deliberate (module `───`, section `═══`, item
+             `---`); requiring one format would flatten a scheme that encodes level
+      9.1    git supersedes Author/Date, and the header contract this repo enforces is
+             Module Version + AI INSTRUCTION (Module Integrity)
+      9.3    the constructs are idiomatic; a comment per use is the noise the comment rule
+             forbids
+      9.8    the fact is documented once per module in its `@exports` header, which owns it
+      10.2   the literals are domain constants (ctx sizes, thread caps, byte multiples);
+             01-constants.sh names the ones that matter
+      10.5   the nested-function idiom is deliberate (`__bench_cleanup` lives inside its
+             owner until a trap calls it); a depth metric needs a real parser, and nobody
+             has asked to act on the number
+      4.2.2  `a; b` on one line is used idiomatically (guard-then-act) in the repo's own
+             hot paths
+      4.2.8  same deliberate nesting as 10.5; the notes that matter exist where the
+             handlers are traps, and the 2026-09-21 trap work documented them
+
+  This section belongs in a ratchet — a guard that fails when the count RISES — not in a
+  per-pass to-do list. A number with no owner and no enforcement only grows; the nine
+  above have an owner, and the closed ones have a reason instead.
 
 18.4 Checks this pass added
 
