@@ -12,7 +12,7 @@ import logging
 import os
 import sqlite3
 
-from .constants import MEMORY_DB_CANDIDATES
+from .constants import MEMORY_DB_CANDIDATES, VOCABULARY_VERSION
 from .html import ensure_parent_dir
 from .models import Graph, GraphBuilder
 
@@ -68,7 +68,41 @@ def init_graph_db(dbpath: str) -> None:
                 UNIQUE(source, target, label)
             )
         """)
+        # REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural
+        # Patterns" (Partha Sarkar, TDS, 2026-09-20) — the article's Challenge 2
+        # asks for ontology governance including versioning, "so a graph built
+        # under an older label set is identifiable".  Key/value rather than
+        # PRAGMA user_version so the stamp is self-describing and can carry more
+        # than one build fact later.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS graph_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
         conn.commit()
+    finally:
+        conn.close()
+
+
+def read_vocabulary_version(dbpath: str) -> str | None:
+    """Return the vocabulary version stamped into *dbpath*, or None if absent.
+
+    None means the graph predates the stamp (or was written by another tool), so
+    its labels were produced under an unknown vocabulary.
+    """
+    path = os.path.expanduser(dbpath)
+    if not os.path.exists(path):
+        return None
+    conn = sqlite3.connect(path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM graph_meta WHERE key = 'vocabulary_version'")
+        row = cur.fetchone()
+        return row[0] if row else None
+    except sqlite3.Error as exc:
+        logger.debug("No vocabulary stamp readable in %s: %s", path, exc, exc_info=True)
+        return None
     finally:
         conn.close()
 
@@ -120,6 +154,17 @@ def load_from_graph_db(dbpath: str) -> Graph:
     finally:
         conn.close()
 
+    # A graph built under a different vocabulary may carry labels this build's
+    # projection and confidence rules no longer match, so say so rather than
+    # letting the elements silently drop out of the derived views.
+    stamped = read_vocabulary_version(path)
+    if stamped != VOCABULARY_VERSION:
+        logger.warning(
+            "Graph %s was built under vocabulary %s, current is %s — labels may not "
+            "match the current projection/confidence rules; rebuild to restamp",
+            path, stamped if stamped is not None else "unstamped", VOCABULARY_VERSION,
+        )
+
     return builder.build()
 
 
@@ -157,6 +202,13 @@ def save_to_graph_db(dbpath: str, graph: Graph | dict) -> None:
                 "INSERT OR REPLACE INTO graph_edges(source, target, label, payload) VALUES (?, ?, ?, ?)",
                 (edge.source, edge.target, edge.label, json.dumps(payload) if payload else None),
             )
+
+        # Stamp which label vocabulary built this graph, so a reader can tell a
+        # graph written under an older set from a current one.
+        cur.execute(
+            "INSERT OR REPLACE INTO graph_meta(key, value) VALUES ('vocabulary_version', ?)",
+            (VOCABULARY_VERSION,),
+        )
 
         conn.commit()
     finally:

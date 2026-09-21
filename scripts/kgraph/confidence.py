@@ -11,6 +11,7 @@ via ``Graph.from_dict()``.
 
 from __future__ import annotations
 
+from .constants import is_summary_edge_label
 from .models import ConfidenceLevel, Graph, GraphEdge
 
 # Re-export for callers that imported the old string constants.
@@ -76,8 +77,9 @@ def _determine_confidence(edge: GraphEdge) -> ConfidenceLevel:
     if label in _CANONICAL_RELATION_LABELS:
         return ConfidenceLevel.INFERRED
 
-    # Summary-derived edges
-    if label.startswith("summarizes ") or label == "semantic summary":
+    # Summary-derived edges — one predicate, shared with projection.py so the
+    # two cannot drift apart on what counts as a summary edge
+    if is_summary_edge_label(label):
         return ConfidenceLevel.INFERRED
 
     # Explicitly tagged inferred

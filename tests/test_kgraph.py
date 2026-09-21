@@ -1494,3 +1494,38 @@ class VocabularyValidationTests(unittest.TestCase):
         })
         self.assertTrue(valid)
         self.assertEqual(msg, '')
+
+
+class VocabularyStampTests(unittest.TestCase):
+    """The vocabulary version is written into the graph DB at build time.
+
+    REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural Patterns"
+    (Partha Sarkar, TDS, 2026-09-20) — so a graph built under an older label set
+    is identifiable rather than merely wrong.
+    """
+
+    def test_save_stamps_the_current_vocabulary_version(self):
+        import kgraph.constants as constants
+        from kgraph.graph_db import read_vocabulary_version, save_to_graph_db
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'graph.sqlite')
+            save_to_graph_db(db, {
+                'nodes': [{'id': 'n1', 'label': 'a'}],
+                'edges': [],
+            })
+            self.assertEqual(read_vocabulary_version(db), constants.VOCABULARY_VERSION)
+
+    def test_a_table_but_no_save_reads_as_unstamped(self):
+        """None means 'built under an unknown vocabulary', not 'current'."""
+        from kgraph.graph_db import init_graph_db, read_vocabulary_version
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'graph.sqlite')
+            init_graph_db(db)
+            self.assertIsNone(read_vocabulary_version(db))
+
+    def test_missing_database_reads_as_unstamped(self):
+        from kgraph.graph_db import read_vocabulary_version
+
+        self.assertIsNone(read_vocabulary_version('/tmp/does-not-exist-kgraph.sqlite'))

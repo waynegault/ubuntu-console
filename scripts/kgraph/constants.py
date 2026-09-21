@@ -106,8 +106,25 @@ CURATED_EDGE_LABELS = frozenset({
     "has issue", "has outcome",
 })
 
-AST_EDGE_LABELS = frozenset({"defines", "calls", "imports", "resolves_to"})
+AST_EDGE_DEFINES = "defines"
+AST_EDGE_CALLS = "calls"
+AST_EDGE_IMPORTS = "imports"
+AST_EDGE_RESOLVES_TO = "resolves_to"
 AST_NODE_TYPES = frozenset({"function", "class", "call", "module", "variable"})
+AST_EDGE_LABELS = frozenset({
+    AST_EDGE_DEFINES, AST_EDGE_CALLS, AST_EDGE_IMPORTS, AST_EDGE_RESOLVES_TO,
+})
+
+# Labels that emitters write as literals, named so a consumer imports the name
+# instead of retyping the string.  Reading the emitters found two members the
+# first version of this set had missed — "related concept" (memory_import.py:472)
+# and the node type "summary" (memory_import.py:698) — which is exactly the drift
+# this declaration exists to make visible: validate.py now reports an undeclared
+# label instead of letting it pass unnoticed.
+SEMANTIC_SUMMARY_LABEL = "semantic summary"
+SEMANTIC_RELATED_LABEL = "semantic related"
+RELATED_CONCEPT_LABEL = "related concept"
+MENTIONS_ACTOR_LABEL = "mentions actor"
 
 # Node types seen in the projected graph: the curated memory-derived set, the
 # AST set, and "unknown" — which models.py assigns by default, so it is a
@@ -115,7 +132,7 @@ AST_NODE_TYPES = frozenset({"function", "class", "call", "module", "variable"})
 # expected, and flagging every one would bury the labels that are not).
 NODE_TYPES = frozenset({
     "actor", "chunk", "decision", "file", "issue", "memory", "organization",
-    "outcome", "person", "place", "project", "topic", "unknown",
+    "outcome", "person", "place", "project", "summary", "topic", "unknown",
 }) | AST_NODE_TYPES
 
 # Labels that are families rather than fixed strings, e.g. "summarizes <topic>".
@@ -123,9 +140,25 @@ NODE_TYPES = frozenset({
 # still has to be declared or every summarises-edge reads as unknown.
 EDGE_LABEL_PREFIXES = ("summarizes ",)
 
-# Everything an edge label may be: the curated set, the AST set, and the two
-# literals projection/confidence match by name.
+# Everything an edge label may be: the curated set, the AST set, and the
+# semantic/derived labels the emitters and confidence rules match by name.
 EDGE_LABELS = frozenset(
-    CURATED_EDGE_LABELS | AST_EDGE_LABELS | {"semantic summary", "semantic related"}
+    CURATED_EDGE_LABELS | AST_EDGE_LABELS | {
+        SEMANTIC_SUMMARY_LABEL,
+        SEMANTIC_RELATED_LABEL,
+        RELATED_CONCEPT_LABEL,
+        MENTIONS_ACTOR_LABEL,
+    }
 )
+
+
+def is_summary_edge_label(label: str) -> bool:
+    """True for the summary-edge family: the fixed label or any "summarizes *".
+
+    projection.py and confidence.py each carried this test separately, which is
+    the shape that drifted before. One predicate, one place: if the family ever
+    changes, both consumers change with it.
+    """
+    return label == SEMANTIC_SUMMARY_LABEL or label.startswith(EDGE_LABEL_PREFIXES)
+
 

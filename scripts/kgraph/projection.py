@@ -17,6 +17,7 @@ from .constants import (
     CONCEPT_ALIASES,
     CURATED_EDGE_LABELS,
     STOPWORDS,
+    is_summary_edge_label,
 )
 from .life_index import load_life_index
 from .models import Graph
@@ -117,7 +118,7 @@ def _is_curated_edge(edge: dict, effective_threshold: float) -> bool:
     label = str(edge.get("label", "") or "")
     if _edge_visibility(edge) == "raw" or _edge_quality(edge) == "supporting":
         return False
-    if label in CURATED_EDGE_LABELS or label == "semantic summary" or label.startswith("summarizes "):
+    if label in CURATED_EDGE_LABELS or is_summary_edge_label(label):
         return True
     if label.startswith("related") and edge.get("semantic_score") is not None:
         score = edge.get("semantic_score")
