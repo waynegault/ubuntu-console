@@ -8,7 +8,7 @@
 #        ./tools/lint.sh --files F  (an explicit list of files)
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 15
+# Module Version: 16
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -20,6 +20,27 @@ if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
     echo "lint.sh $VERSION"
     exit 0
 fi
+
+# --- Resolve the PINNED shellcheck, never PATH order --------------------------
+# Diagnostics move between shellcheck releases, so the version is pinned:
+# tools/install-shellcheck.sh installs v0.11.0 into /usr/local/bin, and CI runs
+# it so local and CI cannot disagree (README's Lint entry).  That shadowing only
+# works when /usr/local/bin precedes /usr/bin on PATH -- and when it does not,
+# the same tree FAILs on a file that lints clean under the pin.  Measured
+# 2026-09-21: 0.9.0 reported SC2317 for bin/bench-timeout-runner.sh's trap-only
+# cleanup, where 0.11.0 reports SC2329 (already suppressed in that file).  Resolve
+# the pin by version rather than trusting PATH order.
+_SHELLCHECK_PIN="0.11.0"
+for _sc_dir in /usr/local/bin "$HOME/.local/bin"
+do
+    if [[ -x "$_sc_dir/shellcheck" ]] \
+       && [[ "$("$_sc_dir/shellcheck" --version 2>/dev/null | awk '/^version:/{print $2; exit}')" == "$_SHELLCHECK_PIN" ]]
+    then
+        export PATH="$_sc_dir${PATH:+:$PATH}"
+        break
+    fi
+done
+unset _sc_dir
 
 # Unicode safety check: detect non-ASCII characters in executable code lines.
 # Default: enabled (SKIP_UNICODE_CHECK=0).
@@ -219,7 +240,7 @@ then
     if ! command -v shellcheck >/dev/null 2>&1
     then
         echo "  FAIL  shellcheck not installed - cannot run static analysis" >&2
-        echo "        Install it (sudo apt install shellcheck) and retry." >&2
+        echo "        Install the PINNED release: sudo tools/install-shellcheck.sh" >&2
         exit 2
     fi
     echo "=== ShellCheck (staged) ==="
@@ -278,6 +299,7 @@ then
     if ! command -v shellcheck >/dev/null 2>&1
     then
         echo "  FAIL  shellcheck not installed - cannot run static analysis" >&2
+        echo "        Install the PINNED release: sudo tools/install-shellcheck.sh" >&2
         exit 2
     fi
     echo "=== ShellCheck (explicit files) ==="
@@ -375,7 +397,7 @@ echo "=== ShellCheck ==="
 if ! command -v shellcheck >/dev/null 2>&1
 then
     echo "  FAIL  shellcheck not installed - cannot run static analysis" >&2
-    echo "        Install it (sudo apt install shellcheck) and retry." >&2
+    echo "        Install the PINNED release: sudo tools/install-shellcheck.sh" >&2
     exit 2
 fi
 

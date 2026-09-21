@@ -398,6 +398,19 @@ EOF
         "$REPO_ROOT"/scripts/oc-update-enhanced.sh
 }
 
+@test "lint.sh resolves the pinned shellcheck despite PATH order" {
+    # Regression (2026-09-21): with /usr/bin ahead of /usr/local/bin, lint.sh
+    # used the distro shellcheck 0.9.0, which reports SC2317 where the pinned
+    # 0.11.0 reports SC2329 for bin/bench-timeout-runner.sh's trap-only cleanup
+    # -- so a file that lints clean under the pin came back as a FAIL.  The pin
+    # must be resolved by version, not inherited from PATH order.
+    [[ -x /usr/local/bin/shellcheck ]] || skip "pinned shellcheck not installed"
+    run env PATH="/usr/bin:/bin" "$REPO_ROOT/tools/lint.sh" --files \
+        "$REPO_ROOT/bin/bench-timeout-runner.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"FAIL"* ]]
+}
+
 @test "bash -n: all tools/*.sh scripts parse without syntax errors" {
     for f in "$REPO_ROOT"/tools/*.sh; do
         [[ -f "$f" ]] || continue
