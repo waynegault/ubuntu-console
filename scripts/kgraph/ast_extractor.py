@@ -11,6 +11,7 @@ suitable for merging into the main kgraph via ``GraphBuilder``.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -76,7 +77,62 @@ def _node_text(node, code: bytes) -> str:
         return ""
 
 
+# Characters that may appear in an id verbatim.  Anything else is escaped.
+_SYMBOL_SAFE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+# A shebang naming one of these shells means the file is bash, whatever it is called.
+_SHEBANG_RE = re.compile(r"#!.*\b(bash|zsh|sh)\b")
+
+
+def _symbol_slug(name: str) -> str:
+    """Id-safe, INJECTIVE encoding of a symbol name.
+
+    ``slugify`` is lossy — it lowercases AND collapses runs of non-alphanumerics to a
+    single ``-`` — so two different functions, ``__model_recommend`` and
+    ``model-recommend``, both produced ``model-recommend``.  The second definition
+    replaced the first in the graph and a call to either bound to the one surviving
+    node; six slugs collided that way (11 definitions, 6 nodes), and the mis-binding
+    was verified (a call to ``__model_recommend`` was recorded as calling
+    ``model-recommend``).  A symbol id must round-trip its name, so a name that is
+    already id-safe is kept verbatim and anything else is escaped character-wise.
+
+    The escaped form is prefixed ``~`` (the safe form can never contain one) and
+    escapes ``_`` as well as non-alphanumerics, so an escape can never be mistaken
+    for a literal name.  File ids keep using ``slugify``: a repo path is unique and
+    the slug is the readable, stable id for it.
+    """
+    if _SYMBOL_SAFE_RE.match(name):
+        return name
+    body = "".join(
+        ch if (ch.isascii() and (ch.isalnum() or ch in "-.")) else f"_{ord(ch):x}"
+        for ch in name
+    )
+    return f"~{body}"
+
+
+def _shebang_lang(path: Path) -> str | None:
+    """The language a script's shebang implies, or None.
+
+    Source files were discovered by EXTENSION alone, so this repo's nine
+    extensionless ``bin/*`` scripts were never parsed — including ``bin/tac-exec``,
+    the dispatcher every wrapper routes through.  Functions invoked only from those
+    files therefore read as call-orphans, which is a coverage gap in the graph
+    rather than dead code.
+    """
+    try:
+        with path.open("rb") as fh:
+            first = fh.readline(256)
+    except OSError as exc:
+        logger.debug("skipping unreadable script %s: %s", path, exc, exc_info=True)
+        return None
+    if not first.startswith(b"#!"):
+        return None
+    return "bash" if _SHEBANG_RE.match(first.decode("utf-8", "replace").lower()) else None
+
+
 # ── file extension → language lookup ──────────────────────────────────
+
+# Directories never walked: vendored deps, build output, caches, VCS metadata.
+_SKIP_DIRS = ("venv", "node_modules", "__pycache__", "dist", "build", ".git")
 
 EXT_LANG = {
     ".sh": "bash",
@@ -176,12 +232,30 @@ def extract_repo_graph(repo_root: str, **kwargs) -> dict:
     for ext, lang in EXT_LANG.items():
         for fpath in root.glob(f"**/*{ext}"):
             parts = fpath.relative_to(root).parts
-            if any(p.startswith(".") or p in ("venv", "node_modules", "__pycache__", "dist", "build", ".git") for p in parts):
+            if any(p.startswith(".") or p in _SKIP_DIRS for p in parts):
                 continue
             if scan_subdirs:
                 if not any(fpath.relative_to(root).as_posix().startswith(s) for s in scan_subdirs):
                     continue
             source_files.append((fpath, lang))
+
+    # Extensionless scripts: a shebang is the only signal they carry (bin/tac-exec,
+    # bin/oc-*, ...).  os.walk with pruned dirnames so the skipped trees are never
+    # descended — the extension globs above cannot prune and this repo carries ~80k
+    # ignored entries, which made an extra unpruned pass cost ~8s per extraction.
+    # Sorted dirnames keep the discovered order deterministic.
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in _SKIP_DIRS)
+        for name in sorted(filenames):
+            fpath = Path(dirpath) / name
+            if name.startswith(".") or fpath.suffix in EXT_LANG:
+                continue
+            rel = fpath.relative_to(root).as_posix()
+            if scan_subdirs and not any(rel.startswith(s) for s in scan_subdirs):
+                continue
+            shell_lang = _shebang_lang(fpath)
+            if shell_lang:
+                source_files.append((fpath, shell_lang))
 
     if max_files and len(source_files) > max_files:
         source_files = source_files[:max_files]
@@ -258,7 +332,7 @@ def _extract_bash_defs(root_node, code: bytes, rel_path: str, file_id: str,
             name = _node_text(node, code)
             if not name or not name.strip():
                 continue
-            nid = f"ast_func:{slugify(name)}"
+            nid = f"ast_func:{_symbol_slug(name)}"
             builder.add_node({
                 "id": nid, "label": name.strip(), "type": "function",
                 "language": "bash", "source": "ast", "file": rel_path,
@@ -272,7 +346,7 @@ def _extract_bash_defs(root_node, code: bytes, rel_path: str, file_id: str,
                 name = _node_text(node, code)
                 if not name or not name.strip():
                     continue
-                nid = f"ast_var:{slugify(name)}"
+                nid = f"ast_var:{_symbol_slug(name)}"
                 builder.add_node({
                     "id": nid, "label": name.strip(), "type": "variable",
                     "language": "bash", "source": "ast", "confidence": "EXTRACTED",
@@ -292,7 +366,7 @@ def _extract_python_defs(root_node, code: bytes, rel_path: str, file_id: str,
             name = _node_text(node, code)
             if not name or not name.strip():
                 continue
-            nid = f"ast_func:{slugify(name)}"
+            nid = f"ast_func:{_symbol_slug(name)}"
             parent = node.parent
             is_async = parent and parent.type == "function_definition" and any(
                 c.type == "async" for c in parent.children
@@ -309,7 +383,7 @@ def _extract_python_defs(root_node, code: bytes, rel_path: str, file_id: str,
             name = _node_text(node, code)
             if not name or not name.strip():
                 continue
-            nid = f"ast_class:{slugify(name)}"
+            nid = f"ast_class:{_symbol_slug(name)}"
             builder.add_node({
                 "id": nid, "label": name.strip(), "type": "class",
                 "language": "python", "source": "ast", "file": rel_path,
@@ -322,7 +396,7 @@ def _extract_python_defs(root_node, code: bytes, rel_path: str, file_id: str,
             if tag == "module":
                 module = _node_text(node, code)
                 if module:
-                    nid = f"ast_module:{slugify(module)}"
+                    nid = f"ast_module:{_symbol_slug(module)}"
                     builder.add_node({
                         "id": nid, "label": module.strip(), "type": "module",
                         "language": "python", "source": "ast", "confidence": "EXTRACTED",
@@ -372,7 +446,7 @@ def _extract_dispatched_calls(grammar_lang: Any, root_node, code: bytes, file_id
             if any(ch in name for ch in "$`|;&<>()'\" "):
                 continue
             seen_calls.add(name)
-            nid = f"ast_call:{slugify(name)}"
+            nid = f"ast_call:{_symbol_slug(name)}"
             builder.add_node({
                 "id": nid, "label": name, "type": "call",
                 "language": "bash", "source": "ast", "confidence": "EXTRACTED",
@@ -449,7 +523,7 @@ def _extract_trap_handlers(grammar_lang: Any, root_node, code: bytes, file_id: s
             if name in seen_calls or not _BASH_NAME_RE.match(name):
                 continue
             seen_calls.add(name)
-            nid = f"ast_call:{slugify(name)}"
+            nid = f"ast_call:{_symbol_slug(name)}"
             builder.add_node({
                 "id": nid, "label": name, "type": "call",
                 "language": "bash", "source": "ast", "confidence": "EXTRACTED",
@@ -481,7 +555,7 @@ def _extract_calls(root_node, code: bytes, lang: str, rel_path: str,
             if not name or not name.strip() or name.strip() in seen_calls:
                 continue
             seen_calls.add(name.strip())
-            nid = f"ast_call:{slugify(name)}"
+            nid = f"ast_call:{_symbol_slug(name)}"
             builder.add_node({
                 "id": nid, "label": name.strip(), "type": "call",
                 "language": lang, "source": "ast", "confidence": "EXTRACTED",
@@ -522,7 +596,7 @@ def _link_call_defs(builder: GraphBuilder) -> None:
         name = (node.label or "").strip()
         if not name:
             continue
-        func_id = f"ast_func:{slugify(name)}"
+        func_id = f"ast_func:{_symbol_slug(name)}"
         if builder.has_node(func_id):
             builder.add_edge({
                 "source": node.id,

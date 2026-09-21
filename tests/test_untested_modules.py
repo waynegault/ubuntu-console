@@ -2618,12 +2618,14 @@ class TestAstExtractor(unittest.TestCase):
     def test_extracts_python_definitions_imports_and_calls(self):
         result = kgraph.extract_repo_graph(self.root)
         ids = self._ids(result)
-        for nid in ("ast_file:main-py", "ast_func:hello", "ast_class:greeter", "ast_module:os",
+        # The fixture declares `class Greeter`; ids keep the name verbatim (case
+        # included), so this is Greeter — not the old lowercased 'greeter' slug.
+        for nid in ("ast_file:main-py", "ast_func:hello", "ast_class:Greeter", "ast_module:os",
                     "ast_module:helper", "ast_call:print"):
             self.assertIn(nid, ids)
         edges = self._edges(result)
         for edge in (("ast_file:main-py", "ast_func:hello", "defines"),
-                     ("ast_file:main-py", "ast_class:greeter", "defines"),
+                     ("ast_file:main-py", "ast_class:Greeter", "defines"),
                      ("ast_file:main-py", "ast_module:os", "imports"),
                      ("ast_file:main-py", "ast_call:print", "calls")):
             self.assertIn(edge, edges)
@@ -2640,8 +2642,11 @@ class TestAstExtractor(unittest.TestCase):
     def test_extracts_bash_variables_imports_and_call_links(self):
         result = kgraph.extract_repo_graph(self.root, include_variables=True)
         self.assertIn("ast_func:greet", self._ids(result))
-        self.assertIn("ast_var:my-var", self._ids(result))
-        self.assertNotIn("ast_var:my-var", self._ids(kgraph.extract_repo_graph(self.root)))
+        # The fixture declares MY_VAR.  Ids now keep the name verbatim — case and
+        # underscores included — so this is MY_VAR, not the old lowercased 'my-var'
+        # slug, which could not round-trip.
+        self.assertIn("ast_var:MY_VAR", self._ids(result))
+        self.assertNotIn("ast_var:MY_VAR", self._ids(kgraph.extract_repo_graph(self.root)))
         edges = self._edges(result)
         self.assertIn(("ast_file:run-sh", "ast_func:greet", "defines"), edges)
         self.assertIn(("ast_module:helper", "ast_file:helper-py", "resolves_to"), edges)
@@ -2657,7 +2662,7 @@ class TestAstExtractor(unittest.TestCase):
         os.chmod(locked, 0o000)
         self.addCleanup(os.chmod, locked, 0o644)
         ids = self._ids(kgraph.extract_repo_graph(self.root))
-        self.assertIn("ast_func:greet-zsh", ids)  # .zsh maps to the bash grammar
+        self.assertIn("ast_func:greet_zsh", ids)  # .zsh maps to the bash grammar
         self.assertIn("ast_func:pywfunc", ids)  # .pyw maps to the python grammar
         self.assertNotIn("ast_func:locked", ids)  # unreadable file is skipped
         self.assertIn("ast_func:hello", ids)  # other files still parse
