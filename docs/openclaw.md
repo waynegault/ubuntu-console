@@ -87,11 +87,21 @@ bridged set **with a warning** rather than starving the gateway.
 
 ### SecretRef Sync
 
-`~/.config/environment.d/90-openclaw.conf` remains the **backing store** for
-API keys: a SecretRef does not store a secret, it references an environment
-variable that OpenClaw resolves at gateway activation. Keeping keys in the
-environment (bridged from Windows) and referencing them by name is what lets
-the plaintext copies be removed from `openclaw.json`.
+The **backing store** for API keys is the environment: a SecretRef does not
+store a secret, it references an environment variable that OpenClaw resolves at
+gateway activation. Two different things fill it, and they are not the same
+store:
+
+- `/dev/shm/tac_win_api_keys` — bridged from Windows and refreshed by
+  `oc-refresh-keys`, which also pushes the names it resolves into the systemd
+  user-manager environment. Short-lived: tmpfs, 1 h TTL.
+- `~/.config/environment.d/90-openclaw.conf` — a *static* drop-in that systemd
+  imports into the user manager at start. Nothing in this repo writes it, and
+  `oc-refresh-keys` does not refresh it; 21 of its ~30 keys have no other
+  source, so it is load-bearing — do not delete it.
+
+Keeping keys in the environment and referencing them by name is what lets the
+plaintext copies be removed from `openclaw.json`.
 
 After refreshing the environment, `oc-refresh-keys` maps a small set of
 config-managed credentials to env-backed SecretRefs using the same builder

@@ -222,11 +222,14 @@ if [[ -f "$HOME/.openclaw/secrets.env" ]]; then
     source "$HOME/.openclaw/secrets.env"
 fi
 
-# Windows-bridged env store (~/.config/environment.d/90-openclaw.conf) is the
-# canonical backing store refreshed by `oc-refresh-keys`. Source it as well so
-# env-backed gateway SecretRefs (OPENCLAW_GATEWAY_PASSWORD/OPENCLAW_GATEWAY_TOKEN)
-# resolve for CLI commands even when the /dev/shm bridge cache is stale or
-# pwsh is unavailable at shell start.
+# systemd user-environment drop-in (~/.config/environment.d/90-openclaw.conf).
+# This is NOT the Windows-bridged store, and NOT refreshed by `oc-refresh-keys`
+# (that refreshes /dev/shm/tac_win_api_keys): systemd imports this file into the
+# user manager at start, and 21 of its ~30 keys have no other source, so it is
+# their sole provider -- do not delete it. Source it as well so env-backed
+# gateway SecretRefs (OPENCLAW_GATEWAY_PASSWORD/OPENCLAW_GATEWAY_TOKEN) resolve
+# for CLI commands even when the /dev/shm bridge cache is stale or pwsh is
+# unavailable at shell start.
 if [[ -f "$HOME/.config/environment.d/90-openclaw.conf" ]]; then
     set -a
     source "$HOME/.config/environment.d/90-openclaw.conf"
