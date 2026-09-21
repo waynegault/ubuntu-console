@@ -1,12 +1,9 @@
 # docs/inspection.md §18.3 count ratchet — see tools/count-ratchet.sh
 # id<TAB>count.  A count may FALL freely; raising one is a deliberate act.
-4.2.1	142
 4.2.4	10
-4.2.5	634
-4.2.6	9
+4.2.6	12
 6.7	14
 8.1.8	254
-8.2.2	19
 9.5	90
 10.4	61
-10.7	152
+10.7	156
