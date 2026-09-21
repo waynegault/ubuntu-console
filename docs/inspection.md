@@ -3357,6 +3357,28 @@ is deliberately not worth fixing, and what was still open when this pass ended.
   one at a time with a probe that has a control that can go red, then read what it
   returns, then decide — exactly as the 2026-09-18 block had to do.
 
+  THE RATCHET (2026-09-21). This section's own closing note says these numbers belong in a
+  guard rather than a to-do list, so one now exists: `tools/count-ratchet.sh` with
+  `tools/ratchet-baseline.tsv`, invoked from `tools/lint.sh` and therefore enforced by CI's
+  lint job on the committed tree. A count that FALLS is reported so the baseline can follow
+  it; a count that RISES fails the build naming the item, both numbers and the two
+  legitimate resolutions. `--selftest` exercises every counter against a fixture whose
+  expected value is written down — a counter nobody can make go red is not evidence (§3.1).
+
+  The counters are deliberately simple, stable patterns over the tracked shell corpus
+  (`*.sh`, `*.bashrc`, `bin/*`, comment-only lines excluded): comparable across revisions,
+  not a semantic measurement of quality. Their enforced baselines — which supersede the
+  table above wherever they differ — are 4.2.1 142, 4.2.4 10, 4.2.5 634, 4.2.6 9, 6.7 14,
+  8.1.8 254, 8.2.2 19, 9.5 90, 10.4 61, 10.7 152. The §8–§10 figures above were already
+  flagged as approximations by the 2026-09-16 pass, so most of these being higher is
+  expected rather than new drift.
+
+  One correction to the block above: 4.2.1 reads 142 here against the 112 recorded there.
+  The 112 came from `git grep … | grep -v ':\s*#'`, whose comment filter also discarded
+  lines carrying an INLINE comment — a `#` preceded by a space anywhere in the line — so it
+  under-counted. The counter's rule (drop comment-only lines, keep inline ones) is the
+  recorded one.
+
   TWO ITEMS ARE STANDARDS DECISIONS, NOT MIGRATIONS:
 
     * 8.2.1 asks for `name() {` while the repo is 301 `function name` to 84 `name()`

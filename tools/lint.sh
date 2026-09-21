@@ -8,7 +8,7 @@
 #        ./tools/lint.sh --files F  (an explicit list of files)
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 14
+# Module Version: 15
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -497,6 +497,26 @@ then
 else
     echo "  FAIL  repository boundary guard"
     rc=1
+fi
+
+echo ""
+echo "=== §18.3 Count Ratchet ==="
+if [[ "${1:-}" == "--staged" ]]
+then
+    # Skipped for a staged-only run on purpose: the ratchet counts the WORKING TREE,
+    # and this repo's working tree is shared with other sessions — a co-worker's
+    # unstaged edit would fail your commit for a rise you did not make.  The
+    # whole-repo run (this script with no arguments, i.e. what CI and a manual
+    # `tools/lint.sh` do) enforces it on the committed tree.
+    echo "  SKIP  staged run — the ratchet counts the working tree; CI enforces it"
+else
+    if "$REPO_ROOT/tools/count-ratchet.sh"
+    then
+        echo "  PASS  §18.3 count ratchet"
+    else
+        echo "  FAIL  §18.3 count ratchet"
+        rc=1
+    fi
 fi
 
 echo ""

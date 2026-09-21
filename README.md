@@ -588,6 +588,7 @@ line counts because they drift.
 | `tools/check-agent-use.sh` | Agent-usage regression check (CI via fixtures; live `/dev/shm` on demand) |
 | `tools/check-repo-boundaries.sh` | Repo ownership boundary guard (CI) |
 | `tools/clean-orphans.sh` | Kill orphaned bench/llama-server keeper processes (refuses while a bench/autotune is live) |
+| `tools/count-ratchet.sh` | §18.3 count ratchet: fails when a migration-backlog count RISES (CI) |
 | `tools/docs-sync-check.sh` | Docs drift guard: module count, loader version, test totals, per-directory breakdowns — in README and `pytest.ini` (CI) |
 | `tools/import-windows-env.sh` | Import Windows user environment variables |
 | `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety |
@@ -760,6 +761,7 @@ by either loader.
 | `tools/check-agent-use.sh` | Agent-usage regression check (`$TAC_CACHE_DIR`; CI runs it via fixtures). |
 | `tools/check-repo-boundaries.sh` | Enforce the repo ownership boundary contract. CI guard. |
 | `tools/clean-orphans.sh` | Kill orphaned bench/llama-server keeper processes. |
+| `tools/count-ratchet.sh` | Fail when a docs/inspection.md §18.3 count rises. CI guard. |
 | `tools/docs-sync-check.sh` | Verify README matches current repo facts (counts/version). CI guard. |
 | `tools/import-windows-env.sh` | Standalone script to import Windows user environment variables. |
 | `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety. CI linter. |
