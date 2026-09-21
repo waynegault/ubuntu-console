@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # gpu-busy.sh — reliable "CUDA card actually in use" detector for local-llm gating.
+# Version: 1.5.0 (2026-09-21: the declared-workload check proves the artefact is
+#          being EXECUTED, not merely NAMED — identity from /proc/PID/exe (or comm
+#          when exe is another user's and unreadable), plus an argv element that is
+#          a path to the file.  The pattern still selects candidates, so the file
+#          name travels with every call.  Before this, `pgrep -f` alone counted a
+#          `cat /usr/local/bin/clear_vram.sh` in an operator's own shell as a
+#          declared workload and the watchdog stopped a serving CUDA lane on a free
+#          card — the third variant of the same command-line-mention defect, after
+#          1.4.0 (signal 2) and 1.3.0 (the patterns themselves))
 # Version: 1.4.0 (2026-09-16: signal 2 identifies a resident by its /proc/PID/exe
 #          resolved against the sanctioned CUDA/Xe binaries, instead of by the
 #          NAME "llama-server" — which any process that merely MENTIONS the string
@@ -9,7 +18,7 @@
 #          instead of bare words, and this probe's own process chain is excluded —
 #          a shell that merely mentioned "autotune" was read as a bench and the
 #          watchdog took a healthy CUDA lane down)
-# Module Version: 4
+# Module Version: 5
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
 #
 # CARD DISCIPLINE: this script is about the CUDA card only.  The Xe card is a
@@ -27,8 +36,11 @@
 #      two sanctioned llama-server binaries holds a CUDA context (someone else is
 #      loaded on the GPU).  Both are allowed: the Xe binary is ours, and the Xe
 #      lane must go on serving whether or not CUDA is clear.
-#   3. Declared GPU workloads — known GPU-hungry processes are alive
-#      (model_selection_bench, autotune, llama-bench, clear_vram)
+#   3. Declared GPU workloads — a known GPU-hungry artefact is being EXECUTED
+#      (model_selection_bench, autotune, llama-bench, clear_vram).  Read as
+#      "executed", never as "named": the identity is the running executable, so a
+#      reader (cat/grep/less/tail) that merely mentions the file does not count.
+#      A false BUSY is not the safe direction here — it stops the lane.
 #   4. Lock files — /tmp/llm-bench.lock (bench/autotune convention; watchdog
 #      already honours it)
 #   5. Another agent's ownership lock (the investigator pipeline's flock).  Signal
@@ -134,7 +146,14 @@ declared_workload_busy() {
     # a human's interactive `grep -iE 'llama|autotune'`, this probe reported BUSY,
     # and the watchdog STOPPED a healthy, serving CUDA lane on a free card.  A
     # false BUSY is not the safe direction here: it takes the lane down.
-    if _any_foreign_process 'model_selection_bench\.py'; then
+    #
+    # Naming the artefact was not enough either.  A pattern only SELECTS candidates
+    # by command line; _any_executing_process then proves the process is RUNNING the
+    # artefact.  On 2026-09-21 a `cat /usr/local/bin/clear_vram.sh` in an operator's
+    # shell was selected by the clear_vram pattern, this probe answered BUSY, and the
+    # watchdog stopped the CUDA lane on a free card.  So every call below passes the
+    # artefact's FILE NAME alongside its pattern.
+    if _any_executing_process 'model_selection_bench\.py' model_selection_bench.py; then
         _why="model_selection_bench"
     fi
     # llama.cpp's bench tool, matched on COMM: a mention in someone's command line
@@ -144,15 +163,16 @@ declared_workload_busy() {
     fi
     # A console autotune/bench run — by script path, not by the word "autotune".
     if [[ -z "$_why" ]] \
-        && _any_foreign_process '/(autotune-model|run-autotune-batch|retune-band-chunk)\.sh'; then
+        && _any_executing_process '/(autotune-model|run-autotune-batch|retune-band-chunk)\.sh' \
+               autotune-model.sh run-autotune-batch.sh retune-band-chunk.sh; then
         _why="autotune"
     fi
     # The investigator's path-pinned bench wrapper (~/.local/bin/cuda-llama-bench).
-    if [[ -z "$_why" ]] && _any_foreign_process '/cuda-llama-bench'; then
+    if [[ -z "$_why" ]] && _any_executing_process '/cuda-llama-bench' cuda-llama-bench; then
         _why="cuda-llama-bench"
     fi
     # A VRAM-clearing helper.
-    if [[ -z "$_why" ]] && _any_foreign_process 'clear_vram\.sh'; then
+    if [[ -z "$_why" ]] && _any_executing_process 'clear_vram\.sh' clear_vram.sh; then
         _why="clear_vram"
     fi
     if [[ -n "$_why" ]]; then
@@ -175,10 +195,68 @@ _self_chain() {
     done
 }
 
-# _any_foreign_process <pgrep -f pattern> — 0 when a match exists outside this
-# probe's own process chain, 1 otherwise.
-_any_foreign_process() {
-    local _pat="$1" _pid _s _is_self
+# 0 when this executable NAME is something that RUNS a script — a shell, an
+# interpreter, or a privilege/exec wrapper.  Readers and editors (cat, grep, less,
+# tail, head, diff, sed, awk, vim) are deliberately absent: they can only NAME an
+# artefact, and reading a name as a run is what took the CUDA lane down.
+_is_interpreter() {
+    case "$1" in
+        bash|sh|dash|zsh|ksh|ash|busybox) return 0 ;;
+        python|python[0-9]*|perl|perl5*|ruby) return 0 ;;
+        sudo|doas|su|env|runuser|systemd-run) return 0 ;;
+    esac
+    return 1
+}
+
+# 0 when process <pid> is really EXECUTING one of the named artefacts, 1 when it
+# merely names one.  Two gates, and neither is a command-line substring:
+#
+#   (a) the running executable IS the artefact — a compiled bench, or a script the
+#       kernel exec'd directly (the kernel then names the process after the script);
+#   (b) the running executable is an interpreter/shell/wrapper AND an argv element
+#       is a PATH whose file name is the artefact.
+#
+# Identity comes from /proc/PID/exe, which `exec -a` cannot forge.  For another
+# user's process — a root-run clear_vram.sh is the real case — exe is unreadable,
+# and the kernel's own /proc/PID/comm is used instead: comm is the executable's
+# name, so it keeps the same discipline, and unlike argv a mere mention cannot
+# reach it (the comm match is the repo's existing idiom — see pgrep -x llama-bench).
+#
+# In gate (b) the argv element must be a path, i.e. ONE WORD.  `cat <file>` passed
+# to `bash -c` is a single element with a space in it and does not qualify, which is
+# exactly the incident this exists for.
+_process_executes() {
+    local _pid="$1"; shift
+    local _name _exe_base _elem
+    local -a _argv=()
+    _exe_base=$(readlink -f "/proc/$_pid/exe" 2>/dev/null || true)
+    _exe_base="${_exe_base##*/}"
+    if [[ -z "$_exe_base" ]]; then
+        IFS= read -r _exe_base < "/proc/$_pid/comm" 2>/dev/null || true
+    fi
+    for _name in "$@"; do
+        [[ -n "$_exe_base" && "$_exe_base" == "$_name" ]] && return 0
+    done
+    _is_interpreter "$_exe_base" || return 1
+    mapfile -d '' -t _argv < "/proc/$_pid/cmdline" 2>/dev/null || true
+    for _elem in "${_argv[@]}"; do
+        [[ "$_elem" == *[[:space:]]* ]] && continue
+        for _name in "$@"; do
+            [[ "${_elem##*/}" == "$_name" ]] && return 0
+        done
+    done
+    return 1
+}
+
+# _any_executing_process <pgrep -f pattern> <artefact name>... — 0 when a process
+# outside this probe's own process chain is EXECUTING one of the artefacts, 1
+# otherwise.  The pattern only SELECTS candidates by command line (cheap, and it
+# keeps the artefact deliberately named); _process_executes decides.  Without that
+# second gate any process that merely NAMED the artefact — a cat, a grep, a tail —
+# was counted as a declared workload and stopped a serving lane (2026-09-21).
+_any_executing_process() {
+    local _pat="$1"; shift
+    local _pid _s _is_self
     local -a _self=()
     mapfile -t _self < <(_self_chain)
     while read -r _pid; do
@@ -188,7 +266,7 @@ _any_foreign_process() {
             [[ "$_pid" == "$_s" ]] && _is_self=1
         done
         (( _is_self )) && continue
-        return 0
+        _process_executes "$_pid" "$@" && return 0
     done < <(pgrep -f "$_pat" 2>/dev/null)
     return 1
 }

@@ -323,13 +323,15 @@ EOS
 @test "gpu-exclusivity: the declared-workload check excludes the caller's own chain" {
     printf 'REASONS=()\n' > "$TAC_TEST_TMPDIR/decl.sh"
     awk '/^_self_chain\(\)/,/^}/'            "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
-    awk '/^_any_foreign_process\(\)/,/^}/'   "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
-    grep -q '_any_foreign_process' "$TAC_TEST_TMPDIR/decl.sh" || return 1
+    awk '/^_is_interpreter\(\)/,/^}/'        "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
+    awk '/^_process_executes\(\)/,/^}/'      "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
+    awk '/^_any_executing_process\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/decl.sh"
+    grep -q '_any_executing_process' "$TAC_TEST_TMPDIR/decl.sh" || return 1
 
     cat > "$TAC_TEST_TMPDIR/chain-probe.sh" <<'EOS'
 set -uo pipefail
 source "$1"
-if _any_foreign_process "$2"; then echo FOREIGN; else echo OWN; fi
+if _any_executing_process "$2" "$3"; then echo FOREIGN; else echo OWN; fi
 EOS
 
     local tok="tac-chain-probe-$RANDOM$RANDOM"
@@ -342,13 +344,13 @@ EOS
     bash -c 'while :; do sleep 1; done' "$tok" &
     local _carrier=$!
     sleep 0.3
-    run bash "$TAC_TEST_TMPDIR/chain-probe.sh" "$TAC_TEST_TMPDIR/decl.sh" "$tok"
+    run bash "$TAC_TEST_TMPDIR/chain-probe.sh" "$TAC_TEST_TMPDIR/decl.sh" "$tok" "$tok"
     [[ "$output" == "FOREIGN" ]]
     kill "$_carrier" 2>/dev/null || true
     wait "$_carrier" 2>/dev/null || true
 
     # ...and when the only carrier is the CALLER's own command line, it must not be.
-    run bash -c "bash '$TAC_TEST_TMPDIR/chain-probe.sh' '$TAC_TEST_TMPDIR/decl.sh' '$tok'  # $tok"
+    run bash -c "bash '$TAC_TEST_TMPDIR/chain-probe.sh' '$TAC_TEST_TMPDIR/decl.sh' '$tok' '$tok'  # $tok"
     [[ "$output" == "OWN" ]]
 }
 
@@ -356,8 +358,108 @@ EOS
 # what failed on 2026-09-15 — a bare word matches any shell that mentions it.
 @test "gpu-exclusivity: the declared-workload patterns name a path, not a bare word" {
     ! grep -q 'pgrep -f "llama-bench|autotune"' "$REPO_ROOT/bin/gpu-busy.sh"
-    grep -q "_any_foreign_process '/(autotune-model|run-autotune-batch|retune-band-chunk)" "$REPO_ROOT/bin/gpu-busy.sh"
+    grep -q "_any_executing_process '/(autotune-model|run-autotune-batch|retune-band-chunk)" "$REPO_ROOT/bin/gpu-busy.sh"
     grep -q 'pgrep -x llama-bench' "$REPO_ROOT/bin/gpu-busy.sh"
+    # ...and the file NAME travels with every pattern.  A pattern only SELECTS
+    # candidates by command line, so on its own it cannot tell a run from a mention
+    # — which is how a `cat clear_vram.sh` stopped the lane on 2026-09-21.
+    # (-F: the patterns carry a literal backslash before the dot, so a BRE `\.` —
+    # which matches a dot with NO backslash — would not find them.)
+    grep -qF "_any_executing_process 'model_selection_bench\.py' model_selection_bench.py" "$REPO_ROOT/bin/gpu-busy.sh"
+    grep -qF "_any_executing_process '/cuda-llama-bench' cuda-llama-bench" "$REPO_ROOT/bin/gpu-busy.sh"
+    grep -qF "_any_executing_process 'clear_vram\.sh' clear_vram.sh" "$REPO_ROOT/bin/gpu-busy.sh"
+    ! grep -q '_any_foreign_process' "$REPO_ROOT/bin/gpu-busy.sh"
+}
+
+# The 2026-09-21 regression, third of its kind.  The declared-workload check
+# selected candidates with `pgrep -f` and stopped there, so ANY process that merely
+# NAMED an artefact counted as a declared workload: a `cat
+# /usr/local/bin/clear_vram.sh` — the operator reading the file — was read as a
+# VRAM-clearing run, and the watchdog stopped a serving CUDA lane on a free card.
+# Being seen is not the claim; RUNNING the artefact is.  (A false BUSY is not the
+# safe direction here, which is why 1.3.0 and 1.4.0 exist.)
+#
+# Driven through _process_executes with an EXPLICIT PID, so the verdict does not
+# depend on what else the box is doing — the lesson from the synthetic-token test
+# above.  Identity is /proc/PID/exe, which `exec -a` cannot forge.
+@test "gpu-exclusivity: a process that merely NAMES an artefact is not executing it" {
+    printf 'set -uo pipefail\n' > "$TAC_TEST_TMPDIR/proc.sh"
+    awk '/^_is_interpreter\(\)/,/^}/'   "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/proc.sh"
+    awk '/^_process_executes\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/proc.sh"
+    grep -q '_process_executes' "$TAC_TEST_TMPDIR/proc.sh" || return 1
+
+    cat > "$TAC_TEST_TMPDIR/exec-probe.sh" <<'EOS'
+set -uo pipefail
+source "$1"
+if _process_executes "$2" "$3"; then echo RUNS; else echo NAMES; fi
+EOS
+
+    local name="tac-decl-$RANDOM$RANDOM.sh"
+    local artefact="$TAC_TEST_TMPDIR/$name"
+    printf '#!/usr/bin/env bash\nsleep 30\n' > "$artefact"
+    chmod +x "$artefact"
+
+    # The incident shape: the artefact's name is argv[0], the executable is not it.
+    bash -c 'exec -a "$0" sleep 30' "$name" &
+    local _liar=$!
+    # A reader holding the file open.
+    tail -f "$artefact" >/dev/null 2>&1 &
+    local _reader=$!
+    # A shell whose -c body names the file: one argv element, with a space in it.
+    bash -c 'while :; do sleep 1; done' "cat $artefact" &
+    local _mentioner=$!
+    sleep 0.4
+
+    run bash "$TAC_TEST_TMPDIR/exec-probe.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_liar" "$name"
+    [[ "$output" == "NAMES" ]] || { echo "argv[0] alone must not count, got: $output"; return 1; }
+    run bash "$TAC_TEST_TMPDIR/exec-probe.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_reader" "$name"
+    [[ "$output" == "NAMES" ]] || { echo "a reader must not count, got: $output"; return 1; }
+    run bash "$TAC_TEST_TMPDIR/exec-probe.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_mentioner" "$name"
+    [[ "$output" == "NAMES" ]] || { echo "a -c body naming the file must not count, got: $output"; return 1; }
+
+    kill "$_liar" "$_reader" "$_mentioner" 2>/dev/null || true
+    wait "$_liar" "$_reader" "$_mentioner" 2>/dev/null || true
+}
+
+# The other half of the contract.  A false NEGATIVE here puts two LLMs on the 4 GB
+# card, so each shape a real run takes must still be seen: through its interpreter
+# (`bash <path>`, how every console script is invoked), exec'd directly, and a
+# compiled artefact whose own file name IS the executable.
+@test "gpu-exclusivity: a process genuinely running the artefact is executing it" {
+    printf 'set -uo pipefail\n' > "$TAC_TEST_TMPDIR/proc.sh"
+    awk '/^_is_interpreter\(\)/,/^}/'   "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/proc.sh"
+    awk '/^_process_executes\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh" >> "$TAC_TEST_TMPDIR/proc.sh"
+
+    cat > "$TAC_TEST_TMPDIR/exec-probe.sh" <<'EOS'
+set -uo pipefail
+source "$1"
+if _process_executes "$2" "$3"; then echo RUNS; else echo NAMES; fi
+EOS
+
+    local name="tac-run-$RANDOM$RANDOM.sh"
+    local artefact="$TAC_TEST_TMPDIR/$name"
+    printf '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n' > "$artefact"
+    chmod +x "$artefact"
+
+    bash "$artefact" &
+    local _interpreted=$!
+    "$artefact" &
+    local _direct=$!
+    local binname="tac-bin-$$-$RANDOM.sh"
+    cp "$(command -v sleep)" "$TAC_TEST_TMPDIR/$binname" || skip "cannot copy a binary here"
+    "$TAC_TEST_TMPDIR/$binname" 30 &
+    local _compiled=$!
+    sleep 0.4
+
+    run bash "$TAC_TEST_TMPDIR/exec-probe.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_interpreted" "$name"
+    [[ "$output" == "RUNS" ]] || { echo "an interpreted run must be seen, got: $output"; return 1; }
+    run bash "$TAC_TEST_TMPDIR/exec-probe.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_direct" "$name"
+    [[ "$output" == "RUNS" ]] || { echo "a direct run must be seen, got: $output"; return 1; }
+    run bash "$TAC_TEST_TMPDIR/exec-probe.sh" "$TAC_TEST_TMPDIR/proc.sh" "$_compiled" "$binname"
+    [[ "$output" == "RUNS" ]] || { echo "a compiled artefact must be seen, got: $output"; return 1; }
+
+    kill "$_interpreted" "$_direct" "$_compiled" 2>/dev/null || true
+    wait "$_interpreted" "$_direct" "$_compiled" 2>/dev/null || true
 }
 
 # __llm_proc_is_server replaced `pgrep -f "$LLM_SERVER_PROC_PATTERN"` for every

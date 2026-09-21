@@ -326,6 +326,21 @@ instead of the bare verdict, because "GPU busy" cannot say which of gpu-busy.sh'
 five signals fired — which is why the Sep 19 10:35 stop could not be attributed
 after the fact.
 
+**"Declared workload" means EXECUTED, not named (2026-09-21).**  The
+declared-workload signal selected candidates with `pgrep -f`, which matches a
+command line that merely *mentions* the artefact.  A `cat
+/usr/local/bin/clear_vram.sh` — an operator reading the file — was therefore read as
+a VRAM-clearing run and the watchdog stopped a serving CUDA lane on a free card.
+It is the third variant of one defect: 1.3.0 (2026-09-15) fixed the patterns
+themselves, 1.4.0 (2026-09-16) fixed signal 2, and this fixes the declared-workload
+selection.  Every candidate must now prove it is **running** the artefact — identity
+from `/proc/PID/exe`, or from `/proc/PID/comm` when the process belongs to another
+user and exe is unreadable (a root-run `clear_vram.sh` is the real case), plus an
+argv element that is a path to the file.  `exec -a` cannot forge it, and a reader
+cannot reach it.  A false BUSY is not the safe direction here: it stops the lane.
+Prefer the cheap probe to answer "free" and the lane to keep serving; the card
+stays protected by signals 1, 2 and 5, which are unchanged.
+
 The naming trap is closed as of 2026-09-15: the CUDA lane was `nvidia` in its unit
 but `cuda` in its launcher, the **Xe** fleet carried the plainest name, and one
 CUDA lane was named after a port while another was named after a model.  Units and

@@ -1230,7 +1230,7 @@ a *simple string* operation; the 228 are three different jobs — sed 34, awk 94
   only form that edits a file — is **0** sites.
 - **grep (115)** searches files and streams rather than testing a variable. Only a `grep` fed by a
   here-string can become `[[ ]]`, and there are **4**. One of them,
-  `grep -qvE '^[0-9]*$' <<< "${smi_out:-0}"` (`bin/gpu-busy.sh:83`), is *not* equivalent — tested,
+  `grep -qvE '^[0-9]*$' <<< "${smi_out:-0}"` (`bin/gpu-busy.sh:95`), is *not* equivalent — tested,
   `123\n456` gives exit 1 from grep ("every line is numeric") where `[[ ! $x =~ ^[0-9]*$ ]]` is true —
   and `smi_out` is multi-line nvidia-smi output by construction.
 
