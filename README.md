@@ -489,7 +489,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1091 total tests: 729 BATS + 362 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1092 total tests: 729 BATS + 363 Python).
 
 ### Running Tests
 
@@ -506,9 +506,14 @@ The project uses two test frameworks: **BATS** (bash automated testing) for shel
 
 ### Test Bridge (`test_bats_bridge.py`)
 
-Each `.bats` file is parsed at collection time to discover all `@test` blocks. One pytest test function is generated per block with a sanitized name (alphanumeric only). Results are cached per file: the first test from a file triggers the full BATS run; subsequent tests read from cache.
+Each `.bats` file is parsed at collection time to discover all `@test` blocks. One pytest test function is generated per block with a sanitized name (alphanumeric only). Results are cached per file, so one BATS invocation serves every case in that file.
 
-For individual test runs (e.g. VS Code clicking one test), `bats --filter` is used to execute only the requested test — dropping per-test runtime from ~900s to ~18s for the large `tactical-console.bats` suite.
+Which invocation depends on what the session selected:
+
+- **Whole file selected** (the normal full run, or `-m bats_full`): one `bats` process runs every case in the file. Each invocation pays a fixed cost — bats startup plus the file's `setup_file` — measured at ~8.8 s per spawn for `tactical-console.bats`, against ~1 s of real work per case. One process per case therefore spent nearly all of its time re-paying that cost: eight of its cases cost 69 s as eight filtered invocations versus 7.5 s as one whole-file invocation, and the full 387-case file takes ~11 min versus ~55 min bridged. `BATS_TEST_TIMEOUT` still bounds each case individually, so a hung case is reported as that case failing (`not ok N name in Xms # timeout after Ns`) and the rest of the file still reports.
+- **Part of the file selected** (a single VS Code click, `-k`, `--deselect`): `bats --filter` runs only that case — running 387 cases because two were asked for would be slower, not faster, and an individual VS Code launch never falls back to the full suite.
+
+The parser records each case's own runtime from bats' `--timing` output, which is what the duration tracker in `tests/conftest.py` reports for bridged tests (a cache hit has no meaningful wall clock of its own).
 
 ### Key Infrastructure Files
 
@@ -519,15 +524,17 @@ For individual test runs (e.g. VS Code clicking one test), `bats --filter` is us
 
 ### Test Counts
 
-| Suite | File | Count | Timeout |
-|-------|------|-------|---------|
-| Full behavioural | `tactical-console.bats` | 386 | 900s |
-| Fast static analysis | `tactical-console-fast.bats` | 53 | 180s |
-| Function availability | `tactical-console-function-availability.bats` | 2 | 180s |
-| Unit (refresh-keys, so-startup, llama-cpp inventory, spec-decode, autotune, agent-use, clean-orphans, module-versions) | `tests/unit/*.bats` | 66 | 120s |
-| Integration (maintenance, model-lifecycle, backup, watchdog, refresh-keys, bench) | `tests/integration/*.bats` | 119 | 300s |
-| Python (kgraph, kgraph-wiring, models, untested-modules, lock-fixture) | `tests/test_*.py` | 338 | 200s |
-| **Total** | | **964** | |
+Counts are enforced by `tools/docs-sync-check.sh`; per-case and whole-file timeouts come from `_BATS_SUITE_DEFS` in `tests/test_bats_bridge.py`.
+
+| Suite | File | Count | Per-case timeout | Whole-file timeout |
+|-------|------|-------|------------------|--------------------|
+| Full behavioural | `tactical-console.bats` | 387 | 900s | 2700s |
+| Fast static analysis | `tactical-console-fast.bats` | 63 | 180s | 900s |
+| Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
+| Unit | `tests/unit/*.bats` | 135 | 120s | 600s |
+| Integration | `tests/integration/*.bats` | 142 | 300s | 1200s |
+| Python | `tests/test_*.py` | 363 | 1000s (`pytest.ini`) | — |
+| **Total** | | **1092** | | |
 
 ---
 

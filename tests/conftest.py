@@ -161,8 +161,10 @@ def _serialize_bats_suites(request: pytest.FixtureRequest):
     _LOCK_DIR.mkdir(mode=0o700, exist_ok=True)
 
     # Read _bats_file / _bats_timeout from the test function's own attributes
-    # (set by test_bats_bridge.py's _make_test).  Falls back to the old
-    # callspec.params path for any remaining parametrized BATS tests.
+    # (set by test_bats_bridge.py's _make_test).  For a bridged BATS case the
+    # budget is the FILE-level one, because a whole-file run holds this lock for
+    # the whole file.  Falls back to the old callspec.params path for any
+    # remaining parametrized BATS tests.
     fn = request.node.function
     bats_file: Path | None = getattr(fn, "_bats_file", None)
     timeout_s: int = getattr(fn, "_bats_timeout", 60)
@@ -255,6 +257,13 @@ def _save_durations(durations: dict[str, list[float]]) -> None:
 
 def _collect_duration(item: pytest.Item, duration_s: float) -> None:
     """Record a test duration and flag regressions."""
+    # A bridged BATS case reports its own TAP duration ("in 2033ms").  Its wall
+    # clock here is not a per-case measurement: the first case of a file carries
+    # that file's whole-file BATS run, and every later case is a cache lookup near
+    # zero.  Prefer the reported figure when the test provided one.
+    reported = getattr(item, "_bats_case_seconds", None)
+    if reported is not None:
+        duration_s = reported
     key = f"{item.nodeid.split('::')[0]}::{getattr(item, 'originalname', None) or item.name}"
     _DURATIONS.setdefault(key, []).append(duration_s)
 
