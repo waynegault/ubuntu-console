@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 45
+# Module Version: 46
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -686,7 +686,8 @@ function __up_oc_plugins() {
                                     then
                                         if ! npm install --prefix "$_path" --silent 2>/dev/null
                                         then
-                                            __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                                            __tac_line "$_status_line" \
+                                                "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
                                         fi
                                     fi
                                     if git -C "$_path" stash pop >/dev/null 2>&1
@@ -696,7 +697,8 @@ function __up_oc_plugins() {
                                         # Pop failed (usually a conflict): the local
                                         # changes are still in the stash, so do NOT
                                         # report them as preserved.
-                                        __tac_line "$_status_line" "[UPDATED - LOCAL CHANGES STILL STASHED]" "$C_Warning"
+                                        __tac_line "$_status_line" \
+                                            "[UPDATED - LOCAL CHANGES STILL STASHED]" "$C_Warning"
                                     fi
                                     return 0
                                 else
@@ -714,7 +716,8 @@ function __up_oc_plugins() {
                                     then
                                         if ! npm install --prefix "$_path" --silent 2>/dev/null
                                         then
-                                            __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                                            __tac_line "$_status_line" \
+                                                "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
                                         fi
                                     fi
                                     __tac_line "$_status_line" "[UPDATED]" "$C_Success"
