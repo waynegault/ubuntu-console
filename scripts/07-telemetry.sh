@@ -2,13 +2,13 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
 # @modular-section: telemetry
 # @depends: constants, design-tokens, ui-engine
-# @exports: _telemetry, __cache_fresh, __get_uptime, __get_disk,
+# @exports: _telemetry, __tac_track_bg_job, __cache_fresh, __get_uptime, __get_disk,
 #   __get_host_metrics, __get_gpu_engines, __get_gpu, __get_battery,
 #   __get_git, __get_oc_version, __get_oc_metrics, __get_llm_slots
 #
@@ -40,6 +40,27 @@ function _telemetry() {
     "$@" > "$_tel_out"
     _telemetry_out=$(< "$_tel_out")
     rm -f "$_tel_out"
+}
+
+# ---------------------------------------------------------------------------
+# __tac_track_bg_job <pid> — Record a background refresh job for EXIT cleanup,
+# and disown it so bash never prints a job-control notice for it.
+#
+# Why the disown: bash reports a tracked job at the next command boundary as
+# "[n] Done <command>", and <command> is the job's ENTIRE body — for the
+# multi-line refreshes below that is dozens of lines of source. Measured
+# 2026-09-22: after `m` returned, the dashboard render was followed by the whole
+# GPU-refresh text, right where the next prompt appears. `disown` drops the job
+# from the JOB TABLE, so no notice is printed at all; the PID stays valid, so the
+# EXIT trap's `kill` still works. Measured over 800 spawn/disown pairs
+# (interactive and not): disown never failed, so nothing is suppressed here.
+#
+# Every background spawn in this module goes through this function — a new spawn
+# that registers __TAC_BG_PIDS directly will start leaking notices into the UI.
+# ---------------------------------------------------------------------------
+function __tac_track_bg_job() {
+    __TAC_BG_PIDS+=("$1")
+    disown "$1"
 }
 
 # ---------------------------------------------------------------------------
@@ -111,7 +132,7 @@ function __refresh_host_metrics() {
           bash "$TACTICAL_REPO_ROOT/bin/tac_hostmetrics.sh" > "$cache_tmp" 2>/dev/null \
             && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; } \
             && { [[ -f "$engines_tmp" ]] && mv "$engines_tmp" "$engines_cache"; } ) &>/dev/null &
-        __TAC_BG_PIDS+=("$!")
+        __tac_track_bg_job "$!"
     fi
 }
 
@@ -225,7 +246,7 @@ function __get_gpu() {
             echo "N/A" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         fi
     ) &>/dev/null &
-    __TAC_BG_PIDS+=("$!")
+    __tac_track_bg_job "$!"
     if [[ -f "$cache" ]]
     then
         cat "$cache"
@@ -261,7 +282,7 @@ function __get_battery() {
             echo "A/C POWERED" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         fi
     ) &>/dev/null &
-    __TAC_BG_PIDS+=("$!")
+    __tac_track_bg_job "$!"
     if [[ -f "$cache" ]]
     then
         cat "$cache"
@@ -313,7 +334,7 @@ function __get_oc_version() {
       fi
       echo "$ocVersion" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
     ) &>/dev/null &
-    __TAC_BG_PIDS+=("$!")
+    __tac_track_bg_job "$!"
     if [[ -f "$cache" ]]
     then
         cat "$cache"
@@ -349,7 +370,7 @@ function __get_oc_metrics() {
           fi
           echo "$sessionCount" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         ) &>/dev/null &
-        __TAC_BG_PIDS+=("$!")
+        __tac_track_bg_job "$!"
     fi
 
     local api_count age
@@ -386,7 +407,7 @@ function __get_llm_slots() {
                 && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         fi
     ) &>/dev/null &
-    __TAC_BG_PIDS+=("$!")
+    __tac_track_bg_job "$!"
     [[ -f "$cache" ]] && cat "$cache"
 }
 

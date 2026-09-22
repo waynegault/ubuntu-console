@@ -2837,7 +2837,7 @@ Prints `OK`. Every user-facing function from modules 01-12 is available.
 
 `bash -c 'source ~/ubuntu-console/env.sh && echo ${__TAC_INITIALIZED:-unset}'`
 
-Prints `unset`. The init module (clear screen, completions, loopback fix, EXIT trap) must not run in library mode.
+Prints `unset`. The init module (banner, completions, loopback check, EXIT trap) must not run in library mode.
 
 15.4
 

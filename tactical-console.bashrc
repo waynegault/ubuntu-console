@@ -69,7 +69,7 @@ esac
 # TACTICAL_PROFILE_VERSION is auto-computed after sourcing all modules:
 #   TACTICAL_PROFILE_VERSION = _TAC_LOADER_VERSION . sum(all module versions)
 #   Example: v3.63 = loader v3 + 63 total module versions
-_TAC_LOADER_VERSION="9"
+_TAC_LOADER_VERSION="10"
 
 # AI INSTRUCTION: Follow these terminal formatting rules strictly:
 # 1. A blank line must exist between the bottom of any UI border and the command prompt.
@@ -145,6 +145,40 @@ _TAC_LOADER_VERSION="9"
 _tac_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TACTICAL_REPO_ROOT="${TACTICAL_REPO_ROOT:-$_tac_repo_root}"
 _tac_module_dir="$TACTICAL_REPO_ROOT/scripts"
+
+# ==============================================================================
+#  Hold startup output until after the banner
+# ==============================================================================
+# The banner is drawn LAST (clear_tactical, near the end of this file) so the
+# header can show the final TACTICAL_PROFILE_VERSION.  But `clear` emits ESC[3J,
+# which erases the SCROLLBACK as well as the screen — so a notice printed while
+# the modules load is destroyed a few milliseconds after it is written and
+# cannot be recovered by scrolling up either.  Measured 2026-09-22: 13-init's
+# loopback0 warning flashed before the header and was unrecoverable, and every
+# other 13-init notice (jq missing, oc-llm-sync hash mismatch, the short
+# module-count report) shares that fate.
+#
+# So the shell's stdout/stderr point at a temp file for the load window and are
+# replayed once the banner is on screen.  Holding at the fd level — rather than
+# editing each printf — means a notice added later by ANY module is held too:
+# the fix cannot be bypassed by the next person who writes `printf`.
+_tac_hold_file=""
+_tac_hold_active=0
+_tac_hold_failed=0
+if _tac_hold_file="$(mktemp "${TMPDIR:-/tmp}/tac-startup-XXXXXX" 2>/dev/null)" \
+   && : >>"$_tac_hold_file" 2>/dev/null
+then
+    _tac_hold_active=1
+    # fds 8/9 keep the real stdout/stderr; redirecting 2>&1 after the file keeps
+    # the two streams interleaved in their original order.
+    exec 8>&1 9>&2 1>>"$_tac_hold_file" 2>&1
+else
+    # No writable temp file.  Degrade to the previous behaviour rather than risk
+    # a failed redirection aborting the whole profile load, and report it AFTER
+    # the banner — where it can be read (see the replay at the end of this file).
+    _tac_hold_file=""
+    _tac_hold_failed=1
+fi
 
 # Shared startup environment (NODE_COMPILE_CACHE / OPENCLAW_NO_RESPAWN /
 # NODE_OPTIONS) plus the __tac_source_submodules helper the thin loaders
@@ -244,11 +278,37 @@ fi
 
 unset _tac_f _tac_module_dir _tac_mod_sum _tac_mv _tac_line _tac_version_files _tac_repo_root _tac_expected_modules _tac_found_count
 
+# End of the held window: restore the real stdout/stderr BEFORE anything is
+# drawn, so the banner goes to the terminal instead of into the hold file.
+if (( _tac_hold_active ))
+then
+    exec 1>&8 2>&9 8>&- 9>&-
+fi
+
 # Display the initial banner now that TACTICAL_PROFILE_VERSION is set.
 # This ensures the correct version is shown on first terminal open.
 if [[ -n "${__TAC_DISPLAY_BANNER:-}" ]]; then
     clear_tactical
     unset __TAC_DISPLAY_BANNER
 fi
+
+# Replay what the held window printed.  This is the whole point of the hold:
+# these lines are now BELOW the banner, so the clear above cannot reach them.
+# Replayed to stderr — the stream diagnostics belong on, and the one it is
+# visible on when a caller captures only stdout.
+if (( _tac_hold_active ))
+then
+    if [[ -s "$_tac_hold_file" ]]
+    then
+        cat "$_tac_hold_file" >&2
+    fi
+    rm -f "$_tac_hold_file"
+fi
+if (( _tac_hold_failed ))
+then
+    printf '%s\n' "${C_Warning:-}[Tactical Profile]${C_Reset:-}" \
+        "no writable temp file — startup notices were not held and may have been cleared with the screen"
+fi
+unset _tac_hold_file _tac_hold_active _tac_hold_failed
 
 # end of file

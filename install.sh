@@ -3,7 +3,7 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
-VERSION="1.6"
+VERSION="1.7"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -15,6 +15,14 @@ fi
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
 PROFILE_PATH="$REPO/tactical-console.bashrc"
+
+# warn — Report a problem on stderr.  This is the ONLY place in this script that
+# writes to stderr (inspection §10.7): every message below is routed through it,
+# so the redirect exists once rather than at each call site.  Each argument
+# prints on its own line.
+warn() {
+    printf '%s\n' "$@" >&2
+}
 
 append_loader_block() {
     cat <<LOADER
@@ -45,8 +53,8 @@ launcher() {
     # mode; catching it here is the difference between a loud install and a silent
     # breakage discovered by a lane that will not come up.
     if [[ ! -x "$src" ]]; then
-        echo "  ERROR: $src is not executable — refusing to install a broken shim" >&2
-        echo "         Fix: chmod +x $src  (and commit the mode change)" >&2
+        warn "  ERROR: $src is not executable — refusing to install a broken shim" \
+             "         Fix: chmod +x $src  (and commit the mode change)"
         return 1
     fi
     mkdir -p "$(dirname "$dest")"
@@ -162,7 +170,7 @@ else
             rm -f "$_tmp_bashrc"
             echo "  ~/.bashrc - refreshed stale loader path"
         else
-            echo "  WARNING: could not refresh the stale loader path in ~/.bashrc" >&2
+            warn "  WARNING: could not refresh the stale loader path in ~/.bashrc"
         fi
     elif [[ -n "$_loader_ref" ]]
     then
@@ -181,7 +189,7 @@ fi
 # The canonical profile lives in tactical-console.bashrc; ~/.bashrc is a thin
 # loader only.  chmod 600 before any write, chmod 444 after.
 chmod 444 "$HOME/.bashrc" 2>/dev/null \
-    || echo "  WARNING: could not set ~/.bashrc read-only (continuing)" >&2
+    || warn "  WARNING: could not set ~/.bashrc read-only (continuing)"
 echo "  ~/.bashrc - set read-only (mode 444)"
 
 # Standalone scripts → ~/.local/bin/
@@ -227,7 +235,7 @@ do
         chmod 755 "$HOME/.local/bin/$_name"
         echo "  ~/.local/bin/$_name -> llama-${_card}-server"
     else
-        echo "  WARNING: llama-${_card}-server not installed — skipped $_name" >&2
+        warn "  WARNING: llama-${_card}-server not installed — skipped $_name"
     fi
 done
 
@@ -291,6 +299,9 @@ then
 fi
 
 # Systemd units
+# `systemd/*` is the USER unit set (symlinked into ~/.config/systemd/user/).
+# The subdirectory `systemd/system` is a separate, root-owned set and is skipped
+# here by the -f test below — do not turn that test into a glob that recurses.
 for f in "$REPO"/systemd/*
 do
     [[ -f "$f" ]] || continue
@@ -313,8 +324,75 @@ done
 
 if command -v systemctl >/dev/null 2>&1
 then
-    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    # Reported, not swallowed: a failed reload leaves the freshly linked units
+    # invisible to systemd, and the next `so` then fails with a confusing
+    # "unit not found" rather than naming the cause.
+    systemctl --user daemon-reload >/dev/null 2>&1 \
+        || warn "  WARNING: systemctl --user daemon-reload failed — user units may not be active until reloaded"
 fi
+
+# ── System units (/etc/systemd/system) ───────────────────────────────────────
+# The user units above run as wayne.  Some host facts need root: loopback0 — the
+# dummy interface WSL2 mirrored networking does not create, which OpenClaw's
+# node-to-node 127.0.0.2 traffic needs — cannot be brought up by a user unit.
+# Those units live in systemd/system/ and are COPIED (not symlinked) into
+# /etc/systemd/system: a root-owned unit pointing into a user's home is a
+# boot-time dependency on that home being mounted and readable.
+#
+# This is install.sh's only privileged step, so it is deliberately narrow:
+#   * `sudo -n` only — it must never prompt, or an unattended install would hang;
+#   * with no passwordless sudo (CI, a container) it SKIPS with the commands to
+#     run by hand, so an unprivileged install still completes;
+#   * it enables AND starts each unit, so re-running install.sh repairs a machine
+#     whose loopback0 is missing without needing a reboot.
+_sys_units=()
+for f in "$REPO"/systemd/system/*
+do
+    [[ -f "$f" ]] || continue
+    _sys_units+=("${f##*/}")
+done
+
+if (( ${#_sys_units[@]} == 0 ))
+then
+    # Not silence: this repo ships tac-loopback0.service, so an empty set means
+    # a broken checkout, and silently installing no systemd units would be
+    # indistinguishable from a machine that needs none.
+    warn "  WARNING: systemd/system/ holds no unit files (expected tac-loopback0.service)"
+elif sudo -n true 2>/dev/null
+then
+    _sys_changed=0
+    for _bn in "${_sys_units[@]}"
+    do
+        if cmp -s "$REPO/systemd/system/$_bn" "/etc/systemd/system/$_bn" 2>/dev/null
+        then
+            echo "  /etc/systemd/system/$_bn - already current (skipped)"
+        else
+            sudo install -m 644 "$REPO/systemd/system/$_bn" "/etc/systemd/system/$_bn"
+            echo "  /etc/systemd/system/$_bn - installed"
+            _sys_changed=1
+        fi
+    done
+    if (( _sys_changed ))
+    then
+        sudo systemctl daemon-reload
+    fi
+    for _bn in "${_sys_units[@]}"
+    do
+        sudo systemctl enable "$_bn" >/dev/null 2>&1 \
+            || warn "  WARNING: could not enable $_bn"
+        if ! systemctl is-active --quiet "$_bn"
+        then
+            sudo systemctl start "$_bn" \
+                || warn "  WARNING: $_bn failed to start — see: systemctl status $_bn"
+        fi
+    done
+    unset _sys_changed
+else
+    warn "  WARNING: passwordless sudo unavailable — system units NOT installed" \
+         "           run: sudo install -m 644 $REPO/systemd/system/* /etc/systemd/system/" \
+         "           and: sudo systemctl enable --now ${_sys_units[*]}"
+fi
+unset _sys_units
 
 # Git hooks — tracked in tools/hooks/ and activated through core.hooksPath, so
 # the hooks are version-controlled and reviewable.  They used to live untracked
@@ -331,7 +409,7 @@ then
         chmod +x "$REPO"/tools/hooks/* 2>/dev/null || true
         echo "  hooks - core.hooksPath set to tools/hooks"
     else
-        echo "  WARNING: could not set core.hooksPath — git hooks will not run" >&2
+        warn "  WARNING: could not set core.hooksPath — git hooks will not run"
     fi
 fi
 

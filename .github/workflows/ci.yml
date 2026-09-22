@@ -75,7 +75,7 @@ jobs:
       - name: Run lint script
         run: tools/lint.sh
 
-    # Full suite (386 tests) is run locally via: bats tests/tactical-console.bats
+    # Full suite (387 tests) is run locally via: bats tests/tactical-console.bats
     # and nightly via .github/workflows/nightly.yml.
 
   docs-sync:
@@ -117,7 +117,10 @@ jobs:
                tests/unit/13-gguf-ctx-bounds.bats \
                tests/unit/14-registry-identity.bats \
                tests/unit/15-secret-ref-paths.bats \
-               tests/unit/16-docs-sync.bats
+               tests/unit/16-docs-sync.bats \
+               tests/unit/17-startup-notice-hold.bats \
+               tests/unit/18-loopback0-unit.bats \
+               tests/unit/19-telemetry-bg-notices.bats
 
       - name: Run integration tests
         run: |

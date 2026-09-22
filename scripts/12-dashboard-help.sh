@@ -2,7 +2,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 19
+# Module Version: 20
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -258,7 +258,10 @@ function tactical_dashboard() {
             if (( $(date +%s) - mtime > cache_ttl )); then
                 # `oc` is a shell function: it must run in a subshell, not via
                 # `setsid`/an external command (which cannot see functions).
+                # Tracked through __tac_track_bg_job so bash does not print a
+                # "[n] Done <whole command>" notice over the next render.
                 ( oc agent-use >/dev/null 2>&1 ) &>/dev/null &
+                __tac_track_bg_job "$!"
             fi
             agent_use_out=$(cat "$cache" 2>/dev/null || true)
             # Sanitize output: remove control characters (except newlines) to prevent
@@ -268,7 +271,10 @@ function tactical_dashboard() {
             # Kick off a background refresh so the cache is populated for
             # subsequent renders, but do not block the dashboard render now.
             # `oc` is a shell function, so it must run in a subshell.
+            # Tracked via __tac_track_bg_job so bash prints no job-control
+            # notice for it (see §7).
             ( oc agent-use >/dev/null 2>&1 ) &>/dev/null &
+            __tac_track_bg_job "$!"
         fi
         if [[ -z "$agent_use_out" ]]
         then

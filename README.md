@@ -489,7 +489,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1100 total tests: 737 BATS + 363 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1111 total tests: 748 BATS + 363 Python).
 
 ### Running Tests
 
@@ -583,7 +583,7 @@ line counts because they drift.
 | `11e-llm-model.sh` | Model management, streaming chat, burn, bench, explain |
 | `11f-llm-runtime.sh` | Runtime helpers: `wake`, `model`, `serve`, `halt`, `mlogs`, `local_chat`, `chat-context` |
 | `12-dashboard-help.sh` | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` |
-| `13-init.sh` | `mkdir -p`, completions, WSL loopback fix, bridge call, EXIT trap (chained) |
+| `13-init.sh` | `mkdir -p`, completions, WSL loopback check, bridge call, EXIT trap (chained) |
 | `14-wsl-extras.sh` | WSL/X11 startup helpers, OpenClaw completions sourcing (guarded), vault env loading |
 | `15-model-recommender.sh` | AI model recommendations by use case (`bc` fallback for integer math) |
 
@@ -637,7 +637,16 @@ Never use PascalCase or camelCase for function names.
 
 ### Version System
 
-`TACTICAL_PROFILE_VERSION` is auto-computed: `_TAC_LOADER_VERSION . sum(all module versions)`. Each module has a `# Module Version: N` comment that is incremented on any change. The loader is currently v9.
+`TACTICAL_PROFILE_VERSION` is auto-computed: `_TAC_LOADER_VERSION . sum(all module versions)`. Each module has a `# Module Version: N` comment that is incremented on any change. The loader is currently v10.
+
+The banner is drawn *after* every module has loaded, so the header can carry that
+final version. That ordering has a consequence: `clear` emits `ESC[3J`, which
+erases the **scrollback** as well as the screen — so a notice printed during the
+load could not be read even by scrolling up. Startup notices (13-init's
+`loopback0`, `jq` and `oc-llm-sync` warnings, the loader's own short-module-count
+report) are therefore held in a temp file and replayed **below** the banner. The
+hold is at the fd level, so a notice added by any future module is held too; a
+notice that cannot be held is reported after the banner rather than silently lost.
 
 ### Telemetry Caching
 
@@ -747,7 +756,7 @@ by either loader.
 | §11e | `scripts/11e-llm-model.sh` | ~3277 | Model commands: scan, list, use (7 helpers), bench, download, archive, delete, doctor |
 | §11f | `scripts/11f-llm-runtime.sh` | ~712 | Runtime: `serve`, `burn`, `local_chat`, SSE streaming, explain, `wtf_repl` |
 | §12 | `scripts/12-dashboard-help.sh` | ~707 | `tactical_dashboard` (OpenClaw-aware), `tactical_help`, `bashrc_diagnose` (OpenClaw status) |
-| §13 | `scripts/13-init.sh` | ~204 | `mkdir -p` (OpenClaw-aware), completions, loopback fix, bridge call, exit trap (chained) |
+| §13 | `scripts/13-init.sh` | ~204 | `mkdir -p` (OpenClaw-aware), completions, loopback check, bridge call, exit trap (chained) |
 | §14 | `scripts/14-wsl-extras.sh` | ~157 | WSL/X11 startup helpers, vault env loading |
 | §15 | `scripts/15-model-recommender.sh` | ~198 | AI model recommendations by use case (`bc` fallback for integer math) |
 
@@ -836,7 +845,7 @@ functions defined in the profile.
 
 **`env.sh`** is a library loader that sources all 16 profile modules (01–15
 plus `09b-gog`), bypassing the interactive guard and skipping `13-init.sh`
-(which runs screen clear, completions, WSL loopback fixes, and EXIT traps)
+(which runs the banner, completions, the WSL loopback check, and EXIT traps)
 and utility scripts in `tools/`. It reads the canonical load order from
 `scripts/_module-list.sh` — the same list the interactive loader uses — so the
 two module sets can never drift. It is idempotent (guarded by
@@ -959,7 +968,7 @@ for normal "not found" / "false" conditions. Only exit codes ≥ 2 are logged.
 4. **oc-llm-sync.sh integrity** — SHA256 hash is verified before sourcing. Mismatches skip the source and warn. Use `oc-trust-sync` to record a new trusted hash.
 5. **ERR trap** — All failed commands (exit ≥ 2) are logged with timestamps.
 6. **Bridge timeout** — `pwsh.exe` calls have a 5-second `timeout` to prevent hangs.
-7. **Sudo guard** — WSL loopback fix uses `sudo -n` (non-interactive only).
+7. **Sudo guard** — WSL loopback repair uses `sudo -n` (non-interactive only).
 8. **Variable name validation** — Bridge skips vars with non-`[a-zA-Z0-9_]` characters.
 
 ---
@@ -969,8 +978,8 @@ pre-modularisation file was preserved as `tactical-console.bashrc.monolith`
 but has since been removed from the repository (it remains in git history).
 
 **Ordering rules:** `01-constants.sh` must load first (everything depends on
-it). `13-init.sh` runs the interactive startup side-effects (screen clear,
-completions, WSL loopback fixes, EXIT traps); the canonical order in
+it). `13-init.sh` runs the interactive startup side-effects (banner request,
+completions, WSL loopback check, EXIT traps); the canonical order in
 `scripts/_module-list.sh` places it near the end, followed only by
 `14-wsl-extras.sh` and `15-model-recommender.sh`. All other modules can be
 reordered as long as their `@depends` are satisfied.
@@ -1099,9 +1108,11 @@ where it was last present.)
 │   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
 │   ├── test_models.py                 # Pydantic model tests (37 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (143 tests: 11+12+8+5+5+6+20+4+8+7+28+19+7+2+1)
+│   ├── unit/                          # BATS unit tests (154 tests: 11+12+8+5+5+6+20+4+8+7+28+19+7+2+1+5+4+2)
 │   └── integration/                   # BATS integration tests (142 tests: 14+43+10+44+3+28)
 └── systemd/
+    ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)
+    │   └── tac-loopback0.service      #     WSL mirrored-networking 127.0.0.2, at boot
     ├── llama-watchdog.service
     ├── llama-watchdog.timer
     ├── llama-xe-minicpm5-1b-chat.service
@@ -1119,6 +1130,7 @@ where it was last present.)
 | `~/.local/bin/load-vault-env.sh` | `scripts/load-vault-env.sh` |
 | `~/.local/bin/oc-update-enhanced.sh` | `scripts/oc-update-enhanced.sh` |
 | `~/.config/systemd/user/<unit>` | Every file in `systemd/`, plus **relative** legacy-name symlinks (`llama-server.service` → `llama-xe-minicpm5-1b-chat.service`, …). Relative on purpose: an absolute alias makes systemd load a second unit for the same service |
+| `/etc/systemd/system/<unit>` | Every file in `systemd/system/` — **copied**, not symlinked, then enabled by `install.sh` (its only `sudo` step). Copied because a root-owned unit pointing into a user's home is a boot-time dependency on that home being mounted and readable. Currently `tac-loopback0.service`, which provides `loopback0`/`127.0.0.2` at boot |
 
 ---
 
@@ -1132,6 +1144,14 @@ cd ~/ubuntu-console
 ./install.sh     # creates thin ~/.bashrc loader + symlinks
 exec bash        # reload profile
 ```
+
+`install.sh` also installs the system-scope units from `systemd/system/` into
+`/etc/systemd/system` and enables them — its only privileged step. It uses
+`sudo -n` (it never prompts), and with no passwordless sudo it skips that step
+with the commands to run by hand, so an unprivileged install still completes.
+`tac-loopback0.service` is what keeps the WSL mirrored-networking interface
+(`loopback0` / `127.0.0.2`) present after a restart; without it that repair is
+on-demand only (`up`, `tac-exec __tac_fix_loopback`).
 
 ### Workflow
 

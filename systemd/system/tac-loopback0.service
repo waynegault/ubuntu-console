@@ -1,0 +1,53 @@
+# tac-loopback0.service — WSL2 mirrored-networking loopback0 (127.0.0.2)
+# ==============================================================================
+# systemd/system/ — SYSTEM units (/etc/systemd/system), installed by install.sh
+# with `sudo install`, NOT symlinked into ~/.config/systemd/user/ like the
+# files one directory up.  A user unit cannot create a host interface, and this
+# one has to exist before anyone logs in: OpenClaw's node-to-node traffic binds
+# 127.0.0.2, which WSL2 mirrored networking does not provide on its own.
+#
+# scripts/08-maintenance.sh:__tac_fix_loopback performs exactly this repair on
+# demand (`up`, `tac-exec __tac_fix_loopback`), and scripts/13-init.sh checks
+# for it at shell start.  This unit is what makes the repair survive a restart,
+# so those two still have a job: the check reports a genuinely broken state, and
+# the function repairs one mid-session without a reboot.
+#
+# Keep the two in step: if the interface specification changes (a different
+# address or mask), change it in __tac_fix_loopback AND here.
+# ==============================================================================
+
+[Unit]
+Description=Tactical Console — WSL2 mirrored-networking loopback0 (127.0.0.2)
+Documentation=file:///home/wayne/ubuntu-console/README.md
+# Ordering is deliberately NOT tied to a specific consumer: this unit provides
+# the address, and a service that must not start before the address exists
+# orders itself with `After=tac-loopback0.service`.  Naming a consumer here
+# would make the unit unusable anywhere that consumer is absent.
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Every step is prefixed with `-` because each one fails harmlessly on an
+# interface that already exists ("RTNETLINK answers: File exists" for the link,
+# "Address already in use" for the address) — and a mid-session `up` or a
+# re-run of install.sh must not leave a failed unit behind.  Ignoring those
+# failures only stays safe because ExecStartPost below checks the INVARIANT:
+# without it, a no-op run would report success with no 127.0.0.2, which is the
+# exact silent failure this unit exists to prevent.
+ExecStart=-/usr/sbin/ip link add loopback0 type dummy
+ExecStart=-/usr/sbin/ip link set loopback0 up
+ExecStart=-/usr/sbin/ip addr add 127.0.0.2/8 dev loopback0
+
+# Fail the unit unless the address is actually there.  `-F` (fixed string) and
+# the trailing "/" match the profile's own check (`grep -q '127\.0\.0\.2/'` in
+# __tac_fix_loopback) and keep any mask valid, while "127.0.0.20/8" still does
+# not match.
+ExecStartPost=/bin/sh -c '/usr/sbin/ip addr show loopback0 | grep -qF 127.0.0.2/'
+
+[Install]
+WantedBy=multi-user.target
+
+# end of file
