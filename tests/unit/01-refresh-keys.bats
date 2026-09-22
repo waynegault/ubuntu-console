@@ -496,13 +496,17 @@ CFG
     "entries": {
       "sample-tool": {
         "apiKey": {"source": "store", "provider": "default", "id": "WIN_SAMPLE_KEY"}
+      },
+      "already-env": {
+        "apiKey": {"source": "env", "provider": "default", "id": "WIN_ALREADY_ENV_KEY"}
       }
     }
   }
 }
 CFG
-    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_SAMPLE_KEY=test-store-key'"
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_SAMPLE_KEY=test-store-key' 'WIN_ALREADY_ENV_KEY=test-env-key'"
     export WIN_SAMPLE_KEY="test-store-key"
+    export WIN_ALREADY_ENV_KEY="test-env-key"
     rm -f "$OC_MOCK_LOG" "$OC_MOCK_PATCH_FILE"
 
     run oc-refresh-keys
@@ -512,6 +516,13 @@ CFG
     [[ "$output" == *"NOT env-backed"* ]]
     [[ "$output" == *"WIN_SAMPLE_KEY"* ]]
     [[ "$output" == *"skills.entries.sample-tool.apiKey"* ]]
+
+    # An unmapped ref that is ALREADY env-backed is NOT a gap: the resolver injects
+    # it regardless of this table, so reporting it would send a reader to add a
+    # needless row — the first version of this report did exactly that, claiming 5
+    # gaps of which 3 were already env-backed. Its var is present in this test, so
+    # absence cannot be the reason it is unnamed.
+    [[ "$output" != *"WIN_ALREADY_ENV_KEY"* ]]
 
     # The store-backed ref was left exactly as it was.
     run grep -F 'WIN_SAMPLE_KEY' "$OC_MOCK_PATCH_FILE" 2>/dev/null

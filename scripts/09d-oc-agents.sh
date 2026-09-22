@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -657,7 +657,19 @@ unmapped = []
 
 def _collect(node, prefix=""):
     if isinstance(node, dict):
-        if isinstance(node.get("id"), str) and "source" in node and prefix not in mapped:
+        # 2026-09-22: only a ref that is NOT env-backed is a gap. An env-backed ref
+        # is already injected on its own — __oc_gateway_resolved_env_names() reads
+        # every {"source": "env"} ref regardless of this table — so reporting it
+        # names a non-problem and invites a needless table row. Measured live: the
+        # first version of this report claimed 5 gaps, 3 of which were already
+        # env-backed (gateway.auth.password, gateway.remote.password,
+        # memory.search.remote.apiKey).
+        if (
+            isinstance(node.get("id"), str)
+            and "source" in node
+            and node.get("source") != "env"
+            and prefix not in mapped
+        ):
             var = node["id"]
             if os.environ.get(var):
                 unmapped.append("{}@{} (source {})".format(var, prefix, node.get("source")))
