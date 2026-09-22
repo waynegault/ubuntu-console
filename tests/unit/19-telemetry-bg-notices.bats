@@ -32,13 +32,27 @@ setup() {
     [[ "${lines[0]}" == *'__TAC_BG_PIDS+=("$1")'* ]]
 }
 
-@test "bg jobs: every refresh spawn in sections 7 and 12 is tracked" {
-    # A spawn is a line ending in `&>/dev/null &`; the very next line has to be
-    # the tracker.  Checking adjacency, not just counts, is what catches a spawn
-    # added without one.
-    run awk '/&>\/dev\/null &$/ { n = NR + 1
-                                  if ((getline nxt) > 0 && nxt !~ /__tac_track_bg_job/)
-                                      print FILENAME ":" n ": untracked spawn" }' \
+@test "bg jobs: every refresh spawn in sections 7 and 12 is wrapped AND tracked" {
+    # Suppressing the noise takes TWO parts, because bash emits two notices:
+    #   { ( ... ) &>/dev/null & } 2>/dev/null   silences the START notice, which
+    #                                           bash prints at fork time — only a
+    #                                           redirect in effect at that
+    #                                           statement reaches it
+    #   __tac_track_bg_job "$!"                  disowns the job, so the
+    #                                            "[n]+ Done <whole command>"
+    #                                            completion notice is never printed
+    # Either half alone leaks into the render: measured 2026-09-22, disown alone
+    # still put seven "[1] <pid>" lines through a dashboard render, and `set +m`
+    # did not suppress them either.
+
+    # No spawn may end in a bare "&>/dev/null &" — that is a missing wrapper.
+    run grep -n ') &>/dev/null &$' "$TELEMETRY" "$DASHBOARD"
+    [ "$output" = "" ]
+
+    # A wrapped spawn's closing line must be immediately followed by the tracker.
+    run awk '/&>\/dev\/null & } 2>\/dev\/null$/ { n = NR + 1
+                 if ((getline nxt) > 0 && nxt !~ /__tac_track_bg_job/)
+                     print FILENAME ":" n ": wrapper without tracker" }' \
         "$TELEMETRY" "$DASHBOARD"
     [ "$output" = "" ]
 }

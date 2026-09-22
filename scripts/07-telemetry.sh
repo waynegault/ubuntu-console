@@ -2,7 +2,7 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
@@ -44,19 +44,26 @@ function _telemetry() {
 
 # ---------------------------------------------------------------------------
 # __tac_track_bg_job <pid> — Record a background refresh job for EXIT cleanup,
-# and disown it so bash never prints a job-control notice for it.
+# and disown it so bash never prints a job-COMPLETION notice for it.
 #
-# Why the disown: bash reports a tracked job at the next command boundary as
-# "[n] Done <command>", and <command> is the job's ENTIRE body — for the
-# multi-line refreshes below that is dozens of lines of source. Measured
-# 2026-09-22: after `m` returned, the dashboard render was followed by the whole
-# GPU-refresh text, right where the next prompt appears. `disown` drops the job
-# from the JOB TABLE, so no notice is printed at all; the PID stays valid, so the
-# EXIT trap's `kill` still works. Measured over 800 spawn/disown pairs
-# (interactive and not): disown never failed, so nothing is suppressed here.
+# Suppressing the notices takes two parts, because bash emits two of them:
 #
-# Every background spawn in this module goes through this function — a new spawn
-# that registers __TAC_BG_PIDS directly will start leaking notices into the UI.
+#   * "[n] <pid>" at FORK time, when the spawn statement runs.  Only a redirect
+#     in effect AT THAT STATEMENT can silence it, so the caller wraps the spawn
+#     as `{ ( ... ) &>/dev/null & } 2>/dev/null`.  disown cannot help — measured
+#     2026-09-22: with disown alone the start notice still printed seven times
+#     into a dashboard render, and `set +m` did not suppress it either.
+#   * "[n]+ Done <command>" at the next command boundary, and <command> is the
+#     job's ENTIRE body — dozens of lines of source for the multi-line refreshes
+#     below, dumped where the next prompt appears.  `disown` drops the job from
+#     the JOB TABLE, so that one is never printed.
+#
+# The PID stays valid after disown, so the EXIT trap's `kill` still works
+# (measured: a disowned job is still killed on exit).  Measured over 800
+# spawn/disown pairs, interactive and not: disown never failed, so nothing is
+# suppressed here.
+#
+# Every background spawn in this module and in §12 goes through both parts.
 # ---------------------------------------------------------------------------
 function __tac_track_bg_job() {
     __TAC_BG_PIDS+=("$1")
@@ -127,11 +134,11 @@ function __refresh_host_metrics() {
     local engines_tmp="${engines_cache}.${_tmp_token}"
     if ! __cache_fresh "$cache" 10 || ! __cache_fresh "$engines_cache" 10
     then
-        ( trap 'rm -f "$cache_tmp" "$engines_tmp"' EXIT; \
+        { ( trap 'rm -f "$cache_tmp" "$engines_tmp"' EXIT; \
           TAC_GPU_ENGINES_OUT="$engines_tmp" \
           bash "$TACTICAL_REPO_ROOT/bin/tac_hostmetrics.sh" > "$cache_tmp" 2>/dev/null \
             && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; } \
-            && { [[ -f "$engines_tmp" ]] && mv "$engines_tmp" "$engines_cache"; } ) &>/dev/null &
+            && { [[ -f "$engines_tmp" ]] && mv "$engines_tmp" "$engines_cache"; } ) &>/dev/null & } 2>/dev/null
         __tac_track_bg_job "$!"
     fi
 }
@@ -206,7 +213,7 @@ function __get_gpu() {
     then
         cat "$cache"; return
     fi
-    (
+    { (
         local smi_cmd
         smi_cmd=$(__resolve_smi)
         if [[ -n "$smi_cmd" ]]
@@ -245,7 +252,7 @@ function __get_gpu() {
         else
             echo "N/A" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         fi
-    ) &>/dev/null &
+    ) &>/dev/null & } 2>/dev/null
     __tac_track_bg_job "$!"
     if [[ -f "$cache" ]]
     then
@@ -270,7 +277,7 @@ function __get_battery() {
     then
         cat "$cache"; return
     fi
-    (
+    { (
         if (( __TAC_HAS_BATTERY == 1 ))
         then
             local cap
@@ -281,7 +288,7 @@ function __get_battery() {
         else
             echo "A/C POWERED" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         fi
-    ) &>/dev/null &
+    ) &>/dev/null & } 2>/dev/null
     __tac_track_bg_job "$!"
     if [[ -f "$cache" ]]
     then
@@ -325,7 +332,7 @@ function __get_oc_version() {
     then
         cat "$cache"; return
     fi
-    ( trap 'rm -f "$cache_tmp"' EXIT; \
+    { ( trap 'rm -f "$cache_tmp"' EXIT; \
       local ocVersion="UNKNOWN"
       if [[ "$__TAC_OPENCLAW_OK" == "1" ]]
       then
@@ -333,7 +340,7 @@ function __get_oc_version() {
           [[ -n "$ocVersion" ]] && ocVersion="v${ocVersion#v}"
       fi
       echo "$ocVersion" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
-    ) &>/dev/null &
+    ) &>/dev/null & } 2>/dev/null
     __tac_track_bg_job "$!"
     if [[ -f "$cache" ]]
     then
@@ -361,7 +368,7 @@ function __get_oc_metrics() {
     local cache_tmp="${cache}.$$"  # PID-suffixed to avoid race conditions
     if ! __cache_fresh "$cache" 60
     then
-        ( trap 'rm -f "$cache_tmp"' EXIT; \
+        { ( trap 'rm -f "$cache_tmp"' EXIT; \
           local sessionCount=0
           if [[ "$__TAC_OPENCLAW_OK" == "1" ]]
           then
@@ -369,7 +376,7 @@ function __get_oc_metrics() {
               sessionCount=${sessionCount:-0}
           fi
           echo "$sessionCount" > "$cache_tmp" && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
-        ) &>/dev/null &
+        ) &>/dev/null & } 2>/dev/null
         __tac_track_bg_job "$!"
     fi
 
@@ -400,13 +407,13 @@ function __get_llm_slots() {
     then
         cat "$cache"; return
     fi
-    (
+    { (
         if __test_port "$LLM_PORT"
         then
             curl -sf --max-time 2 "http://127.0.0.1:${LLM_PORT}/slots" > "$cache_tmp" 2>/dev/null \
                 && { mv "$cache_tmp" "$cache" || rm -f "$cache_tmp"; }
         fi
-    ) &>/dev/null &
+    ) &>/dev/null & } 2>/dev/null
     __tac_track_bg_job "$!"
     [[ -f "$cache" ]] && cat "$cache"
 }
