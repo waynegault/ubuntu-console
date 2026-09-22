@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 21
+# Module Version: 22
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -1200,101 +1200,39 @@ function oc-refresh-keys() {
     fi
 
     # 7. Restart the gateway LAST, once every durable side effect (manager env,
-    #    SecretRefs, NAS mirror) is committed. It always runs OUTSIDE
-    #    openclaw-gateway.service's cgroup: a gateway-hosted caller lives in that
-    #    cgroup, so an in-cgroup restart kills the caller mid-flight. `setsid` is
-    #    NOT sufficient — it escapes the session, not the cgroup.
-    #
-    #    Two invocation modes, chosen by where the caller lives:
-    #
-    #    * Gateway-hosted (our cgroup IS the gateway's): waiting DEADLOCKS. The
-    #      gateway cannot finish draining while this caller is still pending, and
-    #      the caller waits on the restart, so it resolves only at TimeoutStopSec
-    #      (5m30s, measured 2026-09-13) — and even then the outcome goes
-    #      unobserved. So detach: a transient *service* returns in ~0.1s, and the
-    #      caller exiting lets the drain finish immediately.
-    #
-    #    * Anywhere else (interactive shell, cron outside the gateway): no pending
-    #      request blocks the drain, so wait in a transient *scope* and report the
-    #      real outcome. An unreadable cgroup query keeps this conservative path.
-    #
-    #    Why a scope for the waiting path: it inherits this shell's full
-    #    environment, whereas a service sees systemd's minimal PATH, which has no
-    #    `openclaw` (measured 2026-09-13: openclaw NOT-FOUND). The detached path
-    #    therefore passes --setenv=PATH; the user manager already supplies HOME
-    #    and XDG_RUNTIME_DIR (verified: openclaw resolves and `openclaw gateway
-    #    restart` is reachable from the service).
-    #
-    #    The body persists its OWN outcome to $_restart_log, because a waiting
-    #    caller can be torn down by the very restart it issued. The detached
-    #    caller must NOT read that log — the service truncates it on start, so
-    #    reading would race. A trailing "started" with no outcome is therefore
-    #    meaningful evidence, not a lost record.
+    #    SecretRefs, NAS mirror) is committed — see the block below for why this
+    #    is now a plain systemctl restart.
     if (( _gw_restart_needed == 1 ))
     then
-        local _restart_log="$TAC_CACHE_DIR/tac_gateway_restart.log"
-        # SC2016: delayed expansion — this multi-line body is a bash script
-        # handed to a later interpreter, so its `$rl`/`$1` must survive
-        # unevaluated at definition time.
-        # shellcheck disable=SC2016
-        local _restart_body='
-            _rl="$1"
-            # Log every step; echo only the final outcome (the caller captures
-            # stdout, so a second echo would corrupt the single-line match).
-            _log()  { printf "%s %s %s\n" "$1" "$$" "$(date -Is)" >> "$_rl" 2>/dev/null || true; }
-            _emit() { _log "$1"; printf "%s\n" "$1"; }
-            : > "$_rl" 2>/dev/null || true
-            _log started
-            if openclaw gateway restart >/dev/null 2>&1; then
-                _emit restarted
-            elif [[ "$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)" =~ ^(active|activating|reloading)$ ]]; then
-                # The restart did happen; only the readiness probe (/healthz +
-                # /readyz, 45s deadline) timed out on a slow cold start. Do not
-                # stack a redundant reset-failed + start: that start would also
-                # block until the unit finishes activating (the visible hang).
-                _emit issued-slow
-            elif systemctl --user reset-failed openclaw-gateway.service >/dev/null 2>&1 && systemctl --user start openclaw-gateway.service >/dev/null 2>&1; then
-                _emit recovered
-            else
-                _emit failed
-            fi
-        '
-        local _restart_out=""
-        if command -v systemd-run >/dev/null 2>&1
+        # 2026-09-22 (simplification): this block used to run `openclaw gateway
+        # restart` inside an embedded bash body, from either a detached unit or a
+        # scope, and classify SIX outcomes. Two of those outcomes were the same
+        # fact: the CLI's own 45 s readiness probe cannot pass on a box whose cold
+        # start runs to minutes (measured: ~2 min 51 s). Worse, the CLI's restart
+        # raced the state-lifecycle lock — the stability bundles record it in order
+        # (restart_shutdown_timeout → startup_failed → systemd's Restart= recovering
+        # it). systemd's own restart is serial: the stop completes before the start,
+        # so that overlap cannot arise, and --no-block keeps a slow cold start from
+        # hanging the caller. This is the last step, so a gateway-hosted run that
+        # dies here loses only its own final log line.
+        local _gw_state="" _i
+        if systemctl --user restart --no-block openclaw-gateway.service 2>/dev/null
         then
-            # Are we inside the gateway's own cgroup, i.e. a gateway-hosted run?
-            local _self_cg _gw_cg
-            _self_cg=$(awk -F: '/^0::/{print $3}' /proc/self/cgroup 2>/dev/null)
-            _gw_cg=$(systemctl --user show -p ControlGroup --value openclaw-gateway.service 2>/dev/null)
-            if [[ -n "$_gw_cg" && ( "$_self_cg" == "$_gw_cg" || "$_self_cg" == "$_gw_cg"/* ) ]]
-            then
-                # Detach: waiting here would stall the drain until TimeoutStopSec.
-                if systemd-run --user --unit="oc-refresh-restart-$$" --collect --quiet \
-                        --setenv=PATH="$PATH" \
-                        bash -c "$_restart_body" _ "$_restart_log" >/dev/null 2>&1
-                then
-                    __tac_info "Gateway" "[restart issued (detached — a gateway-hosted caller cannot wait for the drain); outcome in $_restart_log]" "$C_Success"
-                else
-                    __tac_info "Gateway" "[restart NOT issued — see $_restart_log; run 'so' to apply env changes]" "$C_Warning"
-                fi
-            else
-                _restart_out=$(systemd-run --user --scope --collect --quiet \
-                    bash -c "$_restart_body" _ "$_restart_log" 2>/dev/null) || true
-                # Prefer the scope's own stdout; if the caller died mid-restart,
-                # fall back to the record the scope left behind.
-                if [[ -z "$_restart_out" && -r "$_restart_log" ]]; then
-                    _restart_out=$(tail -n 1 "$_restart_log" 2>/dev/null | awk '{print $1}')
-                fi
-                case "$_restart_out" in
-                    restarted)   __tac_info "Gateway" "[restarted to pick up refreshed env]" "$C_Success" ;;
-                    issued-slow) __tac_info "Gateway" "[restart issued; readiness probe timed out but unit is up/starting — env applied]" "$C_Warning" ;;
-                    recovered)   __tac_info "Gateway" "[restart command failed; recovered via systemctl reset-failed+start]" "$C_Warning" ;;
-                    started)     __tac_info "Gateway" "[restart issued — outcome unobserved (caller torn down); see $_restart_log]" "$C_Warning" ;;
-                    *)           __tac_info "Gateway" "[restart not confirmed — see $_restart_log; run 'so' if the gateway is stale]" "$C_Warning" ;;
-                esac
-            fi
+            # A bounded settle, not a readiness wait: the unit reports active as
+            # soon as the process is spawned, which is well before it serves.
+            for _i in 1 2 3 4 5 6 7 8 9 10
+            do
+                _gw_state=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)
+                [[ "$_gw_state" == "active" || "$_gw_state" == "failed" ]] && break
+                sleep 1
+            done
+            case "$_gw_state" in
+                active) __tac_info "Gateway" "[restarted to pick up refreshed env]" "$C_Success" ;;
+                failed) __tac_info "Gateway" "[restart FAILED — env is applied; check 'systemctl --user status openclaw-gateway.service']" "$C_Error" ;;
+                *)      __tac_info "Gateway" "[restart issued; unit is $_gw_state — it finishes coming up on its own]" "$C_Warning" ;;
+            esac
         else
-            __tac_info "Gateway" "[restart deferred — systemd-run unavailable; run 'so' to apply env changes]" "$C_Warning"
+            __tac_info "Gateway" "[restart NOT issued — env is applied; run 'systemctl --user restart openclaw-gateway.service']" "$C_Warning"
         fi
     fi
 }

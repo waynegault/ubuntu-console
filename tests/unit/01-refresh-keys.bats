@@ -147,7 +147,7 @@ teardown() {
     [ "$status" -ne 0 ]
 
     # Gateway restart was triggered (mock systemctl is-active returns 0).
-    run grep -F "gateway restart" "$OC_MOCK_LOG"
+    run grep -F "restart --no-block openclaw-gateway.service" "$SYSTEMCTL_LOG"
     [ "$status" -eq 0 ]
 
     run grep -c '^SSH_CALL:' "$ssh_log"
@@ -211,7 +211,7 @@ teardown() {
     # First refresh: env push + gateway restart + NAS upload + nas hash marker.
     run oc-refresh-keys
     [ "$status" -eq 0 ]
-    run grep -F "gateway restart" "$OC_MOCK_LOG"
+    run grep -F "restart --no-block openclaw-gateway.service" "$SYSTEMCTL_LOG"
     [ "$status" -eq 0 ]
     run grep -c '^SSH_CALL:' "$ssh_log"
     [ "$status" -eq 0 ]
@@ -225,7 +225,7 @@ teardown() {
     : > "$ssh_log"
     run oc-refresh-keys
     [ "$status" -eq 0 ]
-    run grep -F "gateway restart" "$OC_MOCK_LOG"
+    run grep -F "restart --no-block" "$SYSTEMCTL_LOG"
     [ "$status" -ne 0 ]
     run grep -F "set-environment" "$SYSTEMCTL_LOG"
     [ "$status" -ne 0 ]
@@ -260,29 +260,17 @@ teardown() {
     [ "$output" -ge 1 ]
 }
 
-@test "oc-refresh-keys reports a readiness timeout (not recovery) when restart fails but the unit is active" {
+@test "oc-refresh-keys reports a restart FAILURE rather than a plausible outcome" {
+    # 2026-09-22 (simplification): the restart is now a plain `systemctl --user
+    # restart --no-block`, so the failure that matters is that call. The old block
+    # wrapped `openclaw gateway restart` and had five ways to describe one fact.
     __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret'"
-
-    # openclaw: config patch succeeds, but `gateway restart` exits non-zero —
-    # simulating the 45s /healthz+/readyz readiness probe timing out on a slow
-    # cold start. The unit stays active (systemctl mock returns 0 for is-active).
-    __mock_command_local openclaw "if [ \"\$*\" = 'config patch --stdin' ]; then cat > \"$OC_MOCK_PATCH_FILE\"; fi; echo \"OPENCLAW_CALL: \$*\" >> \"$OC_MOCK_LOG\"; case \"\$1 \$2\" in 'gateway restart') exit 1 ;; esac; exit 0"
+    __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; case \"\$*\" in *restart*) exit 1;; *is-active*) echo active;; esac; exit 0"
 
     run oc-refresh-keys
     [ "$status" -eq 0 ]
-    local refresh_out="$output"
-
-    # The restart was attempted...
-    run grep -F "OPENCLAW_CALL: gateway restart" "$OC_MOCK_LOG"
-    [ "$status" -eq 0 ]
-
-    # ...and because the unit is still active, the message must name the
-    # readiness-probe timeout rather than claim a recovery.
-    [[ "$refresh_out" == *"readiness probe timed out"* ]]
-
-    # No redundant reset-failed+start was stacked on an already-active unit.
-    run grep -F "reset-failed" "$SYSTEMCTL_LOG"
-    [ "$status" -ne 0 ]
+    [[ "$output" == *"restart NOT issued"* ]]
+    [[ "$output" == *"env is applied"* ]]
 }
 
 @test "oc-refresh-keys escapes NAS env values with %q only (no double-quote wrap)" {
@@ -535,21 +523,15 @@ CFG
     [ "$status" -ne 0 ]
 }
 
-@test "oc-refresh-keys reports an UNCONFIRMED restart rather than a silent no-op" {
-    # The runner's real failure mode (2026-09-21): `systemd-run --user` cannot reach a
-    # user bus — "Failed to connect to bus: No medium found" — so the restart body never
-    # executes and the gateway is left stale.  The refresh must SAY the restart is
-    # unconfirmed rather than report success.  Before setup() mocked systemd-run this
-    # path could not be reached from here at all, which is exactly why the file's three
-    # restart assertions passed locally and failed on CI: the mock always ran the
-    # payload, so the bus-less reality was invisible.
-    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret' 'GEMINI_API_KEY=test-gemini-key'"
-    export GEMINI_API_KEY="test-gemini-key"
-    # A systemd-run that accepts the call and runs nothing — what a failed bus
-    # connection looks like to the caller.
-    __mock_command_local systemd-run 'exit 0'
+@test "oc-refresh-keys reports a CONFIRMED restart when the unit comes back active" {
+    # Replaces the old "UNCONFIRMED restart" test, which existed because the
+    # restart body ran under `systemd-run --user` and needed a live user bus
+    # (2026-09-21: the runner has none, so the body never ran). The plain
+    # systemctl call has no such dependency, so what is worth pinning now is that
+    # the healthy path is reported as confirmed rather than hedged.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret'"
 
     run oc-refresh-keys
     [ "$status" -eq 0 ]
-    [[ "$output" == *"restart not confirmed"* ]]
+    [[ "$output" == *"restarted to pick up refreshed env"* ]]
 }
