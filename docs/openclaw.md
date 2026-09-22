@@ -188,11 +188,14 @@ SecretRef write.
 21 mappings in total. Keep this list in step with `entries` in
 `scripts/09d-oc-agents.sh` (`__oc_apply_secret_refs`) — that list is the source.
 
-A credential the config references but this table does not map is **named, not
-silently skipped**: when the bridged env supplies a key whose ref is not
-env-backed (for example a `source: "store"` ref), the refresh prints a note with
-the exact path and env var, so the fix is one table row. The refresh never
-rewrites such a ref itself — a store-backed ref may be deliberate.
+The refresh prints **one** line classifying the bridged keys, because they can be
+in three different states and only one of them is a problem: *injected* (an
+env-backed ref exists, or this run is writing one), *waiting for a consumer*
+(nothing in the config references it yet — not an error), and **not injectable**
+(the config references it from a non-env source such as `store`, which no env var
+can ever fill). Only the third is named, with its path and source, because only it
+needs a decision: the refresh never rewrites such a ref itself — a store-backed
+ref may be deliberate.
 
 `oc-refresh-keys` also pushes the bridged vars the gateway resolves into the
 systemd **user manager** environment (`systemctl --user set-environment`), which

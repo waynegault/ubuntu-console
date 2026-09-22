@@ -308,8 +308,8 @@ CFG
     # (2026-09-21: TYPESAFE_API_KEY was imported and then read as "refresh-keys
     # did not pick it up"). Assert against the saved run output — by this point
     # $output holds the last grep's result, not the refresh's.
-    [[ "$refresh_out" == *"reach no SecretRef"* ]]
-    [[ "$refresh_out" == *"WIN_API_KEY"* ]]
+    [[ "$refresh_out" == *"waiting for a consumer"* ]]
+    [[ "$refresh_out" != *"WIN_API_KEY"* ]]
 }
 
 @test "oc-refresh-keys injects a newly-consumed SecretRef when no key VALUE changed (2026-09-22 name-set trigger)" {
@@ -466,7 +466,7 @@ CFG
     [ "$status" -eq 0 ]
 
     # Named, with the path and the var, in the run's own output.
-    [[ "$output" == *"NOT env-backed"* ]]
+    [[ "$output" == *"NOT injectable"* ]]
     [[ "$output" == *"WIN_SAMPLE_KEY"* ]]
     [[ "$output" == *"skills.entries.sample-tool.apiKey"* ]]
 

@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 23
+# Module Version: 24
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -665,27 +665,24 @@ for path, var in entries:
 # bridge and was declared in the config and still never reached the gateway.
 # Report the exact path and env var so the fix is the one-line table edit above.
 # Never rewrite the ref here: a store-backed ref may be deliberate.
-mapped = {path for path, _ in entries}
-unmapped = []
-
+# 2026-09-22 (Pass C): ONE report for the three states a bridged key can be in,
+# replacing two separate ones — the env sync listed every un-consumed key by name,
+# and this walk named every non-env ref. Only the THIRD state is actionable, so
+# only it is named; the second is a count, because a key with no consumer yet is
+# not an error (RESMED_PASSWORD is waiting for one and otherwise reads as one of
+# 27 failures).
+#   injected        an env-backed ref exists, or this run is writing one
+#   waiting         nothing in the config references it yet
+#   NOT injectable  the config references it from a NON-env source (store), which
+#                   no env var can ever fill — needs a mapping row or a decision
+refs_env, refs_other = set(), []
 def _collect(node, prefix=""):
     if isinstance(node, dict):
-        # 2026-09-22: only a ref that is NOT env-backed is a gap. An env-backed ref
-        # is already injected on its own — __oc_gateway_resolved_env_names() reads
-        # every {"source": "env"} ref regardless of this table — so reporting it
-        # names a non-problem and invites a needless table row. Measured live: the
-        # first version of this report claimed 5 gaps, 3 of which were already
-        # env-backed (gateway.auth.password, gateway.remote.password,
-        # memory.search.remote.apiKey).
-        if (
-            isinstance(node.get("id"), str)
-            and "source" in node
-            and node.get("source") != "env"
-            and prefix not in mapped
-        ):
-            var = node["id"]
-            if os.environ.get(var):
-                unmapped.append("{}@{} (source {})".format(var, prefix, node.get("source")))
+        if isinstance(node.get("id"), str) and "source" in node:
+            if node.get("source") == "env":
+                refs_env.add(node["id"])
+            else:
+                refs_other.append((node["id"], prefix, node.get("source")))
         for key, value in node.items():
             _collect(value, "{}.{}".format(prefix, key) if prefix else key)
     elif isinstance(node, list):
@@ -693,15 +690,30 @@ def _collect(node, prefix=""):
             _collect(value, "{}[{}]".format(prefix, i))
 
 _collect(cfg)
-if unmapped:
-    print(
-        "[tac] note: {} config credential(s) are NOT env-backed although the bridged env "
-        "supplies the key - add a mapping row in __oc_apply_secret_refs to inject them: {}".format(
-            len(unmapped), ", ".join(sorted(unmapped))
-        ),
-        file=sys.stderr,
-    )
-print(json.dumps({"patch": patch, "changed": changed, "skipped": skipped}))
+# The table is about to make these env-backed, so count them as injected rather
+# than reporting the pre-patch state (the staleness fixed in the reorder earlier).
+refs_env |= {var for _, var in entries if os.environ.get(var)}
+bridged = set()
+_cache_file = os.path.join(os.environ.get("TAC_CACHE_DIR", "/dev/shm"), "tac_win_api_keys")
+try:
+    with open(_cache_file, encoding="utf-8") as _fh:
+        for _line in _fh:
+            if _line.startswith("export "):
+                _nm = _line[7:].split("=", 1)[0]
+                if _nm and _nm == _nm.upper() and _nm.replace("_", "").isalnum():
+                    bridged.add(_nm)
+except OSError as _exc:
+    print("[tac] gateway env: cannot read the bridge cache ({})".format(_exc), file=sys.stderr)
+if bridged:
+    _injected = len(bridged & refs_env)
+    _gaps = sorted({(v, p, s) for (v, p, s) in refs_other if v in bridged})
+    _waiting = len(bridged - refs_env - {v for v, _p, _s in refs_other})
+    _msg = "[tac] gateway env: {} injected, {} waiting for a consumer".format(_injected, _waiting)
+    if _gaps:
+        _msg += " -- NOT injectable (config refs with a NON-env source): " + ", ".join(
+            "{}@{} (source {})".format(v, p, s) for v, p, s in _gaps
+        )
+    print(_msg, file=sys.stderr)
 PYEOF
 )
     _patch=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['patch']))" 2>/dev/null)
@@ -893,7 +905,7 @@ function __oc_sync_gateway_env_file() {
     # resolves (see __oc_gateway_resolved_env_names). Fail-open with a warning if
     # the set cannot be computed — a config/DB hiccup must not silently starve
     # the gateway of a key it needs.
-    local _resolved _kept=() _unexposed=() _n
+    local _resolved _kept=() _n
     _resolved="$(__oc_gateway_resolved_env_names)"
     if [[ -n "$_resolved" ]]; then
         # Iterate the array directly. This used to read it back through
@@ -902,31 +914,13 @@ function __oc_sync_gateway_env_file() {
         # time — item 6.4's shape without the file it was written for.
         for _n in "${_var_names[@]}"; do
             [[ -n "$_n" ]] || continue
-            if grep -qxF "$_n" <<< "$_resolved"; then
-                _kept+=("$_n")
-            else
-                _unexposed+=("$_n")
-            fi
+            grep -qxF "$_n" <<< "$_resolved" && _kept+=("$_n")
         done
         _var_names=("${_kept[@]}")
     else
         __tac_info "Security" "[WARN: resolved-env set unavailable — pushing the full bridged set]" "$C_Warning"
     fi
 
-    # 2026-09-21: name the bridged vars that reach no SecretRef. They are not
-    # lost — the cache and the NAS mirror keep every one — but a refresh that
-    # imports a key and then exposes nothing is indistinguishable from a refresh
-    # that failed, so the drop has to be visible. TYPESAFE_API_KEY was imported
-    # this way and read as "refresh-keys did not pick it up"; a key reaches the
-    # gateway only once something consumes it as an env-backed SecretRef.
-    # Reported before the early return below, so the all-dropped case reports too.
-    if ((${#_unexposed[@]})); then
-        local _unexposed_names _unexposed_note
-        printf -v _unexposed_names '%s, ' "${_unexposed[@]}"
-        _unexposed_note="${#_unexposed[@]} bridged var(s) reach no SecretRef — not injected: "
-        _unexposed_note+="${_unexposed_names%, }"
-        __tac_info "Gateway env" "[$_unexposed_note]" "$C_Warning"
-    fi
     ((${#_var_names[@]})) || return 0
 
     # 1. Inject the resolved set, gated on BOTH the bridged values and the
