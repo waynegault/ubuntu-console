@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 43
+# Module Version: 44
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -3569,7 +3569,8 @@ function llm-build() {
 # Parses the 429 response for the reset timestamp.
 #
 # Output: human-readable status via __tac_info lines.
-# Returns: 0 if quota available, 1 if exhausted, 2 if unreachable.
+# Returns: 0 if quota available, 1 if exhausted, 2 if unreachable or not entitled
+#          (a 403 AccessDenied.* is an ENTITLEMENT state, not a transient fault).
 # ---------------------------------------------------------------------------
 function __model_token_plan_quota() {
     local cache_file="${TAC_CACHE_DIR}/tac_token_plan_quota"
@@ -3641,7 +3642,26 @@ function __model_token_plan_quota() {
         return 2
 
     else
-        __tac_info "Token Plan" "HTTP ${http_code} — unexpected response" "$C_Warning"
+        # Surface WHY.  The body carries the provider's own reason, and throwing
+        # it away turned a whole entitlement state into a bare "unexpected
+        # response": measured 2026-09-22, every model returned
+        # `403 AccessDenied.Unpurchased` — the key authenticated (GET /models was
+        # 200) but no plan was active for it, which the status code alone cannot
+        # distinguish from a transient fault.
+        local err_code err_msg
+        err_code=$(jq -r '.error.code // empty' <<< "$body" 2>/dev/null)
+        err_msg=$(jq -r '.error.message // empty' <<< "$body" 2>/dev/null)
+        if [[ "$err_code" == *Unpurchased* || "$err_code" == AccessDenied* ]]
+        then
+            __tac_info "Token Plan" "Not entitled — no active plan for this key (${err_code})" "$C_Error"
+            __tac_info "Console" "Check the plan at ${console_url}" "$C_Dim"
+        elif [[ -n "$err_msg" ]]
+        then
+            __tac_info "Token Plan" "HTTP ${http_code} — ${err_code:-error}: ${err_msg}" "$C_Warning"
+            __tac_info "Console" "Check at ${console_url}" "$C_Dim"
+        else
+            __tac_info "Token Plan" "HTTP ${http_code} — unexpected response (no error detail in the body)" "$C_Warning"
+        fi
         return 2
     fi
 }
