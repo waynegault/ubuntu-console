@@ -489,7 +489,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1091 total tests: 729 BATS + 362 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1089 total tests: 727 BATS + 362 Python).
 
 ### Running Tests
 
@@ -1093,7 +1093,7 @@ where it was last present.)
 │   ├── test_models.py                 # Pydantic model tests (37 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
 │   ├── unit/                          # BATS unit tests (134 tests: 11+4+8+5+5+6+20+4+8+7+28+19+7+2)
-│   └── integration/                   # BATS integration tests (144 tests: 14+43+10+44+5+28)
+│   └── integration/                   # BATS integration tests (142 tests: 14+43+10+44+3+28)
 └── systemd/
     ├── llama-watchdog.service
     ├── llama-watchdog.timer

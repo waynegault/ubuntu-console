@@ -147,78 +147,22 @@ teardown() {
     [ "$status" -ne 0 ]
 }
 
-@test "oc-refresh-keys records the deferred gateway restart outcome" {
-    # Regression: step 7's outcome used to be written by the caller AFTER
-    # systemd-run returned, so a caller torn down by its own restart lost the
-    # record. The restart body must persist its own outcome.
+@test "oc-refresh-keys issues the restart through systemd and reports the unit state" {
+    # 2026-09-22 (simplification): the restart is a plain `systemctl --user restart
+    # --no-block`. Three integration tests used to pin the removed machinery — the
+    # embedded body, its /dev/shm outcome log, the detached unit and the scope. What
+    # matters now is that the restart is issued through systemd and that the outcome
+    # reported is the unit state, not a probe.
     __mock_command_local pwsh.exe "printf '%s\\n' 'RESTART_PROBE_API_KEY=probe'"
-    rm -f "$TAC_CACHE_DIR/tac_gateway_restart.log"
+    rm -f "$SYSTEMCTL_LOG"
 
     export GEMINI_API_KEY="test-gemini-key"
 
     run oc-refresh-keys
     [ "$status" -eq 0 ]
 
-    local _rlog="$TAC_CACHE_DIR/tac_gateway_restart.log"
-    [ -f "$_rlog" ]
-    run grep -F "started" "$_rlog"
+    run grep -F -- "--user restart --no-block openclaw-gateway.service" "$SYSTEMCTL_LOG"
     [ "$status" -eq 0 ]
-    run grep -F "restarted" "$_rlog"
-    [ "$status" -eq 0 ]
-}
-
-@test "oc-refresh-keys reports an unobserved restart from the scope's own log" {
-    # A caller killed mid-restart sees no stdout. It must still report the
-    # outcome, read back from the log the scope wrote for itself.
-    __mock_command_local pwsh.exe "printf '%s\\n' 'TORN_DOWN_API_KEY=t'"
-    __mock_command_local systemd-run 'while [[ "${1:-}" == --* ]]; do shift; done; printf "started 123 2026-01-01T00:00:00+00:00\\n" > "${!#}"'
-    rm -f "$TAC_CACHE_DIR/tac_gateway_restart.log"
-
-    export GEMINI_API_KEY="test-gemini-key"
-
-    run oc-refresh-keys
-    [ "$status" -eq 0 ]
-
-    # The caller saw no stdout, so it read the scope's log and reported the
-    # unobserved outcome rather than claiming success or losing the record.
-    [[ "$output" == *"outcome unobserved"* ]]
-    run grep -F "started" "$TAC_CACHE_DIR/tac_gateway_restart.log"
-    [ "$status" -eq 0 ]
-}
-
-@test "oc-refresh-keys detaches the restart when the caller is inside the gateway" {
-    # Regression: a gateway-hosted caller that waits on the restart stalls the
-    # drain until TimeoutStopSec (5m30s) and still loses the outcome. It must
-    # fire a detached transient unit and return at once instead.
-    __mock_command_local pwsh.exe "printf '%s\\n' 'DETACH_PROBE_API_KEY=probe'"
-
-    # Report the caller's own cgroup as the gateway's, so this test asserts the
-    # gateway-hosted branch wherever it runs (the suite may itself be inside the
-    # gateway cgroup, as it is when driven by the agent).
-    export SELF_CG="$(awk -F: '/^0::/{print $3}' /proc/self/cgroup)"
-    __mock_command_local systemctl 'if [[ "$*" == *"show -p ControlGroup --value openclaw-gateway.service"* ]]; then printf "%s\n" "$SELF_CG"; fi; exit 0'
-
-    # Record how systemd-run was invoked; do NOT run the payload, standing in
-    # for a transient service that is started and immediately returns.
-    export SYSTEMD_RUN_LOG="$TAC_TEST_TMPDIR/systemd_run_calls.log"
-    rm -f "$SYSTEMD_RUN_LOG"
-    __mock_command_local systemd-run "echo \"SYSTEMD_RUN: \$*\" >> \"$SYSTEMD_RUN_LOG\"; exit 0"
-
-    export GEMINI_API_KEY="test-gemini-key"
-
-    run oc-refresh-keys
-    [ "$status" -eq 0 ]
-
-    # Assert the message first: every later `run` overwrites $output.
-    [[ "$output" == *"restart issued (detached"* ]]
-
-    # Detached: a transient --unit, never a blocking --scope.
-    run grep -F -- "--unit=" "$SYSTEMD_RUN_LOG"
-    [ "$status" -eq 0 ]
-    run grep -F -- "--scope" "$SYSTEMD_RUN_LOG"
-    [ "$status" -ne 0 ]
-
-    # The service cannot see openclaw without the caller's PATH.
-    run grep -F -- "--setenv=PATH=" "$SYSTEMD_RUN_LOG"
-    [ "$status" -eq 0 ]
+    [[ "$output" != *"outcome unobserved"* ]]
+    [[ "$output" != *"readiness probe timed out"* ]]
 }
