@@ -365,6 +365,153 @@ CFG
     [[ "$refresh_out" == *"WIN_API_KEY"* ]]
 }
 
+@test "oc-refresh-keys injects a newly-consumed SecretRef when no key VALUE changed (2026-09-22 name-set trigger)" {
+    # Regression test for the hash-only trigger: the manager-env push used to
+    # fire only when the bridged VALUES changed. Consuming a key as an env-backed
+    # SecretRef changes WHICH names are injected without changing any value, so a
+    # freshly-declared key stayed out of the manager env for good and read as
+    # "refresh-keys did not pick it up" (TYPESAFE_API_KEY, 2026-09-22: bridged and
+    # declared, never injected). On the pre-fix code the second refresh below
+    # pushes nothing and this test fails.
+    mkdir -p "$HOME/.openclaw"
+    cat > "$HOME/.openclaw/openclaw.json" << 'CFG'
+{
+  "plugins": {
+    "entries": {
+      "google": {
+        "config": {
+          "webSearch": {
+            "apiKey": { "source": "env", "provider": "default", "id": "GEMINI_API_KEY" }
+          }
+        }
+      }
+    }
+  }
+}
+CFG
+
+    # Both keys are bridged from the start; only the CONFIG changes below.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GEMINI_API_KEY=test-gemini-key' 'TYPESAFE_API_KEY=test-typesafe-key'"
+    export GEMINI_API_KEY="test-gemini-key"
+    export TYPESAFE_API_KEY="test-typesafe-key"
+
+    # Refresh 1 — one name is consumed, so one name is injected.
+    rm -f "$SYSTEMCTL_LOG"
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    run grep -F "set-environment GEMINI_API_KEY=test-gemini-key" "$SYSTEMCTL_LOG"
+    [ "$status" -eq 0 ]
+
+    run grep -F "set-environment TYPESAFE_API_KEY=" "$SYSTEMCTL_LOG"
+    [ "$status" -ne 0 ]
+
+    local hash_before
+    hash_before=$(cat "$TAC_CACHE_DIR/tac_win_api_keys.hash")
+
+    # Refresh 2 — the config now consumes the second key. The bridged values are
+    # byte-identical, so only the injected NAME SET moved.
+    cat > "$HOME/.openclaw/openclaw.json" << 'CFG'
+{
+  "plugins": {
+    "entries": {
+      "google": {
+        "config": {
+          "webSearch": {
+            "apiKey": { "source": "env", "provider": "default", "id": "GEMINI_API_KEY" }
+          }
+        }
+      },
+      "typesafe-ai": {
+        "config": {
+          "apiKey": { "source": "env", "provider": "default", "id": "TYPESAFE_API_KEY" }
+        }
+      }
+    }
+  }
+}
+CFG
+
+    rm -f "$SYSTEMCTL_LOG"
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    run grep -F "set-environment TYPESAFE_API_KEY=test-typesafe-key" "$SYSTEMCTL_LOG"
+    [ "$status" -eq 0 ]
+
+    # The premise, asserted rather than assumed: the VALUE hash did not move, so
+    # the trigger above really was the name set and not a value change.
+    [ "$(cat "$TAC_CACHE_DIR/tac_win_api_keys.hash")" = "$hash_before" ]
+
+    # The name set that was pushed is the set that was recorded.
+    [ -f "$TAC_CACHE_DIR/tac_win_api_keys.resolved" ]
+    run grep -c '^TYPESAFE_API_KEY$' "$TAC_CACHE_DIR/tac_win_api_keys.resolved"
+    [ "$status" -eq 0 ]
+}
+
+@test "oc-refresh-keys puts a plugin credential from the Windows env onto the env surface (2026-09-22)" {
+    # TYPESAFE_API_KEY was bridged from Windows and declared in openclaw.json, yet
+    # reached the gateway through neither channel: the mapping table had no row for
+    # it, so refresh-keys could not put it on the credential surface. This pins the
+    # row, and the preflight property with it.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'TYPESAFE_API_KEY=test-typesafe-key'"
+    export TYPESAFE_API_KEY="test-typesafe-key"
+    rm -f "$OC_MOCK_LOG" "$OC_MOCK_PATCH_FILE"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    # Present in the bridged env -> the env-backed ref is written for the plugin path.
+    run grep -F '"typesafe-ai": {"apiKey": {"source": "env", "provider": "default", "id": "TYPESAFE_API_KEY"' "$OC_MOCK_PATCH_FILE"
+    [ "$status" -eq 0 ]
+
+    # Absent -> the ref is never created, so an unresolved ref cannot appear.
+    unset TYPESAFE_API_KEY
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret'"
+    rm -f "$OC_MOCK_LOG" "$OC_MOCK_PATCH_FILE"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    run grep -F 'typesafe-ai' "$OC_MOCK_PATCH_FILE" 2>/dev/null
+    [ "$status" -ne 0 ]
+}
+
+@test "oc-refresh-keys NAMES a config credential it cannot put on the env surface (2026-09-22)" {
+    # A ref the config declares but the table does not map (here source "store")
+    # never receives an env var, so refresh-keys cannot inject it — and the key then
+    # reads as "imported from Windows but missing", which is exactly how this was
+    # misdiagnosed for TYPESAFE_API_KEY. It must say so, naming the path and the env
+    # var, and must NOT rewrite a ref that may be deliberate.
+    mkdir -p "$HOME/.openclaw"
+    cat > "$HOME/.openclaw/openclaw.json" << 'CFG'
+{
+  "plugins": {
+    "entries": {
+      "sample-tool": {
+        "apiKey": { "source": "store", "provider": "default", "id": "WIN_SAMPLE_KEY" }
+      }
+    }
+  }
+}
+CFG
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_SAMPLE_KEY=test-store-key'"
+    export WIN_SAMPLE_KEY="test-store-key"
+    rm -f "$OC_MOCK_LOG" "$OC_MOCK_PATCH_FILE"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    # Named, with the path and the var, in the run's own output.
+    [[ "$output" == *"NOT env-backed"* ]]
+    [[ "$output" == *"WIN_SAMPLE_KEY"* ]]
+    [[ "$output" == *"plugins.entries.sample-tool.apiKey"* ]]
+
+    # The store-backed ref was left exactly as it was.
+    run grep -F 'WIN_SAMPLE_KEY' "$OC_MOCK_PATCH_FILE" 2>/dev/null
+    [ "$status" -ne 0 ]
+}
+
 @test "oc-refresh-keys reports an UNCONFIRMED restart rather than a silent no-op" {
     # The runner's real failure mode (2026-09-21): `systemd-run --user` cannot reach a
     # user bus — "Failed to connect to bus: No medium found" — so the restart body never

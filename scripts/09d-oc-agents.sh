@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 15
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -600,6 +600,8 @@ entries = [
     # Tool / Platform API Keys
     ("tools.web.fetch.firecrawl.apiKey", "FIRECRAWL_API_KEY"),
     ("tools.web.search.serp.apiKey", "SERP_API_KEY"),
+    # Plugin / integration credentials
+    ("plugins.entries.typesafe-ai.apiKey", "TYPESAFE_API_KEY"),
 ]
 
 def set_path(node, path, value):
@@ -632,6 +634,38 @@ for path, var in entries:
         continue  # already correct — no write needed
     set_path(patch, path, ref)
     changed += 1
+
+# 2026-09-22: name the credentials the config REFERENCES but this table does not
+# map. A ref that is not env-backed (source "store", or an older shape) reaches no
+# env var, so oc-refresh-keys cannot inject it and the key reads as "imported from
+# Windows but missing" — the TYPESAFE_API_KEY confusion, where the key sat in the
+# bridge and was declared in the config and still never reached the gateway.
+# Report the exact path and env var so the fix is the one-line table edit above.
+# Never rewrite the ref here: a store-backed ref may be deliberate.
+mapped = {path for path, _ in entries}
+unmapped = []
+
+def _collect(node, prefix=""):
+    if isinstance(node, dict):
+        if isinstance(node.get("id"), str) and "source" in node and prefix not in mapped:
+            var = node["id"]
+            if os.environ.get(var):
+                unmapped.append("{}@{} (source {})".format(var, prefix, node.get("source")))
+        for key, value in node.items():
+            _collect(value, "{}.{}".format(prefix, key) if prefix else key)
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            _collect(value, "{}[{}]".format(prefix, i))
+
+_collect(cfg)
+if unmapped:
+    print(
+        "[tac] note: {} config credential(s) are NOT env-backed although the bridged env "
+        "supplies the key - add a mapping row in __oc_apply_secret_refs to inject them: {}".format(
+            len(unmapped), ", ".join(sorted(unmapped))
+        ),
+        file=sys.stderr,
+    )
 print(json.dumps({"patch": patch, "changed": changed, "skipped": skipped}))
 PYEOF
 )
@@ -805,7 +839,6 @@ PY
 # ---------------------------------------------------------------------------
 function __oc_sync_gateway_env_file() {
     local _cache="$1"
-    local _hash_file="$TAC_CACHE_DIR/tac_win_api_keys.hash"
     [[ -f "$_cache" ]] || return 0
 
     # Collect all var names from the cache that the gateway may need.
@@ -861,18 +894,10 @@ function __oc_sync_gateway_env_file() {
     fi
     ((${#_var_names[@]})) || return 0
 
-    # 1. Change detection: content hash of the sorted bridged values. On a
-    #    real change, push the whole set to the manager env and signal a
-    #    restart. On a no-op refresh, do nothing (no writes, no restart).
-    local _hash _prev_hash
-    _hash=$(grep '^export ' "$_cache" | sort | sha256sum | awk '{print $1}')
-    _prev_hash=$(cat "$_hash_file" 2>/dev/null || echo none)
-    if [[ "$_hash" != "$_prev_hash" ]]; then
-        for _name in "${_var_names[@]}"; do
-            systemctl --user set-environment "$_name=${!_name:-}" 2>/dev/null
-        done
-        _OC_GW_ENV_CHANGED=1
-    fi
+    # 1. Inject the resolved set, gated on BOTH the bridged values and the
+    #    injected names — see __oc_inject_manager_env for why the name set is a
+    #    trigger in its own right (2026-09-22).
+    __oc_inject_manager_env "$_cache" "${_var_names[@]}"
 
     # 2. Do NOT rewrite the systemd unit. OpenClaw fingerprints its own unit
     #    definition (path + bytes + manager uid) before it stops the service
@@ -892,8 +917,47 @@ function __oc_sync_gateway_env_file() {
     #    OpenClaw re-author the unit (`openclaw gateway install --force`,
     #    owner action), never by editing it here.
 
-    # Persist the hash for the next run.
+}
+
+# ---------------------------------------------------------------------------
+# __oc_inject_manager_env — push the resolved names into the systemd user manager
+# environment (the secrets channel the gateway inherits), but only when something
+# that affects the injection actually changed: the bridged VALUES (a content hash
+# of the cache) or the injected NAME set.
+#
+# 2026-09-22 — the name set is its own trigger. Consuming a key as an env-backed
+# SecretRef changes WHICH names are injected without changing any key VALUE, so a
+# hash-only trigger left a newly-declared key out of the manager env for good and
+# read exactly like a failed import (TYPESAFE_API_KEY: bridged from Windows and
+# declared in openclaw.json, and still never injected, because no bridged value
+# had changed since the hash was recorded). Recording the set that was pushed also
+# means removing a SecretRef stops re-injecting that name rather than leaving it
+# in the manager env forever.
+#
+# Usage: __oc_inject_manager_env <cache-file> <name>...
+# Sets _OC_GW_ENV_CHANGED=1 when it injected, so the caller signals a restart.
+# ---------------------------------------------------------------------------
+function __oc_inject_manager_env() {
+    local _cache="$1"
+    shift
+    local _hash_file="$TAC_CACHE_DIR/tac_win_api_keys.hash"
+    local _set_file="$TAC_CACHE_DIR/tac_win_api_keys.resolved"
+    local _hash _prev_hash _now_set _prev_set _name
+    _hash=$(grep '^export ' "$_cache" | sort | sha256sum | awk '{print $1}')
+    _prev_hash=$(cat "$_hash_file" 2>/dev/null || echo none)
+    _now_set=$(printf '%s\n' "$@" | sort -u)
+    _prev_set=$(cat "$_set_file" 2>/dev/null || echo none)
+    if [[ "$_hash" != "$_prev_hash" || "$_now_set" != "$_prev_set" ]]; then
+        for _name in "$@"; do
+            systemctl --user set-environment "$_name=${!_name:-}" 2>/dev/null
+        done
+        _OC_GW_ENV_CHANGED=1
+    fi
+    # Record BOTH halves of the trigger, so a refresh that changed either one is
+    # detected next time and a refresh that changed neither stays a no-op. The
+    # set that was pushed is the set that is recorded.
     printf '%s\n' "$_hash" > "$_hash_file"
+    printf '%s\n' "$_now_set" > "$_set_file"
 }
 
 # ---------------------------------------------------------------------------

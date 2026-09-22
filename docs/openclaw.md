@@ -85,6 +85,17 @@ process via `/proc/<pid>/environ`. Measured effect: 45 bridged → 19 injected.
 If the resolved set cannot be computed, injection falls back to the full
 bridged set **with a warning** rather than starving the gateway.
 
+**The injection is re-triggered by the resolved NAME set, not only by key values**
+(2026-09-22). `__oc_sync_gateway_env_file()` used to push only when the bridged
+*values* changed — a content hash of the cache — so *consuming* an existing key as
+a new env-backed SecretRef, which changes no value, left it out of the manager env
+permanently and read exactly like a failed import. That is how `TYPESAFE_API_KEY`
+came to be bridged from Windows *and* declared as a SecretRef while still never
+appearing in the manager env. The trigger is now the value hash **or** the injected
+name set, and the set that was pushed is recorded in
+`/dev/shm/tac_win_api_keys.resolved` beside the hash — so removing a SecretRef
+stops re-injecting that name instead of leaving it in the manager env forever.
+
 ### SecretRef Sync
 
 The **backing store** for API keys is the environment: a SecretRef does not
@@ -153,8 +164,20 @@ profile instead, so there is no `models.providers` ref for it.
 | `tools.web.fetch.firecrawl.apiKey` | `FIRECRAWL_API_KEY` |
 | `tools.web.search.serp.apiKey` | `SERP_API_KEY` |
 
-19 mappings in total. Keep this list in step with `entries` in
+#### Plugin credentials
+
+| Config path | Env var |
+| --- | --- |
+| `plugins.entries.typesafe-ai.apiKey` | `TYPESAFE_API_KEY` |
+
+20 mappings in total. Keep this list in step with `entries` in
 `scripts/09d-oc-agents.sh` (`__oc_apply_secret_refs`) — that list is the source.
+
+A credential the config references but this table does not map is **named, not
+silently skipped**: when the bridged env supplies a key whose ref is not
+env-backed (for example a `source: "store"` ref), the refresh prints a note with
+the exact path and env var, so the fix is one table row. The refresh never
+rewrites such a ref itself — a store-backed ref may be deliberate.
 
 `oc-refresh-keys` also pushes the bridged vars the gateway resolves into the
 systemd **user manager** environment (`systemctl --user set-environment`), which
