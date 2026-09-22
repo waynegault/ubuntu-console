@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -293,8 +293,13 @@ function __so_ensure_llm_running() {
     then
         # Stop any legacy profile-managed instance and stale keepers so VRAM
         # is free for the service (the service itself is down here, so this
-        # cannot kill it).
-        __model_stop >/dev/null 2>&1 || true
+        # cannot kill it).  A failure here does not abort the start, but it is
+        # reported rather than swallowed: it means the old instance may still
+        # be holding the VRAM the service is about to ask for.
+        if ! __model_stop >/dev/null 2>&1
+        then
+            __tac_info "Local LLM" "[legacy instance stop failed — it may still hold the VRAM]" "$C_Warning"
+        fi
         if systemctl --user start llama-xe-minicpm5-1b-chat.service 2>/dev/null
         then
             local _so_svc_wait=0
@@ -321,7 +326,11 @@ function __so_ensure_llm_running() {
         local _so_active_file=""
         [[ -f "$ACTIVE_LLM_FILE" ]] && _so_active_file=$(< "$ACTIVE_LLM_FILE")
         local _so_entry=""
-        [[ -n "$_so_active_file" ]] && _so_entry=$(__llm_active_entry 2>/dev/null || true)
+        if [[ -n "$_so_active_file" ]] && ! _so_entry=$(__llm_active_entry 2>/dev/null)
+        then
+            _so_entry=""
+            __tac_info "Local LLM" "[registry lookup failed for ${_so_active_file} — model name not shown]" "$C_Dim"
+        fi
         if [[ -n "$_so_active_file" && -n "$_so_entry" ]]
         then
             local _so_mname _so_active_num
@@ -335,7 +344,11 @@ function __so_ensure_llm_running() {
 
     # LLM not running — resolve default and start it
     local _so_def_file=""
-    _so_def_file=$(__llm_default_file 2>/dev/null || true)
+    if ! _so_def_file=$(__llm_default_file 2>/dev/null)
+    then
+        _so_def_file=""
+        __tac_info "Local LLM" "[default-model lookup failed — falling back to the first registry row]" "$C_Dim"
+    fi
 
     # If no default is set, auto-select the first model from the registry
     if [[ -z "$_so_def_file" && -f "$LLM_REGISTRY" ]]
@@ -355,7 +368,11 @@ function __so_ensure_llm_running() {
     local _so_model_num=""
     local _so_model_name
     local _so_def_entry=""
-    _so_def_entry=$(__llm_registry_entry_by_file "$_so_def_file" 2>/dev/null || true)
+    if ! _so_def_entry=$(__llm_registry_entry_by_file "$_so_def_file" 2>/dev/null)
+    then
+        _so_def_entry=""
+        __tac_info "Local LLM" "[registry entry lookup failed for ${_so_def_file} — falling back to the first row]" "$C_Dim"
+    fi
     if [[ -n "$_so_def_entry" ]]
     then
         IFS='|' read -r _so_model_num _so_model_name _ <<< "$_so_def_entry"
@@ -380,8 +397,12 @@ function __so_ensure_llm_running() {
         return 1
     fi
 
-    # Enable GPU persistence mode before starting the model
-    wake 2>/dev/null || true
+    # Enable GPU persistence mode before starting the model.  Best-effort: a
+    # failure costs load time, not correctness, but it is reported.
+    if ! wake 2>/dev/null
+    then
+        __tac_info "Local LLM" "[GPU persistence mode not set — starting anyway]" "$C_Dim"
+    fi
 
     # Start resolved model number in non-interactive mode.
     # Running serve in the foreground avoids shell job-control noise ([N] PID).
@@ -531,6 +552,57 @@ function __so_ensure_shell_env() {
 }
 
 # ---------------------------------------------------------------------------
+# __so_gateway_phase — Classify a bound-but-not-serving gateway from its log.
+# Prints one of: draining | starting | running | unknown
+#
+# Why this exists (2026-09-22): a graceful drain keeps the listening socket and
+# answers every request 503 'Gateway websocket admission closed'.  A failed
+# health probe therefore looked identical to a wedged gateway, so 'so' told the
+# operator to run 'openclaw gateway restart' — while a restart was already in
+# flight.  Measured that day: three restarts inside 8 minutes turned one restart
+# into a 15.5-minute outage (17:35:53 -> 17:51:20), and each was issued because
+# 'so' had reported UNHEALTHY.  The reporting is not what is wrong — a drain
+# really is an outage — the ACTION is: a restart re-enters the same window.
+#
+# Discriminators are the gateway's own lifecycle lines, matched most-recent
+# first, so a 'ready' from an earlier boot cannot mask a drain that started
+# after it.  Verified against 3 days of real journal output:
+#   draining — 'received SIGTERM; …', 'draining active work before …',
+#              'still draining active work before …', 'active-work drain …',
+#              'shutdown deadline reached …', 'shutdown budget at shutdown: …'
+#              ('draining active work' already matches the 'still draining
+#              active work before …' continuation, so ONE pattern covers both;
+#              listing the longer phrase as well made the shorter one shadow it,
+#              which shellcheck reports as SC2221/SC2222)
+#   starting — 'loading configuration…' through 'starting channels and sidecars…'
+#   running  — 'http server listening …', and the bare 'ready' line
+# ---------------------------------------------------------------------------
+function __so_gateway_phase() {
+    local _svc="$1" _line=""
+    # A 15-minute window covers the worst case this exists to distinguish: the
+    # full 315s drain plus a 2-4 min cold start.  Only consulted once the health
+    # probe has failed, so an idle healthy gateway never reaches here.
+    _line=$(journalctl --user -u "$_svc" --since '-15 min' --no-pager --output=cat 2>/dev/null \
+        | grep -E '\[gateway\] (received SIGTERM|draining active work|active-work drain|shutdown deadline reached|shutdown budget at|loading configuration|resolving authentication|starting\.\.\.|spawn broker ready|starting HTTP server|starting channels and sidecars|http server listening|ready$)' \
+        | tail -n 1) || _line=""
+
+    case "$_line" in
+        *"received SIGTERM"*|*"draining active work"*|*"active-work drain"*|*"shutdown deadline reached"*|*"shutdown budget at shutdown"*)
+            printf 'draining\n'
+            ;;
+        *"loading configuration"*|*"resolving authentication"*|*"starting..."*|*"shutdown budget at startup"*|*"spawn broker ready"*|*"starting HTTP server"*|*"starting channels and sidecars"*)
+            printf 'starting\n'
+            ;;
+        *"http server listening"*|*"[gateway] ready"*)
+            printf 'running\n'
+            ;;
+        *)
+            printf 'unknown\n'
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
 # so — Start the OpenClaw gateway (systemd-managed service).
 # Injects bridged API keys into the systemd user session before starting.
 # If gateway is already running, only starts the LLM without restarting gateway.
@@ -555,6 +627,27 @@ function so() {
         # 'openclaw gateway restart' is what kicks it.
         if ! timeout 5 openclaw gateway health >/dev/null 2>&1
         then
+            # A drain or a cold start fails this probe too, and naming a restart
+            # for those re-enters the very window that failed the probe.  Ask the
+            # gateway's log which it is before saying what to do about it.
+            local _so_phase
+            _so_phase=$(__so_gateway_phase "$_svc")
+            if [[ "$_so_phase" == "draining" ]]
+            then
+                __tac_info "Gateway" "[RESTARTING — drain in progress, do NOT restart]" "$C_Warning"
+                printf '%s\n' "  ${C_Dim}The gateway holds the port while draining in-flight work and${C_Reset}"
+                printf '%s\n' "  ${C_Dim}answers every request 503 until it goes. Budget is 315s,${C_Reset}"
+                printf '%s\n' "  ${C_Dim}then a 2-4 min cold start. Restarting again re-enters the${C_Reset}"
+                printf '%s\n' "  ${C_Dim}same window — watch it with 'le' instead.${C_Reset}"
+                return 1
+            fi
+            if [[ "$_so_phase" == "starting" ]]
+            then
+                __tac_info "Gateway" "[STARTING — port bound, not serving yet]" "$C_Warning"
+                printf '%s\n' "  ${C_Dim}Cold start is 2-4 min (per-agent SQLite validation runs${C_Reset}"
+                printf '%s\n' "  ${C_Dim}before the HTTP server serves). Wait — do not restart.${C_Reset}"
+                return 1
+            fi
             __tac_info "Gateway" "[RUNNING but UNHEALTHY — run: openclaw gateway restart]" "$C_Warning"
             return 1
         fi
@@ -651,7 +744,7 @@ function __so_ensure_default_agent_session() {
         # Check if any sessions exist (with timeout to prevent hanging)
         _session_count=$(timeout 10 openclaw sessions --all-agents --json 2>/dev/null | jq -r '\''
             (if type=="array" then . elif (.sessions?) then .sessions elif (.items?) then .items else . end)
-            | length'\'' 2>/dev/null) || true
+            | length'\'' 2>/dev/null)
 
         # Validate numeric output — guard against jq failure or partial output
         if ! [[ "$_session_count" =~ ^[0-9]+$ ]]; then
@@ -775,15 +868,23 @@ function __oc_gateway_databases_closed() {
 function __oc_safe_gateway_shutdown() {
     local _svc="openclaw-gateway.service"
 
-    timeout 10 openclaw gateway stop >/dev/null 2>&1 || true
-    timeout 8 systemctl --user stop "$_svc" 2>/dev/null || true
+    # Both stops are time-bounded and best-effort — the DB-handle check below is
+    # what decides whether the shutdown actually took — but a failure is
+    # reported rather than swallowed, so the cause is visible instead of having
+    # to be inferred from a later symptom.
+    if ! timeout 10 openclaw gateway stop >/dev/null 2>&1
+    then
+        __tac_info "Gateway" "['gateway stop' failed or timed out — continuing to systemctl]" "$C_Dim"
+    fi
+    if ! timeout 8 systemctl --user stop "$_svc" 2>/dev/null
+    then
+        __tac_info "Gateway" "[systemctl stop failed or timed out — checking DB handles]" "$C_Dim"
+    fi
 
     if ! __oc_gateway_databases_closed; then
         __tac_info "Gateway" "[DB HANDLE CHECK TIMED OUT — continuing safely]" "$C_Warning"
     fi
     rm -f "$OC_ROOT/supervisor.lock"
 }
-
-# end of file
 
 # end of file

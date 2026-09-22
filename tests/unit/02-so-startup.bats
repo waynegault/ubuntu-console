@@ -105,4 +105,157 @@ EOF
     [ ! -e "$OC_ROOT/.gateway-hold" ]
 }
 
+# ---------------------------------------------------------------------------
+# so: naming the real phase when the health probe fails
+#
+# A graceful drain KEEPS the listening socket and answers every request 503
+# 'Gateway websocket admission closed', so the probe fails exactly as it does for
+# a wedged gateway — and 'so' answered both with "RUNNING but UNHEALTHY — run:
+# openclaw gateway restart".  That named the action which caused the window:
+# measured 2026-09-22, three restarts inside 8 minutes turned one restart into a
+# 15.5-minute outage (17:35:53 -> 17:51:20) and every one of them was issued
+# after 'so' had said UNHEALTHY.  __so_gateway_phase reads the gateway's own
+# lifecycle log instead.  These six pin the classifier; the two below pin the
+# messages it drives.
+# ---------------------------------------------------------------------------
+# The journal lines below are verbatim from the real gateway journal
+# (2026-09-22).  Some gateway loggers prefix their own ISO timestamp and others
+# let journald supply it, so __so_gateway_phase has to classify either shape.
+# Matching only the timestamp-less form is what a first pass got wrong: every
+# real 'ready' line carries the timestamp, so the classifier could never return
+# 'running'.  Validating the patterns against the real journal is what caught it.
+@test "so: __so_gateway_phase reads a drain from the gateway log" {
+    journalctl() {
+        printf '%s\n' \
+            '2026-09-22T17:50:31.773+01:00 [gateway] loading configuration…' \
+            '2026-09-22T17:51:16.000+01:00 [gateway] ready' \
+            '2026-09-22T17:43:51.000+01:00 [gateway] received SIGTERM; restarting' \
+            '2026-09-22T17:43:51.441+01:00 [gateway] draining active work before stop with timeout 315000ms: queueSize=6 embeddedRuns=3'
+    }
+
+    run __so_gateway_phase openclaw-gateway.service
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "draining" ]
+}
+
+@test "so: __so_gateway_phase reads the external-restart drain variant" {
+    journalctl() {
+        printf '%s\n' \
+            '[gateway] received SIGTERM; restarting' \
+            '[gateway] still draining active work before external-restart: backgroundExecSessions=1 activeTasks=1'
+    }
+
+    run __so_gateway_phase openclaw-gateway.service
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "draining" ]
+}
+
+@test "so: __so_gateway_phase reads a cold start from the gateway log" {
+    journalctl() {
+        printf '%s\n' \
+            '2026-09-22T17:50:31.773+01:00 [gateway] loading configuration…' \
+            '2026-09-22T17:50:39.688+01:00 [gateway] resolving authentication…' \
+            '2026-09-22T17:50:39.721+01:00 [gateway] starting...'
+    }
+
+    run __so_gateway_phase openclaw-gateway.service
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "starting" ]
+}
+
+# Ordering is the whole point of tail -n 1: a completed restart ends in 'ready',
+# and a 'ready' from before a drain must not mask the drain that followed it.
+@test "so: __so_gateway_phase treats a drain finished by 'ready' as running" {
+    journalctl() {
+        printf '%s\n' \
+            '2026-09-22T17:43:51.441+01:00 [gateway] draining active work before stop with timeout 315000ms: queueSize=6' \
+            '2026-09-22T17:43:58.000+01:00 [gateway] active-work drain settled; beginning server close' \
+            '2026-09-22T17:50:39.721+01:00 [gateway] starting...' \
+            '2026-09-22T17:51:16.100+01:00 [gateway] ready'
+    }
+
+    run __so_gateway_phase openclaw-gateway.service
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "running" ]
+}
+
+@test "so: __so_gateway_phase handles a timestamp-less 'ready' line too" {
+    journalctl() {
+        printf '%s\n' \
+            '[gateway] starting...' \
+            '[gateway] ready'
+    }
+
+    run __so_gateway_phase openclaw-gateway.service
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "running" ]
+}
+
+@test "so: __so_gateway_phase reports unknown when the log has no lifecycle line" {
+    journalctl() { return 0; }
+
+    run __so_gateway_phase openclaw-gateway.service
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "unknown" ]
+}
+
+# The probe runs as `timeout 5 openclaw ...`, and timeout execs a binary — it
+# cannot call a shell function — so the stub has to be a real file on PATH or the
+# test would invoke the live CLI and depend on the real gateway's state.
+__stub_failing_openclaw() {
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$TAC_TEST_TMPDIR/bin/openclaw"
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+}
+
+__so_test_prelude() {
+    export __TAC_OPENCLAW_OK=1
+    mkdir -p "$TAC_TEST_TMPDIR/oc"
+    export OC_ROOT="$TAC_TEST_TMPDIR/oc"   # no openclaw.json -> __so_ensure_shell_env is a no-op
+    __test_port() { return 0; }            # port answers...
+    __stub_failing_openclaw                # ...but the gateway does not
+}
+
+@test "so: a draining gateway is reported RESTARTING and is never told to restart" {
+    __so_test_prelude
+    journalctl() {
+        printf '%s\n' \
+            '2026-09-22T17:51:16.000+01:00 [gateway] ready' \
+            '2026-09-22T17:43:51.000+01:00 [gateway] received SIGTERM; restarting' \
+            '2026-09-22T17:48:52.794+01:00 [gateway] still draining active work before stop: queueSize=2 embeddedRuns=1'
+    }
+
+    run so
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RESTARTING"* ]]
+    [[ "$output" == *"do NOT restart"* ]]
+    # The remedy that caused the window must be absent from this path.
+    [[ "$output" != *"openclaw gateway restart"* ]]
+}
+
+@test "so: a bound-but-wedged gateway still gets the restart advice" {
+    __so_test_prelude
+    # 'ready' with no drain after it: the gateway claims to be serving and is not,
+    # which is the case the restart advice exists for.
+    journalctl() {
+        printf '%s\n' \
+            '[gateway] starting...' \
+            '[gateway] ready'
+    }
+
+    run so
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RUNNING but UNHEALTHY"* ]]
+    [[ "$output" == *"openclaw gateway restart"* ]]
+}
+
 # end of file
