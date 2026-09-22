@@ -114,9 +114,10 @@ store:
 Keeping keys in the environment and referencing them by name is what lets the
 plaintext copies be removed from `openclaw.json`.
 
-After refreshing the environment, `oc-refresh-keys` maps a small set of
-config-managed credentials to env-backed SecretRefs using the same builder
-`openclaw secrets configure` uses:
+`oc-refresh-keys` maps a small set of config-managed credentials to env-backed
+SecretRefs using the same builder `openclaw secrets configure` uses — and it does
+that **before** it computes and pushes the resolved names (2026-09-22), so a ref
+this run converts is injected in the same run instead of the next one:
 
 ```bash
 openclaw config set <config-path> --ref-provider default --ref-source env --ref-id <ENV_VAR>

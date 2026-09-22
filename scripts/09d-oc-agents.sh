@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -1089,21 +1089,32 @@ function oc-refresh-keys() {
         fi
     fi
 
-    # 3. Push the gateway-resolved bridged vars into the systemd user manager
+    # Also re-assert env.shellEnv (worker-side secret resolution) — see
+    # __so_ensure_shell_env. Both reports below describe the post-patch config.
+    local _OC_GW_ENV_CHANGED=0
+    if type -t __so_ensure_shell_env >/dev/null 2>&1; then __so_ensure_shell_env; fi
+
+    # 3. Sync OpenClaw SecretRefs to the refreshed env credentials FIRST, so the
+    #    resolved-name set computed in step 4 sees any ref this run has just
+    #    converted to env-backed.
+    #
+    #    2026-09-22: with the order reversed, a newly-mapped key was written as an
+    #    env-backed SecretRef and the SAME run still listed it as "reach no
+    #    SecretRef" / "not injected", because the resolution had already been
+    #    computed against the pre-patch config. The key then only entered the
+    #    manager env on the NEXT refresh (measured: AGENTMAIL_API_KEY). Applying
+    #    the refs first makes mapping and injection converge in one pass, and it
+    #    makes both of this run's reports describe the same post-patch state.
+    __oc_apply_secret_refs
+
+    # 4. Push the gateway-resolved bridged vars into the systemd user manager
     #    environment so the running gateway can resolve env-backed SecretRefs
     #    referenced by auth profiles in agent sqlite databases. The unit and
     #    gateway.systemd.env are left alone (see __oc_sync_gateway_env_file,
     #    step 2 — OpenClaw fingerprints its own unit).
     #    Without this, `openclaw doctor` reports "secret reference was not
     #    found" because the gateway process lacks the env vars.
-    #    Also re-assert env.shellEnv (worker-side secret resolution) — see
-    #    __so_ensure_shell_env.
-    local _OC_GW_ENV_CHANGED=0
-    if type -t __so_ensure_shell_env >/dev/null 2>&1; then __so_ensure_shell_env; fi
     __oc_sync_gateway_env_file "$cache"
-
-    # 4. Sync OpenClaw SecretRefs to the refreshed env credentials
-    __oc_apply_secret_refs
 
     # 5. Decide whether the gateway needs a restart (its env changed). The
     #    restart is DEFERRED to step 7, after the NAS mirror: a gateway-hosted
