@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
@@ -206,6 +206,7 @@ function oc() {
         doctor-local)  oc-doctor-local "$@" ;;
         failover)      oc-failover "$@" ;;
         refresh-keys)  oc-refresh-keys "$@" ;;
+        export-keys-nas) oc-export-keys-nas "$@" ;;
         rotate-secrets) oc-rotate-exposed-secrets "$@" ;;
         # trust-sync removed
         # Data & Extensions

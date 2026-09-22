@@ -95,7 +95,7 @@ teardown() {
     rm -rf "$TAC_TEST_TMPDIR"
 }
 
-@test "oc-refresh-keys caches matching Windows vars, syncs gateway env, and calls ssh" {
+@test "oc-refresh-keys caches matching Windows vars and reports a BEHIND NAS mirror" {
     local pwsh_log="$TAC_TEST_TMPDIR/pwsh_calls.log"
     __mock_command_local pwsh.exe "echo \"PWSH_CALL: \$*\" >> \"$pwsh_log\"; printf '%s\\n' 'WIN_API_KEY=winsecret' 'WIN_TOKEN=tok123'"
 
@@ -106,53 +106,10 @@ teardown() {
     export OC_NAS_USER="testuser"
     export OC_NAS_HOST="nas.example"
 
-    local ssh_log="$TAC_TEST_TMPDIR/ssh_calls.log"
-    __mock_command_local ssh "echo \"SSH_CALL: \$*\" >> \"$ssh_log\"; exit 0"
-
-    run oc-refresh-keys
-    [ "$status" -eq 0 ]
-
-    # Cache is populated.
-    [ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]
-    run grep -E '^export WIN_API_KEY=' "$TAC_CACHE_DIR/tac_win_api_keys"
-    [ "$status" -eq 0 ]
-    run grep -E '^export WIN_TOKEN=' "$TAC_CACHE_DIR/tac_win_api_keys"
-    [ "$status" -eq 0 ]
-
-    # PowerShell was called with the expected pattern.
-    run grep -E 'TOKEN\|API\(_\|-\)\?KEY' "$pwsh_log"
-    [ "$status" -eq 0 ]
-
-    # Bridge also matches PASSWORD anywhere in the variable name.
-    run grep -F 'PASSWORD' "$pwsh_log"
-    [ "$status" -eq 0 ]
-
-    # Bridged vars were pushed to the systemd user manager env — the gateway's
-    # secrets channel (the plaintext gateway.systemd.env file is no longer used).
-    run grep -F "set-environment WIN_API_KEY=winsecret" "$SYSTEMCTL_LOG"
-    [ "$status" -eq 0 ]
-    run grep -F "set-environment WIN_TOKEN=tok123" "$SYSTEMCTL_LOG"
-    [ "$status" -eq 0 ]
-
-    # The unit is left exactly as OpenClaw authored it (no rewrite, no
-    # daemon-reload): bridged values reach the gateway via the manager env
-    # asserted above, so the managed-key list never gains WIN_API_KEY/WIN_TOKEN.
-    local unit="$HOME/.config/systemd/user/openclaw-gateway.service"
-    run grep 'OPENCLAW_SERVICE_MANAGED_ENV_KEYS=' "$unit"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *GEMINI_API_KEY* ]]
-    [[ "$output" != *WIN_API_KEY* ]]
-    [[ "$output" != *WIN_TOKEN* ]]
-    run grep -F "daemon-reload" "$SYSTEMCTL_LOG"
-    [ "$status" -ne 0 ]
-
-    # Gateway restart was triggered (mock systemctl is-active returns 0).
-    run grep -F "restart --no-block openclaw-gateway.service" "$SYSTEMCTL_LOG"
-    [ "$status" -eq 0 ]
-
-    run grep -c '^SSH_CALL:' "$ssh_log"
-    [ "$status" -eq 0 ]
-    [ "$output" -ge 1 ]
+    # The NAS mirror is its own command now (`oc export-keys-nas`), so this
+    # command only says when the mirror is BEHIND — which a missing marker is.
+    [[ "$output" == *"NAS mirror"* ]]
+    [[ "$output" == *"behind"* ]]
 }
 
 @test "oc-refresh-keys syncs OpenClaw SecretRefs and gateway env only for present credentials" {
@@ -232,7 +189,7 @@ teardown() {
     [ ! -s "$ssh_log" ]
 }
 
-@test "oc-refresh-keys retries NAS export after a failed upload" {
+@test "oc-export-keys-nas mirrors the cache, and a failed upload is retried" {
     __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret' 'GEMINI_API_KEY=test-gemini-key'"
     export GEMINI_API_KEY="test-gemini-key"
 
@@ -252,7 +209,7 @@ teardown() {
 
     # NAS back: the failed upload is retried and the marker is persisted.
     __mock_command_local ssh "echo \"SSH_CALL: \$*\" >> \"$ssh_log\"; exit 0"
-    run oc-refresh-keys
+    run oc-export-keys-nas
     [ "$status" -eq 0 ]
     [ -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
     run grep -c '^SSH_CALL:' "$ssh_log"
@@ -273,7 +230,7 @@ teardown() {
     [[ "$output" == *"env is applied"* ]]
 }
 
-@test "oc-refresh-keys escapes NAS env values with %q only (no double-quote wrap)" {
+@test "oc-export-keys-nas escapes values with %q only (no double-quote wrap)" {
     # A value containing '!' must round-trip: %q alone yields win\!secret, which
     # sources back to win!secret. Wrapping it in double quotes (the old bug)
     # produced "win\!secret" -> a literal backslash, breaking the NAS collector.
@@ -289,7 +246,9 @@ teardown() {
     local cap="$TAC_TEST_TMPDIR/nas_stdin.txt"
     __mock_command_local ssh "if [ -f \"$cap\" ]; then exit 0; fi; cat > \"$cap\"; exit 0"
 
-    run oc-refresh-keys
+    run oc-refresh-keys        # creates and sources the bridge cache
+    [ "$status" -eq 0 ]
+    run oc-export-keys-nas     # builds the file this test inspects
     [ "$status" -eq 0 ]
     [ -f "$cap" ]
 
