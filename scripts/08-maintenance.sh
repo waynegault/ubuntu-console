@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 44
+# Module Version: 45
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -334,7 +334,7 @@ function __up_npm_cargo() {
     # [3/20] NPM / Cargo
     if __check_cooldown "npm_cargo" "$now" hours_left "$force_mode"
     then
-        local npm_did_update=0 cargo_did_update=0 pkg_err=0
+        local npm_did_update=0 cargo_did_update=0 pkg_err=0 npm_deferred=0
 
         # NPM: Only run if npm is installed and has global packages
         if command -v npm >/dev/null 2>&1
@@ -345,9 +345,25 @@ function __up_npm_cargo() {
 
             if [[ -n "$global_pkgs" ]]
             then
-                # Get list of outdated packages before update
+                # Outdated global packages. --parseable emits
+                #   <fullpath>:<name@wanted>:<name@installed>:<name@latest>:<dependedby>
+                # so field 2 minus its trailing @version is the package name.
                 local outdated_before
+                local -a update_names=()
+                local -a deferred_oc=()
                 outdated_before=$(npm outdated -g --parseable 2>/dev/null | grep -v "^npm:" || echo "")
+                mapfile -t update_names < <(
+                    printf '%s\n' "$outdated_before" | cut -d: -f2 | sed 's/@[^@]*$//' \
+                        | grep . | grep -Ev '^(openclaw|@openclaw/)' | sort -u
+                )
+                mapfile -t deferred_oc < <(
+                    printf '%s\n' "$outdated_before" | cut -d: -f2 | sed 's/@[^@]*$//' \
+                        | grep -E '^(openclaw|@openclaw/)' | sort -u
+                )
+                if (( ${#deferred_oc[@]} > 0 ))
+                then
+                    __tac_line "[3/20] NPM OpenClaw" "[DEFERRED to the guarded window: ${deferred_oc[*]}]" "$C_Warning"
+                fi
 
                 # Snapshot the installed set BEFORE the update. `npm update -g`
                 # reifies the whole root, so a failure can leave it empty rather
@@ -355,15 +371,39 @@ function __up_npm_cargo() {
                 local npm_snapshot
                 npm_snapshot=$(__npm_global_snapshot)
 
-                update_output=$(npm update -g 2>&1)
-                local npm_rc=$?
+                # A global npm install reifies the WHOLE global root, not just the
+                # named packages, so it rewrites openclaw's install tree as well. Under
+                # a running Gateway that breaks the Gateway's own module loading —
+                # measured 2026-09-22 on this host: ENOENT on the hashed dist chunks,
+                # `cron.list` returning UNAVAILABLE, and WhatsApp inbound messages
+                # dropped; cleared only by a Gateway restart. The guard-held,
+                # gateway-stopped window is the one place a global install may run on
+                # this host, so defer the step while the Gateway is up (openclaw and
+                # @openclaw/* are additionally never named below; `openclaw update`
+                # manages them inside that window).
+                local npm_rc=0
+                if command -v systemctl >/dev/null 2>&1 \
+                    && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null
+                then
+                    update_output=""
+                    npm_deferred=1
+                elif (( ${#update_names[@]} > 0 ))
+                then
+                    update_output=$(npm update -g "${update_names[@]}" 2>&1)
+                    npm_rc=$?
+                else
+                    update_output=""
+                fi
 
                 # Check for workspace/local package errors (not real failures)
                 if (( npm_rc == 0 )) || [[ "$update_output" == *"Workspaces not supported for global packages"* ]]
                 then
                     npm_did_update=1
                     # Check if any packages were actually updated
-                    if [[ -n "$outdated_before" ]]
+                    if (( npm_deferred == 1 ))
+                    then
+                        __tac_line "[3/20] NPM Packages" "[DEFERRED - Gateway is running]" "$C_Warning"
+                    elif [[ -n "$outdated_before" ]]
                     then
                         __tac_line "[3/20] NPM Packages" "[PACKAGES UPDATED]" "$C_Success"
                     else
@@ -644,10 +684,20 @@ function __up_oc_plugins() {
                                     # Install new dependencies if package.json exists
                                     if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
                                     then
-                                        npm install --prefix "$_path" --silent 2>/dev/null || true
+                                        if ! npm install --prefix "$_path" --silent 2>/dev/null
+                                        then
+                                            __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                                        fi
                                     fi
-                                    git -C "$_path" stash pop >/dev/null 2>&1 || true
-                                    __tac_line "$_status_line" "[UPDATED (changes preserved)]" "$C_Success"
+                                    if git -C "$_path" stash pop >/dev/null 2>&1
+                                    then
+                                        __tac_line "$_status_line" "[UPDATED (changes preserved)]" "$C_Success"
+                                    else
+                                        # Pop failed (usually a conflict): the local
+                                        # changes are still in the stash, so do NOT
+                                        # report them as preserved.
+                                        __tac_line "$_status_line" "[UPDATED - LOCAL CHANGES STILL STASHED]" "$C_Warning"
+                                    fi
                                     return 0
                                 else
                                     git -C "$_path" stash pop >/dev/null 2>&1 || true
@@ -662,7 +712,10 @@ function __up_oc_plugins() {
                                     # Install new dependencies if package.json exists
                                     if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
                                     then
-                                        npm install --prefix "$_path" --silent 2>/dev/null || true
+                                        if ! npm install --prefix "$_path" --silent 2>/dev/null
+                                        then
+                                            __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                                        fi
                                     fi
                                     __tac_line "$_status_line" "[UPDATED]" "$C_Success"
                                     return 0
@@ -679,7 +732,10 @@ function __up_oc_plugins() {
                             # Install new dependencies if package.json exists
                             if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
                             then
-                                npm install --prefix "$_path" --silent 2>/dev/null || true
+                                if ! npm install --prefix "$_path" --silent 2>/dev/null
+                                then
+                                    __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                                fi
                             fi
                             __tac_line "$_status_line" "[OVERWRITTEN (local changes discarded)]" "$C_Warning"
                             return 0
@@ -727,7 +783,10 @@ function __up_oc_plugins() {
                     # Run npm install if package.json exists (install new dependencies)
                     if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
                     then
-                        npm install --prefix "$_path" --silent 2>/dev/null || true
+                        if ! npm install --prefix "$_path" --silent 2>/dev/null
+                        then
+                            __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                        fi
                     fi
                     __tac_line "$_status_line" "[UPDATED]" "$C_Success"
                     return 0
