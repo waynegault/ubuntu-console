@@ -460,15 +460,21 @@ CFG
     # tests/unit/15-secret-ref-paths.bats now pins against the schema), so
     # refresh-keys could not put it on the credential surface. This pins the row,
     # and the preflight property with it.
-    __mock_command_local pwsh.exe "printf '%s\\n' 'TYPESAFE_API_KEY=test-typesafe-key'"
+    __mock_command_local pwsh.exe "printf '%s\\n' 'TYPESAFE_API_KEY=test-typesafe-key' 'AGENTMAIL_API_KEY=test-agentmail-key'"
     export TYPESAFE_API_KEY="test-typesafe-key"
+    export AGENTMAIL_API_KEY="test-agentmail-key"
     rm -f "$OC_MOCK_LOG" "$OC_MOCK_PATCH_FILE"
 
     run oc-refresh-keys
     [ "$status" -eq 0 ]
 
-    # Present in the bridged env -> the env-backed ref is written for the plugin path.
+    # Present in the bridged env -> the env-backed ref is written for the skill path.
     run grep -F '"typesafe-ai": {"apiKey": {"source": "env", "provider": "default", "id": "TYPESAFE_API_KEY"' "$OC_MOCK_PATCH_FILE"
+    [ "$status" -eq 0 ]
+
+    # The store-backed credential that became env-backed on 2026-09-22: bridged from
+    # Windows and declared, yet unreachable by name until the env became its channel.
+    run grep -F '"agentmail-cli": {"apiKey": {"source": "env", "provider": "default", "id": "AGENTMAIL_API_KEY"' "$OC_MOCK_PATCH_FILE"
     [ "$status" -eq 0 ]
 
     # Absent -> the ref is never created, so an unresolved ref cannot appear.

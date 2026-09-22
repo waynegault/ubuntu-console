@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 20
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -597,6 +597,15 @@ entries = [
     ("models.providers.nvidia.apiKey", "NVIDIA_API_KEY"),
     ("models.providers.fireworks.apiKey", "FIREWORKS_API_KEY"),
     ("models.providers.huggingface.apiKey", "HUGGINGFACE_TOKEN"),
+    # NOT mapped, deliberately: models.providers.inception.apiKey. `inception` is a
+    # CUSTOM provider, and the schema refuses a patch that creates one without
+    # baseUrl + models ("custom model providers must declare baseUrl"; a provider
+    # overlay without them is only supported for BUNDLED providers). The refs go
+    # out in ONE validated batch, so a row that validates only while the provider
+    # block happens to exist can abort every other ref update the day it does not.
+    # tests/unit/15-secret-ref-paths.bats catches exactly that, against an empty
+    # base config. INCEPTION_API_KEY therefore stays store-backed, and the
+    # refresh's own report names it so the gap stays visible (2026-09-22).
     # Tool / Platform API Keys
     # `tools.web.fetch.firecrawl.*` is a LEGACY shape the current schema rejects
     # ("tools.web.fetch: Unrecognized key: firecrawl"); openclaw doctor --fix
@@ -612,6 +621,10 @@ entries = [
     # nothing reads and the real ref is left un-injected (TYPESAFE_API_KEY,
     # 2026-09-22). Confirm the field against the real config before adding a row.
     ("skills.entries.typesafe-ai.apiKey", "TYPESAFE_API_KEY"),
+    # Both of these were store-backed, so the key was bridged from Windows and
+    # declared in the config yet never reached the gateway by name; mapping them
+    # makes the env the single maintained channel (2026-09-22).
+    ("skills.entries.agentmail-cli.apiKey", "AGENTMAIL_API_KEY"),
 ]
 
 def set_path(node, path, value):

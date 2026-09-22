@@ -157,20 +157,34 @@ profile instead, so there is no `models.providers` ref for it.
 | `models.providers.fireworks.apiKey` | `FIREWORKS_API_KEY` |
 | `models.providers.huggingface.apiKey` | `HUGGINGFACE_TOKEN` |
 
+`models.providers.inception.apiKey` is deliberately **not** mapped: `inception` is
+a custom provider, and the schema refuses a patch that creates one without
+`baseUrl` + `models`, so a row would only validate while that provider block
+exists — and the refs are written in one validated batch, where one bad row drops
+every other pending update. `INCEPTION_API_KEY` stays store-backed; the
+refresh's un-mapped-credential report names it.
+
 #### Tools
 
 | Config path | Env var |
 | --- | --- |
-| `tools.web.fetch.firecrawl.apiKey` | `FIRECRAWL_API_KEY` |
+| `plugins.entries.firecrawl.config.webFetch.apiKey` | `FIRECRAWL_API_KEY` |
 | `tools.web.search.serp.apiKey` | `SERP_API_KEY` |
+
+The legacy `tools.web.fetch.firecrawl.*` shape is rejected by the current schema
+(`tools.web.fetch: Unrecognized key: firecrawl`); `openclaw doctor --fix`
+migrates it to the plugin entry above. A row the schema rejects is worse than
+inert: `config patch` validates, so one bad row aborts the whole batched
+SecretRef write.
 
 #### Skill credentials
 
 | Config path | Env var |
 | --- | --- |
 | `skills.entries.typesafe-ai.apiKey` | `TYPESAFE_API_KEY` |
+| `skills.entries.agentmail-cli.apiKey` | `AGENTMAIL_API_KEY` |
 
-20 mappings in total. Keep this list in step with `entries` in
+21 mappings in total. Keep this list in step with `entries` in
 `scripts/09d-oc-agents.sh` (`__oc_apply_secret_refs`) — that list is the source.
 
 A credential the config references but this table does not map is **named, not
