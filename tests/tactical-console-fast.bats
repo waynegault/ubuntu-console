@@ -622,4 +622,26 @@ setup_file() {
     fi
 }
 
+@test "ci: every job names a self-hosted runner (no billing)" {
+    # Wayne's standing rule (2026-09-16): no workflow may run on a GitHub-HOSTED
+    # runner — hosted minutes are metered, and once the allowance ran out every
+    # hosted job was refused, which left CI dark for six days (2026-09-10). The rule
+    # used to be enforced by tests/scripts/test_ci_workflow_honesty.py, but that file
+    # (and tests/scripts/) no longer exists and NOTHING else referenced `runs-on:` —
+    # so a hosted runner could be added silently. It lives here, beside the other
+    # workflow gate, because this is where the repo checks its workflows.
+    run bash -c "grep -rh 'runs-on:' '$REPO_ROOT'/.github/workflows/*.yml | grep -v self-hosted"
+    [ "$output" = "" ]
+
+    # Teeth: the same filter must catch a hosted runner if one appears, or this
+    # check is vacuous.
+    run bash -c "printf '%s\n' '    runs-on: ubuntu-latest' | grep -v self-hosted"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ubuntu-latest"* ]]
+
+    # ...and the workflows really do carry self-hosted jobs, so a rename that made
+    # the filter match nothing could not pass this by accident.
+    grep -rq 'runs-on: \[self-hosted' "$REPO_ROOT"/.github/workflows/*.yml
+}
+
 # end of file
