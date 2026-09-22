@@ -164,11 +164,11 @@ profile instead, so there is no `models.providers` ref for it.
 | `tools.web.fetch.firecrawl.apiKey` | `FIRECRAWL_API_KEY` |
 | `tools.web.search.serp.apiKey` | `SERP_API_KEY` |
 
-#### Plugin credentials
+#### Skill credentials
 
 | Config path | Env var |
 | --- | --- |
-| `plugins.entries.typesafe-ai.apiKey` | `TYPESAFE_API_KEY` |
+| `skills.entries.typesafe-ai.apiKey` | `TYPESAFE_API_KEY` |
 
 20 mappings in total. Keep this list in step with `entries` in
 `scripts/09d-oc-agents.sh` (`__oc_apply_secret_refs`) — that list is the source.

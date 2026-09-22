@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -600,8 +600,11 @@ entries = [
     # Tool / Platform API Keys
     ("tools.web.fetch.firecrawl.apiKey", "FIRECRAWL_API_KEY"),
     ("tools.web.search.serp.apiKey", "SERP_API_KEY"),
-    # Plugin / integration credentials
-    ("plugins.entries.typesafe-ai.apiKey", "TYPESAFE_API_KEY"),
+    # Skill credentials -- installed skills live under skills.entries, NOT
+    # plugins.entries: a row pointing at a non-existent path writes a leaf
+    # nothing reads and the real ref is left un-injected (TYPESAFE_API_KEY,
+    # 2026-09-22). Confirm the field against the real config before adding a row.
+    ("skills.entries.typesafe-ai.apiKey", "TYPESAFE_API_KEY"),
 ]
 
 def set_path(node, path, value):
