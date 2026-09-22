@@ -116,7 +116,8 @@ jobs:
                tests/unit/11-module-versions.bats \
                tests/unit/13-gguf-ctx-bounds.bats \
                tests/unit/14-registry-identity.bats \
-               tests/unit/15-secret-ref-paths.bats
+               tests/unit/15-secret-ref-paths.bats \
+               tests/unit/16-docs-sync.bats
 
       - name: Run integration tests
         run: |
