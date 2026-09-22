@@ -120,7 +120,8 @@ jobs:
                tests/unit/16-docs-sync.bats \
                tests/unit/17-startup-notice-hold.bats \
                tests/unit/18-loopback0-unit.bats \
-               tests/unit/19-telemetry-bg-notices.bats
+               tests/unit/19-telemetry-bg-notices.bats \
+               tests/unit/20-up-npm-safety.bats
 
       - name: Run integration tests
         run: |

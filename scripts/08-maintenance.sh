@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 42
+# Module Version: 44
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -285,6 +285,44 @@ function __up_apt_update() {
 }
 
 # ---------------------------------------------------------------------------
+# __npm_global_snapshot — Print "name@version" for every globally installed
+# package, one per line (empty when npm cannot report the set).
+#
+# Why this exists: `npm update -g` reifies the WHOLE global root, and a failure
+# mid-reify leaves it EMPTY rather than unchanged.  Measured 2026-09-22: an
+# ENOTEMPTY on npm's staging directory removed all ten installed packages —
+# including the gateway's own install and the openclaw CLI — while the step
+# reported [FAILED] and carried on.  The snapshot is what makes that recoverable.
+# ---------------------------------------------------------------------------
+function __npm_global_snapshot() {
+    npm ls -g --depth=0 --json 2>/dev/null \
+        | jq -r '.dependencies // {} | to_entries[] | "\(.key)@\(.value.version)"' 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# __npm_global_missing <snapshot> — Print the "name@version" specs from
+# <snapshot> whose NAME is no longer installed.  Names, not versions: a package
+# may legitimately move version during an update, and only disappearance is the
+# damage being repaired here.
+# ---------------------------------------------------------------------------
+function __npm_global_missing() {
+    local _snap="$1" _spec _name
+    local -A _installed=()
+    while IFS= read -r _spec
+    do
+        [[ -n "$_spec" ]] || continue
+        _installed["${_spec%@*}"]=1
+    done < <(__npm_global_snapshot)
+    while IFS= read -r _spec
+    do
+        [[ -n "$_spec" ]] || continue
+        _name="${_spec%@*}"
+        [[ -n "${_installed[$_name]:-}" ]] || printf '%s\n' "$_spec"
+    done <<< "$_snap"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __up_npm_cargo — [3-4/20] NPM global packages + Cargo crates.
 # Both share a single "npm_cargo" cooldown. When cached, outputs both lines.
 # ---------------------------------------------------------------------------
@@ -311,6 +349,12 @@ function __up_npm_cargo() {
                 local outdated_before
                 outdated_before=$(npm outdated -g --parseable 2>/dev/null | grep -v "^npm:" || echo "")
 
+                # Snapshot the installed set BEFORE the update. `npm update -g`
+                # reifies the whole root, so a failure can leave it empty rather
+                # than unchanged — see __npm_global_snapshot.
+                local npm_snapshot
+                npm_snapshot=$(__npm_global_snapshot)
+
                 update_output=$(npm update -g 2>&1)
                 local npm_rc=$?
 
@@ -326,7 +370,22 @@ function __up_npm_cargo() {
                         __tac_line "[3/20] NPM Packages" "[ALREADY UP TO DATE]" "$C_Success"
                     fi
                 else
-                    __tac_line "[3/20] NPM Packages" "[FAILED]" "$C_Warning"
+                    # The update failed. Check the root still holds what it held,
+                    # and rebuild whatever the failure removed.
+                    local -a npm_lost=()
+                    if [[ -n "$npm_snapshot" ]]
+                    then
+                        mapfile -t npm_lost < <(__npm_global_missing "$npm_snapshot")
+                    fi
+                    if (( ${#npm_lost[@]} == 0 ))
+                    then
+                        __tac_line "[3/20] NPM Packages" "[FAILED - PACKAGES INTACT]" "$C_Warning"
+                    elif npm install -g "${npm_lost[@]}" >/dev/null 2>&1
+                    then
+                        __tac_line "[3/20] NPM Packages" "[FAILED - RESTORED ${#npm_lost[@]} PKG]" "$C_Warning"
+                    else
+                        __tac_line "[3/20] NPM Packages" "[FAILED - LOST ${#npm_lost[@]} PKG]" "$C_Error"
+                    fi
                     pkg_err=1
                 fi
             else
