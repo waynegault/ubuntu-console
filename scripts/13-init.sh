@@ -2,7 +2,7 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 12
+# Module Version: 14
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================
@@ -33,7 +33,9 @@ then
     __TAC_INITIALIZED=1
 fi
 
-# Load completions safely (only once — guarded with -f check)
+# Load completions safely (only once — guarded with -f check).
+# $BASH_COMPLETION_SCRIPT is system/user state, not a file in this repo.
+# shellcheck source=/dev/null
 [[ -f "$BASH_COMPLETION_SCRIPT" ]] && . "$BASH_COMPLETION_SCRIPT"
 # OpenClaw completions — generated file versioned in the repo; regenerate with
 # tools/sync-openclaw-completion.sh after `openclaw update`.

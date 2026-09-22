@@ -2296,7 +2296,7 @@ _openclaw_completion() {
             ;;
     esac
 
-    COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+    mapfile -t COMPREPLY < <(compgen -W "${opts}" -- "${cur}")
 }
 
 complete -F _openclaw_completion openclaw

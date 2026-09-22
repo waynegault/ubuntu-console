@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 25
+# Module Version: 27
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -87,9 +87,8 @@ function oc-agent-use() {
             || openclaw sessions --json 2>/dev/null || true)
     fi
 
-    local tmp_agents tmp_sessions
+    local tmp_agents
     tmp_agents=$(mktemp) || tmp_agents="/tmp/oc_agents.$$"
-    tmp_sessions=$(mktemp) || tmp_sessions="/tmp/oc_sessions.$$"
 
     # Extract agent id -> name mapping (best-effort)
     printf '%s' "$agents_json" | jq -r '
@@ -467,7 +466,11 @@ function __bridge_windows_api_keys() {
     # PATH but WSL interop is broken (common with WSL mirrored networking).
     if [[ -f "$_warn_once_file" ]]
     then
-        # Source stale cache if it exists (from a prior session that worked)
+        # Source stale cache if it exists (from a prior session that worked).
+        # $cache is generated at runtime from the Windows user environment, so
+        # there is nothing here for shellcheck to follow.  The directive names
+        # that — it is SC1090's own suggested remedy, not a disabled check.
+        # shellcheck source=/dev/null
         [[ -f "$cache" ]] && source "$cache" 2>/dev/null
         return 0
     fi
@@ -483,6 +486,7 @@ function __bridge_windows_api_keys() {
     # Use cached exports if fresh enough
     if [[ -f "$cache" ]] && (( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) < ttl ))
     then
+        # shellcheck source=/dev/null
         source "$cache" 2>/dev/null
         return
     fi
@@ -531,6 +535,7 @@ function __bridge_windows_api_keys() {
     done <<< "$raw"
     mv "$tmpfile" "$cache"
     chmod 600 "$cache"
+    # shellcheck source=/dev/null
     source "$cache" 2>/dev/null
     rm -f "$_warn_once_file" 2>/dev/null || true
 }
@@ -1027,6 +1032,7 @@ function oc-export-keys-nas() {
     # reboot) would otherwise export a file containing only its header and then
     # mark that as synced — silent data loss. Sourcing here is a correctness
     # requirement, not a convenience.
+    # shellcheck source=/dev/null
     if ! source "$cache" 2>/dev/null
     then
         __tac_info "Exporting to NAS" "[cache unreadable — run 'oc refresh-keys' first]" "$C_Warning"
@@ -1125,6 +1131,7 @@ function oc-refresh-keys() {
             grep -q "^export ${_lk}=" "$cache" 2>/dev/null && continue
             printf 'export %s=%q\n' "$_lk" "${!_lk}" >> "$cache"
         done
+        # shellcheck source=/dev/null
         source "$cache" 2>/dev/null
         count=$(grep -c '^export ' "$cache" || true)
         grep -oE '^export [A-Z0-9_]+' "$cache" | sed 's/^export //' | sort -u > "$_canonical_names"
@@ -1144,6 +1151,7 @@ function oc-refresh-keys() {
             fi
             [[ -n "$_lv" ]] && printf 'export %s=%q\n' "$_lk" "$_lv"
         done < "$_canonical_names" > "$cache"
+        # shellcheck source=/dev/null
         source "$cache" 2>/dev/null
         count=$(grep -c '^export ' "$cache" || true)
         __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — using last-good env ($count vars)]" "$C_Warning"
@@ -1167,6 +1175,7 @@ function oc-refresh-keys() {
             count=$((count + 1))
         done < <(env | sort -u)
         if [[ "$count" -gt 0 ]]; then
+            # shellcheck source=/dev/null
             source "$cache" 2>/dev/null
             grep -oE '^export [A-Z0-9_]+' "$cache" | sed 's/^export //' | sort -u > "$_canonical_names"
             __tac_info "Reading Windows User environment" "[pwsh.exe unavailable — using Linux env vars ($count exported)]" "$C_Warning"

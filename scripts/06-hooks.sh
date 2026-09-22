@@ -2,7 +2,7 @@
 # ─── Module: 06-hooks ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 9
+# Module Version: 11
 # ==============================================================================
 # 6. SYSTEM HOOKS & OVERRIDES
 # ==============================================================================
@@ -72,7 +72,6 @@ if [[ -z "${C_Reset:-}" ]]
 then
     C_Reset=$'\e[0m'
     C_BoxBg=$'\e[38;5;30m'
-    C_Border=$'\e[36m'
     C_Text=$'\e[37m'
     C_Dim=$'\e[90m'
     C_Highlight=$'\e[96m'

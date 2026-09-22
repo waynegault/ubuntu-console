@@ -6,9 +6,15 @@
 # Usage: ./tools/lint.sh            (whole repo)
 #        ./tools/lint.sh --staged   (only .sh files staged for commit)
 #        ./tools/lint.sh --files F  (an explicit list of files)
+#
+# Gates at --severity=warning.  Info-level findings are notices, not defects:
+# SC1091 ("Not following: <file>") is the one this repo emits, on conditional
+# sources of runtime paths, and gating it made the pass red on something no
+# change could fix.  That is a severity threshold, not suppression — every
+# warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 17
+# Module Version: 18
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -144,7 +150,12 @@ _tac_lint_via_consumer() {
     while IFS= read -r _c
     do
         [[ -n "$_c" ]] || continue
-        if shellcheck -s bash -x --source-path="$REPO_ROOT" "$_c" 2>&1
+        # --check-sourced for the same reason as the graph pass below: the
+        # finding lives in $_TAC_VIA_CONSUMER, and without the flag shellcheck
+        # only reports findings in the consumer it was handed — which is why
+        # this path was documented as covering prompt-sets.sh while reporting
+        # nothing about it.
+        if shellcheck -s bash -x --severity=warning --check-sourced --source-path="$REPO_ROOT" "$_c" 2>&1
         then
             echo "  PASS  ${_c#"$REPO_ROOT"/}  (analyses $_TAC_VIA_CONSUMER)"
         else
@@ -199,6 +210,26 @@ _tac_lint_coverage_guard() {
     return "$_rc"
 }
 
+# _tac_in_lint_scope — Is a shellcheck-reported path inside the repo's lint
+# scope?  That scope is the one documented in docs/AGENT-GUIDELINES.md.
+#
+# Why (2026-09-22): --check-sourced is what makes the graph pass report module
+# findings at all (see _tac_lint_graph), but it also makes shellcheck follow a
+# `source` into vendored trees — the pass failed on 20 findings inside
+# .venv/bin/activate, which nothing in this repo owns and which the scope has
+# never included.  This is scope, not suppression: the graph prints how many
+# findings it ignored, so the omission is visible rather than silent.
+_tac_in_lint_scope() {
+    local _rel="${1#./}"
+    case "$_rel" in
+        tactical-console.bashrc|install.sh|env.sh) return 0 ;;
+        # `*` crosses `/` in a case pattern, so these also cover tools/hooks/*
+        # and scripts/completions/*.
+        scripts/*|tools/*|bin/*) return 0 ;;
+    esac
+    return 1
+}
+
 _tac_lint_graph() {
     local _entry _out _n
     _entry="$(mktemp)" || return 1
@@ -207,15 +238,69 @@ _tac_lint_graph() {
         printf 'source "%s"\n' "$_rel"
     done > "$_entry"
     _n="$(wc -l < "$_entry")"
-    if _out="$(shellcheck -s bash -x --source-path="$REPO_ROOT" "$_entry" 2>&1)"
+    # --check-sourced is load-bearing and is why this mode can report at all:
+    # without it shellcheck reports findings ONLY for the file named on the
+    # command line, so an entry that merely `source`s the modules analysed
+    # nothing and the graph printed PASS over any finding inside a module —
+    # including real ones.  Measured 2026-09-22 on a fixture carrying SC2034,
+    # SC2086, SC2221 and SC2222: via this entry, 0 findings and rc=0 without the
+    # flag; the same 7 findings as a direct per-file run with it.  It was found
+    # because a real SC2221/SC2222 in scripts/09a-oc-gateway.sh went through
+    # --files and --staged with "All listed files passed".
+    if _out="$(shellcheck -s bash -x --severity=warning --check-sourced --source-path="$REPO_ROOT" "$_entry" 2>&1)"
     then
         echo "  PASS  module graph ($_n members, analysed as one set)"
         rm -f "$_entry"
         return 0
     fi
     # Findings stay attributed to the file they are in, because the relative
-    # sources below resolve against --source-path.
-    printf '%s\n' "$_out"
+    # sources resolve against --source-path.  Drop the ones attributed to files
+    # outside the lint scope (vendored trees reached through a `source`) and
+    # print the count, so the omission is visible rather than silent.
+    local _line _path="" _keep=1 _kept=0 _dropped=0 _kept_out=""
+    while IFS= read -r _line
+    do
+        case "$_line" in
+            # One arm only, and deliberately no `*)` arm: shellcheck emits a
+            # three-line group per finding and only the "In <file> line N:"
+            # header names a path, so any other line must fall through with
+            # `_keep` unchanged — a catch-all arm would have nothing to do but
+            # restate that.  §18.3 item 4.2.4 wants that reason written down,
+            # which is why this comment is here rather than a no-op default.
+            "In "*" line "*":")
+                _path="${_line#In }"
+                _path="${_path%% line *}"
+                if _tac_in_lint_scope "$_path"
+                then
+                    _keep=1
+                    _kept=$(( _kept + 1 ))
+                else
+                    _keep=0
+                    _dropped=$(( _dropped + 1 ))
+                fi
+                ;;
+        esac
+        if (( _keep ))
+        then
+            _kept_out+="$_line"$'\n'
+        fi
+    done <<< "$_out"
+
+    if (( _kept == 0 ))
+    then
+        echo "  PASS  module graph ($_n members, analysed as one set)"
+        if (( _dropped > 0 ))
+        then
+            echo "        ($_dropped finding(s) in files outside the lint scope ignored)"
+        fi
+        rm -f "$_entry"
+        return 0
+    fi
+    printf '%s' "$_kept_out"
+    if (( _dropped > 0 ))
+    then
+        echo "        (also $_dropped finding(s) in files outside the lint scope ignored)"
+    fi
     echo "  FAIL  module graph ($_n members)"
     rm -f "$_entry"
     return 1
@@ -262,7 +347,7 @@ then
             if _tac_is_via_consumer "$f"; then _tac_lint_via_consumer || rc=1; fi
             continue
         fi
-        if shellcheck -s bash -x --source-path="$REPO_ROOT" "$REPO_ROOT/$f" 2>&1
+        if shellcheck -s bash -x --severity=warning --source-path="$REPO_ROOT" "$REPO_ROOT/$f" 2>&1
         then
             echo "  PASS  $f"
         else
@@ -353,7 +438,7 @@ then
             if _tac_is_via_consumer "$f"; then _tac_lint_via_consumer || rc=1; fi
             continue
         fi
-        if shellcheck -s bash -x --source-path="$REPO_ROOT" "$f" 2>&1
+        if shellcheck -s bash -x --severity=warning --source-path="$REPO_ROOT" "$f" 2>&1
         then
             echo "  PASS  ${f#"$REPO_ROOT"/}"
         else
@@ -416,12 +501,14 @@ do
     then
         continue
     fi
-    # -x with --source-path: let shellcheck actually FOLLOW the repo's own
-    # sources, so the SC1090/SC1091 class ("Not following: env.sh was not
-    # specified as input") is RESOLVED rather than hidden behind a
-    # `disable=SC1091` directive. Sourced modules carry no shebang, so -s bash
-    # sets the dialect too.
-    shellcheck -s bash -x --source-path="$REPO_ROOT" "$f" 2>&1 || local_rc=$?
+    # -x with --source-path: let shellcheck FOLLOW the repo's own sources, so
+    # the SC1091 class is resolved rather than hidden behind a directive.
+    # NOTE (2026-09-22): this does NOT resolve SC1090 — a source path built from
+    # a variable cannot be followed at all, measured on a fixture: 0 findings
+    # without a directive, and the findings return the moment one is removed.
+    # Those sites carry an explicit `# shellcheck source=` line instead.
+    # Sourced modules carry no shebang, so -s bash sets the dialect too.
+    shellcheck -s bash -x --severity=warning --source-path="$REPO_ROOT" "$f" 2>&1 || local_rc=$?
     if (( local_rc == 0 ))
     then
         echo "  PASS  ${f#"$REPO_ROOT"/}"

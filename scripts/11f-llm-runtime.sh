@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11f-llm-runtime ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 13
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
@@ -180,7 +180,6 @@ function burn() {
 
     local start_ns end_ns response curl_rc
     local transport_history=""
-    local transport_recovered=0
     local attempt=1
     local max_attempts="${LLM_BURN_MAX_ATTEMPTS:-}"
     local retry_health_wait="${LLM_BURN_RETRY_HEALTH_WAIT:-30}"
@@ -306,7 +305,6 @@ function burn() {
                         do
                             if __llm_is_healthy
                             then
-                                transport_recovered=1
                                 printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Model recovered; retrying request."
                                 break
                             fi

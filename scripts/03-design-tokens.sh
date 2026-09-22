@@ -2,7 +2,7 @@
 # ─── Module: 03-design-tokens ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 2
+# Module Version: 4
 # ==============================================================================
 # 3. DESIGN TOKENS
 # ==============================================================================
@@ -10,7 +10,7 @@
 # @depends: none
 # @depended-on-by: ui-engine (§5), hooks (§6), telemetry (§7), maintenance (§8),
 #   openclaw (§9), deployment (§10), llm-manager (§11), dashboard (§12), init (§13)
-# @exports: C_Reset, C_BoxBg, C_Border, C_Text, C_Dim, C_Highlight, C_Success,
+# @exports: C_Reset, C_BoxBg, C_Text, C_Dim, C_Highlight, C_Success,
 #   C_Warning, C_Error, C_Info (all readonly)
 #
 # ANSI colour constants for the tactical UI. Declared readonly so they cannot be
@@ -21,7 +21,6 @@ if [[ -z "${C_Reset:-}" ]]
 then
     readonly C_Reset=$'\e[0m'
     readonly C_BoxBg=$'\e[38;5;30m'    # DarkCyan (256-color)
-    readonly C_Border=$'\e[36m'        # Cyan
     readonly C_Text=$'\e[37m'          # White
     readonly C_Dim=$'\e[90m'           # Gray
     readonly C_Highlight=$'\e[96m'     # Light Cyan

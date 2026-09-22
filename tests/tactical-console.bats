@@ -526,7 +526,6 @@ EOF
 @test "constants: design tokens C_Reset through C_Info are set" {
     [[ -n "$C_Reset" ]]
     [[ -n "$C_BoxBg" ]]
-    [[ -n "$C_Border" ]]
     [[ -n "$C_Text" ]]
     [[ -n "$C_Dim" ]]
     [[ -n "$C_Highlight" ]]
