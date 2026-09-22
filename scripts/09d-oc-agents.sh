@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -598,7 +598,14 @@ entries = [
     ("models.providers.fireworks.apiKey", "FIREWORKS_API_KEY"),
     ("models.providers.huggingface.apiKey", "HUGGINGFACE_TOKEN"),
     # Tool / Platform API Keys
-    ("tools.web.fetch.firecrawl.apiKey", "FIRECRAWL_API_KEY"),
+    # `tools.web.fetch.firecrawl.*` is a LEGACY shape the current schema rejects
+    # ("tools.web.fetch: Unrecognized key: firecrawl"); openclaw doctor --fix
+    # migrates it to the plugin entry below (docs/tools/web-fetch.md: "Legacy
+    # tools.web.fetch.firecrawl.* config auto-migrates to
+    # plugins.entries.firecrawl.config.webFetch").  A row the schema rejects is
+    # worse than inert: `config patch` validates, so one bad row aborts the
+    # whole batched SecretRef write (2026-09-22).
+    ("plugins.entries.firecrawl.config.webFetch.apiKey", "FIRECRAWL_API_KEY"),
     ("tools.web.search.serp.apiKey", "SERP_API_KEY"),
     # Skill credentials -- installed skills live under skills.entries, NOT
     # plugins.entries: a row pointing at a non-existent path writes a leaf

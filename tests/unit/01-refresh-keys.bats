@@ -409,7 +409,8 @@ CFG
     local hash_before
     hash_before=$(cat "$TAC_CACHE_DIR/tac_win_api_keys.hash")
 
-    # Refresh 2 — the config now consumes the second key. The bridged values are
+    # Refresh 2 — the config now consumes the second key, at the field an installed
+    # skill really has (skills.entries.<name>.apiKey). The bridged values are
     # byte-identical, so only the injected NAME SET moved.
     cat > "$HOME/.openclaw/openclaw.json" << 'CFG'
 {
@@ -418,14 +419,16 @@ CFG
       "google": {
         "config": {
           "webSearch": {
-            "apiKey": { "source": "env", "provider": "default", "id": "GEMINI_API_KEY" }
+            "apiKey": {"source": "env", "provider": "default", "id": "GEMINI_API_KEY"}
           }
         }
-      },
+      }
+    }
+  },
+  "skills": {
+    "entries": {
       "typesafe-ai": {
-        "config": {
-          "apiKey": { "source": "env", "provider": "default", "id": "TYPESAFE_API_KEY" }
-        }
+        "apiKey": {"source": "env", "provider": "default", "id": "TYPESAFE_API_KEY"}
       }
     }
   }
@@ -449,11 +452,14 @@ CFG
     [ "$status" -eq 0 ]
 }
 
-@test "oc-refresh-keys puts a plugin credential from the Windows env onto the env surface (2026-09-22)" {
+@test "oc-refresh-keys puts a skill credential from the Windows env onto the env surface (2026-09-22)" {
     # TYPESAFE_API_KEY was bridged from Windows and declared in openclaw.json, yet
-    # reached the gateway through neither channel: the mapping table had no row for
-    # it, so refresh-keys could not put it on the credential surface. This pins the
-    # row, and the preflight property with it.
+    # reached the gateway through neither channel: the mapping row named a path that
+    # does not exist (plugins.entries.typesafe-ai.apiKey — a plugin entry has no
+    # apiKey of its own; the real field is skills.entries.typesafe-ai.apiKey, which
+    # tests/unit/15-secret-ref-paths.bats now pins against the schema), so
+    # refresh-keys could not put it on the credential surface. This pins the row,
+    # and the preflight property with it.
     __mock_command_local pwsh.exe "printf '%s\\n' 'TYPESAFE_API_KEY=test-typesafe-key'"
     export TYPESAFE_API_KEY="test-typesafe-key"
     rm -f "$OC_MOCK_LOG" "$OC_MOCK_PATCH_FILE"
@@ -486,10 +492,10 @@ CFG
     mkdir -p "$HOME/.openclaw"
     cat > "$HOME/.openclaw/openclaw.json" << 'CFG'
 {
-  "plugins": {
+  "skills": {
     "entries": {
       "sample-tool": {
-        "apiKey": { "source": "store", "provider": "default", "id": "WIN_SAMPLE_KEY" }
+        "apiKey": {"source": "store", "provider": "default", "id": "WIN_SAMPLE_KEY"}
       }
     }
   }
@@ -505,7 +511,7 @@ CFG
     # Named, with the path and the var, in the run's own output.
     [[ "$output" == *"NOT env-backed"* ]]
     [[ "$output" == *"WIN_SAMPLE_KEY"* ]]
-    [[ "$output" == *"plugins.entries.sample-tool.apiKey"* ]]
+    [[ "$output" == *"skills.entries.sample-tool.apiKey"* ]]
 
     # The store-backed ref was left exactly as it was.
     run grep -F 'WIN_SAMPLE_KEY' "$OC_MOCK_PATCH_FILE" 2>/dev/null
