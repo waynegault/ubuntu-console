@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 24
+# Module Version: 25
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -714,6 +714,7 @@ if bridged:
             "{}@{} (source {})".format(v, p, s) for v, p, s in _gaps
         )
     print(_msg, file=sys.stderr)
+print(json.dumps({"patch": patch, "changed": changed, "skipped": skipped}))
 PYEOF
 )
     _patch=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['patch']))" 2>/dev/null)

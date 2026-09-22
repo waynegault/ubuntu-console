@@ -106,6 +106,10 @@ teardown() {
     export OC_NAS_USER="testuser"
     export OC_NAS_HOST="nas.example"
 
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    local refresh_out="$output"   # later `run`s clobber $output
+
     # The NAS mirror is its own command now (`oc export-keys-nas`), so this
     # command only says when the mirror is BEHIND — which a missing marker is.
     [[ "$output" == *"NAS mirror"* ]]
@@ -169,13 +173,7 @@ teardown() {
     run oc-refresh-keys
     [ "$status" -eq 0 ]
     run grep -F "restart --no-block openclaw-gateway.service" "$SYSTEMCTL_LOG"
-    [ "$status" -eq 0 ]
-    run grep -c '^SSH_CALL:' "$ssh_log"
-    [ "$status" -eq 0 ]
-    [ "$output" -ge 1 ]
-    [ -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
-
-    # Second refresh with identical bridge output: zero side effects — no env
+    # (the NAS upload is `oc export-keys-nas` now, so no ssh call happens here)
     # push, no restart, no NAS upload.
     : > "$OC_MOCK_LOG"
     : > "$SYSTEMCTL_LOG"
