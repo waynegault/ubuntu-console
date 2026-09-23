@@ -145,11 +145,13 @@ The same refresh also reports two things that would otherwise decay silently:
   consumer gets depends on what it inherits, and nothing else compares the two.
   Names are printed; values are compared and dropped.
 
-`oc health` additionally scans the recent session journal for a `gh`-requested
+`oc health` additionally scans the session journal for a `gh`-requested
 `org.freedesktop.secrets` activation and names it (`Token-less gh`). That is the
 detection half of the one hole this cannot close: a caller that bypasses PATH by
-invoking linuxbrew's `gh` by absolute path. Across 30 days the signature had exactly
-one hit (the 10:52:57 call), so it does not cry wolf.
+invoking linuxbrew's `gh` by absolute path. The window is the journal's, not the
+query's — the scan asks for 7 days, but the user journal held only about two and a
+half hours on 2026-09-23 and the 10:52:57 line had already rotated out by 13:30 — so
+the row says `in the retained journal` rather than claiming a window it cannot see.
 
 ### Re-bridging after a boot
 

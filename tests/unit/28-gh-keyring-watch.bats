@@ -56,7 +56,7 @@ LOG
     run __oc_gh_keyring_recurrence
     [ "$status" -eq 0 ]
     [[ "$output" == *"Token-less gh"* ]]
-    [[ "$output" == *"2 keyring activation(s) in 7 days"* ]]
+    [[ "$output" == *"2 keyring activation(s) in the retained journal"* ]]
     # The timestamp of the LAST hit, which is how a reader finds it again.
     [[ "$output" == *"Sep 23 11:20:01"* ]]
 }
@@ -69,7 +69,7 @@ LOG
 
     run __oc_gh_keyring_recurrence
     [ "$status" -eq 0 ]
-    [[ "$output" == *"none in 7 days"* ]]
+    [[ "$output" == *"none in the retained journal"* ]]
     [[ "$output" != *"activation(s)"* ]]
 }
 
@@ -79,7 +79,60 @@ LOG
 
     run __oc_gh_keyring_recurrence
     [ "$status" -eq 0 ]
-    [[ "$output" == *"none in 7 days"* ]]
+    [[ "$output" == *"none in the retained journal"* ]]
+}
+
+@test "keyring watch: the row also prints on the path this box actually takes" {
+    # NO enhanced checker in the sandbox HOME, so oc-health takes its own fallback
+    # path — the one it really uses here (the enhanced checker does not exist on this
+    # box, verified by running the command). __test_port comes from 06-hooks, which
+    # this harness does not carry, so it is stubbed; the assertion is about OUR row.
+    export HOME="$BATS_TEST_TMPDIR/home-plain"
+    mkdir -p "$HOME"
+    __test_port() { return 0; }
+    # `oc-health` reads this flag before it prints any row, and the harness does not
+    # carry the module that sets it; without it the fallback reports "NOT INSTALLED"
+    # and returns, which is a different test.
+    export __TAC_OPENCLAW_OK=1
+    export JOURNAL_FIXTURE="$BATS_TEST_TMPDIR/journal.txt"
+    : > "$JOURNAL_FIXTURE"
+
+    run oc-health
+    [[ "$output" == *"Health Status"* ]]
+    [[ "$output" == *"Token-less gh"* ]]
+    [[ "$output" == *"none in the retained journal"* ]]
+}
+
+@test "keyring watch: the row is wired into the enhanced-checker path as well" {
+    # The enhanced-checker branch RETURNS before the fallback rows, so a call wired
+    # only below it is dead code on every box where that checker exists. Running the
+    # real function against a stub checker is what pins that wiring; testing the
+    # helper alone (as the first three cases do) cannot see it.
+    export HOME="$BATS_TEST_TMPDIR/home-enhanced"
+    mkdir -p "$HOME/.openclaw/workspace/scripts"
+    cat > "$HOME/.openclaw/workspace/scripts/oc-health-check.py" <<'PYSTUB'
+print("STUB-ENHANCED-CHECKER")
+PYSTUB
+    export TAC_PYTHON="${TAC_PYTHON:-python3}"
+    export JOURNAL_FIXTURE="$BATS_TEST_TMPDIR/journal.txt"
+    : > "$JOURNAL_FIXTURE"
+
+    run oc-health
+    [[ "$output" == *"STUB-ENHANCED-CHECKER"* ]]
+    [[ "$output" == *"Token-less gh"* ]]
+    [[ "$output" == *"none in the retained journal"* ]]
+}
+
+@test "keyring watch: --json stays clear of the forensic row" {
+    export HOME="$BATS_TEST_TMPDIR/home-enhanced"
+    mkdir -p "$HOME/.openclaw/workspace/scripts"
+    cat > "$HOME/.openclaw/workspace/scripts/oc-health-check.py" <<'PYSTUB'
+print('{"checks": []}')
+PYSTUB
+    export TAC_PYTHON="${TAC_PYTHON:-python3}"
+
+    run oc-health --json
+    [[ "$output" != *"Token-less gh"* ]]
 }
 
 @test "boot unit: ExecStart reaches the console dispatch, and is a oneshot at boot" {

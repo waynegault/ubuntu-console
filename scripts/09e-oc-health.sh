@@ -9,7 +9,7 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # 09e-oc-health
 # ==============================================================================
@@ -37,10 +37,14 @@ __TAC_MOD_09E_OC_HEALTH_LOADED=1
 # fix). The signature is unambiguous, and nothing else on the box watches for it,
 # so a recurrence should be named rather than left invisible.
 #
-# Measured across 30 days when this landed: exactly ONE such line, the
-# `gh auth token` call at 10:52:57 — so the scan does not cry wolf. It stays out of
-# `oc-health --json` / `--plain` deliberately: those are machine surfaces, and a
-# forensic note is not a status.
+# THE WINDOW IS THE JOURNAL'S, NOT THE QUERY'S. The scan asks for 7 days, which is
+# only an upper bound: measured on this box 2026-09-23, the user journal retained
+# from 11:04 that morning (5,221 entries, 54 MB) — about two and a half hours — and
+# the very 10:52:57 line this check exists to find had already rotated out by
+# 13:30. The row therefore says "in the retained journal" and never claims 7 days.
+#
+# It stays out of `oc-health --json` / `--plain` deliberately: those are machine
+# surfaces, and a forensic note is not a status.
 #
 # REPORTED, NOT ENFORCED — a past event is not a current fault, so the caller does
 # not count it as an issue.
@@ -63,9 +67,9 @@ function __oc_gh_keyring_recurrence() {
         _n=$(printf '%s\n' "$_raw" | wc -l)
         _last=$(printf '%s\n' "$_raw" | tail -1 | cut -c1-15)
         __tac_info "Token-less gh" \
-            "[$_n keyring activation(s) in 7 days, last $_last]" "$C_Warning"
+            "[$_n keyring activation(s) in the retained journal, last $_last]" "$C_Warning"
     else
-        __tac_info "Token-less gh" "[none in 7 days]" "$C_Success"
+        __tac_info "Token-less gh" "[none in the retained journal]" "$C_Success"
     fi
 }
 
@@ -84,6 +88,7 @@ function oc-health() {
     if [[ -f "$enhanced_script" ]]
     then
         # Use comprehensive health check
+        local _enhanced_rc=0
         case "$output_mode" in
             json)
                 "$TAC_PYTHON" "$enhanced_script" --json
@@ -98,7 +103,17 @@ function oc-health() {
                 "$TAC_PYTHON" "$enhanced_script"
                 ;;
         esac
-        return $?
+        _enhanced_rc=$?
+        # The recurrence watch is OUR check, not the enhanced checker's: this branch
+        # returns before the fallback rows, so without this call the row would be dead
+        # code on any box that HAS the enhanced checker — which is every box here.
+        # Measured 2026-09-23 by running `oc health` after wiring it only below: the
+        # output was the enhanced checker's two rows and nothing else.
+        if [[ "$output_mode" == "human" ]]
+        then
+            __oc_gh_keyring_recurrence
+        fi
+        return "$_enhanced_rc"
     fi
 
     # Fallback to basic health check if enhanced script not found
@@ -201,6 +216,12 @@ function oc-health() {
     else
         __tac_info "Health Status" "[${health_status^^}]" "$health_color"
     fi
+
+    # Watches for the gh keyring fall-through coming back (see the helper for why:
+    # reported, never counted as an issue, and absent from --json/--plain). This is
+    # the path `oc health` takes on a box WITHOUT the enhanced checker — which is
+    # this one, verified by running the command.
+    __oc_gh_keyring_recurrence
 }
 
 # ---------------------------------------------------------------------------
@@ -1063,10 +1084,6 @@ function oc-doctor-local() {
         "$([[ $model_sync -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
     __tac_info "Key Cache" "[$([[ $key_cache -eq 1 ]] && echo PRESENT || echo MISSING)]" \
         "$([[ $key_cache -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
-
-    # Watches for the gh keyring fall-through coming back (see the helper for why:
-    # reported, never counted as an issue, and absent from --json/--plain).
-    __oc_gh_keyring_recurrence
     __tac_info "Config File" "[$([[ $oc_config -eq 1 ]] && echo PRESENT || echo MISSING)]" \
         "$([[ $oc_config -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
     [[ -n "$active_model" ]] && __tac_info "Active Model" "[$active_model]" "$C_Dim"

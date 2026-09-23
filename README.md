@@ -416,7 +416,7 @@ The bridged token already reaches bridged shells (`13-init.sh`) and the systemd 
   Measured 2026-09-23 while answering "is the keyring still used?": the default collection (`Default keyring`) holds **zero items** and is unlocked, so `gh` has no stored credential to find — a token-less call activates `org.freedesktop.secrets` and then fails with `no oauth token found for github.com`. `gnome-keyring-daemon` (pid 52927) is still up because it owns `org.freedesktop.secrets` for anything else on the box that uses libsecret; the `gogcli` collection from April is separate.
 - **It checks the shim every run** — that `~/.local/bin/gh` exists *and* that `command -v gh` still resolves to it. The protection is a symlink, so it can vanish (a fresh clone without `install.sh`, a tidy-up of `~/.local/bin`) and restore the fall-through silently; the refresh now says `MISSING` or `present but NOT first on PATH` in `$C_Warning` when that happens.
 - **It names a shadowed key**: a variable carried by *both* the bridge cache and the static `environment.d` drop-in with **different values** is a silent-shadowing machine — which value a process gets depends on what it inherits — so the disagreeing NAMES are reported (`Key shadowing`), with the values compared and dropped, never printed. It is also the cue for the parked work on *generating* that drop-in.
-- **`oc health` watches for the fall-through coming back** (`Token-less gh`): a bounded journal scan for a `gh`-requested `org.freedesktop.secrets` activation — the one signature a caller that bypasses PATH leaves behind. Across 30 days there is exactly one such line (the 10:52:57 call), so it does not cry wolf. Reported, never counted as an issue, and deliberately absent from `--json`/`--plain`.
+- **`oc health` watches for the fall-through coming back** (`Token-less gh`): a journal scan for a `gh`-requested `org.freedesktop.secrets` activation — the one signature a caller that bypasses PATH leaves behind. The window is the **journal's**, not the query's: the scan asks for 7 days, but this box's user journal held only ~2.5 h on 2026-09-23 (5,221 entries, 54 MB) and the very 10:52:57 line had already rotated out by 13:30 — so the row says `in the retained journal` and never claims a window it cannot see. Reported, never counted as an issue, and deliberately absent from `--json`/`--plain`.
 
 **Still not closable:** a caller invoking linuxbrew's `gh` by *absolute path* bypasses the shim, and nothing in this repo can prevent that — the only alternatives are a plaintext token in gh's own config, or making the real binary unreachable. That is exactly why the `oc health` row exists: a recurrence becomes visible even though it cannot be prevented.
 
@@ -509,7 +509,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1288 total tests: 873 BATS + 415 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1291 total tests: 876 BATS + 415 Python).
 
 ### Running Tests
 
@@ -551,10 +551,10 @@ Counts are enforced by `tools/docs-sync-check.sh`; per-case and whole-file timeo
 | Full behavioural | `tactical-console.bats` | 387 | 900s | 2700s |
 | Fast static analysis | `tactical-console-fast.bats` | 63 | 180s | 900s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
-| Unit | `tests/unit/*.bats` | 279 | 120s | 600s |
+| Unit | `tests/unit/*.bats` | 282 | 120s | 600s |
 | Integration | `tests/integration/*.bats` | 142 | 300s | 1200s |
 | Python | `tests/test_*.py` | 415 | 1000s (`pytest.ini`) | — |
-| **Total** | | **1288** | | |
+| **Total** | | **1291** | | |
 
 **Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and all eight markers the BATS bridge applies dynamically are registered there. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 387 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
 
@@ -1165,7 +1165,7 @@ where it was last present.)
 │   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
 │   ├── test_models.py                 # Pydantic model tests (55 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (279 tests: 18+12+8+5+5+6+20+4+8+7+28+19+7+2+1+5+4+2+3+3+17+16+41+19+6+8+5)
+│   ├── unit/                          # BATS unit tests (282 tests: 18+12+8+5+5+6+20+4+8+7+28+19+7+2+1+5+4+2+3+3+17+16+41+19+6+8+8)
 │   └── integration/                   # BATS integration tests (142 tests: 14+43+10+44+3+28)
 └── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)
