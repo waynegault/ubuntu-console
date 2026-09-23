@@ -263,6 +263,7 @@ EOS
     local -a lanes=(
         llama-xe-minicpm5-1b-chat.service
         llama-xe-embeddinggemma-embed.service
+        llama-xe-qwen25-3b-chat.service
         llama-cuda-llama32-3b-chat.service
         llama-cuda-qwen35-4b-pipeline.service
         llama-cpu-qwen25-3b-chat.service
