@@ -511,7 +511,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1293 total tests: 878 BATS + 415 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1295 total tests: 880 BATS + 415 Python).
 
 ### Running Tests
 
@@ -553,10 +553,10 @@ Counts are enforced by `tools/docs-sync-check.sh`; per-case and whole-file timeo
 | Full behavioural | `tactical-console.bats` | 387 | 900s | 2700s |
 | Fast static analysis | `tactical-console-fast.bats` | 63 | 180s | 900s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
-| Unit | `tests/unit/*.bats` | 284 | 120s | 600s |
+| Unit | `tests/unit/*.bats` | 286 | 120s | 600s |
 | Integration | `tests/integration/*.bats` | 142 | 300s | 1200s |
 | Python | `tests/test_*.py` | 415 | 1000s (`pytest.ini`) | — |
-| **Total** | | **1293** | | |
+| **Total** | | **1295** | | |
 
 **Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and all eight markers the BATS bridge applies dynamically are registered there. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 387 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
 
@@ -1167,7 +1167,7 @@ where it was last present.)
 │   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
 │   ├── test_models.py                 # Pydantic model tests (55 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (284 tests: 20+12+8+5+5+6+20+4+8+7+28+19+7+2+1+5+4+2+3+3+17+16+41+19+6+8+8)
+│   ├── unit/                          # BATS unit tests (286 tests: 22+12+8+5+5+6+20+4+8+7+28+19+7+2+1+5+4+2+3+3+17+16+41+19+6+8+8)
 │   └── integration/                   # BATS integration tests (142 tests: 14+43+10+44+3+28)
 └── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)

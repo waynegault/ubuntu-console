@@ -58,6 +58,14 @@ setup() {
     # shellcheck source=scripts/09-openclaw.sh
     source "$REPO_ROOT/scripts/09-openclaw.sh"
 
+    # 2026-09-23: the restart step now asks the gateway's own log whether it is
+    # SERVING (__so_gateway_phase, from 09a) instead of trusting `is-active`, which
+    # reports "active" the moment the process is spawned. That stub MUST come after
+    # the `source` above — 09-openclaw.sh loads 09a, whose real definition reads the
+    # HOST journal and silently overwrote an earlier stub (measured: the case then
+    # reported "gateway phase unknown" instead of "running").
+    __so_gateway_phase() { printf 'running\n'; }
+
     # Isolate OC_ROOT so tests never touch the real ~/.openclaw.
     export OC_ROOT="$TAC_TEST_TMPDIR/.openclaw"
     mkdir -p "$OC_ROOT"
@@ -490,7 +498,40 @@ CFG
 
     run oc-refresh-keys
     [ "$status" -eq 0 ]
-    [[ "$output" == *"restarted to pick up refreshed env"* ]]
+    [[ "$output" == *"restarted and serving"* ]]
+}
+
+@test "oc-refresh-keys does not stack a restart on a unit systemd is already moving" {
+    # 2026-09-23: the collision that produced "another OpenClaw process owns
+    # state-lifecycle" costs minutes per cycle, and it starts with a second restart
+    # landing on a unit that is still draining. The mock reports deactivating, so no
+    # restart may be issued at all.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret'"
+    __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; case \"\$*\" in *is-active*) echo deactivating;; esac; exit 0"
+    : > "$SYSTEMCTL_LOG"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not stacking a restart"* ]]
+    # The assertion that matters: no restart was issued.
+    run grep -c 'restart' "$SYSTEMCTL_LOG"
+    [ "$output" -eq 0 ]
+}
+
+@test "oc-refresh-keys says a restarted gateway is STILL STARTING, not quietly fine" {
+    # The honest half of the same fix: `is-active` says active while the gateway is
+    # still opening every agent database, so the report must not imply it is serving.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret'"
+    __so_gateway_phase() { printf 'starting\n'; }
+    # The real code polls once a second up to its bound when the phase is not yet
+    # `running`; stubbing `sleep` (a function shadows the binary) keeps the case at
+    # the two lines it is about instead of costing the bound in wall time.
+    sleep() { :; }
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"still starting"* ]]
+    [[ "$output" != *"restarted and serving"* ]]
 }
 
 # --- the GitHub CLI credential surface (2026-09-23) -------------------------

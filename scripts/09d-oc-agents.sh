@@ -7,12 +7,13 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 31
+# Module Version: 32
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
 # @modular-section: openclaw
 # @depends: constants, design-tokens, ui-engine
+# @uses: oc-gateway
 # @exports: oc-agent-use, ockeys, ocdoc-fix, oc-refresh-keys,
 #   oc-rotate-exposed-secrets
 
@@ -1466,24 +1467,55 @@ function oc-refresh-keys() {
         # so that overlap cannot arise, and --no-block keeps a slow cold start from
         # hanging the caller. This is the last step, so a gateway-hosted run that
         # dies here loses only its own final log line.
-        local _gw_state="" _i
-        if systemctl --user restart --no-block openclaw-gateway.service 2>/dev/null
+        # 2026-09-23, both rules from the crash loop this block contributed to:
+        #
+        #  1. NEVER STACK A RESTART. If systemd is already moving the unit — a previous
+        #     restart still draining, or a start in flight — another restart lands on
+        #     top of it. That is the collision whose log line is "another OpenClaw
+        #     process owns state-lifecycle", and each cycle took minutes to fail before
+        #     anyone could see it (measured six times between 14:00 and 14:34).
+        #  2. WAIT FOR CONVERGENCE, not for `is-active`. The unit reports "active" the
+        #     moment the process is spawned, while the gateway then spends minutes
+        #     opening every agent database; the old text ("it finishes coming up on its
+        #     own") read as healthy during exactly that window. The gateway's own log is
+        #     the authority on serving (__so_gateway_phase), so a fresh `running` is what
+        #     convergence means here — and every other outcome is named.
+        local _pre_state _gw_state="" _phase="" _i
+        # swallow-ok: no user manager in an agent/CI shell; the pre-state is then empty and no restart is stacked
+        _pre_state=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)
+        if [[ "$_pre_state" == "activating" || "$_pre_state" == "deactivating" ]]
         then
-            # A bounded settle, not a readiness wait: the unit reports active as
-            # soon as the process is spawned, which is well before it serves.
-            for _i in 1 2 3 4 5 6 7 8 9 10
+            __tac_info "Gateway" "[already $_pre_state — not stacking a restart; env is applied]" "$C_Warning"
+        elif systemctl --user restart --no-block openclaw-gateway.service 2>/dev/null
+        then
+            for _i in {1..60}
             do
                 _gw_state=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)
-                [[ "$_gw_state" == "active" || "$_gw_state" == "failed" ]] && break
+                [[ "$_gw_state" == "failed" ]] && break
+                if [[ "$_gw_state" == "active" ]]
+                then
+                    # A failed read must leave the phase empty (= unknown) rather than
+                    # abort the report; the reader's own journalctl is already redirected.
+                    # swallow-ok: the phase reader is a log parser, and an empty read means "phase unknown"
+                    _phase=$(__so_gateway_phase openclaw-gateway.service 2>/dev/null)
+                    [[ "$_phase" == "running" ]] && break
+                fi
                 sleep 1
             done
-            case "$_gw_state" in
-                active) __tac_info "Gateway" "[restarted to pick up refreshed env]" "$C_Success" ;;
-                failed) __tac_info "Gateway" "[restart FAILED — env is applied; check 'systemctl --user status openclaw-gateway.service']" "$C_Error" ;;
-                *)      __tac_info "Gateway" "[restart issued; unit is $_gw_state — it finishes coming up on its own]" "$C_Warning" ;;
+            case "$_gw_state:$_phase" in
+                failed:*)
+                    __tac_info "Gateway" "[restart FAILED — env applied; check systemctl --user status]" "$C_Error" ;;
+                active:running)
+                    __tac_info "Gateway" "[restarted and serving]" "$C_Success" ;;
+                active:starting)
+                    __tac_info "Gateway" "[restarted — still starting (a cold start here runs 2-4 min)]" "$C_Warning" ;;
+                active:*)
+                    __tac_info "Gateway" "[restarted — active, gateway phase ${_phase:-unknown}]" "$C_Warning" ;;
+                *)
+                    __tac_info "Gateway" "[restart issued; unit is $_gw_state — not waiting further]" "$C_Warning" ;;
             esac
         else
-            __tac_info "Gateway" "[restart NOT issued — env is applied; run 'systemctl --user restart openclaw-gateway.service']" "$C_Warning"
+            __tac_info "Gateway" "[restart NOT issued — env is applied; re-run it yourself]" "$C_Warning"
         fi
     fi
 }
