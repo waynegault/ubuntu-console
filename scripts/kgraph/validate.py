@@ -148,6 +148,57 @@ def _check_vocabulary(graph: dict) -> list[dict]:
 # ── Validation ──────────────────────────────────────────────────────────
 
 
+def _check_community_digest(graph: dict) -> list[dict]:
+    """Report a cached community digest that names nodes the graph does not have.
+
+    REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural Patterns"
+         (Partha Sarkar, TDS, 2026-09-20) — the article's community reports are a
+         CACHE of derived structure, and a cache that has drifted from the graph it
+         describes is worse than no cache: an agent asking "what are the main
+         themes" would be told about members that no longer exist.  The update path
+         writes the digest from the same graph it saves, so drift here means a
+         hand-edited, merged or partially-exported graph.
+
+    Reported at WARNING for the same reason the vocabulary check is: a stale digest
+    does not make a payload unsafe, and rejecting the graph would be the wrong
+    remedy.  One finding per community, bounded, so a wholesale rebuild does not
+    produce a finding per member.
+    """
+    meta = graph.get("meta", {})
+    if not isinstance(meta, dict):
+        return []
+    communities = meta.get("communities")
+    if not isinstance(communities, list):
+        return []
+
+    node_ids = {
+        str(item.get("id")) for item in graph.get("nodes", [])
+        if isinstance(item, dict) and item.get("id") is not None
+    }
+
+    findings: list[dict] = []
+    for idx, community in enumerate(communities):
+        if not isinstance(community, dict):
+            continue
+        members = community.get("members")
+        if not isinstance(members, list):
+            continue
+        missing = [str(m) for m in members if str(m) not in node_ids]
+        if not missing:
+            continue
+        shown = ", ".join(sorted(missing)[:3])
+        more = f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""
+        findings.append({
+            "severity": "warning",
+            "message": (
+                f"meta.communities[{idx}] '{community.get('id', '?')}' lists "
+                f"{len(missing)} member(s) absent from the graph: {shown}{more} — "
+                f"the cached digest is stale; rebuild (kgraph --update) to redigest"
+            ),
+        })
+    return findings
+
+
 def validate_graph(graph: dict) -> list[dict]:
     """Validate a graph dictionary against the Pydantic schema + security rules.
 
@@ -184,6 +235,9 @@ def validate_graph(graph: dict) -> list[dict]:
 
     # Vocabulary membership — the declared set lives in constants.py
     errors.extend(_check_vocabulary(graph))
+
+    # Community digest freshness — a cached digest is derived structure
+    errors.extend(_check_community_digest(graph))
 
     # Pydantic schema validation
     try:

@@ -60,8 +60,13 @@ def generate_report(graph: Graph | dict, **kwargs) -> str:
     centralities = compute_centrality(graph)
 
     # ── Communities ──
-    community_graph = detect_communities(graph)
-    communities = community_graph.meta.communities
+    # Prefer the digest cached with the graph (written by `kgraph --update`) and
+    # only detect when there is none: the community report is meant to be a READ.
+    if graph.meta.communities:
+        communities = graph.meta.communities
+    else:
+        community_graph = detect_communities(graph)
+        communities = community_graph.meta.communities
 
     # ── Surprising connections ──
     surprising = _find_surprising_connections(graph, centralities, god_nodes)
@@ -103,6 +108,16 @@ def generate_report(graph: Graph | dict, **kwargs) -> str:
         lines.append("")
         for c in communities:
             lines.append(f'- **{c["label"]}** — {c["size"]} members')
+            central = c.get("central_nodes") or []
+            if central:
+                names = ", ".join(str(n.get("label", n.get("id", ""))) for n in central)
+                lines.append(f'  - central: {names}')
+            bridging = c.get("god_nodes") or []
+            if bridging:
+                names = ", ".join(str(n.get("label", n.get("id", ""))) for n in bridging)
+                lines.append(f'  - bridging (god nodes): {names}')
+            if c.get("boundary_edge_count"):
+                lines.append(f'  - boundary edges: {c["boundary_edge_count"]}')
         lines.append("")
 
     # ── Surprising connections ──

@@ -20,8 +20,11 @@ if _t.TYPE_CHECKING:
     from .cli import main
     from .community import (
         communities_available,
+        community_for_node,
+        community_view,
         compute_centrality,
         detect_communities,
+        digest_communities,
         find_god_nodes,
     )
     from .confidence import confidence_stats, tag_confidence
@@ -124,7 +127,9 @@ _lazy(".graph_db", ["resolve_memory_db_path", "init_graph_db", "load_from_graph_
 _lazy(".server", ["resolve_serve_target", "serve_file"])
 _lazy(".memory_import", ["load_from_memory_db"])
 _lazy(".ast_extractor", ["ast_available", "extract_repo_graph"])
-_lazy(".community", ["communities_available", "detect_communities", "compute_centrality", "find_god_nodes"])
+_lazy(".community", ["communities_available", "detect_communities", "compute_centrality",
+                     "find_god_nodes", "digest_communities", "community_for_node",
+                     "community_view"])
 _lazy(".confidence", ["tag_confidence", "confidence_stats"])
 _lazy(".report", ["generate_report"])
 _lazy(".query", ["query_nodes", "find_path", "explain_node", "format_explain", "format_path"])
@@ -151,6 +156,7 @@ __all__ = [
     "main",
     "ast_available", "extract_repo_graph",
     "communities_available", "detect_communities", "compute_centrality", "find_god_nodes",
+    "digest_communities", "community_for_node", "community_view",
     "tag_confidence", "confidence_stats",
     "generate_report",
     "query_nodes", "find_path", "explain_node", "format_explain", "format_path",

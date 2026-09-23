@@ -27,7 +27,7 @@ from .constants import (
     normalize_canonical_name,
 )
 from .life_index import load_life_index
-from .models import Graph, GraphBuilder, slugify
+from .models import Graph, GraphBuilder, slugify, source_key
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,25 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
     def add_node(node: dict):
         builder.add_node(node)
 
+    # GRAPHRAG-ARCH-007: every ingest path records WHICH source document asserts
+    # what it emits.  In this branch the asserting documents are the chunk being
+    # read and the file that chunk belongs to; they are bound once per chunk
+    # (below) and read here, rather than repeated at each of the ~20 emission
+    # sites — a site that forgot would silently produce a lineage-less edge, and
+    # nothing in the graph would say so.
+    chunk_source = ''
+    file_source = ''
+
     def add_edge(edge: dict):
+        keys = set(edge.get('sources') or [])
+        src = str(edge.get('from') or edge.get('source') or '')
+        if src.startswith('file:') and file_source:
+            # A file-level roll-up asserted by this chunk of it: carry both, so
+            # deleting the file OR the chunk subtracts the right assertion.
+            keys.update({chunk_source, file_source})
+        elif chunk_source:
+            keys.add(chunk_source)
+        edge['sources'] = sorted(keys)
         builder.add_edge(edge)
 
     # Current OpenClaw memory schema: files/chunks tables.
@@ -405,6 +423,8 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
                     'type': 'file',
                     'path': path,
                     'content_preview': f'File: {path}',
+                    # A file node IS a document, so it names itself as its source.
+                    'sources': [source_key('file', path)],
                 })
         except sqlite3.Error as exc:
             logger.warning("Failed to read 'files' table from memory DB: %s", exc)
@@ -471,10 +491,13 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
                             continue
                         label = semantic_link_labels.get((a_type, b_type)) or semantic_link_labels.get((b_type, a_type)) or 'related concept'
                         pair = (a, b) if a <= b else (b, a)
-                        stat = semantic_pair_stats.setdefault(pair, {'count': 0, 'score': 0.0, 'labels': {}})
+                        stat = semantic_pair_stats.setdefault(
+                            pair, {'count': 0, 'score': 0.0, 'labels': {}, 'sources': set()})
                         stat['count'] += 1
                         stat['score'] += semantic_link_weights.get(label, 0.4)
                         stat['labels'][label] = stat['labels'].get(label, 0) + 1
+                        if chunk_source:
+                            stat['sources'].add(chunk_source)
 
             cur.execute("SELECT id, path, start_line, end_line, text, embedding FROM chunks")
             for chunk_id, path, start_line, end_line, chunk_text, emb_blob in cur.fetchall():
@@ -492,6 +515,12 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
                 if preview:
                     chunk_label = f'{chunk_label}: {preview}'
 
+                # The two documents that can assert anything in this chunk:
+                # the chunk record itself (which carries path + line range, so a
+                # citation resolves) and the file it belongs to.
+                chunk_source = source_key('chunk', chunk_key)
+                file_source = source_key('file', path) if path else ''
+
                 add_node({
                     'id': f'chunk:{chunk_key}',
                     'label': chunk_label,
@@ -501,6 +530,7 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
                     'end_line': end_line,
                     'chunk_id': chunk_key,
                     'content_preview': preview,
+                    'sources': [chunk_source],
                 })
 
                 chunk_concepts = []
@@ -723,6 +753,12 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
 
                 connect_semantic_concepts(chunk_concepts)
 
+            # Past the per-chunk loop: nothing below is asserted by "the last
+            # chunk read", so clear the per-chunk binding and give these
+            # aggregated edges their own explicit source lists.
+            chunk_source = ''
+            file_source = ''
+
             for (a, b), stat in semantic_pair_stats.items():
                 best_label = max(stat['labels'].items(), key=lambda item: (item[1], semantic_link_weights.get(item[0], 0.0)))[0]
                 avg_score = stat['score'] / max(stat['count'], 1)
@@ -743,6 +779,10 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
                     'semantic_score': semantic_score,
                     'cooccurrence_count': stat['count'],
                     'label_visibility': 'visible' if semantic_score >= 0.86 or stat['count'] >= 3 else 'hover',
+                    # Every chunk that produced this pair — the aggregate's whole
+                    # evidence set, which is exactly the case the article warns
+                    # can grow into a very large array (bounded in models.py).
+                    'sources': sorted(stat['sources']),
                 })
 
             # Embedding-based semantic similarity (cross-file only)
@@ -761,11 +801,20 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
                     sim = dot / (mag_a * mag_b)
                     if sim >= SEMANTIC_THRESHOLD:
                         rounded = round(sim, 3)
+                        # The similarity is asserted by the two chunks it joins:
+                        # take their own recorded sources rather than rebuilding a
+                        # key from the node id (which already carries the prefix).
+                        endpoint_nodes = [builder.get_node(cid) for cid in (cid_a, cid_b)]
+                        pair_sources = sorted({
+                            key for node in endpoint_nodes if node is not None
+                            for key in node.sources
+                        })
                         add_edge({
                             'from': cid_a,
                             'to': cid_b,
                             'label': f'related ({sim:.2f})',
                             'semantic_score': rounded,
+                            'sources': pair_sources,
                         })
                         if path_a and path_b:
                             add_edge({
@@ -773,6 +822,7 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
                                 'to': f'file:{path_b}',
                                 'label': f'related ({sim:.2f})',
                                 'semantic_score': rounded,
+                                'sources': [source_key('file', path_a), source_key('file', path_b)],
                             })
         except sqlite3.Error as exc:
             logger.warning("Failed to import chunks from memory DB: %s", exc)
@@ -883,6 +933,75 @@ def _registry_db_path_label(dbpath: str) -> str:
     return 'home'
 
 
+# A memory-system reference that is safe to turn into a source key: the ids the
+# registry writes are uuids, slugs and ``native:<chunk_id>`` values.  Anything
+# else came from an unparsed blob, and using it would fabricate lineage.
+_SOURCE_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:@+-]*$')
+
+
+def _memory_source_key(memory_reference: str) -> str:
+    """Source key for a memory-system reference.
+
+    A registry reference is either a memory uuid or ``native:<chunk_id>`` for a
+    native chunk; the second becomes a ``chunk:`` key so it matches the key the
+    files/chunks branch (and the native-chunk node here) records for the same
+    document.
+    """
+    ref = str(memory_reference or '').strip()
+    if ref.startswith('native:'):
+        return source_key('chunk', ref[len('native:'):])
+    return source_key('memory', ref)
+
+
+def _parse_source_memory_ids(value: Any) -> list[str]:
+    """Best-effort parse of ``memory_entity_relationships.source_memory_ids``.
+
+    The column is TEXT and its contents are not documented anywhere in this
+    repo; readers upstream pass it through as-is into edge ``metadata``.  The
+    shapes a memory registry plausibly writes are accepted (a list of ids, a
+    JSON array, a comma-separated string) and every candidate is then required
+    to LOOK like an id — anything else is dropped with a DEBUG line, because
+    inventing lineage from a value that failed to parse is worse than recording
+    none.
+    """
+    if value is None:
+        return []
+
+    if isinstance(value, (list, tuple, set)):
+        candidates = [str(v) for v in value]
+    else:
+        text = str(value).strip()
+        if not text:
+            return []
+        if text.startswith('['):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError as exc:
+                logger.debug("unparseable source_memory_ids %r: %s", text, exc, exc_info=True)
+                return []
+            if not isinstance(parsed, list):
+                logger.debug("source_memory_ids JSON is %s, not a list", type(parsed).__name__)
+                return []
+            candidates = [str(v) for v in parsed]
+        else:
+            candidates = text.split(',') if ',' in text else [text]
+
+    ids = []
+    rejected = []
+    for candidate in candidates:
+        ref = candidate.strip()
+        if not ref:
+            continue
+        if _SOURCE_ID_RE.match(ref):
+            ids.append(ref)
+        else:
+            rejected.append(ref)
+    if rejected:
+        logger.debug("ignored %d non-id source_memory_ids value(s), e.g. %r",
+                     len(rejected), rejected[0])
+    return ids
+
+
 def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
                            registry: str, include_all: bool = False) -> None:
     """Adapter for the OpenClaw memory registry schema.
@@ -966,6 +1085,8 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
                 'label': _preview_text(d.get('content')),
                 'type': 'memory',
                 'origin': 'memory_db',
+                # A memory node IS the source document; it names itself.
+                'sources': [source_key('memory', d['id'])],
                 'registry': registry,
                 'row_scope': d.get('scope'),
                 'content': d.get('content'),
@@ -1007,6 +1128,9 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
                 'label': _preview_text(d.get('content')),
                 'type': 'memory',
                 'origin': 'memory_db',
+                # The native chunk is a chunk of a source document, so it carries
+                # the same key shape the files/chunks branch uses for chunks.
+                'sources': [source_key('chunk', d['chunk_id'])],
                 'registry': registry,
                 'row_scope': d.get('scope'),
                 'content': d.get('content'),
@@ -1083,14 +1207,19 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
             # Resolve source memory id: native:{chunk_id} → memory:native:{chunk_id}
             mem_id = d.get('memory_id') or ''
             if mem_id.startswith('native:'):
-                src = f"memory:native:{mem_id[len('native:'):]}"
+                native_id = mem_id[len('native:'):]
+                src = f"memory:native:{native_id}"
+                mention_source = source_key('chunk', native_id)
             else:
                 src = f"memory:{mem_id}"
+                mention_source = source_key('memory', mem_id)
             _add_edge({
                 'from': src,
                 'to': ent_id,
                 'label': 'mentions',
                 'origin': 'memory_db',
+                # The memory (or native chunk) whose text mentioned the entity.
+                'sources': [mention_source],
                 'registry': registry,
                 'role': d.get('role'),
                 'metadata': {'confidence': d.get('confidence')},
@@ -1114,6 +1243,15 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
                 'to': f"entity:{tgt}",
                 'label': rel,
                 'origin': 'memory_db',
+                # The relationship row names its own evidence in
+                # source_memory_ids — lift it out of metadata so the edge can be
+                # cited and so removing one of those memories subtracts this edge
+                # only when it was the last one supporting it.
+                'sources': sorted({
+                    _memory_source_key(mid)
+                    for mid in _parse_source_memory_ids(d.get('source_memory_ids'))
+                    if str(mid or '').strip()
+                }),
                 'registry': registry,
                 'evidence_count': d.get('evidence_count'),
                 'metadata': {
@@ -1169,6 +1307,9 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
                 'label': label,
                 'type': 'claim',
                 'origin': 'memory_db',
+                # The claim was consolidated out of that memory, so the memory is
+                # the document that asserts it.
+                'sources': [source_key('memory', mem_id)],
                 'registry': registry,
                 'memory_tier': d.get('memory_tier'),
                 'consolidation_op': d.get('consolidation_op'),
@@ -1180,7 +1321,8 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
             memory_id = f"memory:{mem_id}"
             if builder.has_node(memory_id):
                 _add_edge({'from': memory_id, 'to': claim_id, 'label': 'claims',
-                           'confidence': 'EXTRACTED'})
+                           'confidence': 'EXTRACTED',
+                           'sources': [source_key('memory', mem_id)]})
 
     # ── memory_beliefs → belief:{id} ──
     if _has_table('memory_beliefs'):
@@ -1199,6 +1341,10 @@ def _load_from_registry_db(conn: sqlite3.Connection, builder: GraphBuilder,
                 'label': _preview_text(d.get('content')),
                 'type': 'belief',
                 'origin': 'memory_db',
+                # The belief row names the memory it came from; carry it as
+                # lineage when it is present, and nothing when it is NULL.
+                'sources': ([_memory_source_key(d['source_memory_id'])]
+                            if d.get('source_memory_id') else []),
                 'registry': registry,
                 'entity_id': d.get('entity_id'),
                 'belief_type': d.get('type'),

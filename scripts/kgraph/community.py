@@ -4,6 +4,20 @@ Detects semantic communities (clusters) in a node graph, computes
 centrality scores, and identifies 'god nodes' — highly central
 concepts that bridge otherwise disconnected groups.
 
+Also writes the per-community digest: the article's "community reports" —
+a cached, deterministic summary of each community (central nodes, bridging
+god nodes, boundary edges) that a global "what are the main themes" question
+can be answered from without re-running detection.
+
+REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural Patterns"
+     (Partha Sarkar, TDS, 2026-09-20) — https://towardsdatascience.com/graphrag-a-practitioners-guide-to-6-advanced-architectural-patterns/
+The article's Microsoft-GraphRAG section: hierarchical community detection plus
+LLM-generated community reports, then a GLOBAL SEARCH map-reduce over those
+reports to answer "what are the main themes in this dataset?"; community reports
+"are especially important for global reasoning".  The membership and centrality
+half is deterministic and local, so it is built here; no LLM call is needed to
+produce the digest, and none is made at query time.
+
 Uses networkx as the graph engine under the hood.  Accepts ``Graph``
 models or legacy dicts.
 """
@@ -16,6 +30,7 @@ import time
 import warnings
 from typing import Any
 
+from .constants import COMMUNITY_DIGEST_VERSION
 from .models import Graph
 
 logger = logging.getLogger(__name__)
@@ -216,16 +231,13 @@ def compute_centrality(graph: Graph | dict) -> dict:
     return result
 
 
-def find_god_nodes(graph: Graph | dict, top_n: int = 10) -> list[dict]:
-    """Identify 'god nodes' — the most central, highly-connected nodes.
+def _rank_nodes(centralities: dict) -> list[dict]:
+    """Rank nodes by the composite centrality score, highest first.
 
-    Combines degree, betweenness, and eigenvector centrality into a
-    composite score.  Returns sorted list with scores.
+    One definition of the composite formula: ``find_god_nodes`` and
+    ``digest_communities`` both rank with it, and the digest reuses a single
+    ``compute_centrality`` pass rather than running betweenness twice.
     """
-    centralities = compute_centrality(graph)
-    if not centralities:
-        return []
-
     scored = []
     for nid, data in centralities.items():
         degree_norm = min(1.0, data["degree"] / 20.0)
@@ -244,5 +256,174 @@ def find_god_nodes(graph: Graph | dict, top_n: int = 10) -> list[dict]:
             "eigenvector": data["eigenvector"],
         })
 
-    scored.sort(key=lambda x: x["composite_score"], reverse=True)
-    return scored[:top_n]
+    # id as the tie-break, so two runs on the same graph order identically.
+    scored.sort(key=lambda x: (-x["composite_score"], x["id"]))
+    return scored
+
+
+def find_god_nodes(graph: Graph | dict, top_n: int = 10) -> list[dict]:
+    """Identify 'god nodes' — the most central, highly-connected nodes.
+
+    Combines degree, betweenness, and eigenvector centrality into a
+    composite score.  Returns sorted list with scores.
+    """
+    centralities = compute_centrality(graph)
+    if not centralities:
+        return []
+    return _rank_nodes(centralities)[:top_n]
+
+
+# ── Community digest (the article's community report) ──────────────────
+
+DEFAULT_CENTRAL_NODES = 3
+DEFAULT_BOUNDARY_EDGES = 5
+
+
+def digest_communities(graph: Graph | dict,
+                       central_nodes: int = DEFAULT_CENTRAL_NODES,
+                       boundary_edges: int = DEFAULT_BOUNDARY_EDGES) -> Graph:
+    """Write a short, deterministic community report onto each community.
+
+    REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural
+    Patterns" (Partha Sarkar, TDS, 2026-09-20) — the article's community reports
+    "are especially important for global reasoning".
+
+    Adds, per ``graph.meta.communities`` entry (in place):
+
+    ``central_nodes``
+        the community's ``central_nodes`` most central members, by the same
+        composite score ``find_god_nodes`` ranks with, each with its label.
+    ``god_nodes``
+        the members that are also global god nodes — the bridging concepts.
+    ``boundary_edges``
+        up to ``boundary_edges`` edges with exactly one endpoint inside the
+        community (its interface to the rest of the graph), with ``direction``
+        ``"out"``/``"in"``, plus ``boundary_edge_count`` for the true total.
+    ``digest_version``
+        :data:`~kgraph.constants.COMMUNITY_DIGEST_VERSION`, so a stored digest
+        written to an older shape is identifiable.
+
+    Deterministic and local: membership comes from ``detect_communities``,
+    centrality from ``compute_centrality``, and the ordering is fixed by
+    (score desc, id asc) / (source, target, label).  Nothing here calls an LLM
+    and nothing here is recomputed per query — the update path stores the
+    result with the graph.
+
+    A graph with no detected communities is returned unchanged.
+    """
+    if isinstance(graph, dict):
+        graph = Graph.from_dict(graph)
+
+    if not graph.meta.communities:
+        return graph
+
+    centralities = compute_centrality(graph)
+    if not centralities:
+        # networkx unavailable, or fewer than two nodes: membership may still
+        # exist (it was cached with the graph), but the digest fields cannot be
+        # derived, so leave the records as they are rather than writing empty
+        # lists that read like "no central nodes".
+        logger.info("No centrality available — community digest fields left unset")
+        return graph
+
+    ranked = _rank_nodes(centralities)
+    god_ids = {entry["id"] for entry in ranked[:10]}
+    rank_by_id = {entry["id"]: entry for entry in ranked}
+
+    for community in graph.meta.communities:
+        members = [str(m) for m in (community.get("members") or [])]
+        member_set = set(members)
+
+        picks = [rank_by_id[m] for m in members if m in rank_by_id]
+        picks.sort(key=lambda r: (-r["composite_score"], r["id"]))
+        community["central_nodes"] = [
+            {"id": r["id"], "label": r["label"], "composite_score": r["composite_score"]}
+            for r in picks[:central_nodes]
+        ]
+        community["god_nodes"] = [
+            {"id": r["id"], "label": r["label"]}
+            for r in picks if r["id"] in god_ids
+        ]
+
+        boundary = []
+        for e in graph.edges:
+            src_in = e.source in member_set
+            dst_in = e.target in member_set
+            if src_in == dst_in:
+                continue
+            boundary.append({
+                "source": e.source,
+                "target": e.target,
+                "label": e.label,
+                "direction": "out" if src_in else "in",
+            })
+        boundary.sort(key=lambda b: (b["source"], b["target"], b["label"]))
+        community["boundary_edge_count"] = len(boundary)
+        community["boundary_edges"] = boundary[:boundary_edges]
+        community["digest_version"] = COMMUNITY_DIGEST_VERSION
+
+    return graph
+
+
+def community_for_node(graph: Graph | dict, node_id: str) -> dict | None:
+    """The community record containing *node_id*, or None when it is unclustered."""
+    if isinstance(graph, dict):
+        graph = Graph.from_dict(graph)
+    for community in graph.meta.communities:
+        if node_id in (community.get("members") or []):
+            return community
+    return None
+
+
+def community_view(graph: Graph | dict, community_id: str = "") -> dict:
+    """Read-only answer to "what are the main themes" from the community digest.
+
+    REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural
+    Patterns" (Partha Sarkar, TDS, 2026-09-20) — the global-search side of the
+    article, scoped to what the structure already holds: this is a READ over the
+    cached digest, not an LLM map-reduce (the article itself calls full global
+    search "not a universal solution").
+
+    With *community_id* empty, returns the digest's own summary list — one entry
+    per community, small enough to put in a prompt.  With an id, returns that
+    community's full record (members, central nodes, god/bridging nodes, boundary
+    edges).  ``source`` names where the membership came from: ``"digest"`` when
+    it was cached with the graph, ``"computed"`` when this call had to detect it.
+    """
+    if isinstance(graph, dict):
+        graph = Graph.from_dict(graph)
+
+    source = "digest"
+    if not graph.meta.communities:
+        # A graph saved before the digest existed, or one passed in as a plain
+        # JSON file: compute membership so the tool still answers, and say so.
+        source = "computed"
+        graph = detect_communities(graph)
+
+    records = graph.meta.communities
+    if community_id:
+        for community in records:
+            if str(community.get("id")) == community_id:
+                return {"source": source, "community": community}
+        return {
+            "source": source,
+            "error": f'Community "{community_id}" not found',
+            "community_ids": [str(c.get("id")) for c in records],
+        }
+
+    return {
+        "source": source,
+        "method": graph.meta.community_method,
+        "count": len(records),
+        "communities": [
+            {
+                "id": str(c.get("id")),
+                "label": c.get("label", ""),
+                "size": c.get("size", len(c.get("members") or [])),
+                "central_nodes": c.get("central_nodes", []),
+                "god_nodes": c.get("god_nodes", []),
+                "boundary_edge_count": c.get("boundary_edge_count", 0),
+            }
+            for c in records
+        ],
+    }

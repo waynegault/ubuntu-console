@@ -14,6 +14,7 @@ import logging
 import re
 from collections import deque
 
+from .community import community_for_node
 from .models import Graph, GraphEdge, GraphNode
 
 logger = logging.getLogger(__name__)
@@ -145,6 +146,11 @@ def explain_node(graph: Graph | dict, node_id: str) -> dict:
 
     Returns:
         Dict with node info, connections, and centrality context.
+
+    Each connection carries the ``sources`` that asserted that edge, so a caller
+    can cite the source document rather than assert the fact anonymously, and the
+    node's ``community`` (when the graph carries a cached community digest) so a
+    single explain answers "which theme is this part of" as well.
     """
     if isinstance(graph, dict):
         graph = Graph.from_dict(graph)
@@ -172,6 +178,7 @@ def explain_node(graph: Graph | dict, node_id: str) -> dict:
                 "label": e.label,
                 "confidence": conf,
                 "semantic_score": e.semantic_score,
+                "sources": list(e.sources),
             })
         elif e.target == nid:
             inbound.append({
@@ -179,6 +186,7 @@ def explain_node(graph: Graph | dict, node_id: str) -> dict:
                 "label": e.label,
                 "confidence": conf,
                 "semantic_score": e.semantic_score,
+                "sources": list(e.sources),
             })
 
     # Build label lookup
@@ -189,12 +197,19 @@ def explain_node(graph: Graph | dict, node_id: str) -> dict:
     for item in inbound:
         item["source_label"] = label_map.get(item["source"], item["source"])
 
+    community = community_for_node(graph, nid)
+
     return {
         "node": {
             "id": nid,
             "label": target_node.label,
             "type": target_node.type,
             "content_preview": target_node.content_preview,
+            "community": None if community is None else {
+                "id": str(community.get("id")),
+                "label": community.get("label", ""),
+                "size": community.get("size", len(community.get("members") or [])),
+            },
         },
         "outbound_connections": outbound,
         "inbound_connections": inbound,
@@ -217,6 +232,10 @@ def format_explain(explanation: dict) -> str:
         f'({explanation["outbound_count"]} out, {explanation["inbound_count"]} in)',
     ]
 
+    community = node.get("community")
+    if community:
+        lines.append(f'Community: {community["label"]} ({community["id"]}, {community["size"]} members)')
+
     if node.get("content_preview"):
         lines.append(f'Preview: {node["content_preview"]}')
 
@@ -226,7 +245,8 @@ def format_explain(explanation: dict) -> str:
         for c in explanation["outbound_connections"]:
             score = f' [{c.get("semantic_score")}]' if c.get("semantic_score") else ""
             conf = f' ({c["confidence"]})' if c.get("confidence") else ""
-            lines.append(f'  → {c["target_label"]} ({c["label"]}){score}{conf}')
+            src = f' — source: {", ".join(c["sources"])}' if c.get("sources") else ""
+            lines.append(f'  → {c["target_label"]} ({c["label"]}){score}{conf}{src}')
 
     if explanation["inbound_connections"]:
         lines.append("")
@@ -234,7 +254,8 @@ def format_explain(explanation: dict) -> str:
         for c in explanation["inbound_connections"]:
             score = f' [{c.get("semantic_score")}]' if c.get("semantic_score") else ""
             conf = f' ({c["confidence"]})' if c.get("confidence") else ""
-            lines.append(f'  ← {c["source_label"]} ({c["label"]}){score}{conf}')
+            src = f' — source: {", ".join(c["sources"])}' if c.get("sources") else ""
+            lines.append(f'  ← {c["source_label"]} ({c["label"]}){score}{conf}{src}')
 
     return "\n".join(lines)
 

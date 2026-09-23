@@ -1745,6 +1745,38 @@ class TestMemoryImportStore(unittest.TestCase):
             with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
                 return memory_import.load_from_memory_db(db, include_all=include_all)
 
+    def test_records_and_their_edges_carry_the_asserting_document(self):
+        """GRAPHRAG-ARCH-007: the files/chunks ingest path populates sources."""
+        graph = self._graph()
+        nodes = {n.id: n for n in graph.nodes}
+        # A file node and a chunk node each name themselves as their source.
+        self.assertEqual(nodes["file:memory/notes.md"].sources, ["file:memory/notes.md"])
+        self.assertEqual(nodes["chunk:c1"].sources, ["chunk:c1"])
+
+        edges = {(e.source, e.target, e.label): e for e in graph.edges}
+        # A file-level roll-up carries both the file and the chunk that asserted it.
+        self.assertEqual(sorted(edges[("file:memory/notes.md", "chunk:c1",
+                                       "contains chunk")].sources),
+                         ["chunk:c1", "file:memory/notes.md"])
+        # A chunk-anchored edge is asserted by that chunk (and, for the chunk-to-
+        # chunk similarity edges, by the other chunk it joins as well).
+        chunk_edges = [e for (src, _dst, _lbl), e in edges.items() if src == "chunk:c1"]
+        self.assertTrue(chunk_edges)
+        for edge in chunk_edges:
+            self.assertIn("chunk:c1", edge.sources, edge.label)
+        similarity = edges[("chunk:c1", "chunk:c3", "related (1.00)")]
+        self.assertEqual(similarity.sources, ["chunk:c1", "chunk:c3"])
+        # Every edge from this branch has lineage; none was missed at an emission site.
+        self.assertTrue(all(e.sources for e in graph.edges))
+
+    def test_derived_concept_nodes_carry_no_lineage_of_their_own(self):
+        """A topic/actor node is an aggregate; its evidence is the edges into it."""
+        graph = self._graph()
+        derived = [n for n in graph.nodes if n.type in ("topic", "actor")]
+        self.assertTrue(derived)
+        for node in derived:
+            self.assertEqual(node.sources, [], node.id)
+
     def test_files_chunks_nodes_containment_and_references(self):
         graph = self._graph()
         ids = _node_ids(graph)
@@ -2255,13 +2287,18 @@ class TestProjectionHelpers(unittest.TestCase):
         self.assertEqual(projection._edge_endpoints({"source": "s", "target": "t"}), ("s", "t"))
         self.assertEqual(projection._edge_endpoints(_e("f", "g", "x")), ("f", "g"))
         self.assertEqual(projection._edge_endpoints({}), (None, None))
-        out, seen = [], set()
+        out, seen = [], {}
         projection._dedupe_append(out, seen, None, "b", "x")
         projection._dedupe_append(out, seen, "a", None, "x")
         projection._dedupe_append(out, seen, "a", "b", "x")
         projection._dedupe_append(out, seen, "a", "b", "x")
         projection._dedupe_append(out, seen, "a", "b", "y", {"semantic_score": 0.5})
         self.assertEqual(out, [_e("a", "b", "x"), _e("a", "b", "y", semantic_score=0.5)])
+        # A dropped duplicate's source documents move to the survivor.
+        out2, seen2 = [], {}
+        projection._dedupe_append(out2, seen2, "a", "b", "x", {"sources": ["file:one.md"]})
+        projection._dedupe_append(out2, seen2, "a", "b", "x", {"sources": ["file:two.md"]})
+        self.assertEqual(out2, [_e("a", "b", "x", sources=["file:one.md", "file:two.md"])])
 
     def test_set_display_label_per_mode(self):
         from kgraph import projection
@@ -2724,12 +2761,12 @@ class TestAstExtractorWithoutParser(unittest.TestCase):
         from kgraph.models import GraphBuilder
         builder = GraphBuilder()
         with mock.patch.object(ast_extractor, "_LANGUAGES", {}):
-            ast_extractor._extract_bash_defs(None, b"", "a.sh", "f", builder, True)
-            ast_extractor._extract_python_defs(None, b"", "a.py", "f", builder, True)
-            ast_extractor._extract_calls(None, b"", "python", "a.py", "f", builder)
+            ast_extractor._extract_bash_defs(None, b"", "a.sh", "f", builder, True, "file:a.sh")
+            ast_extractor._extract_python_defs(None, b"", "a.py", "f", builder, True, "file:a.py")
+            ast_extractor._extract_calls(None, b"", "python", "a.py", "f", builder, "file:a.py")
         self.assertEqual(builder.nodes_list, [])
         with mock.patch.object(ast_extractor, "_LANGUAGES", {"ruby": object()}):
-            ast_extractor._extract_calls(None, b"", "ruby", "a.rb", "f", builder)
+            ast_extractor._extract_calls(None, b"", "ruby", "a.rb", "f", builder, "file:a.rb")
         self.assertEqual(builder.nodes_list, [])
 
     def test_link_call_defs_skips_unnamed_call_nodes(self):
@@ -2811,6 +2848,7 @@ class TestMCPServerTools(_MCPHarness):
                          {"error": "Unknown method: initialize"})
         tools = {t["name"]: t for t in self._call("list_tools")["result"]}
         self.assertEqual(set(tools), {"kgraph_query", "kgraph_path", "kgraph_explain",
+                                      "kgraph_community",
                                       "kgraph_report", "kgraph_stats"})
         self.assertIn("pattern", tools["kgraph_query"]["parameters"])
         self.assertIn("source", tools["kgraph_path"]["parameters"])
@@ -2847,6 +2885,56 @@ class TestMCPServerTools(_MCPHarness):
         for bad in ("../escape.md", "/tmp/kgraph-abs-escape.md", "sub/../../escape.md"):
             self.assertEqual(self._call("kgraph_report", {"outpath": bad})["result"], message)
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "escape.md")))
+
+    def test_explain_reports_the_community_and_each_edges_sources(self):
+        """GRAPHRAG-ARCH-006/007: lineage and theme reach the MCP read path."""
+        # b -> c is asserted by a source file; the graph carries a digest naming
+        # a and b as one theme.
+        kgraph.save_to_graph_db(self.db, {
+            "nodes": [{"id": "a", "label": "Alpha", "type": "topic"},
+                      {"id": "b", "label": "Beta", "type": "topic"},
+                      {"id": "c", "label": "Gamma", "type": "topic"}],
+            "edges": [{"from": "a", "to": "b", "label": "links", "sources": ["file:one.md"]},
+                      {"from": "b", "to": "c", "label": "links", "sources": []}],
+            "meta": {"communities": [{"id": "community_0", "label": "Cached · Theme",
+                                      "size": 2, "members": ["a", "b"],
+                                      "central_nodes": [{"id": "a", "label": "Alpha",
+                                                         "composite_score": 0.5}],
+                                      "god_nodes": [], "boundary_edges": [],
+                                      "boundary_edge_count": 0}]},
+        })
+        explained = self._call("kgraph_explain", {"node_id": "b"})["result"]
+        self.assertEqual(explained["node"]["community"],
+                         {"id": "community_0", "label": "Cached · Theme", "size": 2})
+        self.assertEqual(explained["inbound_connections"][0]["sources"], ["file:one.md"])
+        self.assertEqual(explained["outbound_connections"][0]["sources"], [])
+
+    def test_kgraph_community_answers_from_the_cached_digest(self):
+        """The community tool exists, is listed, and does not recompute."""
+        kgraph.save_to_graph_db(self.db, {
+            "nodes": [{"id": "a", "label": "Alpha", "type": "topic"},
+                      {"id": "b", "label": "Beta", "type": "topic"}],
+            "edges": [{"from": "a", "to": "b", "label": "links"}],
+            "meta": {"community_method": "cached-greedy",
+                     "communities": [{"id": "community_0", "label": "Cached · Theme",
+                                      "size": 2, "members": ["a", "b"],
+                                      "central_nodes": [{"id": "a", "label": "Alpha",
+                                                         "composite_score": 0.5}],
+                                      "god_nodes": [{"id": "a", "label": "Alpha"}],
+                                      "boundary_edges": [{"source": "a", "target": "z",
+                                                          "label": "links",
+                                                          "direction": "out"}],
+                                      "boundary_edge_count": 1}]},
+        })
+        result = self._call("kgraph_community")["result"]
+        self.assertEqual(result["source"], "digest")
+        self.assertEqual(result["method"], "cached-greedy")
+        self.assertEqual([c["label"] for c in result["communities"]], ["Cached · Theme"])
+        single = self._call("kgraph_community", {"community_id": "community_0"})["result"]
+        self.assertEqual(single["community"]["members"], ["a", "b"])
+        self.assertEqual(single["community"]["boundary_edges"][0]["target"], "z")
+        self.assertIn("error", self._call("kgraph_community",
+                                         {"community_id": "community_9"})["result"])
 
     def test_stats_counts_types_and_reloads_the_db_per_request(self):
         self.assertEqual(self._call("kgraph_stats")["result"],
@@ -3062,7 +3150,7 @@ class TestCliMainModes(_CliHarness):
                 (["--path", "a", "c"], ["Path:", "a → b: project topic [0.9]"]),
                 (["--explain", "a"], ["Node: Alpha (a)", "Connections: 1 (1 out, 0 in)"]),
                 (["--confidence"], ["Edge confidence:", "INFERRED:  2 (100.0%)"]),
-                (["--communities"], ["1 communities:", "Alpha · Beta · Gamma — 3 members"]),
+                (["--communities"], ["1 communities (detected now):", "Alpha · Beta · Gamma — 3 members"]),
                 (["--god-nodes", "--top-god-nodes", "2"], ["Top 2 god nodes:", "Beta"]),
                 (["--call-flow"], ["```mermaid"]),
                 (["--call-flow", "--output", html], [f"Written to {html}"]),

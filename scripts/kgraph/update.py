@@ -37,7 +37,7 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
     from .graph_db import load_from_graph_db, save_to_graph_db
     from .memory_import import load_from_memory_db
     from .confidence import tag_confidence
-    from .community import detect_communities
+    from .community import detect_communities, digest_communities
     from .ast_extractor import ast_available, extract_repo_graph
     from .life_index import load_life_index
 
@@ -101,8 +101,13 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
     # 5. Confidence tagging
     graph = tag_confidence(graph)
 
-    # 6. Community detection
+    # 6. Community detection, then the community report (the article's digest).
+    # digest_communities is deterministic and local: it adds each community's
+    # central nodes, bridging god nodes and boundary edges to meta.communities,
+    # which save_to_graph_db then caches with the graph so a global "what are the
+    # main themes" question is answered from stored structure, not recomputed.
     graph = detect_communities(graph)
+    graph = digest_communities(graph)
 
     # 7. Save
     if graph_db_path:

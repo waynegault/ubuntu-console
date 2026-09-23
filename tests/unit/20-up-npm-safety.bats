@@ -51,7 +51,12 @@ case "${1:-}" in
         fi
         ;;
     outdated)
-        exit 1          # nothing outdated -> the "ALREADY UP TO DATE" branch
+        # npm exits 1 when anything is outdated, and the step names the packages
+        # from this output — with nothing named it skips the update entirely and
+        # the failure path below is never reached.
+        # Format: <fullpath>:<name@wanted>:<name@installed>:<name@latest>:<dependedby>
+        printf '%s\n' "/stub/prefix:gamma@1.1.0:gamma@1.0.0:gamma@1.1.0:"
+        exit 1
         ;;
     update)
         # Model the real failure: the reify dies. With NPM_UPDATE_RESULT=wipe
@@ -78,6 +83,19 @@ esac
 exit 0
 STUB
     chmod 755 "$NPM_STUB_DIR/npm"
+
+    # `systemctl --user is-active -q openclaw-gateway.service` gates the update:
+    # a global install reifies openclaw's own tree and breaks a running Gateway.
+    # Stub it beside npm so the suite never consults the host's real systemd — on
+    # this host the Gateway IS running, which would defer every case below and
+    # leave the failure path unexercised. SYSTEMCTL_ACTIVE=1 models it running.
+    cat > "$NPM_STUB_DIR/systemctl" <<'SYSTEMCTL_STUB'
+#!/usr/bin/env bash
+(( ${SYSTEMCTL_ACTIVE:-0} )) && exit 0
+exit 3      # systemd's "inactive" exit status
+SYSTEMCTL_STUB
+    chmod 755 "$NPM_STUB_DIR/systemctl"
+
     export PATH="$NPM_STUB_DIR:$PATH"
 
     # shellcheck disable=SC1090  # the repo's library loader
@@ -116,6 +134,22 @@ teardown() {
 
     [[ "$output" == *"[FAILED - PACKAGES INTACT]"* ]]
     run grep -c 'install -g' "$NPM_STUB_DIR/calls.log"
+    [ "$output" = "0" ]
+}
+
+@test "npm safety: the step defers while the Gateway is running" {
+    printf '{"dependencies":{"alpha":{"version":"1.0.0"}}}' > "$NPM_STUB_DIR/state.json"
+    : > "$NPM_STUB_DIR/calls.log"
+    export SYSTEMCTL_ACTIVE=1
+
+    errCount=0
+    run __up_npm_cargo "$(date +%s)" 1 errCount
+
+    [[ "$output" == *"[DEFERRED - Gateway is running]"* ]]
+
+    # ...and npm was never asked to update or reinstall anything: a global
+    # install reifies openclaw's own tree and would break the running Gateway.
+    run grep -cE '^(update|install) -g' "$NPM_STUB_DIR/calls.log"
     [ "$output" = "0" ]
 }
 

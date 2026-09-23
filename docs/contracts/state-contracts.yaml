@@ -1,116 +1,324 @@
-version: 1
-updated: 2026-04-30
+version: 2
+updated: 2026-09-22
 notes:
   - Cross-module state contracts used by dashboard, OpenClaw, and LLM modules.
   - Preserve names and semantics during PowerShell translation unless intentionally versioned.
+  - 'ENFORCED: tools/check-contracts.sh state (run by tools/lint.sh, and by CI).  Every
+    producer, consumer and invalidator edge below is machine-checked: the file must
+    exist, the producer must declare/write the symbol, and each consumer must reference
+    it.  An edge that genuinely cannot be checked must say so with `unenforced: true`
+    plus a `why:` — an unenforced edge is never a silent skip, and the checker prints
+    the count.  See tools/check-contracts.sh for what is NOT enforced.'
+  - 'REF: "Coding Agents Keep Shipping Silent Failures — Here Is How to Catch Them"
+    (TDS, 2026-09-18) —
+    https://towardsdatascience.com/coding-agents-keep-shipping-silent-failures-here-is-how-to-catch-them/'
+  - 'Revised 2026-09-22 (card STATE-CONTRACT-VALIDATION-001) against measured HEAD.
+    Correction 1: /dev/shm/tac_oc_version was never a path this tree writes — the
+    cache is /dev/shm/tac_ocversion (scripts/07-telemetry.sh:329).  Correction 2:
+    /dev/shm/tac_hostmetrics is written by scripts/07-telemetry.sh, NOT by
+    bin/tac_hostmetrics.sh, which only emits the sample on stdout.  Correction 3:
+    prose consumers ("dashboard/help renderers", "feature gates across modules",
+    "diagnostics and operator review") were replaced by the real files that read the
+    symbol; the prose survives in `semantics`.  Correction 4: VSCODE_BIN gained
+    scripts/11-llm-manager.sh, a consumer the old entry missed.  Corrections 5-12: the
+    /dev/shm caches that had no entry at all are added below.'
+  - 'COVERAGE — what this file deliberately does NOT declare (stated, not silent).
+    The /dev/shm state below is the cross-handler set that the PowerShell port and
+    the drift checker care about; it is not every file in /dev/shm.  NOT declared:
+    the Xe, CPU and Xe3b lane counterparts of the watchdog counters
+    (llama-watchdog-xe.strikes, -cpu.strikes, -xe3b.strikes, -cpu.flaps,
+    -xe3b.flaps, and their .gpustop/.flaphold variants), which are lane-local with
+    a single producer and a single consumer; /dev/shm/llama-watchdog-guard.pause,
+    which an OPERATOR creates (the watchdog only tests for it, so it has no source
+    producer to check); /dev/shm/tac_win_api_keys and tac_pwsh_bridge_warned (§9),
+    /dev/shm/last_window_mismatch and the tac_err_* / tac_missing_cmd_once error
+    state (§2), /dev/shm/tac_gpu*, tac_ocmetrics, llama-server.log and
+    /dev/shm/llm-bench-logs (telemetry and bench scratch).  Adding any of them is a
+    one-entry change; tools/check-contracts.sh enforces exactly the entries that
+    are here, and cannot discover one that is not.'
 
 variables:
   - name: TACTICAL_PROFILE_VERSION
     producer: tactical-console.bashrc
     consumers:
-      - dashboard/help renderers
+      - file: scripts/12-dashboard-help.sh
+      - file: scripts/05-ui-engine.sh
+      - file: scripts/09e-oc-health.sh
     type: string
-    semantics: loader_version.module_version_sum
+    semantics: loader_version.module_version_sum (dashboard and help renderers)
 
   - name: __TAC_OPENCLAW_OK
-    producer: scripts/09-openclaw.sh
+    producer:
+      - scripts/01-constants.sh
+      - scripts/09-openclaw.sh
     consumers:
-      - feature gates across modules
+      - file: scripts/04-aliases.sh
+      - file: scripts/05-ui-engine.sh
+      - file: scripts/07-telemetry.sh
+      - file: scripts/08-maintenance.sh
+      - file: scripts/12-dashboard-help.sh
+      - file: scripts/13-init.sh
     type: integer
-    semantics: "1 if OpenClaw CLI is installed and functional, else 0"
+    semantics: "1 if OpenClaw CLI is installed and functional, else 0 — read by the
+      feature gates across modules.  01-constants.sh declares the 0 placeholder;
+      09-openclaw.sh sets the real value at load time.  The §9 sub-modules also read
+      it and are not listed separately: they are inside the producer's module set."
 
   - name: LAST_TPS
-    producer: scripts/11-llm-manager.sh
+    producer:
+      - scripts/01-constants.sh
+      - scripts/11-llm-manager.sh
     consumers:
-      - scripts/12-dashboard-help.sh
+      - file: scripts/12-dashboard-help.sh
     type: string
-    semantics: last observed LLM tokens-per-second display value
+    semantics: last observed LLM tokens-per-second display value (fallback when the
+      /dev/shm/last_tps cache is cold)
 
   - name: __LAST_LLM_RESPONSE
     producer: scripts/11-llm-manager.sh
     consumers:
-      - scripts/11-llm-manager.sh
+      - file: scripts/11-llm-manager.sh
     type: string
     semantics: in-memory most recent LLM response payload
 
   - name: VSCODE_BIN
     producer: scripts/01-constants.sh
     consumers:
-      - scripts/04-aliases.sh
-      - scripts/05-ui-engine.sh
+      - file: scripts/04-aliases.sh
+      - file: scripts/05-ui-engine.sh
+      - file: scripts/11-llm-manager.sh
     type: string
-    semantics: resolved VS Code executable path cache
+    semantics: resolved VS Code executable path cache (lazily resolved by
+      __resolve_vscode_bin, backed by /dev/shm/vscode_path)
 
 files:
   - path: /dev/shm/active_llm
-    producer: scripts/11-llm-manager.sh
+    bindings: [ACTIVE_LLM_FILE]
+    producer:
+      - scripts/01-constants.sh
+      - scripts/11-llm-manager.sh
     consumers:
-      - scripts/09-openclaw.sh
-      - scripts/12-dashboard-help.sh
+      - file: scripts/09-openclaw.sh
+        via: [ACTIVE_LLM_FILE]
+      - file: scripts/12-dashboard-help.sh
+        via: [ACTIVE_LLM_FILE]
+    invalidators:
+      - scripts/11-llm-manager.sh
     format: plain text
     semantics: active model FILE name (the registry row identity — NOT the row number,
       which `model scan` reassigns; consumers resolve the row by file name and read the
       number from it for display)
 
   - path: /dev/shm/last_tps
-    producer: scripts/11-llm-manager.sh
+    bindings: [LLM_TPS_CACHE]
+    producer:
+      - scripts/01-constants.sh
+      - scripts/11-llm-manager.sh
     consumers:
-      - scripts/12-dashboard-help.sh
+      - file: scripts/12-dashboard-help.sh
+        via: [LLM_TPS_CACHE]
+    invalidators:
+      - scripts/11-llm-manager.sh
     format: plain text
-    semantics: most recent TPS value for dashboard display
+    semantics: most recent TPS value for dashboard display (cleared when the model
+      changes, so a stale rate from the previous model is never shown)
 
   - path: /dev/shm/tac_hostmetrics
-    producer: bin/tac_hostmetrics.sh
+    producer: scripts/07-telemetry.sh
     consumers:
-      - scripts/07-telemetry.sh
-      - scripts/12-dashboard-help.sh
+      - file: scripts/07-telemetry.sh
+      - file: scripts/12-dashboard-help.sh
+        via: [__get_host_metrics]
     format: pipe-delimited "cpu|gpu0|gpu1"
-    semantics: cached host metric snapshot
+    semantics: cached host metric snapshot.  bin/tac_hostmetrics.sh is the DATA SOURCE
+      (it prints the sample on stdout) but is not the writer of this file; the cache
+      write is scripts/07-telemetry.sh:139.
 
   - path: /dev/shm/tac_llm_slots
     producer: scripts/07-telemetry.sh
     consumers:
-      - scripts/12-dashboard-help.sh
+      - file: scripts/12-dashboard-help.sh
+        via: [__get_llm_slots]
     format: JSON
-    semantics: cached llama-server slot/context usage
+    semantics: cached llama-server slot/context usage (5s TTL)
 
-  - path: /dev/shm/tac_oc_version
+  - path: /dev/shm/tac_ocversion
     producer: scripts/07-telemetry.sh
     consumers:
-      - scripts/12-dashboard-help.sh
+      - file: scripts/12-dashboard-help.sh
+        via: [__get_oc_metrics, __get_oc_version]
     format: plain text
-    semantics: cached OpenClaw version
+    semantics: cached OpenClaw version (24h TTL).  Renamed from the declared
+      /dev/shm/tac_oc_version on 2026-09-22 — the code has always written
+      .../tac_ocversion, so the old entry named a file nothing produced.
 
   - path: /dev/shm/vscode_path
     producer: scripts/01-constants.sh
     consumers:
-      - scripts/04-aliases.sh
-      - scripts/05-ui-engine.sh
+      - file: scripts/04-aliases.sh
+        via: [VSCODE_BIN]
+      - file: scripts/05-ui-engine.sh
+        via: [VSCODE_BIN]
     format: plain text
-    semantics: cached VS Code path
+    semantics: cached VS Code path; consumers read it indirectly, through the
+      VSCODE_BIN variable that __resolve_vscode_bin populates from this cache
 
   - path: /dev/shm/vscode_path.ts
     producer: scripts/01-constants.sh
     consumers:
-      - scripts/01-constants.sh
+      - file: scripts/01-constants.sh
     format: plain text epoch seconds
     semantics: cache freshness timestamp for vscode_path
 
   - path: ~/.openclaw/maintenance_cooldowns.txt
-    producer: scripts/08-maintenance.sh
-    consumers:
+    bindings: [CooldownDB]
+    producer:
+      - scripts/01-constants.sh
       - scripts/08-maintenance.sh
+    consumers:
+      - file: scripts/08-maintenance.sh
+        via: [CooldownDB]
     format: text records
-    semantics: cooldown state for maintenance pipeline steps
+    semantics: cooldown state for maintenance pipeline steps (read and rewritten
+      under flock)
 
   - path: ~/.openclaw/logs/bash-errors.log
-    producer: scripts/02-error-handling.sh
+    bindings: [ErrorLogPath]
+    producer:
+      - scripts/01-constants.sh
+      - scripts/02-error-handling.sh
+      - scripts/13-init.sh
+      - scripts/_startup-env.sh
     consumers:
-      - diagnostics and operator review
+      - file: scripts/09d-oc-agents.sh
+        via: [ErrorLogPath]
+      - file: scripts/08-maintenance.sh
+        via: [ErrorLogPath]
+      - unenforced: true
+        reader: "an operator reading the log (and the copy synced to the Windows side)"
+        why: "no tracked file reads it for diagnostics — the reader is a human, so
+          there is no file to check"
     format: append-only text
     semantics: redacted error entries and operational hints
+
+  - path: /dev/shm/oc_agent_use.txt
+    producer: scripts/09d-oc-agents.sh
+    consumers:
+      - file: scripts/12-dashboard-help.sh
+    invalidators:
+      - scripts/09c-oc-core.sh
+    format: plain text
+    semantics: rendered OpenClaw agent-usage line, 5s TTL.  The dashboard renders the
+      cached text and kicks a background refresh when it is older than 5s;
+      `oc cache-clear` (09c-oc-core.sh) deletes it.
+
+  - path: /dev/shm/llama-watchdog-cuda.suspend
+    bindings: [_cuda_suspend, CUDA_SUSPEND_FILE, SUSPEND]
+    producer:
+      - scripts/11e-llm-model.sh
+      - scripts/retune-band-chunk.sh
+    consumers:
+      - file: bin/llama-watchdog.sh
+      - file: scripts/11e-llm-model.sh
+      - file: scripts/retune-band-chunk.sh
+    invalidators:
+      - scripts/11e-llm-model.sh
+      - scripts/retune-band-chunk.sh
+    format: empty marker file
+    semantics: 'presence pins the CUDA card to the caller: the watchdog stands the
+      CUDA lane down, model use/bench takes it, and the chunk releases it.  This is the
+      one watchdog file with genuine cross-handler producers AND consumers.'
+
+  - path: /dev/shm/llama-watchdog-cuda.strikes
+    bindings: [STRIKE_CUDA]
+    producer: bin/llama-watchdog.sh
+    consumers:
+      - file: bin/llama-watchdog.sh
+    format: plain text integer
+    semantics: consecutive-death strike counter for the CUDA lane (2 strikes re-arms
+      the timer).  Producer and consumer are the same handler — the edge is declared so
+      the path and its binding cannot be renamed away unnoticed.
+
+  - path: /dev/shm/llama-watchdog-cuda.flaps
+    bindings: [FLAP_CUDA]
+    producer: bin/llama-watchdog.sh
+    consumers:
+      - file: bin/llama-watchdog.sh
+    format: epoch-seconds lines, pruned to FLAP_WINDOW_S
+    semantics: CUDA-lane flap window — one stamp per unexpected death; nothing else
+      reads it (see bin/llama-watchdog.sh:172-175)
+
+  - path: /dev/shm/llama-watchdog-cuda.flaphold
+    bindings: [FLAP_HOLD_FILE]
+    producer: bin/llama-watchdog.sh
+    consumers:
+      - file: bin/llama-watchdog.sh
+      - unenforced: true
+        reader: "an operator running `rm` on the file to lift the hold early"
+        why: "the watchdog header documents deletion as the deliberate escape hatch;
+          the deleter is a human at a shell, so there is no file to check"
+    format: plain text epoch-seconds expiry
+    semantics: CUDA-lane cooling-off hold; while it is live the chain serves from the
+      next tier instead of churning the card (dxgkrnl leak is proportional to CUDA
+      context create/destroy cycles)
+
+  - path: /dev/shm/llama-watchdog-cuda.gpustop
+    bindings: [CUDA_GPUSTOP_FILE]
+    producer: bin/llama-watchdog.sh
+    consumers:
+      - file: bin/llama-watchdog.sh
+    format: plain text epoch-seconds expiry
+    semantics: single-use marker that the GPU-busy branch stopped the CUDA lane on
+      purpose, so the next free tick does not count a designed stop as a flap
+
+  - path: /dev/shm/llama-watchdog.lock
+    bindings: [WATCHDOG_LOCK_FILE]
+    producer: bin/llama-watchdog.sh
+    consumers:
+      - file: bin/llama-watchdog.sh
+    format: flock target
+    semantics: watchdog mutual exclusion — only the lock holder unlinks it
+
+  - path: /dev/shm/llama-watchdog-guard.strikes
+    bindings: [STRIKES]
+    producer: bin/llama-watchdog-guard.sh
+    consumers:
+      - file: bin/llama-watchdog-guard.sh
+    format: plain text integer
+    semantics: supervision-stall strike counter for the watchdog guard (cleared when
+      the timer is active again)
+
+  - path: /dev/shm/autotune-cuda-cycles-<bootid>
+    token: autotune-cuda-cycles
+    producer:
+      - scripts/autotune-model.sh
+      - scripts/run-autotune-batch.sh
+      - scripts/retune-band-chunk.sh
+    consumers:
+      - file: scripts/autotune-model.sh
+      - file: scripts/run-autotune-batch.sh
+      - file: scripts/retune-band-chunk.sh
+    format: plain text integer
+    semantics: boot-scoped CUDA context-cycle ledger.  Every llama-server spawn burns
+      CUDA context creates/destroys and WSL2's dxgkrnl leaks GPU VA in proportion, so a
+      run halts at CUDA_CYCLE_BUDGET.  The boot id is in the path because a WSL restart
+      is the only thing that resets the leak; the ledger is shared by every autotune /
+      bench chunk of the same boot, so the name must stay in step across all three
+      scripts.
+
+  - path: /dev/shm/autotune-degrade-stalls-<bootid>
+    token: autotune-degrade-stalls
+    producer: scripts/autotune-model.sh
+    consumers:
+      - file: scripts/autotune-model.sh
+    format: plain text integer
+    semantics: boot-scoped counter of consecutive stalled launches (health never
+      ready while the process stayed alive) — the dxgkrnl degradation signature
 
 translation_rules:
   - Keep state keys and file meanings stable first; only migrate paths after parity.
   - Replace shell-global state with module-scoped state carefully; preserve read/write timing.
   - Maintain cache TTL semantics where they affect perceived dashboard freshness.
+  - 'The PowerShell port is an OUT-OF-REPO consumer of several of these variables and
+    paths (see .agents/pwsh-build-prompt.md).  It cannot be checked from here and is
+    therefore not declared as a consumer edge.'

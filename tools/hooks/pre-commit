@@ -43,6 +43,14 @@ if ! "$REPO_ROOT/tools/check-module-versions.sh" --staged; then
     rc=1
 fi
 
+# NOT HERE: the whole-repo guards.  tools/check-repo-boundaries.sh,
+# tools/check-contracts.sh and the §18.3 count ratchet all read the WORKING TREE,
+# and this repo's tree is shared with other agent sessions — a co-worker's
+# unstaged edit would fail YOUR commit for a change you did not make.  They run
+# in `tools/lint.sh` (whole-repo, what CI and a manual run invoke).  Decided
+# 2026-09-22 with tools/check-contracts.sh (card STATE-CONTRACT-VALIDATION-001);
+# if you are tempted to add one here, add staged-file scoping to it first.
+
 if (( rc == 0 )); then
     echo "pre-commit: all staged .sh files passed"
 else

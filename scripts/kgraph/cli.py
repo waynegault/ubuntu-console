@@ -135,6 +135,12 @@ def main() -> None:
     parser.add_argument("--min-community-size", type=int, default=2)
     parser.add_argument("--top-god-nodes", type=int, default=10)
 
+    # Source lineage (GRAPHRAG-ARCH-007)
+    parser.add_argument("--remove-source", metavar="SOURCE_KEY",
+                        help="Remove one source document's id from every node/edge in the graph DB "
+                             "(e.g. 'file:scripts/foo.sh', 'memory:<uuid>'); elements are deleted only "
+                             "when that was their last source")
+
     # Watch / update
     parser.add_argument("--watch-interval", type=int, default=30, help="Poll interval in seconds")
     parser.add_argument("--source-dir", help="Source directory for AST + watch")
@@ -289,6 +295,21 @@ def main() -> None:
         serve_mcp(host=args.host, port=args.port or 8331, graph_db=args.graph_db)
         return
 
+    # ── Remove one source document's assertions ──
+    if args.remove_source:
+        from .graph_db import save_to_graph_db
+        graph_db = os.path.expanduser(args.graph_db)
+        if not os.path.exists(graph_db):
+            print(f"Error: graph DB {graph_db} does not exist", file=sys.stderr)
+            sys.exit(1)
+        g = load_from_graph_db(graph_db)
+        counts = g.remove_source(args.remove_source)
+        save_to_graph_db(graph_db, g)
+        print(f"Removed source '{args.remove_source}': "
+              f"{counts['nodes_removed']} nodes deleted, {counts['nodes_updated']} nodes updated, "
+              f"{counts['edges_removed']} edges deleted, {counts['edges_updated']} edges updated")
+        return
+
     # ── Query tools ──
     if args.query:
         results = query_nodes(graph, args.query)
@@ -313,14 +334,25 @@ def main() -> None:
         if not communities_available():
             print("Error: networkx not available. pip install networkx", file=sys.stderr)
             sys.exit(1)
-        g = detect_communities(graph, method=args.community_method, min_community_size=args.min_community_size)
-        clusters = g.meta.communities if hasattr(g.meta, "communities") else []
+        # Prefer the digest cached with the graph (written by --update) and detect
+        # only when there is none, so this is a READ wherever a digest exists.
+        cached = Graph.from_dict(graph).meta.communities
+        if cached:
+            clusters = cached
+        else:
+            g = detect_communities(graph, method=args.community_method, min_community_size=args.min_community_size)
+            clusters = g.meta.communities if hasattr(g.meta, "communities") else []
         if not clusters:
             print("No communities detected")
         else:
-            print(f"{len(clusters)} communities:")
+            origin = "cached digest" if cached else "detected now"
+            print(f"{len(clusters)} communities ({origin}):")
             for c in clusters:
                 print(f'  {c["label"]} — {c["size"]} members')
+                central = c.get("central_nodes") or []
+                if central:
+                    names = " · ".join(str(n.get("label", n.get("id", ""))) for n in central)
+                    print(f'    central: {names}')
         return
 
     if args.god_nodes:

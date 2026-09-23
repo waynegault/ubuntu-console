@@ -137,16 +137,37 @@ def _edge_endpoints(edge: dict) -> tuple[str | None, str | None]:
     return (str(src) if src is not None else None, str(dst) if dst is not None else None)
 
 
-def _dedupe_append(out_edges: list, seen: set, source: str | None, target: str | None, label: str, payload: dict | None = None) -> None:
+def _merge_sources(target: dict, source: dict) -> None:
+    """Union *source*'s ``sources`` into *target*'s, in place.
+
+    REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural Patterns"
+         (Partha Sarkar, TDS, 2026-09-20) — https://towardsdatascience.com/graphrag-a-practitioners-guide-to-6-advanced-architectural-patterns/
+    The article's Challenge 3 keeps a source_document_ids array per element and
+    removes one id on document deletion, so two elements collapsed into one must
+    not lose either side's sources.  projection.py is a VIEW, not an ingest path:
+    it mints new edges (semantic co-occurrence, fallback pairs) that no document
+    asserts, so it must not invent lineage — but it must not lose it either, so
+    every collapse point below routes through here.
+    """
+    incoming = source.get("sources") or []
+    if not incoming:
+        return
+    target["sources"] = sorted(set(target.get("sources") or []) | set(incoming))
+
+
+def _dedupe_append(out_edges: list, seen: dict, source: str | None, target: str | None, label: str, payload: dict | None = None) -> None:
     if not source or not target:
         return
     key = (source, target, label)
-    if key in seen:
-        return
-    seen.add(key)
     item = {"from": source, "to": target, "label": label}
     if payload:
         item.update(payload)
+    existing = seen.get(key)
+    if existing is not None:
+        # Dropped as a duplicate — carry its lineage across first.
+        _merge_sources(existing, item)
+        return
+    seen[key] = item
     out_edges.append(item)
 
 
@@ -325,17 +346,24 @@ def _collapse_semantic_duplicates(graph_out: dict, allowed_types: set[str], life
         return
 
     deduped_nodes = []
+    dropped_sources: dict[str, set[str]] = {}
     seen_nodes: set[str] = set()
     for node in nodes_local:
         nid = str(node.get("id", "") or "")
         cid = canonical_for.get(nid, nid)
-        if cid != nid or cid in seen_nodes:
+        if cid != nid:
+            # A collapsed duplicate's sources move to the node that replaces it.
+            dropped_sources.setdefault(cid, set()).update(node.get("sources") or [])
+            continue
+        if cid in seen_nodes:
             continue
         seen_nodes.add(cid)
+        if cid in dropped_sources:
+            node["sources"] = sorted(set(node.get("sources") or []) | dropped_sources[cid])
         deduped_nodes.append(node)
 
     deduped_edges = []
-    seen_edges: set[tuple[str, str, str]] = set()
+    seen_edges: dict[tuple[str, str, str], dict] = {}
     for edge in edges_local:
         src, dst = _edge_endpoints(edge)
         src = canonical_for.get(src or "", src or "")
@@ -344,12 +372,14 @@ def _collapse_semantic_duplicates(graph_out: dict, allowed_types: set[str], life
             continue
         label = str(edge.get("label", "") or "")
         key = (src, dst, label)
-        if key in seen_edges:
-            continue
-        seen_edges.add(key)
         new_edge = dict(edge)
         new_edge["from"] = src
         new_edge["to"] = dst
+        kept = seen_edges.get(key)
+        if kept is not None:
+            _merge_sources(kept, new_edge)
+            continue
+        seen_edges[key] = new_edge
         deduped_edges.append(new_edge)
 
     graph_out["nodes"] = deduped_nodes
@@ -677,7 +707,7 @@ def project_graph(graph: Graph | dict, mode: str = "overview", semantic_threshol
     # ── Overview / Topics modes ──
     out_nodes: dict[str, dict] = {}
     out_edges: list[dict] = []
-    seen_edges: set[tuple[str, str, str]] = set()
+    seen_edges: dict[tuple[str, str, str], dict] = {}
 
     for nid, node in node_by_id.items():
         ntype = str(node.get("type", ""))
@@ -737,7 +767,7 @@ def _project_files(node_by_id, edges, node_type, dedupe_append, enrich):
     """Files mode: keep file-level structure + AST code nodes."""
     out_nodes: dict[str, dict] = {}
     out_edges: list[dict] = []
-    seen_edges: set[tuple[str, str, str]] = set()
+    seen_edges: dict[tuple[str, str, str], dict] = {}
 
     for nid, node in node_by_id.items():
         ntype = str(node.get("type", ""))
@@ -878,7 +908,7 @@ def _project_semantic(node_by_id, edges, effective_threshold, semantic_threshold
     # Direct edges
     keep_edges: list[dict] = []
     keep_nodes: set[str] = set()
-    seen: set[tuple[str, str, str]] = set()
+    seen: dict[tuple[str, str, str], dict] = {}
     direct_pairs: set[tuple[str, str]] = set()
 
     for src, dst, label, payload in sorted(direct_edges, key=lambda item: (

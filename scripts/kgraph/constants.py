@@ -100,6 +100,18 @@ STOPWORDS = frozenset(_concept_config.get("stopwords", []))
 # identifiable rather than merely wrong.
 VOCABULARY_VERSION = "1"
 
+# Lineage stamp (GRAPHRAG-ARCH-007).  Written into the graph DB at build time
+# alongside every node/edge's ``sources`` list, so a graph whose elements predate
+# the field is identifiable rather than merely lineage-less.  Same shape and same
+# reason as VOCABULARY_VERSION above: a reader can tell an old graph from a
+# current one instead of silently reading an empty source list as "no sources".
+SOURCES_VERSION = "1"
+
+# Community-digest stamp (GRAPHRAG-ARCH-006).  Stamped with the cached
+# per-community report so a digest written by a future, differently-shaped digest
+# is not read as if it were current.
+COMMUNITY_DIGEST_VERSION = "1"
+
 CURATED_EDGE_LABELS = frozenset({
     "covers topic", "mentions actor", "authored by", "references file",
     "file mentions actor", "file authored by", "has project", "has decision",

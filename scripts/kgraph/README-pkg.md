@@ -55,9 +55,12 @@ kgraph --audit              # Show security audit report
 kgraph --pr-dashboard       # Generate PR dashboard
 kgraph --install-hook       # Install git post-commit hook
 kgraph --uninstall-hook     # Remove git hook
+kgraph --remove-source KEY  # Remove one source document's assertions
 ```
 
-`kgraph --mcp` serves 5 tools over JSON-RPC on localhost. Its write tool
+`kgraph --mcp` serves 6 tools over JSON-RPC on localhost — `kgraph_query`,
+`kgraph_path`, `kgraph_explain`, `kgraph_community`, `kgraph_report` and
+`kgraph_stats`. Its write tool
 (`kgraph_report`) is accepted **only** with `Content-Type: application/json`,
 must not carry a cross-origin `Origin`, and writes only inside
 `KG_REPORTS_DIR` (default `~/.openclaw/kgraph-reports`) via a path relative to

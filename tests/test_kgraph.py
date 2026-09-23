@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from _paths import SCRIPT_DIR
 
@@ -1529,3 +1530,509 @@ class VocabularyStampTests(unittest.TestCase):
         from kgraph.graph_db import read_vocabulary_version
 
         self.assertIsNone(read_vocabulary_version('/tmp/does-not-exist-kgraph.sqlite'))
+
+
+# ══════════════ GRAPHRAG-ARCH-006: community digest ══════════════
+#
+# REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural Patterns"
+#      (Partha Sarkar, TDS, 2026-09-20)
+
+_TWO_CLUSTER_GRAPH = {
+    'nodes': [
+        {'id': 'a', 'label': 'Alpha', 'type': 'topic'},
+        {'id': 'b', 'label': 'Beta', 'type': 'topic'},
+        {'id': 'c', 'label': 'Gamma', 'type': 'topic'},
+        {'id': 'd', 'label': 'Delta', 'type': 'topic'},
+        {'id': 'e', 'label': 'Epsilon', 'type': 'topic'},
+        {'id': 'f', 'label': 'Zeta', 'type': 'topic'},
+    ],
+    'edges': [
+        {'from': 'a', 'to': 'b', 'label': 'links', 'weight': 1.0},
+        {'from': 'b', 'to': 'c', 'label': 'links', 'weight': 1.0},
+        {'from': 'a', 'to': 'c', 'label': 'links', 'weight': 1.0},
+        {'from': 'd', 'to': 'e', 'label': 'links', 'weight': 1.0},
+        {'from': 'e', 'to': 'f', 'label': 'links', 'weight': 1.0},
+        {'from': 'd', 'to': 'f', 'label': 'links', 'weight': 1.0},
+        {'from': 'c', 'to': 'd', 'label': 'links', 'weight': 0.05},
+    ],
+}
+
+
+class CommunityDigestTests(unittest.TestCase):
+    """The article's community report: digest_communities + its consumers."""
+
+    def _digested(self):
+        graph = kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method='greedy')
+        return kgraph.digest_communities(graph)
+
+    def test_digest_adds_the_report_fields_to_every_community(self):
+        graph = self._digested()
+        self.assertTrue(graph.meta.communities, 'fixture produced no communities')
+        for community in graph.meta.communities:
+            self.assertIn('central_nodes', community)
+            self.assertIn('god_nodes', community)
+            self.assertIn('boundary_edges', community)
+            self.assertIn('boundary_edge_count', community)
+            self.assertTrue(community['central_nodes'], community)
+            for entry in community['central_nodes']:
+                self.assertEqual(set(entry), {'id', 'label', 'composite_score'})
+                self.assertIn(entry['id'], community['members'])
+
+    def test_digest_is_deterministic(self):
+        first = self._digested().meta.communities
+        second = self._digested().meta.communities
+        self.assertEqual(first, second)
+
+    def test_boundary_edges_cross_the_community_and_are_capped(self):
+        graph = self._digested()
+        community = max(graph.meta.communities, key=lambda c: c['size'])
+        members = set(community['members'])
+        for edge in community['boundary_edges']:
+            self.assertIn(edge['direction'], ('out', 'in'))
+            inside = edge['source'] in members
+            self.assertNotEqual(inside, edge['target'] in members, edge)
+        # The reported total is the true count, independent of the rendered cap.
+        self.assertGreaterEqual(community['boundary_edge_count'],
+                                len(community['boundary_edges']))
+
+    def test_digest_leaves_a_graph_without_communities_untouched(self):
+        graph = kgraph.Graph.from_dict({'nodes': [{'id': 'a', 'label': 'A'}], 'edges': []})
+        self.assertIs(kgraph.digest_communities(graph), graph)
+        self.assertEqual(graph.meta.communities, [])
+
+    def test_community_for_node_finds_the_containing_community(self):
+        graph = self._digested()
+        community = kgraph.community_for_node(graph, 'a')
+        self.assertIsNotNone(community)
+        assert community is not None  # narrows for the type checker
+        self.assertIn('a', community['members'])
+        self.assertIsNone(kgraph.community_for_node(graph, 'no-such-node'))
+
+
+class CommunityViewTests(unittest.TestCase):
+    """``community_view`` — the read path kgraph_community is built on."""
+
+    def test_summary_reads_the_cached_digest_rather_than_recomputing(self):
+        # A digest whose membership no detection could produce: if the view
+        # recomputed, these ids could not appear.
+        graph = kgraph.Graph.from_dict({
+            'nodes': [{'id': 'a', 'label': 'A'}],
+            'edges': [],
+            'meta': {'community_method': 'cached-greedy',
+                     'communities': [{'id': 'community_0', 'label': 'Cached · Theme',
+                                      'size': 1, 'members': ['a'],
+                                      'central_nodes': [{'id': 'a', 'label': 'A',
+                                                         'composite_score': 0.5}],
+                                      'god_nodes': [], 'boundary_edges': [],
+                                      'boundary_edge_count': 0}]},
+        })
+        result = kgraph.community_view(graph)
+        self.assertEqual(result['source'], 'digest')
+        self.assertEqual(result['method'], 'cached-greedy')
+        self.assertEqual([c['label'] for c in result['communities']], ['Cached · Theme'])
+        self.assertEqual(result['communities'][0]['central_nodes'][0]['id'], 'a')
+
+    def test_single_community_returns_members_and_boundary_edges(self):
+        graph = kgraph.digest_communities(
+            kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method='greedy'))
+        community_id = graph.meta.communities[0]['id']
+        result = kgraph.community_view(graph, community_id)
+        self.assertEqual(result['source'], 'digest')
+        self.assertEqual(result['community']['id'], community_id)
+        self.assertIn('members', result['community'])
+        self.assertIn('boundary_edges', result['community'])
+
+    def test_unknown_community_id_reports_the_ids_it_does_have(self):
+        graph = self._cached()
+        result = kgraph.community_view(graph, 'community_99')
+        self.assertIn('error', result)
+        self.assertEqual(result['community_ids'], ['community_0'])
+
+    def test_a_graph_with_no_cached_digest_computes_and_says_so(self):
+        result = kgraph.community_view(_TWO_CLUSTER_GRAPH)
+        self.assertEqual(result['source'], 'computed')
+        self.assertGreater(result['count'], 0)
+
+    @staticmethod
+    def _cached():
+        return kgraph.Graph.from_dict({
+            'nodes': [{'id': 'a', 'label': 'A'}],
+            'meta': {'communities': [{'id': 'community_0', 'label': 'T', 'size': 1,
+                                      'members': ['a']}]},
+        })
+
+
+class CommunityDigestPersistenceTests(unittest.TestCase):
+    """The digest is cached WITH the graph, so a read is a read."""
+
+    def test_save_and_load_round_trip_the_digest(self):
+        from kgraph.graph_db import load_from_graph_db, read_community_digest, save_to_graph_db
+
+        graph = kgraph.digest_communities(
+            kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method='greedy'))
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'graph.sqlite')
+            save_to_graph_db(db, graph)
+            digest = read_community_digest(db)
+            loaded = load_from_graph_db(db)
+        self.assertIsNotNone(digest)
+        assert digest is not None  # narrows for the type checker
+        self.assertEqual(digest['method'], graph.meta.community_method)
+        self.assertEqual([c['id'] for c in loaded.meta.communities],
+                         [c['id'] for c in graph.meta.communities])
+        self.assertEqual(loaded.meta.communities[0]['central_nodes'],
+                         graph.meta.communities[0]['central_nodes'])
+        self.assertEqual(loaded.meta.community_method, graph.meta.community_method)
+
+    def test_saving_without_communities_clears_a_stale_digest(self):
+        """A graph with no communities must not leave the old digest behind."""
+        from kgraph.graph_db import (load_from_graph_db, read_community_digest,
+                                     save_to_graph_db)
+
+        graph = kgraph.digest_communities(
+            kgraph.detect_communities(_TWO_CLUSTER_GRAPH, method='greedy'))
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'graph.sqlite')
+            save_to_graph_db(db, graph)
+            self.assertIsNotNone(read_community_digest(db))
+            save_to_graph_db(db, {'nodes': [{'id': 'a', 'label': 'A'}], 'edges': []})
+            self.assertIsNone(read_community_digest(db))
+            self.assertEqual(load_from_graph_db(db).meta.communities, [])
+
+    def test_a_graph_written_before_the_digest_existed_reads_as_no_communities(self):
+        from kgraph.graph_db import init_graph_db, load_from_graph_db
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'graph.sqlite')
+            init_graph_db(db)
+            conn = sqlite3.connect(db)
+            try:
+                conn.execute("INSERT INTO graph_nodes(id, label, payload) VALUES (?, ?, ?)",
+                             ('a', 'Alpha', '{"type": "topic"}'))
+                conn.commit()
+            finally:
+                conn.close()
+            loaded = load_from_graph_db(db)
+        self.assertEqual(loaded.meta.communities, [])
+        self.assertEqual([n.id for n in loaded.nodes], ['a'])
+
+    def test_report_renders_the_cached_digest_without_recomputing(self):
+        from kgraph import report
+
+        graph = self._cached()
+        with mock.patch.object(report, 'detect_communities',
+                               side_effect=AssertionError('report recomputed communities')):
+            text = report.generate_report(graph)
+        self.assertIn('- **Cached · Theme** — 1 members', text)
+        self.assertIn('central: Alpha', text)
+        self.assertIn('- **Communities detected:** 1', text)
+
+    def test_incremental_update_writes_a_digest_a_later_read_uses(self):
+        """--update caches the digest; the reload answers from it, not by computing."""
+        from kgraph.update import incremental_update
+
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, 'repo')
+            os.makedirs(src)
+            with open(os.path.join(src, 'lib.py'), 'w', encoding='utf-8') as f:
+                f.write('"""lib."""\ndef helper() -> int:\n    return 1\n')
+            with open(os.path.join(src, 'main.py'), 'w', encoding='utf-8') as f:
+                f.write('"""main."""\nfrom lib import helper\n\n'
+                        'def run() -> int:\n    return helper()\n')
+            db_path = os.path.join(td, 'graph.sqlite')
+            incremental_update(db_path, mem_db_path=os.path.join(td, 'missing.sqlite'),
+                               source_dir=src, ast=True, include_all=True)
+            loaded = kgraph.load_from_graph_db(db_path)
+            self.assertTrue(loaded.meta.communities,
+                            '--update left no community digest for a 2-file repo')
+            result = kgraph.community_view(loaded.to_dict())
+            self.assertEqual(result['source'], 'digest')
+            # The cache carries the method it was built with, not a default.
+            self.assertEqual(loaded.meta.community_method, 'leiden_like')
+
+    @staticmethod
+    def _cached():
+        return kgraph.Graph.from_dict({
+            'nodes': [{'id': 'a', 'label': 'Alpha', 'type': 'topic'}],
+            'meta': {'communities': [{'id': 'community_0', 'label': 'Cached · Theme',
+                                      'size': 1, 'members': ['a'],
+                                      'central_nodes': [{'id': 'a', 'label': 'Alpha',
+                                                         'composite_score': 0.5}],
+                                      'god_nodes': [], 'boundary_edges': [],
+                                      'boundary_edge_count': 0}]},
+        })
+
+
+class CommunityDigestValidationTests(unittest.TestCase):
+    def test_a_digest_naming_absent_nodes_is_reported_as_stale(self):
+        from kgraph.validate import validate_graph
+
+        findings = validate_graph({
+            'nodes': [{'id': 'a', 'label': 'A'}],
+            'meta': {'communities': [{'id': 'community_0', 'label': 'T', 'size': 2,
+                                      'members': ['a', 'ghost']}]},
+        })
+        warnings = [f['message'] for f in findings if f['severity'] == 'warning']
+        self.assertTrue(any('stale' in msg and 'ghost' in msg for msg in warnings), warnings)
+        # A stale digest is a warning, never a rejection: the payload is valid.
+        self.assertFalse([f for f in findings if f['severity'] == 'error'])
+
+    def test_a_fresh_digest_produces_no_staleness_finding(self):
+        from kgraph.validate import validate_graph
+
+        findings = validate_graph({
+            'nodes': [{'id': 'a', 'label': 'A'}],
+            'meta': {'communities': [{'id': 'community_0', 'label': 'T', 'size': 1,
+                                      'members': ['a']}]},
+        })
+        self.assertFalse([f for f in findings if 'stale' in f.get('message', '')])
+
+
+# ══════════════ GRAPHRAG-ARCH-007: source lineage ══════════════
+
+
+class SourceLineageReadPathTests(unittest.TestCase):
+    """Lineage is returned per edge, and an element without it does not crash."""
+
+    def test_explain_node_returns_sources_per_edge(self):
+        graph = {
+            'nodes': [{'id': 'a', 'label': 'Alpha'}, {'id': 'b', 'label': 'Beta'},
+                      {'id': 'c', 'label': 'Gamma'}],
+            'edges': [
+                {'from': 'a', 'to': 'b', 'label': 'links', 'sources': ['file:one.md']},
+                {'from': 'a', 'to': 'c', 'label': 'links',
+                 'sources': ['file:one.md', 'memory:m1']},
+            ],
+        }
+        explanation = kgraph.explain_node(graph, 'a')
+        by_target = {c['target']: c for c in explanation['outbound_connections']}
+        self.assertEqual(by_target['b']['sources'], ['file:one.md'])
+        self.assertEqual(by_target['c']['sources'], ['file:one.md', 'memory:m1'])
+
+    def test_explain_node_reports_a_missing_source_list_as_empty(self):
+        """An edge written before the field existed must not crash the reader."""
+        graph = {
+            'nodes': [{'id': 'a', 'label': 'Alpha'}, {'id': 'b', 'label': 'Beta'}],
+            'edges': [{'from': 'a', 'to': 'b', 'label': 'links'}],
+        }
+        explanation = kgraph.explain_node(graph, 'a')
+        self.assertEqual(explanation['outbound_connections'][0]['sources'], [])
+        self.assertIsNone(explanation['node']['community'])
+
+    def test_explain_node_names_the_nodes_community(self):
+        graph = kgraph.Graph.from_dict({
+            'nodes': [{'id': 'a', 'label': 'Alpha'}],
+            'meta': {'communities': [{'id': 'community_0', 'label': 'Cached · Theme',
+                                      'size': 1, 'members': ['a']}]},
+        })
+        explanation = kgraph.explain_node(graph, 'a')
+        self.assertEqual(explanation['node']['community'],
+                         {'id': 'community_0', 'label': 'Cached · Theme', 'size': 1})
+        self.assertIn('Community: Cached · Theme (community_0, 1 members)',
+                      kgraph.format_explain(explanation))
+
+    def test_format_explain_prints_the_asserting_source(self):
+        graph = {
+            'nodes': [{'id': 'a', 'label': 'Alpha'}, {'id': 'b', 'label': 'Beta'}],
+            'edges': [{'from': 'a', 'to': 'b', 'label': 'links', 'sources': ['file:one.md']}],
+        }
+        text = kgraph.format_explain(kgraph.explain_node(graph, 'a'))
+        self.assertIn('source: file:one.md', text)
+
+
+class SourceLineagePersistenceTests(unittest.TestCase):
+    def test_round_trip_preserves_sources_and_the_version_stamp(self):
+        from kgraph.graph_db import (load_from_graph_db, read_sources_version,
+                                     save_to_graph_db)
+        from kgraph.constants import SOURCES_VERSION
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'graph.sqlite')
+            save_to_graph_db(db, {
+                'nodes': [{'id': 'a', 'label': 'Alpha', 'sources': ['file:one.md']}],
+                'edges': [{'from': 'a', 'to': 'b', 'label': 'links',
+                           'sources': ['file:one.md']}],
+            })
+            self.assertEqual(read_sources_version(db), SOURCES_VERSION)
+            loaded = load_from_graph_db(db)
+        self.assertEqual(loaded.nodes[0].sources, ['file:one.md'])
+        self.assertEqual(loaded.edges[0].sources, ['file:one.md'])
+
+    def test_a_row_without_sources_loads_as_unknown_and_is_announced(self):
+        from kgraph.graph_db import init_graph_db, load_from_graph_db
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'graph.sqlite')
+            init_graph_db(db)
+            conn = sqlite3.connect(db)
+            try:
+                # A graph written before the lineage field existed: no
+                # sources_version stamp and no sources key in the payload.
+                conn.execute("INSERT INTO graph_nodes(id, label, payload) VALUES (?, ?, ?)",
+                             ('a', 'Alpha', '{"type": "topic"}'))
+                conn.execute("INSERT INTO graph_edges(source, target, label, payload)"
+                             " VALUES (?, ?, ?, ?)", ('a', 'b', 'links', None))
+                conn.commit()
+            finally:
+                conn.close()
+            with self.assertLogs('kgraph.graph_db', level='WARNING') as captured:
+                loaded = load_from_graph_db(db)
+        self.assertEqual(loaded.nodes[0].sources, [])
+        self.assertEqual(loaded.edges[0].sources, [])
+        self.assertTrue(any('no source lineage' in line for line in captured.output),
+                        captured.output)
+
+    def test_removing_a_source_from_the_persisted_graph_subtracts_one(self):
+        from kgraph.graph_db import load_from_graph_db, save_to_graph_db
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'graph.sqlite')
+            save_to_graph_db(db, {
+                'nodes': [
+                    {'id': 'a', 'label': 'Alpha', 'sources': ['file:one.md']},
+                    {'id': 'b', 'label': 'Beta', 'sources': ['file:one.md', 'file:two.md']},
+                ],
+                'edges': [{'from': 'b', 'to': 'a', 'label': 'links',
+                           'sources': ['file:one.md']}],
+            })
+            graph = load_from_graph_db(db)
+            graph.remove_source('file:one.md')
+            save_to_graph_db(db, graph)
+            reloaded = load_from_graph_db(db)
+        self.assertEqual([n.id for n in reloaded.nodes], ['b'])
+        self.assertEqual(reloaded.nodes[0].sources, ['file:two.md'])
+        self.assertEqual(reloaded.edges, [])
+
+
+class AstSourceLineageTests(unittest.TestCase):
+    def test_ast_nodes_and_edges_carry_the_defining_file_as_source(self):
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, 'repo')
+            os.makedirs(src)
+            with open(os.path.join(src, 'lib.sh'), 'w', encoding='utf-8') as f:
+                f.write('function helper() { echo hi; }\n')
+            with open(os.path.join(src, 'main.sh'), 'w', encoding='utf-8') as f:
+                f.write('helper\n')
+            graph = kgraph.extract_repo_graph(src)
+
+        nodes = {n['id']: n for n in graph['nodes']}
+        self.assertEqual(nodes['ast_file:lib-sh']['sources'], ['file:lib.sh'])
+        self.assertEqual(nodes['ast_func:bash:helper']['sources'], ['file:lib.sh'])
+        # A name-keyed call node aggregates every caller, so it carries no source.
+        self.assertEqual(nodes['ast_call:bash:helper']['sources'], [])
+
+        edges = {(e['source'], e['target'], e.get('label')): e for e in graph['edges']}
+        self.assertEqual(edges[('ast_file:lib-sh', 'ast_func:bash:helper', 'defines')]['sources'],
+                         ['file:lib.sh'])
+        self.assertEqual(edges[('ast_file:main-sh', 'ast_call:bash:helper', 'calls')]['sources'],
+                         ['file:main.sh'])
+        # Derived by name resolution, not asserted by a document.
+        self.assertEqual(edges[('ast_call:bash:helper', 'ast_func:bash:helper', 'calls')]['sources'],
+                         [])
+
+    def test_ast_source_key_is_repo_relative_not_absolute(self):
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, 'repo')
+            os.makedirs(os.path.join(src, 'nested'))
+            with open(os.path.join(src, 'nested', 'lib.sh'), 'w', encoding='utf-8') as f:
+                f.write('function helper() { echo hi; }\n')
+            graph = kgraph.extract_repo_graph(src)
+        node = next(n for n in graph['nodes'] if n['id'].startswith('ast_file:'))
+        self.assertEqual(node['sources'], ['file:nested/lib.sh'])
+        self.assertNotIn(str(src), node['sources'][0])
+
+
+class MemoryRegistrySourceLineageTests(unittest.TestCase):
+    """The registry ingest path populates sources on records, nodes and edges."""
+
+    def _import(self, path, include_all=False):
+        import kgraph.memory_import as mi
+        from kgraph.models import GraphBuilder
+
+        conn = sqlite3.connect(path)
+        builder = GraphBuilder()
+        try:
+            mi._load_from_registry_db(conn, builder, registry='home', include_all=include_all)
+        finally:
+            conn.close()
+        return builder.build()
+
+    def test_memory_and_chunk_records_name_themselves_as_sources(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'registry.sqlite')
+            TestRegistryAdapter()._make_registry(path)
+            graph = self._import(path)
+        nodes = {n.id: n for n in graph.nodes}
+        self.assertEqual(nodes['memory:mem-1'].sources, ['memory:mem-1'])
+        self.assertEqual(nodes['memory:native:chunk-1'].sources, ['chunk:chunk-1'])
+        # A claim is consolidated out of its memory, so the memory asserts it.
+        self.assertEqual(nodes['claim:mem-1:slot-1'].sources, ['memory:mem-1'])
+        self.assertEqual(nodes['belief:bel-1'].sources, ['memory:mem-1'])
+
+    def test_derived_edges_carry_the_record_that_asserted_them(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'registry.sqlite')
+            TestRegistryAdapter()._make_registry(path)
+            graph = self._import(path)
+        edges = {(e.source, e.target, e.label): e for e in graph.edges}
+        # The native chunk (not a uuid) is what mentioned the actor.
+        self.assertEqual(edges[('memory:native:chunk-1', 'entity:hal', 'mentions')].sources,
+                         ['chunk:chunk-1'])
+        self.assertEqual(edges[('memory:mem-1', 'claim:mem-1:slot-1', 'claims')].sources,
+                         ['memory:mem-1'])
+
+    def test_entity_relationship_evidence_is_lifted_out_of_metadata(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'registry.sqlite')
+            TestRegistryAdapter()._make_registry(path)
+            conn = sqlite3.connect(path)
+            try:
+                conn.execute("INSERT INTO memory_entity_relationships VALUES (?,?,?,?,?,?)",
+                             ('a', 'b', 'related_to', 2, '["mem-1", "native:chunk-1"]', 0.8))
+                conn.commit()
+            finally:
+                conn.close()
+            graph = self._import(path)
+        edge = next(e for e in graph.edges if (e.source, e.target) == ('entity:a', 'entity:b'))
+        self.assertEqual(edge.sources, ['chunk:chunk-1', 'memory:mem-1'])
+
+    def test_unparseable_evidence_leaves_the_edge_without_lineage(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, 'registry.sqlite')
+            TestRegistryAdapter()._make_registry(path)
+            conn = sqlite3.connect(path)
+            try:
+                conn.execute("INSERT INTO memory_entity_relationships VALUES (?,?,?,?,?,?)",
+                             ('a', 'b', 'related_to', 1, '{not json}', 0.5))
+                conn.commit()
+            finally:
+                conn.close()
+            graph = self._import(path)
+        edge = next(e for e in graph.edges if (e.source, e.target) == ('entity:a', 'entity:b'))
+        self.assertEqual(edge.sources, [])
+
+
+class SourceLineageCliTests(unittest.TestCase):
+    def test_remove_source_subcommand_subtracts_one_and_reports_counts(self):
+        from kgraph.graph_db import load_from_graph_db, save_to_graph_db
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'graph.sqlite')
+            save_to_graph_db(db, {
+                'nodes': [
+                    {'id': 'a', 'label': 'Alpha', 'sources': ['file:one.md']},
+                    {'id': 'b', 'label': 'Beta', 'sources': ['file:two.md']},
+                ],
+                'edges': [{'from': 'b', 'to': 'a', 'label': 'links', 'sources': ['file:two.md']}],
+            })
+            result = subprocess.run(
+                [sys.executable, '-m', 'kgraph', '--graph-db', db,
+                 '--remove-source', 'file:one.md'],
+                cwd=SCRIPT_DIR, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Removed source 'file:one.md'", result.stdout)
+            self.assertIn('1 nodes deleted', result.stdout)
+            reloaded = load_from_graph_db(db)
+        self.assertEqual([n.id for n in reloaded.nodes], ['b'])
+        self.assertEqual(reloaded.edges, [])

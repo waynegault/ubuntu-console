@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts"))
 
 from kgraph.models import (
+    MAX_SOURCES_PER_ELEMENT,
     ConfidenceLevel,
     Graph,
     GraphBuilder,
@@ -16,6 +17,7 @@ from kgraph.models import (
     GraphNode,
     estimate_tokens,
     slugify,
+    source_key,
 )
 
 
@@ -293,3 +295,170 @@ class TestHelpers:
         assert ConfidenceLevel.EXTRACTED == "EXTRACTED"
         assert ConfidenceLevel.INFERRED == "INFERRED"
         assert ConfidenceLevel.AMBIGUOUS == "AMBIGUOUS"
+
+
+# ── Source lineage (GRAPHRAG-ARCH-007) ─────────────────────────────────
+
+
+class TestSourceKey:
+    def test_key_shape_is_kind_colon_locator(self):
+        assert source_key("file", "scripts/foo.sh") == "file:scripts/foo.sh"
+        assert source_key("memory", "abc-123") == "memory:abc-123"
+        assert source_key("chunk", "c1") == "chunk:c1"
+
+    def test_locator_is_stripped(self):
+        assert source_key("file", "  scripts/foo.sh  ") == "file:scripts/foo.sh"
+
+    def test_unknown_kind_rejected(self):
+        with pytest.raises(ValueError):
+            source_key("document", "x")
+
+    def test_empty_locator_rejected(self):
+        with pytest.raises(ValueError):
+            source_key("file", "   ")
+
+
+class TestSourceLineage:
+    def test_sources_default_to_empty(self):
+        assert GraphNode(id="n").sources == []
+        assert GraphEdge(source="a", target="b").sources == []
+
+    def test_sources_accepts_a_list(self):
+        edge = GraphEdge.model_validate({"from": "a", "to": "b", "sources": ["file:x.md"]})
+        assert edge.sources == ["file:x.md"]
+
+    def test_non_list_sources_rejected(self):
+        with pytest.raises(ValidationError):
+            GraphEdge.model_validate({"from": "a", "to": "b", "sources": "file:x.md"})
+
+    def test_merge_sources_unions_sorts_and_dedupes(self):
+        node = GraphNode(id="n", sources=["file:b.md"])
+        node.merge_sources(["file:a.md", "file:b.md"])
+        assert node.sources == ["file:a.md", "file:b.md"]
+
+    def test_merge_sources_bounds_the_array_and_records_the_overflow(self):
+        node = GraphNode(id="n")
+        node.merge_sources(f"file:f{i:03d}.md" for i in range(MAX_SOURCES_PER_ELEMENT + 6))
+        assert len(node.sources) == MAX_SOURCES_PER_ELEMENT
+        assert node.sources[0] == "file:f000.md"
+        # The kept set is the lexicographically first N, so it is stable as more
+        # sources arrive; the true count is recorded so a capped list is not
+        # mistaken for the whole set.
+        assert node.metadata["sources_overflow"] == MAX_SOURCES_PER_ELEMENT + 6
+
+    def test_drop_source_leaves_an_untracked_element_alone(self):
+        node = GraphNode(id="n")
+        assert node.drop_source("file:x.md") is False
+        assert node.sources == []
+
+    def test_drop_source_true_only_when_the_list_empties(self):
+        node = GraphNode(id="n", sources=["file:a.md", "file:b.md"])
+        assert node.drop_source("file:a.md") is False
+        assert node.sources == ["file:b.md"]
+        assert node.drop_source("file:b.md") is True
+
+
+def _node(graph: Graph, node_id: str) -> GraphNode:
+    """The node with *node_id*, asserted present (and non-optional for the checker)."""
+    node = graph.node_by_id(node_id)
+    assert node is not None, node_id
+    return node
+
+
+class TestGraphBuilderSourceUnion:
+    def test_add_edge_unions_sources_of_a_duplicate_edge(self):
+        b = GraphBuilder()
+        b.add_edge({"from": "a", "to": "b", "label": "links", "sources": ["file:one.md"]})
+        b.add_edge({"from": "a", "to": "b", "label": "links", "sources": ["file:two.md"]})
+        g = b.build()
+        assert len(g.edges) == 1
+        assert g.edges[0].sources == ["file:one.md", "file:two.md"]
+
+    def test_add_node_unions_sources_of_a_duplicate_node(self):
+        b = GraphBuilder()
+        b.add_node({"id": "n", "label": "N", "sources": ["file:one.md"]})
+        b.add_node({"id": "n", "label": "N", "sources": ["memory:m1"]})
+        g = b.build()
+        assert len(g.nodes) == 1
+        assert g.nodes[0].sources == ["file:one.md", "memory:m1"]
+
+    def test_merge_unions_rather_than_dropping_the_second_assertion(self):
+        b = GraphBuilder()
+        b.merge({"nodes": [{"id": "n", "label": "N", "sources": ["file:one.md"]}],
+                 "edges": [{"from": "n", "to": "x", "label": "links", "sources": ["file:one.md"]}]})
+        b.merge({"nodes": [{"id": "n", "label": "N", "sources": ["file:two.md"]}],
+                 "edges": [{"from": "n", "to": "x", "label": "links", "sources": ["file:two.md"]}]})
+        g = b.build()
+        assert g.nodes[0].sources == ["file:one.md", "file:two.md"]
+        assert g.edges[0].sources == ["file:one.md", "file:two.md"]
+
+    def test_semantic_dedup_unions_sources_of_collapsed_edges(self):
+        b = GraphBuilder()
+        b.add_node({"id": "topic:one", "label": "Graph Layout", "type": "topic",
+                    "sources": ["file:one.md"]})
+        b.add_node({"id": "topic:two", "label": "Graph Layout", "type": "topic",
+                    "inferred_type": True, "sources": ["file:two.md"]})
+        b.add_node({"id": "topic:other", "label": "Other", "type": "topic"})
+        b.add_edge({"from": "topic:one", "to": "topic:other", "label": "covers topic",
+                    "sources": ["file:one.md"]})
+        b.add_edge({"from": "topic:two", "to": "topic:other", "label": "covers topic",
+                    "sources": ["file:two.md"]})
+        b.deduplicate_semantic()
+        g = b.build()
+        assert [n.id for n in g.nodes] == ["topic:one", "topic:other"]
+        assert len(g.edges) == 1
+        assert g.edges[0].sources == ["file:one.md", "file:two.md"]
+        assert _node(g, "topic:one").sources == ["file:one.md", "file:two.md"]
+
+
+class TestRemoveSource:
+    """The article's document-deletion protocol, end to end on the model."""
+
+    @staticmethod
+    def _graph() -> Graph:
+        return Graph.from_dict({
+            "nodes": [
+                {"id": "n1", "label": "N1", "sources": ["file:one.md"]},
+                {"id": "n2", "label": "N2", "sources": ["file:one.md", "file:two.md"]},
+                {"id": "n3", "label": "N3", "sources": []},
+                {"id": "n4", "label": "N4", "sources": ["file:three.md"]},
+            ],
+            "edges": [
+                {"from": "n1", "to": "n2", "label": "links", "sources": ["file:two.md"]},
+                {"from": "n2", "to": "n4", "label": "links", "sources": ["file:one.md"]},
+                {"from": "n2", "to": "n3", "label": "links",
+                 "sources": ["file:one.md", "file:two.md"]},
+            ],
+        })
+
+    def test_subtracts_exactly_one_source_and_deletes_only_what_empties(self):
+        g = self._graph()
+        counts = g.remove_source("file:one.md")
+        assert {n.id for n in g.nodes} == {"n2", "n3", "n4"}
+        assert _node(g, "n2").sources == ["file:two.md"]
+        # n1 emptied and was deleted; n3 had no lineage and n4 never carried the
+        # key, so both survive untouched.
+        assert _node(g, "n3").sources == []
+        assert _node(g, "n4").sources == ["file:three.md"]
+        # The edge that emptied was deleted; n1's incident edge went with the node;
+        # the still-supported edge lost only the one key.
+        edge_keys = {(e.source, e.target) for e in g.edges}
+        assert edge_keys == {("n2", "n3")}
+        assert g.edges[0].sources == ["file:two.md"]
+        assert counts == {"nodes_removed": 1, "nodes_updated": 1,
+                          "edges_removed": 2, "edges_updated": 1}
+
+    def test_rolling_back_one_of_several_sources_removes_nothing_else(self):
+        g = self._graph()
+        counts = g.remove_source("file:two.md")
+        assert {n.id for n in g.nodes} == {"n1", "n2", "n3", "n4"}
+        assert _node(g, "n1").sources == ["file:one.md"]
+        assert counts["nodes_removed"] == 0
+
+    def test_unknown_key_is_a_no_op(self):
+        g = self._graph()
+        before = ([(n.id, n.sources) for n in g.nodes], [(e.source, e.target, e.sources) for e in g.edges])
+        counts = g.remove_source("file:never-seen.md")
+        after = ([(n.id, n.sources) for n in g.nodes], [(e.source, e.target, e.sources) for e in g.edges])
+        assert before == after
+        assert counts["nodes_removed"] == 0 and counts["edges_removed"] == 0

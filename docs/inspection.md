@@ -15,10 +15,10 @@ The following file classes are in-scope for every audit pass:
 - `scripts/[0-9][0-9]-*.sh` — the 15 numbered profile modules (01-constants
   through 15-model-recommender) plus the `18-lint.sh` utility
 - `scripts/09b-gog.sh` — the 16th profile module (non-numeric name)
-- `tools/*.sh` — 13 utility scripts (capture-golden-fixtures, check-agent-use,
-  check-module-versions, check-repo-boundaries, clean-orphans, docs-sync-check,
-  import-windows-env, install-shellcheck, lint, mirror-vault, normalize-fixture,
-  run-tests, sync-openclaw-completion)
+- `tools/*.sh` — 15 utility scripts (capture-golden-fixtures, check-agent-use,
+  check-contracts, check-module-versions, check-repo-boundaries, clean-orphans,
+  count-ratchet, docs-sync-check, import-windows-env, install-shellcheck, lint,
+  mirror-vault, normalize-fixture, run-tests, sync-openclaw-completion)
 - `tools/hooks/*` — the repo's git hooks. Tracked here, NOT in `.git/hooks/`
   (which holds only git's own samples); activated via `core.hooksPath`
 - `bin/*.sh` — standalone helper scripts
@@ -1866,7 +1866,7 @@ Difficult regex, file-descriptor manipulation, or Bash-specific tricks have comm
 
 `ls scripts/[0-9][0-9]-*.sh | grep -v 18-lint.sh; ls scripts/09b-gog.sh`
 
-16 profile module files exist under scripts/ (01-constants through 15-model-recommender + 09b-gog). **Do not count the raw glob:** `ls scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh` returns **17**, because the numbered pattern also matches `scripts/18-lint.sh`, a standalone utility that is not a profile module — so "16 numbered + 09b" double-counts against both the glob (17) and `scripts/_module-list.sh` (16). Correct composition: 15 numbered profile modules + `09b-gog.sh` = 16. 13 utility scripts live in tools/. The loaders (tactical-console.bashrc, env.sh) source the profile modules in the order given by scripts/_module-list.sh. Each module has `@modular-section`, `@depends`, and `@exports` annotations below its header.
+16 profile module files exist under scripts/ (01-constants through 15-model-recommender + 09b-gog). **Do not count the raw glob:** `ls scripts/[0-9][0-9]-*.sh scripts/09b-gog.sh` returns **17**, because the numbered pattern also matches `scripts/18-lint.sh`, a standalone utility that is not a profile module — so "16 numbered + 09b" double-counts against both the glob (17) and `scripts/_module-list.sh` (16). Correct composition: 15 numbered profile modules + `09b-gog.sh` = 16. 15 utility scripts live in tools/. The loaders (tactical-console.bashrc, env.sh) source the profile modules in the order given by scripts/_module-list.sh. Each module has `@modular-section`, `@depends`, and `@exports` annotations below its header.
 
 9.4.1
 

@@ -371,13 +371,25 @@ Every graph edge is tagged with one of:
 
 ### MCP Server (`kgraph --mcp`)
 
-Exposes 5 tools via JSON-RPC over HTTP (binds localhost only):
+Exposes 6 tools via JSON-RPC over HTTP (binds localhost only):
 
 - `kgraph_query` — search nodes by pattern
 - `kgraph_path` — shortest path between two nodes
-- `kgraph_explain` — node description with connections
+- `kgraph_explain` — node description with connections, the community it belongs
+  to, and the source document(s) behind each connection
+- `kgraph_community` — the community digest: one entry per community (label,
+  size, central nodes, bridging nodes) when called bare, or one community's
+  members, central nodes and boundary edges when given a `community_id`
 - `kgraph_report` — generate current graph report
 - `kgraph_stats` — basic graph statistics
+
+Every node and edge carries a `sources` list of source documents
+(`file:<path>`, `chunk:<id>`, `memory:<uuid>`, `life:relations.json`) so a fact
+can be cited and one source can be removed without discarding what other sources
+still support (`kgraph --remove-source <key>`). `kgraph --update` records that
+lineage and caches the community digest with the graph, so
+`kgraph_community` answers from stored structure rather than re-running
+detection.
 
 Clients connect to `http://127.0.0.1:8331` (configurable port).
 

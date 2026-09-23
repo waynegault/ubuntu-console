@@ -17,7 +17,10 @@
 # Usage: tools/docs-sync-check.sh
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version.
-# Module Version: 6
+# Module Version: 7
+#   v7 (2026-09-22): guard the README "Test Counts" table (all 7 rows) — its own
+#   header claimed it was enforced, but 4 of the 7 numbers were unguarded and had
+#   drifted (Unit 135 vs 177, Python 363 vs 415, Total 1092 vs 1186).
 # ==============================================================================
 set -u
 
@@ -59,6 +62,7 @@ fi
 # ── 3. Test totals: every suite the BATS bridge discovers ─────────────────
 bats_full=0
 bats_fast=0
+bats_funcavail=0
 bats_total=0
 for f in "$REPO_ROOT"/tests/unit/*.bats \
          "$REPO_ROOT"/tests/tactical-console.bats \
@@ -67,11 +71,12 @@ for f in "$REPO_ROOT"/tests/unit/*.bats \
          "$REPO_ROOT"/tests/integration/*.bats
 do
     [[ -f "$f" ]] || continue
-    n=$(grep -c '^@test ' "$f" || true)
+    n=$(grep -c '^@test ' "$f")
     bats_total=$((bats_total + n))
     case "${f##*/}" in
         tactical-console.bats)      bats_full=$n ;;
         tactical-console-fast.bats) bats_fast=$n ;;
+        tactical-console-function-availability.bats) bats_funcavail=$n ;;
     esac
 done
 python_total=$(grep -hcE '^\s*def test_' "$REPO_ROOT"/tests/test_*.py | awk '{s+=$1} END {print s+0}')
@@ -92,7 +97,7 @@ do
     for f in "$REPO_ROOT"/tests/"$_dir"/*.bats
     do
         [[ -f "$f" ]] || continue
-        n=$(grep -c '^@test ' "$f" || true)
+        n=$(grep -c '^@test ' "$f")
         _sum=$((_sum + n))
         _counts="${_counts:+$_counts+}$n"
     done
@@ -136,6 +141,32 @@ check_in_file "$MAIN" "README integration count" "BATS integration tests (${inte
 check_in_file "$MAIN" "README kgraph module count" \
     "Knowledge graph Python package ($(find "$REPO_ROOT/scripts/kgraph" -name '*.py' | wc -l | tr -d ' ') modules)"
 check_in_file "$REPO_ROOT/pytest.ini" "pytest.ini bats_full marker" "behavioural BATS suite (${bats_full} tests)"
+
+# ── 3d. The README "Test Counts" table ──────────────────────────────────────
+# The table's own header claims "Counts are enforced by tools/docs-sync-check.sh",
+# and that was FALSE for four of its seven rows: only the full-behavioural and
+# fast-suite figures were grepped (through the "N BATS unit tests" / "Fast subset
+# (N tests" phrases).  Measured 2026-09-22, the unguarded rows had drifted a long
+# way — Unit said 135 against an actual 177 and Python said 363 against 415, so
+# the stated **Total** was 1092 against an actual 1186.  A table that says it is
+# guarded while a third of its numbers are free to drift is the same trap §3c
+# records for docs/architecture.md, so each row is now checked against the count
+# computed above.  Row order and cells are matched literally: the table is a
+# three-place statement of one fact, and a reformat is a change to the check.
+check_in_file "$MAIN" "README counts table: full behavioural" \
+    "| Full behavioural | \`tactical-console.bats\` | ${bats_full} |"
+check_in_file "$MAIN" "README counts table: fast static analysis" \
+    "| Fast static analysis | \`tactical-console-fast.bats\` | ${bats_fast} |"
+check_in_file "$MAIN" "README counts table: function availability" \
+    "| Function availability | \`tactical-console-function-availability.bats\` | ${bats_funcavail} |"
+check_in_file "$MAIN" "README counts table: unit" \
+    "| Unit | \`tests/unit/*.bats\` | ${unit_sum} |"
+check_in_file "$MAIN" "README counts table: integration" \
+    "| Integration | \`tests/integration/*.bats\` | ${integration_sum} |"
+check_in_file "$MAIN" "README counts table: python" \
+    "| Python | \`tests/test_*.py\` | ${python_total} |"
+check_in_file "$MAIN" "README counts table: total" \
+    "| **Total** | | **${grand_total}** | | |"
 
 # ── 4. env.sh library-loader phrase (unchanged from the old inline check) ──
 check_phrase "env.sh library-loader description" "Non-interactive library loader (all modules except 13-init.sh)"

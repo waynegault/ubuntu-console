@@ -18,7 +18,7 @@ from .constants import (
     LIFE_ROOT_DEFAULT,
     normalize_canonical_name,
 )
-from .models import Graph, GraphEdge
+from .models import Graph, GraphEdge, source_key
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +207,9 @@ def merge_relations(graph: Graph | dict, life_root: str | None = None) -> Graph:
                 # origin records the edge's PROVENANCE, not its endpoint:
                 # downstream confidence logic keys off origin == "ast" etc.
                 origin="life_index",
+                # ...and sources records the DOCUMENT that asserts it: the
+                # hand-maintained relations file (GRAPHRAG-ARCH-007).
+                sources=[source_key("life", "relations.json")],
                 explicit=True,
             ))
             existing_edges.add((src_id, tgt_id, rel_type))

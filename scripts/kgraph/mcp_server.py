@@ -7,6 +7,7 @@ Provides tools:
 - kgraph_query: find nodes matching a pattern
 - kgraph_path: shortest path between two nodes
 - kgraph_explain: describe a node and its connections
+- kgraph_community: the community digest — members, central nodes, boundary edges
 - kgraph_report: generate a current graph report
 - kgraph_stats: basic graph statistics
 """
@@ -18,6 +19,7 @@ import time
 from urllib.parse import urlsplit
 
 from .query import query_nodes, find_path, explain_node
+from .community import community_view
 from .report import generate_report
 from .graph_db import load_from_graph_db
 from .constants import GRAPH_DB_DEFAULT
@@ -227,6 +229,16 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                 explanation = explain_node(self.graph, node_id)
                 return explanation
 
+            elif method == 'kgraph_community':
+                # Answers "what are the main themes" from the cached community
+                # digest (REF: "GraphRAG: A Practitioner's Guide to 6 Advanced
+                # Architectural Patterns", Partha Sarkar, TDS, 2026-09-20 — the
+                # community reports the article calls "especially important for
+                # global reasoning").  Read-only: the digest is built by
+                # `kgraph --update` and stored with the graph.
+                community_id = str(params.get('community_id', '') or '')
+                return community_view(self.graph, community_id)
+
             elif method == 'kgraph_report':
                 outpath = params.get('outpath', None)
                 if outpath:
@@ -271,8 +283,30 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                     },
                     {
                         'name': 'kgraph_explain',
-                        'description': 'Describe a node and its connections',
+                        'description': (
+                            'Describe a node and its connections. Each connection carries the '
+                            '"sources" that asserted it (source documents, for citation), and '
+                            'the node carries its community when the graph has a cached '
+                            'community digest.'
+                        ),
                         'parameters': {'node_id': 'node id or label'},
+                    },
+                    {
+                        'name': 'kgraph_community',
+                        'description': (
+                            'Community digest — "what are the main themes". Without '
+                            'community_id: one entry per community (label, size, central '
+                            'nodes, bridging god nodes, boundary-edge count). With '
+                            'community_id: that community\'s members, central nodes and '
+                            'boundary edges. Read-only, from the digest cached with the graph '
+                            'by kgraph --update.'
+                        ),
+                        'parameters': {
+                            'community_id': (
+                                'optional community id, e.g. "community_0"; omit for the '
+                                'whole-graph theme list'
+                            ),
+                        },
                     },
                     {
                         'name': 'kgraph_report',
@@ -308,7 +342,8 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
     if isinstance(addr, (bytes, bytearray)):
         addr = addr.decode()
     print(f'MCP server listening on {addr}:{used_port}')
-    print('  Tools: kgraph_query, kgraph_path, kgraph_explain, kgraph_report, kgraph_stats')
+    print('  Tools: kgraph_query, kgraph_path, kgraph_explain, kgraph_community, '
+          'kgraph_report, kgraph_stats')
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

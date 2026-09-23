@@ -14,7 +14,7 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 18
+# Module Version: 19
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -606,6 +606,26 @@ then
     echo "  PASS  repository boundary guard"
 else
     echo "  FAIL  repository boundary guard"
+    rc=1
+fi
+
+echo ""
+echo "=== Contract Drift Guard ==="
+# Whole-repo only, like the boundary guard above and the ratchet below: the check
+# reads the WORKING TREE, and this repo's tree is shared with other agent
+# sessions, so a co-worker's unstaged edit would fail your commit for a change you
+# did not make.  tools/hooks/pre-commit is deliberately staged-file-only for the
+# same reason, and says so — a whole-repo scan is this script's job (CI + manual).
+#
+# Called with NO subcommand on purpose: a bare invocation runs every implemented
+# subcommand, so the other cards' checker classes (modules, continuity, derived,
+# swallows — see tools/check-contracts.sh) join this gate as they land rather
+# than needing a second wiring edit here.
+if "$REPO_ROOT/tools/check-contracts.sh"
+then
+    echo "  PASS  contract drift guard"
+else
+    echo "  FAIL  contract drift guard"
     rc=1
 fi
 
