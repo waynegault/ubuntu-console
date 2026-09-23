@@ -127,7 +127,9 @@ jobs:
                tests/unit/23-prompt-cache-and-gpu-classify.bats \
                tests/unit/24-contracts-guards.bats \
                tests/unit/25-claimed-success-witness.bats \
-               tests/unit/26-docker-prune.bats
+               tests/unit/26-docker-prune.bats \
+               tests/unit/27-gh-token-wrapper.bats \
+               tests/unit/28-gh-keyring-watch.bats
 
       - name: Run integration tests
         run: |
