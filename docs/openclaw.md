@@ -121,11 +121,19 @@ overridden; a cache that is present but unusable (mode != 600, or carrying no
 token) is reported on stderr rather than passing silently; and a box with no
 cache at all — CI — runs `gh` unchanged and says nothing, because no decision was
 taken there. `oc-refresh-keys` additionally states the surface it produced: which
-of bridge cache / systemd user env / `environment.d` carry `GH_TOKEN`, and
-whether gh's stored login is credential-store backed (`hosts.yml` holding a user
-but no plaintext `oauth_token`), i.e. whether an env-less `gh` would reach the
-keyring. It reads files and the manager environment and never runs `gh`, so it
-cannot prompt.
+of bridge cache / systemd user env / `environment.d` carry `GH_TOKEN`, and whether
+`gh`'s `hosts.yml` holds a user with no plaintext `oauth_token` — i.e. whether the
+credential is in the FILE at all, so that an env-less `gh` would have to ask the
+credential store. It reads files and the manager environment and never runs `gh`,
+so it cannot prompt.
+
+Being precise about the store itself (measured 2026-09-23, answering "is the
+keyring still used?"): the default collection `Default keyring` holds **zero
+items** and is unlocked, so `gh` has no stored credential to find anywhere — a
+token-less call activates `org.freedesktop.secrets` and then fails with `no oauth
+token found for github.com`, which is what probe B reproduced. `gnome-keyring-daemon`
+is still running because it owns `org.freedesktop.secrets` for anything else that
+uses libsecret; the separate `gogcli` collection (April) is unrelated.
 
 ### SecretRef Sync
 

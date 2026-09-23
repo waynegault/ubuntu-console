@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 28
+# Module Version: 29
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -1142,15 +1142,19 @@ function __oc_report_gh_credential_surface() {
         _surfaces="${_surfaces:+$_surfaces + }environment.d"
     fi
 
-    # gh's own login: a user entry WITHOUT a plaintext token means the credential
-    # lives in the system credential store, so a gh invoked with no token in its
-    # environment asks the store — and that ask is what creates the keyring.
-    local _store_backed="no"
+    # gh's own config: hosts.yml recording a user with NO plaintext oauth_token
+    # means the credential is not in the FILE, so a gh invoked with no token in
+    # its environment has to ASK the credential store — and that ask is what
+    # activates gnome-keyring. Do not read more into this than the file shows:
+    # measured 2026-09-23 on this box, the Default keyring holds ZERO items, so
+    # gh has no stored credential to find; the call activates the service and
+    # then fails with "no oauth token found for github.com".
+    local _no_plaintext_token="no"
     if [[ -f "$_cfg_dir/hosts.yml" ]] \
         && grep -q '^[[:space:]]*user:' "$_cfg_dir/hosts.yml" \
         && ! grep -q '^[[:space:]]*oauth_token:' "$_cfg_dir/hosts.yml"
     then
-        _store_backed="yes"
+        _no_plaintext_token="yes"
     fi
 
     local _msg _colour
@@ -1158,9 +1162,9 @@ function __oc_report_gh_credential_surface() {
     then
         _msg="GH_TOKEN on NO env surface — every 'gh' call reaches the credential store"
         _colour="$C_Warning"
-    elif [[ "$_store_backed" == "yes" ]]
+    elif [[ "$_no_plaintext_token" == "yes" ]]
     then
-        _msg="GH_TOKEN on: $_surfaces — gh's login is credential-store backed"
+        _msg="GH_TOKEN on: $_surfaces — gh's hosts.yml holds no plaintext token"
         _msg+=", so a 'gh' call without the token activates gnome-keyring"
         _colour="$C_Warning"
     else
