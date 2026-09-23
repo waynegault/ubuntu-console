@@ -121,11 +121,16 @@ overridden; a cache that is present but unusable (mode != 600, or carrying no
 token) is reported on stderr rather than passing silently; and a box with no
 cache at all — CI — runs `gh` unchanged and says nothing, because no decision was
 taken there. `oc-refresh-keys` additionally states the surface it produced: which
-of bridge cache / systemd user env / `environment.d` carry `GH_TOKEN`, and whether
-`gh`'s `hosts.yml` holds a user with no plaintext `oauth_token` — i.e. whether the
-credential is in the FILE at all, so that an env-less `gh` would have to ask the
-credential store. It reads files and the manager environment and never runs `gh`,
-so it cannot prompt.
+of bridge cache / systemd user env / `environment.d` carry `GH_TOKEN`, and — only
+when the shim is not covering callers — whether `gh`'s `hosts.yml` holds a user
+with no plaintext `oauth_token`, because that is when the credential store matters.
+It reads files and the manager environment and never runs `gh`, so it cannot prompt.
+
+**Keep a report line inside `UIWidth` (80).** `__tac_info` pads the label to the full
+width but drops to a single space once `label + status` overflows, so one long status
+unaligns every line around it — measured 2026-09-23 with two statuses of 150 and 122
+characters. The lines here are budgeted, and the key-shadow line names only as many
+keys as fit before printing a count.
 
 Being precise about the store itself (measured 2026-09-23, answering "is the
 keyring still used?"): the default collection `Default keyring` holds **zero

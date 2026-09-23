@@ -499,11 +499,14 @@ CFG
 # activates gnome-keyring (creating the default keyring behind a prompt when
 # there is none). These cases pin the report that now says so at refresh time.
 
-@test "oc-refresh-keys names the gh credential surface when gh's login is store-backed" {
+@test "oc-refresh-keys names the gh credential surface and the store it would fall through to" {
     __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=bridged-gh-token'"
     mkdir -p "$HOME/.config/gh"
     # A user with NO plaintext oauth_token: gh keeps the credential in the system
-    # credential store, which is the fall-through that prompts.
+    # credential store, which is the fall-through that prompts. HOME is the sandbox,
+    # so the shim is MISSING and its own line appears above this one — the pairing is
+    # deliberate: the store line only decides something when the shim is not covering
+    # callers.
     cat > "$HOME/.config/gh/hosts.yml" <<'HOSTS'
 github.com:
     user: someone
@@ -513,10 +516,13 @@ HOSTS
     [ "$status" -eq 0 ]
     [[ "$output" == *"GitHub CLI"* ]]
     [[ "$output" == *"bridge cache"* ]]
+    [[ "$output" == *"GitHub CLI shim"* ]]
+    [[ "$output" == *"MISSING"* ]]
+    [[ "$output" == *"GitHub CLI store"* ]]
     [[ "$output" == *"activates gnome-keyring"* ]]
 }
 
-@test "oc-refresh-keys reports no credential-store dependency when gh holds a plaintext token" {
+@test "oc-refresh-keys does not invoke the credential store when gh holds a plaintext token" {
     __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=bridged-gh-token'"
     mkdir -p "$HOME/.config/gh"
     printf 'github.com:\n    user: someone\n    oauth_token: plaintext-token\n' \
@@ -524,7 +530,8 @@ HOSTS
 
     run oc-refresh-keys
     [ "$status" -eq 0 ]
-    [[ "$output" == *"gh needs no stored credential"* ]]
+    [[ "$output" == *"GitHub CLI"* ]]
+    [[ "$output" != *"GitHub CLI store"* ]]
     [[ "$output" != *"activates gnome-keyring"* ]]
 }
 
@@ -535,7 +542,70 @@ HOSTS
 
     run oc-refresh-keys
     [ "$status" -eq 0 ]
-    [[ "$output" == *"NO env surface"* ]]
+    [[ "$output" == *"on no env surface"* ]]
+}
+
+@test "oc-refresh-keys keeps its gh lines inside UIWidth, so the report stays aligned" {
+    # THE DEFECT THIS PINS (2026-09-23): a status longer than the padding budget makes
+    # __tac_info drop to a single space and the whole report loses its column — measured
+    # in Wayne's own output with a 150-character status and a 122-character one. Force
+    # the long cases: no shim (MISSING + the store line) and a drop-in that disagrees on
+    # five names, so the names must be truncated to the budget.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=c0' 'GH_A_API_KEY=c1' 'GH_B_API_KEY=c2' 'GH_C_API_KEY=c3' 'GH_D_API_KEY=c4'"
+    mkdir -p "$HOME/.config/gh" "$HOME/.config/environment.d"
+    printf 'github.com:\n    user: someone\n' > "$HOME/.config/gh/hosts.yml"
+    # The SAME five names, with different values: a name on only one surface is not a
+    # disagreement, so this must be five and not ten.
+    cat > "$HOME/.config/environment.d/90-openclaw.conf" <<'ENVD'
+GH_TOKEN=e0
+GH_A_API_KEY=e1
+GH_B_API_KEY=e2
+GH_C_API_KEY=e3
+GH_D_API_KEY=e4
+ENVD
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    local stripped line longest=0
+    stripped=$(printf '%s\n' "$output" | sed -E 's/\x1b\[[0-9;]*m//g')
+    while IFS= read -r line
+    do
+        case "$line" in
+            "GitHub CLI"*|"Key shadowing"*)
+                # An `if`, not `(( )) && ...`: this suite runs under errexit, and a
+                # bare arithmetic command returns 1 when the comparison is false.
+                if (( ${#line} > longest )); then
+                    longest=${#line}
+                fi
+                ;;
+        esac
+    done <<< "$stripped"
+    # 80 is UIWidth; the label+status pair must stay inside it, not merely be present.
+    [ "$longest" -gt 0 ]
+    [ "$longest" -le 80 ]
+    # ...and five disagreements are named as far as the budget allows, then counted.
+    [[ "$stripped" == *"5 differ from environment.d:"* ]]
+    [[ "$stripped" == *"+3]"* ]]
+}
+
+@test "oc-refresh-keys drops names that cannot fit and reports the count alone" {
+    # The other side of the same budget: when even ONE name cannot fit, the line must
+    # fall back to the bare count rather than unalign the report.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'A_VERY_LONG_CREDENTIAL_NAME_API_KEY=c0' 'B_VERY_LONG_CREDENTIAL_NAME_API_KEY=c1'"
+    mkdir -p "$HOME/.config/environment.d"
+    cat > "$HOME/.config/environment.d/90-openclaw.conf" <<'ENVD'
+A_VERY_LONG_CREDENTIAL_NAME_API_KEY=e0
+B_VERY_LONG_CREDENTIAL_NAME_API_KEY=e1
+ENVD
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+
+    local stripped
+    stripped=$(printf '%s\n' "$output" | sed -E 's/\x1b\[[0-9;]*m//g')
+    [[ "$stripped" == *"[2 differ from environment.d]"* ]]
+    [[ "$stripped" != *"CREDENTIAL_NAME"* ]]
 }
 
 # --- the PATH shim, and cache-vs-environment.d shadowing (2026-09-23) --------
@@ -549,7 +619,7 @@ HOSTS
 
     run oc-refresh-keys
     [ "$status" -eq 0 ]
-    [[ "$output" == *"GitHub CLI PATH shim"* ]]
+    [[ "$output" == *"GitHub CLI shim"* ]]
     [[ "$output" == *"MISSING"* ]]
 }
 

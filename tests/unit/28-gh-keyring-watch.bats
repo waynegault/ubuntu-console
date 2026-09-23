@@ -98,7 +98,10 @@ LOG
     : > "$JOURNAL_FIXTURE"
 
     run oc-health
-    [[ "$output" == *"Health Status"* ]]
+    # "Gateway Port" is the one row this path always prints; the probe row beside it is
+    # "Health Status …" or "Health Probe [NO RESPONSE]" depending on whether the gateway
+    # answers, which is live host state and therefore not something to assert on.
+    [[ "$output" == *"Gateway Port"* ]]
     [[ "$output" == *"Token-less gh"* ]]
     [[ "$output" == *"none in the retained journal"* ]]
 }

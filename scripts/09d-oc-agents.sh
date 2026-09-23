@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 30
+# Module Version: 31
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -1157,18 +1157,19 @@ function __oc_report_gh_credential_surface() {
         _no_plaintext_token="yes"
     fi
 
+    # LENGTH BUDGET: `__tac_info` pads the label out to UIWidth (80) and drops the
+    # padding to a single space when label+status overflows, which silently unaligns
+    # the whole report — measured 2026-09-23 on an early version of these lines, whose
+    # 150- and 122-character statuses broke the column in Wayne's own output. Every
+    # status below therefore keeps len(label) + len(status) <= 79. Detail that does
+    # not change a decision lives in README "GitHub CLI credentials" / docs/openclaw.md.
     local _msg _colour
     if [[ -z "$_surfaces" ]]
     then
-        _msg="GH_TOKEN on NO env surface — every 'gh' call reaches the credential store"
-        _colour="$C_Warning"
-    elif [[ "$_no_plaintext_token" == "yes" ]]
-    then
-        _msg="GH_TOKEN on: $_surfaces — gh's hosts.yml holds no plaintext token"
-        _msg+=", so a 'gh' call without the token activates gnome-keyring"
+        _msg="GH_TOKEN on no env surface — gh reaches the credential store"
         _colour="$C_Warning"
     else
-        _msg="GH_TOKEN on: $_surfaces — gh needs no stored credential"
+        _msg="GH_TOKEN on: $_surfaces"
         _colour="$C_Success"
     fi
     __tac_info "GitHub CLI" "[$_msg]" "$_colour"
@@ -1184,7 +1185,8 @@ function __oc_report_gh_credential_surface() {
 # inside it: with three concerns in one function it had grown past 100 lines.
 # ---------------------------------------------------------------------------
 function __oc_report_gh_path_shim() {
-    local _shim="$HOME/.local/bin/gh" _shim_state _gh_resolved=""
+    local _shim="$HOME/.local/bin/gh" _gh_resolved="" _state _colour
+    local _shim_ok=1
     # `command -v` writes nothing to stderr for a missing command, so the exit code
     # is the whole signal and is handled here rather than hidden behind a redirect.
     if ! _gh_resolved="$(command -v gh)"; then
@@ -1192,15 +1194,37 @@ function __oc_report_gh_path_shim() {
     fi
     if [[ ! -e "$_shim" ]]
     then
-        _shim_state="MISSING at $_shim — run install.sh to link bin/gh"
-        __tac_info "GitHub CLI PATH shim" "[$_shim_state]" "$C_Warning"
+        _state="MISSING — install.sh links bin/gh to ~/.local/bin"
+        _colour="$C_Warning"
+        _shim_ok=0
     elif [[ "$_gh_resolved" != "$_shim" ]]
     then
-        _shim_state="present but NOT first on PATH — 'gh' resolves to"
-        _shim_state+=" ${_gh_resolved:-nothing}"
-        __tac_info "GitHub CLI PATH shim" "[$_shim_state]" "$C_Warning"
+        _state="not first on PATH: ${_gh_resolved:-nothing}"
+        _colour="$C_Warning"
+        _shim_ok=0
     else
-        __tac_info "GitHub CLI PATH shim" "[installed and first on PATH: $_shim]" "$C_Success"
+        _state="installed and first on PATH"
+        _colour="$C_Success"
+    fi
+    __tac_info "GitHub CLI shim" "[$_state]" "$_colour"
+
+    # The credential FILE only decides something when the shim is not covering
+    # callers, and then it is the whole consequence: a gh carrying no token asks the
+    # credential store, and with no plaintext token in hosts.yml there is nothing
+    # there to find — the ask is what activates gnome-keyring. Measured 2026-09-23:
+    # with no default keyring present, the ask CREATED one behind a password prompt.
+    # Kept off the healthy output because the residual it warns about (a caller
+    # bypassing PATH entirely) is not something this line can see.
+    if (( _shim_ok == 0 ))
+    then
+        local _cfg_dir="${GH_CONFIG_DIR:-$HOME/.config/gh}"
+        if [[ -f "$_cfg_dir/hosts.yml" ]] \
+            && grep -q '^[[:space:]]*user:' "$_cfg_dir/hosts.yml" \
+            && ! grep -q '^[[:space:]]*oauth_token:' "$_cfg_dir/hosts.yml"
+        then
+            __tac_info "GitHub CLI store" \
+                "[no plaintext token: a token-less gh activates gnome-keyring]" "$C_Warning"
+        fi
     fi
 }
 
@@ -1225,7 +1249,7 @@ function __oc_report_key_shadowing() {
         return 0
     fi
     local -A _envd_map=()
-    local _kv _differs="" _n _v
+    local _kv _n _v
     while IFS='=' read -r _n _v
     do
         [[ -n "$_n" ]] && _envd_map["$_n"]="$_v"
@@ -1244,15 +1268,42 @@ function __oc_report_key_shadowing() {
                _n="${BASH_REMATCH[1]}"
                printf '%s=%s\n' "$_n" "${!_n:-}"
            done < "$_cache" )
+    local -a _differs=()
     while IFS='=' read -r _n _v
     do
         [[ -n "${_envd_map[$_n]+set}" ]] || continue
         [[ "$_v" == "${_envd_map[$_n]}" ]] && continue
-        _differs="${_differs:+$_differs, }$_n"
+        _differs+=("$_n")
     done <<< "$_kv"
-    if [[ -n "$_differs" ]]
+    if (( ${#_differs[@]} > 0 ))
     then
-        __tac_info "Key shadowing" "[bridge cache and environment.d disagree on: $_differs]" "$C_Warning"
+        # LENGTH BUDGET (see __oc_report_gh_credential_surface). Names are added only
+        # while the line still fits, so a list of long names cannot unalign the report;
+        # the remainder becomes a count. The constant is the fixed cost: 13 ("Key
+        # shadowing") + 1 (space) + 2 ("]") + 4 (" +NN").
+        local _head="[${#_differs[@]} differ from environment.d: "
+        local _shown="" _name _cand _n_shown=0
+        for _name in "${_differs[@]}"
+        do
+            _cand="${_shown:+$_shown, }$_name"
+            if (( 20 + ${#_head} + ${#_cand} > UIWidth )); then
+                break
+            fi
+            _shown="$_cand"
+            _n_shown=$(( _n_shown + 1 ))
+        done
+        if (( _n_shown == 0 ))
+        then
+            __tac_info "Key shadowing" "[${#_differs[@]} differ from environment.d]" "$C_Warning"
+        else
+            local _tail=""
+            if (( ${#_differs[@]} > _n_shown ))
+            then
+                _tail=" +$(( ${#_differs[@]} - _n_shown ))"
+            fi
+            __tac_info "Key shadowing" \
+                "[${#_differs[@]} differ from environment.d: $_shown$_tail]" "$C_Warning"
+        fi
     fi
 }
 
