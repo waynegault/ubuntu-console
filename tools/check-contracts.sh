@@ -241,7 +241,11 @@
 #      https://towardsdatascience.com/coding-agents-dont-need-longer-history-they-need-intent-continuity/
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-09-23): prose only — SWALLOWS_RESERVED's entry for 08-maintenance.sh no
+#   longer claims it is "another session's in-flight file": that change is committed
+#   (39f2fb08), so the note now says what it is (5 pre-existing sites, untouched by it).
+#   The tool `VERSION` does not move for a comment, so the BATS version pins stay put.
 #   v4 (2026-09-23): `modules` gained the @uses field — run-time collaborators,
 #   order-free and cycle-legal — and the load-order baseline was deleted after the
 #   13 recorded disagreements were relabelled rather than "fixed" (card
@@ -2033,7 +2037,7 @@ SWALLOWS_SCOPE = "scripts/*.sh"
 SWALLOWS_RESERVED = {
     "scripts/11e-llm-model.sh": "start/stop read-backs landed (tests/unit/25-*.bats); its sites stay unclassified, which the baseline permits",
     "scripts/09d-oc-agents.sh": "reported only this pass",
-    "scripts/08-maintenance.sh": "another session's in-flight file",
+    "scripts/08-maintenance.sh": "reported only: 5 pre-existing sites, untouched by the docker-prune fix (commit 39f2fb08)",
     "scripts/11d-llm-gpu.sh": "reported only this pass",
 }
 
