@@ -38,10 +38,12 @@ def _reports_dir() -> str:
     return os.path.expanduser(os.environ.get('KG_REPORTS_DIR', _REPORTS_DIR_DEFAULT))
 
 
-def _safe_report_path(name: str) -> str | None:
+def _safe_report_path(name: str | None) -> str | None:
     """Resolve *name* inside the reports dir, or None if it escapes it.
 
-    Rejects absolute paths and any ``..`` traversal.
+    Takes `str | None` because an absent name is not a path: an RPC that omits
+    the report name must be refused with the same None as a traversal attempt
+    rather than raising.  Rejects absolute paths and any ``..`` traversal.
     """
     if not name or os.path.isabs(name):
         return None

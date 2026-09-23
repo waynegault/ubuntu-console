@@ -199,8 +199,13 @@ def _check_community_digest(graph: dict) -> list[dict]:
     return findings
 
 
-def validate_graph(graph: dict) -> list[dict]:
+def validate_graph(graph: object) -> list[dict]:
     """Validate a graph dictionary against the Pydantic schema + security rules.
+
+    Takes `object` rather than `dict` on purpose: the first rule IS "the root
+    must be a dict", so the parameter has to accept whatever a JSON document
+    decoded to — a caller that hands it a list or a string gets that rule
+    reported as an error instead of a TypeError at the call site.
 
     Returns a list of error dicts with keys: severity, message.
     """

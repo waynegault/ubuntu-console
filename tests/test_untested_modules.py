@@ -1895,7 +1895,9 @@ class TestMemoryImportStore(unittest.TestCase):
             "decision: resolve by rotation | outcome: launcher reliability validation",
         )
         self.assertEqual(summary.visibility, "semantic")
-        self.assertEqual(summary.model_extra["summary_labels"][0], "launcher reliability")
+        summary_extra = summary.model_extra
+        assert summary_extra is not None, "summary must carry model_extra"
+        self.assertEqual(summary_extra["summary_labels"][0], "launcher reliability")
         summary_edges = [e for e in graph.edges if e.source == summary.id]
         self.assertIn("summarizes project", {e.label for e in summary_edges})
         self.assertTrue(all(e.visibility == "semantic" for e in summary_edges))
@@ -1910,7 +1912,9 @@ class TestMemoryImportStore(unittest.TestCase):
                   and e.target == "project:launcher-reliability"]
         self.assertEqual([(e.label, e.semantic_score, e.cooccurrence_count) for e in scored],
                          [("project decision", 0.85, 1)])
-        self.assertEqual(scored[0].model_extra["label_visibility"], "hover")
+        scored_extra = scored[0].model_extra
+        assert scored_extra is not None, "scored edge must carry model_extra"
+        self.assertEqual(scored_extra["label_visibility"], "hover")
 
     def test_embedding_similarity_links_cross_file_chunks_only(self):
         graph = self._graph()
@@ -2183,9 +2187,15 @@ class TestMemoryImportRegistryRows(unittest.TestCase):
                          _edge_keys(graph))
 
     def test_registry_provenance_follows_db_path(self):
-        self.assertEqual(_node(self._graph(), "memory:mem-1").model_extra["registry"], "home")
+        home_node = _node(self._graph(), "memory:mem-1")
+        home_extra = home_node.model_extra
+        assert home_extra is not None, "imported node must carry model_extra"
+        self.assertEqual(home_extra["registry"], "home")
         rook = self._graph(subdir=os.path.join("workspace-rook", "registry.db"))
-        self.assertEqual(_node(rook, "memory:mem-1").model_extra["registry"], "rook")
+        rook_node = _node(rook, "memory:mem-1")
+        rook_extra = rook_node.model_extra
+        assert rook_extra is not None, "imported node must carry model_extra"
+        self.assertEqual(rook_extra["registry"], "rook")
 
     def test_damaged_events_table_degrades_to_minus_one(self):
         # A corrupted memory_events table must not abort the import: the
@@ -3027,7 +3037,10 @@ class TestMCPServerShutdown(unittest.TestCase):
         from kgraph import mcp_server
 
         class _InterruptingHTTPServer:
-            last = None
+            # Quoted annotation: the class names itself, and this module does not
+            # import `annotations` from __future__, so an unquoted form would be
+            # evaluated while the name is still being bound.
+            last: "_InterruptingHTTPServer | None" = None
 
             def __init__(self, addr, handler):
                 type(self).last = self
@@ -3046,7 +3059,9 @@ class TestMCPServerShutdown(unittest.TestCase):
             mcp_server.serve_mcp(host="127.0.0.1", port=9999,
                                  graph_db=os.path.join(tempfile.gettempdir(),
                                                        "kgraph-missing.sqlite"))
-        self.assertTrue(_InterruptingHTTPServer.last.shutdown_called)
+        last_server = _InterruptingHTTPServer.last
+        assert last_server is not None, "serve_mcp must have constructed the server"
+        self.assertTrue(last_server.shutdown_called)
         self.assertIn("MCP server listening on 127.0.0.1:9999", stdout.getvalue())
 
 

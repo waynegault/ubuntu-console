@@ -193,8 +193,12 @@ def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int
     }
 
 
-def _correlate_with_graph(git_data: dict, graph: dict) -> list[dict]:
-    """Correlate changed files with graph nodes."""
+def _correlate_with_graph(git_data: dict, graph: dict | None) -> list[dict]:
+    """Correlate changed files with graph nodes.
+
+    `graph` may be None: an absent graph has no nodes, so it correlates nothing
+    rather than raising — callers pass the result of an optional graph load.
+    """
     correlations = []
     graph_nodes = graph.get('nodes', []) if graph else []
 

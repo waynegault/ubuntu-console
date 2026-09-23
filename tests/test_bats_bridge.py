@@ -202,6 +202,11 @@ def _parse_bats_tap(stdout: str) -> dict[str, dict[str, Any]]:
         if m:
             status = m.group(1)
             raw_name = m.group(2)
+            if status is None or raw_name is None:
+                # _TAP_LINE_RE captures both groups, so this cannot happen; fail
+                # loudly rather than index `results` with a None name if the
+                # pattern is ever edited to make a group optional.
+                raise ValueError(f"TAP line matched without its captures: {line!r}")
             seconds: float | None = None
             marker_at = -1
             for marker in _TAP_MARKERS:
@@ -219,7 +224,7 @@ def _parse_bats_tap(stdout: str) -> dict[str, dict[str, Any]]:
                 seconds = value / 1000 if timing.group(2) == "ms" else value
                 raw_name = raw_name[: timing.start()]
             current_test = raw_name
-            results[current_test] = {
+            results[raw_name] = {
                 "passed": status == "ok",
                 "output": line,
                 "seconds": seconds,
