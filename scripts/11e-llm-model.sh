@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 45
+# Module Version: 46
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -1245,6 +1245,26 @@ function __model_use_launch_server() {
     then
         __tac_info "Warning" "[Could not save state]" "$C_Warning"
     fi
+    # Read back the write before this launch is allowed to claim success (card
+    # CLAIMED-SUCCESS-WITNESS-001).  The write above only WARNS, and the launch used
+    # to carry on to "ONLINE [Port N]" — a success line for a side effect that never
+    # landed.  The pointer is what every other consumer resolves the active model
+    # through, so a launch that cannot record it is a failed launch, not a warning:
+    # tear the just-started server down rather than leave it serving untracked.
+    if ! __llm_active_state_recorded "$file"
+    then
+        # The message is built in a variable so the line stays inside the
+        # 120-column house limit (tools/count-ratchet.sh item 8.1.8).
+        local _witness_msg
+        _witness_msg="[FAILED: the active-model state did not record $file — check that"
+        _witness_msg+=" $ACTIVE_LLM_FILE is writable]"
+        __tac_info "Error" "$_witness_msg" "$C_Error"
+        __llm_server_stop
+        # No swallow on the cleanup: a remove that fails here is part of the
+        # failure being reported, and it is the line above that says so.
+        rm -f "$ACTIVE_LLM_FILE"
+        return 1
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1310,6 +1330,25 @@ function __model_use_wait_healthy() {
             [[ -n "${__BENCH_MODE:-}" ]] && \
                 printf 'advertised=%s served=%s\n' "$ctx" "$_slot_ctx" > "$LLM_WINDOW_MISMATCH_CACHE" 2>/dev/null
         fi
+        # Read back the recorded state immediately before the success line (card
+        # CLAIMED-SUCCESS-WITNESS-001).  This is the read-back that makes "ONLINE"
+        # mean something: the port answers AND the model this launch started is the
+        # one every consumer will resolve.  It is re-asserted here, not only after
+        # the write, because the pointer can be removed in between (a concurrent
+        # `model stop`, a /dev/shm clean, a failed mv) and the echo is the claim.
+        if ! __llm_active_state_recorded "$file"
+        then
+            __llm_server_stop
+            local _witness_msg
+            _witness_msg="[FAILED: the server answered but the active-model state does not"
+            _witness_msg+=" record $file — refusing to report ONLINE]"
+            __tac_info "Error" "$_witness_msg" "$C_Error"
+            # No swallows on the cleanup: this branch is already the loud failure,
+            # and a remove or sync that also fails belongs in front of the reader.
+            rm -f "$ACTIVE_LLM_FILE"
+            __llm_registry_sync_state >/dev/null
+            return 1
+        fi
         [[ -n "${__BENCH_MODE:-}" ]] || __tac_info "Status" "ONLINE [Port $LLM_PORT]" "$C_Success"
         local offload_info
         offload_info=$(grep -oiE 'offload(ing|ed) [0-9]+ .* layers' "$LLM_LOG_FILE" 2>/dev/null | tail -1)
@@ -1351,7 +1390,11 @@ function __model_use() {
     __model_use_claim_cuda_card || return 1
     __model_use_configure_params
     __model_use_build_command
-    __model_use_launch_server
+    # The launch's own read-back (the active-model pointer) can fail, and a failed
+    # launch must not continue into the health wait as if it had started something
+    # (card CLAIMED-SUCCESS-WITNESS-001): the subshell is already torn down by then,
+    # so the wait would report a timeout for a server that was deliberately stopped.
+    __model_use_launch_server || return 1
     __model_use_wait_healthy
     return $?
 }
@@ -1491,6 +1534,21 @@ function __model_stop() {
                 _mem_waited=$(( _mem_waited + 1 ))
             done
         fi
+    fi
+    # Read back the stop before claiming it (card CLAIMED-SUCCESS-WITNESS-001).
+    # "[STOPPED]" used to print unconditionally: __llm_server_stop waits for the
+    # processes IT signalled and SIGKILLs the rest, but it never re-queries, so a
+    # server that survived (a systemd lane, a second server on the port, a process
+    # the sweep could not see) still produced the success line — and the reader
+    # then trusts that the card and the port are free.  A stop that did not land is
+    # a failure, reported as one.
+    if ! __llm_server_gone
+    then
+        local _stop_msg
+        _stop_msg="[FAILED: a llama backend is still running or port $LLM_PORT is still bound"
+        _stop_msg+=" — NOT stopped]"
+        __tac_info "Error" "$_stop_msg" "$C_Error"
+        return 1
     fi
     [[ -z "${__BENCH_MODE:-}" ]] && __tac_info "Llama Server" "[STOPPED]" "$C_Success"
     return 0

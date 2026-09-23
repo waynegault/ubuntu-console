@@ -1,13 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
 # @modular-section: llm-manager
 # @depends: constants, design-tokens, ui-engine, hooks, telemetry, llm-registry
-# @exports: __llm_active_entry, __llm_is_healthy, __llm_server_running,
+# @exports: __llm_active_entry, __llm_active_state_recorded, __llm_is_healthy,
+#   __llm_server_running, __llm_server_gone,
 #   __llm_server_stop, __llm_python_bin_resolve, __llm_health_timeout,
 #   __llm_burn_request_timeout, __llm_wait_for_health, __llm_quant_rating,
 #   __llm_proc_is_server, __llm_server_pids
@@ -44,6 +45,33 @@ function __llm_active_entry() {
     # The pointer names the model FILE: resolving it by number would re-target this
     # lookup whenever a scan renumbers the registry.
     __llm_registry_entry_by_file "$active_file"
+}
+
+# ---------------------------------------------------------------------------
+# __llm_active_state_recorded <model_file> — read-back witness for the
+# "writes active model state" side effect of `model use`.
+#
+# @returns 0 when ACTIVE_LLM_FILE exists AND holds exactly <model_file>.
+#
+# WHY IT EXISTS (card CLAIMED-SUCCESS-WITNESS-001): `model use` printed
+# "ONLINE [Port N]" whether or not the pointer write had landed — a failed write
+# only produced a "[Could not save state]" warning and the launch continued — so
+# the success line claimed a side effect nothing had checked.  Every consumer of
+# state resolves the active model THROUGH this pointer (status, burn timeouts,
+# the dashboard, the gateway, the watchdog-side state contract), and each one
+# silently falls back when it is missing or wrong, which is why the failure has
+# to be caught here rather than downstream.
+#
+# The comparison is against the FILE NAME the launch started, not "is it
+# non-empty": a pointer left over from a previous model is exactly the stale
+# state this rejects.
+# ---------------------------------------------------------------------------
+function __llm_active_state_recorded() {
+    local _expect="${1:-}" _actual
+    [[ -n "$_expect" ]] || return 1
+    [[ -f "$ACTIVE_LLM_FILE" ]] || return 1
+    _actual=$(< "$ACTIVE_LLM_FILE")
+    [[ "$_actual" == "$_expect" ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -123,6 +151,29 @@ function __llm_server_pids() {
         fi
         __llm_proc_is_server "$_pid" && printf '%s\n' "$_pid"
     done
+}
+
+# ---------------------------------------------------------------------------
+# __llm_server_gone — read-back witness for the "stops model server process"
+# side effect of `model stop`.
+#
+# @returns 0 only when NO llama backend is running for this user AND the serving
+# port is no longer bound; 1 otherwise.
+#
+# WHY IT EXISTS (card CLAIMED-SUCCESS-WITNESS-001): `__model_stop` printed
+# "[STOPPED]" unconditionally.  `__llm_server_stop` waits for the processes it
+# SIGTERMed and then SIGKILLs what is left, but it never re-queries afterwards,
+# so a server that survived (a systemd-managed lane, a second server on the same
+# port, a process the sweep could not see) still produced the success line — and
+# the reader then believes the card and the port are free.  Both halves are
+# checked because each one alone is insufficient: a backend can be alive without
+# the port (between crashees) and the port can be held by something that is not a
+# llama backend at all.
+# ---------------------------------------------------------------------------
+function __llm_server_gone() {
+    __llm_server_running && return 1
+    __test_port "$LLM_PORT" && return 1
+    return 0
 }
 
 function __llm_server_running() {

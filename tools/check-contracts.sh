@@ -37,6 +37,15 @@
 # default.  Before this checker, docs/contracts/state-contracts.yaml was prose:
 # nothing parsed it, so every declared edge was unverified documentation.
 #
+# `state` ALSO VERIFIES THE READ-BACK WITNESSES (card CLAIMED-SUCCESS-WITNESS-001,
+# authored half — see check_read_backs below): every ACTIVE command entry in
+# docs/contracts/command-contracts.yaml whose contract lists side effects must
+# declare how the effect was read back before success was printed (`read_back:`),
+# or declare `read_back_exempt: <why>`; every declared witness must name a file
+# that exists, a symbol that is a FUNCTION defined there, and a call site in the
+# module that exports the command.  It lives inside `state` rather than as a sixth
+# subcommand: the claim is a state claim, and the dispatcher stays at five.
+#
 # ENFORCED, per entry (fails name the symbol, the file, and a line when there is
 # one to name):
 #   1. the contract parses, and every entry is structurally complete (a name or
@@ -216,11 +225,11 @@
 #      https://towardsdatascience.com/coding-agents-dont-need-longer-history-they-need-intent-continuity/
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 # @modular-section: contracts
 # @depends: none (standalone CI helper; needs python3 with PyYAML)
 # @exports: (none — standalone script, not sourced)
-VERSION="2"
+VERSION="3"
 set -euo pipefail
 
 # --version is pure bash: a version query must not depend on the YAML engine.
@@ -736,25 +745,205 @@ def run_state(repo):
 
     entries_seen, declared = compute_counts(kind_entries, text, problems)
 
+    # Read-back witnesses (card CLAIMED-SUCCESS-WITNESS-001, authored half).  A
+    # line item inside `state` rather than a sixth subcommand: the claim being
+    # checked ("this command queried the state before it printed success") is a
+    # state claim, and the dispatcher stays at five subcommands.
+    witnesses = {"verified": 0, "exempt": 0, "checked": True, "lines": []}
+    check_read_backs(repo, problems, witnesses)
+
     for line in counts["unenforced_lines"]:
+        print(f"  {line}")
+    for line in witnesses["lines"]:
         print(f"  {line}")
     for problem in problems:
         print(problem)
     edges = counts["producer"] + counts["consumer"] + counts["invalidator"]
+    if witnesses["checked"]:
+        witness_summary = (f"read-back witnesses: {witnesses['verified']} verified, "
+                           f"{witnesses['exempt']} not witnessed (printed above)")
+    else:
+        witness_summary = "read-back witnesses: NOT CHECKED (printed above)"
     summary = (f"{entries_seen} entries ({declared} declared) | enforced edges: "
                f"{counts['producer']} producer, {counts['consumer']} consumer, "
                f"{counts['invalidator']} invalidator | declared-unenforced edges: "
-               f"{counts['unenforced']} (printed above)")
+               f"{counts['unenforced']} (printed above) | {witness_summary}")
     if problems:
         print(f"check-contracts[state]: FAIL — {len(problems)} finding(s). {summary}")
         print("  Fix the contract or the code (both are wrong if they disagree); an edge that")
-        print("  cannot be checked must be declared `unenforced: true` with a `why:`.")
+        print("  cannot be checked must be declared `unenforced: true` with a `why:`, and a")
+        print("  read-back that is not written yet must be declared `read_back_exempt: <why>`.")
         return EXIT_DRIFT
     print(f"check-contracts[state]: OK — {summary}")
     print("  Coverage limits, not enforced by construction: a file that reads a declared")
     print("  symbol without being declared is invisible here; the type/format/semantics/")
     print("  notes/translation_rules prose fields are not machine-checked.")
     return 0
+
+
+# ── read-back witnesses (card CLAIMED-SUCCESS-WITNESS-001) ─────────────────
+# The tooling half of this card (`swallows`) records silent failures; this half
+# checks the OTHER end — that a command which reports success actually queried the
+# state it claims to have changed.  The claim is AUTHORED in
+# docs/contracts/command-contracts.yaml (a `read_back:` list or a
+# `read_back_exempt: <why>`), because the contract is where a command's side
+# effects are already stated and a witness that is not next to the effect it
+# witnesses is a second list that drifts (DYNSKILL-011 owns the derived surface).
+#
+# WHAT IS ENFORCED, per declared witness:
+#   1. `witness:` and `file:` are both present;
+#   2. `asserts:` is present and long enough to be weighable (the same 8-character
+#      floor the swallow markers use — a marker with no reason is a marker no
+#      reviewer can weigh);
+#   3. the named FILE exists and DEFINES the symbol as a function;
+#   4. the symbol is CALLED in the module that `@exports` the command — a
+#      non-comment reference, using the same first_reference() the state edges use.
+#      Without (4) a witness can be defined and never consulted, which is the
+#      decorative version of exactly what this card is about.
+# And, per ACTIVE entry:
+#   5. an entry whose `contract.side_effects` is non-empty must declare a
+#      `read_back:` list or a `read_back_exempt:` reason — otherwise nothing
+#      records whether the effect was ever verified, which is the hole this card
+#      opened on.  An exemption is printed as NOT WITNESSED and counted, so it is
+#      a declared gap rather than a silent one;
+#   6. an entry with NO side effects must not declare a witness (there would be
+#      nothing for it to have read back).
+#
+# NOT ENFORCED (stated, never silently skipped — the counts are printed):
+#   * whether the witness is CALLED ON THE SUCCESS PATH, or before the success
+#     line.  A source check can see the call, not the control flow; the BATS suite
+#     (tests/unit/25-claimed-success-witness.bats) drives the injected-failure
+#     cases for that, and it is what makes the ordering a fact rather than a claim.
+#   * a command whose implementation lives outside the module that exports it.
+READ_BACK_REASON_MIN = 8
+
+
+def command_impl_files(repo, module):
+    """The files a command's witness call site may live in: the exporting GROUP.
+
+    A thin loader exports what its sub-modules define — `model` is defined in
+    scripts/11e-llm-model.sh and reached through scripts/11-llm-manager.sh — so the
+    call site is anywhere in the loader's group.  Searching only the loader's own
+    file reports a false "never called" finding for every command in this repo's
+    §09/§11 groups (measured: all three witnesses above were reported that way
+    before this expansion).
+    """
+    files = [f"scripts/{module}.sh"]
+    submodules = loader_submodules(repo, module) or []
+    files.extend(f"scripts/{sub}.sh" for sub in submodules)
+    return [rel for rel in files if os.path.isfile(os.path.join(repo, rel))]
+
+
+def first_call(repo, rel, symbol):
+    """Line number of the first non-comment CALL of symbol in rel, else None.
+
+    Deliberately not first_reference(): the DEFINITION line (`symbol() { ... }`,
+    with or without `function`) also contains the symbol, so a plain reference
+    search reports every witness as called — measured on a fixture, where a witness
+    that was defined and never consulted passed the check that exists to catch
+    exactly that.  Comments are skipped for the same reason the state edges skip
+    them: a mention is not a call.
+    """
+    text = read_lines(repo, rel)
+    if text is None:
+        return None
+    definition = re.compile(r"^\s*(?:function\s+)?" + re.escape(symbol) + r"\s*\(\s*\)")
+    for number, line in enumerate(text.splitlines(), 1):
+        if COMMENT.match(line) or symbol not in line or definition.match(line):
+            continue
+        return number
+    return None
+
+
+def check_read_backs(repo, problems, counts):
+    """Verify the read-back witnesses declared in command-contracts.yaml."""
+    data, _text, error = command_contracts_file(repo)
+    if error:
+        counts["checked"] = False
+        counts["lines"].append(f"NOT CHECKED  read-back witnesses — {error}; continuity owns "
+                               f"that file's existence, so a missing contract is its finding")
+        return
+    entries = data.get("commands")
+    if not isinstance(entries, list) or not entries:
+        counts["checked"] = False
+        counts["lines"].append("NOT CHECKED  read-back witnesses — the contract declares no "
+                               "commands to witness")
+        return
+    if not os.path.isfile(os.path.join(repo, "scripts/_module-list.sh")):
+        counts["checked"] = False
+        counts["lines"].append("NOT CHECKED  read-back witnesses — resolving a command to the "
+                               "module that exports it needs scripts/_module-list.sh")
+        return
+    order = module_list_names(repo) or []
+    positions, group_of, _findings, _groups = module_graph(repo, order)
+    surface = command_surface(repo, sorted(positions, key=positions.get), positions, group_of)
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = (entry.get("name") or "").strip()
+        if not name or entry.get("status") != "active":
+            continue
+        contract = entry.get("contract")
+        effects = as_list(contract.get("side_effects")) if isinstance(contract, dict) else []
+        declared = entry.get("read_back")
+        exempt = entry.get("read_back_exempt")
+        if not effects:
+            if declared:
+                fail(problems, name, "declares a `read_back:` witness but its contract lists no "
+                                     "side_effects — there is no effect to read back")
+            continue
+        if exempt is not None:
+            reason = str(exempt).strip()
+            if len(reason) < READ_BACK_REASON_MIN:
+                fail(problems, name, f"`read_back_exempt:` needs a reason, not '{reason}' — a "
+                                     f"missing witness with no reason cannot be weighed")
+            else:
+                counts["exempt"] += 1
+                counts["lines"].append(f"NOT WITNESSED  {name} — {reason}")
+            continue
+        if not isinstance(declared, list) or not declared:
+            fail(problems, name, f"declares {len(effects)} side effect(s) but neither a "
+                                 f"`read_back:` witness nor a `read_back_exempt:` reason — "
+                                 f"nothing records whether the effect was verified before the "
+                                 f"command reported success")
+            continue
+        command = contract_command_name(entry)
+        module = surface.get(command)
+        impl_files = command_impl_files(repo, module) if module else []
+        if not impl_files:
+            fail(problems, name, f"cannot resolve the files that export '{command}', so the "
+                                 f"witness call site cannot be checked")
+            continue
+        for index, witness in enumerate(declared, 1):
+            where = f"{name} read_back[{index}]"
+            if not isinstance(witness, dict):
+                fail(problems, where, f"witness is not a mapping: {witness!r}")
+                continue
+            symbol = str(witness.get("witness") or "").strip()
+            rel = str(witness.get("file") or "").strip()
+            claim = str(witness.get("asserts") or "").strip()
+            if not symbol or not rel:
+                fail(problems, where, "needs both a `witness:` symbol and the `file:` that "
+                                      "defines it")
+                continue
+            if len(claim) < READ_BACK_REASON_MIN:
+                fail(problems, where, f"`asserts:` must say what the witness reads back, not "
+                                      f"'{claim}'")
+            text = read_lines(repo, rel)
+            if text is None:
+                fail(problems, where, f"names missing file '{rel}'")
+                continue
+            if defined_names(text).get(symbol) != "function":
+                fail(problems, where, f"'{symbol}' is not a function defined in {rel}")
+                continue
+            if not any(first_call(repo, impl, symbol) is not None
+                       for impl in impl_files):
+                fail(problems, where, f"'{symbol}' is defined in {rel} but never called in "
+                                      f"{' or '.join(impl_files)}, which export the command — a "
+                                      f"witness nothing calls verifies nothing")
+                continue
+            counts["verified"] += 1
 
 
 # ── shared: module annotations and the real load order ──────────────────────
@@ -1757,7 +1946,7 @@ SWALLOWS_SCOPE = "scripts/*.sh"
 # Files another session owns during the tooling pass: reported with their counts,
 # never edited here, so the second pass has a starting point.
 SWALLOWS_RESERVED = {
-    "scripts/11e-llm-model.sh": "reserved (model start/stop/switch read-backs are card item 1)",
+    "scripts/11e-llm-model.sh": "start/stop read-backs landed (tests/unit/25-*.bats); its sites stay unclassified, which the baseline permits",
     "scripts/09d-oc-agents.sh": "reported only this pass",
     "scripts/08-maintenance.sh": "another session's in-flight file",
     "scripts/11d-llm-gpu.sh": "reported only this pass",

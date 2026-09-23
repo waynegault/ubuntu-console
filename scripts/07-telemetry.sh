@@ -2,13 +2,14 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 12
+# Module Version: 13
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
 # @modular-section: telemetry
 # @depends: constants, design-tokens, ui-engine
-# @exports: _telemetry, __tac_track_bg_job, __cache_fresh, __get_uptime, __get_disk,
+# @exports: _telemetry, __tac_track_bg_job, __cache_fresh, __cache_age_suffix,
+#   __get_uptime, __get_disk,
 #   __get_host_metrics, __get_gpu_engines, __get_gpu, __get_battery,
 #   __get_git, __get_oc_version, __get_oc_metrics, __get_llm_slots
 #
@@ -88,6 +89,41 @@ function __cache_fresh() {
     _ts=$(stat -c %Y "$_cache_path" 2>/dev/null) || _ts=0
     _now=$(date +%s)
     (( _now - _ts < _ttl ))
+}
+
+# ---------------------------------------------------------------------------
+# __cache_age_suffix <cache_path> <stale_after_s> — the freshness marker a
+# rendered cache value must carry, or "" while the value is young enough to be
+# shown as current.
+#
+# Card CLAIMED-SUCCESS-WITNESS-001 (item 2): the dashboard renders /dev/shm
+# caches whose freshness is per-cache, and nothing said so.  The stale value
+# looked exactly like a live one — a day-old agent list or TPS read as current —
+# which is the same "success reported for state that is not true" failure the
+# read-back witnesses cover, one layer up at the surface.
+#
+# The band is the DISPLAY bound, not the cache's TTL, and the two are
+# deliberately different: `oc_agent_use.txt` has a 5s TTL, but its refresh is an
+# async background job (and `oc agent-use` itself takes seconds), so a render
+# routinely reads a value a few seconds past its TTL.  A marker at the TTL would
+# therefore fire on every normal render and teach the reader to ignore it — the
+# one outcome worse than no marker.  Past the bound the value is no longer this
+# render's data, and the suffix says how old it is.
+#
+# Format follows the SESSIONS row's existing convention (07/12: `${m_sess}
+# Active (cached ${m_age}s ago)`): a space, "cached Ns ago", nothing new invented.
+# ---------------------------------------------------------------------------
+function __cache_age_suffix() {
+    local _path="$1" _stale_after="$2" _ts _age
+    [[ -n "$_path" && -f "$_path" ]] || { printf '%s' ""; return 0; }
+    [[ "$_stale_after" =~ ^[0-9]+$ ]] || { printf '%s' ""; return 0; }
+    # `|| return 1` rather than a redirect: a stat that fails here means the cache
+    # vanished between the test above and this read, and that must be audible (the
+    # caller then renders no marker, which is what a missing cache gets anyway).
+    _ts=$(stat -c %Y "$_path") || return 1
+    _age=$(( $(date +%s) - _ts ))
+    (( _age > _stale_after )) || { printf '%s' ""; return 0; }
+    printf ' (cached %ss ago — STALE)' "$_age"
 }
 
 # ---------------------------------------------------------------------------

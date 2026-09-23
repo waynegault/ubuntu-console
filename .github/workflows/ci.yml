@@ -125,7 +125,8 @@ jobs:
                tests/unit/21-token-plan-quota-errors.bats \
                tests/unit/22-contracts-state.bats \
                tests/unit/23-prompt-cache-and-gpu-classify.bats \
-               tests/unit/24-contracts-guards.bats
+               tests/unit/24-contracts-guards.bats \
+               tests/unit/25-claimed-success-witness.bats
 
       - name: Run integration tests
         run: |

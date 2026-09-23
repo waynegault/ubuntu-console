@@ -2,7 +2,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 21
+# Module Version: 22
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -170,6 +170,16 @@ function tactical_dashboard() {
         fi
         local tps
         tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null)
+        local tps_age=""
+        if [[ -n "$tps" ]]
+        then
+            # The cached rate is only as current as the file it came from (card
+            # CLAIMED-SUCCESS-WITNESS-001, item 2).  Display bound 3600s: a rate
+            # measured within the last hour is plausibly what this lane is serving
+            # now; past that the row says how old it is instead of implying a live
+            # measurement.
+            tps_age=$(__cache_age_suffix "$LLM_TPS_CACHE" 3600)
+        fi
         if [[ -z "$tps" && -n "$_entry" ]]; then
             # Field 17 is tps; field 15 is mmap_mode (see the registry header
             # in 11e-llm-model.sh). Reading $15 printed "auto tps" whenever the
@@ -178,6 +188,16 @@ function tactical_dashboard() {
             [[ -n "$tps" && "$tps" != "0" ]] && tps="${tps} tps"
         fi
         __fRow "LOCAL LLM" "ACTIVE $act_mod | ${tps:-$LAST_TPS}" "$C_Success"
+        # Its own row rather than a suffix on the one above: that value already
+        # carries the active model's name, and a long name is truncated by __fRow
+        # at UIWidth - 20 — appending the age there would push the RATE out of the
+        # row and leave the marker visible instead of the number it qualifies.
+        # Rendered only when the rate is actually stale, so a fresh render is
+        # unchanged.
+        if [[ -n "$tps_age" ]]
+        then
+            __fRow "TPS AGE" "${tps_age# }" "$C_Warning"
+        fi
 
         # LLM context utilisation via async-cached /slots query
         local slots_json
@@ -249,6 +269,7 @@ function tactical_dashboard() {
         local cache="/dev/shm/oc_agent_use.txt"
         local agent_use_out=""
         local cache_ttl=5
+        local agent_use_age=""
         if [[ -f "$cache" ]]; then
             # If the cache exists but is stale, kick a background refresh
             # so subsequent renders get fresh data, but still read the
@@ -267,6 +288,13 @@ function tactical_dashboard() {
             # Sanitize output: remove control characters (except newlines) to prevent
             # terminal manipulation via ANSI escape sequences or other control codes.
             agent_use_out=$(printf '%s' "$agent_use_out" | tr -d '\000-\010\013-\037\177')
+            # The 5s TTL above is enforced only as "kick a refresh"; the render
+            # below happens either way, so a cache the refresh cannot keep up with
+            # (or one nothing has refreshed for a day) used to read as live data.
+            # Counted age from the same mtime, with a display bound well past the
+            # TTL: `oc agent-use` walks the OpenClaw state and takes seconds, so a
+            # few seconds past the TTL is a normal render, not staleness.
+            agent_use_age=$(__cache_age_suffix "$cache" 60)
         else
             # Kick off a background refresh so the cache is populated for
             # subsequent renders, but do not block the dashboard render now.
@@ -353,14 +381,28 @@ function tactical_dashboard() {
             if (( first == 1 )); then
                 __fRow "ACTIVE AGENT" "No data" "$C_Dim"
             fi
+            # The block's freshness, as its own row (card CLAIMED-SUCCESS-WITNESS-001,
+            # item 2).  Rendered only when the cache is past its display bound, so a
+            # normal render is unchanged; when it appears, the agent list above is
+            # an old snapshot and now says so instead of reading as current.
+            if [[ -n "$agent_use_age" ]]
+            then
+                __fRow "AGENT AGE" "${agent_use_age# }" "$C_Warning"
+            fi
         fi
     else
         __fRow "ACTIVE AGENT" "OFFLINE" "$C_Dim"
     fi
     fi  # End of $__TAC_OPENCLAW_OK check
 
-    # "Cloaking" = active Python virtual environment isolation
-    if [[ -n "$VIRTUAL_ENV" ]]
+    # "Cloaking" = active Python virtual environment isolation.
+    # `${VIRTUAL_ENV:-}` and not `$VIRTUAL_ENV`: an unset VIRTUAL_ENV is the normal
+    # state for a shell started outside a venv, and under `set -u` the bare form
+    # aborts the whole render (measured 2026-09-23 while rendering this dashboard
+    # from a test harness: "line 399: VIRTUAL_ENV: unbound variable" and no
+    # dashboard at all).  Interactive shells do not set -u, which is why it went
+    # unnoticed; `bin/tac-exec` deliberately does not either.
+    if [[ -n "${VIRTUAL_ENV:-}" ]]
     then
         __fRow "CLOAKING" "ACTIVE ($(basename "$VIRTUAL_ENV"))" "$C_Success"
     fi
@@ -678,7 +720,7 @@ function contextual-help() {
         if __llm_server_running
         then
             context="llm-active"
-        elif [[ -n "$VIRTUAL_ENV" ]]
+        elif [[ -n "${VIRTUAL_ENV:-}" ]]
         then
             context="python-dev"
         elif git rev-parse --is-inside-work-tree >/dev/null 2>&1

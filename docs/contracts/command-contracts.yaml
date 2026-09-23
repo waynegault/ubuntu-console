@@ -19,6 +19,18 @@ notes:
     (`shopt expand_aliases` is off, so `tac-exec m` is 'command not found').
     The functions they wrap (tactical_dashboard, tactical_help) load in both, so
     `tac-exec tactical_dashboard` works; only the shorthand is interactive."
+  - "read_back (2026-09-23, card CLAIMED-SUCCESS-WITNESS-001, entries bumped to v2):
+    an ACTIVE entry whose contract lists side effects must say how the effect was
+    READ BACK before the command printed success — either `read_back:` (a list of
+    witnesses, each naming the function that performs the query, the file that
+    defines it, and the claim it asserts) or `read_back_exempt: <reason>` when the
+    witness is genuinely not declared yet.  tools/check-contracts.sh state verifies
+    every declared witness (the file exists, the symbol is a function defined
+    there, and it is CALLED in the module that exports the command) and prints the
+    exempted entries as NOT WITNESSED so the gap is counted, not silent.
+    The v1 rules were not replaced by this — the field is additive, which is why
+    the ten edited entries are v2 with no superseded predecessor (see
+    .agents/decisions/read-back-witness.md)."
 
 entrypoints:
   interactive_loader:
@@ -35,11 +47,17 @@ commands:
   - name: m
     family: dashboard
     summary: Render tactical dashboard
-    version: 1
+    version: 2
     updated: 2026-09-23
     status: active
     scope: interactive
     scope_note: alias for tactical_dashboard; an alias name does not resolve under tac-exec
+    read_back_exempt: >-
+      nothing to witness: the effect this entry lists is a READ (telemetry caches
+      under /dev/shm), not a state change — a read-back here would check a query
+      rather than a mutation.  What the dashboard DOES owe its reader is said where
+      it renders: a cached value past its display bound now carries a STALE marker
+      (scripts/07-telemetry.sh __cache_age_suffix).
     contract:
       side_effects:
         - reads telemetry caches under /dev/shm
@@ -64,10 +82,15 @@ commands:
   - name: up
     family: maintenance
     summary: Run maintenance pipeline with cooldown-aware steps
-    version: 1
+    version: 2
     updated: 2026-09-23
     status: active
     scope: both
+    read_back_exempt: >-
+      not witnessed yet: the pipeline's per-step rows and its exit code are the only
+      verdict it produces, and each STEP would need its own read-back (cooldown
+      record written, package state changed).  Those steps live in
+      scripts/08-maintenance.sh, which another card owns.
     contract:
       side_effects:
         - writes cooldown records
@@ -79,10 +102,15 @@ commands:
   - name: so
     family: openclaw
     summary: Start OpenClaw gateway with dependency checks
-    version: 1
+    version: 2
     updated: 2026-09-23
     status: active
     scope: both
+    read_back_exempt: >-
+      not witnessed yet: the gateway's own readiness probe (oc-health, and the
+      systemd unit state) is the read-back, but no witness is declared on this
+      entry — the OpenClaw family is outside CLAIMED-SUCCESS-WITNESS-001's scope,
+      which named the model/vault/clean families.
     contract:
       side_effects:
         - interacts with systemd user services
@@ -94,10 +122,15 @@ commands:
   - name: xo
     family: openclaw
     summary: Stop OpenClaw gateway
-    version: 1
+    version: 2
     updated: 2026-09-23
     status: active
     scope: both
+    read_back_exempt: >-
+      not witnessed yet: the witness would be "the gateway port is no longer bound
+      and no gateway process remains" (the same shape `model stop` now uses), but
+      it is not declared on this entry — the OpenClaw family is outside this card's
+      named scope.
     contract:
       side_effects:
         - stops gateway service/processes
@@ -136,10 +169,17 @@ commands:
   - name: model use
     family: llm
     summary: Start selected model with computed runtime settings
-    version: 1
+    version: 2
     updated: 2026-09-23
     status: active
     scope: both
+    read_back:
+      - witness: __llm_active_state_recorded
+        file: scripts/11c-llm-server.sh
+        asserts: ACTIVE_LLM_FILE holds the model file this launch started, read back before ONLINE is printed
+      - witness: __llm_wait_for_health
+        file: scripts/11c-llm-server.sh
+        asserts: the serving port answers before the launch reports success
     contract:
       args:
         - "<model_number>"
@@ -154,10 +194,14 @@ commands:
   - name: model stop
     family: llm
     summary: Stop local llama-server
-    version: 1
+    version: 2
     updated: 2026-09-23
     status: active
     scope: both
+    read_back:
+      - witness: __llm_server_gone
+        file: scripts/11c-llm-server.sh
+        asserts: no llama backend is still running and the serving port is released, read back before STOPPED is printed
     contract:
       side_effects:
         - stops model server process
@@ -183,10 +227,14 @@ commands:
   - name: burn
     family: llm
     summary: LLM stress test and TPS benchmark
-    version: 1
+    version: 2
     updated: 2026-09-23
     status: active
     scope: both
+    read_back_exempt: >-
+      not witnessed yet: the witness would be "the TPS cache holds a value written
+      by this run", which is a measurement write, not a state change a reader acts
+      on.  Not declared on this entry.
     contract:
       side_effects:
         - updates TPS cache
@@ -198,10 +246,14 @@ commands:
   - name: explain
     family: llm
     summary: Explain the last command using local LLM
-    version: 1
+    version: 2
     updated: 2026-09-23
     status: active
     scope: both
+    read_back_exempt: >-
+      nothing to witness: the effect this entry lists is a READ (recent shell
+      context/log state), not a state change.  The command's own success condition
+      is that the LLM answered, which its exit code already carries.
     contract:
       side_effects:
         - reads recent shell context/log state
@@ -212,10 +264,14 @@ commands:
   - name: cl
     family: utility
     summary: Deep system cleanup (apt, brew, journal, docker, npm, caches)
-    version: 1
+    version: 2
     updated: 2026-09-23
     status: active
     scope: both
+    read_back_exempt: >-
+      not witnessed yet: the command's own itemised report is the record of what it
+      deleted, and --report deletes nothing at all, so a whole-run read-back would
+      restate the report rather than check it.  Not declared on this entry.
     contract:
       args:
         - --light
@@ -230,10 +286,13 @@ commands:
   - name: logtrim
     family: utility
     summary: Trim oversized log files to bounded tail
-    version: 1
+    version: 2
     updated: 2026-09-23
     status: active
     scope: both
+    read_back_exempt: >-
+      not witnessed yet: the witness would be "the trimmed file is now within
+      LOG_MAX_BYTES" — a real read-back, but it is not declared on this entry.
     contract:
       side_effects:
         - rewrites target log files
