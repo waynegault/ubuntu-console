@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC1090,SC1091  # the module loop sources _module-list.sh entries by name
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
 # ==============================================================================
 # env.sh — Tactical Console Library Loader (Non-Interactive)
 # ==============================================================================
@@ -85,6 +85,13 @@ export LLM_AUTOTUNE_BEAM_ROUNDS="${LLM_AUTOTUNE_BEAM_ROUNDS:-2}"
 # fraction of free VRAM are probed with alternate offload counts and cache
 # quantizations (partial offload can beat pure CPU on borderline models).
 export LLM_AUTOTUNE_NGL_BAND_FRAC="${LLM_AUTOTUNE_NGL_BAND_FRAC:-0.55}"
+# CANDIDATES, not the sweep's effective list: autotune-model.sh probes a KV pair
+# only when it is CERTIFIED, i.e. it passed the long-context retrieval probe
+# (KVCACHE-CONSOLE-PROMPT-CACHE-001).  That probe does not exist yet, so
+# q8_0/q8_0 is the only certified pair and q4_0/q4_0 is refused — with a line in
+# the sweep's output naming that reason, never a silent drop.  Listing a pair
+# here does not make it eligible: see KV_CERTIFIED_PAIRS in
+# scripts/autotune-model.sh.
 export LLM_AUTOTUNE_KV_QUANTS="${LLM_AUTOTUNE_KV_QUANTS:-q8_0/q8_0 q4_0/q4_0}"
 
 # Cap on a single scoring bench's wall time (filled-cache prefill is slow on

@@ -16,7 +16,12 @@ StartLimitBurst=6
 
 [Service]
 ExecStartPre=/home/wayne/.local/bin/llama-gpu-clear.sh
-ExecStart=/home/wayne/.local/bin/llama-cuda-server -m /mnt/m/active/Qwen3.5-4B.Q4_K_M.gguf --port 8081 --host 127.0.0.1 --ctx-size 16384 --batch-size 1024 --ubatch-size 512 --threads 6 --n-gpu-layers 99 --parallel 1 --fit off --flash-attn on --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off
+# --cache-ram 0 (KVCACHE-CONSOLE-PROMPT-CACHE-001): llama.cpp's default is 8192
+# MiB of host RAM for the prompt cache, unbudgeted here; 0 is explicit-disable.
+# The number that should replace it waits on investigator card
+# KVCACHE-PROMPT-CACHE-BUDGET-001 item 1 and lives in scripts/01-constants.sh
+# (LLAMA_CACHE_RAM_MB).  Tests/unit/23-*.bats pins this literal to that default.
+ExecStart=/home/wayne/.local/bin/llama-cuda-server -m /mnt/m/active/Qwen3.5-4B.Q4_K_M.gguf --port 8081 --host 127.0.0.1 --ctx-size 16384 --batch-size 1024 --ubatch-size 512 --threads 6 --n-gpu-layers 99 --parallel 1 --cache-ram 0 --fit off --flash-attn on --kv-offload --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off
 Restart=on-failure
 RestartSec=15
 TimeoutStartSec=600

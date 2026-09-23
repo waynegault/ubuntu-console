@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 62
+# Module Version: 63
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1209,6 +1209,41 @@ last_fail_type() {
     cut -d'|' -f3 "/tmp/at-metrics-$$" 2>/dev/null | head -1
 }
 
+# --- KV-quant certification gate (KVCACHE-CONSOLE-PROMPT-CACHE-001) ---
+# REF: "The KV Cache Tax: Why Inference Servers Run Out of Memory Before Compute"
+#      (Ibrahim, TDS, 2026-09-16) — https://towardsdatascience.com/the-kv-cache-tax-why-inference-servers-run-out-of-memory-before-compute/
+#
+# The KV-quant sweep may select a type only when it has passed the long-context
+# retrieval probe — a measurement of what the quantisation does to RETRIEVAL
+# quality at long ctx, not of what it does to speed.  That probe does not exist
+# yet (investigator card KVCACHE-QUANT-VALIDATE-001), so q8_0/q8_0 is the only
+# certified type and q4_0 is refused here.
+#
+# Refused, NOT removed from the candidate list: LLM_AUTOTUNE_KV_QUANTS still
+# offers q4_0/q4_0 (env.sh), and the sweep prints a line naming the reason for
+# every ineligible pair.  A pair dropped from the list instead would be
+# indistinguishable from a pair nobody configured, which is the silent-narrowing
+# failure this gate exists to avoid.
+#
+# Deliberately NOT an env knob: what makes a KV type eligible is a measurement,
+# not a preference, and a gate an environment variable can widen is not a gate.
+# When KVCACHE-QUANT-VALIDATE-001 lands, add the pairs it certifies here.
+KV_CERTIFIED_PAIRS="q8_0/q8_0"
+
+# kv_pair_status <type_k> <type_v> — print "certified" when this pair may be
+# probed, else the reason it may not.  The caller prints the reason, so the
+# narrowing is always visible in the sweep's output.
+kv_pair_status() {
+    local _pair="$1/$2" _c
+    for _c in $KV_CERTIFIED_PAIRS; do
+        if [[ "$_c" == "$_pair" ]]; then
+            printf '%s\n' "certified"
+            return 0
+        fi
+    done
+    printf '%s\n' "not eligible: no long-context retrieval validation (KVCACHE-QUANT-VALIDATE-001)"
+}
+
 # ---------------------------------------------------------------------------
 # probe_upward — bounded ctx re-climb for a fixed config (quick benches).
 # Confirms the given ctx, then up to 2 ×1.5 climb steps and one binary probe.
@@ -1598,6 +1633,9 @@ _cuda_guard_or_exit
 # full offload fall to CPU-only. In the band (model is a meaningful fraction
 # of free VRAM) probe alternate offload counts and cache quantizations —
 # partial offload or q4_0 KV can beat pure CPU and free VRAM for a higher ctx.
+# ...but only a CERTIFIED KV type may be probed: kv_pair_status() gates it, and
+# the sweep prints why a candidate was refused (see the gate, defined with the
+# probe helpers above).
 WIN_NGL="$BENCH_NGL"; WIN_KVK="q8_0"; WIN_KVV="q8_0"
 BAND_MIN_MB=$(awk -v f="$FREE_VRAM" -v fr="$NGL_BAND_FRAC" 'BEGIN{printf "%d", f*fr}')
 if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; then
@@ -1641,14 +1679,23 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]] && [[ $MODEL_MB -ge $BAND_MIN_MB ]]; 
     fi
 
     # KV-quant candidates: e.g. "q8_0/q8_0 q4_0/q4_0" — the default pair was
-    # implicitly probed by every bench so far; probe the alternates.
+    # implicitly probed by every bench so far; probe the alternates.  Only a
+    # pair that has passed the long-context retrieval probe may be probed; a
+    # refused pair is PRINTED with its reason rather than dropped, so the sweep's
+    # narrowing is visible in its own output (see kv_pair_status above).
     KV_PAIRS=()
     _pair=""
     for _pair in $KV_QUANTS; do
         _kk="${_pair%%/*}"; _kv="${_pair##*/}"
         [[ "$_kk" == "$WIN_KVK" && "$_kv" == "$WIN_KVV" ]] && continue
+        _kv_status=$(kv_pair_status "$_kk" "$_kv")
+        if [[ "$_kv_status" != "certified" ]]; then
+            echo "  cache k=$_kk v=$_kv: NOT TESTED — $_kv_status"
+            continue
+        fi
         KV_PAIRS+=("$_pair")
     done
+    unset _kv_status
 
     if [[ ${#KV_PAIRS[@]} -gt 0 ]]; then
         echo ""

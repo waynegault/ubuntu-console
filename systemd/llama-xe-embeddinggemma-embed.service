@@ -11,7 +11,14 @@ Environment=LD_LIBRARY_PATH=/home/wayne/llama.cpp/build-opencl/bin
 Environment=GGML_OPENCL_PLATFORM=0
 Environment=GGML_OPENCL_DEVICE=0
 # No ExecStartPre GPU-clear: this lane is on the Xe card, not the CUDA card.
-ExecStart=/home/wayne/.local/bin/llama-xe-server -m /home/wayne/.node-llama-cpp/models/hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf --embedding --port 18080 --host 127.0.0.1 --ctx-size 2048 --batch-size 2048 --ubatch-size 2048 --n-gpu-layers 99 --alias embeddinggemma --api-key-file /home/wayne/.config/llama/embed-api-keys.txt
+# --cache-ram 0 (KVCACHE-CONSOLE-PROMPT-CACHE-001): llama.cpp's default is 8192
+# MiB of host RAM for the prompt cache — more than this unit's MemoryMax below —
+# and nothing budgets it.  0 is explicit-disable.  Its number waits on
+# investigator card KVCACHE-PROMPT-CACHE-BUDGET-001 item 1 and lives in
+# scripts/01-constants.sh (LLAMA_CACHE_RAM_MB); tests/unit/23-*.bats pins this
+# literal to that default.  An embed lane reuses no prefix, so 0 costs nothing
+# here — it is set for consistency, so no lane advertises an unbudgeted cache.
+ExecStart=/home/wayne/.local/bin/llama-xe-server -m /home/wayne/.node-llama-cpp/models/hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf --embedding --port 18080 --host 127.0.0.1 --ctx-size 2048 --batch-size 2048 --ubatch-size 2048 --n-gpu-layers 99 --cache-ram 0 --alias embeddinggemma --api-key-file /home/wayne/.config/llama/embed-api-keys.txt
 # always + the cgroup caps below came from drop-ins on the OLD name
 # (llama-embed-server.service.d/{restart-always.conf,memory.conf}), folded in so
 # the effective config is one reviewable file per unit.

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 44
+# Module Version: 45
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -1000,6 +1000,41 @@ function __model_use_build_command() {
         cmd+=("--cache-type-k" "${LLAMA_CACHE_TYPE_K:-${row_kv_k:-q8_0}}")
         cmd+=("--cache-type-v" "${LLAMA_CACHE_TYPE_V:-${row_kv_v:-q8_0}}")
         cmd+=("--parallel" "$parallel_slots")
+        # Prompt-cache budget (KVCACHE-CONSOLE-PROMPT-CACHE-001).  Every lane must
+        # pass --cache-ram EXPLICITLY, because llama.cpp's default is 8192 MiB of
+        # host RAM per server and nothing here budgets it (see 01-constants.sh,
+        # LLAMA_CACHE_RAM_MB, for the number, the memory it sits inside, and the
+        # MEASURED cost of 0 — the prefix is re-processed when a slot switches
+        # conversations, which several agents sharing one lane do all day).  The
+        # systemd lane units repeat the same literal argument — a lane start cannot
+        # assume a sourced shell — and tests/unit/23-prompt-cache-and-gpu-classify.bats
+        # pins the units, this launcher and 01-constants' default to one number, so
+        # "the lane launches with the documented budget" is checkable rather than
+        # claimed.  -1 is llama.cpp's "no limit", accepted deliberately and only
+        # with that meaning.
+        #
+        # --slot-save-path is deliberately NOT emitted, and the absence is the
+        # recorded decision, not an oversight: its default is "disabled" (--help),
+        # so "never write slot KV state to disk" is the choice.  Enabling it would
+        # today be feedback without an effect — nothing in the fleet drives
+        # /slots action=save or action=restore, so the files would be written and
+        # never read — and its only plausible home is $TAC_CACHE_DIR (/dev/shm,
+        # tmpfs), where persisted state is RAM again, competing with the budget
+        # --cache-ram exists to respect.  Enabling it means adding a saver, a
+        # restorer and a docs/contracts/state-contracts.yaml entry for the
+        # directory, which is a different card.  A test pins the absence.
+        local cache_ram_mb="${LLAMA_CACHE_RAM_MB:-0}"
+        if [[ ! "$cache_ram_mb" =~ ^([0-9]+|-1)$ ]]
+        then
+            # The message is built in a variable so the line stays inside the
+            # 120-column house limit (tools/count-ratchet.sh item 8.1.8).
+            local _cram_msg
+            _cram_msg="[LLAMA_CACHE_RAM_MB='${cache_ram_mb}' is not an integer - using 0 (explicit-disable)"
+            _cram_msg+=" instead of silently inheriting llama.cpp's unbudgeted 8192 MiB default]"
+            __tac_info "Warning" "$_cram_msg" "$C_Warning"
+            cache_ram_mb=0
+        fi
+        cmd+=("--cache-ram" "$cache_ram_mb")
         # Speculative decoding (SPEC-DEC-004): verified llama.cpp flags from
         # the registry row / env overrides; empty when disabled.  CPU draft
         # placement by default on the 4 GB card — see __spec_launch_flags.

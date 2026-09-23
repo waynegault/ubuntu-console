@@ -18,7 +18,13 @@ StartLimitBurst=6
 # 47104 on the CUDA card).  That figure is a GPU-server result: on this tier it
 # would size a KV cache far past MemoryMax for a lane whose job is a heartbeat
 # turn, and it is the CUDA lane, not this one, that serves the long-context work.
-ExecStart=/home/wayne/.local/bin/llama-cpu-server -m /mnt/m/active/qwen2.5-3b-instruct-q4_k_m.gguf --port 18084 --host 127.0.0.1 --ctx-size 8192 --threads 8 --parallel 1 --jinja --reasoning off
+# --cache-ram 0 (KVCACHE-CONSOLE-PROMPT-CACHE-001): llama.cpp's default is 8192
+# MiB of host RAM for the prompt cache — larger than this unit's MemoryMax below,
+# on a lane whose whole body is ~2 GiB of weights — and nothing budgets it.
+# 0 is explicit-disable; its replacement waits on investigator card
+# KVCACHE-PROMPT-CACHE-BUDGET-001 item 1 and lives in scripts/01-constants.sh
+# (LLAMA_CACHE_RAM_MB).  Tests/unit/23-*.bats pins this literal to that default.
+ExecStart=/home/wayne/.local/bin/llama-cpu-server -m /mnt/m/active/qwen2.5-3b-instruct-q4_k_m.gguf --port 18084 --host 127.0.0.1 --ctx-size 8192 --threads 8 --parallel 1 --cache-ram 0 --jinja --reasoning off
 # Restart=always (2026-09-19): this tier had NO supervisor.  llama-watchdog.sh
 # manages only the Xe and CUDA units, and this lane holds no card, so no card
 # sweep should ever take it (bin/llama-gpu-clear.sh reaps by /proc/PID/exe and

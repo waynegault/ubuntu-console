@@ -1,5 +1,5 @@
 version: 2
-updated: 2026-09-22
+updated: 2026-09-23
 notes:
   - Cross-module state contracts used by dashboard, OpenClaw, and LLM modules.
   - Preserve names and semantics during PowerShell translation unless intentionally versioned.
@@ -270,6 +270,20 @@ files:
     format: plain text epoch-seconds expiry
     semantics: single-use marker that the GPU-busy branch stopped the CUDA lane on
       purpose, so the next free tick does not count a designed stop as a flap
+
+  - path: /dev/shm/llama-watchdog-cuda.gpuclassify
+    bindings: [GPU_CLASSIFY_FILE]
+    producer: bin/llama-watchdog.sh
+    consumers:
+      - file: bin/llama-watchdog.sh
+    format: plain text epoch-seconds expiry
+    semantics: driver-level classification hold — the expiry before which the
+      watchdog does NOT re-probe a fail-closed CUDA gate with
+      gpu-passthrough-check.sh.  Probing a broken GPU is a crashing nvidia-smi that
+      WSL captures as a core dump, so the classification is rate-limited by this
+      file rather than run on every 5-minute tick.  Lane-local, one producer and one
+      consumer, declared for the same reason as llama-watchdog-cuda.gpustop — so the
+      path and its binding cannot be renamed away unnoticed.
 
   - path: /dev/shm/llama-watchdog.lock
     bindings: [WATCHDOG_LOCK_FILE]

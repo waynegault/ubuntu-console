@@ -99,6 +99,18 @@
 #   of recording a flap.  Single-use and TTL-bounded, so a stale marker cannot mask a
 #   genuine dxgkrnl death.  The busy line also carries the probe's own reasons, since
 #   "GPU busy" alone cannot say which of the five signals fired.
+# v3.13 (2026-09-23): "GPU busy" is no longer taken at face value when the gate failed
+#   CLOSED for a DRIVER-level reason.  gpu-busy.sh fails closed, and a busy card and an
+#   unusable driver BOTH answer busy:true / exit 1, with only the reason string
+#   ("nvidia-smi-unavailable") telling them apart -- so during a real GPU fault the only
+#   human-visible signal named the case that needs no action.  The busy branch now
+#   classifies that one reason ONCE with gpu-passthrough-check.sh --json and logs which
+#   situation it actually is (passthrough BROKEN vs. card genuinely in use).  Probing a
+#   broken GPU is a crashing nvidia-smi that WSL captures as a core dump, so the
+#   classification is held to one probe per window, reusing this file's existing
+#   cooling-off window (LLAMA_WATCHDOG_GPU_CLASSIFY_WINDOW_S, default FLAP_HOLD_S) and
+#   the existing hold-marker shape rather than inventing a second rate limit.  Read-only
+#   with respect to lanes: actuation is unchanged and stays here.
 # Recovery goes through systemctl --user restart/stop/start so the unit's
 # ExecStartPre GPU-clear and tuned parameters are preserved. Never pkill/spawn
 # directly. The Xe unit is boot-enabled and gateway-managed (always-on).
@@ -107,14 +119,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 10
+# Module Version: 11
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line (it is what makes an edit here fail the pre-commit guard until the
 #   number moves).  Deliberately separate from VERSION= below: the marker
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.12"
+VERSION="3.13"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -410,6 +422,122 @@ gpu_busy() {
     return 0
 }
 
+# --- driver-level fail-closed classification (v3.13) ---
+# THE PROBLEM THIS FIXES: gpu-busy.sh fails CLOSED, and only the REASON STRING
+# separates "the card is legitimately busy" from "the driver cannot be talked to".
+# The driver case is the single reason "nvidia-smi-unavailable", and during a real
+# GPU fault that was the whole human-visible signal: a log line saying "GPU busy",
+# which is the case that needs no action, while the lane was held down for a
+# reason that was wrong in one of the two situations.  Here the gate's verdict is
+# classified ONCE by the passthrough checker and logged, so the stated reason is
+# truthful:
+#   * state=unavailable -> the passthrough is BROKEN (a host-side fix, none here);
+#   * state=ok          -> the driver answers, so the fail-closed verdict was a
+#                          transient probe failure and the card is genuinely in use.
+#
+# RATE LIMIT — asking is not free: a probe of a BROKEN GPU is a crashing
+# nvidia-smi, and WSL captures each crash as a core dump (kernel-log noise +
+# jitter).  So the classification is held to at most one probe per HOLD WINDOW,
+# and it reuses the window this file already has (FLAP_HOLD_S, the CUDA
+# cooling-off) rather than introducing a second notion of "how long is too long".
+# The marker has the shape the other holds in this file already use — an
+# epoch-seconds expiry, written by a _stamp and tested by a _due (gpustop_*,
+# flap_hold_*) — and it is deliberately NOT cleared when the card goes free: a
+# driver that oscillates broken/free would otherwise re-probe on every episode,
+# i.e. every 5 minutes again, which is the hammering this exists to stop.  A
+# persistently broken GPU is therefore probed twice an hour, not twelve times.
+#
+# ACTUATION STAYS HERE.  bin/gpu-passthrough-watch.sh is an observe-only observer
+# (it never starts or stops a lane) and this probe is read-only (`nvidia-smi -L`):
+# nothing in this path touches a lane, so the watchdog remains the single owner of
+# lane actuation.
+GPU_CLASSIFY_FILE="${LLAMA_WATCHDOG_GPU_CLASSIFY_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.gpuclassify}"
+GPU_CLASSIFY_WINDOW_S="${LLAMA_WATCHDOG_GPU_CLASSIFY_WINDOW_S:-$FLAP_HOLD_S}"
+GPU_PASSTHROUGH_CHECK="${LLAMA_WATCHDOG_GPU_CHECK:-$HOME/.local/bin/gpu-passthrough-check.sh}"
+
+# gpu_driver_failclosed — 0 when the last gpu-busy.sh answer was a DRIVER-level
+# fail-closed.  Every shape that means "the driver cannot be talked to" arrives
+# here as this ONE reason — nvidia-smi unavailable, "GPU access blocked by the
+# OS", or a signal death all make nvidia-smi exit non-zero, and gpu-busy.sh's
+# foreign-apps branch collapses them into "nvidia-smi-unavailable"
+# (bin/gpu-busy.sh, the fail-closed branch there).  A genuinely busy card
+# produces a different reason (util=, foreign-app pid=, lock:, declared:,
+# cuda-owned-by-another-run) or none, so this cannot fire on it.
+#
+# DELIBERATE BOUNDARY: gpu_busy()'s own fail-closed for a probe that errored
+# outright (a missing or broken gpu-busy.sh) is NOT classified.  That is a fault
+# in our own tooling rather than a driver signal, so asking the passthrough
+# checker about the card would answer a different question — and that path
+# already logs its warning once (see gpu_busy's GPU_BUSY_PROBE_WARNED).
+gpu_driver_failclosed() {
+    [[ "$GPU_BUSY_REASONS" == *nvidia-smi-unavailable* ]]
+}
+
+# gpu_classify_due — 0 when this tick may run the classifier (no hold, an
+# unreadable hold, or an expired one).
+gpu_classify_due() {
+    local until
+    [[ -e "$GPU_CLASSIFY_FILE" ]] || return 0
+    until=$(cat "$GPU_CLASSIFY_FILE" 2>/dev/null || true)
+    [[ "$until" =~ ^[0-9]+$ ]] || return 0
+    (( $(date +%s) >= until ))
+}
+
+# gpu_classify_stamp — start the hold window, so a broken GPU is not probed again
+# on the next tick.
+gpu_classify_stamp() {
+    local until _msg
+    until=$(( $(date +%s) + GPU_CLASSIFY_WINDOW_S ))
+    if ! printf '%s\n' "$until" > "$GPU_CLASSIFY_FILE" 2>/dev/null; then
+        _msg="WARNING: cannot write the GPU classification hold $GPU_CLASSIFY_FILE"
+        _msg+=" — a broken GPU may be re-probed on every tick until it is writable"
+        log "$_msg"
+    fi
+}
+
+# gpu_classify_driver_failclosed — when the gate failed closed for a DRIVER-level
+# reason, say which of the two situations it actually is, at most once per window.
+# Read-only with respect to lanes: it probes and logs, and never starts or stops
+# anything.  The probe's JSON is parsed with the same sed idiom
+# bin/gpu-passthrough-watch.sh uses (the shape is fixed, and a parse miss must not
+# change the busy/free verdict — the verdict is already decided by this point).
+gpu_classify_driver_failclosed() {
+    gpu_driver_failclosed || return 0
+    gpu_classify_due || return 0
+    local _json _rc _state _reason _dxg _crash _win _msg
+    _json=$("$GPU_PASSTHROUGH_CHECK" --json 2>/dev/null); _rc=$?
+    _state=$(printf '%s' "$_json"  | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    _reason=$(printf '%s' "$_json" | sed -n 's/.*"reason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    _dxg=$(printf '%s' "$_json"   | sed -n 's/.*"dxg_failures"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+    _crash=$(printf '%s' "$_json" | sed -n 's/.*"wsl_crashes"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+    _win=$(printf '%s' "$_json"   | sed -n 's/.*"window_min"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+    [[ -n "$_state" ]] || _state="error"
+    [[ -n "$_reason" ]] || _reason="the classifier produced no JSON (rc=$_rc)"
+    case "$_state" in
+        unavailable)
+            _msg="GPU busy driver-level: classified UNAVAILABLE — the CUDA card's passthrough is BROKEN,"
+            _msg+=" not in use (${_reason}; dxg=${_dxg:-?} crash=${_crash:-?} / ${_win:-?}min,"
+            _msg+=" via gpu-passthrough-check.sh)."
+            _msg+=" The lane is down on a DRIVER fault, not on a workload: the Xe lane serves,"
+            _msg+=" and the fix is host-side (wsl --shutdown / GPU driver update)."
+            log "$_msg"
+            ;;
+        ok)
+            _msg="GPU busy driver-level: classified OK — nvidia-smi answers, so the fail-closed"
+            _msg+=" verdict was a transient probe failure and the card is genuinely in use"
+            _msg+=" (${_reason}; dxg=${_dxg:-?} crash=${_crash:-?} / ${_win:-?}min)"
+            log "$_msg"
+            ;;
+        *)
+            _msg="WARNING: GPU busy driver-level and the passthrough classifier could not decide"
+            _msg+=" (state=${_state}, ${_reason}) — the gate's nvidia-smi-unavailable reason is"
+            _msg+=" UNCONFIRMED; the lane stays down until the gate clears"
+            log "$_msg"
+            ;;
+    esac
+    gpu_classify_stamp
+}
+
 bench_lock() { [[ -f "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}" ]]; }
 
 # cuda_suspended — the CUDA lane is held down on purpose (a bench/autotune run is
@@ -495,6 +623,12 @@ if cuda_suspended; then
     strike_reset "$STRIKE_CUDA"
 elif gpu_busy; then
     # GPU in use by foreign workload -> Xe lane serves (Wayne policy)
+    # Before acting on "busy", say WHICH busy this is when the gate failed closed
+    # for a driver-level reason (v3.13): the probe's own reason cannot distinguish
+    # "a workload holds the card" from "the driver is gone", and those need
+    # opposite responses from a human.  Rate-limited inside the helper (one probe
+    # per hold window), and read-only — the stop/start decisions stay here.
+    gpu_classify_driver_failclosed
     if [[ "$cuda_state" == "active" ]]; then
         log "GPU busy — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)${GPU_BUSY_REASONS:+ [probe: $GPU_BUSY_REASONS]}"
         systemctl --user stop "$CUDA_UNIT.service" 2>/dev/null || true

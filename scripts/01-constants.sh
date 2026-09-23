@@ -2,7 +2,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 23
+# Module Version: 24
 # ==============================================================================
 
 # ==============================================================================
@@ -323,6 +323,51 @@ export LLAMA_UBATCH_SIZE="${LLAMA_UBATCH_SIZE:-}"
 export LLAMA_PARALLEL_SLOTS="${LLAMA_PARALLEL_SLOTS:-}"
 # Native llama-server --fit-target margin (MiB). Lower values recover VRAM.
 export LLAMA_FIT_TARGET_MB="${LLAMA_FIT_TARGET_MB:-1024}"
+# Native llama-server --cache-ram (MiB) — the HOST-RAM tier of the prompt cache
+# (llama.cpp's cache_ram_mib; `llama-server --help`: "set the maximum cache size
+# in MiB (default: 8192, -1 - no limit, 0 - disable)").
+#
+# 0 = explicit-disable, and 0 is what every lane launches with.  The problem this
+# records is the DEFAULT, not a behaviour we chose: 8192 MiB is 8 GiB of host RAM
+# advertised per server, and nothing in this repo budgets it.  The box it runs on
+# has 28 GiB (MemTotal 28,740,164 kB) with 7 GiB of swap, and the CUDA lane's own
+# cgroup is MemoryMax=7G (systemd/llama-cuda-llama32-3b-chat.service) — the
+# default alone is larger than the lane's memory cap, so the number has to be one
+# this box can pay for.
+#
+# The number that should REPLACE 0 is not yet known: it waits on the investigator
+# card KVCACHE-PROMPT-CACHE-BUDGET-001 item 1 (measure the host-RAM budget a lane
+# may advertise).  Until that lands, 0 is the only defensible value — inventing a
+# figure here would be a second guess stacked on the unbudgeted default.  When it
+# lands, change this default and the lane units' literal `--cache-ram` argument in
+# the same commit: tests/unit/23-prompt-cache-and-gpu-classify.bats pins the units,
+# the launcher and this value to each other, so a one-sided change fails there.
+#
+# WHAT 0 COSTS (stated, not implied, and MEASURED 2026-09-23 on the CPU build —
+# ctx 2048, --parallel 1, two ~315-token prompts with disjoint prefixes):
+#   * back-to-back identical prompts are UNAFFECTED — 1 prompt token either way,
+#     because that reuse comes from the slot's own KV state, not the prompt cache;
+#   * when a DIFFERENT conversation takes the slot and the first one returns, the
+#     prefix is re-processed: 292 prompt tokens / 7.2 s at --cache-ram 0 against
+#     1 token / 0.1 s at 8192.  That is the user-visible cost — several agents
+#     alternating their own system prompts through one lane is exactly this case.
+#   * --cache-idle-slots (default enabled) requires cache-ram, so idle-slot state is
+#     not parked either.
+# So the trade is real and it is paid on prefix switching, not on every request.
+#
+# THE BENCHES DELIBERATELY DO NOT SET IT.  scripts/autotune-model.sh and
+# scripts/spec_dec_crossover.sh launch servers to MEASURE, and their figures are
+# what the registry certifies; changing what a bench server caches would change
+# what the certified number means, which is a measurement decision (a card), not
+# this one.
+#
+# --slot-save-path (persist slot KV state to disk) is deliberately NOT set
+# anywhere, and that absence is a recorded decision — see the launch site,
+# scripts/11e-llm-model.sh::__model_use_build_command.
+#
+# REF: "The KV Cache Tax: Why Inference Servers Run Out of Memory Before Compute"
+#      (Ibrahim, TDS, 2026-09-16) — https://towardsdatascience.com/the-kv-cache-tax-why-inference-servers-run-out-of-memory-before-compute/
+export LLAMA_CACHE_RAM_MB="${LLAMA_CACHE_RAM_MB:-0}"
 # Memory-map mode for llama-server launch:
 #   auto (default): enable --no-mmap for MoE / low-VRAM pressure / WSL
 #   on            : always enable --no-mmap
