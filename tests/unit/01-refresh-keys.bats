@@ -492,3 +492,48 @@ CFG
     [ "$status" -eq 0 ]
     [[ "$output" == *"restarted to pick up refreshed env"* ]]
 }
+
+# --- the GitHub CLI credential surface (2026-09-23) -------------------------
+# gh prefers GH_TOKEN/GITHUB_TOKEN over any stored credential; with no token in
+# its environment it asks the system credential store, and that ask is what
+# activates gnome-keyring (creating the default keyring behind a prompt when
+# there is none). These cases pin the report that now says so at refresh time.
+
+@test "oc-refresh-keys names the gh credential surface when gh's login is store-backed" {
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=bridged-gh-token'"
+    mkdir -p "$HOME/.config/gh"
+    # A user with NO plaintext oauth_token: gh keeps the credential in the system
+    # credential store, which is the fall-through that prompts.
+    cat > "$HOME/.config/gh/hosts.yml" <<'HOSTS'
+github.com:
+    user: someone
+HOSTS
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"GitHub CLI"* ]]
+    [[ "$output" == *"bridge cache"* ]]
+    [[ "$output" == *"activates gnome-keyring"* ]]
+}
+
+@test "oc-refresh-keys reports no credential-store dependency when gh holds a plaintext token" {
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=bridged-gh-token'"
+    mkdir -p "$HOME/.config/gh"
+    printf 'github.com:\n    user: someone\n    oauth_token: plaintext-token\n' \
+        > "$HOME/.config/gh/hosts.yml"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"gh needs no stored credential"* ]]
+    [[ "$output" != *"activates gnome-keyring"* ]]
+}
+
+@test "oc-refresh-keys warns when GH_TOKEN is on no env surface at all" {
+    # The bridge returns no GH_TOKEN, the (mocked) manager env is empty and HOME
+    # is the sandbox, so every surface the report checks is absent.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'OTHER_API_KEY=not-a-gh-token'"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NO env surface"* ]]
+}

@@ -59,9 +59,12 @@ to prevent command injection.
 
 **How it works:**
 
-1. On shell start, `__bridge_windows_api_keys()` calls `pwsh.exe` (with 5s
-   timeout) to read Windows User environment variables.
-2. It filters for variables matching the regex `API[_-]?KEY|TOKEN`.
+1. On shell start, `__bridge_windows_api_keys()` calls `pwsh.exe` (with 20s
+   timeout — a cold PowerShell start plus the User-env enumeration measures
+   3-10s, and the earlier 5s cap silently truncated the variable set).
+2. It filters for variables whose NAME is credential-shaped: `TOKEN`,
+   `API_KEY`/`API-KEY`, `PASSWORD`, a `*_KEY`/`*_SECRET` suffix, `*_CLIENT_ID`,
+   or a bare `*_API` (case-insensitive).
 3. Matching key-value pairs are written to `/dev/shm/tac_win_api_keys` as
    `export KEY=VALUE` lines (`chmod 600`, tmpfs — never hits disk).
 4. The cache file is `source`d into the shell environment.
@@ -95,6 +98,34 @@ appearing in the manager env. The trigger is now the value hash **or** the injec
 name set, and the set that was pushed is recorded in
 `/dev/shm/tac_win_api_keys.resolved` beside the hash — so removing a SecretRef
 stops re-injecting that name instead of leaving it in the manager env forever.
+
+### GitHub CLI Credentials
+
+`gh` prefers `GH_TOKEN`/`GITHUB_TOKEN` over any stored credential, and says so
+itself: "Setting this avoids being prompted to authenticate and takes precedence
+over previously stored credentials" (`gh help environment`). Verified from both
+sides on 2026-09-23 — with the token in the environment, `gh auth token
+--hostname github.com` returns it and **never** contacts
+`org.freedesktop.secrets`; with the token absent, the same call activates the
+Secret Service, and where no default keyring exists that creates one **behind a
+password prompt**. That is what the 10:52:57 prompt was: the ChatGPT/Codex VS
+Code extension's GitHub-media path runs `gh auth token --hostname github.com`
+from an environment carrying no token.
+
+The window this exposed is a caller that inherits neither a bridged shell nor the
+systemd user manager, so the token is now delivered on the one surface every
+caller passes through — PATH. `bin/gh` (installed to `~/.local/bin/gh`, ahead of
+linuxbrew's `gh`) resolves the real binary past itself and injects the bridged
+token only when the caller has neither variable. An explicit token is never
+overridden; a cache that is present but unusable (mode != 600, or carrying no
+token) is reported on stderr rather than passing silently; and a box with no
+cache at all — CI — runs `gh` unchanged and says nothing, because no decision was
+taken there. `oc-refresh-keys` additionally states the surface it produced: which
+of bridge cache / systemd user env / `environment.d` carry `GH_TOKEN`, and
+whether gh's stored login is credential-store backed (`hosts.yml` holding a user
+but no plaintext `oauth_token`), i.e. whether an env-less `gh` would reach the
+keyring. It reads files and the manager environment and never runs `gh`, so it
+cannot prompt.
 
 ### SecretRef Sync
 

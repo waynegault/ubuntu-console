@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+# ==============================================================================
+# bin/gh — GitHub CLI shim: hand `gh` the bridged token when the caller has none.
+# ==============================================================================
+# Installed to ~/.local/bin/gh (install.sh links every file in bin/), which
+# precedes /home/linuxbrew/.linuxbrew/bin on this box's PATH — so a PATH-resolved
+# `gh` runs this.
+#
+# WHY IT EXISTS
+# -------------
+# gh prefers GH_TOKEN/GITHUB_TOKEN over any stored credential: "Setting this
+# avoids being prompted to authenticate and takes precedence over previously
+# stored credentials" (gh help environment).  Measured 2026-09-23: with the token
+# in the environment, `gh auth token --hostname github.com` returns it and never
+# contacts org.freedesktop.secrets; with the token ABSENT the same call activates
+# the Secret Service, and where no default keyring exists that creates one behind
+# a password prompt.  That is the 10:52:57 prompt: the ChatGPT/Codex VS Code
+# extension's GitHub-media path ran `gh auth token --hostname github.com` from an
+# environment that carried no token.
+#
+# The bridged token is already on the console's own env surfaces (bridged shells
+# via 13-init.sh, the systemd user manager via environment.d + set-environment).
+# Those do not reach a caller that inherits neither — an editor or agent that
+# spawns gh with a controlled environment.  This shim closes that at the one
+# place every caller passes through: PATH.
+#
+# CONTRACT
+# --------
+#   * An explicit GH_TOKEN or GITHUB_TOKEN is never overridden.
+#   * No bridge cache at all (a box without the Windows bridge, e.g. CI) -> gh is
+#     exec'd unchanged and nothing is printed: no decision was taken.
+#   * A bridge cache present but unusable (mode != 600, or carrying no token) is
+#     REPORTED on stderr before gh runs.  An anomaly is never silent.
+#   * The token is never printed and never written anywhere.
+# ==============================================================================
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
+set -euo pipefail
+
+# ── The real gh: the first PATH entry that is not this file ──────────────────
+# Compared by realpath, so this holds whether the installed path is a symlink
+# into the repo (what install.sh creates) or a copy of this file.
+_gh_self="$(readlink -f -- "${BASH_SOURCE[0]}")"
+_gh_real=""
+while IFS= read -r _gh_dir
+do
+    if [[ -z "$_gh_dir" ]]
+    then
+        continue
+    fi
+    if [[ ! -x "$_gh_dir/gh" ]]
+    then
+        continue
+    fi
+    if [[ "$(readlink -f -- "$_gh_dir/gh")" == "$_gh_self" ]]
+    then
+        continue
+    fi
+    _gh_real="$_gh_dir/gh"
+    break
+done < <(printf '%s\n' "${PATH//:/$'\n'}")
+if [[ -z "$_gh_real" ]]
+then
+    printf 'gh: %s is the only gh on PATH — refusing to exec itself\n' "$_gh_self" >&2
+    # 127 is the shell's own "command not found": there is genuinely no gh to run.
+    exit 127
+fi
+unset _gh_dir
+
+# ── Inject the bridged token, but only into an environment that has none ─────
+if [[ -z "${GH_TOKEN:-}" && -z "${GITHUB_TOKEN:-}" ]]
+then
+    _gh_cache="${TAC_CACHE_DIR:-/dev/shm}/tac_win_api_keys"
+    if [[ -f "$_gh_cache" ]]
+    then
+        _gh_perms="$(stat -c '%a' "$_gh_cache")"
+        if [[ "$_gh_perms" != "600" ]]
+        then
+            printf 'gh: refusing bridge cache %s (mode %s, expected 600) — continuing without a token\n' \
+                "$_gh_cache" "$_gh_perms" >&2
+        else
+            # Take ONLY the token.  The cache is the same 0600 store every bridged
+            # shell sources, but it also carries ~45 unrelated secrets
+            # (SSH_PASSWORD, PRINTER_PASSWORD, …) that gh has no use for — the
+            # 2026-09-13 narrowing in __so_push_api_keys refused the same widening.
+            # Each line is `export NAME=<shell-quoted value>` as written by
+            # __bridge_windows_api_keys (printf %q, names validated, newlines
+            # rejected), so evaluating one line is what sourcing it would do.
+            for _gh_name in GH_TOKEN GITHUB_TOKEN
+            do
+                if _gh_line="$(grep -m1 "^export ${_gh_name}=" "$_gh_cache")"
+                then
+                    eval "$_gh_line"
+                fi
+            done
+            unset _gh_line _gh_name
+            if [[ -z "${GH_TOKEN:-}" && -z "${GITHUB_TOKEN:-}" ]]
+            then
+                printf 'gh: bridge cache %s carries no GH_TOKEN/GITHUB_TOKEN — continuing without a token\n' \
+                    "$_gh_cache" >&2
+            fi
+        fi
+    fi
+fi
+
+exec "$_gh_real" "$@"
+# end of file

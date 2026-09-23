@@ -134,7 +134,7 @@ up             # Run 20-step system maintenance
 | `ocstat` | OpenClaw | Full status |
 | `ocgs` | OpenClaw | Deep gateway status |
 | `ockeys` | OpenClaw | Show API key visibility |
-| `oc-refresh-keys` | OpenClaw | Re-import Windows API keys; sync OC SecretRefs |
+| `oc-refresh-keys` | OpenClaw | Re-import Windows API keys; sync OC SecretRefs; report the `gh` credential surface |
 | `oc-backup` | OpenClaw | Snapshot config + scripts + systemd units to ZIP |
 | `oc-restore` | OpenClaw | Restore from ZIP (`--dry-run` supported) |
 | `oc-diag` | OpenClaw | 5-point diagnostic |
@@ -388,7 +388,7 @@ OpenClaw is a Node.js AI agent framework running as a systemd user service on po
 ```text
 Windows 11 Pro
 └── PowerShell 7 (pwsh.exe) — API keys in Windows User env
-    │  pwsh.exe bridge (5s timeout)
+    │  pwsh.exe bridge (20s timeout)
     ▼
 WSL2 Ubuntu 24.04
 └── ~/.bashrc → tactical-console.bashrc → 09-openclaw.sh
@@ -400,9 +400,18 @@ WSL2 Ubuntu 24.04
 
 ### API Key Bridge
 
-On shell start, `__bridge_windows_api_keys()` calls `pwsh.exe` (5s timeout) to read Windows environment variables matching `API[_-]?KEY|TOKEN`. Results are written to `/dev/shm/tac_win_api_keys` (`chmod 600`, tmpfs — never hits disk). Cache TTL: 3600s. Force refresh with `oc-refresh-keys`.
+On shell start, `__bridge_windows_api_keys()` calls `pwsh.exe` (20s timeout — a cold PowerShell start plus the User-env enumeration measures 3-10s, and the earlier 5s cap silently returned a truncated variable set instead of failing) to read Windows **User** environment variables whose names are credential-shaped: `TOKEN`, `API_KEY`/`API-KEY`, `PASSWORD`, a `*_KEY`/`*_SECRET` suffix, `*_CLIENT_ID`, or a bare `*_API` (case-insensitive). Results are written to `/dev/shm/tac_win_api_keys` (`chmod 600`, tmpfs — never hits disk). Cache TTL: 3600s. Force refresh with `oc-refresh-keys`.
 
 For the OpenClaw gateway (systemd, not a shell child), `so()` reads the cache and injects keys via `systemctl --user set-environment` before starting the service — narrowed (2026-09-13) to only the vars the gateway resolves as SecretRefs (config + agent auth profiles), not the whole bridged set.
+
+#### GitHub CLI credentials
+
+`gh` prefers `GH_TOKEN`/`GITHUB_TOKEN` over any stored credential — "Setting this avoids being prompted to authenticate and takes precedence over previously stored credentials" (`gh help environment`). Measured 2026-09-23: with the token in the environment, `gh auth token --hostname github.com` returns it **without ever contacting `org.freedesktop.secrets`**; with the token absent, the same call activates the Secret Service, and where no default keyring exists that creates one **behind a password prompt**.
+
+The bridged token already reaches bridged shells (`13-init.sh`) and the systemd user manager (`environment.d` at boot, `set-environment` at runtime). What it did not reach is a caller that inherits neither — an editor or agent that spawns `gh` with a controlled environment. That is how the 2026-09-23 10:52:57 prompt happened: the ChatGPT/Codex VS Code extension's GitHub-media path runs `gh auth token --hostname github.com`. Two things cover it now:
+
+- **`~/.local/bin/gh`** — `bin/gh` in this repo, installed by `install.sh` like every other `bin/` file, and it precedes linuxbrew's `gh` on PATH. It resolves the real `gh` past itself, injects the bridged token **only** when the caller has neither variable (an explicit token is never overridden), and reports on stderr a bridge cache that is not mode 600 or carries no token. With no cache at all it runs `gh` unchanged and silently — the un-bridged case, where no decision was taken. The token is never printed and never written.
+- **`oc-refresh-keys` states the surface it produced**: which of the three surfaces carry `GH_TOKEN`, and whether `gh`'s own login is credential-store backed (`hosts.yml` holding a user but no plaintext `oauth_token`) — i.e. whether an env-less `gh` would reach the keyring. It reads files and the manager environment and never runs `gh`, so it cannot prompt.
 
 ### Gateway Lifecycle
 
@@ -412,7 +421,7 @@ For the OpenClaw gateway (systemd, not a shell child), `so()` reads the cache an
 | `xo` | Stop gateway only (use `oc restart` to restart from an AI agent context) |
 | `oc-restart` | Native restart: `openclaw gateway restart` |
 | `oc-health` | Deep probe: checks port 18789, calls `openclaw health --json` |
-| `oc-refresh-keys` | Re-bridge Windows API keys + sync OC SecretRefs |
+| `oc-refresh-keys` | Re-bridge Windows API keys + sync OC SecretRefs, then report the `gh` credential surface |
 
 ### Backup & Restore
 
@@ -489,7 +498,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1268 total tests: 853 BATS + 415 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1279 total tests: 864 BATS + 415 Python).
 
 ### Running Tests
 
@@ -531,10 +540,10 @@ Counts are enforced by `tools/docs-sync-check.sh`; per-case and whole-file timeo
 | Full behavioural | `tactical-console.bats` | 387 | 900s | 2700s |
 | Fast static analysis | `tactical-console-fast.bats` | 63 | 180s | 900s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
-| Unit | `tests/unit/*.bats` | 259 | 120s | 600s |
+| Unit | `tests/unit/*.bats` | 270 | 120s | 600s |
 | Integration | `tests/integration/*.bats` | 142 | 300s | 1200s |
 | Python | `tests/test_*.py` | 415 | 1000s (`pytest.ini`) | — |
-| **Total** | | **1268** | | |
+| **Total** | | **1279** | | |
 
 **Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and all eight markers the BATS bridge applies dynamically are registered there. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 387 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
 
@@ -1060,8 +1069,17 @@ where it was last present.)
 ├── bin/
 │   ├── tac-exec                       # Bootstrap: source env.sh + exec "$@"
 │   ├── tac_hostmetrics.sh             # Host CPU + iGPU + NVIDIA dGPU load/engines
+│   ├── gh                             # GitHub CLI shim: bridged GH_TOKEN, no keyring fall-through
 │   ├── llama-watchdog.sh              # Watchdog: auto-restart with -ngl 999, --prio 2
+│   ├── llama-watchdog-guard.sh        # Supervision of the supervisor (GPU-flock holder)
+│   ├── llama-gpu-clear.sh             # ExecStartPre: clear VRAM + kill crash orphans
+│   ├── gpu-busy.sh                    # Proves the CUDA card is executing work, not just named
+│   ├── gpu-watch-selfcheck.sh         # Is the GPU-passthrough watch automation running?
+│   ├── llama-cuda-server              # CUDA lane launcher (which build serves the card)
+│   ├── llama-xe-server                # Xe lane launcher (fleet + embed)
+│   ├── llama-cpu-server               # CPU tier launcher
 │   ├── bench-timeout-runner.sh        # Bench subprocess runner with PID tracking + cleanup
+│   ├── interview-benchmark.sh         # Rook interview: decode/prefill throughput per model
 │   ├── oc-gpu-status                  # Thin wrapper → tac-exec gpu-status
 │   ├── oc-model-status                # Thin wrapper → tac-exec ocms
 │   ├── oc-model-switch                # Thin wrapper → tac-exec serve
@@ -1136,7 +1154,7 @@ where it was last present.)
 │   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
 │   ├── test_models.py                 # Pydantic model tests (55 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (259 tests: 11+12+8+5+5+6+20+4+8+7+28+19+7+2+1+5+4+2+3+3+17+16+41+19+6)
+│   ├── unit/                          # BATS unit tests (270 tests: 14+12+8+5+5+6+20+4+8+7+28+19+7+2+1+5+4+2+3+3+17+16+41+19+6+8)
 │   └── integration/                   # BATS integration tests (142 tests: 14+43+10+44+3+28)
 └── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)
@@ -1154,7 +1172,7 @@ where it was last present.)
 | System Path | Source |
 |---|---|
 | `~/.bashrc` | Thin loader (not in repo — sources `tactical-console.bashrc`) |
-| `~/.local/bin/<name>` | Every file in `bin/` — `tac-exec`, `tac_hostmetrics.sh`, `llama-watchdog.sh`, `bench-timeout-runner.sh`, `oc-*` wrappers — **symlinked**, except the four the card launchers and their helpers occupy (`llama-cuda-server`, `llama-xe-server`, `llama-gpu-clear.sh`, `gpu-busy.sh`), which are installed as one-line `exec` shims so the stable path stays real |
+| `~/.local/bin/<name>` | Every file in `bin/` — `tac-exec`, `tac_hostmetrics.sh`, `llama-watchdog.sh`, `bench-timeout-runner.sh`, `oc-*` wrappers — **symlinked**, except the four the card launchers and their helpers occupy (`llama-cuda-server`, `llama-xe-server`, `llama-gpu-clear.sh`, `gpu-busy.sh`), which are installed as one-line `exec` shims so the stable path stays real. `gh` is the one entry here that **shadows a third-party binary**: it precedes linuxbrew's `gh` on PATH and hands it the bridged token (see API Key Bridge) |
 | `~/.local/bin/load-vault-env.sh` | `scripts/load-vault-env.sh` |
 | `~/.local/bin/oc-update-enhanced.sh` | `scripts/oc-update-enhanced.sh` |
 | `~/.config/systemd/user/<unit>` | Every file in `systemd/`, plus **relative** legacy-name symlinks (`llama-server.service` → `llama-xe-minicpm5-1b-chat.service`, …). Relative on purpose: an absolute alias makes systemd load a second unit for the same service |
@@ -1323,7 +1341,7 @@ File has been modified. Run `oc-trust-sync` to record the new hash as trusted.
 Delete `~/.openclaw/maintenance_cooldowns.txt` to force all steps to re-run.
 
 **Shell starts slowly**
-The only slow startup operation is `__bridge_windows_api_keys` (5s timeout, runs once per hour). If `pwsh.exe` is unreachable, the timeout prevents a hang.
+The only slow startup operation is `__bridge_windows_api_keys` (20s timeout, runs once per hour). If `pwsh.exe` is unreachable, the timeout prevents a hang.
 
 ---
 
@@ -1391,7 +1409,7 @@ Each maintenance step has a cooldown (APT index: 24h, APT upgrade and others:
 ### Shell starts slowly
 
 The only potentially slow operation at startup is `__bridge_windows_api_keys`
-(calls `pwsh.exe` with 5s timeout). The key cache lasts 1 hour, so this only
+(calls `pwsh.exe` with 20s timeout). The key cache lasts 1 hour, so this only
 runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
 
 ## CI Status

@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 27
+# Module Version: 28
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -1104,6 +1104,73 @@ function oc-export-keys-nas() {
 }
 
 # ---------------------------------------------------------------------------
+# __oc_report_gh_credential_surface — state where `gh` gets its token, and
+# whether a `gh` call carrying none would reach the system keyring.
+#
+# `gh` prefers GH_TOKEN/GITHUB_TOKEN over any stored credential, and that
+# precedence is absolute: with the token present, `gh auth token --hostname
+# github.com` never contacts org.freedesktop.secrets; with it absent, the same
+# call ACTIVATES the Secret Service, which creates the default keyring behind a
+# password prompt when there is none. Measured 2026-09-23, reproducing the
+# 10:52:57 prompt (the ChatGPT/Codex VS Code extension's GitHub-media path runs
+# `gh auth token --hostname github.com` from an environment carrying no token).
+# Nothing here reported the state that made it possible, which is why this
+# witness exists. It reads files and the manager env, never runs `gh`, so it
+# cannot prompt. Full record: README "GitHub CLI credentials", docs/openclaw.md.
+# Related: bin/gh (installed as ~/.local/bin/gh) closes the PATH gap.
+# ---------------------------------------------------------------------------
+function __oc_report_gh_credential_surface() {
+    local _cache="$1"
+    local _cfg_dir="${GH_CONFIG_DIR:-$HOME/.config/gh}"
+    local _env_dropin="$HOME/.config/environment.d/90-openclaw.conf"
+    local _surfaces=""
+
+    if grep -q '^export GH_TOKEN=' "$_cache"
+    then
+        _surfaces="bridge cache"
+    fi
+    # A refresh also runs where there is no user manager at all (agent and CI
+    # shells), so a failing systemctl is the honest read here: "no manager env in
+    # this context" is a fact this report states, not a defect to hide.
+    # swallow-ok: systemctl is absent in agent/CI shells, and the surface set is reported either way
+    if systemctl --user show-environment 2>/dev/null | grep -q '^GH_TOKEN='
+    then
+        _surfaces="${_surfaces:+$_surfaces + }systemd user env"
+    fi
+    if [[ -f "$_env_dropin" ]] && grep -q '^GH_TOKEN=' "$_env_dropin"
+    then
+        _surfaces="${_surfaces:+$_surfaces + }environment.d"
+    fi
+
+    # gh's own login: a user entry WITHOUT a plaintext token means the credential
+    # lives in the system credential store, so a gh invoked with no token in its
+    # environment asks the store — and that ask is what creates the keyring.
+    local _store_backed="no"
+    if [[ -f "$_cfg_dir/hosts.yml" ]] \
+        && grep -q '^[[:space:]]*user:' "$_cfg_dir/hosts.yml" \
+        && ! grep -q '^[[:space:]]*oauth_token:' "$_cfg_dir/hosts.yml"
+    then
+        _store_backed="yes"
+    fi
+
+    local _msg _colour
+    if [[ -z "$_surfaces" ]]
+    then
+        _msg="GH_TOKEN on NO env surface — every 'gh' call reaches the credential store"
+        _colour="$C_Warning"
+    elif [[ "$_store_backed" == "yes" ]]
+    then
+        _msg="GH_TOKEN on: $_surfaces — gh's login is credential-store backed"
+        _msg+=", so a 'gh' call without the token activates gnome-keyring"
+        _colour="$C_Warning"
+    else
+        _msg="GH_TOKEN on: $_surfaces — gh needs no stored credential"
+        _colour="$C_Success"
+    fi
+    __tac_info "GitHub CLI" "[$_msg]" "$_colour"
+}
+
+# ---------------------------------------------------------------------------
 function oc-refresh-keys() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
     local count=0
@@ -1211,6 +1278,13 @@ function oc-refresh-keys() {
     #    Without this, `openclaw doctor` reports "secret reference was not
     #    found" because the gateway process lacks the env vars.
     __oc_sync_gateway_env_file "$cache"
+
+    # 4b. State the GitHub CLI's credential surface. This is a report, not a fix:
+    #     it names which surfaces carry GH_TOKEN and whether a `gh` invoked
+    #     WITHOUT it would fall through to the system credential store (and so
+    #     activate gnome-keyring) — the state that produced the 2026-09-23
+    #     10:52:57 keyring prompt, which nothing here was surfacing.
+    __oc_report_gh_credential_surface "$cache"
 
     # 5. Decide whether the gateway needs a restart (its env changed). The
     #    restart is DEFERRED to step 7, after the NAS mirror: a gateway-hosted
