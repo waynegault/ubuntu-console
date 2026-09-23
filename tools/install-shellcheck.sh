@@ -18,7 +18,15 @@
 #        tools/install-shellcheck.sh -p "$HOME/.local/bin"
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-09-23): skip the download when the pin is already installed at the
+#   target prefix.  CI runs this before every shell job on a SELF-HOSTED runner
+#   where a previous job already put the pinned binary in place, so re-downloading
+#   made each job depend on GitHub egress it did not need: measured 2026-09-23, a
+#   ~46 s egress outage failed the Fast Test Suite with `curl: (28) Failed to
+#   connect to github.com port 443 ... Timeout was reached` while
+#   /usr/local/bin/shellcheck was ALREADY the pin on that runner — the Lint job
+#   reported `version: 0.11.0` from it minutes later.
 VERSION="1.0"
 set -euo pipefail
 
@@ -42,6 +50,25 @@ while getopts ":p:" _opt; do
     esac
 done
 shift $((OPTIND - 1))
+
+# Idempotent, and therefore egress-free when the pin is already in place.  The
+# contract this script exists to keep is "the PIN is installed at <prefix>", not
+# "a tarball was fetched", so an already-correct binary means there is no work.
+# The check consults the TARGET PREFIX only, never PATH: PATH order is a separate
+# concern this script also guards, and resolving a different copy would defeat it.
+if [[ -x "$prefix/shellcheck" ]]
+then
+    if _have="$("$prefix/shellcheck" --version 2>/dev/null)" \
+       && [[ "$_have" == *"version: ${SHELLCHECK_VERSION#v}"* ]]
+    then
+        echo "shellcheck ${SHELLCHECK_VERSION} already installed at $prefix/shellcheck — nothing to do."
+        exit 0
+    fi
+    # Present but not the pin (or not runnable): install the pin rather than trust
+    # it, because a version skew between lint machines is the exact failure the
+    # pin exists to prevent.  Say so, so this is a stated fallback and not a skip.
+    echo "Installed $prefix/shellcheck is not ${SHELLCHECK_VERSION} (or will not run) — installing the pin."
+fi
 
 tarball="shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
 url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/${tarball}"
