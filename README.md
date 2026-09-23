@@ -992,6 +992,23 @@ completions, WSL loopback check, EXIT traps); the canonical order in
 `14-wsl-extras.sh` and `15-model-recommender.sh`. All other modules can be
 reordered as long as their `@depends` are satisfied.
 
+Each module's header declares its edges, and `tools/check-contracts.sh modules`
+enforces both fields:
+
+- `# @depends:` — **load order only**: these modules must be sourced first. Every
+  target must resolve to a real loaded module (or the literal `none`), and a
+  dependency that loads *after* the dependent, or that closes a cycle, fails the gate.
+- `# @uses:` — **run-time collaborators**: functions this module *calls* rather than
+  needs at source time. Optional (a module with none omits it); order-free, so a
+  `@uses` cycle is legitimate — the §11 group is mutually recursive by design. A
+  target must still resolve to a loaded module, may not be the module itself, and may
+  not also appear in `@depends` (the two fields partition the edges).
+
+The split exists because one field was carrying both relationships: twelve
+`@depends` edges used to name a module that loads *later*, and the load-order claim
+could not be checked honestly while that was true (see `.agents/decisions/` and
+`docs/inspection.md` §9.4.1).
+
 #### Benefits Realised
 
 | Benefit | Detail |

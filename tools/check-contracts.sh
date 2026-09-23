@@ -110,6 +110,16 @@
 # loads AFTER the dependent, 1 strongly-connected component (11a-11f), and
 # docs/inspection.md §9.4.1's "no circular dependencies" claim is false at HEAD.
 #
+# SPLIT 2026-09-23 (card MOD-GRAPH-DECLARATION-001).  Those disagreements were NOT
+# load-order bugs: `@depends` was carrying two relationships at once — "must be
+# sourced first" and "this module calls that one" — and only the first is a
+# load-order claim.  Measured evidence for that: sourcing the library loader in a
+# scrubbed `env -i` gives rc=0 with zero `command not found` and zero `unbound
+# variable`, so none of the twelve forward edges is used AT SOURCE TIME.  The
+# run-time references moved to a new `@uses:` field, tools/contracts-modules-
+# baseline.tsv was deleted, and the load-order claim became both checkable and true.
+# `@depends` now means LOAD ORDER ONLY; `@uses` means "calls at run time".
+#
 # ENFORCED by `modules`:
 #   1. every module in the load order exists, and carries a `# @modular-section:`
 #      annotation block with an `@depends:` field; the block is read from its own
@@ -128,6 +138,12 @@
 #   7. no NEW edge violates the load order, and no NEW declaration names a
 #      non-module.  A cycle is printed with its concrete path; every cycle
 #      necessarily contains a forward edge, so a new cycle can never be silent.
+#   8. `@uses` is OPTIONAL (a module with no run-time collaborators omits it, which
+#      unlike a missing `@depends` is not a defect).  Where present, every target
+#      must resolve to a loaded module, may not be the module itself, and may not
+#      also appear in `@depends` — the fields partition the edges.  It carries NO
+#      order requirement and a `@uses` cycle is legitimate (§11 is mutually
+#      recursive by design), so cycles are computed over `@depends` edges only.
 # REPORTED, never enforced by `modules`: the disagreements recorded in
 # tools/contracts-modules-baseline.tsv (printed in full every run, each with the
 # module and the module it depends on, and with a cycle path when the edge closes
@@ -225,11 +241,16 @@
 #      https://towardsdatascience.com/coding-agents-dont-need-longer-history-they-need-intent-continuity/
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-09-23): `modules` gained the @uses field — run-time collaborators,
+#   order-free and cycle-legal — and the load-order baseline was deleted after the
+#   13 recorded disagreements were relabelled rather than "fixed" (card
+#   MOD-GRAPH-DECLARATION-001).  No behaviour changed: see the measured
+#   clean-source evidence in the modules doc block above.
 # @modular-section: contracts
 # @depends: none (standalone CI helper; needs python3 with PyYAML)
 # @exports: (none — standalone script, not sourced)
-VERSION="3"
+VERSION="4"
 set -euo pipefail
 
 # --version is pure bash: a version query must not depend on the YAML engine.
@@ -1201,6 +1222,27 @@ def declared_depends(repo, module):
     return csv_tokens(raw), raw, None
 
 
+def declared_uses(repo, module):
+    """(tokens, raw, problem) for one module's @uses declaration.
+
+    `@uses` is OPTIONAL, unlike `@depends`: a module with no run-time collaborators
+    simply omits the field, and unlike a missing @depends that is not a defect.
+    The literal `none` is accepted for a module that wants to say so explicitly.
+    """
+    text = read_lines(repo, f"scripts/{module}.sh")
+    if text is None:
+        return None, None, "module file is missing"
+    fields = annotation_fields(text)
+    if fields is None:
+        return None, None, "no @modular-section annotation block"
+    raw = fields.get("uses")
+    if raw is None:
+        return [], None, None
+    if raw.lower().startswith("none"):
+        return [], raw, None
+    return csv_tokens(raw), raw, None
+
+
 def read_baseline(repo, rel):
     """{key: detail} from a `<kind>\\t<key>\\t<detail>` baseline, or {} when absent.
 
@@ -1328,6 +1370,8 @@ def run_modules(repo):
         problems.append(f"  FAIL  <load order>: {finding}")
     violations = []          # (kind, key, message) — recorded-or-new disagreements
     edges = {}
+    use_edges = []           # (module, module) — run-time collaborators, order-free
+    uses_declaring = 0
     for module in sorted(positions, key=positions.get):
         if not os.path.isfile(os.path.join(repo, f"scripts/{module}.sh")):
             problems.append(f"  FAIL  {module}: listed in scripts/_module-list.sh but no "
@@ -1369,6 +1413,41 @@ def run_modules(repo):
                     f"depends on {name}, which loads AFTER it "
                     f"(position {positions[name]} > {positions[module]})"))
         edges[module] = resolved
+
+        # @uses: RUN-TIME collaborators.  This field exists because @depends was
+        # carrying two different relationships at once — "must be sourced first" and
+        # "this module calls that one" — and only the first is a load-order claim.
+        # Measured 2026-09-23: sourcing the library loader in a scrubbed `env -i`
+        # gives rc=0 with zero `command not found` and zero `unbound variable`, so
+        # none of the declared forward edges is used AT SOURCE TIME.  Hence there is
+        # deliberately NO order requirement here and a cycle among @uses edges is
+        # legitimate and is NOT reported as one; the §11 group is mutually recursive
+        # by design.  What IS an error: naming a module that does not load, naming
+        # yourself, or declaring one target in BOTH fields — the two fields
+        # partition the edges, and an edge in both would make the load-order claim
+        # ambiguous again.
+        use_tokens, use_raw, use_problem = declared_uses(repo, module)
+        if use_problem:
+            problems.append(f"  FAIL  {module}: {use_problem} (scripts/{module}.sh)")
+            continue
+        if use_tokens:
+            uses_declaring += 1
+        for token in use_tokens:
+            name, reason = resolve_module(token, positions)
+            if name is None:
+                problems.append(
+                    f"  FAIL  {module}: @uses names '{token}' ({reason}), which is not a "
+                    f"module: declared as '{use_raw}'")
+                continue
+            if name == module:
+                problems.append(f"  FAIL  {module}: @uses names itself")
+                continue
+            if name in resolved:
+                problems.append(
+                    f"  FAIL  {module}: '{name}' is declared in BOTH @depends and @uses — "
+                    f"the fields partition the edges (load order vs run time)")
+                continue
+            use_edges.append((module, name))
 
     # Coverage the other way: a module-shaped file that no loader loads is a
     # module nothing can call, and the load list is exactly what a new module
@@ -1431,6 +1510,7 @@ def run_modules(repo):
     new_count = len(violations) - len(seen_keys)
     summary = (f"{len(positions)} load position(s) ({len(groups)} thin loader(s) expanded) | "
                f"{len(edges)} module(s) with a parsed @depends | {edge_count} declared edge(s) | "
+               f"{len(use_edges)} @uses edge(s) across {uses_declaring} module(s) | "
                f"disagreements: {len(seen_keys)} recorded, {new_count} new | "
                f"{len(cycles)} cycle(s) reported (one per strongly-connected component)")
     if problems:
@@ -1444,10 +1524,15 @@ def run_modules(repo):
     print("  Enforced: every @depends target resolves to a real loaded module (or is the")
     print("  literal `none`), no module depends on itself, every @exports name is defined in")
     print("  its load unit, every module-shaped file is loaded by some loader, and no NEW")
-    print("  edge violates the load order or closes a cycle. Reported, not enforced: the")
-    print("  disagreements already recorded in tools/contracts-modules-baseline.tsv (printed")
-    print("  above, each with a cycle path when the edge closes one), and whether a forward")
-    print("  edge is reached at run time (the BATS suites cover behaviour).")
+    print("  edge violates the load order or closes a cycle.  @uses is held to the other")
+    print("  half: every target must resolve to a loaded module, may not be the module")
+    print("  itself, and may not also appear in @depends (the fields partition the edges).")
+    print("  No order requirement applies to @uses and a @uses cycle is legitimate — the")
+    print("  §11 group is mutually recursive by design — so cycles are reported over the")
+    print("  @depends edges only. Reported, not enforced: the disagreements already recorded")
+    print("  in tools/contracts-modules-baseline.tsv (printed above, each with a cycle path")
+    print("  when the edge closes one), and whether a forward edge is reached at run time")
+    print("  (the BATS suites cover behaviour).")
     return EXIT_CLEAN
 
 

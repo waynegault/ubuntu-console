@@ -346,10 +346,9 @@ SH
 @test "contracts: --version prints the tool version" {
     run "$CHECKER" --version
     [[ "$status" -eq 0 ]]
-    # v3 added the read-back witness verification to `state`
-    # (CLAIMED-SUCCESS-WITNESS-001); the string moves with the tool, so a bump is
-    # a deliberate edit here rather than a silent drift.
-    [[ "$output" == "check-contracts 3" ]]
+    # v4 added @uses to `modules` (MOD-GRAPH-DECLARATION-001); the string moves
+    # with the tool, so a bump is a deliberate edit here rather than a silent drift.
+    [[ "$output" == "check-contracts 4" ]]
 }
 
 # end of file

@@ -2,12 +2,12 @@
 # ─── Module: 13-init ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # 13. INITIALIZATION
 # ==============================================================================
 # @modular-section: init
-# @depends: all sections above
+# @depends: constants, design-tokens, openclaw
 # @exports: (none — runs startup side-effects only)
 
 # Create required directories

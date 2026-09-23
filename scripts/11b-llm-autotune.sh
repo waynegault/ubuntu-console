@@ -1,11 +1,12 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 21
+# Module Version: 22
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
-# @depends: constants, llm-model, llm-runtime
+# @depends: constants
+# @uses: llm-model, llm-runtime
 # @exports: __llm_autotune_done_for_model,
 #   __llm_autotune_profile_save,
 #   __llm_autotune_estimate_ctx_start, __llm_autotune_profiles_remap_by_registry,

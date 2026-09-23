@@ -1,12 +1,20 @@
 ---
 name: depends-order-baseline
 date: 2026-09-23
-status: active
+status: superseded
 scope: both
 commands: []
 ---
 
-**Decision:** the 13 `@depends`/load-order disagreements measured on 2026-09-23 are
+**SUPERSEDED 2026-09-23 — see `depends-uses-split.md`.** This record described the
+interim: the 13 disagreements were RECORDED in
+`tools/contracts-modules-baseline.tsv` so that only a NEW one failed. That file has
+now been DELETED and the disagreements were relabelled rather than reordered — the
+run-time collaborators moved out of `@depends` into a new `@uses` field — so the gate
+is hard and no baseline remains. The text below is kept as the record of the interim
+decision and of why the repair was deferred when the checker first landed.
+
+**Decision (interim, superseded):** the 13 `@depends`/load-order disagreements measured on 2026-09-23 are
 RECORDED in `tools/contracts-modules-baseline.tsv` rather than fatal, and
 `tools/check-contracts.sh modules` fails only on a NEW one.
 

@@ -1,12 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================
 # @modular-section: llm-manager
-# @depends: constants, design-tokens, ui-engine, hooks, llm-server, llm-autotune
+# @depends: constants, design-tokens, ui-engine, hooks
+# @uses: llm-server, llm-autotune
 # @exports: __save_model_ctx, __llm_registry_set_field, __require_llm,
 #   __llm_json_escape,
 #   __llm_registry_entry_by_num, __llm_registry_entry_by_file,

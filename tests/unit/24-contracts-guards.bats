@@ -804,13 +804,13 @@ SH
     [[ "$output" == *"only accepted with the \`continuity\` subcommand"* ]]
 }
 
-@test "dispatch: an unknown option exits 2; --version prints 3" {
+@test "dispatch: an unknown option exits 2; --version prints 4" {
     run "$CHECKER" --bogus
     [[ "$status" -eq 2 ]]
     [[ "$output" == *"unknown option '--bogus'"* ]]
     run "$CHECKER" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "check-contracts 3" ]]
+    [[ "$output" == "check-contracts 4" ]]
 }
 
 # end of file

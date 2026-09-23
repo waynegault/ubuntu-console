@@ -1,12 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
 # @modular-section: openclaw
-# @depends: constants, design-tokens, ui-engine, hooks, oc-gateway, llm-runtime
+# @depends: constants, design-tokens, ui-engine, hooks, oc-gateway
+# @uses: llm-runtime
 # @exports: xo, oc, oc-restart, ocstart, ocstop, oc-purge
 
 # Globals assigned by sibling modules at source time, named here instead of

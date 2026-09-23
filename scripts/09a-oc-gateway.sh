@@ -1,13 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
 # @modular-section: openclaw
-# @depends: constants, design-tokens, ui-engine, hooks, llm-registry, llm-server,
-#   llm-gpu, llm-runtime
+# @depends: constants, design-tokens, ui-engine, hooks
+# @uses: llm-registry, llm-server, llm-gpu, llm-runtime
 # @exports: so, __oc_safe_gateway_shutdown
 
 # Globals assigned by sibling modules at source time, named here instead of

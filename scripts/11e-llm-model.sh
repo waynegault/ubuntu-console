@@ -1,13 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 46
+# Module Version: 47
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
 # @modular-section: llm-manager
 # @depends: constants, design-tokens, ui-engine, hooks, llm-registry,
-#   llm-autotune, llm-server, llm-gpu, llm-runtime
+#   llm-autotune, llm-server, llm-gpu
+# @uses: llm-runtime
 # @exports: model, __model_scan, __model_list, __model_default, __model_use,
 #   __model_bench, __model_stop, __model_doctor, __model_recommend,
 #   __model_download
