@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 46
+# Module Version: 49
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -200,7 +200,7 @@ function __up_connectivity() {
         __tac_line "[1/20] Internet Connectivity" "[ESTABLISHED]" "$C_Success"
     else
         __tac_line "[1/20] Internet Connectivity" "[LOST]" "$C_Error"
-        ((_up_err++))
+        _up_err=$(( _up_err + 1 ))
     fi
 }
 
@@ -228,7 +228,7 @@ function __up_apt_update() {
             __set_cooldown "apt_index" "$now"
         else
             __tac_line "[2/20] Linux Update" "[INDEX UPDATE FAILED]" "$C_Warning"
-            ((_up_err++))
+            _up_err=$(( _up_err + 1 ))
         fi
     fi
     if __check_cooldown "apt" "$now" hours_left "$force_mode"
@@ -241,7 +241,7 @@ function __up_apt_update() {
                 __set_cooldown "apt_index" "$now"
             else
                 __tac_line "[2/20] Linux Update" "[INDEX UPDATE FAILED]" "$C_Warning"
-                ((_up_err++))
+                _up_err=$(( _up_err + 1 ))
             fi
         fi
         # Check for upgradable packages first
@@ -252,7 +252,7 @@ function __up_apt_update() {
         if ! sudo apt upgrade --dry-run -y --no-install-recommends >/dev/null 2>&1
         then
             __tac_line "[2/20] Linux Update" "[DRY-RUN FAILED]" "$C_Warning"
-            ((_up_err++))
+            _up_err=$(( _up_err + 1 ))
         else
             sudo apt upgrade -y --no-install-recommends >/dev/null 2>&1
             local apt_rc=$?
@@ -271,7 +271,7 @@ function __up_apt_update() {
                 (( apt_did_update == 1 )) && __set_cooldown "apt_index" "$now"
             else
                 __tac_line "[2/20] Linux Update" "[FAILED]" "$C_Error"
-                ((_up_err++))
+                _up_err=$(( _up_err + 1 ))
             fi
         fi
     else
@@ -483,7 +483,7 @@ function __up_npm_cargo() {
             __set_cooldown "npm_cargo" "$now"
         elif (( pkg_err == 1 ))
         then
-            ((_up_err++))
+            _up_err=$(( _up_err + 1 ))
         fi
     else
         __tac_line "[3/20] NPM Packages" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
@@ -584,10 +584,10 @@ function __up_openclaw_doctor() {
             elif (( doc_rc == 124 ))
             then
                 __tac_line "[6/20] OpenClaw Framework" "[TIMED OUT]" "$C_Warning"
-                ((_up_err++))
+                _up_err=$(( _up_err + 1 ))
             else
                 __tac_line "[6/20] OpenClaw Framework" "[ISSUES FOUND - run oc doc-fix]" "$C_Warning"
-                ((_up_err++))
+                _up_err=$(( _up_err + 1 ))
             fi
             __set_cooldown "openclaw" "$now"
         else
@@ -839,7 +839,7 @@ function __up_oc_plugins() {
                         fi
                     else
                         __tac_line "[10/20] Post-Update Drift" "[FIX FAILED - run post-update-drift-check.sh --fix]" "$C_Warning"
-                        ((_up_err++))
+                        _up_err=$(( _up_err + 1 ))
                     fi
                 fi
             else
@@ -914,7 +914,7 @@ function __up_python_venv() {
                     __tac_line "[11/20] Python Venv ($venv_name)" "[UPDATED]" "$C_Success"
                 else
                     __tac_line "[11/20] Python Venv ($venv_name)" "[UPGRADE FAILED]" "$C_Warning"
-                    ((_up_err++))
+                    _up_err=$(( _up_err + 1 ))
                 fi
             else
                 __tac_line "[11/20] Python Venv ($venv_name)" "[ALREADY UP TO DATE]" "$C_Success"
@@ -958,7 +958,7 @@ function __up_python_fleet() {
             __set_cooldown "pyfleet" "$now"
         else
             __tac_line "[12/20] Python Fleet" "[NO VERSIONS DETECTED]" "$C_Warning"
-            ((_up_err++))
+            _up_err=$(( _up_err + 1 ))
         fi
     else
         __tac_line "[12/20] Python Fleet" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
@@ -1000,7 +1000,7 @@ function __up_gpu_status() {
         __tac_line "[13/20] GPU Status" "[READY]" "$C_Success"
     else
         __tac_line "[13/20] GPU Status" "[OFFLINE OR ERROR]" "$C_Warning"
-        ((_up_err++))
+        _up_err=$(( _up_err + 1 ))
     fi
 }
 
@@ -1044,7 +1044,7 @@ function __up_disk_audit() {
         then
             __tac_line "[15/20] Disk: $mount" "[${pct} USED - LOW SPACE]" "$C_Error"
             disk_warn=1
-            ((_up_err++))
+            _up_err=$(( _up_err + 1 ))
         fi
     done < <(df -h --output=pcent,target 2>/dev/null \
         | tail -n +2 | grep -v '/snap/' \
@@ -1212,7 +1212,7 @@ function __up_docs_sync() {
             __tac_line "[18/20] Docs Sync" "[OK]" "$C_Success"
         else
             __tac_line "[18/20] Docs Sync" "[DRIFT DETECTED]" "$C_Warning"
-            ((_up_err++))
+            _up_err=$(( _up_err + 1 ))
         fi
         __set_cooldown "docs_sync" "$now"
     else
@@ -1223,26 +1223,76 @@ function __up_docs_sync() {
 # ---------------------------------------------------------------------------
 # __up_docker_prune — [19/20] Prune unused Docker resources.
 # No cooldown. Cleans containers, images, volumes, and build cache.
+#
+# THREE OUTCOMES, reported apart, because one guard used to collapse them into a
+# green "[CLEAN]": no client, client present but Docker unreachable, and a prune
+# that actually ran.  Measured 2026-09-23: /usr/bin/docker is a symlink into
+# /mnt/wsl/docker-desktop/cli-tools/…, so when that mount is stale EVERY invocation
+# fails with `Input/output error` (rc 126) — while `command -v docker` still
+# succeeds, which is how the old step printed a success colour for a prune that
+# never ran.  A daemon that is merely not up produces the same empty output by a
+# different route ("failed to connect to the docker API at unix:///var/run/docker.sock"),
+# so the probe's own first line is reported rather than a guessed reason.
 # ---------------------------------------------------------------------------
 function __up_docker_prune() {
     local now="$1" force_mode="$2"
     local -n _up_err="$3"
 
     # [19/20] Docker Prune — clean unused containers, images, and build cache.
-    if command -v docker >/dev/null 2>&1
+    if ! command -v docker >/dev/null 2>&1
     then
-        local docker_freed
-        docker_freed=$(docker system prune -f --volumes 2>&1 \
-            | grep "Total reclaimed space" \
-            | grep -oP '[\d.]+[MGK]B' || echo "")
-        if [[ -n "$docker_freed" ]]
-        then
-            __tac_line "[19/20] Docker Prune" "[FREED $docker_freed]" "$C_Success"
-        else
-            __tac_line "[19/20] Docker Prune" "[CLEAN]" "$C_Success"
-        fi
-    else
         __tac_line "[19/20] Docker Prune" "[SKIP - Docker not installed]" "$C_Dim"
+        return 0
+    fi
+
+    # Reachability READ-BACK before acting: `command -v` proves only that a NAME
+    # exists, and on this box that name is a symlink which cannot be executed.
+    # An exec failure is announced by bash as "<script>: line N: <cmd>: <err>", so
+    # the wrapper is stripped and the Docker part is what gets reported.
+    local docker_probe
+    if ! docker_probe=$(docker info --format '{{.ServerVersion}}' 2>&1)
+    then
+        # Not an error: pruning Docker Desktop's store is not this pipeline's job,
+        # so a daemon that is down is a stated skip — but never a clean one.
+        docker_probe=$(head -1 <<< "$docker_probe" | sed -E 's|^[^:]*: line [0-9]+: ||')
+        __tac_line "[19/20] Docker Prune" \
+            "[SKIP - Docker unreachable: $docker_probe]" "$C_Warning"
+        return 0
+    fi
+
+    # The daemon answered, so a failing prune is a REAL failure — it must never be
+    # reported as "[CLEAN]".  The call sits in an `if` condition on purpose: the
+    # rc has to be readable without a bare non-zero assignment, which is fatal
+    # under errexit (bats runs its cases with it, and the profile may too).
+    local docker_out docker_rc=0
+    if docker_out=$(docker system prune -f --volumes 2>&1)
+    then
+        docker_rc=0
+    else
+        docker_rc=$?
+    fi
+    if (( docker_rc != 0 ))
+    then
+        docker_out=$(head -1 <<< "$docker_out" | sed -E 's|^[^:]*: line [0-9]+: ||')
+        __tac_line "[19/20] Docker Prune" \
+            "[FAILED (rc=$docker_rc): $docker_out]" "$C_Error"
+        _up_err=$(( _up_err + 1 ))
+        return 0
+    fi
+
+    # The reclaim figure is parsed in pure bash: no grep pipeline to trip errexit
+    # when a pattern does not match, and one external command fewer.
+    local docker_freed=""
+    if [[ "$docker_out" =~ Total\ reclaimed\ space:\ ([0-9.]+[MGK]B) ]]
+    then
+        docker_freed="${BASH_REMATCH[1]}"
+    fi
+    if [[ -n "$docker_freed" && "$docker_freed" != "0B" ]]
+    then
+        __tac_line "[19/20] Docker Prune" "[FREED $docker_freed]" "$C_Success"
+    else
+        # No reclaim line, or an explicit 0B: docker's own "nothing to reclaim".
+        __tac_line "[19/20] Docker Prune" "[CLEAN]" "$C_Success"
     fi
 }
 
