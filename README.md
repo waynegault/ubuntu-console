@@ -536,6 +536,8 @@ Counts are enforced by `tools/docs-sync-check.sh`; per-case and whole-file timeo
 | Python | `tests/test_*.py` | 415 | 1000s (`pytest.ini`) | — |
 | **Total** | | **1262** | | |
 
+**Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. The venv's pytest (9.0.3, with `pytest-timeout` 2.4.0) is the one CI installs a pin for; a bare `pytest` resolves a **different, unpinned** install on `PATH`, so a version skew between the two is possible. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and all eight markers the BATS bridge applies dynamically are registered there. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 387 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
+
 ---
 
 ## Architecture & Developer Guide

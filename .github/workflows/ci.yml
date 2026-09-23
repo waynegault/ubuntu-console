@@ -218,7 +218,13 @@ jobs:
           # set flags code that passes under the venv's 0.15.20.  The pin makes the two agree by
           # AGREEMENT rather than by disabling a rule; a future bump should be a deliberate change
           # with its new findings fixed.
-          pip install "ruff==0.15.20" pytest pytest-timeout pydantic networkx
+          # pytest and pytest-timeout are PINNED for the same reason: this box has TWO
+          # pytest installs (the venv's 9.0.3 and an unpinned 9.1.1 on PATH via
+          # ~/.local/bin/pytest), so an unpinned CI install is a third version, and the
+          # harness under test (pytest.ini addopts, tests/conftest.py's BATS flock
+          # serialisation) is version-sensitive.  A bump should be a deliberate change
+          # that moves the venv pin too, so local and CI agree by agreement.
+          pip install "ruff==0.15.20" "pytest==9.0.3" "pytest-timeout==2.4.0" pydantic networkx
           pip install tree-sitter tree-sitter-bash tree-sitter-python
 
       - name: Ruff lint
