@@ -17,9 +17,70 @@ setup() {
     REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
     export CHECKER="$REPO_ROOT/tools/check-contracts.sh"
     export FIXTURE="$BATS_TEST_TMPDIR/fixture"
-    mkdir -p "$FIXTURE/docs/contracts" "$FIXTURE/scripts"
+    mkdir -p "$FIXTURE/docs/contracts" "$FIXTURE/scripts" \
+             "$FIXTURE/skills/tactical-console" "$FIXTURE/.agents/decisions"
     _write_contract
     _write_tree
+    _write_other_guards_inputs
+}
+
+# _write_other_guards_inputs — the minimum the other four subcommands need, so the
+# bare-invocation case below still means "every subcommand ran" and not "state ran
+# and four checks refused".  2026-09-23: modules, derived, continuity and swallows
+# landed in the same dispatcher; a fixture without their inputs makes a bare run
+# exit 2, which is correct behaviour but a useless assertion here.
+_write_other_guards_inputs() {
+    cat > "$FIXTURE/scripts/_module-list.sh" <<'SH'
+#!/usr/bin/env bash
+# Fixture load list.
+function __tac_module_list() {
+    printf '%s\n' \
+        02-fixture
+}
+# end of file
+SH
+    cat > "$FIXTURE/scripts/02-fixture.sh" <<'SH'
+# shellcheck shell=bash
+# @modular-section: fixture
+# @depends: none
+# @exports: fixture-cmd
+
+fixture-cmd() { printf '%s\n' fixture; }
+SH
+    cat > "$FIXTURE/skills/tactical-console/SKILL.md" <<'MD'
+---
+name: tactical-console
+---
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `tac-exec fixture-cmd` | Run fixture | Check fixture |
+MD
+    cat > "$FIXTURE/docs/contracts/command-contracts.yaml" <<'YAML'
+version: 2
+updated: 2026-09-23
+commands:
+  - name: fixture-cmd
+    family: fixture
+    summary: Run the fixture command
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
+    contract:
+      side_effects: []
+YAML
+    cat > "$FIXTURE/.agents/decisions/fixture-decision.md" <<'MD'
+---
+name: fixture-decision
+date: 2026-09-23
+status: active
+scope: both
+commands: [fixture-cmd]
+---
+
+**Decision:** fixture decision.
+MD
 }
 
 # _write_contract — the minimal contract every case starts from: one variable
@@ -262,24 +323,30 @@ SH
     run "$CHECKER" --repo "$FIXTURE"
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"=== Contract drift check (docs/contracts/state-contracts.yaml) ==="* ]]
+    # Since 2026-09-23 the other four names are implemented, so a bare run means all
+    # five: the fixture above carries their minimum inputs for exactly this reason.
+    [[ "$output" == *"check-contracts[modules]: OK"* ]]
+    [[ "$output" == *"check-contracts[derived]: OK"* ]]
+    [[ "$output" == *"check-contracts[continuity]: OK"* ]]
+    [[ "$output" == *"check-contracts[swallows]: OK"* ]]
 }
 
-@test "contracts: an unknown subcommand exits 2 with usage; a reserved one says so" {
+@test "contracts: an unknown subcommand exits 2 with usage" {
     run "$CHECKER" bogus
     [[ "$status" -eq 2 ]]
     [[ "$output" == *"unknown argument 'bogus'"* ]]
     [[ "$output" == *"usage: check-contracts.sh"* ]]
-    # The four reserved names are the other board cards' subcommands: refusing is
-    # correct, silently doing nothing would be a fake pass.
-    run "$CHECKER" swallows
-    [[ "$status" -eq 2 ]]
-    [[ "$output" == *"reserved but NOT implemented here"* ]]
+    # All five names in the reservation table are implemented as of 2026-09-23, so
+    # the mechanism that refused them (exit 2, "reserved but NOT implemented here")
+    # no longer has a name to demonstrate with — RESERVED is empty and a sixth
+    # checker would land there first.  The refusal itself is covered by the case
+    # above, which is what an unimplemented name now is: an unknown argument.
 }
 
 @test "contracts: --version prints the tool version" {
     run "$CHECKER" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "check-contracts 1" ]]
+    [[ "$output" == "check-contracts 2" ]]
 }
 
 # end of file

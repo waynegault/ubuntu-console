@@ -1874,7 +1874,7 @@ Difficult regex, file-descriptor manipulation, or Bash-specific tricks have comm
 
 Inspect @depends annotations
 
-Every module's @depends lists only modules with a lower numeric prefix. No circular dependencies.
+Every module's @depends is validated against the load order by `tools/check-contracts.sh modules` (wired into `tools/lint.sh`), which resolves that order from `scripts/_module-list.sh` through its own `__tac_module_list`. Corrected 2026-09-23, when the check was first run: the sentence that stood here — "Every module's @depends lists only modules with a lower numeric prefix. No circular dependencies." — was **false**. 13 declarations disagree with the order: 12 forward edges (the §9 OpenClaw group declares the §11 modules it calls at run time, and §9 loads first) plus one strongly-connected component, `11a-11b-11c-11d-11e-11f`, which is mutually recursive by design. All 13 are recorded in `tools/contracts-modules-baseline.tsv` and printed on every run; a NEW disagreement fails the gate. Repairing them means moving a run-time collaborator out of `@depends` into an agreed field — a change to the module headers, not to the checker. Separately, that check also found `m` and `h` missing from `scripts/04-aliases.sh`'s @exports while `docs/contracts/command-contracts.yaml` already had a contract for each; fixed there.
 
 9.4.2
 

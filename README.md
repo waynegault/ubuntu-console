@@ -489,7 +489,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1186 total tests: 771 BATS + 415 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1227 total tests: 812 BATS + 415 Python).
 
 ### Running Tests
 
@@ -531,10 +531,10 @@ Counts are enforced by `tools/docs-sync-check.sh`; per-case and whole-file timeo
 | Full behavioural | `tactical-console.bats` | 387 | 900s | 2700s |
 | Fast static analysis | `tactical-console-fast.bats` | 63 | 180s | 900s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
-| Unit | `tests/unit/*.bats` | 177 | 120s | 600s |
+| Unit | `tests/unit/*.bats` | 218 | 120s | 600s |
 | Integration | `tests/integration/*.bats` | 142 | 300s | 1200s |
 | Python | `tests/test_*.py` | 415 | 1000s (`pytest.ini`) | — |
-| **Total** | | **1186** | | |
+| **Total** | | **1227** | | |
 
 ---
 
@@ -593,7 +593,7 @@ line counts because they drift.
 |---|---|
 | `tools/capture-golden-fixtures.sh` | Snapshot selected command output for PowerShell parity checks |
 | `tools/check-agent-use.sh` | Agent-usage regression check (CI via fixtures; live `/dev/shm` on demand) |
-| `tools/check-contracts.sh` | Contract-drift guard: enforces `docs/contracts/state-contracts.yaml` (subcommand dispatcher — `state` today) |
+| `tools/check-contracts.sh` | Contract-drift guard: five subcommands — `state`, `modules`, `derived`, `continuity`, `swallows` (a bare run executes all of them) |
 | `tools/check-repo-boundaries.sh` | Repo ownership boundary guard (CI) |
 | `tools/clean-orphans.sh` | Kill orphaned bench/llama-server keeper processes (refuses while a bench/autotune is live) |
 | `tools/count-ratchet.sh` | §18.3 count ratchet: fails when a migration-backlog count RISES (CI) |
@@ -776,7 +776,7 @@ by either loader.
 | `scripts/18-lint.sh` | Repo static-analysis wrapper — delegates to `tools/lint.sh`. |
 | `tools/capture-golden-fixtures.sh` | Capture baseline command outputs for PowerShell parity checks. |
 | `tools/check-agent-use.sh` | Agent-usage regression check (`$TAC_CACHE_DIR`; CI runs it via fixtures). |
-| `tools/check-contracts.sh` | Enforce `docs/contracts/state-contracts.yaml` — producer/consumer/invalidator edges of the cross-handler state contract. CI guard. |
+| `tools/check-contracts.sh` | Enforce five declaration families: the cross-handler state contract, the `@depends`/load-order module graph, the derived command surface, command-contract continuity, and silent-swallow drift. CI guard. |
 | `tools/check-repo-boundaries.sh` | Enforce the repo ownership boundary contract. CI guard. |
 | `tools/clean-orphans.sh` | Kill orphaned bench/llama-server keeper processes. |
 | `tools/count-ratchet.sh` | Fail when a docs/inspection.md §18.3 count rises. CI guard. |
@@ -1084,7 +1084,7 @@ where it was last present.)
 ├── tools/                             # Standalone utility scripts (not sourced)
 │   ├── capture-golden-fixtures.sh     #   Snapshot command output for PowerShell parity checks
 │   ├── check-agent-use.sh             #   Agent-usage regression check (CI via fixtures)
-│   ├── check-contracts.sh             #   Contract-drift guard (state contract)
+│   ├── check-contracts.sh             #   Contract-drift guard (5 subcommands)
 │   ├── check-repo-boundaries.sh       #   Repo ownership boundary guard
 │   ├── clean-orphans.sh               #   Kill orphaned bench/llama-server processes
 │   ├── docs-sync-check.sh             #   Docs drift guard (counts in README and pytest.ini)
@@ -1117,7 +1117,7 @@ where it was last present.)
 │   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
 │   ├── test_models.py                 # Pydantic model tests (55 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (177 tests: 11+12+8+5+5+6+20+4+8+7+28+19+7+2+1+5+4+2+3+3+17)
+│   ├── unit/                          # BATS unit tests (218 tests: 11+12+8+5+5+6+20+4+8+7+28+19+7+2+1+5+4+2+3+3+17+41)
 │   └── integration/                   # BATS integration tests (142 tests: 14+43+10+44+3+28)
 └── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)
@@ -1381,7 +1381,7 @@ runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
 
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (~20s, 62 tests)
 - **Full tests:** `bats tests/tactical-console.bats` (387 BATS unit tests)
-- **Unit suites (105 tests in CI):** CI runs `tests/unit/01`, `02`, `09`–`11`, `13`–`22`; nightly adds `05`–`08` and `12`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host — and `12-gpu-exclusivity` is excluded from the CI job because it takes the CUDA card lock this box also lends to investigator's GPU pipelines.
+- **Unit suites (146 tests in CI):** CI runs `tests/unit/01`, `02`, `09`–`11`, `13`–`22` and `24`; nightly adds `05`–`08` and `12`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host — and `12-gpu-exclusivity` is excluded from the CI job because it takes the CUDA card lock this box also lends to investigator's GPU pipelines.
 - **Integration suites (127 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety) with three modes — whole repo (default), `--staged` (staged `.sh`, used by the pre-commit hook) and `--files F...` (an explicit list, used by the BATS suites) — so the shellcheck flags live in exactly one place, and shellcheck runs `-x --source-path`, which lets the module-graph pass follow the modules by name so the SC1090/SC1091 class needs no suppression *there* — the loaders' own computed paths, the optional files they source, and the tests' run-time generated copies still carry one narrow directive each (item 17.1 of `docs/inspection.md` counts 20 such lines across 13 files as of 2026-09-18, down from 68; re-measure with that item's own command, and note a looser grep over-counts, because several module headers *document* a removed file-wide disable without carrying one). shellcheck itself is pinned to 0.11.0 via `tools/install-shellcheck.sh`, which CI runs so local and CI diagnostics cannot drift (0.9.0 reported SC2317 where 0.11.0 reports SC2329 for the same code). The Python side is pinned the same way: CI installs `ruff==0.15.20`, because an unpinned `ruff` took a newer release whose rule set flagged code the venv's 0.15.20 passes — pinning the version, rather than disabling a rule, is what makes local and CI agree. There is no `[tool.ruff]` config in the repo, so ruff's default rule set is what runs.
 - **Git hooks:** tracked in `tools/hooks/` (`pre-commit`, `post-commit`, `post-merge`) and activated by `git config core.hooksPath <repo>/tools/hooks`, which `install.sh` sets. They are tracked because `.git/hooks/` is not version-controlled — an inlined copy of the shellcheck loop there drifted from `tools/lint.sh` on 2026-09-15, when only one of the two copies of the flags was updated.

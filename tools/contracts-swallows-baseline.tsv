@@ -1,0 +1,47 @@
+# tools/contracts-swallows-baseline.tsv — the silent-swallow population measured
+# by `tools/check-contracts.sh swallows` on 2026-09-23 (card
+# CLAIMED-SUCCESS-WITNESS-001, tooling half).
+#
+# Shape: `unclassified<TAB>path<TAB>count`.  A count may FALL freely (the row is
+# then printed as STALE and asks to be lowered); a file that is not here and
+# carries an unclassified swallow FAILS, and so does a count that rises.  So a new
+# `|| true` or `2>/dev/null` is a decision: mark it `# swallow-ok: <reason>` or
+# change the code.  Regenerate the rows with
+# `tools/check-contracts.sh swallows --print-baseline` (read-only).
+#
+# Why a baseline: 965 sites across 31 files is the existing corpus, and
+# reclassifying it is a separate pass — four of the heaviest files are owned by a
+# concurrent session (11e/09d/08/11d).  The counts are site counts for the two
+# patterns; the card's `grep -c` line counts are printed beside them at run time.
+unclassified	scripts/01-constants.sh	9
+unclassified	scripts/02-error-handling.sh	28
+unclassified	scripts/04-aliases.sh	8
+unclassified	scripts/05-ui-engine.sh	2
+unclassified	scripts/06-hooks.sh	5
+unclassified	scripts/07-telemetry.sh	21
+unclassified	scripts/08-maintenance.sh	65
+unclassified	scripts/09a-oc-gateway.sh	37
+unclassified	scripts/09b-gog.sh	3
+unclassified	scripts/09c-oc-core.sh	9
+unclassified	scripts/09d-oc-agents.sh	84
+unclassified	scripts/09e-oc-health.sh	44
+unclassified	scripts/09f-oc-misc.sh	15
+unclassified	scripts/10-deployment.sh	6
+unclassified	scripts/11a-llm-registry.sh	9
+unclassified	scripts/11b-llm-autotune.sh	7
+unclassified	scripts/11c-llm-server.sh	34
+unclassified	scripts/11d-llm-gpu.sh	88
+unclassified	scripts/11e-llm-model.sh	211
+unclassified	scripts/11f-llm-runtime.sh	20
+unclassified	scripts/12-dashboard-help.sh	13
+unclassified	scripts/13-init.sh	9
+unclassified	scripts/14-wsl-extras.sh	9
+unclassified	scripts/15-model-recommender.sh	1
+unclassified	scripts/_startup-env.sh	3
+unclassified	scripts/autotune-model.sh	167
+unclassified	scripts/load-vault-env.sh	9
+unclassified	scripts/retune-band-chunk.sh	10
+unclassified	scripts/run-autotune-batch.sh	10
+unclassified	scripts/spec-decode-bench.sh	12
+unclassified	scripts/spec_dec_crossover.sh	13
+# end of file

@@ -2,15 +2,21 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 29
+# Module Version: 30
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
 # @modular-section: aliases
 # @depends: constants
 # @exports: code, oedit, llmconf, oclogs, le, lo, ocui, occhat, occonf, os, oa, ocstat,
-#   ocgs, ocv, status, cop, cop-ask, cop-init (plus standard shell aliases)
+#   ocgs, ocv, status, cop, cop-ask, cop-init, m, h (plus standard shell aliases)
 #   Note: owk → 'oc wk', ologs → 'oc log-dir'
+#   m and h are the dashboard/help shorthands (tactical_dashboard, tactical_help).
+#   They were missing from this list until 2026-09-23, while
+#   docs/contracts/command-contracts.yaml already had a contract for each — the
+#   derived command surface could not see them, so the contract named a command
+#   nothing declared. See .agents/decisions/m-h-scope-interactive.md: they are
+#   aliases, so they resolve in the interactive shell only (tac-exec m does not).
 
 # __os_fetch_cached — Fetch JSON with TTL cache.
 # Reads cache if fresh (<cache_ttl seconds); otherwise runs the supplied command
@@ -29,6 +35,9 @@ function __os_fetch_cached() {
         fi
     fi
     local _result
+    # The wrapped command is a JSON probe; empty output is its "no data yet" result,
+    # which the caller tests for on the next line.
+    # swallow-ok: a probe's empty output is the documented result, not a failure.
     _result=$("$@" 2>/dev/null) || true
     if [[ -n "$_result" ]] && jq empty <<< "$_result" 2>/dev/null; then
         # Atomic write: readers must never observe a truncated cache file.
@@ -61,6 +70,9 @@ alias cpwd='copy_path'
 # Passes through to the ubuntu-console runner; detects repo-specific entrypoints.
 function unittest() {
     local repo_root
+    # git is absent, or PWD is outside a repository, in normal use — the empty
+    # result is branched on below rather than reported as an error.
+    # swallow-ok: "not in a git repo" is an expected state, not a swallowed failure.
     repo_root=$(git -C "${PWD:-.}" rev-parse --show-toplevel 2>/dev/null || true)
 
     if [[ -n "$repo_root" && "$repo_root" != "$TACTICAL_REPO_ROOT" ]]; then

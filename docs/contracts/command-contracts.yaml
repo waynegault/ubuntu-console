@@ -1,8 +1,24 @@
-version: 1
-updated: 2026-04-30
+version: 2
+updated: 2026-09-23
 notes:
   - Starter contract set for PowerShell translation.
   - Extend incrementally; avoid changing existing command semantics.
+  - "v2 (2026-09-23, card INTENT-CONT-007): every entry carries its own version,
+    updated date, status and scope.  An edited contract is a NEW version whose
+    predecessor stays in this file marked `status: superseded` with a
+    `superseded_by:` pointer and the date it was superseded — never deleted (the
+    shape investigator's pipeline/canonical_faq.py uses for a canonical answer).
+    No entry has been superseded yet: `version: 1` everywhere is the initial
+    publication, and the superseded shape is exercised by the checker's fixtures."
+  - "scope is which loader the contract applies to: `interactive` = the
+    interactive profile loader (tactical-console.bashrc), `library` = the
+    non-interactive loader (env.sh, i.e. tac-exec), `both` = the same rule in
+    both.  Two entries may share a name only when their scopes differ."
+  - "m and h are scope: interactive because they are ALIASES (scripts/04-aliases.sh)
+    and aliases do not resolve as commands in a non-interactive shell
+    (`shopt expand_aliases` is off, so `tac-exec m` is 'command not found').
+    The functions they wrap (tactical_dashboard, tactical_help) load in both, so
+    `tac-exec tactical_dashboard` works; only the shorthand is interactive."
 
 entrypoints:
   interactive_loader:
@@ -19,6 +35,11 @@ commands:
   - name: m
     family: dashboard
     summary: Render tactical dashboard
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: interactive
+    scope_note: alias for tactical_dashboard; an alias name does not resolve under tac-exec
     contract:
       side_effects:
         - reads telemetry caches under /dev/shm
@@ -29,6 +50,11 @@ commands:
   - name: h
     family: help
     summary: Render tactical help panel
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: interactive
+    scope_note: alias for tactical_help; an alias name does not resolve under tac-exec
     contract:
       side_effects: []
       output_shape:
@@ -38,6 +64,10 @@ commands:
   - name: up
     family: maintenance
     summary: Run maintenance pipeline with cooldown-aware steps
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       side_effects:
         - writes cooldown records
@@ -49,6 +79,10 @@ commands:
   - name: so
     family: openclaw
     summary: Start OpenClaw gateway with dependency checks
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       side_effects:
         - interacts with systemd user services
@@ -60,6 +94,10 @@ commands:
   - name: xo
     family: openclaw
     summary: Stop OpenClaw gateway
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       side_effects:
         - stops gateway service/processes
@@ -70,6 +108,10 @@ commands:
   - name: oc-health
     family: openclaw
     summary: Deep health probe for OpenClaw and dependencies
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       args:
         - --json
@@ -81,6 +123,10 @@ commands:
   - name: model list
     family: llm
     summary: Show registry models with active marker
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       side_effects: []
       output_shape:
@@ -90,6 +136,10 @@ commands:
   - name: model use
     family: llm
     summary: Start selected model with computed runtime settings
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       args:
         - "<model_number>"
@@ -104,6 +154,10 @@ commands:
   - name: model stop
     family: llm
     summary: Stop local llama-server
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       side_effects:
         - stops model server process
@@ -114,6 +168,10 @@ commands:
   - name: model status
     family: llm
     summary: Report active model and server health
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       args:
         - --json
@@ -125,6 +183,10 @@ commands:
   - name: burn
     family: llm
     summary: LLM stress test and TPS benchmark
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       side_effects:
         - updates TPS cache
@@ -136,6 +198,10 @@ commands:
   - name: explain
     family: llm
     summary: Explain the last command using local LLM
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       side_effects:
         - reads recent shell context/log state
@@ -146,6 +212,10 @@ commands:
   - name: cl
     family: utility
     summary: Deep system cleanup (apt, brew, journal, docker, npm, caches)
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       args:
         - --light
@@ -160,6 +230,10 @@ commands:
   - name: logtrim
     family: utility
     summary: Trim oversized log files to bounded tail
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
     contract:
       side_effects:
         - rewrites target log files

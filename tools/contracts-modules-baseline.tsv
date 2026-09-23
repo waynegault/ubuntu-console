@@ -1,0 +1,42 @@
+# tools/contracts-modules-baseline.tsv — @depends/load-order disagreements that
+# EXIST and are knowingly recorded by `tools/check-contracts.sh modules`.
+#
+# Shape: kind<TAB>key<TAB>why-it-is-recorded.  The key is the violating declaration,
+# so fixing one edge makes exactly one row stale (the tool prints it as STALE and asks
+# for the row's removal).  A key that is NOT here and appears in the tree FAILS.
+#
+# Why a baseline rather than a clean tree (measured 2026-09-23, the pass that added
+# the check): the console's @depends headers declare RUNTIME collaborators as if they
+# were load-order edges.  Two shapes:
+#   * 09a/09c/09e (the OpenClaw group) declare the §11 LLM modules they call at run
+#     time (so → model/serve/llm_*), but §9 loads before §11.
+#   * 11a-11f are one mutually-recursive cluster: registry ↔ autotune ↔ model ↔
+#     runtime, so each pair is a two-node cycle.
+# Hard-failing on these would have landed a red gate and blocked every other change;
+# recording them keeps NEW drift fatal (the point of the check) while the declarations
+# are repaired.  Fixing them is a DECLARATION repair in the module headers, which is
+# NOT this tool's change to make: 11b/11c/11d/11e are reserved by a concurrent
+# session, and moving a runtime collaborator out of @depends needs an agreed field for
+# it (the headers already use @state-in/@state-out for a related purpose).
+#
+# The strongest single signal that the declarations are the thing that is wrong:
+# docs/inspection.md §9.4.1 states "Every module's @depends lists only modules with a
+# lower numeric prefix. No circular dependencies." — 2026-09-23, that claim is false
+# for 12 edges and 1 strongly-connected component.
+#
+# DELETE THIS FILE to make every row below fail: the recorded population is not
+# enforcement, it is a debt list.
+order	09a-oc-gateway->11a-llm-registry	09a (§9) calls llm registry helpers at run time; §11 loads later
+order	09a-oc-gateway->11c-llm-server	09a calls the server status/stop helpers at run time
+order	09a-oc-gateway->11d-llm-gpu	09a calls the GPU/VRAM helpers at run time
+order	09a-oc-gateway->11f-llm-runtime	09a calls serve/model at run time (so autostarts the LLM)
+order	09c-oc-core->11f-llm-runtime	09c calls serve/model from the oc/xo dispatchers
+order	09e-oc-health->11a-llm-registry	09e diagnoses the registry at run time
+order	09e-oc-health->11c-llm-server	09e diagnoses the server at run time
+order	11a-llm-registry->11b-llm-autotune	attaches the stored autotune profile; 11b loads after 11a
+order	11a-llm-registry->11c-llm-server	reads server state; 11c loads after 11a
+order	11b-llm-autotune->11e-llm-model	autotune drives model selection; 11e loads after 11b
+order	11b-llm-autotune->11f-llm-runtime	autotune drives the runner; 11f loads after 11b
+order	11e-llm-model->11f-llm-runtime	model use starts the runner; 11f loads after 11e
+unknown-depends	13-init->all sections above	13-init declares prose, not a module list (a non-reserved file; see the hand-back)
+# end of file

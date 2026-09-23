@@ -123,7 +123,8 @@ jobs:
                tests/unit/19-telemetry-bg-notices.bats \
                tests/unit/20-up-npm-safety.bats \
                tests/unit/21-token-plan-quota-errors.bats \
-               tests/unit/22-contracts-state.bats
+               tests/unit/22-contracts-state.bats \
+               tests/unit/24-contracts-guards.bats
 
       - name: Run integration tests
         run: |

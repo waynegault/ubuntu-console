@@ -3,24 +3,30 @@
 # ==============================================================================
 # check-contracts.sh — Contract-drift guard for the ubuntu-console repo.
 # ==============================================================================
-# Card STATE-CONTRACT-VALIDATION-001.  One home for the console's drift checkers:
-# this file is a SUBCOMMAND DISPATCHER, and each subcommand owns one class of
-# drift.  The board decision of 2026-09-21 put all five proposed top-level
-# checkers here rather than in five new tools/ scripts.
+# Card STATE-CONTRACT-VALIDATION-001 opened this file.  One home for the console's
+# drift checkers: this file is a SUBCOMMAND DISPATCHER, and each subcommand owns one
+# class of drift.  The board decision of 2026-09-21 put all five proposed top-level
+# checkers here rather than in five new tools/ scripts; the other four landed
+# 2026-09-23 and each cites its own card below.
 #
-#   state       IMPLEMENTED.  Enforces docs/contracts/state-contracts.yaml — the
-#               cross-handler state contract (who produces each variable and
-#               /dev/shm cache, who consumes it, who invalidates it).
-#   modules     RESERVED — not implemented here.  Owned by its own board card.
-#   continuity  RESERVED — not implemented here.  Owned by its own board card.
-#   derived     RESERVED — not implemented here.  Owned by its own board card.
-#   swallows    RESERVED — not implemented here.  Owned by its own board card.
+#   state       docs/contracts/state-contracts.yaml — the cross-handler state
+#               contract (who produces each variable and /dev/shm cache, who
+#               consumes it, who invalidates it).
+#   modules     the @depends/@exports headers against the REAL load order read from
+#               scripts/_module-list.sh, with thin loaders expanded.
+#   derived     the DERIVED command surface (from @exports) against the AUTHORED
+#               enumerations that snapshot it (skills/tactical-console/SKILL.md's
+#               tac-exec table and docs/contracts/command-contracts.yaml).
+#   continuity  per-entry version/status/scope/superseded_by in
+#               docs/contracts/command-contracts.yaml, plus the decision register
+#               under .agents/decisions/.
+#   swallows    unclassified `|| true` and `2>/dev/null` sites in scripts/.
 #
-# A reserved name exits 2 with a message saying so.  A bare `check-contracts.sh`
-# runs every IMPLEMENTED subcommand (today: `state`), so the no-argument
-# invocation stays meaningful as subcommands are added.  A subcommand is added by
-# adding its name to SUBCOMMANDS and giving it an arm in run_selected() (plus a
-# matching run_<name>() checker) — nothing else in this file needs to know.
+# A bare `check-contracts.sh` runs EVERY subcommand, so the no-argument invocation
+# stays meaningful.  A subcommand is added by adding its name to SUBCOMMANDS and
+# giving it an arm in run_selected() (plus a matching run_<name>() checker) —
+# nothing else in this file needs to know.  A name in RESERVED exits 2 with a
+# message naming its owner instead of silently doing nothing.
 #
 # WHY `state` EXISTS — the failure it catches:
 # The article this card cites names the "cross-handler state disconnect": handler
@@ -84,28 +90,137 @@
 #     passed through the environment, a file written by an external tool) can only
 #     be declared, not verified.
 #
+# WHY `modules` EXISTS — the failure it catches:
+# The console already does the hard half of "draw dependencies, not sequences":
+# every module header declares its edges (`# @depends:`, `# @exports:`) and both
+# loaders source the modules in the order scripts/_module-list.sh gives ("never a
+# glob").  But those declarations were parsed NOWHERE — no cycle check, no order
+# check, no check that a name is declared by a module loaded EARLIER — so the
+# declarations could drift from the load order with no failure.  Measured
+# 2026-09-23 (the pass that added the check): 12 declared edges name a module that
+# loads AFTER the dependent, 1 strongly-connected component (11a-11f), and
+# docs/inspection.md §9.4.1's "no circular dependencies" claim is false at HEAD.
+#
+# ENFORCED by `modules`:
+#   1. every module in the load order exists, and carries a `# @modular-section:`
+#      annotation block with an `@depends:` field; the block is read from its own
+#      anchor, not from the top of the file (01-constants.sh has code above its
+#      block), and a value continues across the `,`-terminated comment lines the
+#      repo writes every @exports list on;
+#   2. every `@depends` target resolves to exactly one loaded module — the literal
+#      `none` (with or without a parenthetical) means "no dependencies", and a
+#      parenthetical is prose (`cd (override)` -> `cd`);
+#   3. no module declares a dependency on itself;
+#   4. every `@exports` name is DEFINED in the module or its load unit (a function,
+#      an alias, or a variable assignment) — an export that names nothing is drift;
+#   5. a module-shaped file (`NN-*.sh` / `NNx-*.sh`) that no loader loads and that
+#      is not a shebang'd entry point is a failure: no pass would analyse it;
+#   6. a thin loader that names a sub-module which does not exist is a failure;
+#   7. no NEW edge violates the load order, and no NEW declaration names a
+#      non-module.  A cycle is printed with its concrete path; every cycle
+#      necessarily contains a forward edge, so a new cycle can never be silent.
+# REPORTED, never enforced by `modules`: the disagreements recorded in
+# tools/contracts-modules-baseline.tsv (printed in full every run, each with the
+# module and the module it depends on, and with a cycle path when the edge closes
+# one), whether a forward edge is actually reached at run time, and which of the
+# recorded rows have gone STALE (a fix is free — it only asks for the row's
+# removal).  Delete that file to make every recorded row fail.
+#
+# WHY `derived` EXISTS — the failure it catches:
+# A static skill is a cache with no invalidation protocol: SKILL.md's tac-exec table
+# is a snapshot of the CLI and drifts when a command is renamed.  There is no
+# command registry in this repo and none is invented — the machine-checkable
+# surface is DERIVED from the `@exports` headers the modules already carry.
+#
+# ENFORCED by `derived`:
+#   1. every command NAMED by a SKILL.md tac-exec table row, or by a
+#      `docs/contracts/command-contracts.yaml` entry, is exported as a function or
+#      an alias by a loaded module (a variable export is a value, not a command);
+#   2. both authored enumerations parse to at least one row/entry, and the derived
+#      surface is non-empty — a parse that finds nothing must not read as clean.
+# REPORTED, never enforced by `derived`: COVERAGE.  The table is a curated subset
+# (a human owns the scope of what to consult), so requiring completeness would be
+# wrong; the summary prints how many derived commands each authored list names,
+# and how many derived commands nothing names.
+#
+# WHY `continuity` EXISTS — the failure it catches:
+# New work never triggers a check of whether an older decision still applies.  The
+# natural home for stated-once rules, docs/contracts/command-contracts.yaml, was
+# read by no script or test: an edited rule left no record of what it replaced, a
+# rule could not be scoped to the interactive loader or to library mode, and
+# nothing under .agents/ persisted an agent's decision across sessions.
+#
+# ENFORCED by `continuity` (per command-contract entry): a positive integer
+# `version:`, an ISO `updated:`, a `status:` in active/superseded/retired, a
+# `scope:` in interactive/library/both; two ACTIVE entries may share a name only in
+# DIFFERENT scopes; a superseded entry keeps its `contract:` block and carries both
+# `superseded:` and `superseded_by:`, and every superseded_by chain ends at an
+# active entry (a dangling pointer or a chain to a dead end is a failure).  For the
+# register: .agents/decisions/ must hold at least one record, whose frontmatter
+# parses, whose `name:` matches its file name, whose `date:` is ISO, whose
+# `status:`/`scope:` are known values, and whose `commands:` values resolve to an
+# exported command.
+# REPORTED, never enforced by `continuity`: what the contracts SAY (`side_effects`,
+# `output_shape`, `exit_code` are prose — `state` and `swallows` enforce their own
+# halves), and the changed-entry pass, which prints (or prints that it could not
+# run) the entries added against HEAD and the older same-family entries that still
+# apply.
+#
+# WHY `swallows` EXISTS — the failure it catches:
+# An unclassified `|| true` or `2>/dev/null` is a silent failure: the code runs,
+# returns something plausible, and the mistake stays invisible.  Reclassifying the
+# whole corpus is a separate pass, so this subcommand does the count-ratchet job
+# tools/count-ratchet.sh already uses for exactly this situation.
+#
+# ENFORCED by `swallows`: no NEW unclassified swallow site in scripts/*.sh (a count
+# that RISES above tools/contracts-swallows-baseline.tsv, or a file that is not in
+# it and carries one, is a failure), and every `# swallow-ok:` marker carries a
+# reason of its own (8+ characters).  The marker is ONE comment line and it
+# classifies a site on its own line or on the line directly below it — deliberately
+# not "somewhere in the comment block above", because a stale explanation would then
+# silence a new swallow silently.
+# REPORTED, never enforced by `swallows`: the recorded unclassified population (its
+# size, the heaviest files, and the `grep -c`-style line counts beside the site
+# counts), and the same counts in bin/ and tools/, which are outside this pass's
+# scope.  DEFERRED from the card that owns this check: read-back assertions before a
+# success echo (model start/stop/switch, vault load, orphan clean, gog auth) — those
+# live in files a concurrent session owns — stale-telemetry badges in the dashboard
+# render, and injected-failure BATS cases for both.
+#
 # Usage:
-#   tools/check-contracts.sh                  # every implemented subcommand
-#   tools/check-contracts.sh state            # just the state contract
-#   tools/check-contracts.sh state --repo DIR # check another checkout (tests)
+#   tools/check-contracts.sh                     # every subcommand
+#   tools/check-contracts.sh state               # just the state contract
+#   tools/check-contracts.sh modules --repo DIR  # check another checkout (tests)
+#   tools/check-contracts.sh continuity model use # what still applies to a command
+#   tools/check-contracts.sh swallows --print-baseline  # read-only: paste-ready rows
 #   tools/check-contracts.sh --version
 #
-# Exit 0 = every enforced edge holds.
-# Exit 1 = contract drift (a producer stopped producing, a consumer stopped
-#          reading, a file disappeared, or the contract itself is incomplete).
-# Exit 2 = bad invocation, or the check cannot run (no python3, no PyYAML,
-#          contract file absent or unparseable).  Never a weaker parse.
+# Exit 0 = every enforced rule holds.
+# Exit 1 = drift (a producer stopped producing, a declaration disagrees with the
+#          load order, an authored list names a command nothing exports, a contract
+#          entry is unversioned/unscoped, or a NEW swallow is unclassified).
+# Exit 2 = bad invocation, or the check cannot run (no python3, no PyYAML, the
+#          artifact it checks is absent or unparseable).  Never a weaker parse.
 #
 # REF: "Coding Agents Keep Shipping Silent Failures — Here Is How to Catch Them"
-#      (TDS, 2026-09-18) —
+#      (TDS, 2026-09-18) — swallows —
 #      https://towardsdatascience.com/coding-agents-keep-shipping-silent-failures-here-is-how-to-catch-them/
+# REF: "Graph Engineering for AI Agents: From Prompts and Loops to Workflows"
+#      (TDS, 2026-09-14) — modules —
+#      https://towardsdatascience.com/graph-engineering-for-ai-agents-from-prompts-and-loops-to-workflows/
+# REF: "From Static to Dynamic Skills: A Different Model for Agent Knowledge"
+#      (TDS, 2026-09-14) — derived —
+#      https://towardsdatascience.com/from-static-to-dynamic-skills-a-different-model-for-agent-knowledge/
+# REF: "Coding Agents Don't Need Longer History — They Need Intent Continuity"
+#      (TDS, 2026-09-11) — continuity —
+#      https://towardsdatascience.com/coding-agents-dont-need-longer-history-they-need-intent-continuity/
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
 # @modular-section: contracts
 # @depends: none (standalone CI helper; needs python3 with PyYAML)
 # @exports: (none — standalone script, not sourced)
-VERSION="1"
+VERSION="2"
 set -euo pipefail
 
 # --version is pure bash: a version query must not depend on the YAML engine.
@@ -132,9 +247,10 @@ fi
 # One program, all arguments: parsing --repo / the subcommand / usage errors in
 # one place keeps the dispatch table and the error text together.
 exec "$_python" - "$_repo_root" "$@" <<'PYEOF'
-"""Enforce docs/contracts/state-contracts.yaml. See the script header for scope."""
+"""Enforce the console's contracts. See the script header for scope per subcommand."""
 import os
 import re
+import subprocess
 import sys
 
 try:
@@ -149,17 +265,23 @@ except ImportError:
 
 REPO_ROOT = sys.argv[1]
 ARGV = sys.argv[2:]
-SUBCOMMANDS = ("state",)
-RESERVED = {"modules": "module-graph / module-list drift",
-            "continuity": "cross-handler state continuity",
-            "derived": "derived and computed value drift",
-            "swallows": "silently swallowed errors"}
+SUBCOMMANDS = ("state", "modules", "derived", "continuity", "swallows")
+# Every subcommand named above is implemented.  The reservation mechanism stays:
+# re-adding a name here is how a sixth checker would land, and a name in RESERVED
+# exits 2 with a message naming its owner instead of silently doing nothing.
+RESERVED = {}
 
 # Exit codes, the same three the header documents.  Named rather than repeated as
 # bare digits so each `return` site says what it means.
 EXIT_CLEAN = 0
 EXIT_DRIFT = 1
 EXIT_CANNOT_RUN = 2
+
+# Options that change WHAT is printed rather than what is checked.  A dict rather
+# than a longer parse_args() tuple: every subcommand already takes the repo, and
+# threading a fifth positional through run_selected() to one arm reads worse than
+# reading a named flag here.
+OPTIONS = {"print_baseline": False}
 
 COMMENT = re.compile(r"^\s*#")
 ENTRY_LINE = re.compile(r"^\s*- (?:name|path):", re.M)
@@ -185,17 +307,23 @@ SUBMODULE_ARG = re.compile(r"\b(\d\d[a-z]?-[a-z0-9][a-z0-9-]*)\b")
 
 USAGE = """check-contracts — contract-drift guard (subcommand dispatcher)
 
-usage: check-contracts.sh [SUBCOMMAND] [--repo DIR]
+usage: check-contracts.sh [SUBCOMMAND] [--repo DIR] [COMMAND...]
 
-  (no SUBCOMMAND)  run every implemented subcommand
+  (no SUBCOMMAND)  run every subcommand
   state            docs/contracts/state-contracts.yaml — cross-handler state
+  modules          @depends/@exports headers vs the real load order
+  derived          the derived command surface vs the authored enumerations
+  continuity       per-entry version/scope/superseded_by + the decision register
+  swallows         unclassified `|| true` / `2>/dev/null` sites in scripts/
   --version, -V    print the tool version and exit
 
-Reserved, NOT implemented here (each exits 2 and names its owner):
-  modules, continuity, derived, swallows — see the header of this script.
+  COMMAND...       only with `continuity`: surface the contract entries and
+                   recorded decisions that still apply to that command.
 
 options:
   --repo DIR       check the checkout at DIR instead of this repository
+  --print-baseline print the paste-ready baseline rows for `modules`/`swallows`
+                   (read-only; the baseline file is never written by this tool)
 
 exit: 0 clean · 1 contract drift · 2 bad invocation / cannot run the check"""
 
@@ -629,10 +757,1180 @@ def run_state(repo):
     return 0
 
 
+# ── shared: module annotations and the real load order ──────────────────────
+# Card GEG-006.  Every module declares its edges in its own header (@depends,
+# @exports) and the two loaders source the modules in the order
+# scripts/_module-list.sh gives ("never a glob").  Nothing parsed either, so the
+# declarations could drift from the load order with no failure — the article's
+# "sequence mistaken for a dependency".  This block is the ONE parser for both
+# the `modules` and the `derived` subcommand (two parsers that disagree would be
+# worse than none).
+#
+# REF: "Graph Engineering for AI Agents: From Prompts and Loops to Workflows"
+#      (TDS, 2026-09-14) —
+#      https://towardsdatascience.com/graph-engineering-for-ai-agents-from-prompts-and-loops-to-workflows/
+MODULE_NAME = re.compile(r"^\d\d[a-z]?-[a-z0-9][a-z0-9-]*$")
+SECTION_FIELD = re.compile(r"^#\s*@modular-section:")
+ANNOTATION_FIELD = re.compile(r"^#\s*@([a-z][a-z-]*):(.*)$")
+FUNC_DEF = re.compile(r"^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*\(\s*\)")
+ALIAS_DEF = re.compile(r"^\s*alias\s+([A-Za-z_][A-Za-z0-9_.-]*)=")
+ASSIGN_DEF = re.compile(
+    r"^\s*(?:export\s+|readonly\s+|declare\s+(?:-[a-zA-Z]+\s+)*|typeset\s+)?"
+    r"([A-Za-z_][A-Za-z0-9_]*)=")
+
+
+def annotation_fields(text):
+    """The @-annotation block of a module, or None when the module has none.
+
+    The block is anchored at `# @modular-section:` and runs to the end of the
+    comment run that contains it — deliberately NOT "the comments from line 1":
+    scripts/01-constants.sh carries a user-configurable-paths section with real
+    code above its block, so a top-of-file reader finds no @depends there at all
+    (measured 2026-09-23 against a prototype that did exactly that).
+
+    A field value continues on the following comment lines while the line ends
+    with a comma; the leading `#` of a continuation is stripped.  Continuation is
+    how every @exports list in this repo is written, so a parser without it sees
+    one name per module and silently under-reports.
+    """
+    lines = text.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if SECTION_FIELD.match(line.strip()):
+            start = index
+            break
+    if start is None:
+        return None
+    fields = {}
+    index = start
+    while index < len(lines) and lines[index].strip().startswith("#"):
+        match = ANNOTATION_FIELD.match(lines[index].strip())
+        if match:
+            name, value = match.group(1), match.group(2).strip()
+            parts = [value]
+            while lines[index].rstrip().endswith(",") and index + 1 < len(lines):
+                index += 1
+                nxt = lines[index].strip()
+                if nxt.startswith("#"):
+                    nxt = nxt[1:].strip()
+                parts.append(nxt)
+            if name not in fields:
+                fields[name] = " ".join(parts).rstrip(",").strip()
+        index += 1
+    return fields
+
+
+def csv_tokens(value):
+    """Tokens of an @depends/@exports value; None when the field is absent.
+
+    A parenthetical is prose, not part of a name: `(none — sets ERR trap only)`
+    tokenises to nothing, `cd (override)` to `cd`, and
+    `__tac_install_shim, __tac_install_pwsh_shims (internal helpers — ...)` to the
+    two names.  The literal `none` is the documented "no dependencies" form
+    (tools/lint.sh carries `@depends: none (standalone CI helper)`); the callers
+    treat it as an empty list rather than as a module called `none`.
+    """
+    if value is None:
+        return None
+    cleaned = re.sub(r"\([^)]*\)", "", value)
+    return [token.strip() for token in cleaned.split(",") if token.strip()]
+
+
+def module_list_names(repo):
+    """The module names __tac_module_list prints, in load order, or None.
+
+    Read from the function's own body: never a glob of scripts/ (which would
+    include entry points and fragments) and never by executing it (the thin
+    loaders have source-time side effects).  The printf argument list is joined
+    across its `\\` continuations — a line-oriented reader finds only the LAST
+    entry, because every other line ends with a backslash (measured against the
+    prototype).  Comment lines inside the body are skipped.
+    """
+    text = read_lines(repo, "scripts/_module-list.sh")
+    if text is None:
+        return None
+    lines = text.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if "__tac_module_list" in line and re.search(r"\{|\(\s*\)", line):
+            start = index
+            break
+    if start is None:
+        return None
+    body = []
+    for line in lines[start + 1:]:
+        if line.strip() == "}":
+            break
+        if line.strip().startswith("#"):
+            continue
+        body.append(line)
+    joined = " ".join(part.rstrip("\\").strip() for part in body)
+    return re.findall(r"\b(\d\d[a-z]?-[a-z0-9][a-z0-9-]*)\b", joined)
+
+
+def loader_submodules(repo, loader):
+    """The sub-modules a thin loader names by argument, or None when it names none.
+
+    The names are literal arguments to __tac_source_submodules on continued
+    lines, so they are invisible to a `source` scan — the same expansion this file
+    already does for the state contract in resolve_ref.  A loader names ITSELF as
+    the first argument; it is not one of its own sub-modules.
+    """
+    text = read_lines(repo, f"scripts/{loader}.sh")
+    if text is None:
+        return None
+    lines = text.splitlines()
+    subs = []
+    found = False
+    for index, line in enumerate(lines):
+        if not SUBMODULE_CALL.search(line):
+            continue
+        found = True
+        chunk = line
+        cursor = index
+        while chunk.rstrip().endswith("\\") and cursor + 1 < len(lines):
+            cursor += 1
+            chunk += " " + lines[cursor]
+        for name in SUBMODULE_ARG.findall(chunk):
+            if name != loader and name not in subs:
+                subs.append(name)
+    return subs if found else None
+
+
+def module_graph(repo, order):
+    """(positions, group_of, findings, groups) for the real load order.
+
+    A thin loader and its sub-modules load as one unit at the loader's position,
+    so a dependency inside that unit is satisfied by the unit being reached at
+    all; `group_of` records which unit each module belongs to.
+    """
+    positions = {}
+    groups = {}
+    findings = []
+    group_of = {}
+    for loader in order:
+        subs = loader_submodules(repo, loader)
+        members = [loader]
+        if subs:
+            groups[loader] = subs
+            for sub in subs:
+                if not os.path.isfile(os.path.join(repo, f"scripts/{sub}.sh")):
+                    findings.append(f"{loader} names sub-module '{sub}', which does not exist")
+                members.append(sub)
+        for member in members:
+            positions[member] = len(positions)
+            group_of[member] = members
+    return positions, group_of, findings, groups
+
+
+def resolve_module(token, positions):
+    """The single loaded module a @depends token names: (name, problem).
+
+    A declaration may name a full module (`llm-manager`) or the short form this
+    repo uses in most headers (`constants`, `llm-registry`, `oc-gateway`), which
+    is the module whose name ends with `-<token>`.  Two matches is ambiguous and
+    is reported rather than guessed: guessing would make the check depend on
+    dictionary order.
+    """
+    if token in positions:
+        return token, None
+    hits = sorted(name for name in positions if name.endswith("-" + token))
+    if len(hits) == 1:
+        return hits[0], None
+    if not hits:
+        return None, "unknown"
+    return None, "ambiguous"
+
+
+def module_group_text(repo, group_of, module):
+    """The source text of a module and every module in its load unit."""
+    chunks = []
+    for name in group_of.get(module, [module]):
+        text = read_lines(repo, f"scripts/{name}.sh")
+        if text is not None:
+            chunks.append(text)
+    return "\n".join(chunks)
+
+
+def defined_names(text):
+    """{name: kind} for every definition site in a module group's text.
+
+    kind is "function", "alias" or "variable"; the distinction is what makes the
+    derived command surface decidable (a command is a name defined as a function
+    or an alias, so an exported CONSTANT is not mistaken for one).  A name
+    defined more than once keeps the first kind seen.
+    """
+    names = {}
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        for kind, pattern in (("function", FUNC_DEF), ("alias", ALIAS_DEF),
+                              ("variable", ASSIGN_DEF)):
+            match = pattern.match(line)
+            if match and match.group(1) not in names:
+                names[match.group(1)] = kind
+    return names
+
+
+def command_surface(repo, order, positions, group_of):
+    """{command: exporting module} — the machine-checkable command surface.
+
+    Card DYNSKILL-011 decided this: there is no command registry in this repo and
+    none is invented.  The surface is DERIVED from the @exports headers the
+    modules already carry, restricted to names a module defines as a function or
+    an alias (a variable export is a value, not a command: 01-constants exports
+    TACTICAL_REPO_ROOT and LLM_PORT, which are not commands).
+    """
+    surface = {}
+    for module in order:
+        fields = annotation_fields(module_group_text(repo, group_of, module))
+        if not fields:
+            continue
+        defined = defined_names(module_group_text(repo, group_of, module))
+        for token in csv_tokens(fields.get("exports")) or []:
+            if defined.get(token) in ("function", "alias") and token not in surface:
+                surface[token] = module
+    return surface
+
+
+def declared_depends(repo, module):
+    """(tokens, raw, problem) for one module's @depends declaration.
+
+    raw is the declared text, which the prose forms are reported verbatim from.
+    """
+    text = read_lines(repo, f"scripts/{module}.sh")
+    if text is None:
+        return None, None, "module file is missing"
+    fields = annotation_fields(text)
+    if fields is None:
+        return None, None, "no @modular-section annotation block"
+    raw = fields.get("depends")
+    if raw is None:
+        return None, None, "annotation block carries no @depends field"
+    if raw.lower().startswith("none"):
+        return [], raw, None
+    return csv_tokens(raw), raw, None
+
+
+def read_baseline(repo, rel):
+    """{key: detail} from a `<kind>\\t<key>\\t<detail>` baseline, or {} when absent.
+
+    The baseline records disagreements that already exist, so that only a NEW one
+    fails.  It is data, not a counter: the key names the exact edge, so fixing one
+    edge makes exactly one row stale.  An absent file is an empty baseline — that
+    is what makes the bare tool fail on a tree that carries no record.
+    """
+    text = read_lines(repo, rel)
+    rows = {}
+    if text is None:
+        return rows
+    for line in text.splitlines():
+        line = line.rstrip("\n")
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            rows.setdefault(parts[0] + "\t" + parts[1], parts[2] if len(parts) > 2 else "")
+    return rows
+
+
+def path_between(edges, start, goal):
+    """Shortest node path start -> goal (inclusive), or None when unreachable."""
+    if start == goal:
+        return [start]
+    queue = [[start]]
+    seen = {start}
+    while queue:
+        path = queue.pop(0)
+        for nxt in edges.get(path[-1], []):
+            if nxt in seen:
+                continue
+            if nxt == goal:
+                return path + [nxt]
+            seen.add(nxt)
+            queue.append(path + [nxt])
+    return None
+
+
+def strongly_connected(edges, nodes):
+    """The SCCs of the declaration graph, each as a sorted member list."""
+    order = []
+    seen = set()
+
+    def visit(node, stack):
+        # Iterative DFS: a recursive one would be shorter but the module graph is
+        # data, and a deep/looped graph must not be able to raise RecursionError
+        # out of a checker whose whole job is to report graph problems.
+        stack.append((node, iter(edges.get(node, []))))
+        seen.add(node)
+        while stack:
+            current, children = stack[-1]
+            advanced = False
+            for child in children:
+                if child not in seen:
+                    seen.add(child)
+                    stack.append((child, iter(edges.get(child, []))))
+                    advanced = True
+                    break
+            if not advanced:
+                stack.pop()
+                order.append(current)
+
+    for node in nodes:
+        if node not in seen:
+            visit(node, [])
+    reverse = {node: [] for node in nodes}
+    for node in nodes:
+        for nxt in edges.get(node, []):
+            reverse.setdefault(nxt, []).append(node)
+    assigned = set()
+    groups = []
+    for node in reversed(order):
+        if node in assigned:
+            continue
+        stack = [node]
+        assigned.add(node)
+        group = []
+        while stack:
+            current = stack.pop()
+            group.append(current)
+            for prv in reverse.get(current, []):
+                if prv not in assigned:
+                    assigned.add(prv)
+                    stack.append(prv)
+        groups.append(sorted(group))
+    return groups
+
+
+def cycle_through(edges, start, members):
+    """One concrete cycle inside an SCC, starting and ending at `start`."""
+    inside = set(members)
+    sub = {node: [nxt for nxt in edges.get(node, []) if nxt in inside] for node in members}
+    best = None
+    for nxt in sub.get(start, []):
+        if nxt == start:
+            return [start, start]
+        rest = path_between(sub, nxt, start)
+        if rest and (best is None or len(rest) + 1 < len(best)):
+            best = [start] + rest
+    return best
+
+
+# ── subcommand: modules ─────────────────────────────────────────────────────
+def run_modules(repo):
+    """Enforce the @depends/@exports headers against the real load order."""
+    print("=== Module graph check (scripts/_module-list.sh) ===")
+    if not os.path.isfile(os.path.join(repo, "scripts/_module-list.sh")):
+        sys.stderr.write(
+            "check-contracts: scripts/_module-list.sh not found — the load order is the\n"
+            "  input to this check, so there is nothing to verify. Refusing to pass.\n")
+        return EXIT_CANNOT_RUN
+    order = module_list_names(repo)
+    if not order:
+        sys.stderr.write(
+            "check-contracts: __tac_module_list yielded no module names — refusing to pass\n"
+            "  on an empty load order (a parse that finds nothing is not a clean tree).\n")
+        return EXIT_CANNOT_RUN
+    positions, group_of, findings, groups = module_graph(repo, order)
+    problems = []
+    for finding in findings:
+        # A finding the loader produced is a FAILURE, not a note: printing it without
+        # adding it to `problems` would exit 0 over a broken load order.
+        problems.append(f"  FAIL  <load order>: {finding}")
+    violations = []          # (kind, key, message) — recorded-or-new disagreements
+    edges = {}
+    for module in sorted(positions, key=positions.get):
+        if not os.path.isfile(os.path.join(repo, f"scripts/{module}.sh")):
+            problems.append(f"  FAIL  {module}: listed in scripts/_module-list.sh but no "
+                            f"such file exists")
+            continue
+        tokens, raw, problem = declared_depends(repo, module)
+        if problem:
+            problems.append(f"  FAIL  {module}: {problem} "
+                            f"(scripts/{module}.sh)")
+            continue
+        fields = annotation_fields(read_lines(repo, f"scripts/{module}.sh")) or {}
+        exports = csv_tokens(fields.get("exports"))
+        if fields.get("exports") is None:
+            problems.append(f"  FAIL  {module}: annotation block carries no @exports field "
+                            f"(scripts/{module}.sh)")
+        else:
+            defined = defined_names(module_group_text(repo, group_of, module))
+            for token in exports:
+                if token not in defined:
+                    problems.append(
+                        f"  FAIL  {module}: @exports names '{token}', which is not defined\n"
+                        f"        as a function, alias or variable in scripts/{module}.sh "
+                        f"or its load unit")
+        resolved = []
+        for token in tokens:
+            name, reason = resolve_module(token, positions)
+            if name is None:
+                violations.append(("unknown-depends", f"{module}->{token}",
+                                   f"@depends names '{token}' ({reason}), which is not a "
+                                   f"module: declared as '{raw}'"))
+                continue
+            if name == module:
+                problems.append(f"  FAIL  {module}: @depends names itself")
+                continue
+            resolved.append(name)
+            if positions[name] > positions[module]:
+                violations.append((
+                    "order", f"{module}->{name}",
+                    f"depends on {name}, which loads AFTER it "
+                    f"(position {positions[name]} > {positions[module]})"))
+        edges[module] = resolved
+
+    # Coverage the other way: a module-shaped file that no loader loads is a
+    # module nothing can call, and the load list is exactly what a new module
+    # forgets to touch.  A shebang'd file is an entry point (scripts/18-lint.sh,
+    # scripts/autotune-model.sh) and is deliberately not a profile module.
+    for entry in sorted(os.listdir(os.path.join(repo, "scripts"))):
+        if not entry.endswith(".sh") or not MODULE_NAME.match(entry[:-3]):
+            continue
+        if entry[:-3] in positions:
+            continue
+        text = read_lines(repo, f"scripts/{entry}")
+        if text is None or text.startswith("#!"):
+            continue
+        problems.append(f"  FAIL  scripts/{entry}: a module-shaped file that neither "
+                        f"scripts/_module-list.sh nor a thin loader names — no pass loads it")
+
+    recorded = read_baseline(repo, "tools/contracts-modules-baseline.tsv")
+    if OPTIONS["print_baseline"]:
+        print("# paste-ready rows for tools/contracts-modules-baseline.tsv, newest "
+              "population:")
+        for kind, key, message in sorted(violations):
+            print(f"{kind}\t{key}\t{message}")
+        return EXIT_CLEAN
+    new_violations = []
+    seen_keys = set()
+    for kind, key, message in violations:
+        lookup = kind + "\t" + key
+        if lookup in recorded:
+            seen_keys.add(lookup)
+            dependent, _, _dependency = key.partition("->")
+            print(f"  RECORDED  {kind:<15} {dependent}: {message}")
+        else:
+            new_violations.append((kind, key, message))
+
+    cycles = []
+    for members in strongly_connected(edges, sorted(positions, key=positions.get)):
+        if len(members) < 2:
+            continue
+        cycle = cycle_through(edges, members[0], members)
+        if cycle:
+            cycles.append(cycle)
+    for kind, key, message in new_violations:
+        dependent, _, dependency = key.partition("->")
+        path = path_between(edges, dependency, dependent) if kind == "order" else None
+        detail = f"  FAIL  {kind}  {dependent}: {message}"
+        if path:
+            detail += f"\n        cycle: {' -> '.join([dependent] + path)}"
+        problems.append(detail)
+
+    stale = [key for key in recorded if key not in seen_keys]
+    for cycle in cycles:
+        print(f"  CYCLE     {' -> '.join(cycle)}")
+    for key in stale:
+        print(f"  STALE     {key.replace(chr(9), ' ')} — no longer a disagreement; "
+              f"delete this row from tools/contracts-modules-baseline.tsv")
+
+    edge_count = sum(len(targets) for targets in edges.values())
+    for problem in problems:
+        print(problem)
+    new_count = len(violations) - len(seen_keys)
+    summary = (f"{len(positions)} load position(s) ({len(groups)} thin loader(s) expanded) | "
+               f"{len(edges)} module(s) with a parsed @depends | {edge_count} declared edge(s) | "
+               f"disagreements: {len(seen_keys)} recorded, {new_count} new | "
+               f"{len(cycles)} cycle(s) reported (one per strongly-connected component)")
+    if problems:
+        print(f"check-contracts[modules]: FAIL — {len(problems)} finding(s). {summary}")
+        print("  Fix the DECLARATION when it disagrees with the load order (never reorder the")
+        print("  numeric load list to satisfy this check). A disagreement that is knowingly")
+        print("  accepted goes in tools/contracts-modules-baseline.tsv as a row with a reason;")
+        print("  deleting that file makes every recorded disagreement fail immediately.")
+        return EXIT_DRIFT
+    print(f"check-contracts[modules]: OK — {summary}")
+    print("  Enforced: every @depends target resolves to a real loaded module (or is the")
+    print("  literal `none`), no module depends on itself, every @exports name is defined in")
+    print("  its load unit, every module-shaped file is loaded by some loader, and no NEW")
+    print("  edge violates the load order or closes a cycle. Reported, not enforced: the")
+    print("  disagreements already recorded in tools/contracts-modules-baseline.tsv (printed")
+    print("  above, each with a cycle path when the edge closes one), and whether a forward")
+    print("  edge is reached at run time (the BATS suites cover behaviour).")
+    return EXIT_CLEAN
+
+
+# ── subcommand: derived ─────────────────────────────────────────────────────
+def command_contracts_file(repo):
+    """(data, text, error) for docs/contracts/command-contracts.yaml."""
+    rel = "docs/contracts/command-contracts.yaml"
+    path = os.path.join(repo, rel)
+    if not os.path.isfile(path):
+        return None, None, f"{rel} not found"
+    text = read_lines(repo, rel)
+    if text is None:
+        return None, None, f"{rel} cannot be read"
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        return None, None, f"{rel} does not parse: {exc}"
+    if not isinstance(data, dict):
+        return None, None, f"{rel} is not a mapping"
+    return data, text, None
+
+
+def skill_table_commands(repo):
+    """[(command, row text, line)] from SKILL.md's tac-exec table.
+
+    The table is the authored snapshot this card gates.  A row is a markdown
+    table line naming `tac-exec <something>`; the command is the FIRST token of
+    the invocation, because every contract and every export in this repo is
+    keyed on the command word (`model use` is the `model` command).
+    """
+    rel = "skills/tactical-console/SKILL.md"
+    text = read_lines(repo, rel)
+    if text is None:
+        return None
+    rows = []
+    for number, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        match = re.search(r"`tac-exec\s+([^`]+)`", stripped)
+        if not match:
+            continue
+        tokens = match.group(1).split()
+        if tokens:
+            rows.append((tokens[0], stripped, number))
+    return rows
+
+
+def contract_command_name(entry):
+    """The command word an entry declares: the first token of its `name`."""
+    name = (entry.get("name") or "").strip()
+    return name.split()[0] if name else ""
+
+
+def run_derived(repo):
+    """Gate the AUTHORED command enumerations against the DERIVED surface."""
+    print("=== Derived command surface check (@exports vs authored enumerations) ===")
+    order = module_list_names(repo) if os.path.isfile(
+        os.path.join(repo, "scripts/_module-list.sh")) else None
+    if not order:
+        sys.stderr.write(
+            "check-contracts: the load order (scripts/_module-list.sh) is the input to the\n"
+            "  derived command surface; without it there is nothing to derive. Refusing.\n")
+        return EXIT_CANNOT_RUN
+    positions, group_of, _findings, _groups = module_graph(repo, order)
+    surface = command_surface(repo, sorted(positions, key=positions.get), positions, group_of)
+    if not surface:
+        sys.stderr.write(
+            "check-contracts: no command-shaped name was derived from any @exports header —\n"
+            "  refusing to pass, because a gate over an empty surface asserts nothing.\n")
+        return EXIT_CANNOT_RUN
+
+    rows = skill_table_commands(repo)
+    if rows is None:
+        sys.stderr.write("check-contracts: skills/tactical-console/SKILL.md not found — the\n"
+                         "  authored table this check gates is missing. Refusing to pass.\n")
+        return EXIT_CANNOT_RUN
+    data, _text, error = command_contracts_file(repo)
+    if error:
+        sys.stderr.write(f"check-contracts: {error}\n")
+        return EXIT_CANNOT_RUN
+    entries = data.get("commands")
+    if not isinstance(entries, list) or not entries:
+        sys.stderr.write("check-contracts: docs/contracts/command-contracts.yaml declares no "
+                         "commands — refusing to pass on an empty enumeration.\n")
+        return EXIT_CANNOT_RUN
+
+    problems = []
+    if not rows:
+        problems.append("  FAIL  skills/tactical-console/SKILL.md: no `tac-exec` table row "
+                        "was found — the table is what this check gates, and a parse that")
+        problems.append("        finds no row would otherwise report a clean pass")
+    named = [row[0] for row in rows]
+    for command, _row, number in rows:
+        if command not in surface:
+            problems.append(f"  FAIL  SKILL.md:{number}: the table names 'tac-exec "
+                            f"{command}', which no loaded module @exports")
+    contract_names = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            problems.append(f"  FAIL  command-contracts.yaml: entry is not a mapping: {entry!r}")
+            continue
+        command = contract_command_name(entry)
+        contract_names.append(command)
+        if not command:
+            problems.append("  FAIL  command-contracts.yaml: an entry declares no `name:`")
+        elif command not in surface:
+            problems.append(f"  FAIL  command-contracts.yaml: entry '{entry.get('name')}' names "
+                            f"'{command}', which no loaded module @exports")
+
+    for problem in problems:
+        print(problem)
+    covered = [c for c in named if c in surface]
+    contracted = [c for c in contract_names if c in surface]
+    summary = (f"{len(surface)} command(s) derived from @exports | SKILL.md table: {len(rows)} "
+               f"row(s) naming {len(set(named))} distinct command(s), {len(covered)}/"
+               f"{len(named)} resolvable | command-contracts.yaml: {len(entries)} entry/entries "
+               f"naming {len(set(contract_names))} distinct command(s), {len(contracted)}/"
+               f"{len(contract_names)} resolvable")
+    if problems:
+        print(f"check-contracts[derived]: FAIL — {len(problems)} finding(s). {summary}")
+        print("  A table that names a command no loaded module exports is a cache with no")
+        print("  invalidation: the command was renamed or removed and the table kept the old")
+        print("  name. Fix the authored enumeration, or the @exports header if it is the one")
+        print("  that is stale.")
+        return EXIT_DRIFT
+    print(f"check-contracts[derived]: OK — {summary}")
+    print("  Enforced: every command NAMED by SKILL.md's tac-exec table or by a")
+    print("  command-contracts.yaml entry is exported (as a function or alias) by a loaded")
+    print("  module, and both authored enumerations parse to at least one row/entry.")
+    print("  Reported, never enforced: COVERAGE. The SKILL.md table is a curated subset (a")
+    print("  human decides the scope of what to consult), so requiring completeness would be")
+    print("  wrong; the counts above are the number, not a gate. Also not checked: `tac-exec`")
+    print(f"  mentions outside the table, and the {len(surface) - len(set(named + contract_names))} "
+          "derived command(s) no authored list names.")
+    return EXIT_CLEAN
+
+
+# ── subcommand: continuity ──────────────────────────────────────────────────
+# REF: "Coding Agents Don't Need Longer History — They Need Intent Continuity"
+#      (TDS, 2026-09-11) —
+#      https://towardsdatascience.com/coding-agents-dont-need-longer-history-they-need-intent-continuity/
+CONTRACT_SCOPES = ("interactive", "library", "both")
+CONTRACT_STATUSES = ("active", "superseded", "retired")
+DECISION_DIR = ".agents/decisions"
+ISO_DATE = re.compile(r"^\d{4}-\d\d-\d\d$")
+
+
+def decision_records(repo):
+    """[(name, fields, problems)] for .agents/decisions/*.md."""
+    directory = os.path.join(repo, DECISION_DIR)
+    records = []
+    problems = []
+    if not os.path.isdir(directory):
+        return records, [f"{DECISION_DIR}/ does not exist — no register, so no decision "
+                         f"survives a session (the card's hole (c))"]
+    for entry in sorted(os.listdir(directory)):
+        if not entry.endswith(".md"):
+            continue
+        rel = f"{DECISION_DIR}/{entry}"
+        text = read_lines(repo, rel)
+        if text is None:
+            problems.append(f"  FAIL  {rel}: cannot be read")
+            continue
+        lines = text.splitlines()
+        if not lines or lines[0].strip() != "---":
+            problems.append(f"  FAIL  {rel}: no frontmatter block (a record that cannot be "
+                            f"parsed cannot be surfaced)")
+            continue
+        fields = {}
+        closed = False
+        for line in lines[1:]:
+            if line.strip() == "---":
+                closed = True
+                break
+            match = re.match(r"^([a-z][a-z-]*):\s*(.*)$", line.strip())
+            if match:
+                fields[match.group(1)] = match.group(2).strip()
+        if not closed:
+            problems.append(f"  FAIL  {rel}: frontmatter block is not closed")
+            continue
+        name = fields.get("name", "")
+        if name != entry[:-3]:
+            problems.append(f"  FAIL  {rel}: frontmatter name '{name}' does not match the "
+                            f"file name '{entry[:-3]}'")
+        if not ISO_DATE.match(fields.get("date", "")):
+            problems.append(f"  FAIL  {rel}: `date:` must be an ISO date "
+                            f"(got '{fields.get('date', '')}')")
+        if fields.get("status") not in CONTRACT_STATUSES:
+            problems.append(f"  FAIL  {rel}: `status:` must be one of "
+                            f"{'/'.join(CONTRACT_STATUSES)} (got '{fields.get('status', '')}')")
+        records.append((name or entry[:-3], fields, rel))
+    return records, problems
+
+
+def decision_commands(fields):
+    """The command names a decision record governs (a `commands:` list)."""
+    raw = fields.get("commands", "")
+    return [token.strip() for token in raw.strip("[]").split(",") if token.strip()]
+
+
+def run_continuity(repo, names):
+    """Validate per-entry versioning/scope, and surface what still applies."""
+    rel = "docs/contracts/command-contracts.yaml"
+    print(f"=== Command-contract continuity ({rel} + {DECISION_DIR}/) ===")
+    data, text, error = command_contracts_file(repo)
+    if error:
+        sys.stderr.write(f"check-contracts: {error}\n")
+        return EXIT_CANNOT_RUN
+    entries = data.get("commands")
+    if not isinstance(entries, list) or not entries:
+        sys.stderr.write("check-contracts: command-contracts.yaml declares no commands — "
+                         "refusing to pass on an empty contract set.\n")
+        return EXIT_CANNOT_RUN
+
+    problems = []
+    by_name = {}
+    active_pairs = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            problems.append(f"  FAIL  {rel}: entry is not a mapping: {entry!r}")
+            continue
+        name = (entry.get("name") or "").strip()
+        where = f"{rel}:{name}" if name else f"{rel}:<unnamed>"
+        if not name:
+            problems.append(f"  FAIL  {rel}: an entry declares no `name:`")
+            continue
+        by_name.setdefault(name, []).append(entry)
+        version = entry.get("version")
+        if not isinstance(version, int) or version < 1:
+            problems.append(f"  FAIL  {where}: `version:` must be a positive integer "
+                            f"(got {version!r}) — an edited contract is a NEW version, and the")
+            problems.append(f"        old one is marked superseded, never deleted")
+        if not ISO_DATE.match(str(entry.get("updated", ""))):
+            problems.append(f"  FAIL  {where}: `updated:` must be an ISO date "
+                            f"(got {entry.get('updated', '')!r})")
+        scope = entry.get("scope")
+        if scope not in CONTRACT_SCOPES:
+            problems.append(f"  FAIL  {where}: `scope:` must be one of "
+                            f"{'/'.join(CONTRACT_SCOPES)} (got {scope!r}) — scope is what lets")
+            problems.append(f"        the interactive loader and tac-exec library mode carry "
+                            f"different contracts for the same command")
+        status = entry.get("status")
+        if status not in CONTRACT_STATUSES:
+            problems.append(f"  FAIL  {where}: `status:` must be one of "
+                            f"{'/'.join(CONTRACT_STATUSES)} (got {status!r})")
+        target = entry.get("superseded_by")
+        if status == "superseded":
+            if not target:
+                problems.append(f"  FAIL  {where}: status is superseded but there is no "
+                                f"`superseded_by:` pointer — nothing records what replaced it")
+            if not ISO_DATE.match(str(entry.get("superseded", ""))):
+                problems.append(f"  FAIL  {where}: status is superseded but `superseded:` is "
+                                f"not an ISO date (got {entry.get('superseded', '')!r})")
+            if not entry.get("contract"):
+                problems.append(f"  FAIL  {where}: a superseded entry must keep its `contract:` "
+                                f"block — the old rule is the record being superseded")
+        elif target:
+            problems.append(f"  FAIL  {where}: declares `superseded_by:` but status is "
+                            f"'{status}' — an active contract that points at its replacement "
+                            f"is two live rules for one command")
+        if status == "active" and scope:
+            key = (name, scope)
+            if key in active_pairs:
+                problems.append(f"  FAIL  {where}: two ACTIVE contracts for '{name}' in the "
+                                f"same scope '{scope}' — different scopes may coexist, the "
+                                f"same scope may not")
+            active_pairs[key] = True
+
+    for name, group in sorted(by_name.items()):
+        for entry in group:
+            target = entry.get("superseded_by")
+            if not target:
+                continue
+            # The chain is walked by NAME, and a replacement may legitimately carry
+            # the superseded entry's own name (v1 superseded by v2 of the same
+            # command, which is the shape this file uses) — so a repeated name is a
+            # loop only when it is not the same-name replacement being resolved.
+            chain = [name]
+            cursor = name
+            for _step in range(len(by_name) + 1):
+                targets = sorted({str(other.get("superseded_by")).strip()
+                                  for other in by_name.get(cursor, [])
+                                  if other.get("superseded_by")})
+                if not targets:
+                    break
+                if len(targets) > 1:
+                    problems.append(f"  FAIL  {rel}:{name}: two entries for '{cursor}' name "
+                                    f"different replacements ({', '.join(targets)}) — which one "
+                                    f"supersedes the other is not decidable from the file")
+                    break
+                nxt = targets[0]
+                if nxt not in by_name:
+                    problems.append(f"  FAIL  {rel}:{name}: superseded_by names '{nxt}', which "
+                                    f"is not an entry in this file")
+                    break
+                active = [other for other in by_name[nxt] if other.get("status") == "active"]
+                if not active:
+                    problems.append(f"  FAIL  {rel}:{name}: the superseded_by chain ends at "
+                                    f"'{nxt}', which is not active ({' -> '.join(chain + [nxt])})")
+                    break
+                if nxt == cursor:
+                    break
+                if nxt in chain:
+                    problems.append(f"  FAIL  {rel}:{name}: the superseded_by chain loops back "
+                                    f"to '{nxt}' ({' -> '.join(chain + [nxt])})")
+                    break
+                chain.append(nxt)
+                cursor = nxt
+
+    records, register_problems = decision_records(repo)
+    problems.extend(register_problems)
+
+    positions = {}
+    surface = {}
+    if os.path.isfile(os.path.join(repo, "scripts/_module-list.sh")):
+        order = module_list_names(repo) or []
+        positions, group_of, _f, _g = module_graph(repo, order)
+        surface = command_surface(repo, sorted(positions, key=positions.get), positions, group_of)
+    else:
+        print("  NOT CHECKED  the decisions' `commands:` values resolve against the @exports "
+              "surface only\n               when scripts/_module-list.sh is present")
+    for name, fields, where in records:
+        for command in decision_commands(fields):
+            if surface and command not in surface:
+                problems.append(f"  FAIL  {where}: decision `commands:` names '{command}', "
+                                f"which no loaded module @exports")
+        if fields.get("scope") not in CONTRACT_SCOPES:
+            problems.append(f"  FAIL  {where}: `scope:` must be one of "
+                            f"{'/'.join(CONTRACT_SCOPES)} (got {fields.get('scope', '')})")
+    if not records:
+        problems.append(f"  FAIL  {DECISION_DIR}/ holds no decision record — the register this")
+        problems.append("        check surfaces is empty, so nothing persists an agent's")
+        problems.append("        decision across sessions")
+
+    if names:
+        wanted = [" ".join(names)]
+        print(f"  --- continuity for: {', '.join(wanted)} ---")
+        for query in wanted:
+            command = query.split()[0]
+            matches = [entry for entry in entries
+                       if isinstance(entry, dict)
+                       and (entry.get("name") or "").strip() == query]
+            if not matches:
+                matches = [entry for entry in entries
+                           if isinstance(entry, dict)
+                           and contract_command_name(entry) == command]
+            if not matches:
+                print(f"  NONE     '{query}' has no contract entry — a new command with no "
+                      f"recorded rule is not continuity-checked at all")
+            for entry in matches:
+                print(f"  ENTRY    {entry.get('name')} v{entry.get('version')} "
+                      f"status={entry.get('status')} scope={entry.get('scope')} "
+                      f"updated={entry.get('updated')} family={entry.get('family')}")
+                if entry.get("superseded_by"):
+                    print(f"           superseded {entry.get('superseded')} by "
+                          f"'{entry.get('superseded_by')}'")
+            family = {entry.get("family") for entry in matches if isinstance(entry, dict)}
+            siblings = sorted({entry.get("name") for entry in entries
+                               if isinstance(entry, dict)
+                               and entry.get("family") in family
+                               and entry.get("name") not in {m.get("name") for m in matches}})
+            if siblings:
+                print(f"  FAMILY   still applies from the same family: {', '.join(siblings)}")
+            related = [name for name, fields, _where in records
+                       if command in decision_commands(fields)]
+            if related:
+                print(f"  DECISION {', '.join(related)}")
+
+    changed_note = print_changed_entries(repo, rel)
+
+    for problem in problems:
+        print(problem)
+    active = sum(1 for entry in entries
+                 if isinstance(entry, dict) and entry.get("status") == "active")
+    superseded = sum(1 for entry in entries
+                     if isinstance(entry, dict) and entry.get("status") == "superseded")
+    summary = (f"{len(entries)} contract entr(ies) ({active} active, {superseded} superseded) | "
+               f"{len(records)} decision record(s) in {DECISION_DIR}/")
+    if problems:
+        print(f"check-contracts[continuity]: FAIL — {len(problems)} finding(s). {summary}")
+        print("  An edited contract is a NEW version with its predecessor marked superseded —")
+        print("  never deleted — so what a rule replaced stays readable.")
+        return EXIT_DRIFT
+    print(f"check-contracts[continuity]: OK — {summary}")
+    if changed_note:
+        print("  Continuity surface: the entries listed as CHANGED above were resolved against")
+        print("  the older entries that still apply, so a new or edited rule cannot land")
+        print("  without the entries it supersedes in view.")
+    print("  Enforced: every entry carries a positive version, an ISO updated date, a scope in")
+    print("  interactive/library/both and a status in active/superseded/retired; two ACTIVE")
+    print("  entries may share a name only in different scopes; a superseded entry keeps its")
+    print("  contract, names its replacement and dates the supersession; every superseded_by")
+    print("  chain ends at an active entry. Enforced for the register too: at least one record,")
+    print("  a parseable frontmatter, a name that matches the file, an ISO date, a known status")
+    print("  and scope, and `commands:` values that resolve to an exported command.")
+    print("  NOT enforced here: what the contracts SAY (side_effects/output_shape/exit_code are")
+    print("  prose; `state` and `swallows` enforce their own halves).")
+    return EXIT_CLEAN
+
+
+def print_changed_entries(repo, rel):
+    """Print the contract entries added or edited against HEAD; return True if any.
+
+    The card's failure mode is that new work never triggers a check of whether an
+    older decision still applies.  Reading the previous revision of the contract
+    is how "newly added or edited" becomes mechanical: the diff names the
+    entries, and their family and scope say which older entries to re-read.  A
+    checkout with no git (a fixture) or no HEAD revision PRINTS that it could not
+    run — a silent skip would look identical to "nothing changed".
+    """
+    try:
+        shown = subprocess.run(["git", "-C", repo, "show", f"HEAD:{rel}"],
+                               capture_output=True, text=True, check=False)
+    except OSError as exc:
+        print(f"  NOT CHECKED  changed-entry pass: git is unavailable ({exc})")
+        return False
+    if shown.returncode != 0:
+        print(f"  NOT CHECKED  changed-entry pass: `git show HEAD:{rel}` failed "
+              f"(no HEAD revision or not a git tree)")
+        return False
+    try:
+        before = yaml.safe_load(shown.stdout) or {}
+    except yaml.YAMLError as exc:
+        print(f"  NOT CHECKED  changed-entry pass: the HEAD revision does not parse ({exc})")
+        return False
+    old = {}
+    for entry in before.get("commands") or []:
+        if isinstance(entry, dict) and entry.get("name"):
+            old[str(entry["name"]).strip()] = entry
+    changed = False
+    data, _text, error = command_contracts_file(repo)
+    if error:
+        return False
+    for entry in data.get("commands") or []:
+        if not isinstance(entry, dict) or not entry.get("name"):
+            continue
+        name = str(entry["name"]).strip()
+        was = old.get(name)
+        applies = ", ".join(entry_family_siblings(data, name)) or "(none)"
+        if was is None:
+            changed = True
+            print(f"  CHANGED  '{name}' is NEW in the working tree (v{entry.get('version')}) — "
+                  f"older entries that still apply: {applies}")
+            continue
+        # A rule change is what needs a superseded predecessor: summary and the
+        # contract block.  Adding the v2 metadata (version/updated/status/scope)
+        # is bookkeeping, not a new rule, so it is deliberately NOT reported as a
+        # change — otherwise a schema addition would drown the pass in noise and
+        # the one real edit would be invisible among 14 bookkeeping lines.
+        rule_before = (was.get("summary"), was.get("contract"))
+        rule_now = (entry.get("summary"), entry.get("contract"))
+        if rule_before != rule_now:
+            changed = True
+            print(f"  CHANGED  '{name}': the rule changed "
+                  f"(v{was.get('version', '?')} -> v{entry.get('version')}). The previous")
+            print(f"           revision must be kept as a superseded entry. Older entries that "
+                  f"still apply: {applies}")
+    if not changed:
+        print("  (no contract entry was added, and no entry's summary or contract block "
+              "changed, against HEAD)")
+    return changed
+
+
+def entry_family_siblings(data, name):
+    """Names of the other entries in the same family as `name`."""
+    for entry in data.get("commands") or []:
+        if isinstance(entry, dict) and str(entry.get("name", "")).strip() == name:
+            family = entry.get("family")
+            return sorted({str(e.get("name")).strip() for e in data.get("commands") or []
+                           if isinstance(e, dict) and e.get("family") == family
+                           and str(e.get("name", "")).strip() != name})
+    return []
+
+
+# ── subcommand: swallows ────────────────────────────────────────────────────
+# REF: "Coding Agents Keep Shipping Silent Failures — Here Is How to Catch Them"
+#      (TDS, 2026-09-18) —
+#      https://towardsdatascience.com/coding-agents-keep-shipping-silent-failures-here-is-how-to-catch-them/
+#
+# TOOLING HALF ONLY (card item 2).  Silent swallows are unclassified and heavy in
+# the mutating modules.  Reclassifying the existing corpus is a separate pass that
+# collides with files another session owns, so this subcommand does the
+# count-ratchet job the repo already uses for exactly this situation
+# (tools/count-ratchet.sh): the existing population is RECORDED, a NEW unclassified
+# swallow is a FAILURE, and the baseline shrinks as sites are classified.
+#
+# DEFERRED, not attempted here (each lives in a reserved file or a later pass):
+# card item 1 (read-back assertions before a success echo on model start/stop/
+# switch, vault load, orphan clean, gog auth), item 3 (stale-telemetry badges in
+# the dashboard render) and item 4 (injected-failure BATS cases for them).
+SWALLOWS_MARKER = re.compile(r"#\s*swallow-ok:\s*(\S.*)$")
+SWALLOW_PATTERNS = (("|| true", re.compile(r"\|\|\s*true\b")),
+                    ("2>/dev/null", re.compile(r"2>\s*/dev/null")))
+SWALLOWS_SCOPE = "scripts/*.sh"
+# Files another session owns during the tooling pass: reported with their counts,
+# never edited here, so the second pass has a starting point.
+SWALLOWS_RESERVED = {
+    "scripts/11e-llm-model.sh": "reserved (model start/stop/switch read-backs are card item 1)",
+    "scripts/09d-oc-agents.sh": "reported only this pass",
+    "scripts/08-maintenance.sh": "another session's in-flight file",
+    "scripts/11d-llm-gpu.sh": "reported only this pass",
+}
+
+
+def swallow_sites(text):
+    """[(line number, pattern name)] for every swallow site in a file's text.
+
+    Comment-only lines are excluded; a site inside a TRAILING comment on a code
+    line still counts (a deliberate over-count that keeps the counter simple and
+    stable, which is what a ratchet needs).  A marker reason must therefore not
+    spell a pattern itself.
+    """
+    sites = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith("#"):
+            continue
+        for name, pattern in SWALLOW_PATTERNS:
+            sites.extend([(number, name)] * len(pattern.findall(line)))
+    return sites
+
+
+def swallow_markers(text):
+    """{line number: reason} for every `# swallow-ok: <reason>` marker.
+
+    The marker is ONE comment line, and it classifies a site on its own line or on
+    the line DIRECTLY below it.  Deliberately not "somewhere in the comment block
+    above": a stale explanation three lines up would then silence a new swallow
+    silently, which is the whole failure class this check exists to catch.  A
+    wrapped marker therefore does not count — put the reason on one line and keep
+    any longer explanation in the comment lines above it.
+    """
+    markers = {}
+    for number, line in enumerate(text.splitlines(), 1):
+        match = SWALLOWS_MARKER.search(line)
+        if match:
+            markers[number] = match.group(1).strip()
+    return markers
+
+
+def run_swallows(repo):
+    """Record and ratchet the unclassified silent swallows in scripts/."""
+    print(f"=== Silent-swallow check ({SWALLOWS_SCOPE}) ===")
+    scripts_dir = os.path.join(repo, "scripts")
+    if not os.path.isdir(scripts_dir):
+        sys.stderr.write(f"check-contracts: {scripts_dir} does not exist — nothing to scan, "
+                         f"and an empty scan is not a clean tree. Refusing to pass.\n")
+        return EXIT_CANNOT_RUN
+    baseline = read_baseline(repo, "tools/contracts-swallows-baseline.tsv")
+    known = {}
+    for key, detail in baseline.items():
+        if key.startswith("unclassified\t"):
+            known[key.split("\t", 1)[1]] = detail
+
+    problems = []
+    rows = []
+    for entry in sorted(os.listdir(scripts_dir)):
+        if not entry.endswith(".sh"):
+            continue
+        rel = f"scripts/{entry}"
+        text = read_lines(repo, rel)
+        if text is None:
+            problems.append(f"  FAIL  {rel}: cannot be read")
+            continue
+        sites = swallow_sites(text)
+        markers = swallow_markers(text)
+        lines = text.splitlines()
+        classified = 0
+        for number, _pattern in sites:
+            reason = markers.get(number)
+            if reason is None and number - 2 >= 0:
+                previous = lines[number - 2].strip()
+                if previous.startswith("#") and SWALLOWS_MARKER.search(previous):
+                    reason = SWALLOWS_MARKER.search(previous).group(1).strip()
+            if reason is not None and len(reason) < 8:
+                problems.append(f"  FAIL  {rel}:{number}: `# swallow-ok:` needs a reason, not "
+                                f"'{reason}' — a marker with no reason is a marker no reviewer "
+                                f"can weigh")
+            if reason:
+                classified += 1
+        unclassified = len(sites) - classified
+        rows.append((rel, len(sites), classified, unclassified))
+
+    new_sites = []
+    seen = set()
+    if OPTIONS["print_baseline"]:
+        print("# paste-ready rows for tools/contracts-swallows-baseline.tsv — the measured "
+              "population:")
+        for rel, _total, _classified, unclassified in rows:
+            if unclassified:
+                print(f"unclassified\t{rel}\t{unclassified}")
+        return EXIT_CLEAN
+    for rel, total, _classified, unclassified in rows:
+        if unclassified == 0:
+            continue
+        if rel in known:
+            seen.add(rel)
+            if unclassified > int(known[rel]):
+                new_sites.append(f"  FAIL  {rel}: {unclassified} unclassified swallow(s) against "
+                                 f"a baseline of {known[rel]} — a NEW swallow needs a reason: "
+                                 f"mark it `# swallow-ok: <why>`, or fix the swallow")
+        else:
+            new_sites.append(f"  FAIL  {rel}: {unclassified} unclassified swallow(s) and no "
+                             f"baseline row. Mark each one on its own line or the line")
+            new_sites.append("        directly above it (`# swallow-ok: <one-line reason>`), or "
+                             "record the count in")
+            new_sites.append("        tools/contracts-swallows-baseline.tsv as a deliberate act")
+    problems.extend(new_sites)
+
+    stale = [rel for rel in known
+             if rel not in {row[0] for row in rows}
+             or next((r[3] for r in rows if r[0] == rel), 0) < int(known[rel])]
+    for rel in stale:
+        print(f"  STALE     {rel}: fewer unclassified swallow(s) than the baseline "
+              f"({known[rel]}) — lower or delete the row in "
+              f"tools/contracts-swallows-baseline.tsv")
+
+    total_sites = sum(row[1] for row in rows)
+    total_classified = sum(row[2] for row in rows)
+    total_unclassified = sum(row[3] for row in rows)
+    heaviest = sorted([row for row in rows if row[3]], key=lambda row: -row[3])[:6]
+    print(f"  {len(rows)} file(s) scanned: {total_sites} site(s), {total_classified} classified "
+          f"(`# swallow-ok:`), {total_unclassified} unclassified across "
+          f"{sum(1 for row in rows if row[3])} file(s)")
+    for rel, total, classified, unclassified in heaviest:
+        note = SWALLOWS_RESERVED.get(rel)
+        suffix = f"   <- {note}" if note else ""
+        print(f"  HEAVIEST  {rel}: {total} site(s), {classified} classified, "
+              f"{unclassified} unclassified{suffix}")
+    per_pattern = {}
+    for entry in sorted(os.listdir(scripts_dir)):
+        if not entry.endswith(".sh"):
+            continue
+        text = read_lines(repo, f"scripts/{entry}")
+        if text is None:
+            continue
+        for name, pattern in SWALLOW_PATTERNS:
+            hits = sum(1 for line in text.splitlines() if not line.lstrip().startswith("#")
+                       and pattern.search(line))
+            per_pattern[name] = per_pattern.get(name, 0) + hits
+    print("  line counts (the card's `grep -c` figures, comments excluded): "
+          + ", ".join(f"{name}: {count}" for name, count in sorted(per_pattern.items())))
+
+    for problem in problems:
+        print(problem)
+    summary = (f"{total_sites} site(s) in {len(rows)} file(s) | {total_classified} classified | "
+               f"{total_unclassified} unclassified | {len(known)} baseline row(s)")
+    if problems:
+        print(f"check-contracts[swallows]: FAIL — {len(problems)} finding(s). {summary}")
+        print("  A new `|| true` or `2>/dev/null` is a decision: either the failure is genuinely")
+        print("  optional (say why with `# swallow-ok: <reason>` on the site or the line above)")
+        print("  or it is a swallow that hides a real failure. The baseline records the")
+        print("  population measured on 2026-09-23; it may FALL freely, never rise unnoticed.")
+        return EXIT_DRIFT
+    print(f"check-contracts[swallows]: OK — {summary}")
+    print("  Enforced: no NEW unclassified swallow, and every `# swallow-ok:` marker carries a")
+    print("  reason. Reported, not enforced: the existing unclassified population (recorded in")
+    print("  tools/contracts-swallows-baseline.tsv, printed above with the heaviest files), and")
+    print(f"  the same counts outside {SWALLOWS_SCOPE} (bin/ and tools/ are not scanned).")
+    return EXIT_CLEAN
+
+
 # ── argument parsing ────────────────────────────────────────────────────────
 def parse_args(argv):
-    """Return (subcommands, repo) or an exit code when the invocation is bad."""
+    """Return (subcommands, repo, positionals) or an exit code when it is bad.
+
+    A positional argument is a command name for `continuity` ("what still applies
+    to this command?").  It is only accepted with that subcommand selected, so a
+    typo'd subcommand cannot be mistaken for a command name and slip through.
+    """
     selected = []
+    positionals = []
     repo = REPO_ROOT
     index = 0
     while index < len(argv):
@@ -640,40 +1938,65 @@ def parse_args(argv):
         if arg == "--repo":
             if index + 1 >= len(argv):
                 sys.stderr.write("check-contracts: --repo needs a path\n")
-                return EXIT_CANNOT_RUN, None, None
+                return EXIT_CANNOT_RUN, None, None, None
             repo = argv[index + 1]
             index += 2
             continue
+        if arg == "--print-baseline":
+            # Read-only: prints the rows the recorded baseline would need, so the
+            # deliberate act of recording is a paste rather than a guess.  It never
+            # writes the file.
+            OPTIONS["print_baseline"] = True
+            index += 1
+            continue
         if arg in ("-h", "--help"):
             print(USAGE)
-            return EXIT_CLEAN, None, None
-        if arg in RESERVED:
-            sys.stderr.write(
-                f"check-contracts: subcommand '{arg}' is reserved but NOT implemented here.\n"
-                f"  It is owned by its own board card ({RESERVED[arg]}) and will land as a\n"
-                "  SUBCOMMANDS entry plus a run_<name>() arm in run_selected().\n")
-            return EXIT_CANNOT_RUN, None, None
+            return EXIT_CLEAN, None, None, None
         if arg in SUBCOMMANDS:
             selected.append(arg)
             index += 1
             continue
-        sys.stderr.write(f"check-contracts: unknown argument '{arg}'\n\n{USAGE}\n")
-        return EXIT_CANNOT_RUN, None, None
+        if arg.startswith("-"):
+            sys.stderr.write(f"check-contracts: unknown option '{arg}'\n\n{USAGE}\n")
+            return EXIT_CANNOT_RUN, None, None, None
+        positionals.append(arg)
+        index += 1
     if not selected:
+        if positionals:
+            # Keep the plain "unknown argument" wording (a typo'd subcommand is the
+            # common case) and add the one thing that disambiguates it.
+            sys.stderr.write(
+                f"check-contracts: unknown argument '{positionals[0]}'\n"
+                "  A COMMAND name is only accepted with the `continuity` subcommand, e.g.\n"
+                "  `check-contracts.sh continuity model use`.\n\n" + USAGE + "\n")
+            return EXIT_CANNOT_RUN, None, None, None
         selected = list(SUBCOMMANDS)
-    return None, selected, repo
+    if positionals and "continuity" not in selected:
+        sys.stderr.write(
+            f"check-contracts: unexpected argument(s) {' '.join(positionals)} — a COMMAND name\n"
+            "  is only meaningful for `continuity`.\n")
+        return EXIT_CANNOT_RUN, None, None, None
+    return None, selected, repo, positionals
 
 
-def run_selected(selected, repo):
+def run_selected(selected, repo, positionals):
     """Dispatch each requested subcommand; return the worst exit code."""
     worst = EXIT_CLEAN
+    arms = {
+        "state": lambda: run_state(repo),
+        "modules": lambda: run_modules(repo),
+        "derived": lambda: run_derived(repo),
+        "continuity": lambda: run_continuity(repo, positionals),
+        "swallows": lambda: run_swallows(repo),
+    }
     for name in selected:
-        if name == "state":
-            code = run_state(repo)
-        else:
+        arm = arms.get(name)
+        if arm is None:
             sys.stderr.write(f"check-contracts: subcommand '{name}' has no implementation\n")
-            code = 2
-        worst = max(worst, code)
+            worst = max(worst, EXIT_CANNOT_RUN)
+            continue
+        print("")
+        worst = max(worst, arm())
     return worst
 
 
@@ -682,13 +2005,13 @@ def run_selected(selected, repo):
 # subcommand needs nothing else.
 def _run_subcommand(argv):
     """Parse argv and run the selected subcommands."""
-    code, selected, repo = parse_args(argv)
+    code, selected, repo, positionals = parse_args(argv)
     if code is not None:
         return code
     if repo and not os.path.isdir(repo):
         sys.stderr.write(f"check-contracts: --repo {repo} is not a directory\n")
         return EXIT_CANNOT_RUN
-    return run_selected(selected, repo)
+    return run_selected(selected, repo, positionals)
 
 
 sys.exit(_run_subcommand(ARGV))
