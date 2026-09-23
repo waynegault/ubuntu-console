@@ -1,0 +1,57 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# openclaw-refresh-keys.service — re-bridge the Windows credentials into the
+# systemd user manager, once per boot.
+#
+# WHY THIS EXISTS (2026-09-23)
+#
+# The bridged credentials live in /dev/shm (tmpfs), so a reboot wipes them, and the
+# user-manager environment is then rebuilt at boot from the STATIC
+# ~/.config/environment.d/90-openclaw.conf alone. Until a human runs
+# `oc refresh-keys`, every bridged name that drop-in does not carry (or carries at
+# a stale value) is absent or wrong for anything the manager starts — including the
+# gateway, which resolves env-backed SecretRefs at activation. That is the gap this
+# unit closes: the refresh now happens by itself, once per boot.
+#
+# WITHOUT IT: a gateway-hosted run that starts before any bridged shell sees the
+# stale set, and the only cue is a `key_cache MISSING` row in `oc health` — which
+# nobody reads at boot.
+#
+# CONSEQUENCE TO EXPECT: the refresh pushes the manager env and, when that CHANGED
+# the gateway's environment (it does after a reboot, because /dev/shm's
+# .hash/.resolved markers are gone), it restarts the gateway once. That restart is
+# the command's own designed outcome, not a fault; if the unit happens to run before
+# the gateway is up, no restart is needed and none is issued.
+#
+# NOT ENABLED BY install.sh — deliberately. install.sh links systemd/* into
+# ~/.config/systemd/user/ and runs daemon-reload, and this repo has never enabled a
+# unit from there (nothing in it calls `systemctl --user enable`), so enabling stays
+# an explicit act:
+#
+#     systemctl --user enable openclaw-refresh-keys.service
+#
+# Verify without starting it:
+#   systemd-analyze --user verify %h/.config/systemd/user/openclaw-refresh-keys.service
+# What it did last boot:
+#   journalctl --user -u openclaw-refresh-keys.service -b
+# ─────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=Re-bridge the Windows credentials into the systemd user manager (once per boot)
+Documentation=file:%h/ubuntu-console/README.md
+# No ordering against the OpenClaw gateway unit: OpenClaw owns that unit, not this
+# repo, so naming it here would be an ordering against something this tree cannot
+# keep valid. network.target is all the refresh needs.
+After=network.target
+
+[Service]
+Type=oneshot
+# The same command the console runs. `oc refresh-keys` is a shell function, so
+# tac-exec is what a unit calls (the documented way to reach the console library
+# non-interactively) — which also means this unit never carries a second copy of
+# the refresh logic.
+ExecStart=%h/.local/bin/tac-exec oc refresh-keys
+# The refresh bridges from Windows over WSL interop (20s pwsh timeout), syncs
+# SecretRefs, pushes the manager env and may restart the gateway. Give it room.
+TimeoutStartSec=180
+
+[Install]
+WantedBy=default.target

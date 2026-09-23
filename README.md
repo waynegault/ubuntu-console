@@ -414,6 +414,15 @@ The bridged token already reaches bridged shells (`13-init.sh`) and the systemd 
 - **`oc-refresh-keys` states the surface it produced**: which of the three surfaces carry `GH_TOKEN`, and whether `gh`'s `hosts.yml` holds a user with no plaintext `oauth_token` — i.e. whether the credential is in the FILE at all, so that an env-less `gh` would have to ask the credential store. It reads files and the manager environment and never runs `gh`, so it cannot prompt.
 
   Measured 2026-09-23 while answering "is the keyring still used?": the default collection (`Default keyring`) holds **zero items** and is unlocked, so `gh` has no stored credential to find — a token-less call activates `org.freedesktop.secrets` and then fails with `no oauth token found for github.com`. `gnome-keyring-daemon` (pid 52927) is still up because it owns `org.freedesktop.secrets` for anything else on the box that uses libsecret; the `gogcli` collection from April is separate.
+- **It checks the shim every run** — that `~/.local/bin/gh` exists *and* that `command -v gh` still resolves to it. The protection is a symlink, so it can vanish (a fresh clone without `install.sh`, a tidy-up of `~/.local/bin`) and restore the fall-through silently; the refresh now says `MISSING` or `present but NOT first on PATH` in `$C_Warning` when that happens.
+- **It names a shadowed key**: a variable carried by *both* the bridge cache and the static `environment.d` drop-in with **different values** is a silent-shadowing machine — which value a process gets depends on what it inherits — so the disagreeing NAMES are reported (`Key shadowing`), with the values compared and dropped, never printed. It is also the cue for the parked work on *generating* that drop-in.
+- **`oc health` watches for the fall-through coming back** (`Token-less gh`): a bounded journal scan for a `gh`-requested `org.freedesktop.secrets` activation — the one signature a caller that bypasses PATH leaves behind. Across 30 days there is exactly one such line (the 10:52:57 call), so it does not cry wolf. Reported, never counted as an issue, and deliberately absent from `--json`/`--plain`.
+
+**Still not closable:** a caller invoking linuxbrew's `gh` by *absolute path* bypasses the shim, and nothing in this repo can prevent that — the only alternatives are a plaintext token in gh's own config, or making the real binary unreachable. That is exactly why the `oc health` row exists: a recurrence becomes visible even though it cannot be prevented.
+
+#### Re-bridging after a boot
+
+`/dev/shm` is tmpfs, so a reboot wipes the bridged credentials, and the user manager rebuilds its environment from the **static** `environment.d` drop-in alone — so every bridged name that drop-in does not carry is absent for anything the manager starts, the gateway included, until a human runs `oc refresh-keys`. `systemd/openclaw-refresh-keys.service` runs that same command once per boot (`ExecStart=%h/.local/bin/tac-exec oc refresh-keys`). It is **not enabled by `install.sh`** (nothing in this repo enables units), so it needs one explicit `systemctl --user enable openclaw-refresh-keys.service`; expect one gateway restart at boot when the manager environment changed, which is the refresh's own designed outcome.
 
 ### Gateway Lifecycle
 
@@ -500,7 +509,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1279 total tests: 864 BATS + 415 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1288 total tests: 873 BATS + 415 Python).
 
 ### Running Tests
 
@@ -542,10 +551,10 @@ Counts are enforced by `tools/docs-sync-check.sh`; per-case and whole-file timeo
 | Full behavioural | `tactical-console.bats` | 387 | 900s | 2700s |
 | Fast static analysis | `tactical-console-fast.bats` | 63 | 180s | 900s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
-| Unit | `tests/unit/*.bats` | 270 | 120s | 600s |
+| Unit | `tests/unit/*.bats` | 279 | 120s | 600s |
 | Integration | `tests/integration/*.bats` | 142 | 300s | 1200s |
 | Python | `tests/test_*.py` | 415 | 1000s (`pytest.ini`) | — |
-| **Total** | | **1279** | | |
+| **Total** | | **1288** | | |
 
 **Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and all eight markers the BATS bridge applies dynamically are registered there. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 387 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
 
@@ -1156,17 +1165,23 @@ where it was last present.)
 │   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
 │   ├── test_models.py                 # Pydantic model tests (55 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
-│   ├── unit/                          # BATS unit tests (270 tests: 14+12+8+5+5+6+20+4+8+7+28+19+7+2+1+5+4+2+3+3+17+16+41+19+6+8)
+│   ├── unit/                          # BATS unit tests (279 tests: 18+12+8+5+5+6+20+4+8+7+28+19+7+2+1+5+4+2+3+3+17+16+41+19+6+8+5)
 │   └── integration/                   # BATS integration tests (142 tests: 14+43+10+44+3+28)
 └── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)
     │   └── tac-loopback0.service      #     WSL mirrored-networking 127.0.0.2, at boot
-    ├── llama-watchdog.service
+    ├── openclaw-refresh-keys.service  #   Re-bridge credentials into the manager env, once per boot
+    ├── llama-watchdog.service         #   Llama Server Health Watchdog
     ├── llama-watchdog.timer
-    ├── llama-xe-minicpm5-1b-chat.service
-    ├── llama-xe-embeddinggemma-embed.service
-    ├── llama-cuda-llama32-3b-chat.service
-    └── llama-cuda-qwen35-4b-pipeline.service
+    ├── llama-watchdog-guard.service   #   Re-arms the watchdog when nothing claims the GPU
+    ├── llama-watchdog-guard.timer     #   Runs that guard every 5 minutes
+    ├── llama-watchdog-guard.README.md #   Why the guard exists (not a unit)
+    ├── llama-xe-minicpm5-1b-chat.service        # Xe, MiniCPM5-1B, chat (18081)
+    ├── llama-xe-qwen25-3b-chat.service          # Xe, Qwen2.5-3B, chat (18085)
+    ├── llama-xe-embeddinggemma-embed.service    # Xe, embeddinggemma-300m, embed (18080)
+    ├── llama-cuda-llama32-3b-chat.service       # CUDA, Llama-3.2-3B, chat (18083)
+    ├── llama-cuda-qwen35-4b-pipeline.service    # CUDA, Qwen3.5-4B, investigator pipeline (8081)
+    └── llama-cpu-qwen25-3b-chat.service         # CPU tier, Qwen2.5-3B, chat (18084)
 ```
 
 ### Symlink Map
@@ -1177,7 +1192,7 @@ where it was last present.)
 | `~/.local/bin/<name>` | Every file in `bin/` — `tac-exec`, `tac_hostmetrics.sh`, `llama-watchdog.sh`, `bench-timeout-runner.sh`, `oc-*` wrappers — **symlinked**, except the four the card launchers and their helpers occupy (`llama-cuda-server`, `llama-xe-server`, `llama-gpu-clear.sh`, `gpu-busy.sh`), which are installed as one-line `exec` shims so the stable path stays real. `gh` is the one entry here that **shadows a third-party binary**: it precedes linuxbrew's `gh` on PATH and hands it the bridged token (see API Key Bridge) |
 | `~/.local/bin/load-vault-env.sh` | `scripts/load-vault-env.sh` |
 | `~/.local/bin/oc-update-enhanced.sh` | `scripts/oc-update-enhanced.sh` |
-| `~/.config/systemd/user/<unit>` | Every file in `systemd/`, plus **relative** legacy-name symlinks (`llama-server.service` → `llama-xe-minicpm5-1b-chat.service`, …). Relative on purpose: an absolute alias makes systemd load a second unit for the same service |
+| `~/.config/systemd/user/<unit>` | Every file in `systemd/`, plus **relative** legacy-name symlinks (`llama-server.service` → `llama-xe-minicpm5-1b-chat.service`, …). Relative on purpose: an absolute alias makes systemd load a second unit for the same service. `install.sh` links and `daemon-reload`s but **never enables** — enabling any unit stays an explicit act, and `openclaw-refresh-keys.service` in particular needs `systemctl --user enable openclaw-refresh-keys.service` once |
 | `/etc/systemd/system/<unit>` | Every file in `systemd/system/` — **copied**, not symlinked, then enabled by `install.sh` (its only `sudo` step). Copied because a root-owned unit pointing into a user's home is a boot-time dependency on that home being mounted and readable. Currently `tac-loopback0.service`, which provides `loopback0`/`127.0.0.2` at boot |
 
 ---

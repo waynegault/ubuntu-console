@@ -9,7 +9,7 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 09e-oc-health
 # ==============================================================================
@@ -26,6 +26,48 @@
 # loader and directly by the profile/env loaders, so run the body once.
 [[ -n "${__TAC_MOD_09E_OC_HEALTH_LOADED:-}" ]] && return 0
 __TAC_MOD_09E_OC_HEALTH_LOADED=1
+
+# ---------------------------------------------------------------------------
+# __oc_gh_keyring_recurrence — name a token-less `gh` that reached the system
+# credential store, per the session journal.
+#
+# A `gh` invocation carrying no GH_TOKEN falls through to org.freedesktop.secrets,
+# and THAT request is what activates gnome-keyring — creating the default keyring
+# behind a password prompt when none exists (2026-09-23; `bin/gh` on PATH is the
+# fix). The signature is unambiguous, and nothing else on the box watches for it,
+# so a recurrence should be named rather than left invisible.
+#
+# Measured across 30 days when this landed: exactly ONE such line, the
+# `gh auth token` call at 10:52:57 — so the scan does not cry wolf. It stays out of
+# `oc-health --json` / `--plain` deliberately: those are machine surfaces, and a
+# forensic note is not a status.
+#
+# REPORTED, NOT ENFORCED — a past event is not a current fault, so the caller does
+# not count it as an issue.
+# ---------------------------------------------------------------------------
+function __oc_gh_keyring_recurrence() {
+    if ! command -v journalctl >/dev/null 2>&1
+    then
+        __tac_info "Token-less gh" "[journalctl unavailable — recurrence check skipped]" "$C_Dim"
+        return 0
+    fi
+    local _raw _n _last
+    # `sed -n p` keeps the pipeline's status 0 when nothing matches, so an empty
+    # result is a result here rather than an error.
+    # swallow-ok: journalctl is absent in CI and agent shells; the guard above reports that case
+    _raw=$(journalctl --user --since "-7 days" --no-pager 2>/dev/null \
+        -g "Activating service name='org\.freedesktop\.secrets'" \
+        | grep 'comm="gh' | sed -n 'p')
+    if [[ -n "$_raw" ]]
+    then
+        _n=$(printf '%s\n' "$_raw" | wc -l)
+        _last=$(printf '%s\n' "$_raw" | tail -1 | cut -c1-15)
+        __tac_info "Token-less gh" \
+            "[$_n keyring activation(s) in 7 days, last $_last]" "$C_Warning"
+    else
+        __tac_info "Token-less gh" "[none in 7 days]" "$C_Success"
+    fi
+}
 
 function oc-health() {
     local output_mode="human"
@@ -1021,6 +1063,10 @@ function oc-doctor-local() {
         "$([[ $model_sync -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
     __tac_info "Key Cache" "[$([[ $key_cache -eq 1 ]] && echo PRESENT || echo MISSING)]" \
         "$([[ $key_cache -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
+
+    # Watches for the gh keyring fall-through coming back (see the helper for why:
+    # reported, never counted as an issue, and absent from --json/--plain).
+    __oc_gh_keyring_recurrence
     __tac_info "Config File" "[$([[ $oc_config -eq 1 ]] && echo PRESENT || echo MISSING)]" \
         "$([[ $oc_config -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
     [[ -n "$active_model" ]] && __tac_info "Active Model" "[$active_model]" "$C_Dim"

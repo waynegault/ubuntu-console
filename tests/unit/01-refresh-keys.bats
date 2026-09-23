@@ -537,3 +537,68 @@ HOSTS
     [ "$status" -eq 0 ]
     [[ "$output" == *"NO env surface"* ]]
 }
+
+# --- the PATH shim, and cache-vs-environment.d shadowing (2026-09-23) --------
+# The shim is the only thing covering a caller that inherits none of the surfaces,
+# and it is a symlink — so the refresh says whether it is installed AND still wins.
+# A name carried by both the bridge cache and the static drop-in with DIFFERENT
+# values is a silent-shadowing machine; only the NAMES are ever reported.
+
+@test "oc-refresh-keys reports a MISSING PATH shim (HOME is the sandbox)" {
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=bridged-gh-token'"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"GitHub CLI PATH shim"* ]]
+    [[ "$output" == *"MISSING"* ]]
+}
+
+@test "oc-refresh-keys reports the PATH shim as first on PATH when it wins" {
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=bridged-gh-token'"
+    mkdir -p "$HOME/.local/bin"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$HOME/.local/bin/gh"
+    chmod +x "$HOME/.local/bin/gh"
+
+    # Order is the whole point: prepending the sandbox bin dir is what makes
+    # `command -v gh` resolve to the shim rather than to linuxbrew's gh.
+    local _saved_path="$PATH"
+    export PATH="$HOME/.local/bin:$PATH"
+    run oc-refresh-keys
+    export PATH="$_saved_path"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"installed and first on PATH"* ]]
+}
+
+@test "oc-refresh-keys names a variable the cache and environment.d disagree on" {
+    __mock_command_local pwsh.exe \
+        "printf '%s\\n' 'GH_TOKEN=cache-value' 'OTHER_API_KEY=cache-only'"
+    mkdir -p "$HOME/.config/environment.d"
+    cat > "$HOME/.config/environment.d/90-openclaw.conf" <<'ENVD'
+GH_TOKEN=different-value
+SHARED_ONLY_API_KEY=envd-only
+ENVD
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Key shadowing"* ]]
+    [[ "$output" == *"GH_TOKEN"* ]]
+    # A name on only ONE surface is not a disagreement — the cache-only and
+    # drop-in-only keys must both stay out of it.
+    [[ "$output" != *"SHARED_ONLY_API_KEY"* ]]
+    [[ "$output" != *"OTHER_API_KEY"* ]]
+    # Names are reported; values never leave the function.
+    [[ "$output" != *"cache-value"* ]]
+    [[ "$output" != *"different-value"* ]]
+}
+
+@test "oc-refresh-keys is silent about shadowing when the two surfaces agree" {
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=same-value'"
+    mkdir -p "$HOME/.config/environment.d"
+    printf 'GH_TOKEN=same-value\n' > "$HOME/.config/environment.d/90-openclaw.conf"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"GitHub CLI"* ]]
+    [[ "$output" != *"Key shadowing"* ]]
+}

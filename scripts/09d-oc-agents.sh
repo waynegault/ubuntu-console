@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 29
+# Module Version: 30
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -1175,6 +1175,88 @@ function __oc_report_gh_credential_surface() {
 }
 
 # ---------------------------------------------------------------------------
+# __oc_report_gh_path_shim — say whether the gh shim is installed AND still wins.
+#
+# The PATH shim is the only thing that covers a caller inheriting NONE of the
+# surfaces `__oc_report_gh_credential_surface` reports, and it is a symlink in
+# ~/.local/bin — so a missing or outranked one silently restores the fall-through
+# that whole change exists to stop. Split out of that report rather than left
+# inside it: with three concerns in one function it had grown past 100 lines.
+# ---------------------------------------------------------------------------
+function __oc_report_gh_path_shim() {
+    local _shim="$HOME/.local/bin/gh" _shim_state _gh_resolved=""
+    # `command -v` writes nothing to stderr for a missing command, so the exit code
+    # is the whole signal and is handled here rather than hidden behind a redirect.
+    if ! _gh_resolved="$(command -v gh)"; then
+        _gh_resolved=""
+    fi
+    if [[ ! -e "$_shim" ]]
+    then
+        _shim_state="MISSING at $_shim — run install.sh to link bin/gh"
+        __tac_info "GitHub CLI PATH shim" "[$_shim_state]" "$C_Warning"
+    elif [[ "$_gh_resolved" != "$_shim" ]]
+    then
+        _shim_state="present but NOT first on PATH — 'gh' resolves to"
+        _shim_state+=" ${_gh_resolved:-nothing}"
+        __tac_info "GitHub CLI PATH shim" "[$_shim_state]" "$C_Warning"
+    else
+        __tac_info "GitHub CLI PATH shim" "[installed and first on PATH: $_shim]" "$C_Success"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __oc_report_key_shadowing — name any variable the bridge cache and the static
+# environment.d drop-in disagree on.
+#
+# One name, two values: both are "the env" for different consumers, so a value that
+# differs between them is a silent-shadowing machine — which one a process gets
+# depends on what it inherits, and nothing else on this box compares the two.
+#
+# NAMES are printed; values are compared and dropped, never reported. They are read
+# from the CACHE FILE in a subshell so the comparison does not read whatever the
+# calling shell happens to hold — environment.d is exported into bridged shells,
+# which would hide the very difference being looked for.
+# ---------------------------------------------------------------------------
+function __oc_report_key_shadowing() {
+    local _cache="$1"
+    local _envd="$HOME/.config/environment.d/90-openclaw.conf"
+    if [[ ! -f "$_envd" ]]
+    then
+        return 0
+    fi
+    local -A _envd_map=()
+    local _kv _differs="" _n _v
+    while IFS='=' read -r _n _v
+    do
+        [[ -n "$_n" ]] && _envd_map["$_n"]="$_v"
+    done < "$_envd"
+    # The values come from the CACHE FILE in a subshell, so the comparison does not
+    # read whatever this shell happens to hold. The directive is SC1090's own remedy:
+    # the path is a variable, so shellcheck cannot follow it. Measured with the pinned
+    # 0.11.0: a comment line between the directive and the `source` is fine, a trailing
+    # directive on the same line is an SC1073 parse error.
+    # shellcheck source=/dev/null
+    # swallow-ok: a corrupt cache must not abort the refresh; the map is then empty and no difference is claimed
+    _kv=$( source "$_cache" 2>/dev/null
+           while IFS= read -r _l
+           do
+               [[ "$_l" =~ ^export[[:space:]]+([A-Z_][A-Z0-9_]*)= ]] || continue
+               _n="${BASH_REMATCH[1]}"
+               printf '%s=%s\n' "$_n" "${!_n:-}"
+           done < "$_cache" )
+    while IFS='=' read -r _n _v
+    do
+        [[ -n "${_envd_map[$_n]+set}" ]] || continue
+        [[ "$_v" == "${_envd_map[$_n]}" ]] && continue
+        _differs="${_differs:+$_differs, }$_n"
+    done <<< "$_kv"
+    if [[ -n "$_differs" ]]
+    then
+        __tac_info "Key shadowing" "[bridge cache and environment.d disagree on: $_differs]" "$C_Warning"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 function oc-refresh-keys() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
     local count=0
@@ -1283,12 +1365,14 @@ function oc-refresh-keys() {
     #    found" because the gateway process lacks the env vars.
     __oc_sync_gateway_env_file "$cache"
 
-    # 4b. State the GitHub CLI's credential surface. This is a report, not a fix:
-    #     it names which surfaces carry GH_TOKEN and whether a `gh` invoked
-    #     WITHOUT it would fall through to the system credential store (and so
-    #     activate gnome-keyring) — the state that produced the 2026-09-23
-    #     10:52:57 keyring prompt, which nothing here was surfacing.
+    # 4b. Report the credential surface, the PATH shim that covers a caller
+    #     inheriting none of it, and any key the two env surfaces disagree on. These
+    #     are reports, not fixes: the first names the state that produced the
+    #     2026-09-23 10:52:57 keyring prompt, the second says whether the protection
+    #     is still installed and winning, the third names a silent-shadowing pair.
     __oc_report_gh_credential_surface "$cache"
+    __oc_report_gh_path_shim
+    __oc_report_key_shadowing "$cache"
 
     # 5. Decide whether the gateway needs a restart (its env changed). The
     #    restart is DEFERRED to step 7, after the NAS mirror: a gateway-hosted

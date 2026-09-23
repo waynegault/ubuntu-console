@@ -135,6 +135,38 @@ token found for github.com`, which is what probe B reproduced. `gnome-keyring-da
 is still running because it owns `org.freedesktop.secrets` for anything else that
 uses libsecret; the separate `gogcli` collection (April) is unrelated.
 
+The same refresh also reports two things that would otherwise decay silently:
+
+- **the shim itself**: that `~/.local/bin/gh` exists and that `command -v gh`
+  still resolves to it. It is a symlink, so a missing or outranked one restores the
+  fall-through with no cue at all.
+- **a shadowed key**: a name carried by *both* the bridge cache and the static
+  `environment.d` drop-in with different values (`Key shadowing`). Which value a
+  consumer gets depends on what it inherits, and nothing else compares the two.
+  Names are printed; values are compared and dropped.
+
+`oc health` additionally scans the recent session journal for a `gh`-requested
+`org.freedesktop.secrets` activation and names it (`Token-less gh`). That is the
+detection half of the one hole this cannot close: a caller that bypasses PATH by
+invoking linuxbrew's `gh` by absolute path. Across 30 days the signature had exactly
+one hit (the 10:52:57 call), so it does not cry wolf.
+
+### Re-bridging after a boot
+
+`/dev/shm` is tmpfs: a reboot wipes the bridged credentials, and the user manager
+then rebuilds its environment from the static drop-in alone. Anything the manager
+starts before a human runs `oc refresh-keys` (the gateway included) therefore sees
+only what that drop-in carries. `systemd/openclaw-refresh-keys.service` closes it by
+running the same command once per boot:
+
+    ExecStart=%h/.local/bin/tac-exec oc refresh-keys
+
+`install.sh` links and reloads units but has never enabled one, so this needs one
+explicit `systemctl --user enable openclaw-refresh-keys.service`. Expect one gateway
+restart at boot when the manager environment changed; that restart is the refresh's
+own designed outcome, and it does not happen when the unit runs before the gateway is
+up.
+
 ### SecretRef Sync
 
 The **backing store** for API keys is the environment: a SecretRef does not
