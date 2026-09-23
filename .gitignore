@@ -85,7 +85,7 @@ logs/
 Thumbs.db
 scripts/__pycache__
 tests/__pycache__
-.qwen/settings.json
+.qwen/
 .qwen-session
 memory/
 .tmp-bats

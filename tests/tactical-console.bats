@@ -65,6 +65,36 @@ EOF
 }
 
 teardown_file() {
+    # 2026-09-23: the `oc restart` case runs oc-restart, whose first act is
+    # __oc_safe_gateway_shutdown() — it STOPS the live gateway — and whose second is
+    # `openclaw gateway start`, which cannot complete under the sandboxed test HOME.
+    # A run killed between the two leaves the gateway DOWN: measured at 17:16:37, a
+    # VS Code restart killed the suite there and the gateway stayed down until the
+    # recovery guard fired nine minutes later. This is the exit net for that class:
+    # if a case marked the gateway as touched and left it inactive, bring it back —
+    # and say so, because a suite must not silently change the host's state.
+    #
+    # LIMIT, stated rather than implied: an exit net cannot run if the suite's whole
+    # process tree is SIGKILLed, and bats owns the signal traps. That residue is why
+    # openclaw-gateway-guard.service exists; this net only shortens the window.
+    if [[ -f "${TAC_TEST_TMPDIR:-/tmp/bats-noop}/gateway-touched" ]]
+    then
+        local _gw=""
+        if ! _gw=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)
+        then
+            _gw="inactive"
+        fi
+        if [[ "$_gw" != "active" ]]
+        then
+            printf '%s\n' \
+                "[tactical-console.bats] WARNING: the suite left the gateway '$_gw' — starting it" >&2
+            if ! systemctl --user start openclaw-gateway.service 2>&1
+            then
+                printf '%s\n' \
+                    "[tactical-console.bats] WARNING: could not start it — check 'systemctl --user status openclaw-gateway.service'" >&2
+            fi
+        fi
+    fi
     rm -rf "${TAC_TEST_TMPDIR:-/tmp/bats-noop}"
 }
 
@@ -1865,13 +1895,33 @@ EOF
 }
 
 @test "oc: oc restart handles openclaw presence" {
+    # 2026-09-23: both halves of oc-restart are stubbed here. It used to run for real,
+    # and its first act is __oc_safe_gateway_shutdown() — which STOPPED the live
+    # gateway — followed by `openclaw gateway start`, which cannot complete under the
+    # sandboxed test HOME ("openclaw refuses service management for a non-account
+    # HOME"). Killed in between, that left the gateway down for nine minutes. The
+    # dispatch contract this case exists for is unchanged: the shutdown stub records
+    # that it was reached, and a PATH stub absorbs the CLI.
+    : > "$TAC_TEST_TMPDIR/gateway-touched"
+    local _stub_dir="$TAC_TEST_TMPDIR/oc-restart-stubs"
+    mkdir -p "$_stub_dir"
+    cat > "$_stub_dir/openclaw" <<'OPENCLAW_STUB'
+#!/usr/bin/env bash
+printf 'OPENCLAW_STUB: %s\n' "$*"
+OPENCLAW_STUB
+    chmod +x "$_stub_dir/openclaw"
+    __oc_safe_gateway_shutdown() { : > "$TAC_TEST_TMPDIR/shutdown-called"; }
+
+    local _saved_path="$PATH"
+    export PATH="$_stub_dir:$PATH"
     run oc restart
+    export PATH="$_saved_path"
+
     if command -v openclaw >/dev/null 2>&1 && [[ "${__TAC_OPENCLAW_OK:-0}" == "1" ]]; then
-        # openclaw detected: restart takes the gateway path, not the
-        # "not installed" error path. The gateway start itself may fail in
-        # the sandboxed test HOME — openclaw refuses service management for
-        # a non-account HOME — so only the dispatch contract is asserted.
+        # openclaw detected: restart takes the gateway path, not the "not installed"
+        # error path — and it reached the shutdown step on the way.
         [[ "$output" != *"NOT INSTALLED"* ]]
+        [[ -f "$TAC_TEST_TMPDIR/shutdown-called" ]]
     else
         [[ "$status" -eq 1 ]]
     fi

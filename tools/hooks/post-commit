@@ -14,17 +14,40 @@ set -uo pipefail
 
 _repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 
+# Timing, because the cost of this hook keeps coming up as a question: the update is
+# ~19 s of work on an idle box (measured 2026-09-23, `--update` over 2.5k nodes), so a
+# multi-minute commit means the BOX was busy — shellcheck over the tree, a CI job, a
+# VS Code pytest session — and not that this hook is heavy. `date` rather than
+# $SECONDS so the number is right even if a branch runs in a subshell.
+_started_at=$(date +%s)
+_rc=0
+
 if [[ -x "$_repo_root/.venv/bin/python3" ]] \
     && PYTHONPATH="$_repo_root/scripts" "$_repo_root/.venv/bin/python3" -c 'import kgraph' >/dev/null 2>&1
 then
     PYTHONPATH="$_repo_root/scripts" "$_repo_root/.venv/bin/python3" -m kgraph \
-        --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /'
+        --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /' || _rc=$?
 elif command -v kgraph >/dev/null 2>&1
 then
     # Fallback: the installed copy.  Its code is NOT tied to this tree, so say so
     # rather than presenting a graph built from something else as this repo's.
     printf '[kgraph-auto] WARNING: using the installed kgraph, not this repo copy\n' >&2
-    kgraph --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /'
+    kgraph --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /' || _rc=$?
+fi
+
+# The elapsed time, so "commits are slow" is a number rather than a feeling — and the
+# exit status, which used to be dropped entirely: a failed rebuild left the graph
+# stale and said nothing. Reported, never fatal (no `exit`), so a commit still lands.
+_elapsed=$(( $(date +%s) - _started_at ))
+if (( _elapsed >= 60 ))
+then
+    printf '[kgraph-auto] took %ss — the box was busy (~19s when idle)\n' "$_elapsed"
+else
+    printf '[kgraph-auto] took %ss\n' "$_elapsed"
+fi
+if (( _rc != 0 ))
+then
+    printf '[kgraph-auto] WARNING: the graph update exited %s — the graph may be stale\n' "$_rc" >&2
 fi
 
 # end of file
