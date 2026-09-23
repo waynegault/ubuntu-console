@@ -98,7 +98,7 @@ SYSTEMCTL_STUB
 
     export PATH="$NPM_STUB_DIR:$PATH"
 
-    # shellcheck disable=SC1090  # the repo's library loader
+    # shellcheck source=env.sh
     source "$REPO_ROOT/env.sh"
 }
 

@@ -33,7 +33,7 @@ STUB
     export PATH="$CURL_STUB_DIR:$PATH"
     export BAILIAN_TOKEN_PLAN_API_KEY="sk-sp-test"
 
-    # shellcheck disable=SC1090  # the repo's library loader
+    # shellcheck source=env.sh
     source "$REPO_ROOT/env.sh"
 
     # Bypass the probe's TTL cache. §1 sets TAC_CACHE_DIR unconditionally to /dev/shm
