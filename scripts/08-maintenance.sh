@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 52
+# Module Version: 53
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -619,6 +619,7 @@ function __update_plugin() {
     local _path="$1" _remote_pattern="$2" _name="$3" _interactive="${4:-0}"
     local _status_line="$_name"
     local _git_out=""
+    local _dep_failed=0
 
     if [[ ! -d "$_path" ]]
     then
@@ -688,6 +689,7 @@ function __update_plugin() {
                                 then
                                     __tac_line "$_status_line" \
                                         "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                                    _dep_failed=1
                                 fi
                             fi
                             if git -C "$_path" stash pop >/dev/null 2>&1
@@ -699,6 +701,10 @@ function __update_plugin() {
                                 # report them as preserved.
                                 __tac_line "$_status_line" \
                                     "[UPDATED - LOCAL CHANGES STILL STASHED]" "$C_Warning"
+                            fi
+                            if (( _dep_failed == 1 ))
+                            then
+                                return 2  # 2 = FAILED: updated, but its deps did not install
                             fi
                             return 0
                         else
@@ -718,9 +724,14 @@ function __update_plugin() {
                                 then
                                     __tac_line "$_status_line" \
                                         "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                                    _dep_failed=1
                                 fi
                             fi
                             __tac_line "$_status_line" "[UPDATED]" "$C_Success"
+                            if (( _dep_failed == 1 ))
+                            then
+                                return 2  # 2 = FAILED: updated, but its deps did not install
+                            fi
                             return 0
                         else
                             __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
@@ -738,9 +749,14 @@ function __update_plugin() {
                         if ! npm install --prefix "$_path" --silent 2>/dev/null
                         then
                             __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                            _dep_failed=1
                         fi
                     fi
                     __tac_line "$_status_line" "[OVERWRITTEN (local changes discarded)]" "$C_Warning"
+                    if (( _dep_failed == 1 ))
+                    then
+                        return 2  # 2 = FAILED: overwritten, but its deps did not install
+                    fi
                     return 0
                     ;;
                 *)
@@ -793,9 +809,14 @@ function __update_plugin() {
                 if ! npm install --prefix "$_path" --silent 2>/dev/null
                 then
                     __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                    _dep_failed=1
                 fi
             fi
             __tac_line "$_status_line" "[UPDATED]" "$C_Success"
+            if (( _dep_failed == 1 ))
+            then
+                return 2  # 2 = FAILED: updated, but its deps did not install
+            fi
             return 0
         else
             __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"

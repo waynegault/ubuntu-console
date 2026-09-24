@@ -300,6 +300,34 @@ _run_plugins() {
     [[ "$output" == *"INFO   Expected https://github.com/legendaryvibecoder/gigabrain.git"* ]]
 }
 
+@test "plugins: an update whose dependency install fails is reported as failed" {
+    # A plugin that may not load is not "updated".  All four dep-install sites warned
+    # and then returned 0, so a broken plugin read as a clean update; the exit code now
+    # agrees with the warning.
+    _scaffold_all
+    _advance_remote gigabrain
+    # package.json has to arrive THROUGH the pull: an untracked one would make the
+    # checkout dirty, and the helper would skip it for local changes instead.
+    printf '{"name":"gigabrain"}\n' > "$SANDBOX/src/gigabrain/package.json"
+    git -C "$SANDBOX/src/gigabrain" add package.json
+    git -C "$SANDBOX/src/gigabrain" commit -qm deps
+    git -C "$SANDBOX/src/gigabrain" push -q origin main
+    mkdir -p "$SANDBOX/stub"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$SANDBOX/stub/npm"
+    chmod +x "$SANDBOX/stub/npm"
+    export PATH="$SANDBOX/stub:$PATH"
+
+    local rc=0
+    __update_plugin "$HOME/.openclaw/extensions/gigabrain" \
+        "legendaryvibecoder/gigabrain" "gigabrain" 0 > "$SANDBOX/out.txt" 2>&1 || rc=$?
+
+    [ "$rc" -eq 2 ]
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"[DEP INSTALL FAILED - plugin may not load]"* ]]
+    # The update itself did land, and that is still reported — the rc is what changed.
+    [[ "$output" == *"[UPDATED]"* ]]
+}
+
 # LIMIT, stated rather than left implied: the command path's UPDATE and FAILURE
 # branches are not exercised here, and cannot be hermetically.  09e passes a full
 # `https://github.com/...` URL as the remote pattern, so a checkout only matches it
