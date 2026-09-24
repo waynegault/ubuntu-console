@@ -38,23 +38,46 @@
 # READ-ONLY: this script reads the automation's state and prints a verdict.  It never
 # starts, stops, enables or re-arms anything — repair is a human decision.
 #
+# TWO CONSUMERS, SO TWO MODES (2026-09-24)
+#   The repo's systemd timer wants the VERDICT every hour: a non-zero exit is what puts
+#   the unit in `systemctl --user --failed` (systemd/gpu-watch-selfcheck.service says so
+#   in its own words).  The OpenClaw automation wants a MESSAGE when something CHANGES:
+#   it runs every 6h and delivers stdout to WhatsApp.
+#
+#   Those are not the same thing, so they are not the same mode.  The default mode
+#   prints the alarm on every run and lets the exit code carry the verdict.  With
+#   --announce the message is printed only on a TRANSITION — the state is compared with
+#   the last one announced, recorded in the state file below — and the exit code is
+#   always 0, because for that automation a non-zero exit does not mean "the watcher is
+#   broken", it means "the job failed", and OpenClaw raises its OWN execution-failure
+#   alert for that: 2 consecutive failures, 1-hour cooldown, delivered to the job's
+#   announce target (docs.openclaw.ai/cli/cron, read 2026-09-24).  Left alone, one
+#   standing alarm would page from two paths on every tick, and the second page is
+#   indistinguishable from a job that genuinely broke.  Stdout IS the delivered message
+#   in this mode — the same contract the hal workspace's failover watcher states.
+#
 # USAGE
 #   gpu-watch-selfcheck.sh            silent when healthy; the alarm text when not
+#   gpu-watch-selfcheck.sh --announce message on a state transition only, always 0
 #   gpu-watch-selfcheck.sh --json     one JSON object (machine consumers)
 #   gpu-watch-selfcheck.sh --version
 # EXIT  0 = healthy   1 = alarming (text on stdout)   2 = the automation is unreadable
+#       (--announce always exits 0 — there the message is the alarm)
 #
 # ENV  GPU_WATCH_SELFCHECK_ID         automation id (default below)
 #      GPU_WATCH_SELFCHECK_OPENCLAW   openclaw binary (override point for tests)
 #      GPU_WATCH_SELFCHECK_MAX_AGE_S  staleness bound, seconds
+#      GPU_WATCH_SELFCHECK_STATE_FILE what --announce announced last
+#                                     (default ~/.cache/gpu-watch-selfcheck.state)
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
 set -uo pipefail
 
 OPENCLAW="${GPU_WATCH_SELFCHECK_OPENCLAW:-openclaw}"
 AUTOMATION_ID="${GPU_WATCH_SELFCHECK_ID:-6a1b0ada-eae2-48e9-905a-78a74ba98549}"
 MODE="${1:-}"
+STATE_FILE="${GPU_WATCH_SELFCHECK_STATE_FILE:-${XDG_CACHE_HOME:-$HOME/.cache}/gpu-watch-selfcheck.state}"
 
 # --json_field <json> <key> — the string value of a key, else empty.  Same
 # sed idiom the rest of the fleet uses on this fixed shape (see
@@ -121,7 +144,7 @@ main() {
         _detail="could not read automation ${AUTOMATION_ID} (rc=${_rc}) - this check cannot"
         _detail+=" see the watcher, so it cannot vouch for it"
         emit "$_state" "$_detail" "" "" "" ""
-        exit 2   # the check itself cannot run — never a green answer
+        exit "$(exit_code_for "$_state")"   # the check itself cannot run — never green
     fi
 
     _enabled=$(json_bool "$_json" enabled)
@@ -164,37 +187,104 @@ main() {
     fi
 
     emit "$_state" "$_detail" "$_name" "$_status" "${_age_s:-}" "$_max_age"
-    [[ "$_state" == "ok" ]] || exit 1   # alarming: the exit code carries it too
-    exit 0
+    exit "$(exit_code_for "$_state")"
 }
 
 # emit <state> <detail> <name> <status> <age_s> <max_age_s> — the one place the
-# verdict becomes output, so the JSON and the human text cannot disagree.  A
-# healthy verdict prints NOTHING (this is an automation announce payload, and a
-# routine "fine" line every 15 minutes is noise that hides the real alarm).
+# verdict becomes output, so the JSON, the transition message and the plain alarm
+# cannot disagree about what was found.  A healthy verdict prints NOTHING in either
+# text mode (this is an automation announce payload, and a routine "fine" line every
+# 15 minutes is noise that hides the real alarm).
 emit() {
     local _state="$1" _detail="$2" _name="$3" _status="$4" _age_s="$5" _max_age="$6"
-    if [[ "$MODE" == "--json" ]]; then
-        verdict_json "$_state" "$_detail" "${_name:-unknown}" "${_status:-unknown}" "${_age_s:-}" "${_max_age:-}"
-        return 0
-    fi
-    [[ "$_state" == "ok" ]] && return 0
-    printf '%s\n' "WARNING: GPU Passthrough Watch automation self-check: ${_state}"
-    printf '%s\n' "${_detail}"
+    case "$MODE" in
+        --json)
+            verdict_json "$_state" "$_detail" "${_name:-unknown}" "${_status:-unknown}" "${_age_s:-}" "${_max_age:-}"
+            ;;
+        --announce)
+            announce "$_state" "$_detail" "$_name" "$_status"
+            ;;
+        *)
+            [[ "$_state" == "ok" ]] && return 0
+            alarm_text "$_state" "$_detail" "$_name" "$_status"
+            ;;
+    esac
+}
+
+# read_state — the state --announce delivered last, or empty when none is recorded.
+# `[[ -r ]]` rather than a redirect through 2>/dev/null: a first run has no state file,
+# and that is an ordinary starting state, not a failure to suppress.
+read_state() {
+    [[ -r "$STATE_FILE" ]] || return 0
+    printf '%s' "$(<"$STATE_FILE")"
+}
+
+# write_state <state> — record what was announced.  A failed write is REPORTED on
+# stdout rather than swallowed: without the record the next tick repeats the message,
+# and an unexplained repeat is what teaches a reader to ignore this channel.
+write_state() {
+    printf '%s\n' "$1" > "$STATE_FILE" || printf '%s\n' \
+        "note: could not record the self-check state in ${STATE_FILE}; the next transition will repeat this message"
+}
+
+# alarm_text <state> <detail> <name> <status> — what a reader gets, built in ONE place
+# so the two text modes cannot describe the same state differently.
+alarm_text() {
+    printf '%s\n' "WARNING: GPU Passthrough Watch automation self-check: $1"
+    printf '%s\n' "$2"
     printf '%s\n' "Why this matters: this automation is what fires the GPU-passthrough watcher,"
     printf '%s\n' "so while it is not running, a lost CUDA-card passthrough is not detected or announced."
-    printf '%s\n' "Automation: ${_name:-unknown} (${AUTOMATION_ID})  lastRunStatus=${_status:-unknown}"
+    printf '%s\n' "Automation: ${3:-unknown} (${AUTOMATION_ID})  lastRunStatus=${4:-unknown}"
     printf '%s\n' "Inspect: ${OPENCLAW} automations get ${AUTOMATION_ID} --json"
+}
+
+# announce <state> <detail> <name> <status> — the --announce text: a TRANSITION is the
+# message.  A standing alarm is not repeated (recording the state is what makes the
+# comparison possible), and a recovery IS a transition — otherwise the channel that
+# reported the fault never reports that it cleared.  A healthy first run says nothing
+# at all, so a fresh box does not open the channel with a routine "fine" line; a first
+# run that finds a fault does announce, because a fault must never be the quiet case.
+announce() {
+    local _state="$1" _detail="$2" _name="$3" _status="$4"
+    local _previous
+    _previous=$(read_state)
+    write_state "$_state"
+    if [[ "$_previous" == "$_state" ]]; then
+        return 0                                   # unchanged: nothing to deliver
+    fi
+    if [[ "$_state" != "ok" ]]; then
+        alarm_text "$_state" "$_detail" "$_name" "$_status"
+        return 0
+    fi
+    [[ -n "$_previous" ]] || return 0              # first run, healthy: nothing to say
+    printf '%s\n' "RECOVERED: the GPU Passthrough Watch automation self-check is healthy again"
+    printf '%s\n' "$_detail"
+}
+
+# exit_code_for <state> — the verdict as an exit code: 0 healthy, 1 alarming, 2 the
+# check itself cannot see the automation.  Always 0 in --announce mode, where the
+# message carries the alarm and a non-zero exit would make the automation raise a
+# second alert of its own (see the header's TWO CONSUMERS note).
+exit_code_for() {
+    if [[ "$MODE" == "--announce" ]]; then
+        printf '%s\n' "0"
+        return 0
+    fi
+    case "$1" in
+        ok)         printf '%s\n' "0" ;;
+        unreadable) printf '%s\n' "2" ;;
+        *)          printf '%s\n' "1" ;;
+    esac
 }
 
 case "$MODE" in
     --version|-V)
-        echo "gpu-watch-selfcheck 1"
+        echo "gpu-watch-selfcheck 2"
         exit 0
         ;;
-    --json|"") ;;
+    --json|--announce|"") ;;
     *)
-        echo "usage: gpu-watch-selfcheck.sh [--json|--version]" >&2
+        echo "usage: gpu-watch-selfcheck.sh [--json|--announce|--version]" >&2
         exit 2   # bad invocation
         ;;
 esac

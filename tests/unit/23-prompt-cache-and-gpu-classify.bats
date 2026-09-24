@@ -470,6 +470,16 @@ setup_selfcheck() {
     export SELFCHECK_FIXTURE="$SANDBOX/automation.json"
     GPU_WATCH_SELFCHECK_OPENCLAW="$(_selfcheck_fixture)"
     export GPU_WATCH_SELFCHECK_OPENCLAW
+    # The transition state lives in the sandbox, not the developer's ~/.cache: a case
+    # that read the real file would pass or fail depending on what ran before it.
+    #
+    # Removed here rather than merely pointed at the sandbox: this suite builds ONE
+    # SANDBOX for the whole file (setup_file/teardown_file), so without this a case
+    # inherits the state the previous case announced and sees a transition that never
+    # happened — measured 2026-09-24, which is what made the second --announce case
+    # report a spurious "RECOVERED".
+    export GPU_WATCH_SELFCHECK_STATE_FILE="$SANDBOX/selfcheck.state"
+    rm -f "$GPU_WATCH_SELFCHECK_STATE_FILE"
     unset SELFCHECK_RC
 }
 
@@ -538,6 +548,72 @@ setup_selfcheck() {
     export SELFCHECK_RC=7
     run "$SELFCHECK"
     [[ "$status" -eq 2 ]]
+    [[ "$output" == *"cannot see the watcher"* ]]
+}
+
+@test "gpu-watch-selfcheck --announce: a standing alarm is announced once, not every tick" {
+    # The automation runs every 6h and delivers stdout, so repeating an unchanged
+    # alarm is a message every 6h for one condition — the noise that teaches a reader
+    # to ignore the channel.  A TRANSITION is what gets delivered.
+    setup_selfcheck
+    local now_ms
+    now_ms=$(( $(date +%s) * 1000 ))
+    _selfcheck_json ok true 0 "$(( now_ms + 900000 ))"          # never-run: an alarm
+
+    run "$SELFCHECK" --announce
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"no run is recorded at all"* ]]
+
+    # The same state again: nothing is delivered, and the exit code is still 0 (a
+    # non-zero exit makes OpenClaw raise its OWN execution-failure alert, which would
+    # put the standing alarm back on the channel by a second route).
+    run "$SELFCHECK" --announce
+    [[ "$status" -eq 0 ]]
+    [[ -z "$output" ]]
+
+    # A DIFFERENT alarm is a transition, so it is delivered.
+    _selfcheck_json ok false "$(( now_ms - 60000 ))" "$(( now_ms + 840000 ))"
+    run "$SELFCHECK" --announce
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"DISABLED"* ]]
+}
+
+@test "gpu-watch-selfcheck --announce: a recovery is announced, a healthy first run is not" {
+    setup_selfcheck
+    local now_ms
+    now_ms=$(( $(date +%s) * 1000 ))
+
+    # No recorded state and nothing wrong: an "all fine" line here would open the
+    # channel with noise, which is what the check is supposed to avoid.
+    _selfcheck_json ok true "$(( now_ms - 60000 ))" "$(( now_ms + 840000 ))"
+    run "$SELFCHECK" --announce
+    [[ "$status" -eq 0 ]]
+    [[ -z "$output" ]]
+
+    # Alarm (delivered) -> same alarm (silent) -> healthy: the last one is a transition
+    # too, or the channel reports a fault and never reports that it cleared.
+    _selfcheck_json ok true 0 "$(( now_ms + 900000 ))"
+    run "$SELFCHECK" --announce
+    [[ "$output" == *"no run is recorded at all"* ]]
+    run "$SELFCHECK" --announce
+    [[ -z "$output" ]]
+    _selfcheck_json ok true "$(( now_ms - 60000 ))" "$(( now_ms + 840000 ))"
+    run "$SELFCHECK" --announce
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"RECOVERED"* ]]
+}
+
+@test "gpu-watch-selfcheck --announce: an unreadable automation is announced, and still 0" {
+    # The default mode's "not a green answer" is exit 2, and that branch has its own
+    # exit — so this mode's override has to cover it too.  If it did not, the automation
+    # would record a failed job and page a second time about a check that had already
+    # delivered its message.
+    setup_selfcheck
+    unset SELFCHECK_FIXTURE
+    export SELFCHECK_RC=7
+
+    run "$SELFCHECK" --announce
+    [[ "$status" -eq 0 ]]
     [[ "$output" == *"cannot see the watcher"* ]]
 }
 

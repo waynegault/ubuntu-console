@@ -10,6 +10,13 @@ Type=oneshot
 # unit IS expected to fail then: that is what puts it in `systemctl --user --failed`
 # and in the journal.  The exit code carries the verdict (0 healthy, 1 alarming,
 # 2 the check itself cannot see the automation) and stdout carries the message.
+#
+# This unit runs the script's DEFAULT mode on purpose — the verdict, every hour.  The
+# OpenClaw automation runs the same script with --announce (a message only on a state
+# transition, always exit 0, because a non-zero exit there makes OpenClaw raise an
+# execution-failure alert of its own).  Adding that flag HERE would silently take this
+# unit out of `systemctl --user --failed` and lose the standing-failure signal it exists
+# to provide; both modes are documented in the script's header.
 ExecStart=%h/.local/bin/gpu-watch-selfcheck.sh
 # Explicit PATH: the check reaches the `openclaw` CLI to read the automation's
 # state, and the default user-manager PATH does not carry the Linuxbrew bin dir
