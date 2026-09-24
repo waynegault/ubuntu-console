@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 09f-oc-misc — Miscellaneous OC commands (kgraph, stinger, mem-index)
 # ==============================================================================
@@ -292,7 +292,13 @@ function lc() {
 # handle permission issues automatically.
 # ---------------------------------------------------------------------------
 function oc-update() {
-    local enhanced_script="$HOME/.openclaw/workspace/scripts/oc-update-enhanced.sh"
+    # install.sh links scripts/oc-update-enhanced.sh to ~/.local/bin (it is a repo
+    # file).  This probe used to name ~/.openclaw/workspace/scripts/ — the VAULT-side
+    # directory, which holds files this repo does not own (e.g.
+    # post-update-drift-check.sh, which is why 08-maintenance's probe there works) —
+    # and the updater was never placed there, so the enhanced path never ran
+    # (measured 2026-09-24: the probed path did not exist).
+    local enhanced_script="$HOME/.local/bin/oc-update-enhanced.sh"
 
     # Use enhanced update script if available
     if [[ -f "$enhanced_script" ]]
@@ -420,7 +426,7 @@ function oc-backup() {
             for (( i=keep; i<${#all_snaps[@]}; i++ ))
             do
                 rm -f "${all_snaps[$i]}"
-                (( pruned++ ))
+                pruned=$(( pruned + 1 ))
             done
             __tac_info "Pruned Old Snapshots" "[$pruned removed, keeping $keep]" "$C_Dim"
         fi

@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 32
+# Module Version: 33
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -247,7 +247,7 @@ function oc-agent-use() {
             output_sum["$id"]=${output_sum[$id]:-0}
             total_sum["$id"]=${total_sum[$id]:-0}
             cap_val["$id"]=${cap_val[$id]:-0}
-            (( total_agents++ ))
+            total_agents=$(( total_agents + 1 ))
         done
     fi
 
@@ -414,7 +414,7 @@ function ockeys() {
                 oc_visible="${C_Error}WSL ✗${C_Reset}"
             fi
             printf '%s\n' "  ${C_Dim}$name${C_Reset}  $masked  $oc_visible"
-            ((found++))
+            found=$(( found + 1 ))
         fi
     done < <(timeout 20 pwsh.exe -NoProfile -Command '
         [Environment]::GetEnvironmentVariables("User").GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }

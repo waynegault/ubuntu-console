@@ -9,7 +9,7 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
 # ==============================================================================
 # 09e-oc-health
 # ==============================================================================
@@ -105,10 +105,14 @@ function oc-health() {
         esac
         _enhanced_rc=$?
         # The recurrence watch is OUR check, not the enhanced checker's: this branch
-        # returns before the fallback rows, so without this call the row would be dead
-        # code on any box that HAS the enhanced checker — which is every box here.
-        # Measured 2026-09-23 by running `oc health` after wiring it only below: the
-        # output was the enhanced checker's two rows and nothing else.
+        # returns before the fallback rows, so it must call the watch itself, or the
+        # row would be dead code on a box that HAS the checker installed.
+        # CORRECTED 2026-09-24: this note used to end "— which is every box here", and
+        # that contradicted the fallback's own note (see the end of this function).
+        # The measurement settles it: nothing installs scripts/oc-health-check.py, and
+        # `find ~/.openclaw ~/.local -name 'oc-health-check*'` returns nothing, so this
+        # box runs the FALLBACK and this branch is the dormant one here.  The call stays
+        # so a box that does have the checker still gets the row.
         if [[ "$output_mode" == "human" ]]
         then
             __oc_gh_keyring_recurrence
@@ -336,33 +340,33 @@ function oc-plugin-update() {
         gigabrain)
             if update_plugin "gigabrain" "https://github.com/legendaryvibecoder/gigabrain.git" "$plugins_dir"
             then
-                ((updated++))
+                updated=$(( updated + 1 ))
             fi
             ;;
         lossless-claw)
             if update_plugin "lossless-claw" "https://github.com/Martian-Engineering/lossless-claw.git" "$plugins_dir"
             then
-                ((updated++))
+                updated=$(( updated + 1 ))
             fi
             ;;
         openstinger)
             if update_plugin "openstinger" "https://github.com/srikanthbellary/openstinger.git" "$vendor_dir"
             then
-                ((updated++))
+                updated=$(( updated + 1 ))
             fi
             ;;
         --all|"")
             if update_plugin "gigabrain" "https://github.com/legendaryvibecoder/gigabrain.git" "$plugins_dir"
             then
-                ((updated++))
+                updated=$(( updated + 1 ))
             fi
             if update_plugin "lossless-claw" "https://github.com/Martian-Engineering/lossless-claw.git" "$plugins_dir"
             then
-                ((updated++))
+                updated=$(( updated + 1 ))
             fi
             if update_plugin "openstinger" "https://github.com/srikanthbellary/openstinger.git" "$vendor_dir"
             then
-                ((updated++))
+                updated=$(( updated + 1 ))
             fi
             ;;
         *)
@@ -826,10 +830,10 @@ function oc-cache-clear() {
         then
             if (( dry_run ))
             then
-                ((count++))
+                count=$(( count + 1 ))
             elif rm -f "$f"
             then
-                ((count++))
+                count=$(( count + 1 ))
             fi
         fi
     done
@@ -912,7 +916,7 @@ function oc-diag() {
     local probe_count=0
     for f in "$OC_AGENTS/main/sessions"/probe-*.jsonl
     do
-        [[ -f "$f" ]] && rm -f "$f" && ((probe_count++))
+        [[ -f "$f" ]] && rm -f "$f" && probe_count=$(( probe_count + 1 ))
     done 2>/dev/null
     if (( probe_count > 0 ))
     then
@@ -1025,14 +1029,14 @@ function oc-doctor-local() {
         gateway_health="missing_cli"
     fi
 
-    (( openclaw_installed )) || ((issues++))
-    (( gateway_port )) || ((issues++))
-    [[ "$gateway_health" == "ok" || "$gateway_health" == "healthy" ]] || ((issues++))
-    (( llm_port )) || ((issues++))
-    (( llm_health )) || ((issues++))
-    (( model_sync )) || ((issues++))
-    (( key_cache )) || ((issues++))
-    (( oc_config )) || ((issues++))
+    (( openclaw_installed )) || issues=$(( issues + 1 ))
+    (( gateway_port )) || issues=$(( issues + 1 ))
+    [[ "$gateway_health" == "ok" || "$gateway_health" == "healthy" ]] || issues=$(( issues + 1 ))
+    (( llm_port )) || issues=$(( issues + 1 ))
+    (( llm_health )) || issues=$(( issues + 1 ))
+    (( model_sync )) || issues=$(( issues + 1 ))
+    (( key_cache )) || issues=$(( issues + 1 ))
+    (( oc_config )) || issues=$(( issues + 1 ))
 
     if [[ "$output_mode" == "json" ]]
     then

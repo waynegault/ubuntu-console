@@ -2,7 +2,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 30
+# Module Version: 31
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -386,7 +386,7 @@ function os() {
     local missing_list=""
     while IFS=$'\t' read -r _id _name; do
         if [[ -n "$_id" && -z "${agents_with_sessions[$_id]:-}" ]]; then
-            ((missing_count++))
+            missing_count=$(( missing_count + 1 ))
             missing_list="${missing_list:+$missing_list, }${_name:-$_id}"
         fi
     done < <(printf '%s' "$agents_json" | jq -r '

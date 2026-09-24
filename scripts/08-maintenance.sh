@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 49
+# Module Version: 50
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -45,7 +45,7 @@ function __cleanup_temps() {
     do
         if [[ -e "$f" ]]
         then
-            rm -rf "$f" && ((count++))
+            rm -rf "$f" && count=$(( count + 1 ))
         fi
     done
     (( _had_nullglob )) || shopt -u nullglob
@@ -598,6 +598,200 @@ function __up_openclaw_doctor() {
     fi
 }
 
+# __update_plugin — Helper function to update a single plugin with change handling.
+# Usage: __update_plugin <path> <remote_pattern> <display_name> <step_num>
+# Returns: 0 if updated or up-to-date, 1 if skipped/error
+#
+# MODULE SCOPE since 2026-09-24 — it used to be nested inside __up_oc_plugins, which
+# made it unaddressable (nothing could call it from elsewhere, and nothing could
+# test it), while 09e's `oc-plugin-update` had grown a second, diverging copy of the
+# same git logic for the same three plugins.  Its policy: it never CREATES a
+# checkout — a missing path is reported and returns 1, and the caller decides
+# whether to clone.  The outcomes below are pinned by
+# tests/unit/30-plugin-update.bats, the net the de-duplication lands behind.
+function __update_plugin() {
+    local _path="$1" _remote_pattern="$2" _name="$3" _step_num="${4:-7}"
+    local _status_line="[${_step_num}/20] ${_name}"
+
+    if [[ ! -d "$_path" ]]
+    then
+        __tac_line "$_status_line" "[NOT INSTALLED]" "$C_Dim"
+        return 1
+    fi
+
+    if [[ ! -d "$_path/.git" ]]
+    then
+        __tac_line "$_status_line" "[INSTALLED (local)]" "$C_Dim"
+        return 1
+    fi
+
+    local _remote
+    _remote=$(git -C "$_path" remote get-url origin 2>/dev/null || echo "")
+    if [[ "$_remote" != *"$_remote_pattern"* ]]
+    then
+        __tac_line "$_status_line" "[SKIP - custom remote]" "$C_Dim"
+        return 1
+    fi
+
+    # Check for local changes
+    local _local_changes
+    _local_changes=$(git -C "$_path" status --porcelain 2>/dev/null)
+
+    if [[ -n "$_local_changes" ]]
+    then
+        # Local changes detected — ask user (only in interactive mode)
+        if [[ -t 0 ]]  # stdin is a terminal
+        then
+            # Format prompt within table border for continuity
+            printf '\n%s\n' "║$(printf '─%.0s' {1..76})║"
+            printf '║ %s %-70s ║\n' "${C_Warning}Warning:${C_Reset}" "$_name — local changes detected:"
+            echo "$_local_changes" | head -5 | while read -r line; do
+                printf '║   %-70s ║\n' "${line:0:70}"
+            done
+            [[ $(wc -l <<< "$_local_changes") -gt 5 ]] && printf '║   %-70s ║\n' "... and more"
+            printf '%s\n' "║$(printf '─%.0s' {1..76})║"
+            printf '║ %-70s ║\n' "Choose an option:"
+            printf '║   %-70s ║\n' "[1] Keep local changes (stash → pull → reapply)"
+            printf '║   %-70s ║\n' "[2] Discard local changes (hard reset to remote)"
+            printf '║   %-70s ║\n' "[3] Skip update (keep as-is)"
+            printf '║ %-70s ║\n' "Selection: "
+            printf '\e[74C'  # Move cursor to column 74 (after "Selection: ")
+
+            local _choice
+            read -r _choice
+            printf '\e[0m'  # Reset
+
+            case "$_choice" in
+                1)
+                    # Stash, pull, then pop
+                    if git -C "$_path" stash push -m "pre-update backup" >/dev/null 2>&1
+                    then
+                        # Had something to stash — pull then reapply
+                        if git -C "$_path" pull --ff-only >/dev/null 2>&1
+                        then
+                            # Install new dependencies if package.json exists
+                            if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
+                            then
+                                if ! npm install --prefix "$_path" --silent 2>/dev/null
+                                then
+                                    __tac_line "$_status_line" \
+                                        "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                                fi
+                            fi
+                            if git -C "$_path" stash pop >/dev/null 2>&1
+                            then
+                                __tac_line "$_status_line" "[UPDATED (changes preserved)]" "$C_Success"
+                            else
+                                # Pop failed (usually a conflict): the local
+                                # changes are still in the stash, so do NOT
+                                # report them as preserved.
+                                __tac_line "$_status_line" \
+                                    "[UPDATED - LOCAL CHANGES STILL STASHED]" "$C_Warning"
+                            fi
+                            return 0
+                        else
+                            git -C "$_path" stash pop >/dev/null 2>&1 || true
+                            __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
+                            return 1
+                        fi
+                    else
+                        # Nothing to stash — changes are staged or untracked
+                        # Just try to pull
+                        if git -C "$_path" pull --ff-only >/dev/null 2>&1
+                        then
+                            # Install new dependencies if package.json exists
+                            if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
+                            then
+                                if ! npm install --prefix "$_path" --silent 2>/dev/null
+                                then
+                                    __tac_line "$_status_line" \
+                                        "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                                fi
+                            fi
+                            __tac_line "$_status_line" "[UPDATED]" "$C_Success"
+                            return 0
+                        else
+                            __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
+                            return 1
+                        fi
+                    fi
+                    ;;
+                2)
+                    # Hard reset to remote
+                    git -C "$_path" fetch origin >/dev/null 2>&1
+                    git -C "$_path" reset --hard origin/HEAD >/dev/null 2>&1
+                    # Install new dependencies if package.json exists
+                    if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
+                    then
+                        if ! npm install --prefix "$_path" --silent 2>/dev/null
+                        then
+                            __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                        fi
+                    fi
+                    __tac_line "$_status_line" "[OVERWRITTEN (local changes discarded)]" "$C_Warning"
+                    return 0
+                    ;;
+                *)
+                    __tac_line "$_status_line" "[SKIPPED (has local changes)]" "$C_Dim"
+                    return 1
+                    ;;
+            esac
+        else
+            # Non-interactive mode — skip safely
+            __tac_line "$_status_line" "[SKIP - has local changes]" "$C_Dim"
+            return 1
+        fi
+    fi
+
+    # No local changes — check if there are upstream updates.
+    # A failed fetch (offline / no origin) must NOT read as "up to date":
+    # empty operands compare equal to 0 in bash, so validate first.
+    local _ahead_behind _ahead _behind
+    if ! git -C "$_path" fetch origin >/dev/null 2>&1
+    then
+        __tac_line "$_status_line" "[CHECK FAILED - fetch]" "$C_Warning"
+        return 1
+    fi
+    _ahead_behind=$(git -C "$_path" rev-list --left-right --count HEAD...origin/HEAD 2>/dev/null)
+    _ahead=$(cut -f1 <<< "$_ahead_behind")
+    _behind=$(cut -f2 <<< "$_ahead_behind")
+    if ! [[ "$_ahead" =~ ^[0-9]+$ && "$_behind" =~ ^[0-9]+$ ]]
+    then
+        __tac_line "$_status_line" "[CHECK FAILED - no upstream]" "$C_Warning"
+        return 1
+    fi
+
+    if [[ "$_behind" -eq 0 && "$_ahead" -eq 0 ]]
+    then
+        # Already at latest — nothing to pull
+        __tac_line "$_status_line" "[ALREADY UP TO DATE]" "$C_Success"
+        return 1
+    elif [[ "$_behind" -gt 0 ]]
+    then
+        # Behind remote — pull
+        if git -C "$_path" pull --ff-only >/dev/null 2>&1
+        then
+            # Run npm install if package.json exists (install new dependencies)
+            if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
+            then
+                if ! npm install --prefix "$_path" --silent 2>/dev/null
+                then
+                    __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                fi
+            fi
+            __tac_line "$_status_line" "[UPDATED]" "$C_Success"
+            return 0
+        else
+            __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
+            return 1
+        fi
+    else
+        # Ahead of remote (local commits) — don't overwrite
+        __tac_line "$_status_line" "[AHEAD OF REMOTE ($_ahead commit(s))]" "$C_Dim"
+        return 1
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # __up_oc_plugins — [7-10/20] Update OpenClaw path-installed plugins.
 # Checks Gigabrain, Lossless-Claw, and OpenStinger for git updates,
@@ -618,191 +812,6 @@ function __up_oc_plugins() {
         local vendor_dir="$HOME/.openclaw/vendor"
         local post_update_check_script="$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
 
-        # __update_plugin — Helper function to update a single plugin with change handling.
-        # Usage: __update_plugin <path> <remote_pattern> <display_name> <step_num>
-        # Returns: 0 if updated or up-to-date, 1 if skipped/error
-        function __update_plugin() {
-            local _path="$1" _remote_pattern="$2" _name="$3" _step_num="${4:-7}"
-            local _status_line="[${_step_num}/20] ${_name}"
-
-            if [[ ! -d "$_path" ]]
-            then
-                __tac_line "$_status_line" "[NOT INSTALLED]" "$C_Dim"
-                return 1
-            fi
-
-            if [[ ! -d "$_path/.git" ]]
-            then
-                __tac_line "$_status_line" "[INSTALLED (local)]" "$C_Dim"
-                return 1
-            fi
-
-            local _remote
-            _remote=$(git -C "$_path" remote get-url origin 2>/dev/null || echo "")
-            if [[ "$_remote" != *"$_remote_pattern"* ]]
-            then
-                __tac_line "$_status_line" "[SKIP - custom remote]" "$C_Dim"
-                return 1
-            fi
-
-            # Check for local changes
-            local _local_changes
-            _local_changes=$(git -C "$_path" status --porcelain 2>/dev/null)
-
-            if [[ -n "$_local_changes" ]]
-            then
-                # Local changes detected — ask user (only in interactive mode)
-                if [[ -t 0 ]]  # stdin is a terminal
-                then
-                    # Format prompt within table border for continuity
-                    printf '\n%s\n' "║$(printf '─%.0s' {1..76})║"
-                    printf '║ %s %-70s ║\n' "${C_Warning}Warning:${C_Reset}" "$_name — local changes detected:"
-                    echo "$_local_changes" | head -5 | while read -r line; do
-                        printf '║   %-70s ║\n' "${line:0:70}"
-                    done
-                    [[ $(wc -l <<< "$_local_changes") -gt 5 ]] && printf '║   %-70s ║\n' "... and more"
-                    printf '%s\n' "║$(printf '─%.0s' {1..76})║"
-                    printf '║ %-70s ║\n' "Choose an option:"
-                    printf '║   %-70s ║\n' "[1] Keep local changes (stash → pull → reapply)"
-                    printf '║   %-70s ║\n' "[2] Discard local changes (hard reset to remote)"
-                    printf '║   %-70s ║\n' "[3] Skip update (keep as-is)"
-                    printf '║ %-70s ║\n' "Selection: "
-                    printf '\e[74C'  # Move cursor to column 74 (after "Selection: ")
-
-                    local _choice
-                    read -r _choice
-                    printf '\e[0m'  # Reset
-
-                    case "$_choice" in
-                        1)
-                            # Stash, pull, then pop
-                            if git -C "$_path" stash push -m "pre-update backup" >/dev/null 2>&1
-                            then
-                                # Had something to stash — pull then reapply
-                                if git -C "$_path" pull --ff-only >/dev/null 2>&1
-                                then
-                                    # Install new dependencies if package.json exists
-                                    if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
-                                    then
-                                        if ! npm install --prefix "$_path" --silent 2>/dev/null
-                                        then
-                                            __tac_line "$_status_line" \
-                                                "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
-                                        fi
-                                    fi
-                                    if git -C "$_path" stash pop >/dev/null 2>&1
-                                    then
-                                        __tac_line "$_status_line" "[UPDATED (changes preserved)]" "$C_Success"
-                                    else
-                                        # Pop failed (usually a conflict): the local
-                                        # changes are still in the stash, so do NOT
-                                        # report them as preserved.
-                                        __tac_line "$_status_line" \
-                                            "[UPDATED - LOCAL CHANGES STILL STASHED]" "$C_Warning"
-                                    fi
-                                    return 0
-                                else
-                                    git -C "$_path" stash pop >/dev/null 2>&1 || true
-                                    __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
-                                    return 1
-                                fi
-                            else
-                                # Nothing to stash — changes are staged or untracked
-                                # Just try to pull
-                                if git -C "$_path" pull --ff-only >/dev/null 2>&1
-                                then
-                                    # Install new dependencies if package.json exists
-                                    if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
-                                    then
-                                        if ! npm install --prefix "$_path" --silent 2>/dev/null
-                                        then
-                                            __tac_line "$_status_line" \
-                                                "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
-                                        fi
-                                    fi
-                                    __tac_line "$_status_line" "[UPDATED]" "$C_Success"
-                                    return 0
-                                else
-                                    __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
-                                    return 1
-                                fi
-                            fi
-                            ;;
-                        2)
-                            # Hard reset to remote
-                            git -C "$_path" fetch origin >/dev/null 2>&1
-                            git -C "$_path" reset --hard origin/HEAD >/dev/null 2>&1
-                            # Install new dependencies if package.json exists
-                            if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
-                            then
-                                if ! npm install --prefix "$_path" --silent 2>/dev/null
-                                then
-                                    __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
-                                fi
-                            fi
-                            __tac_line "$_status_line" "[OVERWRITTEN (local changes discarded)]" "$C_Warning"
-                            return 0
-                            ;;
-                        *)
-                            __tac_line "$_status_line" "[SKIPPED (has local changes)]" "$C_Dim"
-                            return 1
-                            ;;
-                    esac
-                else
-                    # Non-interactive mode — skip safely
-                    __tac_line "$_status_line" "[SKIP - has local changes]" "$C_Dim"
-                    return 1
-                fi
-            fi
-
-            # No local changes — check if there are upstream updates.
-            # A failed fetch (offline / no origin) must NOT read as "up to date":
-            # empty operands compare equal to 0 in bash, so validate first.
-            local _ahead_behind _ahead _behind
-            if ! git -C "$_path" fetch origin >/dev/null 2>&1
-            then
-                __tac_line "$_status_line" "[CHECK FAILED - fetch]" "$C_Warning"
-                return 1
-            fi
-            _ahead_behind=$(git -C "$_path" rev-list --left-right --count HEAD...origin/HEAD 2>/dev/null)
-            _ahead=$(cut -f1 <<< "$_ahead_behind")
-            _behind=$(cut -f2 <<< "$_ahead_behind")
-            if ! [[ "$_ahead" =~ ^[0-9]+$ && "$_behind" =~ ^[0-9]+$ ]]
-            then
-                __tac_line "$_status_line" "[CHECK FAILED - no upstream]" "$C_Warning"
-                return 1
-            fi
-
-            if [[ "$_behind" -eq 0 && "$_ahead" -eq 0 ]]
-            then
-                # Already at latest — nothing to pull
-                __tac_line "$_status_line" "[ALREADY UP TO DATE]" "$C_Success"
-                return 1
-            elif [[ "$_behind" -gt 0 ]]
-            then
-                # Behind remote — pull
-                if git -C "$_path" pull --ff-only >/dev/null 2>&1
-                then
-                    # Run npm install if package.json exists (install new dependencies)
-                    if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
-                    then
-                        if ! npm install --prefix "$_path" --silent 2>/dev/null
-                        then
-                            __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
-                        fi
-                    fi
-                    __tac_line "$_status_line" "[UPDATED]" "$C_Success"
-                    return 0
-                else
-                    __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
-                    return 1
-                fi
-            else
-                # Ahead of remote (local commits) — don't overwrite
-                __tac_line "$_status_line" "[AHEAD OF REMOTE ($_ahead commit(s))]" "$C_Dim"
-                return 1
-            fi
-        }
 
         # Update each plugin
         if __update_plugin "$plugins_dir/gigabrain" "legendaryvibecoder/gigabrain" "Gigabrain Plugin" "7"
@@ -859,7 +868,6 @@ function __up_oc_plugins() {
         __tac_line "[10/20] OpenClaw Plugins" "[CACHED - ${hours_left} LEFT]" "$C_Dim"
     fi
 
-    unset -f __update_plugin
 }
 
 # ---------------------------------------------------------------------------
@@ -991,7 +999,7 @@ function __up_gpu_status() {
         do
             sleep 0.1
             gpu=$(__get_gpu)
-            ((_wait_count++))
+            _wait_count=$(( _wait_count + 1 ))
         done
     fi
 
@@ -1019,7 +1027,7 @@ function __up_temp_sanitation() {
     then
         while IFS= read -r -d '' _tmpf
         do
-            rm -f "$_tmpf" && ((count++))
+            rm -f "$_tmpf" && count=$(( count + 1 ))
         done < <(find /tmp/openclaw \( -name '*.tmp' -o -name 'python-*.exe' \) -print0 2>/dev/null)
     fi
     __tac_line "[14/20] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
@@ -1519,7 +1527,7 @@ function __cl_report_local() {
     do
         if [[ -n "$p" && ! -d "$p" ]]
         then
-            ((path_ghosts++))
+            path_ghosts=$(( path_ghosts + 1 ))
             ghost_paths+=("$p")
         fi
     done
@@ -1712,7 +1720,7 @@ function __cl_step() {
         return 1
     fi
     __tac_info "$label" "[COMPLETE]" "$C_Success"
-    ((deep_count++))
+    deep_count=$(( deep_count + 1 ))
     return 0
 }
 
@@ -1782,7 +1790,7 @@ function cl() {
     then
         systemctl --user reset-failed >/dev/null 2>&1
         __tac_info "Systemd ghosts" "[RESET]" "$C_Success"
-        ((deep_count++))
+        deep_count=$(( deep_count + 1 ))
     fi
 
     # NPM cache cleanup (safe - regenerates on demand)
@@ -1790,7 +1798,7 @@ function cl() {
     then
         npm cache verify --silent >/dev/null 2>&1
         __tac_info "NPM cache" "[VERIFIED]" "$C_Success"
-        ((deep_count++))
+        deep_count=$(( deep_count + 1 ))
     fi
 
     # Thumbnail cache (safe - regenerates on demand)
@@ -1798,7 +1806,7 @@ function cl() {
     then
         rm -rf ~/.cache/thumbnails/* 2>/dev/null
         __tac_info "Thumbnail cache" "[CLEARED]" "$C_Success"
-        ((deep_count++))
+        deep_count=$(( deep_count + 1 ))
     fi
 
     # Trash (safe - user-initiated cleanup)
@@ -1806,7 +1814,7 @@ function cl() {
     then
         rm -rf ~/.local/share/Trash/files/* ~/.local/share/Trash/info/* 2>/dev/null
         __tac_info "Trash" "[EMPTIED]" "$C_Success"
-        ((deep_count++))
+        deep_count=$(( deep_count + 1 ))
     fi
 
     # Broken symlinks (list only, don't auto-delete)
@@ -1915,7 +1923,7 @@ function logtrim() {
             tail -n 1000 "$logfile" > "${logfile}.tmp" || continue
             [[ -s "${logfile}.tmp" ]] || { rm -f "${logfile}.tmp"; continue; }
             mv "${logfile}.tmp" "$logfile" || { rm -f "${logfile}.tmp"; continue; }
-            ((total++))
+            total=$(( total + 1 ))
         fi
     done
     (( _had_nullglob )) || shopt -u nullglob
@@ -1955,7 +1963,7 @@ function check-graph-integrity() {
 
     if (( orphans > 0 )); then
         output+="  ${C_Error}●${C_Reset} Found $orphans orphan relationship targets\n"
-        ((issues++))
+        issues=$(( issues + 1 ))
     fi
 
     # Check for duplicate relationships
@@ -1967,7 +1975,7 @@ function check-graph-integrity() {
 
     if (( duplicates > 0 )); then
         output+="  ${C_Warning}●${C_Reset} Found $duplicates duplicate relationships\n"
-        ((issues++))
+        issues=$(( issues + 1 ))
     fi
 
     # Check for isolated entities (no relationships)

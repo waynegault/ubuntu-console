@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -312,7 +312,7 @@ function __so_ensure_llm_running() {
                     return 0
                 fi
                 sleep 1
-                (( _so_svc_wait++ ))
+                _so_svc_wait=$(( _so_svc_wait + 1 ))
             done
             __tac_info "Local LLM" "[SERVICE START TIMEOUT — check: journalctl --user -u llama-xe-minicpm5-1b-chat.service]" "$C_Error"
             return 1
@@ -479,7 +479,7 @@ function __so_start_gateway() {
         fi
 
         sleep 1
-        (( elapsed++ ))
+        elapsed=$(( elapsed + 1 ))
 
         # Only shorten the budget if the unit has genuinely gone away; a healthy
         # gateway that is merely slow to bind must keep the full budget.
@@ -513,7 +513,7 @@ function __so_start_gateway() {
                 return 0
             fi
             sleep 1
-            ((_grace_s++))
+            _grace_s=$(( _grace_s + 1 ))
         done
 
         __tac_info "Gateway" "[STARTING — finalizing]" "$C_Warning"

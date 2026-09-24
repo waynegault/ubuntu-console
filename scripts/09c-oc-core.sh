@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
@@ -321,7 +321,7 @@ function oc-purge() {
                 if [[ -d "$_session_dir" ]]
                 then
                     rm -rf "$_session_dir"
-                    ((_purge_count++))
+                    _purge_count=$(( _purge_count + 1 ))
                     __tac_info "Session" "[PURGED] $_session_dir" "$C_Dim"
                 fi
             fi
