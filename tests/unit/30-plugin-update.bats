@@ -32,7 +32,14 @@ setup() {
     mkdir -p "$HOME/.openclaw/extensions" "$HOME/.openclaw/vendor" \
              "$TAC_TEST_TMPDIR" "$TAC_CACHE_DIR" "$SANDBOX/remotes" "$SANDBOX/src"
 
-    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    # A global config that is NOT /dev/null: it rewrites GitHub URLs to the local
+    # fixture remotes, so a checkout can carry a real https origin — which is what
+    # the COMMAND matches on (09e passes a full URL as the remote pattern, where 08
+    # passes a bare owner/repo slug) — while fetch/pull/clone still run offline.
+    export GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_CONFIG_GLOBAL="$SANDBOX/gitconfig"
+    git config --file "$SANDBOX/gitconfig" \
+        "url.$SANDBOX/remotes/.insteadOf" "https://github.com/"
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid
     export GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
 
@@ -75,11 +82,16 @@ _make_remote() {
     git -C "$_src" push -q origin main
 }
 
-# _clone_from <pattern-path> <target-dir> — clone that fixture remote into place.
+# _clone_from <pattern-path> <target-dir> — clone that fixture remote into place and
+# give the checkout the URL form as its origin.  The set-url is required, not tidiness:
+# when url.*.insteadOf applies, git records the REWRITTEN url as origin (measured — a
+# clone of the https url stored the local path, and both command cases then reported
+# "[SKIP - custom remote]" because the URL the command matches on was nowhere in it).
 _clone_from() {
     local _pattern_path="$1" _target="$2"
     rm -rf "$_target"
     git clone -q "$SANDBOX/remotes/$_pattern_path.git" "$_target"
+    git -C "$_target" remote set-url origin "https://github.com/$_pattern_path.git"
 }
 
 # _clone_plugin <plugin-id> <target-dir> — clone the plugin's own fixture remote.
@@ -245,3 +257,55 @@ _run_plugins() {
     [[ "$output" == *"[CHECK FAILED - fetch]"* ]]
     [[ "$output" == *"absent/Martian-Engineering"* ]]
 }
+
+# ── The COMMAND, not just the helper ───────────────────────────────────────────
+# Everything above pins the step through __up_oc_plugins.  These run the real
+# `oc-plugin-update` the way a user does, because the delegation in 09e is exactly
+# the wiring a helper-only test cannot see: proving __update_plugin behaves says
+# nothing about whether the command calls it correctly, nor about the count and the
+# exit code it derives from the reply.
+#
+# The positive cases call the command as a PLAIN STATEMENT on purpose — this suite
+# runs under errexit, so surviving the call IS the assertion that it exited 0.
+# Only the failure case wraps it, because there the non-zero code is the thing
+# under test.
+
+@test "oc-plugin-update: a fleet that is already current reports NO UPDATES and exits 0" {
+    # The counting bug at the boundary a user sees: 09e returned 0 for "up to date"
+    # in its own copy, so all three were counted and this run claimed
+    # "3 plugin(s) processed" while changing nothing.
+    _scaffold_all
+
+    oc-plugin-update --all > "$SANDBOX/out.txt" 2>&1 < /dev/null
+
+    run cat "$SANDBOX/out.txt"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"LINE Update Status [NO UPDATES]"* ]]
+}
+
+@test "oc-plugin-update: the command renders the SHARED helper's vocabulary" {
+    # This is the delegation itself, and it is assertable hermetically: 09e's own copy
+    # of this logic said "[SKIP - different remote]"; only the shared helper says
+    # "[SKIP - custom remote]", and it also prints the Current/Expected pair that used
+    # to live only in 09e.  Seeing those on the command's output is proof the command
+    # routed through the helper rather than keeping a private copy.
+    _scaffold_all
+
+    oc-plugin-update --all > "$SANDBOX/out.txt" 2>&1 < /dev/null
+
+    run cat "$SANDBOX/out.txt"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[SKIP - custom remote]"* ]]
+    [[ "$output" != *"[SKIP - different remote]"* ]]
+    [[ "$output" == *"INFO   Expected https://github.com/legendaryvibecoder/gigabrain.git"* ]]
+}
+
+# LIMIT, stated rather than left implied: the command path's UPDATE and FAILURE
+# branches are not exercised here, and cannot be hermetically.  09e passes a full
+# `https://github.com/...` URL as the remote pattern, so a checkout only matches it
+# when `git remote get-url origin` returns that URL — and the only way to serve one
+# locally is `url.*.insteadOf`, which git applies when READING the url as well, so the
+# checkout always reports the rewritten local path (measured 2026-09-24: both attempts
+# landed on "[SKIP - custom remote]" instead of the fetch).  Those branches are
+# therefore pinned one level down, by the helper's own cases above (0/1/2, including a
+# remote that cannot be read).  Covering them at the command level needs a real remote.
