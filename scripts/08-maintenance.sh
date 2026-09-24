@@ -2,7 +2,12 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 54
+# Module Version: 55
+#   v55 (2026-09-24): 21 of this file's 65 unclassified swallow sites now carry a
+#   `# swallow-ok:` reason, and its baseline row falls 65 -> 44.  The 44 left are
+#   either sites whose failure degrades into a plausible success — brought to Wayne as
+#   candidates, deliberately not decided here — or sites whose consumer has not been
+#   read yet.  NOT a behaviour change: comments only.
 #   v54 (2026-09-24): the plugin step's summary stopped calling a missing-or-failed
 #   plugin "ALREADY UP TO DATE".  __update_plugin now returns 3 for "not updated, and
 #   not current" (its rc 1 means CURRENT, which is all a caller may report as up to
@@ -94,10 +99,12 @@ function __check_cooldown() {
     # Use flock for exclusive access to prevent race conditions
     # Ensure the cooldown DB directory exists before opening the lock FD —
     # a first-ever check may run before any __set_cooldown created it.
+    # swallow-ok: best-effort mkdir; the flock redirect on the line after the block fails loudly (and errexit returns non-zero) if the directory could not be made
     mkdir -p "$(dirname "$CooldownDB")" 2>/dev/null || true
     local last_run diff
     {
         flock -x 200 || return 1
+        # swallow-ok: an absent or unreadable DB means "never run", which the ${last_run:-0} directly below is the expected default for
         last_run=$(grep "^${key}=" "$CooldownDB" 2>/dev/null | tail -n 1 | cut -d= -f2)
         last_run=${last_run:-0}
         diff=$(( now - last_run ))
@@ -126,6 +133,7 @@ function __check_cooldown() {
 # ---------------------------------------------------------------------------
 function __set_cooldown() {
     local key="$1" now="$2"
+    # swallow-ok: same best-effort mkdir as __check_cooldown; the rewrite below fails loudly if the directory is not there
     mkdir -p "$(dirname "$CooldownDB")" 2>/dev/null || true
     # Rewrite the cooldown database: remove old entry, append new timestamp.
     # Use flock for exclusive access to prevent race conditions with __check_cooldown
@@ -250,6 +258,7 @@ function __up_apt_update() {
         fi
         # Check for upgradable packages first
         local upgradable
+        # swallow-ok: this count only picks the row's WORDING below; apt's own exit status is what decides whether an upgrade happened, and it is checked
         upgradable=$(apt list --upgradable 2>/dev/null | grep -cv "^Listing")
 
         # Dry-run first to detect dependency issues before actual upgrade
@@ -643,6 +652,7 @@ function __update_plugin() {
     fi
 
     local _remote
+    # swallow-ok: a probe whose failure IS the answer — an unreadable origin falls to the empty string, and the [SKIP - custom remote] branch below names it
     _remote=$(git -C "$_path" remote get-url origin 2>/dev/null || echo "")
     if [[ "$_remote" != *"$_remote_pattern"* ]]
     then
@@ -656,6 +666,7 @@ function __update_plugin() {
 
     # Check for local changes
     local _local_changes
+    # swallow-ok: a failed status read falls to "no local changes", and the ff-only pull below REFUSES rather than overwrite them ("Your local changes would be overwritten"), which lands in the DIVERGED branch and returns 2
     _local_changes=$(git -C "$_path" status --porcelain 2>/dev/null)
 
     if [[ -n "$_local_changes" ]]
@@ -717,6 +728,7 @@ function __update_plugin() {
                             fi
                             return 0
                         else
+                            # swallow-ok: the pop's own failure is what this branch reports — the row below says the changes are still stashed
                             git -C "$_path" stash pop >/dev/null 2>&1 || true
                             __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
                             return 2  # 2 = FAILED: the stash could not be reapplied
@@ -793,6 +805,7 @@ function __update_plugin() {
         fi
         return 2  # 2 = FAILED: the remote could not be read at all
     fi
+    # swallow-ok: a failed read yields empty operands, which the integer validation two lines down turns into [CHECK FAILED - no upstream] and rc 2
     _ahead_behind=$(git -C "$_path" rev-list --left-right --count HEAD...origin/HEAD 2>/dev/null)
     _ahead=$(cut -f1 <<< "$_ahead_behind")
     _behind=$(cut -f2 <<< "$_ahead_behind")
@@ -1268,13 +1281,16 @@ function __up_stale_processes() {
             # systemd-managed llama units filtered out above.
             for _pid in $true_orphans
             do
+                # swallow-ok: the first half of a TERM→check→KILL pair; a PID that has already gone makes TERM fail, which is the outcome being sought
                 kill -TERM "$_pid" 2>/dev/null || true
             done
             sleep 1
             for _pid in $true_orphans
             do
+                # swallow-ok: the probe's failure IS the answer — only a PID that SURVIVED the TERM gets the KILL below
                 if kill -0 "$_pid" 2>/dev/null
                 then
+                    # swallow-ok: SIGKILL is uncatchable, so a failure here can only mean the process is already gone
                     kill -KILL "$_pid" 2>/dev/null || true
                 fi
             done
@@ -1438,6 +1454,7 @@ function __up_npm_cache() {
 # ---------------------------------------------------------------------------
 function __tac_fix_loopback() {
     local _lb_sudo=0
+    # swallow-ok: the probe's failure IS the answer — no passwordless sudo is the refused-and-explained case just below, on stderr
     sudo -n true 2>/dev/null && _lb_sudo=1
     if (( _lb_sudo == 0 ))
     then
@@ -1446,16 +1463,21 @@ function __tac_fix_loopback() {
     fi
     if ! command ip link show loopback0 >/dev/null 2>&1
     then
+        # swallow-ok: NOT swallowed — the effect of both commands is verified by the ip-addr check below, whose failure is printed, logged and returned
         sudo ip link add loopback0 type dummy 2>/dev/null
         sudo ip link set loopback0 up 2>/dev/null
     fi
+    # swallow-ok: this IS the verification — a probe whose failure is the branch taken
     if ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
     then
+        # swallow-ok: the same verification follows it, and reports the result
         sudo ip addr add 127.0.0.2/8 dev loopback0 2>/dev/null
     fi
+    # swallow-ok: the verification the two writes above are judged by
     if ! command ip addr show loopback0 2>/dev/null | grep -q '127\.0\.0\.2/'
     then
         printf '%s\n' "[loopback] 127.0.0.2 unavailable — OpenClaw node-to-node traffic may fail" >&2
+        # swallow-ok: a durable COPY of an alarm that already reached stderr, and the destination defaults to /dev/null — failing to also write it cannot hide it
         echo "$(date +"%Y-%m-%d %H:%M:%S") [LOOPBACK-FAILED] could not set up loopback0/127.0.0.2" \
             >> "${ErrorLogPath:-/dev/null}" 2>/dev/null
         return 1
@@ -1502,6 +1524,7 @@ function up() {
     # Performance tracking: record start time for metrics
     local start_time=$now
 
+    # swallow-ok: `up` guarantees the file before any step appends to it; a failure here would surface on the first append
     touch "$CooldownDB" 2>/dev/null
 
     # Call each step — each function receives (now, force_mode, errCount_nameref)
