@@ -1903,6 +1903,33 @@ class SourceLineagePersistenceTests(unittest.TestCase):
         self.assertEqual(reloaded.nodes[0].sources, ['file:two.md'])
         self.assertEqual(reloaded.edges, [])
 
+    def test_removing_a_source_invalidates_the_cached_community_digest(self):
+        # `save_to_graph_db` re-writes meta.communities verbatim, so a digest left in
+        # place after a removal would name a deleted node as a community member and
+        # answer "what are the main themes" from a structure that no longer exists.
+        from kgraph.graph_db import load_from_graph_db, save_to_graph_db
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, 'graph.sqlite')
+            save_to_graph_db(db, {
+                'nodes': [
+                    {'id': 'a', 'label': 'Alpha', 'sources': ['file:one.md']},
+                    {'id': 'b', 'label': 'Beta', 'sources': ['file:two.md']},
+                ],
+                'edges': [],
+                'meta': {'community_method': 'leiden_like',
+                         'communities': [{'id': 'c0', 'members': ['a', 'b'],
+                                          'size': 2, 'central': 'a'}]},
+            })
+            graph = load_from_graph_db(db)
+            self.assertEqual(len(graph.meta.communities), 1)
+            graph.remove_source('file:one.md')
+            save_to_graph_db(db, graph)
+            reloaded = load_from_graph_db(db)
+        self.assertEqual([n.id for n in reloaded.nodes], ['b'])
+        self.assertEqual(reloaded.meta.communities, [])
+        self.assertEqual(reloaded.meta.community_method, '')
+
 
 class AstSourceLineageTests(unittest.TestCase):
     def test_ast_nodes_and_edges_carry_the_defining_file_as_source(self):

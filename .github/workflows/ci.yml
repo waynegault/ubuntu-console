@@ -129,7 +129,9 @@ jobs:
                tests/unit/25-claimed-success-witness.bats \
                tests/unit/26-docker-prune.bats \
                tests/unit/27-gh-token-wrapper.bats \
-               tests/unit/28-gh-keyring-watch.bats
+               tests/unit/28-gh-keyring-watch.bats \
+               tests/unit/29-errexit-arithmetic.bats \
+               tests/unit/30-plugin-update.bats
 
       - name: Run integration tests
         run: |
