@@ -309,7 +309,13 @@ _a_backend_alive() { __llm_server_running() { return 0; }; }
     touch -d '2 hours ago' "$LLM_TPS_CACHE"
     out=$(__cache_age_suffix "$LLM_TPS_CACHE" 3600)
     [[ "$out" == *"STALE"* ]]
-    [[ "$out" == *"7200"* ]] || { echo "the age is missing from '$out'"; return 1; }
+    # A WINDOW, not the exact figure: `touch` stamps the mtime 7200 s before ITS clock
+    # read, and the helper reads the clock again a moment later, so the printed age is
+    # 7200 or 7201 depending on which side of a second boundary the two reads land.
+    # Pinning "7200" made this case fail in CI (run 36068774956, case 184) with
+    # "(cached 7201s ago — STALE)" — a flake, not a defect.  The window is wide enough
+    # for that drift and still catches a wrong unit or a missing figure.
+    [[ "$out" =~ cached\ 720[0-3]s\ ago ]] || { echo "the age is missing or wrong in '$out'"; return 1; }
 
     # A missing cache renders as missing, not as a stale value.
     out=$(__cache_age_suffix "$SANDBOX/state/nothing-here" 60)
@@ -357,7 +363,9 @@ _render() {
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"TPS AGE"* ]] || { echo "a day-old rate rendered as current"; return 1; }
     [[ "$output" == *"STALE"* ]]
-    [[ "$output" == *"86400"* ]]
+    # Same window as the case above, for the same reason: the age is the difference of
+    # two clock reads, so a day-old stamp can render as 86400 or 86401 s.
+    [[ "$output" =~ 8640[0-3]s ]] || { echo "the age is missing or wrong in '$output'"; return 1; }
 }
 
 @test "stale: the agent block's marker is wired to the same helper" {
