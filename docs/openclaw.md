@@ -454,7 +454,8 @@ Exposes 6 tools via JSON-RPC over HTTP (binds localhost only):
 - `kgraph_query` — search nodes by pattern
 - `kgraph_path` — shortest path between two nodes
 - `kgraph_explain` — node description with connections, the community it belongs
-  to, and the source document(s) behind each connection
+  to, the source document(s) behind each connection, and `sources_overflow` when
+  that list was capped (see below)
 - `kgraph_community` — the community digest: one entry per community (label,
   size, central nodes, bridging nodes) when called bare, or one community's
   members, central nodes and boundary edges when given a `community_id`
@@ -468,6 +469,15 @@ still support (`kgraph --remove-source <key>`). `kgraph --update` records that
 lineage and caches the community digest with the graph, so
 `kgraph_community` answers from stored structure rather than re-running
 detection.
+
+That list is **capped** (`MAX_SOURCES_PER_ELEMENT`, 64) to keep the array out of
+the node property a fact can carry: past the cap only the first 64 keys are kept
+and the true count is recorded as `sources_overflow` in the element's metadata.
+`kgraph_explain` therefore adds `sources_overflow` to a connection only when its
+list was actually truncated — an uncapped list carries no such key, so the key's
+presence IS the claim — and the CLI rendering shows it as
+`(capped: 64 of 900)`. A caller must not read a 64-key `sources` list as the whole
+set without checking for it.
 
 Clients connect to `http://127.0.0.1:8331` (configurable port).
 
@@ -512,17 +522,25 @@ uv tool install ./scripts --extra ast
 | `~/.openclaw/logs/bash-errors.log` | ERR trap log |
 | `~/.openclaw/maintenance_cooldowns.txt` | Cooldown timestamps |
 | `scripts/completions/openclaw.bash` | Bash completions (repo-versioned, generated via `tools/sync-openclaw-completion.sh`) |
-| `~/.openclaw/.env.bridge` | Generated env bridge consumed by the gateway service |
+| `~/.openclaw/.env.bridge` | Windows→WSL env bridge: regenerated and sourced by `scripts/load-vault-env.sh` (which drives `~/.local/bin/import-windows-env.sh`). Holds live keys, is **not** read by systemd, and is gitignored in the OpenClaw repo — never commit it. |
 | `~/.openclaw/kgraph.json` | Optional read-only fallback graph source (`--store`); not written |
 | `~/.openclaw/kgraph.sqlite` | Primary persisted SQLite store for `oc g` |
 | `~/.openclaw/obsidian-vault/` | Gigabrain-exported Obsidian vault root (notes nest under `Gigabrain/`); `tools/mirror-vault.sh` copies it to `C:\Users\wayne\Obsidian\Gigabrain` |
 | `~/.config/systemd/user/openclaw-gateway.service` | systemd unit file |
-| `~/.config/systemd/user/openclaw-gateway.service.d/env-bridge.conf` | Gateway env-bridge drop-in (ExecStartPre + EnvironmentFile) |
+| `~/.openclaw/gateway.systemd.env` | Gateway `EnvironmentFile` — the service's actual env source (`OPENCLAW_SERVICE_MANAGED_ENV_KEYS` names the credentials bridged into it) |
 | `~/.config/systemd/user/llama-watchdog.service` | Watchdog systemd unit |
 | `~/.config/systemd/user/llama-watchdog.timer` | Watchdog timer |
 | `/dev/shm/tac_win_api_keys` | Bridged API key cache (tmpfs) |
 | `~/.local/bin/tac_hostmetrics.sh` | Host CPU + iGPU + NVIDIA dGPU load/engines |
 | `~/.local/bin/llama-watchdog.sh` | Watchdog: auto-restart llama-server |
+
+> **Corrected 2026-09-24.** This table previously listed
+> `~/.config/systemd/user/openclaw-gateway.service.d/env-bridge.conf` as the gateway's env-bridge
+> drop-in, and described `~/.openclaw/.env.bridge` as "consumed by the gateway service". Neither
+> held: there is no such drop-in on the host, `git log --all -- "*env-bridge*"` in this repo is
+> empty, and no systemd unit references the bridge file at all. Its real writer *and* reader is
+> `scripts/load-vault-env.sh` — it regenerates the file via `~/.local/bin/import-windows-env.sh` and
+> then sources it. The gateway takes its environment from `gateway.systemd.env`.
 
 ← [Back to README](../README.md)
 
