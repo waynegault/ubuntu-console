@@ -1,0 +1,30 @@
+# tests/bats-suites.tsv — the canonical BATS suite table (single source of truth).
+#
+# Both bridges read this file rather than restating the list:
+#   tests/test_bats_bridge.py    — pytest: one generated test per BATS @test case
+#   tests/test_bats_unittest.py  — stdlib unittest: one case per suite FILE
+# and tests/_bats_suites.py is the one parser they share.  Same arrangement as
+# scripts/_module-list.sh is for the two shell loaders: a suite's membership and its
+# timeouts are stated once, so the two runners cannot disagree about either.
+#
+# Columns, tab-separated, one suite per line:
+#   pattern <TAB> marker <TAB> per_case_timeout_s <TAB> file_timeout_s
+#
+#   pattern              glob, relative to the repo root
+#   marker               the pytest marker the pytest bridge applies to every case in
+#                        the suite.  It must be registered in pytest.ini's markers=:
+#                        an unregistered name is a collection error under
+#                        --strict-markers, never a silent fallback.  The unittest
+#                        bridge reads the column for its display only.
+#   per_case_timeout_s   bounds ONE case (BATS_TEST_TIMEOUT)
+#   file_timeout_s       bounds a whole-file run — a different quantity from the
+#                        per-case figure, so the two must not be compared
+#
+# A new .bats file inside tests/unit/ or tests/integration/ joins its suite through
+# the glob with no edit here.  A new SUITE (a new directory) needs a line, because its
+# timeouts cannot be inferred from a glob.
+tests/unit/*.bats	bats_unit	120	600
+tests/tactical-console.bats	bats_full	900	2700
+tests/tactical-console-fast.bats	bats_fast	180	900
+tests/tactical-console-function-availability.bats	bats_fast	60	300
+tests/integration/*.bats	bats_integration	300	1200

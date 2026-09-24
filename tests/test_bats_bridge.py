@@ -11,11 +11,16 @@ from typing import Any
 
 import pytest
 
+import _bats_suites
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BATS_EXECUTABLE = "bats"
 
 # ── BATS suite definitions ─────────────────────────────────────────────────
-# (glob_pattern, marker_or_marks, per_test_timeout_s, whole_file_timeout_s)
+# The table itself is tests/bats-suites.tsv — the file the stdlib bridge
+# (tests/test_bats_unittest.py) reads too, so the two runners cannot drift on which
+# suites exist or what bounds them.  tests/_bats_suites.py parses it and rejects a
+# malformed row, a suite whose glob matches nothing, and a file matched by two rows.
 #
 # per_test_timeout_s   bounds ONE case.  It is the process timeout for a filtered
 #                      run and BATS_TEST_TIMEOUT for a whole-file run, so a hung
@@ -24,13 +29,12 @@ BATS_EXECUTABLE = "bats"
 # whole_file_timeout_s bounds a whole-file run of every case in the suite, so it is
 #                      a different quantity from the per-test figure and must not be
 #                      compared with it.
-_BATS_SUITE_DEFS: list[tuple[str, pytest.MarkDecorator, int, int]] = [
-    ("tests/unit/*.bats",                 pytest.mark.bats_unit,         120,  600),
-    ("tests/tactical-console.bats",        pytest.mark.bats_full,         900, 2700),
-    ("tests/tactical-console-fast.bats",   pytest.mark.bats_fast,         180,  900),
-    ("tests/tactical-console-function-availability.bats", pytest.mark.bats_fast, 60, 300),
-    ("tests/integration/*.bats",           pytest.mark.bats_integration, 300, 1200),
-]
+#
+# The suite's marker is resolved by NAME from that same row, which is what makes the
+# table's marker column load-bearing: pytest.ini registers every name it can hold, so
+# a typo is the --strict-markers collection error that names it rather than a silent
+# fall-through to a marker no -m selection asks for.
+_BATS_SUITES: list[_bats_suites.BatsSuite] = _bats_suites.load_suites()
 
 # Cache: maps file stem -> {test_name: {"passed": bool, "output": str}}
 _bats_results_cache: dict[str, dict[str, dict[str, Any]]] = {}
@@ -347,25 +351,28 @@ def _timeout_output(exc: subprocess.TimeoutExpired) -> str:
 
 # ── Generate one pytest test per individual BATS @test block ──────────────
 
-_INDIVIDUAL_TESTS: list[tuple[str, str, int, int]] = []  # (stem, test_name, per_test_s, file_s)
+# (stem, test_name, suite_marker, per_test_s, file_s)
+_INDIVIDUAL_TESTS: list[tuple[str, str, pytest.MarkDecorator, int, int]] = []
 # stem -> file, resolved in ONE pass.  `_make_test` used to search with a recursive
 # glob per test (654 of them); `**/` walks the whole repo, so the search was already
 # wasteful and making it deterministic with sorted() turned that into 654 full-tree
-# walks — collection appeared to hang.  Every BATS file comes from the suite
-# patterns above, and stems are unique, so one indexed pass is exact.
+# walks — collection appeared to hang.  Every BATS file comes from the suite table,
+# and a stem claimed by two rows is an error there, so one indexed pass is exact.
 _BATS_BY_STEM: dict[str, Path] = {}
 # stem -> number of @test cases, so a caller asked for every case can be answered
 # without re-reading the file per test.
 _CASE_COUNT_BY_STEM: dict[str, int] = {}
 
-for _pattern, _marker, _per_test_s, _file_s in _BATS_SUITE_DEFS:
-    for _p in sorted(REPO_ROOT.glob(_pattern)):
-        _stem = _p.stem
-        _BATS_BY_STEM.setdefault(_stem, _p)
-        _case_names = _parse_bats_tests(_p)
-        _CASE_COUNT_BY_STEM.setdefault(_stem, len(_case_names))
-        for _tname in _case_names:
-            _INDIVIDUAL_TESTS.append((_stem, _tname, _per_test_s, _file_s))
+for _suite, _p in _bats_suites.suite_files(_BATS_SUITES):
+    _stem = _p.stem
+    _BATS_BY_STEM.setdefault(_stem, _p)
+    _case_names = _parse_bats_tests(_p)
+    _CASE_COUNT_BY_STEM.setdefault(_stem, len(_case_names))
+    _marker = getattr(pytest.mark, _suite.marker)
+    for _tname in _case_names:
+        _INDIVIDUAL_TESTS.append(
+            (_stem, _tname, _marker, _suite.per_case_timeout_s, _suite.file_timeout_s)
+        )
 
 
 def _session_selected_every_case(request: pytest.FixtureRequest, bats_file: Path) -> bool:
@@ -394,7 +401,13 @@ def _session_selected_every_case(request: pytest.FixtureRequest, bats_file: Path
     return False
 
 
-def _make_test(stem: str, test_name: str, per_test_timeout_s: int, file_timeout_s: int):
+def _make_test(
+    stem: str,
+    test_name: str,
+    marker: pytest.MarkDecorator,
+    per_test_timeout_s: int,
+    file_timeout_s: int,
+):
     """Generate a pytest test function for a single BATS test case."""
     bats_file = _BATS_BY_STEM[stem]
 
@@ -453,9 +466,12 @@ def _make_test(stem: str, test_name: str, per_test_timeout_s: int, file_timeout_
     setattr(_test, "_bats_file", bats_file)
     setattr(_test, "_bats_timeout", file_timeout_s)
 
-    # Apply markers via decoration so pytest -m filtering works
+    # Apply markers via decoration so pytest -m filtering works.  The suite marker is
+    # the one its own table row names, never a lookup by timeout: two rows may share a
+    # timeout, and matching on that picked a marker by table position rather than by
+    # what the table said.
     _test = pytest.mark.bats(_test)
-    _test = _get_marker_for_timeout(per_test_timeout_s)(_test)
+    _test = marker(_test)
     if per_test_timeout_s >= 600:
         _test = pytest.mark.slow(_test)
 
@@ -472,15 +488,8 @@ def _make_test(stem: str, test_name: str, per_test_timeout_s: int, file_timeout_
     return _test
 
 
-def _get_marker_for_timeout(per_test_timeout_s: int) -> pytest.MarkDecorator:
-    for _pattern, marker, to, _file_to in _BATS_SUITE_DEFS:
-        if to == per_test_timeout_s:
-            return marker
-    return pytest.mark.bats_default
-
-
-for _stem, _tname, _per_test_s, _file_s in _INDIVIDUAL_TESTS:
-    _fn = _make_test(_stem, _tname, _per_test_s, _file_s)
+for _stem, _tname, _marker, _per_test_s, _file_s in _INDIVIDUAL_TESTS:
+    _fn = _make_test(_stem, _tname, _marker, _per_test_s, _file_s)
     if _fn.__name__ in globals():
         # Ids are unique by construction (unique file stems + a digest of the full
         # name), so this can only fire if two @test blocks in one file share a name —
@@ -528,24 +537,23 @@ def test_bridge_parse_matches_bats_count() -> None:
     parse drift a test failure instead of a phantom test.
     """
     checked = 0
-    for _pattern, _marker, _per_test_s, _file_s in _BATS_SUITE_DEFS:
-        for bats_file in sorted(REPO_ROOT.glob(_pattern)):
-            real = int(
-                subprocess.run(
-                    [BATS_EXECUTABLE, "--count", str(bats_file)],
-                    cwd=REPO_ROOT,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                ).stdout.strip()
-            )
-            parsed = len(_parse_bats_tests(bats_file))
-            assert parsed == real, (
-                f"{bats_file.relative_to(REPO_ROOT)}: parsed {parsed} @test cases but "
-                f"bats --count says {real} — the parser is matching text that is not a "
-                f"declaration (comment, string, or heredoc)"
-            )
-            checked += 1
+    for _suite, bats_file in _bats_suites.suite_files(_BATS_SUITES):
+        real = int(
+            subprocess.run(
+                [BATS_EXECUTABLE, "--count", str(bats_file)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+        parsed = len(_parse_bats_tests(bats_file))
+        assert parsed == real, (
+            f"{bats_file.relative_to(REPO_ROOT)}: parsed {parsed} @test cases but "
+            f"bats --count says {real} — the parser is matching text that is not a "
+            f"declaration (comment, string, or heredoc)"
+        )
+        checked += 1
     assert checked, "expected at least one BATS suite to compare against"
 
 
@@ -596,7 +604,7 @@ def test_bridge_long_name_ids_carry_a_digest_of_the_full_name() -> None:
     """
     generated = _generated_tests()
     checked = 0
-    for stem, test_name, _per_test_s, _file_s in _INDIVIDUAL_TESTS:
+    for stem, test_name, _marker, _per_test_s, _file_s in _INDIVIDUAL_TESTS:
         safe_name = re.sub(r"_+", "_", re.sub(r"[^a-zA-Z0-9_]", "_", test_name)).strip("_")
         if len(safe_name) <= 60:
             continue

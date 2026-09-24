@@ -16,6 +16,17 @@ from pathlib import Path
 
 import pytest
 
+# pytest must NOT collect tests/test_bats_unittest.py.  That module is the stdlib
+# runner: it generates one case per BATS suite FILE and runs each whole file, so
+# collecting it here as well would run every suite a second time — the same suites,
+# twice, in a session that is already ~30 min long.
+#
+# It is a variable in conftest rather than `collect_ignore` in pytest.ini because that
+# key does not exist there: pytest 9.1.1 rejects it with --strict-config and
+# "Unknown config option: collect_ignore" (measured 2026-09-24; `collect_ignore_glob`
+# in the ini is rejected the same way and silently collects the file anyway).
+collect_ignore = ["test_bats_unittest.py"]
+
 _LOCK_DIR = Path(tempfile.gettempdir()) / "tac-pytest-bats-locks"
 # Floor for the lock wait.  The wait is bounded by the BATS file's own timeout
 # (see _serialize_bats_suites): concurrent runs of the same file must

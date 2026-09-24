@@ -511,7 +511,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1309 total tests: 893 BATS + 416 Python).
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1309 total tests: 893 BATS + 416 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
 
 ### Running Tests
 
@@ -519,6 +519,7 @@ The project uses two test frameworks: **BATS** (bash automated testing) for shel
 |---------|-------------|-----------|
 | `unittest` | All BATS suites + Python tests (via `tools/run-tests.sh`) | 20-40 min |
 | `unittest --fast` | Fast static-analysis BATS only (`tactical-console-fast.bats`) | ~2 min |
+| `.venv/bin/python3 -m unittest discover -s tests -p 'test_bats_unittest.py'` | All BATS suites via the stdlib bridge — one case per suite file; 04 and 12 skipped | 20-40 min |
 | `pytest tests/` | Python tests + the BATS bridge (add `--ignore=tests/test_bats_bridge.py` for Python only) | varies |
 | `pytest tests/test_bats_bridge.py -k "test_tactical_console_fast"` | Single BATS file via bridge | ~2 min |
 | `bats tests/tactical-console-fast.bats --timing` | Single BATS file directly | ~2 min |
@@ -537,16 +538,25 @@ Which invocation depends on what the session selected:
 
 The parser records each case's own runtime from bats' `--timing` output, which is what the duration tracker in `tests/conftest.py` reports for bridged tests (a cache hit has no meaningful wall clock of its own).
 
+### Standard-library Bridge (`test_bats_unittest.py`)
+
+The same suites also run with no pytest in the picture: `.venv/bin/python3 -m unittest discover -s tests -p 'test_bats_unittest.py'` (the row in the table above). One case is generated per suite FILE from `tests/bats-suites.tsv`, and each case runs its whole file in a single `bats` process — so a failure reports the file, its exit status, the failing cases from TAP and the run's last lines. Per-case granularity is deliberately left to the pytest bridge: a `bats` spawn per case costs ~8.8 s of fixed setup (measured above), and the alternative — reusing the bridge's whole-file cache — is the one piece of it that should not exist in two places.
+
+`04-llama-cpp-inventory.bats` (live downloads; mutates the host) and `12-gpu-exclusivity.bats` (takes the CUDA card lock this box shares with the investigator) are skipped by default, each skip stating its reason; `TAC_UNITTEST_ALL=1` runs them. CI excludes the same two files for the same reasons. `pytest` does **not** collect that module (`collect_ignore` in `tests/conftest.py`): it would otherwise run every suite a second time, since the pytest bridge already covers each case individually.
+
 ### Key Infrastructure Files
 
-- `tests/conftest.py` — BATS suite serialization lock (prevents parallel runs), VS Code discovery guard (`_is_vscode_discovery()`), stale lock cleanup
+- `tests/conftest.py` — BATS suite serialization lock (prevents parallel runs), VS Code discovery guard (`_is_vscode_discovery()`), stale lock cleanup, `collect_ignore` for the stdlib bridge
+- `tests/bats-suites.tsv` — the canonical suite table (glob, pytest marker, per-case and whole-file timeout), read by both bridges
+- `tests/_bats_suites.py` — the parser for that table; rejects a malformed row, a suite whose glob matches nothing, and one file matched by two rows
 - `tests/test_bats_bridge.py` — Dynamic test generation, TAP output parser with diagnostic line capture, marker-based filtering (`-m bats_unit`, `bats_fast`, `bats_full`, `bats_integration`)
+- `tests/test_bats_unittest.py` — stdlib `unittest` bridge: one generated case per suite file, each run whole
 - `tests/test_bats_lock_fixture.py` — Tests for the lock fixture itself
 - `tools/run-tests.sh` — CLI test runner invoked by `unittest` command
 
 ### Test Counts
 
-Counts are enforced by `tools/docs-sync-check.sh`; per-case and whole-file timeouts come from `_BATS_SUITE_DEFS` in `tests/test_bats_bridge.py`.
+Counts are enforced by `tools/docs-sync-check.sh`; the suite list and its per-case and whole-file timeouts come from `tests/bats-suites.tsv`, parsed by `tests/_bats_suites.py` and read by both bridges.
 
 | Suite | File | Count | Per-case timeout | Whole-file timeout |
 |-------|------|-------|------------------|--------------------|
@@ -558,7 +568,7 @@ Counts are enforced by `tools/docs-sync-check.sh`; per-case and whole-file timeo
 | Python | `tests/test_*.py` | 416 | 1000s (`pytest.ini`) | — |
 | **Total** | | **1309** | | |
 
-**Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and all eight markers the BATS bridge applies dynamically are registered there. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 387 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
+**Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and every marker the BATS bridge applies dynamically (`bats`, `bats_unit`, `bats_fast`, `bats_full`, `bats_integration`, `slow`) is registered there. There is deliberately no `bats_default`: each suite's marker now comes by name from `tests/bats-suites.tsv`, so a name the table gets wrong fails collection instead of quietly filing the suite under a marker no `-m` selection asks for. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 387 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
 
 ---
 
