@@ -192,13 +192,22 @@ def c_adhoc_stderr(text):
 
 
 def c_funcs_over_100(text):
-    """10.4 — functions longer than 100 lines (bounded by the next definition)."""
+    """10.4 — functions longer than 100 lines (bounded by the next definition).
+
+    COMMENT-ONLY LINES DO NOT COUNT (2026-09-24).  They did, and that made this counter
+    fight the swallow guard: `# swallow-ok: <reason>` is a comment the guard REQUIRES, so
+    recording a decision lengthened a measured function and re-baselining 10.4 became the
+    price of classifying a site — measured three times in one session.  A counter that
+    punishes documentation measures the wrong thing.  Blank lines are still counted, so
+    padding a function out is still a rise.
+    """
     defs = _func_defs(text)
-    total = len(_lines(text))
+    lines = _lines(text)
+    total = len(lines)
     n = 0
     for k, (start, _name) in enumerate(defs):
         end = defs[k + 1][0] if k + 1 < len(defs) else total
-        if end - start > FUNC_LONG_LINES:
+        if len([l for l in lines[start:end] if not COMMENT.match(l)]) > FUNC_LONG_LINES:
             n += 1
     return n
 
@@ -262,7 +271,10 @@ FIXTURES = {
     "8.1.8": ("x=" + "a" * 130 + "\n" + "y=short\n", 1),
     "9.5": ("# noted\nnoted() { :; }\nbare() { :; }\n", 1),
     "9.7": ("exit 0\nreturn 1\nexit 3\n# justified above\nreturn 4\nexit 5 # inline\n", 1),
-    "10.4": ("f() {\n" + "\n".join(["  :"] * 105) + "\n}\n", 1),
+    "10.4": [("f() {\n" + "\n".join(["  :"] * 105) + "\n}\n", 1),
+             # ...and the exemption that keeps this counter compatible with the swallow
+             # guard: 60 code lines + 60 comment lines is 60, not 120.
+             ("g() {\n" + "\n".join(["  :", "  # why"] * 60) + "\n}\n", 0)],
     "10.7": ("echo bad >&2\nhelper warn\n", 1),
 }
 
@@ -274,12 +286,16 @@ def selftest():
             print(f"  control {cid:<7} MISSING FIXTURE (a counter with no control is not evidence)")
             failures += 1
             continue
-        text, expected = FIXTURES[cid]
-        got = fn(text)
-        ok = got == expected
-        if not ok:
-            failures += 1
-        print(f"  control {cid:<7} expected {expected}  got {got}  {'OK' if ok else 'MISMATCH'}")
+        entry = FIXTURES[cid]
+        # A counter may need more than one control — 10.4 does: one proving a long
+        # function IS counted, one proving a function long only in COMMENTS is not.
+        pairs = entry if isinstance(entry[0], (list, tuple)) else [entry]
+        for text, expected in pairs:
+            got = fn(text)
+            ok = got == expected
+            if not ok:
+                failures += 1
+            print(f"  control {cid:<7} expected {expected}  got {got}  {'OK' if ok else 'MISMATCH'}")
     # A control must also prove the *other* direction: the pristine text scores 0.
     clean = (
         "#!/usr/bin/env bash\n"
