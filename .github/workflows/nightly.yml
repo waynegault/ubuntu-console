@@ -29,33 +29,32 @@ jobs:
         # Verified 2026-09-18 with a two-arm control (markers absent without, present with).
         run: bats --print-output-on-failure tests/tactical-console.bats
 
-      - name: Run fast + function-availability suites
-        run: |
-          bats --print-output-on-failure tests/tactical-console-fast.bats
-          bats --print-output-on-failure tests/tactical-console-function-availability.bats
+      # WHY THIS WORKFLOW IS NOT A SECOND COPY OF CI.  ci.yml runs, per push, the fast
+      # suite, units 01/02/09/10/11 and 13-30, and every integration suite.  This
+      # workflow used to repeat all of that and then add the full behavioural suite, so
+      # most of its runtime re-proved what the same commit had already proved.  What is
+      # left here is what ONLY the nightly can run: the full 387-case suite (20-35 min
+      # on a loaded box, which is why it is not per push), the function-availability
+      # suite, and the unit suites CI deliberately excludes — 05-08 (absent from CI's
+      # list) and 12 (CI skips it because it takes the CUDA card lock this box shares
+      # with the investigator).  Re-adding a suite here that ci.yml already runs is a
+      # duplicate, not extra coverage.
+      - name: Run the function-availability suite
+        run: bats --print-output-on-failure tests/tactical-console-function-availability.bats
 
-      - name: Run unit suites
+      - name: Run the unit suites CI excludes
         run: |
-          # 04-llama-cpp-inventory.bats excluded: performs live downloads + mutates host
-          bats --print-output-on-failure tests/unit/01-refresh-keys.bats \
-               tests/unit/02-so-startup.bats \
-               tests/unit/05-spec-dec-threads.bats \
+          # 04-llama-cpp-inventory.bats is excluded from BOTH workflows: it performs
+          # live downloads and mutates the host.
+          bats --print-output-on-failure tests/unit/05-spec-dec-threads.bats \
                tests/unit/06-spec-dec-stats.bats \
                tests/unit/07-spec-dec-launch.bats \
                tests/unit/08-autotune-workload.bats \
-               tests/unit/09-check-agent-use.bats \
-               tests/unit/10-clean-orphans.bats \
-               tests/unit/11-module-versions.bats \
                tests/unit/12-gpu-exclusivity.bats
 
-      - name: Run integration suites
-        run: |
-          bats --print-output-on-failure tests/integration/01-maintenance.bats \
-               tests/integration/02-model-lifecycle.bats \
-               tests/integration/03-backup-restore.bats \
-               tests/integration/04-watchdog.bats \
-               tests/integration/05-refresh-keys.bats \
-               tests/integration/e2e-bench-autotune.bats
+      # The integration suites are deliberately NOT repeated here: ci.yml runs
+      # 01-maintenance, 02-model-lifecycle, 03-backup-restore, 04-watchdog,
+      # 05-refresh-keys and e2e-bench-autotune on every push, on the same commit.
 
       - name: Set up Python
         uses: actions/setup-python@v7
