@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 51
+# Module Version: 52
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -637,6 +637,10 @@ function __update_plugin() {
     if [[ "$_remote" != *"$_remote_pattern"* ]]
     then
         __tac_line "$_status_line" "[SKIP - custom remote]" "$C_Dim"
+        # The pair below used to print only in 09e's own copy of this logic; keeping
+        # it here means the manual command loses no detail when it delegates instead.
+        __tac_info "  Current" "$_remote" "$C_Dim"
+        __tac_info "  Expected" "$_remote_pattern" "$C_Dim"
         return 1
     fi
 

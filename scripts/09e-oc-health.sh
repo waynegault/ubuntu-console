@@ -9,13 +9,13 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
 # ==============================================================================
 # 09e-oc-health
 # ==============================================================================
 # @modular-section: openclaw
 # @depends: constants, design-tokens, ui-engine, hooks
-# @uses: llm-registry, llm-server
+# @uses: llm-registry, llm-server, maintenance
 # @exports: oc-health, oc-diag, oc-doctor-local, oc-failover, oc-sec,
 #   oc-cron, oc-skills, oc-plugins, oc-plugin-update, oc-tail, oc-channels,
 #   oc-stinger, oc-tui, oc-config, oc-docs, oc-usage, oc-local-llm,
@@ -278,7 +278,7 @@ function oc-plugin-update() {
     local plugin_id="${1:---all}"
     local plugins_dir="$HOME/.openclaw/extensions"
     local vendor_dir="$HOME/.openclaw/vendor"
-    local updated=0
+    local updated=0 plugin_errors=0
 
     __tac_header "OPENCLAW PLUGIN UPDATE" "open"
 
@@ -300,33 +300,20 @@ function oc-plugin-update() {
             fi
         elif [[ -d "$plugin_dir/.git" ]]
         then
-            # Git repo — pull updates
-            local current_remote
-            current_remote=$(git -C "$plugin_dir" remote get-url origin 2>/dev/null || echo "")
-            if [[ "$current_remote" == *"$repo_url"* ]]
+            # Git checkout — the shared helper owns this case (08-maintenance.sh,
+            # loaded before this module).  It refuses a checkout that has local
+            # changes (this copy used to pull into one), validates the fetch, prints
+            # the remote's own error on failure, and reports 0 changed / 1 benign /
+            # 2 FAILED.  Returning 0 only for a real change is what makes the `updated`
+            # count below true — this copy counted an already-up-to-date plugin as
+            # updated, because its own "up to date" path also returned 0.
+            local _rc=0
+            __update_plugin "$plugin_dir" "$repo_url" "$id" 0 || _rc=$?
+            if (( _rc == 2 ))
             then
-                local pull_out
-                if pull_out=$(git -C "$plugin_dir" pull --ff-only 2>&1)
-                then
-                    if [[ "$pull_out" == *"Already up to date"* || "$pull_out" == *"Already up-to-date"* ]]
-                    then
-                        __tac_line "$id" "[UP TO DATE]" "$C_Dim"
-                    else
-                        __tac_line "$id" "[UPDATED]" "$C_Success"
-                    fi
-                    return 0
-                else
-                    # A failed pull must not read as "up to date": surface it.
-                    __tac_line "$id" "[UPDATE FAILED]" "$C_Error"
-                    printf '%s\n' "  ${C_Dim}${pull_out}${C_Reset}"
-                    return 1
-                fi
-            else
-                __tac_line "$id" "[SKIP - different remote]" "$C_Warning"
-                __tac_info "  Current" "$current_remote" "$C_Dim"
-                __tac_info "  Expected" "$repo_url" "$C_Dim"
-                return 1
+                plugin_errors=$(( plugin_errors + 1 ))
             fi
+            [[ "$_rc" -eq 0 ]]
         else
             # Not a git repo — offer to reinstall
             __tac_line "$id" "[REINSTALL REQUIRED]" "$C_Warning"
@@ -385,6 +372,10 @@ function oc-plugin-update() {
         __tac_line "Update Status" "[NO UPDATES]" "$C_Dim"
     fi
     __tac_footer
+    # The command succeeds when it ran.  A plugin whose update FAILED (the helper's
+    # rc 2) is the one case that must not exit 0, so a caller can tell a clean no-op
+    # run from one that could not even read a remote.
+    (( plugin_errors == 0 ))
 }
 
 # ---------------------------------------------------------------------------
