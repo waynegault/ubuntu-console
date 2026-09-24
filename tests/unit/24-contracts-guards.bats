@@ -761,16 +761,21 @@ SH
     [[ "$output" == *"STALE     scripts/01-alpha.sh"* ]]
 }
 
-@test "swallows: the scan is limited to scripts/ and says so" {
+@test "swallows: the scan covers bin/ and tools/ too, and a new file there fails" {
     mkdir -p "$FIXTURE/bin"
     cat > "$FIXTURE/bin/helper.sh" <<'SH'
 #!/usr/bin/env bash
 helper() { command -v x 2>/dev/null || true; }
 SH
     run "$CHECKER" swallows --repo "$FIXTURE"
-    [[ "$status" -eq 0 ]]
-    [[ "$output" == *"scripts/*.sh"* ]]
-    [[ "$output" == *"bin/ and tools/ are not scanned"* ]]
+    # This case used to assert the OPPOSITE — "the scan is limited to scripts/ and
+    # says so" — and it passed while the tool could not see bin/ at all.  That is
+    # exactly how bin/llama-watchdog.sh (49 sites) and tools/clean-orphans.sh (40)
+    # stayed unmeasured, so the case now pins the widened scope instead.
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"bin/helper.sh"* ]]
+    [[ "$output" == *"scripts/*.sh, bin/*"* ]]
+    [[ "$output" != *"bin/ and tools/ are not scanned"* ]]
 }
 
 @test "swallows: --print-baseline prints rows and writes nothing" {

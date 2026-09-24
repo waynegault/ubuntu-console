@@ -245,7 +245,12 @@
 #      https://towardsdatascience.com/coding-agents-dont-need-longer-history-they-need-intent-continuity/
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-09-24): two corrections to v7, both found by running the thing rather
+#   than reading it.  The swallows footer still claimed "bin/ and tools/ are not
+#   scanned" — false the moment the corpus widened — and tests/unit/24 pinned that
+#   old scope, so the widen shipped with a red CI on three pushes.  The case now
+#   pins the widened scope; the footer names what is still outside it.
 #   v7 (2026-09-24): `swallows` scans the WHOLE shell corpus, not scripts/*.sh alone —
 #   bin/, tools/*.sh and tools/hooks/* are shell too, and leaving them out made the
 #   reported population a partial figure the ratchet could not be honest about.  The
@@ -2230,8 +2235,10 @@ def run_swallows(repo):
     print(f"check-contracts[swallows]: OK — {summary}")
     print("  Enforced: no NEW unclassified swallow, and every `# swallow-ok:` marker carries a")
     print("  reason. Reported, not enforced: the existing unclassified population (recorded in")
-    print("  tools/contracts-swallows-baseline.tsv, printed above with the heaviest files), and")
-    print(f"  the same counts outside {SWALLOWS_SCOPE} (bin/ and tools/ are not scanned).")
+    print("  tools/contracts-swallows-baseline.tsv, printed above with the heaviest files).")
+    print("  Enforced for EVERY file in the corpus above.  Not scanned: tests/ (test")
+    print("  fixtures, not shipped code) and the root-level loaders (env.sh,")
+    print("  tactical-console.bashrc, install.sh) — adding those is a separate decision.")
     return EXIT_CLEAN
 
 
