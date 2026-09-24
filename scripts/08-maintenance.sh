@@ -2,7 +2,11 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 53
+# Module Version: 54
+#   v54 (2026-09-24): the plugin step's summary stopped calling a missing-or-failed
+#   plugin "ALREADY UP TO DATE".  __update_plugin now returns 3 for "not updated, and
+#   not current" (its rc 1 means CURRENT, which is all a caller may report as up to
+#   date), the step counts those separately, and a rc-2 failure reaches errCount.
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -600,10 +604,15 @@ function __up_openclaw_doctor() {
 
 # __update_plugin — Helper function to update a single plugin with change handling.
 # Usage: __update_plugin <path> <remote_pattern> <label> [interactive]
-# Returns: 0 = changed · 1 = benign no-op (nothing to do, or skipped on purpose) ·
-#          2 = FAILED (fetch failed, no upstream, diverged).  1 and 2 must stay
-#          distinct: both callers count updates from rc 0, and only 2 is an error a
-#          caller should surface.  `label` is the caller's whole row prefix, and
+# Returns: 0 = changed · 1 = benign no-op, ALREADY CURRENT · 2 = FAILED (fetch
+#          failed, no upstream, diverged, deps did not install) · 3 = NOT UPDATED, and
+#          not because it was current (not installed, not a git checkout, a foreign
+#          remote, local changes left alone).
+#          The four must stay distinct: both callers count updates from rc 0, only 2 is
+#          an error to surface, and only 1 lets a caller say "up to date".  3 exists
+#          because reporting it as 1 is exactly how a fleet with NOTHING installed — or
+#          one whose update failed — came to read as "[ALREADY UP TO DATE]"; see the
+#          summary in __up_oc_plugins.  `label` is the caller's whole row prefix, and
 #          `interactive` gates the local-changes menu — 0 for a caller that must
 #          never prompt; even at 1 it still needs a terminal, so a service-run `up`
 #          degrades to the safe skip.
@@ -612,7 +621,7 @@ function __up_openclaw_doctor() {
 # made it unaddressable (nothing could call it from elsewhere, and nothing could
 # test it), while 09e's `oc-plugin-update` had grown a second, diverging copy of the
 # same git logic for the same three plugins.  Its policy: it never CREATES a
-# checkout — a missing path is reported and returns 1, and the caller decides
+# checkout — a missing path is reported and returns 3, and the caller decides
 # whether to clone.  The outcomes below are pinned by
 # tests/unit/30-plugin-update.bats, the net the de-duplication lands behind.
 function __update_plugin() {
@@ -624,13 +633,13 @@ function __update_plugin() {
     if [[ ! -d "$_path" ]]
     then
         __tac_line "$_status_line" "[NOT INSTALLED]" "$C_Dim"
-        return 1
+        return 3  # 3 = NOT UPDATED: there is nothing at this path to update
     fi
 
     if [[ ! -d "$_path/.git" ]]
     then
         __tac_line "$_status_line" "[INSTALLED (local)]" "$C_Dim"
-        return 1
+        return 3  # 3 = NOT UPDATED: not a checkout, so there is nothing to pull
     fi
 
     local _remote
@@ -642,7 +651,7 @@ function __update_plugin() {
         # it here means the manual command loses no detail when it delegates instead.
         __tac_info "  Current" "$_remote" "$C_Dim"
         __tac_info "  Expected" "$_remote_pattern" "$C_Dim"
-        return 1
+        return 3  # 3 = NOT UPDATED: a foreign remote is not ours to move
     fi
 
     # Check for local changes
@@ -761,13 +770,13 @@ function __update_plugin() {
                     ;;
                 *)
                     __tac_line "$_status_line" "[SKIPPED (has local changes)]" "$C_Dim"
-                    return 1
+                    return 3  # 3 = NOT UPDATED: the local changes are the user's, not ours to discard
                     ;;
             esac
         else
             # Non-interactive mode — skip safely
             __tac_line "$_status_line" "[SKIP - has local changes]" "$C_Dim"
-            return 1
+            return 3  # 3 = NOT UPDATED: no terminal to ask on, so the changes are left alone
         fi
     fi
 
@@ -829,7 +838,7 @@ function __update_plugin() {
     else
         # Ahead of remote (local commits) — don't overwrite
         __tac_line "$_status_line" "[AHEAD OF REMOTE ($_ahead commit(s))]" "$C_Dim"
-        return 1
+        return 3  # 3 = NOT UPDATED: local commits ahead of the remote are not ours to drop
     fi
 }
 
@@ -848,27 +857,47 @@ function __up_oc_plugins() {
     # Offers interactive choice when local changes are detected.
     if __check_cooldown "oc_plugins" "$now" hours_left "$force_mode"
     then
-        local plugin_updated=0 openstinger_updated=0
+        local _rc=0
+        local plugin_updated=0 plugin_failed=0 plugin_not_updated=0
+        local openstinger_updated=0
         local plugins_dir="$HOME/.openclaw/extensions"
         local vendor_dir="$HOME/.openclaw/vendor"
         local post_update_check_script="$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
 
 
-        # Update each plugin
-        if __update_plugin "$plugins_dir/gigabrain" "legendaryvibecoder/gigabrain" "[7/20] Gigabrain Plugin" "1"
-        then
-            plugin_updated=1
-        fi
-        if __update_plugin "$plugins_dir/lossless-claw" "Martian-Engineering/lossless-claw" \
-                           "[8/20] Lossless-Claw Plugin" "1"
-        then
-            plugin_updated=1
-        fi
-        if __update_plugin "$vendor_dir/openstinger" "srikanthbellary/openstinger" "[9/20] OpenStinger" "1"
-        then
-            plugin_updated=1
-            openstinger_updated=1
-        fi
+        # Update each plugin, counting the helper's rc: 0 changed · 1 already current ·
+        # 2 FAILED (also counted as an issue for the run) · 3 not updated and not
+        # current.  Until 2026-09-24 this was `if __update_plugin ...; then
+        # plugin_updated=1; fi`, which collapsed all of 1/2/3 into "nothing updated" —
+        # so a fleet with NO plugin installed, and one whose update FAILED, both ended
+        # in the success-coloured "[ALREADY UP TO DATE]" row.
+        _rc=0
+        __update_plugin "$plugins_dir/gigabrain" "legendaryvibecoder/gigabrain" \
+                        "[7/20] Gigabrain Plugin" "1" || _rc=$?
+        case "$_rc" in
+            0) plugin_updated=1 ;;
+            2) plugin_failed=$(( plugin_failed + 1 )); _up_err=$(( _up_err + 1 )) ;;
+            3) plugin_not_updated=$(( plugin_not_updated + 1 )) ;;
+            *) ;;  # 1 = already current: nothing to count, and nothing to report
+        esac
+        _rc=0
+        __update_plugin "$plugins_dir/lossless-claw" "Martian-Engineering/lossless-claw" \
+                        "[8/20] Lossless-Claw Plugin" "1" || _rc=$?
+        case "$_rc" in
+            0) plugin_updated=1 ;;
+            2) plugin_failed=$(( plugin_failed + 1 )); _up_err=$(( _up_err + 1 )) ;;
+            3) plugin_not_updated=$(( plugin_not_updated + 1 )) ;;
+            *) ;;  # 1 = already current: nothing to count, and nothing to report
+        esac
+        _rc=0
+        __update_plugin "$vendor_dir/openstinger" "srikanthbellary/openstinger" \
+                        "[9/20] OpenStinger" "1" || _rc=$?
+        case "$_rc" in
+            0) plugin_updated=1; openstinger_updated=1 ;;
+            2) plugin_failed=$(( plugin_failed + 1 )); _up_err=$(( _up_err + 1 )) ;;
+            3) plugin_not_updated=$(( plugin_not_updated + 1 )) ;;
+            *) ;;  # 1 = already current: nothing to count, and nothing to report
+        esac
 
         # If plugins changed (especially OpenStinger), validate and reapply
         # OpenClaw post-update customizations to prevent drift.
@@ -902,6 +931,20 @@ function __up_oc_plugins() {
         if (( plugin_updated == 1 ))
         then
             __set_cooldown "oc_plugins" "$now"
+        fi
+
+        # One row, in order of what a reader needs to know.  "Already up to date" is
+        # reserved for the case where every plugin is present, ours, and level; a
+        # failure outranks it, and a plugin that is missing or was left alone says so
+        # instead of claiming a clean fleet.
+        if (( plugin_failed > 0 ))
+        then
+            __tac_line "[10/20] OpenClaw Plugins" "[${plugin_failed} UPDATE(S) FAILED]" "$C_Warning"
+        elif (( plugin_not_updated > 0 ))
+        then
+            __tac_line "[10/20] OpenClaw Plugins" "[${plugin_not_updated} PLUGIN(S) NOT UPDATED]" "$C_Warning"
+        elif (( plugin_updated == 1 ))
+        then
             __tac_line "[10/20] OpenClaw Plugins" "[PLUGINS UPDATED]" "$C_Success"
         else
             __tac_line "[10/20] OpenClaw Plugins" "[ALREADY UP TO DATE]" "$C_Success"

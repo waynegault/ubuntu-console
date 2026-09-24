@@ -2,18 +2,22 @@
 # ==============================================================================
 # Unit — the [7/20] OpenClaw plugin update step: its OUTCOMES, pinned
 # ==============================================================================
-# WHY THIS EXISTS (2026-09-24): `__update_plugin` is defined INSIDE
-# `__up_oc_plugins` and torn down with `unset -f` at the end of that call, so it
-# cannot be called directly.  These cases drive the REAL outer function — the same
-# boundary the unattended `up` path uses — which is also why the step needs a net
-# before the de-duplication with 09e's `update_plugin` (same three plugins,
-# different missing-directory policy) can be attempted safely.
+# WHY THIS EXISTS (2026-09-24): `__update_plugin` was defined INSIDE
+# `__up_oc_plugins` and torn down with `unset -f` at the end of that call, so it could
+# not be called directly.  These cases drive the REAL outer function — the same
+# boundary the unattended `up` path uses — which is also why the step needed a net
+# before the de-duplication with 09e's `update_plugin` (same three plugins, different
+# missing-directory policy) could be attempted safely.  The helper is MODULE SCOPE
+# now, so its exit contract is asserted directly as well (case 7).
 #
 # These assertions are the CURRENT behaviour, deliberately: a safety net for the
-# refactor, not a spec to argue with.  One outcome is worth knowing about rather
-# than trusting — when a plugin is simply MISSING the step still ends with
-# `[ALREADY UP TO DATE]`, because the summary counts "updated", not "present"
-# (case 1 pins it).
+# refactor, not a spec to argue with.  One outcome was worth knowing about rather than
+# trusting, and has since been fixed: when a plugin was simply MISSING the step ended
+# with the success-coloured `[ALREADY UP TO DATE]`, because the summary counted
+# "updated" and nothing else — a missing plugin and a FAILED update were
+# indistinguishable from a clean fleet.  The helper now separates rc 1 (current) from
+# rc 3 (not updated, and not current), and the summary row names whichever needs
+# attention (cases 1, 2 and 8 pin all three).
 #
 # HERMETIC: HOME is a temp dir, and each plugin is a real clone of a local BARE
 # repo whose path contains the remote pattern the module expects, so the update
@@ -148,17 +152,21 @@ _run_plugins() {
     __up_oc_plugins "$(date +%s)" 1 err > "$SANDBOX/out.txt" 2>&1 < /dev/null
 }
 
-@test "plugins: a missing plugin reports NOT INSTALLED, and the summary still claims UP TO DATE" {
+@test "plugins: a missing plugin reports NOT INSTALLED, and the summary says so" {
     _run_plugins
     run cat "$SANDBOX/out.txt"
     [ "$status" -eq 0 ]
     [[ "$output" == *"LINE [7/20] Gigabrain Plugin [NOT INSTALLED]"* ]]
     [[ "$output" == *"LINE [8/20] Lossless-Claw Plugin [NOT INSTALLED]"* ]]
     [[ "$output" == *"LINE [9/20] OpenStinger [NOT INSTALLED]"* ]]
-    # Pinned, and misleading: nothing was installed and nothing was updated, yet the
-    # step ends in the SUCCESS colour claiming "ALREADY UP TO DATE".  A future
-    # refactor should decide which of those two words is true.
-    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
+    # The row used to claim "ALREADY UP TO DATE" in the SUCCESS colour here, which is
+    # the one thing the case pinned: nothing was installed and nothing was updated, so
+    # the summary now says what is true.  A plugin this step never installs by policy is
+    # not an ISSUE for the run either, so errCount stays 0.
+    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [3 PLUGIN(S) NOT UPDATED]"* ]]
+    # On the SUMMARY row: a plugin that is present and level does print "ALREADY UP TO
+    # DATE" as its own row, which is a different claim from the fleet's.
+    [[ "$output" != *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
 }
 
 @test "plugins: a directory that is not a git checkout is reported as local, not updated" {
@@ -168,7 +176,11 @@ _run_plugins() {
     _run_plugins
     run cat "$SANDBOX/out.txt"
     [[ "$output" == *"LINE [7/20] Gigabrain Plugin [INSTALLED (local)]"* ]]
-    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
+    # One plugin cannot be updated (it is not a checkout) while the other two are level,
+    # and the summary reports the one that needs attention rather than the two that do
+    # not: "ALREADY UP TO DATE" here would hide the plugin nobody can pull.
+    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [1 PLUGIN(S) NOT UPDATED]"* ]]
+    [[ "$output" != *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
 }
 
 @test "plugins: a checkout of a foreign remote is skipped, not pulled" {
@@ -215,12 +227,13 @@ _run_plugins() {
     [[ "$output" == *"local edit"* ]]
 }
 
-@test "plugins: the helper's exit contract is 0 changed, 1 benign no-op, 2 failed" {
+@test "plugins: the helper's exit contract is 0 changed, 1 current, 2 failed, 3 not updated" {
     # The helper is module scope, so its exit code can be asserted directly — and it
-    # MUST be, because 1 and 2 are the distinction the two callers depend on: both
-    # count updates from rc 0, and only 2 is an error to surface.  Each call is
-    # written `... || rc=$?` on purpose: capturing a non-zero rc means the call must
-    # sit in a `||` list, where errexit does not abort the case.
+    # MUST be, because these are the distinctions the two callers depend on: both count
+    # updates from rc 0, only 2 is an error to surface, and only 1 lets a caller report
+    # "up to date".  Each call is written `... || rc=$?` on purpose: capturing a
+    # non-zero rc means the call must sit in a `||` list, where errexit does not abort
+    # the case.
     _scaffold_all
     local rc
 
@@ -233,13 +246,10 @@ _run_plugins() {
     run git -C "$HOME/.openclaw/extensions/gigabrain" rev-list --count HEAD..origin/HEAD
     [ "$output" = "0" ]
 
-    # 1 — benign: level with the remote, and a plugin that is not installed at all
+    # 1 — benign, and CURRENT: level with the remote.  This is the only case that may be
+    # reported as "already up to date", which is why nothing else shares its code.
     rc=0
     __update_plugin "$HOME/.openclaw/extensions/gigabrain" \
-        "legendaryvibecoder/gigabrain" "gigabrain" 0 > /dev/null 2>&1 || rc=$?
-    [ "$rc" -eq 1 ]
-    rc=0
-    __update_plugin "$SANDBOX/not-installed" \
         "legendaryvibecoder/gigabrain" "gigabrain" 0 > /dev/null 2>&1 || rc=$?
     [ "$rc" -eq 1 ]
 
@@ -256,6 +266,44 @@ _run_plugins() {
     run cat "$SANDBOX/out.txt"
     [[ "$output" == *"[CHECK FAILED - fetch]"* ]]
     [[ "$output" == *"absent/Martian-Engineering"* ]]
+
+    # 3 — not updated, and NOT because it is current.  These are the cases that used to
+    # return the same code as "already up to date", which is how a summary could report a
+    # clean fleet while nothing was installed.
+    rc=0
+    __update_plugin "$SANDBOX/not-installed" \
+        "legendaryvibecoder/gigabrain" "gigabrain" 0 > /dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 3 ]
+
+    rc=0
+    __update_plugin "$HOME/.openclaw/extensions" \
+        "legendaryvibecoder/gigabrain" "gigabrain" 0 > /dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 3 ]   # present, but not a checkout
+
+    printf 'local edit\n' >> "$HOME/.openclaw/extensions/gigabrain/file.txt"
+    rc=0
+    __update_plugin "$HOME/.openclaw/extensions/gigabrain" \
+        "legendaryvibecoder/gigabrain" "gigabrain" 0 > /dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 3 ]   # the user's local changes are not ours to discard
+    run cat "$HOME/.openclaw/extensions/gigabrain/file.txt"
+    [[ "$output" == *"local edit"* ]]
+}
+
+@test "plugins: a failed update is reported as failed, and counted as an issue" {
+    # The step's own accounting: rc 2 is an ISSUE for the whole `up` run, so it reaches
+    # the final "[COMPLETED WITH N ISSUE(S)]" line instead of only a per-plugin row.
+    _scaffold_all
+    git -C "$HOME/.openclaw/extensions/lossless-claw" \
+        remote set-url origin "$SANDBOX/absent/Martian-Engineering/lossless-claw.git"
+
+    local err=0
+    __up_oc_plugins "$(date +%s)" 1 err > "$SANDBOX/out.txt" 2>&1 < /dev/null
+
+    [ "$err" -eq 1 ]
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"LINE [8/20] Lossless-Claw Plugin [CHECK FAILED - fetch]"* ]]
+    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [1 UPDATE(S) FAILED]"* ]]
+    [[ "$output" != *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
 }
 
 # ── The COMMAND, not just the helper ───────────────────────────────────────────
