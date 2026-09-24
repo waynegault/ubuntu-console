@@ -1,0 +1,17 @@
+[Unit]
+Description=GPU Passthrough Watch automation self-check Timer
+Requires=gpu-watch-selfcheck.service
+
+[Timer]
+# HOURLY.  The checker's own bound (twice the automation's schedule period, so
+# 30 min) decides when a recorded run counts as STALE; this interval decides how
+# long a STOPPED schedule goes unnoticed, so an hourly probe means at most ~1h of
+# silence.  RandomizedDelaySec keeps the probe off the automation's own 15-minute
+# tick: a check running in lockstep with its subject shares the failure it exists
+# to catch.
+OnUnitActiveSec=1h
+OnBootSec=10min
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target

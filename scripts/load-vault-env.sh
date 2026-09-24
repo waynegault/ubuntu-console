@@ -3,13 +3,16 @@
 # load-vault-env — Optional Windows-backed vault env loader
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 5
+# Module Version: 6
 # Optional helper loaded by scripts/14-wsl-extras.sh.
 #
 # Source (repo):   scripts/load-vault-env.sh
+# Bridge (repo):   tools/import-windows-env.sh — exec'd by absolute path from the
+#                  installed copy to refresh the Windows env bridge.
 # Install targets: ~/.local/bin/load-vault-env.sh                  (install.sh link)
 #                  ~/.openclaw/credentials/vault/load-vault-env.sh  (sourced by
 #                  14-wsl-extras.sh when present — place it there to auto-load)
+#                  ~/.local/bin/import-windows-env.sh               (install.sh link)
 #
 # Purpose:
 # - Import Windows-backed credential exports into the current shell.
@@ -21,7 +24,14 @@
 #   TAC_VAULT_REFRESH_FROM_WINDOWS=0   — skip re-running the Windows bridge script
 #   TAC_VAULT_EXPORT_NAMES=A,B,C       — override default credential names to import
 
-_lve_bridge_script="$HOME/.openclaw/workspace/scripts/17-import-windows-user-env.sh"
+# The bridge is tools/import-windows-env.sh in this repo, installed by install.sh
+# to ~/.local/bin.  This probe used to name scripts/17-import-windows-user-env.sh
+# under ~/.openclaw/workspace/scripts/ — the file was RENAMED and moved into
+# tools/ by the tools/ split (e357fbb2) without this path being updated, so the
+# [[ -f ]] guard below never matched and TAC_VAULT_REFRESH_FROM_WINDOWS silently
+# refreshed nothing (measured 2026-09-24: the probed path did not exist, and no
+# ~/.openclaw/.env.bridge had ever been written).
+_lve_bridge_script="$HOME/.local/bin/import-windows-env.sh"
 _lve_bridge_file="$HOME/.openclaw/.env.bridge"
 _lve_tmp_file=""
 

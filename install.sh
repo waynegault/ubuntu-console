@@ -3,7 +3,7 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
-VERSION="1.7"
+VERSION="1.8"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -282,12 +282,27 @@ do
 done
 
 # Additional utility scripts that are expected to be directly executable.
-for f in "$REPO"/scripts/load-vault-env.sh "$REPO"/scripts/oc-update-enhanced.sh
+# tools/import-windows-env.sh is listed here, not under bin/, because
+# scripts/load-vault-env.sh execs it by absolute path to refresh the Windows env
+# bridge.  Nothing installed it, so the probe there never matched and
+# TAC_VAULT_REFRESH_FROM_WINDOWS silently never refreshed anything (measured
+# 2026-09-24).
+for _rel in scripts/load-vault-env.sh scripts/oc-update-enhanced.sh \
+            tools/import-windows-env.sh
 do
-    [[ -f "$f" ]] || continue
-    _bn="${f##*/}"
-    link "scripts/$_bn" "$HOME/.local/bin/$_bn"
+    [[ -f "$REPO/$_rel" ]] || continue
+    link "$_rel" "$HOME/.local/bin/${_rel##*/}"
 done
+
+# `oc health` PREFERS a richer checker when it finds one at
+# $HOME/.openclaw/workspace/scripts/oc-health-check.py, and returns before its own
+# rows when it does (scripts/09e-oc-health.sh).  Nothing placed the checker there,
+# so that branch was dead code on every box while the file was maintained in this
+# repo (measured 2026-09-24).  Symlink it into the path the probe reads.
+if [[ -f "$REPO/scripts/oc-health-check.py" ]]
+then
+    link "scripts/oc-health-check.py" "$HOME/.openclaw/workspace/scripts/oc-health-check.py"
+fi
 
 # 14-wsl-extras.sh sources load-vault-env.sh from the vault directory, so place
 # it there too — otherwise `TAC_LOAD_VAULT=1` silently loads nothing after a

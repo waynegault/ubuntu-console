@@ -1,0 +1,18 @@
+[Unit]
+Description=GPU Passthrough Watch — automation liveness self-check
+Documentation=file:%h/.local/bin/gpu-watch-selfcheck.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# A non-zero exit is the intended outcome when the watcher is not running, so this
+# unit IS expected to fail then: that is what puts it in `systemctl --user --failed`
+# and in the journal.  The exit code carries the verdict (0 healthy, 1 alarming,
+# 2 the check itself cannot see the automation) and stdout carries the message.
+ExecStart=%h/.local/bin/gpu-watch-selfcheck.sh
+# Explicit PATH: the check reaches the `openclaw` CLI to read the automation's
+# state, and the default user-manager PATH does not carry the Linuxbrew bin dir
+# where `openclaw` resolves (/home/linuxbrew/.linuxbrew/bin), so a bare `openclaw`
+# would fail here and every run would report "unreadable".
+Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
