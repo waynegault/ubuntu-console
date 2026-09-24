@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 5
 # ==============================================================================
 # clean-orphans.sh — Kill orphaned model bench infrastructure.
 #
@@ -28,6 +28,12 @@
 #           clean-orphans --check  — Just report, don't kill
 # ==============================================================================
 set -euo pipefail
+
+# warn — the ONE place this tool writes to stderr.  §18.3 item 10.7 counts ad-hoc
+# `echo … >&2` because a per-file helper keeps the prefix and the stream in a single
+# place; six more hand-written ones tripped the ratchet, which is the counter doing
+# its job rather than noise to re-baseline away.
+warn() { printf '[clean-orphans] %s\n' "$*" >&2; }
 
 FORCE=0
 CHECK=0
@@ -213,7 +219,7 @@ if command -v ss >/dev/null 2>&1; then
         fi
     done
 else
-    echo "[clean-orphans] Warning: 'ss' not found — cannot resolve the live port owner; skipping the server reaper." >&2
+    warn "Warning: 'ss' not found — cannot resolve the live port owner; skipping the server reaper."
 fi
 while read -r pid cmd; do
     if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$cmd" == *"llama-server"*"no-mmap"* ]]; then
@@ -290,7 +296,7 @@ if (( FORCE == 0 )); then
     # A closed/absent stdin must not abort under `set -e` before the explicit
     # cancel path runs (non-TTY callers: MCP tools, agents, cron, systemd).
     if ! read -r -p "Kill these processes and clean up? [y/N] " reply; then
-        echo "[clean-orphans] No input available — not cleaning up (use --force to skip the prompt)." >&2
+        warn "No input available — not cleaning up (use --force to skip the prompt)."
         exit 1
     fi
     case "$reply" in
@@ -312,28 +318,57 @@ done
 
 sleep 1
 
-# SIGKILL any survivors
+# SIGKILL any survivors — and CHECK it, then VERIFY it.  This is the CUDA-holding
+# path: a llama-server that survives a KILL while we report it killed is how a later
+# start ends up as a second CUDA context on the same card (the host dxgkrnl -512
+# class).  The KILL is deliberately NOT redirected: when it fails, kill(1)'s own
+# reason belongs on stderr rather than being swallowed by a redirect.
+_co_failed=0
 for entry in "${ORPHANS[@]}"; do
     IFS='|' read -r pid cmd <<< "$entry"
     if kill -0 "$pid" 2>/dev/null; then
-        kill -KILL "$pid" 2>/dev/null
-        echo "[clean-orphans] Sent KILL to PID $pid"
+        if kill -KILL "$pid"; then
+            echo "[clean-orphans] Sent KILL to PID $pid"
+        else
+            warn "WARNING: KILL failed for PID $pid — it may still be running: $cmd"
+            (( _co_failed = _co_failed + 1 ))
+        fi
+        if kill -0 "$pid" 2>/dev/null; then
+            # kill(2) said yes and the process is still there: a zombie, or a signal
+            # that did not take.  Either way it is NOT gone, and saying "cleaned"
+            # about it is the failure this whole pass exists to stop.
+            warn "WARNING: PID $pid is STILL PRESENT after KILL"
+            (( _co_failed = _co_failed + 1 ))
+        fi
     fi
 done
 
 # Clean stale files — never remove a live bench's lock/PID (gate on BENCH_ACTIVE),
 # and only remove keeper PID files whose process is actually gone.
 if (( BENCH_ACTIVE == 0 )); then
-    rm -f "$BENCH_LOCK_FILE" "$BENCH_PID_FILE"
+    if ! rm -f "$BENCH_LOCK_FILE" "$BENCH_PID_FILE"; then
+        warn "WARNING: could not remove $BENCH_LOCK_FILE / $BENCH_PID_FILE"
+        (( _co_failed = _co_failed + 1 ))
+    fi
 fi
 for keeper_file in "$KEEPER_DIR"/llm-keeper.*.pid; do
     [[ -f "$keeper_file" ]] || continue
     keeper_pid=$(cat "$keeper_file" 2>/dev/null || true)
     if [[ ! "$keeper_pid" =~ ^[0-9]+$ ]] || ! kill -0 "$keeper_pid" 2>/dev/null; then
-        rm -f "$keeper_file"
+        if ! rm -f "$keeper_file"; then
+            warn "WARNING: could not remove stale keeper file $keeper_file"
+            (( _co_failed = _co_failed + 1 ))
+        fi
     fi
 done
-echo "[clean-orphans] Stale files removed."
+# The line below used to say this unconditionally, which is the "reported a clean it
+# never verified" shape this repo already fixed once for the docker prune (39f2fb08).
+if (( _co_failed == 0 ))
+then
+    echo "[clean-orphans] Stale files removed."
+else
+    warn "Stale files removed, but $_co_failed step(s) FAILED — see the warnings above."
+fi
 
 # Restore the watchdog a killed bench left stopped. Reached only when leftovers
 # were found above, so a deliberate `systemctl --user stop` is never overridden.
@@ -341,9 +376,16 @@ if (( WATCHDOG_STOPPED == 1 )); then
     if systemctl --user start "$WATCHDOG_TIMER" 2>/dev/null; then
         echo "[clean-orphans] Restarted $WATCHDOG_TIMER (a kill had left it stopped)."
     else
-        echo "[clean-orphans] WARNING: could not restart $WATCHDOG_TIMER — start it by hand: systemctl --user start $WATCHDOG_TIMER" >&2
+        warn "WARNING: could not restart $WATCHDOG_TIMER — start it by hand: systemctl --user start $WATCHDOG_TIMER"
     fi
 fi
 
-echo "[clean-orphans] Done."
+if (( _co_failed == 0 ))
+then
+    echo "[clean-orphans] Done."
+else
+    # Exit code left as-is on purpose: this is an interactive tool and its callers
+    # read the output; making the code carry the failure is a separate decision.
+    warn "Done, with $_co_failed FAILED step(s) — see the warnings above."
+fi
 # end of file
