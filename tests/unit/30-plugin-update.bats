@@ -202,3 +202,46 @@ _run_plugins() {
     run cat "$HOME/.openclaw/extensions/gigabrain/file.txt"
     [[ "$output" == *"local edit"* ]]
 }
+
+@test "plugins: the helper's exit contract is 0 changed, 1 benign no-op, 2 failed" {
+    # The helper is module scope, so its exit code can be asserted directly — and it
+    # MUST be, because 1 and 2 are the distinction the two callers depend on: both
+    # count updates from rc 0, and only 2 is an error to surface.  Each call is
+    # written `... || rc=$?` on purpose: capturing a non-zero rc means the call must
+    # sit in a `||` list, where errexit does not abort the case.
+    _scaffold_all
+    local rc
+
+    # 0 — a checkout behind its remote is updated
+    _advance_remote gigabrain
+    rc=0
+    __update_plugin "$HOME/.openclaw/extensions/gigabrain" \
+        "legendaryvibecoder/gigabrain" "gigabrain" 0 > /dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 0 ]
+    run git -C "$HOME/.openclaw/extensions/gigabrain" rev-list --count HEAD..origin/HEAD
+    [ "$output" = "0" ]
+
+    # 1 — benign: level with the remote, and a plugin that is not installed at all
+    rc=0
+    __update_plugin "$HOME/.openclaw/extensions/gigabrain" \
+        "legendaryvibecoder/gigabrain" "gigabrain" 0 > /dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 1 ]
+    rc=0
+    __update_plugin "$SANDBOX/not-installed" \
+        "legendaryvibecoder/gigabrain" "gigabrain" 0 > /dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 1 ]
+
+    # 2 — the remote cannot be read at all, and the reason is printed, not swallowed.
+    # The new URL must still CONTAIN the expected pattern, or the remote check fails
+    # first and returns the benign 1 without ever reaching the fetch.
+    git -C "$HOME/.openclaw/extensions/lossless-claw" \
+        remote set-url origin "$SANDBOX/absent/Martian-Engineering/lossless-claw.git"
+    rc=0
+    __update_plugin "$HOME/.openclaw/extensions/lossless-claw" \
+        "Martian-Engineering/lossless-claw" "lossless-claw" 0 \
+        > "$SANDBOX/out.txt" 2>&1 || rc=$?
+    [ "$rc" -eq 2 ]
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"[CHECK FAILED - fetch]"* ]]
+    [[ "$output" == *"absent/Martian-Engineering"* ]]
+}

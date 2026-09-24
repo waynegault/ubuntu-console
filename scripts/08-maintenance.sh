@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 50
+# Module Version: 51
 # ==============================================================================
 # 8. MAINTENANCE & UTILS
 # ==============================================================================
@@ -599,8 +599,14 @@ function __up_openclaw_doctor() {
 }
 
 # __update_plugin — Helper function to update a single plugin with change handling.
-# Usage: __update_plugin <path> <remote_pattern> <display_name> <step_num>
-# Returns: 0 if updated or up-to-date, 1 if skipped/error
+# Usage: __update_plugin <path> <remote_pattern> <label> [interactive]
+# Returns: 0 = changed · 1 = benign no-op (nothing to do, or skipped on purpose) ·
+#          2 = FAILED (fetch failed, no upstream, diverged).  1 and 2 must stay
+#          distinct: both callers count updates from rc 0, and only 2 is an error a
+#          caller should surface.  `label` is the caller's whole row prefix, and
+#          `interactive` gates the local-changes menu — 0 for a caller that must
+#          never prompt; even at 1 it still needs a terminal, so a service-run `up`
+#          degrades to the safe skip.
 #
 # MODULE SCOPE since 2026-09-24 — it used to be nested inside __up_oc_plugins, which
 # made it unaddressable (nothing could call it from elsewhere, and nothing could
@@ -610,8 +616,9 @@ function __up_openclaw_doctor() {
 # whether to clone.  The outcomes below are pinned by
 # tests/unit/30-plugin-update.bats, the net the de-duplication lands behind.
 function __update_plugin() {
-    local _path="$1" _remote_pattern="$2" _name="$3" _step_num="${4:-7}"
-    local _status_line="[${_step_num}/20] ${_name}"
+    local _path="$1" _remote_pattern="$2" _name="$3" _interactive="${4:-0}"
+    local _status_line="$_name"
+    local _git_out=""
 
     if [[ ! -d "$_path" ]]
     then
@@ -639,8 +646,9 @@ function __update_plugin() {
 
     if [[ -n "$_local_changes" ]]
     then
-        # Local changes detected — ask user (only in interactive mode)
-        if [[ -t 0 ]]  # stdin is a terminal
+        # Local changes detected — ask the user, but only when the caller opted in
+        # AND there is a terminal to ask on.
+        if [[ "$_interactive" == "1" ]] && [[ -t 0 ]]
         then
             # Format prompt within table border for continuity
             printf '\n%s\n' "║$(printf '─%.0s' {1..76})║"
@@ -692,7 +700,7 @@ function __update_plugin() {
                         else
                             git -C "$_path" stash pop >/dev/null 2>&1 || true
                             __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
-                            return 1
+                            return 2  # 2 = FAILED: the stash could not be reapplied
                         fi
                     else
                         # Nothing to stash — changes are staged or untracked
@@ -712,7 +720,7 @@ function __update_plugin() {
                             return 0
                         else
                             __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
-                            return 1
+                            return 2  # 2 = FAILED: the pull needs a manual merge
                         fi
                     fi
                     ;;
@@ -747,10 +755,14 @@ function __update_plugin() {
     # A failed fetch (offline / no origin) must NOT read as "up to date":
     # empty operands compare equal to 0 in bash, so validate first.
     local _ahead_behind _ahead _behind
-    if ! git -C "$_path" fetch origin >/dev/null 2>&1
+    if ! _git_out=$(git -C "$_path" fetch origin 2>&1)
     then
         __tac_line "$_status_line" "[CHECK FAILED - fetch]" "$C_Warning"
-        return 1
+        if [[ -n "$_git_out" ]]
+        then
+            printf '%s\n' "  ${C_Dim}${_git_out}${C_Reset}"
+        fi
+        return 2  # 2 = FAILED: the remote could not be read at all
     fi
     _ahead_behind=$(git -C "$_path" rev-list --left-right --count HEAD...origin/HEAD 2>/dev/null)
     _ahead=$(cut -f1 <<< "$_ahead_behind")
@@ -758,7 +770,7 @@ function __update_plugin() {
     if ! [[ "$_ahead" =~ ^[0-9]+$ && "$_behind" =~ ^[0-9]+$ ]]
     then
         __tac_line "$_status_line" "[CHECK FAILED - no upstream]" "$C_Warning"
-        return 1
+        return 2  # 2 = FAILED: there is no upstream to compare against
     fi
 
     if [[ "$_behind" -eq 0 && "$_ahead" -eq 0 ]]
@@ -769,7 +781,7 @@ function __update_plugin() {
     elif [[ "$_behind" -gt 0 ]]
     then
         # Behind remote — pull
-        if git -C "$_path" pull --ff-only >/dev/null 2>&1
+        if _git_out=$(git -C "$_path" pull --ff-only 2>&1)
         then
             # Run npm install if package.json exists (install new dependencies)
             if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
@@ -783,7 +795,11 @@ function __update_plugin() {
             return 0
         else
             __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
-            return 1
+            if [[ -n "$_git_out" ]]
+            then
+                printf '%s\n' "  ${C_Dim}${_git_out}${C_Reset}"
+            fi
+            return 2  # 2 = FAILED: the pull needs a manual merge
         fi
     else
         # Ahead of remote (local commits) — don't overwrite
@@ -814,15 +830,16 @@ function __up_oc_plugins() {
 
 
         # Update each plugin
-        if __update_plugin "$plugins_dir/gigabrain" "legendaryvibecoder/gigabrain" "Gigabrain Plugin" "7"
+        if __update_plugin "$plugins_dir/gigabrain" "legendaryvibecoder/gigabrain" "[7/20] Gigabrain Plugin" "1"
         then
             plugin_updated=1
         fi
-        if __update_plugin "$plugins_dir/lossless-claw" "Martian-Engineering/lossless-claw" "Lossless-Claw Plugin" "8"
+        if __update_plugin "$plugins_dir/lossless-claw" "Martian-Engineering/lossless-claw" \
+                           "[8/20] Lossless-Claw Plugin" "1"
         then
             plugin_updated=1
         fi
-        if __update_plugin "$vendor_dir/openstinger" "srikanthbellary/openstinger" "OpenStinger" "9"
+        if __update_plugin "$vendor_dir/openstinger" "srikanthbellary/openstinger" "[9/20] OpenStinger" "1"
         then
             plugin_updated=1
             openstinger_updated=1
