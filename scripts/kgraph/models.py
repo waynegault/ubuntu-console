@@ -397,6 +397,16 @@ class Graph(BaseModel):
 
         self.nodes = kept_nodes
         self.edges = kept_edges
+        # The cached community digest describes the structure just changed, so it must
+        # not survive the change.  ``save_to_graph_db`` re-writes ``meta.communities``
+        # verbatim, so a digest left in place names deleted nodes as members with a
+        # stale size — the exact failure that function's own DELETE branch exists to
+        # prevent, and what ``_check_community_digest`` reports as drift.  Clearing it
+        # makes readers re-detect on demand, which is what every reader already does
+        # when a graph carries no digest.  Recomputing here instead would make a
+        # removal require networkx.
+        self.meta.communities = []
+        self.meta.community_method = ""
         return {
             "nodes_removed": len(removed_node_ids),
             "nodes_updated": nodes_updated,
