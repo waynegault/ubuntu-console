@@ -2,7 +2,15 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 55
+# Module Version: 56
+#   v56 (2026-09-24): the stale-process reap now fails CLOSED on both of its inputs —
+#   the boot-guard mtime and the LLM_PORT listener.  Each was a swallow whose empty
+#   result was read as a fact: an unreadable mtime read as "very old" (so the guard did
+#   not skip) and an unresolvable port read as "nobody is listening" (which removes the
+#   `pid == _port_owner` protection from EVERY candidate).  Neither the `ss` nor the
+#   /proc/net/tcp probe can now answer "nothing is listening" unless it actually
+#   answered, and a listener nobody can name is not "no listener".  Pinned by
+#   tests/unit/31-stale-reap-safety.bats, the step's first test net.
 #   v55 (2026-09-24): 21 of this file's 65 unclassified swallow sites now carry a
 #   `# swallow-ok:` reason, and its baseline row falls 65 -> 44.  The 44 left are
 #   either sites whose failure degrades into a plausible success — brought to Wayne as
@@ -1187,11 +1195,20 @@ function __up_stale_processes() {
     # (still booting). ACTIVE_LLM_FILE's mtime is the documented signal.
     if [[ -f "$ACTIVE_LLM_FILE" ]]
     then
-        local _active_age
-        _active_age=$(( $(date +%s) - $(stat -c %Y "$ACTIVE_LLM_FILE" 2>/dev/null || echo 0) ))
-        if (( _active_age < 60 ))
+        local _active_age _active_mtime
+        if _active_mtime=$(stat -c %Y "$ACTIVE_LLM_FILE" 2>&1)
         then
-            __tac_line "[17/20] Stale Processes" "[SKIP - MODEL BOOTING]" "$C_Dim"
+            _active_age=$(( $(date +%s) - _active_mtime ))
+            if (( _active_age < 60 ))
+            then
+                __tac_line "[17/20] Stale Processes" "[SKIP - MODEL BOOTING]" "$C_Dim"
+                return 0
+            fi
+        else
+            # Fail closed, like the port resolution below: an unreadable mtime cannot
+            # tell a booting model from an old one, and this function's whole job is to
+            # kill processes — so it does not run on a guess.
+            __tac_line "[17/20] Stale Processes" "[SKIP - cannot read $(basename "$ACTIVE_LLM_FILE")]" "$C_Warning"
             return 0
         fi
     fi
@@ -1227,32 +1244,76 @@ function __up_stale_processes() {
         # readlink target is "socket:[inode]" with no port, so the port must be
         # resolved separately — the old per-fd `grep ":$LLM_PORT"` never matched
         # and reaped the live user-launched server.
-        local _port_owner=""
+        # _port_probe: "resolved" = the listener's owner is named · "none" = an ANSWERED
+        # "nothing is listening" · anything else = cannot tell, and the reap fails
+        # closed.  The old code had only the empty string, which is both of the last
+        # two — and the reap's safety rests on the difference.
+        local _port_owner="" _port_probe="unknown"
+        local _ss_answered=0
         if command -v ss >/dev/null 2>&1
         then
-            _port_owner=$(ss -ltnpH "sport = :$LLM_PORT" 2>/dev/null \
-                | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true)
-        fi
-        if [[ -z "$_port_owner" ]]
-        then
-            local _phex _inode _pdir _fd
-            _phex=$(printf '%04X' "$LLM_PORT")
-            _inode=$(awk -v p="$_phex" '$4 == "0A" { n=split($2,a,":"); if (a[n] == p) { print $10; exit } }' /proc/net/tcp 2>/dev/null || true)
-            if [[ -n "$_inode" ]]
+            local _ss_out
+            if _ss_out=$(ss -ltnpH "sport = :$LLM_PORT" 2>&1)
             then
-                for _pdir in /proc/[0-9]*
-                do
-                    [[ -d "$_pdir/fd" ]] || continue
-                    for _fd in "$_pdir"/fd/*
-                    do
-                        if [[ "$(readlink "$_fd" 2>/dev/null)" == "socket:[$_inode]" ]]
-                        then
-                            _port_owner="${_pdir#/proc/}"
-                            break 2
-                        fi
-                    done
-                done
+                _ss_answered=1
+                if [[ -z "$_ss_out" ]]
+                then
+                    _port_probe="none"
+                else
+                    _port_owner=$(printf '%s\n' "$_ss_out" | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
+                    [[ -n "$_port_owner" ]] && _port_probe="resolved"
+                fi
             fi
+        fi
+        if (( _ss_answered == 0 ))
+        then
+            # ss could not answer, so ask the kernel directly.  A socket line ss DID
+            # print without a readable pid is deliberately not re-checked here: the two
+            # read the same table at different moments, and a listener that closed in
+            # between belongs to a process that is still alive — the one thing this must
+            # not kill.
+            local _phex _inode _pdir _fd _tcp
+            _phex=$(printf '%04X' "$LLM_PORT")
+            if _tcp=$(< /proc/net/tcp) \
+               && _inode=$(printf '%s\n' "$_tcp" | awk -v p="$_phex" '$4 == "0A" { n=split($2,a,":"); if (a[n] == p) { print $10; exit } }')
+            then
+                if [[ -z "$_inode" ]]
+                then
+                    # The kernel's table carries every LISTEN socket regardless of its
+                    # owner, so this IS an answer: nothing is listening.
+                    _port_probe="none"
+                else
+                    for _pdir in /proc/[0-9]*
+                    do
+                        [[ -d "$_pdir/fd" ]] || continue
+                        for _fd in "$_pdir"/fd/*
+                        do
+                            # swallow-ok: a probe whose failure IS the answer — an unreadable fd link is simply not the socket being looked for
+                            if [[ "$(readlink "$_fd" 2>/dev/null)" == "socket:[$_inode]" ]]
+                            then
+                                _port_owner="${_pdir#/proc/}"
+                                _port_probe="resolved"
+                                break 2
+                            fi
+                        done
+                    done
+                    # A listener whose owner is NOT named stays "unknown" — it may belong
+                    # to a process this user cannot read, and that is not "no listener".
+                fi
+            fi
+        fi
+
+        # FAIL CLOSED.  `pid == _port_owner` in the filter below is the ONLY thing that
+        # separates a live listener from an orphan, so an unresolvable port silently
+        # removes that protection from EVERY candidate — and the header above records
+        # what that cost last time (a per-fd grep that never matched, and the live
+        # user-launched server it reaped).  Neither source answered, or one named a
+        # listener it could not name the owner of, so the reap does not run: a stale
+        # process left alone is recoverable, a killed live model is not.
+        if [[ "$_port_probe" != "resolved" && "$_port_probe" != "none" ]]
+        then
+            __tac_line "[17/20] Stale Processes" "[SKIP - cannot resolve the LLM_PORT listener]" "$C_Warning"
+            return 0
         fi
 
         # Filter out PIDs that still own the port socket (busy processing, not orphaned)
