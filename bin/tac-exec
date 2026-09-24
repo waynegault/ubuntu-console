@@ -21,9 +21,15 @@
 # How:      Sources env.sh (which loads modules 01-15 except 13-init, plus 09b), then executes the
 #           given command with all arguments.
 # ==============================================================================
-# No `set -e`: the console functions use the `((var++))` idiom, which returns 1
-# while its value is 0 and would abort mid-operation under errexit. The exit
-# status of the invoked command is propagated explicitly below.
+# No `set -e`.  The reason once written here — the console functions' `((var++))`
+# idiom, which returns 1 while its value is 0 — no longer applies: that class was
+# removed on 2026-09-24 (every statement-position increment is now `x=$(( x + 1 ))`,
+# and tests/unit/29 keeps it out).  errexit stays omitted because the library is NOT
+# audited for it, and aborting shapes remain — the ones found so far are command
+# substitutions such as `gpu=$(__get_gpu)` in 08-maintenance.sh, where a bare
+# assignment to a failing command kills the operation mid-way.  Enabling `set -e`
+# here is a change of its own, with an audit behind it.  The exit status of the
+# invoked command is propagated explicitly below.
 set -o pipefail
 
 _tac_exec_bin="$(readlink -f "${BASH_SOURCE[0]}")"
