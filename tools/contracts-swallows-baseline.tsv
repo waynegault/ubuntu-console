@@ -1,18 +1,14 @@
 # tools/contracts-swallows-baseline.tsv — the silent-swallow population measured
-# by `tools/check-contracts.sh swallows` on 2026-09-23 (card
-# CLAIMED-SUCCESS-WITNESS-001, tooling half).
+# by `tools/check-contracts.sh swallows` on 2026-09-24.
 #
-# Shape: `unclassified<TAB>path<TAB>count`.  A count may FALL freely (the row is
-# then printed as STALE and asks to be lowered); a file that is not here and
-# carries an unclassified swallow FAILS, and so does a count that rises.  So a new
-# `|| true` or `2>/dev/null` is a decision: mark it `# swallow-ok: <reason>` or
-# change the code.  Regenerate the rows with
-# `tools/check-contracts.sh swallows --print-baseline` (read-only).
+# CORPUS WIDENED the same day: it now covers bin/, tools/*.sh and tools/hooks/* as
+# well as scripts/*.sh, so these figures are NOT comparable with the 2026-09-23 set —
+# that measurement could only see scripts/*.sh, which is why bin/llama-watchdog.sh
+# and tools/clean-orphans.sh appear here for the first time.
 #
-# Why a baseline: 965 sites across 31 files is the existing corpus, and
-# reclassifying it is a separate pass — four of the heaviest files are owned by a
-# concurrent session (11e/09d/08/11d).  The counts are site counts for the two
-# patterns; the card's `grep -c` line counts are printed beside them at run time.
+# 1150 unclassified site(s) across 51 file(s).  A count may FALL freely; a NEW file, or a
+# RISE, is a deliberate act that has to be re-baselined on purpose.
+#
 unclassified	scripts/01-constants.sh	9
 unclassified	scripts/02-error-handling.sh	28
 unclassified	scripts/04-aliases.sh	8
@@ -24,7 +20,7 @@ unclassified	scripts/09a-oc-gateway.sh	37
 unclassified	scripts/09b-gog.sh	3
 unclassified	scripts/09c-oc-core.sh	9
 unclassified	scripts/09d-oc-agents.sh	84
-unclassified	scripts/09e-oc-health.sh	44
+unclassified	scripts/09e-oc-health.sh	43
 unclassified	scripts/09f-oc-misc.sh	15
 unclassified	scripts/10-deployment.sh	6
 unclassified	scripts/11a-llm-registry.sh	9
@@ -44,4 +40,23 @@ unclassified	scripts/retune-band-chunk.sh	10
 unclassified	scripts/run-autotune-batch.sh	10
 unclassified	scripts/spec-decode-bench.sh	12
 unclassified	scripts/spec_dec_crossover.sh	13
-# end of file
+unclassified	bin/bench-timeout-runner.sh	11
+unclassified	bin/gpu-busy.sh	19
+unclassified	bin/gpu-watch-selfcheck.sh	1
+unclassified	bin/interview-benchmark.sh	1
+unclassified	bin/llama-gpu-clear.sh	11
+unclassified	bin/llama-watchdog-guard.sh	4
+unclassified	bin/llama-watchdog.sh	49
+unclassified	bin/tac_hostmetrics.sh	9
+unclassified	tools/check-contracts.sh	6
+unclassified	tools/check-module-versions.sh	8
+unclassified	tools/check-repo-boundaries.sh	1
+unclassified	tools/clean-orphans.sh	40
+unclassified	tools/import-windows-env.sh	1
+unclassified	tools/install-shellcheck.sh	1
+unclassified	tools/lint.sh	12
+unclassified	tools/mirror-vault.sh	2
+unclassified	tools/run-tests.sh	10
+unclassified	tools/hooks/post-commit	1
+unclassified	tools/hooks/post-merge	1
+unclassified	tools/hooks/pre-commit	2

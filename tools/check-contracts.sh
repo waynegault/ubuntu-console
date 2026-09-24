@@ -20,7 +20,8 @@
 #   continuity  per-entry version/status/scope/superseded_by in
 #               docs/contracts/command-contracts.yaml, plus the decision register
 #               under .agents/decisions/.
-#   swallows    unclassified `|| true` and `2>/dev/null` sites in scripts/.
+#   swallows    unclassified `|| true` and `2>/dev/null` sites in the shell corpus
+#               (scripts/*.sh, bin/*, tools/*.sh, tools/hooks/*).
 #
 # A bare `check-contracts.sh` runs EVERY subcommand, so the no-argument invocation
 # stays meaningful.  A subcommand is added by adding its name to SUBCOMMANDS and
@@ -200,8 +201,8 @@
 # whole corpus is a separate pass, so this subcommand does the count-ratchet job
 # tools/count-ratchet.sh already uses for exactly this situation.
 #
-# ENFORCED by `swallows`: no NEW unclassified swallow site in scripts/*.sh (a count
-# that RISES above tools/contracts-swallows-baseline.tsv, or a file that is not in
+# ENFORCED by `swallows`: no NEW unclassified swallow site anywhere in the shell corpus
+# (a count that RISES above tools/contracts-swallows-baseline.tsv, or a file that is not in
 # it and carries one, is a failure), and every `# swallow-ok:` marker carries a
 # reason of its own (8+ characters).  The marker is ONE comment line and it
 # classifies a site on its own line or on the line directly below it — deliberately
@@ -244,7 +245,12 @@
 #      https://towardsdatascience.com/coding-agents-dont-need-longer-history-they-need-intent-continuity/
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 6
+# Module Version: 7
+#   v7 (2026-09-24): `swallows` scans the WHOLE shell corpus, not scripts/*.sh alone —
+#   bin/, tools/*.sh and tools/hooks/* are shell too, and leaving them out made the
+#   reported population a partial figure the ratchet could not be honest about.  The
+#   baseline is re-derived in the same change, because a wider corpus necessarily
+#   raises the recorded counts; that is a corpus change, not drift.
 #   v6 (2026-09-24): prose only — `modules` no longer describes
 #   tools/contracts-modules-baseline.tsv as a live baseline whose rows print every
 #   run.  That file was DELETED in 66f17e5e, so nothing is grandfathered and every
@@ -356,7 +362,7 @@ usage: check-contracts.sh [SUBCOMMAND] [--repo DIR] [COMMAND...]
   modules          @depends/@exports headers vs the real load order
   derived          the derived command surface vs the authored enumerations
   continuity       per-entry version/scope/superseded_by + the decision register
-  swallows         unclassified `|| true` / `2>/dev/null` sites in scripts/
+  swallows         unclassified `|| true` / `2>/dev/null` sites in the shell corpus
   --version, -V    print the tool version and exit
 
   COMMAND...       only with `continuity`: surface the contract entries and
@@ -2039,7 +2045,7 @@ def entry_family_siblings(data, name):
 SWALLOWS_MARKER = re.compile(r"#\s*swallow-ok:\s*(\S.*)$")
 SWALLOW_PATTERNS = (("|| true", re.compile(r"\|\|\s*true\b")),
                     ("2>/dev/null", re.compile(r"2>\s*/dev/null")))
-SWALLOWS_SCOPE = "scripts/*.sh"
+SWALLOWS_SCOPE = "scripts/*.sh, bin/*, tools/*.sh, tools/hooks/*"
 # Files another session owns during the tooling pass: reported with their counts,
 # never edited here, so the second pass has a starting point.
 SWALLOWS_RESERVED = {
@@ -2085,13 +2091,40 @@ def swallow_markers(text):
     return markers
 
 
+def swallow_corpus(repo):
+    """[(rel, abs)] for every shell file the swallow check scans.
+
+    WIDENED 2026-09-24, from `scripts/*.sh` alone.  bin/ and tools/ are shell too, and
+    excluding them made the reported population a PARTIAL figure — this check's own
+    output said so ("the same counts outside scripts/*.sh are not scanned") — and a
+    partial count cannot be ratcheted against honestly.  tools/hooks/* is in for the
+    same reason: those files ARE shell, so an unscanned hook is an unmeasured decision.
+    """
+    groups = (("scripts", True), ("bin", False), ("tools", True), ("tools/hooks", False))
+    corpus = []
+    for sub, only_sh in groups:
+        base = os.path.join(repo, sub)
+        if not os.path.isdir(base):
+            continue
+        for entry in sorted(os.listdir(base)):
+            if entry.startswith("."):
+                continue
+            path = os.path.join(base, entry)
+            if not os.path.isfile(path):
+                continue
+            if only_sh and not entry.endswith(".sh"):
+                continue
+            corpus.append((f"{sub}/{entry}", path))
+    return corpus
+
+
 def run_swallows(repo):
-    """Record and ratchet the unclassified silent swallows in scripts/."""
+    """Record and ratchet the unclassified silent swallows in the shell corpus."""
     print(f"=== Silent-swallow check ({SWALLOWS_SCOPE}) ===")
-    scripts_dir = os.path.join(repo, "scripts")
-    if not os.path.isdir(scripts_dir):
-        sys.stderr.write(f"check-contracts: {scripts_dir} does not exist — nothing to scan, "
-                         f"and an empty scan is not a clean tree. Refusing to pass.\n")
+    corpus = swallow_corpus(repo)
+    if not corpus:
+        sys.stderr.write("check-contracts: no shell files found for the swallow check — nothing "
+                         "to scan, and an empty scan is not a clean tree. Refusing to pass.\n")
         return EXIT_CANNOT_RUN
     baseline = read_baseline(repo, "tools/contracts-swallows-baseline.tsv")
     known = {}
@@ -2101,10 +2134,7 @@ def run_swallows(repo):
 
     problems = []
     rows = []
-    for entry in sorted(os.listdir(scripts_dir)):
-        if not entry.endswith(".sh"):
-            continue
-        rel = f"scripts/{entry}"
+    for rel, _path in corpus:
         text = read_lines(repo, rel)
         if text is None:
             problems.append(f"  FAIL  {rel}: cannot be read")
@@ -2175,10 +2205,8 @@ def run_swallows(repo):
         print(f"  HEAVIEST  {rel}: {total} site(s), {classified} classified, "
               f"{unclassified} unclassified{suffix}")
     per_pattern = {}
-    for entry in sorted(os.listdir(scripts_dir)):
-        if not entry.endswith(".sh"):
-            continue
-        text = read_lines(repo, f"scripts/{entry}")
+    for rel, _path in corpus:
+        text = read_lines(repo, rel)
         if text is None:
             continue
         for name, pattern in SWALLOW_PATTERNS:
