@@ -349,9 +349,10 @@ SH
 }
 
 @test "modules: a recorded disagreement passes, and deleting the baseline makes it fail" {
-    # The ratchet shape the tool uses for the 13 disagreements that already exist in
-    # the real tree: recording is a deliberate act, fixing is free, and the baseline
-    # file is what makes the difference between "reported" and "fatal".
+    # The ratchet shape the tool supports: recording is a deliberate act, fixing is
+    # free, and the baseline file is what makes the difference between "reported" and
+    # "fatal".  The REAL tree has no baseline file (deleted in 66f17e5e) and zero
+    # disagreements, so this fixture is the only place the RECORDED path runs.
     _write_alpha 'beta' 'alpha-cmd, ALPHA_STATE'
     _write_beta 'none' 'beta-cmd'
     run "$CHECKER" modules --repo "$FIXTURE"

@@ -144,12 +144,15 @@
 #      also appear in `@depends` — the fields partition the edges.  It carries NO
 #      order requirement and a `@uses` cycle is legitimate (§11 is mutually
 #      recursive by design), so cycles are computed over `@depends` edges only.
-# REPORTED, never enforced by `modules`: the disagreements recorded in
-# tools/contracts-modules-baseline.tsv (printed in full every run, each with the
-# module and the module it depends on, and with a cycle path when the edge closes
-# one), whether a forward edge is actually reached at run time, and which of the
-# recorded rows have gone STALE (a fix is free — it only asks for the row's
-# removal).  Delete that file to make every recorded row fail.
+# REPORTED, never enforced by `modules`: whether a forward edge is actually
+# reached at run time (the BATS suites cover behaviour).
+#
+# NO BASELINE FILE EXISTS.  tools/contracts-modules-baseline.tsv was DELETED in
+# 66f17e5e, so nothing is grandfathered: every load-order disagreement is reported
+# as NEW and FAILS this check.  The reader and the RECORDED/STALE paths below are
+# kept for a future baseline — re-add the file and its rows print in full, each with
+# the module pair and a cycle path when the edge closes one, and a row that is no
+# longer a disagreement prints as STALE (a free fix: remove the row).
 #
 # WHY `derived` EXISTS — the failure it catches:
 # A static skill is a cache with no invalidation protocol: SKILL.md's tac-exec table
@@ -241,7 +244,12 @@
 #      https://towardsdatascience.com/coding-agents-dont-need-longer-history-they-need-intent-continuity/
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-09-24): prose only — `modules` no longer describes
+#   tools/contracts-modules-baseline.tsv as a live baseline whose rows print every
+#   run.  That file was DELETED in 66f17e5e, so nothing is grandfathered and every
+#   load-order disagreement already fails; the reader and the RECORDED/STALE paths
+#   stay for a future baseline.  The tool `VERSION` does not move for a comment.
 #   v5 (2026-09-23): prose only — SWALLOWS_RESERVED's entry for 08-maintenance.sh no
 #   longer claims it is "another session's in-flight file": that change is committed
 #   (39f2fb08), so the note now says what it is (5 pre-existing sites, untouched by it).
@@ -1521,8 +1529,9 @@ def run_modules(repo):
         print(f"check-contracts[modules]: FAIL — {len(problems)} finding(s). {summary}")
         print("  Fix the DECLARATION when it disagrees with the load order (never reorder the")
         print("  numeric load list to satisfy this check). A disagreement that is knowingly")
-        print("  accepted goes in tools/contracts-modules-baseline.tsv as a row with a reason;")
-        print("  deleting that file makes every recorded disagreement fail immediately.")
+        print("  accepted goes in tools/contracts-modules-baseline.tsv as a row with a reason.")
+        print("  NOTE: that file does not exist at present (deleted in 66f17e5e), so nothing is")
+        print("  accepted today and every disagreement fails.")
         return EXIT_DRIFT
     print(f"check-contracts[modules]: OK — {summary}")
     print("  Enforced: every @depends target resolves to a real loaded module (or is the")
@@ -1533,10 +1542,9 @@ def run_modules(repo):
     print("  itself, and may not also appear in @depends (the fields partition the edges).")
     print("  No order requirement applies to @uses and a @uses cycle is legitimate — the")
     print("  §11 group is mutually recursive by design — so cycles are reported over the")
-    print("  @depends edges only. Reported, not enforced: the disagreements already recorded")
-    print("  in tools/contracts-modules-baseline.tsv (printed above, each with a cycle path")
-    print("  when the edge closes one), and whether a forward edge is reached at run time")
-    print("  (the BATS suites cover behaviour).")
+    print("  @depends edges only.  No baseline file exists (deleted in 66f17e5e), so nothing")
+    print("  is grandfathered — every disagreement fails.  Reported, not enforced: whether a")
+    print("  forward edge is reached at run time (the BATS suites cover behaviour).")
     return EXIT_CLEAN
 
 
