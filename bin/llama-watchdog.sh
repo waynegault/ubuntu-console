@@ -119,7 +119,7 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 11
+# Module Version: 12
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line (it is what makes an edit here fail the pre-commit guard until the
 #   number moves).  Deliberately separate from VERSION= below: the marker
@@ -300,7 +300,15 @@ gpustop_active() {
     [[ "$until" =~ ^[0-9]+$ ]] || return 1
     (( $(date +%s) < until ))
 }
-gpustop_clear() { rm -f "$CUDA_GPUSTOP_FILE" 2>/dev/null || true; }
+# gpustop_clear — drop the "GPU is busy, keep the lane down" marker.  Stated rather
+# than swallowed: if the marker cannot be removed it OUTLIVES the hold it recorded,
+# and the next tick then explains a real death away with a stale one (v3.8's point).
+gpustop_clear() {
+    if ! rm -f "$CUDA_GPUSTOP_FILE"
+    then
+        log "WARNING: could not remove $CUDA_GPUSTOP_FILE — a stale GPU-busy marker may explain away a real death"
+    fi
+}
 
 # --- flap bookkeeping (v3.8) ---
 # flap_record — stamp an unexpected CUDA-lane death, pruning stamps older than the
@@ -558,13 +566,19 @@ wait_healthy() {
 
 # recover <unit> <port> — issue restart (or start if inactive/failed), then wait
 recover() {
-    local unit="$1" port="$2" state
+    local unit="$1" port="$2" state _out _out2
     state=$(systemctl --user show "$unit.service" -p ActiveState --value 2>/dev/null || true)
     if [[ "$state" == "failed" ]]; then
         systemctl --user reset-failed "$unit.service" 2>/dev/null || true
     fi
-    if ! systemctl --user restart "$unit.service" 2>/dev/null; then
-        systemctl --user start "$unit.service" 2>/dev/null || { log "recover failed for $unit"; return 1; }
+    if ! _out=$(systemctl --user restart "$unit.service" 2>&1); then
+        if ! _out2=$(systemctl --user start "$unit.service" 2>&1); then
+            # Name the CAUSE, not just the outcome — and keep BOTH messages, since the
+            # second call's is not the first one's.  "recover failed" with no reason is
+            # what left the 2026-09 CUDA deaths unattributable.
+            log "recover failed for $unit — restart: ${_out}; start: ${_out2}"
+            return 1
+        fi
     fi
     log "Restart issued: $unit"
     if wait_healthy "$port" 150; then
@@ -613,7 +627,10 @@ if cuda_suspended; then
     # was deliberately stopped.
     if [[ "$cuda_state" == "active" ]]; then
         log "CUDA lane suspended — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)"
-        systemctl --user stop "$CUDA_UNIT.service" 2>/dev/null || true
+        if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
+        then
+            log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
+        fi
     else
         log "CUDA lane suspended ($CUDA_SUSPEND_FILE present) — not starting $CUDA_UNIT yet"
     fi
@@ -631,7 +648,10 @@ elif gpu_busy; then
     gpu_classify_driver_failclosed
     if [[ "$cuda_state" == "active" ]]; then
         log "GPU busy — stopping $CUDA_UNIT (freeing VRAM; Xe lane serves)${GPU_BUSY_REASONS:+ [probe: $GPU_BUSY_REASONS]}"
-        systemctl --user stop "$CUDA_UNIT.service" 2>/dev/null || true
+        if ! _stop_out=$(systemctl --user stop "$CUDA_UNIT.service" 2>&1)
+        then
+            log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
+        fi
     fi
     # Mark the stop as OURS, renewed on every busy tick.  Without this the next
     # tick where the card frees sees a down unit and counts the stop as an
