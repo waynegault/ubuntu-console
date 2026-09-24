@@ -53,9 +53,11 @@ setup() {
     export FIXTURE_PID
     __llm_server_pids() { printf '%s\n' "$FIXTURE_PID"; }
 
-    # A headless box for the systemd protect-list probe: no unit has a MainPID here,
-    # which is the normal case on a machine without the llama units running.
-    systemctl() { return 1; }
+    # The systemd protect-list probe: a unit that is not running answers rc 0 with an
+    # empty pid, and so does an ABSENT one (measured 2026-09-24) — that contract is what
+    # the step's fail-closed guard is built on, so the stub must honour it.  A probe that
+    # FAILS is a different input, and case 6 is that one.
+    systemctl() { printf '0\n'; return 0; }
 }
 
 teardown() {
@@ -143,6 +145,23 @@ exit 1'
 
     run cat "$SANDBOX/out.txt"
     [[ "$output" == *"LINE [17/20] Stale Processes [SKIP - cannot read llm-active]"* ]]
+    run _fixture_alive
+    [ "$status" -eq 0 ]
+}
+
+@test "stale reap: an unreadable protect-list unit skips the reap" {
+    # The third fail-closed input.  A stopped unit and an absent one both answer "0"
+    # (measured), so a non-zero rc is a FAILURE to read — and reading it as "not
+    # protected" is how a systemd-managed llama-server gets killed and restarts the
+    # restart storm.  Overriding the function, not PATH: a bash function wins over a
+    # stub on PATH, which is exactly why the setup defines this one.
+    systemctl() { return 1; }
+
+    _run_step
+
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"LINE [17/20] Stale Processes [SKIP - cannot read the protected llama units]"* ]]
+    [[ "$output" != *"ORPHAN(S) KILLED"* ]]
     run _fixture_alive
     [ "$status" -eq 0 ]
 }

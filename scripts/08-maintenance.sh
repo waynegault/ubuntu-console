@@ -2,7 +2,12 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 56
+# Module Version: 57
+#   v57 (2026-09-24): the third fail-closed input — the protect list.  A unit whose
+#   MainPID could not be read was silently treated as "not protected", which is the
+#   restart-storm hazard the list exists to prevent; a stopped unit and an absent one
+#   both answer rc 0 with an empty pid (measured), so a non-zero rc is a failure and now
+#   stops the reap.  Case 5 of tests/unit/31-stale-reap-safety.bats pins it.
 #   v56 (2026-09-24): the stale-process reap now fails CLOSED on both of its inputs —
 #   the boot-guard mtime and the LLM_PORT listener.  Each was a swallow whose empty
 #   result was read as a fact: an unreadable mtime read as "very old" (so the guard did
@@ -1227,11 +1232,22 @@ function __up_stale_processes() {
     stale_pids=$(__llm_server_pids)
     local stale_count=0
     local _unit _protect_pid _pid _p _skip _has_port
+    local _protect_probe_ok=1
     local -a _protect=()
     for _unit in llama-xe-minicpm5-1b-chat.service llama-xe-embeddinggemma-embed.service \
                  llama-cuda-llama32-3b-chat.service
     do
-        _protect_pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
+        # swallow-ok: systemctl's own message is discarded because its rc carries the answer, and a failed probe stops the reap with the [SKIP] row below naming these units
+        if ! _protect_pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null)
+        then
+            # A unit that does not exist answers rc 0 with an empty pid (measured
+            # 2026-09-24), so a non-zero rc is a FAILURE to read, not an absent unit —
+            # and reading it as "not protected" is how a systemd-managed llama-server
+            # gets killed here, which restarts the restart storm.
+            _protect_probe_ok=0
+            continue
+        fi
+        _protect_pid=$(printf '%s' "$_protect_pid" | tr -d ' \n')
         if [[ "$_protect_pid" =~ ^[0-9]+$ ]] && (( _protect_pid > 0 ))
         then
             _protect+=("$_protect_pid")
@@ -1239,6 +1255,17 @@ function __up_stale_processes() {
     done
     if [[ -n "$stale_pids" ]]
     then
+        # FAIL CLOSED on the protect list too, for the same reason as the port below: a
+        # unit whose MainPID could not be read is indistinguishable from one that is not
+        # running, and the difference is a killed systemd-managed llama-server — the
+        # restart storm this filter exists to prevent.  Orphans left for one cycle are
+        # recovered on the next; a killed managed unit is not.
+        if (( _protect_probe_ok == 0 ))
+        then
+            __tac_line "[17/20] Stale Processes" "[SKIP - cannot read the protected llama units]" "$C_Warning"
+            return 0
+        fi
+
         # Resolve the PID that owns the LLM_PORT LISTEN socket, once. `ss` is
         # preferred; /proc/net/tcp inode matching is the fallback. A TCP fd's
         # readlink target is "socket:[inode]" with no port, so the port must be
