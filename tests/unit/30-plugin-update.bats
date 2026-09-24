@@ -328,6 +328,38 @@ _run_plugins() {
     [[ "$output" == *"[UPDATED]"* ]]
 }
 
+@test "oc-plugin-update: a failing fresh clone exits non-zero, not 0" {
+    # The command's OWN branch, where the shared helper is not involved at all: no
+    # plugin directory exists, so each plugin is cloned fresh.  With no fixture remote
+    # behind the rewritten URL every clone fails locally, which is the point — the run
+    # printed "[INSTALL FAILED]" three times and then exited 0, so a caller could not
+    # tell a clean run from one that installed nothing.
+    local rc=0
+    oc-plugin-update --all > "$SANDBOX/out.txt" 2>&1 < /dev/null || rc=$?
+
+    [ "$rc" -ne 0 ]
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"[INSTALL FAILED]"* ]]
+    # All three, so the count aggregates rather than stopping at the first.
+    local _hits
+    _hits="$(grep -c 'INSTALL FAILED' "$SANDBOX/out.txt")"
+    [ "$_hits" -eq 3 ]
+}
+
+@test "oc-plugin-update: a plugin that is not a git checkout exits non-zero" {
+    # The same gap one branch over: the directory is present but is not a checkout, so
+    # the command prints [REINSTALL REQUIRED] and tells the user what to do — and then
+    # returned 0.  A non-zero exit is what makes it actionable from a script.
+    mkdir -p "$HOME/.openclaw/extensions/gigabrain"
+
+    local rc=0
+    oc-plugin-update gigabrain > "$SANDBOX/out.txt" 2>&1 < /dev/null || rc=$?
+
+    [ "$rc" -ne 0 ]
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"[REINSTALL REQUIRED]"* ]]
+}
+
 # LIMIT, stated rather than left implied: the command path's UPDATE and FAILURE
 # branches are not exercised here, and cannot be hermetically.  09e passes a full
 # `https://github.com/...` URL as the remote pattern, so a checkout only matches it
@@ -337,3 +369,6 @@ _run_plugins() {
 # landed on "[SKIP - custom remote]" instead of the fetch).  Those branches are
 # therefore pinned one level down, by the helper's own cases above (0/1/2, including a
 # remote that cannot be read).  Covering them at the command level needs a real remote.
+# The two cases directly above ARE command-level: neither needs a checkout the command
+# can match, because a missing directory is cloned and a non-checkout is refused before
+# any fetch.

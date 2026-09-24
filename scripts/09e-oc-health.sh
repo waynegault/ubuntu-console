@@ -9,7 +9,10 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
+#   v14 (2026-09-24): oc-plugin-update counts every failure it PRINTS, not only the
+#   shared helper's rc 2 — a fresh clone that failed and a directory that is not a
+#   git checkout both exited 0 (tests/unit/30-plugin-update.bats pins both).
 # ==============================================================================
 # 09e-oc-health
 # ==============================================================================
@@ -296,6 +299,7 @@ function oc-plugin-update() {
                 return 0
             else
                 __tac_line "$id" "[INSTALL FAILED]" "$C_Error"
+                plugin_errors=$(( plugin_errors + 1 ))
                 return 1
             fi
         elif [[ -d "$plugin_dir/.git" ]]
@@ -319,6 +323,7 @@ function oc-plugin-update() {
             __tac_line "$id" "[REINSTALL REQUIRED]" "$C_Warning"
             __tac_info "  Reason" "Not a git repository" "$C_Dim"
             __tac_info "  Action" "Run: rm -rf '$plugin_dir' && oc-plugin-update $id" "$C_Dim"
+            plugin_errors=$(( plugin_errors + 1 ))
             return 1
         fi
     }
@@ -372,9 +377,12 @@ function oc-plugin-update() {
         __tac_line "Update Status" "[NO UPDATES]" "$C_Dim"
     fi
     __tac_footer
-    # The command succeeds when it ran.  A plugin whose update FAILED (the helper's
-    # rc 2) is the one case that must not exit 0, so a caller can tell a clean no-op
-    # run from one that could not even read a remote.
+    # The command fails when it could not do what it was asked, and there are three
+    # ways that happens: the shared helper reports FAILED (its rc 2), a fresh clone
+    # fails, and the directory exists but is not a git checkout (REINSTALL REQUIRED).
+    # Only the first was counted, so the other two printed a failure and then exited
+    # 0 — the one shape a script calling this cannot detect.  A benign no-op (the
+    # helper's rc 1, or a plugin already current) stays a success.
     (( plugin_errors == 0 ))
 }
 
