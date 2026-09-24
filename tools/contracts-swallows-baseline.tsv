@@ -44,7 +44,6 @@ unclassified	bin/gpu-busy.sh	19
 unclassified	bin/gpu-watch-selfcheck.sh	1
 unclassified	bin/interview-benchmark.sh	1
 unclassified	bin/llama-gpu-clear.sh	11
-unclassified	bin/llama-watchdog-guard.sh	4
 unclassified	bin/llama-watchdog.sh	41
 unclassified	bin/tac_hostmetrics.sh	9
 unclassified	tools/check-contracts.sh	6

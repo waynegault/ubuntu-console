@@ -26,7 +26,7 @@
 #   deliberate, non-bench stop.  `rm` the file to resume.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
 
 set -euo pipefail
 
@@ -44,6 +44,9 @@ if [ -e "$PAUSE" ]; then
 fi
 
 # 1. Is supervision up?  Anything other than the literal "active" counts.
+# A failed is-active is treated as "not active", which is the fail-safe direction:
+# a supervisor we cannot read is a supervisor we must not assume is running.
+# swallow-ok: the read IS the answer, and its failure falls to the safe branch
 if [ "$(systemctl --user is-active "$TIMER" 2>/dev/null || true)" = "active" ]; then
   if [ -e "$STRIKES" ]; then
     rm -f "$STRIKES"
@@ -55,6 +58,7 @@ fi
 # 2. Is the GPU under a live bench claim?  A held flock means yes.
 held=false
 if [ -e "$LOCK" ]; then
+  # swallow-ok: the probe's exit status is exactly the question being asked
   if flock -n "$LOCK" -c true 2>/dev/null; then
     held=false
   else
@@ -67,6 +71,9 @@ if [ "$held" = true ]; then
 fi
 
 # 3. Two consecutive ticks before acting, so a one-cycle blip is not a flap.
+# An unreadable counter reads as 0 — which re-arms the guard rather than silencing
+# it, and for a supervisor that is the safe direction.
+# swallow-ok: the default (0) is the fail-safe value, not a hidden failure
 n=$(( $(cat "$STRIKES" 2>/dev/null || echo 0) + 1 ))
 printf '%s\n' "$n" > "$STRIKES"
 if [ "$n" -lt "$NEED" ]; then
