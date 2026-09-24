@@ -2897,7 +2897,7 @@ class TestMCPServerTools(_MCPHarness):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "escape.md")))
 
     def test_explain_reports_the_community_and_each_edges_sources(self):
-        """GRAPHRAG-ARCH-006/007: lineage and theme reach the MCP read path."""
+        """GRAPHRAG-ARCH-006/007: lineage, its cap, and theme reach the MCP read path."""
         # b -> c is asserted by a source file; the graph carries a digest naming
         # a and b as one theme.
         kgraph.save_to_graph_db(self.db, {
@@ -2905,7 +2905,11 @@ class TestMCPServerTools(_MCPHarness):
                       {"id": "b", "label": "Beta", "type": "topic"},
                       {"id": "c", "label": "Gamma", "type": "topic"}],
             "edges": [{"from": "a", "to": "b", "label": "links", "sources": ["file:one.md"]},
-                      {"from": "b", "to": "c", "label": "links", "sources": []}],
+                      # The list hit the array bound, so the true count is in the
+                      # metadata and the payload has to carry it: 64 keys look exactly
+                      # like a complete list otherwise.
+                      {"from": "b", "to": "c", "label": "links", "sources": ["file:two.md"],
+                       "metadata": {"sources_overflow": 900}}],
             "meta": {"communities": [{"id": "community_0", "label": "Cached · Theme",
                                       "size": 2, "members": ["a", "b"],
                                       "central_nodes": [{"id": "a", "label": "Alpha",
@@ -2917,7 +2921,10 @@ class TestMCPServerTools(_MCPHarness):
         self.assertEqual(explained["node"]["community"],
                          {"id": "community_0", "label": "Cached · Theme", "size": 2})
         self.assertEqual(explained["inbound_connections"][0]["sources"], ["file:one.md"])
-        self.assertEqual(explained["outbound_connections"][0]["sources"], [])
+        self.assertEqual(explained["outbound_connections"][0]["sources"], ["file:two.md"])
+        self.assertEqual(explained["outbound_connections"][0]["sources_overflow"], 900)
+        # A complete list must NOT claim a cap, or the key means nothing.
+        self.assertNotIn("sources_overflow", explained["inbound_connections"][0])
 
     def test_kgraph_community_answers_from_the_cached_digest(self):
         """The community tool exists, is listed, and does not recompute."""

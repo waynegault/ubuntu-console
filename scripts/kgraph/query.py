@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import deque
+from typing import Any
 
 from .community import community_for_node
 from .models import Graph, GraphEdge, GraphNode
@@ -137,6 +138,22 @@ def find_path(graph: Graph | dict, source: str, target: str, **kwargs) -> list[d
     return []
 
 
+def _source_overflow(element: GraphEdge | GraphNode) -> dict[str, Any]:
+    """The ``sources_overflow`` key for an element, present only when it applies.
+
+    ``SourceLineage.merge_sources`` keeps the first MAX_SOURCES_PER_ELEMENT keys and
+    records the TRUE count in ``metadata['sources_overflow']``.  Nothing read it, so a
+    capped list of 64 arrived at a caller looking exactly like a complete one — the
+    models' own docstring promised a reader could tell them apart, and this is where a
+    reader does.  The key is omitted rather than set to null when nothing was
+    truncated, so its presence carries the meaning.
+    """
+    overflow = element.metadata.get("sources_overflow")
+    if overflow is None:
+        return {}
+    return {"sources_overflow": overflow}
+
+
 def explain_node(graph: Graph | dict, node_id: str) -> dict:
     """Describe a node's connections, type, and role in the graph.
 
@@ -150,7 +167,9 @@ def explain_node(graph: Graph | dict, node_id: str) -> dict:
     Each connection carries the ``sources`` that asserted that edge, so a caller
     can cite the source document rather than assert the fact anonymously, and the
     node's ``community`` (when the graph carries a cached community digest) so a
-    single explain answers "which theme is this part of" as well.
+    single explain answers "which theme is this part of" as well.  A connection whose
+    source list hit the array bound also carries ``sources_overflow`` — the true count
+    — so a truncated list is never read as the whole set.
     """
     if isinstance(graph, dict):
         graph = Graph.from_dict(graph)
@@ -179,6 +198,7 @@ def explain_node(graph: Graph | dict, node_id: str) -> dict:
                 "confidence": conf,
                 "semantic_score": e.semantic_score,
                 "sources": list(e.sources),
+                **_source_overflow(e),
             })
         elif e.target == nid:
             inbound.append({
@@ -187,6 +207,7 @@ def explain_node(graph: Graph | dict, node_id: str) -> dict:
                 "confidence": conf,
                 "semantic_score": e.semantic_score,
                 "sources": list(e.sources),
+                **_source_overflow(e),
             })
 
     # Build label lookup
@@ -246,6 +267,8 @@ def format_explain(explanation: dict) -> str:
             score = f' [{c.get("semantic_score")}]' if c.get("semantic_score") else ""
             conf = f' ({c["confidence"]})' if c.get("confidence") else ""
             src = f' — source: {", ".join(c["sources"])}' if c.get("sources") else ""
+            if c.get("sources_overflow"):
+                src += f' (capped: {len(c["sources"])} of {c["sources_overflow"]})'
             lines.append(f'  → {c["target_label"]} ({c["label"]}){score}{conf}{src}')
 
     if explanation["inbound_connections"]:
@@ -255,6 +278,8 @@ def format_explain(explanation: dict) -> str:
             score = f' [{c.get("semantic_score")}]' if c.get("semantic_score") else ""
             conf = f' ({c["confidence"]})' if c.get("confidence") else ""
             src = f' — source: {", ".join(c["sources"])}' if c.get("sources") else ""
+            if c.get("sources_overflow"):
+                src += f' (capped: {len(c["sources"])} of {c["sources_overflow"]})'
             lines.append(f'  ← {c["source_label"]} ({c["label"]}){score}{conf}{src}')
 
     return "\n".join(lines)

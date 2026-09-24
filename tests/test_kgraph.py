@@ -1833,11 +1833,21 @@ class SourceLineageReadPathTests(unittest.TestCase):
 
     def test_format_explain_prints_the_asserting_source(self):
         graph = {
-            'nodes': [{'id': 'a', 'label': 'Alpha'}, {'id': 'b', 'label': 'Beta'}],
-            'edges': [{'from': 'a', 'to': 'b', 'label': 'links', 'sources': ['file:one.md']}],
+            'nodes': [{'id': 'a', 'label': 'Alpha'}, {'id': 'b', 'label': 'Beta'},
+                      {'id': 'c', 'label': 'Gamma'}],
+            'edges': [{'from': 'a', 'to': 'b', 'label': 'links', 'sources': ['file:one.md']},
+                      # b -> c hit the array bound: merge_sources keeps the first
+                      # MAX_SOURCES_PER_ELEMENT keys and records the TRUE count in
+                      # metadata, which is the only place a reader can see it.
+                      {'from': 'b', 'to': 'c', 'label': 'links',
+                       'sources': ['file:two.md'], 'metadata': {'sources_overflow': 900}}],
         }
-        text = kgraph.format_explain(kgraph.explain_node(graph, 'a'))
-        self.assertIn('source: file:one.md', text)
+        text = kgraph.format_explain(kgraph.explain_node(graph, 'b'))
+        self.assertIn('source: file:two.md', text)
+        self.assertIn('(capped: 1 of 900)', text)
+        # ...and a connection whose list was NOT capped says nothing about a cap, so
+        # the marker's presence is the claim.
+        self.assertNotIn('capped', kgraph.format_explain(kgraph.explain_node(graph, 'a')))
 
 
 class SourceLineagePersistenceTests(unittest.TestCase):
