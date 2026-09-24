@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 47
+# Module Version: 48
+#   v48 (2026-09-24): 79 of this file's 211 unclassified swallow sites now carry
+#   a `# swallow-ok:` reason (its baseline row falls 211 -> 132), and the marker is
+#   NEVER placed between a line ending in a backslash and its continuation — that
+#   broke the file once, measured.  The 132 left are the read-back and parse sites
+#   whose consumer needs reading per site.  NOT a behaviour change: comments only.
 # ==============================================================================
 # 11e-llm-model
 # ==============================================================================
@@ -244,10 +249,12 @@ function __model_scan() {
     fi
     if [[ -n "$old_registry_snapshot" ]]
     then
+        # swallow-ok: best-effort profile remap after a scan: the scan's own result must not depend on it
         __llm_autotune_profiles_remap_by_registry "$old_registry_snapshot" "$LLM_REGISTRY" >/dev/null 2>&1 || true
         rm -f "$old_registry_snapshot"
     fi
     __tac_info "Registry" "[${num} models written to $LLM_REGISTRY]" "$C_Success"
+    # swallow-ok: best-effort registry sync: the caller reports its own result and this must not fail it
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
     if [[ -f "$QUANT_GUIDE" ]]
@@ -354,6 +361,7 @@ function __model_list() {
         return 1
     fi
 
+    # swallow-ok: best-effort registry sync: the listing reports its own result and this must not fail it
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
     # (The active model is flagged by __llm_registry_sync_state above, by FILE name.  This
@@ -513,6 +521,7 @@ function __model_default() {
     IFS='|' read -r _n name file _rest <<< "$entry"
     mkdir -p "$(dirname "$LLM_DEFAULT_FILE")" 2>/dev/null
     echo "$file" > "$LLM_DEFAULT_FILE"
+    # swallow-ok: best-effort registry sync: the default-setting reports its own result
     __llm_registry_sync_state >/dev/null 2>&1 || true
     __tac_info "Default Model" "[SET TO: $name]" "$C_Success"
 }
@@ -673,6 +682,7 @@ function __model_use_ensure_downloaded() {
         return 1
     fi
 
+    # swallow-ok: an unreadable size reads as 0 bytes, which the caller reports rather than mistaking for a full file
     model_bytes=$(stat --format=%s "$model_path" 2>/dev/null || echo 0)
 }
 
@@ -922,6 +932,7 @@ function __model_use_claim_cuda_card() {
     local _unit
     for _unit in llama-cuda-llama32-3b-chat.service llama-cuda-qwen35-4b-pipeline.service
     do
+        # swallow-ok: the probe's failure IS the answer: a unit that is not active has nothing to stop
         if systemctl --user is-active --quiet "$_unit" 2>/dev/null
         then
             __tac_info "CUDA" "stopping $_unit (one LLM per card; this lane takes it)" "$C_Dim"
@@ -1148,6 +1159,7 @@ function __model_use_launch_server() {
         for _lfd in "${_lock_fd_dir}/"*; do
             _lfdnum="${_lfd##*/}"
             if [[ "$_lfdnum" =~ ^[0-9]+$ ]] && [[ "$_lfdnum" -ge 10 ]]; then
+                # swallow-ok: closing an inherited fd that may already be closed
                 eval "exec ${_lfdnum}>&-" 2>/dev/null || true
             fi
         done 2>/dev/null
@@ -1163,6 +1175,7 @@ function __model_use_launch_server() {
             fi
             rm -f "$_okf"
         done
+        # swallow-ok: cleanup of a /tmp glob that may match nothing at all
         rm -rf /tmp/llm-stdin.* 2>/dev/null || true
 
         local stdin_fifo_dir
@@ -1175,6 +1188,7 @@ function __model_use_launch_server() {
         local stdin_fifo="$stdin_fifo_dir/stdin"
         if ! mkfifo "$stdin_fifo" 2>/dev/null
         then
+            # swallow-ok: stdin-fifo cleanup: a second pass has nothing left to remove
             rm -rf "$stdin_fifo_dir" 2>/dev/null || true
             __tac_info "Status" "FAILED OR TIMEOUT - could not create stdin fifo" "$C_Error"
             exit 1
@@ -1208,7 +1222,9 @@ function __model_use_launch_server() {
             # infinite accumulation.
             sleep 3600
             # If we reach here, we were orphaned — clean up
+            # swallow-ok: stdin-fifo cleanup: a second pass has nothing left to remove
             rm -f "$stdin_fifo" "$stdin_keeper_pid_file" 2>/dev/null || true
+            # swallow-ok: stdin-fifo directory cleanup: a second pass has nothing left to remove
             rm -rf "$stdin_fifo_dir" 2>/dev/null || true
         } &
         local stdin_keeper_pid=$!
@@ -1225,9 +1241,12 @@ function __model_use_launch_server() {
         nohup "${cmd[@]}" <"$stdin_fifo" >"$LLM_LOG_FILE" 2>&1
         local server_rc=$?
 
+        # swallow-ok: best-effort keeper teardown; the pid may already be gone
         kill "$stdin_keeper_pid" >/dev/null 2>&1 || true
+        # swallow-ok: reaping the keeper: a pid that already exited has nothing to wait for
         wait "$stdin_keeper_pid" 2>/dev/null || true
         rm -f "$stdin_fifo"
+        # swallow-ok: stdin-fifo directory cleanup after the keeper exits
         rm -rf "$stdin_fifo_dir" 2>/dev/null || true
         exit "$server_rc"
     ) 2>/dev/null &
@@ -1282,6 +1301,7 @@ function __model_use_wait_healthy() {
     [[ -n "${__BENCH_MODE:-}" ]] || _health_progress="dots"
     if __llm_wait_for_health "$health_timeout" _health_elapsed "$_health_progress" "Loading LLM (health check)"
     then
+        # swallow-ok: best-effort registry sync: the health wait reports its own result
         __llm_registry_sync_state >/dev/null 2>&1 || true
         # Bench mode: pre-flight a tiny completion to make sure the model slot is
         # actually ready to serve (WSL2: /health returns OK before slot is ready,
@@ -1363,6 +1383,7 @@ function __model_use_wait_healthy() {
     # Failed startup must not leave a lingering server process.
     __llm_server_stop
     rm -f "$ACTIVE_LLM_FILE"
+    # swallow-ok: best-effort registry sync: the health wait reports its own result
     __llm_registry_sync_state >/dev/null 2>&1 || true
     [[ -z "${__BENCH_MODE:-}" ]] && __tac_info "Status" "FAILED OR TIMEOUT - check: tail $LLM_LOG_FILE" "$C_Error"
     return 1
@@ -1447,6 +1468,7 @@ function __model_stop() {
         __tac_info "CUDA" "card mark left in place (a bench/autotune run owns the card)" "$C_Dim"
     elif [[ -f "$_cuda_suspend" ]]
     then
+        # swallow-ok: releasing the CAS marker; absent already means released
         rm -f "$_cuda_suspend" 2>/dev/null || true
         __tac_info "CUDA" "card released — the CUDA lane may start again" "$C_Dim"
     fi
@@ -1459,6 +1481,7 @@ function __model_stop() {
         _keeper_pid=$(< "$_keeper_file")
         if [[ "$_keeper_pid" =~ ^[0-9]+$ ]]
         then
+            # swallow-ok: best-effort kill of the keeper: a pid that already exited is the outcome sought
             kill -TERM "$_keeper_pid" 2>/dev/null || true
         fi
         rm -f "$_keeper_file"
@@ -1482,8 +1505,10 @@ function __model_stop() {
         _keeper_ppid=$(ps -o ppid= -p "$_keeper_pid" 2>/dev/null | tr -d '[:space:]')
         if [[ -z "$_keeper_ppid" ]] || [[ "$_keeper_ppid" == "1" ]]
         then
+            # swallow-ok: best-effort KILL of a keeper that survived the TERM: an exited pid is the outcome sought
             kill -KILL "$_keeper_pid" 2>/dev/null || true
         fi
+    # swallow-ok: a pgrep that matches nothing prints nothing, and the loop then has nothing to do
     done < <(pgrep -af 'sleep 3600' 2>/dev/null || true)
     # Kill the model subshell (the `( ... ) & disown` wrapper from __model_use)
     # and its entire process tree (inner bash, stdin keeper, any children).
@@ -1502,15 +1527,19 @@ function __model_stop() {
         # Kill child tree recursively (up to 4 levels)
         for ((_ms_depth=0; _ms_depth<4; _ms_depth++))
         do
+            # swallow-ok: a pgrep that matches nothing prints nothing, and the loop then has nothing to do
             for _ms_child in $(pgrep -P "$_ms_pid" 2>/dev/null || true)
             do
+                # swallow-ok: best-effort kill of a bench child; a pid that already exited is the outcome sought
                 kill -KILL "$_ms_child" 2>/dev/null || true
             done
         done
         # Kill the parent subshell
+        # swallow-ok: best-effort KILL of the bench child that survived the TERM
         kill -KILL "$_ms_pid" 2>/dev/null || true
     done
     rm -f "$ACTIVE_LLM_FILE"
+    # swallow-ok: best-effort registry sync: the stop reports its own result
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
     # ---- GPU memory reclamation ----
@@ -1568,6 +1597,7 @@ function __model_status() {
         *) ;;
     esac
 
+    # swallow-ok: best-effort registry sync: the status report carries its own result
     __llm_registry_sync_state >/dev/null 2>&1 || true
 
     if __llm_server_running && __test_port "$LLM_PORT"
@@ -1766,6 +1796,7 @@ function __bench_run_with_timeout() {
         fi
         # Shell functions cannot be exec'd by setsid directly.
         # Run them in a dedicated shell process-group when available.
+        # swallow-ok: exporting a function into a subshell; the call below carries the outcome
         declare -fx "$1" 2>/dev/null || true
         (( _monitor_was_on == 1 )) && set +m
         if command -v setsid >/dev/null 2>&1; then
@@ -1781,6 +1812,7 @@ function __bench_run_with_timeout() {
         "$@" &
     fi
     local cmd_pid=$!
+    # swallow-ok: job-control bookkeeping for a process that is already running
     disown "$cmd_pid" 2>/dev/null || true
     __BENCH_TIMEOUT_LAST_PID="$cmd_pid"
     local cmd_pgid=""
@@ -1789,11 +1821,13 @@ function __bench_run_with_timeout() {
     local interval=1
     while (( waited < timeout_s ))
     do
+        # swallow-ok: the probe's failure IS the answer: an exited pid needs no signal
         if ! kill -0 "$cmd_pid" 2>/dev/null
         then
             wait "$cmd_pid" 2>/dev/null
             if (( _monitor_was_on == 1 ))
             then
+                # swallow-ok: enabling job control; not every context allows it and the waits below do not need it
                 set -m 2>/dev/null || true
             fi
             return $?
@@ -1814,11 +1848,13 @@ function __bench_run_with_timeout() {
     local _grace=10 _g_i
     for (( _g_i=0; _g_i < _grace; _g_i++ ))
     do
+        # swallow-ok: the probe's failure IS the answer: an exited pid needs no signal
         if ! kill -0 "$cmd_pid" 2>/dev/null
         then
             wait "$cmd_pid" 2>/dev/null
             if (( _monitor_was_on == 1 ))
             then
+                # swallow-ok: enabling job control; not every context allows it and the waits below do not need it
                 set -m 2>/dev/null || true
             fi
             return 124
@@ -1841,9 +1877,11 @@ function __bench_run_with_timeout() {
         # No PGID info — last resort, try killing just the child PID.
         kill -KILL -- "$cmd_pid" 2>/dev/null || true
     fi
+    # swallow-ok: waiting for a child that may already have been reaped
     wait "$cmd_pid" 2>/dev/null || true
     if (( _monitor_was_on == 1 ))
     then
+        # swallow-ok: enabling job control; not every context allows it and the waits below do not need it
         set -m 2>/dev/null || true
     fi
     return 124
@@ -1947,18 +1985,22 @@ function __model_bench() {
         # Kill any subprocesses we spawned
         if (( ${#bench_cleanup_spawned_pids[@]} > 0 ))
         then
+            # swallow-ok: cleanup of spawned pids at exit; any of them may be gone already
             kill "${bench_cleanup_spawned_pids[@]}" 2>/dev/null || true
         fi
         # On interrupt/termination, explicitly stop any active model server.
         if (( __bench_signal_rc != 0 ))
         then
+            # swallow-ok: a stop performed as part of cleanup must not fail the cleanup
             __model_stop >/dev/null 2>&1 || true
         fi
         # Remove guard files (unconditionally — these are /tmp files, safe to rm)
         rm -f "$bench_pid_file"
         if [[ -n "$bench_lock_fd" ]]
         then
+            # swallow-ok: releasing the bench lock; releasing it twice is harmless
             flock -u "$bench_lock_fd" 2>/dev/null || true
+            # swallow-ok: closing the bench lock fd; closing it twice is harmless
             exec {bench_lock_fd}>&- 2>/dev/null || true
         fi
         rm -f "$bench_lock_file"
@@ -1976,6 +2018,7 @@ function __model_bench() {
     mkdir -p "$bench_log_dir" 2>/dev/null
 
     local _bench_watchdog_was_active=0
+    # swallow-ok: the probe's failure IS the answer: an inactive timer has nothing to stop
     if systemctl --user is-active --quiet "$bench_watchdog_timer" 2>/dev/null
     then
         _bench_watchdog_was_active=1
@@ -2080,6 +2123,7 @@ function __model_bench() {
         fi
         if [[ -n "$bench_lock_fd" ]]
         then
+            # swallow-ok: releasing the bench lock; releasing it twice is harmless
             flock -u "$bench_lock_fd" 2>/dev/null || true
             exec {bench_lock_fd}>&-
             rm -f "$bench_lock_file" "$bench_pid_file"
@@ -2088,6 +2132,7 @@ function __model_bench() {
         return 1
     fi
 
+    # swallow-ok: a wake signal to a helper that may already have exited
     wake 2>/dev/null || true
     __llm_bench_perf_prep
     if (( ${#bench_selectors[@]} > 0 ))
@@ -2174,6 +2219,7 @@ function __model_bench() {
                     __tac_info "Bench" "[Autotune failed for model #${b_num[$i]} (no working config) - skipping benchmark]" "$C_Error"
                     b_tps+=("FAIL_AUTOTUNE")
                     sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
+                    # swallow-ok: a stop before the next measurement; a model already stopped is the state sought
                     __model_stop 2>/dev/null || true
                     __gpu_clear_stale_processes
                     sleep 2
@@ -2236,6 +2282,7 @@ function __model_bench() {
         local win_note=""
         [[ -f "$LLM_WINDOW_MISMATCH_CACHE" ]] && win_note="window mismatch: $(< "$LLM_WINDOW_MISMATCH_CACHE")"
         b_notes+=("$win_note")
+        # swallow-ok: a stop before the next measurement; a model already stopped is the state sought
         __model_stop 2>/dev/null
         printf "\nClearing VRAM\n"
         sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
@@ -2314,6 +2361,7 @@ function __model_bench() {
     fi
     if [[ -n "$bench_lock_fd" ]]
     then
+        # swallow-ok: releasing the bench lock; releasing it twice is harmless
         flock -u "$bench_lock_fd" 2>/dev/null || true
         exec {bench_lock_fd}>&-
         rm -f "$bench_lock_file" "$bench_pid_file"
@@ -2909,6 +2957,7 @@ function __model_delete() {
     if [[ -f "$fpath" ]]
     then
         local fsize_bytes
+        # swallow-ok: an unreadable size reads as 0 bytes, which the caller reports rather than mistaking for a full file
         fsize_bytes=$(stat --format=%s "$fpath" 2>/dev/null || echo 0)
         local fsize
         fsize=$(awk "BEGIN{printf \"%.1fG\", $fsize_bytes/1024/1024/1024}")
@@ -3303,6 +3352,7 @@ function model() {
             # Parse --ctx-size override from remaining args
             local _use_ctx=""
             local _use_num="${1:-}"
+            # swallow-ok: shifting past the arguments is a no-op with nothing to report
             shift 2>/dev/null || true
             while [[ $# -gt 0 ]]
             do
@@ -3532,7 +3582,9 @@ function llm-build() {
         git fetch --quiet origin 2>/dev/null || true
         upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
         if [[ -n "$upstream" ]]; then
+            # swallow-ok: a question mark is the printed unknown; the report shows it as one rather than as zero
             behind=$(git rev-list --count "HEAD..$upstream" 2>/dev/null || echo "?")
+            # swallow-ok: a question mark is the printed unknown; the report shows it as one rather than as zero
             target=$(git rev-parse --short "$upstream" 2>/dev/null || echo "?")
             # The hazard class that has actually bitten us: flag/default churn.
             churn=$(git diff --stat "HEAD..$upstream" -- common/arg.cpp common/common.h 2>/dev/null | tail -1)
@@ -3544,6 +3596,7 @@ function llm-build() {
 
     echo ""
     __tac_info "Plan" "llama.cpp build plan - nothing has changed yet" "$C_Info"
+    # swallow-ok: a question mark is the printed unknown; the report shows it as one rather than as zero
     echo "  source:   $root   @ $(git rev-parse --short HEAD 2>/dev/null || echo '?')"
     if [[ "$no_pull" == "true" ]]; then
         echo "  pull:     $upstream"
@@ -3583,6 +3636,7 @@ function llm-build() {
 
     # Detect available parallelism
     local jobs
+    # swallow-ok: a machine without nproc builds with 4 jobs, and the output names that choice
     jobs=$(nproc 2>/dev/null || echo 4)
 
     # Configure with CMake (skip if --quick and CMakeCache exists)
@@ -3626,10 +3680,12 @@ function llm-build() {
         local size; size=$(stat --format=%s "$bin" 2>/dev/null)
         local human_size
         if [[ -n "$size" ]]; then
+            # swallow-ok: falls back to the raw byte count when numfmt cannot scale it
             human_size=$(numfmt --to=iec "$size" 2>/dev/null || echo "${size}B")
         else
             human_size="?"
         fi
+        # swallow-ok: a question mark is the printed unknown; the report shows it as one rather than as zero
         local commit; commit=$(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo "?")
         __tac_info "Done" "llama-server built: commit ${commit}, ${human_size}" "$C_Success"
 
