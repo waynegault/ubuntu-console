@@ -2,7 +2,9 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 63
+# Module Version: 64
+#   v64 (2026-09-24): four more sites recorded — two of them INLINE, because they
+#   are the tails of continued statements where a marker above would split the statement.
 #   v63 (2026-09-24): two markers re-anchored to the line DIRECTLY above their
 #   site (the guard reads no further); four sites that are the TAIL of a continuation
 #   are left alone — a marker there splits the statement (SC2188), measured twice.
@@ -464,7 +466,7 @@ function __up_npm_cargo() {
                 # manages them inside that window).
                 local npm_rc=0
                 if command -v systemctl >/dev/null 2>&1 \
-                    && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null
+                    && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null  # swallow-ok: the probe's failure IS the answer: the step defers when the Gateway is up, and an unreadable state means it is not
                 then
                     update_output=""
                     npm_deferred=1
@@ -1675,6 +1677,7 @@ function __tac_fix_loopback() {
     then
         sudo ip link add loopback0 type dummy 2>/dev/null
         # swallow-ok: NOT swallowed — the effect of both commands is verified by the ip-addr check below, whose failure is printed, logged and returned
+        # swallow-ok: the same verification follows both loopback writes and reports their failure on stderr, to the log, and as rc 1
         sudo ip link set loopback0 up 2>/dev/null
     fi
     # swallow-ok: this IS the verification — a probe whose failure is the branch taken
@@ -1689,7 +1692,7 @@ function __tac_fix_loopback() {
         printf '%s\n' "[loopback] 127.0.0.2 unavailable — OpenClaw node-to-node traffic may fail" >&2
         # swallow-ok: a durable COPY of an alarm that already reached stderr, and the destination defaults to /dev/null — failing to also write it cannot hide it
         echo "$(date +"%Y-%m-%d %H:%M:%S") [LOOPBACK-FAILED] could not set up loopback0/127.0.0.2" \
-            >> "${ErrorLogPath:-/dev/null}" 2>/dev/null
+            >> "${ErrorLogPath:-/dev/null}" 2>/dev/null  # swallow-ok: a durable COPY of an alarm that already reached stderr, to a destination that defaults to /dev/null
         return 1
     fi
     return 0
@@ -1785,6 +1788,7 @@ function up() {
     __tac_footer
 
     # Restore original working directory
+    # swallow-ok: the directory may have been removed during the run; the shell keeps the last step's cwd rather than aborting the summary it just printed
     cd "$original_dir" || true
 }
 

@@ -14,7 +14,7 @@ unclassified	scripts/04-aliases.sh	8
 unclassified	scripts/05-ui-engine.sh	2
 unclassified	scripts/06-hooks.sh	5
 unclassified	scripts/07-telemetry.sh	21
-unclassified	scripts/08-maintenance.sh	13
+unclassified	scripts/08-maintenance.sh	10
 unclassified	scripts/09a-oc-gateway.sh	37
 unclassified	scripts/09b-gog.sh	3
 unclassified	scripts/09c-oc-core.sh	9
