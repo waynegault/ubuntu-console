@@ -2,7 +2,13 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 57
+# Module Version: 58
+#   v58 (2026-09-24): five of the accepted report/probe fixes — the cooldown
+#   rewrite refuses to rebuild from an unreadable DB (grep rc over 1), the three
+#   sqlite3 probes in check-graph-integrity report [CHECK FAILED] and return 2
+#   instead of reading a broken DB as a clean graph, copy_path reports a failed copy,
+#   a failed metrics write says [NOT WRITTEN], and a failed loopback repair reaches
+#   errCount.  The npm/pip probe fixes are the next change-set.
 #   v57 (2026-09-24): the third fail-closed input — the protect list.  A unit whose
 #   MainPID could not be read was silently treated as "not protected", which is the
 #   restart-storm hazard the list exists to prevent; a stopped unit and an absent one
@@ -152,9 +158,21 @@ function __set_cooldown() {
     # Use flock for exclusive access to prevent race conditions with __check_cooldown
     {
         flock -x 200 || return 1
+        # grep exits 1 when nothing matched, which is the ordinary "this is the first
+        # key" case; anything ABOVE that means the DB could not be read, and rewriting
+        # from an unreadable source would drop every OTHER step's cooldown — so say so
+        # and leave the file alone.
+        # swallow-ok: grep's exit status is checked on the next line: 1 is the ordinary no-match, over 1 skips the rewrite
+        local _others="" _grep_rc=0
+        _others=$(grep -v "^${key}=" "$CooldownDB" 2>/dev/null) || _grep_rc=$?
+        if (( _grep_rc > 1 ))
+        then
+            __tac_line "Cooldown DB" "[REWRITE SKIPPED - cannot read ${CooldownDB##*/}]" "$C_Warning"
+            return 1
+        fi
         {
-            grep -v "^${key}=" "$CooldownDB" 2>/dev/null
-            echo "${key}=${now}"
+            [[ -n "$_others" ]] && printf '%s\n' "$_others"
+            printf '%s=%s\n' "$key" "$now"
         } > "${CooldownDB}.tmp" && mv "${CooldownDB}.tmp" "$CooldownDB"
     } 200>"$CooldownDB.lock"
 }
@@ -1602,12 +1620,17 @@ function up() {
 
     # Keep the WSL mirrored-networking loopback alive.  This used to happen at shell
     # start-up; it is privileged, so it belongs on the maintenance path (item 2.3.1),
-    # and it is non-fatal: a missing loopback0 must not abort the other 20 steps.
-    __tac_fix_loopback || true
+    # and it is non-fatal: a missing loopback0 must not abort the other 20 steps.  The
+    # call itself sits below errCount's declaration, because its failure is an issue for
+    # the run and belongs in the final "[COMPLETED WITH N ISSUE(S)]" line.
 
     local errCount=0
     local now
     now=$(date +%s)
+
+    # A failure here reaches stderr already; COUNTING it is what makes "0 ISSUE(S)"
+    # honest when 127.0.0.2 could not be set up.
+    __tac_fix_loopback || errCount=$(( errCount + 1 ))
 
     # Performance tracking: record start time for metrics
     local start_time=$now
@@ -1645,10 +1668,15 @@ function up() {
     local total_time=$(( $(date +%s) - start_time ))
     __tac_line "Execution Time" "[${total_time}s]" "$C_Dim"
 
-    # Write metrics to file for trend analysis
+    # Write metrics to file for trend analysis.  A failed write is REPORTED and not
+    # counted: telemetry is not maintenance, but a trend file that silently stops
+    # growing is the "success with nothing behind it" shape.
     local metrics_file="$OC_ROOT/maintenance-history.csv"
-    mkdir -p "$(dirname "$metrics_file")" 2>/dev/null
-    echo "$(date -Iseconds),$total_time,$errCount" >> "$metrics_file" 2>/dev/null
+    if ! mkdir -p "$(dirname "$metrics_file")" \
+       || ! printf '%s,%s,%s\n' "$(date -Iseconds)" "$total_time" "$errCount" >> "$metrics_file"
+    then
+        __tac_line "Maintenance Metrics" "[NOT WRITTEN - ${metrics_file}]" "$C_Warning"
+    fi
 
     __tac_footer
 
@@ -2046,8 +2074,16 @@ function cl() {
 # copy_path — Copy the current working directory to the Windows clipboard.
 # ---------------------------------------------------------------------------
 function copy_path() {
-    pwd | tr -d '\r\n' | clip.exe 2>/dev/null
-    __tac_info "Clipboard" "[$(pwd)]" "$C_Success"
+    # The row is built from the RESULT, not from having tried: this used to print
+    # "[Clipboard] <path>" in the success colour even when clip.exe was absent and
+    # nothing was copied — the one shape a reader cannot detect.
+    if pwd | tr -d '\r\n' | clip.exe
+    then
+        __tac_info "Clipboard" "[$(pwd)]" "$C_Success"
+        return 0
+    fi
+    __tac_info "Clipboard" "[COPY FAILED - clip.exe unavailable or refused]" "$C_Error"
+    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -2148,6 +2184,7 @@ function check-graph-integrity() {
 
     # Check for orphan relationships (target entity doesn't exist)
     local orphans
+    _q_rc=0
     orphans=$(sqlite3 "$db" "
         SELECT COUNT(DISTINCT e.target_entity)
         FROM memory_entity_relationships e
@@ -2155,7 +2192,14 @@ function check-graph-integrity() {
             SELECT 1 FROM memory_entity_aliases a
             WHERE a.entity_id = e.target_entity
         );
-    " 2>/dev/null || echo "0")
+    " 2>/dev/null) || _q_rc=$?  # swallow-ok: the status is checked below; a failure returns 2
+    if (( _q_rc != 0 ))
+    then
+        ((quiet)) || __tac_info "Graph Integrity" "[CHECK FAILED - the registry could not be queried]" "$C_Error"
+        # 2 = the check could not run: a query that FAILED is not a clean graph, and
+        # reading it as 0 reported "no issues" about a database nothing could read.
+        return 2
+    fi
 
     if (( orphans > 0 )); then
         output+="  ${C_Error}●${C_Reset} Found $orphans orphan relationship targets\n"
@@ -2164,10 +2208,18 @@ function check-graph-integrity() {
 
     # Check for duplicate relationships
     local duplicates
+    _q_rc=0
     duplicates=$(sqlite3 "$db" "
         SELECT COUNT(*) - COUNT(DISTINCT entity_id_a || '-' || entity_id_b || '-' || relationship_type)
         FROM memory_entity_relationships;
-    " 2>/dev/null || echo "0")
+    " 2>/dev/null) || _q_rc=$?  # swallow-ok: the status is checked below; a failure returns 2
+    if (( _q_rc != 0 ))
+    then
+        ((quiet)) || __tac_info "Graph Integrity" "[CHECK FAILED - the registry could not be queried]" "$C_Error"
+        # 2 = the check could not run: a query that FAILED is not a clean graph, and
+        # reading it as 0 reported "no issues" about a database nothing could read.
+        return 2
+    fi
 
     if (( duplicates > 0 )); then
         output+="  ${C_Warning}●${C_Reset} Found $duplicates duplicate relationships\n"
@@ -2176,6 +2228,7 @@ function check-graph-integrity() {
 
     # Check for isolated entities (no relationships)
     local isolated
+    _q_rc=0
     isolated=$(sqlite3 "$db" "
         SELECT COUNT(DISTINCT a.entity_id)
         FROM memory_entity_aliases a
@@ -2183,7 +2236,14 @@ function check-graph-integrity() {
             SELECT 1 FROM memory_entity_relationships r
             WHERE r.entity_id_a = a.entity_id OR r.entity_id_b = a.entity_id
         );
-    " 2>/dev/null || echo "0")
+    " 2>/dev/null) || _q_rc=$?  # swallow-ok: the status is checked below; a failure returns 2
+    if (( _q_rc != 0 ))
+    then
+        ((quiet)) || __tac_info "Graph Integrity" "[CHECK FAILED - the registry could not be queried]" "$C_Error"
+        # 2 = the check could not run: a query that FAILED is not a clean graph, and
+        # reading it as 0 reported "no issues" about a database nothing could read.
+        return 2
+    fi
 
     if (( isolated > 5 )); then
         output+="  ${C_Info}○${C_Reset} Found $isolated isolated entities (may be normal)\n"
