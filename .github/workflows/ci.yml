@@ -132,7 +132,8 @@ jobs:
                tests/unit/28-gh-keyring-watch.bats \
                tests/unit/29-errexit-arithmetic.bats \
                tests/unit/30-plugin-update.bats \
-               tests/unit/31-stale-reap-safety.bats
+               tests/unit/31-stale-reap-safety.bats \
+               tests/unit/32-report-rows-safety.bats
 
       - name: Run integration tests
         run: |
