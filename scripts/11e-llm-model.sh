@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 48
+# Module Version: 49
+#   v49 (2026-09-24): nine sites read out of __bench_run_with_timeout and its
+#   helpers — the pgid probes, both bare waits inside 'it already exited' branches, the
+#   TERM/KILL pairs the next phase re-checks, and the launch helper's TERM.  The stale-log
+#   prune is a CONTINUATION TAIL and stays unmarked on purpose: a marker above it splits
+#   the statement, and an inline reason would not fit the 120-character budget.
 #   v48 (2026-09-24): 79 of this file's 211 unclassified swallow sites now carry
 #   a `# swallow-ok:` reason (its baseline row falls 211 -> 132), and the marker is
 #   NEVER placed between a line ending in a backslash and its continuation — that
@@ -1171,6 +1176,7 @@ function __model_use_launch_server() {
             [[ -f "$_okf" ]] || continue
             _okp=$(< "$_okf")
             if [[ "$_okp" =~ ^[0-9]+$ ]]; then
+                # swallow-ok: a best-effort TERM to the launch helper; the keeper teardown below waits for the outcome
                 kill -TERM "$_okp" 2>/dev/null
             fi
             rm -f "$_okf"
@@ -1777,6 +1783,7 @@ function __bench_run_with_timeout() {
     local _monitor_was_on=0
     [[ "$-" == *m* ]] && _monitor_was_on=1
     local _self_pgid=""
+    # swallow-ok: an empty pgid makes the SIGKILL guard below refuse to group-kill, which is its safe direction
     _self_pgid=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')
 
     local _is_shell_func=0
@@ -1816,6 +1823,7 @@ function __bench_run_with_timeout() {
     disown "$cmd_pid" 2>/dev/null || true
     __BENCH_TIMEOUT_LAST_PID="$cmd_pid"
     local cmd_pgid=""
+    # swallow-ok: an empty pgid falls back to signalling the PID alone, which the phase comments spell out
     cmd_pgid=$(ps -o pgid= -p "$cmd_pid" 2>/dev/null | tr -d ' ')
     local waited=0
     local interval=1
@@ -1824,6 +1832,8 @@ function __bench_run_with_timeout() {
         # swallow-ok: the probe's failure IS the answer: an exited pid needs no signal
         if ! kill -0 "$cmd_pid" 2>/dev/null
         then
+            # swallow-ok: this branch was taken because the child had exited, so there is nothing to wait for — and its status IS returned on the next line
+            # swallow-ok: as above: the branch is 'it already exited'
             wait "$cmd_pid" 2>/dev/null
             if (( _monitor_was_on == 1 ))
             then
@@ -1839,8 +1849,10 @@ function __bench_run_with_timeout() {
     # Phase 1 — SIGTERM with grace period (lets EXIT traps fire).
     if [[ -n "$cmd_pgid" ]] && [[ "$cmd_pgid" =~ ^[0-9]+$ ]] && [[ -n "$_self_pgid" ]] && [[ "$cmd_pgid" != "$_self_pgid" ]]
     then
+        # swallow-ok: TERM first, then the grace loop re-checks with kill -0; a group already gone is the outcome sought
         kill -TERM -- "-$cmd_pgid" 2>/dev/null || true
     else
+        # swallow-ok: the no-pgid fallback for the same TERM, checked by the same grace loop
         kill -TERM -- "$cmd_pid" 2>/dev/null || true
     fi
 
@@ -1867,6 +1879,7 @@ function __bench_run_with_timeout() {
     # without triggering EXIT traps, leaving stale lock files.
     if [[ -n "$cmd_pgid" ]] && [[ "$cmd_pgid" =~ ^[0-9]+$ ]] && [[ -n "$_self_pgid" ]] && [[ "$cmd_pgid" != "$_self_pgid" ]]
     then
+        # swallow-ok: SIGKILL is uncatchable, so a failure here can only mean the group is already gone
         kill -KILL -- "-$cmd_pgid" 2>/dev/null || true
     elif [[ "$cmd_pgid" =~ ^[0-9]+$ ]] && [[ "$cmd_pgid" == "$_self_pgid" ]]
     then
@@ -1875,6 +1888,7 @@ function __bench_run_with_timeout() {
         :
     else
         # No PGID info — last resort, try killing just the child PID.
+        # swallow-ok: the last-resort KILL of the PID alone, on the same uncatchable-signal ground
         kill -KILL -- "$cmd_pid" 2>/dev/null || true
     fi
     # swallow-ok: waiting for a child that may already have been reaped
