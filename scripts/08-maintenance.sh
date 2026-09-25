@@ -2,7 +2,11 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 64
+# Module Version: 65
+#   v65 (2026-09-24): the two INLINE markers had to be shortened to fit the 8.1.8
+#   budget — an inline reason leaves a code line, so it shares the 120-character limit
+#   with the code it annotates (126 -> 121 -> 115).  Inline is the only placement for a
+#   continued statement's tail: a marker above it splits the statement (SC2188).
 #   v64 (2026-09-24): four more sites recorded — two of them INLINE, because they
 #   are the tails of continued statements where a marker above would split the statement.
 #   v63 (2026-09-24): two markers re-anchored to the line DIRECTLY above their
@@ -466,7 +470,7 @@ function __up_npm_cargo() {
                 # manages them inside that window).
                 local npm_rc=0
                 if command -v systemctl >/dev/null 2>&1 \
-                    && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null  # swallow-ok: the probe's failure IS the answer: the step defers when the Gateway is up, and an unreadable state means it is not
+                    && systemctl --user is-active -q openclaw-gateway.service 2>/dev/null  # swallow-ok: rc answers
                 then
                     update_output=""
                     npm_deferred=1
@@ -1692,7 +1696,7 @@ function __tac_fix_loopback() {
         printf '%s\n' "[loopback] 127.0.0.2 unavailable — OpenClaw node-to-node traffic may fail" >&2
         # swallow-ok: a durable COPY of an alarm that already reached stderr, and the destination defaults to /dev/null — failing to also write it cannot hide it
         echo "$(date +"%Y-%m-%d %H:%M:%S") [LOOPBACK-FAILED] could not set up loopback0/127.0.0.2" \
-            >> "${ErrorLogPath:-/dev/null}" 2>/dev/null  # swallow-ok: a durable COPY of an alarm that already reached stderr, to a destination that defaults to /dev/null
+            >> "${ErrorLogPath:-/dev/null}" 2>/dev/null  # swallow-ok: alarm already on stderr
         return 1
     fi
     return 0
