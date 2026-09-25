@@ -2,7 +2,10 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 62
+# Module Version: 63
+#   v63 (2026-09-24): two markers re-anchored to the line DIRECTLY above their
+#   site (the guard reads no further); four sites that are the TAIL of a continuation
+#   are left alone — a marker there splits the statement (SC2188), measured twice.
 #   v62 (2026-09-24): the four npm dependency-install sites CAPTURE npm's output
 #   and print it beside the existing [DEP INSTALL FAILED] row — the failure was always
 #   reported; the cause was what got discarded, which is what the git path stopped
@@ -180,8 +183,8 @@ function __set_cooldown() {
         # key" case; anything ABOVE that means the DB could not be read, and rewriting
         # from an unreadable source would drop every OTHER step's cooldown — so say so
         # and leave the file alone.
-        # swallow-ok: grep's exit status is checked on the next line: 1 is the ordinary no-match, over 1 skips the rewrite
         local _others="" _grep_rc=0
+        # swallow-ok: grep's exit status is checked on the next line: 1 is the ordinary no-match, over 1 skips the rewrite
         _others=$(grep -v "^${key}=" "$CooldownDB" 2>/dev/null) || _grep_rc=$?
         if (( _grep_rc > 1 ))
         then
@@ -1670,8 +1673,8 @@ function __tac_fix_loopback() {
     fi
     if ! command ip link show loopback0 >/dev/null 2>&1
     then
-        # swallow-ok: NOT swallowed — the effect of both commands is verified by the ip-addr check below, whose failure is printed, logged and returned
         sudo ip link add loopback0 type dummy 2>/dev/null
+        # swallow-ok: NOT swallowed — the effect of both commands is verified by the ip-addr check below, whose failure is printed, logged and returned
         sudo ip link set loopback0 up 2>/dev/null
     fi
     # swallow-ok: this IS the verification — a probe whose failure is the branch taken
