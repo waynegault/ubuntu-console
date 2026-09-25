@@ -2,7 +2,9 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 66
+# Module Version: 67
+#   v67 (2026-09-24): the last four sites recorded — every remaining swallow in
+#   this file now either carries a reason or is gone.  Row 4 -> 0.
 #   v66 (2026-09-24): the last five false-clean probes report their failure — the
 #   pre-update npm snapshot (the recovery net for a broken reify), cargo's outdated list,
 #   BOTH callers of the broken-symlink scan (piping it into wc -l discarded find's
@@ -382,6 +384,7 @@ function __npm_global_snapshot() {
         # counts hand-written >&2, and a row the run already prints is the better report).
         return 1
     fi
+    # swallow-ok: a parse probe: the function's status is jq's, and the caller reports a non-zero status as CHECK FAILED
     printf '%s\n' "$_out" | jq -r '.dependencies // {} | to_entries[] | "\(.key)@\(.value.version)"' 2>/dev/null
 }
 
@@ -1708,6 +1711,7 @@ function __tac_fix_loopback() {
     fi
     if ! command ip link show loopback0 >/dev/null 2>&1
     then
+        # swallow-ok: the verification below covers both loopback writes and reports their failure on stderr, to the log, and as rc 1
         sudo ip link add loopback0 type dummy 2>/dev/null
         # swallow-ok: NOT swallowed — the effect of both commands is verified by the ip-addr check below, whose failure is printed, logged and returned
         # swallow-ok: the same verification follows both loopback writes and reports their failure on stderr, to the log, and as rc 1
@@ -1845,7 +1849,7 @@ function __find_broken_links() {
         -not -path '*/.cache/*' \
         -not -path '*/.openclaw/*' \
         -not -path '*/__pycache__/*' \
-        2>/dev/null
+        2>/dev/null  # swallow-ok: caller checks this rc
 }
 
 # ---------------------------------------------------------------------------
@@ -1882,6 +1886,7 @@ function __cl_report_local() {
         # claimable when the walk itself succeeded.
         __tac_line "Broken symlinks in ~" "[CHECK FAILED - find could not walk ~]" "$C_Warning"
     else
+        # swallow-ok: grep -c exits 1 when the count is zero, which is a COUNT here, not a failure
         # swallow-ok: grep -c exits 1 when the count is zero, which is a COUNT here, not a failure
         broken_links=$(printf '%s\n' "$_broken_out" | grep -c . || true)
         if (( broken_links > 0 ))
@@ -2219,6 +2224,7 @@ function cl() {
     # Broken symlinks (list only, don't auto-delete)
     local broken_links=0 _broken_ok=1
     _broken_out=$(__find_broken_links) || _broken_ok=0
+    # swallow-ok: grep -c exits 1 when the count is zero, which is a COUNT here, not a failure
     broken_links=$(printf '%s\n' "$_broken_out" | grep -c . || true)
     if (( _broken_ok == 0 ))
     then
