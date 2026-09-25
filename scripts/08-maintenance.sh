@@ -2,7 +2,10 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 60
+# Module Version: 61
+#   v61 (2026-09-24): `cl`'s two rows branch on rm's status instead of claiming
+#   CLEARED/EMPTIED regardless, the disk audit reports an empty df listing as a SKIP
+#   rather than a clean audit, and four more probe sites carry a recorded reason.
 #   v60 (2026-09-24): the post-update drift check moved out of __up_oc_plugins into
 #   __plugin_drift_check — that step falls from 92 to 71 code lines (measured), and the
 #   drift outcome becomes a unit with its own tests.  Correction: it was NOT over the
@@ -1060,6 +1063,7 @@ function __up_python_venv() {
     if [[ -z "$active_venv" ]]
     then
         local py_bin=""
+        # swallow-ok: a probe chain whose empty result is the branch tested on the next line
         py_bin=$(command -v python 2>/dev/null || command -v python3 2>/dev/null || true)
         if [[ -n "$py_bin" ]]
         then
@@ -1214,6 +1218,7 @@ function __up_temp_sanitation() {
         while IFS= read -r -d '' _tmpf
         do
             rm -f "$_tmpf" && count=$(( count + 1 ))
+        # swallow-ok: a find that cannot descend yields fewer candidates, and the row reports the count it actually cleaned
         done < <(find /tmp/openclaw \( -name '*.tmp' -o -name 'python-*.exe' \) -print0 2>/dev/null)
     fi
     __tac_line "[14/20] Temp File Sanitation" "[$count CLEANED]" "$C_Success"
@@ -1228,7 +1233,7 @@ function __up_disk_audit() {
     local -n _up_err="$3"
 
     # [15/20] Disk Space Audit — warn if any mount point exceeds 90%
-    local disk_warn=0
+    local disk_warn=0 _df_rows=0
     while read -r pct mount
     do
         local pct_num=${pct%\%}
@@ -1240,10 +1245,25 @@ function __up_disk_audit() {
             disk_warn=1
             _up_err=$(( _up_err + 1 ))
         fi
+        _df_rows=$(( _df_rows + 1 ))
+    # swallow-ok: df's own message is not the report — the ROW COUNT and the per-row percentages are, and an empty listing is reported as a SKIP
     done < <(df -h --output=pcent,target 2>/dev/null \
         | tail -n +2 | grep -v '/snap/' \
         | grep -v '/mnt/wsl/docker-desktop')
-    (( disk_warn == 0 )) && __tac_line "[15/20] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
+    if (( _df_rows == 0 ))
+    then
+        # No rows is not "every mount is fine": a df that could not run lists nothing, and
+        # the row below would then claim a clean audit.  (The scan carries 2>/dev/null
+        # because df's message is not the report; the ROW COUNT is what decides here.)
+        __tac_line "[15/20] Disk Space Audit" "[SKIP - df listed no mounts]" "$C_Warning"
+    fi
+    # An IF, not `(( ... )) && row`: as the step's last command, a false arithmetic
+    # command becomes the step's return value (1), which aborts a caller running under
+    # errexit.  The suite case for the empty-listing path caught exactly that.
+    if (( disk_warn == 0 && _df_rows > 0 ))
+    then
+        __tac_line "[15/20] Disk Space Audit" "[ALL MOUNTS < 90%]" "$C_Success"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -2085,16 +2105,26 @@ function cl() {
     # Thumbnail cache (safe - regenerates on demand)
     if [[ -d ~/.cache/thumbnails ]]
     then
-        rm -rf ~/.cache/thumbnails/* 2>/dev/null
-        __tac_info "Thumbnail cache" "[CLEARED]" "$C_Success"
+        # swallow-ok: the rc decides the row below, so the suppression is of rm's message, not of its failure
+        if rm -rf ~/.cache/thumbnails/* 2>/dev/null
+        then
+            __tac_info "Thumbnail cache" "[CLEARED]" "$C_Success"
+        else
+            __tac_info "Thumbnail cache" "[NOT CLEARED - rm refused]" "$C_Warning"
+        fi
         deep_count=$(( deep_count + 1 ))
     fi
 
     # Trash (safe - user-initiated cleanup)
     if [[ -d ~/.local/share/Trash/files ]]
     then
-        rm -rf ~/.local/share/Trash/files/* ~/.local/share/Trash/info/* 2>/dev/null
-        __tac_info "Trash" "[EMPTIED]" "$C_Success"
+        # swallow-ok: the rc decides the row below, so the suppression is of rm's message, not of its failure
+        if rm -rf ~/.local/share/Trash/files/* ~/.local/share/Trash/info/* 2>/dev/null
+        then
+            __tac_info "Trash" "[EMPTIED]" "$C_Success"
+        else
+            __tac_info "Trash" "[NOT EMPTIED - rm refused]" "$C_Warning"
+        fi
         deep_count=$(( deep_count + 1 ))
     fi
 
@@ -2207,6 +2237,7 @@ function logtrim() {
     shopt -s nullglob
     for logfile in "$OC_LOGS"/*.log "$ErrorLogPath" "$LLM_LOG_FILE"
     do
+        # swallow-ok: an unreadable log reads as size 0 and is left untrimmed; the summary reports the files it really trimmed
         if [[ -f "$logfile" ]] && (( $(stat -c%s "$logfile" 2>/dev/null || echo 0) > LOG_MAX_BYTES ))
         then
             tail -n 1000 "$logfile" > "${logfile}.tmp" || continue

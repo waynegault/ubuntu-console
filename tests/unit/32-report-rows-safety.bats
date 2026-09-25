@@ -78,6 +78,46 @@ teardown() {
     [[ -z "$output" ]]
 }
 
+@test "disk audit: an empty df listing is a SKIP, not a clean audit" {
+    # The row [ALL MOUNTS < 90%] claimed a clean audit whenever the loop produced no
+    # warnings — including when df listed NOTHING, which is what a df that could not run
+    # prints.  The step ran on a box where the audit was therefore vacuous.
+    mkdir -p "$SANDBOX/bin"
+    cat > "$SANDBOX/bin/df" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+    chmod +x "$SANDBOX/bin/df"
+
+    local err=0
+    PATH="$SANDBOX/bin:$PATH" __up_disk_audit "$(date +%s)" 1 err > "$SANDBOX/out.txt" 2>&1
+
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"[SKIP - df listed no mounts]"* ]]
+    [[ "$output" != *"ALL MOUNTS < 90%"* ]]
+    [ "$err" = "0" ]
+}
+
+@test "disk audit: a normal listing still reports that the mounts are fine" {
+    # The other direction: an answered df must keep the clean row, or the guard would have
+    # turned a working audit into a permanent skip.
+    mkdir -p "$SANDBOX/bin"
+    # df --output=pcent,target prints a header, then two columns: percentage, mount point.
+    cat > "$SANDBOX/bin/df" <<'SH'
+#!/usr/bin/env bash
+printf 'Use%% Mounted on\n 42%% /\n'
+SH
+    chmod +x "$SANDBOX/bin/df"
+
+    local err=0
+    PATH="$SANDBOX/bin:$PATH" __up_disk_audit "$(date +%s)" 1 err > "$SANDBOX/out.txt" 2>&1
+
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"ALL MOUNTS < 90%"* ]]
+    [[ "$output" != *"SKIP"* ]]
+    [ "$err" = "0" ]
+}
+
 @test "copy_path: a missing clip.exe is a reported failure, not a quiet success" {
     # An empty PATH directory as the only source of clip.exe: `command -v` finds nothing,
     # which is the state the old row mis-reported in the SUCCESS colour.
