@@ -7,7 +7,11 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 33
+# Module Version: 34
+#   v34 (2026-09-24): __bridge_windows_api_keys writes to a PER-PROCESS temp name and
+#   reports a failed create/install in the error log.  Two shells refreshing at once
+#   used to collide on a shared "${cache}.tmp" and print a bare
+#   "mv: cannot stat '.../tac_win_api_keys.tmp'" under the banner at shell start.
 # ==============================================================================
 # 09d-oc-agents
 # ==============================================================================
@@ -523,9 +527,21 @@ function __bridge_windows_api_keys() {
         return 0
     fi
 
-    # Build a sourceable cache file, skipping vars with invalid names
-    local tmpfile="${cache}.tmp"
-    ( umask 077; : > "$tmpfile" )
+    # Build a sourceable cache file, skipping vars with invalid names.
+    # A PER-PROCESS temp name: two shells starting together (VS Code plus a terminal, or
+    # two terminals) both refresh this cache, and with a shared "${cache}.tmp" one of them
+    # moves a file the other is still writing — the loser's mv then dies with
+    # "mv: cannot stat '/dev/shm/tac_win_api_keys.tmp'" printed under the banner at shell
+    # start (Wayne's terminal, 2026-09-24).  A unique name also means neither can truncate
+    # the file the other is about to install.
+    local tmpfile="${cache}.tmp.$$"
+    # swallow-ok: the status is checked here and a failure is logged below; bash's redirect message would print under the banner
+    if ! ( umask 077; : > "$tmpfile" ) 2>/dev/null
+    then
+        # swallow-ok: the error-log write is the last resort — best effort by definition, and the shell must still start
+        echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] bridge: cannot write $tmpfile" >> "$ErrorLogPath" 2>/dev/null
+        return 0
+    fi
     while IFS='=' read -r name val
     do
         [[ -z "$name" || ! "$name" =~ ^[a-zA-Z0-9_]+$ ]] && continue
@@ -534,7 +550,15 @@ function __bridge_windows_api_keys() {
         [[ "$val" == *$'\n'* ]] && continue
         printf 'export %s=%q\n' "$name" "$val" >> "$tmpfile"
     done <<< "$raw"
-    mv "$tmpfile" "$cache"
+    if ! mv "$tmpfile" "$cache"
+    then
+        # Reported, never leaked as a bare mv error under the banner: the previous cache
+        # (if any) is still in place and still usable, and the next shell retries.
+        rm -f "$tmpfile"
+        # swallow-ok: the error-log write is the last resort — best effort by definition, and the shell must still start
+        echo "$(date +"%Y-%m-%d %H:%M:%S") [WARN] bridge: could not install $tmpfile" >> "$ErrorLogPath" 2>/dev/null
+        return 0
+    fi
     chmod 600 "$cache"
     # shellcheck source=/dev/null
     source "$cache" 2>/dev/null

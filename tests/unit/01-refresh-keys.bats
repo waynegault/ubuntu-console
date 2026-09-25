@@ -713,3 +713,25 @@ ENVD
     [[ "$output" == *"GitHub CLI"* ]]
     [[ "$output" != *"Key shadowing"* ]]
 }
+
+@test "bridge: an install that cannot happen is logged, not leaked at shell start" {
+    # The user-visible bug (2026-09-24): a bare `mv: cannot stat
+    # '.../tac_win_api_keys.tmp'` printed under the banner.  Two shells refreshing at once
+    # with a SHARED temp name is the common cause (the loser moves a file the winner
+    # already took), so the temp name is now per-process; this case pins the other half —
+    # that a failed write or install is REPORTED in the error log and never leaks under the
+    # banner, because a shell start must not print an error the user cannot act on.
+    export ErrorLogPath="$TAC_TEST_TMPDIR/err.log"
+    __mock_command_local pwsh.exe 'printf "OPENAI_API_KEY=sk-test\r\n"'
+    # A cache dir that cannot accept the temp file at all.
+    chmod 500 "$TAC_CACHE_DIR"
+
+    run __bridge_windows_api_keys
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"cannot stat"* ]]
+    [[ "$output" != *"Permission denied"* ]]
+
+    chmod 700 "$TAC_CACHE_DIR"
+    run grep -c 'cannot write' "$ErrorLogPath"
+    [ "$output" -ge 1 ]
+}
