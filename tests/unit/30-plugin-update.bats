@@ -317,6 +317,37 @@ _run_plugins() {
     [[ "$output" != *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
 }
 
+@test "plugins: a changed plugin runs the drift check, and a clean one says CLEAN" {
+    _scaffold_all
+    _advance_remote gigabrain
+    mkdir -p "$HOME/.openclaw/workspace/scripts"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
+    chmod +x "$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
+
+    _run_plugins
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"LINE [10/20] Post-Update Drift [CLEAN]"* ]]
+    [[ "$output" == *"LINE [10/20] OpenClaw Plugins [PLUGINS UPDATED]"* ]]
+    run cat "$SANDBOX/err.txt"
+    [ "$output" = "0" ]
+}
+
+@test "plugins: a drift check that --fix cannot repair is an issue for the run" {
+    # The nameref: __plugin_drift_check must reach the CALLER's errCount, or a failed
+    # repair would print a warning row and still let the run report zero issues.
+    _scaffold_all
+    _advance_remote openstinger
+    mkdir -p "$HOME/.openclaw/workspace/scripts"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
+    chmod +x "$HOME/.openclaw/workspace/scripts/post-update-drift-check.sh"
+
+    _run_plugins
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"LINE [10/20] Post-Update Drift [FIX FAILED - run post-update-drift-check.sh --fix]"* ]]
+    run cat "$SANDBOX/err.txt"
+    [ "$output" = "1" ]
+}
+
 # ── The COMMAND, not just the helper ───────────────────────────────────────────
 # Everything above pins the step through __up_oc_plugins.  These run the real
 # `oc-plugin-update` the way a user does, because the delegation in 09e is exactly

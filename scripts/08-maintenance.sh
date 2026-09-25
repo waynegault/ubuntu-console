@@ -2,7 +2,12 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 59
+# Module Version: 60
+#   v60 (2026-09-24): the post-update drift check moved out of __up_oc_plugins into
+#   __plugin_drift_check — that step falls from 92 to 71 code lines (measured), and the
+#   drift outcome becomes a unit with its own tests.  Correction: it was NOT over the
+#   100-line mark; excluding comments had already taken it under, and the claim made when
+#   the extraction was planned was stale.
 #   v59 (2026-09-24): the [3/20] npm list and outdated probes and the [11/20] pip
 #   probe now report a failed READ instead of a plausible success — and the pip one was
 #   not merely silent: `pip list --outdated --format=freeze` is INVALID (pip exits 1), the
@@ -908,6 +913,40 @@ function __update_plugin() {
     fi
 }
 
+# __plugin_drift_check <script> <openstinger_updated 0|1> <errcount nameref> — run the
+# post-update drift check after a plugin changed, and report it in the [10/20] row.
+# Extracted from __up_oc_plugins (2026-09-24), which drops that step from 92 to 71 code
+# lines — measured, NOT because it was over §18.3's 100-line mark (excluding comments had
+# already taken it under).  A failure here is an ISSUE for the run, so it takes the
+# caller's errCount by nameref, the idiom the __up_* steps already use.
+# ---------------------------------------------------------------------------
+function __plugin_drift_check() {
+    local _script="$1" _openstinger="$2"
+    local -n _pd_err="$3"
+    if [[ ! -x "$_script" ]]
+    then
+        __tac_line "[10/20] Post-Update Drift" "[SKIP - drift checker missing]" "$C_Dim"
+        return 0
+    fi
+    if "$_script" >/dev/null 2>&1
+    then
+        __tac_line "[10/20] Post-Update Drift" "[CLEAN]" "$C_Success"
+        return 0
+    fi
+    if "$_script" --fix >/dev/null 2>&1
+    then
+        if (( _openstinger == 1 ))
+        then
+            __tac_line "[10/20] Post-Update Drift" "[DRIFT FIXED + OPENSTINGER HARDENING REAPPLIED]" "$C_Success"
+        else
+            __tac_line "[10/20] Post-Update Drift" "[DRIFT FIXED]" "$C_Success"
+        fi
+        return 0
+    fi
+    __tac_line "[10/20] Post-Update Drift" "[FIX FAILED - run post-update-drift-check.sh --fix]" "$C_Warning"
+    _pd_err=$(( _pd_err + 1 ))
+}
+
 # ---------------------------------------------------------------------------
 # __up_oc_plugins — [7-10/20] Update OpenClaw path-installed plugins.
 # Checks Gigabrain, Lossless-Claw, and OpenStinger for git updates,
@@ -965,32 +1004,13 @@ function __up_oc_plugins() {
             *) ;;  # 1 = already current: nothing to count, and nothing to report
         esac
 
-        # If plugins changed (especially OpenStinger), validate and reapply
-        # OpenClaw post-update customizations to prevent drift.
+        # If plugins changed (especially OpenStinger), validate and reapply OpenClaw's
+        # post-update customizations to prevent drift.  The block now lives in its own
+        # function: it was 21 nested lines of the same story (CLEAN / FIXED / FIX FAILED /
+        # CHECKER MISSING), and a named function is what makes that outcome testable.
         if (( plugin_updated == 1 ))
         then
-            if [[ -x "$post_update_check_script" ]]
-            then
-                if "$post_update_check_script" >/dev/null 2>&1
-                then
-                    __tac_line "[10/20] Post-Update Drift" "[CLEAN]" "$C_Success"
-                else
-                    if "$post_update_check_script" --fix >/dev/null 2>&1
-                    then
-                        if (( openstinger_updated == 1 ))
-                        then
-                            __tac_line "[10/20] Post-Update Drift" "[DRIFT FIXED + OPENSTINGER HARDENING REAPPLIED]" "$C_Success"
-                        else
-                            __tac_line "[10/20] Post-Update Drift" "[DRIFT FIXED]" "$C_Success"
-                        fi
-                    else
-                        __tac_line "[10/20] Post-Update Drift" "[FIX FAILED - run post-update-drift-check.sh --fix]" "$C_Warning"
-                        _up_err=$(( _up_err + 1 ))
-                    fi
-                fi
-            else
-                __tac_line "[10/20] Post-Update Drift" "[SKIP - drift checker missing]" "$C_Dim"
-            fi
+            __plugin_drift_check "$post_update_check_script" "$openstinger_updated" _up_err
         fi
 
         # Set cooldown if any plugin was updated
