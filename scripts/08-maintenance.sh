@@ -2,7 +2,12 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 65
+# Module Version: 66
+#   v66 (2026-09-24): the last five false-clean probes report their failure — the
+#   pre-update npm snapshot (the recovery net for a broken reify), cargo's outdated list,
+#   BOTH callers of the broken-symlink scan (piping it into wc -l discarded find's
+#   status), the systemd ghost listing, and the apt cache size ('unknown', not '0').
+#   Row: 10 -> 4.
 #   v65 (2026-09-24): the two INLINE markers had to be shortened to fit the 8.1.8
 #   budget — an inline reason leaves a code line, so it shares the 120-character limit
 #   with the code it annotates (126 -> 121 -> 115).  Inline is the only placement for a
@@ -366,8 +371,18 @@ function __up_apt_update() {
 # reported [FAILED] and carried on.  The snapshot is what makes that recoverable.
 # ---------------------------------------------------------------------------
 function __npm_global_snapshot() {
-    npm ls -g --depth=0 --json 2>/dev/null \
-        | jq -r '.dependencies // {} | to_entries[] | "\(.key)@\(.value.version)"' 2>/dev/null
+    # A failed read must not look like an empty global root: the caller uses this to decide
+    # what was LOST, so "nothing recorded" and "nothing installed" are different claims.
+    local _out="" _rc=0
+    _out=$(npm ls -g --depth=0 --json 2>&1) || _rc=$?
+    if (( _rc != 0 ))
+    then
+        # No stderr note: stdout is the snapshot DATA, and this path returns none.  The
+        # caller prints [CHECK FAILED - no pre-update snapshot] and counts it (10.7 of §18.3
+        # counts hand-written >&2, and a row the run already prints is the better report).
+        return 1
+    fi
+    printf '%s\n' "$_out" | jq -r '.dependencies // {} | to_entries[] | "\(.key)@\(.value.version)"' 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -455,8 +470,14 @@ function __up_npm_cargo() {
                 # Snapshot the installed set BEFORE the update. `npm update -g`
                 # reifies the whole root, so a failure can leave it empty rather
                 # than unchanged — see __npm_global_snapshot.
-                local npm_snapshot
-                npm_snapshot=$(__npm_global_snapshot)
+                local npm_snapshot=""
+                # The snapshot is the net that makes a broken reify recoverable, so a failure
+                # to take it is REPORTED and counted — not silently treated as an empty root.
+                if ! npm_snapshot=$(__npm_global_snapshot)
+                then
+                    __tac_line "[3/20] NPM Packages" "[CHECK FAILED - no pre-update snapshot]" "$C_Warning"
+                    _up_err=$(( _up_err + 1 ))
+                fi
 
                 # A global npm install reifies the WHOLE global root, not just the
                 # named packages, so it rewrites openclaw's install tree as well. Under
@@ -539,8 +560,16 @@ function __up_npm_cargo() {
             if (( _has_cargo_update == 1 ))
             then
                 # Get list of outdated crates before update
-                local outdated_crates
-                outdated_crates=$(cargo install-update -l 2>/dev/null | tail -n +4 | grep -v "^$" || echo "")
+                local outdated_crates="" _cargo_out="" _cargo_rc=0
+                _cargo_out=$(cargo install-update -l 2>&1) || _cargo_rc=$?
+                if (( _cargo_rc != 0 ))
+                then
+                    # The list only picks the row's WORDING; the update below reports itself.
+                    # Parsing an error message as if it were the crate list is what this stops.
+                    __tac_line "[4/20] Cargo Crates" "[NOTE - the outdated list could not be read]" "$C_Dim"
+                else
+                    outdated_crates=$(printf '%s\n' "$_cargo_out" | tail -n +4 | grep -v "^$" || echo "")
+                fi
 
                 if cargo install-update -a >/dev/null 2>&1
                 then
@@ -1846,13 +1875,21 @@ function __cl_report_local() {
     fi
 
     # Broken symlinks (limited depth, exclude known-large caches)
-    local broken_links
-    broken_links=$(__find_broken_links | wc -l)
-    if (( broken_links > 0 ))
+    local broken_links=0 _broken_out=""
+    if ! _broken_out=$(__find_broken_links)
     then
-        __tac_line "Broken symlinks in ~" "[$broken_links found]" "$C_Warning"
+        # "[NONE]" is what a find that could not walk the tree also prints; the count is only
+        # claimable when the walk itself succeeded.
+        __tac_line "Broken symlinks in ~" "[CHECK FAILED - find could not walk ~]" "$C_Warning"
     else
-        __tac_line "Broken symlinks in ~" "[NONE]" "$C_Success"
+        # swallow-ok: grep -c exits 1 when the count is zero, which is a COUNT here, not a failure
+        broken_links=$(printf '%s\n' "$_broken_out" | grep -c . || true)
+        if (( broken_links > 0 ))
+        then
+            __tac_line "Broken symlinks in ~" "[$broken_links found]" "$C_Warning"
+        else
+            __tac_line "Broken symlinks in ~" "[NONE]" "$C_Success"
+        fi
     fi
 
     # PATH ghosts (Linux side)
@@ -1882,11 +1919,14 @@ function __cl_report_local() {
         fi
         # Find where PATH is set (check common locations)
         local path_source=""
+        # swallow-ok: a probe whose failure IS the answer — PATH is simply not set in this file, and the ghost row above is already the honest claim
         if grep -q "export PATH=" "$HOME/.bashrc" 2>/dev/null
         then
             path_source="$HOME/.bashrc"
+        # swallow-ok: as above — no match means PATH is not set there either
         elif grep -q "export PATH=" "$TACTICAL_REPO_ROOT/scripts/"*.sh 2>/dev/null
         then
+            # swallow-ok: the same probe, only to NAME the file; an empty result just omits the diagnostic
             path_source=$(grep -l "export PATH=" "$TACTICAL_REPO_ROOT/scripts/"*.sh 2>/dev/null | head -1)
         fi
         if [[ -n "$path_source" ]]
@@ -1934,13 +1974,21 @@ function __cl_report_system() {
         # grep -c already prints 0 (and exits 1) when nothing matches; a
         # trailing `|| echo 0` would append a second "0", turning the value
         # into "0\n0" and the arithmetic test below into a syntax error.
-        systemd_ghosts=$(systemctl --user list-units --all --state=not-found 2>/dev/null \
-            | grep -c "not-found")
+        local _ghost_units="" _ghost_rc=0
+        _ghost_units=$(systemctl --user list-units --all --state=not-found 2>&1) || _ghost_rc=$?
+        if (( _ghost_rc != 0 ))
+        then
+            # A systemctl that could not answer lists nothing, and the row below would then
+            # claim no ghost units at all.
+            __tac_line "Systemd ghost units" "[CHECK FAILED - systemctl could not list]" "$C_Warning"
+        else
+        systemd_ghosts=$(printf '%s\n' "$_ghost_units" | grep -c "not-found")
         if (( systemd_ghosts > 0 ))
         then
             __tac_line "Systemd ghost units" "[$systemd_ghosts not-found]" "$C_Warning"
         else
             __tac_line "Systemd ghost units" "[NONE]" "$C_Success"
+        fi
         fi
     fi
 
@@ -1948,7 +1996,12 @@ function __cl_report_system() {
     if command -v apt-get >/dev/null 2>&1
     then
         local apt_size
-        apt_size=$(du -sh /var/cache/apt/archives 2>/dev/null | cut -f1 || echo "0")
+        # "0" claimed an empty cache read; "unknown" is what a du that could not run is worth.
+    local apt_size="unknown" _du_out=""
+    if _du_out=$(du -sh /var/cache/apt/archives 2>&1)
+    then
+        apt_size=$(printf '%s\n' "$_du_out" | cut -f1)
+    fi
         __tac_line "APT cache size" "[$apt_size]" "$C_Text"
     fi
 
@@ -2164,9 +2217,15 @@ function cl() {
     fi
 
     # Broken symlinks (list only, don't auto-delete)
-    local broken_links
-    broken_links=$(__find_broken_links | wc -l)
-    if (( broken_links > 0 ))
+    local broken_links=0 _broken_ok=1
+    _broken_out=$(__find_broken_links) || _broken_ok=0
+    broken_links=$(printf '%s\n' "$_broken_out" | grep -c . || true)
+    if (( _broken_ok == 0 ))
+    then
+        # The second caller of the same scan (see __cl_report_local): piping it into `wc -l`
+        # discards find's status, so a walk that failed counted as zero broken links.
+        __tac_info "Broken symlinks" "[CHECK FAILED - find could not walk ~]" "$C_Warning"
+    elif (( broken_links > 0 ))
     then
         __tac_info "Broken symlinks" "[$broken_links found]" "$C_Warning"
         # Show first 3 as examples

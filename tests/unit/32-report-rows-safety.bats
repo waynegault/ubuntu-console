@@ -118,6 +118,49 @@ SH
     [ "$err" = "0" ]
 }
 
+@test "npm snapshot: a failed read is reported, never an empty global root" {
+    # The snapshot is the net that makes a broken `npm update -g` reify recoverable, and an
+    # unreadable one used to be indistinguishable from "nothing is installed".
+    mkdir -p "$SANDBOX/bin"
+    cat > "$SANDBOX/bin/npm" <<'SH'
+#!/usr/bin/env bash
+exit 7
+SH
+    chmod +x "$SANDBOX/bin/npm"
+
+    PATH="$SANDBOX/bin:$PATH" run __npm_global_snapshot
+    [ "$status" -eq 1 ]
+    # The failure travels by EXIT STATUS: stdout is the snapshot data, and the caller turns
+    # the status into a row.  A stderr note here would also have been a new hand-written >&2.
+    [[ -z "$output" ]]
+}
+
+@test "cl report: a systemctl that cannot list is CHECK FAILED, not \"no ghost units\"" {
+    mkdir -p "$SANDBOX/bin"
+    cat > "$SANDBOX/bin/systemctl" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+    chmod +x "$SANDBOX/bin/systemctl"
+    __CL_WIN_GHOSTS=()
+
+    PATH="$SANDBOX/bin:$PATH" __cl_report_system > "$SANDBOX/out.txt" 2>&1
+
+    run cat "$SANDBOX/out.txt"
+    [[ "$output" == *"[CHECK FAILED - systemctl could not list]"* ]]
+    [[ "$output" != *"Systemd ghost units [NONE]"* ]]
+}
+
+@test "cl report: the broken-symlink count is only claimed when the walk succeeded" {
+    # Static, for the same reason as the loopback wiring: the caller lives inside the report
+    # body, and driving that end to end is its own change.  What matters is that the COUNT is
+    # gated on find's status rather than piped into wc, which discards it.
+    grep -q 'if ! _broken_out=$(__find_broken_links)' "$REPO_ROOT/scripts/08-maintenance.sh" \
+        || { echo "the broken-symlink count is not gated on find's exit status"; return 1; }
+    run grep -c '__find_broken_links | wc -l' "$REPO_ROOT/scripts/08-maintenance.sh"
+    [ "$output" = "0" ]
+}
+
 @test "copy_path: a missing clip.exe is a reported failure, not a quiet success" {
     # An empty PATH directory as the only source of clip.exe: `command -v` finds nothing,
     # which is the state the old row mis-reported in the SUCCESS colour.
