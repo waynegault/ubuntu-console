@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 50
+# Module Version: 51
+#   v51 (2026-09-24): six more sites read in place — __model_stop's keeper-dir
+#   fallback (whose comment says a mismatch reaps NOTHING, the safe direction), the smi
+#   resolver whose emptiness skips the VRAM wait, the numeric test that catches a failed
+#   probe, and three in the launch path where the failure is already the branch taken.
 #   v50 (2026-09-24): eleven more read-backs recorded, each verified against the
 #   code around it — the empty results in __model_status and __model_doctor are the
 #   BRANCHES tested on the next lines (and each leaves a flag the doctor reports), and
@@ -1174,6 +1178,7 @@ function __model_use_launch_server() {
                 # swallow-ok: closing an inherited fd that may already be closed
                 eval "exec ${_lfdnum}>&-" 2>/dev/null || true
             fi
+        # swallow-ok: a glob that matches nothing is not an error; each fd's own result is handled inside the loop
         done 2>/dev/null
 
         # Clean up orphan FIFOs and keepers from any previous llama-server
@@ -1199,6 +1204,7 @@ function __model_use_launch_server() {
             exit 1
         fi
         local stdin_fifo="$stdin_fifo_dir/stdin"
+        # swallow-ok: the failure IS handled: the row below reports 'could not create stdin fifo' and exits 1
         if ! mkfifo "$stdin_fifo" 2>/dev/null
         then
             # swallow-ok: stdin-fifo cleanup: a second pass has nothing left to remove
@@ -1274,6 +1280,7 @@ function __model_use_launch_server() {
     # silently re-pointed every consumer (status, burn timeout, spec block size, dashboard,
     # the gateway) at a DIFFERENT model, and the scan's own archive pass could then move
     # the model that was actually serving.
+    # swallow-ok: the compound's status is what the if tests, so a marker that cannot be written is not ignored
     if ! { echo "$file" > "${ACTIVE_LLM_FILE}.tmp" 2>/dev/null && mv "${ACTIVE_LLM_FILE}.tmp" "$ACTIVE_LLM_FILE"; }
     then
         __tac_info "Warning" "[Could not save state]" "$C_Warning"
@@ -1506,6 +1513,7 @@ function __model_stop() {
     # /proc/PID/cwd is ALREADY canonical (no trailing slash, symlinks resolved),
     # so a raw LLM_KEEPER_DIR with a trailing slash or a symlinked path would
     # never match and this guard would silently reap nothing. Normalise it once.
+    # swallow-ok: the realpath failure falls back to the raw value, and the comment above explains that a path that does not match means this guard reaps NOTHING — the safe direction
     _keeper_dir=$(realpath -m -- "${LLM_KEEPER_DIR:-/tmp}" 2>/dev/null || printf '%s' "${LLM_KEEPER_DIR:-/tmp}")
     while IFS= read -r _keeper_line
     do
@@ -1560,9 +1568,11 @@ function __model_stop() {
     # period. We must wait for it to be released before the next model loads,
     # otherwise fragmented memory from the previous run causes OOM.
     local _smi _free_before _free_after _mem_waited _mem_max_wait
+    # swallow-ok: an empty resolver takes the branch below that skips the VRAM-release wait, rather than waiting on an unread figure
     _smi=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$_smi" ]]
     then
+        # swallow-ok: a probe that failed is non-numeric, and the numeric test on the next line sends it down the 'cannot measure' path
         _free_before=$(timeout 3 "$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
         if [[ "$_free_before" =~ ^[0-9]+$ ]]
         then
