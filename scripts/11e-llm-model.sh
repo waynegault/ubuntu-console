@@ -1,7 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 51
+# Module Version: 53
+#   v53 (2026-09-24): the build report's diagnostics recorded — each read feeds a
+#   row that prints '?' or omits the figure when it fails, so nothing here is a claim.
+#   v52 (2026-09-24): sixteen more sites, each verified against the line or two
+#   that consume it — the numeric guards in __model_scan_row_bytes, the refusals in
+#   __model_use_resolve_model, the empty-resolver skips, the claim path's handled touch,
+#   the preflight's 0-is-not-200, the keeper-cwd/ppid tests, the non-numeric wait break,
+#   the optional tps cache and the three trap saves the restore reads back.
 #   v51 (2026-09-24): six more sites read in place — __model_stop's keeper-dir
 #   fallback (whose comment says a mismatch reaps NOTHING, the safe direction), the smi
 #   resolver whose emptiness skips the VRAM wait, the numeric test that catches a failed
@@ -72,6 +79,7 @@ __TAC_MOD_11E_LLM_MODEL_LOADED=1
 # and exercise it against fixture shards without sourcing the console.
 function __model_scan_row_bytes() {
     local _dir="$1" _fname="$2" _fbytes _shard _shard_bytes _total=0
+    # swallow-ok: the numeric test on the next line is the guard: no usable size means this returns no value at all
     _fbytes=$(stat --format=%s "$_dir/$_fname" 2>/dev/null || stat -f%z "$_dir/$_fname" 2>/dev/null)
     [[ "$_fbytes" =~ ^[0-9]+$ ]] || return 0
     if [[ "$_fname" =~ -([0-9]{5})-of-([0-9]{5})\.gguf$ ]]
@@ -80,6 +88,7 @@ function __model_scan_row_bytes() {
         for _shard in "$_dir/${_fname%-[0-9][0-9][0-9][0-9][0-9]-of-*}"-*-of-"${BASH_REMATCH[2]}".gguf
         do
             [[ -f "$_shard" ]] || continue
+            # swallow-ok: the numeric test on the next line decides whether the shard is counted, so an unread size is simply not added
             _shard_bytes=$(stat --format=%s "$_shard" 2>/dev/null || stat -f%z "$_shard" 2>/dev/null)
             [[ "$_shard_bytes" =~ ^[0-9]+$ ]] && _total=$(( _total + _shard_bytes ))
         done
@@ -561,6 +570,7 @@ function __model_use_resolve_model() {
     if [[ -z "$target" ]]
     then
         local _use_default_file=""
+        # swallow-ok: an empty result is the error branch on the next line: no default set means the command refuses rather than launching something arbitrary
         _use_default_file=$(__llm_default_file 2>/dev/null || true)
         if [[ -z "$_use_default_file" ]]
         then
@@ -569,6 +579,7 @@ function __model_use_resolve_model() {
                 "$C_Error"
             return 1
         fi
+        # swallow-ok: an empty result is the error branch below: the default file is not in the registry
         target=$(__llm_default_number 2>/dev/null || true)
         if [[ -z "$target" ]]
         then
@@ -779,6 +790,7 @@ function __model_use_configure_params() {
             return 21
         fi
     fi
+    # swallow-ok: an empty resolver skips the GPU-layer fallback block below, which is where the smi command is used
     smi_cmd=$(__resolve_smi 2>/dev/null || true)
     if [[ -n "$smi_cmd" ]]
     then
@@ -842,6 +854,7 @@ function __model_use_configure_params() {
 
     __llm_server_stop
     sleep 1
+    # swallow-ok: a privileged memlock raise; nothing checks it and the launch proceeds without it when passwordless sudo is unavailable
     sudo -n prlimit --memlock=unlimited:unlimited --pid $$ 2>/dev/null
 
     [[ "$batch_size" =~ ^[0-9]+$ ]] || batch_size=1024
@@ -952,12 +965,14 @@ function __model_use_claim_cuda_card() {
         if systemctl --user is-active --quiet "$_unit" 2>/dev/null
         then
             __tac_info "CUDA" "stopping $_unit (one LLM per card; this lane takes it)" "$C_Dim"
+            # swallow-ok: a best-effort stop inside a loop already gated on the unit being active; the flock claim below is the real gate
             systemctl --user stop "$_unit" 2>/dev/null || true
         fi
     done
 
     # 3. Hold the CUDA lane down for the life of this server.  `model stop`
     #    releases it; a bench/autotune run that already owns the card keeps it.
+    # swallow-ok: the failure IS handled: the row below reports that the card could not be marked as taken
     if ! touch "$_cuda_suspend" 2>/dev/null
     then
         __tac_info "Warning" "[could not mark the CUDA card as taken ($_cuda_suspend)]" "$C_Warning"
@@ -1522,7 +1537,9 @@ function __model_stop() {
         _keeper_cmd=${_keeper_line#* }
         [[ "$_keeper_pid" =~ ^[0-9]+$ ]] || continue
         [[ "$_keeper_cmd" == *"sleep 3600"* ]] || continue
+        # swallow-ok: only keepers whose cwd is this directory are reaped, so an unreadable cwd leaves the keeper ALONE
         [[ "$(readlink "/proc/$_keeper_pid/cwd" 2>/dev/null || true)" == "$_keeper_dir" ]] || continue
+        # swallow-ok: an empty ppid is one of the two cases tested on the next line, and an orphaned keeper is exactly what this reaps
         _keeper_ppid=$(ps -o ppid= -p "$_keeper_pid" 2>/dev/null | tr -d '[:space:]')
         if [[ -z "$_keeper_ppid" ]] || [[ "$_keeper_ppid" == "1" ]]
         then
@@ -1580,6 +1597,7 @@ function __model_stop() {
             _mem_max_wait=3
             while (( _mem_waited < _mem_max_wait ))
             do
+                # swallow-ok: a non-numeric reading breaks the wait loop on the next line, so an unread figure ends the wait rather than being compared
                 _free_after=$(timeout 3 "$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
                 [[ "$_free_after" =~ ^[0-9]+$ ]] || break
                 (( _free_after <= _free_before )) && break
@@ -1654,6 +1672,7 @@ function __model_status() {
             health_color="$C_Warning"
         fi
         local tps
+        # swallow-ok: the trailing ignore is the author's optional marker: an absent cache leaves the field empty rather than failing the report
         tps=$(cat "$LLM_TPS_CACHE" 2>/dev/null) || true
         if [[ "$output_mode" == "json" ]]
         then
@@ -1981,8 +2000,11 @@ function __model_bench() {
     local __bench_prev_int_trap=""
     local __bench_prev_term_trap=""
     local __bench_prev_exit_trap=""
+    # swallow-ok: an empty result means no INT trap was set, and the restore below takes its `trap -` branch for exactly that case
     __bench_prev_int_trap=$(trap -p INT || true)
+    # swallow-ok: the same for TERM: the restore below takes the `trap -` branch when there was none
     __bench_prev_term_trap=$(trap -p TERM || true)
+    # swallow-ok: the same for EXIT: the restore below takes the `trap -` branch when there was none
     __bench_prev_exit_trap=$(trap -p EXIT 2>/dev/null || true)
     __bench_restore_traps() {
         if [[ -n "$__bench_prev_int_trap" ]]
@@ -3606,6 +3628,7 @@ function llm-build() {
     # ---- Pre-flight plan: what would actually change, and what does it affect?
     local lane_target="" lane_impact="nothing live serves this tree"
     if [[ -L "$HOME/.local/bin/cuda-llama-server" ]]; then
+        # swallow-ok: a diagnostic for the build report: an unresolved lane target leaves the row blank rather than failing the report
         lane_target=$(readlink -f "$HOME/.local/bin/cuda-llama-server" 2>/dev/null || true)
         if [[ "$lane_target" == "$root/build/"* ]]; then
             lane_impact="the LIVE CUDA lane (llama-cuda-llama32-3b-chat.service) serves $lane_target - a rebuild replaces the binary under it (the running process keeps its copy; the next restart picks up the new one)"
@@ -3617,7 +3640,9 @@ function llm-build() {
     if [[ "$no_pull" == "true" ]]; then
         upstream="(skipped: --no-pull)"
     else
+        # swallow-ok: a best-effort fetch that updates the comparison; the rows print '?' when it could not
         git fetch --quiet origin 2>/dev/null || true
+        # swallow-ok: an unset upstream is the case the '?' rows below exist for
         upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
         if [[ -n "$upstream" ]]; then
             # swallow-ok: a question mark is the printed unknown; the report shows it as one rather than as zero
@@ -3625,6 +3650,7 @@ function llm-build() {
             # swallow-ok: a question mark is the printed unknown; the report shows it as one rather than as zero
             target=$(git rev-parse --short "$upstream" 2>/dev/null || echo "?")
             # The hazard class that has actually bitten us: flag/default churn.
+            # swallow-ok: a diffstat for the report; no output means the row simply omits the figure
             churn=$(git diff --stat "HEAD..$upstream" -- common/arg.cpp common/common.h 2>/dev/null | tail -1)
             [[ -z "$churn" ]] && churn="none (no changes to common/arg.cpp or common/common.h)"
         else

@@ -26,7 +26,7 @@ unclassified	scripts/11a-llm-registry.sh	9
 unclassified	scripts/11b-llm-autotune.sh	7
 unclassified	scripts/11c-llm-server.sh	34
 unclassified	scripts/11d-llm-gpu.sh	88
-unclassified	scripts/11e-llm-model.sh	102
+unclassified	scripts/11e-llm-model.sh	71
 unclassified	scripts/11f-llm-runtime.sh	20
 unclassified	scripts/12-dashboard-help.sh	13
 unclassified	scripts/13-init.sh	9
