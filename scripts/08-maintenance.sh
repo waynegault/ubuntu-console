@@ -2,7 +2,13 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 58
+# Module Version: 59
+#   v59 (2026-09-24): the [3/20] npm list and outdated probes and the [11/20] pip
+#   probe now report a failed READ instead of a plausible success — and the pip one was
+#   not merely silent: `pip list --outdated --format=freeze` is INVALID (pip exits 1), the
+#   error was swallowed, so the step reported ALREADY UP TO DATE on every run and never
+#   upgraded anything.  It reads --format=json now.  A plugin that is not installed also
+#   counts into errCount (Wayne's call).
 #   v58 (2026-09-24): five of the accepted report/probe fixes — the cooldown
 #   rewrite refuses to rebuild from an unreadable DB (grep rc over 1), the three
 #   sqlite3 probes in check-graph-integrity report [CHECK FAILED] and return 2
@@ -384,10 +390,17 @@ function __up_npm_cargo() {
         if command -v npm >/dev/null 2>&1
         then
             # Check if there are any global packages to update (exclude npm itself)
-            local global_pkgs update_output
-            global_pkgs=$(npm list -g --depth=0 2>/dev/null | grep -v "^npm$" | grep -v "^$" | tail -n +2)
+            local global_pkgs update_output _npm_ls="" _npm_ls_rc=0
+            _npm_ls=$(npm list -g --depth=0 2>&1) || _npm_ls_rc=$?
+            global_pkgs=$(printf '%s\n' "$_npm_ls" | grep -v "^npm$" | grep -v "^$" | tail -n +2)
 
-            if [[ -n "$global_pkgs" ]]
+            if (( _npm_ls_rc != 0 ))
+            then
+                # Measured 2026-09-24: `npm list -g` exits 0 on this box, so a non-zero
+                # status is a real failure — and an unread list would otherwise read as
+                # "no global packages", silently skipping the whole npm half of the step.
+                __tac_line "[3/20] NPM Packages" "[SKIP - cannot read the npm global list]" "$C_Warning"
+            elif [[ -n "$global_pkgs" ]]
             then
                 # Outdated global packages. --parseable emits
                 #   <fullpath>:<name@wanted>:<name@installed>:<name@latest>:<dependedby>
@@ -395,7 +408,16 @@ function __up_npm_cargo() {
                 local outdated_before
                 local -a update_names=()
                 local -a deferred_oc=()
-                outdated_before=$(npm outdated -g --parseable 2>/dev/null | grep -v "^npm:" || echo "")
+                local _npm_out="" _npm_rc=0
+                _npm_out=$(npm outdated -g --parseable 2>&1) || _npm_rc=$?
+                outdated_before=$(printf '%s\n' "$_npm_out" | grep -v "^npm:" || echo "")
+                if [[ -z "$outdated_before" && -n "$_npm_out" ]]
+                then
+                    # npm exits 1 BOTH when it finds outdated packages and when it fails
+                    # (measured 2026-09-24), so the status cannot separate the two — what it
+                    # PRINTED can, and an error must not read as "nothing outdated".
+                    __tac_line "[3/20] NPM Packages" "[NOTE - npm outdated said: ${_npm_out%%$'\n'*}]" "$C_Dim"
+                fi
                 mapfile -t update_names < <(
                     printf '%s\n' "$outdated_before" | cut -d: -f2 | sed 's/@[^@]*$//' \
                         | grep . | grep -Ev '^(openclaw|@openclaw/)' | sort -u
@@ -921,7 +943,7 @@ function __up_oc_plugins() {
         case "$_rc" in
             0) plugin_updated=1 ;;
             2) plugin_failed=$(( plugin_failed + 1 )); _up_err=$(( _up_err + 1 )) ;;
-            3) plugin_not_updated=$(( plugin_not_updated + 1 )) ;;
+            3) plugin_not_updated=$(( plugin_not_updated + 1 )); _up_err=$(( _up_err + 1 )) ;;
             *) ;;  # 1 = already current: nothing to count, and nothing to report
         esac
         _rc=0
@@ -930,7 +952,7 @@ function __up_oc_plugins() {
         case "$_rc" in
             0) plugin_updated=1 ;;
             2) plugin_failed=$(( plugin_failed + 1 )); _up_err=$(( _up_err + 1 )) ;;
-            3) plugin_not_updated=$(( plugin_not_updated + 1 )) ;;
+            3) plugin_not_updated=$(( plugin_not_updated + 1 )); _up_err=$(( _up_err + 1 )) ;;
             *) ;;  # 1 = already current: nothing to count, and nothing to report
         esac
         _rc=0
@@ -939,7 +961,7 @@ function __up_oc_plugins() {
         case "$_rc" in
             0) plugin_updated=1; openstinger_updated=1 ;;
             2) plugin_failed=$(( plugin_failed + 1 )); _up_err=$(( _up_err + 1 )) ;;
-            3) plugin_not_updated=$(( plugin_not_updated + 1 )) ;;
+            3) plugin_not_updated=$(( plugin_not_updated + 1 )); _up_err=$(( _up_err + 1 )) ;;
             *) ;;  # 1 = already current: nothing to count, and nothing to report
         esac
 
@@ -980,7 +1002,9 @@ function __up_oc_plugins() {
         # One row, in order of what a reader needs to know.  "Already up to date" is
         # reserved for the case where every plugin is present, ours, and level; a
         # failure outranks it, and a plugin that is missing or was left alone says so
-        # instead of claiming a clean fleet.
+        # instead of claiming a clean fleet.  BOTH an uninstalled and a failed plugin count
+        # into errCount (Wayne's call, 2026-09-24): the run should carry the colour, not a
+        # row the reader has to notice.
         if (( plugin_failed > 0 ))
         then
             __tac_line "[10/20] OpenClaw Plugins" "[${plugin_failed} UPDATE(S) FAILED]" "$C_Warning"
@@ -1040,13 +1064,26 @@ function __up_python_venv() {
         if __check_cooldown "pyvenv_pkgs" "$now" hours_left "$force_mode"
         then
             # Check for outdated packages
-            local outdated_py
-            outdated_py=$("$active_venv/bin/pip" list --outdated --format=freeze 2>/dev/null || echo "")
+            local outdated_py _pip_out="" _pip_rc=0
+            _pip_out=$("$active_venv/bin/pip" list --outdated --format=json 2>&1) || _pip_rc=$?
+            # --format=freeze CANNOT be used with --outdated: pip exits 1 with "List format
+            # 'freeze' cannot be used with the --outdated option" (measured 2026-09-24), and
+            # the old line swallowed that error — so this step reported "ALREADY UP TO DATE"
+            # on every run and never upgraded a single package.  JSON is a supported pairing;
+            # only the package names are needed below.
+            outdated_py=$(printf '%s' "$_pip_out" \
+                | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' | cut -d'"' -f4 | tr '\n' ' ')
 
-            if [[ -n "$outdated_py" ]]
+            if (( _pip_rc != 0 ))
+            then
+                # A failed read is reported, never rendered as "up to date".
+                __tac_line "[11/20] Python Venv ($venv_name)" \
+                    "[CHECK FAILED - pip could not list outdated packages]" "$C_Warning"
+                _up_err=$(( _up_err + 1 ))
+            elif [[ -n "$outdated_py" ]]
             then
                 # Upgrade all outdated packages
-                if echo "$outdated_py" | cut -d= -f1 | xargs "$active_venv/bin/pip" install --upgrade --quiet 2>&1
+                if printf '%s\n' $outdated_py | xargs "$active_venv/bin/pip" install --upgrade --quiet 2>&1
                 then
                     __tac_line "[11/20] Python Venv ($venv_name)" "[UPDATED]" "$C_Success"
                 else

@@ -150,6 +150,9 @@ _scaffold_all() {
 _run_plugins() {
     local err=0
     __up_oc_plugins "$(date +%s)" 1 err > "$SANDBOX/out.txt" 2>&1 < /dev/null
+    # Recorded, not discarded: whether the step coloured the RUN is an assertion now, and
+    # a local that dies with the function cannot be read by the case.
+    printf '%s\n' "$err" > "$SANDBOX/err.txt"
 }
 
 @test "plugins: a missing plugin reports NOT INSTALLED, and the summary says so" {
@@ -161,9 +164,11 @@ _run_plugins() {
     [[ "$output" == *"LINE [9/20] OpenStinger [NOT INSTALLED]"* ]]
     # The row used to claim "ALREADY UP TO DATE" in the SUCCESS colour here, which is
     # the one thing the case pinned: nothing was installed and nothing was updated, so
-    # the summary now says what is true.  A plugin this step never installs by policy is
-    # not an ISSUE for the run either, so errCount stays 0.
+    # the summary now says what is true — and, by Wayne's call (2026-09-24), a plugin that
+    # is not installed colours the RUN too: three of them are three issues.
     [[ "$output" == *"LINE [10/20] OpenClaw Plugins [3 PLUGIN(S) NOT UPDATED]"* ]]
+    run cat "$SANDBOX/err.txt"
+    [ "$output" = "3" ]
     # On the SUMMARY row: a plugin that is present and level does print "ALREADY UP TO
     # DATE" as its own row, which is a different claim from the fleet's.
     [[ "$output" != *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
@@ -181,6 +186,8 @@ _run_plugins() {
     # not: "ALREADY UP TO DATE" here would hide the plugin nobody can pull.
     [[ "$output" == *"LINE [10/20] OpenClaw Plugins [1 PLUGIN(S) NOT UPDATED]"* ]]
     [[ "$output" != *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
+    run cat "$SANDBOX/err.txt"
+    [ "$output" = "1" ]
 }
 
 @test "plugins: a checkout of a foreign remote is skipped, not pulled" {
@@ -213,6 +220,10 @@ _run_plugins() {
     run cat "$SANDBOX/out.txt"
     [[ "$output" == *"LINE [7/20] Gigabrain Plugin [ALREADY UP TO DATE]"* ]]
     [[ "$output" == *"LINE [10/20] OpenClaw Plugins [ALREADY UP TO DATE]"* ]]
+    # Three plugins, present and level: a clean run, and it must stay CLEAN — the
+    # not-installed counting above must not make every healthy run look like an issue.
+    run cat "$SANDBOX/err.txt"
+    [ "$output" = "0" ]
 }
 
 @test "plugins: local changes with no terminal are skipped, never discarded" {
