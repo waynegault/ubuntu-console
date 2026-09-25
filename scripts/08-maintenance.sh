@@ -2,7 +2,11 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 61
+# Module Version: 62
+#   v62 (2026-09-24): the four npm dependency-install sites CAPTURE npm's output
+#   and print it beside the existing [DEP INSTALL FAILED] row — the failure was always
+#   reported; the cause was what got discarded, which is what the git path stopped
+#   doing when it grew _git_out.
 #   v61 (2026-09-24): `cl`'s two rows branch on rm's status instead of claiming
 #   CLEARED/EMPTIED regardless, the disk audit reports an empty df listing as a SKIP
 #   rather than a clean audit, and four more probe sites carry a recorded reason.
@@ -766,10 +770,15 @@ function __update_plugin() {
                             # Install new dependencies if package.json exists
                             if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
                             then
-                                if ! npm install --prefix "$_path" --silent 2>/dev/null
+                                local _npm_dep_out=""
+                                if ! _npm_dep_out=$(npm install --prefix "$_path" --silent 2>&1)
                                 then
                                     __tac_line "$_status_line" \
                                         "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                                        if [[ -n "$_npm_dep_out" ]]
+                                        then
+                                            printf '%s\n' "  ${C_Dim}${_npm_dep_out}${C_Reset}"
+                                        fi
                                     _dep_failed=1
                                 fi
                             fi
@@ -802,10 +811,15 @@ function __update_plugin() {
                             # Install new dependencies if package.json exists
                             if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
                             then
-                                if ! npm install --prefix "$_path" --silent 2>/dev/null
+                                local _npm_dep_out=""
+                                if ! _npm_dep_out=$(npm install --prefix "$_path" --silent 2>&1)
                                 then
                                     __tac_line "$_status_line" \
                                         "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                                        if [[ -n "$_npm_dep_out" ]]
+                                        then
+                                            printf '%s\n' "  ${C_Dim}${_npm_dep_out}${C_Reset}"
+                                        fi
                                     _dep_failed=1
                                 fi
                             fi
@@ -828,9 +842,14 @@ function __update_plugin() {
                     # Install new dependencies if package.json exists
                     if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
                     then
-                        if ! npm install --prefix "$_path" --silent 2>/dev/null
+                        local _npm_dep_out=""
+                        if ! _npm_dep_out=$(npm install --prefix "$_path" --silent 2>&1)
                         then
                             __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                            if [[ -n "$_npm_dep_out" ]]
+                            then
+                                printf '%s\n' "  ${C_Dim}${_npm_dep_out}${C_Reset}"
+                            fi
                             _dep_failed=1
                         fi
                     fi
@@ -889,9 +908,14 @@ function __update_plugin() {
             # Run npm install if package.json exists (install new dependencies)
             if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
             then
-                if ! npm install --prefix "$_path" --silent 2>/dev/null
+                local _npm_dep_out=""
+                if ! _npm_dep_out=$(npm install --prefix "$_path" --silent 2>&1)
                 then
                     __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+                    if [[ -n "$_npm_dep_out" ]]
+                    then
+                        printf '%s\n' "  ${C_Dim}${_npm_dep_out}${C_Reset}"
+                    fi
                     _dep_failed=1
                 fi
             fi
