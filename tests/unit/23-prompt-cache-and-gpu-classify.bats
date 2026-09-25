@@ -561,20 +561,20 @@ setup_selfcheck() {
     _selfcheck_json ok true 0 "$(( now_ms + 900000 ))"          # never-run: an alarm
 
     run "$SELFCHECK" --announce
-    [[ "$status" -eq 0 ]]
+    [[ "$status" -eq 1 ]]
     [[ "$output" == *"no run is recorded at all"* ]]
 
-    # The same state again: nothing is delivered, and the exit code is still 0 (a
-    # non-zero exit makes OpenClaw raise its OWN execution-failure alert, which would
-    # put the standing alarm back on the channel by a second route).
+    # The same state again: nothing is DELIVERED, but the verdict is unchanged.  The two
+    # are independent on purpose (Wayne's call, 2026-09-24): the channel carries one
+    # message per transition, while the run's status says whether the watcher is healthy.
     run "$SELFCHECK" --announce
-    [[ "$status" -eq 0 ]]
+    [[ "$status" -eq 1 ]]
     [[ -z "$output" ]]
 
-    # A DIFFERENT alarm is a transition, so it is delivered.
+    # A DIFFERENT alarm is a transition, so it is delivered — and it is still an error.
     _selfcheck_json ok false "$(( now_ms - 60000 ))" "$(( now_ms + 840000 ))"
     run "$SELFCHECK" --announce
-    [[ "$status" -eq 0 ]]
+    [[ "$status" -eq 1 ]]
     [[ "$output" == *"DISABLED"* ]]
 }
 
@@ -603,17 +603,17 @@ setup_selfcheck() {
     [[ "$output" == *"RECOVERED"* ]]
 }
 
-@test "gpu-watch-selfcheck --announce: an unreadable automation is announced, and still 0" {
-    # The default mode's "not a green answer" is exit 2, and that branch has its own
-    # exit — so this mode's override has to cover it too.  If it did not, the automation
-    # would record a failed job and page a second time about a check that had already
-    # delivered its message.
+@test "gpu-watch-selfcheck --announce: an unreadable automation is announced, and exits 2" {
+    # The same verdict mapping as every other mode: a check that cannot see the watcher
+    # must not report a healthy RUN either — that is the whole difference between "the
+    # command ran" and "the watcher is fine", and Wayne asked for the status to carry the
+    # second (2026-09-24).
     setup_selfcheck
     unset SELFCHECK_FIXTURE
     export SELFCHECK_RC=7
 
     run "$SELFCHECK" --announce
-    [[ "$status" -eq 0 ]]
+    [[ "$status" -eq 2 ]]
     [[ "$output" == *"cannot see the watcher"* ]]
 }
 

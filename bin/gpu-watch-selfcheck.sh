@@ -47,22 +47,22 @@
 #   Those are not the same thing, so they are not the same mode.  The default mode
 #   prints the alarm on every run and lets the exit code carry the verdict.  With
 #   --announce the message is printed only on a TRANSITION — the state is compared with
-#   the last one announced, recorded in the state file below — and the exit code is
-#   always 0, because for that automation a non-zero exit does not mean "the watcher is
-#   broken", it means "the job failed", and OpenClaw raises its OWN execution-failure
-#   alert for that: 2 consecutive failures, 1-hour cooldown, delivered to the job's
-#   announce target (docs.openclaw.ai/cli/cron, read 2026-09-24).  Left alone, one
-#   standing alarm would page from two paths on every tick, and the second page is
-#   indistinguishable from a job that genuinely broke.  Stdout IS the delivered message
-#   in this mode — the same contract the hal workspace's failover watcher states.
+#   the last one announced, recorded in the state file below.  The exit code keeps the SAME
+#   mapping in both modes — 0 healthy, 1 alarming, 2 unreadable — because the run's STATUS
+#   has to say whether the WATCHER is healthy, not merely that the command ran; Wayne's
+#   call, 2026-09-24.  Consequence, stated: a standing alarm can also reach OpenClaw's own
+#   execution-failure path (2 consecutive failures, 1-hour cooldown, delivered to the job's
+#   announce target — docs.openclaw.ai/cli/cron) on top of the transition message.  Stdout
+#   IS the delivered message and stays transition-only, so the CHANNEL carries one message
+#   per change while the status carries the state.
 #
 # USAGE
 #   gpu-watch-selfcheck.sh            silent when healthy; the alarm text when not
-#   gpu-watch-selfcheck.sh --announce message on a state transition only, always 0
+#   gpu-watch-selfcheck.sh --announce message on a state transition only; exit = verdict
 #   gpu-watch-selfcheck.sh --json     one JSON object (machine consumers)
 #   gpu-watch-selfcheck.sh --version
 # EXIT  0 = healthy   1 = alarming (text on stdout)   2 = the automation is unreadable
-#       (--announce always exits 0 — there the message is the alarm)
+#       (the same mapping in every mode: --announce included)
 #
 # ENV  GPU_WATCH_SELFCHECK_ID         automation id (default below)
 #      GPU_WATCH_SELFCHECK_OPENCLAW   openclaw binary (override point for tests)
@@ -71,7 +71,11 @@
 #                                     (default ~/.cache/gpu-watch-selfcheck.state)
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-09-24): --announce's exit code carries the verdict (Wayne's call), so the
+#   automation's run status reads ok only while the watcher is healthy.  The message
+#   stays transition-only; the status now reports the checked state, not just that the
+#   command ran.
 set -uo pipefail
 
 OPENCLAW="${GPU_WATCH_SELFCHECK_OPENCLAW:-openclaw}"
@@ -262,14 +266,11 @@ announce() {
 }
 
 # exit_code_for <state> — the verdict as an exit code: 0 healthy, 1 alarming, 2 the
-# check itself cannot see the automation.  Always 0 in --announce mode, where the
-# message carries the alarm and a non-zero exit would make the automation raise a
-# second alert of its own (see the header's TWO CONSUMERS note).
+# check itself cannot see the automation.  The SAME mapping in every mode: the
+# automation's run status must read ok when the watcher is healthy and error when it is
+# not, so the status reports the checked state (see the header's TWO CONSUMERS note for
+# the consequence — OpenClaw's own failure path can also fire).
 exit_code_for() {
-    if [[ "$MODE" == "--announce" ]]; then
-        printf '%s\n' "0"
-        return 0
-    fi
     case "$1" in
         ok)         printf '%s\n' "0" ;;
         unreadable) printf '%s\n' "2" ;;
@@ -279,7 +280,7 @@ exit_code_for() {
 
 case "$MODE" in
     --version|-V)
-        echo "gpu-watch-selfcheck 2"
+        echo "gpu-watch-selfcheck 3"
         exit 0
         ;;
     --json|--announce|"") ;;
