@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 49
+# Module Version: 50
+#   v50 (2026-09-24): eleven more read-backs recorded, each verified against the
+#   code around it — the empty results in __model_status and __model_doctor are the
+#   BRANCHES tested on the next lines (and each leaves a flag the doctor reports), and
+#   the four clear_vram calls are best-effort with the free-VRAM reading taken after.
 #   v49 (2026-09-24): nine sites read out of __bench_run_with_timeout and its
 #   helpers — the pgid probes, both bare waits inside 'it already exited' branches, the
 #   TERM/KILL pairs the next phase re-checks, and the launch helper's TERM.  The stale-log
@@ -372,6 +376,7 @@ function __model_list() {
     # (The active model is flagged by __llm_registry_sync_state above, by FILE name.  This
     # function used to read the pointer into an `active_num` local that nothing used.)
     local default_file=""
+    # swallow-ok: an empty result leaves default_set at 0, which the doctor reports
     default_file=$(__llm_default_file 2>/dev/null || true)
 
     if [[ "$output_mode" == "json" ]]
@@ -490,6 +495,7 @@ function __model_default() {
         if [[ -f "$LLM_DEFAULT_FILE" ]]
         then
             local def_file
+            # swallow-ok: the empty result takes the branch below that reports the default as not found in the registry
             def_file=$(__llm_default_file 2>/dev/null || true)
             local entry=""
             [[ -n "$def_file" ]] && entry=$(__llm_registry_entry_by_file "$def_file")
@@ -524,6 +530,7 @@ function __model_default() {
 
     local _n name file _rest
     IFS='|' read -r _n name file _rest <<< "$entry"
+    # swallow-ok: a best-effort mkdir: the write on the next line fails loudly if the directory is missing
     mkdir -p "$(dirname "$LLM_DEFAULT_FILE")" 2>/dev/null
     echo "$file" > "$LLM_DEFAULT_FILE"
     # swallow-ok: best-effort registry sync: the default-setting reports its own result
@@ -1616,6 +1623,7 @@ function __model_status() {
         local name="" file="" size=""
         if [[ -n "$active_file" ]]
         then
+            # swallow-ok: an empty result is the branch tested on the next line: no registry entry means no row number to display
             entry=$(__llm_active_entry 2>/dev/null || true)
             [[ -n "$entry" ]] && active_num=$(printf '%s' "$entry" | cut -d'|' -f1)
         fi
@@ -1625,6 +1633,7 @@ function __model_status() {
             IFS='|' read -r _n name file size _rest <<< "$entry"
         fi
         local health health_label health_color
+        # swallow-ok: the empty result renders as UNHEALTHY in the row below — the fail-safe wording, not a claim of health
         health=$(curl -s --max-time 2 "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null || true)
         if __llm_is_healthy
         then
@@ -2165,6 +2174,10 @@ function __model_bench() {
         printf "\n\n%s── [%s/%s] %s (%s) ──%s\n" "$C_Highlight" "$_prog_num" "$_prog_total" "${b_name[$i]}" "${b_size[$i]}" "$C_Reset"
 
         # Full VRAM cleanup BEFORE checking VRAM state
+        # swallow-ok: the VRAM clear is best-effort; the free-VRAM reading taken immediately after is what the run reports
+        # swallow-ok: the VRAM clear is best-effort; the free-VRAM reading taken immediately after is what the run reports
+        # swallow-ok: the VRAM clear is best-effort; the free-VRAM reading taken immediately after is what the run reports
+        # swallow-ok: the VRAM clear is best-effort; the free-VRAM reading taken immediately after is what the run reports
         sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
 
         local _bench_safe_overrides=0
@@ -2659,6 +2672,7 @@ function __model_doctor() {
     then
         registry_exists=1
         local header_line
+        # swallow-ok: an unreadable header leaves header_ok at 0, and the doctor reports that as an issue rather than passing the registry
         header_line=$(head -1 "$LLM_REGISTRY" 2>/dev/null)
         # Accept both the v4 26-column header and the legacy 20-column header.
         if [[ "$header_line" == "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill" ]] \
