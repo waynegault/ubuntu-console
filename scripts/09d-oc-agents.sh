@@ -7,7 +7,11 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 34
+# Module Version: 35
+#   v35 (2026-09-24): every cache in this file writes to a PER-PROCESS temp name.
+#   The API-key bridge was fixed for the user-visible case (a bare `mv: cannot stat`
+#   under the banner); the agent, session and stats caches had the identical race
+#   with the failure suppressed, so a collision there silently lost a refresh.
 #   v34 (2026-09-24): __bridge_windows_api_keys writes to a PER-PROCESS temp name and
 #   reports a failed create/install in the error log.  Two shells refreshing at once
 #   used to collide on a shared "${cache}.tmp" and print a bare
@@ -51,13 +55,13 @@ function oc-agent-use() {
     if (( now - mtime > 3 )); then
         if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
             if [[ -t 1 ]]; then
-                ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null \
-                  || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) \
-                  && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true
+                ( openclaw agents list --json > "${agent_cache}.tmp.$$" 2>/dev/null \
+                  || openclaw agents --json > "${agent_cache}.tmp.$$" 2>/dev/null ) \
+                  && mv "${agent_cache}.tmp.$$" "$agent_cache" 2>/dev/null || true
             else
-                ( openclaw agents list --json > "${agent_cache}.tmp" 2>/dev/null \
-                  || openclaw agents --json > "${agent_cache}.tmp" 2>/dev/null ) \
-                  && mv "${agent_cache}.tmp" "$agent_cache" 2>/dev/null || true &
+                ( openclaw agents list --json > "${agent_cache}.tmp.$$" 2>/dev/null \
+                  || openclaw agents --json > "${agent_cache}.tmp.$$" 2>/dev/null ) \
+                  && mv "${agent_cache}.tmp.$$" "$agent_cache" 2>/dev/null || true &
             fi
         fi
     fi
@@ -71,9 +75,9 @@ function oc-agent-use() {
     fi
     if (( now - mtime > 5 )); then
         if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
-                ( openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null \
-                    || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null ) \
-                    && mv "${session_cache}.tmp" "$session_cache" 2>/dev/null || true
+                ( openclaw sessions --all-agents --json > "${session_cache}.tmp.$$" 2>/dev/null \
+                    || openclaw sessions --json > "${session_cache}.tmp.$$" 2>/dev/null ) \
+                    && mv "${session_cache}.tmp.$$" "$session_cache" 2>/dev/null || true
         fi
     fi
 
@@ -143,8 +147,8 @@ function oc-agent-use() {
                     cap: (map(.cap) | max)
                   })[]
                 | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' \
-            > "${stats_cache}.tmp" 2>/dev/null ) \
-            && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null || true
+            > "${stats_cache}.tmp.$$" 2>/dev/null ) \
+            && mv "${stats_cache}.tmp.$$" "$stats_cache" 2>/dev/null || true
     fi
 
     local tmp_stats
@@ -175,7 +179,7 @@ function oc-agent-use() {
                         total: (map(.total) | add),
                         cap: (map(.cap) | max) })[]
                     | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' "$session_cache" 2>/dev/null \
-                    > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null )
+                    > "${stats_cache}.tmp.$$" && mv "${stats_cache}.tmp.$$" "$stats_cache" 2>/dev/null )
             else
                 ( jq -r '
                     def aid: .agentId // .agent_id // .agent // .agentName // .agent_name;
@@ -193,7 +197,7 @@ function oc-agent-use() {
                         total: (map(.total) | add),
                         cap: (map(.cap) | max) })[]
                     | "\(.id)\t\(.input)\t\(.output)\t\(.total)\t\(.cap)"' "$session_cache" 2>/dev/null \
-                    > "${stats_cache}.tmp" && mv "${stats_cache}.tmp" "$stats_cache" 2>/dev/null ) &
+                    > "${stats_cache}.tmp.$$" && mv "${stats_cache}.tmp.$$" "$stats_cache" 2>/dev/null ) &
             fi
         fi
         # fast fallback: list known agents with zeroed stats so rendering is immediate
@@ -315,7 +319,9 @@ function oc-agent-use() {
         printf '%d\t%s\t%s\t%s\t%s\n' "$pct" "$id" "$tot" "$cap" "$in_s" >> "$lines_file"
     done
 
-    local outtmp="${cache}.tmp"
+    # Per-process, like the other caches in this file: a shared name lets one shell
+    # move the file another is still writing.
+    local outtmp="${cache}.tmp.$$"
     {
         # Prepare labelled lines and compute max label width for alignment
         local labels_tmp
