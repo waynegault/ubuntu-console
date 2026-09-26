@@ -752,3 +752,33 @@ EOS
     [ "$status" -eq 3 ]
     grep -q "VRAM release FAILED (rc 1)" "$log"
 }
+
+# Signal 3's TRAINING class (card UBC-GRPO-001).  A registered training run holds the
+# bench lock AND is a CUDA resident, so the class is probed FIRST - otherwise the
+# foreign-app probe answers "an unknown app holds the card" about a declared tenant.
+# The end-to-end case is the one that matters: the mechanism is a PROCESS IDENTITY, and
+# only running it says whether the identity is read or merely the name.
+@test "gpu-exclusivity: a running training tenant is named, not read as a foreign app" {
+    local lock="$TAC_TEST_TMPDIR/tenant.lock" log="$TAC_TEST_TMPDIR/tenant.log"
+    "$REPO_ROOT/bin/train-timeout-runner.sh" -l "$log" -L "$lock" sleep 6 &
+    local runner=$!
+    sleep 2
+    run "$REPO_ROOT/bin/gpu-busy.sh" --json
+    kill "$runner" 2>/dev/null || true
+    wait "$runner" 2>/dev/null || true
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'"declared:training'* ]]
+}
+
+@test "gpu-exclusivity: the training class is probed first, and names an artefact" {
+    local body
+    body=$(awk '/^busy\(\)/,/^}/' "$REPO_ROOT/bin/gpu-busy.sh")
+    # First in the chain, and continued by a backslash: a tenant is a CUDA resident too,
+    # so anything ahead of it would name the tenant as something else.
+    [[ "$body" == *"training_tenant_busy \\"* ]]
+    # The class names the runner artefact the training path actually executes...
+    grep -q 'train-timeout-runner' "$REPO_ROOT/bin/gpu-busy.sh"
+    # ...and never a bare word like "grpo" or "unsloth": that is the 2026-09-15
+    # false-BUSY shape this file's header records, and a false BUSY stops a lane.
+    ! grep -qE "'(grpo|unsloth)" "$REPO_ROOT/bin/gpu-busy.sh"
+}

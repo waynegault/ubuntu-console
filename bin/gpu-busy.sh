@@ -18,7 +18,14 @@
 #          instead of bare words, and this probe's own process chain is excluded —
 #          a shell that merely mentioned "autotune" was read as a bench and the
 #          watchdog took a healthy CUDA lane down)
-# Module Version: 5
+# Version: 1.6.0 (2026-09-26: a TRAINING tenant is a declared class.  A training run
+#          that registers through bin/train-timeout-runner.sh holds the bench lock AND
+#          is a CUDA resident, so before this the foreign-app probe named it "an unknown
+#          app holds the card" - the distinction card UBC-GRPO-001 exists for.  Matched
+#          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
+#          false-BUSY regressions recorded below are exactly that mistake, and a false
+#          BUSY stops a serving lane.)
+# Module Version: 6
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
 #
 # CARD DISCIPLINE: this script is about the CUDA card only.  The Xe card is a
@@ -37,10 +44,13 @@
 #      loaded on the GPU).  Both are allowed: the Xe binary is ours, and the Xe
 #      lane must go on serving whether or not CUDA is clear.
 #   3. Declared GPU workloads — a known GPU-hungry artefact is being EXECUTED
-#      (model_selection_bench, autotune, llama-bench, clear_vram).  Read as
-#      "executed", never as "named": the identity is the running executable, so a
-#      reader (cat/grep/less/tail) that merely mentions the file does not count.
-#      A false BUSY is not the safe direction here — it stops the lane.
+#      (model_selection_bench, autotune, llama-bench, clear_vram, and the TRAINING
+#      runner).  Read as "executed", never as "named": the identity is the running
+#      executable, so a reader (cat/grep/less/tail) that merely mentions the file
+#      does not count.  A false BUSY is not the safe direction here — it stops the
+#      lane.  The training class is probed FIRST (see busy()): a registered training
+#      run is a CUDA resident too, so the foreign-app probe would otherwise report
+#      "an unknown app holds the card" about a tenant that registered as a bench does.
 #   4. Lock files — /tmp/llm-bench.lock (bench/autotune convention; watchdog
 #      already honours it)
 #   5. Another agent's ownership lock (the investigator pipeline's flock).  Signal
@@ -295,8 +305,35 @@ cuda_owner_busy() {
     return 0
 }
 
+# Signal 3, the TRAINING tenant (card UBC-GRPO-001).  A training run registers by
+# running under bin/train-timeout-runner.sh (card UBC-GRPO-002), which holds the SAME
+# bench lock this file's signal 4 reads - so the tenancy authority stays single, and the
+# holder's CLASS is read from the executing artefact rather than from a second lock file.
+#
+# First in busy(), deliberately: the trainer is a CUDA resident, so foreign_apps_busy()
+# would otherwise answer "foreign-app pid=... exe=.../python3.12" about it, which is what
+# made a tenant read as an unknown app.  The match never names a word like "grpo" or
+# "unsloth" - the false-BUSY regression in this file's header is that mistake.
+#
+# The reason carries the card's footprint when nvidia-smi answers, so the watchdog's busy
+# line can tell "training holds the card" from an unknown holder without a second probe.
+training_tenant_busy() {
+    _any_executing_process '/train-timeout-runner\.sh' train-timeout-runner.sh || return 1
+    local _used
+    # swallow-ok: a failed probe only drops the footprint figure; the tenant match above already decided BUSY
+    _used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    if [[ "$_used" =~ ^[0-9]+$ ]]; then
+        REASONS+=("declared:training vram=${_used}MiB")
+    else
+        REASONS+=("declared:training")
+    fi
+    return 0
+}
+
 busy() {
-    util_busy || foreign_apps_busy || declared_workload_busy || lock_busy || cuda_owner_busy
+    training_tenant_busy \
+        || util_busy || foreign_apps_busy || declared_workload_busy \
+        || lock_busy || cuda_owner_busy
 }
 
 emit() {
