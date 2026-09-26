@@ -402,6 +402,44 @@ class TestMainUnknown:
         assert not payload.get("green", False)
 
 
+class TestCachedReplay:
+    """A replayed probe must not invent a verdict the live one did not have."""
+
+    def test_a_cached_probe_does_not_claim_green_for_an_unfinished_tip(
+        self, monkeypatch, tmp_path, capsys
+    ) -> None:
+        # Found live on 2026-09-26: the cache stored only red/exempted, so a replay for a tip
+        # whose run had not finished reported green: true.  The exit code was unaffected
+        # (`failing` drives it), but the claim was wrong, so pending/superseded are cached now.
+        cache = tmp_path / "ci.json"
+        cache.write_text(
+            json.dumps(
+                {
+                    "checked_at": datetime.now(UTC).isoformat(),
+                    "branch": "main",
+                    "tip_sha": TIP,
+                    "red": [],
+                    "exempted": [],
+                    "pending": [{"workflow": "CI", "sha": TIP}],
+                    "superseded": [{"workflow": "Nightly Full Suite", "sha": OTHER}],
+                    "dark": False,
+                    "dark_reason": "",
+                    "newest_push_run_at": NOW.isoformat(),
+                    "local_sha": TIP,
+                    "awaiting_push_reason": "",
+                }
+            )
+        )
+        monkeypatch.setattr(mod, "CACHE_FILE", cache)
+        assert mod.main(["--json"]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert [(i["workflow"], i["reason"]) for i in payload["no_verdict_yet"]] == [
+            ("Nightly Full Suite", "superseded"),
+            ("CI", "pending"),
+        ]
+        assert payload["green"] is False
+
+
 class TestMainMutationProof:
     """The card's acceptance: the gate must be provably red-able by mutation."""
 

@@ -517,6 +517,15 @@ def _write_cache(report: Report) -> None:
         "tip_sha": report.tip_sha,
         "red": [s.workflow for s in report.red],
         "exempted": [s.workflow for s, _ in report.exempted],
+        # Cached too, not just red: a replay that forgets these would claim GREEN for a tip
+        # whose runs had not finished when the probe was taken.  Only the baseline filtering
+        # is meant to be re-applied on replay.
+        "pending": [
+            {"workflow": s.workflow, "sha": s.pending_sha} for s in report.pending
+        ],
+        "superseded": [
+            {"workflow": s.workflow, "sha": s.head_sha} for s in report.superseded
+        ],
         "dark": report.dark,
         "dark_reason": report.dark_reason,
         "newest_push_run_at": (
@@ -743,6 +752,28 @@ def main(argv: list[str] | None = None) -> int:
                 report.red.append(status)
             else:
                 report.exempted.append((status, exemption))
+        for item in cached.get("pending", []):
+            report.pending.append(
+                WorkflowStatus(
+                    workflow=item.get("workflow", ""),
+                    conclusion="",
+                    head_sha="",
+                    created_at=None,
+                    url="",
+                    pending=True,
+                    pending_sha=item.get("sha", ""),
+                )
+            )
+        for item in cached.get("superseded", []):
+            report.superseded.append(
+                WorkflowStatus(
+                    workflow=item.get("workflow", ""),
+                    conclusion="",
+                    head_sha=item.get("sha", ""),
+                    created_at=None,
+                    url="",
+                )
+            )
         report.expired_entries = [e for e in entries if e.expired]
         if args.json:
             print(_to_json(report))
