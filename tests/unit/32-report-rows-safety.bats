@@ -217,6 +217,21 @@ SH
     [[ "$output" == *"new_key=3000"* ]]
 }
 
+@test "cooldown: an ABSENT DB is a first write, not a failed read" {
+    # A missing DB reports grep rc 2, exactly like an unreadable one, so a guard that reads
+    # only the rc refuses the FIRST cooldown a fresh HOME ever records and no step can ever
+    # record one.  This case is what CI lacked: it lived in the full suite only, which the
+    # nightly alone runs — so the regression sat in a red nightly, unread, until 2026-09-26.
+    rm -f "$CooldownDB"
+
+    run __set_cooldown "new_key" 3000
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"REWRITE SKIPPED"* ]]
+
+    run cat "$CooldownDB"
+    [[ "$output" == *"new_key=3000"* ]]
+}
+
 @test "up: a failed loopback repair is counted, not just printed" {
     # Static by design: the call sits inside `up`, and driving that function end to end
     # means running all 20 steps against the real box.  What is assertable is the WIRING —

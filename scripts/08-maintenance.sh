@@ -2,7 +2,11 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 67
+# Module Version: 68
+#   v68 (2026-09-26): the cooldown rewrite separates a MISSING DB from an unreadable one.
+#   grep reports both as rc 2, so v58's guard refused the first-ever write: on a fresh HOME
+#   nothing could record a cooldown at all.  The case that catches it lives in the full
+#   suite, which only the nightly runs — so the nightly sat red and unread for a day.
 #   v67 (2026-09-24): the last four sites recorded — every remaining swallow in
 #   this file now either carries a reason or is gone.  Row 4 -> 0.
 #   v66 (2026-09-24): the last five false-clean probes report their failure — the
@@ -196,10 +200,15 @@ function __set_cooldown() {
         # key" case; anything ABOVE that means the DB could not be read, and rewriting
         # from an unreadable source would drop every OTHER step's cooldown — so say so
         # and leave the file alone.
+        #
+        # An ABSENT DB reports rc 2 as well, because grep cannot open it — but that is the
+        # first-ever write, not a failed read.  The file's own existence separates the two;
+        # without that test the first cooldown refuses on a fresh HOME and no step can ever
+        # record one (full-suite case 308, which only the nightly runs).
         local _others="" _grep_rc=0
-        # swallow-ok: grep's exit status is checked on the next line: 1 is the ordinary no-match, over 1 skips the rewrite
+        # swallow-ok: grep's exit status is checked on the next line: 1 is the ordinary no-match, over 1 skips only an existing file
         _others=$(grep -v "^${key}=" "$CooldownDB" 2>/dev/null) || _grep_rc=$?
-        if (( _grep_rc > 1 ))
+        if (( _grep_rc > 1 )) && [[ -e "$CooldownDB" ]]
         then
             __tac_line "Cooldown DB" "[REWRITE SKIPPED - cannot read ${CooldownDB##*/}]" "$C_Warning"
             return 1
