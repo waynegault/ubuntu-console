@@ -1,7 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 53
+# Module Version: 54
+#   v54 (2026-09-26): five more sites read in place.  The two health-preflight curls
+#   move their stderr redirect to the head of the command so it can carry its reason; the
+#   window-mismatch cache write becomes if/then, because a bare `[[ ]] && printf` returns
+#   non-zero when the test is false, which errexit reads as a failed step; the stale
+#   log-dir reap and the doctor's watchdog test get their own lines; and three duplicate
+#   VRAM-clear markers collapse to the one that was doing the work.
 #   v53 (2026-09-24): the build report's diagnostics recorded — each read feeds a
 #   row that prints '?' or omits the figure when it fails, so nothing here is a claim.
 #   v52 (2026-09-24): sixteen more sites, each verified against the line or two
@@ -1345,9 +1351,9 @@ function __model_use_wait_healthy() {
         then
             local _preflight='{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}'
             local _pf_rc
-            _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+            _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 2>/dev/null \
                 -H 'Content-Type: application/json' \
-                -d "$_preflight" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" 2>/dev/null || echo 0)
+                -d "$_preflight" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" || echo 0)
             # If preflight didn't get a 200, the slot wasn't ready yet — wait for
             # it to stabilise by polling /health until it sticks.
             if [[ "$_pf_rc" != "200" ]]
@@ -1356,9 +1362,9 @@ function __model_use_wait_healthy() {
                 for (( _pf=0; _pf < 60; _pf++ ))
                 do
                     sleep 1
-                    _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+                    _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 2>/dev/null \
                         -H 'Content-Type: application/json' \
-                        -d "$_preflight" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" 2>/dev/null || echo 0)
+                        -d "$_preflight" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" || echo 0)
                     [[ "$_pf_rc" == "200" ]] && break
                 done
             fi
@@ -1383,8 +1389,10 @@ function __model_use_wait_healthy() {
             # into LLM_REGISTRY would contaminate the autotune-certified ctx
             # with a value that can flap between runs for reasons unrelated to
             # the model itself (2026-09-14).
-            [[ -n "${__BENCH_MODE:-}" ]] && \
+            if [[ -n "${__BENCH_MODE:-}" ]]
+            then
                 printf 'advertised=%s served=%s\n' "$ctx" "$_slot_ctx" > "$LLM_WINDOW_MISMATCH_CACHE" 2>/dev/null
+            fi
         fi
         # Read back the recorded state immediately before the success line (card
         # CLAIMED-SUCCESS-WITNESS-001).  This is the read-back that makes "ONLINE"
@@ -2207,9 +2215,6 @@ function __model_bench() {
 
         # Full VRAM cleanup BEFORE checking VRAM state
         # swallow-ok: the VRAM clear is best-effort; the free-VRAM reading taken immediately after is what the run reports
-        # swallow-ok: the VRAM clear is best-effort; the free-VRAM reading taken immediately after is what the run reports
-        # swallow-ok: the VRAM clear is best-effort; the free-VRAM reading taken immediately after is what the run reports
-        # swallow-ok: the VRAM clear is best-effort; the free-VRAM reading taken immediately after is what the run reports
         sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
 
         local _bench_safe_overrides=0
@@ -2399,7 +2404,10 @@ function __model_bench() {
         then
             find "$_bench_log_base" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
                 | sort -n | head -n $(( _stale_count - 5 )) | cut -d' ' -f2- \
-                | while IFS= read -r _old_dir; do rm -rf "$_old_dir" 2>/dev/null || true; done
+                | while IFS= read -r _old_dir
+                  do
+                      rm -rf "$_old_dir" 2>/dev/null || true
+                  done
         fi
     fi
 
@@ -2732,8 +2740,7 @@ function __model_doctor() {
         __llm_registry_entry_by_file "$default_file" >/dev/null && default_in_registry=1
     fi
 
-    if command -v systemctl >/dev/null 2>&1 \
-        && systemctl --user is-active --quiet llama-watchdog.timer 2>/dev/null
+    if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet llama-watchdog.timer 2>/dev/null
     then
         watchdog_active=1
     fi
