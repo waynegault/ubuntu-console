@@ -127,7 +127,10 @@ on 2026-09-26; it was removed, and it is deliberately not added to `.gitignore`,
 right fix is not to live with it. The package reads `UNSLOTH_COMPILE_LOCATION`
 (`unsloth/models/_utils.py:3885`), so training code must set that to a path outside this
 repository — or simply run from a dedicated working directory — otherwise a training run
-litters the tree that this repo's own gates read.
+litters the tree that this repo's own gates read. Verified by effect 2026-09-26: with
+`UNSLOTH_COMPILE_LOCATION` set, an import from the repository root created nothing there, and
+the compiled sources appeared under the variable's path instead. The directory is untracked but
+**not** ignored, so a stray run shows up in `git status` rather than hiding.
 
 ## Verified, and not verified
 
