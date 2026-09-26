@@ -703,3 +703,52 @@ EOS
     # ...and the silent coercion that hid all of it must be gone.
     ! grep -q 'completion_tokens // 0' "$f"
 }
+
+# The TRAINING runner (card UBC-GRPO-002) is the sibling of bench-timeout-runner.sh.
+# It claims the card on the SAME lock the bench/autotune path uses, so a training run
+# is a holder class of ONE authority rather than a second rule (Wayne's call,
+# 2026-09-26, on UBC-GRPO-001; the audit doc's own words are "Training must register as
+# a known tenant, exactly as a bench does").  These three cases pin the properties that
+# make that safe.  None needs a GPU or a trainer: the command is `sleep` and the clear
+# script is stubbed, so the VRAM-release path is exercised without probing the live card.
+@test "train-runner: it claims the card, and removes the lock file on exit" {
+    command -v flock >/dev/null || skip "flock unavailable"
+    local lock="$TAC_TEST_TMPDIR/train.lock" log="$TAC_TEST_TMPDIR/train.log"
+    run "$REPO_ROOT/bin/train-timeout-runner.sh" -l "$log" -L "$lock" sleep 1
+    [ "$status" -eq 0 ]
+    # bin/gpu-busy.sh's signal 4 reads the lock's EXISTENCE, so a leftover file would
+    # read as "card busy" forever; tools/clean-orphans.sh covers only a SIGKILLed run.
+    [ ! -e "$lock" ]
+    grep -q "card claimed: lock=$lock" "$log"
+    grep -q "card lock released" "$log"
+}
+
+@test "train-runner: a second tenant is refused, not queued behind" {
+    command -v flock >/dev/null || skip "flock unavailable"
+    local lock="$TAC_TEST_TMPDIR/train2.lock" log="$TAC_TEST_TMPDIR/train2.log"
+    { flock -x 9; sleep 5; } 9>"$lock" &
+    local holder=$!
+    sleep 1
+    run env LLM_BENCH_LOCK_WAIT_SECONDS=1 "$REPO_ROOT/bin/train-timeout-runner.sh" \
+        -l "$log" -L "$lock" sleep 1
+    [ "$status" -eq 3 ]
+    grep -q "already claimed" "$log"
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+}
+
+@test "train-runner: a timeout exits 124, and a trainer crash is propagated" {
+    local log="$TAC_TEST_TMPDIR/train3.log"
+    run "$REPO_ROOT/bin/train-timeout-runner.sh" -l "$log" \
+        -L "$TAC_TEST_TMPDIR/train3.lock" -T 2 -k 2 -c /bin/true sleep 33
+    [ "$status" -eq 124 ]
+    grep -q "TIMED OUT" "$log"
+    [ ! -e "$TAC_TEST_TMPDIR/train3.lock" ]
+
+    # A crash runs the clear script ONCE, reports its REAL status, then propagates the
+    # trainer's code.  /bin/false stands in so the live card is never probed.
+    run "$REPO_ROOT/bin/train-timeout-runner.sh" -l "$log" \
+        -L "$TAC_TEST_TMPDIR/train3b.lock" -c /bin/false sh -c "exit 3"
+    [ "$status" -eq 3 ]
+    grep -q "VRAM release FAILED (rc 1)" "$log"
+}
