@@ -71,7 +71,7 @@ jobs:
         run: ruff check scripts/ tests/
 
       - name: Run Python tests
-        run: python -m pytest tests/test_kgraph.py tests/test_kgraph_wiring.py tests/test_models.py tests/test_untested_modules.py tests/test_bats_lock_fixture.py -x --timeout=120 -q
+        run: python -m pytest tests/test_kgraph.py tests/test_kgraph_wiring.py tests/test_models.py tests/test_untested_modules.py tests/test_bats_lock_fixture.py tests/test_check_ci_status.py -x --timeout=120 -q
 
       - name: Docs sync check
         run: tools/docs-sync-check.sh

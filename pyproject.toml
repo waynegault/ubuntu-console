@@ -8,6 +8,7 @@
 python_version = "3.14"
 files = [
     "scripts/kgraph",
+    "scripts/check_ci_status.py",
     "scripts/oc-health-check.py",
     "tests",
 ]

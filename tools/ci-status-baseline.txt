@@ -1,0 +1,18 @@
+# tools/ci-status-baseline.txt — governed exemptions for RED runs on main.
+#
+# Read by scripts/check_ci_status.py (card CI-WATCH-CONSOLE-001).  A red workflow on
+# the merged branch blocks tools/lint.sh UNLESS an unexpired entry below names that
+# workflow.  Every entry must carry owner=, card= and expiry= (the same governance
+# model the investigator's *_baseline.txt files use for the same gate, CI-WATCH-001),
+# and an entry past its expiry FAILS the gate, so a red cannot be parked silently.
+#
+# Format:
+#   workflow=<exact workflow name> | owner=<owner> | card=<card> | expiry=YYYY-MM-DD | reason
+#
+# Add an entry only with a real owner and a card, and delete it once the red is
+# fixed.  `cancelled` runs are never red.  A red main blocks the very commit that
+# fixes it, so an entry legitimately exists while that fix is committed — but delete
+# it as soon as a green run for that workflow exists, or it will silently park the
+# NEXT red instead of surfacing it.
+#
+# --- entries ---

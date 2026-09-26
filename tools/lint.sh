@@ -14,7 +14,10 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 19
+# Module Version: 20
+#   v20 (2026-09-26): the CI Verdict Gate joins the whole-repo guards (card
+#   CI-WATCH-CONSOLE-001) — scripts/check_ci_status.py --fail, skipped in --staged
+#   because it needs egress, for the same reason the count ratchet below is.
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
@@ -645,6 +648,33 @@ else
         echo "  PASS  §18.3 count ratchet"
     else
         echo "  FAIL  §18.3 count ratchet"
+        rc=1
+    fi
+fi
+
+echo ""
+echo "=== CI Verdict Gate ==="
+# Whole-repo only, like every guard above: a verdict check needs the network, and
+# no commit should depend on egress — the reason tools/hooks/pre-commit is
+# staged-file-only and says so.  This repo's ci.yml has no `concurrency:`, so a
+# superseded run QUEUES rather than being cancelled: the check matches runs by
+# headSha and reads queued/in-progress as "no verdict yet", never as green.  An
+# unexempted RED main fails here; being unable to READ the verdict does not, so
+# tools/lint.sh is not the reason CI fails when the network is absent.
+if [[ "${1:-}" == "--staged" ]]
+then
+    echo "  SKIP  staged run — the verdict check needs egress; CI and a manual run enforce it"
+else
+    _ci_status_py="$REPO_ROOT/.venv/bin/python3"
+    if [[ ! -x "$_ci_status_py" ]]
+    then
+        _ci_status_py="python3"
+    fi
+    if "$_ci_status_py" "$REPO_ROOT/scripts/check_ci_status.py" --fail
+    then
+        echo "  PASS  CI verdict gate"
+    else
+        echo "  FAIL  CI verdict gate"
         rc=1
     fi
 fi
