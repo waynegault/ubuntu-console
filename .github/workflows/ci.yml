@@ -6,10 +6,19 @@ on:
   pull_request:
     branches: [main]
 
+# Job timeouts.  NO job here set one, so a hung job was bounded only by GitHub's default
+# job timeout — 360 minutes, as the investigator's unittest.yml records (docs.github.com
+# was unreachable when this was written, so that figure is second-hand and worth
+# re-checking before it is relied on).  Six hours on a SINGLE self-hosted runner means every
+# later push queues behind a hang — the "a run that never started" state that card
+# CI-WATCH-CONSOLE-001 exists to make visible.  Each cap below is sized from a measured green
+# run (2026-09-26, run 36272668820) with headroom, in the posture the investigator's
+# unittest.yml states: cap generously, then tighten once a green run gives the real duration.
 jobs:
   lint:
     name: Lint & Static Analysis
     runs-on: [self-hosted, wsl-console]
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -51,6 +60,7 @@ jobs:
   test:
     name: Fast Test Suite
     runs-on: [self-hosted, wsl-console]
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -81,6 +91,7 @@ jobs:
   docs-sync:
     name: Docs Sync Check
     runs-on: [self-hosted, wsl-console]
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -91,6 +102,9 @@ jobs:
   behavioral:
     name: Behavioral BATS (unit + integration)
     runs-on: [self-hosted, wsl-console]
+    # Measured 735 s (12.3 min) on 2026-09-26 — the longest job on the push path, so this cap
+    # is also the longest a hang can hold the single runner.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -147,6 +161,7 @@ jobs:
   module-count:
     name: Module Integrity
     runs-on: [self-hosted, wsl-console]
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -207,6 +222,7 @@ jobs:
   python:
     name: Python Lint & Tests
     runs-on: [self-hosted, wsl-console]
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7

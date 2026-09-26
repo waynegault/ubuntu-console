@@ -6,10 +6,16 @@ on:
     - cron: '23 3 * * *'
   workflow_dispatch:
 
+# Job timeout, for the same reason ci.yml sets them: nothing here set one, so a hang was
+# bounded only by GitHub's 360-minute default while holding the single self-hosted runner.
 jobs:
   full-suite:
     name: Full BATS + Python Suite
     runs-on: [self-hosted, wsl-console]
+    # Measured 1357 s (22.6 min) on 2026-09-26, against README's "20-35 min on a loaded box".
+    # Generous on purpose: this job is off the push path, so the cap's only job is to bound a
+    # hang rather than to police duration.
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v7
