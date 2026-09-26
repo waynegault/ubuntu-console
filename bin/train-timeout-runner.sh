@@ -59,8 +59,12 @@
 #
 # AI INSTRUCTION: Increment the Module Version on any change; increment VERSION
 # for significant edits.
-# Module Version: 1
-VERSION="1.0"
+# Module Version: 2
+#   v2 (2026-09-27): it also REFUSES when another agent's run holds the investigator's GPU
+#   flock, which "register as a known tenant, exactly as a bench does" requires - the
+#   bench (11e:960) and autotune (run-autotune-batch.sh:184/210) both refuse that way, and
+#   without it a training run could become a second consumer on a 4 GB card.
+VERSION="1.1"
 set -euo pipefail
 
 pidfile=""
@@ -158,6 +162,34 @@ __ttr_cleanup() {
     exit "$_exit_code"
 }
 trap '__ttr_cleanup $?' EXIT INT TERM
+
+# --- Respect the fleet-wide owner ---------------------------------------------
+# "Register as a known tenant, exactly as a bench does" (the audit doc) includes THIS: the
+# bench (scripts/11e-llm-model.sh:960) and the autotune batch (scripts/run-autotune-batch.sh
+# :184/:210) both refuse when another agent's run holds the investigator's GPU flock, and
+# bin/llama-gpu-clear.sh, bin/gpu-busy.sh and scripts/11d-llm-gpu.sh carry the same path
+# precedence.  Without this check a training run would happily become a SECOND consumer on
+# a 4 GB card.
+#
+# A reader, never a holder: that flock is taken by the investigator's pipeline for the whole
+# of its run and nothing on the console side ever takes it.  Existence-gated, because
+# `flock -n` also fails on a MISSING path, and reading that as "held" would refuse on a box
+# that never took the lock.
+_inv_gpu_lock_path() {
+    printf '%s\n' "${INVESTIGATOR_GPU_LOCK:-${INVESTIGATOR_PRODUCTION_OUTPUT:-$HOME/investigator/production}/runtime/gpu.lock}"
+}
+
+_inv_lock=$(_inv_gpu_lock_path)
+if [[ -e "$_inv_lock" ]]; then
+    # swallow-ok: the probe's failure IS the "held by another run" answer checked on the next line
+    if ! flock -n "$_inv_lock" -c true 2>/dev/null; then
+        # swallow-ok: an unreadable holder pid only costs the pid in the message; the refusal stands
+        _inv_holder=$(tr -dc '0-9' < "$_inv_lock" 2>/dev/null || true)
+        __ttr_log "ERROR" "CUDA card owned by another agent's run (investigator GPU lock, pid ${_inv_holder:-unknown}) - refusing to become a second consumer"
+        echo "train-timeout-runner: CUDA card owned by another run (pid ${_inv_holder:-unknown}); not starting a second one" >&2
+        exit 4
+    fi
+fi
 
 # --- Claim the card -----------------------------------------------------------
 if [[ -n "$lockfile" ]]; then

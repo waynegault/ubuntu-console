@@ -782,3 +782,36 @@ EOS
     # false-BUSY shape this file's header records, and a false BUSY stops a lane.
     ! grep -qE "'(grpo|unsloth)" "$REPO_ROOT/bin/gpu-busy.sh"
 }
+
+# "Exactly as a bench does" includes refusing when ANOTHER agent's run owns the card:
+# the bench (11e:960) and the autotune batch (run-autotune-batch.sh:184/210) both refuse
+# on the investigator's GPU flock, and without this a training run would become a second
+# consumer on a 4 GB card.  Simulated with INVESTIGATOR_GPU_LOCK at a held test path, so
+# the live lock and the live card are untouched.
+@test "train-runner: it refuses when another agent's run owns the card" {
+    command -v flock >/dev/null || skip "flock unavailable"
+    local inv="$TAC_TEST_TMPDIR/inv.lock" log="$TAC_TEST_TMPDIR/inv-runner.log"
+    local own="$TAC_TEST_TMPDIR/inv-own.lock"
+    { flock -x 9; sleep 5; } 9>"$inv" &
+    local holder=$!
+    sleep 1
+    run env INVESTIGATOR_GPU_LOCK="$inv" "$REPO_ROOT/bin/train-timeout-runner.sh" \
+        -l "$log" -L "$own" sleep 1
+    [ "$status" -eq 4 ]
+    grep -q "refusing to become a second consumer" "$log"
+    # The console-side lock was never taken, so nothing is left behind and no cleanup
+    # (which probes the card) can have run.
+    [ ! -e "$own" ]
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+}
+
+@test "train-runner: an UNHELD investigator lock file is not a refusal" {
+    # Existence-gated on purpose: `flock -n` also fails on a MISSING path, so reading a
+    # failed probe as "held" would refuse on a box that never took the lock.
+    printf '12345\n' > "$TAC_TEST_TMPDIR/inv-idle.lock"
+    run env INVESTIGATOR_GPU_LOCK="$TAC_TEST_TMPDIR/inv-idle.lock" \
+        "$REPO_ROOT/bin/train-timeout-runner.sh" -l "$TAC_TEST_TMPDIR/idle.log" \
+        -L "$TAC_TEST_TMPDIR/idle-own.lock" sleep 1
+    [ "$status" -eq 0 ]
+}
