@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-09-27): __prompt_set_revision — a content address for one prompt set, so a
+#   trained artifact can record the served prompt contract it was trained under
+#   (card UBC-GRPO-004). Change any prompt body or display name and the revision moves.
 # ─── Module: prompt-sets ─────────────────────────────────────────────────────
 # Shared SPEC-DEC-006 workload prompt sets — the investigator's real
 # workloads: legal-RAG (structured, long, tool-call-shaped prompts with a
@@ -92,6 +95,29 @@ function __resolve_prompt_set() {
             ;;
     esac
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# __prompt_set_revision — a content address for one prompt set.
+# @args <all|physics|chat|legal|agentic|mix>
+# @prints "<set>@<12 hex>" — sha256 over the set's display names and prompt bodies.
+# @returns 0 on a known set, 1 otherwise (nothing printed).
+#
+# Why this exists (card UBC-GRPO-004): the served prompt contract IS this file, and a
+# reward win measured under a prompt template that then moves is not a win. Recording
+# the revision with a trained artifact turns "it was trained under this contract" from
+# an assumption into a fact that can be re-checked — change any prompt body or display
+# name and the revision changes with it.
+# ---------------------------------------------------------------------------
+function __prompt_set_revision() {
+    local _set="${1:-all}" _digest=""
+    # Declared local so __resolve_prompt_set — which assigns these two globals — fills
+    # THESE (bash resolves the assignment to the nearest declared scope) and leaves the
+    # caller's PROMPTS/PROMPT_NAMES untouched.
+    local PROMPTS=() PROMPT_NAMES=()
+    __resolve_prompt_set "$_set" || return 1
+    _digest=$(printf '%s\n' "${PROMPT_NAMES[@]}" "${PROMPTS[@]}" | sha256sum | awk '{print $1}')
+    printf '%s@%s\n' "$_set" "${_digest:0:12}"
 }
 
 # end of file

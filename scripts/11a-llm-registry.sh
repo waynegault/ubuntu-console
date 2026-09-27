@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
+#   v16 (2026-09-27): provenance helpers for a trained artifact (card UBC-GRPO-004) —
+#   __llm_provenance_dir/_path/_write/_read. A trained model still lands as an ordinary
+#   registry row; the benchmark, held-out set and prompt-contract revision it was made
+#   under live in a sidecar beside the registry, keyed by the model FILE name so a
+#   rescan cannot move provenance onto a different model.
 # ==============================================================================
 # 11a-llm-registry — Registry CRUD, sync, renumber
 # ==============================================================================
@@ -12,7 +17,9 @@
 #   __llm_json_escape,
 #   __llm_registry_entry_by_num, __llm_registry_entry_by_file,
 #   __llm_default_file, __llm_default_entry, __llm_default_number,
-#   __llm_registry_sync_state, __renumber_registry
+#   __llm_registry_sync_state, __renumber_registry,
+#   __llm_provenance_dir, __llm_provenance_path, __llm_provenance_write,
+#   __llm_provenance_read
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
@@ -161,6 +168,71 @@ function __llm_registry_row_for_file() {
     local entry
     entry=$(__llm_registry_entry_by_file "${1:-}") || return 0
     printf '%s\n' "$(printf '%s' "$entry" | cut -d'|' -f1)"
+}
+
+# ---------------------------------------------------------------------------
+# Provenance for a TRAINED artifact (card UBC-GRPO-004).
+#
+# A trained model has to be droppable as an ordinary registry ROW — the launchers, the
+# autotuner and the units all read the same 37 fields and must keep doing so — but a row
+# cannot say WHY the artifact exists: which benchmark scored it, which held-out set it
+# was measured on, and which revision of the served prompt contract it was trained
+# under. Those live in a sidecar beside the registry. The row stays the record every
+# other tool reads; the sidecar is the artifact's provenance.
+#
+# Keyed by the model FILE name, this file's own identity rule (see the resolvers above):
+# a `model scan` that renumbers rows then cannot move provenance onto another model.
+#
+# The directory sits BESIDE the registry, so a test that sandboxes LLM_REGISTRY
+# sandboxes its provenance too — and so the two travel together in a backup.
+#
+# REF: "How GRPO Trains Small Language Models with Verifiable Rewards"
+#      (Benjamin Nweke, TDS, 2026-09-23) — §4, the prompt-template rule.
+#      https://towardsdatascience.com/how-grpo-trains-small-language-models-with-verifiable-rewards/
+# ---------------------------------------------------------------------------
+function __llm_provenance_dir() {
+    printf '%s/provenance\n' "$(dirname "${LLM_REGISTRY:-$HOME/.llm/models.conf}")"
+}
+
+# __llm_provenance_path <model_file> — the sidecar's path. Prints nothing useful for an
+# empty name, and refuses it, so a caller cannot write provenance keyed on nothing.
+function __llm_provenance_path() {
+    local model_file="${1:-}"
+    [[ -n "$model_file" ]] || return 1
+    printf '%s/%s.json\n' "$(__llm_provenance_dir)" "${model_file##*/}"
+}
+
+# __llm_provenance_write <model_file> <benchmark> <held_out> <prompt_set_rev> <sha256> [notes]
+# Atomic in the same way __llm_registry_set_field is: built in a temp file and moved in,
+# so an interrupted write cannot leave a half-record behind.
+function __llm_provenance_write() {
+    local model_file="${1:-}" benchmark="${2:-}" held_out="${3:-}" prompt_set="${4:-}"
+    local digest="${5:-}" notes="${6:-}"
+    local path tmp
+    path="$(__llm_provenance_path "$model_file")" || return 1
+    mkdir -p "$(__llm_provenance_dir)" || return 1
+    tmp="${path}.tmp.$$"
+    {
+        printf '{\n'
+        printf '  "model_file": "%s",\n' "$(__llm_json_escape "$model_file")"
+        printf '  "sha256": "%s",\n' "$(__llm_json_escape "$digest")"
+        printf '  "benchmark": "%s",\n' "$(__llm_json_escape "$benchmark")"
+        printf '  "held_out": "%s",\n' "$(__llm_json_escape "$held_out")"
+        printf '  "prompt_set": "%s",\n' "$(__llm_json_escape "$prompt_set")"
+        printf '  "registered_at": "%s",\n' "$(date -Iseconds)"
+        printf '  "notes": "%s"\n' "$(__llm_json_escape "$notes")"
+        printf '}\n'
+    } > "$tmp" || { rm -f "$tmp"; return 1; }
+    mv "$tmp" "$path" || { rm -f "$tmp"; return 1; }
+    printf '%s\n' "$path"
+}
+
+# __llm_provenance_read <model_file> — the sidecar, verbatim; rc 1 when absent.
+function __llm_provenance_read() {
+    local path
+    path="$(__llm_provenance_path "${1:-}")" || return 1
+    [[ -f "$path" ]] || return 1
+    cat "$path"
 }
 
 # ---------------------------------------------------------------------------

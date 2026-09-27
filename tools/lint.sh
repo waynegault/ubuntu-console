@@ -14,7 +14,15 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 20
+# Module Version: 21
+#   v21 (2026-09-27): the via-consumer pass judges only findings in its OWN subject
+#   (the consumer and the via-consumer fragment). A consumer sources other files, and
+#   a finding in one of those could not be judged from a file set without its readers:
+#   01-constants.sh's VENV_DIR and LAST_TPS — read by 06-hooks.sh and
+#   12-dashboard-help.sh — were reported SC2034 "appears unused", so any commit that
+#   touched prompt-sets.sh failed over a file nobody had edited. Those findings are
+#   counted and named as ignored here; the module graph, which analyses every member
+#   together, judges them.
 #   v20 (2026-09-26): the CI Verdict Gate joins the whole-repo guards (card
 #   CI-WATCH-CONSOLE-001) — scripts/check_ci_status.py --fail, skipped in --staged
 #   because it needs egress, for the same reason the count ratchet below is.
@@ -148,8 +156,19 @@ _tac_skip_perfile() {
 # A via-consumer fragment is only ever analysed inside something that sources
 # it, so when IT is the file being linted, lint its consumers instead — otherwise
 # staging only that file would analyse nothing at all.
+#
+# Only findings that belong to THIS pass's subject are judged here: the consumer
+# itself, and $_TAC_VIA_CONSUMER. A consumer drags in everything IT sources, and a
+# finding in one of those cannot be judged from a file set that lacks the readers —
+# 01-constants.sh defines VENV_DIR and LAST_TPS, which 06-hooks.sh and
+# 12-dashboard-help.sh read, so shellcheck reports both as SC2034 "appears unused"
+# and the commit is blocked over a file nobody touched (measured 2026-09-27:
+# `tools/lint.sh --files scripts/prompt-sets.sh` failed on exactly those two, while
+# the module-graph pass PASSED on the same bytes). The graph analyses every member
+# together, readers included, so that is where such a finding is judged; here it is
+# counted and named as ignored rather than silently dropped.
 _tac_lint_via_consumer() {
-    local _c
+    local _c _out _kept _rc=0
     while IFS= read -r _c
     do
         [[ -n "$_c" ]] || continue
@@ -158,13 +177,27 @@ _tac_lint_via_consumer() {
         # only reports findings in the consumer it was handed — which is why
         # this path was documented as covering prompt-sets.sh while reporting
         # nothing about it.
-        if shellcheck -s bash -x --severity=warning --check-sourced --source-path="$REPO_ROOT" "$_c" 2>&1
+        _rc=0
+        _out="$(shellcheck -s bash -x --severity=warning --check-sourced --source-path="$REPO_ROOT" "$_c" 2>&1)" || _rc=$?
+        if (( _rc == 0 ))
         then
             echo "  PASS  ${_c#"$REPO_ROOT"/}  (analyses $_TAC_VIA_CONSUMER)"
-        else
+            continue
+        fi
+        _kept="$(printf '%s\n' "$_out" | awk -v subj="$_TAC_VIA_CONSUMER" -v cons="${_c#"$REPO_ROOT"/}" '
+            /^In / { keep = ($2 == subj || $2 == cons) }
+            keep { print }
+        ')"
+        local _n_all _n_kept
+        _n_all="$(printf '%s\n' "$_out" | awk '/^In /{n++} END{print n+0}')"
+        _n_kept="$(printf '%s\n' "$_kept" | awk '/^In /{n++} END{print n+0}')"
+        if [[ -n "$_kept" ]]
+        then
+            printf '%s\n' "$_kept"
             echo "  FAIL  ${_c#"$REPO_ROOT"/}  (shellcheck, includes $_TAC_VIA_CONSUMER)" >&2
             return 1
         fi
+        echo "  PASS  ${_c#"$REPO_ROOT"/}  (analyses $_TAC_VIA_CONSUMER; $(( _n_all - _n_kept )) finding(s) in other sourced files ignored — the module graph judges those with their readers present)"
     done < <(grep -ls 'prompt-sets\.sh' "$REPO_ROOT"/scripts/*.sh 2>/dev/null \
         | grep -v "/prompt-sets\.sh$")
     return 0

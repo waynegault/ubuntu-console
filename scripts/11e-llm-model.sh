@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 54
+# Module Version: 55
+#   v55 (2026-09-27): `model register-trained` (card UBC-GRPO-004) — a trained artifact
+#   lands as an ordinary registry row, with the two facts a row cannot carry (which
+#   benchmark, which held-out set) and the served prompt contract's revision recorded in
+#   a provenance sidecar. Refuses without them, and refuses a non-GGUF file, so the
+#   hand-placed artifact the card exists to prevent has nowhere to hide.
 #   v54 (2026-09-26): five more sites read in place.  The two health-preflight curls
 #   move their stderr redirect to the head of the command so it can carry its reason; the
 #   window-mismatch cache write becomes if/then, because a bare `[[ ]] && printf` returns
@@ -42,7 +47,7 @@
 # @uses: llm-runtime
 # @exports: model, __model_scan, __model_list, __model_default, __model_use,
 #   __model_bench, __model_stop, __model_doctor, __model_recommend,
-#   __model_download
+#   __model_download, __model_register_trained
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
@@ -3357,13 +3362,131 @@ function __model_archive() {
 }
 
 # ---------------------------------------------------------------------------
+# __model_register_trained — Register a TRAINED artifact on the ordinary row, with the
+# provenance a row cannot carry (card UBC-GRPO-004).
+#
+# REF: "How GRPO Trains Small Language Models with Verifiable Rewards"
+#      (Benjamin Nweke, TDS, 2026-09-23) — §4: "a training win measured under a prompt
+#      template that then moves is not a win".
+#      https://towardsdatascience.com/how-grpo-trains-small-language-models-with-verifiable-rewards/
+#
+# The serving path is deliberately the ordinary one: convert to GGUF, put the file in
+# $LLAMA_MODEL_DIR, `model scan` gives it a row, and the launchers, the autotuner and the
+# systemd units keep reading that row unchanged. What this command adds is what a row is
+# unable to say: which benchmark and held-out set scored the artifact, and which revision
+# of the served prompt contract it was trained under. Those land in a sidecar keyed by the
+# model FILE name (see __llm_provenance_* in 11a), so a later rescan cannot move them.
+#
+# It REFUSES without --benchmark and --held-out, and refuses a file that is not a GGUF:
+# an artifact whose provenance is unknown is the hand-placed file this path replaces, and
+# refusing at registration is the only moment that stays cheap to enforce.
+# @args <model-file|path> --benchmark <id> --held-out <id> [--prompt-set <set>] [--notes <text>]
+# @returns 0 on registration, 1 on any refusal (each one named on stdout).
+# ---------------------------------------------------------------------------
+function __model_register_trained() {
+    local target="" benchmark="" held_out="" prompt_set="all" notes="" _arg
+    while (( $# > 0 ))
+    do
+        _arg="$1"
+        case "$_arg" in
+            --benchmark)  benchmark="${2:-}"; shift 2 ;;
+            --held-out)   held_out="${2:-}"; shift 2 ;;
+            --prompt-set) prompt_set="${2:-}"; shift 2 ;;
+            --notes)      notes="${2:-}"; shift 2 ;;
+            --help|-h)    __model_usage; return 0 ;;
+            *)            target="$_arg"; shift ;;
+        esac
+    done
+
+    if [[ -z "$target" ]]
+    then
+        __tac_info "Registry" "[register-trained <file> --benchmark <id> --held-out <id>]" "$C_Error"
+        return 1
+    fi
+
+    # A bare name is resolved against the directory a converted artifact belongs in; a
+    # path is used as given.
+    local model_file model_path
+    model_file="$(basename "$target")"
+    if [[ -f "$target" ]]
+    then
+        model_path="$target"
+    else
+        model_path="$LLAMA_MODEL_DIR/$model_file"
+    fi
+    if [[ ! -f "$model_path" ]]
+    then
+        __tac_info "Registry" "[no such file: $model_file]" "$C_Error"
+        return 1
+    fi
+    # GGUF magic. A safetensors directory, a LoRA adapter or a truncated download must not
+    # become a servable row.
+    if [[ "$(head -c 4 "$model_path")" != "GGUF" ]]
+    then
+        __tac_info "Registry" "[not a GGUF file: $model_file]" "$C_Error"
+        return 1
+    fi
+    if [[ -z "$benchmark" || -z "$held_out" ]]
+    then
+        __tac_info "Registry" "[refused — a trained artifact needs --benchmark and --held-out]" "$C_Error"
+        return 1
+    fi
+
+    local row
+    row="$(__llm_registry_row_for_file "$model_file")"
+    if [[ -z "$row" ]]
+    then
+        __tac_info "Registry" "[no registry row — place it in the model dir, then 'model scan']" "$C_Error"
+        return 1
+    fi
+
+    # prompt-sets.sh is a standalone library (spec-decode-bench.sh, autotune-model.sh and
+    # spec_dec_crossover.sh each source it directly), not a member of the interactive
+    # module list — so load it on demand through the shared helper, which REPORTS a
+    # missing or failing file rather than swallowing it.
+    # `type -t` writes nothing to stderr for an undefined function, so the exit code is
+    # the whole signal and needs no redirect.
+    if ! type -t __prompt_set_revision >/dev/null
+    then
+        __tac_source_submodules "$TACTICAL_REPO_ROOT/scripts" "llm-model" prompt-sets
+    fi
+
+    local revision=""
+    if ! revision="$(__prompt_set_revision "$prompt_set")" || [[ -z "$revision" ]]
+    then
+        __tac_info "Registry" "[unknown prompt set '$prompt_set' — refusing to record a revision]" "$C_Error"
+        return 1
+    fi
+
+    local digest size
+    size="$(du -h "$model_path" | cut -f1)"
+    __tac_info "Registry" "[hashing $model_file ($size) — the artifact's identity]" "$C_Dim"
+    digest="$(sha256sum "$model_path" | awk '{print $1}')"
+
+    local path=""
+    if ! path="$(__llm_provenance_write "$model_file" "$benchmark" "$held_out" "$revision" "$digest" "$notes")"
+    then
+        __tac_info "Registry" "[could not write provenance for $model_file]" "$C_Error"
+        return 1
+    fi
+
+    __tac_info "Registry" "[registered row $row: $model_file]" "$C_Success"
+    printf '%s\n' "  benchmark  : $benchmark"
+    printf '%s\n' "  held-out   : $held_out"
+    printf '%s\n' "  prompt set : $revision"
+    printf '%s\n' "  sha256     : $digest"
+    printf '%s\n' "  provenance : $path"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # __model_usage
 # @description Print the model command usage summary.
 # @returns 0 always.
 # ---------------------------------------------------------------------------
 function __model_usage() {
     echo "Usage: model {scan|list|default|use|stop|status|doctor|recommend|info|bench|autotune|bench-diff|\
-bench-compare|bench-latest|bench-history|delete|archive|download}"
+bench-compare|bench-latest|bench-history|delete|archive|download|register-trained}"
     echo "  scan       - Scan $LLAMA_MODEL_DIR, read GGUF metadata, auto-calculate params"
     echo "  list       - Show numbered model registry (${PLAY_MARK} = active, * = default)"
     echo "  default [N] - Show current default LLM, or set it to model #N"
@@ -3386,6 +3509,8 @@ bench-compare|bench-latest|bench-history|delete|archive|download}"
     echo "  delete N   - Permanently delete model #N from disk and registry (--dry-run)"
     echo "  archive N  - Move model #N to archive/ and remove from registry (--dry-run)"
     echo "  download   - Download GGUF models from Hugging Face (repo:file)"
+    echo "  register-trained <file> --benchmark <id> --held-out <id> [--prompt-set <set>]"
+    echo "             - Register a TRAINED artifact with its eval provenance (regenerates nothing)"
     echo ""
     echo "Options:"
     echo "  --ctx-size N  Override context window (default from models.conf)"
@@ -3571,6 +3696,10 @@ function model() {
 
         download)
             __model_download "$@"
+            ;;
+
+        register-trained)
+            __model_register_trained "$@"
             ;;
 
         archive)

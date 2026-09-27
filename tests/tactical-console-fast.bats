@@ -87,6 +87,18 @@ setup_file() {
         "$REPO_ROOT"/scripts/oc-update-enhanced.sh
 }
 
+@test "shellcheck: prompt-sets.sh is judged through its consumers, not through their imports" {
+    # prompt-sets.sh is neither a module nor an entry point, so it is linted inside the
+    # scripts that source it — and those source 01-constants.sh, whose VENV_DIR and
+    # LAST_TPS readers (06-hooks.sh, 12-dashboard-help.sh) are absent from that file
+    # set. Judged there, two LIVE globals were reported as unused (SC2034), failing
+    # every commit that touched prompt-sets.sh (measured 2026-09-27); the module-graph
+    # pass analyses every member together, so that is where they are judged. This case
+    # pins the standalone verdict.
+    command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
+    "$REPO_ROOT/tools/lint.sh" --files "$REPO_ROOT/scripts/prompt-sets.sh"
+}
+
 @test "shellcheck: install.sh passes at all severities" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
     [[ -f "$REPO_ROOT/install.sh" ]] || skip "install.sh not found"
