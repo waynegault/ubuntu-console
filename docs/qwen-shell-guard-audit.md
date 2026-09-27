@@ -4,7 +4,7 @@ Audited 2026-09-16, after a session was denied two commands it should have been
 allowed to run. The guard is not ours; this records what it does, the two gaps
 found, the local patch applied, and what to ask upstream.
 
-> **Status 2026-09-27 (updated 19:46) — the patch is re-applied to 0.24.6 and waiting for a reload.**
+> **Status 2026-09-27 (updated 22:02) — the patch is re-applied to 0.24.6, and LIVE and verified in the running daemon.**
 > The 0.24.6 companion (installed 2026-09-26 14:50) replaced the guard chunk and silently reverted the
 > allowlist to the stock two verbs. `qwen-guard-patch.sh` then refused, correctly: its anchor was the
 > 0.23.4–0.24.5 spelling. On Wayne's instruction the script now recognises BOTH spellings, and the
@@ -19,8 +19,14 @@ found, the local patch applied, and what to ask upstream.
 > marker without them. All four patched chunks (0.24.5 and 0.24.6, Linux and Windows) then passed the
 > 15-row table.
 >
-> **It is still not in effect**: the running process predates the file, proved by comparing the
-> process start time with the chunk's mtime (§Which process enforces a session). One hunk is
+> **It is in effect and verified live.** A window reload at 22:00:06 replaced the whole extension-host
+> tree (every PID changed; the pre-reload ext host and daemon are gone), and the check at 22:01 from
+> the same session gives `git -C <other> log --oneline -1` → **allowed**, plus the discriminating row:
+> the *stock* verb `rev-parse` is still allowed. That pair is what tells the corrected file from the
+> faulty 19:22 one, which allowed `log` and **denied** `rev-parse`. Negative controls hold live:
+> `--output` still denies, and `cd <other> && cat .git/HEAD` still denies. Before the reload the same
+> command was refused — and the process start time predated the chunk's mtime, which is the cheap test
+> for "patched on disk but not loaded" (§Which process enforces a session). One hunk is
 > deliberately NOT applied, and the script reports it: the denial-message patch's 0.24.6 anchor is
 > unrecognised and `invocation`'s scope in that shape cannot be verified by inspection, so only the
 > allowlist hunk lands. Re-audit, the exact 0.24.6 strings, and the correction to this document's
@@ -304,9 +310,15 @@ tree named the enforcer:
 For a WSL-remote session the guard is evaluated inside **that session's own window**: the
 daemon is a direct child of that window's extension host. Two consequences:
 
-* The lever is a **reload of that window**, and it necessarily restarts the session that
-  triggers it. Verification has to come from a session started *after* the reload; the
-  session that triggers it cannot also observe the result.
+* The lever is a **reload of that window**, and what it restarts is the window's extension
+  host *and* the daemon that evaluates the guard — every PID in that tree changes. It does
+  **not** end the chat session: the client reconnects to the new daemon, so the same session
+  can observe the result. Measured 2026-09-27: the reload at 22:00:06 replaced
+  `2014446`/`2015558` with a new tree, and the session that had asked for the reload ran the
+  verification at 22:01 and got the relaxed verdict. (An earlier draft of this section said
+  the reload "necessarily restarts the session that triggers it, [so] the session that
+  triggers it cannot also observe the result" — that prediction was wrong and is corrected
+  here.)
 * The reload has to be **initiated from the UI**. Dispatching
   `vscode://command/workbench.action.reloadWindow` from inside WSL — via
   `cmd.exe /c start "" …` and via PowerShell `Start-Process` — returned rc=0 both times and
