@@ -499,6 +499,10 @@ CFG
     run oc-refresh-keys
     [ "$status" -eq 0 ]
     [[ "$output" == *"restarted and serving"* ]]
+    # The wait announces itself before taking it (2026-09-27): the bound is a measured
+    # ~79-86s cold start on this box, so a silent pause after "the env is applied"
+    # reads as a hang. The message is what tells the operator the pause is expected.
+    [[ "$output" == *"waiting up to"* ]]
 }
 
 @test "oc-refresh-keys does not stack a restart on a unit systemd is already moving" {

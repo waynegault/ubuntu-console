@@ -55,6 +55,14 @@ setup() {
     # payload inline instead of creating a real transient scope on the host.
     __mock_command_local systemd-run 'while [[ "${1:-}" == --* ]]; do shift; done; exec "$@"'
 
+    # Stub `sleep` (a function shadows the binary). The mocked systemctl above never
+    # reports a unit state, so oc-refresh-keys' convergence wait can never see
+    # `running` and runs to its full bound — 120 iterations since 2026-09-27 (see
+    # scripts/09d-oc-agents.sh for the measured ~79-86s start that bound covers).
+    # Without this, every case that reaches the restart path pays the whole bound in
+    # wall time. Same device as tests/unit/01-refresh-keys.bats.
+    sleep() { :; }
+
     # Source only required modules for oc-refresh-keys to keep the test harness stable.
     # shellcheck source=scripts/01-constants.sh
     source "$REPO_ROOT/scripts/01-constants.sh"

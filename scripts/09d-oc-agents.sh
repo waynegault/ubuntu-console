@@ -7,7 +7,15 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 35
+# Module Version: 36
+#   v36 (2026-09-27): oc-refresh-keys' gateway-convergence wait gives up at 120s, not 60.
+#   The unit is Type=simple, so `is-active` says "active" while the gateway is still
+#   opening every agent database, and the only early exit is a `running` phase from
+#   the gateway's own log. Measured here: 13:30:17 unit start -> 13:31:36 "http server
+#   listening" -> 13:31:43 "ready", i.e. ~79-86s. A 60s bound was shorter than the
+#   start it waits for, so "restarted and serving" was unreachable on a cold start and
+#   every refresh reported "still starting" instead. The wait now announces itself, so
+#   the longer pause is not read as a hang.
 #   v35 (2026-09-24): every cache in this file writes to a PER-PROCESS temp name.
 #   The API-key bridge was fixed for the user-visible case (a bare `mv: cannot stat`
 #   under the banner); the agent, session and stats caches had the identical race
@@ -1511,6 +1519,21 @@ function oc-refresh-keys() {
         #     the authority on serving (__so_gateway_phase), so a fresh `running` is what
         #     convergence means here — and every other outcome is named.
         local _pre_state _gw_state="" _phase="" _i
+        # CONVERGENCE BOUND — 120 iterations, and the number is measured, not chosen.
+        # The unit is Type=simple, so `is-active` reports "active" the moment the
+        # process is spawned while the gateway's own log still says "starting": the
+        # ONLY way this loop ends early is a fresh `running` phase, i.e. an
+        # "http server listening" / "[gateway] ready" lifecycle line. Measured on this
+        # box 2026-09-27: unit start 13:30:17 -> "starting HTTP server" 13:31:28 ->
+        # "http server listening" 13:31:36 -> "[gateway] ready" 13:31:43, i.e. ~79-86s
+        # to ready. The previous bound of 60 was therefore SHORTER THAN THE START IT
+        # WAITS FOR, so a cold start could never be seen to converge: the loop ran out
+        # and every restart was reported as "still starting", leaving the success row
+        # unreachable in exactly the situation it describes. 120 covers the measured
+        # start with headroom; each iteration is a `sleep 1`, and a log probe when the
+        # unit is active adds to that, so the wall time is 120s plus at most the
+        # probes. A start that still exceeds it is reported honestly by the `*)` row.
+        local _gw_wait=120
         # swallow-ok: no user manager in an agent/CI shell; the pre-state is then empty and no restart is stacked
         _pre_state=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)
         if [[ "$_pre_state" == "activating" || "$_pre_state" == "deactivating" ]]
@@ -1518,7 +1541,10 @@ function oc-refresh-keys() {
             __tac_info "Gateway" "[already $_pre_state — not stacking a restart; env is applied]" "$C_Warning"
         elif systemctl --user restart --no-block openclaw-gateway.service 2>/dev/null
         then
-            for _i in {1..60}
+            # Announce the wait before taking it: it can last two minutes now, and a
+            # silent two-minute pause after the env has been applied reads as a hang.
+            __tac_info "Gateway" "[restart issued — waiting up to ${_gw_wait}s for it to serve]" "$C_Dim"
+            for (( _i = 0; _i < _gw_wait; _i++ ))
             do
                 _gw_state=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)
                 [[ "$_gw_state" == "failed" ]] && break
