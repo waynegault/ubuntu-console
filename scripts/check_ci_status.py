@@ -50,7 +50,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field, replace
@@ -420,9 +422,28 @@ class CiStatusUnknown(RuntimeError):
     """Raised when GitHub's verdict cannot be obtained."""
 
 
+#: Where gh can be found when PATH has no gh.  This gate also runs in CI, on a
+#: self-hosted runner whose service PATH is the bare system one (measured 2026-09-27:
+#: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin).  A bare "gh" then
+#: resolved nothing: every verdict degraded to UNKNOWN and tools/lint.sh printed PASS
+#: while reading nothing at all.  Being unable to ask is not evidence of green.
+GH_FALLBACKS = ("/home/linuxbrew/.linuxbrew/bin/gh", "/home/wayne/.local/bin/gh")
+
+
+def gh_binary() -> str:
+    """Return the gh executable to invoke, independent of the caller's PATH."""
+    found = shutil.which("gh")
+    if found:
+        return found
+    for candidate in GH_FALLBACKS:
+        if os.access(candidate, os.X_OK):
+            return candidate
+    return "gh"
+
+
 def _gh_json(args: list[str], *, timeout: int) -> object:
     """Call ``gh`` and return its parsed JSON, raising CiStatusUnknown."""
-    cmd = ["gh", *args]
+    cmd = [gh_binary(), *args]
     logger.debug("running: %s", " ".join(cmd))
     try:
         proc = subprocess.run(
