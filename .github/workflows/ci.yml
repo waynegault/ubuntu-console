@@ -54,7 +54,20 @@ jobs:
       # (always-on dangerous-codepoint FAIL, advisory non-ASCII), and the repo
       # boundary guard — with the flags in exactly one place.  Calling it is the
       # point of that script; a second copy of the flags is what drifted.
+      # GH_TOKEN here is the gate's AUTHENTICATION, not a convenience.
+      # scripts/check_ci_status.py resolves gh without PATH (gh_binary), but gh otherwise
+      # authenticates from the stored ~/.config/gh/hosts.yml of whoever owns the runner —
+      # an external dependency that can expire or rotate.  When it does, the gate raises
+      # UNKNOWN, exits 0, and this step prints "PASS CI verdict gate" while reading
+      # nothing: the same blindness the gh-resolution fix closed, one layer down.
+      # Scope needed: actions:read (the run list) + contents:read (repos/…/commits/<branch>).
+      # Both are covered by this repo's default workflow permissions — "read", verified
+      # 2026-09-27 via /repos/waynegault/ubuntu-console/actions/permissions/workflow.  If a
+      # job-level `permissions:` block is ever added, keep actions:read or the gate goes
+      # blind again (and will say so, as UNKNOWN).
       - name: "Lint & static analysis (canonical: tools/lint.sh)"
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: tools/lint.sh
 
   test:
@@ -75,7 +88,7 @@ jobs:
       - name: Install shellcheck (pinned)
         run: sudo tools/install-shellcheck.sh
 
-      - name: Run fast tests (62 smoke tests)
+      - name: Run fast tests (64 smoke tests)
         # --print-output-on-failure: a failed `run ...; [ "$status" -eq 0 ]` assertion
         # otherwise prints the failed line and nothing else, discarding the captured output —
         # which for a script-under-test is where the cause is named.  Verified 2026-09-18 with
@@ -83,6 +96,10 @@ jobs:
         run: bats --print-output-on-failure tests/tactical-console-fast.bats
 
       - name: Run lint script
+        # Same GH_TOKEN reason as the lint job's canonical step: the CI verdict gate inside
+        # tools/lint.sh must not depend on the runner owner's stored gh credential.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: tools/lint.sh
 
     # Full suite (387 tests) is run locally via: bats tests/tactical-console.bats
