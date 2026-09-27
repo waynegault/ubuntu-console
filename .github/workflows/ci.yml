@@ -167,7 +167,8 @@ jobs:
                tests/unit/29-errexit-arithmetic.bats \
                tests/unit/30-plugin-update.bats \
                tests/unit/31-stale-reap-safety.bats \
-               tests/unit/32-report-rows-safety.bats
+               tests/unit/32-report-rows-safety.bats \
+               tests/unit/33-daemon-guard-patch.bats
 
       - name: Run integration tests
         run: |

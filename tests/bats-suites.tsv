@@ -21,8 +21,11 @@
 #                        per-case figure, so the two must not be compared
 #
 # A new .bats file inside tests/unit/ or tests/integration/ joins its suite through
-# the glob with no edit here.  A new SUITE (a new directory) needs a line, because its
-# timeouts cannot be inferred from a glob.
+# the glob with no edit here.  It still needs a LITERAL path in a workflow, though:
+# the fast suite's "ci: every runnable test suite is referenced by a workflow" case
+# fails on a unit file no .github/workflows/*.yml names by path, and on 2026-09-27 a
+# new unit suite went red on exactly that (33-daemon-guard-patch.bats).  A new SUITE
+# (a new directory) needs a line, because its timeouts cannot be inferred from a glob.
 tests/unit/*.bats	bats_unit	120	600
 tests/tactical-console.bats	bats_full	900	2700
 tests/tactical-console-fast.bats	bats_fast	180	900
