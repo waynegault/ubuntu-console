@@ -26,6 +26,8 @@ from __future__ import annotations
 import json
 import unittest
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from _paths import REPO_ROOT
@@ -500,3 +502,66 @@ class TestCLISurface:
         assert "workflow=<name> | owner=<owner> | card=<card> | expiry=YYYY-MM-DD" in (
             capsys.readouterr().out
         )
+
+
+class TestGhResolutionOrder:
+    """Where ``gh`` comes from, and that the call site actually uses it.
+
+    The failure this pins is silent by construction: the gate exits 0 on UNKNOWN, so a
+    caller whose PATH cannot reach ``gh`` used to read UNKNOWN as health. Measured
+    2026-09-27 on the CI runner's service PATH
+    (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin): every verdict degraded
+    to UNKNOWN while tools/lint.sh printed PASS. ``gh_binary()`` now walks
+    ``shutil.which("gh")`` and then ``GH_FALLBACKS``.
+
+    Modelled on the investigator repo's ``TestGhResolutionOrder`` (its CI-WATCH-002), and
+    deliberately in that stronger shape: each candidate is a REAL executable whose stdout
+    names which one ran, so these cases observe which program actually EXECUTED — through
+    ``_gh_json``, the one choke point every ``gh`` call passes through (``_run_gh`` wraps
+    it, and the commits query calls it directly) — rather than that a helper returned a
+    string. ``shutil`` is faked at the MODULE's own binding, never globally, so no other
+    module's ``shutil`` use is disturbed.
+    """
+
+    @staticmethod
+    def _script(path: Path, marker: str) -> Path:
+        """An executable ``sh`` script whose stdout names it."""
+        path.write_text(f'#!/bin/sh\necho \'{{"used": "{marker}"}}\'\n', encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    @staticmethod
+    def _which_finds_nothing(monkeypatch) -> None:
+        monkeypatch.setattr(mod, "shutil", SimpleNamespace(which=lambda name: None))
+
+    def test_which_wins_over_the_fallbacks(self, tmp_path, monkeypatch) -> None:
+        on_path = self._script(tmp_path / "gh-on-path", "which")
+        fallback = self._script(tmp_path / "gh-fallback", "fallback")
+        monkeypatch.setattr(mod, "shutil", SimpleNamespace(which=lambda name: str(on_path)))
+        monkeypatch.setattr(mod, "GH_FALLBACKS", (str(fallback),))
+        assert mod._gh_json([], timeout=30) == {"used": "which"}
+
+    def test_a_fallback_is_used_when_which_finds_nothing(self, tmp_path, monkeypatch) -> None:
+        fallback = self._script(tmp_path / "gh-fallback", "fallback")
+        self._which_finds_nothing(monkeypatch)
+        monkeypatch.setattr(mod, "GH_FALLBACKS", (str(tmp_path / "absent"), str(fallback)))
+        assert mod._gh_json([], timeout=30) == {"used": "fallback"}
+
+    def test_a_non_executable_fallback_is_skipped(self, tmp_path, monkeypatch) -> None:
+        """A file that exists but cannot execute is not a usable gh."""
+        present_but_not_executable = tmp_path / "gh-not-executable"
+        present_but_not_executable.write_text("#!/bin/sh\necho '{}'\n", encoding="utf-8")
+        usable = self._script(tmp_path / "gh-usable", "fallback")
+        self._which_finds_nothing(monkeypatch)
+        monkeypatch.setattr(
+            mod, "GH_FALLBACKS", (str(present_but_not_executable), str(usable))
+        )
+        assert mod._gh_json([], timeout=30) == {"used": "fallback"}
+
+    def test_nothing_resolvable_raises_unknown(self, tmp_path, monkeypatch) -> None:
+        # gh_binary() falls back to the bare name "gh", which does not exist here, so the
+        # exec fails — and the gate must say UNKNOWN rather than return something plausible.
+        self._which_finds_nothing(monkeypatch)
+        monkeypatch.setattr(mod, "GH_FALLBACKS", (str(tmp_path / "absent"),))
+        with pytest.raises(mod.CiStatusUnknown):
+            mod._gh_json([], timeout=30)

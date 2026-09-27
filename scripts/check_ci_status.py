@@ -422,6 +422,14 @@ class CiStatusUnknown(RuntimeError):
     """Raised when GitHub's verdict cannot be obtained."""
 
 
+#: SIBLING IMPLEMENTATION — the investigator repo carries its own copy of this gate
+#: (/home/wayne/investigator/scripts/check_ci_status.py, its card CI-WATCH-002), and the
+#: .openclaw guard schedules THAT copy for its repo the way ci.yml schedules this one. The
+#: duplication is by design (one gate per repo, each with its own baseline); silent drift
+#: between them is not. Both were fixed for the same gh-resolution fault on 2026-09-27, in
+#: parallel and with different naming (theirs: ``_GH_FALLBACKS``); when the resolution order
+#: or the UNKNOWN contract changes here, look at that copy too.
+#:
 #: Where gh can be found when PATH has no gh.  This gate also runs in CI, on a
 #: self-hosted runner whose service PATH is the bare system one (measured 2026-09-27:
 #: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin).  A bare "gh" then
