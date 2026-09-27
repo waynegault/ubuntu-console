@@ -9,7 +9,13 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
+#   v15 (2026-09-27): oc-health reports whether the local daemon guard patch is still
+#   applied (__oc_guard_patch_state, wired into both the enhanced-checker branch and
+#   the fallback). The cron self-heal detected the 0.24.6 reversion for 15 hours into
+#   a log nobody reads, on a box with no mail transport: detection that cannot be
+#   delivered is not detection, so the state also goes on a surface a human reads
+#   (tests/unit/33-daemon-guard-patch.bats pins the helper, both wirings and --json).
 #   v14 (2026-09-24): oc-plugin-update counts every failure it PRINTS, not only the
 #   shared helper's rc 2 — a fresh clone that failed and a directory that is not a
 #   git checkout both exited 0 (tests/unit/30-plugin-update.bats pins both).
@@ -76,6 +82,55 @@ function __oc_gh_keyring_recurrence() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# __oc_guard_patch_state — is the local daemon guard patch still applied?
+# ---------------------------------------------------------------------------
+# WHY: every IDE-companion update replaces `daemon-git-worktree-guard-*.js` and so
+# silently reverts the local read-only relaxation — after which a relocated
+# `git -C <other-repo> log|status|diff` is refused again as "mutating". A cron
+# watchdog (~/.local/bin/qwen-guard-selfheal.sh, :17/:47) re-applies it, but when a
+# chunk's spelling changes it can only REPORT that it could not: on 2026-09-27 thirty
+# consecutive runs wrote STILL-NEEDS-ATTENTION into a log nobody reads, on a box with
+# no mail transport at all, and the reversion stood for hours until a human noticed.
+# Detection that cannot be delivered is not detection, so the state belongs on a
+# surface a human actually looks at.
+#
+# Read-only by construction: `--check` reports and never patches, so a health command
+# cannot change the guard. Reported, never counted as an issue, and absent from
+# --json/--plain — the same contract as __oc_gh_keyring_recurrence above.
+function __oc_guard_patch_state() {
+    local patch="$HOME/.local/bin/qwen-guard-patch.sh"
+    if [[ ! -x "$patch" ]]
+    then
+        __tac_info "Daemon guard patch" "[not installed]" "$C_Dim"
+        return 0
+    fi
+    local check_out="" rc=0
+    if command -v timeout >/dev/null
+    then
+        check_out=$(timeout 10 "$patch" --check 2>&1) || rc=$?
+    else
+        check_out=$("$patch" --check 2>&1) || rc=$?
+    fi
+    if (( rc == 0 ))
+    then
+        __tac_info "Daemon guard patch" "[APPLIED]" "$C_Success"
+        return 0
+    fi
+    __tac_info "Daemon guard patch" "[NOT APPLIED]" "$C_Warning"
+    # Name what the check said, so the reader does not have to run it again.
+    local first_line
+    first_line=$(head -n 1 <<< "$check_out")
+    if [[ -n "$first_line" ]]
+    then
+        printf '  %s\n' "${C_Dim}${first_line}${C_Reset}"
+    fi
+    local log_file="$HOME/.local/share/qwen-guard/selfheal.log"
+    __tac_info "  … fix" \
+        "[${patch/#$HOME/~} re-applies it; the self-heal log is ${log_file/#$HOME/~}]" "$C_Dim"
+    return 0
+}
+
 function oc-health() {
     local output_mode="human"
     case "${1:-}" in
@@ -119,6 +174,7 @@ function oc-health() {
         if [[ "$output_mode" == "human" ]]
         then
             __oc_gh_keyring_recurrence
+            __oc_guard_patch_state
         fi
         return "$_enhanced_rc"
     fi
@@ -229,6 +285,10 @@ function oc-health() {
     # the path `oc health` takes on a box WITHOUT the enhanced checker — which is
     # this one, verified by running the command.
     __oc_gh_keyring_recurrence
+    # Same contract for the daemon guard patch: the cron self-heal can detect a
+    # reversion and still not repair it, and its failure currently reaches no one, so
+    # the state is shown here too (see __oc_guard_patch_state for the incident).
+    __oc_guard_patch_state
 }
 
 # ---------------------------------------------------------------------------
