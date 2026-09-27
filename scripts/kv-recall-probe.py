@@ -124,23 +124,35 @@ def build_haystack(
     """Plant ``needle`` at ``depth`` of a context of about ``plan.ctx_tokens``.
 
     Returns the document and the needle's 1-based position among its lines, so a test can
-    assert placement without re-deriving it.  The size is built in WORDS: the probe's
-    own estimate is returned for display, and the server's reported prompt_tokens is what
-    the record carries — see DepthResult.prompt_tokens.
+    assert placement without re-deriving it.
+
+    The size is measured in WORDS and the filler is appended until that word count is
+    reached — NOT until that many LINES exist.  Measured 2026-09-27: the first version
+    counted lines, so a 4096-token request built 34,786 words (~45k tokens), which a
+    server with a smaller ctx would have truncated while the probe reported per-depth
+    numbers for a context nobody asked for.  ``depth`` is likewise a fraction of the
+    document's WORDS, so it means the same thing whatever the filler's line lengths are.
+    The word estimate (~1.3 words/token) is labelled as an estimate: the record carries
+    the server's own prompt_tokens — see DepthResult.prompt_tokens.
     """
     rng = random.Random((plan.seed, depth, plan.model, plan.kv_type).__hash__())
-    # ~1.3 words per token for this kind of prose; the estimate is labelled as such.
     target_words = max(64, int(plan.ctx_tokens / 1.3))
     lines: list[str] = []
-    needle_at = max(1, int(round(target_words * depth)))
-    while len(lines) < target_words:
-        if len(lines) + 1 == needle_at:
-            lines.append(needle)
-            continue
-        lines.append(rng.choice(FILLERS))
-    if needle not in lines:
-        lines.insert(min(needle_at, len(lines)) - 1, needle)
-    return "\n".join(lines), lines.index(needle) + 1
+    words = 0
+    while words < target_words:
+        filler = rng.choice(FILLERS)
+        lines.append(filler)
+        words += len(filler.split())
+    want = int(round(words * depth))
+    running = 0
+    position = len(lines)
+    for index, line in enumerate(lines):
+        running += len(line.split())
+        if running >= want:
+            position = index
+            break
+    lines.insert(position, needle)
+    return "\n".join(lines), position + 1
 
 
 def extract_answer(text: str) -> str:

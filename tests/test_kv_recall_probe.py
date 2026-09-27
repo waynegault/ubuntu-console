@@ -80,8 +80,23 @@ def test_the_needle_lands_where_the_depth_says() -> None:
         document, position = probe.build_haystack(plan, depth, _needle())
         lines = document.splitlines()
         assert lines[position - 1] == _needle()
-        # Placement is a fraction of the document; allow the rounding of one line.
+        # Placement is a fraction of the document's words; allow one line of rounding.
         assert abs((position / len(lines)) - depth) <= 0.02
+
+
+def test_the_document_is_the_size_that_was_asked_for() -> None:
+    # The assertion that was missing when the first version shipped: it appended
+    # target_words LINES, so a 4096-token request built 34,786 words (~45k tokens) — a
+    # server with a smaller ctx truncates that, and the probe then reports per-depth
+    # numbers for a context nobody asked for. Size is the one thing a scaling bug cannot
+    # hide behind placement or determinism.
+    document, _ = probe.build_haystack(_plan(ctx_tokens=4096), 0.5, _needle())
+    words = len(document.split())
+    # ~1.3 words per token: an estimate, but it must be the right ORDER of magnitude.
+    assert 2600 <= words <= 3700, f"4096-token request built {words} words"
+    # And it scales with the request rather than being accidentally right at one size.
+    smaller, _ = probe.build_haystack(_plan(ctx_tokens=1024), 0.5, _needle())
+    assert len(smaller.split()) < words / 2
 
 
 def test_the_same_plan_builds_the_same_haystack() -> None:
