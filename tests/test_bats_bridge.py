@@ -40,6 +40,24 @@ _BATS_SUITES: list[_bats_suites.BatsSuite] = _bats_suites.load_suites()
 _bats_results_cache: dict[str, dict[str, dict[str, Any]]] = {}
 
 
+#: Escapes bash honours inside a double-quoted string, a line continuation included.
+_BASH_DQ_ESCAPE = re.compile(r'\\(["\\$`]|\n)')
+
+
+def _decode_bash_double_quoted(name: str) -> str:
+    """Decode the escapes bash honours inside a double-quoted @test name.
+
+    This parser reads the .bats SOURCE, but bats keys a case by the name BASH DECODED:
+    ``@test "a \\"b\\"" {`` is reported as ``a "b"``.  A name carrying an escaped quote
+    therefore never matched its TAP line and the caller reported the case as "not found
+    in output" — which is what tests/unit/32-report-rows-safety.bats's
+    ``cl report: ... not \\"no ghost units\\"`` did, in a full pytest run.  Only the
+    escapes bash honours inside double quotes are decoded; a single-quoted name is
+    literal bash and is left exactly as written.
+    """
+    return _BASH_DQ_ESCAPE.sub(lambda m: "" if m.group(1) == "\n" else m.group(1), name)
+
+
 def _parse_bats_tests(bats_file: Path) -> list[str]:
     """Extract individual @test names from a .bats file.
 
@@ -55,11 +73,18 @@ def _parse_bats_tests(bats_file: Path) -> list[str]:
     The closing quote must match the opening quote (backreference) so a name
     containing an apostrophe inside double quotes — e.g. "...last request's stats" —
     is not truncated at the inner quote.
+
+    A double-quoted name is then decoded with bash's rules
+    (:func:`_decode_bash_double_quoted`), because the name this returns is the key the
+    caller looks up against bats' TAP output.
     """
     text = bats_file.read_text(encoding="utf-8")
     names: list[str] = []
     for m in re.finditer(r'^[ \t]*@test[ \t]+(["\'])(.*?)\1[ \t]*\{', text, re.MULTILINE):
-        names.append(m.group(2))
+        name = m.group(2)
+        if m.group(1) == '"':
+            name = _decode_bash_double_quoted(name)
+        names.append(name)
     return names
 
 
@@ -594,6 +619,37 @@ def test_bridge_parse_names_cases_despite_trailing_markers() -> None:
     # The diagnostics after a failure stay attached to that failure.
     assert "failed due to timeout" in results["slow"]["output"]
     assert "`false' failed" in results["fails"]["output"]
+
+
+def test_bridge_parse_decodes_a_quoted_name_the_way_bats_reports_it(tmp_path) -> None:
+    """An escaped quote in a name must still match bats' own TAP line.
+
+    This reached a full pytest run: the parser returned the SOURCE text
+    (``... not \\"no ghost units\\"``) while bats printed the DECODED name, so the only
+    case in tests/unit/32-report-rows-safety.bats that quotes anything came back as
+    "not found in output".  The assertion is an ORACLE against a real bats run of a
+    probe file rather than a restatement of the decode, so it fails on any future
+    divergence between what the parser reads and what bats reports.
+    """
+    probe = tmp_path / "quoted-name.bats"
+    probe.write_text(
+        "#!/usr/bin/env bats\n"
+        '@test "cl report: not \\"no ghost units\\"" {\n'
+        "    true\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    parsed = _parse_bats_tests(probe)
+    assert parsed == ['cl report: not "no ghost units"']
+
+    result = subprocess.run(
+        ["bats", "--tap", "--timing", str(probe)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert set(parsed) == set(_parse_bats_tap(result.stdout))
 
 
 def test_bridge_long_name_ids_carry_a_digest_of_the_full_name() -> None:
