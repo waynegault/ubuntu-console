@@ -283,6 +283,7 @@ def _run_and_cache_bats(
     file_timeout_s: int,
     test_name: str | None = None,
     run_whole_file: bool = False,
+    filter_name: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Run a BATS file and return a per-test results dict (cached by file stem).
 
@@ -335,14 +336,20 @@ def _run_and_cache_bats(
         _bats_results_cache[stem] = results
         return results
 
-    if test_name is None:
+    if test_name is None or filter_name is None:
         raise AssertionError(
-            "a BATS run needs either a test_name (filtered) or run_whole_file: "
-            "falling through to a whole-file run here would silently run the "
-            "entire suite for every case"
+            "a BATS run needs a test_name (the decoded key the case is looked up by), a "
+            "filter_name (the raw declaration bats matches --filter against), or "
+            "run_whole_file: falling through to a whole-file run here would silently run "
+            "the entire suite for every case"
         )
 
-    filter_ = re.escape(test_name)
+    # bats matches --filter against the name AS THE FILE WRITES IT, while its TAP output
+    # reports the name bash DECODED.  Verified on tests/unit/32-report-rows-safety.bats's
+    # quoted case: re.escape(raw) matches it (1..1) and re.escape(decoded) matches nothing
+    # (1..0), so filtering with the decoded form found no case and a single VS Code launch
+    # of it reported "test not found".  The two forms are the same string everywhere else.
+    filter_ = re.escape(filter_name)
 
     # A filtered run can occasionally come back with no TAP line for the
     # requested test (transient process/resource hiccup rather than a real
@@ -453,6 +460,7 @@ def _make_test(
             file_timeout_s,
             test_name=test_name,
             run_whole_file=_session_selected_every_case(request, bats_file),
+            filter_name=raw_name,
         )
         r = results.get(test_name, {"passed": False, "output": "test not found"})
         # conftest's duration tracker reads this: when the file ran as one process
@@ -665,6 +673,37 @@ def test_bridge_parse_decodes_a_quoted_name_the_way_bats_reports_it(tmp_path) ->
     )
     assert result.returncode == 0
     assert set(parsed) == set(_parse_bats_tap(result.stdout))
+
+
+def test_filtered_run_matches_a_case_whose_name_carries_an_escaped_quote() -> None:
+    """The filtered path must filter with the RAW declaration and look up the DECODED name.
+
+    bats matches ``--filter`` against the name AS THE FILE WRITES IT, while its TAP output
+    reports the name bash DECODED.  Filtering with the decoded form therefore matched nothing
+    at all, and a single VS Code launch of this case reported "test not found" instead of its
+    result.  This runs the REAL filtered path, so it fails on the pre-fix code rather than
+    restating the fix.
+    """
+    bats_file = REPO_ROOT / "tests" / "unit" / "32-report-rows-safety.bats"
+    pairs = [
+        (name, raw)
+        for stem, name, raw, _marker, _per_s, _file_s in _INDIVIDUAL_TESTS
+        if stem == bats_file.stem and "\\" in raw
+    ]
+    assert pairs, "expected the quoted case to be in the generated table"
+    decoded, raw = pairs[0]
+    assert decoded != raw
+
+    _bats_results_cache.pop(bats_file.stem, None)
+    results = _run_and_cache_bats(
+        bats_file,
+        120,
+        600,
+        test_name=decoded,
+        run_whole_file=False,
+        filter_name=raw,
+    )
+    assert results[decoded]["passed"] is True, results[decoded]["output"]
 
 
 def test_bridge_long_name_ids_carry_a_digest_of_the_full_name() -> None:
