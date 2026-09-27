@@ -4,6 +4,19 @@ Audited 2026-09-16, after a session was denied two commands it should have been
 allowed to run. The guard is not ours; this records what it does, the two gaps
 found, the local patch applied, and what to ask upstream.
 
+> **Status 2026-09-27 — the local patch is NOT applied.** The 0.24.6 companion
+> (installed 2026-09-26 14:50) replaced the guard chunk and silently reverted the
+> allowlist to the stock two verbs, so the read-only exemption described below does
+> **not** hold on this box today. `~/.local/bin/qwen-guard-patch.sh --check` reports
+> `UNKNOWN … the bundle changed shape` and refuses to patch blind. Re-audit, the exact
+> 0.24.6 strings, and the correction to this document's framing: §0.24.6. Everything
+> before that section describes the 0.23.4–0.24.5 chunk.
+>
+> Upstream's own bundled docs were right all along (`bundled/qc-helper/docs/qwen-serve.md`):
+> "Relocated commands whose subcommand is one of a small verified read-only set
+> (`rev-parse`, `cat-file`) remain allowed". The wider list was never upstream
+> behaviour — it was our patch, and this audit read the patched state as the shipped one.
+
 ## What it is, and where
 
 The "Daemon shell guard" that prefixes denials with `Daemon shell guard denied …` is
@@ -122,7 +135,7 @@ run the git command at top level. The same rule is recorded in `~/.qwen/QWEN.md`
 sessions do not have to rediscover it. Nothing here wants a patch — the fix is the
 command.
 
-## Local patch (applied 2026-09-16)
+## Local patch (applied 2026-09-16; 0.23.4–0.24.5 chunks only — reverted by 0.24.6)
 
 Two hunks in the chunk, at the guard's own extension points — no logic rewritten:
 
@@ -181,7 +194,88 @@ command and reading the guard's verdict — not through the harness above. That 
 results are a statement about the shipped, patched behaviour rather than about the
 evaluator in isolation.
 
+## 0.24.6 (re-audited 2026-09-27) — the chunk changed shape and the patch silently reverted
+
+Measured on this box. The standing warning in the patch script came true: a companion
+update replaces the chunk.
+
+    qwenlm.qwen-code-vscode-ide-companion-0.24.5-*   chunk 86 705 B   marker present, .orig-20260925-071701   -> patched
+    qwenlm.qwen-code-vscode-ide-companion-0.24.6-*   chunk 64 029 B   no marker, no backup                    -> STOCK
+
+Both 0.24.6 copies were installed at 2026-09-26 14:50. The Windows-side one
+(`...-0.24.6-win32-x64`, chunk `daemon-git-worktree-guard-BJFH5IIF.js`) is the copy the
+daemon loads. 0.24.5's chunks (`...S3SFT3H7.js`, `...UWMLREGF.js`) were patched on
+2026-09-25 and are still patched on disk — they are simply no longer the ones running.
+The 86 705 -> 64 029 byte drop is the guard's own restructure, not a deletion: the logic
+below is all still present, only its spelling changed.
+
+`qwen-guard-patch.sh --check` now reports, correctly (rc=1):
+
+      ok       daemon-git-worktree-guard-S3SFT3H7.js (patch already applied)              # 0.24.5 linux
+      UNKNOWN  daemon-git-worktree-guard-I3X7TJFR.js — stock allowlist string not found   # 0.24.6 linux
+      ok       daemon-git-worktree-guard-UWMLREGF.js (patch already applied)              # 0.24.5 win32
+      UNKNOWN  daemon-git-worktree-guard-BJFH5IIF.js — stock allowlist string not found   # 0.24.6 win32
+
+### What changed — cosmetic spelling, still two verbs
+
+The patch script matches an exact string, and that string no longer occurs:
+
+    var RELOCATED_READ_ONLY_GIT_SUBCOMMANDS = /* @__PURE__ */ new Set(["cat-file", "rev-parse"]);   # what the script matches (0.24.5)
+         RELOCATED_READ_ONLY_GIT_SUBCOMMANDS=new Set(["cat-file","rev-parse"])                      # 0.24.6
+
+Three differences, none semantic: no `var`, no `/* @__PURE__ */` annotation, and no space
+after the commas. The set is **still two verbs in 0.24.6** — Gap 1 is unaddressed
+upstream. The disqualifying flags became a named set rather than an inline check:
+
+    RELOCATED_READ_ONLY_DISQUALIFYING_FLAGS=new Set(["--filters","--output","--textconv"])
+
+and the exemption call site keeps its shape:
+
+    RELOCATED_READ_ONLY_GIT_SUBCOMMANDS.has(invocation.subcommand??"")&&!invocation.hasDisqualifyingFlag){return void 0
+
+### Still not configurable — and now checked one level higher
+
+The 2026-09-16 audit checked the chunk for setting reads. 0.24.6 reads none either
+(no `getConfiguration`, no `QWEN_*`), and the stronger check also holds: the extension
+`package.json` contributes **5** configuration properties and **none** is
+guard/shell/git-related. There is no supported way to widen the exemption; the only lever
+remains the source patch.
+
+### Gap 3 is unchanged
+
+`GIT_WORD_PATTERN=/\bgit\b/i` and a `TEXT_RELOCATION_MARKER_PATTERN` matching a bare `-C`
+are both still present, so the quoted-substitution refusal measured on 2026-09-21 still
+stands, and still dies in the same fail-closed branch.
+
+### A consequence the 2026-09-16 audit did not record: one denied shape refuses the WHOLE command line
+
+Measured 2026-09-27, while bundling harmless read-only checks with a relocated
+`git log`: the call returned **only** the denial — every other clause was refused with it.
+The guard reasons about the command line, not about clauses, so one relocated git command
+anywhere in a compound command can take down unrelated work. Run the git call as its own
+top-level command.
+
+### What a 0.24.6 re-patch would need
+
+Generalise the script's exact-match string to the 0.24.6 spelling above, keep
+`--filters`/`--output`/`--textconv` disqualifying (now via the named set), re-apply to both
+copies, then **reload the VS Code window** — the guard runs in the Windows-side extension
+host, so a WSL restart does nothing. Until then, relocated read-only verbs other than
+`cat-file`/`rev-parse` are refused, including `log`, `status` and `diff` — which is why a
+cross-repo inspection that worked in September fails in October.
+
 ## Upstream asks
+
+Re-checked against 0.24.6 on 2026-09-27. **Ask 1 is still open** — the allowlist is still
+`new Set(["cat-file","rev-parse"])`. **Ask 2 is still open** for the resolved-relocation
+case — the live message is `Daemon shell guard denied a mutating Git command outside the
+session working directory: <path>`, naming neither the verb nor the rule. **Ask 4 is
+unchanged** — both patterns behind it are still present. **Ask 3 was mis-stated and is
+largely satisfied**: upstream's bundled docs already give the two-verb set, the
+`--output`/`--textconv`/`--filters` disqualifiers, both denial message forms and the
+best-effort caveat. What they still do not give is an example of a *cwd* relocation into
+another repository (the `cd <other> && cat .git/HEAD` case), which this audit did not
+re-measure on 0.24.6.
 
 1. **Widen `RELOCATED_READ_ONLY_GIT_SUBCOMMANDS`** to the standard read-only verbs
    (the list above), keeping `--output`/`--filters`/`--textconv` disqualifying. Two
