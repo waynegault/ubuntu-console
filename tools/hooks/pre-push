@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# pre-push hook — refuse a push whose whole-tree gates fail.
+#
+# WHY THIS EXISTS (2026-09-27).  Two commits were pushed in one session, each carrying a red
+# gate, because the author ran ONE gate (or the --staged form) and pushed:
+#
+#   7957004a  §18.3 ratchet +2   — two of my own lines over 120 characters
+#   f516be8c  README count short — one test added, the documented count bumped by one, not two
+#
+# A push is what makes a red gate permanent: a workflow run is bound to its SHA, so it cannot
+# be re-run green, and deleting the run to make the history look clean is not something this
+# repo does.  Both classes are one command each to catch, and both are cheap compared with
+# the alternative — tools/lint.sh (whole tree) and tools/docs-sync-check.sh.  That is too slow
+# for every COMMIT, which is exactly why tools/hooks/pre-commit stays staged-file-only; this
+# hook runs once per PUSH instead, which is the last moment the tree can still be fixed.
+#
+# TRACKED: tools/hooks/ is the source of truth for this repo's hooks.  Install with
+# `git config core.hooksPath <repo>/tools/hooks`; install.sh does that, and
+# docs/inspection.md documents the convention.
+# To bypass in an emergency: git push --no-verify  — git's own escape.  This hook adds no
+# bypass of its own on purpose: the gates carry the escapes they need (e.g.
+# CI_STATUS_ALLOW_UNKNOWN=1 for a known API outage), so a refusal here means a gate judged the
+# TREE wrong, never the network.  If you use --no-verify, say so in the same breath.
+#
+# stdin: <local ref> <local sha> <remote ref> <remote sha> — deliberately not read.  The
+# gates inspect the working tree, and a push sends committed content from that same tree.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+rc=0
+
+run_gate() {
+    local _name="$1"; shift
+    local _out
+    if _out="$("$@" 2>&1)"; then
+        echo "pre-push: ok   $_name"
+    else
+        echo "pre-push: FAIL $_name — push refused" >&2
+        printf '%s\n' "$_out" | tail -20 >&2
+        rc=1
+    fi
+}
+
+echo "=== pre-push: whole-tree gates (about 1-2 min; that is the point) ==="
+run_gate "tools/lint.sh (whole tree)" "$REPO_ROOT/tools/lint.sh"
+run_gate "tools/docs-sync-check.sh" "$REPO_ROOT/tools/docs-sync-check.sh"
+
+if (( rc != 0 )); then
+    echo "pre-push: fix the gate above and push again, or bypass knowingly with: git push --no-verify" >&2
+fi
+exit "$rc"
