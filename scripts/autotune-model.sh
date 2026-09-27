@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 67
-#   v67 (2026-09-27): corrects one figure in v66's comment. The prompt range was quoted as
-#   17,682..17,770 for both pairs; that is the q4_0 run's. q8_0's record run was
-#   17,675..17,759, so the range is now given per pair and the baseline file is named as the
-#   record of authority. Comment only; no behaviour change.
+# Module Version: 68
+#   v68 (2026-09-27): the q8_0 prompt range in v66/v67's comment corrected to the measured
+#   17,675..17,756 — read this time from the --record run's own captured output AND from
+#   config/kv-recall-baseline.tsv, which agree. The earlier 17,759 was the --check run's
+#   first line, taken from a truncated view. Comment only; no behaviour change.
+#   v67 (2026-09-27): the prompt range had been quoted as 17,682..17,770 for BOTH pairs;
+#   that is the q4_0 run's. v67 gave it per pair and named config/kv-recall-baseline.tsv
+#   the record of authority — but restated q8_0's maximum from the --check run. Comment
+#   only; no behaviour change.
 #   v66 (2026-09-27): the gate's comment carries the FULL-CONTEXT measurement (ctx 21504,
 #   ~17.7k-token prompts: q8_0 9/9, q4_0 9/9, 3376 vs 2788 MiB), superseding the ~3.7k
 #   first pass, and records how the precision is evidenced when the build logs no cache
@@ -1252,8 +1256,9 @@ last_fail_type() {
 # MEASURED 2026-09-27 — the rows in config/kv-recall-baseline.tsv.  A first pass at
 # ctx 8192 with ~3.7k-token prompts is superseded by this one: Llama-3.2-3B-Instruct
 # -Q4_K_M at the SERVING ctx 21504, depths 0.1..0.9, one trial each.  Prompt sizes, the
-# server's own count: q4_0 17,682..17,770 — q8_0 17,675..17,759 (the per-depth figures are
-# in the baseline itself, which is the record of authority) —
+# server's own count, from the two --record runs: q4_0 17,682..17,770 — q8_0 17,675..17,756.
+# config/kv-recall-baseline.tsv holds all 18 per-depth figures and is the record of
+# authority; --check re-measures without recording.
 #   q8_0  9/9 depths recalled    3376 MiB
 #   q4_0  9/9 depths recalled    2788 MiB
 # i.e. no recall loss measurable at this size either.  The 588 MiB footprint difference is
