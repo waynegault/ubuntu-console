@@ -408,6 +408,36 @@ The 15 rows run on 2026-09-27 (session cwd `~/ubuntu-console`, other repo `~/inv
 
 All four patched chunks — 0.24.5 and 0.24.6, Linux and Windows — pass every row.
 
+### The self-heal was working, and could reach nobody (measured 2026-09-27)
+
+The patch has a cron watchdog — `~/.local/bin/qwen-guard-selfheal.sh`, `17,47 * * * *` — that
+re-applies it whenever an extension update reverts the chunk. When 0.24.6 landed it did exactly
+what it was built to do, and that was not enough:
+
+    30 entries, 04:47:01 → 19:17:02 on 2026-09-27, each ending:
+      UNKNOWN  …daemon-git-worktree-guard-I3X7TJFR.js — stock allowlist string not found
+      UNKNOWN  …daemon-git-worktree-guard-BJFH5IIF.js — stock allowlist string not found
+        --check after: STILL-NEEDS-ATTENTION
+
+It could *detect* the reversion — the new spelling defeated its exact-match anchor — but not
+repair it, and its report went to `~/.local/share/qwen-guard/selfheal.log`, which nothing reads.
+Two properties made the failure unreachable:
+
+* the script ended with `exit 0` on **both** branches, so nothing downstream could tell a repaired
+  box from one that had been unpatched for hours; and
+* this box has **no mail transport at all** (no `msmtp`/`sendmail`/`mail`/`postfix`, and `/var/mail`
+  is empty), so cron's own failure path delivers nothing either — a non-zero exit is *inert* here,
+  not an alert.
+
+What finally restored the patch was Wayne's instruction to re-patch by hand, not the watchdog.
+
+Changed 2026-09-27: the script now exits non-zero when `--check` still fails after its attempt — a
+failed run must not report success. Verified against a stub patch script in a scratch directory, so
+the real patcher was never invoked: healthy → rc=0 and no log entry; recovered → rc=0,
+`--check after: ok`; unrecoverable → rc=1, `STILL-NEEDS-ATTENTION`. **Delivery is still open**: on
+this box the exit status reaches nobody, so the next reversion will again sit unnoticed unless that
+state is surfaced on a channel someone actually reads.
+
 ## Upstream asks
 
 Re-checked against 0.24.6 on 2026-09-27. **Ask 1 is still open** — the allowlist is still
