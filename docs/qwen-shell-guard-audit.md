@@ -4,18 +4,27 @@ Audited 2026-09-16, after a session was denied two commands it should have been
 allowed to run. The guard is not ours; this records what it does, the two gaps
 found, the local patch applied, and what to ask upstream.
 
-> **Status 2026-09-27 (updated 19:22) — the patch is RE-APPLIED to 0.24.6 and waiting for a reload.**
+> **Status 2026-09-27 (updated 19:46) — the patch is re-applied to 0.24.6 and waiting for a reload.**
 > The 0.24.6 companion (installed 2026-09-26 14:50) replaced the guard chunk and silently reverted the
 > allowlist to the stock two verbs. `qwen-guard-patch.sh` then refused, correctly: its anchor was the
-> 0.23.4–0.24.5 spelling. On Wayne's instruction the script now recognises BOTH spellings and was
-> re-applied at 19:22 to both 0.24.6 copies (`.orig-20260927-192229` backups; `node --check` passed on
-> each). **It is not in effect yet** — the running daemon still executes the old code until the
-> enforcing process restarts, which for a WSL session is a VS Code window reload, not a WSL reboot
-> (measured 2026-09-16). One hunk was deliberately NOT re-applied, and the script reports it: the
-> denial-message patch's 0.24.6 anchor is unrecognised and `invocation`'s scope in that shape cannot be
-> verified by inspection, so only the allowlist hunk landed. Re-audit, the exact 0.24.6 strings, and
-> the correction to this document's framing: §0.24.6. Everything before that section describes the
-> 0.23.4–0.24.5 chunk.
+> 0.23.4–0.24.5 spelling. On Wayne's instruction the script now recognises BOTH spellings, and the
+> replacement was re-applied to both 0.24.6 copies.
+>
+> **The first application, at 19:22, was wrong and was caught before any reload.** Its replacement
+> string listed only the verbs being *added*, and it replaces the whole declaration — so it silently
+> **dropped** the stock `cat-file` and `rev-parse`, leaving a guard stricter than upstream's. Found by
+> evaluating each chunk through its own exported guard (§0.24.6 → the harness), not by re-reading the
+> diff. Both copies were restored from their pristine backups and re-applied at 19:46; the script now
+> asserts the stock pair is present in the replacement, and reports `BROKEN` if a chunk carries the
+> marker without them. All four patched chunks (0.24.5 and 0.24.6, Linux and Windows) then passed the
+> 15-row table.
+>
+> **It is still not in effect**: the running process predates the file, proved by comparing the
+> process start time with the chunk's mtime (§Which process enforces a session). One hunk is
+> deliberately NOT applied, and the script reports it: the denial-message patch's 0.24.6 anchor is
+> unrecognised and `invocation`'s scope in that shape cannot be verified by inspection, so only the
+> allowlist hunk lands. Re-audit, the exact 0.24.6 strings, and the correction to this document's
+> framing: §0.24.6. Everything before that section describes the 0.23.4–0.24.5 chunk.
 >
 > Upstream's own bundled docs were right all along (`bundled/qc-helper/docs/qwen-serve.md`):
 > "Relocated commands whose subcommand is one of a small verified read-only set
@@ -273,14 +282,111 @@ The guard reasons about the command line, not about clauses, so one relocated gi
 anywhere in a compound command can take down unrelated work. Run the git call as its own
 top-level command.
 
-### What a 0.24.6 re-patch would need
+### What a 0.24.6 re-patch needed (carried out 2026-09-27)
 
-Generalise the script's exact-match string to the 0.24.6 spelling above, keep
-`--filters`/`--output`/`--textconv` disqualifying (now via the named set), re-apply to both
-copies, then **reload the VS Code window** — the guard runs in the Windows-side extension
-host, so a WSL restart does nothing. Until then, relocated read-only verbs other than
-`cat-file`/`rev-parse` are refused, including `log`, `status` and `diff` — which is why a
-cross-repo inspection that worked in September fails in October.
+The script's exact-match string was generalised to the 0.24.6 spelling above,
+`--filters`/`--output`/`--textconv` still disqualify (now via the named set), and both
+copies were re-applied. **The remaining step is the reload** (§Which process enforces a
+session) — until it happens, relocated read-only verbs other than `cat-file`/`rev-parse`
+are refused, including `log`, `status` and `diff`, which is why a cross-repo inspection
+that worked in September fails now.
+
+### Which process enforces a session (measured 2026-09-27)
+
+The denied call was a single top-level `git -C <other> log --oneline -1`, and the process
+tree named the enforcer:
+
+    PID 372489  systemd-inhibit … --why=Qwen Code is executing tool run_shell_command
+      parent → 2015558  node --max-old-space-size=16384 --expose-gc …/dist/qwen-…
+        parent → 2015426  node …/qwenlm…-0.24.6-linux-x64/dist/qwen-…
+          parent → 2014446  node …/bootstrap-fork --type=extensionHost
+
+For a WSL-remote session the guard is evaluated inside **that session's own window**: the
+daemon is a direct child of that window's extension host. Two consequences:
+
+* The lever is a **reload of that window**, and it necessarily restarts the session that
+  triggers it. Verification has to come from a session started *after* the reload; the
+  session that triggers it cannot also observe the result.
+* The old "the guard runs on the Windows side" inference is dead (see the correction at the
+  top). The `-linux-x64` build is the loaded one, and a WSL reboot says nothing about it.
+
+The cheap deterministic test for "patched on disk but not loaded" is process start time
+against file mtime — no reload, no inference:
+
+    $ ps -o lstart=,etimes= -p 2015558
+    Sat Sep 26 21:39:33 2026            79310
+    $ stat -c '%y %n' …/daemon-git-worktree-guard-I3X7TJFR.js
+    2026-09-27 19:22:29.134716460 +0100  …/daemon-git-worktree-guard-I3X7TJFR.js
+
+A process that started 21.7 hours before the file was written cannot be running that file.
+The 19:41 denial is therefore the *predicted* outcome, not a new mystery.
+
+### The allowlist replacement dropped the stock verbs (caught 2026-09-27, before it went live)
+
+The patch replaces the whole `new Set([...])` declaration, and the replacement written for
+0.24.6 listed only the nineteen verbs being ADDED:
+
+    RELOCATED_READ_ONLY_GIT_SUBCOMMANDS=new Set([
+      // LOCAL PATCH … (comment block)
+      "blame", "count-objects", …, "whatchanged"
+    ]);
+
+`cat-file` and `rev-parse` were gone — a guard **stricter** than upstream's, because the
+stock exemption was the thing being replaced. Source counts are a trap here: both names
+still occur exactly once, inside the comment, so a naive count says "present". Evaluation
+is unambiguous:
+
+| Chunk on disk | five added verbs | `rev-parse`, `cat-file` |
+| --- | --- | --- |
+| stock 0.24.6 (pristine backup) | DENY | ALLOW |
+| patched 19:22 (faulty) | ALLOW | **DENY** |
+| patched 19:46 (fixed) | ALLOW | ALLOW |
+
+Fixed by listing the stock pair first, asserting both survive into the replacement before
+anything is written, and making the script report `BROKEN` when a chunk carries the marker
+without them — `--check` now names that exact state instead of printing `ok`.
+
+### The evaluation harness (reproduce this)
+
+Each chunk exports its own guard factory, so a file can be exercised without an IDE reload:
+
+    import { createDaemonToolGuard } from '/abs/path/daemon-git-worktree-guard-<hash>.js';
+    const guard = createDaemonToolGuard(null);        // null → built-in guard only
+    const verdict = await guard({
+      toolName: 'run_shell_command',                  // 'monitor' is the other shell tool
+      arguments: { command: 'git -C <other> log --oneline -1' },
+      effectiveCwd: '<session working directory>',
+      sessionId: 'harness',
+    });                                               // → { allowed, reason? }
+
+`createDaemonToolGuard(externalGuard)` is `async request => …`: it requires a string
+`request.effectiveCwd`, reads `request.arguments.command`, and with `externalGuard === null`
+returns the built-in decision directly. A chunk copied out of its directory will not import
+— it pulls sibling `chunk-*.js` modules by relative path — so give the copy a `.js` name in
+a directory that has those siblings (symlinks work). Node keys module loading off the file
+extension, which is why a bare `.orig-*` backup cannot be imported as-is.
+
+The 15 rows run on 2026-09-27 (session cwd `~/ubuntu-console`, other repo `~/investigator`):
+
+| Command | Expected | Stock | 19:22 | 19:46 |
+| --- | --- | --- | --- | --- |
+| `git -C <other> log --oneline -1` | allow | DENY | ALLOW | ALLOW |
+| `git -C <other> status --porcelain` | allow | DENY | ALLOW | ALLOW |
+| `git -C <other> diff --stat` | allow | DENY | ALLOW | ALLOW |
+| `git -C <other> show --stat HEAD` | allow | DENY | ALLOW | ALLOW |
+| `git -C <other> ls-files` | allow | DENY | ALLOW | ALLOW |
+| `git -C <other> rev-parse --short HEAD` | allow (stock) | ALLOW | **DENY** | ALLOW |
+| `git -C <other> cat-file -p HEAD` | allow (stock) | ALLOW | **DENY** | ALLOW |
+| `git status --porcelain` | allow | ALLOW | ALLOW | ALLOW |
+| `git -C <other> log -n 1 --output=/tmp/x` | deny (`--output`) | DENY | DENY | DENY |
+| `git -C <other> commit -m x` | deny | DENY | DENY | DENY |
+| `git -C <other> push` | deny | DENY | DENY | DENY |
+| `git -C <other> branch -D topic` | deny | DENY | DENY | DENY |
+| `git -C <other> config core.editor vim` | deny | DENY | DENY | DENY |
+| `cd <other> && cat .git/HEAD` | deny (negative control) | DENY | DENY | DENY |
+| `echo "$(git -C <other> log --oneline -1)"` | deny (Gap 3) | DENY | DENY | DENY |
+
+All four patched chunks — 0.24.5 and 0.24.6, Linux and Windows — pass every row.
 
 ## Upstream asks
 
