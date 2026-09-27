@@ -14,7 +14,13 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 22
+# Module Version: 23
+#   v23 (2026-09-27): the CI Verdict Gate is STRICT — an UNKNOWN verdict (gh unresolvable,
+#   credential rejected, API unreachable) now fails the run instead of passing silently, with
+#   CI_STATUS_ALLOW_UNKNOWN=1 as the explicit escape. Reverses v20's documented fail-open, for
+#   the reason v21 and the token fix both demonstrated: the gate degraded to UNKNOWN twice
+#   while this step printed PASS. A local commit still does not depend on egress — the staged
+#   run skips the gate — so the strictness lands in CI and in a deliberate whole-tree run.
 #   v22 (2026-09-27): the v21 line-splitting below keeps BOTH new lines inside the
 #   §18.3 120-character count — v21 as first committed had two over-long lines of its
 #   own, which raised that ratchet by exactly two (252 -> 254) and would have failed
@@ -33,7 +39,7 @@
 # @modular-section: lint
 # @depends: none (standalone CI helper)
 # @exports: (none — standalone script, not sourced)
-VERSION="1.5"
+VERSION="1.6"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -699,8 +705,20 @@ echo "=== CI Verdict Gate ==="
 # staged-file-only and says so.  This repo's ci.yml has no `concurrency:`, so a
 # superseded run QUEUES rather than being cancelled: the check matches runs by
 # headSha and reads queued/in-progress as "no verdict yet", never as green.  An
-# unexempted RED main fails here; being unable to READ the verdict does not, so
-# tools/lint.sh is not the reason CI fails when the network is absent.
+# unexempted RED main fails here.
+#
+# STRICT (2026-09-27) — this REVERSES the choice this comment used to record ("being unable
+# to READ the verdict does not [fail], so tools/lint.sh is not the reason CI fails when the
+# network is absent").  The reversal is deliberate, and the gate's own two bugs are the
+# reason: a gh it could not resolve (0c1977da) and a stored credential it silently depended
+# on (78f84b02), each of which degraded every verdict to UNKNOWN while this step printed
+# PASS.  A gate that passes when it cannot read enforces nothing, and "nothing breaks" is
+# exactly the failure mode this repo works to remove.  The cost is deliberate too: a broken
+# read now shows up as a failed lint job — named in its message, cleared by a re-run —
+# rather than as a silent PASS.  Nothing here makes a LOCAL COMMIT depend on egress: the
+# staged run skips this gate entirely, so the strictness lands in CI and in a deliberate
+# whole-tree run.  Escape, for a known outage, must be said out loud:
+#   CI_STATUS_ALLOW_UNKNOWN=1 tools/lint.sh
 if [[ "${1:-}" == "--staged" ]]
 then
     echo "  SKIP  staged run — the verdict check needs egress; CI and a manual run enforce it"
@@ -710,7 +728,13 @@ else
     then
         _ci_status_py="python3"
     fi
-    if "$_ci_status_py" "$REPO_ROOT/scripts/check_ci_status.py" --fail
+    _ci_status_args=(--fail --strict-unknown)
+    if [[ "${CI_STATUS_ALLOW_UNKNOWN:-0}" == "1" ]]
+    then
+        _ci_status_args=(--fail)
+        echo "  NOTE  CI_STATUS_ALLOW_UNKNOWN=1 — an UNKNOWN verdict will not fail this run"
+    fi
+    if "$_ci_status_py" "$REPO_ROOT/scripts/check_ci_status.py" "${_ci_status_args[@]}"
     then
         echo "  PASS  CI verdict gate"
     else

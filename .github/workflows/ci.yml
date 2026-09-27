@@ -88,7 +88,10 @@ jobs:
       - name: Install shellcheck (pinned)
         run: sudo tools/install-shellcheck.sh
 
-      - name: Run fast tests (64 smoke tests)
+      # No count in this step's name: it read "62" while the suite had 64, and drifted twice in
+      # one day. The count's authority is the README table, which tools/docs-sync-check.sh
+      # gates; a number duplicated here can only drift.
+      - name: Run fast tests
         # --print-output-on-failure: a failed `run ...; [ "$status" -eq 0 ]` assertion
         # otherwise prints the failed line and nothing else, discarding the captured output —
         # which for a script-under-test is where the cause is named.  Verified 2026-09-18 with
