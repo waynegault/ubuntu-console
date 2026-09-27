@@ -14,7 +14,11 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 21
+# Module Version: 22
+#   v22 (2026-09-27): the v21 line-splitting below keeps BOTH new lines inside the
+#   §18.3 120-character count — v21 as first committed had two over-long lines of its
+#   own, which raised that ratchet by exactly two (252 -> 254) and would have failed
+#   the whole-tree gate. No behaviour change from v21.
 #   v21 (2026-09-27): the via-consumer pass judges only findings in its OWN subject
 #   (the consumer and the via-consumer fragment). A consumer sources other files, and
 #   a finding in one of those could not be judged from a file set without its readers:
@@ -178,7 +182,8 @@ _tac_lint_via_consumer() {
         # this path was documented as covering prompt-sets.sh while reporting
         # nothing about it.
         _rc=0
-        _out="$(shellcheck -s bash -x --severity=warning --check-sourced --source-path="$REPO_ROOT" "$_c" 2>&1)" || _rc=$?
+        _out="$(shellcheck -s bash -x --severity=warning --check-sourced \
+            --source-path="$REPO_ROOT" "$_c" 2>&1)" || _rc=$?
         if (( _rc == 0 ))
         then
             echo "  PASS  ${_c#"$REPO_ROOT"/}  (analyses $_TAC_VIA_CONSUMER)"
@@ -197,7 +202,9 @@ _tac_lint_via_consumer() {
             echo "  FAIL  ${_c#"$REPO_ROOT"/}  (shellcheck, includes $_TAC_VIA_CONSUMER)" >&2
             return 1
         fi
-        echo "  PASS  ${_c#"$REPO_ROOT"/}  (analyses $_TAC_VIA_CONSUMER; $(( _n_all - _n_kept )) finding(s) in other sourced files ignored — the module graph judges those with their readers present)"
+        local _why="; $(( _n_all - _n_kept )) finding(s) in other sourced files ignored"
+        _why+=" — the module graph judges those with their readers present"
+        echo "  PASS  ${_c#"$REPO_ROOT"/}  (analyses $_TAC_VIA_CONSUMER$_why)"
     done < <(grep -ls 'prompt-sets\.sh' "$REPO_ROOT"/scripts/*.sh 2>/dev/null \
         | grep -v "/prompt-sets\.sh$")
     return 0
