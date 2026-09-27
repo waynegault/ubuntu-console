@@ -10,6 +10,7 @@ files = [
     "scripts/kgraph",
     "scripts/check_ci_status.py",
     "scripts/grpo-vram-probe.py",
+    "scripts/kv-recall-probe.py",
     "scripts/oc-health-check.py",
     "tests",
 ]

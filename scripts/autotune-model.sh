@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 63
+# Module Version: 64
+#   v64 (2026-09-27): KV_CERTIFIED_PAIRS' comment now names the retrieval probe that gate
+#   was waiting for (scripts/kv-recall-probe.py, card KVCACHE-QUANT-VALIDATE-001) and the
+#   three steps that certify a pair. No behaviour change: q8_0/q8_0 is still the only
+#   certified pair until a pair has rows in config/kv-recall-baseline.tsv.
 #===============================================================================
 # autotune-model.sh — Find optimal ctx/batch/ubatch for one GGUF model.
 #
@@ -1227,7 +1231,19 @@ last_fail_type() {
 #
 # Deliberately NOT an env knob: what makes a KV type eligible is a measurement,
 # not a preference, and a gate an environment variable can widen is not a gate.
-# When KVCACHE-QUANT-VALIDATE-001 lands, add the pairs it certifies here.
+#
+# The probe that gate waited for now exists: scripts/kv-recall-probe.py plants a needle
+# at several depths in a long context, asks for it, and scores recall PER DEPTH — never
+# as an average, because the cliff the audit doc warns about is exactly what an average
+# hides — recording to config/kv-recall-baseline.tsv.  Certifying a pair is therefore a
+# measurement, not a preference:
+#   1. start the lane with that pair's --cache-type-k/-v (the probe requires the label);
+#   2. scripts/kv-recall-probe.py --kv-type <pair> --model <label> --record <baseline>
+#      (then --check it, which fails loudly on a recall that is not reproduced);
+#   3. add the pair below, naming the recorded recall and the model it was measured on
+#      in the commit.
+# Until a pair has rows in that baseline it stays refused: a capacity squeeze must not
+# buy throughput with recall nobody measured.
 KV_CERTIFIED_PAIRS="q8_0/q8_0"
 
 # kv_pair_status <type_k> <type_v> — print "certified" when this pair may be
