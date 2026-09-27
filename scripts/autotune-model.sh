@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 64
+# Module Version: 65
+#   v65 (2026-09-27): KV_CERTIFIED_PAIRS' comment carries the FIRST MEASURED ROWS from
+#   the retrieval probe (q8_0 9/9, q4_0 9/9 depths at ~3.7k tokens; VRAM 2544 vs 2320 MiB
+#   confirms the runs differed) and says plainly why that is not yet a certification of
+#   q4_0. No behaviour change: q8_0/q8_0 remains the only certified pair.
 #   v64 (2026-09-27): KV_CERTIFIED_PAIRS' comment now names the retrieval probe that gate
 #   was waiting for (scripts/kv-recall-probe.py, card KVCACHE-QUANT-VALIDATE-001) and the
 #   three steps that certify a pair. No behaviour change: q8_0/q8_0 is still the only
@@ -1235,15 +1239,26 @@ last_fail_type() {
 # The probe that gate waited for now exists: scripts/kv-recall-probe.py plants a needle
 # at several depths in a long context, asks for it, and scores recall PER DEPTH — never
 # as an average, because the cliff the audit doc warns about is exactly what an average
-# hides — recording to config/kv-recall-baseline.tsv.  Certifying a pair is therefore a
-# measurement, not a preference:
-#   1. start the lane with that pair's --cache-type-k/-v (the probe requires the label);
+# hides — recording to config/kv-recall-baseline.tsv.
+#
+# MEASURED 2026-09-27, the first rows (both recorded in that file): Llama-3.2-3B-Instruct
+# -Q4_K_M at ctx 8192 with ~3.7k-token prompts, depths 0.1..0.9, one trial each —
+#   q8_0  9/9 depths recalled
+#   q4_0  9/9 depths recalled
+# i.e. no recall loss measurable at this size.  VRAM corroborates that the two runs really
+# differed in KV precision: 2544 MiB at q8_0 vs 2320 MiB at q4_0.
+#
+#   That is NOT a certification of q4_0/q4_0 and it stays refused: one model, one ctx
+#   (~3.7k of the 21504 the serving lane uses), one needle, one trial per depth.  Thin
+#   evidence does not widen a production gate.  What WOULD certify it: the investigator's
+#   real retrieval workload, the lane's full ctx, and several needles per depth, recorded
+#   here with the numbers named in the commit.
+#
+# Certifying a pair remains a measurement, not a preference:
+#   1. start a lane with that pair's --cache-type-k/-v (the probe requires the label);
 #   2. scripts/kv-recall-probe.py --kv-type <pair> --model <label> --record <baseline>
 #      (then --check it, which fails loudly on a recall that is not reproduced);
-#   3. add the pair below, naming the recorded recall and the model it was measured on
-#      in the commit.
-# Until a pair has rows in that baseline it stays refused: a capacity squeeze must not
-# buy throughput with recall nobody measured.
+#   3. add the pair below, naming the recorded recall and the model it was measured on.
 KV_CERTIFIED_PAIRS="q8_0/q8_0"
 
 # kv_pair_status <type_k> <type_v> — print "certified" when this pair may be
