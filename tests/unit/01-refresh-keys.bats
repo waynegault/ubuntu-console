@@ -318,6 +318,36 @@ CFG
     [[ "$refresh_out" != *"WIN_API_KEY"* ]]
 }
 
+@test "oc-refresh-keys does not record a manager-env push it could not make" {
+    # The hash/set markers are the only thing that stops the next refresh from
+    # pushing, so writing them after a failed push ended the injection for good: the
+    # next run — an interactive one included — compared equal, decided "no change"
+    # and skipped the push with nothing reported. A refresh also runs where there is
+    # no user bus (agent and CI shells), where `systemctl --user set-environment`
+    # fails rc=1 "Failed to connect to bus: No medium found" (measured 2026-09-27).
+    # This mock is that shell.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret'"
+    __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; case \"\$*\" in *set-environment*) exit 1;; *is-active*) echo active;; esac; exit 0"
+    rm -f "$TAC_CACHE_DIR/tac_win_api_keys.hash" "$TAC_CACHE_DIR/tac_win_api_keys.resolved"
+    rm -f "$SYSTEMCTL_LOG"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    local refresh_out="$output"
+    # The failed push is NAMED rather than swallowed.
+    [[ "$refresh_out" == *"NOT pushed to the manager env"* ]]
+    # Nothing was recorded as pushed.
+    [ ! -f "$TAC_CACHE_DIR/tac_win_api_keys.hash" ]
+
+    # The point of the fix: the second refresh still tries. On the pre-fix code it
+    # reads its own unverified marker, sees no change, and pushes nothing at all.
+    : > "$SYSTEMCTL_LOG"
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    run grep -c "set-environment WIN_API_KEY=" "$SYSTEMCTL_LOG"
+    [ "$output" -ge 1 ]
+}
+
 @test "oc-refresh-keys injects a newly-consumed SecretRef when no key VALUE changed (2026-09-22 name-set trigger)" {
     # Regression test for the hash-only trigger: the manager-env push used to
     # fire only when the bridged VALUES changed. Consuming a key as an env-backed

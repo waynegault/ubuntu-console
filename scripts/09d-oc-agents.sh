@@ -7,7 +7,14 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 36
+# Module Version: 37
+#   v37 (2026-09-27): __oc_inject_manager_env no longer records a manager-env push it
+#   could not make. The hash/set markers are what make the next refresh a no-op, so
+#   writing them after a failed `systemctl --user set-environment` silently ended the
+#   injection for good — every later run, interactive ones included, compared equal and
+#   skipped the push with nothing reported. Measured: without a user bus that call
+#   fails rc=1 ("Failed to connect to bus: No medium found"), the agent/CI-shell case.
+#   The failure is now counted, named, and the markers left unwritten so the run retries.
 #   v36 (2026-09-27): oc-refresh-keys' gateway-convergence wait gives up at 120s, not 60.
 #   The unit is Type=simple, so `is-active` says "active" while the gateway is still
 #   opening every agent database, and the only early exit is a `running` phase from
@@ -1021,11 +1028,29 @@ function __oc_inject_manager_env() {
     _prev_hash=$(cat "$_hash_file" 2>/dev/null || echo none)
     _now_set=$(printf '%s\n' "$@" | sort -u)
     _prev_set=$(cat "$_set_file" 2>/dev/null || echo none)
+    local _failed=()
     if [[ "$_hash" != "$_prev_hash" || "$_now_set" != "$_prev_set" ]]; then
         for _name in "$@"; do
-            systemctl --user set-environment "$_name=${!_name:-}" 2>/dev/null
+            # swallow-ok: a refresh also runs where there is no user bus (the agent/CI
+            # shell case) — a failure is counted below, keeps the markers unwritten and
+            # is reported, rather than being swallowed here
+            systemctl --user set-environment "$_name=${!_name:-}" 2>/dev/null || _failed+=("$_name")
         done
         _OC_GW_ENV_CHANGED=1
+    fi
+    # A push that did not happen must not be RECORDED as one. These two markers are
+    # the only thing that stops the next refresh from pushing — they are what makes
+    # the name-set trigger a no-op when nothing changed — so writing them after a
+    # failed push ends the injection for good: every later run, an interactive one
+    # included, compares equal, decides "no change", and skips the push in silence.
+    # Measured 2026-09-27: with no user bus `systemctl --user set-environment` fails
+    # with "Failed to connect to bus: No medium found" (rc=1), which is exactly the
+    # agent-shell case this file already handles elsewhere. Leave both markers alone
+    # and let the next run retry (set-environment is idempotent).
+    if (( ${#_failed[@]} > 0 ))
+    then
+        __tac_info "Gateway" "[${#_failed[@]} of $# key(s) NOT pushed to the manager env — will retry]" "$C_Warning"
+        return 0
     fi
     # Record BOTH halves of the trigger, so a refresh that changed either one is
     # detected next time and a refresh that changed neither stays a no-op. The
