@@ -87,10 +87,11 @@ MOCK
     [[ "$output" != *"NOT APPLIED"* ]]
 }
 
-@test "guard patch: the row prints on the path this box actually takes" {
-    # No enhanced checker in the sandbox HOME, so oc-health takes its own fallback
-    # path — the one it really uses here. __test_port comes from 06-hooks, which this
-    # harness does not carry, so it is stubbed; the assertion is about OUR row.
+@test "guard patch: the row prints on the fallback path too" {
+    # No checker in the sandbox HOME, so oc-health takes its fallback path. That is NOT
+    # the path this box takes — install.sh links the checker into place, so the enhanced
+    # branch pinned above is the live one here. __test_port comes from 06-hooks, which
+    # this harness does not carry, so it is stubbed; the assertion is about OUR row.
     __test_port() { return 0; }
     # `oc-health` reads this flag before it prints any row, and the harness does not
     # carry the module that sets it; without it the fallback reports "NOT INSTALLED"

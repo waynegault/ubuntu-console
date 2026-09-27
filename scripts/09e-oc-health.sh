@@ -9,7 +9,12 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
+#   v16 (2026-09-27): corrected two comments that claimed this box runs the FALLBACK
+#   health path because "nothing installs scripts/oc-health-check.py". False:
+#   install.sh:298-304 links that checker into ~/.openclaw/workspace/scripts/, the link
+#   is present here, and `oc health` prints the checker's own summary — so the enhanced
+#   branch is the live one and a row wired only into the fallback is invisible here.
 #   v15 (2026-09-27): oc-health reports whether the local daemon guard patch is still
 #   applied (__oc_guard_patch_state, wired into both the enhanced-checker branch and
 #   the fallback). The cron self-heal detected the 0.24.6 reversion for 15 hours into
@@ -167,10 +172,14 @@ function oc-health() {
         # row would be dead code on a box that HAS the checker installed.
         # CORRECTED 2026-09-24: this note used to end "— which is every box here", and
         # that contradicted the fallback's own note (see the end of this function).
-        # The measurement settles it: nothing installs scripts/oc-health-check.py, and
-        # `find ~/.openclaw ~/.local -name 'oc-health-check*'` returns nothing, so this
-        # box runs the FALLBACK and this branch is the dormant one here.  The call stays
-        # so a box that does have the checker still gets the row.
+        # CORRECTED 2026-09-27: it then claimed "nothing installs
+        # scripts/oc-health-check.py … so this box runs the FALLBACK and this branch is
+        # the dormant one here", which is false — install.sh:298-304 links that file
+        # into ~/.openclaw/workspace/scripts/, and the link is in place here
+        # (created 2026-09-24 14:27). `oc health` on this box prints the checker's own
+        # summary ("OpenClaw Health Summary: …", scripts/oc-health-check.py:247), so
+        # THIS is the live branch and the fallback is the dormant one. A row wired only
+        # into the fallback is therefore invisible here — wire both.
         if [[ "$output_mode" == "human" ]]
         then
             __oc_gh_keyring_recurrence
@@ -282,8 +291,9 @@ function oc-health() {
 
     # Watches for the gh keyring fall-through coming back (see the helper for why:
     # reported, never counted as an issue, and absent from --json/--plain). This is
-    # the path `oc health` takes on a box WITHOUT the enhanced checker — which is
-    # this one, verified by running the command.
+    # the path `oc health` takes on a box WITHOUT the enhanced checker — NOT this one,
+    # which has it linked in place (see the branch note above). A row added only here
+    # is invisible on this box, so both branches carry these calls.
     __oc_gh_keyring_recurrence
     # Same contract for the daemon guard patch: the cron self-heal can detect a
     # reversion and still not repair it, and its failure currently reaches no one, so

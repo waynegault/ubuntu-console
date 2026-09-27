@@ -82,11 +82,12 @@ LOG
     [[ "$output" == *"none in the retained journal"* ]]
 }
 
-@test "keyring watch: the row also prints on the path this box actually takes" {
-    # NO enhanced checker in the sandbox HOME, so oc-health takes its own fallback
-    # path — the one it really uses here (the enhanced checker does not exist on this
-    # box, verified by running the command). __test_port comes from 06-hooks, which
-    # this harness does not carry, so it is stubbed; the assertion is about OUR row.
+@test "keyring watch: the row also prints on the fallback path" {
+    # NO checker in the sandbox HOME, so oc-health takes its fallback path. That is NOT
+    # the path this box takes (corrected 2026-09-27): install.sh:298-304 links the
+    # checker into ~/.openclaw/workspace/scripts/, so the enhanced branch is the live one
+    # here and this case is the dormant path. __test_port comes from 06-hooks, which this
+    # harness does not carry, so it is stubbed; the assertion is about OUR row.
     export HOME="$BATS_TEST_TMPDIR/home-plain"
     mkdir -p "$HOME"
     __test_port() { return 0; }
