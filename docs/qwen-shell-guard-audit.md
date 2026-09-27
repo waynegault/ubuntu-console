@@ -307,6 +307,14 @@ daemon is a direct child of that window's extension host. Two consequences:
 * The lever is a **reload of that window**, and it necessarily restarts the session that
   triggers it. Verification has to come from a session started *after* the reload; the
   session that triggers it cannot also observe the result.
+* The reload has to be **initiated from the UI**. Dispatching
+  `vscode://command/workbench.action.reloadWindow` from inside WSL — via
+  `cmd.exe /c start "" …` and via PowerShell `Start-Process` — returned rc=0 both times and
+  reloaded nothing: both extension hosts kept their PIDs and start times. The bundled CLI
+  offers no alternative (`code --help` lists `--new-window`/`--reuse-window`, not
+  `--reload-window` or `--command`). So a session cannot reload the window that hosts it by
+  any supported route, and an agent inside that session must hand the keystroke to the
+  operator.
 * The old "the guard runs on the Windows side" inference is dead (see the correction at the
   top). The `-linux-x64` build is the loaded one, and a WSL reboot says nothing about it.
 
