@@ -25,19 +25,25 @@ part of the Qwen Code **VS Code IDE companion**, bundled as
 lines, 84 KB, obfuscated identifiers, readable strings; 0.24.0 is the same shape at 84.9
 KB).
 
-**There are up to three copies, and the one that matters is the Windows-side one.** At
+**There are up to three copies, and WHICH one matters depends on where the session runs.** At
 2026-09-16 17:00 this box had:
 
     ~/.vscode-server/extensions/…-0.23.4/…/daemon-git-worktree-guard-QU2CCJIE.js      (patched first — and USELESS)
     ~/.vscode-server/extensions/…-0.24.0/…/daemon-git-worktree-guard-BULXRIDA.js
     /mnt/c/Users/wayne/.vscode/extensions/…-0.24.0-win32-x64/…/daemon-git-worktree-guard-ER5WRHNU.js
 
-The daemon that evaluates commands does **not** run inside WSL: a WSL reboot happened and
-this session survived it, and the guard stayed unpatched afterwards. It is the
-**Windows-side** extension that enforces the guard, which is why patching the Linux copies
-alone changed nothing. `~/.local/bin/qwen-guard-patch.sh` now globs **both** install roots,
-and the 0.24.0 update is a standing reminder that an update replaces the chunk — the stock
-2-verb allowlist was still present in 0.24.0, so the upstream gap is unaddressed.
+Patching the 0.23.4 Linux copy changed nothing, and this document read that as "the daemon
+runs on Windows". **Re-audited 2026-09-27: that inference is not supported.** The likelier and
+simpler explanation is that 0.23.4 was not the loaded version — VS Code loads the newest
+installed build, and 0.24.0 sat beside it. A WSL-remote session's daemon and extension host
+both run WSL-side (that is what `-linux-x64` means), so the Linux copy is the one in play for
+the sessions this box actually runs; the win32 copy would be the one in play for a
+Windows-hosted session. Neither attribution can be settled by behaviour while BOTH copies are
+stock, which they are now. The practical rule that follows is why
+`~/.local/bin/qwen-guard-patch.sh` globs **both** install roots: a re-patch must cover every
+copy, and then the process enforcing the session in question must restart. The 0.24.0 update
+is a standing reminder that an update replaces the chunk — the stock 2-verb allowlist was
+still present in 0.24.0, so the upstream gap is unaddressed.
 
 It is **not configurable**: no guard-related setting id exists anywhere in the
 extension's `dist`, and the chunk reads no `settings.*` or `QWEN_*` value. The
@@ -155,9 +161,10 @@ Two hunks in the chunk, at the guard's own extension points — no logic rewritt
 - Revert: restore the `.orig-*` backup over the chunk, then reload.
 
 Taking effect requires a **VS Code window reload** (Developer: Reload Window), not a WSL
-restart: the guard runs in the Windows-side extension host, and a WSL reboot on 2026-09-16
-demonstrably did not reload it. Until that reload, the running daemon still executes the
-unpatched code — so the 12/12 harness below describes the *file*, not live behaviour.
+restart: a WSL reboot on 2026-09-16 demonstrably did not reload it. Attribute the host by the
+SESSION, not by the platform (see the correction above). Until that reload, the running daemon
+still executes the unpatched code — so the 12/12 harness below describes the *file*, not live
+behaviour.
 
 ## Verification
 
@@ -167,7 +174,7 @@ a syntax error here breaks the whole CLI).
 Behavioural verification uses the chunk's own exported entry point
 (`createDaemonToolGuard(null)` → an async evaluator over a request), so a patched
 file is exercised without a reload — re-run on 2026-09-16 17:42 against the
-Windows-side 0.24.0 chunk (`…ER5WRHNU.js`, the copy the daemon loads) and again 12/12:
+0.24.0 win32 chunk (`…ER5WRHNU.js`) and again 12/12:
 
 | Command | Expected | Result |
 |---|---|---|
@@ -202,10 +209,14 @@ update replaces the chunk.
     qwenlm.qwen-code-vscode-ide-companion-0.24.5-*   chunk 86 705 B   marker present, .orig-20260925-071701   -> patched
     qwenlm.qwen-code-vscode-ide-companion-0.24.6-*   chunk 64 029 B   no marker, no backup                    -> STOCK
 
-Both 0.24.6 copies were installed at 2026-09-26 14:50. The Windows-side one
-(`...-0.24.6-win32-x64`, chunk `daemon-git-worktree-guard-BJFH5IIF.js`) is the copy the
-daemon loads. 0.24.5's chunks (`...S3SFT3H7.js`, `...UWMLREGF.js`) were patched on
-2026-09-25 and are still patched on disk — they are simply no longer the ones running.
+Both 0.24.6 copies were installed at 2026-09-26 14:50 — the Linux one
+(`...-0.24.6-linux-x64`, chunk `daemon-git-worktree-guard-I3X7TJFR.js`, 64 029 B) and the
+Windows one (`...-0.24.6-win32-x64`, chunk `daemon-git-worktree-guard-BJFH5IIF.js`, 64 029 B),
+both stock, both carrying the same `new Set(["cat-file","rev-parse"])`. Which is loaded
+depends on where the session runs (see the correction at the top); for the WSL sessions this
+box runs it is the Linux copy. 0.24.5's chunks (`...S3SFT3H7.js` linux, `...UWMLREGF.js`
+win32) were patched on 2026-09-25 and are still patched on disk — they are simply no longer
+the ones running.
 The 86 705 -> 64 029 byte drop is the guard's own restructure, not a deletion: the logic
 below is all still present, only its spelling changed.
 
