@@ -4,13 +4,18 @@ Audited 2026-09-16, after a session was denied two commands it should have been
 allowed to run. The guard is not ours; this records what it does, the two gaps
 found, the local patch applied, and what to ask upstream.
 
-> **Status 2026-09-27 — the local patch is NOT applied.** The 0.24.6 companion
-> (installed 2026-09-26 14:50) replaced the guard chunk and silently reverted the
-> allowlist to the stock two verbs, so the read-only exemption described below does
-> **not** hold on this box today. `~/.local/bin/qwen-guard-patch.sh --check` reports
-> `UNKNOWN … the bundle changed shape` and refuses to patch blind. Re-audit, the exact
-> 0.24.6 strings, and the correction to this document's framing: §0.24.6. Everything
-> before that section describes the 0.23.4–0.24.5 chunk.
+> **Status 2026-09-27 (updated 19:22) — the patch is RE-APPLIED to 0.24.6 and waiting for a reload.**
+> The 0.24.6 companion (installed 2026-09-26 14:50) replaced the guard chunk and silently reverted the
+> allowlist to the stock two verbs. `qwen-guard-patch.sh` then refused, correctly: its anchor was the
+> 0.23.4–0.24.5 spelling. On Wayne's instruction the script now recognises BOTH spellings and was
+> re-applied at 19:22 to both 0.24.6 copies (`.orig-20260927-192229` backups; `node --check` passed on
+> each). **It is not in effect yet** — the running daemon still executes the old code until the
+> enforcing process restarts, which for a WSL session is a VS Code window reload, not a WSL reboot
+> (measured 2026-09-16). One hunk was deliberately NOT re-applied, and the script reports it: the
+> denial-message patch's 0.24.6 anchor is unrecognised and `invocation`'s scope in that shape cannot be
+> verified by inspection, so only the allowlist hunk landed. Re-audit, the exact 0.24.6 strings, and
+> the correction to this document's framing: §0.24.6. Everything before that section describes the
+> 0.23.4–0.24.5 chunk.
 >
 > Upstream's own bundled docs were right all along (`bundled/qc-helper/docs/qwen-serve.md`):
 > "Relocated commands whose subcommand is one of a small verified read-only set
@@ -234,9 +239,11 @@ The patch script matches an exact string, and that string no longer occurs:
     var RELOCATED_READ_ONLY_GIT_SUBCOMMANDS = /* @__PURE__ */ new Set(["cat-file", "rev-parse"]);   # what the script matches (0.24.5)
          RELOCATED_READ_ONLY_GIT_SUBCOMMANDS=new Set(["cat-file","rev-parse"])                      # 0.24.6
 
-Three differences, none semantic: no `var`, no `/* @__PURE__ */` annotation, and no space
-after the commas. The set is **still two verbs in 0.24.6** — Gap 1 is unaddressed
-upstream. The disqualifying flags became a named set rather than an inline check:
+Three differences, none semantic: the `/* @__PURE__ */` annotation is gone, and the `=` and the commas
+lost their spaces — the `var` IS still present. (The first draft of this section said "no `var`": that
+was a grep-pattern artefact, because the pattern used to locate the string excluded `var`. The
+re-application script anchors on the measured spelling.) The **stock** 0.24.6 chunk still lists two verbs — Gap 1 is unaddressed
+upstream, and our local re-patch (above) is what adds the rest. The disqualifying flags became a named set rather than an inline check:
 
     RELOCATED_READ_ONLY_DISQUALIFYING_FLAGS=new Set(["--filters","--output","--textconv"])
 
