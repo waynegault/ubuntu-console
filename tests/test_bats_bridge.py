@@ -58,7 +58,7 @@ def _decode_bash_double_quoted(name: str) -> str:
     return _BASH_DQ_ESCAPE.sub(lambda m: "" if m.group(1) == "\n" else m.group(1), name)
 
 
-def _parse_bats_tests(bats_file: Path) -> list[str]:
+def _parse_bats_tests(bats_file: Path, *, raw: bool = False) -> list[str]:
     """Extract individual @test names from a .bats file.
 
     Anchored to the start of a line, with the opening `{` REQUIRED.  An unanchored
@@ -77,12 +77,18 @@ def _parse_bats_tests(bats_file: Path) -> list[str]:
     A double-quoted name is then decoded with bash's rules
     (:func:`_decode_bash_double_quoted`), because the name this returns is the key the
     caller looks up against bats' TAP output.
+
+    ``raw=True`` returns the name as the FILE writes it.  The generated id's digest is
+    taken over that form on purpose: an escaping correction is not a rename, and an id
+    that moves for one churns every editor cache holding it.  When the decode was first
+    added the digest moved with it and VS Code went on asking for the old id — the names
+    here are otherwise identical, so no editor should see the difference.
     """
     text = bats_file.read_text(encoding="utf-8")
     names: list[str] = []
     for m in re.finditer(r'^[ \t]*@test[ \t]+(["\'])(.*?)\1[ \t]*\{', text, re.MULTILINE):
         name = m.group(2)
-        if m.group(1) == '"':
+        if m.group(1) == '"' and not raw:
             name = _decode_bash_double_quoted(name)
         names.append(name)
     return names
@@ -376,8 +382,8 @@ def _timeout_output(exc: subprocess.TimeoutExpired) -> str:
 
 # ── Generate one pytest test per individual BATS @test block ──────────────
 
-# (stem, test_name, suite_marker, per_test_s, file_s)
-_INDIVIDUAL_TESTS: list[tuple[str, str, pytest.MarkDecorator, int, int]] = []
+# (stem, test_name, raw_name, suite_marker, per_test_s, file_s)
+_INDIVIDUAL_TESTS: list[tuple[str, str, str, pytest.MarkDecorator, int, int]] = []
 # stem -> file, resolved in ONE pass.  `_make_test` used to search with a recursive
 # glob per test (654 of them); `**/` walks the whole repo, so the search was already
 # wasteful and making it deterministic with sorted() turned that into 654 full-tree
@@ -392,11 +398,14 @@ for _suite, _p in _bats_suites.suite_files(_BATS_SUITES):
     _stem = _p.stem
     _BATS_BY_STEM.setdefault(_stem, _p)
     _case_names = _parse_bats_tests(_p)
+    # The id's digest is taken over the RAW declaration, not the decoded name, so a
+    # future escaping fix cannot churn editor caches (see _parse_bats_tests).
+    _raw_names = _parse_bats_tests(_p, raw=True)
     _CASE_COUNT_BY_STEM.setdefault(_stem, len(_case_names))
     _marker = getattr(pytest.mark, _suite.marker)
-    for _tname in _case_names:
+    for _tname, _raw in zip(_case_names, _raw_names, strict=True):
         _INDIVIDUAL_TESTS.append(
-            (_stem, _tname, _marker, _suite.per_case_timeout_s, _suite.file_timeout_s)
+            (_stem, _tname, _raw, _marker, _suite.per_case_timeout_s, _suite.file_timeout_s)
         )
 
 
@@ -429,6 +438,7 @@ def _session_selected_every_case(request: pytest.FixtureRequest, bats_file: Path
 def _make_test(
     stem: str,
     test_name: str,
+    raw_name: str,
     marker: pytest.MarkDecorator,
     per_test_timeout_s: int,
     file_timeout_s: int,
@@ -478,9 +488,11 @@ def _make_test(
     #     2026-09-15 VS Code asked for `..._is_no`, a 60-character cut of a name that
     #     no longer existed, and its test runner errored out.
     # A digest of the FULL name makes every id depend only on the file stem and the
-    # test's own name: unique, order-independent, and still readable.
+    # test's own name: unique, order-independent, and still readable.  It is taken over
+    # the RAW declaration (raw_name) so that correcting how a name is ESCAPED - which
+    # changes nothing about the case - cannot move the id, because editors cache it.
     if len(safe_name) > 60:
-        _digest = hashlib.sha1(test_name.encode("utf-8")).hexdigest()[:8]
+        _digest = hashlib.sha1(raw_name.encode("utf-8")).hexdigest()[:8]
         safe_name = f"{safe_name[:60]}_{_digest}"
 
     _final = f"test_{safe_stem}_{safe_name}"
@@ -513,8 +525,8 @@ def _make_test(
     return _test
 
 
-for _stem, _tname, _marker, _per_test_s, _file_s in _INDIVIDUAL_TESTS:
-    _fn = _make_test(_stem, _tname, _marker, _per_test_s, _file_s)
+for _stem, _tname, _raw, _marker, _per_test_s, _file_s in _INDIVIDUAL_TESTS:
+    _fn = _make_test(_stem, _tname, _raw, _marker, _per_test_s, _file_s)
     if _fn.__name__ in globals():
         # Ids are unique by construction (unique file stems + a digest of the full
         # name), so this can only fire if two @test blocks in one file share a name —
@@ -641,6 +653,9 @@ def test_bridge_parse_decodes_a_quoted_name_the_way_bats_reports_it(tmp_path) ->
     )
     parsed = _parse_bats_tests(probe)
     assert parsed == ['cl report: not "no ghost units"']
+    # The RAW form is what the generated id's digest is taken over, so correcting an
+    # escape cannot move an id an editor is holding.
+    assert _parse_bats_tests(probe, raw=True) == ['cl report: not \\"no ghost units\\"']
 
     result = subprocess.run(
         ["bats", "--tap", "--timing", str(probe)],
@@ -660,11 +675,11 @@ def test_bridge_long_name_ids_carry_a_digest_of_the_full_name() -> None:
     """
     generated = _generated_tests()
     checked = 0
-    for stem, test_name, _marker, _per_test_s, _file_s in _INDIVIDUAL_TESTS:
+    for stem, test_name, raw_name, _marker, _per_test_s, _file_s in _INDIVIDUAL_TESTS:
         safe_name = re.sub(r"_+", "_", re.sub(r"[^a-zA-Z0-9_]", "_", test_name)).strip("_")
         if len(safe_name) <= 60:
             continue
-        digest = hashlib.sha1(test_name.encode("utf-8")).hexdigest()[:8]
+        digest = hashlib.sha1(raw_name.encode("utf-8")).hexdigest()[:8]
         expected = f"test_{re.sub(r'[^a-zA-Z0-9_]', '_', stem)}_{safe_name[:60]}_{digest}"
         assert expected in generated, f"missing generated id {expected!r} for {test_name!r}"
         checked += 1
