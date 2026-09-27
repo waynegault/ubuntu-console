@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 65
+# Module Version: 66
+#   v66 (2026-09-27): the gate's comment carries the FULL-CONTEXT measurement (ctx 21504,
+#   ~17.7k-token prompts: q8_0 9/9, q4_0 9/9, 3376 vs 2788 MiB), superseding the ~3.7k
+#   first pass, and records how the precision is evidenced when the build logs no cache
+#   type. q4_0 stays refused: one model, one needle, one trial is not a certification.
 #   v65 (2026-09-27): KV_CERTIFIED_PAIRS' comment carries the FIRST MEASURED ROWS from
 #   the retrieval probe (q8_0 9/9, q4_0 9/9 depths at ~3.7k tokens; VRAM 2544 vs 2320 MiB
 #   confirms the runs differed) and says plainly why that is not yet a certification of
@@ -1241,18 +1245,25 @@ last_fail_type() {
 # as an average, because the cliff the audit doc warns about is exactly what an average
 # hides — recording to config/kv-recall-baseline.tsv.
 #
-# MEASURED 2026-09-27, the first rows (both recorded in that file): Llama-3.2-3B-Instruct
-# -Q4_K_M at ctx 8192 with ~3.7k-token prompts, depths 0.1..0.9, one trial each —
-#   q8_0  9/9 depths recalled
-#   q4_0  9/9 depths recalled
-# i.e. no recall loss measurable at this size.  VRAM corroborates that the two runs really
-# differed in KV precision: 2544 MiB at q8_0 vs 2320 MiB at q4_0.
+# MEASURED 2026-09-27 — the rows in config/kv-recall-baseline.tsv.  A first pass at
+# ctx 8192 with ~3.7k-token prompts is superseded by this one: Llama-3.2-3B-Instruct
+# -Q4_K_M at the SERVING ctx 21504, prompts 17,682..17,770 tokens (the server's own
+# count), depths 0.1..0.9, one trial each —
+#   q8_0  9/9 depths recalled    3376 MiB
+#   q4_0  9/9 depths recalled    2788 MiB
+# i.e. no recall loss measurable at this size either.  The 588 MiB footprint difference is
+# the KV allocation, and that is HOW the precision is evidenced: this build does not log
+# the cache type (its full log is 33 lines, no llama_kv_cache_init), so the flags each
+# server was launched with plus that footprint are the evidence.  The q8_0 run reproduced
+# the serving lane's own footprint exactly (3376 MiB), a second independent check that it
+# was the lane's configuration.
 #
-#   That is NOT a certification of q4_0/q4_0 and it stays refused: one model, one ctx
-#   (~3.7k of the 21504 the serving lane uses), one needle, one trial per depth.  Thin
-#   evidence does not widen a production gate.  What WOULD certify it: the investigator's
-#   real retrieval workload, the lane's full ctx, and several needles per depth, recorded
-#   here with the numbers named in the commit.
+#   Still NOT a certification of q4_0/q4_0, and it stays refused: one model, one needle,
+#   one trial per depth, and the prompt is ~17.7k tokens against the lane's 21504 ceiling
+#   rather than at it.  Thin evidence does not widen a production gate.  What WOULD certify
+#   it: the investigator's real retrieval workload, several needles per depth, and trials
+#   enough to bound noise — recorded here with the numbers named in the commit.  Worth
+#   making deliberately: q4_0 buys ~588 MiB of headroom and costs nothing measurable here.
 #
 # Certifying a pair remains a measurement, not a preference:
 #   1. start a lane with that pair's --cache-type-k/-v (the probe requires the label);
