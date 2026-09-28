@@ -110,6 +110,16 @@ _load_console() {
     source "$REPO_ROOT/scripts/12-dashboard-help.sh"
 }
 
+# _real_bound — the log bound exactly as 01-constants declares it, read through a
+# child shell.  It cannot be inherited: bats runs a file's free code (and every
+# sourced module) inside a FUNCTION, so a `declare -ri` there is a local — measured,
+# 01-constants' `export`s reach a test body while LOG_MAX_BYTES does not.  Assigning
+# this result in a test body makes it the plain global the witness reads, and the
+# value still comes from the constant rather than from a literal of this file's own.
+_real_bound() {
+    bash -c "source '$REPO_ROOT/scripts/01-constants.sh'; printf '%s' \"\$LOG_MAX_BYTES\""
+}
+
 # _stub_killers — remove every path in these functions that could touch the live
 # box: the process killer, the GPU probe, the registry sync and `oc`.
 _stub_killers() {
@@ -631,6 +641,87 @@ SH
     [[ "$output" == *"check-contracts[state]: OK"* ]]
     [[ "$output" != *"read-back witnesses: 0 verified"* ]]
     [[ "$output" == *"read-back witnesses: "*" not witnessed (printed above)"* ]]
+}
+
+@test "read-back: __log_trim_within_bound demands the rewritten file be inside the bound" {
+    _load_console
+    source "$REPO_ROOT/scripts/08-maintenance.sh"
+    LOG_MAX_BYTES=$(_real_bound)
+    local _f="$BATS_TEST_TMPDIR/log"
+    local _status
+
+    # Over the bound.  LOG_MAX_BYTES is 1 MiB and `declare -ri`, so the file is real
+    # rather than the bound being lowered: 1.5 MiB.
+    head -c 1572864 /dev/zero | tr '\0' 'x' > "$_f"
+    _status=0
+    __log_trim_within_bound "$_f" || _status=$?
+    [[ "$_status" -ne 0 ]] || { echo "a file still over the bound must fail the read-back"; return 1; }
+
+    head -c 1024 /dev/zero | tr '\0' 'x' > "$_f"
+    _status=0
+    __log_trim_within_bound "$_f" || _status=$?
+    [[ "$_status" -eq 0 ]] || {
+        echo "a bounded file must pass: size=$(stat -c%s "$_f") bound=${LOG_MAX_BYTES:-unset} status=$_status"
+        return 1
+    }
+
+    # A file that no longer exists is not a verified trim.
+    _status=0
+    __log_trim_within_bound "$BATS_TEST_TMPDIR/gone" || _status=$?
+    [[ "$_status" -ne 0 ]] || { echo "a vanished file must fail the read-back"; return 1; }
+}
+
+@test "logtrim: the 'Trimmed' line is gated on the read-back, and the count is not the claim" {
+    # THE INJECTED-FAILURE CASE.  60 lines x 20 KiB = 1.2 MiB, and `tail -n 1000`
+    # keeps every one of them, so the loop's own count says "trimmed" while the claim
+    # the message makes is false.  The read-back must catch it: pre-fix this printed
+    # "[Trimmed 1 file(s)]" and exited 0.
+    _load_console
+    source "$REPO_ROOT/scripts/08-maintenance.sh"
+    LOG_MAX_BYTES=$(_real_bound)
+    export OC_LOGS="$BATS_TEST_TMPDIR/logs"
+    export ErrorLogPath="$BATS_TEST_TMPDIR/err.log"
+    export LLM_LOG_FILE="$BATS_TEST_TMPDIR/llm.log"
+    mkdir -p "$OC_LOGS"
+    python3 - "$OC_LOGS/stuck.log" <<'PY'
+import sys
+with open(sys.argv[1], "w") as fh:
+    for _ in range(60):
+        fh.write("x" * 20480 + "\n")
+PY
+
+    run logtrim
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"read-back FAILED"* ]]
+    [[ "$output" != *"[Trimmed"* ]]
+}
+
+@test "logtrim: a log brought inside the bound is reported trimmed, and the file really shrank" {
+    _load_console
+    source "$REPO_ROOT/scripts/08-maintenance.sh"
+    LOG_MAX_BYTES=$(_real_bound)
+    export OC_LOGS="$BATS_TEST_TMPDIR/logs2"
+    export ErrorLogPath="$BATS_TEST_TMPDIR/err2.log"
+    export LLM_LOG_FILE="$BATS_TEST_TMPDIR/llm2.log"
+    mkdir -p "$OC_LOGS"
+    python3 - "$OC_LOGS/ok.log" <<'PY'
+import sys
+with open(sys.argv[1], "w") as fh:
+    for i in range(200000):
+        fh.write("line %d\n" % i)
+PY
+
+    run logtrim
+    [[ "$status" -eq 0 ]] || {
+        echo "logtrim must report success; size=$(stat -c%s "$OC_LOGS/ok.log") bound=$LOG_MAX_BYTES"
+        echo "output: $output"
+        return 1
+    }
+    [[ "$output" == *"Trimmed"* ]]
+    # The observable, not the message: the file itself is now inside the bound.
+    local _size
+    _size=$(stat -c%s "$OC_LOGS/ok.log")
+    (( _size <= LOG_MAX_BYTES )) || { echo "still over the bound after a reported trim"; return 1; }
 }
 
 # end of file

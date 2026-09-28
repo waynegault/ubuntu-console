@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
@@ -61,7 +61,15 @@ function xo() {
 
     if (( _was_running ))
     then
-        __tac_info "Gateway Processes" "[TERMINATED]" "$C_Error"
+        # The stop is claimed only after it is read back: the unit is no longer
+        # active and the port is released (__oc_gateway_gone, 09a).  Without this the
+        # line was a claim about a process nobody had re-checked.
+        if __oc_gateway_gone; then
+            __tac_info "Gateway Processes" "[TERMINATED]" "$C_Error"
+        else
+            __tac_info "Gateway Processes" "[STILL RUNNING — the stop did not take]" "$C_Error"
+            return 1
+        fi
     else
         __tac_info "Gateway" "[NOT RUNNING]" "$C_Dim"
     fi

@@ -258,4 +258,41 @@ __so_test_prelude() {
     [[ "$output" == *"openclaw gateway restart"* ]]
 }
 
+@test "xo: a gateway still active after the stop is not reported TERMINATED" {
+    # THE INJECTED-FAILURE CASE for xo's read-back (docs/contracts/command-contracts.yaml,
+    # entry `xo`): the unit is queried and still active, so the stop did not take.  Pre-fix
+    # this printed "[TERMINATED]" and exited 0 — a success message with no read-back behind
+    # it.  __oc_safe_gateway_shutdown is stubbed so nothing here can touch the live gateway.
+    export __TAC_OPENCLAW_OK=1
+    systemctl() { return 0; }
+    __oc_safe_gateway_shutdown() { return 0; }
+    __llm_server_running() { return 1; }
+
+    run xo
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"STILL RUNNING"* ]]
+    [[ "$output" != *"TERMINATED"* ]]
+}
+
+@test "xo: TERMINATED is printed only once the unit and the port are both gone" {
+    # The other half, so the case above cannot pass by always reporting failure.  The
+    # first systemctl call is xo's own "is anything running?" probe (active), the second
+    # is the witness (gone), and __test_port is stubbed free by setup() — so the stop is
+    # genuinely read back as taken.
+    export __TAC_OPENCLAW_OK=1
+    systemctl() {
+        if [[ -f "$TAC_TEST_TMPDIR/witness-asked" ]]; then
+            return 1
+        fi
+        : > "$TAC_TEST_TMPDIR/witness-asked"
+        return 0
+    }
+    __oc_safe_gateway_shutdown() { return 0; }
+    __llm_server_running() { return 1; }
+
+    run xo
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"TERMINATED"* ]]
+}
+
 # end of file

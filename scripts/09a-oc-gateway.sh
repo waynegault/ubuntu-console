@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -885,6 +885,24 @@ function __oc_safe_gateway_shutdown() {
         __tac_info "Gateway" "[DB HANDLE CHECK TIMED OUT — continuing safely]" "$C_Warning"
     fi
     rm -f "$OC_ROOT/supervisor.lock"
+}
+
+# ---------------------------------------------------------------------------
+# __oc_gateway_gone — read-back witness for xo's "stops gateway service/processes"
+# claim (docs/contracts/command-contracts.yaml, entry `xo`).
+#
+# The same shape `model stop` uses (__llm_server_gone): the stop is not taken on
+# faith.  The gateway is gone when its systemd unit is no longer active AND the port
+# it serves on has been released — an "active" read can be stale for minutes here
+# (see the 2026-09-23 restart race), so the port is the second, independent witness.
+# ---------------------------------------------------------------------------
+function __oc_gateway_gone() {
+    # swallow-ok: a unit that cannot be queried is not "active", which is the answer this witness wants; a real query failure still leaves the port check below to fail the claim
+    if systemctl --user is-active --quiet "openclaw-gateway.service" 2>/dev/null; then
+        return 1
+    fi
+    __test_port "$OC_PORT" && return 1
+    return 0
 }
 
 # end of file

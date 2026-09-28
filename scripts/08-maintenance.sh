@@ -2,7 +2,8 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 68
+# Module Version: 69
+#   v69 (2026-09-28): logtrim reads its trim back before reporting it (__log_trim_within_bound).
 #   v68 (2026-09-26): the cooldown rewrite separates a MISSING DB from an unreadable one.
 #   grep reports both as rc 2, so v58's guard refused the first-ever write: on a fresh HOME
 #   nothing could record a cooldown at all.  The case that catches it lives in the full
@@ -2338,10 +2339,30 @@ function sysinfo() {
 }
 
 # ---------------------------------------------------------------------------
+# __log_trim_within_bound — read-back witness for logtrim's "rewrites target log
+# files" claim (docs/contracts/command-contracts.yaml, entry `logtrim`).
+#
+# The loop counts the files it rewrote, and that count is not the claim.  The claim
+# is that they are now BOUNDED, so this re-stats exactly the files this run rewrote
+# and returns non-zero when one is still over the bound: a rewritten log that stayed
+# oversized means the trim did not take, whatever the count says.
+# ---------------------------------------------------------------------------
+function __log_trim_within_bound() {
+    local _f _size
+    for _f in "$@"; do
+        [[ -f "$_f" ]] || return 1
+        _size=$(stat -c%s "$_f") || return 1
+        (( _size <= LOG_MAX_BYTES )) || return 1
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # logtrim — Trim logs larger than 1 MB to their last 1000 lines.
 # ---------------------------------------------------------------------------
 function logtrim() {
     local total=0
+    local -a _trimmed=()
     local _had_nullglob=0; shopt -q nullglob && _had_nullglob=1
     shopt -s nullglob
     for logfile in "$OC_LOGS"/*.log "$ErrorLogPath" "$LLM_LOG_FILE"
@@ -2352,12 +2373,19 @@ function logtrim() {
             tail -n 1000 "$logfile" > "${logfile}.tmp" || continue
             [[ -s "${logfile}.tmp" ]] || { rm -f "${logfile}.tmp"; continue; }
             mv "${logfile}.tmp" "$logfile" || { rm -f "${logfile}.tmp"; continue; }
+            _trimmed+=("$logfile")
             total=$(( total + 1 ))
         fi
     done
     (( _had_nullglob )) || shopt -u nullglob
     if (( total > 0 )); then
-        __tac_info "logtrim" "[Trimmed $total file(s)]" "$C_Success"
+        if __log_trim_within_bound "${_trimmed[@]}"; then
+            __tac_info "logtrim" "[Trimmed $total file(s)]" "$C_Success"
+        else
+            local _msg="[read-back FAILED: a trimmed log is still over the ${LOG_MAX_BYTES}-byte bound]"
+            __tac_info "logtrim" "$_msg" "$C_Error"
+            return 1
+        fi
     else
         __tac_info "logtrim" "[No files trimmed]" "$C_Dim"
     fi
