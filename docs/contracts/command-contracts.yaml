@@ -153,6 +153,19 @@ commands:
         - human-readable table or JSON object
       exit_code: non-zero when health checks fail
 
+  - name: oc-restart-check
+    family: openclaw
+    summary: Report whether WSL can be restarted now, and what would be interrupted
+    version: 1
+    updated: 2026-09-28
+    status: active
+    scope: both
+    contract:
+      side_effects: []
+      output_shape:
+        - named blockers, or an all-clear line
+      exit_code: 0 safe, 1 not safe, 2 could not measure
+
   - name: model list
     family: llm
     summary: Show registry models with active marker

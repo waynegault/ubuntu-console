@@ -2,7 +2,7 @@
 # ─── Module: 09-openclaw ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 27
+# Module Version: 28
 # ==============================================================================
 # 9. OPENCLAW MANAGER (THIN LOADER)
 # ==============================================================================
@@ -16,6 +16,7 @@
 #   oc-agent-use, oc-health, oc-diag, oc-doctor-local, oc-failover,
 #   wacli, oc-kgraph, owk, ologs, ocroot, lc, oc-update,
 #   oc-cron, oc-skills, oc-plugins, oc-plugin-update, oc-tail,
+#   oc-restart-check,
 #   oc-channels, oc-sec, oc-stinger, oc-tui, oc-config, oc-docs,
 #   oc-usage, oc-local-llm, oc-sync-models, ocms, oc-browser,
 #   oc-nodes, oc-sandbox, oc-env, oc-cache-clear, oc-trust-sync,
