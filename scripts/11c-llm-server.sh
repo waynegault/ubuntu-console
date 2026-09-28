@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -235,6 +235,15 @@ function __llm_pid_is_lane() {
     then
         _pexe=$(__llm_proc_exe "$_ppid") || _pexe=""
         _pbase="${_pexe##*/}"
+        # comm is the FALLBACK, and it is load-bearing rather than tidiness: the USER
+        # systemd manager's /proc/PID/exe is EACCES for an ordinary reader (measured
+        # 2026-09-28 - pid 568, errno 13), and that manager is the parent every lane has.
+        # Without this, the criterion that "needs no systemd query" answers "not a lane"
+        # for exactly the case it exists for.  Read with $(< ) so no redirection is added.
+        if [[ -z "$_pbase" && -r "/proc/${_ppid}/comm" ]]
+        then
+            _pbase=$(< "/proc/${_ppid}/comm")
+        fi
         [[ "$_pbase" == "systemd" ]] && return 0
     fi
 
