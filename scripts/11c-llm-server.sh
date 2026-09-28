@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -11,7 +11,8 @@
 #   __llm_server_running, __llm_server_gone,
 #   __llm_server_stop, __llm_python_bin_resolve, __llm_health_timeout,
 #   __llm_burn_request_timeout, __llm_wait_for_health, __llm_quant_rating,
-#   __llm_proc_is_server, __llm_server_pids
+#   __llm_proc_is_server, __llm_server_pids, __llm_lane_pids, __llm_pid_is_lane,
+#   __llm_owned_server_pids
 
 # Globals assigned by sibling modules at source time, named here instead of
 # relying on a file-wide `disable=SC2154` (removed 2026-09-15): shellcheck lints
@@ -154,11 +155,101 @@ function __llm_server_pids() {
 }
 
 # ---------------------------------------------------------------------------
+# LANE PROTECTION — which llama backends TAC-side stop logic may NOT kill.
+#
+# WHY THIS IS DERIVED AND NOT A LIST (measured 2026-09-28, mid bench pass).  The
+# protection was a hand-written list of three unit names.  The fleet grew two
+# lanes on 2026-09-19 (d5d18e4c, 5c45f623) and the list did not, so every
+# `model stop` swept those two up.  The CPU lane's journal, during one bench pass:
+#
+#     03:13:46  Main process exited, code=killed, status=9/KILL
+#     03:13:51  Scheduled restart job, restart counter is at 18
+#     03:14:16  cleaning up before exit          <- killed again
+#     03:14:22  Failed with result 'start-limit-hit'
+#
+# i.e. the pass killed a live lane row after row until systemd gave up and left
+# it failed.  A name list cannot stay correct against a growing fleet, so the set
+# is derived from the process table and from systemd instead.
+#
+# Three criteria, ORed.  Each has a blind spot, and the failure direction here
+# must always be "protect too much" — never "kill a lane":
+#   * the pid is the MainPID of an ACTIVE llama-*.service user unit: the lanes as
+#     systemd sees them.  Blind to a lane started outside systemd.
+#   * the pid's PARENT is a systemd binary: true for every systemd-spawned
+#     backend, false for anything TAC or a bench spawned.  This is the criterion
+#     that needs no systemd query, so it still holds where `systemctl --user` has
+#     no session bus (measured: this box's CI runners).
+#   * the pid owns LLM_SERVICE_PORT (:18081): the fleet server by port, the
+#     identity the rest of this module already uses.
+# ---------------------------------------------------------------------------
+
+# __llm_lane_pids — the MainPID of every ACTIVE llama-*.service user unit, one per
+# line.  Empty (not an error) when systemd has nothing to report.
+function __llm_lane_pids() {
+    local _units _unit _pid
+    _units=$(systemctl --user list-units --type=service --state=active \
+                 --no-legend --plain 'llama-*.service' 2>/dev/null | awk '{print $1}')
+    while IFS= read -r _unit
+    do
+        [[ -n "$_unit" ]] || continue
+        _pid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n')
+        [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        (( _pid > 0 )) || continue
+        printf '%s\n' "$_pid"
+    done <<< "$_units"
+}
+
+# __llm_pid_is_lane <pid> [lanes] — 0 when this pid is a fleet lane TAC must not
+# touch.  <lanes> is an optional pre-computed __llm_lane_pids result: the caller
+# normally has one already, and computing it is a systemctl round trip.
+function __llm_pid_is_lane() {
+    local _pid="${1:-}" _lanes="${2:-}" _ppid _pexe _pbase _sport_pid _lane
+    [[ "$_pid" =~ ^[0-9]+$ ]] || return 1
+    [[ -n "$_lanes" ]] || _lanes=$(__llm_lane_pids)
+
+    while IFS= read -r _lane
+    do
+        [[ "$_lane" == "$_pid" ]] && return 0
+    done <<< "$_lanes"
+
+    # /proc/PID/status, not /proc/PID/stat: comm can carry spaces and parens.
+    _ppid=$(awk '/^PPid:/ {print $2}' "/proc/${_pid}/status" 2>/dev/null)
+    if [[ "$_ppid" =~ ^[0-9]+$ ]]
+    then
+        _pexe=$(__llm_proc_exe "$_ppid") || _pexe=""
+        _pbase="${_pexe##*/}"
+        [[ "$_pbase" == "systemd" ]] && return 0
+    fi
+
+    _sport_pid=$(ss -tlnp "sport = :${LLM_SERVICE_PORT:-18081}" 2>/dev/null \
+        | awk 'match($0, /pid=([0-9]+)/, m) { print m[1]; exit }')
+    [[ "$_sport_pid" == "$_pid" ]] && return 0
+
+    return 1
+}
+
+# __llm_owned_server_pids [user] [lanes] — the llama backends `model stop` OWNS:
+# every backend for <user> that is not a fleet lane.  THIS is the single definition
+# both the killer and its read-back use, so the two cannot disagree about what the
+# stop was supposed to remove.
+function __llm_owned_server_pids() {
+    local _user="${1-${USER:-}}" _lanes="${2:-}" _pg_out="" _pid
+    [[ -n "$_lanes" ]] || _lanes=$(__llm_lane_pids)
+    _pg_out=$(__llm_server_pids "$_user")
+    while IFS= read -r _pid
+    do
+        [[ -n "$_pid" ]] || continue
+        __llm_pid_is_lane "$_pid" "$_lanes" && continue
+        printf '%s\n' "$_pid"
+    done <<< "$_pg_out"
+}
+
+# ---------------------------------------------------------------------------
 # __llm_server_gone — read-back witness for the "stops model server process"
 # side effect of `model stop`.
 #
-# @returns 0 only when NO llama backend is running for this user AND the serving
-# port is no longer bound; 1 otherwise.
+# @returns 0 only when no backend `model stop` OWNS is still running AND the
+# serving port is no longer bound; 1 otherwise.
 #
 # WHY IT EXISTS (card CLAIMED-SUCCESS-WITNESS-001): `__model_stop` printed
 # "[STOPPED]" unconditionally.  `__llm_server_stop` waits for the processes it
@@ -169,9 +260,16 @@ function __llm_server_pids() {
 # checked because each one alone is insufficient: a backend can be alive without
 # the port (between crashees) and the port can be held by something that is not a
 # llama backend at all.
+#
+# SCOPED TO THE OWNED SET (2026-09-28): this witness used to ask whether ANY
+# llama backend ran for this user, which on a multi-lane box is always true, so it
+# reported "[FAILED ... NOT stopped]" on 22 of 22 rows of a bench pass whatever
+# the stop had actually done.  An alarm that can never go green is worse than
+# noise: it teaches the reader to skip the one line this card exists to make
+# meaningful.  It now asks the same question the killer acts on.
 # ---------------------------------------------------------------------------
 function __llm_server_gone() {
-    __llm_server_running && return 1
+    [[ -n "$(__llm_owned_server_pids)" ]] && return 1
     __test_port "$LLM_PORT" && return 1
     return 0
 }
@@ -185,8 +283,8 @@ function __llm_server_running() {
 
 function __llm_server_stop() {
     local _llm_user _grace _tries _i
-    local _llm_pid _pid _unit _upid _sport_pid
-    local -a _pids=() _svc_pids=()
+    local _llm_pid _pid _lanes
+    local -a _pids=()
 
     _llm_user="${USER:-$(id -un 2>/dev/null || true)}"
     _grace="${LLM_SERVER_STOP_GRACE_SECONDS:-8}"
@@ -194,51 +292,30 @@ function __llm_server_stop() {
     _tries=$((_grace * 5))
     ((_tries < 5)) && _tries=5
 
-    # Protected PIDs: every systemd-managed llama unit — fleet Xe
-    # (llama-xe-minicpm5-1b-chat.service, LLM_SERVICE_PORT owner), embed and the
-    # CUDA chat lane.  They are gateway-managed and self-healing; TAC-side stop
-    # logic must never TERM/KILL them, even when the pattern sweep below matches
-    # them.
-    for _unit in llama-xe-minicpm5-1b-chat.service llama-xe-embeddinggemma-embed.service \
-                 llama-cuda-llama32-3b-chat.service
-    do
-        _upid=$(systemctl --user show -p MainPID --value "$_unit" 2>/dev/null | tr -d ' \n' || true)
-        if [[ "$_upid" =~ ^[0-9]+$ ]] && (( _upid > 0 ))
-        then
-            _svc_pids+=("$_upid")
-        fi
-    done
-    # Fallback: the process bound to LLM_SERVICE_PORT when systemd is not
-    # reporting a MainPID (e.g. unit started outside systemd this session).
-    _sport_pid=$(ss -tlnp "sport = :${LLM_SERVICE_PORT:-18081}" 2>/dev/null | awk 'match($0, /pid=([0-9]+)/, m) { print m[1]; exit }' || true)
-    if [[ "$_sport_pid" =~ ^[0-9]+$ ]]
-    then
-        _svc_pids+=("$_sport_pid")
-    fi
+    # The protected set, computed ONCE: it is the same for every candidate and for
+    # every pass of the wait loop below, and __llm_lane_pids shells out to
+    # systemctl.  See the LANE PROTECTION note above the helpers for the three
+    # criteria and for why this is derived rather than a list of unit names.
+    _lanes=$(__llm_lane_pids)
 
-    _llm_pid_is_protected() {
-        local _cand="$1" _ppid
-        for _ppid in "${_svc_pids[@]:-}"
-        do
-            [[ "$_cand" == "$_ppid" ]] && return 0
-        done
-        return 1
-    }
-
-    # Collect PIDs — avoid mapfile + process substitution (crashes nested context)
+    # Collect PIDs — the servers this stop OWNS, i.e. every llama backend that is
+    # not a fleet lane.  Deliberately not mapfile + process substitution (crashes
+    # in nested contexts).
     local _pg_out=""
-    _pg_out=$(__llm_server_pids "$_llm_user")
+    _pg_out=$(__llm_owned_server_pids "$_llm_user" "$_lanes")
     while IFS= read -r _pid
     do
         [[ -z "$_pid" ]] && continue
-        _llm_pid_is_protected "$_pid" && continue
         _pids+=("$_pid")
     done <<< "$_pg_out"
 
+    # A backend can hold the serving port without the scan above recognising it
+    # (a launcher, or a build the exe check does not cover); add it unless it is a
+    # lane.
     _llm_pid=$(ss -tlnp "sport = :${LLM_PORT}" 2>/dev/null | awk 'match($0, /pid=([0-9]+)/, m) { print m[1]; exit }')
-    if [[ "$_llm_pid" =~ ^[0-9]+$ ]]
+    if [[ "$_llm_pid" =~ ^[0-9]+$ ]] && ! __llm_pid_is_lane "$_llm_pid" "$_lanes"
     then
-        _llm_pid_is_protected "$_llm_pid" || _pids+=("$_llm_pid")
+        _pids+=("$_llm_pid")
     fi
 
     if (( ${#_pids[@]} == 0 ))
@@ -249,18 +326,16 @@ function __llm_server_stop() {
     for _pid in "${_pids[@]}"
     do
         [[ "$_pid" =~ ^[0-9]+$ ]] || continue
-        _llm_pid_is_protected "$_pid" && continue
         kill -TERM "$_pid" 2>/dev/null || true
     done
 
     for ((_i=0; _i<_tries; _i++))
     do
         _pids=()
-        _pg_out=$(__llm_server_pids "$_llm_user")
+        _pg_out=$(__llm_owned_server_pids "$_llm_user" "$_lanes")
         while IFS= read -r _pid
         do
             [[ -z "$_pid" ]] && continue
-            _llm_pid_is_protected "$_pid" && continue
             _pids+=("$_pid")
         done <<< "$_pg_out"
         (( ${#_pids[@]} == 0 )) && return 0
@@ -270,7 +345,6 @@ function __llm_server_stop() {
     for _pid in "${_pids[@]}"
     do
         [[ "$_pid" =~ ^[0-9]+$ ]] || continue
-        _llm_pid_is_protected "$_pid" && continue
         kill -KILL "$_pid" 2>/dev/null || true
     done
 

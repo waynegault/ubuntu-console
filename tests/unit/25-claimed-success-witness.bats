@@ -63,10 +63,16 @@ setup() {
     export LLM_PORT="$(_free_port)"
     rm -f "$ACTIVE_LLM_FILE" "$LLM_TPS_CACHE" "$SANDBOX/state/gpu_check.json" 2>/dev/null || true
     LISTENER_PID=""
+    FIXTURE_BACKEND_PID=""
 }
 
 teardown() {
     [[ -n "${LISTENER_PID:-}" ]] && kill "$LISTENER_PID" 2>/dev/null || true
+    # Best-effort, and written as an `if` rather than `kill … || true` so a pid that
+    # has already exited is a condition, not a swallowed failure.
+    if [[ -n "${FIXTURE_BACKEND_PID:-}" ]]; then
+        kill "$FIXTURE_BACKEND_PID" 2>/dev/null
+    fi
     rm -f "$SANDBOX/state/active_llm" "$SANDBOX/state/last_tps" 2>/dev/null || true
 }
 
@@ -113,13 +119,22 @@ _stub_killers() {
     oc() { :; }
 }
 
-# _no_backends / _a_backend_alive — the "is a llama backend running?" half of the
-# stop witness.  Overridden rather than stubbed with a real process: the real scan
-# (__llm_server_pids by /proc/PID/exe) sees this box's LIVE lanes, so a real scan
-# would report "not gone" in every case.  That scan has its own suite
-# (tests/unit/12-gpu-exclusivity.bats); what is under test here is the composition.
-_no_backends() { __llm_server_running() { return 1; }; }
-_a_backend_alive() { __llm_server_running() { return 0; }; }
+# _no_backends / _a_backend_alive — the "is a backend the stop OWNS alive?" half of
+# the witness.  Both stub the SCAN (__llm_server_pids, the /proc/PID/exe walk) and
+# leave the lane filter REAL, because the filter is what these cases are about: it
+# is the thing that decides whether a running process counts against the stop.
+#
+# The scan is stubbed for a measured reason: the real one sees this box's LIVE
+# lanes, so an unstubbed scan would make every case depend on whatever happens to be
+# running.  _a_backend_alive spawns a real process and names it, so the lane answer
+# earned by __llm_pid_is_lane is honest rather than forced.  The scan itself has its
+# own suite (tests/unit/12-gpu-exclusivity.bats).
+_no_backends() { __llm_server_pids() { :; }; }
+_a_backend_alive() {
+    sleep 300 &
+    FIXTURE_BACKEND_PID=$!
+    __llm_server_pids() { printf '%s\n' "$FIXTURE_BACKEND_PID"; }
+}
 
 # ── item 1: the witnesses themselves ───────────────────────────────────────
 @test "read-back: __llm_active_state_recorded accepts only the model this launch recorded" {
@@ -189,6 +204,55 @@ _a_backend_alive() { __llm_server_running() { return 0; }; }
     _status=0
     __llm_server_gone || _status=$?
     [[ "$_status" -ne 0 ]] || { echo "backend alive with a free port: must not report gone"; return 1; }
+}
+
+@test "read-back: a fleet lane is not a backend 'model stop' owns" {
+    _load_console
+    # THE REGRESSION CASE for the 2026-09-28 fix (see the LANE PROTECTION note in
+    # 11c).  The witness used to ask "does ANY llama backend run for this user?", and
+    # this box's lanes always do — so the read-back was red on 22 of 22 rows of a
+    # bench pass whatever the stop had actually done, and an alarm that can never go
+    # green is one a reader learns to skip.  With a pid in the scan AND in the lane
+    # set, the owned set is empty and the witness must report gone.
+    __llm_server_pids() { printf '%s\n' "$$"; }
+    __llm_lane_pids() { printf '%s\n' "$$"; }
+    local _status=0
+    __llm_server_gone || _status=$?
+    [[ "$_status" -eq 0 ]] || { echo "a lane was counted as a backend the stop owns"; return 1; }
+
+    # ...and the same pid with the lane half removed IS owned, so this case cannot
+    # pass by ignoring the scan altogether — the mutation that would hide a filter
+    # that had stopped filtering.  A witness that never fails is not a witness.
+    __llm_lane_pids() { :; }
+    _status=0
+    __llm_server_gone || _status=$?
+    [[ "$_status" -ne 0 ]] || { echo "an owned backend was reported gone"; return 1; }
+}
+
+@test "model stop: a lane in the scan is never sent a signal" {
+    # The DAMAGING half of the same 2026-09-28 defect: the stop TERM/KILLed the
+    # CPU-tier and Xe3B lanes because the protect list named only three unit names,
+    # so their journals carry `code=killed, status=9/KILL` row after row and then
+    # systemd's `Failed with result 'start-limit-hit'`.  The signal is intercepted
+    # here rather than sent — this suite must never signal a live process.
+    _load_console
+    # Deliberately NOT _stub_killers: that stubs __llm_server_stop, which is the
+    # function under test.
+    __resolve_smi() { return 1; }
+    __llm_server_pids() { printf '%s\n' "$$"; }
+    __llm_lane_pids() { printf '%s\n' "$$"; }
+    : > "$SANDBOX/state/signalled"
+    kill() { printf '%s\n' "$1" >> "$SANDBOX/state/signalled"; return 0; }
+
+    local _rc=0
+    __llm_server_stop || _rc=$?
+    unset -f kill
+
+    [[ "$_rc" -eq 0 ]] || { echo "a stop with only lanes present exited $_rc"; return 1; }
+    if [[ -s "$SANDBOX/state/signalled" ]]; then
+        echo "a lane was signalled: $(tr '\n' ' ' < "$SANDBOX/state/signalled")"
+        return 1
+    fi
 }
 
 # ── item 3: the CLI reports FAILURE, not success ───────────────────────────
