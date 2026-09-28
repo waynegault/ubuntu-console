@@ -60,12 +60,15 @@ EOF
         "" "" "" "" "" "" "legal"
     local row
     row=$(grep "^1|" "$LLM_REGISTRY")
-    # v6 schema: 37 fields.
-    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "37" ]]
+    # Current schema: 39 fields (37 + the two BENCH-SAMPLER-001 sampler columns).  The
+    # writers converge on the current schema, so this moves with it.
+    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "39" ]]
     [[ "$(echo "$row" | cut -d'|' -f33)" == "legal" ]]
     local header
     header=$(head -1 "$LLM_REGISTRY")
-    [[ "$(echo "$header" | awk -F'|' '{print NF}')" == "37" ]]
+    # The header moves with the schema too: a legacy row is padded to 39 and the header
+    # names all 39, so pinning 37 here is the same stale expectation as the row above.
+    [[ "$(echo "$header" | awk -F'|' '{print NF}')" == "39" ]]
 }
 
 @test "autotune-001: autotune-model.sh accepts --workload and env default chat" {
@@ -94,7 +97,7 @@ EOF
     local row
     row=$(grep "^1|" "$LLM_REGISTRY")
     [[ "$(echo "$row" | cut -d'|' -f34)" == "145.5" ]]
-    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "37" ]]
+    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "39" ]]
 }
 
 @test "autotune-003: autotune-model.sh measures TTFT via a streaming probe" {
