@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11f-llm-runtime ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
@@ -97,6 +97,23 @@ function mlogs() {
     __resolve_vscode_bin
     "$VSCODE_BIN" "$LLM_LOG_FILE"
     echo "VS Code opened..."
+}
+
+# ---------------------------------------------------------------------------
+# __burn_tps_cache_holds — read-back witness for burn's "updates TPS cache" claim
+# (docs/contracts/command-contracts.yaml, entry `burn`).
+#
+# The run computes a rate and prints it; the effect is that the value is in the cache
+# the dashboard reads.  This asserts the cache holds EXACTLY what this run wrote, so a
+# write whose `mv` returned 0 while the file holds something else — a concurrent run, a
+# tmp race — is reported as a failed measurement rather than as a rate.
+# ---------------------------------------------------------------------------
+function __burn_tps_cache_holds() {
+    local _expected="$1"
+    [[ -n "$_expected" ]] || return 1
+    [[ -f "$LLM_TPS_CACHE" ]] || return 1
+    [[ "$(< "$LLM_TPS_CACHE")" == "$_expected" ]] || return 1
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -438,7 +455,16 @@ function burn() {
     # validation that compared the bench against "the recorded value" was comparing a
     # number with itself.  LLM_TPS_CACHE / LAST_TPS is where the last observed rate
     # lives — the registry keeps what the autotune certified.
-    echo "${tps_int}.${tps_dec} tps" > "${LLM_TPS_CACHE}.tmp" && mv "${LLM_TPS_CACHE}.tmp" "$LLM_TPS_CACHE"
+    local _burn_tps="${tps_int}.${tps_dec} tps"
+    echo "$_burn_tps" > "${LLM_TPS_CACHE}.tmp" && mv "${LLM_TPS_CACHE}.tmp" "$LLM_TPS_CACHE"
+
+    # The rate is claimed as measured only if the cache actually holds it.  The write
+    # above can return 0 while the file holds something else (a concurrent run, a tmp
+    # race), and a measurement nobody persisted is not a measurement.
+    if ! __burn_tps_cache_holds "$_burn_tps"; then
+        __tac_info "TPS cache" "[read-back FAILED — the measured rate is not in $LLM_TPS_CACHE]" "$C_Error"
+        return 1
+    fi
 
     [[ -f "$LLM_TPS_CACHE" ]] && LAST_TPS=$(< "$LLM_TPS_CACHE")
     return 0

@@ -238,14 +238,14 @@ commands:
   - name: burn
     family: llm
     summary: LLM stress test and TPS benchmark
-    version: 2
-    updated: 2026-09-23
+    version: 3
+    updated: 2026-09-28
     status: active
     scope: both
-    read_back_exempt: >-
-      not witnessed yet: the witness would be "the TPS cache holds a value written
-      by this run", which is a measurement write, not a state change a reader acts
-      on.  Not declared on this entry.
+    read_back:
+      - witness: __burn_tps_cache_holds
+        file: scripts/11f-llm-runtime.sh
+        asserts: the TPS cache holds exactly the rate this run measured, read back before the run returns success
     contract:
       side_effects:
         - updates TPS cache

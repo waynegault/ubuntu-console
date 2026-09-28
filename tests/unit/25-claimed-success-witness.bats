@@ -724,4 +724,47 @@ PY
     (( _size <= LOG_MAX_BYTES )) || { echo "still over the bound after a reported trim"; return 1; }
 }
 
+@test "read-back: __burn_tps_cache_holds accepts only the rate this run wrote" {
+    # The witness for `burn`'s "updates TPS cache" claim.  Catches: a rate reported as
+    # measured when the cache is absent, still holds another run's value, or never took
+    # the write — the "feedback without persistence" shape.
+    _load_console
+    source "$REPO_ROOT/scripts/11f-llm-runtime.sh"
+    LLM_TPS_CACHE="$BATS_TEST_TMPDIR/tps"
+    rm -f "$LLM_TPS_CACHE"
+    local _status
+
+    _status=0
+    __burn_tps_cache_holds "12.3 tps" || _status=$?
+    [[ "$_status" -ne 0 ]] || { echo "an absent cache must fail the read-back"; return 1; }
+
+    printf '%s\n' "9.9 tps" > "$LLM_TPS_CACHE"
+    _status=0
+    __burn_tps_cache_holds "12.3 tps" || _status=$?
+    [[ "$_status" -ne 0 ]] || { echo "a cache holding another run's rate must fail"; return 1; }
+
+    printf '%s\n' "12.3 tps" > "$LLM_TPS_CACHE"
+    _status=0
+    __burn_tps_cache_holds "12.3 tps" || _status=$?
+    [[ "$_status" -eq 0 ]] || { echo "the rate this run wrote must pass"; return 1; }
+}
+
+@test "burn: the witness is consulted before burn returns success" {
+    # A WIRING assertion, deliberately: driving `burn` end to end needs a live
+    # llama-server (curl plus a 768-token completion), which a unit test must not start.
+    # What it pins is that the shipped function CALLS the witness before it finishes —
+    # the helper-passes-but-nothing-calls-it shape the oc-health case was written for,
+    # which no helper-level case can see.
+    local src _call_line _end_line
+    src=$(< "$REPO_ROOT/scripts/11f-llm-runtime.sh")
+    [[ "$src" == *'if ! __burn_tps_cache_holds "$_burn_tps"'* ]] || {
+        echo "burn must gate on the witness"
+        return 1
+    }
+    _call_line=$(grep -nF '__burn_tps_cache_holds "$_burn_tps"' "$REPO_ROOT/scripts/11f-llm-runtime.sh" | tail -1 | cut -d: -f1)
+    _end_line=$(awk '/^function burn\(\)/{f=1; next} f && /^}/{print NR; exit}' "$REPO_ROOT/scripts/11f-llm-runtime.sh")
+    [[ -n "$_call_line" && -n "$_end_line" ]] || { echo "could not locate the call or the end of burn"; return 1; }
+    (( _call_line < _end_line )) || { echo "the call must be inside burn, before it ends"; return 1; }
+}
+
 # end of file
