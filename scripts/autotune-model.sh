@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 69
+# Module Version: 70
 #   v68 (2026-09-27): the q8_0 prompt range in v66/v67's comment corrected to the measured
 #   17,675..17,756 — read this time from the --record run's own captured output AND from
 #   config/kv-recall-baseline.tsv, which agree. The earlier 17,759 was the --check run's
@@ -648,6 +648,9 @@ _sampler_args() {
     return 0
 }
 
+# _bench_spawn — the ctx/batch/ubatch search's launcher.  Its rationale and its argument
+# list are in the block comment above _sampler_args, which was inserted here so the
+# sampler flags sit next to the launch sites that use them.
 _bench_spawn() {
     local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}" kv_k="${6:-q8_0}" kv_v="${7:-q8_0}"
     local effective_ngl="${override_ngl:-${BENCH_NGL:-999}}"
