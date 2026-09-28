@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 68
+# Module Version: 69
 #   v68 (2026-09-27): the q8_0 prompt range in v66/v67's comment corrected to the measured
 #   17,675..17,756 — read this time from the --record run's own captured output AND from
 #   config/kv-recall-baseline.tsv, which agree. The earlier 17,759 was the --check run's
@@ -624,6 +624,30 @@ _bench_stop() {
 #   dxgkrnl leaks GPU VA on each context create/destroy — see bench_once_multi).
 #   args: ctx batch ubatch [mmap_mode] [ngl] [kv_k] [kv_v]
 # ---------------------------------------------------------------------------
+# _sampler_args — the anti-repetition sampler flags for THIS model, from the registry
+# row, one argv word per line (the __spec_launch_flags idiom).
+#
+# WHY THIS EXISTS (2026-09-28): the autotune's spawns produce every CERTIFIED tps.  If
+# the serve path applies a sampler and this path does not, the certified number and the
+# served decode are two different policies and the row means neither.  Both read the
+# same registry column through the same name-keyed lookup (__llm_registry_field), so
+# they cannot drift; blank means "not configured" and emits nothing, which is
+# llama.cpp's own default.  Deliberately NOT an env knob - see the note in 11e's builder.
+_sampler_args() {
+    local _f="${MODEL_PATH##*/}" _rp="" _rln=""
+    _rp=$(__llm_registry_field "$_f" repeat_penalty)
+    _rln=$(__llm_registry_field "$_f" repeat_last_n)
+    if [[ -n "$_rp" ]]
+    then
+        printf '%s\n' "--repeat-penalty" "$_rp"
+    fi
+    if [[ -n "$_rln" ]]
+    then
+        printf '%s\n' "--repeat-last-n" "$_rln"
+    fi
+    return 0
+}
+
 _bench_spawn() {
     local c="$1" b="$2" u="$3" mmap_mode="${4:-auto}" override_ngl="${5:-}" kv_k="${6:-q8_0}" kv_v="${7:-q8_0}"
     local effective_ngl="${override_ngl:-${BENCH_NGL:-999}}"
@@ -644,6 +668,11 @@ _bench_spawn() {
     _launch_server() {
         local -a fa_args=()
         [[ $flash_attn == "on" ]] && fa_args=(--flash-attn on) || fa_args=(--flash-attn off)
+        # The sampler fragment is built in BOTH launch helpers (the bench spawn and the
+        # TTFT server) from the same registry column, so no measurement in this script
+        # runs a decode policy the serve path does not.
+        local -a sampler_args=()
+        mapfile -t sampler_args < <(_sampler_args)
         # SPEC-DEC-004: the block-size sweep drives spec-decode via these
         # globals (BENCH_SPEC_TYPE / BENCH_SPEC_N_MAX / BENCH_SPEC_DRAFT_MODEL);
         # "off" (the default during the ctx/batch search) passes no flags.
@@ -665,7 +694,7 @@ _bench_spawn() {
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
             --parallel "${BENCH_PARALLEL:-1}" --fit off "${fa_args[@]}" --kv-offload \
             --cache-type-k "$kv_k" --cache-type-v "$kv_v" "${mmap_flag[@]}" \
-            "${spec_args[@]}" \
+            "${spec_args[@]}" "${sampler_args[@]}" \
             > "$_BENCH_LOG" 2>&1 &
         _BENCH_PID=$!
         _bump_cuda_cycle
@@ -2072,11 +2101,17 @@ ttft_probe() {
     _launch_ttft_server() {
         local -a fa_args=()
         [[ $flash_attn == "on" ]] && fa_args=(--flash-attn on) || fa_args=(--flash-attn off)
+        # The sampler fragment is built in BOTH launch helpers (the bench spawn and the
+        # TTFT server) from the same registry column, so no measurement in this script
+        # runs a decode policy the serve path does not.
+        local -a sampler_args=()
+        mapfile -t sampler_args < <(_sampler_args)
         "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
             --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
             --parallel 1 --fit off "${fa_args[@]}" --kv-offload \
             --cache-type-k "$kv_k" --cache-type-v "$kv_v" "${mmap_flag[@]}" \
+            "${sampler_args[@]}" \
             > "/tmp/at-ttft-${MODEL}-c${c}.log" 2>&1 &
         pid=$!
         _bump_cuda_cycle
