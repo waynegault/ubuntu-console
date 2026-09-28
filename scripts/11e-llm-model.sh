@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 56
+# Module Version: 57
 #   v55 (2026-09-27): `model register-trained` (card UBC-GRPO-004) — a trained artifact
 #   lands as an ordinary registry row, with the two facts a row cannot carry (which
 #   benchmark, which held-out set) and the served prompt contract's revision recorded in
@@ -147,7 +147,7 @@ function __model_scan() {
         mkdir -p "$_scan_backup_dir"
         cp "$LLM_REGISTRY" "$_scan_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S).pre-scan"
     fi
-    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens" > "$tmpconf"
+    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n" > "$tmpconf"
 
     local num=0
     __tac_info "Reading" "files from $LLAMA_MODEL_DIR..." "$C_Dim"
@@ -194,6 +194,7 @@ function __model_scan() {
         local prev_active="no"
         local prev_spec_type="" prev_spec_draft_model="" prev_spec_n_max="" prev_spec_ngl="" prev_spec_device="" prev_spec_accept_len=""
         local prev_workload="" prev_ttft="" prev_bench_ctx="" prev_bench_max_chunks="" prev_bench_avg_prompt_tokens=""
+        local prev_repeat_penalty="" prev_repeat_last_n=""
         # prefill/p2_* are ALSO read from the previous row — they must be declared and
         # initialised here like the rest.  They used to be assigned only by the `read`
         # below, which is skipped when the model has no previous row, so a newly added
@@ -208,7 +209,7 @@ function __model_scan() {
             prev_row=$(awk -F'|' -v f="$fname" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null || true)
             if [[ -n "$prev_row" ]]
             then
-                IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_flash_attn prev_tps prev_autotuned prev_default prev_active prev_prefill prev_p2_ctx prev_p2_batch prev_p2_ubatch prev_p2_tps prev_p2_prefill prev_spec_type prev_spec_draft_model prev_spec_n_max prev_spec_ngl prev_spec_device prev_spec_accept_len prev_workload prev_ttft prev_bench_ctx prev_bench_max_chunks prev_bench_avg_prompt_tokens <<< "$prev_row"
+                IFS='|' read -r _pn _pname _pfile _psize _pqc _parch _pgpu _pctx _pthr prev_batch prev_ubatch prev_parallel prev_fit prev_backend prev_mmap prev_flash_attn prev_tps prev_autotuned prev_default prev_active prev_prefill prev_p2_ctx prev_p2_batch prev_p2_ubatch prev_p2_tps prev_p2_prefill prev_spec_type prev_spec_draft_model prev_spec_n_max prev_spec_ngl prev_spec_device prev_spec_accept_len prev_workload prev_ttft prev_bench_ctx prev_bench_max_chunks prev_bench_avg_prompt_tokens prev_repeat_penalty prev_repeat_last_n <<< "$prev_row"
                 [[ -z "${prev_flash_attn:-}" ]] && prev_flash_attn="on"
             fi
         fi
@@ -251,6 +252,12 @@ function __model_scan() {
         # (workload 33, ttft_ms 34, bench_* input-profile 35-37) so a rescan
         # never truncates the schema back to 32 columns.
         _reg_line+="|${prev_workload:-}|${prev_ttft:-}|${prev_bench_ctx:-}|${prev_bench_max_chunks:-}|${prev_bench_avg_prompt_tokens:-}"
+        # BENCH-SAMPLER-001: the sampler columns (38, 39) are carried exactly like the
+        # measurement columns above.  A writer that did not know about them would drop
+        # them on the next scan and silently turn the sampler OFF for every row - the
+        # same class of loss this file already records for the KV quant and the curated
+        # name, both of which had to be carried for the same reason.
+        _reg_line+="|${prev_repeat_penalty:-}|${prev_repeat_last_n:-}"
         echo "$_reg_line" >> "$tmpconf"
 
         # Progress: not printing each model individually
@@ -345,7 +352,7 @@ function __model_scan() {
             # until the final mv.
             local clean_tmp="${LLM_REGISTRY}.renum.$$"
             local new_num=0
-            echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens" > "$clean_tmp"
+            echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n" > "$clean_tmp"
             local _cline
             while IFS= read -r _cline
             do
