@@ -2,7 +2,8 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 69
+# Module Version: 70
+#   v70 (2026-09-28): cl reads its home-directory deletions back (__cl_paths_cleared).
 #   v69 (2026-09-28): logtrim reads its trim back before reporting it (__log_trim_within_bound).
 #   v68 (2026-09-26): the cooldown rewrite separates a MISSING DB from an unreadable one.
 #   grep reports both as rc 2, so v58's guard refused the first-ever write: on a fresh HOME
@@ -2128,6 +2129,33 @@ function __cl_step() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# __cl_paths_cleared — read-back witness for cl's "file deletions unless --report"
+# claim (docs/contracts/command-contracts.yaml, entry `cl`).
+#
+# cl's steps are two families.  The tooling prunes (apt/brew/journal/docker/npm)
+# report the COMMAND's own rc and leave no console-visible artefact to re-read — that
+# is their verification, and the entry's `asserts` says so.  The home-directory
+# deletions (thumbnails, trash) leave a path this process can re-stat, so the claim
+# "cleared" is not taken from rm's exit status alone: this asserts the directories are
+# empty NOW.  A path that does not exist counts as cleared — nothing is left to delete.
+# ---------------------------------------------------------------------------
+function __cl_paths_cleared() {
+    local _dir _had_nullglob _left
+    for _dir in "$@"; do
+        [[ -d "$_dir" ]] || continue
+        # nullglob, so an empty directory yields no entries rather than the literal glob.
+        _had_nullglob=0; shopt -q nullglob && _had_nullglob=1
+        shopt -s nullglob
+        _left=("$_dir"/*)
+        (( _had_nullglob )) || shopt -u nullglob
+        if (( ${#_left[@]} > 0 )); then
+            return 1
+        fi
+    done
+    return 0
+}
+
 function cl() {
     local light_mode=0 report_mode=0 yes_mode=0
 
@@ -2229,6 +2257,14 @@ function cl() {
             __tac_info "Trash" "[NOT EMPTIED - rm refused]" "$C_Warning"
         fi
         deep_count=$(( deep_count + 1 ))
+    fi
+
+    # The two home-directory deletions above claim [CLEARED]/[EMPTIED] from rm's exit
+    # status; re-stat the paths themselves before the run reports its summary.
+    if ! __cl_paths_cleared ~/.cache/thumbnails ~/.local/share/Trash/files ~/.local/share/Trash/info
+    then
+        __tac_info "Deletions" "[read-back FAILED — a cleared path still holds entries]" "$C_Error"
+        return 1
     fi
 
     # Broken symlinks (list only, don't auto-delete)

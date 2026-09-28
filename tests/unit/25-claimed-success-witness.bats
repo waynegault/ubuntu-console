@@ -767,4 +767,48 @@ PY
     (( _call_line < _end_line )) || { echo "the call must be inside burn, before it ends"; return 1; }
 }
 
+@test "read-back: __cl_paths_cleared needs the cleared paths to be empty" {
+    # The witness for `cl`'s home-directory deletions.  Catches: a path reported
+    # [CLEARED] from rm's exit status while entries remain — the "feedback without
+    # persistence" shape — and a missing path wrongly counted as a failure.
+    _load_console
+    source "$REPO_ROOT/scripts/08-maintenance.sh"
+    local _d="$BATS_TEST_TMPDIR/thumbnails"
+    local _status
+
+    _status=0
+    __cl_paths_cleared "$_d" || _status=$?
+    [[ "$_status" -eq 0 ]] || { echo "a missing path must count as cleared"; return 1; }
+
+    mkdir -p "$_d"
+    _status=0
+    __cl_paths_cleared "$_d" || _status=$?
+    [[ "$_status" -eq 0 ]] || { echo "an empty directory must pass"; return 1; }
+
+    : > "$_d/left-behind.png"
+    _status=0
+    __cl_paths_cleared "$_d" || _status=$?
+    [[ "$_status" -ne 0 ]] || { echo "a path still holding entries must fail the read-back"; return 1; }
+
+    rm -f "$_d/left-behind.png"
+    _status=0
+    __cl_paths_cleared "$_d" "$_d" || _status=$?
+    [[ "$_status" -eq 0 ]] || { echo "several cleared paths must pass"; return 1; }
+}
+
+@test "cl: the deletions are read back before cl reports its summary" {
+    # A WIRING assertion, deliberately: driving `cl` runs apt/brew/journal/docker/npm,
+    # which a unit test must not do.  Catches the helper-defined-but-never-called shape.
+    local src _call_line _end_line
+    src=$(< "$REPO_ROOT/scripts/08-maintenance.sh")
+    [[ "$src" == *'if ! __cl_paths_cleared ~/.cache/thumbnails'* ]] || {
+        echo "cl must gate its home-directory deletions on the witness"
+        return 1
+    }
+    _call_line=$(grep -nF '__cl_paths_cleared ~/.cache/thumbnails' "$REPO_ROOT/scripts/08-maintenance.sh" | tail -1 | cut -d: -f1)
+    _end_line=$(awk '/^function cl\(\)/{f=1; next} f && /^}/{print NR; exit}' "$REPO_ROOT/scripts/08-maintenance.sh")
+    [[ -n "$_call_line" && -n "$_end_line" ]] || { echo "could not locate the call or the end of cl"; return 1; }
+    (( _call_line < _end_line )) || { echo "the call must be inside cl, before it ends"; return 1; }
+}
+
 # end of file
