@@ -3167,7 +3167,7 @@ class TestCliMainModes(_CliHarness):
             bench, report, html = (os.path.join(td, n) for n in
                                    ("bench.json", "r.md", "flow.html"))
             cases = [
-                (["--query", "Alpha"], ["1 matching nodes:", "[topic] Alpha (a)"]),
+                (["--query", "Alpha"], ["1 matching nodes:", "[topic] Alpha (a)", "match=exact"]),
                 (["--query", "zzz-nope"], ['No nodes matching "zzz-nope"']),
                 (["--path", "a", "c"], ["Path:", "a → b: project topic [0.9]"]),
                 (["--explain", "a"], ["Node: Alpha (a)", "Connections: 1 (1 out, 0 in)"]),

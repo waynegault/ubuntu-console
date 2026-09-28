@@ -318,7 +318,8 @@ def main() -> None:
         else:
             print(f"{len(results)} matching nodes:")
             for n in results:
-                print(f'  [{n.get("type", "?")}] {n.get("label", "")} ({n.get("id", "")})')
+                print(f'  [{n.get("type", "?")}] {n.get("label", "")} ({n.get("id", "")}) '
+                      f'score={n.get("score", 0):g} match={n.get("match", "?")}')
         return
 
     if args.path:

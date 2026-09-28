@@ -403,6 +403,99 @@ class TestQuery(unittest.TestCase):
         results = self.kgraph.query_nodes(self.small_graph, 'zzzznotfound')
         self.assertEqual(results, [])
 
+    # ── RAGACT-007: the candidate set carries strength, not membership ─────
+    # REF: "RAG Isn't an Agent - I Built the Layer Between Retrieval and Action"
+    #      (Emmimal P Alexander, TDS, 2026-09-25)
+    # The card's criterion is that a caller can tell a decisive match from a partial one
+    # and can threshold the set, so these cases pin the ORDERING and the two fields.
+
+    def test_query_nodes_exact_label_outranks_substring(self):
+        # Catches: a decisive hit and a partial one treated alike — the score would then
+        # rank nothing, and row one would be graph order rather than the best match.
+        graph = {
+            'nodes': [
+                {'id': 'n-long', 'label': 'Authentication', 'type': 'topic'},
+                {'id': 'n-exact', 'label': 'Auth', 'type': 'topic'},
+            ],
+        }
+        results = self.kgraph.query_nodes(graph, 'auth')
+        self.assertEqual([r['id'] for r in results], ['n-exact', 'n-long'])
+        self.assertEqual(results[0]['match'], 'exact')
+        self.assertEqual(results[1]['match'], 'substring')
+
+    def test_query_nodes_match_kind_outranks_edge_confidence(self):
+        # Catches: a weighting formula in which a confident partial match is promoted above
+        # an exact hit — "strongest first" would then depend on the graph's edges and a
+        # caller's threshold could not be reasoned about.  This is the invariant
+        # _MATCH_TIER's comment names: the tier gap must exceed the maximum edge weight.
+        graph = {
+            'nodes': [
+                {'id': 'n-exact', 'label': 'Auth', 'type': 'topic'},
+                {'id': 'n-partial', 'label': 'Authentication', 'type': 'topic'},
+                {'id': 'n-other', 'label': 'Unrelated', 'type': 'topic'},
+            ],
+            'edges': [
+                {'from': 'n-partial', 'to': 'n-other', 'label': 'x', 'confidence': 'EXTRACTED'},
+            ],
+        }
+        results = self.kgraph.query_nodes(graph, 'auth')
+        self.assertEqual([r['id'] for r in results], ['n-exact', 'n-partial'])
+        # 3.0 with no incident edges must still beat 2.0 with the strongest edges.
+        self.assertGreater(results[0]['score'], results[1]['score'])
+
+    def test_query_nodes_ranks_by_incident_edge_confidence_within_a_tier(self):
+        # Catches: the score ignoring edge confidence, so a weakly-supported partial
+        # outranks a well-supported one and the two look equally strong to a caller.
+        graph = {
+            'nodes': [
+                {'id': 'n-weak', 'label': 'Auth Weak', 'type': 'topic'},
+                {'id': 'n-strong', 'label': 'Auth Strong', 'type': 'topic'},
+                {'id': 'n-w2', 'label': 'Filler W', 'type': 'topic'},
+                {'id': 'n-s2', 'label': 'Filler S', 'type': 'topic'},
+            ],
+            'edges': [
+                {'from': 'n-strong', 'to': 'n-s2', 'label': 'x', 'confidence': 'EXTRACTED'},
+                {'from': 'n-weak', 'to': 'n-w2', 'label': 'x', 'confidence': 'AMBIGUOUS'},
+            ],
+        }
+        results = self.kgraph.query_nodes(graph, 'auth')
+        self.assertEqual([r['id'] for r in results], ['n-strong', 'n-weak'])
+        self.assertGreater(results[0]['score'], results[1]['score'])
+
+    def test_query_nodes_tie_break_is_deterministic_by_id(self):
+        # Catches: graph-order dependence (the behaviour this replaced), where the same
+        # graph could return a different order — and a different row at max_results=1 —
+        # between runs or after a rebuild.
+        graph = {
+            'nodes': [
+                {'id': 'zzz', 'label': 'Auth Z', 'type': 'topic'},
+                {'id': 'aaa', 'label': 'Auth A', 'type': 'topic'},
+            ],
+        }
+        first = [r['id'] for r in self.kgraph.query_nodes(graph, 'auth')]
+        self.assertEqual(first, ['aaa', 'zzz'])
+        self.assertEqual([r['id'] for r in self.kgraph.query_nodes(graph, 'auth')], first)
+        self.assertEqual(
+            [r['id'] for r in self.kgraph.query_nodes(graph, 'auth', max_results=1)], ['aaa'])
+
+    def test_query_nodes_rows_carry_a_descending_score(self):
+        # Catches: a score computed but not surfaced (a caller cannot threshold what it
+        # cannot see) and an unsorted return.
+        results = self.kgraph.query_nodes(self.small_graph, 'n')
+        self.assertTrue(results)
+        for row in results:
+            self.assertIn('score', row)
+            self.assertIn('match', row)
+        scores = [r['score'] for r in results]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
+    def test_query_nodes_empty_pattern_still_matches_everything(self):
+        # Catches: the ordering rewrite changing the empty-query semantics — an empty
+        # pattern is a substring of every label, and a caller passing an empty filter
+        # expects the whole set rather than none of it.
+        results = self.kgraph.query_nodes(self.small_graph, '')
+        self.assertEqual(len(results), 4)
+
     def test_query_nodes_max_results(self):
         graph = {
             'nodes': [{'id': f'n{i}', 'label': 'Alpha'} for i in range(10)],

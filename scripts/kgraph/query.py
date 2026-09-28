@@ -16,24 +16,93 @@ from collections import deque
 from typing import Any
 
 from .community import community_for_node
-from .models import Graph, GraphEdge, GraphNode
+from .models import ConfidenceLevel, Graph, GraphEdge, GraphNode
 
 logger = logging.getLogger(__name__)
 
+# REF: "RAG Isn't an Agent - I Built the Layer Between Retrieval and Action"
+#      (Emmimal P Alexander, TDS, 2026-09-25) —
+#      https://towardsdatascience.com/rag-isnt-an-agent-i-built-the-layer-between-retrieval-and-action/
+# §5: the retriever must not treat the first (or any single) result as sufficient evidence,
+# so the candidate set has to carry STRENGTH and not just membership.  A match is therefore
+# scored and ordered here, and the score travels with the result so a caller can threshold
+# it or flag a weak set.
+#
+# The tiers are 1.0 apart and the maximum edge weight is 0.9, so the match KIND dominates:
+# an exact label cannot be outranked by a substring match however confident its edges are.
+# That invariant is asserted in tests/test_kgraph.py — raising a tier into the weight range
+# is the edit that would silently break the ordering this module's docstring promises.
+_MATCH_TIER: dict[str, float] = {"exact": 3.0, "substring": 2.0, "regex": 1.0}
+
+#: Edge confidence → weight, on the repo's own three levels (confidence.py).  An untagged
+#: edge takes INFERRED, which is what `confidence._determine_confidence` returns as its
+#: default, so an unclassified edge never outranks a classified one.
+_EDGE_WEIGHT: dict[str, float] = {
+    ConfidenceLevel.EXTRACTED.value: 0.9,
+    ConfidenceLevel.INFERRED.value: 0.6,
+    ConfidenceLevel.AMBIGUOUS.value: 0.3,
+}
+_EDGE_WEIGHT_DEFAULT = 0.6
+
+
+def _incident_edge_weights(graph: Graph) -> dict[str, float]:
+    """{node_id: mean weight of its incident edges}.
+
+    A node with no incident edges is ABSENT from the map rather than given a middle
+    value: no edge evidence is not weak edge evidence, and the caller reads a missing id
+    as 0.0.
+    """
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for edge in graph.edges:
+        level = getattr(edge.confidence, "value", edge.confidence)
+        weight = _EDGE_WEIGHT.get(str(level), _EDGE_WEIGHT_DEFAULT)
+        for endpoint in (str(edge.source), str(edge.target)):
+            if not endpoint:
+                continue
+            totals[endpoint] = totals.get(endpoint, 0.0) + weight
+            counts[endpoint] = counts.get(endpoint, 0) + 1
+    return {nid: totals[nid] / counts[nid] for nid in totals}
+
+
+def _match_kind(text: str, pattern_lower: str, regex: re.Pattern[str] | None) -> str | None:
+    """How ``pattern`` matches ``text`` — the strongest of exact, substring, regex.
+
+    An empty pattern is a substring of every text, which is the behaviour this replaced,
+    so an empty query keeps matching everything rather than nothing.
+    """
+    if pattern_lower and text == pattern_lower:
+        return "exact"
+    if pattern_lower in text:
+        return "substring"
+    if regex is not None and regex.search(text):
+        return "regex"
+    return None
+
 
 def query_nodes(graph: Graph | dict, pattern: str, **kwargs) -> list[dict]:
-    """Find nodes matching a query pattern (label, type, or regex).
+    """Find nodes matching a query pattern (label, type, or regex), strongest first.
+
+    Each returned row carries the strength of its match, because a caller cannot tell a
+    single decisive hit from a page of weak partials otherwise:
+
+    * ``match`` — how the pattern hit: ``exact``, ``substring`` or ``regex``.
+    * ``score`` — the match tier plus the node's mean incident-edge confidence weight
+      (0.0 when the node has no incident edges).
+
+    Ordering is deterministic — score descending, then ``id`` ascending — so the same
+    graph yields the same order on every run (the graph is static per build).
 
     Args:
         graph: Graph model or dict.
         pattern: Text to match against labels and types.
         match_type: 'label', 'type', or 'any' (default 'any').
+        max_results: cap on the returned rows (default 50).
 
     Returns:
-        List of matching node dicts.
+        List of matching node dicts, each carrying ``match`` and ``score``, best first.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    g = Graph.from_dict(graph) if isinstance(graph, dict) else graph
 
     match_type = kwargs.get("match_type", "any")
     max_results = kwargs.get("max_results", 50)
@@ -48,32 +117,32 @@ def query_nodes(graph: Graph | dict, pattern: str, **kwargs) -> list[dict]:
         logger.warning("Invalid regex pattern %r, matching literally instead: %s", pattern, exc)
         regex = None
 
-    results: list[dict] = []
+    weights = _incident_edge_weights(g)
 
-    for node in graph.nodes:
-        label = node.label.lower()
-        ntype = node.type.lower()
-
+    by_id: dict[str, dict] = {}
+    for node in g.nodes:
+        kinds: list[str] = []
         if match_type in ("label", "any"):
-            if pattern_lower in label or (regex is not None and regex.search(label)):
-                results.append(node.model_dump(mode="json", exclude_none=True))
-                continue
+            kind = _match_kind(node.label.lower(), pattern_lower, regex)
+            if kind:
+                kinds.append(kind)
         if match_type in ("type", "any"):
-            if pattern_lower in ntype or (regex is not None and regex.search(ntype)):
-                if not results or results[-1].get("id") != node.id:
-                    results.append(node.model_dump(mode="json", exclude_none=True))
-                    continue
+            kind = _match_kind(node.type.lower(), pattern_lower, regex)
+            if kind:
+                kinds.append(kind)
+        if not kinds:
+            continue
+        nid = str(node.id)
+        if nid in by_id:
+            continue
+        best = max(kinds, key=lambda k: _MATCH_TIER[k])
+        payload = node.model_dump(mode="json", exclude_none=True)
+        payload["match"] = best
+        payload["score"] = round(_MATCH_TIER[best] + weights.get(nid, 0.0), 4)
+        by_id[nid] = payload
 
-    # Deduplicate
-    seen: set[str] = set()
-    deduped: list[dict] = []
-    for n in results:
-        nid = str(n.get("id", ""))
-        if nid and nid not in seen:
-            seen.add(nid)
-            deduped.append(n)
-
-    return deduped[:max_results]
+    ordered = sorted(by_id.values(), key=lambda n: (-n["score"], str(n.get("id", ""))))
+    return ordered[:max_results]
 
 
 def find_path(graph: Graph | dict, source: str, target: str, **kwargs) -> list[dict]:

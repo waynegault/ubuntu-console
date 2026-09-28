@@ -212,9 +212,11 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                 pattern = params.get('pattern', '')
                 max_results = params.get('max_results', 20)
                 results = query_nodes(self.graph, pattern, max_results=max_results)
-                # Return minimal representation
+                # Return minimal representation, with the match strength so a caller can
+                # threshold the set or flag a weak one instead of trusting row one.
                 return [
                     {'id': n.get('id'), 'label': n.get('label'), 'type': n.get('type'),
+                     'score': n.get('score'), 'match': n.get('match'),
                      'degree': n.get('degree', 0), 'importance': n.get('importance', 1)}
                     for n in results
                 ]
