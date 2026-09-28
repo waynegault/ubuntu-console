@@ -144,6 +144,22 @@ _TAC_LOADER_VERSION="10"
 
 _tac_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TACTICAL_REPO_ROOT="${TACTICAL_REPO_ROOT:-$_tac_repo_root}"
+
+# Homebrew's PATH-shadow check warns that `gh` resolves to ~/.local/bin/gh instead of the
+# brew-managed binary, and suggests this variable.  The shadowing is DELIBERATE and
+# load-bearing: bin/gh is this repo's shim, and install.sh puts it ahead of brew on PATH
+# precisely so a bare `gh` resolves the bridged token instead of falling through to
+# gnome-keyring and prompting to CREATE a keyring — the 2026-09-23 incident that shim
+# exists to prevent.  Homebrew's check assumes a shadowed formula binary is an accident;
+# for this one it is the design, and its own message text says what the warning means
+# ("running by name will not invoke the version provided by Homebrew") — which is exactly
+# what we want.  So this is Homebrew's supported opt-out for a false positive, NOT a
+# blanket filter and not a suppression of anything this repo emits.  Removing the shim or
+# reordering PATH instead would undo the keyring fix.
+#   Emitter: Homebrew (7.0.7 on this box), the PATH-shadow check it runs on commands such
+#            as `brew update`; the warning names its own escape.
+#   Tracking: the gh-keyring work in docs/openclaw.md and bin/gh's own header.
+export HOMEBREW_NO_PATH_SHADOW_CHECK=1
 _tac_module_dir="$TACTICAL_REPO_ROOT/scripts"
 
 # ==============================================================================
