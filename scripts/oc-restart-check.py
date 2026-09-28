@@ -36,6 +36,9 @@ import sys
 from dataclasses import dataclass, field
 
 SELF = os.getpid()
+#: This script's own basename, so a concurrent copy of the probe is excluded by identity
+#: rather than by a filename literal a rename would silently orphan.
+SELF_NAME = os.path.basename(__file__)
 
 #: Work that a restart would interrupt, matched on the COMMAND LINE here because there is
 #: no single artefact to key on - and this list is checked against real processes, so it
@@ -173,10 +176,12 @@ def scan_work(report: Report) -> None:
         cmdline = " ".join(argv)
         if not any(marker in cmdline for marker in WORK_MARKERS):
             continue
-        # This probe's own command line mentions every marker above; a python process
-        # running THIS file is the probe, not the work it is looking for.
+        # A python process running THIS file (a concurrent copy of the probe) is the
+        # probe, not the work it is looking for.  Keyed on the script's own basename,
+        # because the literal `restart-safety.py` this replaced went dead the moment the
+        # file was renamed to oc-restart-check.py.
         if os.path.basename(argv[0]).startswith("python") and any(
-            a.endswith("restart-safety.py") for a in argv
+            os.path.basename(a) == SELF_NAME for a in argv
         ):
             continue
         report.work.append(f"pid={pid} cwd={_cwd(pid)}: {cmdline[:120]}")
