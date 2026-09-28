@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
@@ -133,6 +133,7 @@ function oc() {
         printf '  %-20s %s\n' "cache-clear"  "Wipe /dev/shm telemetry caches"
         printf '  %-20s %s\n' "diag"         "5-point check: doctor, gw, models, env, logs"
         printf '  %-20s %s\n' "doctor-local" "Validate local gateway + llama.cpp path end-to-end"
+        printf '  %-20s %s\n' "restart-check" "Can WSL restart now? Names what would be interrupted"
         printf '  %-20s %s\n' "failover"     "Cloud LLM fallback (on|off|status)"
         printf '  %-20s %s\n' "refresh-keys" "Re-import Windows API keys; sync SecretRefs"
         printf '  %-20s %s\n' "rotate-secrets" "Rotate checklist + optional bash log sanitization"
@@ -204,6 +205,7 @@ function oc() {
         docs)          oc-docs "$@" ;;
         cache-clear)   oc-cache-clear "$@" ;;
         diag)          oc-diag "$@" ;;
+        restart-check) oc-restart-check "$@" ;;
         doctor-local)  oc-doctor-local "$@" ;;
         failover)      oc-failover "$@" ;;
         refresh-keys)  oc-refresh-keys "$@" ;;
@@ -241,6 +243,22 @@ function oc() {
 # oc-restart — Restart the OpenClaw gateway (systemd-managed service).
 # Now uses the native OpenClaw CLI restart for reliability.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# oc-restart-check — "can I restart WSL now?", and what would be interrupted.
+#
+# Thin wrapper: the probe is Python (it reads /proc and nvidia-smi and needs no shell), and
+# its EXIT CODE is the answer — 0 safe, 1 not safe, 2 could not measure.  The status is
+# passed through deliberately, and never polished into a zero: `oc restart-check && sudo
+# shutdown` has to be safe to type, so an unreadable card must not read as a free one.
+# ---------------------------------------------------------------------------
+function oc-restart-check() {
+    local _py="${TAC_PYTHON:-python3}"
+    "$_py" "$TACTICAL_REPO_ROOT/scripts/oc-restart-check.py" "$@"
+}
+
+# oc-restart — restart the OpenClaw gateway (systemd-managed service).  Its rationale block
+# is the comment above oc-restart-check, which was inserted between that block and this
+# definition - so this line keeps every function here with a comment directly above it.
 function oc-restart() {
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw" "[NOT INSTALLED - cannot restart gateway]" "$C_Error"
