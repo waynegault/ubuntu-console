@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
 #   v16 (2026-09-27): provenance helpers for a trained artifact (card UBC-GRPO-004) —
 #   __llm_provenance_dir/_path/_write/_read. A trained model still lands as an ordinary
 #   registry row; the benchmark, held-out set and prompt-contract revision it was made
@@ -142,6 +142,36 @@ function __llm_registry_entry_by_file() {
     local target_file="${1:-}"
     [[ -n "$target_file" && -f "$LLM_REGISTRY" ]] || return 1
     awk -F'|' -v f="$target_file" '$3 == f {print; exit}' "$LLM_REGISTRY" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# __llm_registry_field <model_file> <column> — the value of a NAMED registry column
+# for the row whose `file` column is <model_file>, or empty.
+#
+# WHY A NAME LOOKUP EXISTS AT ALL (2026-09-28): the launch paths read this file
+# POSITIONALLY, and a positional reader cannot see a column the header has grown.  A
+# setting that the serve path and the bench/autotune path must AGREE on is therefore
+# asked for by name here, so neither side can be silently off by one field.
+#
+# CONTRACT — empty means "the registry says nothing about this", which every caller
+# turns into "emit no flag" (llama.cpp's own default).  An absent column, an absent
+# row and a blank cell are deliberately the same answer; no value is invented here.
+# An unreadable registry is warned about rather than reported as "not configured",
+# because those are different facts and only one of them is silent.
+# ---------------------------------------------------------------------------
+function __llm_registry_field() {
+    local _file="${1:-}" _col="${2:-}" _val=""
+    [[ -n "$_file" && -n "$_col" && -f "$LLM_REGISTRY" ]] || return 0
+    if ! _val=$(awk -F'|' -v col="$_col" -v want="$_file" '
+        NR == 1 { for (i = 1; i <= NF; i++) if ($i == col) idx = i; next }
+        idx == 0 { next }
+        $3 == want { print $idx; exit }
+    ' "$LLM_REGISTRY")
+    then
+        __tac_info "Warning" "[could not read $LLM_REGISTRY for column \'$_col\' - emitting no flag]" "$C_Warning"
+        return 0
+    fi
+    printf '%s\n' "$_val"
 }
 
 # ---------------------------------------------------------------------------

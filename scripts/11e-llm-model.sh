@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 55
+# Module Version: 56
 #   v55 (2026-09-27): `model register-trained` (card UBC-GRPO-004) — a trained artifact
 #   lands as an ordinary registry row, with the two facts a row cannot carry (which
 #   benchmark, which held-out set) and the served prompt contract's revision recorded in
@@ -1094,6 +1094,26 @@ function __model_use_build_command() {
         # placement by default on the 4 GB card — see __spec_launch_flags.
         mapfile -t _spec_flags < <(__spec_launch_flags)
         (( ${#_spec_flags[@]} > 0 )) && cmd+=("${_spec_flags[@]}")
+
+        # Anti-repetition sampler (BENCH-SAMPLER-001).  Applied HERE so the serve path
+        # and the bench path - which both come through this builder, and the autotune,
+        # which reads the same registry columns - cannot disagree about the decode
+        # policy.  Read BY NAME from the registry row: blank means "not configured"
+        # and emits no flag, which is llama.cpp's own default, never a value chosen
+        # here.  Deliberately NOT an env knob, for the same reason the KV gate is not
+        # one - a setting two paths can be given different values for is not a setting
+        # they agree on.
+        local _model_file="${model_path##*/}" _row_repeat_penalty _row_repeat_last_n
+        _row_repeat_penalty=$(__llm_registry_field "$_model_file" repeat_penalty)
+        _row_repeat_last_n=$(__llm_registry_field "$_model_file" repeat_last_n)
+        if [[ -n "$_row_repeat_penalty" ]]
+        then
+            cmd+=("--repeat-penalty" "$_row_repeat_penalty")
+        fi
+        if [[ -n "$_row_repeat_last_n" ]]
+        then
+            cmd+=("--repeat-last-n" "$_row_repeat_last_n")
+        fi
     else
         cmd=("$python_bin" "-m" "$LLM_SERVER_MODULE")
         cmd+=("--model" "$model_path" "--port" "$LLM_PORT" "--host" "127.0.0.1")
