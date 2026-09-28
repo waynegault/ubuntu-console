@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
 #   v16 (2026-09-27): provenance helpers for a trained artifact (card UBC-GRPO-004) —
 #   __llm_provenance_dir/_path/_write/_read. A trained model still lands as an ordinary
 #   registry row; the benchmark, held-out set and prompt-contract revision it was made
@@ -330,7 +330,7 @@ function __llm_registry_sync_state() {
             # registry has lost its header line (e.g. after an interrupted
             # model-scan renumbering pass).  This prevents a headerless
             # registry from self-perpetuating across every sync_state call.
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens"
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n"
         }
         $1 == "#" { next }
         # Preserve rows of unexpected width verbatim rather than dropping
@@ -385,7 +385,7 @@ function __renumber_registry() {
     awk -F'|' -v n="$target" '$1 != n && $1 != "#"' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
     local newnum=0
     {
-        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens"
+        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n"
         while IFS='|' read -r _num rest
         do
             ((++newnum))

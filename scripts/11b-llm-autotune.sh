@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 22
+# Module Version: 23
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -386,7 +386,7 @@ function __llm_autotune_profile_save() {
             OFS="|"
             # Emit header unconditionally so a headerless registry
             # does not self-perpetuate (same guard as sync_state).
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens"
+            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n"
         }
         $1 == "#" { next }
         {
