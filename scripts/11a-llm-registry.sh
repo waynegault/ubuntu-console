@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
 #   v16 (2026-09-27): provenance helpers for a trained artifact (card UBC-GRPO-004) —
 #   __llm_provenance_dir/_path/_write/_read. A trained model still lands as an ordinary
 #   registry row; the benchmark, held-out set and prompt-contract revision it was made
@@ -336,19 +336,23 @@ function __llm_registry_sync_state() {
         # Preserve rows of unexpected width verbatim rather than dropping
         # them: a stray pipe character in a value (or a partially-written
         # row) must not make a model silently vanish from the registry.
-        (NF != 20 && NF != 26 && NF != 32 && NF != 37) { print; next }
+        (NF != 20 && NF != 26 && NF != 32 && NF != 37 && NF != 39) { print; next }
         {
             d = ($3 == def ? "yes" : "no")
             a = (run == 1 && af != "" && $3 == af ? "yes" : "no")
             $19=d; $20=a
             if ($15 == "") $15="auto"
             if ($16 == "") $16="on"
-            # Pad legacy 20/26/32-column rows to the v6 37-column schema so
-            # the registry converges on the extended header (AUTOTUNE-001/003/005).
-            if (NF == 20) { for (i = 21; i <= 37; i++) $i = "" }
-            if (NF == 26) { for (i = 27; i <= 37; i++) $i = "" }
-            if (NF == 32) { for (i = 33; i <= 37; i++) $i = "" }
-            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37
+            # Pad legacy 20/26/32/37-column rows to the CURRENT schema so the registry
+            # converges on the extended header (AUTOTUNE-001/003/005, then the
+            # BENCH-SAMPLER-001 sampler columns).  The width list above must name every
+            # width this pads FROM and the width it pads TO: a width that is neither is
+            # passed through verbatim, which is how 39-column rows silently stopped
+            # receiving the $19/$20/$15/$16 normalisation just above once the sampler
+            # columns were added.  (No apostrophes in this string: it is inside an awk
+            # single-quoted program, where one would close the quote and break the file.)
+            if (NF >= 20 && NF < 39) { for (i = NF + 1; i <= 39; i++) $i = "" }
+            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39
         }
     ' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" || return 1
 

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 23
+# Module Version: 24
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -390,11 +390,11 @@ function __llm_autotune_profile_save() {
         }
         $1 == "#" { next }
         {
-            # Pad legacy 20/26/32-column rows to the v6 37-column schema
-            # BEFORE any field writes — awk extends NF only as far as the
-            # highest assigned column, so a later $33 write would otherwise
-            # cap the padded row at 33 columns.
-            if (NF >= 20 && NF < 37) { for (i = NF + 1; i <= 37; i++) $i = "" }
+            # Pad legacy 20/26/32/37-column rows to the CURRENT schema (39, after
+            # BENCH-SAMPLER-001) BEFORE any field writes — awk extends NF only as far as the
+            # highest assigned column, so a later write would otherwise cap the padded row
+            # at that column.
+            if (NF >= 20 && NF < 39) { for (i = NF + 1; i <= 39; i++) $i = "" }
             if ($3 == f) {
                 $8 = ctx; $10 = batch; $11 = ubatch; $12 = parallel
                 $13 = fit; $14 = backend
