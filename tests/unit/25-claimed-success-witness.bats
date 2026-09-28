@@ -811,4 +811,52 @@ PY
     (( _call_line < _end_line )) || { echo "the call must be inside cl, before it ends"; return 1; }
 }
 
+@test "read-back: __up_run_recorded needs this run's own row to have landed" {
+    # The witness for `up`'s run record.  Catches: a run reporting a completed summary
+    # with no row on disk behind it, and a concurrent run's interleaved append being
+    # mistaken for this run's own record.
+    _load_console
+    source "$REPO_ROOT/scripts/08-maintenance.sh"
+    local _f="$BATS_TEST_TMPDIR/maintenance-history.csv"
+    local _stamp="2026-09-28T12:00:00+00:00"
+    local _status
+
+    _status=0
+    __up_run_recorded "$_f" 0 "$_stamp" || _status=$?
+    [[ "$_status" -ne 0 ]] || { echo "a missing metrics file must fail the read-back"; return 1; }
+
+    printf '%s\n' "2026-09-27T12:00:00+00:00,9,0" > "$_f"
+    printf '%s\n' "${_stamp},12,0" >> "$_f"
+    _status=0
+    __up_run_recorded "$_f" 1 "$_stamp" || _status=$?
+    [[ "$_status" -eq 0 ]] || { echo "a file grown by one, ending in this run's row, must pass"; return 1; }
+
+    # The append did not take: the count did not move.
+    _status=0
+    __up_run_recorded "$_f" 2 "$_stamp" || _status=$?
+    [[ "$_status" -ne 0 ]] || { echo "a file that did not grow must fail the read-back"; return 1; }
+
+    # A concurrent run appended after ours: the count grew by two.
+    printf '%s\n' "2026-09-28T12:00:01+00:00,3,0" >> "$_f"
+    _status=0
+    __up_run_recorded "$_f" 1 "$_stamp" || _status=$?
+    [[ "$_status" -ne 0 ]] || { echo "a concurrent interleaved append must fail the read-back"; return 1; }
+}
+
+@test "up: the run's row is read back before up reports its record" {
+    # A WIRING assertion, deliberately: driving `up` runs twenty maintenance phases
+    # (apt, brew, docker, systemd units), which a unit test must not do.  Catches the
+    # helper-defined-but-never-called shape.
+    local src _call_line _end_line
+    src=$(< "$REPO_ROOT/scripts/08-maintenance.sh")
+    [[ "$src" == *'__up_run_recorded "$metrics_file" "$_up_before" "$_up_stamp"'* ]] || {
+        echo "up must read its metrics row back"
+        return 1
+    }
+    _call_line=$(grep -nF '__up_run_recorded "$metrics_file"' "$REPO_ROOT/scripts/08-maintenance.sh" | tail -1 | cut -d: -f1)
+    _end_line=$(awk '/^function up\(\)/{f=1; next} f && /^}/{print NR; exit}' "$REPO_ROOT/scripts/08-maintenance.sh")
+    [[ -n "$_call_line" && -n "$_end_line" ]] || { echo "could not locate the call or the end of up"; return 1; }
+    (( _call_line < _end_line )) || { echo "the call must be inside up, before it ends"; return 1; }
+}
+
 # end of file

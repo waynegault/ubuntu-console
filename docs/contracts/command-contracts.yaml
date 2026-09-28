@@ -82,15 +82,19 @@ commands:
   - name: up
     family: maintenance
     summary: Run maintenance pipeline with cooldown-aware steps
-    version: 2
-    updated: 2026-09-23
+    version: 3
+    updated: 2026-09-28
     status: active
     scope: both
-    read_back_exempt: >-
-      not witnessed yet: the pipeline's per-step rows and its exit code are the only
-      verdict it produces, and each STEP would need its own read-back (cooldown
-      record written, package state changed).  Those steps live in
-      scripts/08-maintenance.sh, which another card owns.
+    read_back:
+      - witness: __up_run_recorded
+        file: scripts/08-maintenance.sh
+        asserts: >-
+          the metrics file gained exactly one line during this run and its last line is
+          this run's own row (the timestamp the run wrote), read back before up returns.
+          Scoped on purpose: each STEP's own effect is reported by that step (its
+          command's rc, its own row and cooldown record) rather than by one row that
+          would restate the summary.
     contract:
       side_effects:
         - writes cooldown records

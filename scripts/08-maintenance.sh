@@ -2,7 +2,8 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 70
+# Module Version: 71
+#   v71 (2026-09-28): up reads its own metrics row back (__up_run_recorded).
 #   v70 (2026-09-28): cl reads its home-directory deletions back (__cl_paths_cleared).
 #   v69 (2026-09-28): logtrim reads its trim back before reporting it (__log_trim_within_bound).
 #   v68 (2026-09-26): the cooldown rewrite separates a MISSING DB from an unreadable one.
@@ -1750,6 +1751,26 @@ function __tac_fix_loopback() {
 # up — Run 20-step system maintenance with cooldowns per step.
 # Usage: up [--force]
 #   --force: Suspend all cooldowns for testing purposes
+# ---------------------------------------------------------------------------
+# __up_run_recorded — read-back witness for up's run record
+# (docs/contracts/command-contracts.yaml, entry `up`).
+#
+# `up` maintains its own issue counter in-process and reports from it; the artefact that
+# survives the run is the metrics row, so this asserts THAT: the file gained exactly one
+# line during this run, and the line is this run's own (its timestamp is the one the run
+# used).  Requiring the count to grow by exactly one also fails a concurrent run's
+# interleaved append, which a "does the row appear anywhere" check would not see.
+# ---------------------------------------------------------------------------
+function __up_run_recorded() {
+    local _file="$1" _before="$2" _stamp="$3"
+    [[ -f "$_file" ]] || return 1
+    local _now_count
+    _now_count=$(wc -l < "$_file") || return 1
+    (( _now_count == _before + 1 )) || return 1
+    [[ "$(tail -n 1 "$_file")" == "$_stamp",* ]] || return 1
+    return 0
+}
+
 # Cooldown functions (__check_cooldown / __set_cooldown) are defined above
 # in this section to avoid leaking nested function definitions.
 # ---------------------------------------------------------------------------
@@ -1827,10 +1848,21 @@ function up() {
     # counted: telemetry is not maintenance, but a trend file that silently stops
     # growing is the "success with nothing behind it" shape.
     local metrics_file="$OC_ROOT/maintenance-history.csv"
+    local _up_stamp _up_before=0 _up_record_ok=1
+    _up_stamp=$(date -Iseconds)
+    if [[ -f "$metrics_file" ]]; then
+        _up_before=$(wc -l < "$metrics_file")
+    fi
     if ! mkdir -p "$(dirname "$metrics_file")" \
-       || ! printf '%s,%s,%s\n' "$(date -Iseconds)" "$total_time" "$errCount" >> "$metrics_file"
+       || ! printf '%s,%s,%s\n' "$_up_stamp" "$total_time" "$errCount" >> "$metrics_file"
     then
         __tac_line "Maintenance Metrics" "[NOT WRITTEN - ${metrics_file}]" "$C_Warning"
+        _up_record_ok=0
+    elif ! __up_run_recorded "$metrics_file" "$_up_before" "$_up_stamp"
+    then
+        # The append returned 0 but this run's row is not the one that landed.
+        __tac_line "Maintenance Record" "[read-back FAILED — this run's row is not in ${metrics_file}]" "$C_Error"
+        _up_record_ok=0
     fi
 
     __tac_footer
@@ -1838,6 +1870,10 @@ function up() {
     # Restore original working directory
     # swallow-ok: the directory may have been removed during the run; the shell keeps the last step's cwd rather than aborting the summary it just printed
     cd "$original_dir" || true
+
+    # The run's record is part of its claim: without it the summary describes a run
+    # nothing on disk can corroborate.
+    (( _up_record_ok )) || return 1
 }
 
 # ---------------------------------------------------------------------------
