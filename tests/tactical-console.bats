@@ -3131,7 +3131,11 @@ EOF
     [[ "$p2tps" == "88.3" ]]
     [[ "$p2pf" == "150.2" ]]
     # Legacy 20-col row must have been padded to the v6 37-col schema.
-    [[ $(awk -F'|' '$1==7 {print NF}' "$LLM_REGISTRY") == "37" ]]
+    # 39 is the CURRENT schema width: 37 was the width before the
+    # BENCH-SAMPLER-001 columns, and the writers converge on the current one
+    # (11a __llm_registry_sync_state pads legacy rows to it, 11b's profile_save
+    # ditto). Pinning a frozen width here is what went red in CI on cc5db32b.
+    [[ $(awk -F'|' '$1==7 {print NF}' "$LLM_REGISTRY") == "39" ]]
 }
 
 @test "autotune: profile_save without v4 args leaves kv/ngl/prefill untouched" {
