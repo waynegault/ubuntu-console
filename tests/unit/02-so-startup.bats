@@ -295,4 +295,53 @@ __so_test_prelude() {
     [[ "$output" == *"TERMINATED"* ]]
 }
 
+@test "so: __oc_gateway_started needs BOTH the unit active and the port answering" {
+    # The witness for `so`'s start claim (docs/contracts/command-contracts.yaml, entry
+    # `so`).  Catches: a half-claim — `systemctl start` returning 0 is a statement about
+    # the request, not the service, and a port bound by something else is not our unit.
+    local _status
+    systemctl() { return 1; }      # unit never became active
+    __test_port() { return 0; }    # ...but the port answers
+    _status=0
+    __oc_gateway_started || _status=$?
+    [ "$_status" -ne 0 ] || { echo "an inactive unit must fail the read-back"; return 1; }
+
+    systemctl() { return 0; }      # unit active
+    __test_port() { return 1; }    # ...but nothing is serving
+    _status=0
+    __oc_gateway_started || _status=$?
+    [ "$_status" -ne 0 ] || { echo "a closed port must fail the read-back"; return 1; }
+
+    systemctl() { return 0; }
+    __test_port() { return 0; }
+    _status=0
+    __oc_gateway_started || _status=$?
+    [ "$_status" -eq 0 ] || { echo "an active unit with an answering port must pass"; return 1; }
+}
+
+@test "so: a start that does not leave the gateway serving is FAILURE, not success" {
+    # THE INJECTED-FAILURE CASE for that witness: the gateway is not yet bound, so `so`
+    # runs its full startup, `__so_start_gateway` "succeeds", and the read-back finds the
+    # unit inactive — the pre-fix behaviour was to return 0 having claimed the start.
+    export __TAC_OPENCLAW_OK=1
+    mkdir -p "$TAC_TEST_TMPDIR/oc"
+    export OC_ROOT="$TAC_TEST_TMPDIR/oc"
+    oc() { :; }
+    __test_port() { return 1; }              # not bound -> the full startup path
+    __so_clear_wslrelay() { :; }
+    __so_check_stale_hold() { :; }
+    __so_clear_stale_state() { :; }
+    __so_free_port() { return 0; }
+    __so_cycle_tailscale_serve() { :; }
+    __so_push_api_keys() { :; }
+    __so_ensure_llm_running() { return 0; }
+    __so_start_gateway() { return 0; }       # the start "succeeds"...
+    __so_ensure_default_agent_session() { :; }
+    systemctl() { return 1; }                # ...but the unit is not active
+
+    run so
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"STARTED but not serving"* ]]
+}
+
 # end of file
