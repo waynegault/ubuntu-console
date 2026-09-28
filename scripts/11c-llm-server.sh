@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -23,6 +23,7 @@
 # safe against the `readonly` in 03 (a plain C_Dim="$C_Dim" would abort).
 : "${C_Dim:=}"
 : "${C_Reset:=}"
+: "${C_Warning:=}"
 
 # ---- Named constants for model size thresholds (in tenths of GB) ----
 # Idempotent include guard: sub-modules are sourced both by their thin
@@ -83,12 +84,24 @@ function __llm_is_healthy() {
     __test_port "$LLM_PORT" || return 1
     local health_body models_body
     local health_timeout="${LLM_HEALTH_HTTP_TIMEOUT:-20}"
-    health_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null || true)
+    # Both probes are POLLED while a server is starting, so curl's own "connection
+    # refused" would be a line per attempt that a reader learns to skip.  An endpoint
+    # that did not answer is this function's "not healthy" ANSWER - but the status is
+    # handled here rather than discarded, so nothing is silent about it.
+    # swallow-ok: curl's stderr is the same not-healthy answer, repeated once per poll of a starting server; the status is acted on below.
+    if ! health_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+    then
+        health_body=""
+    fi
     if [[ "$health_body" == *'"ok"'* ]]
     then
         return 0
     fi
-    models_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$LLM_PORT/v1/models" 2>/dev/null || true)
+    # swallow-ok: the second acceptance probe, polled the same way as the first for the same reason.
+    if ! models_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$LLM_PORT/v1/models" 2>/dev/null)
+    then
+        models_body=""
+    fi
     if [[ "$models_body" == *'"data"'* ]]
     then
         return 0
@@ -134,7 +147,11 @@ function __llm_proc_is_server() {
         python|python3|python3.*|pypy3) ;;
         *) return 1 ;;
     esac
-    _cmd=$(tr '\0' ' ' < "/proc/${_pid}/cmdline" 2>/dev/null || true)
+    # A pid that exited between the exe read above and this one is not a backend any
+    # more - the same answer as a cmdline that does not match - so the race is
+    # decided and returned rather than swallowed.
+    [[ -r "/proc/${_pid}/cmdline" ]] || return 1
+    _cmd=$(tr '\0' ' ' < "/proc/${_pid}/cmdline") || return 1
     [[ "$_cmd" == *"${LLM_SERVER_MODULE:-llama_cpp.server}"* ]]
 }
 
@@ -274,9 +291,33 @@ function __llm_server_gone() {
     return 0
 }
 
+# __llm_current_user — the user whose llama backends this module manages.  $USER is
+# the normal case; id(1) covers a cron/systemd context where it is unset.  An EMPTY
+# answer is warned about rather than passed on quietly, because every caller scans
+# with it and an empty value makes that scan UNSCOPED — every user's backends — which
+# is a widening this module must never do by accident.
+function __llm_current_user() {
+    local _u="${USER:-}"
+    if [[ -z "$_u" ]]
+    then
+        # swallow-ok: id(1)'s own message would only duplicate the warning below, which names the consequence instead of the errno.
+        _u=$(id -un 2>/dev/null) || _u=""
+    fi
+    if [[ -z "$_u" ]]
+    then
+        # Built in a variable so the line stays inside the 120-column house limit
+        # (tools/count-ratchet.sh item 8.1.8).
+        local _msg
+        _msg="[\$USER is unset and id(1) failed - the llama backend scan is"
+        _msg+=" UNSCOPED across every user]"
+        __tac_info "Warning" "$_msg" "$C_Warning"
+    fi
+    printf '%s\n' "$_u"
+}
+
 function __llm_server_running() {
     local _llm_user _pids
-    _llm_user="${USER:-$(id -un 2>/dev/null || true)}"
+    _llm_user=$(__llm_current_user)
     _pids=$(__llm_server_pids "$_llm_user")
     [[ -n "$_pids" ]]
 }
@@ -286,7 +327,7 @@ function __llm_server_stop() {
     local _llm_pid _pid _lanes
     local -a _pids=()
 
-    _llm_user="${USER:-$(id -un 2>/dev/null || true)}"
+    _llm_user=$(__llm_current_user)
     _grace="${LLM_SERVER_STOP_GRACE_SECONDS:-8}"
     [[ "$_grace" =~ ^[0-9]+$ ]] || _grace=8
     _tries=$((_grace * 5))
@@ -326,7 +367,8 @@ function __llm_server_stop() {
     for _pid in "${_pids[@]}"
     do
         [[ "$_pid" =~ ^[0-9]+$ ]] || continue
-        kill -TERM "$_pid" 2>/dev/null || true
+        # swallow-ok: every pid here was chosen for termination a moment ago and may already have exited; the wait loop below re-reads the live set, so a signal with nothing left to signal is not an error.
+        kill -TERM "$_pid" 2>/dev/null
     done
 
     for ((_i=0; _i<_tries; _i++))
@@ -345,7 +387,8 @@ function __llm_server_stop() {
     for _pid in "${_pids[@]}"
     do
         [[ "$_pid" =~ ^[0-9]+$ ]] || continue
-        kill -KILL "$_pid" 2>/dev/null || true
+        # swallow-ok: the SIGKILL pass over whatever the wait loop still found alive; a pid that exited between that scan and this signal is the outcome we wanted.
+        kill -KILL "$_pid" 2>/dev/null
     done
 
     # Kill any lingering stdin keeper processes (orphaned sleep loops).
@@ -362,7 +405,8 @@ function __llm_server_stop() {
 
     # Reclaim GPU memory: wait for VRAM to stabilise after server kill.
     local _smi _free_before _free_after _mem_waited _mem_max_wait
-    _smi=$(__resolve_smi 2>/dev/null || true)
+    # swallow-ok: "no SMI tool on PATH" is the ordinary cannot-read-VRAM case, and the empty test right below is what handles it.
+    _smi=$(__resolve_smi 2>/dev/null) || _smi=""
     if [[ -n "$_smi" ]]
     then
         _free_before=$(timeout 3 "$_smi" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
@@ -406,7 +450,8 @@ function __llm_python_bin_resolve() {
         then
             resolved="$cand"
         else
-            resolved=$(command -v "$cand" 2>/dev/null || true)
+            # swallow-ok: a candidate that is not on PATH is this search failing for that one candidate, which the loop continues past.
+            resolved=$(command -v "$cand" 2>/dev/null) || resolved=""
         fi
         [[ -z "$resolved" ]] && continue
 
@@ -552,7 +597,8 @@ function __llm_burn_request_timeout() {
 # ---------------------------------------------------------------------------
 function __llm_gpu_clock_snapshot() {
     local smi_cmd
-    smi_cmd=$(__resolve_smi 2>/dev/null || true)
+    # swallow-ok: a missing SMI tool is the documented skip path both callers test for explicitly below, not an error to raise here.
+    smi_cmd=$(__resolve_smi 2>/dev/null) || smi_cmd=""
     if [[ -z "$smi_cmd" ]]
     then
         printf '%s\n' "unavailable"
@@ -590,7 +636,8 @@ function __llm_gpu_clock_snapshot() {
 # ---------------------------------------------------------------------------
 function __llm_bench_perf_prep() {
     local smi_cmd
-    smi_cmd=$(__resolve_smi 2>/dev/null || true)
+    # swallow-ok: a missing SMI tool is the documented skip path both callers test for explicitly below, not an error to raise here.
+    smi_cmd=$(__resolve_smi 2>/dev/null) || smi_cmd=""
 
     # Compact GPU status within the bench header
     local _gpu_line=""

@@ -24,7 +24,7 @@ unclassified	scripts/09f-oc-misc.sh	15
 unclassified	scripts/10-deployment.sh	6
 unclassified	scripts/11a-llm-registry.sh	9
 unclassified	scripts/11b-llm-autotune.sh	7
-unclassified	scripts/11c-llm-server.sh	34
+unclassified	scripts/11c-llm-server.sh	12
 unclassified	scripts/11d-llm-gpu.sh	88
 unclassified	scripts/11e-llm-model.sh	71
 unclassified	scripts/11f-llm-runtime.sh	20
