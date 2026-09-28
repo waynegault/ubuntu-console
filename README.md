@@ -139,6 +139,7 @@ up             # Run 20-step system maintenance
 | `oc-restore` | OpenClaw | Restore from ZIP (`--dry-run` supported) |
 | `oc-diag` | OpenClaw | 5-point diagnostic |
 | `oc-doctor-local` | OpenClaw | End-to-end local gateway + llama.cpp validation |
+| `oc restart-check` | Console | Can WSL restart now? Names what would be interrupted (exit 0 safe / 1 not safe / 2 could not measure) |
 | `oc-failover` | OpenClaw | Cloud fallback toggle (`on`/`off`/`status`) |
 | `oc g` | OpenClaw | Launch knowledge graph server + open in browser |
 | `oc-local-llm` | OpenClaw | Bind OpenClaw to local llama.cpp |
@@ -1140,6 +1141,7 @@ where it was last present.)
 │   ├── _module-list.sh                #   Canonical module load order (shared by both loaders)
 │   ├── _startup-env.sh                #   Shared startup env fragment (sourced by loader + env.sh)
 │   ├── check_ci_status.py             #   CI verdict gate (card CI-WATCH-CONSOLE-001; run by tools/lint.sh)
+│   ├── oc-restart-check.py            #   "Can WSL restart now?" — names what a restart would interrupt (`oc restart-check`)
 │   ├── grpo-vram-probe.py             #   Measures the GRPO/QLoRA training VRAM budget (card UBC-GRPO-003)
 │   └── kgraph/                        #   Knowledge graph Python package (23 modules)
 │       ├── models.py                  #     GraphNode, GraphEdge, Graph, GraphBuilder
