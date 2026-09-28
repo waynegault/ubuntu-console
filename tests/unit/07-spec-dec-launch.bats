@@ -86,18 +86,19 @@ EOF
         "ngram" "" "16" "" "" "6.67"
     local row
     row=$(grep "^1|" "$LLM_REGISTRY")
-    # Current schema: 39 fields (v5's 32 + workload/ttft_ms/bench_*, then the two
-    # BENCH-SAMPLER-001 sampler columns).  The writers converge on the current schema, so
-    # this moves with it rather than pinning whatever the width happened to be.
-    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "39" ]]
+    # DERIVED: the writers converge the row on the header, so assert the two AGREE rather
+    # than pinning a width that every schema change moves.  The specific columns are
+    # pinned below, so nothing about the ordering is lost.
+    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "$(awk -F'|' 'NR==1{print NF}' "$LLM_REGISTRY")" ]]
     # spec_type(27), spec_draft_n_max(29), spec_accept_len(32).
     [[ "$(echo "$row" | cut -d'|' -f27)" == "ngram" ]]
     [[ "$(echo "$row" | cut -d'|' -f29)" == "16" ]]
     [[ "$(echo "$row" | cut -d'|' -f32)" == "6.67" ]]
-    # Legacy 20-col row padded to the CURRENT schema (39), header included.
+    # The header is the schema, so pin its TAIL BY NAME rather than by field count - names
+    # are the spec, the count is arithmetic that a schema change moves.
     local header
     header=$(head -1 "$LLM_REGISTRY")
-    [[ "$(echo "$header" | awk -F'|' '{print NF}')" == "39" ]]
+    [[ "$header" == *"|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n" ]]
 }
 
 @test "spec-dec-004: remap carries the spec fields across a renumber" {

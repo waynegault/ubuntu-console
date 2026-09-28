@@ -60,15 +60,15 @@ EOF
         "" "" "" "" "" "" "legal"
     local row
     row=$(grep "^1|" "$LLM_REGISTRY")
-    # Current schema: 39 fields (37 + the two BENCH-SAMPLER-001 sampler columns).  The
-    # writers converge on the current schema, so this moves with it.
-    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "39" ]]
+    # DERIVED: the row must agree with the header the same writer emitted, not with a
+    # number that goes stale the next time the schema grows.  The col-33 check below
+    # pins the content.
+    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "$(awk -F'|' 'NR==1{print NF}' "$LLM_REGISTRY")" ]]
     [[ "$(echo "$row" | cut -d'|' -f33)" == "legal" ]]
     local header
     header=$(head -1 "$LLM_REGISTRY")
-    # The header moves with the schema too: a legacy row is padded to 39 and the header
-    # names all 39, so pinning 37 here is the same stale expectation as the row above.
-    [[ "$(echo "$header" | awk -F'|' '{print NF}')" == "39" ]]
+    # The header is the schema: pin its TAIL BY NAME, not its field count.
+    [[ "$header" == *"|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n" ]]
 }
 
 @test "autotune-001: autotune-model.sh accepts --workload and env default chat" {
@@ -97,7 +97,8 @@ EOF
     local row
     row=$(grep "^1|" "$LLM_REGISTRY")
     [[ "$(echo "$row" | cut -d'|' -f34)" == "145.5" ]]
-    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "39" ]]
+    # DERIVED, as above: agreement with the header, not a frozen width.
+    [[ "$(echo "$row" | awk -F'|' '{print NF}')" == "$(awk -F'|' 'NR==1{print NF}' "$LLM_REGISTRY")" ]]
 }
 
 @test "autotune-003: autotune-model.sh measures TTFT via a streaming probe" {
