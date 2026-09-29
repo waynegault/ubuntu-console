@@ -26,6 +26,12 @@
 # "fix" a fixture to make a case pass: a fixture that stops being wrong turns its
 # case into a control and leaves the arm unproven.
 #
+# Case-name prefixes, which are also the file's index (the `meta:` case below greps
+# for them): `seed:` = a deliberately-broken fixture that must be caught,
+# `control:` = a clean fixture that must pass, `report:` = a case whose criterion is
+# a REPORTED count rather than a verdict, and `real:` = the shipped repo's own
+# artifact, asserted where a fixture cannot stand in for it.
+#
 # Hermetic, like 22 and 24: each case builds a throwaway tree under
 # $BATS_TEST_TMPDIR and points the checker at it with --repo, so the shared real
 # repo and its baselines are never touched.
@@ -352,6 +358,145 @@ YAML
     run "$CHECKER" continuity --repo "$FIXTURE"
     [[ "$status" -eq 1 ]]
     [[ "$output" == *"status is superseded but there is no \`superseded_by:\` pointer"* ]]
+}
+
+# ── verified_by: the contract-to-test traceability (SPEC-VV-CONSOLE-003) ────
+# The criterion is the checker header: a `verified_by:` node must exist as written
+# in a BATS file under tests/ (FAIL otherwise), while an ACTIVE entry that declares
+# none is REPORTED and counted, never a failure — the posture `state` takes for its
+# NOT ENFORCED edges.  Three cases, one per direction: a dangling pointer, an
+# absent map, and a correct declaration that must be accepted and counted.
+@test "seed: continuity — a dangling verified_by is caught, naming the entry and the node" {
+    mkdir -p "$FIXTURE/tests/unit"
+    printf '@test "fixture case" {\n    true\n}\n' > "$FIXTURE/tests/unit/99-fixture.bats"
+
+    # (a) the file exists but the node does not: the test was renamed or deleted, so
+    # the entry cites something that is no longer there — a stale claim of coverage.
+    sed -i 's|^    scope: both$|    scope: both\n    verified_by:\n      - "tests/unit/99-fixture.bats::a case that was renamed away"|' \
+        "$FIXTURE/docs/contracts/command-contracts.yaml"
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"FAIL  docs/contracts/command-contracts.yaml:beta-cmd"* ]]
+    [[ "$output" == *"names 'tests/unit/99-fixture.bats::a case that was renamed away'"* ]]
+    [[ "$output" == *"which is not a @test in tests/unit/99-fixture.bats"* ]]
+
+    # (b) the path is not a BATS file under tests/ at all.  A Python test cannot be
+    # named (the oracle is the @test parser), so naming one is a failure rather than
+    # a silently ignored pointer.
+    cat > "$FIXTURE/docs/contracts/command-contracts.yaml" <<'YAML'
+version: 2
+commands:
+  - name: beta-cmd
+    family: fixture
+    summary: Run the fixture beta command
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
+    effect: read
+    verified_by:
+      - "tests/test_fixture.py::test_beta_cmd"
+    contract:
+      side_effects: []
+YAML
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"but 'tests/test_fixture.py' is not a BATS file under tests/"* ]]
+    [[ "$output" == *"a Python test cannot be named here"* ]]
+}
+
+@test "seed: continuity — a malformed verified_by is caught, empty or not a node" {
+    # The declaration's own shape: a present-but-empty list says nothing, and an item
+    # without the `::` separator is not a node at all.  Both are FAILs rather than
+    # silent no-ops, because a field that reads as declared coverage while naming
+    # nothing is the failure mode this card is about.
+    cat > "$FIXTURE/docs/contracts/command-contracts.yaml" <<'YAML'
+version: 2
+commands:
+  - name: beta-cmd
+    family: fixture
+    summary: Run the fixture beta command
+    version: 1
+    updated: 2026-09-23
+    status: active
+    scope: both
+    effect: read
+    verified_by: []
+    contract:
+      side_effects: []
+YAML
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"declares an empty \`verified_by:\`"* ]]
+
+    sed -i 's|^    verified_by: \[\]$|    verified_by:\n      - "not-a-node"|' \
+        "$FIXTURE/docs/contracts/command-contracts.yaml"
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"item 'not-a-node' is not of the form"* ]]
+}
+
+@test "report: continuity — an active entry with no verified_by is counted, not fatal" {
+    # The posture half: a missing test is a fact about the suite, so it is reported
+    # and counted (mirroring `state`'s NOT WITNESSED) rather than failing the check.
+    # The fixture has no tests/ at all, which is also how the empty ORACLE stays
+    # visible: a zero-node index is printed, not mistaken for a clean tree.
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"NOT VERIFIED  beta-cmd"* ]]
+    [[ "$output" == *"verified_by: 0 node(s) verified, 1 active entr(ies) unverified"* ]]
+    [[ "$output" == *"@test oracle: 0 node(s) in 0 BATS file(s)"* ]]
+}
+
+@test "control: continuity — a verified_by naming a real test node passes and is counted" {
+    # The false-positive half of this rule: the same declaration that must fail when
+    # the node is missing must PASS, and be counted, when the node is there.
+    mkdir -p "$FIXTURE/tests/unit"
+    printf '@test "fixture case exercises beta-cmd" {\n    true\n}\n' \
+        > "$FIXTURE/tests/unit/99-fixture.bats"
+    sed -i 's|^    scope: both$|    scope: both\n    verified_by:\n      - "tests/unit/99-fixture.bats::fixture case exercises beta-cmd"|' \
+        "$FIXTURE/docs/contracts/command-contracts.yaml"
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"VERIFIED      beta-cmd -> tests/unit/99-fixture.bats::fixture case exercises beta-cmd"* ]]
+    [[ "$output" == *"verified_by: 1 node(s) verified, 0 active entr(ies) unverified"* ]]
+    [[ "$output" == *"@test oracle: 1 node(s) in 1 BATS file(s)"* ]]
+}
+
+@test "real: the shipped contract's verified_by nodes all resolve, and the gap is named" {
+    # The real-tree half of the card: the shipped map parses, every declared node
+    # exists (a dangling one is a FAIL above, so exit 0 is the assertion), and the
+    # reported counts are cross-checked against the FILE ITSELF rather than a pinned
+    # number — the count of declared nodes, and the count of entries with no map,
+    # both come from the contract's own text.
+    run "$CHECKER" continuity --repo "$REPO_ROOT"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"15 contract entr(ies) (15 active, 0 superseded)"* ]]
+
+    local _declared _reported _entries _with_map _unverified
+    _declared=$(grep -c '^      - "tests/' "$REPO_ROOT/docs/contracts/command-contracts.yaml")
+    _reported=$(printf '%s\n' "$output" \
+        | sed -n 's/.*verified_by: \([0-9]*\) node(s) verified.*/\1/p')
+    [[ -n "$_reported" ]] || { echo "the summary carries no verified_by count"; return 1; }
+    [[ "$_reported" == "$_declared" ]] || {
+        echo "$_declared node(s) declared in the contract, $_reported reported verified"
+        return 1
+    }
+    (( _declared > 0 )) || { echo "the shipped map declares no test node at all"; return 1; }
+
+    _entries=$(grep -c '^  - name: ' "$REPO_ROOT/docs/contracts/command-contracts.yaml")
+    _with_map=$(grep -c '^    verified_by:$' "$REPO_ROOT/docs/contracts/command-contracts.yaml")
+    _unverified=$(printf '%s\n' "$output" \
+        | sed -n 's/.*, \([0-9]*\) active entr(ies) unverified.*/\1/p')
+    [[ "$_unverified" == "$((_entries - _with_map))" ]] || {
+        echo "$((_entries - _with_map)) entr(ies) declare no verified_by, $_unverified reported"
+        return 1
+    }
+    # ...and the one entry without a BATS test is the recorded gap, reported by name:
+    # oc-restart-check's coverage is tests/test_oc_restart_check.py, which the
+    # BATS-only oracle cannot name.  If a BATS case for it lands, this assertion is
+    # the deliberate edit that adds the mapping.
+    [[ "$output" == *"NOT VERIFIED  oc-restart-check"* ]]
 }
 
 @test "seed: swallows — a new unclassified swallow is caught" {

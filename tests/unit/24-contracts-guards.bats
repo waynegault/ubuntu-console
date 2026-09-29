@@ -811,13 +811,15 @@ SH
     [[ "$output" == *"only accepted with the \`continuity\` subcommand"* ]]
 }
 
-@test "dispatch: an unknown option exits 2; --version prints 4" {
+@test "dispatch: an unknown option exits 2; --version prints the tool version" {
     run "$CHECKER" --bogus
     [[ "$status" -eq 2 ]]
     [[ "$output" == *"unknown option '--bogus'"* ]]
     run "$CHECKER" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "check-contracts 5" ]]
+    # v6 is the `verified_by:` rule in `continuity` (SPEC-VV-CONSOLE-003); the string
+    # moves with the tool, so a bump is a deliberate edit here, not silent drift.
+    [[ "$output" == "check-contracts 6" ]]
 }
 
 # end of file

@@ -17,9 +17,9 @@
 #   derived     the DERIVED command surface (from @exports) against the AUTHORED
 #               enumerations that snapshot it (skills/tactical-console/SKILL.md's
 #               tac-exec table and docs/contracts/command-contracts.yaml).
-#   continuity  per-entry version/status/scope/superseded_by in
-#               docs/contracts/command-contracts.yaml, plus the decision register
-#               under .agents/decisions/.
+#   continuity  per-entry version/status/scope/superseded_by and the per-entry
+#               `verified_by:` test nodes in docs/contracts/command-contracts.yaml,
+#               plus the decision register under .agents/decisions/.
 #   swallows    unclassified `|| true` and `2>/dev/null` sites in the shell corpus
 #               (scripts/*.sh, bin/*, tools/*.sh, tools/hooks/*).
 #
@@ -189,11 +189,27 @@
 # parses, whose `name:` matches its file name, whose `date:` is ISO, whose
 # `status:`/`scope:` are known values, and whose `commands:` values resolve to an
 # exported command.
+#   `verified_by:` (card SPEC-VV-CONSOLE-003) is an OPTIONAL entry-level list, a
+#   sibling of `read_back:`, whose items are test nodes written
+#   `<repo-relative path>::<exact @test name>`.  The oracle is the @test NAME PARSER
+#   for tests/**/*.bats (the same declaration regex the pytest bridge uses), so a
+#   node this check accepts is a node the bridge collects.  A declared node that does
+#   not exist is a FAIL, naming the entry and the node; the field is validated on
+#   every entry, superseded ones included, because a dangling pointer is dangling
+#   wherever it sits.
 # REPORTED, never enforced by `continuity`: what the contracts SAY (`side_effects`,
 # `output_shape`, `exit_code` are prose — `state` and `swallows` enforce their own
-# halves), and the changed-entry pass, which prints (or prints that it could not
-# run) the entries added against HEAD and the older same-family entries that still
-# apply.
+# halves); the ACTIVE entries that declare no `verified_by:` at all (the same posture
+# `state` takes for its NOT ENFORCED edges and NOT WITNESSED entries — the gap is
+# COUNTED and printed, never silent, and an unverified entry is not a failure); and
+# the changed-entry pass, which prints (or prints that it could not run) the entries
+# added against HEAD and the older same-family entries that still apply.
+#
+# NOT COVERED by `verified_by` (stated rather than implied): a Python test cannot be
+# named — the index is BATS only — and the check proves a node EXISTS, not that the
+# test genuinely exercises the command.  The map is authored, so it can be wrong in
+# the direction of naming a weaker test; that is a review question, not a checkable
+# one.
 #
 # WHY `swallows` EXISTS — the failure it catches:
 # An unclassified `|| true` or `2>/dev/null` is a silent failure: the code runs,
@@ -243,9 +259,20 @@
 # REF: "Coding Agents Don't Need Longer History — They Need Intent Continuity"
 #      (TDS, 2026-09-11) — continuity —
 #      https://towardsdatascience.com/coding-agents-dont-need-longer-history-they-need-intent-continuity/
+# REF: "Towards Spec-Driven Test Automation: Part 1" (Gal Arav, TDS, 2026-09-24) — https://towardsdatascience.com/towards-spec-driven-test-automation-part-1/
+#      — continuity's `verified_by:` (a contract entry must say which test holds it
+#      to its word, and a named node must exist).
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-09-29): `continuity` gained `verified_by:` (card SPEC-VV-CONSOLE-003) —
+#   an optional per-entry list of `<repo-relative path>::<exact @test name>` nodes,
+#   validated against the @test declaration parser for tests/**/*.bats (a declared
+#   node that does not exist FAILS, naming the entry and the node), with the ACTIVE
+#   entries that declare none COUNTED and printed as NOT VERIFIED rather than failing
+#   — the posture `state` already takes for its NOT ENFORCED edges.  The tool
+#   `VERSION` moves to 6 for the new enforced rule, so the BATS version pins move with
+#   it (tests/unit/22 and 24).
 #   v9 (2026-09-28): state validates each ACTIVE entry's `effect: read|mutate` and
 #   forbids `mutate` + `read_back_exempt`, and names the mutating surface (RAGACT-006).
 #   v8 (2026-09-24): two corrections to v7, both found by running the thing rather
@@ -275,7 +302,7 @@
 # @modular-section: contracts
 # @depends: none (standalone CI helper; needs python3 with PyYAML)
 # @exports: (none — standalone script, not sourced)
-VERSION="5"
+VERSION="6"
 set -euo pipefail
 
 # --version is pure bash: a version query must not depend on the YAML engine.
@@ -1732,6 +1759,98 @@ CONTRACT_STATUSES = ("active", "superseded", "retired")
 DECISION_DIR = ".agents/decisions"
 ISO_DATE = re.compile(r"^\d{4}-\d\d-\d\d$")
 
+# ── continuity's `verified_by:` (card SPEC-VV-CONSOLE-003) ──────────────────
+# A contract entry says what a command does; nothing said which test holds it to
+# that word, so a CONTRACT-TO-TEST traceability gap was invisible: an entry could
+# be reworded, or its behaviour deleted, with every gate still green.
+# REF: "Towards Spec-Driven Test Automation: Part 1" (Gal Arav, TDS, 2026-09-24) — https://towardsdatascience.com/towards-spec-driven-test-automation-part-1/
+#
+# The oracle for "does that node exist" is the @test DECLARATION parser for
+# tests/**/*.bats.  The regex is deliberately the same one the pytest bridge uses
+# (tests/test_bats_bridge.py, _parse_bats_tests: anchored to the line, opening `{`
+# REQUIRED, single or double quoted name), so a node this check accepts is a node
+# the bridge collects; two parsers that disagree would make the map mean two
+# different things.  The anchoring is load-bearing there and here: an unanchored
+# match also reads @test TEXT out of a comment or a printf fixture, which the
+# bridge recorded as fabricating cases that never existed.
+BATS_TEST_DECL = re.compile(r'^[ \t]*@test[ \t]+(["\'])(.*?)\1[ \t]*\{', re.MULTILINE)
+
+
+def bats_test_nodes(repo):
+    """(nodes_by_file, n_files) — every BATS @test name under tests/.
+
+    Returns {repo-relative .bats path: [exact @test names]} plus the number of
+    .bats files read, so the caller can report how big the oracle was rather than
+    implying it looked everywhere.  A file that cannot be read is written to
+    stderr and skipped: the node it holds then reads as not-found, which fails a
+    verified_by that names it instead of passing on a partial index.
+    """
+    root = os.path.join(repo, "tests")
+    nodes = {}
+    n_files = 0
+    if not os.path.isdir(root):
+        return nodes, n_files
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for filename in sorted(filenames):
+            if not filename.endswith(".bats"):
+                continue
+            path = os.path.join(dirpath, filename)
+            try:
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError as exc:
+                sys.stderr.write(f"check-contracts: cannot read {path}: {exc}\n")
+                continue
+            n_files += 1
+            rel = os.path.relpath(path, repo)
+            nodes[rel] = [m.group(2) for m in BATS_TEST_DECL.finditer(text)]
+    return nodes, n_files
+
+
+def check_verified_by(entry, where, status, name, nodes, problems, report):
+    """Validate one entry's `verified_by:` and record its coverage.
+
+    `report` collects the NOT VERIFIED lines (the posture `state` takes for an
+    unenforced edge: counted and printed, never a failure).  A DECLARED node that
+    cannot be resolved IS a failure, naming the entry and the node — that is the
+    half this card exists for, because a stale pointer is a claim of coverage that
+    is no longer true.
+    """
+    declared = entry.get("verified_by")
+    if declared is None:
+        if status == "active":
+            report.append(f"NOT VERIFIED  {name} — no `verified_by:` names the test that "
+                          f"holds this entry to its word")
+        return
+    if not isinstance(declared, list) or not declared:
+        problems.append(f"  FAIL  {where}: declares an empty `verified_by:` — name at least "
+                        f"one '<path>::<exact @test name>' node, or omit the field so the "
+                        f"entry is counted as unverified")
+        return
+    for item in declared:
+        if not isinstance(item, str) or "::" not in item:
+            problems.append(f"  FAIL  {where}: `verified_by:` item {item!r} is not of the form "
+                            f"'<repo-relative .bats path>::<exact @test name>'")
+            continue
+        path, _sep, node = item.partition("::")
+        path = path.strip()
+        node = node.strip()
+        if not path or not node:
+            problems.append(f"  FAIL  {where}: `verified_by:` item '{item}' has an empty path or "
+                            f"test name")
+            continue
+        if path not in nodes:
+            problems.append(f"  FAIL  {where}: `verified_by:` names '{item}', but '{path}' is not "
+                            f"a BATS file under tests/ — a Python test cannot be named here")
+            continue
+        if node not in nodes[path]:
+            problems.append(f"  FAIL  {where}: `verified_by:` names '{item}', which is not a "
+                            f"@test in {path} — the node was renamed or deleted, so the entry "
+                            f"claims a test that does not exist")
+            continue
+        report.append(f"VERIFIED      {name} -> {item}")
+
 
 def decision_records(repo):
     """[(name, fields, problems)] for .agents/decisions/*.md."""
@@ -1803,6 +1922,11 @@ def run_continuity(repo, names):
     problems = []
     by_name = {}
     active_pairs = {}
+    # The traceability oracle (card SPEC-VV-CONSOLE-003): the @test names the pytest
+    # bridge would collect, plus how many files they were read from — the second
+    # figure is printed so an empty index is visible rather than reading as "clean".
+    test_nodes, n_bats = bats_test_nodes(repo)
+    trace_lines = []
     for entry in entries:
         if not isinstance(entry, dict):
             problems.append(f"  FAIL  {rel}: entry is not a mapping: {entry!r}")
@@ -1853,6 +1977,7 @@ def run_continuity(repo, names):
                                 f"same scope '{scope}' — different scopes may coexist, the "
                                 f"same scope may not")
             active_pairs[key] = True
+        check_verified_by(entry, where, status, name, test_nodes, problems, trace_lines)
 
     for name, group in sorted(by_name.items()):
         for entry in group:
@@ -1942,6 +2067,9 @@ def run_continuity(repo, names):
                 if entry.get("superseded_by"):
                     print(f"           superseded {entry.get('superseded')} by "
                           f"'{entry.get('superseded_by')}'")
+                if entry.get("verified_by"):
+                    print("           verified_by: "
+                          f"{', '.join(str(node) for node in entry['verified_by'])}")
             family = {entry.get("family") for entry in matches if isinstance(entry, dict)}
             siblings = sorted({entry.get("name") for entry in entries
                                if isinstance(entry, dict)
@@ -1956,6 +2084,14 @@ def run_continuity(repo, names):
 
     changed_note = print_changed_entries(repo, rel)
 
+    # The traceability report, printed before the findings like `state` prints its
+    # NOT ENFORCED / NOT WITNESSED lines: an unverified entry is a stated gap, not a
+    # verdict, and the count in the summary says "(printed above)" so it cannot read
+    # as a number with nothing behind it.
+    verified_lines = [line for line in trace_lines if line.startswith("VERIFIED")]
+    unverified_lines = [line for line in trace_lines if line.startswith("NOT VERIFIED")]
+    for line in trace_lines:
+        print(f"  {line}")
     for problem in problems:
         print(problem)
     active = sum(1 for entry in entries
@@ -1963,7 +2099,11 @@ def run_continuity(repo, names):
     superseded = sum(1 for entry in entries
                      if isinstance(entry, dict) and entry.get("status") == "superseded")
     summary = (f"{len(entries)} contract entr(ies) ({active} active, {superseded} superseded) | "
-               f"{len(records)} decision record(s) in {DECISION_DIR}/")
+               f"{len(records)} decision record(s) in {DECISION_DIR}/ | "
+               f"verified_by: {len(verified_lines)} node(s) verified, "
+               f"{len(unverified_lines)} active entr(ies) unverified (printed above) | "
+               f"@test oracle: {sum(len(v) for v in test_nodes.values())} node(s) "
+               f"in {n_bats} BATS file(s)")
     if problems:
         print(f"check-contracts[continuity]: FAIL — {len(problems)} finding(s). {summary}")
         print("  An edited contract is a NEW version with its predecessor marked superseded —")
@@ -1980,9 +2120,14 @@ def run_continuity(repo, names):
     print("  contract, names its replacement and dates the supersession; every superseded_by")
     print("  chain ends at an active entry. Enforced for the register too: at least one record,")
     print("  a parseable frontmatter, a name that matches the file, an ISO date, a known status")
-    print("  and scope, and `commands:` values that resolve to an exported command.")
+    print("  and scope, and `commands:` values that resolve to an exported command. Enforced")
+    print("  for `verified_by:`: every declared test node exists as written, in a BATS file")
+    print("  under tests/ (the same @test parser the pytest bridge uses).")
     print("  NOT enforced here: what the contracts SAY (side_effects/output_shape/exit_code are")
-    print("  prose; `state` and `swallows` enforce their own halves).")
+    print("  prose; `state` and `swallows` enforce their own halves), and COVERAGE — an ACTIVE")
+    print("  entry with no `verified_by:` is counted and printed as NOT VERIFIED, never a")
+    print("  failure, because a missing test is a statement about the suite, not about the")
+    print("  contract. The check proves a node EXISTS, not that the test exercises the command.")
     return EXIT_CLEAN
 
 

@@ -31,6 +31,19 @@ notes:
     The v1 rules were not replaced by this — the field is additive, which is why
     the ten edited entries are v2 with no superseded predecessor (see
     .agents/decisions/read-back-witness.md)."
+  - "verified_by (2026-09-29, card SPEC-VV-CONSOLE-003): an OPTIONAL entry-level
+    list, a sibling of `read_back:`, naming the tests that exercise the command.
+    Each item is `<repo-relative path>::<exact @test name>`, so the pointer is
+    checkable rather than prose: tools/check-contracts.sh continuity parses every
+    `@test \"…\" {` declaration under tests/ and FAILS, naming the entry and the
+    node, when a declared node does not exist (a renamed or deleted test is a
+    stale claim of coverage).  An ACTIVE entry that declares none is REPORTED as
+    NOT VERIFIED and counted, never a failure — the same posture `state` takes for
+    its NOT ENFORCED edges: a missing test is a fact about the suite, and hiding
+    it would be the silent gap this field exists to close.  Only BATS nodes can be
+    named (the oracle is the @test parser), and the field proves a node EXISTS,
+    not that the test exercises the command — that judgement stays with the
+    author, which is why every mapping here was read before it was written."
 
 entrypoints:
   interactive_loader:
@@ -59,6 +72,8 @@ commands:
       rather than a mutation.  What the dashboard DOES owe its reader is said where
       it renders: a cached value past its display bound now carries a STALE marker
       (scripts/07-telemetry.sh __cache_age_suffix).
+    verified_by:
+      - "tests/tactical-console.bats::alias: m is defined (tactical_dashboard)"
     contract:
       side_effects:
         - reads telemetry caches under /dev/shm
@@ -75,6 +90,8 @@ commands:
     scope: interactive
     effect: read
     scope_note: alias for tactical_help; an alias name does not resolve under tac-exec
+    verified_by:
+      - "tests/tactical-console.bats::alias: h is defined (tactical_help)"
     contract:
       side_effects: []
       output_shape:
@@ -98,6 +115,9 @@ commands:
           Scoped on purpose: each STEP's own effect is reported by that step (its
           command's rc, its own row and cooldown record) rather than by one row that
           would restate the summary.
+    verified_by:
+      - "tests/unit/25-claimed-success-witness.bats::up: the run's row is read back before up reports its record"
+      - "tests/unit/25-claimed-success-witness.bats::read-back: __up_run_recorded needs this run's own row to have landed"
     contract:
       side_effects:
         - writes cooldown records
@@ -118,6 +138,9 @@ commands:
       - witness: __oc_gateway_started
         file: scripts/09a-oc-gateway.sh
         asserts: the gateway's systemd unit is active and its port answers, read back before the start is reported as done
+    verified_by:
+      - "tests/unit/02-so-startup.bats::so: a start that does not leave the gateway serving is FAILURE, not success"
+      - "tests/unit/02-so-startup.bats::so: __oc_gateway_started needs BOTH the unit active and the port answering"
     contract:
       side_effects:
         - interacts with systemd user services
@@ -138,6 +161,9 @@ commands:
       - witness: __oc_gateway_gone
         file: scripts/09a-oc-gateway.sh
         asserts: the gateway's systemd unit is no longer active and its port is released, read back before TERMINATED is printed
+    verified_by:
+      - "tests/unit/02-so-startup.bats::xo: TERMINATED is printed only once the unit and the port are both gone"
+      - "tests/unit/02-so-startup.bats::xo: a gateway still active after the stop is not reported TERMINATED"
     contract:
       side_effects:
         - stops gateway service/processes
@@ -153,6 +179,9 @@ commands:
     status: active
     scope: both
     effect: read
+    verified_by:
+      - "tests/unit/33-daemon-guard-patch.bats::guard patch: --json stays clear of the row"
+      - "tests/unit/28-gh-keyring-watch.bats::keyring watch: the row also prints on the fallback path"
     contract:
       args:
         - --json
@@ -183,6 +212,8 @@ commands:
     status: active
     scope: both
     effect: read
+    verified_by:
+      - "tests/tactical-console.bats::model: model list runs without syntax error (empty state)"
     contract:
       side_effects: []
       output_shape:
@@ -204,6 +235,9 @@ commands:
       - witness: __llm_wait_for_health
         file: scripts/11c-llm-server.sh
         asserts: the serving port answers before the launch reports success
+    verified_by:
+      - "tests/unit/25-claimed-success-witness.bats::model use: the recorded state makes ONLINE honest"
+      - "tests/unit/25-claimed-success-witness.bats::model use: the state missing at the success line is FAILURE, not ONLINE"
     contract:
       args:
         - "<model_number>"
@@ -227,6 +261,9 @@ commands:
       - witness: __llm_server_gone
         file: scripts/11c-llm-server.sh
         asserts: no llama backend is still running and the serving port is released, read back before STOPPED is printed
+    verified_by:
+      - "tests/unit/25-claimed-success-witness.bats::model stop: a stop that really landed still reports STOPPED"
+      - "tests/tactical-console.bats::model: model stop succeeds when no server running"
     contract:
       side_effects:
         - stops model server process
@@ -242,6 +279,9 @@ commands:
     status: active
     scope: both
     effect: read
+    verified_by:
+      - "tests/tactical-console.bats::llm-manager: model status supports json output"
+      - "tests/tactical-console.bats::llm-manager: model status supports plain output"
     contract:
       args:
         - --json
@@ -262,6 +302,9 @@ commands:
       - witness: __burn_tps_cache_holds
         file: scripts/11f-llm-runtime.sh
         asserts: the TPS cache holds exactly the rate this run measured, read back before the run returns success
+    verified_by:
+      - "tests/unit/25-claimed-success-witness.bats::burn: the witness is consulted before burn returns success"
+      - "tests/unit/25-claimed-success-witness.bats::read-back: __burn_tps_cache_holds accepts only the rate this run wrote"
     contract:
       side_effects:
         - updates TPS cache
@@ -282,6 +325,8 @@ commands:
       nothing to witness: the effect this entry lists is a READ (recent shell
       context/log state), not a state change.  The command's own success condition
       is that the LLM answered, which its exit code already carries.
+    verified_by:
+      - "tests/tactical-console-function-availability.bats::explain: returns error when no previous command (non-interactive shell)"
     contract:
       side_effects:
         - reads recent shell context/log state
@@ -306,6 +351,9 @@ commands:
           purpose: the tooling prunes (apt/brew/journal/docker/npm) leave no
           console-visible artefact to re-read, so their verification is the command's
           own exit status, which cl already reports per step.
+    verified_by:
+      - "tests/unit/25-claimed-success-witness.bats::cl: the deletions are read back before cl reports its summary"
+      - "tests/unit/25-claimed-success-witness.bats::read-back: __cl_paths_cleared needs the cleared paths to be empty"
     contract:
       args:
         - --light
@@ -329,6 +377,9 @@ commands:
       - witness: __log_trim_within_bound
         file: scripts/08-maintenance.sh
         asserts: every log this run rewrote is within LOG_MAX_BYTES, read back before the trim is reported
+    verified_by:
+      - "tests/unit/25-claimed-success-witness.bats::logtrim: a log brought inside the bound is reported trimmed, and the file really shrank"
+      - "tests/unit/25-claimed-success-witness.bats::logtrim: the 'Trimmed' line is gated on the read-back, and the count is not the claim"
     contract:
       side_effects:
         - rewrites target log files
