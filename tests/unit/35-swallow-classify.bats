@@ -114,6 +114,20 @@ def _post(url, payload, timeout):
     # came from discovery (never a hardcoded one).
     assert url.endswith("/v1/chat/completions"), url
     assert isinstance(payload.get("model"), str) and payload["model"], payload
+    content = payload["messages"][0]["content"]
+    prompt_out = os.environ.get("STUB_PROMPT_OUT")
+    if prompt_out:
+        with open(prompt_out, "a", encoding="utf-8") as handle:
+            handle.write(content + "\n@@@\n")
+    # STUB_ANSWER_MAP lets one run answer differently per site: "<needle>|<verdict>;…"
+    # where the needle is a distinctive fragment of that site's line.
+    for part in os.environ.get("STUB_ANSWER_MAP", "").split(";"):
+        if "|" not in part:
+            continue
+        needle, _sep, verdict = part.partition("|")
+        if needle.strip() and needle.strip() in content:
+            return {"choices": [{"message": {"content":
+                f"VERDICT: {verdict.strip()}\nREASON: stub reason for {needle.strip()}"}}]}
     return {"choices": [{"message": {"content": os.environ["STUB_ANSWER"]}}]}
 
 
@@ -124,6 +138,32 @@ assert module.discover_model.__globals__["http_get_json"] is _get
 assert module.ask_model.__globals__["http_post_json"] is _post
 sys.exit(module.main(sys.argv[2:]))
 PY
+}
+
+# _write_multifile_fixture <dir> — a tree with CLASSIFIED sites in several files of
+# different sizes, which is what stratified sampling and the tune/heldout split need to
+# show anything: one file cannot demonstrate coverage of every file.
+_write_multifile_fixture() {
+    local dir="$1"
+    mkdir -p "$dir/scripts" "$dir/bin"
+    _write_labelled_file "$dir/scripts/01-alpha.sh" 4 alpha
+    _write_labelled_file "$dir/scripts/02-beta.sh" 3 beta
+    _write_labelled_file "$dir/bin/03-gamma.sh" 2 gamma
+}
+
+# _write_labelled_file <path> <count> <tag> — N site-lines, each with its own
+# `# swallow-ok:` marker on the line above, so EVERY line in the file is classified.
+_write_labelled_file() {
+    local path="$1" count="$2" tag="$3" index
+    {
+        printf '%s\n' '#!/usr/bin/env bash'
+        for index in $(seq 1 "$count"); do
+            printf '# swallow-ok: the %s probe %s is optional and the caller checks for it.\n' \
+                "$tag" "$index"
+            printf 'probe_%s_%s() { command -v "%s-tool-%s" 2>/dev/null >/dev/null; }\n' \
+                "$tag" "$index" "$tag" "$index"
+        done
+    } > "$path"
 }
 
 # ── the site source ────────────────────────────────────────────────────────
@@ -236,6 +276,181 @@ PY
     [[ "$output" == *"(human-labelled benign)"* ]]
     _after=$(sha256sum "$FIXTURE/scripts/01-fixture.sh" | cut -d' ' -f1)
     [[ "$_before" == "$_after" ]]
+}
+
+@test "sample: stratified covers EVERY file, in proportion, and is reproducible from the command" {
+    # The precision card's cause 1: `--limit` took corpus order, so a 30-site sample
+    # covered two files.  Stratified must cover every file that carries a site, allocate
+    # in proportion, and be a pure function of the command (seed included) — the rule it
+    # used is printed per file, because the acceptance records the RULE, not the count.
+    export FIXTURE2="$BATS_TEST_TMPDIR/fixture-multi"
+    _write_multifile_fixture "$FIXTURE2"
+
+    # Ask for the real plan: 5 of 9 lines across 3 files of sizes 4/3/2 -> 2/2/1.
+    run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE2" --endpoint "$DEAD_ENDPOINT" \
+        --only classified --sample stratified --limit 5 --seed 7
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"SAMPLING       --sample stratified --seed 7"* ]]
+    [[ "$output" == *"scripts/01-alpha.sh: 2 of 4"* ]]
+    [[ "$output" == *"scripts/02-beta.sh: 2 of 3"* ]]
+    [[ "$output" == *"bin/03-gamma.sh: 1 of 2"* ]]
+    [[ "$output" == *"rule: stratified by file, proportional with a floor of 1, seed=7; 3 file(s) covered"* ]]
+    [[ "$output" == *"asked 5 unique site-line(s)"* ]]
+
+    # Reproducible from the command alone: the same command twice is byte-identical.
+    local _first _second
+    _first=$(run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE2" --endpoint "$DEAD_ENDPOINT" \
+        --only classified --sample stratified --limit 5 --seed 7; printf '%s' "$output")
+    _second=$(run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE2" --endpoint "$DEAD_ENDPOINT" \
+        --only classified --sample stratified --limit 5 --seed 7; printf '%s' "$output")
+    [[ -n "$_first" ]]
+    [[ "$_first" == "$_second" ]]
+
+    # A limit smaller than the file count is REFUSED rather than dropping a stratum.
+    run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE2" --endpoint "$DEAD_ENDPOINT" \
+        --only classified --sample stratified --limit 2 --seed 7
+    [[ "$status" -eq 2 ]]
+    [[ "$output" == *"cannot cover every file"* ]]
+    [[ "$output" == *"smallest covering limit is 3"* ]]
+}
+
+@test "sample: random is seeded, and corpus order stays the default" {
+    # Reproducibility is the property: a recorded command must reproduce the sample.
+    export FIXTURE2="$BATS_TEST_TMPDIR/fixture-multi"
+    _write_multifile_fixture "$FIXTURE2"
+    local _a _b
+    _a=$(run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE2" --endpoint "$DEAD_ENDPOINT" \
+        --only classified --sample random --limit 4 --seed 11; printf '%s' "$output")
+    _b=$(run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE2" --endpoint "$DEAD_ENDPOINT" \
+        --only classified --sample random --limit 4 --seed 11; printf '%s' "$output")
+    [[ -n "$_a" ]]
+    [[ "$_a" == "$_b" ]]
+    [[ "$_a" == *"rule: seeded shuffle of the pool, seed=11"* ]]
+
+    # ...and the DEFAULT is corpus order, so an old result stays reproducible.
+    run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE2" --endpoint "$DEAD_ENDPOINT" \
+        --only classified --limit 3
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"--sample corpus --seed 0"* ]]
+    [[ "$output" == *"rule: corpus order (dump order), no shuffle"* ]]
+}
+
+@test "split: tune and heldout are disjoint, cover the labelled pool, and are stratified by file" {
+    # A prompt tuned and scored on the same rows proves nothing, so the halves must be a
+    # clean cut: disjoint, together the whole labelled pool, both carrying every file.
+    export FIXTURE2="$BATS_TEST_TMPDIR/fixture-multi"
+    _write_multifile_fixture "$FIXTURE2"
+    "$PY" - "$TOOL" "$FIXTURE2" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("swallow_classify", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+sites = module.merge_site_lines(module.read_sites(sys.argv[2]))
+pool = module.ordered_for_asking(sites, "classified")
+assert len(pool) == 9, len(pool)
+tune, plan_tune = module.split_labelled(pool, "tune", 3)
+heldout, plan_heldout = module.split_labelled(pool, "heldout", 3)
+key = module.site_key
+tune_keys, heldout_keys = {key(s) for s in tune}, {key(s) for s in heldout}
+assert not (tune_keys & heldout_keys), "the halves overlap"
+assert tune_keys | heldout_keys == {key(s) for s in pool}, "the halves do not cover the pool"
+assert len(tune) == 5 and len(heldout) == 4, (len(tune), len(heldout))
+assert {s["file"] for s in tune} == {s["file"] for s in heldout} == {
+    "bin/03-gamma.sh", "scripts/01-alpha.sh", "scripts/02-beta.sh"}
+# Deterministic under a fixed seed, and a different seed deals different rows.
+again, _ = module.split_labelled(pool, "tune", 3)
+assert {key(s) for s in again} == tune_keys
+other, _ = module.split_labelled(pool, "tune", 99)
+assert {key(s) for s in other} != tune_keys, "a different seed must deal differently"
+# The rule is printed, per file.
+assert any("alternating deal inside each file" in line for line in plan_tune), plan_tune
+assert any("scripts/01-alpha.sh:" in line for line in plan_tune), plan_tune
+print("split ok:", len(tune), "+", len(heldout), "across 3 files")
+PY
+    [[ "$?" -eq 0 ]]
+}
+
+@test "bar: below the bar the proposals are UNFILTERED; at or above it they are usable" {
+    # The card's acceptance (c)/(d): a rate under a STATED bar must not be quoted without
+    # its consequence.  One labelled site in this fixture, so the stub decides the rate.
+    run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE" --endpoint "$DEAD_ENDPOINT" \
+        --only classified --limit 1
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"BAR            80% agreement on labelled sites — a CHOSEN bar (not derived from data)"* ]]
+    [[ "$output" == *"FILTER         USABLE as a filter at this bar: 100.0% >= 80%"* ]]
+
+    run env STUB_ANSWER=$'VERDICT: masking\nREASON: the required copy failure is discarded here' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE" --endpoint "$DEAD_ENDPOINT" \
+        --only classified --limit 1
+    [[ "$status" -eq 0 ]]          # below the bar is a REPORT, never a non-zero exit
+    [[ "$output" == *"FILTER         UNFILTERED — 0.0% < 80%"* ]]
+    [[ "$output" == *"a human must read every one"* ]]
+
+    # --bar moves the line, which is what makes it the owner's call rather than a constant.
+    run env STUB_ANSWER=$'VERDICT: masking\nREASON: the required copy failure is discarded here' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE" --endpoint "$DEAD_ENDPOINT" \
+        --only classified --limit 1 --bar 0
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"FILTER         USABLE as a filter at this bar: 0.0% >= 0%"* ]]
+}
+
+@test "bar: a labelled run with no parsed verdict is NO MEASUREMENT, not a favourable rate" {
+    run env STUB_ANSWER='This line is probably fine, honestly.' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE" --endpoint "$DEAD_ENDPOINT" \
+        --only classified --limit 1
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"FILTER         NO MEASUREMENT — 1 labelled site(s) asked and not one parsed verdict"* ]]
+    [[ "$output" != *"USABLE"* ]]
+}
+
+@test "prompt: v1 is the default and byte-identical; v2 asks for the consequence" {
+    # The old result must stay reproducible (v1 unchanged), and v2 must attack the
+    # measured failure mode rather than being a cosmetic reword.
+    export PROMPTS_OUT="$BATS_TEST_TMPDIR/prompts.txt"
+    rm -f "$PROMPTS_OUT"
+    run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design' \
+        STUB_PROMPT_OUT="$PROMPTS_OUT" "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE" \
+        --endpoint "$DEAD_ENDPOINT" --only classified --limit 1
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"PROMPT         --prompt v1"* ]]
+
+    run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design' \
+        STUB_PROMPT_OUT="$BATS_TEST_TMPDIR/prompts-v1.txt" "$PY" "$DRIVER" "$TOOL" \
+        --repo "$FIXTURE" --endpoint "$DEAD_ENDPOINT" --only classified --limit 1 --prompt v1
+    [[ "$status" -eq 0 ]]
+    run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design' \
+        STUB_PROMPT_OUT="$BATS_TEST_TMPDIR/prompts-v2.txt" "$PY" "$DRIVER" "$TOOL" \
+        --repo "$FIXTURE" --endpoint "$DEAD_ENDPOINT" --only classified --limit 1 --prompt v2
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"--prompt v2"* ]]
+
+    cmp -s "$PROMPTS_OUT" "$BATS_TEST_TMPDIR/prompts-v1.txt"
+    ! cmp -s "$BATS_TEST_TMPDIR/prompts-v1.txt" "$BATS_TEST_TMPDIR/prompts-v2.txt"
+    grep -q "ignore it" "$BATS_TEST_TMPDIR/prompts-v2.txt"
+    grep -q "Do NOT answer by describing the syntax" "$BATS_TEST_TMPDIR/prompts-v2.txt"
+    grep -q "If you cannot name a concrete later consequence, the answer is benign" \
+        "$BATS_TEST_TMPDIR/prompts-v2.txt"
+    grep -q "deliberately ignored" "$BATS_TEST_TMPDIR/prompts-v1.txt"
+}
+
+@test "docstring: the chosen bar and the UNFILTERED consequence are stated in the tool" {
+    # Acceptance (d) lives in the docstring, so it is pinned here: removing the stated
+    # bar, or the sentence about what a below-bar rate means, turns this red.
+    grep -q "STATED BAR (card SWALLOW-CLASSIFY-PRECISION-001; CHOSEN, not derived)" "$TOOL"
+    grep -q "80% agreement with the human labels on a" "$TOOL"
+    grep -q "the proposals are UNFILTERED and a human must read" "$TOOL"
+    grep -q -- "--sample random|stratified" "$TOOL"
+    grep -q "prompt tuned and scored on the same rows proves nothing" "$TOOL"
 }
 
 # end of file
