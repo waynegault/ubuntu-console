@@ -2,7 +2,8 @@
 
 Provides CLI-friendly functions for:
 - query: find nodes by label/type/pattern
-- path: find shortest paths between two nodes
+- path: find a path between two nodes — fewest-hop ("bfs") or
+  maximum-strength ("strongest"), with the mode named on the result
 - explain: describe a node's connections and role
 
 All functions accept ``Graph`` models or legacy dicts.
@@ -10,7 +11,10 @@ All functions accept ``Graph`` models or legacy dicts.
 
 from __future__ import annotations
 
+import heapq
+import itertools
 import logging
+import math
 import re
 from collections import deque
 from typing import Any
@@ -28,10 +32,11 @@ logger = logging.getLogger(__name__)
 # scored and ordered here, and the score travels with the result so a caller can threshold
 # it or flag a weak set.
 #
-# The tiers are 1.0 apart and the maximum edge weight is 0.9, so the match KIND dominates:
-# an exact label cannot be outranked by a substring match however confident its edges are.
-# That invariant is asserted in tests/test_kgraph.py — raising a tier into the weight range
-# is the edit that would silently break the ordering this module's docstring promises.
+# The tiers are 1.0 apart and the maximum incident-edge confidence weight is 0.9, so the
+# match KIND dominates: an exact label cannot be outranked by a substring match however
+# confident its edges are.  That invariant is asserted in tests/test_kgraph.py — raising a
+# tier into the weight range is the edit that would silently break the ordering this
+# module's docstring promises.
 _MATCH_TIER: dict[str, float] = {"exact": 3.0, "substring": 2.0, "regex": 1.0}
 
 #: Edge confidence → weight, on the repo's own three levels (confidence.py).  An untagged
@@ -145,52 +150,111 @@ def query_nodes(graph: Graph | dict, pattern: str, **kwargs) -> list[dict]:
     return ordered[:max_results]
 
 
-def find_path(graph: Graph | dict, source: str, target: str, **kwargs) -> list[dict]:
-    """Find the shortest path between two nodes by id or label.
+# ── Path finding: two modes, both deterministic ────────────────────────
+# REF: "GraphRAG with TypeSafe Jev: A System One Approach to Scalable
+# Knowledge Graphs" (Partha Sarkar, TDS, 2026-09-27) —
+# https://towardsdatascience.com/graphrag-with-typesafe-jev-a-system-one-approach-to-scalable-knowledge-graphs/
+# `find_path` was a plain BFS, so the relationship STRENGTH the edges carry never
+# entered a path answer at all.  The fewest-hop path stays the DEFAULT — a
+# deterministic answer a caller can explain edge by edge — and the strength-aware
+# answer is a second, NAMED mode, because the two answer different questions and
+# a caller must be able to tell which one it got.
 
-    Args:
-        graph: Graph model or dict.
-        source: Starting node id or label substring.
-        target: Ending node id or label substring.
+PATH_MODE_BFS = "bfs"
+PATH_MODE_STRONGEST = "strongest"
+_PATH_MODES = frozenset({PATH_MODE_BFS, PATH_MODE_STRONGEST})
 
-    Returns:
-        List of edge dicts forming the path, or empty list.
+#: Strength is clamped into this interval before its log is taken.  The floor
+#: keeps ``-log(strength)`` finite for a 0.0 score (and for a negative or NaN one,
+#: which the model does not forbid), so no edge has infinite cost; the ceiling
+#: stops a score above 1.0 from producing a NEGATIVE cost — a free edge — which
+#: would let an arbitrarily long chain of over-1 scores outrank a short direct
+#: link.
+_PATH_STRENGTH_MIN = 1e-6
+_PATH_STRENGTH_MAX = 1.0
+
+# Last term of the strongest-path ordering key: a strictly increasing counter, so
+# two distinct paths can never compare equal and heapq never falls through to
+# comparing the payloads (dicts and lists, which do not order).
+_path_tiebreak = itertools.count()
+
+
+def _path_strength(edge: GraphEdge) -> float:
+    """The edge's relationship strength, clamped into ``(0, 1]``.
+
+    ``semantic_score`` is the package's single continuous strength vocabulary
+    (declared in constants.py); this reads it and adds no parallel score field.
+    An edge that asserts rather than scores a relationship — an AST
+    ``defines``/``calls`` edge — carries no score and is read as strength 1.0,
+    not as a weak tie.
+
+    A non-finite score reads as 1.0 with a warning: NaN compares False against
+    every bound, so clamping it would otherwise silently return whatever the
+    argument order of ``min``/``max`` happened to produce.
     """
-    if isinstance(graph, dict):
-        graph = Graph.from_dict(graph)
+    raw = edge.semantic_score if edge.semantic_score is not None else 1.0
+    value = float(raw)
+    if not math.isfinite(value):
+        logger.warning(
+            "Non-finite semantic_score %r on edge %s → %s; reading it as strength 1.0",
+            raw, edge.source, edge.target,
+        )
+        return 1.0
+    return min(_PATH_STRENGTH_MAX, max(_PATH_STRENGTH_MIN, value))
 
-    max_depth = kwargs.get("max_depth", 10)
 
-    # Resolve node ids from labels if needed
-    node_by_id: dict[str, GraphNode] = {}
-    id_by_label: dict[str, str] = {}
-    for n in graph.nodes:
-        node_by_id[n.id] = n
-        if n.label:
-            id_by_label.setdefault(n.label.lower(), n.id)
+def _path_cost(edge: GraphEdge) -> float:
+    """Traversal cost of *edge* in the ``"strongest"`` mode: ``-log(strength)``.
 
-    src_id = source
-    tgt_id = target
-    if source not in node_by_id:
-        for label, nid in id_by_label.items():
-            if source.lower() in label:
-                src_id = nid
-                break
-    if target not in node_by_id:
-        for label, nid in id_by_label.items():
-            if target.lower() in label:
-                tgt_id = nid
-                break
+    Minimizing the summed cost maximizes the PRODUCT of the path's strengths.
+    The product is the defensible combination because edge strengths are
+    independent similarities: a chain is only as strong as the joint strength of
+    its links, whereas a sum would let one weak link be averaged away by a strong
+    one.  Every cost is non-negative, which is what makes Dijkstra applicable.
+    """
+    return -math.log(_path_strength(edge))
 
-    if src_id not in node_by_id or tgt_id not in node_by_id:
-        return []
 
-    # BFS
+def _neighbourhood(graph: Graph) -> dict[str, list[tuple[str, str, GraphEdge]]]:
+    """Undirected adjacency: node id → ``[(neighbour, label, edge), ...]``.
+
+    Edge order is preserved, and both modes build their adjacency here, so a BFS
+    answer and a strongest-path answer cannot disagree about which edges exist.
+    """
     adj: dict[str, list[tuple[str, str, GraphEdge]]] = {}
     for e in graph.edges:
         adj.setdefault(e.source, []).append((e.target, e.label, e))
         adj.setdefault(e.target, []).append((e.source, e.label, e))
+    return adj
 
+
+def _resolve_endpoint(
+    node_by_id: dict[str, GraphNode], id_by_label: dict[str, str], name: str,
+) -> str | None:
+    """A node id for *name*: the id itself, else the first label containing it.
+
+    "First" is ``graph.nodes`` order, so the answer is deterministic for a given
+    graph; an unmatched name returns None and the caller reports no path.
+    """
+    if name in node_by_id:
+        return name
+    lowered = str(name).lower()
+    for label, nid in id_by_label.items():
+        if lowered in label:
+            return nid
+    return None
+
+
+def _shortest_path_edges(
+    adj: dict[str, list[tuple[str, str, GraphEdge]]], src_id: str, tgt_id: str, max_depth: int,
+) -> list[dict]:
+    """BFS: the fewest-hop path, ties broken by edge order in ``graph.edges``.
+
+    Deterministic for a given graph, and explainable edge by edge — every step is
+    an edge a reader can check, with no hidden arithmetic.
+
+    Returns the path's edges as JSON-ready dicts, or ``[]``.
+    """
     visited = {src_id}
     queue: deque[tuple[str, list[dict]]] = deque([(src_id, [])])
     while queue:
@@ -202,9 +266,146 @@ def find_path(graph: Graph | dict, source: str, target: str, **kwargs) -> list[d
         for neighbor, _lbl, edge in adj.get(current, []):
             if neighbor not in visited:
                 visited.add(neighbor)
-                queue.append((neighbor, path_edges + [edge.model_dump(mode="json", exclude_none=True)]))
+                queue.append((
+                    neighbor,
+                    path_edges + [edge.model_dump(mode="json", exclude_none=True)],
+                ))
 
     return []
+
+
+def _strongest_path_edges(
+    adj: dict[str, list[tuple[str, str, GraphEdge]]], src_id: str, tgt_id: str, max_depth: int,
+) -> list[dict]:
+    """Dijkstra over ``-log(strength)``: the maximum-product-strength path.
+
+    Tie-break, explicit and total: paths are ordered by
+    ``(total cost, hop count, node-id sequence)`` — lower cost first, then fewer
+    hops, then the lexicographically smallest node sequence.  The hop term is
+    load-bearing, not cosmetic: an edge with no ``semantic_score`` costs exactly
+    0.0, so without it a longer detour through unscored edges would tie with a
+    short path at the same cost and the answer would depend on relaxation order.
+
+    A node is visited at most once along a path, which also anchors the search on
+    a graph whose zero-cost edges form a cycle.
+
+    Returns the path's edges as JSON-ready dicts, or ``[]``.
+    """
+    ordering = (0.0, 0, (src_id,), next(_path_tiebreak))
+    best: dict[str, tuple[float, int, tuple[str, ...]]] = {src_id: ordering[:3]}
+    heap: list[tuple[tuple[float, int, tuple[str, ...], int], str, list[dict]]] = [
+        (ordering, src_id, []),
+    ]
+    while heap:
+        key, node, edges = heapq.heappop(heap)
+        if key[:3] != best.get(node):
+            # A cheaper label for this node was already expanded; this entry is
+            # the stale one Dijkstra's lazy deletion leaves behind.
+            continue
+        if node == tgt_id:
+            return edges
+        if key[1] >= max_depth:
+            continue
+        for neighbor, _lbl, edge in adj.get(node, []):
+            if neighbor in key[2]:
+                continue
+            candidate = (
+                key[0] + _path_cost(edge),
+                key[1] + 1,
+                key[2] + (neighbor,),
+            )
+            current = best.get(neighbor)
+            if current is not None and current <= candidate:
+                continue
+            best[neighbor] = candidate
+            heapq.heappush(heap, (
+                candidate + (next(_path_tiebreak),),
+                neighbor,
+                edges + [edge.model_dump(mode="json", exclude_none=True)],
+            ))
+
+    return []
+
+
+def find_path_result(
+    graph: Graph | dict,
+    source: str,
+    target: str,
+    mode: str = PATH_MODE_BFS,
+    **kwargs: Any,
+) -> dict:
+    """Find a path between two nodes and NAME the mode that produced it.
+
+    Args:
+        graph: Graph model or dict.
+        source: Starting node id or label substring.
+        target: Ending node id or label substring.
+        mode: ``"bfs"`` (default) — the fewest-hop path, ties broken by edge
+            order in ``graph.edges`` — or ``"strongest"`` — the path maximizing
+            the product of its edges' strengths, at cost ``-log(strength)`` per
+            edge, with the tie-break documented on
+            :func:`_strongest_path_edges`.
+        max_depth: cap on the number of hops (default 10).
+
+    Returns:
+        ``{"mode": <mode>, "path_found": bool, "edges": [...]}``.  ``mode`` is
+        always present and is the mode actually used, because "no path" under one
+        mode is not "no path" under the other: a caller that cannot see which one
+        ran cannot interpret the answer.  An unknown mode raises ``ValueError``
+        rather than silently answering with a different one.
+    """
+    if isinstance(graph, dict):
+        graph = Graph.from_dict(graph)
+
+    normalized = str(mode).strip().lower()
+    if normalized not in _PATH_MODES:
+        raise ValueError(
+            f"unknown path mode {mode!r}: expected one of {sorted(_PATH_MODES)}"
+        )
+
+    max_depth = kwargs.get("max_depth", 10)
+
+    # Resolve node ids from labels if needed
+    node_by_id: dict[str, GraphNode] = {}
+    id_by_label: dict[str, str] = {}
+    for n in graph.nodes:
+        node_by_id[n.id] = n
+        if n.label:
+            id_by_label.setdefault(n.label.lower(), n.id)
+
+    src_id = _resolve_endpoint(node_by_id, id_by_label, source)
+    tgt_id = _resolve_endpoint(node_by_id, id_by_label, target)
+    if src_id is None or tgt_id is None:
+        return {"mode": normalized, "path_found": False, "edges": []}
+
+    adj = _neighbourhood(graph)
+    if normalized == PATH_MODE_STRONGEST:
+        edges = _strongest_path_edges(adj, src_id, tgt_id, max_depth)
+    else:
+        edges = _shortest_path_edges(adj, src_id, tgt_id, max_depth)
+    return {"mode": normalized, "path_found": bool(edges), "edges": edges}
+
+
+def find_path(graph: Graph | dict, source: str, target: str, **kwargs: Any) -> list[dict]:
+    """Find the shortest path between two nodes by id or label.
+
+    The fewest-hop path by default; the same call that also reports which mode
+    produced the edges — and accepts ``mode="strongest"`` for the
+    maximum-product-strength path — is :func:`find_path_result`.  Kept as the
+    list-returning entry point so a caller that only wants the edges is not
+    forced to unpack a result dict.
+
+    Args:
+        graph: Graph model or dict.
+        source: Starting node id or label substring.
+        target: Ending node id or label substring.
+        mode: passed through to :func:`find_path_result` (default ``"bfs"``).
+        max_depth: cap on the number of hops (default 10).
+
+    Returns:
+        List of edge dicts forming the path, or empty list.
+    """
+    return find_path_result(graph, source, target, **kwargs)["edges"]
 
 
 def _source_overflow(element: GraphEdge | GraphNode) -> dict[str, Any]:
@@ -354,12 +555,20 @@ def format_explain(explanation: dict) -> str:
     return "\n".join(lines)
 
 
-def format_path(path_edges: list[dict]) -> str:
-    """Format a find_path result as human-readable text."""
+def format_path(path_edges: list[dict], mode: str = "") -> str:
+    """Format a find_path result as human-readable text.
+
+    *mode*, when given, is named under the header, because "the path" means two
+    different things in :func:`find_path_result`'s two modes: an output that does
+    not say which one ran cannot be interpreted.  Omitted (the default), the text
+    is unchanged.
+    """
     if not path_edges:
-        return "No path found"
+        return "No path found" if not mode else f"No path found (mode: {mode})"
 
     lines = ["Path:"]
+    if mode:
+        lines.append(f"  mode: {mode}")
     for e in path_edges:
         src = str(e.get("source", e.get("from", "")))
         dst = str(e.get("target", e.get("to", "")))

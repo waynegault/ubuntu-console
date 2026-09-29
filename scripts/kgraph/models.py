@@ -215,6 +215,22 @@ class GraphEdge(SourceLineage):
     derived pass invented rather than a document asserting (an import resolved
     by name matching, a call linked to its definition) carries none, because no
     single document asserted it; the endpoints' own sources remain reachable.
+
+    Relationship STRENGTH is ``semantic_score`` — the single continuous strength
+    vocabulary the package declares, and the only one a consumer reads.  An edge
+    that asserts a relationship rather than scoring one (an AST ``defines`` /
+    ``calls`` edge) carries no score, and a consumer reads that as strength 1.0.
+
+    REF: "GraphRAG with TypeSafe Jev: A System One Approach to Scalable
+    Knowledge Graphs" (Partha Sarkar, TDS, 2026-09-27) —
+    https://towardsdatascience.com/graphrag-with-typesafe-jev-a-system-one-approach-to-scalable-knowledge-graphs/
+    The former ``weight: float = 1.0`` field was REMOVED (GRAPHRAG-JEV-005): the
+    one dependency-strength consumer (community detection) already preferred
+    ``semantic_score`` and fell back to ``weight``, whose default made the
+    fallback a constant — so the field could only ever disagree with the score it
+    shadowed, and nothing else read it.  ``extra="allow"`` above tolerates a
+    ``graph.json`` serialized by an older build that still carries ``weight``; it
+    is ignored, never honoured, and no shim maps it back onto a score.
     """
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
@@ -226,7 +242,6 @@ class GraphEdge(SourceLineage):
     semantic_score: float | None = None
     cooccurrence_count: int | None = None
     confidence: ConfidenceLevel | None = None
-    weight: float = 1.0
     inferred: bool = False
     explicit: bool = False
     visibility: str = "both"

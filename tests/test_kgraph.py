@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import subprocess
@@ -303,6 +304,46 @@ class TestConfidence(unittest.TestCase):
         self.assertEqual(conf0.value, 'INFERRED')
         self.assertEqual(conf1.value, 'AMBIGUOUS')
 
+    def test_semantic_score_threshold_boundary_is_inclusive(self):
+        """GRAPHRAG-JEV-005 states the rule as ``semantic_score >= 0.55``.
+
+        The expected values come from that statement of the rule (the threshold is
+        kept as an un-calibrated default; its BOUNDARY is still the rule), not from
+        the current output.  Catches the comparison drifting to ``>``, which
+        reclassifies the boundary edge from INFERRED to AMBIGUOUS with nothing
+        else changing.
+        """
+        graph = {
+            'edges': [
+                {'from': 'a', 'to': 'b', 'semantic_score': 0.55},
+                {'from': 'c', 'to': 'd', 'semantic_score': 0.549},
+            ],
+        }
+        result = self.kgraph.tag_confidence(graph)
+        conf0 = result.edges[0].confidence
+        conf1 = result.edges[1].confidence
+        assert conf0 is not None and conf1 is not None
+        self.assertEqual(conf0.value, 'INFERRED')
+        self.assertEqual(conf1.value, 'AMBIGUOUS')
+
+    def test_cooccurrence_threshold_boundary_is_inclusive(self):
+        """GRAPHRAG-JEV-005 states the rule as ``cooccurrence_count >= 3``.
+
+        Catches the same drift as above on the co-occurrence signal.
+        """
+        graph = {
+            'edges': [
+                {'from': 'a', 'to': 'b', 'cooccurrence_count': 3},
+                {'from': 'c', 'to': 'd', 'cooccurrence_count': 2},
+            ],
+        }
+        result = self.kgraph.tag_confidence(graph)
+        conf0 = result.edges[0].confidence
+        conf1 = result.edges[1].confidence
+        assert conf0 is not None and conf1 is not None
+        self.assertEqual(conf0.value, 'INFERRED')
+        self.assertEqual(conf1.value, 'AMBIGUOUS')
+
     def test_tag_confidence_ambiguous_fallback_related_label(self):
         graph = {
             'edges': [
@@ -361,6 +402,88 @@ class TestConfidence(unittest.TestCase):
         stats = self.kgraph.confidence_stats(graph)
         self.assertEqual(stats['extracted'], 1)
         self.assertEqual(stats['inferred'], 1)
+
+
+# ══════════════ GRAPHRAG-JEV-005: strength is semantic_score ══════════════
+# REF: "GraphRAG with TypeSafe Jev: A System One Approach to Scalable Knowledge
+#      Graphs" (Partha Sarkar, TDS, 2026-09-27)
+
+# A short weak link (cost -log(0.05) = 3.00) against a two-hop strong chain
+# (cost 2 × -log(0.9) = 0.21).  Shared by the query tests and the CLI test below,
+# so the mode that answers differently is the SAME graph in both.
+_WEAK_SHORTCUT_GRAPH = {
+    'nodes': [{'id': 's'}, {'id': 'x'}, {'id': 't'}],
+    'edges': [
+        {'from': 's', 'to': 't', 'label': 'weak', 'semantic_score': 0.05},
+        {'from': 's', 'to': 'x', 'label': 'strong', 'semantic_score': 0.9},
+        {'from': 'x', 'to': 't', 'label': 'strong', 'semantic_score': 0.9},
+    ],
+}
+
+
+class EdgeStrengthTests(unittest.TestCase):
+    """``GraphEdge.weight`` is removed; ``semantic_score`` is the strength."""
+
+    def test_graph_edge_no_longer_declares_weight(self):
+        # Catches: the removed field surviving as a second strength vocabulary —
+        # the state in which two consumers could disagree about the same edge.
+        self.assertNotIn('weight', kgraph.GraphEdge.model_fields)
+
+    def test_community_detection_reads_semantic_score_as_strength(self):
+        # Catches: the field deleted WITHOUT moving its reader — _build_nx_graph
+        # reading `e.weight` now raises, and one hardcoding weight=1.0 loses the
+        # strength the graph actually carries.
+        from kgraph import community
+
+        nx_graph = community._build_nx_graph(kgraph.Graph.from_dict({
+            'nodes': [{'id': 'a'}, {'id': 'b'}, {'id': 'c'}, {'id': 'd'}],
+            'edges': [
+                {'from': 'a', 'to': 'b', 'semantic_score': 0.9},
+                {'from': 'c', 'to': 'd'},
+            ],
+        }))
+        self.assertEqual(nx_graph['a']['b']['weight'], 0.9)
+        self.assertAlmostEqual(nx_graph['a']['b']['distance'], 1 / 0.9)
+        # An edge with no score is an asserted tie, read as strength 1.0.
+        self.assertEqual(nx_graph['c']['d']['weight'], 1.0)
+
+    def test_a_serialized_weight_is_tolerated_and_ignored(self):
+        # Catches: a legacy `weight` read back as strength.  s→t carries a
+        # near-zero `weight` and no score: ignored, it reads as strength 1.0 and
+        # the direct edge wins on cost; honoured, it would cost -log(0.05) = 3.0
+        # and lose to the two-hop strong chain (cost 0.21).
+        graph = {
+            'nodes': [{'id': 's'}, {'id': 'x'}, {'id': 't'}],
+            'edges': [
+                {'from': 's', 'to': 't', 'label': 'legacy', 'weight': 0.05},
+                {'from': 's', 'to': 'x', 'label': 'strong', 'semantic_score': 0.9},
+                {'from': 'x', 'to': 't', 'label': 'strong', 'semantic_score': 0.9},
+            ],
+        }
+        result = kgraph.find_path_result(graph, 's', 't', mode='strongest')
+        self.assertEqual([(e['source'], e['target']) for e in result['edges']], [('s', 't')])
+
+
+class PathModeCliTests(unittest.TestCase):
+    """``kgraph --path --path-mode`` answers with the mode and says so."""
+
+    def test_cli_names_the_mode_and_answers_with_it(self):
+        # Catches: the CLI accepting --path-mode but still printing the fewest-hop
+        # path (a flag with no effect), or printing a path with no indication of
+        # which mode produced it.
+        with tempfile.TemporaryDirectory() as td:
+            graph_path = os.path.join(td, 'graph.json')
+            with open(graph_path, 'w', encoding='utf-8') as fh:
+                json.dump(_WEAK_SHORTCUT_GRAPH, fh)
+            run = subprocess.run(
+                [sys.executable, '-m', 'kgraph', '--graph', graph_path,
+                 '--path', 's', 't', '--path-mode', 'strongest'],
+                cwd=SCRIPT_DIR, capture_output=True, text=True,
+            )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn('mode: strongest', run.stdout)
+        self.assertIn('s → x', run.stdout)
+        self.assertNotIn('s → t', run.stdout)
 
 
 class TestQuery(unittest.TestCase):
@@ -565,6 +688,150 @@ class TestQuery(unittest.TestCase):
         path = self.kgraph.find_path(graph, 'n0', 'n4', max_depth=10)
         self.assertEqual(len(path), 4)
 
+    # ── find_path_result: the mode is NAMED (GRAPHRAG-JEV-005) ─────────
+    # REF: "GraphRAG with TypeSafe Jev: A System One Approach to Scalable
+    #      Knowledge Graphs" (Partha Sarkar, TDS, 2026-09-27)
+    # The card's finding: find_path was a plain BFS, so an edge's strength never
+    # entered a path answer.  The default stays the fewest-hop path; the
+    # strength-weighted answer is a second, NAMED mode.  The expected paths below
+    # come from that criterion and from the documented cost function (-log of the
+    # edge's strength, tie-broken by total cost, then hop count, then node-id
+    # sequence) — not from what the code currently returns.
+
+    # A short weak link (cost -log(0.05) = 3.00) against a two-hop strong chain
+    # (cost 2 × -log(0.9) = 0.21): the two modes must disagree on this graph.
+    # (_WEAK_SHORTCUT_GRAPH is defined at module level, below.)
+
+    def test_find_path_result_default_is_bfs_and_still_the_fewest_hop_path(self):
+        # Catches: the default drifting to the weighted answer — every existing
+        # caller would silently start getting a different path — or the result
+        # not naming the mode at all.
+        result = self.kgraph.find_path_result(self.small_graph, 'n1', 'n3')
+        self.assertEqual(result['mode'], 'bfs')
+        self.assertTrue(result['path_found'])
+        self.assertEqual([(e['source'], e['target']) for e in result['edges']],
+                         [('n1', 'n3')])
+        # find_path stays the list-returning form and answers with the same edges.
+        self.assertEqual(self.kgraph.find_path(self.small_graph, 'n1', 'n3'), result['edges'])
+
+    def test_strongest_mode_takes_the_strong_chain_over_the_weak_shortcut(self):
+        # Catches: a "weighted" mode that still returns the fewest-hop path — the
+        # card's finding, where strength is declared but never consumed.  That
+        # failure looks plausible (a path IS returned) and is wrong.
+        bfs = self.kgraph.find_path_result(_WEAK_SHORTCUT_GRAPH, 's', 't')
+        strongest = self.kgraph.find_path_result(
+            _WEAK_SHORTCUT_GRAPH, 's', 't', mode='strongest')
+        self.assertEqual([(e['source'], e['target']) for e in bfs['edges']], [('s', 't')])
+        self.assertEqual([(e['source'], e['target']) for e in strongest['edges']],
+                         [('s', 'x'), ('x', 't')])
+        self.assertEqual(strongest['mode'], 'strongest')
+
+    def test_strongest_mode_breaks_an_equal_cost_tie_by_fewer_hops(self):
+        # a→b costs -log(1.0) = 0.0, so a→b→c and a→c tie at exactly
+        # -log(0.5) = 0.6931471805599453; the documented tie-break takes the
+        # fewer-hop path.  Catches: a zero-cost edge making an equal-cost detour
+        # win, so "strongest" no longer prefers the shortest of two equally strong
+        # chains.
+        graph = {
+            'nodes': [{'id': 'a'}, {'id': 'b'}, {'id': 'c'}],
+            'edges': [
+                {'from': 'a', 'to': 'b', 'label': 'free', 'semantic_score': 1.0},
+                {'from': 'b', 'to': 'c', 'label': 'half', 'semantic_score': 0.5},
+                {'from': 'a', 'to': 'c', 'label': 'half', 'semantic_score': 0.5},
+            ],
+        }
+        result = self.kgraph.find_path_result(graph, 'a', 'c', mode='strongest')
+        self.assertEqual([(e['source'], e['target']) for e in result['edges']], [('a', 'c')])
+
+    def test_strongest_mode_breaks_an_equal_cost_tie_by_node_sequence(self):
+        # Two 2-hop paths, both costing -log(0.5): (a,x,c) and (a,b,c).  The
+        # documented tie-break takes the lexicographically smaller node sequence,
+        # ('a','b','c'), even though the x route is written FIRST in this fixture.
+        # Catches: an insertion-order tie-break, where the same graph would answer
+        # differently after a rebuild reordered its edges.
+        graph = {
+            'nodes': [{'id': 'a'}, {'id': 'x'}, {'id': 'b'}, {'id': 'c'}],
+            'edges': [
+                {'from': 'a', 'to': 'x', 'label': 'via-x', 'semantic_score': 1.0},
+                {'from': 'x', 'to': 'c', 'label': 'via-x', 'semantic_score': 0.5},
+                {'from': 'a', 'to': 'b', 'label': 'via-b', 'semantic_score': 1.0},
+                {'from': 'b', 'to': 'c', 'label': 'via-b', 'semantic_score': 0.5},
+            ],
+        }
+        result = self.kgraph.find_path_result(graph, 'a', 'c', mode='strongest')
+        self.assertEqual([e['label'] for e in result['edges']], ['via-b', 'via-b'])
+
+    def test_strongest_mode_is_deterministic_across_repeated_calls(self):
+        # Catches: an answer that depends on dict/heap iteration order, which would
+        # not be reproducible between runs over the same graph.
+        graph = {
+            'nodes': [{'id': 'a'}, {'id': 'x'}, {'id': 'b'}, {'id': 'c'}],
+            'edges': [
+                {'from': 'a', 'to': 'x', 'label': 'via-x', 'semantic_score': 1.0},
+                {'from': 'x', 'to': 'c', 'label': 'via-x', 'semantic_score': 0.5},
+                {'from': 'a', 'to': 'b', 'label': 'via-b', 'semantic_score': 1.0},
+                {'from': 'b', 'to': 'c', 'label': 'via-b', 'semantic_score': 0.5},
+            ],
+        }
+        runs = [self.kgraph.find_path_result(graph, 'a', 'c', mode='strongest')
+                for _ in range(3)]
+        self.assertEqual(runs[0], runs[1])
+        self.assertEqual(runs[1], runs[2])
+
+    def test_strongest_mode_avoids_a_zero_strength_edge(self):
+        # A 0.0 semantic_score is -log(0.0) = +inf unclamped; the documented floor
+        # (1e-6) makes it a very expensive edge instead of an infinite one, so a
+        # weak-but-real chain beats it.  Catches: a crash or a hung search on a
+        # 0.0 score, and a clamp so loose that the weakest edge is treated as
+        # ordinary.
+        graph = {
+            'nodes': [{'id': 's'}, {'id': 'x'}, {'id': 't'}],
+            'edges': [
+                {'from': 's', 'to': 't', 'label': 'nil', 'semantic_score': 0.0},
+                {'from': 's', 'to': 'x', 'label': 'half', 'semantic_score': 0.5},
+                {'from': 'x', 'to': 't', 'label': 'half', 'semantic_score': 0.5},
+            ],
+        }
+        result = self.kgraph.find_path_result(graph, 's', 't', mode='strongest')
+        self.assertEqual([e['label'] for e in result['edges']], ['half', 'half'])
+
+    def test_strongest_mode_honours_max_depth(self):
+        # Catches: the weighted mode ignoring the hop cap, answering with a path a
+        # caller asked not to receive.
+        graph = {
+            'nodes': [{'id': f'n{i}'} for i in range(4)],
+            'edges': [{'from': f'n{i}', 'to': f'n{i+1}', 'label': 'next',
+                       'semantic_score': 0.9} for i in range(3)],
+        }
+        capped = self.kgraph.find_path_result(graph, 'n0', 'n3', mode='strongest', max_depth=2)
+        self.assertEqual(capped['edges'], [])
+        allowed = self.kgraph.find_path_result(graph, 'n0', 'n3', mode='strongest', max_depth=3)
+        self.assertEqual(len(allowed['edges']), 3)
+
+    def test_an_unknown_mode_raises_rather_than_defaulting(self):
+        # Catches: a typo'd mode silently answered with the default, so a caller
+        # that asked for the strongest path gets a fewest-hop one and cannot tell
+        # from the answer alone.
+        with self.assertRaises(ValueError):
+            self.kgraph.find_path_result(self.small_graph, 'n1', 'n2', mode='fastest')
+
+    def test_non_finite_strength_reads_as_one_and_is_logged(self):
+        # Catches: NaN flowing into the cost arithmetic, where every comparison is
+        # False and the clamp would silently return whichever bound the argument
+        # order happened to favour.
+        from kgraph import query as kgraph_query
+        edge = self.kgraph.GraphEdge(source='a', target='b', semantic_score=float('nan'))
+        with self.assertLogs('kgraph.query', level='WARNING'):
+            self.assertEqual(kgraph_query._path_strength(edge), 1.0)
+
+    def test_format_path_names_the_mode_when_given_one(self):
+        # Catches: the CLI showing WHICH path without which mode produced it — the
+        # same text then meaning two different answers.
+        result = self.kgraph.find_path_result(self.small_graph, 'n1', 'n3', mode='strongest')
+        text = self.kgraph.format_path(result['edges'], mode=result['mode'])
+        self.assertIn('Path:', text)
+        self.assertIn('mode: strongest', text)
+
     # ── explain_node ────────────────────────────────────────────────
 
     def test_explain_node_by_id(self):
@@ -687,10 +954,10 @@ _SMALL_CONNECTED_GRAPH = {
         {'id': 'e', 'label': 'Epsilon'},
     ],
     'edges': [
-        {'from': 'a', 'to': 'b', 'weight': 1.0},
-        {'from': 'a', 'to': 'c', 'weight': 0.5},
-        {'from': 'b', 'to': 'c', 'weight': 0.8},
-        {'from': 'd', 'to': 'e', 'weight': 0.9},
+        {'from': 'a', 'to': 'b', 'semantic_score': 1.0},
+        {'from': 'a', 'to': 'c', 'semantic_score': 0.5},
+        {'from': 'b', 'to': 'c', 'semantic_score': 0.8},
+        {'from': 'd', 'to': 'e', 'semantic_score': 0.9},
     ],
 }
 
@@ -764,10 +1031,10 @@ class CommunityDetectionTests(unittest.TestCase):
                 {'id': 'e', 'label': 'E'},
             ],
             'edges': [
-                {'from': 'a', 'to': 'b', 'weight': 1.0},
-                {'from': 'a', 'to': 'c', 'weight': 0.5},
-                {'from': 'b', 'to': 'c', 'weight': 0.8},
-                {'from': 'd', 'to': 'e', 'weight': 0.9},
+                {'from': 'a', 'to': 'b', 'semantic_score': 1.0},
+                {'from': 'a', 'to': 'c', 'semantic_score': 0.5},
+                {'from': 'b', 'to': 'c', 'semantic_score': 0.8},
+                {'from': 'd', 'to': 'e', 'semantic_score': 0.9},
             ],
         }
         result = kgraph.detect_communities(long_label_graph, method='greedy')
@@ -785,10 +1052,10 @@ class CommunityDetectionTests(unittest.TestCase):
                 {'id': 'e', 'label': 'E'},
             ],
             'edges': [
-                {'from': 'a', 'to': 'b', 'weight': 1.0},
-                {'from': 'a', 'to': 'c', 'weight': 0.5},
-                {'from': 'b', 'to': 'c', 'weight': 0.8},
-                {'from': 'd', 'to': 'e', 'weight': 0.9},
+                {'from': 'a', 'to': 'b', 'semantic_score': 1.0},
+                {'from': 'a', 'to': 'c', 'semantic_score': 0.5},
+                {'from': 'b', 'to': 'c', 'semantic_score': 0.8},
+                {'from': 'd', 'to': 'e', 'semantic_score': 0.9},
             ],
         }
         result = kgraph.detect_communities(graph, method='greedy', min_community_size=5)
@@ -810,17 +1077,17 @@ class CommunityDetectionTests(unittest.TestCase):
                 {'id': 'e', 'label': 'E'},
             ],
             'edges': [
-                {'source': 'a', 'target': 'b', 'weight': 1.0},
-                {'source': 'a', 'target': 'c', 'weight': 0.5},
-                {'source': 'b', 'target': 'c', 'weight': 0.8},
-                {'source': 'd', 'target': 'e', 'weight': 0.9},
+                {'source': 'a', 'target': 'b', 'semantic_score': 1.0},
+                {'source': 'a', 'target': 'c', 'semantic_score': 0.5},
+                {'source': 'b', 'target': 'c', 'semantic_score': 0.8},
+                {'source': 'd', 'target': 'e', 'semantic_score': 0.9},
             ],
         }
         result = kgraph.detect_communities(graph, method='greedy')
         self.assertGreater(len(result.meta.communities), 0)
 
-    def test_detect_communities_edge_semantic_score_as_weight(self):
-        """edges can use semantic_score instead of weight."""
+    def test_detect_communities_edge_semantic_score_as_strength(self):
+        """edges carry their strength as semantic_score — the only field community detection reads."""
         graph = {
             'nodes': [
                 {'id': 'a', 'label': 'A'},
@@ -867,7 +1134,7 @@ class CommunityDetectionTests(unittest.TestCase):
         """each node entry has id, label, degree, betweenness, eigenvector."""
         graph = {
             'nodes': [{'id': 'a', 'label': 'A'}, {'id': 'b', 'label': 'B'}],
-            'edges': [{'from': 'a', 'to': 'b', 'weight': 1.0}],
+            'edges': [{'from': 'a', 'to': 'b', 'semantic_score': 1.0}],
         }
         result = kgraph.compute_centrality(graph)
         self.assertIn('a', result)
@@ -910,10 +1177,10 @@ class CommunityDetectionTests(unittest.TestCase):
                 {'id': 'd', 'label': 'D'},
             ],
             'edges': [
-                {'from': 'a', 'to': 'b', 'weight': 1.0},
-                {'from': 'a', 'to': 'c', 'weight': 0.8},
-                {'from': 'a', 'to': 'd', 'weight': 0.6},
-                {'from': 'b', 'to': 'c', 'weight': 0.5},
+                {'from': 'a', 'to': 'b', 'semantic_score': 1.0},
+                {'from': 'a', 'to': 'c', 'semantic_score': 0.8},
+                {'from': 'a', 'to': 'd', 'semantic_score': 0.6},
+                {'from': 'b', 'to': 'c', 'semantic_score': 0.5},
             ],
         }
         result = kgraph.find_god_nodes(graph, top_n=5)
@@ -932,8 +1199,8 @@ class CommunityDetectionTests(unittest.TestCase):
                 {'id': 'solo', 'label': 'Solo'},
             ],
             'edges': [
-                {'from': 'a', 'to': 'b', 'weight': 1.0},
-                {'from': 'x', 'to': 'y', 'weight': 1.0},
+                {'from': 'a', 'to': 'b', 'semantic_score': 1.0},
+                {'from': 'x', 'to': 'y', 'semantic_score': 1.0},
             ],
         }
         result = kgraph.compute_centrality(graph)
@@ -955,8 +1222,8 @@ class CommunityDetectionTests(unittest.TestCase):
                 {'id': 'lone', 'label': 'Lone'},
             ],
             'edges': [
-                {'from': 'hub', 'to': 'b', 'weight': 1.0},
-                {'from': 'hub', 'to': 'c', 'weight': 1.0},
+                {'from': 'hub', 'to': 'b', 'semantic_score': 1.0},
+                {'from': 'hub', 'to': 'c', 'semantic_score': 1.0},
             ],
         }
         result = kgraph.find_god_nodes(graph, top_n=5)
@@ -1640,13 +1907,13 @@ _TWO_CLUSTER_GRAPH = {
         {'id': 'f', 'label': 'Zeta', 'type': 'topic'},
     ],
     'edges': [
-        {'from': 'a', 'to': 'b', 'label': 'links', 'weight': 1.0},
-        {'from': 'b', 'to': 'c', 'label': 'links', 'weight': 1.0},
-        {'from': 'a', 'to': 'c', 'label': 'links', 'weight': 1.0},
-        {'from': 'd', 'to': 'e', 'label': 'links', 'weight': 1.0},
-        {'from': 'e', 'to': 'f', 'label': 'links', 'weight': 1.0},
-        {'from': 'd', 'to': 'f', 'label': 'links', 'weight': 1.0},
-        {'from': 'c', 'to': 'd', 'label': 'links', 'weight': 0.05},
+        {'from': 'a', 'to': 'b', 'label': 'links', 'semantic_score': 1.0},
+        {'from': 'b', 'to': 'c', 'label': 'links', 'semantic_score': 1.0},
+        {'from': 'a', 'to': 'c', 'label': 'links', 'semantic_score': 1.0},
+        {'from': 'd', 'to': 'e', 'label': 'links', 'semantic_score': 1.0},
+        {'from': 'e', 'to': 'f', 'label': 'links', 'semantic_score': 1.0},
+        {'from': 'd', 'to': 'f', 'label': 'links', 'semantic_score': 1.0},
+        {'from': 'c', 'to': 'd', 'label': 'links', 'semantic_score': 0.05},
     ],
 }
 

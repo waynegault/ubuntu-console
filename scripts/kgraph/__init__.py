@@ -58,7 +58,14 @@ if _t.TYPE_CHECKING:
     )
     from .pr_dashboard import generate_pr_dashboard
     from .projection import project_graph
-    from .query import explain_node, find_path, format_explain, format_path, query_nodes
+    from .query import (
+        explain_node,
+        find_path,
+        find_path_result,
+        format_explain,
+        format_path,
+        query_nodes,
+    )
     from .report import generate_report
     from .server import resolve_serve_target, serve_file
     from .update import incremental_update, merge_graphs, start_watch
@@ -132,7 +139,8 @@ _lazy(".community", ["communities_available", "detect_communities", "compute_cen
                      "community_view"])
 _lazy(".confidence", ["tag_confidence", "confidence_stats"])
 _lazy(".report", ["generate_report"])
-_lazy(".query", ["query_nodes", "find_path", "explain_node", "format_explain", "format_path"])
+_lazy(".query", ["query_nodes", "find_path", "find_path_result", "explain_node",
+                 "format_explain", "format_path"])
 _lazy(".call_flow", ["generate_call_flow_mermaid", "generate_call_flow_html"])
 _lazy(".update", ["incremental_update", "start_watch", "merge_graphs"])
 _lazy(".mcp_server", ["serve_mcp"])
@@ -159,7 +167,8 @@ __all__ = [
     "digest_communities", "community_for_node", "community_view",
     "tag_confidence", "confidence_stats",
     "generate_report",
-    "query_nodes", "find_path", "explain_node", "format_explain", "format_path",
+    "query_nodes", "find_path", "find_path_result", "explain_node", "format_explain",
+    "format_path",
     "generate_call_flow_mermaid", "generate_call_flow_html",
     "incremental_update", "start_watch", "merge_graphs",
     "serve_mcp",

@@ -452,7 +452,9 @@ Every graph edge is tagged with one of:
 Exposes 6 tools via JSON-RPC over HTTP (binds localhost only):
 
 - `kgraph_query` — search nodes by pattern
-- `kgraph_path` — shortest path between two nodes
+- `kgraph_path` — path between two nodes, fewest-hop (`mode: "bfs"`, the default)
+  or maximum-strength (`mode: "strongest"`, maximizing the product of the edges'
+  `semantic_score` strengths); the result names the mode it used
 - `kgraph_explain` — node description with connections, the community it belongs
   to, the source document(s) behind each connection, and `sources_overflow` when
   that list was capped (see below)

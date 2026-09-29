@@ -36,6 +36,34 @@ _CANONICAL_RELATION_LABELS = frozenset({
     "actor decision", "actor issue", "actor outcome",
 })
 
+# ── UN-CALIBRATED classification thresholds (GRAPHRAG-JEV-005) ─────────
+# REF: "GraphRAG with TypeSafe Jev: A System One Approach to Scalable Knowledge
+#      Graphs" (Partha Sarkar, TDS, 2026-09-27) —
+#      https://towardsdatascience.com/graphrag-with-typesafe-jev-a-system-one-approach-to-scalable-knowledge-graphs/
+# Both numbers below are hand-picked defaults, NOT measured values, and this pass
+# deliberately leaves them as they are rather than calibrating them, because the
+# prerequisite is missing: calibration needs a LABELLED edge set — a sample of
+# edges each carrying an independent judgement of whether the asserted
+# relationship is real — and no such set exists in this repo.  Fabricating a
+# fixture set and reporting it as calibration is forbidden here, so the honest
+# state is "un-calibrated", written down, rather than a plausible-looking number.
+#
+# What a calibration would need, concretely:
+#   * a labelled sample of edges (label = real / not-real), drawn from the same
+#     emitters that produce `semantic_score` and `cooccurrence_count` — for
+#     instance a JSON/CSV of (source, target, label, semantic_score,
+#     cooccurrence_count, real) exported from a built graph and hand-reviewed;
+#   * one PRECISION-RECALL curve per signal: precision and recall as the
+#     threshold sweeps `semantic_score` (and, separately, `cooccurrence_count`).
+#     The metric is precision-at-threshold with its recall, not accuracy: the two
+#     errors are not symmetric — a wrong INFERRED edge is asserted downstream and
+#     costs more than an AMBIGUOUS one flagged for review — so the threshold is
+#     the lowest one whose precision stays at or above that cost ratio.
+# Until that set exists, every value here is a default someone picked; treat a
+# change to one as an unmeasured change, not an improvement.
+SEMANTIC_INFERRED_MIN = 0.55
+COOCCURRENCE_INFERRED_MIN = 3
+
 
 def tag_confidence(graph: Graph | dict) -> Graph:
     """Tag every edge in the graph with a confidence level.
@@ -45,8 +73,12 @@ def tag_confidence(graph: Graph | dict) -> Graph:
       canonically defined edges, user-saved edges
     - INFERRED: semantic similarity edges, co-occurrence edges,
       summary-derived edges, inferred (cooccurrence_count) edges
-    - AMBIGUOUS: low semantic_score (< 0.55), inferred + weak support,
-      very short edges without source data
+    - AMBIGUOUS: low semantic_score (< :data:`SEMANTIC_INFERRED_MIN`), inferred
+      + weak support, very short edges without source data
+
+    The two numeric cut-offs (:data:`SEMANTIC_INFERRED_MIN` and
+    :data:`COOCCURRENCE_INFERRED_MIN`) are UN-CALIBRATED hand-picked defaults —
+    see the note above them for what a real calibration would need.
     """
     if isinstance(graph, dict):
         graph = Graph.from_dict(graph)
@@ -88,13 +120,13 @@ def _determine_confidence(edge: GraphEdge) -> ConfidenceLevel:
 
     # Semantic similarity edges
     if edge.semantic_score is not None:
-        if edge.semantic_score >= 0.55:
+        if edge.semantic_score >= SEMANTIC_INFERRED_MIN:
             return ConfidenceLevel.INFERRED
         return ConfidenceLevel.AMBIGUOUS
 
     # Co-occurrence edges
     if edge.cooccurrence_count is not None:
-        if edge.cooccurrence_count >= 3:
+        if edge.cooccurrence_count >= COOCCURRENCE_INFERRED_MIN:
             return ConfidenceLevel.INFERRED
         return ConfidenceLevel.AMBIGUOUS
 

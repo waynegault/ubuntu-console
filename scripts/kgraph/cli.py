@@ -27,7 +27,15 @@ from .confidence import confidence_stats, tag_confidence
 from .community import communities_available, detect_communities, find_god_nodes
 from .report import generate_report
 from .ast_extractor import ast_available, extract_repo_graph
-from .query import explain_node, find_path, format_explain, format_path, query_nodes
+from .query import (
+    PATH_MODE_BFS,
+    PATH_MODE_STRONGEST,
+    explain_node,
+    find_path_result,
+    format_explain,
+    format_path,
+    query_nodes,
+)
 from .call_flow import generate_call_flow_html, generate_call_flow_mermaid
 from .update import incremental_update, start_watch
 from .models import Graph
@@ -106,7 +114,12 @@ def main() -> None:
 
     # Query tools
     parser.add_argument("--query", help="Search nodes matching a pattern")
-    parser.add_argument("--path", nargs=2, metavar=("SOURCE", "TARGET"), help="Shortest path between two nodes")
+    parser.add_argument("--path", nargs=2, metavar=("SOURCE", "TARGET"),
+                        help="Path between two nodes (see --path-mode)")
+    parser.add_argument("--path-mode", choices=[PATH_MODE_BFS, PATH_MODE_STRONGEST],
+                        default=PATH_MODE_BFS,
+                        help="'bfs' (default): fewest hops. 'strongest': maximize the "
+                             "product of the edges' semantic_score strengths")
     parser.add_argument("--explain", help="Describe a node and its graph connections")
 
     # Shared I/O
@@ -323,7 +336,10 @@ def main() -> None:
         return
 
     if args.path:
-        print(format_path(find_path(graph, args.path[0], args.path[1])))
+        # Name the mode in the output: "the path" is a different path in each
+        # mode, and the default (bfs) must not be assumed silently.
+        result = find_path_result(graph, args.path[0], args.path[1], mode=args.path_mode)
+        print(format_path(result["edges"], mode=result["mode"]))
         return
 
     if args.explain:

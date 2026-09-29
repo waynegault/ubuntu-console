@@ -51,6 +51,7 @@ kgraph --wiring --repo DIR  # Analyze source-tree wiring (orphans, broken import
 kgraph --watch              # Watch mode (auto-rebuild on file changes)
 kgraph --mcp                # MCP server for LLM tool-call access
 kgraph --report             # Write GRAPH_REPORT.md
+kgraph --path A B           # Path between two nodes; --path-mode bfs (default) | strongest
 kgraph --audit              # Show security audit report
 kgraph --pr-dashboard       # Generate PR dashboard
 kgraph --install-hook       # Install git post-commit hook

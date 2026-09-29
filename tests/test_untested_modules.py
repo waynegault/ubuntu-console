@@ -2862,6 +2862,7 @@ class TestMCPServerTools(_MCPHarness):
                                       "kgraph_report", "kgraph_stats"})
         self.assertIn("pattern", tools["kgraph_query"]["parameters"])
         self.assertIn("source", tools["kgraph_path"]["parameters"])
+        self.assertIn("mode", tools["kgraph_path"]["parameters"])
         self.assertIn("node_id", tools["kgraph_explain"]["parameters"])
         self.assertIn("KG_REPORTS_DIR", tools["kgraph_report"]["parameters"]["outpath"])
         self.assertEqual(tools["kgraph_stats"]["parameters"], {})
@@ -2876,8 +2877,16 @@ class TestMCPServerTools(_MCPHarness):
         found = self._call("kgraph_path", {"source": "a", "target": "c"})["result"]
         self.assertEqual([(e["source"], e["target"]) for e in found["edges"]],
                          [("a", "b"), ("b", "c")])
+        # The payload names the mode that ran — the default here — and the same
+        # tool takes the strength-weighted mode; neither may be left implicit,
+        # because the two modes answer differently on a graph where they differ.
+        self.assertEqual(found["mode"], "bfs")
+        self.assertEqual(
+            self._call("kgraph_path",
+                       {"source": "a", "target": "c", "mode": "strongest"})["result"]["mode"],
+            "strongest")
         self.assertEqual(self._call("kgraph_path", {"source": "a", "target": "zzz"})["result"],
-                         {"path_found": False, "edges": []})
+                         {"mode": "bfs", "path_found": False, "edges": []})
         explained = self._call("kgraph_explain", {"node_id": "a"})["result"]
         self.assertEqual(explained["node"]["id"], "a")
         self.assertEqual((explained["outbound_count"], explained["inbound_count"]), (1, 0))

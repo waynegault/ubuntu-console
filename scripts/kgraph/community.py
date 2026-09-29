@@ -68,15 +68,26 @@ def _build_nx_graph(graph: Graph) -> Any:
         G.add_node(n.id)
     for e in graph.edges:
         if G.has_node(e.source) and G.has_node(e.target):
-            weight = e.semantic_score if e.semantic_score is not None else e.weight
-            # `weight` is a similarity/strength (higher = stronger tie) and is
+            # REF: "GraphRAG with TypeSafe Jev: A System One Approach to Scalable
+            # Knowledge Graphs" (Partha Sarkar, TDS, 2026-09-27) —
+            # https://towardsdatascience.com/graphrag-with-typesafe-jev-a-system-one-approach-to-scalable-knowledge-graphs/
+            # Relationship strength comes from `semantic_score`, the package's
+            # single continuous strength vocabulary (constants.py).  An edge with
+            # no score is strength 1.0: an AST `defines`/`calls` edge is asserted,
+            # not weak, and scoring it below a semantic edge would cluster
+            # structure differently from meaning.  The former `GraphEdge.weight`
+            # field was removed (GRAPHRAG-JEV-005) — it shadowed this same
+            # meaning and had no other reader, and its 1.0 default meant the old
+            # fallback could only ever be the constant this line now states.
+            strength = e.semantic_score if e.semantic_score is not None else 1.0
+            # `strength` is a similarity (higher = stronger tie) and is
             # used as tie-strength by Louvain/eigenvector. networkx shortest-path
             # algorithms instead treat a `weight` attribute as a *distance*, so
             # store an explicit `distance` (stronger = shorter) and use that for
             # betweenness; otherwise a strong-linked hub is scored as a weak
             # bridge.
-            G.add_edge(e.source, e.target, weight=weight,
-                       distance=1.0 / max(float(weight), 1e-9))
+            G.add_edge(e.source, e.target, weight=strength,
+                       distance=1.0 / max(float(strength), 1e-9))
     return G
 
 

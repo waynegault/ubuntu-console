@@ -769,6 +769,23 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
                     keep = stat['count'] >= 3 and avg_score >= 0.45
                 if not keep:
                     continue
+                # semantic_score and the label-visibility cut-off below are
+                # UN-CALIBRATED hand-picked defaults (GRAPHRAG-JEV-005), kept as
+                # they are in this pass: calibrating them needs a LABELLED edge
+                # set — sampled edges each judged real / not-real by hand, drawn
+                # from these same emitters — which this repo does not have, and
+                # inventing one to justify the numbers is forbidden.  A real
+                # calibration is a precision-recall curve over `semantic_score`
+                # (precision at the threshold with its recall, not accuracy),
+                # choosing the lowest threshold whose precision stays above the
+                # cost of asserting a wrong edge; see scripts/kgraph/confidence.py
+                # for the same note on the classification thresholds.
+                #
+                # REF: "GraphRAG with TypeSafe Jev: A System One Approach to
+                # Scalable Knowledge Graphs" (Partha Sarkar, TDS, 2026-09-27) —
+                # https://towardsdatascience.com/graphrag-with-typesafe-jev-a-system-one-approach-to-scalable-knowledge-graphs/
+                # 0.55 base + 0.12/co-occurrence (capped at 3) + 0.18*avg_score,
+                # capped at 0.99: the coefficients are picked, not fitted.
                 semantic_score = round(min(0.99, 0.55 + (0.12 * min(stat['count'], 3)) + (0.18 * avg_score)), 3)
                 add_edge({
                     'from': a,
@@ -778,6 +795,10 @@ def _load_from_memory_db_conn(conn: sqlite3.Connection, dbpath: str, include_all
                     'quality_tier': 'semantic',
                     'semantic_score': semantic_score,
                     'cooccurrence_count': stat['count'],
+                    # 0.86 is another UN-CALIBRATED pick (see the note above): it
+                    # decides which labels are shown by default rather than on
+                    # hover, and no labelled set has measured where that line
+                    # should fall.
                     'label_visibility': 'visible' if semantic_score >= 0.86 or stat['count'] >= 3 else 'hover',
                     # Every chunk that produced this pair — the aggregate's whole
                     # evidence set, which is exactly the case the article warns

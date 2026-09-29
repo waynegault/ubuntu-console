@@ -5,7 +5,8 @@ from LLMs during tool-call mode.
 
 Provides tools:
 - kgraph_query: find nodes matching a pattern
-- kgraph_path: shortest path between two nodes
+- kgraph_path: path between two nodes — fewest-hop ("bfs", the default) or
+  maximum-strength ("strongest"); the mode is named on the result
 - kgraph_explain: describe a node and its connections
 - kgraph_community: the community digest — members, central nodes, boundary edges
 - kgraph_report: generate a current graph report
@@ -18,7 +19,13 @@ import os
 import time
 from urllib.parse import urlsplit
 
-from .query import query_nodes, find_path, explain_node
+from .query import (
+    PATH_MODE_BFS,
+    PATH_MODE_STRONGEST,
+    find_path_result,
+    query_nodes,
+    explain_node,
+)
 from .community import community_view
 from .report import generate_report
 from .graph_db import load_from_graph_db
@@ -225,8 +232,18 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                 src = params.get('source', '')
                 tgt = params.get('target', '')
                 max_depth = params.get('max_depth', 6)
-                path = find_path(self.graph, src, tgt, max_depth=max_depth)
-                return {'path_found': bool(path), 'edges': path}
+                # The mode is an explicit RPC parameter AND is echoed on the
+                # result: a caller that cannot see which mode ran cannot tell a
+                # fewest-hop path from a maximum-strength one.  An unknown mode
+                # raises and comes back as a JSON-RPC error rather than being
+                # silently replaced by the default.
+                mode = str(params.get('mode', PATH_MODE_BFS) or PATH_MODE_BFS)
+                result = find_path_result(self.graph, src, tgt, mode=mode, max_depth=max_depth)
+                return {
+                    'mode': result['mode'],
+                    'path_found': result['path_found'],
+                    'edges': result['edges'],
+                }
 
             elif method == 'kgraph_explain':
                 node_id = params.get('node_id', '')
@@ -278,11 +295,19 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                     },
                     {
                         'name': 'kgraph_path',
-                        'description': 'Shortest path between two nodes',
+                        'description': (
+                            'Path between two nodes. Two modes, and the result names the '
+                            'one used: "bfs" (default) is the fewest-hop path; '
+                            '"strongest" maximizes the product of the edges\' '
+                            'semantic_score strengths (cost -log(strength) per edge). '
+                            'The modes can disagree — the strongest path may be longer '
+                            'than the shortest one.'
+                        ),
                         'parameters': {
                             'source': 'source node id or label',
                             'target': 'target node id or label',
                             'max_depth': 'max path length (default 6)',
+                            'mode': f'"{PATH_MODE_BFS}" (default) or "{PATH_MODE_STRONGEST}"',
                         }
                     },
                     {
