@@ -1185,7 +1185,7 @@ where it was last present.)
 │   ├── test_bats_lock_fixture.py      # Tests for conftest lock fixture
 │   ├── test_check_ci_status.py        # CI verdict gate tests (card CI-WATCH-CONSOLE-001)
 │   ├── test_grpo_vram_probe.py        # VRAM-budget arithmetic tests (card UBC-GRPO-003)
-│   ├── test_kgraph.py                 # Python tests for kgraph package (141 tests)
+│   ├── test_kgraph.py                 # Python tests for kgraph package (164 tests)
 │   ├── test_kgraph_wiring.py          # kgraph wiring/orphan detection tests (13 tests)
 │   ├── test_models.py                 # Pydantic model tests (55 tests)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
