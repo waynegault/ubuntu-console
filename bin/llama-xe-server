@@ -42,7 +42,12 @@ fi
 _neo_default=4096                          # keep in step with the .d/neo-maxalloc.conf drop-ins
 _neo_mb="${OverrideMaxMemAllocSizeMb:-}"
 if [[ ! "$_neo_mb" =~ ^[0-9]+$ ]] || (( _neo_mb < 1 )); then
-    [[ -n "$_neo_mb" ]] && echo "llama-xe-server: WARNING ignoring malformed OverrideMaxMemAllocSizeMb=${_neo_mb@Q} (want a positive integer); using ${_neo_default}" >&2
+    if [[ -n "$_neo_mb" ]]; then
+        _neo_note="llama-xe-server: WARNING ignoring malformed"
+        _neo_note+=" OverrideMaxMemAllocSizeMb=${_neo_mb@Q} (want a positive integer)"
+        _neo_note+="; using ${_neo_default}"
+        echo "$_neo_note" >&2
+    fi
     _neo_mb="$_neo_default"
 fi
 export NEOReadDebugKeys=1
