@@ -53,6 +53,27 @@ answering by restating the syntax ("stderr is discarded" is not an answer), refu
 to treat a `# swallow-ok:` comment as evidence, and makes "no concrete later
 consequence" mean benign.
 
+RESULT (measured 2026-09-30 against the qwen2.5-3b lane on :18084, temperature 0,
+`--sample stratified --seed 1 --timeout 600`).  The labelled pool is 163 site-lines
+across 10 files; it was split stratified (alternating deal inside each file after a
+seeded shuffle) into a TUNE half of 85 and a HELD-OUT half of 78, and BOTH prompts
+were measured on the TUNE half first:
+    v1  TUNE  9/85 = 10.6% agreement  (9 benign, 76 masking, 0 unparsed)
+    v2  TUNE  0/85 =  0.0% agreement  (0 benign, 85 masking, 0 unparsed)
+v1 is the winner, and the winner's HELD-OUT number — the only one that is evidence —
+is 12/78 = 15.4% (12 benign, 66 masking, 0 unparsed) against the CHOSEN 80% bar.
+
+VERDICT: **the proposals are UNFILTERED — a human must read every one.**  The tool
+may NOT be used to skip review, and no candidate may be ratified on its output alone
+until a configuration clears the bar.  Two things the measurement rules out: the v2
+reword did not help but HURT (0.0% — its "name the consequence" demand had the model
+call every line masking), and stratifying the sample did not rescue the rate either
+(10.6%/15.4% here versus the earlier 16.7% two-file figure, so the earlier number was
+if anything OPTIMISTIC).  With 0 unparsed across 355 replies, the FORMAT is fine, the
+SAMPLING is not the cause, and the PROMPT variant did not fix it: that leaves model
+capacity as the leading untested candidate, and the card's own ordering requires
+testing the SAME prompt on a larger local lane before any further rewording.
+
 SITES COME FROM THE CHECKER, NOT FROM A SECOND SCANNER.  The population is read
 through `tools/check-contracts.sh swallows --dump-sites` (JSONL), so this tool and
 the check that enforces the count cannot disagree about what a site is.  The asked
