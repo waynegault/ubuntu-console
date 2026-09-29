@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 70
+# Module Version: 71
+#   v71 (2026-09-29): _sampler_args takes the model path as an ARGUMENT (it read a
+#   caller-scope MODEL_PATH, so a direct call printed nothing and looked like dead
+#   wiring — three probes concluded wrongly); it refuses loudly with no argument.  The
+#   row now logs its sampler policy once before spawning, and the `saved:` line carries
+#   sampler=<rp>/<rln>, so a certified tps can be audited for its decode policy.
 #   v68 (2026-09-27): the q8_0 prompt range in v66/v67's comment corrected to the measured
 #   17,675..17,756 — read this time from the --record run's own captured output AND from
 #   config/kv-recall-baseline.tsv, which agree. The earlier 17,759 was the --check run's
@@ -634,7 +639,16 @@ _bench_stop() {
 # they cannot drift; blank means "not configured" and emits nothing, which is
 # llama.cpp's own default.  Deliberately NOT an env knob - see the note in 11e's builder.
 _sampler_args() {
-    local _f="${MODEL_PATH##*/}" _rp="" _rln=""
+    local _f="${1##*/}" _rp="" _rln=""
+    # The model is an ARGUMENT, not a caller-scope global.  It used to read
+    # ${MODEL_PATH##*/}: a direct call then printed NOTHING and looked like dead wiring,
+    # and on 2026-09-29 three separate probes wrongly concluded "the autotune does not
+    # apply the sampler" for exactly that reason.  A hidden dependency is not a default,
+    # it is a trap — and an empty result must never be the answer to "which model?".
+    if [[ -z "${1:-}" ]]; then
+        __tac_info "Sampler" "[needs the model path - refusing to guess]" "${C_Warning:-}"
+        return 1
+    fi
     _rp=$(__llm_registry_field "$_f" repeat_penalty)
     _rln=$(__llm_registry_field "$_f" repeat_last_n)
     if [[ -n "$_rp" ]]
@@ -675,7 +689,7 @@ _bench_spawn() {
         # TTFT server) from the same registry column, so no measurement in this script
         # runs a decode policy the serve path does not.
         local -a sampler_args=()
-        mapfile -t sampler_args < <(_sampler_args)
+        mapfile -t sampler_args < <(_sampler_args "$MODEL_PATH")
         # SPEC-DEC-004: the block-size sweep drives spec-decode via these
         # globals (BENCH_SPEC_TYPE / BENCH_SPEC_N_MAX / BENCH_SPEC_DRAFT_MODEL);
         # "off" (the default during the ctx/batch search) passes no flags.
@@ -1340,6 +1354,24 @@ probe_upward() {
     local _pc="$1" _pb="$2" _pu="$3" _pm="${4:-auto}" _pngl="${5:-$BENCH_NGL}"
     local _pkk="${6:-q8_0}" _pkv="${7:-q8_0}"
     local _tps _lo _hi=0 _steps=0 _mid _fail_label
+
+    # Which decode policy is this row being measured under?  Say it ONCE per row, before
+    # any spawning: a log that is silent about the sampler cannot be audited afterwards
+    # (the server argv is never printed, so its absence proves nothing — 2026-09-29, when
+    # a certified tps could not be checked for the sampler at all).  "none configured" is
+    # STATED rather than omitted, because "unset" and "explicitly none" are different
+    # claims and only one of them is a decision.  One-shot per process, and a row is a
+    # process, so this is the row's own record.
+    if [[ -z "${_SAMPLER_POLICY_LOGGED:-}" ]]; then
+        _SAMPLER_POLICY_LOGGED=1
+        local -a _policy_args=()
+        mapfile -t _policy_args < <(_sampler_args "$MODEL_PATH")
+        if (( ${#_policy_args[@]} > 0 )); then
+            echo "  sampler: ${_policy_args[*]}   (registry columns 38/39)"
+        else
+            echo "  sampler: none configured (registry columns 38/39 blank) — llama.cpp defaults apply"
+        fi
+    fi
 
     _tps=$(bench_ctx "$_pc" "$_pb" "$_pu" 1 "$_pm" "$_pngl" "quick" "$_pkk" "$_pkv") || {
         _fail_label="OOM"
@@ -2108,7 +2140,7 @@ ttft_probe() {
         # TTFT server) from the same registry column, so no measurement in this script
         # runs a decode policy the serve path does not.
         local -a sampler_args=()
-        mapfile -t sampler_args < <(_sampler_args)
+        mapfile -t sampler_args < <(_sampler_args "$MODEL_PATH")
         "$LLAMA_BIN" --model "$MODEL_PATH" --port "$autotune_port" --host 127.0.0.1 \
             --ctx-size "$c" --batch-size "$b" --ubatch-size "$u" \
             --threads "$TUNE_THREADS" --n-gpu-layers "$effective_ngl" \
@@ -2435,7 +2467,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         echo "         The console's llm-manager helpers failed to load; look for 'missing sub-module' above." >&2
         exit 1
     fi
-    awk -F'|' -v f="$MODEL_FILE" '$3 == f {printf "  saved:   ctx=%s batch=%s/%s parallel=%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s ttft_ms=%s\n", $8, $10, $11, $12, $17, $21, $18, $27, $29, $32, $33, $34}' "$LLM_REGISTRY"
+    awk -F'|' -v f="$MODEL_FILE" '$3 == f {rp=($38==""?"none":$38); rln=($39==""?"none":$39); printf "  saved:   ctx=%s batch=%s/%s parallel=%s tps=%s prefill=%s autotuned=%s spec_type=%s spec_n_max=%s spec_accept_len=%s workload=%s ttft_ms=%s sampler=%s/%s\n", $8, $10, $11, $12, $17, $21, $18, $27, $29, $32, $33, $34, rp, rln}' "$LLM_REGISTRY"
 
     # Measurement context (2026-09-16).  A certified tps is only comparable to another
     # row if the box was quiet when it was taken.  On 2026-09-16 this sweep ran at load

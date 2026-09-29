@@ -359,3 +359,61 @@ _selftest_run() {
     [[ -n "$cert_line" ]]
     (( clamp_line < cert_line ))
 }
+
+# ── SAMPLER-ARGS: the audit path that did not exist on 2026-09-29 ───────────
+# _sampler_args is the only way to answer "what decode policy did this row run
+# under?" — the question that could not be answered when row 26's certification was
+# audited.  It used to read a CALLER-scope MODEL_PATH, so a direct call printed
+# NOTHING and looked like dead wiring; three probes concluded wrongly.  The model is
+# an argument now, and the run records its own policy.
+
+@test "sampler-args: the model is an argument, and a bare call refuses loudly" {
+    # Catches: the hidden-global shape answering "no flags" for a model that HAS them —
+    # a false negative that reads as "the autotune does not apply the sampler".
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" != *'local _f="${MODEL_PATH##*/}"'* ]] || {
+        echo "the model must not come from a caller-scope MODEL_PATH"
+        return 1
+    }
+    [[ "$src" == *'local _f="${1##*/}"'* ]]
+    # ...and both spawn sites pass it explicitly, so neither can silently emit nothing.
+    local _sites
+    _sites=$(grep -c 'mapfile -t sampler_args < <(_sampler_args "$MODEL_PATH")' \
+        "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$_sites" -eq 2 ]]
+
+    eval "$(sed -n '/^_sampler_args()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    # The refusal goes through the UI helper (ratchet 10.7 forbids a hand-written >&2),
+    # so the helper has to be loaded here — the shipped script sources it.
+    source "$REPO_ROOT/scripts/05-ui-engine.sh"
+    run _sampler_args
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"needs the model path"* ]]
+}
+
+@test "sampler-args: flags come from the registry columns, and a blank column emits nothing" {
+    # Catches: the spawn flags drifting from the registry column (the drift the function
+    # exists to prevent), and a blank column emitting a flag with NO value — which would
+    # hand llama-server a bare `--repeat-penalty`.
+    eval "$(sed -n '/^_sampler_args()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+
+    cat > "$LLM_REGISTRY" <<'EOF'
+#|name|file|repeat_penalty|repeat_last_n
+1|Spark|spark.gguf|1.1|256
+2|Plain|plain.gguf||
+EOF
+
+    run _sampler_args spark.gguf
+    [[ "$status" -eq 0 ]]
+    # One argv word per line (the __spec_launch_flags idiom), so the flag and its value
+    # are separate lines — asserting "--repeat-penalty 1.1" would never match.
+    [[ "$output" == *"--repeat-penalty"* ]]
+    [[ "$output" == *"1.1"* ]]
+    [[ "$output" == *"--repeat-last-n"* ]]
+    [[ "$output" == *"256"* ]]
+
+    run _sampler_args plain.gguf
+    [[ "$status" -eq 0 ]]
+    [[ -z "$output" ]]
+}
