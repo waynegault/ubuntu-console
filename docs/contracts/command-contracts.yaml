@@ -58,16 +58,24 @@ notes:
     is optional and the triage of a borderline line is the owner's call.  A
     guessed classification is a silently-failed requirement, so an entry whose own
     text does not settle the question stays unclassified rather than filled in.
-    Classified here, both on the entry's own words: `oc-restart-check` (its
-    exit_code states a closed three-way enumeration) and `h` (its exit_code states
-    the single closed value 0, with no 'unless' — the weaker of the two, since one
-    value is not an enumeration).  Deliberately UNCLASSIFIED: every other
+    Classified here, on the entry's own words: `oc-restart-check` (its exit_code
+    states a closed three-way enumeration).  `h` was classified `decision` in the
+    first pass and is DEMOTED (ruled 2026-09-29): one closed value with no
+    alternatives is a consequence of a help panel not being able to fail, not an
+    owner's decision.  Deliberately UNCLASSIFIED: every other
     exit_code line names no failing set ('non-zero on …') or is half-stated ('0
     unless internal render failure' — the article's 'up to 250 m' shape, whose
     lower bound is undefined), the `args:` lists are not marked exhaustive, and
     the output_shape/side_effects lines are prose.  The field is additive: it is a
     sibling of `contract:`, so no entry version moves (the checker's changed-entry
-    pass covers the summary and the contract block, not this field)."
+    pass covers the summary and the contract block, not this field).  RULED
+    2026-09-29 (owner, on the audit's options (b)+(c)): an entry whose `read_back:`
+    witness already states a closed success condition is deliberately left
+    UNCLASSIFIED — the witness's `asserts:` IS the bound of record, and copying it
+    into `bound:` would create a second list that can drift, which is exactly the
+    objection the read_back note above makes.  The eight witness-carrying entries
+    (up, so, xo, model use, model stop, burn, cl, logtrim) are therefore
+    unclassified on purpose, not by omission."
 
 entrypoints:
   interactive_loader:
@@ -116,8 +124,6 @@ commands:
     scope_note: alias for tactical_help; an alias name does not resolve under tac-exec
     verified_by:
       - "tests/tactical-console.bats::alias: h is defined (tactical_help)"
-    disposition: decision
-    bound: "exit_code: 0 — the entry states one closed value and names no failing set, so the only stated result is success"
     contract:
       side_effects: []
       output_shape:
