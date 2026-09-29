@@ -25,6 +25,29 @@ if [[ ! -x "$_bin" ]]; then
     exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# NEO per-allocation ceiling — fail-safe normalisation (2026-09-29).
+#
+# The device's default CL_DEVICE_MAX_MEM_ALLOC_SIZE is exactly 1 GiB, which caps
+# a single OpenCL buffer; NEOReadDebugKeys=1 gates the OverrideMaxMemAllocSizeMb
+# override.  A *malformed* value is the trap: NEO parses it as 0, so the cap
+# becomes 0 bytes and EVERY allocation fails — the device looks broken while the
+# cause is one bad character in a systemd drop-in.  Normalise here, before the
+# runtime reads the variable, so that can never reach the device.
+#
+# A value is honoured only if it is a plain positive integer; anything else
+# (empty, 0, negative, "4096abc", whitespace) is ignored in favour of the default
+# and both vars are always set or cleared together — never one without the other.
+# ---------------------------------------------------------------------------
+_neo_default=4096                          # keep in step with the .d/neo-maxalloc.conf drop-ins
+_neo_mb="${OverrideMaxMemAllocSizeMb:-}"
+if [[ ! "$_neo_mb" =~ ^[0-9]+$ ]] || (( _neo_mb < 1 )); then
+    [[ -n "$_neo_mb" ]] && echo "llama-xe-server: WARNING ignoring malformed OverrideMaxMemAllocSizeMb=${_neo_mb@Q} (want a positive integer); using ${_neo_default}" >&2
+    _neo_mb="$_neo_default"
+fi
+export NEOReadDebugKeys=1
+export OverrideMaxMemAllocSizeMb="$_neo_mb"
+
 exec "$_bin" "$@"
 
 # end of file
