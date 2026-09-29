@@ -44,6 +44,30 @@ notes:
     named (the oracle is the @test parser), and the field proves a node EXISTS,
     not that the test exercises the command — that judgement stays with the
     author, which is why every mapping here was read before it was written."
+  - "disposition (2026-09-29, card SPEC-VV-CONSOLE-004): an OPTIONAL entry-level
+    field answering the article's triage question — given only the requirements,
+    could two competent developers legitimately disagree about this line?  YES =
+    `disposition: decision`: an owner made a call, so the entry states the closed
+    value it fixes in `bound:`.  NO = `disposition: consequence`: the value is
+    derived from its producer and free to change with it, so the entry must carry
+    NO `bound:` — a hard-coded value there goes stale silently, which is the
+    failure this pair of rules refuses.  tools/check-contracts.sh continuity FAILS
+    a `decision` with no weighable `bound:`, a `consequence` that carries one, any
+    other value, and a `bound:` with no `disposition:`; it REPORTS the ACTIVE
+    entries nobody classified as UNCLASSIFIED and counts them, because the field
+    is optional and the triage of a borderline line is the owner's call.  A
+    guessed classification is a silently-failed requirement, so an entry whose own
+    text does not settle the question stays unclassified rather than filled in.
+    Classified here, both on the entry's own words: `oc-restart-check` (its
+    exit_code states a closed three-way enumeration) and `h` (its exit_code states
+    the single closed value 0, with no 'unless' — the weaker of the two, since one
+    value is not an enumeration).  Deliberately UNCLASSIFIED: every other
+    exit_code line names no failing set ('non-zero on …') or is half-stated ('0
+    unless internal render failure' — the article's 'up to 250 m' shape, whose
+    lower bound is undefined), the `args:` lists are not marked exhaustive, and
+    the output_shape/side_effects lines are prose.  The field is additive: it is a
+    sibling of `contract:`, so no entry version moves (the checker's changed-entry
+    pass covers the summary and the contract block, not this field)."
 
 entrypoints:
   interactive_loader:
@@ -92,6 +116,8 @@ commands:
     scope_note: alias for tactical_help; an alias name does not resolve under tac-exec
     verified_by:
       - "tests/tactical-console.bats::alias: h is defined (tactical_help)"
+    disposition: decision
+    bound: "exit_code: 0 — the entry states one closed value and names no failing set, so the only stated result is success"
     contract:
       side_effects: []
       output_shape:
@@ -198,6 +224,8 @@ commands:
     status: active
     scope: both
     effect: read
+    disposition: decision
+    bound: "exit_code: 0 safe, 1 not safe, 2 could not measure — a closed three-way enumeration, so no other result is valid"
     contract:
       side_effects: []
       output_shape:

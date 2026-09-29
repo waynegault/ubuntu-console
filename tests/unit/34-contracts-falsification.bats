@@ -463,7 +463,7 @@ YAML
     [[ "$output" == *"@test oracle: 1 node(s) in 1 BATS file(s)"* ]]
 }
 
-@test "real: the shipped contract's verified_by nodes all resolve, and the gap is named" {
+@test "real: the shipped contract's verified_by nodes resolve and its counts cross-check" {
     # The real-tree half of the card: the shipped map parses, every declared node
     # exists (a dangling one is a FAIL above, so exit 0 is the assertion), and the
     # reported counts are cross-checked against the FILE ITSELF rather than a pinned
@@ -474,7 +474,11 @@ YAML
     [[ "$output" == *"15 contract entr(ies) (15 active, 0 superseded)"* ]]
 
     local _declared _reported _entries _with_map _unverified
-    _declared=$(grep -c '^      - "tests/' "$REPO_ROOT/docs/contracts/command-contracts.yaml")
+    # Counted with awk, not `grep -c`: grep exits 1 on zero matches, and under this
+    # suite's errexit that would abort the case with a bogus failure the first time a
+    # count legitimately reaches zero (measured here: 0 consequences).
+    _declared=$(awk '/^      - "tests\//{n++} END{print n+0}' \
+        "$REPO_ROOT/docs/contracts/command-contracts.yaml")
     _reported=$(printf '%s\n' "$output" \
         | sed -n 's/.*verified_by: \([0-9]*\) node(s) verified.*/\1/p')
     [[ -n "$_reported" ]] || { echo "the summary carries no verified_by count"; return 1; }
@@ -484,8 +488,10 @@ YAML
     }
     (( _declared > 0 )) || { echo "the shipped map declares no test node at all"; return 1; }
 
-    _entries=$(grep -c '^  - name: ' "$REPO_ROOT/docs/contracts/command-contracts.yaml")
-    _with_map=$(grep -c '^    verified_by:$' "$REPO_ROOT/docs/contracts/command-contracts.yaml")
+    _entries=$(awk '/^  - name: /{n++} END{print n+0}' \
+        "$REPO_ROOT/docs/contracts/command-contracts.yaml")
+    _with_map=$(awk '/^    verified_by:$/{n++} END{print n+0}' \
+        "$REPO_ROOT/docs/contracts/command-contracts.yaml")
     _unverified=$(printf '%s\n' "$output" \
         | sed -n 's/.*, \([0-9]*\) active entr(ies) unverified.*/\1/p')
     [[ "$_unverified" == "$((_entries - _with_map))" ]] || {
@@ -497,6 +503,103 @@ YAML
     # BATS-only oracle cannot name.  If a BATS case for it lands, this assertion is
     # the deliberate edit that adds the mapping.
     [[ "$output" == *"NOT VERIFIED  oc-restart-check"* ]]
+
+    # The same cross-check for the triage: the reported split must equal the
+    # `disposition:` lines the contract actually carries, and every other ACTIVE entry
+    # must be counted as unclassified — a half-populated map cannot pass.
+    local _decisions _consequences _unclassified_entries
+    _decisions=$(awk '/^    disposition: decision$/{n++} END{print n+0}' \
+        "$REPO_ROOT/docs/contracts/command-contracts.yaml")
+    _consequences=$(awk '/^    disposition: consequence$/{n++} END{print n+0}' \
+        "$REPO_ROOT/docs/contracts/command-contracts.yaml")
+    [[ "$output" == *"disposition: ${_decisions} decision(s), ${_consequences} consequence(s)"* ]] || {
+        echo "the summary's triage split disagrees with the contract's disposition lines"
+        return 1
+    }
+    _unclassified_entries=$(printf '%s\n' "$output" \
+        | sed -n 's/.*disposition: [0-9]* decision(s), [0-9]* consequence(s), \([0-9]*\) active entr(ies) unclassified.*/\1/p')
+    [[ -n "$_unclassified_entries" ]] || { echo "the summary carries no unclassified count"; return 1; }
+    [[ "$_unclassified_entries" == "$((_entries - _decisions - _consequences))" ]] || {
+        echo "$((_entries - _decisions - _consequences)) entr(ies) are unclassified, $_unclassified_entries reported"
+        return 1
+    }
+    # ...and the two classified entries are named while the half-stated one is not:
+    # oc-restart-check states a closed three-way enumeration, while m's exit_code
+    # ("0 unless internal render failure") names no failing set — the article's
+    # "up to 250 m" shape, left for the owner rather than guessed at.
+    [[ "$output" == *"DISPOSITION   oc-restart-check -> decision"* ]]
+    [[ "$output" == *"UNCLASSIFIED  m —"* ]]
+}
+
+# ── disposition/bound: the decision/consequence triage (SPEC-VV-CONSOLE-004) ──
+# The criterion is the checker header: `disposition: decision` needs a weighable
+# `bound:` (the closed stated value an owner fixed), `disposition: consequence` must
+# carry none (it is derived from its producer, so a hard-coded value goes stale), any
+# other value is refused naming the two, and an ACTIVE entry that declares no
+# `disposition:` at all is REPORTED and counted, never a failure.
+@test "seed: continuity — a decision with no bound is caught" {
+    # The rule the card names first: a decision is a CLOSED stated value, so an entry
+    # marked `decision` without one is the article's half-stated line ("up to 250 m",
+    # lower bound undefined) — a bound nobody can check, which is what this refuses.
+    sed -i 's|^    scope: both$|    scope: both\n    disposition: decision|' \
+        "$FIXTURE/docs/contracts/command-contracts.yaml"
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"FAIL  docs/contracts/command-contracts.yaml:beta-cmd"* ]]
+    [[ "$output" == *"\`disposition: decision\` with no \`bound:\`"* ]]
+
+    # A `bound:` that says nothing is the same finding, not a pass: the floor is the
+    # one the read_back exemption already uses, so a value a reviewer cannot weigh is
+    # refused rather than counted as a stated bound.
+    sed -i 's|^    disposition: decision$|    disposition: decision\n    bound: "x"|' \
+        "$FIXTURE/docs/contracts/command-contracts.yaml"
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"\`bound:\` says nothing weighable"* ]]
+}
+
+@test "seed: continuity — a consequence carrying a bound is caught" {
+    # The second rule: a consequence is DERIVED from its producer, so a hard-coded
+    # value in the entry goes stale silently the moment the producer changes — the
+    # failure the pair of rules exists to separate.
+    sed -i 's|^    scope: both$|    scope: both\n    disposition: consequence\n    bound: "exit_code: 0"|' \
+        "$FIXTURE/docs/contracts/command-contracts.yaml"
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"\`disposition: consequence\` carries a \`bound:\`"* ]]
+
+    # ...and the mirror: a `bound:` with no `disposition:` is refused too, because
+    # nothing then says whether the value is stated or derived.
+    sed -i '/^    disposition: consequence$/d' "$FIXTURE/docs/contracts/command-contracts.yaml"
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"declares a \`bound:\` with no \`disposition:\`"* ]]
+}
+
+@test "seed: continuity — an unknown disposition is caught, naming the allowed two" {
+    sed -i 's|^    scope: both$|    scope: both\n    disposition: derived-ish|' \
+        "$FIXTURE/docs/contracts/command-contracts.yaml"
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"\`disposition:\` must be one of decision/consequence (got 'derived-ish')"* ]]
+}
+
+@test "report: continuity — an entry with no disposition is counted, then accepted once stated" {
+    # `disposition:` is optional by the card, so an entry nobody triaged is REPORTED
+    # and counted (the posture `state` takes for NOT WITNESSED), never a failure.
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"UNCLASSIFIED  beta-cmd"* ]]
+    [[ "$output" == *"disposition: 0 decision(s), 0 consequence(s), 1 active entr(ies) unclassified"* ]]
+
+    # The false-positive half: the SAME entry, once stated, is accepted and counted as
+    # a decision — so "reported" is not the only outcome the rule can produce.
+    sed -i 's|^    scope: both$|    scope: both\n    disposition: decision\n    bound: "exit_code: 0 — one closed value, stated by this fixture"|' \
+        "$FIXTURE/docs/contracts/command-contracts.yaml"
+    run "$CHECKER" continuity --repo "$FIXTURE"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"DISPOSITION   beta-cmd -> decision"* ]]
+    [[ "$output" == *"disposition: 1 decision(s), 0 consequence(s), 0 active entr(ies) unclassified"* ]]
 }
 
 @test "seed: swallows — a new unclassified swallow is caught" {

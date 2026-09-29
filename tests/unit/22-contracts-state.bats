@@ -349,9 +349,10 @@ SH
     [[ "$status" -eq 0 ]]
     # v4 added @uses to `modules` (MOD-GRAPH-DECLARATION-001); v5 added the `effect`
     # class rule to `state` (RAGACT-006); v6 added `verified_by:` to `continuity`
-    # (SPEC-VV-CONSOLE-003).  The string moves with the tool, so a bump is a
-    # deliberate edit here rather than a silent drift.
-    [[ "$output" == "check-contracts 6" ]]
+    # (SPEC-VV-CONSOLE-003); v7 added `disposition:`/`bound:` there (SPEC-VV-CONSOLE-004).
+    # The string moves with the tool, so a bump is a deliberate edit here rather than
+    # a silent drift.
+    [[ "$output" == "check-contracts 7" ]]
 }
 
 @test "effect: an active entry with no effect class fails, naming it and the allowed values" {

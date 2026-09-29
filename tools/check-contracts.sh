@@ -17,9 +17,10 @@
 #   derived     the DERIVED command surface (from @exports) against the AUTHORED
 #               enumerations that snapshot it (skills/tactical-console/SKILL.md's
 #               tac-exec table and docs/contracts/command-contracts.yaml).
-#   continuity  per-entry version/status/scope/superseded_by and the per-entry
-#               `verified_by:` test nodes in docs/contracts/command-contracts.yaml,
-#               plus the decision register under .agents/decisions/.
+#   continuity  per-entry version/status/scope/superseded_by, the per-entry
+#               `verified_by:` test nodes and the `disposition:`/`bound:` triage in
+#               docs/contracts/command-contracts.yaml, plus the decision register
+#               under .agents/decisions/.
 #   swallows    unclassified `|| true` and `2>/dev/null` sites in the shell corpus
 #               (scripts/*.sh, bin/*, tools/*.sh, tools/hooks/*).
 #
@@ -197,19 +198,33 @@
 #   not exist is a FAIL, naming the entry and the node; the field is validated on
 #   every entry, superseded ones included, because a dangling pointer is dangling
 #   wherever it sits.
+#   `disposition:` (card SPEC-VV-CONSOLE-004) is an OPTIONAL entry-level field, the
+#   article's triage: `decision` for a line two competent developers could disagree
+#   about (it needs a `bound:` stating the closed value an owner chose) and
+#   `consequence` for a line derived from its producer (it must carry no `bound:`, or
+#   the value goes stale silently).  A decision with no weighable bound FAILS, a
+#   consequence with a bound FAILS, any other value FAILS naming the two, and a
+#   `bound:` with no `disposition:` FAILS.  The classification itself is AUTHORED and
+#   cannot be checked here — the check refuses an incoherent pair, and an entry whose
+#   own text does not settle the question is left UNCLASSIFIED and counted rather than
+#   guessed at.
 # REPORTED, never enforced by `continuity`: what the contracts SAY (`side_effects`,
 # `output_shape`, `exit_code` are prose — `state` and `swallows` enforce their own
-# halves); the ACTIVE entries that declare no `verified_by:` at all (the same posture
-# `state` takes for its NOT ENFORCED edges and NOT WITNESSED entries — the gap is
-# COUNTED and printed, never silent, and an unverified entry is not a failure); and
-# the changed-entry pass, which prints (or prints that it could not run) the entries
-# added against HEAD and the older same-family entries that still apply.
+# halves); the ACTIVE entries that declare no `verified_by:` or no `disposition:` at
+# all (the same posture `state` takes for its NOT ENFORCED edges and NOT WITNESSED
+# entries — the gap is COUNTED and printed, never silent, and an unverified or
+# unclassified entry is not a failure); and the changed-entry pass, which prints (or
+# prints that it could not run) the entries added against HEAD and the older
+# same-family entries that still apply.
 #
 # NOT COVERED by `verified_by` (stated rather than implied): a Python test cannot be
 # named — the index is BATS only — and the check proves a node EXISTS, not that the
 # test genuinely exercises the command.  The map is authored, so it can be wrong in
 # the direction of naming a weaker test; that is a review question, not a checkable
-# one.
+# one.  Likewise `disposition:` is authored: the check proves a `decision` states a
+# bound and a `consequence` does not, never that the line was TRIAGED correctly, so a
+# mis-triaged line stays a review question (which is why the unclassified count is
+# printed — the entries nobody has judged are the ones that need the owner).
 #
 # WHY `swallows` EXISTS — the failure it catches:
 # An unclassified `|| true` or `2>/dev/null` is a silent failure: the code runs,
@@ -261,10 +276,20 @@
 #      https://towardsdatascience.com/coding-agents-dont-need-longer-history-they-need-intent-continuity/
 # REF: "Towards Spec-Driven Test Automation: Part 1" (Gal Arav, TDS, 2026-09-24) — https://towardsdatascience.com/towards-spec-driven-test-automation-part-1/
 #      — continuity's `verified_by:` (a contract entry must say which test holds it
-#      to its word, and a named node must exist).
+#      to its word, and a named node must exist) and `disposition:` (the
+#      decision/consequence triage: a decision needs its closed bound, a consequence
+#      must not carry one).
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-09-29): `continuity` gained `disposition:`/`bound:` (card
+#   SPEC-VV-CONSOLE-004) — the decision/consequence triage from the article.  A
+#   `decision` needs a weighable `bound:` (the closed stated value), a `consequence`
+#   must carry none (it is derived, so a hard-coded value goes stale), any other value
+#   fails naming the two, and a `bound:` with no `disposition:` fails.  ACTIVE entries
+#   that declare no `disposition:` are COUNTED and printed as UNCLASSIFIED, never a
+#   failure — the triage of a borderline line is the owner's call.  The tool
+#   `VERSION` moves to 7, so the BATS version pins move with it (tests/unit/22 and 24).
 #   v10 (2026-09-29): `continuity` gained `verified_by:` (card SPEC-VV-CONSOLE-003) —
 #   an optional per-entry list of `<repo-relative path>::<exact @test name>` nodes,
 #   validated against the @test declaration parser for tests/**/*.bats (a declared
@@ -302,7 +327,7 @@
 # @modular-section: contracts
 # @depends: none (standalone CI helper; needs python3 with PyYAML)
 # @exports: (none — standalone script, not sourced)
-VERSION="6"
+VERSION="7"
 set -euo pipefail
 
 # --version is pure bash: a version query must not depend on the YAML engine.
@@ -1852,6 +1877,72 @@ def check_verified_by(entry, where, status, name, nodes, problems, report):
         report.append(f"VERIFIED      {name} -> {item}")
 
 
+# ── continuity's `disposition:` (card SPEC-VV-CONSOLE-004) ──────────────────
+# The article's triage question is: "given only the requirements, could two
+# competent developers legitimately disagree about this line?"  YES -> the line is
+# a DECISION: an owner made a call, so it belongs in the contract as a closed,
+# stated value (`disposition: decision` + `bound:`).  NO -> a CONSEQUENCE: derived
+# from the producer, free to change when the producer changes, so a hard-coded
+# value in the entry goes stale silently.
+# REF: "Towards Spec-Driven Test Automation: Part 1" (Gal Arav, TDS, 2026-09-24) — https://towardsdatascience.com/towards-spec-driven-automation-part-1/
+#
+# The field is OPTIONAL and the classification is AUTHORED, which is the honest
+# limit of this check: it REFUSES an incoherent pair (a decision with no bound, a
+# consequence that carries one) and REPORTS the active entries nobody classified —
+# it cannot tell whether a given line was triaged correctly.  A guessed
+# classification is a silently-failed requirement, so an entry whose own text does
+# not settle the question stays unclassified and is counted, not filled in.
+DISPOSITIONS = ("decision", "consequence")
+
+
+def check_disposition(entry, where, status, name, problems, report):
+    """Validate one entry's `disposition:`/`bound:` pair and record its coverage.
+
+    Rules, each naming the entry and the reason: a `decision` with no weighable
+    `bound:` fails; a `consequence` carrying a `bound:` fails (that IS the
+    hard-coded value a consequence must not have); any other value fails naming
+    the allowed two.  A `bound:` with no `disposition:` is also a failure — the
+    bound belongs to a decision, and without the field nothing says whether the
+    value is stated or derived.  An ACTIVE entry with no `disposition:` at all is
+    REPORTED and counted, never a failure (the field is optional by the card).
+    """
+    disposition = entry.get("disposition")
+    bound = entry.get("bound")
+    bound_text = bound.strip() if isinstance(bound, str) else ""
+    if disposition is None:
+        if bound is not None:
+            problems.append(f"  FAIL  {where}: declares a `bound:` with no `disposition:` — the "
+                            f"bound belongs to a `disposition: decision`, and without the "
+                            f"disposition nothing says whether the value is stated or derived")
+        elif status == "active":
+            report.append(f"UNCLASSIFIED  {name} — no `disposition:` says whether this entry "
+                          f"states a decision (closed bound) or records a consequence")
+        return
+    if not isinstance(disposition, str) or disposition.strip() not in DISPOSITIONS:
+        problems.append(f"  FAIL  {where}: `disposition:` must be one of "
+                        f"{'/'.join(DISPOSITIONS)} (got {disposition!r})")
+        return
+    disposition = disposition.strip()
+    if disposition == "decision":
+        if not bound_text:
+            problems.append(f"  FAIL  {where}: `disposition: decision` with no `bound:` — a "
+                            f"decision is a closed stated value, and a decision without its "
+                            f"bound is the half-stated line this rule exists to refuse")
+            return
+        if len(bound_text) < READ_BACK_REASON_MIN:
+            problems.append(f"  FAIL  {where}: `bound:` says nothing weighable ({bound_text!r}) — "
+                            f"state the closed value the decision fixes")
+            return
+    elif bound is not None:
+        problems.append(f"  FAIL  {where}: `disposition: consequence` carries a `bound:` — a "
+                        f"consequence is derived from its producer, so a hard-coded value here "
+                        f"goes stale the moment the producer changes; drop the bound, or state "
+                        f"the entry as a decision with the bound it really has")
+        return
+    report.append(f"DISPOSITION   {name} -> {disposition}"
+                  + (f" ({bound_text})" if bound_text else ""))
+
+
 def decision_records(repo):
     """[(name, fields, problems)] for .agents/decisions/*.md."""
     directory = os.path.join(repo, DECISION_DIR)
@@ -1978,6 +2069,7 @@ def run_continuity(repo, names):
                                 f"same scope may not")
             active_pairs[key] = True
         check_verified_by(entry, where, status, name, test_nodes, problems, trace_lines)
+        check_disposition(entry, where, status, name, problems, trace_lines)
 
     for name, group in sorted(by_name.items()):
         for entry in group:
@@ -2070,6 +2162,10 @@ def run_continuity(repo, names):
                 if entry.get("verified_by"):
                     print("           verified_by: "
                           f"{', '.join(str(node) for node in entry['verified_by'])}")
+                if entry.get("disposition"):
+                    print(f"           disposition: {entry.get('disposition')}"
+                          + (f" — bound: {str(entry.get('bound')).strip()}"
+                             if entry.get("bound") else ""))
             family = {entry.get("family") for entry in matches if isinstance(entry, dict)}
             siblings = sorted({entry.get("name") for entry in entries
                                if isinstance(entry, dict)
@@ -2090,6 +2186,8 @@ def run_continuity(repo, names):
     # as a number with nothing behind it.
     verified_lines = [line for line in trace_lines if line.startswith("VERIFIED")]
     unverified_lines = [line for line in trace_lines if line.startswith("NOT VERIFIED")]
+    classified_lines = [line for line in trace_lines if line.startswith("DISPOSITION")]
+    unclassified_lines = [line for line in trace_lines if line.startswith("UNCLASSIFIED")]
     for line in trace_lines:
         print(f"  {line}")
     for problem in problems:
@@ -2098,12 +2196,16 @@ def run_continuity(repo, names):
                  if isinstance(entry, dict) and entry.get("status") == "active")
     superseded = sum(1 for entry in entries
                      if isinstance(entry, dict) and entry.get("status") == "superseded")
+    decisions = sum(1 for line in classified_lines if "-> decision" in line)
+    consequences = sum(1 for line in classified_lines if "-> consequence" in line)
     summary = (f"{len(entries)} contract entr(ies) ({active} active, {superseded} superseded) | "
                f"{len(records)} decision record(s) in {DECISION_DIR}/ | "
                f"verified_by: {len(verified_lines)} node(s) verified, "
                f"{len(unverified_lines)} active entr(ies) unverified (printed above) | "
                f"@test oracle: {sum(len(v) for v in test_nodes.values())} node(s) "
-               f"in {n_bats} BATS file(s)")
+               f"in {n_bats} BATS file(s) | disposition: {decisions} decision(s), "
+               f"{consequences} consequence(s), "
+               f"{len(unclassified_lines)} active entr(ies) unclassified (printed above)")
     if problems:
         print(f"check-contracts[continuity]: FAIL — {len(problems)} finding(s). {summary}")
         print("  An edited contract is a NEW version with its predecessor marked superseded —")
@@ -2122,12 +2224,19 @@ def run_continuity(repo, names):
     print("  a parseable frontmatter, a name that matches the file, an ISO date, a known status")
     print("  and scope, and `commands:` values that resolve to an exported command. Enforced")
     print("  for `verified_by:`: every declared test node exists as written, in a BATS file")
-    print("  under tests/ (the same @test parser the pytest bridge uses).")
+    print("  under tests/ (the same @test parser the pytest bridge uses). Enforced for")
+    print("  `disposition:`: a `decision` carries a weighable `bound:` (a closed stated value), a")
+    print("  `consequence` carries none (it is derived, so a hard-coded value would go stale),")
+    print("  the value must be one of the two names, and a `bound:` with no `disposition:` is")
+    print("  refused because nothing then says whether the value is stated or derived.")
     print("  NOT enforced here: what the contracts SAY (side_effects/output_shape/exit_code are")
     print("  prose; `state` and `swallows` enforce their own halves), and COVERAGE — an ACTIVE")
     print("  entry with no `verified_by:` is counted and printed as NOT VERIFIED, never a")
     print("  failure, because a missing test is a statement about the suite, not about the")
     print("  contract. The check proves a node EXISTS, not that the test exercises the command.")
+    print("  The same posture applies to `disposition:`: an unclassified entry is counted and")
+    print("  printed as UNCLASSIFIED, never a failure — the triage of a borderline line is the")
+    print("  owner's call, and the check refuses an incoherent pair rather than guessing one.")
     return EXIT_CLEAN
 
 
