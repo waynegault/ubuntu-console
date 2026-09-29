@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -603,6 +603,63 @@ function __so_gateway_phase() {
 }
 
 # ---------------------------------------------------------------------------
+# __so_health_gate — is the bound gateway actually SERVING?  0 yes, 1 no.
+#
+# Extracted from so() so these rules live in one place and so() keeps its size.  A
+# bound port is not a serving gateway (a gateway bound but unhealthy printed
+# all-green and exited 0), and the CLI's own latency is the budget's problem, not
+# the gateway's — measured 2026-09-30 against a HEALTHY gateway: `openclaw gateway
+# health` 3.0-4.6 s, `openclaw gateway status` 15.2 s.  The old `timeout 5` therefore
+# expired on a working gateway, and `so` then named `openclaw gateway restart` — the
+# action that re-enters the drain window (2026-09-22: three restarts inside 8 minutes
+# became a 15.5-minute outage).  20 s is better than 4x the measured range;
+# SO_HEALTH_TIMEOUT lowers it for a test.
+#
+# `timeout` exits 124 when IT killed the probe: that says "too slow to answer", which
+# is NOT "unhealthy" — and the two used to be reported identically, restart included.
+# ---------------------------------------------------------------------------
+function __so_health_gate() {
+    local _svc="$1"
+    local _probe_timeout="${SO_HEALTH_TIMEOUT:-20}" _rc=0
+
+    timeout "$_probe_timeout" openclaw gateway health >/dev/null 2>&1 || _rc=$?
+    (( _rc == 0 )) && return 0
+
+    if (( _rc == 124 ))
+    then
+        __tac_info "Gateway" "[HEALTH PROBE TIMED OUT after ${_probe_timeout}s]" "$C_Warning"
+        printf '%s\n' "  ${C_Dim}That is NOT a health verdict — the probe did not answer in${C_Reset}"
+        printf '%s\n' "  ${C_Dim}budget (measured 3.0-4.6 s when healthy, so a loaded box${C_Reset}"
+        printf '%s\n' "  ${C_Dim}can exceed it). Re-run 'openclaw gateway health', or watch${C_Reset}"
+        printf '%s\n' "  ${C_Dim}it with 'le' — do NOT restart on this alone.${C_Reset}"
+        return 1
+    fi
+
+    # A drain or a cold start fails this probe too, and naming a restart for those
+    # re-enters the very window that failed it.  Ask the gateway's log which it is.
+    local _phase
+    _phase=$(__so_gateway_phase "$_svc")
+    if [[ "$_phase" == "draining" ]]
+    then
+        __tac_info "Gateway" "[RESTARTING — drain in progress, do NOT restart]" "$C_Warning"
+        printf '%s\n' "  ${C_Dim}The gateway holds the port while draining in-flight work and${C_Reset}"
+        printf '%s\n' "  ${C_Dim}answers every request 503 until it goes. Budget is 315s,${C_Reset}"
+        printf '%s\n' "  ${C_Dim}then a 2-4 min cold start. Restarting again re-enters the${C_Reset}"
+        printf '%s\n' "  ${C_Dim}same window — watch it with 'le' instead.${C_Reset}"
+        return 1
+    fi
+    if [[ "$_phase" == "starting" ]]
+    then
+        __tac_info "Gateway" "[STARTING — port bound, not serving yet]" "$C_Warning"
+        printf '%s\n' "  ${C_Dim}Cold start is 2-4 min (per-agent SQLite validation runs${C_Reset}"
+        printf '%s\n' "  ${C_Dim}before the HTTP server serves). Wait — do not restart.${C_Reset}"
+        return 1
+    fi
+    __tac_info "Gateway" "[RUNNING but UNHEALTHY — run: openclaw gateway restart]" "$C_Warning"
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # so — Start the OpenClaw gateway (systemd-managed service).
 # Injects bridged API keys into the systemd user session before starting.
 # If gateway is already running, only starts the LLM without restarting gateway.
@@ -625,54 +682,9 @@ function so() {
         # this printed all-green and exited 0.  Probe it — but stay
         # non-destructive, because 'so' answers "is it up?" while
         # 'openclaw gateway restart' is what kicks it.
-        # The CLI's own latency is the budget's problem, not the gateway's: measured
-        # 2026-09-30, `openclaw gateway health` takes 3.0-4.6 s against a HEALTHY
-        # gateway and `openclaw gateway status` 15.2 s, so the old `timeout 5` expired
-        # on a working gateway — and `so` then named `openclaw gateway restart`, the
-        # action that re-enters the drain window (2026-09-22: three restarts inside
-        # 8 minutes turned one restart into a 15.5-minute outage).  20 s gives the
-        # measured range better than 4x headroom; a test can lower it with
-        # SO_HEALTH_TIMEOUT.
-        local _so_probe_timeout="${SO_HEALTH_TIMEOUT:-20}" _so_health_rc=0
-        timeout "$_so_probe_timeout" openclaw gateway health >/dev/null 2>&1 || _so_health_rc=$?
-        if (( _so_health_rc != 0 ))
-        then
-            # `timeout` exits 124 when IT killed the probe.  That says "too slow to
-            # answer", which is NOT "unhealthy" — the two were reported identically
-            # before, and a restart was named for both.
-            if (( _so_health_rc == 124 ))
-            then
-                __tac_info "Gateway" "[HEALTH PROBE TIMED OUT after ${_so_probe_timeout}s — NOT a health verdict]" "$C_Warning"
-                printf '%s\n' "  ${C_Dim}The probe did not answer in budget.  Measured here: 3.0-4.6 s${C_Reset}"
-                printf '%s\n' "  ${C_Dim}when healthy, so a loaded box can exceed it.  Re-run${C_Reset}"
-                printf '%s\n' "  ${C_Dim}'openclaw gateway health', or watch it with 'le' — do NOT${C_Reset}"
-                printf '%s\n' "  ${C_Dim}restart on this alone.${C_Reset}"
-                return 1
-            fi
-            # A drain or a cold start fails this probe too, and naming a restart
-            # for those re-enters the very window that failed the probe.  Ask the
-            # gateway's log which it is before saying what to do about it.
-            local _so_phase
-            _so_phase=$(__so_gateway_phase "$_svc")
-            if [[ "$_so_phase" == "draining" ]]
-            then
-                __tac_info "Gateway" "[RESTARTING — drain in progress, do NOT restart]" "$C_Warning"
-                printf '%s\n' "  ${C_Dim}The gateway holds the port while draining in-flight work and${C_Reset}"
-                printf '%s\n' "  ${C_Dim}answers every request 503 until it goes. Budget is 315s,${C_Reset}"
-                printf '%s\n' "  ${C_Dim}then a 2-4 min cold start. Restarting again re-enters the${C_Reset}"
-                printf '%s\n' "  ${C_Dim}same window — watch it with 'le' instead.${C_Reset}"
-                return 1
-            fi
-            if [[ "$_so_phase" == "starting" ]]
-            then
-                __tac_info "Gateway" "[STARTING — port bound, not serving yet]" "$C_Warning"
-                printf '%s\n' "  ${C_Dim}Cold start is 2-4 min (per-agent SQLite validation runs${C_Reset}"
-                printf '%s\n' "  ${C_Dim}before the HTTP server serves). Wait — do not restart.${C_Reset}"
-                return 1
-            fi
-            __tac_info "Gateway" "[RUNNING but UNHEALTHY — run: openclaw gateway restart]" "$C_Warning"
-            return 1
-        fi
+        # The probe's rules, and the two things `timeout` conflates, live in
+        # __so_health_gate; this is the wiring, and its row is what the operator acts on.
+        __so_health_gate "$_svc" || return 1
         # Check if LLM is also running.  The LLM the gateway consumes is the
         # production lane on LLM_SERVICE_PORT; testing LLM_PORT here (the legacy
         # registry-managed fallback port) meant this early return essentially
@@ -910,11 +922,11 @@ function __oc_safe_gateway_shutdown() {
     # says what happened, and the DB-handle check below still decides the outcome.
     if ! timeout 30 openclaw gateway stop >/dev/null 2>&1
     then
-        __tac_info "Gateway" "['gateway stop' exceeded its 30s client budget — request stands, checking systemctl]" "$C_Dim"
+        __tac_info "Gateway" "['gateway stop' past its 30s budget — request stands]" "$C_Dim"
     fi
     if ! timeout 60 systemctl --user stop "$_svc" 2>/dev/null
     then
-        __tac_info "Gateway" "[systemctl stop still running past 60s (unit budget 330s) — checking DB handles]" "$C_Dim"
+        __tac_info "Gateway" "[stop still running past 60s (unit budget 330s) — checking DB handles]" "$C_Dim"
     fi
 
     if ! __oc_gateway_databases_closed; then
