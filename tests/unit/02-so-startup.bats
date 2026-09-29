@@ -344,4 +344,25 @@ __so_test_prelude() {
     [[ "$output" == *"STARTED but not serving"* ]]
 }
 
+@test "so: a health probe that TIMES OUT is not reported as unhealthy, and names no restart" {
+    # A budget that expires says "too slow to answer", NOT "unhealthy": measured
+    # 2026-09-30, `openclaw gateway health` takes 3.0-4.6 s against a HEALTHY gateway
+    # here, so the old 5 s window expired on a working gateway and `so` then named
+    # `openclaw gateway restart` — the action that re-enters the drain window.  This
+    # drives the REAL `so` (not a helper): that row is what the operator acts on.
+    export __TAC_OPENCLAW_OK=1
+    export SO_HEALTH_TIMEOUT=1
+    __test_port() { return 0; }        # the port answers: the already-running branch
+    __so_ensure_shell_env() { return 0; }
+    openclaw() { sleep 6; return 0; }  # outlasts the PRE-change 5 s budget too, so this case can fail against it
+
+    run so
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"HEALTH PROBE TIMED OUT after 1s"* ]]
+    [[ "$output" == *"NOT a health verdict"* ]]
+    [[ "$output" != *"UNHEALTHY"* ]]
+    [[ "$output" != *"gateway restart"* ]]
+}
+
 # end of file

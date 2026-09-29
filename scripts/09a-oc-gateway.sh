@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -625,8 +625,30 @@ function so() {
         # this printed all-green and exited 0.  Probe it — but stay
         # non-destructive, because 'so' answers "is it up?" while
         # 'openclaw gateway restart' is what kicks it.
-        if ! timeout 5 openclaw gateway health >/dev/null 2>&1
+        # The CLI's own latency is the budget's problem, not the gateway's: measured
+        # 2026-09-30, `openclaw gateway health` takes 3.0-4.6 s against a HEALTHY
+        # gateway and `openclaw gateway status` 15.2 s, so the old `timeout 5` expired
+        # on a working gateway — and `so` then named `openclaw gateway restart`, the
+        # action that re-enters the drain window (2026-09-22: three restarts inside
+        # 8 minutes turned one restart into a 15.5-minute outage).  20 s gives the
+        # measured range better than 4x headroom; a test can lower it with
+        # SO_HEALTH_TIMEOUT.
+        local _so_probe_timeout="${SO_HEALTH_TIMEOUT:-20}" _so_health_rc=0
+        timeout "$_so_probe_timeout" openclaw gateway health >/dev/null 2>&1 || _so_health_rc=$?
+        if (( _so_health_rc != 0 ))
         then
+            # `timeout` exits 124 when IT killed the probe.  That says "too slow to
+            # answer", which is NOT "unhealthy" — the two were reported identically
+            # before, and a restart was named for both.
+            if (( _so_health_rc == 124 ))
+            then
+                __tac_info "Gateway" "[HEALTH PROBE TIMED OUT after ${_so_probe_timeout}s — NOT a health verdict]" "$C_Warning"
+                printf '%s\n' "  ${C_Dim}The probe did not answer in budget.  Measured here: 3.0-4.6 s${C_Reset}"
+                printf '%s\n' "  ${C_Dim}when healthy, so a loaded box can exceed it.  Re-run${C_Reset}"
+                printf '%s\n' "  ${C_Dim}'openclaw gateway health', or watch it with 'le' — do NOT${C_Reset}"
+                printf '%s\n' "  ${C_Dim}restart on this alone.${C_Reset}"
+                return 1
+            fi
             # A drain or a cold start fails this probe too, and naming a restart
             # for those re-enters the very window that failed the probe.  Ask the
             # gateway's log which it is before saying what to do about it.
@@ -877,16 +899,22 @@ function __oc_safe_gateway_shutdown() {
     local _svc="openclaw-gateway.service"
 
     # Both stops are time-bounded and best-effort — the DB-handle check below is
-    # what decides whether the shutdown actually took — but a failure is
-    # reported rather than swallowed, so the cause is visible instead of having
-    # to be inferred from a later symptom.
-    if ! timeout 10 openclaw gateway stop >/dev/null 2>&1
+    # what decides whether the shutdown actually took — and a client budget that
+    # expires is reported rather than swallowed, so the cause is visible instead
+    # of having to be inferred from a later symptom.
+    # Budgets, measured 2026-09-30: the CLI is slow on this box ('openclaw gateway
+    # status' alone takes 15.2 s) and the unit's OWN stop budget is 330 s
+    # (TimeoutStopUSec=5min30s, drain ~314 s), so the old 10 s/8 s windows expired as
+    # a matter of course — and reported a normal, slow stop as "failed".  A client
+    # budget expiring does not cancel the request it already sent, so the wording now
+    # says what happened, and the DB-handle check below still decides the outcome.
+    if ! timeout 30 openclaw gateway stop >/dev/null 2>&1
     then
-        __tac_info "Gateway" "['gateway stop' failed or timed out — continuing to systemctl]" "$C_Dim"
+        __tac_info "Gateway" "['gateway stop' exceeded its 30s client budget — request stands, checking systemctl]" "$C_Dim"
     fi
-    if ! timeout 8 systemctl --user stop "$_svc" 2>/dev/null
+    if ! timeout 60 systemctl --user stop "$_svc" 2>/dev/null
     then
-        __tac_info "Gateway" "[systemctl stop failed or timed out — checking DB handles]" "$C_Dim"
+        __tac_info "Gateway" "[systemctl stop still running past 60s (unit budget 330s) — checking DB handles]" "$C_Dim"
     fi
 
     if ! __oc_gateway_databases_closed; then
