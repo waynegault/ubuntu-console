@@ -147,6 +147,17 @@ _hold_lock() {
 }
 
 # A guard that is defined but never consulted protects nothing.
+#
+# KNOWN LIMIT (measured 2026-09-29, card KILL-PASS-TENANCY-001): this list is
+# HAND-WRITTEN, so a CUDA kill path added in a NEW file is not caught here.  Do
+# not "fix" that by deriving the list from the corpus — two candidate signatures
+# were measured and neither is a clean proxy: `nvidia-smi` AND a kill matches 12
+# files, 9 of them with no guard (`01-constants`, `07-telemetry`, `08-maintenance`,
+# `09a`, `09c`, `11c`, `12-dashboard-help`, `autotune-model`, `llama-watchdog`), so
+# requiring the guard would need a 9-entry allow-list; and `query-compute-apps`
+# AND a kill matches only `11d-llm-gpu.sh`, which misses llama-gpu-clear.sh and
+# run-autotune-batch.sh that this case must keep pinning.  A new kill path
+# therefore has to be added to the assertions below by hand in the same commit.
 @test "gpu-exclusivity: every CUDA reap path consults the guard before killing" {
     # Module: both killers short-circuit when a foreign owner holds the lock —
     # __llm_kill_cuda_llama_servers (llama servers by exe) and
