@@ -470,3 +470,19 @@ re-measure on 0.24.6.
 
 None of these weaken the control; the first two make it usable, and the last two make
 its behaviour predictable.
+
+5. **Make the text-level trigger ignore `git`-shaped tokens inside paths (NEW, found
+   2026-09-29).** The pre-parse heuristic refuses the WHOLE command line when the text
+   carries a chdir marker (`TEXT_RELOCATION_MARKER_WITHOUT_C_PATTERN`:
+   `(^|[\s;&|(){}])(cd|chdir|pushd)([\s;&|]|$)`) and also matches `GIT_WORD_PATTERN`
+   (`/\bgit\b/i`). That second pattern is matched against the raw text, not against a
+   command position, so the word `git` inside a FILENAME is enough. Measured 2026-09-29: a
+   `cd <…>/dist/qwen-cli/chunks` followed by `ls`/`grep` over
+   `daemon-git-worktree-guard-*.js` was refused with `Daemon shell guard denied a mutating
+   Git command outside the session working directory: <the cd target>`, although the
+   command runs no git at all; the same command with the glob
+   `daemon-*worktree-guard-*.js` (no standalone `git` token) and no `cd` succeeded. The
+   hyphens in `-git-` are what supply the word boundaries that make the filename match.
+   Ask: require the `git` token to be in command position (or exclude matches inside
+   path/glob tokens), and name the offending token in the denial. This one is a FALSE
+   POSITIVE in a fail-closed path — nothing in this ask weakens the control.
