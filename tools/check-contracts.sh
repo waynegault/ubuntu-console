@@ -242,7 +242,15 @@
 # REPORTED, never enforced by `swallows`: the recorded unclassified population (its
 # size, the heaviest files, and the `grep -c`-style line counts beside the site
 # counts), and the same counts in bin/ and tools/, which are outside this pass's
-# scope.  DEFERRED from the card that owns this check: read-back assertions before a
+# scope.  `--dump-sites` is the machine-readable form of the same population (one
+# JSON object per site: file, line, pattern, matched text, classified, reason,
+# reason source and whether the reason is weighable) for a consumer such as
+# tools/swallow-classify.py — so the site SCANNER lives here once and a consumer
+# never re-greps the corpus with a second scanner that could disagree (card
+# SPLIT-CONTRACT-TRIAGE-001).  It is read-only, prints the human summary to stderr,
+# and exits 0 even when sites are unclassified: a dump is not a verdict.
+#
+# DEFERRED from the card that owns this check: read-back assertions before a
 # success echo (model start/stop/switch, vault load, orphan clean, gog auth) — those
 # live in files a concurrent session owns — stale-telemetry badges in the dashboard
 # render, and injected-failure BATS cases for both.
@@ -281,7 +289,15 @@
 #      must not carry one).
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 11
+# Module Version: 12
+#   v12 (2026-09-29): `swallows` gained `--dump-sites` (card SPLIT-CONTRACT-TRIAGE-001) —
+#   a read-only JSONL dump of every site (file, line, pattern, matched text,
+#   classified, reason, reason source, weighable) so tools/swallow-classify.py reads
+#   the SAME population this check counts instead of re-grepping with a second
+#   scanner.  Stdout is pure JSONL and the summary goes to stderr; the mode narrows a
+#   bare invocation to `swallows`, refuses the `--print-baseline` combination, and
+#   exits 0 even with unclassified sites (a dump, not a verdict).  The tool `VERSION`
+#   moves to 8, so the BATS version pins move with it (tests/unit/22 and 24).
 #   v11 (2026-09-29): `continuity` gained `disposition:`/`bound:` (card
 #   SPEC-VV-CONSOLE-004) — the decision/consequence triage from the article.  A
 #   `decision` needs a weighable `bound:` (the closed stated value), a `consequence`
@@ -327,7 +343,7 @@
 # @modular-section: contracts
 # @depends: none (standalone CI helper; needs python3 with PyYAML)
 # @exports: (none — standalone script, not sourced)
-VERSION="7"
+VERSION="8"
 set -euo pipefail
 
 # --version is pure bash: a version query must not depend on the YAML engine.
@@ -356,6 +372,7 @@ fi
 exec "$_python" - "$_repo_root" "$@" <<'PYEOF'
 """Enforce the console's contracts. See the script header for scope per subcommand."""
 import os
+import json
 import re
 import subprocess
 import sys
@@ -388,7 +405,7 @@ EXIT_CANNOT_RUN = 2
 # than a longer parse_args() tuple: every subcommand already takes the repo, and
 # threading a fifth positional through run_selected() to one arm reads worse than
 # reading a named flag here.
-OPTIONS = {"print_baseline": False}
+OPTIONS = {"print_baseline": False, "dump_sites": False}
 
 COMMENT = re.compile(r"^\s*#")
 ENTRY_LINE = re.compile(r"^\s*- (?:name|path):", re.M)
@@ -431,6 +448,9 @@ options:
   --repo DIR       check the checkout at DIR instead of this repository
   --print-baseline print the paste-ready baseline rows for `modules`/`swallows`
                    (read-only; the baseline file is never written by this tool)
+  --dump-sites     print every `swallows` site as one JSON object per line (read-only
+                   JSONL on stdout, the summary on stderr, exit 0 — a dump, not a
+                   check).  Only with `swallows`; a bare invocation narrows to it.
 
 exit: 0 clean · 1 contract drift · 2 bad invocation / cannot run the check"""
 
@@ -2408,7 +2428,18 @@ def swallow_corpus(repo):
 
 def run_swallows(repo):
     """Record and ratchet the unclassified silent swallows in the shell corpus."""
-    print(f"=== Silent-swallow check ({SWALLOWS_SCOPE}) ===")
+    # `--dump-sites` is the machine-readable form of this subcommand's population
+    # (card SPLIT-CONTRACT-TRIAGE-001): one JSON object per site, so a consumer —
+    # tools/swallow-classify.py — reads the SAME sites this check counts instead of
+    # re-grepping the corpus with a second scanner that could disagree.  It is
+    # read-only and never a verdict: every line of stdout is JSONL, the human-facing
+    # summary goes to stderr, and the exit code is clean even when sites are
+    # unclassified (this is a dump, not a check).
+    dump = OPTIONS["dump_sites"]
+    if dump:
+        sys.stderr.write(f"=== Silent-swallow site dump ({SWALLOWS_SCOPE}) ===\n")
+    else:
+        print(f"=== Silent-swallow check ({SWALLOWS_SCOPE}) ===")
     corpus = swallow_corpus(repo)
     if not corpus:
         sys.stderr.write("check-contracts: no shell files found for the swallow check — nothing "
@@ -2422,6 +2453,7 @@ def run_swallows(repo):
 
     problems = []
     rows = []
+    site_rows = []
     for rel, _path in corpus:
         text = read_lines(repo, rel)
         if text is None:
@@ -2431,20 +2463,55 @@ def run_swallows(repo):
         markers = swallow_markers(text)
         lines = text.splitlines()
         classified = 0
-        for number, _pattern in sites:
+        occurrence = {}
+        for number, pattern_name in sites:
             reason = markers.get(number)
+            source = "same-line" if reason is not None else None
             if reason is None and number - 2 >= 0:
                 previous = lines[number - 2].strip()
-                if previous.startswith("#") and SWALLOWS_MARKER.search(previous):
-                    reason = SWALLOWS_MARKER.search(previous).group(1).strip()
+                above = SWALLOWS_MARKER.search(previous) if previous.startswith("#") else None
+                if above:
+                    reason = above.group(1).strip()
+                    source = "line-above"
             if reason is not None and len(reason) < 8:
                 problems.append(f"  FAIL  {rel}:{number}: `# swallow-ok:` needs a reason, not "
                                 f"'{reason}' — a marker with no reason is a marker no reviewer "
                                 f"can weigh")
             if reason:
                 classified += 1
+            if dump:
+                # The matched TEXT, not just the pattern's name: a pattern can match a
+                # longer spelling (`||    true`), and the consumer quotes what was
+                # matched.  `occurrence` keeps rows distinct when one line carries the
+                # same pattern twice, which the site count above also counts twice.
+                key = (number, pattern_name)
+                occurrence[key] = occurrence.get(key, 0) + 1
+                matched = next(p.search(lines[number - 1]) for name, p in SWALLOW_PATTERNS
+                               if name == pattern_name)
+                site_rows.append({
+                    "file": rel,
+                    "line": number,
+                    "pattern": pattern_name,
+                    "match": matched.group(0) if matched else pattern_name,
+                    "occurrence": occurrence[key],
+                    "text": lines[number - 1].strip(),
+                    "classified": bool(reason),
+                    "reason": reason,
+                    "reason_source": source,
+                    "reason_weighable": bool(reason) and len(reason) >= READ_BACK_REASON_MIN,
+                })
         unclassified = len(sites) - classified
         rows.append((rel, len(sites), classified, unclassified))
+
+    if dump:
+        for site_row in site_rows:
+            print(json.dumps(site_row, sort_keys=True))
+        sys.stderr.write(
+            f"check-contracts[dump-sites]: {len(site_rows)} site(s) in {len(rows)} file(s) — "
+            f"{sum(1 for row in site_rows if row['classified'])} classified, "
+            f"{sum(1 for row in site_rows if not row['classified'])} unclassified "
+            f"(read-only; the exit code is not a verdict)\n")
+        return EXIT_CLEAN
 
     new_sites = []
     seen = set()
@@ -2553,6 +2620,13 @@ def parse_args(argv):
             OPTIONS["print_baseline"] = True
             index += 1
             continue
+        if arg == "--dump-sites":
+            # Read-only JSONL dump of the swallow SITES (card SPLIT-CONTRACT-TRIAGE-001):
+            # the machine-readable form of the population this subcommand counts, so a
+            # consumer never re-greps with a second scanner that could disagree.
+            OPTIONS["dump_sites"] = True
+            index += 1
+            continue
         if arg in ("-h", "--help"):
             print(USAGE)
             return EXIT_CLEAN, None, None, None
@@ -2580,6 +2654,20 @@ def parse_args(argv):
             f"check-contracts: unexpected argument(s) {' '.join(positionals)} — a COMMAND name\n"
             "  is only meaningful for `continuity`.\n")
         return EXIT_CANNOT_RUN, None, None, None
+    if OPTIONS["dump_sites"]:
+        # The dump is a machine-readable stream: mixing it with the baseline print or
+        # with another subcommand's prose would make the JSONL unparseable, so the
+        # combination is refused rather than half-honoured.  A bare invocation narrows
+        # to `swallows` for the same reason.
+        if OPTIONS["print_baseline"]:
+            sys.stderr.write("check-contracts: --dump-sites and --print-baseline are two "
+                             "read-only modes for the same population — pass one.\n")
+            return EXIT_CANNOT_RUN, None, None, None
+        if "swallows" not in selected and selected != list(SUBCOMMANDS):
+            sys.stderr.write("check-contracts: --dump-sites is only meaningful with the "
+                             "`swallows` subcommand.\n")
+            return EXIT_CANNOT_RUN, None, None, None
+        selected = ["swallows"]
     return None, selected, repo, positionals
 
 
@@ -2599,7 +2687,10 @@ def run_selected(selected, repo, positionals):
             sys.stderr.write(f"check-contracts: subcommand '{name}' has no implementation\n")
             worst = max(worst, EXIT_CANNOT_RUN)
             continue
-        print("")
+        # The blank separator is for a human reading prose; in `--dump-sites` mode it
+        # would be a non-JSON line on stdout and break the stream contract.
+        if not OPTIONS["dump_sites"]:
+            print("")
         worst = max(worst, arm())
     return worst
 

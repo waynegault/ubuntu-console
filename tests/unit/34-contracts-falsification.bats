@@ -602,6 +602,64 @@ YAML
     [[ "$output" == *"disposition: 1 decision(s), 0 consequence(s), 0 active entr(ies) unclassified"* ]]
 }
 
+@test "seed: swallows — the site dump reports the seeded site, and refuses to mix modes" {
+    # `--dump-sites` is CHANGED SUBCOMMAND BEHAVIOUR (card SPLIT-CONTRACT-TRIAGE-001),
+    # so the battery seeds its fault too: the seeded fault is an UNCLASSIFIED swallow,
+    # and the dump must report it as unclassified with no reason — then flip to
+    # classified, with the reason and its placement, once a human marker lands.  A dump
+    # that said "classified" for everything would make every proposal built on it
+    # meaningless, and it would still look green.
+    cat >> "$FIXTURE/scripts/01-alpha.sh" <<'SH'
+
+probe_dump() { command -v some-tool 2>/dev/null || true; }
+SH
+    "$CHECKER" swallows --dump-sites --repo "$FIXTURE" > "$BATS_TEST_TMPDIR/dump.jsonl" 2>/dev/null
+    run python3 - "$BATS_TEST_TMPDIR/dump.jsonl" <<'PY'
+import json
+import sys
+
+rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+mine = [row for row in rows if row["file"] == "scripts/01-alpha.sh" and "probe_dump" in row["text"]]
+assert len(mine) == 2, mine                       # both patterns on the seeded line
+assert all(not row["classified"] and row["reason"] is None for row in mine), mine
+assert all(row["reason_source"] is None for row in mine), mine
+print("seeded dump rows:", len(mine), "unclassified")
+PY
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"seeded dump rows: 2 unclassified"* ]]
+
+    # The same site, classified by a marker on the line above: the dump must carry the
+    # reason, where it was found, and that it is weighable.
+    sed -i 's|^probe_dump() |# swallow-ok: the dump fixture marks this site on the line above.\nprobe_dump() |' \
+        "$FIXTURE/scripts/01-alpha.sh"
+    "$CHECKER" swallows --dump-sites --repo "$FIXTURE" > "$BATS_TEST_TMPDIR/dump2.jsonl" 2>/dev/null
+    run python3 - "$BATS_TEST_TMPDIR/dump2.jsonl" <<'PY'
+import json
+import sys
+
+rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+mine = [row for row in rows if row["file"] == "scripts/01-alpha.sh" and "probe_dump" in row["text"]]
+assert len(mine) == 2, mine
+assert all(row["classified"] for row in mine), mine
+assert all(row["reason"] == "the dump fixture marks this site on the line above."
+           for row in mine), mine
+assert all(row["reason_source"] == "line-above" and row["reason_weighable"]
+           for row in mine), mine
+print("classified dump rows:", len(mine))
+PY
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"classified dump rows: 2"* ]]
+
+    # The machine-readable mode is `swallows`-only and refuses to mix with the other
+    # read-only mode: a half-honoured dump would put non-JSON on the stream.
+    run "$CHECKER" state --dump-sites --repo "$FIXTURE"
+    [[ "$status" -eq 2 ]]
+    [[ "$output" == *"only meaningful with the \`swallows\` subcommand"* ]]
+    run "$CHECKER" swallows --dump-sites --print-baseline --repo "$FIXTURE"
+    [[ "$status" -eq 2 ]]
+    [[ "$output" == *"pass one"* ]]
+}
+
 @test "seed: swallows — a new unclassified swallow is caught" {
     # ENFORCED by swallows: no NEW unclassified `|| true` / `2>/dev/null` site —
     # the silent-failure class the whole subcommand exists for.

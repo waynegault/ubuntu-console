@@ -817,10 +817,11 @@ SH
     [[ "$output" == *"unknown option '--bogus'"* ]]
     run "$CHECKER" --version
     [[ "$status" -eq 0 ]]
-    # v6 is the `verified_by:` rule in `continuity` (SPEC-VV-CONSOLE-003) and v7 the
-    # `disposition:`/`bound:` triage (SPEC-VV-CONSOLE-004); the string moves with the
-    # tool, so a bump is a deliberate edit here, not silent drift.
-    [[ "$output" == "check-contracts 7" ]]
+    # v6 is the `verified_by:` rule in `continuity` (SPEC-VV-CONSOLE-003), v7 the
+    # `disposition:`/`bound:` triage (SPEC-VV-CONSOLE-004) and v8 the `swallows`
+    # `--dump-sites` mode (SPLIT-CONTRACT-TRIAGE-001); the string moves with the tool,
+    # so a bump is a deliberate edit here, not silent drift.
+    [[ "$output" == "check-contracts 8" ]]
 }
 
 # end of file
