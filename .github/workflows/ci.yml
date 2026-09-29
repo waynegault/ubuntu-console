@@ -168,7 +168,8 @@ jobs:
                tests/unit/30-plugin-update.bats \
                tests/unit/31-stale-reap-safety.bats \
                tests/unit/32-report-rows-safety.bats \
-               tests/unit/33-daemon-guard-patch.bats
+               tests/unit/33-daemon-guard-patch.bats \
+               tests/unit/34-contracts-falsification.bats
 
       - name: Run integration tests
         run: |
