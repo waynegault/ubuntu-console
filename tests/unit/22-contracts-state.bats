@@ -67,6 +67,7 @@ commands:
     updated: 2026-09-23
     status: active
     scope: both
+    effect: read
     contract:
       side_effects: []
 YAML
@@ -346,9 +347,51 @@ SH
 @test "contracts: --version prints the tool version" {
     run "$CHECKER" --version
     [[ "$status" -eq 0 ]]
-    # v4 added @uses to `modules` (MOD-GRAPH-DECLARATION-001); the string moves
-    # with the tool, so a bump is a deliberate edit here rather than a silent drift.
-    [[ "$output" == "check-contracts 4" ]]
+    # v4 added @uses to `modules` (MOD-GRAPH-DECLARATION-001); v5 added the `effect`
+    # class rule to `state` (RAGACT-006).  The string moves with the tool, so a bump is
+    # a deliberate edit here rather than a silent drift.
+    [[ "$output" == "check-contracts 5" ]]
+}
+
+@test "effect: an active entry with no effect class fails, naming it and the allowed values" {
+    # Catches: the field being optional in practice — a new entry lands with no
+    # read/mutate classification and nothing separates a knowledge command from a
+    # state change, which is the entire point of the card.
+    sed -i '/^    effect: read$/d' "$FIXTURE/docs/contracts/command-contracts.yaml"
+    run "$CHECKER" state --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"fixture-cmd: declares effect '(none)'"* ]]
+    [[ "$output" == *"one of read/mutate"* ]]
+}
+
+@test "effect: a mutate entry that also declares read_back_exempt fails" {
+    # Catches: the incoherence the rule exists for — an entry that changes state while
+    # declaring there is nothing to observe.  It is the shape the four 2026-09-28
+    # witnesses removed, so this keeps it from creeping back.
+    sed -i 's/^    effect: read$/    effect: mutate/' "$FIXTURE/docs/contracts/command-contracts.yaml"
+    sed -i 's|^    effect: mutate$|    effect: mutate\n    read_back_exempt: "the fixture has no observable effect to read back at all"|' \
+        "$FIXTURE/docs/contracts/command-contracts.yaml"
+    run "$CHECKER" state --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"is \`mutate\` but declares \`read_back_exempt:\`"* ]]
+}
+
+@test "effect: the real contract classifies every active entry, and the mutating surface is named" {
+    # The real-tree case (the 16-docs-sync precedent): the fixtures above prove the
+    # rule CAN fail; this proves the shipped contract satisfies it and that the
+    # mutating surface is exposed for a caller to gate on.  It names the surface a
+    # caller greps rather than pinning a count, so adding a mutating command does not
+    # fail this — a suite that verifies nothing does.
+    run "$CHECKER" state --repo "$REPO_ROOT"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"check-contracts[state]: OK"* ]]
+    local _line=""
+    if ! _line=$(printf '%s\n' "$output" | grep 'MUTATING surface'); then
+        echo "the mutating surface is not exposed"
+        return 1
+    fi
+    [[ "$_line" == *"burn"* ]]
+    [[ "$_line" != *"explain"* ]]
 }
 
 # end of file

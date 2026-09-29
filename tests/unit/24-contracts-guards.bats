@@ -122,6 +122,7 @@ commands:
     updated: 2026-09-23
     status: active
     scope: both
+    effect: read
     contract:
       side_effects: []
       output_shape:
@@ -816,7 +817,7 @@ SH
     [[ "$output" == *"unknown option '--bogus'"* ]]
     run "$CHECKER" --version
     [[ "$status" -eq 0 ]]
-    [[ "$output" == "check-contracts 4" ]]
+    [[ "$output" == "check-contracts 5" ]]
 }
 
 # end of file

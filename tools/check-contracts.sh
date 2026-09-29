@@ -245,7 +245,9 @@
 #      https://towardsdatascience.com/coding-agents-dont-need-longer-history-they-need-intent-continuity/
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-09-28): state validates each ACTIVE entry's `effect: read|mutate` and
+#   forbids `mutate` + `read_back_exempt`, and names the mutating surface (RAGACT-006).
 #   v8 (2026-09-24): two corrections to v7, both found by running the thing rather
 #   than reading it.  The swallows footer still claimed "bin/ and tools/ are not
 #   scanned" — false the moment the corpus widened — and tests/unit/24 pinned that
@@ -273,7 +275,7 @@
 # @modular-section: contracts
 # @depends: none (standalone CI helper; needs python3 with PyYAML)
 # @exports: (none — standalone script, not sourced)
-VERSION="4"
+VERSION="5"
 set -euo pipefail
 
 # --version is pure bash: a version query must not depend on the YAML engine.
@@ -793,7 +795,7 @@ def run_state(repo):
     # line item inside `state` rather than a sixth subcommand: the claim being
     # checked ("this command queried the state before it printed success") is a
     # state claim, and the dispatcher stays at five subcommands.
-    witnesses = {"verified": 0, "exempt": 0, "checked": True, "lines": []}
+    witnesses = {"verified": 0, "exempt": 0, "checked": True, "lines": [], "mutating": []}
     check_read_backs(repo, problems, witnesses)
 
     for line in counts["unenforced_lines"]:
@@ -802,6 +804,13 @@ def run_state(repo):
         print(f"  {line}")
     for problem in problems:
         print(problem)
+    # The mutating surface, named rather than only counted (card RAGACT-006 item 3):
+    # this is the console's half of the retrieval/action seam, so a caller can see
+    # which commands change state without parsing the YAML.  Printed on both paths —
+    # the inventory is a fact about the contract, not a verdict on the check.
+    mutating = witnesses.get("mutating") or []
+    if mutating:
+        print(f"  MUTATING surface ({len(mutating)} entries): {', '.join(mutating)}")
     edges = counts["producer"] + counts["consumer"] + counts["invalidator"]
     if witnesses["checked"]:
         witness_summary = (f"read-back witnesses: {witnesses['verified']} verified, "
@@ -860,6 +869,11 @@ def run_state(repo):
 #     cases for that, and it is what makes the ordering a fact rather than a claim.
 #   * a command whose implementation lives outside the module that exports it.
 READ_BACK_REASON_MIN = 8
+
+#: The effect classes an ACTIVE entry may declare (card RAGACT-006).  `read` gathers
+#: knowledge; `mutate` changes state.  The distinction is the console's half of the
+#: article's retrieval/action seam, and it is what lets a caller gate on it at all.
+CONTRACT_EFFECTS = ("read", "mutate")
 
 
 def command_impl_files(repo, module):
@@ -932,6 +946,21 @@ def check_read_backs(repo, problems, counts):
         effects = as_list(contract.get("side_effects")) if isinstance(contract, dict) else []
         declared = entry.get("read_back")
         exempt = entry.get("read_back_exempt")
+
+        # The effect class (card RAGACT-006).  Every ACTIVE entry declares one, and the
+        # two rules are a pair: an entry that changes state must say how the change was
+        # read back, so `mutate` and `read_back_exempt` cannot both be true — the
+        # exemption claims there is nothing to observe.
+        effect = str(entry.get("effect") or "").strip()
+        if effect not in CONTRACT_EFFECTS:
+            fail(problems, name, f"declares effect '{effect or '(none)'}' — every active entry "
+                                 f"must declare one of {'/'.join(CONTRACT_EFFECTS)}")
+        elif effect == "mutate":
+            counts["mutating"].append(name)
+            if exempt is not None:
+                fail(problems, name, "is `mutate` but declares `read_back_exempt:` — a state "
+                                     "change must say how it was read back, or be reclassified "
+                                     "as `read`")
         if not effects:
             if declared:
                 fail(problems, name, "declares a `read_back:` witness but its contract lists no "
