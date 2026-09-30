@@ -40,10 +40,14 @@
 #   * MARKDOWNLINT_REAL=<path> names the linter to exec — the test hook, and the
 #     only way to point this at a stub in CI (which has no linuxbrew).  It does
 #     not weaken the refusal check, which runs first and without a linter.
-#   * An absolute path (/home/linuxbrew/.linuxbrew/bin/markdownlint) bypasses
-#     this, exactly as an absolute-path gh call bypasses bin/gh.  That residual
-#     is named in the README, not closed: closing it would mean editing
-#     linuxbrew's install or shadowing it twice.
+#   * The ABSOLUTE PATH is covered too: markdownlint-guard-repair.sh re-points
+#     /home/linuxbrew/.linuxbrew/bin/markdownlint at this shim (the real linter
+#     stays put at …/lib/node_modules/markdownlint-cli/markdownlint.js, which is
+#     why that path is resolved first below), so every caller gets the refusal.
+#     An `npm update -g` restores that symlink and reopens the bypass, which is
+#     what the repair script's --check detects.  A caller naming the .js file
+#     itself is still unguarded: that is the end of the chain, named rather than
+#     claimed closed.
 # ==============================================================================
 
 set -euo pipefail
@@ -106,6 +110,7 @@ fi
 if [[ -z "$REAL_MARKDOWNLINT" ]]
 then
     for _candidate in \
+        /home/linuxbrew/.linuxbrew/lib/node_modules/markdownlint-cli/markdownlint.js \
         /home/linuxbrew/.linuxbrew/bin/markdownlint \
         /usr/local/bin/markdownlint \
         /usr/bin/markdownlint
