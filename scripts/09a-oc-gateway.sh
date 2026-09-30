@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -949,6 +949,18 @@ function __oc_gateway_gone() {
     if systemctl --user is-active --quiet "openclaw-gateway.service" 2>/dev/null; then
         return 1
     fi
+    # A unit that is down NOW but has a start/restart job QUEUED is on its way back.
+    # `openclaw gateway restart` and `xo` both stop for minutes before starting (the
+    # unit's own stop budget is 330s, drain ~315s), so a point-in-time check reports
+    # "gone" for a gateway that will be running again — measured 2026-09-30: xo
+    # printed TERMINATED while the journal shows SIGTERM 23:59:50, the unit inactive
+    # until 00:04:16 and `ready` only at 00:07:23.  A pending job is readable: on a
+    # probe unit, `systemctl --user show -p Job --value <unit>` returned the live job
+    # id (`Job=[43187]`, `activating/start-pre`) and `list-jobs` named it.
+    # swallow-ok: a unit whose job state cannot be read is not assumed to have one; the is-active check above and the port check below still have to pass for the claim
+    local _job
+    _job=$(systemctl --user show -p Job --value "openclaw-gateway.service" 2>/dev/null | tr -d ' \n')
+    [[ -z "$_job" ]] || return 1
     __test_port "$OC_PORT" && return 1
     return 0
 }

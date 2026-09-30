@@ -184,15 +184,15 @@ commands:
   - name: xo
     family: openclaw
     summary: Stop OpenClaw gateway
-    version: 3
-    updated: 2026-09-28
+    version: 4
+    updated: 2026-09-30
     status: active
     scope: both
     effect: mutate
     read_back:
       - witness: __oc_gateway_gone
         file: scripts/09a-oc-gateway.sh
-        asserts: the gateway's systemd unit is no longer active and its port is released, read back before TERMINATED is printed
+        asserts: the gateway's systemd unit is no longer active, NO start/restart job is queued for it, and its port is released, read back before TERMINATED is printed
     verified_by:
       - "tests/unit/02-so-startup.bats::xo: TERMINATED is printed only once the unit and the port are both gone"
       - "tests/unit/02-so-startup.bats::xo: a gateway still active after the stop is not reported TERMINATED"

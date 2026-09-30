@@ -365,4 +365,24 @@ __so_test_prelude() {
     [[ "$output" != *"gateway restart"* ]]
 }
 
+@test "xo: a pending start job means the gateway is coming BACK, not gone" {
+    # The witness samples one instant, so a unit that is down NOW but has a start job
+    # QUEUED must not read as gone — `openclaw gateway restart` and `xo` both stop for
+    # minutes before starting, and on 2026-09-30 xo printed TERMINATED while the
+    # journal shows the gateway coming back (SIGTERM 23:59:50 -> ready 00:07:23).
+    # Mechanism verified on a probe unit: `show -p Job` returns the live job id while
+    # a start job runs (`Job=[43187]`, `activating/start-pre`).
+    systemctl() {
+        case "$*" in
+            *"show -p Job"*) printf '%s\n' 43187; return 0 ;;   # a start is queued
+            *) return 1 ;;                                      # and it is not active now
+        esac
+    }
+    # the suite's setup already pins __test_port to "free", so the other two checks pass
+
+    run __oc_gateway_gone
+
+    [ "$status" -eq 1 ]
+}
+
 # end of file
