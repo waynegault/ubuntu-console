@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
@@ -325,10 +325,10 @@ function ocstop() {
 # which also refuses while a start/restart job is queued.  A stop that outlasts the bound
 # is a REFUSAL, not a purge: the operator waits and re-runs.
 # ---------------------------------------------------------------------------
+# __oc_purge_wait_gone — 0 when the gateway is GONE within the bound, 1 otherwise.
+# Bounded on purpose: `oc purge` is destructive, so a gateway that will not stop is a
+# refusal, not a licence to delete under it.  OC_PURGE_WAIT_S keeps a test from sleeping.
 function __oc_purge_wait_gone() {
-    # 0 when the gateway is GONE within the bound, 1 otherwise.  Bounded on purpose:
-    # `oc purge` is destructive, so a gateway that will not stop is a refusal, not a
-    # licence to delete under it.  OC_PURGE_WAIT_S keeps a test from sleeping.
     local _bound="${OC_PURGE_WAIT_S:-120}" _waited=0
     while (( _waited < _bound ))
     do
