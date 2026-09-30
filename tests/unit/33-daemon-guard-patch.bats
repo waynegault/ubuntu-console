@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # ==============================================================================
-# Unit — the daemon guard patch is visible where a human actually looks
+# Unit — local vendor patches are visible where a human actually looks
 # ==============================================================================
 # ~/.local/bin/qwen-guard-patch.sh relaxes the daemon's read-only-git allowlist in
 # the bundled guard chunks, and every IDE-companion update reverts it — so a cron
@@ -10,6 +10,12 @@
 # those runs ended with exit 0, and this box has no mail transport at all, so the
 # report went to a log nobody reads and reached nobody. Detection that cannot be
 # delivered is not detection, so `oc health` now shows the state too.
+#
+# The SECOND patch in this file (2026-09-30) is the same class of thing: the VS Code
+# Python extension's pytest wrapper is patched to record every Testing run, and an
+# extension update replaces the wrapper and reverts that too. It shares this suite
+# deliberately — same failure shape, same row contract, and a NEW tests/unit file
+# would not run in CI at all without being named by literal path in a workflow.
 #
 # What each group is for:
 #   * the three states of the helper — the expected values come from the criterion
@@ -130,4 +136,97 @@ PYSTUB
 
     run oc-health --json
     [[ "$output" != *"Daemon guard patch"* ]]
+}
+
+# ==============================================================================
+# The second patch: the VS Code Testing results logger
+# ==============================================================================
+# Same contract, read from the patch tool's --check exit code: 0 patched, 1 a reverted
+# copy, 2 no Python extension at all (not a fault), 3 the recorder file is missing.
+# The stub is a FILE, not a function: the row runs the tool behind `timeout`, which
+# EXECs its argument, so a shell function would never be reached.
+stub_test_log_tool() {
+    mkdir -p "$HOME/.local/bin"
+    cat > "$HOME/.local/bin/vscode-pytest-log-patch.py" <<MOCK
+#!/usr/bin/env bash
+echo "  UNPATCHED  run_pytest_script.py"
+exit $1
+MOCK
+    chmod +x "$HOME/.local/bin/vscode-pytest-log-patch.py"
+}
+
+@test "test log patch: a patched box reports APPLIED" {
+    stub_test_log_tool 0
+
+    run __oc_vscode_pytest_log_state
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Test log patch"* ]]
+    [[ "$output" == *"[APPLIED]"* ]]
+    [[ "$output" != *"NOT APPLIED"* ]]
+}
+
+@test "test log patch: a reverted patch blames the extension update, and names the way back" {
+    stub_test_log_tool 1
+
+    run __oc_vscode_pytest_log_state
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[NOT APPLIED - an extension update reverts this]"* ]]
+    # The reader needs the check's own words and the command that re-applies it —
+    # naming an update without a remedy is the 2026-09-27 failure this file records.
+    [[ "$output" == *"UNPATCHED"* ]]
+    [[ "$output" == *"vscode-pytest-log-patch.py --apply re-applies it"* ]]
+}
+
+@test "test log patch: a box with no Python extension is reported, not treated as broken" {
+    stub_test_log_tool 2
+
+    run __oc_vscode_pytest_log_state
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[no Python extension installed]"* ]]
+    [[ "$output" != *"NOT APPLIED"* ]]
+}
+
+@test "test log patch: a missing recorder is named as itself, not as an update reversion" {
+    # Exit 3 is a different fault with a different remedy (restore the file), so the
+    # row must not send the reader to re-apply a patch that is already applied.
+    stub_test_log_tool 3
+
+    run __oc_vscode_pytest_log_state
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[NOT APPLIED - the recorder is missing]"* ]]
+    [[ "$output" != *"extension update"* ]]
+}
+
+@test "test log patch: a box without the tool at all is reported, not treated as broken" {
+    [ ! -e "$HOME/.local/bin/vscode-pytest-log-patch.py" ]
+
+    run __oc_vscode_pytest_log_state
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[not installed]"* ]]
+    [[ "$output" != *"NOT APPLIED"* ]]
+}
+
+@test "test log patch: the row is wired into the enhanced-checker branch as well" {
+    mkdir -p "$HOME/.openclaw/workspace/scripts"
+    cat > "$HOME/.openclaw/workspace/scripts/oc-health-check.py" <<'PYSTUB'
+print("STUB-ENHANCED-CHECKER")
+PYSTUB
+    export TAC_PYTHON="${TAC_PYTHON:-python3}"
+    stub_test_log_tool 1
+
+    run oc-health
+    [[ "$output" == *"STUB-ENHANCED-CHECKER"* ]]
+    [[ "$output" == *"Test log patch"* ]]
+    [[ "$output" == *"[NOT APPLIED"* ]]
+}
+
+@test "test log patch: --json stays clear of the row" {
+    mkdir -p "$HOME/.openclaw/workspace/scripts"
+    cat > "$HOME/.openclaw/workspace/scripts/oc-health-check.py" <<'PYSTUB'
+print('{"checks": []}')
+PYSTUB
+    export TAC_PYTHON="${TAC_PYTHON:-python3}"
+
+    run oc-health --json
+    [[ "$output" != *"Test log patch"* ]]
 }

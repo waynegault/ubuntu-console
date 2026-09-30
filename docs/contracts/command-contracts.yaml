@@ -208,14 +208,16 @@ commands:
   - name: oc-health
     family: openclaw
     summary: Deep health probe for OpenClaw and dependencies
-    version: 1
-    updated: 2026-09-23
+    version: 2
+    updated: 2026-09-30
     status: active
     scope: both
     effect: read
     verified_by:
       - "tests/unit/33-daemon-guard-patch.bats::guard patch: --json stays clear of the row"
       - "tests/unit/28-gh-keyring-watch.bats::keyring watch: the row also prints on the fallback path"
+      - "tests/unit/33-daemon-guard-patch.bats::test log patch: a reverted patch blames the extension update, and names the way back"
+      - "tests/unit/33-daemon-guard-patch.bats::test log patch: the row is wired into the enhanced-checker branch as well"
     contract:
       args:
         - --json

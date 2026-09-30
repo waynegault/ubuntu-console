@@ -9,7 +9,11 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 17
+#   v17 (2026-09-30): `oc health` also reports whether the VS Code Testing results
+#   logger is still wired — the Python extension's pytest wrapper is patched to record
+#   every run, and an extension update replaces it and reverts the patch silently
+#   (__oc_vscode_pytest_log_state, both human branches).
 #   v16 (2026-09-27): corrected two comments that claimed this box runs the FALLBACK
 #   health path because "nothing installs scripts/oc-health-check.py". False:
 #   install.sh:298-304 links that checker into ~/.openclaw/workspace/scripts/, the link
@@ -136,6 +140,66 @@ function __oc_guard_patch_state() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# __oc_vscode_pytest_log_state — is the VS Code Testing results logger still wired?
+# ---------------------------------------------------------------------------
+# WHY: every VS Code Testing run, in every repo and window, is recorded to
+# ~/.cache/vscode-pytest/<repo>-<hash>/ because the Python extension's pytest wrapper
+# (…/extensions/ms-python.python-*/python_files/vscode_pytest/run_pytest_script.py) is
+# patched to load a recorder (2026-09-30).  An EXTENSION UPDATE replaces that wrapper
+# and silently reverts the patch — the same shape as the daemon guard patch below and
+# the 0.24.6 companion update — after which runs are simply not logged and nothing says
+# so.  The results are what a later reader (human or agent) uses to see what a run
+# raised, so a silent reversion costs the evidence, not just a convenience.
+#
+# Read-only by construction: `--check` reports and never patches, so a health command
+# cannot change the extension.  Reported, never counted as an issue, and absent from
+# --json/--plain — the same contract as __oc_gh_keyring_recurrence and
+# __oc_guard_patch_state above.  The exit codes it reads are documented in the tool.
+# ---------------------------------------------------------------------------
+function __oc_vscode_pytest_log_state() {
+    local tool="$HOME/.local/bin/vscode-pytest-log-patch.py"
+    if [[ ! -x "$tool" ]]
+    then
+        __tac_info "Test log patch" "[not installed]" "$C_Dim"
+        return 0
+    fi
+    local check_out="" rc=0
+    if command -v timeout >/dev/null
+    then
+        check_out=$(timeout 10 "$tool" --check 2>&1) || rc=$?
+    else
+        check_out=$("$tool" --check 2>&1) || rc=$?
+    fi
+    if (( rc == 0 ))
+    then
+        __tac_info "Test log patch" "[APPLIED]" "$C_Success"
+        return 0
+    fi
+    if (( rc == 2 ))
+    then
+        # No Python extension on this box — a legitimate state, not a fault.
+        __tac_info "Test log patch" "[no Python extension installed]" "$C_Dim"
+        return 0
+    fi
+    if (( rc == 3 ))
+    then
+        __tac_info "Test log patch" "[NOT APPLIED - the recorder is missing]" "$C_Warning"
+    else
+        __tac_info "Test log patch" "[NOT APPLIED - an extension update reverts this]" "$C_Warning"
+    fi
+    # Name what the check said, so the reader does not have to run it again.
+    local first_line
+    first_line=$(head -n 1 <<< "$check_out")
+    if [[ -n "$first_line" ]]
+    then
+        printf '  %s\n' "${C_Dim}${first_line}${C_Reset}"
+    fi
+    __tac_info "  … fix" \
+        "[${tool/#$HOME/~} --apply re-applies it, then the next run is logged again]" "$C_Dim"
+    return 0
+}
+
 function oc-health() {
     local output_mode="human"
     case "${1:-}" in
@@ -184,6 +248,7 @@ function oc-health() {
         then
             __oc_gh_keyring_recurrence
             __oc_guard_patch_state
+            __oc_vscode_pytest_log_state
         fi
         return "$_enhanced_rc"
     fi
@@ -299,6 +364,9 @@ function oc-health() {
     # reversion and still not repair it, and its failure currently reaches no one, so
     # the state is shown here too (see __oc_guard_patch_state for the incident).
     __oc_guard_patch_state
+    # …and for the VS Code Testing results logger, whose patch an extension update
+    # reverts silently (see __oc_vscode_pytest_log_state).
+    __oc_vscode_pytest_log_state
 }
 
 # ---------------------------------------------------------------------------
