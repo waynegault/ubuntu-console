@@ -385,4 +385,24 @@ __so_test_prelude() {
     [ "$status" -eq 1 ]
 }
 
+@test "oc purge: a gateway that is not gone is a REFUSAL, and nothing is deleted" {
+    # `oc purge` deletes state, so a stop that does not land must REFUSE rather than
+    # delete under a live gateway.  __oc_safe_gateway_shutdown is fire-and-forget (its
+    # last statement is an `rm`, so its status says nothing) and the unit's stop budget
+    # is 330s — measured 2026-09-30, the old code purged 0.5s after asking it to stop.
+    export __TAC_OPENCLAW_OK=1
+    export OC_PURGE_WAIT_S=0                 # do not sleep; __oc_gateway_gone decides
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    mkdir -p "$OC_AGENTS/alpha/sessions"
+    : > "$OC_AGENTS/alpha/sessions/s.json"
+    __oc_safe_gateway_shutdown() { return 0; }
+    __oc_gateway_gone() { return 1; }        # still up
+
+    run oc-purge
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"REFUSED - the gateway is still up"* ]]
+    [ -f "$OC_AGENTS/alpha/sessions/s.json" ]  # the point: nothing was deleted
+}
+
 # end of file

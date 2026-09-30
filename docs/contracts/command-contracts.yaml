@@ -421,6 +421,32 @@ commands:
         - per-file trim results
       exit_code: non-zero on IO failures
 
+  - name: oc purge
+    family: openclaw
+    summary: Stop the gateway and clear every agent's session directory
+    version: 1
+    updated: 2026-09-30
+    status: active
+    scope: both
+    effect: mutate
+    read_back:
+      - witness: __oc_purge_wait_gone
+        file: scripts/09c-oc-core.sh
+        asserts: >-
+          the gateway's unit is no longer active, no start/restart job is queued for it
+          and its port is released BEFORE any session directory is deleted; a stop that
+          does not land within the bound is a REFUSAL and nothing is deleted.  Scoped on
+          purpose: the deletion itself is checked per directory, so a failed `rm` is
+          reported and NOT counted and the summary cannot claim a directory still there.
+    contract:
+      args:
+        - --dry-run
+      side_effects:
+        - stops the gateway
+        - deletes ~/.openclaw/agents/*/sessions
+      output_shape:
+        - per-session rows and a summary line
+      exit_code: non-zero when the gateway will not stop, or when a purge failed
 fixture_priority:
   - m
   - h

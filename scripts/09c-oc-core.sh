@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 12
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
@@ -311,12 +311,34 @@ function ocstop() {
 
 # ---------------------------------------------------------------------------
 # oc-purge — Stop gateway and clear all agent sessions.
-# Usage: oc purge
+# Usage: oc purge [--dry-run]
 # This command:
-#   1. Stops the OpenClaw gateway
+#   1. Stops the OpenClaw gateway and WAITS for it to be gone (see below)
 #   2. Clears all agent session directories (~/.openclaw/agents/*/sessions)
 #   3. Clears session state cache in /dev/shm
+#
+# WHY THE WAIT EXISTS (measured 2026-09-30).  The stop's own report is not enough:
+# `__oc_safe_gateway_shutdown` is fire-and-forget — its last statement is an `rm`, so its
+# return status says nothing — and the unit's stop budget is 330s (drain ~315s).  Purging
+# 0.5s after asking it to stop therefore deletes the session dirs of a gateway that is
+# still RUNNING.  The gate reuses `__oc_gateway_gone`, the witness `xo` already trusts,
+# which also refuses while a start/restart job is queued.  A stop that outlasts the bound
+# is a REFUSAL, not a purge: the operator waits and re-runs.
 # ---------------------------------------------------------------------------
+function __oc_purge_wait_gone() {
+    # 0 when the gateway is GONE within the bound, 1 otherwise.  Bounded on purpose:
+    # `oc purge` is destructive, so a gateway that will not stop is a refusal, not a
+    # licence to delete under it.  OC_PURGE_WAIT_S keeps a test from sleeping.
+    local _bound="${OC_PURGE_WAIT_S:-120}" _waited=0
+    while (( _waited < _bound ))
+    do
+        __oc_gateway_gone && return 0
+        sleep 1
+        _waited=$(( _waited + 1 ))
+    done
+    __oc_gateway_gone
+}
+
 function oc-purge() {
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw" "[NOT INSTALLED - cannot purge sessions]" "$C_Error"
@@ -329,12 +351,23 @@ function oc-purge() {
         return 1
     fi
 
-    local _purge_count=0
+    local _dry_run=0
+    [[ "${1:-}" == "--dry-run" ]] && _dry_run=1
 
-    # 1. Stop the gateway with DB-safe sequencing
+    local _purge_count=0 _failed=0
+
+    # 1. Stop the gateway with DB-safe sequencing, then WAIT for it to be gone.  A stop
+    #    that does not land is a refusal: everything below deletes state.
     __tac_info "Gateway" "[STOPPING]" "$C_Warning"
     __oc_safe_gateway_shutdown
-    sleep 0.5
+    if ! __oc_purge_wait_gone
+    then
+        __tac_info "Purge" "[REFUSED - the gateway is still up; nothing was deleted]" "$C_Error"
+        printf '%s\n' "  ${C_Dim}Waited ${OC_PURGE_WAIT_S:-120}s for it to stop. Watch it with 'le',${C_Reset}"
+        printf '%s\n' "  ${C_Dim}then re-run 'oc purge'. Deleting under a live gateway is the${C_Reset}"
+        printf '%s\n' "  ${C_Dim}failure this wait exists to prevent.${C_Reset}"
+        return 1
+    fi
 
     # 2. Clear all agent session directories
     if [[ -d "$OC_AGENTS" ]]
@@ -346,9 +379,19 @@ function oc-purge() {
                 local _session_dir="${_agent_dir%/}/sessions"
                 if [[ -d "$_session_dir" ]]
                 then
-                    rm -rf "$_session_dir"
-                    _purge_count=$(( _purge_count + 1 ))
-                    __tac_info "Session" "[PURGED] $_session_dir" "$C_Dim"
+                    if (( _dry_run == 1 ))
+                    then
+                        __tac_info "Session" "[WOULD PURGE] $_session_dir" "$C_Dim"
+                    elif rm -rf "$_session_dir"
+                    then
+                        _purge_count=$(( _purge_count + 1 ))
+                        __tac_info "Session" "[PURGED] $_session_dir" "$C_Dim"
+                    else
+                        # A delete that did not land is NOT a purge: reported, and not
+                        # counted, so the summary cannot claim a directory that is there.
+                        _failed=$(( _failed + 1 ))
+                        __tac_info "Session" "[FAILED to purge] $_session_dir" "$C_Error"
+                    fi
                 fi
             fi
         done
@@ -360,8 +403,23 @@ function oc-purge() {
     rm -f "$TAC_CACHE_DIR/oc_agent_use.txt" 2>/dev/null
     rm -f "$TAC_CACHE_DIR/oc_agent_stats.tsv" 2>/dev/null
 
+    # 4. NOT PURGED — stated, never silent (measured 2026-09-30).  The session
+    #    DIRECTORIES are not the whole record: ~/.openclaw/state/openclaw.sqlite holds
+    #    session-shaped rows — acp_sessions, acp_replay_sessions, capture_sessions,
+    #    session_groups, session_state_events, session_state_heads — and this command
+    #    leaves every one of them.  That is a scope statement, not an oversight: whether
+    #    "purge" should clear the gateway's own bookkeeping too is a decision about the
+    #    gateway, so it is named here and in the summary line rather than taken.
+    __tac_info "Sessions" "[dirs cleared; DB session rows NOT purged]" "$C_Dim"
+
     # Report result
-    if (( _purge_count > 0 ))
+    if (( _dry_run == 1 ))
+    then
+        __tac_info "Purge Complete" "[DRY RUN - nothing was deleted]" "$C_Dim"
+    elif (( _failed > 0 ))
+    then
+        __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared, $_failed FAILED]" "$C_Error"
+    elif (( _purge_count > 0 ))
     then
         __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared]" "$C_Success"
     else
