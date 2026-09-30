@@ -7,7 +7,21 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 40
+# Module Version: 41
+#   v41 (2026-09-30): the auth-profile pass now writes what the CONFIG declares.  Two defects
+#   made a present, valid key resolve as missing (measured 2026-09-30, on Wayne's report):
+#   the keyRef carried the literal provider "default" instead of the real provider id, and
+#   the store wrote only a bare `deepseek` profile while `auth.profiles` declares
+#   `deepseek:default` — the id the DEFAULT agent (agents.defaults.systemAgent.agentId = hal)
+#   resolves, so hal's turns were refused "configured but unavailable (secret reference was
+#   not found)", the deepseek candidate failed and the fallback died on "Context overflow".
+#   The "<provider>:default" entry goes ONLY into the default agent's store (adding it to
+#   every store raised the secrets-reload warning count 19 -> 46, measured); if the config
+#   cannot be read the pass REPORTS that instead of silently writing nothing.
+#   Also carried in this commit, the other console session's work: __ocdoc_fix_contain now
+#   parses the audit's `plaintext=` count instead of keying on its exit code, which had
+#   reported `plaintext=0, unresolved=45` as a plaintext leak and reverted the operator's
+#   config on that basis.
 #   v40 (2026-09-30): the delegation and the ratchet hygiene land TOGETHER.  The delegation
 #   was written against v38; the hygiene edit had already landed on main as v39, so this
 #   commit carries both and the number moves past it.  `ocdoc-fix` DELEGATES the Gateway
@@ -637,21 +651,39 @@ function __ocdoc_fix_contain() {
                 "$C_Error" "$C_Reset" "$snapdir"
         fi
     fi
+    # The audit reports several classes (plaintext, unresolved, shadowed, storeResidue,
+    # legacy); only `plaintext` is THIS function's contract. Keying on the command's exit
+    # code made an unrelated finding read as a plaintext secret — measured 2026-09-30:
+    # `plaintext=0, unresolved=45` printed "CONTAINMENT FAILED - a plaintext secret is still
+    # in the config", and the config-changed branch below REVERTED the operator's config on
+    # that basis. Parse the count.
+    local audit_out audit_plaintext=""
+    audit_out="$(openclaw secrets audit 2>&1)"
+    audit_plaintext="$(printf '%s' "$audit_out" | sed -n 's/.*plaintext=\([0-9][0-9]*\).*/\1/p' | head -1)"
+    if [[ -z "$audit_plaintext" ]]
+    then
+        contained=0
+        printf '  %sCONTAINMENT FAILED%s - the secrets audit reported no plaintext= count:\n' \
+            "$C_Error" "$C_Reset"
+        printf '%s\n' "$audit_out" | tail -5
+    fi
     if [[ -f "$cfg" && -f "$bak" ]] && ! diff -q "$bak" "$cfg"
     then
-        if ! openclaw secrets audit --check
+        if [[ -n "$audit_plaintext" && "$audit_plaintext" != 0 ]]
         then
             cp "$bak" "$cfg"
             printf '  %sReverted the config%s - doctor had written a plaintext secret into openclaw.json\n' \
                 "$C_Warning" "$C_Reset"
         else
-            printf '  %sThe config changed%s - worth a look: %s\n' "$C_Warning" "$C_Reset" "${bak/#$HOME/~}"
+            printf '  %sThe config changed%s - no plaintext secret (plaintext=%s); worth a look: %s\n' \
+                "$C_Warning" "$C_Reset" "${audit_plaintext:-unknown}" "${bak/#$HOME/~}"
         fi
     fi
-    if ! openclaw secrets audit --check
+    if [[ -n "$audit_plaintext" && "$audit_plaintext" != 0 ]]
     then
         contained=0
-        printf '  %sCONTAINMENT FAILED%s - a plaintext secret is still in the config\n' "$C_Error" "$C_Reset"
+        printf '  %sCONTAINMENT FAILED%s - the config carries a plaintext secret (plaintext=%s)\n' \
+            "$C_Error" "$C_Reset" "$audit_plaintext"
     fi
     if (( contained == 0 ))
     then
@@ -983,7 +1015,7 @@ PYEOF
     local _agents_root="${OC_AGENTS:-$HOME/.openclaw/agents}"
     # One python process for ALL agents x profiles (was one subprocess per
     # agent per profile — 45 spawns). Merges into each store's 'primary' row.
-    local _auth_info _auth_applied=0 _auth_skipped=0 _auth_failed=0
+    local _auth_info _auth_applied=0 _auth_skipped=0 _auth_failed=0 _auth_config_error="" _auth_msg=""
     _auth_info=$(python3 - "$_agents_root" <<'PYEOF' 2>/dev/null
 import json, os, sqlite3, sys, time
 agents_root = sys.argv[1]
@@ -992,6 +1024,21 @@ auth_map = [
     ("deepseek", "deepseek", "api_key", "DEEPSEEK_API_KEY"),
     ("ollama", "ollama", "api_key", "OLLAMA_API_KEY"),
 ]
+# Which agent is the DEFAULT one? The runtime resolves the CONFIG's auth.profiles for it, and
+# its store must carry those ids too (see the "<provider>:default" write below).
+default_agent = ""
+config_error = ""
+try:
+    with open(os.path.join(os.environ.get("HOME", ""), ".openclaw", "openclaw.json"), encoding="utf-8") as _fh:
+        default_agent = str(
+            ((((json.load(_fh).get("agents") or {}).get("defaults") or {}).get("systemAgent") or {})
+             .get("agentId")) or ""
+        )
+except Exception as exc:
+    # Reported in the JSON below, never swallowed: without the id the config's
+    # "<provider>:default" profile cannot be written and auth keeps failing.
+    config_error = f"{type(exc).__name__}: {exc}"
+
 changed = unchanged = skipped = 0
 for name in sorted(os.listdir(agents_root)):
     db = os.path.join(agents_root, name, "agent", "openclaw-agent.sqlite")
@@ -1004,13 +1051,30 @@ for name in sorted(os.listdir(agents_root)):
         if not os.environ.get(var):
             skipped += 1
             continue
-        ref = {"source": "env", "provider": "default", "id": var}
+        # `provider` must be the REAL provider id, not the literal "default": the resolver
+        # matches a profile's cred.provider against the provider id, so "default" leaves the
+        # keyRef invisible and a present key reads as missing.  (The CONFIG's own refs do use
+        # "default" — that shape is correct there; this is the auth-profile store.)
+        ref = {"source": "env", "provider": provider, "id": var}
         profile = {"type": ctype, "provider": provider}
         if ctype == "api_key":
             profile["keyRef"] = ref
         else:
             profile["tokenRef"] = ref
         store.setdefault("profiles", {})[pid] = profile
+    # The CONFIG declares auth.profiles["<provider>:default"] and the runtime resolves THAT id
+    # for the default agent, so a bare "<provider>" entry leaves it with no store entry
+    # ("... is configured but unavailable (secret reference was not found)").  Scoped to the
+    # default agent only: adding it to every agent's store raised the secrets-reload warning
+    # count 19 -> 46 (measured 2026-09-30).
+    if default_agent and name == default_agent:
+        for _pid, provider, ctype, var in auth_map:
+            if not os.environ.get(var):
+                continue
+            _ref = {"source": "env", "provider": provider, "id": var}
+            _extra = {"type": ctype, "provider": provider}
+            _extra["keyRef" if ctype == "api_key" else "tokenRef"] = _ref
+            store.setdefault("profiles", {})[f"{provider}:default"] = _extra
     # Write only when the merged store actually differs — no-op refreshes
     # perform zero sqlite writes. Compare parsed dicts (order-insensitive).
     new_json = json.dumps(store, sort_keys=True)
@@ -1025,11 +1089,31 @@ for name in sorted(os.listdir(agents_root)):
     con.commit()
     con.close()
     changed += 1
-print(json.dumps({"stores_written": changed, "stores_unchanged": unchanged, "skipped": skipped}))
+print(json.dumps({
+    "stores_written": changed,
+    "stores_unchanged": unchanged,
+    "skipped": skipped,
+    "default_agent": default_agent,
+    "config_error": config_error,
+}))
 PYEOF
 )
     _auth_applied=$(printf '%s' "$_auth_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['stores_written'])" 2>/dev/null)
     _auth_unchanged=$(printf '%s' "$_auth_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['stores_unchanged'])" 2>/dev/null)
+    # Visible, never silent: without the config's default-agent id the "<provider>:default"
+    # profile the runtime resolves is NOT written, and auth keeps failing.  No stderr
+    # redirect here on purpose — a result this cannot parse is itself reported below.
+    if ! _auth_config_error=$(printf '%s' "$_auth_info" \
+        | python3 -c "import json,sys; print(json.load(sys.stdin).get('config_error',''))")
+    then
+        _auth_config_error="<the auth-sync result could not be parsed>"
+    fi
+    if [[ -n "$_auth_config_error" ]]
+    then
+        _auth_msg="[could NOT read agents.defaults.systemAgent from openclaw.json: $_auth_config_error"
+        _auth_msg+=" — the config's '<provider>:default' auth profile was NOT written]"
+        __tac_info "Syncing Auth Profile SecretRefs" "$_auth_msg" "$C_Warning"
+    fi
 
     if (( _auth_applied > 0 ))
     then
