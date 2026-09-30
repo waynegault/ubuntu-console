@@ -43,7 +43,10 @@
 # EXIT  0 window completed · 1 preflight failed, nothing stopped · 2 doctor --fix non-zero
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-09-30): add the repo-required `# end of file` marker. Its absence turned main
+#   RED (CI run 36752500465, Fast Test Suite test 25: "hygiene: all scripts end with
+#   # end of file marker"), so the file could not ship as committed in 5bc52634.
 #   v1 (2026-09-30): first version, replacing the ad-hoc
 #   ~/Backups/openclaw/scripts/doctor-maintenance-window-2026.9.7.sh.  Adds STOP_ONLY /
 #   RESTORE modes for the interactive case and fixes that script's ordering trap
@@ -184,3 +187,4 @@ log "=== update status"; "$OPENCLAW" update status
 log "=== window end (doctor rc=$doctor_rc; repair rc=$repair_rc)"
 
 exit "$doctor_rc"
+# end of file
