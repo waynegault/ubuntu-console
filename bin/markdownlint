@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+# ==============================================================================
+# bin/markdownlint — markdownlint shim: refuse a full-config `--fix`.
+# ==============================================================================
+# Installed to ~/.local/bin/markdownlint (install.sh links every file in bin/),
+# which precedes /home/linuxbrew/.linuxbrew/bin on this box's PATH — so a
+# PATH-resolved `markdownlint` runs this.
+#
+# WHY IT EXISTS
+# -------------
+# markdownlint's `--fix` applies the fixers of every ENABLED rule, and a fixer
+# cannot tell prose that wrapped onto a marker from real structure.  Measured
+# 2026-09-30 on a memory note whose wrapped lines began with a marker, under the
+# full config (~/.qwen/.markdownlint.jsonc):
+#
+#   * MD004 rewrote a quoted "+ maintenance lease released" to "- …"
+#   * MD018 inserted the space that turns a wrapped "#144627/#143932/#146315"
+#     into a real heading — which then reported MD022/MD025/MD026, so a second
+#     run would have deleted the sentence's full stop
+#   * MD004 likewise swapped a quoted "* not a list item…" to "- …"
+#
+# Each of those notes still linted CLEAN afterwards, so a green exit code is no
+# evidence the text survived.  Whitespace-only rules cannot arise from that
+# misreading, so where a fix IS wanted it runs under a config that enables only
+# those (~/.qwen/.markdownlint-fixable.jsonc, measured to leave all three lines
+# byte-identical).  The memory-markdownlint hook already prescribes that config;
+# this shim is what makes a hand-typed full-config fix fail closed too.
+#
+# CONTRACT
+# --------
+#   * `--fix` with any config other than the fixable one, or with none, is
+#     REFUSED before anything else happens — no linter is needed to refuse, and
+#     nothing is written.
+#   * `--fix` with the fixable config passes through.
+#   * Every invocation WITHOUT `--fix` passes through untouched: reporting is
+#     never restricted, only the automatic rewrite.
+#   * MARKDOWNLINT_ALLOW_FULL_FIX=1 is the escape, said out loud on the command
+#     line, for prose that carries no marker-at-line-start risk.
+#   * MARKDOWNLINT_REAL=<path> names the linter to exec — the test hook, and the
+#     only way to point this at a stub in CI (which has no linuxbrew).  It does
+#     not weaken the refusal check, which runs first and without a linter.
+#   * An absolute path (/home/linuxbrew/.linuxbrew/bin/markdownlint) bypasses
+#     this, exactly as an absolute-path gh call bypasses bin/gh.  That residual
+#     is named in the README, not closed: closing it would mean editing
+#     linuxbrew's install or shadowing it twice.
+# ==============================================================================
+
+set -euo pipefail
+
+FIXABLE="$HOME/.qwen/.markdownlint-fixable.jsonc"
+
+# ── 1. Read the invocation ────────────────────────────────────────────────────
+_fix=0
+_cfg=""
+_expect_cfg=0
+for _arg in "$@"
+do
+    if (( _expect_cfg ))
+    then
+        _cfg="$_arg"
+        _expect_cfg=0
+        continue
+    fi
+    case "$_arg" in
+        -f|--fix) _fix=1 ;;
+        -c|--config) _expect_cfg=1 ;;
+        --config=*) _cfg="${_arg#--config=}" ;;
+        *) ;;
+    esac
+done
+
+# ── 2. Refuse a full-config fix — before resolving anything ───────────────────
+if (( _fix )) && [[ "${MARKDOWNLINT_ALLOW_FULL_FIX:-0}" != "1" ]]
+then
+    # Compare RESOLVED paths, so ~/, a relative path and a symlink all agree.
+    # swallow-ok: a config that cannot be resolved cannot be the safe one — readlink failing leaves this empty, and empty is treated as a refusal, never as consent
+    _cfg_real="$(readlink -f "$_cfg" 2>/dev/null || printf '')"
+    # swallow-ok: same for the fixable config — if IT cannot be resolved the shim must refuse rather than wave a fix through
+    _fixable_real="$(readlink -f "$FIXABLE" 2>/dev/null || printf '')"
+    if [[ -z "$_cfg_real" || "$_cfg_real" != "$_fixable_real" ]]
+    then
+        {
+            printf '%s\n' \
+            "markdownlint shim: refusing --fix under a full config." \
+            "  A fixer cannot tell prose that wrapped onto a marker from real structure: measured" \
+            "  2026-09-30 it rewrote a quoted \"+ …\" to \"- …\" (MD004) and turned a wrapped" \
+            "  \"#144627/…\" into a heading (MD018) — and the note still linted clean afterwards." \
+            "  Safe fix:  markdownlint --config ~/.qwen/.markdownlint-fixable.jsonc --fix <file>" \
+            "  Reporting is unrestricted: run without --fix for the full rule set." \
+            "  Deliberate override: MARKDOWNLINT_ALLOW_FULL_FIX=1 markdownlint --config … --fix <file>"
+        } >&2
+        exit 2  # 2 = refused by policy, distinct from the linter's own 1 (findings) and 127 (absent)
+    fi
+fi
+
+# ── 3. Resolve the real linter past ourselves ─────────────────────────────────
+# MARKDOWNLINT_REAL first (the test hook), then the fixed prefixes, then PATH
+# with this shim filtered out — on this box the first PATH hit IS this file.
+REAL_MARKDOWNLINT=""
+_self="$(readlink -f "${BASH_SOURCE[0]}")"
+if [[ -n "${MARKDOWNLINT_REAL:-}" && -x "${MARKDOWNLINT_REAL:-}" ]]
+then
+    REAL_MARKDOWNLINT="$MARKDOWNLINT_REAL"
+fi
+if [[ -z "$REAL_MARKDOWNLINT" ]]
+then
+    for _candidate in \
+        /home/linuxbrew/.linuxbrew/bin/markdownlint \
+        /usr/local/bin/markdownlint \
+        /usr/bin/markdownlint
+    do
+        [[ -x "$_candidate" ]] || continue
+        [[ "$(readlink -f "$_candidate")" == "$_self" ]] && continue
+        REAL_MARKDOWNLINT="$_candidate"
+        break
+    done
+fi
+if [[ -z "$REAL_MARKDOWNLINT" ]]
+then
+    # swallow-ok: `type -p` prints NOTHING and exits non-zero when the name is absent — that IS the answer here (no linter on PATH), and the empty result falls through to the exit-127 report below rather than being treated as success
+    _candidates="$(type -a -p markdownlint 2>/dev/null || printf '')"
+    while IFS= read -r _candidate
+    do
+        [[ -n "$_candidate" && -x "$_candidate" ]] || continue
+        [[ "$(readlink -f "$_candidate")" == "$_self" ]] && continue
+        REAL_MARKDOWNLINT="$_candidate"
+        break
+    done <<< "$_candidates"
+fi
+if [[ -z "$REAL_MARKDOWNLINT" ]]
+then
+    {
+        printf '%s\n' "markdownlint shim: no real markdownlint found — not in the known prefixes, not on PATH"
+    } >&2
+    exit 127  # 127 = the shell's own "command not found", which is exactly what this is
+fi
+
+exec "$REAL_MARKDOWNLINT" "$@"

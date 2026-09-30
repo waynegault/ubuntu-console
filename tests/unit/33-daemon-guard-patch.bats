@@ -230,3 +230,74 @@ PYSTUB
     run oc-health --json
     [[ "$output" != *"Test log patch"* ]]
 }
+# ==============================================================================
+# The markdownlint shim: a full-config --fix must fail closed
+# ==============================================================================
+# The criterion is the shim's own CONTRACT block (bin/markdownlint): a full-config
+# --fix is refused before anything else happens, the fixable config passes through,
+# reporting is never restricted, and MARKDOWNLINT_ALLOW_FULL_FIX=1 is the stated
+# escape.  Measured 2026-09-30, a full-config fix rewrote a quoted "+ …" to "- …"
+# (MD004), and turned a wrapped "#144627/…" into a heading (MD018) — then linted
+# clean, so a green exit code was no evidence the text survived.
+#
+# MARKDOWNLINT_REAL exists so a pass-through case can point at a stub: CI has no
+# linuxbrew linter, and an assertion about pass-through must not depend on one
+# being installed.  The refusal case deliberately does NOT set it — refusing must
+# need no linter at all.
+stub_linter() {
+    cat > "$BATS_TEST_TMPDIR/linter-stub" <<'MOCK'
+#!/usr/bin/env bash
+printf 'STUB-LINTER %s\n' "$*"
+exit 0
+MOCK
+    chmod +x "$BATS_TEST_TMPDIR/linter-stub"
+    printf '%s' "$BATS_TEST_TMPDIR/linter-stub"
+}
+
+@test "markdownlint shim: a full-config --fix is refused, and nothing is written" {
+    printf '%s\n' 'a note with trailing spaces   ' > "$BATS_TEST_TMPDIR/note.md"
+    local before
+    before="$(cat "$BATS_TEST_TMPDIR/note.md")"
+
+    run "$REPO_ROOT/bin/markdownlint" --config "$REPO_ROOT/.markdownlint.json" --fix "$BATS_TEST_TMPDIR/note.md"
+
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"refusing --fix under a full config"* ]]
+    [[ "$output" == *"markdownlint-fixable.jsonc"* ]]
+    [ "$(cat "$BATS_TEST_TMPDIR/note.md")" = "$before" ]
+}
+
+@test "markdownlint shim: the fixable config passes through to the linter" {
+    mkdir -p "$HOME/.qwen"
+    : > "$HOME/.qwen/.markdownlint-fixable.jsonc"
+    local stub
+    stub="$(stub_linter)"
+
+    run env MARKDOWNLINT_REAL="$stub" "$REPO_ROOT/bin/markdownlint" \
+        --config "$HOME/.qwen/.markdownlint-fixable.jsonc" --fix "$BATS_TEST_TMPDIR/note.md"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"STUB-LINTER"* ]]
+}
+
+@test "markdownlint shim: reporting is never restricted - no --fix passes through" {
+    local stub
+    stub="$(stub_linter)"
+
+    run env MARKDOWNLINT_REAL="$stub" "$REPO_ROOT/bin/markdownlint" \
+        --config /any/other/config.json "$BATS_TEST_TMPDIR/note.md"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"STUB-LINTER"* ]]
+}
+
+@test "markdownlint shim: the stated override passes a full fix through" {
+    local stub
+    stub="$(stub_linter)"
+
+    run env MARKDOWNLINT_ALLOW_FULL_FIX=1 MARKDOWNLINT_REAL="$stub" \
+        "$REPO_ROOT/bin/markdownlint" --config /any/other/config.json --fix "$BATS_TEST_TMPDIR/note.md"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"STUB-LINTER"* ]]
+}
