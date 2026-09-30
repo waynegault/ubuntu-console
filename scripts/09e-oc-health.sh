@@ -9,7 +9,9 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
+#   v19 (2026-09-30): ratchet hygiene only, no behaviour change — the `provider_json`
+#   condition is wrapped across two lines so it sits inside §18.3's 120-character bound.
 #   v17 (2026-09-30): `oc health` also reports whether the VS Code Testing results
 #   logger is still wired — the Python extension's pytest wrapper is patched to record
 #   every run, and an extension update replaces it and reverts the patch silently
@@ -1171,7 +1173,8 @@ function oc-doctor-local() {
         # (measured 2026-09-30). Ask whether SOME provider points at the production port
         # rather than requiring one fixed id.
         provider_json=$(openclaw config get models.providers 2>/dev/null || true)
-        if [[ -n "$provider_json" && "$provider_json" != "null" && "$provider_json" == *"127.0.0.1:${LLM_SERVICE_PORT}"* ]]
+        if [[ -n "$provider_json" && "$provider_json" != "null" \
+              && "$provider_json" == *"127.0.0.1:${LLM_SERVICE_PORT}"* ]]
         then
             model_sync=1
         fi

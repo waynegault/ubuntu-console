@@ -7,7 +7,12 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 38
+# Module Version: 39
+#   v39 (2026-09-30): ratchet hygiene only, no behaviour change — `ocdoc-fix` declares
+#   `contained` with its other locals and merges the unit/hold pair (two `local`s in one
+#   statement is this repo's own idiom), putting the function back under §18.3's
+#   100-line bound; and its 123-character printf names the parenthetical as a %s
+#   argument so both lines fit the 120-character bound.  Output text is unchanged.
 #   v37 (2026-09-27): __oc_inject_manager_env no longer records a manager-env push it
 #   could not make. The hash/set markers are what make the next refresh a no-op, so
 #   writing them after a failed `systemctl --user set-environment` silently ended the
@@ -477,10 +482,9 @@ function ockeys() {
 function ocdoc-fix() {
     local cfg="$OC_ROOT/openclaw.json"
     local bak="${cfg}.pre-doctor"
-    local unit="$HOME/.config/systemd/user/openclaw-gateway.service"
-    local hold="$OC_ROOT/.gateway-hold"
+    local unit="$HOME/.config/systemd/user/openclaw-gateway.service" hold="$OC_ROOT/.gateway-hold"
     local snapdir="$OC_ROOT/state/pre-doctor-snapshot"
-    local unit_before="" rc=0 stop_out=""
+    local unit_before="" rc=0 stop_out="" contained=1
 
     printf '\n%soc doc-fix%s - running %sopenclaw doctor --fix%s in a Gateway window\n' \
         "$C_Highlight" "$C_Reset" "$C_Text" "$C_Reset"
@@ -538,7 +542,6 @@ function ocdoc-fix() {
 
     # 4. undo what doctor wrote, then VERIFY the undo actually holds — the containment is
     #    this function's OWN contract, so it is proved rather than assumed.
-    local contained=1
     if [[ -n "$unit_before" && -f "$unit" ]]
     then
         if [[ "$(sha256sum "$unit" | cut -d' ' -f1)" != "$unit_before" ]]
@@ -590,8 +593,8 @@ function ocdoc-fix() {
         printf '  %sGateway restarted%s - doctor finished cleanly; run %soc gs%s to re-check.\n\n' \
             "$C_Success" "$C_Reset" "$C_Text" "$C_Reset"
     else
-        printf '  %sGateway restarted%s - window clean; doctor itself exited %s%d%s (its repair fails on this host).\n\n' \
-            "$C_Warning" "$C_Reset" "$C_Text" "$rc" "$C_Reset"
+        printf '  %sGateway restarted%s - window clean; doctor itself exited %s%d%s%s\n\n' \
+            "$C_Warning" "$C_Reset" "$C_Text" "$rc" "$C_Reset" ' (its repair fails on this host).'
     fi
     return 0
 }

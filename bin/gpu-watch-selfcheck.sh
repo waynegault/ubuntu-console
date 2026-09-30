@@ -77,7 +77,11 @@
 #                                     (default ~/.cache/gpu-watch-selfcheck.state)
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-09-30): ratchet hygiene only, no behaviour change — v4 put
+#   SELFCHECK_MAX_AGE_FLOOR_S between max_age_seconds' doc comment and the function, so
+#   §18.3's 9.5 counted it as undocumented; the constant now sits above the comment and
+#   the doc is adjacent to the definition again.
 #   v3 (2026-09-24): --announce's exit code carries the verdict (Wayne's call), so the
 #   automation's run status reads ok only while the watcher is healthy.  The message
 #   stays transition-only; the status now reports the checked state, not just that the
@@ -122,9 +126,10 @@ json_bool() {
     printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" | head -1
 }
 
+SELFCHECK_MAX_AGE_FLOOR_S=7200
+
 # max_age_seconds <every_ms> — the staleness bound: the larger of two schedule periods
 # and the maintenance-window floor.  An explicit override wins over both.
-SELFCHECK_MAX_AGE_FLOOR_S=7200
 max_age_seconds() {
     local _every_ms="$1" _override="${GPU_WATCH_SELFCHECK_MAX_AGE_S:-}"
     local _bound="$SELFCHECK_MAX_AGE_FLOOR_S"
