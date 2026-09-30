@@ -354,7 +354,15 @@ __so_test_prelude() {
     export SO_HEALTH_TIMEOUT=1
     __test_port() { return 0; }        # the port answers: the already-running branch
     __so_ensure_shell_env() { return 0; }
-    openclaw() { sleep 6; return 0; }  # outlasts the PRE-change 5 s budget too, so this case can fail against it
+    # An EXECUTABLE stub, NOT a shell function: `timeout` execs its argument, so a
+    # function is never reached.  That is why this case was green here and RED in CI —
+    # locally the probe hit the REAL `openclaw` (3.0-4.6 s) and timed out at 1 s, while
+    # CI has no `openclaw` at all, so it exited 127 and took a different branch.  The
+    # stub also outlasts the pre-change 5 s budget, so the case can fail against it.
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    printf '#!/usr/bin/env bash\nsleep 6\n' > "$TAC_TEST_TMPDIR/bin/openclaw"
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 
     run so
 

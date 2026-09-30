@@ -16,3 +16,4 @@
 # NEXT red instead of surfacing it.
 #
 # --- entries ---
+workflow=CI | owner=hal | card=SPEC-VV-CONSOLE-002 | expiry=2026-10-07 | reason: the tip 9d016f57 reds on ONE case, "so: a health probe that TIMES OUT ...", which passed locally only because the real openclaw CLI existed here and the case stubbed a shell function that `timeout` cannot exec (CI has no openclaw, so the probe exited 127 and took another branch); fixed in this commit by an executable PATH stub, and this entry exists only until a green CI run for the new tip lands, then delete it
