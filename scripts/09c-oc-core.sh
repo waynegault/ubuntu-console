@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
@@ -339,6 +339,7 @@ function __oc_purge_wait_gone() {
     __oc_gateway_gone
 }
 
+# oc-purge — see the header above for the gateway-gone wait and what is NOT purged.
 function oc-purge() {
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw" "[NOT INSTALLED - cannot purge sessions]" "$C_Error"
