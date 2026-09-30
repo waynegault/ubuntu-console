@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 21
+# Module Version: 22
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -957,8 +957,8 @@ function __oc_gateway_gone() {
     # until 00:04:16 and `ready` only at 00:07:23.  A pending job is readable: on a
     # probe unit, `systemctl --user show -p Job --value <unit>` returned the live job
     # id (`Job=[43187]`, `activating/start-pre`) and `list-jobs` named it.
-    # swallow-ok: a unit whose job state cannot be read is not assumed to have one; the is-active check above and the port check below still have to pass for the claim
     local _job
+    # swallow-ok: a unit whose job state cannot be read is not assumed to have one; the is-active check above and the port check below still have to pass for the claim
     _job=$(systemctl --user show -p Job --value "openclaw-gateway.service" 2>/dev/null | tr -d ' \n')
     [[ -z "$_job" ]] || return 1
     __test_port "$OC_PORT" && return 1
