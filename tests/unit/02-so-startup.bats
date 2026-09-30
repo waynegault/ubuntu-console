@@ -315,6 +315,27 @@ __so_test_prelude() {
     [ -e "$TAC_TEST_TMPDIR/probe-ran" ]     # the probe had to answer it
 }
 
+@test "so: a drain outranks a liveness warning logged during it" {
+    # A draining gateway still COMPLETES the requests admitted before the SIGTERM, so a
+    # completion line restores the serving witness, and a loaded box keeps warning while
+    # it drains: the newest warning can post-date the SIGTERM.  Without the precedence
+    # guard the classifier answered `degraded` here — the restart window reported under
+    # the wrong cause, which is the one verdict the drain handling exists to get right.
+    # The completion line is real-shaped with a '~' standing in for the two glyphs.
+    journalctl() {
+        printf '%s\n' \
+            '2026-09-30T10:30:00.000+01:00 [gateway] received SIGTERM; restarting' \
+            '2026-09-30T10:30:01.000+01:00 [gateway] draining active work before stop with timeout 315000ms: queueSize=2' \
+            '2026-09-30T10:30:02.000+01:00 [ws] ~ res ok sessions.list 412ms conn=abc123 id=7' \
+            '2026-09-30T10:30:03.000+01:00 [diagnostic] liveness warning: reasons=cpu interval=2s degradedFor=95s eventLoopDelayP99Ms=707.3'
+    }
+
+    run __so_gateway_phase openclaw-gateway.service
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "draining" ]
+}
+
 @test "so: a degraded gateway that booted long ago is still read as degraded" {
     # The window is 15 min, so a gateway up for hours has no 'ready' line left inside
     # it.  Requiring "serving" on that line alone would make this verdict fire only

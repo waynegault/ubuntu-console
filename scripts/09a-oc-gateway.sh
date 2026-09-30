@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 23
+# Module Version: 24
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -623,7 +623,14 @@ function __so_gateway_phase() {
     done < <(journalctl --user -u "$_svc" --since '-15 min' --no-pager --output=cat 2>/dev/null \
         | grep -E "$_pat")
 
-    if [[ -n "$_degraded" ]]
+    # A drain or a cold start OUTRANKS a concurrent warning.  A draining gateway still
+    # COMPLETES the requests admitted before the SIGTERM (so a '[ws] … res' line
+    # restores "serving"), and a loaded box keeps emitting liveness warnings while it
+    # drains — measured shape, so the newest warning can post-date the SIGTERM.
+    # Without this guard that drain is reported as CPU-DEGRADED: advice that happens to
+    # be right for the state, under the wrong cause, in the one state this classifier
+    # exists to name.
+    if [[ -n "$_degraded" && "$_phase" != "draining" && "$_phase" != "starting" ]]
     then
         printf 'degraded\n'
         return 0
