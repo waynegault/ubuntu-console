@@ -25,6 +25,40 @@ setup_file() {
     export PROFILE_PATH="$REPO_ROOT/tactical-console.bashrc"
 }
 
+# __fast_member_shellcheck — the ONE graph pass every member-listing case asserts.
+#
+# `tools/lint.sh --files` analyses the 29-member module graph as one set whenever any
+# listed file IS a member, and scripts/0*, 10, 12 and 13-15 all are. That single pass
+# dominates this suite's wall clock — measured 2026-09-30 at ~132 s on a loaded box
+# against 5 s for the companion-only part — and each of the three cases below was paying
+# for it again, which is how two of them crossed their per-case cap and reported a
+# timeout-shaped failure with no code defect behind it.
+#
+# The graph verdict is GLOBAL, so it is computed once here and the cases assert the
+# union: strictly stronger than each case's own subset, and a failure still names the
+# offending file in lint.sh's own output, which the caller prints.
+#
+# Lazy on purpose, and memoised in BATS_FILE_TMPDIR rather than a variable: bats runs
+# each test in its own subshell, so state cannot live in the parent, and the cheap cases
+# (bashrc, bin/*, a single filtered case) must not pay for a graph they do not need.
+__fast_member_shellcheck() {
+    local out="$BATS_FILE_TMPDIR/member-shellcheck.out"
+    local rc_file="$BATS_FILE_TMPDIR/member-shellcheck.rc"
+    if [[ ! -f "$rc_file" ]]
+    then
+        local rc=0
+        "$REPO_ROOT/tools/lint.sh" --files \
+            "$REPO_ROOT"/scripts/0*.sh \
+            "$REPO_ROOT"/scripts/1[0-5]-*.sh \
+            "$REPO_ROOT"/scripts/18-lint.sh \
+            "$REPO_ROOT"/scripts/load-vault-env.sh \
+            "$REPO_ROOT"/scripts/oc-update-enhanced.sh > "$out" 2>&1 || rc=$?
+        printf '%s\n' "$rc" > "$rc_file"
+    fi
+    cat "$out"
+    return "$(cat "$rc_file")"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. SYNTAX & STATIC ANALYSIS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -68,23 +102,23 @@ setup_file() {
 
 @test "shellcheck: companion scripts 0x have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    "$REPO_ROOT/tools/lint.sh" --files "$REPO_ROOT"/scripts/0*.sh
+    # One shared graph pass serves the three member-listing cases; see
+    # __fast_member_shellcheck. Each still asserts (a superset of) its own scope, and a
+    # failure prints lint.sh's own output, which names the offending file.
+    run __fast_member_shellcheck
+    [ "$status" -eq 0 ] || { printf '%s\n' "$output"; return 1; }
 }
 
 @test "shellcheck: companion scripts 10 and 12 have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    "$REPO_ROOT/tools/lint.sh" --files \
-        "$REPO_ROOT"/scripts/10-deployment.sh \
-        "$REPO_ROOT"/scripts/12-dashboard-help.sh
+    run __fast_member_shellcheck
+    [ "$status" -eq 0 ] || { printf '%s\n' "$output"; return 1; }
 }
 
 @test "shellcheck: companion scripts 13-15 and extras have no findings" {
     command -v shellcheck >/dev/null 2>&1 || skip "shellcheck not installed"
-    "$REPO_ROOT/tools/lint.sh" --files \
-        "$REPO_ROOT"/scripts/1[3-5]-*.sh \
-        "$REPO_ROOT"/scripts/18-lint.sh \
-        "$REPO_ROOT"/scripts/load-vault-env.sh \
-        "$REPO_ROOT"/scripts/oc-update-enhanced.sh
+    run __fast_member_shellcheck
+    [ "$status" -eq 0 ] || { printf '%s\n' "$output"; return 1; }
 }
 
 @test "shellcheck: prompt-sets.sh is judged through its consumers, not through their imports" {
