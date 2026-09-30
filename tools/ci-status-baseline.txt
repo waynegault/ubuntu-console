@@ -16,3 +16,4 @@
 # NEXT red instead of surfacing it.
 #
 # --- entries ---
+workflow=CI | owner=wayne | card=CI-RED-001 | expiry=2026-10-07 | 2026-09-30: tests/unit/15-secret-ref-paths.bats read the host's live OpenClaw state DB, so an openclaw self-update (or an unfinished plugin upgrade it carried) turned a healthy tree red. The hermeticity fix is in this change-set; this entry exists only so the fix could be pushed and is deleted as soon as its run is green.

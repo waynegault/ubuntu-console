@@ -25,6 +25,18 @@ given a dummy value for the run so that SecretRef *resolvability* cannot mask a
 schema error.  (This checks that a path is a legal field; it deliberately does
 not check that the key is importable.)
 
+The run is HERMETIC against the host's OpenClaw: it validates an empty throwaway
+config (`OPENCLAW_CONFIG_PATH`, set by the caller) AND points the CLI at a
+throwaway state dir (`OPENCLAW_STATE_DIR`, a temp dir this module owns), because
+`openclaw config patch` consults the state DB on every call.  The schema is
+bundled in the CLI, so an empty state dir is sufficient — verified by the teeth
+case, which still catches a bad path.  Without the state-dir pin the check inherits
+the host DB's transient state, which is not this check's business and must not
+decide its verdict: measured 2026-09-30, a healthy tree went red because that DB
+was mid `openclaw` self-update ("... is undergoing offline maintenance; retry when
+it finishes"), and minutes later because it carried an unfinished plugin upgrade
+("Cannot edit retained config at ...").
+
 EXIT CODES
 ----------
   0  every mapping path is a valid config field
@@ -120,20 +132,27 @@ def main():
     for _, env_var in rows:
         env.setdefault(env_var, "dummy-validation-value")
 
-    try:
-        proc = subprocess.run(
-            [openclaw, "config", "patch", "--file", patch_path, "--dry-run"],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=180,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        print(f"check-secret-ref-paths: could not run the validator: {exc}", file=sys.stderr)
-        return 2
-    finally:
-        os.unlink(patch_path)
+    # A throwaway state dir, owned here: `openclaw config patch` reads the state DB
+    # on every call, and the host's DB is deliberately taken offline while an
+    # `openclaw` self-update runs — neither that, nor an unfinished plugin upgrade
+    # it may carry, is this check's business.  The schema is bundled in the CLI, so
+    # an empty state dir still validates against the real schema.
+    with tempfile.TemporaryDirectory(prefix="check-secret-ref-paths-state-") as state_dir:
+        env["OPENCLAW_STATE_DIR"] = state_dir
+        try:
+            proc = subprocess.run(
+                [openclaw, "config", "patch", "--file", patch_path, "--dry-run"],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=180,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"check-secret-ref-paths: could not run the validator: {exc}", file=sys.stderr)
+            return 2
+        finally:
+            os.unlink(patch_path)
 
     output = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode == 0:

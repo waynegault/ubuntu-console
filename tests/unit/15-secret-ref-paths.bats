@@ -24,9 +24,16 @@
 #
 # This file deliberately does NOT mock openclaw, so it requires the real CLI, and
 # it validates against a throwaway EMPTY config (OPENCLAW_CONFIG_PATH) so the live
-# ~/.openclaw/openclaw.json is neither read for its contents nor written.  Where
-# the CLI is unavailable (the CI runner installs bats, not openclaw) the check
-# cannot run and skips rather than pretending to pass.
+# ~/.openclaw/openclaw.json is neither read for its contents nor written.  The
+# checker also pins its OWN throwaway state dir (OPENCLAW_STATE_DIR,
+# check-secret-ref-paths.py), because `openclaw config patch` consults the host's
+# state DB on every call and that DB's transient state must not decide this
+# verdict — measured 2026-09-30, a healthy tree went red with "is undergoing
+# offline maintenance" (a self-update) and, minutes later, "Cannot edit retained
+# config at plugins.entries.brave.config" (an unfinished plugin upgrade).  The
+# third case below is the regression guard for that pin.  Where the CLI is
+# unavailable (the CI runner installs bats, not openclaw) the first two cases
+# cannot run and skip rather than pretending to pass.
 # ==============================================================================
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
@@ -73,4 +80,32 @@ teardown() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"plugins.entries.typesafe-ai.apiKey"* ]]
     [[ "$output" == *"TYPESAFE_API_KEY"* ]]
+}
+
+@test "hermetic: the check hands the CLI a throwaway state dir, never the host's (2026-09-30 regression)" {
+    # Regression guard for the 2026-09-30 CI red.  `openclaw config patch` consults
+    # the OpenClaw state DB on every call, and on this box that DB is taken offline
+    # while an `openclaw` self-update runs and can carry an unfinished plugin upgrade.
+    # Either one turns the suite red for a reason that has nothing to do with the
+    # mapping table, so the checker must hand the CLI a state dir of its own.  A fake
+    # CLI records the OPENCLAW_STATE_DIR it was given — this needs no real openclaw,
+    # and it fails the moment the pin is dropped.
+    local fakebin="$TMPDIR_BATS/bin"
+    mkdir -p "$fakebin"
+    cat > "$fakebin/openclaw" <<FAKE
+#!/usr/bin/env bash
+printf '%s\n' "\${OPENCLAW_STATE_DIR:-<unset>}" > "$TMPDIR_BATS/openclaw-state-dir.txt"
+exit 0
+FAKE
+    chmod +x "$fakebin/openclaw"
+
+    run env PATH="$fakebin:$PATH" python3 "$CHECK"
+    [ "$status" -eq 0 ]
+
+    local seen
+    seen="$(cat "$TMPDIR_BATS/openclaw-state-dir.txt")"
+    # It must be the checker's own temp dir ...
+    [[ "$seen" == */check-secret-ref-paths-state-* ]]
+    # ... and never the host's live state dir, which is what leaked before the fix.
+    [[ "$seen" != "$HOME/.openclaw/state" ]]
 }
