@@ -365,9 +365,19 @@ class TestPushedTipAndSlug:
         assert ".git" in mod.CACHE_FILE.parts
 
     def test_the_baseline_sits_with_the_other_baselines(self) -> None:
+        # Location and governance, NOT emptiness.  The file's own header says an entry
+        # legitimately exists while the commit that fixes a red main is being pushed, so
+        # asserting the shipped file parses to [] made the Python suite red for exactly
+        # the exemption this repo's own gate had parked: measured 2026-09-30, it was the
+        # ONLY remaining failure of runs e852b434 and 5a1a75ca, with every other job
+        # green.  An empty file is a state here, not a rule — `parse_baseline` is what
+        # rejects a malformed or ungoverned entry, and expiry is the deadline the gate
+        # itself enforces, so the assertions below are the ones that carry meaning.
         assert mod.BASELINE_FILE.parent.name == "tools"
         assert mod.BASELINE_FILE.exists()
-        assert mod.parse_baseline(mod.BASELINE_FILE.read_text()) == []
+        entries = mod.parse_baseline(mod.BASELINE_FILE.read_text())
+        for entry in entries:
+            assert not entry.expired, f"{entry.workflow}: exemption expired {entry.expiry}"
 
     def test_the_repo_root_resolves(self) -> None:
         assert str(mod.REPO_DIR) == REPO_ROOT
@@ -448,6 +458,13 @@ class TestMainMutationProof:
     @staticmethod
     def _patch(monkeypatch, tmp_path, runs) -> None:
         monkeypatch.setattr(mod, "CACHE_FILE", tmp_path / "ci.json")
+        # An ABSENT baseline, so this class is isolated from whatever the SHIPPED file
+        # currently parks.  This class proves the gate is red-able by mutation, and a
+        # shipped exemption masks exactly that: measured 2026-09-30, the console's own
+        # CI entry exempted the flipped conclusion, so the mutation returned 0.  CI's
+        # own run never showed it because pytest runs with `-x` there and stopped at an
+        # earlier case in this file — replicate the job locally to see both.
+        monkeypatch.setattr(mod, "BASELINE_FILE", tmp_path / "no-baseline.txt")
         monkeypatch.setattr(mod, "repo_slug", lambda: "owner/name")
         monkeypatch.setattr(mod, "local_head", lambda: (TIP, NOW))
         monkeypatch.setattr(mod, "pushed_tip", lambda slug, branch: (TIP, NOW))
