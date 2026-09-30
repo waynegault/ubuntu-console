@@ -40,10 +40,22 @@
 #       --property=EnvironmentFile=-/home/wayne/.openclaw/gateway.systemd.env \
 #       /home/wayne/ubuntu-console/bin/openclaw-doctor-fix-window.sh
 #
-# EXIT  0 window completed · 1 preflight failed, nothing stopped · 2 doctor --fix non-zero
+# EXIT  0 window completed · 1 the stop was refused or the Gateway could not be stopped, so
+#       NOTHING was repaired · 2 doctor --fix non-zero · 3 doctor REPAIRED STATE but its own
+#       61 s Gateway-readiness budget expired before the listener opened; this script then
+#       waited for the Gateway itself and it is up (measured 2026-09-30: this host's startup
+#       is ~102 s under load, so 3 is the normal outcome on a busy box)
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-09-30): honour the safe-stop refusal (a DO NOT STOP used to be downgraded to a
+#   warning, so doctor ran against a LIVE Gateway and failed with a misleading contention
+#   error); exit codes now match this header (`exit "$doctor_rc"` returned 1 for a doctor
+#   rc=1, which was indistinguishable from "refused, nothing stopped"); the post-window
+#   `doctor --lint` and `update status` now run AFTER the Gateway is back, because running
+#   them while the maintenance scope was still closing returned
+#   "... read scope is closing or closed" for nearly every check; and a doctor rc caused
+#   only by its readiness budget is reported as 3 rather than as a failed repair.
 #   v2 (2026-09-30): add the repo-required `# end of file` marker. Its absence turned main
 #   RED (CI run 36752500465, Fast Test Suite test 25: "hygiene: all scripts end with
 #   # end of file marker"), so the file could not ship as committed in 5bc52634.
@@ -151,8 +163,30 @@ start_hold_keeper
 restore_done=0
 trap 'if [ "$restore_done" = "0" ]; then restore; fi' EXIT
 
-stop_gateway || log "WARNING: the stop wrapper returned non-zero — verifying anyway"
+# The stop is a GATE, not a warning. safe-stop-gateway.py refuses a red pre-flight with exit 2
+# and deliberately has no override for it; exit 1 is its "warned, and --force was not given"
+# (this script always passes --force) and 4 is "the stop command itself failed". Downgrading
+# any of those to a warning is what made doctor run against a LIVE Gateway and fail with
+# "GatewayStateOwnerContentionError ... state database is busy" — an error that reads like a
+# doctor/state defect and sends the operator to the wrong place (measured 2026-09-30). Exit 3
+# is different: the unit DID go inactive, only the shutdown was not clean, and doctor can run.
+stop_rc=0
+stop_gateway || stop_rc=$?
+case "$stop_rc" in
+  0) : ;;
+  3) log "NOTE: the stop verified $UNIT is down but the shutdown was not clean (rc=3); continuing." ;;
+  *)
+    log "FATAL: the stop was refused or failed (rc=$stop_rc) — nothing was stopped and doctor was NOT run."
+    log "  A DO NOT STOP pre-flight verdict is not overridable (see safe-stop-gateway.py --help)."
+    log "  Resolve the finding above (often load, or another process holding the state), then re-run."
+    exit 1
+    ;;
+esac
 log "gateway after stop: state=$(state_of)"
+if [[ "$(state_of)" == active ]]; then
+  log "FATAL: $UNIT is still active after the stop — doctor would be refused. Not running doctor."
+  exit 1
+fi
 log "processes still holding the state (must be empty for doctor to enter maintenance):"
 pgrep -af 'dist/index.js gateway'
 
@@ -177,14 +211,48 @@ fi
 
 doctor_flags=()
 [ "${DOCTOR_FIX_YES:-0}" = "1" ] && doctor_flags+=(--yes)
+DOCTOR_LOG="$OPENCLAW_HOME/logs/doctor-fix-window-$(date +%Y%m%d-%H%M%S).log"
 log "=== doctor --fix ${doctor_flags[*]:-}  (note: it restarts the Gateway itself at the end)"
-"$OPENCLAW" doctor --fix "${doctor_flags[@]}"
-doctor_rc=$?
+log "    full output: $DOCTOR_LOG"
+# Capture as well as stream: doctor's own words are the only way to tell a failed repair from
+# its too-short readiness budget — the exit code alone cannot (both are rc=1).
+"$OPENCLAW" doctor --fix "${doctor_flags[@]}" 2>&1 | tee "$DOCTOR_LOG"
+doctor_rc="${PIPESTATUS[0]}"
 log "=== doctor --fix exited rc=$doctor_rc"
 
-log "=== doctor --lint"; "$OPENCLAW" doctor --lint
-log "=== update status"; "$OPENCLAW" update status
-log "=== window end (doctor rc=$doctor_rc; repair rc=$repair_rc)"
+# doctor repairs the state and THEN restarts the Gateway itself, waiting only a fixed 61 s for
+# the listener. Under load this host's startup is ~102 s, so doctor reports failure after a
+# SUCCESSFUL repair: "Doctor repaired state, but the managed Gateway did not become ready:
+# Readiness budget exhausted after 61s". That is a timing miss, not a repair failure, so it is
+# classified separately; `restore` below waits for the Gateway itself (60 x 5 s) and exit 3 is
+# only returned if the Gateway really is up.
+doctor_note=""
+if [[ "$doctor_rc" != 0 ]] \
+   && grep -q "Doctor repaired state" "$DOCTOR_LOG" \
+   && grep -q "Readiness budget exhausted" "$DOCTOR_LOG"; then
+  doctor_note="state-repaired;doctor-readiness-budget-expired"
+  log "NOTE: doctor reports a SUCCESSFUL repair — only its own Gateway-readiness check timed out."
+fi
 
-exit "$doctor_rc"
+# Leave the window FIRST, then run the read-only post-window checks: while the maintenance
+# scope is still closing they report "... read scope is closing or closed" for nearly every
+# check, which is not a verdict (measured 2026-09-30).
+restore
+
+log "=== doctor --lint (post-window; informational)"
+"$OPENCLAW" doctor --lint
+log "=== update status"
+"$OPENCLAW" update status
+log "=== window end (doctor rc=$doctor_rc; ${doctor_note:-doctor-clean}; repair rc=$repair_rc)"
+
+if [[ "$doctor_rc" == 0 ]]; then
+  exit 0
+fi
+if [[ -n "$doctor_note" ]]; then
+  if [[ "$(state_of)" == active ]]; then
+    exit 3  # doctor's repair SUCCEEDED; only its own readiness budget expired — the Gateway is up
+  fi
+  log "NOTE: the Gateway is NOT active after the restore — this is a failed window, not a timing miss."
+fi
+exit 2  # doctor --fix itself exited non-zero (see the window log it was captured to)
 # end of file

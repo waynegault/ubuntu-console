@@ -339,7 +339,7 @@ per-agent SQLite stores are migrated separately via
 | `oc-doctor-local` | Validate the full local OpenClaw + llama.cpp path end-to-end. Supports `--json` and `--plain`. |
 | `oc-sec` | Deep security audit: `openclaw security audit --deep` |
 | `oc-docs` | Search OpenClaw docs from the terminal |
-| `ocdoc-fix` | Run `openclaw doctor --fix` in a Gateway window (stops the Gateway, then puts back the unit and config doctor rewrites) |
+| `ocdoc-fix` | Run `openclaw doctor --fix` in a Gateway window by delegating to `bin/openclaw-doctor-fix-window.sh` (armed guard hold → verified stop → doctor → restore), run detached so doctor does not take its interactive service-config step; still puts back the unit and config doctor rewrites |
 | `oc-cache-clear` | Wipe all `/dev/shm/tac_*` telemetry caches. Supports `--dry-run`. |
 
 ## Backup & Restore
