@@ -471,7 +471,23 @@ YAML
     # both come from the contract's own text.
     run "$CHECKER" continuity --repo "$REPO_ROOT"
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"15 contract entr(ies) (15 active, 0 superseded)"* ]]
+    # Derived from the contract's own text, NOT pinned.  The pin that used to sit here
+    # was left behind by the 16th entry (`oc purge`): a legitimate addition reds CI
+    # while every local gate stays green, because tools/lint.sh does not run this
+    # suite.  Measured 2026-09-30: red on 3ca1b62a, one case, this line.
+    local _entries_total _active_total _superseded_total _expected
+    _entries_total=$(awk '/^  - name:/{n++} END{print n+0}' \
+        "$REPO_ROOT/docs/contracts/command-contracts.yaml")
+    _active_total=$(awk '/^    status: active/{n++} END{print n+0}' \
+        "$REPO_ROOT/docs/contracts/command-contracts.yaml")
+    _superseded_total=$(awk '/^    status: superseded/{n++} END{print n+0}' \
+        "$REPO_ROOT/docs/contracts/command-contracts.yaml")
+    _expected="$_entries_total contract entr(ies)"
+    _expected+=" ($_active_total active, $_superseded_total superseded)"
+    [[ "$output" == *"$_expected"* ]] || {
+        echo "printed entry counts are not the contract's own: want $_expected"
+        return 1
+    }
 
     local _declared _reported _entries _with_map _unverified
     # Counted with awk, not `grep -c`: grep exits 1 on zero matches, and under this
