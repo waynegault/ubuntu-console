@@ -208,9 +208,12 @@ EOF
 # The probe runs as `timeout 5 openclaw ...`, and timeout execs a binary — it
 # cannot call a shell function — so the stub has to be a real file on PATH or the
 # test would invoke the live CLI and depend on the real gateway's state.
+# It also records that it ran: the journal is read BEFORE the probe, so a row that
+# came from the log must not have paid the probe's seconds, and a row that came from
+# the probe must have.  Without the marker both orderings pass these cases.
 __stub_failing_openclaw() {
     mkdir -p "$TAC_TEST_TMPDIR/bin"
-    printf '#!/usr/bin/env bash\nexit 1\n' > "$TAC_TEST_TMPDIR/bin/openclaw"
+    printf '#!/usr/bin/env bash\n: > "%s"\nexit 1\n' "$TAC_TEST_TMPDIR/probe-ran" > "$TAC_TEST_TMPDIR/bin/openclaw"
     chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
     export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 }
@@ -239,6 +242,8 @@ __so_test_prelude() {
     [[ "$output" == *"do NOT restart"* ]]
     # The remedy that caused the window must be absent from this path.
     [[ "$output" != *"openclaw gateway restart"* ]]
+    # And it cost no probe: the drain was named from the log alone.
+    [ ! -e "$TAC_TEST_TMPDIR/probe-ran" ]
 }
 
 @test "so: a bound-but-wedged gateway still gets the restart advice" {
@@ -256,6 +261,81 @@ __so_test_prelude() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"RUNNING but UNHEALTHY"* ]]
     [[ "$output" == *"openclaw gateway restart"* ]]
+    # 'running' leaves the serving question open, so this row DID pay the probe.
+    [ -e "$TAC_TEST_TMPDIR/probe-ran" ]
+}
+
+@test "so: a serving but CPU-degraded gateway is reported DEGRADED, never told to restart" {
+    # Measured on this box 2026-09-30: the gateway's own health RPC COMPLETED
+    # (journal: '[ws] ⇄ res ✓ health 32764ms'), so it was serving; the CLI's 10 s
+    # transport timeout expired first, and `so` answered "RUNNING but UNHEALTHY — run:
+    # openclaw gateway restart" — restart advice for CPU contention that a restart
+    # cannot fix.  The discriminator is the gateway's own liveness warning, logged
+    # AFTER the 'ready' that proves it is serving.  The warning line is verbatim.
+    __so_test_prelude
+    journalctl() {
+        printf '%s\n' \
+            '2026-09-30T09:44:11.000+01:00 [gateway] ready' \
+            '2026-09-30T09:46:46.030+01:00 [diagnostic] liveness warning: reasons=cpu interval=2s degradedFor=223s eventLoopDelayP99Ms=707.3 cpuCoreRatio=1.851 active=0 waiting=0 queued=0'
+    }
+
+    run so
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"CPU-DEGRADED"* ]]
+    [[ "$output" == *"do NOT restart"* ]]
+    [[ "$output" == *"degradedFor=223s"* ]]
+    [[ "$output" == *"eventLoopDelayP99Ms=707.3"* ]]
+    # Not the unable-to-answer row, and not the remedy a restart spiral starts with.
+    [[ "$output" != *"UNHEALTHY"* ]]
+    [[ "$output" != *"openclaw gateway restart"* ]]
+    # The whole point of reading the log first: this row cost no probe at all.
+    [ ! -e "$TAC_TEST_TMPDIR/probe-ran" ]
+}
+
+@test "so: a liveness warning outside the short window is not read as degraded" {
+    # The classifier's window is 15 min, so without a recency bound a warning from
+    # 14 min ago would keep reporting a gateway that has since recovered as degraded
+    # for the rest of that window.  The stub answers by argument: the classification
+    # sees 'ready' plus an old warning, the recency read sees no warning at all.
+    __so_test_prelude
+    journalctl() {
+        case "$*" in
+            *"-3 min"*) return 0 ;;
+            *) printf '%s\n' \
+                '2026-09-30T09:32:11.000+01:00 [gateway] ready' \
+                '2026-09-30T09:33:46.030+01:00 [diagnostic] liveness warning: reasons=cpu interval=2s degradedFor=223s eventLoopDelayP99Ms=707.3' ;;
+        esac
+    }
+
+    run so
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"RUNNING but UNHEALTHY"* ]]
+    [ -e "$TAC_TEST_TMPDIR/probe-ran" ]     # the probe had to answer it
+}
+
+@test "so: a degraded gateway that booted long ago is still read as degraded" {
+    # The window is 15 min, so a gateway up for hours has no 'ready' line left inside
+    # it.  Requiring "serving" on that line alone would make this verdict fire only
+    # shortly after a boot — the opposite of the case that matters, since a box under
+    # batch load stays degraded for hours.  The witness is a completed client request
+    # instead: the real line carries the gateway's two glyph markers between '[ws]' and
+    # 'res', which the pattern skips with a one-character wildcard, so the stub stands a
+    # '~' in for them.
+    __so_test_prelude
+    journalctl() {
+        printf '%s\n' \
+            '2026-09-30T10:20:11.000+01:00 [ws] ~ res ok projects.list 33017ms conn=abc123 id=15' \
+            '2026-09-30T10:20:46.030+01:00 [diagnostic] liveness warning: reasons=cpu interval=2s degradedFor=612s eventLoopDelayP99Ms=707.3 active=0 waiting=0 queued=0'
+    }
+
+    run so
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"CPU-DEGRADED"* ]]
+    [[ "$output" != *"openclaw gateway restart"* ]]
+    [ ! -e "$TAC_TEST_TMPDIR/probe-ran" ]
 }
 
 @test "xo: a gateway still active after the stop is not reported TERMINATED" {
@@ -354,6 +434,11 @@ __so_test_prelude() {
     export SO_HEALTH_TIMEOUT=1
     __test_port() { return 0; }        # the port answers: the already-running branch
     __so_ensure_shell_env() { return 0; }
+    # Prints NOTHING on purpose.  The journal is read BEFORE the probe now, so a real
+    # journalctl here would decide the row and this case would assert the probe path
+    # while never reaching it — green on a box with a running gateway, differently
+    # branched without one.  That divergence is what this case was fixed for once.
+    journalctl() { return 0; }
     # An EXECUTABLE stub, NOT a shell function: `timeout` execs its argument, so a
     # function is never reached.  That is why this case was green here and RED in CI —
     # locally the probe hit the REAL `openclaw` (3.0-4.6 s) and timed out at 1 s, while

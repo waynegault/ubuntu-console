@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 22
+# Module Version: 23
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -576,30 +576,59 @@ function __so_ensure_shell_env() {
 #              which shellcheck reports as SC2221/SC2222)
 #   starting — 'loading configuration…' through 'starting channels and sidecars…'
 #   running  — 'http server listening …', and the bare 'ready' line
+#   degraded — a '[diagnostic] liveness warning' logged while the gateway is
+#              PROVEN to be serving: either its newest lifecycle line is
+#              'ready'/'http server listening', or its log carries a completed
+#              client request ('[ws] … res').  Its event loop is behind
+#              (reasons=…, degradedFor=…).  The probe cannot report this as
+#              anything but "unhealthy" — measured 2026-09-30, the gateway's own
+#              health RPC completed at 32764ms, so the gateway was answering and
+#              slow, and the row told the operator to restart a working gateway
+#              over CPU contention.
 # ---------------------------------------------------------------------------
 function __so_gateway_phase() {
-    local _svc="$1" _line=""
+    local _svc="$1" _line="" _phase="unknown" _degraded="" _serving=0
     # A 15-minute window covers the worst case this exists to distinguish: the
-    # full 315s drain plus a 2-4 min cold start.  Only consulted once the health
-    # probe has failed, so an idle healthy gateway never reaches here.
-    _line=$(journalctl --user -u "$_svc" --since '-15 min' --no-pager --output=cat 2>/dev/null \
-        | grep -E '\[gateway\] (received SIGTERM|draining active work|active-work drain|shutdown deadline reached|shutdown budget at|loading configuration|resolving authentication|starting\.\.\.|spawn broker ready|starting HTTP server|starting channels and sidecars|http server listening|ready$)' \
-        | tail -n 1) || _line=""
+    # full 315s drain plus a 2-4 min cold start.  The scan runs BEFORE the health
+    # probe: it costs ~65 ms against the probe's 14+ s, and it is the only signal
+    # that can name a drain, a cold start or a degraded-but-serving gateway — the
+    # probe answers all three with the same "did the handshake complete".
+    local _pat='\[gateway\] (received SIGTERM|draining active work|active-work drain'
+    _pat+='|shutdown deadline reached|shutdown budget at|loading configuration'
+    _pat+='|resolving authentication|starting\.\.\.|spawn broker ready|starting HTTP server'
+    _pat+='|starting channels and sidecars|http server listening|ready$)'
+    _pat+='|\[diagnostic\] liveness warning|\[ws\] . res'
+    while IFS= read -r _line
+    do
+        case "$_line" in
+            *"received SIGTERM"*|*"draining active work"*|*"active-work drain"*|*"shutdown deadline reached"*|*"shutdown budget at shutdown"*)
+                _phase="draining"; _degraded=""; _serving=0 ;;
+            *"loading configuration"*|*"resolving authentication"*|*"starting..."*|*"shutdown budget at startup"*|*"spawn broker ready"*|*"starting HTTP server"*|*"starting channels and sidecars"*)
+                _phase="starting"; _degraded=""; _serving=0 ;;
+            *"http server listening"*|*"[gateway] ready"*)
+                _phase="running"; _degraded=""; _serving=1 ;;
+            *" res "*)
+                # '[ws] ⇄ res ✓ <method> <ms>' — a COMPLETED client request, matched on
+                # its ASCII shape ('[ws] . res').  It is the only in-log proof that the
+                # protocol layer ANSWERS, and it is load-bearing twice: it keeps the
+                # degraded verdict working on a gateway that booted more than a window
+                # ago (its 'ready' line is long gone), and it keeps that verdict OFF a
+                # wedged gateway, where nothing completes.
+                _serving=1 ;;
+            *"[diagnostic] liveness warning"*)
+                # Only meaningful while the gateway is SERVING: a warning logged during
+                # a cold start is that start being slow, not a serving gateway degraded.
+                [[ "$_serving" == "1" ]] && _degraded="$_line" ;;
+        esac
+    done < <(journalctl --user -u "$_svc" --since '-15 min' --no-pager --output=cat 2>/dev/null \
+        | grep -E "$_pat")
 
-    case "$_line" in
-        *"received SIGTERM"*|*"draining active work"*|*"active-work drain"*|*"shutdown deadline reached"*|*"shutdown budget at shutdown"*)
-            printf 'draining\n'
-            ;;
-        *"loading configuration"*|*"resolving authentication"*|*"starting..."*|*"shutdown budget at startup"*|*"spawn broker ready"*|*"starting HTTP server"*|*"starting channels and sidecars"*)
-            printf 'starting\n'
-            ;;
-        *"http server listening"*|*"[gateway] ready"*)
-            printf 'running\n'
-            ;;
-        *)
-            printf 'unknown\n'
-            ;;
-    esac
+    if [[ -n "$_degraded" ]]
+    then
+        printf 'degraded\n'
+        return 0
+    fi
+    printf '%s\n' "$_phase"
 }
 
 # ---------------------------------------------------------------------------
@@ -612,33 +641,27 @@ function __so_gateway_phase() {
 # health` 3.0-4.6 s, `openclaw gateway status` 15.2 s.  The old `timeout 5` therefore
 # expired on a working gateway, and `so` then named `openclaw gateway restart` — the
 # action that re-enters the drain window (2026-09-22: three restarts inside 8 minutes
-# became a 15.5-minute outage).  20 s is better than 4x the measured range;
-# SO_HEALTH_TIMEOUT lowers it for a test.
+# became a 15.5-minute outage).  SO_HEALTH_TIMEOUT is the hard net around the whole
+# probe (20 s).  The CLI additionally gets --timeout, because it retries 3 times and
+# its own default (10000 ms) therefore costs 34.6 s measured — past the net, so a
+# silent gateway was killed at 20 s with rc 124: `so` paid the whole budget and
+# reported NO verdict.  A per-attempt 3 s lets all three attempts finish inside the
+# net (measured 14.5 s; 12.5 s at 1 s), so the same wait yields a real answer.
+#
+# The order is the other half.  The gateway's own journal costs ~65 ms and names the
+# three states a probe cannot — drain, cold start, degraded-but-serving — so it is
+# read FIRST.  Only 'running' (the log claims to serve) or 'unknown' (the log says
+# nothing) still needs the handshake, and only those two pay the probe's seconds.
 #
 # `timeout` exits 124 when IT killed the probe: that says "too slow to answer", which
 # is NOT "unhealthy" — and the two used to be reported identically, restart included.
 # ---------------------------------------------------------------------------
 function __so_health_gate() {
     local _svc="$1"
-    local _probe_timeout="${SO_HEALTH_TIMEOUT:-20}" _rc=0
-
-    timeout "$_probe_timeout" openclaw gateway health >/dev/null 2>&1 || _rc=$?
-    (( _rc == 0 )) && return 0
-
-    if (( _rc == 124 ))
-    then
-        __tac_info "Gateway" "[HEALTH PROBE TIMED OUT after ${_probe_timeout}s]" "$C_Warning"
-        printf '%s\n' "  ${C_Dim}That is NOT a health verdict — the probe did not answer in${C_Reset}"
-        printf '%s\n' "  ${C_Dim}budget (measured 3.0-4.6 s when healthy, so a loaded box${C_Reset}"
-        printf '%s\n' "  ${C_Dim}can exceed it). Re-run 'openclaw gateway health', or watch${C_Reset}"
-        printf '%s\n' "  ${C_Dim}it with 'le' — do NOT restart on this alone.${C_Reset}"
-        return 1
-    fi
-
-    # A drain or a cold start fails this probe too, and naming a restart for those
-    # re-enters the very window that failed it.  Ask the gateway's log which it is.
+    local _probe_timeout="${SO_HEALTH_TIMEOUT:-20}" _rpc_ms="${SO_HEALTH_RPC_MS:-3000}" _rc=0
     local _phase
     _phase=$(__so_gateway_phase "$_svc")
+
     if [[ "$_phase" == "draining" ]]
     then
         __tac_info "Gateway" "[RESTARTING — drain in progress, do NOT restart]" "$C_Warning"
@@ -653,6 +676,48 @@ function __so_health_gate() {
         __tac_info "Gateway" "[STARTING — port bound, not serving yet]" "$C_Warning"
         printf '%s\n' "  ${C_Dim}Cold start is 2-4 min (per-agent SQLite validation runs${C_Reset}"
         printf '%s\n' "  ${C_Dim}before the HTTP server serves). Wait — do not restart.${C_Reset}"
+        return 1
+    fi
+    if [[ "$_phase" == "degraded" ]]
+    then
+        # Recency-bounded on purpose: the classifier's window is 15 min, so a warning
+        # from 14 min ago would otherwise keep reporting a gateway that has since
+        # recovered as degraded for the rest of that window.  This read takes the
+        # row's numbers too, so the operator sees what the gateway said about itself.
+        local _deg=""
+        # swallow-ok: an unreadable journal is not evidence of health — an empty read falls through to the probe below, which answers the serving question itself
+        _deg=$(journalctl --user -u "$_svc" --since "-${SO_DEGRADED_MIN:-3} min" --no-pager --output=cat 2>/dev/null \
+            | grep '\[diagnostic\] liveness warning' | tail -n 1 \
+            | grep -oE 'reasons=[a-z_,]+|degradedFor=[0-9]+s|eventLoopDelayP99Ms=[0-9.]+|cpuCoreRatio=[0-9.]+' \
+            | tr '\n' ' ')
+        _deg="${_deg% }"
+        if [[ -n "$_deg" ]]
+        then
+            __tac_info "Gateway" "[RUNNING but CPU-DEGRADED — do NOT restart]" "$C_Warning"
+            printf '%s\n' "  ${C_Dim}Its log shows completed client requests, but the${C_Reset}"
+            printf '%s\n' "  ${C_Dim}gateway's own liveness warning reports a behind-schedule${C_Reset}"
+            printf '%s\n' "  ${C_Dim}event loop: ${_deg}${C_Reset}"
+            printf '%s\n' "  ${C_Dim}A restart does not free CPU, and re-entering the restart${C_Reset}"
+            printf '%s\n' "  ${C_Dim}window is what turned one restart into 15.5 min of outage${C_Reset}"
+            printf '%s\n' "  ${C_Dim}(2026-09-22). Find the consumer instead:${C_Reset}"
+            printf '%s\n' "  ${C_Dim}ps -eo pcpu,pid,comm --sort=-pcpu | head -8${C_Reset}"
+            return 1
+        fi
+    fi
+
+    # 'running' or 'unknown': the log claims to serve, or says nothing, so only the
+    # handshake answers it.  A drain or a cold start never reaches here — which is
+    # what keeps the restart advice off the two states that a restart would deepen.
+    timeout "$_probe_timeout" openclaw gateway health --timeout "$_rpc_ms" >/dev/null 2>&1 || _rc=$?
+    (( _rc == 0 )) && return 0
+
+    if (( _rc == 124 ))
+    then
+        __tac_info "Gateway" "[HEALTH PROBE TIMED OUT after ${_probe_timeout}s]" "$C_Warning"
+        printf '%s\n' "  ${C_Dim}That is NOT a health verdict — the probe did not answer in${C_Reset}"
+        printf '%s\n' "  ${C_Dim}budget (measured 3.0-4.6 s when healthy, so a loaded box${C_Reset}"
+        printf '%s\n' "  ${C_Dim}can exceed it). Re-run 'openclaw gateway health', or watch${C_Reset}"
+        printf '%s\n' "  ${C_Dim}it with 'le' — do NOT restart on this alone.${C_Reset}"
         return 1
     fi
     __tac_info "Gateway" "[RUNNING but UNHEALTHY — run: openclaw gateway restart]" "$C_Warning"

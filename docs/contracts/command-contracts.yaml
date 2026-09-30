@@ -161,8 +161,8 @@ commands:
   - name: so
     family: openclaw
     summary: Start OpenClaw gateway with dependency checks
-    version: 3
-    updated: 2026-09-28
+    version: 4
+    updated: 2026-09-30
     status: active
     scope: both
     effect: mutate
@@ -173,6 +173,8 @@ commands:
     verified_by:
       - "tests/unit/02-so-startup.bats::so: a start that does not leave the gateway serving is FAILURE, not success"
       - "tests/unit/02-so-startup.bats::so: __oc_gateway_started needs BOTH the unit active and the port answering"
+      - "tests/unit/02-so-startup.bats::so: a serving but CPU-degraded gateway is reported DEGRADED, never told to restart"
+      - "tests/unit/02-so-startup.bats::so: a liveness warning outside the short window is not read as degraded"
     contract:
       side_effects:
         - interacts with systemd user services
