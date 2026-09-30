@@ -9,7 +9,7 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
 #   v17 (2026-09-30): `oc health` also reports whether the VS Code Testing results
 #   logger is still wired — the Python extension's pytest wrapper is patched to record
 #   every run, and an extension update replaces it and reverts the patch silently
@@ -1127,8 +1127,12 @@ function oc-doctor-local() {
 
     [[ "$__TAC_OPENCLAW_OK" == "1" ]] || openclaw_installed=0
     __test_port "$OC_PORT" && gateway_port=1
-    __test_port "$LLM_PORT" && llm_port=1
-    __llm_is_healthy && llm_health=1
+    # The PRODUCTION lane is LLM_SERVICE_PORT (llama-xe-minicpm5-1b-chat on 18081).
+    # LLM_PORT (8081) is the SCRATCH port that `so` loads a duplicate on, so it is
+    # closed whenever the production lane is doing the work — checking it here reported
+    # a perfectly healthy local stack as two failures (measured 2026-09-30).
+    __test_port "$LLM_SERVICE_PORT" && llm_port=1
+    __llm_is_healthy "$LLM_SERVICE_PORT" && llm_health=1
     [[ -f "$TAC_CACHE_DIR/tac_win_api_keys" ]] && key_cache=1
     [[ -f "$OC_ROOT/openclaw.json" ]] && oc_config=1
 
@@ -1149,7 +1153,11 @@ function oc-doctor-local() {
         # .checks[] forced gateway_health to "unknown" (a spurious issue) on
         # hosts without the enhanced checker.
         local api_health_status=""
-        api_health_status=$(jq -r '((.checks[]? | select(.name == "API Health") | .status) // .health_status) // empty' <<< "$_oc_health_json" 2>/dev/null || true)
+        # The emitter names this check `gateway_health`; `API Health` is the OLD name and
+        # no longer matches, so a live gateway fell through to "unknown" and counted as an
+        # issue (measured 2026-09-30: oc-health --json reports gateway_health=ok,
+        # "gateway health: live"). Accept both names.
+        api_health_status=$(jq -r '((.checks[]? | select(.name == "gateway_health" or .name == "API Health") | .status) // .health_status) // empty' <<< "$_oc_health_json" 2>/dev/null || true)
         if [[ "$api_health_status" == "OK" || "$api_health_status" == "ok" ]]
         then
             gateway_health="ok"
@@ -1157,8 +1165,13 @@ function oc-doctor-local() {
             gateway_health="unknown"
         fi
         local provider_json=""
-        provider_json=$(openclaw config get models.providers.local-llama 2>/dev/null || true)
-        if [[ -n "$provider_json" && "$provider_json" != "null" && "$provider_json" == *"127.0.0.1:${LLM_PORT}"* ]]
+        # ANY configured provider may serve the production lane: this fleet's is
+        # xe-minicpm5-1b (18081), while `local-llama` — the old single-lane id, pointed at
+        # the SCRATCH port — is not configured at all, so the old check could never pass
+        # (measured 2026-09-30). Ask whether SOME provider points at the production port
+        # rather than requiring one fixed id.
+        provider_json=$(openclaw config get models.providers 2>/dev/null || true)
+        if [[ -n "$provider_json" && "$provider_json" != "null" && "$provider_json" == *"127.0.0.1:${LLM_SERVICE_PORT}"* ]]
         then
             model_sync=1
         fi
@@ -1217,7 +1230,7 @@ function oc-doctor-local() {
     local gateway_health_color="$C_Warning"
     [[ "$gateway_health" == "ok" || "$gateway_health" == "healthy" ]] && gateway_health_color="$C_Success"
     __tac_info "Gateway Health" "[${gateway_health^^}]" "$gateway_health_color"
-    __tac_info "LLM Port" "[$([[ $llm_port -eq 1 ]] && echo LISTENING || echo CLOSED)]" \
+    __tac_info "LLM Port" "[$([[ $llm_port -eq 1 ]] && echo LISTENING || echo CLOSED) :${LLM_SERVICE_PORT}]" \
         "$([[ $llm_port -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Error")"
     __tac_info "LLM Health" "[$([[ $llm_health -eq 1 ]] && echo OK || echo OFFLINE_OR_LOADING)]" \
         "$([[ $llm_health -eq 1 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"

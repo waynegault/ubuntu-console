@@ -7,7 +7,7 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 37
+# Module Version: 38
 #   v37 (2026-09-27): __oc_inject_manager_env no longer records a manager-env push it
 #   could not make. The hash/set markers are what make the next refresh a no-op, so
 #   writing them after a failed `systemctl --user set-environment` silently ended the
@@ -453,22 +453,147 @@ function ockeys() {
 }
 
 # ---------------------------------------------------------------------------
-# ocdoc-fix — Run openclaw doctor --fix with automatic config backup.
+# ocdoc-fix — Run openclaw doctor --fix inside a REAL window, and undo what it writes.
 # ---------------------------------------------------------------------------
+# WHY A WINDOW (measured 2026-09-30).  `openclaw doctor --fix` cannot enter maintenance
+# while the Gateway owns state/openclaw.sqlite (GatewayStateOwnerContentionError), so the
+# Gateway must be STOPPED first.  A bare `systemctl --user stop` is NOT enough on this
+# host: an unclean drain exits 1, which trips OnFailure=openclaw-gateway-guard.service and
+# revives the Gateway in ~60 ms (measured — it flapped ~9x during the 2026.9.7 window), so
+# the guard's own dead-man switch ~/.openclaw/.gateway-hold is armed FIRST and the stop
+# goes through the console's canonical wrapper so it is VERIFIED, not assumed.
+#
+# WHY IT UNDOES THINGS (measured 2026-09-30 — the reason this function is not just a call).
+# With a window, doctor's "update gateway service config to the recommended defaults?"
+# step answers YES by itself (no TTY needed) and:
+#   * REPLACES the managed unit (backing it up to openclaw-gateway.service.bak), reordering
+#     it and SHORTENING OPENCLAW_SERVICE_MANAGED_ENV_KEYS;
+#   * writes gateway.auth.token into openclaw.json IN PLAINTEXT — and that file is TRACKED,
+#     so the next fleet sync would commit and push the secret;
+#   * can still end in "Doctor could not complete maintenance" + a
+#     GatewayServiceUpdateOwnershipError.
+# So the unit and the config are snapshotted first and restored after if doctor changed
+# them, and the plaintext-secret case is caught with doctor's own audit.
 function ocdoc-fix() {
     local cfg="$OC_ROOT/openclaw.json"
     local bak="${cfg}.pre-doctor"
+    local unit="$HOME/.config/systemd/user/openclaw-gateway.service"
+    local hold="$OC_ROOT/.gateway-hold"
+    local snapdir="$OC_ROOT/state/pre-doctor-snapshot"
+    local unit_before="" rc=0 stop_out=""
+
+    printf '\n%soc doc-fix%s - running %sopenclaw doctor --fix%s in a Gateway window\n' \
+        "$C_Highlight" "$C_Reset" "$C_Text" "$C_Reset"
+    printf '%s\n' "${C_Dim}  doctor needs the state DB to itself, so the Gateway stops for the duration."
+    printf '%s\n' "  The unit and the config are snapshotted first, and anything doctor rewrites is put"
+    printf '%s\n' "  back afterwards.${C_Reset}"
+
+    # 1. snapshot — doctor rewrites BOTH of these.
+    mkdir -p "$snapdir"
     if [[ -f "$cfg" ]]
     then
         cp "$cfg" "$bak"
-        __tac_info "Config Backup" "[SAVED → $(basename "$bak")]" "$C_Success"
+        cp "$cfg" "$snapdir/openclaw.json"
+        printf '  %sConfig backed up%s -> %s\n' "$C_Text" "$C_Reset" "${bak/#$HOME/~}"
     fi
-    openclaw doctor --fix
-    if [[ -f "$bak" && -f "$cfg" ]]
+    if [[ -f "$unit" ]]
     then
-        printf '%s\n' "${C_Dim}If settings were overwritten, restore with:${C_Reset}"
-        printf '%s\n' "  ${C_Highlight}cp $bak $cfg${C_Reset}"
+        cp "$unit" "$snapdir/openclaw-gateway.service"
+        unit_before="$(sha256sum "$unit" | cut -d' ' -f1)"
     fi
+
+    # 2. the window: hold the guard, then stop the Gateway (verified).
+    # The wrapper's own pre-flight output is captured rather than streamed: it is useful
+    # when the stop does NOT go clean, and noise when it does.
+    systemctl --user set-environment OPENCLAW_GUARD_HOLD_MAX_AGE=3600
+    : > "$hold"
+    printf '  %sStopping the Gateway%s (doctor needs the state DB) ...\n' "$C_Text" "$C_Reset"
+    if [[ -x "$OC_ROOT/.venv/bin/python3" && -f "$OC_ROOT/workspace/scripts/safe-stop-gateway.py" ]]
+    then
+        stop_out="$("$OC_ROOT/.venv/bin/python3" "$OC_ROOT/workspace/scripts/safe-stop-gateway.py" --yes --force 2>&1)"
+    else
+        stop_out="$(systemctl --user stop openclaw-gateway.service 2>&1)"
+    fi
+    if systemctl --user is-active --quiet openclaw-gateway.service
+    then
+        printf '  %sThe Gateway is still active%s, so doctor will refuse. The stop said:\n' "$C_Warning" "$C_Reset"
+        printf '%s\n' "$stop_out"
+    else
+        printf '  %sGateway stopped%s - verified\n' "$C_Success" "$C_Reset"
+    fi
+
+    # 3. run it.
+    printf '  %sRunning doctor --fix%s - this can take a few minutes ...\n' "$C_Text" "$C_Reset"
+    # `--force` is documented as "(with --fix, preserves service definitions)", and preserving the
+    # service definition is the whole point here. Measured 2026-09-30 on this host: an INTERACTIVE
+    # run takes doctor's "update gateway service config to the recommended defaults now?" step
+    # (its prompt defaults to Yes), which rewrites the managed unit — persisting gateway.auth.token
+    # into openclaw.json as PLAINTEXT — and then fails to restore the Gateway because the drop-ins
+    # still override the definition it installed (GatewayServiceUpdateOwnershipError). A
+    # NON-interactive run skips that step and completes rc=0. We do not want that step: our unit's
+    # behaviour lives in drop-ins on purpose, and doctor's version would replace it.
+    # The cost of --force, stated: it also permits doctor's other aggressive repair choices.
+    openclaw doctor --fix --force
+    rc=$?
+
+    # 4. undo what doctor wrote, then VERIFY the undo actually holds — the containment is
+    #    this function's OWN contract, so it is proved rather than assumed.
+    local contained=1
+    if [[ -n "$unit_before" && -f "$unit" ]]
+    then
+        if [[ "$(sha256sum "$unit" | cut -d' ' -f1)" != "$unit_before" ]]
+        then
+            cp "$snapdir/openclaw-gateway.service" "$unit"
+            systemctl --user daemon-reload
+            printf '  %sPut the gateway unit back%s - doctor had replaced it\n' "$C_Warning" "$C_Reset"
+        fi
+        if [[ "$(sha256sum "$unit" | cut -d' ' -f1)" != "$unit_before" ]]
+        then
+            contained=0
+            printf '  %sCONTAINMENT FAILED%s - the gateway unit still differs; snapshot is at %s\n' \
+                "$C_Error" "$C_Reset" "$snapdir"
+        fi
+    fi
+    if [[ -f "$cfg" && -f "$bak" ]] && ! diff -q "$bak" "$cfg"
+    then
+        if ! openclaw secrets audit --check
+        then
+            cp "$bak" "$cfg"
+            printf '  %sReverted the config%s - doctor had written a plaintext secret into openclaw.json\n' \
+                "$C_Warning" "$C_Reset"
+        else
+            printf '  %sThe config changed%s - worth a look: %s\n' "$C_Warning" "$C_Reset" "${bak/#$HOME/~}"
+        fi
+    fi
+    if ! openclaw secrets audit --check
+    then
+        contained=0
+        printf '  %sCONTAINMENT FAILED%s - a plaintext secret is still in the config\n' "$C_Error" "$C_Reset"
+    fi
+
+    # 5. leave the window.
+    rm -f "$hold"
+    systemctl --user unset-environment OPENCLAW_GUARD_HOLD_MAX_AGE
+    systemctl --user start openclaw-gateway.service
+    if (( contained == 0 ))
+    then
+        printf '  %sGateway restarted%s - but the window did NOT contain doctor; see the lines above.\n\n' \
+            "$C_Error" "$C_Reset"
+        return 1
+    fi
+    # The exit code reports THIS function's contract: the Gateway was stopped, doctor ran,
+    # and whatever it wrote was put back and verified.  doctor's own rc is doctor's — on
+    # this host its repair always ends at GatewayServiceUpdateOwnershipError, so returning
+    # that would make a correctly-contained run read as a failure every single time.
+    if (( rc == 0 ))
+    then
+        printf '  %sGateway restarted%s - doctor finished cleanly; run %soc gs%s to re-check.\n\n' \
+            "$C_Success" "$C_Reset" "$C_Text" "$C_Reset"
+    else
+        printf '  %sGateway restarted%s - window clean; doctor itself exited %s%d%s (its repair fails on this host).\n\n' \
+            "$C_Warning" "$C_Reset" "$C_Text" "$rc" "$C_Reset"
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------

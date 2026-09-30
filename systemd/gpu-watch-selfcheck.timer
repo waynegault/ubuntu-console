@@ -3,12 +3,15 @@ Description=GPU Passthrough Watch automation self-check Timer
 Requires=gpu-watch-selfcheck.service
 
 [Timer]
-# HOURLY.  The checker's own bound (twice the automation's schedule period, so
-# 30 min) decides when a recorded run counts as STALE; this interval decides how
-# long a STOPPED schedule goes unnoticed, so an hourly probe means at most ~1h of
-# silence.  RandomizedDelaySec keeps the probe off the automation's own 15-minute
-# tick: a check running in lockstep with its subject shares the failure it exists
-# to catch.
+# HOURLY.  The checker's own bound decides when a recorded run counts as STALE: the
+# larger of twice the automation's schedule period and a 2 h MAINTENANCE-WINDOW FLOOR
+# (so 7200 s for this 15-minute automation, which is the floor).  This interval decides
+# how long a STOPPED schedule goes unnoticed, so an hourly probe means at most ~1 h of
+# silence on top of the bound — the deliberate trade for not reporting a planned
+# maintenance window as a fault (2026-09-30: a 33-minute window left a 45-minute gap
+# that the old 1800 s bound announced as "stale").  RandomizedDelaySec keeps the probe
+# off the automation's own 15-minute tick: a check running in lockstep with its subject
+# shares the failure it exists to catch.
 OnUnitActiveSec=1h
 OnBootSec=10min
 RandomizedDelaySec=5m

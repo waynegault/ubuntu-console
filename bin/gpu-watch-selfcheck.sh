@@ -30,10 +30,16 @@
 #   A missing or zero lastRunAtMs is an ALARM.  It is the case this exists for:
 #   everything looks configured and nothing runs.
 #
-# STALENESS BOUND: twice the automation's own schedule period when the JSON carries
-# one (schedule.everyMs), else 3600 s.  Twice, not once, because one missed period is
-# a hiccup and one in three runs still sees the watcher; a bound of one period would
-# report every slow tick as an outage.
+# STALENESS BOUND: the LARGER of twice the automation's own schedule period (from
+# schedule.everyMs) and a MAINTENANCE-WINDOW FLOOR of 7200 s (2 h).  Twice the period,
+# not once, because one missed period is a hiccup and one in three runs still sees the
+# watcher.  The floor exists because a PLANNED Gateway outage stops this automation for
+# as long as the window runs: measured 2026-09-30, a 33-minute maintenance window left a
+# 45-minute run gap (13:57:07 -> 14:42:05 BST) that tripped the old 1800 s bound and
+# self-cleared on the catch-up run — i.e. the bound reported a planned outage as a
+# fault, the exact false alarm this file exists to avoid.  A longer-period automation
+# still gets its proportional (larger) bound.  GPU_WATCH_SELFCHECK_MAX_AGE_S overrides
+# both.
 #
 # READ-ONLY: this script reads the automation's state and prints a verdict.  It never
 # starts, stops, enables or re-arms anything — repair is a human decision.
@@ -71,11 +77,18 @@
 #                                     (default ~/.cache/gpu-watch-selfcheck.state)
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
 #   v3 (2026-09-24): --announce's exit code carries the verdict (Wayne's call), so the
 #   automation's run status reads ok only while the watcher is healthy.  The message
 #   stays transition-only; the status now reports the checked state, not just that the
 #   command ran.
+#   v4 (2026-09-30): (a) the staleness bound gains a 2 h maintenance-window FLOOR — a
+#   planned Gateway outage stops this automation for the length of the window, and the
+#   old 2 x period bound (1800 s) reported every window as a fault (measured across the
+#   14:04-14:37 BST outage: a 45 min gap, self-cleared at 14:42:05); (b) the alarm's
+#   "Why this matters" premise is CORRECTED — passthrough has a second, Gateway-
+#   independent detector (openclaw-gpu-passthrough-watch.timer), so a pause here
+#   silences the ANNOUNCEMENT, it does not stop the check.
 set -uo pipefail
 
 OPENCLAW="${GPU_WATCH_SELFCHECK_OPENCLAW:-openclaw}"
@@ -109,19 +122,21 @@ json_bool() {
     printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" | head -1
 }
 
-# max_age_seconds <every_ms> — the staleness bound: two schedule periods when the
-# JSON carries a period, else 3600 s.  An explicit override wins over both.
+# max_age_seconds <every_ms> — the staleness bound: the larger of two schedule periods
+# and the maintenance-window floor.  An explicit override wins over both.
+SELFCHECK_MAX_AGE_FLOOR_S=7200
 max_age_seconds() {
     local _every_ms="$1" _override="${GPU_WATCH_SELFCHECK_MAX_AGE_S:-}"
+    local _bound="$SELFCHECK_MAX_AGE_FLOOR_S"
     if [[ "$_override" =~ ^[0-9]+$ ]] && (( _override > 0 )); then
         printf '%s\n' "$_override"
         return 0
     fi
-    if [[ "$_every_ms" =~ ^[0-9]+$ ]] && (( _every_ms > 0 )); then
-        printf '%s\n' "$(( _every_ms / 1000 * 2 ))"
-        return 0
+    if [[ "$_every_ms" =~ ^[0-9]+$ ]] && (( _every_ms > 0 )) \
+        && (( _every_ms / 1000 * 2 > _bound )); then
+        _bound=$(( _every_ms / 1000 * 2 ))
     fi
-    printf '%s\n' "3600"
+    printf '%s\n' "$_bound"
 }
 
 # verdict_json <state> <detail> <name> <status> <age_s> <max_age_s> — an age that
@@ -236,8 +251,10 @@ write_state() {
 alarm_text() {
     printf '%s\n' "WARNING: GPU Passthrough Watch automation self-check: $1"
     printf '%s\n' "$2"
-    printf '%s\n' "Why this matters: this automation is what fires the GPU-passthrough watcher,"
-    printf '%s\n' "so while it is not running, a lost CUDA-card passthrough is not detected or announced."
+    printf '%s\n' "Why this matters: this automation is the CRON path that fires the GPU-passthrough"
+    printf '%s\n' "watcher and ANNOUNCES a change. Passthrough is still checked independently by the"
+    printf '%s\n' "systemd timer openclaw-gpu-passthrough-watch.timer (~10 min, Gateway-independent),"
+    printf '%s\n' "so a pause here means the alert path went quiet — the check itself did not stop."
     printf '%s\n' "Automation: ${3:-unknown} (${AUTOMATION_ID})  lastRunStatus=${4:-unknown}"
     printf '%s\n' "Inspect: ${OPENCLAW} automations get ${AUTOMATION_ID} --json"
 }
@@ -280,7 +297,7 @@ exit_code_for() {
 
 case "$MODE" in
     --version|-V)
-        echo "gpu-watch-selfcheck 3"
+        echo "gpu-watch-selfcheck 4"
         exit 0
         ;;
     --json|--announce|"") ;;

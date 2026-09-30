@@ -2,7 +2,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 22
+# Module Version: 23
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -601,7 +601,7 @@ function tactical_help() {
         __hRow "oc env" "Show OpenClaw environment vars"
         __hRow "oc keys" "List Windows API keys bridged"
         __hRow "oc ms" "Probe model provider endpoints"
-        __hRow "oc doc-fix" "Run openclaw doctor --fix"
+        __hRow "oc doc-fix" "Run doctor --fix in a Gateway window"
         __hRow "oc logs" "Open runtime log in VS Code"
         __hRow "le" "40-line log tail"
         __hRow "lo" "120-line full log"

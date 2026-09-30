@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11c-llm-server ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
 # ==============================================================================
 # 11c-llm-server — LLM server lifecycle, health, Python resolution
 # ==============================================================================
@@ -81,7 +81,11 @@ function __llm_active_state_recorded() {
 # @returns 0 if the local LLM health endpoint reports ok, 1 otherwise.
 # ---------------------------------------------------------------------------
 function __llm_is_healthy() {
-    __test_port "$LLM_PORT" || return 1
+    # Optional port argument: callers that are not talking about the SCRATCH port
+    # (LLM_PORT, where `so` loads a duplicate) can ask about the PRODUCTION lane
+    # (LLM_SERVICE_PORT).  Default keeps every existing caller unchanged.
+    local _port="${1:-$LLM_PORT}"
+    __test_port "$_port" || return 1
     local health_body models_body
     local health_timeout="${LLM_HEALTH_HTTP_TIMEOUT:-20}"
     # Both probes are POLLED while a server is starting, so curl's own "connection
@@ -89,7 +93,7 @@ function __llm_is_healthy() {
     # that did not answer is this function's "not healthy" ANSWER - but the status is
     # handled here rather than discarded, so nothing is silent about it.
     # swallow-ok: curl's stderr is the same not-healthy answer, repeated once per poll of a starting server; the status is acted on below.
-    if ! health_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$LLM_PORT/health" 2>/dev/null)
+    if ! health_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$_port/health" 2>/dev/null)
     then
         health_body=""
     fi
@@ -98,7 +102,7 @@ function __llm_is_healthy() {
         return 0
     fi
     # swallow-ok: the second acceptance probe, polled the same way as the first for the same reason.
-    if ! models_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$LLM_PORT/v1/models" 2>/dev/null)
+    if ! models_body=$(curl -s --max-time "$health_timeout" "http://127.0.0.1:$_port/v1/models" 2>/dev/null)
     then
         models_body=""
     fi

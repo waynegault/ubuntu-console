@@ -1,5 +1,5 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║ Bash {{VERSION}} HELP INDEX v.150║
+║ Bash {{VERSION}} HELP INDEX v10.360║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║ SYSTEM ║
 ║ m Open Tactical Dashboard with live system stats ║
@@ -47,7 +47,7 @@
 ║ oc env Show OpenClaw environment vars ║
 ║ oc keys List Windows API keys bridged ║
 ║ oc ms Probe model provider endpoints ║
-║ oc doc-fix Run openclaw doctor --fix ║
+║ oc doc-fix Run doctor --fix in a Gateway window ║
 ║ oc logs Open runtime log in VS Code ║
 ║ le 40-line log tail ║
 ║ lo 120-line full log ║
@@ -97,7 +97,7 @@
 ║ wake Lock GPU persistence mode ║
 ║ llm-build [--quick] [--no-pull] ║
 ║ Build/rebuild llama-server with CUDA from source (see║
-║ docs/llama-cpp-build-guide.md) ║
+║ docs/llm.md) ║
 ║ gpu-status NVIDIA GPU: util, VRAM, temp ║
 ║ gpu-check Quick CUDA verification ║
 ║ llmconf Open models.conf in VS Code ║

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # 09c-oc-core
 # ==============================================================================
@@ -133,7 +133,7 @@ function oc() {
         printf '  %-20s %s\n' "env"          "Dump all OC and LLM env variables"
         printf '  %-20s %s\n' "keys"         "List Windows API keys bridged to WSL"
         printf '  %-20s %s\n' "ms"           "Probe model provider endpoints"
-        printf '  %-20s %s\n' "doc-fix"      "Run openclaw doctor --fix with backup"
+        printf '  %-20s %s\n' "doc-fix"      "Run doctor --fix in a Gateway window"
         printf '  %-20s %s\n' "log-dir"      "cd to the OpenClaw logs folder"
         printf '  %-20s %s\n' "logs"         "Open runtime log in VS Code"
         printf '  %-20s %s\n' "sec"          "Deep security audit"

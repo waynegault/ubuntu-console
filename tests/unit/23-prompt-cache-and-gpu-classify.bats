@@ -512,18 +512,26 @@ setup_selfcheck() {
     [[ "$status" -eq 1 ]]
     [[ "$output" == *"no run is recorded at all"* ]]
 
-    # Running but stopped: the last run is far beyond twice the schedule period.
-    _selfcheck_json ok true "$(( now_ms - 5000000 ))" "$(( now_ms - 4000000 ))"
+    # Running but stopped: the last run is far beyond the staleness bound.
+    _selfcheck_json ok true "$(( now_ms - 9000000 ))" "$(( now_ms - 8000000 ))"
     run "$SELFCHECK"
     [[ "$status" -eq 1 ]]
     [[ "$output" == *"schedule has stopped firing"* ]]
 
-    # The bound follows the automation's own period (2 x everyMs), so a 15-minute
-    # schedule is not called stale at 20 minutes.
+    # The bound is max(2 x everyMs, the 7200 s maintenance-window FLOOR), so a 15-minute
+    # schedule gets 7200 s — not 1800 s.
     _selfcheck_json ok true "$(( now_ms - 1200000 ))" "$(( now_ms + 300000 ))"
     run "$SELFCHECK" --json
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *'"max_age_s":1800'* ]]
+    [[ "$output" == *'"max_age_s":7200'* ]]
+
+    # The regression this floor exists for (2026-09-30): a planned Gateway outage left a
+    # 45-minute run gap (2700 s), which the old 1800 s bound reported as "stale" — a
+    # planned outage announced as a fault.  It must NOT alarm.
+    _selfcheck_json ok true "$(( now_ms - 2700000 ))" "$(( now_ms + 300000 ))"
+    run "$SELFCHECK" --json
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *'"state":"ok"'* ]]
 }
 
 @test "gpu-watch-selfcheck: a failed, disabled or unreadable automation is not a green answer" {
