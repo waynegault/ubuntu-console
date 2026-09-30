@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 24
+# Module Version: 25
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
@@ -660,6 +660,12 @@ function __so_gateway_phase() {
 # read FIRST.  Only 'running' (the log claims to serve) or 'unknown' (the log says
 # nothing) still needs the handshake, and only those two pay the probe's seconds.
 #
+# The probe KEEPS its full strength.  A cheaper proof of health was offered — treat a
+# client request that completed within the last N seconds as "serving" — and the owner
+# declined it (Wayne, 2026-09-30), because it can report a gateway healthy moments after
+# it wedged.  Its cost when it does run (seconds against a loaded gateway) is the
+# accepted price of a verdict that can be trusted, not a defect to be tuned away.
+#
 # `timeout` exits 124 when IT killed the probe: that says "too slow to answer", which
 # is NOT "unhealthy" — and the two used to be reported identically, restart included.
 # ---------------------------------------------------------------------------
@@ -708,6 +714,9 @@ function __so_health_gate() {
             printf '%s\n' "  ${C_Dim}window is what turned one restart into 15.5 min of outage${C_Reset}"
             printf '%s\n' "  ${C_Dim}(2026-09-22). Find the consumer instead:${C_Reset}"
             printf '%s\n' "  ${C_Dim}ps -eo pcpu,pid,comm --sort=-pcpu | head -8${C_Reset}"
+            # exit 1 here is DELIBERATE and owner-ratified (Wayne, 2026-09-30): every
+            # non-green row of this command returns 1, so `so && …` does not proceed on a
+            # degraded gateway.  Exiting 0 was offered — the gateway IS up — and declined.
             return 1
         fi
     fi
