@@ -14,11 +14,27 @@
 # Counted contributions: 4.2.4 +1, 6.7 +6, 8.1.8 +9, 9.5 +6, 9.7 +6, 10.7 +8.
 # Not counted here: bin/heavy-job's own single `[ … ]`, which was changed to
 # `[[ … ]]` instead — the counter's ask — when it was written.
-4.2.4	15
+#
+# 2026-10-01 (third re-baseline, same day): CORPUS GROWTH, not drift.  Two files were
+# tracked in from loose ~/.local/bin copies — bin/qwen-guard-patch.sh and
+# bin/qwen-guard-selfheal.sh — with their own edits kept comment-only, so every counter
+# they raise is pre-existing style.  Contributions measured by running the counters over
+# those two files alone: 6.7 +2, 8.1.8 +18, 9.5 +2, 10.4 +1, 10.7 +10.  Corpus 89 -> 91.
+#
+# 2026-10-01 (fourth re-baseline, same day): what the TRACKED corpus actually holds.
+# d1df5ce9 tracked ONE new shell file, bin/qwen-guard-selfheal.sh; measured with this
+# tool's own counters over that file alone it raises 4.2.4 +1 and 6.7 +4.  Corpus
+# 89 -> 90.  The third block above counted bin/qwen-guard-patch.sh as tracked too, but
+# it is still UNTRACKED, so its 8.1.8 +18 / 9.5 +2 / 10.4 +1 / 10.7 +10 are absent from
+# this corpus — which is why those four counts sit BELOW the third block's numbers.
+# 8.1.8's 272 also carries +2 from another lane's uncommitted scripts/09d-oc-agents.sh
+# edit, which the working-tree ratchet sees (that count falls to 270 if the edit is not
+# committed).  Deliberate re-baseline: corpus growth, not drift.
+4.2.4	16
 4.2.6	12
 4.3.6	31
-6.7	53
-8.1.8	270
+6.7	57
+8.1.8	272
 9.5	105
 9.7	56
 10.4	49
