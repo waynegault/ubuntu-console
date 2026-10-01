@@ -1,11 +1,16 @@
 # docs/inspection.md §18.3 count ratchet — see tools/count-ratchet.sh
 # id<TAB>count.  A count may FALL freely; raising one is a deliberate act.
+#
+# 2026-10-01: 8.1.8 +2 and 10.7 +3 are CORPUS GROWTH, not drift — both are the
+# pre-existing style of bin/qwen-memory-index-patch.sh (two >120-char lines, three
+# `echo … >&2` sites), a script that lived only as an unversioned ~/.local/bin copy
+# until it was tracked here.  Deliberate re-baseline for ONE newly added file.
 4.2.4	14
 4.2.6	12
 4.3.6	31
 6.7	46
-8.1.8	259
+8.1.8	261
 9.5	99
 9.7	50
 10.4	49
-10.7	160
+10.7	163
