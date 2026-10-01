@@ -7,7 +7,21 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 41
+# Module Version: 42
+#   v42 (2026-10-01): `ocdoc-fix` STREAMS the delegated window's output while still capturing it
+#   (`tee`) instead of redirecting it into the log and printing nothing until the end.  Measured
+#   2026-10-01 01:51->02:18: doctor archived hal's historical transcripts for 27 minutes and the
+#   command looked hung throughout — the caller saw only its own three header lines and no
+#   progress.  stdin stays /dev/null (the window must not see a TTY) and `rc` is the WINDOW's
+#   status via PIPESTATUS[0], not tee's (and the pipeline is wrapped in `if` so a failing window
+#   cannot abort an errexit caller).
+#   ALSO in v42: the auth-profile keyRef writes the literal provider "default" again.  v41 put the
+#   REAL provider id there on a diagnosis that was WRONG — with it the gateway reported, for every
+#   agent, `[SECRETS_OWNER_UNAVAILABLE] Secret owner account:[<agent db>,"deepseek"] is
+#   configured-unavailable … reason: secret reference was not found` (measured 2026-10-01).  The
+#   same complaint appears with "default", for BOTH the bare and the ":default" ids, so this pass
+#   is not where the deepseek resolution fault lives — the card says so and has been reopened.  The
+#   live stores were reverted to this shape the same night.
 #   v41 (2026-09-30): the auth-profile pass now writes what the CONFIG declares.  Two defects
 #   made a present, valid key resolve as missing (measured 2026-09-30, on Wayne's report):
 #   the keyRef carried the literal provider "default" instead of the real provider id, and
@@ -570,11 +584,20 @@ function ocdoc-fix() {
 
     printf '  %sRunning the window%s (%s) - doctor needs the state DB to itself, so the\n' \
         "$C_Text" "$C_Reset" "${window/#$HOME/~}"
-    printf '  Gateway stops for the duration. This can take several minutes ...\n'
-    printf '  Full output: %s\n' "${wlog/#$HOME/~}"
-    RUN_UPDATE_REPAIR="${OCDOC_FIX_UPDATE_REPAIR:-0}" "$window" </dev/null >"$wlog" 2>&1
-    rc=$?
-    tail -n 30 "$wlog"
+    printf '  Gateway stops for the duration. This can take several minutes; the output\n'
+    printf '  STREAMS below as it goes, and is kept at %s\n' "${wlog/#$HOME/~}"
+    # STREAM as well as capture. The window must still not see a TTY (an interactive doctor
+    # takes its service-config step and rewrites the unit), so stdin stays /dev/null and its
+    # stdout is a pipe — but redirecting to the log ALONE made a 27-minute run look like a dead
+    # command: measured 2026-10-01, doctor archived hal's transcripts (25 s SQLite transactions)
+    # for 27 min and the caller printed nothing until it finished.  `rc` is the WINDOW's status,
+    # not tee's, hence PIPESTATUS[0].
+    if RUN_UPDATE_REPAIR="${OCDOC_FIX_UPDATE_REPAIR:-0}" "$window" </dev/null 2>&1 | tee "$wlog"
+    then
+        rc=0
+    else
+        rc=${PIPESTATUS[0]}   # the WINDOW's status, not tee's — and errexit-safe
+    fi
 
 
     # 4. undo what doctor wrote, then VERIFY the undo actually holds — the containment is
@@ -1007,10 +1030,11 @@ PYEOF
     # These live in per-agent `openclaw-agent.sqlite` tables.
     #
     # Format: <profile-id>:<provider>::<cred-type>::<env-var>
-    # NOTE: the profile's `provider` field must equal the real provider id —
+    # NOTE: the profile's OWN `provider` field must equal the real provider id —
     # the auth resolver matches profiles via cred.provider === providerId
-    # (listProfilesForProvider). Using "default" makes the keyRef invisible
-    # to resolution (deepseek auth then fails with "No API key found").
+    # (listProfilesForProvider).  The `provider` inside the keyRef is a DIFFERENT
+    # field and must stay the literal "default"; writing the real id there was
+    # measured wrong on 2026-10-01 (see the comment at the ref below).
     # ================================================================
     local _agents_root="${OC_AGENTS:-$HOME/.openclaw/agents}"
     # One python process for ALL agents x profiles (was one subprocess per
@@ -1051,11 +1075,15 @@ for name in sorted(os.listdir(agents_root)):
         if not os.environ.get(var):
             skipped += 1
             continue
-        # `provider` must be the REAL provider id, not the literal "default": the resolver
-        # matches a profile's cred.provider against the provider id, so "default" leaves the
-        # keyRef invisible and a present key reads as missing.  (The CONFIG's own refs do use
-        # "default" — that shape is correct there; this is the auth-profile store.)
-        ref = {"source": "env", "provider": provider, "id": var}
+        # "default" is the shape an auth-profile ref MUST have.  A diagnosis said the resolver
+        # matches cred.provider against the provider id, so "default" would hide the ref — that
+        # was WRONG and is reverted here: with the real provider id written instead, the gateway
+        # reported, for every agent, `[SECRETS_OWNER_UNAVAILABLE] Secret owner account:[<db>,
+        # "deepseek"] … reason: secret reference was not found` (measured 2026-10-01).  The
+        # config's own refs use "default" for the same reason.  The gateway reports the same
+        # "not found" for the bare and the ":default" ids — so this pass is NOT where the
+        # deepseek resolution fault lives; see card OC-REFRESH-KEYS-AUTHPROFILE-001.
+        ref = {"source": "env", "provider": "default", "id": var}
         profile = {"type": ctype, "provider": provider}
         if ctype == "api_key":
             profile["keyRef"] = ref
