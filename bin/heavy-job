@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # heavy-job — serialise the box's HEAVY lane jobs behind ONE exclusive lock.
+# Version: 1.1.0 (2026-10-01: RE-ENTRANT.  Every heavy entry point in this repo now routes
+#          through this wrapper, and those entry points NEST — the autotune batch calls the
+#          per-model autotuner, the band re-tune calls the batch.  A nested call would try to
+#          acquire a lock its own ancestor holds; flock is per open file DESCRIPTION, so that
+#          is not a re-entrant acquisition but a deadlock of the whole flow.  HEAVY_JOB_HELD
+#          marks "already inside a session": the wrapper exports it for the locked command,
+#          and a nested invocation passes straight through.  1.0.1's behaviour is unchanged
+#          for a top-level call.)
 # Version: 1.0.1 (2026-10-01: the swallow gate's first run on 1.0.0 was a fair hit.  The EXIT
 #          trap could never fire because `exec "$@"` replaces this shell — dead code whose
 #          comment claimed a behaviour the file did not have; a failed `touch` was swallowed
@@ -108,6 +116,18 @@ if [ "$#" -eq 0 ]; then
     exit 2
 fi
 
+# NESTED INVOCATION — already inside a heavy-job session.  The wrapped command
+# inherits HEAVY_JOB_HELD (set below, just before the exec), and a heavy script
+# that another heavy script calls passes that on: the autotune batch calling the
+# per-model autotuner, the band re-tune calling the batch, the oc-kgraph reindex
+# called from a heavy flow.  Such a call must NOT take the lock again — flock is
+# held per open file description, so a fresh open by our own descendant does not
+# re-enter, it BLOCKS, and the flow then deadlocks against its own parent.
+# Inside the session there is nothing left to serialise, so pass straight through.
+if [[ -n "${HEAVY_JOB_HELD:-}" ]]; then
+    exec "$@"
+fi
+
 exec 9>"$LOCK"
 
 if [ -n "${TIMEOUT:-}" ]; then
@@ -131,5 +151,12 @@ fi
 # Advisory "last holder" record, for --status.  Written while the lock is held, and left
 # behind on purpose — see the header note on why nothing runs after the exec below.
 printf 'pid=%s started=%s cmd=%s\n' "$$" "$(date -Is)" "$*" >"$LOCK"
+
+# Mark the session for every descendant: a heavy script invoked FROM the command
+# below sees this and passes through instead of deadlocking (see the nested
+# invocation note above).  Exported, never written back to the invoking shell —
+# the exec below replaces this process, so only the locked command's own tree
+# ever sees it.
+export HEAVY_JOB_HELD=1
 
 exec "$@"
