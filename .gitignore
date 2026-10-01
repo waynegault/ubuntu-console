@@ -105,3 +105,10 @@ GRAPH_REPORT*.md
 
 # graphify knowledge-graph output (generated; rebuilt by `graphify update .`)
 graphify-out/
+
+# Runtime lock files — flock targets, never source.  bin/heavy-job's default lock
+# lives outside the repo (/tmp/heavy-job.lock), but a HEAVY_JOB_LOCK, a bench lock
+# or a tool can point one into the tree, and a lock is transient by definition.
+# NOTE: git has NO inline comments — text after a pattern is PART of the pattern,
+# so each reason must sit on its own line above its rule.
+*.lock
