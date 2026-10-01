@@ -7,7 +7,13 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 42
+# Module Version: 43
+#   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
+#   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
+#   give the same `secret reference was not found` for every agent, so neither is provably better
+#   and the asymmetry is deliberate.  The header comment claimed the keyRef provider "must stay
+#   the literal default", which misdescribed the twin and invited a future reader to "reconcile"
+#   the two sites on the false assumption that one of them resolves.
 #   v42 (2026-10-01): `ocdoc-fix` STREAMS the delegated window's output while still capturing it
 #   (`tee`) instead of redirecting it into the log and printing nothing until the end.  Measured
 #   2026-10-01 01:51->02:18: doctor archived hal's historical transcripts for 27 minutes and the
@@ -1033,8 +1039,13 @@ PYEOF
     # NOTE: the profile's OWN `provider` field must equal the real provider id —
     # the auth resolver matches profiles via cred.provider === providerId
     # (listProfilesForProvider).  The `provider` inside the keyRef is a DIFFERENT
-    # field and must stay the literal "default"; writing the real id there was
-    # measured wrong on 2026-10-01 (see the comment at the ref below).
+    # field, and its VALUE does not change resolution: measured 2026-10-01, "default"
+    # and the real provider id both yield `secret reference was not found` for every
+    # agent.  The bare entry below writes "default" (the shape the config's own refs
+    # use, restored in d94687b1); the "<provider>:default" twin keeps the real id by
+    # Wayne's rule of 2026-10-01.  Do not "reconcile" them on the assumption that
+    # either one resolves -- neither is the fault (card OC-REFRESH-KEYS-AUTHPROFILE-001,
+    # closed with that verdict).
     # ================================================================
     local _agents_root="${OC_AGENTS:-$HOME/.openclaw/agents}"
     # One python process for ALL agents x profiles (was one subprocess per
@@ -1090,6 +1101,9 @@ for name in sorted(os.listdir(agents_root)):
         else:
             profile["tokenRef"] = ref
         store.setdefault("profiles", {})[pid] = profile
+    # Its keyRef deliberately keeps the REAL provider id while the bare entry above writes
+    # "default": both were measured to resolve identically, so the two sites are allowed to
+    # differ (Wayne, 2026-10-01) -- see the header comment block above.
     # The CONFIG declares auth.profiles["<provider>:default"] and the runtime resolves THAT id
     # for the default agent, so a bare "<provider>" entry leaves it with no store entry
     # ("... is configured but unavailable (secret reference was not found)").  Scoped to the
