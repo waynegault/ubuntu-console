@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # heavy-job — serialise the box's HEAVY lane jobs behind ONE exclusive lock.
-# Version: 1.0.0 (2026-10-01: created for the latency incident's residual — the control
-#          plane is priority-weighted now, but nothing coordinated the heavy jobs
-#          themselves, so two lanes running mypy/pytest/kgraph together still oversubscribe
-#          all 16 cores and starve every interactive turn).
+# Version: 1.0.1 (2026-10-01: the swallow gate's first run on 1.0.0 was a fair hit.  The EXIT
+#          trap could never fire because `exec "$@"` replaces this shell — dead code whose
+#          comment claimed a behaviour the file did not have; a failed `touch` was swallowed
+#          and the next line would then have reported the lock FREE when it had not been
+#          checked at all; and the three advisory reads are now one helper.  11 unclassified
+#          sites became 3, each carrying its own reason.)
+# Version: 1.0.0 (2026-10-01: created for the latency incident's residual — the control plane
+#          is priority-weighted now, but nothing coordinated the heavy jobs themselves, so two
+#          lanes running mypy/pytest/kgraph together still oversubscribe all 16 cores and
+#          starve every interactive turn.)
 #
 # WHY THIS EXISTS.  Measured 2026-09-29 23:43: load average 24.82/22.61/19.61 on a 16-core
 # box, with the top consumers being an investigator `mypy pipeline` (1.8 GB), three
@@ -18,8 +24,16 @@
 # work that saturates the box — mypy, a pytest suite, an ingest, a kgraph build.
 #
 # A FLOCK RELEASES ITSELF when the holder exits, including on SIGKILL, so there is no stale
-# lock to clean up and no pid file to reconcile.  The lock file's CONTENT is advisory only
-# (who holds it and since when), written for --status and never trusted for ownership.
+# lock to clean up and no pid file to reconcile.  The lock file's BODY is advisory only — a
+# "last holder" record written for --status — and ownership is decided by the flock, never by
+# that body.  The body PERSISTS after a run by design: `exec "$@"` replaces this shell, so
+# nothing runs afterwards; a non-empty body with a free lock therefore means the last run
+# finished, and --status says "last holder" rather than implying a live one.
+#
+# NEVER NEST IT INSIDE A JOB THAT HOLDS ANOTHER BOX-WIDE LOCK.  In particular, do not take it
+# in a pre-commit hook: the commit wrapper already holds the commit lock while its hooks run,
+# so a hook taking this lock can deadlock against a lane that holds this one and is waiting to
+# commit.
 #
 # ADVISORY, NOT ENFORCED: a lane that does not route through this wrapper is not blocked.
 # Adoption is what makes it bite; the alternative (cgroup throttling per lane) is a bigger
@@ -41,10 +55,24 @@ usage() {
     sed -n 's/^# \{0,1\}//p' "$0" | sed -n '/^USAGE/,/^$/p'
 }
 
+# The body is an advisory record, so an absent or unreadable file means "no holder recorded"
+# — which is exactly what an empty string renders as.  This read IS the answer, and ownership
+# is decided by the flock below, never by this.
+read_holder() {
+    cat "$LOCK" 2>/dev/null || true # swallow-ok: the body is advisory — absence means "no holder recorded" and the flock decides ownership
+}
+
 show_status() {
     local holder
-    holder="$(cat "$LOCK" 2>/dev/null || true)"
-    touch "$LOCK" 2>/dev/null || true
+    holder="$(read_holder)"
+    if ! touch "$LOCK"; then
+        # Not swallowed: without a lock file the flock below cannot mean anything, so printing
+        # "free" would be a claim about a check that never happened.
+        printf 'heavy-job: cannot create or read the lock file %s — refusing to report a state\n' \
+            "$LOCK" >&2
+        return 4
+    fi
+    # swallow-ok: the flock's own diagnostic is noise on a status line — its EXIT STATUS is the answer
     if flock -n "$LOCK" -c true 2>/dev/null; then
         printf 'heavy-job: free'
         [ -n "$holder" ] && printf ' (last holder: %s)' "$holder"
@@ -63,7 +91,7 @@ case "${1:-}" in
         ;;
     --status)
         show_status
-        exit 0
+        exit $?
         ;;
     --timeout)
         TIMEOUT="${2:?heavy-job: --timeout needs a number of seconds}"
@@ -86,13 +114,13 @@ if [ -n "${TIMEOUT:-}" ]; then
     if ! flock -x -w "$TIMEOUT" 9; then
         printf 'heavy-job: lock still busy after %ss — giving up rather than queueing\n' \
             "$TIMEOUT" >&2
-        holder="$(cat "$LOCK" 2>/dev/null || true)"
+        holder="$(read_holder)"
         [ -n "$holder" ] && printf 'heavy-job: holder was %s\n' "$holder" >&2
         exit 3
     fi
 else
     if ! flock -x -n 9; then
-        holder="$(cat "$LOCK" 2>/dev/null || true)"
+        holder="$(read_holder)"
         printf 'heavy-job: waiting for the heavy-job lock' >&2
         [ -n "$holder" ] && printf ' (held by %s)' "$holder" >&2
         printf '...\n' >&2
@@ -100,9 +128,8 @@ else
     fi
 fi
 
-# Advisory holder record, for --status.  Truncated on exit while the lock is still held, so
-# a non-empty body always means either a live holder or a holder that was SIGKILLed.
+# Advisory "last holder" record, for --status.  Written while the lock is held, and left
+# behind on purpose — see the header note on why nothing runs after the exec below.
 printf 'pid=%s started=%s cmd=%s\n' "$$" "$(date -Is)" "$*" >"$LOCK"
-trap 'printf "" >"$LOCK" 2>/dev/null || true' EXIT
 
 exec "$@"
