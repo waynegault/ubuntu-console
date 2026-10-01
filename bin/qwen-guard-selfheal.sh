@@ -33,7 +33,18 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
+#
+# 2026-10-01: wired the STORE-SIDE witness (scripts/qwen-memory-index-check.py)
+# into this watchdog, run in the same tick but independently of the patch paths.
+# The patches prove the BUNDLE is patched; the witness proves the STORES are
+# sound -- a patched bundle still holds links a pre-patch daemon chopped.  Unlike
+# a patch, bad>0 is NOT auto-repairable here (the remedy is retiring pre-patch
+# daemons, i.e. a reboot, which a cron tick cannot do), so it is a REPORT: its
+# per-file lines go to the same log and the tick exits non-zero.  Still silent
+# with exit 0 and an unchanged log when both patches are applied and every store
+# reads bad=0.  Mirrored into this tracked copy from the loose ~/.local/bin one
+# (and into that one from here) so the two stay semantically identical.
 #
 # 2026-10-01: wired qwen-memory-index-patch.sh into this watchdog (run its
 # --check; re-apply; --check again) alongside the guard patch, because its patch
@@ -50,6 +61,7 @@ export PATH="/home/linuxbrew/.linuxbrew/bin:/home/wayne/.local/bin:/usr/local/bi
 
 PATCH="/home/wayne/.local/bin/qwen-guard-patch.sh"
 IDX="/home/wayne/.local/bin/qwen-memory-index-patch.sh"
+WITNESS="/home/wayne/ubuntu-console/scripts/qwen-memory-index-check.py"
 LOG_DIR="/home/wayne/.local/share/qwen-guard"
 LOG="$LOG_DIR/selfheal.log"
 
@@ -64,8 +76,24 @@ if [ -x "$IDX" ] && ! "$IDX" --check >/dev/null 2>&1; then
   needed+=(memory-index)
 fi
 
-# Every patch already in place (or nothing to patch): stay silent.
-[ "${#needed[@]}" -eq 0 ] && exit 0
+# The STORE-SIDE witness: a health signal separate from the patches.  The patches prove
+# the BUNDLE is patched; this proves the STORES are sound -- a patched bundle still holds
+# links that a pre-patch daemon chopped.  It runs every tick, independently of the patch
+# paths: a missing or non-executable witness is skipped without affecting them, and a
+# missing patch tool never suppresses it.  Unlike a patch, bad>0 is NOT auto-repairable
+# here (the remedy is retiring pre-patch daemons, i.e. a reboot, which a cron tick cannot
+# do), so it is a REPORT: its per-file lines are recorded and the tick exits non-zero.
+witness_out=""
+witness_rc=0
+if [[ -x "$WITNESS" ]]; then
+  witness_out="$("$WITNESS" 2>&1)"
+  witness_rc=$?
+fi
+
+# Every patch already in place AND every store clean: stay silent, write nothing.
+if [[ "${#needed[@]}" -eq 0 && "$witness_rc" -eq 0 ]]; then
+  exit 0
+fi
 
 mkdir -p "$LOG_DIR"
 
@@ -95,6 +123,17 @@ for tool in "${needed[@]}"; do
     fi
   } >>"$LOG" 2>&1
 done
+
+# Report the store witness when it had something to say (bad>0, or it could not run),
+# and make the tick exit non-zero.  Silent and rc-neutral when every store reads clean.
+if [[ "$witness_rc" -ne 0 ]]; then
+  {
+    echo "=== $(date -Is) - memory-index stores reported broken entries; a patch"
+    echo "    re-apply cannot fix this (retire pre-patch daemons / reboot)"
+    printf '%s\n' "$witness_out"
+  } >>"$LOG" 2>&1
+  rc=1
+fi
 
 # Exit non-zero when a patch could not be restored: 30 consecutive runs on
 # 2026-09-27 recorded STILL-NEEDS-ATTENTION here and still exited 0, so nothing
