@@ -171,7 +171,8 @@ jobs:
                tests/unit/33-daemon-guard-patch.bats \
                tests/unit/34-contracts-falsification.bats \
                tests/unit/35-swallow-classify.bats \
-               tests/unit/36-memory-index-check.bats
+               tests/unit/36-memory-index-check.bats \
+               tests/unit/37-transcript-retention.bats
 
       - name: Run integration tests
         run: |
