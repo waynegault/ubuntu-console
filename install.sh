@@ -3,7 +3,7 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
-VERSION="1.8"
+VERSION="1.9"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -426,6 +426,27 @@ then
     else
         warn "  WARNING: could not set core.hooksPath — git hooks will not run"
     fi
+fi
+
+# Qwen CLI agent hooks — tracked in tools/qwen-hooks/ and linked to the ABSOLUTE
+# paths the CLI already has registered in ~/.qwen/settings.json.  The CLI names a
+# hook by absolute path, so that path must keep resolving or the hook is silently
+# disabled; the four files used to sit as loose, unversioned copies in
+# ~/.qwen/hooks/ (post-edit-check.sh is one Wayne relies on).  A symlink keeps
+# every registered path valid while the implementation stays repo-owned and
+# reviewable beside docs/qwen-shell-guard-audit.md.  Deliberately NOT under
+# tools/hooks/: that directory is core.hooksPath, so only real Git hook names
+# belong in it.
+if [[ -d "$REPO/tools/qwen-hooks" ]]
+then
+    for _qh in "$REPO"/tools/qwen-hooks/*
+    do
+        [[ -f "$_qh" ]] || continue
+        link "tools/qwen-hooks/${_qh##*/}" "$HOME/.qwen/hooks/${_qh##*/}"
+    done
+    unset _qh
+else
+    warn "  WARNING: $REPO/tools/qwen-hooks is missing — the Qwen CLI hooks will NOT be installed"
 fi
 
 echo ""
