@@ -7,7 +7,17 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 43
+#   v44 (2026-10-01): deepseek and ollama now get CONFIG env-refs too
+#   (`models.providers.<id>.apiKey`). The table below excluded deepseek on the belief that an
+#   auth-profile entry served it; that belief is provably wrong — measured, a store ref is NOT
+#   a sufficient channel for a key the runtime resolves: the store refs matched the working
+#   config refs byte-for-byte and the gateway still logged, for all 15 agent owners,
+#   `SECRETS_DEGRADED ... reason="secret reference was not found"`, with `secrets reload`
+#   leaving its 19-warning baseline. The config env-ref is the only shape observed to resolve.
+#   Both providers are BUNDLED (the bundle ships docs/providers/deepseek.md and ollama.md), so
+#   the apiKey-only overlay is schema-legal; a CUSTOM provider would be refused. The
+#   auth-profile store entries stay, as a second channel. Card OC-REFRESH-KEYS-AUTHPROFILE-001.
+# Module Version: 44
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -886,8 +896,13 @@ entries = [
     ("plugins.entries.xai.config.webSearch.apiKey", "XAI_API_KEY"),
     ("plugins.entries.moonshot.config.webSearch.apiKey", "MOONSHOT_API_KEY"),
     ("plugins.entries.firecrawl.config.webSearch.apiKey", "FIRECRAWL_API_KEY"),
-    # Model Provider API Keys (direct-consumption providers; deepseek uses an
-    # auth profile below, not a models.providers ref)
+    # Model Provider API Keys. EVERY provider a model is selected from needs an env-backed
+    # ref here: the auth-profile store below is a second channel, not a sufficient one
+    # (measured 2026-10-01: deepseek's store ref had the same shape as these and the gateway
+    # still reported `secret reference was not found` for every agent, so the key could not
+    # survive the sweep). deepseek is the default agent's model, so it goes first.
+    ("models.providers.deepseek.apiKey", "DEEPSEEK_API_KEY"),
+    ("models.providers.ollama.apiKey", "OLLAMA_API_KEY"),
     ("models.providers.openai.apiKey", "OPENAI_API_KEY"),
     ("models.providers.anthropic.apiKey", "ANTHROPIC_API_KEY"),
     ("models.providers.groq.apiKey", "GROQ_API_KEY"),
@@ -1029,9 +1044,10 @@ PYEOF
     # ================================================================
     # Auth Profile SecretRef sync (SQLite credential stores)
     #
-    # Keys managed via auth profiles (not models.providers.<id>.apiKey):
-    #   DEEPSEEK_API_KEY  →  deepseek:default.keyRef
-    #   OLLAMA_API_KEY    →  ollama:default.keyRef
+    # A SECOND channel for these two keys — the models.providers env-refs written above are
+    # what actually resolve (measured 2026-10-01; a store ref alone is not sufficient):
+    #   DEEPSEEK_API_KEY  →  deepseek:default.keyRef  (+ models.providers.deepseek.apiKey)
+    #   OLLAMA_API_KEY    →  ollama:default.keyRef    (+ models.providers.ollama.apiKey)
     #
     # These live in per-agent `openclaw-agent.sqlite` tables.
     #
