@@ -1,0 +1,4 @@
+#!/bin/bash
+# Thin wrapper — delegates to the real 'xo' function via tac-exec
+exec ~/ubuntu-console/bin/tac-exec xo "$@"
+# end of file

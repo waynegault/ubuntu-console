@@ -1,0 +1,4 @@
+#!/bin/bash
+# Thin wrapper — delegates to the real 'serve' function via tac-exec
+exec ~/ubuntu-console/bin/tac-exec serve "$@"
+# end of file
