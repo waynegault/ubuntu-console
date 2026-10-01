@@ -5,12 +5,21 @@
 # pre-existing style of bin/qwen-memory-index-patch.sh (two >120-char lines, three
 # `echo … >&2` sites), a script that lived only as an unversioned ~/.local/bin copy
 # until it was tracked here.  Deliberate re-baseline for ONE newly added file.
-4.2.4	14
+# (Restored by hand after `--update`: the tool rewrites the file without comments.)
+#
+# 2026-10-01 (second re-baseline, same day): every rise below is the PRE-EXISTING
+# style of code that became TRACKED, not new drift — six files moved in from loose
+# ~/.local/bin copies (autotune-rows.sh, bench-rows.sh, gpu-passthrough-check.sh,
+# so, xo, serve) plus bin/heavy-job, which is new.  Corpus 81 -> 88 files.
+# Counted contributions: 4.2.4 +1, 6.7 +6, 8.1.8 +9, 9.5 +6, 9.7 +6, 10.7 +8.
+# Not counted here: bin/heavy-job's own single `[ … ]`, which was changed to
+# `[[ … ]]` instead — the counter's ask — when it was written.
+4.2.4	15
 4.2.6	12
 4.3.6	31
-6.7	46
-8.1.8	261
-9.5	99
-9.7	50
+6.7	53
+8.1.8	270
+9.5	105
+9.7	56
 10.4	49
-10.7	163
+10.7	171
