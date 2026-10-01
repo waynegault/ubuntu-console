@@ -436,7 +436,60 @@ failed run must not report success. Verified against a stub patch script in a sc
 the real patcher was never invoked: healthy → rc=0 and no log entry; recovered → rc=0,
 `--check after: ok`; unrecoverable → rc=1, `STILL-NEEDS-ATTENTION`. **Delivery is still open**: on
 this box the exit status reaches nobody, so the next reversion will again sit unnoticed unless that
-state is surfaced on a channel someone actually reads.
+state is surfaced on a channel someone actually reads. (Since 2026-10-01 the re-apply covers all
+three patched states, not just the read-only allowlist — see the section below.)
+
+## The 2026-10-01 patch — two more local relaxations, reported as states 2 and 3
+
+The 2026-10-01 work added two hunks to the same chunk and, with them, a vocabulary: the patch
+script now reports **three states** per chunk copy, and `--check` fails if any one of them is
+missing. Verified 2026-10-01 on both copies:
+
+    $ /home/wayne/.local/bin/qwen-guard-patch.sh --check
+      ok  daemon-git-worktree-guard-2TDMUSUD.js (read-only allowlist: applied; git-token rule: applied; mutating-repo allowlist: applied)
+      ok  daemon-git-worktree-guard-P2JHZALI.js (read-only allowlist: applied; git-token rule: applied; mutating-repo allowlist: applied)
+      rc=0
+
+### State 2 — a git token must name git (2026-10-01)
+
+`evaluateUnrecognizedRun` treated ANY token whose text contains the word `git` as a git program
+(`GIT_WORD_PATTERN = /\bgit\b/i`), matched against raw text rather than a command position. So an
+ordinary argument that merely NAMES a file turned an unrelated command into a "relocated Git
+command", and the denial then asserted a mutation and a repository target that did not exist.
+Measured 2026-10-01 — same cwd, byte-identical files, only the filename differing:
+
+    DENIED   cd ~/.qwen && markdownlint --config .markdownlint.jsonc \
+               memories/reference/qwen-memory-stores-under-git.md
+             -> "denied a mutating Git command outside the session working directory:
+                 /home/wayne/.qwen"
+    ALLOWED  the same command naming /tmp/qgc/control-plain.md
+
+A git token must now NAME git: the program word itself (`git`, `/usr/bin/git`) or a path component
+named `.git`. That keeps `cd <other> && cat .git/HEAD` refused (audit row 14) while dropping matches
+inside plain arguments and quoted words. Dropping those is safe because command-substitution bodies
+are still evaluated recursively on their own merits, so a mutating git hidden in `"$(...)"` is
+refused by the body's own evaluation rather than by this token test. The test stays fail-CLOSED on
+purpose: it accepts any program-shaped git token, which is what catches an unmodelled wrapper such
+as `nice -n 5 git -C <other> commit`. The residual false positive — a bare `git` word used as an
+argument while the working directory is outside the session root — is stock behaviour, unchanged
+here, and is now reported as what it is instead of as a "mutating Git command". This implements
+**Ask 5** locally; the ask stays open upstream for the shipped behaviour.
+
+### State 3 — allowed mutating repositories (2026-10-01)
+
+Wayne, 2026-10-01: *"i authorise widening the guard's mutating-verb allowlist"* — for the two
+`~/.qwen` memory stores, the second nested inside the first. Implemented as an EXPLICIT
+repository-root allowlist (`/home/wayne/.qwen` and `/home/wayne/.qwen/memories`) and nothing else:
+a blanket "any relocated mutating git" would remove the protection the guard exists to provide for
+every other repository on the box. It is applied at the three gates that decide an OUTSIDE_TARGET
+denial, so it relaxes only *which repository is reachable* — the dynamic-relocation,
+unparseable-payload and unrecognized-program refusals are untouched.
+
+### The self-heal now re-applies all three states (2026-10-01)
+
+`qwen-guard-selfheal.sh` (`17,47 * * * *`) already delegated to the patcher, and `--check` now
+covers all three states, so a companion update that reverts the chunk is repaired in full rather
+than in the read-only allowlist alone. The delivery gap recorded below is unchanged and still open.
 
 ## Upstream asks
 
@@ -486,3 +539,5 @@ its behaviour predictable.
    Ask: require the `git` token to be in command position (or exclude matches inside
    path/glob tokens), and name the offending token in the denial. This one is a FALSE
    POSITIVE in a fail-closed path — nothing in this ask weakens the control.
+   **Implemented locally 2026-10-01** as the patch's state 2 ("a git token must name git"),
+   including naming what was actually matched; the ask remains open for the shipped bundle.
