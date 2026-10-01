@@ -3,7 +3,15 @@
 # oc-update-enhanced — Enhanced OpenClaw updater helper
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#
+# v2 (2026-10-01): the update's output is STREAMED, not buffered. v1 captured it with
+# `_out=$(openclaw update 2>&1)` and printed it only after the command returned, so a
+# long run looked like a dead command: measured 2026-10-01, the 02:18 run held the
+# state DB in offline maintenance for ~24 minutes (the gateway's starts were refused
+# by design throughout) and printed nothing until it exited. It now streams via `tee`
+# into a temp log, and `rc` is the UPDATE's status, not tee's. The log is still read
+# back for the permission-error check below, so that path is unchanged.
 #
 # Behavior:
 # - Runs `openclaw update` directly.
@@ -17,11 +25,13 @@ _print() {
     printf '%s\n' "$*"
 }
 
+_log_file="$(mktemp)"
+trap 'rm -f "$_log_file"' EXIT
+
 _run_update() {
-    local _out _rc
-    _out=$(openclaw update 2>&1)
-    _rc=$?
-    printf '%s\n' "$_out"
+    local _rc
+    openclaw update 2>&1 | tee "$_log_file"
+    _rc=${PIPESTATUS[0]}
     return "$_rc"
 }
 
@@ -75,9 +85,11 @@ fi
 _print "[oc-update-enhanced] checking for updates..."
 update_rc=0
 # `|| update_rc=$?` keeps `set -e` from aborting on a failed update, so the
-# permission-repair-and-retry path below is actually reachable.
-update_output="$(_run_update)" || update_rc=$?
-printf '%s\n' "$update_output"
+# permission-repair-and-retry path below is actually reachable. The update's output
+# already went to the terminal as it ran (see _run_update); this only reads it back
+# for the permission-error classification.
+_run_update || update_rc=$?
+update_output="$(cat "$_log_file")"
 
 if (( update_rc == 0 ))
 then
@@ -100,8 +112,7 @@ fi
 
 _print "[oc-update-enhanced] retrying update after repair..."
 retry_rc=0
-retry_output="$(_run_update)" || retry_rc=$?
-printf '%s\n' "$retry_output"
+_run_update || retry_rc=$?
 
 if (( retry_rc == 0 ))
 then
