@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# heavy-job — serialise the box's HEAVY lane jobs behind ONE exclusive lock.
+# Version: 1.0.0 (2026-10-01: created for the latency incident's residual — the control
+#          plane is priority-weighted now, but nothing coordinated the heavy jobs
+#          themselves, so two lanes running mypy/pytest/kgraph together still oversubscribe
+#          all 16 cores and starve every interactive turn).
+#
+# WHY THIS EXISTS.  Measured 2026-09-29 23:43: load average 24.82/22.61/19.61 on a 16-core
+# box, with the top consumers being an investigator `mypy pipeline` (1.8 GB), three
+# investigator REPLs, an `ubuntu-console kgraph --update` and llama-server; agent turns took
+# ~11.5 minutes to reach model_call_started and lane waits ran 86-228 s.  Setting the
+# Gateway's cgroup CPUWeight=1000 (10x) protects the CONTROL PLANE — it does not reduce the
+# total load, and it was deliberately not 10000, which would starve the lanes instead.  The
+# missing piece is coordination: at most ONE heavy job should run at a time.
+#
+# THE PATTERN IS THE COMMIT WRAPPER'S: an exclusive flock held for the whole run
+# (investigator's scripts/git_commit.sh serialises commits the same way).  Use it for batch
+# work that saturates the box — mypy, a pytest suite, an ingest, a kgraph build.
+#
+# A FLOCK RELEASES ITSELF when the holder exits, including on SIGKILL, so there is no stale
+# lock to clean up and no pid file to reconcile.  The lock file's CONTENT is advisory only
+# (who holds it and since when), written for --status and never trusted for ownership.
+#
+# ADVISORY, NOT ENFORCED: a lane that does not route through this wrapper is not blocked.
+# Adoption is what makes it bite; the alternative (cgroup throttling per lane) is a bigger
+# change and was not what was approved.
+#
+# USAGE
+#   heavy-job <command> [args...]      run <command> holding the lock
+#   heavy-job --status                 report free/busy and, if busy, the holder
+#   heavy-job --timeout <secs> <cmd>   give up rather than queue forever (exit 3)
+#
+# ENV
+#   HEAVY_JOB_LOCK   lock path (default /tmp/heavy-job.lock)
+
+set -euo pipefail
+
+LOCK="${HEAVY_JOB_LOCK:-/tmp/heavy-job.lock}"
+
+usage() {
+    sed -n 's/^# \{0,1\}//p' "$0" | sed -n '/^USAGE/,/^$/p'
+}
+
+show_status() {
+    local holder
+    holder="$(cat "$LOCK" 2>/dev/null || true)"
+    touch "$LOCK" 2>/dev/null || true
+    if flock -n "$LOCK" -c true 2>/dev/null; then
+        printf 'heavy-job: free'
+        [ -n "$holder" ] && printf ' (last holder: %s)' "$holder"
+        printf '\n'
+    else
+        printf 'heavy-job: BUSY'
+        [ -n "$holder" ] && printf ' — %s' "$holder"
+        printf '\n'
+    fi
+}
+
+case "${1:-}" in
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    --status)
+        show_status
+        exit 0
+        ;;
+    --timeout)
+        TIMEOUT="${2:?heavy-job: --timeout needs a number of seconds}"
+        shift 2
+        ;;
+    *)
+        TIMEOUT=""
+        ;;
+esac
+
+if [ "$#" -eq 0 ]; then
+    printf 'heavy-job: no command given\n\n' >&2
+    usage >&2
+    exit 2
+fi
+
+exec 9>"$LOCK"
+
+if [ -n "${TIMEOUT:-}" ]; then
+    if ! flock -x -w "$TIMEOUT" 9; then
+        printf 'heavy-job: lock still busy after %ss — giving up rather than queueing\n' \
+            "$TIMEOUT" >&2
+        holder="$(cat "$LOCK" 2>/dev/null || true)"
+        [ -n "$holder" ] && printf 'heavy-job: holder was %s\n' "$holder" >&2
+        exit 3
+    fi
+else
+    if ! flock -x -n 9; then
+        holder="$(cat "$LOCK" 2>/dev/null || true)"
+        printf 'heavy-job: waiting for the heavy-job lock' >&2
+        [ -n "$holder" ] && printf ' (held by %s)' "$holder" >&2
+        printf '...\n' >&2
+        flock -x 9
+    fi
+fi
+
+# Advisory holder record, for --status.  Truncated on exit while the lock is still held, so
+# a non-empty body always means either a live holder or a holder that was SIGKILLed.
+printf 'pid=%s started=%s cmd=%s\n' "$$" "$(date -Is)" "$*" >"$LOCK"
+trap 'printf "" >"$LOCK" 2>/dev/null || true' EXIT
+
+exec "$@"
