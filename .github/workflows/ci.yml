@@ -170,7 +170,8 @@ jobs:
                tests/unit/32-report-rows-safety.bats \
                tests/unit/33-daemon-guard-patch.bats \
                tests/unit/34-contracts-falsification.bats \
-               tests/unit/35-swallow-classify.bats
+               tests/unit/35-swallow-classify.bats \
+               tests/unit/36-memory-index-check.bats
 
       - name: Run integration tests
         run: |
