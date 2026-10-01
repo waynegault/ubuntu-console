@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 17
+# Module Version: 18
+#   v18 (2026-10-01): routes through bin/heavy-job so at most one saturating job runs on
+#   the box at a time — see the serialisation prologue after `set -uo pipefail`.
 #===============================================================================
 # run-autotune-batch.sh — Run autotune sequentially on all untuned models
 #
@@ -43,6 +45,19 @@
 #===============================================================================
 
 set -uo pipefail
+
+# ── Box-wide heavy-job serialisation (bin/heavy-job) ─────────────────────────
+# At most ONE heavy job runs on this box at a time: two of them oversubscribe all
+# 16 cores and starve every interactive turn (bin/heavy-job records the
+# measurement).  Re-entrant — an enclosing heavy-job exports HEAVY_JOB_HELD, so a
+# nested call (the batch calling the per-model autotuner, say) passes through
+# instead of deadlocking on the lock its own parent holds.  The path is resolved
+# from this script's own location so the guard does not depend on ~/.local/bin
+# being on PATH (a CI runner's PATH is not the box's).
+if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
+    exec "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/heavy-job" \
+        "${BASH:-bash}" "${BASH_SOURCE[0]}" "$@"
+fi
 
 _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$_SELF_DIR/.." || exit 1

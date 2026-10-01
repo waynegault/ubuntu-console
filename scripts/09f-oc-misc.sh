@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-10-01): oc-kgraph's --reindex runs through bin/heavy-job, so the explicit
+#   kgraph update is serialised against the box's other heavy jobs.  The server launch is
+#   deliberately NOT wrapped (a detached server would hold the lock forever).
 # ==============================================================================
 # 09f-oc-misc — Miscellaneous OC commands (kgraph, stinger, mem-index)
 # ==============================================================================
@@ -47,7 +50,12 @@ function oc-kgraph() {
 
     if $do_reindex; then
         __tac_info "kgraph" "[SYNCING MEMORY DB + AST — GRAPH DB]" "$C_Info"
-        "$TAC_PYTHON" - <<'PY' >/dev/null || true
+        # Serialised box-wide through bin/heavy-job: this reindex is the explicit
+        # `ubuntu-console kgraph --update` the 2026-09-29 load-24.8 measurement
+        # listed among the top consumers.  ONLY the reindex is wrapped, never the
+        # server launch below — a detached server would inherit the lock's file
+        # descriptor and hold the box-wide lock for as long as it ran.
+        "$TACTICAL_REPO_ROOT/bin/heavy-job" "$TAC_PYTHON" - <<'PY' >/dev/null || true
 import sys, os
 repo_root = os.environ.get('TACTICAL_REPO_ROOT', '/home/wayne/ubuntu-console')
 if repo_root:

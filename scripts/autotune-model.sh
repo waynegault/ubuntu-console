@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 71
+# Module Version: 72
+#   v72 (2026-10-01): routes through bin/heavy-job so at most one saturating job runs on
+#   the box at a time — see the serialisation prologue after `set -uo pipefail`.
 #   v71 (2026-09-29): _sampler_args takes the model path as an ARGUMENT (it read a
 #   caller-scope MODEL_PATH, so a direct call printed nothing and looked like dead
 #   wiring — three probes concluded wrongly); it refuses loudly with no argument.  The
@@ -51,6 +53,19 @@
 #===============================================================================
 
 set -uo pipefail
+
+# ── Box-wide heavy-job serialisation (bin/heavy-job) ─────────────────────────
+# At most ONE heavy job runs on this box at a time: two of them oversubscribe all
+# 16 cores and starve every interactive turn (bin/heavy-job records the
+# measurement).  Re-entrant — an enclosing heavy-job exports HEAVY_JOB_HELD, so a
+# nested call (the autotune batch calling this per-model autotuner) passes through
+# instead of deadlocking on the lock its own parent holds.  The path is resolved
+# from this script's own location so the guard does not depend on ~/.local/bin
+# being on PATH (a CI runner's PATH is not the box's).
+if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
+    exec "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/heavy-job" \
+        "${BASH:-bash}" "${BASH_SOURCE[0]}" "$@"
+fi
 
 # The model may be given as a registry row NUMBER or as a model FILE name.  Both are
 # accepted; the FILE name is the authoritative identity, and a number is resolved to one

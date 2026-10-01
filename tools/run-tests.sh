@@ -12,12 +12,28 @@
 #   tools/run-tests.sh --integration      # with integration tests
 #   tools/run-tests.sh -- --filter "bash" # pass extra args to bats
 # ==============================================================================
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-01): the full suite routes through bin/heavy-job, so a ~30-minute
+#   saturating run cannot overlap another heavy job — see the prologue after `set -uo pipefail`.
 # No -e on purpose: the runner must execute every suite and print the summary even
 # when one fails. With -e the first failing suite would abort the run and the
 # summary — the thing this script exists to produce — would never be printed.
 # (docs/inspection.md 3.3)
 set -uo pipefail
+
+# ── Box-wide heavy-job serialisation (bin/heavy-job) ─────────────────────────
+# The full suite is a saturating job: it bridges every BATS case and runs the
+# Python tests, ~30 min of the box.  At most ONE heavy job runs at a time (two
+# oversubscribe all 16 cores and starve every interactive turn — bin/heavy-job
+# records the measurement).  Re-entrant: an enclosing heavy-job exports
+# HEAVY_JOB_HELD, so a suite nested inside another heavy flow passes through
+# instead of deadlocking on the lock its own parent holds.  Resolved from this
+# script's own location, so the guard does not depend on ~/.local/bin being on
+# PATH (a CI runner's PATH is not the box's).
+if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
+    exec "$(cd "$(dirname "$0")/.." && pwd)/bin/heavy-job" \
+        "${BASH:-bash}" "${BASH_SOURCE[0]}" "$@"
+fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
