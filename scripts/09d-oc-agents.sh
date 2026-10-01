@@ -7,6 +7,25 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+#   v45 (2026-10-01): the SecretRef table gains GH_TOKEN, at `gateway.controlUi.github.token`.
+#   The startup sweep deletes every managed key the CONFIG does not name, and this host supplies
+#   GH_TOKEN from the user-manager environment, so it was deleted (measured with
+#   workspace/scripts/managed-env-sweep-check.py: "SWEPT - nothing can restore it"; with this ref
+#   in the config the same check prints "PRESERVED by config env-SecretRef").  The consumers are
+#   measured, not assumed: dist/github-tool-identity-*.mjs reads GH_TOKEN then GITHUB_TOKEN from
+#   the Gateway process env for the native `gh` identity, and the schema text for the field this
+#   row writes names the same process-env fallback ("Omit it to retain the GH_TOKEN/GITHUB_TOKEN
+#   fallback from the shared Gateway process environment" -- docs/gateway/config-gateway.md).
+#   The row was validated against the live schema with `openclaw config patch --stdin --dry-run`
+#   ("Dry run successful: 1 update(s) validated"), so it cannot abort the batched write.
+#   GITHUB_TOKEN deliberately gets NO row: it is the second name in that one precedence chain
+#   (GH_TOKEN wins wherever both are read) and a single config path cannot carry two ids.
+#   QWEN_TOKEN_PLAN_API_KEY deliberately gets no row either: it is supplied by the Gateway unit
+#   env file, and NOTHING on this host consumes it -- the sole declarer is the qwen plugin's
+#   `qwen-token-plan` provider (scripts/lib/official-external-provider-catalog.json), which no
+#   `models.providers` block, model ref or auth profile selects (measured; no auth-profile store
+#   carries a qwen ref -- see the auth-profile pass below).  It is swept and unused, so the fix
+#   for it is dropping it from that env surface, not a ref here.
 #   v44 (2026-10-01): deepseek and ollama now get CONFIG env-refs too
 #   (`models.providers.<id>.apiKey`). The table below excluded deepseek on the belief that an
 #   auth-profile entry served it; that belief is provably wrong — measured, a store ref is NOT
@@ -17,7 +36,7 @@
 #   Both providers are BUNDLED (the bundle ships docs/providers/deepseek.md and ollama.md), so
 #   the apiKey-only overlay is schema-legal; a CUSTOM provider would be refused. The
 #   auth-profile store entries stay, as a second channel. Card OC-REFRESH-KEYS-AUTHPROFILE-001.
-# Module Version: 44
+# Module Version: 45
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -932,6 +951,10 @@ entries = [
     # whole batched SecretRef write (2026-09-22).
     ("plugins.entries.firecrawl.config.webFetch.apiKey", "FIRECRAWL_API_KEY"),
     ("tools.web.search.serp.apiKey", "SERP_API_KEY"),
+    # GH_TOKEN feeds the native `gh` identity (dist/github-tool-identity-*.mjs reads GH_TOKEN
+    # then GITHUB_TOKEN out of the Gateway process env) for the same process-env fallback this
+    # schema field documents, so naming it here is what keeps the sweep from deleting it.
+    ("gateway.controlUi.github.token", "GH_TOKEN"),
     # Skill credentials -- installed skills live under skills.entries, NOT
     # plugins.entries: a row pointing at a non-existent path writes a leaf
     # nothing reads and the real ref is left un-injected (TYPESAFE_API_KEY,
