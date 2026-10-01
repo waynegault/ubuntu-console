@@ -314,8 +314,15 @@ CFG
     # (2026-09-21: TYPESAFE_API_KEY was imported and then read as "refresh-keys
     # did not pick it up"). Assert against the saved run output — by this point
     # $output holds the last grep's result, not the refresh's.
+    #
+    # 2026-10-01 (Wayne): the ruling that a bridged credential placed on no
+    # surface is NAMED on every refresh is what makes this true literally — this
+    # key is on no config ref, no EnvironmentFile and no drop-in, so it is now
+    # expected in the unplaced list. The push assertions above are unchanged:
+    # named is not pushed.
     [[ "$refresh_out" == *"waiting for a consumer"* ]]
-    [[ "$refresh_out" != *"WIN_API_KEY"* ]]
+    [[ "$refresh_out" == *"ON NO SURFACE"* ]]
+    [[ "$refresh_out" == *"WIN_API_KEY"* ]]
 }
 
 @test "oc-refresh-keys does not record a manager-env push it could not make" {
@@ -730,8 +737,15 @@ ENVD
     [[ "$output" == *"GH_TOKEN"* ]]
     # A name on only ONE surface is not a disagreement — the cache-only and
     # drop-in-only keys must both stay out of it.
-    [[ "$output" != *"SHARED_ONLY_API_KEY"* ]]
-    [[ "$output" != *"OTHER_API_KEY"* ]]
+    #
+    # 2026-10-01: THE SHADOWING REPORT is what this asserts, so it is read from its own
+    # line rather than from the whole output. The cache-only key now also appears in the
+    # unplaced report (it is on no surface at all, which is that report's subject, not a
+    # shadowing disagreement) — reading the whole output would conflate the two.
+    local shadowing_line
+    shadowing_line="$(printf '%s\n' "$output" | grep -F 'Key shadowing' | head -1)"
+    [[ "$shadowing_line" != *"SHARED_ONLY_API_KEY"* ]]
+    [[ "$shadowing_line" != *"OTHER_API_KEY"* ]]
     # Names are reported; values never leave the function.
     [[ "$output" != *"cache-value"* ]]
     [[ "$output" != *"different-value"* ]]

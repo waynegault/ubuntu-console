@@ -220,11 +220,16 @@ absent, so an unresolved ref is never created). Current mapping (defined in
 
 #### Model providers
 
-Direct-consumption providers only — `deepseek` authenticates through an auth
-profile instead, so there is no `models.providers` ref for it.
+Direct-consumption providers, plus the two auth-profile keys that ALSO carry a
+`models.providers` ref: that ref is what survives the Gateway's startup sweep and
+what puts the name into the manager-env push (measured 2026-10-01 — an
+auth-profile `keyRef` alone does not, because the sweep's preserve set is
+`collectEnvSecretRefIds(config)`).
 
 | Config path | Env var |
 | --- | --- |
+| `models.providers.deepseek.apiKey` | `DEEPSEEK_API_KEY` |
+| `models.providers.ollama.apiKey` | `OLLAMA_API_KEY` |
 | `models.providers.openai.apiKey` | `OPENAI_API_KEY` |
 | `models.providers.anthropic.apiKey` | `ANTHROPIC_API_KEY` |
 | `models.providers.groq.apiKey` | `GROQ_API_KEY` |
@@ -235,6 +240,15 @@ profile instead, so there is no `models.providers` ref for it.
 | `models.providers.nvidia.apiKey` | `NVIDIA_API_KEY` |
 | `models.providers.fireworks.apiKey` | `FIREWORKS_API_KEY` |
 | `models.providers.huggingface.apiKey` | `HUGGINGFACE_TOKEN` |
+| `models.providers.qwen-token-plan.apiKey` | `QWEN_TOKEN_PLAN_API_KEY` |
+
+`models.providers.qwen-token-plan.apiKey` names the provider id the bundled
+catalog declares for that env var; **nothing selects that provider yet**, so the
+row's value today is that the key survives the sweep and is pushed to the manager
+env instead of being carried by nothing at all. `HF_TOKEN` has no row and cannot
+get one here: the `huggingface` provider has exactly one `apiKey` field and it is
+already bound to its alias `HUGGINGFACE_TOKEN` (the two hold *different* values,
+measured 2026-10-01), so `HF_TOKEN` stays on the unplaced report.
 
 `models.providers.inception.apiKey` is deliberately **not** mapped: `inception` is
 a custom provider, and the schema refuses a patch that creates one without
@@ -263,17 +277,42 @@ SecretRef write.
 | `skills.entries.typesafe-ai.apiKey` | `TYPESAFE_API_KEY` |
 | `skills.entries.agentmail-cli.apiKey` | `AGENTMAIL_API_KEY` |
 
-21 mappings in total. Keep this list in step with `entries` in
-`scripts/09d-oc-agents.sh` (`__oc_apply_secret_refs`) — that list is the source.
+#### Gateway and talk credentials
+
+| Config path | Env var |
+| --- | --- |
+| `gateway.auth.token` | `OPENCLAW_GATEWAY_TOKEN` |
+| `gateway.controlUi.github.token` | `GH_TOKEN` |
+| `talk.providers.elevenlabs.apiKey` | `ELEVENLABS_API_KEY` |
+
+`gateway.auth.mode` is explicitly `password`, and stays so: the resolved mode
+takes `authConfig.mode` before any token, so naming the token here does not flip
+the auth mode — it makes the sweep preserve the token instead of deleting it.
+`talk.providers.<provider>` is the documented shape for a speech provider
+(`docs/nodes/talk*.md`), and the elevenlabs plugin's own `configSchema` has no
+field of its own (`additionalProperties: false`, no properties), so that is the
+only place its key can be named.
+
+27 mappings in total. Keep this list in step with `entries` in
+`scripts/09d-oc-agents.sh` (`__oc_apply_secret_refs`) — that list is the source,
+and `tests/unit/15-secret-ref-paths.bats` validates every path in it against the
+real config schema.
 
 The refresh prints **one** line classifying the bridged keys, because they can be
-in three different states and only one of them is a problem: *injected* (an
+in four different states and only two of them need attention: *injected* (an
 env-backed ref exists, or this run is writing one), *waiting for a consumer*
-(nothing in the config references it yet — not an error), and **not injectable**
-(the config references it from a non-env source such as `store`, which no env var
-can ever fill). Only the third is named, with its path and source, because only it
-needs a decision: the refresh never rewrites such a ref itself — a store-backed
-ref may be deliberate.
+(nothing in the config references it yet, but a surface carries it — not an
+error), **not injectable** (the config references it from a non-env source such
+as `store`, which no env var can ever fill), and **on no surface** (bridged, but
+named by no config ref and present on neither the unit's `EnvironmentFile`, the
+`environment.d` drop-in nor the user-manager env — readable by nothing).
+
+The last two are named, because each needs a decision. *Not injectable* is named
+with its path and source, and the refresh never rewrites such a ref itself — a
+store-backed ref may be deliberate. *On no surface* is named by variable, so an
+import that exposes nothing is visible on every refresh instead of being
+rediscovered as "imported from Windows but missing"; Wayne's ruling of
+2026-10-01 made this a named outcome rather than a count.
 
 `oc-refresh-keys` also pushes the bridged vars the gateway resolves into the
 systemd **user manager** environment (`systemctl --user set-environment`), which

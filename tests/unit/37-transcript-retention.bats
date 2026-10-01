@@ -35,8 +35,9 @@ setup() {
     WORK="$BATS_TEST_TMPDIR"
     QWEN="$WORK/qwen"
     CHATS="$QWEN/projects/-home-wayne--openclaw/chats"
+    SUBAGENTS="$QWEN/projects/-home-wayne--openclaw/subagents"
     REGISTRY="$QWEN/sessions"
-    mkdir -p "$CHATS" "$REGISTRY"
+    mkdir -p "$CHATS" "$SUBAGENTS" "$REGISTRY"
 }
 
 # transcript <sessionId> <age-in-touch-syntax> — content is unique per session, so a
@@ -52,6 +53,21 @@ register() {
         > "$REGISTRY/$2-abcdef12.json"
 }
 
+# subagent <parentSessionId> <stem> <age> <suffix>... — one call, as the CLI lays it out:
+# <project>/subagents/<parentSessionId>/<agent>-<callid><suffix>.  The parent session is the
+# DIRECTORY name; the file name carries no sessionId at all.
+subagent() {
+    local parent="$1" stem="$2" age="$3"
+    shift 3
+    mkdir -p "$SUBAGENTS/$parent"
+    for suffix in "$@"
+    do
+        printf '{"parent":"%s","stem":"%s","suffix":"%s"}\n' "$parent" "$stem" "$suffix" \
+            > "$SUBAGENTS/$parent/$stem$suffix"
+        touch -d "$age" "$SUBAGENTS/$parent/$stem$suffix"
+    done
+}
+
 # proc_start <pid> — "<bootid>:<ticks>", built the same way the tool reads /proc.
 proc_start() {
     local ticks
@@ -65,7 +81,7 @@ proc_start() {
     run "$TOOL" --qwen-dir "$QWEN"
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"TO REMOVE     1 ("* ]]
+    [[ "$output" == *"TO REMOVE     1 unit, 1 file ("* ]]
     [[ "$output" == *"unreg-old.jsonl"* ]]
     [[ "$output" == *"DRY RUN       nothing deleted"* ]]
     # Rule 5: the artifact is still there after a default run.
@@ -82,7 +98,7 @@ proc_start() {
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"of those LIVE (rule 1, never touched): 1"* ]]
-    [[ "$output" == *"TO REMOVE     0 ("* ]]
+    [[ "$output" == *"TO REMOVE     0 units, 0 files ("* ]]
     [ -f "$CHATS/live-sid.jsonl" ]
 }
 
@@ -92,7 +108,7 @@ proc_start() {
     run "$TOOL" --qwen-dir "$QWEN"
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"TO REMOVE     1 ("* ]]
+    [[ "$output" == *"TO REMOVE     1 unit, 1 file ("* ]]
     # Size, mtime and age are all printed: a count alone cannot be checked (rule 3).
     [[ "$output" == *"unreg-old.jsonl  "*"bytes  mtime="* ]]
     [[ "$output" == *"age=200.0 days"* ]]
@@ -105,7 +121,7 @@ proc_start() {
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"kept          younger than the cutoff: 1"* ]]
-    [[ "$output" == *"TO REMOVE     0 ("* ]]
+    [[ "$output" == *"TO REMOVE     0 units, 0 files ("* ]]
 }
 
 @test "retention: --delete removes exactly the listed set and leaves the rest byte-identical" {
@@ -122,7 +138,7 @@ proc_start() {
     run "$TOOL" --qwen-dir "$QWEN" --delete
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"TO REMOVE     3 ("* ]]
+    [[ "$output" == *"TO REMOVE     3 units, 3 files ("* ]]
     [[ "$output" == *"DELETED       3 files"* ]]
     # Exactly the listed three are gone — including the ledger that shares the sessionId.
     [ ! -e "$CHATS/drop-a.jsonl" ]
@@ -147,7 +163,7 @@ proc_start() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"excluded      registered (rule 2): 1"* ]]
     [[ "$output" == *"of those LIVE (rule 1, never touched): 0"* ]]
-    [[ "$output" == *"TO REMOVE     0 ("* ]]
+    [[ "$output" == *"TO REMOVE     0 units, 0 files ("* ]]
     [ -f "$CHATS/dead-sid.jsonl" ]
 }
 
@@ -169,9 +185,9 @@ proc_start() {
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"mtime strictly older than 10 days"* ]]
-    [[ "$output" == *"TO REMOVE     1 ("* ]]
+    [[ "$output" == *"TO REMOVE     1 unit, 1 file ("* ]]
     [[ "$output" == *"just-over.jsonl"* ]]
-    [[ "$output" != *"TO REMOVE     2 ("* ]]
+    [[ "$output" != *"TO REMOVE     2 units"* ]]
     [ -f "$CHATS/just-under.jsonl" ]
 }
 
@@ -201,7 +217,7 @@ proc_start() {
     run "$TOOL" --qwen-dir "$WORK/no-store-here"
 
     [ "$status" -eq 2 ]
-    [[ "$output" == *"no chat store at"* ]]
+    [[ "$output" == *"no chats store at"* ]]
     [[ "$output" == *"an empty scan is not a clean tree"* ]]
 }
 
@@ -227,4 +243,128 @@ proc_start() {
 
     # None of the three reached a scan, and none of them deleted anything.
     [ -f "$CHATS/unreg-old.jsonl" ]
+}
+
+# ==============================================================================
+# The default cutoff, and the subagent store (--store subagents)
+# ==============================================================================
+
+@test "retention: the default cutoff is 60 days (Wayne's decision, 2026-10-01)" {
+    # Both files are far outside the 24 h in-flight window, so only the cutoff can separate
+    # them.  A 30-day default would take the 45-day file; a 90-day default would spare the
+    # 90-day one — this case pins the value that was actually decided.
+    transcript inside-default "45 days ago"
+    transcript outside-default "90 days ago"
+
+    run "$TOOL" --qwen-dir "$QWEN"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"strictly older than 60 days"* ]]
+    [[ "$output" == *"TO REMOVE     1 unit, 1 file ("* ]]
+    [[ "$output" == *"outside-default.jsonl"* ]]
+    [ -f "$CHATS/inside-default.jsonl" ]
+}
+
+@test "retention: a file being written right now is never eligible (rule 6, the in-flight guard)" {
+    # The measurement the guard rests on: appending updates mtime.  The cutoff is 0 days, so
+    # EVERY file here is "old enough" and only the in-flight window can tell them apart —
+    # which is what makes this a test of rule 6 rather than a second test of rule 3.
+    subagent parent-gone call-inflight "300 days ago" ".jsonl"
+    subagent parent-gone call-abandoned "300 days ago" ".jsonl"
+    printf 'append\n' >> "$SUBAGENTS/parent-gone/call-inflight.jsonl"
+
+    run "$TOOL" --qwen-dir "$QWEN" --store subagents --max-age-days 0
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"in-flight     newest mtime inside 24 h"* ]]
+    [[ "$output" == *"kept          inside the in-flight window: 1"* ]]
+    [[ "$output" == *"TO REMOVE     1 unit, 1 file ("* ]]
+    [[ "$output" == *"call-abandoned"* ]]
+    [[ "$output" != *"call-inflight"* ]]
+    [ -f "$SUBAGENTS/parent-gone/call-inflight.jsonl" ]
+}
+
+@test "retention: an abandoned subagent call is one unit — transcript, sidecar and stale stream go together" {
+    subagent parent-gone agent-Explore-deadbeef "200 days ago" ".jsonl" ".meta.json" ".stream"
+
+    run "$TOOL" --qwen-dir "$QWEN" --store subagents --delete
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"1 unit per call, keyed by the PARENT session directory"* ]]
+    [[ "$output" == *"TO REMOVE     1 unit, 3 files ("* ]]
+    [[ "$output" == *"DELETED       3 files"* ]]
+    # No orphan sidecar and no orphan stream: the call goes as one.
+    [ -z "$(ls -A "$SUBAGENTS/parent-gone")" ]
+}
+
+@test "retention: a live .stream pins its whole call, transcript and sidecar included" {
+    # An in-flight call writes its .stream continuously; the unit's age is the NEWEST of its
+    # files, so the fresh partial holds back the 300-day-old transcript beside it.  Delete a
+    # transcript out from under a running call and the call is what breaks.
+    #
+    # The cutoff is 0 days on purpose: at the 60-day default such a unit is ALSO "younger
+    # than the cutoff", and then the cutoff, not rule 6, is what saves it — this case pins
+    # the rule that actually decides, and the transcript here is old enough that nothing
+    # else could.
+    subagent parent-gone agent-general-purpose-runnow "300 days ago" ".jsonl" ".meta.json"
+    printf 'tokens\n' > "$SUBAGENTS/parent-gone/agent-general-purpose-runnow.jsonl.stream"
+
+    run "$TOOL" --qwen-dir "$QWEN" --store subagents --max-age-days 0 --delete
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"kept          inside the in-flight window: 1"* ]]
+    [[ "$output" == *"TO REMOVE     0 units, 0 files ("* ]]
+    [ -f "$SUBAGENTS/parent-gone/agent-general-purpose-runnow.jsonl" ]
+    [ -f "$SUBAGENTS/parent-gone/agent-general-purpose-runnow.meta.json" ]
+}
+
+@test "retention: a live registered parent's subagent call is excluded and survives --delete (rule 1)" {
+    # The subagent file names no session, so the ONLY link is the parent directory.  Here the
+    # parent is this test shell, registered and alive: its calls are excluded whatever age
+    # they carry.
+    register live-parent "$$" "$(proc_start "$$")"
+    subagent live-parent agent-Explore-12345678 "300 days ago" ".jsonl" ".meta.json"
+
+    run "$TOOL" --qwen-dir "$QWEN" --store subagents --delete
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"of those LIVE (rule 1, never touched): 1"* ]]
+    [[ "$output" == *"TO REMOVE     0 units, 0 files ("* ]]
+    [ -f "$SUBAGENTS/live-parent/agent-Explore-12345678.jsonl" ]
+}
+
+@test "retention: rule 2 excludes nothing for subagents — a registered parent is a LIVE parent" {
+    # Stated in the header, and measured here: the registry holds live sessions, so a parent
+    # found in it is registered AND live, and rule 2's own contribution is zero.  A subagent
+    # call whose parent is NOT in the registry is what the policy actually decides on.
+    register registered-parent "$$" "$(proc_start "$$")"
+    subagent registered-parent agent-Explore-aaaaaaaa "300 days ago" ".jsonl"
+    subagent never-registered agent-Explore-bbbbbbbb "300 days ago" ".jsonl"
+
+    run "$TOOL" --qwen-dir "$QWEN" --store subagents
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"excluded      registered (rule 2): 1"* ]]
+    [[ "$output" == *"TO REMOVE     1 unit, 1 file ("* ]]
+    [[ "$output" == *"never-registered/agent-Explore-bbbbbbbb  "* ]]
+    # The registered parent's call is REPORTED as excluded; it must not appear in the plan
+    # listing, whose entries are the full path under the store (the exclusion lines are not).
+    [[ "$output" != *"/subagents/registered-parent/"* ]]
+}
+
+@test "retention: --store selects one store and leaves the other alone" {
+    transcript chat-old "300 days ago"
+    subagent parent-gone agent-Explore-99999999 "300 days ago" ".jsonl"
+
+    run "$TOOL" --qwen-dir "$QWEN"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"store         chats ("* ]]
+    [[ "$output" == *"chat-old.jsonl"* ]]
+    [[ "$output" != *"agent-Explore-99999999"* ]]
+
+    run "$TOOL" --qwen-dir "$QWEN" --store subagents
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"store         subagents ("* ]]
+    [[ "$output" == *"agent-Explore-99999999"* ]]
+    [[ "$output" != *"chat-old.jsonl"* ]]
 }

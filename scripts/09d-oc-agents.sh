@@ -7,6 +7,20 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+#   v46 (2026-10-01): the SecretRef table gains three rows the Gateway's startup sweep was
+#   deleting, and the refresh NAMES the bridged keys placed on NO surface instead of only
+#   counting them.  Rows added, each validated against the live schema the way
+#   tests/unit/15-secret-ref-paths.bats does: `gateway.auth.token` (OPENCLAW_GATEWAY_TOKEN —
+#   auth.mode stays "password", so naming the token preserves it without flipping the mode),
+#   `talk.providers.elevenlabs.apiKey` (the plugin's schema is additionalProperties:false with
+#   no declared properties, so this is its only field), and
+#   `models.providers.qwen-token-plan.apiKey` (the provider id the bundled catalog declares;
+#   nothing selects it yet, so the row only stops the sweep deleting the key and lets the
+#   manager-env push carry it — superseding v45's "no row" note for that key).  The new
+#   unplaced report distinguishes "waiting for a consumer" from "placed nowhere": a key on no
+#   config ref, no unit EnvironmentFile, no environment.d drop-in and not in the manager env
+#   is named on every refresh, because a credential on no surface at all is readable by
+#   nothing.  Carried from another lane's change-set; the shell module is otherwise unchanged.
 #   v45 (2026-10-01): the SecretRef table gains GH_TOKEN, at `gateway.controlUi.github.token`.
 #   The startup sweep deletes every managed key the CONFIG does not name, and this host supplies
 #   GH_TOKEN from the user-manager environment, so it was deleted (measured with
@@ -36,7 +50,7 @@
 #   Both providers are BUNDLED (the bundle ships docs/providers/deepseek.md and ollama.md), so
 #   the apiKey-only overlay is schema-legal; a CUSTOM provider would be refused. The
 #   auth-profile store entries stay, as a second channel. Card OC-REFRESH-KEYS-AUTHPROFILE-001.
-# Module Version: 45
+# Module Version: 46
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -905,7 +919,7 @@ function __oc_apply_secret_refs() {
     # no-op refresh performs no config writes at all.
     local _patch_info _patch _applied=0 _skipped=0 _failed=0
     _patch_info=$(python3 - <<'PYEOF'
-import json, os, sys
+import json, os, subprocess, sys
 entries = [
     # Web Search Plugin API Keys
     ("plugins.entries.google.config.webSearch.apiKey", "GEMINI_API_KEY"),
@@ -964,6 +978,29 @@ entries = [
     # declared in the config yet never reached the gateway by name; mapping them
     # makes the env the single maintained channel (2026-09-22).
     ("skills.entries.agentmail-cli.apiKey", "AGENTMAIL_API_KEY"),
+    # 2026-10-01 (Wayne): keys the Gateway's startup sweep deletes, which only the login-shell
+    # import was putting back. Each field below was validated against the real schema with
+    # `openclaw config patch --dry-run` on a throwaway empty config — the same oracle
+    # tests/unit/15-secret-ref-paths.bats runs, so a row that drifts from the schema fails there:
+    #   gateway.auth.token      the Gateway's own token. Its auth.mode is explicitly "password"
+    #                           (and stays that way: finalizeResolvedGatewayAuth takes
+    #                           authConfig.mode before any token), so naming the token here does
+    #                           not flip the auth mode — it makes the sweep preserve it.
+    #   talk.providers.elevenlabs.apiKey
+    #                           elevenlabs is a talk/speech provider (docs/nodes/talk*.md:
+    #                           "the matching talk.providers.<provider> configuration"); the
+    #                           plugin's own configSchema (dist/extensions/elevenlabs) is
+    #                           additionalProperties:false with NO properties, so this is the
+    #                           only field its key can be named on.
+    #   models.providers.qwen-token-plan.apiKey
+    #                           the provider id the bundled catalog declares for
+    #                           QWEN_TOKEN_PLAN_API_KEY (dist/official-external-provider-catalog).
+    #                           Nothing selects that provider yet, so today this row buys the two
+    #                           things the key lacked entirely: the sweep stops deleting it, and
+    #                           the manager-env push starts carrying it.
+    ("gateway.auth.token", "OPENCLAW_GATEWAY_TOKEN"),
+    ("talk.providers.elevenlabs.apiKey", "ELEVENLABS_API_KEY"),
+    ("models.providers.qwen-token-plan.apiKey", "QWEN_TOKEN_PLAN_API_KEY"),
 ]
 
 def set_path(node, path, value):
@@ -1052,6 +1089,67 @@ if bridged:
         _msg += " -- NOT injectable (config refs with a NON-env source): " + ", ".join(
             "{}@{} (source {})".format(v, p, s) for v, p, s in _gaps
         )
+
+    # 2026-10-01 (Wayne): NAME the credentials placed on NO surface, rather than counting them.
+    # "waiting for a consumer" and "placed nowhere" are different states: a key no config ref
+    # names can still be carried by the unit's EnvironmentFile or the environment.d drop-in
+    # (GITHUB_TOKEN, TAILSCALE_API_KEY are), and a consumer can read it there. A key on no
+    # surface at all is readable by nothing, however long it sits in the bridge -- the
+    # "imported from Windows but missing" class, which is expensive to rediscover.
+    #
+    # Surfaces counted: an env-backed config ref (the durable, sweep-proof place), a config ref
+    # with any other source, the unit's EnvironmentFile, the environment.d drop-in, and the
+    # systemd user-manager env. The manager env is this script's own push target; when it cannot
+    # be read (no user bus -- the agent/CI shell case) the recorded pushed set stands in and the
+    # message says which was used, so a bus-less refresh cannot report every un-referenced key
+    # as unplaced.  Measured 2026-10-01: no bridged key is carried by the manager env ALONE, so
+    # counting it or not changes nothing today; it is read anyway because Wayne's surface list
+    # includes it.
+    def _surface_names(_path):
+        _found = set()
+        try:
+            with open(os.path.expanduser(_path), encoding="utf-8") as _handle:
+                for _raw in _handle:
+                    _raw = _raw.strip()
+                    if not _raw or _raw.startswith("#") or "=" not in _raw:
+                        continue
+                    _key = (_raw[7:] if _raw.startswith("export ") else _raw).split("=", 1)[0].strip()
+                    if _key:
+                        _found.add(_key)
+        except FileNotFoundError:
+            pass  # absent file: this surface places nothing (the expected case on a bare host)
+        except OSError as _exc:
+            print("[tac] gateway env: cannot read {} ({}); counting it as placing nothing".format(_path, _exc),
+                  file=sys.stderr)
+        return _found
+
+    _manager_names, _manager_surface = set(), "the user-manager env"
+    try:
+        _manager_names = {
+            _line.split("=", 1)[0]
+            for _line in subprocess.run(["systemctl", "--user", "show-environment"],
+                                        capture_output=True, text=True, timeout=20, check=False).stdout.splitlines()
+            if "=" in _line
+        }
+    except (OSError, subprocess.SubprocessError) as _exc:
+        _manager_surface = "the recorded push set (user-manager env unreadable: {})".format(_exc)
+        try:
+            with open(os.path.join(os.environ.get("TAC_CACHE_DIR", "/dev/shm"), "tac_win_api_keys.resolved"),
+                      encoding="utf-8") as _handle:
+                _manager_names = {_line.strip() for _line in _handle if _line.strip()}
+        except OSError as _exc2:
+            _manager_surface = "no surface at all (user-manager env AND the recorded push set are unreadable: {})".format(_exc2)
+            _manager_names = set()
+
+    _placed_surfaces = (refs_env
+                        | {v for v, _p, _s in refs_other}
+                        | _surface_names("~/.openclaw/gateway.systemd.env")
+                        | _surface_names("~/.config/environment.d/90-openclaw.conf")
+                        | _manager_names)
+    _unplaced = sorted(bridged - _placed_surfaces)
+    if _unplaced:
+        _msg += (" -- ON NO SURFACE (bridged, but named by no config ref and present on neither the unit "
+                 "EnvironmentFile, the environment.d drop-in, nor {}): {}".format(_manager_surface, ", ".join(_unplaced)))
     print(_msg, file=sys.stderr)
 print(json.dumps({"patch": patch, "changed": changed, "skipped": skipped}))
 PYEOF
