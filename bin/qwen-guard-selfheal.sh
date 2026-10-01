@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Self-heal guard for the Qwen daemon's read-only-git patch AND the Qwen CLI's
+# memory-index patch.
+#
+# WHY: qwen-guard-patch.sh patches `daemon-git-worktree-guard-*.js` inside the
+# VS Code extension bundle. Every extension update replaces that chunk and
+# silently reverts the patch (back to the two-verb allowlist, so `git -C <other
+# repo> log|status|diff` is denied as "mutating"). This guard re-applies it.
+#
+# The same watchdog also covers qwen-memory-index-patch.sh, which patches the
+# Qwen CLI's own memory-index builder so it stops truncating every MEMORY.md
+# index line at 150 chars -- a cut that lands inside the "](path)" link and
+# leaves the entry unresolvable.  That patch lives on a FOREIGN bundle too (four
+# copies: the linuxbrew CLI, the VS Code companion, the npm update cache, and the
+# Windows-side companion), so any CLI/companion update reverts it just like the
+# guard patch -- and a reverted index patch fails silently, chopping links.
+#
+# Run from cron. Deliberately quiet when healthy: it does nothing and prints
+# nothing when every patch is already in place, and it only writes a record when
+# it actually had to act. When it CANNOT restore a patch it exits non-zero, so a
+# failed run no longer reports success -- but note that this box has NO mail
+# transport (no msmtp/sendmail/postfix, empty /var/mail), so the exit status alone
+# reaches nobody: delivering that failure is still an open item.
+#
+# Idempotency comes from each patch script itself, which refuses to patch a bundle
+# whose shape changed rather than patching blind.
+#
+# TRACKED HERE since 2026-10-01: this script lived only as a loose copy at
+# ~/.local/bin/qwen-guard-selfheal.sh, so the one thing that notices a reverted guard
+# patch was unversioned.  `install.sh` links every file in `bin/` into ~/.local/bin, so
+# the CRON ENTRY IS UNCHANGED: the 17,47 * * * * job invokes the stable path
+# ~/.local/bin/qwen-guard-selfheal.sh, which keeps resolving — now as a symlink to
+# this file.  Nothing about the schedule or the command has to move.
+#
+# AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 2
+#
+# 2026-10-01: wired qwen-memory-index-patch.sh into this watchdog (run its
+# --check; re-apply; --check again) alongside the guard patch, because its patch
+# is also per-foreign-bundle and reverts on every CLI/companion update.  Mirrored
+# into this tracked copy from the loose ~/.local/bin one, so that when install.sh
+# replaces that copy with a symlink here the index coverage is not silently lost.
+set -uo pipefail
+
+# cron's PATH omits linuxbrew. The patch scripts run `node --check` to validate
+# each patched chunk and ROLL BACK if it fails, so without node on PATH this
+# guard would back up, patch, fail the check, and revert on every run - leaving
+# stray .orig-* backups and no patch. Pin the path explicitly.
+export PATH="/home/linuxbrew/.linuxbrew/bin:/home/wayne/.local/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+
+PATCH="/home/wayne/.local/bin/qwen-guard-patch.sh"
+IDX="/home/wayne/.local/bin/qwen-memory-index-patch.sh"
+LOG_DIR="/home/wayne/.local/share/qwen-guard"
+LOG="$LOG_DIR/selfheal.log"
+
+# Ask each TOOL its own --check (never this guard's own idea of health), so one
+# tool being absent cannot mask the other.  A tool that is not executable is
+# treated as "nothing to do", mirroring the original guard-only behaviour.
+needed=()
+if [ -x "$PATCH" ] && ! "$PATCH" --check >/dev/null 2>&1; then
+  needed+=(guard)
+fi
+if [ -x "$IDX" ] && ! "$IDX" --check >/dev/null 2>&1; then
+  needed+=(memory-index)
+fi
+
+# Every patch already in place (or nothing to patch): stay silent.
+[ "${#needed[@]}" -eq 0 ] && exit 0
+
+mkdir -p "$LOG_DIR"
+
+# Bound the log so an unattended loop cannot grow it without limit.  An unreadable
+# or absent log must not abort the guard, so the size test reads 0 lines and simply
+# skips the trim.
+if [ -f "$LOG" ] && [ "$(wc -l <"$LOG" 2>/dev/null || echo 0)" -gt 500 ]; then  # swallow-ok: no log yet on first run
+  tail -n 200 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+fi
+
+rc=0
+for tool in "${needed[@]}"; do
+  case "$tool" in
+    guard) patch="$PATCH"; label="guard patch" ;;
+    memory-index) patch="$IDX"; label="memory-index patch" ;;
+  esac
+
+  {
+    echo "=== $(date -Is) - ${label} was missing; re-applying"
+    "$patch" 2>&1
+    if "$patch" --check >/dev/null 2>&1
+    then
+      echo "    --check after: ok"
+    else
+      echo "    --check after: STILL-NEEDS-ATTENTION"
+      rc=1
+    fi
+  } >>"$LOG" 2>&1
+done
+
+# Exit non-zero when a patch could not be restored: 30 consecutive runs on
+# 2026-09-27 recorded STILL-NEEDS-ATTENTION here and still exited 0, so nothing
+# downstream could tell a repaired box from one that had been unpatched for hours.
+exit "$rc"
+# end of file
