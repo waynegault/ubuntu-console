@@ -52,11 +52,17 @@ jobs:
         run: |
           # 04-llama-cpp-inventory.bats is excluded from BOTH workflows: it performs
           # live downloads and mutates the host.
+          # 38-heavy-job.bats is listed HERE rather than in ci.yml's per-push unit list
+          # for one reason only: ci.yml carried another lane's uncommitted edit when this
+          # suite landed (2026-10-01), so adding to it would have committed that lane's
+          # work.  The suite is fast (~15 s, hermetic — its own lock under the test tmpdir)
+          # and belongs in ci.yml; move it there when that edit is committed.
           bats --print-output-on-failure tests/unit/05-spec-dec-threads.bats \
                tests/unit/06-spec-dec-stats.bats \
                tests/unit/07-spec-dec-launch.bats \
                tests/unit/08-autotune-workload.bats \
-               tests/unit/12-gpu-exclusivity.bats
+               tests/unit/12-gpu-exclusivity.bats \
+               tests/unit/38-heavy-job.bats
 
       # The integration suites are deliberately NOT repeated here: ci.yml runs
       # 01-maintenance, 02-model-lifecycle, 03-backup-restore, 04-watchdog,
