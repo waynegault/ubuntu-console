@@ -7,6 +7,18 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+#   v47 (2026-10-01): the shadowing report now compares EVERY env surface against the
+#   canonical bridge value — Wayne's ruling (2026-10-01) is that the Windows user
+#   environment is the source and every other surface is a derived copy that nobody
+#   hand-edits.  It therefore reads the systemd USER MANAGER env as well as the
+#   environment.d drop-in: the manager env is the surface the Gateway itself inherits
+#   and the previous version could not see.  A name is reported together with the
+#   surface that diverged from the canonical value, and a surface that exists but cannot
+#   be read is NAMED ("NOT COMPARED: …") rather than treated as agreeing.  The status
+#   length budget is now DERIVED from the message actually built (__oc_fit_list) instead
+#   of the hardcoded fixed cost the longer status had silently invalidated — measured
+#   2026-10-01, the line reached 108 characters and unaligned the report while both
+#   budget tests still asserted the old constant.
 #   v46 (2026-10-01): the SecretRef table gains three rows the Gateway's startup sweep was
 #   deleting, and the refresh NAMES the bridged keys placed on NO surface instead of only
 #   counting them.  Rows added, each validated against the live schema the way
@@ -50,7 +62,7 @@
 #   Both providers are BUNDLED (the bundle ships docs/providers/deepseek.md and ollama.md), so
 #   the apiKey-only overlay is schema-legal; a CUSTOM provider would be refused. The
 #   auth-profile store entries stay, as a second channel. Card OC-REFRESH-KEYS-AUTHPROFILE-001.
-# Module Version: 46
+# Module Version: 47
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -1745,36 +1757,144 @@ function __oc_report_gh_path_shim() {
 }
 
 # ---------------------------------------------------------------------------
-# __oc_report_key_shadowing — name any variable the bridge cache and the static
-# environment.d drop-in disagree on.
+# __oc_fit_list — the longest "; "-joined prefix of a list that fits a length budget.
 #
-# One name, two values: both are "the env" for different consumers, so a value that
-# differs between them is a silent-shadowing machine — which one a process gets
-# depends on what it inherits, and nothing else on this box compares the two.
+# Prints "<fitted>|<count>": the joined items that fit and how many of them there were.
+# The reports in this file end in a __tac_info STATUS, and __tac_info keeps its column
+# only while len(status) fits the width left after the label — an over-long status takes
+# the padding down to a single space and unaligns the WHOLE report (measured 2026-09-23).
+# Re-deriving "what fits" by hand is how that recurs: measured 2026-10-01, a wording
+# change made a hardcoded fixed cost silently wrong and the line went past UIWidth with
+# every test still naming the old constant. So a report hands this function the budget it
+# actually has and names what fits, then a count of what did not.
+# Usage: _fit=$( __oc_fit_list <budget> "${_items[@]}" )
+# ---------------------------------------------------------------------------
+function __oc_fit_list() {
+    local _budget="$1"
+    shift
+    local _out="" _item _cand _n=0
+    for _item in "$@"
+    do
+        _cand="${_out:+$_out; }$_item"
+        (( ${#_cand} <= _budget )) || break
+        _out="$_cand"
+        _n=$(( _n + 1 ))
+    done
+    printf '%s|%s\n' "$_out" "$_n"
+}
+
+# ---------------------------------------------------------------------------
+# __oc_shadowing_line — render the "Key shadowing" line for two name lists.
 #
-# NAMES are printed; values are compared and dropped, never reported. They are read
-# from the CACHE FILE in a subshell so the comparison does not read whatever the
-# calling shell happens to hold — environment.d is exported into bridged shells,
-# which would hide the very difference being looked for.
+# __oc_shadowing_line <label> <differs: newline-separated> <unreadable: newline-separated>
+#
+# The lists carry NAMES and surfaces only — never a value — and the label is an argument
+# so the width budget is derived from the same string __tac_info pads, which is the only
+# way the two can agree (the failure this replaces was a budget assumed rather than
+# measured). Split out of __oc_report_key_shadowing to keep that function bounded.
+#
+# LENGTH BUDGET (see __oc_report_gh_credential_surface). __tac_info pads the label out to
+# UIWidth and keeps its column only while the whole label + 1 + status fits, so the status
+# may not exceed UIWidth - len(label) - 1. Every constant here is DERIVED from the message
+# actually being built: the fixed cost this used to assume was 20, and it went stale the
+# moment the status grew a phrase and a per-name surface (measured 2026-10-01 — the line
+# reached 108 characters and unaligned the report while both budget tests still asserted
+# the old constant). The " +NN" reserve uses the TOTAL count as an upper bound on the
+# remainder's digits, so a truncated list cannot grow past the budget it was fitted to.
+# ---------------------------------------------------------------------------
+function __oc_shadowing_line() {
+    local _label="$1" _differs_in="$2" _unreadable_in="$3"
+    local -a _differs=() _unreadable=()
+    local _l
+    while IFS= read -r _l
+    do
+        if [[ -n "$_l" ]]; then _differs+=("$_l"); fi
+    done <<< "$_differs_in"
+    while IFS= read -r _l
+    do
+        if [[ -n "$_l" ]]; then _unreadable+=("$_l"); fi
+    done <<< "$_unreadable_in"
+    local _max_status=$(( UIWidth - ${#_label} - 1 ))
+    local _count_part
+    if (( ${#_differs[@]} > 0 ))
+    then
+        _count_part="${#_differs[@]} differ from the bridge"
+    else
+        # Nothing seen to differ — which is only a statement about the surfaces that
+        # COULD be read, and the clause below names which ones those were not.
+        _count_part="no differences seen"
+    fi
+    # A surface that could not be read is reported EVERY time: an unreadable copy is
+    # exactly where a divergence would hide, so silence would read as agreement — and it
+    # is an alarm in its own right, not detail to drop when the names want the room.
+    local _unread_clause=""
+    if (( ${#_unreadable[@]} > 0 ))
+    then
+        local _uprefix="; NOT COMPARED: "
+        local _ufit _ushown _un
+        local _uroom=$(( _max_status - 1 - ${#_count_part} - 1 - ${#_uprefix} - 2 - ${#_unreadable[@]} ))
+        _ufit=$( __oc_fit_list "$_uroom" "${_unreadable[@]}" )
+        _ushown="${_ufit%|*}"
+        _un="${_ufit##*|}"
+        if (( _un == 0 ))
+        then
+            # Even one surface label cannot fit: the count alone still says the check could
+            # not be completed, which is the part that must not be lost.
+            _unread_clause="${_uprefix}${#_unreadable[@]} surfaces"
+        else
+            _unread_clause="${_uprefix}${_ushown}"
+            if (( ${#_unreadable[@]} > _un ))
+            then
+                _unread_clause="${_unread_clause} +$(( ${#_unreadable[@]} - _un ))"
+            fi
+        fi
+    fi
+    # What is left goes to the names, each of which carries its own surface: which copy
+    # diverged is the whole finding, so a name is never printed without it.
+    local _names_part=""
+    local _names_budget=$(( _max_status - 1 - ${#_count_part} - 2 - ${#_unread_clause} - 1 - 2 - ${#_differs[@]} ))
+    if (( ${#_differs[@]} > 0 )) && (( _names_budget > 0 ))
+    then
+        local _fit _shown _ns
+        _fit=$( __oc_fit_list "$_names_budget" "${_differs[@]}" )
+        _shown="${_fit%|*}"
+        _ns="${_fit##*|}"
+        if (( _ns > 0 ))
+        then
+            _names_part=": $_shown"
+            if (( ${#_differs[@]} > _ns ))
+            then
+                _names_part="${_names_part} +$(( ${#_differs[@]} - _ns ))"
+            fi
+        fi
+    fi
+    __tac_info "$_label" "[${_count_part}${_names_part}${_unread_clause}]" "$C_Warning"
+}
+
+# ---------------------------------------------------------------------------
+# __oc_report_key_shadowing — compare every env surface against the CANONICAL value.
+#
+# Wayne's ruling (2026-10-01): the Windows user environment is canonical. The bridge cache
+# is this box's copy of it and every other surface is DERIVED, so a name whose value
+# differs on a derived surface is a copy that has diverged — and what matters is the name
+# plus WHICH surface. A process gets whichever surface it inherits, so a diverged copy is a
+# silent-shadowing machine, and nothing else on this box compares them.
+#
+# Surfaces compared: the environment.d drop-in (a static file) and the systemd USER MANAGER
+# environment — the one the Gateway itself inherits, which the earlier version of this
+# report could not see. A surface that exists but cannot be read is NAMED as unreadable,
+# never treated as agreeing: that is exactly the case where a divergence would hide.
+#
+# NAMES are printed; values are compared and dropped, never reported. Each surface is read
+# in a subshell and DECODED — both files store %q-escaped values and systemd quotes its own
+# output — because the decoded value is what a consumer sees. Comparing a decoded value
+# against raw text reported 4 correct values as differences on 2026-10-01.
 # ---------------------------------------------------------------------------
 function __oc_report_key_shadowing() {
     local _cache="$1"
     local _envd="$HOME/.config/environment.d/90-openclaw.conf"
-    if [[ ! -f "$_envd" ]]
-    then
-        return 0
-    fi
-    local -A _envd_map=()
-    local _kv _n _v
-    while IFS='=' read -r _n _v
-    do
-        [[ -n "$_n" ]] && _envd_map["$_n"]="$_v"
-    done < "$_envd"
-    # The values come from the CACHE FILE in a subshell, so the comparison does not
-    # read whatever this shell happens to hold. The directive is SC1090's own remedy:
-    # the path is a variable, so shellcheck cannot follow it. Measured with the pinned
-    # 0.11.0: a comment line between the directive and the `source` is fine, a trailing
-    # directive on the same line is an SC1073 parse error.
+    local _kv _envd_kv _mgr_raw _n _v _l
+    local -A _canon=()
     # shellcheck source=/dev/null
     # swallow-ok: a corrupt cache must not abort the refresh; the map is then empty and no difference is claimed
     _kv=$( source "$_cache" 2>/dev/null
@@ -1784,42 +1904,69 @@ function __oc_report_key_shadowing() {
                _n="${BASH_REMATCH[1]}"
                printf '%s=%s\n' "$_n" "${!_n:-}"
            done < "$_cache" )
-    local -a _differs=()
     while IFS='=' read -r _n _v
     do
-        [[ -n "${_envd_map[$_n]+set}" ]] || continue
-        [[ "$_v" == "${_envd_map[$_n]}" ]] && continue
-        _differs+=("$_n")
+        [[ -n "$_n" ]] && _canon["$_n"]="$_v"
     done <<< "$_kv"
-    if (( ${#_differs[@]} > 0 ))
+    local -a _differs=() _unreadable=()
+    # --- surface 1: the environment.d drop-in ---------------------------------
+    if [[ ! -f "$_envd" ]]
     then
-        # LENGTH BUDGET (see __oc_report_gh_credential_surface). Names are added only
-        # while the line still fits, so a list of long names cannot unalign the report;
-        # the remainder becomes a count. The constant is the fixed cost: 13 ("Key
-        # shadowing") + 1 (space) + 2 ("]") + 4 (" +NN").
-        local _head="[${#_differs[@]} differ from environment.d: "
-        local _shown="" _name _cand _n_shown=0
-        for _name in "${_differs[@]}"
-        do
-            _cand="${_shown:+$_shown, }$_name"
-            if (( 20 + ${#_head} + ${#_cand} > UIWidth )); then
-                break
-            fi
-            _shown="$_cand"
-            _n_shown=$(( _n_shown + 1 ))
-        done
-        if (( _n_shown == 0 ))
+        _unreadable+=("environment.d (absent)")
+    else
+        # shellcheck source=/dev/null
+        # The read's own diagnostic is deliberately NOT silenced: this probe exists to tell
+        # "readable and agreeing" from "could not be read", and the status below names the
+        # surface as unreadable as well.
+        if ! _envd_kv=$( source "$_envd" || exit 1
+                         while IFS= read -r _l
+                         do
+                             [[ "$_l" =~ ^(export[[:space:]]+)?([A-Z_][A-Z0-9_]*)= ]] || continue
+                             _n="${BASH_REMATCH[2]}"
+                             printf '%s=%s\n' "$_n" "${!_n:-}"
+                         done < "$_envd" )
         then
-            __tac_info "Key shadowing" "[${#_differs[@]} differ from environment.d]" "$C_Warning"
+            _unreadable+=("environment.d (unreadable)")
         else
-            local _tail=""
-            if (( ${#_differs[@]} > _n_shown ))
-            then
-                _tail=" +$(( ${#_differs[@]} - _n_shown ))"
-            fi
-            __tac_info "Key shadowing" \
-                "[${#_differs[@]} differ from environment.d: $_shown$_tail]" "$C_Warning"
+            while IFS='=' read -r _n _v
+            do
+                [[ -n "${_canon[$_n]+set}" ]] || continue
+                [[ "$_v" == "${_canon[$_n]}" ]] && continue
+                _differs+=("environment.d: $_n")
+            done <<< "$_envd_kv"
         fi
+    fi
+    # --- surface 2: the systemd user-manager env (what the Gateway inherits) ----
+    if ! _mgr_raw=$(systemctl --user show-environment 2>/dev/null)  # swallow-ok: no user bus; named unreadable below
+    then
+        _unreadable+=("user-manager env (unreadable)")
+    else
+        while IFS= read -r _l
+        do
+            [[ "$_l" == *=* ]] || continue
+            _n="${_l%%=*}"
+            _v="${_l#*=}"
+            [[ -n "${_canon[$_n]+set}" ]] || continue
+            case "$_v" in
+                # systemd renders a value it had to escape in ANSI-C form ($'…') and a plain
+                # one as-is; `%b` turns those escapes back into the bytes a consumer sees.
+                # Decoding only the double-quoted form reported five CORRECT passwords as
+                # diverged on 2026-10-01 — the same decoded-versus-raw mistake as before,
+                # one quoting form further on. A `*)` arm would be wrong for both shapes.
+                \$*\'*) _v=$(printf '%b' "${_v:2:${#_v}-3}") ;;
+                \"*\")  _v=$(printf '%b' "${_v:1:${#_v}-2}") ;;
+            esac
+            [[ "$_v" == "${_canon[$_n]}" ]] && continue
+            _differs+=("user-manager env: $_n")
+        done <<< "$_mgr_raw"
+    fi
+    if (( ${#_differs[@]} > 0 )) || (( ${#_unreadable[@]} > 0 ))
+    then
+        # The line is assembled (and fitted to the column width) by __oc_shadowing_line;
+        # this function's job is the comparison, and it passes NAMES and surfaces only.
+        __oc_shadowing_line "Key shadowing" \
+            "$(printf '%s\n' "${_differs[@]}")" \
+            "$(printf '%s\n' "${_unreadable[@]}")"
     fi
 }
 

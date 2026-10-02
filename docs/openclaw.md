@@ -145,10 +145,15 @@ The same refresh also reports two things that would otherwise decay silently:
 - **the shim itself**: that `~/.local/bin/gh` exists and that `command -v gh`
   still resolves to it. It is a symlink, so a missing or outranked one restores the
   fall-through with no cue at all.
-- **a shadowed key**: a name carried by *both* the bridge cache and the static
-  `environment.d` drop-in with different values (`Key shadowing`). Which value a
-  consumer gets depends on what it inherits, and nothing else compares the two.
-  Names are printed; values are compared and dropped.
+- **a shadowed key**: a name whose value on a **derived** surface disagrees with the
+  **canonical bridge value** (`Key shadowing`). The Windows user environment is the
+  source; the bridge cache is this box's copy of it, and the surfaces compared are the
+  static `environment.d` drop-in and the systemd **user-manager environment** — the one
+  the Gateway itself inherits. Which value a consumer gets depends on what it inherits,
+  and nothing else compares them. Names are printed, each with the surface that diverged;
+  values are compared and dropped. A surface that exists but cannot be read is named as
+  `NOT COMPARED`, never treated as agreeing. Nobody hand-edits a derived copy: the fix is
+  to re-derive it from the bridge.
 
 `oc health` additionally scans the session journal for a `gh`-requested
 `org.freedesktop.secrets` activation and names it (`Token-less gh`). That is the

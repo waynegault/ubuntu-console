@@ -666,9 +666,11 @@ ENVD
     # 80 is UIWidth; the label+status pair must stay inside it, not merely be present.
     [ "$longest" -gt 0 ]
     [ "$longest" -le 80 ]
-    # ...and five disagreements are named as far as the budget allows, then counted.
-    [[ "$stripped" == *"5 differ from environment.d:"* ]]
-    [[ "$stripped" == *"+3]"* ]]
+    # ...and disagreements are named as far as the budget allows, then counted. A name is
+    # never printed without the surface it diverged on, so naming costs 14 more characters
+    # per name than it used to — the budget is a real constraint, not a formality.
+    [[ "$stripped" == *"5 differ from the bridge: environment.d:"* ]]
+    [[ "$stripped" == *"+4]"* ]]
 }
 
 @test "oc-refresh-keys drops names that cannot fit and reports the count alone" {
@@ -686,7 +688,7 @@ ENVD
 
     local stripped
     stripped=$(printf '%s\n' "$output" | sed -E 's/\x1b\[[0-9;]*m//g')
-    [[ "$stripped" == *"[2 differ from environment.d]"* ]]
+    [[ "$stripped" == *"[2 differ from the bridge]"* ]]
     [[ "$stripped" != *"CREDENTIAL_NAME"* ]]
 }
 
@@ -749,6 +751,40 @@ ENVD
     # Names are reported; values never leave the function.
     [[ "$output" != *"cache-value"* ]]
     [[ "$output" != *"different-value"* ]]
+}
+
+@test "oc-refresh-keys names a surface it could NOT read instead of treating it as agreeing" {
+    # WHAT THIS CATCHES: a comparison that silently skips what it cannot read. With no
+    # drop-in there is nothing to compare, and a report that only counts differences would
+    # print nothing at all — the absent copy is exactly where a divergence hides, and this
+    # is the shape the earlier version had (it could not see the user-manager env either).
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=bridged-gh-token'"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Key shadowing"* ]]
+    [[ "$output" == *"NOT COMPARED"* ]]
+    [[ "$output" == *"environment.d (absent)"* ]]
+    # The surface is named; its values still never are.
+    [[ "$output" != *"bridged-gh-token"* ]]
+}
+
+@test "oc-refresh-keys decodes the user-manager rendering before comparing it" {
+    # WHAT THIS CATCHES: a comparison between a decoded value and a raw one. `systemctl
+    # --user show-environment` renders a value it had to escape in ANSI-C form ($'…'), so
+    # reading that rendering literally turns every password containing a quote, backslash
+    # or space into a phantom divergence — measured 2026-10-01, five correct passwords
+    # (DECO/GLOWMARKT/MICROSOFT/PRINTER/SSH) were reported as differing from the bridge.
+    # The same value decodes to the bridge value, so the report must stay SILENT.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GH_TOKEN=cache-value'"
+    __mock_command_local systemctl \
+        "printf '%s\\n' \"GH_TOKEN=\\\$'cache-value'\""
+    mkdir -p "$HOME/.config/environment.d"
+    printf 'GH_TOKEN=cache-value\n' > "$HOME/.config/environment.d/90-openclaw.conf"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Key shadowing"* ]]
 }
 
 @test "oc-refresh-keys is silent about shadowing when the two surfaces agree" {
