@@ -18,6 +18,9 @@ PATH=/opt/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 # BLE bridge watchdog for Govee + Mi Scale ingestion
 3,13,23,33,43,53 * * * * /mnt/HD/HD_a2/butler/bt-bridge/S35bt-mqtt-bridge start >> /mnt/HD/HD_a2/butler/logs/bt-bridge-watchdog.log 2>&1
+
+# Log rotation: size-cap the butler logs and bridge.log, one .old per log (rotate-logs.sh, bash).
+25 * * * * /mnt/HD/HD_a2/butler/scripts/rotate-logs.sh >> /mnt/HD/HD_a2/butler/logs/rotate-logs-cron.log 2>&1
 # END OPENCLAW-NAS-COLLECTORS
 
 # Internet connection quality monitor
