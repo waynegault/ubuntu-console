@@ -2,7 +2,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 31
+# Module Version: 32
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -90,6 +90,15 @@ function unittest() {
 
 # g — Shortcut for 'oc g' (launch knowledge graph server).
 alias g='oc g'
+
+# triage — OpenClaw diagnostics handoff, defaulting to the Qwen Code agent.
+# Qwen Code is already DeepSeek-backed (see ~/.qwen/settings.json), so this is the
+# cheap, supervised repair path. Escalate a hard install repair to the native
+# Codex CLI on OpenAI by bypassing the alias entirely:
+#   openclaw triage --agent codex
+# (Unattended/automatic repair ignores this: it uses the embedded agent, then
+#  Codex/Claude only, and cannot be pointed at Qwen.)
+alias triage='openclaw triage --agent qwen'
 
 # ---- Dev Tools & VS Code Wrappers (lazy-resolved — no pwsh hit at shell start) ----
 # Path resolution is centralised in __resolve_vscode_bin (§1).
