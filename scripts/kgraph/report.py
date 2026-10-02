@@ -60,7 +60,7 @@ def generate_report(graph: Graph | dict, **kwargs) -> str:
     centralities = compute_centrality(graph)
 
     # ── Communities ──
-    # Prefer the digest cached with the graph (written by `kgraph --update`) and
+    # Prefer the digest cached with the graph (written by `kgraph update`) and
     # only detect when there is none: the community report is meant to be a READ.
     if graph.meta.communities:
         communities = graph.meta.communities

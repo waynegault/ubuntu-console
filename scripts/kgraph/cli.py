@@ -2,20 +2,15 @@
 
 Each mode is a SUBCOMMAND — ``kgraph update``, ``kgraph query --query PATTERN``,
 ``kgraph serve`` … — with one ``cmd_<mode>(args)`` handler per mode, looked up in
-``_DISPATCH``.  ``main`` does nothing but pick the command and call it.
+``_DISPATCH``.  ``main`` does nothing but parse the command and call its handler.
 
-The legacy FLAT-FLAG form (``kgraph --update``) is still accepted: the repo's own
-git hooks (``tools/hooks/_kgraph-auto-rebuild``), the ``oc-kgraph`` launcher
-(``scripts/09f-oc-misc.sh``) and installed hooks written by an older ``kgraph``
-all invoke it that way, so dropping it would break first-party callers for no
-functional gain.  A flat-flag invocation is resolved to its command by
-``_resolve_legacy_command`` (the order the old if-chain used) and then runs the
-SAME handler the subcommand runs — there is one implementation per mode, two
-routes to it.
+There is NO flat-flag form: a mode flag such as ``--update`` is not accepted as a
+selector.  Every mode is reached as a subcommand, and bare ``kgraph`` (no command)
+prints the command list and exits non-zero via argparse's required-command error.
 
-``kgraph`` with no arguments is the default render: it writes the HTML viewer to
-a temp path (or ``--output``) and prints the command list; ``kgraph serve`` (or
-``--serve``) additionally serves that file.
+``kgraph html`` is the default render: it writes the HTML viewer to a temp path
+(or ``--output``) and prints the command list; ``kgraph serve`` additionally
+serves that file.
 """
 
 from __future__ import annotations
@@ -63,14 +58,12 @@ _DESCRIPTION = (
 # for --install-hook to rewrite it rather than refuse).
 _KGRAPH_HOOK_MARKER = "kgraph auto-rebuild"
 
-# Written by --install-hook.  Kept on the LEGACY flag form on purpose: the hook may
-# run against an older installed `kgraph` on PATH, which does not know the
-# subcommand form yet.
+# Written by --install-hook.  Subcommand form, matching the CLI it is installed by.
 _KGRAPH_HOOK_BODY = (
     "#!/bin/bash\n"
     "# kgraph auto-rebuild post-commit hook\n"
     'if command -v kgraph &>/dev/null; then\n'
-    '    kgraph --update --source-dir "$(git rev-parse --show-toplevel)" 2>&1 | sed \'s/^/[kgraph] /\'\n'
+    '    kgraph update --source-dir "$(git rev-parse --show-toplevel)" 2>&1 | sed \'s/^/[kgraph] /\'\n'
     "fi\n"
 )
 
@@ -200,13 +193,6 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--days", type=int, default=30, help="History window in days")
     parser.add_argument("--author", help="Filter by author")
     parser.add_argument("--max-prs", type=int, default=30, help="Max PRs/merges to include")
-
-
-def _build_legacy_parser() -> argparse.ArgumentParser:
-    """The flat-flag parser: `kgraph --update …`, and `kgraph` with no flags."""
-    parser = argparse.ArgumentParser(prog="kgraph", description=_DESCRIPTION)
-    _add_common_options(parser)
-    return parser
 
 
 def _build_subcommand_parser() -> argparse.ArgumentParser:
@@ -558,61 +544,11 @@ _DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
     "remove-source": cmd_remove_source,
 }
 
-# The flat flags that NAME a mode, in the order the old if-chain tested them.  The
-# first one present wins, so `kgraph --update --query x` still means update.
-_LEGACY_PRIORITY: tuple[tuple[str, str], ...] = (
-    ("ast", "ast"),
-    ("wiring", "wiring"),
-    ("install_hook", "install-hook"),
-    ("uninstall_hook", "uninstall-hook"),
-    ("update", "update"),
-    ("watch", "watch"),
-    ("mcp", "mcp"),
-    ("remove_source", "remove-source"),
-    ("query", "query"),
-    ("path", "path"),
-    ("explain", "explain"),
-    ("communities", "communities"),
-    ("god_nodes", "god-nodes"),
-    ("call_flow", "call-flow"),
-    ("confidence", "confidence"),
-    ("report", "report"),
-    ("pr_dashboard", "pr-dashboard"),
-    ("benchmark", "benchmark"),
-    ("audit", "audit"),
-)
-
-
-def _resolve_legacy_command(args: argparse.Namespace) -> str:
-    """The command a flat-flag invocation names.
-
-    `--serve` is not a mode of its own — in the old code it only chose whether the
-    default render also served the file — so it maps to `serve`; anything else
-    with no mode flag is the default `html` render.
-    """
-    for attr, command in _LEGACY_PRIORITY:
-        if getattr(args, attr):
-            return command
-    return "serve" if args.serve else "html"
-
 
 def main(argv: list[str] | None = None) -> None:
-    raw = list(sys.argv[1:] if argv is None else argv)
-
-    # Subcommand form: the command is the first token.
-    if raw and raw[0] in _DISPATCH:
-        args = _build_subcommand_parser().parse_args(raw)
-        _DISPATCH[args.command](args)
-        return
-
-    # `kgraph --help` lists the commands; `kgraph <command> --help` is handled above.
-    if raw and raw[0] in ("-h", "--help"):
-        _build_subcommand_parser().print_help()
-        return
-
-    # Flat-flag form (and bare `kgraph`, which is the default render).
-    args = _build_legacy_parser().parse_args(raw)
-    _DISPATCH[_resolve_legacy_command(args)](args)
+    parser = _build_subcommand_parser()
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    _DISPATCH[args.command](args)
 
 
 def _hooks_path_from_config(repo_root: str) -> str | None:

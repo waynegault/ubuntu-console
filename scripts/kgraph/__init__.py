@@ -4,7 +4,7 @@ __version__ = "2.0.0"
 
 # Lazy imports — modules are loaded on first access to avoid paying the
 # startup cost of importing all 16 submodules (tree-sitter, networkx, HTTP
-# server, MCP server, AST extractor, etc.) on every `kgraph --help`.
+# server, MCP server, AST extractor, etc.) on every `kgraph -h`.
 # Use `from kgraph import <name>` as normal; the import machinery is unchanged.
 # The __all__ list respects the public API contract.
 

@@ -256,7 +256,7 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                 # Architectural Patterns", Partha Sarkar, TDS, 2026-09-20 — the
                 # community reports the article calls "especially important for
                 # global reasoning").  Read-only: the digest is built by
-                # `kgraph --update` and stored with the graph.
+                # `kgraph update` and stored with the graph.
                 community_id = str(params.get('community_id', '') or '')
                 return community_view(self.graph, community_id)
 
@@ -328,7 +328,7 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
                             'nodes, bridging god nodes, boundary-edge count). With '
                             'community_id: that community\'s members, central nodes and '
                             'boundary edges. Read-only, from the digest cached with the graph '
-                            'by kgraph --update.'
+                            'by kgraph update.'
                         ),
                         'parameters': {
                             'community_id': (

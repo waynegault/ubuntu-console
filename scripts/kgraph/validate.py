@@ -193,7 +193,7 @@ def _check_community_digest(graph: dict) -> list[dict]:
             "message": (
                 f"meta.communities[{idx}] '{community.get('id', '?')}' lists "
                 f"{len(missing)} member(s) absent from the graph: {shown}{more} — "
-                f"the cached digest is stale; rebuild (kgraph --update) to redigest"
+                f"the cached digest is stale; rebuild (kgraph update) to redigest"
             ),
         })
     return findings

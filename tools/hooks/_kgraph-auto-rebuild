@@ -36,13 +36,13 @@ _kgraph_auto_rebuild() {
         && PYTHONPATH="$_repo_root/scripts" "$_repo_root/.venv/bin/python3" -c 'import kgraph' >/dev/null 2>&1
     then
         PYTHONPATH="$_repo_root/scripts" "$_repo_root/.venv/bin/python3" -m kgraph \
-            --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /' || _rc=$?
+            update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /' || _rc=$?
     elif command -v kgraph >/dev/null 2>&1
     then
         # Fallback: the installed copy.  Its code is NOT tied to this tree, so say so
         # rather than presenting a graph built from something else as this repo's.
         printf '[kgraph-auto] WARNING: using the installed kgraph, not this repo copy\n' >&2
-        kgraph --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /' || _rc=$?
+        kgraph update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /' || _rc=$?
     fi
 
     # The elapsed time, so "commits are slow" is a number rather than a feeling — and the

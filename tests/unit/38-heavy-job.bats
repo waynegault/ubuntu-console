@@ -4,7 +4,7 @@
 # ==============================================================================
 # WHY (2026-10-01).  Measured 2026-09-29 23:43: load 24.82/22.61/19.61 on a 16-core box,
 # the top consumers an investigator `mypy pipeline`, three investigator REPLs, an
-# `ubuntu-console kgraph --update` and llama-server; agent turns took ~11.5 minutes to
+# `ubuntu-console kgraph update` and llama-server; agent turns took ~11.5 minutes to
 # reach model_call_started.  The Gateway's cgroup weight protects the CONTROL PLANE — it
 # does not reduce the load.  bin/heavy-job is the missing coordination: ONE exclusive
 # flock, held for the whole run, self-releasing on death (SIGKILL included).

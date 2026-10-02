@@ -7,7 +7,7 @@ unused package facades, and cross-file call gaps.  This is the
 real imports and definitions rather than name-shaped call nodes.
 
 CLI:
-    kgraph --wiring --repo /path/to/repo
+    kgraph wiring --repo /path/to/repo
 """
 
 from __future__ import annotations

@@ -3165,7 +3165,7 @@ A bench stops after 2 consecutive case *errors* (exception, timeout, empty gener
 
 🔍 Graph and wiring health
 
-PYTHONPATH=scripts python3 -m kgraph --update --repo .; PYTHONPATH=scripts python3 -m kgraph --wiring --repo .
+PYTHONPATH=scripts python3 -m kgraph update --repo .; PYTHONPATH=scripts python3 -m kgraph wiring --repo .
 
 The update completes with a node/edge count, and wiring reports 0 orphans, 0 broken internal imports, 0 weak-wiring-only-from-tests, 0 unused facades, 0 cross-file call gaps.
 

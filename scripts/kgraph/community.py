@@ -52,7 +52,7 @@ except ImportError:
 
 # Louvain is expensive on large graphs (quadratic-ish refinement passes).
 # Above this node count, requests for Louvain fall back to greedy modularity
-# so `kgraph --update` / `--communities` cannot stall silently on a huge
+# so `kgraph update` / `kgraph communities` cannot stall silently on a huge
 # merged graph.
 LOUVAIN_MAX_NODES = 10_000
 

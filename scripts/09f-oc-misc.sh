@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
+#   v13 (2026-10-02): oc-kgraph's viewer launch and its stale-viewer guard use the kgraph
+#   SUBCOMMAND form (`kgraph serve`), not the removed flat `--serve` flag, so `oc g` keeps
+#   working against cli.py's subcommand-only dispatch (card 75219978).
 #   v12 (2026-10-02): oc-restore's workspace/agents swap now checks each move's status and
 #   rolls the .bak back into place on failure, so a FAILED restore can no longer delete the
 #   only pre-restore copy (AUDIT-2026-10-02, card cb501472).  The .bak is removed only after
@@ -55,7 +58,7 @@ function oc-kgraph() {
     if $do_reindex; then
         __tac_info "kgraph" "[SYNCING MEMORY DB + AST — GRAPH DB]" "$C_Info"
         # Serialised box-wide through bin/heavy-job: this reindex is the explicit
-        # `ubuntu-console kgraph --update` the 2026-09-29 load-24.8 measurement
+        # `ubuntu-console kgraph update` the 2026-09-29 load-24.8 measurement
         # listed among the top consumers.  ONLY the reindex is wrapped, never the
         # server launch below — a detached server would inherit the lock's file
         # descriptor and hold the box-wide lock for as long as it ran.
@@ -109,9 +112,9 @@ PY
     # Kill whatever currently owns the port first (including legacy copies).
     local PORT=46139
     fuser -k "${PORT}/tcp" >/dev/null 2>&1 || true
-    if pgrep -u "$USER" -f "kgraph --serve" >/dev/null 2>&1; then
+    if pgrep -u "$USER" -f "kgraph serve" >/dev/null 2>&1; then
         # -f required: target is python3 with a module invocation, -x would only match process name
-        pkill -u "$USER" -f "kgraph --serve" >/dev/null 2>&1 || true
+        pkill -u "$USER" -f "kgraph serve" >/dev/null 2>&1 || true
     fi
     sleep 0.3
     set +m
@@ -119,7 +122,7 @@ PY
     # scripts/ dir (same source the --reindex path uses) so the server launch
     # does not fail silently with ModuleNotFoundError.
     PYTHONPATH="$TACTICAL_REPO_ROOT/scripts${PYTHONPATH:+:$PYTHONPATH}" \
-        setsid "$TAC_PYTHON" -m kgraph --serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
+        setsid "$TAC_PYTHON" -m kgraph serve --embed --host 127.0.0.1 --port "$PORT" >/dev/null 2>&1 &
     disown
     set -m
 

@@ -220,7 +220,7 @@ def load_from_graph_db(dbpath: str) -> Graph:
     if sources_stamp != SOURCES_VERSION:
         logger.warning(
             "Graph %s carries no source lineage (stamp %s, current %s) — rebuild "
-            "(kgraph --update) so edges can be cited and removed by source",
+            "(kgraph update) so edges can be cited and removed by source",
             path, sources_stamp if sources_stamp is not None else "unstamped",
             SOURCES_VERSION,
         )

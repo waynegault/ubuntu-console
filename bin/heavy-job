@@ -21,7 +21,7 @@
 #
 # WHY THIS EXISTS.  Measured 2026-09-29 23:43: load average 24.82/22.61/19.61 on a 16-core
 # box, with the top consumers being an investigator `mypy pipeline` (1.8 GB), three
-# investigator REPLs, an `ubuntu-console kgraph --update` and llama-server; agent turns took
+# investigator REPLs, an `ubuntu-console kgraph update` and llama-server; agent turns took
 # ~11.5 minutes to reach model_call_started and lane waits ran 86-228 s.  Setting the
 # Gateway's cgroup CPUWeight=1000 (10x) protects the CONTROL PLANE — it does not reduce the
 # total load, and it was deliberately not 10000, which would starve the lanes instead.  The

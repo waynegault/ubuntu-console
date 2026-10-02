@@ -43,23 +43,23 @@ cd scripts && pip install -e .
 ## Usage
 
 ```bash
-kgraph --help               # All commands
-kgraph --serve              # Start web viewer
-kgraph --output graph.html  # Generate static HTML
-kgraph --update             # Incremental rebuild
-kgraph --wiring --repo DIR  # Analyze source-tree wiring (orphans, broken imports, weak wiring, facades)
-kgraph --watch              # Watch mode (auto-rebuild on file changes)
-kgraph --mcp                # MCP server for LLM tool-call access
-kgraph --report             # Write GRAPH_REPORT.md
-kgraph --path A B           # Path between two nodes; --path-mode bfs (default) | strongest
-kgraph --audit              # Show security audit report
-kgraph --pr-dashboard       # Generate PR dashboard
-kgraph --install-hook       # Install git post-commit hook
-kgraph --uninstall-hook     # Remove git hook
-kgraph --remove-source KEY  # Remove one source document's assertions
+kgraph -h                             # All commands
+kgraph serve                          # Start web viewer
+kgraph html --output graph.html       # Generate static HTML
+kgraph update                         # Incremental rebuild
+kgraph wiring --repo DIR              # Analyze source-tree wiring (orphans, broken imports, weak wiring, facades)
+kgraph watch                          # Watch mode (auto-rebuild on file changes)
+kgraph mcp                            # MCP server for LLM tool-call access
+kgraph report                         # Write GRAPH_REPORT.md
+kgraph path --path A B                # Path between two nodes; --path-mode bfs (default) | strongest
+kgraph audit                          # Show security audit report
+kgraph pr-dashboard                   # Generate PR dashboard
+kgraph install-hook                   # Install git post-commit hook
+kgraph uninstall-hook                 # Remove git hook
+kgraph remove-source --remove-source KEY  # Remove one source document's assertions
 ```
 
-`kgraph --mcp` serves 6 tools over JSON-RPC on localhost — `kgraph_query`,
+`kgraph mcp` serves 6 tools over JSON-RPC on localhost — `kgraph_query`,
 `kgraph_path`, `kgraph_explain`, `kgraph_community`, `kgraph_report` and
 `kgraph_stats`. Its write tool
 (`kgraph_report`) is accepted **only** with `Content-Type: application/json`,

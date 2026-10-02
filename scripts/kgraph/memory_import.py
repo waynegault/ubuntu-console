@@ -43,7 +43,7 @@ def load_from_memory_db(dbpath: str, include_all: bool = False) -> Graph:
     """Load nodes/edges from an OpenClaw memory SQLite DB into a Graph model.
 
     ``include_all`` skips the default registry filter (status/value_score/stale)
-    — used by ``kgraph --update --include-all`` for audit runs.
+    — used by ``kgraph update --include-all`` for audit runs.
     """
     conn = sqlite3.connect(os.path.expanduser(dbpath))
     try:

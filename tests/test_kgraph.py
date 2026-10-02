@@ -22,7 +22,7 @@ class KGraphTests(unittest.TestCase):
     def test_generate_html_contains_cytoscape_markup(self):
         with tempfile.TemporaryDirectory() as td:
             out = os.path.join(td, 'nested', 'kgraph.html')
-            subprocess.run([sys.executable, '-m', 'kgraph', '--output', out], check=True, cwd=SCRIPT_DIR)
+            subprocess.run([sys.executable, '-m', 'kgraph', 'html', '--output', out], check=True, cwd=SCRIPT_DIR)
 
             self.assertTrue(os.path.exists(out), 'Output HTML not created')
             with open(out, 'r', encoding='utf-8') as handle:
@@ -465,7 +465,7 @@ class EdgeStrengthTests(unittest.TestCase):
 
 
 class PathModeCliTests(unittest.TestCase):
-    """``kgraph --path --path-mode`` answers with the mode and says so."""
+    """``kgraph path --path --path-mode`` answers with the mode and says so."""
 
     def test_cli_names_the_mode_and_answers_with_it(self):
         # Catches: the CLI accepting --path-mode but still printing the fewest-hop
@@ -476,7 +476,7 @@ class PathModeCliTests(unittest.TestCase):
             with open(graph_path, 'w', encoding='utf-8') as fh:
                 json.dump(_WEAK_SHORTCUT_GRAPH, fh)
             run = subprocess.run(
-                [sys.executable, '-m', 'kgraph', '--graph', graph_path,
+                [sys.executable, '-m', 'kgraph', 'path', '--graph', graph_path,
                  '--path', 's', 't', '--path-mode', 'strongest'],
                 cwd=SCRIPT_DIR, capture_output=True, text=True,
             )
@@ -2423,7 +2423,7 @@ class SourceLineageCliTests(unittest.TestCase):
                 'edges': [{'from': 'b', 'to': 'a', 'label': 'links', 'sources': ['file:two.md']}],
             })
             result = subprocess.run(
-                [sys.executable, '-m', 'kgraph', '--graph-db', db,
+                [sys.executable, '-m', 'kgraph', 'remove-source', '--graph-db', db,
                  '--remove-source', 'file:one.md'],
                 cwd=SCRIPT_DIR, capture_output=True, text=True,
             )

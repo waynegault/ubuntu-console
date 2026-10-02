@@ -436,23 +436,27 @@ from the repo root. It exposes all features as subcommands:
 
 | Command | Description |
 | --- | --- |
-| `kgraph --serve` | Launch interactive viewer (same as `oc g`) |
-| `kgraph --ast --repo .` | Extract AST code concepts from a repo |
-| `kgraph --update --source-dir .` | Incremental rebuild (memory DB → AST → communities) |
-| `kgraph --watch` | Watch files and auto-rebuild |
-| `kgraph --report` | Generate GRAPH_REPORT.md with god nodes, communities, surprises |
-| `kgraph --communities` | Detect communities/clusters in the graph |
-| `kgraph --god-nodes` | List most central nodes by composite centrality |
-| `kgraph --call-flow` | Generate call-flow HTML/Mermaid from AST data |
-| `kgraph --mcp` | Serve MCP JSON-RPC server for LLM tool-call access |
-| `kgraph --query <pattern>` | Find nodes matching a label/type |
-| `kgraph --path <src> <dst>` | Shortest path between two nodes |
-| `kgraph --explain <node>` | Describe a node and its connections |
-| `kgraph --confidence` | Show edge confidence breakdown (EXTRACTED/INFERRED/AMBIGUOUS) |
-| `kgraph --pr-dashboard` | Generate PR dashboard correlating git history ↔ graph nodes |
-| `kgraph --benchmark` | Run token-reduction benchmark (graph vs raw files) |
-| `kgraph --audit` | Show security audit report |
-| `kgraph --install-hook` | Install git post-commit/post-merge hooks for auto-rebuild |
+| `kgraph serve` | Launch interactive viewer (same as `oc g`) |
+| `kgraph html` | Write the HTML viewer (the default mode) |
+| `kgraph ast --repo .` | Extract AST code concepts from a repo |
+| `kgraph update --source-dir .` | Incremental rebuild (memory DB → AST → communities) |
+| `kgraph watch` | Watch files and auto-rebuild |
+| `kgraph report` | Generate GRAPH_REPORT.md with god nodes, communities, surprises |
+| `kgraph wiring --repo .` | Analyze source-tree wiring (orphans, broken imports, weak wiring, facades) |
+| `kgraph communities` | Detect communities/clusters in the graph |
+| `kgraph god-nodes` | List most central nodes by composite centrality |
+| `kgraph call-flow` | Generate call-flow HTML/Mermaid from AST data |
+| `kgraph mcp` | Serve MCP JSON-RPC server for LLM tool-call access |
+| `kgraph query --query <pattern>` | Find nodes matching a label/type |
+| `kgraph path --path <src> <dst>` | Shortest path between two nodes |
+| `kgraph explain --explain <node>` | Describe a node and its connections |
+| `kgraph confidence` | Show edge confidence breakdown (EXTRACTED/INFERRED/AMBIGUOUS) |
+| `kgraph pr-dashboard` | Generate PR dashboard correlating git history ↔ graph nodes |
+| `kgraph benchmark` | Run token-reduction benchmark (graph vs raw files) |
+| `kgraph audit` | Show security audit report |
+| `kgraph install-hook` | Install git post-commit/post-merge hooks for auto-rebuild |
+| `kgraph uninstall-hook` | Remove the git post-commit/post-merge hooks |
+| `kgraph remove-source --remove-source <key>` | Remove one source document's assertions |
 
 ### Interactive Viewer Features
 
@@ -465,25 +469,25 @@ from the repo root. It exposes all features as subcommands:
 - Graph data saved via `GET`/`POST` to `/graph.json`
 - **Rate-limited POST** (30 req/min) — returns 429 with Retry-After
 
-### AST Code Extraction (`kgraph --ast`)
+### AST Code Extraction (`kgraph ast`)
 
 Extracts function definitions, class definitions, calls, imports, and file
 dependencies from source code using tree-sitter. Supports Bash and Python.
 Deterministic, zero API calls. 26+ language grammars available.
 
 ```bash
-kgraph --ast --repo /path/to/repo --ast-subdirs scripts --output ast-graph.json
-kgraph --confidence --graph ast-graph.json
-kgraph --god-nodes --graph ast-graph.json
+kgraph ast --repo /path/to/repo --ast-subdirs scripts --output ast-graph.json
+kgraph confidence --graph ast-graph.json
+kgraph god-nodes --graph ast-graph.json
 ```
 
-### Community Detection (`kgraph --communities`)
+### Community Detection (`kgraph communities`)
 
 Uses networkx (Louvain/greedy modularity) to detect semantic clusters.
 Also computes degree, betweenness, and eigenvector centrality to identify
 "god nodes" — the most central concepts in the graph.
 
-### Confidence Tagging (`kgraph --confidence`)
+### Confidence Tagging (`kgraph confidence`)
 
 Every graph edge is tagged with one of:
 
@@ -491,7 +495,7 @@ Every graph edge is tagged with one of:
 - **INFERRED** — derived via co-occurrence or semantic similarity
 - **AMBIGUOUS** — low-confidence, needs verification
 
-### MCP Server (`kgraph --mcp`)
+### MCP Server (`kgraph mcp`)
 
 Exposes 6 tools via JSON-RPC over HTTP (binds localhost only):
 
@@ -511,7 +515,7 @@ Exposes 6 tools via JSON-RPC over HTTP (binds localhost only):
 Every node and edge carries a `sources` list of source documents
 (`file:<path>`, `chunk:<id>`, `memory:<uuid>`, `life:relations.json`) so a fact
 can be cited and one source can be removed without discarding what other sources
-still support (`kgraph --remove-source <key>`). `kgraph --update` records that
+still support (`kgraph remove-source --remove-source <key>`). `kgraph update` records that
 lineage and caches the community digest with the graph, so
 `kgraph_community` answers from stored structure rather than re-running
 detection.
@@ -536,11 +540,11 @@ written file must be a path *relative to* the reports directory
 Vite dev frontend's origin and redacts memory text (`content`, `tags`,
 `content_preview`, and content-derived `memory`/`summary` labels).
 
-### Git Hooks (`kgraph --install-hook`)
+### Git Hooks (`kgraph install-hook`)
 
 Installs post-commit and post-merge hooks that auto-rebuild the graph
 when source files change. Detects changes via tree-sitter and runs
-`kgraph --update` automatically.
+`kgraph update` automatically.
 
 ### Installation
 
