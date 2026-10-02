@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 72
+# Module Version: 73
+#   v73 (2026-10-02): the profile modules are (re)loaded through the shared sub-module
+#   loader, which REPORTS a missing/failing module instead of discarding the error and the
+#   status (card f5bf87bc).
 #   v72 (2026-10-01): routes through bin/heavy-job so at most one saturating job runs on
 #   the box at a time — see the serialisation prologue after `set -uo pipefail`.
 #   v71 (2026-09-29): _sampler_args takes the model path as an ARGUMENT (it read a
@@ -106,12 +109,18 @@ if [[ "${TAC_LOAD_DEGRADED:-0}" == "1" ]]; then
     echo "       Run 'source env.sh' in a shell to see which; nothing was benchmarked."
     exit 1
 fi
-source scripts/01-constants.sh 2>/dev/null || true
-source scripts/11-llm-manager.sh 2>/dev/null || true
+# These are (re)loaded through the shared helper, which REPORTS a missing or failing
+# file instead of swallowing it (card f5bf87bc): `source ... 2>/dev/null || true` used
+# to discard BOTH the error and the status, so the script ran on with none of the
+# definitions below.  01-constants and 11-llm-manager are also in the interactive module
+# list (env.sh loads them; a failure already trips TAC_LOAD_DEGRADED above).
+# prompt-sets is a standalone library and is NOT in that list, so this is its primary
+# load here — a named failure is the difference between a real prompt set and the
+# built-in fallback being silently scored.
 # AUTOTUNE-001: the SPEC-DEC-006 legal/agentic prompt sets (shared with
 # spec-decode-bench.sh) — the scoring payload is built from the workload's
 # prompts, so the TPS floor is certified on the real input distribution.
-source scripts/prompt-sets.sh 2>/dev/null || true
+__tac_source_submodules "$PWD/scripts" "autotune-model" 01-constants 11-llm-manager prompt-sets
 
 # Source the tactical console for shared functions (__gguf_metadata, __kv_mb_per_1k,
 # __gpu_clear_stale_processes, __llm_autotune_profile_save)

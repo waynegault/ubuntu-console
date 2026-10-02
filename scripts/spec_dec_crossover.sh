@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-10-02): prompt-sets is loaded through the shared sub-module loader, which
+#   reports a missing/failing module instead of swallowing it (card f5bf87bc).
 #===============================================================================
 # spec_dec_crossover.sh — SPEC-DEC-005 concurrency crossover measurement.
 #
@@ -58,7 +60,12 @@ done
 [[ -n "$MODEL" ]] || { echo "Error: --model NUM required" >&2; exit 2; }
 
 source env.sh 2>/dev/null || { echo "Failed to source env.sh" >&2; exit 1; }
-source scripts/prompt-sets.sh 2>/dev/null || true
+# Load the prompt sets through the shared helper, which REPORTS a missing or failing
+# file instead of swallowing it (card f5bf87bc): `source ... 2>/dev/null || true` used
+# to discard both the error and the status.  A failure here leaves PROMPTS_LEGAL empty,
+# which the named warning below turns into the built-in fallback — the helper's report
+# is what makes that fallback visible rather than silent.
+__tac_source_submodules "$PWD/scripts" "spec_dec_crossover" prompt-sets
 
 ENTRY=$(grep "^${MODEL}|" "$LLM_REGISTRY" 2>/dev/null) || {
     echo "Error: Model #${MODEL} not found in registry" >&2; exit 1; }

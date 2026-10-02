@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
+#   v13 (2026-10-02): the profile modules are loaded through the shared sub-module loader,
+#   which reports a missing/failing module instead of swallowing it (card f5bf87bc).
 #   v12 (2026-10-01): routes through bin/heavy-job so at most one saturating job runs on
 #   the box at a time — see the serialisation prologue after `set -uo pipefail`.
 #===============================================================================
@@ -60,11 +62,14 @@ _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$_SELF_DIR/.." || exit 1
 
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
-source scripts/01-constants.sh 2>/dev/null || true
-source scripts/11-llm-manager.sh 2>/dev/null || true
+# These are (re)loaded through the shared helper, which REPORTS a missing or failing
+# file instead of swallowing it (card f5bf87bc): `source ... 2>/dev/null || true` used to
+# discard both the error and the status.  01-constants and 11-llm-manager are also in the
+# interactive module list (env.sh loads them); prompt-sets is a standalone library that
+# is NOT in that list, so this is its primary load here.
 # SPEC-DEC-006 prompt sets (AUTOTUNE-001: single source shared with
 # autotune-model.sh's scoring payload — do not redefine prompts here).
-source scripts/prompt-sets.sh 2>/dev/null || true
+__tac_source_submodules "$PWD/scripts" "spec-decode-bench" 01-constants 11-llm-manager prompt-sets
 
 MAX_TOKENS=256
 PROMPT_SET="all"
