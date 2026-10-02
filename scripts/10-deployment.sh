@@ -2,7 +2,10 @@
 # ─── Module: 10-deployment ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 6
+# Module Version: 7
+#   v7 (2026-10-02): commit_deploy returns the PUSH's status (card cf05ce24) — a
+#   failed push printed "[REMOTE PUSH FAILED]" and then returned the footer's 0, so
+#   a caller checking the exit code read a failed sync as success.
 # ==============================================================================
 # 10. DEPLOYMENT & SCAFFOLDING
 # ==============================================================================
@@ -319,7 +322,11 @@ function commit_deploy() {
         __tac_line "Repository Sync" "[REMOTE PUSH FAILED]" "$C_Error"
     fi
 
+    # The status the caller reads is the PUSH's, not the footer's: a failed push
+    # printed "[REMOTE PUSH FAILED]" and then returned 0, so `commit_deploy && …`
+    # treated a failed sync as success (card cf05ce24).
     __tac_footer
+    return "$push_rc"
 }
 
 # ---------------------------------------------------------------------------
