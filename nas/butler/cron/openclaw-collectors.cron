@@ -1,0 +1,24 @@
+# BEGIN OPENCLAW-NAS-COLLECTORS
+SHELL=/bin/sh
+PATH=/opt/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+# Air monitoring fallback pull to NAS InfluxDB
+1,6,11,16,21,26,31,36,41,46,51,56 * * * * . /mnt/HD/HD_a2/butler/cron/openclaw-collectors.env; /bin/sh /mnt/HD/HD_a2/butler/scripts/air-monitor-curl-collector.sh >> /mnt/HD/HD_a2/butler/logs/air-monitor-nas-cron.log 2>&1
+
+# SmartThings electricity ingestion to NAS InfluxDB
+
+# CPAP daily ingestion to NAS InfluxDB
+20 7 * * * . /mnt/HD/HD_a2/butler/cron/openclaw-collectors.env; . /mnt/HD/HD_a2/butler/cron/cpap-collector.env; /opt/bin/python3 /mnt/HD/HD_a2/butler/scripts/cpap-myair-collector.py collect-once --adapter command --source "${CPAP_SOURCE:-myair}" --region "${CPAP_REGION:-EU}" >> /mnt/HD/HD_a2/butler/logs/cpap-myair-cron.log 2>&1
+
+# Thermostat polling to NAS InfluxDB
+7,37 * * * * . /mnt/HD/HD_a2/butler/cron/openclaw-collectors.env; /opt/bin/python3 /mnt/HD/HD_a2/butler/scripts/it500-influx-collector.py >> /mnt/HD/HD_a2/butler/logs/thermostat-it500-cron.log 2>&1
+
+# NAS health monitor
+2,17,32,47 * * * * /usr/bin/python3 /mnt/HD/HD_a2/butler/scripts/nas_health_collector.py --once >> /mnt/HD/HD_a2/butler/logs/nas-health-cron.log 2>&1
+
+# BLE bridge watchdog for Govee + Mi Scale ingestion
+3,13,23,33,43,53 * * * * /mnt/HD/HD_a2/butler/bt-bridge/S35bt-mqtt-bridge start >> /mnt/HD/HD_a2/butler/logs/bt-bridge-watchdog.log 2>&1
+# END OPENCLAW-NAS-COLLECTORS
+
+# Internet connection quality monitor
+9,19,29,39,49,59 * * * * /bin/sh /mnt/HD/HD_a2/butler/scripts/internet-quality-monitor.sh >> /mnt/HD/HD_a2/butler/logs/internet-quality-cron.log 2>&1

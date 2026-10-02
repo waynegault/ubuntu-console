@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Pure stdlib Graph API OTP fetcher for NAS."""
+
+import json
+import pathlib
+import re
+import urllib.request
+import urllib.parse
+import sys
+
+TOKEN_CACHE = "/mnt/HD/HD_a2/butler/cron/outlook-mcp-token-cache"
+GRAPH_API = "https://graph.microsoft.com/v1.0"
+
+def _get_access_token() -> str:
+    cache_path = pathlib.Path(TOKEN_CACHE)
+    if not cache_path.exists():
+        raise RuntimeError(f"Token cache not found: {TOKEN_CACHE}")
+    cache = json.loads(cache_path.read_text())
+    for key, token in cache.get("AccessToken", {}).items():
+        if "graph.microsoft.com" in key:
+            return token["secret"]
+    raise RuntimeError("No Graph API access token found in cache")
+
+def _graph_get(token: str, url: str) -> dict:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def _graph_delete(token: str, url: str) -> int:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
+        method="DELETE",
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return int(resp.status)
+
+def _extract_otp(text: str) -> str | None:
+    match = re.search(r"\b(\d{6,8})\b", text)
+    return match.group(1) if match else None
+
+def _looks_like_myair(sender: str, subject: str) -> bool:
+    s = sender.lower()
+    subj = subject.lower()
+    return (
+        "resmed" in s
+        or "myair" in s
+        or "resmed" in subj
+        or "myair" in subj
+        or "verification code" in subj
+        or "one-time" in subj
+        or ("noreply" in s and "resmed" in s)
+    )
+
+def main() -> int:
+    try:
+        token = _get_access_token()
+        
+        # Build URL with encoded query params
+        base_url = f"{GRAPH_API}/me/messages"
+        params = urllib.parse.urlencode({
+            "$top": "30",
+            "$select": "id,subject,sender,bodyPreview,receivedDateTime",
+            "$orderby": "receivedDateTime desc",
+        })
+        url = f"{base_url}?{params}"
+        
+        data = _graph_get(token, url)
+        messages = data.get("value", [])
+        
+        for msg in messages:
+            sender = msg.get("sender", {}).get("emailAddress", {}).get("address", "")
+            subject = msg.get("subject", "")
+            body = msg.get("bodyPreview", "")
+            
+            if not _looks_like_myair(sender, subject):
+                continue
+            
+            otp = _extract_otp(f"{subject}\n{body}")
+            if otp:
+                msg_id = msg["id"]
+                delete_url = f"{GRAPH_API}/me/messages/{msg_id}"
+                _graph_delete(token, delete_url)
+                print(otp)
+                return 0
+        
+        print("No myAir OTP found in recent messages", file=sys.stderr)
+        return 1
+        
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,13 @@
+*.env
+*.log
+*.bak
+*.bak.*
+*.orig
+*~
+__pycache__/
+microsoft-env.sh
+outlook-*
+*token*
+*secret*
+myair-email-otp.txt
+*.pyc
