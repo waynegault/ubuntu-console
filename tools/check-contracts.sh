@@ -289,7 +289,13 @@
 #      must not carry one).
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 12
+# Module Version: 13
+#   v13 (2026-10-02): `swallows` corpus widened to nas/**/*.sh — the NAS (butler) tooling,
+#   mirrored into this repo at nas/butler/, is shell, and leaving it unscanned was the same
+#   unmeasured decision the 2026-09-24 widening fixed for bin/ and tools/.  It is the one group
+#   that needs a RECURSIVE walk (its files sit two levels down).  Every site in that tree was
+#   classified before the widening landed, so the baseline gains no row; measured
+#   `OK — 1180 site(s) in 105 file(s)` against 89 before.
 #   v12 (2026-09-29): `swallows` gained `--dump-sites` (card SPLIT-CONTRACT-TRIAGE-001) —
 #   a read-only JSONL dump of every site (file, line, pattern, matched text,
 #   classified, reason, reason source, weighable) so tools/swallow-classify.py reads
@@ -2353,7 +2359,7 @@ def entry_family_siblings(data, name):
 SWALLOWS_MARKER = re.compile(r"#\s*swallow-ok:\s*(\S.*)$")
 SWALLOW_PATTERNS = (("|| true", re.compile(r"\|\|\s*true\b")),
                     ("2>/dev/null", re.compile(r"2>\s*/dev/null")))
-SWALLOWS_SCOPE = "scripts/*.sh, bin/*, tools/*.sh, tools/hooks/*"
+SWALLOWS_SCOPE = "scripts/*.sh, bin/*, tools/*.sh, tools/hooks/*, nas/**/*.sh"
 # Files another session owns during the tooling pass: reported with their counts,
 # never edited here, so the second pass has a starting point.
 SWALLOWS_RESERVED = {
@@ -2407,12 +2413,30 @@ def swallow_corpus(repo):
     output said so ("the same counts outside scripts/*.sh are not scanned") — and a
     partial count cannot be ratcheted against honestly.  tools/hooks/* is in for the
     same reason: those files ARE shell, so an unscanned hook is an unmeasured decision.
+
+    WIDENED AGAIN 2026-10-02: `nas/**/*.sh`.  The NAS (butler) tooling is mirrored into this
+    repo at nas/butler/ and is shell, so leaving it out was the same unmeasured decision.  It
+    is the ONE group that needs a RECURSIVE walk — its files sit two levels down (nas/butler/
+    scripts/…), which a single listdir of `nas/` can never reach.  Every site in that tree was
+    classified BEFORE this landed, so the baseline gains no row.
     """
-    groups = (("scripts", True), ("bin", False), ("tools", True), ("tools/hooks", False))
+    groups = (("scripts", True, False), ("bin", False, False), ("tools", True, False),
+              ("tools/hooks", False, False), ("nas", True, True))
     corpus = []
-    for sub, only_sh in groups:
+    for sub, only_sh, recursive in groups:
         base = os.path.join(repo, sub)
         if not os.path.isdir(base):
+            continue
+        if recursive:
+            for dirpath, dirnames, filenames in os.walk(base):
+                dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+                for entry in sorted(filenames):
+                    if entry.startswith("."):
+                        continue
+                    if only_sh and not entry.endswith(".sh"):
+                        continue
+                    full = os.path.join(dirpath, entry)
+                    corpus.append((os.path.relpath(full, repo), full))
             continue
         for entry in sorted(os.listdir(base)):
             if entry.startswith("."):

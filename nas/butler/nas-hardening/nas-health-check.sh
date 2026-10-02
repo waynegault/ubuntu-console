@@ -28,6 +28,7 @@ fi
 # Check SSH authorized_keys
 if [ ! -s /home/root/.ssh/authorized_keys ]; then
     repair "SSH authorized_keys missing, restoring from backup"
+    # swallow-ok: an absent backup is a real state; the caller tests its result and skips the restore
     LATEST=$(ls -t $BACKUP_DIR/ssh/authorized_keys.* 2>/dev/null | head -1)
     if [ -n "$LATEST" ]; then
         mkdir -p /home/root/.ssh /root/.ssh
@@ -44,6 +45,7 @@ fi
 # Check Samba config
 if [ ! -f /etc/samba/smb.conf ]; then
     repair "smb.conf missing, restoring from backup"
+    # swallow-ok: an absent backup is a real state; the caller tests its result and skips the restore
     LATEST=$(ls -t $BACKUP_DIR/samba/smb.conf.* 2>/dev/null | head -1)
     if [ -n "$LATEST" ]; then
         cp "$LATEST" /etc/samba/smb.conf
@@ -53,6 +55,7 @@ fi
 # Check init script
 if [ ! -f /etc/init.d/S91samba ]; then
     repair "S91samba init script missing, restoring from backup"
+    # swallow-ok: an absent backup is a real state; the caller tests its result and skips the restore
     LATEST=$(ls -t $BACKUP_DIR/init/S91samba.* 2>/dev/null | head -1)
     if [ -n "$LATEST" ]; then
         cp "$LATEST" /etc/init.d/S91samba
@@ -78,17 +81,21 @@ if ! pgrep -x mosquitto >/dev/null 2>&1; then
 fi
 
 # Check air monitor collector in crontab
+# swallow-ok: a non-match is the SIGNAL here: the repair above re-adds the crontab line
 if ! grep -q 'air-monitor-influx-collector' /etc/crontab 2>/dev/null; then
     repair "Air monitor collector missing from crontab, re-adding"
     echo '*/2 * * * * /opt/bin/python3 /mnt/HD/HD_a2/butler/scripts/air-monitor-influx-collector.py >> /mnt/HD/HD_a2/butler/logs/air-monitor-collector.log 2>&1' >> /etc/crontab
+    # swallow-ok: killall is best-effort; crond is started unconditionally on the next line
     killall crond 2>/dev/null
     crond
 fi
 
 # Check CPAP collector in crontab
+# swallow-ok: a non-match is the SIGNAL here: the repair above re-adds the crontab line
 if ! grep -q 'cpap-collect' /etc/crontab 2>/dev/null; then
     repair "CPAP collector missing from crontab, re-adding"
     echo '0 8 * * * /mnt/HD/HD_a2/butler/scripts/cpap-collect-with-otp.sh >> /mnt/HD/HD_a2/butler/logs/cpap-collect.log 2>&1' >> /etc/crontab
+    # swallow-ok: killall is best-effort; crond is started unconditionally on the next line
     killall crond 2>/dev/null
     crond
 fi
@@ -97,6 +104,7 @@ fi
 OTP_FILE=/mnt/HD/HD_a2/butler/cron/myair-email-otp.txt
 if [ -f $OTP_FILE ]; then
     now=$(date +%s)
+    # swallow-ok: a stat failure yields 0, which the staleness warning below reports
     otp_epoch=$(stat -c %Y $OTP_FILE 2>/dev/null || echo 0)
     if [ $((now - otp_epoch)) -gt 900 ]; then
         log "WARNING: myAir OTP file is stale (>15 min)"
@@ -111,11 +119,13 @@ if [ ! -f /mnt/HD/HD_a2/butler/cron/microsoft-env.sh ]; then
 fi
 
 # Rotate logs if too big
+# swallow-ok: a stat failure yields 0; rotate-logs.sh now caps this log hourly
 if [ -f "$LOG" ] && [ "$(stat -c%s "$LOG" 2>/dev/null || echo 0)" -gt 1048576 ]; then
     mv "$LOG" "$LOG.old"
 fi
 
 # Check admin password hash
+# swallow-ok: the match drives the repair, which is reported to the repair log
 if grep -q "^admin::\|\$HASH" /etc/shadow 2>/dev/null; then
     repair "admin password hash missing or corrupt, restoring from backup"
     if ! cp /mnt/HD/HD_a2/butler/nas-hardening/shadow.admin_backup /etc/shadow

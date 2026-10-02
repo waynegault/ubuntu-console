@@ -26,6 +26,7 @@ fi
 # Run collection immediately with OTP
 export CPAP_MYAIR_EMAIL_OTP_COMMAND="/mnt/HD/HD_a2/butler/scripts/read-myair-otp.sh"
 /opt/bin/python3 $FETCH_SCRIPT 2>>$LOG > /tmp/cpap-payload.json
+# swallow-ok: the file is tested with -s first, so grep has nothing to report on stderr
 if [ -s /tmp/cpap-payload.json ] && grep -q "device" /tmp/cpap-payload.json 2>/dev/null; then
     /opt/bin/python3 $COLLECT_SCRIPT collect-once --adapter file --input-file /tmp/cpap-payload.json 2>>$LOG
     echo "$(date +%Y-%m-%d\ %H:%M:%S) CPAP collection completed" >> $LOG

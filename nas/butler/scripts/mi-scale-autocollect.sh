@@ -2,6 +2,7 @@
 set -u
 
 COLLECTOR="${MI_SCALE_COLLECTOR:-/mnt/HD/HD_a2/butler/scripts/mi-scale-2-collector.py}"
+# swallow-ok: a missing python3 falls back to /usr/bin/python3 on this same line
 PYTHON_BIN="${MI_SCALE_PYTHON_BIN:-$(command -v python3 2>/dev/null || echo /usr/bin/python3)}"
 TARGET_MAC="${MI_SCALE_TARGET_MAC:-D8:E7:2F:08:7C:5D}"
 RUNTIME="${MI_SCALE_RUNTIME:-auto}"
@@ -12,17 +13,21 @@ LOCK_DIR="/tmp/openclaw-mi-scale-autocollect.lock"
 mkdir -p "$(dirname "$LOG_FILE")"
 
 acquire_lock() {
+  # swallow-ok: mkdir's failure IS the lock-held test; the caller reports it
   if mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "$$" > "$LOCK_DIR/pid"
     return 0
   fi
 
   if [[ -f "$LOCK_DIR/pid" ]]; then
+    # swallow-ok: a missing pid file is a real state; the next test decides
     existing_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    # swallow-ok: kill -0's failure IS the stale-lock test
     if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
       return 1
     fi
     rm -rf "$LOCK_DIR"
+    # swallow-ok: mkdir's failure IS the lock-held test
     if mkdir "$LOCK_DIR" 2>/dev/null; then
       echo "$$" > "$LOCK_DIR/pid"
       return 0

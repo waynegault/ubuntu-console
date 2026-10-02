@@ -4,6 +4,12 @@
 # CORPUS WIDENED the same day: it now covers bin/, tools/*.sh and tools/hooks/* as
 # well as scripts/*.sh, so these figures are NOT comparable with the 2026-09-23 set.
 #
+# CORPUS WIDENED AGAIN 2026-10-02: nas/**/*.sh (the NAS butler mirror, nas/butler/) joins the
+# corpus — 89 -> 105 files.  No row is added and none changes: every site in that tree was
+# classified (fixed at source, or marked with a reason on the site) BEFORE the widening
+# landed, which is the order this gate requires — widening first would have made the check red
+# for every pusher.
+#
 # 1142 unclassified site(s) across 51 file(s).  A count may FALL freely (bin/llama-watchdog.sh
 # went 49 -> 44 when five state-swallows were given a log); a NEW file, or a RISE, is a
 # deliberate act that has to be re-baselined on purpose.

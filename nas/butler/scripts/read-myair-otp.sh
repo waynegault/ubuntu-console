@@ -5,6 +5,7 @@ if [ ! -f "$OTP_FILE" ]; then
   echo "OTP file not found: $OTP_FILE" >&2
   exit 1
 fi
+# swallow-ok: an unmatched grep is an empty value, not an error
 otp="$(grep -Eo '[0-9]{6,8}' "$OTP_FILE" | tail -n 1 || true)"
 if [ -z "$otp" ]; then
   echo "No OTP found in file: $OTP_FILE" >&2

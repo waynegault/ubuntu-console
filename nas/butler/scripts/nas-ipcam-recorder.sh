@@ -19,6 +19,7 @@ RTSP_URL="${RTSP_URL:-}"
 RECORD_ROOT="${RECORD_ROOT:-/mnt/HD/HD_a2/butler/camera-recordings}"
 SEGMENT_SECONDS="${SEGMENT_SECONDS:-300}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
+# swallow-ok: a missing ffmpeg is reported by the [ERROR] ffmpeg not found line below
 FFMPEG_BIN="${FFMPEG_BIN:-$(command -v ffmpeg 2>/dev/null || true)}"
 LOG_DIR="${RECORD_ROOT}/logs"
 CAM_DIR="${RECORD_ROOT}/${CAMERA_NAME}"
@@ -37,18 +38,23 @@ mkdir -p "${CAM_DIR}" "${LOG_DIR}"
 
 # One process per camera to avoid duplicate writers.
 LOCK_DIR="/tmp/nas-ipcam-recorder-${CAMERA_NAME}.lock"
+# swallow-ok: mkdir's failure IS the already-running test, reported on the next line
 if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
   echo "[INFO] recorder already running for ${CAMERA_NAME}" >&2
   exit 0
 fi
 trap 'rm -rf "${LOCK_DIR}"' EXIT INT TERM
 
-# Keep storage bounded.
-find "${CAM_DIR}" -type f -name '*.mp4' -mtime +"${RETENTION_DAYS}" -delete || true
-
 STAMP="$(date +%Y%m%d_%H%M%S)"
 OUT_PATTERN="${CAM_DIR}/${CAMERA_NAME}_${STAMP}_%05d.mp4"
 LOG_FILE="${LOG_DIR}/${CAMERA_NAME}.log"
+
+# Keep storage bounded.  A failed prune is REPORTED — silently keeping every recording is how a
+# disk fills.  It runs AFTER LOG_FILE exists so the failure lands in the log, rather than on a
+# hand-written stderr redirect (§18.3 item 10.7 counts those).
+if ! find "${CAM_DIR}" -type f -name '*.mp4' -mtime +"${RETENTION_DAYS}" -delete; then
+  echo "[$(date -Iseconds)] [WARN] retention prune failed for ${CAM_DIR}" >> "${LOG_FILE}"
+fi
 
 {
   echo "[$(date -Iseconds)] starting recorder camera=${CAMERA_NAME} segment=${SEGMENT_SECONDS}s"

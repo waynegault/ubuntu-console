@@ -36,6 +36,7 @@ require_nas_root() {
 
 install_entware() {
   if command -v opkg >/dev/null 2>&1; then
+    # swallow-ok: a missing opkg shows as the fallback text in this log line
     log "Entware already present: $(opkg --version 2>/dev/null | head -1 || echo opkg)"
     return 0
   fi
@@ -128,10 +129,18 @@ print_status() {
 main() {
   require_nas_root
   log "Starting NAS IoT bootstrap"
-  install_entware || true
-  install_packages || true
+  # A failed install step used to be swallowed with a trailing "always succeed", and the
+  # bootstrap still printed "Done" — the silent-failure shape this pass exists to remove.
+  # The status is RECORDED, reported at the end, and carried in the exit code.
+  _install_rc=0
+  install_entware || _install_rc=1
+  install_packages || _install_rc=1
   write_startup_snippet
   print_status
+  if [ "$_install_rc" -ne 0 ]; then
+    log "Done WITH FAILURES: a package install step did not complete - see the log above"
+    return "$_install_rc"
+  fi
   log "Done"
 }
 
