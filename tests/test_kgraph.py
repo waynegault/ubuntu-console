@@ -1836,14 +1836,45 @@ class VocabularyValidationTests(unittest.TestCase):
         where models.py, projection.py and memory_import.py each carried a copy
         and the copies diverged by seven keys before anyone noticed.
         """
+        import kgraph.confidence as confidence
         import kgraph.constants as constants
         import kgraph.projection as projection
 
         self.assertIs(projection.CURATED_EDGE_LABELS, constants.CURATED_EDGE_LABELS)
         self.assertIs(projection.AST_EDGE_LABELS, constants.AST_EDGE_LABELS)
         self.assertIs(projection.AST_NODE_TYPES, constants.AST_NODE_TYPES)
+        self.assertIs(projection.CANONICAL_RELATION_LABELS,
+                      constants.CANONICAL_RELATION_LABELS)
+        # confidence.py reads the SAME objects.  It used to declare private
+        # copies (_AST_LABELS, _CANONICAL_RELATION_LABELS), so a label change in
+        # constants.py would silently reclassify edges there.
+        self.assertIs(confidence.AST_EDGE_LABELS, constants.AST_EDGE_LABELS)
+        self.assertIs(confidence.CANONICAL_RELATION_LABELS,
+                      constants.CANONICAL_RELATION_LABELS)
+        self.assertFalse(hasattr(confidence, "_AST_LABELS"))
+        self.assertFalse(hasattr(confidence, "_CANONICAL_RELATION_LABELS"))
         for label_set in (constants.CURATED_EDGE_LABELS, constants.AST_EDGE_LABELS):
             self.assertTrue(label_set <= constants.EDGE_LABELS)
+
+    def test_confidence_classifies_every_ast_edge_label_as_extracted(self):
+        """Pins confidence.py's AST rule to the shared constants.AST_EDGE_LABELS.
+
+        Catches: a private _AST_LABELS copy that omits or renames a member, so
+        an AST edge label falls through to the generic INFERRED fallback while
+        projection.py, reading the real set, still treats it as AST.
+
+        The canonical relation labels are pinned by IDENTITY in
+        test_vocabulary_sets_are_one_object_across_modules, not here: they and
+        the generic fallback both yield INFERRED, so no behavioural check on
+        them could disagree with a stale copy.
+        """
+        from kgraph.confidence import _determine_confidence
+        from kgraph.constants import AST_EDGE_LABELS
+        from kgraph.models import ConfidenceLevel, GraphEdge
+
+        for label in sorted(AST_EDGE_LABELS):
+            edge = GraphEdge(source='a', target='b', label=label)
+            self.assertEqual(_determine_confidence(edge), ConfidenceLevel.EXTRACTED, label)
 
     def test_unknown_label_does_not_reject_the_payload(self):
         """A warning, not an error: the MCP pre-flight contract is unchanged."""

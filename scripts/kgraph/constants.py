@@ -127,6 +127,17 @@ AST_EDGE_LABELS = frozenset({
     AST_EDGE_DEFINES, AST_EDGE_CALLS, AST_EDGE_IMPORTS, AST_EDGE_RESOLVES_TO,
 })
 
+# The canonical project/decision/issue relation labels.  projection.py declared
+# this set and confidence.py carried a byte-identical private copy
+# (_CANONICAL_RELATION_LABELS), so a change to one would have silently
+# reclassified edges in the other.  Declared here once, imported by both.
+CANONICAL_RELATION_LABELS = frozenset({
+    "project decision", "project issue", "project outcome", "project topic",
+    "project owner", "decision addresses issue", "decision drives outcome",
+    "issue affects outcome", "topic decision", "topic issue", "topic outcome",
+    "actor decision", "actor issue", "actor outcome",
+})
+
 # Labels that emitters write as literals, named so a consumer imports the name
 # instead of retyping the string.  Reading the emitters found two members the
 # first version of this set had missed — "related concept" (memory_import.py:472)

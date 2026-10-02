@@ -11,7 +11,11 @@ via ``Graph.from_dict()``.
 
 from __future__ import annotations
 
-from .constants import is_summary_edge_label
+from .constants import (
+    AST_EDGE_LABELS,
+    CANONICAL_RELATION_LABELS,
+    is_summary_edge_label,
+)
 from .models import ConfidenceLevel, Graph, GraphEdge
 
 # Re-export for callers that imported the old string constants.
@@ -20,20 +24,15 @@ INFERRED = ConfidenceLevel.INFERRED.value
 AMBIGUOUS = ConfidenceLevel.AMBIGUOUS.value
 
 # ── Label sets for classification ─────────────────────────────────────
-
-_AST_LABELS = frozenset({"defines", "imports", "calls", "resolves_to"})
+# AST_EDGE_LABELS and CANONICAL_RELATION_LABELS are the single declarations in
+# constants.py; this module used to carry a private copy of each (_AST_LABELS and
+# _CANONICAL_RELATION_LABELS), so editing one copy would have reclassified edges
+# here without touching projection.py or validate.py.
 
 _DIRECT_MEMORY_LABELS = frozenset({
     "covers topic", "mentions actor", "authored by", "references file",
     "contains chunk", "has project", "has decision", "has issue",
     "has outcome", "has person", "has organization", "has place",
-})
-
-_CANONICAL_RELATION_LABELS = frozenset({
-    "project decision", "project issue", "project outcome", "project topic",
-    "project owner", "decision addresses issue", "decision drives outcome",
-    "issue affects outcome", "topic decision", "topic issue", "topic outcome",
-    "actor decision", "actor issue", "actor outcome",
 })
 
 # ── UN-CALIBRATED classification thresholds (GRAPHRAG-JEV-005) ─────────
@@ -98,7 +97,7 @@ def _determine_confidence(edge: GraphEdge) -> ConfidenceLevel:
         return ConfidenceLevel.EXTRACTED
 
     # AST parse edges
-    if edge.origin == "ast" or label in _AST_LABELS:
+    if edge.origin == "ast" or label in AST_EDGE_LABELS:
         return ConfidenceLevel.EXTRACTED
 
     # Direct memory DB edges
@@ -106,7 +105,7 @@ def _determine_confidence(edge: GraphEdge) -> ConfidenceLevel:
         return ConfidenceLevel.EXTRACTED
 
     # Canonical/semantic relation edges
-    if label in _CANONICAL_RELATION_LABELS:
+    if label in CANONICAL_RELATION_LABELS:
         return ConfidenceLevel.INFERRED
 
     # Summary-derived edges — one predicate, shared with projection.py so the

@@ -14,6 +14,7 @@ import re
 from .constants import (
     AST_EDGE_LABELS,
     AST_NODE_TYPES,
+    CANONICAL_RELATION_LABELS,
     CURATED_EDGE_LABELS,
     is_summary_edge_label,
 )
@@ -45,13 +46,6 @@ WEAK_NODE_LABELS = frozenset({
 SEMANTIC_CORE_TYPES = frozenset({
     "actor", "topic", "summary", "project", "decision", "issue",
     "outcome", "person", "organization", "place",
-})
-
-CANONICAL_RELATION_LABELS = frozenset({
-    "project decision", "project issue", "project outcome", "project topic",
-    "project owner", "decision addresses issue", "decision drives outcome",
-    "issue affects outcome", "topic decision", "topic issue", "topic outcome",
-    "actor decision", "actor issue", "actor outcome",
 })
 
 WEAK_CLUSTER_LABELS = frozenset({
