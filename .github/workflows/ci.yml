@@ -195,7 +195,8 @@ jobs:
                tests/unit/43-count-ratchet-comments.bats \
                tests/unit/44-llm-build-cmake-status.bats \
                tests/unit/45-kgraph-hook-failure-report.bats \
-               tests/unit/46-guarded-module-source.bats
+               tests/unit/46-guarded-module-source.bats \
+               tests/unit/47-capture-golden-fixtures.bats
 
       - name: Run integration tests
         run: |

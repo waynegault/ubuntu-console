@@ -52,6 +52,12 @@ fi
 
 mkdir -p "$OUT_DIR"
 
+# Failure tally (card 90eee0c2): a capture that failed must not be reported as a
+# completed run.  capture() records every command's exit code below, and the run
+# ends non-zero with a count when any of them was non-zero.
+CAPTURE_TOTAL=0
+CAPTURE_FAILED=0
+
 capture() {
     local name="$1"
     shift
@@ -72,7 +78,14 @@ capture() {
     set -e
 
     echo "exit_code: $rc" >> "$meta_file"
-    echo "captured: $name (rc=$rc)"
+    CAPTURE_TOTAL=$((CAPTURE_TOTAL + 1))
+    if (( rc != 0 ))
+    then
+        CAPTURE_FAILED=$((CAPTURE_FAILED + 1))
+        echo "captured: $name (rc=$rc) FAILED"
+    else
+        echo "captured: $name (rc=$rc)"
+    fi
 }
 
 # Keep this list non-destructive and broadly available.
@@ -87,13 +100,25 @@ capture "logtrim" logtrim
 # Dashboard render can include dynamic timestamps/metrics; still useful as shape fixture.
 capture "dashboard_m" tactical_dashboard
 
+CAPTURE_OK=$((CAPTURE_TOTAL - CAPTURE_FAILED))
+if (( CAPTURE_FAILED > 0 ))
+then
+    SUMMARY="Fixture capture complete: ${CAPTURE_OK}/${CAPTURE_TOTAL} captured, ${CAPTURE_FAILED} FAILED (see above)."
+else
+    SUMMARY="Fixture capture complete: ${CAPTURE_OK}/${CAPTURE_TOTAL} captured, 0 FAILED."
+fi
 cat <<EOF
-Fixture capture complete.
+$SUMMARY
 Output directory: $OUT_DIR
 
 Next step:
 - Compare these fixtures against PowerShell command outputs after normalization
   (timestamps, cache age, host-specific values).
 EOF
+
+if (( CAPTURE_FAILED > 0 ))
+then
+    exit 1
+fi
 
 # end of file
