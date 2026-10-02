@@ -2,7 +2,11 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 71
+# Module Version: 72
+#   v72 (2026-10-02): __up_npm_cache reads npm's OWN exit status, so a failed
+#   `npm cache verify` is reported as [FAILED] and counted, and the cooldown is NOT
+#   recorded — the old grep pipeline reported grep's status, so a failure fell through
+#   to [VERIFIED] in the success colour and was never retried (card f7d203cc).
 #   v71 (2026-09-28): up reads its own metrics row back (__up_run_recorded).
 #   v70 (2026-09-28): cl reads its home-directory deletions back (__cl_paths_cleared).
 #   v69 (2026-09-28): logtrim reads its trim back before reporting it (__log_trim_within_bound).
@@ -1678,14 +1682,34 @@ function __up_npm_cache() {
     then
         if command -v npm >/dev/null 2>&1
         then
-            local npm_cache_result
-            npm_cache_result=$(npm cache verify 2>&1 | grep -E "Cache cleaned|Cache size" || echo "")
-            if [[ "$npm_cache_result" == *"Cache cleaned"* ]]
+            # npm's OWN exit status is the verdict; the output is parsed only after
+            # that.  The old pipeline (`npm cache verify 2>&1 | grep ... || echo ""`)
+            # reported grep's status, so a failed verify produced an empty result and
+            # fell through to [VERIFIED] in the success colour — then recorded the
+            # cooldown, so the failure was never retried (card f7d203cc).  The call
+            # sits in an `if` condition on purpose: the rc must be readable without a
+            # bare non-zero assignment, which is fatal under errexit.
+            local npm_out npm_rc=0
+            if npm_out=$(npm cache verify 2>&1)
+            then
+                npm_rc=0
+            else
+                npm_rc=$?
+            fi
+            if (( npm_rc != 0 ))
+            then
+                npm_out=$(head -1 <<< "$npm_out" | sed -E 's|^[^:]*: line [0-9]+: ||')
+                __tac_line "[20/20] NPM Cache Clean" \
+                    "[FAILED (rc=$npm_rc): $npm_out]" "$C_Error"
+                _up_err=$(( _up_err + 1 ))
+                return 0
+            fi
+            if [[ "$npm_out" == *"Cache cleaned"* ]]
             then
                 local cleaned_size
-                cleaned_size=$(grep -oP '[\d.]+[MGK]B' <<< "$npm_cache_result" || echo "unknown")
+                cleaned_size=$(grep -oP '[\d.]+[MGK]B' <<< "$npm_out" || echo "unknown")
                 __tac_line "[20/20] NPM Cache Clean" "[FREED $cleaned_size]" "$C_Success"
-            elif [[ "$npm_cache_result" == *"Cache size"* ]]
+            elif [[ "$npm_out" == *"Cache size"* ]]
             then
                 __tac_line "[20/20] NPM Cache Clean" "[ALREADY UP TO DATE]" "$C_Success"
             else
