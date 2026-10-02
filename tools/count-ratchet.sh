@@ -334,10 +334,40 @@ def read_baseline(path):
     return base
 
 
+_BASELINE_HEADER = (
+    "# docs/inspection.md §18.3 count ratchet — see tools/count-ratchet.sh",
+    "# id<TAB>count.  A count may FALL freely; raising one is a deliberate act.",
+)
+
+
+def _preserved_comments(path):
+    """Existing `#` comment lines that are NOT the generated header.
+
+    `read_baseline` has always ignored comments, so the file legitimately carries
+    hand-written provenance (WHY a count was re-baselined).  `--update` used to open
+    the file with mode "w" and write only the header + rows, deleting them — the file's
+    own notes recorded the loss and were "restored by hand" more than once.  Carry them
+    through the rewrite instead (card fc4d3e29).
+    """
+    if not os.path.exists(path):
+        return []
+    kept = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if line.startswith("#") and line not in _BASELINE_HEADER:
+                kept.append(line)
+    return kept
+
+
 def write_baseline(path, counts):
+    preserved = _preserved_comments(path)
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write("# docs/inspection.md §18.3 count ratchet — see tools/count-ratchet.sh\n")
-        fh.write("# id<TAB>count.  A count may FALL freely; raising one is a deliberate act.\n")
+        for line in _BASELINE_HEADER:
+            fh.write(line + "\n")
+        # ...then any hand-added provenance, so a re-baseline no longer destroys it.
+        for line in preserved:
+            fh.write(line + "\n")
         for cid, _desc, _fn in COUNTERS:
             fh.write(f"{cid}\t{counts[cid]}\n")
 

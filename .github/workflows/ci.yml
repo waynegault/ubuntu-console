@@ -187,7 +187,8 @@ jobs:
                tests/unit/39-oc-restore-safety.bats \
                tests/unit/40-npm-cache-safety.bats \
                tests/unit/41-model-use-autotune-refusal.bats \
-               tests/unit/42-commit-deploy-push-status.bats
+               tests/unit/42-commit-deploy-push-status.bats \
+               tests/unit/43-count-ratchet-comments.bats
 
       - name: Run integration tests
         run: |
