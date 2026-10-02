@@ -34,11 +34,23 @@
 # third case below is the regression guard for that pin.  Where the CLI is
 # unavailable (the CI runner installs bats, not openclaw) the first two cases
 # cannot run and skip rather than pretending to pass.
+#
+# The CLI is NOT required for the parse-and-attribute logic, and the cases at the
+# bottom exercise it under CI: the checker's input seam is the `openclaw config
+# patch --dry-run` subprocess, so a recorded transcript of that command
+# (tests/fixtures/secret-ref-paths/, captured on this box 2026-10-02 with a
+# throwaway OPENCLAW_CONFIG_PATH and OPENCLAW_STATE_DIR; the OK line's own config
+# path is normalized to <config> per tests/fixtures/golden/README.md) is replayed
+# through a stand-in `openclaw` on PATH.  That keeps the checker's real
+# stdout+stderr parsing and error-path attribution under test without the CLI.
 # ==============================================================================
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 CHECK="$REPO_ROOT/tests/helpers/check-secret-ref-paths.py"
 SCRIPT="$REPO_ROOT/scripts/09d-oc-agents.sh"
+FIXTURES="$REPO_ROOT/tests/fixtures/secret-ref-paths"
+FIXTURE_OK="$FIXTURES/patch-dry-run-ok.txt"
+FIXTURE_REJECTED="$FIXTURES/patch-dry-run-rejected.txt"
 TMPDIR_BATS="$(mktemp -d)"
 
 setup() {
@@ -108,4 +120,70 @@ FAKE
     [[ "$seen" == */check-secret-ref-paths-state-* ]]
     # ... and never the host's live state dir, which is what leaked before the fix.
     [[ "$seen" != "$HOME/.openclaw/state" ]]
+}
+
+# Build a stand-in `openclaw` that replays a recorded transcript and exit code,
+# then print the bin dir to put first on PATH.  The checker's ONLY input from the
+# CLI is the command's stdout+stderr and its exit status, so replaying both is a
+# faithful stand-in — no openclaw install is needed to exercise the parsing.
+_fake_openclaw_replay() {  # <transcript.txt> <exit-code>
+    local transcript="$1" rc="$2"
+    local bin="$TMPDIR_BATS/replay-$(basename "$transcript" .txt)"
+    mkdir -p "$bin"
+    cat > "$bin/openclaw" <<FAKE
+#!/usr/bin/env bash
+cat "$transcript"
+exit $rc
+FAKE
+    chmod +x "$bin/openclaw"
+    printf '%s\n' "$bin"
+}
+
+@test "recorded dry-run: a successful transcript passes the check without the CLI (CI)" {
+    # Catches: a checker that reports failure on the validator's own success —
+    # e.g. one that treats any stdout, or a non-empty message, as an error, which
+    # would make a healthy tree look red for every operator.
+    local bin rc
+    rc="$(cat "$FIXTURES/patch-dry-run-ok.exit")"
+    bin="$(_fake_openclaw_replay "$FIXTURE_OK" "$rc")"
+
+    run env PATH="$bin:$PATH" python3 "$CHECK"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OK:"* ]]
+}
+
+@test "recorded dry-run: a rejection is attributed to its mapping row (teeth, CI)" {
+    # Catches: a checker that passes a path the validator rejected, or that fails
+    # without naming the offending row so the operator cannot find it.  The
+    # recorded transcript names the historical bug shape; the script copy restores
+    # that row (~plugins.entries.typesafe-ai) so attribution has something to blame.
+    local bad="$TMPDIR_BATS/09d-bad-path.sh"
+    sed 's|("skills.entries.typesafe-ai.apiKey"|("plugins.entries.typesafe-ai.apiKey"|' \
+        "$SCRIPT" > "$bad"
+    # If the table has moved, the substitution silently no-ops and this case would
+    # be asserting nothing — so prove the fixture really carries the bad row.
+    grep -qF '("plugins.entries.typesafe-ai.apiKey", "TYPESAFE_API_KEY")' "$bad"
+
+    local bin rc
+    rc="$(cat "$FIXTURES/patch-dry-run-rejected.exit")"
+    bin="$(_fake_openclaw_replay "$FIXTURE_REJECTED" "$rc")"
+
+    run env PATH="$bin:$PATH" python3 "$CHECK" --script "$bad"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"plugins.entries.typesafe-ai.apiKey"* ]]
+    [[ "$output" == *"TYPESAFE_API_KEY"* ]]
+}
+
+@test "recorded dry-run: a rejection it cannot blame on a row still fails (CI)" {
+    # Catches: reporting SUCCESS BY OMISSION — a validator refusal whose path the
+    # checker cannot pin to a row must still exit non-zero and say so, never pass
+    # because it had nothing to print.  Same transcript, the UNMODIFIED script:
+    # `plugins.entries.typesafe-ai` is not one of its rows.
+    local bin rc
+    rc="$(cat "$FIXTURES/patch-dry-run-rejected.exit")"
+    bin="$(_fake_openclaw_replay "$FIXTURE_REJECTED" "$rc")"
+
+    run env PATH="$bin:$PATH" python3 "$CHECK"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no row could be blamed directly"* ]]
 }

@@ -1,0 +1,2 @@
+Dry run failed: config schema validation failed.
+- - plugins.entries.typesafe-ai: Unrecognized key: "apiKey"
