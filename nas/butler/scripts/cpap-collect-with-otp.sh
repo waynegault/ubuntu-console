@@ -8,9 +8,11 @@ COLLECT_SCRIPT=/mnt/HD/HD_a2/butler/scripts/cpap-myair-collector.py
 OTP_SCRIPT=/mnt/HD/HD_a2/butler/scripts/nas-graph-otp.py
 LOG=/mnt/HD/HD_a2/butler/logs/cpap-collect.log
 
-# Export myAir credentials
-export CPAP_MYAIR_USERNAME="REDACTED-CREDENTIAL"
-export CPAP_MYAIR_PASSWORD="REDACTED-CREDENTIAL"
+# myAir credentials come from the environment — never hardcoded (see README).
+# The caller sources cron/openclaw-collectors.env + cron/cpap-collector.env first.
+: "${CPAP_MYAIR_USERNAME:?CPAP_MYAIR_USERNAME is not set — source cron/cpap-collector.env}"
+: "${CPAP_MYAIR_PASSWORD:?CPAP_MYAIR_PASSWORD is not set — source cron/cpap-collector.env}"
+export CPAP_MYAIR_USERNAME CPAP_MYAIR_PASSWORD
 export CPAP_REGION="EU"
 
 # Fetch fresh OTP via Graph API (extracts and deletes email in one shot)

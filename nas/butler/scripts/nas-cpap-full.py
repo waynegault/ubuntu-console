@@ -2,6 +2,7 @@
 """Full CPAP collection on NAS: trigger MFA, extract OTP, fetch data."""
 
 import json
+import os
 import pathlib
 import re
 import urllib.request
@@ -20,8 +21,8 @@ EU_OKTA_TOKEN_URL = "https://id.resmed.eu/oauth2/aus2uznux2sYKTsEg417/v1/token"
 EU_CLIENT_ID = "0oa2uznuih7PcVgF7417"
 EU_REDIRECT_URI = "https://myair.resmed.eu/authentication/callback"
 
-USERNAME = "REDACTED-CREDENTIAL"
-PASSWORD = "REDACTED-CREDENTIAL"
+USERNAME = os.environ.get("CPAP_MYAIR_USERNAME", "")
+PASSWORD = os.environ.get("CPAP_MYAIR_PASSWORD", "")
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def http_error_302(self, req, fp, code, msg, headers):
@@ -166,6 +167,9 @@ def _get_bearer_token(otp: str) -> str:
         return token_data.get("access_token", "")
 
 def main() -> int:
+    if not USERNAME or not PASSWORD:
+        print("CPAP_MYAIR_USERNAME and CPAP_MYAIR_PASSWORD required", file=sys.stderr)
+        return 1
     try:
         print("Getting fresh OTP...", file=sys.stderr)
         otp = _get_fresh_otp()
