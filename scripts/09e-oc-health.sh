@@ -9,7 +9,17 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
+#   v20 (2026-10-02): __oc_guard_patch_state gains a `--quiet-when-ok` mode, so `so`
+#   can carry the row only when the patch needs acting on. `oc health` keeps calling it
+#   with no argument and always shows the state; `so` passes the flag because an
+#   always-on row on every start would be noise, while the silent reversion it exists to
+#   catch is exactly a "quiet unless stale" case (tests/unit/02-so-startup.bats pins it).
+#   Also fixes this file's eight pre-existing blanket-swallow sites: each failure (a
+#   PWD restore in oc-stinger, the oc-usage session-cache refresh and direct fetch, the
+#   registry read in oc-local-llm, and the health-JSON / models.providers reads in
+#   oc-doctor-local) now reports on stderr instead of being discarded, and a failed
+#   cache refresh removes its partial .tmp.
 #   v19 (2026-09-30): ratchet hygiene only, no behaviour change — the `provider_json`
 #   condition is wrapped across two lines so it sits inside §18.3's 120-character bound.
 #   v17 (2026-09-30): `oc health` also reports whether the VS Code Testing results
@@ -109,10 +119,22 @@ function __oc_gh_keyring_recurrence() {
 # Read-only by construction: `--check` reports and never patches, so a health command
 # cannot change the guard. Reported, never counted as an issue, and absent from
 # --json/--plain — the same contract as __oc_gh_keyring_recurrence above.
+#
+# Usage: __oc_guard_patch_state [--quiet-when-ok]
+#   --quiet-when-ok: print NOTHING when the patch is applied, or when no local patch
+#     exists at all.  A status command (see `so`, 09a) shows the row only when there is
+#     something to act on, because the state it exists to catch is a reversion — a
+#     [APPLIED] row on every healthy start is noise, and a reverted one must not be.
+#     `oc health` calls with no argument and always shows the state.
 function __oc_guard_patch_state() {
+    local _mode="${1:-}"
     local patch="$HOME/.local/bin/qwen-guard-patch.sh"
     if [[ ! -x "$patch" ]]
     then
+        if [[ "$_mode" == "--quiet-when-ok" ]]
+        then
+            return 0
+        fi
         __tac_info "Daemon guard patch" "[not installed]" "$C_Dim"
         return 0
     fi
@@ -125,6 +147,10 @@ function __oc_guard_patch_state() {
     fi
     if (( rc == 0 ))
     then
+        if [[ "$_mode" == "--quiet-when-ok" ]]
+        then
+            return 0
+        fi
         __tac_info "Daemon guard patch" "[APPLIED]" "$C_Success"
         return 0
     fi
@@ -594,7 +620,12 @@ function oc-stinger() {
                     > "$os_dir/.openstinger/openstinger.log" 2>&1 &
                 disown
                 set -m
-                cd "$_prev_pwd" 2>/dev/null || true
+                # A failed restore is reported, not swallowed: the caller's shell would
+                # otherwise be left in the vendor directory with no cue at all.
+                if ! cd "$_prev_pwd" 2>/dev/null
+                then
+                    printf '%s\n' "[oc-stinger] could not return to $_prev_pwd — the shell is still in $PWD" >&2
+                fi
                 sleep 3
                 if pgrep -f "openstinger.gradient.mcp.server" >/dev/null 2>&1
                 then
@@ -757,9 +788,16 @@ function oc-usage() {
 
     if (( now - mtime > 5 )); then
         if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
-            ( openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null \
-                || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null ) \
-                && mv "${session_cache}.tmp" "$session_cache" 2>/dev/null || true
+            # A failed fetch or move is reported and the partial .tmp removed, never
+            # silently ignored: the reader below falls back to a visible
+            # "[No session data available]" row while the cache stays empty.
+            if ! ( openclaw sessions --all-agents --json > "${session_cache}.tmp" 2>/dev/null \
+                   || openclaw sessions --json > "${session_cache}.tmp" 2>/dev/null ) \
+               || ! mv "${session_cache}.tmp" "$session_cache" 2>/dev/null
+            then
+                rm -f "${session_cache}.tmp"
+                printf '%s\n' "[oc-usage] session cache refresh failed — using the previous cache" >&2
+            fi
         fi
     fi
 
@@ -768,8 +806,12 @@ function oc-usage() {
     if [[ -f "$session_cache" ]]; then
         sessions_json=$(cat "$session_cache")
     elif [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
-        sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null \
-            || openclaw sessions --json 2>/dev/null || true)
+        if ! sessions_json=$(openclaw sessions --all-agents --json 2>/dev/null \
+                || openclaw sessions --json 2>/dev/null)
+        then
+            sessions_json=""
+            printf '%s\n' "[oc-usage] both session fetches failed — reporting no session data" >&2
+        fi
     fi
 
     if [[ -z "$sessions_json" || "$sessions_json" == "null" ]]; then
@@ -826,7 +868,11 @@ function oc-local-llm() {
     # Read the active model's name and GGUF filename from the registry
     local model_name="local" model_file=""
     local _entry=""
-    _entry=$(__llm_active_entry 2>/dev/null || true)
+    if ! _entry=$(__llm_active_entry 2>/dev/null)
+    then
+        _entry=""
+        printf '%s\n' "[oc-local-llm] could not read the active model from the registry — using the 'local' fallback name" >&2
+    fi
     if [[ -n "$_entry" ]]
     then
         IFS='|' read -r _ _name _file _ <<< "$_entry"
@@ -1105,6 +1151,22 @@ function oc-diag() {
 }
 
 # ---------------------------------------------------------------------------
+# __oc_doctor_note — report an oc-doctor-local read failure without breaking --json.
+#
+# In --json/--plain the failure is visible in the DERIVED field (gateway_health
+# "unknown", an empty active_model, model_sync 0), and bats' `run` merges stderr into the
+# captured output, so a note printed in a machine mode would break a `{`-prefixed parse.
+# Human mode gets the note on stderr — a read that fails here is never silent.
+# ---------------------------------------------------------------------------
+function __oc_doctor_note() {
+    local _mode="$1" _msg="$2"
+    if [[ "$_mode" == "human" ]]
+    then
+        printf '%s\n' "[oc-doctor-local] $_msg" >&2
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # oc-doctor-local — Validate the full local OpenClaw + llama.cpp path.
 # Usage: oc doctor-local [--json|--plain]
 # ---------------------------------------------------------------------------
@@ -1139,7 +1201,11 @@ function oc-doctor-local() {
     [[ -f "$OC_ROOT/openclaw.json" ]] && oc_config=1
 
     local active_entry=""
-    active_entry=$(__llm_active_entry 2>/dev/null || true)
+    if ! active_entry=$(__llm_active_entry 2>/dev/null)
+    then
+        active_entry=""
+        __oc_doctor_note "$output_mode" "could not read the active model from the registry"
+    fi
     if [[ -n "$active_entry" ]]
     then
         IFS='|' read -r _ active_model _ <<< "$active_entry"
@@ -1148,7 +1214,13 @@ function oc-doctor-local() {
     if (( openclaw_installed ))
     then
         local _oc_health_json=""
-        _oc_health_json=$(oc-health --json 2>/dev/null || true)
+        if ! _oc_health_json=$(oc-health --json 2>/dev/null)
+        then
+            # An empty value still leaves gateway_health "unknown" below, but the
+            # reason must not hide behind that verdict.
+            _oc_health_json=""
+            __oc_doctor_note "$output_mode" "'oc-health --json' failed — gateway health reported as unknown"
+        fi
         # Accept both oc-health --json shapes: the enhanced Python checker
         # emits {"checks":[{"name":...,"status":...}]}, but the built-in
         # fallback emits a flat {"health_status":...} object. Reading only
@@ -1159,7 +1231,13 @@ function oc-doctor-local() {
         # no longer matches, so a live gateway fell through to "unknown" and counted as an
         # issue (measured 2026-09-30: oc-health --json reports gateway_health=ok,
         # "gateway health: live"). Accept both names.
-        api_health_status=$(jq -r '((.checks[]? | select(.name == "gateway_health" or .name == "API Health") | .status) // .health_status) // empty' <<< "$_oc_health_json" 2>/dev/null || true)
+        if ! api_health_status=$(jq -r '((.checks[]? | select(.name == "gateway_health"
+                or .name == "API Health") | .status) // .health_status) // empty' \
+                <<< "$_oc_health_json" 2>/dev/null)
+        then
+            api_health_status=""
+            __oc_doctor_note "$output_mode" "could not parse the health JSON — gateway health reported as unknown"
+        fi
         if [[ "$api_health_status" == "OK" || "$api_health_status" == "ok" ]]
         then
             gateway_health="ok"
@@ -1172,7 +1250,11 @@ function oc-doctor-local() {
         # the SCRATCH port — is not configured at all, so the old check could never pass
         # (measured 2026-09-30). Ask whether SOME provider points at the production port
         # rather than requiring one fixed id.
-        provider_json=$(openclaw config get models.providers 2>/dev/null || true)
+        if ! provider_json=$(openclaw config get models.providers 2>/dev/null)
+        then
+            provider_json=""
+            __oc_doctor_note "$output_mode" "could not read models.providers — model-sync counts as not configured"
+        fi
         if [[ -n "$provider_json" && "$provider_json" != "null" \
               && "$provider_json" == *"127.0.0.1:${LLM_SERVICE_PORT}"* ]]
         then

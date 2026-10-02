@@ -7,6 +7,14 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+#   v48 (2026-10-02): oc export-keys-nas is narrowed to the names the NAS actually reads
+#   (__oc_nas_export_names records which name, which NAS file reads it, and how it was
+#   measured) instead of shipping all 48 bridged names, and it now enforces mode 600 with a
+#   READ-BACK — the file it wrote was 644, 48 credentials world-readable, against this box's
+#   0600 cache. Both were measured on the NAS over SSH. The upload marker now hashes the
+#   CONTENT uploaded rather than the cache, so a change to the selection cannot be silently
+#   skipped by a matching cache hash. `oc export-keys-nas --dry-run` prints the names and
+#   their value fingerprints (never values) and touches nothing.
 #   v47 (2026-10-01): the shadowing report now compares EVERY env surface against the
 #   canonical bridge value — Wayne's ruling (2026-10-01) is that the Windows user
 #   environment is the source and every other surface is a derived copy that nobody
@@ -62,7 +70,7 @@
 #   Both providers are BUNDLED (the bundle ships docs/providers/deepseek.md and ollama.md), so
 #   the apiKey-only overlay is schema-legal; a CUSTOM provider would be refused. The
 #   auth-profile store entries stay, as a second channel. Card OC-REFRESH-KEYS-AUTHPROFILE-001.
-# Module Version: 47
+# Module Version: 48
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -1530,19 +1538,169 @@ function __oc_inject_manager_env() {
 # gateway.systemd.env, auth profiles) reference it rather than holding their
 # own plaintext values.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# __oc_nas_export_names — the bridged names the NAS actually CONSUMES.
+#
+# Derived from the NAS side, not from the bridge: every script the NAS's own
+# crontab runs was read over SSH (measured 2026-10-02, /mnt/HD/HD_a2/butler):
+#
+#   glowmarkt-collector.py   (cron */30)   GLOWMARKT_PASSWORD
+#       `_load_creds()` takes each field from the environment first and the
+#       secrets file second, and its own docstring says GLOWMARKT_PASSWORD "is
+#       imported from the Windows environment by oc-refresh-keys". It also reads
+#       GLOWMARKT_USERNAME / _TOKEN_FILE / _DATA_DIR from the environment, but the
+#       bridge never carries those — nothing in them matches its TOKEN/KEY/
+#       PASSWORD/CLIENT_ID/API pattern — so selecting from the cache excludes them
+#       without a rule of their own.
+#   cpap-myair-collector.py / cpap-myair-fetch.py   (cron 20 7)   RESMED_PASSWORD
+#       After the 2026-10-02 consolidation in workspace-jarvis the fetch resolves
+#       the password by CANONICAL name (RESMED_PASSWORD, with CPAP_MYAIR_PASSWORD
+#       as its documented fallback), and the bridge carries that name. The CPAP_*
+#       settings the NAS job needs (CPAP_COLLECT_COMMAND, CPAP_INFLUX_*) are NOT
+#       bridged, so this export was never that job's only channel anyway. If the
+#       NAS CPAP job is retired, delete this line: nothing else changes.
+#   air-monitor-curl-collector.sh, it500-influx-collector.py,
+#   nas_health_collector.py, internet-quality-monitor.sh, bt-bridge, and
+#   glowmarkt's INFLUXDB_* overrides: no bridged name at all.
+#
+# Adding a NAS consumer means adding its names HERE, with the file that reads
+# them — never by widening the export back to the whole cache.
+#
+# Prints one name per line.
+# ---------------------------------------------------------------------------
+function __oc_nas_export_names() {
+    cat <<'NAMES'
+GLOWMARKT_PASSWORD
+RESMED_PASSWORD
+NAMES
+}
+
+# ---------------------------------------------------------------------------
+# __oc_nas_export_render <cache> — print the FILE that would be uploaded.
+#
+# The caller has SOURCED the cache, so values are read from the environment and the
+# cache is iterated for names only (see oc-export-keys-nas for why that ordering is
+# a correctness requirement). Only names __oc_nas_export_names selects are printed,
+# under a header that records what the file is and which names were selected.
+#
+# %q alone is the correct escaping: it yields a shell word that round-trips to the
+# exact value. Wrapping it in double quotes double-escapes (e.g. a "!" password
+# becomes GlowforHomes\!…), which the NAS collector would read back wrong.
+#
+# The header carries a TIMESTAMP, so it must never enter the upload marker's hash;
+# the caller hashes only the `export ` lines.
+# ---------------------------------------------------------------------------
+function __oc_nas_export_render() {
+    local _cache="$1" _want _l _k _v
+    local -A _wanted=()
+    while IFS= read -r _want
+    do
+        if [[ -n "$_want" ]]; then _wanted["$_want"]=1; fi
+    done < <(__oc_nas_export_names)
+    printf '# regenerated by oc export-keys-nas %s\n' "$(date -Iseconds)"
+    printf '# selected names (%s); the rest of the bridge is not exported\n' \
+        "$(__oc_nas_export_names | tr '\n' ' ')"
+    while IFS= read -r _l
+    do
+        [[ "$_l" =~ ^export[[:space:]]+ ]] || continue
+        _k="${_l#export }"; _k="${_k%%=*}"
+        [[ "$_k" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
+        [[ -n "${_wanted[$_k]:-}" ]] || continue
+        _v="${!_k:-}"
+        [[ -n "$_v" ]] || continue
+        printf 'export %s=%q\n' "$_k" "$_v"
+    done < "$_cache"
+}
+
+# ---------------------------------------------------------------------------
+# __oc_nas_preflight_reason <ssh-key-path> — why no SSH transport was built.
+#
+# The three causes need different repairs (install a client / install the key /
+# investigate a key that exists but did not work), so they are told apart rather
+# than collapsed into one "failed". Prints the clause the report shows.
+# ---------------------------------------------------------------------------
+function __oc_nas_preflight_reason() {
+    local _key="$1"
+    if ! command -v ssh >/dev/null 2>&1
+    then
+        printf '%s' "ssh missing"
+    elif [[ ! -f "$_key" ]]
+    then
+        printf 'SSH key missing (%s)' "$_key"
+    else
+        printf '%s' "preflight failed"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# __oc_nas_upload_cmd <target-path> — the remote command that installs the file.
+#
+# It creates the temporary file under `umask 077`, chmods it, moves it into place
+# atomically, chmods the result, and PRINTS THE RESULTING MODE. The mode matters
+# because the file carries credentials: the previous version left it 644 — 48
+# credentials world-readable on the NAS, measured 2026-10-02 — and never looked.
+# Printing it makes the caller's check a read-back instead of an assumption.
+# ---------------------------------------------------------------------------
+function __oc_nas_upload_cmd() {
+    local _t="$1"
+    printf 'umask 077'
+    printf ' && cat > "%s.tmp"' "$_t"
+    printf ' && chmod 600 "%s.tmp"' "$_t"
+    printf ' && mv -f "%s.tmp" "%s"' "$_t" "$_t"
+    printf ' && chmod 600 "%s"' "$_t"
+    printf ' && stat -c %%a "%s"' "$_t"
+}
+
+# ---------------------------------------------------------------------------
+# __oc_nas_export_show <built-file> — the dry-run table.
+#
+# One line per selected name with the value's LENGTH and sha256[:12] — never the
+# value. This is the review step: the exported set is inspectable before it reaches
+# the NAS.
+# ---------------------------------------------------------------------------
+function __oc_nas_export_show() {
+    local _f="$1" _l _k _v _fp
+    while IFS= read -r _l
+    do
+        [[ "$_l" == export\ * ]] || continue
+        _k="${_l#export }"; _k="${_k%%=*}"
+        _v="${!_k:-}"
+        _fp=$(printf '%s' "$_v" | sha256sum | cut -c1-12)
+        printf '  %-24s len=%-4s sha256=%s\n' "$_k" "${#_v}" "$_fp"
+    done < "$_f"
+}
+
+# ---------------------------------------------------------------------------
 # oc-export-keys-nas — mirror the bridged key cache to the NAS.
 #
 # Extracted from oc-refresh-keys (2026-09-22): a backup job does not belong inside
 # a key refresh. It keeps its own SSH preflight, one connection per run, and a
-# marker recording the CACHE hash it last uploaded — the same hash the refresh
-# compares, so "is the mirror behind?" is an exact question. The marker is written
-# only after a successful upload, so a failed sync is retried on the next run.
-# Run it standalone (`oc export-keys-nas`) or from a timer.
+# marker recording the hash of the CONTENT it last uploaded — so "is the mirror
+# behind?" is an exact question. The marker is written only after a successful
+# upload, so a failed sync is retried on the next run. Run it standalone
+# (`oc export-keys-nas`), from a timer, or with `--dry-run` to review the set.
+#
+# TWO DEFECTS FIXED 2026-10-02 (both measured on the NAS over SSH):
+#   1. The file it wrote was mode 644 — 48 credentials world-readable, against
+#      this box's own bridge cache at 600. It is now created under `umask 077`,
+#      chmod-ed 600, and the mode is READ BACK: an upload whose mode is not 600
+#      is reported as a failure instead of a success.
+#   2. It shipped every bridged name. The NAS's own code reads TWO of them
+#      (__oc_nas_export_names records which, and from where). The rest reached a
+#      readable file on a host that never read them.
 # ---------------------------------------------------------------------------
 function oc-export-keys-nas() {
     local cache="$TAC_CACHE_DIR/tac_win_api_keys"
     local _nas_collectors_env="/mnt/HD/HD_a2/butler/cron/openclaw-collectors.env"
     local _nas_user="${OC_NAS_USER:-sshd}"
+    # --dry-run reports what WOULD be written (names + value fingerprints, never
+    # values) and touches nothing, so the exported set can be reviewed before it
+    # reaches the NAS.
+    local _dry_run=0
+    if [[ "${1:-}" == "--dry-run" ]]
+    then
+        _dry_run=1
+    fi
     # LAN SSH to 192.168.33.20 times out from WSL. The NAS is reachable via
     # Tailscale, but its MagicDNS name (mycloudex2ultra.tail99183.ts.net) does
     # not resolve while Tailscale DNS is off (`tailscale set --accept-dns`), so
@@ -1567,7 +1725,30 @@ function oc-export-keys-nas() {
         return 1
     fi
     local _cache_hash
-    _cache_hash=$(grep '^export ' "$cache" | sort | sha256sum | awk '{print $1}')
+    # The marker hashes the CONTENT this command would upload — the selected
+    # names and their values — not the whole cache. Keying it on the cache made a
+    # change to the SELECTION invisible (the hash still matched, so the upload was
+    # skipped and the new set never landed). The timestamped header is excluded, or
+    # every run would look like a change.
+    local _nas_names _nas_tmp _n_written _n_selected _n_absent
+    _nas_names="$(__oc_nas_export_names)"
+    _nas_tmp="$(mktemp)"
+    __oc_nas_export_render "$cache" > "$_nas_tmp"
+    _cache_hash=$(awk '/^export /' "$_nas_tmp" | sort | sha256sum | awk '{print $1}')
+    # The counts come from the rendered file itself, so they cannot drift from what
+    # is actually uploaded.
+    _n_written=$(awk '/^export / { n++ } END { print n + 0 }' "$_nas_tmp")
+    _n_selected=$(awk 'END { print NR + 0 }' <<< "$_nas_names")
+    _n_absent=$(( _n_selected - _n_written ))
+    if (( _dry_run == 1 ))
+    then
+        printf '%s\n' "oc export-keys-nas --dry-run — what would be written to:"
+        printf '  %s\n' "$_nas_collectors_env"
+        __oc_nas_export_show "$_nas_tmp"
+        rm -f "$_nas_tmp"
+        __tac_info "Exporting to NAS" "[dry run — $_n_written name(s), nothing uploaded]" "$C_Dim"
+        return 0
+    fi
     local _prev_nas_hash
     _prev_nas_hash=$(cat "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" 2>/dev/null || echo none)
     local _nas_ssh=()
@@ -1580,53 +1761,46 @@ function oc-export-keys-nas() {
     fi
     if ((${#_nas_ssh[@]}))
     then
-        local _synced_nas=0 _nas_skipped=0 _nas_tmp _l _k2 _v2
-        _nas_tmp="$(mktemp)"
-        {
-            printf '# regenerated by oc export-keys-nas %s\n' "$(date -Iseconds)"
-            while IFS= read -r _l
-            do
-                [[ "$_l" =~ ^export[[:space:]]+ ]] || continue
-                _k2="${_l#export }"; _k2="${_k2%%=*}"
-                [[ "$_k2" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
-                _v2="${!_k2:-}"
-                [[ -n "$_v2" ]] || continue
-                # %q alone is the correct escaping: it yields a shell word that
-                # round-trips to the exact value. Wrapping it in double quotes
-                # double-escapes (e.g. a "!" password becomes GlowforHomes\!…).
-                printf 'export %s=%q\n' "$_k2" "$_v2"
-            done < "$cache"
-        } > "$_nas_tmp"
+        local _synced_nas=0 _nas_skipped=0
+        local _mode_ok=1 _remote_out=""
         if [[ "$_cache_hash" == "$_prev_nas_hash" ]]
         then
             _nas_skipped=1
-        elif "${_nas_ssh[@]}" "cat > \"$_nas_collectors_env.tmp\"" < "$_nas_tmp" >/dev/null 2>&1 \
-            && "${_nas_ssh[@]}" "mv \"$_nas_collectors_env.tmp\" \"$_nas_collectors_env\"" >/dev/null 2>&1
+        elif _remote_out=$("${_nas_ssh[@]}" "$(__oc_nas_upload_cmd "$_nas_collectors_env")" < "$_nas_tmp" 2>&1)
         then
-            _synced_nas=1
-            printf '%s\n' "$_cache_hash" > "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash"
+            # The mode is a read-back, not an assumption: the file carries
+            # credentials, and the previous version left it 644 (world-readable).
+            if [[ "$_remote_out" == "600" ]]
+            then
+                _synced_nas=1
+                printf '%s\n' "$_cache_hash" > "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash"
+            else
+                _mode_ok=0
+            fi
         fi
         rm -f "$_nas_tmp"
         if (( _synced_nas == 1 ))
         then
-            __tac_info "Exporting to NAS" "[$_nas_collectors_env]" "$C_Success"
+            __tac_info "Exporting to NAS" "[$_n_written name(s) -> $_nas_collectors_env]" "$C_Success"
+        elif (( _mode_ok == 0 ))
+        then
+            __tac_info "Exporting to NAS" "[uploaded but mode ${_remote_out:-unknown}, not 600]" "$C_Warning"
         elif (( _nas_skipped == 1 ))
         then
             __tac_info "Exporting to NAS" "[no changes — skipped]" "$C_Dim"
         else
             __tac_info "Exporting to NAS" "[failed — SSH sync error (auth or connectivity)]" "$C_Warning"
         fi
-    else
-        local _reason=""
-        if ! command -v ssh >/dev/null 2>&1
+        # A SELECTED name with no value in the cache is not a quiet skip: the NAS
+        # consumer that reads it gets nothing, and the upload above may still have
+        # succeeded — so it is reported whatever the outcome was.
+        if (( _n_absent > 0 ))
         then
-            _reason="ssh missing"
-        elif [[ ! -f "$_nas_key" ]]
-        then
-            _reason="SSH key missing ($_nas_key)"
-        else
-            _reason="preflight failed"
+            __tac_info "Exporting to NAS" "[$_n_absent selected name(s) absent from the cache]" "$C_Warning"
         fi
+    else
+        local _reason
+        _reason="$(__oc_nas_preflight_reason "$_nas_key")"
         __tac_info "Exporting to NAS" "[skipped — ${_reason}]" "$C_Warning"
     fi
 }

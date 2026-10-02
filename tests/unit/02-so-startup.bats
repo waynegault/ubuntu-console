@@ -519,4 +519,78 @@ __so_test_prelude() {
     [ -f "$OC_AGENTS/alpha/sessions/s.json" ]  # the point: nothing was deleted
 }
 
+# ---------------------------------------------------------------------------
+# so: the daemon guard patch row (card SELFHEAL-GUARD-DELIVERY-001)
+#
+# Every IDE-companion update replaces the guard chunk and reverts the local patch, and
+# on 2026-09-27 the cron self-heal detected exactly that for fifteen hours without
+# repairing it — its report went to a log nobody reads, on a box with no mail transport
+# at all. So the state also goes on `so`, the command the operator runs to ask "is this
+# box up?". The acceptance is two-sided: with the patch reverted `so` shows it, and with
+# it applied `so` stays quiet — an [APPLIED] row on every healthy start would be noise,
+# and a silent reversion is precisely the "quiet unless stale" case.
+#
+# Hermetic: the patcher is a stub in a sandbox HOME, so the real
+# ~/.local/bin/qwen-guard-patch.sh is never executed.
+# ---------------------------------------------------------------------------
+__stub_guard_patcher() {   # $1 = the --check exit code
+    export HOME="$TAC_TEST_TMPDIR/home"
+    mkdir -p "$HOME/.local/bin"
+    cat > "$HOME/.local/bin/qwen-guard-patch.sh" <<MOCK
+#!/usr/bin/env bash
+echo "  ok       daemon-git-worktree-guard-STUB.js"
+exit $1
+MOCK
+    chmod +x "$HOME/.local/bin/qwen-guard-patch.sh"
+}
+
+# The already-running, all-green path: the port answers, the gateway is healthy and the
+# LLM is up, so `so` prints its success rows and returns. That early return is where the
+# operator sees nothing wrong — the whole point of adding the row there.
+__so_healthy_prelude() {
+    export __TAC_OPENCLAW_OK=1
+    mkdir -p "$TAC_TEST_TMPDIR/oc"
+    export OC_ROOT="$TAC_TEST_TMPDIR/oc"
+    __test_port() { return 0; }
+    __llm_server_running() { return 0; }
+    __so_health_gate() { return 0; }
+    __so_ensure_shell_env() { return 0; }
+}
+
+@test "so: a reverted daemon guard patch is shown on the status output" {
+    __so_healthy_prelude
+    __stub_guard_patcher 1     # --check fails: the patch is missing/reverted
+
+    run so
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Local LLM"* ]]
+    [[ "$output" == *"Daemon guard patch"* ]]
+    [[ "$output" == *"[NOT APPLIED]"* ]]
+}
+
+@test "so: a healthy daemon guard patch stays off the status output" {
+    __so_healthy_prelude
+    __stub_guard_patcher 0     # --check passes: the patch is applied
+
+    run so
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Local LLM"* ]]
+    # Quiet when there is nothing to act on — the row must not become noise.
+    [[ "$output" != *"Daemon guard patch"* ]]
+}
+
+@test "so: a box with no local guard patcher stays quiet too" {
+    __so_healthy_prelude
+    export HOME="$TAC_TEST_TMPDIR/home"   # sandbox HOME, with no patcher in it
+    mkdir -p "$HOME"
+
+    run so
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Local LLM"* ]]
+    [[ "$output" != *"Daemon guard patch"* ]]
+}
+
 # end of file

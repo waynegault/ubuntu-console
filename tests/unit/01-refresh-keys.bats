@@ -213,14 +213,107 @@ teardown() {
     [ "$status" -eq 0 ]
     [ ! -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
 
-    # NAS back: the failed upload is retried and the marker is persisted.
-    __mock_command_local ssh "echo \"SSH_CALL: \$*\" >> \"$ssh_log\"; exit 0"
+    # NAS back: the failed upload is retried and the marker is persisted. The
+    # remote command must also report the mode it left behind (600) — the mode is
+    # a read-back, so a mock that answers nothing is a failed upload.
+    __mock_command_local ssh "echo \"SSH_CALL: \$*\" >> \"$ssh_log\"; case \"\$*\" in *stat*) echo 600;; esac; exit 0"
     run oc-export-keys-nas
     [ "$status" -eq 0 ]
     [ -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
     run grep -c '^SSH_CALL:' "$ssh_log"
     [ "$status" -eq 0 ]
     [ "$output" -ge 1 ]
+}
+
+@test "oc-export-keys-nas uploads ONLY the names the NAS reads, at mode 600" {
+    # WHAT THIS CATCHES: the export shipping the whole bridge (48 names, measured
+    # 2026-10-02) to a world-readable file on a host whose code reads two of them.
+    # The criterion is the consuming side: any name no NAS script reads must not be
+    # in the file, and the remote command must set the mode explicitly.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GLOWMARKT_PASSWORD=glow-value' 'RESMED_PASSWORD=resmed-value' 'UNREAD_API_KEY=unread-value'"
+
+    local nas_key="$TAC_TEST_TMPDIR/nas_key"
+    touch "$nas_key" && chmod 600 "$nas_key"
+    export OC_NAS_KEY_PATH="$nas_key"
+    export OC_NAS_USER="testuser"
+    export OC_NAS_HOST="nas.example"
+
+    local cap="$TAC_TEST_TMPDIR/nas_upload.txt" remote="$TAC_TEST_TMPDIR/nas_remote_cmd.txt"
+    __mock_command_local ssh "printf '%s\n' \"\$*\" > \"$remote\"; cat > \"$cap\"; echo 600; exit 0"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    run oc-export-keys-nas
+    [ "$status" -eq 0 ]
+    [ -f "$cap" ]
+
+    # The two consumed names are there...
+    run grep -c '^export GLOWMARKT_PASSWORD=' "$cap"
+    [ "$output" -eq 1 ]
+    run grep -c '^export RESMED_PASSWORD=' "$cap"
+    [ "$output" -eq 1 ]
+    # ...and nothing else is. A name on no NAS consumer is the defect.
+    run grep -c 'UNREAD_API_KEY' "$cap"
+    [ "$output" -eq 0 ]
+    run grep -c '^export ' "$cap"
+    [ "$output" -eq 2 ]
+    # The mode is enforced in the same remote command that moves the file into place.
+    run grep -q 'umask 077' "$remote"
+    [ "$status" -eq 0 ]
+    run grep -q 'chmod 600' "$remote"
+    [ "$status" -eq 0 ]
+    run grep -q 'stat -c %a' "$remote"
+    [ "$status" -eq 0 ]
+}
+
+@test "oc-export-keys-nas reports an upload whose mode is NOT 600, and does not mark it synced" {
+    # WHAT THIS CATCHES: the silent-success shape — the old code moved the file and
+    # recorded the marker without ever looking at the mode, which is how 48
+    # credentials sat world-readable (644, measured on the NAS 2026-10-02).
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GLOWMARKT_PASSWORD=glow-value'"
+
+    local nas_key="$TAC_TEST_TMPDIR/nas_key"
+    touch "$nas_key" && chmod 600 "$nas_key"
+    export OC_NAS_KEY_PATH="$nas_key"
+    export OC_NAS_USER="testuser"
+    export OC_NAS_HOST="nas.example"
+
+    __mock_command_local ssh "cat > /dev/null; echo 644; exit 0"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    run oc-export-keys-nas
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not 600"* ]]
+    # Nothing is recorded as synced: the next run must try again.
+    [ ! -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
+}
+
+@test "oc-export-keys-nas --dry-run names, and uploads nothing" {
+    # The review step: the imported set is inspectable before it reaches the NAS.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GLOWMARKT_PASSWORD=glow-value' 'UNREAD_API_KEY=unread-value'"
+
+    local nas_key="$TAC_TEST_TMPDIR/nas_key"
+    touch "$nas_key" && chmod 600 "$nas_key"
+    export OC_NAS_KEY_PATH="$nas_key"
+    export OC_NAS_USER="testuser"
+    export OC_NAS_HOST="nas.example"
+
+    local ssh_log="$TAC_TEST_TMPDIR/dry_ssh.log"
+    __mock_command_local ssh "echo \"SSH_CALL: \$*\" >> \"$ssh_log\"; exit 0"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    run oc-export-keys-nas --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"GLOWMARKT_PASSWORD"* ]]
+    [[ "$output" == *"dry run"* ]]
+    # The value never appears; the fingerprint does.
+    [[ "$output" != *"glow-value"* ]]
+    [[ "$output" == *"len=10"* ]]
+    # Nothing was uploaded and nothing was marked synced.
+    [ ! -f "$ssh_log" ]
+    [ ! -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
 }
 
 @test "oc-refresh-keys reports a restart FAILURE rather than a plausible outcome" {
@@ -240,7 +333,9 @@ teardown() {
     # A value containing '!' must round-trip: %q alone yields win\!secret, which
     # sources back to win!secret. Wrapping it in double quotes (the old bug)
     # produced "win\!secret" -> a literal backslash, breaking the NAS collector.
-    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=win!secret'"
+    # GLOWMARKT_PASSWORD is used because it is one of the names the export carries
+    # (the set is the NAS's read set, not the whole bridge — see __oc_nas_export_names).
+    __mock_command_local pwsh.exe "printf '%s\\n' 'GLOWMARKT_PASSWORD=win!secret'"
 
     local nas_key="$TAC_TEST_TMPDIR/nas_key"
     touch "$nas_key" && chmod 600 "$nas_key"
@@ -248,9 +343,9 @@ teardown() {
     export OC_NAS_USER="testuser"
     export OC_NAS_HOST="nas.example"
 
-    # Capture the first ssh call's stdin (the generated env file).
+    # Capture the upload call's stdin (the generated env file).
     local cap="$TAC_TEST_TMPDIR/nas_stdin.txt"
-    __mock_command_local ssh "if [ -f \"$cap\" ]; then exit 0; fi; cat > \"$cap\"; exit 0"
+    __mock_command_local ssh "if [ -f \"$cap\" ]; then exit 0; fi; cat > \"$cap\"; echo 600; exit 0"
 
     run oc-refresh-keys        # creates and sources the bridge cache
     [ "$status" -eq 0 ]
@@ -258,7 +353,7 @@ teardown() {
     [ "$status" -eq 0 ]
     [ -f "$cap" ]
 
-    run grep -F 'export WIN_API_KEY=win\!secret' "$cap"
+    run grep -F 'export GLOWMARKT_PASSWORD=win\!secret' "$cap"
     [ "$status" -eq 0 ]
 
     run grep -F '"win\!secret"' "$cap"

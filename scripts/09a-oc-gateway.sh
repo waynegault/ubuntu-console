@@ -1,13 +1,19 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 25
+# Module Version: 26
+#   v26 (2026-10-02): `so` also shows the daemon guard patch when it needs acting on
+#   (__oc_guard_patch_state --quiet-when-ok, from 09e). The patch silently reverts on
+#   every IDE-companion update and its cron self-heal can fail without reaching anyone
+#   (this box has no mail transport), so the reverted state belongs on the status output
+#   the operator actually reads. Quiet when the patch is applied — a row on every healthy
+#   start would be noise (tests/unit/02-so-startup.bats pins both halves).
 # ==============================================================================
 # 09a-oc-gateway
 # ==============================================================================
 # @modular-section: openclaw
 # @depends: constants, design-tokens, ui-engine, hooks
-# @uses: llm-registry, llm-server, llm-gpu, llm-runtime
+# @uses: llm-registry, llm-server, llm-gpu, llm-runtime, oc-health
 # @exports: so, __oc_safe_gateway_shutdown
 
 # Globals assigned by sibling modules at source time, named here instead of
@@ -776,6 +782,11 @@ function so() {
         then
             __tac_info "Local LLM" "[RUNNING on PORT $_so_llm_port]" "$C_Success"
             __tac_info "Gateway" "[RUNNING on PORT $OC_PORT]" "$C_Success"
+            # A reverted guard patch is a silent-reversion surface, so it is reported on
+            # this all-green path too — exactly where the operator sees nothing wrong.
+            # Both calls are needed: this early return is reached before the one at the
+            # end of the function on the common "already up" path.
+            __oc_guard_patch_state --quiet-when-ok
             return 0
         fi
         # Gateway running but LLM offline — only start LLM
@@ -852,6 +863,12 @@ function so() {
     if [[ -n "$_so_default_agent" ]]; then
         __tac_info "Default Agent" "${_so_default_agent}" "$C_Highlight"
     fi
+
+    # The guard-patch row for the started path. It reports only when the patch needs
+    # acting on (the cron self-heal's failure reaches nobody here), so a healthy box
+    # stays quiet. Wired here AND on the already-running early return above, because
+    # that return is taken before this line on the common path.
+    __oc_guard_patch_state --quiet-when-ok
 }
 
 # ---------------------------------------------------------------------------

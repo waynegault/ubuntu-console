@@ -434,10 +434,15 @@ What finally restored the patch was Wayne's instruction to re-patch by hand, not
 Changed 2026-09-27: the script now exits non-zero when `--check` still fails after its attempt — a
 failed run must not report success. Verified against a stub patch script in a scratch directory, so
 the real patcher was never invoked: healthy → rc=0 and no log entry; recovered → rc=0,
-`--check after: ok`; unrecoverable → rc=1, `STILL-NEEDS-ATTENTION`. **Delivery is still open**: on
-this box the exit status reaches nobody, so the next reversion will again sit unnoticed unless that
-state is surfaced on a channel someone actually reads. (Since 2026-10-01 the re-apply covers all
-three patched states, not just the read-only allowlist — see the section below.)
+`--check after: ok`; unrecoverable → rc=1, `STILL-NEEDS-ATTENTION`. **Delivery is closed** (landed
+2026-09-27 22:26 BST as `61e82a8a`): the exit status still reaches nobody — this box has no mail
+transport — but the *state* it reports is now on a channel a human reads. `oc health` gained a
+`Daemon guard patch` row that runs `qwen-guard-patch.sh --check` read-only and reports `[APPLIED]` /
+`[NOT APPLIED]` / `[not installed]` (`tests/unit/33-daemon-guard-patch.bats` pins the helper and both
+wirings), and since 2026-10-02 `so` carries the same row — shown only when the patch needs acting on,
+so a healthy box stays quiet. A reversion is therefore visible on the next `so` or `oc health`
+instead of only in a log nobody reads. (Since 2026-10-01 the re-apply covers all three patched
+states, not just the read-only allowlist — see the section below.)
 
 ## The 2026-10-01 patch — two more local relaxations, reported as states 2 and 3
 
@@ -489,7 +494,9 @@ unparseable-payload and unrecognized-program refusals are untouched.
 
 `qwen-guard-selfheal.sh` (`17,47 * * * *`) already delegated to the patcher, and `--check` now
 covers all three states, so a companion update that reverts the chunk is repaired in full rather
-than in the read-only allowlist alone. The delivery gap recorded below is unchanged and still open.
+than in the read-only allowlist alone. The delivery gap recorded above is CLOSED: `oc health`
+(`61e82a8a`, 2026-09-27) and, since 2026-10-02, `so` both surface the state — see the 2026-09-27
+section.
 
 ## Upstream asks
 
