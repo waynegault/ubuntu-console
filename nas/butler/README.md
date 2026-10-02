@@ -28,6 +28,14 @@ the follow-up that makes the mirror a full gate rather than a partial one.
   `microsoft-env.sh`, `*token*` (`myair-graph-token.json`, `outlook-mcp-token-cache`),
   `openclaw/secrets.json`, `myair-email-otp.txt`. The NAS export carries
   `GLOWMARKT_PASSWORD` and `RESMED_PASSWORD`; those must never enter this repo.
+
+The CPAP scripts therefore hold **no literals** (credential-hardening, 2026-10-02 — card
+`a7383ea0`): `nas-cpap-full.py` and `cpap-myair-fetch.py` read `CPAP_MYAIR_USERNAME`,
+`CPAP_MYAIR_PASSWORD` and `CPAP_MYAIR_API_KEY` from the environment, and
+`cpap-collect-with-otp.sh` self-sources `cron/openclaw-collectors.env` +
+`cron/cpap-collector.env` (the latter defines the names, aliasing `CPAP_MYAIR_PASSWORD` to
+`RESMED_PASSWORD`) before it runs. The live `/etc/crontab` 08:00 entry sources nothing, so
+that self-sourcing is what keeps the job working without hardcoded values.
 - **Litter and vendored trees**: `*.bak*` / `*.orig`, `*.log`, `__pycache__/`,
   `entware-opt/`, `influxdb/`, `openclaw-data/`, `shared-data/`, `.trash-*`.
 

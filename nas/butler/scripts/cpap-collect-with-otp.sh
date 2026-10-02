@@ -8,10 +8,20 @@ COLLECT_SCRIPT=/mnt/HD/HD_a2/butler/scripts/cpap-myair-collector.py
 OTP_SCRIPT=/mnt/HD/HD_a2/butler/scripts/nas-graph-otp.py
 LOG=/mnt/HD/HD_a2/butler/logs/cpap-collect.log
 
-# myAir credentials come from the environment — never hardcoded (see README).
-# The caller sources cron/openclaw-collectors.env + cron/cpap-collector.env first.
-: "${CPAP_MYAIR_USERNAME:?CPAP_MYAIR_USERNAME is not set — source cron/cpap-collector.env}"
-: "${CPAP_MYAIR_PASSWORD:?CPAP_MYAIR_PASSWORD is not set — source cron/cpap-collector.env}"
+# myAir credentials come from the gitignored NAS env files -- never hardcoded here.
+# Self-sourced so the 08:00 cron entry needs no env wiring of its own.
+for _envf in \
+    /mnt/HD/HD_a2/butler/cron/openclaw-collectors.env \
+    /mnt/HD/HD_a2/butler/cron/cpap-collector.env
+do
+    # shellcheck disable=SC1090  # runtime path, deliberately not followed statically
+    . "$_envf" 2>/dev/null || :  # swallow-ok: missing env file is non-fatal; guard fails closed
+done
+unset _envf
+# RESMED_PASSWORD (bridged export) is the canonical myAir password name.
+: "${CPAP_MYAIR_PASSWORD:=${RESMED_PASSWORD:-}}"
+: "${CPAP_MYAIR_USERNAME:?CPAP_MYAIR_USERNAME is not set - source cron/cpap-collector.env}"
+: "${CPAP_MYAIR_PASSWORD:?CPAP_MYAIR_PASSWORD is not set - source cron/cpap-collector.env}"
 export CPAP_MYAIR_USERNAME CPAP_MYAIR_PASSWORD
 export CPAP_REGION="EU"
 
