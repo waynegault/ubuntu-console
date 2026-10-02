@@ -260,7 +260,16 @@ jobs:
           for f in tactical-console.bashrc install.sh env.sh \
                    scripts/[0-9][0-9]-*.sh bin/*.sh; do
             [[ -f "$f" ]] || continue
-            count=$(grep -Pc '\r' "$f" || true)
+            # Distinguish grep's three outcomes.  rc 1 is "no match", the expected
+            # answer; rc >= 2 is a real error (unreadable file, bad pattern) and must
+            # NOT be read as "no carriage returns" — the old `|| true` left the count
+            # empty, and the arithmetic test below then passed vacuously.
+            rc=0
+            count=$(grep -Pc '\r' "$f") || rc=$?
+            if [[ "$rc" -ge 2 ]]; then
+              echo "grep failed (rc=$rc) while checking $f — cannot verify the no-CR invariant"
+              exit 1
+            fi
             if [[ "$count" -gt 0 ]]; then
               echo "Carriage returns found in $f"
               exit 1
