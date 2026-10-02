@@ -34,8 +34,9 @@ if [ ! -s /home/root/.ssh/authorized_keys ]; then
         chmod 700 /home/root/.ssh /root/.ssh
         cp "$LATEST" /home/root/.ssh/authorized_keys
         chmod 600 /home/root/.ssh/authorized_keys
-        # swallow-ok: a redundant SECOND copy of the same keys, into /root/.ssh, which this
-        # firmware may not have; the restore that matters is the unchecked copy just above
+        # a redundant SECOND copy of the same keys, into /root/.ssh, which this firmware may
+        # not have; the restore that matters is the unchecked copy just above
+        # swallow-ok: best-effort second copy; the primary restore is unchecked but visible
         cp /home/root/.ssh/authorized_keys /root/.ssh/authorized_keys 2>/dev/null || true
     fi
 fi

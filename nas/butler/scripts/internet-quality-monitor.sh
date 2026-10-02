@@ -20,12 +20,16 @@ monitor() {
     # Remove ms suffix for InfluxDB (must be float)
     AVGF=$(echo "$AVG" | sed "s/ ms//")
     LINE="internet_quality,target=$LABEL latency_ms=$AVGF,packet_loss=$LOSS"
+    # swallow-ok: a failed POST shows as a non-200 code in the log line below (000 = no connect)
     CODE=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" -X POST "$INFLUX_URL" -d "$LINE" 2>/dev/null)
     echo "$(now) $LABEL HTTP $CODE avg=${AVG} loss=${LOSS}%" >> "$LOG"
   else
-    echo "$(now) $LABEL DOWN" >> "$LOG"
     LINE="internet_quality,target=$LABEL latency_ms=0,packet_loss=100"
-    /usr/bin/curl -s -o /dev/null -X POST "$INFLUX_URL" -d "$LINE" 2>/dev/null
+    # the DOWN branch used to POST with no code captured, so a failed fallback write was
+    # invisible; capture and log it exactly as the branch above does
+    # swallow-ok: a failed POST shows as the non-200 code now logged on the DOWN line
+    CODE=$(/usr/bin/curl -s -o /dev/null -w "%{http_code}" -X POST "$INFLUX_URL" -d "$LINE" 2>/dev/null)
+    echo "$(now) $LABEL DOWN HTTP $CODE" >> "$LOG"
   fi
 }
 
