@@ -2413,13 +2413,16 @@ class TestProjectionHelpers(unittest.TestCase):
         from kgraph import projection
         for given, expected in [(0.0, 0.58), (0.5, 0.58), (0.82, 0.772), (1.0, 0.88), (2.0, 0.90)]:
             self.assertAlmostEqual(projection._effective_semantic_threshold(given), expected, msg=given)
+        # The normaliser moved to models.py, where the ONE implementation lives
+        # (card 27b55b6f); projection's private copy is gone.
+        from kgraph.models import normalize_semantic_label
         for label, expected in [("The Current Graph Layout", "graph"), ("Topic cleanup", "topic structure"),
                                 ("Alpha Project", "alpha canonical"), ("!!!", ""), ("", "")]:
-            self.assertEqual(projection._normalized_semantic_label(_n("x", label, "topic"), _PROJECTION_LIFE_INDEX),
+            self.assertEqual(normalize_semantic_label(label, _PROJECTION_LIFE_INDEX),
                              expected, msg=label)
         alias = {"aliases": {"widget": {"title": "Widget Canonical"}}, "title_aliases": {"gadget": "Gadget C"}}
-        self.assertEqual(projection._normalized_semantic_label(_n("x", "Widget", "topic"), alias), "widget canonical")
-        self.assertEqual(projection._normalized_semantic_label(_n("x", "Gadget", "topic"), alias), "gadget c")
+        self.assertEqual(normalize_semantic_label("Widget", alias), "widget canonical")
+        self.assertEqual(normalize_semantic_label("Gadget", alias), "gadget c")
         for edge, expected in [(_e("a", "b", "project decision", semantic_score=0.1), 0.95),
                                (_e("a", "b", "project outcome"), 0.88),
                                (_e("a", "b", "actor issue"), 0.76),
@@ -2494,6 +2497,30 @@ class TestProjectionHelpers(unittest.TestCase):
             node = _n("m", label, "topic")
             projection._set_display_label(node, "m", "topic", "semantic", {"m"})
             self.assertEqual((node["display_label"], node["visual_role"]), ("", "provenance"), msg=label)
+
+    def test_collapse_semantic_duplicates_uses_the_shared_boundary_and_bound(self):
+        """The view path must apply the SAME rule as the store (card 27b55b6f).
+
+        States the wrong outcomes: a view-only `<4` gate leaves an
+        exactly-3-character concept duplicated on screen after the store collapsed
+        it, and an unbounded dict union stores 80 keys with no overflow record.
+        """
+        from kgraph import projection
+        from kgraph.models import MAX_SOURCES_PER_ELEMENT
+
+        out = {"nodes": [_n("w1", "wsl", "topic"), _n("w2", "wsl", "topic"),
+                         _n("g1", "gw", "topic"), _n("g2", "gw", "topic"),
+                         _n("big1", "Big Concept", "topic",
+                            sources=[f"file:a{i:03d}.md" for i in range(40)]),
+                         _n("big2", "Big Concept", "topic",
+                            sources=[f"file:b{i:03d}.md" for i in range(40)])],
+               "edges": []}
+        projection._collapse_semantic_duplicates(out, {"topic"}, _PROJECTION_LIFE_INDEX)
+
+        self.assertEqual([n["id"] for n in out["nodes"]], ["w1", "g1", "g2", "big1"])
+        big = next(n for n in out["nodes"] if n["id"] == "big1")
+        self.assertEqual(len(big["sources"]), MAX_SOURCES_PER_ELEMENT)
+        self.assertEqual(big["metadata"]["sources_overflow"], 80)
 
     def test_collapse_semantic_duplicates_merges_and_drops_self_loops(self):
         from kgraph import projection

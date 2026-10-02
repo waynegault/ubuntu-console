@@ -10,12 +10,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "scr
 
 from kgraph.models import (
     MAX_SOURCES_PER_ELEMENT,
+    MIN_SEMANTIC_KEY_LEN,
     ConfidenceLevel,
     Graph,
     GraphBuilder,
     GraphEdge,
     GraphNode,
+    collapse_semantic_duplicates,
     estimate_tokens,
+    normalize_semantic_label,
     slugify,
     source_key,
 )
@@ -462,3 +465,61 @@ class TestRemoveSource:
         after = ([(n.id, n.sources) for n in g.nodes], [(e.source, e.target, e.sources) for e in g.edges])
         assert before == after
         assert counts["nodes_removed"] == 0 and counts["edges_removed"] == 0
+
+
+# ── Semantic identity: one normaliser, one collapse (card 27b55b6f) ────
+
+
+class TestSemanticCollapseUnification:
+    """The rule BOTH paths use: models owns it, projection calls it."""
+
+    @staticmethod
+    def _same_label_pair(label: str, node_type: str = "topic"):
+        return [
+            {"id": "a", "label": label, "type": node_type},
+            {"id": "b", "label": label, "type": node_type},
+        ]
+
+    def test_the_grouping_key_boundary_is_three_characters(self):
+        """States the wrong outcome: a boundary of 4 leaves an exactly-3-character
+        concept duplicated in the graph, and a boundary of 2 merges a fragment."""
+        assert MIN_SEMANTIC_KEY_LEN == 3
+        assert normalize_semantic_label("WSL") == "wsl"
+        assert normalize_semantic_label("gw") == "gw"
+
+        three = collapse_semantic_duplicates(
+            Graph.from_dict({"nodes": self._same_label_pair("wsl"), "edges": []}))
+        assert [n.id for n in three.nodes] == ["a"]  # exactly 3 chars → one concept
+
+        two = collapse_semantic_duplicates(
+            Graph.from_dict({"nodes": self._same_label_pair("gw"), "edges": []}))
+        assert [n.id for n in two.nodes] == ["a", "b"]  # 2 chars → fragments, kept apart
+
+    def test_collapse_bounds_the_source_union_and_records_the_overflow(self):
+        """States the wrong outcome: an unbounded union stores 80 keys with nothing
+        saying the array was capped, so a reader takes a partial list for the whole."""
+        nodes = [
+            {"id": "a", "label": "Big Concept", "type": "topic",
+             "sources": [f"file:a{i:03d}.md" for i in range(40)]},
+            {"id": "b", "label": "Big Concept", "type": "topic",
+             "sources": [f"file:b{i:03d}.md" for i in range(40)]},
+        ]
+        graph = collapse_semantic_duplicates(Graph.from_dict({"nodes": nodes, "edges": []}))
+        assert [n.id for n in graph.nodes] == ["a"]
+        canonical = graph.nodes[0]
+        assert len(canonical.sources) == MAX_SOURCES_PER_ELEMENT
+        assert canonical.sources == sorted({f"file:a{i:03d}.md" for i in range(40)}
+                                           | {f"file:b{i:03d}.md" for i in range(40)})[:MAX_SOURCES_PER_ELEMENT]
+        assert canonical.metadata["sources_overflow"] == 80
+
+    def test_the_builder_path_and_the_graph_function_agree(self):
+        """States the wrong outcome: two entry points that answer "same concept?"
+        differently (the drift this card removes)."""
+        builder = GraphBuilder()
+        for node in self._same_label_pair("wsl"):
+            builder.add_node(node)
+        builder.deduplicate_semantic()
+        from_builder = [n.id for n in builder.build().nodes]
+        direct = [n.id for n in collapse_semantic_duplicates(
+            Graph.from_dict({"nodes": self._same_label_pair("wsl"), "edges": []})).nodes]
+        assert from_builder == direct == ["a"]

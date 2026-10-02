@@ -14,13 +14,16 @@ import re
 from .constants import (
     AST_EDGE_LABELS,
     AST_NODE_TYPES,
-    CONCEPT_ALIASES,
     CURATED_EDGE_LABELS,
-    STOPWORDS,
     is_summary_edge_label,
 )
 from .life_index import load_life_index
-from .models import Graph
+from .models import (
+    Graph,
+    SourceLineage,
+    collapse_semantic_duplicates,
+    normalize_semantic_label,
+)
 
 # ── Label / type constants ─────────────────────────────────────────────
 # CURATED_EDGE_LABELS, AST_EDGE_LABELS and AST_NODE_TYPES are declared once in
@@ -137,8 +140,17 @@ def _edge_endpoints(edge: dict) -> tuple[str | None, str | None]:
     return (str(src) if src is not None else None, str(dst) if dst is not None else None)
 
 
+def _label_key(node: dict, life_index: dict) -> str:
+    """The shared normalised semantic key for a projected node dict.
+
+    ``models.normalize_semantic_label`` owns the rule (stopwords, aliases, life
+    index); this only pulls the label out of the dict the view carries.
+    """
+    return normalize_semantic_label(str(node.get("label", "") or ""), life_index)
+
+
 def _merge_sources(target: dict, source: dict) -> None:
-    """Union *source*'s ``sources`` into *target*'s, in place.
+    """Union *source*'s ``sources`` into *target*'s, through the model, in place.
 
     REF: "GraphRAG: A Practitioner's Guide to 6 Advanced Architectural Patterns"
          (Partha Sarkar, TDS, 2026-09-20) — https://towardsdatascience.com/graphrag-a-practitioners-guide-to-6-advanced-architectural-patterns/
@@ -148,11 +160,22 @@ def _merge_sources(target: dict, source: dict) -> None:
     it mints new edges (semantic co-occurrence, fallback pairs) that no document
     asserts, so it must not invent lineage — but it must not lose it either, so
     every collapse point below routes through here.
+
+    The union runs through ``SourceLineage.merge_sources`` rather than a local
+    set union, so the array bound (``MAX_SOURCES_PER_ELEMENT``) and the
+    ``metadata["sources_overflow"]`` record apply on the view path exactly as
+    they do on ingest — the unbounded copy this replaces would have let a
+    collapsed edge carry an arbitrarily long array with nothing saying so.
     """
     incoming = source.get("sources") or []
     if not incoming:
         return
-    target["sources"] = sorted(set(target.get("sources") or []) | set(incoming))
+    lineage = SourceLineage(sources=list(target.get("sources") or []),
+                            metadata=dict(target.get("metadata") or {}))
+    lineage.merge_sources(incoming)
+    target["sources"] = lineage.sources
+    if "sources_overflow" in lineage.metadata:
+        target["metadata"] = lineage.metadata
 
 
 def _dedupe_append(out_edges: list, seen: dict, source: str | None, target: str | None, label: str, payload: dict | None = None) -> None:
@@ -285,105 +308,46 @@ def _set_display_label(node: dict, nid: str, ntype: str, mode: str, top_label_no
             node["display_label"] = raw_label[:24]
 
 
-def _normalized_semantic_label(node: dict, life_index: dict) -> str:
-    label = str(node.get("label", "") or "").strip().lower()
-    if not label:
-        return ""
-    # Stopwords and aliases come from config/concept-aliases.json via constants.py,
-    # the single source for concept classification (item 11.14).  Both were literals
-    # here: the alias map duplicated models.py's with a DIFFERENT set of entries
-    # (this one was a narrow subset of the JSON while models.py held seven keys the
-    # JSON lacked), and the stopwords were the same ten words spelled as two inline
-    # regexes.  One combined alternation is equivalent to the two sequential subs it
-    # replaces — the alternative sets are disjoint and re.sub is global — and
-    # `sorted` keeps the generated pattern deterministic across runs.
-    label = re.sub(r"\b(?:%s)\b" % "|".join(sorted(STOPWORDS)), " ", label)
-    label = re.sub(r"[^a-z0-9\s-]", " ", label)
-    label = re.sub(r"\s+", " ", label).strip(" .:-")
-    for alias, canonical in CONCEPT_ALIASES.items():
-        if label == alias or alias in label:
-            label = canonical
-            break
-    record = life_index.get("aliases", {}).get(label)
-    if record:
-        return str(record.get("title", label)).strip().lower()
-    canonical_title = life_index.get("title_aliases", {}).get(label)
-    if canonical_title:
-        return str(canonical_title).strip().lower()
-    return label
-
-
 def _collapse_semantic_duplicates(graph_out: dict, allowed_types: set[str], life_index: dict) -> None:
-    nodes_local = graph_out.get("nodes", []) or []
-    edges_local = graph_out.get("edges", []) or []
-    canonical_for: dict[str, str] = {}
-    label_groups: dict[tuple[str, str], list[dict]] = {}
+    """Collapse semantic duplicates by handing the model this very graph.
 
-    for node in nodes_local:
-        nid = str(node.get("id", "") or "")
-        ntype = str(node.get("type", "") or "").lower()
-        if not nid or ntype not in allowed_types:
-            continue
-        norm = _normalized_semantic_label(node, life_index)
-        if not norm or len(norm) < 4:
-            continue
-        label_groups.setdefault((ntype, norm), []).append(node)
+    The rule — normalisation, the minimum group key length, canonical choice,
+    edge remapping and the BOUNDED source union — lives in
+    ``models.collapse_semantic_duplicates``, so the stored graph and the view
+    cannot collapse differently (card 27b55b6f).  This function is only the
+    dict ⇄ model bridge: the view's edges are spelled ``from``/``to`` for the
+    frontend, so that spelling is restored on the way out.
+    """
+    collapsed = collapse_semantic_duplicates(
+        Graph.from_dict(graph_out), life_index=life_index, allowed_types=allowed_types)
+    graph_out["nodes"] = [_projected_element_dict(n) for n in collapsed.nodes]
+    graph_out["edges"] = [_projected_edge_dict(e) for e in collapsed.edges]
 
-    for members in label_groups.values():
-        if len(members) < 2:
-            continue
-        members_sorted = sorted(members, key=lambda n: (
-            int(bool(n.get("inferred_type"))),
-            -float(n.get("type_confidence", 1.0) or 1.0),
-            -len(str(n.get("label", "") or "")),
-            str(n.get("id", "") or ""),
-        ))
-        canonical = str(members_sorted[0].get("id"))
-        for node in members_sorted:
-            canonical_for[str(node.get("id"))] = canonical
 
-    if not canonical_for:
-        return
+def _projected_element_dict(element) -> dict:
+    """A model element back as the view dict it came from.
 
-    deduped_nodes = []
-    dropped_sources: dict[str, set[str]] = {}
-    seen_nodes: set[str] = set()
-    for node in nodes_local:
-        nid = str(node.get("id", "") or "")
-        cid = canonical_for.get(nid, nid)
-        if cid != nid:
-            # A collapsed duplicate's sources move to the node that replaces it.
-            dropped_sources.setdefault(cid, set()).update(node.get("sources") or [])
-            continue
-        if cid in seen_nodes:
-            continue
-        seen_nodes.add(cid)
-        if cid in dropped_sources:
-            node["sources"] = sorted(set(node.get("sources") or []) | dropped_sources[cid])
-        deduped_nodes.append(node)
+    ``exclude_unset`` keeps the dict shape the view started with — but the
+    collapse can SET a field the input did not carry (the source union, the
+    ``sources_overflow`` record), and dropping those would lose exactly the
+    lineage the merge just gathered, so they are re-attached when non-empty.
+    """
+    data = element.model_dump(mode="json", exclude_unset=True)
+    if element.sources:
+        data["sources"] = list(element.sources)
+    if element.metadata:
+        data["metadata"] = dict(element.metadata)
+    return data
 
-    deduped_edges = []
-    seen_edges: dict[tuple[str, str, str], dict] = {}
-    for edge in edges_local:
-        src, dst = _edge_endpoints(edge)
-        src = canonical_for.get(src or "", src or "")
-        dst = canonical_for.get(dst or "", dst or "")
-        if not src or not dst or src == dst:
-            continue
-        label = str(edge.get("label", "") or "")
-        key = (src, dst, label)
-        new_edge = dict(edge)
-        new_edge["from"] = src
-        new_edge["to"] = dst
-        kept = seen_edges.get(key)
-        if kept is not None:
-            _merge_sources(kept, new_edge)
-            continue
-        seen_edges[key] = new_edge
-        deduped_edges.append(new_edge)
 
-    graph_out["nodes"] = deduped_nodes
-    graph_out["edges"] = deduped_edges
+def _projected_edge_dict(edge) -> dict:
+    """An edge as the projection spells it: ``from``/``to`` plus its set fields."""
+    data = _projected_element_dict(edge)
+    data.pop("source", None)
+    data.pop("target", None)
+    out = {"from": edge.source, "to": edge.target}
+    out.update(data)
+    return out
 
 
 def _edge_strength_value(edge: dict) -> float:
@@ -411,7 +375,7 @@ def _filter_semantic_edges(out: dict, current_mode: str, life_index: dict) -> No
     """Filter and score semantic edges for topics/semantic modes."""
     canonical_anchor_types = {"project", "decision", "issue", "outcome", "workflow", "system", "repo"}
     canonical_anchor_labels = {
-        _normalized_semantic_label(n, life_index)
+        _label_key(n, life_index)
         for n in out["nodes"]
         if str(n.get("type", "") or "").lower() in canonical_anchor_types
     }
@@ -437,8 +401,8 @@ def _filter_semantic_edges(out: dict, current_mode: str, life_index: dict) -> No
         strength = _edge_strength_value(edge)
         src_node = node_lookup.get(src, {})
         dst_node = node_lookup.get(dst, {})
-        src_label = _normalized_semantic_label(src_node, life_index)
-        dst_label = _normalized_semantic_label(dst_node, life_index)
+        src_label = _label_key(src_node, life_index)
+        dst_label = _label_key(dst_node, life_index)
         src_type = str(src_node.get("type", "") or "").lower()
         dst_type = str(dst_node.get("type", "") or "").lower()
         label = str(edge.get("label", "") or "").lower()
@@ -527,7 +491,7 @@ def _filter_semantic_edges(out: dict, current_mode: str, life_index: dict) -> No
             connected_ids.add(dst)
     for nid, node in node_lookup.items():
         ntype = str(node.get("type", "") or "").lower()
-        if ntype in canonical_anchor_types and _normalized_semantic_label(node, life_index) in canonical_anchor_labels:
+        if ntype in canonical_anchor_types and _label_key(node, life_index) in canonical_anchor_labels:
             connected_ids.add(nid)
 
     filtered_nodes = []

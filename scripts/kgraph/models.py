@@ -64,6 +64,25 @@ SOURCE_KEY_KINDS = ("memory", "chunk", "file", "life")
 # routinely reach the bound, ``metadata["sources_overflow"]`` is what will say so.
 MAX_SOURCES_PER_ELEMENT = 64
 
+# The shortest normalised semantic key that may group two nodes.
+#
+# The key IS the identity: two nodes collapse only when their normalised labels
+# are byte-equal, so a short key cannot merge two DIFFERENT labels — it can only
+# merge labels that normalise identically.  3 is the floor because a 1-2 character
+# key is a fragment left behind by stopword/punctuation stripping ("gw", "ok"),
+# while a 3-character key ("git", "api", "wsl", "ceo", "sql") is a complete word
+# and a legitimate concept name.  Extraction-time dedup applied this floor to the
+# final key; view-time dedup applied 4 and also gated the pre-alias label at 4, so
+# a 3-character key was collapsed by one path and skipped by the other — the
+# disagreement card 27b55b6f records.
+MIN_SEMANTIC_KEY_LEN = 3
+
+# Node types eligible for semantic collapse.  One declaration: the ingest path and
+# the view path grouped on their own copies of this set.
+DEFAULT_SEMANTIC_TYPES = frozenset({
+    "topic", "project", "decision", "issue", "outcome", "organization", "place", "person",
+})
+
 
 def source_key(kind: str, locator: str) -> str:
     """Canonical source key ``<kind>:<locator>`` for one source document.
@@ -439,6 +458,130 @@ class Graph(BaseModel):
         return cls.model_validate(data)
 
 
+# ── Semantic identity: ONE normaliser, ONE collapse ────────────────────
+# Both the extraction/merge path (GraphBuilder.deduplicate_semantic) and the
+# view path (projection._enrich_graph_payload) call these, so "is this the same
+# concept?" can only be answered one way (card 27b55b6f).
+
+def normalize_semantic_label(label: str, life_index: dict | None = None) -> str:
+    """The normalised grouping key for *label*: stopwords/punctuation, then aliases.
+
+    Deliberately has NO length gate: the caller applies
+    :data:`MIN_SEMANTIC_KEY_LEN` to the FINAL key.  The extraction path used to
+    gate the PRE-alias label at 4 characters, before the alias map could see it —
+    and since no alias key or canonical in ``config/concept-aliases.json`` is
+    shorter than 4 characters, that gate never bought a correct grouping while
+    making the two paths disagree about 3-character labels.
+    """
+    text = (label or "").strip().lower()
+    if not text:
+        return ""
+    # Stopwords and aliases come from config/concept-aliases.json via constants.py,
+    # the single source for concept classification (item 11.14); `sorted` keeps the
+    # generated alternation deterministic across runs.
+    text = re.sub(r"\b(?:%s)\b" % "|".join(sorted(STOPWORDS)), " ", text)
+    text = re.sub(r"[^a-z0-9\s-]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" .:-")
+    if not text:
+        return ""
+    for alias, canonical in CONCEPT_ALIASES.items():
+        if text == alias or alias in text:
+            text = canonical
+            break
+    if life_index:
+        record = life_index.get("aliases", {}).get(text)
+        if record:
+            title = str(record.get("title", text)).strip().lower()
+            if title and title != text:
+                return title
+        canonical_title = life_index.get("title_aliases", {}).get(text)
+        if canonical_title:
+            return str(canonical_title).strip().lower()
+    return text
+
+
+def collapse_semantic_duplicates(graph: Graph, life_index: dict | None = None,
+                                 allowed_types: set[str] | frozenset[str] | None = None) -> Graph:
+    """Collapse semantically-equivalent nodes, remapping and merging their edges.
+
+    Nodes are grouped by ``(type, normalize_semantic_label(label))``; a group is
+    collapsed only when its key is at least :data:`MIN_SEMANTIC_KEY_LEN`
+    characters.  The canonical member is the non-inferred, highest-confidence,
+    longest-labelled one; a dropped member's source documents union into it
+    through :meth:`SourceLineage.merge_sources`, so the array bound and the
+    ``sources_overflow`` record apply here too.
+
+    AST nodes (function, class, call, …) are never collapsed: their identity
+    carries semantic meaning.  Returns a new ``Graph``; the input is unchanged
+    apart from the canonical nodes/edges it mutates in place.
+    """
+    if allowed_types is None:
+        allowed_types = DEFAULT_SEMANTIC_TYPES
+
+    groups: dict[tuple[str, str], list[GraphNode]] = {}
+    for node in graph.nodes:
+        ntype = (node.type or "unknown").lower()
+        if ntype not in allowed_types:
+            continue
+        key = normalize_semantic_label(node.label, life_index)
+        if len(key) < MIN_SEMANTIC_KEY_LEN:
+            continue
+        groups.setdefault((ntype, key), []).append(node)
+
+    canonical_for: dict[str, str] = {}
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda n: (
+            bool(n.inferred_type) if n.inferred_type is not None else False,  # non-inferred first
+            -(float(n.type_confidence) if n.type_confidence is not None else 1.0),  # highest confidence first
+            -len(n.label or ""),  # longest label first
+            n.id or "",
+        ))
+        canonical = members[0]
+        cid = canonical.id or ""
+        merged_desc_parts: list[str] = []
+        for node in members[1:]:
+            nid = node.id or ""
+            if nid:
+                canonical_for[nid] = cid
+            # The collapsed node's evidence moves to the canonical node —
+            # otherwise dedup would silently drop the sources that only the
+            # dropped spelling carried.
+            canonical.merge_sources(node.sources)
+            # Merge description from dropped nodes
+            if node.description and node.description != canonical.description:
+                merged_desc_parts.append(node.description)
+        if merged_desc_parts and canonical.description:
+            canonical.description = "\n".join([canonical.description] + merged_desc_parts)
+        elif merged_desc_parts:
+            canonical.description = "\n".join(merged_desc_parts)
+
+    if not canonical_for:
+        return graph
+
+    kept_nodes = [n for n in graph.nodes if (n.id or "") not in canonical_for]
+
+    new_edges: dict[tuple[str, str, str], GraphEdge] = {}
+    for edge in graph.edges:
+        src = canonical_for.get(edge.source, edge.source)
+        dst = canonical_for.get(edge.target, edge.target)
+        if not src or not dst or src == dst:
+            continue  # drop self-loops
+        edge.source = src
+        edge.target = dst
+        new_key = (src, dst, edge.label or "related")
+        kept = new_edges.get(new_key)
+        if kept is not None:
+            # Two edges became the same edge: keep the first, but carry the
+            # dropped one's source documents across.
+            kept.merge_sources(edge.sources)
+            continue  # deduplicate edges
+        new_edges[new_key] = edge
+
+    return Graph(nodes=kept_nodes, edges=list(new_edges.values()), meta=graph.meta)
+
+
 # ── GraphBuilder ───────────────────────────────────────────────────────
 
 
@@ -517,139 +660,25 @@ class GraphBuilder:
 
     # ── semantic deduplication ──
 
-    # Single-sourced from config/concept-aliases.json via constants.py (item 11.14).
-    # These were literal copies: the alias dict duplicated projection.py's, and SEVEN
-    # of its keys were absent from the JSON entirely — so this module and
-    # projection.py classified those labels DIFFERENTLY.  The seven were folded into
-    # the JSON on 2026-09-16 (with self-entries for the canonical targets they
-    # referenced) and every consumer now reads the one set.
-    # Source: rahulnyk/graph_maker review — dedup at extraction time avoids stale
-    # duplicates persisting in the database.
-    _SEMANTIC_ALIASES: dict[str, str] = CONCEPT_ALIASES
-    _STOPWORDS: frozenset[str] = STOPWORDS
-
-    def _normalized_label(self, node: GraphNode, life_index: dict | None) -> str:
-        """Produce a normalised key for semantic dedup grouping."""
-        label = (node.label or "").strip().lower()
-        if not label:
-            return ""
-        # Remove stopwords
-        label = re.sub(r"\b(?:%s)\b" % "|".join(self._STOPWORDS), " ", label)
-        label = re.sub(r"[^a-z0-9\s-]", " ", label)
-        label = re.sub(r"\s+", " ", label).strip(" .:-")
-        if not label or len(label) < 4:
-            return ""
-        # Apply alias map
-        for alias, canonical in self._SEMANTIC_ALIASES.items():
-            if label == alias or alias in label:
-                label = canonical
-                break
-        # Life-index alias resolution
-        if life_index:
-            record = life_index.get("aliases", {}).get(label)
-            if record:
-                canonical = str(record.get("title", label)).strip().lower()
-                if canonical and canonical != label:
-                    return canonical
-            canonical_title = life_index.get("title_aliases", {}).get(label)
-            if canonical_title:
-                return str(canonical_title).strip().lower()
-        return label
-
     def deduplicate_semantic(self,
                               life_index: dict | None = None,
                               allowed_types: set[str] | None = None) -> None:
-        """Collapse semantically-equivalent nodes, merging edges.
+        """Collapse semantically-equivalent nodes in the builder state, merging edges.
 
-        Operates on the in-memory builder state — use *before* ``build()``
-        to ensure the persisted graph has no semantic duplicates.  This
-        complements the view-time dedup in ``projection.py`` by catching
-        duplicates at extraction/merge time.
+        Use *before* ``build()`` so the persisted graph carries no semantic
+        duplicates.  A thin wrapper over :func:`collapse_semantic_duplicates` —
+        the ONE implementation, shared with the view path in ``projection.py`` —
+        which writes the collapsed graph back into the builder.
 
-        Only nodes whose ``type`` is in *allowed_types* (default: semantic
-        core types) are candidates for collapse.  AST nodes (function,
-        class, call, etc.) are never collapsed because their identity
-        carries semantic meaning.
-
-        When two nodes match, the canonical (highest-confidence, longest
-        label, non-inferred) node is kept and the other's edges are
-        reconnected to it.  Metadata from dropped nodes is merged into
-        the canonical node's ``description``.
+        Sources of a collapsed node move to its canonical node through
+        :meth:`SourceLineage.merge_sources`, so the array bound and the
+        ``sources_overflow`` record apply on this path too.  Metadata from
+        dropped nodes merges into the canonical node's ``description``.
         """
-        if allowed_types is None:
-            allowed_types = {"topic", "project", "decision", "issue",
-                             "outcome", "organization", "place", "person"}
-
-        # 1. Group nodes by (type, normalized_label)
-        label_groups: dict[tuple[str, str], list[GraphNode]] = {}
-        for node in self._nodes.values():
-            ntype = (node.type or "unknown").lower()
-            if ntype not in allowed_types:
-                continue
-            norm = self._normalized_label(node, life_index)
-            if not norm or len(norm) < 3:
-                continue
-            label_groups.setdefault((ntype, norm), []).append(node)
-
-        if not label_groups:
-            return
-
-        # 2. Within each group, pick the canonical node and build ID map
-        canonical_for: dict[str, str] = {}
-        for members in label_groups.values():
-            if len(members) < 2:
-                continue
-            members.sort(key=lambda n: (
-                bool(n.inferred_type) if n.inferred_type is not None else False,  # non-inferred first
-                -(float(n.type_confidence) if n.type_confidence is not None else 1.0),  # highest confidence first
-                -len(n.label or ""),  # longest label first
-                n.id or "",
-            ))
-            canonical = members[0]
-            cid = canonical.id or ""
-            merged_desc_parts: list[str] = []
-            for node in members[1:]:
-                nid = node.id or ""
-                if nid:
-                    canonical_for[nid] = cid
-                # The collapsed node's evidence moves to the canonical node —
-                # otherwise dedup would silently drop the sources that only the
-                # dropped spelling carried.
-                canonical.merge_sources(node.sources)
-                # Merge description from dropped nodes
-                if node.description and node.description != canonical.description:
-                    merged_desc_parts.append(node.description)
-            if merged_desc_parts and canonical.description:
-                canonical.description = "\n".join([canonical.description] + merged_desc_parts)
-            elif merged_desc_parts:
-                canonical.description = "\n".join(merged_desc_parts)
-
-        if not canonical_for:
-            return
-
-        # 3. Remove non-canonical nodes from _nodes
-        for nid in canonical_for:
-            self._nodes.pop(nid, None)
-
-        # 4. Rebuild _edges: remap source/target and deduplicate
-        new_edges: dict[tuple[str, str, str], GraphEdge] = {}
-        for key, edge in self._edges.items():
-            src = canonical_for.get(edge.source, edge.source)
-            dst = canonical_for.get(edge.target, edge.target)
-            if not src or not dst or src == dst:
-                continue  # drop self-loops
-            new_key = (src, dst, edge.label or "related")
-            kept = new_edges.get(new_key)
-            if kept is not None:
-                # Two edges became the same edge: keep the first, but carry the
-                # dropped one's source documents across.
-                kept.merge_sources(edge.sources)
-                continue  # deduplicate edges
-            # Rewrite endpoints on the edge object
-            edge.source = src
-            edge.target = dst
-            new_edges[new_key] = edge
-        self._edges = new_edges
+        collapsed = collapse_semantic_duplicates(
+            self.build(), life_index=life_index, allowed_types=allowed_types)
+        self._nodes = {n.id: n for n in collapsed.nodes if n.id}
+        self._edges = {(e.source, e.target, e.label or "related"): e for e in collapsed.edges}
 
     # ── build ──
 
