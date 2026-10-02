@@ -1,7 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 59
+# Module Version: 60
+#   v60 (2026-10-02): the scan and renumber header writes use LLM_REGISTRY_HEADER
+#   (01-constants) instead of two more literal copies; __model_doctor accepts that
+#   SAME header (it previously only accepted the 26/20-column shapes, so a current
+#   39-column registry reported "Registry Header [BAD]"); and the post-scan remap
+#   call is no longer `|| true` — a failure is retried once and then NAMED, because
+#   a silently-failed remap leaves every scanned row with blank tuning (card
+#   e0579318).
 #   v59 (2026-10-02): llm-build reads CMake's OWN status, not `tail`'s, for both the
 #   configure and the build pipeline (`${PIPESTATUS[0]}`, the repo idiom).  With no
 #   pipefail set, `cmake ... 2>&1 | tail -5 || { … }` and `cmake --build … | tail -5`
@@ -156,7 +163,8 @@ function __model_scan() {
         mkdir -p "$_scan_backup_dir"
         cp "$LLM_REGISTRY" "$_scan_backup_dir/models.conf.$(date +%Y%m%d-%H%M%S).pre-scan"
     fi
-    echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n" > "$tmpconf"
+    # The ONE header definition (01-constants), not another literal copy.
+    echo "$LLM_REGISTRY_HEADER" > "$tmpconf"
 
     local num=0
     __tac_info "Reading" "files from $LLAMA_MODEL_DIR..." "$C_Dim"
@@ -298,8 +306,22 @@ function __model_scan() {
     fi
     if [[ -n "$old_registry_snapshot" ]]
     then
-        # swallow-ok: best-effort profile remap after a scan: the scan's own result must not depend on it
-        __llm_autotune_profiles_remap_by_registry "$old_registry_snapshot" "$LLM_REGISTRY" >/dev/null 2>&1 || true
+        # Carry the tuning columns from the pre-scan snapshot onto the freshly scanned
+        # rows.  This is NOT cosmetic: a remap that fails (or no-ops on a schema it does
+        # not recognise) leaves every model with blank ctx/tps/bench values.  `|| true`
+        # used to hide exactly that (card e0579318).  Retry once, then NAME the failure;
+        # the registry is already written, so aborting the scan now would discard it.
+        # (if/then, not `&& break`: a false test in `A && B` returns non-zero and errexit
+        # reads it as a failed step.)
+        local _remap_rc=0 _remap_try
+        for _remap_try in 1 2; do
+            _remap_rc=0
+            __llm_autotune_profiles_remap_by_registry "$old_registry_snapshot" "$LLM_REGISTRY" >/dev/null 2>&1 || _remap_rc=$?
+            if (( _remap_rc == 0 )); then break; fi
+        done
+        if (( _remap_rc != 0 )); then
+            __tac_info "Registry" "[tuning-column remap failed after 2 attempts (rc=${_remap_rc}) — the scanned rows keep the scan's values, not the previous tuning]" "$C_Warning"
+        fi
         rm -f "$old_registry_snapshot"
     fi
     __tac_info "Registry" "[${num} models written to $LLM_REGISTRY]" "$C_Success"
@@ -361,7 +383,8 @@ function __model_scan() {
             # until the final mv.
             local clean_tmp="${LLM_REGISTRY}.renum.$$"
             local new_num=0
-            echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n" > "$clean_tmp"
+            # The ONE header definition (01-constants), not another literal copy.
+            echo "$LLM_REGISTRY_HEADER" > "$clean_tmp"
             local _cline
             while IFS= read -r _cline
             do
@@ -2759,8 +2782,13 @@ function __model_doctor() {
         local header_line
         # swallow-ok: an unreadable header leaves header_ok at 0, and the doctor reports that as an issue rather than passing the registry
         header_line=$(head -1 "$LLM_REGISTRY" 2>/dev/null)
-        # Accept both the v4 26-column header and the legacy 20-column header.
-        if [[ "$header_line" == "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill" ]] \
+        # Accept the CURRENT header from its ONE definition (01-constants), plus the two
+        # legacy shapes this doctor still has to recognise on an un-migrated registry.
+        # Comparing only the v4/legacy literals made a CURRENT (39-column) registry
+        # report "Registry Header [BAD]" — the same stale-schema drift the remap had
+        # (card e0579318).
+        if [[ "$header_line" == "$LLM_REGISTRY_HEADER" ]] \
+            || [[ "$header_line" == "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill" ]] \
             || [[ "$header_line" == "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram" ]]
         then
             header_ok=1

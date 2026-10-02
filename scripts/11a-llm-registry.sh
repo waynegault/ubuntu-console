@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11a-llm-registry ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
+#   v20 (2026-10-02): the registry header and column count come from ONE source,
+#   LLM_REGISTRY_HEADER (01-constants): __llm_registry_sync_state emits it and
+#   derives ncols from it (no literal 1..39 field list), and __renumber_registry
+#   echoes it.  The remap call is no longer `|| true` — a failure is retried once
+#   and then NAMED (card e0579318).
 #   v16 (2026-09-27): provenance helpers for a trained artifact (card UBC-GRPO-004) —
 #   __llm_provenance_dir/_path/_write/_read. A trained model still lands as an ordinary
 #   registry row; the benchmark, held-out set and prompt-contract revision it was made
@@ -324,19 +329,24 @@ function __llm_registry_sync_state() {
         active_file=$(< "$ACTIVE_LLM_FILE")
     fi
 
-    awk -F'|' -v def="$default_file" -v af="$active_file" -v run="$running" 'BEGIN {
+    awk -F'|' -v def="$default_file" -v af="$active_file" -v run="$running" \
+        -v header="$LLM_REGISTRY_HEADER" 'BEGIN {
             OFS="|"
             # Always emit the canonical header first, even if the input
             # registry has lost its header line (e.g. after an interrupted
             # model-scan renumbering pass).  This prevents a headerless
             # registry from self-perpetuating across every sync_state call.
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n"
+            # The header AND the column count come from the ONE definition in
+            # 01-constants (LLM_REGISTRY_HEADER), never a literal here, so this
+            # writer cannot drift from the schema the way the remap did.
+            print header
+            ncols = split(header, _hdr, "|")
         }
         $1 == "#" { next }
         # Preserve rows of unexpected width verbatim rather than dropping
         # them: a stray pipe character in a value (or a partially-written
         # row) must not make a model silently vanish from the registry.
-        (NF != 20 && NF != 26 && NF != 32 && NF != 37 && NF != 39) { print; next }
+        (NF != 20 && NF != 26 && NF != 32 && NF != 37 && NF != ncols) { print; next }
         {
             d = ($3 == def ? "yes" : "no")
             a = (run == 1 && af != "" && $3 == af ? "yes" : "no")
@@ -351,8 +361,13 @@ function __llm_registry_sync_state() {
             # receiving the $19/$20/$15/$16 normalisation just above once the sampler
             # columns were added.  (No apostrophes in this string: it is inside an awk
             # single-quoted program, where one would close the quote and break the file.)
-            if (NF >= 20 && NF < 39) { for (i = NF + 1; i <= 39; i++) $i = "" }
-            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39
+            if (NF >= 20 && NF < ncols) { for (i = NF + 1; i <= ncols; i++) $i = "" }
+            # Emit exactly ncols fields, where ncols came from the header above —
+            # a literal 1..39 list here is what would silently truncate a row the
+            # day a column is added.
+            _row = $1
+            for (i = 2; i <= ncols; i++) _row = _row OFS $i
+            print _row
         }
     ' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp" || return 1
 
@@ -389,7 +404,8 @@ function __renumber_registry() {
     awk -F'|' -v n="$target" '$1 != n && $1 != "#"' "$LLM_REGISTRY" > "${LLM_REGISTRY}.tmp"
     local newnum=0
     {
-        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n"
+        # The ONE header definition (01-constants), not another literal copy.
+        echo "$LLM_REGISTRY_HEADER"
         while IFS='|' read -r _num rest
         do
             ((++newnum))
@@ -407,7 +423,21 @@ function __renumber_registry() {
         rm -f "$old_registry_snapshot"
         return 1
     fi
-    __llm_autotune_profiles_remap_by_registry "$old_registry_snapshot" "$LLM_REGISTRY" >/dev/null 2>&1 || true
+    # Carry the tuning columns onto the renumbered rows.  `|| true` used to hide a
+    # failure here, which is how a stale-schema remap could blank every row's tuning
+    # with nobody knowing (card e0579318).  Retry once, then NAME the failure: the
+    # registry is already written, so aborting the renumber now would discard it —
+    # the honest outcome is a loud, specific warning.  (if/then, not `&& break`:
+    # a false test in `A && B` returns non-zero and errexit reads it as a failure.)
+    local _remap_rc=0 _remap_try
+    for _remap_try in 1 2; do
+        _remap_rc=0
+        __llm_autotune_profiles_remap_by_registry "$old_registry_snapshot" "$LLM_REGISTRY" >/dev/null 2>&1 || _remap_rc=$?
+        if (( _remap_rc == 0 )); then break; fi
+    done
+    if (( _remap_rc != 0 )); then
+        __tac_info "Registry" "[tuning-column remap failed after 2 attempts (rc=${_remap_rc}) — the renumbered rows keep the scan's values, not the previous tuning]" "$C_Warning"
+    fi
     rm -f "$old_registry_snapshot"
     rm -f "$ACTIVE_LLM_FILE"
     __llm_registry_sync_state >/dev/null 2>&1 || true

@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 24
+# Module Version: 25
+#   v25 (2026-10-02): the profile-save writer and the remap both take their header
+#   and column count from LLM_REGISTRY_HEADER (01-constants).  The remap carried its
+#   own 32-column header and a 20/26/32 width list, so it matched neither a 37- nor a
+#   39-column registry and silently dropped the newer columns (card e0579318); it now
+#   carries every column generically and preserves a wider-than-schema row verbatim.
 # Autotune infrastructure for optimal model parameters
 # ────────────────────────────────────────────────────────────────────────────────
 # @modular-section: llm-manager
@@ -382,19 +387,22 @@ function __llm_autotune_profile_save() {
         -v spec_accept_len_val="$spec_accept_len" \
         -v workload_val="$workload" \
         -v ttft_ms_val="$ttft_ms" \
+        -v header="$LLM_REGISTRY_HEADER" \
         'BEGIN {
             OFS="|"
             # Emit header unconditionally so a headerless registry
-            # does not self-perpetuate (same guard as sync_state).
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n"
+            # does not self-perpetuate (same guard as sync_state).  Header and
+            # column count come from the ONE definition in 01-constants.
+            print header
+            ncols = split(header, _hdr, "|")
         }
         $1 == "#" { next }
         {
-            # Pad legacy 20/26/32/37-column rows to the CURRENT schema (39, after
-            # BENCH-SAMPLER-001) BEFORE any field writes — awk extends NF only as far as the
-            # highest assigned column, so a later write would otherwise cap the padded row
-            # at that column.
-            if (NF >= 20 && NF < 39) { for (i = NF + 1; i <= 39; i++) $i = "" }
+            # Pad legacy rows to the CURRENT schema (ncols, from the header) BEFORE
+            # any field writes — awk extends NF only as far as the highest assigned
+            # column, so a later write would otherwise cap the padded row at that
+            # column.
+            if (NF >= 20 && NF < ncols) { for (i = NF + 1; i <= ncols; i++) $i = "" }
             if ($3 == f) {
                 $8 = ctx; $10 = batch; $11 = ubatch; $12 = parallel
                 $13 = fit; $14 = backend
@@ -604,50 +612,55 @@ function __llm_autotune_profiles_remap_by_registry() {
     local new_registry="${2:-}"
     [[ -s "$old_registry" && -f "$new_registry" ]] || return 0
 
-    awk -F'|' 'BEGIN {
+    awk -F'|' -v header="$LLM_REGISTRY_HEADER" '
+        BEGIN {
             OFS="|"
-            # Always emit the canonical header so a headerless input
-            # registry does not self-perpetuate (same guard as in
-            # __llm_registry_sync_state).
-            print "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len"
+            # Always emit the canonical header so a headerless input registry
+            # does not self-perpetuate (same guard as in __llm_registry_sync_state).
+            # Header AND column count come from the ONE definition in 01-constants;
+            # the old `NF == 20 || NF == 26 || NF == 32` arms and the literal
+            # 1..32 field list are gone — they silently matched NEITHER a 37- nor a
+            # 39-column registry, so the remap no-opped and every tuning column was
+            # lost (card e0579318).
+            print header
+            ncols = split(header, _hdr, "|")
         }
         FNR == NR {
-            if ($1 != "#" && (NF == 20 || NF == 26 || NF == 32)) {
-                key=$3
-                old_ctx[key]=$8; old_thr[key]=$9; old_batch[key]=$10; old_ub[key]=$11
-                old_par[key]=$12; old_fit[key]=$13; old_be[key]=$14
-                old_mm[key]=$15; old_fa[key]=$16; old_tps[key]=$17; old_done[key]=$18
-                old_pf[key]=$21; old_p2c[key]=$22; old_p2b[key]=$23; old_p2u[key]=$24
-                old_p2t[key]=$25; old_p2pf[key]=$26
-                old_st[key]=$27; old_sdm[key]=$28; old_snm[key]=$29
-                old_snl[key]=$30; old_sdv[key]=$31; old_sal[key]=$32
+            # Old snapshot: remember every carryable column, keyed by model FILE
+            # name.  Whatever width the snapshot has is carried; columns beyond it
+            # simply do not exist in the new row and are left blank.
+            if ($1 != "#" && NF >= 8) {
+                key = $3
+                for (i = 8; i <= NF && i <= ncols; i++) old[key, i] = $i
+                oldnf[key] = NF
             }
             next
         }
+        $1 == "#" { next }
         {
-            if ($1 == "#" || (NF != 20 && NF != 26 && NF != 32)) { next }
-            key=$3
-            if (key in old_ctx) {
-                $8=old_ctx[key]; $9=old_thr[key]; $10=old_batch[key]; $11=old_ub[key]
-                $12=old_par[key]; $13=old_fit[key]; $14=old_be[key]; $15=old_mm[key];
-                $16=old_fa[key]; $17=old_tps[key]; $18=old_done[key]
-                $21=old_pf[key]; $22=old_p2c[key]; $23=old_p2b[key]; $24=old_p2u[key]
-                $25=old_p2t[key]; $26=old_p2pf[key]
-                if (old_st[key] != "") $27=old_st[key]
-                if (old_sdm[key] != "") $28=old_sdm[key]
-                if (old_snm[key] != "") $29=old_snm[key]
-                if (old_snl[key] != "") $30=old_snl[key]
-                if (old_sdv[key] != "") $31=old_sdv[key]
-                if (old_sal[key] != "") $32=old_sal[key]
+            key = $3
+            # A row wider than the schema is preserved verbatim: a stray pipe must
+            # not make model data vanish (same rule as sync_state).
+            if (NF > ncols) { print; next }
+            # Pad a legacy short row up to the schema width first, so the carried
+            # values land in the right columns.
+            for (i = NF + 1; i <= ncols; i++) $i = ""
+            if (key in oldnf) {
+                # Carry every tuning/measurement column, EXCEPT is_default (19) and
+                # in_vram (20), which __llm_registry_sync_state recomputes.
+                for (i = 8; i <= ncols; i++) {
+                    if (i == 19 || i == 20) continue
+                    if (i <= oldnf[key]) $i = old[key, i]
+                }
             }
-            if ($16 == "") $16="on"
+            if ($16 == "") $16 = "on"
             # SPEC-DEC-002: clamp the carried thread count to the i9-12900HK
             # P-core ceiling (6) — a pre-cap registry must not reintroduce
             # E-core-spilling threads through a remap.
             if ($9 != "" && $9 + 0 > 6) $9 = 6
-            if (NF == 20) { for (i=21; i<=32; i++) $i="" }
-            if (NF == 26) { for (i=27; i<=32; i++) $i="" }
-            print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
+            _row = $1
+            for (i = 2; i <= ncols; i++) _row = _row OFS $i
+            print _row
         }
     ' "$old_registry" "$new_registry" > "${new_registry}.tmp" || return 1
 

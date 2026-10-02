@@ -2,7 +2,11 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 24
+# Module Version: 25
+#   v25 (2026-10-02): LLM_REGISTRY_HEADER — the ONE definition of the registry
+#   column set, consumed by every writer (11a sync_state + __renumber_registry,
+#   11b profile_save + remap, 11e scan).  Card e0579318: the remap kept emitting a
+#   32-column header after the schema reached 39 columns.
 # ==============================================================================
 
 # ==============================================================================
@@ -162,6 +166,16 @@ fi
 # Used by: model scan/use/stop/bench, llama-watchdog.sh, dashboard
 # Registry on local ext4 to avoid 9P atomic-mv corruption on Windows drive.
 # Bench logs remain on drive M: for persistence across WSL rebuilds.
+#
+# LLM_REGISTRY_HEADER is the ONE definition of the column set.  Every writer emits
+# THIS line (11a __llm_registry_sync_state and __renumber_registry, 11b
+# __llm_autotune_profile_save and __llm_autotune_profiles_remap_by_registry, 11e
+# model scan), and the remap derives its column count from it instead of hardcoding
+# widths.  Add a column HERE and every writer picks it up; a header copied into one
+# writer drifts the first time a column is added — which is exactly what happened
+# when the remap kept emitting its 32-column copy after the schema reached 39
+# (card e0579318).  The field descriptions below cover the first 20 columns.
+export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n'
 export LLM_REGISTRY="$HOME/.llm/models.conf"
 export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$HOME/.llm/default_model.conf}"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"

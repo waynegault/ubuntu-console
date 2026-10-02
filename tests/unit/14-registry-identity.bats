@@ -263,3 +263,90 @@ __fake_gguf() {
 
     export TACTICAL_REPO_ROOT="$_saved_root"
 }
+
+# --- schema remap (card e0579318) --------------------------------------------
+# __llm_autotune_profiles_remap_by_registry carries tuning columns by filename after
+# a scan/renumber.  It used to hardcode a 32-column header and accept only 20/26/32-
+# wide rows, so against the LIVE 39-column registry it matched neither arm: the
+# output was the header alone, the >=2-line guard refused it, and the callers'
+# `|| true` swallowed the refusal — every tuning column silently blank.
+
+# __row39 — a 39-column registry row with recognisable values in the columns the
+# remap carries (2=name, 3=file, 8=ctx, 17=tps, 33=workload, 34=ttft, 39=repeat_last_n)
+# and blank elsewhere; pass "" for a value to blank a column, as a fresh scan leaves it.
+__row39() {  # <num> <file> <ctx> <tps> <workload> <ttft> <repeat_last_n>
+    local num="$1" file="$2" ctx="$3" tps="$4" workload="$5" ttft="$6" rln="$7" i v out=""
+    for ((i = 1; i <= 39; i++)); do
+        v=""
+        case "$i" in
+            1) v="$num" ;;
+            2) v="Model $num" ;;
+            3) v="$file" ;;
+            4) v="1.0G" ;;
+            5) v="Q4_K_M/q8_0" ;;
+            6) v="qwen2" ;;
+            7) v="24" ;;
+            8) v="$ctx" ;;
+            9) v="6" ;;
+            10) v="1024" ;;
+            11) v="256" ;;
+            12) v="1" ;;
+            13) v="256" ;;
+            14) v="llama_server" ;;
+            15) v="auto" ;;
+            16) v="on" ;;
+            17) v="$tps" ;;
+            18) v="yes" ;;
+            19) v="no" ;;
+            20) v="no" ;;
+            21) v="20.0" ;;
+            33) v="$workload" ;;
+            34) v="$ttft" ;;
+            39) v="$rln" ;;
+        esac
+        out+="${out:+|}${v}"
+    done
+    printf '%s\n' "$out"
+}
+
+@test "remap: every column survives a 39-column remap (card e0579318)" {
+    # Catches: a remap that no-ops on the CURRENT schema — the pre-fix code emitted a
+    # 32-column header, matched neither 37 nor 39 wide rows, and left the scanned row
+    # with blank tuning.  The 33-39 columns are the ones it silently dropped.
+    local old="$TMPDIR_BATS/old39.conf" new="$TMPDIR_BATS/new39.conf"
+    {
+        printf '%s\n' "$LLM_REGISTRY_HEADER"
+        __row39 1 alpha.gguf 4096 11.5 chat 1234 64
+    } > "$old"
+    {
+        printf '%s\n' "$LLM_REGISTRY_HEADER"
+        __row39 1 alpha.gguf "" "" "" "" ""
+    } > "$new"
+
+    __llm_autotune_profiles_remap_by_registry "$old" "$new"
+
+    local row
+    row=$(awk -F'|' '$3 == "alpha.gguf"' "$new")
+    # The header is the schema: 39 columns, and the row is padded to it.
+    [ "$(awk -F'|' '{print NF}' <<< "$row")" -eq 39 ]
+    [[ "$(cut -d'|' -f8 <<< "$row")" == "4096" ]]
+    [[ "$(cut -d'|' -f17 <<< "$row")" == "11.5" ]]
+    # The columns the old 32-column remap dropped:
+    [[ "$(cut -d'|' -f33 <<< "$row")" == "chat" ]]
+    [[ "$(cut -d'|' -f34 <<< "$row")" == "1234" ]]
+    [[ "$(cut -d'|' -f39 <<< "$row")" == "64" ]]
+    # Header == the ONE definition, not a stale copy.
+    [[ "$(head -1 "$new")" == "$LLM_REGISTRY_HEADER" ]]
+}
+
+@test "renumber: a failed tuning remap is NAMED, not swallowed (card e0579318)" {
+    # Catches: the `|| true` that hid a remap failure — the renumber would look
+    # healthy while every row lost its tuning.  Seed the failure by refusing the
+    # remap, which is what a stale schema (or a write error) looked like from here.
+    __llm_autotune_profiles_remap_by_registry() { return 1; }
+    run __renumber_registry 2
+    # The renumber itself still succeeds (the registry is already written)...
+    [ "$status" -eq 0 ]
+    # ...but the failure is REPORTED by name, not silently dropped.
+    [[ "$output" == *"tuning-column remap failed"* ]]
+}
