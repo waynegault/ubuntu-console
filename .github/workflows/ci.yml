@@ -193,7 +193,8 @@ jobs:
                tests/unit/41-model-use-autotune-refusal.bats \
                tests/unit/42-commit-deploy-push-status.bats \
                tests/unit/43-count-ratchet-comments.bats \
-               tests/unit/44-llm-build-cmake-status.bats
+               tests/unit/44-llm-build-cmake-status.bats \
+               tests/unit/45-kgraph-hook-failure-report.bats
 
       - name: Run integration tests
         run: |

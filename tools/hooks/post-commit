@@ -3,51 +3,17 @@
 # TRACKED: tools/hooks/ is the source of truth for this repo's hooks (install
 # with `git config core.hooksPath <repo>/tools/hooks`; install.sh does that).
 #
-# Prefer this repo's OWN module over an installed `kgraph`.  `kgraph` on PATH is a
-# separate uv-tool install (~/.local/share/uv/tools/openclaw-kgraph), so using it
-# rebuilt the graph from a DIFFERENT codebase than the one being committed — the
-# graph could describe a version of scripts/kgraph that is not in this tree.  The
-# repo module needs PYTHONPATH=scripts and an interpreter that can import it.
+# The rebuild body (and its status/elapsed reporting) lives in the sourced helper
+# tools/hooks/_kgraph-auto-rebuild, shared with post-merge so the two cannot drift
+# in whether a failed rebuild is reported.  See that file for the contract.
 #
 # No `set -e`: a hook must never abort a commit.
 set -uo pipefail
 
 _repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 
-# Timing, because the cost of this hook keeps coming up as a question: the update is
-# ~19 s of work on an idle box (measured 2026-09-23, `--update` over 2.5k nodes), so a
-# multi-minute commit means the BOX was busy — shellcheck over the tree, a CI job, a
-# VS Code pytest session — and not that this hook is heavy. `date` rather than
-# $SECONDS so the number is right even if a branch runs in a subshell.
-_started_at=$(date +%s)
-_rc=0
-
-if [[ -x "$_repo_root/.venv/bin/python3" ]] \
-    && PYTHONPATH="$_repo_root/scripts" "$_repo_root/.venv/bin/python3" -c 'import kgraph' >/dev/null 2>&1
-then
-    PYTHONPATH="$_repo_root/scripts" "$_repo_root/.venv/bin/python3" -m kgraph \
-        --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /' || _rc=$?
-elif command -v kgraph >/dev/null 2>&1
-then
-    # Fallback: the installed copy.  Its code is NOT tied to this tree, so say so
-    # rather than presenting a graph built from something else as this repo's.
-    printf '[kgraph-auto] WARNING: using the installed kgraph, not this repo copy\n' >&2
-    kgraph --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /' || _rc=$?
-fi
-
-# The elapsed time, so "commits are slow" is a number rather than a feeling — and the
-# exit status, which used to be dropped entirely: a failed rebuild left the graph
-# stale and said nothing. Reported, never fatal (no `exit`), so a commit still lands.
-_elapsed=$(( $(date +%s) - _started_at ))
-if (( _elapsed >= 60 ))
-then
-    printf '[kgraph-auto] took %ss — the box was busy (~19s when idle)\n' "$_elapsed"
-else
-    printf '[kgraph-auto] took %ss\n' "$_elapsed"
-fi
-if (( _rc != 0 ))
-then
-    printf '[kgraph-auto] WARNING: the graph update exited %s — the graph may be stale\n' "$_rc" >&2
-fi
+# shellcheck source=tools/hooks/_kgraph-auto-rebuild
+source "$_repo_root/tools/hooks/_kgraph-auto-rebuild"
+_kgraph_auto_rebuild "$_repo_root"
 
 # end of file

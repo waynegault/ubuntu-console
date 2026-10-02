@@ -3,28 +3,19 @@
 # TRACKED: tools/hooks/ is the source of truth for this repo's hooks (install
 # with `git config core.hooksPath <repo>/tools/hooks`; install.sh does that).
 #
-# Prefer this repo's OWN module over an installed `kgraph`.  `kgraph` on PATH is a
-# separate uv-tool install (~/.local/share/uv/tools/openclaw-kgraph), so using it
-# rebuilt the graph from a DIFFERENT codebase than the one being merged — the graph
-# could describe a version of scripts/kgraph that is not in this tree.  The repo
-# module needs PYTHONPATH=scripts and an interpreter that can import it.
+# The rebuild body (and its status/elapsed reporting) lives in the sourced helper
+# tools/hooks/_kgraph-auto-rebuild, shared with post-commit so the two cannot drift
+# in whether a failed rebuild is reported.  This hook used to pipe the update through
+# `sed` and drop its exit status, so a merge that broke the rebuild was silent and the
+# stale graph was then queried (card a6ead879).  See the helper for the contract.
 #
 # No `set -e`: a hook must never abort a merge.
 set -uo pipefail
 
 _repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 
-if [[ -x "$_repo_root/.venv/bin/python3" ]] \
-    && PYTHONPATH="$_repo_root/scripts" "$_repo_root/.venv/bin/python3" -c 'import kgraph' >/dev/null 2>&1
-then
-    PYTHONPATH="$_repo_root/scripts" "$_repo_root/.venv/bin/python3" -m kgraph \
-        --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /'
-elif command -v kgraph >/dev/null 2>&1
-then
-    # Fallback: the installed copy.  Its code is NOT tied to this tree, so say so
-    # rather than presenting a graph built from something else as this repo's.
-    printf '[kgraph-auto] WARNING: using the installed kgraph, not this repo copy\n' >&2
-    kgraph --update --source-dir "$_repo_root" 2>&1 | sed 's/^/[kgraph-auto] /'
-fi
+# shellcheck source=tools/hooks/_kgraph-auto-rebuild
+source "$_repo_root/tools/hooks/_kgraph-auto-rebuild"
+_kgraph_auto_rebuild "$_repo_root"
 
 # end of file
