@@ -15,4 +15,4 @@ if [ "${MI_SCALE_ENABLE_SCAN:-0}" != "1" ]; then
 fi
 
 # One-shot read; caller can loop from cron/fun_plug.
-exec python3 /mnt/HD/HD_a2/butler/mi-scale-2-collector.py
+exec python3 /mnt/HD/HD_a2/butler/scripts/mi-scale-2-collector.py

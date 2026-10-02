@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-COLLECTOR="${MI_SCALE_COLLECTOR:-/mnt/HD/HD_a2/butler/mi-scale-2-collector.py}"
+COLLECTOR="${MI_SCALE_COLLECTOR:-/mnt/HD/HD_a2/butler/scripts/mi-scale-2-collector.py}"
 PYTHON_BIN="${MI_SCALE_PYTHON_BIN:-$(command -v python3 2>/dev/null || echo /usr/bin/python3)}"
 TARGET_MAC="${MI_SCALE_TARGET_MAC:-D8:E7:2F:08:7C:5D}"
 RUNTIME="${MI_SCALE_RUNTIME:-auto}"
