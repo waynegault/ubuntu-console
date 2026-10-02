@@ -59,11 +59,16 @@ def _load_graph(args: argparse.Namespace) -> dict:
         # in `source` with no endpoint) fails with a clear message instead of a
         # pydantic traceback deep inside a renderer.
         try:
-            Graph.from_dict(data)
+            validated = Graph.from_dict(data)
         except ValidationError as exc:
             print(f"Error: invalid graph in '{args.graph}': {exc}", file=sys.stderr)
             sys.exit(1)
-        return data
+        # Return the VALIDATED model's dict, not the raw file: the model coerces
+        # legacy shapes (_meta -> meta, legacy edge endpoint keys), and discarding
+        # it meant the validation ran and then nothing used its result — the same
+        # "validate then ignore" shape the server's json-store branch had (card
+        # 79d69304).
+        return validated.to_dict()
 
     graph_db = args.graph_db or os.path.expanduser(GRAPH_DB_DEFAULT)
     memory_db = args.import_db or resolve_memory_db_path()

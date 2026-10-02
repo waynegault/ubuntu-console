@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from .constants import GRAPH_DB_DEFAULT, SAMPLE_GRAPH
 from .graph_db import load_from_graph_db, resolve_memory_db_path, save_to_graph_db
 from .memory_import import load_from_memory_db
+from .models import Graph
 from .projection import project_graph
 from .validate import MAX_PAYLOAD_SIZE, validate_graph_payload
 
@@ -255,11 +256,15 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
 
         if has_store:
             # An unreadable/corrupt store must not break the fallback chain:
-            # OSError (permissions, EIO) and JSONDecodeError (a ValueError)
-            # both fall through to the sample graph with a log.
+            # OSError (permissions, EIO), JSONDecodeError and a pydantic
+            # ValidationError (both ValueError subclasses) fall through to the
+            # sample graph with a log.  The payload is VALIDATED here apart from
+            # every other source above, which all go through Graph.from_dict —
+            # returning json.load(f) raw handed a malformed graph straight to
+            # project_graph (card 79d69304).
             try:
                 with open(self.store, "r", encoding="utf-8") as f:
-                    return json.load(f), "json-store"
+                    return Graph.from_dict(json.load(f)).to_dict(), "json-store"
             except (OSError, ValueError) as exc:
                 logger.warning(
                     "Failed to load graph store %s: %s; falling back to sample graph",
