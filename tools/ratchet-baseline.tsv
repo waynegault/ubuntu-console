@@ -67,12 +67,21 @@
 # 92 -> 108 files. Nothing was relaxed: the mirrored scripts are byte-identical to the NAS
 # except the two gate fixes recorded in nas/butler/README.md, and tools/lint.sh's whole-tree
 # scope still excludes nas/ - this row set records knowledge, not a lowered gate.
+#
+# 2026-10-02 (ninth re-baseline): CORPUS GROWTH, not drift - TWO new shell tools land with
+# the gitleaks secret scanner (card a7383ea0): tools/install-gitleaks.sh and
+# tools/secret-scan.sh. Measured with this tool's OWN counters over those two files ALONE:
+# 9.7 +4 (four literal `exit 2` returns) and 10.7 +5 (five hand-written `>&2` sites); they
+# contribute 0 to 6.7 / 8.1.8 / 9.5 / 10.4. Corpus 107 -> 109 files. Hand-edited, NOT
+# --update (which rewrites this file as header+rows and strips these comments):
+# 9.7 56->60, 10.7 190->195. Also recorded, as FALLS from elsewhere in the tree
+# (informational; they are not from the two new files): 8.1.8 296->294, 9.5 124->121.
 4.2.4	16
 4.2.6	12
 4.3.6	31
 6.7	77
-8.1.8	296
-9.5	124
-9.7	56
+8.1.8	294
+9.5	121
+9.7	60
 10.4	50
-10.7	190
+10.7	195

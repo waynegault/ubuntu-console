@@ -1,0 +1,18 @@
+# Gitleaks configuration for this repo.
+#
+# `gitleaks git` (history / index) is the mode both the pre-commit hook and the
+# Secret Scan workflow use, so only COMMITTED content is ever judged — a
+# gitignored build artefact (e.g. graphify-out/cache/*, whose stat "secret" is a
+# path hash) can never fail a commit, which a filesystem scan would.
+#
+# The allowlist exists so a deliberate exception is a one-line, reviewable act
+# rather than an inline `git commit --no-verify`.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Measured non-secrets (2026-10-02): generated, gitignored graph cache."
+paths = [
+  '''graphify-out/''',
+]

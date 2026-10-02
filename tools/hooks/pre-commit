@@ -13,16 +13,30 @@ set -euo pipefail
 # repo root either way.
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
-# Staged shell files (added, modified, or copied — not deleted).  Nothing staged
-# means nothing to guard, and the early exit keeps a docs-only commit cheap.
+# Staged shell files (added, modified, or copied — not deleted).  The shell lint
+# below is scoped to these; the secret scan is not — it reads the whole index.
 staged=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null | grep '\.sh$' || true)
 
-if [[ -z "$staged" ]]; then
-    echo "pre-commit: no staged .sh files — skipping lint"
-    exit 0
+rc=0
+
+# ── Secret scan ────────────────────────────────────────────────────────────
+# gitleaks over the INDEX (tools/secret-scan.sh --staged), so a credential is
+# stopped before it ever enters history — card a7383ea0's failure mode was that
+# the scanner arrived only AFTER the leak.  Runs for EVERY commit, .sh or not.
+# Fails closed: the pinned binary is installed by tools/install-gitleaks.sh.
+echo "=== pre-commit: secret scan ==="
+if ! "$REPO_ROOT/tools/secret-scan.sh" --staged; then
+    rc=1
 fi
 
-rc=0
+if [[ -z "$staged" ]]; then
+    if (( rc == 0 )); then
+        echo "pre-commit: no staged .sh files — shell lint skipped; secret scan passed"
+    else
+        echo "pre-commit: some checks failed — commit aborted"
+    fi
+    exit "$rc"
+fi
 
 # ── Staged-file lint ───────────────────────────────────────────────────────
 # The bash -n + shellcheck loop lives in tools/lint.sh --staged and is never
@@ -52,7 +66,7 @@ fi
 # if you are tempted to add one here, add staged-file scoping to it first.
 
 if (( rc == 0 )); then
-    echo "pre-commit: all staged .sh files passed"
+    echo "pre-commit: all checks passed"
 else
     echo "pre-commit: some checks failed — commit aborted"
 fi
