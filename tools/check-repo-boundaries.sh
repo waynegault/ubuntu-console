@@ -11,7 +11,10 @@ if ! command -v rg >/dev/null 2>&1; then
     exit 2
 fi
 
-declare -a SEARCH_PATHS=("scripts" "tools" "bin" "tests")
+# `nas/` is a mirrored tree — the NAS tooling is deployed from here — so it is
+# the one path that could carry investigator implementation code the guard would
+# otherwise never see.  Scan it with the rest.
+declare -a SEARCH_PATHS=("scripts" "tools" "bin" "tests" "nas")
 
 declare -a FORBIDDEN_PATTERNS=(
     "pipeline/model_benchmark.py"
