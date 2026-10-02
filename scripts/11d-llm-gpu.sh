@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 24
+# Module Version: 25
+#   v25 (2026-10-02): adds __llm_train_lane_holder / __llm_train_lane_busy — the
+#   console-side read of a supervised GPU TRAINING run (card UBC-GRPO-002). The
+#   runner claims the card exactly as a bench does, but the lock file cannot say
+#   WHICH lane holds it; `oc health` and the autotune batch both need the name so a
+#   training run is visible and is not mistaken for a stuck lane.
 # ==============================================================================
 # 11d-llm-gpu — GPU status, GGUF metadata, calculations
 # ==============================================================================
@@ -10,7 +15,8 @@
 # @exports: wake, gpu-status, gpu-check, __gguf_metadata, __calc_gpu_layers,
 #   __calc_ctx_size, __calc_threads, __quant_label, __tac_cleanup_stale_locks,
 #   __gpu_clear_stale_processes, __llm_kill_cuda_llama_servers,
-#   __llm_gpu_lock_path, __llm_gpu_lock_holder, __llm_gpu_foreign_owner
+#   __llm_gpu_lock_path, __llm_gpu_lock_holder, __llm_gpu_foreign_owner,
+#   __llm_train_lane_holder, __llm_train_lane_busy
 
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
@@ -319,6 +325,75 @@ function __llm_gpu_foreign_owner() {
         return 1   # we took it, so nobody else holds it
     fi
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# __llm_train_lane_holder / __llm_train_lane_busy
+#
+# A supervised GPU TRAINING run (card UBC-GRPO-002) claims the CUDA card exactly
+# as a bench does — bin/train-timeout-runner.sh takes the bench lock
+# ($LLM_BENCH_LOCK_FILE) for the whole run — but the lock file alone cannot say
+# WHICH lane holds it.  The console needs that name for the two things the card's
+# console-side acceptance asks for: a training run must be visible in the health
+# view (`oc health`), and a second heavy job must be able to refuse up front with
+# a reason instead of waiting out the bench-lock timeout and failing a row after
+# a wasted spawn.
+#
+# The identity is the EXECUTING artefact, never a word: some process must be
+# RUNNING bin/train-timeout-runner.sh itself.  A shell that merely MENTIONS the
+# name — a `grep`, an editor, a `cat` of this file — is not a tenant.  That is the
+# false-BUSY defect bin/gpu-busy.sh records three times over, and here a false
+# BUSY would refuse a bench run on a free card.  bin/gpu-busy.sh carries the same
+# rule for the watchdog path; the two copies are pinned together by a drift test
+# in tests/unit/12-gpu-exclusivity.bats, because this module is sourced by the
+# console while gpu-busy.sh is a standalone script that must not depend on this
+# tree (the duplication is deliberate, as the investigator-lock path already is).
+# ---------------------------------------------------------------------------
+function __llm_train_lane_holder() {
+    local _pid _exe_base _elem _is_interp
+    local -a _argv=()
+    # pgrep only SELECTS candidates by command line; each is then proved to be
+    # EXECUTING the runner.  A bash child of a runner still matches, and that is
+    # correct: it is part of the same tenant.
+    while IFS= read -r _pid; do
+        [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        # swallow-ok: a process gone between pgrep and here has no exe; the checks below decide
+        _exe_base=$(readlink -f "/proc/$_pid/exe" 2>/dev/null || true)
+        _exe_base="${_exe_base##*/}"
+        if [[ "$_exe_base" == "train-timeout-runner.sh" ]]; then
+            printf '%s\n' "$_pid"
+            return 0
+        fi
+        # Only an INTERPRETER carries the script path in argv (how every console
+        # script is invoked: `bash bin/train-timeout-runner.sh …`).  For any other
+        # exe an argv element that merely NAMES the runner is a reader — a
+        # `tail -f`, a `grep` — not a tenant.  bin/gpu-busy.sh gates argv behind
+        # the same interpreter list; the drift test pins the two together.
+        _is_interp=0
+        case "$_exe_base" in
+            bash|sh|dash|zsh|ksh|ash|busybox) _is_interp=1 ;;
+            python|python[0-9]*|perl|perl5*|ruby) _is_interp=1 ;;
+            sudo|doas|su|env|runuser|systemd-run) _is_interp=1 ;;
+            *) _is_interp=0 ;;
+        esac
+        (( _is_interp )) || continue
+        # swallow-ok: a vanished process has no cmdline, and its absence is the answer checked
+        mapfile -d '' -t _argv < "/proc/$_pid/cmdline" 2>/dev/null || true
+        for _elem in "${_argv[@]}"; do
+            [[ "$_elem" == *[[:space:]]* ]] && continue
+            if [[ "${_elem##*/}" == "train-timeout-runner.sh" ]]; then
+                printf '%s\n' "$_pid"
+                return 0
+            fi
+        done
+    # swallow-ok: pgrep's non-zero exit means no candidate matched — the "no tenant" answer
+    done < <(pgrep -f '/train-timeout-runner\.sh' 2>/dev/null)
+    return 1
+}
+
+# Predicate form for callers that only branch on it.
+function __llm_train_lane_busy() {
+    __llm_train_lane_holder >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------

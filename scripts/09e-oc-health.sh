@@ -9,7 +9,12 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 21
+# Module Version: 22
+#   v22 (2026-10-02): `oc health` also reports the CUDA card's TRAINING lane
+#   (card UBC-GRPO-002): a supervised training run claims the card through
+#   bin/train-timeout-runner.sh, and the console must be able to show it and tell it
+#   apart from a stuck lane. The row is human-mode only, like the other watches, and
+#   every oc-health branch calls it so a box WITH the enhanced checker reports it too.
 #   v21 (2026-10-02): consolidates the v20 swallow diagnostics onto ONE helper,
 #   __oc_note (message, optional mode), instead of the ad-hoc `printf … >&2` each site
 #   carried — §18.3 item 10.7's ask.  oc-doctor-local's notes stay human-mode-only, so
@@ -234,6 +239,54 @@ function __oc_vscode_pytest_log_state() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# __oc_train_lane — the CUDA card's TRAINING lane, for `oc health`.
+#
+# Card UBC-GRPO-002 asks the console to show a long GPU training run in its health
+# view and to tell it apart from a stuck lane.  A training run claims the card
+# through bin/train-timeout-runner.sh, which holds the bench lock
+# ($LLM_BENCH_LOCK_FILE) for the whole run; the lock file alone cannot say which
+# lane holds it, so the identity comes from __llm_train_lane_holder — the EXECUTING
+# runner artefact, the same rule bin/gpu-busy.sh uses (the two are pinned together
+# by a drift test in tests/unit/12-gpu-exclusivity.bats).
+#
+# Three states, and the difference between the last two is the whole point:
+#   RUNNING — a training tenant is executing: name its pid and how long it has run.
+#   HELD    — the bench lock exists but no training tenant runs: another lane (a
+#             bench/autotune) holds it, OR a SIGKILL left a stale file behind — the
+#             "stuck lane" a reader must not mistake for a live training run.
+#   IDLE    — no training run and no bench lock.
+#
+# Human-mode only, like the other watches: this is a status row, not a machine field.
+# ---------------------------------------------------------------------------
+function __oc_train_lane() {
+    local _lock="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
+    local _holder=""
+    if declare -f __llm_train_lane_holder &>/dev/null
+    then
+        # swallow-ok: the helper's non-zero exit IS the "no training tenant" answer read below
+        _holder=$(__llm_train_lane_holder 2>/dev/null || true)
+    fi
+    if [[ -n "$_holder" ]]
+    then
+        local _elapsed="" _age=""
+        # swallow-ok: a holder gone between the lookup and here yields no ps row; state stays RUNNING
+        _elapsed=$(ps -o etimes= -p "$_holder" 2>/dev/null | tr -d ' ')
+        if [[ "$_elapsed" =~ ^[0-9]+$ ]]
+        then
+            _age=" elapsed=$(( _elapsed / 3600 ))h$(( (_elapsed % 3600) / 60 ))m"
+        fi
+        __tac_info "Training lane" "[RUNNING pid=$_holder$_age]" "$C_Highlight"
+    elif [[ -e "$_lock" ]]
+    then
+        __tac_info "Training lane" \
+            "[HELD by another lane (lock: $_lock) — no training tenant]" "$C_Warning"
+    else
+        __tac_info "Training lane" "[IDLE]" "$C_Dim"
+    fi
+    return 0
+}
+
 function oc-health() {
     local output_mode="human"
     case "${1:-}" in
@@ -283,6 +336,7 @@ function oc-health() {
             __oc_gh_keyring_recurrence
             __oc_guard_patch_state
             __oc_vscode_pytest_log_state
+            __oc_train_lane
         fi
         return "$_enhanced_rc"
     fi
@@ -399,8 +453,10 @@ function oc-health() {
     # the state is shown here too (see __oc_guard_patch_state for the incident).
     __oc_guard_patch_state
     # …and for the VS Code Testing results logger, whose patch an extension update
-    # reverts silently (see __oc_vscode_pytest_log_state).
+    # reverts silently (see __oc_vscode_pytest_log_state), and the CUDA card's
+    # training lane (see __oc_train_lane).
     __oc_vscode_pytest_log_state
+    __oc_train_lane
 }
 
 # ---------------------------------------------------------------------------

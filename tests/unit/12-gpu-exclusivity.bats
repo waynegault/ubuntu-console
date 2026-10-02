@@ -826,3 +826,104 @@ EOS
         -L "$TAC_TEST_TMPDIR/idle-own.lock" sleep 1
     [ "$status" -eq 0 ]
 }
+
+# Card UBC-GRPO-002's console-side acceptance: a long training run must be VISIBLE —
+# `oc health` shows it, and the console can tell a live run from a stale lock ("a
+# stuck lane").  The identity is __llm_train_lane_holder in 11d-llm-gpu.sh: the
+# EXECUTING runner artefact, the same rule bin/gpu-busy.sh uses for the watchdog.
+# End-to-end through the real runner, because the identity is a PROCESS property and
+# only running it says whether the identity is read or merely the name.
+@test "train-lane: the holder helper names an executing runner, and only while it runs" {
+    local lock="$TAC_TEST_TMPDIR/lane.lock" log="$TAC_TEST_TMPDIR/lane.log"
+    "$REPO_ROOT/bin/train-timeout-runner.sh" -l "$log" -L "$lock" sleep 8 &
+    local runner=$!
+    sleep 1
+    run bash -c 'source "$1"; __llm_train_lane_holder' bash "$MODULE"
+    [[ "$status" -eq 0 ]] || { echo "the running tenant must be named, got: $output"; return 1; }
+    [[ "$output" == *"$runner"* ]] || { echo "want pid $runner, got: $output"; return 1; }
+
+    kill "$runner" 2>/dev/null || true
+    wait "$runner" 2>/dev/null || true
+    # After it exits the lane is empty: a leftover lock file is NOT a tenant, which is
+    # exactly the distinction the health row exists to make.
+    run bash -c 'source "$1"; __llm_train_lane_holder' bash "$MODULE"
+    [[ "$status" -ne 0 ]]
+    [ -z "$output" ]
+}
+
+# The false-BUSY shape bin/gpu-busy.sh records three times: a READER (a `tail -f`, a
+# `grep`) that merely names the artefact is not executing it.  Here a false positive
+# would refuse a bench run on a free card, so only an INTERPRETER's argv counts.
+@test "train-lane: a mere mention of the runner is not a tenant" {
+    tail -f "$REPO_ROOT/bin/train-timeout-runner.sh" >/dev/null 2>&1 &
+    local _reader=$!
+    # A shell whose -c body names the file: one argv element, with a space in it.
+    bash -c 'while :; do sleep 1; done' "cat $REPO_ROOT/bin/train-timeout-runner.sh" &
+    local _mentioner=$!
+    sleep 0.5
+    run bash -c 'source "$1"; __llm_train_lane_holder' bash "$MODULE"
+    kill "$_reader" "$_mentioner" 2>/dev/null || true
+    wait "$_reader" "$_mentioner" 2>/dev/null || true
+    [[ "$status" -ne 0 ]]
+    [ -z "$output" ]
+}
+
+# The console read (11d) and the watchdog read (gpu-busy, standalone) must name the
+# SAME tenant, or the health view and the exclusivity check disagree about the card.
+# Two copies are deliberate — the module tree cannot source the standalone script — so
+# this pins them together, exactly as the investigator-lock path is pinned.
+@test "train-lane: the console and gpu-busy agree on the runner identity" {
+    local m="$REPO_ROOT/scripts/11d-llm-gpu.sh" g="$REPO_ROOT/bin/gpu-busy.sh"
+    grep -q 'train-timeout-runner\.sh' "$m"
+    grep -q 'train-timeout-runner\.sh' "$g"
+    # The interpreter gate: only an interpreter carries the script path in argv.
+    local interp='bash|sh|dash|zsh|ksh|ash|busybox'
+    grep -qF "$interp" "$m"
+    grep -qF "$interp" "$g"
+    # Exported, so the console module tree (and run-autotune-batch.sh) can call it.
+    grep -q '__llm_train_lane_holder' "$m"
+}
+
+# The autotune batch is the console's other heavy job on the same 4 GB card.  It must
+# consult the lane read (not a bare lock test — a stale file must not refuse) and halt
+# with the lane NAMED, so the footer prints a real resume command.
+@test "train-lane: the autotune batch halts on a training run, and names it" {
+    local f="$REPO_ROOT/scripts/run-autotune-batch.sh"
+    grep -q '__llm_train_lane_holder' "$f"
+    grep -q 'GPU held by a TRAINING run (pid ' "$f"
+    grep -q 'bin/train-timeout-runner.sh' "$f"
+}
+
+# `oc health`'s row: RUNNING names the tenant pid and its age, HELD reports a lock
+# with no tenant (another lane, or a stale file — the "stuck lane"), IDLE is neither.
+# Driven with a stub lookup so all three states are exercised without a GPU.
+@test "train-lane: oc health reports the lane, and tells a stale lock from a live run" {
+    local f="$REPO_ROOT/scripts/09e-oc-health.sh"
+    awk '/^function __oc_train_lane\(\)/,/^}/' "$f" > "$TAC_TEST_TMPDIR/lane.sh"
+    grep -q '__oc_train_lane' "$TAC_TEST_TMPDIR/lane.sh" || return 1
+    # It must also be WIRED, in both oc-health branches (a row in only one is the
+    # defect this file's own header records for the other watches).
+    [ "$(grep -c '__oc_train_lane$' "$f")" -ge 2 ]
+
+    cat > "$TAC_TEST_TMPDIR/lane-probe.sh" <<'EOS'
+set -uo pipefail
+C_Highlight=""; C_Warning=""; C_Dim=""
+__tac_info() { printf '%s %s\n' "$1" "$2"; }
+__llm_train_lane_holder() { [[ -n "${STUB_HOLDER:-}" ]] && printf '%s\n' "$STUB_HOLDER"; }
+source "$1"
+__oc_train_lane
+EOS
+
+    run env STUB_HOLDER="$$" LLM_BENCH_LOCK_FILE="$TAC_TEST_TMPDIR/run.lock" \
+        bash "$TAC_TEST_TMPDIR/lane-probe.sh" "$TAC_TEST_TMPDIR/lane.sh"
+    [[ "$output" == *"Training lane [RUNNING pid=$$"* ]] || { echo "got: $output"; return 1; }
+
+    : > "$TAC_TEST_TMPDIR/held.lock"
+    run env STUB_HOLDER="" LLM_BENCH_LOCK_FILE="$TAC_TEST_TMPDIR/held.lock" \
+        bash "$TAC_TEST_TMPDIR/lane-probe.sh" "$TAC_TEST_TMPDIR/lane.sh"
+    [[ "$output" == *"HELD by another lane"* ]] || { echo "got: $output"; return 1; }
+
+    run env STUB_HOLDER="" LLM_BENCH_LOCK_FILE="$TAC_TEST_TMPDIR/none.lock" \
+        bash "$TAC_TEST_TMPDIR/lane-probe.sh" "$TAC_TEST_TMPDIR/lane.sh"
+    [[ "$output" == *"Training lane [IDLE]"* ]] || { echo "got: $output"; return 1; }
+}

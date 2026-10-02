@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 18
+# Module Version: 19
+#   v19 (2026-10-02): halts when a supervised TRAINING run holds the card (card
+#   UBC-GRPO-002). The run claims the bench lock for the whole of its run, so a row
+#   launched alongside it would fail its VRAM baseline after a wasted spawn — the
+#   same shape as the existing foreign-owner gate, and named the same way.
 #   v18 (2026-10-01): routes through bin/heavy-job so at most one saturating job runs on
 #   the box at a time — see the serialisation prologue after `set -uo pipefail`.
 #===============================================================================
@@ -196,7 +200,20 @@ wsl_gpu_health_suspect() {
 
 # Initial drain — skipped when another agent owns the card: there is nothing of
 # ours to reap, and waiting for a foreign holder's VRAM to drop cannot succeed.
-if declare -f __llm_gpu_foreign_owner &>/dev/null && __llm_gpu_foreign_owner; then
+# Same for a supervised TRAINING run (card UBC-GRPO-002): the card is a live
+# tenant's, not ours to drain.  Identity is the EXECUTING runner artefact
+# (11d-llm-gpu.sh::__llm_train_lane_holder), never a word, so a stale lock file
+# alone cannot refuse here.
+train_lane_holder() {
+    declare -f __llm_train_lane_holder &>/dev/null || return 0
+    # swallow-ok: an unloaded tree or a vanished process IS the "no training tenant" answer
+    __llm_train_lane_holder 2>/dev/null || true
+}
+
+_train_lane_pid="$(train_lane_holder)"
+if [[ -n "$_train_lane_pid" ]]; then
+    echo "GPU held by a TRAINING run (pid $_train_lane_pid) — skipping the initial drain"
+elif declare -f __llm_gpu_foreign_owner &>/dev/null && __llm_gpu_foreign_owner; then
     echo "GPU owned by another agent's run (investigator GPU lock) — skipping the initial drain"
 else
     drain_vram
@@ -222,6 +239,16 @@ for ((i = 0; i < TOTAL; i++)); do
     # lock, so nothing would be killed — but with the card still held every row
     # would fail its VRAM baseline after a wasted spawn.  Halt up front and let
     # the standard footer print the real resume command.
+    #
+    # A supervised TRAINING run is the same shape (card UBC-GRPO-002): it holds the
+    # bench lock for the whole of its run, so halt with the lane named rather than
+    # let a row fail against a tenant the console already knows about.  The
+    # execution identity is the runner artefact, so a stale lock file never fires it.
+    _train_lane_pid="$(train_lane_holder)"
+    if [[ -n "$_train_lane_pid" ]]; then
+        HALT_REASON="GPU held by a TRAINING run (pid $_train_lane_pid, bin/train-timeout-runner.sh)"
+        break
+    fi
     if declare -f __llm_gpu_foreign_owner &>/dev/null && __llm_gpu_foreign_owner; then
         HALT_REASON="GPU owned by another agent's run (investigator GPU lock, pid $(__llm_gpu_lock_holder 2>/dev/null || true))"
         break

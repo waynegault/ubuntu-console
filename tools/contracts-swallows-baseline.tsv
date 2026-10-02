@@ -25,7 +25,7 @@ unclassified	scripts/09a-oc-gateway.sh	37
 unclassified	scripts/09b-gog.sh	3
 unclassified	scripts/09c-oc-core.sh	9
 unclassified	scripts/09d-oc-agents.sh	84
-unclassified	scripts/09e-oc-health.sh	43
+unclassified	scripts/09e-oc-health.sh	35
 unclassified	scripts/09f-oc-misc.sh	15
 unclassified	scripts/10-deployment.sh	6
 unclassified	scripts/11a-llm-registry.sh	9
