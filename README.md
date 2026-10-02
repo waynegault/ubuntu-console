@@ -1112,8 +1112,9 @@ where it was last present.)
 │   ├── oc-quick-diag                  # Thin wrapper → tac-exec oc diag
 │   ├── oc-wake                        # Thin wrapper → tac-exec wake
 │   ├── qwen-guard-patch.sh            # Re-apply the daemon guard's read-only-git patch after an update
-│   ├── qwen-guard-selfheal.sh         # Cron 17,47: re-apply that patch when an update reverts it
-│   └── qwen-memory-index-patch.sh     # Re-apply the local memory-index fix after a CLI/companion update
+│   ├── qwen-guard-selfheal.sh         # Cron 17,47: re-apply those patches when an update reverts them
+│   ├── qwen-memory-index-patch.sh     # Re-apply the local memory-index fix after a CLI/companion update
+│   └── qwen-memory-style-patch.sh     # State the store's Markdown style in the CLI's auto-memory extractor
 ├── scripts/                           # Profile modules (01-15, 09a-f, 11a-f) + kgraph package
 │   ├── 01-constants.sh                #   All paths, ports, env vars
 │   ├── 02-error-handling.sh           #   ERR trap

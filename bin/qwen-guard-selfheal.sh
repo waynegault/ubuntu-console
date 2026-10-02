@@ -15,6 +15,16 @@
 # Windows-side companion), so any CLI/companion update reverts it just like the
 # guard patch -- and a reverted index patch fails silently, chopping links.
 #
+# The third patch (2026-10-02) is qwen-memory-style-patch.sh: the same foreign
+# bundle, a different mechanism.  The CLI's managed auto-memory extractor rewrites
+# the ~/.qwen memory notes after user turns, and its prompt states no emphasis
+# style, so it mixes asterisk spans into files whose dominant style is underscore
+# -- which the store's linter flags (MD049 at its default, consistency WITHIN a
+# file).  Measured, the asterisk-span count on one note rose 2 -> 4 -> 7 across
+# successive passes, so the writer re-creates the violation class it is editing
+# around.  That patch states the style in the extractor's prompt.  Same reversion
+# risk, same watchdog.
+#
 # Run from cron. Deliberately quiet when healthy: it does nothing and prints
 # nothing when every patch is already in place, and it only writes a record when
 # it actually had to act. When it CANNOT restore a patch it exits non-zero, so a
@@ -33,7 +43,7 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
 #
 # 2026-10-01: wired the STORE-SIDE witness (scripts/qwen-memory-index-check.py)
 # into this watchdog, run in the same tick but independently of the patch paths.
@@ -51,6 +61,10 @@
 # is also per-foreign-bundle and reverts on every CLI/companion update.  Mirrored
 # into this tracked copy from the loose ~/.local/bin one, so that when install.sh
 # replaces that copy with a symlink here the index coverage is not silently lost.
+#
+# 2026-10-02: wired qwen-memory-style-patch.sh the same way (its own --check,
+# re-apply, --check again).  It patches the auto-memory extractor's prompt in the
+# same four copies, so it reverts on the same events and for the same reason.
 set -uo pipefail
 
 # cron's PATH omits linuxbrew. The patch scripts run `node --check` to validate
@@ -61,6 +75,7 @@ export PATH="/home/linuxbrew/.linuxbrew/bin:/home/wayne/.local/bin:/usr/local/bi
 
 PATCH="/home/wayne/.local/bin/qwen-guard-patch.sh"
 IDX="/home/wayne/.local/bin/qwen-memory-index-patch.sh"
+STYLE="/home/wayne/.local/bin/qwen-memory-style-patch.sh"
 WITNESS="/home/wayne/ubuntu-console/scripts/qwen-memory-index-check.py"
 LOG_DIR="/home/wayne/.local/share/qwen-guard"
 LOG="$LOG_DIR/selfheal.log"
@@ -69,11 +84,14 @@ LOG="$LOG_DIR/selfheal.log"
 # tool being absent cannot mask the other.  A tool that is not executable is
 # treated as "nothing to do", mirroring the original guard-only behaviour.
 needed=()
-if [ -x "$PATCH" ] && ! "$PATCH" --check >/dev/null 2>&1; then
+if [[ -x "$PATCH" ]] && ! "$PATCH" --check >/dev/null 2>&1; then
   needed+=(guard)
 fi
-if [ -x "$IDX" ] && ! "$IDX" --check >/dev/null 2>&1; then
+if [[ -x "$IDX" ]] && ! "$IDX" --check >/dev/null 2>&1; then
   needed+=(memory-index)
+fi
+if [[ -x "$STYLE" ]] && ! "$STYLE" --check >/dev/null 2>&1; then
+  needed+=(memory-style)
 fi
 
 # The STORE-SIDE witness: a health signal separate from the patches.  The patches prove
@@ -109,6 +127,7 @@ for tool in "${needed[@]}"; do
   case "$tool" in
     guard) patch="$PATCH"; label="guard patch" ;;
     memory-index) patch="$IDX"; label="memory-index patch" ;;
+    memory-style) patch="$STYLE"; label="memory-style patch" ;;
   esac
 
   {
