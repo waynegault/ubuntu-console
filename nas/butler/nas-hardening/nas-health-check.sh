@@ -34,6 +34,8 @@ if [ ! -s /home/root/.ssh/authorized_keys ]; then
         chmod 700 /home/root/.ssh /root/.ssh
         cp "$LATEST" /home/root/.ssh/authorized_keys
         chmod 600 /home/root/.ssh/authorized_keys
+        # swallow-ok: a redundant SECOND copy of the same keys, into /root/.ssh, which this
+        # firmware may not have; the restore that matters is the unchecked copy just above
         cp /home/root/.ssh/authorized_keys /root/.ssh/authorized_keys 2>/dev/null || true
     fi
 fi
@@ -68,7 +70,10 @@ fi
 # Check mosquitto running
 if ! pgrep -x mosquitto >/dev/null 2>&1; then
     repair "mosquitto not running, attempting restart"
-    /opt/etc/init.d/S80mosquitto start >/dev/null 2>&1 || true
+    if ! /opt/etc/init.d/S80mosquitto start >/dev/null 2>&1
+    then
+        log "REPAIR FAILED: mosquitto did not restart - MQTT ingestion is down"
+    fi
 fi
 
 # Check air monitor collector in crontab
@@ -112,5 +117,8 @@ fi
 # Check admin password hash
 if grep -q "^admin::\|\$HASH" /etc/shadow 2>/dev/null; then
     repair "admin password hash missing or corrupt, restoring from backup"
-    cp /mnt/HD/HD_a2/butler/nas-hardening/shadow.admin_backup /etc/shadow 2>/dev/null || true
+    if ! cp /mnt/HD/HD_a2/butler/nas-hardening/shadow.admin_backup /etc/shadow
+    then
+        log "REPAIR FAILED: could not restore /etc/shadow from backup - admin login may still be broken"
+    fi
 fi
