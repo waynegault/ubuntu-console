@@ -89,7 +89,10 @@ def run(cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout, r.stderr
-    except Exception as exc:  # noqa: BLE001
+    except (OSError, subprocess.SubprocessError) as exc:
+        # The two failures `subprocess.run` actually raises here: OSError when the
+        # binary is absent, SubprocessError (TimeoutExpired) when it exceeds the
+        # timeout.  Anything else is a bug and must surface, not read as "rc=-1".
         return -1, "", str(exc)
 
 
@@ -155,7 +158,10 @@ def _extract_ad_fields(adv_data: bytes) -> tuple[list[int], dict[int, bytes], di
         elif ad_type in (0x08, 0x09):
             try:
                 local_name = payload.decode("utf-8", errors="ignore").strip() or None
-            except Exception:  # noqa: BLE001
+            except (UnicodeDecodeError, AttributeError):
+                # payload is bytes and errors="ignore" makes the decode total, so this
+                # guards a malformed buffer rather than a routine path.  A different
+                # exception is a bug and must surface.
                 local_name = None
         i = end
 
@@ -262,9 +268,12 @@ def _parse_govee_frame(mfg_data: bytes) -> tuple[float | None, float | None]:
 
         if -50.0 <= temp_c <= 60.0 and 0.0 <= humidity_pct <= 100.0:
             return round(temp_c, 2), round(humidity_pct, 2)
-    except Exception:  # noqa: BLE001
+    except (ValueError, TypeError, IndexError):
+        # A malformed advertisement is not a parse result: the caller reads
+        # (None, None) as "not parseable".  Only the shape errors the slicing and
+        # arithmetic can raise are caught; anything else is a bug and must surface.
         pass
-    
+
     return None, None
 
 
@@ -423,7 +432,10 @@ class USBHciScanner:
                 self.dev.attach_kernel_driver(intf.bInterfaceNumber)
             except usb.core.USBError:
                 pass
-        except Exception:  # noqa: BLE001
+        except (usb.core.USBError, ValueError, KeyError, IndexError):
+            # Teardown must not mask the USB failure that brought us here: libusb
+            # errors and the configuration/interface container lookups above are the
+            # expected ones.  Anything else is a bug and must surface.
             pass
         usb.util.dispose_resources(self.dev)
         self.dev = None
@@ -744,7 +756,10 @@ def scan_and_publish(client: mqtt.Client, scan_seconds: int, target_mac: str, vi
     finally:
         try:
             scanner.set_scan_enable(False)
-        except Exception:  # noqa: BLE001
+        except (usb.core.USBError, RuntimeError):
+            # The scanner is being torn down; a USB error or a closed device
+            # (RuntimeError "device not open") is expected here and must not hide the
+            # scan's own outcome.  Anything else is a bug and must surface.
             pass
         scanner.close()
 
@@ -774,7 +789,10 @@ def main() -> None:
 
     try:
         client.connect(args.mqtt_host, args.mqtt_port, keepalive=60)
-    except Exception as exc:  # noqa: BLE001
+    except OSError as exc:
+        # paho raises OSError subclasses (ConnectionRefusedError, socket errors) when
+        # the broker is unreachable; that expected failure is re-raised as a named
+        # exit, never swallowed.  Anything else is a bug and must surface.
         raise SystemExit(f"MQTT connect failed: {exc}") from exc
 
     client.loop_start()

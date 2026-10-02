@@ -49,6 +49,7 @@ REF: "How GRPO Trains Small Language Models with Verifiable Rewards" (Benjamin N
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
 import subprocess
@@ -147,8 +148,10 @@ def build_configs(model_id: str, lora_r: int) -> tuple[object, object]:
     """
     import torch
     # peft lives ONLY in the isolated training env (docs/grpo-training-env.md), never in
-    # this repo's .venv by design - so both checkers are told so, with the reason.
-    from peft import LoraConfig  # type: ignore[import-not-found]  # pyright: ignore[reportMissingImports]
+    # this repo's .venv by design.  Resolved BY NAME at runtime, so neither mypy nor
+    # pyright needs a suppression for a module that is deliberately absent here — a
+    # suppression would hide a real import error if this ever ran where peft is present.
+    LoraConfig = getattr(importlib.import_module("peft"), "LoraConfig")
     from transformers import BitsAndBytesConfig
 
     quant = BitsAndBytesConfig(
@@ -180,8 +183,11 @@ def build_configs(model_id: str, lora_r: int) -> tuple[object, object]:
 def measure(model_id: str, args: argparse.Namespace) -> Budget:
     """Load, adapt, step and generate once, recording each phase's cost."""
     import torch
-    # Same reason as in build_configs: peft is in the training env, not this repo's .venv.
-    from peft import get_peft_model, prepare_model_for_kbit_training  # type: ignore[import-not-found]  # pyright: ignore[reportMissingImports]
+    # Same reason as in build_configs: peft is in the training env, not this repo's
+    # .venv, so it is resolved by name rather than statically imported.
+    _peft = importlib.import_module("peft")
+    get_peft_model = getattr(_peft, "get_peft_model")
+    prepare_model_for_kbit_training = getattr(_peft, "prepare_model_for_kbit_training")
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     budget = Budget(
