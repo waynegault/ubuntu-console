@@ -29,11 +29,10 @@ import logging
 import os
 import pathlib
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from typing import Any, Iterable
 
 try:
     import paho.mqtt.client as mqtt
@@ -47,10 +46,13 @@ try:
 except ImportError as exc:
     raise SystemExit("pyusb missing. Install with: /opt/bin/pip3 install pyusb") from exc
 
+# requests is optional (the HTTP publish path only): declared Any so the fallback
+# `None` below does not conflict with the module type.
+requests: Any = None
 try:
     import requests
 except ImportError:
-    requests = None
+    pass
 
 
 logging.basicConfig(
@@ -180,15 +182,19 @@ def _parse_mi_scale_v2_live_frame(data: bytes) -> tuple[float | None, int | None
         return None, None
 
     frame_offset = 0
-    status0 = data[frame_offset]  # noqa: F841
+    # Bytes 0 and the removed bit are parsed to keep the frame layout explicit but
+    # are deliberately unread: the unit bit is ignored (weights are treated as kg)
+    # and a removed+stable frame is the final locked-in weight, accepted by the
+    # `stable` test below.  Underscore-prefixed so ruff's unused-local rule sees them.
+    _status0 = data[frame_offset]
     status1 = data[frame_offset + 1]
-    
+
     has_impedance = (status1 & 0x02) != 0
     stable = (status1 & 0x20) != 0
-    removed = (status1 & 0x80) != 0
-    
-    # Accept stable frames regardless of removed flag.
-    # removed=True + stable=True is the final locked-in weight (user stepped off).
+    _removed = (status1 & 0x80) != 0
+
+    # Accept stable frames regardless of the removed flag: removed=True +
+    # stable=True is the final locked-in weight (user stepped off).
     if not stable:
         return None, None
     

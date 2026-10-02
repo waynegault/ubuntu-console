@@ -12,11 +12,10 @@ Manages scheduled Salus commands for future execution. Supports:
 import asyncio
 import json
 import logging
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, Dict, List, Callable
-import subprocess
+from typing import Optional, Dict, List
 import sys
 
 logger = logging.getLogger(__name__)

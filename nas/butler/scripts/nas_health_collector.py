@@ -89,8 +89,12 @@ def memory_stats():
     try:
         with open("/proc/meminfo") as f:
             text = f.read()
-        total = int(re.search(r"MemTotal:\s+(\d+)", text).group(1)) // 1024
-        avail = int(re.search(r"MemAvailable:\s+(\d+)", text).group(1)) // 1024
+        m_total = re.search(r"MemTotal:\s+(\d+)", text)
+        m_avail = re.search(r"MemAvailable:\s+(\d+)", text)
+        if m_total is None or m_avail is None:
+            return None, None
+        total = int(m_total.group(1)) // 1024
+        avail = int(m_avail.group(1)) // 1024
         return avail, total
     except Exception:
         return None, None

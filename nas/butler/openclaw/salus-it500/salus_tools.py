@@ -14,7 +14,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 # Path to the salus.py script
 SALUS_SCRIPT = Path(__file__).parent / "salus.py"

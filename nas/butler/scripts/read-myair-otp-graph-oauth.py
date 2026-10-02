@@ -89,6 +89,7 @@ def _post_form(url: str, form: dict[str, str]) -> dict:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        payload: dict[str, object]
         try:
             payload = json.loads(body)
         except Exception:
@@ -107,6 +108,7 @@ def _graph_get(url: str, access_token: str) -> dict:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        payload: dict[str, object]
         try:
             payload = json.loads(body)
         except Exception:
@@ -335,6 +337,9 @@ def auth_init() -> int:
     print(dc.get("message") or f"Visit {dc.get('verification_uri')} and enter code {dc.get('user_code')}")
 
     device_code = dc.get("device_code")
+    if not device_code:
+        print("Device-code init returned no device_code", file=sys.stderr)
+        return 4
     interval = int(dc.get("interval", 5) or 5)
     expires_in = int(dc.get("expires_in", 900) or 900)
     deadline = _now() + expires_in
@@ -399,15 +404,14 @@ def auth_status() -> int:
 
 
 def _clean_matching() -> int:
-    """Delete all messages matching the configured sender/subject regex without extracting OTP."""  # noqa: E501
+    """Delete all messages matching the configured sender/subject regex
+    without extracting OTP."""
     token = _ensure_access_token()
-    data = {"value": _fetch_messages(token)}
-    if data.get("error"):
-        message = (data.get("error") or {}).get("message") or str(data.get("error"))
-        print(f"Graph read failed: {message}", file=sys.stderr)
-        return 1
+    # _fetch_messages returns the message list and RAISES RuntimeError on a Graph
+    # error, so the old {"value": ...} wrapper's error branch was unreachable.
+    messages = _fetch_messages(token)
     deleted = 0
-    for msg in data.get("value", []):
+    for msg in messages:
         if not _message_matches(msg):
             continue
         message_id = str(msg.get("id") or "")

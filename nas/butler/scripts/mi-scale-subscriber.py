@@ -1,6 +1,12 @@
 #!/opt/bin/python3
 """NAS Mi Scale MQTT subscriber - lightweight, no local imports needed beyond paho"""
-import paho.mqtt.client as mqtt, time, json, os, signal, urllib.request, urllib.parse
+import json
+import signal
+import time
+import urllib.parse
+import urllib.request
+
+import paho.mqtt.client as mqtt
 from pathlib import Path
 
 SHARED_FILE = Path("/mnt/HD/HD_a2/butler/shared-data/weight-monitor/latest.json")

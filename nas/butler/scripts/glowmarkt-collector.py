@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.3.0
+# Version: 1.3.1
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
 
 """Glowmarkt/Bright Smart Meter electricity collector.
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -193,7 +192,7 @@ def write_influx(lines: list[str]) -> int | None:
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             return int(resp.status)
-    except urllib.error.URLError as e:
+    except urllib.error.URLError:
         return None
 
 

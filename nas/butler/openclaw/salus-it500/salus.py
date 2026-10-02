@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 from datetime import timedelta
+from typing import NoReturn
 
 import aiohttp
 
@@ -39,7 +40,7 @@ def _load_credentials() -> tuple[str, str, str]:
     return username, password, device_id
 
 
-def _die(msg: str, code: int = 1) -> None:
+def _die(msg: str, code: int = 1) -> NoReturn:
     print(json.dumps({"error": msg}), file=sys.stderr)
     sys.exit(code)
 
@@ -48,8 +49,8 @@ def _out(data: dict) -> None:
     print(json.dumps(data, indent=2))
 
 
-def _jsonable(value):
-    if is_dataclass(value):
+def _jsonable(value: object) -> object:
+    if is_dataclass(value) and not isinstance(value, type):
         return asdict(value)
     return value
 
@@ -235,15 +236,15 @@ async def _run(args: list[str]) -> None:
                 )
 
             elif command == "get-delta-temp":
-                delta = await client.get_delta_temperature()
-                if delta is None:
+                delta_temp = await client.get_delta_temperature()
+                if delta_temp is None:
                     _die("Cannot calculate delta temperature (missing data)")
                 _out(
                     {
                         "ok": True,
                         "command": "get-delta-temp",
-                        "delta_temperature": delta,
-                        "description": f"Indoor temperature is {delta}°C higher than outdoor",
+                        "delta_temperature": delta_temp,
+                        "description": f"Indoor temperature is {delta_temp}°C higher than outdoor",
                     }
                 )
 
@@ -332,7 +333,7 @@ async def _run(args: list[str]) -> None:
                         "task_id": task.task_id,
                         "status": task.status,
                         "scheduled_time": task.scheduled_time,
-                        "command": task.command,
+                        "task_command": task.command,
                         "description": task.description,
                         "created_at": task.created_at,
                         "executed_at": task.executed_at,

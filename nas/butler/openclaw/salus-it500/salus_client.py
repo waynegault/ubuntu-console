@@ -244,6 +244,8 @@ class SalusClient:
         if self._security_token and time.time() - self._token_age < _TOKEN_TTL_SECONDS:
             return self._security_token
         await self._refresh_token()
+        if self._security_token is None:
+            raise SalusAuthError("Token refresh returned no security token")
         return self._security_token
 
     async def _refresh_token(self) -> None:
@@ -329,9 +331,9 @@ class SalusClient:
             heating_active=heating_state == "1",
             hot_water_enabled=None if hw_status is None else (hw_status != "0"),
             heating_control_mode=heating_control_mode,
-            heating_schedule_type=_SCHEDULE_TYPE_NAMES.get(schedule_type),
+            heating_schedule_type=_SCHEDULE_TYPE_NAMES.get(schedule_type) if schedule_type is not None else None,
             hot_water_mode=hot_water_mode_name,
-            hot_water_schedule_type=_SCHEDULE_TYPE_NAMES.get(hot_water_schedule_type),
+            hot_water_schedule_type=_SCHEDULE_TYPE_NAMES.get(hot_water_schedule_type) if hot_water_schedule_type is not None else None,
             hot_water_boost_remaining_hours=hot_water_boost_remaining_hours,
             holiday_mode_active=holiday_mode_active,
             holiday_start=holiday_start.isoformat() if holiday_start is not None else None,
@@ -369,7 +371,7 @@ class SalusClient:
         if err_node is not None:
             raise SalusAPIError(f"API error: {err_node.text}")
         ret_node = xml.find("./retCode")
-        if ret_node is None or int(ret_node.text) != 0:
+        if ret_node is None or ret_node.text is None or int(ret_node.text) != 0:
             raise SalusAPIError(f"Unexpected retCode: {ET.tostring(xml, encoding='unicode')}")
 
     async def set_temperature(self, temperature: float) -> None:
@@ -572,11 +574,11 @@ class SalusClient:
 
         if should_heat and not is_currently_heating:
             _LOGGER.info(f"Activating heating: outside {outside_temp}°C < threshold {threshold_temp}°C")
-            await self.set_heating_mode("on")
+            await self.set_hvac_mode("heat")
             return True
         elif not should_heat and is_currently_heating:
             _LOGGER.info(f"Disabling heating: outside {outside_temp}°C >= threshold {threshold_temp}°C")
-            await self.set_heating_mode("off")
+            await self.set_hvac_mode("off")
             return True
 
         return False

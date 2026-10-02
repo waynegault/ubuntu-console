@@ -8,7 +8,6 @@ import re
 import urllib.request
 import urllib.parse
 import urllib.error
-import subprocess
 import time
 import sys
 
@@ -96,7 +95,9 @@ def _get_fresh_otp() -> str:
 
 def _get_bearer_token(otp: str) -> str:
     """Complete OAuth2 flow with OTP."""
-    import secrets, hashlib, base64
+    import base64
+    import hashlib
+    import secrets
     
     # Authn
     payload = json.dumps({

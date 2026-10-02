@@ -271,7 +271,7 @@ def _load_influx_env() -> dict[str, str]:
     return config
 
 
-def _write_influxdb(measurement: str, tags: dict[str, str], fields: dict[str, float]) -> bool:
+def _write_influxdb(measurement: str, tags: dict[str, str], fields: dict[str, int | float]) -> bool:
     """Write a measurement to InfluxDB via HTTP using health_metrics database."""
     config = _load_influx_env()
     host = config.get("HEALTH_METRICS_HOST", "192.168.33.17")
@@ -287,12 +287,12 @@ def _write_influxdb(measurement: str, tags: dict[str, str], fields: dict[str, fl
         escaped_v = str(v).replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
         tag_parts.append(f"{k}={escaped_v}")
     
-    field_parts = []
-    for k, v in fields.items():
-        if isinstance(v, float):
-            field_parts.append(f"{k}={v}")
-        elif isinstance(v, int):
-            field_parts.append(f"{k}={v}i")
+    field_parts: list[str] = []
+    for fkey, fval in fields.items():
+        if isinstance(fval, float):
+            field_parts.append(f"{fkey}={fval}")
+        elif isinstance(fval, int):
+            field_parts.append(f"{fkey}={fval}i")
     
     if not tag_parts or not field_parts:
         return False

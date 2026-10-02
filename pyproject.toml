@@ -1,5 +1,6 @@
 # Repository-wide tool configuration for mypy and pyright.
-# Python sources live under bin/, scripts/ (kgraph package + helpers), and tests/.
+# Python sources live under bin/, scripts/ (kgraph package + helpers), tests/ and
+# nas/ (the NAS/butler collectors and OpenClaw skills).
 # Type-check everything with:
 #   .venv/bin/python3 -m mypy            (or: mypy)
 #   .venv/bin/pyright
@@ -13,12 +14,26 @@ files = [
     "scripts/kv-recall-probe.py",
     "scripts/oc-health-check.py",
     "tests",
+    "nas",
 ]
 warn_unused_configs = true
 show_error_codes = true
 
+# NAS-only third-party runtime deps — paho-mqtt, pyusb and bleak — are not
+# installed in this repo's venv or CI (the NAS runs them under /opt/bin/python3),
+# and complete stub packages do not exist (pyusb ships none).  Declaring exactly
+# these modules untyped keeps `mypy` a usable gate for nas/; it is scoped to the
+# three names, so a missing import anywhere else is still an error.
+[[tool.mypy.overrides]]
+module = ["paho.*", "usb.*", "bleak"]
+ignore_missing_imports = true
+
+# NOTE (2026-10-02): pyright has no per-module import override, so `pyright nas`
+# still reports reportMissingImports for the same three NAS-only deps above and
+# only those — no code-level findings remain.  `ruff check .` (the CI gate) and
+# `mypy` are clean including nas/.
 [tool.pyright]
-include = ["bin", "scripts", "tests"]
+include = ["bin", "scripts", "tests", "nas"]
 exclude = ["**/__pycache__", "**/frontend-g6/**", "scripts/build/**"]
 pythonVersion = "3.14"
 typeCheckingMode = "basic"

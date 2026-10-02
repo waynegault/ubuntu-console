@@ -105,7 +105,9 @@ def _get_fresh_otp() -> str:
 
 def _get_bearer_token(otp: str) -> str:
     """Complete OAuth2 flow."""
-    import secrets, hashlib, base64
+    import base64
+    import hashlib
+    import secrets
     
     # Authn
     payload = json.dumps({

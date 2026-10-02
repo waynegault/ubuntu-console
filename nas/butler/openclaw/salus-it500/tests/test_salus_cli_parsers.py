@@ -7,8 +7,8 @@ MODULE_PATH = Path("/home/wayne/.openclaw/skills/salus-it500/salus.py")
 
 def _load_module():
     spec = importlib.util.spec_from_file_location("salus_cli", MODULE_PATH)
-    module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
