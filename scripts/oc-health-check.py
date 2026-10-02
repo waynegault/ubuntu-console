@@ -1,4 +1,4 @@
-#!/home/wayne/ubuntu-console/.venv/bin/python
+#!/usr/bin/env python3
 """Richer OpenClaw diagnostics helper used by `oc-health`.
 
 Outputs:
