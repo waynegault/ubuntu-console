@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# llama-watchdog-guard.sh — supervision-of-the-supervisor. DRAFT for review, not installed.
+# llama-watchdog-guard.sh — supervision-of-the-supervisor. INSTALLED and LIVE.
+#
+# STATUS (installed 2026-09-21 09:13 BST): run every ~5 min by systemd —
+#   systemd/llama-watchdog-guard.service (ExecStart=%h/.local/bin/llama-watchdog-guard.sh,
+#   reached through this repo's bin/ symlink) on systemd/llama-watchdog-guard.timer
+#   (OnBootSec=3min, OnUnitActiveSec=5min).  Opt out with
+#   `touch /dev/shm/llama-watchdog-guard.pause` (see OPT-OUT below); install layout:
+#   systemd/llama-watchdog-guard.README.md.  A stale "DRAFT for review, not installed"
+#   banner stood here until 2026-10-02 (card 3289360a).
 #
 # WHY (evidence, 2026-09-20):
 #   The model-selection bench (investigator/scripts/bench_shared/msb, via
@@ -26,7 +34,7 @@
 #   deliberate, non-bench stop.  `rm` the file to resume.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 
 set -euo pipefail
 
