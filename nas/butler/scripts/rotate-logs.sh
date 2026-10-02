@@ -5,9 +5,12 @@
 # butler/logs/ unboundedly.  nas-health-check.sh rotates only its OWN $LOG, so the rest grew
 # without limit on a NAS whose disk the collectors share.
 #
-# ONE .old per log, NOT a date series: a date series is exactly what produced the 42-file
-# backup litter under nas-hardening/ — backup-critical-config.sh stamps `<name>.$DATE` per run
-# and has no retention.  One generation is enough to inspect a runaway log.
+# ONE .old per log, NOT a date series: a date series is what leaves a prune-one-day-too-late
+# state to reason about.  (CORRECTION, 2026-10-02: an earlier version of this comment claimed
+# backup-critical-config.sh has no retention — it does, 10 dated copies per target via
+# `ls -t … | tail -n +11`; the litter that accumulated under nas-hardening/ was that retained
+# history plus one-off manual `.bak-*` files, which nothing prunes.)  One generation is enough
+# to inspect a runaway log.
 #
 # The rotation is COPY + TRUNCATE, never `mv`.  bridge.log is held open by the long-running
 # bt-bridge process, so a rename would strand that writer on the renamed inode — it would keep
