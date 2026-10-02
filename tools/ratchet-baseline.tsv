@@ -39,12 +39,22 @@
 # borne out (measured, not assumed).  The +2 the fourth block attributed to the
 # uncommitted scripts/09d-oc-agents.sh edit is now committed (2f1b5a1d) and sits inside
 # the 272 this rises from.  Deliberate re-baseline: corpus growth, not drift.
+#
+# 2026-10-02 (sixth re-baseline): NOT corpus growth — a deliberate style fix in
+# scripts/09e-oc-health.sh.  Item 10.7 rose 181 -> 182 because the five `|| true`
+# swallow sites now report their failure on stderr, routed through ONE helper
+# (__oc_note) instead of five ad-hoc redirects.  The counter counts the helper's own
+# single write and cannot express "a helper rather than ad-hoc", which is exactly what
+# this item asks for — so the +1 is the cost of complying, not drift.  8.1.8 fell
+# 290 -> 289 and 6.7 fell 57 -> 56 as side effects of the same edit (a long multi-line
+# jq call re-wrapped, one ad-hoc stderr site removed).  Measured with this tool's own
+# counters; no other count moved.
 4.2.4	16
 4.2.6	12
 4.3.6	31
-6.7	57
-8.1.8	290
+6.7	56
+8.1.8	289
 9.5	107
 9.7	56
 10.4	50
-10.7	181
+10.7	182

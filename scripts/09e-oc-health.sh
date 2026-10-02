@@ -9,7 +9,13 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
+#   v21 (2026-10-02): consolidates the v20 swallow diagnostics onto ONE helper,
+#   __oc_note (message, optional mode), instead of the ad-hoc `printf … >&2` each site
+#   carried — §18.3 item 10.7's ask.  oc-doctor-local's notes stay human-mode-only, so
+#   its `{`-prefixed --json output is not corrupted by a stderr line.  §18.3 re-baselined
+#   deliberately (10.7 181 -> 182: the counter counts the helper's own single write and
+#   cannot express "a helper rather than ad-hoc").
 #   v20 (2026-10-02): __oc_guard_patch_state gains a `--quiet-when-ok` mode, so `so`
 #   can carry the row only when the patch needs acting on. `oc health` keeps calling it
 #   with no argument and always shows the state; `so` passes the flag because an
@@ -624,7 +630,7 @@ function oc-stinger() {
                 # otherwise be left in the vendor directory with no cue at all.
                 if ! cd "$_prev_pwd" 2>/dev/null
                 then
-                    printf '%s\n' "[oc-stinger] could not return to $_prev_pwd — the shell is still in $PWD" >&2
+                    __oc_note "[oc-stinger] could not return to $_prev_pwd — the shell is still in $PWD"
                 fi
                 sleep 3
                 if pgrep -f "openstinger.gradient.mcp.server" >/dev/null 2>&1
@@ -796,7 +802,7 @@ function oc-usage() {
                || ! mv "${session_cache}.tmp" "$session_cache" 2>/dev/null
             then
                 rm -f "${session_cache}.tmp"
-                printf '%s\n' "[oc-usage] session cache refresh failed — using the previous cache" >&2
+                __oc_note "[oc-usage] session cache refresh failed — using the previous cache"
             fi
         fi
     fi
@@ -810,7 +816,7 @@ function oc-usage() {
                 || openclaw sessions --json 2>/dev/null)
         then
             sessions_json=""
-            printf '%s\n' "[oc-usage] both session fetches failed — reporting no session data" >&2
+            __oc_note "[oc-usage] both session fetches failed — reporting no session data"
         fi
     fi
 
@@ -871,7 +877,7 @@ function oc-local-llm() {
     if ! _entry=$(__llm_active_entry 2>/dev/null)
     then
         _entry=""
-        printf '%s\n' "[oc-local-llm] could not read the active model from the registry — using the 'local' fallback name" >&2
+        __oc_note "[oc-local-llm] could not read the active model from the registry — using the 'local' fallback name"
     fi
     if [[ -n "$_entry" ]]
     then
@@ -1151,18 +1157,20 @@ function oc-diag() {
 }
 
 # ---------------------------------------------------------------------------
-# __oc_doctor_note — report an oc-doctor-local read failure without breaking --json.
+# __oc_note — report a non-fatal read failure on stderr, never on stdout.
 #
-# In --json/--plain the failure is visible in the DERIVED field (gateway_health
-# "unknown", an empty active_model, model_sync 0), and bats' `run` merges stderr into the
-# captured output, so a note printed in a machine mode would break a `{`-prefixed parse.
-# Human mode gets the note on stderr — a read that fails here is never silent.
+# These are diagnostics, not command output: they belong on stderr so they cannot mix
+# into the formatted rows (or, for oc-doctor-local, the `{`-prefixed --json contract —
+# bats' `run` merges the two, so stdout would corrupt it). <mode> gates the note to
+# human mode for the caller that has machine modes (oc-doctor-local); callers without
+# one omit it and always report. One helper rather than an ad-hoc redirect per site,
+# which is the §18.3 house-style rule (item 10.7).
 # ---------------------------------------------------------------------------
-function __oc_doctor_note() {
-    local _mode="$1" _msg="$2"
+function __oc_note() {
+    local _msg="$1" _mode="${2:-human}"
     if [[ "$_mode" == "human" ]]
     then
-        printf '%s\n' "[oc-doctor-local] $_msg" >&2
+        printf '%s\n' "$_msg" >&2
     fi
 }
 
@@ -1204,7 +1212,7 @@ function oc-doctor-local() {
     if ! active_entry=$(__llm_active_entry 2>/dev/null)
     then
         active_entry=""
-        __oc_doctor_note "$output_mode" "could not read the active model from the registry"
+        __oc_note "[oc-doctor-local] could not read the active model from the registry" "$output_mode"
     fi
     if [[ -n "$active_entry" ]]
     then
@@ -1219,7 +1227,7 @@ function oc-doctor-local() {
             # An empty value still leaves gateway_health "unknown" below, but the
             # reason must not hide behind that verdict.
             _oc_health_json=""
-            __oc_doctor_note "$output_mode" "'oc-health --json' failed — gateway health reported as unknown"
+            __oc_note "[oc-doctor-local] 'oc-health --json' failed — gateway health reported as unknown" "$output_mode"
         fi
         # Accept both oc-health --json shapes: the enhanced Python checker
         # emits {"checks":[{"name":...,"status":...}]}, but the built-in
@@ -1236,7 +1244,8 @@ function oc-doctor-local() {
                 <<< "$_oc_health_json" 2>/dev/null)
         then
             api_health_status=""
-            __oc_doctor_note "$output_mode" "could not parse the health JSON — gateway health reported as unknown"
+            __oc_note "[oc-doctor-local] could not parse the health JSON — gateway health reads unknown" \
+                "$output_mode"
         fi
         if [[ "$api_health_status" == "OK" || "$api_health_status" == "ok" ]]
         then
@@ -1253,7 +1262,8 @@ function oc-doctor-local() {
         if ! provider_json=$(openclaw config get models.providers 2>/dev/null)
         then
             provider_json=""
-            __oc_doctor_note "$output_mode" "could not read models.providers — model-sync counts as not configured"
+            __oc_note "[oc-doctor-local] could not read models.providers — model-sync reads not configured" \
+                "$output_mode"
         fi
         if [[ -n "$provider_json" && "$provider_json" != "null" \
               && "$provider_json" == *"127.0.0.1:${LLM_SERVICE_PORT}"* ]]
