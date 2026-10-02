@@ -19,19 +19,25 @@ files = [
 warn_unused_configs = true
 show_error_codes = true
 
-# NAS-only third-party runtime deps — paho-mqtt, pyusb and bleak — are not
-# installed in this repo's venv or CI (the NAS runs them under /opt/bin/python3),
-# and complete stub packages do not exist (pyusb ships none).  Declaring exactly
-# these modules untyped keeps `mypy` a usable gate for nas/; it is scoped to the
-# three names, so a missing import anywhere else is still an error.
+# Optional third-party runtime deps that CI does not install, so `mypy` cannot
+# resolve them there:
+#   * paho-mqtt, pyusb and bleak — the NAS collectors' deps, run under
+#     /opt/bin/python3 on the NAS (pyusb ships no stubs at all);
+#   * torch and transformers — the GPU probe's deps (scripts/grpo-vram-probe.py
+#     imports them inside the functions that need a card), hundreds of MB that a
+#     lint job must not install.
+# Declaring exactly these modules untyped keeps `mypy` a usable CI gate, while a
+# missing import anywhere else is still an error.  Locally torch and transformers
+# ARE installed and ship py.typed, so this override only changes their CI
+# resolution — it does not stop checking them where they exist.
 [[tool.mypy.overrides]]
-module = ["paho.*", "usb.*", "bleak"]
+module = ["paho.*", "usb.*", "bleak", "torch", "transformers"]
 ignore_missing_imports = true
 
 # NOTE (2026-10-02): pyright has no per-module import override, so `pyright nas`
-# still reports reportMissingImports for the same three NAS-only deps above and
-# only those — no code-level findings remain.  `ruff check .` (the CI gate) and
-# `mypy` are clean including nas/.
+# still reports reportMissingImports for the deps genuinely absent from this box
+# (paho, usb, bleak) and only those — no code-level findings remain.  `ruff check .`
+# (the CI gate) and `mypy` are clean including nas/.
 [tool.pyright]
 include = ["bin", "scripts", "tests", "nas"]
 exclude = ["**/__pycache__", "**/frontend-g6/**", "scripts/build/**"]

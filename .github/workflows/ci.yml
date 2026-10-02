@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # workflow_dispatch is the second half of CI-PORTABILITY-001's non-push home for
+  # the unit suite: the `python-unit` job below runs on PRs AND on a manual dispatch
+  # (it is gated off `push`), so the suite can be run on demand without a push.
+  workflow_dispatch:
 
 # The CI verdict gate (inside tools/lint.sh) authenticates with ${{ github.token }} and reads
 # GET /repos/<owner>/<repo>/actions/runs to decide whether the published tip is red.  The repo's
@@ -290,13 +294,72 @@ jobs:
           # investigator's venv, the linuxbrew and python3.12 user-site installs, and
           # the ~/.local/bin wrapper that execs the investigator's.  Keep this pin and
           # the venv in step; a bump should move both deliberately.
-          pip install "ruff==0.15.20" "pytest==9.1.1" "pytest-timeout==2.4.0" pydantic networkx
+          # mypy is PINNED like ruff and pytest: it is the gate QWEN.md requires after
+          # any Python change, and an unpinned CI mypy could disagree with the venv's
+          # 2.3.1 on a rule set.  `requests` and `aiohttp` are installed so mypy can
+          # RESOLVE them (both ship py.typed); the heavy optional deps it cannot get
+          # (torch, transformers) are declared untyped in pyproject.toml instead.
+          pip install "ruff==0.15.20" "pytest==9.1.1" "pytest-timeout==2.4.0" "mypy==2.3.1" pydantic networkx requests aiohttp
           pip install tree-sitter tree-sitter-bash tree-sitter-python
 
       - name: Ruff lint
         run: ruff check .
 
+      - name: Mypy
+        # The repo requires mypy after any Python change, but CI never ran it — the
+        # gap card 50cef401 records.  The interpreter is CI's python 3.12 while
+        # pyproject targets 3.14; mypy is a static checker and targets the version in
+        # the config regardless of the interpreter it runs under (verified 2026-10-02
+        # in a python-3.12 venv holding only the CI dependency set).
+        run: mypy
+
       - name: Run Python tests
         run: python -m pytest tests/test_kgraph.py tests/test_kgraph_wiring.py tests/test_models.py tests/test_untested_modules.py tests/test_bats_lock_fixture.py tests/test_check_ci_status.py tests/test_oc_health_check.py tests/test_shell_command_scan.py -x --timeout=120 -q
+
+  python-unit:
+    name: Python Full Suite (PR / dispatch)
+    # CI-PORTABILITY-001 (card 1fb62638) re-scoped the unit suite OFF the push lane:
+    # its BATS-bridge files run the whole unit set, 66 cases of which are host-coupled
+    # and cannot be green on this self-hosted runner yet, so a push must not pay for
+    # them.  This job is that NON-PUSH home (PRs and workflow_dispatch, never push),
+    # which is why `if` gates it; the `python` job above covers the fast, portable
+    # subset on every push.
+    #
+    # It runs `pytest tests/` (testpaths in pytest.ini) rather than a hand-listed file
+    # set, so a NEW tests/test_*.py is picked up with no workflow edit — the acceptance
+    # in card 50cef401.  That same run covers the five files which previously ran
+    # NOWHERE: test_bats_bridge.py, test_bats_unittest.py, test_kv_recall_probe.py,
+    # test_oc_restart_check.py and test_grpo_vram_probe.py.  There is deliberately no
+    # `-x`: stopping at the first failure would hide every later one.
+    if: github.event_name != 'push'
+    runs-on: [self-hosted, wsl-console]
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      # The BATS-bridge suites call tools/lint.sh in places; install the pin so those
+      # cases run instead of skipping on a missing shellcheck.
+      - name: Install shellcheck (pinned)
+        run: sudo tools/install-shellcheck.sh
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "pytest==9.1.1" "pytest-timeout==2.4.0" pydantic networkx
+          pip install tree-sitter tree-sitter-bash tree-sitter-python
+
+      - name: Run the full Python suite
+        run: python -m pytest tests/ --timeout=120 -q
 
 # end of file
