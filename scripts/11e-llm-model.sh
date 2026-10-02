@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 58
+# Module Version: 59
+#   v59 (2026-10-02): llm-build reads CMake's OWN status, not `tail`'s, for both the
+#   configure and the build pipeline (`${PIPESTATUS[0]}`, the repo idiom).  With no
+#   pipefail set, `cmake ... 2>&1 | tail -5 || { … }` and `cmake --build … | tail -5`
+#   followed by `local rc=$?` both read tail's 0, so a failed cmake fell through to
+#   the "built" report and reused whatever binary was already on disk (card 50ab5c38).
 #   v58 (2026-10-02): __model_use guards __model_use_configure_params and
 #   __model_use_build_command with `|| return 1`, like their four neighbours.  The
 #   AUTOTUNE-002 no-ctx refusal (rc 21) was discarded by the unguarded call, so
@@ -3893,9 +3898,17 @@ function llm-build() {
             -DLLAMA_BUILD_SERVER=ON \
             -DLLAMA_BUILD_EXAMPLES=ON \
             -DLLAMA_BUILD_TESTS=ON \
-            2>&1 | tail -5 || {
-            __tac_info "Error" "CMake configuration failed" "$C_Error"; return 1
-        }
+            2>&1 | tail -5
+        # `tail` exits 0 whatever cmake did, so the pipeline's status proves nothing:
+        # read cmake's own from PIPESTATUS[0] (the repo idiom, scripts/04-aliases.sh).
+        # It must be captured in the SAME command as the `local` — a bare `local`
+        # between the pipeline and the assignment clobbers PIPESTATUS (measured), and
+        # the expansion happens before the builtin runs, so this form is correct.
+        local configure_rc=${PIPESTATUS[0]}
+        if [[ $configure_rc -ne 0 ]]; then
+            __tac_info "Error" "CMake configuration failed (exit=$configure_rc)" "$C_Error"
+            return 1
+        fi
     else
         __tac_info "Configure" "Using existing CMake cache (--quick)" "$C_Dim"
     fi
@@ -3903,7 +3916,10 @@ function llm-build() {
     # Build
     __tac_info "Build" "Compiling llama-server (${jobs} threads) ..." "$C_Info"
     cmake --build build --target llama-server -j"$jobs" 2>&1 | tail -5
-    local rc=$?
+    # cmake's status, not tail's: `$?` here was tail's 0, so a failed build read as
+    # success and the script then reported a binary it had not produced.  Captured in
+    # the same command as `local` — see the configure check above for why.
+    local rc=${PIPESTATUS[0]}
     if [[ $rc -ne 0 ]]; then
         __tac_info "Error" "Build failed (exit=$rc)" "$C_Error"
         return $rc
