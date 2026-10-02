@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 09f-oc-misc ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
+#   v12 (2026-10-02): oc-restore's workspace/agents swap now checks each move's status and
+#   rolls the .bak back into place on failure, so a FAILED restore can no longer delete the
+#   only pre-restore copy (AUDIT-2026-10-02, card cb501472).  The .bak is removed only after
+#   the replacement has arrived and is non-empty; the unsafe-path check moved BEFORE the swap.
 #   v11 (2026-10-01): oc-kgraph's --reindex runs through bin/heavy-job, so the explicit
 #   kgraph update is serialised against the box's other heavy jobs.  The server launch is
 #   deliberately NOT wrapped (a detached server would hold the lock forever).
@@ -444,6 +448,74 @@ function oc-backup() {
 }
 
 # ---------------------------------------------------------------------------
+# __oc_restore_dir — swap a staged directory into place with no loss window.
+#
+# oc-restore renames the current directory aside to <target>.bak, moves the
+# staged copy into place, then removes the aside copy.  Removal is only safe once
+# the replacement has demonstrably ARRIVED: if the staging move fails and the
+# aside copy is still deleted, the original state is gone and there is nothing to
+# roll back to (AUDIT-2026-10-02, card cb501472).  Returns 0 only when the
+# replacement is in place and non-empty; on any failure it puts the aside copy
+# back and returns 1.
+# ---------------------------------------------------------------------------
+function __oc_restore_dir() {
+    local target="$1" src="$2" label="$3"
+    # Refuse an unsafe destination BEFORE touching anything: a path we would not
+    # be willing to delete is also not one we should rename aside.
+    if [[ -z "$target" || "$target" == "/" || ! "$target" =~ ^(/home|/tmp|/dev/shm) ]]
+    then
+        __tac_info "Backup Cleanup" "[REFUSED - unsafe ${label} path: ${target:-EMPTY}]" "$C_Error"
+        return 1
+    fi
+    local bak="${target}.bak"
+    if [[ -e "$bak" ]]
+    then
+        __tac_info "Backup Cleanup" "[REFUSED - ${label} backup already present: $bak]" "$C_Error"
+        return 1
+    fi
+
+    local failure=""
+    if [[ -d "$target" ]] && ! mv "$target" "$bak"
+    then
+        failure="could not set aside the current ${label}"
+    fi
+    if [[ -z "$failure" ]] && ! mv "$src" "$target"
+    then
+        failure="could not move the staged ${label} into place"
+    fi
+    if [[ -z "$failure" ]]
+    then
+        # The replacement must be a NON-EMPTY directory before the aside copy —
+        # the only remaining original — is deleted.
+        local entry found=0
+        for entry in "$target"/* "$target"/.[!.]* "$target"/..?*
+        do
+            if [[ -e "$entry" || -L "$entry" ]]
+            then
+                found=1
+                break
+            fi
+        done
+        [[ "$found" -eq 1 ]] || failure="the restored ${label} is empty"
+    fi
+
+    if [[ -n "$failure" ]]
+    then
+        __tac_info "State Rollback" "[FAILED - ${failure}]" "$C_Error"
+        if [[ -d "$bak" ]]
+        then
+            # The .bak is the only copy of the original state at this point.
+            rm -rf "$target"
+            mv "$bak" "$target" \
+                || __tac_info "State Rollback" "[MANUAL RESTORE NEEDED - move ${bak} back to ${target}]" "$C_Error"
+        fi
+        return 1
+    fi
+    rm -rf "$bak"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # oc-restore — Rollback OpenClaw state from the most recent snapshot.
 # DESTRUCTIVE: Deletes current workspace and agents. Prompts for confirmation.
 # ---------------------------------------------------------------------------
@@ -544,28 +616,26 @@ function oc-restore() {
 
     # Only destroy directories that the backup will replace — a config-only
     # restore must NOT wipe workspace/agents if it has no replacements.
-    # Atomic swap: rename current → .bak, move new into place, then remove .bak.
-    # If the move fails, the .bak can be manually restored (no total-loss window).
+    # Atomic swap: rename current → .bak, move new into place, then remove .bak
+    # — but ONLY once the replacement has arrived, because the .bak is the only
+    # copy of the original while the move is in flight (see __oc_restore_dir).
     mkdir -p "$OC_ROOT" "$(dirname "$LLM_REGISTRY")"
+    local restore_failed=0
     if [[ -d "$tmp_restore/.openclaw/workspace" ]]
     then
-        [[ -d "$OC_WORKSPACE" ]] && mv "$OC_WORKSPACE" "${OC_WORKSPACE}.bak"
-        mv "$tmp_restore/.openclaw/workspace" "$OC_WORKSPACE"
-        if [[ -z "$OC_WORKSPACE" || "$OC_WORKSPACE" == "/" || ! "$OC_WORKSPACE" =~ ^(/home|/tmp|/dev/shm) ]]; then
-            __tac_info "Backup Cleanup" "[REFUSED - unsafe OC_WORKSPACE: ${OC_WORKSPACE:-EMPTY}]" "$C_Error"
-        else
-            rm -rf "${OC_WORKSPACE}.bak"
-        fi
+        __oc_restore_dir "$OC_WORKSPACE" "$tmp_restore/.openclaw/workspace" "workspace" \
+            || restore_failed=1
     fi
-    if [[ -d "$tmp_restore/.openclaw/agents" ]]
+    if [[ "$restore_failed" -eq 0 && -d "$tmp_restore/.openclaw/agents" ]]
     then
-        [[ -d "$OC_AGENTS" ]] && mv "$OC_AGENTS" "${OC_AGENTS}.bak"
-        mv "$tmp_restore/.openclaw/agents" "$OC_AGENTS"
-        if [[ -z "$OC_AGENTS" || "$OC_AGENTS" == "/" || ! "$OC_AGENTS" =~ ^(/home|/tmp|/dev/shm) ]]; then
-            __tac_info "Backup Cleanup" "[REFUSED - unsafe OC_AGENTS: ${OC_AGENTS:-EMPTY}]" "$C_Error"
-        else
-            rm -rf "${OC_AGENTS}.bak"
-        fi
+        __oc_restore_dir "$OC_AGENTS" "$tmp_restore/.openclaw/agents" "agents" \
+            || restore_failed=1
+    fi
+    if (( restore_failed ))
+    then
+        rm -rf "$tmp_restore"
+        __tac_info "State Rollback" "[FAILED - RESTORE ABORTED; originals kept or rolled back]" "$C_Error"
+        return 1
     fi
     # Restore config files if they were backed up
     [[ -f "$tmp_restore/.openclaw/openclaw.json" ]] \

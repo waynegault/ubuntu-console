@@ -183,7 +183,8 @@ jobs:
                tests/unit/34-contracts-falsification.bats \
                tests/unit/35-swallow-classify.bats \
                tests/unit/36-memory-index-check.bats \
-               tests/unit/37-transcript-retention.bats
+               tests/unit/37-transcript-retention.bats \
+               tests/unit/39-oc-restore-safety.bats
 
       - name: Run integration tests
         run: |
