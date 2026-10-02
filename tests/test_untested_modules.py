@@ -1960,6 +1960,167 @@ class TestMemoryImportStore(unittest.TestCase):
                         logs.output)
 
 
+class TestMemoryImportPhases(unittest.TestCase):
+    """Card 1c8dcf62: the phases split out of the 810-line importer.
+
+    Each case drives ONE phase directly with fixture rows, so a phase that only
+    works when the others ran first — or that quietly drops its input — fails
+    here instead of being hidden behind the end-to-end import.
+    """
+
+    def test_detect_schema_distinguishes_the_two_schemas_and_an_unrelated_db(self):
+        import sqlite3
+
+        from kgraph import memory_import
+
+        with tempfile.TemporaryDirectory() as td:
+            def schema_for(name, ddl):
+                db = os.path.join(td, name)
+                conn = sqlite3.connect(db)
+                try:
+                    for statement in ddl:
+                        conn.execute(statement)
+                    conn.commit()
+                    return memory_import._detect_schema(conn.cursor())
+                finally:
+                    conn.close()
+
+            self.assertEqual(
+                schema_for("store.db", ["CREATE TABLE files (path TEXT)",
+                                        "CREATE TABLE chunks (id TEXT)"]),
+                "files-chunks")
+            self.assertEqual(
+                schema_for("registry.db", ["CREATE TABLE memories (id TEXT)",
+                                           "CREATE TABLE memory_entities (entity_id TEXT)"]),
+                "registry")
+            self.assertEqual(schema_for("other.db", ["CREATE TABLE notes (x TEXT)"]), "unknown")
+            # Half a pair is NOT a schema: a probe that keyed on one table would
+            # send that branch's SQL at the other schema's columns.
+            self.assertEqual(schema_for("half-a.db", ["CREATE TABLE files (path TEXT)"]), "unknown")
+            self.assertEqual(schema_for("half-b.db", ["CREATE TABLE memories (id TEXT)"]), "unknown")
+
+    def test_ingest_files_emits_file_nodes_and_builds_the_reference_index(self):
+        """Catches a file phase that emits the node but leaves the index empty —
+        every later `references file` edge then silently stops resolving."""
+        import sqlite3
+
+        from kgraph import memory_import
+        from kgraph.models import GraphBuilder
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "files.db")
+            conn = sqlite3.connect(db)
+            try:
+                conn.execute("CREATE TABLE files (path TEXT)")
+                conn.executemany("INSERT INTO files VALUES (?)",
+                                 [("memory/notes.md",), (None,), ("",)])
+                conn.commit()
+                with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
+                    ingest = memory_import._MemoryStoreIngest(GraphBuilder())
+                ingest.ingest_files(conn.cursor())
+            finally:
+                conn.close()
+
+            graph = ingest.builder.build()
+            self.assertEqual(_node_ids(graph), {"file:memory/notes.md"})
+            self.assertEqual(_node(graph, "file:memory/notes.md").sources, ["file:memory/notes.md"])
+            # The lookup tables are the phase's other output.
+            self.assertEqual(ingest.file_node_ids, {"memory/notes.md": "file:memory/notes.md"})
+            self.assertEqual(ingest.file_path_by_basename, {"notes.md": ["memory/notes.md"]})
+            self.assertEqual(
+                memory_import._resolve_file_reference(
+                    "notes.md",
+                    file_node_ids=ingest.file_node_ids,
+                    file_paths=ingest.file_paths,
+                    file_path_by_basename=ingest.file_path_by_basename),
+                "memory/notes.md")
+
+    def test_ingest_chunks_emits_the_chunk_node_its_containment_edge_and_a_topic(self):
+        """Catches a chunk phase that skips the file roll-up edge, drops the
+        heading topic, or never hands its embedding to the similarity pass."""
+        import sqlite3
+
+        from kgraph import memory_import
+        from kgraph.models import GraphBuilder
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "chunks.db")
+            conn = sqlite3.connect(db)
+            try:
+                conn.execute("CREATE TABLE chunks (id TEXT, path TEXT, start_line INT,"
+                             " end_line INT, text TEXT, embedding TEXT)")
+                conn.execute("INSERT INTO chunks VALUES (?,?,?,?,?,?)",
+                             ("c1", "/docs/notes.md", 1, 2,
+                              "## Project: Launcher reliability\nProject: Launcher reliability\n",
+                              "[1.0, 0.0]"))
+                conn.commit()
+                with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
+                    ingest = memory_import._MemoryStoreIngest(GraphBuilder())
+                embeddings = ingest.ingest_chunks(conn.cursor())
+            finally:
+                conn.close()
+
+            graph = ingest.builder.build()
+            ids = _node_ids(graph)
+            self.assertIn("chunk:c1", ids)
+            # The containing file node is created even though the `files` table
+            # was never read, and the containment edge records the roll-up.
+            self.assertIn("file:/docs/notes.md", ids)
+            self.assertIn(("file:/docs/notes.md", "chunk:c1", "contains chunk"), _edge_keys(graph))
+            # Heading → topic node, and the heading's theme → typed project node.
+            self.assertIn("topic:project-launcher-reliability", ids)
+            self.assertIn("project:launcher-reliability", ids)
+            # The vector is COLLECTED for the similarity pass, not dropped.
+            self.assertEqual([(cid, vec) for cid, _path, vec, _mag in embeddings],
+                             [("chunk:c1", [1.0, 0.0])])
+
+    def test_emit_semantic_edges_keeps_the_strong_pair_and_drops_the_weak_one(self):
+        """Catches an emitter with no cut-off (every co-occurring pair becomes an
+        edge, making the semantic layer noise) or one that mis-scores the pair."""
+        from kgraph import memory_import
+        from kgraph.models import GraphBuilder
+
+        builder = GraphBuilder()
+        for node_id, ntype in (("decision:rotate-token", "decision"),
+                               ("project:launcher", "project"),
+                               ("topic:shallow-labels", "topic"),
+                               ("outcome:validated", "outcome")):
+            builder.add_node({"id": node_id, "label": node_id, "type": ntype})
+
+        with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
+            ingest = memory_import._MemoryStoreIngest(builder)
+        ingest.connect_semantic_concepts(["decision:rotate-token", "project:launcher"], "chunk:c1")
+        ingest.connect_semantic_concepts(["topic:shallow-labels", "outcome:validated"], "chunk:c1")
+        ingest.emit_semantic_edges()
+
+        graph = builder.build()
+        scored = next(e for e in graph.edges
+                      if e.source == "decision:rotate-token" and e.target == "project:launcher")
+        self.assertEqual((scored.label, scored.semantic_score, scored.cooccurrence_count),
+                         ("project decision", 0.85, 1))
+        scored_extra = scored.model_extra
+        assert scored_extra is not None, "scored edge must carry model_extra"
+        self.assertEqual(scored_extra["label_visibility"], "hover")
+        # A single weak co-occurrence (weight 0.5) does not clear the cut.
+        labels = {(e.source, e.target, e.label) for e in graph.edges}
+        self.assertNotIn(("outcome:validated", "topic:shallow-labels", "topic outcome"), labels)
+        self.assertNotIn(("topic:shallow-labels", "outcome:validated", "topic outcome"), labels)
+
+    def test_end_to_end_import_still_works_through_the_phases(self):
+        """The orchestrator still drives every phase for a real store DB."""
+        from kgraph import memory_import
+
+        with tempfile.TemporaryDirectory() as td:
+            db = os.path.join(td, "store.db")
+            _create_store_db(db)
+            with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
+                graph = memory_import.load_from_memory_db(db)
+        ids = _node_ids(graph)
+        self.assertIn("file:memory/notes.md", ids)
+        self.assertIn("chunk:c1", ids)
+        self.assertIn(("chunk:c3", "file:memory/notes.md", "references file"), _edge_keys(graph))
+
+
 class TestMemoryImportSchemaDetection(unittest.TestCase):
     """Behaviour on DBs that are not a memory registry at all."""
 
