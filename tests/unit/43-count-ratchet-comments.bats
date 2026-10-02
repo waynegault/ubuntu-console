@@ -25,7 +25,10 @@ setup() {
     mkdir -p "$SANDBOX/tools"
     TOOL="$SANDBOX/tools/count-ratchet.sh"
     export TOOL
-    cp "$REPO_ROOT/tools/count-ratchet.sh" "$TOOL"
+    # The tool is a WRAPPER plus its program module now (card dd96b63f): the wrapper
+    # execs the ratchet_check.py that sits beside it, so a fixture that copies the
+    # tool must copy both files or the copy cannot run.
+    cp "$REPO_ROOT/tools/count-ratchet.sh" "$REPO_ROOT/tools/ratchet_check.py" "$SANDBOX/tools/"
     BASELINE="$SANDBOX/tools/ratchet-baseline.tsv"
     export BASELINE
 
