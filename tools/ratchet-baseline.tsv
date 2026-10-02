@@ -49,12 +49,20 @@
 # 290 -> 289 and 6.7 fell 57 -> 56 as side effects of the same edit (a long multi-line
 # jq call re-wrapped, one ad-hoc stderr site removed).  Measured with this tool's own
 # counters; no other count moved.
+# 2026-10-02 (seventh re-baseline): CORPUS GROWTH, not drift - ONE new shell file,
+# bin/qwen-memory-style-patch.sh (commit 8f157a47). Measured with this tool's OWN counters
+# over that file ALONE: 8.1.8 +1 (one 190-char line), 10.7 +3 (three >&2 sites); every other
+# counter 0 there. The same commit's edit to bin/qwen-guard-selfheal.sh converted two
+# `[ -x ... ]` tests to `[[ -x ... ]]` (item 6.7's ask), so 6.7 FELL 56 -> 54 - recorded
+# because a fall is informational and the row must match reality.
+# Hand-edited, NOT --update, which rewrites this file as header+rows and strips these comments:
+# 6.7 56->54, 8.1.8 289->290, 10.7 182->185; the other six rows are unchanged.
 4.2.4	16
 4.2.6	12
 4.3.6	31
-6.7	56
-8.1.8	289
+6.7	54
+8.1.8	290
 9.5	107
 9.7	56
 10.4	50
-10.7	182
+10.7	185
