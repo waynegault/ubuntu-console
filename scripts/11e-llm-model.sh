@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 57
+# Module Version: 58
+#   v58 (2026-10-02): __model_use guards __model_use_configure_params and
+#   __model_use_build_command with `|| return 1`, like their four neighbours.  The
+#   AUTOTUNE-002 no-ctx refusal (rc 21) was discarded by the unguarded call, so
+#   `model use N` proceeded to launch a model with no certified context (card a370221d).
 #   v55 (2026-09-27): `model register-trained` (card UBC-GRPO-004) — a trained artifact
 #   lands as an ordinary registry row, with the two facts a row cannot carry (which
 #   benchmark, which held-out set) and the served prompt contract's revision recorded in
@@ -784,7 +788,7 @@ function __model_use_select_backend() {
 #   model_bytes, gpu_layers (initial from registry)
 # @sets threads, smi_cmd, gpu_layers, batch_size, ubatch_size, parallel_slots,
 #   free_vram_mb, type_k_val (all finalised)
-# @returns 0 always.
+# @returns 0 on success, 21 on the AUTOTUNE-002 no-ctx refusal.
 # ---------------------------------------------------------------------------
 function __model_use_configure_params() {
     # Prefer per-model registry values from model scan; fall back to global defaults.
@@ -1485,8 +1489,12 @@ function __model_use() {
     __model_use_ensure_downloaded || return 1
     __model_use_select_backend || return 1
     __model_use_claim_cuda_card || return 1
-    __model_use_configure_params
-    __model_use_build_command
+    # configure_params refuses with rc 21 when the registry row has no autotuned
+    # ctx and no --ctx-size was given (AUTOTUNE-002); that refusal must abort the
+    # launch, not be discarded and followed by a launch with no certified ctx
+    # (card a370221d).
+    __model_use_configure_params || return 1
+    __model_use_build_command || return 1
     # The launch's own read-back (the active-model pointer) can fail, and a failed
     # launch must not continue into the health wait as if it had started something
     # (card CLAIMED-SUCCESS-WITNESS-001): the subshell is already torn down by then,

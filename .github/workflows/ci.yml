@@ -185,7 +185,8 @@ jobs:
                tests/unit/36-memory-index-check.bats \
                tests/unit/37-transcript-retention.bats \
                tests/unit/39-oc-restore-safety.bats \
-               tests/unit/40-npm-cache-safety.bats
+               tests/unit/40-npm-cache-safety.bats \
+               tests/unit/41-model-use-autotune-refusal.bats
 
       - name: Run integration tests
         run: |
