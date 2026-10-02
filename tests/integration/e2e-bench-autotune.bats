@@ -43,6 +43,10 @@ REGISTRY
     export LLAMA_DRIVE_ROOT="$TAC_TEST_TMPDIR"
     export LLM_BENCH_MODEL_TIMEOUT=10
     export LLM_BENCH_LOCK_WAIT_SECONDS=1
+    # The box-wide heavy-job lock is SERIALISATION, not something a test should ever contend
+    # for: point it under the test tmpdir so a case can never queue behind — or hold off — a
+    # real heavy job on this box (and so a case that deliberately holds it is hermetic).
+    export HEAVY_JOB_LOCK="$TAC_TEST_TMPDIR/heavy-job.lock"
     # The pointer holds the model FILE name (the row's identity), not a row number.
     echo "tuned.gguf" > "$ACTIVE_LLM_FILE"
 }
@@ -97,11 +101,16 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     [[ "$src" == *"is not a model file in the registry"* ]]
 }
 
-@test "[B3] Autotune: autotune-model.sh sources shared helpers" {
+@test "[B3] Autotune: autotune-model.sh loads the shared helpers" {
     local src; src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
     [[ "$src" == *"source env.sh"* ]]
-    [[ "$src" == *"source scripts/11-llm-manager.sh"* ]]
-    [[ "$src" == *"source scripts/01-constants.sh"* ]]
+    # v73 (card f5bf87bc): the profile modules load through the shared sub-module loader,
+    # which REPORTS a missing or failing module, instead of the old
+    # `source scripts/<mod>.sh 2>/dev/null || true` that discarded both.  The pin is the
+    # loader call plus the modules it loads, not the removed literal.
+    [[ "$src" == *"__tac_source_submodules"* ]]
+    [[ "$src" == *"11-llm-manager"* ]]
+    [[ "$src" == *"01-constants"* ]]
 }
 
 @test "[B4] Bench: __model_bench restores INT, TERM, EXIT traps" {
@@ -157,6 +166,26 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     # checklist 5.4, Wayne's ruling 2026-09-17).  This test asserts the refusal is REPORTED,
     # and `2>/dev/null` here discarded exactly the output it was checking for.
     run timeout 5 bash -c "LLM_REGISTRY='$fake_registry' LLAMA_MODEL_DIR='$TAC_TEST_TMPDIR' bash '$REPO_ROOT/scripts/autotune-model.sh' 999 2>&1 || true"
+    [[ "$status" -ne 124 ]]
+    [[ "$output" == *"not found"* || "$output" == *"Error"* ]]
+}
+
+@test "[D6] Failure: an invalid model is refused BEFORE the heavy-job lock (never queues)" {
+    # The regression the red CI exposed: the heavy-job lock was taken at the very top of
+    # the script, so an invalid invocation QUEUED behind a running heavy job and only
+    # failed when that job finished — the caller's own timeout then reported 124 ("a
+    # hang") rather than the refusal the script owes.  Hold the lock for real and assert
+    # the refusal is still immediate.
+    "$REPO_ROOT/bin/heavy-job" sleep 10 &
+    local _hj=$!
+    local _i
+    for _i in $(seq 1 50); do
+        "$REPO_ROOT/bin/heavy-job" --status | grep -q BUSY && break
+        sleep 0.1
+    done
+    run timeout 3 bash "$REPO_ROOT/scripts/autotune-model.sh" 99999
+    kill "$_hj" 2>/dev/null || true
+    wait "$_hj" 2>/dev/null || true
     [[ "$status" -ne 124 ]]
     [[ "$output" == *"not found"* || "$output" == *"Error"* ]]
 }

@@ -3201,10 +3201,24 @@ EOF
     [[ "$src" == *'--cache-type-v" "${LLAMA_CACHE_TYPE_V:-${row_kv_v:-q8_0}}"'* ]]
 }
 
-@test "autotune: registry writers emit the v4 26-column header" {
-    grep -q 'in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill' "$REPO_ROOT/scripts/11b-llm-autotune.sh"
-    grep -q 'in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill' "$REPO_ROOT/scripts/11a-llm-registry.sh"
-    grep -q 'in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill' "$REPO_ROOT/scripts/11e-llm-model.sh"
+@test "autotune: the registry header has ONE definition the writers emit" {
+    # Card e0579318: the column set used to be a literal header in every writer, and they
+    # drifted — 11b carried a 32-column header against a 39-column registry, so its remap
+    # emitted the header alone and every tuning column stayed blank (the callers' `|| true`
+    # then swallowed the refusal).  The ONE definition is now LLM_REGISTRY_HEADER in
+    # 01-constants.sh; every writer emits THAT, not its own literal.
+    local _cols='in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill'
+    grep -q "$_cols" "$REPO_ROOT/scripts/01-constants.sh" || {
+        echo "01-constants.sh no longer defines the full registry header"
+        return 1
+    }
+    local f
+    for f in scripts/11b-llm-autotune.sh scripts/11a-llm-registry.sh scripts/11e-llm-model.sh; do
+        grep -q 'LLM_REGISTRY_HEADER' "$REPO_ROOT/$f" || {
+            echo "$f does not emit the shared LLM_REGISTRY_HEADER"
+            return 1
+        }
+    done
 }
 
 # end of file

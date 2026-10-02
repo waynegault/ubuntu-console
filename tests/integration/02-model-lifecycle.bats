@@ -27,6 +27,9 @@ setup() {
     # Override AFTER sourcing — 01-constants.sh sets LLM_REGISTRY to the real path.
     export LLM_REGISTRY="$TAC_TEST_TMPDIR/models.conf"
     export LLAMA_MODEL_DIR="$TAC_TEST_TMPDIR/models"
+    # Hermetic box-wide heavy-job lock: a case must never queue behind (or hold off) a
+    # real heavy job — see tests/unit/38-heavy-job.bats for why this is a test's own file.
+    export HEAVY_JOB_LOCK="$TAC_TEST_TMPDIR/heavy-job.lock"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -248,12 +251,16 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
     [[ "$output" == *"not found"* || "$output" == *"Error"* ]]
 }
 
-@test "integration: autotune-model.sh sources shared helpers" {
+@test "integration: autotune-model.sh loads the shared helpers" {
     local fn_src
     fn_src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
 
     [[ "$fn_src" == *"source env.sh"* ]]
-    [[ "$fn_src" == *"source scripts/11-llm-manager.sh"* ]]
+    # Card f5bf87bc: the profile modules load through the shared sub-module loader (it
+    # REPORTS a missing or failing module) instead of `source scripts/<mod>.sh 2>/dev/null
+    # || true`, so pin the loader call and the module name, not the removed literal.
+    [[ "$fn_src" == *"__tac_source_submodules"* ]]
+    [[ "$fn_src" == *"11-llm-manager"* ]]
 }
 
 @test "integration: autotune-model.sh has an mmap fallback via --load-mode" {

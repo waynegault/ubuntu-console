@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 73
+# Module Version: 74
+#   v74 (2026-10-02): the heavy-job lock is taken AFTER the command line is validated and
+#   the model resolved, not as the first thing after `set -uo pipefail`.  An invalid
+#   invocation (a typo, a row that does not exist, a missing file) is a refusal to start,
+#   so it must not queue behind a running heavy job: on a busy box it sat in
+#   `heavy-job: waiting for the heavy-job lock...` until the caller's own timeout (124),
+#   which is exactly what the fast-fail integration cases caught.
 #   v73 (2026-10-02): the profile modules are (re)loaded through the shared sub-module
 #   loader, which REPORTS a missing/failing module instead of discarding the error and the
 #   status (card f5bf87bc).
 #   v72 (2026-10-01): routes through bin/heavy-job so at most one saturating job runs on
-#   the box at a time — see the serialisation prologue after `set -uo pipefail`.
+#   the box at a time — see the serialisation prologue after the MODEL_PATH check.
 #   v71 (2026-09-29): _sampler_args takes the model path as an ARGUMENT (it read a
 #   caller-scope MODEL_PATH, so a direct call printed nothing and looked like dead
 #   wiring — three probes concluded wrongly); it refuses loudly with no argument.  The
@@ -62,13 +68,20 @@ set -uo pipefail
 # 16 cores and starve every interactive turn (bin/heavy-job records the
 # measurement).  Re-entrant — an enclosing heavy-job exports HEAVY_JOB_HELD, so a
 # nested call (the autotune batch calling this per-model autotuner) passes through
-# instead of deadlocking on the lock its own parent holds.  The path is resolved
-# from this script's own location so the guard does not depend on ~/.local/bin
-# being on PATH (a CI runner's PATH is not the box's).
-if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
-    exec "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/heavy-job" \
-        "${BASH:-bash}" "${BASH_SOURCE[0]}" "$@"
-fi
+# instead of deadlocking on the lock its own parent holds.
+#
+# The LOCK IS TAKEN FURTHER DOWN — after the command line has been validated and the
+# model resolved (see the prologue after the MODEL_PATH check).  It used to be the very
+# first thing after `set -uo pipefail`, which meant an INVALID invocation (a typo, a
+# missing row, a file that does not exist) queued behind a running heavy job and only
+# failed once that job finished.  Nothing above that point is heavy — argument parsing,
+# sourcing the console helpers, one registry lookup — whereas a refusal to start must be
+# immediate; on a box with a real autotune/bench holding the lock the old order sat in
+# `heavy-job: waiting...` until the caller's own timeout (124).
+#
+# Captured here because the `shift` below consumes the model argument, and the heavy-job
+# re-exec must replay the FULL command line into the locked re-entry.
+_AUTOTUNE_ORIG_ARGS=("$@")
 
 # The model may be given as a registry row NUMBER or as a model FILE name.  Both are
 # accepted; the FILE name is the authoritative identity, and a number is resolved to one
@@ -155,6 +168,22 @@ MODEL="$_num"
 
 MODEL_PATH="$LLAMA_MODEL_DIR/$file"
 [[ -f "$MODEL_PATH" ]] || { echo "Error: File not found: $MODEL_PATH" >&2; exit 1; }
+
+# ── Box-wide heavy-job serialisation (bin/heavy-job) ─────────────────────────
+# Taken HERE — after the argument/workload validation and the model resolution above —
+# and NOT at the top of the file: those checks are cheap and a failed one is a refusal to
+# start, so it must not queue behind a heavy job (see the note at the top of this file).
+# Everything from this point on can spawn llama-server and saturate all 16 cores, which is
+# exactly what must be serialised box-wide.  Re-entrant — an enclosing heavy-job exports
+# HEAVY_JOB_HELD, so a nested call (the autotune batch calling this per-model autotuner)
+# passes straight through instead of deadlocking on the lock its own parent holds.  The
+# path is resolved from this script's own location so the guard does not depend on
+# ~/.local/bin being on PATH (a CI runner's PATH is not the box's).
+if [[ -z "${HEAVY_JOB_HELD:-}" ]]; then
+    exec "$(cd "$_SELF_DIR/.." && pwd)/bin/heavy-job" \
+        "${BASH:-bash}" "$_SELF_DIR/$(basename "${BASH_SOURCE[0]}")" \
+        "${_AUTOTUNE_ORIG_ARGS[@]}"
+fi
 
 # The ctx this row currently has recorded, captured before anything can mutate it.  The
 # phase-4 descent adds it as a candidate, so a run cannot certify a DIFFERENT window from the
