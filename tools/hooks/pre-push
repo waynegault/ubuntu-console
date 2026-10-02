@@ -1,18 +1,39 @@
 #!/usr/bin/env bash
-# pre-push hook — refuse a push whose whole-tree gates fail.
+# pre-push hook — refuse a push whose whole-tree gates fail, JUDGED AGAINST THE CONTENT BEING PUSHED.
 #
-# WHY THIS EXISTS (2026-09-27).  Two commits were pushed in one session, each carrying a red
-# gate, because the author ran ONE gate (or the --staged form) and pushed:
+# WHY THIS EXISTS (2026-09-27; the judgement changed 2026-10-02 — card PREPUSH-VS-CI-001)
+#   Two commits were pushed in one session, each carrying a red gate, because the author ran ONE gate
+#   (or the --staged form) and pushed:
 #
-#   7957004a  §18.3 ratchet +2   — two of my own lines over 120 characters
-#   f516be8c  README count short — one test added, the documented count bumped by one, not two
+#     7957004a  §18.3 ratchet +2   — two of my own lines over 120 characters
+#     f516be8c  README count short — one test added, the documented count bumped by one, not two
 #
-# A push is what makes a red gate permanent: a workflow run is bound to its SHA, so it cannot
-# be re-run green, and deleting the run to make the history look clean is not something this
-# repo does.  Both classes are one command each to catch, and both are cheap compared with
-# the alternative — tools/lint.sh (whole tree) and tools/docs-sync-check.sh.  That is too slow
-# for every COMMIT, which is exactly why tools/hooks/pre-commit stays staged-file-only; this
-# hook runs once per PUSH instead, which is the last moment the tree can still be fixed.
+#   A push is what makes a red gate permanent: a workflow run is bound to its SHA, so it cannot
+#   be re-run green, and deleting the run to make the history look clean is not something this repo does.
+#
+#   WHAT THE 2026-09-27 VERSION GOT WRONG, measured 2026-10-02: it read the WORKING TREE while CI checks
+#   out the COMMIT, so a push could pass here and be red on the remote. Commit ed8d64cd went out carrying
+#   §18.3 counter 10.7 = 186 against its own baseline of 181 (RISEN 181 -> 186) while the tree on disk
+#   already held the fix (five ad-hoc stderr writes → one helper; baseline 182). This hook said yes; CI
+#   judged the commit and said no. Earlier the same day the same class ran the other way and left HEAD
+#   red for every pusher. "The gates passed" and "the content being pushed passes" are different
+#   statements, and a hook that reads the tree can only make the first.
+#
+# HOW (A gated by C — the priced options are on card PREPUSH-VS-CI-001)
+#   C — first, cheaply (~5 ms): does the tree match HEAD across everything the gates read? Tracked content
+#       must be identical (`git diff --quiet HEAD`, which covers staged and unstaged edits and deletions)
+#       and there must be NO untracked files, because the gates glob directories (scripts/, tools/, bin/,
+#       tests/) and would read a file CI does not have. The check is deliberately CONSERVATIVE — the whole
+#       tree, not a hand-listed read set — because a pathspec-narrowed version is sound only while that
+#       list is provably complete, and an incomplete list is the false green this hook exists to prevent.
+#       When C passes the tree IS the commit, so the gates run exactly as they always have, at no cost.
+#   A — only when C fails: materialise HEAD with `git worktree add --detach` and run the same gates THERE,
+#       so the verdict applies to exactly what is being pushed. Measured +~70 s for the gates themselves
+#       (~+350 s if tools/lint.sh runs contended). If HEAD cannot be materialised the hook REFUSES —
+#       falling back to a tree verdict is the defect being fixed.
+#   Cleanup is guaranteed on every exit path (EXIT/INT/TERM/HUP), and a sweep runs at the START of every
+#   invocation whatever the tree looks like — so a worktree left by a hook killed with SIGKILL is removed
+#   by the next push rather than lingering: this hook must never leak a worktree per push.
 #
 # TRACKED: tools/hooks/ is the source of truth for this repo's hooks.  Install with
 # `git config core.hooksPath <repo>/tools/hooks`; install.sh does that, and
@@ -22,13 +43,85 @@
 # CI_STATUS_ALLOW_UNKNOWN=1 for a known API outage), so a refusal here means a gate judged the
 # TREE wrong, never the network.  If you use --no-verify, say so in the same breath.
 #
-# stdin: <local ref> <local sha> <remote ref> <remote sha> — deliberately not read.  The
-# gates inspect the working tree, and a push sends committed content from that same tree.
+# stdin: <local ref> <local sha> <remote ref> <remote sha> — deliberately not read.  The pushed refs are
+# not what the gates judge; the content at HEAD is, and that is what this hook materialises when the tree
+# and HEAD disagree.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+WT_PREFIX="ubuntu-console-pre-push."
+WT_ROOT=""
+WT=""
+GATE_ROOT="$REPO_ROOT"
 rc=0
 
+# cleanup — remove the temporary worktree and its parent on EVERY exit path, including gate failures and
+# signals, and report loudly if it cannot: a leaked worktree per push would be worse than the bug this
+# hook fixes.
+cleanup() {
+    local _rc=$?
+    local _out=""
+    trap - EXIT INT TERM HUP
+    if [[ -n "$WT" ]]; then
+        if ! _out="$(git -C "$REPO_ROOT" worktree remove --force "$WT" 2>&1)"; then
+            echo "pre-push: WARNING: could not remove the temporary worktree $WT" >&2
+            printf 'pre-push:   %s\n' "$_out" >&2
+            echo "pre-push:   remove it by hand: git -C $REPO_ROOT worktree remove --force $WT" >&2
+        fi
+    fi
+    if [[ -n "$WT_ROOT" && -d "$WT_ROOT" ]]; then
+        if ! rm -rf "$WT_ROOT"; then
+            echo "pre-push: WARNING: could not remove $WT_ROOT — remove it by hand" >&2
+        fi
+    fi
+    exit "$_rc"
+}
+trap cleanup EXIT INT TERM HUP
+
+# sweep_stale_worktrees — a hook killed with SIGKILL cannot run its trap, so anything THIS hook left
+# behind is removed before a new worktree is created. The mktemp prefix keeps us off worktrees lanes
+# created by hand.
+sweep_stale_worktrees() {
+    local _path=""
+    local _parent=""
+    git -C "$REPO_ROOT" worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r _path; do
+        case "$_path" in
+            # Only our own prefix: a lane's hand-made worktree is not ours to remove.
+            */"$WT_PREFIX"*)
+                echo "pre-push: removing a worktree left by an interrupted hook: $_path" >&2
+                if ! git -C "$REPO_ROOT" worktree remove --force "$_path" >&2; then
+                    echo "pre-push: WARNING: could not remove $_path" >&2
+                fi
+                # ...and the mktemp directory it lived in, or a killed hook leaks one per push anyway.
+                _parent="$(dirname "$_path")"
+                if [[ "$_parent" == *"$WT_PREFIX"* && -d "$_parent" ]]; then
+                    if ! rm -rf "$_parent"; then
+                        echo "pre-push: WARNING: could not remove $_parent — remove it by hand" >&2
+                    fi
+                fi
+                ;;
+        esac
+    done
+    # Prune what is left when a killed hook's directory was itself removed: without this the repo keeps
+    # the dead worktree's metadata for ever. Failures are reported, never swallowed.
+    local _prune=""
+    if ! _prune="$(git -C "$REPO_ROOT" worktree prune --verbose 2>&1)"; then
+        echo "pre-push: WARNING: 'git worktree prune' failed — stale worktree metadata may remain" >&2
+        printf 'pre-push:   %s\n' "$_prune" >&2
+    fi
+}
+
+# tree_matches_head — gate C. Conservative by design: the whole tree, not a hand-listed read set.
+tree_matches_head() {
+    if ! git -C "$REPO_ROOT" diff --quiet HEAD; then
+        return 1
+    fi
+    local _untracked=""
+    _untracked="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)"
+    [[ -z "$_untracked" ]]
+}
+
+# run_gate — run one gate and record its verdict; the gate's own words are shown on failure, tailed.
 run_gate() {
     local _name="$1"; shift
     local _out
@@ -41,11 +134,39 @@ run_gate() {
     fi
 }
 
-echo "=== pre-push: whole-tree gates (about 1-2 min; that is the point) ==="
-run_gate "tools/lint.sh (whole tree)" "$REPO_ROOT/tools/lint.sh"
-run_gate "tools/docs-sync-check.sh" "$REPO_ROOT/tools/docs-sync-check.sh"
+echo "=== pre-push: whole-tree gates, judged against HEAD (about 1-2 min; that is the point) ==="
+
+# Always first, whatever the tree looks like: a worktree left by a hook killed with SIGKILL must not
+# outlive the next push, and the sweep costs one `git worktree list` (~5 ms).
+sweep_stale_worktrees
+
+if tree_matches_head; then
+    echo "pre-push: tree matches HEAD — the gates run on disk, which IS the pushed content (no added cost)"
+else
+    _changed="$(git -C "$REPO_ROOT" diff --name-only HEAD | wc -l | tr -d ' ')"
+    _untracked="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard | wc -l | tr -d ' ')"
+    echo "pre-push: tree differs from HEAD ($_changed modified, $_untracked untracked)."
+    echo "pre-push: a push sends the COMMIT and CI judges it — so the gates judge HEAD, not your tree."
+    WT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/${WT_PREFIX}XXXXXX")"
+    WT="$WT_ROOT/wt"
+    if ! git -C "$REPO_ROOT" worktree add --detach "$WT" HEAD >&2; then
+        echo "pre-push: REFUSING: could not materialise HEAD in a temporary worktree, and a verdict on the" >&2
+        echo "pre-push: working tree is NOT a verdict on the commit. Fix the temp-dir problem (${TMPDIR:-/tmp})" >&2
+        echo "pre-push: and push again." >&2
+        exit 1
+    fi
+    echo "pre-push: HEAD materialised at $WT — judging exactly the content being pushed"
+    GATE_ROOT="$WT"
+fi
+
+run_gate "tools/lint.sh (whole tree)" "$GATE_ROOT/tools/lint.sh"
+run_gate "tools/docs-sync-check.sh" "$GATE_ROOT/tools/docs-sync-check.sh"
 
 if (( rc != 0 )); then
+    if [[ "$GATE_ROOT" != "$REPO_ROOT" ]]; then
+        echo "pre-push: the COMMITTED content fails the gate above. Your working tree may already hold the" >&2
+        echo "pre-push: fix — commit it and push again; CI judges the commit, not your tree." >&2
+    fi
     echo "pre-push: fix the gate above and push again, or bypass knowingly with: git push --no-verify" >&2
 fi
 exit "$rc"
