@@ -6,6 +6,17 @@ on:
   pull_request:
     branches: [main]
 
+# The CI verdict gate (inside tools/lint.sh) authenticates with ${{ github.token }} and reads
+# GET /repos/<owner>/<repo>/actions/runs to decide whether the published tip is red.  The repo's
+# DEFAULT workflow permission is "read" — which does NOT include actions:read — measured
+# 2026-10-02: the gate got HTTP 403 ("Resource not accessible by integration") and FAILED BOTH
+# jobs (run 37052712483), turning every push red (card CI-RED-001).  The explicit grant below is
+# what lets the gate read the run list.  Keep actions:read if this block is ever changed, or the
+# gate goes blind again and reports UNKNOWN.
+permissions:
+  contents: read   # actions/checkout
+  actions: read    # the CI verdict gate's actions/runs query
+
 # Job timeouts.  NO job here set one, so a hung job was bounded only by GitHub's default
 # job timeout — 360 minutes, as the investigator's unittest.yml records (docs.github.com
 # was unreachable when this was written, so that figure is second-hand and worth
