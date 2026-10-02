@@ -7,10 +7,15 @@ Taken **2026-10-02** so the tooling stops being machine-local only: it now has h
 diffs. Source: `/mnt/HD/HD_a2/butler/` on the NAS. Copied over `ssh` and verified
 **md5-identical for all 41 files**.
 
-**Not yet gated.** `tools/lint.sh` and `tools/check-contracts.sh` enumerate `scripts/`,
-`tools/`, `bin/` — they do not look inside `nas/`, so shellcheck, the swallow check and the
-§18.3 ratchet do **not** cover this tooling yet. Extending the lint scope (or adding a
-nas-specific check) is the follow-up that makes the mirror a gate rather than just a record.
+**Partly gated — measured, not assumed.** The §18.3 count ratchet **does** count this
+tooling: it reads the tracked `*.sh` files, so mirroring the NAS took the corpus 92 → 108
+files and moved four counters (6.7 +23, 8.1.8 +6, 9.5 +17, 10.7 +5 — all pre-existing style
+of code that had no such convention), which is why landing this needed a deliberate
+re-baseline (`tools/ratchet-baseline.tsv`, eighth block). What does *not* reach here:
+`tools/lint.sh`'s whole-tree pass enumerates `scripts/`, `tools/`, `bin/`, so `nas/` gets no
+whole-tree shellcheck and no swallow classification. Its `.sh` files **are** shellchecked
+when staged (that is how the two fixes below were found). Extending the whole-tree scope is
+the follow-up that makes the mirror a full gate rather than a partial one.
 
 ## In scope (committed)
 
