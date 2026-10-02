@@ -231,6 +231,32 @@ It is `nvcc -compress-mode` applied to the linked CUDA library
 (`ggml/src/ggml-cuda/CMakeLists.txt:199`). It cannot affect weight residency and buys no
 VRAM headroom. (Corrected in the build guide's flag table.)
 
+### 2.6 Flash Attention on the OpenCL lane corrupts output past ~1.5k tokens **[measured, fixed]**
+
+`--flash-attn` defaults to `auto` (on). On the **Xe/OpenCL** lane this build's FA kernel is
+numerically broken beyond roughly 1.5k tokens of context: the attention output corrupts and the
+model emits unfinishable garbage. Measured boundaries on the real heartbeat prompt shape:
+
+| prompt tokens | FA `auto` (before) | `--flash-attn off` (after) |
+|---|---|---|
+| 1106 | clean | clean |
+| 1906 | **HTTP 500** | clean |
+| 2090 (real digest prompt) | **`##???????` garbage** | clean (`NO_REPLY`) |
+| 2506–3706 | **garbage** | clean |
+
+Symptom chain: model corruption → `common_chat_peg_parse: unparsed peg-native output: {"?????…`
+→ `srv operator(): {code:500,"The model produced output that does not match the expected
+peg-native format"}`. The peg-native parser was a **symptom converter, not the cause** — do not
+debug the parser.
+
+- **Not the weights:** identical failure for Qwen2.5-3B and Llama-3.2-3B (both fine on the CPU tier).
+- **Not memory:** no OpenCL alloc errors (`-61`/`-6`) in the log; the 2.6 GiB shared-pool caveat is unrelated.
+- **Fix:** append `--flash-attn off` to the lane's `ExecStart` (`systemd/llama-xe-qwen25-3b-chat.service`, ubuntu-console `86b0f2b2`).
+- **Also applies to the CUDA lane in principle** — if any lane degenerates on long prompts while
+  another is clean, A/B the attention path (`--flash-attn off`) before swapping models. Trade-off:
+  FA off costs a little long-context speed/memory (prompt-eval measured ~33 tok/s, marginal).
+- Full write-up: `~/.openclaw/workspace/docs/2026-10-02-lesson-xe-longctx-flash-attention.md`.
+
 ---
 
 ## 3. Capabilities the build has that we do not use
