@@ -1,9 +1,21 @@
 """CLI entry point for kgraph.
 
-Exposes all kgraph functionality via command-line flags:
-serve, update, watch, report, AST extraction, community detection,
-god nodes, query/path/explain, call-flow, MCP server, confidence,
-PR dashboard, benchmark, security audit, and git hooks.
+Each mode is a SUBCOMMAND — ``kgraph update``, ``kgraph query --query PATTERN``,
+``kgraph serve`` … — with one ``cmd_<mode>(args)`` handler per mode, looked up in
+``_DISPATCH``.  ``main`` does nothing but pick the command and call it.
+
+The legacy FLAT-FLAG form (``kgraph --update``) is still accepted: the repo's own
+git hooks (``tools/hooks/_kgraph-auto-rebuild``), the ``oc-kgraph`` launcher
+(``scripts/09f-oc-misc.sh``) and installed hooks written by an older ``kgraph``
+all invoke it that way, so dropping it would break first-party callers for no
+functional gain.  A flat-flag invocation is resolved to its command by
+``_resolve_legacy_command`` (the order the old if-chain used) and then runs the
+SAME handler the subcommand runs — there is one implementation per mode, two
+routes to it.
+
+``kgraph`` with no arguments is the default render: it writes the HTML viewer to
+a temp path (or ``--output``) and prints the command list; ``kgraph serve`` (or
+``--serve``) additionally serves that file.
 """
 
 from __future__ import annotations
@@ -15,6 +27,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 
 from pydantic import ValidationError
 
@@ -41,6 +54,25 @@ from .update import incremental_update, start_watch
 from .models import Graph
 
 logger = logging.getLogger(__name__)
+
+_DESCRIPTION = (
+    "Knowledge graph — server, AST extraction, community detection, MCP, and CLI tools"
+)
+
+# The marker an installed hook must carry for --uninstall-hook to remove it (and
+# for --install-hook to rewrite it rather than refuse).
+_KGRAPH_HOOK_MARKER = "kgraph auto-rebuild"
+
+# Written by --install-hook.  Kept on the LEGACY flag form on purpose: the hook may
+# run against an older installed `kgraph` on PATH, which does not know the
+# subcommand form yet.
+_KGRAPH_HOOK_BODY = (
+    "#!/bin/bash\n"
+    "# kgraph auto-rebuild post-commit hook\n"
+    'if command -v kgraph &>/dev/null; then\n'
+    '    kgraph --update --source-dir "$(git rev-parse --show-toplevel)" 2>&1 | sed \'s/^/[kgraph] /\'\n'
+    "fi\n"
+)
 
 
 def _load_graph(args: argparse.Namespace) -> dict:
@@ -92,12 +124,13 @@ def _load_graph(args: argparse.Namespace) -> dict:
     return SAMPLE_GRAPH
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        prog="kgraph",
-        description="Knowledge graph — server, AST extraction, community detection, MCP, and CLI tools",
-    )
+# ── options ──────────────────────────────────────────────────────────────────
+def _add_common_options(parser: argparse.ArgumentParser) -> None:
+    """Add every flag kgraph accepts.
 
+    One definition shared by the legacy parser and by every subcommand, so a
+    flag, its default and its help can never drift between the two routes.
+    """
     # ── Mode flags ──
     parser.add_argument("--serve", action="store_true", help="Serve graph viewer in browser")
     parser.add_argument("--update", action="store_true", help="Incremental rebuild from memory DB + AST")
@@ -168,283 +201,293 @@ def main() -> None:
     parser.add_argument("--author", help="Filter by author")
     parser.add_argument("--max-prs", type=int, default=30, help="Max PRs/merges to include")
 
-    args = parser.parse_args()
 
-    # ── Resolve graph early for modes that need it ──
-    needs_graph = bool(
-        args.query or args.path or args.explain
-        or args.communities or args.god_nodes or args.call_flow
-        or args.confidence or args.report or args.benchmark
-        or args.pr_dashboard
-    )
-    graph: dict = {}
-    if needs_graph:
-        graph = _load_graph(args)
+def _build_legacy_parser() -> argparse.ArgumentParser:
+    """The flat-flag parser: `kgraph --update …`, and `kgraph` with no flags."""
+    parser = argparse.ArgumentParser(prog="kgraph", description=_DESCRIPTION)
+    _add_common_options(parser)
+    return parser
 
-    # ── AST extraction ──
-    if args.ast:
-        if not args.repo:
-            print("Error: --repo is required for AST extraction", file=sys.stderr)
-            sys.exit(1)
-        if not ast_available():
-            print("Error: tree-sitter not available. Install with: pip install tree-sitter tree-sitter-bash tree-sitter-python", file=sys.stderr)
-            sys.exit(1)
-        raw = extract_repo_graph(args.repo, include_variables=args.ast_vars,
-                                 max_files=args.ast_max_files, subdirs=args.ast_subdirs)
-        g = tag_confidence(raw)
-        s = confidence_stats(g)
-        node_count = len(g.nodes)
-        edge_count = len(g.edges)
-        print(f"AST extraction: {node_count} nodes, {edge_count} edges")
-        print(f'Confidence: {s["extracted"]} EXTRACTED, {s["inferred"]} INFERRED, {s["ambiguous"]} AMBIGUOUS')
+
+def _build_subcommand_parser() -> argparse.ArgumentParser:
+    """The subcommand parser: `kgraph <command> [flags]`."""
+    parser = argparse.ArgumentParser(prog="kgraph", description=_DESCRIPTION)
+    common = argparse.ArgumentParser(add_help=False)
+    _add_common_options(common)
+    sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+    for name, help_text in _COMMANDS:
+        sub.add_parser(name, parents=[common], help=help_text, description=help_text)
+    return parser
+
+
+# ── handlers: one per mode, each reading only the flags it owns ──────────────
+def cmd_ast(args: argparse.Namespace) -> None:
+    if not args.repo:
+        print("Error: --repo is required for AST extraction", file=sys.stderr)
+        sys.exit(1)
+    if not ast_available():
+        print("Error: tree-sitter not available. Install with: pip install tree-sitter tree-sitter-bash tree-sitter-python", file=sys.stderr)
+        sys.exit(1)
+    raw = extract_repo_graph(args.repo, include_variables=args.ast_vars,
+                             max_files=args.ast_max_files, subdirs=args.ast_subdirs)
+    g = tag_confidence(raw)
+    s = confidence_stats(g)
+    node_count = len(g.nodes)
+    edge_count = len(g.edges)
+    print(f"AST extraction: {node_count} nodes, {edge_count} edges")
+    print(f'Confidence: {s["extracted"]} EXTRACTED, {s["inferred"]} INFERRED, {s["ambiguous"]} AMBIGUOUS')
+    out_data = g.to_dict()
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(out_data, f, indent=2)
+        print(f"Saved to {args.output}")
+    else:
+        print(json.dumps(out_data, indent=2))
+
+
+def cmd_wiring(args: argparse.Namespace) -> None:
+    if not args.repo:
+        print("Error: --repo is required for wiring analysis", file=sys.stderr)
+        sys.exit(1)
+    from .wiring import analyze_wiring, format_wiring_report, wiring_summary
+    report = analyze_wiring(args.repo)
+    print(format_wiring_report(report, show_all=args.wiring_all))
+    print(f"\nSUMMARY: {wiring_summary(report)}")
+
+
+def _hooks_dir_or_exit() -> str:
+    """The active hooks dir, or exit 1 with the reason (shared by both hook modes)."""
+    hook_dir = _find_git_hooks_dir()
+    if not hook_dir:
+        print("Error: not in a git repository", file=sys.stderr)
+        sys.exit(1)
+    if not os.path.isdir(hook_dir):
+        print(f"Error: hooks directory {hook_dir} does not exist", file=sys.stderr)
+        sys.exit(1)
+    return hook_dir
+
+
+def cmd_install_hook(args: argparse.Namespace) -> None:
+    hook_dir = _hooks_dir_or_exit()
+    for name in ("post-commit", "post-merge"):
+        path = os.path.join(hook_dir, name)
+        if os.path.exists(path):
+            # Never clobber a hook kgraph did not install (pre-commit, husky, …):
+            # overwriting one would silently break the user's existing tooling.
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as existing:
+                    current = existing.read()
+            except OSError as exc:
+                print(f"Skipped {name}: cannot read existing hook ({exc})", file=sys.stderr)
+                continue
+            if _KGRAPH_HOOK_MARKER not in current:
+                print(f"Skipped {name}: existing hook was not installed by kgraph (left untouched)", file=sys.stderr)
+                continue
+        with open(path, "w") as f:
+            f.write(_KGRAPH_HOOK_BODY)
+        os.chmod(path, 0o755)
+        print(f"Installed {name} hook in {hook_dir}")
+
+
+def cmd_uninstall_hook(args: argparse.Namespace) -> None:
+    hook_dir = _hooks_dir_or_exit()
+    for name in ("post-commit", "post-merge"):
+        path = os.path.join(hook_dir, name)
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as existing:
+                current = existing.read()
+        except OSError as exc:
+            # Fail closed: if we cannot prove it is ours, keep it.
+            print(f"Skipped {name}: cannot read hook ({exc})", file=sys.stderr)
+            continue
+        if _KGRAPH_HOOK_MARKER not in current:
+            print(f"Skipped {name}: not a kgraph hook (left untouched)", file=sys.stderr)
+            continue
+        os.remove(path)
+        print(f"Removed {path}")
+
+
+def cmd_update(args: argparse.Namespace) -> None:
+    graph_db = os.path.expanduser(args.graph_db)
+    # Explicit --import-db overrides auto-detect; otherwise pass None so
+    # incremental_update resolves ALL memory DB candidates (multi-registry).
+    mem_db = args.import_db or None
+    src = args.source_dir or args.repo
+    g = incremental_update(graph_db, mem_db_path=mem_db, source_dir=src,
+                           ast=bool(src), ast_vars=args.ast_vars,
+                           ast_max_files=args.ast_max_files, ast_subdirs=args.ast_subdirs,
+                           include_all=args.include_all)
+    s = confidence_stats(g)
+    node_count = len(g.nodes)
+    edge_count = len(g.edges)
+    print(f"Update complete: {node_count} nodes, {edge_count} edges")
+    print(f'  EXTRACTED: {s["extracted"]}, INFERRED: {s["inferred"]}, AMBIGUOUS: {s["ambiguous"]}')
+    if args.output:
         out_data = g.to_dict()
-        if args.output:
-            with open(args.output, "w", encoding="utf-8") as f:
-                json.dump(out_data, f, indent=2)
-            print(f"Saved to {args.output}")
-        else:
-            print(json.dumps(out_data, indent=2))
-        return
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(out_data, f, indent=2)
 
-    # ── Wiring analysis ──
-    if args.wiring:
-        if not args.repo:
-            print("Error: --repo is required for wiring analysis", file=sys.stderr)
-            sys.exit(1)
-        from .wiring import analyze_wiring, format_wiring_report, wiring_summary
-        report = analyze_wiring(args.repo)
-        print(format_wiring_report(report, show_all=args.wiring_all))
-        print(f"\nSUMMARY: {wiring_summary(report)}")
-        return
 
-    # ── Git hooks ──
-    if args.install_hook or args.uninstall_hook:
-        hook_dir = _find_git_hooks_dir()
-        if not hook_dir:
-            print("Error: not in a git repository", file=sys.stderr)
-            sys.exit(1)
-        if not os.path.isdir(hook_dir):
-            print(f"Error: hooks directory {hook_dir} does not exist", file=sys.stderr)
-            sys.exit(1)
+def cmd_watch(args: argparse.Namespace) -> None:
+    graph_db = os.path.expanduser(args.graph_db)
+    mem_db = args.import_db or resolve_memory_db_path()
+    src = args.source_dir or args.repo
+    start_watch(graph_db, mem_db_path=mem_db, source_dir=src,
+                interval=args.watch_interval, ast=bool(src),
+                ast_vars=args.ast_vars, ast_max_files=args.ast_max_files,
+                ast_subdirs=args.ast_subdirs)
 
-        marker = "kgraph auto-rebuild"
-        if args.install_hook:
-            hook = (
-                "#!/bin/bash\n"
-                "# kgraph auto-rebuild post-commit hook\n"
-                'if command -v kgraph &>/dev/null; then\n'
-                '    kgraph --update --source-dir "$(git rev-parse --show-toplevel)" 2>&1 | sed \'s/^/[kgraph] /\'\n'
-                "fi\n"
-            )
-            for name in ("post-commit", "post-merge"):
-                path = os.path.join(hook_dir, name)
-                if os.path.exists(path):
-                    # Never clobber a hook kgraph did not install (pre-commit,
-                    # husky, …): overwriting one would silently break the
-                    # user's existing tooling.
-                    try:
-                        with open(path, "r", encoding="utf-8", errors="replace") as existing:
-                            current = existing.read()
-                    except OSError as exc:
-                        print(f"Skipped {name}: cannot read existing hook ({exc})", file=sys.stderr)
-                        continue
-                    if marker not in current:
-                        print(f"Skipped {name}: existing hook was not installed by kgraph (left untouched)", file=sys.stderr)
-                        continue
-                with open(path, "w") as f:
-                    f.write(hook)
-                os.chmod(path, 0o755)
-                print(f"Installed {name} hook in {hook_dir}")
-        else:
-            for name in ("post-commit", "post-merge"):
-                path = os.path.join(hook_dir, name)
-                if not os.path.exists(path):
-                    continue
-                try:
-                    with open(path, "r", encoding="utf-8", errors="replace") as existing:
-                        current = existing.read()
-                except OSError as exc:
-                    # Fail closed: if we cannot prove it is ours, keep it.
-                    print(f"Skipped {name}: cannot read hook ({exc})", file=sys.stderr)
-                    continue
-                if marker not in current:
-                    print(f"Skipped {name}: not a kgraph hook (left untouched)", file=sys.stderr)
-                    continue
-                os.remove(path)
-                print(f"Removed {path}")
-        return
 
-    # ── Update mode ──
-    if args.update:
-        graph_db = os.path.expanduser(args.graph_db)
-        # Explicit --import-db overrides auto-detect; otherwise pass None so
-        # incremental_update resolves ALL memory DB candidates (multi-registry).
-        mem_db = args.import_db or None
-        src = args.source_dir or args.repo
-        g = incremental_update(graph_db, mem_db_path=mem_db, source_dir=src,
-                               ast=bool(src), ast_vars=args.ast_vars,
-                               ast_max_files=args.ast_max_files, ast_subdirs=args.ast_subdirs,
-                               include_all=args.include_all)
-        s = confidence_stats(g)
-        node_count = len(g.nodes)
-        edge_count = len(g.edges)
-        print(f"Update complete: {node_count} nodes, {edge_count} edges")
-        print(f'  EXTRACTED: {s["extracted"]}, INFERRED: {s["inferred"]}, AMBIGUOUS: {s["ambiguous"]}')
-        if args.output:
-            out_data = g.to_dict()
-            with open(args.output, "w", encoding="utf-8") as f:
-                json.dump(out_data, f, indent=2)
-        return
+def cmd_mcp(args: argparse.Namespace) -> None:
+    from .mcp_server import serve_mcp
+    serve_mcp(host=args.host, port=args.port or 8331, graph_db=args.graph_db)
 
-    # ── Watch mode ──
-    if args.watch:
-        graph_db = os.path.expanduser(args.graph_db)
-        mem_db = args.import_db or resolve_memory_db_path()
-        src = args.source_dir or args.repo
-        start_watch(graph_db, mem_db_path=mem_db, source_dir=src,
-                    interval=args.watch_interval, ast=bool(src),
-                    ast_vars=args.ast_vars, ast_max_files=args.ast_max_files,
-                    ast_subdirs=args.ast_subdirs)
-        return
 
-    # ── MCP server ──
-    if args.mcp:
-        from .mcp_server import serve_mcp
-        serve_mcp(host=args.host, port=args.port or 8331, graph_db=args.graph_db)
-        return
+def cmd_remove_source(args: argparse.Namespace) -> None:
+    from .graph_db import save_to_graph_db
+    graph_db = os.path.expanduser(args.graph_db)
+    if not os.path.exists(graph_db):
+        print(f"Error: graph DB {graph_db} does not exist", file=sys.stderr)
+        sys.exit(1)
+    g = load_from_graph_db(graph_db)
+    counts = g.remove_source(args.remove_source)
+    save_to_graph_db(graph_db, g)
+    print(f"Removed source '{args.remove_source}': "
+          f"{counts['nodes_removed']} nodes deleted, {counts['nodes_updated']} nodes updated, "
+          f"{counts['edges_removed']} edges deleted, {counts['edges_updated']} edges updated")
 
-    # ── Remove one source document's assertions ──
-    if args.remove_source:
-        from .graph_db import save_to_graph_db
-        graph_db = os.path.expanduser(args.graph_db)
-        if not os.path.exists(graph_db):
-            print(f"Error: graph DB {graph_db} does not exist", file=sys.stderr)
-            sys.exit(1)
-        g = load_from_graph_db(graph_db)
-        counts = g.remove_source(args.remove_source)
-        save_to_graph_db(graph_db, g)
-        print(f"Removed source '{args.remove_source}': "
-              f"{counts['nodes_removed']} nodes deleted, {counts['nodes_updated']} nodes updated, "
-              f"{counts['edges_removed']} edges deleted, {counts['edges_updated']} edges updated")
-        return
 
-    # ── Query tools ──
-    if args.query:
-        results = query_nodes(graph, args.query)
-        if not results:
-            print(f'No nodes matching "{args.query}"')
-        else:
-            print(f"{len(results)} matching nodes:")
-            for n in results:
-                print(f'  [{n.get("type", "?")}] {n.get("label", "")} ({n.get("id", "")}) '
-                      f'score={n.get("score", 0):g} match={n.get("match", "?")}')
-        return
+def cmd_query(args: argparse.Namespace) -> None:
+    if args.query is None:
+        print("Error: --query PATTERN is required for the query command", file=sys.stderr)
+        sys.exit(1)
+    graph = _load_graph(args)
+    results = query_nodes(graph, args.query)
+    if not results:
+        print(f'No nodes matching "{args.query}"')
+    else:
+        print(f"{len(results)} matching nodes:")
+        for n in results:
+            print(f'  [{n.get("type", "?")}] {n.get("label", "")} ({n.get("id", "")}) '
+                  f'score={n.get("score", 0):g} match={n.get("match", "?")}')
 
-    if args.path:
-        # Name the mode in the output: "the path" is a different path in each
-        # mode, and the default (bfs) must not be assumed silently.
-        result = find_path_result(graph, args.path[0], args.path[1], mode=args.path_mode)
-        print(format_path(result["edges"], mode=result["mode"]))
-        return
 
-    if args.explain:
-        print(format_explain(explain_node(graph, args.explain)))
-        return
+def cmd_path(args: argparse.Namespace) -> None:
+    if args.path is None:
+        print("Error: --path SOURCE TARGET is required for the path command", file=sys.stderr)
+        sys.exit(1)
+    graph = _load_graph(args)
+    # Name the mode in the output: "the path" is a different path in each mode,
+    # and the default (bfs) must not be assumed silently.
+    result = find_path_result(graph, args.path[0], args.path[1], mode=args.path_mode)
+    print(format_path(result["edges"], mode=result["mode"]))
 
-    # ── Communities / god nodes ──
-    if args.communities:
-        if not communities_available():
-            print("Error: networkx not available. pip install networkx", file=sys.stderr)
-            sys.exit(1)
-        # Prefer the digest cached with the graph (written by --update) and detect
-        # only when there is none, so this is a READ wherever a digest exists.
-        cached = Graph.from_dict(graph).meta.communities
-        if cached:
-            clusters = cached
-        else:
-            g = detect_communities(graph, method=args.community_method, min_community_size=args.min_community_size)
-            clusters = g.meta.communities if hasattr(g.meta, "communities") else []
-        if not clusters:
-            print("No communities detected")
-        else:
-            origin = "cached digest" if cached else "detected now"
-            print(f"{len(clusters)} communities ({origin}):")
-            for c in clusters:
-                print(f'  {c["label"]} — {c["size"]} members')
-                central = c.get("central_nodes") or []
-                if central:
-                    names = " · ".join(str(n.get("label", n.get("id", ""))) for n in central)
-                    print(f'    central: {names}')
-        return
 
-    if args.god_nodes:
-        if not communities_available():
-            print("Error: networkx not available. pip install networkx", file=sys.stderr)
-            sys.exit(1)
-        gods = find_god_nodes(graph, top_n=args.top_god_nodes)
-        if not gods:
-            print("No god nodes found")
-        else:
-            print(f"Top {len(gods)} god nodes:")
-            for idx, gn in enumerate(gods, 1):
-                print(f'  {idx}. {gn["label"][:35]:35s} score={gn["composite_score"]:.3f}  deg={gn["degree"]}')
-        return
+def cmd_explain(args: argparse.Namespace) -> None:
+    if args.explain is None:
+        print("Error: --explain NODE is required for the explain command", file=sys.stderr)
+        sys.exit(1)
+    graph = _load_graph(args)
+    print(format_explain(explain_node(graph, args.explain)))
 
-    # ── Call flow ──
-    if args.call_flow:
-        if args.output and args.output.endswith(".html"):
-            html = generate_call_flow_html(graph)
-            with open(args.output, "w", encoding="utf-8") as f:
-                f.write(html)
-            print(f"Written to {args.output}")
-        else:
-            print(generate_call_flow_mermaid(graph))
-        return
 
-    # ── Confidence stats ──
-    if args.confidence:
-        g = tag_confidence(graph)
-        s = confidence_stats(g)
-        print("Edge confidence:")
-        print(f'  Total: {s["total"]}')
-        print(f'  EXTRACTED: {s["extracted"]} ({s["extracted_pct"]}%)')
-        print(f'  INFERRED:  {s["inferred"]} ({s["inferred_pct"]}%)')
-        print(f'  AMBIGUOUS: {s["ambiguous"]} ({s["ambiguous_pct"]}%)')
-        return
+def cmd_communities(args: argparse.Namespace) -> None:
+    if not communities_available():
+        print("Error: networkx not available. pip install networkx", file=sys.stderr)
+        sys.exit(1)
+    graph = _load_graph(args)
+    # Prefer the digest cached with the graph (written by --update) and detect
+    # only when there is none, so this is a READ wherever a digest exists.
+    cached = Graph.from_dict(graph).meta.communities
+    if cached:
+        clusters = cached
+    else:
+        g = detect_communities(graph, method=args.community_method, min_community_size=args.min_community_size)
+        clusters = g.meta.communities if hasattr(g.meta, "communities") else []
+    if not clusters:
+        print("No communities detected")
+    else:
+        origin = "cached digest" if cached else "detected now"
+        print(f"{len(clusters)} communities ({origin}):")
+        for c in clusters:
+            print(f'  {c["label"]} — {c["size"]} members')
+            central = c.get("central_nodes") or []
+            if central:
+                names = " · ".join(str(n.get("label", n.get("id", ""))) for n in central)
+                print(f'    central: {names}')
 
-    # ── GRAPH_REPORT.md ──
-    if args.report:
-        print(generate_report(graph, outpath=args.report_path))
-        return
 
-    # ── PR dashboard ──
-    if args.pr_dashboard:
-        from .pr_dashboard import generate_pr_dashboard
-        out = args.output or "kgraph_pr_dashboard.html"
-        generate_pr_dashboard(os.getcwd(), days=args.days, graph_data=graph,
-                              output_path=out, author=args.author, max_prs=args.max_prs)
-        print(f"Written to {out}")
-        return
+def cmd_god_nodes(args: argparse.Namespace) -> None:
+    if not communities_available():
+        print("Error: networkx not available. pip install networkx", file=sys.stderr)
+        sys.exit(1)
+    graph = _load_graph(args)
+    gods = find_god_nodes(graph, top_n=args.top_god_nodes)
+    if not gods:
+        print("No god nodes found")
+    else:
+        print(f"Top {len(gods)} god nodes:")
+        for idx, gn in enumerate(gods, 1):
+            print(f'  {idx}. {gn["label"][:35]:35s} score={gn["composite_score"]:.3f}  deg={gn["degree"]}')
 
-    # ── Benchmark ──
-    if args.benchmark:
-        from .benchmark import benchmark_graph_vs_raw, print_benchmark
-        out = args.output or "benchmark_results.json"
-        result = benchmark_graph_vs_raw(graph, output_path=out)
-        print_benchmark(result)
-        return
 
-    # ── Security audit ──
-    if args.audit:
-        audit_path = os.path.join(os.path.dirname(__file__), "audit_security.md")
-        if os.path.exists(audit_path):
-            with open(audit_path) as f:
-                print(f.read())
-        else:
-            print("Security audit report not found at", audit_path)
-        return
+def cmd_call_flow(args: argparse.Namespace) -> None:
+    graph = _load_graph(args)
+    if args.output and args.output.endswith(".html"):
+        html = generate_call_flow_html(graph)
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(html)
+        print(f"Written to {args.output}")
+    else:
+        print(generate_call_flow_mermaid(graph))
 
-    # ── Default: generate HTML + optionally serve ──
+
+def cmd_confidence(args: argparse.Namespace) -> None:
+    graph = _load_graph(args)
+    g = tag_confidence(graph)
+    s = confidence_stats(g)
+    print("Edge confidence:")
+    print(f'  Total: {s["total"]}')
+    print(f'  EXTRACTED: {s["extracted"]} ({s["extracted_pct"]}%)')
+    print(f'  INFERRED:  {s["inferred"]} ({s["inferred_pct"]}%)')
+    print(f'  AMBIGUOUS: {s["ambiguous"]} ({s["ambiguous_pct"]}%)')
+
+
+def cmd_report(args: argparse.Namespace) -> None:
+    graph = _load_graph(args)
+    print(generate_report(graph, outpath=args.report_path))
+
+
+def cmd_pr_dashboard(args: argparse.Namespace) -> None:
+    from .pr_dashboard import generate_pr_dashboard
+    graph = _load_graph(args)
+    out = args.output or "kgraph_pr_dashboard.html"
+    generate_pr_dashboard(os.getcwd(), days=args.days, graph_data=graph,
+                          output_path=out, author=args.author, max_prs=args.max_prs)
+    print(f"Written to {out}")
+
+
+def cmd_benchmark(args: argparse.Namespace) -> None:
+    from .benchmark import benchmark_graph_vs_raw, print_benchmark
+    graph = _load_graph(args)
+    out = args.output or "benchmark_results.json"
+    result = benchmark_graph_vs_raw(graph, output_path=out)
+    print_benchmark(result)
+
+
+def cmd_audit(args: argparse.Namespace) -> None:
+    audit_path = os.path.join(os.path.dirname(__file__), "audit_security.md")
+    if os.path.exists(audit_path):
+        with open(audit_path) as f:
+            print(f.read())
+    else:
+        print("Security audit report not found at", audit_path)
+
+
+def cmd_render(args: argparse.Namespace) -> None:
+    """The default mode: write the HTML viewer, then serve it or print the commands."""
     graph_data = _load_graph(args)
     outpath = args.output or os.path.join(tempfile.gettempdir(), "kgraph.html")
     generate_html(graph_data, outpath)
@@ -456,7 +499,120 @@ def main() -> None:
                    graph_db_path=os.path.expanduser(args.graph_db),
                    view_mode=args.view, semantic_threshold=args.semantic_threshold)
     else:
-        parser.print_help()
+        _build_subcommand_parser().print_help()
+
+
+def cmd_serve(args: argparse.Namespace) -> None:
+    args.serve = True
+    cmd_render(args)
+
+
+# ── dispatch ─────────────────────────────────────────────────────────────────
+# The subcommand table: `kgraph <name>` → handler.  `html` is the default render
+# (the legacy no-mode invocation) and `serve` is that render plus the server.
+_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("serve", "Write the HTML viewer and serve it in the browser"),
+    ("html", "Write the HTML viewer (the default mode)"),
+    ("update", "Incremental rebuild from the memory DB + AST"),
+    ("watch", "Watch files and auto-rebuild"),
+    ("report", "Generate GRAPH_REPORT.md"),
+    ("ast", "Extract AST code concepts from a repo"),
+    ("wiring", "Analyze source-tree wiring (stdlib AST import graph)"),
+    ("communities", "Detect communities/clusters"),
+    ("god-nodes", "List the most central nodes"),
+    ("call-flow", "Generate call-flow HTML/Mermaid"),
+    ("mcp", "Serve the MCP JSON-RPC server"),
+    ("confidence", "Show confidence stats for edges"),
+    ("pr-dashboard", "Generate the PR dashboard HTML"),
+    ("benchmark", "Run the token-reduction benchmark"),
+    ("audit", "Show the security audit report"),
+    ("install-hook", "Install the git post-commit/post-merge hooks"),
+    ("uninstall-hook", "Remove the git post-commit/post-merge hooks"),
+    ("query", "Search nodes matching a pattern (--query)"),
+    ("path", "Path between two nodes (--path SOURCE TARGET)"),
+    ("explain", "Describe a node and its connections (--explain NODE)"),
+    ("remove-source", "Remove one source document's assertions (--remove-source KEY)"),
+)
+
+_DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
+    "serve": cmd_serve,
+    "html": cmd_render,
+    "update": cmd_update,
+    "watch": cmd_watch,
+    "report": cmd_report,
+    "ast": cmd_ast,
+    "wiring": cmd_wiring,
+    "communities": cmd_communities,
+    "god-nodes": cmd_god_nodes,
+    "call-flow": cmd_call_flow,
+    "mcp": cmd_mcp,
+    "confidence": cmd_confidence,
+    "pr-dashboard": cmd_pr_dashboard,
+    "benchmark": cmd_benchmark,
+    "audit": cmd_audit,
+    "install-hook": cmd_install_hook,
+    "uninstall-hook": cmd_uninstall_hook,
+    "query": cmd_query,
+    "path": cmd_path,
+    "explain": cmd_explain,
+    "remove-source": cmd_remove_source,
+}
+
+# The flat flags that NAME a mode, in the order the old if-chain tested them.  The
+# first one present wins, so `kgraph --update --query x` still means update.
+_LEGACY_PRIORITY: tuple[tuple[str, str], ...] = (
+    ("ast", "ast"),
+    ("wiring", "wiring"),
+    ("install_hook", "install-hook"),
+    ("uninstall_hook", "uninstall-hook"),
+    ("update", "update"),
+    ("watch", "watch"),
+    ("mcp", "mcp"),
+    ("remove_source", "remove-source"),
+    ("query", "query"),
+    ("path", "path"),
+    ("explain", "explain"),
+    ("communities", "communities"),
+    ("god_nodes", "god-nodes"),
+    ("call_flow", "call-flow"),
+    ("confidence", "confidence"),
+    ("report", "report"),
+    ("pr_dashboard", "pr-dashboard"),
+    ("benchmark", "benchmark"),
+    ("audit", "audit"),
+)
+
+
+def _resolve_legacy_command(args: argparse.Namespace) -> str:
+    """The command a flat-flag invocation names.
+
+    `--serve` is not a mode of its own — in the old code it only chose whether the
+    default render also served the file — so it maps to `serve`; anything else
+    with no mode flag is the default `html` render.
+    """
+    for attr, command in _LEGACY_PRIORITY:
+        if getattr(args, attr):
+            return command
+    return "serve" if args.serve else "html"
+
+
+def main(argv: list[str] | None = None) -> None:
+    raw = list(sys.argv[1:] if argv is None else argv)
+
+    # Subcommand form: the command is the first token.
+    if raw and raw[0] in _DISPATCH:
+        args = _build_subcommand_parser().parse_args(raw)
+        _DISPATCH[args.command](args)
+        return
+
+    # `kgraph --help` lists the commands; `kgraph <command> --help` is handled above.
+    if raw and raw[0] in ("-h", "--help"):
+        _build_subcommand_parser().print_help()
+        return
+
+    # Flat-flag form (and bare `kgraph`, which is the default render).
+    args = _build_legacy_parser().parse_args(raw)
+    _DISPATCH[_resolve_legacy_command(args)](args)
 
 
 def _hooks_path_from_config(repo_root: str) -> str | None:

@@ -3364,6 +3364,68 @@ class TestCliMainModes(_CliHarness):
             self.assertEqual(kwargs["graph_db_path"], os.path.expanduser(kgraph.GRAPH_DB_DEFAULT))
 
 
+class TestCliSubcommandDispatch(_CliHarness):
+    """Card 75219978: the subcommand dispatch table.
+
+    The old ``main()`` was a 365-line if-chain.  These cases pin the properties the
+    table must have for that rewrite to be safe — every advertised command reaches a
+    handler, every legacy flag resolves to one, and an unknown command fails loudly
+    instead of falling through to the default render (which would exit 0 and write a
+    file: the silent no-op the case exists to stop).
+    """
+
+    def test_the_advertised_commands_and_the_dispatch_table_agree(self):
+        from kgraph import cli
+
+        advertised = [name for name, _ in cli._COMMANDS]
+        self.assertEqual(len(advertised), len(set(advertised)))
+        for name, help_text in cli._COMMANDS:
+            self.assertTrue(help_text.strip(), name)
+        # A renamed command would advertise a name with no handler, or leave a
+        # dispatch key nothing advertises — both fail here rather than at runtime.
+        self.assertEqual(set(advertised), set(cli._DISPATCH))
+        for name in advertised:
+            self.assertTrue(callable(cli._DISPATCH[name]), name)
+
+    def test_every_legacy_flag_resolves_to_an_advertised_command(self):
+        from kgraph import cli
+
+        advertised = {name for name, _ in cli._COMMANDS}
+        for attr, command in cli._LEGACY_PRIORITY:
+            self.assertIn(command, advertised, f"{attr} -> {command} has no command")
+        # The default render and the serve variant are advertised too.
+        for default in ("html", "serve"):
+            self.assertIn(default, advertised)
+
+    def test_a_subcommand_reaches_its_handler(self):
+        # `audit` is the cheapest handler with a deterministic, file-only effect.
+        code, out, _ = self._run(["kgraph", "audit"])
+        self.assertEqual(code, 0)
+        self.assertIn("# Security Audit", out)
+
+    def test_dispatch_calls_the_handler_the_subcommand_names(self):
+        from kgraph import cli
+
+        calls = []
+        with mock.patch.dict(cli._DISPATCH, {"audit": lambda args: calls.append(args.command)}):
+            code, _, _ = self._run(["kgraph", "audit"])
+        self.assertEqual((code, calls), (0, ["audit"]))
+
+    def test_an_unknown_command_exits_nonzero_with_usage(self):
+        code, out, err = self._run(["kgraph", "definitely-not-a-command"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("usage: kgraph", err)
+        self.assertNotIn("Wrote", out)
+
+    def test_a_subcommand_missing_its_value_fails_loudly(self):
+        # `kgraph query` names a mode but no pattern — a loud error, never a
+        # handler that runs on None.
+        code, out, err = self._run(["kgraph", "query"])
+        self.assertEqual(code, 1)
+        self.assertIn("--query", err)
+        self.assertNotIn("matching nodes", out)
+
+
 class TestCliGitHooks(_CliHarness):
     def _hooks_dir(self, td):
         hooks = os.path.join(td, "hooks")
