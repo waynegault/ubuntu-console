@@ -22,7 +22,8 @@
 #               docs/contracts/command-contracts.yaml, plus the decision register
 #               under .agents/decisions/.
 #   swallows    unclassified `|| true` and `2>/dev/null` sites in the shell corpus
-#               (scripts/*.sh, bin/*, tools/*.sh, tools/hooks/*).
+#               (scripts/*.sh, bin/*, tools/*.sh, tools/hooks/*, tools/qwen-hooks/*,
+#               nas/**/*.sh).
 #
 # A bare `check-contracts.sh` runs EVERY subcommand, so the no-argument invocation
 # stays meaningful.  A subcommand is added by adding its name to SUBCOMMANDS and
@@ -289,7 +290,14 @@
 #      must not carry one).
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 13
+# Module Version: 14
+#   v14 (2026-10-02, card b55c77f5): `swallows` corpus widened to `tools/qwen-hooks/*` — the Qwen
+#   hook set (post-edit-check.sh, memory-markdownlint.sh, guard-patch-check.sh, shell-command-scan.py)
+#   sits under tools/ but a listdir of tools/ never reaches a subdirectory, so neither this gate nor
+#   tools/lint.sh's whole-tree loops saw it.  Its six unclassified sites were marked with a reason
+#   BEFORE the widening landed, so the baseline gains no row; measured
+#   `OK — 1184 site(s) in 112 file(s)` against 1178/108 before.  The tool VERSION does not move (no
+#   new mode or enforced rule), so the BATS version pins stay put.
 #   v13 (2026-10-02): `swallows` corpus widened to nas/**/*.sh — the NAS (butler) tooling,
 #   mirrored into this repo at nas/butler/, is shell, and leaving it unscanned was the same
 #   unmeasured decision the 2026-09-24 widening fixed for bin/ and tools/.  It is the one group
@@ -2359,7 +2367,7 @@ def entry_family_siblings(data, name):
 SWALLOWS_MARKER = re.compile(r"#\s*swallow-ok:\s*(\S.*)$")
 SWALLOW_PATTERNS = (("|| true", re.compile(r"\|\|\s*true\b")),
                     ("2>/dev/null", re.compile(r"2>\s*/dev/null")))
-SWALLOWS_SCOPE = "scripts/*.sh, bin/*, tools/*.sh, tools/hooks/*, nas/**/*.sh"
+SWALLOWS_SCOPE = "scripts/*.sh, bin/*, tools/*.sh, tools/hooks/*, tools/qwen-hooks/*, nas/**/*.sh"
 # Files another session owns during the tooling pass: reported with their counts,
 # never edited here, so the second pass has a starting point.
 SWALLOWS_RESERVED = {
@@ -2419,9 +2427,16 @@ def swallow_corpus(repo):
     is the ONE group that needs a RECURSIVE walk — its files sit two levels down (nas/butler/
     scripts/…), which a single listdir of `nas/` can never reach.  Every site in that tree was
     classified BEFORE this landed, so the baseline gains no row.
+
+    WIDENED AGAIN 2026-10-02 (card b55c77f5): `tools/qwen-hooks/*`.  The Qwen hook set lives
+    under tools/ but one listdir of `tools/` never reaches a subdirectory, so — with `tools`
+    non-recursive — those files were scanned by neither this gate nor tools/lint.sh's
+    whole-tree loops.  Every site was classified before this landed, so the baseline gains no
+    row.
     """
     groups = (("scripts", True, False), ("bin", False, False), ("tools", True, False),
-              ("tools/hooks", False, False), ("nas", True, True))
+              ("tools/hooks", False, False), ("tools/qwen-hooks", False, False),
+              ("nas", True, True))
     corpus = []
     for sub, only_sh, recursive in groups:
         base = os.path.join(repo, sub)

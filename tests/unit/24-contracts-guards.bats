@@ -763,10 +763,18 @@ SH
 }
 
 @test "swallows: the scan covers bin/ and tools/ too, and a new file there fails" {
-    mkdir -p "$FIXTURE/bin"
+    mkdir -p "$FIXTURE/bin" "$FIXTURE/tools/qwen-hooks"
     cat > "$FIXTURE/bin/helper.sh" <<'SH'
 #!/usr/bin/env bash
 helper() { command -v x 2>/dev/null || true; }
+SH
+    # Card b55c77f5: tools/qwen-hooks is a SUBDIRECTORY of tools/, which the
+    # non-recursive tools/*.sh glob never reaches — so it is the second shape this
+    # case must prove the corpus sees.  A suite that only exercised bin/ passed while
+    # tools/qwen-hooks was invisible.
+    cat > "$FIXTURE/tools/qwen-hooks/probe.sh" <<'SH'
+#!/usr/bin/env bash
+probe() { command -v y 2>/dev/null || true; }
 SH
     run "$CHECKER" swallows --repo "$FIXTURE"
     # This case used to assert the OPPOSITE — "the scan is limited to scripts/ and
@@ -775,7 +783,9 @@ SH
     # stayed unmeasured, so the case now pins the widened scope instead.
     [[ "$status" -eq 1 ]]
     [[ "$output" == *"bin/helper.sh"* ]]
+    [[ "$output" == *"tools/qwen-hooks/probe.sh"* ]]
     [[ "$output" == *"scripts/*.sh, bin/*"* ]]
+    [[ "$output" == *"tools/qwen-hooks/*"* ]]
     [[ "$output" != *"bin/ and tools/ are not scanned"* ]]
 }
 

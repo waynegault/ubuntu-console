@@ -10,6 +10,10 @@
 # landed, which is the order this gate requires — widening first would have made the check red
 # for every pusher.
 #
+# CORPUS WIDENED AGAIN 2026-10-02 (card b55c77f5): tools/qwen-hooks/* joins the corpus —
+# 108 -> 112 files.  No row is added and none changes: its six sites were marked with a
+# reason BEFORE the widening landed.
+#
 # 1142 unclassified site(s) across 51 file(s).  A count may FALL freely (bin/llama-watchdog.sh
 # went 49 -> 44 when five state-swallows were given a log); a NEW file, or a RISE, is a
 # deliberate act that has to be re-baselined on purpose.

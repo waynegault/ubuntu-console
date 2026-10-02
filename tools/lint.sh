@@ -14,7 +14,15 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 23
+# Module Version: 24
+#   v24 (2026-10-02, card b55c77f5): the whole-tree loops now enumerate
+#   `tools/qwen-hooks/*.sh` as well — `tools/*.sh` is a non-recursive glob, so those three hook
+#   scripts (and shell-command-scan.py) were reached by NOTHING, and were outside the
+#   check-contracts swallow corpus too (widened in the same change).  These files already
+#   passed the pinned checker, so this closes a coverage gap rather than fixing a finding.
+#   The widening surfaced one advisory non-ASCII WARN — the heavy check mark ✔ (U+2714) in
+#   post-edit-check.sh's SUCCESS_RE — so the approved-glyph allowlist now carries it beside its
+#   sibling ✓ (U+2713).
 #   v23 (2026-09-27): the CI Verdict Gate is STRICT — an UNKNOWN verdict (gh unresolvable,
 #   credential rejected, API unreachable) now fails the run instead of passing silently, with
 #   CI_STATUS_ALLOW_UNKNOWN=1 as the explicit escape. Reverses v20's documented fail-open, for
@@ -90,9 +98,10 @@ SKIP_UNICODE_CHECK=${SKIP_UNICODE_CHECK:-0}
 #  \x{25CB}-\x{25CF}  Geometric Shapes subset  (○ ●)
 #  \x{26A0}           Warning sign  (⚠)
 #  \x{2713}           Check mark  (✓)
+#  \x{2714}           Heavy check mark  (✔ — the success detector's alternate glyph)
 #  \x{2717}           Ballot X  (✗)
 #  \x{2800}-\x{28FF}  Braille Patterns  (spinner glyphs)
-_UNICODE_ALLOWED='\x{00A0}-\x{00FF}\x{2014}\x{2026}\x{2192}\x{2264}\x{2298}\x{2500}-\x{2570}\x{25CB}-\x{25CF}\x{26A0}\x{2713}\x{2717}\x{2800}-\x{28FF}'
+_UNICODE_ALLOWED='\x{00A0}-\x{00FF}\x{2014}\x{2026}\x{2192}\x{2264}\x{2298}\x{2500}-\x{2570}\x{25CB}-\x{25CF}\x{26A0}\x{2713}\x{2714}\x{2717}\x{2800}-\x{28FF}'
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 rc=0
@@ -516,6 +525,7 @@ for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/scripts/*.sh \
          "$REPO_ROOT"/tools/*.sh \
          "$REPO_ROOT"/tools/hooks/* \
+         "$REPO_ROOT"/tools/qwen-hooks/*.sh \
          "$REPO_ROOT"/bin/*
 do
     if bash -n "$f" 2>&1
@@ -542,6 +552,7 @@ for f in "$REPO_ROOT"/tactical-console.bashrc \
          "$REPO_ROOT"/scripts/*.sh \
          "$REPO_ROOT"/tools/*.sh \
          "$REPO_ROOT"/tools/hooks/* \
+         "$REPO_ROOT"/tools/qwen-hooks/*.sh \
          "$REPO_ROOT"/bin/*
 do
     local_rc=0
@@ -592,6 +603,7 @@ then
              "$REPO_ROOT"/install.sh \
              "$REPO_ROOT"/scripts/*.sh \
              "$REPO_ROOT"/tools/*.sh \
+             "$REPO_ROOT"/tools/qwen-hooks/*.sh \
              "$REPO_ROOT"/bin/*
     do
         hits=$(grep -Pn '[\x{061C}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]' "$f" 2>/dev/null || true)
@@ -624,6 +636,7 @@ else
              "$REPO_ROOT"/install.sh \
              "$REPO_ROOT"/scripts/*.sh \
              "$REPO_ROOT"/tools/*.sh \
+             "$REPO_ROOT"/tools/qwen-hooks/*.sh \
              "$REPO_ROOT"/bin/*
     do
         # Find non-ASCII outside the approved glyph allowlist.

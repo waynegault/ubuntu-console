@@ -21,11 +21,13 @@ set -uo pipefail
 
 input="$(cat)"
 
+# swallow-ok: an unparseable PostToolUse payload leaves the path empty and this advisory hook exits 0 — it never blocks an edit
 file="$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
 [ -n "$file" ] || exit 0
 [ -f "$file" ] || exit 0
 
 # Content this edit ADDED: write_file carries .content, edit carries .new_string.
+# swallow-ok: same advisory hook input; a parse failure contributes no content to scan and never blocks
 added="$(printf '%s' "$input" | jq -r '.tool_input.content // .tool_input.new_string // empty' 2>/dev/null)"
 
 findings=""
@@ -70,6 +72,7 @@ SHELL_PATTERNS=(
   'for[[:space:]]+[[:alpha:]_][[:alnum:]_]*[[:space:]]+in[[:space:]]+\$\(@@for-loop over command substitution: unquoted word splitting/globbing'
   'curl[^|;]*\|[[:space:]]*(ba)?sh([[:space:]]|$)@@piping a download straight into a shell'
   'chmod[[:space:]]+(-[[:alpha:]]+[[:space:]]+)*777@@chmod 777'
+  # swallow-ok: this entry is the DETECTOR's own pattern literal, not a shell swallow in the hook
   '\|\|[[:space:]]*true@@"|| true" swallows the failure - a silent failure by construction'
   'git[[:space:]]+push[^|;]*--force@@git push --force'
   'git[[:space:]]+reset[[:space:]]+--hard@@git reset --hard'
@@ -102,6 +105,7 @@ scan_patterns() {
   for entry in "$@"; do
     pat="${entry%%@@*}"
     label="${entry#*@@}"
+    # swallow-ok: the risky-default scan is advisory and never blocks; an unreadable file yields no hits
     m="$(grep -nE -- "$pat" "$f" 2>/dev/null | head -n 5)"
     [ -n "$m" ] && hits+="  [${label}]"$'\n'"$(printf '%s\n' "$m" | sed 's/^/    /')"$'\n'
   done

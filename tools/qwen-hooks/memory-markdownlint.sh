@@ -88,9 +88,11 @@ collect_changed() {
 }
 
 if [ -f "$STAMP" ]; then
+    # swallow-ok: find may hit an unreadable subdir; the hook must not abort on one — an empty list exits early below
     collect_changed > "$LIST" 2>/dev/null
 else
     # No stamp yet: lint everything once, then start tracking.
+    # swallow-ok: same find walk — an unreadable subdir is skipped and an empty list exits early below
     collect_all > "$LIST" 2>/dev/null
 fi
 
