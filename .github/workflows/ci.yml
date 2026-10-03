@@ -197,7 +197,8 @@ jobs:
                tests/unit/45-kgraph-hook-failure-report.bats \
                tests/unit/46-guarded-module-source.bats \
                tests/unit/47-capture-golden-fixtures.bats \
-               tests/unit/48-error-handling-noise.bats
+               tests/unit/48-error-handling-noise.bats \
+               tests/unit/49-nas-backup-critical-config.bats
 
       - name: Run integration tests
         run: |

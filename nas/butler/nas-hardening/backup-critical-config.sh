@@ -7,29 +7,37 @@
 # plus an always-succeed on five of these copies, so a backup that quietly did not happen
 # looked exactly like one that did.
 
-BACKUP_DIR=/mnt/HD/HD_a2/butler/nas-hardening
+BACKUP_DIR="${BACKUP_DIR:-/mnt/HD/HD_a2/butler/nas-hardening}"
 DATE=$(date +%Y%m%d_%H%M%S)
 KEEP=10
 
 mkdir -p "$BACKUP_DIR/ssh" "$BACKUP_DIR/samba" "$BACKUP_DIR/init" "$BACKUP_DIR/bt-bridge"
 
+# Count failed copies so the script can carry the outcome in its exit status.
+# `backup_one` used to `return 0` unconditionally and the script ended with an
+# unconditional "Backed up to …", so a caller checking only $? read a total
+# failure as success (card 388e5001).  The count is named and the exit is non-zero.
+FAILURES=0
+
 # backup_one <source> <destination> — copy, and name what happened either way
 backup_one() {
     if cp "$1" "$2"; then
         echo "backed up: $2"
-    else
-        echo "SKIPPED (copy failed): $1"
+        return 0
     fi
-    return 0
+    echo "SKIPPED (copy failed): $1"
+    return 1
 }
 
-backup_one /etc/samba/smb.conf "$BACKUP_DIR/samba/smb.conf.$DATE"
-backup_one /etc/samba/smbpasswd "$BACKUP_DIR/samba/smbpasswd.$DATE"
-backup_one /home/root/.ssh/authorized_keys "$BACKUP_DIR/ssh/authorized_keys.$DATE"
-backup_one /etc/init.d/S91samba "$BACKUP_DIR/init/S91samba.$DATE"
-backup_one /etc/init.d/S92nas-health "$BACKUP_DIR/init/S92nas-health.$DATE"
-backup_one /mnt/HD/HD_a2/butler/bt-bridge/S35bt-mqtt-bridge "$BACKUP_DIR/bt-bridge/S35bt-mqtt-bridge.$DATE"
-backup_one /mnt/HD/HD_a2/butler/bt-bridge/nas-bt-mqtt-bridge.py "$BACKUP_DIR/bt-bridge/nas-bt-mqtt-bridge.py.$DATE"
+backup_one /etc/samba/smb.conf "$BACKUP_DIR/samba/smb.conf.$DATE" || FAILURES=$((FAILURES + 1))
+backup_one /etc/samba/smbpasswd "$BACKUP_DIR/samba/smbpasswd.$DATE" || FAILURES=$((FAILURES + 1))
+backup_one /home/root/.ssh/authorized_keys "$BACKUP_DIR/ssh/authorized_keys.$DATE" || FAILURES=$((FAILURES + 1))
+backup_one /etc/init.d/S91samba "$BACKUP_DIR/init/S91samba.$DATE" || FAILURES=$((FAILURES + 1))
+backup_one /etc/init.d/S92nas-health "$BACKUP_DIR/init/S92nas-health.$DATE" || FAILURES=$((FAILURES + 1))
+backup_one /mnt/HD/HD_a2/butler/bt-bridge/S35bt-mqtt-bridge \
+    "$BACKUP_DIR/bt-bridge/S35bt-mqtt-bridge.$DATE" || FAILURES=$((FAILURES + 1))
+backup_one /mnt/HD/HD_a2/butler/bt-bridge/nas-bt-mqtt-bridge.py \
+    "$BACKUP_DIR/bt-bridge/nas-bt-mqtt-bridge.py.$DATE" || FAILURES=$((FAILURES + 1))
 
 # Keep only the newest KEEP per directory, over the DATED backups this script writes
 # (<name>.YYYYMMDD_HHMMSS).  The stamp is part of the pattern, not a `*.*` wildcard: a plain
@@ -47,5 +55,13 @@ for DIR in "$BACKUP_DIR/samba" "$BACKUP_DIR/ssh" "$BACKUP_DIR/init" "$BACKUP_DIR
     ls -t "$DIR"/*.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9] \
         | tail -n +$((KEEP + 1)) | xargs rm -f
 done
+
+case "$FAILURES" in
+    0) ;;
+    *)
+        echo "BACKUP INCOMPLETE: $FAILURES copy(ies) FAILED — see 'SKIPPED (copy failed)' above"
+        exit 1
+        ;;
+esac
 
 echo "Backed up to $BACKUP_DIR at $DATE"
