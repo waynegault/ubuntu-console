@@ -63,6 +63,23 @@ def _needle(code: str = "7394") -> str:
     return probe.NEEDLE_TEMPLATE.format(tag="the A-17 bundle", code=code)
 
 
+def test_the_needle_template_is_the_documented_literal() -> None:
+    """Pin the production template to an INDEPENDENT literal.
+
+    Catches: a change to NEEDLE_TEMPLATE that the placement/scoring cases below
+    cannot see — they build their needle FROM the template, so they mirror whatever
+    it becomes. This literal is the criterion; when the probe's wording changes,
+    this fails and the change must be made deliberately here too.
+    """
+    assert probe.NEEDLE_TEMPLATE == (
+        "Note for the case file: the maintenance access code for {tag} is {code}."
+    )
+    # ...and the rendered form `_needle` produces, so the .format() call is pinned too.
+    assert _needle("7394") == (
+        "Note for the case file: the maintenance access code for the A-17 bundle is 7394."
+    )
+
+
 # --- depth handling ---------------------------------------------------------
 
 def test_depths_are_positions_inside_the_context() -> None:
