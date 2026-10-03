@@ -88,7 +88,7 @@ def extract_rows(script_path):
 
 def build_patch(rows):
     """Nest the rows into one patch object, exactly as the production code does."""
-    patch = {}
+    patch: dict = {}
     for config_path, env_var in rows:
         node = patch
         parts = config_path.split(".")

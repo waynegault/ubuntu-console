@@ -194,7 +194,7 @@ COUNTERS = [
     ("10.7", "hand-written `>&2` on echo/printf instead of a helper", c_adhoc_stderr),
 ]
 
-FIXTURES = {
+FIXTURES: dict[str, tuple[str, int] | list[tuple[str, int]]] = {
     "4.2.4": ("case $x in\na) : ;;\nesac\n", 1),
     "4.2.6": ("for i in 1 2; do echo $i; done\n", 1),
     "4.3.6": ("f() {\n    local camelCase=1\n    local snake_case=2\n    local UPPER=3\n}\n", 1),
@@ -220,7 +220,7 @@ def selftest():
         entry = FIXTURES[cid]
         # A counter may need more than one control — 10.4 does: one proving a long
         # function IS counted, one proving a function long only in COMMENTS is not.
-        pairs = entry if isinstance(entry[0], (list, tuple)) else [entry]
+        pairs = entry if isinstance(entry, list) else [entry]
         for text, expected in pairs:
             got = fn(text)
             ok = got == expected
@@ -251,7 +251,7 @@ def selftest():
 
 
 def read_baseline(path):
-    base = {}
+    base: dict[str, int] = {}
     if not os.path.exists(path):
         return base
     with open(path, encoding="utf-8") as fh:

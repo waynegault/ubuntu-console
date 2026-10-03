@@ -20,6 +20,12 @@ files = [
 ]
 warn_unused_configs = true
 show_error_codes = true
+# Check the bodies of functions that carry no annotations.  Left off by default,
+# so an unannotated helper's internals were never type-checked — mypy only
+# printed an `annotation-unchecked` note and moved on.  Turning it on surfaced
+# the errors fixed alongside this setting; it is not narrowed by any per-module
+# override.
+check_untyped_defs = true
 
 # Optional third-party runtime deps that CI does not install, so `mypy` cannot
 # resolve them there:

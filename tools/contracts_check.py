@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+from typing import TypedDict
 
 # Exit codes, the same three the header documents.  Named rather than repeated as
 # bare digits so each `return` site says what it means.  Declared BEFORE the
@@ -36,6 +37,31 @@ SUBCOMMANDS = ("state", "modules", "derived", "continuity", "swallows")
 # re-adding a name here is how a sixth checker would land, and a name in RESERVED
 # exits 2 with a message naming its owner instead of silently doing nothing.
 RESERVED: dict[str, str] = {}
+
+
+class _StateCounts(TypedDict):
+    """The `state` subcommand's heterogeneous edge counters.
+
+    A TypedDict rather than one `dict` of ints plus a parallel list: the values
+    are read by name and mutated by name, and the separate list was what made the
+    accumulator's type unrepresentable to a checker.
+    """
+
+    producer: int
+    consumer: int
+    invalidator: int
+    unenforced: int
+    unenforced_lines: list[str]
+
+
+class _WitnessCounts(TypedDict):
+    """The read-back witness tallies, threaded through check_read_backs()."""
+
+    verified: int
+    exempt: int
+    checked: bool
+    lines: list[str]
+    mutating: list[str]
 
 # Options that change WHAT is printed rather than what is checked.  A dict rather
 # than a longer parse_args() tuple: every subcommand already takes the repo, and
@@ -271,7 +297,7 @@ def check_structure(kind, entry, problems):
     return ok
 
 
-def check_consumers(kind, entry, consumers, repo, problems, counts):
+def check_consumers(kind, entry, consumers, repo, problems, counts: _StateCounts):
     """Enforce one consumer edge per declared file; count unenforced edges."""
     symbol = entry_symbol(kind, entry)
     base_tokens = entry_tokens(kind, entry)
@@ -309,7 +335,7 @@ def check_consumers(kind, entry, consumers, repo, problems, counts):
                  f"(searched {', '.join(files)})")
 
 
-def check_producers(kind, entry, repo, problems, counts):
+def check_producers(kind, entry, repo, problems, counts: _StateCounts):
     """Enforce that a declared producer still writes the symbol."""
     symbol = entry_symbol(kind, entry)
     tokens = entry_tokens(kind, entry)
@@ -379,7 +405,7 @@ def check_path_identity(kind, entry, repo, problems):
          "cache in the contract too, or the contract names a path nothing produces")
 
 
-def check_invalidators(kind, entry, repo, problems, counts):
+def check_invalidators(kind, entry, repo, problems, counts: _StateCounts):
     """Enforce that a declared invalidator still deletes the symbol."""
     symbol = entry_symbol(kind, entry)
     tokens = entry_tokens(kind, entry)
@@ -429,7 +455,7 @@ def index_contract_lines(text, kind_entries):
     why `fail()` treats a missing line as optional rather than printing a wrong
     one.
     """
-    lines = {}
+    lines: dict[str, int] = {}
     for match in ENTRY_LINE.finditer(text):
         start = text.rfind("\n", 0, match.start()) + 1
         end = text.find("\n", match.end())
@@ -468,10 +494,10 @@ def run_state(repo):
         return EXIT_CANNOT_RUN
 
     print(f"=== Contract drift check ({contract_rel}) ===")
-    problems = []
-    symbols = {}
-    counts = {"producer": 0, "consumer": 0, "invalidator": 0, "unenforced": 0,
-              "unenforced_lines": []}
+    problems: list[str] = []
+    symbols: dict[str, str] = {}
+    counts: _StateCounts = {"producer": 0, "consumer": 0, "invalidator": 0, "unenforced": 0,
+                            "unenforced_lines": []}
     kind_entries = []
     for kind in ("variables", "files"):
         entries = data.get(kind) or []
@@ -503,7 +529,8 @@ def run_state(repo):
     # line item inside `state` rather than a sixth subcommand: the claim being
     # checked ("this command queried the state before it printed success") is a
     # state claim, and the dispatcher stays at five subcommands.
-    witnesses = {"verified": 0, "exempt": 0, "checked": True, "lines": [], "mutating": []}
+    witnesses: _WitnessCounts = {"verified": 0, "exempt": 0, "checked": True, "lines": [],
+                                 "mutating": []}
     check_read_backs(repo, problems, witnesses)
 
     for line in counts["unenforced_lines"]:
@@ -620,7 +647,7 @@ def first_call(repo, rel, symbol):
     return None
 
 
-def check_read_backs(repo, problems, counts):
+def check_read_backs(repo, problems, counts: _WitnessCounts):
     """Verify the read-back witnesses declared in command-contracts.yaml."""
     data, _text, error = command_contracts_file(repo)
     if error:
@@ -873,10 +900,10 @@ def module_graph(repo, order):
     so a dependency inside that unit is satisfied by the unit being reached at
     all; `group_of` records which unit each module belongs to.
     """
-    positions = {}
-    groups = {}
-    findings = []
-    group_of = {}
+    positions: dict[str, int] = {}
+    groups: dict[str, list[str]] = {}
+    findings: list[str] = []
+    group_of: dict[str, list[str]] = {}
     for loader in order:
         subs = loader_submodules(repo, loader)
         members = [loader]
@@ -1011,7 +1038,7 @@ def read_baseline(repo, rel):
     is what makes the bare tool fail on a tree that carries no record.
     """
     text = read_lines(repo, rel)
-    rows = {}
+    rows: dict[str, str] = {}
     if text is None:
         return rows
     for line in text.splitlines():
@@ -1069,7 +1096,7 @@ def strongly_connected(edges, nodes):
     for node in nodes:
         if node not in seen:
             visit(node, [])
-    reverse = {node: [] for node in nodes}
+    reverse: dict[str, list[str]] = {node: [] for node in nodes}
     for node in nodes:
         for nxt in edges.get(node, []):
             reverse.setdefault(nxt, []).append(node)
@@ -1466,7 +1493,7 @@ def bats_test_nodes(repo):
     verified_by that names it instead of passing on a partial index.
     """
     root = os.path.join(repo, "tests")
-    nodes = {}
+    nodes: dict[str, list[str]] = {}
     n_files = 0
     if not os.path.isdir(root):
         return nodes, n_files
@@ -1601,7 +1628,7 @@ def check_disposition(entry, where, status, name, problems, report):
 def decision_records(repo):
     """[(name, fields, problems)] for .agents/decisions/*.md."""
     directory = os.path.join(repo, DECISION_DIR)
-    records = []
+    records: list[tuple[str, dict[str, str], str]] = []
     problems = []
     if not os.path.isdir(directory):
         return records, [f"{DECISION_DIR}/ does not exist — no register, so no decision "
@@ -1666,13 +1693,13 @@ def run_continuity(repo, names):
         return EXIT_CANNOT_RUN
 
     problems = []
-    by_name = {}
+    by_name: dict[str, list[dict]] = {}
     active_pairs = {}
     # The traceability oracle (card SPEC-VV-CONSOLE-003): the @test names the pytest
     # bridge would collect, plus how many files they were read from — the second
     # figure is printed so an empty index is visible rather than reading as "clean".
     test_nodes, n_bats = bats_test_nodes(repo)
-    trace_lines = []
+    trace_lines: list[str] = []
     for entry in entries:
         if not isinstance(entry, dict):
             problems.append(f"  FAIL  {rel}: entry is not a mapping: {entry!r}")
@@ -1822,10 +1849,11 @@ def run_continuity(repo, names):
                           + (f" — bound: {str(entry.get('bound')).strip()}"
                              if entry.get("bound") else ""))
             family = {entry.get("family") for entry in matches if isinstance(entry, dict)}
-            siblings = sorted({entry.get("name") for entry in entries
-                               if isinstance(entry, dict)
-                               and entry.get("family") in family
-                               and entry.get("name") not in {m.get("name") for m in matches}})
+            siblings = sorted(str(name) for name in {
+                entry.get("name") for entry in entries
+                if isinstance(entry, dict)
+                and entry.get("family") in family
+                and entry.get("name") not in {m.get("name") for m in matches}})
             if siblings:
                 print(f"  FAMILY   still applies from the same family: {', '.join(siblings)}")
             related = [name for name, fields, _where in records
@@ -1847,13 +1875,13 @@ def run_continuity(repo, names):
         print(f"  {line}")
     for problem in problems:
         print(problem)
-    active = sum(1 for entry in entries
-                 if isinstance(entry, dict) and entry.get("status") == "active")
+    n_active = sum(1 for entry in entries
+                   if isinstance(entry, dict) and entry.get("status") == "active")
     superseded = sum(1 for entry in entries
                      if isinstance(entry, dict) and entry.get("status") == "superseded")
     decisions = sum(1 for line in classified_lines if "-> decision" in line)
     consequences = sum(1 for line in classified_lines if "-> consequence" in line)
-    summary = (f"{len(entries)} contract entr(ies) ({active} active, {superseded} superseded) | "
+    summary = (f"{len(entries)} contract entr(ies) ({n_active} active, {superseded} superseded) | "
                f"{len(records)} decision record(s) in {DECISION_DIR}/ | "
                f"verified_by: {len(verified_lines)} node(s) verified, "
                f"{len(unverified_lines)} active entr(ies) unverified (printed above) | "
@@ -2123,7 +2151,7 @@ def run_swallows(repo):
         markers = swallow_markers(text)
         lines = text.splitlines()
         classified = 0
-        occurrence = {}
+        occurrence: dict = {}
         for number, pattern_name in sites:
             reason = markers.get(number)
             source = "same-line" if reason is not None else None
@@ -2219,7 +2247,7 @@ def run_swallows(repo):
         suffix = f"   <- {note}" if note else ""
         print(f"  HEAVIEST  {rel}: {total} site(s), {classified} classified, "
               f"{unclassified} unclassified{suffix}")
-    per_pattern = {}
+    per_pattern: dict[str, int] = {}
     for rel, _path in corpus:
         text = read_lines(repo, rel)
         if text is None:

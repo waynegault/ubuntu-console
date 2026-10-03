@@ -25,7 +25,9 @@ GRAPH_DB_DEFAULT = '~/.openclaw/kgraph.sqlite'
 LIFE_ROOT_DEFAULT = '~/.openclaw/life'
 CANONICAL_CONCEPTS_DEFAULT = '~/.openclaw/life/canonical-concepts.json'
 
-SAMPLE_GRAPH = {
+# Annotated so the type is not inferred from the heterogeneous literal, which
+# mypy widens to `dict[str, object]` and makes every element access un-iterable.
+SAMPLE_GRAPH: dict[str, list[dict[str, object]]] = {
     "nodes": [
         {"id": 1, "label": "Cluster A"},
         {"id": 2, "label": "Cluster B"},

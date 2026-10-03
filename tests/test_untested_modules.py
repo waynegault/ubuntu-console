@@ -2208,7 +2208,7 @@ _REGISTRY_DDL = [
     "CREATE TABLE memory_events (event_id TEXT, timestamp TEXT, component TEXT, action TEXT, reason_codes TEXT, memory_id TEXT, payload TEXT)",
 ]
 
-_REGISTRY_ROWS = [
+_REGISTRY_ROWS: list[tuple[str, list[tuple]]] = [
     ("INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [
         ("mem-1", "FACT", "Live memory", "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, None, None, "registry", "active"),
         ("mem-2", "FACT", "Archived memory", "jarvis", "jarvis", "[]", 0.9, "2026-04-01", None, None, None, "registry", "archived"),
@@ -2416,10 +2416,10 @@ class TestProjectionHelpers(unittest.TestCase):
         # The normaliser moved to models.py, where the ONE implementation lives
         # (card 27b55b6f); projection's private copy is gone.
         from kgraph.models import normalize_semantic_label
-        for label, expected in [("The Current Graph Layout", "graph"), ("Topic cleanup", "topic structure"),
-                                ("Alpha Project", "alpha canonical"), ("!!!", ""), ("", "")]:
+        for label, want in [("The Current Graph Layout", "graph"), ("Topic cleanup", "topic structure"),
+                            ("Alpha Project", "alpha canonical"), ("!!!", ""), ("", "")]:
             self.assertEqual(normalize_semantic_label(label, _PROJECTION_LIFE_INDEX),
-                             expected, msg=label)
+                             want, msg=label)
         alias = {"aliases": {"widget": {"title": "Widget Canonical"}}, "title_aliases": {"gadget": "Gadget C"}}
         self.assertEqual(normalize_semantic_label("Widget", alias), "widget canonical")
         self.assertEqual(normalize_semantic_label("Gadget", alias), "gadget c")
@@ -2461,7 +2461,8 @@ class TestProjectionHelpers(unittest.TestCase):
         self.assertEqual(projection._edge_endpoints({"source": "s", "target": "t"}), ("s", "t"))
         self.assertEqual(projection._edge_endpoints(_e("f", "g", "x")), ("f", "g"))
         self.assertEqual(projection._edge_endpoints({}), (None, None))
-        out, seen = [], {}
+        out: list = []
+        seen: dict = {}
         projection._dedupe_append(out, seen, None, "b", "x")
         projection._dedupe_append(out, seen, "a", None, "x")
         projection._dedupe_append(out, seen, "a", "b", "x")
@@ -2469,7 +2470,8 @@ class TestProjectionHelpers(unittest.TestCase):
         projection._dedupe_append(out, seen, "a", "b", "y", {"semantic_score": 0.5})
         self.assertEqual(out, [_e("a", "b", "x"), _e("a", "b", "y", semantic_score=0.5)])
         # A dropped duplicate's source documents move to the survivor.
-        out2, seen2 = [], {}
+        out2: list = []
+        seen2: dict = {}
         projection._dedupe_append(out2, seen2, "a", "b", "x", {"sources": ["file:one.md"]})
         projection._dedupe_append(out2, seen2, "a", "b", "x", {"sources": ["file:two.md"]})
         self.assertEqual(out2, [_e("a", "b", "x", sources=["file:one.md", "file:two.md"])])

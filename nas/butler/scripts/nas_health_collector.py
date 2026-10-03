@@ -46,7 +46,7 @@ SMART_FIELDS = {
 
 def smart_data(dev):
     """Return dict of SMART attribute values for a drive."""
-    result = {}
+    result: dict = {}
     try:
         out = subprocess.check_output(
             ["smartctl", "-A", dev],

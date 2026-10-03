@@ -10,6 +10,7 @@ compatibility with the HTML template and JSON serialization layers.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from .constants import (
     AST_EDGE_LABELS,
@@ -721,7 +722,13 @@ def project_graph(graph: Graph | dict, mode: str = "overview", semantic_threshol
     return _enrich_graph_payload({"nodes": list(out_nodes.values()), "edges": out_edges}, mode)
 
 
-def _project_files(node_by_id, edges, node_type, dedupe_append, enrich):
+def _project_files(
+    node_by_id: dict[str, dict],
+    edges: list[dict],
+    node_type: Callable[[str | None], str],
+    dedupe_append: Callable[[list, dict, str | None, str | None, str, dict | None], None],
+    enrich: Callable[[dict, str], dict],
+) -> dict:
     """Files mode: keep file-level structure + AST code nodes."""
     out_nodes: dict[str, dict] = {}
     out_edges: list[dict] = []
@@ -736,17 +743,26 @@ def _project_files(node_by_id, edges, node_type, dedupe_append, enrich):
         src, dst = _edge_endpoints(edge)
         label = str(edge.get("label", ""))
         if node_type(src) == "file" and node_type(dst) == "file":
-            dedupe_append(out_edges, seen_edges, src, dst, label)
+            dedupe_append(out_edges, seen_edges, src, dst, label, None)
         elif node_type(src) == "file" and dst in out_nodes and label in AST_EDGE_LABELS:
-            dedupe_append(out_edges, seen_edges, src, dst, label)
+            dedupe_append(out_edges, seen_edges, src, dst, label, None)
         elif src in out_nodes and dst in out_nodes and label in AST_EDGE_LABELS:
-            dedupe_append(out_edges, seen_edges, src, dst, label)
+            dedupe_append(out_edges, seen_edges, src, dst, label, None)
 
     return enrich({"nodes": list(out_nodes.values()), "edges": out_edges}, "files")
 
 
-def _project_semantic(node_by_id, edges, effective_threshold, semantic_threshold,
-                       is_curated_node, is_curated_edge, edge_endpoints, dedupe_append, enrich):
+def _project_semantic(
+    node_by_id: dict[str, dict],
+    edges: list[dict],
+    effective_threshold: float,
+    semantic_threshold: float,
+    is_curated_node: Callable[[dict], bool],
+    is_curated_edge: Callable[[dict, float], bool],
+    edge_endpoints: Callable[[dict], tuple[str | None, str | None]],
+    dedupe_append: Callable[[list, dict, str | None, str | None, str, dict | None], None],
+    enrich: Callable[[dict, str], dict],
+) -> dict:
     """Semantic mode: aggressive curation with inferred co-occurrence edges."""
     concept_types = {"topic", "project", "decision", "issue", "outcome", "actor", "person", "organization", "place", "chunk"}
     anchor_types = {"project", "decision", "issue", "outcome"}
@@ -797,8 +813,12 @@ def _project_semantic(node_by_id, edges, effective_threshold, semantic_threshold
     direct_edges: list[tuple] = []
     for edge in edges:
         src, dst = edge_endpoints(edge)
-        src_node = node_by_id.get(src or "")
-        dst_node = node_by_id.get(dst or "")
+        # An endpoint that is absent (None) cannot key a node; skipping here also
+        # narrows src/dst to str for the set/dict keys below.
+        if src is None or dst is None:
+            continue
+        src_node = node_by_id.get(src)
+        dst_node = node_by_id.get(dst)
         if not src_node or not dst_node:
             continue
         src_type = str(src_node.get("type", "") or "").lower()
@@ -917,7 +937,7 @@ def _project_semantic(node_by_id, edges, effective_threshold, semantic_threshold
 
     inferred_neighbor_counts: dict[str, int] = {}
     for src, dst, label, payload in inferred_candidates:
-        pair = tuple(sorted((src, dst)))
+        pair = (src, dst) if src <= dst else (dst, src)
         if pair in direct_pairs:
             continue
         src_budget = SEMANTIC_INFERRED_NEIGHBOR_BUDGET_HIGH if node_strength.get(src, 0) >= SEMANTIC_INFERRED_NEIGHBOR_STRENGTH_CUTOFF else SEMANTIC_INFERRED_NEIGHBOR_BUDGET_LOW

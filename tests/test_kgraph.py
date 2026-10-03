@@ -974,7 +974,7 @@ class CommunityDetectionTests(unittest.TestCase):
 
     def test_detect_communities_empty_graph_returns_as_is(self):
         """detect_communities on empty graph returns graph with no communities."""
-        graph = {'nodes': [], 'edges': []}
+        graph: dict = {'nodes': [], 'edges': []}
         result = kgraph.detect_communities(graph, method='greedy')
         self.assertEqual(result.meta.communities, [])
 
