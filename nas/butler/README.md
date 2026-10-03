@@ -109,6 +109,38 @@ documents the divergence here.
 `mi-scale-autocollect.sh` and `run-mi-scale-collector.sh` exist in **both** `scripts/` and
 `mi-scale/` and **differ**; `mi-scale-2-collector.py` is a byte-identical duplicate.
 
+## Naming — deliberate, documented, NOT renamed here (card `307df479`)
+
+Most `scripts/` files are hyphenated, but one is not, and three readers share an OTP role.  This
+is recorded rather than renamed because the mirror is a byte-for-byte copy of the NAS and the NAS
+invokes these files by **absolute path**:
+
+- `scripts/nas_health_collector.py` — the underscore outlier.  The NAS cron names it by absolute
+  path (`cron/openclaw-collectors.cron`: `/mnt/HD/HD_a2/butler/scripts/nas_health_collector.py --once`),
+  and `scripts/09d-oc-agents.sh` lists it by that name.  Renaming it to `nas-health-collector.py`
+  would change the NAS path — the cron would have to change on the NAS too — and diverge this
+  mirror's bytes and file set.  So the name is documented, not changed.
+
+- Three OTP readers, each a different transport/contract (the audit's "3 OTP readers"):
+  * `scripts/nas-graph-otp.py` — pure-stdlib Graph reader; USED by `cpap-collect-with-otp.sh`.
+  * `scripts/read-myair-otp-imap.py` — IMAP reader; referenced by no cron entry and no live
+    wrapper (tests only).
+  * `scripts/read-myair-otp-graph-oauth.py` — Graph reader with its own client and an
+    `_http_status` error payload (see "One deliberate exception" above); referenced by no cron
+    entry and no live wrapper (tests only).
+
+  The last two are the candidates for the "superseded duplicate" the naming audit names, but
+  which supersedes which is the owner's call — they differ in transport and error contract — and
+  deleting one here would change the mirror's file set.  Delete on the NAS first, then refresh
+  this mirror so the record stays truthful.
+
+- The `nas-cpap-full.py` / `nas-cpap-unified.py` pair: `full` was the dead stub **deleted** under
+  card `8dda5918` (see the divergence list above); `unified` is the env-reading one that remains.
+
+**Reversal (card `307df479`):** if the owner decides the rename/delete is worth the mirror
+divergence, rename the NAS file and its cron reference first and refresh; the new names then
+become the mirror's, and this section is removed.
+
 ## What runs (from `cron/openclaw-collectors.cron`)
 
 `air-monitor-curl-collector.sh` (5 min) · `cpap-myair-collector.py` (daily 07:20) ·
