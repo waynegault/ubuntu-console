@@ -196,7 +196,8 @@ jobs:
                tests/unit/44-llm-build-cmake-status.bats \
                tests/unit/45-kgraph-hook-failure-report.bats \
                tests/unit/46-guarded-module-source.bats \
-               tests/unit/47-capture-golden-fixtures.bats
+               tests/unit/47-capture-golden-fixtures.bats \
+               tests/unit/48-error-handling-noise.bats
 
       - name: Run integration tests
         run: |

@@ -2,7 +2,7 @@
 # ─── Module: 02-error-handling ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 8
+# Module Version: 9
 # ==============================================================================
 # 2. ERROR HANDLING
 # ==============================================================================
@@ -24,6 +24,12 @@
 #   - timeout: returns 124 when command times out (expected behavior)
 #   - curl: returns 22 for HTTP 404 (expected for API probes)
 #   - jq: returns 5 when input is not JSON (expected for probes)
+#   - systemctl is-active/is-enabled: returns 3 for inactive/disabled (a normal
+#     answer). Only rc 3 from those two subcommands is suppressed; a real systemctl
+#     failure (rc 4, a bus error, a different subcommand) is still logged — see
+#     __tac_is_normal_systemctl_query.
+#   - a bare `return $*` / `return "$1"`: a function propagating its callee's status,
+#     not a failure of its own — see __tac_is_internal_noise_command.
 # Extracted to a named function for clarity (traps with inline code are hard to read).
 # __tac_last_err intentionally global — traps cannot use `local`.
 
@@ -50,12 +56,48 @@ function __tac_redact_command() {
 function __tac_is_internal_noise_command() {
     local _cmd="$1"
     case "$_cmd" in
-        ""|"return \"\$1\""|"return 127"|"\"\$@\" 2>&1") return 0 ;;
+        # `return $*` / `return $previous_exit_status` and the other bare-`return`
+        # shapes are a function propagating its callee's status, not an error of its
+        # own — measured 92 such lines in the log.  The quoted `return "$1"` form is
+        # the same shape and is kept beside it.  The trailing `*` is OUTSIDE the
+        # quotes deliberately: quoting it would make it a literal asterisk.
+        ""|"return \"\$1\""|"return 127"|"return \$"*|"\"\$@\" 2>&1") return 0 ;;
         "/usr/lib/command-not-found -- \"\$1\"") return 0 ;;
         "custom_prompt_command"|*"BASH_COMMAND"*|*"__tac_err_handler"*) return 0 ;;
         *"__bridge_windows_api_keys"*) return 0 ;;
         *) ;;
     esac
+    return 1
+}
+
+function __tac_is_normal_systemctl_query() {
+    # True when this command's non-zero status is a normal systemctl answer rather
+    # than a failure: `is-active`/`is-enabled` return 3 for "inactive"/"disabled".
+    # The log carried 296 such lines.  Only rc 3 is suppressed — a real failure
+    # (rc 4 "no such unit", rc 1, a bus/DBus error) must still be logged, so the
+    # caller reaches here for EVERY systemctl exit and this predicate decides.
+    local _cmd="$1"
+    local _rc="$2"
+    (( _rc == 3 )) || return 1
+
+    case "$_cmd" in
+        systemctl\ *|*/systemctl\ *) ;;
+        *) return 1 ;;
+    esac
+
+    # `--user`, `--system`, `--quiet`/`-q` are options, so the subcommand is NOT
+    # necessarily word 2 (`systemctl --user is-active --quiet x`): scan every word.
+    # `read -a` rather than unquoted expansion so a `*` in the command cannot glob.
+    local -a _words=()
+    read -r -a _words <<< "$_cmd"
+    local _word
+    for _word in "${_words[@]}"
+    do
+        case "$_word" in
+            is-active|is-enabled) return 0 ;;
+            *) ;;
+        esac
+    done
     return 1
 }
 
@@ -220,6 +262,15 @@ function __tac_err_handler() {
         curl*) return ;;                  # HTTP errors are expected for probes
         jq*) return ;;                    # Invalid JSON is expected for probes
         *nvm.sh*) return ;;               # NVM returns exit code 3 when already loaded or in non-interactive shell
+        systemctl*)
+            # `is-active`/`is-enabled` return 3 for inactive/disabled — a normal
+            # answer, not an error (296 such lines were logged). A real systemctl
+            # failure must still be logged, so the predicate decides on rc + subcommand.
+            if __tac_is_normal_systemctl_query "$_raw_cmd" "$__tac_last_err"
+            then
+                return
+            fi
+            ;;
         *) ;;
     esac
 
