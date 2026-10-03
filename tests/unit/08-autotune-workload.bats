@@ -243,7 +243,15 @@ _selftest_run() {
     # _SELFTEST_CERT_GAP_* case is written against), so the canned curve never fires and
     # the case silently asserts nothing.  Lifting the multiplier off the native window
     # makes the ceiling the model's own context_length on every host.
+    # HEAVY_JOB_LOCK is sandboxed to this case: autotune-model.sh re-execs through
+    # bin/heavy-job, which takes an exclusive flock on ${HEAVY_JOB_LOCK:-/tmp/heavy-job.lock}.
+    # With the default lock a unit test blocks indefinitely while ANY other heavy job on the
+    # box (another repo's pytest, an autotune batch) holds it — measured 2026-10-02, a
+    # 45+ min investigator pytest held it and this filtered case hung with no output. A
+    # test-private lock makes the suite independent of the shared box-wide lock while still
+    # exercising the real heavy-job serialisation path (card 34c28be3).
     env -u VIRTUAL_ENV HOME="$sandbox/home" LLAMA_DRIVE_ROOT="$sandbox/drive" \
+        HEAVY_JOB_LOCK="$sandbox/heavy-job.lock" \
         CUDA_CYCLE_FILE="$sandbox/cycles" CUDA_STALL_FILE="$sandbox/stalls" \
         LLM_AUTOTUNE_BASELINE_GAP_MAX=999999 AUTOTUNE_SELFTEST=1 \
         LLM_AUTOTUNE_VRAM_CAP_MULT=4194304 "$@" \
