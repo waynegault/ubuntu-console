@@ -579,6 +579,23 @@ __fast_member_shellcheck() {
     done
 }
 
+@test "bin: the shared helpers are defined ONCE, in bin/_tac-bin-lib.sh" {
+    # Card a1076d6f: log() was defined in FIVE bin/ scripts, _free_mib in two and
+    # _inv_gpu_lock_path in two. Each now has ONE definition, in the shared
+    # library the others source. This pins that, so a copy cannot creep back —
+    # and it is a grep because the property is "one definition in the tree",
+    # which running a script cannot show.
+    local _h _files
+    for _h in 'log' '_free_mib' '_inv_gpu_lock_path'; do
+        _files=$(grep -lE "^${_h}\(\) \{" "$REPO_ROOT"/bin/* 2>/dev/null || true)
+        [[ "$_files" == "$REPO_ROOT/bin/_tac-bin-lib.sh" ]] || {
+            echo "helper '${_h}' defined in: ${_files:-<none>}"
+            echo "expected exactly: $REPO_ROOT/bin/_tac-bin-lib.sh"
+            return 1
+        }
+    done
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. SYSTEMD UNITS — Structure validation
 # ─────────────────────────────────────────────────────────────────────────────

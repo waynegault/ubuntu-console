@@ -119,14 +119,14 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 12
+# Module Version: 13
 #   Bump counter for tools/check-module-versions.sh, which parses exactly this
 #   line (it is what makes an edit here fail the pre-commit guard until the
 #   number moves).  Deliberately separate from VERSION= below: the marker
 #   changes on ANY edit, VERSION= on significant ones (it is what --version
 #   prints).  Added 2026-09-14 — until then this was the only GPU-adjacent
 #   script in the repo outside the version guard.
-VERSION="3.13"
+VERSION="3.14"
 
 # --version works without taking the lock (diagnostic; also keeps VERSION used).
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
@@ -134,6 +134,13 @@ if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
     exit 0
 fi
 set -uo pipefail
+
+# log lives in the shared bin library (one definition, every bin/ caller).
+# Sourced by realpath so the ~/.local/bin symlink and the repo path both resolve.
+TAC_LOG_TAG="watchdog"
+export TAC_LOG_TAG
+# shellcheck source=_tac-bin-lib.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 
 # Prevent concurrent runs (timer could fire while a slow restart is in progress).
 # Cleanup is inlined into the trap (rather than a named function) so shellcheck
@@ -211,8 +218,6 @@ CUDA_SUSPEND_FILE="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-c
 # exactly one restart and never mask a genuine death after that.
 CUDA_GPUSTOP_FILE="${LLAMA_WATCHDOG_CUDA_GPUSTOP_FILE:-$WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.gpustop}"
 CUDA_GPUSTOP_TTL_S="${LLAMA_WATCHDOG_CUDA_GPUSTOP_TTL_S:-1800}"
-
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] $*"; }
 
 # health: 0=ok, 1=down/fail, 2=still loading (503) — treat 2 as "not ready, don't touch"
 health() {

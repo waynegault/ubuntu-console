@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 74
+# Module Version: 75
+#   v75 (2026-10-03): the dead `__llm_thread_cap` standalone fallback is deleted —
+#   `__llm_thread_cap has ONE definition in scripts/11d-llm-gpu.sh, which env.sh (sourced
+#   above, exit-1 on failure) loads.
 #   v74 (2026-10-02): the heavy-job lock is taken AFTER the command line is validated and
 #   the model resolved, not as the first thing after `set -uo pipefail`.  An invalid
 #   invocation (a typo, a row that does not exist, a missing file) is a refusal to start,
@@ -203,15 +206,9 @@ CPU_COUNT=$(nproc 2>/dev/null || echo 6)
 # REF: "Speculative Decoding on CPUs — Nearly 4x Faster Token Generation
 # with DFlash" (Intel, TDS 2026)
 # https://towardsdatascience.com/speculative-decoding-on-cpus-nearly-4x-faster-token-generation-with-dflash/
-if ! declare -f __llm_thread_cap &>/dev/null; then
-    # Standalone fallback (11d-llm-gpu.sh not sourced): same P-core clamp.
-    __llm_thread_cap() {
-        local _raw="${1:-6}"
-        [[ "$_raw" =~ ^[0-9]+$ ]] || _raw=6
-        (( _raw > 6 )) && _raw=6
-        echo "$_raw"
-    }
-fi
+# __llm_thread_cap has ONE definition, in scripts/11d-llm-gpu.sh.  env.sh (sourced
+# above, exit-1 on failure) loads it, so the standalone fallback copy that used to
+# sit here was unreachable duplication and is deleted.
 if [[ "$_thr" =~ ^[0-9]+$ ]] && [[ $_thr -gt 0 ]] && [[ $_thr -le $CPU_COUNT ]]; then
     TUNE_THREADS=$(__llm_thread_cap "$_thr")
 else

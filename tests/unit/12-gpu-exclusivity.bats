@@ -29,6 +29,10 @@
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 MODULE="$REPO_ROOT/scripts/11d-llm-gpu.sh"
 CLEAR="$REPO_ROOT/bin/llama-gpu-clear.sh"
+# The bin-side lock-path helper lives in the shared bin library now (one
+# definition for llama-gpu-clear.sh and train-timeout-runner.sh); this test
+# extracts it from there and compares it with the module's copy.
+BIN_LIB="$REPO_ROOT/bin/_tac-bin-lib.sh"
 
 setup() {
     TAC_TEST_TMPDIR="$(mktemp -d)"
@@ -68,7 +72,7 @@ _module_guards() {
 }
 
 _clear_guards() {
-    sed -n '/^_inv_gpu_lock_path/,/^}/p' "$CLEAR" > "$TAC_TEST_TMPDIR/guards.sh"
+    sed -n '/^_inv_gpu_lock_path/,/^}/p' "$BIN_LIB" > "$TAC_TEST_TMPDIR/guards.sh"
     sed -n '/^_inv_gpu_foreign_owner/,/^}/p' "$CLEAR" >> "$TAC_TEST_TMPDIR/guards.sh"
 }
 

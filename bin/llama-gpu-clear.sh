@@ -7,8 +7,8 @@
 # released by the driver - use a short grace period instead of the full 30s
 # drain wait so recovery isn't delayed.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 8
-VERSION="1.4.2"   # 1.4.2: drop the retired llama-server-cuda name from the CUDA evict set.
+# Module Version: 9
+VERSION="1.4.3"   # 1.4.3: log and _inv_gpu_lock_path moved to the shared bin/_tac-bin-lib.sh.
 
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
     echo "llama-gpu-clear $VERSION"
@@ -17,25 +17,28 @@ fi
 
 set -uo pipefail
 
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') [gpu-clear] $*"; }
+# log and _inv_gpu_lock_path live in the shared bin library now (one definition,
+# every bin/ caller).  Sourced by realpath so the ~/.local/bin shim that execs
+# this file and the repo path both resolve to the same companion.
+TAC_LOG_TAG="gpu-clear"
+export TAC_LOG_TAG
+# shellcheck source=_tac-bin-lib.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 
 # The investigator pipeline holds a cross-process GPU flock for the whole
 # duration of a local-model run (pipeline/gpu/_lock.py).  Nothing on the
 # console side honoured it, so this ExecStartPre — evictor #1 in the
 # investigator's own list (BENCH-GPU-EXCLUSIVITY-001) — reaped a foreign
-# bench's llama-server mid-run.  Deliberately a local copy of
-# scripts/11d-llm-gpu.sh::__llm_gpu_lock_path/__llm_gpu_foreign_owner: this
-# script runs as an ExecStartPre and must not depend on the console's module
-# tree, which is why it stands alone at all.  tests/unit/12-gpu-exclusivity.bats
-# asserts the two copies agree, so they cannot drift.
+# bench's llama-server mid-run.  The lock PATH comes from bin/_tac-bin-lib.sh
+# (shared with bin/train-timeout-runner.sh); scripts/11d-llm-gpu.sh carries the
+# module-side copy of the same precedence, and tests/unit/12-gpu-exclusivity.bats
+# asserts the two agree, so they cannot drift.  _inv_gpu_foreign_owner stays
+# local: this script runs as an ExecStartPre and must not depend on the
+# console's module tree, which is why it stands alone at all.
 #
-# Path precedence mirrors config/paths.gpu_lock_path() exactly.  The probe is
-# existence-gated: `flock -n` also fails on a missing path, and reading that as
-# "held" would stop the lane from ever starting on a box that never took it.
-_inv_gpu_lock_path() {
-    printf '%s\n' "${INVESTIGATOR_GPU_LOCK:-${INVESTIGATOR_PRODUCTION_OUTPUT:-$HOME/investigator/production}/runtime/gpu.lock}"
-}
-
+# The probe is existence-gated: `flock -n` also fails on a missing path, and
+# reading that as "held" would stop the lane from ever starting on a box that
+# never took it.
 _inv_gpu_foreign_owner() {
     local _lock_path
     _lock_path=$(_inv_gpu_lock_path)

@@ -47,7 +47,7 @@
 #       is ~102 s under load, so 3 is the normal outcome on a busy box)
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
 #   v3 (2026-09-30): honour the safe-stop refusal (a DO NOT STOP used to be downgraded to a
 #   warning, so doctor ran against a LIVE Gateway and failed with a misleading contention
 #   error); exit codes now match this header (`exit "$doctor_rc"` returned 1 for a doctor
@@ -65,6 +65,17 @@
 #   (update repair ran after doctor --fix and re-hit the contention).
 set -uo pipefail
 
+# log lives in the shared bin library (one definition, every bin/ caller).  This
+# script's line has NO tag and uses ISO-8601 seconds, both stated here so its
+# output stays byte-identical.  Sourced by realpath so the ~/.local/bin symlink
+# and the repo path both resolve.
+TAC_LOG_TAG=""
+export TAC_LOG_TAG
+TAC_LOG_DATE="-Is"
+export TAC_LOG_DATE
+# shellcheck source=_tac-bin-lib.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
+
 # Explicit PATH: a `systemd-run` transient unit gets only the default PATH — no Linuxbrew,
 # no node — so `openclaw` would not resolve and the preflight would refuse the run. Measured
 # 2026-09-30 on the first detached attempt ("FATAL preflight: --version failed — nothing
@@ -79,8 +90,6 @@ HOLD="$OPENCLAW_HOME/.gateway-hold"
 SAFE_STOP="$OPENCLAW_HOME/workspace/scripts/safe-stop-gateway.py"
 PY="$OPENCLAW_HOME/.venv/bin/python3"
 HOLD_MAX_AGE_S="${HOLD_MAX_AGE_S:-3600}"
-
-log() { printf '%s %s\n' "$(date -Is)" "$*"; }
 
 # state_of — the unit's state, with no stderr suppression and no swallowed status: an
 # assignment does not abort under `set -uo pipefail`, and is-active writes the state to

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
 # TRACKED HERE since 2026-10-01: this script lived only as a loose ~/.local/bin copy, so a
 # change to it was unversioned and unreviewable.  Code that is exclusively supportive of
 # ubuntu-console belongs in this repo; install.sh links every file in bin/ into
@@ -27,6 +27,11 @@
 #   — the budget meters autotune spawns only (verified: _bump_cuda_cycle lives only in
 #   autotune-model.sh), and that distinction is deliberate until it is fixed.
 set -uo pipefail
+
+# Shared helpers (_free_mib) — see bin/_tac-bin-lib.sh.  Sourced by realpath so
+# the ~/.local/bin symlink and the repo path both resolve.
+# shellcheck source=_tac-bin-lib.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 
 # ── Box-wide heavy-job serialisation (bin/heavy-job) ─────────────────────────
 # At most ONE heavy job runs on this box at a time: two of them oversubscribe all
@@ -88,11 +93,6 @@ trap 'rm -f "$SUSPEND"' EXIT
 # swallow-ok: the lane may already be down, and a down lane is the state this line seeks either way
 systemctl --user stop "$LANE" >/dev/null 2>&1 || true
 
-_free_mib() {
-    # swallow-ok: a failing nvidia-smi leaves _free empty, and the numeric guard in the wait loop is what decides — the probe's own error adds nothing
-    nvidia-smi --query-gpu=memory.total,memory.used --format=csv,noheader,nounits 2>/dev/null \
-        | awk -F', *' '{print $1 - $2; exit}'
-}
 for _ in $(seq 1 45); do
     _free="$(_free_mib)"
     [[ "$_free" =~ ^[0-9]+$ ]] || break

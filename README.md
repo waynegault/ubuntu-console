@@ -513,7 +513,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1710 total tests: 1120 BATS + 590 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (1711 total tests: 1121 BATS + 590 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
 
 ### Running Tests
 
@@ -563,12 +563,12 @@ Counts are enforced by `tools/docs-sync-check.sh`; the suite list and its per-ca
 | Suite | File | Count | Per-case timeout | Whole-file timeout |
 |-------|------|-------|------------------|--------------------|
 | Full behavioural | `tactical-console.bats` | 387 | 900s | 2700s |
-| Fast static analysis | `tactical-console-fast.bats` | 65 | 300s | 900s |
+| Fast static analysis | `tactical-console-fast.bats` | 66 | 300s | 900s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
 | Unit | `tests/unit/*.bats` | 523 | 300s | 600s |
 | Integration | `tests/integration/*.bats` | 143 | 300s | 1200s |
 | Python | `tests/test_*.py` | 590 | 1000s (`pytest.ini`) | — |
-| **Total** | | **1710** | | |
+| **Total** | | **1711** | | |
 
 **Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and every marker the BATS bridge applies dynamically (`bats`, `bats_unit`, `bats_fast`, `bats_full`, `bats_integration`, `slow`) is registered there. There is deliberately no `bats_default`: each suite's marker now comes by name from `tests/bats-suites.tsv`, so a name the table gets wrong fails collection instead of quietly filing the suite under a marker no `-m` selection asks for. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 387 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
 
@@ -1092,6 +1092,7 @@ where it was last present.)
 │   ├── quant-guide.conf               # Quantization priority ratings (editable)
 │   └── concept-aliases.json           # kgraph concept classification data
 ├── bin/
+│   ├── _tac-bin-lib.sh                # Shared standalone-script helpers (log, _free_mib, _inv_gpu_lock_path)
 │   ├── tac-exec                       # Bootstrap: source env.sh + exec "$@"
 │   ├── tac_hostmetrics.sh             # Host CPU + iGPU + NVIDIA dGPU load/engines
 │   ├── gh                             # GitHub CLI shim: bridged GH_TOKEN, no keyring fall-through
@@ -1188,7 +1189,7 @@ where it was last present.)
 │   ├── _bats_suites.py                # Parser for the suite table below (rejects a malformed row)
 │   ├── bats-suites.tsv                # Canonical BATS suite table: glob, marker, per-case + whole-file timeouts
 │   ├── tactical-console.bats          # BATS full suite (387 tests, ~5-15 min)
-│   ├── tactical-console-fast.bats     # Fast subset (65 tests, ~2 min)
+│   ├── tactical-console-fast.bats     # Fast subset (66 tests, ~2 min)
 │   ├── tactical-console-function-availability.bats  # Function availability checks (2 tests)
 │   ├── test_bats_bridge.py            # BATS→pytest bridge: exposes each @test as an individual pytest test
 │   ├── test_bats_unittest.py          # BATS→unittest bridge: one generated case per suite file (pytest ignores it)
@@ -1496,7 +1497,7 @@ runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
 
 [![CI](.github/workflows/ci.yml)](.github/workflows/ci.yml)
 
-- **Fast tests:** `bats tests/tactical-console-fast.bats` (65 tests)
+- **Fast tests:** `bats tests/tactical-console-fast.bats` (66 tests)
 - **Full tests:** `bats tests/tactical-console.bats` (387 BATS unit tests)
 - **Unit suites (428 tests in CI):** the exact set is the literal path list under "Run unit tests" in `.github/workflows/ci.yml`; nightly adds `05`–`08`, `12` and `38`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host — and `12-gpu-exclusivity` is excluded from the CI job because it takes the CUDA card lock this box also lends to investigator's GPU pipelines.
 - **Integration suites (143 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).

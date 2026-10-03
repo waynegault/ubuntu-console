@@ -59,13 +59,18 @@
 #
 # AI INSTRUCTION: Increment the Module Version on any change; increment VERSION
 # for significant edits.
-# Module Version: 2
+# Module Version: 3
 #   v2 (2026-09-27): it also REFUSES when another agent's run holds the investigator's GPU
 #   flock, which "register as a known tenant, exactly as a bench does" requires - the
 #   bench (11e:960) and autotune (run-autotune-batch.sh:184/210) both refuse that way, and
 #   without it a training run could become a second consumer on a 4 GB card.
-VERSION="1.1"
+VERSION="1.2"
 set -euo pipefail
+
+# Shared helper (_inv_gpu_lock_path) — see bin/_tac-bin-lib.sh.  Sourced by
+# realpath so the ~/.local/bin symlink and the repo path both resolve.
+# shellcheck source=_tac-bin-lib.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 
 pidfile=""
 logfile=""
@@ -175,10 +180,6 @@ trap '__ttr_cleanup $?' EXIT INT TERM
 # of its run and nothing on the console side ever takes it.  Existence-gated, because
 # `flock -n` also fails on a MISSING path, and reading that as "held" would refuse on a box
 # that never took the lock.
-_inv_gpu_lock_path() {
-    printf '%s\n' "${INVESTIGATOR_GPU_LOCK:-${INVESTIGATOR_PRODUCTION_OUTPUT:-$HOME/investigator/production}/runtime/gpu.lock}"
-}
-
 _inv_lock=$(_inv_gpu_lock_path)
 if [[ -e "$_inv_lock" ]]; then
     # swallow-ok: the probe's failure IS the "held by another run" answer checked on the next line

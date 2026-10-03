@@ -34,18 +34,26 @@
 #   deliberate, non-bench stop.  `rm` the file to resume.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
 
 set -euo pipefail
 
+# log lives in the shared bin library (one definition, every bin/ caller).
+# Sourced by realpath so the ~/.local/bin symlink and the repo path both resolve.
+TAC_LOG_TAG="watchdog-guard"
+export TAC_LOG_TAG
+# shellcheck source=_tac-bin-lib.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
+
 TIMER="llama-watchdog.timer"
-LOCK="/home/wayne/investigator/production/runtime/gpu.lock"
+# The investigator GPU lock path comes from the shared helper (same precedence
+# as the module side); this was a hardcoded literal that ignored
+# INVESTIGATOR_GPU_LOCK, a drift waiting to happen.
+LOCK="$(_inv_gpu_lock_path)"
 PAUSE="/dev/shm/llama-watchdog-guard.pause"
 STRIKES="/dev/shm/llama-watchdog-guard.strikes"
 ALERT="/home/wayne/.openclaw/life/alerts/supervision-stall.json"
 NEED=2
-
-log() { printf '%s [watchdog-guard] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
 if [ -e "$PAUSE" ]; then
   exit 0

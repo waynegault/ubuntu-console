@@ -25,7 +25,7 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 6
+# Module Version: 7
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
 #
 # CARD DISCIPLINE: this script is about the CUDA card only.  The Xe card is a
@@ -72,7 +72,21 @@ SAMPLE_INTERVAL="${GPU_BUSY_SAMPLE_INTERVAL:-1.5}"
 BENCH_LOCK="${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}"
 LOG_FILE="${GPU_BUSY_LOG:-}"
 
-log() { [[ -n "$LOG_FILE" ]] && printf '%s [gpu-busy] %s\n' "$(date -Iseconds)" "$*" >> "$LOG_FILE"; }
+# log lives in the shared bin library (one definition, every bin/ caller).  This
+# script appends to $LOG_FILE (and emits nothing while it is empty) with the
+# gpu-busy tag and ISO-8601 seconds — all stated here so the output stays
+# byte-identical.  Sourced by realpath so the ~/.local/bin shim that execs this
+# file and the repo path both resolve.
+TAC_LOG_TAG="gpu-busy"
+export TAC_LOG_TAG
+TAC_LOG_DATE="-Iseconds"
+export TAC_LOG_DATE
+TAC_LOG_TO_FILE=1
+export TAC_LOG_TO_FILE
+TAC_LOG_FILE="$LOG_FILE"
+export TAC_LOG_FILE
+# shellcheck source=_tac-bin-lib.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 
 REASONS=()
 
