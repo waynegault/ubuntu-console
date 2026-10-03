@@ -217,21 +217,28 @@ class TestBenchmark(unittest.TestCase):
                 data = json.load(f)
             self.assertEqual(data["node_count"], 3)
 
-    def test_format_benchmark_renders_a_result_without_printing(self):
+    def test_format_benchmark_renders_the_measured_figures(self):
+        """The rendered report carries the header and the computed counts.
+
+        Catches: format_benchmark dropping a figure (or formatting the wrong
+        field) so `kgraph benchmark` reports a number that is not the one the
+        benchmark computed.  _SMALL_GRAPH is 3 nodes / 2 edges, so the two
+        counts below are the values len(result[...]) produces.
+        """
         result = kgraph.benchmark_graph_vs_raw(_SMALL_GRAPH)
+        self.assertEqual(result["node_count"], 3)
+        self.assertEqual(result["edge_count"], 2)
         text = kgraph.format_benchmark(result)
         self.assertIn("=== Token-Reduction Benchmark ===", text)
         self.assertIn("Graph nodes: 3", text)
+        self.assertIn("Graph edges: 2", text)
+        self.assertIn(f'Avg tokens/node: {result["avg_tokens_per_node"]}', text)
 
 
 # ── mcp_server ─────────────────────────────────────────────────────────
 
 
 class TestMCPServer(unittest.TestCase):
-    def test_serve_mcp_is_callable(self):
-        """serve_mcp is importable and callable."""
-        self.assertTrue(callable(kgraph.serve_mcp))
-
     def test_safe_report_path_confines_writes(self):
         """kgraph_report outpath stays inside the reports directory."""
         from kgraph.mcp_server import _safe_report_path
