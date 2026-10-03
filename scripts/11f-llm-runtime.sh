@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 11f-llm-runtime ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # 11f-llm-runtime
 # ==============================================================================
@@ -117,257 +117,128 @@ function __burn_tps_cache_holds() {
 }
 
 # ---------------------------------------------------------------------------
-# burn — Stress test the local LLM with a ~1300 token physics prompt.
-# Uses non-streaming request with accurate server-reported completion_tokens.
-# Pure bash + curl + jq with nanosecond timing.
+# __burn_wait_ready — block until the model can serve completions, or give up.
+# A 503 "Loading model" window follows __require_llm (the GGUF mmap can take up
+# to 90s for CPU), so burn waits here rather than failing the first request.
 # ---------------------------------------------------------------------------
-function burn() {
-    __require_llm || return 1
-    if [[ -z "${__BENCH_MODE:-}" ]]
-    then
-        __tac_header "HARDWARE BURN-IN STRESS TEST"
-    fi
-
-    # Wait for the model to finish loading before sending the completion request.
-    # The port may be open (passes __require_llm) but the server returns 503
-    # "Loading model" while the GGUF memory-map completes (up to 90s for CPU).
+function __burn_wait_ready() {
+    __llm_is_healthy && return 0
+    local burn_ready_timeout="${LLM_BURN_READY_TIMEOUT:-180}"
+    printf '%s' "${C_Dim}Waiting for model to finish loading"
+    local _bw
+    for (( _bw=0; _bw < burn_ready_timeout; _bw++ ))
+    do
+        __llm_is_healthy && break
+        printf '.'
+        sleep 1
+    done
+    printf '%s\n' "$C_Reset"
     if ! __llm_is_healthy
     then
-        local burn_ready_timeout="${LLM_BURN_READY_TIMEOUT:-180}"
-        printf '%s' "${C_Dim}Waiting for model to finish loading"
-        for (( _bw=0; _bw < burn_ready_timeout; _bw++ ))
-        do
-            __llm_is_healthy && break
-            printf '.'
-            sleep 1
-        done
-        printf '%s\n' "$C_Reset"
-        if ! __llm_is_healthy
-        then
-            __tac_info "Status" "Model failed to become healthy - check: tail $LLM_LOG_FILE" "$C_Error"
-            return 1
-        fi
+        __tac_info "Status" "Model failed to become healthy - check: tail $LLM_LOG_FILE" "$C_Error"
+        return 1
     fi
+    return 0
+}
 
-    local bench_tokens="${LLM_BENCH_BURN_TOKENS:-768}"
-    [[ "$bench_tokens" =~ ^[0-9]+$ ]] || bench_tokens=768
-    (( bench_tokens < 128 )) && bench_tokens=128
-    printf '%s\n' "${C_Dim}Testing: ~${bench_tokens} token synthetic physics response...${C_Reset}"
-    printf '%s\n' "${C_Highlight}Processing ....${C_Reset}"
-
-    local prompt="Explain the complete theory of special relativity"
-    prompt+=" in extreme detail, including the mathematical"
-    prompt+=" derivations for time dilation."
-
-    # Non-streaming request — curl + jq, with bash nanosecond timing.
-    # Bench mode uses deterministic sampling to make cross-run TPS comparisons
-    # less sensitive to random token path variation.
-    local payload
+# ---------------------------------------------------------------------------
+# __burn_build_payload <tokens> <prompt> — echo the request body.  Bench mode
+# pins deterministic sampling (temperature from LLM_BENCH_TEMPERATURE) so
+# cross-run TPS compares like with like; normal mode uses the interactive 0.7.
+# ---------------------------------------------------------------------------
+function __burn_build_payload() {
+    local _tokens="$1" _prompt="$2"
     if [[ -n "${__BENCH_MODE:-}" ]]
     then
-        payload=$(jq -n \
-            --arg p "$prompt" \
-            --argjson bench_tokens "$bench_tokens" \
+        jq -n --arg p "$_prompt" \
+            --argjson bench_tokens "$_tokens" \
             --argjson bench_temp "${LLM_BENCH_TEMPERATURE:-0}" \
-            '{messages: [{role: "user", content: $p}], max_tokens: $bench_tokens, temperature: $bench_temp, top_p: 1.0}')
+            '{messages: [{role: "user", content: $p}], max_tokens: $bench_tokens, temperature: $bench_temp, top_p: 1.0}'
     else
-        payload=$(jq -n --arg p "$prompt" \
-            '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}')
+        jq -n --arg p "$_prompt" \
+            '{messages: [{role: "user", content: $p}], max_tokens: 1500, temperature: 0.7}'
     fi
+}
 
-    local request_timeout=360
-    if [[ -f "$ACTIVE_LLM_FILE" && -f "$LLM_REGISTRY" ]]
+# ---------------------------------------------------------------------------
+# __burn_preflight_slot — in bench mode, confirm the slot actually serves a
+# completion (WSL2: /health can report OK before the slot can), polling up to
+# 60s.  A no-op outside bench mode.
+# ---------------------------------------------------------------------------
+function __burn_preflight_slot() {
+    [[ -n "${__BENCH_MODE:-}" ]] || return 0
+    local _pf_body='{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}'
+    local _pf_rc
+    _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+        -H 'Content-Type: application/json' \
+        -d "$_pf_body" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" 2>/dev/null || echo 0)
+    if [[ "$_pf_rc" != "200" ]]
     then
-        local _burn_file _burn_entry _burn_gpu _burn_size _burn_num=""
-        # The pointer holds the model FILE name; the number form would pick up another
-        # model's size/gpu-layers — and so a wrong request timeout — after a rescan.
-        _burn_file=$(< "$ACTIVE_LLM_FILE")
-        _burn_entry=$(__llm_registry_entry_by_file "$_burn_file" 2>/dev/null || true)
-        if [[ -n "$_burn_entry" ]]
-        then
-            # Field POSITIONS matter: 1=#, 2=name, 3=file, 4=size_gb, 5=quant_cache,
-            # 6=arch, 7=gpu_layers, 8=ctx, 9=threads.  This read used to name 11 variables
-            # for fields 4-11, so from the fifth onward every one was off by one: the
-            # timeout helper was handed ctx as gpu_layers and quant_cache as arch, which
-            # silently disabled its CPU-only and qwen35 branches (fixed 2026-09-17).
-            IFS='|' read -r _burn_num _name _file _burn_size _qc _arch _burn_gpu _ctx _threads _batch _ubatch <<< "$_burn_entry"
-            request_timeout=$(__llm_burn_request_timeout "${_burn_size:-0G}" "${_burn_gpu:-0}" "${_arch:-}" "${__BENCH_MODE:-}")
-        fi
+        # Slot not ready — poll until it responds.
+        local _pfr
+        for (( _pfr=0; _pfr < 60; _pfr++ ))
+        do
+            sleep 1
+            _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+                -H 'Content-Type: application/json' \
+                -d "$_pf_body" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" 2>/dev/null || echo 0)
+            [[ "$_pf_rc" == "200" ]] && break
+        done
     fi
+    return 0
+}
 
-    local start_ns end_ns response curl_rc
-    local transport_history=""
-    local attempt=1
-    local max_attempts="${LLM_BURN_MAX_ATTEMPTS:-}"
-    local retry_health_wait="${LLM_BURN_RETRY_HEALTH_WAIT:-30}"
-    local retry_settle_sec="${LLM_BURN_RETRY_SETTLE_SEC:-2}"
-    if [[ ! "$max_attempts" =~ ^[0-9]+$ ]]
+# ---------------------------------------------------------------------------
+# __burn_recover_model <num> <ctx> <health_wait> <recovery_attempt nameref> —
+# clear VRAM and restart the active model after a transport failure, stepping
+# the ctx down on each successive attempt so a broken autotuned ctx does not
+# cause repeated identical crashes.  The caller's counter is incremented here.
+# ---------------------------------------------------------------------------
+function __burn_recover_model() {
+    local _burn_num="$1" _ctx="$2" _retry_health_wait="$3"
+    local -n _burn_recovery_attempt="$4"
+    printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Restarting active model #${_burn_num} after transport failure..."
+    # Clear VRAM before reload to remove ghost allocations from the
+    # failed server instance (WSL2 CUDA often holds stale memory).
+    sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
+    _burn_recovery_attempt=$(( _burn_recovery_attempt + 1 ))
+    local _burn_saved_ctx="${LLAMA_N_CTX:-${_ctx:-4096}}"
+    if (( _burn_recovery_attempt > 1 )) && [[ -n "${_ctx:-}" ]]
     then
-        if [[ -n "${__BENCH_MODE:-}" ]]
-        then
-            max_attempts=4
-        else
-            max_attempts=3
-        fi
+        local _burn_reduced_ctx=$(( _ctx / (2 ** (_burn_recovery_attempt - 1)) ))
+        [[ "$_burn_reduced_ctx" -lt 4096 ]] && _burn_reduced_ctx=4096
+        export LLAMA_N_CTX="$_burn_reduced_ctx"
+        printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Step-down ctx: ${_ctx} \xe2\x86\x92 ${_burn_reduced_ctx} (attempt ${_burn_recovery_attempt})"
     fi
-    (( max_attempts < 1 )) && max_attempts=1
-    [[ "$retry_health_wait" =~ ^[0-9]+$ ]] || retry_health_wait=30
-    (( retry_health_wait < 1 )) && retry_health_wait=1
-    [[ "$retry_settle_sec" =~ ^[0-9]+$ ]] || retry_settle_sec=2
-    (( retry_settle_sec < 0 )) && retry_settle_sec=0
-    local _burn_recovery_attempt=0
-    while true
-    do
-        start_ns=$(date +%s%N)
-        response=$(curl -sS --max-time "$request_timeout" "$LOCAL_LLM_URL" \
-            -H "Content-Type: application/json" \
-            -d "$payload" 2>/dev/null)
-        curl_rc=$?
-        end_ns=$(date +%s%N)
-
-        # Retry transient transport issues (e.g. brief server restart/socket
-        # reset) to improve benchmark fairness and reduce false negatives.
-        if (( curl_rc != 0 && curl_rc != 28 && attempt < max_attempts ))
-        then
-            [[ -n "$transport_history" ]] && transport_history+=","
-            transport_history+="$curl_rc"
-            local _retry_msg
-            local _next_attempt=$(( attempt + 1 ))
-            _retry_msg="${C_Dim}[API Retry]${C_Reset} Transport error (curl ${curl_rc}); "
-            _retry_msg+="request ${attempt}/${max_attempts}; waiting up to ${retry_health_wait}s before retry ${_next_attempt}/${max_attempts}..."
-            printf '%s\n' \
-                "$_retry_msg"
-            if [[ -n "${__BENCH_MODE:-}" ]] && [[ "$bench_tokens" =~ ^[0-9]+$ ]] && (( bench_tokens > 128 ))
+    if __model_use "$_burn_num" >/tmp/burn_transport_recover_use.log 2>&1
+    then
+        local _rw
+        for (( _rw=0; _rw < _retry_health_wait; _rw++ ))
+        do
+            if __llm_is_healthy
             then
-                local _retry_tokens=$(( bench_tokens / 2 ))
-                (( _retry_tokens < 128 )) && _retry_tokens=128
-                if (( _retry_tokens < bench_tokens ))
-                then
-                    bench_tokens=$_retry_tokens
-                    payload=$(jq -n \
-                        --arg p "$prompt" \
-                        --argjson bench_tokens "$bench_tokens" \
-                        --argjson bench_temp "${LLM_BENCH_TEMPERATURE:-0}" \
-                        '{messages: [{role: "user", content: $p}], max_tokens: $bench_tokens, temperature: $bench_temp, top_p: 1.0}')
-                    printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Retrying with ${bench_tokens} tokens after transient failure."
-                fi
+                printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Model recovered; retrying request."
+                break
             fi
-            local _rh
-            local _healthy=0
-            for (( _rh=0; _rh < retry_health_wait; _rh++ ))
-            do
-                if __llm_is_healthy
-                then
-                    _healthy=1
-                    # Pre-flight a tiny completion to confirm the slot is actually
-                    # ready (WSL2: /health can return OK before the model slot can
-                    # serve completions).
-                    if [[ -n "${__BENCH_MODE:-}" ]]
-                    then
-                        local _pf_body='{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}'
-                        local _pf_rc
-                        _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
-                            -H 'Content-Type: application/json' \
-                            -d "$_pf_body" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" 2>/dev/null || echo 0)
-                        if [[ "$_pf_rc" != "200" ]]
-                        then
-                            # Slot not ready — poll until it responds.
-                            for (( _pfr=0; _pfr < 60; _pfr++ ))
-                            do
-                                sleep 1
-                                _pf_rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
-                                    -H 'Content-Type: application/json' \
-                                    -d "$_pf_body" "http://127.0.0.1:$LLM_PORT/v1/chat/completions" 2>/dev/null || echo 0)
-                                [[ "$_pf_rc" == "200" ]] && break
-                            done
-                        fi
-                    fi
-                    if (( retry_settle_sec > 0 ))
-                    then
-                        sleep "$retry_settle_sec"
-                    fi
-                    break
-                fi
-                sleep 1
-            done
+            sleep 1
+        done
+    fi
+    # Restore original ctx after the recovery attempt so subsequent
+    # health checks and retries use the configured value.
+    export LLAMA_N_CTX="$_burn_saved_ctx"
+    return 0
+}
 
-            # If readiness never recovered during wait, attempt one active-model
-            # restart as auto-recovery before consuming remaining retries.
-            if (( _healthy == 0 ))
-            then
-                printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Server still unhealthy after ${retry_health_wait}s."
-
-                if [[ "${LLM_BURN_AUTO_RECOVER:-1}" == "1" ]] \
-                    && [[ -n "${_burn_num:-}" && "${_burn_num:-}" =~ ^[0-9]+$ ]]
-                then
-                    printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Restarting active model #${_burn_num} after transport failure..."
-                    # Clear VRAM before reload to remove ghost allocations from the
-                    # failed server instance (WSL2 CUDA often holds stale memory).
-                    sudo -n /usr/local/bin/clear_vram.sh >/dev/null 2>&1 || true
-                    # Step-down ctx on each successive recovery attempt so a broken
-                    # autotuned ctx does not cause repeated identical crashes.
-                    _burn_recovery_attempt=$(( _burn_recovery_attempt + 1 ))
-                    local _burn_saved_ctx="${LLAMA_N_CTX:-${_ctx:-4096}}"
-                    if (( _burn_recovery_attempt > 1 )) && [[ -n "${_ctx:-}" ]]
-                    then
-                        local _burn_reduced_ctx=$(( _ctx / (2 ** (_burn_recovery_attempt - 1)) ))
-                        [[ "$_burn_reduced_ctx" -lt 4096 ]] && _burn_reduced_ctx=4096
-                        export LLAMA_N_CTX="$_burn_reduced_ctx"
-                        printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Step-down ctx: ${_ctx} \xe2\x86\x92 ${_burn_reduced_ctx} (attempt ${_burn_recovery_attempt})"
-                    fi
-                    if __model_use "$_burn_num" >/tmp/burn_transport_recover_use.log 2>&1
-                    then
-                        local _rw
-                        for (( _rw=0; _rw < retry_health_wait; _rw++ ))
-                        do
-                            if __llm_is_healthy
-                            then
-                                printf '%s\n' "${C_Dim}[API Recover]${C_Reset} Model recovered; retrying request."
-                                break
-                            fi
-                            sleep 1
-                        done
-                    fi
-                    # Restore original ctx after the recovery attempt so subsequent
-                    # health checks and retries use the configured value.
-                    export LLAMA_N_CTX="$_burn_saved_ctx"
-                fi
-            fi
-
-            attempt=$(( attempt + 1 ))
-            continue
-        fi
-
-        # Retry once if server returned 503 "Loading model" (readiness race:
-        # /health reports ok before the model slot is fully ready to serve).
-        if (( curl_rc == 0 && attempt < max_attempts ))
-        then
-            local _loading_msg
-            _loading_msg=$(printf '%s' "$response" | jq -r '.error.message // empty' 2>/dev/null)
-            if [[ "$_loading_msg" == *[Ll]oading* ]]
-            then
-                local _loading_retry_msg
-                _loading_retry_msg="${C_Dim}[API Retry]${C_Reset} Server still loading "
-                _loading_retry_msg+="(\"${_loading_msg}\"); waiting up to 30s..."
-                printf '%s\n' \
-                    "$_loading_retry_msg"
-                local _lw
-                for (( _lw=0; _lw < 30; _lw++ ))
-                do
-                    if __llm_is_healthy; then
-                        sleep 3
-                        break
-                    fi
-                    sleep 1
-                done
-                attempt=$(( attempt + 1 ))
-                continue
-            fi
-        fi
-
-        break
-    done
-
+# ---------------------------------------------------------------------------
+# __burn_report_result <response> <curl_rc> <timeout> <attempt> <max_attempts>
+#                      <transport_history> <start_ns> <end_ns> <bench_tokens>
+# The post-request half of burn: classify the transport outcome, compute TPS over
+# DELIVERED tokens (counter-inflation guard), print the result and spec-decode
+# line, then persist the rate and read it back.  Returns non-zero on any failure.
+# ---------------------------------------------------------------------------
+function __burn_report_result() {
+    local response="$1" curl_rc="$2" request_timeout="$3" attempt="$4" max_attempts="$5"
+    local transport_history="$6" start_ns="$7" end_ns="$8" bench_tokens="$9"
     if (( curl_rc == 28 ))
     then
         printf '%s\n' \
@@ -468,6 +339,204 @@ function burn() {
 
     [[ -f "$LLM_TPS_CACHE" ]] && LAST_TPS=$(< "$LLM_TPS_CACHE")
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# __burn_resolve_timeout — echo "<request_timeout>|<num>|<ctx>" for the active
+# model.  The pointer holds the model FILE name, so the row is resolved by file
+# (the number form would pick up another model's size/gpu-layers — and so a
+# wrong request timeout — after a rescan).
+# ---------------------------------------------------------------------------
+function __burn_resolve_timeout() {
+    local request_timeout=360
+    if [[ -f "$ACTIVE_LLM_FILE" && -f "$LLM_REGISTRY" ]]
+    then
+        local _burn_file _burn_entry _burn_gpu _burn_size _burn_num="" _ctx=""
+        _burn_file=$(< "$ACTIVE_LLM_FILE")
+        _burn_entry=$(__llm_registry_entry_by_file "$_burn_file" 2>/dev/null || true)
+        if [[ -n "$_burn_entry" ]]
+        then
+            # Field POSITIONS matter: 1=#, 2=name, 3=file, 4=size_gb, 5=quant_cache,
+            # 6=arch, 7=gpu_layers, 8=ctx, 9=threads.  This read used to name 11 variables
+            # for fields 4-11, so from the fifth onward every one was off by one: the
+            # timeout helper was handed ctx as gpu_layers and quant_cache as arch, which
+            # silently disabled its CPU-only and qwen35 branches (fixed 2026-09-17).
+            local _name _file _qc _arch _threads _batch _ubatch
+            IFS='|' read -r _burn_num _name _file _burn_size _qc _arch _burn_gpu _ctx _threads _batch _ubatch <<< "$_burn_entry"
+            request_timeout=$(__llm_burn_request_timeout "${_burn_size:-0G}" "${_burn_gpu:-0}" "${_arch:-}" "${__BENCH_MODE:-}")
+        fi
+    fi
+    printf '%s|%s|%s\n' "$request_timeout" "${_burn_num:-}" "${_ctx:-}"
+}
+
+# ---------------------------------------------------------------------------
+# __burn_retry_settings — echo "<max_attempts> <health_wait> <settle_sec>",
+# validated.  Bench mode gets more attempts than the interactive default.
+# ---------------------------------------------------------------------------
+function __burn_retry_settings() {
+    local max_attempts="${LLM_BURN_MAX_ATTEMPTS:-}"
+    local retry_health_wait="${LLM_BURN_RETRY_HEALTH_WAIT:-30}"
+    local retry_settle_sec="${LLM_BURN_RETRY_SETTLE_SEC:-2}"
+    if [[ ! "$max_attempts" =~ ^[0-9]+$ ]]
+    then
+        if [[ -n "${__BENCH_MODE:-}" ]]
+        then
+            max_attempts=4
+        else
+            max_attempts=3
+        fi
+    fi
+    (( max_attempts < 1 )) && max_attempts=1
+    [[ "$retry_health_wait" =~ ^[0-9]+$ ]] || retry_health_wait=30
+    (( retry_health_wait < 1 )) && retry_health_wait=1
+    [[ "$retry_settle_sec" =~ ^[0-9]+$ ]] || retry_settle_sec=2
+    (( retry_settle_sec < 0 )) && retry_settle_sec=0
+    printf '%s %s %s\n' "$max_attempts" "$retry_health_wait" "$retry_settle_sec"
+}
+
+# ---------------------------------------------------------------------------
+# burn — Stress test the local LLM with a ~1300 token physics prompt.
+# Uses non-streaming request with accurate server-reported completion_tokens.
+# Pure bash + curl + jq with nanosecond timing.
+# ---------------------------------------------------------------------------
+function burn() {
+    __require_llm || return 1
+    if [[ -z "${__BENCH_MODE:-}" ]]
+    then
+        __tac_header "HARDWARE BURN-IN STRESS TEST"
+    fi
+
+    # Wait for the model to finish loading before sending the completion request.
+    # The port may be open (passes __require_llm) but the server returns 503
+    # "Loading model" while the GGUF memory-map completes (up to 90s for CPU).
+    __burn_wait_ready || return 1
+
+    local bench_tokens="${LLM_BENCH_BURN_TOKENS:-768}"
+    [[ "$bench_tokens" =~ ^[0-9]+$ ]] || bench_tokens=768
+    (( bench_tokens < 128 )) && bench_tokens=128
+    printf '%s\n' "${C_Dim}Testing: ~${bench_tokens} token synthetic physics response...${C_Reset}"
+    printf '%s\n' "${C_Highlight}Processing ....${C_Reset}"
+
+    local prompt="Explain the complete theory of special relativity"
+    prompt+=" in extreme detail, including the mathematical"
+    prompt+=" derivations for time dilation."
+
+    # Non-streaming request — curl + jq, with bash nanosecond timing.
+    # Bench mode uses deterministic sampling to make cross-run TPS comparisons
+    # less sensitive to random token path variation.
+    local payload
+    payload=$(__burn_build_payload "$bench_tokens" "$prompt")
+
+    local request_timeout _burn_num _ctx
+    IFS='|' read -r request_timeout _burn_num _ctx <<< "$(__burn_resolve_timeout)"
+
+    local start_ns end_ns response curl_rc
+    local transport_history=""
+    local attempt=1
+    local max_attempts="" retry_health_wait="" retry_settle_sec=""
+    IFS=' ' read -r max_attempts retry_health_wait retry_settle_sec <<< "$(__burn_retry_settings)"
+    local _burn_recovery_attempt=0
+    while true
+    do
+        start_ns=$(date +%s%N)
+        response=$(curl -sS --max-time "$request_timeout" "$LOCAL_LLM_URL" \
+            -H "Content-Type: application/json" \
+            -d "$payload" 2>/dev/null)
+        curl_rc=$?
+        end_ns=$(date +%s%N)
+
+        # Retry transient transport issues (e.g. brief server restart/socket
+        # reset) to improve benchmark fairness and reduce false negatives.
+        if (( curl_rc != 0 && curl_rc != 28 && attempt < max_attempts ))
+        then
+            [[ -n "$transport_history" ]] && transport_history+=","
+            transport_history+="$curl_rc"
+            local _retry_msg
+            local _next_attempt=$(( attempt + 1 ))
+            _retry_msg="${C_Dim}[API Retry]${C_Reset} Transport error (curl ${curl_rc}); "
+            _retry_msg+="request ${attempt}/${max_attempts}; waiting up to ${retry_health_wait}s before retry ${_next_attempt}/${max_attempts}..."
+            printf '%s\n' \
+                "$_retry_msg"
+            if [[ -n "${__BENCH_MODE:-}" ]] && [[ "$bench_tokens" =~ ^[0-9]+$ ]] && (( bench_tokens > 128 ))
+            then
+                local _retry_tokens=$(( bench_tokens / 2 ))
+                (( _retry_tokens < 128 )) && _retry_tokens=128
+                if (( _retry_tokens < bench_tokens ))
+                then
+                    bench_tokens=$_retry_tokens
+                    payload=$(__burn_build_payload "$bench_tokens" "$prompt")
+                    printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Retrying with ${bench_tokens} tokens after transient failure."
+                fi
+            fi
+            local _rh
+            local _healthy=0
+            for (( _rh=0; _rh < retry_health_wait; _rh++ ))
+            do
+                if __llm_is_healthy
+                then
+                    _healthy=1
+                    # Pre-flight a tiny completion to confirm the slot is actually
+                    # ready (WSL2: /health can return OK before the model slot can
+                    # serve completions).  No-op outside bench mode.
+                    __burn_preflight_slot
+                    if (( retry_settle_sec > 0 ))
+                    then
+                        sleep "$retry_settle_sec"
+                    fi
+                    break
+                fi
+                sleep 1
+            done
+
+            # If readiness never recovered during wait, attempt one active-model
+            # restart as auto-recovery before consuming remaining retries.
+            if (( _healthy == 0 ))
+            then
+                printf '%s\n' "${C_Dim}[API Retry]${C_Reset} Server still unhealthy after ${retry_health_wait}s."
+
+                if [[ "${LLM_BURN_AUTO_RECOVER:-1}" == "1" ]] \
+                    && [[ -n "${_burn_num:-}" && "${_burn_num:-}" =~ ^[0-9]+$ ]]
+                then
+                    __burn_recover_model "$_burn_num" "${_ctx:-}" "$retry_health_wait" _burn_recovery_attempt
+                fi
+            fi
+
+            attempt=$(( attempt + 1 ))
+            continue
+        fi
+
+        # Retry once if server returned 503 "Loading model" (readiness race:
+        # /health reports ok before the model slot is fully ready to serve).
+        if (( curl_rc == 0 && attempt < max_attempts ))
+        then
+            local _loading_msg
+            _loading_msg=$(printf '%s' "$response" | jq -r '.error.message // empty' 2>/dev/null)
+            if [[ "$_loading_msg" == *[Ll]oading* ]]
+            then
+                local _loading_retry_msg
+                _loading_retry_msg="${C_Dim}[API Retry]${C_Reset} Server still loading "
+                _loading_retry_msg+="(\"${_loading_msg}\"); waiting up to 30s..."
+                printf '%s\n' \
+                    "$_loading_retry_msg"
+                local _lw
+                for (( _lw=0; _lw < 30; _lw++ ))
+                do
+                    if __llm_is_healthy; then
+                        sleep 3
+                        break
+                    fi
+                    sleep 1
+                done
+                attempt=$(( attempt + 1 ))
+                continue
+            fi
+        fi
+
+        break
+    done
+
+    __burn_report_result "$response" "$curl_rc" "$request_timeout" "$attempt" \
+        "$max_attempts" "$transport_history" "$start_ns" "$end_ns" "$bench_tokens"
 }
 
 # ---------------------------------------------------------------------------

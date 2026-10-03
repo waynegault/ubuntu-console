@@ -753,19 +753,28 @@ PY
 @test "burn: the witness is consulted before burn returns success" {
     # A WIRING assertion, deliberately: driving `burn` end to end needs a live
     # llama-server (curl plus a 768-token completion), which a unit test must not start.
-    # What it pins is that the shipped function CALLS the witness before it finishes —
+    # What it pins is that the shipped success path CALLS the witness before it finishes —
     # the helper-passes-but-nothing-calls-it shape the oc-health case was written for,
     # which no helper-level case can see.
+    #
+    # The gate lives in __burn_report_result, and burn's last act is to hand off to it
+    # (extracted 2026-10-03, card 15da0400).  So the wiring spans two functions now: burn
+    # must CALL the reporting helper, and the helper must gate on the witness before its
+    # own success return.  Checking only the helper would miss a burn that dropped the call.
     local src _call_line _end_line
     src=$(< "$REPO_ROOT/scripts/11f-llm-runtime.sh")
     [[ "$src" == *'if ! __burn_tps_cache_holds "$_burn_tps"'* ]] || {
         echo "burn must gate on the witness"
         return 1
     }
+    grep -qF '__burn_report_result "$response" "$curl_rc"' <<< "$src" || {
+        echo "burn must call __burn_report_result on its success path"
+        return 1
+    }
     _call_line=$(grep -nF '__burn_tps_cache_holds "$_burn_tps"' "$REPO_ROOT/scripts/11f-llm-runtime.sh" | tail -1 | cut -d: -f1)
-    _end_line=$(awk '/^function burn\(\)/{f=1; next} f && /^}/{print NR; exit}' "$REPO_ROOT/scripts/11f-llm-runtime.sh")
-    [[ -n "$_call_line" && -n "$_end_line" ]] || { echo "could not locate the call or the end of burn"; return 1; }
-    (( _call_line < _end_line )) || { echo "the call must be inside burn, before it ends"; return 1; }
+    _end_line=$(awk '/^function __burn_report_result\(\)/{f=1; next} f && /^}/{print NR; exit}' "$REPO_ROOT/scripts/11f-llm-runtime.sh")
+    [[ -n "$_call_line" && -n "$_end_line" ]] || { echo "could not locate the call or the end of __burn_report_result"; return 1; }
+    (( _call_line < _end_line )) || { echo "the call must be inside __burn_report_result, before it ends"; return 1; }
 }
 
 @test "read-back: __cl_paths_cleared needs the cleared paths to be empty" {

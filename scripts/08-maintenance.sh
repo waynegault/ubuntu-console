@@ -2,7 +2,12 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 72
+# Module Version: 73
+#   v73 (2026-10-03, card 15da0400): __update_plugin (241 lines) split into named
+#   helpers — __update_plugin_npm_deps (the four duplicated dep-install blocks),
+#   __update_plugin_prompt_changes (the interactive keep/discard/skip prompt) and
+#   __update_plugin_pull (the no-local-changes fetch/compare/pull half).  Behaviour
+#   and row text unchanged; tests/unit/30-plugin-update.bats is the oracle.
 #   v72 (2026-10-02): __up_npm_cache reads npm's OWN exit status, so a failed
 #   `npm cache verify` is reported as [FAILED] and counted, and the cooldown is NOT
 #   recorded — the old grep pipeline reported grep's status, so a failure fell through
@@ -755,11 +760,183 @@ function __up_openclaw_doctor() {
 # checkout — a missing path is reported and returns 3, and the caller decides
 # whether to clone.  The outcomes below are pinned by
 # tests/unit/30-plugin-update.bats, the net the de-duplication lands behind.
+# __update_plugin_npm_deps <path> <status_line> — install the plugin's node deps
+# when it has a package.json.  Returns 1 (and names it) when the install failed, so
+# the caller reports [DEP INSTALL FAILED] and still returns 2 after the update row.
+function __update_plugin_npm_deps() {
+    local _path="$1" _status_line="$2"
+    local _npm_dep_out=""
+    if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
+    then
+        if ! _npm_dep_out=$(npm install --prefix "$_path" --silent 2>&1)
+        then
+            __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
+            if [[ -n "$_npm_dep_out" ]]
+            then
+                printf '%s\n' "  ${C_Dim}${_npm_dep_out}${C_Reset}"
+            fi
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# __update_plugin_prompt_changes <path> <name> <status_line> <local_changes> — the
+# interactive keep/discard/skip prompt a checkout with local changes gets.  Returns
+# the run's rc: 0 updated, 2 failed/diverged, 3 skipped.
+function __update_plugin_prompt_changes() {
+    local _path="$1" _name="$2" _status_line="$3" _local_changes="$4"
+    local _choice _dep_failed=0
+    # Format prompt within table border for continuity
+    printf '\n%s\n' "║$(printf '─%.0s' {1..76})║"
+    printf '║ %s %-70s ║\n' "${C_Warning}Warning:${C_Reset}" "$_name — local changes detected:"
+    echo "$_local_changes" | head -5 | while read -r line; do
+        printf '║   %-70s ║\n' "${line:0:70}"
+    done
+    [[ $(wc -l <<< "$_local_changes") -gt 5 ]] && printf '║   %-70s ║\n' "... and more"
+    printf '%s\n' "║$(printf '─%.0s' {1..76})║"
+    printf '║ %-70s ║\n' "Choose an option:"
+    printf '║   %-70s ║\n' "[1] Keep local changes (stash → pull → reapply)"
+    printf '║   %-70s ║\n' "[2] Discard local changes (hard reset to remote)"
+    printf '║   %-70s ║\n' "[3] Skip update (keep as-is)"
+    printf '║ %-70s ║\n' "Selection: "
+    printf '\e[74C'  # Move cursor to column 74 (after "Selection: ")
+    read -r _choice
+    printf '\e[0m'  # Reset
+
+    case "$_choice" in
+        1)
+            # Stash, pull, then pop
+            if git -C "$_path" stash push -m "pre-update backup" >/dev/null 2>&1
+            then
+                # Had something to stash — pull then reapply
+                if git -C "$_path" pull --ff-only >/dev/null 2>&1
+                then
+                    __update_plugin_npm_deps "$_path" "$_status_line" || _dep_failed=1
+                    if git -C "$_path" stash pop >/dev/null 2>&1
+                    then
+                        __tac_line "$_status_line" "[UPDATED (changes preserved)]" "$C_Success"
+                    else
+                        # Pop failed (usually a conflict): the local
+                        # changes are still in the stash, so do NOT
+                        # report them as preserved.
+                        __tac_line "$_status_line" \
+                            "[UPDATED - LOCAL CHANGES STILL STASHED]" "$C_Warning"
+                    fi
+                    if (( _dep_failed == 1 ))
+                    then
+                        return 2  # 2 = FAILED: updated, but its deps did not install
+                    fi
+                    return 0
+                else
+                    # swallow-ok: the pop's own failure is what this branch reports — the row below says the changes are still stashed
+                    git -C "$_path" stash pop >/dev/null 2>&1 || true
+                    __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
+                    return 2  # 2 = FAILED: the stash could not be reapplied
+                fi
+            else
+                # Nothing to stash — changes are staged or untracked
+                # Just try to pull
+                if git -C "$_path" pull --ff-only >/dev/null 2>&1
+                then
+                    __update_plugin_npm_deps "$_path" "$_status_line" || _dep_failed=1
+                    __tac_line "$_status_line" "[UPDATED]" "$C_Success"
+                    if (( _dep_failed == 1 ))
+                    then
+                        return 2  # 2 = FAILED: updated, but its deps did not install
+                    fi
+                    return 0
+                else
+                    __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
+                    return 2  # 2 = FAILED: the pull needs a manual merge
+                fi
+            fi
+            ;;
+        2)
+            # Hard reset to remote
+            git -C "$_path" fetch origin >/dev/null 2>&1
+            git -C "$_path" reset --hard origin/HEAD >/dev/null 2>&1
+            __update_plugin_npm_deps "$_path" "$_status_line" || _dep_failed=1
+            __tac_line "$_status_line" "[OVERWRITTEN (local changes discarded)]" "$C_Warning"
+            if (( _dep_failed == 1 ))
+            then
+                return 2  # 2 = FAILED: overwritten, but its deps did not install
+            fi
+            return 0
+            ;;
+        *)
+            __tac_line "$_status_line" "[SKIPPED (has local changes)]" "$C_Dim"
+            return 3  # 3 = NOT UPDATED: the local changes are the user's, not ours to discard
+            ;;
+    esac
+}
+
+# __update_plugin_pull <path> <status_line> — the no-local-changes half: fetch,
+# compare ahead/behind, and pull --ff-only when behind.  Returns the run's rc.
+function __update_plugin_pull() {
+    local _path="$1" _status_line="$2"
+    # A failed fetch (offline / no origin) must NOT read as "up to date":
+    # empty operands compare equal to 0 in bash, so validate first.
+    local _git_out _ahead_behind _ahead _behind
+    if ! _git_out=$(git -C "$_path" fetch origin 2>&1)
+    then
+        __tac_line "$_status_line" "[CHECK FAILED - fetch]" "$C_Warning"
+        if [[ -n "$_git_out" ]]
+        then
+            printf '%s\n' "  ${C_Dim}${_git_out}${C_Reset}"
+        fi
+        return 2  # 2 = FAILED: the remote could not be read at all
+    fi
+    # swallow-ok: a failed read yields empty operands, which the integer validation two lines down turns into [CHECK FAILED - no upstream] and rc 2
+    _ahead_behind=$(git -C "$_path" rev-list --left-right --count HEAD...origin/HEAD 2>/dev/null)
+    _ahead=$(cut -f1 <<< "$_ahead_behind")
+    _behind=$(cut -f2 <<< "$_ahead_behind")
+    if ! [[ "$_ahead" =~ ^[0-9]+$ && "$_behind" =~ ^[0-9]+$ ]]
+    then
+        __tac_line "$_status_line" "[CHECK FAILED - no upstream]" "$C_Warning"
+        return 2  # 2 = FAILED: there is no upstream to compare against
+    fi
+
+    if [[ "$_behind" -eq 0 && "$_ahead" -eq 0 ]]
+    then
+        # Already at latest — nothing to pull
+        __tac_line "$_status_line" "[ALREADY UP TO DATE]" "$C_Success"
+        return 1
+    elif [[ "$_behind" -gt 0 ]]
+    then
+        # Behind remote — pull
+        local _dep_failed=0
+        if _git_out=$(git -C "$_path" pull --ff-only 2>&1)
+        then
+            __update_plugin_npm_deps "$_path" "$_status_line" || _dep_failed=1
+            __tac_line "$_status_line" "[UPDATED]" "$C_Success"
+            if (( _dep_failed == 1 ))
+            then
+                return 2  # 2 = FAILED: updated, but its deps did not install
+            fi
+            return 0
+        else
+            __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
+            if [[ -n "$_git_out" ]]
+            then
+                printf '%s\n' "  ${C_Dim}${_git_out}${C_Reset}"
+            fi
+            return 2  # 2 = FAILED: the pull needs a manual merge
+        fi
+    else
+        # Ahead of remote (local commits) — don't overwrite
+        __tac_line "$_status_line" "[AHEAD OF REMOTE ($_ahead commit(s))]" "$C_Dim"
+        return 3  # 3 = NOT UPDATED: local commits ahead of the remote are not ours to drop
+    fi
+}
+
+# __update_plugin <path> <remote_pattern> <name> [interactive] — update (or skip)
+# one plugin checkout, returning the outcome code the [10/20] row reports:
+# 0 updated, 1 already current, 2 failed, 3 not updated.  Delegates the two heavy
+# halves to __update_plugin_prompt_changes and __update_plugin_pull.
 function __update_plugin() {
     local _path="$1" _remote_pattern="$2" _name="$3" _interactive="${4:-0}"
     local _status_line="$_name"
-    local _git_out=""
-    local _dep_failed=0
 
     if [[ ! -d "$_path" ]]
     then
@@ -797,131 +974,8 @@ function __update_plugin() {
         # AND there is a terminal to ask on.
         if [[ "$_interactive" == "1" ]] && [[ -t 0 ]]
         then
-            # Format prompt within table border for continuity
-            printf '\n%s\n' "║$(printf '─%.0s' {1..76})║"
-            printf '║ %s %-70s ║\n' "${C_Warning}Warning:${C_Reset}" "$_name — local changes detected:"
-            echo "$_local_changes" | head -5 | while read -r line; do
-                printf '║   %-70s ║\n' "${line:0:70}"
-            done
-            [[ $(wc -l <<< "$_local_changes") -gt 5 ]] && printf '║   %-70s ║\n' "... and more"
-            printf '%s\n' "║$(printf '─%.0s' {1..76})║"
-            printf '║ %-70s ║\n' "Choose an option:"
-            printf '║   %-70s ║\n' "[1] Keep local changes (stash → pull → reapply)"
-            printf '║   %-70s ║\n' "[2] Discard local changes (hard reset to remote)"
-            printf '║   %-70s ║\n' "[3] Skip update (keep as-is)"
-            printf '║ %-70s ║\n' "Selection: "
-            printf '\e[74C'  # Move cursor to column 74 (after "Selection: ")
-
-            local _choice
-            read -r _choice
-            printf '\e[0m'  # Reset
-
-            case "$_choice" in
-                1)
-                    # Stash, pull, then pop
-                    if git -C "$_path" stash push -m "pre-update backup" >/dev/null 2>&1
-                    then
-                        # Had something to stash — pull then reapply
-                        if git -C "$_path" pull --ff-only >/dev/null 2>&1
-                        then
-                            # Install new dependencies if package.json exists
-                            if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
-                            then
-                                local _npm_dep_out=""
-                                if ! _npm_dep_out=$(npm install --prefix "$_path" --silent 2>&1)
-                                then
-                                    __tac_line "$_status_line" \
-                                        "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
-                                        if [[ -n "$_npm_dep_out" ]]
-                                        then
-                                            printf '%s\n' "  ${C_Dim}${_npm_dep_out}${C_Reset}"
-                                        fi
-                                    _dep_failed=1
-                                fi
-                            fi
-                            if git -C "$_path" stash pop >/dev/null 2>&1
-                            then
-                                __tac_line "$_status_line" "[UPDATED (changes preserved)]" "$C_Success"
-                            else
-                                # Pop failed (usually a conflict): the local
-                                # changes are still in the stash, so do NOT
-                                # report them as preserved.
-                                __tac_line "$_status_line" \
-                                    "[UPDATED - LOCAL CHANGES STILL STASHED]" "$C_Warning"
-                            fi
-                            if (( _dep_failed == 1 ))
-                            then
-                                return 2  # 2 = FAILED: updated, but its deps did not install
-                            fi
-                            return 0
-                        else
-                            # swallow-ok: the pop's own failure is what this branch reports — the row below says the changes are still stashed
-                            git -C "$_path" stash pop >/dev/null 2>&1 || true
-                            __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
-                            return 2  # 2 = FAILED: the stash could not be reapplied
-                        fi
-                    else
-                        # Nothing to stash — changes are staged or untracked
-                        # Just try to pull
-                        if git -C "$_path" pull --ff-only >/dev/null 2>&1
-                        then
-                            # Install new dependencies if package.json exists
-                            if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
-                            then
-                                local _npm_dep_out=""
-                                if ! _npm_dep_out=$(npm install --prefix "$_path" --silent 2>&1)
-                                then
-                                    __tac_line "$_status_line" \
-                                        "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
-                                        if [[ -n "$_npm_dep_out" ]]
-                                        then
-                                            printf '%s\n' "  ${C_Dim}${_npm_dep_out}${C_Reset}"
-                                        fi
-                                    _dep_failed=1
-                                fi
-                            fi
-                            __tac_line "$_status_line" "[UPDATED]" "$C_Success"
-                            if (( _dep_failed == 1 ))
-                            then
-                                return 2  # 2 = FAILED: updated, but its deps did not install
-                            fi
-                            return 0
-                        else
-                            __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
-                            return 2  # 2 = FAILED: the pull needs a manual merge
-                        fi
-                    fi
-                    ;;
-                2)
-                    # Hard reset to remote
-                    git -C "$_path" fetch origin >/dev/null 2>&1
-                    git -C "$_path" reset --hard origin/HEAD >/dev/null 2>&1
-                    # Install new dependencies if package.json exists
-                    if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
-                    then
-                        local _npm_dep_out=""
-                        if ! _npm_dep_out=$(npm install --prefix "$_path" --silent 2>&1)
-                        then
-                            __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
-                            if [[ -n "$_npm_dep_out" ]]
-                            then
-                                printf '%s\n' "  ${C_Dim}${_npm_dep_out}${C_Reset}"
-                            fi
-                            _dep_failed=1
-                        fi
-                    fi
-                    __tac_line "$_status_line" "[OVERWRITTEN (local changes discarded)]" "$C_Warning"
-                    if (( _dep_failed == 1 ))
-                    then
-                        return 2  # 2 = FAILED: overwritten, but its deps did not install
-                    fi
-                    return 0
-                    ;;
-                *)
-                    __tac_line "$_status_line" "[SKIPPED (has local changes)]" "$C_Dim"
-                    return 3  # 3 = NOT UPDATED: the local changes are the user's, not ours to discard
-                    ;;
-            esac
+            __update_plugin_prompt_changes "$_path" "$_name" "$_status_line" "$_local_changes"
+            return $?
         else
             # Non-interactive mode — skip safely
             __tac_line "$_status_line" "[SKIP - has local changes]" "$C_Dim"
@@ -929,72 +983,8 @@ function __update_plugin() {
         fi
     fi
 
-    # No local changes — check if there are upstream updates.
-    # A failed fetch (offline / no origin) must NOT read as "up to date":
-    # empty operands compare equal to 0 in bash, so validate first.
-    local _ahead_behind _ahead _behind
-    if ! _git_out=$(git -C "$_path" fetch origin 2>&1)
-    then
-        __tac_line "$_status_line" "[CHECK FAILED - fetch]" "$C_Warning"
-        if [[ -n "$_git_out" ]]
-        then
-            printf '%s\n' "  ${C_Dim}${_git_out}${C_Reset}"
-        fi
-        return 2  # 2 = FAILED: the remote could not be read at all
-    fi
-    # swallow-ok: a failed read yields empty operands, which the integer validation two lines down turns into [CHECK FAILED - no upstream] and rc 2
-    _ahead_behind=$(git -C "$_path" rev-list --left-right --count HEAD...origin/HEAD 2>/dev/null)
-    _ahead=$(cut -f1 <<< "$_ahead_behind")
-    _behind=$(cut -f2 <<< "$_ahead_behind")
-    if ! [[ "$_ahead" =~ ^[0-9]+$ && "$_behind" =~ ^[0-9]+$ ]]
-    then
-        __tac_line "$_status_line" "[CHECK FAILED - no upstream]" "$C_Warning"
-        return 2  # 2 = FAILED: there is no upstream to compare against
-    fi
-
-    if [[ "$_behind" -eq 0 && "$_ahead" -eq 0 ]]
-    then
-        # Already at latest — nothing to pull
-        __tac_line "$_status_line" "[ALREADY UP TO DATE]" "$C_Success"
-        return 1
-    elif [[ "$_behind" -gt 0 ]]
-    then
-        # Behind remote — pull
-        if _git_out=$(git -C "$_path" pull --ff-only 2>&1)
-        then
-            # Run npm install if package.json exists (install new dependencies)
-            if [[ -f "$_path/package.json" ]] && command -v npm >/dev/null 2>&1
-            then
-                local _npm_dep_out=""
-                if ! _npm_dep_out=$(npm install --prefix "$_path" --silent 2>&1)
-                then
-                    __tac_line "$_status_line" "[DEP INSTALL FAILED - plugin may not load]" "$C_Warning"
-                    if [[ -n "$_npm_dep_out" ]]
-                    then
-                        printf '%s\n' "  ${C_Dim}${_npm_dep_out}${C_Reset}"
-                    fi
-                    _dep_failed=1
-                fi
-            fi
-            __tac_line "$_status_line" "[UPDATED]" "$C_Success"
-            if (( _dep_failed == 1 ))
-            then
-                return 2  # 2 = FAILED: updated, but its deps did not install
-            fi
-            return 0
-        else
-            __tac_line "$_status_line" "[DIVERGED (manual merge needed)]" "$C_Warning"
-            if [[ -n "$_git_out" ]]
-            then
-                printf '%s\n' "  ${C_Dim}${_git_out}${C_Reset}"
-            fi
-            return 2  # 2 = FAILED: the pull needs a manual merge
-        fi
-    else
-        # Ahead of remote (local commits) — don't overwrite
-        __tac_line "$_status_line" "[AHEAD OF REMOTE ($_ahead commit(s))]" "$C_Dim"
-        return 3  # 3 = NOT UPDATED: local commits ahead of the remote are not ours to drop
-    fi
+    __update_plugin_pull "$_path" "$_status_line"
+    return $?
 }
 
 # __plugin_drift_check <script> <openstinger_updated 0|1> <errcount nameref> — run the

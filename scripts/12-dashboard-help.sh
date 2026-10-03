@@ -2,7 +2,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 23
+# Module Version: 24
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -29,21 +29,11 @@
 : "${C_BoxBg:=}"
 : "${UIWidth:=}"
 : "${_telemetry_out:=}"
+: "${__DASHBOARD_OC_ACTIVE:=}"
 
-# ---------------------------------------------------------------------------
-# tactical_dashboard — Full-screen system status panel.
-# ---------------------------------------------------------------------------
-function tactical_dashboard() {
-    command clear
-    # Reset the background PID tracker. The getters run through `_telemetry`,
-    # which runs them in this shell, so each background cache refresh's `$!` IS
-    # appended to __TAC_BG_PIDS; clearing here drops the previous render's
-    # (usually already-exited) PIDs before the new ones accumulate.
-    __TAC_BG_PIDS=()
-    local line; printf -v line '%*s' "$((UIWidth - 2))" ''; line="${line// /═}"
-
-    __tac_header "TACTICAL DASHBOARD" "open" "$TACTICAL_PROFILE_VERSION"
-
+# __dashboard_system_metrics — the SYSTEM TIME/UPTIME/BATTERY/CPU-GPU/MEMORY/STORAGE rows.
+function __dashboard_system_metrics() {
+    local line="$1"
     # --- System metrics block ---
     local systime
     systime=$(date +"%H:%M %A %d/%m/%Y")
@@ -110,6 +100,12 @@ function tactical_dashboard() {
     fi
     __fRow "BATTERY" "$batt_detail" "$batt_color"
 
+}
+
+
+# __dashboard_gpu_llm — the GPU, LOCAL LLM and LLM CONTEXT rows for the GPU/LLM block.
+function __dashboard_gpu_llm() {
+    local line="$1"
     local gpu_raw
     _telemetry __get_gpu
     gpu_raw=$_telemetry_out
@@ -222,179 +218,192 @@ function tactical_dashboard() {
     fi
 
     __fRow "WSL" "ACTIVE  ${WSL_DISTRO_NAME:-UNKNOWN}  ($(uname -r))" "$C_Success"
+}
 
-    # --- OpenClaw status block ---
+
+# __dashboard_oc_active_agents — render the ACTIVE AGENT list from the oc agent-use cache.
+function __dashboard_oc_active_agents() {
+    local line="$1"
+    local cache="/dev/shm/oc_agent_use.txt"
+    local agent_use_out=""
+    local cache_ttl=5
+    local agent_use_age=""
+    if [[ -f "$cache" ]]; then
+        # If the cache exists but is stale, kick a background refresh
+        # so subsequent renders get fresh data, but still read the
+        # current cache for this render to avoid blocking the UI.
+        local mtime
+        mtime=$(stat -c %Y "$cache" 2>/dev/null || echo 0)
+        if (( $(date +%s) - mtime > cache_ttl )); then
+            # `oc` is a shell function: it must run in a subshell, not via
+            # `setsid`/an external command (which cannot see functions).
+            # Tracked through __tac_track_bg_job so bash does not print a
+            # "[n] Done <whole command>" notice over the next render.
+            { ( oc agent-use >/dev/null 2>&1 ) &>/dev/null & } 2>/dev/null
+            __tac_track_bg_job "$!"
+        fi
+        agent_use_out=$(cat "$cache" 2>/dev/null || true)
+        # Sanitize output: remove control characters (except newlines) to prevent
+        # terminal manipulation via ANSI escape sequences or other control codes.
+        agent_use_out=$(printf '%s' "$agent_use_out" | tr -d '\000-\010\013-\037\177')
+        # The 5s TTL above is enforced only as "kick a refresh"; the render
+        # below happens either way, so a cache the refresh cannot keep up with
+        # (or one nothing has refreshed for a day) used to read as live data.
+        # Counted age from the same mtime, with a display bound well past the
+        # TTL: `oc agent-use` walks the OpenClaw state and takes seconds, so a
+        # few seconds past the TTL is a normal render, not staleness.
+        agent_use_age=$(__cache_age_suffix "$cache" 60)
+    else
+        # Kick off a background refresh so the cache is populated for
+        # subsequent renders, but do not block the dashboard render now.
+        # `oc` is a shell function, so it must run in a subshell.
+        # Tracked via __tac_track_bg_job so bash prints no job-control
+        # notice for it (see §7).
+        { ( oc agent-use >/dev/null 2>&1 ) &>/dev/null & } 2>/dev/null
+        __tac_track_bg_job "$!"
+    fi
+    if [[ -z "$agent_use_out" ]]
+    then
+        __fRow "ACTIVE AGENT" "No data" "$C_Dim"
+    else
+        # Use __fRow to render the first agent on the same row as the
+        # "ACTIVE AGENTS" label so the "::" alignment, colours and
+        # right-border padding match other dashboard rows. Subsequent
+        # agents are rendered with an empty label so their text lines up
+        # under the value column.
+        local first=1
+        while IFS= read -r _l; do
+            l=${_l%$'\r'}
+            # Trim leading/trailing spaces and skip blank/header lines
+            l=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' <<< "$l")
+            [[ -z "$l" ]] && continue
+            [[ "$l" =~ ^ACTIVE[[:space:]]+AGENT ]] && continue
+            [[ "$l" =~ ^ACTIVE[[:space:]]+AGENTS ]] && continue
+            if (( first == 1 )); then
+                # Normalise the row to "name: <stats>": split on the first
+                # ": " the writer emits and re-join, so the agent name and
+                # its stats render on the ACTIVE AGENT row.
+                if [[ "$l" == *": "* ]]; then
+                    # Split on the FIRST ": ". The writer emits
+                    # "name: 42% (…) ⬆ … ⬇ …"; the old greedy ERE
+                    # `^(.+?)[[:space:]]+([0-9].*)$` split at the last
+                    # whitespace-digit and mangled every row.
+                    name_part="${l%%: *}"
+                    rest_part="${l#*: }"
+                    name_part="${name_part%:}"
+                    formatted="${name_part}: ${rest_part}"
+                else
+                    # No numeric suffix; just ensure trailing colon on name
+                    formatted="$l"
+                    [[ "$formatted" != *: ]] && formatted="${formatted}:"
+                fi
+                __fRow "ACTIVE AGENT" "$formatted" ""
+                first=0
+            else
+                # Render subsequent agent lines without the " :: " label
+                # but reserve the same label width so values align.
+                # Use the same measurements as __fRow to preserve alignment.
+                local val_width=$(( UIWidth - 20 ))
+                # Split using the original line (preserve ANSI sequences in the
+                # remainder so percent colouring is retained). Use __strip_ansi
+                # only for width calculation below.
+                if [[ "$l" == *": "* ]]; then
+                    name_part="${l%%: *}"
+                    rest_part="${l#*: }"
+                    name_part="${name_part%:}"
+                    # Apply colouring to the leading percent token in rest_part
+                    if [[ "$rest_part" =~ ^([0-9]{1,3})% ]]; then
+                        local pct_val="${BASH_REMATCH[1]}"
+                        local pct_tok="${BASH_REMATCH[1]}%"
+                        local pct_color
+                        pct_color=$(__threshold_color "$pct_val")
+                        rest_part="${rest_part/"$pct_tok"/"${pct_color}${pct_tok}${C_Reset}"}"
+                    fi
+                    formatted="${name_part}: ${rest_part}"
+                else
+                    formatted="$l"
+                    [[ "$formatted" != *: ]] && formatted="${formatted}:"
+                fi
+                local cleanFormatted
+                __strip_ansi "$formatted" cleanFormatted
+                local valPad=$(( val_width - ${#cleanFormatted} ))
+                (( valPad < 0 )) && valPad=0
+                local vPadStr=""; (( valPad > 0 )) && printf -v vPadStr '%*s' "$valPad" ""
+                local labelPad=""; printf -v labelPad '%*s' 12 ""
+                printf '%s' "${C_BoxBg}║${C_Reset}"
+                printf "  ${C_Dim}%s${C_Reset}" "$labelPad"
+                # Reserve the same 4-character separator width as __fRow (" :: ")
+                printf "    %s%s${C_BoxBg}║${C_Reset}\n" "$formatted" "$vPadStr"
+            fi
+        done <<< "$agent_use_out"
+        if (( first == 1 )); then
+            __fRow "ACTIVE AGENT" "No data" "$C_Dim"
+        fi
+        # The block's freshness, as its own row (card CLAIMED-SUCCESS-WITNESS-001,
+        # item 2).  Rendered only when the cache is past its display bound, so a
+        # normal render is unchanged; when it appears, the agent list above is
+        # an old snapshot and now says so instead of reading as current.
+        if [[ -n "$agent_use_age" ]]
+        then
+            __fRow "AGENT AGE" "${agent_use_age# }" "$C_Warning"
+        fi
+    fi
+}
+
+
+# __dashboard_openclaw — the OpenClaw status block, dispatching to the active-agent list.
+function __dashboard_openclaw() {
+    local line="$1"
     printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         # OpenClaw CLI not installed — show single status line
         __fRow "OPENCLAW" "[NOT INSTALLED]" "$C_Dim"
-    else
-        # OpenClaw installed — show detailed status
-        local oc_stat="OFFLINE"
-        local oc_active=0
-        __test_port "$OC_PORT" && { oc_stat="ONLINE"; oc_active=1; }
+        __DASHBOARD_OC_ACTIVE=0
+        return 0
+    fi
+    local oc_stat="OFFLINE"
+    local oc_active=0
+    __test_port "$OC_PORT" && { oc_stat="ONLINE"; oc_active=1; }
 
-        local metrics
-        _telemetry __get_oc_metrics
-        metrics=$_telemetry_out
-        local m_sess m_age m_ver
-        IFS='|' read -r m_sess m_age m_ver <<< "$metrics"
-        m_sess=${m_sess%$'\r'}; m_age=${m_age%$'\r'}; m_ver=${m_ver%$'\r'}
+    local metrics
+    _telemetry __get_oc_metrics
+    metrics=$_telemetry_out
+    local m_sess m_age m_ver
+    IFS='|' read -r m_sess m_age m_ver <<< "$metrics"
+    m_sess=${m_sess%$'\r'}; m_age=${m_age%$'\r'}; m_ver=${m_ver%$'\r'}
 
-        local oc_color=$C_Error
-        if [[ $oc_active == 1 ]]
+    local oc_color=$C_Error
+    if [[ $oc_active == 1 ]]
+    then
+        oc_color=$C_Success
+    fi
+    __fRow "OPENCLAW" "[$oc_stat]  ${m_ver}" "$oc_color"
+
+    local sess_color=$C_Dim
+    local age_label=""
+    if [[ "$m_sess" != "Querying..." && "$m_sess" =~ ^[0-9]+$ ]]
+    then
+        (( m_sess > 0 )) && sess_color=$C_Warning
+        if [[ "$m_age" =~ ^[0-9]+$ ]] && (( m_age > 0 ))
         then
-            oc_color=$C_Success
-        fi
-        __fRow "OPENCLAW" "[$oc_stat]  ${m_ver}" "$oc_color"
-
-        local sess_color=$C_Dim
-        local age_label=""
-        if [[ "$m_sess" != "Querying..." && "$m_sess" =~ ^[0-9]+$ ]]
-        then
-            (( m_sess > 0 )) && sess_color=$C_Warning
-            if [[ "$m_age" =~ ^[0-9]+$ ]] && (( m_age > 0 ))
-            then
-                age_label=" (cached ${m_age}s ago)"
-            else
-                age_label=" (live)"
-            fi
-        fi
-        __fRow "SESSIONS" "${m_sess} Active${age_label}" "$sess_color"
-
-        # Replace single-line CONTEXT USED with multi-line ACTIVE AGENTS
-        # Render the output of `oc agent-use` inside the dashboard box when OpenClaw is online.
-        if [[ $oc_active == 1 ]]
-        then
-        local cache="/dev/shm/oc_agent_use.txt"
-        local agent_use_out=""
-        local cache_ttl=5
-        local agent_use_age=""
-        if [[ -f "$cache" ]]; then
-            # If the cache exists but is stale, kick a background refresh
-            # so subsequent renders get fresh data, but still read the
-            # current cache for this render to avoid blocking the UI.
-            local mtime
-            mtime=$(stat -c %Y "$cache" 2>/dev/null || echo 0)
-            if (( $(date +%s) - mtime > cache_ttl )); then
-                # `oc` is a shell function: it must run in a subshell, not via
-                # `setsid`/an external command (which cannot see functions).
-                # Tracked through __tac_track_bg_job so bash does not print a
-                # "[n] Done <whole command>" notice over the next render.
-                { ( oc agent-use >/dev/null 2>&1 ) &>/dev/null & } 2>/dev/null
-                __tac_track_bg_job "$!"
-            fi
-            agent_use_out=$(cat "$cache" 2>/dev/null || true)
-            # Sanitize output: remove control characters (except newlines) to prevent
-            # terminal manipulation via ANSI escape sequences or other control codes.
-            agent_use_out=$(printf '%s' "$agent_use_out" | tr -d '\000-\010\013-\037\177')
-            # The 5s TTL above is enforced only as "kick a refresh"; the render
-            # below happens either way, so a cache the refresh cannot keep up with
-            # (or one nothing has refreshed for a day) used to read as live data.
-            # Counted age from the same mtime, with a display bound well past the
-            # TTL: `oc agent-use` walks the OpenClaw state and takes seconds, so a
-            # few seconds past the TTL is a normal render, not staleness.
-            agent_use_age=$(__cache_age_suffix "$cache" 60)
+            age_label=" (cached ${m_age}s ago)"
         else
-            # Kick off a background refresh so the cache is populated for
-            # subsequent renders, but do not block the dashboard render now.
-            # `oc` is a shell function, so it must run in a subshell.
-            # Tracked via __tac_track_bg_job so bash prints no job-control
-            # notice for it (see §7).
-            { ( oc agent-use >/dev/null 2>&1 ) &>/dev/null & } 2>/dev/null
-            __tac_track_bg_job "$!"
+            age_label=" (live)"
         fi
-        if [[ -z "$agent_use_out" ]]
-        then
-            __fRow "ACTIVE AGENT" "No data" "$C_Dim"
-        else
-            # Use __fRow to render the first agent on the same row as the
-            # "ACTIVE AGENTS" label so the "::" alignment, colours and
-            # right-border padding match other dashboard rows. Subsequent
-            # agents are rendered with an empty label so their text lines up
-            # under the value column.
-            local first=1
-            while IFS= read -r _l; do
-                l=${_l%$'\r'}
-                # Trim leading/trailing spaces and skip blank/header lines
-                l=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' <<< "$l")
-                [[ -z "$l" ]] && continue
-                [[ "$l" =~ ^ACTIVE[[:space:]]+AGENT ]] && continue
-                [[ "$l" =~ ^ACTIVE[[:space:]]+AGENTS ]] && continue
-                if (( first == 1 )); then
-                    # Normalise the row to "name: <stats>": split on the first
-                    # ": " the writer emits and re-join, so the agent name and
-                    # its stats render on the ACTIVE AGENT row.
-                    if [[ "$l" == *": "* ]]; then
-                        # Split on the FIRST ": ". The writer emits
-                        # "name: 42% (…) ⬆ … ⬇ …"; the old greedy ERE
-                        # `^(.+?)[[:space:]]+([0-9].*)$` split at the last
-                        # whitespace-digit and mangled every row.
-                        name_part="${l%%: *}"
-                        rest_part="${l#*: }"
-                        name_part="${name_part%:}"
-                        formatted="${name_part}: ${rest_part}"
-                    else
-                        # No numeric suffix; just ensure trailing colon on name
-                        formatted="$l"
-                        [[ "$formatted" != *: ]] && formatted="${formatted}:"
-                    fi
-                    __fRow "ACTIVE AGENT" "$formatted" ""
-                    first=0
-                else
-                    # Render subsequent agent lines without the " :: " label
-                    # but reserve the same label width so values align.
-                    # Use the same measurements as __fRow to preserve alignment.
-                    local val_width=$(( UIWidth - 20 ))
-                    # Split using the original line (preserve ANSI sequences in the
-                    # remainder so percent colouring is retained). Use __strip_ansi
-                    # only for width calculation below.
-                    if [[ "$l" == *": "* ]]; then
-                        name_part="${l%%: *}"
-                        rest_part="${l#*: }"
-                        name_part="${name_part%:}"
-                        # Apply colouring to the leading percent token in rest_part
-                        if [[ "$rest_part" =~ ^([0-9]{1,3})% ]]; then
-                            local pct_val="${BASH_REMATCH[1]}"
-                            local pct_tok="${BASH_REMATCH[1]}%"
-                            local pct_color
-                            pct_color=$(__threshold_color "$pct_val")
-                            rest_part="${rest_part/"$pct_tok"/"${pct_color}${pct_tok}${C_Reset}"}"
-                        fi
-                        formatted="${name_part}: ${rest_part}"
-                    else
-                        formatted="$l"
-                        [[ "$formatted" != *: ]] && formatted="${formatted}:"
-                    fi
-                    local cleanFormatted
-                    __strip_ansi "$formatted" cleanFormatted
-                    local valPad=$(( val_width - ${#cleanFormatted} ))
-                    (( valPad < 0 )) && valPad=0
-                    local vPadStr=""; (( valPad > 0 )) && printf -v vPadStr '%*s' "$valPad" ""
-                    local labelPad=""; printf -v labelPad '%*s' 12 ""
-                    printf '%s' "${C_BoxBg}║${C_Reset}"
-                    printf "  ${C_Dim}%s${C_Reset}" "$labelPad"
-                    # Reserve the same 4-character separator width as __fRow (" :: ")
-                    printf "    %s%s${C_BoxBg}║${C_Reset}\n" "$formatted" "$vPadStr"
-                fi
-            done <<< "$agent_use_out"
-            if (( first == 1 )); then
-                __fRow "ACTIVE AGENT" "No data" "$C_Dim"
-            fi
-            # The block's freshness, as its own row (card CLAIMED-SUCCESS-WITNESS-001,
-            # item 2).  Rendered only when the cache is past its display bound, so a
-            # normal render is unchanged; when it appears, the agent list above is
-            # an old snapshot and now says so instead of reading as current.
-            if [[ -n "$agent_use_age" ]]
-            then
-                __fRow "AGENT AGE" "${agent_use_age# }" "$C_Warning"
-            fi
-        fi
+    fi
+    __fRow "SESSIONS" "${m_sess} Active${age_label}" "$sess_color"
+    __DASHBOARD_OC_ACTIVE=$oc_active
+    if [[ $oc_active == 1 ]]
+    then
+        __dashboard_oc_active_agents "$line"
     else
         __fRow "ACTIVE AGENT" "OFFLINE" "$C_Dim"
     fi
-    fi  # End of $__TAC_OPENCLAW_OK check
+}
 
+
+# __dashboard_cloaking — the CLOAKING row when a Python virtualenv is active.
+function __dashboard_cloaking() {
     # "Cloaking" = active Python virtual environment isolation.
     # `${VIRTUAL_ENV:-}` and not `$VIRTUAL_ENV`: an unset VIRTUAL_ENV is the normal
     # state for a shell started outside a venv, and under `set -u` the bare form
@@ -406,7 +415,12 @@ function tactical_dashboard() {
     then
         __fRow "CLOAKING" "ACTIVE ($(basename "$VIRTUAL_ENV"))" "$C_Success"
     fi
+}
 
+
+# __dashboard_git — the TARGET REPO / SEC STATUS rows.
+function __dashboard_git() {
+    local line="$1"
     local gitStat
     _telemetry __get_git
     gitStat=$_telemetry_out
@@ -423,9 +437,12 @@ function tactical_dashboard() {
         fi
         __fRow "SEC STATUS" "$gSec" "$sec_color"
     fi
+}
 
-    printf '%s\n' "${C_BoxBg}╠${line}╣${C_Reset}"
 
+# __dashboard_footer — the command bar and the closing box border.
+function __dashboard_footer() {
+    local oc_active="$1" line="$2"
     local cmds_toggle
     if [[ $oc_active == 1 ]]
     then
@@ -444,6 +461,30 @@ function tactical_dashboard() {
     printf "${C_BoxBg}║%s${C_Dim}%s${C_Reset}%s${C_BoxBg}║${C_Reset}\n" "$lCmdPad" "$cmds" "$rCmdPad"
 
     printf '%s\n' "${C_BoxBg}╚${line}╝${C_Reset}"
+}
+
+
+# ---------------------------------------------------------------------------
+# tactical_dashboard — Full-screen system status panel.
+# ---------------------------------------------------------------------------
+function tactical_dashboard() {
+    command clear
+    # Reset the background PID tracker. The getters run through `_telemetry`,
+    # which runs them in this shell, so each background cache refresh's `$!` IS
+    # appended to __TAC_BG_PIDS; clearing here drops the previous render's
+    # (usually already-exited) PIDs before the new ones accumulate.
+    __TAC_BG_PIDS=()
+    local line; printf -v line '%*s' "$((UIWidth - 2))" ''; line="${line// /═}"
+
+    __tac_header "TACTICAL DASHBOARD" "open" "$TACTICAL_PROFILE_VERSION"
+
+    __DASHBOARD_OC_ACTIVE=0
+    __dashboard_system_metrics "$line"
+    __dashboard_gpu_llm "$line"
+    __dashboard_openclaw "$line"
+    __dashboard_cloaking
+    __dashboard_git "$line"
+    __dashboard_footer "$__DASHBOARD_OC_ACTIVE" "$line"
 }
 
 # ---------------------------------------------------------------------------
