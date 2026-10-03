@@ -13,6 +13,7 @@ import hashlib
 import logging
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .models import Graph, GraphBuilder
@@ -142,12 +143,20 @@ def merge_graphs(base: Graph | dict, overlay: Graph | dict,
 
 
 def start_watch(graph_db_path: str, mem_db_path: str | None = None,
-                source_dir: str | None = None, interval: int = 30, **kwargs) -> None:
+                source_dir: str | None = None, interval: int = 30,
+                reporter: Callable[[str], None] | None = None, **kwargs) -> None:
     """Watch directories and auto-rebuild on changes.
 
     Polls for file changes at the given interval.  When detected,
     runs incremental_update().
+
+    Progress goes to *reporter* when one is given (the CLI passes ``print``);
+    this module never writes to stdout itself.
     """
+    def _say(message: str) -> None:
+        if reporter is not None:
+            reporter(message)
+
     if mem_db_path:
         mem_db_path = os.path.expanduser(mem_db_path)
     file_hashes: dict[str, str] = {}
@@ -171,7 +180,7 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
 
     if source_dir:
         file_hashes = _hash_files(source_dir)
-        print(f"  Watching {source_dir} ({len(file_hashes)} files, interval={interval}s)")
+        _say(f"  Watching {source_dir} ({len(file_hashes)} files, interval={interval}s)")
 
     # Track memory DB mtimes for change detection.  With no explicit path,
     # incremental_update merges every auto-resolved registry, so watch those
@@ -191,7 +200,7 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
         except OSError as exc:
             logger.debug("cannot stat watched memory DB %s: %s", _p, exc, exc_info=True)
 
-    print("  Watch mode active. Press Ctrl+C to stop.")
+    _say("  Watch mode active. Press Ctrl+C to stop.")
     while True:
         time.sleep(interval)
 
@@ -213,7 +222,7 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
                 last_mem_mtimes[_p] = _mt
 
         if changed:
-            print(f"  [{time.strftime('%H:%M:%S')}] File changes detected, rebuilding...")
+            _say(f"  [{time.strftime('%H:%M:%S')}] File changes detected, rebuilding...")
             try:
                 incremental_update(
                     graph_db_path,
@@ -223,6 +232,6 @@ def start_watch(graph_db_path: str, mem_db_path: str | None = None,
                 )
                 from .graph_db import load_from_graph_db
                 reloaded = load_from_graph_db(graph_db_path)
-                print(f"  Rebuilt: {len(reloaded.nodes)} nodes, {len(reloaded.edges)} edges")
+                _say(f"  Rebuilt: {len(reloaded.nodes)} nodes, {len(reloaded.edges)} edges")
             except (OSError, ValueError, KeyError) as exc:
                 logger.warning("Rebuild failed: %s", exc)

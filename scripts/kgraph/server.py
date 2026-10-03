@@ -10,6 +10,7 @@ import os
 import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlsplit
@@ -73,7 +74,7 @@ def _redacted_label(node: dict) -> str:
   return f"{kind} {tail[:8]}" if tail else kind
 
 
-def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: str | None = None, force_embed: bool = False, graph_db_path: str | None = None, view_mode: str = 'overview', semantic_threshold: float = 0.82):
+def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: str | None = None, force_embed: bool = False, graph_db_path: str | None = None, view_mode: str = 'overview', semantic_threshold: float = 0.82, reporter: Callable[[str], None] | None = None):
   serve_dir, filename, using_built_frontend = resolve_serve_target(path, force_embed=force_embed)
 
   # ── CORS ──
@@ -428,7 +429,10 @@ def serve_file(path: str, host: str = '127.0.0.1', port: int = 0, store_path: st
   except OSError:
     pass
 
-  print('Serving', url)
+  # The banner goes through the reporter the CLI passes in (cli.cmd_render passes
+  # `print`); a library caller that omits it gets no stdout side effect.
+  if reporter is not None:
+    reporter(f'Serving {url}')
   try:
     httpd.serve_forever()
   except KeyboardInterrupt:

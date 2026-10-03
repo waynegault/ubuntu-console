@@ -52,7 +52,9 @@ def generate_pr_dashboard(repo_root: str, **kwargs) -> str:
         os.makedirs(os.path.dirname(os.path.abspath(output_path)) or '.', exist_ok=True)
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(html)
-        print(f'PR dashboard written to {output_path}')
+        # The caller prints the user-facing "PR dashboard written to …" line
+        # (cli.cmd_pr_dashboard); this module returns data and never prints.
+        logger.info('PR dashboard written to %s', output_path)
 
     return html
 

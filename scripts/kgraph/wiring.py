@@ -17,7 +17,7 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # ── defaults ───────────────────────────────────────────────────────────
 
@@ -489,18 +489,22 @@ def wiring_summary(report: dict[str, Any]) -> dict[str, int]:
 # ── CLI ────────────────────────────────────────────────────────────────
 
 
-def main() -> None:
+def main(reporter: Callable[[str], None] | None = None) -> None:
     """CLI entry point: python -m kgraph.wiring <repo> [--all]"""
+    def _say(message: str) -> None:
+        if reporter is not None:
+            reporter(message)
+
     args = [a for a in sys.argv[1:] if a != "--all"]
     show_all = "--all" in sys.argv[1:]
     if not args:
-        print("Usage: python -m kgraph.wiring <repo-root> [--all]")
+        _say("Usage: python -m kgraph.wiring <repo-root> [--all]")
         sys.exit(1)
     report = analyze_wiring(args[0])
-    print(format_wiring_report(report, show_all=show_all))
+    _say(format_wiring_report(report, show_all=show_all))
     summary = wiring_summary(report)
-    print(f"\nSUMMARY: {summary}")
+    _say(f"\nSUMMARY: {summary}")
 
 
 if __name__ == "__main__":
-    main()
+    main(reporter=print)

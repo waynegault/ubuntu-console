@@ -217,10 +217,11 @@ class TestBenchmark(unittest.TestCase):
                 data = json.load(f)
             self.assertEqual(data["node_count"], 3)
 
-    def test_print_benchmark_outputs_without_error(self):
+    def test_format_benchmark_renders_a_result_without_printing(self):
         result = kgraph.benchmark_graph_vs_raw(_SMALL_GRAPH)
-        # Should not raise
-        kgraph.print_benchmark(result)
+        text = kgraph.format_benchmark(result)
+        self.assertIn("=== Token-Reduction Benchmark ===", text)
+        self.assertIn("Graph nodes: 3", text)
 
 
 # ── mcp_server ─────────────────────────────────────────────────────────
@@ -671,7 +672,9 @@ class TestReport(unittest.TestCase):
             self.assertTrue(os.path.exists(out))
             with open(out, encoding="utf-8") as f:
                 self.assertEqual(f.read(), text)
-            self.assertIn("Wrote", stdout.getvalue())
+            # The library returns data and never prints; the CLI (cmd_report)
+            # owns the user-facing "Wrote" line.
+            self.assertNotIn("Wrote", stdout.getvalue())
 
     def test_report_truncates_edge_types_beyond_twenty(self):
         edges = [{"from": "n0", "to": "n1", "label": f"lbl{i}"} for i in range(25)]
@@ -914,7 +917,7 @@ class TestStartWatch(unittest.TestCase):
             ):
                 with contextlib.redirect_stdout(stdout):
                     with self.assertRaises(KeyboardInterrupt):
-                        kgraph.start_watch(db, source_dir=src, interval=1)
+                        kgraph.start_watch(db, source_dir=src, interval=1, reporter=print)
 
             upd.assert_called_once()
             out = stdout.getvalue()
@@ -943,7 +946,7 @@ class TestStartWatch(unittest.TestCase):
             ):
                 with contextlib.redirect_stdout(stdout):
                     with self.assertRaises(KeyboardInterrupt):
-                        kgraph.start_watch(db, source_dir=src, interval=1)
+                        kgraph.start_watch(db, source_dir=src, interval=1, reporter=print)
 
             upd.assert_not_called()
             self.assertNotIn("File changes detected", stdout.getvalue())
@@ -978,7 +981,7 @@ class TestStartWatch(unittest.TestCase):
             ):
                 with contextlib.redirect_stdout(stdout):
                     with self.assertRaises(KeyboardInterrupt):
-                        kgraph.start_watch(db, source_dir=src, interval=1)
+                        kgraph.start_watch(db, source_dir=src, interval=1, reporter=print)
 
             upd.assert_not_called()
             # .hidden/ and venv/ are skipped; the unreadable file is only counted
@@ -1010,7 +1013,7 @@ class TestStartWatch(unittest.TestCase):
             ):
                 with contextlib.redirect_stdout(stdout):
                     with self.assertRaises(KeyboardInterrupt):
-                        kgraph.start_watch(db, mem_db_path=mem, interval=1)
+                        kgraph.start_watch(db, mem_db_path=mem, interval=1, reporter=print)
 
             upd.assert_called_once()
             self.assertIn("File changes detected, rebuilding", stdout.getvalue())
@@ -1041,7 +1044,7 @@ class TestStartWatch(unittest.TestCase):
             ):
                 with contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaises(KeyboardInterrupt):
-                        kgraph.start_watch(db, source_dir=src, interval=1)
+                        kgraph.start_watch(db, source_dir=src, interval=1, reporter=print)
 
             log.warning.assert_called()
 
@@ -1515,13 +1518,13 @@ class TestPRDashboardGitData(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             self._make_repo(td)
             out = os.path.join(td, "nested", "dashboard.html")
-            stdout = io.StringIO()
-            with contextlib.redirect_stdout(stdout):
+            with self.assertLogs("kgraph.pr_dashboard", level="INFO") as log:
                 html = kgraph.generate_pr_dashboard(td, days=7, output_path=out)
             self.assertTrue(os.path.exists(out))
             with open(out, encoding="utf-8") as f:
                 self.assertEqual(f.read(), html)
-        self.assertIn("PR dashboard written to", stdout.getvalue())
+        # The library logs the write and returns the HTML; the CLI prints the line.
+        self.assertTrue(any("PR dashboard written to" in m for m in log.output))
         self.assertIn("Merges", html)
         self.assertIn("PR Dashboard", html)
 
@@ -3008,7 +3011,7 @@ class _MCPHarness(unittest.TestCase):
         # which is then served for real on an ephemeral port below.
         with (mock.patch("http.server.HTTPServer", _FakeHTTPServer),
               contextlib.redirect_stdout(stdout)):
-            mcp_server.serve_mcp(host="127.0.0.1", graph_db=self.db)
+            mcp_server.serve_mcp(host="127.0.0.1", graph_db=self.db, reporter=print)
         self.serve_stdout = stdout.getvalue()
 
         httpd = HTTPServer(("127.0.0.1", 0), captured["handler"])
@@ -3264,7 +3267,8 @@ class TestMCPServerShutdown(unittest.TestCase):
               contextlib.redirect_stdout(stdout)):
             mcp_server.serve_mcp(host="127.0.0.1", port=9999,
                                  graph_db=os.path.join(tempfile.gettempdir(),
-                                                       "kgraph-missing.sqlite"))
+                                                       "kgraph-missing.sqlite"),
+                                 reporter=print)
         last_server = _InterruptingHTTPServer.last
         assert last_server is not None, "serve_mcp must have constructed the server"
         self.assertTrue(last_server.shutdown_called)
@@ -3375,8 +3379,8 @@ class TestCliMainModes(_CliHarness):
                 (["god-nodes", "--top-god-nodes", "2"], ["Top 2 god nodes:", "Beta"]),
                 (["call-flow"], ["```mermaid"]),
                 (["call-flow", "--output", html], [f"Written to {html}"]),
-                (["benchmark", "--output", bench], ["Token-Reduction Benchmark"]),
-                (["report", "--report-path", report], ["# Knowledge Graph Report"]),
+                (["benchmark", "--output", bench], ["Benchmark written to", "Token-Reduction Benchmark"]),
+                (["report", "--report-path", report], ["Wrote", "# Knowledge Graph Report"]),
                 (["audit"], ["# Security Audit — kgraph"]),
             ]
             for argv, expected in cases:
@@ -3754,6 +3758,52 @@ class TestKgrapModuleEntryPoint(unittest.TestCase):
                               capture_output=True, text=True, env=env, cwd=REPO_ROOT)
         self.assertEqual(proc.returncode, 0)
         self.assertIn("usage: kgraph", proc.stdout)
+
+
+class TestKgrapLibraryDoesNotPrint(unittest.TestCase):
+    """Only cli.py — the CLI boundary — prints; library modules return data.
+
+    Catches: a print() creeping back into a library module (report, update,
+    benchmark, mcp_server, pr_dashboard, server, wiring, validate, …), which
+    would emit output a library caller and the MCP server never asked for.
+    A print inside a module's top-level `if __name__ == "__main__":` block is
+    allowed — that block IS a CLI boundary for `python -m kgraph.<module>`.
+    """
+
+    def test_library_modules_do_not_call_print(self):
+        import ast
+        import pathlib
+
+        def main_block_lines(tree):
+            lines = set()
+            for node in tree.body:
+                if not isinstance(node, ast.If):
+                    continue
+                test = node.test
+                if not (isinstance(test, ast.Compare) and isinstance(test.left, ast.Name)
+                        and test.left.id == "__name__" and len(test.comparators) == 1):
+                    continue
+                comp = test.comparators[0]
+                if not (isinstance(comp, ast.Constant) and comp.value == "__main__"):
+                    continue
+                for stmt in node.body:
+                    for ln in range(stmt.lineno, (stmt.end_lineno or stmt.lineno) + 1):
+                        lines.add(ln)
+            return lines
+
+        pkg = pathlib.Path(REPO_ROOT) / "scripts" / "kgraph"
+        offenders: list[str] = []
+        for path in sorted(pkg.glob("*.py")):
+            if path.name == "cli.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            allowed = main_block_lines(tree)
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == "print" and node.lineno not in allowed):
+                    offenders.append(f"{path.name}:{node.lineno}")
+        self.assertEqual(offenders, [],
+                         "library modules must return data, not print: " + ", ".join(offenders))
 
 
 if __name__ == "__main__":

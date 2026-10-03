@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any
+from typing import Any, Callable
 import sys
 
 from pydantic import ValidationError
@@ -302,23 +302,31 @@ def validate_graph_payload(payload: Any) -> tuple[bool, str]:
     return True, ""
 
 
-def main() -> None:
-    """CLI entry point: python -m kgraph.validate <graph.json>"""
+def main(reporter: Callable[[str], None] | None = None) -> None:
+    """CLI entry point: python -m kgraph.validate <graph.json>
+
+    Output goes through *reporter* when one is given (the ``__main__`` block
+    passes ``print``); this module never writes to stdout itself.
+    """
+    def _say(message: str) -> None:
+        if reporter is not None:
+            reporter(message)
+
     if len(sys.argv) < 2:
-        print("Usage: python -m kgraph.validate <graph.json>")
+        _say("Usage: python -m kgraph.validate <graph.json>")
         sys.exit(1)
     fp = sys.argv[1]
     errors = validate_graph_file(fp)
     if errors:
-        print(f"Validation: {len(errors)} issue(s)")
+        _say(f"Validation: {len(errors)} issue(s)")
         for err in errors:
             ref = err.get("file", "")
             sev = err.get("severity", "error")
-            print(f"  [{sev}] {ref}: {err.get('message', '')}")
+            _say(f"  [{sev}] {ref}: {err.get('message', '')}")
         sys.exit(1)
     else:
-        print(f"{fp}: validation PASSED")
+        _say(f"{fp}: validation PASSED")
 
 
 if __name__ == "__main__":
-    main()
+    main(reporter=print)

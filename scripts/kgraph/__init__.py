@@ -15,7 +15,7 @@ if _t.TYPE_CHECKING:
     # definitions for `from kgraph import X` / `kgraph.X` without paying the
     # runtime import cost (the __getattr__ shim handles execution).
     from .ast_extractor import ast_available, extract_repo_graph
-    from .benchmark import benchmark_graph_vs_raw, print_benchmark
+    from .benchmark import benchmark_graph_vs_raw, format_benchmark
     from .call_flow import generate_call_flow_html, generate_call_flow_mermaid
     from .cli import main
     from .community import (
@@ -146,7 +146,7 @@ _lazy(".update", ["incremental_update", "start_watch", "merge_graphs"])
 _lazy(".mcp_server", ["serve_mcp"])
 _lazy(".validate", ["validate_graph_payload"])
 _lazy(".pr_dashboard", ["generate_pr_dashboard"])
-_lazy(".benchmark", ["benchmark_graph_vs_raw", "print_benchmark"])
+_lazy(".benchmark", ["benchmark_graph_vs_raw", "format_benchmark"])
 _lazy(".cli", ["main"])
 
 __all__ = [
@@ -174,5 +174,5 @@ __all__ = [
     "serve_mcp",
     "validate_graph_payload",
     "generate_pr_dashboard",
-    "benchmark_graph_vs_raw", "print_benchmark",
+    "benchmark_graph_vs_raw", "format_benchmark",
 ]

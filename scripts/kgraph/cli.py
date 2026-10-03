@@ -323,12 +323,13 @@ def cmd_watch(args: argparse.Namespace) -> None:
     start_watch(graph_db, mem_db_path=mem_db, source_dir=src,
                 interval=args.watch_interval, ast=bool(src),
                 ast_vars=args.ast_vars, ast_max_files=args.ast_max_files,
-                ast_subdirs=args.ast_subdirs)
+                ast_subdirs=args.ast_subdirs, reporter=print)
 
 
 def cmd_mcp(args: argparse.Namespace) -> None:
     from .mcp_server import serve_mcp
-    serve_mcp(host=args.host, port=args.port or 8331, graph_db=args.graph_db)
+    serve_mcp(host=args.host, port=args.port or 8331, graph_db=args.graph_db,
+              reporter=print)
 
 
 def cmd_remove_source(args: argparse.Namespace) -> None:
@@ -443,7 +444,12 @@ def cmd_confidence(args: argparse.Namespace) -> None:
 
 def cmd_report(args: argparse.Namespace) -> None:
     graph = _load_graph(args)
-    print(generate_report(graph, outpath=args.report_path))
+    # generate_report returns the text and writes the file; the user-facing
+    # "Wrote …" line is this CLI boundary's job (the library never prints).
+    text = generate_report(graph, outpath=args.report_path)
+    if args.report_path:
+        print(f"Wrote {args.report_path}")
+    print(text)
 
 
 def cmd_pr_dashboard(args: argparse.Namespace) -> None:
@@ -452,15 +458,17 @@ def cmd_pr_dashboard(args: argparse.Namespace) -> None:
     out = args.output or "kgraph_pr_dashboard.html"
     generate_pr_dashboard(os.getcwd(), days=args.days, graph_data=graph,
                           output_path=out, author=args.author, max_prs=args.max_prs)
+    print(f"PR dashboard written to {out}")
     print(f"Written to {out}")
 
 
 def cmd_benchmark(args: argparse.Namespace) -> None:
-    from .benchmark import benchmark_graph_vs_raw, print_benchmark
+    from .benchmark import benchmark_graph_vs_raw, format_benchmark
     graph = _load_graph(args)
     out = args.output or "benchmark_results.json"
     result = benchmark_graph_vs_raw(graph, output_path=out)
-    print_benchmark(result)
+    print(f"Benchmark written to {out}")
+    print(format_benchmark(result))
 
 
 def cmd_audit(args: argparse.Namespace) -> None:
@@ -483,7 +491,8 @@ def cmd_render(args: argparse.Namespace) -> None:
         serve_file(outpath, host=args.host, port=args.port,
                    store_path=args.store, force_embed=args.embed,
                    graph_db_path=os.path.expanduser(args.graph_db),
-                   view_mode=args.view, semantic_threshold=args.semantic_threshold)
+                   view_mode=args.view, semantic_threshold=args.semantic_threshold,
+                   reporter=print)
     else:
         _build_subcommand_parser().print_help()
 

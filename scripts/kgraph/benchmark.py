@@ -96,24 +96,33 @@ def benchmark_graph_vs_raw(graph: Graph | dict, source_files: list[str] | None =
     if output_path:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
-        print(f"Benchmark written to {output_path}")
+        # The caller prints the user-facing "Benchmark written to …" line
+        # (cli.cmd_benchmark); this module returns data and never prints.
+        logger.info("Benchmark written to %s", output_path)
 
     return result
 
 
-def print_benchmark(result: dict) -> None:
-    """Pretty-print a benchmark result dict."""
-    print("=== Token-Reduction Benchmark ===")
-    print(f'  Graph nodes: {result.get("node_count", 0)}')
-    print(f'  Graph edges: {result.get("edge_count", 0)}')
-    print(f'  Estimated graph tokens: {result.get("graph_tokens", "N/A")}')
-    print(f'  Compressed graph tokens: {result.get("compressed_graph_tokens", "N/A")}')
+def format_benchmark(result: dict) -> str:
+    """Render a benchmark result dict as the CLI's report lines.
+
+    Returns the text rather than printing it: the CLI boundary (cli.py) owns
+    stdout, so a library caller can render the report without side effects.
+    """
+    lines = [
+        "=== Token-Reduction Benchmark ===",
+        f'  Graph nodes: {result.get("node_count", 0)}',
+        f'  Graph edges: {result.get("edge_count", 0)}',
+        f'  Estimated graph tokens: {result.get("graph_tokens", "N/A")}',
+        f'  Compressed graph tokens: {result.get("compressed_graph_tokens", "N/A")}',
+    ]
     raw = result.get("raw_file_tokens", "N/A")
-    print(f"  Raw file tokens: {raw}")
+    lines.append(f"  Raw file tokens: {raw}")
     if isinstance(raw, int):
-        print(f'  Raw-to-graph ratio: {result.get("raw_to_graph_ratio", "N/A")}x')
-        print(f'  Raw-to-compressed ratio: {result.get("raw_to_compressed_ratio", "N/A")}x')
-        print(f'  Savings vs raw: {result.get("savings_pct_vs_raw", "N/A")}%')
-        print(f'  Compressed savings vs raw: {result.get("compressed_savings_pct_vs_raw", "N/A")}%')
-    print(f'  Avg tokens/node: {result.get("avg_tokens_per_node", "N/A")}')
-    print(f'  Avg tokens/edge: {result.get("avg_tokens_per_edge", "N/A")}')
+        lines.append(f'  Raw-to-graph ratio: {result.get("raw_to_graph_ratio", "N/A")}x')
+        lines.append(f'  Raw-to-compressed ratio: {result.get("raw_to_compressed_ratio", "N/A")}x')
+        lines.append(f'  Savings vs raw: {result.get("savings_pct_vs_raw", "N/A")}%')
+        lines.append(f'  Compressed savings vs raw: {result.get("compressed_savings_pct_vs_raw", "N/A")}%')
+    lines.append(f'  Avg tokens/node: {result.get("avg_tokens_per_node", "N/A")}')
+    lines.append(f'  Avg tokens/edge: {result.get("avg_tokens_per_edge", "N/A")}')
+    return "\n".join(lines)

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 from .query import (
@@ -66,7 +67,8 @@ def _safe_report_path(name: str | None) -> str | None:
     return target
 
 
-def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = None):
+def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = None,
+              reporter: Callable[[str], None] | None = None):
     """Serve MCP-style JSON-RPC over HTTP.
 
     This is a lightweight implementation. For a full MCP spec server,
@@ -370,9 +372,12 @@ def serve_mcp(host: str = '127.0.0.1', port: int = 0, graph_db: str | None = Non
     used_port = httpd.server_address[1]
     if isinstance(addr, (bytes, bytearray)):
         addr = addr.decode()
-    print(f'MCP server listening on {addr}:{used_port}')
-    print('  Tools: kgraph_query, kgraph_path, kgraph_explain, kgraph_community, '
-          'kgraph_report, kgraph_stats')
+    # The banner is emitted through the reporter the CLI passes in (cli.cmd_mcp
+    # passes `print`); a library caller that omits it gets no stdout side effect.
+    if reporter is not None:
+        reporter(f'MCP server listening on {addr}:{used_port}')
+        reporter('  Tools: kgraph_query, kgraph_path, kgraph_explain, kgraph_community, '
+                 'kgraph_report, kgraph_stats')
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
