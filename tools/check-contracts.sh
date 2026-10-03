@@ -290,7 +290,14 @@
 #      must not carry one).
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 15
+# Module Version: 16
+#   v16 (2026-10-03, card 74051862): `swallows` now NAMES a configured corpus group whose
+#   directory is absent instead of skipping it silently.  A missing group used to be a
+#   `continue`, so its baseline rows read STALE (non-fatal) and a whole vanished group passed
+#   as the fix that removed its sites: a group the baseline knows about is now a blocking FAIL,
+#   and one with no baseline rows a named WARNING (so a partial fixture tree stays usable with
+#   --repo).  The fully-empty-corpus refusal is unchanged.  The tool VERSION does not move (no
+#   new mode or rule beyond this finding), so the BATS version pins stay put.
 #   v15 (2026-10-02, card dd96b63f): the 2365-line embedded Python program moved out of the
 #   heredoc into tools/contracts_check.py; this file is now a 391-line wrapper that selects
 #   the interpreter and execs the module with the SAME argv (`python3 -` and `python3 <file>`

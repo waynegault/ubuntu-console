@@ -704,6 +704,38 @@ SH
     [[ "$output" == *"0 unclassified"* ]]
 }
 
+@test "seed: swallows — a missing group with no baseline rows warns but does not fail" {
+    # A configured corpus group whose directory is absent is NAMED (card 74051862).
+    # Nothing in the baseline references bin/, so its absence is a WARNING, not a
+    # verdict — a partial fixture tree (and a --repo run against one) stays usable.
+    run "$CHECKER" swallows --repo "$FIXTURE"
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"WARNING  group 'bin'"* ]]
+    [[ "$output" == *"a whole group was NOT scanned"* ]]
+}
+
+@test "seed: swallows — a whole group directory that vanished is caught, not read as STALE" {
+    # ENFORCED by swallows (card 74051862): a group the baseline knows about whose
+    # directory disappears must FAIL.  Before this it was skipped silently, its
+    # baseline rows read STALE (non-fatal), and a vanished group passed as the fix
+    # that removed its sites.
+    mkdir -p "$FIXTURE/bin" "$FIXTURE/tools"
+    cat > "$FIXTURE/bin/helper.sh" <<'SH'
+#!/usr/bin/env bash
+helper() { command -v x || true; }
+SH
+    printf 'unclassified\tbin/helper.sh\t1\n' > "$FIXTURE/tools/contracts-swallows-baseline.tsv"
+    run "$CHECKER" swallows --repo "$FIXTURE"
+    [[ "$status" -eq 0 ]]
+
+    rm -rf "$FIXTURE/bin"
+    run "$CHECKER" swallows --repo "$FIXTURE"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"FAIL  group 'bin'"* ]]
+    [[ "$output" == *"a whole group was NOT scanned"* ]]
+    [[ "$output" == *"STALE     bin/helper.sh"* ]]
+}
+
 # ── the battery's own ratchet ──────────────────────────────────────────────
 @test "meta: every subcommand has a seeded case and a clean control in this file" {
     # A seeded case that is deleted or renamed leaves the battery green with the

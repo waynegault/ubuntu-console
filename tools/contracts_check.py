@@ -2082,14 +2082,20 @@ def swallow_corpus(repo):
     non-recursive — those files were scanned by neither this gate nor tools/lint.sh's
     whole-tree loops.  Every site was classified before this landed, so the baseline gains no
     row.
+
+    Returns `(corpus, missing)` where `missing` is the (sub, base) of every CONFIGURED group
+    whose directory is absent (card 74051862).  A missing group used to be skipped silently,
+    so its baseline rows read STALE (non-fatal) and a whole vanished group passed as a fix.
     """
     groups = (("scripts", True, False), ("bin", False, False), ("tools", True, False),
               ("tools/hooks", False, False), ("tools/qwen-hooks", False, False),
               ("nas", True, True))
     corpus = []
+    missing = []
     for sub, only_sh, recursive in groups:
         base = os.path.join(repo, sub)
         if not os.path.isdir(base):
+            missing.append((sub, base))
             continue
         if recursive:
             for dirpath, dirnames, filenames in os.walk(base):
@@ -2111,7 +2117,7 @@ def swallow_corpus(repo):
             if only_sh and not entry.endswith(".sh"):
                 continue
             corpus.append((f"{sub}/{entry}", path))
-    return corpus
+    return corpus, missing
 
 
 def run_swallows(repo):
@@ -2128,7 +2134,7 @@ def run_swallows(repo):
         sys.stderr.write(f"=== Silent-swallow site dump ({SWALLOWS_SCOPE}) ===\n")
     else:
         print(f"=== Silent-swallow check ({SWALLOWS_SCOPE}) ===")
-    corpus = swallow_corpus(repo)
+    corpus, missing_groups = swallow_corpus(repo)
     if not corpus:
         sys.stderr.write("check-contracts: no shell files found for the swallow check — nothing "
                          "to scan, and an empty scan is not a clean tree. Refusing to pass.\n")
@@ -2138,6 +2144,21 @@ def run_swallows(repo):
     for key, detail in baseline.items():
         if key.startswith("unclassified\t"):
             known[key.split("\t", 1)[1]] = detail
+
+    # A configured group whose directory is absent is a coverage loss, not a clean
+    # tree (card 74051862).  Without this it was skipped silently, so its baseline rows
+    # read STALE (non-fatal) and a whole vanished group passed as the fix that removed
+    # its sites.  A group the baseline knows about is a FAIL (blocking); a group with no
+    # baseline rows has nothing to lose and is only a named WARNING, so a partial
+    # fixture tree stays usable with --repo.
+    group_fail: list[str] = []
+    group_warn: list[str] = []
+    for sub, base in missing_groups:
+        covered = any(rel.startswith(sub + "/") for rel in known)
+        line = (f"  {'FAIL' if covered else 'WARNING'}  group '{sub}': configured for the "
+                f"swallow corpus but {os.path.relpath(base, repo)}/ is not a directory — a "
+                f"whole group was NOT scanned")
+        (group_fail if covered else group_warn).append(line)
 
     problems = []
     rows = []
@@ -2194,6 +2215,9 @@ def run_swallows(repo):
     if dump:
         for site_row in site_rows:
             print(json.dumps(site_row, sort_keys=True))
+        # stderr, so the JSONL on stdout stays parseable.
+        for line in group_fail + group_warn:
+            sys.stderr.write(line.lstrip() + "\n")
         sys.stderr.write(
             f"check-contracts[dump-sites]: {len(site_rows)} site(s) in {len(rows)} file(s) — "
             f"{sum(1 for row in site_rows if row['classified'])} classified, "
@@ -2209,6 +2233,8 @@ def run_swallows(repo):
         for rel, _total, _classified, unclassified in rows:
             if unclassified:
                 print(f"unclassified\t{rel}\t{unclassified}")
+        for line in group_fail + group_warn:
+            sys.stderr.write(line.lstrip() + "\n")
         return EXIT_CLEAN
     for rel, total, _classified, unclassified in rows:
         if unclassified == 0:
@@ -2226,6 +2252,7 @@ def run_swallows(repo):
                              "record the count in")
             new_sites.append("        tools/contracts-swallows-baseline.tsv as a deliberate act")
     problems.extend(new_sites)
+    problems.extend(group_fail)
 
     stale = [rel for rel in known
              if rel not in {row[0] for row in rows}
@@ -2234,6 +2261,8 @@ def run_swallows(repo):
         print(f"  STALE     {rel}: fewer unclassified swallow(s) than the baseline "
               f"({known[rel]}) — lower or delete the row in "
               f"tools/contracts-swallows-baseline.tsv")
+    for line in group_warn:
+        print(line)
 
     total_sites = sum(row[1] for row in rows)
     total_classified = sum(row[2] for row in rows)
