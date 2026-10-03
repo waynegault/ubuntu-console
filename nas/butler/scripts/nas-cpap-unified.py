@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Unified CPAP fetcher for NAS: triggers MFA, extracts OTP via Graph API, fetches data."""
+"""Unified CPAP fetcher for NAS: triggers MFA, extracts OTP via Graph API, fetches data.
+
+The myAir fetch itself is NOT implemented — ``_fetch_cpap_data`` raises rather than
+returning placeholder data (card 8dda5918).  This is a mirror-only fix pending the NAS
+deploy; see nas/butler/README.md.
+"""
 
 import json
 import pathlib
@@ -169,25 +174,33 @@ def _get_bearer_token(otp: str) -> str:
         return token_data.get("access_token", "")
 
 def _fetch_cpap_data(bearer: str) -> dict:
-    """Fetch CPAP data using bearer token."""
-    # TODO: Implement GraphQL query to myAir API
-    # For now, return mock data structure
-    return {"device": {}, "sleep_records": []}
+    """Fetch CPAP data using bearer token.
+
+    NOT IMPLEMENTED.  This used to return a mock payload while ``main()`` printed
+    ``{"ok": true}``, so a caller saw success with nothing fetched (card 8dda5918).
+    It raises until the real myAir fetch exists — never return placeholder data from
+    a function whose success callers trust.
+    """
+    raise NotImplementedError(
+        "myAir CPAP fetch is not implemented; refusing to return mock data"
+    )
+
 
 def main() -> int:
     if not USERNAME or not PASSWORD:
         print("CPAP_MYAIR_USERNAME and CPAP_MYAIR_PASSWORD required", file=sys.stderr)
         return 1
-    
+
     try:
         otp = _get_fresh_otp()
         bearer = _get_bearer_token(otp)
         print(f"Bearer token: {bearer[:50]}...", file=sys.stderr)
-        
-        # TODO: Fetch actual CPAP data
-        print(json.dumps({"ok": True, "bearer": bearer[:20] + "..."}))
+
+        # An unimplemented fetch raises, so this never reports ok:true on mock data.
+        data = _fetch_cpap_data(bearer)
+        print(json.dumps({"ok": True, "data": data}))
         return 0
-        
+
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

@@ -70,18 +70,41 @@ that owns it) and this mirror is refreshed from the NAS afterwards. **A file tha
 between here and the NAS is drift** — and note the crontab names the `scripts/` copy, so a
 fix applied to the `mi-scale/` copy alone changes nothing.
 
-## First fixes landed HERE, not yet on the NAS (2026-10-02)
+## First fixes landed HERE, not yet on the NAS (2026-10-02; one added 2026-10-03)
 
-The pre-commit gate caught these when the copy was staged, so they are fixed in the mirror and
-the NAS still carries the old version (deployment held — see the one-writer note):
+These are fixed in the mirror and the NAS still carries the old version (deployment held — see
+the one-writer note):
 
 - `scripts/internet-quality-monitor.sh` — `TX`, `RX` and `MIN` were parsed and never used
   (SC2034); removed.
 - `nas-hardening/nas-health-check.sh` — the size test used unquoted `$LOG` and `$(…)`
   (SC2046); both quoted.
+- `scripts/nas-cpap-unified.py` (2026-10-03, card `8dda5918`) — `_fetch_cpap_data` returned a
+  MOCK payload (`{"device": {}, "sleep_records": []}`) while `main()` printed `{"ok": true}`,
+  so a caller saw success with nothing fetched.  It now raises `NotImplementedError` and `main()`
+  reports the failure instead of a false success.  The NAS copy still returns the mock data
+  until the deploy pass.
 
-So this directory is the NAS content **plus these two files**, which are the first items for
+So this directory is the NAS content **plus these three files**, which are the first items for
 the deploy pass.
+
+## `nas-cpap-full.py` is a dead stub — documented, NOT removed here (card `8dda5918`)
+
+`scripts/nas-cpap-full.py` triggers MFA and obtains a bearer token, then prints `SUCCESS` and
+exits 0 **without fetching any data** (its fetch is a `# TODO`).  It is UNREFERENCED: the cron
+(`cron/openclaw-collectors.cron`) runs `cpap-myair-collector.py`, and `cpap-collect-with-otp.sh`
+runs `cpap-myair-fetch.py` + `nas-graph-otp.py`; `git grep nas-cpap-full` finds only this README.
+
+It is documented here rather than deleted because this directory is a byte-for-byte copy of the
+NAS: deleting a file changes the mirror's file **set** (the NAS still has it), where the
+mirror-only fixes above change only a file's **bytes** — the shape this mirror already documents
+and deploys.  A silent divergence of either kind is what this section exists to prevent.  The fix
+belongs on the NAS, then the mirror is refreshed — the NAS lane would remove the unreferenced
+stub at `/mnt/HD/HD_a2/butler/scripts/nas-cpap-full.py`.
+
+**Reversal for both `8dda5918` actions:** if the owner prefers the recommendation applied in the
+mirror, `git rm scripts/nas-cpap-full.py` and record it here; `nas-cpap-unified.py` is already
+fixed above and only awaits the deploy.
 
 ## Known drift, already measured (2026-10-02)
 

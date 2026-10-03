@@ -333,6 +333,17 @@ def test_read_myair_uses_the_shared_extractor() -> None:
     assert mod.extract_otp("no code here") is None
 
 
+def test_cpap_unified_fetch_raises_instead_of_returning_mock_data() -> None:
+    # Card 8dda5918: _fetch_cpap_data must not return a placeholder payload that
+    # lets main() print {"ok": true} with nothing fetched.  It raises until the real
+    # myAir fetch exists, so a caller cannot mistake mock data for a result.  The
+    # pre-fix function returned {"device": {}, "sleep_records": []} and this case
+    # failed on the missing exception; the NAS copy is the same code, pending deploy.
+    mod = _load("nas_cpap_unified_fetch", "nas-cpap-unified.py")
+    with pytest.raises(NotImplementedError):
+        mod._fetch_cpap_data("bearer-not-used")
+
+
 # ── smoke: every migrated importer still loads (lib.butler_common resolves) ───
 
 _IMPORT_SAFE = [
