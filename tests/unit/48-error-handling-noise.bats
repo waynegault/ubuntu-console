@@ -16,6 +16,11 @@
 # error, a different subcommand) MUST still be logged, or the trap would hide the
 # failures it exists to surface.
 #
+# A second defect in the same handler (card cb0ef810): the command was written
+# verbatim, so a control byte in it made bash-errors.log binary (a 639-NUL line
+# stopped `grep` reading the file). __tac_sanitize_log_field now strips NUL/control
+# bytes (keeping TAB) before any field is written.
+#
 # FALSIFICATION: against the pre-fix module every "not logged" case below fails —
 # the rc-3 is-active line is written to the log. And if the whitelist were widened
 # from "is-active/is-enabled only" to all systemctl invocations, the `restart rc 3`
@@ -103,6 +108,56 @@ _run_under_trap() {
 @test "noise: an ordinary systemctl query is not internal noise" {
     run bash -c "source '$MODULE'; __tac_is_internal_noise_command 'systemctl is-active x'"
     [ "$status" -eq 1 ]
+}
+
+# ── card cb0ef810: the log must stay plain text ───────────────────────────────
+# A control byte in a logged command turned bash-errors.log binary (a 639-NUL line
+# stopped `grep` reading the file). NUL cannot inhabit a bash command WORD — bash
+# strips NUL from variables — so the NUL path is pinned on the filter directly
+# (fed through a pipe), and the handler path is pinned with a control byte (ESC)
+# that CAN reach BASH_COMMAND.
+
+@test "sanitize: NUL bytes are stripped from a log field" {
+    raw="$BATS_TEST_TMPDIR/raw.bin"
+    clean="$BATS_TEST_TMPDIR/clean.bin"
+    printf 'a\0b\0c' > "$raw"
+    run bash -c "source '$MODULE'; __tac_sanitize_log_field < '$raw' > '$clean'"
+    [ "$status" -eq 0 ]
+    run bash -c "LC_ALL=C tr -dc '\\000' < '$clean' | wc -c"
+    [ "$output" -eq 0 ]
+    run cat "$clean"
+    [ "$output" = "abc" ]
+}
+
+@test "sanitize: the raw field WOULD carry the NULs (the NUL counter is valid)" {
+    raw="$BATS_TEST_TMPDIR/raw.bin"
+    printf 'a\0b\0c' > "$raw"
+    run bash -c "LC_ALL=C tr -dc '\\000' < '$raw' | wc -c"
+    [ "$output" -eq 2 ]
+}
+
+@test "sanitize: ESC/CR/DEL are stripped and TAB is kept" {
+    raw="$BATS_TEST_TMPDIR/ctl.bin"
+    printf 'a\tb\033c\rd\177e' > "$raw"
+    run bash -c "source '$MODULE'; __tac_sanitize_log_field < '$raw'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'a\tbcde')" ]
+}
+
+@test "sanitize: an all-control field sanitizes to empty" {
+    raw="$BATS_TEST_TMPDIR/allctl.bin"
+    printf '\0\001\002\033' > "$raw"
+    run bash -c "source '$MODULE'; __tac_sanitize_log_field < '$raw' | wc -c"
+    [ "$status" -eq 0 ]
+    [ "$output" -eq 0 ]
+}
+
+@test "log: a command carrying a control byte writes no control byte" {
+    : > "$ErrorLogPath"
+    run env PATH="$SHIMDIR/bin:$PATH" bash -c "source '$MODULE'; ls \$'\033'probe-$PROBE_UNIQ"
+    grep -q "EXIT 2" "$ErrorLogPath"
+    run grep -q '[[:cntrl:]]' "$ErrorLogPath"
+    [ "$status" -ne 0 ]
 }
 
 # end of file

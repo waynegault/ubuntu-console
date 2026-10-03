@@ -2,7 +2,7 @@
 # ─── Module: 02-error-handling ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 9
+# Module Version: 10
 # ==============================================================================
 # 2. ERROR HANDLING
 # ==============================================================================
@@ -53,6 +53,17 @@ function __tac_redact_command() {
     printf '%s' "$_cmd"
 }
 
+# Strip NUL/control bytes from a log field (stdin filter) so the log stays plain text.
+function __tac_sanitize_log_field() {
+    # Stdin filter: strip NUL and the other C0 control bytes (keeping TAB, 0x09)
+    # plus DEL (0x7F) before a command is written to the log.  A control byte made
+    # the log binary: measured 2026-10-02, ~/.openclaw/logs/bash-errors.log held a
+    # line of 639 NUL bytes, after which `grep` reported the whole file as binary
+    # and every reader lost it.  LC_ALL=C so `tr` cannot cut a multibyte UTF-8
+    # character in half (only ASCII bytes are in the delete set).
+    LC_ALL=C tr -d '\000-\010\012-\037\177'
+}
+
 function __tac_is_internal_noise_command() {
     local _cmd="$1"
     case "$_cmd" in
@@ -70,6 +81,7 @@ function __tac_is_internal_noise_command() {
     return 1
 }
 
+# True when a systemctl exit is the normal "inactive"/"disabled" answer (rc 3).
 function __tac_is_normal_systemctl_query() {
     # True when this command's non-zero status is a normal systemctl answer rather
     # than a failure: `is-active`/`is-enabled` return 3 for "inactive"/"disabled".
@@ -230,9 +242,21 @@ function __tac_ssh_circuit_breaker_allows_log() {
 
 function __tac_err_handler() {
     __tac_last_err=$?
-    local _raw_cmd="$BASH_COMMAND"
+    # Strip NUL/control bytes at the SOURCE, before any field is derived from the
+    # command.  TWO lines here write to the log — the final `[EXIT n] <cmd>` and the
+    # `[MISSING-TOOL]` line that derives `_missing` from the raw command — and a
+    # control byte in either makes the log binary (measured 2026-10-02: a 639-NUL
+    # line stopped `grep` reading the whole file).  Sanitising here covers both.
+    local _raw_cmd
+    _raw_cmd=$(printf '%s' "$BASH_COMMAND" | __tac_sanitize_log_field)
     local _cmd
     _cmd=$(__tac_redact_command "$_raw_cmd")
+    # An all-control command sanitises to empty; drop it rather than append a blank
+    # entry with nothing to debug.
+    if [[ -z "$_cmd" ]]
+    then
+        return
+    fi
     local _label="EXIT $__tac_last_err"
 
     # Skip logging for exit code 1 (common false positives)
