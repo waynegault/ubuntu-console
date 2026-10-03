@@ -18,11 +18,6 @@ from .constants import (
 )
 from .models import ConfidenceLevel, Graph, GraphEdge
 
-# Re-export for callers that imported the old string constants.
-EXTRACTED = ConfidenceLevel.EXTRACTED.value
-INFERRED = ConfidenceLevel.INFERRED.value
-AMBIGUOUS = ConfidenceLevel.AMBIGUOUS.value
-
 # ── Label sets for classification ─────────────────────────────────────
 # AST_EDGE_LABELS and CANONICAL_RELATION_LABELS are the single declarations in
 # constants.py; this module used to carry a private copy of each (_AST_LABELS and
