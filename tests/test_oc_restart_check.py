@@ -20,7 +20,9 @@ loaded by path rather than imported by name.
 from __future__ import annotations
 
 import json
+import os
 import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -184,3 +186,202 @@ def test_scan_work_still_reports_a_marker_process_under_another_name(
 def test_self_name_is_this_script_not_a_stale_literal() -> None:
     # The literal can only be right if it is this file's own name.
     assert probe.SELF_NAME == "oc-restart-check.py"
+
+
+# --- /proc readers ----------------------------------------------------------
+# Criterion: each reader returns the kernel value it names, and an UNREADABLE value
+# is reported as absent ("?" / 0 / []) rather than guessed - the docstring's rule that
+# a probe which cannot see must not read as an empty box.  Where a real pid works the
+# test uses one; the unreadable arm uses a pid that cannot exist.
+
+
+def _missing_pid() -> int:
+    """A pid that is not in /proc (max pid is bounded well below this)."""
+    return 2**30
+
+
+def test_argv_and_cwd_read_a_real_process() -> None:
+    pid = os.getpid()
+    argv = probe._argv(pid)
+    assert argv and argv[0]
+    assert isinstance(probe._cwd(pid), str)
+
+
+def test_argv_cwd_ppid_degrade_when_the_process_is_gone() -> None:
+    # Catches: a reader that raises (crashing the whole probe) or invents a value on a
+    # pid it cannot read - here, a process that has exited between the two reads.
+    gone = _missing_pid()
+    assert probe._argv(gone) == []
+    assert probe._cwd(gone) == "?"
+    assert probe._ppid(gone) == 0
+
+
+def test_ppid_reads_a_real_parent() -> None:
+    ppid = probe._ppid(os.getpid())
+    assert isinstance(ppid, int)
+    assert ppid >= 0
+
+
+def test_parent_is_systemd_true_from_exe(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: the exe fast path not recognising the service manager, which would
+    # report our own self-healing lanes as foreign holders and invert the verdict.
+    fake_os = SimpleNamespace(path=os.path, readlink=lambda _p: "/usr/lib/systemd/systemd")
+    monkeypatch.setattr(probe, "os", fake_os)
+    assert probe._parent_is_systemd(4242) is True
+
+
+def test_parent_is_systemd_false_for_a_non_systemd_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_os = SimpleNamespace(path=os.path, readlink=lambda _p: "/usr/bin/python3")
+    monkeypatch.setattr(probe, "os", fake_os)
+    # /proc/<this test process>/comm is the interpreter, so the fallback answers False.
+    assert probe._parent_is_systemd(os.getpid()) is False
+
+
+def test_parent_is_systemd_falls_back_to_comm_when_exe_is_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The load-bearing fallback (docstring): the user manager's /proc/PID/exe is EACCES
+    # for an ordinary reader, so exe being unreadable must fall through to comm.
+    def _raise(_p: str) -> str:
+        raise OSError(13, "permission denied")
+
+    fake_os = SimpleNamespace(path=os.path, readlink=_raise)
+    monkeypatch.setattr(probe, "os", fake_os)
+    # pid 1 is the systemd service manager on this box; its comm is readable.
+    assert probe._parent_is_systemd(1) is True
+
+
+def test_is_systemd_managed_uses_the_parent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(probe, "_ppid", lambda pid: 1)
+    monkeypatch.setattr(probe, "_parent_is_systemd", lambda parent: True)
+    assert probe._is_systemd_managed(50) is True
+    monkeypatch.setattr(probe, "_ppid", lambda pid: 0)
+    assert probe._is_systemd_managed(50) is False
+    monkeypatch.setattr(probe, "_ppid", lambda pid: 123)
+    monkeypatch.setattr(probe, "_parent_is_systemd", lambda parent: False)
+    assert probe._is_systemd_managed(50) is False
+
+
+def test_pids_are_sorted_ints_and_include_this_process() -> None:
+    pids = probe._pids()
+    assert pids == sorted(pids)
+    assert all(isinstance(p, int) for p in pids)
+    assert os.getpid() in pids
+
+
+# --- scanners over a fixture process table ----------------------------------
+
+
+def _argv_map(monkeypatch: pytest.MonkeyPatch, mapping: dict[int, list[str]]) -> None:
+    monkeypatch.setattr(probe, "_pids", lambda: [probe.SELF, *mapping])
+    monkeypatch.setattr(probe, "_argv", lambda pid: mapping.get(pid, []))
+    monkeypatch.setattr(probe, "_cwd", lambda pid: "/cwd")
+
+
+def test_scan_workers_matches_argv0_and_excludes_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: a worker hidden from the report (a runner job killed by the restart reads
+    # as a cancellation), and the probe reporting itself as a worker.
+    _argv_map(monkeypatch, {
+        4242: ["/home/runner/Runner.Worker"],
+        4243: ["/usr/bin/python3", "Runner.Worker"],  # marker NOT in argv[0]
+    })
+    report = _report()
+    probe.scan_workers(report)
+    assert report.workers == ["pid=4242 cwd=/cwd /home/runner/Runner.Worker"]
+
+
+def test_scan_work_skips_empty_and_unrelated_then_reports_a_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Catches: an unrelated process reported as work (a false blocker) and real bench
+    # work missed (a false clearance).
+    _argv_map(monkeypatch, {
+        5001: [],                                   # nothing to read
+        5002: ["/bin/cat", "notes.txt"],            # no marker
+        5003: ["/usr/bin/python3", "bench-rows.sh"],  # marker in the command line
+    })
+    report = _report()
+    probe.scan_work(report)
+    assert len(report.work) == 1
+    assert "bench-rows.sh" in report.work[0]
+
+
+def _fake_subprocess_run(returncode: int = 0, stdout: str = "", stderr: str = "",
+                         raise_exc: Exception | None = None) -> Any:
+    module = type(sys)("subprocess")
+
+    class SubprocessError(Exception):
+        pass
+
+    module.SubprocessError = SubprocessError  # type: ignore[attr-defined]
+
+    class Proc:
+        def __init__(self) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def run(*args: Any, **kwargs: Any) -> Any:
+        if raise_exc is not None:
+            raise raise_exc
+        return Proc()
+
+    module.run = run  # type: ignore[attr-defined]
+    return module
+
+
+def test_scan_gpu_splits_lanes_from_foreign_holders(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: our self-healing lanes counted as blockers (inverting the verdict) or
+    # another session's holder counted as benign (a destructive restart).
+    monkeypatch.setattr(probe, "subprocess", _fake_subprocess_run(stdout="111\n222\n"))
+    monkeypatch.setattr(probe, "_argv", lambda pid: ["llama-server", f"--pid={pid}"])
+    monkeypatch.setattr(probe, "_is_systemd_managed", lambda pid: pid == 111)
+    report = _report()
+    probe.scan_gpu(report)
+    assert len(report.lanes) == 1 and "pid=111" in report.lanes[0]
+    assert len(report.foreign_gpu) == 1 and "pid=222" in report.foreign_gpu[0]
+
+
+def test_scan_gpu_reports_an_unreadable_card_rather_than_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: nvidia-smi failing and the report reading "0 apps" as an all-clear.
+    monkeypatch.setattr(probe, "subprocess", _fake_subprocess_run(returncode=9, stderr="driver lost"))
+    report = _report()
+    probe.scan_gpu(report)
+    assert report.unreadable and "exited 9" in report.unreadable[0]
+    assert report.safe is False
+
+    monkeypatch.setattr(probe, "subprocess", _fake_subprocess_run(raise_exc=OSError("ENOENT")))
+    report2 = _report()
+    probe.scan_gpu(report2)
+    assert report2.unreadable and "could not be run" in report2.unreadable[0]
+
+
+def test_scan_gpu_ignores_non_numeric_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(probe, "subprocess", _fake_subprocess_run(stdout="\nN/A\n333\n"))
+    monkeypatch.setattr(probe, "_argv", lambda pid: [])
+    monkeypatch.setattr(probe, "_is_systemd_managed", lambda pid: False)
+    report = _report()
+    probe.scan_gpu(report)
+    assert len(report.foreign_gpu) == 1
+    assert "cmdline unreadable" in report.foreign_gpu[0]
+
+
+def test_gather_runs_every_scanner(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: a scanner added to gather() but never invoked - its findings would be
+    # invisible while the verdict still looked complete.
+    def _workers(report: Any) -> None:
+        report.workers.append("w")
+
+    def _work(report: Any) -> None:
+        report.work.append("j")
+
+    def _gpu(report: Any) -> None:
+        report.lanes.append("l")
+
+    monkeypatch.setattr(probe, "scan_workers", _workers)
+    monkeypatch.setattr(probe, "scan_work", _work)
+    monkeypatch.setattr(probe, "scan_gpu", _gpu)
+    report = probe.gather()
+    assert (report.workers, report.work, report.lanes) == (["w"], ["j"], ["l"])

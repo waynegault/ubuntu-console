@@ -5,12 +5,18 @@ orphan modules, broken internal imports, weak wiring, and unused
 package facades.
 """
 
+import ast
 import os
+import sys
 import tempfile
 import unittest
+from pathlib import Path
+
+import pytest
 
 from _paths import SCRIPT_DIR
 
+from kgraph import wiring
 from kgraph.wiring import (
     analyze_wiring,
     format_wiring_report,
@@ -221,5 +227,170 @@ class WiringAnalysisTests(unittest.TestCase):
             self.assertIn('UNUSED PACKAGE FACADES', text)
 
 
+# ── resolution + scanning branches (card 7577436f) ─────────────────────────
+# These cover the arms the anomaly detector's whole point rides on: relative and
+# dynamic imports, unparseable files, and the cross-file call gap.  Expected values
+# come from Python's import semantics and the module's own documented report shape,
+# never from the detector's current output.
+
+
+def _write_files(root: str, files: dict[str, str]) -> None:
+    for rel, content in files.items():
+        path = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+
+def test_module_name_and_relative_resolution_follow_import_semantics() -> None:
+    # Catches: a wrong module name for a package __init__/leaf, or a mis-resolved
+    # relative level, either of which fabricates or hides a broken-import finding.
+    assert wiring._module_name(()) is None
+    assert wiring._module_name(('pkg', '__init__.py')) == 'pkg'
+    assert wiring._module_name(('pkg', 'mod.py')) == 'pkg.mod'
+    # `from .x import ...` inside package `a` resolves to a.x.
+    assert wiring._resolve_relative(1, 'x', 'a') == 'a.x'
+    # `from ..x import ...` inside package a.b resolves to a.x.
+    assert wiring._resolve_relative(2, 'x', 'a.b') == 'a.x'
+    # `from .. import x` inside a.b resolves to the parent package a.
+    assert wiring._resolve_relative(2, '', 'a.b') == 'a'
+    # A level that climbs above the package root cannot resolve.
+    assert wiring._resolve_relative(3, 'x', 'a') is None
+
+
+def _first_call(src: str) -> ast.Call:
+    """The single Call expression in *src*, for the _arg_string cases."""
+    stmt = ast.parse(src).body[0]
+    assert isinstance(stmt, ast.Expr)
+    call = stmt.value
+    assert isinstance(call, ast.Call)
+    return call
+
+
+def test_arg_string_reads_a_literal_or_a_name_keyword() -> None:
+    # Catches: __import__(name="...") (the keyword form) being recorded as an empty
+    # dynamic-import site, which would under-report the tool's dynamic_import_sites.
+    assert wiring._arg_string(_first_call('__import__("pkg.mod")')) == 'pkg.mod'
+    assert wiring._arg_string(_first_call('__import__(name="pkg.mod")')) == 'pkg.mod'
+    assert wiring._arg_string(_first_call('__import__(1)')) is None
+
+
+def test_line_count_unreadable_path_is_zero(tmp_path: Path) -> None:
+    # Catches: an unreadable path raising out of the scan instead of counting as 0
+    # lines (a directory is the cheapest stand-in for an unreadable file).
+    assert wiring._line_count(tmp_path) == 0
+
+
+_DYNAMIC_FIXTURE = {
+    'pkg/__init__.py': '"""pkg."""\n',
+    'pkg/mod.py': '"""mod."""\ndef x() -> int:\n    return 1\n',
+    'pkg/dyn.py': (
+        '"""dynamic imports."""\n'
+        'import importlib\n'
+        'import pkgutil\n'
+        '__import__("pkg.mod")\n'
+        '__import__(name="pkg.mod")\n'
+        'importlib.import_module("pkg.mod")\n'
+        'pkgutil.import_module("pkg.mod")\n'
+    ),
+    'pkg/rel.py': (
+        '"""relative imports."""\n'
+        'from .mod import x\n'
+        'from . import mod as m\n'
+    ),
+    'pkg/ext.py': '"""external symbol import."""\nfrom os import path\n',
+    'scripts/gadget/__init__.py': '"""gadget."""\n',
+    'scripts/gadget/mod.py': '"""mod."""\n',
+    'scripts/gadget_user.py': '"""entry-relative import."""\nfrom gadget import mod as gmod\n',
+}
+
+
+def test_dynamic_relative_and_entry_relative_imports_resolve(tmp_path: Path) -> None:
+    # Catches: a dynamic import site dropped from the report, a relative import
+    # mis-resolved into a false broken-import, or an entry-relative package facade
+    # flagged unused.
+    _write_files(str(tmp_path), _DYNAMIC_FIXTURE)
+    report = analyze_wiring(str(tmp_path))
+    assert report['dynamic_import_sites']['pkg.dyn'] == sorted(
+        ['pkg.mod', 'pkg.mod', 'importlib.import_module', 'pkgutil.import_module'])
+    broken = {(b['module'], b['import']) for b in report['broken_imports']}
+    assert not any(m.startswith('pkg.rel') or m.startswith('pkg.dyn') for m, _ in broken)
+    facades = {f_['path'] for f_ in report['unused_facades']}
+    assert 'scripts/gadget/__init__.py' not in facades
+
+
+_BAD_FIXTURE = {
+    '__init__.py': '"""root package (its module name is undecidable)."""\n',
+    'pkg/__init__.py': '"""pkg."""\n',
+    'pkg/defs.py': '"""defs."""\ndef shared() -> int:\n    return 1\n',
+    'pkg/caller.py': '"""caller."""\ndef go() -> int:\n    return shared()\n',
+    'pkg/broken.py': '"""unparseable."""\ndef (\n',
+}
+
+
+def test_parse_failure_and_cross_file_gap_are_reported(tmp_path: Path) -> None:
+    # Catches: an unparseable file silently skipped (not even named), and a bare
+    # cross-file call with no import path left unreported - both the tool's point.
+    _write_files(str(tmp_path), _BAD_FIXTURE)
+    report = analyze_wiring(str(tmp_path))
+    assert any('pkg/broken.py' in f for f in report['parse_failures'])
+    assert 'PARSE FAILURES (1)' in format_wiring_report(report)
+    gaps = {(g['name'], g['definer'], g['caller'])
+            for g in report['cross_file_call_gaps']}
+    assert ('shared', 'pkg.defs', 'pkg.caller') in gaps
+
+
+def _synthetic_report() -> dict:
+    return {
+        'repo': '/x', 'modules': 9, 'files': 9,
+        'parse_failures': ['b.py: bad syntax'],
+        'orphan_modules': [
+            {'module': f'm{i}', 'path': f'm{i}.py', 'lines': i} for i in range(25)],
+        'broken_imports': [],
+        'weak_wiring': [
+            {'module': f'w{i}', 'path': f'w{i}.py', 'lines': i,
+             'importers': ['tests.t']} for i in range(25)],
+        'unused_facades': [
+            {'package': 'p', 'path': 'p/__init__.py', 'lines': 3, 'submodules': 2}],
+        'cross_file_call_gaps': [
+            {'name': f'g{i}', 'definer': 'a', 'caller': 'b'} for i in range(25)],
+    }
+
+
+def test_report_truncates_without_all_and_expands_with_it() -> None:
+    # Catches: a report that silently drops rows past the display cap with no
+    # ellipsis (looking complete), or --all failing to print the whole list.
+    report = _synthetic_report()
+    text = format_wiring_report(report)
+    assert text.count('… and 5 more') == 3
+    assert 'p/__init__.py  (2 submodules)' in text
+    assert 'g0  defined in a  called from b' in text
+    full = format_wiring_report(report, show_all=True)
+    assert '… and' not in full
+    assert 'm24' in full and 'w24' in full and 'g24' in full
+
+
+def test_main_prints_usage_without_a_repo(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catches: the CLI running a scan of sys.argv[0] or exiting 0 with no argument.
+    monkeypatch.setattr(sys, 'argv', ['wiring'])
+    said: list[str] = []
+    with pytest.raises(SystemExit) as exc:
+        wiring.main(reporter=said.append)
+    assert exc.value.code == 1
+    assert any('Usage: python -m kgraph.wiring' in s for s in said)
+
+
+def test_main_reports_a_scanned_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Catches: the CLI printing nothing (or dying) on a real repo argument.
+    _write_files(str(tmp_path), {'pkg/__init__.py': '"""pkg."""\n'})
+    monkeypatch.setattr(sys, 'argv', ['wiring', str(tmp_path)])
+    said: list[str] = []
+    wiring.main(reporter=said.append)
+    joined = '\n'.join(said)
+    assert 'Wiring analysis:' in joined
+    assert 'SUMMARY:' in joined
+
+
 if __name__ == '__main__':
     unittest.main()
+

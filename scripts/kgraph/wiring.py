@@ -439,7 +439,12 @@ def _find_facades(scan: _SourceScan, root: Path,
 
 
 def _collect_defined_in(scan: _SourceScan) -> dict[str, set[str]]:
-    """Module → names of functions/classes defined there."""
+    """Name → modules that define a function/class with that name.
+
+    Keyed by the SYMBOL, because ``_find_cross_gaps`` looks it up with the name
+    a bare call uses; keying it by module made every lookup miss, so the pass
+    reported nothing (found 2026-10-03 writing its coverage test).
+    """
     defined_in: dict[str, set[str]] = defaultdict(set)
     for p in scan.files:
         m = scan.path_to_module.get(p)
@@ -451,7 +456,7 @@ def _collect_defined_in(scan: _SourceScan) -> dict[str, set[str]]:
             continue
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                defined_in[m].add(node.name)
+                defined_in[node.name].add(m)
     return defined_in
 
 
