@@ -216,9 +216,23 @@ PY
         "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE" --endpoint "$DEAD_ENDPOINT" --limit 0
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"model=stub-model"* ]]
+    # A model that came from /v1/models is recorded as UNPINNED (card 9fa9e818): the
+    # lane's served model can change between runs with no bench evidence.
+    [[ "$output" == *"UNPINNED"* ]]
     [[ "$output" == *"asked 2 unique site-line(s): 2 benign · 0 masking · 0 unparsed"* ]]
     [[ "$output" == *"AGREEMENT      on the 1 classified site-line(s) asked: 1 agree"* ]]
     [[ "$output" == *"-> # swallow-ok: the optional probe is absent by design on a minimal box"* ]]
+}
+
+@test "model pin: --model pins the name and the report says so" {
+    # Catches: a run whose model is whatever the lane serves, with no record that the
+    # operator pinned it — so the header cannot tell a pinned run from a discovered one.
+    run env STUB_ANSWER=$'VERDICT: benign\nREASON: the optional probe is absent by design on a minimal box' \
+        "$PY" "$DRIVER" "$TOOL" --repo "$FIXTURE" --endpoint "$DEAD_ENDPOINT" --limit 0 \
+        --model pinned-model
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"model=pinned-model (pinned via --model)"* ]]
+    [[ "$output" != *"UNPINNED"* ]]
 }
 
 # ── the comparison, and the direction that must FAIL ───────────────────────

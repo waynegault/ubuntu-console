@@ -87,6 +87,14 @@ http://127.0.0.1:18084 (override with `--endpoint` or $SWALLOW_CLASSIFY_ENDPOINT
 the model NAME is read from that endpoint's /v1/models, never hardcoded.  No hosted
 API is called.  Loopback only, and every request carries a timeout.
 
+THE MODEL IS NAMED IN THE REPORT, AND A DISCOVERED ONE IS MARKED UNPINNED.  The
+header records the resolved endpoint and model, so a change under the run shows up
+in the diff; a model that came from /v1/models is marked `UNPINNED`, because the
+lane's served model can change between runs with no bench evidence (card 9fa9e818).
+Pass `--model <name>` to pin it; the header then says `pinned via --model`.  This is
+a development tool, not a benchmarked task, and it is recorded as such in
+`.agents/decisions/llm-task-inventory.md`.
+
 RUNNING IT:
     # 1. the human baseline — deterministic, no model, safe to run anywhere
     .venv/bin/python3 tools/swallow-classify.py --baseline-only
@@ -202,7 +210,8 @@ def parse_args(argv):
                         help=f"loopback model base URL (default ${ENDPOINT_ENV} or "
                              f"{DEFAULT_ENDPOINT})")
     parser.add_argument("--model", default=None,
-                        help="model name; by default read from the endpoint's /v1/models")
+                        help="model name; by default read from the endpoint's /v1/models "
+                             "(the report marks a discovered model UNPINNED)")
     parser.add_argument("--limit", type=int, default=20,
                         help="ask about at most N unique site-lines, classified first "
                              "(0 = every site-line)")
@@ -418,7 +427,7 @@ def ordered_for_asking(sites, only):
 
 def strata_of(pool):
     """{file: [site, ...]} in stable file order — the strata 'stratified' allocates over."""
-    strata = {}
+    strata: dict[str, list[dict]] = {}
     for site in pool:
         strata.setdefault(site["file"], []).append(site)
     return {name: strata[name] for name in sorted(strata)}
@@ -565,7 +574,7 @@ def baseline_section(sites):
     labelled_lines = {(site["file"], site["line"]) for site in classified}
     unlabelled_lines = {(site["file"], site["line"]) for site in unclassified}
     reasons = {site["reason"] for site in classified}
-    patterns = {}
+    patterns: dict[str, int] = {}
     for site in sites:
         patterns[site["pattern"]] = patterns.get(site["pattern"], 0) + 1
     same_line = sum(1 for site in classified if site["reason_source"] == "same-line")
@@ -600,8 +609,8 @@ def count_verdicts(asked, verdicts):
     return benign, masking, unparsed
 
 
-def report_lines(repo, raw_sites, asked, verdicts, endpoint, model, sample, seed, split,
-                 prompt_name, bar, plan_lines, split_lines):
+def report_lines(repo, raw_sites, asked, verdicts, endpoint, model, model_pinned, sample,
+                 seed, split, prompt_name, bar, plan_lines, split_lines):
     """The whole report: baseline, the sampling rule, the model comparison, the candidates."""
     lines = ["swallow-classify — PROPOSAL report (no gate; the count/baseline in",
              "`check-contracts.sh swallows` is the only enforcement)",
@@ -617,7 +626,12 @@ def report_lines(repo, raw_sites, asked, verdicts, endpoint, model, sample, seed
     lines.append(f"PROMPT         --prompt {prompt_name}")
     lines.append("")
     benign, masking, unparsed = count_verdicts(asked, verdicts)
-    lines.append(f"MODEL          {endpoint} model={model}")
+    # The model is named in the header so a change under the run is visible in the
+    # diff (card 9fa9e818): a run whose model came from /v1/models is marked UNPINNED,
+    # because the lane's served model can change between runs with no bench evidence.
+    pin_note = ("pinned via --model" if model_pinned
+                else "UNPINNED — discovered from /v1/models; pass --model to pin")
+    lines.append(f"MODEL          {endpoint} model={model} ({pin_note})")
     lines.append(f"               asked {len(asked)} unique site-line(s): {benign} benign · "
                  f"{masking} masking · {unparsed} unparsed (a non-answer is never counted as "
                  f"benign)")
@@ -738,7 +752,8 @@ def run(argv):
     verdicts = {}
     for site in asked:
         verdicts[site_key(site)] = ask_model(site, endpoint, model, args.timeout, args.prompt)
-    lines = report_lines(repo, raw_sites, asked, verdicts, endpoint, model, args.sample,
+    lines = report_lines(repo, raw_sites, asked, verdicts, endpoint, model,
+                         bool(args.model), args.sample,
                          args.seed, args.split, args.prompt, args.bar, plan_lines, split_lines)
 
     if args.labels:
