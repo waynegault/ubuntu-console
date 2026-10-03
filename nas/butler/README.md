@@ -19,7 +19,14 @@ RECURSIVELY because these files sit two levels down. What does *not* reach here:
 `scripts/`, `tools/`, `tools/qwen-hooks/` and `bin/` — so `nas/` gets no whole-tree shellcheck.
 Its `.sh` files **are** shellchecked when staged (that is how the two fixes below were found).
 Extending the whole-tree lint scope is the follow-up that makes the mirror a full lint gate
-rather than a partial one.
+rather than a partial one. These files also carry **no `# Module Version:` marker and no
+`AI INSTRUCTION` header, by design** (card `05509ef9`): `tools/check-module-versions.sh` examines
+only files that already carry the marker, and the `AI INSTRUCTION` cross-script case in
+`tests/tactical-console{,-fast}.bats` enumerates `bin/*.sh` and `scripts/*.sh` only — neither
+reaches `nas/**`. A marker here would be a version number nothing bumps and a header nothing
+reads, on files that are copies of NAS content rather than editable-in-place modules; adding
+them would also trigger a needless §18.3 re-baseline. The omission is the deliberate convention,
+so do not read it as drift.
 
 ## One deliberate exception to byte-identical mirroring
 

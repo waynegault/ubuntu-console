@@ -1309,7 +1309,12 @@ measured drift.
 them moved four counters and needed a deliberate re-baseline), and the swallow check scans
 `nas/**/*.sh` — it is the one group walked recursively. `tools/lint.sh`'s whole-tree pass does
 **not** reach `nas/` (it enumerates `scripts/`, `tools/`, `tools/qwen-hooks/` and `bin/`), so these
-files are shellchecked only when staged. Extending that whole-tree scope is the follow-up.
+files are shellchecked only when staged. Extending that whole-tree scope is the follow-up. The
+mirror's shell files also carry **no `# Module Version:` marker and no `AI INSTRUCTION` header by
+design** (card `05509ef9`): `tools/check-module-versions.sh` checks only files that already carry
+the marker, and the `AI INSTRUCTION` cross-script case covers `bin/*.sh` and `scripts/*.sh` — a
+marker on a copy of NAS content would be a version nothing bumps, so the omission is the documented
+convention, not drift.
 
 ## Dependencies
 
