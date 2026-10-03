@@ -169,7 +169,12 @@ then
     fi
     if [[ -z "$NODE" ]]
     then
-        printf '%s\n' "markdownlint shim: the linter at $REAL_MARKDOWNLINT is a Node script but no node interpreter was found (looked in the linuxbrew prefix and on PATH)" >&2
+        # Group redirect, matching this file's own idiom above: a hand-written
+        # `printf … >&2` is exactly what §18.3 item 10.7 counts, and this is the
+        # one such line the node fix would have added.
+        {
+            printf '%s\n' "markdownlint shim: the linter at $REAL_MARKDOWNLINT is a Node script but no node interpreter was found (looked in the linuxbrew prefix and on PATH)"
+        } >&2
         exit 127  # 127 = the linter cannot run without its interpreter — distinct from 1 (findings) and 2 (refused)
     fi
     exec "$NODE" "$REAL_MARKDOWNLINT" "$@"
