@@ -3043,6 +3043,22 @@ class _MCPHarness(unittest.TestCase):
         finally:
             conn.close()
 
+    def _post_retrying_reset(self, *args, **kwargs):
+        """POST, retrying ONCE only on a ConnectionResetError.
+
+        The server refuses an over-long (or negative) Content-Length by replying
+        and closing WITHOUT draining the request body, so under coverage load the
+        client can see the RST instead of the response (observed twice:
+        socket.py ConnectionResetError).  ONLY that documented socket error is
+        retried — any other error propagates — and the retried response is still
+        returned, so a server that stopped answering fails on the second attempt
+        rather than being excused.
+        """
+        try:
+            return self._post(*args, **kwargs)
+        except ConnectionResetError:
+            return self._post(*args, **kwargs)
+
     def _call(self, method, params=None, req_id=1):
         status, raw, _ = self._post(json.dumps(
             {"jsonrpc": "2.0", "method": method, "params": params or {}, "id": req_id}))
@@ -3205,13 +3221,17 @@ class TestMCPServerPostGuards(_MCPHarness):
         self.assertEqual(self._post(body)[0], 200)  # no Origin (MCP client)
 
     def test_content_length_oversized_and_malformed_bodies(self):
-        status, raw, _ = self._post(None, length=-1)
+        # Malformed/over-long Content-Length makes the server reply and close
+        # without draining the body, so the client can see a RST under load; the
+        # retry helper tolerates ONLY that socket error, and every status below is
+        # still asserted (the well-formed oversized case included).
+        status, raw, _ = self._post_retrying_reset(None, length=-1)
         self.assertEqual((status, json.loads(raw)), (400, {"error": "Invalid Content-Length"}))
         # A non-numeric length becomes 0, so the empty body cannot be parsed.
-        status, raw, _ = self._post("{", length="not-a-number")
+        status, raw, _ = self._post_retrying_reset("{", length="not-a-number")
         self.assertEqual((status, json.loads(raw)), (400, {"error": "Invalid JSON"}))
         with mock.patch("kgraph.mcp_server.MAX_PAYLOAD_SIZE", 10):
-            status, raw, _ = self._post("x" * 100)
+            status, raw, _ = self._post_retrying_reset("x" * 100)
         self.assertEqual((status, json.loads(raw)), (413, {"error": "Payload too large"}))
         status, raw, _ = self._post("{ not json")
         self.assertEqual((status, json.loads(raw)), (400, {"error": "Invalid JSON"}))
