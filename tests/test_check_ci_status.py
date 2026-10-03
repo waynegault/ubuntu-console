@@ -582,3 +582,80 @@ class TestGhResolutionOrder:
         monkeypatch.setattr(mod, "GH_FALLBACKS", (str(tmp_path / "absent"),))
         with pytest.raises(mod.CiStatusUnknown):
             mod._gh_json([], timeout=30)
+
+
+class TestRetryBackoff:
+    """Card d486cea2: a stale run window is retried with a BACKOFF, and gets more
+    attempts than a network/403 failure — without softening the fail-closed default.
+
+    A transient stale window cleared in a minute or two, yet a single retry with no
+    pause could still catch the same stale window and refuse a push.  Each case here
+    pins a number: the backoff between attempts, and the two DIFFERENT attempt caps.
+    """
+
+    @staticmethod
+    def _patch(monkeypatch, tmp_path, run_gh, watermark: datetime) -> list[float]:
+        # A cache with ONLY the high-water mark is stale (no checked_at), so it
+        # supplies the watermark for the backwards check without short-circuiting.
+        cache = tmp_path / "ci.json"
+        cache.write_text(
+            json.dumps({"newest_push_run_at": watermark.isoformat()}), encoding="utf-8"
+        )
+        monkeypatch.setattr(mod, "CACHE_FILE", cache)
+        monkeypatch.setattr(mod, "BASELINE_FILE", tmp_path / "no-baseline.txt")
+        monkeypatch.setattr(mod, "repo_slug", lambda: "owner/name")
+        monkeypatch.setattr(mod, "local_head", lambda: (TIP, NOW))
+        monkeypatch.setattr(mod, "pushed_tip", lambda slug, branch: (TIP, NOW))
+        monkeypatch.setattr(mod, "_run_gh", run_gh)
+        sleeps: list[float] = []
+        # Patch the MODULE's own sleep seam, never the global time.sleep.
+        monkeypatch.setattr(mod, "_sleep", sleeps.append)
+        return sleeps
+
+    def test_a_stale_window_clears_on_the_retry_and_a_backoff_is_taken(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        watermark = NOW + timedelta(minutes=5)
+        attempts = [
+            [run_row("CI", "success", NOW - timedelta(hours=3))],   # backwards -> stale
+            [run_row("CI", "success", watermark)],                   # forward -> fresh
+        ]
+        seen = {"n": 0}
+
+        def run_gh(args, *, timeout):
+            i = min(seen["n"], len(attempts) - 1)
+            seen["n"] += 1
+            return list(attempts[i])
+
+        sleeps = self._patch(monkeypatch, tmp_path, run_gh, watermark)
+        assert mod.main(["--fail"]) == 0
+        assert seen["n"] == 2
+        assert sleeps == [mod._RETRY_BACKOFF_S]
+
+    def test_a_network_failure_gets_the_network_cap(self, monkeypatch, tmp_path) -> None:
+        seen = {"n": 0}
+
+        def run_gh(args, *, timeout):
+            seen["n"] += 1
+            raise mod.CiStatusUnknown("gh HTTP 403")
+
+        sleeps = self._patch(monkeypatch, tmp_path, run_gh, NOW)
+        assert mod.main(["--fail", "--strict-unknown"]) == 2
+        assert seen["n"] == mod._NETWORK_ATTEMPTS
+        assert sleeps == [mod._RETRY_BACKOFF_S] * (mod._NETWORK_ATTEMPTS - 1)
+
+    def test_a_persistent_stale_window_gets_the_stale_cap_and_fails_closed(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        seen = {"n": 0}
+
+        def run_gh(args, *, timeout):
+            seen["n"] += 1
+            return [run_row("CI", "success", NOW - timedelta(hours=3))]
+
+        sleeps = self._patch(monkeypatch, tmp_path, run_gh, NOW)
+        assert mod.main(["--fail", "--strict-unknown"]) == 2
+        assert seen["n"] == mod._STALE_ATTEMPTS
+        # The stale cap is strictly greater than the network cap (the card's ask).
+        assert seen["n"] > mod._NETWORK_ATTEMPTS
+        assert sleeps == [mod._RETRY_BACKOFF_S] * (mod._STALE_ATTEMPTS - 1)

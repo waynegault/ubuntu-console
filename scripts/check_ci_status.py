@@ -55,6 +55,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -81,6 +82,18 @@ _META_FIELD_RE = re.compile(r"^(owner|card|expiry)=(.+)$")
 #: Fields requested from `gh run list`.  `event` is what scopes DARK to
 #: push-triggered runs without a hardcoded workflow list that can drift.
 _RUN_FIELDS = "workflowName,conclusion,status,headSha,createdAt,url,event"
+
+# Retry policy for the run-list fetch (card d486cea2).  A STALE RUN WINDOW is
+# transient — the feed catches up in a minute or two — so it gets two MORE
+# attempts than a network/403 failure, which is a connectivity/permissions FACT.
+# A short backoff between attempts is what lets a stale window clear.  Neither
+# cap softens the default: exhausting either one still ends UNKNOWN (exit 2 with
+# --strict-unknown), never a silent pass.
+_NETWORK_ATTEMPTS = 2
+_STALE_ATTEMPTS = _NETWORK_ATTEMPTS + 2
+_RETRY_BACKOFF_S = 5
+#: Module-local sleep seam: tests patch THIS, never the global time.sleep.
+_sleep = time.sleep
 
 #: One-line description for `--help` (and the module's own identity).
 _SUMMARY = "CI verdict gate (CI-WATCH-CONSOLE-001): a red main blocks the gate"
@@ -822,36 +835,59 @@ def main(argv: list[str] | None = None) -> int:
         # because nobody pushed it, so its committer time must not drive the dark
         # math.  A failure here is UNKNOWN, not a silent pass.
         tip_sha, tip_time = pushed_tip(slug, args.branch)
-        # A single invocation intermittently returns a stale window (measured in the
-        # investigator repo: two probes seconds apart disagreed), so retry ONCE.  A
-        # fresh invocation almost always gets a fresh window; if BOTH attempts are
-        # stale, the backwards check below still refuses to conclude — the fail-closed
-        # path, which this retry must not weaken.
-        for attempt in (1, 2):
-            runs = _run_gh(
-                [
-                    "run",
-                    "list",
-                    "--repo",
-                    slug,
-                    "--branch",
-                    args.branch,
-                    "--limit",
-                    str(args.limit),
-                    "--json",
-                    _RUN_FIELDS,
-                ],
-                timeout=60,
-            )
+        # A run-list window is intermittently stale (measured in the investigator
+        # repo: two probes seconds apart disagreed) and a fetch can fail on a
+        # transient network/403 blip.  Retry with a BACKOFF; see _NETWORK_ATTEMPTS /
+        # _STALE_ATTEMPTS above.  If the caps are exhausted the backwards check below
+        # still refuses to conclude — the fail-closed path, which this retry must not
+        # weaken.
+        runs: list[dict] | None = None
+        for attempt in range(1, _STALE_ATTEMPTS + 1):
+            try:
+                runs = _run_gh(
+                    [
+                        "run",
+                        "list",
+                        "--repo",
+                        slug,
+                        "--branch",
+                        args.branch,
+                        "--limit",
+                        str(args.limit),
+                        "--json",
+                        _RUN_FIELDS,
+                    ],
+                    timeout=60,
+                )
+            except CiStatusUnknown as exc:
+                # A network/403 is a fact, so it gets fewer attempts than staleness.
+                if attempt >= _NETWORK_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "run-list fetch failed (attempt %d/%d): %s — retrying in %ds",
+                    attempt,
+                    _NETWORK_ATTEMPTS,
+                    exc,
+                    _RETRY_BACKOFF_S,
+                )
+                _sleep(_RETRY_BACKOFF_S)
+                continue
             _known = _push_run_stamps(runs)
             if watermark is None or not _known or not _feed_went_backwards(max(_known), watermark):
                 break
+            if attempt >= _STALE_ATTEMPTS:
+                break
             logger.warning(
-                "stale run window on attempt %d (%d run(s), newest=%s) — retrying once",
+                "stale run window on attempt %d/%d (%d run(s), newest=%s) — retrying in %ds",
                 attempt,
+                _STALE_ATTEMPTS,
                 len(runs),
                 max(_known).isoformat(),
+                _RETRY_BACKOFF_S,
             )
+            _sleep(_RETRY_BACKOFF_S)
+        if runs is None:   # unreachable: the loop sets runs or re-raises
+            raise CiStatusUnknown("run list unavailable after retries")
     except CiStatusUnknown as exc:
         msg = (
             f"CI status UNKNOWN: {exc}.  This is NOT a pass — the branch state was "
