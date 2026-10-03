@@ -1202,7 +1202,7 @@ where it was last present.)
 │   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
 │   ├── unit/                          # BATS unit tests (523 tests: 29+26+8+5+5+6+22+4+8+7+40+19+16+6+1+5+4+2+3+3+20+19+41+30+6+8+8+3+15+6+13+17+27+15+5+17+9+6+4+4+2+3+3+4+4+2+13)
 │   └── integration/                   # BATS integration tests (143 tests: 14+43+10+44+3+29)
-└── systemd/
+├── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)
     │   └── tac-loopback0.service      #     WSL mirrored-networking 127.0.0.2, at boot
     ├── openclaw-refresh-keys.service  #   Re-bridge credentials into the manager env, once per boot
@@ -1219,6 +1219,8 @@ where it was last present.)
     ├── llama-cuda-llama32-3b-chat.service       # CUDA, Llama-3.2-3B, chat (18083)
     ├── llama-cuda-qwen35-4b-pipeline.service    # CUDA, Qwen3.5-4B, investigator pipeline (8081)
     └── llama-cpu-qwen25-3b-chat.service         # CPU tier, Qwen2.5-3B, chat (18084)
+└── nas/
+    └── butler/                        #   Versioned mirror of the NAS (butler) tooling (see below)
 ```
 
 ### Symlink Map
@@ -1270,6 +1272,27 @@ git add -A && git commit -m "description" && git push
 ```
 
 end of file
+
+## NAS (butler) mirror
+
+`nas/butler/` is a **versioned mirror** of the shell / Python / conf / php tooling that runs on
+the NAS — a WD **MyCloudEX2Ultra** at `192.168.33.20` (`ssh nas`, user `sshd`, key
+`~/.ssh/jarvis_sshd_key`). It was copied from `/mnt/HD/HD_a2/butler/` on 2026-10-02 and verified
+md5-identical for all 41 files, so the tooling has history and diffs instead of being
+machine-local only. Credentials and state are deliberately **not** mirrored (`*.env`, `*token*`,
+`secrets.json`, `myair-email-otp.txt`).
+
+**Deploy model: nothing here is deployed automatically.** Changes are made on the NAS by hand and
+the mirror is refreshed from it afterwards, so a file that differs between here and the NAS is
+drift — and the crontab names the `scripts/` copy, so a fix applied to the `mi-scale/` copy alone
+changes nothing. `nas/butler/README.md` carries the scope list, the not-copied list and the
+measured drift.
+
+**Gate coverage is partial, measured.** The §18.3 count ratchet reads the tracked `*.sh` (mirroring
+them moved four counters and needed a deliberate re-baseline), and the swallow check scans
+`nas/**/*.sh` — it is the one group walked recursively. `tools/lint.sh`'s whole-tree pass does
+**not** reach `nas/` (it enumerates `scripts/`, `tools/`, `tools/qwen-hooks/` and `bin/`), so these
+files are shellchecked only when staged. Extending that whole-tree scope is the follow-up.
 
 ## Dependencies
 

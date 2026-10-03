@@ -11,11 +11,15 @@ diffs. Source: `/mnt/HD/HD_a2/butler/` on the NAS. Copied over `ssh` and verifie
 tooling: it reads the tracked `*.sh` files, so mirroring the NAS took the corpus 92 → 108
 files and moved four counters (6.7 +23, 8.1.8 +6, 9.5 +17, 10.7 +5 — all pre-existing style
 of code that had no such convention), which is why landing this needed a deliberate
-re-baseline (`tools/ratchet-baseline.tsv`, eighth block). What does *not* reach here:
-`tools/lint.sh`'s whole-tree pass enumerates `scripts/`, `tools/`, `bin/`, so `nas/` gets no
-whole-tree shellcheck and no swallow classification. Its `.sh` files **are** shellchecked
-when staged (that is how the two fixes below were found). Extending the whole-tree scope is
-the follow-up that makes the mirror a full gate rather than a partial one.
+re-baseline (`tools/ratchet-baseline.tsv`, eighth block). The swallow check reaches here too:
+`tools/contracts_check.py` scans `scripts/*.sh, bin/*, tools/*.sh, tools/hooks/*,
+tools/qwen-hooks/*, nas/**/*.sh` (widened 2026-10-02), and `nas/` is the one group walked
+RECURSIVELY because these files sit two levels down. What does *not* reach here:
+`tools/lint.sh`'s whole-tree pass enumerates `tactical-console.bashrc`, `install.sh`, `env.sh`,
+`scripts/`, `tools/`, `tools/qwen-hooks/` and `bin/` — so `nas/` gets no whole-tree shellcheck.
+Its `.sh` files **are** shellchecked when staged (that is how the two fixes below were found).
+Extending the whole-tree lint scope is the follow-up that makes the mirror a full lint gate
+rather than a partial one.
 
 ## In scope (committed)
 

@@ -23,6 +23,12 @@ The following file classes are in-scope for every audit pass:
   (which holds only git's own samples); activated via `core.hooksPath`
 - `bin/*.sh` — standalone helper scripts
 - `bin/tac-exec` — non-interactive function runner (symlinked to `~/.local/bin/`)
+- `nas/butler/**` — the versioned mirror of the NAS (butler) shell / Python / conf / php
+  tooling (WD MyCloudEX2Ultra; see README's "NAS (butler) mirror"). Its `*.sh` are scanned by
+  the swallow check (`nas/**/*.sh`, the one group walked recursively) and by the §18.3 count
+  ratchet, and its `*.py` are in `pyproject.toml`'s mypy and pyright scope — but
+  `tools/lint.sh`'s whole-tree pass does NOT reach `nas/` (it enumerates `scripts/`, `tools/`,
+  `tools/qwen-hooks/` and `bin/`), so its shell files are shellchecked only when staged
 - `env.sh` — library loader for non-interactive shells
 - `install.sh` — installer
 - `tools/lint.sh`, `tools/run-tests.sh` — CI helper scripts
