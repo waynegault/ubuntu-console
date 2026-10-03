@@ -262,6 +262,11 @@ class TestPRDashboard(unittest.TestCase):
             self.assertIn("Not a git repository", html)
 
     def test_generate_pr_dashboard_real_repo(self):
+        # THIN SMOKE, deliberately: it proves generate_pr_dashboard runs against a
+        # real repository and returns HTML, nothing about the content. The ROWS are
+        # pinned against a known commit history in
+        # TestPRDashboardGitData::test_the_dashboard_renders_rows_from_a_fixture_repo,
+        # which is where a rendering regression is caught.
         html = kgraph.generate_pr_dashboard(REPO_ROOT, days=7)
         self.assertIn("PR Dashboard", html)
         self.assertIn("<!doctype html>", html)
@@ -1534,6 +1539,28 @@ class TestPRDashboardGitData(unittest.TestCase):
         self.assertTrue(any("PR dashboard written to" in m for m in log.output))
         self.assertIn("Merges", html)
         self.assertIn("PR Dashboard", html)
+
+    def test_the_dashboard_renders_rows_from_a_fixture_repo(self):
+        """A fixture repo's known history is rendered as ROWS, not just a heading.
+
+        Catches: the dashboard emitting its heading while dropping or mis-rendering
+        the merge/commit/file rows the repository actually has. The REPO_ROOT smoke
+        in TestPRDashboard cannot pin this — its history is whatever the working
+        repo happens to hold — so this drives a temp repo with a known history:
+        base commit -> feature commit -> `merge feature`, plus the two changed files.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            self._make_repo(td)
+            html = kgraph.generate_pr_dashboard(td, days=7)
+        # Merge row and commit rows (each is a <td> cell of the row).
+        self.assertIn("<td>merge feature</td>", html)
+        self.assertIn("<td>initial commit</td>", html)
+        self.assertIn("<td>feature commit</td>", html)
+        # The changed files appear in the files list.
+        self.assertIn("a.txt", html)
+        self.assertIn("b.txt", html)
+        # The feature branch appears as a branch row (no marker: it is not current).
+        self.assertIn("<li>feature</li>", html)
 
 
 class TestPRDashboardCorrelation(unittest.TestCase):
