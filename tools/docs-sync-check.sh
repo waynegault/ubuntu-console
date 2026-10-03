@@ -17,7 +17,14 @@
 # Usage: tools/docs-sync-check.sh
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-10-03, card 43e4800a): guard the README "CI Status" bullets.  They
+#   restated three test counts that nothing computed and had drifted — fast said
+#   62 (actual 65), "Unit suites (227 tests in CI)" against 428, and integration
+#   142 against 143.  The fast/full/integration figures reuse the counts computed
+#   above; the CI-unit figure is derived from the unit files ci.yml actually names,
+#   so "in CI" is a fact about the workflow rather than a remembered range (the old
+#   prose enumerated `01, 02, 09-11, 13-30`, which was itself stale).
 #   v7 (2026-09-22): guard the README "Test Counts" table (all 7 rows) — its own
 #   header claimed it was enforced, but 4 of the 7 numbers were unguarded and had
 #   drifted (Unit 135 vs 177, Python 363 vs 415, Total 1092 vs 1186).
@@ -179,6 +186,37 @@ else
     echo "  DRIFT: loaders do not both source scripts/_module-list.sh"
     drift=1
 fi
+
+# ── 6. README "CI Status" bullets (card 43e4800a) ───────────────────────────
+# This block restated the fast/unit/integration counts and nothing computed them,
+# so they drifted (fast 62, "in CI" 227, integration 142).  The fast, full and
+# integration figures reuse the counts computed above; the CI-unit figure is
+# derived from the unit files ci.yml actually names, so "in CI" describes the
+# workflow rather than a remembered range (the old prose enumerated
+# `01, 02, 09-11, 13-30`, which was itself stale).
+ci_unit_total=0
+ci_unit_files=0
+while IFS= read -r _rel
+do
+    [[ -n "$_rel" ]] || continue
+    _f="$REPO_ROOT/$_rel"
+    [[ -f "$_f" ]] || continue
+    ci_unit_files=$((ci_unit_files + 1))
+    ci_unit_total=$((ci_unit_total + $(grep -c '^@test ' "$_f")))
+done < <(grep -oE 'tests/unit/[0-9][0-9a-z-]*\.bats' "$REPO_ROOT/.github/workflows/ci.yml" | sort -u)
+if (( ci_unit_files == 0 )); then
+    echo "  ERROR: ci.yml names no unit suite — the CI-unit count cannot be derived"
+    drift=1
+fi
+
+check_phrase "CI Status: fast tests count" \
+    "tactical-console-fast.bats\` (${bats_fast} tests)"
+check_phrase "CI Status: full tests count" \
+    "tactical-console.bats\` (${bats_full} BATS unit tests)"
+check_phrase "CI Status: unit suites (in CI)" \
+    "**Unit suites (${ci_unit_total} tests in CI):**"
+check_phrase "CI Status: integration suites" \
+    "**Integration suites (${integration_sum} tests overall):**"
 
 echo ""
 if (( drift == 0 )); then
