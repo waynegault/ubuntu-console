@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import fcntl
 import os
-import shutil
 import tempfile
 import time
 from collections.abc import Generator
@@ -121,29 +120,6 @@ _cleanup_stale_locks()
 def _is_vscode_discovery() -> bool:
     """Return True when pytest is running discovery (VS Code --collect-only)."""
     return "--collect-only" in __import__("sys").argv
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _protect_registry_file() -> Generator[None, None, None]:
-    """Snapshot-restore ~/.llm/models.conf around the test session.
-
-    Skips during VS Code test discovery (--collect-only) to avoid
-    unnecessary I/O on every refresh.
-    """
-    if _is_vscode_discovery():
-        yield
-        return
-
-    registry_path = Path.home() / ".llm" / "models.conf"
-    # A TemporaryDirectory owns the snapshot path (no mktemp TOCTOU window)
-    # and removes the whole directory when the fixture finishes.
-    with tempfile.TemporaryDirectory(prefix="models-conf-snapshot-") as tmpdir:
-        snapshot_path = Path(tmpdir) / "models.conf.bak"
-        if registry_path.exists():
-            shutil.copy2(registry_path, snapshot_path)
-        yield
-        if snapshot_path.exists():
-            shutil.copy2(snapshot_path, registry_path)
 
 
 @pytest.fixture(autouse=True)
