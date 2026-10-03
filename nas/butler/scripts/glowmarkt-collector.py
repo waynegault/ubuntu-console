@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-# Version: 1.3.2
+# Version: 1.3.3
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
+#   v1.3.3 (2026-10-03, card 974f99ff): write_influx posts through the shared
+#   lib.butler_common.post_line_protocol instead of a private request/header copy.
 #   v1.3.2 (2026-10-03, card b296c75c): write_influx logs the URLError instead of
 #   swallowing it, and collect_once derives `ok` from the actual write result — a
 #   total InfluxDB outage used to set ok:True and exit 0.
@@ -26,6 +28,8 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
+
+from lib.butler_common import post_line_protocol
 
 logger = logging.getLogger(__name__)
 
@@ -189,16 +193,9 @@ def write_influx(lines: list[str]) -> int | None:
     """Write line protocol data to InfluxDB. Returns HTTP status or None."""
     if not lines:
         return None
-    data = "\n".join(lines).encode()
+    data = "\n".join(lines)
     try:
-        req = urllib.request.Request(
-            INFLUX_URL,
-            data=data,
-            method="POST",
-            headers={"Content-Type": "application/octet-stream"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return int(resp.status)
+        return post_line_protocol(INFLUX_URL, data, timeout=10)
     except urllib.error.URLError as exc:
         # Name the outage: returning None silently let collect_once report ok:True
         # (a total InfluxDB outage exited 0).  The caller now derives ok from this.

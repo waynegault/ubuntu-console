@@ -22,11 +22,12 @@ Deploy:
 import subprocess
 import re
 import time
-import urllib.request
 import urllib.error
 import os
 import sys
 import logging
+
+from lib.butler_common import post_line_protocol
 
 logger = logging.getLogger(__name__)
 
@@ -148,16 +149,9 @@ def net_stats():
 
 def influx_write(lines):
     """POST line-protocol data to InfluxDB."""
-    body = "\n".join(lines).encode()
-    req = urllib.request.Request(
-        INFLUX_URL,
-        data=body,
-        method="POST",
-        headers={"Content-Type": "application/octet-stream"},
-    )
     try:
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return r.status in (200, 204)
+        status = post_line_protocol(INFLUX_URL, "\n".join(lines), timeout=5)
+        return status in (200, 204)
     except urllib.error.URLError as e:
         print(f"[ERROR] InfluxDB write failed: {e}", file=sys.stderr)
         return False

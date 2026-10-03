@@ -4,11 +4,11 @@ import json
 import logging
 import signal
 import time
-import urllib.parse
-import urllib.request
 
 import paho.mqtt.client as mqtt
 from pathlib import Path
+
+from lib.butler_common import post_line_protocol
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +31,11 @@ def write_influx(tags, fields, ts_ns):
     line = f"{INFLUX['meas']},{','.join(f'{k}={v}' for k,v in sorted(tags.items()))} {','.join(f'{k}={v}' for k,v in sorted(fields.items()))} {ts_ns}"
     url = f"http://{INFLUX['host']}:{INFLUX['port']}/write?db={INFLUX['db']}"
     try:
-        req = urllib.request.Request(url, data=line.encode())
-        with urllib.request.urlopen(req, timeout=5) as r:
-            if r.status != 204:
-                # A non-204 is InfluxDB refusing the write — name it rather than
-                # discarding the only signal that the point did not land.
-                logger.warning("influx write returned HTTP %s (expected 204)", r.status)
+        status = post_line_protocol(url, line, timeout=5)
+        if status != 204:
+            # A non-204 is InfluxDB refusing the write — name it rather than
+            # discarding the only signal that the point did not land.
+            logger.warning("influx write returned HTTP %s (expected 204)", status)
     except Exception:
         # A failed write used to vanish here; the shared-file copy still lands, but
         # the time-series gap must be visible.

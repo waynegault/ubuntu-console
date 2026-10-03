@@ -14,6 +14,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from lib.butler_common import post_line_protocol
+
 logger = logging.getLogger(__name__)
 
 SENSOR_URL = os.environ.get("AIRMON_SENSOR_URL", "http://192.168.33.2/data.json")
@@ -41,10 +43,7 @@ def _parse_metrics(payload: dict) -> dict[str, float]:
 
 def _write_influx(influx_url: str, line: str) -> int:
     """POST line protocol and return the HTTP status (raises on failure)."""
-    req = urllib.request.Request(influx_url, data=line.encode("utf-8"), method="POST")
-    req.add_header("Content-Type", "application/octet-stream")
-    with urllib.request.urlopen(req, timeout=8) as r:
-        return int(r.status)
+    return post_line_protocol(influx_url, line, timeout=8)
 
 
 def collect_once() -> dict[str, Any]:

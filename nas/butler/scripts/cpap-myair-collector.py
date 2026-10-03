@@ -23,6 +23,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from lib.butler_common import post_line_protocol
+
 DATA_DIR = Path(
     os.environ.get(
         "CPAP_DATA_DIR",
@@ -75,10 +77,7 @@ def _influx_base() -> str:
 
 def _post_influx(line_protocol: str) -> int:
     url = f"{_influx_base()}/write?{urllib.parse.urlencode({'db': INFLUX_DB})}"
-    req = urllib.request.Request(url, data=line_protocol.encode("utf-8"), method="POST")
-    req.add_header("Content-Type", "application/octet-stream")
-    with urllib.request.urlopen(req, timeout=5) as response:
-        return int(response.status)
+    return post_line_protocol(url, line_protocol, timeout=5)
 
 
 def _influx_line(payload: dict[str, Any]) -> str:

@@ -21,6 +21,19 @@ Its `.sh` files **are** shellchecked when staged (that is how the two fixes belo
 Extending the whole-tree lint scope is the follow-up that makes the mirror a full lint gate
 rather than a partial one.
 
+## One deliberate exception to byte-identical mirroring
+
+`nas/butler/scripts/lib/butler_common.py` (card `974f99ff`) is the ONE shared module the
+collectors import rather than each carrying a private copy: one OTP extractor, one Microsoft
+Graph GET/DELETE client, one InfluxDB line-protocol POST. It deploys to
+`/mnt/HD/HD_a2/butler/scripts/lib/` alongside the scripts — a script run as
+`python /path/to/foo.py` has its own directory on `sys.path`, so
+`from lib.butler_common import ...` resolves. This is a deliberate departure from the
+byte-for-byte copy, taken because the alternative was five drifting `_extract_otp` copies and
+four divergent Graph clients. `nas-cpap-full.py` is a dead stub (card `8dda5918`) and is NOT
+migrated. The OAuth reader keeps its own Graph client on purpose: it returns an HTTP-error
+payload with `_http_status` rather than raising, and uses a custom SSL context.
+
 ## In scope (committed)
 
 `*.sh`, `*.py`, `*.cron`, `*.conf`, `*.php`, plus the extension-less init script

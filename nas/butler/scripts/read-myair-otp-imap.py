@@ -15,16 +15,13 @@ import ssl
 import sys
 from datetime import timezone
 
+from lib.butler_common import extract_otp
+
 logger = logging.getLogger(__name__)
 
 
 def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
-
-
-def _extract_otp(text: str) -> str | None:
-    match = re.search(r"\b(\d{6,8})\b", text)
-    return match.group(1) if match else None
 
 
 def _iter_message_text(msg) -> str:
@@ -120,7 +117,7 @@ def main() -> int:
                         continue
 
                     body = _iter_message_text(msg)
-                    otp = _extract_otp(f"{subj_hdr}\n{body}")
+                    otp = extract_otp(f"{subj_hdr}\n{body}")
                     if otp:
                         conn.store(msg_id, "+FLAGS", "\\Deleted")
                         conn.expunge()

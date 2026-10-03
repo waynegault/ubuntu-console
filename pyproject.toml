@@ -18,6 +18,9 @@ files = [
     "tests",
     "nas",
 ]
+# nas collectors import the shared lib as `lib.butler_common` (card 974f99ff); the
+# scripts dir is on sys.path at run time, so mirror that for the type checkers.
+mypy_path = "nas/butler/scripts"
 warn_unused_configs = true
 show_error_codes = true
 # Check the bodies of functions that carry no annotations.  Left off by default,
@@ -58,4 +61,5 @@ typeCheckingMode = "basic"
 venvPath = "."
 venv = ".venv"
 # tests/ import kgraph via a runtime sys.path insertion pyright cannot see.
-extraPaths = ["scripts"]
+# nas/butler/scripts is on sys.path at run time for the `lib.butler_common` import.
+extraPaths = ["scripts", "nas/butler/scripts"]

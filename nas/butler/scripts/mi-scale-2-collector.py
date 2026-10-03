@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from lib.butler_common import post_line_protocol
+
 try:
     from bleak import BleakClient, BleakScanner
     HAS_BLEAK = True
@@ -302,14 +304,7 @@ def _write_influxdb(measurement: str, tags: dict[str, str], fields: dict[str, in
     line = f"{measurement},{tag_str} {field_str}"
     
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            url,
-            data=line.encode(),
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=5) as response:
-            return response.status == 204
+        return post_line_protocol(url, line, timeout=5) == 204
     except Exception as e:
         print(f"InfluxDB write failed: {e}", file=sys.stderr)
         return False

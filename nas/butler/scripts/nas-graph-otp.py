@@ -3,10 +3,10 @@
 
 import json
 import pathlib
-import re
-import urllib.request
 import urllib.parse
 import sys
+
+from lib.butler_common import extract_otp, graph_delete, graph_get
 
 TOKEN_CACHE = "/mnt/HD/HD_a2/butler/cron/outlook-mcp-token-cache"
 GRAPH_API = "https://graph.microsoft.com/v1.0"
@@ -20,33 +20,6 @@ def _get_access_token() -> str:
         if "graph.microsoft.com" in key:
             return token["secret"]
     raise RuntimeError("No Graph API access token found in cache")
-
-def _graph_get(token: str, url: str) -> dict:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-def _graph_delete(token: str, url: str) -> int:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-        },
-        method="DELETE",
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return int(resp.status)
-
-def _extract_otp(text: str) -> str | None:
-    match = re.search(r"\b(\d{6,8})\b", text)
-    return match.group(1) if match else None
 
 def _looks_like_myair(sender: str, subject: str) -> bool:
     s = sender.lower()
@@ -74,7 +47,7 @@ def main() -> int:
         })
         url = f"{base_url}?{params}"
         
-        data = _graph_get(token, url)
+        data = graph_get(url, token)
         messages = data.get("value", [])
         
         for msg in messages:
@@ -85,11 +58,11 @@ def main() -> int:
             if not _looks_like_myair(sender, subject):
                 continue
             
-            otp = _extract_otp(f"{subject}\n{body}")
+            otp = extract_otp(f"{subject}\n{body}")
             if otp:
                 msg_id = msg["id"]
                 delete_url = f"{GRAPH_API}/me/messages/{msg_id}"
-                _graph_delete(token, delete_url)
+                graph_delete(delete_url, token)
                 print(otp)
                 return 0
         

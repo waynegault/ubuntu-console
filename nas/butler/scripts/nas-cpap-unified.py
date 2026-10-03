@@ -3,13 +3,14 @@
 
 import json
 import pathlib
-import re
 import urllib.request
 import urllib.parse
 import urllib.error
 import time
 import sys
 import os
+
+from lib.butler_common import extract_otp, graph_delete, graph_get
 
 TOKEN_CACHE = "/mnt/HD/HD_a2/butler/cron/outlook-mcp-token-cache"
 GRAPH_API = "https://graph.microsoft.com/v1.0"
@@ -36,20 +37,10 @@ def _get_graph_token() -> str:
     raise RuntimeError("No Graph token")
 
 def _graph_get(url: str) -> dict:
-    token = _get_graph_token()
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode())
+    return graph_get(url, _get_graph_token())
 
 def _graph_delete(url: str) -> int:
-    token = _get_graph_token()
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}, method="DELETE")
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return int(resp.status)
-
-def _extract_otp(text: str) -> str | None:
-    match = re.search(r"\b(\d{6,8})\b", text)
-    return match.group(1) if match else None
+    return graph_delete(url, _get_graph_token())
 
 def _get_fresh_otp() -> str:
     """Trigger MFA, poll for email, extract OTP."""
@@ -90,7 +81,7 @@ def _get_fresh_otp() -> str:
                 
                 subject = msg.get("subject", "")
                 body = msg.get("bodyPreview", "")
-                otp = _extract_otp(f"{subject}\n{body}")
+                otp = extract_otp(f"{subject}\n{body}")
                 
                 if otp:
                     # Delete the email

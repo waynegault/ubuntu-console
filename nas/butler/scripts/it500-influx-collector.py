@@ -18,6 +18,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
+from lib.butler_common import post_line_protocol
+
 URL_LOGIN = "https://sal-emea-p01-api.arrayent.com/acc/applications/SalusService/sessions"
 URL_GET_DATA = "https://sal-emea-p01-api.arrayent.com/zdk/services/zamapi/getDeviceAttributesWithValues"
 APP_AUTH = "687886-679716122"
@@ -66,10 +68,7 @@ def _to_celsius(raw: str | None) -> float | None:
 
 
 def _post_influx(line: str) -> int:
-    req = urllib.request.Request(INFLUX_URL, data=line.encode("utf-8"), method="POST")
-    req.add_header("Content-Type", "application/octet-stream")
-    with urllib.request.urlopen(req, timeout=10) as response:
-        return int(response.status)
+    return post_line_protocol(INFLUX_URL, line, timeout=10)
 
 
 def main() -> int:
