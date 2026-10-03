@@ -147,3 +147,24 @@ become the mirror's, and this section is removed.
 `it500-influx-collector.py` (:07/:37) · `nas_health_collector.py --once`
 (:02/:17/:32/:47) · `S35bt-mqtt-bridge start` (:03, watchdog) ·
 `internet-quality-monitor.sh` (:09) · `glowmarkt-collector.py` (*/30).
+
+## `openclaw/salus-it500` — the NAS openclaw agent's SALUS/IT500 toolset (card `ace13efd`)
+
+`openclaw/salus-it500/` is self-contained: `salus.py` is the CLI (stdlib + `aiohttp`),
+`salus_client.py` and `salus_scheduler.py` are its client and scheduler, and `salus_tools.py`
+exposes `SALUS_TOOLS` (an openclaw LLM tool schema) and drives `salus.py`. Nothing else in the
+repo imports it and no cron entry runs it — it is the NAS openclaw agent's toolset, mirrored
+for history, not a console tool. The live IT500 data path is a DIFFERENT, standalone script:
+`scripts/it500-influx-collector.py`, the one `cron/openclaw-collectors.cron` runs at :07/:37.
+
+Its tests are collected IN PLACE by pytest — `pytest.ini` `testpaths` names
+`nas/butler/openclaw/salus-it500/tests/` and the CI/nightly Python-test step names the directory
+too (added 2026-10-03, card `ace13efd`). They sit outside `tests/`, so they are NOT in the
+docs-sync test count (scoped to `tests/test_*.py`). The files are neither moved nor edited —
+either would diverge the mirror:
+
+- `test_schedule_status_keys.py` reads the mirror's `salus.py` with `ast` (stdlib only); it is
+  the regression guard for the duplicate-key defect in the `schedule-status` payload.
+- `test_salus_cli_parsers.py` `exec`s the INSTALLED skill copy at
+  `/home/wayne/.openclaw/skills/salus-it500/salus.py` and needs `aiohttp` (installed by
+  `.github/ci-requirements.txt`), so it tests the installed skill rather than the mirror.

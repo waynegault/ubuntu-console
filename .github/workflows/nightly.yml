@@ -94,6 +94,7 @@ jobs:
           tests/test_ast_extractor.py tests/test_kgraph_package.py
           tests/test_bats_lock_fixture.py tests/test_check_ci_status.py
           tests/test_oc_health_check.py tests/test_shell_command_scan.py
+          nas/butler/openclaw/salus-it500/tests
           -x --timeout=120 -q
 
       - name: Docs sync check
