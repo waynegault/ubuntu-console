@@ -690,4 +690,32 @@ __fast_member_shellcheck() {
     grep -rq 'runs-on: \[self-hosted' "$REPO_ROOT"/.github/workflows/*.yml
 }
 
+@test "ci: the Python tool pins live in ONE requirements file both workflows install" {
+    # Card 49ab1c89: nightly.yml installed ruff/pytest/pytest-timeout UNPINNED while
+    # ci.yml pinned them, so the nightly lane could pass or fail on a version no other
+    # lane used. The pins now live once in .github/ci-requirements.txt, installed by
+    # every workflow that runs Python. This catches a re-float: a bare `pip install
+    # ruff`, a pin dropped from the file, or a workflow that stops installing it.
+    local req="$REPO_ROOT/.github/ci-requirements.txt"
+    [ -f "$req" ]
+    # Every tool the CI lane must agree on is stated with `==` in the one file.
+    local tool
+    for tool in ruff pytest pytest-timeout mypy; do
+        grep -qE "^${tool}==" "$req"
+    done
+    # Both Python-running workflows install that file...
+    local rel
+    for rel in ci.yml nightly.yml; do
+        grep -qF 'ci-requirements.txt' "$REPO_ROOT/.github/workflows/$rel"
+    done
+    # ...and NO workflow installs one of those tools by bare name (an unpinned install).
+    run grep -rnE 'pip install (ruff|pytest|pytest-timeout|mypy)([^=]|$)' \
+        "$REPO_ROOT"/.github/workflows/
+    [ "$status" -ne 0 ]
+
+    # Teeth: the same filter must match a bare unpinned install if one appears.
+    run bash -c "printf '%s\n' '          pip install ruff pytest' | grep -E 'pip install (ruff|pytest)([^=]|\$)'"
+    [ "$status" -eq 0 ]
+}
+
 # end of file

@@ -294,27 +294,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # ruff is PINNED, for the same reason shellcheck is (tools/install-shellcheck.sh):
-          # an unpinned linter drifts from the developer's venv and fails CI on code the local
-          # run passes.  Measured 2026-09-18: `pip install ruff` took a newer release whose rule
-          # set flags code that passes under the venv's 0.15.20.  The pin makes the two agree by
-          # AGREEMENT rather than by disabling a rule; a future bump should be a deliberate change
-          # with its new findings fixed.
-          # pytest and pytest-timeout are PINNED to the versions this box runs, for
-          # the same reason as ruff: the harness under test (pytest.ini addopts,
-          # tests/conftest.py's BATS flock serialisation) is version-sensitive, and an
-          # unpinned CI install would be a version no local run uses.  Measured
-          # 2026-09-23: every pytest on the box is 9.1.1 — this repo's venv, the
-          # investigator's venv, the linuxbrew and python3.12 user-site installs, and
-          # the ~/.local/bin wrapper that execs the investigator's.  Keep this pin and
-          # the venv in step; a bump should move both deliberately.
-          # mypy is PINNED like ruff and pytest: it is the gate QWEN.md requires after
-          # any Python change, and an unpinned CI mypy could disagree with the venv's
-          # 2.3.1 on a rule set.  `requests` and `aiohttp` are installed so mypy can
-          # RESOLVE them (both ship py.typed); the heavy optional deps it cannot get
-          # (torch, transformers) are declared untyped in pyproject.toml instead.
-          pip install "ruff==0.15.20" "pytest==9.1.1" "pytest-timeout==2.4.0" "mypy==2.3.1" pydantic networkx requests aiohttp
-          pip install tree-sitter tree-sitter-bash tree-sitter-python
+          # The pinned Python toolchain lives in ONE file that every Python job installs, so
+          # the per-push and nightly lanes cannot run different versions (card 49ab1c89). The
+          # pins (ruff, pytest, pytest-timeout, mypy) and their reasoning are in
+          # .github/ci-requirements.txt — bump them there, not here.
+          pip install -r .github/ci-requirements.txt
 
       - name: Ruff lint
         run: ruff check .
@@ -370,8 +354,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "pytest==9.1.1" "pytest-timeout==2.4.0" pydantic networkx
-          pip install tree-sitter tree-sitter-bash tree-sitter-python
+          # Same single source as the other Python jobs (card 49ab1c89).
+          pip install -r .github/ci-requirements.txt
 
       - name: Run the full Python suite
         run: python -m pytest tests/ --timeout=120 -q

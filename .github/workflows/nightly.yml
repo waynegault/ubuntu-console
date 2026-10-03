@@ -76,8 +76,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff pytest pytest-timeout pydantic networkx
-          pip install tree-sitter tree-sitter-bash tree-sitter-python
+          # Same pinned toolchain as ci.yml — ONE requirements file, so the nightly
+          # cannot run a version no other lane uses (card 49ab1c89).
+          pip install -r .github/ci-requirements.txt
 
       - name: Ruff lint
         run: ruff check .

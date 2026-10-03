@@ -1,0 +1,34 @@
+# CI Python toolchain — ONE file, so every workflow installs identical versions.
+#
+# Why this file exists (card 49ab1c89): ci.yml pinned ruff/pytest/pytest-timeout/mypy while
+# nightly.yml installed the same tools UNPINNED, so the nightly lane could pass or fail on a
+# version no other lane used. A pin repeated in two files drifts the first time one is
+# updated; a pin stated once cannot.
+#
+# The `==` pins are the versions this box runs (verified against .venv: ruff 0.15.20,
+# pytest 9.1.1, pytest-timeout 2.4.0, mypy 2.3.1). This is the same reasoning as
+# tools/install-shellcheck.sh for shellcheck: an unpinned linter drifts from the developer's
+# venv and fails CI on code the local run passed (measured 2026-09-18 with ruff). A bump is a
+# deliberate change: move the pin HERE, run the suite, and fix any new findings — never float it.
+#
+# mypy is pinned like the rest because QWEN.md requires it after any Python change; requests
+# and aiohttp are installed (both ship py.typed) so mypy can RESOLVE them — the heavy optional
+# deps it cannot get (torch, transformers) are declared untyped in pyproject.toml instead.
+#
+# Installed by .github/workflows/ci.yml (jobs: python, python-unit) and
+# .github/workflows/nightly.yml (job: full-suite). Change this file once, not three times.
+ruff==0.15.20
+pytest==9.1.1
+pytest-timeout==2.4.0
+mypy==2.3.1
+
+# Runtime deps the Python suites import. Unpinned deliberately — these were never the drift
+# (only the tools above were), and pinning a scientific-stack transitive set here would be a
+# second maintenance surface with no measured benefit.
+pydantic
+networkx
+requests
+aiohttp
+tree-sitter
+tree-sitter-bash
+tree-sitter-python
