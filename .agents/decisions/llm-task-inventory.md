@@ -34,10 +34,13 @@ These measure the same model the registry names, so a model change is covered by
 |------|--------|
 | `tools/swallow-classify.py:355` | A development/classification tool (proposes `# swallow-ok:` reasons). Not a scored benchmark task; its model is recorded in the report header and marked UNPINNED, with `--model` to pin. |
 | `scripts/kv-recall-probe.py:190` | A targeted diagnostic probe with its own oracle; it measures one property of the active model, not a benchmark score. |
+| `scripts/10-deployment.sh:433` (`commit_auto`) | Generates a commit message for the user to accept, reject or edit — human-in-the-loop, no rubric or score. The diff is refused to any non-localhost `LOCAL_LLM_URL` by a host check before the call. |
+| `scripts/11f-llm-runtime.sh:442` (`burn`) | A synthetic TPS/latency stress test of the active lane — a transport measurement, not a judged task; a model change is caught by `model bench`. |
 | `scripts/11e-llm-model.sh:1420,1431` | `model use` launch readiness preflight — a 1-token liveness check, not a task whose output is judged. |
 | `scripts/11f-llm-runtime.sh:174,184` | `burn`'s slot-readiness preflight — same liveness-only shape. |
-| `scripts/11e-llm-model.sh:4011` | The HOSTED Token Plan endpoint, not a local registry model; out of the local registry's scope by construction. |
-| `scripts/11f-llm-runtime.sh` interactive chat / `serve` | Human-facing interactive chat; no rubric, no score, unbounded input. |
+| `scripts/11e-llm-model.sh:4011` | The HOSTED Token Plan endpoint, not a local registry model; out of the local registry's scope by construction. The 1-token probe burns PAID quota, so it is cached 60s (`__os_fetch_cached`). |
+| `scripts/11f-llm-runtime.sh:623` interactive chat / `serve` | Human-facing interactive chat; no rubric, no score, unbounded input. |
+| `scripts/11c-llm-server.sh:105` | `/v1/models` readiness probe (waits for the served model list) — never sends a completion. |
 | `bin/llama-watchdog.sh:230` | `/v1/models` liveness probe only — it never sends a completion. |
 
 **Why:** an LLM-invoking path with no bench evidence can change behaviour silently when
