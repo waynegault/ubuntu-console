@@ -43,12 +43,12 @@ STAMP="$STAMP_DIR/memory-markdownlint.stamp"
 LIST="$STAMP_DIR/.memory-markdownlint.files.$$"
 MAX_LINES=20
 
-if [ ! -x "$LINTER" ]; then
+if [[ ! -x "$LINTER" ]]; then
     echo "memory-markdownlint: $LINTER is missing or not executable — the memory notes were NOT checked."
     exit 0
 fi
 
-if [ ! -f "$CONFIG" ]; then
+if [[ ! -f "$CONFIG" ]]; then
     echo "memory-markdownlint: $CONFIG is missing — the memory notes were NOT checked."
     exit 0
 fi
@@ -87,7 +87,7 @@ collect_changed() {
         -not -path '*/.git/*' -not -path '*/node_modules/*' -newer "$STAMP"
 }
 
-if [ -f "$STAMP" ]; then
+if [[ -f "$STAMP" ]]; then
     # swallow-ok: find may hit an unreadable subdir; the hook must not abort on one — an empty list exits early below
     collect_changed > "$LIST" 2>/dev/null
 else
@@ -100,15 +100,15 @@ fi
 rm -f "$LIST.keep"
 checked=0
 while IFS= read -r candidate; do
-    [ -n "$candidate" ] || continue
-    if [ -f "$candidate" ]; then
+    [[ -n "$candidate" ]] || continue
+    if [[ -f "$candidate" ]]; then
         printf '%s\n' "$candidate" >> "$LIST.keep"
         checked=$((checked + 1))
     fi
 done < "$LIST"
 rm -f "$LIST"
 
-if [ "$checked" -eq 0 ]; then
+if [[ "$checked" -eq 0 ]]; then
     touch -r "$marker" "$STAMP"
     rm -f "$marker"
     rm -f "$LIST.keep"
@@ -124,19 +124,27 @@ rm -f "$LIST.keep"
 touch -r "$marker" "$STAMP"
 rm -f "$marker"
 
-if [ "$status" -eq 0 ] && [ -z "$report" ]; then
+if [[ "$status" -eq 0 ]] && [[ -z "$report" ]]; then
     exit 0
 fi
 
 total="$(printf '%s\n' "$report" | grep -cE 'MD[0-9]+')"
 
 echo "MEMORY-MARKDOWNLINT: a memory note changed since the last turn does not satisfy $CONFIG."
-echo "Checked $checked changed note(s); $total violation(s):"
+if [[ "$total" -eq 0 ]] && [[ "$status" -ne 0 ]]; then
+    # Non-zero status with no MD finding means the linter never RAN — a missing interpreter, a
+    # bad rule set, an unreadable file.  Say that rather than "0 violation(s)", which reads as a
+    # clean tree: measured 2026-10-03, a node-less PATH made every run print exactly that over an
+    # empty check.  The linter's own words follow below.
+    echo "Checked $checked changed note(s); the linter did NOT run — its own words follow:"
+else
+    echo "Checked $checked changed note(s); $total violation(s):"
+fi
 printf '%s\n' "$report" | grep -E 'MD[0-9]+' | head -n "$MAX_LINES"
-if [ "$total" -gt "$MAX_LINES" ]; then
+if [[ "$total" -gt "$MAX_LINES" ]]; then
     echo "  ... and $((total - MAX_LINES)) more."
 fi
-if [ "$total" -eq 0 ]; then
+if [[ "$total" -eq 0 ]]; then
     # The linter itself failed (unreadable file, bad config) — show its own words rather than nothing.
     printf '%s\n' "$report" | head -n "$MAX_LINES"
 fi
@@ -148,7 +156,7 @@ fi
 # one of those notes still linted clean afterwards.  A fixer cannot tell prose that wrapped onto a
 # marker from real structure, so the automatic rewrite is now limited to whitespace rules, which
 # cannot arise from a misreading: the same three lines come back byte-identical under it.
-if [ -f "$FIX_CONFIG" ]; then
+if [[ -f "$FIX_CONFIG" ]]; then
     echo "Fix with the restricted config (whitespace rules only, safe) — run it from the STORE ROOT with a"
     echo "path RELATIVE to it, which is the shape this hook itself uses ($QWEN_DIR):"
     echo "  (cd $QWEN_DIR && $LINTER --config .markdownlint-fixable.jsonc --fix <path relative to ~/.qwen>)"
