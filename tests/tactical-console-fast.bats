@@ -631,6 +631,22 @@ __fast_member_shellcheck() {
     [[ "$line1" == "#!"* ]]
 }
 
+@test "install: legacy unit aliases are created AFTER the unit links (first install)" {
+    # Card 5c20ae57: the alias loop used to run BEFORE the loop that links
+    # systemd/* into ~/.config/systemd/user/, so on a FIRST install the alias
+    # target did not exist yet and the -e guard skipped EVERY alias (a re-run
+    # happened to work, hiding it). install.sh cannot be run end-to-end here, so
+    # this pins the ORDER; the runtime half (a skipped alias is NAMED) is the
+    # else-branch asserted below.
+    local link_ln alias_ln
+    link_ln=$(grep -n 'link "systemd/\$_bn" "\$HOME/.config/systemd/user/\$_bn"' "$REPO_ROOT/install.sh" | cut -d: -f1)
+    alias_ln=$(grep -n 'for _pair in llama-server.service:' "$REPO_ROOT/install.sh" | cut -d: -f1)
+    [[ -n "$link_ln" && -n "$alias_ln" ]]
+    (( link_ln < alias_ln )) || { echo "unit links at line $link_ln, alias loop at line $alias_ln"; return 1; }
+    # A missing target is REPORTED, not skipped silently.
+    grep -q 'alias \$_old skipped' "$REPO_ROOT/install.sh"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 8. COMPANION FILES
 # ─────────────────────────────────────────────────────────────────────────────

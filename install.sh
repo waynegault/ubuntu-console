@@ -3,7 +3,11 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
-VERSION="1.9"
+# v1.10 (2026-10-03, card 5c20ae57): the legacy unit ALIAS loop runs AFTER the
+#   systemd/* linking loop (it ran before it, so on a FIRST install the target
+#   units did not exist yet and every alias was skipped), and a skipped alias now
+#   names its missing target on stderr instead of passing silently.
+VERSION="1.10"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -258,29 +262,6 @@ do
     fi
 done
 
-# Legacy UNIT names, as RELATIVE alias symlinks — deliberately not systemd's
-# [Install] Alias=.  Because the unit files are themselves symlinks into this repo,
-# `systemctl enable` materialises its alias with an ABSOLUTE target, and systemd
-# then loads that as a SEPARATE unit: two units for one service, with is-active
-# lying about both.  The investigator found this on 2026-09-15, after it had already
-# put a live CUDA lane down — their name-keyed check read the lane as inactive, and
-# ours could have added a second server to the card.  A relative symlink to the unit
-# NAME merges the two: one Id, one state, both names.
-#
-# llama-server-phi4.service is absent by design: its unit (the retired Phi-4-mini
-# decomposition lane) was removed on 2026-09-15, so there is nothing to alias.
-for _pair in llama-server.service:llama-xe-minicpm5-1b-chat.service \
-             llama-embed-server.service:llama-xe-embeddinggemma-embed.service \
-             llama-server-nvidia.service:llama-cuda-llama32-3b-chat.service \
-             llama-server-8081.service:llama-cuda-qwen35-4b-pipeline.service
-do
-    _old="${_pair%%:*}"; _new="${_pair##*:}"
-    if [[ -e "$HOME/.config/systemd/user/$_new" ]]; then
-        ln -sfn "$_new" "$HOME/.config/systemd/user/$_old"
-        echo "  ~/.config/systemd/user/$_old -> $_new (relative alias)"
-    fi
-done
-
 # Additional utility scripts that are expected to be directly executable.
 # tools/import-windows-env.sh is listed here, not under bin/, because
 # scripts/load-vault-env.sh execs it by absolute path to refresh the Windows env
@@ -322,6 +303,36 @@ do
     [[ -f "$f" ]] || continue
     _bn="${f##*/}"
     link "systemd/$_bn" "$HOME/.config/systemd/user/$_bn"
+done
+
+# Legacy UNIT names, as RELATIVE alias symlinks — deliberately not systemd's
+# [Install] Alias=.  Because the unit files are themselves symlinks into this repo,
+# `systemctl enable` materialises its alias with an ABSOLUTE target, and systemd
+# then loads that as a SEPARATE unit: two units for one service, with is-active
+# lying about both.  The investigator found this on 2026-09-15, after it had already
+# put a live CUDA lane down — their name-keyed check read the lane as inactive, and
+# ours could have added a second server to the card.  A relative symlink to the unit
+# NAME merges the two: one Id, one state, both names.
+#
+# ORDER (card 5c20ae57): this loop runs AFTER the unit-linking loop above.  It used
+# to run BEFORE it, so on a FIRST install the target unit did not exist yet and the
+# `-e` guard skipped EVERY alias (a re-run happened to work, which hid it).  The
+# else-branch now NAMES any target that is still absent instead of skipping quietly.
+#
+# llama-server-phi4.service is absent by design: its unit (the retired Phi-4-mini
+# decomposition lane) was removed on 2026-09-15, so there is nothing to alias.
+for _pair in llama-server.service:llama-xe-minicpm5-1b-chat.service \
+             llama-embed-server.service:llama-xe-embeddinggemma-embed.service \
+             llama-server-nvidia.service:llama-cuda-llama32-3b-chat.service \
+             llama-server-8081.service:llama-cuda-qwen35-4b-pipeline.service
+do
+    _old="${_pair%%:*}"; _new="${_pair##*:}"
+    if [[ -e "$HOME/.config/systemd/user/$_new" ]]; then
+        ln -sfn "$_new" "$HOME/.config/systemd/user/$_old"
+        echo "  ~/.config/systemd/user/$_old -> $_new (relative alias)"
+    else
+        warn "  WARNING: alias $_old skipped — target $_new is not installed"
+    fi
 done
 
 # Retired UNIT names (2026-09-15): the Phi-4-mini decomposition lane was removed
