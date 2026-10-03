@@ -266,5 +266,72 @@ class TestGraphHandlerConstruction(unittest.TestCase):
         self.assertEqual(second._rl_requests, [])
 
 
+class TestGraphServerRefusesSample(unittest.TestCase):
+    """A read with no real source is refused, not answered with the sample graph.
+
+    Catches (card 0a5f97d5): the server returned HTTP 200 with the synthetic
+    SAMPLE_GRAPH and ``_meta.source == "sample"``, so fabricated data looked
+    real.  The CLI may still print SAMPLE_GRAPH as its explicit default demo; the
+    server must not serve it as a production graph.
+    """
+
+    def _get(self, handler_cls, path="/graph.json?view=raw"):
+        httpd = HTTPServer(("127.0.0.1", 0), handler_cls)
+        self.addCleanup(httpd.server_close)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        conn = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=5)
+        try:
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            return resp.status, resp.read()
+        finally:
+            conn.close()
+
+    def test_no_real_source_is_503_not_200_with_the_sample_graph(self):
+        from kgraph.server import build_graph_handler
+
+        handler = build_graph_handler(
+            serve_dir=os.getcwd(), store="", graph_db="", view_mode="raw",
+            semantic_threshold=0.5, memory_db=None)
+        status, body = self._get(handler)
+        self.assertEqual(status, 503)
+        payload = json.loads(body)
+        self.assertEqual(payload["error"], "graph unavailable")
+        self.assertIn("sample graph", payload["detail"])
+        self.assertNotIn("nodes", payload)
+
+    def test_projection_failure_is_503_not_a_sample_fallback(self):
+        from kgraph import server as kgraph_server
+
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        db = os.path.join(td.name, "graph.sqlite")
+        kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+        handler = kgraph_server.build_graph_handler(
+            serve_dir=os.getcwd(), store="", graph_db=db, view_mode="raw",
+            semantic_threshold=0.5, memory_db=None)
+        with mock.patch.object(kgraph_server, "project_graph", side_effect=ValueError("boom")):
+            status, body = self._get(handler)
+        self.assertEqual(status, 503)
+        self.assertIn("projection failed", json.loads(body)["detail"])
+
+    def test_a_real_source_still_serves_200(self):
+        # The control: a real graph DB is served as before, so the refusal did not
+        # become a blanket failure.
+        from kgraph.server import build_graph_handler
+
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        db = os.path.join(td.name, "graph.sqlite")
+        kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+        handler = build_graph_handler(
+            serve_dir=os.getcwd(), store="", graph_db=db, view_mode="raw",
+            semantic_threshold=0.5, memory_db=None)
+        status, body = self._get(handler)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["_meta"]["source"], "graph-db")
+
+
 if __name__ == "__main__":
     unittest.main()

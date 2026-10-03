@@ -325,17 +325,28 @@ class GraphRequestHandler(SimpleHTTPRequestHandler):
       req_semantic = self.semantic_threshold
     return req_view_mode, req_semantic
 
-  def _read_payload(self, req_view_mode: str, req_semantic: float) -> str:
-    """Resolve, project and redact the graph, returning a JSON body string.
+  @staticmethod
+  def _unavailable_body(detail: str) -> str:
+    """The JSON error body for a read that cannot be served (503)."""
+    return json.dumps({'error': 'graph unavailable', 'detail': detail})
+
+  def _read_payload(self, req_view_mode: str, req_semantic: float) -> tuple[int, str]:
+    """Resolve, project and redact the graph, returning (http_status, JSON body).
 
     The GET path is readable cross-origin by the allowlisted Vite dev
     frontend, so memory-derived free text is stripped from the served payload
-    (see _redact_nodes_for_read).  A projection failure falls back to the
-    sample graph rather than erroring the request.
+    (see _redact_nodes_for_read).  A production read must NOT present the
+    synthetic SAMPLE_GRAPH as if it were a real graph (card 0a5f97d5): when no
+    real source exists — or a real graph cannot be projected — the status is
+    503 with an error body, never 200 + sample.
     """
     try:
       prefer_memory = req_view_mode in {'semantic', 'overview', 'topics', 'files'}
       base_graph, source_name = self._resolve_graph(prefer_memory)
+      if source_name == 'sample':
+        return 503, self._unavailable_body(
+          'no graph source available: no memory DB, graph DB or json store could be '
+          'loaded, and the synthetic sample graph is not served as a real graph')
       projected = project_graph(base_graph, mode=req_view_mode, semantic_threshold=req_semantic)
       payload = dict(projected)
       payload['_meta'] = dict(payload.get('_meta', {}))
@@ -345,22 +356,18 @@ class GraphRequestHandler(SimpleHTTPRequestHandler):
         'source': source_name,
       })
       _redact_nodes_for_read(payload.get('nodes', []))
-      return json.dumps(payload)
+      return 200, json.dumps(payload)
     except (ValueError, KeyError, TypeError) as exc:
-      logger.warning("Graph projection failed, falling back to sample: %s", exc)
-      fallback = project_graph(SAMPLE_GRAPH, mode=req_view_mode, semantic_threshold=req_semantic)
-      fallback['_meta'] = {
-        'viewMode': req_view_mode,
-        'semanticThreshold': req_semantic,
-        'source': 'sample'
-      }
-      return json.dumps(fallback)
+      logger.warning('Graph projection failed; refusing to serve the sample graph: %s', exc)
+      return 503, self._unavailable_body(
+        f'graph projection failed and the synthetic sample graph is not served in its '
+        f'place: {exc}')
 
   def do_GET(self):
     if self.path.split('?', 1)[0] == '/graph.json':
       req_view_mode, req_semantic = self._read_view_params()
-      data = self._read_payload(req_view_mode, req_semantic)
-      self.send_response(200)
+      status, data = self._read_payload(req_view_mode, req_semantic)
+      self.send_response(status)
       self.send_header('Content-Type', 'application/json')
       self._send_cors_headers(self._allowed_origin())
       self.end_headers()

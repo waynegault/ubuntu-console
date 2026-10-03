@@ -91,6 +91,10 @@ def test_malformed_json_store_is_rejected_not_projected() -> None:
     was "json-store" and project_graph received a malformed graph.  The payload
     used is an edge with no endpoints, the exact provenance-tag shape the CLI's
     own validator names.
+
+    "sample" is the resolver's no-source SIGNAL here.  The server's GET path turns
+    it into a 503 rather than serving it (card 0a5f97d5, tests/test_graph_server.py);
+    this case pins the resolver that produces the signal.
     """
     with tempfile.TemporaryDirectory() as td:
         store = os.path.join(td, "bad-store.json")
