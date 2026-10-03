@@ -31,12 +31,27 @@ teardown() {
     rm -rf "$TAC_TEST_TMPDIR"
 }
 
-@test "import-windows-env resolves the repo venv python when one exists" {
-    # Failure caught: the resolver returns a bare `python3` even though the repo
-    # ships .venv/bin/python3, so the bridge would run under the wrong interpreter.
-    run bash -c 'source "$1" >/dev/null 2>&1; _tac_python_path' _ "$IMPORT_SCRIPT"
+@test "import-windows-env prefers the venv python3 when bin/python also exists" {
+    # Failure caught: the resolver reverts to the removed `.venv/bin/python`
+    # preference, so a venv carrying BOTH binaries resolves to the wrong one.
+    #
+    # HERMETIC by construction. This case used to source the repo's own
+    # $REPO_ROOT/tools/import-windows-env.sh and assert the result was
+    # "$REPO_ROOT/.venv/bin/python3" — but the resolver keys off the SCRIPT's own
+    # directory, and `.venv/` is gitignored, so in CI's checkout (no .venv) it
+    # correctly fell back to PATH `python3` and the case failed everywhere except
+    # a dev box.  A test for a host could not pass on the host.
+    local sandbox="$TAC_TEST_TMPDIR/venv-both"
+    mkdir -p "$sandbox/tools" "$sandbox/.venv/bin"
+    cp "$IMPORT_SCRIPT" "$sandbox/tools/import-windows-env.sh"
+    printf '#!/bin/sh\nexit 0\n' > "$sandbox/.venv/bin/python"
+    printf '#!/bin/sh\nexit 0\n' > "$sandbox/.venv/bin/python3"
+    chmod +x "$sandbox/.venv/bin/python" "$sandbox/.venv/bin/python3"
+
+    run bash -c 'source "$1" >/dev/null 2>&1; _tac_python_path' _ \
+        "$sandbox/tools/import-windows-env.sh"
     [ "$status" -eq 0 ]
-    [ "$output" = "$REPO_ROOT/.venv/bin/python3" ]
+    [ "$output" = "$sandbox/.venv/bin/python3" ]
     [ -x "$output" ]
 }
 
