@@ -752,65 +752,79 @@ def _project_files(
     return enrich({"nodes": list(out_nodes.values()), "edges": out_edges}, "files")
 
 
-def _project_semantic(
+_SEMANTIC_CONCEPT_TYPES = {
+    "topic", "project", "decision", "issue", "outcome",
+    "actor", "person", "organization", "place", "chunk",
+}
+_SEMANTIC_ANCHOR_TYPES = {"project", "decision", "issue", "outcome"}
+_SEMANTIC_PREFERRED_TYPES = {
+    "project", "decision", "issue", "outcome", "actor",
+    "person", "organization", "place", "chunk",
+}
+
+
+def _semantic_node_ok(node: dict, is_curated_node: Callable[[dict], bool]) -> bool:
+    """True when *node* is a concept node semantic mode should keep."""
+    if not node:
+        return False
+    ntype = str(node.get("type", "") or "").lower()
+    if ntype not in _SEMANTIC_CONCEPT_TYPES or not is_curated_node(node):
+        return False
+    return not (ntype == "topic" and _is_weak_label(node.get("label", "")))
+
+
+def _apply_canonical_bias(node: dict, life_index: dict) -> dict:
+    """Return a copy of *node* with life-index canonical label/type applied."""
+    updated = dict(node)
+    raw_label = str(updated.get("label", "") or "").strip()
+    if not raw_label:
+        return updated
+    norm = re.sub(r"\s+", " ", raw_label.lower()).strip()
+    record = life_index.get("aliases", {}).get(norm)
+    if not record:
+        return updated
+    updated["label"] = str(record.get("title") or raw_label)
+    record_type = str(record.get("type", "") or "").lower()
+    current_type = str(updated.get("type", "") or "").lower()
+    if record_type in _SEMANTIC_CONCEPT_TYPES and current_type == "topic":
+        updated["type"] = record_type
+        # GraphNode.inferred_type is a bool, and the field is only ever
+        # tested for truthiness; the canonical kind lives in `type`.
+        updated["inferred_type"] = True
+        updated["type_confidence"] = max(float(updated.get("type_confidence", 0.0) or 0.0), 0.96)
+    updated["canonical_slug"] = str(record.get("slug") or "")
+    updated["canonical_path"] = str(record.get("path") or "")
+    return updated
+
+
+def _collect_semantic_concepts(
     node_by_id: dict[str, dict],
-    edges: list[dict],
-    effective_threshold: float,
-    semantic_threshold: float,
     is_curated_node: Callable[[dict], bool],
+    life_index: dict,
+) -> dict[str, dict]:
+    """Keep the curated concept nodes, applying canonical bias in place."""
+    concept_nodes: dict[str, dict] = {}
+    for nid, node in node_by_id.items():
+        if _semantic_node_ok(node, is_curated_node):
+            concept_nodes[nid] = _apply_canonical_bias(node, life_index)
+    return concept_nodes
+
+
+def _collect_concept_links(
+    edges: list[dict],
+    node_by_id: dict[str, dict],
+    concept_nodes: dict[str, dict],
+    effective_threshold: float,
     is_curated_edge: Callable[[dict, float], bool],
     edge_endpoints: Callable[[dict], tuple[str | None, str | None]],
-    dedupe_append: Callable[[list, dict, str | None, str | None, str, dict | None], None],
-    enrich: Callable[[dict, str], dict],
-) -> dict:
-    """Semantic mode: aggressive curation with inferred co-occurrence edges."""
-    concept_types = {"topic", "project", "decision", "issue", "outcome", "actor", "person", "organization", "place", "chunk"}
-    anchor_types = {"project", "decision", "issue", "outcome"}
-    preferred_semantic_types = {"project", "decision", "issue", "outcome", "actor", "person", "organization", "place", "chunk"}
-    life_index = load_life_index()
-
-    concept_nodes: dict[str, dict] = {}
+) -> tuple[list[tuple], dict[str, set[str]], dict[str, set[str]], dict[str, set[str]], dict[str, set[str]]]:
+    """Split edges into direct concept links and summary/chunk memberships."""
+    direct_edges: list[tuple] = []
     summary_to_concepts: dict[str, set[str]] = {}
     chunk_to_concepts: dict[str, set[str]] = {}
     concept_to_summaries: dict[str, set[str]] = {}
     concept_to_chunks: dict[str, set[str]] = {}
-    inferred_scores: dict[tuple[str, str], dict[str, int]] = {}
 
-    def semantic_node_ok(node: dict) -> bool:
-        if not node:
-            return False
-        ntype = str(node.get("type", "") or "").lower()
-        if ntype not in concept_types or not is_curated_node(node):
-            return False
-        return not (ntype == "topic" and _is_weak_label(node.get("label", "")))
-
-    def apply_canonical_bias(node: dict) -> dict:
-        updated = dict(node)
-        raw_label = str(updated.get("label", "") or "").strip()
-        if not raw_label:
-            return updated
-        norm = re.sub(r"\s+", " ", raw_label.lower()).strip()
-        record = life_index.get("aliases", {}).get(norm)
-        if not record:
-            return updated
-        updated["label"] = str(record.get("title") or raw_label)
-        record_type = str(record.get("type", "") or "").lower()
-        current_type = str(updated.get("type", "") or "").lower()
-        if record_type in concept_types and current_type == "topic":
-            updated["type"] = record_type
-            # GraphNode.inferred_type is a bool, and the field is only ever
-            # tested for truthiness; the canonical kind lives in `type`.
-            updated["inferred_type"] = True
-            updated["type_confidence"] = max(float(updated.get("type_confidence", 0.0) or 0.0), 0.96)
-        updated["canonical_slug"] = str(record.get("slug") or "")
-        updated["canonical_path"] = str(record.get("path") or "")
-        return updated
-
-    for nid, node in node_by_id.items():
-        if semantic_node_ok(node):
-            concept_nodes[nid] = apply_canonical_bias(node)
-
-    direct_edges: list[tuple] = []
     for edge in edges:
         src, dst = edge_endpoints(edge)
         # An endpoint that is absent (None) cannot key a node; skipping here also
@@ -849,7 +863,14 @@ def _project_semantic(
             chunk_to_concepts.setdefault(dst, set()).add(src)
             concept_to_chunks.setdefault(src, set()).add(dst)
 
-    # Co-occurrence scoring
+    return (direct_edges, summary_to_concepts, chunk_to_concepts,
+            concept_to_summaries, concept_to_chunks)
+
+
+def _score_cooccurrence(summary_to_concepts: dict[str, set[str]],
+                        chunk_to_concepts: dict[str, set[str]]) -> dict[tuple[str, str], dict[str, int]]:
+    """Count co-occurrences of concept pairs within shared summaries/chunks."""
+    inferred_scores: dict[tuple[str, str], dict[str, int]] = {}
     for members in summary_to_concepts.values():
         member_list = sorted(members)
         for i, a in enumerate(member_list):
@@ -865,15 +886,20 @@ def _project_semantic(
                 pair = (a, b) if a <= b else (b, a)
                 inferred_scores.setdefault(pair, {"summary": 0, "chunk": 0})
                 inferred_scores[pair]["chunk"] += 1
+    return inferred_scores
 
-    # Node strength
+
+def _compute_node_strength(concept_nodes: dict[str, dict],
+                           concept_to_summaries: dict[str, set[str]],
+                           concept_to_chunks: dict[str, set[str]]) -> dict[str, float]:
+    """Score each concept node by type, membership support and confidence."""
     node_strength: dict[str, float] = {}
     for nid, node in concept_nodes.items():
         ntype = str(node.get("type", "") or "").lower()
         strength = 1.0
-        if ntype in anchor_types:
+        if ntype in _SEMANTIC_ANCHOR_TYPES:
             strength += 3.0
-        elif ntype in preferred_semantic_types:
+        elif ntype in _SEMANTIC_PREFERRED_TYPES:
             strength += 2.0
         strength += min(2.5, 0.7 * len(concept_to_summaries.get(nid, set())))
         strength += min(2.0, 0.45 * len(concept_to_chunks.get(nid, set())))
@@ -882,8 +908,15 @@ def _project_semantic(
         if node.get("inferred_type"):
             strength -= 0.25
         node_strength[nid] = round(strength, 3)
+    return node_strength
 
-    # Direct edges
+
+def _select_direct_edges(
+    direct_edges: list[tuple],
+    node_strength: dict[str, float],
+    dedupe_append: Callable[[list, dict, str | None, str | None, str, dict | None], None],
+) -> tuple[list[dict], set[str], dict[tuple[str, str, str], dict], set[tuple[str, str]]]:
+    """Add the strongest direct concept edges; return the dedupe state too."""
     keep_edges: list[dict] = []
     keep_nodes: set[str] = set()
     seen: dict[tuple[str, str, str], dict] = {}
@@ -897,8 +930,15 @@ def _project_semantic(
         direct_pairs.add(tuple(sorted((src, dst))))
         keep_nodes.add(src)
         keep_nodes.add(dst)
+    return keep_edges, keep_nodes, seen, direct_pairs
 
-    # Inferred edges
+
+def _build_inferred_candidates(
+    inferred_scores: dict[tuple[str, str], dict[str, int]],
+    concept_nodes: dict[str, dict],
+    node_strength: dict[str, float],
+) -> list[tuple]:
+    """Score co-occurrence pairs into ranked, thresholded inferred edges."""
     inferred_candidates = []
     for (a, b), support in inferred_scores.items():
         a_node = concept_nodes.get(a)
@@ -912,7 +952,7 @@ def _project_semantic(
         if summary_support <= 0 and chunk_support <= 0:
             continue
         score = min(0.5, 0.18 * summary_support) + min(0.35, 0.12 * chunk_support)
-        if a_type in anchor_types or b_type in anchor_types:
+        if a_type in _SEMANTIC_ANCHOR_TYPES or b_type in _SEMANTIC_ANCHOR_TYPES:
             score += 0.12
         if a_type == b_type == "topic":
             score -= 0.08
@@ -934,7 +974,19 @@ def _project_semantic(
         (item[3] or {}).get("cooccurrence_count", 0),
         node_strength.get(item[0], 0) + node_strength.get(item[1], 0),
     ), reverse=True)
+    return inferred_candidates
 
+
+def _select_inferred_edges(
+    inferred_candidates: list[tuple],
+    node_strength: dict[str, float],
+    direct_pairs: set[tuple[str, str]],
+    keep_edges: list[dict],
+    keep_nodes: set[str],
+    seen: dict[tuple[str, str, str], dict],
+    dedupe_append: Callable[[list, dict, str | None, str | None, str, dict | None], None],
+) -> None:
+    """Add inferred edges up to each node's neighbour budget."""
     inferred_neighbor_counts: dict[str, int] = {}
     for src, dst, label, payload in inferred_candidates:
         pair = (src, dst) if src <= dst else (dst, src)
@@ -951,7 +1003,17 @@ def _project_semantic(
         inferred_neighbor_counts[src] = inferred_neighbor_counts.get(src, 0) + 1
         inferred_neighbor_counts[dst] = inferred_neighbor_counts.get(dst, 0) + 1
 
-    # Fallback for sparse results
+
+def _apply_sparse_fallback(
+    keep_edges: list[dict],
+    keep_nodes: set[str],
+    inferred_candidates: list[tuple],
+    node_strength: dict[str, float],
+    semantic_threshold: float,
+    seen: dict[tuple[str, str, str], dict],
+    dedupe_append: Callable[[list, dict, str | None, str | None, str, dict | None], None],
+) -> None:
+    """When too few edges survive, keep the strongest nodes and add fallbacks."""
     if len(keep_edges) < 6:
         for nid, _score in sorted(node_strength.items(), key=lambda item: item[1], reverse=True)[:18]:
             keep_nodes.add(nid)
@@ -977,9 +1039,38 @@ def _project_semantic(
         for nid, _score in sorted(node_strength.items(), key=lambda item: item[1], reverse=True)[:14]:
             keep_nodes.add(nid)
 
+
+def _project_semantic(
+    node_by_id: dict[str, dict],
+    edges: list[dict],
+    effective_threshold: float,
+    semantic_threshold: float,
+    is_curated_node: Callable[[dict], bool],
+    is_curated_edge: Callable[[dict, float], bool],
+    edge_endpoints: Callable[[dict], tuple[str | None, str | None]],
+    dedupe_append: Callable[[list, dict, str | None, str | None, str, dict | None], None],
+    enrich: Callable[[dict, str], dict],
+) -> dict:
+    """Semantic mode: aggressive curation with inferred co-occurrence edges."""
+    life_index = load_life_index()
+    concept_nodes = _collect_semantic_concepts(node_by_id, is_curated_node, life_index)
+    (direct_edges, summary_to_concepts, chunk_to_concepts,
+     concept_to_summaries, concept_to_chunks) = _collect_concept_links(
+        edges, node_by_id, concept_nodes, effective_threshold,
+        is_curated_edge, edge_endpoints)
+    inferred_scores = _score_cooccurrence(summary_to_concepts, chunk_to_concepts)
+    node_strength = _compute_node_strength(concept_nodes, concept_to_summaries, concept_to_chunks)
+    keep_edges, keep_nodes, seen, direct_pairs = _select_direct_edges(
+        direct_edges, node_strength, dedupe_append)
+    inferred_candidates = _build_inferred_candidates(inferred_scores, concept_nodes, node_strength)
+    _select_inferred_edges(inferred_candidates, node_strength, direct_pairs,
+                           keep_edges, keep_nodes, seen, dedupe_append)
+    _apply_sparse_fallback(keep_edges, keep_nodes, inferred_candidates, node_strength,
+                           semantic_threshold, seen, dedupe_append)
+
     return enrich({
         # Emit the canonical-biased copies (canonical label/type/slug/path
-        # computed by apply_canonical_bias).  Using node_by_id here discarded
+        # computed by _apply_canonical_bias).  Using node_by_id here discarded
         # that work, so the served graph never showed canonical labels.
         "nodes": [concept_nodes.get(nid) or node_by_id[nid]
                   for nid in keep_nodes if nid in node_by_id],

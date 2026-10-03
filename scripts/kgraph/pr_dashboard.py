@@ -59,128 +59,143 @@ def generate_pr_dashboard(repo_root: str, **kwargs) -> str:
     return html
 
 
-def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int) -> dict:
-    """Run git commands to gather PR/merge/commit data."""
-    since = f'--since={days}.days.ago'
+def _run_git(cmd: list[str], repo_root: str, what: str) -> tuple[str | None, str | None]:
+    """Run one git command for the dashboard.
 
-    # Merge commits (PR-like merges)
-    merge_cmd = [
+    Returns ``(stdout, None)`` on success, or ``(None, error_message)`` when the
+    command could not be run — logging the failure either way, because a
+    dashboard that silently shows zero rows looks identical to a repo that has
+    none.
+    """
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                cwd=repo_root, check=False)
+        return result.stdout, None
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("Failed to %s for dashboard: %s", what, exc)
+        return None, str(exc)
+
+
+def _parse_git_records(stdout: str) -> list[dict]:
+    """Parse ``%H|%an|%ae|%ai|%s`` lines into commit/merge record dicts."""
+    records = []
+    for line in stdout.strip().split('\n'):
+        if not line.strip():
+            continue
+        parts = line.split('|', 4)
+        if len(parts) >= 5:
+            records.append({
+                'hash': parts[0],
+                'author_name': parts[1],
+                'author_email': parts[2],
+                'date': parts[3],
+                'subject': parts[4],
+            })
+    return records
+
+
+def _git_merges(repo_root: str, since: str, max_prs: int) -> list[dict]:
+    """PR-like merge commits."""
+    cmd = [
         'git', 'log', since, '--merges', '--first-parent',
         '--format=%H|%an|%ae|%ai|%s',
         f'--max-count={max_prs}',
     ]
+    stdout, error = _run_git(cmd, repo_root, "list merges")
+    if error is not None:
+        # Surface it in the returned data as well as the log.
+        return [{'error': error}]
+    return _parse_git_records(stdout or '')
 
-    merges = []
-    try:
-        result = subprocess.run(merge_cmd, capture_output=True, text=True,
-                                cwd=repo_root, check=False)
-        for line in result.stdout.strip().split('\n'):
-            if not line.strip():
-                continue
-            parts = line.split('|', 4)
-            if len(parts) >= 5:
-                merges.append({
-                    'hash': parts[0],
-                    'author_name': parts[1],
-                    'author_email': parts[2],
-                    'date': parts[3],
-                    'subject': parts[4],
-                })
-    except (OSError, subprocess.SubprocessError) as e:
-        # Surface it in the returned data AND the log: a dashboard that silently
-        # shows zero merges looks identical to a repo that has none.
-        logger.warning("Failed to list merges for dashboard: %s", e)
-        merges = [{'error': str(e)}]
 
-    # Recent commits (non-merge)
-    commit_cmd = [
+def _git_commits(repo_root: str, since: str, author: str | None) -> list[dict]:
+    """Recent non-merge commits, optionally filtered to one author."""
+    cmd = [
         'git', 'log', since,
         '--format=%H|%an|%ae|%ai|%s',
         '--max-count=100',
     ]
     if author:
-        commit_cmd.append(f'--author={author}')
+        cmd.append(f'--author={author}')
+    stdout, error = _run_git(cmd, repo_root, "list recent commits")
+    if error is not None:
+        return []
+    return _parse_git_records(stdout or '')
 
-    commits = []
-    try:
-        result = subprocess.run(commit_cmd, capture_output=True, text=True,
-                                cwd=repo_root, check=False)
-        for line in result.stdout.strip().split('\n'):
-            if not line.strip():
-                continue
-            parts = line.split('|', 4)
-            if len(parts) >= 5:
-                commits.append({
-                    'hash': parts[0],
-                    'author_name': parts[1],
-                    'author_email': parts[2],
-                    'date': parts[3],
-                    'subject': parts[4],
-                })
-    except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning("Failed to list recent commits for dashboard: %s", exc)
 
-    # Files changed recently.  Use the same date window as the commit queries
-    # above via `git log --name-status`: `git diff @{N.days.ago}` is a reflog
-    # selector, which resolves to the wrong commit (or errors) on a fresh
-    # clone / CI checkout and after reflog expiry.
-    recent_files = []
+def _git_recent_files(repo_root: str, since: str) -> list[dict]:
+    """Files changed in the window, deduplicated, via `git log --name-status`.
+
+    `git diff @{N.days.ago}` is a reflog selector, which resolves to the wrong
+    commit (or errors) on a fresh clone / CI checkout and after reflog expiry,
+    so the same date window is applied through `git log` instead.
+    """
+    cmd = ['git', 'log', since, '--name-status', '--no-renames', '--format=']
+    stdout, error = _run_git(cmd, repo_root, "list recently changed files")
+    if error is not None:
+        return []
+    recent_files: list[dict] = []
     seen_paths: set[str] = set()
-    try:
-        result = subprocess.run(
-            ['git', 'log', since, '--name-status', '--no-renames', '--format='],
-            capture_output=True, text=True, cwd=repo_root, check=False,
-        )
-        for line in result.stdout.splitlines():
-            parts = line.split('\t', 1)
-            if len(parts) != 2 or not parts[1].strip():
-                continue
-            path = parts[1].strip()
-            if path in seen_paths:
-                continue
-            seen_paths.add(path)
-            recent_files.append({'status': parts[0].strip(), 'path': path})
-    except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning("Failed to list recently changed files: %s", exc)
+    for line in (stdout or '').splitlines():
+        parts = line.split('\t', 1)
+        if len(parts) != 2 or not parts[1].strip():
+            continue
+        path = parts[1].strip()
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        recent_files.append({'status': parts[0].strip(), 'path': path})
+    return recent_files
 
-    # Active branches
-    branch_cmd = ['git', 'branch', '-a', '--sort=-committerdate']
+
+def _git_branches(repo_root: str) -> list[dict]:
+    """Active branches, newest first, with the current one marked."""
+    cmd = ['git', 'branch', '-a', '--sort=-committerdate']
+    stdout, error = _run_git(cmd, repo_root, "list active branches")
+    if error is not None:
+        return []
     branches = []
-    try:
-        result = subprocess.run(branch_cmd, capture_output=True, text=True,
-                                cwd=repo_root, check=False)
-        for line in result.stdout.strip().split('\n'):
-            line = line.strip()
-            if line:
-                is_current = line.startswith('* ')
-                branches.append({
-                    'name': line.lstrip('* ').strip(),
-                    'current': is_current,
-                })
-    except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning("Failed to list active branches: %s", exc)
+    for line in (stdout or '').strip().split('\n'):
+        line = line.strip()
+        if line:
+            branches.append({
+                'name': line.lstrip('* ').strip(),
+                'current': line.startswith('* '),
+            })
+    return branches
 
-    # Authors. NOTE: `git shortlog -sne --format=...` ignores --format and prints
-    # "count<TAB>Name <email>", and with no revision range it reads STDIN — empty
-    # for a subprocess with a closed stdin, which left the authors map empty.
-    # `git log --format` is deterministic and needs no parsing.
-    author_cmd = [
-        'git', 'log', since,
-        '--format=%an|%ae',
-    ]
-    authors = {}
-    try:
-        result = subprocess.run(author_cmd, capture_output=True, text=True,
-                                cwd=repo_root, check=False)
-        for line in result.stdout.strip().split('\n'):
-            if not line.strip():
-                continue
-            name, _, email = line.strip().partition('|')
-            name = name.strip()
-            if name:
-                authors[name] = email.strip()
-    except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning("Failed to get authors list: %s", exc)
+
+def _git_authors(repo_root: str, since: str) -> dict[str, str]:
+    """Author name → email, from `git log --format`.
+
+    NOTE: `git shortlog -sne --format=...` ignores --format and prints
+    "count<TAB>Name <email>", and with no revision range it reads STDIN — empty
+    for a subprocess with a closed stdin, which left the authors map empty.
+    `git log --format` is deterministic and needs no parsing.
+    """
+    cmd = ['git', 'log', since, '--format=%an|%ae']
+    stdout, error = _run_git(cmd, repo_root, "get authors list")
+    if error is not None:
+        return {}
+    authors: dict[str, str] = {}
+    for line in (stdout or '').strip().split('\n'):
+        if not line.strip():
+            continue
+        name, _, email = line.strip().partition('|')
+        name = name.strip()
+        if name:
+            authors[name] = email.strip()
+    return authors
+
+
+def _gather_git_data(repo_root: str, days: int, author: str | None, max_prs: int) -> dict:
+    """Run git commands to gather PR/merge/commit data."""
+    since = f'--since={days}.days.ago'
+    merges = _git_merges(repo_root, since, max_prs)
+    commits = _git_commits(repo_root, since, author)
+    recent_files = _git_recent_files(repo_root, since)
+    branches = _git_branches(repo_root)
+    authors = _git_authors(repo_root, since)
 
     return {
         'merges': merges,
@@ -231,11 +246,8 @@ def _correlate_with_graph(git_data: dict, graph: dict | None) -> list[dict]:
     return deduped[:50]
 
 
-def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, days: int) -> str:
-    """Generate the full HTML dashboard."""
-    repo_name = escape(os.path.basename(repo_root))
-    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
-
+def _merges_table(git_data: dict) -> str:
+    """Recent merge rows (capped at 20)."""
     merges_table = ''
     for m in git_data.get('merges', [])[:20]:
         merges_table += f'''
@@ -245,7 +257,11 @@ def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, da
             <td>{escape(m.get('subject', '')[:80])}</td>
             <td>{escape(m.get('date', '')[:10])}</td>
         </tr>'''
+    return merges_table
 
+
+def _commits_table(git_data: dict) -> str:
+    """Recent commit rows (capped at 30)."""
     commits_table = ''
     for c in git_data.get('commits', [])[:30]:
         commits_table += f'''
@@ -255,7 +271,11 @@ def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, da
             <td>{escape(c.get('subject', '')[:80])}</td>
             <td>{escape(c.get('date', '')[:10])}</td>
         </tr>'''
+    return commits_table
 
+
+def _files_list(git_data: dict) -> str:
+    """Changed-file list items (capped at 40), each with a status badge."""
     files_list = ''
     for f in git_data.get('recent_files', [])[:40]:
         status_class = f.get('status', 'M')
@@ -270,12 +290,20 @@ def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, da
         else:
             badge = f'<span class="badge">{escape(status_class)}</span>'
         files_list += f'<li>{badge} {escape(f.get("path", ""))}</li>'
+    return files_list
 
+
+def _branches_list(git_data: dict) -> str:
+    """Branch list items (capped at 15), the current one marked."""
     branches_list = ''
     for b in git_data.get('branches', [])[:15]:
         marker = '<strong>▶</strong> ' if b.get('current') else ''
         branches_list += f'<li>{marker}{escape(b.get("name", ""))}</li>'
+    return branches_list
 
+
+def _correlations_table(correlations: list) -> str:
+    """Graph-correlation rows (capped at 20)."""
     correlations_table = ''
     for c in correlations[:20]:
         correlations_table += f'''
@@ -284,10 +312,54 @@ def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, da
             <td>{escape(str(c.get('node_label', '')))}</td>
             <td>{escape(str(c.get('node_type', '')))}</td>
         </tr>'''
+    return correlations_table
 
+
+def _authors_list(git_data: dict) -> str:
+    """Author list items (name <email>)."""
     authors_list = ''
     for name, email in git_data.get('authors', {}).items():
         authors_list += f'<li>{escape(str(name))} &lt;{escape(str(email))}&gt;</li>'
+    return authors_list
+
+
+_DASHBOARD_CSS = """
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, sans-serif; background: #f8fafc; color: #1e293b; padding: 24px; }
+        header { margin-bottom: 24px; }
+        h1 { font-size: 22px; color: #0f172a; }
+        .subtitle { color: #64748b; font-size: 13px; }
+        .stats { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
+        .stat { background: #fff; border-radius: 8px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); min-width: 120px; }
+        .stat-value { font-size: 28px; font-weight: 700; color: #0f172a; }
+        .stat-label { font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+        .card { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .card h2 { font-size: 15px; color: #334155; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid #f1f5f9; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #f1f5f9; }
+        th { background: #f8fafc; font-weight: 600; color: #64748b; font-size: 11px; text-transform: uppercase; }
+        td code { font-size: 11px; background: #f1f5f9; padding: 1px 4px; border-radius: 3px; }
+        ul { list-style: none; padding: 0; }
+        li { padding: 4px 0; font-size: 13px; }
+        .badge { display: inline-block; width: 20px; height: 20px; text-align: center; line-height: 20px; border-radius: 4px; font-size: 11px; font-weight: 700; margin-right: 6px; }
+        .badge.added { background: #d1fae5; color: #065f46; }
+        .badge.deleted { background: #fee2e2; color: #991b1b; }
+        .badge.modified { background: #fef3c7; color: #92400e; }
+        .badge.renamed { background: #e0e7ff; color: #3730a3; }
+        .tab { display: inline-block; padding: 6px 14px; font-size: 13px; cursor: pointer; border-radius: 6px 6px 0 0; background: #f1f5f9; color: #64748b; margin-right: 2px; }
+        .tab.active { background: #fff; color: #0f172a; font-weight: 600; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .scroll { max-height: 400px; overflow: auto; }
+    """
+
+
+def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, days: int) -> str:
+    """Generate the full HTML dashboard."""
+    repo_name = escape(os.path.basename(repo_root))
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
     html = f'''<!doctype html>
 <html>
@@ -295,37 +367,7 @@ def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, da
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PR Dashboard — {repo_name}</title>
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ font-family: system-ui, -apple-system, sans-serif; background: #f8fafc; color: #1e293b; padding: 24px; }}
-        header {{ margin-bottom: 24px; }}
-        h1 {{ font-size: 22px; color: #0f172a; }}
-        .subtitle {{ color: #64748b; font-size: 13px; }}
-        .stats {{ display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }}
-        .stat {{ background: #fff; border-radius: 8px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); min-width: 120px; }}
-        .stat-value {{ font-size: 28px; font-weight: 700; color: #0f172a; }}
-        .stat-label {{ font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }}
-        .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
-        @media (max-width: 800px) {{ .grid {{ grid-template-columns: 1fr; }} }}
-        .card {{ background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
-        .card h2 {{ font-size: 15px; color: #334155; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid #f1f5f9; }}
-        table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
-        th, td {{ text-align: left; padding: 6px 8px; border-bottom: 1px solid #f1f5f9; }}
-        th {{ background: #f8fafc; font-weight: 600; color: #64748b; font-size: 11px; text-transform: uppercase; }}
-        td code {{ font-size: 11px; background: #f1f5f9; padding: 1px 4px; border-radius: 3px; }}
-        ul {{ list-style: none; padding: 0; }}
-        li {{ padding: 4px 0; font-size: 13px; }}
-        .badge {{ display: inline-block; width: 20px; height: 20px; text-align: center; line-height: 20px; border-radius: 4px; font-size: 11px; font-weight: 700; margin-right: 6px; }}
-        .badge.added {{ background: #d1fae5; color: #065f46; }}
-        .badge.deleted {{ background: #fee2e2; color: #991b1b; }}
-        .badge.modified {{ background: #fef3c7; color: #92400e; }}
-        .badge.renamed {{ background: #e0e7ff; color: #3730a3; }}
-        .tab {{ display: inline-block; padding: 6px 14px; font-size: 13px; cursor: pointer; border-radius: 6px 6px 0 0; background: #f1f5f9; color: #64748b; margin-right: 2px; }}
-        .tab.active {{ background: #fff; color: #0f172a; font-weight: 600; }}
-        .tab-content {{ display: none; }}
-        .tab-content.active {{ display: block; }}
-        .scroll {{ max-height: 400px; overflow: auto; }}
-    </style>
+    <style>{_DASHBOARD_CSS}</style>
 </head>
 <body>
 <header>
@@ -358,7 +400,7 @@ def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, da
         <div class="scroll">
         <table>
             <tr><th>Hash</th><th>Author</th><th>Subject</th><th>Date</th></tr>
-            {merges_table}
+            {_merges_table(git_data)}
         </table>
         </div>
     </div>
@@ -367,23 +409,23 @@ def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, da
         <div class="scroll">
         <table>
             <tr><th>Hash</th><th>Author</th><th>Subject</th><th>Date</th></tr>
-            {commits_table}
+            {_commits_table(git_data)}
         </table>
         </div>
     </div>
     <div class="card">
         <h2>Files Changed</h2>
-        <div class="scroll"><ul>{files_list}</ul></div>
+        <div class="scroll"><ul>{_files_list(git_data)}</ul></div>
     </div>
     <div class="card">
         <h2>Active Branches</h2>
-        <div class="scroll"><ul>{branches_list}</ul></div>
+        <div class="scroll"><ul>{_branches_list(git_data)}</ul></div>
     </div>
 </div>
 
 <div class="card" style="margin-top:16px;">
     <h2>Authors ({len(git_data.get('authors', {}))})</h2>
-    <ul>{authors_list}</ul>
+    <ul>{_authors_list(git_data)}</ul>
 </div>
 
 <div class="card" style="margin-top:16px;">
@@ -392,7 +434,7 @@ def _build_dashboard_html(git_data: dict, correlations: list, repo_root: str, da
     <div class="scroll">
     <table>
         <tr><th>File</th><th>Node Label</th><th>Type</th></tr>
-        {correlations_table}
+        {_correlations_table(correlations)}
     </table>
     </div>
 </div>

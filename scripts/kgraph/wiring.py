@@ -16,6 +16,7 @@ import ast
 import re
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -121,25 +122,53 @@ def _is_subprocess_consumed(rel_path: Path, sources: dict[Path, str]) -> bool:
     return any(needle in text for path, text in sources.items() if path != rel_path)
 
 
-# ── analysis ───────────────────────────────────────────────────────────
+def _arg_string(node: ast.Call) -> str | None:
+    if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+        return node.args[0].value
+    for kw in node.keywords:
+        if kw.arg == "name" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+            return kw.value.value
+    return None
 
 
-def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
-                   entry_dirs: tuple[str, ...] = ("scripts",)) -> dict[str, Any]:
-    """Analyze a Python source tree for wiring anomalies.
+# ── scan state ─────────────────────────────────────────────────────────
 
-    Args:
-        repo_root: Filesystem path to the repository root.
-        skip_dirs: Additional directory names to skip (defaults merged).
-        entry_dirs: Top-level directories whose modules are entry points
-            (expected to have no importers), e.g. ``("scripts",)``.
 
-    Returns:
-        A structured report dict with per-category findings.
-    """
-    root = Path(repo_root).resolve()
-    skip = DEFAULT_SKIP_DIRS | set(skip_dirs or ())
+@dataclass
+class _SourceScan:
+    """The files found under the root, and their module names."""
 
+    files: list[Path]
+    module_to_path: dict[str, Path]
+    path_to_module: dict[Path, str]
+
+
+@dataclass
+class _ImportScan:
+    """Everything learned by AST-walking the source files once."""
+
+    import_deps: dict[str, set[str]]
+    symbol_deps: dict[str, set[str]]
+    dynamic: dict[str, list[str]]
+    parse_failures: list[str]
+    source_texts: dict[Path, str]
+    main_guard_modules: set[str]
+
+
+@dataclass
+class _Namespace:
+    """The importable namespaces for the scanned tree."""
+
+    package_names: set[str]
+    top_packages: set[str]
+    entry_relative: dict[str, str]
+
+
+# ── named analysis passes ──────────────────────────────────────────────
+
+
+def _scan_sources(root: Path, skip: frozenset[str] | set[str]) -> _SourceScan:
+    """Collect the Python files under *root*, keyed by dotted module name."""
     files = [p for p in root.rglob("*.py") if not any(
         part in skip or part.startswith(".") for part in p.relative_to(root).parts)]
 
@@ -150,7 +179,12 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
         if m:
             module_to_path[m] = p
             path_to_module[p] = m
+    return _SourceScan(files=files, module_to_path=module_to_path,
+                       path_to_module=path_to_module)
 
+
+def _collect_imports(scan: _SourceScan, root: Path) -> _ImportScan:
+    """Walk every source file once, collecting imports and call metadata."""
     import_deps: dict[str, set[str]] = defaultdict(set)
     symbol_deps: dict[str, set[str]] = defaultdict(set)
     dynamic: dict[str, list[str]] = defaultdict(list)
@@ -160,8 +194,8 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
     #: modules with an ``if __name__ == "__main__":`` guard (entry points).
     main_guard_modules: set[str] = set()
 
-    for p in files:
-        m = path_to_module.get(p)
+    for p in scan.files:
+        m = scan.path_to_module.get(p)
         if not m:
             continue
         try:
@@ -203,10 +237,18 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
                         and f.value.id in ("importlib", "pkgutil"):
                     dynamic[m].append(f"{f.value.id}.{f.attr}")
 
+    return _ImportScan(import_deps=import_deps, symbol_deps=symbol_deps,
+                       dynamic=dynamic, parse_failures=parse_failures,
+                       source_texts=source_texts,
+                       main_guard_modules=main_guard_modules)
+
+
+def _build_namespace(scan: _SourceScan, entry_dirs: tuple[str, ...]) -> _Namespace:
+    """Build the package, top-package and entry-relative name namespaces."""
     # Every dotted prefix of a local module is an importable package
     # (covers namespace packages — directories without __init__.py).
     package_names: set[str] = set()
-    for mod in module_to_path:
+    for mod in scan.module_to_path:
         parts = mod.split(".")
         for i in range(1, len(parts) + 1):
             package_names.add(".".join(parts[:i]))
@@ -217,54 +259,69 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
     # the entry dir sits on sys.path.  Map entry-relative names back to the
     # path-based module names so imports resolve against the real namespace.
     entry_relative: dict[str, str] = {}
-    for mod in module_to_path:
+    for mod in scan.module_to_path:
         first, _sep, rest = mod.partition(".")
         if first in entry_dirs and rest:
             entry_relative[rest] = mod
 
-    def _resolve_local(mod: str) -> str | None:
-        """Resolve a module name to the longest local module/package prefix.
+    return _Namespace(package_names=package_names, top_packages=top_packages,
+                      entry_relative=entry_relative)
 
-        Consults both the path-based namespace (``scripts.kgraph``) and the
-        entry-relative namespace (``kgraph``) so ``from kgraph.query import
-        query_nodes`` resolves to ``scripts.kgraph.query``.
-        """
-        if mod in module_to_path or mod in package_names:
-            return mod
-        if mod in entry_relative:
-            return entry_relative[mod]
-        prefix = mod
-        while "." in prefix:
-            prefix = prefix.rsplit(".", 1)[0]
-            if prefix in module_to_path or prefix in package_names:
-                return prefix
-            if prefix in entry_relative:
-                return entry_relative[prefix]
-        return None
 
+def _resolve_local(mod: str, scan: _SourceScan, ns: _Namespace) -> str | None:
+    """Resolve a module name to the longest local module/package prefix.
+
+    Consults both the path-based namespace (``scripts.kgraph``) and the
+    entry-relative namespace (``kgraph``) so ``from kgraph.query import
+    query_nodes`` resolves to ``scripts.kgraph.query``.
+    """
+    if mod in scan.module_to_path or mod in ns.package_names:
+        return mod
+    if mod in ns.entry_relative:
+        return ns.entry_relative[mod]
+    prefix = mod
+    while "." in prefix:
+        prefix = prefix.rsplit(".", 1)[0]
+        if prefix in scan.module_to_path or prefix in ns.package_names:
+            return prefix
+        if prefix in ns.entry_relative:
+            return ns.entry_relative[prefix]
+    return None
+
+
+def _resolve_dependencies(
+    scan: _SourceScan, imports: _ImportScan, ns: _Namespace,
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Resolve import targets to local modules, splitting out broken imports."""
     # Real import targets must exist exactly (as a module or namespace
     # package); a missing module under a local top-level package is a
     # broken import.  Prefix resolution only applies to symbol deps below.
     local_dep: dict[str, set[str]] = defaultdict(set)
     broken: dict[str, set[str]] = defaultdict(set)
-    for m, mods in import_deps.items():
+    for m, mods in imports.import_deps.items():
         for mod in mods:
-            if mod in module_to_path or mod in package_names:
+            if mod in scan.module_to_path or mod in ns.package_names:
                 local_dep[m].add(mod)
-            elif mod in entry_relative:
-                local_dep[m].add(entry_relative[mod])
-            elif mod.split(".")[0] in top_packages:
+            elif mod in ns.entry_relative:
+                local_dep[m].add(ns.entry_relative[mod])
+            elif mod.split(".")[0] in ns.top_packages:
                 broken[m].add(mod)
 
     # Symbol expansions (``from X import Y``) resolve via longest prefix;
     # they are not module targets, so a missing symbol is never "broken"
     # at the import level (could be an attribute import).
-    for m, mods in symbol_deps.items():
+    for m, mods in imports.symbol_deps.items():
         for mod in mods:
-            resolved = _resolve_local(mod)
+            resolved = _resolve_local(mod, scan, ns)
             if resolved is not None:
                 local_dep[m].add(resolved)
+    return local_dep, broken
 
+
+def _collect_importers(
+    local_dep: dict[str, set[str]], scan: _SourceScan, ns: _Namespace,
+) -> dict[str, set[str]]:
+    """Invert ``local_dep`` into module → importers, incl. ancestor packages."""
     importers: dict[str, set[str]] = defaultdict(set)
     for m, mods in local_dep.items():
         for d in mods:
@@ -280,43 +337,50 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
                 prefix = prefix.rsplit(".", 1)[0]
                 if prefix == m:
                     break
-                if prefix in module_to_path or prefix in package_names:
+                if prefix in scan.module_to_path or prefix in ns.package_names:
                     importers[prefix].add(m)
+    return importers
 
-    def _reachable(start: str) -> set[str]:
-        seen: set[str] = set()
-        stack = [start]
-        while stack and len(seen) < 5000:
-            cur = stack.pop()
-            if cur in seen:
-                continue
-            seen.add(cur)
-            for dep in local_dep.get(cur, ()):
-                if dep not in seen:
-                    stack.append(dep)
-        return seen
 
-    def _is_interpreter_entry(m: str) -> bool:
-        """True when *m* is launched by the interpreter, not imported.
+def _reachable(start: str, local_dep: dict[str, set[str]]) -> set[str]:
+    """Modules reachable from *start* along resolved import edges (bounded)."""
+    seen: set[str] = set()
+    stack = [start]
+    while stack and len(seen) < 5000:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        for dep in local_dep.get(cur, ()):
+            if dep not in seen:
+                stack.append(dep)
+    return seen
 
-        A ``__main__`` guard (``python -m mod`` / ``python path/mod.py``)
-        or a string reference to its file path from another module
-        (subprocess execution) means the module is deliberately wired
-        outside the import graph.
-        """
-        if m in main_guard_modules:
-            return True
-        p = module_to_path[m]
-        return _is_subprocess_consumed(p.relative_to(root), source_texts)
 
-    # 1. orphan source modules
+def _is_interpreter_entry(m: str, scan: _SourceScan, imports: _ImportScan, root: Path) -> bool:
+    """True when *m* is launched by the interpreter, not imported.
+
+    A ``__main__`` guard (``python -m mod`` / ``python path/mod.py``)
+    or a string reference to its file path from another module
+    (subprocess execution) means the module is deliberately wired
+    outside the import graph.
+    """
+    if m in imports.main_guard_modules:
+        return True
+    p = scan.module_to_path[m]
+    return _is_subprocess_consumed(p.relative_to(root), imports.source_texts)
+
+
+def _find_orphans(scan: _SourceScan, root: Path, importers: dict[str, set[str]],
+                  imports: _ImportScan, entry_dirs: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Pass 1: source modules nobody imports."""
     orphans: list[dict[str, Any]] = []
-    for m in sorted(module_to_path):
+    for m in sorted(scan.module_to_path):
         if m in importers or m.startswith("tests."):
             continue
-        if _is_interpreter_entry(m):
+        if _is_interpreter_entry(m, scan, imports, root):
             continue
-        p = module_to_path[m]
+        p = scan.module_to_path[m]
         rel = p.relative_to(root)
         if _is_entry(rel.as_posix(), rel.parts):
             continue
@@ -324,48 +388,61 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
             continue
         orphans.append({"module": m, "path": rel.as_posix(), "lines": _line_count(p)})
     orphans.sort(key=lambda d: (-d["lines"], d["module"]))
+    return orphans
 
-    # 2. broken internal imports
+
+def _find_broken(broken: dict[str, set[str]]) -> list[dict[str, Any]]:
+    """Pass 2: internal imports of a module that does not exist."""
     broken_list: list[dict[str, Any]] = []
     for m in sorted(broken):
         for b in sorted(broken[m]):
             broken_list.append({"module": m, "import": b})
     broken_list.sort(key=lambda d: (d["module"], d["import"]))
+    return broken_list
 
-    # 3. weak wiring — source modules imported only from tests/
+
+def _find_weak(scan: _SourceScan, root: Path, importers: dict[str, set[str]],
+               imports: _ImportScan) -> list[dict[str, Any]]:
+    """Pass 3: source modules imported only from tests/."""
     weak: list[dict[str, Any]] = []
-    for m in sorted(module_to_path):
+    for m in sorted(scan.module_to_path):
         if m.startswith(("tests.", "scripts.", "config.")):
             continue
-        if m in main_guard_modules:
+        if m in imports.main_guard_modules:
             # interpreter-launched entry point (python -m), not weak wiring
             continue
         imp = importers.get(m, set())
         if imp and all(i.startswith("tests.") for i in imp):
-            p = module_to_path[m]
+            p = scan.module_to_path[m]
             weak.append({"module": m, "path": p.relative_to(root).as_posix(),
                          "lines": _line_count(p), "importers": sorted(imp)})
     weak.sort(key=lambda d: (-d["lines"], d["module"]))
+    return weak
 
-    # 4. unused package facades — package __init__ never imported directly
+
+def _find_facades(scan: _SourceScan, root: Path,
+                  importers: dict[str, set[str]]) -> list[dict[str, Any]]:
+    """Pass 4: package __init__ files never imported directly."""
     facades: list[dict[str, Any]] = []
-    for m in sorted(module_to_path):
-        p = module_to_path[m]
+    for m in sorted(scan.module_to_path):
+        p = scan.module_to_path[m]
         if p.name != "__init__.py":
             continue
         if m in importers:
             continue
-        submodules = {k for k, v in module_to_path.items()
+        submodules = {k for k, v in scan.module_to_path.items()
                       if k.startswith(m + ".") and v.name != "__init__.py"}
         facades.append({"package": m, "path": p.relative_to(root).as_posix(),
                         "lines": _line_count(p), "submodules": len(submodules)})
     facades.sort(key=lambda d: (-d["lines"], d["package"]))
+    return facades
 
-    # 5. cross-file call gaps — call to a name defined elsewhere with no
-    #    (transitive) import path from the caller to the definer.
+
+def _collect_defined_in(scan: _SourceScan) -> dict[str, set[str]]:
+    """Module → names of functions/classes defined there."""
     defined_in: dict[str, set[str]] = defaultdict(set)
-    for p in files:
-        m = path_to_module.get(p)
+    for p in scan.files:
+        m = scan.path_to_module.get(p)
         if not m:
             continue
         try:
@@ -375,10 +452,14 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 defined_in[m].add(node.name)
+    return defined_in
 
+
+def _collect_calls_from(scan: _SourceScan) -> dict[str, set[str]]:
+    """Name → modules that call it as a bare (``ast.Name``) call."""
     calls_from: dict[str, set[str]] = defaultdict(set)
-    for p in files:
-        m = path_to_module.get(p)
+    for p in scan.files:
+        m = scan.path_to_module.get(p)
         if not m:
             continue
         try:
@@ -388,41 +469,65 @@ def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 calls_from[node.func.id].add(m)
+    return calls_from
 
+
+def _find_cross_gaps(defined_in: dict[str, set[str]], calls_from: dict[str, set[str]],
+                     local_dep: dict[str, set[str]]) -> list[dict[str, Any]]:
+    """Pass 5: call to a name defined elsewhere with no import path to it."""
     cross_gaps: list[dict[str, Any]] = []
     for name, definers in sorted(defined_in.items()):
         callers = calls_from.get(name, set())
         if not callers:
             continue
         for definer in sorted(definers):
-            reach = _reachable(definer)
+            reach = _reachable(definer, local_dep)
             for caller in sorted(callers):
                 if caller == definer or caller in reach:
                     continue
                 cross_gaps.append({"name": name, "definer": definer, "caller": caller})
     cross_gaps.sort(key=lambda d: (d["name"], d["definer"], d["caller"]))
+    return cross_gaps
+
+
+# ── analysis ───────────────────────────────────────────────────────────
+
+
+def analyze_wiring(repo_root: str, *, skip_dirs: set[str] | None = None,
+                   entry_dirs: tuple[str, ...] = ("scripts",)) -> dict[str, Any]:
+    """Analyze a Python source tree for wiring anomalies.
+
+    Args:
+        repo_root: Filesystem path to the repository root.
+        skip_dirs: Additional directory names to skip (defaults merged).
+        entry_dirs: Top-level directories whose modules are entry points
+            (expected to have no importers), e.g. ``("scripts",)``.
+
+    Returns:
+        A structured report dict with per-category findings.
+    """
+    root = Path(repo_root).resolve()
+    skip = DEFAULT_SKIP_DIRS | set(skip_dirs or ())
+
+    scan = _scan_sources(root, skip)
+    imports = _collect_imports(scan, root)
+    ns = _build_namespace(scan, entry_dirs)
+    local_dep, broken = _resolve_dependencies(scan, imports, ns)
+    importers = _collect_importers(local_dep, scan, ns)
 
     return {
         "repo": str(root),
-        "modules": len(module_to_path),
-        "files": len(files),
-        "parse_failures": parse_failures,
-        "orphan_modules": orphans,
-        "broken_imports": broken_list,
-        "weak_wiring": weak,
-        "unused_facades": facades,
-        "cross_file_call_gaps": cross_gaps,
-        "dynamic_import_sites": {m: sorted(v) for m, v in sorted(dynamic.items()) if v},
+        "modules": len(scan.module_to_path),
+        "files": len(scan.files),
+        "parse_failures": imports.parse_failures,
+        "orphan_modules": _find_orphans(scan, root, importers, imports, entry_dirs),
+        "broken_imports": _find_broken(broken),
+        "weak_wiring": _find_weak(scan, root, importers, imports),
+        "unused_facades": _find_facades(scan, root, importers),
+        "cross_file_call_gaps": _find_cross_gaps(
+            _collect_defined_in(scan), _collect_calls_from(scan), local_dep),
+        "dynamic_import_sites": {m: sorted(v) for m, v in sorted(imports.dynamic.items()) if v},
     }
-
-
-def _arg_string(node: ast.Call) -> str | None:
-    if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
-        return node.args[0].value
-    for kw in node.keywords:
-        if kw.arg == "name" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-            return kw.value.value
-    return None
 
 
 # ── reporting ──────────────────────────────────────────────────────────

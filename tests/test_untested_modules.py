@@ -513,6 +513,58 @@ class TestGraphServerPost(unittest.TestCase):
         self.assertEqual(self._node_ids(), {"a", "b", "c"})
 
 
+class TestGraphHandlerConstruction(unittest.TestCase):
+    """The HTTP handler is module-level and buildable without serve_file.
+
+    Catches: a refactor that re-nests request handling inside serve_file (the
+    card's original 312-line nested class), which makes the handler unreachable
+    from tests and forces every case through a listener.  Also catches a
+    factory that shares one rate-limiter list across servers.
+    """
+
+    def test_module_level_handler_serves_without_serve_file(self):
+        from kgraph.server import GraphRequestHandler, build_graph_handler
+
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        db = os.path.join(td.name, "graph.sqlite")
+        kgraph.save_to_graph_db(db, _SMALL_GRAPH)
+
+        handler_cls = build_graph_handler(
+            serve_dir=os.getcwd(), store=os.path.join(td.name, "missing.json"),
+            graph_db=db, view_mode="topics", semantic_threshold=0.9, memory_db=None)
+        self.assertTrue(issubclass(handler_cls, GraphRequestHandler))
+
+        httpd = HTTPServer(("127.0.0.1", 0), handler_cls)
+        self.addCleanup(httpd.server_close)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        conn = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=5)
+        try:
+            conn.request("GET", "/graph.json?view=topics")
+            resp = conn.getresponse()
+            body = resp.read()
+        finally:
+            conn.close()
+        self.assertEqual(resp.status, 200)
+        self.assertIn("nodes", json.loads(body))
+
+    def test_factory_gives_each_handler_its_own_rate_limiter(self):
+        from kgraph.server import build_graph_handler
+
+        first = build_graph_handler(
+            serve_dir=".", store="", graph_db="", view_mode="overview",
+            semantic_threshold=0.82, memory_db=None)
+        second = build_graph_handler(
+            serve_dir=".", store="", graph_db="", view_mode="raw",
+            semantic_threshold=0.5, memory_db=None)
+        self.assertEqual((first.view_mode, second.view_mode), ("overview", "raw"))
+        first._rl_requests.append(1.0)
+        # A list inherited from the base would leak the sliding window across
+        # servers, so the second factory's class must still be empty.
+        self.assertEqual(second._rl_requests, [])
+
+
 # ── report HTML escaping ───────────────────────────────────────────────
 
 
