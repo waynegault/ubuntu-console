@@ -7,6 +7,11 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+#   v49 (2026-10-03): the embedded JSON-parse helpers now invoke "${TAC_PYTHON:-python3}"
+#   instead of bare `python3`, so they use the project venv resolver 01-constants exports
+#   (TAC_PYTHON) when it exists and fall back to PATH python3 when it does not (card
+#   117e3303).  Behaviour is unchanged where TAC_PYTHON is unset — the fallback is the
+#   previous bare `python3`.
 #   v48 (2026-10-02): oc export-keys-nas is narrowed to the names the NAS actually reads
 #   (__oc_nas_export_names records which name, which NAS file reads it, and how it was
 #   measured) instead of shipping all 48 bridged names, and it now enforces mode 600 with a
@@ -70,7 +75,7 @@
 #   Both providers are BUNDLED (the bundle ships docs/providers/deepseek.md and ollama.md), so
 #   the apiKey-only overlay is schema-legal; a CUSTOM provider would be refused. The
 #   auth-profile store entries stay, as a second channel. Card OC-REFRESH-KEYS-AUTHPROFILE-001.
-# Module Version: 48
+# Module Version: 49
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -938,7 +943,7 @@ function __oc_apply_secret_refs() {
     # validated write) — and skip the patch entirely when nothing changed, so a
     # no-op refresh performs no config writes at all.
     local _patch_info _patch _applied=0 _skipped=0 _failed=0
-    _patch_info=$(python3 - <<'PYEOF'
+    _patch_info=$("${TAC_PYTHON:-python3}" - <<'PYEOF'
 import json, os, subprocess, sys
 entries = [
     # Web Search Plugin API Keys
@@ -1174,9 +1179,9 @@ if bridged:
 print(json.dumps({"patch": patch, "changed": changed, "skipped": skipped}))
 PYEOF
 )
-    _patch=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['patch']))" 2>/dev/null)
-    _applied=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['changed'])" 2>/dev/null)
-    _skipped=$(printf '%s' "$_patch_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['skipped'])" 2>/dev/null)
+    _patch=$(printf '%s' "$_patch_info" | "${TAC_PYTHON:-python3}" -c "import json,sys; print(json.dumps(json.load(sys.stdin)['patch']))" 2>/dev/null)
+    _applied=$(printf '%s' "$_patch_info" | "${TAC_PYTHON:-python3}" -c "import json,sys; print(json.load(sys.stdin)['changed'])" 2>/dev/null)
+    _skipped=$(printf '%s' "$_patch_info" | "${TAC_PYTHON:-python3}" -c "import json,sys; print(json.load(sys.stdin)['skipped'])" 2>/dev/null)
     if (( _applied > 0 )) && ! printf '%s' "$_patch" | openclaw config patch --stdin >/dev/null 2>&1; then
         _failed=$_applied
         _applied=0
@@ -1208,7 +1213,7 @@ PYEOF
     # One python process for ALL agents x profiles (was one subprocess per
     # agent per profile — 45 spawns). Merges into each store's 'primary' row.
     local _auth_info _auth_applied=0 _auth_skipped=0 _auth_failed=0 _auth_config_error="" _auth_msg=""
-    _auth_info=$(python3 - "$_agents_root" <<'PYEOF' 2>/dev/null
+    _auth_info=$("${TAC_PYTHON:-python3}" - "$_agents_root" <<'PYEOF' 2>/dev/null
 import json, os, sqlite3, sys, time
 agents_root = sys.argv[1]
 # Format: (profile_id, provider, cred_type, env_var)
@@ -1297,13 +1302,13 @@ print(json.dumps({
 }))
 PYEOF
 )
-    _auth_applied=$(printf '%s' "$_auth_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['stores_written'])" 2>/dev/null)
-    _auth_unchanged=$(printf '%s' "$_auth_info" | python3 -c "import json,sys; print(json.load(sys.stdin)['stores_unchanged'])" 2>/dev/null)
+    _auth_applied=$(printf '%s' "$_auth_info" | "${TAC_PYTHON:-python3}" -c "import json,sys; print(json.load(sys.stdin)['stores_written'])" 2>/dev/null)
+    _auth_unchanged=$(printf '%s' "$_auth_info" | "${TAC_PYTHON:-python3}" -c "import json,sys; print(json.load(sys.stdin)['stores_unchanged'])" 2>/dev/null)
     # Visible, never silent: without the config's default-agent id the "<provider>:default"
     # profile the runtime resolves is NOT written, and auth keeps failing.  No stderr
     # redirect here on purpose — a result this cannot parse is itself reported below.
     if ! _auth_config_error=$(printf '%s' "$_auth_info" \
-        | python3 -c "import json,sys; print(json.load(sys.stdin).get('config_error',''))")
+        | "${TAC_PYTHON:-python3}" -c "import json,sys; print(json.load(sys.stdin).get('config_error',''))")
     then
         _auth_config_error="<the auth-sync result could not be parsed>"
     fi
@@ -1349,7 +1354,7 @@ PYEOF
 function __oc_gateway_resolved_env_names() {
     local _cfg="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
     local _state="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
-    python3 - "$_cfg" "$_state" <<'PY' 2>/dev/null
+    "${TAC_PYTHON:-python3}" - "$_cfg" "$_state" <<'PY' 2>/dev/null
 import glob, json, os, re, shutil, sqlite3, sys, tempfile
 
 cfg_path, state = sys.argv[1], sys.argv[2]
