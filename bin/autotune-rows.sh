@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 # TRACKED HERE since 2026-10-01: this script lived only as a loose ~/.local/bin copy, so a
 # change to it was unversioned and unreviewable.  Code that is exclusively supportive of
 # ubuntu-console belongs in this repo; install.sh links every file in bin/ into
@@ -73,8 +73,14 @@ cd "$REPO" || exit 1
     echo "=== log: $LOG"
 } | tee -a "$LOG"
 
-touch "$SUSPEND"
-trap 'rm -f "$SUSPEND"' EXIT
+if ! _tac_suspend_acquire "$SUSPEND"; then
+    _owner_pid="$(_tac_suspend_owner_pid "$SUSPEND")"
+    echo "autotune-rows: REFUSING — $SUSPEND is held by a live run (owner pid ${_owner_pid:-unknown})" >&2
+    exit 1
+fi
+# Release only when THIS run owns the hold (card 7d3e7b95): the old trap removed a
+# hold it may not have set, releasing another run's hold mid-sweep.
+trap '_tac_suspend_release "$SUSPEND"' EXIT
 # swallow-ok: the lane may already be down, and a down lane is the state this line seeks either way
 systemctl --user stop "$LANE" >/dev/null 2>&1 || true
 

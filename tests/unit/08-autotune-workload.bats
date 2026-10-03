@@ -417,3 +417,38 @@ EOF
     [[ "$status" -eq 0 ]]
     [[ -z "$output" ]]
 }
+
+@test "cuda-suspend: live owner refuses, stale is taken over, release is owner-checked" {
+    # Card 7d3e7b95: /dev/shm/llama-watchdog-cuda.suspend used to be touch/rm with
+    # NO ownership, so a run could release another run's hold (lane back up
+    # mid-sweep) and an abort left the hold behind (lane down until someone
+    # noticed).  bin/_tac-bin-lib.sh now records the setter's pid; this exercises
+    # all three branches against a temp path (never the real /dev/shm file).
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    local f; f="$TMPDIR_BATS/thread.suspend"
+
+    # (1) fresh: this shell owns it, and release removes it.
+    _tac_suspend_acquire "$f"
+    [[ "$(_tac_suspend_owner_pid "$f")" == "$$" ]]
+    _tac_suspend_release "$f"
+    [[ ! -e "$f" ]]
+
+    # (2) a LIVE owner: acquire refuses, and a non-owner release leaves it.
+    sleep 30 &
+    local _live=$!
+    touch "$f"; printf '%s\n' "$_live" > "$f.owner"
+    local rc=0; _tac_suspend_acquire "$f" || rc=$?
+    [[ "$rc" -eq 1 ]]
+    [[ -e "$f" ]]
+    rc=0; _tac_suspend_release "$f" || rc=$?
+    [[ "$rc" -eq 1 ]]
+    [[ -e "$f" ]]
+
+    # (3) STALE owner (killed and reaped): taken over by this shell, then released.
+    kill "$_live" 2>/dev/null || true
+    wait "$_live" 2>/dev/null || true
+    _tac_suspend_acquire "$f"
+    [[ "$(_tac_suspend_owner_pid "$f")" == "$$" ]]
+    _tac_suspend_release "$f"
+    [[ ! -e "$f" ]]
+}

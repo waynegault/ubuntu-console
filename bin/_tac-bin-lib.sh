@@ -16,7 +16,7 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 3
 # ==============================================================================
 
 # log — one timestamped line, parameterised so every caller keeps its EXACT
@@ -57,6 +57,61 @@ _free_mib() {
 # it is existence-gated because `flock -n` also fails on a missing path.
 _inv_gpu_lock_path() {
     printf '%s\n' "${INVESTIGATOR_GPU_LOCK:-${INVESTIGATOR_PRODUCTION_OUTPUT:-$HOME/investigator/production}/runtime/gpu.lock}"
+}
+
+# ── CUDA-lane suspend ownership (card 7d3e7b95) ─────────────────────────────
+# /dev/shm/llama-watchdog-cuda.suspend holds the CUDA lane down while a bench or
+# autotune needs the card.  It used to be touch/rm with NO ownership: a run that
+# aborted left it behind (lane down forever), and a run that removed one it did
+# not set released ANOTHER run's hold mid-sweep.  The protocol: a run that sets
+# the file records its pid in a companion "<file>.owner", refuses to start when a
+# LIVE owner already holds it, and removes it only when this run owns it.
+_tac_suspend_owner_file() { printf '%s.owner\n' "$1"; }
+
+# The pid recorded for a suspend file, or empty when none/unreadable.
+_tac_suspend_owner_pid() {
+    local _owner
+    _owner="$(_tac_suspend_owner_file "$1")"
+    [[ -f "$_owner" ]] || return 0
+    tr -dc '0-9' < "$_owner" 2>/dev/null   # swallow-ok: an unreadable owner file yields empty, which the callers read as "no live owner" and take over
+}
+
+# True when the recorded owner pid is still alive.
+_tac_suspend_owner_alive() {
+    local _pid
+    _pid="$(_tac_suspend_owner_pid "$1")"
+    [[ -n "$_pid" ]] || return 1
+    kill -0 "$_pid" 2>/dev/null   # swallow-ok: a failed kill -0 IS the "not alive" answer the caller checks
+}
+
+# Acquire the hold: 0 = this run now owns it, 1 = a live owner holds it, 2 = the
+# file/owner could not be written.  A stale file (owner gone, or an older writer
+# that recorded nothing) is TAKEN OVER rather than refused, so a leftover cannot
+# wedge the lane down.
+_tac_suspend_acquire() {
+    local _f="$1" _owner
+    _owner="$(_tac_suspend_owner_file "$_f")"
+    if [[ -e "$_f" ]] && _tac_suspend_owner_alive "$_f"; then
+        return 1
+    fi
+    touch "$_f" 2>/dev/null || return 2   # swallow-ok: the failure IS reported as rc 2, which the caller turns into a refusal
+    if ! printf '%s\n' "$$" > "$_owner" 2>/dev/null; then   # swallow-ok: the `if !` tests the failure and returns 2
+        # An untracked hold is the bug this protocol exists to remove: drop it.
+        rm -f "$_f" 2>/dev/null   # swallow-ok: best-effort drop of an untracked hold; rc 2 reports the outcome
+        return 2   # 2 = could not record ownership; caller refuses to start
+    fi
+    return 0
+}
+
+# Release the hold ONLY when this run owns it: 0 = removed, 1 = not ours (left).
+_tac_suspend_release() {
+    local _f="$1" _owner
+    if [[ "$(_tac_suspend_owner_pid "$_f")" != "$$" ]]; then
+        return 1
+    fi
+    _owner="$(_tac_suspend_owner_file "$_f")"
+    rm -f "$_f" "$_owner" 2>/dev/null   # swallow-ok: `rm -f` is best-effort by definition; the return below is the result
+    return 0
 }
 
 # end of file

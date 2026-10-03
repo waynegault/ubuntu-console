@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 7
+#   v7 (2026-10-03): the release keeps a literal `rm -f "$SUSPEND"` in this file
+#   (owner-guarded) so state-contracts.yaml's invalidator check still sees it;
+#   the swallow sites in the shared lib are classified.
+#   v6 (2026-10-03): the CUDA-suspend hold is ownership-tracked (bin/_tac-bin-lib.sh):
+#   acquire records this run's pid and refuses when a live owner holds it, and an
+#   EXIT trap now releases it on any exit (an abort used to leave the lane down).
 #   v5 (2026-10-01): routes through bin/heavy-job so at most one saturating job runs on
 #   the box at a time — see the serialisation prologue after `set -uo pipefail`.
 # ==============================================================================
@@ -58,6 +64,11 @@ fi
 
 _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Shared suspend-ownership helpers — see bin/_tac-bin-lib.sh.  Sourced by
+# realpath so the repo path and any installed copy both resolve.
+# shellcheck source=../bin/_tac-bin-lib.sh
+source "$_SELF_DIR/../bin/_tac-bin-lib.sh"
+
 # Same env override and default as bin/llama-watchdog.sh — keep the two in step.
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 
@@ -78,8 +89,22 @@ _autotune_boot_id="$(tr -d '-' < /proc/sys/kernel/random/boot_id 2>/dev/null | c
 _cycle_file="/dev/shm/autotune-cuda-cycles-${_autotune_boot_id:-unknown}"
 cycle_now() { [[ -f "$_cycle_file" ]] && cat "$_cycle_file" 2>/dev/null || echo 0; }
 
-touch "$SUSPEND" || { echo "Cannot set $SUSPEND - refusing to start" >&2; exit 1; }
-echo "[retune] CUDA lane suspended for this chunk ($SUSPEND)"
+if ! _tac_suspend_acquire "$SUSPEND"; then
+    _owner_pid="$(_tac_suspend_owner_pid "$SUSPEND")"
+    echo "[retune] REFUSING: $SUSPEND is held by a live run (owner pid ${_owner_pid:-unknown}) - another bench may own the card." >&2
+    exit 1
+fi
+# release_suspend — remove the hold ONLY when THIS run owns it (card 7d3e7b95).
+# Silent, so it is safe as the EXIT trap; it keeps the literal delete here so
+# state-contracts.yaml's invalidator check can see retune still removes the path.
+release_suspend() {
+    [[ "$(_tac_suspend_owner_pid "$SUSPEND")" == "$$" ]] || return 0
+    rm -f "$SUSPEND" "$(_tac_suspend_owner_file "$SUSPEND")" 2>/dev/null  # swallow-ok: rm -f is best-effort and the owner check above is the guard
+}
+# Release on ANY exit, SIGINT/SIGTERM included: a hold left behind keeps the CUDA
+# lane down until someone notices, which is the failure this guards (card 7d3e7b95).
+trap release_suspend EXIT
+echo "[retune] CUDA lane suspended for this chunk ($SUSPEND, owner $$)"
 
 # The suspension file only tells the WATCHDOG to stand the lane down, and the
 # watchdog runs on a 300s timer — so for up to five minutes the lane still holds
@@ -90,10 +115,12 @@ echo "[retune] CUDA lane suspended for this chunk ($SUSPEND)"
 # ledger 0/60).  So stand the lane down HERE, and refuse to start a chunk if the
 # card cannot be freed.
 release_lane() {
-    if rm -f "$SUSPEND" 2>/dev/null; then
+    if [[ "$(_tac_suspend_owner_pid "$SUSPEND")" == "$$" ]]; then
+        release_suspend
         echo "[retune] CUDA lane released ($SUSPEND removed) - the watchdog may start it again"
     else
-        echo "[retune] WARNING: could not remove $SUSPEND - the CUDA lane stays down" >&2
+        # Not ours (or already released): leave another run's hold in place.
+        echo "[retune] $SUSPEND is held by another run - leaving it in place" >&2
     fi
 }
 
