@@ -1803,12 +1803,22 @@ EOF
 }
 
 @test "autotune: autotune-model.sh reads the shared LLM_MIN_TPS floor (default 10)" {
-    grep -q 'MIN_TPS=${LLM_MIN_TPS:-10}' "$REPO_ROOT/scripts/autotune-model.sh"
+    # EXECUTED: eval the script's own assignment line (extracted, not the whole
+    # top-level script, which would run a GPU bench) with LLM_MIN_TPS unset — the
+    # same technique the two env.sh floor tests above use. The eval reads the real
+    # line, so changing the default in the script fails this.
+    run bash -c 'unset LLM_MIN_TPS; eval "$(grep "^MIN_TPS=" "$1")"; printf "%s" "$MIN_TPS"' _ "$REPO_ROOT/scripts/autotune-model.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "10" ]
 }
 
-@test "autotune: autotune-model.sh downshifts ctx to recover TPS below the floor" {
-    grep -q 'Phase 4: filled-cache TPS floor recovery' "$REPO_ROOT/scripts/autotune-model.sh"
-    grep -q 'step ctx DOWN' "$REPO_ROOT/scripts/autotune-model.sh"
+@test "autotune: autotune-model.sh descends ctx through the tested descent helper" {
+    # Grep, not executed: scripts/autotune-model.sh runs top-level (no source
+    # guard), so its Phase-4 descent cannot be reached without a GPU bench. The
+    # descent ARITHMETIC is executed per push in tests/unit/13-gguf-ctx-bounds.bats;
+    # this asserts the script still routes the descent through that helper,
+    # bounded by MIN_CTX, rather than an ad-hoc x3/4 ladder.
+    grep -qF '__autotune_descent_candidates "$_dc" "$MIN_CTX"' "$REPO_ROOT/scripts/autotune-model.sh"
 }
 
 @test "llm-manager: model status supports json output" {

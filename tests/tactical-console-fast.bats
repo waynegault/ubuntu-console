@@ -498,25 +498,47 @@ __fast_member_shellcheck() {
 }
 
 @test "cross-script: watchdog has correct health endpoint" {
-    grep -q '/health' "$REPO_ROOT/bin/llama-watchdog.sh"
+    # Grep, not executed: bin/llama-watchdog.sh runs its whole body at top level
+    # (no source guard — it ends in `exit 0`), so calling health() would run the
+    # watchdog itself. The /health URL is the only static observable of the
+    # endpoint; reaching it by execution needs a live llama-server.
+    grep -q '127.0.0.1:${port}/health' "$REPO_ROOT/bin/llama-watchdog.sh"
 }
 
-@test "constants: LLAMA_DRIVE_ROOT not assigned twice" {
+@test "constants: LLAMA_DRIVE_ROOT resolves and is assigned once" {
+    # EXECUTED value: source the leaf module in a child shell (the suite stays
+    # static — one module, ~8ms, not the profile). The one-assignment half stays a
+    # grep because execution cannot observe it: two `export`s yield one value.
+    run bash -c 'source "$1/scripts/01-constants.sh" >/dev/null 2>&1; printf "%s" "$LLAMA_DRIVE_ROOT"' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
     local count
     count=$(grep -c '^export LLAMA_DRIVE_ROOT=' "$REPO_ROOT/scripts/01-constants.sh" || true)
     [[ "$count" -eq 1 ]]
 }
 
 @test "constants: COOLDOWN_WEEKLY is 604800 (7d)" {
-    grep -qP 'COOLDOWN_WEEKLY=604800' "$REPO_ROOT/scripts/01-constants.sh"
+    # EXECUTED: read the variable from the sourced leaf module in a child, so the
+    # suite stays static while the value under test is the one the module exports.
+    run bash -c 'source "$1/scripts/01-constants.sh" >/dev/null 2>&1; printf "%s" "$COOLDOWN_WEEKLY"' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [ "$output" = "604800" ]
 }
 
-@test "aliases: le and lo share __oc_journal_tail helper" {
-    grep -q '__oc_journal_tail' "$REPO_ROOT/scripts/04-aliases.sh"
-    local helper_count
-    helper_count=$(grep -c '__oc_journal_tail' "$REPO_ROOT/scripts/04-aliases.sh")
-    # definition + 2 call sites
-    [[ "$helper_count" -ge 3 ]]
+@test "aliases: le and lo call the shared __oc_journal_tail helper" {
+    # EXECUTED: source the two leaf modules in a child and inspect the DEFINED
+    # functions, so this asserts the wiring (le/lo actually call the helper) rather
+    # than that a string appears in the file.
+    run bash -c '
+        source "$1/scripts/01-constants.sh" >/dev/null 2>&1
+        source "$1/scripts/04-aliases.sh" >/dev/null 2>&1
+        declare -f __oc_journal_tail >/dev/null || exit 3
+        declare -f le | grep -q __oc_journal_tail || exit 4
+        declare -f lo | grep -q __oc_journal_tail || exit 5
+        printf OK
+    ' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [ "$output" = "OK" ]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -524,6 +546,9 @@ __fast_member_shellcheck() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 @test "bin: tac-exec sources env.sh" {
+    # Grep, not executed: tac-exec `source`s env.sh in-process and then execs "$@";
+    # the profile functions are NOT exported to the child, so a run cannot observe
+    # them. The source line is the only observable of this wiring.
     grep -q 'env.sh' "$REPO_ROOT/bin/tac-exec"
 }
 
