@@ -422,7 +422,7 @@ def _extract_python_defs(root_node, code: bytes, rel_path: str, file_id: str,
             builder.add_node({
                 "id": nid, "label": name.strip(), "type": "function",
                 "language": "python", "source": "ast", "file": rel_path,
-                "confidence": ConfidenceLevel.EXTRACTED, "async": is_async,
+                "confidence": ConfidenceLevel.EXTRACTED, "is_async": is_async,
                 "sources": [file_source],
             })
             builder.add_edge({"source": file_id, "target": nid, "label": "defines",

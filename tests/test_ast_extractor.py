@@ -66,8 +66,11 @@ class TestAstExtractor(unittest.TestCase):
                      ("ast_file:main-py", "ast_call:python:print", "calls")):
             self.assertIn(edge, edges)
         by_id = {n["id"]: n for n in result["nodes"]}
-        self.assertTrue(by_id["ast_func:python:aio"]["async"])
-        self.assertFalse(by_id["ast_func:python:hello"]["async"])
+        # ``is_async``, not ``async``: the latter is a Python reserved word and
+        # cannot be a GraphNode field, so the emitter uses the declarable name
+        # (card d25d3b8b).
+        self.assertTrue(by_id["ast_func:python:aio"]["is_async"])
+        self.assertFalse(by_id["ast_func:python:hello"]["is_async"])
         # Two identical calls collapse onto one node and one edge.
         self._write("twice.py", "def go():\n    pass\n\ngo()\ngo()\n")
         calls = [(e["source"], e["target"], e["label"])

@@ -314,9 +314,8 @@ class TestMemoryImportStore(unittest.TestCase):
             "decision: resolve by rotation | outcome: launcher reliability validation",
         )
         self.assertEqual(summary.visibility, "semantic")
-        summary_extra = summary.model_extra
-        assert summary_extra is not None, "summary must carry model_extra"
-        self.assertEqual(summary_extra["summary_labels"][0], "launcher reliability")
+        # summary_labels is a declared GraphNode field now (card d25d3b8b).
+        self.assertEqual(summary.summary_labels[0], "launcher reliability")
         summary_edges = [e for e in graph.edges if e.source == summary.id]
         self.assertIn("summarizes project", {e.label for e in summary_edges})
         self.assertTrue(all(e.visibility == "semantic" for e in summary_edges))
@@ -331,9 +330,8 @@ class TestMemoryImportStore(unittest.TestCase):
                   and e.target == "project:launcher-reliability"]
         self.assertEqual([(e.label, e.semantic_score, e.cooccurrence_count) for e in scored],
                          [("project decision", 0.85, 1)])
-        scored_extra = scored[0].model_extra
-        assert scored_extra is not None, "scored edge must carry model_extra"
-        self.assertEqual(scored_extra["label_visibility"], "hover")
+        # label_visibility is a declared GraphEdge field now (card d25d3b8b).
+        self.assertEqual(scored[0].label_visibility, "hover")
 
     def test_embedding_similarity_links_cross_file_chunks_only(self):
         graph = self._graph()
@@ -517,9 +515,8 @@ class TestMemoryImportPhases(unittest.TestCase):
                       if e.source == "decision:rotate-token" and e.target == "project:launcher")
         self.assertEqual((scored.label, scored.semantic_score, scored.cooccurrence_count),
                          ("project decision", 0.85, 1))
-        scored_extra = scored.model_extra
-        assert scored_extra is not None, "scored edge must carry model_extra"
-        self.assertEqual(scored_extra["label_visibility"], "hover")
+        # label_visibility is a declared GraphEdge field now (card d25d3b8b).
+        self.assertEqual(scored.label_visibility, "hover")
         # A single weak co-occurrence (weight 0.5) does not clear the cut.
         labels = {(e.source, e.target, e.label) for e in graph.edges}
         self.assertNotIn(("outcome:validated", "topic:shallow-labels", "topic outcome"), labels)
@@ -768,14 +765,11 @@ class TestMemoryImportRegistryRows(unittest.TestCase):
 
     def test_registry_provenance_follows_db_path(self):
         home_node = _node(self._graph(), "memory:mem-1")
-        home_extra = home_node.model_extra
-        assert home_extra is not None, "imported node must carry model_extra"
-        self.assertEqual(home_extra["registry"], "home")
+        # `registry` is a declared GraphNode field now (card d25d3b8b).
+        self.assertEqual(home_node.registry, "home")
         rook = self._graph(subdir=os.path.join("workspace-rook", "registry.db"))
         rook_node = _node(rook, "memory:mem-1")
-        rook_extra = rook_node.model_extra
-        assert rook_extra is not None, "imported node must carry model_extra"
-        self.assertEqual(rook_extra["registry"], "rook")
+        self.assertEqual(rook_node.registry, "rook")
 
     def test_damaged_events_table_degrades_to_minus_one(self):
         # A corrupted memory_events table must not abort the import: the

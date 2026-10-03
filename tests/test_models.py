@@ -65,11 +65,19 @@ class TestGraphNode:
         assert node.inferred_type is True
         assert node.type_confidence == 0.96
 
-    def test_extra_fields_allowed(self):
+    def test_projection_fields_are_declared(self):
+        # degree/importance are DECLARED GraphNode fields (set by
+        # projection.project_graph), so they are typed rather than kept as
+        # model_extra (card d25d3b8b).
         node = GraphNode.model_validate({"id": "n1", "label": "Test", "degree": 5, "importance": 10})
-        extra = node.model_extra or {}
-        assert extra.get("degree") == 5
-        assert extra.get("importance") == 10
+        assert node.degree == 5
+        assert node.importance == 10
+        assert (node.model_extra or {}) == {}
+
+    def test_unknown_field_raises(self):
+        # Card d25d3b8b: a mistyped/unknown field is REJECTED, never silently kept.
+        with pytest.raises(ValidationError):
+            GraphNode.model_validate({"id": "n1", "label": "Test", "labell": "typo"})
 
     def test_missing_id_raises(self):
         with pytest.raises(ValidationError):
@@ -144,9 +152,17 @@ class TestGraphEdge:
         edge = GraphEdge(source="a", target="b", semantic_score=0.85)
         assert edge.semantic_score == 0.85
 
-    def test_extra_fields_allowed(self):
+    def test_internal_strength_key_is_dropped_not_rejected(self):
+        # _strength is projection's INTERNAL sort key, never part of the wire
+        # format; the validator pops it (like the removed `weight`) so an older
+        # dict that still carries it does not reject the edge (card d25d3b8b).
         edge = GraphEdge.model_validate({"source": "a", "target": "b", "_strength": 0.9})
-        assert (edge.model_extra or {}).get("_strength") == 0.9
+        assert (edge.model_extra or {}) == {}
+        assert not hasattr(edge, "_strength")
+
+    def test_unknown_field_raises(self):
+        with pytest.raises(ValidationError):
+            GraphEdge.model_validate({"source": "a", "target": "b", "strenght": 0.9})
 
     def test_missing_source_raises(self):
         with pytest.raises(ValidationError):

@@ -358,11 +358,13 @@ class TestConfidence(unittest.TestCase):
     def test_tag_confidence_preserves_existing_fields(self):
         graph = {
             'nodes': [{'id': 'a', 'label': 'A'}],
-            'edges': [{'from': 'a', 'to': 'b', 'label': 'imports', 'source': 'ast', 'extra': 'keep'}],
+            'edges': [{'from': 'a', 'to': 'b', 'label': 'imports', 'source': 'ast', 'role': 'general'}],
         }
         result = self.kgraph.tag_confidence(graph)
         self.assertEqual(result.nodes[0].label, 'A')
-        self.assertEqual((result.edges[0].model_extra or {}).get('extra'), 'keep')
+        # A declared field is preserved; an UNKNOWN one is rejected by the model
+        # (card d25d3b8b), so the tag pass keeps every field the model declares.
+        self.assertEqual(result.edges[0].role, 'general')
         conf = result.edges[0].confidence
         assert conf is not None
         self.assertEqual(conf.value, 'EXTRACTED')
@@ -1063,7 +1065,9 @@ class CommunityDetectionTests(unittest.TestCase):
 
     def test_detect_communities_missing_graph_keys(self):
         """detect_communities handles missing 'nodes'/'edges' keys gracefully."""
-        result = kgraph.detect_communities({'foo': 'bar'}, method='greedy')
+        # An unknown KEY is rejected by the model (card d25d3b8b); the missing-keys
+        # shape this case pins is the empty dict.
+        result = kgraph.detect_communities({}, method='greedy')
         self.assertEqual(result.meta.communities, [])
 
     def test_detect_communities_edge_source_target_aliases(self):
@@ -1109,11 +1113,12 @@ class CommunityDetectionTests(unittest.TestCase):
     def test_detect_communities_preserves_existing_meta(self):
         """existing meta fields are preserved in the output."""
         graph = dict(_SMALL_CONNECTED_GRAPH)
-        graph['_meta'] = {'source': 'test', 'version': 1}
+        # Declared GraphMeta fields (an unknown meta key is now rejected — card
+        # d25d3b8b), so this pins preservation on the model's own surface.
+        graph['_meta'] = {'data_source': 'test', 'view_mode': 'overview'}
         result = kgraph.detect_communities(graph, method='greedy')
-        meta_extra = result.meta.model_extra or {}
-        self.assertEqual(meta_extra.get('source'), 'test')
-        self.assertEqual(meta_extra.get('version'), 1)
+        self.assertEqual(result.meta.data_source, 'test')
+        self.assertEqual(result.meta.view_mode, 'overview')
         self.assertGreater(len(result.meta.communities), 0)
 
     # ── compute_centrality ──────────────────────────────────────────
@@ -1158,7 +1163,9 @@ class CommunityDetectionTests(unittest.TestCase):
 
     def test_compute_centrality_missing_graph_keys(self):
         """compute_centrality handles missing 'nodes'/'edges' keys."""
-        result = kgraph.compute_centrality({'foo': 'bar'})
+        # An unknown KEY is rejected by the model (card d25d3b8b); the missing-keys
+        # shape this case pins is the empty dict.
+        result = kgraph.compute_centrality({})
         self.assertEqual(result, {})
 
     # ── find_god_nodes ──────────────────────────────────────────────
@@ -1344,9 +1351,14 @@ class ValidatePayloadTests(unittest.TestCase):
         self.assertIn('dangerous patterns', msg)
 
     def test_validate_payload_warning_downgrade(self):
-        """warnings alone (no errors) do not fail validation."""
+        """warnings alone (no errors) do not fail validation.
+
+        An unknown node TYPE is a vocabulary WARNING, not an error; an unknown
+        node FIELD is now a schema ERROR (card d25d3b8b), so this pins the
+        warning path with a field the model accepts.
+        """
         valid, msg = kgraph.validate_graph_payload({
-            'nodes': [{'id': 1, 'label': 'ok', 'nonsense_field': 'x'}],
+            'nodes': [{'id': 'n1', 'label': 'ok', 'type': 'not-a-declared-type'}],
             'edges': [],
         })
         self.assertTrue(valid)

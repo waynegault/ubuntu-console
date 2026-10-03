@@ -176,10 +176,12 @@ class GraphNode(SourceLineage):
     legacy sources deserialize cleanly.
 
     Extra fields added during processing (``degree``, ``importance``,
-    ``display_label``, …) are permitted via ``extra="allow"``.
+    ``display_label``, ``semantic_degree``, ``display_group``, ``visual_role``)
+    are declared below and set by ``projection.project_graph``; an UNKNOWN field
+    is REJECTED (card d25d3b8b) rather than silently kept.
     """
 
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     id: str
     label: str = ""
@@ -204,6 +206,66 @@ class GraphNode(SourceLineage):
     type_confidence: float = 1.0
     canonical_slug: str = ""
     canonical_path: str = ""
+    # View-projection fields set by projection.project_graph (were extra="allow").
+    degree: int = 0
+    semantic_degree: int = 0
+    importance: float = 1.0
+    display_group: str = ""
+    display_label: str = ""
+    visual_role: str = ""
+    # Data fields the importers/adapters attach (memory_import, ast_extractor),
+    # declared so extra="forbid" rejects only genuinely UNKNOWN keys (card
+    # d25d3b8b).  Nullable where the source row can be NULL.
+    origin: str = ""
+    rel_path: str = ""
+    chunk_id: str = ""
+    start_line: int | None = None
+    end_line: int | None = None
+    content: str | None = None
+    tags: str | None = None
+    memory_type: str | None = None
+    source_agent: str | None = None
+    source_layer: str | None = None
+    registry: str = ""
+    row_scope: str | None = None
+    value_label: str | None = None
+    # The registry column is REAL, but the row filter tolerates a non-numeric
+    # value (``_registry_row_is_live`` swallows the parse error and keeps the
+    # row), and the node carries the raw value through — so the field accepts the
+    # string the DB can hold instead of rejecting the whole import.
+    value_score: float | str | None = None
+    concept: str | None = None
+    created_at: str | None = None
+    kind: str = ""
+    aliases: str = ""
+    status: str = ""
+    section: str | None = None
+    source_kind: str | None = None
+    source_path: str | None = None
+    line_start: int | str | None = None
+    line_end: int | str | None = None
+    summary_labels: list[str] = Field(default_factory=list)
+    typed_summary: dict[str, Any] = Field(default_factory=dict)
+    # Synthesis/belief-node fields set by memory_import's registry/synthesis phases.
+    evidence_count: int = 0
+    generated_at: str = ""
+    stale: int = 0
+    subject_id: str = ""
+    subject_type: str = ""
+    memory_tier: str = ""
+    consolidation_op: str = ""
+    # The live stored graph carries a string label here ("strong"), so — like
+    # value_score — the field accepts the string rather than failing the load.
+    source_strength: float | str | None = None
+    belief_type: str = ""
+    entity_id: str = ""
+    source_memory_id: str = ""
+    priority: str | None = None
+    related_entity_id: str | None = None
+    # ast_extractor's async-function flag.  Named ``is_async`` because ``async`` is
+    # a Python reserved word and cannot be a field name; the emitter was renamed
+    # to match (card d25d3b8b).
+    is_async: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -212,6 +274,14 @@ class GraphNode(SourceLineage):
             raw = data.get("id")
             if raw is not None and not isinstance(raw, str):
                 data["id"] = str(raw)
+            # Legacy ast key: the reserved word ``async`` was renamed ``is_async``
+            # (card d25d3b8b), so a graph.json serialized before the rename is
+            # mapped rather than rejected.  Live producer: the stored graph DB.
+            if "async" in data:
+                if "is_async" not in data:
+                    data["is_async"] = data.pop("async")
+                else:
+                    data.pop("async")
         return data
 
 
@@ -247,12 +317,13 @@ class GraphEdge(SourceLineage):
     one dependency-strength consumer (community detection) already preferred
     ``semantic_score`` and fell back to ``weight``, whose default made the
     fallback a constant — so the field could only ever disagree with the score it
-    shadowed, and nothing else read it.  ``extra="allow"`` above tolerates a
-    ``graph.json`` serialized by an older build that still carries ``weight``; it
-    is ignored, never honoured, and no shim maps it back onto a score.
+    shadowed, and nothing else read it.  ``weight`` is popped in the validator
+    below and EXPLICITLY IGNORED (never mapped onto a score) when a ``graph.json``
+    serialized by an older build still carries it; with ``extra="forbid"`` it would
+    otherwise reject the whole edge.
     """
 
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     source: str
     target: str
@@ -265,6 +336,16 @@ class GraphEdge(SourceLineage):
     explicit: bool = False
     visibility: str = "both"
     quality_tier: str = "semantic"
+    # Projection/ingest annotations (were extra="allow"): label_visibility is set
+    # by memory_import's semantic edges; the support counts and fallback by
+    # projection.
+    label_visibility: str = ""
+    support_chunk_count: int = 0
+    support_summary_count: int = 0
+    fallback: bool = False
+    registry: str = ""
+    role: str = ""
+    evidence_count: int = 0
 
     @model_validator(mode="before")
     @classmethod
@@ -284,6 +365,14 @@ class GraphEdge(SourceLineage):
         dst = data.get("target")
         frm = data.pop("from", None)
         to = data.pop("to", None)
+        # ``weight`` was REMOVED in GRAPHRAG-JEV-005 (see the class docstring): an
+        # older serialized graph may still carry it, and it is ignored — dropped
+        # here so extra="forbid" does not reject the edge.
+        data.pop("weight", None)
+        # ``_strength`` is projection's INTERNAL sort key (projection.py strips it
+        # from the emitted dict); it is never part of the wire format, so a dict
+        # that still carries it does not make it a model field.
+        data.pop("_strength", None)
 
         # If source/target are missing but from/to exist, use them
         if src is None and frm is not None:
@@ -322,13 +411,23 @@ class GraphEdge(SourceLineage):
 class GraphMeta(BaseModel):
     """Metadata attached to a graph projection."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     view_mode: str = "overview"
     semantic_threshold: float = 0.82
     data_source: str = ""
     community_method: str = ""
     communities: list[dict[str, Any]] = Field(default_factory=list)
+    # Projection counters set by projection.project_graph (were extra="allow"):
+    # kgraph.html reads payload._meta.typeCounts / .nodeCount / .edgeCount.
+    typeCounts: dict[str, int] = Field(default_factory=dict)
+    nodeCount: int = 0
+    edgeCount: int = 0
+    clusterSuggestions: list[dict[str, Any]] = Field(default_factory=list)
+    # ast_extractor's result metadata (result["_meta"]).
+    source: str = ""
+    files_parsed: int = 0
+    languages: list[str] = Field(default_factory=list)
 
 
 class Graph(BaseModel):
@@ -338,7 +437,7 @@ class Graph(BaseModel):
     Legacy ``_meta`` keys are mapped to ``meta`` during deserialization.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     nodes: list[GraphNode] = Field(default_factory=list)
     edges: list[GraphEdge] = Field(default_factory=list)
