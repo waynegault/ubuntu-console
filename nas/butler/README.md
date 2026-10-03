@@ -72,10 +72,13 @@ that owns it) and this mirror is refreshed from the NAS afterwards. **A file tha
 between here and the NAS is drift** — and note the crontab names the `scripts/` copy, so a
 fix applied to the `mi-scale/` copy alone changes nothing.
 
-## Mirror divergences pending the NAS deploy (2026-10-02; extended 2026-10-03)
+## Mirror divergences — NAS deploy status (2026-10-02; extended 2026-10-03)
 
 These differ from the NAS here while the NAS still carries the old content (deployment held —
 see the one-writer note).  One list, so the deploy pass has a single source:
+
+**The CPAP pair was DEPLOYED to the NAS on 2026-10-03 (conflict C6)** — verified by md5 in both
+directions; the two shell files below remain pending.
 
 - `scripts/internet-quality-monitor.sh` — `TX`, `RX` and `MIN` were parsed and never used
   (SC2034); removed.
@@ -84,20 +87,22 @@ see the one-writer note).  One list, so the deploy pass has a single source:
 - `scripts/nas-cpap-unified.py` (2026-10-03, card `8dda5918`) — `_fetch_cpap_data` returned a
   MOCK payload (`{"device": {}, "sleep_records": []}`) while `main()` printed `{"ok": true}`,
   so a caller saw success with nothing fetched.  It now raises `NotImplementedError` and `main()`
-  reports the failure instead of a false success.  The NAS copy still returns the mock data
-  until the deploy pass.
+  reports the failure instead of a false success.  **DEPLOYED 2026-10-03 (C6):** the NAS copy now
+  matches this file byte-for-byte (`e459c2a3484be44329a18575d012587c`) and compiles under
+  `/opt/bin/python3`; it no longer returns the mock.
 - `scripts/nas-cpap-full.py` **DELETED** (2026-10-03, card `8dda5918`) — an unreferenced stub
   that triggered MFA and printed `SUCCESS` **without fetching any data** (its fetch was a
   `# TODO`).  It was not called by the cron (`cron/openclaw-collectors.cron` runs
   `cpap-myair-collector.py`) nor by `cpap-collect-with-otp.sh` (which runs
   `cpap-myair-fetch.py` + `nas-graph-otp.py`); `git grep nas-cpap-full` matched only this README.
-  The NAS copy still exists, so the deploy pass must delete it there too:
-  `/mnt/HD/HD_a2/butler/scripts/nas-cpap-full.py`.
+  **DELETED ON THE NAS 2026-10-03 (C6)** — verified absent at
+  `/mnt/HD/HD_a2/butler/scripts/nas-cpap-full.py`.  The NAS originals of both files are preserved
+  locally at `/home/wayne/backups/nas-pre-c6-2026-10-03/`.
 
-So this directory is the NAS content **plus three changed files and minus one deleted stub** —
-the deploy pass's whole to-do list.  Deleting the stub is a change to the mirror's file *set*,
-larger than the byte edits above, so it is recorded here deliberately instead of left as a
-silent absence.
+So this directory is now the NAS content **plus the two shell files above and minus one deleted
+stub** — the CPAP half of the deploy pass is done; the two shell files remain.  Deleting the stub
+is a change to the mirror's file *set*, larger than the byte edits above, so it is recorded here
+deliberately instead of left as a silent absence.
 
 **Reversal (card `8dda5918`):** if the owner prefers the mirror to stay byte-identical, restore
 `nas-cpap-full.py` from git history and revert `nas-cpap-unified.py` to its mock return, then
