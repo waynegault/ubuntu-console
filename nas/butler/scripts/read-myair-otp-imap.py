@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import datetime
 import imaplib
+import logging
 import os
 import re
 import ssl
 import sys
 from datetime import timezone
+
+logger = logging.getLogger(__name__)
 
 
 def _env(key: str, default: str = "") -> str:
@@ -35,14 +38,19 @@ def _iter_message_text(msg) -> str:
                     if payload:
                         parts.append(payload.decode("utf-8", errors="replace"))
                 except Exception:
-                    pass
+                    # One undecodable MIME part is skipped; the message may still
+                    # carry the OTP in another part.  Name it so a failure to find
+                    # the code can be diagnosed against the raw message.
+                    logger.debug("skipping an undecodable MIME part (%s)", content_type, exc_info=True)
     else:
         try:
             payload = msg.get_payload(decode=True)
             if payload:
                 parts.append(payload.decode("utf-8", errors="replace"))
         except Exception:
-            pass
+            # Same: a single-part message that will not decode yields no text, and
+            # the caller reports "No OTP found" rather than crashing.
+            logger.debug("single-part message body could not be decoded", exc_info=True)
     return "\n".join(parts)
 
 

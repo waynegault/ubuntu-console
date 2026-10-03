@@ -26,6 +26,9 @@ import urllib.request
 import urllib.error
 import os
 import sys
+import logging
+
+logger = logging.getLogger(__name__)
 
 INFLUX_URL = "http://localhost:8086/write?db=health_metrics&precision=s"
 HOST = "MyCloudEX2Ultra"
@@ -54,6 +57,9 @@ def smart_data(dev):
             timeout=10,
         ).decode()
     except Exception:
+        # A drive whose SMART cannot be read loses its row for this cycle; name it
+        # rather than returning an empty dict as if the drive had no attributes.
+        logger.warning("smartctl read failed for %s", dev, exc_info=True)
         return result
     for line in out.splitlines():
         parts = line.split()
@@ -67,7 +73,9 @@ def smart_data(dev):
             try:
                 result[SMART_FIELDS[attr_id]] = int(val)
             except ValueError:
-                pass
+                # A raw SMART value that is not a plain integer (some firmwares
+                # annotate it) drops just that one attribute; name it at debug.
+                logger.debug("non-integer SMART value for attribute %s: %r", attr_id, val, exc_info=True)
     return result
 
 
@@ -80,7 +88,9 @@ def cpu_temp_c():
                 with open(path) as f:
                     return round(int(f.read().strip()) / 1000.0, 1)
     except Exception:
-        pass
+        # No thermal zone readable (some firmwares expose none): cpu_temp_c is
+        # simply absent this cycle, so its field is omitted, not zeroed.
+        logger.debug("no readable thermal zone for cpu_temp_c", exc_info=True)
     return None
 
 
@@ -97,6 +107,9 @@ def memory_stats():
         avail = int(m_avail.group(1)) // 1024
         return avail, total
     except Exception:
+        # An unreadable /proc/meminfo (unexpected on Linux) omits the memory fields;
+        # log so the omission is diagnosable rather than looking like a normal cycle.
+        logger.debug("could not read /proc/meminfo", exc_info=True)
         return None, None
 
 
@@ -107,6 +120,8 @@ def load_avg():
             parts = f.read().split()
         return float(parts[0]), float(parts[1]), float(parts[2])
     except Exception:
+        # /proc/loadavg is standard on Linux; a failure omits the load fields.
+        logger.debug("could not read /proc/loadavg", exc_info=True)
         return None, None, None
 
 
@@ -125,7 +140,9 @@ def net_stats():
             tx = int(parts[9])
             result[iface] = (rx, tx)
     except Exception:
-        pass
+        # A malformed /proc/net/dev line drops the per-interface rows for this cycle;
+        # name it so a partial cycle is not read as "no interfaces".
+        logger.debug("could not parse /proc/net/dev", exc_info=True)
     return result
 
 

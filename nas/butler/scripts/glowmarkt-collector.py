@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-# Version: 1.3.1
+# Version: 1.3.2
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
+#   v1.3.2 (2026-10-03, card b296c75c): write_influx logs the URLError instead of
+#   swallowing it, and collect_once derives `ok` from the actual write result — a
+#   total InfluxDB outage used to set ok:True and exit 0.
 
 """Glowmarkt/Bright Smart Meter electricity collector.
 
@@ -15,6 +18,7 @@ Auth: JWT (7-day expiry) via POST /auth
 from __future__ import annotations
 
 import json
+import logging
 import os
 import urllib.error
 import urllib.parse
@@ -22,6 +26,8 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
+
+logger = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -108,7 +114,8 @@ def _load_cached_token() -> str | None:
             if datetime.now(timezone.utc) < expiry - timedelta(hours=1):
                 return token
     except (json.JSONDecodeError, KeyError, ValueError):
-        pass
+        # A corrupt/expired token cache is expected on first run; re-auth follows.
+        logger.debug("cached Glowmarkt token unusable; re-authenticating", exc_info=True)
     return None
 
 
@@ -192,7 +199,10 @@ def write_influx(lines: list[str]) -> int | None:
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             return int(resp.status)
-    except urllib.error.URLError:
+    except urllib.error.URLError as exc:
+        # Name the outage: returning None silently let collect_once report ok:True
+        # (a total InfluxDB outage exited 0).  The caller now derives ok from this.
+        logger.warning("InfluxDB write failed: %s", exc, exc_info=True)
         return None
 
 
@@ -204,7 +214,9 @@ def _load_cursor() -> dict[str, Any]:
         try:
             return json.loads(CURSOR_FILE.read_text())
         except json.JSONDecodeError:
-            pass
+            # A corrupt cursor falls back to the default window; say so rather than
+            # silently re-fetching 7 days as if nothing happened.
+            logger.debug("cursor file %s is corrupt; using the default window", CURSOR_FILE, exc_info=True)
     return {"lastIntervalEnd": None, "updatedAt": None}
 
 
@@ -309,9 +321,13 @@ def collect_once() -> dict[str, Any]:
         last_timestamp = iso_ts
 
     influx_status = write_influx(influx_lines)
+    # `ok` is derived from the write, not hardcoded: a non-empty batch whose write
+    # returned None is a failed dependency, and the run must not claim success.
+    # Nothing to write (every reading was zero/invalid) is not a failure.
+    write_ok = True if not influx_lines else influx_status is not None
 
     result = {
-        "ok": True,
+        "ok": write_ok,
         "timestamp": now.isoformat(),
         "resource": resource_id,
         "readings": len(data_points),

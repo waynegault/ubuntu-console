@@ -1,6 +1,7 @@
 #!/opt/bin/python3
 """NAS Mi Scale MQTT subscriber - lightweight, no local imports needed beyond paho"""
 import json
+import logging
 import signal
 import time
 import urllib.parse
@@ -9,9 +10,10 @@ import urllib.request
 import paho.mqtt.client as mqtt
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 SHARED_FILE = Path("/mnt/HD/HD_a2/butler/shared-data/weight-monitor/latest.json")
 HISTORY_FILE = Path("/mnt/HD/HD_a2/butler/shared-data/weight-monitor/history.jsonl")
-SHARED_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 INFLUX = {"host": "127.0.0.1", "port": 8086, "db": "sensor_data", "meas": "body_composition"}
 running = True
@@ -32,9 +34,13 @@ def write_influx(tags, fields, ts_ns):
         req = urllib.request.Request(url, data=line.encode())
         with urllib.request.urlopen(req, timeout=5) as r:
             if r.status != 204:
-                pass
+                # A non-204 is InfluxDB refusing the write — name it rather than
+                # discarding the only signal that the point did not land.
+                logger.warning("influx write returned HTTP %s (expected 204)", r.status)
     except Exception:
-        pass
+        # A failed write used to vanish here; the shared-file copy still lands, but
+        # the time-series gap must be visible.
+        logger.warning("influx write failed", exc_info=True)
 
 def on_connect(c, u, f, r, p):
     c.subscribe("bt/mi_scale/#")
@@ -45,6 +51,9 @@ def on_msg(c, u, m):
     try:
         data = json.loads(m.payload)
     except Exception:
+        # A non-JSON payload on the topic is skipped, not fatal; log it at debug so
+        # a misbehaving publisher is diagnosable.
+        logger.debug("ignoring non-JSON MQTT payload on %s", m.topic, exc_info=True)
         return
     mac = data.get("mac", data.get("address", ""))
     weight = data.get("weight_kg", data.get("weight"))
@@ -62,15 +71,25 @@ def handler(s, f):
     global running
     running = False
 
-signal.signal(signal.SIGTERM, handler)
-signal.signal(signal.SIGINT, handler)
 
-c = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id="nas-mi-scale-sub", clean_session=True)
-c.on_connect = on_connect
-c.on_message = on_msg
-c.connect("127.0.0.1", 1883, 60)
-c.loop_start()
+def main() -> None:
+    """Connect, subscribe and loop until SIGTERM/SIGINT."""
+    # Deferred from module scope so importing this file has no side effect (the NAS
+    # path is unwritable elsewhere), and so write_shared's directory exists first.
+    SHARED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
 
-while running:
-    time.sleep(1)
-c.disconnect()
+    c = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id="nas-mi-scale-sub", clean_session=True)
+    c.on_connect = on_connect
+    c.on_message = on_msg
+    c.connect("127.0.0.1", 1883, 60)
+    c.loop_start()
+
+    while running:
+        time.sleep(1)
+    c.disconnect()
+
+
+if __name__ == "__main__":
+    main()
