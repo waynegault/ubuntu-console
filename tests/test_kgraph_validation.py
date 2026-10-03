@@ -27,7 +27,7 @@ import kgraph
 class _FakeHTTPServer:
     """Captures the handler class serve_file builds, without listening.
 
-    Mirrors the stub in tests/test_untested_modules.py: serve_file blocks in
+    Mirrors the stub in tests/_kgraph_fixtures.py: serve_file blocks in
     serve_forever, so its (module-local) HTTPServer is replaced to obtain the real
     handler class.  Only the module-local name is patched.
     """

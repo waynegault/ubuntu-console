@@ -38,7 +38,7 @@ The following file classes are in-scope for every audit pass:
 - `tests/test_bats_bridge.py` — Pytest parametrize bridge for BATS suites
 - `tests/test_kgraph.py` — Python tests for kgraph package
 - `tests/test_models.py` — Pydantic model tests (GraphNode, GraphEdge, Graph, GraphBuilder)
-- `tests/test_untested_modules.py` — Tests for call_flow, update, life_index, benchmark, mcp_server, pr_dashboard, validate
+- `tests/test_<module>.py` — per-module kgraph tests (call_flow, update, life_index, benchmark, mcp_server, pr_dashboard, validate, server, report, cli, memory_import, projection, ast_extractor), split out of the former `test_untested_modules.py` (card 842f2b93); `tests/_kgraph_fixtures.py` holds the shared graph fixtures
 - `tests/conftest.py` — Pytest fixtures (BATS serialization via flock)
 - `pytest.ini` — Pytest configuration (markers, testpaths)
 - `scripts/kgraph/models.py` — Pydantic models (GraphNode, GraphEdge, Graph, GraphBuilder, ConfidenceLevel)
@@ -2206,14 +2206,15 @@ All checks passed — no bare excepts (BLE001), no unused imports (F401), no imp
 
 🔧 Python tests pass
 
-`.venv/bin/python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_untested_modules.py --timeout=60 -q`
+`.venv/bin/python -m pytest tests/test_kgraph.py tests/test_models.py tests/test_call_flow.py tests/test_update.py tests/test_life_index.py tests/test_benchmark.py tests/test_mcp_server.py tests/test_pr_dashboard.py tests/test_validate.py tests/test_graph_server.py tests/test_report.py tests/test_cli.py tests/test_memory_import.py tests/test_projection.py tests/test_ast_extractor.py tests/test_kgraph_package.py --timeout=60 -q`
 
 All collected tests pass. Do not trust a written-down count: derive it with
-`--collect-only -q` before quoting one. Measured 2026-09-16 by collection: **324**
-tests (92 + 37 + 195), with ZERO skip/xfail markers — so the "174 passed" this item
+`--collect-only -q` before quoting one. Measured 2026-10-03 by collection: **438**
+tests (165 + 59 + 214), with ZERO skip/xfail markers — so the "174 passed" this item
 used to state cannot describe the command any more (that would require ~150 failures,
 which would itself be the finding). A stale pass-count is worse than none: it reads as
-a target and quietly stops being checked.
+a target and quietly stops being checked. The 14 per-module kgraph files are the split
+of the former `test_untested_modules.py` (card 842f2b93).
 
 11.10
 

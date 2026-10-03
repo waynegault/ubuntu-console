@@ -68,7 +68,7 @@ def resolve_serve_target(path: str, force_embed: bool = False) -> tuple[str, str
 # path replaces it with a non-content identifier (see _redacted_label).
 # memory_import sets label = _preview_text(content) for these, so serving the
 # label would serve the memory text.  This tuple is the single source of truth
-# for that decision, and tests/test_untested_modules.py carries a canary that
+# for that decision, and tests/test_memory_import.py carries a canary that
 # fails when an importer starts emitting a type not classified here or in its
 # non-content list (audit_security.md: keying on the type alone leaks a future
 # content-derived type).

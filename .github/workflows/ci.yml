@@ -313,7 +313,17 @@ jobs:
         run: mypy
 
       - name: Run Python tests
-        run: python -m pytest tests/test_kgraph.py tests/test_kgraph_wiring.py tests/test_models.py tests/test_untested_modules.py tests/test_bats_lock_fixture.py tests/test_check_ci_status.py tests/test_oc_health_check.py tests/test_shell_command_scan.py -x --timeout=120 -q
+        run: >-
+          python -m pytest
+          tests/test_kgraph.py tests/test_kgraph_wiring.py tests/test_models.py
+          tests/test_call_flow.py tests/test_update.py tests/test_life_index.py
+          tests/test_benchmark.py tests/test_mcp_server.py tests/test_pr_dashboard.py
+          tests/test_validate.py tests/test_graph_server.py tests/test_report.py
+          tests/test_cli.py tests/test_memory_import.py tests/test_projection.py
+          tests/test_ast_extractor.py tests/test_kgraph_package.py
+          tests/test_bats_lock_fixture.py tests/test_check_ci_status.py
+          tests/test_oc_health_check.py tests/test_shell_command_scan.py
+          -x --timeout=120 -q
 
   python-unit:
     name: Python Full Suite (PR / dispatch)

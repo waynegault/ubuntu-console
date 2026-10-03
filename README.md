@@ -1187,6 +1187,7 @@ where it was last present.)
 │   ├── _paths.py                      # Shared sys.path bootstrap for kgraph imports
 │   ├── _probe_paths.py                # Shared by-path loader for the hyphenated scripts/*.py probes
 │   ├── _bats_suites.py                # Parser for the suite table below (rejects a malformed row)
+│   ├── _kgraph_fixtures.py            # Shared kgraph test fixtures + scripts/ sys.path bootstrap
 │   ├── bats-suites.tsv                # Canonical BATS suite table: glob, marker, per-case + whole-file timeouts
 │   ├── tactical-console.bats          # BATS full suite (387 tests, ~5-15 min)
 │   ├── tactical-console-fast.bats     # Fast subset (67 tests, ~2 min)
@@ -1202,7 +1203,20 @@ where it was last present.)
 │   ├── test_nas_bt_bridge.py          # NAS BLE bridge exception-narrowing tests (card 887c1d65)
 │   ├── test_nas_collector_failures.py # NAS collector failure visibility (card b296c75c)
 │   ├── test_shell_command_scan.py     # shell-command-scan hook classifier tests (card 07a1516a)
-│   ├── test_untested_modules.py       # Tests for call_flow, update, life_index, benchmark, etc.
+│   ├── test_ast_extractor.py          # Tests for kgraph.ast_extractor
+│   ├── test_benchmark.py              # Tests for kgraph.benchmark
+│   ├── test_call_flow.py              # Tests for kgraph.call_flow
+│   ├── test_cli.py                    # Tests for kgraph.cli
+│   ├── test_graph_server.py           # Tests for kgraph.server
+│   ├── test_kgraph_package.py         # kgraph entry point + library-must-not-print invariant
+│   ├── test_life_index.py             # Tests for kgraph.life_index
+│   ├── test_mcp_server.py             # Tests for kgraph.mcp_server
+│   ├── test_memory_import.py          # Tests for kgraph.memory_import
+│   ├── test_pr_dashboard.py           # Tests for kgraph.pr_dashboard
+│   ├── test_projection.py             # Tests for kgraph.projection
+│   ├── test_report.py                 # Tests for kgraph.report
+│   ├── test_update.py                 # Tests for kgraph.update
+│   ├── test_validate.py               # Tests for kgraph.validate
 │   ├── unit/                          # BATS unit tests (527 tests: 29+26+8+5+5+6+23+4+8+7+40+19+16+6+1+5+4+2+3+3+20+19+41+30+6+8+8+3+15+6+13+17+27+16+5+17+9+6+4+4+2+3+3+4+4+2+13+2)
 │   └── integration/                   # BATS integration tests (143 tests: 14+43+10+44+3+29)
 ├── systemd/
