@@ -1,12 +1,13 @@
 """Tests for kgraph Pydantic models (models.py)."""
 
+import sys
+
 import pytest
 from pydantic import ValidationError
 
-import os
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts"))
+# Importing the shared bootstrap puts the repo's scripts/ on sys.path, so
+# `import kgraph` works; this module used to re-do that insert by hand.
+from _paths import SCRIPT_DIR
 
 from kgraph.models import (
     MAX_SOURCES_PER_ELEMENT,
@@ -22,6 +23,15 @@ from kgraph.models import (
     slugify,
     source_key,
 )
+
+
+def test_the_shared_path_bootstrap_put_scripts_on_sys_path():
+    """The `from _paths import ...` above is what makes `import kgraph` work.
+
+    Catches: a test module that re-does its own sys.path insert instead of using
+    the shared bootstrap — this asserts the shared one actually ran.
+    """
+    assert SCRIPT_DIR in sys.path
 
 
 # ── GraphNode ──────────────────────────────────────────────────────────

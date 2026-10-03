@@ -12,39 +12,15 @@ loaded by path rather than imported by name.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 import urllib.error
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from _probe_paths import load_probe
 
-
-def _load_probe() -> Any:
-    """Import scripts/kv-recall-probe.py by path (its name is not a module name).
-
-    Registered in ``sys.modules`` before execution on purpose: ``@dataclass`` resolves the
-    defining module's namespace through ``sys.modules``, and on Python 3.14 a module that
-    was only ``module_from_spec``-ed makes that lookup return None.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "kv_recall_probe", REPO_ROOT / "scripts" / "kv-recall-probe.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        del sys.modules[spec.name]
-        raise
-    return module
-
-
-probe = _load_probe()
+probe = load_probe("kv_recall_probe", "kv-recall-probe.py")
 
 
 def _plan(**over: Any) -> Any:

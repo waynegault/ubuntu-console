@@ -11,37 +11,11 @@ loaded by path rather than imported by name.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from _probe_paths import load_probe
 
-
-def _load_probe() -> Any:
-    """Import scripts/grpo-vram-probe.py by path (its name is not a module name).
-
-    Registered in ``sys.modules`` before execution on purpose: ``@dataclass`` resolves
-    the defining module's namespace through ``sys.modules``, and on Python 3.14 a module
-    that was only ``module_from_spec``-ed makes that lookup return None - the class
-    creation then fails with an AttributeError that points at the dataclass, not here.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "grpo_vram_probe", REPO_ROOT / "scripts" / "grpo-vram-probe.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        del sys.modules[spec.name]
-        raise
-    return module
-
-
-probe = _load_probe()
+probe = load_probe("grpo_vram_probe", "grpo-vram-probe.py")
 
 
 def _budget(**kw: Any) -> Any:

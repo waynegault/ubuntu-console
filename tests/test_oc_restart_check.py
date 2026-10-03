@@ -19,40 +19,15 @@ loaded by path rather than imported by name.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from _probe_paths import load_probe
 
-
-def _load_probe() -> Any:
-    """Import scripts/oc-restart-check.py by path (its name is not a module name).
-
-    Registered in ``sys.modules`` before execution: the module defines ``@dataclass``
-    types, and on Python 3.14 that decorator resolves the defining module's namespace
-    through ``sys.modules``, which returns None for a module that was only
-    ``module_from_spec``-ed.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "oc_restart_check", REPO_ROOT / "scripts" / "oc-restart-check.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        del sys.modules[spec.name]
-        raise
-    return module
-
-
-probe = _load_probe()
+probe = load_probe("oc_restart_check", "oc-restart-check.py")
 
 
 def _report(**over: Any) -> Any:
