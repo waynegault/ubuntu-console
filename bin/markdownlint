@@ -141,4 +141,38 @@ then
     exit 127  # 127 = the shell's own "command not found", which is exactly what this is
 fi
 
+# ── 4. Resolve the interpreter the real linter needs ──────────────────────────
+# The real linter is a Node SCRIPT (markdownlint-cli's markdownlint.js) whose
+# shebang is `#!/usr/bin/env node`.  Exec'ing it directly therefore depends on
+# `node` being on PATH — and the Qwen memory-lint hook does NOT inherit one
+# (measured 2026-10-03: every run died with "/usr/bin/env: 'node': No such file
+# or directory" and the hook reported "0 violation(s)", a not-run that read as
+# clean).  Resolve the interpreter HERE, by ABSOLUTE path, and exec through it
+# explicitly: the .js never falls back to a PATH lookup, and a missing node is
+# reported rather than surfacing as the shebang's own opaque 127.
+if [[ "$REAL_MARKDOWNLINT" == *.js ]]
+then
+    NODE=""
+    for _candidate in \
+        /home/linuxbrew/.linuxbrew/bin/node \
+        /usr/local/bin/node \
+        /usr/bin/node
+    do
+        [[ -x "$_candidate" ]] || continue
+        NODE="$_candidate"
+        break
+    done
+    if [[ -z "$NODE" ]]
+    then
+        # swallow-ok: `type -p` prints NOTHING and exits non-zero when node is absent — that IS the answer here (no interpreter), and the empty result falls through to the report below rather than being read as success
+        NODE="$(type -p node 2>/dev/null || printf '')"
+    fi
+    if [[ -z "$NODE" ]]
+    then
+        printf '%s\n' "markdownlint shim: the linter at $REAL_MARKDOWNLINT is a Node script but no node interpreter was found (looked in the linuxbrew prefix and on PATH)" >&2
+        exit 127  # 127 = the linter cannot run without its interpreter — distinct from 1 (findings) and 2 (refused)
+    fi
+    exec "$NODE" "$REAL_MARKDOWNLINT" "$@"
+fi
+
 exec "$REAL_MARKDOWNLINT" "$@"
