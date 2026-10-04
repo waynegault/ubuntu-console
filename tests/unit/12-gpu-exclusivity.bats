@@ -138,7 +138,10 @@ _hold_lock() {
 @test "gpu-exclusivity: both copies resolve the lock path identically" {
     local _expr='${INVESTIGATOR_GPU_LOCK:-${INVESTIGATOR_PRODUCTION_OUTPUT:-$HOME/investigator/production}/runtime/gpu.lock}'
     grep -qF -- "$_expr" "$MODULE"
-    grep -qF -- "$_expr" "$CLEAR"
+    # The bin-side copy moved into the shared library (966c718d); llama-gpu-clear.sh
+    # now calls _inv_gpu_lock_path from there, so the drift guard compares the
+    # module's copy against the library's, where that copy actually lives.
+    grep -qF -- "$_expr" "$BIN_LIB"
 }
 
 @test "gpu-exclusivity: both copies existence-gate the probe and use flock -n" {

@@ -2610,9 +2610,9 @@ EOF
     run env HOME="$home_dir" USER="${USER:-wayne}" bash -lc "
         source '$REPO_ROOT/env.sh' >/dev/null 2>&1
         export OC_ROOT='$restore_root/.openclaw'
-        export OC_WORKSPACE='\$OC_ROOT/workspace'
-        export OC_AGENTS='\$OC_ROOT/agents'
-        export OC_LOGS='\$OC_ROOT/logs'
+        export OC_WORKSPACE="\$OC_ROOT/workspace"
+        export OC_AGENTS="\$OC_ROOT/agents"
+        export OC_LOGS="\$OC_ROOT/logs"
         export OC_BACKUPS='$backups_dir'
         export LLM_REGISTRY='$restore_root/.llm/models.conf'
         printf 'y\n' | oc-restore >/dev/null 2>&1
