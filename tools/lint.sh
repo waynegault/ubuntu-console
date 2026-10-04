@@ -14,7 +14,10 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 24
+# Module Version: 25
+#   v25 (2026-10-04, card 93909ea5): resolve bats by a PIN (_BATS_PIN 1.11.1, installed by
+#   tools/install-bats.sh), not PATH order — the `.bats` branch decides PASS/FAIL from
+#   `bats --count`, and apt's 1.10.0 accepts a malformed suite (rc 0) that 1.11.1 rejects.
 #   v24 (2026-10-02, card b55c77f5): the whole-tree loops now enumerate
 #   `tools/qwen-hooks/*.sh` as well — `tools/*.sh` is a non-recursive glob, so those three hook
 #   scripts (and shell-command-scan.py) were reached by NOTHING, and were outside the
@@ -77,6 +80,30 @@ do
     fi
 done
 unset _sc_dir _sc_ver
+
+# --- Resolve the PINNED bats, never PATH order --------------------------------
+# The `.bats` branch below asks `bats --count` whether a suite parses and turns
+# its exit status into PASS or FAIL, so the gate is only as strict as the bats
+# that answers.  Two installs on this box disagree about the same file: apt
+# /usr/bin/bats 1.10.0 accepts an unterminated `@test {` (prints a count, rc 0),
+# while ~/.local/bin/bats 1.11.1 rejects it (rc 1).  Measured 2026-10-04: the
+# malformed-suite case in tests/tactical-console-fast.bats failed from a tool
+# shell and passed under the console because the two resolve different bats —
+# which bats answers was decided by PATH order alone.  tools/install-bats.sh
+# installs the pin; resolve it by version here so the verdict cannot move.
+_BATS_PIN="1.11.1"
+for _bats_dir in /usr/local/bin "$HOME/.local/bin"
+do
+    [[ -x "$_bats_dir/bats" ]] || continue
+    # swallow-ok: version probe of a possibly-foreign binary; non-zero IS the signal
+    _bats_ver="$("$_bats_dir/bats" --version 2>/dev/null || true)"
+    if [[ "$_bats_ver" == *"Bats $_BATS_PIN"* ]]
+    then
+        export PATH="$_bats_dir${PATH:+:$PATH}"
+        break
+    fi
+done
+unset _bats_dir _bats_ver
 
 # Unicode safety check: detect non-ASCII characters in executable code lines.
 # Default: enabled (SKIP_UNICODE_CHECK=0).

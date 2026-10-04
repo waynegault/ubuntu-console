@@ -20,10 +20,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install bats
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bats
+      - name: Install bats (pinned)
+        # apt's copy is 1.10.0 and is SHADOWED by ~/.local/bin first on this self-hosted
+        # runner, so it never decided which bats the .bats gate ran; install the pin the way
+        # shellcheck is pinned, so the version cannot drift with PATH order.
+        run: sudo tools/install-bats.sh
 
       - name: Install shellcheck (pinned)
         run: sudo tools/install-shellcheck.sh
