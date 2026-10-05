@@ -26,9 +26,12 @@
 #     the extractor reads before it writes states the style.  The same element also carries
 #     the second class this store's linter flags (MD032, blank lines around lists): one
 #     array element costs nothing extra, and its general half ("match the store's Markdown
-#     style") is what a future extractor can extend.  Anything beyond those two is OWED
-#     UPSTREAM (filed 2026-10-02): the durable fix is the CLI telling the extractor the
-#     store's style, or linting the files the extractor writes.
+#     style") is what a future extractor can extend.  EXTENDED 2026-10-05 (card 59f47689)
+#     to name the three further classes this store actually carries: MD041 (the single H1
+#     repeats the frontmatter name value), MD022 (a blank line before AND after every
+#     heading) and MD046/MD040 (code blocks fenced with a language, never indented).  Anything
+#     beyond those is OWED UPSTREAM (filed 2026-10-02): the durable fix is the CLI telling
+#     the extractor the store's style, or linting the files the extractor writes.
 #     NOT A LINTER CHANGE: the store's markdownlint config is NOT touched by this patch.
 #     A warning is answered by removing its cause, never by relaxing the rule that found it.
 #
@@ -72,11 +75,21 @@
 # patcher is re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-10-05, card 59f47689): the rule element extended to the five measured classes
+#   (MD049 + MD032 as before, plus MD041 / MD022 / MD046+MD040), and the patch made
+#   UPGRADE-AWARE — state is decided by the payload's own phrase, so a copy already carrying
+#   the v1 element is upgraded IN PLACE instead of being skipped by its marker.
 set -euo pipefail
 
 MARKER="LOCAL PATCH 2026-10-02 (qwen-memory-extractor-style)"
 EXTRACTOR_NAME="You are now acting as the managed memory extraction subagent"
+# A v1 copy is recognised by the marker; a CURRENT copy by this phrase, which no earlier
+# version carried.  The rule text is the patch's PAYLOAD — the marker only records that some
+# version of this patch ran here — so the state has to be decided by content (card 59f47689,
+# which extended the rule on 2026-10-05; without this, an already-v1 copy is skipped by the
+# marker and the new clauses never land).
+RULE_NEWEST_CLAUSE="fenced with a language tag, never indented"
 
 check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
@@ -122,7 +135,8 @@ for f in "${files[@]}"; do
     name="${f/#$HOME/~}"
 
     state="UNKNOWN"
-    if grep -qF "$MARKER" "$f"; then state="applied"
+    if grep -qF "$RULE_NEWEST_CLAUSE" "$f"; then state="applied"
+    elif grep -qF "$MARKER" "$f"; then state="v1"
     elif grep -qF "\"Memory file format reference:\",...MEMORY_FRONTMATTER_EXAMPLE]" "$f" \
       || grep -qF "\"Memory file format reference:\"," "$f"; then state="stock"; fi
 
@@ -159,9 +173,21 @@ EXTRACTOR = "You are now acting as the managed memory extraction subagent"
 # general instruction a future extractor can extend.
 rule_text = (
     "- Match the store's Markdown style: emphasis with underscores (_like this_), never "
-    "asterisks (*like this*), and a blank line before and after every list."
+    "asterisks (*like this*); a blank line before and after every list and heading; the "
+    "single H1 repeats the frontmatter name value; and every code block is fenced with a "
+    "language tag, never indented."
 )
 rule_literal = '"' + rule_text + '"'
+
+# The v1 payload (2026-10-02), kept so an already-patched copy is UPGRADED IN PLACE rather
+# than skipped: the marker records that a version of this patch ran, never which payload it
+# wrote.  Inserting the new element beside the old one would leave a stale rule the extractor
+# still reads, so the v1 literal is REPLACED.
+V1_RULE_TEXT = (
+    "- Match the store's Markdown style: emphasis with underscores (_like this_), never "
+    "asterisks (*like this*), and a blank line before and after every list."
+)
+v1_literal = '"' + V1_RULE_TEXT + '"'
 
 MIN_ANCHOR = '"Memory file format reference:",...MEMORY_FRONTMATTER_EXAMPLE]'
 SPACED_ANCHOR = '"Memory file format reference:",\n  ...MEMORY_FRONTMATTER_EXAMPLE\n]'
@@ -181,12 +207,25 @@ if min_hits + spaced_hits != 1:
         f"refusing to patch: no single anchor matched (minified={min_hits}, pretty-printed={spaced_hits})"
     )
 
-if min_hits == 1:
-    new = "/* %s */%s," % (marker, rule_literal) + MIN_ANCHOR
-    src = src.replace(MIN_ANCHOR, new)
-else:
-    new = "/* %s */\n  %s,\n  " % (marker, rule_literal) + SPACED_ANCHOR
-    src = src.replace(SPACED_ANCHOR, new)
+if src.count(rule_literal) == 1:
+    raise SystemExit(
+        "refusing to patch: the current rule element is already present (state should read 'applied')"
+    )
+
+upgraded = False
+if src.count(v1_literal) == 1:
+    # UPGRADE v1 -> current: swap the payload IN PLACE, leaving the marker and the anchor
+    # exactly where v1 put them, so the array keeps ONE style element.
+    src = src.replace(v1_literal, rule_literal)
+    upgraded = True
+
+if not upgraded:
+    if min_hits == 1:
+        new = "/* %s */%s," % (marker, rule_literal) + MIN_ANCHOR
+        src = src.replace(MIN_ANCHOR, new)
+    else:
+        new = "/* %s */\n  %s,\n  " % (marker, rule_literal) + SPACED_ANCHOR
+        src = src.replace(SPACED_ANCHOR, new)
 
 # Post-conditions: everything this patch promises must be present in the text about to be
 # written, and the anchor must survive it.
@@ -194,6 +233,8 @@ if src.count(marker) != 1:
     raise SystemExit("refusing to patch: the marker is not present exactly once in the result")
 if src.count(rule_literal) != 1:
     raise SystemExit("refusing to patch: the rule element is not present exactly once in the result")
+if src.count(v1_literal) != 0:
+    raise SystemExit("refusing to patch: the v1 rule element survived — the array would carry two style rules")
 if src.count(EXTRACTOR) != 1:
     raise SystemExit("refusing to patch: the extractor prompt sentence did not survive the edit")
 if src.count(MIN_ANCHOR) + src.count(SPACED_ANCHOR) != 1:
@@ -202,7 +243,7 @@ if src.index(marker) > src.index(MIN_ANCHOR if min_hits == 1 else SPACED_ANCHOR)
     raise SystemExit("refusing to patch: the rule landed after the format reference, not before it")
 
 p.write_text(src, encoding="utf-8")
-print("  patched  extractor-style")
+print("  upgraded extractor-style (v1 -> current)" if upgraded else "  patched  extractor-style")
 PY
     then
         echo "  MISMATCH $name — an anchor did not match; the chunk is UNCHANGED (backup kept)" >&2
