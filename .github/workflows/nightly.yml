@@ -16,26 +16,48 @@ jobs:
     # Generous on purpose: this job is off the push path, so the cap's only job is to bound a
     # hang rather than to police duration.
     timeout-minutes: 90
+    # ONE VERDICT PER SUITE, never one verdict for the first failure.  Measured 2026-10-04
+    # (card e10aa3a4): the 387-case suite ran FIRST, failed, and every step after it — including
+    # `Run the unit suites CI excludes`, the only place tests/unit/12-gpu-exclusivity.bats is
+    # named — came out SKIPPED, so a tip with ONE red case read as if four suites had passed.
+    # Each suite below is therefore guarded on its OWN prerequisite's outcome (a step id), never
+    # on the step before it, and the long 387-case suite runs LAST.  A suite still reports
+    # `skipped` when its prerequisite failed — that is honest, because the prerequisite's own
+    # red is the root cause and is named directly above it; what must never happen is one
+    # suite's assertion failure hiding a different suite.
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # ---- prerequisites.  install_bats and python_deps GATE the suites below (each suite
+      # ---- is guarded on its own prerequisite's outcome, never on the step before it);
+      # ---- shellcheck and the Python toolchain are what those suites actually use.
       - name: Install bats (pinned)
+        id: install_bats
         # apt's copy is 1.10.0 and is SHADOWED by ~/.local/bin first on this self-hosted
         # runner, so it never decided which bats the .bats gate ran; install the pin the way
         # shellcheck is pinned, so the version cannot drift with PATH order.
         run: sudo tools/install-bats.sh
 
       - name: Install shellcheck (pinned)
+        id: install_shellcheck
         run: sudo tools/install-shellcheck.sh
 
-      - name: Run full behavioural suite
-        # --print-output-on-failure on every bats invocation here: a failed
-        # `run ...; [ "$status" -eq 0 ]` assertion otherwise prints only the failed line and
-        # discards the captured output, which is where a script-under-test names the cause.
-        # Verified 2026-09-18 with a two-arm control (markers absent without, present with).
-        run: bats --print-output-on-failure tests/tactical-console.bats
+      - name: Set up Python
+        id: setup_python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
 
+      - name: Install dependencies
+        id: python_deps
+        run: |
+          python -m pip install --upgrade pip
+          # Same pinned toolchain as ci.yml — ONE requirements file, so the nightly
+          # cannot run a version no other lane uses (card 49ab1c89).
+          pip install -r .github/ci-requirements.txt
+
+      # ---- the suites, each on its own prerequisite's outcome ---------------
       # WHY THIS WORKFLOW IS NOT A SECOND COPY OF CI.  ci.yml runs, per push, the fast
       # suite, units 01/02/09/10/11 and 13-30, and every integration suite.  This
       # workflow used to repeat all of that and then add the full behavioural suite, so
@@ -46,10 +68,8 @@ jobs:
       # list) and 12 (CI skips it because it takes the CUDA card lock this box shares
       # with the investigator).  Re-adding a suite here that ci.yml already runs is a
       # duplicate, not extra coverage.
-      - name: Run the function-availability suite
-        run: bats --print-output-on-failure tests/tactical-console-function-availability.bats
-
       - name: Run the unit suites CI excludes
+        if: ${{ !cancelled() && steps.install_bats.outcome == 'success' }}
         run: |
           # 04-llama-cpp-inventory.bats is excluded from BOTH workflows: it performs
           # live downloads and mutates the host.
@@ -65,26 +85,24 @@ jobs:
                tests/unit/12-gpu-exclusivity.bats \
                tests/unit/38-heavy-job.bats
 
+      - name: Run the function-availability suite
+        if: ${{ !cancelled() && steps.install_bats.outcome == 'success' }}
+        run: bats --print-output-on-failure tests/tactical-console-function-availability.bats
+
       # The integration suites are deliberately NOT repeated here: ci.yml runs
       # 01-maintenance, 02-model-lifecycle, 03-backup-restore, 04-watchdog,
       # 05-refresh-keys and e2e-bench-autotune on every push, on the same commit.
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          # Same pinned toolchain as ci.yml — ONE requirements file, so the nightly
-          # cannot run a version no other lane uses (card 49ab1c89).
-          pip install -r .github/ci-requirements.txt
-
       - name: Ruff lint
+        if: ${{ !cancelled() && steps.python_deps.outcome == 'success' }}
         run: ruff check .
 
       - name: Run Python tests
+        if: ${{ !cancelled() && steps.python_deps.outcome == 'success' }}
+        # NO `-x`: with it, the FIRST failing test aborts the run and every later failure in
+        # the set is never reported — the same "one red hides the rest" shape this job was
+        # hardened against, one level down.  The per-test --timeout still bounds a hang, and
+        # the whole set is cheap enough to run to the end.
         run: >-
           python -m pytest
           tests/test_kgraph.py tests/test_kgraph_wiring.py tests/test_models.py
@@ -96,9 +114,21 @@ jobs:
           tests/test_bats_lock_fixture.py tests/test_check_ci_status.py
           tests/test_oc_health_check.py tests/test_shell_command_scan.py
           nas/butler/openclaw/salus-it500/tests
-          -x --timeout=120 -q
+          --timeout=120 -q
 
       - name: Docs sync check
+        if: ${{ !cancelled() }}
         run: tools/docs-sync-check.sh
+
+      # LAST, deliberately: the 387-case suite is the longest step, and its old position at the
+      # top is exactly why a single failing case SKIPPED every suite after it.  With the suites
+      # above guarded on their own prerequisites, a red here now hides nothing.
+      - name: Run full behavioural suite
+        if: ${{ !cancelled() && steps.install_bats.outcome == 'success' }}
+        # --print-output-on-failure on every bats invocation here: a failed
+        # `run ...; [ "$status" -eq 0 ]` assertion otherwise prints only the failed line and
+        # discards the captured output, which is where a script-under-test names the cause.
+        # Verified 2026-09-18 with a two-arm control (markers absent without, present with).
+        run: bats --print-output-on-failure tests/tactical-console.bats
 
 # end of file
