@@ -514,11 +514,15 @@ YAML
         echo "$((_entries - _with_map)) entr(ies) declare no verified_by, $_unverified reported"
         return 1
     }
-    # ...and the one entry without a BATS test is the recorded gap, reported by name:
-    # oc-restart-check's coverage is tests/test_oc_restart_check.py, which the
-    # BATS-only oracle cannot name.  If a BATS case for it lands, this assertion is
-    # the deliberate edit that adds the mapping.
-    [[ "$output" == *"NOT VERIFIED  oc-restart-check"* ]]
+    # ...and the entry without a BATS node is the recorded gap, reported by name.
+    # `oc-restart-check` WAS that entry — its coverage was tests/test_oc_restart_check.py,
+    # which the BATS-only oracle cannot name — until a BATS case landed for it
+    # (tests/unit/52-oc-restart-check.bats, 2026-10-06).  That is the deliberate edit this
+    # comment anticipated, and the entry now reads VERIFIED; the remaining gap is
+    # `oc purge` (effect: mutate), left unmapped by the owner's call, whose guard is its
+    # read_back witness.
+    [[ "$output" == *"NOT VERIFIED  oc purge"* ]]
+    [[ "$output" == *"VERIFIED      oc-restart-check -> tests/unit/52-oc-restart-check.bats"* ]]
 
     # The same cross-check for the triage: the reported split must equal the
     # `disposition:` lines the contract actually carries, and every other ACTIVE entry
