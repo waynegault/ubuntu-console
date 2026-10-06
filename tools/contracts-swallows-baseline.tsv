@@ -24,7 +24,6 @@ unclassified	scripts/04-aliases.sh	8
 unclassified	scripts/05-ui-engine.sh	2
 unclassified	scripts/06-hooks.sh	5
 unclassified	scripts/07-telemetry.sh	21
-unclassified	scripts/08-maintenance.sh	0
 unclassified	scripts/09a-oc-gateway.sh	37
 unclassified	scripts/09b-gog.sh	3
 unclassified	scripts/09c-oc-core.sh	9
@@ -32,7 +31,7 @@ unclassified	scripts/09d-oc-agents.sh	84
 unclassified	scripts/09e-oc-health.sh	35
 unclassified	scripts/09f-oc-misc.sh	15
 unclassified	scripts/10-deployment.sh	6
-unclassified	scripts/11a-llm-registry.sh	9
+unclassified	scripts/11a-llm-registry.sh	8
 unclassified	scripts/11b-llm-autotune.sh	7
 unclassified	scripts/11c-llm-server.sh	12
 unclassified	scripts/11d-llm-gpu.sh	88
@@ -43,12 +42,12 @@ unclassified	scripts/13-init.sh	9
 unclassified	scripts/14-wsl-extras.sh	9
 unclassified	scripts/15-model-recommender.sh	1
 unclassified	scripts/_startup-env.sh	3
-unclassified	scripts/autotune-model.sh	167
+unclassified	scripts/autotune-model.sh	161
 unclassified	scripts/load-vault-env.sh	9
-unclassified	scripts/retune-band-chunk.sh	10
+unclassified	scripts/retune-band-chunk.sh	9
 unclassified	scripts/run-autotune-batch.sh	10
-unclassified	scripts/spec-decode-bench.sh	12
-unclassified	scripts/spec_dec_crossover.sh	13
+unclassified	scripts/spec-decode-bench.sh	6
+unclassified	scripts/spec_dec_crossover.sh	11
 unclassified	bin/bench-timeout-runner.sh	11
 unclassified	bin/gpu-busy.sh	19
 unclassified	bin/gpu-watch-selfcheck.sh	1
@@ -56,7 +55,6 @@ unclassified	bin/interview-benchmark.sh	1
 unclassified	bin/llama-gpu-clear.sh	11
 unclassified	bin/llama-watchdog.sh	41
 unclassified	bin/tac_hostmetrics.sh	9
-unclassified	tools/check-contracts.sh	6
 unclassified	tools/check-module-versions.sh	8
 unclassified	tools/check-repo-boundaries.sh	1
 unclassified	tools/clean-orphans.sh	40
