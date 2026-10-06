@@ -10,8 +10,10 @@
 # companion update reverts it; a fix that cannot be re-verified is not a fix.
 #
 # The expected values come from the checker's stated CONTRACT — broken means
-# (no link / missing target / trailing ellipsis), counted once PER LINE — not from
-# the implementation's current output.  The mixed fixture is deliberately 3 entries
+# (no link / missing target), counted once PER LINE; a trailing ellipsis is context
+# for an already-broken line, never a defect on its own (refined 2026-10-06, when the
+# 0.25.0 builder's truncateIndexField was found to append '…' to shortened descriptions
+# while keeping the link intact).  The mixed fixture is deliberately 3 entries
 # with exactly 2 defects: an assertion that only read "bad > 0" would pass on a
 # checker that flagged every line, so the count is asserted exactly, and the good
 # line is asserted NOT to be blamed.
@@ -61,6 +63,35 @@ setup() {
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"$d/MEMORY.md: entries=1 bad=0"* ]]
+}
+
+@test "memory index check: a shortened description ending in an ellipsis is NOT a defect" {
+    # The 0.25.0 builder's truncateIndexField appends '…' to a shortened DESCRIPTION while
+    # keeping the link intact and resolvable; flagging that fired the guard on upstream's
+    # deliberate behaviour (measured 2026-10-06: 133 such lines across three stores, every
+    # link resolving).  The expected value comes from the refined contract, not the code.
+    local d="$WORK/ellipsis"
+    mkdir -p "$d"
+    : > "$d/topic.md"
+    printf '%s\n' '- [Short](topic.md) — a description that was shortened…' > "$d/MEMORY.md"
+
+    run python3 "$CHECK" "$d/MEMORY.md"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$d/MEMORY.md: entries=1 bad=0"* ]]
+}
+
+@test "memory index check: an ellipsis beside a broken link is still reported as context" {
+    local d="$WORK/ellipsis-bad"
+    mkdir -p "$d"
+    printf '%s\n' '- [Gone](gone.md) — a description that was shortened…' > "$d/MEMORY.md"
+
+    run python3 "$CHECK" "$d/MEMORY.md"
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"$d/MEMORY.md: entries=1 bad=1"* ]]
+    [[ "$output" == *"missing target: gone.md"* ]]
+    [[ "$output" == *"line ends in an ellipsis (truncated)"* ]]
 }
 
 @test "memory index check: it discovers the root store and EVERY project store, including one it never knew" {

@@ -16,11 +16,20 @@ many are BROKEN.
 WHAT COUNTS AS BROKEN (one `- [` entry line)
 --------------------------------------------
   * no link at all, or an empty/unclosed `](...)` target;
-  * a link whose target does not exist RELATIVE TO THE INDEX FILE's own directory;
-  * a line that ends in an ellipsis (`…` or `...`) — the truncation's own signature,
-    and a defect even when the link it cut still happens to resolve.
+  * a link whose target does not exist RELATIVE TO THE INDEX FILE's own directory.
 One line is counted ONCE however many of those it trips, so `bad=` is a line count,
 not a reason count: `entries=3 bad=2` means one good entry and two bad ones.
+
+A TRAILING ELLIPSIS IS NOT A DEFECT ON ITS OWN (changed 2026-10-06).  A line ending in
+`…` used to mean the stock truncator had cut through the `](path)` target and left a
+dangling marker — but the CLI's 0.25.0 builder keeps the link intact and marks only a
+SHORTENED DESCRIPTION with `…` (measured 2026-10-06: calling the shipped
+`truncateIndexField` appends `…`, and every one of the 133 flagged store lines across the
+root/investigator/ubuntu-console stores had a link that resolved, `missing_target=0`).
+Flagging those fired the guard on upstream's deliberate, harmless behaviour.  The ellipsis
+is therefore named only as CONTEXT for an entry that is already broken; the link checks
+above carry the detection, because a cut-through link has no closing `)` and is caught as
+"no link".
 
 WHICH INDEXES (the store set is DISCOVERED, never listed)
 ---------------------------------------------------------
@@ -57,7 +66,7 @@ EXIT_CANNOT_RUN = 2
 
 # One index entry: `- [title](target) — description`.  Group 2 is the link target.
 # A line truncated mid-link has no closing `)`, so this does not match it and the
-# entry is reported as having no link; the ellipsis test below names the real cause.
+# entry is reported as having no link (the trailing ellipsis is then named as context).
 ENTRY_RE = re.compile(r"^- \[(.*?)\]\(([^)]*)\)")
 
 # Per-file detail is capped so one rotten index cannot bury the summary lines.
@@ -100,7 +109,10 @@ def check_index(path):
                 target = os.path.join(base, match.group(2))
                 if not os.path.exists(target):
                     reasons.append(f"missing target: {match.group(2)}")
-            if line.rstrip().endswith(("…", "...")):
+            # Context only — see the module docstring: from 0.25.0 on, a trailing ellipsis
+            # marks a shortened description with an intact link, so it is NOT a defect and
+            # is named only beside a link problem.
+            if reasons and line.rstrip().endswith(("…", "...")):
                 reasons.append("line ends in an ellipsis (truncated)")
             if reasons:
                 broken.append((lineno, "; ".join(reasons)))
