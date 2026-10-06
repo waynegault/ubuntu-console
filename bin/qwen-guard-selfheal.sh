@@ -25,6 +25,16 @@
 # around.  That patch states the style in the extractor's prompt.  Same reversion
 # risk, same watchdog.
 #
+# The FOURTH (2026-10-05, card 75b9cfcc) is the Workboard comment-cap patch,
+# ~/.openclaw/scripts/workboard-commentcap-patch.sh.  It patches a FOREIGN bundle of its
+# own -- the Gateway's runtime-api-<hash>.mjs -- whose filename carries a content hash, so
+# every OpenClaw upgrade reverts it.  Measured 2026-10-05: it HAD been reverted, and
+# NOTHING invoked the patcher, so a card carrying a comment over the 2000-char cap could
+# no longer be read (NIGHTLY-RED-001, b736803c, 2272 chars).  It already had its own
+# --check (added 2026-10-03); this watchdog is the place it gets invoked.  A re-applied
+# patch needs a GATEWAY RESTART to take effect, which a cron tick cannot perform: the tick
+# re-applies and reports; the restart stays the operator's.
+#
 # Run from cron. Deliberately quiet when healthy: it does nothing and prints
 # nothing when every patch is already in place, and it only writes a record when
 # it actually had to act. When it CANNOT restore a patch it exits non-zero, so a
@@ -43,6 +53,12 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 5
+#   v5 (2026-10-05, card 75b9cfcc): a FOURTH tool is announced -- the Workboard
+#   comment-cap patcher in ~/.openclaw (~/.openclaw/scripts/workboard-commentcap-patch.sh),
+#   probed with its own --check and re-applied like its three siblings.  Measured: the
+#   patch had been reverted by an OpenClaw upgrade and nothing invoked it, so a card with
+#   an over-cap comment became unreadable.
 # Module Version: 4
 #
 # 2026-10-01: wired the STORE-SIDE witness (scripts/qwen-memory-index-check.py)
@@ -76,6 +92,10 @@ export PATH="/home/linuxbrew/.linuxbrew/bin:/home/wayne/.local/bin:/usr/local/bi
 PATCH="/home/wayne/.local/bin/qwen-guard-patch.sh"
 IDX="/home/wayne/.local/bin/qwen-memory-index-patch.sh"
 STYLE="/home/wayne/.local/bin/qwen-memory-style-patch.sh"
+# The comment-cap patcher lives in the OTHER repo and takes its own package root; named by
+# path here rather than linked into ~/.local/bin, because this watchdog is the only thing
+# that invokes it (card 75b9cfcc).
+COMMENTCAP="/home/wayne/.openclaw/scripts/workboard-commentcap-patch.sh"
 WITNESS="/home/wayne/ubuntu-console/scripts/qwen-memory-index-check.py"
 LOG_DIR="/home/wayne/.local/share/qwen-guard"
 LOG="$LOG_DIR/selfheal.log"
@@ -92,6 +112,9 @@ if [[ -x "$IDX" ]] && ! "$IDX" --check >/dev/null 2>&1; then
 fi
 if [[ -x "$STYLE" ]] && ! "$STYLE" --check >/dev/null 2>&1; then
   needed+=(memory-style)
+fi
+if [[ -x "$COMMENTCAP" ]] && ! "$COMMENTCAP" --check >/dev/null 2>&1; then
+  needed+=(commentcap)
 fi
 
 # The STORE-SIDE witness: a health signal separate from the patches.  The patches prove
@@ -128,6 +151,7 @@ for tool in "${needed[@]}"; do
     guard) patch="$PATCH"; label="guard patch" ;;
     memory-index) patch="$IDX"; label="memory-index patch" ;;
     memory-style) patch="$STYLE"; label="memory-style patch" ;;
+    commentcap) patch="$COMMENTCAP"; label="workboard-commentcap patch" ;;
   esac
 
   {
