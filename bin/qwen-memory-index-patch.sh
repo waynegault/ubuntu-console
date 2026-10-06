@@ -75,7 +75,17 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-10-06): recognise that 0.25.0 SATISFIES hunks 1 and 2 UPSTREAM.  Its builder
+#   dropped `truncateIndexLine` for `truncateIndexField` and now budgets the description
+#   around the link (`room = MAX_INDEX_LINE_CHARS - link.length - ...`), and
+#   `encodeIndexPathTarget` no longer slices the path.  Measured 2026-10-05: both 0.25.0
+#   companions reported "no known stock truncateIndexLine body (UNKNOWN shape)" and were
+#   refused, which read as OUR patch being broken.  A chunk carrying both 0.25.0 spellings is
+#   now reported `upstream` (satisfied, nothing to apply).  Hunk 3 remains OWED there: the
+#   byte cap is still 25e3 and its assembleIndex was rewritten, so a new stock spelling and a
+#   matching replacement are still to be derived -- --check says `bytecap: stock` for exactly
+#   that copy rather than MISMATCH.
 set -euo pipefail
 
 MARKER_TRUNC="LOCAL PATCH 2026-10-01 (qwen-memory-index-patch)"
@@ -87,6 +97,16 @@ PATHCAP_STOCK_MIN='const chars=[...value].slice(0,MAX_INDEX_FIELD_CHARS);'
 BYTES_STOCK_SPACED='var MAX_INDEX_BYTES = 25e3;'
 BYTES_STOCK_MIN='var MAX_INDEX_BYTES=25e3;'
 FUNC_TRUNC_STOCK='function truncateIndexLine(text)'
+# 0.25.0 REWROTE the builder (measured 2026-10-05 on the IDE companion's
+# chunk-QJ3UTSP5.js): `truncateIndexLine` is GONE, `docIndexLine` now budgets the
+# description AROUND the link (`room = MAX_INDEX_LINE_CHARS - link.length - suffix.length -
+# separator.length`) so the link is never cut, and `encodeIndexPathTarget` no longer slices
+# the path at all.  Hunks 1 and 2 are therefore SATISFIED BY UPSTREAM in this shape: there is
+# nothing to patch, and a patch that is missing because upstream fixed it must not be
+# reported as a broken bundle.  Both spellings are required, so a chunk that merely happens
+# to define a helper named truncateIndexField is not mistaken for the fixed builder.
+UPSTREAM_FIELD_TRUNC='function truncateIndexField('
+UPSTREAM_ROOM_CALC='room=MAX_INDEX_LINE_CHARS-link2.length'
 
 check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
@@ -129,7 +149,8 @@ for f in "${files[@]}"; do
 
     st_trunc="UNKNOWN"
     if grep -qF "$MARKER_TRUNC" "$f"; then st_trunc="applied"
-    elif grep -qF "$FUNC_TRUNC_STOCK" "$f"; then st_trunc="stock"; fi
+    elif grep -qF "$FUNC_TRUNC_STOCK" "$f"; then st_trunc="stock"
+    elif grep -qF "$UPSTREAM_FIELD_TRUNC" "$f" && grep -qF "$UPSTREAM_ROOM_CALC" "$f"; then st_trunc="upstream"; fi
 
     st_path="applied"
     if grep -qF "$PATHCAP_STOCK_SPACED" "$f" || grep -qF "$PATHCAP_STOCK_MIN" "$f"; then st_path="stock"; fi
@@ -138,8 +159,12 @@ for f in "${files[@]}"; do
     if grep -qF "$MARKER_BYTES" "$f"; then st_bytes="applied"
     elif grep -qF "$BYTES_STOCK_SPACED" "$f" || grep -qF "$BYTES_STOCK_MIN" "$f"; then st_bytes="stock"; fi
 
-    if [[ "$st_trunc" == "applied" && "$st_path" == "applied" && "$st_bytes" == "applied" ]]; then
-        echo "  ok       $name (truncator: applied; pathcap: applied; bytecap: applied)"
+    # `upstream` counts as satisfied: on 0.25.0 the builder already does what hunks 1-2 asked
+    # for, so there is nothing to apply and reporting it as missing would be false.
+    if [[ "$st_trunc" == "applied" || "$st_trunc" == "upstream" ]] \
+       && [[ "$st_path" == "applied" ]] \
+       && [[ "$st_bytes" == "applied" ]]; then
+        echo "  ok       $name (truncator: $st_trunc; pathcap: $st_path; bytecap: $st_bytes)"
         continue
     fi
 
@@ -164,6 +189,12 @@ p = pathlib.Path(os.environ["PATCH_FILE"])
 marker_trunc = os.environ["PATCH_MARKER_TRUNC"]
 marker_bytes = os.environ["PATCH_MARKER_BYTES"]
 src = p.read_text(encoding="utf-8")
+
+# 0.25.0's builder already keeps the link, so hunks 1-2 are upstream-satisfied there.
+# Recognised by the same two spellings the shell side uses; without this a copy that needs
+# ONLY hunk 3 is refused with "no known stock truncateIndexLine body".
+UPSTREAM = ("function truncateIndexField(" in src
+            and "room=MAX_INDEX_LINE_CHARS-link2.length" in src)
 
 # --- hunk 2: drop the 120-char path cap in encodeIndexPathTarget (two spellings) ---
 PATHCAP = {
@@ -323,6 +354,8 @@ already = []
 # hunk 1 (truncator)
 if marker_trunc in src:
     already.append("truncator")
+elif UPSTREAM:
+    already.append("truncator (upstream 0.25.0)")
 elif STOCK_TRUNC_SPACED in src:
     src = src.replace(STOCK_TRUNC_SPACED, NEW_TRUNC)
     applied.append("truncator")
@@ -343,6 +376,8 @@ for old, new in PATHCAP.items():
         break
 if pc is not None:
     applied.append("pathcap")
+elif UPSTREAM:
+    already.append("pathcap (upstream: the path is no longer capped)")
 elif marker_trunc in src and not re.search(r"\[\.\.\.value\]\.slice\(0,\s*MAX_INDEX_FIELD_CHARS\)", src):
     already.append("pathcap")
 else:
