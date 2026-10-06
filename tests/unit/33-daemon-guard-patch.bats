@@ -139,6 +139,47 @@ PYSTUB
 }
 
 # ==============================================================================
+# Gateway health: the lifecycle verdict is FORWARDED, not re-derived
+# ==============================================================================
+# `oc health` and `so` disagreed about one moment (2026-10-06): the checker probed
+# /health without the lifecycle verdict `so` acts on, so a bound-but-not-serving
+# Gateway during its cold start read FAIL while `so` read STARTING. The fix lives in
+# the WIRING — `oc-health` must hand the checker `__so_gateway_phase`'s answer, or
+# the checker silently falls back to its weaker unit+port+age evidence and the two
+# commands re-diverge. A stub checker that echoes the variable is what pins it.
+gateway_phase_echo_checker() {
+    mkdir -p "$HOME/.openclaw/workspace/scripts"
+    cat > "$HOME/.openclaw/workspace/scripts/oc-health-check.py" <<'PYSTUB'
+import os
+print("PHASE=" + os.environ.get("OC_HEALTH_GATEWAY_PHASE", "<unset>"))
+PYSTUB
+    export TAC_PYTHON="${TAC_PYTHON:-python3}"
+}
+
+@test "gateway health: so's lifecycle verdict reaches the enhanced checker" {
+    gateway_phase_echo_checker
+    # 09a-oc-gateway.sh is not sourced in this harness, so stand the classifier in.
+    __so_gateway_phase() { printf 'starting\n'; }
+
+    # --json skips the human-only watch rows (the journal-scanning ones are slow on
+    # a box with a large journal); the phase wiring is identical in every mode.
+    run oc-health --json
+    [[ "$output" == *"PHASE=starting"* ]]
+}
+
+@test "gateway health: a harness without the classifier forwards an empty verdict" {
+    # __so_gateway_phase is absent here; the checker's own fallback must take over
+    # rather than the variable being invented or the row disappearing.
+    gateway_phase_echo_checker
+    run declare -F __so_gateway_phase
+    [ "$status" -ne 0 ]
+
+    run oc-health --json
+    [[ "$output" == *"PHASE="* ]]
+    [[ "$output" != *"PHASE=starting"* ]]
+}
+
+# ==============================================================================
 # The second patch: the VS Code Testing results logger
 # ==============================================================================
 # Same contract, read from the patch tool's --check exit code: 0 patched, 1 a reverted

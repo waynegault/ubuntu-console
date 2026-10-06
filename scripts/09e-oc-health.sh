@@ -9,7 +9,15 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 22
+# Module Version: 23
+#   v23 (2026-10-06): `oc health` forwards `so`'s gateway lifecycle verdict
+#   (__so_gateway_phase) to the enhanced checker as OC_HEALTH_GATEWAY_PHASE, so a
+#   bound-but-not-serving gateway during its cold start reads STARTING, not FAIL.
+#   The checker's `gateway_health` probe used to return FAIL for a healthy Gateway
+#   inside that window (cold starts measured 58-347 s here), so `oc health` and `so`
+#   disagreed about one moment and `so` was right. They now read one source of truth
+#   for "is the Gateway up", and the STARTING row names the elapsed seconds and the
+#   bound so a reader can tell "wait" from "broken" without consulting `so`.
 #   v22 (2026-10-02): `oc health` also reports the CUDA card's TRAINING lane
 #   (card UBC-GRPO-002): a supervised training run claims the card through
 #   bin/train-timeout-runner.sh, and the console must be able to show it and tell it
@@ -301,20 +309,32 @@ function oc-health() {
 
     if [[ -f "$enhanced_script" ]]
     then
+        # Hand the checker the SAME lifecycle verdict `so` acts on, so the two can no
+        # longer disagree about one moment: a gateway whose port is bound but whose
+        # HTTP server is not serving yet is STARTING through its cold start, not
+        # FAIL. `__so_gateway_phase` lives in 09a-oc-gateway.sh, which a harness may
+        # not load; when it is absent the checker falls back to its own
+        # unit+port+start-age evidence rather than inventing a second journal
+        # classifier, so the absence is handled rather than assumed away.
+        local _gw_phase=""
+        if declare -F __so_gateway_phase >/dev/null 2>&1
+        then
+            _gw_phase=$(__so_gateway_phase "openclaw-gateway.service")
+        fi
         # Use comprehensive health check
         local _enhanced_rc=0
         case "$output_mode" in
             json)
-                "$TAC_PYTHON" "$enhanced_script" --json
+                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script" --json
                 ;;
             plain)
-                "$TAC_PYTHON" "$enhanced_script" --json | jq -r '.checks[] | "\(.name): \(.status) - \(.message)"'
+                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script" --json | jq -r '.checks[] | "\(.name): \(.status) - \(.message)"'
                 ;;
             verbose)
-                "$TAC_PYTHON" "$enhanced_script" --verbose
+                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script" --verbose
                 ;;
             *)
-                "$TAC_PYTHON" "$enhanced_script"
+                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script"
                 ;;
         esac
         _enhanced_rc=$?

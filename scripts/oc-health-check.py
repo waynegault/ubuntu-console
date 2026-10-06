@@ -21,6 +21,21 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+# The systemd user unit `so` drives and this checker observes.
+GATEWAY_UNIT = "openclaw-gateway.service"
+
+# How long a bound-but-not-serving gateway may still be called STARTING.  The cold
+# start this host actually shows, measured 2026-10-06 and earlier: the HTTP listener
+# opens ~58 s after the unit starts on an ordinary day; 102.5 s and 130.5 s on
+# merely-busy starts (the Gateway's own "http server listening (…; Ns)" lines);
+# 341 s wall time (298.7 s internal) on the 19:06 BST start; 347 s under heavy lane
+# load.  This bound is the worst measured case plus headroom — past it, a
+# bound-but-not-serving unit is no longer "still starting" and the verdict is FAIL.
+# It bounds the state evidence below; it does not replace it.  A fixed 300 s bound
+# (let alone the 5 s probe this checker replaced) would still have produced a false
+# FAIL on the 341 s start measured here.
+GATEWAY_COLD_START_BOUND_S = 420
+
 
 def _check_tcp_port(host: str, port: int, timeout: float = 1.5) -> bool:
     try:
@@ -41,8 +56,11 @@ def _run(cmd: list[str], timeout: float = 3.0) -> subprocess.CompletedProcess[st
 
 
 def _status_rank(status: str) -> int:
-    order = {"ok": 0, "info": 1, "warn": 2, "fail": 3}
-    return order.get(status, 3)
+    # `starting` is a NORMAL transient, so it ranks above `info` (we know more than
+    # "informational") but below `warn` (nothing is deviating): a gateway mid cold
+    # start must not out-shout a genuine warning, and must not be a `fail`.
+    order = {"ok": 0, "info": 1, "starting": 2, "warn": 3, "fail": 4}
+    return order.get(status, 4)
 
 
 def _summary_status(checks: list[dict[str, object]]) -> str:
@@ -104,6 +122,115 @@ def _check_gateway_port(port: int) -> dict[str, object]:
     }
 
 
+def _gateway_unit_start() -> dict[str, object]:
+    """Read the gateway unit's ActiveState and start age from systemd.
+
+    Returns ``{"available": bool, "active_state": str, "elapsed_s": int | None}``.
+    ``available`` is False when ``systemctl`` is missing or the read fails, so a
+    caller can tell "the unit is not active" apart from "could not ask".
+    """
+    if shutil.which("systemctl") is None:
+        return {"available": False, "active_state": "", "elapsed_s": None}
+
+    try:
+        result = _run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                "-p",
+                "ActiveState",
+                "-p",
+                "ExecMainStartTimestamp",
+                "--timestamp=unix",
+                GATEWAY_UNIT,
+            ],
+            timeout=3.0,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "available": False,
+            "active_state": "",
+            "elapsed_s": None,
+            "error": "systemctl timed out",
+        }
+
+    active_state = ""
+    start_epoch: float | None = None
+    for line in (result.stdout or "").splitlines():
+        key, _, value = line.partition("=")
+        value = value.strip()
+        if key == "ActiveState":
+            active_state = value
+        elif key == "ExecMainStartTimestamp":
+            # --timestamp=unix prints `@<epoch>`; strip the marker before parsing.
+            epoch = value.lstrip("@")
+            if epoch:
+                try:
+                    start_epoch = float(epoch)
+                except ValueError:
+                    start_epoch = None
+
+    elapsed = None
+    if start_epoch is not None:
+        elapsed = int(max(0.0, time.time() - start_epoch))
+    return {"available": True, "active_state": active_state, "elapsed_s": elapsed}
+
+
+def _gateway_unreachable_verdict(port: int, url: str, error: str) -> dict[str, object]:
+    """Decide STARTING vs FAIL when ``/health`` did not answer.
+
+    A bound port is not a serving gateway: on this host the port binds BEFORE the
+    HTTP server serves (cold start measured 58-347 s), so a probe inside that window
+    reports "unreachable" for a Gateway behaving exactly as designed.  The evidence
+    that it is still starting is the same evidence ``so`` acts on —
+    ``__so_gateway_phase``'s lifecycle verdict, passed in by the caller as
+    ``OC_HEALTH_GATEWAY_PHASE`` — together with the unit being active, its start
+    being inside the documented cold-start bound, and its port already bound.
+
+    FAIL is the verdict for every other case: an inactive/failed unit, an unbound
+    port, a start older than the bound, or a journal that says the gateway is
+    running, degraded or draining (those are not a cold start).
+    """
+    phase = os.getenv("OC_HEALTH_GATEWAY_PHASE", "").strip().lower()
+    port_bound = _check_tcp_port("127.0.0.1", port)
+    unit = _gateway_unit_start()
+    elapsed = unit.get("elapsed_s")
+    unit_active = unit.get("available") is True and unit.get("active_state") == "active"
+    within_bound = isinstance(elapsed, int) and elapsed <= GATEWAY_COLD_START_BOUND_S
+    # `running`/`degraded` claim the gateway IS serving, and `draining` is a real
+    # outage: neither is a cold start, so the endpoint being unreachable is a fault.
+    phase_allows_start = phase not in {"running", "degraded", "draining"}
+
+    details: dict[str, object] = {
+        "url": url,
+        "error": error,
+        "phase": phase or "unknown",
+        "port_bound": port_bound,
+        "unit_active": unit_active,
+        "elapsed_s": elapsed,
+        "bound_s": GATEWAY_COLD_START_BOUND_S,
+    }
+
+    if unit_active and port_bound and within_bound and phase_allows_start:
+        return {
+            "name": "gateway_health",
+            "status": "starting",
+            "message": (
+                "gateway starting: port bound, not serving yet "
+                f"(elapsed {elapsed}s; cold-start bound {GATEWAY_COLD_START_BOUND_S}s)"
+            ),
+            "details": details,
+        }
+
+    return {
+        "name": "gateway_health",
+        "status": "fail",
+        "message": "health endpoint unreachable",
+        "details": details,
+    }
+
+
 def _check_gateway_health(port: int) -> dict[str, object]:
     url = f"http://127.0.0.1:{port}/health"
     started = time.time()
@@ -119,12 +246,7 @@ def _check_gateway_health(port: int) -> dict[str, object]:
             "details": {"url": url, "http_status": exc.code},
         }
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        return {
-            "name": "gateway_health",
-            "status": "fail",
-            "message": "health endpoint unreachable",
-            "details": {"url": url, "error": str(exc)},
-        }
+        return _gateway_unreachable_verdict(port, url, str(exc))
 
     try:
         payload = json.loads(body)
@@ -207,7 +329,14 @@ def _check_jq() -> dict[str, object]:
 
 def build_report() -> dict[str, object]:
     oc_port = int(os.getenv("OC_PORT", "18789"))
-    llm_port = int(os.getenv("LLM_PORT", "8081"))
+    # Probe the PRODUCTION lane, not the scratch port.  LLM_PORT (8081) is where `so`
+    # loads a duplicate on demand; the gateway actually talks to LLM_SERVICE_PORT
+    # (llama-xe-minicpm5-1b-chat.service on 18081), so 8081 is closed whenever the
+    # production lane is serving — checking it reported a healthy local stack as a
+    # warning (same defect class already fixed in 09e-oc-health.sh).  The 18081
+    # default stands alone for callers outside the console, where only
+    # LLM_SERVICE_PORT is defined.
+    llm_port = int(os.getenv("LLM_SERVICE_PORT", "18081"))
 
     checks: list[dict[str, object]] = [
         _check_openclaw_cli(),
@@ -233,6 +362,7 @@ def _symbol(status: str) -> str:
         "warn": "[WARN]",
         "fail": "[FAIL]",
         "info": "[INFO]",
+        "starting": "[STARTING]",
     }.get(status, "[FAIL]")
 
 
@@ -263,7 +393,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print_human(report, verbose=args.verbose)
 
-    return 0 if str(report.get("summary")) in {"ok", "info", "warn"} else 1
+    # `starting` is a transient, not a failure: it must not exit 1, or a wrapper's
+    # `oc health && …` treats a cold start as a red box (the defect this verdict
+    # exists to remove).
+    return 0 if str(report.get("summary")) in {"ok", "info", "starting", "warn"} else 1
 
 
 if __name__ == "__main__":
