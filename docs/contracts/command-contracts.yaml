@@ -230,12 +230,14 @@ commands:
     family: openclaw
     summary: Report whether WSL can be restarted now, and what would be interrupted
     version: 1
-    updated: 2026-09-28
+    updated: 2026-10-06
     status: active
     scope: both
     effect: read
     disposition: decision
     bound: "exit_code: 0 safe, 1 not safe, 2 could not measure — a closed three-way enumeration, so no other result is valid"
+    verified_by:
+      - "tests/unit/52-oc-restart-check.bats::oc-restart-check: exit codes are the closed three-way enumeration (0 safe, 1 not safe, 2 could not measure)"
     contract:
       side_effects: []
       output_shape:
@@ -433,6 +435,11 @@ commands:
     status: active
     scope: both
     effect: mutate
+    # NO verified_by, DELIBERATELY (2026-10-06, owner's call).  The read_back witness below is
+    # the guard: it proves the gateway is gone BEFORE any deletion, and that a failed `rm` is
+    # reported and not counted.  A BATS node would have to stop the live gateway and delete real
+    # session dirs (effect: mutate), so this entry stays NOT VERIFIED by the continuity check --
+    # which prints it and never fails -- rather than being tested with a destructive harness.
     read_back:
       - witness: __oc_purge_wait_gone
         file: scripts/09c-oc-core.sh
