@@ -9,7 +9,11 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 23
+# Module Version: 24
+#   v24 (2026-10-06): reflow the `plain)` case's enhanced-checker pipeline across a `\`
+#   continuation so the file carries no line over 120 characters (§18.3 8.1.8) —
+#   behaviour identical.  The marker moves because it IS the change-detection contract:
+#   any edit, including this reflow, must move it.
 #   v23 (2026-10-06): `oc health` forwards `so`'s gateway lifecycle verdict
 #   (__so_gateway_phase) to the enhanced checker as OC_HEALTH_GATEWAY_PHASE, so a
 #   bound-but-not-serving gateway during its cold start reads STARTING, not FAIL.
@@ -328,7 +332,8 @@ function oc-health() {
                 OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script" --json
                 ;;
             plain)
-                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script" --json | jq -r '.checks[] | "\(.name): \(.status) - \(.message)"'
+                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script" --json \
+                    | jq -r '.checks[] | "\(.name): \(.status) - \(.message)"'
                 ;;
             verbose)
                 OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script" --verbose
