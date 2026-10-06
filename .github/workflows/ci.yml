@@ -201,7 +201,8 @@ jobs:
                tests/unit/47-capture-golden-fixtures.bats \
                tests/unit/48-error-handling-noise.bats \
                tests/unit/49-nas-backup-critical-config.bats \
-               tests/unit/50-python-interpreter-resolution.bats
+               tests/unit/50-python-interpreter-resolution.bats \
+               tests/unit/51-memory-index-patch.bats
 
       - name: Run integration tests
         run: |

@@ -68,6 +68,9 @@
 #   qwen-memory-index-patch.sh          # apply (or report) for every installed copy
 #   qwen-memory-index-patch.sh --check  # report only; exit 1 if any copy is unpatched
 #
+#   QWEN_INDEX_PATCH_CHUNK_DIRS=<dir>[:<dir>…]  # scan ONLY these chunk dirs.  The test/CI
+#   affordance: CI has no CLI bundle, and a fixture run must not reach the real copies.
+#
 # TRACKED HERE since 2026-10-01: this script used to exist only as a loose copy at
 # ~/.local/bin/qwen-memory-index-patch.sh, so a fix nobody could re-verify lived
 # outside version control.  `install.sh` links every file in `bin/` into
@@ -75,7 +78,20 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-10-06): hunk 3 is now DERIVED for 0.25.0, which REWROTE assembleIndex.  Its body
+#   no longer cuts the joined text at a newline before the byte cap; it keeps a `kept` Set of
+#   entry indexes (short lines first, then longer ones that still fit) and re-joins them IN
+#   INDEX ORDER, still shedding the surplus SILENTLY behind the same generic warning.  A third
+#   stock spelling (STOCK_ASSEMBLE_V025) and a matching replacement (NEW_ASSEMBLE_V025) are
+#   added, the byte cap is raised there too, and the marker NAMES the loss while keeping the
+#   stock sentence as a prefix.  Also fixes a defect that made an APPLY to 0.25.0 impossible:
+#   two post-conditions assumed hunk 1 had run and demanded a `truncateIndexLine` definition
+#   and its marker, neither of which exists in the upstream-shaped copy — so the hunk-3 apply
+#   would have been refused even once its anchor matched (measured 2026-10-06).  A test
+#   affordance (QWEN_INDEX_PATCH_CHUNK_DIRS) and a node harness (tests/helpers/
+#   memory-index-assemble-harness.mjs) now prove hunk 3's behaviour, which CI cannot reach
+#   through the four real foreign bundles.
 #   v2 (2026-10-06): recognise that 0.25.0 SATISFIES hunks 1 and 2 UPSTREAM.  Its builder
 #   dropped `truncateIndexLine` for `truncateIndexField` and now budgets the description
 #   around the link (`room = MAX_INDEX_LINE_CHARS - link.length - ...`), and
@@ -112,19 +128,23 @@ check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
 
 shopt -s nullglob
-chunk_dirs=(
-    # CLI on PATH (linuxbrew node_modules)
-    /home/linuxbrew/.linuxbrew/lib/node_modules/@qwen-code/qwen-code/chunks
-    # other global node_modules the CLI may be installed into
-    "$HOME"/.local/lib/node_modules/@qwen-code/qwen-code/chunks
-    "$HOME"/.npm-global/lib/node_modules/@qwen-code/qwen-code/chunks
-    # WSL-side (remote) IDE companion — a WSL session runs this copy
-    "$HOME"/.vscode-server/extensions/qwenlm.qwen-code-vscode-ide-companion-*/dist/qwen-cli/chunks
-    # Windows-side IDE companion — a Windows-hosted session runs this copy
-    /mnt/c/Users/*/.vscode/extensions/qwenlm.qwen-code-vscode-ide-companion-*/dist/qwen-cli/chunks
-    # npm update cache
-    "$HOME"/.qwen/updates/npm/*/versions/*/node_modules/@qwen-code/qwen-code/chunks
-)
+if [[ -n "${QWEN_INDEX_PATCH_CHUNK_DIRS:-}" ]]; then
+    IFS=: read -r -a chunk_dirs <<<"$QWEN_INDEX_PATCH_CHUNK_DIRS"
+else
+    chunk_dirs=(
+        # CLI on PATH (linuxbrew node_modules)
+        /home/linuxbrew/.linuxbrew/lib/node_modules/@qwen-code/qwen-code/chunks
+        # other global node_modules the CLI may be installed into
+        "$HOME"/.local/lib/node_modules/@qwen-code/qwen-code/chunks
+        "$HOME"/.npm-global/lib/node_modules/@qwen-code/qwen-code/chunks
+        # WSL-side (remote) IDE companion — a WSL session runs this copy
+        "$HOME"/.vscode-server/extensions/qwenlm.qwen-code-vscode-ide-companion-*/dist/qwen-cli/chunks
+        # Windows-side IDE companion — a Windows-hosted session runs this copy
+        /mnt/c/Users/*/.vscode/extensions/qwenlm.qwen-code-vscode-ide-companion-*/dist/qwen-cli/chunks
+        # npm update cache
+        "$HOME"/.qwen/updates/npm/*/versions/*/node_modules/@qwen-code/qwen-code/chunks
+    )
+fi
 
 files=()
 for d in "${chunk_dirs[@]}"; do
@@ -314,6 +334,29 @@ STOCK_ASSEMBLE_MIN = (
     "Keep index entries concise and move detail into topic files.`}"
     '__name(assembleIndex,"assembleIndex");'
 )
+# 0.25.0 REWROTE assembleIndex.  Instead of cutting the joined text at a newline before the
+# byte cap, it keeps a `kept` Set of entry indexes (short lines first, then longer ones that
+# still fit) and re-joins them IN INDEX ORDER -- and still sheds the surplus SILENTLY behind
+# the same generic warning.  Measured 2026-10-06: both 0.25.0 companions carry this body
+# byte-for-byte.  Its warning template literal holds REAL newlines (unlike the source-escaped
+# "\n" in join/split), so this literal uses \n for the former and \\n for the latter.
+STOCK_ASSEMBLE_V025 = (
+    'function assembleIndex(lines){const raw=lines.join("\\n");'
+    "const wasLineTruncated=lines.length>MAX_INDEX_LINES;"
+    'let truncated=wasLineTruncated?lines.slice(0,MAX_INDEX_LINES).join("\\n"):raw;'
+    'if(truncated.length>MAX_INDEX_BYTES){const entries=truncated.split("\\n");'
+    "const kept=new Set;let size=0;"
+    "for(const limit of[MAX_INDEX_LINE_CHARS,MAX_INDEX_BYTES]){"
+    "for(const[index,line]of entries.entries()){"
+    "if(kept.has(index)||line.length>limit){continue}"
+    "const next=size+(kept.size>0?1:0)+line.length;"
+    "if(next>MAX_INDEX_BYTES){continue}size=next;kept.add(index)}}"
+    'truncated=entries.filter((_2,index)=>kept.has(index)).join("\\n")}'
+    "if(!wasLineTruncated&&truncated.length===raw.length){return truncated}"
+    'return`${truncated}\n\n> WARNING: MEMORY.md is too large; only part of it was written. '
+    "Keep index entries concise and move detail into topic files.`}"
+    '__name(assembleIndex,"assembleIndex");'
+)
 NEW_ASSEMBLE = r'''function assembleIndex(lines) {
   // LOCAL PATCH 2026-10-01 (qwen-memory-index-bytecap): the stock 25000-byte cap silently
   // dropped the tail of the index (measured 2026-10-01: a 161-entry store shed 14 entries).
@@ -346,6 +389,62 @@ NEW_ASSEMBLE = r'''function assembleIndex(lines) {
   return `${joined}\n\n> WARNING: MEMORY.md index is INCOMPLETE — ${kept} of ${lines.length} entries written, ${dropped} DROPPED (${reasons.join("; ")}). Do not read this index as whole; move detail into topic files or raise the caps.`;
 }
 __name(assembleIndex, "assembleIndex");'''
+
+# The 0.25.0 replacement: same promise, adapted to the `kept`-Set body.  The byte cap is raised
+# (BYTES above) and the marker NAMES the loss while KEEPING THE STOCK SENTENCE AS A PREFIX, so a
+# reader or tool that greps for the stock wording still finds it.  Upstream never TRUNCATES an
+# individual line (it drops a line whole or keeps it whole), and this keeps that property; a
+# line longer than MAX_INDEX_LINE_CHARS is merely deprioritised in the byte-cap pass.
+NEW_ASSEMBLE_V025 = (
+    r'''function assembleIndex(lines) {
+  // LOCAL PATCH 2026-10-01 (qwen-memory-index-bytecap): the stock 25000-byte cap silently
+  // dropped the tail of the index (measured 2026-10-01: a 161-entry store shed 14 entries).
+  // A silently-dropped entry is worse than a truncated line - a broken line at least shows the
+  // entry exists. The cap is raised so a realistic store is kept whole, and whenever ANYTHING
+  // is still dropped the marker below NAMES the loss, so a shortened index can never be read as
+  // a whole one. A byte cap is kept (rather than removed) because this index is read into every
+  // session's context; it is a backstop, not a target.
+  const raw = lines.join("\n");
+  const lineShed = lines.length > MAX_INDEX_LINES;
+  const byLines = lineShed ? lines.slice(0, MAX_INDEX_LINES) : lines;
+  let truncated = byLines.join("\n");
+  let byteShed = false;
+  if (truncated.length > MAX_INDEX_BYTES) {
+    const entries = truncated.split("\n");
+    const kept = new Set;
+    let size = 0;
+    for (const limit of [MAX_INDEX_LINE_CHARS, MAX_INDEX_BYTES]) {
+      for (const [index, line] of entries.entries()) {
+        if (kept.has(index) || line.length > limit) { continue; }
+        const next = size + (kept.size > 0 ? 1 : 0) + line.length;
+        if (next > MAX_INDEX_BYTES) { continue; }
+        size = next;
+        kept.add(index);
+      }
+    }
+    truncated = entries.filter((_2, index) => kept.has(index)).join("\n");
+    byteShed = true;
+  }
+  const keptCount = byteShed ? (truncated === "" ? 0 : truncated.split("\n").length) : byLines.length;
+  const dropped = lines.length - keptCount;
+  if (dropped <= 0) {
+    return raw;
+  }
+  const reasons = [];
+  if (lineShed) {
+    reasons.push(`line cap MAX_INDEX_LINES=${MAX_INDEX_LINES}`);
+  }
+  if (byteShed) {
+    reasons.push(`byte cap MAX_INDEX_BYTES=${MAX_INDEX_BYTES}`);
+  }
+  return `${truncated}\n\n> WARNING: MEMORY.md is too large; only part of it was written. '''
+    # Split so this marker line stays inside the §18.3 120-char count; implicit raw-string
+    # concatenation reproduces the exact JS characters (no newline is introduced).
+    r'''Keep index entries concise and move detail into topic files. INCOMPLETE: wrote '''
+    r'''${keptCount} of ${lines.length} entries, ${dropped} DROPPED (${reasons.join("; ")}).`;
+}
+__name(assembleIndex, "assembleIndex");'''
+)
 
 # --- apply, per-copy all-or-nothing (nothing is written unless every needed anchor matches) ---
 applied = []
@@ -397,11 +496,26 @@ else:
             break
     if b is None:
         raise SystemExit("refusing to patch: no known MAX_INDEX_BYTES declaration (UNKNOWN shape)")
-    if STOCK_ASSEMBLE_SPACED in src:
-        src = src.replace(STOCK_ASSEMBLE_SPACED, NEW_ASSEMBLE)
-    elif STOCK_ASSEMBLE_MIN in src:
-        src = src.replace(STOCK_ASSEMBLE_MIN, NEW_ASSEMBLE)
-    else:
+    # Three known stock shapes now: the 0.24.x pretty-printed and minified bodies, and the
+    # 0.25.0 rewrite.  Each is matched EXACTLY ONCE, so a chunk carrying two of them (or two
+    # copies of one) is refused rather than half-patched.
+    assemble_forms = (
+        (STOCK_ASSEMBLE_SPACED, NEW_ASSEMBLE),
+        (STOCK_ASSEMBLE_MIN, NEW_ASSEMBLE),
+        (STOCK_ASSEMBLE_V025, NEW_ASSEMBLE_V025),
+    )
+    hit = False
+    for old, new in assemble_forms:
+        if old not in src:
+            continue
+        if src.count(old) != 1:
+            raise SystemExit(
+                f"refusing to patch: assembleIndex anchor occurs {src.count(old)} times (expected 1)"
+            )
+        src = src.replace(old, new)
+        hit = True
+        break
+    if not hit:
         raise SystemExit("refusing to patch: no known stock assembleIndex body (UNKNOWN shape)")
 
     # The SCAN itself caps at MAX_SCANNED_MEMORY_FILES = 200, BEFORE assembleIndex runs - so a
@@ -434,14 +548,26 @@ else:
     applied.append("bytecap")
 
 # Post-conditions: everything this patch promises must be present in the text about to be written.
-if marker_trunc not in src or marker_bytes not in src:
-    raise SystemExit("refusing to patch: a hunk marker is absent from the result")
+# The truncator marker and its definition are required ONLY where our hunk 1 ran: a 0.25.0-shaped
+# copy has no `truncateIndexLine` at all (upstream keeps the link itself), so demanding them there
+# would refuse a hunk-3-only apply -- the defect fixed in v3.
+if marker_bytes not in src:
+    raise SystemExit("refusing to patch: the byte-cap marker is absent from the result")
+if not UPSTREAM and marker_trunc not in src:
+    raise SystemExit("refusing to patch: the truncator marker is absent from the result")
 if re.search(r"\[\.\.\.value\]\.slice\(0,\s*MAX_INDEX_FIELD_CHARS\)", src):
     raise SystemExit("refusing to patch: path cap still present in result")
 if "var MAX_INDEX_BYTES = 25e3;" in src or "var MAX_INDEX_BYTES=25e3;" in src:
     raise SystemExit("refusing to patch: the stock MAX_INDEX_BYTES declaration is still present")
-if src.count("function truncateIndexLine(text)") != 1 or src.count("function assembleIndex(lines)") != 1:
-    raise SystemExit("refusing to patch: a definition count is not 1")
+if src.count("function assembleIndex(lines)") != 1:
+    raise SystemExit("refusing to patch: the assembleIndex definition count is not 1")
+if UPSTREAM:
+    if "function truncateIndexField(" not in src:
+        raise SystemExit("refusing to patch: the upstream truncateIndexField is absent from the result")
+    if "function truncateIndexLine(text)" in src:
+        raise SystemExit("refusing to patch: truncateIndexLine appeared in an upstream-shaped result")
+elif src.count("function truncateIndexLine(text)") != 1:
+    raise SystemExit("refusing to patch: the truncateIndexLine definition count is not 1")
 if "DROPPED (" not in src:
     raise SystemExit("refusing to patch: the explicit drop marker is absent from the result")
 if "scanAllAutoMemoryTopicDocuments(projectRoot)" not in src or "scanAllUserAutoMemoryTopicDocuments()" not in src:
