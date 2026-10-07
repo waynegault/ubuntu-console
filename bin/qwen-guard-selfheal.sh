@@ -35,6 +35,19 @@
 # patch needs a GATEWAY RESTART to take effect, which a cron tick cannot perform: the tick
 # re-applies and reports; the restart stays the operator's.
 #
+# The FIFTH (2026-10-07) is the VS Code Testing results-logger patch,
+# ~/.local/bin/vscode-pytest-log-patch.py.  It patches a FOREIGN bundle too -- the
+# ms-python.python extension's pytest wrapper, one copy per installed extension
+# version -- so every Python-extension update reverts it, exactly as the guard and
+# memory-index patches revert on their own updates.  Measured 2026-10-07: the patch
+# HAD reverted (the `oc health` row read "an extension update reverts this") and only
+# a human re-applied it, because nothing periodic invoked the tool; a reverted logger
+# fails SILENTLY -- Testing runs simply stop being recorded to ~/.cache/vscode-pytest.
+# Unlike its four siblings its --check is not boolean (0 patched, 1 a reverted copy,
+# 2 no Python extension at all, 3 the recorder FILE is missing), so the added entry is
+# gated on rc==1 and rc==3 is REPORTED (an --apply cannot restore a missing recorder:
+# the tool refuses on rc==3 before it patches anything).
+#
 # Run from cron. Deliberately quiet when healthy: it does nothing and prints
 # nothing when every patch is already in place, and it only writes a record when
 # it actually had to act. When it CANNOT restore a patch it exits non-zero, so a
@@ -53,6 +66,13 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 6
+#   v6 (2026-10-07): a FIFTH tool is announced -- the VS Code Testing results-logger
+#   patcher (~/.local/bin/vscode-pytest-log-patch.py), probed with its own --check and
+#   re-applied like its siblings, but rc-aware: only rc==1 (a reverted copy) is
+#   auto-repairable; rc==2 (no extension copy) is quiet, and rc==3 (the recorder file
+#   is missing) is REPORTED with a non-zero exit because --apply cannot restore it.
+#   Measured: the patch had reverted and only a human had put it back.
 # Module Version: 5
 #   v5 (2026-10-05, card 75b9cfcc): a FOURTH tool is announced -- the Workboard
 #   comment-cap patcher in ~/.openclaw (~/.openclaw/scripts/workboard-commentcap-patch.sh),
@@ -96,6 +116,10 @@ STYLE="/home/wayne/.local/bin/qwen-memory-style-patch.sh"
 # path here rather than linked into ~/.local/bin, because this watchdog is the only thing
 # that invokes it (card 75b9cfcc).
 COMMENTCAP="/home/wayne/.openclaw/scripts/workboard-commentcap-patch.sh"
+# The VS Code Testing results-logger patcher (2026-10-07).  Named by path like its
+# siblings; its --check is rc-aware, so it is probed separately below rather than by
+# the boolean `! … --check` test the four above use.
+TESTLOG="/home/wayne/.local/bin/vscode-pytest-log-patch.py"
 WITNESS="/home/wayne/ubuntu-console/scripts/qwen-memory-index-check.py"
 LOG_DIR="/home/wayne/.local/share/qwen-guard"
 LOG="$LOG_DIR/selfheal.log"
@@ -117,6 +141,26 @@ if [[ -x "$COMMENTCAP" ]] && ! "$COMMENTCAP" --check >/dev/null 2>&1; then
   needed+=(commentcap)
 fi
 
+# The test-log tool's --check is NOT boolean (0 patched, 1 a reverted copy, 2 no
+# Python-extension copy at all, 3 the recorder file is missing), so it cannot use the
+# `! … --check` form above: rc 2 is a legitimate state, not a reversion, and treating
+# it as "needs re-applying" would fire on every tick and never clear.  Only rc 1 is
+# auto-repairable; rc 2 is quiet; rc 3 cannot be fixed by --apply at all (the tool
+# refuses before patching), so it is carried to the report below.
+testlog_rc=0
+testlog_report=""
+if [[ -x "$TESTLOG" ]]; then
+  "$TESTLOG" --check >/dev/null 2>&1 || testlog_rc=$?
+  if [[ "$testlog_rc" -eq 1 ]]; then
+    needed+=(testlog)
+  elif [[ "$testlog_rc" -eq 3 ]]; then
+    # Capture the tool's own words for the log.  Its rc is already known (3) and the
+    # assignment is not errexit-guarded, so no error-suppressing tail is needed to keep
+    # the tick alive — and adding one would be a swallow site the contracts gate counts.
+    testlog_report="$("$TESTLOG" --check 2>&1)"
+  fi
+fi
+
 # The STORE-SIDE witness: a health signal separate from the patches.  The patches prove
 # the BUNDLE is patched; this proves the STORES are sound -- a patched bundle still holds
 # links that a pre-patch daemon chopped.  It runs every tick, independently of the patch
@@ -131,8 +175,9 @@ if [[ -x "$WITNESS" ]]; then
   witness_rc=$?
 fi
 
-# Every patch already in place AND every store clean: stay silent, write nothing.
-if [[ "${#needed[@]}" -eq 0 && "$witness_rc" -eq 0 ]]; then
+# Every patch already in place, every store clean AND the test-log tool not in its
+# unreachable rc==3 state: stay silent, write nothing.
+if [[ "${#needed[@]}" -eq 0 && "$witness_rc" -eq 0 && -z "$testlog_report" ]]; then
   exit 0
 fi
 
@@ -147,16 +192,23 @@ fi
 
 rc=0
 for tool in "${needed[@]}"; do
+  # Each arm names the tool's own re-apply invocation.  The four older patchers apply
+  # when run bare; the test-log patcher is the one sibling with NO default action — a
+  # bare invocation is a usage error — so its arm must name --apply.  Found by this
+  # script's own proof run (2026-10-07): with a bare invocation the tick logged the
+  # tool's usage text and left the wrapper unpatched, while still logging
+  # "--check after: STILL-NEEDS-ATTENTION".
   case "$tool" in
-    guard) patch="$PATCH"; label="guard patch" ;;
-    memory-index) patch="$IDX"; label="memory-index patch" ;;
-    memory-style) patch="$STYLE"; label="memory-style patch" ;;
-    commentcap) patch="$COMMENTCAP"; label="workboard-commentcap patch" ;;
+    guard) patch="$PATCH"; label="guard patch"; apply_args=() ;;
+    memory-index) patch="$IDX"; label="memory-index patch"; apply_args=() ;;
+    memory-style) patch="$STYLE"; label="memory-style patch"; apply_args=() ;;
+    commentcap) patch="$COMMENTCAP"; label="workboard-commentcap patch"; apply_args=() ;;
+    testlog) patch="$TESTLOG"; label="test-log patch"; apply_args=(--apply) ;;
   esac
 
   {
     echo "=== $(date -Is) - ${label} was missing; re-applying"
-    "$patch" 2>&1
+    "$patch" "${apply_args[@]}" 2>&1
     if "$patch" --check >/dev/null 2>&1
     then
       echo "    --check after: ok"
@@ -166,6 +218,20 @@ for tool in "${needed[@]}"; do
     fi
   } >>"$LOG" 2>&1
 done
+
+# Report the test-log tool's rc==3 state: the recorder FILE is missing, so the patch
+# would load nothing and --apply refuses before it touches a wrapper.  A cron tick
+# cannot restore that file, so it is a REPORT (log + non-zero exit), like the store
+# witness below — and the record names the file to restore.
+if [[ -n "$testlog_report" ]]; then
+  {
+    echo "=== $(date -Is) - the test-log patch cannot be re-applied: its recorder is"
+    echo "    missing from ~/.local/lib/vscode-pytest-log/vscode_pytest_log.py; restore"
+    echo "    that file (the patch tool refuses on rc==3), then re-apply with --apply"
+    printf '%s\n' "$testlog_report"
+  } >>"$LOG" 2>&1
+  rc=1
+fi
 
 # Report the store witness when it had something to say (bad>0, or it could not run),
 # and make the tick exit non-zero.  Silent and rc-neutral when every store reads clean.
