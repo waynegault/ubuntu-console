@@ -85,12 +85,14 @@ def _socket_table_listening(port: int) -> bool | None:
     if shutil.which("ss") is None:
         return None
     try:
-        result = _run(["ss", "-ltn", f"sport = :{port}"], timeout=3.0)
+        # The SAME invocation __test_port uses (scripts/06-hooks.sh), so a drift in
+        # either is visible as a difference between the two commands.
+        result = _run(["ss", "-tln", f"sport = :{port}"], timeout=3.0)
     except (subprocess.TimeoutExpired, OSError) as exc:
         _note(f"`ss` could not be read for port {port} ({exc}); using a connect probe")
         return None
     if result.returncode != 0:
-        _note(f"`ss -ltn` exited {result.returncode} for port {port}; using a connect probe")
+        _note(f"`ss -tln` exited {result.returncode} for port {port}; using a connect probe")
         return None
     return "LISTEN" in (result.stdout or "")
 
