@@ -46,8 +46,11 @@ mechanism extends each row with measurement data:
 | 33–37 | `workload`, `ttft_ms`, `bench_ctx`, `bench_max_chunks`, `bench_avg_prompt_tokens` | Autotune workload + measured TTFT + investigator bench input profile (schema v6) |
 
 Fields are auto-calculated by `model scan` from GGUF metadata and preserved per model.
-`tps` is refreshed by `model bench` and burn/stream updates. `mmap_mode` supports
-per-model overrides (`auto|on|off`).
+`tps` (field 17) is written by the **autotune** alone (`11b-llm-autotune.sh`: `$17 = tps_val;
+$18 = "yes"`); the runtime must not overwrite it (`11f-llm-runtime.sh`: "registry field 17 is
+the autotune's"), the field-17 `__save_tps` twin was deleted on 2026-09-16, and `model bench`
+never writes the registry — it saves its own `~/.llm/bench_*.tsv` and leaves field 17 untouched.
+`mmap_mode` supports per-model overrides (`auto|on|off`).
 
 ## Hardware Tuning
 
