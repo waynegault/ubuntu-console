@@ -191,6 +191,100 @@ PYSTUB
     [[ "$output" != *"BINDAGE=258"* ]]
 }
 
+# ------------------------------------------------------------------------------
+# `oc doctor-local` is the checker's OTHER consumer, and it reads the exit code.
+#
+# WHY THIS EXISTS: the first version branched on `!= 0`, so a stalled gateway (rc 5 —
+# exit-code contract, scripts/oc-health-check.py::EXIT_BY_SUMMARY) took the FAILURE
+# branch: it discarded the whole JSON and reported gateway health as "unknown", which
+# is the wrong outcome these cases are named for.  The three codes now mean the same
+# thing in both commands — 0 clean, 5 stalled (alert, do not restart), 1 any other
+# issue (repair or restart is legitimate) — so a consumer of either can tell the two
+# apart, which is the whole point of giving `stalled` its own code.
+#
+# The harness: 33's setup already sources 01/02/03/05/09e with a sandboxed HOME, and
+# 11a is sourced HERE for `__llm_json_escape` (the json field must be readable, since
+# that is the only channel in --json mode — `__oc_note` is silent there).  Every probe
+# is stubbed AFTER the sources, module-locally, so no live gateway, port or config is
+# touched.  `oc-health` is a shell FUNCTION here: the consumer calls it as one.
+doctor_local_prelude() {
+    # shellcheck source=scripts/11a-llm-registry.sh
+    source "$REPO_ROOT/scripts/11a-llm-registry.sh"
+    export __TAC_OPENCLAW_OK=1 LLM_SERVICE_PORT=18081 OC_PORT=18789
+    export TAC_CACHE_DIR="$BATS_TEST_TMPDIR/tac-cache" OC_ROOT="$BATS_TEST_TMPDIR/oc"
+    mkdir -p "$TAC_CACHE_DIR" "$OC_ROOT"
+    : > "$TAC_CACHE_DIR/tac_win_api_keys"
+    printf '%s\n' '{}' > "$OC_ROOT/openclaw.json"
+    __test_port() { return 0; }
+    __llm_is_healthy() { return 0; }
+    __llm_active_entry() { printf '%s\n' '1|Model One|model-one.gguf'; }
+    openclaw() { printf '{"local":{"baseUrl":"http://127.0.0.1:%s/v1"}}\n' "$LLM_SERVICE_PORT"; }
+}
+
+# A checker stub that answers like the real one for a given status/code pair.  The two
+# values are GLOBALS, not locals of this helper: bash closes over variables dynamically,
+# so a `local` here would be gone by the time `oc-doctor-local` actually calls the stub
+# (and naming one `status` would collide with bats' own `$status`).
+STUB_OC_HEALTH_STATUS=""
+STUB_OC_HEALTH_RC=0
+stub_oc_health() {
+    STUB_OC_HEALTH_STATUS="$1"
+    STUB_OC_HEALTH_RC="$2"
+    oc-health() {
+        printf '{"checks":[{"name":"gateway_health","status":"%s","message":"gateway health: %s"}]}\n' \
+            "$STUB_OC_HEALTH_STATUS" "$STUB_OC_HEALTH_STATUS"
+        return "$STUB_OC_HEALTH_RC"
+    }
+}
+
+@test "oc doctor-local: a stalled gateway reads STALLED from the code, not 'unknown', and exits 5" {
+    doctor_local_prelude
+    stub_oc_health stalled 5
+
+    run oc-doctor-local --json
+
+    [ "$status" -eq 5 ] || { echo "a stall exited $status, not 5 (alert, do not restart)"; return 1; }
+    # The wrong outcome this catches: the report being thrown away and the state flattened.
+    [[ "$output" == *'"gateway_health":"stalled"'* ]] \
+        || { echo "the json field does not carry the stall: $output"; return 1; }
+    [[ "$output" != *'"gateway_health":"unknown"'* ]] \
+        || { echo "the stall was flattened to 'unknown'"; return 1; }
+    # A stall is not healthy, so it is still counted as an issue.
+    [[ "$output" == *'"issues":1'* ]] \
+        || { echo "the stall was not counted as an issue: $output"; return 1; }
+}
+
+@test "oc doctor-local: a stall is NAMED in human mode with the action it needs" {
+    doctor_local_prelude
+    stub_oc_health stalled 5
+
+    run oc-doctor-local
+
+    [ "$status" -eq 5 ]
+    [[ "$output" == *"gateway stalled — alert, do not restart"* ]] \
+        || { echo "human mode does not name the stall and its action: $output"; return 1; }
+    [[ "$output" == *"Gateway Health"*"[STALLED]"* ]] \
+        || { echo "the row does not read STALLED: $output"; return 1; }
+}
+
+@test "oc doctor-local: 0 clean and 1 for a genuine failure keep their meaning" {
+    doctor_local_prelude
+
+    # Clean: every probe healthy and the checker's own verdict is ok.
+    stub_oc_health ok 0
+    run oc-doctor-local --json
+    [ "$status" -eq 0 ] || { echo "a clean run exited $status, not 0"; return 1; }
+    [[ "$output" == *'"gateway_health":"ok"'* ]]
+    [[ "$output" == *'"issues":0'* ]]
+
+    # A genuine failure: the checker failed, so its report is unusable — "repair or
+    # restart is legitimate" — and that must NOT be reported as a stall.
+    stub_oc_health fail 1
+    run oc-doctor-local --json
+    [ "$status" -eq 1 ] || { echo "a genuine failure exited $status, not 1"; return 1; }
+    [[ "$output" == *'"gateway_health":"unknown"'* ]]
+}
+
 # ==============================================================================
 # The second patch: the VS Code Testing results logger
 # ==============================================================================

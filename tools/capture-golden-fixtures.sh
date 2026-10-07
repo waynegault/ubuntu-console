@@ -15,6 +15,8 @@
 #   tools/capture-golden-fixtures.sh
 #   tools/capture-golden-fixtures.sh --out tests/fixtures/golden
 # ==============================================================================
+# AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 1
 
 set -euo pipefail
 

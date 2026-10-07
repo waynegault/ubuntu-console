@@ -9,6 +9,17 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 27
+#   v27 (2026-10-07): `oc-doctor-local` stops flattening a stall into a generic issue —
+#   it now returns the SAME three values as `oc health` (0 clean, 5 stalled: alert, do
+#   NOT restart, 1 any other issue: repair or restart is legitimate).  Before this the
+#   same gateway read 5 from `oc health` and 1 from `oc doctor-local`, which is the
+#   ambiguity the exit-code contract exists to remove.  The value is computed once, above
+#   the three output branches, and every return uses it.
+#   The v26 residual ("no behavioural test surface for oc-doctor-local") is CLOSED: three
+#   `oc doctor-local:` cases in tests/unit/33-daemon-guard-patch.bats drive the function
+#   with `oc-health` stubbed to print a stalled JSON and return 5 (and to return 0/1 for
+#   the other arms), asserting the json field, the human note and the exit code.
 # Module Version: 26
 #   v26 (2026-10-07): `oc-health` documents its EXIT CODE as a contract.  Wayne's
 #   decision that day: the checker gives `stalled` its own code (5) instead of 0, so the
@@ -22,9 +33,8 @@
 #   stall: "alert, do not restart"), and only 1/unrecognised takes the failure branch —
 #   previously a stall discarded the whole JSON and reported gateway health as "unknown".
 #   gateway_health also carries the checker's own word (`stalled`) through to the json/plain
-#   surfaces instead of flattening it.  (No behavioural test surface for oc-doctor-local
-#   exists — tests/tactical-console.bats pins only that the FUNCTION is defined — so this
-#   half is unpinned and says so rather than inventing a fixture.)
+#   surfaces instead of flattening it.  (v26 left oc-doctor-local's EXIT contract and its
+#   behavioural coverage open; both land in v27.)
 # Module Version: 25
 #   v25 (2026-10-07): `oc health` also forwards `__so_gateway_bound_age` as
 #   OC_HEALTH_GATEWAY_BOUND_AGE_S, the checker's POST-BIND evidence.  Wayne's decision
@@ -1437,6 +1447,33 @@ function oc-doctor-local() {
     (( key_cache )) || issues=$(( issues + 1 ))
     (( oc_config )) || issues=$(( issues + 1 ))
 
+    # EXIT CODE CONTRACT (Wayne, 2026-10-07) — the SAME three values `oc health` uses
+    # (scripts/oc-health-check.py::EXIT_BY_SUMMARY), so a consumer of either command can
+    # tell "alert, do not restart" from "repair or restart" about the same state:
+    #   0  clean — every probe passed
+    #   5  a STALLED gateway (listener bound and dark past the post-bind grace): alert, do
+    #      NOT restart.  It outranks the generic tally because the state is known and the
+    #      action is not a repair; without this the same gateway read 5 from `oc health`
+    #      and 1 here — exactly the ambiguity the exit-code contract exists to remove.
+    #   1  any other issue — a genuine failure, where repair or restart IS legitimate.
+    # An inactive or unrecognised state keeps the conservative default of 1.
+    #
+    # TWO INDEPENDENT SURFACES, deliberately.  `issues` above is a HEALTH TALLY: a stalled
+    # gateway is not healthy, so it still counts (see the `stalled` branch's own note).  THIS
+    # value is an ACTION CONTRACT: what a consumer should DO.  Neither is derived from the
+    # other — `issues:1` together with rc 5 means "one unhealthy probe, and the action is
+    # alert", not "one issue, therefore repair".  A consumer that keyed on the tally, or on
+    # `!= 0`, would restart a state that measurement shows recovers by itself.
+    local doctor_rc=0
+    if (( issues > 0 ))
+    then
+        doctor_rc=1
+    fi
+    if [[ "$gateway_health" == "stalled" ]]
+    then
+        doctor_rc=5
+    fi
+
     if [[ "$output_mode" == "json" ]]
     then
         printf '{'
@@ -1451,8 +1488,7 @@ function oc-doctor-local() {
         printf '"active_model":"%s",' "$(__llm_json_escape "$active_model")"
         printf '"issues":%s' "$issues"
         printf '}\n'
-        (( issues == 0 ))
-        return
+        return "$doctor_rc"
     fi
 
     if [[ "$output_mode" == "plain" ]]
@@ -1467,8 +1503,7 @@ function oc-doctor-local() {
         printf '%s\n' "oc_config=$oc_config"
         printf '%s\n' "active_model=$active_model"
         printf '%s\n' "issues=$issues"
-        (( issues == 0 ))
-        return
+        return "$doctor_rc"
     fi
 
     __tac_header "LOCAL AI DOCTOR" "open"
@@ -1493,7 +1528,7 @@ function oc-doctor-local() {
     __tac_info "Summary" "[$issues issue(s)]" \
         "$([[ $issues -eq 0 ]] && printf '%s' "$C_Success" || printf '%s' "$C_Warning")"
     __tac_footer
-    (( issues == 0 ))
+    return "$doctor_rc"
 }
 
 # ---------------------------------------------------------------------------
