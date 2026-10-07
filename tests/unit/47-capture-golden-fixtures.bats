@@ -54,3 +54,28 @@ SH
         || { echo "the clean run's tally is wrong: $output"; return 1; }
     [[ "$output" != *"FAILED (see above)"* ]]
 }
+
+# Exit 5 is `oc health`'s STALLED code — the listener is bound and dark past the
+# post-bind grace, and the action is ALERT, NEVER RESTART (Wayne, 2026-10-07;
+# scripts/oc-health-check.py::EXIT_BY_SUMMARY).  A capture taken on such a box is
+# FAITHFUL, so counting it as a failure reddened the run for a probe that worked.  The
+# expected values here come from that contract, not from the script's behaviour: a stall
+# is captured and NAMED, the tally stays at zero failures, and the run exits 0 — while
+# `rc 1` (and every other non-zero code) stays a failure, pinned by the first case.
+@test "capture-golden-fixtures: rc 5 is a captured-but-STALLED fixture, not a failure" {
+    local root
+    root="$(_sandbox 5)"
+    run "$root/tools/capture-golden-fixtures.sh" --out "$root/out"
+
+    [[ "$status" -eq 0 ]] || { echo "a stalled capture exited $status"; return 1; }
+    [[ "$output" == *"captured: help_h (rc=5) STALLED"* ]] \
+        || { echo "the per-command line does not name the stall: $output"; return 1; }
+    [[ "$output" == *"7/7 captured, 0 FAILED; 7 STALLED"* ]] \
+        || { echo "the tally does not report the stalls separately from failures: $output"; return 1; }
+    [[ "$output" != *"(see above)"* ]] \
+        || { echo "the run printed the failure summary for a stall: $output"; return 1; }
+    # The fixture format carries the state without being forced: the meta keeps the raw
+    # code, so a consumer can tell a stall (5) from a failure (1) from the file itself.
+    [[ "$(cat "$root/out/help_h.meta")" == *"exit_code: 5"* ]] \
+        || { echo "the meta does not record the stall's exit code"; return 1; }
+}

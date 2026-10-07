@@ -9,6 +9,22 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 26
+#   v26 (2026-10-07): `oc-health` documents its EXIT CODE as a contract.  Wayne's
+#   decision that day: the checker gives `stalled` its own code (5) instead of 0, so the
+#   bound-but-dark state stops being invisible to a consumer that reads only the status,
+#   while `!= 0 -> restart` is explicitly ruled out (a stall recovers by itself; a restart
+#   re-enters the drain window).  `oc-health` already returned the checker's code
+#   unchanged — this note is the shell side of the contract, and the mapping itself lives
+#   in scripts/oc-health-check.py as EXIT_BY_SUMMARY (pinned by tests/test_oc_health_check.py).
+#   The SAME change-set fixes the consumer that keyed on `!= 0`: oc-doctor-local now
+#   captures the code separately, so 0 AND 5 both render their report (5 also names the
+#   stall: "alert, do not restart"), and only 1/unrecognised takes the failure branch —
+#   previously a stall discarded the whole JSON and reported gateway health as "unknown".
+#   gateway_health also carries the checker's own word (`stalled`) through to the json/plain
+#   surfaces instead of flattening it.  (No behavioural test surface for oc-doctor-local
+#   exists — tests/tactical-console.bats pins only that the FUNCTION is defined — so this
+#   half is unpinned and says so rather than inventing a fixture.)
 # Module Version: 25
 #   v25 (2026-10-07): `oc health` also forwards `__so_gateway_bound_age` as
 #   OC_HEALTH_GATEWAY_BOUND_AGE_S, the checker's POST-BIND evidence.  Wayne's decision
@@ -309,6 +325,18 @@ function __oc_train_lane() {
     return 0
 }
 
+# oc-health — the health report.  Its EXIT CODE IS A CONTRACT (Wayne, 2026-10-07; the
+# mapping lives in scripts/oc-health-check.py as EXIT_BY_SUMMARY, and this function
+# returns the checker's code unchanged):
+#   0  ok | info | warn | starting — healthy, merely degraded, or a NORMAL cold start
+#   5  stalled — the listener is bound and dark past the post-bind grace: ALERT, NEVER
+#      RESTART (the state that recovers by itself; a restart re-enters the drain window
+#      that turned one restart into a 15.5-minute outage)
+#   1  fail — an inactive unit, or a start that stopped producing evidence: repair or
+#      restart IS legitimate; also the conservative default for an unrecognised summary
+# CONSUMERS MUST KEY ON THE VALUE.  `!= 0 -> restart` must not be written anywhere: it
+# reads a stall as a reason to restart.  (The fallback path below — a box without the
+# enhanced checker — has no stall state and keeps returning 0/1.)
 function oc-health() {
     local output_mode="human"
     case "${1:-}" in
@@ -1328,13 +1356,25 @@ function oc-doctor-local() {
 
     if (( openclaw_installed ))
     then
-        local _oc_health_json=""
-        if ! _oc_health_json=$(oc-health --json 2>/dev/null)
+        # `oc-health`'s exit code is a CONTRACT (scripts/oc-health-check.py::
+        # EXIT_BY_SUMMARY): 0 AND 5 both carry a usable report.  Branching on `!= 0`
+        # therefore threw the whole JSON away on a stall — the one state this run must
+        # surface rather than blank — and reported it as "unknown".  Only a genuine
+        # failure (1, or any unrecognised code) takes the failure branch; a stall is named
+        # with the action it needs, and its report is still rendered below.
+        local _oc_health_json="" _oc_health_rc=0
+        _oc_health_json=$(oc-health --json 2>/dev/null) || _oc_health_rc=$?
+        if (( _oc_health_rc == 5 ))
+        then
+            __oc_note "[oc-doctor-local] gateway stalled — alert, do not restart" "$output_mode"
+        elif (( _oc_health_rc != 0 ))
         then
             # An empty value still leaves gateway_health "unknown" below, but the
             # reason must not hide behind that verdict.
             _oc_health_json=""
-            __oc_note "[oc-doctor-local] 'oc-health --json' failed — gateway health reported as unknown" "$output_mode"
+            local _oc_note_msg="[oc-doctor-local] 'oc-health --json' failed (rc=$_oc_health_rc)"
+            _oc_note_msg+=" — gateway health reported as unknown"
+            __oc_note "$_oc_note_msg" "$output_mode"
         fi
         # Accept both oc-health --json shapes: the enhanced Python checker
         # emits {"checks":[{"name":...,"status":...}]}, but the built-in
@@ -1357,6 +1397,13 @@ function oc-doctor-local() {
         if [[ "$api_health_status" == "OK" || "$api_health_status" == "ok" ]]
         then
             gateway_health="ok"
+        elif [[ "$api_health_status" == "stalled" ]]
+        then
+            # Carry the checker's own word through instead of flattening it to "unknown":
+            # the state is known and actionable (alert, never restart), and the json/plain
+            # surfaces are the machine-readable ones.  It still counts as an issue below —
+            # a stall is not healthy.
+            gateway_health="stalled"
         else
             gateway_health="unknown"
         fi

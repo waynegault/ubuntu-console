@@ -5,6 +5,24 @@ Outputs:
 - human (default): concise checklist
 - --verbose: checklist + details
 - --json: structured JSON for automation
+
+EXIT CODE CONTRACT — the SUMMARY decides the code, in `EXIT_BY_SUMMARY` below:
+
+    0   ok | info | warn | starting   healthy, merely degraded, or a NORMAL cold start
+    5   stalled                        the listener is bound and dark past the post-bind
+                                       grace: ALERT, NEVER RESTART
+    1   fail                           an inactive unit, or a start that stopped producing
+                                       evidence: repair or restart is legitimate
+    1   anything else                  an unrecognised summary keeps the conservative default
+
+Consumers MUST key on the VALUE.  1 means repair or restart is legitimate; 5 means alert and
+never restart.  `!= 0 -> restart` must not be written: a stall is exactly the state that
+measurement shows recovers by itself (bound 212 s in, serving at 542 s, 2026-10-07), and a
+restart re-enters the drain window that turned one restart into a 15.5-minute outage
+(2026-09-22).  A stall is not a plain failure, and must not be read as one.
+
+`oc health` returns this code unchanged (scripts/09e-oc-health.sh::oc-health), so the same
+contract governs the shell command.
 """
 
 from __future__ import annotations
@@ -543,8 +561,43 @@ def print_human(report: dict[str, Any], verbose: bool = False) -> None:
                 print(f"       details: {json.dumps(details, ensure_ascii=True, sort_keys=True)}")
 
 
+# The consumer contract lives in ONE greppable place.  The SUMMARY decides the code (the
+# module docstring states the reasoning):
+#   0  ok | info | warn | starting — healthy, degraded, or a NORMAL cold start;
+#   5  stalled — the listener is bound and dark past the post-bind grace: ALERT, NEVER
+#      RESTART.  It has its own value because the exit status is the only channel a
+#      wrapper or a monitor reads, and a stall that reads as a plain failure invites the
+#      restart that re-enters the drain window (measured 2026-09-22: one restart became a
+#      15.5-minute outage);
+#   1  fail — an inactive unit, or a start that has stopped producing evidence, where
+#      repair or restart IS legitimate.
+# `EXIT_UNRECOGNISED` is the conservative default: a status added without an exit decision
+# must not read as success (the tests pin the mapping's keys so it cannot go stale).
+EXIT_BY_SUMMARY = {
+    "ok": 0,
+    "info": 0,
+    "warn": 0,
+    "starting": 0,
+    "stalled": 5,
+    "fail": 1,
+}
+EXIT_UNRECOGNISED = 1
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Richer OpenClaw health diagnostics")
+    parser = argparse.ArgumentParser(
+        description="Richer OpenClaw health diagnostics",
+        epilog=(
+            "exit codes (consumers must key on the VALUE, never on `!= 0`):\n"
+            "  0  ok | info | warn | starting — healthy, degraded, or a normal cold start\n"
+            "  5  stalled — listener bound and dark past the post-bind grace: ALERT, never restart\n"
+            "  1  fail — inactive unit, or a start that stopped producing evidence; also the\n"
+            "     default for an unrecognised summary\n"
+            "Never write `!= 0 -> restart`: a stall recovers by itself, and a restart\n"
+            "re-enters the drain window."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON report")
     parser.add_argument("--verbose", action="store_true", help="Verbose human output")
     args = parser.parse_args(argv)
@@ -555,13 +608,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print_human(report, verbose=args.verbose)
 
-    # `starting` and `stalled` are transients, not proven failures: they must not exit
-    # 1, or a wrapper's `oc health && …` treats a cold start — or a bound listener still
-    # coming up — as a red box.  `stalled` is loud in the row, but the action it names is
-    # "watch, do not restart" (measured 2026-10-07: this state recovered by itself), and
-    # a restart is the action that turns a start into a 15.5-minute outage.  Only `fail`
-    # — an inactive unit, or a start that has stopped producing evidence — exits 1.
-    return 0 if str(report.get("summary")) in {"ok", "info", "starting", "warn", "stalled"} else 1
+    # The code comes from the mapping, not from a boolean: `starting` (a normal cold start)
+    # and `stalled` (bound, dark, may still recover) must not read as `fail`, while
+    # `stalled` must NOT read as success either — that would be a silent channel.  The two
+    # transients therefore get 0 and 5 respectively, and only `fail` gets 1.
+    summary = str(report.get("summary"))
+    return EXIT_BY_SUMMARY.get(summary, EXIT_UNRECOGNISED)
 
 
 if __name__ == "__main__":

@@ -55,8 +55,16 @@ mkdir -p "$OUT_DIR"
 # Failure tally (card 90eee0c2): a capture that failed must not be reported as a
 # completed run.  capture() records every command's exit code below, and the run
 # ends non-zero with a count when any of them was non-zero.
+#
+# EXIT 5 IS NOT A FAILURE (Wayne, 2026-10-07).  `oc health` reserves 5 for a STALLED
+# gateway — the listener is bound and dark past the post-bind grace, action = ALERT,
+# NEVER RESTART (scripts/oc-health-check.py::EXIT_BY_SUMMARY) — so a capture taken on
+# such a box was faithful and the run still reddened.  It is counted separately as
+# captured-but-STALLED; the fixture's own meta keeps `exit_code: 5`, so the format
+# carries the state without being forced.  Only a non-zero, non-5 code is a failure.
 CAPTURE_TOTAL=0
 CAPTURE_FAILED=0
+CAPTURE_STALLED=0
 
 capture() {
     local name="$1"
@@ -79,7 +87,11 @@ capture() {
 
     echo "exit_code: $rc" >> "$meta_file"
     CAPTURE_TOTAL=$((CAPTURE_TOTAL + 1))
-    if (( rc != 0 ))
+    if (( rc == 5 ))
+    then
+        CAPTURE_STALLED=$((CAPTURE_STALLED + 1))
+        echo "captured: $name (rc=$rc) STALLED"
+    elif (( rc != 0 ))
     then
         CAPTURE_FAILED=$((CAPTURE_FAILED + 1))
         echo "captured: $name (rc=$rc) FAILED"
@@ -104,6 +116,10 @@ CAPTURE_OK=$((CAPTURE_TOTAL - CAPTURE_FAILED))
 if (( CAPTURE_FAILED > 0 ))
 then
     SUMMARY="Fixture capture complete: ${CAPTURE_OK}/${CAPTURE_TOTAL} captured, ${CAPTURE_FAILED} FAILED (see above)."
+elif (( CAPTURE_STALLED > 0 ))
+then
+    SUMMARY="Fixture capture complete: ${CAPTURE_OK}/${CAPTURE_TOTAL} captured, 0 FAILED;"
+    SUMMARY+=" ${CAPTURE_STALLED} STALLED (rc=5 — gateway bound and dark: alert, do not restart)."
 else
     SUMMARY="Fixture capture complete: ${CAPTURE_OK}/${CAPTURE_TOTAL} captured, 0 FAILED."
 fi

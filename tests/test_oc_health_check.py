@@ -612,11 +612,13 @@ def test_stalled_is_its_own_status_above_warn_and_below_fail() -> None:
     assert checker._symbol("stalled") == "[STALLED]"
 
 
-def test_main_exits_zero_for_stalled(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Like `starting`: loud in the row, but NOT a red box for `oc health && …` — the
-    # action a stalled start needs is "watch, do not restart", and exiting 1 invites the
-    # restart that turns a start into a 15.5-minute outage.
-    assert _main_with(monkeypatch, "stalled") == 0
+def test_main_exits_five_for_stalled(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Wayne's 2026-10-07 decision: `stalled` gets its OWN exit code.  Exiting 0 made the
+    # state invisible to a consumer that reads only the status (a silent channel);
+    # exiting 1 would have said "repair or restart", and a restart re-enters the drain
+    # window that turned one restart into a 15.5-minute outage (2026-09-22).  5 says
+    # alert and never restart.
+    assert _main_with(monkeypatch, "stalled") == 5
 
 
 def test_gateway_bind_age_reads_the_env_and_rejects_stale_or_bad_values(
@@ -872,6 +874,61 @@ def test_main_exits_zero_for_warn(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_main_exits_one_for_fail(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _main_with(monkeypatch, "fail") == 1
+
+
+# --- the exit-code contract (Wayne's 2026-10-07 decision) -------------------
+#
+# WHY THE CODES ARE PINNED HERE: the exit status is the only channel a wrapper or a
+# monitor reads, so the contract has to be a property of THIS module, not of a caller's
+# comment.  These cases assert the CODE — the thing under test — not the summary string,
+# because a mapping that returned the right code for the wrong reason would still be
+# wrong the moment a status is added.
+#
+# 0 for the healthy/degraded/normal-start states, 5 for a stall (ALERT, NEVER RESTART),
+# 1 for a fault (repair or restart is legitimate) and for anything unrecognised.
+
+
+def test_exit_mapping_covers_every_status_the_checker_can_emit() -> None:
+    # A status added without an exit decision must not silently inherit "success": the
+    # mapping's keys are the set of summaries the checker emits, and this assertion is
+    # what forces the mapping to be extended instead of going stale.  `EXIT_UNRECOGNISED`
+    # is the conservative default.
+    assert set(checker.EXIT_BY_SUMMARY) == {"ok", "info", "warn", "starting", "stalled", "fail"}
+    assert checker.EXIT_UNRECOGNISED == 1
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected"),
+    [
+        ("ok", 0),
+        ("info", 0),
+        ("warn", 0),
+        ("starting", 0),
+        ("stalled", 5),
+        ("fail", 1),
+        ("banana", 1),  # unrecognised -> the conservative default, never 0
+    ],
+)
+def test_exit_code_contract(
+    monkeypatch: pytest.MonkeyPatch, summary: str, expected: int
+) -> None:
+    assert _main_with(monkeypatch, summary) == expected
+
+
+def test_exit_code_does_not_depend_on_the_output_mode(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `oc health --json | …` and the human row must agree on the code, or a monitor and a
+    # human would read the same stall differently.
+    monkeypatch.setattr(
+        checker,
+        "build_report",
+        lambda: {"summary": "stalled", "checks": [], "ports": {}, "timestamp": 0},
+    )
+    assert checker.main(["--json"]) == 5
+    assert checker.main(["--verbose"]) == 5
+    assert checker.main([]) == 5
+    capsys.readouterr()
 
 
 def test_main_json_mode_emits_the_report(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
