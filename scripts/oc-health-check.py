@@ -37,12 +37,70 @@ GATEWAY_UNIT = "openclaw-gateway.service"
 GATEWAY_COLD_START_BOUND_S = 420
 
 
+def _note(message: str) -> None:
+    """Report a non-fatal read failure on stderr, never on stdout.
+
+    These are diagnostics, not row output: a note on stdout would corrupt the
+    ``--json`` contract and the ``--plain`` pipe, both of which read stdout alone.
+    """
+    print(f"[oc-health-check] {message}", file=sys.stderr)
+
+
 def _check_tcp_port(host: str, port: int, timeout: float = 1.5) -> bool:
+    """Whether a TCP connect to ``host:port`` is accepted.
+
+    ``OSError`` here is the probe's NEGATIVE answer (nothing accepting a connection),
+    not a swallowed fault, so it carries no note.  It is a SECONDARY signal: prefer
+    ``_check_port_bound``, because a saturated event loop can refuse a connect while
+    the listener exists (measured 2026-10-07).
+    """
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
     except OSError:
         return False
+
+
+def _socket_table_listening(port: int) -> bool | None:
+    """Whether the kernel's socket table shows a listener on ``port``.
+
+    This is the evidence ``so`` acts on: ``__test_port`` (scripts/06-hooks.sh) runs
+    ``ss -tln "sport = :<port>"``.  Reading the SAME table is what stops the two
+    commands disagreeing about one moment.  A connect is not equivalent — measured
+    2026-10-07, during a Gateway cold start a saturated event loop refused the 1.5 s
+    connect (``oc health`` -> FAIL) while ``ss -ltn`` showed two LISTEN rows and ``so``
+    correctly read STARTING.
+
+    Returns True/False when ``ss`` answered, and None when it could not be asked (no
+    ``ss``, a timeout, a non-zero exit) so the caller can tell "not bound" apart from
+    "could not ask" and fall back to a connect instead of inventing a verdict.
+    """
+    if shutil.which("ss") is None:
+        return None
+    try:
+        result = _run(["ss", "-ltn", f"sport = :{port}"], timeout=3.0)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        _note(f"`ss` could not be read for port {port} ({exc}); using a connect probe")
+        return None
+    if result.returncode != 0:
+        _note(f"`ss -ltn` exited {result.returncode} for port {port}; using a connect probe")
+        return None
+    return "LISTEN" in (result.stdout or "")
+
+
+def _check_port_bound(port: int) -> tuple[bool, dict[str, object]]:
+    """Whether ``port`` is bound, preferring the socket table over a connect.
+
+    The socket table is authoritative when ``ss`` answers, because it is the source
+    ``so`` reads; the connect is only a fallback for when the table could not be read,
+    so a saturated event loop can no longer turn a bound port into a FAIL.  Returns the
+    verdict with the evidence behind it, so a caller can name what it saw.
+    """
+    table = _socket_table_listening(port)
+    if table is not None:
+        return table, {"socket_table": table, "connect": None}
+    connect = _check_tcp_port("127.0.0.1", port)
+    return connect, {"socket_table": None, "connect": connect}
 
 
 def _run(cmd: list[str], timeout: float = 3.0) -> subprocess.CompletedProcess[str]:
@@ -113,12 +171,12 @@ def _check_openclaw_cli() -> dict[str, object]:
 
 
 def _check_gateway_port(port: int) -> dict[str, object]:
-    listening = _check_tcp_port("127.0.0.1", port)
+    listening, evidence = _check_port_bound(port)
     return {
         "name": "gateway_port",
         "status": "ok" if listening else "fail",
         "message": f"port {port} listening" if listening else f"port {port} not listening",
-        "details": {"port": port, "listening": listening},
+        "details": {"port": port, "listening": listening, **evidence},
     }
 
 
@@ -185,15 +243,21 @@ def _gateway_unreachable_verdict(port: int, url: str, error: str) -> dict[str, o
     reports "unreachable" for a Gateway behaving exactly as designed.  The evidence
     that it is still starting is the same evidence ``so`` acts on —
     ``__so_gateway_phase``'s lifecycle verdict, passed in by the caller as
-    ``OC_HEALTH_GATEWAY_PHASE`` — together with the unit being active, its start
-    being inside the documented cold-start bound, and its port already bound.
+    ``OC_HEALTH_GATEWAY_PHASE`` — together with the unit being active and its start
+    being inside the documented cold-start bound.
 
-    FAIL is the verdict for every other case: an inactive/failed unit, an unbound
-    port, a start older than the bound, or a journal that says the gateway is
-    running, degraded or draining (those are not a cold start).
+    A bound port STRENGTHENS that evidence and is named in the message, but it is not
+    a precondition.  The earliest phase of a cold start — unit active, inside the
+    bound, listener not yet open — is a start too, and requiring a bound port made it
+    read FAIL here: the same false red as the bound-but-refused case, one phase
+    earlier.
+
+    FAIL is the verdict for every other case: an inactive/failed unit, a start older
+    than the bound, or a journal that says the gateway is running, degraded or
+    draining (those are not a cold start).
     """
     phase = os.getenv("OC_HEALTH_GATEWAY_PHASE", "").strip().lower()
-    port_bound = _check_tcp_port("127.0.0.1", port)
+    port_bound, port_evidence = _check_port_bound(port)
     unit = _gateway_unit_start()
     elapsed = unit.get("elapsed_s")
     unit_active = unit.get("available") is True and unit.get("active_state") == "active"
@@ -210,14 +274,16 @@ def _gateway_unreachable_verdict(port: int, url: str, error: str) -> dict[str, o
         "unit_active": unit_active,
         "elapsed_s": elapsed,
         "bound_s": GATEWAY_COLD_START_BOUND_S,
+        **port_evidence,
     }
 
-    if unit_active and port_bound and within_bound and phase_allows_start:
+    if unit_active and within_bound and phase_allows_start:
+        port_note = "port bound, " if port_bound else "port not bound yet, "
         return {
             "name": "gateway_health",
             "status": "starting",
             "message": (
-                "gateway starting: port bound, not serving yet "
+                f"gateway starting: {port_note}not serving yet "
                 f"(elapsed {elapsed}s; cold-start bound {GATEWAY_COLD_START_BOUND_S}s)"
             ),
             "details": details,
@@ -275,12 +341,12 @@ def _check_gateway_health(port: int) -> dict[str, object]:
 
 
 def _check_llm_port(port: int) -> dict[str, object]:
-    listening = _check_tcp_port("127.0.0.1", port)
+    listening, evidence = _check_port_bound(port)
     return {
         "name": "llm_port",
         "status": "ok" if listening else "warn",
         "message": f"LLM port {port} listening" if listening else f"LLM port {port} not listening",
-        "details": {"port": port, "listening": listening},
+        "details": {"port": port, "listening": listening, **evidence},
     }
 
 

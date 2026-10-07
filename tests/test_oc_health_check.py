@@ -88,6 +88,12 @@ def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> Any:
 
 
 # --- TCP port probe ---------------------------------------------------------
+#
+# The port verdict PREFERS the kernel's socket table (what `so` reads) and uses a
+# connect only as a fallback, so the two commands cannot disagree about one moment.
+# Measured 2026-10-07 at a Gateway cold start: `ss -ltn` showed two LISTEN rows while
+# the 1.5 s connect was refused by a saturated event loop, so `oc health` read FAIL
+# and `so` read STARTING.
 
 
 def test_tcp_port_probe_true_when_connect_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,16 +109,115 @@ def test_tcp_port_probe_false_when_connect_refuses(monkeypatch: pytest.MonkeyPat
     assert checker._check_tcp_port("127.0.0.1", 18789) is False
 
 
+def _fake_run(stdout: str = "", returncode: int = 0, raises: Exception | None = None) -> Any:
+    """A stand-in for `_run` answering one probe with a chosen result."""
+
+    def _run(*_a: Any, **_k: Any) -> Any:
+        if raises is not None:
+            raise raises
+        return _completed(returncode, stdout=stdout)
+
+    return _run
+
+
+def test_socket_table_true_when_ss_reports_a_listener(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(checker, "shutil", _fake_shutil({"ss": "/usr/bin/ss"}))
+    monkeypatch.setattr(
+        checker,
+        "_run",
+        _fake_run(stdout="State Recv-Q Send-Q Local Address:Port Peer Address:Port\nLISTEN 0 4096 127.0.0.1:18789 0.0.0.0:*\n"),
+    )
+    assert checker._socket_table_listening(18789) is True
+
+
+def test_socket_table_false_when_ss_shows_only_the_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(checker, "shutil", _fake_shutil({"ss": "/usr/bin/ss"}))
+    monkeypatch.setattr(
+        checker,
+        "_run",
+        _fake_run(stdout="State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"),
+    )
+    assert checker._socket_table_listening(18789) is False
+
+
+def test_socket_table_none_without_ss(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `ss` absent is "could not ask", not "not bound" — the caller falls back to a
+    # connect rather than inventing a verdict.
+    monkeypatch.setattr(checker, "shutil", _fake_shutil({"ss": None}))
+    assert checker._socket_table_listening(18789) is None
+
+
+def test_socket_table_none_and_a_note_when_ss_times_out(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(checker, "shutil", _fake_shutil({"ss": "/usr/bin/ss"}))
+    monkeypatch.setattr(checker, "_run", _fake_run(raises=subprocess.TimeoutExpired(cmd=["ss"], timeout=3.0)))
+    assert checker._socket_table_listening(18789) is None
+    # The fallback is reported, not silent: the note goes to stderr so it cannot
+    # corrupt the --json/--plain stdout contract.
+    assert "could not be read" in capsys.readouterr().err
+
+
+def test_socket_table_none_and_a_note_when_ss_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(checker, "shutil", _fake_shutil({"ss": "/usr/bin/ss"}))
+    monkeypatch.setattr(checker, "_run", _fake_run(stdout="", returncode=1))
+    assert checker._socket_table_listening(18789) is None
+    assert "exited 1" in capsys.readouterr().err
+
+
+def test_port_bound_prefers_the_socket_table_and_skips_the_connect(monkeypatch: pytest.MonkeyPatch) -> None:
+    consulted = False
+
+    def _connect(*_a: Any, **_k: Any) -> bool:
+        nonlocal consulted
+        consulted = True
+        return False
+
+    monkeypatch.setattr(checker, "_socket_table_listening", lambda *a, **k: True)
+    monkeypatch.setattr(checker, "_check_tcp_port", _connect)
+    bound, evidence = checker._check_port_bound(18789)
+    assert bound is True
+    assert evidence == {"socket_table": True, "connect": None}
+    assert consulted is False
+
+
+def test_port_bound_falls_back_to_a_connect_when_the_table_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(checker, "_socket_table_listening", lambda *a, **k: None)
+    monkeypatch.setattr(checker, "_check_tcp_port", lambda *a, **k: True)
+    bound, evidence = checker._check_port_bound(18789)
+    assert bound is True
+    assert evidence == {"socket_table": None, "connect": True}
+
+
 def test_gateway_port_fails_when_not_listening(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(checker, "_check_tcp_port", lambda *a, **k: False)
+    monkeypatch.setattr(checker, "_socket_table_listening", lambda *a, **k: False)
     check = checker._check_gateway_port(18789)
     assert check["status"] == "fail"
     assert check["details"]["listening"] is False
 
 
+def test_gateway_port_ok_when_the_listener_is_bound_but_the_connect_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The 2026-10-07 shape: the listener is bound (ss sees it) and the saturated event
+    # loop refuses the connect.  `so` reads the socket table, so this must read OK
+    # here too, or `oc health` and `so` disagree about whether the port is bound.
+    monkeypatch.setattr(checker, "_socket_table_listening", lambda *a, **k: True)
+    monkeypatch.setattr(checker, "_check_tcp_port", lambda *a, **k: False)
+    check = checker._check_gateway_port(18789)
+    assert check["status"] == "ok"
+    assert check["details"]["listening"] is True
+    assert check["details"]["socket_table"] is True
+    assert check["details"]["connect"] is None
+
+
 def test_llm_port_is_only_a_warning_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     # A down LLM lane must not fail the whole report: the gateway is the live service.
-    monkeypatch.setattr(checker, "_check_tcp_port", lambda *a, **k: False)
+    monkeypatch.setattr(checker, "_socket_table_listening", lambda *a, **k: False)
     check = checker._check_llm_port(8081)
     assert check["status"] == "warn"
 
@@ -192,14 +297,12 @@ def test_health_http_error_is_a_warning_with_the_code(monkeypatch: pytest.Monkey
 
 
 def test_health_unreachable_is_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _raise(*_a: Any, **_k: Any) -> Any:
-        raise _FakeURLError("connection refused")
-
-    monkeypatch.setattr(checker, "urllib", _fake_urllib(_raise))
-    # The unreachable branch now consults the unit and the port to tell "starting"
-    # from "failed", so pin BOTH at the module-local seam.  Without this the test
-    # would read the live systemd unit and the live port — host-coupled, and green
-    # only because the box happens to be serving (or idle) when it runs.
+    monkeypatch.setattr(checker, "urllib", _fake_urllib(_raise_refused))
+    # The unreachable branch consults the unit and the port to tell "starting" from
+    # "failed", so pin BOTH port seams and the unit at the module-local boundary.
+    # Without this the test would read the live systemd unit and the live socket table
+    # — host-coupled, and green only because the box happens to be idle when it runs.
+    monkeypatch.setattr(checker, "_socket_table_listening", lambda *a, **k: False)
     monkeypatch.setattr(checker, "_check_tcp_port", lambda *a, **k: False)
     monkeypatch.setattr(checker, "_gateway_unit_start", _inactive_unit)
     check = checker._check_gateway_health(18789)
@@ -213,9 +316,18 @@ def test_health_unreachable_is_a_failure(monkeypatch: pytest.MonkeyPatch) -> Non
 # cold start measured here runs 58 s (ordinary), 102.5/130.5 s (busy) and 341 s
 # (2026-10-06 19:06 BST start, 298.7 s internal) to 347 s (heavy load).  `oc health`
 # reported FAIL for a Gateway inside that window while `so` reported STARTING, and
-# `so` was right.  These cases hold the three states apart, using the SAME evidence
-# the checker reads: the OC_HEALTH_GATEWAY_PHASE verdict `so`'s classifier produces,
-# the unit's ActiveState, its start age, and whether the port is bound.
+# `so` was right.  These cases hold the states apart, using the SAME evidence the
+# checker reads: the OC_HEALTH_GATEWAY_PHASE verdict `so`'s classifier produces, the
+# unit's ActiveState, its start age, and whether the port is bound.
+#
+# The matrix a later reader must be able to re-derive from here:
+#   unit inactive                            -> FAIL
+#   unit active, elapsed PAST the bound      -> FAIL
+#   unit active, inside the bound            -> STARTING, bound port or not
+#   listener bound but the connect refused   -> STARTING (the 2026-10-07 transitional
+#                                               case: a saturated event loop refuses
+#                                               the connect while `ss` sees the row)
+#   /health answers ok                       -> OK
 
 
 def _raise_refused(*_a: Any, **_k: Any) -> Any:
@@ -242,8 +354,15 @@ def _arm_unreachable(
     active_state: str = "active",
     port_bound: bool = True,
     unset_phase: bool = False,
+    socket_table_bound: bool | None = None,
 ) -> None:
     monkeypatch.setattr(checker, "urllib", _fake_urllib(_raise_refused))
+    # The port verdict comes from the socket table, so pin BOTH seams: leaving the
+    # table live would read the real `ss` (and this box's real listener) and make the
+    # case host-coupled.  `socket_table_bound` overrides the table alone, for the
+    # transitional shape where the table and the connect disagree.
+    table = port_bound if socket_table_bound is None else socket_table_bound
+    monkeypatch.setattr(checker, "_socket_table_listening", lambda *a, **k: table)
     monkeypatch.setattr(checker, "_check_tcp_port", lambda *a, **k: port_bound)
     monkeypatch.setattr(checker, "_gateway_unit_start", _unit(active_state, elapsed_s))
     if unset_phase:
@@ -296,10 +415,34 @@ def test_health_fails_when_the_unit_is_inactive(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_health_fails_when_no_port_is_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    # SUPERSEDED criterion (2026-10-07): a bound port is no longer a precondition for
+    # STARTING.  The unit being active inside the bound is the evidence; requiring the
+    # port as well made the earliest phase of a cold start (unit active, listener not
+    # open yet) read FAIL — the same false red, one phase earlier.  An unbound port is
+    # therefore STARTING, with the message naming the weaker evidence.
     _arm_unreachable(monkeypatch, phase="starting", port_bound=False)
     check = checker._check_gateway_health(18789)
-    assert check["status"] == "fail"
+    assert check["status"] == "starting"
     assert check["details"]["port_bound"] is False
+    assert "port not bound yet" in str(check["message"])
+
+
+def test_health_is_starting_when_the_listener_is_bound_but_the_connect_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The 2026-10-07 report: `oc health` read FAIL while `so` read STARTING because
+    # the event loop was saturated and refused the connect, though `ss` showed the
+    # listener.  The socket table answers, so the connect is never consulted and the
+    # verdict matches `so`.
+    _arm_unreachable(
+        monkeypatch, phase="starting", elapsed_s=138, port_bound=True, socket_table_bound=True
+    )
+    monkeypatch.setattr(checker, "_check_tcp_port", lambda *a, **k: False)  # the connect refused
+    check = checker._check_gateway_health(18789)
+    assert check["status"] == "starting"
+    assert check["details"]["socket_table"] is True
+    assert check["details"]["connect"] is None
+    assert "port bound" in str(check["message"])
 
 
 def test_health_fails_when_the_journal_says_the_gateway_is_running(
