@@ -1,6 +1,13 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 28
+#   v28 (2026-10-07): `__so_gateway_bound_age` no longer silences a failing journalctl —
+#   the `2>/dev/null` is REMOVED (and its `swallow-ok` marker with it) rather than kept.
+#   An unreadable journal has a defined outcome (no bind line, so no post-bind evidence,
+#   and the checker falls back to its elapsed bound), while a read that fails should say
+#   so on the caller's stderr — the silence the swallow gate exists to keep visible.  The
+#   pipeline's status is `cut`'s (0), so a failing read cannot abort a caller under `set -e`.
 # Module Version: 27
 #   v27 (2026-10-07): `__so_gateway_bound_age` — how many seconds ago the gateway's
 #   HTTP listener bound, read from the newest "[gateway] http server listening" line.
@@ -667,12 +674,18 @@ function __so_gateway_phase() {
 # `--output=short-unix` is what makes the timestamp readable: its first field is
 # the journald receipt time as `<epoch>.<micros>`.  The classifier's own
 # --output=cat scan cannot supply this, which is why the two reads are separate.
+#
+# The pipeline carries NO stderr redirect, deliberately.  A `journalctl` that fails
+# here has a defined outcome — no bind line, therefore no post-bind evidence — and
+# the checker then falls back to its elapsed bound; a read that fails says so on the
+# caller's stderr instead of being silenced, which is the class of silence the swallow
+# gate exists to keep visible.  The pipeline's status is `cut`'s (0), so a failing
+# read also cannot abort a caller running under `set -e`.
 # ---------------------------------------------------------------------------
 function __so_gateway_bound_age() {
-    local _svc="$1" _stamp="" _secs="" _raw=""
-    # swallow-ok: an unreadable journal is not evidence of a bind, and an empty read falls back to the checker's elapsed bound
-    _raw=$(journalctl --user -u "$_svc" --since '-15 min' --no-pager --output=short-unix 2>/dev/null)
-    _stamp=$(printf '%s\n' "$_raw" | grep -F '[gateway] http server listening' | tail -n 1 | cut -d' ' -f1)
+    local _svc="$1" _stamp="" _secs=""
+    _stamp=$(journalctl --user -u "$_svc" --since '-15 min' --no-pager --output=short-unix \
+        | grep -F '[gateway] http server listening' | tail -n 1 | cut -d' ' -f1)
     [[ -n "$_stamp" ]] || return 0
     _secs="${_stamp%%.*}"
     [[ "$_secs" =~ ^[0-9]+$ ]] || return 0
