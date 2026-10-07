@@ -321,13 +321,24 @@ def test_health_unreachable_is_a_failure(monkeypatch: pytest.MonkeyPatch) -> Non
 # unit's ActiveState, its start age, and whether the port is bound.
 #
 # The matrix a later reader must be able to re-derive from here:
-#   unit inactive                            -> FAIL
-#   unit active, elapsed PAST the bound      -> FAIL
-#   unit active, inside the bound            -> STARTING, bound port or not
-#   listener bound but the connect refused   -> STARTING (the 2026-10-07 transitional
-#                                               case: a saturated event loop refuses
-#                                               the connect while `ss` sees the row)
-#   /health answers ok                       -> OK
+#   unit inactive                                      -> FAIL
+#   journal says running / degraded / draining         -> FAIL
+#   journal reports a start in progress, ANY elapsed   -> STARTING (the phase verdict
+#                                                          outranks the wall clock:
+#                                                          542 s time-to-ready measured
+#                                                          2026-10-07, /health timing
+#                                                          out at elapsed 470 s)
+#   no journal verdict, elapsed PAST the bound         -> FAIL (the bound is the
+#                                                          fallback, and this is what
+#                                                          stops a wedge reading
+#                                                          STARTING forever)
+#   no journal verdict, inside the bound               -> STARTING, bound port or not
+#   listener bound but the connect refused             -> STARTING (the 2026-10-07
+#                                                          transitional case: a
+#                                                          saturated event loop refuses
+#                                                          the connect while `ss` sees
+#                                                          the row)
+#   /health answers ok                                 -> OK
 
 
 def _raise_refused(*_a: Any, **_k: Any) -> Any:
@@ -385,14 +396,36 @@ def test_health_is_starting_for_a_bound_but_not_serving_cold_start(
     assert check["details"]["phase"] == "starting"
 
 
-def test_health_starting_at_the_bound_but_failing_just_past_it(
+def test_health_is_starting_past_the_fallback_bound_while_the_journal_reports_a_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The bound is the decision boundary: at it the start is still "in progress",
-    # past it the same evidence is a fault.
-    _arm_unreachable(monkeypatch, elapsed_s=checker.GATEWAY_COLD_START_BOUND_S)
+    # Measured 2026-10-07 (WSL boot, MainPID 613675): the listener bound at 05:51:40,
+    # `ready` came at 05:57:10 — a 542 s time-to-ready — and /health timed out at
+    # elapsed 470 s, past the 420 s bound, with the unit active and the port bound.
+    # `so`, whose classifier has no elapsed bound, read STARTING; the checker must not
+    # read FAIL for a Gateway still reporting a start in progress.
+    _arm_unreachable(monkeypatch, phase="starting", elapsed_s=470)
+    check = checker._check_gateway_health(18789)
+    assert check["status"] == "starting"
+    assert "470s" in str(check["message"])
+    assert check["details"]["within_bound"] is False
+    _arm_unreachable(monkeypatch, phase="starting", elapsed_s=542)
     assert checker._check_gateway_health(18789)["status"] == "starting"
-    _arm_unreachable(monkeypatch, elapsed_s=checker.GATEWAY_COLD_START_BOUND_S + 1)
+
+
+def test_health_falls_back_to_the_bound_when_the_journal_has_gone_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The bound is what stops a WEDGED gateway reading STARTING forever: a wedge emits
+    # no further lifecycle lines, so its `starting` line ages out of the classifier's
+    # window and the phase it then produces is not `starting` (here: absent).  At the
+    # bound the start is still "in progress"; just past it, with no journal verdict,
+    # the same evidence is a fault.
+    _arm_unreachable(monkeypatch, unset_phase=True, elapsed_s=checker.GATEWAY_COLD_START_BOUND_S)
+    assert checker._check_gateway_health(18789)["status"] == "starting"
+    _arm_unreachable(
+        monkeypatch, unset_phase=True, elapsed_s=checker.GATEWAY_COLD_START_BOUND_S + 1
+    )
     assert checker._check_gateway_health(18789)["status"] == "fail"
 
 

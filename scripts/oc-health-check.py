@@ -24,16 +24,23 @@ from typing import Any
 # The systemd user unit `so` drives and this checker observes.
 GATEWAY_UNIT = "openclaw-gateway.service"
 
-# How long a bound-but-not-serving gateway may still be called STARTING.  The cold
+# How long a start may be called STARTING on wall-clock evidence ALONE.  The cold
 # start this host actually shows, measured 2026-10-06 and earlier: the HTTP listener
 # opens ~58 s after the unit starts on an ordinary day; 102.5 s and 130.5 s on
-# merely-busy starts (the Gateway's own "http server listening (…; Ns)" lines);
-# 341 s wall time (298.7 s internal) on the 19:06 BST start; 347 s under heavy lane
-# load.  This bound is the worst measured case plus headroom — past it, a
-# bound-but-not-serving unit is no longer "still starting" and the verdict is FAIL.
-# It bounds the state evidence below; it does not replace it.  A fixed 300 s bound
-# (let alone the 5 s probe this checker replaced) would still have produced a false
-# FAIL on the 341 s start measured here.
+# merely-busy starts (the Gateway's own "http server listening (…; Ns)" lines); 341 s
+# wall time (298.7 s internal) on the 19:06 BST start; 347 s under heavy lane load.
+# This bound is the worst of those plus headroom.
+#
+# It is the FALLBACK, not the only evidence.  Measured 2026-10-07 on a WSL boot (unit
+# start 05:48:08 BST, MainPID 613675, no restart, no suspend; btime+uptime == now):
+# the listener bound at 05:51:40 and "ready" came at 05:57:10 — a 542 s time-to-ready
+# — with /health timing out at elapsed 470 s.  This bound had already expired, so a
+# rule keyed on it alone read FAIL for a Gateway that was mid-start and then recovered
+# by itself, while `so` (whose classifier carries no elapsed bound) read STARTING.
+# The repair is the phase precondition in `_gateway_unreachable_verdict`, NOT a larger
+# bound: raising it only moves the same wall-clock deadline and would swallow a stall
+# that may warrant a FAIL.  This bound still decides whenever the journal cannot — no
+# phase verdict, or one that is not `starting`.
 GATEWAY_COLD_START_BOUND_S = 420
 
 
@@ -239,22 +246,28 @@ def _gateway_unreachable_verdict(port: int, url: str, error: str) -> dict[str, o
     """Decide STARTING vs FAIL when ``/health`` did not answer.
 
     A bound port is not a serving gateway: on this host the port binds BEFORE the
-    HTTP server serves (cold start measured 58-347 s), so a probe inside that window
-    reports "unreachable" for a Gateway behaving exactly as designed.  The evidence
-    that it is still starting is the same evidence ``so`` acts on —
-    ``__so_gateway_phase``'s lifecycle verdict, passed in by the caller as
-    ``OC_HEALTH_GATEWAY_PHASE`` — together with the unit being active and its start
-    being inside the documented cold-start bound.
+    HTTP server serves (cold start measured 58-542 s), so a probe inside that window
+    reports "unreachable" for a Gateway behaving exactly as designed.  STARTING needs
+    an ACTIVE unit and a journal verdict that does not claim the gateway is already
+    serving; the wall-clock bound is the FALLBACK evidence, used when the journal
+    cannot decide (no phase verdict, or one that is not `starting`).
+
+    A phase verdict of `starting` outranks the bound, because the bound exists only to
+    stop a WEDGED gateway reading STARTING forever — and a wedge emits no further
+    lifecycle lines, so its `starting` line ages out of the classifier's journal
+    window, the phase then reads `unknown`, and the bound decides again.  Measured
+    2026-10-07: a 542 s time-to-ready with /health timing out at elapsed 470 s, past
+    the 420 s bound, for a Gateway that recovered by itself — while `so`, whose
+    classifier has no elapsed bound, correctly read STARTING.
 
     A bound port STRENGTHENS that evidence and is named in the message, but it is not
-    a precondition.  The earliest phase of a cold start — unit active, inside the
-    bound, listener not yet open — is a start too, and requiring a bound port made it
-    read FAIL here: the same false red as the bound-but-refused case, one phase
-    earlier.
+    a precondition.  The earliest phase of a cold start — unit active, listener not
+    yet open — is a start too, and requiring a bound port made it read FAIL here: the
+    same false red as the bound-but-refused case, one phase earlier.
 
-    FAIL is the verdict for every other case: an inactive/failed unit, a start older
-    than the bound, or a journal that says the gateway is running, degraded or
-    draining (those are not a cold start).
+    FAIL is the verdict for every other case: an inactive/failed unit, a start past
+    the bound with no journal verdict saying otherwise, or a journal that says the
+    gateway is running, degraded or draining (those are not a cold start).
     """
     phase = os.getenv("OC_HEALTH_GATEWAY_PHASE", "").strip().lower()
     port_bound, port_evidence = _check_port_bound(port)
@@ -265,6 +278,7 @@ def _gateway_unreachable_verdict(port: int, url: str, error: str) -> dict[str, o
     # `running`/`degraded` claim the gateway IS serving, and `draining` is a real
     # outage: neither is a cold start, so the endpoint being unreachable is a fault.
     phase_allows_start = phase not in {"running", "degraded", "draining"}
+    phase_in_progress = phase == "starting"
 
     details: dict[str, object] = {
         "url": url,
@@ -274,18 +288,25 @@ def _gateway_unreachable_verdict(port: int, url: str, error: str) -> dict[str, o
         "unit_active": unit_active,
         "elapsed_s": elapsed,
         "bound_s": GATEWAY_COLD_START_BOUND_S,
+        "within_bound": within_bound,
         **port_evidence,
     }
 
-    if unit_active and within_bound and phase_allows_start:
+    if unit_active and phase_allows_start and (within_bound or phase_in_progress):
         port_note = "port bound, " if port_bound else "port not bound yet, "
+        if phase_in_progress and not within_bound:
+            bound_note = (
+                f"elapsed {elapsed}s is past the {GATEWAY_COLD_START_BOUND_S}s fallback "
+                "bound, but the journal still reports a start in progress"
+            )
+        else:
+            bound_note = (
+                f"elapsed {elapsed}s; cold-start bound {GATEWAY_COLD_START_BOUND_S}s"
+            )
         return {
             "name": "gateway_health",
             "status": "starting",
-            "message": (
-                f"gateway starting: {port_note}not serving yet "
-                f"(elapsed {elapsed}s; cold-start bound {GATEWAY_COLD_START_BOUND_S}s)"
-            ),
+            "message": f"gateway starting: {port_note}not serving yet ({bound_note})",
             "details": details,
         }
 
