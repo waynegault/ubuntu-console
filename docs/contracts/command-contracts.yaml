@@ -93,10 +93,11 @@ commands:
     family: dashboard
     summary: Render tactical dashboard
     version: 2
-    updated: 2026-09-23
+    updated: 2026-10-06
     status: active
     scope: interactive
     effect: read
+    disposition: consequence
     scope_note: alias for tactical_dashboard; an alias name does not resolve under tac-exec
     read_back_exempt: >-
       nothing to witness: the effect this entry lists is a READ (telemetry caches
@@ -117,10 +118,11 @@ commands:
     family: help
     summary: Render tactical help panel
     version: 1
-    updated: 2026-09-23
+    updated: 2026-10-06
     status: active
     scope: interactive
     effect: read
+    disposition: consequence
     scope_note: alias for tactical_help; an alias name does not resolve under tac-exec
     verified_by:
       - "tests/tactical-console.bats::alias: h is defined (tactical_help)"
@@ -134,10 +136,11 @@ commands:
     family: maintenance
     summary: Run maintenance pipeline with cooldown-aware steps
     version: 3
-    updated: 2026-09-28
+    updated: 2026-10-06
     status: active
     scope: both
     effect: mutate
+    disposition: consequence
     read_back:
       - witness: __up_run_recorded
         file: scripts/08-maintenance.sh
@@ -162,10 +165,11 @@ commands:
     family: openclaw
     summary: Start OpenClaw gateway with dependency checks
     version: 4
-    updated: 2026-09-30
+    updated: 2026-10-06
     status: active
     scope: both
     effect: mutate
+    disposition: consequence
     read_back:
       - witness: __oc_gateway_started
         file: scripts/09a-oc-gateway.sh
@@ -187,10 +191,11 @@ commands:
     family: openclaw
     summary: Stop OpenClaw gateway
     version: 4
-    updated: 2026-09-30
+    updated: 2026-10-06
     status: active
     scope: both
     effect: mutate
+    disposition: consequence
     read_back:
       - witness: __oc_gateway_gone
         file: scripts/09a-oc-gateway.sh
@@ -209,10 +214,11 @@ commands:
     family: openclaw
     summary: Deep health probe for OpenClaw and dependencies
     version: 2
-    updated: 2026-09-30
+    updated: 2026-10-06
     status: active
     scope: both
     effect: read
+    disposition: consequence
     verified_by:
       - "tests/unit/33-daemon-guard-patch.bats::guard patch: --json stays clear of the row"
       - "tests/unit/28-gh-keyring-watch.bats::keyring watch: the row also prints on the fallback path"
@@ -248,10 +254,11 @@ commands:
     family: llm
     summary: Show registry models with active marker
     version: 1
-    updated: 2026-09-23
+    updated: 2026-10-06
     status: active
     scope: both
     effect: read
+    disposition: consequence
     verified_by:
       - "tests/tactical-console.bats::model: model list runs without syntax error (empty state)"
     contract:
@@ -264,10 +271,11 @@ commands:
     family: llm
     summary: Start selected model with computed runtime settings
     version: 2
-    updated: 2026-09-23
+    updated: 2026-10-06
     status: active
     scope: both
     effect: mutate
+    disposition: consequence
     read_back:
       - witness: __llm_active_state_recorded
         file: scripts/11c-llm-server.sh
@@ -293,10 +301,11 @@ commands:
     family: llm
     summary: Stop local llama-server
     version: 2
-    updated: 2026-09-23
+    updated: 2026-10-06
     status: active
     scope: both
     effect: mutate
+    disposition: consequence
     read_back:
       - witness: __llm_server_gone
         file: scripts/11c-llm-server.sh
@@ -315,10 +324,11 @@ commands:
     family: llm
     summary: Report active model and server health
     version: 1
-    updated: 2026-09-23
+    updated: 2026-10-06
     status: active
     scope: both
     effect: read
+    disposition: consequence
     verified_by:
       - "tests/tactical-console.bats::llm-manager: model status supports json output"
       - "tests/tactical-console.bats::llm-manager: model status supports plain output"
@@ -334,10 +344,11 @@ commands:
     family: llm
     summary: LLM stress test and TPS benchmark
     version: 3
-    updated: 2026-09-28
+    updated: 2026-10-06
     status: active
     scope: both
     effect: mutate
+    disposition: consequence
     read_back:
       - witness: __burn_tps_cache_holds
         file: scripts/11f-llm-runtime.sh
@@ -357,10 +368,11 @@ commands:
     family: llm
     summary: Explain the last command using local LLM
     version: 2
-    updated: 2026-09-23
+    updated: 2026-10-06
     status: active
     scope: both
     effect: read
+    disposition: consequence
     read_back_exempt: >-
       nothing to witness: the effect this entry lists is a READ (recent shell
       context/log state), not a state change.  The command's own success condition
@@ -378,10 +390,11 @@ commands:
     family: utility
     summary: Deep system cleanup (apt, brew, journal, docker, npm, caches)
     version: 3
-    updated: 2026-09-28
+    updated: 2026-10-06
     status: active
     scope: both
     effect: mutate
+    disposition: consequence
     read_back:
       - witness: __cl_paths_cleared
         file: scripts/08-maintenance.sh
@@ -409,10 +422,11 @@ commands:
     family: utility
     summary: Trim oversized log files to bounded tail
     version: 3
-    updated: 2026-09-28
+    updated: 2026-10-06
     status: active
     scope: both
     effect: mutate
+    disposition: consequence
     read_back:
       - witness: __log_trim_within_bound
         file: scripts/08-maintenance.sh
@@ -431,10 +445,11 @@ commands:
     family: openclaw
     summary: Stop the gateway and clear every agent's session directory
     version: 1
-    updated: 2026-09-30
+    updated: 2026-10-06
     status: active
     scope: both
     effect: mutate
+    disposition: consequence
     # NO verified_by, DELIBERATELY (2026-10-06, owner's call).  The read_back witness below is
     # the guard: it proves the gateway is gone BEFORE any deletion, and that a failed `rm` is
     # reported and not counted.  A BATS node would have to stop the live gateway and delete real

@@ -543,12 +543,14 @@ YAML
         echo "$((_entries - _decisions - _consequences)) entr(ies) are unclassified, $_unclassified_entries reported"
         return 1
     }
-    # ...and the two classified entries are named while the half-stated one is not:
-    # oc-restart-check states a closed three-way enumeration, while m's exit_code
-    # ("0 unless internal render failure") names no failing set — the article's
-    # "up to 250 m" shape, left for the owner rather than guessed at.
+    # ...and both classifications are named: oc-restart-check states a closed three-way
+    # enumeration (a decision), while m's exit_code ("0 unless internal render failure")
+    # names no failing set — the article's "up to 250 m" shape — so it is recorded as a
+    # CONSEQUENCE.  That was the owner's call this comment used to defer; Wayne made it on
+    # 2026-10-06 (all 15 prose exit codes are consequences), so NOTHING is unclassified.
     [[ "$output" == *"DISPOSITION   oc-restart-check -> decision"* ]]
-    [[ "$output" == *"UNCLASSIFIED  m —"* ]]
+    [[ "$output" == *"DISPOSITION   m -> consequence"* ]]
+    [[ "$output" == *"0 active entr(ies) unclassified"* ]]
 }
 
 # ── disposition/bound: the decision/consequence triage (SPEC-VV-CONSOLE-004) ──
