@@ -318,27 +318,30 @@ def test_health_unreachable_is_a_failure(monkeypatch: pytest.MonkeyPatch) -> Non
 # reported FAIL for a Gateway inside that window while `so` reported STARTING, and
 # `so` was right.  These cases hold the states apart, using the SAME evidence the
 # checker reads: the OC_HEALTH_GATEWAY_PHASE verdict `so`'s classifier produces, the
-# unit's ActiveState, its start age, and whether the port is bound.
+# unit's ActiveState, its start age, whether the port is bound, and the listener's
+# bind age (OC_HEALTH_GATEWAY_BOUND_AGE_S, from __so_gateway_bound_age).
 #
 # The matrix a later reader must be able to re-derive from here:
-#   unit inactive                                      -> FAIL
-#   journal says running / degraded / draining         -> FAIL
-#   journal reports a start in progress, ANY elapsed   -> STARTING (the phase verdict
-#                                                          outranks the wall clock:
-#                                                          542 s time-to-ready measured
-#                                                          2026-10-07, /health timing
-#                                                          out at elapsed 470 s)
-#   no journal verdict, elapsed PAST the bound         -> FAIL (the bound is the
-#                                                          fallback, and this is what
-#                                                          stops a wedge reading
-#                                                          STARTING forever)
-#   no journal verdict, inside the bound               -> STARTING, bound port or not
-#   listener bound but the connect refused             -> STARTING (the 2026-10-07
-#                                                          transitional case: a
-#                                                          saturated event loop refuses
-#                                                          the connect while `ss` sees
-#                                                          the row)
-#   /health answers ok                                 -> OK
+#   unit inactive                                        -> FAIL
+#   journal says running / degraded / draining           -> FAIL
+#   unbound, elapsed inside the cold-start bound         -> STARTING
+#   unbound, elapsed PAST the bound                      -> FAIL
+#   bound + journal says `starting` + dark <= grace      -> STARTING (a normal post-bind
+#                                                          interval: an ordinary start
+#                                                          serves as it binds)
+#   bound + journal says `starting` + dark > grace       -> STALLED (2026-10-07: bound
+#                                                          212 s in, first /health 200
+#                                                          at 542 s = 330 s dark)
+#   bound + journal says `starting` + no bind age        -> STARTING (no post-bind
+#                                                          evidence to measure with)
+#   bound + NO journal verdict + inside the bound        -> STARTING
+#   bound + NO journal verdict + PAST the bound          -> FAIL
+#   listener bound but the connect refused               -> STARTING / STALLED by bind
+#                                                          age, never FAIL (the 2026-10-07
+#                                                          transitional case: a saturated
+#                                                          event loop refuses the connect
+#                                                          while `ss` sees the row)
+#   /health answers ok                                   -> OK
 
 
 def _raise_refused(*_a: Any, **_k: Any) -> Any:
@@ -366,6 +369,8 @@ def _arm_unreachable(
     port_bound: bool = True,
     unset_phase: bool = False,
     socket_table_bound: bool | None = None,
+    bind_age_s: int | None = 30,
+    set_bind_age: bool = True,
 ) -> None:
     monkeypatch.setattr(checker, "urllib", _fake_urllib(_raise_refused))
     # The port verdict comes from the socket table, so pin BOTH seams: leaving the
@@ -380,37 +385,82 @@ def _arm_unreachable(
         monkeypatch.delenv("OC_HEALTH_GATEWAY_PHASE", raising=False)
     else:
         monkeypatch.setenv("OC_HEALTH_GATEWAY_PHASE", phase)
+    # The bind age is the post-bind seam.  30 s is an ordinary post-bind interval; the
+    # default keeps every existing case inside the grace, so only the STALLED cases
+    # have to say so.
+    if set_bind_age and bind_age_s is not None:
+        monkeypatch.setenv("OC_HEALTH_GATEWAY_BOUND_AGE_S", str(bind_age_s))
+    else:
+        monkeypatch.delenv("OC_HEALTH_GATEWAY_BOUND_AGE_S", raising=False)
 
 
 def test_health_is_starting_for_a_bound_but_not_serving_cold_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # 200 s in, still not serving: `so` says STARTING, and so must this.
-    _arm_unreachable(monkeypatch, phase="starting", elapsed_s=200)
+    # 200 s in, listener up 30 s ago, still not serving: a normal post-bind interval —
+    # `so` says STARTING, and so must this.
+    _arm_unreachable(monkeypatch, phase="starting", elapsed_s=200, bind_age_s=30)
     check = checker._check_gateway_health(18789)
     assert check["status"] == "starting"
-    assert "200s" in str(check["message"])
-    assert str(checker.GATEWAY_COLD_START_BOUND_S) in str(check["message"])
+    assert "30s" in str(check["message"])
+    assert str(checker.GATEWAY_POST_BIND_GRACE_S) in str(check["message"])
     assert check["details"]["elapsed_s"] == 200
+    assert check["details"]["bind_age_s"] == 30
     assert check["details"]["port_bound"] is True
     assert check["details"]["phase"] == "starting"
 
 
-def test_health_is_starting_past_the_fallback_bound_while_the_journal_reports_a_start(
+def test_health_is_stalled_when_the_listener_is_bound_and_dark_past_the_grace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Measured 2026-10-07 (WSL boot, MainPID 613675): the listener bound at 05:51:40,
-    # `ready` came at 05:57:10 — a 542 s time-to-ready — and /health timed out at
-    # elapsed 470 s, past the 420 s bound, with the unit active and the port bound.
-    # `so`, whose classifier has no elapsed bound, read STARTING; the checker must not
-    # read FAIL for a Gateway still reporting a start in progress.
-    _arm_unreachable(monkeypatch, phase="starting", elapsed_s=470)
+    # The state Wayne measured, 2026-10-07 (boot, MainPID 613675): the listener bound
+    # at 05:51:40 — 212 s after the unit started — and the first /health 200 came at
+    # 05:57:10.  At elapsed 470 s the listener had been bound 258 s and dark, past the
+    # 150 s grace, so the verdict is its own signal — not STARTING (a normal start
+    # serves as it binds) and not FAIL (the unit is active, the port is bound, and the
+    # start recovered on its own).
+    _arm_unreachable(monkeypatch, phase="starting", elapsed_s=470, bind_age_s=258)
+    check = checker._check_gateway_health(18789)
+    assert check["status"] == "stalled"
+    assert "258s" in str(check["message"])
+    assert "do not restart" in str(check["message"])
+    assert check["details"]["bind_age_s"] == 258
+    assert check["details"]["post_bind_grace_s"] == checker.GATEWAY_POST_BIND_GRACE_S
+    # And at the first 200 (542 s in, 330 s of darkness) it is still stalled, not FAIL.
+    _arm_unreachable(monkeypatch, phase="starting", elapsed_s=542, bind_age_s=330)
+    assert checker._check_gateway_health(18789)["status"] == "stalled"
+
+
+def test_health_post_bind_grace_is_the_decision_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # At the grace the post-bind interval is still "normal"; one second past it, the
+    # same evidence is the stalled signal.  The bound is a decision boundary, so both
+    # sides of it are pinned.
+    _arm_unreachable(
+        monkeypatch, phase="starting", elapsed_s=400, bind_age_s=checker.GATEWAY_POST_BIND_GRACE_S
+    )
+    assert checker._check_gateway_health(18789)["status"] == "starting"
+    _arm_unreachable(
+        monkeypatch,
+        phase="starting",
+        elapsed_s=400,
+        bind_age_s=checker.GATEWAY_POST_BIND_GRACE_S + 1,
+    )
+    assert checker._check_gateway_health(18789)["status"] == "stalled"
+
+
+def test_health_is_starting_when_the_grace_cannot_be_measured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No bind age means no post-bind evidence, so a journal-reported start is trusted
+    # rather than being called stalled on evidence we do not have.  A wedge stops
+    # logging, and the phase then stops saying `starting`, which is what brings the
+    # elapsed bound back into play.
+    _arm_unreachable(monkeypatch, phase="starting", elapsed_s=500, set_bind_age=False)
     check = checker._check_gateway_health(18789)
     assert check["status"] == "starting"
-    assert "470s" in str(check["message"])
-    assert check["details"]["within_bound"] is False
-    _arm_unreachable(monkeypatch, phase="starting", elapsed_s=542)
-    assert checker._check_gateway_health(18789)["status"] == "starting"
+    assert check["details"]["bind_age_s"] is None
 
 
 def test_health_falls_back_to_the_bound_when_the_journal_has_gone_quiet(
@@ -420,13 +470,48 @@ def test_health_falls_back_to_the_bound_when_the_journal_has_gone_quiet(
     # no further lifecycle lines, so its `starting` line ages out of the classifier's
     # window and the phase it then produces is not `starting` (here: absent).  At the
     # bound the start is still "in progress"; just past it, with no journal verdict,
-    # the same evidence is a fault.
-    _arm_unreachable(monkeypatch, unset_phase=True, elapsed_s=checker.GATEWAY_COLD_START_BOUND_S)
+    # the same evidence is a fault — even though the port is bound, because a bound
+    # listener with no journal verdict is not the post-bind state the grace measures.
+    _arm_unreachable(
+        monkeypatch, unset_phase=True, elapsed_s=checker.GATEWAY_COLD_START_BOUND_S, bind_age_s=10
+    )
     assert checker._check_gateway_health(18789)["status"] == "starting"
     _arm_unreachable(
-        monkeypatch, unset_phase=True, elapsed_s=checker.GATEWAY_COLD_START_BOUND_S + 1
+        monkeypatch,
+        unset_phase=True,
+        elapsed_s=checker.GATEWAY_COLD_START_BOUND_S + 1,
+        bind_age_s=10,
     )
     assert checker._check_gateway_health(18789)["status"] == "fail"
+    # ...and a long post-bind darkness with NO journal verdict is a fault too, not a
+    # stall: nothing says a start is in progress, and it is past the bound.
+    _arm_unreachable(
+        monkeypatch,
+        unset_phase=True,
+        elapsed_s=checker.GATEWAY_COLD_START_BOUND_S + 1,
+        bind_age_s=300,
+    )
+    assert checker._check_gateway_health(18789)["status"] == "fail"
+
+
+def test_health_fails_when_no_port_is_bound_and_the_bound_is_past(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The PRE-BIND phase keeps the elapsed bound: a listener that has not appeared by
+    # then is a fault.  (Wayne's 2026-10-07 decision kept 420 and gave only the
+    # POST-BIND dark state its own signal.)
+    _arm_unreachable(monkeypatch, phase="starting", port_bound=False, elapsed_s=100, bind_age_s=None)
+    assert checker._check_gateway_health(18789)["status"] == "starting"
+    _arm_unreachable(
+        monkeypatch,
+        phase="starting",
+        port_bound=False,
+        elapsed_s=checker.GATEWAY_COLD_START_BOUND_S + 1,
+        bind_age_s=None,
+    )
+    check = checker._check_gateway_health(18789)
+    assert check["status"] == "fail"
+    assert check["details"]["port_bound"] is False
 
 
 def test_health_is_starting_on_the_minimum_evidence_without_a_phase_verdict(
@@ -447,13 +532,17 @@ def test_health_fails_when_the_unit_is_inactive(monkeypatch: pytest.MonkeyPatch)
     assert check["details"]["unit_active"] is False
 
 
-def test_health_fails_when_no_port_is_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_health_is_starting_when_no_port_is_bound_inside_the_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # SUPERSEDED criterion (2026-10-07): a bound port is no longer a precondition for
     # STARTING.  The unit being active inside the bound is the evidence; requiring the
     # port as well made the earliest phase of a cold start (unit active, listener not
     # open yet) read FAIL — the same false red, one phase earlier.  An unbound port is
     # therefore STARTING, with the message naming the weaker evidence.
-    _arm_unreachable(monkeypatch, phase="starting", port_bound=False)
+    _arm_unreachable(
+        monkeypatch, phase="starting", port_bound=False, elapsed_s=200, bind_age_s=None
+    )
     check = checker._check_gateway_health(18789)
     assert check["status"] == "starting"
     assert check["details"]["port_bound"] is False
@@ -468,14 +557,31 @@ def test_health_is_starting_when_the_listener_is_bound_but_the_connect_refuses(
     # listener.  The socket table answers, so the connect is never consulted and the
     # verdict matches `so`.
     _arm_unreachable(
-        monkeypatch, phase="starting", elapsed_s=138, port_bound=True, socket_table_bound=True
+        monkeypatch,
+        phase="starting",
+        elapsed_s=138,
+        port_bound=True,
+        socket_table_bound=True,
+        bind_age_s=30,
     )
     monkeypatch.setattr(checker, "_check_tcp_port", lambda *a, **k: False)  # the connect refused
     check = checker._check_gateway_health(18789)
     assert check["status"] == "starting"
     assert check["details"]["socket_table"] is True
     assert check["details"]["connect"] is None
-    assert "port bound" in str(check["message"])
+    assert "listener bound 30s ago" in str(check["message"])
+    # A bound listener whose connect refuses is NEVER FAIL, whatever the bind age: the
+    # same evidence with a long post-bind darkness is the stalled signal, not a fault.
+    _arm_unreachable(
+        monkeypatch,
+        phase="starting",
+        elapsed_s=470,
+        port_bound=True,
+        socket_table_bound=True,
+        bind_age_s=258,
+    )
+    monkeypatch.setattr(checker, "_check_tcp_port", lambda *a, **k: False)
+    assert checker._check_gateway_health(18789)["status"] == "stalled"
 
 
 def test_health_fails_when_the_journal_says_the_gateway_is_running(
@@ -493,6 +599,49 @@ def test_starting_ranks_between_info_and_warn_and_has_its_own_symbol() -> None:
     assert checker._status_rank("info") < checker._status_rank("starting")
     assert checker._status_rank("starting") < checker._status_rank("warn")
     assert checker._symbol("starting") == "[STARTING]"
+
+
+def test_stalled_is_its_own_status_above_warn_and_below_fail() -> None:
+    # Wayne's 2026-10-07 decision: the post-bind dark state gets its own SIGNAL, so it
+    # must be its own status — distinguishable from STARTING (a slow-but-normal start)
+    # and from FAIL (an inactive unit, an unbound port, or a start that stopped
+    # producing evidence).  It is real news (bound and dark for minutes), so it outranks
+    # a warning; it is short of a failure, because the start may still complete.
+    assert checker._status_rank("warn") < checker._status_rank("stalled")
+    assert checker._status_rank("stalled") < checker._status_rank("fail")
+    assert checker._symbol("stalled") == "[STALLED]"
+
+
+def test_main_exits_zero_for_stalled(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Like `starting`: loud in the row, but NOT a red box for `oc health && …` — the
+    # action a stalled start needs is "watch, do not restart", and exiting 1 invites the
+    # restart that turns a start into a 15.5-minute outage.
+    assert _main_with(monkeypatch, "stalled") == 0
+
+
+def test_gateway_bind_age_reads_the_env_and_rejects_stale_or_bad_values(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("OC_HEALTH_GATEWAY_BOUND_AGE_S", "258")
+    assert checker._gateway_bind_age(470) == 258
+    monkeypatch.setenv("OC_HEALTH_GATEWAY_BOUND_AGE_S", "")
+    assert checker._gateway_bind_age(470) is None
+    monkeypatch.delenv("OC_HEALTH_GATEWAY_BOUND_AGE_S", raising=False)
+    assert checker._gateway_bind_age(470) is None
+    monkeypatch.setenv("OC_HEALTH_GATEWAY_BOUND_AGE_S", "banana")
+    assert checker._gateway_bind_age(470) is None
+    monkeypatch.setenv("OC_HEALTH_GATEWAY_BOUND_AGE_S", "-5")
+    assert checker._gateway_bind_age(470) is None
+    # Older than the unit itself: a line from a PREVIOUS incarnation inside the
+    # classifier's window.  Using it would fake a stall on a unit that just started.
+    monkeypatch.setenv("OC_HEALTH_GATEWAY_BOUND_AGE_S", "300")
+    assert checker._gateway_bind_age(100) is None
+    # ...and without a unit age there is nothing to cross-check, so it is used.
+    assert checker._gateway_bind_age(None) == 300
+    err = capsys.readouterr().err
+    assert "not an integer" in err
+    assert "negative" in err
+    assert "older than" in err
 
 
 def test_main_exits_zero_for_starting(monkeypatch: pytest.MonkeyPatch) -> None:

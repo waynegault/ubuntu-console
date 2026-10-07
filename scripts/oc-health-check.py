@@ -24,24 +24,39 @@ from typing import Any
 # The systemd user unit `so` drives and this checker observes.
 GATEWAY_UNIT = "openclaw-gateway.service"
 
-# How long a start may be called STARTING on wall-clock evidence ALONE.  The cold
-# start this host actually shows, measured 2026-10-06 and earlier: the HTTP listener
-# opens ~58 s after the unit starts on an ordinary day; 102.5 s and 130.5 s on
-# merely-busy starts (the Gateway's own "http server listening (…; Ns)" lines); 341 s
-# wall time (298.7 s internal) on the 19:06 BST start; 347 s under heavy lane load.
-# This bound is the worst of those plus headroom.
+# How long a start may be called STARTING on wall-clock evidence ALONE — the elapsed
+# bound used when there is NO post-bind evidence.  The cold start this host shows,
+# measured 2026-10-06 and earlier: the HTTP listener opens ~58 s after the unit starts
+# on an ordinary day; 102.5 s and 130.5 s on merely-busy starts (the Gateway's own
+# "http server listening (…; Ns)" lines); 341 s wall time (298.7 s internal) on the
+# 19:06 BST start; 347 s under heavy lane load.  This bound is the worst of those plus
+# headroom, and it covers the PRE-bind phase (config, auth, broker, HTTP transport).
 #
-# It is the FALLBACK, not the only evidence.  Measured 2026-10-07 on a WSL boot (unit
-# start 05:48:08 BST, MainPID 613675, no restart, no suspend; btime+uptime == now):
-# the listener bound at 05:51:40 and "ready" came at 05:57:10 — a 542 s time-to-ready
-# — with /health timing out at elapsed 470 s.  This bound had already expired, so a
-# rule keyed on it alone read FAIL for a Gateway that was mid-start and then recovered
-# by itself, while `so` (whose classifier carries no elapsed bound) read STARTING.
-# The repair is the phase precondition in `_gateway_unreachable_verdict`, NOT a larger
-# bound: raising it only moves the same wall-clock deadline and would swallow a stall
-# that may warrant a FAIL.  This bound still decides whenever the journal cannot — no
-# phase verdict, or one that is not `starting`.
+# KEPT AT 420 BY DECISION (Wayne, 2026-10-07).  The state that motivated raising it —
+# unit active, listener bound, /health still dark — got its own signal instead
+# (GATEWAY_POST_BIND_GRACE_S below), because a larger number only moves the same
+# wall-clock deadline and would hide a stall that may warrant a FAIL.  Measured on a
+# WSL boot that day (unit start 05:48:08 BST, no restart): the listener bound at
+# 05:51:40 (212 s in), "ready" came at 05:57:10 (542 s in), and /health timed out at
+# elapsed 470 s — past this bound.  Reaching that state now means the post-bind signal
+# has already had its say, so this bound never has to fail it.
 GATEWAY_COLD_START_BOUND_S = 420
+
+# How long a BOUND listener may stay dark before the verdict is STALLED, not STARTING.
+# Chosen from measurement (2026-10-07), not taste:
+#   * an ordinary start SERVES AS IT BINDS — the listener and the HTTP server appear
+#     together, ~58 s after the unit starts, so a normal post-bind dark interval is
+#     seconds, not minutes;
+#   * the worst merely-busy starts measured here are 102.5 s and 130.5 s end-to-end;
+#   * the anomaly this exists for: bound at 212 s, first /health 200 at 542 s — a
+#     330 s post-bind dark interval.
+# 150 s is the largest non-heavy normal start (130.5 s) plus ~15% headroom: no normal
+# start can reach it (a normal start is not dark for minutes after binding), and it
+# fires 180 s before the measured anomaly's darkness, with margin.  The interval is
+# measured from the journal's own "[gateway] http server listening" timestamp, handed
+# over as OC_HEALTH_GATEWAY_BOUND_AGE_S by __so_gateway_bound_age (scripts/09a) — the
+# checker receives a NUMBER, never a second lifecycle classifier.
+GATEWAY_POST_BIND_GRACE_S = 150
 
 
 def _note(message: str) -> None:
@@ -126,8 +141,11 @@ def _status_rank(status: str) -> int:
     # `starting` is a NORMAL transient, so it ranks above `info` (we know more than
     # "informational") but below `warn` (nothing is deviating): a gateway mid cold
     # start must not out-shout a genuine warning, and must not be a `fail`.
-    order = {"ok": 0, "info": 1, "starting": 2, "warn": 3, "fail": 4}
-    return order.get(status, 4)
+    # `stalled` is the post-bind anomaly — the gateway is bound but has been dark past
+    # the grace, which is real news, so it outranks `warn`; it is short of `fail`
+    # because the start may still complete (measured: ours did).
+    order = {"ok": 0, "info": 1, "starting": 2, "warn": 3, "stalled": 4, "fail": 5}
+    return order.get(status, 5)
 
 
 def _summary_status(checks: list[dict[str, object]]) -> str:
@@ -244,43 +262,73 @@ def _gateway_unit_start() -> dict[str, object]:
     return {"available": True, "active_state": active_state, "elapsed_s": elapsed}
 
 
+def _gateway_bind_age(elapsed: int | None) -> int | None:
+    """Seconds since the HTTP listener bound, from ``OC_HEALTH_GATEWAY_BOUND_AGE_S``.
+
+    The value is produced by ``__so_gateway_bound_age`` (scripts/09a-oc-gateway.sh),
+    which reads the journal's own "[gateway] http server listening" timestamp, so the
+    journal parsing stays in one module and the checker never grows a second lifecycle
+    classifier.  Returns None when the variable is absent, empty or unparseable, and
+    when the reported age is OLDER than the unit's own start — a line that old is from
+    a previous incarnation inside the classifier's window, and using it would fake a
+    stall.  ``None`` means "no post-bind evidence", which the caller answers with the
+    elapsed bound.
+    """
+    raw = os.getenv("OC_HEALTH_GATEWAY_BOUND_AGE_S", "").strip()
+    if not raw:
+        return None
+    try:
+        age = int(raw)
+    except ValueError:
+        _note(f"OC_HEALTH_GATEWAY_BOUND_AGE_S is not an integer ({raw!r}); ignoring it")
+        return None
+    if age < 0:
+        _note(f"OC_HEALTH_GATEWAY_BOUND_AGE_S is negative ({age}); ignoring it")
+        return None
+    if elapsed is not None and age > elapsed + 5:
+        _note(f"bound age {age}s is older than the unit's own age {elapsed}s; ignoring the stale line")
+        return None
+    return age
+
+
 def _gateway_unreachable_verdict(port: int, url: str, error: str) -> dict[str, object]:
-    """Decide STARTING vs FAIL when ``/health`` did not answer.
+    """Decide STARTING / STALLED / FAIL when ``/health`` did not answer.
 
-    A bound port is not a serving gateway: on this host the port binds BEFORE the
-    HTTP server serves (cold start measured 58-542 s), so a probe inside that window
-    reports "unreachable" for a Gateway behaving exactly as designed.  STARTING needs
-    an ACTIVE unit and a journal verdict that does not claim the gateway is already
-    serving; the wall-clock bound is the FALLBACK evidence, used when the journal
-    cannot decide (no phase verdict, or one that is not `starting`).
+    A bound port is not a serving gateway: on this host the port binds BEFORE the HTTP
+    server serves, so a probe inside that window reports "unreachable" for a Gateway
+    behaving exactly as designed.  Three states must stay apart, using the evidence
+    this checker actually has — the unit's ActiveState and start age, the socket table,
+    the journal classifier's verdict, and the listener's bind age:
 
-    A phase verdict of `starting` outranks the bound, because the bound exists only to
-    stop a WEDGED gateway reading STARTING forever — and a wedge emits no further
-    lifecycle lines, so its `starting` line ages out of the classifier's journal
-    window, the phase then reads `unknown`, and the bound decides again.  Measured
-    2026-10-07: a 542 s time-to-ready with /health timing out at elapsed 470 s, past
-    the 420 s bound, for a Gateway that recovered by itself — while `so`, whose
-    classifier has no elapsed bound, correctly read STARTING.
+    STARTING  the unit is active, the journal does not claim the gateway is serving,
+              and the start is inside its budget for its phase: unbounded-before-bind
+              gives the start ``GATEWAY_COLD_START_BOUND_S``; a bound listener has
+              ``GATEWAY_POST_BIND_GRACE_S`` of post-bind darkness (an ordinary start
+              serves as it binds, so a normal post-bind interval is seconds).
+    STALLED   the same, except the listener has been bound and dark LONGER than that
+              grace — the state measured 2026-10-07 (bound 212 s in, first /health 200
+              at 542 s: 330 s of post-bind darkness).  It is neither a normal start nor
+              a proven failure: the start may still complete, and a restart re-enters
+              the drain window, so the row says "do not restart".
+    FAIL      every other case: an inactive/failed unit, a journal that says the
+              gateway is running, degraded or draining (those are not a cold start),
+              or a start with no journal verdict that has run past its phase's budget.
 
-    A bound port STRENGTHENS that evidence and is named in the message, but it is not
-    a precondition.  The earliest phase of a cold start — unit active, listener not
-    yet open — is a start too, and requiring a bound port made it read FAIL here: the
-    same false red as the bound-but-refused case, one phase earlier.
-
-    FAIL is the verdict for every other case: an inactive/failed unit, a start past
-    the bound with no journal verdict saying otherwise, or a journal that says the
-    gateway is running, degraded or draining (those are not a cold start).
+    A bound port is NOT a precondition for STARTING: the earliest phase of a cold start
+    (unit active, listener not yet open) is a start too, and requiring a bound port made
+    it read FAIL — the same false red as the bound-but-refused case, one phase earlier.
     """
     phase = os.getenv("OC_HEALTH_GATEWAY_PHASE", "").strip().lower()
     port_bound, port_evidence = _check_port_bound(port)
     unit = _gateway_unit_start()
     elapsed = unit.get("elapsed_s")
+    elapsed_s = elapsed if isinstance(elapsed, int) else None
+    bind_age = _gateway_bind_age(elapsed_s)
     unit_active = unit.get("available") is True and unit.get("active_state") == "active"
-    within_bound = isinstance(elapsed, int) and elapsed <= GATEWAY_COLD_START_BOUND_S
+    within_bound = elapsed_s is not None and elapsed_s <= GATEWAY_COLD_START_BOUND_S
     # `running`/`degraded` claim the gateway IS serving, and `draining` is a real
     # outage: neither is a cold start, so the endpoint being unreachable is a fault.
     phase_allows_start = phase not in {"running", "degraded", "draining"}
-    phase_in_progress = phase == "starting"
 
     details: dict[str, object] = {
         "url": url,
@@ -291,24 +339,48 @@ def _gateway_unreachable_verdict(port: int, url: str, error: str) -> dict[str, o
         "elapsed_s": elapsed,
         "bound_s": GATEWAY_COLD_START_BOUND_S,
         "within_bound": within_bound,
+        "bind_age_s": bind_age,
+        "post_bind_grace_s": GATEWAY_POST_BIND_GRACE_S,
         **port_evidence,
     }
 
-    if unit_active and phase_allows_start and (within_bound or phase_in_progress):
-        port_note = "port bound, " if port_bound else "port not bound yet, "
-        if phase_in_progress and not within_bound:
-            bound_note = (
-                f"elapsed {elapsed}s is past the {GATEWAY_COLD_START_BOUND_S}s fallback "
-                "bound, but the journal still reports a start in progress"
-            )
-        else:
-            bound_note = (
-                f"elapsed {elapsed}s; cold-start bound {GATEWAY_COLD_START_BOUND_S}s"
-            )
+    if unit_active and phase_allows_start and port_bound and phase == "starting":
+        # The listener is up and the journal reports a start in progress: the only
+        # question left is whether the post-bind dark interval is still normal.  With no
+        # bind age there is nothing to measure it with, so a journal-reported start is
+        # trusted (a wedge stops logging, and the phase then stops saying `starting`).
+        if bind_age is not None and bind_age > GATEWAY_POST_BIND_GRACE_S:
+            return {
+                "name": "gateway_health",
+                "status": "stalled",
+                "message": (
+                    f"gateway stalled: listener bound {bind_age}s ago, /health still dark "
+                    f"(post-bind grace {GATEWAY_POST_BIND_GRACE_S}s); do not restart"
+                ),
+                "details": details,
+            }
+        bound_note = (
+            f"listener bound {bind_age}s ago" if bind_age is not None else "port bound"
+        )
         return {
             "name": "gateway_health",
             "status": "starting",
-            "message": f"gateway starting: {port_note}not serving yet ({bound_note})",
+            "message": (
+                f"gateway starting: {bound_note}, not serving yet "
+                f"(post-bind grace {GATEWAY_POST_BIND_GRACE_S}s)"
+            ),
+            "details": details,
+        }
+
+    if unit_active and phase_allows_start and within_bound:
+        port_note = "port bound, " if port_bound else "port not bound yet, "
+        return {
+            "name": "gateway_health",
+            "status": "starting",
+            "message": (
+                f"gateway starting: {port_note}not serving yet "
+                f"(elapsed {elapsed_s}s; cold-start bound {GATEWAY_COLD_START_BOUND_S}s)"
+            ),
             "details": details,
         }
 
@@ -452,6 +524,7 @@ def _symbol(status: str) -> str:
         "fail": "[FAIL]",
         "info": "[INFO]",
         "starting": "[STARTING]",
+        "stalled": "[STALLED]",
     }.get(status, "[FAIL]")
 
 
@@ -482,10 +555,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print_human(report, verbose=args.verbose)
 
-    # `starting` is a transient, not a failure: it must not exit 1, or a wrapper's
-    # `oc health && …` treats a cold start as a red box (the defect this verdict
-    # exists to remove).
-    return 0 if str(report.get("summary")) in {"ok", "info", "starting", "warn"} else 1
+    # `starting` and `stalled` are transients, not proven failures: they must not exit
+    # 1, or a wrapper's `oc health && …` treats a cold start — or a bound listener still
+    # coming up — as a red box.  `stalled` is loud in the row, but the action it names is
+    # "watch, do not restart" (measured 2026-10-07: this state recovered by itself), and
+    # a restart is the action that turns a start into a 15.5-minute outage.  Only `fail`
+    # — an inactive unit, or a start that has stopped producing evidence — exits 1.
+    return 0 if str(report.get("summary")) in {"ok", "info", "starting", "warn", "stalled"} else 1
 
 
 if __name__ == "__main__":

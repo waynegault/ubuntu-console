@@ -147,11 +147,18 @@ PYSTUB
 # the WIRING — `oc-health` must hand the checker `__so_gateway_phase`'s answer, or
 # the checker silently falls back to its weaker unit+port+age evidence and the two
 # commands re-diverge. A stub checker that echoes the variable is what pins it.
+#
+# The SECOND string (2026-10-07) is the post-bind evidence: `__so_gateway_bound_age`'s
+# answer, which is what tells a listener that JUST bound from one bound and dark for
+# minutes (the checker's STALLED row). It travels the same way, and a harness without
+# 09a forwards empty — which the checker reads as "no post-bind evidence" rather than
+# inventing an age. Both are echoed and pinned here.
 gateway_phase_echo_checker() {
     mkdir -p "$HOME/.openclaw/workspace/scripts"
     cat > "$HOME/.openclaw/workspace/scripts/oc-health-check.py" <<'PYSTUB'
 import os
 print("PHASE=" + os.environ.get("OC_HEALTH_GATEWAY_PHASE", "<unset>"))
+print("BINDAGE=" + os.environ.get("OC_HEALTH_GATEWAY_BOUND_AGE_S", "<unset>"))
 PYSTUB
     export TAC_PYTHON="${TAC_PYTHON:-python3}"
 }
@@ -160,14 +167,16 @@ PYSTUB
     gateway_phase_echo_checker
     # 09a-oc-gateway.sh is not sourced in this harness, so stand the classifier in.
     __so_gateway_phase() { printf 'starting\n'; }
+    __so_gateway_bound_age() { printf '258\n'; }
 
     # --json skips the human-only watch rows (the journal-scanning ones are slow on
     # a box with a large journal); the phase wiring is identical in every mode.
     run oc-health --json
     [[ "$output" == *"PHASE=starting"* ]]
+    [[ "$output" == *"BINDAGE=258"* ]]
 }
 
-@test "gateway health: a harness without the classifier forwards an empty verdict" {
+@test "gateway health: a harness without the classifier forwards empty verdicts" {
     # __so_gateway_phase is absent here; the checker's own fallback must take over
     # rather than the variable being invented or the row disappearing.
     gateway_phase_echo_checker
@@ -177,6 +186,9 @@ PYSTUB
     run oc-health --json
     [[ "$output" == *"PHASE="* ]]
     [[ "$output" != *"PHASE=starting"* ]]
+    # The post-bind string is forwarded the same way: empty, never invented.
+    [[ "$output" == *"BINDAGE="* ]]
+    [[ "$output" != *"BINDAGE=258"* ]]
 }
 
 # ==============================================================================

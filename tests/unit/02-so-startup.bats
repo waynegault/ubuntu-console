@@ -205,6 +205,49 @@ EOF
     [ "$output" = "unknown" ]
 }
 
+# __so_gateway_bound_age feeds `oc health`'s POST-BIND measure: the checker can see
+# that the listener is bound but not HOW LONG it has been bound, and the whole
+# difference between a start that is coming up and one that is stalled is that
+# interval.  The journal carries it only as a timestamp, so the helper reads
+# `--output=short-unix` and differences the newest bind line against now.
+#
+# The stub below emits the real short-unix shape — `<epoch>.<micros> <host> <id>:
+# <message>` — with the two lines in journal order (oldest first), so `tail -n 1`
+# picking the NEWEST is what the case proves: the older line carries a much smaller
+# epoch, and an implementation reading `head -n 1` would report the wrong age.
+@test "so: __so_gateway_bound_age ages the NEWEST listener-bind line" {
+    local _now _old
+    _now="$(date +%s)"
+    _old=$(( _now - 9000 ))
+    journalctl() {
+        printf '%s.000000 host unit[1]: 2026-10-07T05:33:08.000+01:00 [gateway] http server listening (15 plugins: x; 145.7s)\n' "$_old"
+        printf '%s.167487 host unit[1]: 2026-10-07T05:51:40.167+01:00 [gateway] http server listening (15 plugins: x; 145.7s)\n' "$(( _now - 258 ))"
+    }
+
+    run __so_gateway_bound_age openclaw-gateway.service
+
+    [ "$status" -eq 0 ]
+    # A second of slack: the helper calls `date` itself, after the stub line was built.
+    [ "$output" -ge 257 ]
+    [ "$output" -le 259 ]
+}
+
+@test "so: __so_gateway_bound_age prints nothing when the window has no bind line" {
+    # A pre-bind start, or a journal that has aged the line out: NO output is the
+    # contract (the checker reads empty as "no post-bind evidence" and falls back to
+    # the elapsed bound).  Printing 0 here would report a start as just-bound forever.
+    journalctl() {
+        printf '%s\n' \
+            '2026-10-07T05:50:39.721+01:00 [gateway] starting...' \
+            '2026-10-07T05:50:31.773+01:00 [gateway] loading configuration…'
+    }
+
+    run __so_gateway_bound_age openclaw-gateway.service
+
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
 # The probe runs as `timeout 5 openclaw ...`, and timeout execs a binary — it
 # cannot call a shell function — so the stub has to be a real file on PATH or the
 # test would invoke the live CLI and depend on the real gateway's state.

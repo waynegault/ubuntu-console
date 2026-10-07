@@ -1,6 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 27
+#   v27 (2026-10-07): `__so_gateway_bound_age` — how many seconds ago the gateway's
+#   HTTP listener bound, read from the newest "[gateway] http server listening" line.
+#   09e forwards it to the enhanced checker as OC_HEALTH_GATEWAY_BOUND_AGE_S, because
+#   the checker needs a POST-BIND measurement to tell a listener that has just bound
+#   from one that has been bound and dark for minutes (measured 2026-10-07: bound at
+#   212 s, first /health 200 at 542 s — a 330 s post-bind dark interval, where an
+#   ordinary start serves as it binds).  The journal parsing stays in ONE module: the
+#   checker receives a number, never a second lifecycle classifier.
 # Module Version: 26
 #   v26 (2026-10-02): `so` also shows the daemon guard patch when it needs acting on
 #   (__oc_guard_patch_state --quiet-when-ok, from 09e). The patch silently reverts on
@@ -642,6 +651,32 @@ function __so_gateway_phase() {
         return 0
     fi
     printf '%s\n' "$_phase"
+}
+
+# ---------------------------------------------------------------------------
+# __so_gateway_bound_age — seconds since the gateway's HTTP listener bound.
+#
+# Prints the age in whole seconds of the NEWEST "[gateway] http server listening"
+# line inside the classifier's window, or nothing when there is no such line (a
+# pre-bind start, or a journal that has aged it out).  This is what lets the health
+# checker tell a listener that has JUST bound from one bound and dark for minutes:
+# measured 2026-10-07 on a boot (unit start 05:48:08 BST) the listener bound at
+# 05:51:40 — 212 s in — and the first /health 200 came at 05:57:10, 542 s in: a
+# 330 s post-bind dark interval, where an ordinary start serves as it binds.
+#
+# `--output=short-unix` is what makes the timestamp readable: its first field is
+# the journald receipt time as `<epoch>.<micros>`.  The classifier's own
+# --output=cat scan cannot supply this, which is why the two reads are separate.
+# ---------------------------------------------------------------------------
+function __so_gateway_bound_age() {
+    local _svc="$1" _stamp="" _secs="" _raw=""
+    # swallow-ok: an unreadable journal is not evidence of a bind, and an empty read falls back to the checker's elapsed bound
+    _raw=$(journalctl --user -u "$_svc" --since '-15 min' --no-pager --output=short-unix 2>/dev/null)
+    _stamp=$(printf '%s\n' "$_raw" | grep -F '[gateway] http server listening' | tail -n 1 | cut -d' ' -f1)
+    [[ -n "$_stamp" ]] || return 0
+    _secs="${_stamp%%.*}"
+    [[ "$_secs" =~ ^[0-9]+$ ]] || return 0
+    printf '%s\n' "$(( $(date +%s) - _secs ))"
 }
 
 # ---------------------------------------------------------------------------

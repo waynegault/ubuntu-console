@@ -9,6 +9,16 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 25
+#   v25 (2026-10-07): `oc health` also forwards `__so_gateway_bound_age` as
+#   OC_HEALTH_GATEWAY_BOUND_AGE_S, the checker's POST-BIND evidence.  Wayne's decision
+#   (2026-10-07): keep GATEWAY_COLD_START_BOUND_S = 420 and do not raise it; instead
+#   give the measured state — unit active, listener bound, /health still dark past a
+#   short post-bind grace — its own signal (STALLED), distinct from a slow-but-normal
+#   cold start and from an inactive unit or an unbound port.  Measured on a boot:
+#   listener bound 212 s after unit start, first /health 200 at 542 s — a 330 s
+#   post-bind dark interval, where an ordinary start serves as it binds.  The number
+#   comes from 09a so the journal parsing stays in one module.
 # Module Version: 24
 #   v24 (2026-10-06): reflow the `plain)` case's enhanced-checker pipeline across a `\`
 #   continuation so the file carries no line over 120 characters (§18.3 8.1.8) —
@@ -320,26 +330,42 @@ function oc-health() {
         # not load; when it is absent the checker falls back to its own
         # unit+port+start-age evidence rather than inventing a second journal
         # classifier, so the absence is handled rather than assumed away.
-        local _gw_phase=""
+        local _gw_phase="" _gw_bound_age=""
         if declare -F __so_gateway_phase >/dev/null 2>&1
         then
             _gw_phase=$(__so_gateway_phase "openclaw-gateway.service")
+        fi
+        # The POST-BIND evidence, forwarded the same way: the checker needs it to tell a
+        # listener that has just bound from one bound and dark for minutes (its STALLED
+        # row).  Empty when 09a is absent or the bind line has aged out, which the
+        # checker reads as "no post-bind evidence" and handles with the elapsed bound.
+        if declare -F __so_gateway_bound_age >/dev/null 2>&1
+        then
+            _gw_bound_age=$(__so_gateway_bound_age "openclaw-gateway.service")
         fi
         # Use comprehensive health check
         local _enhanced_rc=0
         case "$output_mode" in
             json)
-                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script" --json
+                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" \
+                OC_HEALTH_GATEWAY_BOUND_AGE_S="$_gw_bound_age" \
+                    "$TAC_PYTHON" "$enhanced_script" --json
                 ;;
             plain)
-                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script" --json \
+                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" \
+                OC_HEALTH_GATEWAY_BOUND_AGE_S="$_gw_bound_age" \
+                    "$TAC_PYTHON" "$enhanced_script" --json \
                     | jq -r '.checks[] | "\(.name): \(.status) - \(.message)"'
                 ;;
             verbose)
-                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script" --verbose
+                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" \
+                OC_HEALTH_GATEWAY_BOUND_AGE_S="$_gw_bound_age" \
+                    "$TAC_PYTHON" "$enhanced_script" --verbose
                 ;;
             *)
-                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" "$TAC_PYTHON" "$enhanced_script"
+                OC_HEALTH_GATEWAY_PHASE="$_gw_phase" \
+                OC_HEALTH_GATEWAY_BOUND_AGE_S="$_gw_bound_age" \
+                    "$TAC_PYTHON" "$enhanced_script"
                 ;;
         esac
         _enhanced_rc=$?
