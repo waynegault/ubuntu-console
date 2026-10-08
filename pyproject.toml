@@ -28,7 +28,7 @@ files = [
 ]
 # nas collectors import the shared lib as `lib.butler_common` (card 974f99ff); the
 # scripts dir is on sys.path at run time, so mirror that for the type checkers.
-mypy_path = "nas/butler/scripts"
+mypy_path = ["stubs", "nas/butler/scripts"]
 warn_unused_configs = true
 show_error_codes = true
 # Check the bodies of functions that carry no annotations.  Left off by default,
@@ -54,7 +54,7 @@ check_untyped_defs = true
 # ARE installed and ship py.typed, so this override only changes their CI
 # resolution — it does not stop checking them where they exist.
 [[tool.mypy.overrides]]
-module = ["paho.*", "usb.*", "bleak", "torch", "transformers", "yaml.*"]
+module = ["torch", "transformers", "yaml.*"]
 ignore_missing_imports = true
 
 # NOTE (2026-10-02): pyright has no per-module import override, so `pyright nas`
@@ -76,4 +76,7 @@ venvPath = "."
 venv = ".venv"
 # tests/ import kgraph via a runtime sys.path insertion pyright cannot see.
 # nas/butler/scripts is on sys.path at run time for the `lib.butler_common` import.
-extraPaths = ["scripts", "nas/butler/scripts"]
+extraPaths = ["scripts", "nas/butler/scripts", "stubs"]
+# In-repo stubs for the NAS runtime deps (paho, usb, bleak): absent from this
+# box, so stubs are the only way both checkers see the code here.
+stubPath = "stubs"

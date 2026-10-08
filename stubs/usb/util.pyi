@@ -1,0 +1,13 @@
+"""Minimal PyUSB util stubs (see usb/core.pyi for provenance)."""
+
+from typing import Any
+
+from .core import Device
+
+ENDPOINT_IN: int
+ENDPOINT_TYPE_INTR: int
+
+def endpoint_direction(address: int) -> int: ...
+def endpoint_type(bmAttributes: int) -> int: ...
+def release_interface(device: Device, interface: Any) -> None: ...
+def dispose_resources(device: Device) -> None: ...

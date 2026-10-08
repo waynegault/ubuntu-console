@@ -337,7 +337,7 @@ class USBHciScanner:
         self.vid = vid
         self.pid = pid
         self.dev: usb.core.Device | None = None
-        self.event_ep = None
+        self.event_ep: usb.core.Endpoint | None = None
         self._usb_interface_path: str | None = None
         self._rebind_btusb = False
 

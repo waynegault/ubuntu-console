@@ -631,9 +631,9 @@ async def main():
         if not HAS_BLEAK:
             print("Error: bleak library not available", file=sys.stderr)
             sys.exit(1)
-        devices = await BleakScanner.discover()
-        for device in devices:
-            print(f"  {device.address}: {device.name}")
+        ble_devices = await BleakScanner.discover()
+        for ble_device in ble_devices:
+            print(f"  {ble_device.address}: {ble_device.name}")
         return
 
     measurement = await _connect_and_read(args.target, runtime)
