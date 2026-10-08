@@ -514,15 +514,17 @@ YAML
         echo "$((_entries - _with_map)) entr(ies) declare no verified_by, $_unverified reported"
         return 1
     }
-    # ...and the entry without a BATS node is the recorded gap, reported by name.
-    # `oc-restart-check` WAS that entry — its coverage was tests/test_oc_restart_check.py,
-    # which the BATS-only oracle cannot name — until a BATS case landed for it
-    # (tests/unit/52-oc-restart-check.bats, 2026-10-06).  That is the deliberate edit this
-    # comment anticipated, and the entry now reads VERIFIED; the remaining gap is
-    # `oc purge` (effect: mutate), left unmapped by the owner's call, whose guard is its
-    # read_back witness.
-    [[ "$output" == *"NOT VERIFIED  oc purge"* ]]
+    # ...and BOTH entries that used to be the recorded gap now read VERIFIED.
+    # `oc-restart-check`'s coverage was tests/test_oc_restart_check.py, which the BATS-only
+    # oracle cannot name, until a BATS case landed for it (tests/unit/52-oc-restart-check.bats,
+    # 2026-10-06).  `oc purge` (effect: mutate) followed on 2026-10-08, once the premise its own
+    # entry recorded -- that a BATS node "would have to stop the live gateway and delete real
+    # session dirs" -- was measured FALSE: the suite stubs the stop and points OC_AGENTS at a
+    # TAC_TEST_TMPDIR fixture.  The negative assertion below is the one that must FAIL the
+    # moment either entry goes unmapped again.
+    [[ "$output" == *"VERIFIED      oc purge -> tests/unit/02-so-startup.bats"* ]]
     [[ "$output" == *"VERIFIED      oc-restart-check -> tests/unit/52-oc-restart-check.bats"* ]]
+    [[ "$output" != *"NOT VERIFIED  oc purge"* ]]
 
     # The same cross-check for the triage: the reported split must equal the
     # `disposition:` lines the contract actually carries, and every other ACTIVE entry

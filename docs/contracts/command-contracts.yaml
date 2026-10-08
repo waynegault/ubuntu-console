@@ -444,17 +444,28 @@ commands:
   - name: oc purge
     family: openclaw
     summary: Stop the gateway and clear every agent's session directory
-    version: 1
-    updated: 2026-10-06
+    version: 2
+    updated: 2026-10-08
     status: active
     scope: both
     effect: mutate
     disposition: consequence
-    # NO verified_by, DELIBERATELY (2026-10-06, owner's call).  The read_back witness below is
-    # the guard: it proves the gateway is gone BEFORE any deletion, and that a failed `rm` is
-    # reported and not counted.  A BATS node would have to stop the live gateway and delete real
-    # session dirs (effect: mutate), so this entry stays NOT VERIFIED by the continuity check --
-    # which prints it and never fails -- rather than being tested with a destructive harness.
+    # VERIFIED (2026-10-08, owner's call).  The 2026-10-06 note that sat here said a BATS node
+    # "would have to stop the live gateway and delete real session dirs" -- that premise is
+    # false, and the two nodes below are its refutation: a test CAN exercise this command
+    # hermetically.  setup() points OC_AGENTS at a TAC_TEST_TMPDIR fixture (which still has to
+    # pass this command's own `^(/home|/dev/shm|/tmp)` safety guard, so the guard is exercised
+    # rather than dodged), points TAC_CACHE_DIR there too, and OC_PURGE_WAIT_S=0 skips the wait;
+    # the two gateway functions the stop goes through are stubbed, so no live gateway is
+    # stopped.  The first node holds the SAFETY half (a stop that does not land is a REFUSAL and
+    # nothing is deleted); the second holds the MUTATION half (--dry-run deletes nothing, and a
+    # real run removes exactly the session dirs it names) -- both read back from the filesystem
+    # rather than believed from the summary.  The read_back witness below remains the runtime
+    # guard: it proves the gateway is gone BEFORE any deletion, and that a failed `rm` is
+    # reported and not counted.
+    verified_by:
+      - "tests/unit/02-so-startup.bats::oc purge: a gateway that is not gone is a REFUSAL, and nothing is deleted"
+      - "tests/unit/02-so-startup.bats::oc purge: --dry-run names what it would delete and deletes nothing, and the real run removes exactly those session dirs"
     read_back:
       - witness: __oc_purge_wait_gone
         file: scripts/09c-oc-core.sh

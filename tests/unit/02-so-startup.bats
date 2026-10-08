@@ -562,6 +562,55 @@ __so_test_prelude() {
     [ -f "$OC_AGENTS/alpha/sessions/s.json" ]  # the point: nothing was deleted
 }
 
+@test "oc purge: --dry-run names what it would delete and deletes nothing, and the real run removes exactly those session dirs" {
+    # The MUTATION half.  The refusal node above proves the direction "a stop that does not
+    # land deletes nothing"; this proves the other one -- that a purge which DOES land removes
+    # exactly the session dirs it names, and that --dry-run removes none.  Both halves are read
+    # back from the FILESYSTEM, not from the command's summary: a `[PURGED]` row is the claim,
+    # an absent directory is the fact.  That distinction is the point of the per-directory `rm`
+    # in oc-purge (a failed delete is reported and NOT counted), so asserting the counter alone
+    # would let a summary disagree with the disk.
+    #
+    # Hermetic, same as the node above: the stop goes through __oc_safe_gateway_shutdown and
+    # __oc_gateway_gone (both stubbed), OC_AGENTS and TAC_CACHE_DIR are fixtures under
+    # TAC_TEST_TMPDIR (OC_AGENTS from this test, TAC_CACHE_DIR from setup()), and
+    # OC_PURGE_WAIT_S=0 makes __oc_purge_wait_gone skip its loop.  No live gateway is stopped
+    # and no real session directory is touched -- the fixture path is only legal because it is
+    # under /tmp, i.e. through the command's own safety guard rather than around it.
+    export __TAC_OPENCLAW_OK=1
+    export OC_PURGE_WAIT_S=0
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    mkdir -p "$OC_AGENTS/alpha/sessions" "$OC_AGENTS/beta/sessions"
+    : > "$OC_AGENTS/alpha/sessions/a.json"
+    : > "$OC_AGENTS/beta/sessions/b.json"
+    __oc_safe_gateway_shutdown() { return 0; }
+    __oc_gateway_gone() { return 0; }        # gone, so the purge is allowed through
+
+    # 1. --dry-run names both session dirs and deletes NEITHER.
+    run oc-purge --dry-run
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[WOULD PURGE] $OC_AGENTS/alpha/sessions"* ]]
+    [[ "$output" == *"[WOULD PURGE] $OC_AGENTS/beta/sessions"* ]]
+    [[ "$output" == *"[DRY RUN - nothing was deleted]"* ]]
+    [ -f "$OC_AGENTS/alpha/sessions/a.json" ]
+    [ -f "$OC_AGENTS/beta/sessions/b.json" ]
+
+    # 2. The real run: both session dirs are gone, and the count is the number that went.
+    run oc-purge
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[PURGED] $OC_AGENTS/alpha/sessions"* ]]
+    [[ "$output" == *"[PURGED] $OC_AGENTS/beta/sessions"* ]]
+    [[ "$output" == *"[2 agent dir(s) cleared]"* ]]
+    [ ! -d "$OC_AGENTS/alpha/sessions" ]
+    [ ! -d "$OC_AGENTS/beta/sessions" ]
+    # ...and it did not reach past what it named: the agent dirs themselves stay, so "purge"
+    # clears sessions rather than the agents that own them.
+    [ -d "$OC_AGENTS/alpha" ]
+    [ -d "$OC_AGENTS/beta" ]
+}
+
 # ---------------------------------------------------------------------------
 # so: the daemon guard patch row (card SELFHEAL-GUARD-DELIVERY-001)
 #
