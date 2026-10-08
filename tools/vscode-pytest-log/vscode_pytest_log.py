@@ -32,6 +32,7 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
+from typing import TypedDict
 
 SCHEMA = "vscode-pytest-log/1"
 
@@ -43,7 +44,30 @@ KEEP = int(os.environ.get("VSCODE_PYTEST_LOG_KEEP", "50"))
 #: A failure message is for a human to act on, not a full traceback archive.
 MESSAGE_LIMIT = 4000
 
-_state: dict[str, object] = {}
+
+class _State(TypedDict, total=False):
+    """The run's mutable state, one entry per field the hooks share.
+
+    A TypedDict rather than a bare ``dict[str, object]``: with the loose annotation every
+    read out of this mapping was typed ``object``, so none of the sites that USE a value —
+    a path handed to ``_write``, a float, the tests table — could be checked at all, and
+    one declaration produced nine separate errors.  ``total=False`` because the entries
+    appear as the run progresses: ``pytest_configure`` fills them, the logreport hook
+    appends, ``pytest_sessionfinish`` reads them back.
+    """
+
+    run_dir: pathlib.Path
+    run_file: pathlib.Path
+    cwd: str
+    argv: list[str]
+    started_at: str
+    started_monotonic: float
+    tests: dict[str, dict]
+    failures: list[dict]
+    start_payload: dict
+
+
+_state: _State = {}
 
 
 def _now() -> str:
@@ -107,25 +131,32 @@ def pytest_configure(config) -> None:
     cwd = os.getcwd()
     run_dir = _run_dir(cwd)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    _state.update(
-        {
-            "run_dir": run_dir,
-            "run_file": run_dir / f"{stamp}.json",
-            "cwd": cwd,
-            "argv": list(getattr(config, "args", []) or []),
-            "started_at": _now(),
-            "started_monotonic": time.monotonic(),
-            "tests": {},
-            "failures": [],
-        }
-    )
+    _state["run_dir"] = run_dir
+    _state["run_file"] = run_dir / f"{stamp}.json"
+    _state["cwd"] = cwd
+    _state["argv"] = list(getattr(config, "args", []) or [])
+    _state["started_at"] = _now()
+    _state["started_monotonic"] = time.monotonic()
+    _state["tests"] = {}
+    _state["failures"] = []
+
     try:
         import pytest as _pytest
 
         pytest_version = _pytest.__version__
-    except Exception:  # noqa: BLE001 - cosmetic field only
+    except (ImportError, AttributeError) as exc:
+        # A cosmetic field, so this must not fail the run — but a silently swallowed
+        # failure is indistinguishable from a working recorder, so say it.  The exception
+        # is narrowed rather than blind: those two are the real ways to get here (pytest
+        # absent, or a build without __version__), and anything else should surface.
+        print(f"Warning[vscode-pytest-log]: cannot read pytest's version: {exc!r}")
         pytest_version = ""
-    payload = {
+
+    # Annotated because three of the values are EMPTY containers (`counts`, `failures`,
+    # `tests`) whose element type the literal itself cannot state, so mypy refused to infer
+    # one.  `object` is the accurate element type for a JSON document, not a loosening:
+    # every value here is a JSON scalar, container or null.
+    payload: dict[str, object] = {
         "schema": SCHEMA,
         "status": "running",
         "repo": cwd,
@@ -166,7 +197,11 @@ def pytest_runtest_logreport(report) -> None:
 def pytest_sessionfinish(session, exitstatus) -> None:
     """Publish the finished run: counts, failures, and the per-test outcomes."""
     run_file = _state.get("run_file")
-    if run_file is None:
+    started_monotonic = _state.get("started_monotonic")
+    # Both are written together by pytest_configure, so one guard covers the pair; it is
+    # spelled as two lookups rather than a `.get(..., 0.0)` default so a missing start can
+    # never be silently reported as a duration measured from the epoch.
+    if run_file is None or started_monotonic is None:
         return
     tests = sorted(_state.get("tests", {}).values(), key=lambda t: t["nodeid"])
     counts: dict[str, int] = {}
@@ -178,7 +213,7 @@ def pytest_sessionfinish(session, exitstatus) -> None:
         {
             "status": "done",
             "finished_at": _now(),
-            "duration_s": round(time.monotonic() - float(_state["started_monotonic"]), 3),
+            "duration_s": round(time.monotonic() - float(started_monotonic), 3),
             "exit_status": int(exitstatus),
             "counts": counts,
             "failures": _state.get("failures", []),

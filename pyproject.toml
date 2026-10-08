@@ -1,6 +1,9 @@
 # Repository-wide tool configuration for mypy and pyright.
-# Python sources live under bin/, scripts/ (kgraph package + helpers), tests/ and
-# nas/ (the NAS/butler collectors and OpenClaw skills).
+# Checked Python sources are the ones the `files` list below names: the kgraph package
+# and helpers under scripts/, the gates' own checkers and box tools under tools/, the
+# suite under tests/ and the NAS/butler collectors under nas/.  bin/ is absent because
+# it holds shell only — a .py there fails tools/lint.sh, which runs `bash -n` AND
+# shellcheck over every bin/* entry (measured 2026-10-08, rc 2).
 # Type-check everything with:
 #   .venv/bin/python3 -m mypy            (or: mypy)
 #   .venv/bin/pyright
@@ -13,8 +16,13 @@ files = [
     "scripts/grpo-vram-probe.py",
     "scripts/kv-recall-probe.py",
     "scripts/oc-health-check.py",
-    "tools/contracts_check.py",
-    "tools/ratchet_check.py",
+    # The DIRECTORY, not its individual files: tools/ was outside every type checker
+    # because only contracts_check.py and ratchet_check.py were named here, so the other
+    # four — including the pytest-log recorder and the qwen-hooks scanner — could not be
+    # checked at all.  Ten real errors were hiding there (nine of them from one
+    # `dict[str, object]` annotation).  Naming the directory is what keeps a NEW tool
+    # covered without a config edit; a file list is the shape that let the gap open.
+    "tools",
     "tests",
     "nas",
 ]

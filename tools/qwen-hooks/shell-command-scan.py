@@ -106,7 +106,12 @@ def _split_simple_commands(command: str) -> list[tuple[str, bool]]:
         stripped = part.strip()
         if not stripped:
             continue
-        piped_in = index > 0 and command and _SEPARATOR_RE.split(command)[index - 1] == "|"
+        # `bool(...)` rather than the bare `and` chain: the chain's value is the last
+        # operand, so `command and …` yields the EMPTY STRING when the command is empty
+        # — a `str` in a field declared `bool`, which is what the type checker refused.
+        piped_in = bool(
+            index > 0 and command and _SEPARATOR_RE.split(command)[index - 1] == "|"
+        )
         segments.append((stripped, piped_in))
     return segments
 
