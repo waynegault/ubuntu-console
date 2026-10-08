@@ -2,7 +2,7 @@
 # ─── Module: 08-maintenance ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 73
+# Module Version: 74
 #   v73 (2026-10-03, card 15da0400): __update_plugin (241 lines) split into named
 #   helpers — __update_plugin_npm_deps (the four duplicated dep-install blocks),
 #   __update_plugin_prompt_changes (the interactive keep/discard/skip prompt) and
@@ -1370,7 +1370,7 @@ function __up_stale_processes() {
         if _active_mtime=$(stat -c %Y "$ACTIVE_LLM_FILE" 2>&1)
         then
             _active_age=$(( $(date +%s) - _active_mtime ))
-            if (( _active_age < 60 ))
+            if (( _active_age >= 0 && _active_age < 60 ))
             then
                 __tac_line "[17/20] Stale Processes" "[SKIP - MODEL BOOTING]" "$C_Dim"
                 return 0

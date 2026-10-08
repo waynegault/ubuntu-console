@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 28
+# Module Version: 29
 #   v28 (2026-10-07): `__so_gateway_bound_age` no longer silences a failing journalctl —
 #   the `2>/dev/null` is REMOVED (and its `swallow-ok` marker with it) rather than kept.
 #   An unreadable journal has a defined outcome (no bind line, so no post-bind evidence,
@@ -92,7 +92,7 @@ function __so_check_stale_hold() {
     _now=$(date +%s)
     _mtime=$(stat -c %Y "$_hold" 2>/dev/null || echo 0)
     _age=$(( _now - _mtime ))
-    if (( _age <= _limit )); then
+    if (( _age >= 0 && _age <= _limit )); then
         __tac_info "Gateway" "[hold present ${_age}s — recovery guard deliberately paused]" "$C_Dim"
         return 1
     fi

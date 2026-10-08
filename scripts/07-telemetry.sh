@@ -2,7 +2,7 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 13
+# Module Version: 14
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
@@ -122,7 +122,7 @@ function __cache_age_suffix() {
     # caller then renders no marker, which is what a missing cache gets anyway).
     _ts=$(stat -c %Y "$_path") || return 1
     _age=$(( $(date +%s) - _ts ))
-    (( _age > _stale_after )) || { printf '%s' ""; return 0; }
+    (( _age > _stale_after || _age < 0 )) || { printf '%s' ""; return 0; }
     printf ' (cached %ss ago — STALE)' "$_age"
 }
 

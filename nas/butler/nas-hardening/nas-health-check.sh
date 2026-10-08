@@ -106,7 +106,7 @@ if [ -f $OTP_FILE ]; then
     now=$(date +%s)
     # swallow-ok: a stat failure yields 0, which the staleness warning below reports
     otp_epoch=$(stat -c %Y $OTP_FILE 2>/dev/null || echo 0)
-    if [ $((now - otp_epoch)) -gt 900 ]; then
+    if [ $((now - otp_epoch)) -lt 0 ] || [ $((now - otp_epoch)) -gt 900 ]; then
         log "WARNING: myAir OTP file is stale (>15 min)"
     fi
 else

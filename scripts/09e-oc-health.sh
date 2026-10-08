@@ -9,7 +9,7 @@
 # SC2015 and SC1091 were listed but fire nowhere in this file and have been dropped.
 # --- Module: 09e-oc-health ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 27
+# Module Version: 28
 #   v27 (2026-10-07): `oc-doctor-local` stops flattening a stall into a generic issue —
 #   it now returns the SAME three values as `oc health` (0 clean, 5 stalled: alert, do
 #   NOT restart, 1 any other issue: repair or restart is legitimate).  Before this the
@@ -937,7 +937,7 @@ function oc-usage() {
         mtime=0
     fi
 
-    if (( now - mtime > 5 )); then
+    if (( now - mtime < 0 || now - mtime > 5 )); then
         if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
             # A failed fetch or move is reported and the partial .tmp removed, never
             # silently ignored: the reader below falls back to a visible

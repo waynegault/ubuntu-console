@@ -2,7 +2,7 @@
 # ─── Module: 04-aliases ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 32
+# Module Version: 33
 # ==============================================================================
 # 4. ALIAS DEFINITIONS & SHORTCUTS
 # ==============================================================================
@@ -30,7 +30,7 @@ function __os_fetch_cached() {
         local _now _mtime
         _now=$(date +%s)
         _mtime=$(stat -c %Y "$cache_file" 2>/dev/null || echo 0)
-        if (( _now - _mtime < cache_ttl )); then
+        if (( _now - _mtime >= 0 && _now - _mtime < cache_ttl )); then
             cat "$cache_file"; return 0
         fi
     fi

@@ -2,7 +2,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 25
+# Module Version: 26
 #   v25 (2026-10-02): LLM_REGISTRY_HEADER — the ONE definition of the registry
 #   column set, consumed by every writer (11a sync_state + __renumber_registry,
 #   11b profile_save + remap, 11e scan).  Card e0579318: the remap kept emitting a
@@ -279,7 +279,7 @@ function __tac_probe_ok() {
         local now mtime
         now=$(date +%s)
         mtime=$(stat -c %Y "$cache_file" 2>/dev/null || echo 0)
-        if (( now - mtime < ttl ))
+        if (( now - mtime >= 0 && now - mtime < ttl ))
         then
             [[ "$(< "$cache_file")" == "1" ]]
             return

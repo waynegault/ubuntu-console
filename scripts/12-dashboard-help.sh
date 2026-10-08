@@ -2,7 +2,7 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 24
+# Module Version: 25
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -234,7 +234,7 @@ function __dashboard_oc_active_agents() {
         # current cache for this render to avoid blocking the UI.
         local mtime
         mtime=$(stat -c %Y "$cache" 2>/dev/null || echo 0)
-        if (( $(date +%s) - mtime > cache_ttl )); then
+        if (( $(date +%s) - mtime < 0 || $(date +%s) - mtime > cache_ttl )); then
             # `oc` is a shell function: it must run in a subshell, not via
             # `setsid`/an external command (which cannot see functions).
             # Tracked through __tac_track_bg_job so bash does not print a
