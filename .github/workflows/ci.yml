@@ -206,6 +206,7 @@ jobs:
                tests/unit/52-oc-restart-check.bats \
                tests/unit/53-vscode-pytest-log-patch.bats \
                tests/unit/54-qwen-memory-style-patch.bats
+               tests/unit/55-memory-markdownlint-hook.bats
 
       - name: Run integration tests
         run: |
