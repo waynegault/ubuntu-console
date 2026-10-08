@@ -75,7 +75,7 @@
 #   Both providers are BUNDLED (the bundle ships docs/providers/deepseek.md and ollama.md), so
 #   the apiKey-only overlay is schema-legal; a CUSTOM provider would be refused. The
 #   auth-profile store entries stay, as a second channel. Card OC-REFRESH-KEYS-AUTHPROFILE-001.
-# Module Version: 49
+# Module Version: 50
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -165,7 +165,9 @@ function oc-agent-use() {
     local ttl=5
 
     # Serve cached rendering when fresh
-    if [[ -f "$cache" ]] && (( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) < ttl )); then
+    _ca=$(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
+    # A negative age means a future mtime (clock step / writer backdate): not fresh.
+    if [[ -f "$cache" ]] && (( _ca >= 0 && _ca < ttl )); then
         cat "$cache"; return 0
     fi
 
@@ -182,7 +184,7 @@ function oc-agent-use() {
     else
         mtime=0
     fi
-    if (( now - mtime > 3 )); then
+    if (( now - mtime < 0 || now - mtime > 3 )); then
         if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
             if [[ -t 1 ]]; then
                 ( openclaw agents list --json > "${agent_cache}.tmp.$$" 2>/dev/null \
@@ -203,7 +205,7 @@ function oc-agent-use() {
     else
         mtime=0
     fi
-    if (( now - mtime > 5 )); then
+    if (( now - mtime < 0 || now - mtime > 5 )); then
         if [[ "$__TAC_OPENCLAW_OK" == "1" ]]; then
                 ( openclaw sessions --all-agents --json > "${session_cache}.tmp.$$" 2>/dev/null \
                     || openclaw sessions --json > "${session_cache}.tmp.$$" 2>/dev/null ) \
@@ -251,7 +253,7 @@ function oc-agent-use() {
     else
         mtime=0
     fi
-    if (( now - mtime > stats_ttl )); then
+    if (( now - mtime < 0 || now - mtime > stats_ttl )); then
         # Aggregate sessions_json → per-agent token sums.
         # jq pipeline: normalise agent ID field name (many JSON shapes),
         # extract token counts, group by agent, sum input/output/total
@@ -828,7 +830,8 @@ function __bridge_windows_api_keys() {
     fi
 
     # Use cached exports if fresh enough
-    if [[ -f "$cache" ]] && (( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) < ttl ))
+    _ca=$(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
+    if [[ -f "$cache" ]] && (( _ca >= 0 && _ca < ttl ))
     then
         # shellcheck source=/dev/null
         source "$cache" 2>/dev/null
@@ -1706,13 +1709,30 @@ function oc-export-keys-nas() {
     then
         _dry_run=1
     fi
-    # LAN SSH to 192.168.33.20 times out from WSL. The NAS is reachable via
-    # Tailscale, but its MagicDNS name (mycloudex2ultra.tail99183.ts.net) does
-    # not resolve while Tailscale DNS is off (`tailscale set --accept-dns`), so
-    # use the stable Tailscale IP. Override with OC_NAS_HOST if the LAN route is
-    # restored or MagicDNS is re-enabled.
-    local _nas_host="${OC_NAS_HOST:-100.106.225.96}"
     local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
+    # Resolve the NAS route AT RUN TIME. The old default was a hardcoded Tailscale
+    # IP (100.106.225.96), with a comment claiming LAN SSH "times out from WSL".
+    # Both are false now (measured 2026-10-08): that address is not in
+    # `tailscale status` at all (the node is 100.83.76.103), while LAN
+    # 192.168.33.20 answers from this host (uid=0). A changed cache therefore
+    # silently took the "[failed -- SSH sync error]" branch and the mirror
+    # stopped updating. OC_NAS_HOST still wins if set; otherwise probe LAN first,
+    # then the current Tailscale address, so the export works on- and off-LAN.
+    local _nas_host="${OC_NAS_HOST:-}"
+    if [[ -z "$_nas_host" && "$_dry_run" != "1" && -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1
+    then
+        local _cand
+        for _cand in 192.168.33.20 100.83.76.103
+        do
+            if ssh -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=4 \
+                 -o StrictHostKeyChecking=no "${_nas_user}@${_cand}" true 2>/dev/null
+            then
+                _nas_host="$_cand"
+                break
+            fi
+        done
+    fi
+    _nas_host="${_nas_host:-192.168.33.20}"
     if [[ ! -f "$cache" ]]
     then
         __tac_info "Exporting to NAS" "[no bridge cache — run 'oc refresh-keys' first]" "$C_Warning"
