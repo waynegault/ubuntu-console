@@ -251,11 +251,19 @@ def first_reference(repo, rel, tokens):
 
 
 # ── entry model ─────────────────────────────────────────────────────────────
-def entry_symbol(kind, entry):
-    """The symbol an entry declares: the variable name, or the path's basename."""
+def entry_symbol(kind: str, entry: dict) -> str | None:
+    """The symbol an entry declares: the variable name, or the path's basename.
+
+    `None` — not a coerced ``""`` — when the entry declares no name at all, so the caller
+    can tell "no symbol" from "a symbol that happens to be empty".  The registry that
+    receives this is typed ``dict[str, str]``, and a ``None`` key could never be looked up
+    anyway: the only read is guarded by the symbol being truthy.
+    """
     if kind == "variables":
-        return entry.get("name")
-    return os.path.basename(entry.get("path", ""))
+        name = entry.get("name")
+        return str(name) if name is not None else None
+    path = entry.get("path")
+    return os.path.basename(str(path)) if path is not None else None
 
 
 def entry_tokens(kind, entry):
@@ -515,7 +523,8 @@ def run_state(repo):
             symbol = entry_symbol(kind, entry)
             if symbol and symbol in symbols:
                 fail(problems, symbol, f"declared twice ({symbols[symbol]} and {kind})")
-            symbols[symbol] = kind
+            if symbol is not None:
+                symbols[symbol] = kind
             if not check_structure(kind, entry, problems):
                 continue
             check_producers(kind, entry, repo, problems, counts)
@@ -668,7 +677,7 @@ def check_read_backs(repo, problems, counts: _WitnessCounts):
         return
     order = module_list_names(repo) or []
     positions, group_of, _findings, _groups = module_graph(repo, order)
-    surface = command_surface(repo, sorted(positions, key=positions.get), positions, group_of)
+    surface = command_surface(repo, sorted(positions, key=lambda name: positions[name]), positions, group_of)
 
     for entry in entries:
         if not isinstance(entry, dict):
@@ -1158,7 +1167,7 @@ def run_modules(repo):
     edges = {}
     use_edges = []           # (module, module) — run-time collaborators, order-free
     uses_declaring = 0
-    for module in sorted(positions, key=positions.get):
+    for module in sorted(positions, key=lambda name: positions[name]):
         if not os.path.isfile(os.path.join(repo, f"scripts/{module}.sh")):
             problems.append(f"  FAIL  {module}: listed in scripts/_module-list.sh but no "
                             f"such file exists")
@@ -1175,14 +1184,20 @@ def run_modules(repo):
                             f"(scripts/{module}.sh)")
         else:
             defined = defined_names(module_group_text(repo, group_of, module))
-            for token in exports:
+            # `csv_tokens` answers None only for an ABSENT @exports field, which the branch
+            # above has already reported and this `else` excludes — two facts that live in
+            # different expressions, so the empty fallback is spelled out rather than
+            # assumed by the checker.
+            for token in exports or []:
                 if token not in defined:
                     problems.append(
                         f"  FAIL  {module}: @exports names '{token}', which is not defined\n"
                         f"        as a function, alias or variable in scripts/{module}.sh "
                         f"or its load unit")
         resolved = []
-        for token in tokens:
+        # `declared_depends` answers None only alongside a `problem`, which the guard above
+        # has already consumed, so there is nothing to iterate when it fires.
+        for token in tokens or []:
             name, reason = resolve_module(token, positions)
             if name is None:
                 violations.append(("unknown-depends", f"{module}->{token}",
@@ -1218,7 +1233,8 @@ def run_modules(repo):
             continue
         if use_tokens:
             uses_declaring += 1
-        for token in use_tokens:
+        # Same contract as `declared_depends`: None comes only with the `problem` above.
+        for token in use_tokens or []:
             name, reason = resolve_module(token, positions)
             if name is None:
                 problems.append(
@@ -1269,7 +1285,7 @@ def run_modules(repo):
             new_violations.append((kind, key, message))
 
     cycles = []
-    for members in strongly_connected(edges, sorted(positions, key=positions.get)):
+    for members in strongly_connected(edges, sorted(positions, key=lambda name: positions[name])):
         if len(members) < 2:
             continue
         cycle = cycle_through(edges, members[0], members)
@@ -1323,21 +1339,28 @@ def run_modules(repo):
 
 
 # ── subcommand: derived ─────────────────────────────────────────────────────
-def command_contracts_file(repo):
-    """(data, text, error) for docs/contracts/command-contracts.yaml."""
+def command_contracts_file(repo) -> tuple[dict, str | None, str | None]:
+    """(data, text, error) for docs/contracts/command-contracts.yaml.
+
+    `data` is ALWAYS a mapping — empty on every error path — so a caller that has checked
+    `error` can use it without also having to prove it exists.  `error` is the one value
+    that says whether the read was usable.  A three-tuple cannot express that invariant, so
+    it is kept by construction instead: returning `None` made all four callers index a
+    value no checker could tell was present.
+    """
     rel = "docs/contracts/command-contracts.yaml"
     path = os.path.join(repo, rel)
     if not os.path.isfile(path):
-        return None, None, f"{rel} not found"
+        return {}, None, f"{rel} not found"
     text = read_lines(repo, rel)
     if text is None:
-        return None, None, f"{rel} cannot be read"
+        return {}, None, f"{rel} cannot be read"
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        return None, None, f"{rel} does not parse: {exc}"
+        return {}, None, f"{rel} does not parse: {exc}"
     if not isinstance(data, dict):
-        return None, None, f"{rel} is not a mapping"
+        return {}, None, f"{rel} is not a mapping"
     return data, text, None
 
 
@@ -1384,7 +1407,7 @@ def run_derived(repo):
             "  derived command surface; without it there is nothing to derive. Refusing.\n")
         return EXIT_CANNOT_RUN
     positions, group_of, _findings, _groups = module_graph(repo, order)
-    surface = command_surface(repo, sorted(positions, key=positions.get), positions, group_of)
+    surface = command_surface(repo, sorted(positions, key=lambda name: positions[name]), positions, group_of)
     if not surface:
         sys.stderr.write(
             "check-contracts: no command-shaped name was derived from any @exports header —\n"
@@ -1802,7 +1825,7 @@ def run_continuity(repo, names):
     if os.path.isfile(os.path.join(repo, "scripts/_module-list.sh")):
         order = module_list_names(repo) or []
         positions, group_of, _f, _g = module_graph(repo, order)
-        surface = command_surface(repo, sorted(positions, key=positions.get), positions, group_of)
+        surface = command_surface(repo, sorted(positions, key=lambda name: positions[name]), positions, group_of)
     else:
         print("  NOT CHECKED  the decisions' `commands:` values resolve against the @exports "
               "surface only\n               when scripts/_module-list.sh is present")

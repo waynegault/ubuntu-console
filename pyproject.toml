@@ -62,7 +62,13 @@ ignore_missing_imports = true
 # (paho, usb, bleak) and only those — no code-level findings remain.  `ruff check .`
 # (the CI gate) and `mypy` are clean including nas/.
 [tool.pyright]
-include = ["bin", "scripts", "tests", "nas"]
+# tools/ is named here for the same reason mypy's `files` names it: a DIRECTORY, so a new
+# checker or box tool is covered without a config edit.  It was omitted while mypy's file
+# list named two tools files by hand, so the same four files were invisible to both
+# checkers.  Turning it on surfaced 19 findings — a `dict | None` helper contract, an
+# optional sort key, three optional iterables and a `__doc__` read — none of them a live
+# defect, all fixed at the source rather than narrowed away.
+include = ["bin", "scripts", "tools", "tests", "nas"]
 exclude = ["**/__pycache__", "**/frontend-g6/**", "scripts/build/**"]
 pythonVersion = "3.14"
 typeCheckingMode = "basic"

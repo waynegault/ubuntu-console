@@ -141,7 +141,11 @@ def revert(path: Path) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # `__doc__` is typed `str | None` even for a module that plainly has one, so the
+    # summary line is read through a guard rather than asserted away — and a docstring-less
+    # copy then prints no description instead of raising IndexError.
+    doc_lines = (__doc__ or "").splitlines()
+    parser = argparse.ArgumentParser(description=doc_lines[0] if doc_lines else None)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", action="store_true", help="report state; exit 1 if any copy is unpatched")
     group.add_argument("--apply", action="store_true", help="insert the block (idempotent)")
