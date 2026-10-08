@@ -709,31 +709,81 @@ __fast_member_shellcheck() {
 
 @test "ci: every runnable test suite is referenced by a workflow" {
     # A suite no workflow runs silently rots — e2e-bench-autotune.bats sat
-    # unreferenced until this guard was added, and a newly added unit suite has
-    # the same trap. Only 04-llama-cpp-inventory is deliberately excluded (it
-    # performs live downloads and mutates the host).
-    local missing="" f rel
+    # unreferenced until this guard was added, and a newly added unit suite has the
+    # same trap. Only 04-llama-cpp-inventory is deliberately excluded (it performs
+    # live downloads and mutates the host).
+    #
+    # The reference must be a LIVE ARGUMENT, not mere text. The workflows mention a
+    # suite path in prose as well — nightly.yml:21 carries tests/unit/12-gpu-exclusivity.bats
+    # in a comment — so a substring grep would pass while the suite never runs. This
+    # collects the paths that are ARGUMENTS of a `bats` command, through a literal (`|`)
+    # block's backslash continuations and a folded (`>-`) block alike, and requires each
+    # expected suite to appear there.
+    local argscan='
+        function ind(s) { return (match(s, /^ */) ? RLENGTH : 0) }
+        function flush(   t, n, a, i) {
+            if (cmd == "") return
+            t = cmd; gsub(/\\/, " ", t); sub(/^[[:space:]]+/, "", t)
+            n = split(t, a, /[[:space:]]+/)
+            if (n >= 1 && a[1] == "bats")
+                for (i = 2; i <= n; i++) if (a[i] ~ /^tests\/.*\.bats$/) print a[i]
+            cmd = ""
+        }
+        {
+            if (inblk && $0 !~ /^[[:space:]]*$/ && ind($0) <= keyind) { inblk = 0; flush() }
+            if (!inblk && $0 ~ /^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]/) {
+                rest = $0; sub(/^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]*/, "", rest)
+                keyind = ind($0)
+                if (rest ~ /^[|]/)    { inblk = 1; lit = 1 }
+                else if (rest ~ /^>/) { inblk = 1; lit = 0 }
+                else                  { inblk = 0 }
+                cmd = ""; next
+            }
+            if (inblk) { cmd = cmd " " $0; if (lit && $0 !~ /\\[[:space:]]*$/) flush() }
+        }
+        END { flush() }
+    '
+    local referenced missing="" f rel
+    referenced="$(awk "$argscan" "$REPO_ROOT"/.github/workflows/*.yml)"
     for f in "$REPO_ROOT"/tests/unit/*.bats "$REPO_ROOT"/tests/integration/*.bats; do
         [[ -f "$f" ]] || continue
         rel="tests/${f#"$REPO_ROOT"/tests/}"
         [[ "$rel" == "tests/unit/04-llama-cpp-inventory.bats" ]] && continue
-        grep -qF "$rel" "$REPO_ROOT"/.github/workflows/*.yml || missing="$missing $rel"
+        printf '%s\n' "$referenced" | grep -qxF "$rel" || missing="$missing $rel"
     done
     if [[ -n "$missing" ]]
     then
-        echo "reference these in a workflow (ci.yml or nightly.yml):$missing"
+        echo "these suites are not run by a workflow as a bats ARGUMENT:$missing"
         return 1
     fi
 
-    # Presence as TEXT is not presence as a live ARGUMENT. The grep above passes when a
-    # suite path sits on its own line — but if the line ABOVE it lost its trailing
-    # backslash, that path becomes a separate command and the job dies with
-    # "Permission denied" (exit 126) AFTER most cases have passed. Measured 2026-10-08:
-    # the tip went red exactly this way — suite 55 was appended to ci.yml's bats list and
-    # the `\` on the suite-54 line was dropped (4f71a6c7), and no local gate saw it.
-    # bats argument lists here are literal (`|`) blocks whose lines are backslash-
-    # continued; a folded (`>-`) block joins its lines instead, so the scan tracks the
-    # block style and applies the rule only inside a `|` block.
+    # Teeth for the extractor: a suite after a dropped continuation is omitted, the real
+    # argument above it is kept, and a path mentioned only in a comment is not counted.
+    local tmp="$BATS_TEST_TMPDIR/args.yml"
+    cat > "$tmp" <<'YAML'
+jobs:
+  x:
+    steps:
+      - run: |
+          # prose mentions tests/unit/99-ghost.bats
+          bats a \
+               tests/unit/01-a.bats
+               tests/unit/02-b.bats
+YAML
+    run awk "$argscan" "$tmp"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"tests/unit/01-a.bats"* ]]
+    [[ "$output" != *"tests/unit/02-b.bats"* ]]
+    [[ "$output" != *"tests/unit/99-ghost.bats"* ]]
+
+    # A stray `tests/*.bats` line is a DISTINCT fault the extractor's "not run" list
+    # cannot locate: if the line ABOVE it lost its trailing backslash, that path becomes
+    # its own command and the job dies with "Permission denied" (exit 126) AFTER most
+    # cases have passed. Measured 2026-10-08: the tip went red exactly this way — suite 55
+    # was appended to ci.yml's bats list and the `\` on the suite-54 line was dropped
+    # (4f71a6c7). This scan names the offending file:line. bats argument lists here are
+    # literal (`|`) blocks whose lines are backslash-continued; a folded (`>-`) block has
+    # no backslashes, so the rule applies only inside a `|` block.
     local scan='
         function ind(s) { return (match(s, /^ */) ? RLENGTH : 0) }
         {
