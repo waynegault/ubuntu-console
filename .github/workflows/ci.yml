@@ -204,7 +204,8 @@ jobs:
                tests/unit/50-python-interpreter-resolution.bats \
                tests/unit/51-memory-index-patch.bats \
                tests/unit/52-oc-restart-check.bats \
-               tests/unit/53-vscode-pytest-log-patch.bats
+               tests/unit/53-vscode-pytest-log-patch.bats \
+               tests/unit/54-qwen-memory-style-patch.bats
 
       - name: Run integration tests
         run: |

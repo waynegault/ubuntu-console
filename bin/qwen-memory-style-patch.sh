@@ -75,21 +75,34 @@
 # patcher is re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
 #   v2 (2026-10-05, card 59f47689): the rule element extended to the five measured classes
 #   (MD049 + MD032 as before, plus MD041 / MD022 / MD046+MD040), and the patch made
 #   UPGRADE-AWARE — state is decided by the payload's own phrase, so a copy already carrying
 #   the v1 element is upgraded IN PLACE instead of being skipped by its marker.
+#   v3 (2026-10-08): the rule STRENGTHENED, after measuring that wording was not the problem.
+#   MEASURED FIRST, so the change is aimed rather than guessed: the v2 rule IS inside the
+#   EXTRACTION_AGENT_SYSTEM_PROMPT array — verified in the copy this box loads, 1134 chars
+#   after the constant, exactly once — and this session's daemon STARTED 2026-10-08 09:16,
+#   three days AFTER the v2 payload was written (chunk mtime 2026-10-05 09:50).  So v2 was
+#   LIVE, correctly placed, and still did not hold: the extractor wrote asterisk emphasis at
+#   12:04 BST with v2 in its prompt.  Misplacement and staleness are both ruled out, which
+#   leaves the instruction's FORM.  v3 states the rule as a numbered, self-checked directive
+#   ("read before writing and re-check before you finish") and names the one case that must
+#   NOT be converted — STRONG text keeps its asterisks (**bold**) — because a rule that says
+#   only "never asterisks" invites the mirror error this store ALSO flags (MD050, measured
+#   2026-10-01 with two underscore strong runs).
 set -euo pipefail
 
 MARKER="LOCAL PATCH 2026-10-02 (qwen-memory-extractor-style)"
 EXTRACTOR_NAME="You are now acting as the managed memory extraction subagent"
-# A v1 copy is recognised by the marker; a CURRENT copy by this phrase, which no earlier
-# version carried.  The rule text is the patch's PAYLOAD — the marker only records that some
-# version of this patch ran here — so the state has to be decided by content (card 59f47689,
-# which extended the rule on 2026-10-05; without this, an already-v1 copy is skipped by the
-# marker and the new clauses never land).
-RULE_NEWEST_CLAUSE="fenced with a language tag, never indented"
+# A copy carrying an OLDER payload is recognised by the marker; a CURRENT one by this phrase,
+# which only v3 carries.  The rule text is the patch's PAYLOAD — the marker only records that
+# some version of this patch ran here — so the state must be decided by content, never by the
+# marker (card 59f47689: without that, an already-patched copy is skipped by its marker and the
+# new clauses never land).  v3 carries a phrase no earlier payload had, so this separates v3
+# from BOTH v2 and v1, and the python below upgrades in place from either.
+RULE_NEWEST_CLAUSE="The asterisk must NEVER delimit emphasis"
 
 check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
@@ -136,7 +149,7 @@ for f in "${files[@]}"; do
 
     state="UNKNOWN"
     if grep -qF "$RULE_NEWEST_CLAUSE" "$f"; then state="applied"
-    elif grep -qF "$MARKER" "$f"; then state="v1"
+    elif grep -qF "$MARKER" "$f"; then state="superseded"
     elif grep -qF "\"Memory file format reference:\",...MEMORY_FRONTMATTER_EXAMPLE]" "$f" \
       || grep -qF "\"Memory file format reference:\"," "$f"; then state="stock"; fi
 
@@ -167,27 +180,40 @@ p = pathlib.Path(os.environ["PATCH_FILE"])
 marker = os.environ["PATCH_MARKER"]
 EXTRACTOR = "You are now acting as the managed memory extraction subagent"
 
-# The rule element, as a JS string literal.  One line, imperative, in the prompt's own
-# voice (the surrounding rules all begin "- ").  Emphasis is the measured defect; the
-# blank-line clause is this store's other flagged class (MD032); the first half is the
-# general instruction a future extractor can extend.
+# The v3 rule element, as a JS string literal: one line, in the prompt's own voice (the
+# elements around it begin "- ").  v2 stated the style plainly and was still ignored WITH the
+# payload live and correctly placed (see the v3 note in the header), so v3 is written as a
+# directive that asks for a self-check, and it names the conversion that must NOT happen.
+# ASCII only, like the elements it sits among.
 rule_text = (
+    "- OUTPUT STYLE: read this before writing and re-check it before you finish. This store "
+    "lints every note it holds, so: (1) EMPHASIS uses underscores ONLY, _like this_. The "
+    "asterisk must NEVER delimit emphasis -- re-read every span you emit and convert "
+    "*like this* to _like this_. STRONG text keeps its asterisks (**bold**); never convert "
+    "those to underscores. (2) A blank line before and after every list and heading. (3) The "
+    "single H1 repeats the frontmatter name value. (4) Every code block is fenced with a "
+    "language tag, never indented."
+)
+rule_literal = '"' + rule_text + '"'
+
+# The two SUPERSEDED payloads, kept so an already-patched copy is UPGRADED IN PLACE rather
+# than skipped: the marker records that some version of this patch ran, never which payload it
+# wrote.  Inserting the new element beside an old one would leave a stale rule the extractor
+# still reads, so whichever literal is found is REPLACED, and a post-condition then proves it
+# did not survive.
+V2_RULE_TEXT = (
     "- Match the store's Markdown style: emphasis with underscores (_like this_), never "
     "asterisks (*like this*); a blank line before and after every list and heading; the "
     "single H1 repeats the frontmatter name value; and every code block is fenced with a "
     "language tag, never indented."
 )
-rule_literal = '"' + rule_text + '"'
-
-# The v1 payload (2026-10-02), kept so an already-patched copy is UPGRADED IN PLACE rather
-# than skipped: the marker records that a version of this patch ran, never which payload it
-# wrote.  Inserting the new element beside the old one would leave a stale rule the extractor
-# still reads, so the v1 literal is REPLACED.
+v2_literal = '"' + V2_RULE_TEXT + '"'
 V1_RULE_TEXT = (
     "- Match the store's Markdown style: emphasis with underscores (_like this_), never "
     "asterisks (*like this*), and a blank line before and after every list."
 )
 v1_literal = '"' + V1_RULE_TEXT + '"'
+SUPERSEDED = (v2_literal, v1_literal)
 
 MIN_ANCHOR = '"Memory file format reference:",...MEMORY_FRONTMATTER_EXAMPLE]'
 SPACED_ANCHOR = '"Memory file format reference:",\n  ...MEMORY_FRONTMATTER_EXAMPLE\n]'
@@ -213,11 +239,13 @@ if src.count(rule_literal) == 1:
     )
 
 upgraded = False
-if src.count(v1_literal) == 1:
-    # UPGRADE v1 -> current: swap the payload IN PLACE, leaving the marker and the anchor
-    # exactly where v1 put them, so the array keeps ONE style element.
-    src = src.replace(v1_literal, rule_literal)
-    upgraded = True
+for old_literal in SUPERSEDED:
+    if src.count(old_literal) == 1:
+        # UPGRADE -> current: swap the payload IN PLACE, leaving the marker and the anchor
+        # exactly where the earlier version put them, so the array keeps ONE style element.
+        src = src.replace(old_literal, rule_literal)
+        upgraded = True
+        break
 
 if not upgraded:
     if min_hits == 1:
@@ -233,8 +261,11 @@ if src.count(marker) != 1:
     raise SystemExit("refusing to patch: the marker is not present exactly once in the result")
 if src.count(rule_literal) != 1:
     raise SystemExit("refusing to patch: the rule element is not present exactly once in the result")
-if src.count(v1_literal) != 0:
-    raise SystemExit("refusing to patch: the v1 rule element survived — the array would carry two style rules")
+for old_literal in SUPERSEDED:
+    if src.count(old_literal) != 0:
+        raise SystemExit(
+            "refusing to patch: a superseded rule element survived — the array would carry two style rules"
+        )
 if src.count(EXTRACTOR) != 1:
     raise SystemExit("refusing to patch: the extractor prompt sentence did not survive the edit")
 if src.count(MIN_ANCHOR) + src.count(SPACED_ANCHOR) != 1:
@@ -243,7 +274,7 @@ if src.index(marker) > src.index(MIN_ANCHOR if min_hits == 1 else SPACED_ANCHOR)
     raise SystemExit("refusing to patch: the rule landed after the format reference, not before it")
 
 p.write_text(src, encoding="utf-8")
-print("  upgraded extractor-style (v1 -> current)" if upgraded else "  patched  extractor-style")
+print("  upgraded extractor-style (superseded payload -> v3)" if upgraded else "  patched  extractor-style")
 PY
     then
         echo "  MISMATCH $name — an anchor did not match; the chunk is UNCHANGED (backup kept)" >&2
