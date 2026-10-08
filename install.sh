@@ -3,11 +3,17 @@
 # Run from the repo root: ./install.sh
 # Idempotent: safe to re-run.
 # AI INSTRUCTION: Increment version on significant changes.
+# v1.11 (2026-10-08, card c0c6df3d): the VS Code Testing results-logger's two halves are
+#   now delivered from this repo — tools/vscode-pytest-log/vscode-pytest-log-patch.py and
+#   tools/vscode-pytest-log/vscode_pytest_log.py — so the patch bin/qwen-guard-selfheal.sh
+#   re-applies every cron tick has a source anyone can read.  They are tracked under tools/,
+#   not bin/, because the shell lint gate treats every bin/* file as a shell script; the two
+#   links below deliver them to ~/.local/bin and ~/.local/lib/vscode-pytest-log/.
 # v1.10 (2026-10-03, card 5c20ae57): the legacy unit ALIAS loop runs AFTER the
 #   systemd/* linking loop (it ran before it, so on a FIRST install the target
 #   units did not exist yet and every alias was skipped), and a skipped alias now
 #   names its missing target on stderr instead of passing silently.
-VERSION="1.10"
+VERSION="1.11"
 set -euo pipefail
 
 # --version (diagnostic; also keeps VERSION referenced, so no SC2034 suppression).
@@ -217,6 +223,19 @@ do
             link "bin/$_bn" "$HOME/.local/bin/$_bn" ;;
     esac
 done
+
+# The VS Code Testing results-logger's TWO halves are tracked under tools/vscode-pytest-log/
+# rather than bin/, because tools/lint.sh runs `bash -n` and shellcheck over every bin/*
+# file — a Python file there fails both (measured: "syntax error near unexpected token `('",
+# rc 2).  Each is delivered to the path its own consumer expects: the patcher onto
+# ~/.local/bin, where bin/qwen-guard-selfheal.sh probes it by absolute path, and the recorder
+# into ~/.local/lib/vscode-pytest-log, where the patched extension wrapper imports it from.
+#
+# Both are tracked so the patch the self-heal cron re-applies every tick has a source anyone
+# can read, instead of existing only in ~/.local (card VSCODE-PYTEST-LOG-UNVERSIONED-001,
+# c0c6df3d).
+link "tools/vscode-pytest-log/vscode-pytest-log-patch.py" "$HOME/.local/bin/vscode-pytest-log-patch.py"
+link "tools/vscode-pytest-log/vscode_pytest_log.py" "$HOME/.local/lib/vscode-pytest-log/vscode_pytest_log.py"
 
 # Historical launcher names, forwarding to the canonical card launchers.  The
 # investigator's pipeline/gpu/_llama_procs.py knows these names, so they must keep
