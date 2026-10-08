@@ -724,6 +724,71 @@ __fast_member_shellcheck() {
         echo "reference these in a workflow (ci.yml or nightly.yml):$missing"
         return 1
     fi
+
+    # Presence as TEXT is not presence as a live ARGUMENT. The grep above passes when a
+    # suite path sits on its own line — but if the line ABOVE it lost its trailing
+    # backslash, that path becomes a separate command and the job dies with
+    # "Permission denied" (exit 126) AFTER most cases have passed. Measured 2026-10-08:
+    # the tip went red exactly this way — suite 55 was appended to ci.yml's bats list and
+    # the `\` on the suite-54 line was dropped (4f71a6c7), and no local gate saw it.
+    # bats argument lists here are literal (`|`) blocks whose lines are backslash-
+    # continued; a folded (`>-`) block joins its lines instead, so the scan tracks the
+    # block style and applies the rule only inside a `|` block.
+    local scan='
+        function ind(s) { return (match(s, /^ */) ? RLENGTH : 0) }
+        {
+            if (inblk && $0 !~ /^[[:space:]]*$/ && ind($0) <= keyind) { inblk = 0 }
+            if (!inblk && $0 ~ /^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]/) {
+                rest = $0; sub(/^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]*/, "", rest)
+                keyind = ind($0)
+                if (rest ~ /^\|/)     { inblk = 1; lit = 1 }
+                else if (rest ~ /^>/) { inblk = 1; lit = 0 }
+                else                  { inblk = 0 }
+                prev = $0; next
+            }
+            if (inblk && lit && $0 ~ /^[[:space:]]*tests\/[^[:space:]]*\.bats/) {
+                if (prev !~ /\\[[:space:]]*$/) print FILENAME ":" NR ": " $0
+            }
+            prev = $0
+        }
+    '
+    local orphans
+    orphans="$(awk "$scan" "$REPO_ROOT"/.github/workflows/*.yml)"
+    if [[ -n "$orphans" ]]
+    then
+        echo "a suite path in a workflow is not a live argument — the line above it lost its trailing backslash:"
+        printf '%s\n' "$orphans"
+        return 1
+    fi
+
+    # Teeth: the same scan must flag a dropped continuation...
+    local tmp="$BATS_TEST_TMPDIR/dropped.yml"
+    cat > "$tmp" <<'YAML'
+jobs:
+  x:
+    steps:
+      - run: |
+          bats a \
+               tests/unit/01-a.bats
+               tests/unit/02-b.bats
+YAML
+    run awk "$scan" "$tmp"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"tests/unit/02-b.bats"* ]]
+
+    # ...and must NOT flag a folded (`>-`) block, whose lines carry no backslash.
+    cat > "$tmp" <<'YAML'
+jobs:
+  x:
+    steps:
+      - run: >-
+          bats
+          tests/unit/01-a.bats
+          tests/unit/02-b.bats
+YAML
+    run awk "$scan" "$tmp"
+    [ "$status" -eq 0 ]
+    [ "$output" = "" ]
 }
 
 @test "ci: every job names a self-hosted runner (no billing)" {
