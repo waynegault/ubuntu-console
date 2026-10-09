@@ -321,6 +321,17 @@ jobs:
         # in a python-3.12 venv holding only the CI dependency set).
         run: mypy
 
+      - name: Pyright (nas/ only)
+        # Scoped to nas/ deliberately.  A repo-wide pyright step reddened CI on 8f2af6e7:
+        # the runner's `torch` is a PARTIAL stub, so scripts/grpo-vram-probe.py raised ~12
+        # reportAttributeAccessIssue errors the real, py.typed torch on the dev box never
+        # raises.  nas/ imports NONE of torch/transformers — only the in-repo-stubbed
+        # paho/usb/bleak, lib.butler_common and requests/aiohttp — so here local and CI
+        # agree, and this is the scope the stubs exist for.  It exits 1 on errors, 0 on
+        # warnings; the five reportMissingModuleSource warnings are EXPECTED (see the
+        # pyproject.toml pyright NOTE) and stay visible rather than suppressed.
+        run: pyright nas/
+
       - name: Run Python tests
         run: >-
           python -m pytest
