@@ -7,6 +7,17 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+#   v53 (2026-10-09): the Qwen Token Plan row's RATIONALE is corrected, not the code (the row
+#   itself has been in the table since v46 and is covered by tests/unit/01-refresh-keys.bats).
+#   v45's paragraph — "QWEN_TOKEN_PLAN_API_KEY deliberately gets no row … NOTHING on this host
+#   consumes it … the fix for it is dropping it from that env surface" — is now wrong on both
+#   counts, and the reader who takes it at face value would delete a row a live provider needs.
+#   Wayne (2026-10-09) intends to USE the provider, and `models.providers.qwen-token-plan` IS
+#   declared in openclaw.json (written by an `openclaw config patch` on 2026-10-01 23:41 BST).
+#   Measured 2026-10-09: `openclaw models list --provider qwen-token-plan` resolves 15 models
+#   with `Auth: yes`, i.e. the env SecretRef resolves and the sweep preserves the key.  The
+#   paragraph below is kept as read-only history with a SUPERSEDED marker rather than rewritten,
+#   because the version note is the record of what was believed when.  Comments only.
 #   v52 (2026-10-09): the NAS mirror marker MOVES OFF TMPFS. It was written under
 #   TAC_CACHE_DIR (/dev/shm), so a restart wiped it: `oc status` then reported the mirror
 #   "behind" until the next export, and a scheduled export re-uploaded an unchanged set once
@@ -78,6 +89,11 @@
 #   `models.providers` block, model ref or auth profile selects (measured; no auth-profile store
 #   carries a qwen ref -- see the auth-profile pass below).  It is swept and unused, so the fix
 #   for it is dropping it from that env surface, not a ref here.
+#   [SUPERSEDED 2026-10-09 -- see v53.  Kept as read-only history; it is wrong on two counts
+#   today.  v46 DID add the row it says is absent (the table below carries
+#   `models.providers.qwen-token-plan.apiKey`), and the provider IS declared in openclaw.json
+#   and is intended for use, so "NOTHING on this host consumes it" no longer holds.  Do not act
+#   on this paragraph: deleting the row would strip a live provider's credential.]
 #   v44 (2026-10-01): deepseek and ollama now get CONFIG env-refs too
 #   (`models.providers.<id>.apiKey`). The table below excluded deepseek on the belief that an
 #   auth-profile entry served it; that belief is provably wrong — measured, a store ref is NOT
@@ -88,7 +104,7 @@
 #   Both providers are BUNDLED (the bundle ships docs/providers/deepseek.md and ollama.md), so
 #   the apiKey-only overlay is schema-legal; a CUSTOM provider would be refused. The
 #   auth-profile store entries stay, as a second channel. Card OC-REFRESH-KEYS-AUTHPROFILE-001.
-# Module Version: 52
+# Module Version: 53
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -1036,9 +1052,12 @@ entries = [
     #   models.providers.qwen-token-plan.apiKey
     #                           the provider id the bundled catalog declares for
     #                           QWEN_TOKEN_PLAN_API_KEY (dist/official-external-provider-catalog).
-    #                           Nothing selects that provider yet, so today this row buys the two
-    #                           things the key lacked entirely: the sweep stops deleting it, and
-    #                           the manager-env push starts carrying it.
+    #                           The provider IS declared in openclaw.json and is intended for use
+    #                           (Wayne, 2026-10-09), but no model ref selects it yet, so no agent
+    #                           runs on it until one does.  This row is what keeps the key alive:
+    #                           the sweep stops deleting it and the manager-env push carries it.
+    #                           Measured 2026-10-09: `openclaw models list --provider
+    #                           qwen-token-plan` resolves 15 models, Auth yes.
     ("gateway.auth.token", "OPENCLAW_GATEWAY_TOKEN"),
     ("talk.providers.elevenlabs.apiKey", "ELEVENLABS_API_KEY"),
     ("models.providers.qwen-token-plan.apiKey", "QWEN_TOKEN_PLAN_API_KEY"),

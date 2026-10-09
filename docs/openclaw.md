@@ -171,7 +171,9 @@ starts before a human runs `oc refresh-keys` (the gateway included) therefore se
 only what that drop-in carries. `systemd/openclaw-refresh-keys.service` closes it by
 running the same command once per boot:
 
-    ExecStart=%h/.local/bin/tac-exec oc refresh-keys
+```ini
+ExecStart=%h/.local/bin/tac-exec oc refresh-keys
+```
 
 `install.sh` links and reloads units but has never enabled one, so this needs one
 explicit `systemctl --user enable openclaw-refresh-keys.service`. Expect one gateway
@@ -248,9 +250,12 @@ auth-profile `keyRef` alone does not, because the sweep's preserve set is
 | `models.providers.qwen-token-plan.apiKey` | `QWEN_TOKEN_PLAN_API_KEY` |
 
 `models.providers.qwen-token-plan.apiKey` names the provider id the bundled
-catalog declares for that env var; **nothing selects that provider yet**, so the
-row's value today is that the key survives the sweep and is pushed to the manager
-env instead of being carried by nothing at all. `HF_TOKEN` has no row and cannot
+catalog declares for that env var. The provider is declared in `openclaw.json`
+and is intended for use (Wayne, 2026-10-09), though no model ref selects it yet;
+the row's value is that the key survives the startup sweep and is pushed to the
+manager env instead of being carried by nothing at all. Measured 2026-10-09:
+`openclaw models list --provider qwen-token-plan` resolves 15 models, `Auth yes`.
+`HF_TOKEN` has no row and cannot
 get one here: the `huggingface` provider has exactly one `apiKey` field and it is
 already bound to its alias `HUGGINGFACE_TOKEN` (the two hold *different* values,
 measured 2026-10-01), so `HF_TOKEN` stays on the unplaced report.
