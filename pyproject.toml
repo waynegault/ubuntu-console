@@ -40,8 +40,6 @@ check_untyped_defs = true
 
 # Optional third-party runtime deps that CI does not install, so `mypy` cannot
 # resolve them there:
-#   * paho-mqtt, pyusb and bleak — the NAS collectors' deps, run under
-#     /opt/bin/python3 on the NAS (pyusb ships no stubs at all);
 #   * torch and transformers — the GPU probe's deps (scripts/grpo-vram-probe.py
 #     imports them inside the functions that need a card), hundreds of MB that a
 #     lint job must not install;
@@ -49,6 +47,9 @@ check_untyped_defs = true
 #     program out of a shell heredoc, where no Python gate could see it).  It ships
 #     no type information, so mypy needs types-PyYAML; requiring a stub package just
 #     to lint the tool would add a dependency that checks nothing the tool does.
+# paho-mqtt, pyusb and bleak (the NAS collectors' deps, run under /opt/bin/python3 on
+# the NAS) are NOT listed here — they resolve through the in-repo stubs in `stubs/`,
+# named by mypy_path below, so no `ignore_missing_imports` entry is needed for them.
 # Declaring exactly these modules untyped keeps `mypy` a usable CI gate, while a
 # missing import anywhere else is still an error.  Locally torch and transformers
 # ARE installed and ship py.typed, so this override only changes their CI
@@ -57,10 +58,12 @@ check_untyped_defs = true
 module = ["torch", "transformers", "yaml.*"]
 ignore_missing_imports = true
 
-# NOTE (2026-10-02): pyright has no per-module import override, so `pyright nas`
-# still reports reportMissingImports for the deps genuinely absent from this box
-# (paho, usb, bleak) and only those — no code-level findings remain.  `ruff check .`
-# (the CI gate) and `mypy` are clean including nas/.
+# NOTE (2026-10-09): pyright has no per-module import override, so the deps genuinely
+# absent from this box (paho, usb, bleak) are resolved by the in-repo stubs in
+# `stubs/`, wired in via extraPaths/stubPath below — `pyright` now exits 0.  It still
+# emits reportMissingModuleSource WARNINGS for those stub-only packages (a stub with no
+# source module beside it); the stubs are derived from the real call sites, and those
+# warnings are reported rather than suppressed.
 [tool.pyright]
 # tools/ is named here for the same reason mypy's `files` names it: a DIRECTORY, so a new
 # checker or box tool is covered without a config edit.  It was omitted while mypy's file

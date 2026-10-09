@@ -7,6 +7,14 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+#   v51 (2026-10-09): the NAS SSH route is resolved by the new __oc_nas_resolve_host helper
+#   instead of inline in oc export-keys-nas — the same run-time route, with that function
+#   back under the §18.3 100-line bound and the probe's ssh stderr recorded as a decision
+#   (`# swallow-ok:`).  No behaviour change.
+#   v50 (2026-10-08): the NAS route is resolved at RUN TIME (OC_NAS_HOST wins, else probe LAN
+#   192.168.33.20 then tailnet 100.83.76.103, else fall back to LAN), replacing the hardcoded
+#   stale Tailscale default 100.106.225.96; and this file's freshness checks reject a NEGATIVE
+#   age (a future mtime), so a clock step cannot read as fresh.
 #   v49 (2026-10-03): the embedded JSON-parse helpers now invoke "${TAC_PYTHON:-python3}"
 #   instead of bare `python3`, so they use the project venv resolver 01-constants exports
 #   (TAC_PYTHON) when it exists and fall back to PATH python3 when it does not (card
@@ -75,7 +83,7 @@
 #   Both providers are BUNDLED (the bundle ships docs/providers/deepseek.md and ollama.md), so
 #   the apiKey-only overlay is schema-legal; a CUSTOM provider would be refused. The
 #   auth-profile store entries stay, as a second channel. Card OC-REFRESH-KEYS-AUTHPROFILE-001.
-# Module Version: 50
+# Module Version: 51
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -1679,6 +1687,41 @@ function __oc_nas_export_show() {
 }
 
 # ---------------------------------------------------------------------------
+# __oc_nas_resolve_host <ssh-key-path> <ssh-user> <dry-run:0|1> — the NAS SSH
+# route, resolved AT RUN TIME.
+#
+# The old default was a hardcoded Tailscale IP (100.106.225.96), with a comment
+# claiming LAN SSH "times out from WSL". Both are false now (measured 2026-10-08):
+# that address is not in `tailscale status` at all (the node is 100.83.76.103),
+# while LAN 192.168.33.20 answers from this host (uid=0) — so a changed cache
+# silently took the "[failed -- SSH sync error]" branch and the mirror stopped
+# updating. OC_NAS_HOST still wins if set; otherwise probe the LAN address, then
+# the current tailnet one, so the export works on- and off-LAN.
+# ---------------------------------------------------------------------------
+function __oc_nas_resolve_host() {
+    local _key="$1" _user="$2" _dry_run="$3"
+    if [[ -n "${OC_NAS_HOST:-}" ]]
+    then
+        printf '%s\n' "$OC_NAS_HOST"
+        return 0
+    fi
+    if [[ "$_dry_run" != "1" && -f "$_key" ]] && command -v ssh >/dev/null 2>&1
+    then
+        local _cand _ssh_opts=(-i "$_key" -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no)
+        for _cand in 192.168.33.20 100.83.76.103
+        do
+            # swallow-ok: a failed probe's ssh connection error IS the reachability signal
+            if ssh "${_ssh_opts[@]}" "${_user}@${_cand}" true 2>/dev/null
+            then
+                printf '%s\n' "$_cand"
+                return 0
+            fi
+        done
+    fi
+    printf '%s\n' "192.168.33.20"
+}
+
+# ---------------------------------------------------------------------------
 # oc-export-keys-nas — mirror the bridged key cache to the NAS.
 #
 # Extracted from oc-refresh-keys (2026-09-22): a backup job does not belong inside
@@ -1710,29 +1753,10 @@ function oc-export-keys-nas() {
         _dry_run=1
     fi
     local _nas_key="${OC_NAS_KEY_PATH:-$HOME/.ssh/jarvis_sshd_key}"
-    # Resolve the NAS route AT RUN TIME. The old default was a hardcoded Tailscale
-    # IP (100.106.225.96), with a comment claiming LAN SSH "times out from WSL".
-    # Both are false now (measured 2026-10-08): that address is not in
-    # `tailscale status` at all (the node is 100.83.76.103), while LAN
-    # 192.168.33.20 answers from this host (uid=0). A changed cache therefore
-    # silently took the "[failed -- SSH sync error]" branch and the mirror
-    # stopped updating. OC_NAS_HOST still wins if set; otherwise probe LAN first,
-    # then the current Tailscale address, so the export works on- and off-LAN.
-    local _nas_host="${OC_NAS_HOST:-}"
-    if [[ -z "$_nas_host" && "$_dry_run" != "1" && -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1
-    then
-        local _cand
-        for _cand in 192.168.33.20 100.83.76.103
-        do
-            if ssh -i "$_nas_key" -o BatchMode=yes -o ConnectTimeout=4 \
-                 -o StrictHostKeyChecking=no "${_nas_user}@${_cand}" true 2>/dev/null
-            then
-                _nas_host="$_cand"
-                break
-            fi
-        done
-    fi
-    _nas_host="${_nas_host:-192.168.33.20}"
+    # The SSH route is resolved at run time (__oc_nas_resolve_host): the LAN
+    # address first, then the current tailnet one, so it works on and off LAN.
+    local _nas_host
+    _nas_host="$(__oc_nas_resolve_host "$_nas_key" "$_nas_user" "$_dry_run")"
     if [[ ! -f "$cache" ]]
     then
         __tac_info "Exporting to NAS" "[no bridge cache — run 'oc refresh-keys' first]" "$C_Warning"
