@@ -64,6 +64,14 @@ ignore_missing_imports = true
 # emits reportMissingModuleSource WARNINGS for those stub-only packages (a stub with no
 # source module beside it); the stubs are derived from the real call sites, and those
 # warnings are reported rather than suppressed.
+#
+# pyright is deliberately NOT a CI gate — attempted 2026-10-09 and reverted the same day:
+# the runner's `torch` is a PARTIAL stub, so `pyright` there reports ~12
+# reportAttributeAccessIssue ERRORS in scripts/grpo-vram-probe.py that the real, py.typed
+# torch on this box never raises. CI and local disagree on the same bytes, so a green local
+# run says nothing about CI. The stubs are therefore validated LOCALLY only; before adding
+# the gate, give CI a real torch — or scope the step to `nas/`, which imports none of it —
+# and MEASURE on the runner rather than assuming local parity.
 [tool.pyright]
 # tools/ is named here for the same reason mypy's `files` names it: a DIRECTORY, so a new
 # checker or box tool is covered without a config edit.  It was omitted while mypy's file

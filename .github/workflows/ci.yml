@@ -321,14 +321,6 @@ jobs:
         # in a python-3.12 venv holding only the CI dependency set).
         run: mypy
 
-      - name: Pyright
-        # pyright ran only on the developer box until 2026-10-09, so the in-repo stubs
-        # (stubs/) it exists to satisfy could regress without failing CI.  It exits 1 on
-        # ERRORS and 0 when only warnings remain — the five reportMissingModuleSource
-        # warnings for the stub-only packages (paho/usb/bleak) are EXPECTED and stay
-        # visible in the log rather than suppressed (see pyproject.toml's pyright NOTE).
-        run: pyright
-
       - name: Run Python tests
         run: >-
           python -m pytest

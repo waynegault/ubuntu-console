@@ -21,11 +21,6 @@ ruff==0.15.20
 pytest==9.1.1
 pytest-timeout==2.4.0
 mypy==2.3.1
-# pyright is pinned like the rest: it is the checker the in-repo NAS stubs (stubs/) exist
-# to satisfy, and until 2026-10-09 it ran only on the developer box — a stub regression
-# could not red CI.  Same reasoning as the pins above: unpinned, it drifts from the venv.
-# Bump HERE and fix any new findings; never float it.
-pyright==1.1.411
 
 # Runtime deps the Python suites import. Unpinned deliberately — these were never the drift
 # (only the tools above were), and pinning a scientific-stack transitive set here would be a
