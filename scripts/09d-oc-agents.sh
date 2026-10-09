@@ -7,6 +7,11 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+#   v52 (2026-10-09): the NAS mirror marker MOVES OFF TMPFS. It was written under
+#   TAC_CACHE_DIR (/dev/shm), so a restart wiped it: `oc status` then reported the mirror
+#   "behind" until the next export, and a scheduled export re-uploaded an unchanged set once
+#   per boot. It is state, not cache — it now lives under TAC_STATE_DIR (persistent), and the
+#   export mkdir -p's that directory before writing. Register NAS-MIRROR-UNSCHEDULED.
 #   v51 (2026-10-09): the NAS SSH route is resolved by the new __oc_nas_resolve_host helper
 #   instead of inline in oc export-keys-nas — the same run-time route, with that function
 #   back under the §18.3 100-line bound and the probe's ssh stderr recorded as a decision
@@ -83,7 +88,7 @@
 #   Both providers are BUNDLED (the bundle ships docs/providers/deepseek.md and ollama.md), so
 #   the apiKey-only overlay is schema-legal; a CUSTOM provider would be refused. The
 #   auth-profile store entries stay, as a second channel. Card OC-REFRESH-KEYS-AUTHPROFILE-001.
-# Module Version: 51
+# Module Version: 52
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -1799,7 +1804,7 @@ function oc-export-keys-nas() {
         return 0
     fi
     local _prev_nas_hash
-    _prev_nas_hash=$(cat "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" 2>/dev/null || echo none)
+    _prev_nas_hash=$(cat "$TAC_STATE_DIR/tac_win_api_keys.nas_hash" 2>/dev/null || echo none)
     local _nas_ssh=()
     if [[ -f "$_nas_key" ]] && command -v ssh >/dev/null 2>&1
     then
@@ -1822,7 +1827,8 @@ function oc-export-keys-nas() {
             if [[ "$_remote_out" == "600" ]]
             then
                 _synced_nas=1
-                printf '%s\n' "$_cache_hash" > "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash"
+                mkdir -p "$TAC_STATE_DIR"
+                printf '%s\n' "$_cache_hash" > "$TAC_STATE_DIR/tac_win_api_keys.nas_hash"
             else
                 _mode_ok=0
             fi
@@ -2330,7 +2336,7 @@ function oc-refresh-keys() {
     #    CACHE hash, the same one compared here, so this is an exact question.
     local _cache_hash _mirror_hash
     _cache_hash=$(grep '^export ' "$cache" | sort | sha256sum | awk '{print $1}')
-    _mirror_hash=$(cat "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" 2>/dev/null || echo none)
+    _mirror_hash=$(cat "$TAC_STATE_DIR/tac_win_api_keys.nas_hash" 2>/dev/null || echo none)
     if [[ "$_cache_hash" != "$_mirror_hash" ]]
     then
         __tac_info "NAS mirror" "[behind — run 'oc export-keys-nas' to sync it]" "$C_Warning"

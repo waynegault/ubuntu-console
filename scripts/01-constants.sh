@@ -2,7 +2,12 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 27
+# Module Version: 28
+#   v28 (2026-10-09): TAC_STATE_DIR — a PERSISTENT home for the small state markers that
+#   must outlive a reboot. The NAS mirror marker (tac_win_api_keys.nas_hash) lived under
+#   TAC_CACHE_DIR, i.e. /dev/shm — a tmpfs — so every restart wiped it and `oc status` then
+#   reported the mirror "behind" until the next export (and a timer re-uploaded an unchanged
+#   set once per boot). A marker is state, not cache; the two notions now have two variables.
 #   v25 (2026-10-02): LLM_REGISTRY_HEADER — the ONE definition of the registry
 #   column set, consumed by every writer (11a sync_state + __renumber_registry,
 #   11b profile_save + remap, 11e scan).  Card e0579318: the remap kept emitting a
@@ -195,6 +200,9 @@ export LLM_KEEPER_DIR="${LLM_KEEPER_DIR:-/tmp}"
 
 # ---- Telemetry & System Paths ----
 export TAC_CACHE_DIR="/dev/shm"
+# Persistent STATE (NOT cache): a marker recording "what I last did" must survive a restart,
+# while TAC_CACHE_DIR (/dev/shm) is cleared with it. Keep the two notions apart.
+export TAC_STATE_DIR="${TAC_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/tactical-console}"
 # VENV_DIR is shell-local only (not exported). Used by the cd() override
 # in §6 to auto-activate Python virtual environments on directory change.
 VENV_DIR=".venv"
