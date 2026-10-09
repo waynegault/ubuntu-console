@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the OpenClaw → NAS key-name export daily
+Requires=openclaw-nas-export-keys.service
+
+[Timer]
+# Daily. The mirror is a credential path, so a rotation should reach the NAS within a
+# day; an unchanged set costs one skipped SSH probe. 06:20 is off the fleet's hourly
+# agent heartbeat slots (08:00–21:00), so it never contends with one.
+OnCalendar=*-*-* 06:20:00
+# Catch up if the host was off at 06:20 — a missed daily run is not acceptable on a
+# credential path.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

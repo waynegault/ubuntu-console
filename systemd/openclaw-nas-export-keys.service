@@ -1,0 +1,51 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# openclaw-nas-export-keys.service — mirror the OpenClaw key names to the NAS,
+# on a schedule.
+#
+# WHY THIS EXISTS (2026-10-09)
+#
+# `oc export-keys-nas` publishes the selected OpenClaw key NAMES (and a content
+# hash) to the NAS at /mnt/HD/HD_a2/butler/cron/openclaw-collectors.env, where the
+# NAS-side collectors read their credentials from. It is the only route that keeps
+# that mirror current.
+#
+# It had NO schedule — it was manual-only (only the interactive `oc` dispatcher
+# invoked it), so the mirror went ~7 days stale on a credential path with nothing
+# raising it. This timer is that schedule. The command is explicitly built for a
+# timer (its own header names the timer use case), is idempotent — it hashes the
+# CONTENT it would upload and SKIPS when unchanged — and fails safe (an absent
+# bridge cache is a no-op).
+#
+# The mirror hash marker is written under TAC_STATE_DIR (persistent, NOT /dev/shm),
+# so a reboot no longer wipes the skip-logic and forces a re-upload of an unchanged
+# set once per boot (patched 2026-10-09).
+#
+# NOT ENABLED BY install.sh — deliberately, like every unit in this tree. install.sh
+# links systemd/* into ~/.config/systemd/user/ and runs daemon-reload; enabling is an
+# explicit act:
+#
+#     systemctl --user enable --now openclaw-nas-export-keys.timer
+#
+# Verify:
+#   systemctl --user list-timers openclaw-nas-export-keys.timer
+#   journalctl --user -u openclaw-nas-export-keys.service -n50
+# ─────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=Mirror the OpenClaw key names to the NAS (oc export-keys-nas)
+Documentation=file:%h/ubuntu-console/docs/openclaw.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# `oc export-keys-nas` is a shell function, so tac-exec is what a unit calls — the
+# documented way to reach the console library non-interactively — which also means
+# this unit never carries a second copy of the export logic.
+ExecStart=%h/.local/bin/tac-exec oc export-keys-nas
+# Explicit PATH: the export SSHes to the NAS (the ssh binary resolves in /usr/bin),
+# and tac-exec sources the console library, so give the unit a known PATH rather than
+# rely on the bare user-manager default.
+Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+# One SSH round-trip plus a small render; a short cap keeps a hung route from wedging
+# the unit.
+TimeoutStartSec=120
