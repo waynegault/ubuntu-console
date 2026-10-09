@@ -2,7 +2,7 @@
 # ─── Module: 07-telemetry ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 14
+# Module Version: 15
 # ==============================================================================
 # 7. TELEMETRY & HARDWARE (FAST CACHING)
 # ==============================================================================
@@ -88,7 +88,7 @@ function __cache_fresh() {
     [[ -f "$_cache_path" ]] || return 1
     _ts=$(stat -c %Y "$_cache_path" 2>/dev/null) || _ts=0
     _now=$(date +%s)
-    (( _now - _ts < _ttl ))
+    (( _now - _ts >= 0 && _now - _ts < _ttl ))
 }
 
 # ---------------------------------------------------------------------------

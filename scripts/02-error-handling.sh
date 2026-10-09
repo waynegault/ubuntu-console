@@ -2,7 +2,7 @@
 # ─── Module: 02-error-handling ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 10
+# Module Version: 11
 # ==============================================================================
 # 2. ERROR HANDLING
 # ==============================================================================
@@ -171,7 +171,7 @@ function __tac_log_dedup_gate() {
     [[ -f "$_ts_file" ]] && _last_ts=$(< "$_ts_file")
     [[ -f "$_supp_file" ]] && _supp=$(< "$_supp_file")
 
-    if [[ "$_signature" == "$_last_sig" ]] && (( _now - _last_ts < _window ))
+    if [[ "$_signature" == "$_last_sig" ]] && (( _now - _last_ts >= 0 && _now - _last_ts < _window ))
     then
         printf '%s' $(( _supp + 1 )) > "$_supp_file" 2>/dev/null || true
         return 1

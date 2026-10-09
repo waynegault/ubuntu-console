@@ -2,7 +2,7 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 26
+# Module Version: 27
 #   v25 (2026-10-02): LLM_REGISTRY_HEADER — the ONE definition of the registry
 #   column set, consumed by every writer (11a sync_state + __renumber_registry,
 #   11b profile_save + remap, 11e scan).  Card e0579318: the remap kept emitting a
@@ -219,7 +219,7 @@ function __resolve_vscode_bin() {
         local now ts
         now=$(date +%s)
         ts=$(< "$timestamp_file")
-        if (( now - ts < __VSCODE_CACHE_TTL ))
+        if (( now - ts >= 0 && now - ts < __VSCODE_CACHE_TTL ))
         then
             local cached
             cached=$(< "$cache_file")
