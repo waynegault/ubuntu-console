@@ -2,7 +2,12 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 25
+# Module Version: 26
+#   v26 (2026-10-09): __dashboard_oc_active_agents reads its cache path from
+#   OC_AGENT_USE_FILE (default /dev/shm/oc_agent_use.txt, i.e. current behaviour
+#   unchanged).  The hard-coded path made the two-sided staleness guard — a
+#   FUTURE mtime must not read as current — impossible to drive from a sandboxed
+#   fixture, so no case covered it; tests/unit/56-two-sided-freshness.bats now does.
 # ==============================================================================
 # 12. DASHBOARD & HELP
 # ==============================================================================
@@ -224,7 +229,9 @@ function __dashboard_gpu_llm() {
 # __dashboard_oc_active_agents — render the ACTIVE AGENT list from the oc agent-use cache.
 function __dashboard_oc_active_agents() {
     local line="$1"
-    local cache="/dev/shm/oc_agent_use.txt"
+    # Path is overridable so the staleness guard below can be driven from a
+    # sandboxed fixture; the default is the live path, unchanged.
+    local cache="${OC_AGENT_USE_FILE:-/dev/shm/oc_agent_use.txt}"
     local agent_use_out=""
     local cache_ttl=5
     local agent_use_age=""
