@@ -15,8 +15,12 @@ setup() {
     export REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
     export TAC_TEST_TMPDIR="$(mktemp -d)"
     export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
+    # The NAS mirror marker is STATE, not cache: 71516c30 moved it off tmpfs onto
+    # TAC_STATE_DIR.  Sandbox it too, or the assertions below read the real state dir.
+    export TAC_STATE_DIR="$TAC_TEST_TMPDIR/state"
     export MOCK_BIN_DIR="$TAC_TEST_TMPDIR/mocks"
     mkdir -p "$TAC_CACHE_DIR"
+    mkdir -p "$TAC_STATE_DIR"
     mkdir -p "$MOCK_BIN_DIR"
     export PATH="$MOCK_BIN_DIR:$PATH"
 
@@ -75,10 +79,12 @@ setup() {
     # real $HOME, so without this the tests would read/write the live bridge
     # cache in /dev/shm and the real error log.
     export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
+    export TAC_STATE_DIR="$TAC_TEST_TMPDIR/state"
     export OC_AGENTS="$OC_ROOT/agents"
     export OC_LOGS="$OC_ROOT/logs"
     export ErrorLogPath="$OC_LOGS/bash-errors.log"
     mkdir -p "$TAC_CACHE_DIR"
+    mkdir -p "$TAC_STATE_DIR"
 
     # Keep the harness hermetic: drop anything inherited from the real shell
     # that oc-refresh-keys would act on (NAS mirror preflight, Linux-side merge
@@ -211,7 +217,7 @@ teardown() {
     # NAS unreachable: no marker persisted, refresh still exits 0.
     run oc-refresh-keys
     [ "$status" -eq 0 ]
-    [ ! -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
+    [ ! -f "$TAC_STATE_DIR/tac_win_api_keys.nas_hash" ]
 
     # NAS back: the failed upload is retried and the marker is persisted. The
     # remote command must also report the mode it left behind (600) — the mode is
@@ -219,7 +225,7 @@ teardown() {
     __mock_command_local ssh "echo \"SSH_CALL: \$*\" >> \"$ssh_log\"; case \"\$*\" in *stat*) echo 600;; esac; exit 0"
     run oc-export-keys-nas
     [ "$status" -eq 0 ]
-    [ -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
+    [ -f "$TAC_STATE_DIR/tac_win_api_keys.nas_hash" ]
     run grep -c '^SSH_CALL:' "$ssh_log"
     [ "$status" -eq 0 ]
     [ "$output" -ge 1 ]
@@ -286,7 +292,7 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"not 600"* ]]
     # Nothing is recorded as synced: the next run must try again.
-    [ ! -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
+    [ ! -f "$TAC_STATE_DIR/tac_win_api_keys.nas_hash" ]
 }
 
 @test "oc-export-keys-nas --dry-run names, and uploads nothing" {
@@ -313,7 +319,7 @@ teardown() {
     [[ "$output" == *"len=10"* ]]
     # Nothing was uploaded and nothing was marked synced.
     [ ! -f "$ssh_log" ]
-    [ ! -f "$TAC_CACHE_DIR/tac_win_api_keys.nas_hash" ]
+    [ ! -f "$TAC_STATE_DIR/tac_win_api_keys.nas_hash" ]
 }
 
 @test "oc-refresh-keys reports a restart FAILURE rather than a plausible outcome" {
