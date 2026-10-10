@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import pathlib
 import subprocess
@@ -595,14 +596,29 @@ def _write_to_influxdb(detection: Detection, influx_url: str = "http://127.0.0.1
                 line = f"body_composition,{tags} {','.join(fields)} {timestamp_ns}"
                 lines.append(line)
         
-        # Govee data
+        # Govee data -> canonical indoor_env series (Jarvis-Govee-H5075-Protocol.md L80-87)
         if detection.is_govee and (detection.temp_c is not None or detection.humidity_pct is not None):
-            tags = f"mac={detection.mac},type=govee"
+            _bs = chr(92)  # line-protocol escape without a literal backslash in the source
+            tags = (
+                "source=govee_h5075,device_alias=Study" + _bs + " thermometer,"
+                f"device_mac={detection.mac},owner=Wayne123"
+            )
             fields = []
             if detection.temp_c is not None:
-                fields.append(f"temp_c={detection.temp_c}")
+                fields.append(f"temperature_c={detection.temp_c}")
             if detection.humidity_pct is not None:
                 fields.append(f"humidity_rel={detection.humidity_pct}")
+            if detection.temp_c is not None and detection.humidity_pct is not None:
+                _t = detection.temp_c
+                _rh = detection.humidity_pct
+                _es = 6.112 * math.exp(17.67 * _t / (_t + 243.5))
+                _steam = _es * _rh / 100.0
+                _gamma = math.log(_rh / 100.0) + 17.67 * _t / (_t + 243.5)
+                _dew = 243.5 * _gamma / (17.67 - _gamma)
+                _abs = 216.7 * _steam / (_t + 273.15)
+                fields.append(f"dew_point_c={round(_dew, 1)}")
+                fields.append(f"abs_humidity_gm3={round(_abs, 1)}")
+                fields.append(f"steam_pressure_mbar={round(_steam, 1)}")
             fields.append(f"rssi={detection.rssi}i")
             if fields:
                 line = f"indoor_env,{tags} {','.join(fields)} {timestamp_ns}"
