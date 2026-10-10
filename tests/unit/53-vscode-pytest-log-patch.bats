@@ -31,9 +31,23 @@ setup() {
     WRAPPER="$FIX/.vscode-server/extensions/ms-python.python-9.9.9/python_files/vscode_pytest/run_pytest_script.py"
     LIB="$FIX/.local/lib/vscode-pytest-log"
     ANCHOR='if __name__ == "__main__":'
-    # The recorder runs as a pytest PLUGIN, so its cases need an interpreter that has pytest
-    # (the bare python3 on this box does not).
+    # The recorder runs as a pytest PLUGIN, so its cases need an interpreter that has pytest.
+    # Prefer the repo venv (this box's only pytest-carrying interpreter), else PATH python3 — the
+    # same prefer-venv-else-PATH shape tools/count-ratchet.sh:74 and import-windows-env.sh's
+    # _tac_python_path use.  A hardcoded "$REPO_ROOT/.venv/bin/python3" was a HOST-ONLY path:
+    # .venv is gitignored and actions/checkout cleans it, so on the CI runner the path does not
+    # exist and the three recorder cases below died with `env: …: No such file or directory`
+    # (exit 127, run 38041966565 — red).  Resolve, then VERIFY pytest imports; where no
+    # interpreter carries it the cases SKIP with a printed reason rather than fail on a path that
+    # only a dev box has (the same "a test for a host could not pass on the host" defect
+    # tests/unit/50-python-interpreter-resolution.bats:38 records).
     PY="$REPO_ROOT/.venv/bin/python3"
+    if [[ ! -x "$PY" ]]; then
+        PY="$(command -v python3 2>/dev/null || true)"
+    fi
+    if [[ -z "$PY" ]] || ! "$PY" -c 'import pytest' >/dev/null 2>&1; then
+        PY=""
+    fi
     mkdir -p "$FIX"
 }
 
@@ -151,6 +165,7 @@ latest_json() {
 }
 
 @test "test-log recorder: a selection pytest cannot collect records WHY (usage_error names the id)" {
+    [ -n "$PY" ] || skip "no pytest-capable interpreter (no $REPO_ROOT/.venv, and PATH python3 lacks pytest)"
     LOGDIR="$WORK/vpl-usage"; mkdir -p "$LOGDIR"; write_tiny_test
     run run_recorder_on "$LOGDIR" "$WORK/test_tiny.py::NoSuchClass::no_such_test"
     [ "$status" -eq 4 ]
@@ -161,6 +176,7 @@ latest_json() {
 }
 
 @test "test-log recorder: a file that cannot be imported records its collection error" {
+    [ -n "$PY" ] || skip "no pytest-capable interpreter (no $REPO_ROOT/.venv, and PATH python3 lacks pytest)"
     LOGDIR="$WORK/vpl-collect"; mkdir -p "$LOGDIR"
     printf 'def test_broken(:\n' > "$WORK/test_broken.py"
     run run_recorder_on "$LOGDIR" "$WORK/test_broken.py"
@@ -171,6 +187,7 @@ latest_json() {
 }
 
 @test "test-log recorder: a healthy run grows NEITHER error field" {
+    [ -n "$PY" ] || skip "no pytest-capable interpreter (no $REPO_ROOT/.venv, and PATH python3 lacks pytest)"
     LOGDIR="$WORK/vpl-ok"; mkdir -p "$LOGDIR"; write_tiny_test
     run run_recorder_on "$LOGDIR" "$WORK/test_tiny.py"
     [ "$status" -eq 0 ]

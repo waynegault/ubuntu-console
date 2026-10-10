@@ -16,3 +16,14 @@
 # NEXT red instead of surfacing it.
 #
 # --- entries ---
+#
+# CI-RED-001 / 2026-10-10: the Behavioral BATS job's VS Code Testing results-logger cases
+# (tests/unit/53-vscode-pytest-log-patch.bats) ran pytest as a plugin through a hardcoded
+# "$REPO_ROOT/.venv/bin/python3" — a host-only path that does not exist in the runner's
+# checkout (.venv is gitignored and actions/checkout cleans it), so all three cases died
+# with exit 127 on run 38041966565 and main went red.  The fix is in the same range: the test
+# resolves .venv-else-PATH and skips only when no interpreter carries pytest, and the
+# behavioral job now provisions the pinned Python toolchain so the cases RUN.  DELETE THIS
+# ENTRY once a green CI run for the fixed tip exists — it exists only so the commit that
+# fixes the red is not itself blocked by the red it fixes.
+workflow=CI | owner=hal | card=CI-RED-001 | expiry=2026-10-14 | tests/unit/53 recorder cases failed on a host-only .venv path (exit 127); fixed in range, removed once green

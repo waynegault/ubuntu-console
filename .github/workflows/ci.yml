@@ -145,6 +145,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set up Python
+        # The unit suite's VS Code Testing results-logger cases (tests/unit/53-vscode-pytest-log-patch.bats)
+        # run pytest as a PLUGIN, so they need an interpreter that carries pytest.  This job had NO python
+        # setup: the runner's bare python3 does not carry pytest and .venv is gitignored (actions/checkout
+        # cleans it), so a hardcoded "$REPO_ROOT/.venv/bin/python3" made all three cases die with
+        # `env: …: No such file or directory` (exit 127, run 38041966565 — red, card CI-RED-001).  unit/53 is
+        # run ONLY here (the full suite tests/tactical-console.bats does not include it), so those cases must
+        # RUN here rather than skip.  Same pinned toolchain the `python` and nightly jobs use.
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Python toolchain
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r .github/ci-requirements.txt
+
       - name: Install bats (pinned)
         # apt's copy is 1.10.0 and is SHADOWED by ~/.local/bin first on this self-hosted
         # runner, so it never decided which bats the .bats gate ran; install the pin the way
