@@ -7,6 +7,20 @@
 # anywhere else in this file still gets flagged.
 # --- Module: 09d-oc-agents ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+#   v54 (2026-10-10): the ollama bridge is RETIRED (register item OLLAMA-AUTH-BRIDGE-DEGRADED,
+#   disposition option (a)). Both seeding rows are removed: `models.providers.ollama.apiKey` from
+#   the config env-ref table, and the `("ollama","ollama","api_key","OLLAMA_API_KEY")` tuple from
+#   auth_map. Nothing on this host consumed ollama (`plugins.entries.ollama` was `enabled:false`,
+#   `models.providers.ollama.models` was `[]`, no agent model chain named it), yet the auth_map
+#   upserted an `ollama:default` profile into all 14 agent stores on EVERY run
+#   (openclaw-refresh-keys.service), so every `secrets reload` logged
+#   `[SECRETS_PROVIDER_DEGRADED] provider:ollama ... secret provider failed`.
+#   Removing the tuple stops the re-seed. Companion live steps (jarvis, same change):
+#   `models auth logout --agent <id> ollama --yes` on all 14 agents (verified 0 via `models auth
+#   list`) and removal of the retired `models.providers.ollama` block via `openclaw config patch`.
+#   `plugins.entries.ollama` is LEFT in place as `enabled:false` — it is not in `plugins.allow`, so
+#   the plugin never loads; removing it is optional and out of this item's scope. v44's ollama
+#   claim below is superseded.
 #   v53 (2026-10-09): the Qwen Token Plan row's RATIONALE is corrected, not the code (the row
 #   itself has been in the table since v46 and is covered by tests/unit/01-refresh-keys.bats).
 #   v45's paragraph — "QWEN_TOKEN_PLAN_API_KEY deliberately gets no row … NOTHING on this host
@@ -104,7 +118,10 @@
 #   Both providers are BUNDLED (the bundle ships docs/providers/deepseek.md and ollama.md), so
 #   the apiKey-only overlay is schema-legal; a CUSTOM provider would be refused. The
 #   auth-profile store entries stay, as a second channel. Card OC-REFRESH-KEYS-AUTHPROFILE-001.
-# Module Version: 53
+#   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
+#   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
+#   deepseek half still holds.]
+# Module Version: 54
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -992,7 +1009,6 @@ entries = [
     # still reported `secret reference was not found` for every agent, so the key could not
     # survive the sweep). deepseek is the default agent's model, so it goes first.
     ("models.providers.deepseek.apiKey", "DEEPSEEK_API_KEY"),
-    ("models.providers.ollama.apiKey", "OLLAMA_API_KEY"),
     ("models.providers.openai.apiKey", "OPENAI_API_KEY"),
     ("models.providers.anthropic.apiKey", "ANTHROPIC_API_KEY"),
     ("models.providers.groq.apiKey", "GROQ_API_KEY"),
@@ -1225,10 +1241,9 @@ PYEOF
     # ================================================================
     # Auth Profile SecretRef sync (SQLite credential stores)
     #
-    # A SECOND channel for these two keys — the models.providers env-refs written above are
-    # what actually resolve (measured 2026-10-01; a store ref alone is not sufficient):
+    # A SECOND channel for this key — the models.providers env-ref written above is
+    # what actually resolves (measured 2026-10-01; a store ref alone is not sufficient):
     #   DEEPSEEK_API_KEY  →  deepseek:default.keyRef  (+ models.providers.deepseek.apiKey)
-    #   OLLAMA_API_KEY    →  ollama:default.keyRef    (+ models.providers.ollama.apiKey)
     #
     # These live in per-agent `openclaw-agent.sqlite` tables.
     #
@@ -1254,7 +1269,6 @@ agents_root = sys.argv[1]
 # Format: (profile_id, provider, cred_type, env_var)
 auth_map = [
     ("deepseek", "deepseek", "api_key", "DEEPSEEK_API_KEY"),
-    ("ollama", "ollama", "api_key", "OLLAMA_API_KEY"),
 ]
 # Which agent is the DEFAULT one? The runtime resolves the CONFIG's auth.profiles for it, and
 # its store must carry those ids too (see the "<provider>:default" write below).
