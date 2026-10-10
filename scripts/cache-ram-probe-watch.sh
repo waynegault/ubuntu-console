@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-10-10): gate 4 made MULTI-GPU SAFE.  Found by an independent verifier
+#   testing v3: nvidia-smi returns one line per GPU, so a bare numeric test on the
+#   value never matched on a multi-GPU box and the gate could NEVER open — fail-safe
+#   but unusable.  It now takes the most-used card, and still fails closed.
 #   v3 (2026-10-10): ADD GATE 4 — a real VRAM reading.  Gate 2 is a serialisation
 #   lock, not a card-availability probe, and this file used it as one.
 #   v2 (2026-10-10): route every stderr write through one `warn` helper and comment the
@@ -101,10 +105,17 @@ gate_ok() {
     # The ledger is boot-scoped and absent before the first autotune of a boot.
     # swallow-ok: an absent file and a zero sum are the same state, which the awk prints.
     cycles="$(cat /dev/shm/autotune-cuda-cycles-* 2>/dev/null | awk '{s+=$1} END{print s+0}')"
-    # Gate 4 (v3).  Deliberately NOT silenced: if nvidia-smi cannot be read the
-    # reading stays empty, the numeric test below fails, and the box is treated as
-    # BUSY — the gate fails closed, which is the correct direction for a GPU probe.
-    vram="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | tr -d ' ')"
+    # Gate 4 (v3, hardened v4).  Deliberately NOT silenced: if nvidia-smi cannot be
+    # read the reading stays empty, the numeric test below fails, and the box is
+    # treated as BUSY — the gate fails closed, the correct direction for a GPU probe.
+    # MULTI-GPU SAFE (v4): the query returns ONE LINE PER GPU, and a bare numeric test
+    # on a multi-line value never matches — leaving the gate permanently CLOSED, which
+    # is fail-safe but unusable.  Found by an independent verifier on 2026-10-10.  Take
+    # the MOST-used card so any busy GPU reads busy, and print EMPTY when no line is
+    # numeric so an unreadable card still fails closed.
+    vram="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits \
+        | tr -d ' ' \
+        | awk 'BEGIN{m=-1} /^[0-9]+$/{if ($1+0>m) m=$1+0} END{if (m<0) print ""; else print m}')"
     load_ok="$(awk -v l="$load1" -v m="$LOAD_MAX" 'BEGIN{print (l<m)?1:0}')"
     if [[ ! "$hj_rc" =~ ^[0-9]+$ ]] || (( hj_rc != 0 )); then
         warn "WARNING: heavy-job --status rc=$hj_rc — cannot read the lock; treating the box as NOT free"
