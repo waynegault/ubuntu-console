@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # ==============================================================================
-# Unit — the cache-ram probe's argv PREFLIGHT and its ORDER CONTROL
+# Unit — the cache-ram probe's argv PREFLIGHT and ORDER CONTROL, and the
+# probe watcher's VRAM GATE
 # ==============================================================================
 # WHY THIS EXISTS: the probe's whole product is a comparison of two llama-server
 # argv that differ by ONE flag, so two things must be true or the numbers mean
@@ -21,9 +22,19 @@
 #      default order INTERLEAVES the arms so each occupies an early and a late
 #      position; a non-interleaved order is refused unless explicitly allowed.
 #
+#   3. THE WATCHER MUST NOT LAUNCH INTO AN OCCUPIED CARD — AND MUST BE ABLE TO
+#      LAUNCH AT ALL.  The probe watcher's gate 4 was wrong twice on 2026-10-10.
+#      v3 read nvidia-smi's VRAM and could never OPEN on a multi-GPU box, because
+#      the query prints ONE LINE PER GPU and a bare numeric test on a multi-line
+#      value never matches — fail-safe, but unusable.  The shapes that matter are
+#      both directions: an unreadable card must read BUSY (fail closed), and the
+#      reading must be the MOST-used card, not the first.  The cases at the end
+#      pin those, with the exclusive bound and a free-card control.
+#
 # The cases below exercise the SHIPPED functions, extracted verbatim from
-# scripts/cache-ram-probe.sh (the 12-gpu-exclusivity idiom), so they are hermetic:
-# no env.sh, no server, no GPU, no registry.
+# scripts/cache-ram-probe.sh and scripts/cache-ram-probe-watch.sh (the
+# 12-gpu-exclusivity idiom), so they are hermetic: no env.sh, no server, no GPU,
+# no registry.
 #
 # FALSIFICATION (2026-10-10): against the pre-promotion harness these cases fail at
 # setup — that harness had no parse_order/is_interleaved and defaulted to a
@@ -53,6 +64,27 @@ setup() {
     ORDER_DEFAULT="$(sed -n 's/^ORDER_DEFAULT="\(.*\)"$/\1/p' "$PROBE")"
     export ORDER_DEFAULT
     [[ -n "$ORDER_DEFAULT" ]] || { echo "FAIL: ORDER_DEFAULT not declared in $PROBE"; return 1; }
+
+    # gate_ok lives in the WATCHER, not the probe — extract it verbatim too and
+    # carry its three top-level bounds across the same way (they are scalars
+    # beside the function, so extraction alone leaves them undefined).
+    WATCH="$REPO_ROOT/scripts/cache-ram-probe-watch.sh"
+    export WATCH
+    awk '/^gate_ok\(\)/,/^}/' "$WATCH" >> "$SANDBOX/fns.sh"
+    grep -q 'gate_ok' "$SANDBOX/fns.sh" || { echo "FAIL: gate_ok not extracted from $WATCH"; return 1; }
+    LOAD_MAX="$(sed -n 's/^LOAD_MAX=\([0-9][0-9]*\).*$/\1/p' "$WATCH")"
+    LEDGER_MAX="$(sed -n 's/^LEDGER_MAX=\([0-9][0-9]*\).*$/\1/p' "$WATCH")"
+    VRAM_MAX="$(sed -n 's/^VRAM_MAX=\([0-9][0-9]*\).*$/\1/p' "$WATCH")"
+    export LOAD_MAX LEDGER_MAX VRAM_MAX
+    [[ -n "$LOAD_MAX" && -n "$LEDGER_MAX" && -n "$VRAM_MAX" ]] \
+        || { echo "FAIL: a gate bound is not declared in $WATCH"; return 1; }
+    # Gate 2 runs "$HEAVY" --status.  Point it at a stub that reads free, so the
+    # cases at the end vary ONLY gate 4.
+    mkdir -p "$SANDBOX/bin"
+    printf '#!/usr/bin/env bash\nprintf "heavy-job: free (last holder: none)\\n"\n' \
+        > "$SANDBOX/bin/heavy-job"
+    chmod +x "$SANDBOX/bin/heavy-job"
+    export HEAVY="$SANDBOX/bin/heavy-job"
 
     # shellcheck source=/dev/null
     source "$SANDBOX/fns.sh"
@@ -154,4 +186,107 @@ teardown() {
     [[ "$body" == *'measure "$WORKDIR/p1.json" "$out_dir/r1.json"'* ]] || { echo "no cold (R1) request"; return 1; }
     [[ "$body" == *'measure "$WORKDIR/p2.json" "$out_dir/r2.json"'* ]] || { echo "no switch (R2) request"; return 1; }
     [[ "$body" == *'measure "$WORKDIR/p1.json" "$out_dir/r3.json"'* ]] || { echo "no reuse (R3) request"; return 1; }
+}
+
+# ── the probe watcher's VRAM gate (gate_ok, scripts/cache-ram-probe-watch.sh) ─
+#
+# Gate 4 decides whether the probe may launch at all.  Every case also asserts
+# gates 1-3 were OPEN (load_ok=1, hj_ok=1, cyc_ok=1), so a non-zero status is
+# gate 4's doing and not a stubbed input's — and each states the wrong outcome it
+# catches, so it can disagree with the code rather than confirm it.
+
+# gate_stubs — isolate gate_ok's remaining inputs.  The cut and cat stubs
+# intercept ONLY the /proc/loadavg read and the cycle-ledger glob, and delegate
+# everything else to the real command, so no other case in this file is affected.
+gate_stubs() {
+    cut() {
+        # The read is `cut -d' ' -f1 /proc/loadavg`: match on the FILE, not on a
+        # positional index — `-d' '` is ONE word ("-d "), so the path is argv[3].
+        local _a
+        for _a in "$@"; do
+            if [[ "$_a" == "/proc/loadavg" ]]; then
+                printf '0.10\n'
+                return 0
+            fi
+        done
+        command cut "$@"
+    }
+    cat() {
+        case "${1:-}" in
+            /dev/shm/autotune-cuda-cycles-*)
+                return 0 ;;                 # gate 3: no ledger content this boot
+            *)
+                command cat "$@" ;;
+        esac
+    }
+}
+
+@test "vram gate: a card that cannot be read FAILS CLOSED" {
+    # Catches: gate 4 OPENING when nvidia-smi dies (no output, rc 1) — the one
+    # direction that must never happen for a GPU probe, and the shape that
+    # launched into a full card before gate 4 existed.
+    gate_stubs
+    nvidia-smi() { return 1; }
+    run gate_ok
+    [[ "$status" -ne 0 ]]
+    [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
+    [[ "$output" == *"vram=MiB vram_ok=0"* ]]
+}
+
+@test "vram gate: rc 0 with EMPTY output still FAILS CLOSED" {
+    # Catches: the same hole when the CLI succeeds but prints nothing — an exit
+    # status is not a reading.
+    gate_stubs
+    nvidia-smi() { :; }
+    run gate_ok
+    [[ "$status" -ne 0 ]]
+    [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
+    [[ "$output" == *"vram=MiB vram_ok=0"* ]]
+}
+
+@test "vram gate: a multi-GPU reading with both cards under the bound OPENS the gate" {
+    # Catches the v3 regression: nvidia-smi prints ONE LINE PER GPU, and v3's bare
+    # numeric test on that multi-line value never matched, so the gate could NEVER
+    # open on a multi-GPU box.  Both cards are free, so the gate must OPEN.
+    gate_stubs
+    nvidia-smi() { printf '100\n50\n'; }
+    run gate_ok
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
+    [[ "$output" == *"vram=100MiB vram_ok=1"* ]]
+}
+
+@test "vram gate: a multi-GPU reading with ONE card over the bound is BUSY" {
+    # Catches: taking the FIRST line instead of the MOST-used card — the gate
+    # would open on the free card while the second is nearly full, which is the
+    # launch-into-a-full-card failure again, one card over.
+    gate_stubs
+    nvidia-smi() { printf '50\n9999\n'; }
+    run gate_ok
+    [[ "$status" -ne 0 ]]
+    [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
+    [[ "$output" == *"vram=9999MiB vram_ok=0"* ]]
+}
+
+@test "vram gate: the bound is EXCLUSIVE (exactly VRAM_MAX reads BUSY)" {
+    # Catches: an off-by-one that admits a card sitting exactly on the bound,
+    # which the gate's own comment defines as occupied.
+    gate_stubs
+    nvidia-smi() { printf '%s\n' "$VRAM_MAX"; }
+    run gate_ok
+    [[ "$status" -ne 0 ]]
+    [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
+    [[ "$output" == *"vram=${VRAM_MAX}MiB vram_ok=0"* ]]
+}
+
+@test "vram gate: control — a genuinely free card OPENS the gate" {
+    # The control: without it, a gate that simply ALWAYS said BUSY would pass
+    # every fail-closed case above, and the two fail-closed cases would prove
+    # nothing about the reading.
+    gate_stubs
+    nvidia-smi() { printf '100\n'; }
+    run gate_ok
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
+    [[ "$output" == *"vram=100MiB vram_ok=1"* ]]
 }
