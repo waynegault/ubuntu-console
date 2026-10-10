@@ -1,7 +1,16 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 60
+# Module Version: 61
+#   v61 (2026-10-10): bench mode no longer appends --cache-ram, so a validation bench
+#   reproduces the argv the autotune CERTIFIES with (scripts/autotune-model.sh:759-766
+#   and :2194-2200 pass no --cache-ram).  `model bench` shares THIS builder, so the
+#   recorded decision that benches deliberately omit the flag (01-constants.sh:380-383,
+#   "changing what a bench server caches would change what the certified number means")
+#   had been violated by construction — bench mode silently reused the serve argv and
+#   appended --cache-ram 0.  The serve branch is unchanged (still the explicit
+#   LLAMA_CACHE_RAM_MB, default 0); only the bench arm is added.  A test in
+#   tests/unit/23-prompt-cache-and-gpu-classify.bats now pins the two sides together.
 #   v60 (2026-10-02): the scan and renumber header writes use LLM_REGISTRY_HEADER
 #   (01-constants) instead of two more literal copies; __model_doctor accepts that
 #   SAME header (it previously only accepted the 26/20-column shapes, so a current
@@ -1093,7 +1102,7 @@ function __model_use_build_command() {
         cmd+=("--cache-type-k" "${LLAMA_CACHE_TYPE_K:-${row_kv_k:-q8_0}}")
         cmd+=("--cache-type-v" "${LLAMA_CACHE_TYPE_V:-${row_kv_v:-q8_0}}")
         cmd+=("--parallel" "$parallel_slots")
-        # Prompt-cache budget (KVCACHE-CONSOLE-PROMPT-CACHE-001).  Every lane must
+        # Prompt-cache budget (KVCACHE-CONSOLE-PROMPT-CACHE-001).  The SERVE path must
         # pass --cache-ram EXPLICITLY, because llama.cpp's default is 8192 MiB of
         # host RAM per server and nothing here budgets it (see 01-constants.sh,
         # LLAMA_CACHE_RAM_MB, for the number, the memory it sits inside, and the
@@ -1106,6 +1115,17 @@ function __model_use_build_command() {
         # claimed.  -1 is llama.cpp's "no limit", accepted deliberately and only
         # with that meaning.
         #
+        # BENCH MODE DELIBERATELY OMITS THE FLAG, so a validation bench reproduces the
+        # argv the autotune CERTIFIES with: the autotune's own spawns pass no
+        # --cache-ram — scripts/autotune-model.sh:759-766 (_bench_spawn) and :2194-2200
+        # (ttft_probe) — i.e. llama.cpp's default.  That is the recorded decision
+        # (01-constants.sh:380-383: changing what a bench server caches "would change
+        # what the certified number means") and the bench's stated purpose
+        # (bin/bench-rows.sh:80: "off = measure the CERTIFIED configuration").  The two
+        # sides must agree BY CONSTRUCTION, and `model bench` shares THIS builder, so
+        # this branch is where they are kept in step: the serve arm below emits the
+        # flag; a bench run of the same row does not, exactly as the autotune does not.
+        #
         # --slot-save-path is deliberately NOT emitted, and the absence is the
         # recorded decision, not an oversight: its default is "disabled" (--help),
         # so "never write slot KV state to disk" is the choice.  Enabling it would
@@ -1116,18 +1136,21 @@ function __model_use_build_command() {
         # --cache-ram exists to respect.  Enabling it means adding a saver, a
         # restorer and a docs/contracts/state-contracts.yaml entry for the
         # directory, which is a different card.  A test pins the absence.
-        local cache_ram_mb="${LLAMA_CACHE_RAM_MB:-0}"
-        if [[ ! "$cache_ram_mb" =~ ^([0-9]+|-1)$ ]]
+        if [[ -z "${__BENCH_MODE:-}" ]]
         then
-            # The message is built in a variable so the line stays inside the
-            # 120-column house limit (tools/count-ratchet.sh item 8.1.8).
-            local _cram_msg
-            _cram_msg="[LLAMA_CACHE_RAM_MB='${cache_ram_mb}' is not an integer - using 0 (explicit-disable)"
-            _cram_msg+=" instead of silently inheriting llama.cpp's unbudgeted 8192 MiB default]"
-            __tac_info "Warning" "$_cram_msg" "$C_Warning"
-            cache_ram_mb=0
+            local cache_ram_mb="${LLAMA_CACHE_RAM_MB:-0}"
+            if [[ ! "$cache_ram_mb" =~ ^([0-9]+|-1)$ ]]
+            then
+                # The message is built in a variable so the line stays inside the
+                # 120-column house limit (tools/count-ratchet.sh item 8.1.8).
+                local _cram_msg
+                _cram_msg="[LLAMA_CACHE_RAM_MB='${cache_ram_mb}' is not an integer - using 0 (explicit-disable)"
+                _cram_msg+=" instead of silently inheriting llama.cpp's unbudgeted 8192 MiB default]"
+                __tac_info "Warning" "$_cram_msg" "$C_Warning"
+                cache_ram_mb=0
+            fi
+            cmd+=("--cache-ram" "$cache_ram_mb")
         fi
-        cmd+=("--cache-ram" "$cache_ram_mb")
         # Speculative decoding (SPEC-DEC-004): verified llama.cpp flags from
         # the registry row / env overrides; empty when disabled.  CPU draft
         # placement by default on the 4 GB card — see __spec_launch_flags.

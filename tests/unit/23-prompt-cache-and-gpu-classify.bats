@@ -142,9 +142,11 @@ setup() {
 # and run against the globals it consumes, so this exercises the shipped text
 # rather than a paraphrase of it.  __spec_launch_flags and __tac_info are stubs:
 # the first belongs to another module, the second is UI.  Optional arg 1 is the
-# LLAMA_CACHE_RAM_MB the harness exports before building the argv.
+# LLAMA_CACHE_RAM_MB the harness exports before building the argv; optional arg 2
+# ("bench") sets __BENCH_MODE=1, so the bench-mode argv can be compared with the
+# autotune's in the "bench-mode build omits --cache-ram" case below.
 _build_argv() {
-    local _cache_ram="${1:-}"
+    local _cache_ram="${1:-}" _bench="${2:-}"
     awk '/^function __model_use_build_command\(\)/,/^}/' "$LAUNCHER" > "$SANDBOX/builder.sh"
     grep -q -- '--cache-ram' "$SANDBOX/builder.sh" \
         || { echo "FAIL: builder not extracted"; return 1; }
@@ -174,11 +176,11 @@ arch="qwen2"
 free_vram_mb=3000
 model_bytes=1000000
 C_Warning=""
-unset __BENCH_MODE
+if [[ -n "${3:-}" ]]; then export __BENCH_MODE=1; else unset __BENCH_MODE; fi
 __model_use_build_command || { echo "FAIL: builder returned non-zero"; exit 1; }
 printf '%s\n' "${cmd[@]}"
 EOS
-    bash "$SANDBOX/harness.sh" "$SANDBOX/builder.sh" "$_cache_ram"
+    bash "$SANDBOX/harness.sh" "$SANDBOX/builder.sh" "$_cache_ram" "$_bench"
 }
 
 @test "prompt-cache: the launcher emits --cache-ram, and never --slot-save-path" {
@@ -227,6 +229,42 @@ EOS
     awk '/^--cache-ram$/{print; getline; print "CACHE"; next} {print}' \
         "$SANDBOX/argv-override" > "$SANDBOX/a2"
     diff "$SANDBOX/a1" "$SANDBOX/a2" || { echo "the argv changed beyond the cache value"; return 1; }
+}
+
+@test "prompt-cache: a bench-mode build omits --cache-ram, agreeing with the autotune spawn" {
+    # The bench exists to REPRODUCE the certified configuration — bench-rows.sh:80
+    # ("off = measure the CERTIFIED configuration") — and the recorded decision is that
+    # the benches deliberately omit --cache-ram, because changing what a bench server
+    # caches "would change what the certified number means" (01-constants.sh:380-383).
+    # `model bench` shares __model_use_build_command with the serve path, so before this
+    # case a bench argv carried `--cache-ram 0` while the autotune's spawn carried none:
+    # the bench did NOT reproduce what it validates.  This case fails on that builder.
+    #
+    # The CERTIFIED side: the autotune's spawn must still pass NO --cache-ram.  If that
+    # ever changes, this case's whole premise is gone, so it is asserted, not assumed.
+    awk '/^_bench_spawn\(\)/,/^}/' "$AUTOTUNE" > "$SANDBOX/at-spawn.sh"
+    grep -q 'LLAMA_BIN' "$SANDBOX/at-spawn.sh" \
+        || { echo "FAIL: _bench_spawn not extracted from $AUTOTUNE"; return 1; }
+    if grep -q -- '--cache-ram' "$SANDBOX/at-spawn.sh"; then
+        echo "FAIL: the autotune spawn now passes --cache-ram; the certified argv moved:"
+        grep -n -- '--cache-ram' "$SANDBOX/at-spawn.sh"
+        return 1
+    fi
+
+    # The MEASURING side: a bench-mode build of the same row must omit it too.
+    run _build_argv "" bench
+    [[ "$status" -eq 0 ]]
+    if [[ "$output" == *"--cache-ram"* ]]; then
+        echo "FAIL: bench-mode build still passes --cache-ram; it does not reproduce the certified argv:"
+        printf '%s\n' "$output"
+        return 1
+    fi
+
+    # ...and the omission is BENCH-ONLY: the serve build of that same row still emits it.
+    run _build_argv
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *$'--cache-ram\n0'* ]] \
+        || { echo "FAIL: the serve build no longer emits '--cache-ram 0':"; printf '%s\n' "$output"; return 1; }
 }
 
 @test "prompt-cache: every repo lane unit passes the same --cache-ram literal as 01-constants" {
