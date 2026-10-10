@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-10-10): ADD GATE 4 — a real VRAM reading.  Gate 2 is a serialisation
+#   lock, not a card-availability probe, and this file used it as one.
 #   v2 (2026-10-10): route every stderr write through one `warn` helper and comment the
 #   two functions §18.3 items 10.7/9.5 counted, so this file adds no ad-hoc `>&2` site.
 #   v1 (2026-10-10): promoted from the gitignored one-off watcher.  Waits for a quiet
@@ -12,12 +14,19 @@
 # cache-ram-probe-watch.sh — quiet-window launcher for scripts/cache-ram-probe.sh.
 # ==============================================================================
 # The probe is a GPU measurement, so it is only meaningful on a quiet box; and it
-# must not run concurrently with another heavy job.  This waits for ALL THREE gates:
+# must not run concurrently with another heavy job.  This waits for ALL FOUR gates:
 #   1. /proc/loadavg 1-min < 4
 #   2. `heavy-job --status` line STARTS WITH 'heavy-job: free'  (a PREFIX match: the
 #      free line carries " (last holder: <cmd>)" after the word, so a substring
 #      match could read BUSY as free)
 #   3. the boot CUDA-cycle ledger /dev/shm/autotune-cuda-cycles-* sums under 50 of 60
+#   4. nvidia-smi used VRAM under VRAM_MAX — ADDED v3.  Gate 2 does NOT test the
+#      card: a lane can hold the GPU entirely outside bin/heavy-job, so `--status`
+#      reads `free` while the card is nearly full.  Measured 2026-10-10 — the
+#      openclaw hal bench held 3.3 GiB of 4.0 GiB for four hours with the lock
+#      reading free, and a run launched on gates 1-3 alone found 126 MB free and
+#      produced no measurement at all.  The lock serialises heavy jobs; it does not
+#      answer "is the card free".  Ask the card.
 # then runs the probe under bin/heavy-job, which also serialises against any other
 # heavy job (it BLOCKS on the lock rather than fighting for it).
 #
@@ -40,6 +49,7 @@ cd "$REPO" || exit 1
 HEAVY="$REPO/bin/heavy-job"
 LEDGER_MAX=50   # the boot's CUDA-cycle budget share to spend before a bench
 LOAD_MAX=4      # /proc/loadavg 1-min ceiling for a "quiet" box
+VRAM_MAX=800    # MiB; above this the card is occupied by someone else (gate 4, v3)
 ROW=21
 OPT_ORDER="BABA"
 OPT_OUT="logs/cache-ram-probe"
@@ -81,16 +91,20 @@ parse_args() {
     done
 }
 
-# gate_ok — 0 when ALL THREE gates are open.  Prints the readings to stdout with the
+# gate_ok — 0 when ALL FOUR gates are open.  Prints the readings to stdout with the
 # derived booleans so a log line shows WHY it waited.
 gate_ok() {
-    local load1 hj hj_rc cycles load_ok=0 hj_ok=0 cyc_ok=0
+    local load1 hj hj_rc cycles vram load_ok=0 hj_ok=0 cyc_ok=0 vram_ok=0
     load1="$(cut -d' ' -f1 /proc/loadavg)"
     # swallow-ok: the exit status is captured on the same line (hj_rc) and checked below.
     hj="$("$HEAVY" --status 2>/dev/null)"; hj_rc=$?
     # The ledger is boot-scoped and absent before the first autotune of a boot.
     # swallow-ok: an absent file and a zero sum are the same state, which the awk prints.
     cycles="$(cat /dev/shm/autotune-cuda-cycles-* 2>/dev/null | awk '{s+=$1} END{print s+0}')"
+    # Gate 4 (v3).  Deliberately NOT silenced: if nvidia-smi cannot be read the
+    # reading stays empty, the numeric test below fails, and the box is treated as
+    # BUSY — the gate fails closed, which is the correct direction for a GPU probe.
+    vram="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | tr -d ' ')"
     load_ok="$(awk -v l="$load1" -v m="$LOAD_MAX" 'BEGIN{print (l<m)?1:0}')"
     if [[ ! "$hj_rc" =~ ^[0-9]+$ ]] || (( hj_rc != 0 )); then
         warn "WARNING: heavy-job --status rc=$hj_rc — cannot read the lock; treating the box as NOT free"
@@ -101,9 +115,10 @@ gate_ok() {
         esac
     fi
     if [[ "$cycles" =~ ^[0-9]+$ ]] && (( cycles < LEDGER_MAX )); then cyc_ok=1; fi
-    printf 'load1=%s load_ok=%s | hj=%s hj_ok=%s | cycles=%s cyc_ok=%s\n' \
-        "$load1" "$load_ok" "$hj" "$hj_ok" "$cycles" "$cyc_ok"
-    (( load_ok == 1 && hj_ok == 1 && cyc_ok == 1 ))
+    if [[ "$vram" =~ ^[0-9]+$ ]] && (( vram < VRAM_MAX )); then vram_ok=1; fi
+    printf 'load1=%s load_ok=%s | hj=%s hj_ok=%s | cycles=%s cyc_ok=%s | vram=%sMiB vram_ok=%s\n' \
+        "$load1" "$load_ok" "$hj" "$hj_ok" "$cycles" "$cyc_ok" "$vram" "$vram_ok"
+    (( load_ok == 1 && hj_ok == 1 && cyc_ok == 1 && vram_ok == 1 ))
 }
 
 parse_args "$@"
