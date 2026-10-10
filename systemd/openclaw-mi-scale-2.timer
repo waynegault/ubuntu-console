@@ -1,0 +1,13 @@
+[Unit]
+Description=Poll the Mi Scale 2 (native GATT 2A9C composition) every 5 minutes
+Requires=openclaw-mi-scale-2.service
+
+[Timer]
+# Every 5 minutes. The scale advertises only around a weigh-in and a miss fails
+# fast (the collector's discovery scan is short), so the poll is cheap. :00/5
+# avoids the Govee collector's :07/:27/:47 scans on the shared Windows BLE adapter.
+OnCalendar=*-*-* *:00/5:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

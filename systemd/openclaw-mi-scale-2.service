@@ -1,0 +1,32 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# openclaw-mi-scale-2.service — poll the Mi Body Composition Scale 2 for its
+# NATIVE body-composition reading (GATT 2A9C), every 5 minutes.
+#
+# WHY THIS EXISTS (2026-10-10)
+#
+# The derived body_composition_canonical stream uses a Deurenberg (1991) estimate
+# tagged composition_estimated=1, because the scale's own BIA value needs the GATT
+# 2A9C path. mi-scale-2-collector.py now reaches that path over the Windows BLE
+# stack (WSL interop), and writes the native point into the raw feed
+# (sensor_data.body_composition) that mi-scale-canonicalizer.py reads; the
+# canonicalizer PREFERS it and tags composition_estimated=0.
+#
+# The scale only advertises for a short burst around a weigh-in, so most runs find
+# nothing. That is a normal no-op (the wrapper exits 0), not a fault.
+#
+# Cadence is 5 min: the timer's :00/5 minutes avoid the Govee Windows-BLE
+# collector's :07/:27/:47 scans, which share this host's Bluetooth adapter.
+#
+# NOT ENABLED BY install.sh — enabling is an explicit act:
+#     systemctl --user enable --now openclaw-mi-scale-2.timer
+# ─────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=Poll the Mi Scale 2 for its native GATT 2A9C body composition
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.openclaw/workspace-jarvis/scripts/mi-scale-2-cron.sh
+Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+TimeoutStartSec=120
