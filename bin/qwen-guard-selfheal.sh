@@ -48,6 +48,17 @@
 # gated on rc==1 and rc==3 is REPORTED (an --apply cannot restore a missing recorder:
 # the tool refuses on rc==3 before it patches anything).
 #
+# The SIXTH (2026-10-10) is the plugin-skill hardlink self-heal,
+# ~/.openclaw/scripts/skill-denlink.sh.  It is NOT a bundle patch like its five siblings:
+# OpenClaw's OWN plugin-admission capture hardlinks the installed plugin into
+# tmp/plugin-captures/…, so the plugin's SKILL.md carries nlink>1, and the skills loader
+# refuses any file with nlink>1 -- logging "Skipping invalid skill: … error=path must not
+# be hardlinked" on every catalog and leaving the skill silently ABSENT.  Re-materialising
+# the installed file to a fresh inode clears it, but the next admission re-creates the
+# link, so this tick re-applies it.  Measured 2026-10-09/10 on the agentmail plugin; filed
+# upstream as openclaw/openclaw#167991 and recorded as workspace-jarvis issue 0037.  Its
+# --check is boolean (0 clean, 1 needs repair), like the four older patchers.
+#
 # Run from cron. Deliberately quiet when healthy: it does nothing and prints
 # nothing when every patch is already in place, and it only writes a record when
 # it actually had to act. When it CANNOT restore a patch it exits non-zero, so a
@@ -66,6 +77,14 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 7
+#   v7 (2026-10-10): a SIXTH tool is announced -- the plugin-skill hardlink self-heal
+#   (~/.openclaw/scripts/skill-denlink.sh), probed with its own boolean --check and
+#   re-applied per tick.  It clears the nlink>1 that OpenClaw's own plugin-admission
+#   capture puts on the installed plugin's SKILL.md, which the skills loader then refuses
+#   (so the skill is silently absent).  Unlike its five siblings it is not a bundle patch
+#   and it RECURS on every admission; measured 2026-10-09/10 on agentmail
+#   (openclaw/openclaw#167991).
 # Module Version: 6
 #   v6 (2026-10-07): a FIFTH tool is announced -- the VS Code Testing results-logger
 #   patcher (~/.local/bin/vscode-pytest-log-patch.py), probed with its own --check and
@@ -120,6 +139,10 @@ COMMENTCAP="/home/wayne/.openclaw/scripts/workboard-commentcap-patch.sh"
 # siblings; its --check is rc-aware, so it is probed separately below rather than by
 # the boolean `! … --check` test the four above use.
 TESTLOG="/home/wayne/.local/bin/vscode-pytest-log-patch.py"
+# The plugin-skill hardlink self-heal (2026-10-10).  Named by path like the comment-cap
+# patcher (it lives in the OTHER repo); its --check is boolean, so it is probed with the
+# four older patchers below.
+DENLINK="/home/wayne/.openclaw/scripts/skill-denlink.sh"
 WITNESS="/home/wayne/ubuntu-console/scripts/qwen-memory-index-check.py"
 LOG_DIR="/home/wayne/.local/share/qwen-guard"
 LOG="$LOG_DIR/selfheal.log"
@@ -139,6 +162,9 @@ if [[ -x "$STYLE" ]] && ! "$STYLE" --check >/dev/null 2>&1; then
 fi
 if [[ -x "$COMMENTCAP" ]] && ! "$COMMENTCAP" --check >/dev/null 2>&1; then
   needed+=(commentcap)
+fi
+if [[ -x "$DENLINK" ]] && ! "$DENLINK" --check >/dev/null 2>&1; then
+  needed+=(denlink)
 fi
 
 # The test-log tool's --check is NOT boolean (0 patched, 1 a reverted copy, 2 no
@@ -193,9 +219,9 @@ fi
 rc=0
 for tool in "${needed[@]}"; do
   # Each arm names the tool's own re-apply invocation.  The four older patchers apply
-  # when run bare; the test-log patcher is the one sibling with NO default action — a
-  # bare invocation is a usage error — so its arm must name --apply.  Found by this
-  # script's own proof run (2026-10-07): with a bare invocation the tick logged the
+  # when run bare; the test-log and denlink patchers are the siblings with NO default
+  # action — a bare invocation is a usage error — so each names --apply here.  Found by
+  # this script's own proof run (2026-10-07): with a bare invocation the tick logged the
   # tool's usage text and left the wrapper unpatched, while still logging
   # "--check after: STILL-NEEDS-ATTENTION".
   case "$tool" in
@@ -203,6 +229,7 @@ for tool in "${needed[@]}"; do
     memory-index) patch="$IDX"; label="memory-index patch"; apply_args=() ;;
     memory-style) patch="$STYLE"; label="memory-style patch"; apply_args=() ;;
     commentcap) patch="$COMMENTCAP"; label="workboard-commentcap patch"; apply_args=() ;;
+    denlink) patch="$DENLINK"; label="plugin-skill hardlink"; apply_args=(--apply) ;;
     testlog) patch="$TESTLOG"; label="test-log patch"; apply_args=(--apply) ;;
   esac
 
