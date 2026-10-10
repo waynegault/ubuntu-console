@@ -40,10 +40,12 @@ setup() {
     # Extract the pure functions VERBATIM so the cases exercise the shipped text,
     # not a paraphrase of it.
     {
+        awk '/^warn\(\)/,/^}/' "$PROBE"
         awk '/^is_interleaved\(\)/,/^}/' "$PROBE"
         awk '/^parse_order\(\)/,/^}/' "$PROBE"
         awk '/^assert_argv\(\)/,/^}/' "$PROBE"
     } > "$SANDBOX/fns.sh"
+    grep -q 'warn' "$SANDBOX/fns.sh" || { echo "FAIL: warn not extracted from $PROBE"; return 1; }
     grep -q 'parse_order' "$SANDBOX/fns.sh" || { echo "FAIL: parse_order not extracted from $PROBE"; return 1; }
     grep -q 'is_interleaved' "$SANDBOX/fns.sh" || { echo "FAIL: is_interleaved not extracted from $PROBE"; return 1; }
     grep -q 'assert_argv' "$SANDBOX/fns.sh" || { echo "FAIL: assert_argv not extracted from $PROBE"; return 1; }

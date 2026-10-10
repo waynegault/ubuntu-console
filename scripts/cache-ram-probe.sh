@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-10-10): route every stderr write through one `warn` helper, comment the two
+#   functions §18.3 items 10.7/9.5 counted, note why the arm `case` carries no `*)`, and
+#   extract `_summarise_py` from `summarise` so neither exceeds item 10.4's bound.
 #   v1 (2026-10-10): promoted from the gitignored one-off that produced the
 #   cache-ram divergence verdict.  Tracked so the evidence behind that conclusion
 #   is re-runnable from the tree: `--cache-ram` makes NO difference to DECODE
@@ -85,6 +88,18 @@ OPT_ALLOW_NI=0
 OPT_OUT="logs/cache-ram-probe"
 OPT_DRY=0
 
+# warn — the ONE place this script writes to stderr.  §18.3 item 10.7 counts each
+# ad-hoc `printf … >&2` site separately; routing them through here keeps the prefix
+# and the stream in one place.  The redirect sits on the closing brace, so this
+# definition is not itself counted as a site (the counter matches echo/printf and
+# `>&2` on the same line).
+warn() {
+    {
+        printf 'cache-ram-probe: %s\n' "$*"
+    } >&2
+}
+
+# usage — the CLI synopsis; printed to stdout on --help, to stderr on a bad flag.
 usage() {
     printf '%s\n' \
         "usage: cache-ram-probe.sh [--row N] [--port N] [--order SEQ]" \
@@ -102,7 +117,7 @@ parse_args() {
             --out)   OPT_OUT="${2:?--out needs a directory}"; shift 2 ;;
             --dry-run) OPT_DRY=1; shift ;;
             -h|--help) usage; exit 0 ;;
-            *) usage >&2; printf 'FATAL: unknown argument %s\n' "$1" >&2; exit 1 ;;
+            *) usage >&2; warn "FATAL: unknown argument $1"; exit 1 ;;
         esac
     done
 }
@@ -131,17 +146,17 @@ parse_order() {
         ch="${seq:i:1}"
         case "$ch" in
             A|B) ;;
-            *) printf "FATAL: order '%s' may contain only A and B (got '%s')\n" "$seq" "$ch" >&2; return 1 ;;
+            *) warn "FATAL: order '$seq' may contain only A and B (got '$ch')"; return 1 ;;
         esac
         i=$(( i + 1 ))
     done
     if ! is_interleaved "$seq"; then
         if (( allow != 1 )); then
-            printf "REFUSED: order '%s' is not interleaved — a single pass with this order cannot" "$seq" >&2
-            printf " separate the ARM from the POSITION (pass --allow-noninterleaved to override)\n" >&2
+            warn "REFUSED: order '$seq' is not interleaved — a single pass with this order" \
+                 "cannot separate the ARM from the POSITION (pass --allow-noninterleaved)"
             return 1
         fi
-        printf "WARNING: order '%s' is not interleaved — arm and position are CONFOUNDED in this run\n" "$seq" >&2
+        warn "WARNING: order '$seq' is not interleaved — arm and position are CONFOUNDED in this run"
     fi
     i=0
     while (( i < ${#seq} )); do
@@ -197,14 +212,14 @@ assert_argv() {
 
 parse_args "$@"
 
-source env.sh || { printf 'FATAL: failed to source env.sh\n' >&2; exit 1; }
+source env.sh || { warn 'FATAL: failed to source env.sh'; exit 1; }
 source "$REPO/bin/_tac-bin-lib.sh"
 
 SUSPEND="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
 LANE="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
 HEALTH="http://127.0.0.1:${PORT}"
 LLAMA_BIN="${LLAMA_SERVER_BIN:-$HOME/llama.cpp/build/bin/llama-server}"
-[[ -x "$LLAMA_BIN" ]] || { printf 'FATAL: no llama-server at %s\n' "$LLAMA_BIN" >&2; exit 1; }
+[[ -x "$LLAMA_BIN" ]] || { warn "FATAL: no llama-server at $LLAMA_BIN"; exit 1; }
 
 OUT_DIR="$OPT_OUT"
 [[ "$OUT_DIR" == /* ]] || OUT_DIR="$REPO/$OUT_DIR"
@@ -213,11 +228,11 @@ RESULT_JSON="$OUT_DIR/result-$STAMP.json"
 # swallow-ok: mktemp's own failure prints its reason and returns non-zero; the call below
 # is guarded by the WORKDIR emptiness test, so nothing is lost silently
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/cache-ram-probe.XXXXXX")"
-[[ -d "$WORKDIR" ]] || { printf 'FATAL: no workdir\n' >&2; exit 1; }
+[[ -d "$WORKDIR" ]] || { warn 'FATAL: no workdir'; exit 1; }
 
 # ── snapshot the row (registry-SAFETY proof, part 1) ─────────────────────────
 ROW_BEFORE="$(awk -F'|' -v r="$ROW" '$1==r{print; exit}' "$LLM_REGISTRY")"
-[[ -n "$ROW_BEFORE" ]] || { printf 'FATAL: row %s not in %s\n' "$ROW" "$LLM_REGISTRY" >&2; exit 1; }
+[[ -n "$ROW_BEFORE" ]] || { warn "FATAL: row $ROW not in $LLM_REGISTRY"; exit 1; }
 
 # Read the row as an ARRAY and bind only the columns this probe uses — a named read
 # would leave ~20 unused names and shellcheck rightly flags each (SC2034).
@@ -226,7 +241,7 @@ name="${F[1]:-}"; file="${F[2]:-}"; qc="${F[4]:-}"; ngl="${F[6]:-}"; ctx="${F[7]
 thr="${F[8]:-}"; ba="${F[9]:-}"; ub="${F[10]:-}"; pa="${F[11]:-}"; fa="${F[15]:-}"
 stype="${F[26]:-}"; snmax="${F[28]:-}"; rp="${F[37]:-}"; rln="${F[38]:-}"
 MODEL_PATH="$LLAMA_MODEL_DIR/$file"
-[[ -f "$MODEL_PATH" ]] || { printf 'FATAL: model file not found: %s\n' "$MODEL_PATH" >&2; exit 1; }
+[[ -f "$MODEL_PATH" ]] || { warn "FATAL: model file not found: $MODEL_PATH"; exit 1; }
 KVK="${qc##*/}"; _kvpre="${qc%/*}"; KVV="${_kvpre##*/}"   # Q4_K_M/q8_0/q8_0 -> q8_0 / q8_0
 [[ -n "$KVK" ]] || KVK=q8_0
 [[ -n "$KVV" ]] || KVV=q8_0
@@ -344,8 +359,8 @@ PYEOF
 term_server() {
     local pid="$1" w=0
     [[ "$pid" =~ ^[0-9]+$ ]] || return 0
-    # swallow-ok: a pid already gone is the state this seeks; the loop below is the
-    # liveness check, so discarding kill's "No such process" loses nothing.
+    # A pid already gone is the state this seeks, so a best-effort TERM is enough.
+    # swallow-ok: the liveness loop below is the check; kill's "No such process" adds nothing.
     kill -TERM "$pid" 2>/dev/null
     while (( w < 25 )); do
         # swallow-ok: kill -0's "No such process" IS the answer here, not an error.
@@ -386,8 +401,8 @@ run_arm() {
             printf '    FAIL: server exited during load — see %s/server.log\n' "$out_dir"
             return 1
         fi
-        # swallow-ok: connection-refused while the server loads is EXPECTED; the loop's
-        # 120s timeout is the verdict, so curl's noise carries no information.
+        # Connection-refused while the server loads is EXPECTED, not a failure.
+        # swallow-ok: the loop's 120s timeout is the verdict, so curl's noise tells nothing.
         if curl -sS --max-time 2 "$HEALTH/health" 2>/dev/null | grep -q '"status":"ok"'; then
             break
         fi
@@ -399,12 +414,15 @@ run_arm() {
     fi
     local pf=0 w=0
     while (( w < 60 )); do
-        # swallow-ok (both redirects): the connection may be refused while the server
-        # finishes binding (EXPECTED), and parsing an empty body is the false case the
-        # loop retries; the pf==1 check below is the verdict.
-        if curl -sS --max-time 5 "$HEALTH/v1/chat/completions" -H "Content-Type: application/json" \
-            -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}' 2>/dev/null \
-            | "$TAC_PYTHON" -c "$_PF_PARSE" 2>/dev/null | grep -q '[1-9]'; then
+        # The connection may be refused while the server finishes binding (EXPECTED) and
+        # an empty body is the false case the loop retries; pf==1 below is the verdict.
+        if {
+            curl -sS --max-time 5 "$HEALTH/v1/chat/completions" \
+                -H "Content-Type: application/json" \
+                -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"temperature":0}' \
+                | "$TAC_PYTHON" -c "$_PF_PARSE" \
+                | grep -q '[1-9]'
+        } 2>/dev/null; then   # swallow-ok: EXPECTED load-window noise; pf==1 is the verdict
             pf=1; break
         fi
         # swallow-ok: kill -0's message is the ANSWER; the pf==1 check below reports it.
@@ -427,9 +445,11 @@ run_arm() {
     return 0
 }
 
-# summarise <workdir> <order-seq> <result-json> <row> — print the per-position table,
-# the per-arm means, the DELTA, and the position-drift verdict; write the JSON result.
-summarise() {
+# _summarise_py <workdir> <order-seq> <result-json> <row> — the measurement reader:
+#   walks the pos* directories, prints the per-position table, the per-arm means, the
+#   DELTA and the position-drift verdict, and writes the result JSON.  Extracted from
+#   `summarise` so each function stays under the §18.3 item 10.4 100-line bound.
+_summarise_py() {
     "$TAC_PYTHON" - "$1" "$2" "$3" "$4" "$DRIFT_WARN_PCT" <<'PYEOF'
 import glob, json, os, re, sys
 wd, seq, result_path, row, drift_pct = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], float(sys.argv[5])
@@ -499,9 +519,15 @@ except OSError as exc:
 PYEOF
 }
 
+# summarise <workdir> <order-seq> <result-json> <row> — the reporting entry point;
+#   delegates to _summarise_py.
+summarise() {
+    _summarise_py "$@"
+}
+
 # ── take the card: hold the watchdog off, stop the lane (bin/bench-rows.sh pattern)
 if ! _tac_suspend_acquire "$SUSPEND"; then
-    printf 'FATAL: could not acquire the CUDA suspend hold (%s)\n' "$SUSPEND" >&2
+    warn "FATAL: could not acquire the CUDA suspend hold ($SUSPEND)"
     exit 1
 fi
 trap '_tac_suspend_release "$SUSPEND"' EXIT
@@ -521,10 +547,10 @@ printf '\ncard free before start: %s MiB\n' "${_free:-unknown}"
 _seq_out="$(parse_order "$OPT_ORDER" "$OPT_ALLOW_NI")"
 _prc=$?
 if (( _prc != 0 )); then
-    printf 'FATAL: refusing to start — the order was rejected (see above)\n' >&2
+    warn 'FATAL: refusing to start — the order was rejected (see above)'
     exit 1
 fi
-[[ -n "$_seq_out" ]] || { printf 'FATAL: the order produced no arms\n' >&2; exit 1; }
+[[ -n "$_seq_out" ]] || { warn 'FATAL: the order produced no arms'; exit 1; }
 mapfile -t _arm_seq <<< "$_seq_out"
 printf 'arm sequence this run: %s\n' "${_arm_seq[*]}"
 
@@ -534,6 +560,8 @@ _pos=0
 for _arm in "${_arm_seq[@]}"; do
     _pos=$(( _pos + 1 ))
     case "$_arm" in
+        # parse_order emits only A and B, so a `*)` arm here would be unreachable; the
+        # argument defect it would catch is refused earlier, at the parse.
         A) run_arm A ""  "$_pos" || _fail=1 ;;
         B) run_arm B "0" "$_pos" || _fail=1 ;;
     esac

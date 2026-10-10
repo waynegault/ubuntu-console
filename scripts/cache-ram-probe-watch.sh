@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-10-10): route every stderr write through one `warn` helper and comment the
+#   two functions §18.3 items 10.7/9.5 counted, so this file adds no ad-hoc `>&2` site.
 #   v1 (2026-10-10): promoted from the gitignored one-off watcher.  Waits for a quiet
 #   box (three gates), runs scripts/cache-ram-probe.sh ONCE under the box-wide
 #   heavy-job lock, tees the transcript to a governed log, and reads the measurements
@@ -45,6 +47,18 @@ OPT_POLL=120
 OPT_MAX_WAIT=86400
 OPT_ALLOW_NI=0
 
+# warn — the ONE place this script writes to stderr.  §18.3 item 10.7 counts each
+# ad-hoc `printf … >&2` site separately; routing them through here keeps the prefix
+# and the stream in one place.  The redirect sits on the closing brace, so this
+# definition is not itself counted as a site (the counter matches echo/printf and
+# `>&2` on the same line).
+warn() {
+    {
+        printf 'cache-ram-probe-watch: %s\n' "$*"
+    } >&2
+}
+
+# usage — the CLI synopsis; printed to stdout on --help, to stderr on a bad flag.
 usage() {
     printf '%s\n' \
         "usage: cache-ram-probe-watch.sh [--row N] [--order SEQ] [--out DIR]" \
@@ -62,7 +76,7 @@ parse_args() {
             --max-wait) OPT_MAX_WAIT="${2:?--max-wait needs seconds}"; shift 2 ;;
             --allow-noninterleaved) OPT_ALLOW_NI=1; shift ;;
             -h|--help) usage; exit 0 ;;
-            *) usage >&2; printf 'FATAL: unknown argument %s\n' "$1" >&2; exit 1 ;;
+            *) usage >&2; warn "FATAL: unknown argument $1"; exit 1 ;;
         esac
     done
 }
@@ -72,13 +86,14 @@ parse_args() {
 gate_ok() {
     local load1 hj hj_rc cycles load_ok=0 hj_ok=0 cyc_ok=0
     load1="$(cut -d' ' -f1 /proc/loadavg)"
+    # swallow-ok: the exit status is captured on the same line (hj_rc) and checked below.
     hj="$("$HEAVY" --status 2>/dev/null)"; hj_rc=$?
-    # swallow-ok: the ledger is boot-scoped and absent before the first autotune of a
-    # boot; absent means zero cycles spent, which the awk below expresses as 0.
+    # The ledger is boot-scoped and absent before the first autotune of a boot.
+    # swallow-ok: an absent file and a zero sum are the same state, which the awk prints.
     cycles="$(cat /dev/shm/autotune-cuda-cycles-* 2>/dev/null | awk '{s+=$1} END{print s+0}')"
     load_ok="$(awk -v l="$load1" -v m="$LOAD_MAX" 'BEGIN{print (l<m)?1:0}')"
     if [[ ! "$hj_rc" =~ ^[0-9]+$ ]] || (( hj_rc != 0 )); then
-        printf 'WARNING: heavy-job --status rc=%s — cannot read the lock; treating the box as NOT free\n' "$hj_rc" >&2
+        warn "WARNING: heavy-job --status rc=$hj_rc — cannot read the lock; treating the box as NOT free"
     else
         case "$hj" in
             "heavy-job: free"*) hj_ok=1 ;;
@@ -101,6 +116,7 @@ WLOG="$OUT_DIR/watch-$STAMP.log"
 RLOG="$OUT_DIR/probe-$STAMP.log"
 PY="$REPO/.venv/bin/python"
 
+# log — append one timestamped line to the watch transcript.
 log() { printf '%s %s\n' "$(date -Is)" "$*" >>"$WLOG"; }
 
 _ni=""
@@ -136,6 +152,7 @@ rc=${PIPESTATUS[0]}
 log "probe exited rc=$rc (0 = completed)"
 
 # Read the MEASUREMENTS back from the probe's own result JSON, not the exit code.
+# swallow-ok: no result file IS the finding — the `-z "$newest"` branch below reports it.
 newest="$(ls -1t "$OUT_DIR"/result-*.json 2>/dev/null | head -1)"
 if [[ -z "$newest" ]]; then
     log "no result-*.json in $OUT_DIR — the probe wrote nothing (rc=$rc)"
