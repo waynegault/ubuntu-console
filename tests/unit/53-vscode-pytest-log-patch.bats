@@ -31,6 +31,9 @@ setup() {
     WRAPPER="$FIX/.vscode-server/extensions/ms-python.python-9.9.9/python_files/vscode_pytest/run_pytest_script.py"
     LIB="$FIX/.local/lib/vscode-pytest-log"
     ANCHOR='if __name__ == "__main__":'
+    # The recorder runs as a pytest PLUGIN, so its cases need an interpreter that has pytest
+    # (the bare python3 on this box does not).
+    PY="$REPO_ROOT/.venv/bin/python3"
     mkdir -p "$FIX"
 }
 
@@ -117,6 +120,63 @@ write_recorder() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"REFUSED: 2 anchors, expected exactly one"* ]]
     [ "$(sha256sum "$WRAPPER" | awk '{print $1}')" = "$before" ]
+}
+
+# ── The recorder's own contract: a run that produced NOTHING must say why ──────────────────
+# Measured 2026-10-10 in the investigator workspace: the Testing panel passes every selected node id
+# EXPLICITLY, so ONE id that no longer exists — a renamed test — makes pytest treat the whole
+# selection as a usage error: it collects everything, runs nothing and exits 4.  The results file
+# carried only `exit_status: 4` with `counts.total: 0`, so nothing on disk said why.  The first two
+# cases pin the fields that now explain it; the third pins that a HEALTHY run grows neither, because
+# a field that always appears reads as "no errors" without anyone having checked.
+
+write_tiny_test() {
+    cat > "$WORK/test_tiny.py" <<'PY'
+def test_tiny() -> None:
+    assert True
+PY
+}
+
+# Run the recorder as a plugin on $1 (a pytest argument), with its log dir redirected so the case
+# never touches ~/.cache, and never loads a conftest from the repo (cwd and arg both live in $WORK).
+run_recorder_on() {
+    local logdir="$1"; shift
+    env -C "$WORK" VSCODE_PYTEST_LOG_DIR="$logdir" \
+        PYTHONPATH="$REPO_ROOT/tools/vscode-pytest-log" \
+        "$PY" -m pytest -q -p vscode_pytest_log "$@"
+}
+
+latest_json() {
+    ls "$1"/*/latest.json | head -1
+}
+
+@test "test-log recorder: a selection pytest cannot collect records WHY (usage_error names the id)" {
+    LOGDIR="$WORK/vpl-usage"; mkdir -p "$LOGDIR"; write_tiny_test
+    run run_recorder_on "$LOGDIR" "$WORK/test_tiny.py::NoSuchClass::no_such_test"
+    [ "$status" -eq 4 ]
+    run "$PY" -c "import json,sys; print(json.load(open(sys.argv[1])).get('usage_error',''))" "$(latest_json "$LOGDIR")"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not found"* ]]
+    [[ "$output" == *"no_such_test"* ]]
+}
+
+@test "test-log recorder: a file that cannot be imported records its collection error" {
+    LOGDIR="$WORK/vpl-collect"; mkdir -p "$LOGDIR"
+    printf 'def test_broken(:\n' > "$WORK/test_broken.py"
+    run run_recorder_on "$LOGDIR" "$WORK/test_broken.py"
+    [ "$status" -eq 2 ]
+    run "$PY" -c "import json,sys; d=json.load(open(sys.argv[1])); ce=d.get('collection_errors') or []; print(ce[0]['nodeid'] if ce else 'MISSING')" "$(latest_json "$LOGDIR")"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"test_broken.py"* ]]
+}
+
+@test "test-log recorder: a healthy run grows NEITHER error field" {
+    LOGDIR="$WORK/vpl-ok"; mkdir -p "$LOGDIR"; write_tiny_test
+    run run_recorder_on "$LOGDIR" "$WORK/test_tiny.py"
+    [ "$status" -eq 0 ]
+    run "$PY" -c "import json,sys; d=json.load(open(sys.argv[1])); print('usage_error' in d, 'collection_errors' in d, d['counts']['total'])" "$(latest_json "$LOGDIR")"
+    [ "$status" -eq 0 ]
+    [ "$output" = "False False 1" ]
 }
 
 # end of file

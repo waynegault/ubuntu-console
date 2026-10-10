@@ -17,6 +17,15 @@ The first is written at ``pytest_configure`` with ``status: running``, so "is a 
 and where is it?" is answerable while it runs; the second carries the outcomes and the
 failure messages.
 
+WHY A RUN PRODUCED NOTHING is recorded too (2026-10-10): ``exit_status`` 4 with
+``counts.total`` 0 is what a run leaves behind when pytest cannot collect the selection at
+all — the Testing panel passes every selected node id explicitly, so ONE id that no longer
+exists (a renamed test) is a usage error that runs nothing.  Two extra fields carry the
+reason, each only when it applies:
+
+    "usage_error":      pytest's own text for a selection it could not collect
+    "collection_errors": [{"nodeid": ..., "message": ...}] for files that failed to import
+
 Environment knobs (both optional, named rather than defaulted silently):
     VSCODE_PYTEST_LOG_DIR    where to write          (default ~/.cache/vscode-pytest)
     VSCODE_PYTEST_LOG_KEEP   runs kept per repo      (default 50; 0 disables pruning)
@@ -33,6 +42,11 @@ import sys
 import time
 from datetime import datetime, timezone
 from typing import TypedDict
+
+# pytest is imported at module scope for the hook wrappers below (``@pytest.hookimpl`` and
+# ``pytest.UsageError`` are needed when this module is REGISTERED, not when a hook runs) - this is a
+# pytest plugin, loaded by the patched extension wrapper inside a pytest process.
+import pytest
 
 SCHEMA = "vscode-pytest-log/1"
 
@@ -64,6 +78,7 @@ class _State(TypedDict, total=False):
     started_monotonic: float
     tests: dict[str, dict]
     failures: list[dict]
+    collection_errors: list[dict]
     start_payload: dict
 
 
@@ -194,6 +209,67 @@ def pytest_runtest_logreport(report) -> None:
         )
 
 
+def pytest_collectreport(report) -> None:
+    """Record a COLLECTION failure, so a run that collected nothing can say why.
+
+    Only failures are kept — a report arrives per collected file, passing ones included, and
+    logging those would swamp the payload to say nothing.  Measured 2026-10-10 against a
+    deliberate syntax error: ``report.failed`` is True and ``str(report.longrepr)`` carries
+    pytest's import traceback, which is the text a reader needs and which exists nowhere else
+    in the results file.
+    """
+    if not report.failed:
+        return
+    _state.setdefault("collection_errors", []).append(
+        {"nodeid": report.nodeid, "message": str(report.longrepr)[:MESSAGE_LIMIT]}
+    )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_cmdline_main(config):
+    """Record pytest's own usage error, then re-raise so the exit status is unchanged.
+
+    The case this exists for (measured 2026-10-10): the Testing panel passes every selected
+    node id EXPLICITLY, so one id that no longer exists — a renamed test — makes pytest treat
+    the whole selection as a usage error: it collects everything, runs NOTHING and exits 4,
+    while the results file kept ``exit_status: 4``, ``counts.total: 0`` and no reason at all.
+    None of the reporting hooks carry that text (``Session._notfound`` is already empty when
+    they run, and ``terminalreporter.stats`` is empty for this whole class), so it is taken
+    from the exception here — the only place pytest's own message is visible.  A re-raise
+    keeps the run's outcome exactly as pytest decided it; recording never changes a verdict.
+    """
+    try:
+        return (yield)
+    except pytest.UsageError as exc:
+        _amend_run_with_error("usage_error", str(exc))
+        raise
+
+
+def _amend_run_with_error(field: str, message: str) -> None:
+    """Add *field* to this run's already-written payloads (the run file and ``latest.json``).
+
+    It re-READS what ``pytest_sessionfinish`` wrote rather than rebuilding it, so the counts and
+    the per-test outcomes it computed stay exactly as they were, and it must run late: the
+    measured order on a usage error is ``sessionfinish`` (payload written) -> ``unconfigure`` ->
+    ``pytest_cmdline_main``'s wrapper, so amending there is the only point where the reason is
+    known.  A failure to amend is reported, never raised: a log that cannot be completed must
+    not change what the run did.
+    """
+    run_file = _state.get("run_file")
+    run_dir = _state.get("run_dir")
+    if run_file is None or run_dir is None:
+        _report_failure(f"cannot record {field}: the run never reached pytest_configure")
+        return
+    for path in (pathlib.Path(run_file), pathlib.Path(run_dir) / "latest.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            _report_failure(f"cannot read {path} to record {field}: {exc!r}")
+            continue
+        payload[field] = message[:MESSAGE_LIMIT]
+        _write(path, payload)
+
+
 def pytest_sessionfinish(session, exitstatus) -> None:
     """Publish the finished run: counts, failures, and the per-test outcomes."""
     run_file = _state.get("run_file")
@@ -220,6 +296,12 @@ def pytest_sessionfinish(session, exitstatus) -> None:
             "tests": tests,
         }
     )
+    # Included only when it happened: a run whose collection failed must say so, and a healthy run
+    # must not grow a field that would read as "no errors" without anyone checking (the class this
+    # whole file exists to close is the failure that leaves no trace).
+    collection_errors = _state.get("collection_errors") or []
+    if collection_errors:
+        payload["collection_errors"] = collection_errors
     _write(run_file, payload)
     _write(pathlib.Path(run_file).parent / "latest.json", payload)
     _prune(pathlib.Path(run_file).parent)
