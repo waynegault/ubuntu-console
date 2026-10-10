@@ -83,12 +83,16 @@
 # with `tools/count-ratchet.sh --update`, which preserved the comment blocks above on this run:
 # 10.7 195->198. The rows that FELL (4.2.6 12->9, 6.7 77->67, 8.1.8 294->290, 9.5 121->113,
 # 10.4 50->49) are the tree's own, not from the new file.
-4.2.4	17
+# 2026-10-10: the four rows the cache-ram probe's re-baseline raised are tightened back by hand.
+# The rises it absorbed (4.2.4 16->17, 9.5 113->116, 10.4 49->50, 10.7 198->213) were fixed AT
+# SOURCE in 51d4b561, so those counters read the tree's own values again. Hand-edited rather than
+# `--update`, which rewrites this file and drops the comment blocks above.
+4.2.4	16
 4.2.6	9
 4.3.6	31
 6.7	67
 8.1.8	290
-9.5	116
+9.5	113
 9.7	60
-10.4	50
-10.7	213
+10.4	49
+10.7	198
