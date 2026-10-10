@@ -224,7 +224,8 @@ jobs:
                tests/unit/53-vscode-pytest-log-patch.bats \
                tests/unit/54-qwen-memory-style-patch.bats \
                tests/unit/55-memory-markdownlint-hook.bats \
-               tests/unit/56-two-sided-freshness.bats
+               tests/unit/56-two-sided-freshness.bats \
+               tests/unit/57-cache-ram-probe.bats
 
       - name: Run integration tests
         run: |
