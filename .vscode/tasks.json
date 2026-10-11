@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Tests: pytest bridge",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest",
+      "args": [
+        "-q",
+        "tests"
+      ],
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Tests: repo bats suite",
+      "type": "shell",
+      "command": "${workspaceFolder}/tools/run-tests.sh",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Tests: bats fast",
+      "type": "shell",
+      "command": "bats",
+      "args": [
+        "${workspaceFolder}/tests/tactical-console-fast.bats"
+      ],
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}
