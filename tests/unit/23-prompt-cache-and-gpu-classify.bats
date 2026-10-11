@@ -519,6 +519,9 @@ setup_selfcheck() {
     export GPU_WATCH_SELFCHECK_STATE_FILE="$SANDBOX/selfcheck.state"
     rm -f "$GPU_WATCH_SELFCHECK_STATE_FILE"
     unset SELFCHECK_RC
+    # Same reason as the state file: a case that set the readiness wait must not leak it into
+    # the next one (the automation and a human run leave it unset, so that is the default here).
+    unset GPU_WATCH_SELFCHECK_READY_WAIT_S GPU_WATCH_SELFCHECK_READY_INTERVAL_S SELFCHECK_COUNTER
 }
 
 @test "gpu-watch-selfcheck: a healthy automation is silent and exits 0" {
@@ -661,6 +664,83 @@ setup_selfcheck() {
     run "$SELFCHECK" --announce
     [[ "$status" -eq 2 ]]
     [[ "$output" == *"cannot see the watcher"* ]]
+}
+
+@test "gpu-watch-selfcheck: the readiness wait rides out a Gateway that is not serving yet" {
+    # A boot, or a Gateway restart, leaves the control plane unreachable for minutes.  The
+    # systemd unit sets a bounded readiness wait so that window is not reported as an unreadable
+    # WATCHER — measured 2026-10-11, the unit reddened on 6/6 boots.  Here the fixture fails the
+    # first two reads, then serves: the check must retry and end HEALTHY, not alarm.
+    setup_selfcheck
+    export SELFCHECK_COUNTER="$SANDBOX/ready.counter"
+    rm -f "$SELFCHECK_COUNTER"
+    cat > "$SANDBOX/openclaw-ready" <<'MOCK'
+#!/usr/bin/env bash
+n=$(cat "$SELFCHECK_COUNTER" 2>/dev/null || echo 0)
+if (( n < 2 )); then printf '%s\n' "$(( n + 1 ))" > "$SELFCHECK_COUNTER"; exit 3; fi
+cat "$SELFCHECK_FIXTURE"
+MOCK
+    chmod +x "$SANDBOX/openclaw-ready"
+    export GPU_WATCH_SELFCHECK_OPENCLAW="$SANDBOX/openclaw-ready"
+    export GPU_WATCH_SELFCHECK_READY_WAIT_S=10
+    export GPU_WATCH_SELFCHECK_READY_INTERVAL_S=1
+
+    local now_ms
+    now_ms=$(( $(date +%s) * 1000 ))
+    _selfcheck_json ok true "$(( now_ms - 60000 ))" "$(( now_ms + 840000 ))"
+
+    run "$SELFCHECK"
+    [[ "$status" -eq 0 ]]
+    [[ -z "$output" ]]
+    # It really did retry rather than pass on the first look: the counter advanced past both
+    # failing reads before the fixture was served.
+    [[ "$(cat "$SELFCHECK_COUNTER")" -ge 2 ]]
+}
+
+@test "gpu-watch-selfcheck: with no readiness wait set an unreadable read is immediate" {
+    # No wait is the DEFAULT — the automation runs every tick and must not stall, and a human
+    # running the script must not sit for minutes.  A broken read returns at once.
+    setup_selfcheck
+    unset SELFCHECK_FIXTURE
+    export SELFCHECK_RC=7
+
+    local start elapsed
+    start=$(date +%s)
+    run "$SELFCHECK"
+    elapsed=$(( $(date +%s) - start ))
+    [[ "$status" -eq 2 ]]
+    [[ "$output" == *"cannot see the watcher"* ]]
+    [[ "$elapsed" -lt 5 ]]
+}
+
+@test "gpu-watch-selfcheck: the readiness wait is bounded, so a still-dead Gateway still reports" {
+    # The wait must END.  A Gateway that never serves must still produce the unreadable verdict
+    # (exit 2), or the unit would hang instead of reporting a fault.  wait=3s, interval=1s.
+    setup_selfcheck
+    unset SELFCHECK_FIXTURE
+    export SELFCHECK_RC=7
+    export GPU_WATCH_SELFCHECK_READY_WAIT_S=3
+    export GPU_WATCH_SELFCHECK_READY_INTERVAL_S=1
+
+    local start elapsed
+    start=$(date +%s)
+    run "$SELFCHECK"
+    elapsed=$(( $(date +%s) - start ))
+    [[ "$status" -eq 2 ]]
+    [[ "$output" == *"cannot see the watcher"* ]]
+    [[ "$elapsed" -ge 2 ]]   # it waited...
+    [[ "$elapsed" -le 8 ]]   # ...but gave up at the deadline
+}
+
+@test "gpu-watch-selfcheck: --version reports its own module-version marker" {
+    # The two had drifted: the script printed "4" while its marker said 5.  --version reads the
+    # marker now, so a check-module-versions.sh bump and the reported version cannot disagree.
+    local marker
+    marker=$(sed -n 's/^# Module Version: //p' "$SELFCHECK" | head -1)
+    [[ -n "$marker" ]]
+    run "$SELFCHECK" --version
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == "gpu-watch-selfcheck $marker" ]]
 }
 
 # end of file

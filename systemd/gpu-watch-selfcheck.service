@@ -18,6 +18,12 @@ Type=oneshot
 # unit out of `systemctl --user --failed` and lose the standing-failure signal it exists
 # to provide; both modes are documented in the script's header.
 ExecStart=%h/.local/bin/gpu-watch-selfcheck.sh
+# A boot, or a Gateway restart, leaves the control plane unreachable for minutes; without a
+# wait the check calls that an unreadable WATCHER and lands this unit in `--failed` — the
+# alarm-class false positive.  THIS unit is the only consumer that sets the wait, so the
+# OpenClaw automation's per-tick semantics are unchanged (the scheduled probe hit the
+# cold-start window on the 2026-10-11 16:28 boot).
+Environment=GPU_WATCH_SELFCHECK_READY_WAIT_S=600
 # Explicit PATH: the check reaches the `openclaw` CLI to read the automation's
 # state, and the default user-manager PATH does not carry the Linuxbrew bin dir
 # where `openclaw` resolves (/home/linuxbrew/.linuxbrew/bin), so a bare `openclaw`

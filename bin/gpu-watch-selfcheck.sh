@@ -73,11 +73,24 @@
 # ENV  GPU_WATCH_SELFCHECK_ID         automation id (default below)
 #      GPU_WATCH_SELFCHECK_OPENCLAW   openclaw binary (override point for tests)
 #      GPU_WATCH_SELFCHECK_MAX_AGE_S  staleness bound, seconds
+#      GPU_WATCH_SELFCHECK_READY_WAIT_S      before concluding "unreadable", retry the read for
+#                                     up to this many seconds (0 = off; set only by the systemd
+#                                     unit — the automation leaves it unset)
+#      GPU_WATCH_SELFCHECK_READY_INTERVAL_S  seconds between readiness retries (default 20)
 #      GPU_WATCH_SELFCHECK_STATE_FILE what --announce announced last
 #                                     (default ~/.cache/gpu-watch-selfcheck.state)
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-10-11): an opt-in, bounded READINESS WAIT before concluding "unreadable" —
+#   GPU_WATCH_SELFCHECK_READY_WAIT_S (seconds; 0 = off, the default) with
+#   GPU_WATCH_SELFCHECK_READY_INTERVAL_S (seconds between retries, default 20).  A Gateway
+#   that is cold-starting, or being restarted, cannot serve the CLI yet — and calling THAT an
+#   unreadable WATCHER reds systemd/gpu-watch-selfcheck.service on every boot and restart,
+#   an alarm on expected-to-change state.  The wait is set ONLY by that unit, so the OpenClaw
+#   automation's per-tick semantics are unchanged and a human's run stays immediate.  Also:
+#   --version now reports the module version by reading its own marker (it had printed "4"
+#   against a marker of 5).
 #   v5 (2026-09-30): ratchet hygiene only, no behaviour change — v4 put
 #   SELFCHECK_MAX_AGE_FLOOR_S between max_age_seconds' doc comment and the function, so
 #   §18.3's 9.5 counted it as undocumented; the constant now sits above the comment and
@@ -99,6 +112,15 @@ OPENCLAW="${GPU_WATCH_SELFCHECK_OPENCLAW:-openclaw}"
 AUTOMATION_ID="${GPU_WATCH_SELFCHECK_ID:-6a1b0ada-eae2-48e9-905a-78a74ba98549}"
 MODE="${1:-}"
 STATE_FILE="${GPU_WATCH_SELFCHECK_STATE_FILE:-${XDG_CACHE_HOME:-$HOME/.cache}/gpu-watch-selfcheck.state}"
+
+# Readiness retry (see the ENV block).  Validated here so a bad value cannot reach `sleep`:
+# 0 (or a non-integer) means no wait — the default, and the automation's behaviour.
+READY_WAIT_S="${GPU_WATCH_SELFCHECK_READY_WAIT_S:-0}"
+READY_INTERVAL_S="${GPU_WATCH_SELFCHECK_READY_INTERVAL_S:-20}"
+[[ "$READY_WAIT_S" =~ ^[0-9]+$ ]] || READY_WAIT_S=0
+if ! [[ "$READY_INTERVAL_S" =~ ^[0-9]+$ ]] || (( READY_INTERVAL_S <= 0 )); then
+    READY_INTERVAL_S=20
+fi
 
 # --json_field <json> <key> — the string value of a key, else empty.  Same
 # sed idiom the rest of the fleet uses on this fixed shape (see
@@ -159,10 +181,27 @@ verdict_json() {
 main() {
     local _json _rc _name _enabled _status _last_ms _next_ms _every_ms
     local _max_age _now_s _age_s _overdue_s _state="" _detail=""
+    local _deadline=0
 
-    _json=$("$OPENCLAW" automations get "$AUTOMATION_ID" --json 2>/dev/null); _rc=$?
+    # Read the automation — with an opt-in bounded readiness WAIT (READY_WAIT_S; 0 by
+    # default).  A Gateway that is cold-starting, or mid-restart, cannot serve the CLI
+    # yet; reporting THAT as an unreadable WATCHER is what reds the systemd unit on a
+    # boot or a restart, so the unit — and only the unit — asks for a retry window.
+    if (( READY_WAIT_S > 0 )); then
+        _deadline=$(( $(date +%s) + READY_WAIT_S ))
+    fi
+    while :; do
+        _json=$("$OPENCLAW" automations get "$AUTOMATION_ID" --json 2>/dev/null); _rc=$?
+        _name=$(json_field "$_json" name)
+        if (( _rc == 0 )) && [[ -n "$_name" ]]; then
+            break
+        fi
+        if (( _deadline == 0 )) || (( $(date +%s) >= _deadline )); then
+            break
+        fi
+        sleep "$READY_INTERVAL_S"
+    done
 
-    _name=$(json_field "$_json" name)
     if (( _rc != 0 )) || [[ -z "$_name" ]]; then
         _state="unreadable"
         _detail="could not read automation ${AUTOMATION_ID} (rc=${_rc}) - this check cannot"
@@ -302,7 +341,10 @@ exit_code_for() {
 
 case "$MODE" in
     --version|-V)
-        echo "gpu-watch-selfcheck 4"
+        # Read the number from this file's OWN module-version marker so the two can never
+        # drift — they had: the marker said 5 while this printed 4.  The marker is what
+        # tools/check-module-versions.sh bumps on every edit, so it is the source of truth.
+        printf 'gpu-watch-selfcheck %s\n' "$(sed -n 's/^# Module Version: //p' "$0" | head -1)"
         exit 0
         ;;
     --json|--announce|"") ;;
