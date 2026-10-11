@@ -6,14 +6,25 @@
 # ==============================================================================
 # Purpose: The OpenClaw CLI self-updates frequently, so the generated bash
 # completion script must be refreshed to cover new subcommands. The script is
-# versioned in this repo (not the tool-owned state dir) and sourced by
+# versioned in this repo (not the tool-owned state dir) and consumed by
 # 13-init.sh, making regeneration a repo operation: run this after
 # `openclaw update` and commit the result.
+#
+# WHERE IT IS LOADED (corrected 2026-10-11): the CLI ALSO writes its own copy to
+# ~/.openclaw/completions/openclaw.bash, and 13-init.sh prefers THAT one, using
+# this repo copy only as the fallback for a box where the CLI has not written one.
+# The preference is not cosmetic: measured 2026-10-11, this repo copy still emitted
+# `tasks` (which the installed CLI no longer emits) while missing `agentmail`,
+# `policy` and `storage` (which it now emits). So this regeneration keeps the
+# FALLBACK current; the copy a shell normally loads is the CLI's own.
 #
 # Usage: tools/sync-openclaw-completion.sh
 # ==============================================================================
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-10-11): the header said 13-init.sh SOURCES this copy; it now prefers
+#   the CLI-generated copy and falls back to this one, so the sentence was false.
+#   Corrected with the measurement that shows why the preference matters.
 # ==============================================================================
 set -euo pipefail
 

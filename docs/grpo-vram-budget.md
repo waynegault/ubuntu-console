@@ -12,7 +12,15 @@ The probe ran under `bin/train-timeout-runner.sh`, which holds the bench lock �
 tenancy path a real training run uses, so `bin/gpu-busy.sh` reported the card busy and
 `llama-watchdog` stood the CUDA lane down by its own rule rather than being raced for the
 card. The lane was stopped explicitly (the documented bench/autotune behaviour, which is
-why the suspend file was **not** used: a stale one would hold the lane down indefinitely)
+why the suspend file was **not** used: a stale one would hold the lane down indefinitely
+— **annotated 2026-10-11, commit cf584892**: that hazard is gone. The CUDA suspend hold is
+now decided by the *owner's liveness* (`_tac_suspend_held`, `bin/_tac-bin-lib.sh`), so a
+marker left behind by a killed holder reads as NOT held and never wedges the lane; proven
+live the same day — the lane came back at 21:33:56 with the legacy marker still on disk.
+The clause above therefore no longer applies. The decision is left unchanged because it does
+not rest on it alone: the bench lock named above already provides tenancy, `llama-watchdog`
+stood the lane down by its own `gpu_busy` rule, and the VRAM-reads-0 precondition is a gate
+the suspend marker never provided anyway)
 and the measurement refused to start until VRAM read 0 MiB.
 
 Settings measured — the card's own edge case: `ctx=2048`, LoRA `r=16` (alpha 32) on

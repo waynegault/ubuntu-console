@@ -119,7 +119,12 @@
 # not by this script; this script recovers process death / start-limit states.
 # AI: Do not add streaming, partial-offload, or auto-download logic to this script.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 14
+# Module Version: 15
+#   v15 (2026-10-11): the suspend log line names the LIVE OWNER PID rather than the
+#   marker's presence.  Since v5 the marker is honoured only while its recorded pid
+#   is alive, so "($CUDA_SUSPEND_FILE present)" misdirected a reader to the file
+#   instead of to the holder that must be checked.  Text only; the decision and the
+#   "CUDA lane suspended" prefix the tests assert are unchanged.
 #   v14 (2026-10-11): cuda_suspended() asks _tac_suspend_held (bin/_tac-bin-lib.sh)
 #   instead of testing the marker's EXISTENCE, so a marker whose holder was
 #   SIGKILLed (its EXIT trap never ran) reads as NOT held and the lane is restored
@@ -647,7 +652,7 @@ if cuda_suspended; then
             log "WARNING: could not stop $CUDA_UNIT — the lane may still hold VRAM: ${_stop_out}"
         fi
     else
-        log "CUDA lane suspended ($CUDA_SUSPEND_FILE present) — not starting $CUDA_UNIT yet"
+        log "CUDA lane suspended — held by live pid $(_tac_suspend_pid "$CUDA_SUSPEND_FILE"); not starting $CUDA_UNIT"
     fi
     # A suspend is its own deliberate stop; a stale GPU-busy marker must not
     # survive it and explain away the first real death after a resume.

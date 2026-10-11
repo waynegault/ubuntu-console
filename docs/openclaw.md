@@ -576,7 +576,7 @@ uv tool install ./scripts --extra ast
 | `~/.openclaw/openclaw.json` | Global configuration |
 | `~/.openclaw/logs/bash-errors.log` | ERR trap log |
 | `~/.openclaw/maintenance_cooldowns.txt` | Cooldown timestamps |
-| `scripts/completions/openclaw.bash` | Bash completions (repo-versioned, generated via `tools/sync-openclaw-completion.sh`) |
+| `scripts/completions/openclaw.bash` | Bash completions (repo-versioned, generated via `tools/sync-openclaw-completion.sh`) — the **fallback**: the CLI writes its own copy to `~/.openclaw/completions/openclaw.bash`, which `13-init.sh` prefers (measured 2026-10-11, the repo copy was three subcommands behind the installed CLI and one command ahead, so the CLI's own copy is the one a shell normally loads) |
 | `~/.openclaw/.env.bridge` | Windows→WSL env bridge: regenerated and sourced by `scripts/load-vault-env.sh` (which drives `~/.local/bin/import-windows-env.sh`). Holds live keys, is **not** read by systemd, and is gitignored in the OpenClaw repo — never commit it. |
 | `~/.openclaw/kgraph.json` | Optional read-only fallback graph source (`--store`); not written |
 | `~/.openclaw/kgraph.sqlite` | Primary persisted SQLite store for `oc g` |
