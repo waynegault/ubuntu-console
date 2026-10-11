@@ -290,3 +290,86 @@ gate_stubs() {
     [[ "$output" == *"load1=0.10 load_ok=1"* && "$output" == *"hj_ok=1"* && "$output" == *"cyc_ok=1"* ]]
     [[ "$output" == *"vram=100MiB vram_ok=1"* ]]
 }
+
+# ── the watcher's CALLER: the wait loop, its abort, and the heavy-job launch ──
+#
+# gate_ok is covered above; this covers what the shipped script DOES with it.
+# The bug that motivated it: the first watcher had no abort on exhaustion and
+# LAUNCHED the probe into a 3.6 GiB card — the abort is the only thing standing
+# between this script and a repeat.
+#
+# HERMETIC: the script resolves HEAVY="$REPO/bin/heavy-job" from its OWN location,
+# so no env var can redirect it and the script is NOT edited.  Instead the
+# UNMODIFIED shipped text runs from a scratch repo layout (<scratch>/scripts/…)
+# whose <scratch>/bin/heavy-job is a recording stub, and the four gate inputs are
+# controlled on PATH: gate 4 via an nvidia-smi stub whose output the case picks,
+# gate 1 via a cut stub (this box is BUSY — real /proc/loadavg would close gate 1
+# and the open-gate control would pass only on a quiet box), gate 3 via a cat stub
+# (/dev/shm ledger files exist here and are host state).  No GPU, no lock, no
+# /dev/shm, and the stub never execs its argv, so the real probe cannot run.
+
+# watch_layout — build the scratch repo layout and the controlling stubs.
+# Sets W_SCRIPT (the copy to run), W_OUT, W_STUBBIN, W_LAUNCHES.
+watch_layout() {
+    W_ROOT="$SANDBOX/watch-root"
+    W_OUT="$SANDBOX/watch-out"
+    W_STUBBIN="$SANDBOX/watch-stubbin"
+    W_LAUNCHES="$SANDBOX/watch-launches.log"
+    mkdir -p "$W_ROOT/scripts" "$W_ROOT/bin" "$W_OUT" "$W_STUBBIN"
+    # The shipped script, byte for byte.  $SELF_DIR is its own directory, so it
+    # resolves REPO to $W_ROOT and HEAVY to $W_ROOT/bin/heavy-job.
+    cp "$WATCH" "$W_ROOT/scripts/cache-ram-probe-watch.sh"
+    W_SCRIPT="$W_ROOT/scripts/cache-ram-probe-watch.sh"
+    export W_SCRIPT
+    : > "$W_LAUNCHES"
+    export W_LAUNCHES
+    # --status is gate 2's probe: prints free, records NOTHING.  Every other
+    # invocation IS the launch: recorded, and never exec'd.
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'if [[ "${1:-}" == "--status" ]]; then printf "heavy-job: free (last holder: none)\n"; exit 0; fi' \
+        'printf "%s\n" "$*" >> "${W_LAUNCHES:?}"' \
+        'printf "heavy-job: free (last holder: none)\n"' \
+        > "$W_ROOT/bin/heavy-job"
+    chmod +x "$W_ROOT/bin/heavy-job"
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "${W_VRAM_OUT:-}"' > "$W_STUBBIN/nvidia-smi"
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "0.10\n"' > "$W_STUBBIN/cut"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$W_STUBBIN/cat"
+    chmod +x "$W_STUBBIN/nvidia-smi" "$W_STUBBIN/cut" "$W_STUBBIN/cat"
+}
+
+# watch_run <nvidia-smi-output-MiB> — run the copy with a 1s poll and a 0s budget.
+watch_run() {
+    run env PATH="$W_STUBBIN:$PATH" W_VRAM_OUT="$1" W_LAUNCHES="$W_LAUNCHES" \
+        bash "$W_SCRIPT" --poll 1 --max-wait 0 --out "$W_OUT"
+}
+
+@test "watch caller: the wait loop ABORTS when the window never opens (busy card)" {
+    # Catches: a fall-through that LAUNCHES the probe when the window never opened
+    # — the first watcher's bug, which put the probe onto a 3.6 GiB card.  3293 MiB
+    # is over VRAM_MAX, so gate 4 cannot open on any iteration.
+    watch_layout
+    watch_run 3293
+    [[ "$status" -eq 1 ]]
+    local wlog
+    wlog="$(ls "$W_OUT"/watch-*.log)"
+    grep -q 'waiting (' "$wlog"                        # the wait actually happened...
+    grep -q 'reached without a quiet window' "$wlog"   # ...and exhaustion aborted
+    [[ ! -s "$W_LAUNCHES" ]]                           # heavy-job was never launched
+    [[ -z "$(ls "$W_OUT"/probe-*.log 2>/dev/null)" ]]  # no probe transcript either
+}
+
+@test "watch caller: an open window LAUNCHES the probe once, through heavy-job" {
+    # Catches: a gate that can never open (no launch at all) AND a launch that
+    # bypasses the lock — the probe must be launched via heavy-job, carrying the
+    # probe's own argv, and the transcript must open.
+    watch_layout
+    watch_run 100
+    [[ "$status" -eq 0 ]]
+    [[ "$(wc -l < "$W_LAUNCHES")" -eq 1 ]]
+    grep -q -- 'bash -c' "$W_LAUNCHES"
+    grep -q -- '--row 21' "$W_LAUNCHES"
+    grep -q -- "--out $W_OUT" "$W_LAUNCHES"
+    grep -q -- 'cache-ram-probe.sh' "$W_LAUNCHES"
+    [[ -n "$(ls "$W_OUT"/probe-*.log 2>/dev/null)" ]]
+}
