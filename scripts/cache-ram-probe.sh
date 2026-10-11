@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-10-11): the post-suspend free-VRAM wait ABORTS on exhaustion instead of
+#   proceeding.  After 45 polls (90 s) the loop used to END and the probe started its
+#   measurement on whatever free VRAM it found — the same fall-through that launched a
+#   run onto a 3.6 GiB card earlier the same day.  An unreadable reading now refuses
+#   too: "cannot tell" is not evidence the card is free, so the wait fails closed.
 #   v2 (2026-10-10): route every stderr write through one `warn` helper, comment the two
 #   functions §18.3 items 10.7/9.5 counted, note why the arm `case` carries no `*)`, and
 #   extract `_summarise_py` from `summarise` so neither exceeds item 10.4's bound.
@@ -535,14 +540,32 @@ trap '_tac_suspend_release "$SUSPEND"' EXIT
 # is the check that the card was actually released.
 systemctl --user stop "$LANE" >/dev/null 2>&1
 _sw=0
+_free=""
+_card_free=0
 while (( _sw < 45 )); do
     _free="$(_free_mib)"
-    [[ "$_free" =~ ^[0-9]+$ ]] || break
-    (( _free > 3000 )) && break
+    # An unreadable reading is NOT evidence the card is free: this loop exists to
+    # PROVE it freed, so "cannot tell" refuses rather than proceeding — the same
+    # fail-closed direction as the watcher's gate 4.
+    if [[ ! "$_free" =~ ^[0-9]+$ ]]; then
+        warn "FATAL: cannot read free VRAM (last: '${_free:-<empty>}') after ${_sw} poll(s) — refusing to start"
+        exit 1
+    fi
+    if (( _free > 3000 )); then
+        _card_free=1
+        break
+    fi
     sleep 2
     _sw=$(( _sw + 1 ))
 done
-printf '\ncard free before start: %s MiB\n' "${_free:-unknown}"
+# EXHAUSTION ABORTS (v3).  This wait used to END after 45 polls and let the probe start
+# its measurement on whatever free VRAM it found — the fall-through that launched a run
+# onto a card holding 3.6 GiB (2026-10-10).  A window that never opened is a refusal.
+if (( _card_free == 0 )); then
+    warn "FATAL: card never freed in 45 polls/90 s (last free: ${_free} MiB, need > 3000) — refusing to start"
+    exit 1
+fi
+printf '\ncard free before start: %s MiB\n' "$_free"
 
 _seq_out="$(parse_order "$OPT_ORDER" "$OPT_ALLOW_NI")"
 _prc=$?
