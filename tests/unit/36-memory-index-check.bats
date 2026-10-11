@@ -114,6 +114,71 @@ setup() {
     [[ "$output" == *"$q/projects/-proj-b/memory/MEMORY.md: entries=1 bad=1"* ]]
 }
 
+@test "memory index check: the cap is enforced — a line AT it is clean, one char over exits 3" {
+    # The boundary comes from the CRITERION (the writer's MAX_INDEX_LINE_CHARS = 150, which the
+    # checker mirrors), so the constant is read out of the file and asserted FIRST: if either
+    # side drifts, this fails rather than quietly re-baselining to whatever the code now does.
+    local cap
+    cap="$(python3 - "$CHECK" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+match = re.search(r"^MAX_INDEX_LINE_CHARS = (\d+)$", src, re.M)
+print(match.group(1) if match else "")
+PY
+)"
+    [ "$cap" = "150" ]
+
+    local d="$WORK/over-cap"
+    mkdir -p "$d"
+    : > "$d/t.md"
+    # Built in python so length is counted in CHARACTERS — the separator is an em dash, which
+    # is 1 character and 3 bytes, and `${#…}` would disagree with the checker in a C locale.
+    python3 - "$d" "$cap" <<'PY'
+import sys
+
+d, cap = sys.argv[1], int(sys.argv[2])
+head = "- [T](t.md) — "
+at_cap = head + "y" * (cap - len(head))
+assert len(at_cap) == cap, (len(at_cap), cap)
+with open(f"{d}/at_cap.md", "w", encoding="utf-8") as handle:
+    handle.write(at_cap + "\n")
+with open(f"{d}/over_cap.md", "w", encoding="utf-8") as handle:
+    handle.write(at_cap + "y\n")
+PY
+
+    run python3 "$CHECK" "$d/at_cap.md"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"entries=1 bad=0 over=0"* ]]
+
+    run python3 "$CHECK" "$d/over_cap.md"
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"entries=1 bad=0 over=1"* ]]
+    [[ "$output" == *"151 chars, over the 150 cap"* ]]
+}
+
+@test "memory index check: a broken link outranks a long line (both counted, exit 1)" {
+    # The two findings are independent counters, and the exit code says which fired: a caller
+    # testing `== 1` must still read "an entry is unusable", never "a line is long".
+    local d="$WORK/mixed-over"
+    mkdir -p "$d"
+    : > "$d/ok.md"
+    python3 - "$d" <<'PY'
+import sys
+
+d = sys.argv[1]
+with open(f"{d}/MEMORY.md", "w", encoding="utf-8") as handle:
+    handle.write("- [Gone](gone.md) — target absent\n")
+    handle.write("- [L](ok.md) — " + "z" * 160 + "\n")
+PY
+
+    run python3 "$CHECK" "$d/MEMORY.md"
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"entries=2 bad=1 over=1"* ]]
+}
+
 @test "memory index check: a named index that does not exist is a cannot-run, never a pass" {
     run python3 "$CHECK" "$WORK/absent/MEMORY.md"
 

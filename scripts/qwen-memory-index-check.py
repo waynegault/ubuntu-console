@@ -31,6 +31,16 @@ is therefore named only as CONTEXT for an entry that is already broken; the link
 above carry the detection, because a cut-through link has no closing `)` and is caught as
 "no link".
 
+A LINE LONGER THAN THE WRITER'S CAP IS ITS OWN FINDING (added 2026-10-11).  The indexer's
+line builder budgets the description AROUND the link but never the TITLE, so a long note name
+beside a long relative path produced a line of up to ~189 characters while the writer's own
+`MAX_INDEX_LINE_CHARS = 150` went unenforced.  Such a line is NOT "broken" — its link still
+resolves — so it is counted separately as `over=` and reported; it is checked here because a
+resolving link is not the only way an index line can be wrong.  Fixed at the mechanism by
+`bin/qwen-memory-index-patch.sh` hunk 4 and reported upstream as QwenLM/qwen-code#13910.  The
+`MAX_INDEX_LINE_CHARS` below MIRRORS the writer's constant, and this file's own suite pins the
+150 boundary, so a drift in either direction shows up as a failure.
+
 WHICH INDEXES (the store set is DISCOVERED, never listed)
 ---------------------------------------------------------
 With no arguments it checks the ROOT store (`<qwen-dir>/memories/MEMORY.md`) and every
@@ -39,10 +49,11 @@ once here; the stores themselves are globbed, so a project store added later is 
 without an edit — a hard-coded list would silently miss the one that is broken.
 
 EXIT CODES
-  0  every index read cleanly and no entry is broken
-  1  at least one broken entry — this is the gate
+  0  every index read cleanly, no entry is broken and no line exceeds the cap
+  1  at least one broken entry — this is the gate (a broken link outranks a long line)
   2  the check could not run: a named index is missing, or no index was found at all
      (an empty scan is not a clean tree)
+  3  no broken entry, but at least one line is longer than MAX_INDEX_LINE_CHARS
 
 USAGE
   qwen-memory-index-check.py                    # every store under ~/.qwen
@@ -63,6 +74,12 @@ import sys
 EXIT_CLEAN = 0
 EXIT_BROKEN = 1
 EXIT_CANNOT_RUN = 2
+EXIT_OVER_LONG = 3
+
+# Mirrors the CLI indexer's MAX_INDEX_LINE_CHARS, which its own line builder has not always
+# enforced on the title (see the docstring).  Named here so the boundary this check gates on
+# is one identifiable number, pinned by tests/unit/36-memory-index-check.bats.
+MAX_INDEX_LINE_CHARS = 150
 
 # One index entry: `- [title](target) — description`.  Group 2 is the link target.
 # A line truncated mid-link has no closing `)`, so this does not match it and the
@@ -92,15 +109,24 @@ def discover_indexes(qwen_dir):
 
 
 def check_index(path):
-    """(entry_count, [(lineno, why)]) for one index file."""
+    """(entry_count, [(lineno, why)], [(lineno, length)]) for one index file.
+
+    The two findings lists are independent — an entry can be broken, over the cap, or both —
+    and only the first feeds `bad=` (see the module docstring).  Length is counted on the line
+    as stored without its newline, which is the unit the writer's cap is stated in.
+    """
     base = os.path.dirname(os.path.abspath(path))
     entries = 0
     broken = []
+    too_long = []
     with open(path, encoding="utf-8") as handle:
         for lineno, line in enumerate(handle, 1):
             if not line.startswith("- ["):
                 continue
             entries += 1
+            stripped = line.rstrip("\n")
+            if len(stripped) > MAX_INDEX_LINE_CHARS:
+                too_long.append((lineno, len(stripped)))
             reasons = []
             match = ENTRY_RE.match(line)
             if not match or not match.group(2).strip():
@@ -116,7 +142,7 @@ def check_index(path):
                 reasons.append("line ends in an ellipsis (truncated)")
             if reasons:
                 broken.append((lineno, "; ".join(reasons)))
-    return entries, broken
+    return entries, broken, too_long
 
 
 def main(argv):
@@ -157,17 +183,30 @@ def main(argv):
             return EXIT_CANNOT_RUN
 
     any_broken = False
+    any_over = False
     for path in targets:
-        entries, broken = check_index(path)
-        print(f"{path}: entries={entries} bad={len(broken)}")
+        entries, broken, too_long = check_index(path)
+        print(f"{path}: entries={entries} bad={len(broken)} over={len(too_long)}")
         for lineno, why in broken[:MAX_DETAIL_LINES]:
             print(f"    line {lineno}: {why}")
         if len(broken) > MAX_DETAIL_LINES:
             print(f"    ... {len(broken) - MAX_DETAIL_LINES} more")
+        for lineno, length in too_long[:MAX_DETAIL_LINES]:
+            print(f"    line {lineno}: {length} chars, over the {MAX_INDEX_LINE_CHARS} cap")
+        if len(too_long) > MAX_DETAIL_LINES:
+            print(f"    ... {len(too_long) - MAX_DETAIL_LINES} more")
         if broken:
             any_broken = True
+        if too_long:
+            any_over = True
 
-    return EXIT_BROKEN if any_broken else EXIT_CLEAN
+    # A broken link outranks a long line: `bad=` keeps the meaning it has always had, so a
+    # caller testing `== 1` still reads "an entry is unusable", while `over=` is its own code.
+    if any_broken:
+        return EXIT_BROKEN
+    if any_over:
+        return EXIT_OVER_LONG
+    return EXIT_CLEAN
 
 
 if __name__ == "__main__":
