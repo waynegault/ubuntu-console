@@ -14,7 +14,13 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 25
+# Module Version: 26
+#   v26 (2026-10-11): the CI Verdict Gate forces a LIVE read — `--cache-ttl 0` on
+#   both argument variants.  check_ci_status.py caches its probe for 600 s by
+#   default, and this gate judges the pushed tip, so a cached verdict could judge
+#   the PREVIOUS tip (measured: a cached read omitted a run's `success` conclusion
+#   that a live read reported).  Cost measured at load 16.2: 0.080 s cached against
+#   1.584/1.660 s live.
 #   v25 (2026-10-04, card 93909ea5): resolve bats by a PIN (_BATS_PIN 1.11.1, installed by
 #   tools/install-bats.sh), not PATH order — the `.bats` branch decides PASS/FAIL from
 #   `bats --count`, and apt's 1.10.0 accepts a malformed suite (rc 0) that 1.11.1 rejects.
@@ -768,10 +774,17 @@ else
     then
         _ci_status_py="python3"
     fi
-    _ci_status_args=(--fail --strict-unknown)
+    # --cache-ttl 0: the probe's own cache is 600 s by default, and this gate judges
+    # the PUSHED TIP — reusing a verdict from up to ten minutes ago means judging the
+    # PREVIOUS tip.  Measured 2026-10-11 (load 16.2): a cached read reported the
+    # newest completed run without its conclusion where a live read reported
+    # `success`, which is exactly the stale-verdict shape that can pass a red tip.
+    # The live read costs ~1.5 s (0.080 s cached vs 1.584/1.660 s live) inside a push
+    # that already takes minutes, so the cache buys nothing worth that risk here.
+    _ci_status_args=(--fail --strict-unknown --cache-ttl 0)
     if [[ "${CI_STATUS_ALLOW_UNKNOWN:-0}" == "1" ]]
     then
-        _ci_status_args=(--fail)
+        _ci_status_args=(--fail --cache-ttl 0)
         echo "  NOTE  CI_STATUS_ALLOW_UNKNOWN=1 — an UNKNOWN verdict will not fail this run"
     fi
     if "$_ci_status_py" "$REPO_ROOT/scripts/check_ci_status.py" "${_ci_status_args[@]}"
