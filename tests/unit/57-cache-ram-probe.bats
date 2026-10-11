@@ -576,3 +576,58 @@ probe_run() {
     [[ ! -s "$P_SERVER_LOG" ]]
     [[ "$output" != *"arm sequence this run"* ]]
 }
+
+# ── _free_mib (bin/_tac-bin-lib.sh) — the reading the wait above consumes ─────
+#
+# The wait's fail-closed branch depends on THIS contract: an nvidia-smi that cannot
+# be read must yield EMPTY, not 0 and not a stale number — a 0 would read as "no
+# card free" (refuse) but a stale/normal number would read as "free" and let the
+# probe start.  tactical-console-fast.bats asserts _free_mib is DEFINED in one
+# place; nothing asserted what it RETURNS on failure.
+
+@test "free VRAM: _free_mib yields EMPTY when nvidia-smi cannot be read" {
+    # Catches: a fallback in the parser (`|| echo 0`, a cached last value), which
+    # would make the wait's "cannot tell" indistinguishable from a real reading.
+    mkdir -p "$SANDBOX/fm-bad" "$SANDBOX/fm-ok"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$SANDBOX/fm-bad/nvidia-smi"
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "4000, 3900"' > "$SANDBOX/fm-ok/nvidia-smi"
+    chmod +x "$SANDBOX/fm-bad/nvidia-smi" "$SANDBOX/fm-ok/nvidia-smi"
+    local lib="$REPO_ROOT/bin/_tac-bin-lib.sh"
+    run env PATH="$SANDBOX/fm-bad:$PATH" bash -c "source '$lib'; _free_mib"
+    [[ -z "$output" ]]                 # EMPTY — the contract the wait branches on
+    # Control: a normal reading still parses to total - used, so the case above is
+    # not passing because the helper is broken outright.
+    run env PATH="$SANDBOX/fm-ok:$PATH" bash -c "source '$lib'; _free_mib"
+    [[ "$output" == "100" ]]
+}
+
+# ── the probe's SUSPEND contract (the interleaving with systemd) ──────────────
+#
+# The helper's own protocol is covered by tests/unit/08-autotune-workload.bats;
+# what nothing covered is the PROBE's use of it.  Asserted here as a CONTRACT —
+# the call, and the abort on its failure — with the helper stubbed in the scratch
+# lib (the shipped probe text is untouched).  That is hermetic; the real
+# interleaving with systemd is a manual check (see the module's `up` path).
+
+@test "probe: a suspend hold that cannot be acquired ABORTS before anything starts" {
+    # Catches: the probe starting a server WITHOUT the watchdog held off — the lane
+    # would be restarted underneath the measurement.
+    probe_layout
+    printf '%s\n' '_tac_suspend_acquire() { return 1; }' >> "$P_ROOT/bin/_tac-bin-lib.sh"
+    probe_run "4000, 3900"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"could not acquire the CUDA suspend hold"* ]]
+    [[ ! -s "$P_SERVER_LOG" ]]
+    [[ "$output" != *"card never freed"* ]]   # stopped AT the gate, not later
+}
+
+@test "probe: control — an acquired hold lets the run reach the VRAM wait" {
+    # The other half: without it, a probe that aborted unconditionally would pass the
+    # case above.  The real helper is used here (sandbox suspend file), so this proves
+    # the abort above came from the stub and not from the harness.
+    probe_layout
+    probe_run "4000, 3900"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" != *"could not acquire the CUDA suspend hold"* ]]
+    [[ "$output" == *"card never freed"* ]]
+}
