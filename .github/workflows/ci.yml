@@ -225,7 +225,8 @@ jobs:
                tests/unit/54-qwen-memory-style-patch.bats \
                tests/unit/55-memory-markdownlint-hook.bats \
                tests/unit/56-two-sided-freshness.bats \
-               tests/unit/57-cache-ram-probe.bats
+               tests/unit/57-cache-ram-probe.bats \
+               tests/unit/58-gpu-watch-selfcheck-timer.bats
 
       - name: Run integration tests
         run: |

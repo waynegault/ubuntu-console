@@ -1,6 +1,11 @@
 [Unit]
 Description=GPU Passthrough Watch automation self-check Timer
-Requires=gpu-watch-selfcheck.service
+# Deliberately NO Requires=/Wants= on the service: that starts it the moment this timer
+# starts at boot (~13 s in), before the Gateway's control plane serves, so the check
+# reads the STARTUP as an unreadable watcher and lands the unit in `systemctl --user
+# --failed` on every reboot (measured 6/6 boots, 2026-10-11).  The timer activates the
+# service on its own schedule through the implicit Unit= (a `Triggers=` link), which
+# needs no dependency clause.
 
 [Timer]
 # HOURLY.  The checker's own bound decides when a recorded run counts as STALE: the
