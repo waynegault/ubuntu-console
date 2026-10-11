@@ -248,3 +248,108 @@ setup() {
     sleep 0.3
     [ ! -e "$OC_AGENT_USE_MARKER" ]
 }
+
+# ── scripts/load-vault-env.sh — the Windows env-bridge refresh guard ─────────
+#
+# The bridge crosses the WSL/Windows boundary and starts pwsh.exe: 1.7-2.1 s per
+# call, measured 2026-10-11.  It ran on EVERY interactive shell — the guard was "is
+# the helper present", never "is the result stale" — and was the largest single
+# contributor to shell startup (`bash -lic true`: 3.0-6.4 s with it, 0.55-0.63 s with
+# the vault load skipped).  v7 added the TTL guard these cases pin.
+
+# vault_layout — a sandbox HOME so the loader's own $HOME paths (the bridge helper,
+# the bridge file and the candidate vault files) all resolve inside the test.
+vault_layout() {
+    V_HOME="$BATS_TEST_TMPDIR/vault-home"
+    V_BIN="$V_HOME/.local/bin"
+    V_LOG="$BATS_TEST_TMPDIR/vault-bridge-calls.log"
+    V_BRIDGE="$V_HOME/.openclaw/.env.bridge"
+    V_LOADER="$REPO_ROOT/scripts/load-vault-env.sh"
+    mkdir -p "$V_BIN" "$V_HOME/.openclaw/credentials/vault"
+    : > "$V_LOG"
+    export V_LOG   # the stub bridge is a child process: it must see the log path
+    # The bridge as the loader calls it: bash <script> <out> <names...>.
+    printf '%s\n' '#!/usr/bin/env bash' \
+        'printf "%s\n" "$*" >> "${V_LOG:?}"' \
+        'printf "%s\n" "OPENAI_API_KEY=stub" > "$1"' \
+        'exit 0' > "$V_BIN/import-windows-env.sh"
+    chmod +x "$V_BIN/import-windows-env.sh"
+    # One candidate file, so the loader gets past its "nothing to read" early return.
+    printf '%s\n' 'OPENAI_API_KEY=stub' > "$V_HOME/.openclaw/credentials/vault/vault.env"
+    V_PY="$REPO_ROOT/.venv/bin/python3"
+    [[ -x "$V_PY" ]] || V_PY="$(command -v python3)"
+    export V_PY
+}
+
+# vault_run <TAC_VAULT_BRIDGE_TTL> [extra env assignments...]
+vault_run() {
+    local ttl="$1"
+    shift
+    run env HOME="$V_HOME" TMPDIR="$BATS_TEST_TMPDIR" TAC_PYTHON="$V_PY" \
+        TAC_VAULT_BRIDGE_TTL="$ttl" "$@" \
+        bash -c 'source "$1"' _ "$V_LOADER"
+}
+
+@test "vault bridge: a MISSING bridge file refreshes it (no result to trust)" {
+    # The control the TTL guard must not defeat: with nothing on disk there is no
+    # freshness to honour, so the bridge must run.
+    vault_layout
+    rm -f "$V_BRIDGE"
+    vault_run 300
+    [[ "$status" -eq 0 ]]
+    [[ "$(wc -l < "$V_LOG")" -eq 1 ]]
+    [[ -f "$V_BRIDGE" ]]
+}
+
+@test "vault bridge: control — a bridge file younger than the TTL is NOT refreshed" {
+    # Catches the live defect: pwsh.exe (1.7-2.1 s) started on every interactive
+    # shell because nothing ever asked whether the bridge file was stale.
+    vault_layout
+    printf '%s\n' 'OPENAI_API_KEY=fresh' > "$V_BRIDGE"
+    vault_run 300
+    [[ "$status" -eq 0 ]]
+    [[ ! -s "$V_LOG" ]]
+}
+
+@test "vault bridge: a bridge file OLDER than the TTL IS refreshed" {
+    # Catches the opposite failure: a TTL that never expires, so a rotated Windows
+    # credential is never picked up again.
+    vault_layout
+    printf '%s\n' 'OPENAI_API_KEY=stale' > "$V_BRIDGE"
+    touch -d '2 hours ago' "$V_BRIDGE"
+    vault_run 300
+    [[ "$status" -eq 0 ]]
+    [[ "$(wc -l < "$V_LOG")" -eq 1 ]]
+}
+
+@test "vault bridge: a bridge file dated in the FUTURE is refreshed (two-sided)" {
+    # Catches a ONE-sided `(( age < TTL ))`: a future mtime makes the age negative,
+    # which reads as fresh and would skip the refresh until the clock caught up —
+    # the same class of defect this file exists to pin.
+    vault_layout
+    printf '%s\n' 'OPENAI_API_KEY=future' > "$V_BRIDGE"
+    touch -d '+1 hour' "$V_BRIDGE"
+    vault_run 300
+    [[ "$status" -eq 0 ]]
+    [[ "$(wc -l < "$V_LOG")" -eq 1 ]]
+}
+
+@test "vault bridge: TTL=0 forces a refresh on every shell (escape hatch)" {
+    # The behaviour before v7, kept reachable deliberately: anyone who needs the
+    # bridge regenerated per shell sets TAC_VAULT_BRIDGE_TTL=0.
+    vault_layout
+    printf '%s\n' 'OPENAI_API_KEY=fresh' > "$V_BRIDGE"
+    vault_run 0
+    [[ "$status" -eq 0 ]]
+    [[ "$(wc -l < "$V_LOG")" -eq 1 ]]
+}
+
+@test "vault bridge: TAC_VAULT_REFRESH_FROM_WINDOWS=0 still skips the bridge" {
+    # The pre-existing switch must keep working — it is the documented way to avoid
+    # the Windows call entirely.
+    vault_layout
+    rm -f "$V_BRIDGE"
+    vault_run 300 TAC_VAULT_REFRESH_FROM_WINDOWS=0
+    [[ "$status" -eq 0 ]]
+    [[ ! -s "$V_LOG" ]]
+}
