@@ -375,3 +375,76 @@ vault_run() {
     [[ "$status" -eq 0 ]]
     [[ "$(wc -l < "$V_LOG")" -eq 1 ]]
 }
+
+# slow_bridge <seconds> — replace the stub with one that takes measurable time, so
+# "did the shell wait for it?" is answerable.  It logs only AFTER the sleep, so the
+# log is also the "the refresh completed" signal.
+slow_bridge() {
+    printf '%s\n' '#!/usr/bin/env bash' "sleep $1" \
+        'printf "%s\n" "$*" >> "${V_LOG:?}"' \
+        'printf "%s\n" "OPENAI_API_KEY=stub" > "$1"' > "$V_BIN/import-windows-env.sh"
+    chmod +x "$V_BIN/import-windows-env.sh"
+}
+
+# vault_elapsed <ttl> [extra env...] — source the loader and print the seconds it took.
+vault_elapsed() {
+    local ttl="$1"
+    shift
+    local s e
+    s="$(date +%s.%N)"
+    env HOME="$V_HOME" TMPDIR="$BATS_TEST_TMPDIR" TAC_PYTHON="$V_PY" \
+        TAC_VAULT_BRIDGE_TTL="$ttl" "$@" \
+        bash -c 'source "$1"' _ "$V_LOADER" >/dev/null 2>&1
+    e="$(date +%s.%N)"
+    printf '%s' "$(echo "$e - $s" | bc)"
+}
+
+@test "vault bridge: the refresh is FORKED — the shell does not wait for pwsh" {
+    # Catches a regression to the blocking refresh: with a stub that sleeps 2 s, a
+    # BLOCKING loader takes >= 2 s, so "the shell returned in under a second" is
+    # exactly the property the fork buys (~1.7-2.1 s idle, 3.5-9.8 s at load 22-25).
+    vault_layout
+    slow_bridge 2
+    rm -f "$V_BRIDGE"
+    local el
+    el="$(vault_elapsed 0)"
+    [ "$(echo "$el < 1.0" | bc)" = "1" ]
+    # ...and the forked refresh still COMPLETES: poll for the stub's log line.
+    local i=0
+    while [[ ! -s "$V_LOG" && $i -lt 60 ]]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    [[ -s "$V_LOG" ]]
+}
+
+@test "vault bridge: the forked spawn is TRACKED (__tac_track_bg_job), not bare" {
+    # Catches an untracked fork: the START job-control notice is printed at fork
+    # time, and __tac_track_bg_job is what the profile relies on to disown it so no
+    # "[n] Done <command>" reaches the dashboard render (measured 2026-09-22).
+    vault_layout
+    printf '%s\n' '#!/usr/bin/env bash' 'sleep 1' > "$V_BIN/import-windows-env.sh"
+    chmod +x "$V_BIN/import-windows-env.sh"
+    rm -f "$V_BRIDGE"
+    export V_TRACK_LOG="$BATS_TEST_TMPDIR/track.log"
+    : > "$V_TRACK_LOG"
+    __tac_track_bg_job() { printf '%s\n' "$1" >> "${V_TRACK_LOG:?}"; }
+    export -f __tac_track_bg_job
+    vault_run 0
+    [[ "$status" -eq 0 ]]
+    [[ "$(wc -l < "$V_TRACK_LOG")" -eq 1 ]]
+    [[ "$(cat "$V_TRACK_LOG")" =~ ^[0-9]+$ ]]
+}
+
+@test "vault bridge: control — TAC_VAULT_REFRESH_SYNC=1 waits for the refresh" {
+    # The other half of the A/B: the same 2 s stub, but the documented escape hatch
+    # for a caller that must have the new values in ITS OWN shell.  Without this
+    # case, a loader that forked unconditionally would pass the case above.
+    vault_layout
+    slow_bridge 2
+    rm -f "$V_BRIDGE"
+    local el
+    el="$(vault_elapsed 0 TAC_VAULT_REFRESH_SYNC=1)"
+    [ "$(echo "$el >= 2.0" | bc)" = "1" ]
+    [[ -s "$V_LOG" ]]
+}

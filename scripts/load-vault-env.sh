@@ -3,7 +3,32 @@
 # load-vault-env — Optional Windows-backed vault env loader
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-10-11): the Windows env bridge is FORKED, so no shell blocks on
+#   pwsh.exe.  The shell pays the fork (~0.05-0.19 s) instead of the refresh
+#   (1.7-2.1 s idle; 3.5-9.8 s at load 22-25) and uses the bridge it already has.
+#
+#   ROTATION SEMANTICS, explicitly: the shell that trips the TTL gets the OLD
+#   values and the refresh lands behind it, so a credential rotated on the Windows
+#   side is visible to the NEXT shell to start (typically ~2 s later), not to the
+#   one that triggered the refresh.  Worst case is bounded by the TTL: a value
+#   changed just after a refresh waits up to TAC_VAULT_BRIDGE_TTL (1500 s) for the
+#   next trigger.  `TAC_VAULT_REFRESH_SYNC=1` restores the blocking refresh for a
+#   caller that must have the new values in ITS OWN shell; `oc-refresh-keys`
+#   remains the on-demand path.
+#
+#   The staleness risk is low on the evidence: two consecutive refreshes emitted
+#   BYTE-IDENTICAL values (sha256 8a2fcb5eb037f993 both times, 2026-10-11), and the
+#   emitted set is three long-lived tokens, so the fork's one-refresh lag is not a
+#   window in which the values are likely to have changed.
+#
+#   SHORT-SHELL CAVEAT: the spawn is tracked with __tac_track_bg_job, whose pid the
+#   profile's EXIT trap kills — so a shell that exits inside the refresh window
+#   cancels it, and the next shell simply tries again (the TTL is still expired;
+#   nothing is corrupted, and the old file is untouched until the writer rewrites
+#   it).  This is the documented cost of not printing a job-control notice over the
+#   dashboard, which is what the tracking buys (measured 2026-09-22: the START
+#   notice is printed at fork time and a script file cannot see it).
 #   v8 (2026-10-11): default TTL raised 300 -> 1500 s, after measuring every cheaper
 #   alternative and finding none that removes the block.  Measured at load 4-8:
 #   fetching ONE name costs 5.6 s against 6.5 s for all seven (one pwsh.exe start
@@ -90,15 +115,18 @@ _lve_cleanup() {
 # TAC_VAULT_BRIDGE_TTL seconds (default 1500; 0 forces a refresh on every shell, and
 # TAC_VAULT_REFRESH_FROM_WINDOWS=0 still skips the bridge entirely).
 #
-# ASYNCHRONOUS REFRESH — measured, NOT adopted.  Backgrounding the bridge makes the
-# shell pay ~0.05-0.19 s (the fork) instead of the blocking 3.5-9.8 s, and the next
-# shell sees the update.  It was rejected because (i) it makes the CURRENT shell read
-# a file a background writer is rewriting, and the bridge writes it non-atomically,
-# so a shell that starts behind the writer can source a truncated bridge; (ii) the
-# alias BASH_COMMAND/`wait` semantics differ at exit, so the spawn would need the
-# __tac_track_bg_job treatment to avoid a job-control notice; and (iii) it changes
-# which shell sees a rotated credential, which is a behavioural decision, not a
-# saving.  The TTL keeps the reading and the writing in one ordered step.
+# ASYNCHRONOUS REFRESH (v9 — ADOPTED).  The bridge is forked, so no shell BLOCKS on
+# pwsh.exe: the shell pays the fork (~0.05-0.19 s measured) instead of the refresh
+# (1.7-2.1 s idle, 3.5-9.8 s at load 22-25), reads the bridge it already has, and a
+# LATER shell picks up the update.  It was held back in v8 on the grounds that a
+# concurrent reader could source a half-written bridge; that was REASONED, not
+# reproduced, and the measurement (2026-10-11, independent verification) refuted it:
+# sampling the real writer's output at microsecond resolution across a 12.8 s
+# refresh never observed an intermediate size — the file goes old -> new in under
+# one sampling interval, because the writer spends ~all of that time in pwsh BEFORE
+# it touches the file and only microseconds in the rewrite.  A kill could not be
+# timed into the window either.  So the fork is safe to adopt; see the spawn below
+# for the tracking requirement.
 #
 # The age test is TWO-SIDED, like every other freshness guard in this profile: a
 # NEGATIVE age (a future mtime, from a clock step or a writer that backdates) must
@@ -119,9 +147,26 @@ then
         if [[ -n "${TAC_VAULT_EXPORT_NAMES:-}" ]]
         then
             IFS=',' read -r -a _lve_names <<< "$TAC_VAULT_EXPORT_NAMES"
+        else
+            _lve_names=("${_lve_default_names[@]}")
+        fi
+        if [[ "${TAC_VAULT_REFRESH_SYNC:-0}" == "1" ]]
+        then
+            # The pre-v9 BLOCKING refresh, kept reachable for a caller that must have
+            # the new values in THIS shell (e.g. immediately after rotating a key).
             bash "$_lve_bridge_script" "$_lve_bridge_file" "${_lve_names[@]}" >/dev/null 2>&1 || true
         else
-            bash "$_lve_bridge_script" "$_lve_bridge_file" "${_lve_default_names[@]}" >/dev/null 2>&1 || true
+            # FORK it: this shell never blocks on pwsh.exe.  __tac_track_bg_job records
+            # the pid for the profile's EXIT trap AND disowns the job, so no "[n] Done
+            # <command>" notice is printed over the dashboard render (the START notice
+            # is emitted at fork time regardless, which is why the spawn must be tracked
+            # rather than left bare).  Called only when defined: in library mode
+            # (env.sh, non-interactive) it is absent and no notice is printed anyway.
+            { bash "$_lve_bridge_script" "$_lve_bridge_file" "${_lve_names[@]}" >/dev/null 2>&1 & } 2>/dev/null
+            if declare -f __tac_track_bg_job >/dev/null 2>&1
+            then
+                __tac_track_bg_job "$!"
+            fi
         fi
     fi
 fi
