@@ -75,3 +75,21 @@ DRIVE
     [[ "$output" != *"failed to load"* ]]
     [[ "$output" != *"missing sub-module"* ]]
 }
+
+@test "openclaw completions: exactly ONE source site in the repo (v16 de-duplication)" {
+    # Catches the duplication returning.  scripts/13-init.sh sourced the
+    # repo-versioned completion while ~/.bashrc sourced the CLI-generated one, so the
+    # same single `_openclaw_completion` function was parsed TWICE per interactive
+    # shell (~380 KB of bash for one completion set) and the later definition
+    # silently replaced the earlier one.  The defect IS the file structure — two load
+    # sites — so this asserts the structure; measured alongside it: a login shell now
+    # opens the generated copy once and the repo copy zero times, and the repo copy
+    # still loads (once) when the CLI-generated file is absent.
+    local sites=""
+    if ! sites="$(grep -rl 'completions/openclaw\.bash' \
+                    "$REPO_ROOT/scripts" "$REPO_ROOT/tactical-console.bashrc" 2>/dev/null)"
+    then
+        sites="none"
+    fi
+    [[ "$sites" == "$REPO_ROOT/scripts/13-init.sh" ]]
+}
