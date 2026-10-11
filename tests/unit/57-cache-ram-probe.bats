@@ -79,12 +79,19 @@ setup() {
     [[ -n "$LOAD_MAX" && -n "$LEDGER_MAX" && -n "$VRAM_MAX" ]] \
         || { echo "FAIL: a gate bound is not declared in $WATCH"; return 1; }
     # Gate 2 runs "$HEAVY" --status.  Point it at a stub that reads free, so the
-    # cases at the end vary ONLY gate 4.
+    # cases at the end vary ONLY gate 4.  The two extra stubs drive gate 2's OWN
+    # failure branch: one exits non-zero, one exits 0 with an unparseable line.
     mkdir -p "$SANDBOX/bin"
     printf '#!/usr/bin/env bash\nprintf "heavy-job: free (last holder: none)\\n"\n' \
         > "$SANDBOX/bin/heavy-job"
-    chmod +x "$SANDBOX/bin/heavy-job"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$SANDBOX/bin/heavy-bad"
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "heavy-job: maybe\n"' > "$SANDBOX/bin/heavy-garbage"
+    chmod +x "$SANDBOX/bin/heavy-job" "$SANDBOX/bin/heavy-bad" "$SANDBOX/bin/heavy-garbage"
     export HEAVY="$SANDBOX/bin/heavy-job"
+    # The interpreter the scratch layouts serve as their own .venv python.
+    W_PY="$REPO_ROOT/.venv/bin/python3"
+    [[ -x "$W_PY" ]] || W_PY="$(command -v python3)"
+    export W_PY
 
     # shellcheck source=/dev/null
     source "$SANDBOX/fns.sh"
@@ -372,4 +379,200 @@ watch_run() {
     grep -q -- "--out $W_OUT" "$W_LAUNCHES"
     grep -q -- 'cache-ram-probe.sh' "$W_LAUNCHES"
     [[ -n "$(ls "$W_OUT"/probe-*.log 2>/dev/null)" ]]
+}
+
+# ── gate 2's own failure branch (the warn fallback, v3 of the watcher) ────────
+#
+# PREFIX CAVEAT: gate_ok is extracted from cache-ram-probe-WATCH.sh, but the `warn`
+# it calls comes from the PROBE's extraction earlier in fns.sh, so the emitted line
+# reads "cache-ram-probe: …" where the watcher's own helper would say
+# "cache-ram-probe-watch: …".  The two helpers share the message body, so these
+# cases assert the CONTENT (the prefix is the only difference and asserting it
+# would pin the harness rather than the behaviour).
+
+@test "vram gate: an unreadable heavy-job --status FAILS CLOSED and says why" {
+    # Catches: gate 2 OPENING when the lock cannot be read (the CLI exited non-zero)
+    # — hj_ok must stay 0, the box must be treated as NOT free, and the reason must
+    # be emitted: a silent version of this is how a run starts beside another job.
+    gate_stubs
+    nvidia-smi() { printf '100\n'; }
+    export HEAVY="$SANDBOX/bin/heavy-bad"
+    run gate_ok
+    [[ "$status" -ne 0 ]]
+    [[ "$output" == *"hj_ok=0"* ]]
+    [[ "$output" == *"WARNING: heavy-job --status rc=1"* ]]
+    [[ "$output" == *"treating the box as NOT free"* ]]
+    [[ "$output" == *"vram=100MiB vram_ok=1"* ]]   # gate 4 was fine; gate 2 closed it
+}
+
+@test "vram gate: an unparseable heavy-job --status line FAILS CLOSED" {
+    # Catches: a garbage status line (rc 0) matching the "heavy-job: free" PREFIX
+    # test — the prefix match must not fire, so hj_ok stays 0 with no warn (the warn
+    # is for an unreadable exit, not a readable-but-wrong line).
+    gate_stubs
+    nvidia-smi() { printf '100\n'; }
+    export HEAVY="$SANDBOX/bin/heavy-garbage"
+    run gate_ok
+    [[ "$status" -ne 0 ]]
+    [[ "$output" == *"hj_ok=0"* ]]
+    [[ "$output" == *"vram=100MiB vram_ok=1"* ]]
+}
+
+# ── the watcher's post-launch RESULT READ-BACK ───────────────────────────────
+#
+# The launch path was covered above with no result file, so the run ended in the
+# "wrote nothing" branch.  These two cases put a result JSON in the out dir and
+# drive the read-back itself: the reader that prints row/order/drift and the
+# per-position lines, and the missing-interpreter guard beside it.
+
+# probe_result_fixture <path> — a minimal well-formed result, one complete position
+# (which the reader formats) and one incomplete (which it labels INCOMPLETE).
+probe_result_fixture() {
+    printf '%s' \
+        '{"row":21,"order":"BABA","interleaved":true,"drift_pct":12.5,' \
+        '"drift_warn_pct":25,"positions":[' \
+        '{"pos":1,"arm":"A","r1":{"server_decode_tps":20.5,"ttft_ms":900,"server_prompt_ms":100},' \
+        '"r3":{"server_decode_tps":21.0,"ttft_ms":150,"server_prompt_ms":20}},' \
+        '{"pos":2,"arm":"B","r1":null,"r3":null}],' \
+        '"delta":{"decode_cold":1.0,"decode_reuse":0.5,"ttft_reuse":-10}}' \
+        > "$1"
+}
+
+@test "watch caller: the post-launch read-back parses the probe's result JSON" {
+    # Catches: the read-back being skipped or mis-wired — the watcher would report a
+    # run whose figures it never read, or claim "the probe wrote nothing" while a
+    # result file sits in the out dir.
+    watch_layout
+    probe_result_fixture "$W_OUT/result-STUB.json"
+    # $PY is "$REPO/.venv/bin/python": give the scratch layout one that really runs.
+    mkdir -p "$W_ROOT/.venv/bin"
+    printf '%s\n' '#!/usr/bin/env bash' "exec $W_PY \"\$@\"" > "$W_ROOT/.venv/bin/python"
+    chmod +x "$W_ROOT/.venv/bin/python"
+    watch_run 100
+    [[ "$status" -eq 0 ]]
+    local wlog
+    wlog="$(ls "$W_OUT"/watch-*.log)"
+    grep -q 'result read back from' "$wlog"
+    grep -q 'row=21 order=BABA interleaved=True drift_pct=12.5 bound=25' "$wlog"
+    grep -q 'pos1 ARM A: decode_cold=20.50 decode_reuse=21.00 ttft_reuse=150 ms' "$wlog"
+    grep -q 'pos2 ARM B: INCOMPLETE' "$wlog"
+    grep -q 'delta={' "$wlog"
+    [[ "$output" != *"wrote nothing"* ]]
+}
+
+@test "watch caller: a missing .venv python makes the read-back FAIL LOUDLY" {
+    # Catches: a missing interpreter silently ending the run — the guard must log
+    # FATAL and exit 1 rather than report a clean finish over an unread result.
+    watch_layout
+    probe_result_fixture "$W_OUT/result-STUB.json"
+    # no $W_ROOT/.venv/bin/python in this layout
+    watch_run 100
+    [[ "$status" -eq 1 ]]
+    local wlog
+    wlog="$(ls "$W_OUT"/watch-*.log)"
+    grep -q 'FATAL: .*missing' "$wlog"
+    grep -q 'install the venv' "$wlog"
+    grep -q 'watcher done (rc=1)' "$wlog"
+    [[ "$output" != *"wrote nothing"* ]]
+}
+
+# ── the PROBE's post-suspend free-VRAM wait (v3: exhaustion aborts) ──────────
+#
+# The watcher gates the LAUNCH; this is the probe's own wait AFTER it has taken the
+# suspend hold — and it used to END after 45 polls and start the measurement on
+# whatever free VRAM it found.  That is the fall-through that launched a run onto a
+# card holding 3.6 GiB (2026-10-11).
+#
+# HERMETIC: the shipped cache-ram-probe.sh and the shipped bin/_tac-bin-lib.sh run
+# UNMODIFIED from a scratch repo layout; only their collaborators are supplied — a
+# stub env.sh (the three names the probe reads from it), a sandbox registry with one
+# row, a dummy model file, and PATH stubs.  nvidia-smi decides the reading (the
+# case picks it), systemctl is a no-op, and sleep is a no-op so the 45x2s wait does
+# not cost 90 s.  The server binary the probe would spawn is a RECORDER that exits
+# at once, so "a server was started" is observable and no real server, GPU, lock,
+# /dev/shm ledger or registry is touched.
+
+# probe_layout — build the scratch repo layout.  Sets P_SCRIPT, P_OUT, P_REGISTRY,
+# P_MODELS, P_SERVER_LOG, P_SUSPEND, P_STUB, P_WRAPPER (the served python path).
+probe_layout() {
+    P_ROOT="$SANDBOX/probe-root"
+    P_OUT="$SANDBOX/probe-out"
+    P_STUB="$SANDBOX/probe-stubbin"
+    P_TMP="$SANDBOX/probe-tmp"
+    P_LOGS="$SANDBOX/probe-logs"
+    P_SCRIPT="$P_ROOT/scripts/cache-ram-probe.sh"
+    P_REGISTRY="$P_ROOT/models.conf"
+    P_MODELS="$P_ROOT/models"
+    P_SERVER_LOG="$P_LOGS/server-launches.log"
+    P_SERVER_BIN="$P_ROOT/bin/llama-server-recorder"
+    P_SUSPEND="$P_ROOT/llama-watchdog-cuda.suspend"
+    P_WRAPPER="$P_ROOT/.venv/bin/python"
+    mkdir -p "$P_ROOT/scripts" "$P_ROOT/bin" "$P_MODELS" "$P_OUT" "$P_STUB" "$P_TMP" "$P_LOGS"
+    # The shipped script and the shipped suspend/free-VRAM library, byte for byte.
+    cp "$PROBE" "$P_SCRIPT"
+    cp "$REPO_ROOT/bin/_tac-bin-lib.sh" "$P_ROOT/bin/_tac-bin-lib.sh"
+    : > "$P_SERVER_LOG"
+    touch "$P_MODELS/dummy.gguf"
+    # A 39-field row (the probe indexes up to F[38]).  Only the columns it reads
+    # carry values: name, file, quant_cache, ngl, ctx, threads, batch, ubatch,
+    # parallel, flash_attn — the rest stay empty so no spec args are appended.
+    {
+        printf '%s' '21|probe-test|dummy.gguf||q8_0/q8_0||99|4096|8|2048|512|1||||on'
+        local _pad
+        for (( _pad = 16; _pad < 39; _pad++ )); do printf '%s' '|'; done
+        printf '\n'
+    } > "$P_REGISTRY"
+    # nvidia-smi prints whatever W_GPU holds (empty by default => no reading at all).
+    printf '%s\n' '#!/usr/bin/env bash' '[[ -n "${W_GPU:-}" ]] && printf "%s\n" "$W_GPU"' \
+        'exit 0' > "$P_STUB/nvidia-smi"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$P_STUB/systemctl"
+    # swallow-free no-op: the wait's 45 x 2 s must not cost 90 s of test time.
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$P_STUB/sleep"
+    chmod +x "$P_STUB/nvidia-smi" "$P_STUB/systemctl" "$P_STUB/sleep"
+    # The server the probe would spawn: records its argv, exits at once.
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >> "${W_SERVER_LOG:?}"' \
+        'exit 0' > "$P_SERVER_BIN"
+    chmod +x "$P_SERVER_BIN"
+    # A stub env.sh: only the three names the probe reads from it.
+    printf '%s\n' '#!/usr/bin/env bash' \
+        'LLM_REGISTRY="$PROBE_REGISTRY"' \
+        'LLAMA_MODEL_DIR="$PROBE_MODELS"' \
+        "TAC_PYTHON='$W_PY'" > "$P_ROOT/env.sh"
+}
+
+# probe_run <nvidia-smi reading, e.g. "4000, 3900" or "">
+probe_run() {
+    run env PATH="$P_STUB:$PATH" TMPDIR="$P_TMP" \
+        W_GPU="$1" W_SERVER_LOG="$P_SERVER_LOG" \
+        PROBE_REGISTRY="$P_REGISTRY" PROBE_MODELS="$P_MODELS" \
+        LLAMA_SERVER_BIN="$P_SERVER_BIN" \
+        LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$P_SUSPEND" \
+        LLAMA_CUDA_LANE_UNIT=probe-test-lane.service \
+        bash "$P_SCRIPT" --row 21 --port 18099 --out "$P_OUT"
+}
+
+@test "probe free-VRAM wait: a card that never frees ABORTS before starting a server" {
+    # Catches: the fall-through that ENDED the wait after 45 polls and started the
+    # measurement on whatever free VRAM it found — the shape that launched a run
+    # onto a card holding 3.6 GiB.  100 MiB free is never > 3000.
+    probe_layout
+    probe_run "4000, 3900"
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"card never freed in 45 polls"* ]]
+    [[ "$output" == *"last free: 100 MiB"* ]]
+    [[ ! -s "$P_SERVER_LOG" ]]                        # no server was ever started
+    [[ "$output" != *"arm sequence this run"* ]]      # never reached the arm loop
+    [[ -z "$(ls "$P_OUT"/result-*.json 2>/dev/null)" ]]
+}
+
+@test "probe free-VRAM wait: an unreadable reading ABORTS too (fail closed)" {
+    # Catches: an empty nvidia-smi reading being treated as "free enough" — the old
+    # `|| break` left the loop at once with an unknown card and started the run.
+    probe_layout
+    probe_run ""
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"cannot read free VRAM"* ]]
+    [[ "$output" == *"<empty>"* ]]
+    [[ ! -s "$P_SERVER_LOG" ]]
+    [[ "$output" != *"arm sequence this run"* ]]
 }
