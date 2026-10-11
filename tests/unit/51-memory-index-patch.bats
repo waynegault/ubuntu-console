@@ -29,6 +29,7 @@ setup() {
     REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
     PATCHER="$REPO_ROOT/bin/qwen-memory-index-patch.sh"
     HARNESS="$REPO_ROOT/tests/helpers/memory-index-assemble-harness.mjs"
+    TITLE_HARNESS="$REPO_ROOT/tests/helpers/memory-index-titlecap-harness.mjs"
     FIXTURE="$REPO_ROOT/tests/fixtures/memory-index-v025-chunk.js"
     WORK="$BATS_TEST_TMPDIR"
     CHUNKS="$WORK/chunks"
@@ -49,6 +50,8 @@ setup() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"truncator: upstream"* ]]
     [[ "$output" == *"bytecap: stock"* ]]
+    [[ "$output" == *"titlecap: stock"* ]]
+    [[ "$output" == *"linecap: stock"* ]]
 }
 
 @test "index patch: hunk 3 applies to a 0.25.0 fixture, backs it up, and --check then reads ok" {
@@ -61,6 +64,9 @@ setup() {
     cmp -s "$PATCHED.orig" "$FIXTURE"
     # The cap is raised and the loss is NAMED (and the stock sentence survives as a prefix).
     grep -qF 'var MAX_INDEX_BYTES=256000;' "$PATCHED"
+    # Hunk 5 raises the LINE cap, and hunk 4 leaves its marker on the title budget.
+    grep -qF 'var MAX_INDEX_LINES=400;' "$PATCHED"
+    grep -qF 'LOCAL PATCH 2026-10-11 (qwen-memory-index-titlecap)' "$PATCHED"
     grep -qF 'INCOMPLETE: wrote' "$PATCHED"
     grep -qF '> WARNING: MEMORY.md is too large; only part of it was written.' "$PATCHED"
     # hunk 1 must NOT have run: an upstream-shaped copy keeps truncateIndexField, gains no
@@ -72,6 +78,8 @@ setup() {
     run env QWEN_INDEX_PATCH_CHUNK_DIRS="$CHUNKS" bash "$PATCHER" --check
     [ "$status" -eq 0 ]
     [[ "$output" == *"bytecap: applied"* ]]
+    [[ "$output" == *"titlecap: applied"* ]]
+    [[ "$output" == *"linecap: applied"* ]]
 }
 
 @test "index patch: the patched assembleIndex passes the behavioural harness" {
@@ -83,6 +91,17 @@ setup() {
     [[ "$output" == *"(a) ~30 KB index returned whole"* ]]
     [[ "$output" == *"(b1) byte cap"* ]]
     [[ "$output" == *"(c) over-long line"* ]]
+    [[ "$output" == *"all assertions passed"* ]]
+}
+
+@test "index patch: the patched docIndexLine passes the title-budget harness" {
+    command -v node >/dev/null || skip "node is required to run the harness"
+    run env QWEN_INDEX_PATCH_CHUNK_DIRS="$CHUNKS" bash "$PATCHER"
+    [ "$status" -eq 0 ]
+    run node "$TITLE_HARNESS" "$PATCHED"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"(1) long title + long path"* ]]
+    [[ "$output" == *"(3) title budget follows the path"* ]]
     [[ "$output" == *"all assertions passed"* ]]
 }
 

@@ -2,7 +2,7 @@
 # qwen-memory-index-patch.sh — re-apply the local fixes to the Qwen CLI's memory-index
 # builder, after a CLI/companion update replaces the bundled chunk.
 #
-# THREE HUNKS (each reported separately by --check; each re-applied after an update):
+# FIVE HUNKS (each reported separately by --check; each re-applied after an update):
 #
 #   1. truncator (LOCAL PATCH 2026-10-01 (qwen-memory-index-patch))
 #      The indexer builds every MEMORY.md line as
@@ -47,6 +47,30 @@
 #      (roughly 64k tokens at ~4 bytes/token) is loaded into every session — that is why this
 #      is a backstop rather than a target, and why the marker matters when it is hit.
 #
+#   4. titlecap (LOCAL PATCH 2026-10-11 (qwen-memory-index-titlecap))
+#      docIndexLine budgets the HOOK around the link but never the TITLE.  The title is only
+#      capped by sanitizeIndexField at MAX_INDEX_FIELD_CHARS = 120, so a long `name:` beside a
+#      long relative path emits `- [title](path)` with NO hook and a length of up to ~189 —
+#      MAX_INDEX_LINE_CHARS = 150 is not enforced on the line at all.  Measured 2026-10-11 on
+#      real stores: every over-cap line was this shape, and it is the branch that skips the
+#      hook, so the entries carrying a summary are systematically the short-titled ones.
+#      FIX: budget the title from the PATH exactly as the hook is budgeted from the link —
+#      truncateIndexField(title, max(8, MAX_INDEX_LINE_CHARS - 6 - target.length)) — so link2
+#      always fits, room is >= MIN_INDEX_HOOK_CHARS whenever any room exists (the hook then
+#      appears instead of being skipped), and the line cannot overshoot the cap.  The floor of
+#      8 and the principle both follow hunk 1: a path long enough to leave less than 8 chars
+#      for the title would otherwise overflow — and there the LINK wins, as it must, because a
+#      resolvable long link beats a short dead one.
+#      Filed upstream 2026-10-11 as QwenLM/qwen-code#13910.
+#
+#   5. linecap (LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap))
+#      MAX_INDEX_LINES = 200 is a HARD cap and it is not the note count a real project store
+#      reaches: measured 2026-10-11, a 245-note store produced 200 index lines and 45 notes
+#      that no index entry points at (the hunk-3 marker named them).  Shortening lines does not
+#      help — the cap counts lines.  FIX: RAISE it to 400.  The byte cap (hunk 3, 256000) still
+#      bounds a pathological store, so this trades a per-turn cost of at most ~60 KB for the
+#      reachability of 45+ authored notes.
+#
 # WHICH COPY MATTERS
 #   Every shipped copy is patched (this script globs the CLI, the WSL and Windows IDE
 #   companions, and the npm update-cache), because which copy enforces a session depends on
@@ -78,7 +102,17 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-10-11): hunks 4 (titlecap) and 5 (linecap).  docIndexLine budgeted the hook around
+#   the link but never the title, so MAX_INDEX_LINE_CHARS = 150 was unenforced on the line (a
+#   long title plus a long path emitted a no-hook line of up to ~189); the title is now
+#   budgeted from the path, in BOTH shapes (the 0.24.x pretty-printed docIndexLine and the
+#   0.25.0 minified one).  MAX_INDEX_LINES is raised 200 -> 400, because a real 245-note store
+#   shed 45 entries under the old cap and no amount of line shortening changes a line count.
+#   The fixture gained the real 0.25.0 docIndexLine (plus sanitizeIndexField and
+#   encodeIndexPathTarget) so both new hunks are exercised without a foreign bundle, and a new
+#   harness (tests/helpers/memory-index-titlecap-harness.mjs) proves the title budget
+#   behaviourally.  Upstream: QwenLM/qwen-code#13910.
 #   v3 (2026-10-06): hunk 3 is now DERIVED for 0.25.0, which REWROTE assembleIndex.  Its body
 #   no longer cuts the joined text at a newline before the byte cap; it keeps a `kept` Set of
 #   entry indexes (short lines first, then longer ones that still fit) and re-joins them IN
@@ -106,6 +140,8 @@ set -euo pipefail
 
 MARKER_TRUNC="LOCAL PATCH 2026-10-01 (qwen-memory-index-patch)"
 MARKER_BYTES="LOCAL PATCH 2026-10-01 (qwen-memory-index-bytecap)"
+MARKER_TITLE="LOCAL PATCH 2026-10-11 (qwen-memory-index-titlecap)"
+MARKER_LINES="LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap)"
 
 # Stock anchors used only for state detection in --check.
 PATHCAP_STOCK_SPACED='const chars = [...value].slice(0, MAX_INDEX_FIELD_CHARS);'
@@ -113,6 +149,11 @@ PATHCAP_STOCK_MIN='const chars=[...value].slice(0,MAX_INDEX_FIELD_CHARS);'
 BYTES_STOCK_SPACED='var MAX_INDEX_BYTES = 25e3;'
 BYTES_STOCK_MIN='var MAX_INDEX_BYTES=25e3;'
 FUNC_TRUNC_STOCK='function truncateIndexLine(text)'
+# hunks 4-5 (measured 2026-10-11 on the 0.24.4 linuxbrew CLI and the 0.25.0 companions).
+TITLE_STOCK_SPACED='const title = sanitizeIndexField(doc.title) || doc.type;'
+TITLE_STOCK_MIN='const title=sanitizeIndexField(doc.title)||doc.type;'
+LINES_STOCK_SPACED='var MAX_INDEX_LINES = 200;'
+LINES_STOCK_MIN='var MAX_INDEX_LINES=200;'
 # 0.25.0 REWROTE the builder (measured 2026-10-05 on the IDE companion's
 # chunk-QJ3UTSP5.js): `truncateIndexLine` is GONE, `docIndexLine` now budgets the
 # description AROUND the link (`room = MAX_INDEX_LINE_CHARS - link.length - suffix.length -
@@ -179,17 +220,29 @@ for f in "${files[@]}"; do
     if grep -qF "$MARKER_BYTES" "$f"; then st_bytes="applied"
     elif grep -qF "$BYTES_STOCK_SPACED" "$f" || grep -qF "$BYTES_STOCK_MIN" "$f"; then st_bytes="stock"; fi
 
+    st_title="UNKNOWN"
+    if grep -qF "$MARKER_TITLE" "$f"; then st_title="applied"
+    elif grep -qF "$TITLE_STOCK_SPACED" "$f" || grep -qF "$TITLE_STOCK_MIN" "$f"; then st_title="stock"; fi
+
+    st_lines="UNKNOWN"
+    if grep -qF "$MARKER_LINES" "$f"; then st_lines="applied"
+    elif grep -qF "$LINES_STOCK_SPACED" "$f" || grep -qF "$LINES_STOCK_MIN" "$f"; then st_lines="stock"; fi
+
     # `upstream` counts as satisfied: on 0.25.0 the builder already does what hunks 1-2 asked
     # for, so there is nothing to apply and reporting it as missing would be false.
+    states="truncator: $st_trunc; pathcap: $st_path; bytecap: $st_bytes"
+    states="$states; titlecap: $st_title; linecap: $st_lines"
     if [[ "$st_trunc" == "applied" || "$st_trunc" == "upstream" ]] \
        && [[ "$st_path" == "applied" ]] \
-       && [[ "$st_bytes" == "applied" ]]; then
-        echo "  ok       $name (truncator: $st_trunc; pathcap: $st_path; bytecap: $st_bytes)"
+       && [[ "$st_bytes" == "applied" ]] \
+       && [[ "$st_title" == "applied" ]] \
+       && [[ "$st_lines" == "applied" ]]; then
+        echo "  ok       $name ($states)"
         continue
     fi
 
     if (( check_only )); then
-        echo "  NEEDS    $name (truncator: $st_trunc; pathcap: $st_path; bytecap: $st_bytes)" >&2
+        echo "  NEEDS    $name ($states)" >&2
         rc=1
         continue
     fi
@@ -202,12 +255,15 @@ for f in "${files[@]}"; do
 
     # Exact-match, per-copy all-or-nothing: every hunk this copy still needs must find its
     # anchor exactly once, or nothing is written.  Post-conditions then re-check the promises.
-    if ! PATCH_FILE="$f" PATCH_MARKER_TRUNC="$MARKER_TRUNC" PATCH_MARKER_BYTES="$MARKER_BYTES" python3 - <<'PY'
+    if ! PATCH_FILE="$f" PATCH_MARKER_TRUNC="$MARKER_TRUNC" PATCH_MARKER_BYTES="$MARKER_BYTES" \
+         PATCH_MARKER_TITLE="$MARKER_TITLE" PATCH_MARKER_LINES="$MARKER_LINES" python3 - <<'PY'
 import os, pathlib, re
 
 p = pathlib.Path(os.environ["PATCH_FILE"])
 marker_trunc = os.environ["PATCH_MARKER_TRUNC"]
 marker_bytes = os.environ["PATCH_MARKER_BYTES"]
+marker_title = os.environ["PATCH_MARKER_TITLE"]
+marker_lines = os.environ["PATCH_MARKER_LINES"]
 src = p.read_text(encoding="utf-8")
 
 # 0.25.0's builder already keeps the link, so hunks 1-2 are upstream-satisfied there.
@@ -446,6 +502,59 @@ NEW_ASSEMBLE_V025 = (
 __name(assembleIndex, "assembleIndex");'''
 )
 
+# --- hunk 4: budget the TITLE so the link always fits MAX_INDEX_LINE_CHARS (two shapes) ---
+# The stock docIndexLine caps the title only via sanitizeIndexField (MAX_INDEX_FIELD_CHARS
+# = 120) and budgets the DESCRIPTION around the link, never the title; a long title beside a
+# long path therefore emits a no-hook line longer than MAX_INDEX_LINE_CHARS (measured 2026-10-11:
+# every over-cap line on this box was that shape, up to 189 chars).  The replacement derives the
+# title limit from the path, so `- [title](path)` can never exceed the cap and `room` stays
+# >= MIN_INDEX_HOOK_CHARS whenever any room exists.
+TITLE_STOCK_SPACED = (
+    "function docIndexLine(doc) {\n"
+    "  const title = sanitizeIndexField(doc.title) || doc.type;\n"
+    "  const description = sanitizeIndexField(doc.description) || doc.type;\n"
+    "  return `- [${title}](${encodeIndexPathTarget(doc.relativePath)}) \\u2014 ${description}`;\n"
+    "}"
+)
+NEW_TITLE_SPACED = (
+    "/* LOCAL PATCH 2026-10-11 (qwen-memory-index-titlecap) */\n"
+    "function docIndexLine(doc) {\n"
+    "  const target = encodeIndexPathTarget(doc.relativePath);\n"
+    "  const titleLimit = Math.max(8, MAX_INDEX_LINE_CHARS - 6 - target.length);\n"
+    "  const titleRaw = sanitizeIndexField(doc.title) || doc.type;\n"
+    "  const titleHead = titleRaw.slice(0, titleLimit);\n"
+    "  const title = titleHead.length < titleRaw.length\n"
+    '    ? `${titleHead.slice(0, titleLimit - 1).replace(/\\s+\\S*$/, "").trimEnd()}\\u2026`\n'
+    "    : titleHead;\n"
+    "  const description = sanitizeIndexField(doc.description) || doc.type;\n"
+    "  return `- [${title}](${target}) \\u2014 ${description}`;\n"
+    "}"
+)
+TITLE_STOCK_MIN = (
+    "function docIndexLine(doc,others=[]){const title=sanitizeIndexField(doc.title)||doc.type;"
+    "const link2=`- [${title}](${encodeIndexPathTarget(doc.relativePath)})`;"
+)
+NEW_TITLE_MIN = (
+    "function docIndexLine(doc,others=[]){"
+    "/* LOCAL PATCH 2026-10-11 (qwen-memory-index-titlecap) */"
+    "const target=encodeIndexPathTarget(doc.relativePath);"
+    "const title=truncateIndexField(sanitizeIndexField(doc.title)||doc.type,"
+    "Math.max(8,MAX_INDEX_LINE_CHARS-6-target.length));"
+    "const link2=`- [${title}](${target})`;"
+)
+
+# --- hunk 5: raise MAX_INDEX_LINES so a real store is not truncated at 200 (two spellings) ---
+# The line cap counts LINES, so no amount of shortening an entry's text frees a slot: measured
+# 2026-10-11, a 245-note store produced 200 index lines and 45 notes that nothing pointed at.
+# 400 keeps the reachability of those notes; the hunk-3 byte cap (256000) is the backstop that
+# still bounds a pathological store (400 lines x ~150 chars is ~60 KB).
+LINES = {
+    "var MAX_INDEX_LINES = 200;":
+        "var MAX_INDEX_LINES = 400; /* LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap) */",
+    "var MAX_INDEX_LINES=200;":
+        "var MAX_INDEX_LINES=400;/* LOCAL PATCH 2026-10-11 (qwen-memory-index-linecap) */",
+}
+
 # --- apply, per-copy all-or-nothing (nothing is written unless every needed anchor matches) ---
 applied = []
 already = []
@@ -547,6 +656,44 @@ else:
     src = user_scan[0]
     applied.append("bytecap")
 
+# hunk 4 (titlecap)
+if marker_title in src:
+    already.append("titlecap")
+else:
+    t = None
+    for old, new in ((TITLE_STOCK_SPACED, NEW_TITLE_SPACED), (TITLE_STOCK_MIN, NEW_TITLE_MIN)):
+        if old not in src:
+            continue
+        if src.count(old) != 1:
+            raise SystemExit(
+                f"refusing to patch: docIndexLine title anchor occurs {src.count(old)} times (expected 1)"
+            )
+        src = src.replace(old, new)
+        t = new
+        break
+    if t is None:
+        raise SystemExit("refusing to patch: no known docIndexLine title anchor (UNKNOWN shape)")
+    applied.append("titlecap")
+
+# hunk 5 (linecap)
+if marker_lines in src:
+    already.append("linecap")
+else:
+    ln = None
+    for old, new in LINES.items():
+        if old not in src:
+            continue
+        if src.count(old) != 1:
+            raise SystemExit(
+                f"refusing to patch: MAX_INDEX_LINES anchor occurs {src.count(old)} times (expected 1)"
+            )
+        src = src.replace(old, new)
+        ln = new
+        break
+    if ln is None:
+        raise SystemExit("refusing to patch: no known MAX_INDEX_LINES declaration (UNKNOWN shape)")
+    applied.append("linecap")
+
 # Post-conditions: everything this patch promises must be present in the text about to be written.
 # The truncator marker and its definition are required ONLY where our hunk 1 ran: a 0.25.0-shaped
 # copy has no `truncateIndexLine` at all (upstream keeps the link itself), so demanding them there
@@ -572,6 +719,14 @@ if "DROPPED (" not in src:
     raise SystemExit("refusing to patch: the explicit drop marker is absent from the result")
 if "scanAllAutoMemoryTopicDocuments(projectRoot)" not in src or "scanAllUserAutoMemoryTopicDocuments()" not in src:
     raise SystemExit("refusing to patch: the uncapped index scan is not wired")
+if marker_title not in src:
+    raise SystemExit("refusing to patch: the title-cap marker is absent from the result")
+if marker_lines not in src:
+    raise SystemExit("refusing to patch: the line-cap marker is absent from the result")
+if "var MAX_INDEX_LINES = 200;" in src or "var MAX_INDEX_LINES=200;" in src:
+    raise SystemExit("refusing to patch: the stock MAX_INDEX_LINES declaration is still present")
+if src.count("function docIndexLine") != 1:
+    raise SystemExit("refusing to patch: the docIndexLine definition count is not 1")
 
 for label in applied:
     print(f"  patched  {label}")

@@ -48,12 +48,14 @@ function readDecl(name) {
   return Number(hits[0][1]);
 }
 
-// The contract the patch promises: the byte cap is RAISED, the other two caps are untouched.
+// The contract the patch promises: the byte cap is RAISED (256000), the LINE cap is RAISED
+// (400 — hunk 5, because the old 200 shed 45 of one real store's 245 notes), and the per-line
+// cap is untouched at 150.
 const CAP_LINE_CHARS = readDecl("MAX_INDEX_LINE_CHARS");
 const CAP_LINES = readDecl("MAX_INDEX_LINES");
 const CAP_BYTES = readDecl("MAX_INDEX_BYTES");
 assert.equal(CAP_LINE_CHARS, 150, "MAX_INDEX_LINE_CHARS must stay 150");
-assert.equal(CAP_LINES, 200, "MAX_INDEX_LINES must stay 200");
+assert.equal(CAP_LINES, 400, "MAX_INDEX_LINES must be the RAISED value 400 (hunk 5)");
 assert.equal(CAP_BYTES, 256000, "the byte cap must be the RAISED value 256000");
 
 const start = src.indexOf("function assembleIndex(lines)");
@@ -86,7 +88,7 @@ function report(name, detail) {
   console.log(`  PASS ${name}: ${detail}`);
 }
 
-report("(cap) byte cap raised", `MAX_INDEX_BYTES=${CAP_BYTES} (stock ${STOCK_BYTES}); line caps unchanged`);
+report("(cap) caps raised", `MAX_INDEX_BYTES=${CAP_BYTES} (stock ${STOCK_BYTES}); MAX_INDEX_LINES=${CAP_LINES}; line cap ${CAP_LINE_CHARS}`);
 
 // --- (a) a ~30 KB index is returned whole -----------------------------------
 {
