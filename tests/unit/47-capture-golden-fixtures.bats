@@ -79,3 +79,74 @@ SH
     [[ "$(cat "$root/out/help_h.meta")" == *"exit_code: 5"* ]] \
         || { echo "the meta does not record the stall's exit code"; return 1; }
 }
+
+# ── tools/sync-openclaw-completion.sh: ONE capture, TWO writes (v4) ───────────
+#
+# The tool wrote only the repo fallback while scripts/13-init.sh PREFERS the CLI's own
+# copy in $HOME/.openclaw/completions — which the CLI rewrites only on update, so the
+# preferred copy lagged.  Wayne's decision: refresh BOTH from the same capture.  The
+# CLI itself is stubbed here — the real `openclaw completion` takes minutes in plugin
+# teardown — and the stub COUNTS its invocations, so "exactly once" is measured
+# rather than inferred.
+
+# _completion_sandbox — sandbox repo root + sandbox HOME + a counting stub `openclaw`.
+# The tool derives REPO_ROOT from its own location and the preferred path from $HOME,
+# so both writes land in the sandbox and neither real copy is touched.
+_completion_sandbox() {
+    local root="$BATS_TEST_TMPDIR/comp-repo"
+    mkdir -p "$root/tools" "$BATS_TEST_TMPDIR/comp-home/.openclaw/completions" \
+             "$BATS_TEST_TMPDIR/comp-bin"
+    cp "$REPO_ROOT/tools/sync-openclaw-completion.sh" "$root/tools/sync-openclaw-completion.sh"
+    chmod +x "$root/tools/sync-openclaw-completion.sh"
+    cat > "$BATS_TEST_TMPDIR/comp-bin/openclaw" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_CALLS"
+printf '\n_openclaw_completion() {\n  COMPREPLY=( stub )\n}\ncomplete -F _openclaw_completion openclaw\n'
+STUB
+    chmod +x "$BATS_TEST_TMPDIR/comp-bin/openclaw"
+    printf '%s\n' "$root"
+}
+
+@test "sync-openclaw-completion: ONE capture writes BOTH copies, and a re-run is unchanged" {
+    # Catches: (i) a SECOND CLI invocation — that call spends minutes in plugin
+    # teardown, which is what the tool's timeout exists for, so capturing twice
+    # doubles both the cost and the risk; (ii) writing only the repo fallback while
+    # the loader prefers ~/.openclaw (the v3 defect); (iii) a re-run that rewrites
+    # instead of reporting Unchanged, per path.
+    local root home preferred repo
+    root="$(_completion_sandbox)"
+    home="$BATS_TEST_TMPDIR/comp-home"
+    preferred="$home/.openclaw/completions/openclaw.bash"
+    repo="$root/scripts/completions/openclaw.bash"
+    export STUB_CALLS="$BATS_TEST_TMPDIR/openclaw-calls"
+    : > "$STUB_CALLS"
+
+    run env HOME="$home" PATH="$BATS_TEST_TMPDIR/comp-bin:$PATH" "$root/tools/sync-openclaw-completion.sh"
+    [[ "$status" -eq 0 ]] || { echo "the tool failed: $output"; return 1; }
+
+    # (a) BOTH copies are written, each in the shape its path is supposed to carry.
+    [[ -s "$preferred" ]] || { echo "the PREFERRED copy was not written"; return 1; }
+    [[ -s "$repo" ]] || { echo "the fallback copy was not written"; return 1; }
+    grep -q 'GENERATED FILE, do not edit by hand' "$repo" \
+        || { echo "the fallback lost its GENERATED header"; return 1; }
+    ! grep -q 'GENERATED FILE' "$preferred" \
+        || { echo "the preferred copy was given a header the CLI does not write there"; return 1; }
+    # ...and both carry the SAME capture: the preferred copy is the repo copy minus
+    # its 5-line header.
+    [[ "$(sed -n '6,$p' "$repo")" == "$(cat "$preferred")" ]] \
+        || { echo "the two copies are not the same capture"; return 1; }
+
+    # (b) the CLI was invoked EXACTLY ONCE — counted from the stub's own log.
+    [[ "$(wc -l < "$STUB_CALLS")" -eq 1 ]] \
+        || { echo "expected 1 CLI invocation, saw $(wc -l < "$STUB_CALLS"): $(cat "$STUB_CALLS")"; return 1; }
+
+    # (c) a second run reports Unchanged for BOTH paths and invokes the CLI once more.
+    run env HOME="$home" PATH="$BATS_TEST_TMPDIR/comp-bin:$PATH" "$root/tools/sync-openclaw-completion.sh"
+    [[ "$status" -eq 0 ]] || { echo "the re-run failed: $output"; return 1; }
+    [[ "$output" == *"Unchanged: $preferred"* ]] \
+        || { echo "no Unchanged line for the preferred copy: $output"; return 1; }
+    [[ "$output" == *"Unchanged: $repo"* ]] \
+        || { echo "no Unchanged line for the fallback: $output"; return 1; }
+    [[ "$(wc -l < "$STUB_CALLS")" -eq 2 ]] \
+        || { echo "the re-run did not invoke the CLI exactly once: $(wc -l < "$STUB_CALLS")"; return 1; }
+}
