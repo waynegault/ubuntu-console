@@ -3,7 +3,14 @@
 # load-vault-env — Optional Windows-backed vault env loader
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 6
+# Module Version: 7
+#   v7 (2026-10-11): the Windows env bridge is TTL-GUARDED.  It ran on every
+#   interactive shell because the guard was "is the helper present", not "is the
+#   result stale"; at 1.7-2.1 s per pwsh.exe call that was the largest single cost
+#   in shell startup (measured `bash -lic true`: 3.0-6.4 s with it, 0.55-0.63 s with
+#   the vault load skipped).  Refreshes now only when the bridge file is missing or
+#   older than TAC_VAULT_BRIDGE_TTL (default 300 s), two-sided so a future mtime
+#   cannot read as fresh.
 # Optional helper loaded by scripts/14-wsl-extras.sh.
 #
 # Source (repo):   scripts/load-vault-env.sh
@@ -51,9 +58,31 @@ _lve_cleanup() {
 }
 
 # Refresh bridge file from Windows env when helper exists.
+#
+# TTL GUARD (v7).  This crossed the WSL/Windows boundary and started pwsh.exe on
+# EVERY interactive shell — measured 2026-10-11 at 1.7-2.1 s per call, making it the
+# single largest contributor to shell startup: `bash -lic true` measured 3.0-6.4 s
+# with it and 0.55-0.63 s with the vault load skipped.  The only guard was "is the
+# helper present", never "is the result stale", so the cost was paid on every shell
+# even when the bridge file was a second old.  It now refreshes only when the file
+# is missing or older than TAC_VAULT_BRIDGE_TTL seconds (default 300 — the same TTL
+# the profile's other startup probes use; 0 forces a refresh on every shell, and
+# TAC_VAULT_REFRESH_FROM_WINDOWS=0 still skips the bridge entirely).
+#
+# The age test is TWO-SIDED, like every other freshness guard in this profile: a
+# NEGATIVE age (a future mtime, from a clock step or a writer that backdates) must
+# not read as "fresh", or the refresh would be skipped until the clock caught up.
+_lve_bridge_ttl="${TAC_VAULT_BRIDGE_TTL:-300}"
 if [[ -f "$_lve_bridge_script" ]]
 then
-    if [[ "${TAC_VAULT_REFRESH_FROM_WINDOWS:-1}" != "0" ]]
+    _lve_need_refresh=1
+    if [[ "$_lve_bridge_ttl" =~ ^[0-9]+$ ]] && (( _lve_bridge_ttl > 0 )) && [[ -f "$_lve_bridge_file" ]]
+    then
+        # swallow-ok: a failed stat means the file vanished after the -f test above; epoch age = refresh
+        _lve_age=$(( $(date +%s) - $(stat -c %Y "$_lve_bridge_file" 2>/dev/null || echo 0) ))
+        (( _lve_age >= 0 && _lve_age < _lve_bridge_ttl )) && _lve_need_refresh=0
+    fi
+    if [[ "${TAC_VAULT_REFRESH_FROM_WINDOWS:-1}" != "0" && "$_lve_need_refresh" == "1" ]]
     then
         mkdir -p "$(dirname "$_lve_bridge_file")" 2>/dev/null || true
         if [[ -n "${TAC_VAULT_EXPORT_NAMES:-}" ]]
@@ -93,6 +122,7 @@ if (( ${#_lve_existing_files[@]} == 0 ))
 then
     unset _lve_f _lve_candidate_files _lve_existing_files _lve_bridge_script _lve_bridge_file
     unset _lve_default_names _lve_names _lve_tmp_file
+    unset _lve_bridge_ttl _lve_need_refresh _lve_age
     # shellcheck disable=SC2317
     return 0 2>/dev/null || exit 0
 fi
@@ -162,6 +192,7 @@ _lve_cleanup
 
 unset _lve_f _lve_candidate_files _lve_existing_files _lve_bridge_script _lve_bridge_file
 unset _lve_default_names _lve_names _lve_tmp_file _lve_allow_csv
+unset _lve_bridge_ttl _lve_need_refresh _lve_age
 unset -f _lve_cleanup
 
 # shellcheck disable=SC2317  # this file is both sourced and executed: `return` is the
