@@ -2,7 +2,10 @@
 # ─── Module: 06-hooks ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 11
+# Module Version: 12
+#   v12 (2026-10-11): the prompt's venv segment uses a parameter expansion instead of
+#   a `basename` subshell — one fewer fork on EVERY prompt of a (large) interactive
+#   shell.  Behaviour is unchanged.
 # ==============================================================================
 # 6. SYSTEM HOOKS & OVERRIDES
 # ==============================================================================
@@ -57,7 +60,10 @@ function cd() {
         then
             if type deactivate >/dev/null 2>&1
             then
-                deactivate >/dev/null 2>&1 || true
+                # No failure-swallow needed: the `type` guard above already covers
+                # "no deactivate", and the trailing `return 0` covers a non-zero from
+                # deactivate itself, so a real failure is not artificially hidden.
+                deactivate >/dev/null 2>&1
             fi
         fi
     fi
@@ -120,7 +126,9 @@ function custom_prompt_command() {
     (( lastExit == 0 )) && exit_badge=" \[${C_Success}\]${CHECK_MARK}\[${C_Reset}\] "
     local ps1_path="\[${C_Info}\]\w\[${C_Reset}\]"
     local ps1_venv=""
-    [[ -n "${VIRTUAL_ENV:-}" ]] && ps1_venv=" \[${C_Success}\]($(basename "${VIRTUAL_ENV:-}"))\[${C_Reset}\]"
+    # Fork-free basename: the prompt runs on every command, and a $(basename …)
+    # subshell is a fork of this (large) shell's address space on each one.
+    [[ -n "${VIRTUAL_ENV:-}" ]] && ps1_venv=" \[${C_Success}\](${VIRTUAL_ENV##*/})\[${C_Reset}\]"
 
     PS1="\n${ps1_user}${_TAC_ADMIN_BADGE}${exit_badge}${ps1_path}${ps1_venv} \[${C_Dim}\]> \[${C_Reset}\]"
 }
