@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-10-11): the suspend-owner helper was renamed _tac_suspend_pid
+#   (bin/_tac-bin-lib.sh v5 — the pid now lives in the marker itself).
 # TRACKED HERE since 2026-10-01: this script lived only as a loose ~/.local/bin copy, so a
 # change to it was unversioned and unreviewable.  Code that is exclusively supportive of
 # ubuntu-console belongs in this repo; install.sh links every file in bin/ into
@@ -74,7 +76,7 @@ cd "$REPO" || exit 1
 } | tee -a "$LOG"
 
 if ! _tac_suspend_acquire "$SUSPEND"; then
-    _owner_pid="$(_tac_suspend_owner_pid "$SUSPEND")"
+    _owner_pid="$(_tac_suspend_pid "$SUSPEND")"
     echo "autotune-rows: REFUSING — $SUSPEND is held by a live run (owner pid ${_owner_pid:-unknown})" >&2
     exit 1
 fi

@@ -437,14 +437,14 @@ EOF
 
     # (1) fresh: this shell owns it, and release removes it.
     _tac_suspend_acquire "$f"
-    [[ "$(_tac_suspend_owner_pid "$f")" == "$$" ]]
+    [[ "$(_tac_suspend_pid "$f")" == "$$" ]]
     _tac_suspend_release "$f"
     [[ ! -e "$f" ]]
 
     # (2) a LIVE owner: acquire refuses, and a non-owner release leaves it.
     sleep 30 &
     local _live=$!
-    touch "$f"; printf '%s\n' "$_live" > "$f.owner"
+    printf '%s\n' "$_live" > "$f"
     local rc=0; _tac_suspend_acquire "$f" || rc=$?
     [[ "$rc" -eq 1 ]]
     [[ -e "$f" ]]
@@ -456,7 +456,59 @@ EOF
     kill "$_live" 2>/dev/null || true
     wait "$_live" 2>/dev/null || true
     _tac_suspend_acquire "$f"
-    [[ "$(_tac_suspend_owner_pid "$f")" == "$$" ]]
+    [[ "$(_tac_suspend_pid "$f")" == "$$" ]]
     _tac_suspend_release "$f"
     [[ ! -e "$f" ]]
+}
+
+# ── _tac_suspend_held: the ONE rule readers and acquirers share (v5) ──────────
+#
+# The defect these pin (measured 2026-10-11): the marker's holder was recorded in a
+# companion file, and every reader tested only that the MARKER EXISTED — so a holder
+# killed with SIGKILL, whose `trap … EXIT` never ran, kept the CUDA lane down.  The
+# marker now carries the pid and liveness decides.  Each case below is a shape that
+# must NOT be read as held, except the live-owner one.
+
+@test "suspend held: a MISSING marker is NOT held" {
+    # Catches: treating "no marker" as held (which would wedge the lane down with
+    # nothing on disk to explain it).
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    local f="$TMPDIR_BATS/held-missing.suspend"
+    rm -f "$f"
+    ! _tac_suspend_held "$f"
+}
+
+@test "suspend held: an EMPTY marker is NOT held (the legacy shape)" {
+    # Catches: the LIVE defect — the file on disk today is 0 bytes, and the old
+    # existence test read it as held.  An empty marker must let the lane come back.
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    local f="$TMPDIR_BATS/held-empty.suspend"
+    : > "$f"
+    ! _tac_suspend_held "$f"
+}
+
+@test "suspend held: a DEAD owner pid is NOT held" {
+    # Catches: the SIGKILL asymmetry — a holder that never ran its EXIT trap.  Its
+    # pid is recorded but gone, so the hold must be treated as released.
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    local f="$TMPDIR_BATS/held-dead.suspend"
+    local dead
+    sleep 30 & dead=$!
+    kill "$dead" 2>/dev/null || true
+    wait "$dead" 2>/dev/null || true
+    printf '%s\n' "$dead" > "$f"
+    ! _tac_suspend_held "$f"
+}
+
+@test "suspend held: a LIVE owner pid IS held" {
+    # The control: without it, a predicate that always answered "not held" would
+    # pass every case above — and would let the watchdog restart a lane a bench is
+    # holding down.
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    local f="$TMPDIR_BATS/held-live.suspend"
+    printf '%s\n' "$$" > "$f"
+    _tac_suspend_held "$f"
+    # ...and it stops being held once that owner is gone (the transition, in place).
+    printf '%s\n' "999999" > "$f"
+    ! _tac_suspend_held "$f"
 }

@@ -291,7 +291,7 @@ setup() {
     # the probe reports FREE, because a bench is measuring TPS and wants the card.
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
     echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
-    touch "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
+    printf '%s\n' "$$" > "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"   # a LIVE owner: an empty marker is NOT held since v5
 
     run "$WATCHDOG_SCRIPT"
 
@@ -305,7 +305,7 @@ setup() {
     touch "$WATCHDOG_MOCK_STATE/healthy"
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
     echo "active" > "$WATCHDOG_MOCK_STATE/cuda_state"
-    touch "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
+    printf '%s\n' "$$" > "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"   # a LIVE owner: an empty marker is NOT held since v5
 
     run "$WATCHDOG_SCRIPT"
 
@@ -321,7 +321,7 @@ setup() {
     # suspending the CUDA lane would quietly disable Xe self-healing.
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
     echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
-    touch "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
+    printf '%s\n' "$$" > "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"   # a LIVE owner: an empty marker is NOT held since v5
 
     run "$WATCHDOG_SCRIPT"
     run "$WATCHDOG_SCRIPT"
@@ -336,7 +336,7 @@ setup() {
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
     echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
     printf '2\n' > "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.strikes"
-    touch "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
+    printf '%s\n' "$$" > "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"   # a LIVE owner: an empty marker is NOT held since v5
 
     run "$WATCHDOG_SCRIPT"
 
@@ -525,7 +525,7 @@ setup() {
     # the lane down for hours.
     echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
     echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
-    touch "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"
+    printf '%s\n' "$$" > "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"   # a LIVE owner: an empty marker is NOT held since v5
 
     run "$WATCHDOG_SCRIPT"
     run "$WATCHDOG_SCRIPT"
@@ -534,6 +534,27 @@ setup() {
     [[ "$output" == *"CUDA lane suspended"* ]]
     [[ "$output" != *"WARNING flap"* ]]
     [[ ! -e "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps" ]]
+}
+
+@test "integration: a LEGACY empty suspend marker does NOT suppress the death count" {
+    # THE TRANSITION.  The marker left on disk by a SIGKILLed holder is 0 bytes (its
+    # pid sat in a now-orphaned companion).  Under the old existence test that empty
+    # file read as "suspended" and kept the lane down for hours; under v5 it carries
+    # no pid, so the lane's absence is an UNEXPECTED death: counted AND recovered —
+    # no manual `rm` needed.  This is the case that catches a reader still testing
+    # the marker's mere existence.
+    echo "active" > "$WATCHDOG_MOCK_STATE/xe_state"
+    echo "inactive" > "$WATCHDOG_MOCK_STATE/cuda_state"
+    : > "$LLAMA_WATCHDOG_CUDA_SUSPEND_FILE"                    # the legacy 0-byte shape
+    rm -f "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps"
+    rm -f "$WATCHDOG_MOCK_STATE/start_called"
+
+    run "$WATCHDOG_SCRIPT"
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" != *"CUDA lane suspended"* ]]                 # not honoured as a hold
+    [[ "$(wc -l < "$LLAMA_WATCHDOG_STRIKE_DIR/llama-watchdog-cuda.flaps")" -eq 1 ]]
+    [[ -f "$WATCHDOG_MOCK_STATE/start_called" ]]               # ...and the lane was restored
 }
 
 @test "integration: flap stamps outside the window are pruned, not counted" {

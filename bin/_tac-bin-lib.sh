@@ -16,7 +16,15 @@
 # errexit/pipefail/nounset, so each script keeps its own `set` line.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-11): the CUDA-suspend marker carries its holder's PID, and
+#   _tac_suspend_held is the ONE rule acquirers and readers share — HELD only when
+#   the marker exists, carries a numeric pid, and that pid is alive.  Before v5 the
+#   pid sat in a companion file and readers tested only the marker's EXISTENCE, so a
+#   holder killed with SIGKILL (its EXIT trap never runs) left the lane down for
+#   hours.  The acquire write is now atomic (temp + rename in the same directory,
+#   /dev/shm) because "empty" is NOT HELD and a torn write would restart the lane
+#   mid-bench; release is idempotent and owner-checked.
 # ==============================================================================
 
 # log — one timestamped line, parameterised so every caller keeps its EXACT
@@ -59,58 +67,92 @@ _inv_gpu_lock_path() {
     printf '%s\n' "${INVESTIGATOR_GPU_LOCK:-${INVESTIGATOR_PRODUCTION_OUTPUT:-$HOME/investigator/production}/runtime/gpu.lock}"
 }
 
-# ── CUDA-lane suspend ownership (card 7d3e7b95) ─────────────────────────────
+# ── CUDA-lane suspend ownership (card 7d3e7b95; owner-liveness 2026-10-11) ───
 # /dev/shm/llama-watchdog-cuda.suspend holds the CUDA lane down while a bench or
-# autotune needs the card.  It used to be touch/rm with NO ownership: a run that
-# aborted left it behind (lane down forever), and a run that removed one it did
-# not set released ANOTHER run's hold mid-sweep.  The protocol: a run that sets
-# the file records its pid in a companion "<file>.owner", refuses to start when a
-# LIVE owner already holds it, and removes it only when this run owns it.
-_tac_suspend_owner_file() { printf '%s.owner\n' "$1"; }
+# autotune needs the card.
+#
+# v5: THE HOLDER PID LIVES IN THE SUSPEND FILE ITSELF, and liveness is decided by
+# the READER through _tac_suspend_held, so acquirers and readers share ONE rule.
+# Until v5 the pid sat in a companion "<file>.owner" and every READER tested only
+# that the suspend FILE EXISTED — so a holder killed with SIGKILL, whose `trap …
+# EXIT` therefore never ran (unlike bin/heavy-job's flock, which the kernel
+# releases on death), kept the lane down until a human noticed.  Measured
+# 2026-10-11: the CUDA lane was down 4h22m on a 0-byte marker whose companion
+# carried the dead pid 12148.
+#
+# HELD means: the file EXISTS and carries a NUMERIC PID and that pid is ALIVE.
+# Anything else — missing, empty, unparseable, dead owner — is NOT held, and the
+# case is LOGGED, so "cannot tell" never passes silently as either answer.
+# Deliberately NOT age-based: a legitimate hold lasts HOURS (the 2026-10-11 screen
+# ran 4h13m), so a TTL would break a real run.  The owner's liveness is the signal.
 
-# The pid recorded for a suspend file, or empty when none/unreadable.
-_tac_suspend_owner_pid() {
-    local _owner
-    _owner="$(_tac_suspend_owner_file "$1")"
-    [[ -f "$_owner" ]] || return 0
-    tr -dc '0-9' < "$_owner" 2>/dev/null   # swallow-ok: an unreadable owner file yields empty, which the callers read as "no live owner" and take over
+# _tac_suspend_pid <file> — the holder pid recorded in the suspend file, or empty.
+_tac_suspend_pid() {
+    [[ -f "$1" ]] || return 0
+    # swallow-ok: an unreadable/empty file yields empty, which every caller reads as "no owner recorded"
+    tr -dc '0-9' < "$1" 2>/dev/null
 }
 
-# True when the recorded owner pid is still alive.
-_tac_suspend_owner_alive() {
-    local _pid
-    _pid="$(_tac_suspend_owner_pid "$1")"
-    [[ -n "$_pid" ]] || return 1
-    kill -0 "$_pid" 2>/dev/null   # swallow-ok: a failed kill -0 IS the "not alive" answer the caller checks
-}
-
-# Acquire the hold: 0 = this run now owns it, 1 = a live owner holds it, 2 = the
-# file/owner could not be written.  A stale file (owner gone, or an older writer
-# that recorded nothing) is TAKEN OVER rather than refused, so a leftover cannot
-# wedge the lane down.
-_tac_suspend_acquire() {
-    local _f="$1" _owner
-    _owner="$(_tac_suspend_owner_file "$_f")"
-    if [[ -e "$_f" ]] && _tac_suspend_owner_alive "$_f"; then
+# _tac_suspend_held <file> — 0 = HELD, 1 = not held.  THE rule, for readers too.
+_tac_suspend_held() {
+    local _f="$1" _pid
+    if [[ ! -e "$_f" ]]
+    then
+        log "suspend: NOT HELD — no marker at $_f"
         return 1
     fi
-    touch "$_f" 2>/dev/null || return 2   # swallow-ok: the failure IS reported as rc 2, which the caller turns into a refusal
-    if ! printf '%s\n' "$$" > "$_owner" 2>/dev/null; then   # swallow-ok: the `if !` tests the failure and returns 2
-        # An untracked hold is the bug this protocol exists to remove: drop it.
-        rm -f "$_f" 2>/dev/null   # swallow-ok: best-effort drop of an untracked hold; rc 2 reports the outcome
-        return 2   # 2 = could not record ownership; caller refuses to start
+    _pid="$(_tac_suspend_pid "$_f")"
+    if [[ -z "$_pid" ]]
+    then
+        log "suspend: NOT HELD — $_f carries no numeric owner pid (legacy, empty or mid-write marker)"
+        return 1
+    fi
+    if kill -0 "$_pid" 2>/dev/null   # swallow-ok: a failed kill -0 IS the "not alive" answer this predicate reports
+    then
+        log "suspend: HELD by live pid $_pid ($_f)"
+        return 0
+    fi
+    log "suspend: NOT HELD — owner pid $_pid is dead ($_f); a killed holder cannot release its own hold"
+    return 1
+}
+
+# Acquire the hold: 0 = this run now owns it, 1 = a LIVE owner holds it, 2 = the
+# marker could not be written.  A stale marker — absent, legacy/empty, unparseable,
+# or a DEAD owner — is TAKEN OVER rather than refused, so a leftover cannot wedge
+# the lane down.
+_tac_suspend_acquire() {
+    local _f="$1" _tmp
+    if _tac_suspend_held "$_f"; then
+        return 1
+    fi
+    # Written to a temp file in the SAME directory (/dev/shm — one filesystem, so the
+    # rename is atomic) and moved into place: a reader sees the old marker or the new
+    # one, never an EMPTY one mid-write.  That matters more now than before, because
+    # "empty" is NOT HELD — a torn write would let the watchdog restart the lane in
+    # the microseconds an acquirer spends stamping it.
+    _tmp="${_f}.tmp.$$"
+    if ! printf '%s\n' "$$" > "$_tmp" 2>/dev/null   # swallow-ok: the `if !` tests the failure and reports rc 2
+    then
+        rm -f "$_tmp" 2>/dev/null   # swallow-ok: best-effort drop of the temp; rc 2 reports the outcome
+        return 2   # 2 = the marker could not be written; the caller refuses to start
+    fi
+    if ! mv -f "$_tmp" "$_f" 2>/dev/null   # swallow-ok: the `if !` tests the failure and reports rc 2
+    then
+        rm -f "$_tmp" 2>/dev/null   # swallow-ok: best-effort drop of the temp; rc 2 reports the outcome
+        return 2   # 2 = the rename could not be made; the caller refuses to start
     fi
     return 0
 }
 
 # Release the hold ONLY when this run owns it: 0 = removed, 1 = not ours (left).
+# IDEMPOTENT: a second call (or one after the marker is already gone) is a no-op
+# returning 1, so an EXIT trap can fire more than once without error.
 _tac_suspend_release() {
-    local _f="$1" _owner
-    if [[ "$(_tac_suspend_owner_pid "$_f")" != "$$" ]]; then
+    local _f="$1"
+    if [[ "$(_tac_suspend_pid "$_f")" != "$$" ]]; then
         return 1
     fi
-    _owner="$(_tac_suspend_owner_file "$_f")"
-    rm -f "$_f" "$_owner" 2>/dev/null   # swallow-ok: `rm -f` is best-effort by definition; the return below is the result
+    rm -f "$_f" 2>/dev/null   # swallow-ok: `rm -f` is best-effort by definition; the return below is the result
     return 0
 }
 

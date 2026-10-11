@@ -1,7 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 61
+# Module Version: 62
+#   v62 (2026-10-11): the CUDA "card mark" is OWNER-STAMPED and read by liveness.
+#   `model use` used to bare-`touch` the marker and `model stop` removed it on a
+#   mere `[[ -f ]]` test, so a `model use` whose shell was SIGKILLed wedged the CUDA
+#   lane down exactly like the bench holds did (the marker existed, its owner was
+#   gone, and every reader — the watchdog included — only tested existence).  The
+#   mark now goes through _tac_suspend_acquire (bin/_tac-bin-lib.sh, sourced below)
+#   so it records THIS shell's pid, and the release leaves a marker a LIVE owner
+#   still holds while cleaning up a dead one.
 #   v61 (2026-10-10): bench mode no longer appends --cache-ram, so a validation bench
 #   reproduces the argv the autotune CERTIFIES with (scripts/autotune-model.sh:759-766
 #   and :2194-2200 pass no --cache-ram).  `model bench` shares THIS builder, so the
@@ -78,6 +86,15 @@
 # loader and directly by the profile/env loaders, so run the body once.
 [[ -n "${__TAC_MOD_11E_LLM_MODEL_LOADED:-}" ]] && return 0
 __TAC_MOD_11E_LLM_MODEL_LOADED=1
+
+# Shared CUDA-suspend ownership helpers — ONE rule for acquirers and readers
+# (_tac_suspend_held, _tac_suspend_acquire, _tac_suspend_pid).  Sourced by
+# realpath, like the other consumers (bin/autotune-rows.sh, bin/bench-rows.sh,
+# scripts/retune-band-chunk.sh, bin/llama-watchdog.sh), so the repo path and any
+# installed copy both resolve.  It defines only functions and sets no shell
+# options, so sourcing it here cannot change this module's behaviour.
+# shellcheck source=../bin/_tac-bin-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/_tac-bin-lib.sh"
 
 # Globals assigned by sibling modules at source time, named here instead of
 # relying on a file-wide `disable=SC2154`: shellcheck lints each module in
@@ -1031,8 +1048,11 @@ function __model_use_claim_cuda_card() {
 
     # 3. Hold the CUDA lane down for the life of this server.  `model stop`
     #    releases it; a bench/autotune run that already owns the card keeps it.
-    # swallow-ok: the failure IS handled: the row below reports that the card could not be marked as taken
-    if ! touch "$_cuda_suspend" 2>/dev/null
+    #    OWNER-STAMPED (v62): the marker carries THIS shell's pid, so a holder that
+    #    is killed without running its trap no longer wedges the lane — the readers
+    #    see a dead owner and treat the mark as not held.
+    if ! _tac_suspend_acquire "$_cuda_suspend" \
+       && [[ "$(_tac_suspend_pid "$_cuda_suspend")" != "$$" ]]
     then
         __tac_info "Warning" "[could not mark the CUDA card as taken ($_cuda_suspend)]" "$C_Warning"
     fi
@@ -1600,10 +1620,13 @@ function __model_stop() {
     if [[ -f "${LLM_BENCH_LOCK_FILE:-/tmp/llm-bench.lock}" || -f "${LLM_AUTOTUNE_LOCK_FILE:-/tmp/llm-autotune.lock}" ]]
     then
         __tac_info "CUDA" "card mark left in place (a bench/autotune run owns the card)" "$C_Dim"
-    elif [[ -f "$_cuda_suspend" ]]
+    elif _tac_suspend_held "$_cuda_suspend"
     then
-        # swallow-ok: releasing the CAS marker; absent already means released
-        rm -f "$_cuda_suspend" 2>/dev/null || true
+        # v62: a LIVE owner holds it — leave it.  Only the holder (or a stale/dead
+        # mark, which reads as NOT held) may be cleared here.
+        __tac_info "CUDA" "card mark left in place (live owner pid $(_tac_suspend_pid "$_cuda_suspend"))" "$C_Dim"
+    else
+        rm -f "$_cuda_suspend" 2>/dev/null || true   # swallow-ok: releasing the CAS marker; absent already means released
         __tac_info "CUDA" "card released — the CUDA lane may start again" "$C_Dim"
     fi
     # Kill any lingering stdin keeper processes (sleep-loop bash children)

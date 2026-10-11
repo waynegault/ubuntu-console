@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-10-11): the release removes only the marker (the "<file>.owner"
+#   companion is gone — bin/_tac-bin-lib.sh v5 records the pid IN the marker) and
+#   uses the renamed _tac_suspend_pid.
 #   v7 (2026-10-03): the release keeps a literal `rm -f "$SUSPEND"` in this file
 #   (owner-guarded) so state-contracts.yaml's invalidator check still sees it;
 #   the swallow sites in the shared lib are classified.
@@ -90,7 +93,7 @@ _cycle_file="/dev/shm/autotune-cuda-cycles-${_autotune_boot_id:-unknown}"
 cycle_now() { [[ -f "$_cycle_file" ]] && cat "$_cycle_file" 2>/dev/null || echo 0; }
 
 if ! _tac_suspend_acquire "$SUSPEND"; then
-    _owner_pid="$(_tac_suspend_owner_pid "$SUSPEND")"
+    _owner_pid="$(_tac_suspend_pid "$SUSPEND")"
     echo "[retune] REFUSING: $SUSPEND is held by a live run (owner pid ${_owner_pid:-unknown}) - another bench may own the card." >&2
     exit 1
 fi
@@ -98,8 +101,8 @@ fi
 # Silent, so it is safe as the EXIT trap; it keeps the literal delete here so
 # state-contracts.yaml's invalidator check can see retune still removes the path.
 release_suspend() {
-    [[ "$(_tac_suspend_owner_pid "$SUSPEND")" == "$$" ]] || return 0
-    rm -f "$SUSPEND" "$(_tac_suspend_owner_file "$SUSPEND")" 2>/dev/null  # swallow-ok: rm -f is best-effort and the owner check above is the guard
+    [[ "$(_tac_suspend_pid "$SUSPEND")" == "$$" ]] || return 0
+    rm -f "$SUSPEND" 2>/dev/null  # swallow-ok: rm -f is best-effort and the owner check above is the guard
 }
 # Release on ANY exit, SIGINT/SIGTERM included: a hold left behind keeps the CUDA
 # lane down until someone notices, which is the failure this guards (card 7d3e7b95).
@@ -115,7 +118,7 @@ echo "[retune] CUDA lane suspended for this chunk ($SUSPEND, owner $$)"
 # ledger 0/60).  So stand the lane down HERE, and refuse to start a chunk if the
 # card cannot be freed.
 release_lane() {
-    if [[ "$(_tac_suspend_owner_pid "$SUSPEND")" == "$$" ]]; then
+    if [[ "$(_tac_suspend_pid "$SUSPEND")" == "$$" ]]; then
         release_suspend
         echo "[retune] CUDA lane released ($SUSPEND removed) - the watchdog may start it again"
     else
