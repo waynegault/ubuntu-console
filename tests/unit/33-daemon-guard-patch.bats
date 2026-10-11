@@ -448,3 +448,26 @@ MOCK
     [ "$status" -eq 0 ]
     [[ "$output" == *"STUB-LINTER"* ]]
 }
+
+# ==============================================================================
+# The self-heal tick's SIXTH tool: the plugin-skill hardlink (2026-10-10)
+# ==============================================================================
+# Wayne 2026-10-10: "do A".  OpenClaw's plugin-admission capture hardlinks the installed
+# plugin into tmp/plugin-captures/…, so the plugin's SKILL.md carries nlink>1 and the
+# skills loader refuses any file with nlink>1 (rejectHardlinks) — the skill is silently
+# absent and every catalog logs "path must not be hardlinked" (openclaw/openclaw#167991).
+# The tick must PROBE ~/.openclaw/scripts/skill-denlink.sh by its own boolean --check and
+# re-apply it with --apply, on the four older patchers' pattern.
+#
+# What this case is for, and what it is NOT.  It is a REGRESSION NET for the wiring — it
+# fails if a future edit drops the sixth tool from the tick, the role 38-heavy-job's case 7
+# plays for its entry-point list.  Being a static assertion, it cannot see a mutation the
+# tool's own battery misses: the TOOL's behaviour lives where the tool lives, in
+# ~/.openclaw/workspace/unit-test/test_skill_denlink.py, and this split keeps the case
+# hermetic (it reads the tick's own text; no cross-repo path, no live tree).
+@test "self-heal: the tick probes the plugin-skill denlink tool" {
+    local sh="$REPO_ROOT/bin/qwen-guard-selfheal.sh"
+    grep -q '^DENLINK="/home/wayne/.openclaw/scripts/skill-denlink.sh"' "$sh"
+    grep -q 'needed+=(denlink)' "$sh"
+    grep -q 'denlink) patch="\$DENLINK"; label="plugin-skill hardlink"; apply_args=(--apply)' "$sh"
+}
