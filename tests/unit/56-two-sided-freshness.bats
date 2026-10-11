@@ -353,3 +353,25 @@ vault_run() {
     [[ "$status" -eq 0 ]]
     [[ ! -s "$V_LOG" ]]
 }
+
+@test "vault bridge: the DEFAULT TTL is 1500 s (a 10-minute-old file is not refreshed)" {
+    # Pins the v8 default.  A file 10 minutes old is STALE under the old 300 s default
+    # and FRESH under 1500 s, so this case fails if the default regresses to 300.
+    vault_layout
+    printf '%s\n' 'OPENAI_API_KEY=fresh' > "$V_BRIDGE"
+    touch -d '10 minutes ago' "$V_BRIDGE"
+    vault_run ""              # empty = unset, so the shipped default applies
+    [[ "$status" -eq 0 ]]
+    [[ ! -s "$V_LOG" ]]
+}
+
+@test "vault bridge: control — the same 10-minute-old file IS refreshed at TTL=300" {
+    # The other half of the pair: without it, a guard that simply never refreshed
+    # would pass the case above and prove nothing.
+    vault_layout
+    printf '%s\n' 'OPENAI_API_KEY=fresh' > "$V_BRIDGE"
+    touch -d '10 minutes ago' "$V_BRIDGE"
+    vault_run 300
+    [[ "$status" -eq 0 ]]
+    [[ "$(wc -l < "$V_LOG")" -eq 1 ]]
+}

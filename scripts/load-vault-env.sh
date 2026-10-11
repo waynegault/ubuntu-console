@@ -3,14 +3,36 @@
 # load-vault-env — Optional Windows-backed vault env loader
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-10-11): default TTL raised 300 -> 1500 s, after measuring every cheaper
+#   alternative and finding none that removes the block.  Measured at load 4-8:
+#   fetching ONE name costs 5.6 s against 6.5 s for all seven (one pwsh.exe start
+#   dominates, so a subset saves ~14%, not the cost); the emitted set is 3 vars and
+#   their VALUES were byte-identical across two consecutive refreshes; a cheaper
+#   incantation is `reg.exe query HKCU\Environment` at 1.0-2.2 s against
+#   pwsh.exe's 2.6-4.5 s and powershell.exe 5.1's 2.0-3.3 s (interleaved, load
+#   12-15) — ~2x cheaper but still over a second, and it returns REG_EXPAND_SZ
+#   values UNEXPANDED and only the User scope, so it is not a drop-in; and no
+#   cheaper INVALIDATION signal exists, because every Windows-side probe costs at
+#   least a second, leaving the local mtime as the cheapest signal there is (it is
+#   the one used).  Backgrounding the refresh makes the shell cost ~0.05-0.19 s
+#   instead of 3.5-9.8 s, but it is a behaviour change (see the note above the
+#   guard), not a saving, and it was not adopted here.
+#
+#   STALENESS TRADE-OFF.  A value changed on the Windows side now takes up to
+#   1500 s (25 min) to appear in a NEWLY STARTED shell; shells already open keep
+#   what they exported.  These are long-lived credentials (the same three names,
+#   unchanged across refreshes in the measurement above), and the forced paths
+#   remain: `oc-refresh-keys` re-imports on demand, `TAC_VAULT_BRIDGE_TTL=0`
+#   restores the per-shell refresh, `TAC_VAULT_REFRESH_FROM_WINDOWS=0` skips the
+#   bridge entirely.
 #   v7 (2026-10-11): the Windows env bridge is TTL-GUARDED.  It ran on every
 #   interactive shell because the guard was "is the helper present", not "is the
 #   result stale"; at 1.7-2.1 s per pwsh.exe call that was the largest single cost
 #   in shell startup (measured `bash -lic true`: 3.0-6.4 s with it, 0.55-0.63 s with
 #   the vault load skipped).  Refreshes now only when the bridge file is missing or
-#   older than TAC_VAULT_BRIDGE_TTL (default 300 s), two-sided so a future mtime
-#   cannot read as fresh.
+#   older than TAC_VAULT_BRIDGE_TTL, two-sided so a future mtime cannot read as
+#   fresh.
 # Optional helper loaded by scripts/14-wsl-extras.sh.
 #
 # Source (repo):   scripts/load-vault-env.sh
@@ -59,20 +81,29 @@ _lve_cleanup() {
 
 # Refresh bridge file from Windows env when helper exists.
 #
-# TTL GUARD (v7).  This crossed the WSL/Windows boundary and started pwsh.exe on
-# EVERY interactive shell — measured 2026-10-11 at 1.7-2.1 s per call, making it the
-# single largest contributor to shell startup: `bash -lic true` measured 3.0-6.4 s
-# with it and 0.55-0.63 s with the vault load skipped.  The only guard was "is the
-# helper present", never "is the result stale", so the cost was paid on every shell
-# even when the bridge file was a second old.  It now refreshes only when the file
-# is missing or older than TAC_VAULT_BRIDGE_TTL seconds (default 300 — the same TTL
-# the profile's other startup probes use; 0 forces a refresh on every shell, and
+# TTL GUARD (v7, default raised v8).  This crossed the WSL/Windows boundary and
+# started pwsh.exe on EVERY interactive shell — measured 2026-10-11 at 1.7-2.1 s per
+# call (and 2.7-9.8 s at load 12-25), making it the single largest contributor to
+# shell startup.  The only guard was "is the helper present", never "is the result
+# stale", so the cost was paid on every shell even when the bridge file was a second
+# old.  It now refreshes only when the file is missing or older than
+# TAC_VAULT_BRIDGE_TTL seconds (default 1500; 0 forces a refresh on every shell, and
 # TAC_VAULT_REFRESH_FROM_WINDOWS=0 still skips the bridge entirely).
+#
+# ASYNCHRONOUS REFRESH — measured, NOT adopted.  Backgrounding the bridge makes the
+# shell pay ~0.05-0.19 s (the fork) instead of the blocking 3.5-9.8 s, and the next
+# shell sees the update.  It was rejected because (i) it makes the CURRENT shell read
+# a file a background writer is rewriting, and the bridge writes it non-atomically,
+# so a shell that starts behind the writer can source a truncated bridge; (ii) the
+# alias BASH_COMMAND/`wait` semantics differ at exit, so the spawn would need the
+# __tac_track_bg_job treatment to avoid a job-control notice; and (iii) it changes
+# which shell sees a rotated credential, which is a behavioural decision, not a
+# saving.  The TTL keeps the reading and the writing in one ordered step.
 #
 # The age test is TWO-SIDED, like every other freshness guard in this profile: a
 # NEGATIVE age (a future mtime, from a clock step or a writer that backdates) must
 # not read as "fresh", or the refresh would be skipped until the clock caught up.
-_lve_bridge_ttl="${TAC_VAULT_BRIDGE_TTL:-300}"
+_lve_bridge_ttl="${TAC_VAULT_BRIDGE_TTL:-1500}"
 if [[ -f "$_lve_bridge_script" ]]
 then
     _lve_need_refresh=1
