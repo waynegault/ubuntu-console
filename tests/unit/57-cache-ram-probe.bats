@@ -654,3 +654,114 @@ probe_run() {
     [[ "$output" != *"could not acquire the CUDA suspend hold"* ]]
     [[ "$output" == *"card did NOT free"* ]]
 }
+
+# ── the re-bench RUNNER (scripts/rebench-rows.sh) ────────────────────────────
+#
+# WHY: on 2026-10-12 the re-bench was driven from a hand-rolled wrapper that failed
+# three ways, and the runner exists to make each impossible: (1) it HELD the CUDA
+# suspend and then ran a probe that acquires its OWN — the helper is owner-checked
+# and NOT re-entrant, so all five rows died in ~1 s each with "FATAL: could not
+# acquire the CUDA suspend hold"; (2) it exited 0 anyway, because a `for` loop's
+# status is its LAST command's, so a job whose every row failed read GREEN; and
+# (3) it repeated that identical failure four more times.
+#
+# HERMETIC: the shipped runner runs UNMODIFIED from a scratch repo layout
+# (<root>/scripts/rebench-rows.sh), so its $SELF_DIR/$REPO resolve into the sandbox
+# and BOTH collaborators it launches — the probe and heavy-job — are stubs there.
+# The pre-row GPU gate is the shared _tac_gpu_wait_foreign_clear with TAC_GPU_BUSY_SH
+# pointed at a stub, and the suspend marker at a sandbox path: no card, no lock, no
+# /dev/shm.  Nothing here can take the GPU.
+
+# rebench_layout — build the scratch repo layout and the controlling stubs.
+# Sets R_ROOT, R_OUT, R_PROBE_LOG, R_STUB, R_SUSPEND.
+rebench_layout() {
+    R_ROOT="$SANDBOX/rebench-root"
+    R_OUT="$SANDBOX/rebench-out"
+    R_PROBE_LOG="$SANDBOX/rebench-probe.log"
+    R_STUB="$SANDBOX/rebench-stubbin"
+    R_SUSPEND="$SANDBOX/rebench.suspend"
+    mkdir -p "$R_ROOT/scripts" "$R_ROOT/bin" "$R_STUB"
+    # The shipped runner and the shipped lib, byte for byte.
+    cp "$REPO_ROOT/scripts/rebench-rows.sh" "$R_ROOT/scripts/rebench-rows.sh"
+    cp "$REPO_ROOT/bin/_tac-bin-lib.sh" "$R_ROOT/bin/_tac-bin-lib.sh"
+    # heavy-job: exec what it is given (the real one takes the lock then execs).
+    printf '%s\n' '#!/usr/bin/env bash' 'exec "$@"' > "$R_ROOT/bin/heavy-job"
+    chmod +x "$R_ROOT/bin/heavy-job"
+    # The probe: records its argv, prints a registry snapshot, and exits with the rc
+    # the case chose for that row (R_FAIL_ROW; empty => every row passes).
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'printf "%s\n" "$*" >> "${R_PROBE_LOG:?}"' \
+        'printf "  registry line (READ ONLY, snapshot): 26|stub|dummy.gguf\n"' \
+        'row=""' \
+        'while (( $# > 0 )); do case "$1" in --row) row="$2"; shift 2 ;; *) shift ;; esac; done' \
+        '[[ "$row" == "${R_FAIL_ROW:-}" ]] && exit 1' \
+        'exit 0' > "$R_ROOT/scripts/cache-ram-probe.sh"
+    chmod +x "$R_ROOT/scripts/cache-ram-probe.sh"
+    # The GPU detector: no foreign holder, so the pre-row gate opens at once.
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "{\"busy\":false,\"reasons\":[]}\n"' 'exit 0' \
+        > "$R_STUB/gpu-busy.sh"
+    chmod +x "$R_STUB/gpu-busy.sh"
+    : > "$R_PROBE_LOG"
+    export R_ROOT R_OUT R_PROBE_LOG R_STUB R_SUSPEND
+}
+
+# rebench_run <runner args...> — run the shipped runner with its collaborators stubbed.
+rebench_run() {
+    run env TAC_GPU_BUSY_SH="$R_STUB/gpu-busy.sh" R_PROBE_LOG="$R_PROBE_LOG" \
+        R_FAIL_ROW="${R_FAIL_ROW:-}" \
+        LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$R_SUSPEND" \
+        bash "$R_ROOT/scripts/rebench-rows.sh" "$@"
+}
+
+@test "rebench runner: a failing row STOPS the run after ONE row and exits non-zero" {
+    # Catches BOTH defects at once: the wrapper that repeated an identical failure
+    # five times, and the wrapper that exited 0 with every row failed (a `for` loop's
+    # status is its last command's).  Row 26 is FIRST and fails, so fail-fast must
+    # stop there: one invocation, non-zero status, and the row/rc named.
+    rebench_layout
+    export R_FAIL_ROW=26
+    rebench_run --rows 26,10,14 --out "$R_OUT"
+    [[ "$status" -eq 1 ]]
+    [[ "$(wc -l < "$R_PROBE_LOG")" -eq 1 ]]      # only the FIRST row was attempted
+    grep -q -- '--row 26' "$R_PROBE_LOG"
+    local rlog
+    rlog="$(ls "$R_OUT"/rebench-*.log)"
+    grep -q 'FAIL-FAST: stopping at row 26' "$rlog"
+    grep -q 'row 26: rc=1' "$rlog"
+    grep -q 'registry line (READ ONLY, snapshot)' "$rlog"   # the snapshot was kept
+    [[ "$output" == *"at least one FAILED; exit 1"* ]]
+}
+
+@test "rebench runner: control — every row passing runs them ALL and exits 0" {
+    # The control that makes the case above discriminating: without it, a runner that
+    # stopped after one row unconditionally (or exited non-zero unconditionally) would
+    # pass it.  Every row must be attempted and the status must be 0.
+    rebench_layout
+    R_FAIL_ROW=""
+    rebench_run --rows 26,10,14 --out "$R_OUT"
+    [[ "$status" -eq 0 ]]
+    [[ "$(wc -l < "$R_PROBE_LOG")" -eq 3 ]]
+    grep -q -- '--row 26' "$R_PROBE_LOG"
+    grep -q -- '--row 10' "$R_PROBE_LOG"
+    grep -q -- '--row 14' "$R_PROBE_LOG"
+    [[ "$output" == *"all 3 row(s) exited 0"* ]]
+    [[ "$output" != *"FAIL-FAST"* ]]
+}
+
+@test "rebench runner: a suspend marker held by its OWN tree REFUSES before any row" {
+    # Catches the first, measured defect: a wrapper of OURS holding the CUDA suspend
+    # while the probe acquires its own.  The runner is launched as a CHILD of the shell
+    # that stamps the marker, so the recorded pid is an ANCESTOR — exactly the
+    # hand-rolled wrapper's shape — and it must refuse (exit 2) rather than run rows
+    # that would each die in ~1 s.  Rows 26,10 would both be attempted if it did not.
+    rebench_layout
+    run env TAC_GPU_BUSY_SH="$R_STUB/gpu-busy.sh" R_PROBE_LOG="$R_PROBE_LOG" \
+        R_SUSPEND="$R_SUSPEND" R_ROOT="$R_ROOT" R_OUT="$R_OUT" \
+        LLAMA_WATCHDOG_CUDA_SUSPEND_FILE="$R_SUSPEND" \
+        bash -c 'printf "%s\n" "$$" > "$R_SUSPEND"; bash "$R_ROOT/scripts/rebench-rows.sh" --rows 26,10 --out "$R_OUT"'
+    [[ "$status" -eq 2 ]]
+    [[ "$output" == *"held by THIS script's own process tree"* ]]
+    [[ ! -s "$R_PROBE_LOG" ]]                    # NO probe was ever launched
+    [[ "$output" != *"gpu gate"* ]]              # it stopped before the card was even asked
+}
