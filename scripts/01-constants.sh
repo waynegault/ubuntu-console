@@ -2,7 +2,12 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 28
+# Module Version: 29
+#   v29 (2026-10-12): LLM_REGISTRY_HEADER gains five MEASUREMENT columns (40-44) so a
+#   certified tps carries HOW it was measured: meas_load, meas_n, meas_spread_pct,
+#   meas_drift_pct, meas_state (certified|indicative).  Header-first: every writer pads
+#   to ncols from THIS line, so scan/sync emit them empty and only the autotune's
+#   __llm_autotune_profile_save writes them.  (Autotune/bench revision, item 2b.)
 #   v28 (2026-10-09): TAC_STATE_DIR — a PERSISTENT home for the small state markers that
 #   must outlive a reboot. The NAS mirror marker (tac_win_api_keys.nas_hash) lived under
 #   TAC_CACHE_DIR, i.e. /dev/shm — a tmpfs — so every restart wiped it and `oc status` then
@@ -180,7 +185,7 @@ fi
 # writer drifts the first time a column is added — which is exactly what happened
 # when the remap kept emitting its 32-column copy after the schema reached 39
 # (card e0579318).  The field descriptions below cover the first 20 columns.
-export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n'
+export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state'
 export LLM_REGISTRY="$HOME/.llm/models.conf"
 export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$HOME/.llm/default_model.conf}"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"

@@ -3128,7 +3128,7 @@ EOF
     # sampler columns after them).  This assertion pins the header's TAIL, so
     # anything appended to the schema has to be appended here too - it went red
     # in CI (run 36424247320) the first time the sampler columns were added.
-    [[ "$header" == *"|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n" ]]
+    [[ "$header" == *"|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state" ]]
     local kv gpu ctx tps autotuned prefill p2ctx p2tps p2pf
     IFS='|' read -r _ _ _ _ kv _ gpu ctx _ batch ubatch _ _ _ _ _ tps autotuned _ _ prefill p2ctx _ _ p2tps p2pf _ _ _ _ _ _ _ _ _ _ _ <<< "$row"
     [[ "$kv" == "Q4_K_M/q4_0/q4_0" ]]

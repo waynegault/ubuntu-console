@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 76
+# Module Version: 77
+#   v77 (2026-10-12): 2b — the certification now STAMPS how its number was measured.
+#   The measurement-context read (load/cores) moved BEFORE the save so the load is read
+#   once and passed as meas_load, with meas_n=5 and meas_state=certified|indicative; the
+#   warning block below reuses the same read.  New registry columns 40-44.
 #   v76 (2026-10-12): a FAILED profile save is FATAL.  `__llm_autotune_profile_save`
 #   verifies its own registry write (11b v26) and returns 1 when the row does not hold
 #   the value it was asked for; the call site used to echo a warning and carry on, so the
@@ -2506,10 +2510,23 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # it and warn when over-subscribed (11e-llm-model.sh).
         # The FILE name, not the row number: this run tuned MODEL_PATH, so this run's
         # numbers belong to that file whatever the row numbering does meanwhile.
+        # 2b (2026-10-12): carry HOW this number was measured.  The measurement-context
+        # read below is taken HERE instead, so the load is read once and stamped into the
+        # row; a load above the core count is the CONTENDED case that block names, so it
+        # is stamped INDICATIVE rather than dropped.  (Not `local`: script scope.)
+        _row_load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo "?")
+        _row_cores=$(nproc 2>/dev/null || echo "?")
+        _meas_state="certified"
+        if [[ "$_row_load" =~ ^[0-9.]+$ && "$_row_cores" =~ ^[0-9]+$ ]] \
+            && awk -v l="$_row_load" -v c="$_row_cores" 'BEGIN{exit !(l > c)}'
+        then
+            _meas_state="indicative"
+        fi
         __llm_autotune_profile_save "$MODEL_FILE" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
+            "$_row_load" "5" "" "" "$_meas_state" \
             || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
         # A missing helper used to take NEITHER branch and then still print the
@@ -2529,8 +2546,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     # saying so — the number reads as a property of the model.  Printing the load beside
     # it is the cheap half of the fix; the warning is for the case where it is not cheap.
     # (Not `local`: this block is script scope, not a function — SC2168.)
-    _row_load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo "?")
-    _row_cores=$(nproc 2>/dev/null || echo "?")
+    # (The read itself now happens before the save, which stamps it into the row.)
     if [[ "$_row_load" =~ ^[0-9.]+$ && "$_row_cores" =~ ^[0-9]+$ ]] \
         && awk -v l="$_row_load" -v c="$_row_cores" 'BEGIN{exit !(l > c)}'
     then

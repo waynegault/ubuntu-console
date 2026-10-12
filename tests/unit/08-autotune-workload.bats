@@ -68,7 +68,7 @@ EOF
     local header
     header=$(head -1 "$LLM_REGISTRY")
     # The header is the schema: pin its TAIL BY NAME, not its field count.
-    [[ "$header" == *"|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n" ]]
+    [[ "$header" == *"|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state" ]]
 }
 
 @test "autotune-001: autotune-model.sh accepts --workload and env default chat" {

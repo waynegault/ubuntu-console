@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 26
+# Module Version: 27
+#   v27 (2026-10-12): __llm_autotune_profile_save takes five optional MEASUREMENT args
+#   (26-30) and writes registry columns 40-44 when provided: how a certified tps was
+#   measured (load, sample count, spread, position drift, certified|indicative).  Empty
+#   args leave the columns untouched, so legacy callers are unaffected.  (Item 2b.)
 #   v26 (2026-10-12): __llm_autotune_profile_save VERIFIES its own write — after the
 #   in-place mv it reads the row back and returns 1 unless field 17 (tps) equals the
 #   value asked for AND field 18 is 'yes'.  A registry write has silently VANISHED
@@ -288,6 +292,7 @@ function __llm_autotune_profile_save() {
     local spec_accept_len="${23:-}"
     local workload="${24:-}"
     local ttft_ms="${25:-}"
+    local meas_load="${26:-}" meas_n="${27:-}" meas_spread_pct="${28:-}" meas_drift_pct="${29:-}" meas_state="${30:-}"
     local profile_file="$LLM_REGISTRY"
 
     # $1 is a row NUMBER or a model FILE name; both are accepted so existing callers
@@ -334,6 +339,12 @@ function __llm_autotune_profile_save() {
     [[ "$spec_accept_len" =~ ^[0-9]+(\.[0-9]+)?$ ]] || spec_accept_len=""
     workload=$(__llm_autotune_sanitize_token "$workload")
     [[ "$ttft_ms" =~ ^[0-9]+(\.[0-9]+)?$ ]] || ttft_ms=""
+    # 2b measurement columns: numeric when given, else empty (leave the column).
+    [[ "$meas_load" =~ ^[0-9]+(\.[0-9]+)?$ ]] || meas_load=""
+    [[ "$meas_n" =~ ^[0-9]+$ ]] || meas_n=""
+    [[ "$meas_spread_pct" =~ ^[0-9]+(\.[0-9]+)?$ ]] || meas_spread_pct=""
+    [[ "$meas_drift_pct" =~ ^[0-9]+(\.[0-9]+)?$ ]] || meas_drift_pct=""
+    [[ "$meas_state" == "certified" || "$meas_state" == "indicative" ]] || meas_state=""
 
     # Registry hygiene: persist measured floats at a maximum of 2 decimal
     # places. The server timings carry full float64 precision (e.g. prefill
@@ -391,6 +402,11 @@ function __llm_autotune_profile_save() {
         -v spec_accept_len_val="$spec_accept_len" \
         -v workload_val="$workload" \
         -v ttft_ms_val="$ttft_ms" \
+        -v meas_load_val="$meas_load" \
+        -v meas_n_val="$meas_n" \
+        -v meas_spread_val="$meas_spread_pct" \
+        -v meas_drift_val="$meas_drift_pct" \
+        -v meas_state_val="$meas_state" \
         -v header="$LLM_REGISTRY_HEADER" \
         'BEGIN {
             OFS="|"
@@ -427,6 +443,12 @@ function __llm_autotune_profile_save() {
                 if (spec_accept_len_val != "") $32 = spec_accept_len_val
                 if (workload_val != "") $33 = workload_val
                 if (ttft_ms_val != "") $34 = ttft_ms_val
+                # 2b: columns 40-44 carry the measurement provenance, one block so
+                # they are set together and a partial write cannot half-fill them.
+                if (meas_state_val != "") {
+                    $40 = meas_load_val; $41 = meas_n_val; $42 = meas_spread_val
+                    $43 = meas_drift_val; $44 = meas_state_val
+                }
             }
             # SPEC-DEC-002: clamp the stored thread count to the i9-12900HK
             # P-core ceiling (6) on every registry write — a pre-cap row must
