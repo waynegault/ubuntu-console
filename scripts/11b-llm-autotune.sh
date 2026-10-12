@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 25
+# Module Version: 26
+#   v26 (2026-10-12): __llm_autotune_profile_save VERIFIES its own write — after the
+#   in-place mv it reads the row back and returns 1 unless field 17 (tps) equals the
+#   value asked for AND field 18 is 'yes'.  A registry write has silently VANISHED
+#   before (2026-09-22, row 21), and a save whose awk matched no row used to return 0.
 #   v25 (2026-10-02): the profile-save writer and the remap both take their header
 #   and column count from LLM_REGISTRY_HEADER (01-constants).  The remap carried its
 #   own 32-column header and a 20/26/32 width list, so it matched neither a 37- nor a
@@ -437,6 +441,20 @@ function __llm_autotune_profile_save() {
         mv "${profile_file}.tmp" "$profile_file" || return 1
     else
         rm -f "${profile_file}.tmp"
+        return 1
+    fi
+
+    # Write verification (2026-10-12).  A registry write has silently VANISHED before
+    # (2026-09-22: the row-21 retune's saved tps never persisted), and an awk whose $3
+    # matched no row changed nothing and still returned 0.  Read the row BACK after the
+    # mv and fail closed unless field 17 is the requested tps and field 18 is 'yes'.
+    # No message here: the CALLER must treat a non-zero return as fatal, not a warning.
+    local _verified=""
+    if ! _verified="$(awk -F'|' -v f="$model_file" \
+            '$3 == f {print $17 "|" $18; exit}' "$profile_file")"; then
+        _verified=""
+    fi
+    if [[ "$_verified" != "$tps|yes" ]]; then
         return 1
     fi
 }

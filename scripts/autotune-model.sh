@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 75
+# Module Version: 76
+#   v76 (2026-10-12): a FAILED profile save is FATAL.  `__llm_autotune_profile_save`
+#   verifies its own registry write (11b v26) and returns 1 when the row does not hold
+#   the value it was asked for; the call site used to echo a warning and carry on, so the
+#   run still printed its "saved:" line from the unchanged row and read as success.
 #   v75 (2026-10-03): the dead `__llm_thread_cap` standalone fallback is deleted —
 #   `__llm_thread_cap has ONE definition in scripts/11d-llm-gpu.sh, which env.sh (sourced
 #   above, exit-1 on failure) loads.
@@ -2506,7 +2510,7 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
-            || echo "  warning: profile save failed"
+            || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
         # A missing helper used to take NEITHER branch and then still print the
         # `saved:` line below straight out of the unchanged registry row — a run

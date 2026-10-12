@@ -633,3 +633,20 @@ STUB
     run _tac_gpu_wait_used_below 800 10 1
     [[ "$status" -eq 0 ]] || { echo "a multi-GPU reading never opened the gate"; return 1; }
 }
+
+@test "verify-write: a save whose awk matches NO row is REFUSED, not reported as success" {
+    # Item 5 (2026-10-12).  A row whose file name carries a BACKSLASH is not matched by the
+    # save's `awk -v f=...` (awk expands the escape in a -v assignment), so the rewrite
+    # emits the row unchanged and the mv still succeeds.  BEFORE the write-verification
+    # this returned 0 — a save that persisted NOTHING and read as success.  It must now
+    # fail closed.  The mangling premise, proved once here so the case cannot pass
+    # vacuously: printf 'a\b\n' | awk -F'|' -v f='a\b' '{print ($1==f)?"M":"N"}' -> N.
+    printf '%s\n' "$LLM_REGISTRY_HEADER" \
+        '1|Weird|weird\name.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|1024|llama_server|auto|on|0|no|no|no' \
+        > "$LLM_REGISTRY"
+    run __llm_autotune_profile_save "1" "native" "4608" "1024" "256" "1" "256" "12.3"
+    [[ "$status" -ne 0 ]] || { echo "a save that wrote NOTHING was reported as success"; return 1; }
+    # Control: prove the write really did no-op (the case is not green by accident).
+    [[ "$(grep '^1|' "$LLM_REGISTRY" | cut -d'|' -f17)" != "12.3" ]] \
+        || { echo "premise failed: the write DID land, so this case tested nothing"; return 1; }
+}
