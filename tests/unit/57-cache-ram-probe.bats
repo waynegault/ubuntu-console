@@ -72,6 +72,15 @@ setup() {
     export WATCH
     awk '/^gate_ok\(\)/,/^}/' "$WATCH" >> "$SANDBOX/fns.sh"
     grep -q 'gate_ok' "$SANDBOX/fns.sh" || { echo "FAIL: gate_ok not extracted from $WATCH"; return 1; }
+    # gate 4's READING is the shared helper now (bin/_tac-bin-lib.sh v6): the shipped
+    # gate_ok CALLS it, so the definition has to travel with the extraction — and it is
+    # extracted from the shipped library, not paraphrased, so these cases still pin the
+    # code that runs.  The `nvidia-smi` function each case defines intercepts its query.
+    BIN_LIB="$REPO_ROOT/bin/_tac-bin-lib.sh"
+    export BIN_LIB
+    awk '/^_tac_gpu_used_mib\(\)/,/^}/' "$BIN_LIB" >> "$SANDBOX/fns.sh"
+    grep -q '_tac_gpu_used_mib' "$SANDBOX/fns.sh" \
+        || { echo "FAIL: _tac_gpu_used_mib not extracted from $BIN_LIB"; return 1; }
     LOAD_MAX="$(sed -n 's/^LOAD_MAX=\([0-9][0-9]*\).*$/\1/p' "$WATCH")"
     LEDGER_MAX="$(sed -n 's/^LEDGER_MAX=\([0-9][0-9]*\).*$/\1/p' "$WATCH")"
     VRAM_MAX="$(sed -n 's/^VRAM_MAX=\([0-9][0-9]*\).*$/\1/p' "$WATCH")"
@@ -324,8 +333,12 @@ watch_layout() {
     W_LAUNCHES="$SANDBOX/watch-launches.log"
     mkdir -p "$W_ROOT/scripts" "$W_ROOT/bin" "$W_OUT" "$W_STUBBIN"
     # The shipped script, byte for byte.  $SELF_DIR is its own directory, so it
-    # resolves REPO to $W_ROOT and HEAVY to $W_ROOT/bin/heavy-job.
+    # resolves REPO to $W_ROOT and HEAVY to $W_ROOT/bin/heavy-job.  The shared library
+    # it sources (bin/_tac-bin-lib.sh — gate 4's reading) must travel with it, or the
+    # source fails and gate 4 reads empty (fail-closed, so the open-gate case would
+    # fail rather than the gate silently opening).
     cp "$WATCH" "$W_ROOT/scripts/cache-ram-probe-watch.sh"
+    cp "$REPO_ROOT/bin/_tac-bin-lib.sh" "$W_ROOT/bin/_tac-bin-lib.sh"
     W_SCRIPT="$W_ROOT/scripts/cache-ram-probe-watch.sh"
     export W_SCRIPT
     : > "$W_LAUNCHES"
@@ -476,18 +489,22 @@ probe_result_fixture() {
     [[ "$output" != *"wrote nothing"* ]]
 }
 
-# ── the PROBE's post-suspend free-VRAM wait (v3: exhaustion aborts) ──────────
+# ── the PROBE's post-suspend free-VRAM wait (v4: the SHARED helper) ──────────
 #
 # The watcher gates the LAUNCH; this is the probe's own wait AFTER it has taken the
-# suspend hold — and it used to END after 45 polls and start the measurement on
-# whatever free VRAM it found.  That is the fall-through that launched a run onto a
-# card holding 3.6 GiB (2026-10-11).
+# suspend hold — and its hand-rolled predecessor ENDED after 45 polls and started the
+# measurement on whatever free VRAM it found.  That is the fall-through that launched a
+# run onto a card holding 3.6 GiB (2026-10-11).  Since v4 the wait is the shared
+# `_tac_gpu_wait_used_below` (bin/_tac-bin-lib.sh); the helper's own cases — the
+# foreign-holder test, exhaustion, the unreadable card and the multi-GPU reading — live
+# in tests/unit/08-autotune-workload.bats.  What is pinned HERE is the PROBE's use of
+# it: the bound is 800 MiB USED, and a non-zero return must refuse the run.
 #
 # HERMETIC: the shipped cache-ram-probe.sh and the shipped bin/_tac-bin-lib.sh run
 # UNMODIFIED from a scratch repo layout; only their collaborators are supplied — a
 # stub env.sh (the three names the probe reads from it), a sandbox registry with one
 # row, a dummy model file, and PATH stubs.  nvidia-smi decides the reading (the
-# case picks it), systemctl is a no-op, and sleep is a no-op so the 45x2s wait does
+# case picks it), systemctl is a no-op, and sleep is a no-op so the 45 x 2s wait does
 # not cost 90 s.  The server binary the probe would spawn is a RECORDER that exits
 # at once, so "a server was started" is observable and no real server, GPU, lock,
 # /dev/shm ledger or registry is touched.
@@ -522,7 +539,8 @@ probe_layout() {
         for (( _pad = 16; _pad < 39; _pad++ )); do printf '%s' '|'; done
         printf '\n'
     } > "$P_REGISTRY"
-    # nvidia-smi prints whatever W_GPU holds (empty by default => no reading at all).
+    # nvidia-smi prints whatever W_GPU holds — a USED reading in MiB, one line per card
+    # (empty by default => nothing readable at all, which must fail CLOSED).
     printf '%s\n' '#!/usr/bin/env bash' '[[ -n "${W_GPU:-}" ]] && printf "%s\n" "$W_GPU"' \
         'exit 0' > "$P_STUB/nvidia-smi"
     printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$P_STUB/systemctl"
@@ -540,7 +558,7 @@ probe_layout() {
         "TAC_PYTHON='$W_PY'" > "$P_ROOT/env.sh"
 }
 
-# probe_run <nvidia-smi reading, e.g. "4000, 3900" or "">
+# probe_run <nvidia-smi USED reading in MiB, e.g. "3900" or "" for unreadable>
 probe_run() {
     run env PATH="$P_STUB:$PATH" TMPDIR="$P_TMP" \
         W_GPU="$1" W_SERVER_LOG="$P_SERVER_LOG" \
@@ -552,14 +570,16 @@ probe_run() {
 }
 
 @test "probe free-VRAM wait: a card that never frees ABORTS before starting a server" {
-    # Catches: the fall-through that ENDED the wait after 45 polls and started the
-    # measurement on whatever free VRAM it found — the shape that launched a run
-    # onto a card holding 3.6 GiB.  100 MiB free is never > 3000.
+    # Catches: the probe PROCEEDING when its wait cannot get a free card.  The
+    # hand-rolled predecessor ended the wait after 45 polls and started the measurement
+    # on whatever free VRAM it found — the shape that launched a run onto a card holding
+    # 3.6 GiB.  3900 MiB used is never under the 800 MiB bound.
     probe_layout
-    probe_run "4000, 3900"
+    probe_run "3900"
     [[ "$status" -eq 1 ]]
-    [[ "$output" == *"card never freed in 45 polls"* ]]
-    [[ "$output" == *"last free: 100 MiB"* ]]
+    [[ "$output" == *"card did NOT free within 90s"* ]]
+    [[ "$output" == *"last: 3900 MiB used, need < 800"* ]]
+    [[ "$output" == *"refusing to start"* ]]
     [[ ! -s "$P_SERVER_LOG" ]]                        # no server was ever started
     [[ "$output" != *"arm sequence this run"* ]]      # never reached the arm loop
     [[ -z "$(ls "$P_OUT"/result-*.json 2>/dev/null)" ]]
@@ -567,12 +587,15 @@ probe_run() {
 
 @test "probe free-VRAM wait: an unreadable reading ABORTS too (fail closed)" {
     # Catches: an empty nvidia-smi reading being treated as "free enough" — the old
-    # `|| break` left the loop at once with an unknown card and started the run.
+    # `|| break` left the loop at once with an unknown card and started the run.  The
+    # shared helper fails CLOSED on "cannot tell"; this pins that the probe turns that
+    # non-zero return into a refusal.
     probe_layout
     probe_run ""
     [[ "$status" -eq 1 ]]
-    [[ "$output" == *"cannot read free VRAM"* ]]
+    [[ "$output" == *"cannot read used VRAM"* ]]
     [[ "$output" == *"<empty>"* ]]
+    [[ "$output" == *"refusing to start"* ]]
     [[ ! -s "$P_SERVER_LOG" ]]
     [[ "$output" != *"arm sequence this run"* ]]
 }
@@ -614,11 +637,11 @@ probe_run() {
     # would be restarted underneath the measurement.
     probe_layout
     printf '%s\n' '_tac_suspend_acquire() { return 1; }' >> "$P_ROOT/bin/_tac-bin-lib.sh"
-    probe_run "4000, 3900"
+    probe_run "3900"
     [[ "$status" -eq 1 ]]
     [[ "$output" == *"could not acquire the CUDA suspend hold"* ]]
     [[ ! -s "$P_SERVER_LOG" ]]
-    [[ "$output" != *"card never freed"* ]]   # stopped AT the gate, not later
+    [[ "$output" != *"card did NOT free"* ]]   # stopped AT the gate, not later
 }
 
 @test "probe: control — an acquired hold lets the run reach the VRAM wait" {
@@ -626,8 +649,8 @@ probe_run() {
     # case above.  The real helper is used here (sandbox suspend file), so this proves
     # the abort above came from the stub and not from the harness.
     probe_layout
-    probe_run "4000, 3900"
+    probe_run "3900"
     [[ "$status" -eq 1 ]]
     [[ "$output" != *"could not acquire the CUDA suspend hold"* ]]
-    [[ "$output" == *"card never freed"* ]]
+    [[ "$output" == *"card did NOT free"* ]]
 }

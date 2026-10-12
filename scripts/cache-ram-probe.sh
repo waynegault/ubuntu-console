@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-10-12): the post-suspend free-VRAM wait calls the SHARED gate
+#   `_tac_gpu_wait_used_below` (bin/_tac-bin-lib.sh) instead of hand-rolling a
+#   free-VRAM threshold here.  Same contract as v3 — unreadable fails CLOSED,
+#   exhaustion ABORTS with the last reading and never falls through — but the rule now
+#   lives in one reviewed place, because this mechanism had been hand-rolled inline
+#   three times that day and every copy was wrong differently.  The bound is now 800
+#   MiB USED (multi-GPU safe) rather than "> 3000 MiB free".
 #   v3 (2026-10-11): the post-suspend free-VRAM wait ABORTS on exhaustion instead of
 #   proceeding.  After 45 polls (90 s) the loop used to END and the probe started its
 #   measurement on whatever free VRAM it found — the same fall-through that launched a
@@ -536,36 +543,22 @@ if ! _tac_suspend_acquire "$SUSPEND"; then
     exit 1
 fi
 trap '_tac_suspend_release "$SUSPEND"' EXIT
-# swallow-ok: a lane already down is the state this seeks; the free-VRAM loop below
+# swallow-ok: a lane already down is the state this seeks; the free-VRAM check below
 # is the check that the card was actually released.
 systemctl --user stop "$LANE" >/dev/null 2>&1
-_sw=0
-_free=""
-_card_free=0
-while (( _sw < 45 )); do
-    _free="$(_free_mib)"
-    # An unreadable reading is NOT evidence the card is free: this loop exists to
-    # PROVE it freed, so "cannot tell" refuses rather than proceeding — the same
-    # fail-closed direction as the watcher's gate 4.
-    if [[ ! "$_free" =~ ^[0-9]+$ ]]; then
-        warn "FATAL: cannot read free VRAM (last: '${_free:-<empty>}') after ${_sw} poll(s) — refusing to start"
-        exit 1
-    fi
-    if (( _free > 3000 )); then
-        _card_free=1
-        break
-    fi
-    sleep 2
-    _sw=$(( _sw + 1 ))
-done
-# EXHAUSTION ABORTS (v3).  This wait used to END after 45 polls and let the probe start
-# its measurement on whatever free VRAM it found — the fall-through that launched a run
-# onto a card holding 3.6 GiB (2026-10-10).  A window that never opened is a refusal.
-if (( _card_free == 0 )); then
-    warn "FATAL: card never freed in 45 polls/90 s (last free: ${_free} MiB, need > 3000) — refusing to start"
+# THE SHARED GATE (v4).  This wait was hand-rolled here — a free-VRAM threshold polled
+# inline — and the same mechanism was hand-rolled wrongly elsewhere twice more the same
+# day.  It now calls `_tac_gpu_wait_used_below` (bin/_tac-bin-lib.sh), which owns the
+# whole rule: the most-used card (multi-GPU safe), a reading that cannot be read fails
+# CLOSED, and EXHAUSTION ABORTS non-zero with the last reading instead of falling
+# through — the fall-through that once launched a run onto a card holding 3.6 GiB.
+# The bound (800 MiB USED) is chosen so it is satisfiable once OUR lane is down; the
+# old free-VRAM test (> 3000 MiB free) said the same thing less directly.
+if ! _tac_gpu_wait_used_below 800 90; then
+    warn "FATAL: the card did not free for this run (see the gpu-wait line above) — refusing to start"
     exit 1
 fi
-printf '\ncard free before start: %s MiB\n' "$_free"
+printf '\ncard free before start: %s MiB used\n' "$(_tac_gpu_used_mib)"
 
 _seq_out="$(parse_order "$OPT_ORDER" "$OPT_ALLOW_NI")"
 _prc=$?

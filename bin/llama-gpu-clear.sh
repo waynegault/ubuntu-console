@@ -7,8 +7,14 @@
 # released by the driver - use a short grace period instead of the full 30s
 # drain wait so recovery isn't delayed.
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 9
-VERSION="1.4.3"   # 1.4.3: log and _inv_gpu_lock_path moved to the shared bin/_tac-bin-lib.sh.
+# Module Version: 10
+#   v10 (2026-10-12): the VRAM drain wait uses the shared `_tac_gpu_wait_used_below`
+#   (bin/_tac-bin-lib.sh) instead of an inline loop.  The inline form read the FIRST
+#   card and treated an UNREADABLE card as clear, exiting 0 with no wait at all — the
+#   same hand-rolled gate that was wrong three other ways on this box that day.  The
+#   policy is unchanged: a card that will not drain logs and proceeds, because this is
+#   ExecStartPre for the chat lane.
+VERSION="1.4.4"   # 1.4.4: the VRAM drain wait moved to the shared bin library.
 
 if [[ "${1:-}" == "--version" || "${1:-}" == "-V" ]]; then
     echo "llama-gpu-clear $VERSION"
@@ -137,21 +143,29 @@ fi
 # 3. Wait for VRAM to drain (nvidia-smi memory.used < 100 MiB). Full 30s wait
 #    on clean starts. On a crash-recovery start with no orphan process, the
 #    previous server is already gone, so give the driver a short grace period.
+#
+# The WAIT is the shared one (bin/_tac-bin-lib.sh, `_tac_gpu_wait_used_below`), which
+# is multi-GPU safe (the most-used card, not the first) and — unlike the inline loop
+# this replaced — never reads an UNREADABLE card as clear: the old
+# `[[ -z "$USED" || "$USED" -lt 100 ]]` exited 0 IMMEDIATELY when the query failed, so
+# a broken nvidia-smi skipped the drain wait entirely.  The POLICY is unchanged and is
+# this caller's own: a card that will not drain must not keep the chat lane down, so
+# exhaustion still logs and proceeds.  Do not "fix" that here without an owner call on
+# whether a stuck card may hold the lane down.
 if command -v nvidia-smi >/dev/null 2>&1; then
     MAX_ITER=15
     if [[ "$RECOVERY" -eq 1 && -z "${STALE:-}" ]]; then
         MAX_ITER=3
         log "recovery start with no stale process - short VRAM grace (${MAX_ITER} iters)"
     fi
-    for i in $(seq 1 "$MAX_ITER"); do
-        USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-        if [[ -z "$USED" || "$USED" -lt 100 ]]; then
-            log "VRAM clear: ${USED:-unknown} MiB used (iter $i)"
-            exit 0
-        fi
-        sleep 2
-    done
-    log "WARN: VRAM still at ${USED} MiB after $(( MAX_ITER * 2 ))s - proceeding anyway"
+    if _tac_gpu_wait_used_below 100 $(( MAX_ITER * 2 )) 2; then
+        log "VRAM clear: $(_tac_gpu_used_mib) MiB used"
+        exit 0
+    fi
+    # The helper logged the last reading (or that it was unreadable) and did NOT
+    # proceed on its own.  Proceeding is this caller's documented policy.
+    VRAM_LAST="$(_tac_gpu_used_mib)"
+    log "WARN: VRAM still at ${VRAM_LAST:-unreadable} MiB after $(( MAX_ITER * 2 ))s - proceeding anyway"
 else
     log "nvidia-smi not available - skipping VRAM wait"
 fi

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-12): gate 4's VRAM READING comes from the shared `_tac_gpu_used_mib`
+#   (bin/_tac-bin-lib.sh) instead of an inline nvidia-smi pipeline.  The v4 multi-GPU
+#   property (most-used card; empty when nothing is readable) is preserved byte for
+#   byte — it now lives in one reviewed place, because the same GPU gate had been
+#   hand-rolled inline three times that day and every copy was wrong differently.
+#   Gate 4 keeps its own BOUND (VRAM_MAX); only the mechanism moved.
 #   v4 (2026-10-10): gate 4 made MULTI-GPU SAFE.  Found by an independent verifier
 #   testing v3: nvidia-smi returns one line per GPU, so a bare numeric test on the
 #   value never matched on a multi-GPU box and the gate could NEVER open — fail-safe
@@ -49,6 +55,11 @@ set -uo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SELF_DIR/.." && pwd)"
 cd "$REPO" || exit 1
+
+# Shared GPU-availability helpers (_tac_gpu_used_mib) — see bin/_tac-bin-lib.sh, which
+# owns the "is the card free, and for us?" mechanism so this file does not hand-roll it.
+# shellcheck source=../bin/_tac-bin-lib.sh
+source "$REPO/bin/_tac-bin-lib.sh"
 
 HEAVY="$REPO/bin/heavy-job"
 LEDGER_MAX=50   # the boot's CUDA-cycle budget share to spend before a bench
@@ -105,17 +116,18 @@ gate_ok() {
     # The ledger is boot-scoped and absent before the first autotune of a boot.
     # swallow-ok: an absent file and a zero sum are the same state, which the awk prints.
     cycles="$(cat /dev/shm/autotune-cuda-cycles-* 2>/dev/null | awk '{s+=$1} END{print s+0}')"
-    # Gate 4 (v3, hardened v4).  Deliberately NOT silenced: if nvidia-smi cannot be
-    # read the reading stays empty, the numeric test below fails, and the box is
-    # treated as BUSY — the gate fails closed, the correct direction for a GPU probe.
-    # MULTI-GPU SAFE (v4): the query returns ONE LINE PER GPU, and a bare numeric test
-    # on a multi-line value never matches — leaving the gate permanently CLOSED, which
-    # is fail-safe but unusable.  Found by an independent verifier on 2026-10-10.  Take
-    # the MOST-used card so any busy GPU reads busy, and print EMPTY when no line is
-    # numeric so an unreadable card still fails closed.
-    vram="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits \
-        | tr -d ' ' \
-        | awk 'BEGIN{m=-1} /^[0-9]+$/{if ($1+0>m) m=$1+0} END{if (m<0) print ""; else print m}')"
+    # Gate 4 (v3, hardened v4; the READING is shared since v5).  Deliberately NOT
+    # silenced: if nvidia-smi cannot be read the reading stays empty, the numeric test
+    # below fails, and the box is treated as BUSY — the gate fails closed, the correct
+    # direction for a GPU probe.  MULTI-GPU SAFE (v4): the query returns ONE LINE PER
+    # GPU, and a bare numeric test on a multi-line value never matches — leaving the
+    # gate permanently CLOSED, which is fail-safe but unusable.  Found by an
+    # independent verifier on 2026-10-10.  That logic now lives in ONE reviewed place
+    # — `_tac_gpu_used_mib` (bin/_tac-bin-lib.sh), which takes the MOST-used card and
+    # prints EMPTY when nothing is readable — because the same GPU gate had been
+    # hand-rolled inline three times that day and every copy was wrong differently.
+    # Gate 4 still owns its own BOUND (VRAM_MAX); the mechanism below is the reading.
+    vram="$(_tac_gpu_used_mib)"
     load_ok="$(awk -v l="$load1" -v m="$LOAD_MAX" 'BEGIN{print (l<m)?1:0}')"
     if [[ ! "$hj_rc" =~ ^[0-9]+$ ]] || (( hj_rc != 0 )); then
         warn "WARNING: heavy-job --status rc=$hj_rc — cannot read the lock; treating the box as NOT free"

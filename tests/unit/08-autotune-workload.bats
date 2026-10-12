@@ -512,3 +512,124 @@ EOF
     printf '%s\n' "999999" > "$f"
     ! _tac_suspend_held "$f"
 }
+
+# ── the SHARED GPU-availability gate (bin/_tac-bin-lib.sh v6) ────────────────
+#
+# The same GPU gate was hand-rolled inline THREE times in one day and each copy was
+# wrong differently (a fall-through on exhaustion; an unsatisfiable "<1500 MiB BEFORE
+# suspending our own lane" precondition that polled 5.6 h; a multi-line reading that
+# never matched on a multi-GPU box).  These cases drive the ONE reviewed mechanism.
+# Each states the wrong outcome it catches; the A/B for cases (a) and (c) runs the
+# hand-rolled predecessors against the same assertions.
+
+# _gpu_stubs <busy-rc> [used-mib...] — sandbox BOTH inputs: a stub bin/gpu-busy.sh
+# whose EXIT CODE is the foreign-holder contract, and a stub nvidia-smi whose readings
+# come from a queue (one per call, the last repeating), so "a foreign holder is here,
+# then our lane is suspended" is expressible in one case.
+_gpu_stubs() {
+    local busy_rc="$1"; shift
+    local busy_bool="true"
+    (( busy_rc == 0 )) && busy_bool="false"
+    GPUBIN="$TMPDIR_BATS/gpubin"
+    mkdir -p "$GPUBIN"
+    cat > "$GPUBIN/gpu-busy.sh" <<STUB
+#!/usr/bin/env bash
+printf '{"busy":${busy_bool},"reasons":["stub"]}\n'
+exit ${busy_rc}
+STUB
+    chmod +x "$GPUBIN/gpu-busy.sh"
+    local v seq=""
+    for v in "$@"; do seq+="$v"$'\n'; done
+    export GPU_SEQ_FILE="$TMPDIR_BATS/gpu-seq"
+    printf '%s' "$seq" > "$GPU_SEQ_FILE"
+    cat > "$GPUBIN/nvidia-smi" <<'STUB'
+#!/usr/bin/env bash
+# While OUR OWN lane is up (the suspend marker is absent) the card reads the held
+# value; the queue is consulted only once the lane has been suspended.  That is what
+# makes the deadlock expressible: a gate that demands a free card BEFORE suspending
+# can never see the drop.  Unset GPU_SUSPEND_MARKER = always read the queue.
+if [[ -n "${GPU_SUSPEND_MARKER:-}" && ! -e "$GPU_SUSPEND_MARKER" ]]; then
+    printf '%s\n' "${GPU_HELD_MIB:-3376}"
+    exit 0
+fi
+# One reading per call from the queue; the LAST value repeats once it is exhausted.
+_n=$(wc -l < "$GPU_SEQ_FILE")
+if (( _n > 1 )); then
+    head -1 "$GPU_SEQ_FILE"
+    sed -i '1d' "$GPU_SEQ_FILE"
+else
+    cat "$GPU_SEQ_FILE"
+fi
+STUB
+    chmod +x "$GPUBIN/nvidia-smi"
+    export TAC_GPU_BUSY_SH="$GPUBIN/gpu-busy.sh"
+    export PATH="$GPUBIN:$PATH"
+}
+
+@test "gpu gate: our OWN lane holding the card is NOT a foreign holder (the 5.6h deadlock)" {
+    # Catches the UNSATISFIABLE precondition: gpu-busy.sh excludes our own fleet's
+    # servers, so a card pinned at our lane's ~3376 MiB must read FREE — the foreign
+    # test must PASS and the run must proceed to the suspend, where 3376 -> 120 is
+    # satisfiable.  The hand-rolled predecessor waited for <1500 MiB BEFORE suspending
+    # and polled 5.6 h having launched nothing.
+    #
+    # The fixture models the ORDER: the card reads 3376 while our lane is up and 120
+    # only once the suspend marker is held, so a threshold-before-suspend gate can
+    # never see the drop.
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    _gpu_stubs 0 120
+    export GPU_SUSPEND_MARKER="$TMPDIR_BATS/lane.suspend"
+    rm -f "$GPU_SUSPEND_MARKER"
+    run _tac_gpu_wait_foreign_clear 10 0
+    [[ "$status" -eq 0 ]] || { echo "a card held only by OUR lane was treated as foreign"; return 1; }
+    _tac_suspend_acquire "$GPU_SUSPEND_MARKER" || { echo "the suspend could not be taken"; return 1; }
+    run _tac_gpu_wait_used_below 800 10 1
+    [[ "$status" -eq 0 ]] || { echo "the card never freed after our own lane was suspended"; return 1; }
+    _tac_suspend_release "$GPU_SUSPEND_MARKER"
+}
+
+@test "gpu gate: a FOREIGN holder makes it WAIT, and our lane's VRAM does not satisfy it" {
+    # Catches: reading "something is using 3376 MiB" as permission to launch.  With a
+    # foreign holder the wait must TIME OUT (non-zero) even though the VRAM reading on
+    # its own would have looked like a busy-but-usable card.
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    _gpu_stubs 1 3376 120
+    run _tac_gpu_wait_foreign_clear 0 0
+    [[ "$status" -ne 0 ]] || { echo "a FOREIGN holder was accepted as free"; return 1; }
+}
+
+@test "gpu gate: exhaustion ABORTS non-zero and never falls through" {
+    # Catches the fall-through that launched a run onto an occupied card: a card that
+    # never frees must return NON-ZERO, so the caller launches nothing.
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    _gpu_stubs 0 3376 3376 3376
+    run _tac_gpu_wait_used_below 800 0 0
+    [[ "$status" -ne 0 ]] || { echo "an exhausted wait returned success (fall-through)"; return 1; }
+}
+
+@test "gpu gate: an unreadable nvidia-smi FAILS CLOSED" {
+    # Catches: "cannot tell" reading as "free".  An empty reading must never satisfy
+    # the used-below test, because the caller has already suspended our lane.
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    _gpu_stubs 0 ""
+    run _tac_gpu_wait_used_below 800 10 1
+    [[ "$status" -ne 0 ]] || { echo "an unreadable card was accepted as free"; return 1; }
+}
+
+@test "gpu gate: a MULTI-GPU multi-line reading still OPENS (the v4 property)" {
+    # Catches the regression that closed the gate forever on a multi-GPU box: the query
+    # prints ONE LINE PER CARD, so a bare numeric test never matches.  Two lines under
+    # the bound must yield the MOST-used card and open.
+    source "$REPO_ROOT/bin/_tac-bin-lib.sh"
+    mkdir -p "$TMPDIR_BATS/multigpu"
+    cat > "$TMPDIR_BATS/multigpu/nvidia-smi" <<'STUB'
+#!/usr/bin/env bash
+printf '100\n50\n'
+STUB
+    chmod +x "$TMPDIR_BATS/multigpu/nvidia-smi"
+    export PATH="$TMPDIR_BATS/multigpu:$PATH"
+    run _tac_gpu_used_mib
+    [[ "$output" == "100" ]] || { echo "the most-used card was not taken (got '$output')"; return 1; }
+    run _tac_gpu_wait_used_below 800 10 1
+    [[ "$status" -eq 0 ]] || { echo "a multi-GPU reading never opened the gate"; return 1; }
+}
