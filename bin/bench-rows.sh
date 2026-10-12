@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-12): the post-stop free-VRAM wait is the shared `_tac_gpu_wait_used_below`
+#   (bin/_tac-bin-lib.sh).  The inline loop it replaced broke out on an UNREADABLE reading
+#   and fell through on exhaustion, so the bench could launch against an occupied or
+#   unknown card; it now ABORTS (exit 1, hold released by the EXIT trap) instead.
 #   v4 (2026-10-11): the suspend-owner helper was renamed _tac_suspend_pid
 #   (bin/_tac-bin-lib.sh v5 — the pid now lives in the marker itself).
 # TRACKED HERE since 2026-10-01: this script lived only as a loose ~/.local/bin copy, so a
@@ -30,8 +34,8 @@
 #   autotune-model.sh), and that distinction is deliberate until it is fixed.
 set -uo pipefail
 
-# Shared helpers (_free_mib) — see bin/_tac-bin-lib.sh.  Sourced by realpath so
-# the ~/.local/bin symlink and the repo path both resolve.
+# Shared helpers (_tac_suspend_*, _tac_gpu_wait_used_below) — see bin/_tac-bin-lib.sh.
+# Sourced by realpath so the ~/.local/bin symlink and the repo path both resolve.
 # shellcheck source=_tac-bin-lib.sh
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
 
@@ -101,13 +105,21 @@ trap '_tac_suspend_release "$SUSPEND"' EXIT
 # swallow-ok: the lane may already be down, and a down lane is the state this line seeks either way
 systemctl --user stop "$LANE" >/dev/null 2>&1 || true
 
-for _ in $(seq 1 45); do
-    _free="$(_free_mib)"
-    [[ "$_free" =~ ^[0-9]+$ ]] || break
-    (( _free > 3000 )) && break
-    sleep 2
-done
-echo "=== card free before start: ${_free:-unknown} MiB" >> "$LOG"
+# Require the card to be genuinely free before launching the bench — through the SHARED
+# wait (bin/_tac-bin-lib.sh), never a hand-rolled free-VRAM loop.  The loop this replaced
+# broke out on an UNREADABLE reading (a failing nvidia-smi launched the bench against a
+# card whose state was unknown) and FELL THROUGH on exhaustion, so a bench could start on
+# an occupied card and measure contamination instead of the certified configuration.  The
+# order is what makes the bound satisfiable: the suspend hold is taken and the lane stopped
+# ABOVE, so our own ~3.4 GiB is gone by the time this runs.
+if ! _tac_gpu_wait_used_below 800 90 2; then
+    # The wait logged the last reading (or that the card was unreadable) and did not
+    # proceed.  ABORT rather than launch — the EXIT trap above releases the hold.
+    echo "=== ABORT: the card did not free after the lane stop — NOT launching the bench" \
+        | tee -a "$LOG"
+    exit 1
+fi
+echo "=== card free before start: $(_tac_gpu_used_mib) MiB used" >> "$LOG"
 
 # The repo's own non-interactive function runner; `model bench` accepts several rows.
 "$HOME/.local/bin/tac-exec" model bench "$@" >> "$LOG" 2>&1
