@@ -309,10 +309,14 @@ __row39() {  # <num> <file> <ctx> <tps> <workload> <ttft> <repeat_last_n>
     printf '%s\n' "$out"
 }
 
-@test "remap: every column survives a 39-column remap (card e0579318)" {
+@test "remap: every column survives a remap to the CURRENT header width (card e0579318)" {
     # Catches: a remap that no-ops on the CURRENT schema — the pre-fix code emitted a
     # 32-column header, matched neither 37 nor 39 wide rows, and left the scanned row
     # with blank tuning.  The 33-39 columns are the ones it silently dropped.
+    #
+    # 2026-10-13: the row is PADDED TO THE HEADER, and 2b grew the header 39 -> 44
+    # (cols 40-44), so the width is DERIVED from the header rather than pinned to the
+    # 39 the schema happened to be when this case was written.
     local old="$TMPDIR_BATS/old39.conf" new="$TMPDIR_BATS/new39.conf"
     {
         printf '%s\n' "$LLM_REGISTRY_HEADER"
@@ -325,10 +329,14 @@ __row39() {  # <num> <file> <ctx> <tps> <workload> <ttft> <repeat_last_n>
 
     __llm_autotune_profiles_remap_by_registry "$old" "$new"
 
-    local row
+    local row ncols
     row=$(awk -F'|' '$3 == "alpha.gguf"' "$new")
-    # The header is the schema: 39 columns, and the row is padded to it.
-    [ "$(awk -F'|' '{print NF}' <<< "$row")" -eq 39 ]
+    ncols=$(awk -F'|' 'NR==1{print NF}' "$new")
+    # The header is the schema: the row is padded to the header's width, whatever it is.
+    # Assert the width really is wider than the 39 this case was written against, so the
+    # derived check below cannot pass vacuously on a future narrow schema.
+    [ "$ncols" -gt 39 ]
+    [ "$(awk -F'|' '{print NF}' <<< "$row")" -eq "$ncols" ]
     [[ "$(cut -d'|' -f8 <<< "$row")" == "4096" ]]
     [[ "$(cut -d'|' -f17 <<< "$row")" == "11.5" ]]
     # The columns the old 32-column remap dropped:

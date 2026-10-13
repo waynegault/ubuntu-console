@@ -224,9 +224,19 @@ __fast_member_shellcheck() {
     # 2026-09-16: row 2 recorded .96 tps while the box ran at load 20-26 on 12 cores, and
     # nothing in the output said so — the figure reads as a property of the model. The
     # summary must name the load, and must say CONTENDED once it exceeds the core count.
+    #
+    # 2026-10-13: the READ moved out of that window — 2b placed it before the save and 3c
+    # moved it above the selftest branch — so asserting the literal path INSIDE `-A14` no
+    # longer describes the summary (the WINDOW was stale, not the behaviour).  Assert the
+    # read directly, and keep the window's two real claims: the load it stamps and the
+    # CONTENDED verdict it can print.
+    run grep -nF '/proc/loadavg' "$REPO_ROOT/scripts/autotune-model.sh"
+    [ "$status" -eq 0 ]
+    [[ -n "$output" ]]
+
     run grep -A14 'saved:   ctx=' "$REPO_ROOT/scripts/autotune-model.sh"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"/proc/loadavg"* ]]
+    [[ "$output" == *"_row_load"* ]]
     [[ "$output" == *"CONTENDED"* ]]
 }
 
