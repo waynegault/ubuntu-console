@@ -27,3 +27,14 @@
 # ENTRY once a green CI run for the fixed tip exists — it exists only so the commit that
 # fixes the red is not itself blocked by the red it fixes.
 workflow=CI | owner=hal | card=CI-RED-001 | expiry=2026-10-14 | tests/unit/53 recorder cases failed on a host-only .venv path (exit 127); fixed in range, removed once green
+
+# NIGHTLY-2026-10-13 / session ubuntu-console-64: the NIGHTLY is red on the SAME commit
+# (64b18037) for a DIFFERENT defect than the CI entry above — the 08 suite's
+# autotune-selftest/dxg cases abort with `_row_load: unbound variable`, a regression 2b
+# introduced (it moved the measurement-context read INSIDE the write branch, which the
+# selftest path skips, so `set -u` killed the run).  The nightly is the ONLY CI job that
+# runs the unit suites ci.yml excludes, so this red cannot appear in `CI`.  It is fixed by
+# a8ddc313, which reads the load ABOVE the branch.  A red main blocks the very commit that
+# fixes it, so this entry exists only until the nightly runs on a8ddc313 and goes green —
+# DELETE IT THEN (verify with `check_ci_status.py --fail --cache-ttl 0`, live not cached).
+workflow=Nightly Full Suite | owner=hal | card=CI-RED-001 | expiry=2026-10-15 | 08 selftest/dxg cases abort "_row_load: unbound variable" (2b regression); fixed by a8ddc313 — delete once a green nightly exists
