@@ -593,6 +593,11 @@ Two bench modes share the same pure-text generation payload (no `response_format
 
 Both modes parse the server `timings` block (`prompt_per_second`, `predicted_per_second`) for prefill and decode throughput, falling back to wall-clock when absent.
 
+**The argv axis a certified `tps` is measured under (the `--cache-ram` divergence).** The certification spawns its server with llama.cpp's **default 8192 MiB HOST prompt cache** — it passes **no `--cache-ram`** (`scripts/autotune-model.sh`, `_bench_spawn`). The box **serves `--cache-ram 0`** deliberately: that pin is a host-RAM guard, because five resident lanes at the 8192 MiB default would reserve ~40 GiB of this box's 47 GiB. Measured 2026-10-10 (`scripts/cache-ram-probe.sh`, whose header carries the verdict): the flag makes **no difference to DECODE** — the cold-decode gap follows run POSITION, not the arm — it moves only reuse/`ttft` (the served arm re-prefills on a conversation switch, `+5.3 s` TTFT). So a certified `tps` is the served **decode** rate; the divergence is a reuse/`ttft` cost, not a throughput one.
+
+**The measurement columns (40-44) a certified row now carries.** `meas_load`/`meas_n` are the box load at certification and the sample count (5); `meas_state` is `certified` or `indicative`, and **`indicative` means the number is not trustworthy as a property of the model**, for either of two independent reasons: the box was CONTENDED when it was taken (load above the core count — the run refuses to write that by default; `--allow-contended` records it), or its `meas_drift_pct` — the spread of the SAME config measured at a second POSITION — exceeded the cache-ram probe's 25% hazard bound.
+
+
 ```json
 {
   "messages": [{
