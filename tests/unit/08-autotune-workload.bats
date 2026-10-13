@@ -700,3 +700,58 @@ STUB
     [[ -n "$save_line" ]]
     (( refuse_line < save_line )) || { echo "the refusal must precede the save (refuse=$refuse_line save=$save_line)"; return 1; }
 }
+
+# ── 1a: the position term (2026-10-13) ───────────────────────────────────────
+# The winner is a median of 5 samples taken at ONE point in the run, and this box
+# drifts with POSITION (45-65% cold-decode drift across the cache-ram probe's own
+# positions against ~13% run-to-run spread).  1a re-measures the SAME config at a
+# second position and records the drift, stamped indicative above the probe's own
+# 25% DRIFT_WARN_PCT bound.
+
+@test "1a: the position-drift formula is the probe's own (max-min)/max" {
+    # Catches: a drift DEFINED differently from the probe's, so a figure here and a
+    # figure there would not mean the same thing.  The probe computes (max-min)/max*100
+    # (scripts/cache-ram-probe.sh:512) against its 25% bound.
+    eval "$(sed -n '/^__autotune_position_drift()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    declare -f __autotune_position_drift >/dev/null
+
+    run __autotune_position_drift 22.66 23.77
+    [[ "$output" == "4.67" ]] || { echo "22.66 vs 23.77 must drift 4.67% (got '$output')"; return 1; }
+    # Order-independent: the same pair read the other way must give the same figure.
+    run __autotune_position_drift 23.77 22.66
+    [[ "$output" == "4.67" ]] || { echo "the drift must not depend on position ORDER (got '$output')"; return 1; }
+    # (max-min)/max: 10 vs 20 over the max 20 = 50%.
+    run __autotune_position_drift 10 20
+    [[ "$output" == "50.00" ]] || { echo "10 vs 20 must drift 50.00% (got '$output')"; return 1; }
+    # A non-positive or unreadable figure yields NO drift, never a fabricated one.
+    run __autotune_position_drift 0 20
+    [[ -z "$output" ]] || { echo "a zero first position must yield no drift (got '$output')"; return 1; }
+    run __autotune_position_drift "" 20
+    [[ -z "$output" ]] || { echo "an absent first position must yield no drift (got '$output')"; return 1; }
+    run __autotune_position_drift "?" 23
+    [[ -z "$output" ]] || { echo "a non-numeric figure must yield no drift (got '$output')"; return 1; }
+}
+
+@test "1a: the certification measures a SECOND position and stamps indicative above 25%" {
+    # Catches the helper-only blind spot plus both halves of the policy: the verdict that
+    # the write branch really RE-MEASURES the winner config (a second bench_ctx, AFTER the
+    # refusal gate), that the drift reaches meas_drift_pct (save arg 29), and that exceeding
+    # the bound stamps meas_state=indicative.  A test on the helper alone proves none of it.
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" == *'AUTOTUNE_DRIFT_WARN_PCT=25'* ]]
+    [[ "$src" == *'_meas_pos2=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 5'* ]]
+    [[ "$src" == *'_meas_drift_pct=$(__autotune_position_drift "${BEST_TPS:-0}" "$_meas_pos2")'* ]]
+    # the figure reaches the save as meas_drift_pct — the FOURTH optional (arg 29)
+    [[ "$src" == *'"$_row_load" "5" "" "$_meas_drift_pct" "$_meas_state"'* ]]
+    # ...and exceeding the bound stamps the row indicative, as contention does
+    [[ "$src" == *'awk -v d="$_meas_drift_pct" -v w="$AUTOTUNE_DRIFT_WARN_PCT"'* ]]
+    [[ "$src" == *'_meas_state="indicative"'* ]]
+    # A REFUSED row must not spend the second bench: the refusal precedes it.
+    local refuse_line pos2_line
+    refuse_line=$(grep -nF 'REFUSING to write' "$REPO_ROOT/scripts/autotune-model.sh" | head -1 | cut -d: -f1)
+    pos2_line=$(grep -nF '_meas_pos2=$(bench_ctx' "$REPO_ROOT/scripts/autotune-model.sh" | head -1 | cut -d: -f1)
+    [[ -n "$refuse_line" ]]
+    [[ -n "$pos2_line" ]]
+    (( refuse_line < pos2_line )) || { echo "the second bench must follow the refusal (refuse=$refuse_line pos2=$pos2_line)"; return 1; }
+}

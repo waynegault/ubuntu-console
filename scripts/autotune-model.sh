@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 78
+# Module Version: 79
+#   v79 (2026-10-13): 1a — the POSITION term.  The winner is a median of 5 taken at ONE
+#   point in the run, so the write branch now measures the SAME config a SECOND time
+#   (after profile 2 and the spec sweep, so it is a genuinely later position) and records
+#   the drift in meas_drift_pct (col 43) using the probe's own (max-min)/max formula;
+#   above the probe's 25% DRIFT_WARN_PCT the row is stamped indicative, as contention is.
 #   v78 (2026-10-13): 3c — the certification REFUSES to write when the box is
 #   contended.  A tps measured on a contended box is indicative, not certified, so
 #   by default the run exits 1 WITHOUT writing the row; --allow-contended writes it
@@ -518,6 +523,27 @@ __autotune_measurement_verdict() {
         return 0
     fi
     if [[ "$allow" == "1" ]]; then echo indicative; else echo refuse; fi
+    return 0
+}
+
+# ── 1a: the position term ────────────────────────────────────────────────────
+# The winner is a median of 5 samples taken at ONE point in the run, and this box
+# drifts with POSITION (the cache-ram probe measured 45-65% cold-decode drift across
+# its own positions against only ~13% run-to-run spread).  The bound below is the
+# probe's own DRIFT_WARN_PCT (scripts/cache-ram-probe.sh:94) — deliberately the SAME
+# number, so a drift flagged here means the same thing as a drift flagged there.
+AUTOTUNE_DRIFT_WARN_PCT=25
+
+# __autotune_position_drift <p1> <p2> — the probe's OWN formula (cache-ram-probe.sh:512,
+# (max-min)/max * 100), so the figure is directly comparable with that 25% bound.
+# Prints one number at 2dp, or NOTHING when either figure is absent or not positive.
+__autotune_position_drift() {
+    local p1="${1:-}" p2="${2:-}"
+    if [[ "$p1" =~ ^[0-9]+([.][0-9]+)?$ && "$p2" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        awk -v a="$p1" -v b="$p2" 'BEGIN{
+            if (a > 0 && b > 0) { m = (a > b) ? a : b; printf "%.2f", (m - ((a < b) ? a : b)) / m * 100 }
+        }'
+    fi
     return 0
 }
 
@@ -2570,11 +2596,34 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             echo "  Re-run on a quiet box, or pass --allow-contended to save it as meas_state=indicative."
             exit 1
         fi
+        # 1a — the POSITION term.  The winner above is a median of 5 taken at ONE point in
+        # the run, and this box drifts with position (the cache-ram probe measured 45-65%
+        # cold-decode drift across its own positions against only ~13% run-to-run spread).
+        # Measure the SAME config a SECOND time HERE — after profile 2 and the spec sweep, so
+        # it is a genuinely later position — and record the drift beside the number.  Above
+        # the probe's own 25% bound the row is stamped indicative, exactly as contention is.
+        # (The read/restore of AUTOTUNE_SERVED_CTX is NOT needed: its last reader, the
+        # served-ctx block, has already run above this point.)
+        _meas_drift_pct=""
+        _meas_pos2=$(bench_ctx "$BEST_CTX" "$BEST_B" "$BEST_U" 5 "$EFFECTIVE_MMAP" \
+            "$WIN_NGL" "filled" "$WIN_KVK" "$WIN_KVV") || _meas_pos2=""
+        [[ -n "$_meas_pos2" ]] \
+            && _meas_drift_pct=$(__autotune_position_drift "${BEST_TPS:-0}" "$_meas_pos2")
+        if [[ -z "$_meas_drift_pct" ]]; then
+            echo "  WARNING: the second-position re-measurement produced no figure — no drift recorded"
+        elif awk -v d="$_meas_drift_pct" -v w="$AUTOTUNE_DRIFT_WARN_PCT" 'BEGIN{exit !(d > w)}'; then
+            echo "  position drift ${_meas_drift_pct}% (p1=${BEST_TPS} p2=${_meas_pos2}) exceeds" \
+                 "the ${AUTOTUNE_DRIFT_WARN_PCT}% hazard bound — stamping this row INDICATIVE"
+            _meas_state="indicative"
+        else
+            echo "  position drift ${_meas_drift_pct}% (p1=${BEST_TPS} p2=${_meas_pos2}) —" \
+                 "within the ${AUTOTUNE_DRIFT_WARN_PCT}% hazard bound"
+        fi
         __llm_autotune_profile_save "$MODEL_FILE" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
-            "$_row_load" "5" "" "" "$_meas_state" \
+            "$_row_load" "5" "" "$_meas_drift_pct" "$_meas_state" \
             || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
         # A missing helper used to take NEITHER branch and then still print the
