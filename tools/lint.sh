@@ -14,7 +14,15 @@
 # warning and error still gates.
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 26
+# Module Version: 27
+#   v27 (2026-10-13): four intentional glyphs join `_UNICODE_ALLOWED`, so the
+#   advisory non-ASCII WARN becomes a recorded glyph rather than a standing
+#   notice — U+2013 EN DASH (a separator in qwen-memory-index-patch.sh), U+2705
+#   WHITE HEAVY CHECK MARK and U+1F534 LARGE RED CIRCLE (the printf status lines
+#   in gpu-passthrough-check.sh), and U+FE0F VARIATION SELECTOR-16 (the emoji
+#   presentation on that file's warning sign; U+26A0 itself was already allowed).
+#   No executable line changes — the allowlist is the repo's recorded way to
+#   declare a glyph intentional, exactly as U+2714 was in v24.
 #   v26 (2026-10-11): the CI Verdict Gate forces a LIVE read — `--cache-ttl 0` on
 #   both argument variants.  check_ci_status.py caches its probe for 600 s by
 #   default, and this gate judges the pushed tip, so a cached verdict could judge
@@ -122,6 +130,7 @@ SKIP_UNICODE_CHECK=${SKIP_UNICODE_CHECK:-0}
 # in any file.  Anything outside ASCII + this allowlist triggers a WARN.
 #
 #  \x{00A0}-\x{00FF}  Latin-1 Supplement  (degree, squared, multiply, section)
+#  \x{2013}           En dash  (a separator in qwen-memory-index-patch.sh)
 #  \x{2014}           Em dash
 #  \x{2026}           Horizontal ellipsis
 #  \x{2192}           Right arrow
@@ -130,11 +139,14 @@ SKIP_UNICODE_CHECK=${SKIP_UNICODE_CHECK:-0}
 #  \x{2500}-\x{2570}  Box Drawing  (─ ═ ║ ╔ ╗ ╚ ╝ ╟ ╠ ╢ ╣ …)
 #  \x{25CB}-\x{25CF}  Geometric Shapes subset  (○ ●)
 #  \x{26A0}           Warning sign  (⚠)
+#  \x{2705}           White heavy check mark  (✅ — gpu-passthrough-check RECOVERED)
 #  \x{2713}           Check mark  (✓)
 #  \x{2714}           Heavy check mark  (✔ — the success detector's alternate glyph)
 #  \x{2717}           Ballot X  (✗)
 #  \x{2800}-\x{28FF}  Braille Patterns  (spinner glyphs)
-_UNICODE_ALLOWED='\x{00A0}-\x{00FF}\x{2014}\x{2026}\x{2192}\x{2264}\x{2298}\x{2500}-\x{2570}\x{25CB}-\x{25CF}\x{26A0}\x{2713}\x{2714}\x{2717}\x{2800}-\x{28FF}'
+#  \x{1F534}          Large red circle  (🔴 — gpu-passthrough-check LOST)
+#  \x{FE0F}           Variation selector-16  (the emoji presentation of the ⚠ above)
+_UNICODE_ALLOWED='\x{00A0}-\x{00FF}\x{2013}\x{2014}\x{2026}\x{2192}\x{2264}\x{2298}\x{2500}-\x{2570}\x{25CB}-\x{25CF}\x{26A0}\x{2705}\x{2713}\x{2714}\x{2717}\x{2800}-\x{28FF}\x{1F534}\x{FE0F}'
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 rc=0
