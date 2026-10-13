@@ -650,3 +650,53 @@ STUB
     [[ "$(grep '^1|' "$LLM_REGISTRY" | cut -d'|' -f17)" != "12.3" ]] \
         || { echo "premise failed: the write DID land, so this case tested nothing"; return 1; }
 }
+
+# ── 3c: the quiet-box write gate (2026-10-13) ────────────────────────────────
+# The certification stores a bare tps that reads as certified.  A tps measured on a
+# CONTENDED box is indicative, not certified, so 3c makes the run REFUSE to persist
+# one by default and permits it only under an explicit --allow-contended, stamped
+# meas_state=indicative.  The verdict is a pure function (extracted here, like
+# _sampler_args) so the policy matrix is testable without a GPU.
+
+@test "3c: a CONTENDED box refuses to write; --allow-contended stamps indicative" {
+    # Catches: the pre-3c behaviour, where a contended box wrote the row anyway and the
+    # number read as certified; and a gate that ignores the flag, or refuses a quiet box.
+    eval "$(sed -n '/^__autotune_measurement_verdict()/,/^}/p' "$REPO_ROOT/scripts/autotune-model.sh")"
+    # Both constructs must exist or this case asserts nothing.
+    declare -f __autotune_measurement_verdict >/dev/null
+
+    run __autotune_measurement_verdict "1.77" "16" "0"
+    [[ "$output" == "certified" ]] || { echo "a QUIET box (load 1.77/16) must certify (got '$output')"; return 1; }
+
+    run __autotune_measurement_verdict "20.0" "16" "0"
+    [[ "$output" == "refuse" ]] || { echo "a CONTENDED box (load 20/16) must REFUSE without the flag (got '$output')"; return 1; }
+
+    run __autotune_measurement_verdict "20.0" "16" "1"
+    [[ "$output" == "indicative" ]] || { echo "--allow-contended must record INDICATIVE (got '$output')"; return 1; }
+
+    # An UNREADABLE load is not proven quiet: it fails closed, like the GPU gate.
+    run __autotune_measurement_verdict "?" "16" "0"
+    [[ "$output" == "refuse" ]] || { echo "an unreadable load must fail closed (got '$output')"; return 1; }
+
+    # ...and --allow-contended still permits the unreadable case, stamped indicative.
+    run __autotune_measurement_verdict "?" "16" "1"
+    [[ "$output" == "indicative" ]] || { echo "an unreadable load + --allow-contended must be indicative (got '$output')"; return 1; }
+}
+
+@test "3c: the certification parses --allow-contended and refuses BEFORE the save" {
+    # Catches the helper-only blind spot: the verdict function existing while the CALL
+    # SITE ignores it.  The gate must sit between the load/cores read and the profile
+    # save, and the flag must be parsed — a green unit test on the helper proves neither.
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" == *'--allow-contended) ALLOW_CONTENDED=1'* ]]
+    [[ "$src" == *'__autotune_measurement_verdict "$_row_load" "$_row_cores" "${ALLOW_CONTENDED:-0}"'* ]]
+
+    local refuse_line save_line
+    refuse_line=$(grep -nF 'REFUSING to write' "$REPO_ROOT/scripts/autotune-model.sh" | head -1 | cut -d: -f1)
+    save_line=$(grep -nF '__llm_autotune_profile_save "$MODEL_FILE"' "$REPO_ROOT/scripts/autotune-model.sh" | head -1 | cut -d: -f1)
+    # Both must exist, or this ordering assert is vacuous.
+    [[ -n "$refuse_line" ]]
+    [[ -n "$save_line" ]]
+    (( refuse_line < save_line )) || { echo "the refusal must precede the save (refuse=$refuse_line save=$save_line)"; return 1; }
+}

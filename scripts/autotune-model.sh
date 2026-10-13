@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 77
+# Module Version: 78
+#   v78 (2026-10-13): 3c — the certification REFUSES to write when the box is
+#   contended.  A tps measured on a contended box is indicative, not certified, so
+#   by default the run exits 1 WITHOUT writing the row; --allow-contended writes it
+#   stamped meas_state=indicative (the 2b columns carry that caveat).  An unreadable
+#   load is not proven quiet, so it refuses too (fail closed).  The verdict lives in
+#   __autotune_measurement_verdict; the load/cores read before the save is REUSED.
+#   ALSO IN v78: that read moved ABOVE the selftest branch.  2b had placed it inside
+#   the write branch, but the warning block below is reached on the selftest path too,
+#   where it was then unset under `set -u` and aborted the run (line 2589:
+#   _row_load: unbound variable) — the 08 suite's selftest/dxg cases failed.
 #   v77 (2026-10-12): 2b — the certification now STAMPS how its number was measured.
 #   The measurement-context read (load/cores) moved BEFORE the save so the load is read
 #   once and passed as meas_load, with meas_n=5 and meas_state=certified|indicative; the
@@ -98,7 +108,7 @@ _AUTOTUNE_ORIG_ARGS=("$@")
 # accepted; the FILE name is the authoritative identity, and a number is resolved to one
 # ONCE (see the resolution below, which must run AFTER the console's registry helpers are
 # sourced — the reason it is not here).
-MODEL_REF="${1:?Usage: autotune-model.sh MODEL_NUM|MODEL_FILE [--workload chat|legal|agentic|mix]}"
+MODEL_REF="${1:?Usage: autotune-model.sh MODEL_NUM|MODEL_FILE [--workload chat|legal|agentic|mix] [--allow-contended]}"
 
 # AUTOTUNE-001: workload-selectable scoring payload.  The ctx/batch/TPS
 # winner is certified against the workload that matters — legal-RAG for the
@@ -109,11 +119,16 @@ MODEL_REF="${1:?Usage: autotune-model.sh MODEL_NUM|MODEL_FILE [--workload chat|l
 # Env: LLM_AUTOTUNE_WORKLOAD (default chat) — the batch runner / investigator
 # profile sets it to "legal".
 WORKLOAD="${LLM_AUTOTUNE_WORKLOAD:-chat}"
+# 3c: --allow-contended is the ONLY way to persist a row measured on a CONTENDED
+# box — it writes it stamped meas_state=indicative.  Without it the certification
+# refuses (see __autotune_measurement_verdict's call site).  Default: refuse.
+ALLOW_CONTENDED=0
 shift  # drop MODEL_NUM
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --workload) WORKLOAD="${2:-}"; shift 2 ;;
-        *) echo "Unknown arg: $1 (usage: autotune-model.sh MODEL_NUM [--workload chat|legal|agentic|mix])" >&2; exit 2 ;;
+        --allow-contended) ALLOW_CONTENDED=1; shift ;;
+        *) echo "Unknown arg: $1 (usage: autotune-model.sh MODEL_NUM [--workload chat|legal|agentic|mix] [--allow-contended])" >&2; exit 2 ;;
     esac
 done
 case "$WORKLOAD" in
@@ -481,6 +496,30 @@ read -r START_CTX MAX_CTX MIN_CTX < <(__autotune_ctx_bounds \
 fmt() { printf "%'d" "$1"; }
 # fmts — comma-format each "batch:ubatch" combo passed as args.
 fmts() { local _c _out=""; for _c in "$@"; do _out+="$(printf "%'d:%'d " "${_c%%:*}" "${_c##*:}")"; done; printf '%s' "${_out% }"; }
+
+# ── 3c: the certification's write gate ──────────────────────────────────────
+# A tps measured on a CONTENDED box is indicative, not certified (the same rule the
+# end-of-run warning names), so by DEFAULT a contended box REFUSES to write: storing
+# an indicative number that reads as certified is the silent failure this gate stops.
+# --allow-contended writes it anyway, stamped meas_state=indicative so the 2b columns
+# carry the caveat.  Prints exactly one verdict word:
+#   certified   load <= cores        write it as certified
+#   indicative  contended + allowed  write it, stamped indicative
+#   refuse      contended, not allowed - and also an UNREADABLE load, because
+#               "unknown" is not proven quiet (fail closed, like the GPU gate).
+__autotune_measurement_verdict() {
+    local load="${1:-}" cores="${2:-}" allow="${3:-0}"
+    if [[ "$load" =~ ^[0-9]+([.][0-9]+)?$ && "$cores" =~ ^[0-9]+$ ]]; then
+        if awk -v l="$load" -v c="$cores" 'BEGIN{exit !(l > c)}'; then
+            if [[ "$allow" == "1" ]]; then echo indicative; else echo refuse; fi
+        else
+            echo certified
+        fi
+        return 0
+    fi
+    if [[ "$allow" == "1" ]]; then echo indicative; else echo refuse; fi
+    return 0
+}
 
 echo "============================================="
 echo ""
@@ -2494,6 +2533,14 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
     if [[ -n "${_qc%%/*}" ]]; then
         KV_QUANT_SAVE="${_qc%%/*}/${WIN_KVK}/${WIN_KVV}"
     fi
+    # Measurement context (2b/3c): the box's load is read ONCE, BEFORE the selftest and
+    # write branches, so the write stamps it (2b) AND the warning below reuses it on
+    # EVERY path — including the selftest path, which writes nothing but still reaches
+    # the warning.  Reading it inside the write branch alone left it unset under `set -u`
+    # on the selftest path and aborted the run (a regression from 2b, fixed 2026-10-13).
+    # (Not `local`: script scope.)
+    _row_load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo "?")
+    _row_cores=$(nproc 2>/dev/null || echo "?")
     # AUTOTUNE_SELFTEST never persists — the canned curve is a decision-logic
     # regression, not a measurement (2026-08-27: a selftest run wrote its
     # 524288/8.5 into registry row 3, polluting the real profile).
@@ -2510,17 +2557,18 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         # it and warn when over-subscribed (11e-llm-model.sh).
         # The FILE name, not the row number: this run tuned MODEL_PATH, so this run's
         # numbers belong to that file whatever the row numbering does meanwhile.
-        # 2b (2026-10-12): carry HOW this number was measured.  The measurement-context
-        # read below is taken HERE instead, so the load is read once and stamped into the
-        # row; a load above the core count is the CONTENDED case that block names, so it
-        # is stamped INDICATIVE rather than dropped.  (Not `local`: script scope.)
-        _row_load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo "?")
-        _row_cores=$(nproc 2>/dev/null || echo "?")
-        _meas_state="certified"
-        if [[ "$_row_load" =~ ^[0-9.]+$ && "$_row_cores" =~ ^[0-9]+$ ]] \
-            && awk -v l="$_row_load" -v c="$_row_cores" 'BEGIN{exit !(l > c)}'
-        then
-            _meas_state="indicative"
+        # 2b (2026-10-12): carry HOW this number was measured.  The load is read above,
+        # once, and stamped into the row; a load above the core count is the CONTENDED
+        # case that block names, so it is stamped INDICATIVE rather than dropped.
+        # 3c: the verdict decides whether this row may be written at all — "refuse"
+        # (contended, or an unreadable load, without --allow-contended) exits BEFORE
+        # the save; otherwise it is the meas_state the row carries.
+        _meas_state=$(__autotune_measurement_verdict "$_row_load" "$_row_cores" "${ALLOW_CONTENDED:-0}")
+        if [[ "$_meas_state" == "refuse" ]]; then
+            echo "  REFUSING to write: measured at load ${_row_load} on ${_row_cores} cores — the box"
+            echo "  was CONTENDED, so this row's tps is indicative, not certified — nothing was written."
+            echo "  Re-run on a quiet box, or pass --allow-contended to save it as meas_state=indicative."
+            exit 1
         fi
         __llm_autotune_profile_save "$MODEL_FILE" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
