@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# openclaw-update-capture-prune.service — bound the update-capture store.
+#
+# WHY THIS EXISTS (2026-10-13)
+#
+# `~/.openclaw.update-captures/` accumulates one recovery set per update/Doctor run,
+# each ~1 GB (roots = every agent's openclaw-agent.sqlite). The updater treats these as
+# MANUAL-removal only — "recovery bundles are not automatically pruned. Keep it until
+# you have checked the updated installation; removal is manual"
+# (docs/cli/update/how-updates-run.md) — and nothing on this host pruned them, so the
+# store reached 9.1 GB across 9 sets by 2026-10-13, five of them standalone Doctor
+# baselines created inside a single day. This timer is that missing retention policy.
+#
+# The script keeps the current `lastRun` set, the newest set of any kind, and the newest
+# SEALED set; refuses to prune at all if `openclaw update status --json` cannot be read
+# (an active set may be unsealed); stages removals to Trash for STAGING_D days before
+# reclaiming; rejects negative ages; and exits 0 on a no-op. See the script header for
+# the full policy.
+#
+# NOT ENABLED BY install.sh — deliberately, like every unit in this tree. install.sh
+# links systemd/* into ~/.config/systemd/user/ and runs daemon-reload; enabling is an
+# explicit act:
+#
+#     systemctl --user enable --now openclaw-update-capture-prune.timer
+#
+# Verify:
+#   systemctl --user list-timers openclaw-update-capture-prune.timer
+#   journalctl --user -u openclaw-update-capture-prune.service -n50
+# ─────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=Prune the OpenClaw update-capture store (~/.openclaw.update-captures)
+Documentation=file:%h/ubuntu-console/systemd/openclaw-update-capture-prune.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/openclaw-update-capture-prune.sh
+# Explicit PATH: the script reaches the `openclaw` CLI (in /home/linuxbrew/...) for the
+# authoritative set list, plus `node`, `trash`, `stat` and `du`.
+Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+# A prune of a multi-GB store reads status, stats each set and may move large trees to
+# Trash; a generous cap keeps a slow disk from wedging the unit.
+TimeoutStartSec=300

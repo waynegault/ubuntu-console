@@ -1,0 +1,15 @@
+[Unit]
+Description=Prune the OpenClaw update-capture store daily
+Requires=openclaw-update-capture-prune.service
+
+[Timer]
+# Daily. Retention drift is slow (a set per update/Doctor run), so a day is ample.
+# 05:10 is clear of this host's other daily units (04:24 investigator-absence-rate,
+# 06:20 nas-export-keys, 07:15/07:20/07:23 jarvis router + mirror-check) and of the
+# fleet's hourly agent heartbeats (08:00–21:00), so it contends with nothing.
+OnCalendar=*-*-* 05:10:00
+# Catch up if the host was off at 05:10 — a missed sweep just means one day's growth.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
