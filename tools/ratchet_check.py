@@ -27,6 +27,12 @@ FUNC_DEF = re.compile(
 )
 CASE_START = re.compile(r"case\b.*\bin\b")
 STDERR_REDIR = re.compile(r"(?:echo|printf)\b[^\n]*>&2")
+# 10.8 — a `systemctl` aimed at an openclaw unit with no `--user`.  The unit token must
+# follow the systemctl word on the same line, so a comment ABOUT systemctl elsewhere on
+# the line is not counted.
+SYSTEMCTL_WORD = re.compile(r"(?<![\w./-])systemctl(?![\w-])")
+SYSTEMCTL_USER = re.compile(r"(?<![\w-])--user(?![\w-])")
+OPENCLAW_UNIT = re.compile(r"\bopenclaw[-_.]")
 
 
 def _lines(text):
@@ -122,6 +128,28 @@ def c_adhoc_stderr(text):
     return sum(1 for line in _code_lines(text) if STDERR_REDIR.search(line))
 
 
+def c_scopeless_systemctl_openclaw(text):
+    """10.8 — a `systemctl` aimed at an openclaw unit with no `--user`.
+
+    Every openclaw unit lives in the USER manager, so a scope-less `systemctl` reads the
+    SYSTEM scope, which holds NO openclaw unit file at all: "inactive" is then
+    indistinguishable from "the unit is genuinely down" (measured 2026-10-14 on this box —
+    `systemctl is-active openclaw-gateway.service` read `inactive` while
+    `systemctl --user is-active` read `active`).  The unit token must FOLLOW the systemctl
+    word on the same line, so an unrelated mention of systemctl beside an openclaw path is
+    not counted.  Baselined at 0: the corpus has none today, and this exists so that a new
+    one cannot land silently and red the box for the next reader.
+    """
+    n = 0
+    for line in _code_lines(text):
+        m = SYSTEMCTL_WORD.search(line)
+        if not m or SYSTEMCTL_USER.search(line):
+            continue
+        if OPENCLAW_UNIT.search(line, m.end()):
+            n += 1
+    return n
+
+
 def c_funcs_over_100(text):
     """10.4 — functions longer than 100 lines (bounded by the next definition).
 
@@ -192,6 +220,7 @@ COUNTERS = [
     ("9.7", "literal exit/return codes other than 0/1 with no comment", c_unexplained_exit_codes),
     ("10.4", "functions longer than 100 lines", c_funcs_over_100),
     ("10.7", "hand-written `>&2` on echo/printf instead of a helper", c_adhoc_stderr),
+    ("10.8", "a `systemctl` on an openclaw unit with no `--user` (user units are invisible to the system scope)", c_scopeless_systemctl_openclaw),
 ]
 
 FIXTURES: dict[str, tuple[str, int] | list[tuple[str, int]]] = {
@@ -207,6 +236,10 @@ FIXTURES: dict[str, tuple[str, int] | list[tuple[str, int]]] = {
              # guard: 60 code lines + 60 comment lines is 60, not 120.
              ("g() {\n" + "\n".join(["  :", "  # why"] * 60) + "\n}\n", 0)],
     "10.7": ("echo bad >&2\nhelper warn\n", 1),
+    "10.8": ("systemctl is-active openclaw-gateway.service\n"
+             "systemctl --user is-active openclaw-gateway.service\n"
+             "systemctl restart nginx\n"
+             "ls openclaw-gateway.log\n", 1),
 }
 
 
