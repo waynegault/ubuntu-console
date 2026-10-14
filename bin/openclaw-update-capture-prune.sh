@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-14): rename this file's logging helper to `_cap_log` so `log` is defined ONCE
+#   in the tree, in bin/_tac-bin-lib.sh (tests/tactical-console-fast.bats pins it, card
+#   a1076d6f).  It cannot adopt the shared `log`: that one either prints OR appends, never
+#   both, while this helper `tee`s to LOGF and stdout together.  No behaviour change.
 #   v4 (2026-10-14): add the trailing `# end of file` marker the CI hygiene test requires
 #   (bin/*.sh is in its corpus); its absence left CI red for every pusher.
 #   v3 (2026-10-14): remove the 13 unclassified swallow sites so the shared contracts gate
@@ -70,10 +74,10 @@ DRY=0
 export PATH="$HOME/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 mkdir -p "$(dirname "$LOGF")"
-log() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOGF"; }
+_cap_log() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOGF"; }
 quiet() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOGF"; }
 
-[ -d "$STORE" ] || { log "store absent: $STORE — nothing to do"; exit 0; }
+[ -d "$STORE" ] || { _cap_log "store absent: $STORE — nothing to do"; exit 0; }
 
 # ── authoritative status (FAIL-SAFE: no status ⇒ no prune) ───────────────────
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
@@ -106,7 +110,7 @@ done < <(node -e '
 ' "$tmp")
 
 if [ -z "$LAST_ID" ]; then
-  log "WARN   cannot resolve current lastRun from 'openclaw update status --json' — refusing to prune (an active set may be unsealed); nothing changed"
+  _cap_log "WARN   cannot resolve current lastRun from 'openclaw update status --json' — refusing to prune (an active set may be unsealed); nothing changed"
   exit 0
 fi
 
@@ -146,7 +150,7 @@ for d in "$STORE"/*/; do
 done
 shopt -u nullglob
 
-[ "${#names[@]}" -eq 0 ] && { log "store empty: $STORE — nothing to do"; exit 0; }
+[ "${#names[@]}" -eq 0 ] && { _cap_log "store empty: $STORE — nothing to do"; exit 0; }
 
 # ── pass 2: decide ───────────────────────────────────────────────────────────
 targets=(); reasons=()
@@ -156,7 +160,7 @@ for i in "${!names[@]}"; do
   if [ "$name" = "$LAST_ID" ]; then quiet "keep   $name  (lastRun)"; continue; fi
   # swallow-ok: the clock-step guard; age is always an integer and the negative case is logged on the next line
   if [ "$age" -lt 0 ] 2>/dev/null; then
-    log "WARN   $name  age=${age}s (negative — clock step?); keeping, not deleting"; continue; fi
+    _cap_log "WARN   $name  age=${age}s (negative — clock step?); keeping, not deleting"; continue; fi
   if [ "$name" = "$newest_any" ]; then quiet "keep   $name  (newest set)"; continue; fi
   if [ "$sealed" -eq 1 ] && [ "$name" = "$newest_sealed" ]; then
     quiet "keep   $name  (newest sealed)"; continue; fi
@@ -178,11 +182,11 @@ done
 # ── backstop: size cap (oldest retireable first) ─────────────────────────────
 # A failed `du` used to read as 0 KB and silently skip the size cap; say so instead.
 if ! store_kb=$(du -sk "$STORE" | cut -f1) || [[ -z "$store_kb" ]]; then
-  log "WARN   could not measure ${STORE} — size-cap backstop skipped for this run"; store_kb=0
+  _cap_log "WARN   could not measure ${STORE} — size-cap backstop skipped for this run"; store_kb=0
 fi
 cap_kb=$(( CAP_GB * 1024 * 1024 ))
 if [ "$store_kb" -gt "$cap_kb" ]; then
-  log "WARN   store ${store_kb}KB exceeds cap ${cap_kb}KB — considering oldest retireable sets"
+  _cap_log "WARN   store ${store_kb}KB exceeds cap ${cap_kb}KB — considering oldest retireable sets"
   for i in "${!names[@]}"; do
     name="${names[$i]}"
     [ "$name" = "$LAST_ID" ] && continue
@@ -195,21 +199,21 @@ fi
 
 # ── act: stage to Trash ──────────────────────────────────────────────────────
 if [ "${#targets[@]}" -eq 0 ]; then
-  log "no-op: ${#names[@]} set(s) present, all within retention"
+  _cap_log "no-op: ${#names[@]} set(s) present, all within retention"
 else
   for i in "${!targets[@]}"; do
     name="${targets[$i]}"; why="${reasons[$i]}"
     if [ "$DRY" -eq 1 ]; then
-      log "DRY    would trash $name  ($why)"
+      _cap_log "DRY    would trash $name  ($why)"
     # swallow-ok: handled — the else branch logs "ERROR failed to trash … — keeping"; the redirect hides only trash's message
     elif trash "$STORE/$name" 2>/dev/null; then
-      log "trash  $name  ($why)"
+      _cap_log "trash  $name  ($why)"
     else
-      log "ERROR  failed to trash $name — keeping"
+      _cap_log "ERROR  failed to trash $name — keeping"
     fi
   done
   # swallow-ok: this size is only text for the summary line; a failed du leaves the field blank and changes no action
-  [ "$DRY" -eq 0 ] && log "staged ${#targets[@]} set(s) to Trash; store now $(du -sh "$STORE" 2>/dev/null | cut -f1)"
+  [ "$DRY" -eq 0 ] && _cap_log "staged ${#targets[@]} set(s) to Trash; store $(du -sh "$STORE" 2>/dev/null | cut -f1)"
 fi
 
 # ── stage B: reclaim Trash entries this store created, past STAGING_D ─────────
@@ -223,7 +227,7 @@ for info in "$TRASH_INFO"/*.trashinfo; do
   [ -n "$dd" ] || continue
   # A malformed DeletionDate used to skip the entry silently; say so.
   if ! dts="$(date -d "$dd" +%s)"; then
-    log "WARN   unparseable DeletionDate '$dd' in $(basename "$info") — not reclaiming it"; continue
+    _cap_log "WARN   unparseable DeletionDate '$dd' in $(basename "$info") — not reclaiming it"; continue
   fi
   [ "$dts" -gt 0 ] || continue
   [ $(( $(date +%s) - dts )) -gt $(( STAGING_D * 86400 )) ] || continue
@@ -231,11 +235,11 @@ for info in "$TRASH_INFO"/*.trashinfo; do
   if rm -rf -- "${TRASH_FILES:?}/${base:?}" "$info"; then
     reclaimed=$(( reclaimed + 1 ))
   else
-    log "WARN   could not reclaim ${base} from Trash — leaving it staged"
+    _cap_log "WARN   could not reclaim ${base} from Trash — leaving it staged"
   fi
 done
 shopt -u nullglob
-[ "$reclaimed" -gt 0 ] && log "reclaimed $reclaimed staged Trash entr(y/ies) older than ${STAGING_D}d"
+[ "$reclaimed" -gt 0 ] && _cap_log "reclaimed $reclaimed staged Trash entr(y/ies) older than ${STAGING_D}d"
 
 exit 0
 
