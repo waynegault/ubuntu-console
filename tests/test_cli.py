@@ -498,7 +498,20 @@ class TestCliFindGitHooksDir(unittest.TestCase):
             self.assertEqual(_find_git_hooks_dir(), hooks)
         with tempfile.TemporaryDirectory() as td:
             os.chdir(td)
-            self.assertIsNone(_find_git_hooks_dir())
+            # The walk climbs to the filesystem root, exactly as git's own discovery does,
+            # so "no hooks directory" holds only when NO ANCESTOR is a repository — and a
+            # tmp dir under /tmp has an ancestor .git whenever something left a stray
+            # /tmp/.git behind (measured: that made this case red, and a re-run green).
+            # So the expectation is BOUNDED by an independent oracle rather than assumed:
+            # git applies the same walk-up, and it is the authority on whether this cwd
+            # is inside a repository at all.
+            enclosing = subprocess.run(["git", "rev-parse", "--git-path", "hooks"],
+                                       capture_output=True, text=True)
+            got = _find_git_hooks_dir()
+            if enclosing.returncode == 0:
+                self.assertEqual(got, os.path.abspath(enclosing.stdout.strip()))
+            else:
+                self.assertIsNone(got)
 
     def test_core_hooks_path_wins_over_the_git_dir(self):
         """A repo that tracks its hooks sets core.hooksPath, and git then
