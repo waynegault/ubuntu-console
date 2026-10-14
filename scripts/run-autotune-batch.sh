@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
+#   v20 (2026-10-14): re-assert the CUDA lane's DOWN state before the first row and before
+#   every row, while OUR suspend hold is live.  A cross-lane hand-off (investigator's
+#   GpuExclusivityClaim release) RESTORES llama-cuda-llama32-3b-chat.service as well as
+#   releasing the bench flock, and that restore can land AFTER the wrapper's own stop — so
+#   the lane came back mid-chunk and the next row refused its VRAM baseline (measured
+#   2026-10-14: 590 MiB free of 4096, 3506 held, and the row spent 0 cycles).  Guarded by
+#   _tac_suspend_held, so a stand-alone run — which takes no hold — never stops the lane.
 #   v19 (2026-10-02): halts when a supervised TRAINING run holds the card (card
 #   UBC-GRPO-002). The run claims the bench lock for the whole of its run, so a row
 #   launched alongside it would fail its VRAM baseline after a wasted spawn — the
@@ -66,6 +73,10 @@ fi
 _SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$_SELF_DIR/.." || exit 1
 source env.sh 2>/dev/null || { echo "Failed to source env.sh"; exit 1; }
+# Shared helpers (_tac_suspend_held / _tac_suspend_pid) — the SAME tenancy predicate the
+# wrapper acquires the hold with and the watchdog honours, never a second copy of the rule.
+# shellcheck source=_tac-bin-lib.sh
+source "$_SELF_DIR/../bin/_tac-bin-lib.sh"
 
 # Parse model list.
 # The list is MODEL FILE NAMES, not row numbers: a row number is only a view of the
@@ -129,6 +140,21 @@ export CUDA_CYCLE_FILE
 
 cuda_cycles() {
     [[ -f "$CUDA_CYCLE_FILE" ]] && cat "$CUDA_CYCLE_FILE" 2>/dev/null || echo 0
+}
+
+# The CUDA chat lane and the hold that names it — the same defaults the wrapper uses.
+_lane_suspend="${LLAMA_WATCHDOG_CUDA_SUSPEND_FILE:-/dev/shm/llama-watchdog-cuda.suspend}"
+_lane_unit="${LLAMA_CUDA_LANE_UNIT:-llama-cuda-llama32-3b-chat.service}"
+
+# keep_lane_down — re-assert the lane's DOWN state, but ONLY while our own suspend hold is
+# live.  A cross-lane hand-off restores the lane as well as releasing the bench flock, and
+# that restore can land after the wrapper's own stop, so the lane comes back mid-chunk and
+# the next row refuses its VRAM baseline (cross-lane-gpu-handoff-restores-the-lane).  The
+# hold is the tenancy test: a stand-alone run takes none, so it is left alone here.
+keep_lane_down() {
+    declare -f _tac_suspend_held &>/dev/null || return 0
+    _tac_suspend_held "$_lane_suspend" || return 0
+    systemctl --user stop "$_lane_unit" >/dev/null
 }
 
 echo "model autotune all"
@@ -211,6 +237,9 @@ train_lane_holder() {
 }
 
 _train_lane_pid="$(train_lane_holder)"
+# The wrapper stopped the lane, but a foreign hand-off can have restored it since — take
+# it down again before the first row, so the card is ours when that row measures.
+keep_lane_down
 if [[ -n "$_train_lane_pid" ]]; then
     echo "GPU held by a TRAINING run (pid $_train_lane_pid) — skipping the initial drain"
 elif declare -f __llm_gpu_foreign_owner &>/dev/null && __llm_gpu_foreign_owner; then
@@ -254,6 +283,8 @@ for ((i = 0; i < TOTAL; i++)); do
         break
     fi
 
+    # Re-assert the lane's down state per row: a hand-off can restore it between rows.
+    keep_lane_down
     COUNT=$((COUNT + 1))
     # Identity is the file name; the row number is resolved for DISPLAY only, so the
     # line stays useful to a human reading the log without carrying a stale identity.

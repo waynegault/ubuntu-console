@@ -180,6 +180,57 @@ _hold_lock() {
     grep -q '__llm_gpu_foreign_owner' "$REPO_ROOT/scripts/run-autotune-batch.sh"
 }
 
+# The 2026-10-14 hand-off regression.  investigator's GpuExclusivityClaim release
+# RESTORES llama-cuda-llama32-3b-chat.service as well as releasing the bench flock, and
+# that restore can land AFTER bin/autotune-rows.sh stopped the lane — so the lane came
+# back mid-chunk and the next row refused its VRAM baseline ("590 MiB free of 4096,
+# 3506 still held", 0 CUDA cycles, row left uncertified).  The batch must re-assert the
+# lane's down state, but ONLY while OUR suspend hold is live: this batch is documented as
+# runnable without the wrapper, and stopping the lane with no hold would evict a lane
+# nobody ceded to us.
+@test "gpu-exclusivity: the batch re-asserts the lane-down only under our own suspend hold" {
+    # The guard is extracted VERBATIM, so the assertion is about the shipped text.
+    awk '/^keep_lane_down\(\)/,/^}/' "$REPO_ROOT/scripts/run-autotune-batch.sh" \
+        > "$TAC_TEST_TMPDIR/lane.sh"
+    grep -q 'keep_lane_down' "$TAC_TEST_TMPDIR/lane.sh" || return 1
+
+    cat > "$TAC_TEST_TMPDIR/lane-probe.sh" <<'EOS'
+set -uo pipefail
+_calls="$1"; _script="$2"; _held="$3"
+systemctl() { printf '%s\n' "$*" >> "$_calls"; }
+_lane_suspend="/dev/shm/llama-watchdog-cuda.suspend"
+_lane_unit="llama-cuda-llama32-3b-chat.service"
+if [[ "$_held" != "none" ]]; then _tac_suspend_held() { return "$_held"; }; fi
+source "$_script"
+keep_lane_down
+EOS
+
+    # OUR hold is live -> the lane is stopped, and by the right name.
+    : > "$TAC_TEST_TMPDIR/calls"
+    run bash "$TAC_TEST_TMPDIR/lane-probe.sh" "$TAC_TEST_TMPDIR/calls" "$TAC_TEST_TMPDIR/lane.sh" 0
+    [[ "$(cat "$TAC_TEST_TMPDIR/calls")" == *"--user stop llama-cuda-llama32-3b-chat.service"* ]] \
+        || { echo "a LIVE hold must stop the lane; got: '$(cat "$TAC_TEST_TMPDIR/calls")'"; return 1; }
+
+    # No hold — another lane's run, or a stand-alone batch -> the lane is LEFT ALONE.
+    : > "$TAC_TEST_TMPDIR/calls"
+    run bash "$TAC_TEST_TMPDIR/lane-probe.sh" "$TAC_TEST_TMPDIR/calls" "$TAC_TEST_TMPDIR/lane.sh" 1
+    [[ ! -s "$TAC_TEST_TMPDIR/calls" ]] \
+        || { echo "no hold must stop nothing; got: '$(cat "$TAC_TEST_TMPDIR/calls")'"; return 1; }
+
+    # The predicate not even loaded (the stand-alone shape) -> also left alone.
+    : > "$TAC_TEST_TMPDIR/calls"
+    run bash "$TAC_TEST_TMPDIR/lane-probe.sh" "$TAC_TEST_TMPDIR/calls" "$TAC_TEST_TMPDIR/lane.sh" none
+    [[ ! -s "$TAC_TEST_TMPDIR/calls" ]] \
+        || { echo "an unloaded predicate must stop nothing; got: '$(cat "$TAC_TEST_TMPDIR/calls")'"; return 1; }
+
+    # ...and it is WIRED — once before the first row, once inside the row loop.  A
+    # helper-only test cannot see that (helper-only-tests-cannot-see-wiring).
+    local _sites
+    _sites=$(grep -c '^keep_lane_down$\|^    keep_lane_down$' "$REPO_ROOT/scripts/run-autotune-batch.sh")
+    [[ "$_sites" -eq 2 ]] \
+        || { echo "expected 2 call sites (pre-loop + per-row), got $_sites"; return 1; }
+}
+
 # ONE LLM ON THE CUDA CARD, EVER.  When another run owns the card the lane must
 # not start at all — a second llama-server on a 4 GB card is the failure mode, and
 # skipping only the reap was not enough.  Only the REFUSAL path is exercised here:
