@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# pre-commit hook — bash -n + shellcheck on staged .sh files, then the module
-# version guard.
+# pre-commit hook — bash -n + shellcheck on staged .sh files, the staged-file
+# swallow check, then the module version guard.
 #
 # TRACKED: tools/hooks/ is the source of truth for this repo's hooks.  Install
 # with `git config core.hooksPath <repo>/tools/hooks`; install.sh does that, and
@@ -29,9 +29,26 @@ if ! "$REPO_ROOT/tools/secret-scan.sh" --staged; then
     rc=1
 fi
 
+# ── Staged-file swallow classification ─────────────────────────────────────
+# A NEW unclassified `|| true` / `2>/dev/null` in the shell corpus is a HARD FAIL at
+# push (tools/check-contracts.sh swallows), so without this a lane that adds a new
+# bin/ script discovers the gate only when SOMEONE ELSE's push is refused — measured
+# 2026-10-14, a peer's new bin/ file (13 unclassified swallows, no baseline row)
+# blocked every other pusher while its author's own commit had passed.  The scan is
+# the tool's own (read-only, ~1 s), but the VERDICT is scoped to the staged files, so
+# a co-worker's in-flight file cannot refuse a commit that does not touch it.  The
+# scoping and the comparison live in tools/check-swallows-staged.sh (tracked, tested);
+# this hook only calls it.  It runs whatever the staged extension — the corpus covers
+# extensionless files in bin/ and tools/hooks/ — so it sits BEFORE the no-staged-.sh
+# early exit below.
+echo "=== pre-commit: staged swallow classification ==="
+if ! "$REPO_ROOT/tools/check-swallows-staged.sh"; then
+    rc=1
+fi
+
 if [[ -z "$staged" ]]; then
     if (( rc == 0 )); then
-        echo "pre-commit: no staged .sh files — shell lint skipped; secret scan passed"
+        echo "pre-commit: no staged .sh files — shell lint skipped; secret scan and swallow check passed"
     else
         echo "pre-commit: some checks failed — commit aborted"
     fi
@@ -57,13 +74,18 @@ if ! "$REPO_ROOT/tools/check-module-versions.sh" --staged; then
     rc=1
 fi
 
-# NOT HERE: the whole-repo guards.  tools/check-repo-boundaries.sh,
-# tools/check-contracts.sh and the §18.3 count ratchet all read the WORKING TREE,
-# and this repo's tree is shared with other agent sessions — a co-worker's
-# unstaged edit would fail YOUR commit for a change you did not make.  They run
-# in `tools/lint.sh` (whole-repo, what CI and a manual run invoke).  Decided
-# 2026-09-22 with tools/check-contracts.sh (card STATE-CONTRACT-VALIDATION-001);
-# if you are tempted to add one here, add staged-file scoping to it first.
+# NOT HERE: the whole-repo guards.  tools/check-repo-boundaries.sh and the §18.3
+# count ratchet read the WORKING TREE, and this repo's tree is shared with other
+# agent sessions — a co-worker's unstaged edit would fail YOUR commit for a change
+# you did not make.  They run in `tools/lint.sh` (whole-repo, what CI and a manual
+# run invoke).  Decided 2026-09-22 with tools/check-contracts.sh (card
+# STATE-CONTRACT-VALIDATION-001).
+#
+# The ONE contract-drift check that IS run above is the swallow ratchet — and only
+# because it is staged-scoped: tools/check-swallows-staged.sh reads the tool's own
+# per-file population but intersects the VERDICT with the staged set, so it keeps
+# the rule without the shared-tree false block.  Add a guard here the same way, or
+# not at all.
 
 if (( rc == 0 )); then
     echo "pre-commit: all checks passed"
