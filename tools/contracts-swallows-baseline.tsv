@@ -54,6 +54,7 @@ unclassified	bin/gpu-watch-selfcheck.sh	1
 unclassified	bin/interview-benchmark.sh	1
 unclassified	bin/llama-gpu-clear.sh	10
 unclassified	bin/llama-watchdog.sh	41
+unclassified	bin/openclaw-update-capture-prune.sh	13
 unclassified	bin/tac_hostmetrics.sh	9
 unclassified	tools/check-module-versions.sh	8
 unclassified	tools/check-repo-boundaries.sh	1
