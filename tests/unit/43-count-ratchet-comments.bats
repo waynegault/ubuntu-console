@@ -71,8 +71,11 @@ _fixture_plain() {
     [ "$status" -eq 0 ]
     run grep -c "^# " "$BASELINE"
     [ "$output" = "2" ]
+    # The ratcheted set is ten counters (§18.3 item 10.8 joined it on 2026-10-14;
+    # `tools/count-ratchet.sh --list` names them all). A new counter is a deliberate
+    # act, so update this number in the same change that adds or removes one.
     run grep -c $'^[0-9]' "$BASELINE"
-    [ "$output" = "9" ]
+    [ "$output" = "10" ]
 }
 
 @test "count-ratchet --update is idempotent for a preserved comment" {

@@ -3415,6 +3415,8 @@ is deliberately not worth fixing, and what was still open when this pass ended.
 
     RATCHETED (9) — baselines as listed above; growth is now a build failure:
       4.2.4, 4.2.6, 4.3.6, 6.7, 8.1.8, 9.5, 9.7, 10.4, 10.7
+      10.8 joined on 2026-10-14 (9981662e, baseline 0), so TEN are ratcheted at HEAD;
+      `tools/ratchet-baseline.tsv` carries their current counts.
 
     WITHDRAWN (3 of the table's, 5 in total) — the expectation contradicts a deliberate
     convention:
@@ -3448,7 +3450,7 @@ is deliberately not worth fixing, and what was still open when this pass ended.
              handlers are traps, and the 2026-09-21 trap work documented them
 
   This section belongs in a ratchet — a guard that fails when the count RISES — not in a
-  per-pass to-do list. A number with no owner and no enforcement only grows; the nine
+  per-pass to-do list. A number with no owner and no enforcement only grows; the ten
   above have an owner, and the closed ones have a reason instead.
 
 18.4 Checks this pass added
