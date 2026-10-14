@@ -16,6 +16,11 @@
 # NEXT red instead of surfacing it.
 #
 # --- entries ---
+# Added 2026-10-14 under Wayne's ruling (visible single-writer escape + card, not --no-verify),
+# ONLY so the fix for the red it names can be pushed — a red main blocks the very commit that
+# fixes it.  DELETE this entry as soon as a green `CI` run exists for 7d100195 (a stale entry
+# parks the NEXT red).  Owner decision, reversible.
+workflow=CI | owner=wayne | card=CI-WATCH-CONSOLE-RED-20261014 | expiry=2026-10-15 | red run 38577211076 on 9981662e: bin/openclaw-update-capture-prune.sh lacked the `# end of file` marker (hygiene test, tactical-console-fast.bats:336); fix is 7d100195
 # (none — both entries were deleted on 2026-10-13 once a GREEN run existed for the fixed
 #  tip: `CI` on 0e741f8d (run 38375179184, all six jobs success), so `main` is green again
 #  and needs no exemption; and `Nightly Full Suite`, whose red was on the superseded
