@@ -38,6 +38,25 @@ setup() {
     __test_port() { return 1; }
     pgrep() { return 1; }
     wake() { return 0; }
+
+    # Mock the systemd boundary — the runner has no user session bus
+    # (ci-behavioral-bats-red-2026-09-21: a real `systemctl --user` there answers
+    # nothing while it answers fine on a workstation, so such a test passes locally and
+    # fails in CI).  `__so_gateway_phase` asserts the MANAGED unit is active BEFORE it
+    # reads the health paths (09a:798, added 2026-10-14), so with an empty answer the
+    # managed-unit branch fired first and the wedged / timed-out verdicts below it were
+    # never reached.  Locally this also stops these cases reading this box's live
+    # gateway.  Defined AFTER the sources, as this harness requires.
+    systemctl() {
+        while [[ "${1:-}" == --* ]]; do shift; done
+        local _verb="${1:-}"
+        shift || true
+        case "${_verb} ${1:-}" in
+            "is-active openclaw-gateway.service")     echo active ;;
+            "is-active openclaw-gateway-guard.timer") echo active ;;
+            "is-active "*)                            echo inactive ;;
+        esac
+    }
 }
 
 teardown() {
