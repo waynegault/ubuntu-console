@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-10-14): remove the 13 unclassified swallow sites so the shared contracts gate
+#   stops refusing every pusher.  Nine are classified with a `# swallow-ok:` reason (the
+#   status/stat/trash redirects are fail-safe by design and the outcome is logged below
+#   each).  Four were genuinely silent and are now audible: node's parse error, a failed
+#   `du` that quietly disabled the size cap, an unparseable Trash DeletionDate, and a
+#   failed Trash reclaim.  The retention policy and what is deleted are unchanged.
 #
 # openclaw-update-capture-prune.sh — bound the OpenClaw update-capture store.
 #
@@ -72,7 +78,11 @@ tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
 if [ -n "$STATUS_JSON_FILE" ] && [ -r "$STATUS_JSON_FILE" ]; then
   cp "$STATUS_JSON_FILE" "$tmp"
 else
-  openclaw update status --json >"$tmp" 2>/dev/null || true
+  # An unreadable status is FAIL-SAFE by design: the node parse below then yields no
+  # lastRun id and the script logs an explicit WARN and REFUSES to prune — so these
+  # redirects hide only the CLI's own error text, never the failure.
+  # swallow-ok: a failed status read leaves no lastRun id; the WARN-and-refuse path below reports it
+  openclaw update status --json >"$tmp" 2>/dev/null
 fi
 
 LAST_ID=""
@@ -91,7 +101,7 @@ done < <(node -e '
     const id = r.runId || (r.directory ? path.basename(r.directory) : "");
     if (id) console.log(["SET", id, (r.status||"?")].join("\t"));
   }
-' "$tmp" 2>/dev/null)
+' "$tmp")
 
 if [ -z "$LAST_ID" ]; then
   log "WARN   cannot resolve current lastRun from 'openclaw update status --json' — refusing to prune (an active set may be unsealed); nothing changed"
@@ -101,8 +111,11 @@ fi
 age_seconds() {  # $1 = dir; echoes age in seconds; negative = suspicious
   local d="$1" now birth mtime ts
   now=$(date +%s)
+  # swallow-ok: a stat failure maps to 0 — the documented "no birth time" value; the %Y fallback is the next line
   birth=$(stat -c %W "$d" 2>/dev/null || echo 0); [ -n "$birth" ] || birth=0
+  # swallow-ok: guards the arithmetic from a non-numeric %W on a filesystem without birth time; the else is the mtime fallback
   if [ "$birth" -gt 0 ] 2>/dev/null; then ts=$birth; else
+    # swallow-ok: as above — a %Y failure maps to 0, and a vanished dir then fails at the staging step, which reports it
     mtime=$(stat -c %Y "$d" 2>/dev/null || echo 0); [ -n "$mtime" ] || mtime=0; ts=$mtime
   fi
   echo $(( now - ts ))
@@ -120,6 +133,7 @@ for d in "$STORE"/*/; do
   age="$(age_seconds "$d")"
   sealed=0; [ -f "$d/manifest.json" ] && sealed=1
   names+=("$name"); ages+=("$age"); seals+=("$sealed")
+  # swallow-ok: age is always an integer; a negative age is excluded from newest-set tracking by design
   if [ "$age" -ge 0 ] 2>/dev/null; then
     ts=$(( $(date +%s) - age ))
     [ "$ts" -gt "$newest_any_ts" ] && { newest_any_ts=$ts; newest_any="$name"; }
@@ -138,6 +152,7 @@ for i in "${!names[@]}"; do
   name="${names[$i]}"; age="${ages[$i]}"; sealed="${seals[$i]}"
   st="${STATUS_OF[$name]:-}"
   if [ "$name" = "$LAST_ID" ]; then quiet "keep   $name  (lastRun)"; continue; fi
+  # swallow-ok: the clock-step guard; age is always an integer and the negative case is logged on the next line
   if [ "$age" -lt 0 ] 2>/dev/null; then
     log "WARN   $name  age=${age}s (negative — clock step?); keeping, not deleting"; continue; fi
   if [ "$name" = "$newest_any" ]; then quiet "keep   $name  (newest set)"; continue; fi
@@ -159,7 +174,10 @@ for i in "${!names[@]}"; do
 done
 
 # ── backstop: size cap (oldest retireable first) ─────────────────────────────
-store_kb=$(du -sk "$STORE" 2>/dev/null | cut -f1); store_kb=${store_kb:-0}
+# A failed `du` used to read as 0 KB and silently skip the size cap; say so instead.
+if ! store_kb=$(du -sk "$STORE" | cut -f1) || [[ -z "$store_kb" ]]; then
+  log "WARN   could not measure ${STORE} — size-cap backstop skipped for this run"; store_kb=0
+fi
 cap_kb=$(( CAP_GB * 1024 * 1024 ))
 if [ "$store_kb" -gt "$cap_kb" ]; then
   log "WARN   store ${store_kb}KB exceeds cap ${cap_kb}KB — considering oldest retireable sets"
@@ -181,12 +199,14 @@ else
     name="${targets[$i]}"; why="${reasons[$i]}"
     if [ "$DRY" -eq 1 ]; then
       log "DRY    would trash $name  ($why)"
+    # swallow-ok: handled — the else branch logs "ERROR failed to trash … — keeping"; the redirect hides only trash's message
     elif trash "$STORE/$name" 2>/dev/null; then
       log "trash  $name  ($why)"
     else
       log "ERROR  failed to trash $name — keeping"
     fi
   done
+  # swallow-ok: this size is only text for the summary line; a failed du leaves the field blank and changes no action
   [ "$DRY" -eq 0 ] && log "staged ${#targets[@]} set(s) to Trash; store now $(du -sh "$STORE" 2>/dev/null | cut -f1)"
 fi
 
@@ -199,11 +219,18 @@ for info in "$TRASH_INFO"/*.trashinfo; do
   case "$p" in "$STORE"/*) ;; *) continue ;; esac
   dd="$(sed -n 's/^DeletionDate=//p' "$info" | head -1)"
   [ -n "$dd" ] || continue
-  dts="$(date -d "$dd" +%s 2>/dev/null || echo 0)"
+  # A malformed DeletionDate used to skip the entry silently; say so.
+  if ! dts="$(date -d "$dd" +%s)"; then
+    log "WARN   unparseable DeletionDate '$dd' in $(basename "$info") — not reclaiming it"; continue
+  fi
   [ "$dts" -gt 0 ] || continue
   [ $(( $(date +%s) - dts )) -gt $(( STAGING_D * 86400 )) ] || continue
   base="$(basename "$info" .trashinfo)"
-  rm -rf -- "${TRASH_FILES:?}/${base:?}" "$info" 2>/dev/null && { reclaimed=$(( reclaimed + 1 )); }
+  if rm -rf -- "${TRASH_FILES:?}/${base:?}" "$info"; then
+    reclaimed=$(( reclaimed + 1 ))
+  else
+    log "WARN   could not reclaim ${base} from Trash — leaving it staged"
+  fi
 done
 shopt -u nullglob
 [ "$reclaimed" -gt 0 ] && log "reclaimed $reclaimed staged Trash entr(y/ies) older than ${STAGING_D}d"
