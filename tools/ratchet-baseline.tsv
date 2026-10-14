@@ -87,12 +87,28 @@
 # The rises it absorbed (4.2.4 16->17, 9.5 113->116, 10.4 49->50, 10.7 198->213) were fixed AT
 # SOURCE in 51d4b561, so those counters read the tree's own values again. Hand-edited rather than
 # `--update`, which rewrites this file and drops the comment blocks above.
-4.2.4	16
+#
+# 2026-10-14 (eleventh re-baseline): CORPUS GROWTH, not drift - ONE new shell file,
+# bin/openclaw-update-capture-prune.sh (commit 698cafd5, UNPUSHED, another lane's).  Measured with
+# this tool's OWN counters over that file ALONE: 4.2.4 +1 (a `case` with no default arm and no
+# note), 6.7 +33 (`[ ... ]` where `[[ ... ]]` is the house style), 8.1.8 +1 (one line over 120
+# characters), 9.5 +3 (functions with no comment directly above), 10.4 +1 (a function over 100
+# lines); it contributes 0 to 4.2.6 / 4.3.6 / 9.7 / 10.7.  All five rises below are that file's
+# PRE-EXISTING style - corpus growth, which is the case this tool's own message says to
+# re-baseline and name the file for.
+#   The 6.7 +33 is the one that matters: it loosens that row from 67 to 100, so fixing the file AT
+#   SOURCE (6.7's own ask - 33 `[ ... ]` -> `[[ ... ]]`) is the tighter route, and doing that would
+#   let these rows revert.  It was NOT taken here because the file is another lane's UNPUSHED work
+#   (so it may still be in flight), and a refactor of it can change behaviour where a `[ ... ]` test
+#   relies on word splitting - not a call for this change-set to make silently.
+# Hand-edited, NOT `--update` (which rewrites this file as header+rows and strips the blocks above):
+# 4.2.4 16->17, 6.7 67->100, 8.1.8 287->288, 9.5 113->116, 10.4 49->50; the other four rows unchanged.
+4.2.4	17
 4.2.6	9
 4.3.6	31
-6.7	67
-8.1.8	287
-9.5	113
+6.7	100
+8.1.8	288
+9.5	116
 9.7	60
-10.4	49
+10.4	50
 10.7	195

@@ -102,7 +102,22 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-14): recognise CLI 0.25.1, which RENAMED the byte cap `MAX_INDEX_BYTES` ->
+#   `MAX_INDEX_CHARS` and SPLIT assembleIndex: the kept-Set budget moved into trimIndexToBudget
+#   and upstream now appends its OWN INDEX_TRUNCATION_NOTICE whenever it sheds (that notice
+#   names no count).  Before this, `--check` read `bytecap: UNKNOWN` and the apply REFUSED with
+#   "no known MAX_INDEX_BYTES declaration (UNKNOWN shape)"; the rename was the ONLY blocker, as
+#   hunks 4-5's anchors match 0.25.1, but hunk 3 is all-or-nothing per copy, so the whole copy
+#   was abandoned.  TWO TRAPS on this shape: (1) hunk 3's two UNCAPPED-SCAN rewires are SKIPPED
+#   -- `MAX_SCANNED_MEMORY_FILES` is gone, so there is no cap to lift, yet the rewire anchors DO
+#   match and the substitution would silently turn a working upstream call into one with the
+#   wrong arguments, which `node --check` cannot detect; (2) the two "no DROPPED marker"
+#   post-conditions are guarded on INDEX_TRUNCATION_NOTICE, because upstream's own notice is
+#   the "never shed silently" half there and it names no count.  A new fixture
+#   (tests/fixtures/memory-index-v0251-chunk.js -- the 0.25.0 fixture with the rename + the
+#   split, keeping both scan-rewire anchors so the SKIP is provable) and three new cases in
+#   tests/unit/51-memory-index-patch.bats prove it end to end.
 #   v4 (2026-10-11): hunks 4 (titlecap) and 5 (linecap).  docIndexLine budgeted the hook around
 #   the link but never the title, so MAX_INDEX_LINE_CHARS = 150 was unenforced on the line (a
 #   long title plus a long path emitted a no-hook line of up to ~189); the title is now
@@ -148,6 +163,10 @@ PATHCAP_STOCK_SPACED='const chars = [...value].slice(0, MAX_INDEX_FIELD_CHARS);'
 PATHCAP_STOCK_MIN='const chars=[...value].slice(0,MAX_INDEX_FIELD_CHARS);'
 BYTES_STOCK_SPACED='var MAX_INDEX_BYTES = 25e3;'
 BYTES_STOCK_MIN='var MAX_INDEX_BYTES=25e3;'
+# 0.25.1 RENAMED the byte cap (measured 2026-10-14): the same 25e3 value under a new name.  A
+# copy whose cap is UNKNOWN while titlecap/linecap read `stock` is a 0.25.1 copy.
+BYTES_STOCK_V0251_SPACED='var MAX_INDEX_CHARS = 25e3;'
+BYTES_STOCK_V0251_MIN='var MAX_INDEX_CHARS=25e3;'
 FUNC_TRUNC_STOCK='function truncateIndexLine(text)'
 # hunks 4-5 (measured 2026-10-11 on the 0.24.4 linuxbrew CLI and the 0.25.0 companions).
 TITLE_STOCK_SPACED='const title = sanitizeIndexField(doc.title) || doc.type;'
@@ -218,7 +237,10 @@ for f in "${files[@]}"; do
 
     st_bytes="UNKNOWN"
     if grep -qF "$MARKER_BYTES" "$f"; then st_bytes="applied"
-    elif grep -qF "$BYTES_STOCK_SPACED" "$f" || grep -qF "$BYTES_STOCK_MIN" "$f"; then st_bytes="stock"; fi
+    elif grep -qF "$BYTES_STOCK_SPACED" "$f" || grep -qF "$BYTES_STOCK_MIN" "$f" \
+      || grep -qF "$BYTES_STOCK_V0251_SPACED" "$f" || grep -qF "$BYTES_STOCK_V0251_MIN" "$f"; then
+        st_bytes="stock"
+    fi
 
     st_title="UNKNOWN"
     if grep -qF "$MARKER_TITLE" "$f"; then st_title="applied"
@@ -265,6 +287,14 @@ marker_bytes = os.environ["PATCH_MARKER_BYTES"]
 marker_title = os.environ["PATCH_MARKER_TITLE"]
 marker_lines = os.environ["PATCH_MARKER_LINES"]
 src = p.read_text(encoding="utf-8")
+
+# 0.25.1 (measured 2026-10-14) RENAMED the byte cap MAX_INDEX_BYTES -> MAX_INDEX_CHARS and SPLIT
+# assembleIndex: the kept-Set budget moved into trimIndexToBudget, and upstream now appends its
+# OWN INDEX_TRUNCATION_NOTICE whenever it sheds (that notice names no count).  MAX_SCANNED_MEMORY_
+# FILES is GONE there, so hunk 3's two uncapped-scan rewires have no premise.  The notice is the
+# fingerprint: our patch never touches it, so it identifies the shape on a RE-APPLY as well as on
+# a first apply (the MAX_INDEX_CHARS spelling does not -- this patch renames it away).
+bytes_v0251 = "INDEX_TRUNCATION_NOTICE" in src
 
 # 0.25.0's builder already keeps the link, so hunks 1-2 are upstream-satisfied there.
 # Recognised by the same two spellings the shell side uses; without this a copy that needs
@@ -357,10 +387,16 @@ NEW_TRUNC = r'''function truncateIndexLine(text) {
 }
 __name(truncateIndexLine, "truncateIndexLine");'''
 
-# --- hunk 3: raise MAX_INDEX_BYTES and never shed silently (two spellings of the cap decl) ---
+# --- hunk 3: raise the byte cap and never shed silently (the cap-declaration spellings) ---
 BYTES = {
     "var MAX_INDEX_BYTES = 25e3;": "var MAX_INDEX_BYTES = 256000;",
     "var MAX_INDEX_BYTES=25e3;": "var MAX_INDEX_BYTES=256000;",
+    # 0.25.1 renamed the cap.  There the assembleIndex rewrite is SKIPPED (see below), so this
+    # replacement must itself carry `marker_bytes` -- that string is what the `applied`
+    # detection and the byte-cap post-condition look for, and without NEW_ASSEMBLE nothing else
+    # would add it.  The marker's date stays 2026-10-01: the hunk's introduction, not this fix's.
+    "var MAX_INDEX_CHARS = 25e3;": "var MAX_INDEX_CHARS = 256000;/* " + marker_bytes + " */",
+    "var MAX_INDEX_CHARS=25e3;": "var MAX_INDEX_CHARS=256000;/*" + marker_bytes + "*/",
 }
 STOCK_ASSEMBLE_SPACED = (
     "function assembleIndex(lines) {\n"
@@ -600,14 +636,22 @@ else:
         if old in src:
             if src.count(old) != 1:
                 raise SystemExit(f"refusing to patch: MAX_INDEX_BYTES anchor occurs {src.count(old)} times")
+            # Renaming the 0.25.1 cap is only safe when the split's own notice is present: that
+            # notice IS the "never shed silently" half there, so without it we would be raising a
+            # cap and silently dropping the tail -- the exact defect hunk 3 exists to stop.
+            if old.startswith("var MAX_INDEX_CHARS") and not bytes_v0251:
+                raise SystemExit(
+                    "refusing to patch: a MAX_INDEX_CHARS chunk lacks INDEX_TRUNCATION_NOTICE (UNKNOWN shape)"
+                )
             src = src.replace(old, new)
             b = new
             break
     if b is None:
         raise SystemExit("refusing to patch: no known MAX_INDEX_BYTES declaration (UNKNOWN shape)")
-    # Three known stock shapes now: the 0.24.x pretty-printed and minified bodies, and the
-    # 0.25.0 rewrite.  Each is matched EXACTLY ONCE, so a chunk carrying two of them (or two
-    # copies of one) is refused rather than half-patched.
+    # Four known stock shapes: the 0.24.x pretty-printed and minified bodies, the 0.25.0 rewrite,
+    # and 0.25.1 (whose cap rename we just made, and where NO assembleIndex body of ours applies
+    # -- see the post-conditions).  Each is matched EXACTLY ONCE, so a chunk carrying two of them
+    # (or two copies of one) is refused rather than half-patched.
     assemble_forms = (
         (STOCK_ASSEMBLE_SPACED, NEW_ASSEMBLE),
         (STOCK_ASSEMBLE_MIN, NEW_ASSEMBLE),
@@ -624,7 +668,10 @@ else:
         src = src.replace(old, new)
         hit = True
         break
-    if not hit:
+    # On 0.25.1 there is no body of ours to rewrite: upstream's trimIndexToBudget + its own
+    # INDEX_TRUNCATION_NOTICE already do the "never shed silently" half, so the missing anchor is
+    # BY DESIGN, not drift.  (Third instance of this precedent -- v2/v3 did the same for hunks 1-2.)
+    if not hit and not bytes_v0251:
         raise SystemExit("refusing to patch: no known stock assembleIndex body (UNKNOWN shape)")
 
     # The SCAN itself caps at MAX_SCANNED_MEMORY_FILES = 200, BEFORE assembleIndex runs - so a
@@ -633,27 +680,35 @@ else:
     # INDEX rebuilds at the uncapped scanners so the index sees every note and the marker can
     # name whatever is then dropped. The extraction agent's own capped scan is left untouched,
     # so its context budget is unchanged.
-    managed_scan = re.subn(
-        r"scanAutoMemoryTopicDocuments\(projectRoot\)(\s*,\s*)readAutoMemoryMetadata\(projectRoot\)",
-        r"scanAllAutoMemoryTopicDocuments(projectRoot)\1readAutoMemoryMetadata(projectRoot)",
-        src,
-    )
-    if managed_scan[1] != 1:
-        raise SystemExit(
-            f"refusing to patch: managed-rebuild scan anchor occurred {managed_scan[1]} times (expected 1)"
+    # TRAP: on 0.25.1 these two anchors DO match, so the rewrite is NOT prevented by the anchor
+    # -- it simply has no premise there (MAX_SCANNED_MEMORY_FILES is gone, so there is no cap to
+    # lift) and it is actively harmful: it would swap a working upstream call for one with the
+    # wrong arguments (the 0.25.1 scanAll* signature differs).  `node --check` cannot see that,
+    # so the bundle would pass its syntax gate and throw at runtime.  The rewires are therefore
+    # SKIPPED on that shape -- skipped, not merely tolerated, because `re.subn` would rewrite it
+    # whether or not the raise fires.
+    if not bytes_v0251:
+        managed_scan = re.subn(
+            r"scanAutoMemoryTopicDocuments\(projectRoot\)(\s*,\s*)readAutoMemoryMetadata\(projectRoot\)",
+            r"scanAllAutoMemoryTopicDocuments(projectRoot)\1readAutoMemoryMetadata(projectRoot)",
+            src,
         )
-    src = managed_scan[0]
-    user_scan = re.subn(
-        r"await scanUserAutoMemoryTopicDocuments\(\)"
-        r"(\s*;\s*const content\s*=\s*buildManagedAutoMemoryIndex\(docs\))",
-        r"await scanAllUserAutoMemoryTopicDocuments()\1",
-        src,
-    )
-    if user_scan[1] != 1:
-        raise SystemExit(
-            f"refusing to patch: user-rebuild scan anchor occurred {user_scan[1]} times (expected 1)"
+        if managed_scan[1] != 1:
+            raise SystemExit(
+                f"refusing to patch: managed-rebuild scan anchor occurred {managed_scan[1]} times (expected 1)"
+            )
+        src = managed_scan[0]
+        user_scan = re.subn(
+            r"await scanUserAutoMemoryTopicDocuments\(\)"
+            r"(\s*;\s*const content\s*=\s*buildManagedAutoMemoryIndex\(docs\))",
+            r"await scanAllUserAutoMemoryTopicDocuments()\1",
+            src,
         )
-    src = user_scan[0]
+        if user_scan[1] != 1:
+            raise SystemExit(
+                f"refusing to patch: user-rebuild scan anchor occurred {user_scan[1]} times (expected 1)"
+            )
+        src = user_scan[0]
     applied.append("bytecap")
 
 # hunk 4 (titlecap)
@@ -704,8 +759,9 @@ if not UPSTREAM and marker_trunc not in src:
     raise SystemExit("refusing to patch: the truncator marker is absent from the result")
 if re.search(r"\[\.\.\.value\]\.slice\(0,\s*MAX_INDEX_FIELD_CHARS\)", src):
     raise SystemExit("refusing to patch: path cap still present in result")
-if "var MAX_INDEX_BYTES = 25e3;" in src or "var MAX_INDEX_BYTES=25e3;" in src:
-    raise SystemExit("refusing to patch: the stock MAX_INDEX_BYTES declaration is still present")
+if ("var MAX_INDEX_BYTES = 25e3;" in src or "var MAX_INDEX_BYTES=25e3;" in src
+        or "var MAX_INDEX_CHARS = 25e3;" in src or "var MAX_INDEX_CHARS=25e3;" in src):
+    raise SystemExit("refusing to patch: the stock byte-cap declaration is still present")
 if src.count("function assembleIndex(lines)") != 1:
     raise SystemExit("refusing to patch: the assembleIndex definition count is not 1")
 if UPSTREAM:
@@ -715,9 +771,15 @@ if UPSTREAM:
         raise SystemExit("refusing to patch: truncateIndexLine appeared in an upstream-shaped result")
 elif src.count("function truncateIndexLine(text)") != 1:
     raise SystemExit("refusing to patch: the truncateIndexLine definition count is not 1")
-if "DROPPED (" not in src:
+# The two "we rewired it" promises hold only where our own body ran.  On 0.25.1 hunk 3 skipped
+# both by design: upstream's INDEX_TRUNCATION_NOTICE is the never-shed-silently half (and it
+# names no count -- so there is no `DROPPED (` marker), and MAX_SCANNED_MEMORY_FILES is gone, so
+# there is no scan to lift.  Guarding on bytes_v0251 is what keeps a lawful skip from reading as
+# a broken apply -- and, keyed on the notice, it holds on a re-apply too.
+if "DROPPED (" not in src and not bytes_v0251:
     raise SystemExit("refusing to patch: the explicit drop marker is absent from the result")
-if "scanAllAutoMemoryTopicDocuments(projectRoot)" not in src or "scanAllUserAutoMemoryTopicDocuments()" not in src:
+if ("scanAllAutoMemoryTopicDocuments(projectRoot)" not in src
+        or "scanAllUserAutoMemoryTopicDocuments()" not in src) and not bytes_v0251:
     raise SystemExit("refusing to patch: the uncapped index scan is not wired")
 if marker_title not in src:
     raise SystemExit("refusing to patch: the title-cap marker is absent from the result")
