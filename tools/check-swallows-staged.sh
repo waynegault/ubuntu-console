@@ -44,7 +44,12 @@
 # Exit 2 = the check could not run (not a git repository, or the scanner could not run).
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-10-14): guard the verdict loop against an EMPTY measured set.  When the
+#   scanner reports no unclassified site at all, `printf '%s\n' "${!measured[@]}"` still
+#   emits ONE blank line, so the loop body ran once with an empty `rel` and
+#   `is_staged[$rel]` raised "bad array subscript" on stderr — the ordinary CLEAN case,
+#   not an error.  Found by this tool's new suite (tests/unit/59-check-swallows-staged.bats).
 set -uo pipefail
 
 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,7 +57,7 @@ repo="$(cd "$self_dir/.." && pwd)"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --repo) repo="${2:?--repo needs a path}"; shift 2 ;;
-        --version | -V) echo "check-swallows-staged 1"; exit 0 ;;
+        --version | -V) echo "check-swallows-staged 2"; exit 0 ;;
         *) echo "check-swallows-staged: unknown argument '$1'" >&2; exit 2 ;;
     esac
 done
@@ -115,7 +120,13 @@ fi
 
 # ── The verdict: the tool's two rules, scoped to the staged set ────────────
 fails=0
+# `printf '%s\n' "${!measured[@]}"` below emits ONE blank line when `measured` is EMPTY,
+# so the loop body ran once with `rel` unset — and `is_staged[$rel]` is then a "bad array
+# subscript": a bash error on stderr, though the verdict was unaffected.  A corpus with no
+# unclassified site at all is the ordinary CLEAN case, not an error (found by this tool's
+# new suite, whose clean fixture reaches it).
 while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
     [[ -n "${is_staged[$rel]:-}" ]] || continue
     count="${measured[$rel]}"
     if [[ -n "${known[$rel]:-}" ]]; then
