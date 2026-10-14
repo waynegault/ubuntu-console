@@ -308,6 +308,54 @@ _selftest_run() {
     [[ "$output" == *"cannot be loaded"* || "$output" == *"unsupported"* ]]
 }
 
+# ── load_fail aborts the ctx walk; an OOM still walks (2026-10-14) ───────────
+# A hard LOAD failure (unsupported/corrupt GGUF, arch needs a context it has not
+# got) is not an OOM: shrinking ctx cannot make an unloadable file load, so the
+# halving walk was one wasted llama-server spawn and CUDA cycle per step — rows 2
+# and 3 on 2026-10-14 walked 40,960 -> 2,560 (and the mmap fallback repeated it)
+# until the boot's 60-cycle ledger was spent.  These two cases pin BOTH halves of
+# the policy, because a "stop on everything" change would pass the first alone.
+
+@test "autotune-selftest: a load_fail STOPS the ctx walk after one attempt (no halving)" {
+    # Catches: the pre-change behaviour where a load_fail was walked down ctx by
+    # ctx.  With the walk stopped, only ONE Test rung is reported and no
+    # ": dropping to" halving line is printed (the real code prints "Test N: ctx
+    # X - unsupported model - model cannot run at any ctx" and then skips the rest).
+    run _selftest_run "$BATS_TEST_TMPDIR/loadfail" _SELFTEST_LOAD_FAIL=1
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"Test 1:"* ]]
+    [[ "$output" != *"dropping to"* ]]
+    [[ "$output" == *"unsupported"* || "$output" == *"cannot be loaded"* ]]
+}
+
+@test "autotune-selftest: an OOM still walks the ctx down (the load-fail stop must not regress it)" {
+    # The control: shrinking ctx IS the fix for a memory failure, so the halving
+    # walk must remain.  Without this case a stop-on-everything change would pass
+    # the load-fail case above while silently breaking OOM recovery.
+    run _selftest_run "$BATS_TEST_TMPDIR/walkdown" _SELFTEST_OOM_ABOVE=2048
+    [[ "$status" -eq 1 ]]
+    [[ "$output" == *"dropping to"* ]]
+}
+
+@test "autotune: a load failure is classified from the log, so a FAILURE that is not flash-attn is not called one" {
+    # Catches the misattribution that hid this defect for hours: the launch retry
+    # used to print "flash-attn load failure" for EVERY launch failure, so an
+    # unloadable GGUF ("load_model: failed to load model") read as an FA fault.
+    # The retry stays; the message must name the failure the log shows.  Source-level
+    # because it is the CALL SITE's wording that lied, not a pure function's verdict.
+    local src
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    [[ "$src" == *'flash-attn load failure — retrying'* ]] && {
+        echo "the retry must not assert flash-attn for a failure the log did not name"; return 1; }
+    [[ "$src" == *'_fa_cause=$(_startup_fail_type quiet)'* ]]
+    [[ "$src" == *'model load failure'* ]]
+    [[ "$src" == *'launch failed (no load-failure signature)'* ]]
+    # ...the ONE legitimate load-failure retry (FA off) is still attempted...
+    [[ "$src" == *'_launch_server || true'* ]]
+    # ...and the ctx walk consults the classification before halving.
+    [[ "$src" == *'if [[ $(last_fail_type) == "load_fail" ]]; then'* ]]
+}
+
 # ── WSL2 dxgkrnl leak ledger (2026-09-14) ────────────────────────────────────
 # Every bench spawns a llama-server, which is one CUDA context create/destroy;
 # dxgkrnl leaks GPU VA per cycle until the VM hangs.  The ledger is a FILE, so

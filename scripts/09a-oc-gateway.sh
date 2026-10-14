@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 30
+#   v29 (2026-10-14): `__so_health_gate` asserts that the MANAGED UNIT serves the port.
+#   A Gateway started as `openclaw gateway run` binds 18789 from a console while
+#   openclaw-gateway.service reads inactive, and every probe `so` ran still passed, so
+#   `so` printed "[RUNNING on PORT 18789]" and returned 0 (measured 2026-10-14).  A
+#   non-active unit now reports "[UP but NOT the managed service]" and returns 1; a
+#   stopped openclaw-gateway-guard.timer is REPORTED without changing the verdict,
+#   because a maintenance window stops that timer on purpose.
 # Module Version: 29
 #   v28 (2026-10-07): `__so_gateway_bound_age` no longer silences a failing journalctl —
 #   the `2>/dev/null` is REMOVED (and its `swallow-ok` marker with it) rather than kept.
@@ -773,6 +781,34 @@ function __so_health_gate() {
             # degraded gateway.  Exiting 0 was offered — the gateway IS up — and declined.
             return 1
         fi
+    fi
+
+    # A bound port is NOT a managed gateway.  Measured 2026-10-14: a Gateway started as
+    # `openclaw gateway run` binds 18789 from a console and leaves
+    # openclaw-gateway.service inactive, while the probe below still answers — `so`
+    # printed "[RUNNING on PORT 18789]" and returned 0.  The UNIT's state is what the
+    # guard's recovery path and the next update window depend on, so assert it here
+    # rather than trusting the port.  draining/starting/degraded returned above, so a
+    # restart in progress is never reported as a foreign gateway.
+    local _unit_state=""
+    # swallow-ok: a unit that cannot be queried is not "active", which is the answer this check wants; a real query failure still leaves the health probe below to fail the claim
+    _unit_state=$(systemctl --user is-active "$_svc" 2>/dev/null)
+    if [[ "$_unit_state" != "active" ]]
+    then
+        __tac_info "Gateway" "[UP but NOT the managed service — run: systemctl --user start $_svc]" "$C_Warning"
+        printf '%s\n' "  ${C_Dim}The port is bound by a process outside ${_svc} (unit reads${C_Reset}"
+        printf '%s\n' "  ${C_Dim}'${_unit_state}'), so the guard cannot recover it and the next${C_Reset}"
+        printf '%s\n' "  ${C_Dim}update window will not treat it as the managed Gateway.${C_Reset}"
+        return 1
+    fi
+
+    # The guard timer is a SEPARATE supervisor — its tick re-applies the patched-bundle
+    # tools, so a stopped timer is reported even while the Gateway serves.  Reported,
+    # not fatal: a maintenance window stops it on purpose.
+    # swallow-ok: a guard timer that cannot be queried is not assumed active, which is the answer this report wants; the unit check above and the probe below still have to pass for the green row
+    if [[ "$(systemctl --user is-active openclaw-gateway-guard.timer 2>/dev/null)" != "active" ]]
+    then
+        __tac_info "Gateway guard" "[TIMER STOPPED — the self-heal tick will not run]" "$C_Warning"
     fi
 
     # 'running' or 'unknown': the log claims to serve, or says nothing, so only the

@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 79
+# Module Version: 80
+#   v80 (2026-10-14): a hard LOAD failure now STOPS the ctx walk instead of halving it.
+#   ctx cannot make an unloadable GGUF load, so every further step was a llama-server
+#   spawn and a CUDA cycle: code-100k-Q8_0 walked 40,960 -> 2,560 on "failed to load
+#   model", then the --load-mode none fallback repeated it, until the boot's 60-cycle
+#   ledger was exhausted (rows 2 and 3, 2026-10-14).  A load-fail-at-every-ctx now
+#   also skips that mmap fallback; OOM still halves, untouched.  The launch-failure
+#   retry no longer claims "flash-attn" for a failure that is not flash-attn-specific —
+#   it names the failure the server log actually shows (failure-message-is-not-the-
+#   cause).  The load-fail signature gains `requires ctx_other to be set`: a DRAFT/
+#   assistant arch served standalone hits it and it is a load failure, not memory
+#   (dflash2-qwen38-27b-Q8_0).
 #   v79 (2026-10-13): 1a — the POSITION term.  The winner is a median of 5 taken at ONE
 #   point in the run, so the write branch now measures the SAME config a SECOND time
 #   (after profile 2 and the spec sweep, so it is a genuinely later position) and records
@@ -857,10 +868,24 @@ _bench_spawn() {
     # 2026-09-16 (legalparam, which loads fine in 3 s under the same flags) were
     # un-diagnosable for exactly that reason — the one line that named the cause
     # had already been thrown away.  Never discard the only witness.
+    # `requires ctx_other to be set` is the arch-level hard stop a DRAFT/assistant
+    # GGUF hits when served STANDALONE (llama-context.cpp: the draft arch needs its
+    # target's context).  It is a load failure, not memory — ctx cannot supply the
+    # missing context, and the string is emitted only when that pointer is null, so
+    # it cannot mask a real OOM (2026-10-14: dflash2-qwen38-27b-Q8_0 walked
+    # 180,224 -> 2,816 classified OOM and helped exhaust the boot's cycle ledger).
     _startup_fail_type() {
-        local _pat='unknown model architecture|failed to load model|error loading model|unsupported (model|architecture)|failed to open|no such file'
+        local _pat='unknown model architecture|failed to load model|error loading model|unsupported (model|architecture)|failed to open|no such file|requires ctx_other to be set'
         if grep -qiE "$_pat" "$_BENCH_LOG" 2>/dev/null; then
-            echo "  server log said: $(grep -iE "$_pat" "$_BENCH_LOG" 2>/dev/null | tail -1)" >&2
+            # The witness line is the evidence the deleted server log leaves behind;
+            # "quiet" is for a caller that classifies a failure it will re-attempt
+            # anyway, leaving the one authoritative print to the point the
+            # classification is USED (the pre-flight probe).
+            if [[ "${1:-}" != "quiet" ]]; then
+                local _wit
+                _wit=$(grep -iE "$_pat" "$_BENCH_LOG" 2>/dev/null | tail -1)
+                echo "  server log said: $_wit" >&2
+            fi
             printf 'load_fail'
         else
             printf 'oom'
@@ -868,7 +893,16 @@ _bench_spawn() {
     }
     _launch_server || {
         if [[ $flash_attn == "on" ]]; then
-            echo "  flash-attn load failure — retrying with --flash-attn off" >&2
+            # The retry is right — an FA-on launch failure is the one case worth a
+            # re-try — but the REASON must be READ, never assumed: labelling every
+            # launch failure "flash-attn" is how an unloadable GGUF read as an FA
+            # fault for hours (2026-10-14 — code-100k-Q8_0 logged load_model
+            # "failed to load model" at every ctx while each attempt claimed
+            # flash-attn).  Name the failure the server log actually shows.
+            local _fa_cause _fa_label="launch failed (no load-failure signature)"
+            _fa_cause=$(_startup_fail_type quiet)
+            [[ "$_fa_cause" == "load_fail" ]] && _fa_label="model load failure"
+            echo "  ${_fa_label} — retrying once with --flash-attn off" >&2
             _bench_stop "$_BENCH_PID"
             flash_attn="off"
             _launch_server || true
@@ -1250,7 +1284,10 @@ bench_ctx() {
 #                                 instead of the unparseable stub, so the capacity ctx
 #                                 comes from the fixture's <arch>.context_length
 #   _SELFTEST_FLOOR_ABOVE=<ctx>  12.0 tps at/below, 5.0 above (floor descent)
-#   _SELFTEST_OOM_ABOVE=<ctx>    load fails above the ceiling (OOM path)
+#   _SELFTEST_OOM_ABOVE=<ctx>    load fails above the ceiling (OOM path — still walks)
+#   _SELFTEST_LOAD_FAIL=1        EVERY bench fails as a hard LOAD failure (the metrics
+#                                 field reads load_fail), so the ctx walk's stop-on-
+#                                 load-fail policy is exercised: the walk must NOT halve
 #   _SELFTEST_CERT_GAP_ABOVE=<ctx>   with _SELFTEST_CERT_GAP_FACTOR=<n>: a SINGLE sample
 #                                 reads the full rate at/above <ctx> while a 5-sample
 #                                 certification reads rate/<n> — the 2026-09-17 defect the
@@ -1276,6 +1313,15 @@ if [[ "${AUTOTUNE_SELFTEST:-0}" == "1" ]]; then
         # threshold fail (returns OOM), reproducing the real binary-probe /
         # floor-recovery OOM path deterministically (default: no OOM).
         if [[ -n "${_SELFTEST_OOM_ABOVE:-}" ]] && [[ $c -gt ${_SELFTEST_OOM_ABOVE} ]]; then
+            echo ""; return 1
+        fi
+        # Optional hard-load-failure mode: _SELFTEST_LOAD_FAIL makes every bench
+        # return the load-fail classification, reproducing an unsupported/corrupt
+        # GGUF (default: no load failure).  It writes the metrics field
+        # last_fail_type reads, exactly as the real load-fail path does — a bare
+        # empty return would be classified OOM.
+        if [[ -n "${_SELFTEST_LOAD_FAIL:-}" ]]; then
+            echo "0|0|load_fail" > "/tmp/at-metrics-$$"
             echo ""; return 1
         fi
         # Optional TPS-floor threshold: _SELFTEST_FLOOR_ABOVE makes ctx above
@@ -1558,9 +1604,19 @@ for combo in "${COMBOS[@]}"; do
         test_num=$((test_num + 1))
         tps=$(bench_ctx "$c" "$b" "$u" 1) || {
             fail_label="OOM"
-            [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
+            # STOP, do not halve, on a hard load failure: shrinking ctx cannot make
+            # an unloadable GGUF load, so every further step is another llama-server
+            # spawn and another CUDA cycle (2026-10-14 — code-100k-Q8_0 walked
+            # 40,960 -> 2,560 on "failed to load model" and, with the fallback below,
+            # exhausted the boot's 60-cycle ledger).  The FA-off retry inside
+            # _bench_spawn is the one legitimate retry a load failure gets; leaving
+            # _ALL_LOAD_FAIL true makes the row report un-runnable and skip the combos.
+            if [[ $(last_fail_type) == "load_fail" ]]; then
+                fail_label="unsupported model"
+                break
+            fi
             echo "  Test $test_num: ctx $(fmt "$c") - ${fail_label}: dropping to $(fmt $((c/2)))"
-            [[ $(last_fail_type) != "load_fail" ]] && _ALL_LOAD_FAIL=false
+            _ALL_LOAD_FAIL=false
             c=$((c/2)); [[ $c -lt $MIN_CTX ]] && break; continue
         }
         echo "  Test $test_num: ctx $(fmt "$c") - ${tps} tps"
@@ -1686,9 +1742,14 @@ probe_no_mmap() {
         while [[ $c -ge $MIN_CTX ]]; do
             tps=$(bench_ctx "$c" "$b" "$u" 1 "off") || {
                 fail_label="OOM"
-                [[ $(last_fail_type) == "load_fail" ]] && fail_label="unsupported model"
+                # Same stop-on-load-fail rule as the mmap walk: an unloadable GGUF
+                # does not become loadable with --load-mode none.
+                if [[ $(last_fail_type) == "load_fail" ]]; then
+                    fail_label="unsupported model"
+                    break
+                fi
                 echo "  ctx $(fmt "$c") - ${fail_label}: dropping to $(fmt $((c/2)))"
-                [[ $(last_fail_type) != "load_fail" ]] && _ALL_LOAD_FAIL=false
+                _ALL_LOAD_FAIL=false
                 c=$((c/2)); [[ $c -lt $MIN_CTX ]] && break; continue
             }
             echo "  ctx $(fmt "$c") - ${tps} tps"
@@ -1720,7 +1781,12 @@ probe_no_mmap() {
     done
 }
 
-if [[ $ANY_OK == false ]]; then
+# A model that never loaded at any ctx (a load_fail at every step) is un-runnable
+# with mmap off too — the fallback exists for VRAM-allocation failures, where a
+# different load mode is the fix — so retrying the whole walk with --load-mode none
+# only re-spends spawns and CUDA cycles (2026-10-14: code-100k-Q8_0's fallback
+# doubled the wasted spawns before the boot's ledger was exhausted).
+if [[ $ANY_OK == false && ${_ALL_LOAD_FAIL:-true} != true ]]; then
     probe_no_mmap
 fi
 
