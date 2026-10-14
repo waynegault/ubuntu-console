@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-10-14): add the trailing `# end of file` marker the CI hygiene test requires
+#   (bin/*.sh is in its corpus); its absence left CI red for every pusher.
 #   v3 (2026-10-14): remove the 13 unclassified swallow sites so the shared contracts gate
 #   stops refusing every pusher.  Nine are classified with a `# swallow-ok:` reason (the
 #   status/stat/trash redirects are fail-safe by design and the outcome is logged below
@@ -236,3 +238,5 @@ shopt -u nullglob
 [ "$reclaimed" -gt 0 ] && log "reclaimed $reclaimed staged Trash entr(y/ies) older than ${STAGING_D}d"
 
 exit 0
+
+# end of file
