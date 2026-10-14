@@ -471,3 +471,29 @@ MOCK
     grep -q 'needed+=(denlink)' "$sh"
     grep -q 'denlink) patch="\$DENLINK"; label="plugin-skill hardlink"; apply_args=(--apply)' "$sh"
 }
+
+# Wayne 2026-10-13: "wire the re-apply into the self-heal tick".  Every plugin
+# install/update rewrites the installed agentmail extension's own dist/, reverting the
+# local patch that trims the SDK export `markdownToText` out of
+# dist/channel/src/inbound.js — measured three times on 2026-10-13, the last by
+# `openclaw plugins update agentmail` at 23:30 BST, which is why a hand re-apply was not
+# durable.  The tick must PROBE ~/.openclaw/scripts/agentmail-dist-patch.sh by its own
+# rc-aware --check and re-apply it with --apply.
+#
+# Its --check is NOT boolean: rc 2 (the extension is not installed, or is a build the tool
+# does not know) is a legitimate state — the upstream ladder's own third step REMOVES the
+# plugin — so only rc 1 is auto-repairable and it is probed separately, on the test-log
+# tool's pattern.
+#
+# What this case is for, and what it is NOT.  It is a REGRESSION NET for the wiring — it
+# fails if a future edit drops the seventh tool from the tick, the role the denlink case
+# above plays for the sixth.  Being a static assertion, it cannot see a mutation the
+# tool's own battery misses: the TOOL's behaviour lives where the tool lives, in
+# ~/.openclaw/workspace/unit-test/test_agentmail_dist_patch.py, and this split keeps the
+# case hermetic (it reads the tick's own text; no cross-repo path, no live tree).
+@test "self-heal: the tick probes the agentmail dist-patch tool" {
+    local sh="$REPO_ROOT/bin/qwen-guard-selfheal.sh"
+    grep -q '^AGENTMAIL="/home/wayne/.openclaw/scripts/agentmail-dist-patch.sh"' "$sh"
+    grep -q 'needed+=(agentmail)' "$sh"
+    grep -q 'agentmail) patch="\$AGENTMAIL"; label="agentmail dist patch"; apply_args=(--apply)' "$sh"
+}

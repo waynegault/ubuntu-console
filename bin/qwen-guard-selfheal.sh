@@ -77,6 +77,16 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 8
+#   v8 (2026-10-13): a SEVENTH tool is announced -- the agentmail dist patch
+#   (~/.openclaw/scripts/agentmail-dist-patch.sh), probed rc-aware like the test-log tool
+#   (0 patched / 1 reverted / 2 the extension is absent) and re-applied with --apply.  It
+#   re-trims the SDK export `markdownToText` that the plugin's compiled
+#   dist/channel/src/inbound.js still imports after the SDK removed it, which makes the
+#   plugin unloadable and gets it force-retired.  Every plugin install/update rewrites that
+#   file -- measured THREE times on 2026-10-13, the last by `openclaw plugins update
+#   agentmail` at 23:30 BST, which is why a hand re-apply was not durable.  Upstream:
+#   agentmail-to/openclaw-plugin#20.
 # Module Version: 7
 #   v7 (2026-10-10): a SIXTH tool is announced -- the plugin-skill hardlink self-heal
 #   (~/.openclaw/scripts/skill-denlink.sh), probed with its own boolean --check and
@@ -143,6 +153,9 @@ TESTLOG="/home/wayne/.local/bin/vscode-pytest-log-patch.py"
 # patcher (it lives in the OTHER repo); its --check is boolean, so it is probed with the
 # four older patchers below.
 DENLINK="/home/wayne/.openclaw/scripts/skill-denlink.sh"
+# The agentmail dist patch (2026-10-13).  Named by path like the comment-cap patcher (it
+# lives in the OTHER repo); its --check is rc-aware, so it is probed separately below.
+AGENTMAIL="/home/wayne/.openclaw/scripts/agentmail-dist-patch.sh"
 WITNESS="/home/wayne/ubuntu-console/scripts/qwen-memory-index-check.py"
 LOG_DIR="/home/wayne/.local/share/qwen-guard"
 LOG="$LOG_DIR/selfheal.log"
@@ -165,6 +178,19 @@ if [[ -x "$COMMENTCAP" ]] && ! "$COMMENTCAP" --check >/dev/null 2>&1; then
 fi
 if [[ -x "$DENLINK" ]] && ! "$DENLINK" --check >/dev/null 2>&1; then
   needed+=(denlink)
+fi
+
+# The agentmail dist patch's --check is rc-aware too (0 patched, 1 a reverted copy, 2 the
+# extension is not installed, or is a build this tool does not know), so it cannot use the
+# `! … --check` form: rc 2 is a legitimate state -- the ladder's own step 3 REMOVES the
+# plugin -- and treating it as "needs re-applying" would fire on every tick and never clear.
+# Only rc 1 is auto-repairable; rc 2 is quiet, exactly as the test-log tool's is.
+agentmail_rc=0
+if [[ -x "$AGENTMAIL" ]]; then
+  "$AGENTMAIL" --check >/dev/null 2>&1 || agentmail_rc=$?
+  if [[ "$agentmail_rc" -eq 1 ]]; then
+    needed+=(agentmail)
+  fi
 fi
 
 # The test-log tool's --check is NOT boolean (0 patched, 1 a reverted copy, 2 no
@@ -231,6 +257,7 @@ for tool in "${needed[@]}"; do
     commentcap) patch="$COMMENTCAP"; label="workboard-commentcap patch"; apply_args=() ;;
     denlink) patch="$DENLINK"; label="plugin-skill hardlink"; apply_args=(--apply) ;;
     testlog) patch="$TESTLOG"; label="test-log patch"; apply_args=(--apply) ;;
+    agentmail) patch="$AGENTMAIL"; label="agentmail dist patch"; apply_args=(--apply) ;;
   esac
 
   {
