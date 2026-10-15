@@ -151,11 +151,18 @@ teardown() {
     grep -q '^uncertified.gguf$' "$ARGV_LOG"
     grep -q '^flagged.gguf$' "$ARGV_LOG"
 
-    # Claimed: no plan left at the path a boot looks at, a copy in the log home, and
-    # the claim kept aside rather than destroyed.
+    # Claimed: no plan left at the path a boot looks at, a copy in the log home, and the
+    # claim kept aside rather than destroyed.  v3 also writes a RETIREMENT marker beside
+    # it, so the claim is counted EXCLUDING that marker - the marker matches the same glob.
     [ ! -e "$TAC_RESUME_PLAN" ]
     [ "$(ls -1 "$TAC_RESUME_LOGDIR" | grep -c '\.rows$')" -eq 1 ]
-    [ "$(ls -1 "$TAC_RESUME_STATE_DIR" | grep -c '\.claimed-')" -eq 1 ]
+    local _claim_n _marker_n
+    _claim_n=$(ls -1 "$TAC_RESUME_STATE_DIR"/autotune-resume.rows.claimed-* 2>/dev/null \
+        | grep -vc '\.retired$')
+    _marker_n=$(ls -1 "$TAC_RESUME_STATE_DIR"/autotune-resume.rows.claimed-*.retired 2>/dev/null \
+        | wc -l)
+    [ "$_claim_n" -eq 1 ]
+    [ "$_marker_n" -eq 1 ]
 
     # And a second boot finds nothing and says so, rather than re-tuning the rows.
     run "$SCRIPT" 2>&1
@@ -308,6 +315,60 @@ EOS
     [[ "$output" == *"never clears the filled-cache TPS floor"* ]]
     # A fresh campaign resets the loop's counter.
     [ "$(cat "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts")" = "0" ]
+}
+
+# ── THE CLAIM IS THE RESUME MARKER (v3) ───────────────────────────────────────
+# v2 claimed the plan and moved it aside, so a restart that killed the chunk left NO plan
+# and NO record that a run was owed: measured 2026-10-15 14:34:58 BST, the next boot read
+# "no plan ... nothing to resume" and 8 rows were never measured.  The claim is retired the
+# moment the exit code has been read, so an UNRETIRED claim means exactly "cut off".
+
+# Falsification: fails against v2, which had no recovery path at all and would print
+# "no plan ... nothing to resume" and call nothing.
+@test "autotune-resume: a chunk cut off after the claim is RE-DERIVED and resumed" {
+    printf 'uncertified.gguf\n' > "$TAC_RESUME_PLAN.claimed-20261015-134149"
+
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"the previous run was never reported on"* ]]
+    [[ "$output" == *"re-derives the remainder"* ]]
+
+    # The RULED remainder was re-derived and handed over, not the claim's own list.
+    grep -q '^uncertified.gguf$' "$ARGV_LOG"
+    grep -q '^law-chat-Q2_K.gguf$' "$ARGV_LOG"
+
+    # BOTH claims are retired - the recovered one and this boot's own - so a second boot
+    # finds nothing to recover and calls nothing.
+    [ -e "$TAC_RESUME_PLAN.claimed-20261015-134149.retired" ]
+    local _calls
+    _calls=$(wc -l < "$ARGV_LOG")
+    run "$SCRIPT" 2>&1
+    [[ "$output" == *"no plan at"* ]]
+    [ "$(wc -l < "$ARGV_LOG")" -eq "$_calls" ]
+}
+
+# Falsification: fails against a scan that does not skip the ".retired" NAME - the marker
+# file itself matches the claim glob, so a reported-on run reads as cut off.
+@test "autotune-resume: a claim that WAS reported on resumes nothing" {
+    printf 'uncertified.gguf\n' > "$TAC_RESUME_PLAN.claimed-20261015-190635"
+    : > "$TAC_RESUME_PLAN.claimed-20261015-190635.retired"
+
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"no plan at"* ]]
+    [[ "$output" == *"nothing to resume"* ]]
+    [ ! -e "$ARGV_LOG" ]
+}
+
+# Falsification: fails when --status does not report the claim at all, which is how a
+# cut-off campaign stayed invisible to the operator.
+@test "autotune-resume: --status names an unreported claim" {
+    printf 'uncertified.gguf\n' > "$TAC_RESUME_PLAN.claimed-20261015-134149"
+
+    run "$SCRIPT" --status 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"UNREPORTED previous run"* ]]
+    [[ "$output" == *"claimed-20261015-134149"* ]]
 }
 
 # end of file

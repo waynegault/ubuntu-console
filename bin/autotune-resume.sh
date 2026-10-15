@@ -23,8 +23,16 @@
 # silently at every boot.  With no plan this exits 0 and says so: a boot does
 # nothing, loudly.
 #
-# THE PLAN IS CLAIMED ONCE.  Before the run it is copied to the log home and moved
-# aside (not deleted), so a boot loop cannot re-tune rows it already has.
+# THE PLAN IS CLAIMED ONCE, AND THE CLAIM IS THE RESUME MARKER.  Before the run the plan
+# is copied to the log home and moved aside (not deleted), so a boot loop cannot re-tune
+# rows it already has.  The claim is RETIRED (`<claim>.retired`) the moment the chunk's
+# exit code has been read and acted on, so a claim still UNRETIRED means this boot never
+# heard how its chunk ended - a restart in the middle, not a campaign that finished.
+# Measured 2026-10-15 14:34:58 BST: the chunk was killed by a teardown SIGTERM, the plan
+# had already been claimed and moved aside, and the next boot read "no plan ... nothing to
+# resume" with 8 rows left UNMEASURED - the campaign died without saying so.  v3 closes
+# that: a boot that finds an unretired claim re-derives the remainder and resumes it, and
+# prints the claim it recovered from.
 #
 # FOUR STOPS KEEP THAT FROM BEING A REBOOT LOOP.  A boot that did not SHRINK the
 # remainder; a remainder that is empty; a CI job executing on THIS box (a restart
@@ -49,8 +57,15 @@
 #   exit 4 = the campaign PAUSED: a budget halt that will not resume by itself
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
-VERSION="2.0.0"
+# Module Version: 3
+#   v3 (2026-10-15): an UNRETIRED claim now RESUMES the campaign.  A restart that killed the
+#   chunk (measured 14:34:58 BST, 8 rows left) used to leave no plan and no recovery, so the
+#   next boot read "nothing to resume" and the campaign died without saying so.  The claim is
+#   retired as soon as the entry point's exit code has been read, and a boot that finds one
+#   still unretired re-derives the remainder and continues; --status surfaces it.
+#   v2 (2026-10-15): the chunk runs as a CHILD so its exit code can be read; a budget halt
+#   that shrank the remainder re-derives the plan and arms the restart (four stops, cap 8).
+VERSION="3.0.0"
 
 set -uo pipefail
 
@@ -152,6 +167,34 @@ write_plan() {
     printf '  %s\n' "$_rows"
     report_parked
     return 0
+}
+
+# The newest claim that was never RETIRED, or nothing.  A claim is written just before a
+# chunk is handed the rows and retired once the entry point's exit code has been read, so a
+# claim still unretired means THIS boot never heard how its chunk ended - a restart in the
+# middle (or a crash), never a campaign that finished.  Glob order is name order and every
+# stamp is `date +%Y%m%d-%H%M%S`, so the last match is the newest.
+latest_unretired_claim() {
+    local _f _newest=""
+    for _f in "$PLAN".claimed-*; do
+        [[ -e "$_f" ]] || continue
+        # A claim's own RETIREMENT MARKER matches the glob too, so it must be skipped by
+        # NAME as well as by the sibling test below - otherwise the marker is mistaken for
+        # an unretired claim and every reported-on run reads as cut off.
+        [[ "$_f" == *.retired ]] && continue
+        [[ -e "$_f.retired" ]] && continue
+        _newest="$_f"
+    done
+    [[ -n "$_newest" ]] || return 1
+    printf '%s\n' "$_newest"
+}
+
+# Mark a claim as REPORTED: the entry point's exit code has been read and acted on, so the
+# next boot must not mistake this run for one that was cut off.  Retirement is what makes
+# "unretired" mean "we never heard how it ended", which is the whole recovery signal.
+retire_claim() {
+    [[ -n "${1:-}" && -e "${1:-}" ]] || return 0
+    : > "$1.retired"
 }
 
 # The boot-scoped CUDA cycle ledger, or a named absence on a fresh boot.  Reported,
@@ -280,10 +323,26 @@ continue_after() {
 # Run the plan: drop a row whose model file is gone (an unloadable row still burns
 # CUDA cycles walking ctx - see the load-failure note), claim the plan, hand over.
 run_plan() {
-    local _row _kept=() _missing=0 _rc=0
+    local _row _kept=() _missing=0 _rc=0 _recover=""
     if [[ ! -f "$PLAN" ]]; then
-        printf 'no plan at %s - nothing to resume (write one with --plan)\n' "$PLAN"
-        return 0
+        # No plan, but a claim that was never retired means the last chunk was CUT OFF
+        # rather than finished: its exit code was never read, so nothing re-derived the
+        # remainder or armed a restart.  Re-derive from the registry and carry on.  The
+        # never-armed case (no plan AND no unretired claim) still does nothing, loudly.
+        if _recover="$(latest_unretired_claim)"; then
+            printf 'no plan at %s, but the previous run was never reported on: %s\n' \
+                "$PLAN" "$_recover"
+            printf '  a restart cut its chunk off, so this boot re-derives the remainder\n'
+            write_plan || return "$EXIT_PAUSED"
+            retire_claim "$_recover"
+            if [[ ! -f "$PLAN" ]]; then
+                printf 'the remainder is EMPTY - the campaign is complete\n'
+                return 0
+            fi
+        else
+            printf 'no plan at %s - nothing to resume (write one with --plan)\n' "$PLAN"
+            return 0
+        fi
     fi
     if [[ ! -x "$ENTRY" ]]; then
         printf 'ERROR: entry point not executable: %s\n' "$ENTRY"
@@ -307,18 +366,25 @@ run_plan() {
         return "$EXIT_FAILED"
     fi
 
-    # Claim it BEFORE the run: a boot loop must not re-tune rows it already has.
+    # Claim it BEFORE the run: a boot loop must not re-tune rows it already has.  The claim
+    # doubles as the resume marker (latest_unretired_claim): it is retired as soon as the
+    # exit code below has been read, so an UNRETIRED one means exactly "cut off".
     mkdir -p "$LOGDIR"
-    local _stamp
+    local _stamp _claim
     _stamp="$(date +%Y%m%d-%H%M%S)"
     cp "$PLAN" "$LOGDIR/autotune-resume-$_stamp.rows"
     mv "$PLAN" "$PLAN.claimed-$_stamp"
+    _claim="$PLAN.claimed-$_stamp"
     printf 'resuming %s row(s) through %s (claimed as %s.claimed-%s)\n' \
         "${#_kept[@]}" "$ENTRY" "$PLAN" "$_stamp"
     # A CHILD, not `exec`: the exit code is the loop's input, and `exec` threw it
     # away by replacing this process with the chunk.
     "$ENTRY" "${_kept[@]}" || _rc=$?
     printf 'entry point exited %s after %s row(s) were handed to it\n' "$_rc" "${#_kept[@]}"
+    # RETIRE before deciding: the exit code HAS been read, so this run is no longer an
+    # interrupted one however continue_after resolves it.  A stall that stops for a person
+    # must not look like a cut-off chunk on the next boot.
+    retire_claim "$_claim"
     continue_after "$_rc" "${#_kept[@]}"
 }
 
@@ -340,6 +406,11 @@ show_status() {
         printf 'no chunk in flight\n'
     fi
     printf 'model dir: %s\n' "$MODEL_DIR"
+    local _claim=""
+    if _claim="$(latest_unretired_claim)"; then
+        printf 'UNREPORTED previous run: %s\n' "$_claim"
+        printf '  its chunk was cut off before its exit code was read - the next boot re-derives and resumes\n'
+    fi
     printf 'automatic restarts armed since --plan: %s (cap %s)\n' "$(restart_count)" "$ARM_MAX"
     printf 'CI jobs on this box: %s (a restart waits for these to drain)\n' "$(ci_workers)"
     report_parked
