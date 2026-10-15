@@ -41,6 +41,7 @@ import argparse
 import gzip
 import json
 import os
+import shutil
 import sqlite3
 import sys
 import time
@@ -161,12 +162,85 @@ def apply_trim(db: Path, state: dict, keep: list, backup_dir: Path) -> dict:
     }
 
 
+def freelist_bytes(db: Path) -> int:
+    """Bytes SQLite can hand back to the filesystem: free pages x page size.
+
+    READ-ONLY, so it answers for a DB VS Code currently holds open, and 0 for a DB with
+    no tables to compact.  This is the measure the trim cannot move: deleting a value
+    frees PAGES, and only a VACUUM returns them (measured 2026-10-15 — the companion's
+    key fell from 75 MB to 297 bytes and the file stayed at 153,202,688).
+    """
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
+    try:
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+        free_pages = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    finally:
+        conn.close()
+    return int(page_size) * int(free_pages)
+
+
+def vacuum_db(db: Path, backup_dir: Path) -> dict:
+    """Back the DB up, VACUUM it, and report the sizes read back from DISK."""
+    before = db.stat().st_size
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    slug = db.parent.parent.parent.name or "state"
+    backup = backup_dir / f"state-vscdb-{slug}-{stamp}.sqlite.gz"
+    with db.open("rb") as src, gzip.open(backup, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    conn = sqlite3.connect(db, timeout=60)
+    try:
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+    return {"backup": backup, "before": before, "after": db.stat().st_size}
+
+
+def run_vacuum(dbs: list[Path], apply: bool, backup_dir: Path) -> int:
+    """Report — and with APPLY, perform — one VACUUM per state DB."""
+    print(f"mode: {'APPLY' if apply else 'DRY RUN (nothing will be written)'}")
+    print("rule: compact each DB, returning pages freed by deleted values")
+    if apply:
+        print("PRECONDITION: VS Code must be CLOSED — it holds the DB open, and a VACUUM")
+        print("              against a live DB is refused ('database is locked').")
+    print()
+    rc = 0
+    for db in dbs:
+        free = freelist_bytes(db)
+        print(f"{db}")
+        print(f"  size: {db.stat().st_size:,} bytes,  free pages: {free:,} bytes")
+        if free == 0:
+            print("  nothing to compact")
+            print()
+            continue
+        if not apply:
+            print("  (dry run — pass --vacuum --apply with VS Code closed to compact this)")
+            print()
+            continue
+        try:
+            res = vacuum_db(db, backup_dir)
+        except sqlite3.OperationalError as exc:
+            # Not a crash: a live VS Code is the expected reason, and it is the operator's
+            # to clear - so name it and keep going rather than half-compacting a profile.
+            print(f"  REFUSED: {exc} — is VS Code still open?", file=sys.stderr)
+            rc = 1
+            print()
+            continue
+        print(f"  backup:        {res['backup']} ({res['backup'].stat().st_size:,} bytes gz)")
+        print(f"  after VACUUM:  {res['after']:,} bytes  (reclaimed {res['before'] - res['after']:,})")
+        print()
+    return rc
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="vscode-companion-state-trim.py",
         description="Bound the companion's conversation blob in VS Code extension state.",
     )
     ap.add_argument("--apply", action="store_true", help="write the trim (backup taken first)")
+    ap.add_argument("--vacuum", action="store_true",
+                    help="compact each state DB instead of trimming: returns freed pages to the "
+                         "filesystem.  Reports only unless --apply")
     ap.add_argument("--keep-days", type=int, default=DEFAULT_KEEP_DAYS,
                     help=f"keep conversations with messages updated within N days (default {DEFAULT_KEEP_DAYS})")
     ap.add_argument("--state-dir", default=None, help="VS Code user-data dir")
@@ -178,6 +252,9 @@ def main(argv: list[str] | None = None) -> int:
     if not targets:
         print("no state.vscdb found; searched:", ", ".join(str(d) for d in user_dirs), file=sys.stderr)
         return 2
+
+    if args.vacuum:
+        return run_vacuum([db for _d, db in targets], args.apply, Path(args.backup_dir))
 
     now_ms = time.time() * 1000
     print(f"mode: {'APPLY' if args.apply else 'DRY RUN (nothing will be written)'}")

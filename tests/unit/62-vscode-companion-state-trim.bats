@@ -264,4 +264,76 @@ PY
     [[ "$output" == *"$SANDBOX"* ]]
 }
 
+# _bloated_db FILE — a state DB whose FILE is far larger than its live data: a big value
+# written and then DELETED, which frees PAGES but never shrinks the file.  That gap is what
+# --vacuum closes and what the trim cannot touch (measured on the real profile: the key fell
+# to 297 bytes while the file stayed 153,202,688, with 152,252,416 free).
+_bloated_db() {
+    _fixture "$SANDBOX/convs.json"
+    _mkdb "$1" "$SANDBOX/convs.json"
+    "$PY" - "$1" <<'PY'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
+             ("filler", "x" * 2_000_000))
+conn.commit()
+conn.execute("DELETE FROM ItemTable WHERE key = 'filler'")
+conn.commit()
+conn.close()
+PY
+}
+
+@test "companion-trim: --vacuum reports the free pages and writes NOTHING" {
+    _bloated_db "$DB"
+    before=$(stat -c %s "$DB")
+
+    _trim --vacuum
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"free pages:"* ]]
+    [[ "$output" == *"DRY RUN"* ]]
+
+    # The observable: byte-identical file, and no backup taken.
+    [ "$(stat -c %s "$DB")" = "$before" ]
+    [ ! -d "$BACKUPS" ]
+}
+
+@test "companion-trim: --vacuum --apply compacts the file and the KEY SURVIVES" {
+    _bloated_db "$DB"
+    before=$(stat -c %s "$DB")
+    convs_before=$(_conv_count "$DB")
+
+    _trim --vacuum --apply
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"after VACUUM:"* ]]
+
+    # Smaller on disk AND the data intact — a VACUUM rebuilds the file, so the point of the
+    # case is that compacting is not trimming.
+    [ "$(stat -c %s "$DB")" -lt "$before" ]
+    [ "$(_conv_count "$DB")" = "$convs_before" ]
+    compgen -G "$BACKUPS/state-vscdb-*.sqlite.gz" > /dev/null
+}
+
+@test "companion-trim: a DB with no tables is reported, not crashed on" {
+    mkdir -p "$(dirname "$DB")"
+    : > "$DB"
+
+    _trim --vacuum
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing to compact"* ]]
+    [[ "$output" != *"Traceback"* ]]
+    [ ! -d "$BACKUPS" ]
+}
+
+@test "companion-trim: an already-compact DB is left alone even with --apply" {
+    _fixture "$SANDBOX/convs.json"
+    _mkdb "$DB" "$SANDBOX/convs.json"
+    before=$(stat -c %s "$DB")
+
+    _trim --vacuum --apply
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing to compact"* ]]
+    [ "$(stat -c %s "$DB")" = "$before" ]
+    [ ! -d "$BACKUPS" ]
+}
+
 # end of file
