@@ -453,8 +453,7 @@ class TestMemoryImportPhases(unittest.TestCase):
                 "memory/notes.md")
 
     def test_ingest_chunks_emits_the_chunk_node_its_containment_edge_and_a_topic(self):
-        """Catches a chunk phase that skips the file roll-up edge, drops the
-        heading topic, or never hands its embedding to the similarity pass."""
+        """Catches dropped chunk outputs and concept-pass ordering/link regressions."""
         import sqlite3
 
         from kgraph import memory_import
@@ -490,6 +489,57 @@ class TestMemoryImportPhases(unittest.TestCase):
             # The vector is COLLECTED for the similarity pass, not dropped.
             self.assertEqual([(cid, vec) for cid, _path, vec, _mag in embeddings],
                              [("chunk:c1", [1.0, 0.0])])
+
+            # The concept phase is also callable by itself; its order is part of
+            # semantic pair scoring, and named entities intentionally skip file links.
+            concept_builder = GraphBuilder()
+            with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
+                concept_ingest = memory_import._MemoryStoreIngest(concept_builder)
+            concepts = []
+            concept_ingest._ingest_chunk_concepts(
+                "fixture",
+                "memory/notes.md",
+                "\n".join((
+                    "## Project: Atlas",
+                    "## Notes on cache migration",
+                    "Decision: maintain archive logic",
+                    "We decided to keep the archive guard.",
+                    "# Sarah-Activate Report",
+                    "OpenClaw runs on Windows.",
+                )),
+                concepts,
+            )
+            self.assertEqual(concepts, [
+                "topic:project-atlas",
+                "topic:notes-on-cache-migration",
+                "project:atlas",
+                "decision:maintain-archive-logic",
+                "decision:keep-the-archive-guard",
+                "actor:sarah",
+                "person:sarah",
+                "organization:openclaw",
+            ])
+            concept_graph = concept_builder.build()
+            concept_edges = [
+                (edge.target, edge.label)
+                for edge in concept_graph.edges
+                if edge.source == "chunk:fixture"
+            ]
+            self.assertEqual(concept_edges, [
+                ("topic:project-atlas", "covers topic"),
+                ("topic:notes-on-cache-migration", "covers topic"),
+                ("project:atlas", "has project"),
+                ("decision:maintain-archive-logic", "has decision"),
+                ("decision:keep-the-archive-guard", "has decision"),
+                ("actor:sarah", "authored by"),
+                ("person:sarah", "has person"),
+                ("organization:openclaw", "has organization"),
+            ])
+            entity_edges = [
+                edge for edge in concept_graph.edges
+                if edge.target in {"person:sarah", "organization:openclaw"}
+            ]
+            self.assertEqual([edge.source for edge in entity_edges], ["chunk:fixture"] * 2)
 
     def test_emit_semantic_edges_keeps_the_strong_pair_and_drops_the_weak_one(self):
         """Catches an emitter with no cut-off (every co-occurring pair becomes an

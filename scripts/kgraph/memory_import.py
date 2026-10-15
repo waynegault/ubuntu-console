@@ -755,16 +755,32 @@ class _MemoryStoreIngest:
                     'label': 'references file',
                 })
 
-    def _ingest_chunk_concepts(
+    def _link_theme_concept(
         self,
         chunk_key: str,
         path: str,
-        chunk_text: str,
+        kind: str,
+        label: str,
         preview: str,
         chunk_concepts: list[str],
+        link_file: bool = True,
+    ) -> bool:
+        """Create and link a typed theme when its label is concept-worthy."""
+        theme_id = self.add_theme_node(kind, label, preview=preview)
+        if not theme_id:
+            return False
+        self._link_chunk_concept(
+            chunk_key, path, theme_id, f'has {kind}', chunk_concepts, link_file,
+        )
+        return True
+
+    def _ingest_heading_topics(
+        self,
+        chunk_key: str,
+        path: str,
+        headings: list[re.Match[str]],
+        chunk_concepts: list[str],
     ) -> None:
-        """Extract the topic, theme, activation, and entity concepts for a chunk."""
-        headings = list(_HEADING_PATTERN.finditer(chunk_text))
         for heading in headings:
             topic_id = self.add_topic_node(heading.group(1))
             if topic_id:
@@ -772,30 +788,45 @@ class _MemoryStoreIngest:
                     chunk_key, path, topic_id, 'covers topic', chunk_concepts,
                 )
 
+    def _ingest_heading_themes(
+        self,
+        chunk_key: str,
+        path: str,
+        headings: list[re.Match[str]],
+        chunk_concepts: list[str],
+    ) -> None:
         for heading in headings:
             heading_text = (heading.group(1) or '').strip()
             for kind, pattern in _THEMATIC_HEADING_PATTERNS:
                 match = pattern.match(heading_text)
-                if not match:
-                    continue
-                derived = (match.group(1) or '').strip()
-                if not derived:
-                    continue
-                theme_id = self.add_theme_node(kind, derived, preview=heading_text)
-                if theme_id:
-                    self._link_chunk_concept(
-                        chunk_key, path, theme_id, f'has {kind}', chunk_concepts,
-                    )
+                if match:
+                    derived = (match.group(1) or '').strip()
+                    if derived:
+                        self._link_theme_concept(
+                            chunk_key, path, kind, derived, heading_text, chunk_concepts,
+                        )
 
+    def _ingest_explicit_themes(
+        self,
+        chunk_key: str,
+        path: str,
+        chunk_text: str,
+        chunk_concepts: list[str],
+    ) -> None:
         for kind, pattern in _THEMATIC_PATTERNS:
             for match in pattern.finditer(chunk_text):
                 derived = (match.group(1) or '').strip()
-                theme_id = self.add_theme_node(kind, derived, preview=derived)
-                if theme_id:
-                    self._link_chunk_concept(
-                        chunk_key, path, theme_id, f'has {kind}', chunk_concepts,
-                    )
+                self._link_theme_concept(
+                    chunk_key, path, kind, derived, derived, chunk_concepts,
+                )
 
+    def _ingest_line_themes(
+        self,
+        chunk_key: str,
+        path: str,
+        chunk_text: str,
+        chunk_concepts: list[str],
+    ) -> None:
         for raw_line in chunk_text.splitlines():
             line = raw_line.strip()
             if not concept_worthy_line(line):
@@ -805,28 +836,53 @@ class _MemoryStoreIngest:
                 if not match:
                     continue
                 derived = (match.group(1) or '').strip(' .:-')
-                theme_id = self.add_theme_node(kind, derived, preview=line)
-                if theme_id:
-                    self._link_chunk_concept(
-                        chunk_key, path, theme_id, f'has {kind}', chunk_concepts,
-                    )
+                if self._link_theme_concept(
+                    chunk_key, path, kind, derived, line, chunk_concepts,
+                ):
                     break
 
+    def _ingest_activation_authorship(
+        self,
+        chunk_key: str,
+        path: str,
+        chunk_text: str,
+        chunk_concepts: list[str],
+    ) -> None:
         for match in _ACTIVATE_PATTERN.finditer(chunk_text):
             agent_name = match.group(1)
-            role = AGENT_ROLES.get(agent_name, 'Agent')
-            actor_id = self.add_actor_node(agent_name, role)
+            actor_id = self.add_actor_node(agent_name, AGENT_ROLES.get(agent_name, 'Agent'))
             self._link_chunk_concept(
                 chunk_key, path, actor_id, 'authored by', chunk_concepts,
             )
 
+    def _ingest_named_entities(
+        self,
+        chunk_key: str,
+        path: str,
+        chunk_text: str,
+        chunk_concepts: list[str],
+    ) -> None:
         for entity_kind, entity_label in self.extract_semantic_entities(chunk_text):
-            entity_id = self.add_theme_node(entity_kind, entity_label, preview=entity_label)
-            if entity_id:
-                self._link_chunk_concept(
-                    chunk_key, path, entity_id, f'has {entity_kind}',
-                    chunk_concepts, link_file=False,
-                )
+            self._link_theme_concept(
+                chunk_key, path, entity_kind, entity_label, entity_label,
+                chunk_concepts, link_file=False,
+            )
+
+    def _ingest_chunk_concepts(
+        self,
+        chunk_key: str,
+        path: str,
+        chunk_text: str,
+        chunk_concepts: list[str],
+    ) -> None:
+        """Extract the topic, theme, activation, and entity concepts for a chunk."""
+        headings = list(_HEADING_PATTERN.finditer(chunk_text))
+        self._ingest_heading_topics(chunk_key, path, headings, chunk_concepts)
+        self._ingest_heading_themes(chunk_key, path, headings, chunk_concepts)
+        self._ingest_explicit_themes(chunk_key, path, chunk_text, chunk_concepts)
+        self._ingest_line_themes(chunk_key, path, chunk_text, chunk_concepts)
+        self._ingest_activation_authorship(chunk_key, path, chunk_text, chunk_concepts)
+        self._ingest_named_entities(chunk_key, path, chunk_text, chunk_concepts)
 
     def _add_chunk_semantic_summary(
         self,
@@ -939,7 +995,7 @@ class _MemoryStoreIngest:
                     )
 
             self._ingest_chunk_concepts(
-                chunk_key, normalized_path, normalized_text, preview, chunk_concepts,
+                chunk_key, normalized_path, normalized_text, chunk_concepts,
             )
             self._add_chunk_semantic_summary(chunk_key, chunk_concepts)
 
