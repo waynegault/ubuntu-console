@@ -168,7 +168,7 @@ class TestProjectionHelpers(unittest.TestCase):
         strong = [_e("a", "b", "project decision", semantic_score=0.9),
                   _e("b", "c", "decision addresses issue", semantic_score=0.9),
                   _e("a", "c", "project issue", semantic_score=0.9)]
-        self.assertEqual([(s["label"], s["size"]) for s in cluster(bases, strong)], [("Alpha · Gamma", 3)])
+        self.assertEqual([(s.label, s.size) for s in cluster(bases, strong)], [("Alpha · Gamma", 3)])
         # Unknown endpoints are ignored; a two-node component is not a cluster.
         self.assertEqual(len(cluster(bases, strong + [_e("a", "ghost", "project decision")])), 1)
         self.assertEqual(cluster(bases[:2], strong), [])
@@ -178,22 +178,22 @@ class TestProjectionHelpers(unittest.TestCase):
         weak_edges = [_e("w1", "w2", "related (0.9)", semantic_score=0.9),
                       _e("w2", "w3", "related (0.9)", semantic_score=0.9),
                       _e("w1", "w3", "related (0.9)", semantic_score=0.9)]
-        self.assertEqual([s["label"] for s in cluster(weak, weak_edges)], ["cluster 1"])
+        self.assertEqual([s.label for s in cluster(weak, weak_edges)], ["cluster 1"])
         chunk_edges = [_e("c1", "c2", "related (0.9)", semantic_score=0.9),
                        _e("c2", "c3", "related (0.9)", semantic_score=0.9),
                        _e("c1", "c3", "related (0.9)", semantic_score=0.9)]
         chunks = [_n("c1", "Chunk one", "chunk", degree=2), _n("c2", "Chunk two", "chunk", degree=2),
                   _n("c3", "Chunk three", "chunk", degree=2)]
-        self.assertEqual([s["label"] for s in cluster(chunks, chunk_edges)], ["Chunk three · Chunk one"])
+        self.assertEqual([s.label for s in cluster(chunks, chunk_edges)], ["Chunk three · Chunk one"])
         single = [_n("a", "Alpha", "project", degree=2), _n("b", "Graph quality", "topic", degree=2),
                   _n("c", "Env bridge", "decision", degree=2)]
         bad_numeric = [_e("a", "b", "project decision", semantic_score="bad", cooccurrence_count="bad"),
                        _e("b", "c", "decision addresses issue", cooccurrence_count=3),
                        _e("a", "c", "project issue", cooccurrence_count=2)]
-        self.assertEqual([s["label"] for s in cluster(single, bad_numeric)], ["Alpha (cluster)"])
+        self.assertEqual([s.label for s in cluster(single, bad_numeric)], ["Alpha (cluster)"])
         repeated = [_n("a", "Same", "project", degree=2), _n("b", "Same", "decision", degree=2),
                     _n("c", "Graph quality", "issue", degree=2)]
-        self.assertEqual([s["label"] for s in cluster(repeated, strong)], ["Same (issue)"])
+        self.assertEqual([s.label for s in cluster(repeated, strong)], ["Same (issue)"])
         # Cooccurrence-only relations stay below the 0.74 cluster bar.
         self.assertEqual(cluster(single, [_e("a", "b", "related", cooccurrence_count=3),
                                           _e("b", "c", "related", cooccurrence_count=2)]), [])

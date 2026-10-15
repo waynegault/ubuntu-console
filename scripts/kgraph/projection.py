@@ -21,6 +21,7 @@ from .constants import (
 )
 from .life_index import load_life_index
 from .models import (
+    ClusterSuggestion,
     Graph,
     SourceLineage,
     collapse_semantic_duplicates,
@@ -253,7 +254,7 @@ def _enrich_graph_payload(projected: dict, current_mode: str) -> dict:
         _set_display_label(node, nid, ntype, current_mode, top_label_nodes)
 
     # ── Cluster suggestions (semantic mode) ──
-    cluster_suggestions: list[dict] = []
+    cluster_suggestions: list[ClusterSuggestion] = []
     if current_mode == "semantic":
         cluster_suggestions = _build_cluster_suggestions(out)
 
@@ -262,7 +263,9 @@ def _enrich_graph_payload(projected: dict, current_mode: str) -> dict:
     out["_meta"]["nodeCount"] = len(out["nodes"])
     out["_meta"]["edgeCount"] = len(out["edges"])
     if cluster_suggestions:
-        out["_meta"]["clusterSuggestions"] = cluster_suggestions
+        out["_meta"]["clusterSuggestions"] = [
+            suggestion.model_dump(mode="json") for suggestion in cluster_suggestions
+        ]
     return out
 
 
@@ -507,7 +510,7 @@ def _filter_semantic_edges(out: dict, current_mode: str, life_index: dict) -> No
     ]
 
 
-def _build_cluster_suggestions(out: dict) -> list[dict]:
+def _build_cluster_suggestions(out: dict) -> list[ClusterSuggestion]:
     """Build semantic cluster suggestions from connected components."""
     semantic_adj: dict[str, set[str]] = {}
     semantic_nodes = {str(n.get("id")): n for n in out["nodes"] if n.get("id") is not None}
@@ -549,7 +552,7 @@ def _build_cluster_suggestions(out: dict) -> list[dict]:
         semantic_adj.setdefault(dst, set()).add(src)
 
     visited: set[str] = set()
-    cluster_suggestions: list[dict] = []
+    cluster_suggestions: list[ClusterSuggestion] = []
 
     for nid in semantic_nodes:
         if nid in visited or nid not in semantic_adj:
@@ -610,12 +613,12 @@ def _build_cluster_suggestions(out: dict) -> list[dict]:
         else:
             cluster_label = f"cluster {len(cluster_suggestions) + 1}"
 
-        cluster_suggestions.append({
-            "id": f"semantic_cluster_{len(cluster_suggestions) + 1}",
-            "label": cluster_label[:64],
-            "members": component,
-            "size": len(component),
-        })
+        cluster_suggestions.append(ClusterSuggestion(
+            id=f"semantic_cluster_{len(cluster_suggestions) + 1}",
+            label=cluster_label[:64],
+            members=component,
+            size=len(component),
+        ))
 
     return cluster_suggestions
 

@@ -410,6 +410,23 @@ class GraphEdge(SourceLineage):
 # ── Graph ──────────────────────────────────────────────────────────────
 
 
+class ClusterSuggestion(BaseModel):
+    """A semantic cluster suggestion emitted by the graph projection."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, validate_assignment=True)
+
+    id: str
+    label: str
+    members: list[str]
+    size: int
+
+    @model_validator(mode="after")
+    def _size_matches_members(self) -> ClusterSuggestion:
+        if self.size != len(self.members):
+            raise ValueError("cluster suggestion size must equal its member count")
+        return self
+
+
 class GraphMeta(BaseModel):
     """Metadata attached to a graph projection."""
 
@@ -425,7 +442,7 @@ class GraphMeta(BaseModel):
     typeCounts: dict[str, int] = Field(default_factory=dict)
     nodeCount: int = 0
     edgeCount: int = 0
-    clusterSuggestions: list[dict[str, Any]] = Field(default_factory=list)
+    clusterSuggestions: list[ClusterSuggestion] = Field(default_factory=list)
     # ast_extractor's result metadata (result["_meta"]).
     source: str = ""
     files_parsed: int = 0

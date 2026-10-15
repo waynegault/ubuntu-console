@@ -265,9 +265,29 @@ class TestGraph:
         assert g.meta.view_mode == "overview"
         assert g.meta.semantic_threshold == 0.82
 
-    def test_metadata_count_coercion_is_rejected(self):
+    def test_meta_counts_and_cluster_suggestions_validate_strictly(self):
         with pytest.raises(ValidationError):
             GraphMeta.model_validate({"nodeCount": "2"})
+
+        payload = {
+            "id": "semantic_cluster_1",
+            "label": "Alpha · Beta",
+            "members": ["a", "b"],
+            "size": 2,
+        }
+        with pytest.raises(ValidationError):
+            GraphMeta.model_validate({"clusterSuggestions": [{**payload, "size": "2"}]})
+
+        meta = GraphMeta.model_validate({"clusterSuggestions": [payload]})
+        assert meta.model_dump()["clusterSuggestions"] == [payload]
+
+        for invalid in (
+            {**payload, "members": ["a", 2]},
+            {**payload, "unexpected": True},
+            {**payload, "size": 3},
+        ):
+            with pytest.raises(ValidationError):
+                GraphMeta.model_validate({"clusterSuggestions": [invalid]})
 
 # ── GraphBuilder ───────────────────────────────────────────────────────
 
