@@ -88,7 +88,13 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-10-15): the cancel path EXITS.  v4 "named" the cancel code and dropped
+#   the `exit` with it, so the generated script evaluated `$CancelCode` and fell off
+#   the end - PowerShell exits 0, which the wrapper reads as "restart as planned", so
+#   a Cancel would have been IGNORED and the window would have closed anyway.
+#   tests/unit/60-wsl-restart.bats:360 caught it (the tip's CI was red on that case)
+#   and the fix is `exit $CancelCode`.
 #   v5 (2026-10-15): the gate's own logging goes to STDOUT.  The first live fire
 #   (12:25 BST) proved the gate RAN - the wrapper logged "operator gate clear -
 #   proceeding" - but every line the gate wrote was lost: it Add-Content'd to the
@@ -316,7 +322,7 @@ render_prompt() {
         '& schtasks.exe /create /f /tn $TaskName /tr $WrapperWin /sc once `' \
         '    /sd $when.ToString("dd/MM/yyyy") /st $when.ToString("HH:mm") 2>&1 `' \
         '    | ForEach-Object { Write-Gate "schtasks: $_" }' \
-        '$CancelCode' \
+        'exit $CancelCode' \
         '# end of file'
 }
 
