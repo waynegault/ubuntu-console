@@ -87,7 +87,7 @@ CURL
 }
 
 @test "explicit update installs from a stubbed release and preserves the old link" {
-    "$REPO_ROOT/.venv/bin/python" -c '
+    "$REPO_ROOT/.venv/bin/python3" -c '
 import sys, zipfile
 with zipfile.ZipFile(sys.argv[1], "w") as archive:
     archive.writestr("bin/llama-server", "#!/bin/sh\nprintf \"version (build 99999)\\n\"\n")
