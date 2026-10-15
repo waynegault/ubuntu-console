@@ -358,6 +358,18 @@ _line_of() {
     # `if errorlevel 3`, so the value and the test have to agree.
     grep -q 'CancelCode = 3' "$TAC_WSL_RESTART_PROMPT_UNIX"
     grep -q 'exit \$CancelCode' "$TAC_WSL_RESTART_PROMPT_UNIX"
+
+    # ...and its own lines go to STDOUT, never into the wrapper's log.  MEASURED on the
+    # first live fire (12:25 BST): the gate RAN - the wrapper logged "operator gate
+    # clear - proceeding" - but every line the gate itself wrote was LOST, because the
+    # wrapper holds its log open for the whole run and Add-Content raised
+    # GetContentWriterIOError.  The wrapper already appends the gate's stdout to that
+    # same log, so stdout is both lock-free and where a reader looks.  A unit case
+    # cannot observe a runtime file lock; it can pin the mechanism that avoids it.
+    ! grep -q 'Add-Content' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    grep -q 'Write-Output "\[\$stamp\] operator gate: \$m"' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    run "$SCRIPT" --dry-run
+    [[ "$output" == *'-File "%PROMPT%" >> "%LOG%" 2>&1'* ]]
 }
 
 @test "wsl-restart: a CANCELLED restart SKIPS the self-delete and re-arms instead" {
