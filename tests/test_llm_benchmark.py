@@ -220,6 +220,23 @@ def test_runner_never_overwrites_artifact_without_force(tmp_path, capsys):
     assert output.read_text(encoding="utf-8") == "preserve me"
 
 
+def test_runner_preserves_racing_output_created_after_initial_check(tmp_path, monkeypatch):
+    output = tmp_path / "race.json"
+    original_link = llm_benchmark.os.link
+
+    def create_competing_output(source, destination):
+        Path(destination).write_text("created concurrently", encoding="utf-8")
+        return original_link(source, destination)
+
+    monkeypatch.setattr(llm_benchmark.os, "link", create_competing_output)
+
+    with pytest.raises(llm_benchmark.BenchmarkError, match="output already exists"):
+        llm_benchmark._atomic_json_write(output, {"result": "new"}, force=False)
+
+    assert output.read_text(encoding="utf-8") == "created concurrently"
+    assert list(tmp_path.glob(".race.json.*.tmp")) == []
+
+
 def test_comparison_rejects_incompatible_or_failed_runs(tmp_path):
     baseline = _write_artifact(tmp_path / "baseline.json", median=100)
     current = _write_artifact(tmp_path / "current.json", median=80)

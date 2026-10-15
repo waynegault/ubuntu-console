@@ -454,7 +454,19 @@ def _atomic_json_write(path: Path, payload: dict[str, Any], force: bool) -> None
             target.write("\n")
             target.flush()
             os.fsync(target.fileno())
-        os.replace(temp_name, path)
+        if force:
+            os.replace(temp_name, path)
+        else:
+            os.link(temp_name, path)
+            os.unlink(temp_name)
+            temp_name = None
+    except FileExistsError as exc:
+        if temp_name is not None:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+        raise BenchmarkError(f"output already exists (pass --force to replace it): {path}") from exc
     except OSError as exc:
         if temp_name is not None:
             try:
