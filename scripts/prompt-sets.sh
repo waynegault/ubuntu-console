@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-10-15): the agentic tool-call prompt now specifies a machine-checkable JSON
+#   call shape, enabling a one-shot deterministic contract check after autotune without
+#   judging throughput samples or claiming semantic correctness.
 #   v5 (2026-09-27): __prompt_set_revision — a content address for one prompt set, so a
 #   trained artifact can record the served prompt contract it was trained under
 #   (card UBC-GRPO-004). Change any prompt body or display name and the revision moves.
@@ -35,7 +38,7 @@ PROMPTS_LEGAL=(
 )
 
 PROMPTS_AGENTIC=(
-    "You have tools: search_corpus(query), fetch_document(id), summarize(text). Plan the minimal sequence of tool calls to determine whether the workplace policy on annual leave was amended between March and September 2023. Return a JSON array of tool calls with arguments."
+    'You have tools: search_corpus(query), fetch_document(id), summarize(text). Plan the minimal sequence of tool calls to determine whether the workplace policy on annual leave was amended between March and September 2023. Return a JSON array where each item has exactly the shape {"tool":"search_corpus","arguments":{"query":"..."}}. Use only the declared tool names and their declared arguments.'
     "You are investigating whether a respondent fabricated meeting minutes. Step 1: search the corpus for 'meeting minutes March 2023'. Step 2: fetch the top result and extract the attendees. Step 3: cross-reference the attendees against the HR system export. Step 4: decide whether the minutes are consistent with the export and output a structured finding."
     "Answer the question: was the disciplinary hearing held within a reasonable time after the alleged misconduct? Use the ReAct pattern: first think about what evidence you need, then call search_corpus('disciplinary hearing date'), then reason about the gap between the incident date (12 March) and the hearing date you found, then conclude."
     "A witness statement claims the claimant was 'pressured to resign'. Retrieve the full statement, identify the three passages that support or contradict the pressure claim, and produce a verdict for the allegation '[FACT] The claimant was pressured to resign' with a confidence score."

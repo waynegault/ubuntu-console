@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 80
+# Module Version: 81
+#   v81 (2026-10-15): legal/agentic profiles run one deterministic task-contract probe at
+#   the final winner before persistence; malformed legal labels or agentic tool-call JSON
+#   refuse the save. Probe calls are separate from the throughput samples and use no judge.
 #   v80 (2026-10-14): a hard LOAD failure now STOPS the ctx walk instead of halving it.
 #   ctx cannot make an unloadable GGUF load, so every further step was a llama-server
 #   spawn and a CUDA cycle: code-100k-Q8_0 walked 40,960 -> 2,560 on "failed to load
@@ -1114,6 +1117,83 @@ print('%s|%s|%s|%s|%s' % (ct, pt, decode, prefill, pred_ms))
     fi
     echo "0|0|oom" > "/tmp/at-metrics-$$"; echo ""; _BENCH_FAIL_TYPE="oom"
     return 1
+}
+
+# ---------------------------------------------------------------------------
+# __autotune_task_quality_check — run one deterministic task-contract probe per
+#   selected legal/agentic task after tuning, using the final winner config.
+#   It does not score truth or alter the throughput samples; failures refuse profile save.
+# ---------------------------------------------------------------------------
+# __autotune_quality_error — report task-quality failures through the shared UI helper.
+__autotune_quality_error() {
+    __tac_info "Autotune" "[ERROR: $1]" "${C_Error:-}"
+}
+
+# Validate the selected workload contract once at the final tuned configuration.
+__autotune_task_quality_check() {
+    local -a probe_workloads=()
+    case "$WORKLOAD" in
+        legal) probe_workloads=(legal) ;;
+        agentic) probe_workloads=(agentic) ;;
+        mix) probe_workloads=(legal agentic) ;;
+        chat) return 0 ;;
+        *) __autotune_quality_error "no task-quality contract for workload $WORKLOAD"; return 1 ;;
+    esac
+
+    local _quality_checker="$_SELF_DIR/../tools/llm_task_quality.py"
+    if [[ ! -f "$_quality_checker" ]]; then
+        __autotune_quality_error "task-quality checker is missing: $_quality_checker"
+        return 1
+    fi
+    cleanup_gpu >&2 || { __autotune_quality_error "could not clear the GPU for task-quality checks"; return 1; }
+
+    local _saved_spec_type="${BENCH_SPEC_TYPE:-off}"
+    local _saved_spec_n_max="${BENCH_SPEC_N_MAX:-}"
+    local _saved_draft_model="${BENCH_SPEC_DRAFT_MODEL:-}"
+    BENCH_SPEC_TYPE="${WIN_SPEC_TYPE:-off}"
+    BENCH_SPEC_N_MAX="${WIN_SPEC_N_MAX:-}"
+    BENCH_SPEC_DRAFT_MODEL="${WIN_SPEC_DRAFT_MODEL:-}"
+    if ! _bench_spawn "$BEST_CTX" "$BEST_B" "$BEST_U" "$EFFECTIVE_MMAP" \
+        "$WIN_NGL" "$WIN_KVK" "$WIN_KVV"; then
+        _bench_stop "$_BENCH_PID"
+        BENCH_SPEC_TYPE="$_saved_spec_type"
+        BENCH_SPEC_N_MAX="$_saved_spec_n_max"
+        BENCH_SPEC_DRAFT_MODEL="$_saved_draft_model"
+        __autotune_quality_error "task-quality probe could not start the winner configuration"
+        return 1
+    fi
+
+    local _qworkload _qprompt _qpayload _quality_failed=0
+    for _qworkload in "${probe_workloads[@]}"; do
+        case "$_qworkload" in
+            legal) _qprompt="${PROMPTS_LEGAL[1]}" ;;
+            agentic) _qprompt="${PROMPTS_AGENTIC[0]}" ;;
+            *) __autotune_quality_error "unknown task-quality probe workload: $_qworkload"; _quality_failed=1; break ;;
+        esac
+        _qpayload=$("$TAC_PYTHON" - "$_qprompt" <<'PYEOF'
+import json, sys
+print(json.dumps({
+    "messages": [{"role": "user", "content": sys.argv[1]}],
+    "max_tokens": 256,
+    "temperature": 0,
+}))
+PYEOF
+        ) || { __autotune_quality_error "could not build $_qworkload task-quality request"; _quality_failed=1; break; }
+        if ! curl -fsS --max-time "$BENCH_TIMEOUT" \
+            "$_BENCH_HEALTH_URL/v1/chat/completions" \
+            -H "Content-Type: application/json" -d "$_qpayload" \
+            | "$TAC_PYTHON" "$_quality_checker" --workload "$_qworkload"; then
+            __autotune_quality_error "$_qworkload task-contract probe failed; refusing to save this profile"
+            _quality_failed=1
+            break
+        fi
+    done
+
+    _bench_stop "$_BENCH_PID"
+    BENCH_SPEC_TYPE="$_saved_spec_type"
+    BENCH_SPEC_N_MAX="$_saved_spec_n_max"
+    BENCH_SPEC_DRAFT_MODEL="$_saved_draft_model"
+    return "$(( _quality_failed == 0 ? 0 : 1 ))"
 }
 
 # ---------------------------------------------------------------------------
@@ -2684,6 +2764,10 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
         else
             echo "  position drift ${_meas_drift_pct}% (p1=${BEST_TPS} p2=${_meas_pos2}) —" \
                  "within the ${AUTOTUNE_DRIFT_WARN_PCT}% hazard bound"
+        fi
+        if ! __autotune_task_quality_check; then
+            __autotune_quality_error "task-quality contract was not verified — the winner was NOT saved"
+            exit 1
         fi
         __llm_autotune_profile_save "$MODEL_FILE" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \

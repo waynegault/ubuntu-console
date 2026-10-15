@@ -258,6 +258,15 @@ network access beyond a loopback fixture.
 2. Maximum stable context
 3. Maximum TPS (stability-adjusted)
 
+Before saving a `legal`, `agentic`, or `mix` profile, autotune makes one extra
+request per applicable task contract at the final winner configuration. The
+legal probe checks for one of the verdict labels explicitly required by its
+shared prompt. The agentic probe parses the requested JSON call array and checks
+the declared tool names and argument keys. These deterministic checks run after
+throughput sampling, use no judge model, and do not establish factual/legal
+correctness, evidence grounding, or whether a tool-call sequence is minimal.
+A failed response contract refuses the profile write; `chat` remains unchanged.
+
 ### What It Optimizes
 
 - Row-level runtime defaults in `models.conf`

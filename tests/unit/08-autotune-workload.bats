@@ -86,6 +86,20 @@ EOF
     [[ "$src" == *"workload=%s"* ]]
 }
 
+@test "autotune task-contract checks run once before profile persistence" {
+    local src prompts gate_line save_line
+    src=$(< "$REPO_ROOT/scripts/autotune-model.sh")
+    prompts=$(< "$REPO_ROOT/scripts/prompt-sets.sh")
+    [[ "$src" == *"__autotune_task_quality_check"* ]]
+    [[ "$src" == *"tools/llm_task_quality.py"* ]]
+    [[ "$src" == *"probe_workloads=(legal agentic)"* ]]
+    [[ "$src" == *"chat) return 0"* ]]
+    [[ "$prompts" == *"each item has exactly the shape"* ]]
+    gate_line=$(grep -n '^        if ! __autotune_task_quality_check' "$REPO_ROOT/scripts/autotune-model.sh" | cut -d: -f1)
+    save_line=$(grep -n '^[[:space:]]*__llm_autotune_profile_save ' "$REPO_ROOT/scripts/autotune-model.sh" | cut -d: -f1)
+    [[ -n "$gate_line" && -n "$save_line" && "$gate_line" -lt "$save_line" ]]
+}
+
 @test "autotune-003: profile-save records ttft_ms (col 34, v6 schema)" {
     cat > "$LLM_REGISTRY" <<'EOF'
 #|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram

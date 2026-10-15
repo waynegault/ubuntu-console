@@ -37,6 +37,8 @@ technical debt has been removed.
 | AUD-027 | The active EU MyAir adapter treated missing GraphQL response objects and malformed sleep-record entries as empty data, allowing an HTTP 200 response to look like a successful empty fetch. | Added explicit response-envelope and nested-type validation that raises `MyAirFetchError`, with fake-transport tests for missing wrapper and invalid records. The repo mirror is fixed; the NAS deployment is explicitly pending and recorded in `nas/butler/README.md`.|
 | AUD-028 | Benchmark artifact comparison validated each workload row independently but did not verify that the row IDs exactly matched the workload definitions in the manifest. An unmanifested row could therefore be ignored by comparison. | Artifact loading now rejects missing, extra, blank, or duplicate workload IDs and requires result rows to match the manifest definitions exactly. Fake artifact tests cover missing and extra result rows.|
 | AUD-029 | Benchmark artifact creation checked for an existing path before writing, then used `os.replace`, so a file created by another process between those steps could be overwritten without `--force`. | Non-forced writes now atomically link the completed temporary file into place; an existing destination fails without modifying it. A deterministic race test confirms the competing file survives and the temporary artifact is cleaned up.|
+| AUD-030 | Autotune selected legal/agentic profiles by throughput alone; per-sample judge calls would add cost without a grounded reference. | Before profile persistence, run one deterministic contract probe per selected legal/agentic task (two for mix): legal requires a requested verdict label; agentic validates the explicit JSON tool-call schema and arguments. The checks use no judge, do not affect throughput samples, and do not claim factual/legal correctness. Tests cover acceptance/rejection; live task performance remains unmeasured.
+
 
 ## Confirmed debt / follow-up
 
@@ -141,3 +143,4 @@ technical debt has been removed.
   entire bridge was not rerun after correction: the README notes the full suite restarts
   the live gateway, and this host's first BATS case took 291s versus a 0.9s median. No
   full-suite pass is claimed.
+- AUD-030 validation: `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_llm_task_quality.py` (11 passed); `bats tests/unit/08-autotune-workload.bats` (41 passed); repo-venv Ruff/mypy, ShellCheck, `tools/count-ratchet.sh`, `tools/docs-sync-check.sh`, and whole-tree `CI_STATUS_ALLOW_UNKNOWN=1 tools/lint.sh` passed. The lint run reported CI UNKNOWN because the repo `gh` shim has no real GitHub CLI behind it; no live model quality probe was run.
