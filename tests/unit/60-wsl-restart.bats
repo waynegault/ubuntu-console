@@ -101,6 +101,8 @@ STUB_EOF
     export TAC_WSL_RESTART_SCHTASKS="$STUB"
     export TAC_WSL_RESTART_WRAPPER_UNIX="$SANDBOX/wsl-restart-action.cmd"
     export TAC_WSL_RESTART_WRAPPER_WIN='C:\Users\wayne\wsl-restart-action.cmd'
+    export TAC_WSL_RESTART_PROMPT_UNIX="$SANDBOX/wsl-restart-prompt.ps1"
+    export TAC_WSL_RESTART_PROMPT_WIN='C:\Users\wayne\wsl-restart-prompt.ps1'
     export TAC_WSL_RESTART_LOG_UNIX="$SANDBOX/wsl-restart-action.log"
     export TAC_WSL_RESTART_CODE_CMD_UNIX="$CODE_CMD"
 }
@@ -328,6 +330,75 @@ _line_of() {
     run "$SCRIPT" --unschedule 2>&1
     [ "$status" -eq 0 ]
     [[ "$output" == *"nothing to remove"* ]]
+}
+
+@test "wsl-restart: the OPERATOR GATE asks BEFORE anything is closed, and ships with the wrapper" {
+    run "$SCRIPT" --dry-run
+    [ "$status" -eq 0 ]
+
+    prompt_n=$(_line_of "$output" 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROMPT%"')
+    close_n=$(_line_of "$output" 'taskkill /im Code.exe')
+    [ "$prompt_n" -gt 0 ]
+    # ITS WHOLE POINT: the ask happens while the session is still open.  A prompt
+    # after the close would be asking about a window it had already taken away.
+    [ "$prompt_n" -lt "$close_n" ]
+    # Exit 3 is the ONLY cancel.  A missing prompt, a crash, an OK and the popup's own
+    # expiry all fall through to the restart - that is what keeps the schedule the
+    # default and the cancel the exception.
+    printf '%s\n' "$output" | grep -q 'if errorlevel 3 goto operator_cancel'
+    printf '%s\n' "$output" | grep -q 'if not exist "%PROMPT%"'
+
+    # ...and the gate's script must reach disk, or the wrapper calls nothing.
+    export QUERY_MODE=registered
+    run "$SCRIPT" --restart --delay 2 2>&1
+    [ "$status" -eq 0 ]
+    [ -f "$TAC_WSL_RESTART_PROMPT_UNIX" ]
+    grep -q 'Popup(' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    # The cancel code is NAMED, never a bare literal - the wrapper tests it with
+    # `if errorlevel 3`, so the value and the test have to agree.
+    grep -q 'CancelCode = 3' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    grep -q 'exit \$CancelCode' "$TAC_WSL_RESTART_PROMPT_UNIX"
+}
+
+@test "wsl-restart: a CANCELLED restart SKIPS the self-delete and re-arms instead" {
+    run "$SCRIPT" --dry-run
+    [ "$status" -eq 0 ]
+
+    cancel_n=$(_line_of "$output" ':operator_cancel')
+    final_n=$(_line_of "$output" ':final')
+    delete_n=$(_line_of "$output" 'schtasks.exe /delete /f /tn tac-wsl-restart')
+    finished_n=$(_line_of "$output" ':finished')
+    [ "$cancel_n" -gt 0 ]
+    [ "$final_n" -gt "$cancel_n" ]
+    # The cancel branch jumps PAST the delete: the gate has just re-armed the very
+    # registration that delete would remove, so deleting here would cancel the retry.
+    [ "$finished_n" -gt "$delete_n" ]
+    printf '%s\n' "$output" | awk -v a="$cancel_n" -v b="$finished_n" 'NR>a && NR<b' \
+        | grep -q 'goto finished'
+
+    # The re-arm itself is the prompt's job, with a real future minute and the SAME
+    # task name - otherwise the retry would never fire.
+    export QUERY_MODE=registered
+    run "$SCRIPT" --restart --delay 2 2>&1
+    grep -q 'AddMinutes($RetryMinutes)' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    grep -q '/create /f /tn $TaskName' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    grep -q '/sc once' "$TAC_WSL_RESTART_PROMPT_UNIX"
+}
+
+@test "wsl-restart: the gate's shipped defaults - a 10s ask, 120s idle, 20min retry" {
+    export QUERY_MODE=registered
+    run "$SCRIPT" --restart --delay 2 2>&1
+    [ "$status" -eq 0 ]
+    grep -q '\$TimeoutSeconds = 10' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    grep -q '\$IdleSeconds = 120' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    grep -q '\$RetryMinutes = 20' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    # The expiry resolves to the RESTART: only an explicit Cancel (2) stops it.
+    grep -q 'if ($answer -ne 2)' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    # "Obviously in use" needs BOTH a client and recent input, and the input probe
+    # failing must still ASK rather than skip the ask.
+    grep -q 'Get-Process -Name Code' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    grep -q 'GetLastInputInfo' "$TAC_WSL_RESTART_PROMPT_UNIX"
+    grep -q 'asking anyway' "$TAC_WSL_RESTART_PROMPT_UNIX"
 }
 
 # end of file
