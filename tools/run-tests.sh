@@ -12,7 +12,13 @@
 #   tools/run-tests.sh --integration      # with integration tests
 #   tools/run-tests.sh -- --filter "bash" # pass extra args to bats
 # ==============================================================================
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-10-15): the duration-anomaly helper no longer hides its own failures.  It used
+#   a bare `python3`, interpolated the durations path INTO the program text, swallowed
+#   every error with `except: sys.exit(0)`, and discarded stderr with `2>/dev/null` - so a
+#   detector that could not read the file printed exactly what a clean run prints ("No
+#   duration anomalies detected").  Now: the venv interpreter when present, the path as
+#   ARGV, `except (OSError, ValueError)` naming the failure on stderr, and no redirect.
 #   v5 (2026-10-01): the full suite routes through bin/heavy-job, so a ~30-minute
 #   saturating run cannot overlap another heavy job — see the prologue after `set -uo pipefail`.
 # No -e on purpose: the runner must execute every suite and print the summary even
@@ -437,11 +443,24 @@ fi
 # Duration anomaly detection (if tac-durations.json exists)
 _dur_file="$REPO_ROOT/.pytest_cache/tac-durations.json"
 if [[ -f "$_dur_file" ]]; then
-    anomalies=$(python3 -c "
+    # The interpreter: the repo's venv when it exists, else PATH python3 - the same
+    # resolution the pytest step above uses.  NOT a bare `python3`: this box's system
+    # python3.12 carries no pytest, and this file is written by the venv's pytest.
+    _dur_py="$REPO_ROOT/.venv/bin/python"
+    [[ -x "$_dur_py" ]] || _dur_py="python3"
+    # The path goes in as ARGV, never interpolated into the program text (a quote in a
+    # path would otherwise be executed as code), and stderr is NOT discarded: a helper
+    # that cannot read the file must say so, because "no anomalies detected" and "the
+    # detector failed" are different answers and a bare `except: sys.exit(0)` plus
+    # `2>/dev/null` rendered them identical.
+    anomalies=$("$_dur_py" - "$_dur_file" <<'PY'
 import json, sys
 try:
-    d = json.load(open('$_dur_file'))
-except: sys.exit(0)
+    with open(sys.argv[1]) as fh:
+        d = json.load(fh)
+except (OSError, ValueError) as exc:
+    print(f"  duration anomalies UNREADABLE: {exc}", file=sys.stderr)
+    sys.exit(0)
 warnings = []
 for key, times in d.items():
     if len(times) < 2:
@@ -455,7 +474,8 @@ if warnings:
     for key, last, median, ratio in warnings[:3]:
         short = key.split('::')[-1][:80]
         print(f'  {short}  took {last:.1f}s ({ratio:.1f}x median {median:.1f}s)')
-" 2>/dev/null)
+PY
+)
     if [[ -n "$anomalies" ]]; then
         header "Duration Anomalies"
         echo "$anomalies" | while IFS= read -r line; do
