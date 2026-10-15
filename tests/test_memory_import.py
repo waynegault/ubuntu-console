@@ -495,7 +495,7 @@ class TestMemoryImportPhases(unittest.TestCase):
             concept_builder = GraphBuilder()
             with mock.patch("kgraph.memory_import.load_life_index", return_value=_LIFE_INDEX):
                 concept_ingest = memory_import._MemoryStoreIngest(concept_builder)
-            concepts = []
+            concepts: list[str] = []
             concept_ingest._ingest_chunk_concepts(
                 "fixture",
                 "memory/notes.md",

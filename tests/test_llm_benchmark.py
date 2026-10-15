@@ -3,6 +3,7 @@
 import json
 import threading
 import time
+from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -21,6 +22,7 @@ class _StreamingHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
         prompt = request["messages"][-1]["content"]
+        events: tuple[Mapping[str, object], ...]
         if prompt == "server-error":
             events = ({"error": {"message": prompt}},)
         elif prompt == "missing-usage":
