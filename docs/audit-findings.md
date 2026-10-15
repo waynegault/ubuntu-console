@@ -33,14 +33,15 @@ technical debt has been removed.
 | AUD-023 | The configured repository-wide mypy command treated `tools/llm_benchmark.py` as both `llm_benchmark` and `tools.llm_benchmark`, so it stopped before checking the full configured source set; once package discovery was fixed, three latent test annotations were rejected. | Made `tools` an explicit package and corrected the benchmark event and concept fixture types. The repository-wide configured mypy gate now checks all 102 configured sources. Commit `70d904f5`. |
 | AUD-024 | `tools/contracts_check.py` combined five enforcement subcommands in a 2,490-line file, making its state, module graph, derived-surface, continuity, and swallow-check logic difficult to review independently. | Extracted those five checkers into `tools/contracts_checkers/` behind a 151-line CLI facade. Captured and compared 11 invocations (all/default, each subcommand, baseline and JSONL modes, named continuity lookup, help, and invalid arguments): exit codes and stdout/stderr match byte-for-byte. The focused unit and BATS bridge suites pass. |
 | AUD-025 | The newly strict graph `TypedDict`s correctly mark digest and lineage metadata keys as optional, but some report/test consumers indexed those fields without narrowing, leaving Pyright errors hidden by an earlier package-discovery failure. | Kept the schema optional where old/raw graph records may omit digest fields; report code and tests now narrow optional values before use. Pyright reports zero errors; its five documented NAS missing-source warnings remain visible. |
+| AUD-026 | The active EU MyAir fetch adapter had no automated coverage for its GraphQL request/response contract or API-level error handling; the existing CPAP failure test covered only the separate unified stub. | Added fake-transport tests for the active adapter's request shape, normalized device/sleep-record output, and surfaced GraphQL errors. Tests inject only synthetic credentials and a local in-memory response; no network or NAS runtime is touched. README test counts now match the added cases.|
 
 ## Confirmed debt / follow-up
 
 | Priority | Finding | Evidence and disposition |
 |---|---|---|
 | P2 | Salus scheduler orchestration is large. | `nas/butler/openclaw/salus-it500/salus.py::_run` is 266 lines. The NAS skill copy has deployment/mirror constraints; no refactor was attempted without a verified source-of-truth and deploy path. |
-| P2 | CPAP fetch is deliberately unimplemented. | `nas/butler/scripts/nas-cpap-unified.py::_fetch_cpap_data` raises `NotImplementedError` rather than returning fake success; its consumer is not enabled as a cron collector. Implementing it requires the real API contract, not a placeholder. |
-| P3 | A representative live-hardware LLM performance baseline has not yet been measured. | Synthetic autotune coverage remains; AUD-015 adds a reproducible opt-in local runner and compatible artifact comparison, but this audit did not spend GPU cycles or establish a reviewed baseline. Baseline collection must use the intended model/runtime/hardware after the operator selects representative prompts and a quiet GPU window. |
+| P2 | The separate CPAP unified entrypoint remains deliberately unimplemented. | `nas/butler/scripts/nas-cpap-unified.py::_fetch_cpap_data` raises `NotImplementedError` rather than returning fake success and is not called by the cron path. The active EU adapter is `cpap-myair-fetch.py`, now covered by AUD-026. The NAS tree is runtime/source-of-truth; deleting or changing the obsolete deployed mirror entrypoint requires a NAS-side owner/deploy decision, not a repo-only edit.|
+| P3 | A representative live-hardware LLM performance baseline has not yet been measured. | AUD-015 adds a reproducible opt-in local runner and compatible artifact comparison, but this audit did not spend GPU cycles or establish a reviewed baseline. At inspection, 3376 MiB of 4096 MiB GPU memory was occupied with multiple `llama-server` processes active. Baseline collection remains deferred until the operator selects representative prompts and a quiet GPU window.|
 
 ## Audit checks recorded
 
@@ -117,6 +118,9 @@ technical debt has been removed.
 - The extracted checker was compared against its pre-split implementation for 11 CLI invocations; return codes, stdout, and stderr were byte-identical.
 - `.venv/bin/python -m mypy`: passed across 102 configured source files after the checker split.
 - `.venv/bin/python -m pyright`: 0 errors and 5 known NAS missing-module-source warnings; no warnings were suppressed.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_nas_collector_failures.py`: 44 passed, including synthetic-transport coverage for the active EU MyAir GraphQL adapter.
+- `.venv/bin/python -m ruff check tests/test_nas_collector_failures.py` and `.venv/bin/python -m mypy`: passed. Pyright remains at 0 errors and 5 visible NAS dependency-source warnings.
+- `tools/docs-sync-check.sh`: passed after updating the README to 2,030 tests (1,324 BATS + 706 Python).
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_models.py tests/test_kgraph.py tests/test_report.py`: 250 passed after narrowing optional TypedDict reads.
 - `bash -n` and ShellCheck (`-x -P bin`) passed for the seven modified shell scripts.
 - `.venv/bin/python -m ruff check scripts tools tests nas/butler` and

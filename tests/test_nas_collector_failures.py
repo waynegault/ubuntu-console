@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import io
 import json
 import logging
 import re
@@ -334,14 +335,86 @@ def test_read_myair_uses_the_shared_extractor() -> None:
 
 
 def test_cpap_unified_fetch_raises_instead_of_returning_mock_data() -> None:
-    # Card 8dda5918: _fetch_cpap_data must not return a placeholder payload that
-    # lets main() print {"ok": true} with nothing fetched.  It raises until the real
-    # myAir fetch exists, so a caller cannot mistake mock data for a result.  The
-    # pre-fix function returned {"device": {}, "sleep_records": []} and this case
-    # failed on the missing exception; the NAS copy is the same code, pending deploy.
+    # The obsolete unified entrypoint must stay fail-closed rather than print success
+    # with nothing fetched. The active cron/wrapper path uses cpap-myair-fetch.py.
     mod = _load("nas_cpap_unified_fetch", "nas-cpap-unified.py")
     with pytest.raises(NotImplementedError):
         mod._fetch_cpap_data("bearer-not-used")
+
+
+class _FakeHttpResponse(io.BytesIO):
+    def __init__(self, payload: dict[str, Any], status: int = 200) -> None:
+        super().__init__(json.dumps(payload).encode("utf-8"))
+        self.status = status
+        self.headers: dict[str, str] = {}
+
+
+class _FakeHttpOpener:
+    def __init__(self, response: _FakeHttpResponse) -> None:
+        self.response = response
+        self.requests: list[Any] = []
+
+    def open(self, request: Any, timeout: int) -> _FakeHttpResponse:
+        self.requests.append(request)
+        return self.response
+
+
+def test_cpap_myair_fetch_uses_expected_graphql_contract_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load("nas_cpap_myair_fetch", "cpap-myair-fetch.py")
+    monkeypatch.setenv("CPAP_MYAIR_BEARER_TOKEN", "test-only-bearer")
+    monkeypatch.setenv("CPAP_MYAIR_API_KEY", "test-only-api-key")
+    response = _FakeHttpResponse({
+        "data": {
+            "getPatientWrapper": {
+                "patient": {"id": "device-1", "firstName": "Test user"},
+                "fgDevices": [{
+                    "deviceSeries": "AirSense",
+                    "deviceFamily": "10",
+                    "lastSleepDataReportTime": "2026-10-14T08:00:00Z",
+                }],
+                "sleepRecords": {"items": [{"startDate": "2026-10-14", "ahi": 1.2}]},
+            },
+        },
+    })
+    opener = _FakeHttpOpener(response)
+    monkeypatch.setattr(mod.urllib.request, "build_opener", lambda *_handlers: opener)
+
+    result = mod._fetch_eu("test-user", "test-password")
+
+    assert result == {
+        "device": {
+            "serialNumber": "device-1",
+            "localizedName": "Test user",
+            "deviceSeries": "AirSense",
+            "deviceFamily": "10",
+            "lastSleepDataReportTime": "2026-10-14T08:00:00Z",
+        },
+        "sleep_records": [{"startDate": "2026-10-14", "ahi": 1.2}],
+    }
+    assert len(opener.requests) == 1
+    request = opener.requests[0]
+    assert request.full_url == mod.EU_GRAPHQL_URL
+    assert request.get_method() == "POST"
+    assert request.headers["x-api-key"] == "test-only-api-key"
+    body = json.loads(request.data)
+    assert body["operationName"] == "GetPatientSleepRecords"
+    assert body["variables"]["startMonth"] < body["variables"]["endMonth"]
+    assert "sleepRecords(startMonth: $startMonth, endMonth: $endMonth)" in body["query"]
+
+
+def test_cpap_myair_fetch_surfaces_graphql_errors_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load("nas_cpap_myair_fetch_errors", "cpap-myair-fetch.py")
+    monkeypatch.setenv("CPAP_MYAIR_BEARER_TOKEN", "test-only-bearer")
+    monkeypatch.setenv("CPAP_MYAIR_API_KEY", "test-only-api-key")
+    opener = _FakeHttpOpener(_FakeHttpResponse({"errors": [{"message": "invalid query"}]}))
+    monkeypatch.setattr(mod.urllib.request, "build_opener", lambda *_handlers: opener)
+
+    with pytest.raises(mod.MyAirFetchError, match="GraphQL returned errors"):
+        mod._fetch_eu("test-user", "test-password")
 
 
 # ── smoke: every migrated importer still loads (lib.butler_common resolves) ───
