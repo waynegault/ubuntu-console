@@ -45,6 +45,7 @@ technical debt has been removed.
 
 ## Audit checks recorded
 
+- Reviewed the configured post-commit/post-merge hooks and their shared rebuild helper: they update the local knowledge graph only and contain no staging or commit command. The hooks ran during this audit's commits; the graph changed outside the Git working tree, and `git status` remained limited to the pre-existing `.vscode` edits. The separate `commit_auto` path is covered by AUD-012 and requires explicit confirmation while preserving the real index until acceptance.
 - A static import graph over the 23 `scripts/kgraph` modules found no import cycle.
 - Searches found no `model_construct`, `strict=False`, global ignored-warning filter, or
   `parse_obj` use in the audited Python trees. The graph boundary now uses strict scalar
