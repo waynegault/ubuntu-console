@@ -90,7 +90,11 @@ technical debt has been removed.
 - `bash -n` and ShellCheck (`-x -P bin`) passed for the seven modified shell scripts.
 - `.venv/bin/python -m ruff check scripts tools tests nas/butler` and
   `.venv/bin/python -m mypy`: passed after strict model validation.
-- The full suite before the latest fixes reported 2,056 passed, 15 subtests passed, and
-  two failures in `20-up-npm-safety`; after reasserting mock `PATH`, all three cases pass
-  (`tests/test_bats_bridge.py -k test_20_up_npm_safety`: 3 passed). The full 20-minute
-  bridge suite has not been repeated after this isolated fix.
+- An earlier full suite reported 2,056 passed, 15 subtests passed, and two failures in
+  `20-up-npm-safety`; after reasserting mock `PATH`, all three cases passed
+  (`tests/test_bats_bridge.py -k test_20_up_npm_safety`: 3 passed). The 2026-10-15
+  fail-fast bridge run passed 223 tests, then caught the README count drift in AUD-014;
+  after correction, `-k "16_docs_sync"` and `tools/docs-sync-check.sh` passed. The
+  entire bridge was not rerun after correction: the README notes the full suite restarts
+  the live gateway, and this host's first BATS case took 291s versus a 0.9s median. No
+  full-suite pass is claimed.
