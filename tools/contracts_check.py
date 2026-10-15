@@ -63,11 +63,12 @@ class _WitnessCounts(TypedDict):
     lines: list[str]
     mutating: list[str]
 
-# Options that change WHAT is printed rather than what is checked.  A dict rather
-# than a longer parse_args() tuple: every subcommand already takes the repo, and
-# threading a fifth positional through run_selected() to one arm reads worse than
-# reading a named flag here.
-OPTIONS = {"print_baseline": False, "dump_sites": False}
+
+class _CheckerOptions(TypedDict):
+    """Per-invocation output modes; never shared between checker runs."""
+
+    print_baseline: bool
+    dump_sites: bool
 
 COMMENT = re.compile(r"^\s*#")
 ENTRY_LINE = re.compile(r"^\s*- (?:name|path):", re.M)
@@ -1144,7 +1145,7 @@ def cycle_through(edges, start, members):
 
 
 # ── subcommand: modules ─────────────────────────────────────────────────────
-def run_modules(repo):
+def run_modules(repo, options: _CheckerOptions):
     """Enforce the @depends/@exports headers against the real load order."""
     print("=== Module graph check (scripts/_module-list.sh) ===")
     if not os.path.isfile(os.path.join(repo, "scripts/_module-list.sh")):
@@ -1268,7 +1269,7 @@ def run_modules(repo):
                         f"scripts/_module-list.sh nor a thin loader names — no pass loads it")
 
     recorded = read_baseline(repo, "tools/contracts-modules-baseline.tsv")
-    if OPTIONS["print_baseline"]:
+    if options["print_baseline"]:
         print("# paste-ready rows for tools/contracts-modules-baseline.tsv, newest "
               "population:")
         for kind, key, message in sorted(violations):
@@ -2144,7 +2145,7 @@ def swallow_corpus(repo):
     return corpus, missing
 
 
-def run_swallows(repo):
+def run_swallows(repo, options: _CheckerOptions):
     """Record and ratchet the unclassified silent swallows in the shell corpus."""
     # `--dump-sites` is the machine-readable form of this subcommand's population
     # (card SPLIT-CONTRACT-TRIAGE-001): one JSON object per site, so a consumer —
@@ -2153,7 +2154,7 @@ def run_swallows(repo):
     # read-only and never a verdict: every line of stdout is JSONL, the human-facing
     # summary goes to stderr, and the exit code is clean even when sites are
     # unclassified (this is a dump, not a check).
-    dump = OPTIONS["dump_sites"]
+    dump = options["dump_sites"]
     if dump:
         sys.stderr.write(f"=== Silent-swallow site dump ({SWALLOWS_SCOPE}) ===\n")
     else:
@@ -2251,7 +2252,7 @@ def run_swallows(repo):
 
     new_sites = []
     seen = set()
-    if OPTIONS["print_baseline"]:
+    if options["print_baseline"]:
         print("# paste-ready rows for tools/contracts-swallows-baseline.tsv — the measured "
               "population:")
         for rel, _total, _classified, unclassified in rows:
@@ -2335,14 +2336,13 @@ def run_swallows(repo):
 
 # ── argument parsing ────────────────────────────────────────────────────────
 def parse_args(argv):
-    """Return (subcommands, repo, positionals) or an exit code when it is bad.
+    """Return selected checks, repo, positionals, and options for this invocation.
 
     A positional argument is a command name for `continuity` ("what still applies
     to this command?").  It is only accepted with that subcommand selected, so a
     typo'd subcommand cannot be mistaken for a command name and slip through.
     """
-    OPTIONS["print_baseline"] = False
-    OPTIONS["dump_sites"] = False
+    options: _CheckerOptions = {"print_baseline": False, "dump_sites": False}
     selected = []
     positionals = []
     repo = REPO_ROOT
@@ -2352,7 +2352,7 @@ def parse_args(argv):
         if arg == "--repo":
             if index + 1 >= len(argv):
                 sys.stderr.write("check-contracts: --repo needs a path\n")
-                return EXIT_CANNOT_RUN, None, None, None
+                return EXIT_CANNOT_RUN, None, None, None, options
             repo = argv[index + 1]
             index += 2
             continue
@@ -2360,26 +2360,26 @@ def parse_args(argv):
             # Read-only: prints the rows the recorded baseline would need, so the
             # deliberate act of recording is a paste rather than a guess.  It never
             # writes the file.
-            OPTIONS["print_baseline"] = True
+            options["print_baseline"] = True
             index += 1
             continue
         if arg == "--dump-sites":
             # Read-only JSONL dump of the swallow SITES (card SPLIT-CONTRACT-TRIAGE-001):
             # the machine-readable form of the population this subcommand counts, so a
             # consumer never re-greps with a second scanner that could disagree.
-            OPTIONS["dump_sites"] = True
+            options["dump_sites"] = True
             index += 1
             continue
         if arg in ("-h", "--help"):
             print(USAGE)
-            return EXIT_CLEAN, None, None, None
+            return EXIT_CLEAN, None, None, None, options
         if arg in SUBCOMMANDS:
             selected.append(arg)
             index += 1
             continue
         if arg.startswith("-"):
             sys.stderr.write(f"check-contracts: unknown option '{arg}'\n\n{USAGE}\n")
-            return EXIT_CANNOT_RUN, None, None, None
+            return EXIT_CANNOT_RUN, None, None, None, options
         positionals.append(arg)
         index += 1
     if not selected:
@@ -2390,39 +2390,39 @@ def parse_args(argv):
                 f"check-contracts: unknown argument '{positionals[0]}'\n"
                 "  A COMMAND name is only accepted with the `continuity` subcommand, e.g.\n"
                 "  `check-contracts.sh continuity model use`.\n\n" + USAGE + "\n")
-            return EXIT_CANNOT_RUN, None, None, None
+            return EXIT_CANNOT_RUN, None, None, None, options
         selected = list(SUBCOMMANDS)
     if positionals and "continuity" not in selected:
         sys.stderr.write(
             f"check-contracts: unexpected argument(s) {' '.join(positionals)} — a COMMAND name\n"
             "  is only meaningful for `continuity`.\n")
-        return EXIT_CANNOT_RUN, None, None, None
-    if OPTIONS["dump_sites"]:
+        return EXIT_CANNOT_RUN, None, None, None, options
+    if options["dump_sites"]:
         # The dump is a machine-readable stream: mixing it with the baseline print or
         # with another subcommand's prose would make the JSONL unparseable, so the
         # combination is refused rather than half-honoured.  A bare invocation narrows
         # to `swallows` for the same reason.
-        if OPTIONS["print_baseline"]:
+        if options["print_baseline"]:
             sys.stderr.write("check-contracts: --dump-sites and --print-baseline are two "
                              "read-only modes for the same population — pass one.\n")
-            return EXIT_CANNOT_RUN, None, None, None
+            return EXIT_CANNOT_RUN, None, None, None, options
         if "swallows" not in selected and selected != list(SUBCOMMANDS):
             sys.stderr.write("check-contracts: --dump-sites is only meaningful with the "
                              "`swallows` subcommand.\n")
-            return EXIT_CANNOT_RUN, None, None, None
+            return EXIT_CANNOT_RUN, None, None, None, options
         selected = ["swallows"]
-    return None, selected, repo, positionals
+    return None, selected, repo, positionals, options
 
 
-def run_selected(selected, repo, positionals):
+def run_selected(selected, repo, positionals, options: _CheckerOptions):
     """Dispatch each requested subcommand; return the worst exit code."""
     worst = EXIT_CLEAN
     arms = {
         "state": lambda: run_state(repo),
-        "modules": lambda: run_modules(repo),
+        "modules": lambda: run_modules(repo, options),
         "derived": lambda: run_derived(repo),
         "continuity": lambda: run_continuity(repo, positionals),
-        "swallows": lambda: run_swallows(repo),
+        "swallows": lambda: run_swallows(repo, options),
     }
     for name in selected:
         arm = arms.get(name)
@@ -2432,7 +2432,7 @@ def run_selected(selected, repo, positionals):
             continue
         # The blank separator is for a human reading prose; in `--dump-sites` mode it
         # would be a non-JSON line on stdout and break the stream contract.
-        if not OPTIONS["dump_sites"]:
+        if not options["dump_sites"]:
             print("")
         worst = max(worst, arm())
     return worst
@@ -2443,13 +2443,13 @@ def run_selected(selected, repo, positionals):
 # subcommand needs nothing else.
 def _run_subcommand(argv):
     """Parse argv and run the selected subcommands."""
-    code, selected, repo, positionals = parse_args(argv)
+    code, selected, repo, positionals, options = parse_args(argv)
     if code is not None:
         return code
     if repo and not os.path.isdir(repo):
         sys.stderr.write(f"check-contracts: --repo {repo} is not a directory\n")
         return EXIT_CANNOT_RUN
-    return run_selected(selected, repo, positionals)
+    return run_selected(selected, repo, positionals, options)
 
 
 def main(argv=None):

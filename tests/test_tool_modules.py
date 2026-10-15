@@ -14,8 +14,10 @@ a broken caller.
 """
 
 import importlib.util
+import io
 import os
 import sys
+from contextlib import redirect_stderr
 
 TOOLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools")
 REPO = os.path.dirname(TOOLS)
@@ -59,23 +61,30 @@ def test_contract_checker_helpers_and_repeated_runs_are_isolated():
     ])
     assert checker.swallow_sites(text) == [(2, "|| true"), (3, "2>/dev/null")]
 
-    code, selected, _, _ = checker.parse_args(["--print-baseline", "modules"])
+    code, selected, _, _, baseline_options = checker.parse_args(["--print-baseline", "modules"])
     assert code is None
     assert selected == ["modules"]
-    assert checker.OPTIONS["print_baseline"] is True
-    assert checker.OPTIONS["dump_sites"] is False
+    assert baseline_options == {"print_baseline": True, "dump_sites": False}
 
-    code, selected, _, _ = checker.parse_args(["--dump-sites"])
+    code, selected, _, _, dump_options = checker.parse_args(["--dump-sites"])
     assert code is None
     assert selected == ["swallows"]
-    assert checker.OPTIONS["print_baseline"] is False
-    assert checker.OPTIONS["dump_sites"] is True
+    assert dump_options == {"print_baseline": False, "dump_sites": True}
+    assert baseline_options == {"print_baseline": True, "dump_sites": False}
 
-    code, selected, _, positionals = checker.parse_args(["continuity", "model", "use"])
+    code, selected, _, positionals, default_options = checker.parse_args([
+        "continuity", "model", "use",
+    ])
     assert code is None
     assert selected == ["continuity"]
     assert positionals == ["model", "use"]
-    assert checker.OPTIONS == {"print_baseline": False, "dump_sites": False}
+    assert default_options == {"print_baseline": False, "dump_sites": False}
+
+    with redirect_stderr(io.StringIO()):
+        code, selected, repo, positionals, invalid_options = checker.parse_args(["--repo"])
+    assert code == checker.EXIT_CANNOT_RUN
+    assert selected is repo is positionals is None
+    assert invalid_options == {"print_baseline": False, "dump_sites": False}
 
     checker.ENTITY_LINES["stale-entry"] = 99
     assert checker.run_state(os.path.join(REPO, "missing-fixture")) == checker.EXIT_CANNOT_RUN
