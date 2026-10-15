@@ -1,5 +1,8 @@
 {
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/scripts"
+  ],
   "python.terminal.activateEnvironment": false,
   "python.testing.pytestEnabled": true,
   "python.testing.unittestEnabled": false,
@@ -11,8 +14,5 @@
   "python-envs.defaultEnvManager": "ms-python.python:venv",
   "python-envs.globalSearchPaths": [
     "${workspaceFolder}/.venv"
-  ],
-  "qwen-code.provider": "api-key",
-  "qwen-code.codingPlanRegion": "global",
-  ***REMOVED***
+  ]
 }

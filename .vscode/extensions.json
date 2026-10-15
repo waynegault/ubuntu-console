@@ -1,6 +1,5 @@
 {
   "recommendations": [
-    "ms-python.python",
-    "qwenlm.qwen-code-vscode-ide-companion"
+    "ms-python.python"
   ]
 }
