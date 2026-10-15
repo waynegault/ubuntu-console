@@ -42,6 +42,10 @@
 #     that cannot be shown all mean RESTART AS PLANNED - the schedule stays the
 #     default and cancelling is the exception.  ONLY an explicit Cancel stops it; that
 #     re-arms the task for a later retry and SKIPS the self-delete below.
+#   - COMPACTS the VS Code state DBs while the client is down (step 3b, through
+#     bin/vscode-state-compact.sh): only a VACUUM returns the pages a deleted value
+#     freed, and this is the one window in which nothing holds those DBs open.
+#     OPPORTUNISTIC - its output is logged and its exit code never gates the relaunch.
 #   - closes the VS Code client: WM_CLOSE first so hot-exit can write its backups,
 #     bounded, then forced
 #   - `wsl.exe --shutdown`
@@ -88,7 +92,14 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
+#   v7 (2026-10-15): step 3b — COMPACT the VS Code state DBs inside the window this
+#   wrapper already creates.  The client is killed in step 1 and relaunched in step 4,
+#   so between the distro answering and that relaunch nothing holds those DBs open,
+#   and only a VACUUM returns the pages a deleted value freed (measured: 152,252,416
+#   free of 153,202,688 in the profile's state.vscdb).  It runs bin/vscode-state-compact.sh
+#   through wsl.exe, logs its output, and NEVER branches on it: the restart is the job.
+#   The helper's absence is an arm-time WARN, not a precondition failure.
 #   v6 (2026-10-15): the cancel path EXITS.  v4 "named" the cancel code and dropped
 #   the `exit` with it, so the generated script evaluated `$CancelCode` and fell off
 #   the end - PowerShell exits 0, which the wrapper reads as "restart as planned", so
@@ -171,6 +182,10 @@ PROMPT_UNIX="${TAC_WSL_RESTART_PROMPT_UNIX:-/mnt/c/Users/wayne/wsl-restart-promp
 # The chunk gate's implementation, reached from the Windows side.  ~/.local/bin is the
 # stable path install.sh maintains for exactly this kind of caller.
 GATE_CMD_UNIX="${TAC_WSL_RESTART_GATE_CMD:-$HOME/.local/bin/wsl-restart.sh}"
+# The compaction step the wrapper runs while the client is CLOSED (step 3b): only a VACUUM
+# returns the pages a deleted value freed, and this restart is the one window where nothing
+# holds the state DBs open.  Same stable path convention as the gate.
+COMPACT_CMD_UNIX="${TAC_WSL_RESTART_COMPACT_CMD:-$HOME/.local/bin/vscode-state-compact.sh}"
 
 # Deliberately NOT named `log`: bin/_tac-bin-lib.sh owns that name (a gate asserts
 # it is defined exactly once, there).  This script wants the caller to READ its
@@ -430,6 +445,15 @@ render_wrapper() {
         "echo [%DATE% %TIME%] WARN: distro did not answer after ${WAIT_TRIES} tries >> \"%LOG%\"" \
         ':relaunch' \
         '' \
+        'REM 3b. COMPACT the VS Code state DBs. The client was killed in step 1 and is' \
+        'REM     relaunched BELOW, so this is the one moment nothing holds those DBs' \
+        'REM     open - and only a VACUUM returns the pages a deleted value freed' \
+        'REM     (measured 2026-10-15: 152,252,416 free of 153,202,688). It is' \
+        'REM     OPPORTUNISTIC: the RESTART IS THE JOB. Its output is logged, its exit' \
+        'REM     code is NOT branched on, and a missing helper or a locked DB cannot' \
+        'REM     stop the relaunch - so this line never gates anything.' \
+        "wsl.exe -d ${DISTRO} -u wayne -- ${COMPACT_CMD_UNIX} >> \"%LOG%\" 2>&1" \
+        '' \
         'REM 4. Relaunch the client on a fresh relay. Absolute, because the' \
         'REM    wrapper gets no shell profile.' \
         "set \"CODE_CMD=${CODE_CMD_WIN}\"" \
@@ -525,6 +549,12 @@ check_preconditions() {
         _say "ERROR: the chunk gate is not executable at $GATE_CMD_UNIX"
         _say "       (install.sh links bin/* into ~/.local/bin; run it, or ln -s this script)"
         _rc=1
+    fi
+    # ADVISORY, not a gate: a missing compaction helper costs an OPPORTUNITY, never the
+    # restart - step 3b logs whatever it says, and the relaunch happens regardless.
+    if [[ ! -x "$COMPACT_CMD_UNIX" ]]; then
+        _say "WARN: compaction helper not executable at $COMPACT_CMD_UNIX"
+        _say "      step 3b will log a failure and the restart will proceed without it"
     fi
     return "$_rc"
 }

@@ -413,4 +413,54 @@ _line_of() {
     grep -q 'asking anyway' "$TAC_WSL_RESTART_PROMPT_UNIX"
 }
 
+@test "wsl-restart: the vacuum runs in the CLOSED window, and never gates the restart" {
+    run "$SCRIPT" --dry-run
+    [ "$status" -eq 0 ]
+
+    up_n=$(_line_of "$output" ':distro_up')
+    vac_n=$(_line_of "$output" 'vscode-state-compact.sh')
+    relaunch_n=$(_line_of "$output" '--remote wsl+Ubuntu-24.04')
+    close_n=$(_line_of "$output" 'taskkill /im Code.exe')
+    [ "$close_n" -gt 0 ]
+    [ "$up_n" -gt 0 ]
+    [ "$vac_n" -gt 0 ]
+    [ "$relaunch_n" -gt 0 ]
+
+    # THE WHOLE POINT: the client is killed in step 1 and relaunched in step 4, so the
+    # compaction has to sit between the distro answering and that relaunch - the only
+    # window in which nothing holds those state DBs open.  A line either side of it is
+    # a VACUUM against a live DB, which SQLite refuses.
+    [ "$vac_n" -gt "$close_n" ]
+    [ "$vac_n" -gt "$up_n" ]
+    [ "$vac_n" -lt "$relaunch_n" ]
+
+    # ...and it must NOT be branched on: an `if errorlevel`/`goto` on its result would let
+    # a refusal (locked DB, missing helper) stop the restart, the opposite of the contract.
+    ! printf '%s\n' "$output" | grep -qE 'if errorlevel [0-9]+ goto[^\r]*compact'
+}
+
+@test "wsl-restart: the compaction helper runs the tool's vacuum mode, and is fail-soft" {
+    # The helper owns the flags, so the wrapper's line stays one call.  Drive its own seam
+    # with a stub interpreter that records the argv it was handed.
+    local stub="$SANDBOX/stub-py" argv="$SANDBOX/stub.argv"
+    cat > "$stub" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$ARGV_OUT"
+EOS
+    chmod +x "$stub"
+    # The helper refuses BEFORE the interpreter when the tool is absent (its own
+    # fail-soft path), so the tool must exist for this arm to reach the argv.
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$SANDBOX/tool.py"
+    run env ARGV_OUT="$argv" TAC_COMPACT_TOOL="$SANDBOX/tool.py" TAC_PYTHON="$stub" \
+        bash "$REPO_ROOT/bin/vscode-state-compact.sh"
+    [ "$status" -eq 0 ]
+    grep -q -- '/tool.py --vacuum --apply' "$argv"
+
+    # A MISSING tool is reported and still exits 0: the restart is the job, so a broken
+    # compaction can never fail the wrapper that called it.
+    run env TAC_COMPACT_TOOL="$SANDBOX/absent-tool.py" bash "$REPO_ROOT/bin/vscode-state-compact.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing compacted"* ]]
+}
+
 # end of file
