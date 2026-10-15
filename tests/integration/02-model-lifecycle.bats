@@ -12,8 +12,10 @@ setup_file() {
     export PROFILE_PATH="$REPO_ROOT/tactical-console.bashrc"
     export TAC_TEST_TMPDIR
     TAC_TEST_TMPDIR="$(mktemp -d)"
+    export HOME="$TAC_TEST_TMPDIR"
+    export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
     export LLAMA_MODEL_DIR="$TAC_TEST_TMPDIR/models"
-    mkdir -p "$LLAMA_MODEL_DIR"
+    mkdir -p "$TAC_CACHE_DIR" "$LLAMA_MODEL_DIR"
 }
 
 teardown_file() {
@@ -22,9 +24,9 @@ teardown_file() {
 
 setup() {
     # Load all profile functions via env.sh (the non-interactive library loader)
-    source "$REPO_ROOT/env.sh" 2>/dev/null || true
+    source "$REPO_ROOT/env.sh"
 
-    # Override AFTER sourcing — 01-constants.sh sets LLM_REGISTRY to the real path.
+    # Override AFTER sourcing — 01-constants.sh sets the model registry path.
     export LLM_REGISTRY="$TAC_TEST_TMPDIR/models.conf"
     export LLAMA_MODEL_DIR="$TAC_TEST_TMPDIR/models"
     # Hermetic box-wide heavy-job lock: a case must never queue behind (or hold off) a

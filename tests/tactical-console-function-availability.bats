@@ -13,8 +13,9 @@ setup_file() {
     export PROFILE_PATH="$REPO_ROOT/tactical-console.bashrc"
     export TAC_TEST_TMPDIR
     TAC_TEST_TMPDIR="$(mktemp -d)"
+    export HOME="$TAC_TEST_TMPDIR"
     export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
-    mkdir -p "$TAC_CACHE_DIR"
+    mkdir -p "$HOME" "$TAC_CACHE_DIR"
     export __TAC_INITIALIZED=1
 }
 
@@ -25,7 +26,7 @@ teardown_file() {
 # Source the profile so all functions are available.
 setup() {
     # shellcheck source=env.sh
-    source "$REPO_ROOT/env.sh" >/dev/null 2>&1 || true
+    source "$REPO_ROOT/env.sh"
 }
 
 # ── All expected functions (consolidated from 95 individual tests) ────────

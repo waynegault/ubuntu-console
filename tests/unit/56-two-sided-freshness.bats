@@ -33,20 +33,17 @@ setup_file() {
 setup() {
     export REPO_ROOT
     REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
+    export HOME="$BATS_TEST_TMPDIR"
     export TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache"
     export TAC_STATE_DIR="$BATS_TEST_TMPDIR/state"
     export OC_ROOT="$BATS_TEST_TMPDIR/.openclaw"
     export ACTIVE_LLM_FILE="$BATS_TEST_TMPDIR/active_llm"
-    mkdir -p "$TAC_CACHE_DIR" "$TAC_STATE_DIR" "$OC_ROOT"
+    mkdir -p "$HOME" "$TAC_CACHE_DIR" "$TAC_STATE_DIR" "$OC_ROOT"
     export __TAC_INITIALIZED=1
     # shellcheck source=env.sh
-    source "$REPO_ROOT/env.sh" >/dev/null 2>&1 || true
-    # Re-assert the sandbox AFTER sourcing: 01-constants.sh unconditionally exports
-    # TAC_CACHE_DIR=/dev/shm, ACTIVE_LLM_FILE=/dev/shm/active_llm and
-    # OC_ROOT=$HOME/.openclaw, and derives OC_AGENTS / ErrorLogPath from the real
-    # $HOME.  Without this the guards under test would read and write live host state
-    # (the /dev/shm bridge cache, the real error log) instead of the fixture.
-    export TAC_CACHE_DIR="$BATS_TEST_TMPDIR/cache"
+    source "$REPO_ROOT/env.sh"
+    # Re-assert paths whose production defaults are not configurable, and keep the
+    # fixture's OpenClaw paths explicit. The cache override is honored during sourcing.
     export TAC_STATE_DIR="$BATS_TEST_TMPDIR/state"
     export OC_ROOT="$BATS_TEST_TMPDIR/.openclaw"
     export ACTIVE_LLM_FILE="$BATS_TEST_TMPDIR/active_llm"
@@ -56,6 +53,12 @@ setup() {
     # No case may reach the live /dev/shm agent-use cache: only the guard-4 pair sets
     # these, and it points them at $BATS_TEST_TMPDIR.
     unset OC_AGENT_USE_FILE OC_AGENT_USE_MARKER
+}
+
+@test "freshness: env startup probes stay in the configured cache directory" {
+    [ "$TAC_CACHE_DIR" = "$BATS_TEST_TMPDIR/cache" ]
+    [ -f "$TAC_CACHE_DIR/tac_openclaw_ok" ]
+    [ -f "$TAC_CACHE_DIR/tac_gog_ok" ]
 }
 
 # ── __cache_fresh (07-telemetry) — the shared helper behind six call sites ────

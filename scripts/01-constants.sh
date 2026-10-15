@@ -2,7 +2,10 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 29
+# Module Version: 30
+#   v30 (2026-10-15): TAC_CACHE_DIR accepts an explicit override while retaining /dev/shm
+#   as its default. This lets isolated tests and callers direct source-time capability
+#   probes into a private cache instead of writing to the host-wide tmpfs.
 #   v29 (2026-10-12): LLM_REGISTRY_HEADER gains five MEASUREMENT columns (40-44) so a
 #   certified tps carries HOW it was measured: meas_load, meas_n, meas_spread_pct,
 #   meas_drift_pct, meas_state (certified|indicative).  Header-first: every writer pads
@@ -204,7 +207,7 @@ export LLM_KEEPER_DIR="${LLM_KEEPER_DIR:-/tmp}"
 # ---- (Python SSE helper removed — all streaming is now pure bash + curl + jq) ----
 
 # ---- Telemetry & System Paths ----
-export TAC_CACHE_DIR="/dev/shm"
+export TAC_CACHE_DIR="${TAC_CACHE_DIR:-/dev/shm}"
 # Persistent STATE (NOT cache): a marker recording "what I last did" must survive a restart,
 # while TAC_CACHE_DIR (/dev/shm) is cleared with it. Keep the two notions apart.
 export TAC_STATE_DIR="${TAC_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/tactical-console}"

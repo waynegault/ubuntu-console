@@ -14,6 +14,7 @@ MOCK_EOF
 setup() {
     export REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
     export TAC_TEST_TMPDIR="$(mktemp -d)"
+    export HOME="$TAC_TEST_TMPDIR"
     export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
     # The NAS mirror marker is STATE, not cache: 71516c30 moved it off tmpfs onto
     # TAC_STATE_DIR.  Sandbox it too, or the assertions below read the real state dir.
@@ -79,16 +80,12 @@ setup() {
     export OC_ROOT="$TAC_TEST_TMPDIR/.openclaw"
     mkdir -p "$OC_ROOT"
 
-    # Re-assert sandboxed paths AFTER sourcing: 01-constants.sh unconditionally
-    # exports TAC_CACHE_DIR=/dev/shm and derives OC_AGENTS/ErrorLogPath from the
-    # real $HOME, so without this the tests would read/write the live bridge
-    # cache in /dev/shm and the real error log.
-    export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
+    # Re-assert sandboxed OpenClaw paths after sourcing; HOME was already isolated,
+    # and TAC_CACHE_DIR's explicit override is honored during source-time probes.
     export TAC_STATE_DIR="$TAC_TEST_TMPDIR/state"
     export OC_AGENTS="$OC_ROOT/agents"
     export OC_LOGS="$OC_ROOT/logs"
     export ErrorLogPath="$OC_LOGS/bash-errors.log"
-    mkdir -p "$TAC_CACHE_DIR"
     mkdir -p "$TAC_STATE_DIR"
 
     # Keep the harness hermetic: drop anything inherited from the real shell
@@ -106,8 +103,7 @@ setup() {
 [Service]
 Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=GEMINI_API_KEY
 UNIT
-    # Override HOME so the unit file path resolves inside the test sandbox.
-    export HOME="$TAC_TEST_TMPDIR"
+    # HOME was sandboxed before sourcing modules so their derived paths stay isolated.
 }
 
 teardown() {

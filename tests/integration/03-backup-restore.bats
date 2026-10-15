@@ -15,6 +15,7 @@ setup_file() {
 
     export TAC_TEST_TMPDIR
     TAC_TEST_TMPDIR="$(mktemp -d)"
+    export HOME="$TAC_TEST_TMPDIR"
     export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
     export OC_ROOT="$TAC_TEST_TMPDIR/.openclaw"
     export OC_WORKSPACE="$OC_ROOT/workspace"
@@ -30,7 +31,7 @@ teardown_file() {
 
 setup() {
     # Load all profile functions via env.sh (the non-interactive library loader)
-    source "$REPO_ROOT/env.sh" 2>/dev/null || true
+    source "$REPO_ROOT/env.sh"
 }
 
 # _make_storage — build the sandboxed "storage root" that oc-backup archives

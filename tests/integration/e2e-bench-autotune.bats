@@ -11,7 +11,9 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 
 setup() {
     export TAC_TEST_TMPDIR="$(mktemp -d)/tac_bench_e2e"
-    mkdir -p "$TAC_TEST_TMPDIR/models" "$TAC_TEST_TMPDIR/.llm"
+    export HOME="$TAC_TEST_TMPDIR"
+    export TAC_CACHE_DIR="$TAC_TEST_TMPDIR/cache"
+    mkdir -p "$TAC_CACHE_DIR" "$TAC_TEST_TMPDIR/models" "$TAC_TEST_TMPDIR/.llm"
     echo "stub" > "$TAC_TEST_TMPDIR/models/tuned.gguf"
     echo "stub" > "$TAC_TEST_TMPDIR/models/untuned.gguf"
 
@@ -22,7 +24,7 @@ setup() {
 3|Missing File|missing.gguf|0.5G|Q4_K_M/q8_0|llama|24|4096|4|1024|256|1|256|native|auto|on|0|no|no|no
 REGISTRY
 
-    source "$REPO_ROOT/env.sh" >/dev/null 2>&1
+    source "$REPO_ROOT/env.sh"
 
     # Override paths AFTER sourcing so we don't touch the real registry.
     # 01-constants.sh sets LLM_REGISTRY to the real path; we must override.
@@ -58,7 +60,7 @@ teardown() {
     rm -rf "$TAC_TEST_TMPDIR" 2>/dev/null || true
 }
 
-_s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
+_s() { source "$REPO_ROOT/env.sh"; }
 
 # ===== A) PREFLIGHT ==========================================================
 
@@ -206,11 +208,12 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
     exec {fd}>"$LLM_BENCH_LOCK_FILE"
     flock -x "$fd"
     echo "$$" > "$LLM_BENCH_LOCK_FILE"
-    run timeout 10 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
+    run timeout 10 bash -c "source '$REPO_ROOT/env.sh' >/dev/null || exit 125; \
         LLM_BENCH_LOCK_FILE='$LLM_BENCH_LOCK_FILE' bash '$REPO_ROOT/scripts/autotune-model.sh' 1 2>/dev/null || true"
     # Should not block indefinitely — the lock exists but autotune-model.sh
     # doesn't acquire the bench lock itself (skip-lock mode).
     [[ "$status" -ne 124 ]]
+    [[ "$status" -ne 125 ]]
     flock -u "$fd"; exec {fd}>&-; rm -f "$LLM_BENCH_LOCK_FILE"
 }
 
@@ -223,9 +226,10 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 
 @test "[E4] Lock: skip-lock mode preserves existing lock file" {
     echo "424242" > "$LLM_BENCH_LOCK_FILE"
-    run timeout 5 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
+    run timeout 5 bash -c "source '$REPO_ROOT/env.sh' >/dev/null || exit 125; \
         LLM_BENCH_LOCK_FILE='$LLM_BENCH_LOCK_FILE' LLM_AUTOTUNE_SKIP_LOCK=1 \
         bash '$REPO_ROOT/scripts/autotune-model.sh' 99999 2>/dev/null || true"
+    [[ "$status" -ne 125 ]]
     [[ -f "$LLM_BENCH_LOCK_FILE" ]]
     rm -f "$LLM_BENCH_LOCK_FILE"
 }
@@ -233,9 +237,10 @@ _s() { source "$REPO_ROOT/env.sh" >/dev/null 2>&1; }
 @test "[E5] Lock: skip-lock does not clobber PID in lock file" {
     local other_pid=424242
     echo "$other_pid" > "$LLM_BENCH_LOCK_FILE"
-    run timeout 5 bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
+    run timeout 5 bash -c "source '$REPO_ROOT/env.sh' >/dev/null || exit 125; \
         LLM_BENCH_LOCK_FILE='$LLM_BENCH_LOCK_FILE' LLM_AUTOTUNE_SKIP_LOCK=1 \
         bash '$REPO_ROOT/scripts/autotune-model.sh' 99999 2>/dev/null || true"
+    [[ "$status" -ne 125 ]]
     [[ -f "$LLM_BENCH_LOCK_FILE" ]]
     local stored; stored=$(cat "$LLM_BENCH_LOCK_FILE")
     [[ "$stored" == "$other_pid" ]]
@@ -331,7 +336,7 @@ LLM_BENCH_LOCK_WAIT_SECONDS=1"
     printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' > "$TAC_TEST_TMPDIR/.bench_trap_registry"
     local e_reg="$TAC_TEST_TMPDIR/.bench_trap_registry"
 
-    run bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
+    run bash -c "source '$REPO_ROOT/env.sh' >/dev/null || exit 125; \
         $vars LLM_REGISTRY=$e_reg \
         pi=\$(trap -p INT || true); pt=\$(trap -p TERM || true); \
         __model_bench >/dev/null 2>&1 || true; \
@@ -351,13 +356,14 @@ LLM_BENCH_LOCK_WAIT_SECONDS=1"
     # state-dependent.
     printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' > "$TAC_TEST_TMPDIR/.empty_registry"
 
-    run bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
+    run bash -c "source '$REPO_ROOT/env.sh' >/dev/null || exit 125; \
         LLM_REGISTRY='$TAC_TEST_TMPDIR/.empty_registry' \
         LLM_BENCH_LOCK_FILE='$LLM_BENCH_LOCK_FILE' \
         LLM_BENCH_PID_FILE='$LLM_BENCH_PID_FILE' \
         LLM_BENCH_WATCHDOG_TIMER='$LLM_BENCH_WATCHDOG_TIMER' \
         __model_bench >/dev/null 2>&1 || true"
 
+    [[ "$status" -ne 125 ]]
     [[ ! -f "$LLM_BENCH_PID_FILE" ]]
     [[ ! -f "$LLM_BENCH_LOCK_FILE" ]]
 }
@@ -380,13 +386,14 @@ EOS
     : > "$calls"
     printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' > "$TAC_TEST_TMPDIR/.empty_registry"
 
-    run env PATH="$bin:$PATH" SYSTEMCTL_LOG="$calls" bash -c "source '$REPO_ROOT/env.sh' >/dev/null 2>&1; \
+    run env PATH="$bin:$PATH" SYSTEMCTL_LOG="$calls" bash -c "source '$REPO_ROOT/env.sh' >/dev/null || exit 125; \
         LLM_REGISTRY='$TAC_TEST_TMPDIR/.empty_registry' \
         LLM_BENCH_LOCK_FILE='$LLM_BENCH_LOCK_FILE' \
         LLM_BENCH_PID_FILE='$LLM_BENCH_PID_FILE' \
         LLM_BENCH_WATCHDOG_TIMER='$LLM_BENCH_WATCHDOG_TIMER' \
         __model_bench >/dev/null 2>&1 || true"
 
+    [[ "$status" -ne 125 ]]
     # A stub that answered nothing would prove nothing about which name is used.
     local seen; seen=$(cat "$calls" 2>/dev/null || true)
     if [[ "$seen" != *fake-watchdog.timer* || "$seen" == *llama-watchdog.timer* ]]

@@ -17,6 +17,7 @@ technical debt has been removed.
 | AUD-007 | `tests/unit/20-up-npm-safety.bats` installed `npm`/`systemctl` stubs before sourcing `env.sh`, whose constants module prepended host paths; two failure-recovery cases reached host commands and failed. | Reasserted stub precedence after sourcing. All three BATS cases pass through the `.venv` pytest bridge. Commit `729776bb`. |
 | AUD-008 | Five repository shell entrypoints launched inline Python through bare `python3`, bypassing the repository venv and risking missing or mismatched dependencies; interpreter selection was duplicated in the Windows environment importer. | Added `tools/python-runtime.sh` as the shared venv-first resolver (then validated `TAC_PYTHON`, then PATH `python3`) and routed all five callers plus the importer through it. Regression cases cover both venv executable names, explicit override, invalid override, PATH fallback, and caller wiring. The deployment script's system-Python venv bootstrap remains an intentional exception. |
 | AUD-009 | `tests/unit/04-llama-cpp-inventory.bats` mixed inventory assertions with live release downloads and an install that could replace `~/.local/bin/llama-server`; warning-only checks could appear successful without asserting a result. | Replaced it with an executable read-only inventory and explicit `--update` command. New BATS tests sandbox `HOME`, use a local ZIP fixture and stubbed `curl`, assert install/backup behavior, no-op idempotency, and API/archive failure cleanup and preservation. Registered the suite in CI and the pytest bridge; removed obsolete exclusions and documented the opt-in update. |
+| AUD-010 | Several BATS setups sourced `env.sh` before sandboxing `HOME`, or ignored source errors with `|| true`. Source-time probes in `09-openclaw.sh` and `09b-gog.sh` write capability results through `__tac_probe_ok`; `01-constants.sh` forced that cache into shared `/dev/shm`, bypassing test-provided temp paths. | Set test `HOME` and cache directories before loading modules, made source failures fatal (including explicit sentinel checks in nested E2E shells), and let `TAC_CACHE_DIR` honor an explicit path while retaining `/dev/shm` as the default. Added regression assertions that both startup-probe cache files land in the sandbox. |
 
 ## Confirmed debt / follow-up
 
@@ -57,6 +58,13 @@ technical debt has been removed.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
   "every_runnable_test_suite"`: 1 passed; every runnable BATS suite is referenced by a workflow.
 - `bash -n` and ShellCheck (`-x -P bin`) passed for `tools/llama-cpp-inventory.sh`.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
+  "refresh_keys or two_sided_freshness or model_lifecycle or backup_restore or
+  e2e_bench_autotune or function_availability"`: 143 passed and 1 initially failed because
+  the E2E suite had not created its newly isolated cache directory; after adding that setup,
+  rerunning `-k "e2e_bench_autotune"` passed all 29 cases.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
+  "11_module_versions"`: 7 passed after incrementing `01-constants.sh` to module version 30.
 - `bash -n` and ShellCheck (`-x -P bin`) passed for the seven modified shell scripts.
 - `.venv/bin/python -m ruff check scripts tools tests nas/butler` and
   `.venv/bin/python -m mypy`: passed after strict model validation.
