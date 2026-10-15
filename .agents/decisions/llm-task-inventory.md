@@ -6,15 +6,17 @@ scope: both
 ---
 
 **Decision (card `9fa9e818`):** every site in the repo that calls an LLM is either
-covered by the model registry's benchmark/autotune path, or listed here with a named
-reason it is exempt. The audit's concern was that `tools/swallow-classify.py` invokes
+covered by the model registry's benchmark/autotune path, covered by an explicit
+standalone performance measurement, or listed here with a named reason it is exempt.
+The audit's concern was that `tools/swallow-classify.py` invokes
 an LLM whose model is whatever serves the loopback lane — so its behaviour can change
 under it with no bench evidence. That tool now records the resolved endpoint and model
 in its report header and marks a model read from `/v1/models` as **UNPINNED** (pass
 `--model` to pin it); this record is the inventory the card asked for.
 
-**Enumerated with** `git grep -n 'chat/completions'` (plus `/completion` and
-`/v1/models` for the full LLM surface), 2026-10-03.
+**Re-enumerated with** `git grep -nE 'chat/completions|/completion|/v1/models'`
+over repository Python and shell entrypoints, 2026-10-15. This pass added the
+standalone benchmark and cache-RAM diagnostic below.
 
 ## Registry-covered (benchmarked / tuned by the model registry)
 
@@ -27,6 +29,13 @@ in its report header and marks a model read from `/v1/models` as **UNPINNED** (p
 
 These measure the same model the registry names, so a model change is covered by
 `model bench` / autotune.
+
+## Standalone performance measurements
+
+| Site | Coverage |
+|------|----------|
+| `tools/llm_benchmark.py` | The opt-in performance runner itself: explicit local model/workloads, latency and throughput metrics, hardware/runtime manifest, and manifest-gated comparisons. It is not a production inference path needing a separate benchmark. |
+| `scripts/cache-ram-probe.sh` | A paired configuration experiment with an interleaved order control; measures decode throughput and TTFT/cache behavior, not semantic task quality. |
 
 ## Exempt — with a named reason
 
