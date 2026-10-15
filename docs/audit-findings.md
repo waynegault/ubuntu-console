@@ -20,12 +20,13 @@ technical debt has been removed.
 | AUD-010 | Several BATS setups sourced `env.sh` before sandboxing `HOME`, or ignored source errors with `|| true`. Source-time probes in `09-openclaw.sh` and `09b-gog.sh` write capability results through `__tac_probe_ok`; `01-constants.sh` forced that cache into shared `/dev/shm`, bypassing test-provided temp paths. | Set test `HOME` and cache directories before loading modules, made source failures fatal (including explicit sentinel checks in nested E2E shells), and let `TAC_CACHE_DIR` honor an explicit path while retaining `/dev/shm` as the default. Added regression assertions that both startup-probe cache files land in the sandbox. |
 | AUD-011 | The main `tests/tactical-console.bats` profile loader suppressed all source output and used `|| true`, then marked the profile as loaded. A failed/partial source could therefore leave many tests operating on incomplete functions; one cooldown case only searched output for `1`, which could match command-not-found status `127`. | Propagate profile-source failure with stderr visible, set the loaded flag only after success, and make subprocess profile/env loads exit with a sentinel on source failure. Focused regressions cover cooldown, model recommendation, restore, and env bootstrap/module loading. |
 | AUD-012 | `commit_auto` suppressed curl and jq errors, then returned success when no commit message was produced. It also staged the real index before confirmation and reset it on cancellation/failure, discarding pre-existing staged state. | Use curl's fail/show-error flags, keep jq diagnostics visible, and return non-zero for transport or malformed/empty responses. Build the proposed diff and commit with a temporary index seeded from the current index; leave the real index untouched until acceptance, and refuse to overwrite it if it changed during confirmation. Synchronize it to the new `HEAD` after commit. Hermetic tests cover preserved staged state on failures/cancellation and a confirmed local-bare commit/push. |
+| AUD-013 | `_MemoryStoreIngest.ingest_chunks` mixed chunk setup, file/actor references, topic/theme extraction, semantic summaries, and embedding collection in one orchestration loop; it also scanned headings twice. | Extract file/actor/reference links, concepts, and semantic-summary construction into focused helpers. Keep `ingest_chunks` as the row/embedding orchestrator and evaluate each chunk's headings once. Existing end-to-end graph and phase tests characterize node, edge, lineage, and embedding output. |
 
 ## Confirmed debt / follow-up
 
 | Priority | Finding | Evidence and disposition |
 |---|---|---|
-| P2 | Chunk import remains a large orchestration method. | `scripts/kgraph/memory_import.py::_MemoryStoreIngest.ingest_chunks` combines row decoding, embeddings, references, theme extraction and summary construction. AUD-005 removes repeated link plumbing, but a full phase extraction should follow only with characterization tests for every emitted node/edge and lineage rule. |
+| P2 | Semantic concept extraction still groups several strategies in one phase helper. | `scripts/kgraph/memory_import.py::_MemoryStoreIngest._ingest_chunk_concepts` handles headings, explicit themes, line-based themes, activation authorship, and entity extraction. The surrounding reference and summary phases are now separate; further splitting should wait for strategy-specific tests that preserve emission order and deduplication behavior. |
 | P2 | Contract-checker surface is large and multi-purpose. | `tools/contracts_check.py` is 2,465 lines; `run_continuity` is 243 lines. Its checks are an enforcement surface, so splitting it is deferred until CLI/output contracts have focused tests and module boundaries are clear. |
 | P2 | Salus scheduler orchestration is large. | `nas/butler/openclaw/salus-it500/salus.py::_run` is 266 lines. The NAS skill copy has deployment/mirror constraints; no refactor was attempted without a verified source-of-truth and deploy path. |
 | P2 | CPAP fetch is deliberately unimplemented. | `nas/butler/scripts/nas-cpap-unified.py::_fetch_cpap_data` raises `NotImplementedError` rather than returning fake success; its consumer is not enabled as a cron collector. Implementing it requires the real API contract, not a placeholder. |
@@ -78,6 +79,10 @@ technical debt has been removed.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
   "11_module_versions"`: 7 passed after incrementing `10-deployment.sh` for the two
   `commit_auto` batches (module version 9).
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_memory_import.py
+  tests/test_kgraph.py`: 188 passed after extracting the memory-store chunk phases.
+- `.venv/bin/python -m ruff check scripts/kgraph/memory_import.py
+  tests/test_memory_import.py`: passed.
 - `bash -n` and ShellCheck (`-x -P bin`) passed for the seven modified shell scripts.
 - `.venv/bin/python -m ruff check scripts tools tests nas/butler` and
   `.venv/bin/python -m mypy`: passed after strict model validation.

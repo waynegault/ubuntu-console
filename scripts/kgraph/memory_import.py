@@ -700,6 +700,179 @@ class _MemoryStoreIngest:
         except sqlite3.Error as exc:
             logger.warning("Failed to read 'files' table from memory DB: %s", exc)
 
+    def _ingest_chunk_file_relationships(
+        self,
+        chunk_key: str,
+        path: str,
+        chunk_text: str,
+        chunk_concepts: list[str],
+    ) -> None:
+        """Create the file/chunk, actor-mention, and cross-file reference links."""
+        if path:
+            if path not in self.file_paths:
+                self.file_paths.add(path)
+                file_name = os.path.basename(path) or path
+                self.file_path_by_basename.setdefault(file_name, []).append(path)
+                self.file_node_ids[path] = f'file:{path}'
+                self.add_node({
+                    'id': f'file:{path}',
+                    'label': file_name,
+                    'type': 'file',
+                    'path': path,
+                    'content_preview': f'File: {path}',
+                })
+            self.add_edge({
+                'from': f'file:{path}',
+                'to': f'chunk:{chunk_key}',
+                'label': 'contains chunk',
+            })
+
+        for name, role in iter_actor_mentions(chunk_text):
+            actor_id = self.add_actor_node(name, role)
+            self._link_chunk_concept(
+                chunk_key, path, actor_id, 'mentions actor', chunk_concepts,
+            )
+
+        for ref_a, ref_b in _FILE_REF_PATTERN.findall(chunk_text):
+            ref = ref_a or ref_b
+            target_path = _resolve_file_reference(
+                ref,
+                file_node_ids=self.file_node_ids,
+                file_paths=self.file_paths,
+                file_path_by_basename=self.file_path_by_basename,
+            )
+            if not target_path or target_path == path:
+                continue
+            self.add_edge({
+                'from': f'chunk:{chunk_key}',
+                'to': f'file:{target_path}',
+                'label': 'references file',
+            })
+            if path:
+                self.add_edge({
+                    'from': f'file:{path}',
+                    'to': f'file:{target_path}',
+                    'label': 'references file',
+                })
+
+    def _ingest_chunk_concepts(
+        self,
+        chunk_key: str,
+        path: str,
+        chunk_text: str,
+        preview: str,
+        chunk_concepts: list[str],
+    ) -> None:
+        """Extract the topic, theme, activation, and entity concepts for a chunk."""
+        headings = list(_HEADING_PATTERN.finditer(chunk_text))
+        for heading in headings:
+            topic_id = self.add_topic_node(heading.group(1))
+            if topic_id:
+                self._link_chunk_concept(
+                    chunk_key, path, topic_id, 'covers topic', chunk_concepts,
+                )
+
+        for heading in headings:
+            heading_text = (heading.group(1) or '').strip()
+            for kind, pattern in _THEMATIC_HEADING_PATTERNS:
+                match = pattern.match(heading_text)
+                if not match:
+                    continue
+                derived = (match.group(1) or '').strip()
+                if not derived:
+                    continue
+                theme_id = self.add_theme_node(kind, derived, preview=heading_text)
+                if theme_id:
+                    self._link_chunk_concept(
+                        chunk_key, path, theme_id, f'has {kind}', chunk_concepts,
+                    )
+
+        for kind, pattern in _THEMATIC_PATTERNS:
+            for match in pattern.finditer(chunk_text):
+                derived = (match.group(1) or '').strip()
+                theme_id = self.add_theme_node(kind, derived, preview=derived)
+                if theme_id:
+                    self._link_chunk_concept(
+                        chunk_key, path, theme_id, f'has {kind}', chunk_concepts,
+                    )
+
+        for raw_line in chunk_text.splitlines():
+            line = raw_line.strip()
+            if not concept_worthy_line(line):
+                continue
+            for kind, pattern in _THEMATIC_LINE_PATTERNS:
+                match = pattern.match(line)
+                if not match:
+                    continue
+                derived = (match.group(1) or '').strip(' .:-')
+                theme_id = self.add_theme_node(kind, derived, preview=line)
+                if theme_id:
+                    self._link_chunk_concept(
+                        chunk_key, path, theme_id, f'has {kind}', chunk_concepts,
+                    )
+                    break
+
+        for match in _ACTIVATE_PATTERN.finditer(chunk_text):
+            agent_name = match.group(1)
+            role = AGENT_ROLES.get(agent_name, 'Agent')
+            actor_id = self.add_actor_node(agent_name, role)
+            self._link_chunk_concept(
+                chunk_key, path, actor_id, 'authored by', chunk_concepts,
+            )
+
+        for entity_kind, entity_label in self.extract_semantic_entities(chunk_text):
+            entity_id = self.add_theme_node(entity_kind, entity_label, preview=entity_label)
+            if entity_id:
+                self._link_chunk_concept(
+                    chunk_key, path, entity_id, f'has {entity_kind}',
+                    chunk_concepts, link_file=False,
+                )
+
+    def _add_chunk_semantic_summary(
+        self,
+        chunk_key: str,
+        chunk_concepts: list[str],
+    ) -> None:
+        """Add the summary node and its typed theme edges for a chunk."""
+        semantic_summary, summary_labels, typed_summary = _build_chunk_semantic_summary(
+            self.builder, chunk_concepts,
+        )
+        if not semantic_summary:
+            return
+
+        summary_slug = slugify(semantic_summary[:120])
+        summary_id = f'summary:{chunk_key}:{summary_slug}'
+        self.add_node({
+            'id': summary_id,
+            'label': semantic_summary[:180],
+            'type': 'summary',
+            'content_preview': semantic_summary,
+            'visibility': 'semantic',
+            'quality_tier': 'semantic',
+            'summary_labels': summary_labels,
+            'typed_summary': typed_summary,
+        })
+        chunk_concepts.append(summary_id)
+        self.add_edge({
+            'from': f'chunk:{chunk_key}',
+            'to': summary_id,
+            'label': 'semantic summary',
+            'visibility': 'semantic',
+            'quality_tier': 'semantic',
+        })
+        for summary_kind, summary_label in typed_summary.items():
+            summary_theme_id = self.add_theme_node(
+                summary_kind, summary_label, preview=semantic_summary,
+            )
+            if summary_theme_id:
+                self.add_edge({
+                    'from': summary_id,
+                    'to': summary_theme_id,
+                    'label': f'summarizes {summary_kind}',
+                    'visibility': 'semantic',
+                    'quality_tier': 'semantic',
+                })
+
     # ── phase: chunks table → nodes, derived edges, embeddings ────────
     def ingest_chunks(self, cur: sqlite3.Cursor) -> list[tuple[str, str, list[float], float]]:
         chunk_embeddings: list[tuple[str, str, list[float], float]] = []
@@ -740,53 +913,11 @@ class _MemoryStoreIngest:
             })
 
             chunk_concepts: list[str] = []
-
-            if path:
-                if path not in self.file_paths:
-                    self.file_paths.add(path)
-                    file_name = os.path.basename(path) or path
-                    self.file_path_by_basename.setdefault(file_name, []).append(path)
-                    self.file_node_ids[path] = f'file:{path}'
-                    self.add_node({
-                        'id': f'file:{path}',
-                        'label': file_name,
-                        'type': 'file',
-                        'path': path,
-                        'content_preview': f'File: {path}',
-                    })
-                self.add_edge({
-                    'from': f'file:{path}',
-                    'to': f'chunk:{chunk_key}',
-                    'label': 'contains chunk',
-                })
-
-            for name, role in iter_actor_mentions(chunk_text or ''):
-                actor_id = self.add_actor_node(name, role)
-                self._link_chunk_concept(
-                    chunk_key, path or '', actor_id, 'mentions actor', chunk_concepts,
-                )
-
-            for ref_a, ref_b in _FILE_REF_PATTERN.findall(chunk_text or ''):
-                ref = ref_a or ref_b
-                target_path = _resolve_file_reference(
-                    ref,
-                    file_node_ids=self.file_node_ids,
-                    file_paths=self.file_paths,
-                    file_path_by_basename=self.file_path_by_basename,
-                )
-                if not target_path or target_path == path:
-                    continue
-                self.add_edge({
-                    'from': f'chunk:{chunk_key}',
-                    'to': f'file:{target_path}',
-                    'label': 'references file',
-                })
-                if path:
-                    self.add_edge({
-                        'from': f'file:{path}',
-                        'to': f'file:{target_path}',
-                        'label': 'references file',
-                    })
+            normalized_text = chunk_text or ''
+            normalized_path = path or ''
+            self._ingest_chunk_file_relationships(
+                chunk_key, normalized_path, normalized_text, chunk_concepts,
+            )
 
             # Collect embedding vector for semantic similarity pass
             if emb_blob and isinstance(emb_blob, str):
@@ -807,104 +938,10 @@ class _MemoryStoreIngest:
                         chunk_key, exc, exc_info=True,
                     )
 
-            # Extract H2/H3 headings as topic nodes
-            for hm in _HEADING_PATTERN.finditer(chunk_text or ''):
-                topic_id = self.add_topic_node(hm.group(1))
-                if topic_id:
-                    self._link_chunk_concept(
-                        chunk_key, path or '', topic_id, 'covers topic', chunk_concepts,
-                    )
-
-            # Lift higher-level semantic themes from headings and explicit summary lines
-            for hm in _HEADING_PATTERN.finditer(chunk_text or ''):
-                heading_text = (hm.group(1) or '').strip()
-                for kind, pat in _THEMATIC_HEADING_PATTERNS:
-                    m = pat.match(heading_text)
-                    if not m:
-                        continue
-                    derived = (m.group(1) or '').strip()
-                    if not derived:
-                        continue
-                    theme_id = self.add_theme_node(kind, derived, preview=heading_text)
-                    if theme_id:
-                        self._link_chunk_concept(
-                            chunk_key, path or '', theme_id, f'has {kind}', chunk_concepts,
-                        )
-
-            for kind, pat in _THEMATIC_PATTERNS:
-                for match in pat.finditer(chunk_text or ''):
-                    derived = (match.group(1) or '').strip()
-                    theme_id = self.add_theme_node(kind, derived, preview=derived)
-                    if theme_id:
-                        self._link_chunk_concept(
-                            chunk_key, path or '', theme_id, f'has {kind}', chunk_concepts,
-                        )
-
-            for raw_line in (chunk_text or '').splitlines():
-                line = raw_line.strip()
-                if not concept_worthy_line(line):
-                    continue
-                for kind, pat in _THEMATIC_LINE_PATTERNS:
-                    m = pat.match(line)
-                    if not m:
-                        continue
-                    derived = (m.group(1) or '').strip(' .:-')
-                    theme_id = self.add_theme_node(kind, derived, preview=line)
-                    if theme_id:
-                        self._link_chunk_concept(
-                            chunk_key, path or '', theme_id, f'has {kind}', chunk_concepts,
-                        )
-                        break
-
-            # Detect activation-report authorship from H1 title
-            for am in _ACTIVATE_PATTERN.finditer(chunk_text or ''):
-                agent_name = am.group(1)
-                role = AGENT_ROLES.get(agent_name, 'Agent')
-                actor_id = self.add_actor_node(agent_name, role)
-                self._link_chunk_concept(
-                    chunk_key, path or '', actor_id, 'authored by', chunk_concepts,
-                )
-
-            for entity_kind, entity_label in self.extract_semantic_entities(chunk_text or ''):
-                entity_id = self.add_theme_node(entity_kind, entity_label, preview=entity_label)
-                if entity_id:
-                    self._link_chunk_concept(
-                        chunk_key, path or '', entity_id, f'has {entity_kind}',
-                        chunk_concepts, link_file=False,
-                    )
-
-            semantic_summary, summary_labels, typed_summary = _build_chunk_semantic_summary(self.builder, chunk_concepts)
-            if semantic_summary:
-                summary_slug = slugify(semantic_summary[:120])
-                summary_id = f'summary:{chunk_key}:{summary_slug}'
-                self.add_node({
-                    'id': summary_id,
-                    'label': semantic_summary[:180],
-                    'type': 'summary',
-                    'content_preview': semantic_summary,
-                    'visibility': 'semantic',
-                    'quality_tier': 'semantic',
-                    'summary_labels': summary_labels,
-                    'typed_summary': typed_summary,
-                })
-                chunk_concepts.append(summary_id)
-                self.add_edge({
-                    'from': f'chunk:{chunk_key}',
-                    'to': summary_id,
-                    'label': 'semantic summary',
-                    'visibility': 'semantic',
-                    'quality_tier': 'semantic',
-                })
-                for summary_kind, summary_label in typed_summary.items():
-                    summary_theme_id = self.add_theme_node(summary_kind if summary_kind != 'actor' else 'actor', summary_label, preview=semantic_summary)
-                    if summary_theme_id:
-                        self.add_edge({
-                            'from': summary_id,
-                            'to': summary_theme_id,
-                            'label': f'summarizes {summary_kind}',
-                            'visibility': 'semantic',
-                            'quality_tier': 'semantic',
-                        })
+            self._ingest_chunk_concepts(
+                chunk_key, normalized_path, normalized_text, preview, chunk_concepts,
+            )
+            self._add_chunk_semantic_summary(chunk_key, chunk_concepts)
 
             self.connect_semantic_concepts(chunk_concepts, chunk_source)
 
