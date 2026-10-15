@@ -1,0 +1,15 @@
+[Unit]
+Description=Autotune resume — re-arm the remaining rows after a boot
+Documentation=file:%h/ubuntu-console/systemd/autotune-resume.README.md
+
+[Service]
+Type=oneshot
+# The entry point owns the card and waits for the box lock, so "queued behind another
+# lane" plus a chunk is a normal lifetime.  systemd's 90 s default would kill this
+# mid-wait, so the bound is generous - but it IS a bound: a wedged unit fails visibly
+# instead of sitting in "activating" for ever.
+TimeoutStartSec=21600
+ExecStart=%h/.local/bin/autotune-resume.sh
+
+[Install]
+WantedBy=default.target
