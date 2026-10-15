@@ -386,7 +386,7 @@ a coin-flip.  Use the card-explicit launchers.
 | `LLM_AUTOTUNE_SPEC_N_MAX_LIST` | `4 8 16 32` | Speculative-decoding draft lengths to try |
 | `LLM_AUTOTUNE_BASELINE_GAP_MAX` | `800` | Max MiB of held VRAM tolerated before refusing to run |
 | `LLM_AUTOTUNE_VRAM_CAP_MULT` | `2` | Second cap on the ctx-probe ceiling: `min(<arch>.context_length, START_CTX × N)`. The KV-fit estimate under-probes **by design** — Phi-3.5-mini (native 131072) serves 32768 FULL in 9 s while a 2× cap stops the probe near 15360 — and it is ~4× too pessimistic for hybrid-attention models (Spark). Raising it is NOT a licence to certify a slow window: Phase 4's TPS-first descent still refuses anything that cannot hold `LLM_MIN_TPS` |
-| `CUDA_CYCLE_BUDGET` | `60` | CUDA context create/destroy cycles allowed in one WSL boot before the run halts (exit 3). See the WSL2 cycle-budget note below |
+| `CUDA_CYCLE_BUDGET` | `60` | CUDA context create/destroy cycles allowed in one WSL boot before the run halts (the batch exits **4**, the designed end of one boot's measuring). See the WSL2 cycle-budget note below |
 | `CUDA_DEGRADE_CONSECUTIVE_STALLS` | `2` | Consecutive launches that stay alive but never report healthy before halting as the dxgkrnl degradation signature (`0` disables) |
 | `CUDA_CYCLE_FILE` | `/dev/shm/autotune-cuda-cycles-<boot-id>` | Cycle-ledger path; namespaced by boot ID so a WSL restart starts a fresh counter |
 | `CUDA_STALL_FILE` | `/dev/shm/autotune-degrade-stalls-<boot-id>` | Consecutive-stall counter path |
@@ -441,11 +441,19 @@ it changes the counter or the failure rate. Its status is **unproven,
 mechanism-justified, cheap** — do not record it as either a fix or a myth.
 
 Both `autotune-model.sh` and `run-autotune-batch.sh` therefore share one
-boot-scoped ledger in `/dev/shm` and halt (exit 3) with a resume hint when:
+boot-scoped ledger in `/dev/shm` and halt with a resume hint when:
 
-- the cycle count reaches `CUDA_CYCLE_BUDGET`, or
-- `CUDA_DEGRADE_CONSECUTIVE_STALLS` launches in a row come up alive but never
-  report healthy — the signature of an already-degraded adapter.
+- the cycle count reaches `CUDA_CYCLE_BUDGET` — the batch exits **4**. This is the
+  designed end of one boot's measuring and the ONLY halt a restart resumes, so
+  `autotune-resume.service` re-derives the remainder and arms the next restart by
+  itself when a budget halt made progress; or
+- `CUDA_DEGRADE_CONSECUTIVE_STALLS` launches in a row come up alive but never report
+  healthy — the signature of an already-degraded adapter. The batch exits **3**,
+  because the ledger is NOT the explanation: a restart would buy nothing, and a
+  person has to look at the adapter.
+
+Both were exit 3 until 2026-10-15, which is why an unattended resume could not tell
+"carry on" from "stop and look" and read the designed halt as a failure.
 
 The ledger lives in `/dev/shm`, not `/tmp`: `/tmp` is cleaned aggressively on
 this box, and a mid-boot clean would reset the budget while the condition it

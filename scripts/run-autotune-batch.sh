@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 20
+# Module Version: 21
+#   v21 (2026-10-15): the adapter stops got DISTINCT exit codes, so the boot re-arm can
+#   tell "carry on" from "stop and look".  A spent cycle budget is now 4 (the designed
+#   end of one boot's measuring, and the only halt a restart resumes) and a stall with
+#   the budget UNSPENT stays 3.  The row-exit-3 branch asks the LEDGER which it was,
+#   because autotune-model.sh exits 3 for both.  The printed resume line also names
+#   bin/autotune-rows.sh (the wrapper that suspends the CUDA lane) instead of this
+#   runner, which refuses on VRAM when nothing suspended the lane.
 #   v20 (2026-10-14): re-assert the CUDA lane's DOWN state before the first row and before
 #   every row, while OUR suspend hold is live.  A cross-lane hand-off (investigator's
 #   GpuExclusivityClaim release) RESTORES llama-cuda-llama32-3b-chat.service as well as
@@ -42,8 +49,12 @@
 # Exit codes are a contract shared with autotune-model.sh (docs/llm.md):
 #   0  every requested row certified
 #   1  at least one row failed
-#   3  stopped for the ADAPTER — the cycle budget, or a row that exited 3 for
-#      consecutive stalls.  Outranks 1: it is the case that needs a WSL restart.
+#   3  stopped for the ADAPTER with the cycle BUDGET UNSPENT — a row stalled or was
+#      refused, so the adapter (or that row) is the suspect.  A person looks.
+#   4  the cycle BUDGET is spent — the designed end of ONE boot's measuring, and
+#      the only halt a restart resumes.  Split from 3 on 2026-10-15, because one
+#      code for both meant the boot re-arm could not tell "carry on" from "stop and
+#      look", and it read the designed halt as a failure.
 #   (a chunk-cap or foreign-owner halt exits 0 or 1 by whether rows failed)
 #
 # Timing estimate per model (RTX 3050 4GB, autotune v4). The figures date from
@@ -113,9 +124,12 @@ MAX_CONSECUTIVE_FAILURES="${MAX_CONSECUTIVE_FAILURES:-2}"
 # One warning per batch is enough for a host-state flag that no longer halts.
 _GPU_HEALTH_WARNED=0
 # The batch's exit code is a contract (docs/llm.md, and autotune-model.sh's own
-# exit 3): 3 = stopped for the ADAPTER, 1 = rows failed, 0 = clean.  A budget halt
-# outranks a failed row because it is the condition that needs a WSL restart and it
-# explains any failures alongside it.
+# exit 3): 0 = clean, 1 = rows failed, 3 = stopped for the ADAPTER with the budget
+# unspent, 4 = the cycle budget is spent.  A budget halt outranks a failed row
+# because it is the condition a WSL restart fixes and it explains any failures
+# alongside it.
+EXIT_ADAPTER=3  # the adapter stalled, refused, or launched-unhealthy
+EXIT_BUDGET=4   # this boot's measuring is done: restart, then resume
 HALT_EXIT=0
 
 # --- WSL2 dxgkrnl cycle-budget knobs ---
@@ -254,8 +268,8 @@ for ((i = 0; i < TOTAL; i++)); do
     # Halt gate BEFORE the next model: cycle budget + chunk size.
     _cyc=$(cuda_cycles)
     if [[ "$_cyc" =~ ^[0-9]+$ ]] && [[ "$_cyc" -ge "$CUDA_CYCLE_BUDGET" ]]; then
-        HALT_REASON="CUDA context-cycle budget reached (${_cyc} >= ${CUDA_CYCLE_BUDGET})"
-        HALT_EXIT=3
+        HALT_REASON="the CUDA cycle budget is spent (${_cyc} >= ${CUDA_CYCLE_BUDGET}) — one boot's measuring is done"
+        HALT_EXIT="$EXIT_BUDGET"
         HALT_NEEDS_WSL_RESTART=1
         break
     fi
@@ -307,8 +321,20 @@ for ((i = 0; i < TOTAL; i++)); do
         # contract ("both ... halt (exit 3)"); the batch used to swallow the code and
         # count the row as an ordinary failure.
         if (( _row_rc == 3 )); then
-            HALT_REASON="model #${m} exited 3 — the adapter backstop fired (cycle budget or consecutive stalls)"
-            HALT_EXIT=3
+            # WHICH adapter backstop?  Ask the LEDGER rather than guess: a row that
+            # spent the budget and a row that stalled both exit 3, and the two want
+            # opposite handling — the first resumes after a restart, the second
+            # needs a person to look at the adapter.
+            _cyc_now=$(cuda_cycles)
+            if [[ "$_cyc_now" =~ ^[0-9]+$ ]] && (( _cyc_now >= CUDA_CYCLE_BUDGET )); then
+                HALT_REASON="model #${m} exited 3 with the cycle budget spent"
+                HALT_REASON+=" (${_cyc_now} >= ${CUDA_CYCLE_BUDGET}) — one boot's measuring is done"
+                HALT_EXIT="$EXIT_BUDGET"
+            else
+                HALT_REASON="model #${m} exited 3 with the budget UNSPENT"
+                HALT_REASON+=" (${_cyc_now:-?}/${CUDA_CYCLE_BUDGET}) — the adapter stalled"
+                HALT_EXIT="$EXIT_ADAPTER"
+            fi
             HALT_NEEDS_WSL_RESTART=1
             break
         fi
@@ -364,8 +390,12 @@ __rab_footer() {
         else
             echo "  resume:"
         fi
-        echo "    bash ~/ubuntu-console/scripts/run-autotune-batch.sh ${REMAINING[*]}"
-        echo "  (or run with no args to auto-resume every still-untuned model)"
+        echo "    bash ~/ubuntu-console/bin/autotune-rows.sh ${REMAINING[*]}"
+        echo "  (through the WRAPPER, never this batch alone: only the wrapper takes the"
+        echo "   box lock and holds the CUDA lane down, so the card is free enough for a"
+        echo "   row to pass its VRAM baseline; a bare batch launch refuses on VRAM)"
+        echo "  (after a restart autotune-resume.service re-derives the remainder and"
+        echo "   arms the next restart by itself when a budget halt made progress)"
     fi
 
     if [[ "${HALT_EXIT:-0}" != "0" ]]; then

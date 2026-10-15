@@ -33,6 +33,43 @@ missing is dropped with a line (an unloadable row still burns CUDA cycles walkin
 Only the wrapper takes the box lock (`bin/heavy-job`) and holds the CUDA lane down for
 the whole run; this unit inherits that serialisation instead of adding a second lock.
 
-**What it does NOT do.** It does not restart WSL, and it does not decide the scope. For
-the restart half see `bin/wsl-restart.sh` (`--schedule HH:MM` for the recurring form,
-whose wrapper is gated on a chunk check so a busy box skips that night).
+**What it does NOT do.** It does not decide the scope (the plan does, and the plan's
+rule is Wayne's ruling), and it does not restart WSL itself — it ARMS a restart through
+`bin/wsl-restart.sh`, which owns the Windows side and the chunk gate.
+
+## The loop (v2, 2026-10-15) — why a boot is not the end of the campaign
+
+**v1 survived a restart but never caused one.** It `exec`d the chunk, so the script died
+with it, and nothing re-derived the plan or armed a second restart. Measured the night
+of 2026-10-15: a peer's ONE-SHOT restart fired at 07:30, the unit claimed its 13-row
+plan, the chunk ran to the cycle-budget halt at 08:41 — and the campaign then stopped
+with 11 rows left, because the only product of a halt was a printed suggestion. That is
+the half Wayne's brief cared about, and it was not built. v2 closes it: the chunk runs as
+a CHILD, its exit code is read, and a **budget** halt (exit 4) that SHRANK the remainder
+re-derives the plan and arms the next restart.
+
+**Four stops, each deliberate** — an unattended reboot loop is only safe if it cannot
+spin doing nothing:
+
+| stop | why |
+|---|---|
+| the boot did not SHRINK the remainder | a restart would re-run the rows that just ran |
+| the remainder is EMPTY | the campaign is complete; nothing to resume |
+| a CI job is executing on this box | a restart cancels it, and a cancelled run leaves `main` red here — the arm waits (bounded, 15 min by default) and then PAUSES rather than killing the job |
+| `ARM_MAX` consecutive automatic restarts (8) | an absolute cap; `--plan` resets it, so a person chooses a new campaign |
+
+Any of those exits **non-zero**, so the unit reads `failed` — that is the intended
+signal (a person decides), not an alarm on expected state.
+
+**A parked row is not a bug.** `PARKED_ROWS` in the script keeps rows out of every
+derivation. It currently holds `MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf`, measured
+2026-10-15: that row enters the batch at cycle 43 and leaves the boot spent at 63 — 20
+of the boot's 60 cycles — inside Phase 4's filled-cache TPS floor descent, which
+re-spawns a server once per ctx step and never clears the floor. It therefore stays
+flagged in the registry and returns in every derivation, ending every boot in the same
+place. Parked is not deleted: its row and columns are untouched.
+
+**Knobs** (all overridable, all read once at start): `TAC_RESUME_ARM_MAX`,
+`TAC_RESUME_ARM_DELAY` (minutes, default 3), `TAC_RESUME_CI_WAIT_S` /
+`TAC_RESUME_CI_POLL_S`, `TAC_RESUME_RESTART_TOOL`, and `TAC_RESUME_CI_WORKERS_CMD` (a
+command that prints the CI-worker count — the seam the suite drives instead of a runner).

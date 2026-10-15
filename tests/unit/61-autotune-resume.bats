@@ -20,6 +20,13 @@
 # Case 5 fails against a claim-first-then-check implementation, which would leave the
 # operator's plan consumed by a run that never happened.
 #
+# THE LOOP (v2 cases below).  These pin the half v1 never built: v1 `exec`d the chunk,
+# so the script died with it and nothing re-derived the plan or armed a second restart
+# — measured 2026-10-15, the campaign simply stopped at the first budget halt with 11
+# rows left.  The budget case fails against any version that does not arm; the
+# no-progress case against one that arms without progress; the cap case against one
+# that arms for ever; the CI case against one that cancels another lane's run.
+#
 # No env.sh: the script is standalone and is driven here as a subprocess through its
 # documented TAC_RESUME_* seams, so nothing from the module tree is sourced.
 # ==============================================================================
@@ -44,13 +51,42 @@ setup() {
     mkdir -p "$TAC_RESUME_MODEL_DIR" "$TAC_RESUME_STATE_DIR" "$TAC_RESUME_LOGDIR"
 
     # A stub entry point: records the rows it was handed, so the case can assert what
-    # the resume actually asked for.
+    # the resume actually asked for, and exits with the code this boot's chunk ended
+    # on — v2 reads that code to decide whether the campaign continues.
+    ENTRY_RC_FILE="$SANDBOX/entry.rc"
+    export ENTRY_RC_FILE
+    printf '0\n' > "$ENTRY_RC_FILE"
     cat > "$TAC_RESUME_ENTRY" <<'ENTRY_EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >> "$ARGV_LOG"
-exit 0
+_rc=0
+[[ -r "${ENTRY_RC_FILE:-}" ]] && _rc=$(< "$ENTRY_RC_FILE")
+exit "$_rc"
 ENTRY_EOF
     chmod +x "$TAC_RESUME_ENTRY"
+
+    # The loop's two out-of-tree collaborators, both stubbed: the restart tool (so no
+    # Windows state is touched) and the CI-worker count (so a runner on this box
+    # cannot silently decide a case — the shipped default is a real `pgrep`).
+    RESTART_ARGV="$SANDBOX/restart.argv"
+    export RESTART_ARGV
+    RESTART_TOOL_STUB="$SANDBOX/restart-stub.sh"
+    export RESTART_TOOL_STUB
+    cat > "$RESTART_TOOL_STUB" <<'RESTART_EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$RESTART_ARGV"
+exit 0
+RESTART_EOF
+    chmod +x "$RESTART_TOOL_STUB"
+    export TAC_RESUME_RESTART_TOOL="$RESTART_TOOL_STUB"
+
+    CI_WORKERS_STUB="$SANDBOX/ci-workers.sh"
+    export CI_WORKERS_STUB
+    _write_ci_workers 0
+    export TAC_RESUME_CI_WORKERS_CMD="$CI_WORKERS_STUB"
+    export TAC_RESUME_ARM_DELAY=1
+    export TAC_RESUME_CI_WAIT_S=0
+    export TAC_RESUME_CI_POLL_S=1
 
     # Registry rows carry the real column layout: 3 = model file, 17 = tps,
     # 18 = certified (yes/no), 25 = p2_tps.  Built by position so the field count
@@ -148,6 +184,130 @@ teardown() {
     # The plan survives, so the operator can fix it; nothing was called.
     [ -f "$TAC_RESUME_PLAN" ]
     [ ! -e "$ARGV_LOG" ]
+}
+
+# _write_ci_workers N — the count the loop's CI gate reads.  A FILE, not a real
+# runner: the shipped default is `pgrep -cf '[R]unner.Worker'`, and on a box that
+# runs other repos' CI (and this suite's own CI) that would decide these cases for us.
+_write_ci_workers() {
+    cat > "$CI_WORKERS_STUB" <<EOS
+#!/usr/bin/env bash
+printf '%s\n' "$1"
+EOS
+    chmod +x "$CI_WORKERS_STUB"
+}
+
+# ── THE LOOP (v2) ─────────────────────────────────────────────────────────────
+# v1 `exec`d the chunk, so the script died with it: nothing re-derived the plan and
+# nothing armed another restart, and the campaign stopped at the first budget halt
+# (measured 2026-10-15, 11 rows left).  The cases below drive the exit code the chunk
+# leaves behind, which is the loop's only input.
+
+@test "autotune-resume: a budget halt that SHRANK the remainder re-plans and ARMS a restart" {
+    printf 'uncertified.gguf\nflagged.gguf\n' > "$TAC_RESUME_PLAN"
+    # One row certified this boot, so it leaves the derivation; flagged.gguf stays.
+    {
+        _row 1 uncertified.gguf 2.00 yes 1.00
+        _row 2 flagged.gguf     1.00 yes 5.00
+    } > "$TAC_RESUME_REGISTRY"
+    printf '4\n' > "$ENTRY_RC_FILE"
+
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"the remainder shrank 2 -> 1"* ]]
+    [[ "$output" == *"armed restart 1/8"* ]]
+
+    # Armed through the TRACKED tool, which owns the Windows side and the chunk gate.
+    grep -q '^--restart$' "$RESTART_ARGV"
+    grep -q '^--delay$' "$RESTART_ARGV"
+
+    # The plan is re-derived for the next boot, and it is the still-owed row.
+    [ -f "$TAC_RESUME_PLAN" ]
+    [ "$(grep -c . "$TAC_RESUME_PLAN")" -eq 1 ]
+    grep -q '^flagged.gguf$' "$TAC_RESUME_PLAN"
+
+    # The counter counts RESTARTS, not boots: that is what the cap bounds.
+    [ "$(cat "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts")" = "1" ]
+}
+
+@test "autotune-resume: a budget halt that did NOT shrink the remainder does not arm" {
+    printf 'uncertified.gguf\nflagged.gguf\n' > "$TAC_RESUME_PLAN"
+    printf '4\n' > "$ENTRY_RC_FILE"
+    # The registry is untouched, so the same rows (and more) are still owed.
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 4 ]
+    [[ "$output" == *"did not shrink the remainder"* ]]
+    [ ! -e "$RESTART_ARGV" ]
+}
+
+@test "autotune-resume: an adapter STALL is not resumed — the budget was not the reason" {
+    printf 'uncertified.gguf\n' > "$TAC_RESUME_PLAN"
+    printf '3\n' > "$ENTRY_RC_FILE"
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"budget UNSPENT"* ]]
+    [[ "$output" == *"a person looks"* ]]
+    [ ! -e "$RESTART_ARGV" ]
+}
+
+@test "autotune-resume: an EMPTY remainder ends the campaign and arms nothing" {
+    printf 'flagged.gguf\n' > "$TAC_RESUME_PLAN"
+    printf '4\n' > "$ENTRY_RC_FILE"
+    # Every row certified and unflagged, no ruled new quant: nothing is owed.
+    { _row 1 flagged.gguf 5.00 yes 1.00; } > "$TAC_RESUME_REGISTRY"
+
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"remainder is EMPTY"* ]]
+    [ ! -e "$RESTART_ARGV" ]
+}
+
+@test "autotune-resume: a CI job on this box PAUSES the loop rather than being cancelled" {
+    printf 'uncertified.gguf\nflagged.gguf\n' > "$TAC_RESUME_PLAN"
+    {
+        _row 1 uncertified.gguf 2.00 yes 1.00
+        _row 2 flagged.gguf     1.00 yes 5.00
+    } > "$TAC_RESUME_REGISTRY"
+    printf '4\n' > "$ENTRY_RC_FILE"
+    _write_ci_workers 2
+
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 4 ]
+    [[ "$output" == *"a CI job is executing on this box"* ]]
+    [ ! -e "$RESTART_ARGV" ]
+}
+
+@test "autotune-resume: the automatic-restart cap stops the loop and names the reset" {
+    printf 'uncertified.gguf\nflagged.gguf\n' > "$TAC_RESUME_PLAN"
+    {
+        _row 1 uncertified.gguf 2.00 yes 1.00
+        _row 2 flagged.gguf     1.00 yes 5.00
+    } > "$TAC_RESUME_REGISTRY"
+    printf '4\n' > "$ENTRY_RC_FILE"
+    printf '8\n' > "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts"
+
+    run "$SCRIPT" 2>&1
+    [ "$status" -eq 4 ]
+    [[ "$output" == *"8 automatic restarts already (cap 8)"* ]]
+    [[ "$output" == *"--plan"* ]]
+    [ ! -e "$RESTART_ARGV" ]
+}
+
+@test "autotune-resume: --plan PARKS a row that can never certify, and names the reason" {
+    {
+        _row 1 MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf 9.10 yes 11.13
+        _row 2 flagged.gguf 1.00 yes 5.00
+    } > "$TAC_RESUME_REGISTRY"
+
+    run "$SCRIPT" --plan 2>&1
+    [ "$status" -eq 0 ]
+    # The parked row is kept OUT of the plan and NAMED, with its reason.
+    ! grep -q '^MemSFT' "$TAC_RESUME_PLAN"
+    grep -q '^flagged.gguf$' "$TAC_RESUME_PLAN"
+    [[ "$output" == *"parked (out of the plan): MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf"* ]]
+    [[ "$output" == *"never clears the filled-cache TPS floor"* ]]
+    # A fresh campaign resets the loop's counter.
+    [ "$(cat "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts")" = "0" ]
 }
 
 # end of file

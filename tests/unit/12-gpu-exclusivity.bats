@@ -613,7 +613,8 @@ case "$2" in
     failures) MODEL_ARRAY=(5 7 18 27); COUNT=2; TOTAL=4; TUNED_COUNT=0; FAILED_ROWS=(5 7) ;;
     clean)    MODEL_ARRAY=(1 5);       COUNT=1; TOTAL=2; TUNED_COUNT=1; FAILED_ROWS=() ;;
     allfail)  MODEL_ARRAY=(5 7);       COUNT=2; TOTAL=2; TUNED_COUNT=0; FAILED_ROWS=(5 7) ;;
-    budget)   MODEL_ARRAY=(5 7);       COUNT=1; TOTAL=2; TUNED_COUNT=0; FAILED_ROWS=(5); HALT_EXIT=3 ;;
+    budget)   MODEL_ARRAY=(5 7);       COUNT=1; TOTAL=2; TUNED_COUNT=0; FAILED_ROWS=(5); HALT_EXIT=4 ;;
+    stall)    MODEL_ARRAY=(5 7);       COUNT=1; TOTAL=2; TUNED_COUNT=0; FAILED_ROWS=(5); HALT_EXIT=3 ;;
 esac
 __rab_footer "halt" 0
 echo "RC=$?"
@@ -635,12 +636,39 @@ EOS
     [[ "$output" == *"REMAINING=5 7"* ]]
     [[ "$output" == *"RC=1"* ]]
 
-    # Stopped for the ADAPTER: exit 3, which outranks the failed row beside it.
-    # docs/llm.md states this as a contract shared with autotune-model.sh, and the
-    # batch used to have no exit 3 at all.
+    # The adapter stops carry DIFFERENT codes, because they want opposite handling: a
+    # spent cycle budget is 4 (the designed end of one boot's measuring, and the only
+    # halt a restart resumes), while a stall with the budget UNSPENT is 3.  docs/llm.md
+    # states both as a contract shared with autotune-model.sh.  They were ONE code
+    # until 2026-10-15, which is why the boot re-arm could not tell "carry on" from
+    # "stop and look", and read the designed halt as a failure.
     run bash "$TAC_TEST_TMPDIR/footer-probe.sh" "$TAC_TEST_TMPDIR/footer.sh" budget
+    [[ "$output" == *"RC=4"* ]]
+    [[ "$output" == *"REMAINING=5 7"* ]]
+    run bash "$TAC_TEST_TMPDIR/footer-probe.sh" "$TAC_TEST_TMPDIR/footer.sh" stall
     [[ "$output" == *"RC=3"* ]]
     [[ "$output" == *"REMAINING=5 7"* ]]
+}
+
+# The two codes above only mean something if the batch ASSIGNS them where it can, so
+# this pins the assignment and the discrimination statically — there is no GPU in CI
+# and no way to spend a real budget in a unit case.  The row-exit-3 branch is the one
+# that matters: a row that spent the budget and a row that stalled BOTH exit 3 from
+# autotune-model.sh, so the branch has to ask the LEDGER which one it was.
+@test "autotune: a spent budget and an adapter stall are distinct exit codes" {
+    local f="$REPO_ROOT/scripts/run-autotune-batch.sh" r="$REPO_ROOT/bin/autotune-resume.sh"
+    grep -q 'EXIT_ADAPTER=3' "$f"
+    grep -q 'EXIT_BUDGET=4' "$f"
+    grep -q 'HALT_EXIT="$EXIT_BUDGET"' "$f"
+    grep -q 'HALT_EXIT="$EXIT_ADAPTER"' "$f"
+    # The discrimination is the ledger read, never a guess from the row's message.
+    grep -q '_cyc_now=$(cuda_cycles)' "$f"
+    grep -q '_cyc_now >= CUDA_CYCLE_BUDGET' "$f"
+    # The boot re-arm keys its loop on the BUDGET code alone.
+    grep -q 'EXIT_BUDGET=4' "$r"
+    # And the printed resume line names the WRAPPER: a bare batch launch refuses on
+    # VRAM, because nothing suspended the lane (measured 2026-10-13).
+    ! grep -q 'run-autotune-batch.sh ${REMAINING' "$f"
 }
 
 # The dxgkrnl EOVERFLOW count WARNS, it does not halt (Wayne, 2026-09-15).  It

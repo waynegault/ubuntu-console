@@ -8,6 +8,14 @@ Type=oneshot
 # lane" plus a chunk is a normal lifetime.  systemd's 90 s default would kill this
 # mid-wait, so the bound is generous - but it IS a bound: a wedged unit fails visibly
 # instead of sitting in "activating" for ever.
+#
+# The unit is also the campaign's ENGINE (v2, 2026-10-15): when the chunk halts on the
+# cycle budget it re-derives the remainder and arms the next restart itself, so
+# `inactive (dead)` here means "the campaign continues".  Exit 0 = nothing to do, the
+# campaign finished, or it continued.  Exit 3 (the adapter stalled with the budget
+# UNSPENT) and exit 4 (a budget halt that made no progress, hit the cap, or found a CI
+# job on this box) both mean the campaign PAUSED and a person decides - so `failed`
+# is a real signal here, never the designed halt's noise.
 TimeoutStartSec=21600
 ExecStart=%h/.local/bin/autotune-resume.sh
 

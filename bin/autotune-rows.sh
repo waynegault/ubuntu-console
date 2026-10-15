@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-10-15): the halt classes are distinguished.  A spent cycle budget is
+#   exit 4 (the designed end of one boot's measuring, and the only halt a restart
+#   resumes); exit 3 is the OTHER adapter stop — a stall with the budget unspent,
+#   which needs a person rather than a reboot.  The log line names which fired, so
+#   a reader no longer has to infer it from the ledger.
 #   v5 (2026-10-12): the post-stop free-VRAM wait is the shared `_tac_gpu_wait_used_below`
 #   (bin/_tac-bin-lib.sh).  The inline loop it replaced broke out on an UNREADABLE reading
 #   and fell through on exhaustion, so the batch could launch against an occupied or
@@ -27,9 +32,12 @@
 # Durable on purpose (2026-09-16): the previous launcher lived in /tmp and a WSL restart
 # deleted it along with the log.  This one logs to ~/.llm/autotune-logs/, which survives.
 #
-# The CUDA cycle ledger is boot-scoped and the batch HALTS (exit 3) at CUDA_CYCLE_BUDGET
+# The CUDA cycle ledger is boot-scoped and the batch HALTS (exit 4) at CUDA_CYCLE_BUDGET
 # (60) — that is by design, not a failure: a full 27-row sweep is several sessions, each
-# needing a WSL restart to reset the ledger.  On halt this prints the resume command.
+# needing a WSL restart to reset the ledger.  Exit 3 is the OTHER adapter stop, a stall
+# with the budget UNSPENT, and it is NOT a budget halt: it wants a person, not a reboot.
+# On halt the batch prints how to resume, and autotune-resume.service re-derives the
+# remainder and arms the next restart by itself after a budget halt that made progress.
 set -uo pipefail
 
 # Shared helpers (_tac_suspend_*, _tac_gpu_wait_used_below) — see bin/_tac-bin-lib.sh.
@@ -109,7 +117,11 @@ echo "=== card free before start: $(_tac_gpu_used_mib) MiB used" >> "$LOG"
 bash scripts/run-autotune-batch.sh "${ROWS[@]}" >> "$LOG" 2>&1
 rc=$?
 {
-    echo "=== batch exited $rc at $(date -Iseconds)"
+    case "$rc" in
+        4) echo "=== batch exited 4 (cycle budget spent — one boot's measuring is done)" ;;
+        3) echo "=== batch exited 3 (adapter stalled with the budget UNSPENT — look, do not reboot)" ;;
+        *) echo "=== batch exited $rc at $(date -Iseconds)" ;;
+    esac
     # swallow-ok: the boot-scoped ledger again — an absent file reports zero cycles, which is its true value
     echo "=== ledger after: $(cat /dev/shm/autotune-cuda-cycles-* 2>/dev/null || echo 0)"
     echo "=== log: $LOG"
