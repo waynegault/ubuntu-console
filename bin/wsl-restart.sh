@@ -92,7 +92,12 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-10-15): step 3b's block moved OUT of render_wrapper into
+#   render_compaction_step().  Inlining it had pushed that function past the §18.3 10.4
+#   hundred-line bound, which the pre-push ratchet caught and refused - the same
+#   extraction the operator gate needed, for the same reason.  No behaviour change; the
+#   generated order is unchanged and pinned by a case.
 #   v7 (2026-10-15): step 3b — COMPACT the VS Code state DBs inside the window this
 #   wrapper already creates.  The client is killed in step 1 and relaunched in step 4,
 #   so between the distro answering and that relaunch nothing holds those DBs open,
@@ -365,6 +370,23 @@ render_operator_gate() {
         'echo [%DATE% %TIME%] operator gate clear - proceeding >> "%LOG%"'
 }
 
+# The wrapper's COMPACTION step (3b), printed by its own function so render_wrapper stays a
+# readable list of STEPS.  It runs inside the window this wrapper creates - the client is
+# killed in step 1 and relaunched in step 4 - and it is never branched on: the restart is
+# the job, so a locked DB or a missing helper costs an opportunity, never the relaunch.
+render_compaction_step() {
+    printf '%s\r\n' \
+        'REM 3b. COMPACT the VS Code state DBs. The client was killed in step 1 and is' \
+        'REM     relaunched BELOW, so this is the one moment nothing holds those DBs' \
+        'REM     open - and only a VACUUM returns the pages a deleted value freed' \
+        'REM     (measured 2026-10-15: 152,252,416 free of 153,202,688). It is' \
+        'REM     OPPORTUNISTIC: the RESTART IS THE JOB. Its output is logged, its exit' \
+        'REM     code is NOT branched on, and a missing helper or a locked DB cannot' \
+        'REM     stop the relaunch - so this line never gates anything.' \
+        "wsl.exe -d ${DISTRO} -u wayne -- ${COMPACT_CMD_UNIX} >> \"%LOG%\" 2>&1" \
+        ''
+}
+
 # The wrapper that runs on the Windows side.  CRLF is deliberate: cmd.exe parses a
 # LF-only .cmd unreliably around labels and goto, and this file is full of both.
 # `_mode` is `oneshot` (fired once, deletes its own registration) or `scheduled`
@@ -444,16 +466,12 @@ render_wrapper() {
         ':distro_timeout' \
         "echo [%DATE% %TIME%] WARN: distro did not answer after ${WAIT_TRIES} tries >> \"%LOG%\"" \
         ':relaunch' \
-        '' \
-        'REM 3b. COMPACT the VS Code state DBs. The client was killed in step 1 and is' \
-        'REM     relaunched BELOW, so this is the one moment nothing holds those DBs' \
-        'REM     open - and only a VACUUM returns the pages a deleted value freed' \
-        'REM     (measured 2026-10-15: 152,252,416 free of 153,202,688). It is' \
-        'REM     OPPORTUNISTIC: the RESTART IS THE JOB. Its output is logged, its exit' \
-        'REM     code is NOT branched on, and a missing helper or a locked DB cannot' \
-        'REM     stop the relaunch - so this line never gates anything.' \
-        "wsl.exe -d ${DISTRO} -u wayne -- ${COMPACT_CMD_UNIX} >> \"%LOG%\" 2>&1" \
-        '' \
+        ''
+    # The compression step prints itself (render_compaction_step): inlining it pushed this
+    # function past the §18.3 10.4 hundred-line bound, and the STEP LIST is what a reader
+    # comes here for.
+    render_compaction_step
+    printf '%s\r\n' \
         'REM 4. Relaunch the client on a fresh relay. Absolute, because the' \
         'REM    wrapper gets no shell profile.' \
         "set \"CODE_CMD=${CODE_CMD_WIN}\"" \
