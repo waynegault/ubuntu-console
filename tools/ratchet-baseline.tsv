@@ -112,13 +112,20 @@
 # helper.  Hand-edited, NOT `--update`: the tool rewrites this file as header+rows and would strip
 # every block above, other lanes' included.  The other four counters this file rose (8.1.8, 9.5,
 # 9.7, 10.7) were fixed at source in the same change-set and are unchanged here.
+# 2026-10-15 (later): 9.7 64 -> 66 and 10.7 205 -> 206 are CORPUS GROWTH from ONE newly added file,
+# tools/python-runtime.sh (the shared Python-interpreter resolver).  The attribution is measured, not
+# assumed: the pushed range adds exactly that one file, it carries exactly two `return 127` sites (9.7 +2)
+# and exactly one same-line `printf ... >&2` (10.7 +1 — its other stderr write is a printf whose `>&2`
+# stands on the continuation line, so it is not a same-line site).  Hand-edited, NOT `--update`, for the
+# reason the block above gives: the tool rewrites this file as header+rows and would strip every block,
+# other lanes' included.  Cleared so the three lane commits underneath could be pushed.
 4.2.4	17
 4.2.6	9
 4.3.6	31
 6.7	100
 8.1.8	290
 9.5	116
-9.7	64
+9.7	66
 10.4	50
-10.7	205
+10.7	206
 10.8	0
