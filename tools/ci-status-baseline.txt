@@ -16,6 +16,7 @@
 # NEXT red instead of surfacing it.
 #
 # --- entries ---
+workflow=CI | owner=Wayne | card=CI-RED-2026-10-15-unit-venv-python | expiry=2026-10-18 | reason=Tip 70823378 is RED (run 38762999750).  Exactly ONE case failed: `not ok 61 explicit update installs from a stubbed release and preserves the old link` (tests/unit/04-llama-cpp-tools.bats:90), which died with status 127 because it invoked "$REPO_ROOT/.venv/bin/python" - a path the runner's venv does not provide, which is also why it passes on this box.  Fixed in c4577c05, which this push delivers.  Every other job of that run was success (Docs Sync Check, Lint & Static Analysis, Fast Test Suite, Python Lint & Tests, Module Integrity; Python Full Suite skipped), so this entry covers one red and names it.  A red tip blocks the very push that fixes it, so this is the recorded, time-boxed escape; Wayne answered "a" to the menu put to him on 2026-10-15.  DELETE this entry the moment a GREEN `CI` run exists for the fixed tip.
 # (none — the `CI` entry added 2026-10-15 (card CI-RED-2026-10-15-trim-mypy) was deleted the same
 #  day on Wayne's instruction, with BOTH its reds fixed and pushed: the mypy failures in
 #  tools/vscode-companion-state/vscode-companion-state-trim.py (f5d43152) and the operator-gate
