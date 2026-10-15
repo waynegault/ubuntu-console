@@ -119,6 +119,14 @@
 # stands on the continuation line, so it is not a same-line site).  Hand-edited, NOT `--update`, for the
 # reason the block above gives: the tool rewrites this file as header+rows and would strip every block,
 # other lanes' included.  Cleared so the three lane commits underneath could be pushed.
+# 2026-10-15 (later still): 10.7 206 -> 207 is the SAME newly added file after its §18.3 shapes were
+# fixed AT SOURCE (363df2d1): the three ad-hoc `printf ... >&2` sites now call one helper, `_say`, and
+# 10.7 counts that helper's OWN definition line — one irreducible site, which is the corpus-growth case
+# the tool's own message sanctions.  9.7 was NOT moved by that fix (the tool prints neither a rise nor a
+# fall for it, so the recorded 66 equals the tree).  10.4 also fell 50 -> 49 in the same range (the
+# lane's own refactors, not this fix), and is tightened here rather than left above the tree: a baseline
+# above the tree is a raised floor, so a genuine 49 -> 50 rise would print as a `fell` and pass.
+# Hand-edited, never `--update`.
 4.2.4	17
 4.2.6	9
 4.3.6	31
@@ -126,6 +134,6 @@
 8.1.8	290
 9.5	116
 9.7	66
-10.4	50
-10.7	206
+10.4	49
+10.7	207
 10.8	0
