@@ -2,7 +2,9 @@
 # ─── Module: 10-deployment ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-10-15): added the doc comment above commit_auto that was missing at v9
+#   (count-ratchet 9.5: a function definition with no comment directly above).
 #   v9 (2026-10-15): commit_auto builds its preview and commit with a temporary index,
 #   preserving the real index on abort and refusing to overwrite concurrent index edits.
 #   v8 (2026-10-15): commit_auto reports LLM failures and returns non-zero for bad responses.
@@ -350,6 +352,9 @@ function __commit_unstage() {
     fi
 }
 
+# commit_auto — commit the working tree and push, with the message inferred by the local
+# LLM.  Declared with `(` so it runs in a subshell: an early return cannot change the
+# caller's cwd or shell options.
 function commit_auto() (
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1
     then
