@@ -30,7 +30,7 @@ technical debt has been removed.
 | AUD-020 | `GraphMeta.clusterSuggestions` was an unconstrained list of arbitrary dictionaries, despite its sole producer emitting a fixed four-field cluster shape. Malformed cached/projected values could therefore pass graph validation. | Added strict `ClusterSuggestion` validation for the exact fields and member-count invariant; the projection now builds validated records and serializes them back to its existing plain-dict output. Tests cover valid output and reject coercions, extra keys, invalid members, and inconsistent size. Commit `cd9edc5e`. |
 | AUD-021 | `run_continuity` combined contract-row validation, supersession traversal, decision-record checks, lookup rendering, and the final report in a 243-line driver. | Extracted those phases into named helpers and reduced `run_continuity` to a 33-line orchestrator. Existing contract fixtures pass, and stdout/stderr plus exit status match the pre-refactor implementation for both bare and named continuity queries. Commit `e73ab9b4`. |
 | AUD-022 | `GraphMeta.communities` and `SourceLineage.metadata` were broad nested payloads even though their producers use a fixed community/digest shape and only three metadata keys. Unknown or malformed nested values could cross the otherwise strict graph boundary. | Replaced the unconstrained dictionaries with strict nested `TypedDict` shapes for community membership/digests, central nodes, boundary edges, and source metadata (`sources_overflow`, relationship `confidence`, and raw `source_memory_ids`). Projection lineage now validates copied metadata through `SourceLineage`. Existing adapter, cache, projection, reporting, and MCP tests pass; unknown keys, coerced types, and invalid directions are rejected. |
-| AUD-023 | The configured repository-wide mypy command treated `tools/llm_benchmark.py` as both `llm_benchmark` and `tools.llm_benchmark`, so it stopped before checking the full configured source set; once package discovery was fixed, three latent test annotations were rejected. | Made `tools` an explicit package and corrected the benchmark event and concept fixture types. The repository-wide configured mypy gate now checks the intended 95 source files. |
+| AUD-023 | The configured repository-wide mypy command treated `tools/llm_benchmark.py` as both `llm_benchmark` and `tools.llm_benchmark`, so it stopped before checking the full configured source set; once package discovery was fixed, three latent test annotations were rejected. | Made `tools` an explicit package and corrected the benchmark event and concept fixture types. The repository-wide configured mypy gate now checks the intended 95 source files. Commit `70d904f5`. |
 
 ## Confirmed debt / follow-up
 
@@ -57,7 +57,8 @@ technical debt has been removed.
 ## Verification
 
 - `.venv/bin/python -m pytest -q -p no:cacheprovider --ignore=tests/test_bats_bridge.py`:
-  749 passed, 15 subtests passed after strict model validation.
+  757 passed, 15 subtests passed after strict community metadata validation and the
+  explicit tools package change.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_models.py tests/test_kgraph.py`:
   236 passed after strict model validation.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
