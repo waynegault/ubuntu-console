@@ -239,6 +239,27 @@ def test_comparison_rejects_incompatible_or_failed_runs(tmp_path):
     assert "status" in result["mismatches"]
 
 
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_comparison_rejects_workload_rows_that_do_not_match_manifest(tmp_path, mutation):
+    baseline = _write_artifact(tmp_path / "baseline.json", median=100)
+    current = _write_artifact(tmp_path / "current.json", median=100)
+    payload = json.loads(current.read_text(encoding="utf-8"))
+    if mutation == "missing":
+        payload["workloads"] = []
+    else:
+        payload["workloads"].append({
+            "id": "unmanifested",
+            "summary": {"decode_tokens_per_second": {"median": 1}},
+        })
+    current.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        llm_benchmark.BenchmarkError,
+        match="workload rows do not match manifest workload definitions",
+    ):
+        llm_benchmark.compare_artifacts(baseline, current, 10)
+
+
 def test_compare_cli_reports_regression_with_nonzero_status(tmp_path, capsys):
     baseline = _write_artifact(tmp_path / "baseline.json", median=100)
     current = _write_artifact(tmp_path / "current.json", median=80)

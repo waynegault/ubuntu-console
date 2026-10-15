@@ -35,6 +35,7 @@ technical debt has been removed.
 | AUD-025 | The newly strict graph `TypedDict`s correctly mark digest and lineage metadata keys as optional, but some report/test consumers indexed those fields without narrowing, leaving Pyright errors hidden by an earlier package-discovery failure. | Kept the schema optional where old/raw graph records may omit digest fields; report code and tests now narrow optional values before use. Pyright reports zero errors; its five documented NAS missing-source warnings remain visible. |
 | AUD-026 | The active EU MyAir fetch adapter had no automated coverage for its GraphQL request/response contract or API-level error handling; the existing CPAP failure test covered only the separate unified stub. | Added fake-transport tests for the active adapter's request shape, normalized device/sleep-record output, and surfaced GraphQL errors. Tests inject only synthetic credentials and a local in-memory response; no network or NAS runtime is touched. README test counts now match the added cases.|
 | AUD-027 | The active EU MyAir adapter treated missing GraphQL response objects and malformed sleep-record entries as empty data, allowing an HTTP 200 response to look like a successful empty fetch. | Added explicit response-envelope and nested-type validation that raises `MyAirFetchError`, with fake-transport tests for missing wrapper and invalid records. The repo mirror is fixed; the NAS deployment is explicitly pending and recorded in `nas/butler/README.md`.|
+| AUD-028 | Benchmark artifact comparison validated each workload row independently but did not verify that the row IDs exactly matched the workload definitions in the manifest. An unmanifested row could therefore be ignored by comparison. | Artifact loading now rejects missing, extra, blank, or duplicate workload IDs and requires result rows to match the manifest definitions exactly. Fake artifact tests cover missing and extra result rows.|
 
 ## Confirmed debt / follow-up
 
@@ -121,9 +122,11 @@ technical debt has been removed.
 - `.venv/bin/python -m mypy`: passed across 102 configured source files after the checker split.
 - `.venv/bin/python -m pyright`: 0 errors and 5 known NAS missing-module-source warnings; no warnings were suppressed.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_nas_collector_failures.py`: 46 passed, including synthetic-transport coverage for the active EU MyAir GraphQL adapter and malformed-payload rejection.
-- `.venv/bin/python -m pytest -q -p no:cacheprovider --ignore=tests/test_bats_bridge.py`: 761 passed, 15 subtests passed after adding strict CPAP response validation. The full BATS bridge remains intentionally unclaimed.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_llm_benchmark.py`: 10 passed; artifact comparison rejects results inconsistent with their workload manifest.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider --ignore=tests/test_bats_bridge.py`: 763 passed, 15 subtests passed after strict CPAP payload validation and benchmark artifact consistency coverage. The full BATS bridge remains intentionally unclaimed.
 - `.venv/bin/python -m ruff check tests/test_nas_collector_failures.py` and `.venv/bin/python -m mypy`: passed. Pyright remains at 0 errors and 5 visible NAS dependency-source warnings.
 - `tools/docs-sync-check.sh`: passed after updating the README to 2,031 tests (1,324 BATS + 707 Python).
+- `tools/docs-sync-check.sh`: passed at the current 2,034 tests (1,326 BATS + 708 Python), including concurrent WSL-restart test additions and this benchmark test increase.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_models.py tests/test_kgraph.py tests/test_report.py`: 250 passed after narrowing optional TypedDict reads.
 - `bash -n` and ShellCheck (`-x -P bin`) passed for the seven modified shell scripts.
 - `.venv/bin/python -m ruff check scripts tools tests nas/butler` and

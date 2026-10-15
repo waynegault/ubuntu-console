@@ -634,15 +634,28 @@ def _load_artifact(path: Path) -> dict[str, Any]:
         raise BenchmarkError(f"{path}: unsupported or invalid benchmark artifact schema")
     if not isinstance(payload.get("manifest"), dict) or not isinstance(payload.get("workloads"), list):
         raise BenchmarkError(f"{path}: artifact must contain manifest and workloads")
+    manifest_workloads = payload["manifest"].get("workloads")
+    if not isinstance(manifest_workloads, list):
+        raise BenchmarkError(f"{path}: manifest must contain workload definitions")
+    manifest_ids: set[str] = set()
+    for item in manifest_workloads:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"].strip():
+            raise BenchmarkError(f"{path}: manifest workload definitions must have non-empty string ids")
+        if item["id"] in manifest_ids:
+            raise BenchmarkError(f"{path}: duplicate manifest workload id {item['id']!r}")
+        manifest_ids.add(item["id"])
+
     seen_ids: set[str] = set()
     for row in payload["workloads"]:
-        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
-            raise BenchmarkError(f"{path}: workload rows must have string ids")
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"].strip():
+            raise BenchmarkError(f"{path}: workload rows must have non-empty string ids")
         if row["id"] in seen_ids:
             raise BenchmarkError(f"{path}: duplicate workload id {row['id']!r}")
         if not isinstance(row.get("summary"), dict):
             raise BenchmarkError(f"{path}: workload {row['id']!r} has no summary object")
         seen_ids.add(row["id"])
+    if seen_ids != manifest_ids:
+        raise BenchmarkError(f"{path}: workload rows do not match manifest workload definitions")
     return payload
 
 
