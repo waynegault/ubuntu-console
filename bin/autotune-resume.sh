@@ -57,7 +57,12 @@
 #   exit 4 = the campaign PAUSED: a budget halt that will not resume by itself
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-10-15): a claim is "cut off" only when NO chunk is running.  Measured 23:37 on the
+#   boot that certified law-chat: --status printed "UNREPORTED previous run ... its chunk was
+#   cut off" on the SAME screen as "a chunk IS live", because a claim stays unretired for the
+#   whole duration of its run.  Both the recovery and the report now consult the process table,
+#   so a second run can no longer start beside a live one either.
 #   v3 (2026-10-15): an UNRETIRED claim now RESUMES the campaign.  A restart that killed the
 #   chunk (measured 14:34:58 BST, 8 rows left) used to leave no plan and no recovery, so the
 #   next boot read "nothing to resume" and the campaign died without saying so.  The claim is
@@ -65,7 +70,7 @@
 #   still unretired re-derives the remainder and continues; --status surfaces it.
 #   v2 (2026-10-15): the chunk runs as a CHILD so its exit code can be read; a budget halt
 #   that shrank the remainder re-derives the plan and arms the restart (four stops, cap 8).
-VERSION="3.0.0"
+VERSION="4.0.0"
 
 set -uo pipefail
 
@@ -169,11 +174,20 @@ write_plan() {
     return 0
 }
 
+# A chunk executing on THIS box, as a yes/no.  The claim says "a run was owed"; the process
+# table says "that run is still going" - and only the two TOGETHER mean "cut off".  A claim
+# stays unretired for the WHOLE duration of its chunk, so without this test --status reported
+# "UNREPORTED previous run ... its chunk was cut off" on the same screen as "a chunk IS live"
+# (measured 2026-10-15 23:37), and a second boot-time run could have started beside the first.
+chunk_is_live() {
+    pgrep -f "$CHUNK_PATTERN" >/dev/null 2>&1
+}
+
 # The newest claim that was never RETIRED, or nothing.  A claim is written just before a
 # chunk is handed the rows and retired once the entry point's exit code has been read, so a
-# claim still unretired means THIS boot never heard how its chunk ended - a restart in the
-# middle (or a crash), never a campaign that finished.  Glob order is name order and every
-# stamp is `date +%Y%m%d-%H%M%S`, so the last match is the newest.
+# claim still unretired AND no chunk running means THIS boot never heard how its chunk ended
+# - a restart in the middle (or a crash), never a campaign that finished.  Glob order is name
+# order and every stamp is `date +%Y%m%d-%H%M%S`, so the last match is the newest.
 latest_unretired_claim() {
     local _f _newest=""
     for _f in "$PLAN".claimed-*; do
@@ -330,6 +344,14 @@ run_plan() {
         # remainder or armed a restart.  Re-derive from the registry and carry on.  The
         # never-armed case (no plan AND no unretired claim) still does nothing, loudly.
         if _recover="$(latest_unretired_claim)"; then
+            if chunk_is_live; then
+                # The claim is unretired simply because its chunk is STILL RUNNING.  Starting
+                # a second run beside it would double the CUDA cycle spend and fight it for
+                # the card, so this is a stop, not a recovery.
+                printf 'a chunk is already running and holds the claim: %s\n' "$_recover"
+                printf '  its claim is retired when its exit code is read - nothing to recover\n'
+                return 0
+            fi
             printf 'no plan at %s, but the previous run was never reported on: %s\n' \
                 "$PLAN" "$_recover"
             printf '  a restart cut its chunk off, so this boot re-derives the remainder\n'
@@ -408,8 +430,13 @@ show_status() {
     printf 'model dir: %s\n' "$MODEL_DIR"
     local _claim=""
     if _claim="$(latest_unretired_claim)"; then
-        printf 'UNREPORTED previous run: %s\n' "$_claim"
-        printf '  its chunk was cut off before its exit code was read - the next boot re-derives and resumes\n'
+        if chunk_is_live; then
+            printf 'claim in flight: %s\n' "$_claim"
+            printf '  its chunk IS running - the claim is retired when its exit code is read\n'
+        else
+            printf 'UNREPORTED previous run: %s\n' "$_claim"
+            printf '  its chunk was cut off before its exit code was read - the next boot re-derives and resumes\n'
+        fi
     fi
     printf 'automatic restarts armed since --plan: %s (cap %s)\n' "$(restart_count)" "$ARM_MAX"
     printf 'CI jobs on this box: %s (a restart waits for these to drain)\n' "$(ci_workers)"

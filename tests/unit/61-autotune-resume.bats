@@ -371,4 +371,29 @@ EOS
     [[ "$output" == *"claimed-20261015-134149"* ]]
 }
 
+# Falsification: fails before v4, where the claim ALONE decided "cut off" - so --status named
+# a run as unreported on the same screen as "a chunk IS live", and a boot could have started a
+# second run beside the live one.
+@test "autotune-resume: a claim whose chunk is STILL RUNNING is not called cut off" {
+    printf 'uncertified.gguf\n' > "$TAC_RESUME_PLAN.claimed-20261015-134149"
+    # A live process whose cmdline matches the chunk probe, as the real wrapper's does.
+    ( exec -a autotune-rows-fake sleep 30 ) &
+    local _fake=$!
+    sleep 1
+
+    run "$SCRIPT" --status 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"claim in flight"* ]]
+    [[ "$output" != *"UNREPORTED previous run"* ]]
+
+    # A bare boot must NOT start a second run beside the live one.
+    run "$SCRIPT" 2>&1
+    [[ "$output" == *"already running"* ]]
+    [ ! -e "$ARGV_LOG" ]
+
+    if ! kill "$_fake" 2>/dev/null; then
+        printf 'note: the fake chunk had already exited\n' >&2
+    fi
+}
+
 # end of file
