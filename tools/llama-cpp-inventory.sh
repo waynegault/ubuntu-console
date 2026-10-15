@@ -1,17 +1,30 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-10-15): §18.3 shapes fixed at source — named exit codes, one stderr writer
+#   (`_say`), a comment above every function, and no non-comment line over 120 chars.
 
 set -euo pipefail
+
+# Named exit codes; the shell's own 0/1 stay literal (§18.3 9.7).
+readonly EXIT_USAGE=2
+readonly EXIT_TOOL_MISSING=127
 
 _SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 REPO_ROOT="$(cd "$(dirname "$_SCRIPT_PATH")/.." && pwd)"
 _LLAMA_UPDATE_TMPDIR=""
 
+# _say — the one stderr writer, so no ad-hoc `printf ... >&2` sits at a call site (§18.3 10.7).
+_say() {
+    printf '%s\n' "$*" >&2
+}
+
+# _cleanup_update_tmpdir — drop the --update scratch directory, if one was created.
 _cleanup_update_tmpdir() {
     [[ -z "$_LLAMA_UPDATE_TMPDIR" ]] || rm -rf -- "$_LLAMA_UPDATE_TMPDIR"
 }
 
+# usage — the help text, and the only place the accepted flags are documented.
 usage() {
     cat <<'EOF'
 Usage: llama-cpp-inventory.sh [--update]
@@ -24,10 +37,12 @@ repoints ~/.local/bin/llama-server, preserving the previous link as .bak.
 EOF
 }
 
+# _resolve — follow symlinks to the real binary path.
 _resolve() {
     readlink -f -- "$1"
 }
 
+# _classify — print one `type|path|build|cuda|details` row for a binary.
 _classify() {
     local binary="$1" resolved dir version="" build_tag="" cmake_cache=""
     local has_cuda=no type=unknown notes
@@ -77,6 +92,7 @@ _classify() {
     printf '%s|%s|%s|%s|%s\n' "$type" "$binary" "$build_tag" "$has_cuda" "$notes"
 }
 
+# _inventory — list candidate binaries and classify each one once.
 _inventory() {
     local path resolved include_system="${1:-yes}"
     local -a candidates=()
@@ -108,17 +124,18 @@ _inventory() {
     done
 }
 
+# _update — fetch the latest Ubuntu x64 release and repoint ~/.local/bin/llama-server.
 _update() {
     local python_bin release_json latest_tag current_tag="" link dest extract_dir archive server
     local link_tmp
     : "${HOME:?HOME must be set to update llama.cpp}"
     command -v curl >/dev/null 2>&1 || {
-        printf '%s\n' "llama-cpp-inventory: curl is required for --update" >&2
-        return 127
+        _say "llama-cpp-inventory: curl is required for --update"
+        return "$EXIT_TOOL_MISSING"
     }
     command -v unzip >/dev/null 2>&1 || {
-        printf '%s\n' "llama-cpp-inventory: unzip is required for --update" >&2
-        return 127
+        _say "llama-cpp-inventory: unzip is required for --update"
+        return "$EXIT_TOOL_MISSING"
     }
 
     # shellcheck source=tools/python-runtime.sh
@@ -138,12 +155,15 @@ print(match.group(1))
     link="$HOME/.local/bin/llama-server"
     if [[ -e "$link" || -L "$link" ]]; then
         local current_path=""
-        current_path="$(_resolve "$link" 2>/dev/null || true)" # swallow-ok: a broken or unresolved current link must not prevent the explicit updater from replacing it
+        # A broken or unresolved current link must not prevent the explicit updater from
+        # replacing it.
+        current_path="$(_resolve "$link" 2>/dev/null || true)" # swallow-ok: unresolvable link
         if [[ "$current_path" =~ /b([0-9]+)/ ]]; then
             current_tag="${BASH_REMATCH[1]}"
         elif [[ -x "$link" ]]; then
             local current_version=""
-            current_version="$("$link" --version 2>/dev/null || true)" # swallow-ok: an unreadable legacy binary has no current version to compare, so the explicit update continues
+            # The legacy binary may be unreadable; then there is no current version to compare.
+            current_version="$("$link" --version 2>/dev/null || true)" # swallow-ok: unreadable binary
             if [[ "$current_version" =~ \(build[[:space:]]+([0-9]+)\) ]]; then
                 current_tag="${BASH_REMATCH[1]}"
             fi
@@ -159,8 +179,7 @@ print(match.group(1))
     if [[ -d "$dest" ]]; then
         server="$(find "$dest" -type f -name llama-server -print -quit)"
         [[ -n "$server" ]] || {
-            printf 'llama-cpp-inventory: existing release directory has no llama-server: %s\n' \
-                "$dest" >&2
+            _say "llama-cpp-inventory: existing release directory has no llama-server: $dest"
             return 1
         }
     else
@@ -170,13 +189,14 @@ print(match.group(1))
         archive="$_LLAMA_UPDATE_TMPDIR/release.zip"
         extract_dir="$_LLAMA_UPDATE_TMPDIR/extracted"
         mkdir -p "$extract_dir"
+        local zip_name="llama-b${latest_tag}-bin-ubuntu-x64.zip"
         curl --fail --location --silent --show-error --max-time 120 \
-            "https://github.com/ggml-org/llama.cpp/releases/download/b${latest_tag}/llama-b${latest_tag}-bin-ubuntu-x64.zip" \
+            "https://github.com/ggml-org/llama.cpp/releases/download/b${latest_tag}/${zip_name}" \
             --output "$archive"
         unzip -q "$archive" -d "$extract_dir"
         server="$(find "$extract_dir" -type f -name llama-server -print -quit)"
         [[ -n "$server" ]] || {
-            printf '%s\n' "llama-cpp-inventory: release archive contains no llama-server" >&2
+            _say "llama-cpp-inventory: release archive contains no llama-server"
             return 1
         }
         mkdir -p "$(dirname "$dest")"
@@ -196,13 +216,14 @@ print(match.group(1))
     printf 'Symlink: %s -> %s\n' "$link" "$server"
 }
 
+# main — dispatch the three modes, and refuse anything else with the usage text.
 main() {
     case "${1:-}" in
         "") _inventory ;;
-        --home-only) [[ $# -eq 1 ]] || { usage >&2; return 2; }; _inventory no ;;
-        --update) [[ $# -eq 1 ]] || { usage >&2; return 2; }; _update ;;
-        -h|--help) [[ $# -eq 1 ]] || { usage >&2; return 2; }; usage ;;
-        *) usage >&2; return 2 ;;
+        --home-only) [[ $# -eq 1 ]] || { usage >&2; return "$EXIT_USAGE"; }; _inventory no ;;
+        --update) [[ $# -eq 1 ]] || { usage >&2; return "$EXIT_USAGE"; }; _update ;;
+        -h|--help) [[ $# -eq 1 ]] || { usage >&2; return "$EXIT_USAGE"; }; usage ;;
+        *) usage >&2; return "$EXIT_USAGE" ;;
     esac
 }
 
