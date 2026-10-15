@@ -144,7 +144,10 @@ def apply_trim(db: Path, state: dict, keep: list, backup_dir: Path) -> dict:
     payload = projected(state, keep)
     conn = sqlite3.connect(db, timeout=20)
     try:
-        conn.execute("UPDATE ItemTable SET value = ? WHERE key = ?", (payload, KEY))
+        # Bind TEXT, not bytes: VS Code writes this column as TEXT, and a BLOB is read back as
+        # a non-string, so the extension host logs "[extHostStorage] unexpected error parsing
+        # storage contents … not valid JSON" on its next start (measured 2026-10-15).
+        conn.execute("UPDATE ItemTable SET value = ? WHERE key = ?", (payload.decode(), KEY))
         conn.commit()
     finally:
         conn.close()

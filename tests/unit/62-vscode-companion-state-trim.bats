@@ -119,6 +119,23 @@ print(len(raw), hashlib.sha256(raw).hexdigest())
 PY
 }
 
+# _stored_type DB — the SQLite storage class of the value as the DB holds it.  VS Code
+# writes this column as TEXT; a BLOB row (what binding Python bytes produces) makes the
+# extension host log "[extHostStorage] unexpected error parsing storage contents" on its
+# next start, with the value read back as a non-string.
+_stored_type() {
+    "$PY" - "$1" <<'PY'
+import sqlite3, sys
+conn = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+try:
+    row = conn.execute("SELECT typeof(value) FROM ItemTable WHERE key = ?",
+                       ("qwenlm.qwen-code-vscode-ide-companion",)).fetchone()
+finally:
+    conn.close()
+print(row[0] if row else "none")
+PY
+}
+
 # _trim [--apply ...] — run the tool with the standard seams, stderr merged so a
 # traceback or a failure line cannot hide behind the verdict.
 _trim() {
@@ -169,6 +186,10 @@ PY
     [ "$(_conv_count "$DB")" = "1" ]
     after_bytes="$(_stored "$DB")"
     [ "${after_bytes%% *}" -lt "$before_bytes" ]
+
+    # ...and the column is TEXT, as VS Code writes it.  The fixture inserts BYTES, so this
+    # asserts the writer's type and nothing else.
+    [ "$(_stored_type "$DB")" = "text" ]
 
     # And a backup was taken, non-empty, before the write.
     compgen -G "$BACKUPS/companion-conversations-*.json.gz" > /dev/null
