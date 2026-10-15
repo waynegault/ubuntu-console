@@ -412,4 +412,40 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
     grep -q '/q4_0/q4_0' "$LLM_REGISTRY"
 }
 
+# The sampler columns (38 = repeat_penalty, 39 = repeat_last_n) are the fleet's decode
+# policy.  An empty pair is not a policy: the serve builder emits --repeat-penalty and
+# --repeat-last-n only when the column is non-empty, so a blank pair silently serves with
+# llama.cpp's own default (no repetition penalty), and the autotune builds its argv from
+# these same columns and re-saves what it read, so nothing fills them in afterwards.
+@test "integration: a newly scanned model is born with the fleet sampler, and a rescan keeps a row's own" {
+    local sb="$TAC_TEST_TMPDIR/scan-sampler"
+    mkdir -p "$sb/models"
+    "$TAC_PYTHON" "$REPO_ROOT/tests/helpers/make-gguf-fixture.py" \
+        junk-name "$sb/models/Newly-Added.Q4_K_M.gguf" >/dev/null
+    # The scan skips files under 300 MB; only the GGUF header is read, so the tail costs
+    # no real disk.
+    truncate -s 400M "$sb/models/Newly-Added.Q4_K_M.gguf"
+
+    export LLAMA_MODEL_DIR="$sb/models"
+    export LLM_REGISTRY="$sb/models.conf"
+    # The real header, so columns 38/39 exist and survive the post-scan pad.
+    printf '%s\n' "$LLM_REGISTRY_HEADER" > "$LLM_REGISTRY"
+    __LLAMA_DRIVE_MOUNTED=1
+
+    run __model_scan
+    [[ "$status" -eq 0 ]]
+    # A model with NO previous row takes the fleet default (1.1/256).  Catches the
+    # defect this case exists for: a new row written with both columns blank.
+    [ "$(awk -F'|' -v f='Newly-Added.Q4_K_M.gguf' '$3==f {print $38"|"$39}' "$LLM_REGISTRY")" = "1.1|256" ]
+
+    # Control: the operator (or the autotune) sets a different sampler, then a rescan must
+    # keep it.  Catches a seeding that overwrites an existing row's own policy.
+    sed -i 's/|1\.1|256|/|1.3|64|/' "$LLM_REGISTRY"
+    run __model_scan
+    [[ "$status" -eq 0 ]]
+    [ "$(awk -F'|' -v f='Newly-Added.Q4_K_M.gguf' '$3==f {print $38"|"$39}' "$LLM_REGISTRY")" = "1.3|64" ]
+    # ... and the rescan did not duplicate the row.
+    [ "$(awk -F'|' -v f='Newly-Added.Q4_K_M.gguf' '$3==f' "$LLM_REGISTRY" | wc -l)" -eq 1 ]
+}
+
 # end of file

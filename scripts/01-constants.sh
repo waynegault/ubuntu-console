@@ -2,7 +2,10 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 30
+# Module Version: 31
+#   v31 (2026-10-15): LLAMA_REPEAT_PENALTY / LLAMA_REPEAT_LAST_N declare the anti-repetition
+#   sampler a NEW registry row is seeded with (`model scan`, columns 38/39); as with
+#   LLAMA_BATCH_SIZE and its neighbours, the fallback value lives at the use site.
 #   v30 (2026-10-15): TAC_CACHE_DIR accepts an explicit override while retaining /dev/shm
 #   as its default. This lets isolated tests and callers direct source-time capability
 #   probes into a private cache instead of writing to the host-wide tmpfs.
@@ -351,6 +354,13 @@ export LLAMA_CACHE_TYPE_K="${LLAMA_CACHE_TYPE_K:-q8_0}"
 export LLAMA_BATCH_SIZE="${LLAMA_BATCH_SIZE:-}"
 export LLAMA_UBATCH_SIZE="${LLAMA_UBATCH_SIZE:-}"
 export LLAMA_PARALLEL_SLOTS="${LLAMA_PARALLEL_SLOTS:-}"
+# Anti-repetition sampler a model row is BORN with.  `model scan` seeds the registry's
+# repeat_penalty/repeat_last_n columns (38, 39) from these, exactly as it seeds
+# batch/ubatch/parallel from the three knobs above; the fallback value lives at that use
+# site (scripts/11e-llm-model.sh, default 1.1 / 256).  After creation the row's own
+# columns are authoritative — the autotune reads THEM to build its argv.
+export LLAMA_REPEAT_PENALTY="${LLAMA_REPEAT_PENALTY:-}"
+export LLAMA_REPEAT_LAST_N="${LLAMA_REPEAT_LAST_N:-}"
 # Native llama-server --fit-target margin (MiB). Lower values recover VRAM.
 export LLAMA_FIT_TARGET_MB="${LLAMA_FIT_TARGET_MB:-1024}"
 # Native llama-server --cache-ram (MiB) — the HOST-RAM tier of the prompt cache

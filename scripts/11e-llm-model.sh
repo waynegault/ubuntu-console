@@ -1,7 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 62
+# Module Version: 63
+#   v63 (2026-10-15): `model scan` SEEDS the sampler columns (38, 39) for a model it has no
+#   predecessor for, from LLAMA_REPEAT_PENALTY/LLAMA_REPEAT_LAST_N (default 1.1 / 256) —
+#   the same shape as batch/ubatch/parallel/fit.  The two columns were only CARRIED before,
+#   so a genuinely new model was written with both blank, and blank is not neutral: the
+#   serve builder omits --repeat-penalty/--repeat-last-n and llama.cpp's own default (no
+#   repetition penalty) applies silently, while the autotune builds its argv from these
+#   same columns and re-saves what it read, so nothing downstream ever filled them in.
+#   Measured 2026-10-15: Edge4-SQL, gemma-4-E2B, Qwen2.5-1.5B-MoE, Qwen2.5-7b-Q2_K.
 #   v62 (2026-10-11): the CUDA "card mark" is OWNER-STAMPED and read by liveness.
 #   `model use` used to bare-`touch` the marker and `model stop` removed it on a
 #   mere `[[ -f ]]` test, so a `model use` whose shell was SIGKILLed wedged the CUDA
@@ -237,7 +245,17 @@ function __model_scan() {
         local prev_active="no"
         local prev_spec_type="" prev_spec_draft_model="" prev_spec_n_max="" prev_spec_ngl="" prev_spec_device="" prev_spec_accept_len=""
         local prev_workload="" prev_ttft="" prev_bench_ctx="" prev_bench_max_chunks="" prev_bench_avg_prompt_tokens=""
-        local prev_repeat_penalty="" prev_repeat_last_n=""
+        # BENCH-SAMPLER-001: the sampler columns (38, 39) are seeded from the fleet default
+        # exactly like batch/ubatch/parallel/fit above — the `read` below is skipped when a
+        # model has no previous row, so these values are what a NEW row is born with.  Left
+        # empty, an empty column is not a policy: the serve builder then omits
+        # --repeat-penalty/--repeat-last-n and llama.cpp's own default (no repetition
+        # penalty) applies silently, and the autotune builds its argv from these same
+        # columns and re-saves what it read, so nothing downstream ever fills them in.
+        # Measured 2026-10-15: Edge4-SQL, gemma-4-E2B, Qwen2.5-1.5B-MoE and Qwen2.5-7b-Q2_K
+        # had gone through exactly that loop.  An EXISTING row still wins, including a
+        # deliberately blank one — this seeds a new row, it does not repair an old one.
+        local prev_repeat_penalty="${LLAMA_REPEAT_PENALTY:-1.1}" prev_repeat_last_n="${LLAMA_REPEAT_LAST_N:-256}"
         # prefill/p2_* are ALSO read from the previous row — they must be declared and
         # initialised here like the rest.  They used to be assigned only by the `read`
         # below, which is skipped when the model has no previous row, so a newly added
