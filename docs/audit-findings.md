@@ -18,6 +18,7 @@ technical debt has been removed.
 | AUD-008 | Five repository shell entrypoints launched inline Python through bare `python3`, bypassing the repository venv and risking missing or mismatched dependencies; interpreter selection was duplicated in the Windows environment importer. | Added `tools/python-runtime.sh` as the shared venv-first resolver (then validated `TAC_PYTHON`, then PATH `python3`) and routed all five callers plus the importer through it. Regression cases cover both venv executable names, explicit override, invalid override, PATH fallback, and caller wiring. The deployment script's system-Python venv bootstrap remains an intentional exception. |
 | AUD-009 | `tests/unit/04-llama-cpp-inventory.bats` mixed inventory assertions with live release downloads and an install that could replace `~/.local/bin/llama-server`; warning-only checks could appear successful without asserting a result. | Replaced it with an executable read-only inventory and explicit `--update` command. New BATS tests sandbox `HOME`, use a local ZIP fixture and stubbed `curl`, assert install/backup behavior, no-op idempotency, and API/archive failure cleanup and preservation. Registered the suite in CI and the pytest bridge; removed obsolete exclusions and documented the opt-in update. |
 | AUD-010 | Several BATS setups sourced `env.sh` before sandboxing `HOME`, or ignored source errors with `|| true`. Source-time probes in `09-openclaw.sh` and `09b-gog.sh` write capability results through `__tac_probe_ok`; `01-constants.sh` forced that cache into shared `/dev/shm`, bypassing test-provided temp paths. | Set test `HOME` and cache directories before loading modules, made source failures fatal (including explicit sentinel checks in nested E2E shells), and let `TAC_CACHE_DIR` honor an explicit path while retaining `/dev/shm` as the default. Added regression assertions that both startup-probe cache files land in the sandbox. |
+| AUD-011 | The main `tests/tactical-console.bats` profile loader suppressed all source output and used `|| true`, then marked the profile as loaded. A failed/partial source could therefore leave many tests operating on incomplete functions; one cooldown case only searched output for `1`, which could match command-not-found status `127`. | Propagate profile-source failure with stderr visible, set the loaded flag only after success, and make subprocess profile/env loads exit with a sentinel on source failure. Focused regressions cover cooldown, model recommendation, restore, and env bootstrap/module loading. |
 
 ## Confirmed debt / follow-up
 
@@ -65,6 +66,11 @@ technical debt has been removed.
   rerunning `-k "e2e_bench_autotune"` passed all 29 cases.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
   "11_module_versions"`: 7 passed after incrementing `01-constants.sh` to module version 30.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
+  "tactical_console and (cooldown_check_cooldown_returns_1_active or
+  cooldown_check_cooldown_returns_remaining_time or model_recommend_ranks_on_disk_models
+  or restore_recreates_missing_parent_directories or env_sh_library_mode_bootstraps or
+  env_sh_loads_09b_gog)"`: 6 passed after making profile loading fail visibly.
 - `bash -n` and ShellCheck (`-x -P bin`) passed for the seven modified shell scripts.
 - `.venv/bin/python -m ruff check scripts tools tests nas/butler` and
   `.venv/bin/python -m mypy`: passed after strict model validation.

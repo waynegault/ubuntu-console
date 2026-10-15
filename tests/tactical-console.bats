@@ -181,7 +181,10 @@ _tac_ensure_profile() {
     export TAC_SKIP_PWSH=1
     # shellcheck disable=SC1090  # the target is a sed-patched copy generated at run
     #                             # time under $TAC_TEST_TMPDIR — no static file to follow.
-    source "$TAC_TEST_TMPDIR/profile_patched.bash" &>/dev/null || true
+    if ! source "$TAC_TEST_TMPDIR/profile_patched.bash" >/dev/null; then
+        printf '%s\n' "[tactical-console.bats] failed to source the patched profile" >&2
+        return 1
+    fi
     _TAC_PROFILE_SOURCED=1
 }
 
@@ -1346,7 +1349,7 @@ EOF
     CooldownDB="$tmp_db"
     local remaining=""
     run bash -c "
-        source '$TAC_TEST_TMPDIR/profile_patched.bash' &>/dev/null
+        source '$TAC_TEST_TMPDIR/profile_patched.bash' >/dev/null || exit 125
         CooldownDB='$tmp_db'
         __check_cooldown 'test_key' '$now' _cd_sink
         echo \$?
@@ -1395,7 +1398,7 @@ EOF
     CooldownDB="$tmp_db"
     local remaining=""
     run bash -c "
-        source '$TAC_TEST_TMPDIR/profile_patched.bash' &>/dev/null
+        source '$TAC_TEST_TMPDIR/profile_patched.bash' >/dev/null || exit 125
         CooldownDB='$tmp_db'
         r=''
         __check_cooldown 'some_task' '$now' r
@@ -1859,7 +1862,7 @@ EOF
 
 @test "llm-manager: model recommend ranks on-disk models from registry" {
     run bash -lc "
-        source '$REPO_ROOT/env.sh' >/dev/null 2>&1
+        source '$REPO_ROOT/env.sh' >/dev/null || exit 125
         llm_root='$TAC_TEST_TMPDIR/model-recommend'
         mkdir -p \"\$llm_root/models\" \"\$llm_root/.llm\"
         printf '%s\n' '#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram' \
@@ -2608,7 +2611,7 @@ EOF
     (cd "$snapshot_src" && zip -qr "$backup_zip" .)
 
     run env HOME="$home_dir" USER="${USER:-wayne}" bash -lc "
-        source '$REPO_ROOT/env.sh' >/dev/null 2>&1
+        source '$REPO_ROOT/env.sh' >/dev/null || exit 125
         export OC_ROOT='$restore_root/.openclaw'
         export OC_WORKSPACE="\$OC_ROOT/workspace"
         export OC_AGENTS="\$OC_ROOT/agents"
@@ -2631,7 +2634,7 @@ EOF
 @test "env.sh: library mode bootstraps OpenClaw state for cooldown writes" {
     local home_dir="$TAC_TEST_TMPDIR/env-home-bootstrap"
     mkdir -p "$home_dir"
-    local cmd="source '$REPO_ROOT/env.sh' >/dev/null 2>&1"
+    local cmd="source '$REPO_ROOT/env.sh' >/dev/null || exit 125"
     cmd+="; __set_cooldown smoke 123"
     cmd+="; test -f '$home_dir/.openclaw/maintenance_cooldowns.txt'"
 
@@ -2641,7 +2644,7 @@ EOF
 
 @test "env.sh: loads 09b-gog module (gog functions available)" {
     run bash -c "
-        source '$REPO_ROOT/env.sh' >/dev/null 2>&1
+        source '$REPO_ROOT/env.sh' >/dev/null || exit 125
         declare -f gog-status >/dev/null 2>&1
     "
     [ "$status" -eq 0 ]
