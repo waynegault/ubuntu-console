@@ -124,6 +124,8 @@ _stub_commit_auto_dependencies() {
 @test "commit_auto: local inference transport failure is non-zero and leaves files uncommitted" {
     _stub_commit_auto_dependencies
     export COMMIT_AUTO_CURL_MODE=transport-failure
+    printf 'pre-staged change\n' > "$WORK/pre-staged.txt"
+    git add pre-staged.txt
 
     run commit_auto
 
@@ -132,14 +134,15 @@ _stub_commit_auto_dependencies() {
     [[ "$output" == *"[REQUEST FAILED]"* ]]
     [ -f "$WORK/note.txt" ]
     [ "$(git log -1 --format=%s)" = "baseline" ]
-    run git diff --cached --quiet
-    [ "$status" -eq 0 ]
+    [ "$(git diff --cached --name-only)" = "pre-staged.txt" ]
     [ -z "$(git --git-dir="$ORIGIN" for-each-ref --format='%(refname)' refs/heads)" ]
 }
 
 @test "commit_auto: malformed model response is non-zero and reports parse failure" {
     _stub_commit_auto_dependencies
     export COMMIT_AUTO_CURL_MODE=malformed-response
+    printf 'pre-staged change\n' > "$WORK/pre-staged.txt"
+    git add pre-staged.txt
 
     run commit_auto
 
@@ -148,8 +151,21 @@ _stub_commit_auto_dependencies() {
     [[ "$output" == *"[FAILED TO GENERATE MESSAGE]"* ]]
     [ -f "$WORK/note.txt" ]
     [ "$(git log -1 --format=%s)" = "baseline" ]
-    run git diff --cached --quiet
+    [ "$(git diff --cached --name-only)" = "pre-staged.txt" ]
+}
+
+@test "commit_auto: cancellation preserves the pre-existing index" {
+    _stub_commit_auto_dependencies
+    printf 'pre-staged change\n' > "$WORK/pre-staged.txt"
+    git add pre-staged.txt
+
+    run commit_auto <<< "n"
+
     [ "$status" -eq 0 ]
+    [[ "$output" == *"[CANCELLED]"* ]]
+    [ "$(git diff --cached --name-only)" = "pre-staged.txt" ]
+    [ -f "$WORK/note.txt" ]
+    [ "$(git log -1 --format=%s)" = "baseline" ]
 }
 
 @test "commit_auto: generated message is committed and pushed only after acceptance" {
@@ -162,6 +178,7 @@ _stub_commit_auto_dependencies() {
     [[ "$output" == *"generated test message"* ]]
     [[ "$output" == *"[SUCCESS]"* ]]
     [ "$(git log -1 --format=%s)" = "generated test message" ]
+    [ -z "$(git status --porcelain)" ]
     run bash -c '[[ "$(git rev-parse HEAD)" == "$(git rev-parse "@{u}")" ]]'
     [ "$status" -eq 0 ]
 }

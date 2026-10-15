@@ -2,10 +2,10 @@
 # ─── Module: 10-deployment ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 8
-#   v8 (2026-10-15): commit_auto returns failure for transport/invalid LLM responses,
-#   reports curl/jq diagnostics, and checks index cleanup instead of treating generation
-#   failures as successful cancellation.
+# Module Version: 9
+#   v9 (2026-10-15): commit_auto builds its preview and commit with a temporary index,
+#   preserving the real index on abort and refusing to overwrite concurrent index edits.
+#   v8 (2026-10-15): commit_auto reports LLM failures and returns non-zero for bad responses.
 #   v7 (2026-10-02): commit_deploy returns the PUSH's status (card cf05ce24) — a
 #   failed push printed "[REMOTE PUSH FAILED]" and then returned the footer's 0, so
 #   a caller checking the exit code read a failed sync as success.
@@ -350,7 +350,7 @@ function __commit_unstage() {
     fi
 }
 
-function commit_auto() {
+function commit_auto() (
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1
     then
         __tac_info "Repository Check" "[NOT A GIT REPO]" "$C_Error"
@@ -392,21 +392,58 @@ function commit_auto() {
     fi
 
     # UX flow:
-    #   1. Stage all changes (git add .)
+    #   1. Stage all changes in an isolated index (git add .)
     #   2. Send diff to local LLM for commit message generation
     #   3. Show proposed message to user
     #   4. Accept (Y/Enter), reject (n), or edit (e) interactively
-    #   5. On accept: commit and push. On reject: git reset HEAD.
+    #   5. On accept: commit and push. On reject: leave the real index untouched.
 
-    git add .
+    local index_dir
+    index_dir=$(mktemp -d "${TMPDIR:-/tmp}/commit-auto.XXXXXX") || {
+        __tac_info "Staging" "[FAILED TO CREATE TEMPORARY INDEX]" "$C_Error"
+        return 1
+    }
+    local index_file="$index_dir/index"
+    trap 'rm -rf -- "$index_dir"' EXIT
+    local real_index="${GIT_INDEX_FILE:-$(git rev-parse --absolute-git-dir)/index}"
+    local index_existed=false
+    if [[ -f "$real_index" ]]
+    then
+        if ! cp -- "$real_index" "$index_dir/original-index" ||
+            ! cp -- "$real_index" "$index_file"
+        then
+            __tac_info "Staging" "[FAILED TO COPY INDEX]" "$C_Error"
+            return 1
+        fi
+        index_existed=true
+    else
+        if ! GIT_INDEX_FILE="$index_file" git read-tree HEAD
+        then
+            __tac_info "Staging" "[FAILED TO INITIALIZE TEMPORARY INDEX]" "$C_Error"
+            return 1
+        fi
+    fi
+    if ! GIT_INDEX_FILE="$index_file" git add .
+    then
+        __tac_info "Staging" "[FAILED TO STAGE CHANGES]" "$C_Error"
+        return 1
+    fi
     # Capture both stat (file-level summary) and body (line-level diff)
     # Note (I4): Two separate `git diff --cached` calls are intentional — --stat
     # produces a columnar summary while the raw diff gives line-level context.
-    # Both read the same index snapshot so there is no consistency issue.
+    # Both read the same temporary index snapshot so there is no consistency issue.
     local diff_stat
-    diff_stat=$(git diff --cached --stat 2>/dev/null)
+    if ! diff_stat=$(GIT_INDEX_FILE="$index_file" git diff --cached --stat)
+    then
+        __tac_info "Staging" "[FAILED TO READ TEMPORARY INDEX]" "$C_Error"
+        return 1
+    fi
     local diff_body_full
-    diff_body_full=$(git diff --cached 2>/dev/null)
+    if ! diff_body_full=$(GIT_INDEX_FILE="$index_file" git diff --cached)
+    then
+        __tac_info "Staging" "[FAILED TO READ TEMPORARY INDEX]" "$C_Error"
+        return 1
+    fi
     local diff_body
     diff_body=$(printf '%s' "$diff_body_full" | head -"$_COMMIT_DIFF_MAX_LINES")
     local diff="${diff_stat}
@@ -421,10 +458,8 @@ ${diff_body}"
         return 1
     fi
 
-    # Guard: refuse to send diffs containing secret-like patterns to the LLM.
-    # Even though LOCAL_LLM_URL is localhost, a misconfigured proxy could route
-    # the request externally. Fail safe by scanning the diff body.
-    # (Duplicate check - kept for defense-in-depth before LLM submission)
+    # Refuse to send secret-like diffs to the LLM; a misconfigured local proxy
+    # could route the request externally despite the localhost URL check.
 
     __tac_info "Generating commit message..." "[LLM]" "$C_Dim"
 
@@ -447,7 +482,6 @@ ${diff_body}"
         -d "$payload")
     then
         __tac_info "LLM" "[REQUEST FAILED]" "$C_Error"
-        __commit_unstage || return 1
         return 1
     fi
     local msg
@@ -461,7 +495,6 @@ ${diff_body}"
     if [[ -z "$msg" || "$msg" == "null" ]]
     then
         __tac_info "LLM" "[FAILED TO GENERATE MESSAGE]" "$C_Error"
-        __commit_unstage || return 1
         return 1
     fi
 
@@ -473,7 +506,6 @@ ${diff_body}"
             y|yes|"") break ;;
             n|no)
                 __tac_info "Commit" "[CANCELLED]" "$C_Dim"
-                __commit_unstage || return 1
                 return 0
                 ;;
             e|edit)
@@ -481,7 +513,6 @@ ${diff_body}"
                 if [[ -z "$msg" ]]
                 then
                     __tac_info "Commit" "[CANCELLED]" "$C_Dim"
-                    __commit_unstage || return 1
                     return 0
                 fi
                 break
@@ -490,9 +521,29 @@ ${diff_body}"
         esac
     done
 
-    if ! git commit -m "$msg" --quiet
+    if ! GIT_INDEX_FILE="$index_file" git commit -m "$msg" --quiet
     then
         __tac_info "Commit" "[FAILED - not pushed]" "$C_Error"
+        return 1
+    fi
+    if [[ "$index_existed" == true ]]
+    then
+        if ! cmp -s -- "$index_dir/original-index" "$real_index"
+        then
+            __tac_info "Committed" "[$msg]" "$C_Success"
+            __tac_info "Staging" "[INDEX CHANGED DURING COMMIT; LEFT UNTOUCHED]" "$C_Error"
+            return 1
+        fi
+    elif [[ -e "$real_index" ]]
+    then
+        __tac_info "Committed" "[$msg]" "$C_Success"
+        __tac_info "Staging" "[INDEX CREATED DURING COMMIT; LEFT UNTOUCHED]" "$C_Error"
+        return 1
+    fi
+    if ! git reset --mixed --quiet HEAD
+    then
+        __tac_info "Committed" "[$msg]" "$C_Success"
+        __tac_info "Staging" "[FAILED TO SYNCHRONIZE INDEX]" "$C_Error"
         return 1
     fi
     __tac_info "Committed" "[$msg]" "$C_Success"
@@ -505,7 +556,7 @@ ${diff_body}"
         __tac_info "Repository Sync" "[REMOTE PUSH FAILED]" "$C_Error"
         return 1  # Changes committed but not synced - caller should decide retry strategy
     fi
-}
+)
 
 
 

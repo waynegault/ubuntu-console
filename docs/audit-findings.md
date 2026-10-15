@@ -19,7 +19,7 @@ technical debt has been removed.
 | AUD-009 | `tests/unit/04-llama-cpp-inventory.bats` mixed inventory assertions with live release downloads and an install that could replace `~/.local/bin/llama-server`; warning-only checks could appear successful without asserting a result. | Replaced it with an executable read-only inventory and explicit `--update` command. New BATS tests sandbox `HOME`, use a local ZIP fixture and stubbed `curl`, assert install/backup behavior, no-op idempotency, and API/archive failure cleanup and preservation. Registered the suite in CI and the pytest bridge; removed obsolete exclusions and documented the opt-in update. |
 | AUD-010 | Several BATS setups sourced `env.sh` before sandboxing `HOME`, or ignored source errors with `|| true`. Source-time probes in `09-openclaw.sh` and `09b-gog.sh` write capability results through `__tac_probe_ok`; `01-constants.sh` forced that cache into shared `/dev/shm`, bypassing test-provided temp paths. | Set test `HOME` and cache directories before loading modules, made source failures fatal (including explicit sentinel checks in nested E2E shells), and let `TAC_CACHE_DIR` honor an explicit path while retaining `/dev/shm` as the default. Added regression assertions that both startup-probe cache files land in the sandbox. |
 | AUD-011 | The main `tests/tactical-console.bats` profile loader suppressed all source output and used `|| true`, then marked the profile as loaded. A failed/partial source could therefore leave many tests operating on incomplete functions; one cooldown case only searched output for `1`, which could match command-not-found status `127`. | Propagate profile-source failure with stderr visible, set the loaded flag only after success, and make subprocess profile/env loads exit with a sentinel on source failure. Focused regressions cover cooldown, model recommendation, restore, and env bootstrap/module loading. |
-| AUD-012 | `commit_auto` suppressed curl and jq errors, then returned success when no commit message was produced. Callers could read an inference transport/response failure as a successful cancellation. | Use curl's fail/show-error flags, keep jq diagnostics visible, return non-zero for transport or malformed/empty responses, and check staging cleanup. Add hermetic tests for transport failure, malformed response, and a confirmed local-bare commit/push. |
+| AUD-012 | `commit_auto` suppressed curl and jq errors, then returned success when no commit message was produced. It also staged the real index before confirmation and reset it on cancellation/failure, discarding pre-existing staged state. | Use curl's fail/show-error flags, keep jq diagnostics visible, and return non-zero for transport or malformed/empty responses. Build the proposed diff and commit with a temporary index seeded from the current index; leave the real index untouched until acceptance, and refuse to overwrite it if it changed during confirmation. Synchronize it to the new `HEAD` after commit. Hermetic tests cover preserved staged state on failures/cancellation and a confirmed local-bare commit/push. |
 
 ## Confirmed debt / follow-up
 
@@ -31,7 +31,6 @@ technical debt has been removed.
 | P2 | CPAP fetch is deliberately unimplemented. | `nas/butler/scripts/nas-cpap-unified.py::_fetch_cpap_data` raises `NotImplementedError` rather than returning fake success; its consumer is not enabled as a cron collector. Implementing it requires the real API contract, not a placeholder. |
 | P2 | Some nested graph payloads remain intentionally broad. | `metadata`, `typed_summary`, `communities`, and cluster suggestions contain `Any`/generic dictionaries, so strict scalar validation cannot define their internal schemas. `value_score`, `source_strength`, and line-range annotations explicitly allow strings because persisted registry rows can carry them. Constraining these further needs persisted-data and producer-shape evidence. |
 | P3 | LLM measurement logic is well tested synthetically, but live performance was not measured in this audit. | Existing coverage includes 33 autotune-workload tests, 29 bench/autotune integration tests, and prompt-cache argv parity cases; the tests exercise sample medians, workload selection, TTFT/profile-2 values, contention and drift. They use controlled fixtures and do not certify current hardware performance. No missing code-path benchmark was confirmed from this pass. |
-| P2 | `commit_auto` stages the whole worktree and resets the index to `HEAD` after cancellation or generation failure, which can unstage changes that were staged before invocation. | Preserve the explicit accept-before-commit/push behavior. Exact pre-invocation index restoration needs focused treatment of staged, intent-to-add, and conflicted entries; defer rather than risk overwriting an index during this audit batch. |
 
 ## Audit checks recorded
 
@@ -74,10 +73,11 @@ technical debt has been removed.
   or restore_recreates_missing_parent_directories or env_sh_library_mode_bootstraps or
   env_sh_loads_09b_gog)"`: 6 passed after making profile loading fail visibly.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
-  "42_commit_deploy_push_status"`: 5 passed, including local-bare success and the new
-  `commit_auto` transport/malformed-response regressions.
+  "42_commit_deploy_push_status"`: 6 passed, including local-bare success and
+  `commit_auto` transport/malformed-response/cancellation regressions.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
-  "11_module_versions"`: 7 passed after incrementing `10-deployment.sh` to module version 8.
+  "11_module_versions"`: 7 passed after incrementing `10-deployment.sh` for the two
+  `commit_auto` batches (module version 9).
 - `bash -n` and ShellCheck (`-x -P bin`) passed for the seven modified shell scripts.
 - `.venv/bin/python -m ruff check scripts tools tests nas/butler` and
   `.venv/bin/python -m mypy`: passed after strict model validation.
