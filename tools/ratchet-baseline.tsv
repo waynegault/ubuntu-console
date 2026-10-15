@@ -103,6 +103,15 @@
 #   relies on word splitting - not a call for this change-set to make silently.
 # Hand-edited, NOT `--update` (which rewrites this file as header+rows and strips the blocks above):
 # 4.2.4 16->17, 6.7 67->100, 8.1.8 287->288, 9.5 113->116, 10.4 49->50; the other four rows unchanged.
+#
+# 2026-10-15: 10.7 204 -> 205 is CORPUS GROWTH from ONE newly added file, bin/wsl-restart.sh (the
+# restart sequence for a WSL restart taken from inside the distro, plus the VS Code client's own
+# restart).  Its four ad-hoc `printf ... >&2` sites were fixed AT SOURCE - every stderr write now
+# goes through one private helper, `_say`, which is exactly what 10.7 asks for.  The +1 that
+# remains is that helper's own definition line, and it cannot be removed without removing the
+# helper.  Hand-edited, NOT `--update`: the tool rewrites this file as header+rows and would strip
+# every block above, other lanes' included.  The other four counters this file rose (8.1.8, 9.5,
+# 9.7, 10.7) were fixed at source in the same change-set and are unchanged here.
 4.2.4	17
 4.2.6	9
 4.3.6	31
@@ -111,5 +120,5 @@
 9.5	116
 9.7	64
 10.4	50
-10.7	204
+10.7	205
 10.8	0

@@ -52,10 +52,24 @@
 #   wsl-restart.sh --status
 #   wsl-restart.sh --dry-run [--folder PATH]     # render the wrapper, arm nothing
 #   wsl-restart.sh --help | --version
+#   --restart exits 0 when armed, 2 for a bad argument.  --status exits 0 with
+#   nothing armed, 1 when a restart IS armed, 2 when the Task Scheduler could not
+#   be read at all - never read that third one as "nothing armed".
+#
+# THE TASK RUNS ONLY WHILE WAYNE IS LOGGED ON.  Measured 2026-10-15 on a probe
+# task created exactly this way: `Logon Mode: Interactive only`.  That is also what
+# lets the wrapper's relaunch reach the desktop - a task given a background token
+# would start the client in a session nobody can see, which would look like "the
+# restart worked but VS Code never came back".  A trigger missed because the user
+# is logged off leaves the registration behind, which `--status` reports; the
+# wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 1
-VERSION="1.0.0"
+# Module Version: 2
+#   v2 (2026-10-15): record the measured Logon Mode ("Interactive only") - it is
+#   both what lets the wrapper's relaunch reach the desktop and what bounds the
+#   task to a logged-on user.
+VERSION="1.0.1"
 
 set -uo pipefail
 
@@ -78,7 +92,8 @@ WRAPPER_WIN="${TAC_WSL_RESTART_WRAPPER_WIN:-$WRAPPER_WIN_DEFAULT}"
 WRAPPER_UNIX="${TAC_WSL_RESTART_WRAPPER_UNIX:-/mnt/c/Users/wayne/wsl-restart-action.cmd}"
 LOG_WIN="${TAC_WSL_RESTART_LOG_WIN:-$LOG_WIN_DEFAULT}"
 LOG_UNIX="${TAC_WSL_RESTART_LOG_UNIX:-/mnt/c/Users/wayne/wsl-restart-action.log}"
-CODE_CMD_UNIX="${TAC_WSL_RESTART_CODE_CMD_UNIX:-/mnt/c/Users/wayne/AppData/Local/Programs/Microsoft VS Code/bin/code.cmd}"
+CODE_CMD_UNIX_DEFAULT='/mnt/c/Users/wayne/AppData/Local/Programs/Microsoft VS Code/bin/code.cmd'
+CODE_CMD_UNIX="${TAC_WSL_RESTART_CODE_CMD_UNIX:-$CODE_CMD_UNIX_DEFAULT}"
 CODE_CMD_WIN="${TAC_WSL_RESTART_CODE_CMD_WIN:-$CODE_CMD_WIN_DEFAULT}"
 
 # Deliberately NOT named `log`: bin/_tac-bin-lib.sh owns that name (a gate asserts
@@ -87,9 +102,17 @@ CODE_CMD_WIN="${TAC_WSL_RESTART_CODE_CMD_WIN:-$CODE_CMD_WIN_DEFAULT}"
 # is the whole requirement.
 _say() { printf '%s\n' "$*" >&2; }
 
+# Exit codes, named rather than spelled as bare literals at each site so a reader
+# does not have to guess what a `return 2` meant there.
+EXIT_STATUS_ARMED=1    # --status: a restart IS armed (0 is the "nothing armed" case)
+EXIT_STATUS_UNKNOWN=2  # --status: the Task Scheduler could not be read
+EXIT_USAGE=2           # the caller asked for something this script cannot do
+
 # Print the usage block out of this file's own header, so the two cannot drift.
 usage() {
-    sed -n '/^# USAGE$/,/^#$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+    local _block
+    _block=$(sed -n '/^# USAGE$/,/^#$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//')
+    _say "$_block"
 }
 
 # A bounded Windows interop call.  Interop costs seconds and has been seen to hang
@@ -160,6 +183,8 @@ render_wrapper() {
         '# end of file'
 }
 
+# Render the wrapper onto its Windows-side path, or fail loudly - a wrapper that
+# did not reach disk would be reported as armed anyway.
 write_wrapper() {
     local _folder="$1"
     if ! render_wrapper "$_folder" > "$WRAPPER_UNIX"; then
@@ -179,13 +204,14 @@ task_state() {
             && return 1
         # Any other failure is not proof of absence - say so instead of guessing.
         _say "WARN: schtasks could not be read: $(printf '%s' "$_out" | head -1)"
-        return 2
+        return "$EXIT_STATUS_UNKNOWN"
     }
     printf '%s\n' "$_out" | grep -iE 'TaskName|Next Run Time|Last Run Time|Last Result|Status|Task To Run' |
         sed 's/^[[:space:]]*//'
     return 0
 }
 
+# Refuse to arm anything unless every path the wrapper will need is present.
 check_preconditions() {
     local _rc=0
     if [[ ! -x "$SCHTASKS_BIN" ]]; then
@@ -205,6 +231,7 @@ check_preconditions() {
     return "$_rc"
 }
 
+# Render the wrapper and register the one-shot task that runs it on the Windows side.
 arm_restart() {
     local _folder="$1" _delay="$2" _when_unix _st _sd _state
     if ! check_preconditions; then
@@ -214,7 +241,7 @@ arm_restart() {
     # A leftover from an earlier run is worth saying out loud before overwriting.
     if _state=$(task_state); then
         _say "WARN: a $TASK_NAME registration already exists:"
-        printf '%s\n' "$_state" >&2
+        _say "$_state"
         _say "WARN: overwriting it."
     fi
 
@@ -243,34 +270,41 @@ arm_restart() {
         return 1
     fi
     _say "armed: $TASK_NAME fires at $_st on $_sd (Windows local time)"
-    printf '%s\n' "$_state" >&2
+    _say "$_state"
     _say "the wrapper logs to $LOG_WIN; this session ends with the client."
     return 0
 }
 
+# Report the registration and the wrapper's log.  Exit 0 = nothing armed, 1 = a
+# restart IS armed, 2 = the Task Scheduler could not be read, which is never
+# absence and must not read as one.
 show_status() {
-    local _state _rc=0
-    if _state=$(task_state); then
-        _say "registered:"
-        printf '%s\n' "$_state" >&2
-    else
-        _rc=$?
-        if [[ "$_rc" -eq 1 ]]; then
+    local _state _rc=0 _verdict=0
+    _state=$(task_state) || _rc=$?
+    case "$_rc" in
+        0)
+            _say "ARMED - a restart is pending:"
+            _say "$_state"
+            _verdict="$EXIT_STATUS_ARMED"
+            ;;
+        1)
             _say "not registered (no $TASK_NAME task) - no restart is pending"
-        else
-            _say "WARN: state unknown (the query itself failed); do not read this as absent"
-            _rc=0
-        fi
-    fi
+            ;;
+        *)
+            _say "WARN: the schtasks query itself failed; state unknown, never absence"
+            _verdict="$EXIT_STATUS_UNKNOWN"
+            ;;
+    esac
     if [[ -f "$LOG_UNIX" ]]; then
         _say "--- last 15 lines of $LOG_WIN"
         tail -n 15 "$LOG_UNIX" >&2
     else
         _say "no wrapper log at $LOG_WIN (the wrapper has not run since it was written)"
     fi
-    return "$_rc"
+    return "$_verdict"
 }
 
+# Argument parsing only; --restart is never reached by accident.
 main() {
     local _mode="" _folder="$FOLDER_DEFAULT" _delay="$DELAY_MINUTES_DEFAULT"
     while [[ $# -gt 0 ]]; do
@@ -282,7 +316,7 @@ main() {
             --delay)   _delay="${2:?--delay needs minutes}"; shift ;;
             --help|-h) usage; return 0 ;;
             --version|-V) printf 'wsl-restart %s\n' "$VERSION"; return 0 ;;
-            *) _say "ERROR: unknown argument: $1"; usage; return 2 ;;
+            *) _say "ERROR: unknown argument: $1"; usage; return "$EXIT_USAGE" ;;
         esac
         shift
     done
@@ -292,7 +326,7 @@ main() {
             # schtasks refuses a past start time - so require at least one minute
             # and let the failure be the loud kind rather than a surprise.
             [[ "$_delay" =~ ^[0-9]+$ && "$_delay" -ge 1 ]] ||
-                { _say "ERROR: --delay must be a whole number of minutes, at least 1"; return 2; }
+                { _say "ERROR: --delay must be a whole number of minutes, at least 1"; return "$EXIT_USAGE"; }
             arm_restart "$_folder" "$_delay"
             ;;
         status)  show_status ;;
@@ -301,7 +335,7 @@ main() {
             # are inspectable) and touches nothing else - no file, no task.
             render_wrapper "$_folder"
             ;;
-        *) usage; return 2 ;;
+        *) usage; return "$EXIT_USAGE" ;;
     esac
 }
 
