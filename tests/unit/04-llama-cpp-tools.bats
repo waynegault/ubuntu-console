@@ -87,7 +87,16 @@ CURL
 }
 
 @test "explicit update installs from a stubbed release and preserves the old link" {
-    "$REPO_ROOT/.venv/bin/python3" -c '
+    # Interpreter from the repo's SHARED resolver, never a hard-coded venv path: a CI
+    # checkout has NO .venv, so both `$REPO_ROOT/.venv/bin/python` and `.../python3` die
+    # with status 127 there (measured 2026-10-15, runs 38762999750 and 38804176354 -- the
+    # first fix only swapped which missing name was used).  _tac_python_path prefers the
+    # repository venv and falls back to PATH python3; this case only needs stdlib zipfile.
+    # shellcheck source=tools/python-runtime.sh
+    source "$REPO_ROOT/tools/python-runtime.sh"
+    local _py
+    _py="$(_tac_python_path "$REPO_ROOT")"
+    "$_py" -c '
 import sys, zipfile
 with zipfile.ZipFile(sys.argv[1], "w") as archive:
     archive.writestr("bin/llama-server", "#!/bin/sh\nprintf \"version (build 99999)\\n\"\n")
