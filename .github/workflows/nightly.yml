@@ -71,8 +71,6 @@ jobs:
       - name: Run the unit suites CI excludes
         if: ${{ !cancelled() && steps.install_bats.outcome == 'success' }}
         run: |
-          # 04-llama-cpp-inventory.bats is excluded from BOTH workflows: it performs
-          # live downloads and mutates the host.
           # 38-heavy-job.bats is listed HERE rather than in ci.yml's per-push unit list
           # for one reason only: ci.yml carried another lane's uncommitted edit when this
           # suite landed (2026-10-01), so adding to it would have committed that lane's

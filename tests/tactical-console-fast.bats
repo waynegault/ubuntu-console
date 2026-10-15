@@ -720,8 +720,7 @@ __fast_member_shellcheck() {
 @test "ci: every runnable test suite is referenced by a workflow" {
     # A suite no workflow runs silently rots — e2e-bench-autotune.bats sat
     # unreferenced until this guard was added, and a newly added unit suite has the
-    # same trap. Only 04-llama-cpp-inventory is deliberately excluded (it performs
-    # live downloads and mutates the host).
+    # same trap. GPU exclusivity remains excluded because it takes the shared card lock.
     #
     # The reference must be a LIVE ARGUMENT, not mere text. The workflows mention a
     # suite path in prose as well — nightly.yml:21 carries tests/unit/12-gpu-exclusivity.bats
@@ -758,7 +757,6 @@ __fast_member_shellcheck() {
     for f in "$REPO_ROOT"/tests/unit/*.bats "$REPO_ROOT"/tests/integration/*.bats; do
         [[ -f "$f" ]] || continue
         rel="tests/${f#"$REPO_ROOT"/tests/}"
-        [[ "$rel" == "tests/unit/04-llama-cpp-inventory.bats" ]] && continue
         printf '%s\n' "$referenced" | grep -qxF "$rel" || missing="$missing $rel"
     done
     if [[ -n "$missing" ]]

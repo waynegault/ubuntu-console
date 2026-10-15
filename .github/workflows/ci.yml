@@ -170,8 +170,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          # Fast smoke subset.  04-llama-cpp-inventory is excluded (live downloads +
-          # host mutation).  12-gpu-exclusivity is excluded for the same reason ON A
+          # Fast smoke subset.  12-gpu-exclusivity is excluded ON A
           # SELF-HOSTED RUNNER: it takes the CUDA card lock, and this box also runs
           # investigator's GPU pipelines.  Measured 2026-09-18, a validation bench was
           # refused with "CUDA card is owned by another run" while a CI job held it — CI
@@ -179,6 +178,7 @@ jobs:
           # in any explicitly-listed run; it is not part of the nightly legacy suite.
           bats --print-output-on-failure tests/unit/01-refresh-keys.bats \
                tests/unit/02-so-startup.bats \
+               tests/unit/04-llama-cpp-tools.bats \
                tests/unit/09-check-agent-use.bats \
                tests/unit/10-clean-orphans.bats \
                tests/unit/11-module-versions.bats \

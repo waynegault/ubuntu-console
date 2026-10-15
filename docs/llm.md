@@ -1306,7 +1306,7 @@ it. See `docs/llama-cpp-runtime-audit.md` §2.2.
 | Xe lane serves but is orders of magnitude slower | The lane found no OpenCL device and fell back to CPU (check for `warning: no usable GPU found`) | Do not run an OpenCL server from a shell that exports `OCL_ICD_VENDORS`; verify with `--list-devices` or the cpu/wall ratio, not by `/health` alone |
 | `dmesg` shows 0 GPU faults but the journal shows many | The kernel ring buffer evicts entries | Count from `journalctl -k -b` |
 | Performance regression after update | New commit changed default behaviour | Check `git log --oneline HEAD..HEAD@{1}` to see what changed. Common culprits: flash-attn defaults, batch size heuristics, GPU layer count algorithms. |
-| Generic symlink broken after update | The `~/.local/bin/llama-server` symlink points to a stale release dir | Re-run `bats tests/unit/04-llama-cpp-inventory.bats --filter "update generic"` (with network) to auto-download the latest release, or manually: `ln -sf ~/.local/opt/llama.cpp/b<N>/llama-server ~/.local/bin/llama-server` |
+| Generic symlink broken after update | The `~/.local/bin/llama-server` symlink points to a stale release dir | Inspect with `tools/llama-cpp-inventory.sh`; update explicitly with `tools/llama-cpp-inventory.sh --update` (`curl`, `unzip`, and a Python interpreter selected by `tools/python-runtime.sh` are required). The old symlink is saved as `~/.local/bin/llama-server.bak`. |
 
 ---
 
@@ -1317,6 +1317,6 @@ it. See `docs/llama-cpp-runtime-audit.md` §2.2.
 - [Repository layout and module anatomy](../README.md#architecture--developer-guide) — README (docs/architecture.md was consolidated into it on 2026-09-15)
 - Upstream: [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)
 - Prebuilt releases: [github.com/ggml-org/llama.cpp/releases](https://github.com/ggml-org/llama.cpp/releases)
-- Tactical Console inventory test: `tests/unit/04-llama-cpp-inventory.bats`
+- Read-only llama.cpp inventory and explicit updater: `tools/llama-cpp-inventory.sh`
 
 <!-- end of file -->

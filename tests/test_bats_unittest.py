@@ -17,11 +17,10 @@ on tests/tactical-console.bats, where eight filtered invocations took 69.0 s aga
 which is the piece of it that took the most work to get right and the last thing that
 should exist in two places.
 
-EXCLUDED BY DEFAULT: 04-llama-cpp-inventory (live downloads; mutates the host) and
-12-gpu-exclusivity (takes the CUDA card lock this box shares with the investigator — a
-test run must never be the reason a measurement is refused).  CI excludes the same two
-files for the same reasons.  Each exclusion is a SKIP that states its reason rather
-than a case that quietly does not exist, and ``TAC_UNITTEST_ALL=1`` runs them too.
+EXCLUDED BY DEFAULT: 12-gpu-exclusivity (takes the CUDA card lock this box shares with
+the investigator — a test run must never be the reason a measurement is refused). CI
+excludes that file for the same reason. The exclusion is a SKIP that states its reason
+rather than a case that quietly does not exist, and ``TAC_UNITTEST_ALL=1`` runs it too.
 
 COST: the whole set is the 20-40 min the suites cost anywhere — one whole-file run of
 tests/tactical-console.bats alone is ~11-35 min.  ``unittest discover`` picks this
@@ -52,7 +51,6 @@ RUN_ALL_ENV = "TAC_UNITTEST_ALL"
 # has left the table skips nothing and runs nothing, which is why it is a name here
 # rather than a pattern: the skip says which file it is about.
 _EXCLUDED_BY_DEFAULT = {
-    "04-llama-cpp-inventory": "performs live downloads and mutates the host",
     "12-gpu-exclusivity": "takes the CUDA card lock this box shares with the investigator",
 }
 

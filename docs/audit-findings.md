@@ -16,6 +16,7 @@ technical debt has been removed.
 | AUD-006 | Graph models used Pydantic's lax default coercion (`line="8"`, `degree=True`, and string counts were accepted), and model validators silently discarded removed `weight`, internal `_strength`, and renamed `async` fields. Assignment could also bypass field validation. | Enabled strict validation and assignment validation. Kept only evidenced integer-ID normalization and the confidence enum's explicit producer-string conversion; reject booleans/other ID types and obsolete/unknown fields. Added regression coverage for construction, assignment, metadata, and removed fields. |
 | AUD-007 | `tests/unit/20-up-npm-safety.bats` installed `npm`/`systemctl` stubs before sourcing `env.sh`, whose constants module prepended host paths; two failure-recovery cases reached host commands and failed. | Reasserted stub precedence after sourcing. All three BATS cases pass through the `.venv` pytest bridge. Commit `729776bb`. |
 | AUD-008 | Five repository shell entrypoints launched inline Python through bare `python3`, bypassing the repository venv and risking missing or mismatched dependencies; interpreter selection was duplicated in the Windows environment importer. | Added `tools/python-runtime.sh` as the shared venv-first resolver (then validated `TAC_PYTHON`, then PATH `python3`) and routed all five callers plus the importer through it. Regression cases cover both venv executable names, explicit override, invalid override, PATH fallback, and caller wiring. The deployment script's system-Python venv bootstrap remains an intentional exception. |
+| AUD-009 | `tests/unit/04-llama-cpp-inventory.bats` mixed inventory assertions with live release downloads and an install that could replace `~/.local/bin/llama-server`; warning-only checks could appear successful without asserting a result. | Replaced it with an executable read-only inventory and explicit `--update` command. New BATS tests sandbox `HOME`, use a local ZIP fixture and stubbed `curl`, assert install/backup behavior, no-op idempotency, and API/archive failure cleanup and preservation. Registered the suite in CI and the pytest bridge; removed obsolete exclusions and documented the opt-in update. |
 
 ## Confirmed debt / follow-up
 
@@ -49,6 +50,13 @@ technical debt has been removed.
   236 passed after strict model validation.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
   "50_python_interpreter_resolution"`: 8 passed for the shared interpreter resolver and caller wiring.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
+  "04_llama_cpp_tools"`: 7 passed for the sandboxed inventory/updater suite.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_unittest.py -k
+  "04_llama_cpp_tools"`: 1 passed; the unittest bridge includes the replacement suite.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
+  "every_runnable_test_suite"`: 1 passed; every runnable BATS suite is referenced by a workflow.
+- `bash -n` and ShellCheck (`-x -P bin`) passed for `tools/llama-cpp-inventory.sh`.
 - `bash -n` and ShellCheck (`-x -P bin`) passed for the seven modified shell scripts.
 - `.venv/bin/python -m ruff check scripts tools tests nas/butler` and
   `.venv/bin/python -m mypy`: passed after strict model validation.
