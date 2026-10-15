@@ -16,6 +16,7 @@
 # NEXT red instead of surfacing it.
 #
 # --- entries ---
+workflow=CI | owner=Wayne | card=CI-RED-2026-10-15-trim-mypy | expiry=2026-10-17 | reason=Tip 1d09ab7a is RED (run 38713529941).  One red job is mine and REAL: `Python Lint & Tests` failed on three mypy errors in tools/vscode-companion-state/vscode-companion-state-trim.py, fixed in the push this entry travels with (f5d43152) - ruff and that tool's own suite were green, mypy was never run, which is the whole defect.  The other red job, `Behavioral BATS`, failed in "Set up job" on a GitHub 429 downloading actions/checkout: infra, not code.  A red tip blocks the very push that fixes it, so this is the recorded, time-boxed escape; Wayne answered "a" to the menu put to him on 2026-10-15.  DELETE this entry the moment a GREEN `CI` run exists for the fixed tip.
 # (none — the `CI` entry added 2026-10-14 was deleted once a GREEN run existed for the fixed
 #  tip: `CI` run 38649016670 on 07f9be80, all six jobs success.  Verified live with
 #  `--cache-ttl 0` BEFORE the deletion: the probe read "no red, but not every workflow has a
