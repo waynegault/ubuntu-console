@@ -2,15 +2,11 @@
 
 ``tools/check-contracts.sh`` and ``tools/count-ratchet.sh`` used to carry their
 Python inside shell heredocs, where no Python gate could see it.  The programs now
-live in ``tools/contracts_check.py`` and ``tools/ratchet_check.py``; these cases
-import them and exercise a pure helper from each, so the modules are covered AS
-modules rather than only through a wrapper's subprocess path.
+live in ``tools/contracts_check.py`` plus ``tools/contracts_checkers/`` and
+``tools/ratchet_check.py``; these cases import the CLI facade and focused checker
+helpers, so both the entrypoint and implementation modules are covered directly.
 
-Both programs read their arguments at IMPORT time (``REPO_ROOT = sys.argv[1]``) —
-which is exactly what the wrapper passes — so the importer below sets ``sys.argv``
-first.  No fallback was added to the programs for a missing argument: a default for
-a value the wrapper always supplies is a silent fallback that could only ever mask
-a broken caller.
+Both tools are import-safe; their CLIs read arguments only when ``main`` is called.
 """
 
 import importlib.util
@@ -19,13 +15,15 @@ import os
 import sys
 from contextlib import redirect_stderr
 
+from tools.contracts_checkers.state import ENTITY_LINES, run_state
+from tools.contracts_checkers.swallows import swallow_sites
+
 TOOLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools")
 REPO = os.path.dirname(TOOLS)
 
 
-def _import_tool(module_name, argv):
-    """Import a ``tools/*.py`` program by path, with the argv its wrapper passes."""
-    sys.argv = [module_name, *argv]
+def _import_tool(module_name):
+    """Import a tool program by path without mutating process arguments."""
     spec = importlib.util.spec_from_file_location(module_name, os.path.join(TOOLS, f"{module_name}.py"))
     assert spec is not None and spec.loader is not None, module_name
     module = importlib.util.module_from_spec(spec)
@@ -37,7 +35,7 @@ def _import_tool(module_name, argv):
 def test_ratchet_counters_are_pure_functions_of_a_files_text():
     """States the wrong outcome: a counter that counts COMMENT lines, or has no
     120-column ceiling, would mis-report the corpus it exists to describe."""
-    ratchet = _import_tool("ratchet_check", [REPO, "baseline.tsv", "check"])
+    ratchet = _import_tool("ratchet_check")
     text = "\n".join([
         "# a comment line: not code, whatever it contains",
         "echo hi >&2",
@@ -53,13 +51,13 @@ def test_contract_checker_helpers_and_repeated_runs_are_isolated():
     """States the wrong outcome: a scanner that counted comment lines would read a
     `# swallow-ok:` marker (or a comment merely mentioning a pattern) as a live
     swallow site, and the gate would report drift that does not exist."""
-    checker = _import_tool("contracts_check", [REPO, "swallows"])
+    checker = _import_tool("contracts_check")
     text = "\n".join([
         "# a comment that mentions || true and 2>/dev/null",
         "run || true",
         "quiet 2>/dev/null",
     ])
-    assert checker.swallow_sites(text) == [(2, "|| true"), (3, "2>/dev/null")]
+    assert swallow_sites(text) == [(2, "|| true"), (3, "2>/dev/null")]
 
     code, selected, _, _, baseline_options = checker.parse_args(["--print-baseline", "modules"])
     assert code is None
@@ -86,6 +84,6 @@ def test_contract_checker_helpers_and_repeated_runs_are_isolated():
     assert selected is repo is positionals is None
     assert invalid_options == {"print_baseline": False, "dump_sites": False}
 
-    checker.ENTITY_LINES["stale-entry"] = 99
-    assert checker.run_state(os.path.join(REPO, "missing-fixture")) == checker.EXIT_CANNOT_RUN
-    assert checker.ENTITY_LINES == {}
+    ENTITY_LINES["stale-entry"] = 99
+    assert run_state(os.path.join(REPO, "missing-fixture")) == checker.EXIT_CANNOT_RUN
+    assert ENTITY_LINES == {}

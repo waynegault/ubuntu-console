@@ -464,7 +464,9 @@ class TestSourceLineage:
         # The kept set is the lexicographically first N, so it is stable as more
         # sources arrive; the true count is recorded so a capped list is not
         # mistaken for the whole set.
-        assert node.metadata["sources_overflow"] == MAX_SOURCES_PER_ELEMENT + 6
+        sources_overflow = node.metadata.get("sources_overflow")
+        assert sources_overflow is not None
+        assert sources_overflow == MAX_SOURCES_PER_ELEMENT + 6
 
     def test_drop_source_leaves_an_untracked_element_alone(self):
         node = GraphNode(id="n")
@@ -627,7 +629,9 @@ class TestSemanticCollapseUnification:
         assert len(canonical.sources) == MAX_SOURCES_PER_ELEMENT
         assert canonical.sources == sorted({f"file:a{i:03d}.md" for i in range(40)}
                                            | {f"file:b{i:03d}.md" for i in range(40)})[:MAX_SOURCES_PER_ELEMENT]
-        assert canonical.metadata["sources_overflow"] == 80
+        sources_overflow = canonical.metadata.get("sources_overflow")
+        assert sources_overflow is not None
+        assert sources_overflow == 80
 
     def test_the_builder_path_and_the_graph_function_agree(self):
         """States the wrong outcome: two entry points that answer "same concept?"

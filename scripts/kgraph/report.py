@@ -119,8 +119,9 @@ def generate_report(graph: Graph | dict, **kwargs) -> str:
             if bridging:
                 names = ", ".join(str(n.get("label", n.get("id", ""))) for n in bridging)
                 lines.append(f'  - bridging (god nodes): {names}')
-            if c.get("boundary_edge_count"):
-                lines.append(f'  - boundary edges: {c["boundary_edge_count"]}')
+            boundary_edge_count = c.get("boundary_edge_count")
+            if boundary_edge_count:
+                lines.append(f'  - boundary edges: {boundary_edge_count}')
         lines.append("")
 
     # ── Surprising connections ──

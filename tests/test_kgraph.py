@@ -1970,8 +1970,11 @@ class CommunityDigestTests(unittest.TestCase):
             self.assertIn('god_nodes', community)
             self.assertIn('boundary_edges', community)
             self.assertIn('boundary_edge_count', community)
-            self.assertTrue(community['central_nodes'], community)
-            for entry in community['central_nodes']:
+            central_nodes = community.get('central_nodes')
+            self.assertIsNotNone(central_nodes, community)
+            assert central_nodes is not None
+            self.assertTrue(central_nodes, community)
+            for entry in central_nodes:
                 self.assertEqual(set(entry), {'id', 'label', 'composite_score'})
                 self.assertIn(entry['id'], community['members'])
 
@@ -1984,13 +1987,18 @@ class CommunityDigestTests(unittest.TestCase):
         graph = self._digested()
         community = max(graph.meta.communities, key=lambda c: c['size'])
         members = set(community['members'])
-        for edge in community['boundary_edges']:
+        boundary_edges = community.get('boundary_edges')
+        boundary_edge_count = community.get('boundary_edge_count')
+        self.assertIsNotNone(boundary_edges)
+        self.assertIsNotNone(boundary_edge_count)
+        assert boundary_edges is not None
+        assert boundary_edge_count is not None
+        for edge in boundary_edges:
             self.assertIn(edge['direction'], ('out', 'in'))
             inside = edge['source'] in members
             self.assertNotEqual(inside, edge['target'] in members, edge)
         # The reported total is the true count, independent of the rendered cap.
-        self.assertGreaterEqual(community['boundary_edge_count'],
-                                len(community['boundary_edges']))
+        self.assertGreaterEqual(boundary_edge_count, len(boundary_edges))
 
     def test_digest_leaves_a_graph_without_communities_untouched(self):
         graph = kgraph.Graph.from_dict({'nodes': [{'id': 'a', 'label': 'A'}], 'edges': []})
@@ -2077,8 +2085,13 @@ class CommunityDigestPersistenceTests(unittest.TestCase):
         self.assertEqual(digest['method'], graph.meta.community_method)
         self.assertEqual([c['id'] for c in loaded.meta.communities],
                          [c['id'] for c in graph.meta.communities])
-        self.assertEqual(loaded.meta.communities[0]['central_nodes'],
-                         graph.meta.communities[0]['central_nodes'])
+        loaded_central_nodes = loaded.meta.communities[0].get('central_nodes')
+        expected_central_nodes = graph.meta.communities[0].get('central_nodes')
+        self.assertIsNotNone(loaded_central_nodes)
+        self.assertIsNotNone(expected_central_nodes)
+        assert loaded_central_nodes is not None
+        assert expected_central_nodes is not None
+        self.assertEqual(loaded_central_nodes, expected_central_nodes)
         self.assertEqual(loaded.meta.community_method, graph.meta.community_method)
 
     def test_saving_without_communities_clears_a_stale_digest(self):
