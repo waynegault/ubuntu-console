@@ -111,6 +111,13 @@ class ConfidenceLevel(str, Enum):
     AMBIGUOUS = "AMBIGUOUS"
 
 
+def _canonical_identifier(value: Any, *, field_name: str) -> str:
+    """Accept string IDs and SQLite integer IDs, but no other coercions."""
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ValueError(f"{field_name} must be a string or integer identifier")
+    return str(value)
+
+
 # ── Node ───────────────────────────────────────────────────────────────
 
 
@@ -124,6 +131,8 @@ class SourceLineage(BaseModel):
     before the field existed, or one derived from other elements rather than
     from a document), NOT "no sources exist".
     """
+
+    model_config = ConfigDict(extra="forbid", strict=True, validate_assignment=True)
 
     sources: list[str] = Field(default_factory=list)
     # Declared here because merge_sources records the array bound in it; both
@@ -171,9 +180,8 @@ class SourceLineage(BaseModel):
 class GraphNode(SourceLineage):
     """A single node in the knowledge graph.
 
-    Core fields (``id``, ``label``) are required.  All other fields
-    carry sensible defaults so that partially-specified dicts from
-    legacy sources deserialize cleanly.
+    Core fields (``id``, ``label``) are required. All other fields carry defaults
+    so partially specified producer dictionaries remain valid without scalar coercion.
 
     Extra fields added during processing (``degree``, ``importance``,
     ``display_label``, ``semantic_degree``, ``display_group``, ``visual_role``)
@@ -181,7 +189,9 @@ class GraphNode(SourceLineage):
     is REJECTED (card d25d3b8b) rather than silently kept.
     """
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(
+        extra="forbid", strict=True, validate_assignment=True, populate_by_name=True,
+    )
 
     id: str
     label: str = ""
@@ -269,19 +279,11 @@ class GraphNode(SourceLineage):
 
     @model_validator(mode="before")
     @classmethod
-    def _coerce_id(cls, data: Any) -> Any:
+    def _canonicalise_id(cls, data: Any) -> Any:
         if isinstance(data, dict):
             raw = data.get("id")
-            if raw is not None and not isinstance(raw, str):
-                data["id"] = str(raw)
-            # Legacy ast key: the reserved word ``async`` was renamed ``is_async``
-            # (card d25d3b8b), so a graph.json serialized before the rename is
-            # mapped rather than rejected.  Live producer: the stored graph DB.
-            if "async" in data:
-                if "is_async" not in data:
-                    data["is_async"] = data.pop("async")
-                else:
-                    data.pop("async")
+            if raw is not None:
+                data["id"] = _canonical_identifier(raw, field_name="node id")
         return data
 
 
@@ -292,8 +294,8 @@ class GraphEdge(SourceLineage):
     """A directed edge between two graph nodes.
 
     Endpoints are canonicalised to ``source`` / ``target``.
-    Legacy ``from`` / ``to`` keys are accepted and mapped during
-    deserialization.
+    Producer-facing ``from`` / ``to`` keys are mapped to canonical
+    ``source`` / ``target`` fields during validation.
 
     The ``origin`` field records *where* the edge was extracted from
     (e.g. ``"ast"``, ``"memory_db"``).  This was previously stored
@@ -317,13 +319,13 @@ class GraphEdge(SourceLineage):
     one dependency-strength consumer (community detection) already preferred
     ``semantic_score`` and fell back to ``weight``, whose default made the
     fallback a constant — so the field could only ever disagree with the score it
-    shadowed, and nothing else read it.  ``weight`` is popped in the validator
-    below and EXPLICITLY IGNORED (never mapped onto a score) when a ``graph.json``
-    serialized by an older build still carries it; with ``extra="forbid"`` it would
-    otherwise reject the whole edge.
+    shadowed, and nothing else read it.  An obsolete serialized ``weight`` field
+    is rejected by ``extra="forbid"`` rather than silently ignored.
     """
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(
+        extra="forbid", strict=True, validate_assignment=True, populate_by_name=True,
+    )
 
     source: str
     target: str
@@ -350,7 +352,7 @@ class GraphEdge(SourceLineage):
     @model_validator(mode="before")
     @classmethod
     def _canonicalise_endpoints(cls, data: Any) -> Any:
-        """Map legacy ``from``/``to`` keys → ``source``/``target``.
+        """Map producer ``from``/``to`` keys → ``source``/``target``.
 
         Also resolves the overloaded ``source`` key: when it looks like
         a provenance tag (``"ast"``, ``"memory_db"``) rather than a node
@@ -365,14 +367,6 @@ class GraphEdge(SourceLineage):
         dst = data.get("target")
         frm = data.pop("from", None)
         to = data.pop("to", None)
-        # ``weight`` was REMOVED in GRAPHRAG-JEV-005 (see the class docstring): an
-        # older serialized graph may still carry it, and it is ignored — dropped
-        # here so extra="forbid" does not reject the edge.
-        data.pop("weight", None)
-        # ``_strength`` is projection's INTERNAL sort key (projection.py strips it
-        # from the emitted dict); it is never part of the wire format, so a dict
-        # that still carries it does not make it a model field.
-        data.pop("_strength", None)
 
         # If source/target are missing but from/to exist, use them
         if src is None and frm is not None:
@@ -380,11 +374,12 @@ class GraphEdge(SourceLineage):
         if dst is None and to is not None:
             dst = to
 
-        # Coerce to str
+        # SQLite may supply integer IDs; reject booleans and unrelated values
+        # instead of relying on Pydantic's general scalar coercion.
         if src is not None:
-            data["source"] = str(src)
+            data["source"] = _canonical_identifier(src, field_name="edge source")
         if dst is not None:
-            data["target"] = str(dst)
+            data["target"] = _canonical_identifier(dst, field_name="edge target")
 
         # ── resolve overloaded 'source' as provenance ──
         _PROVENANCE_VALUES = {"ast", "memory_db", "json_store", "user", "life_index"}
@@ -393,7 +388,7 @@ class GraphEdge(SourceLineage):
             if frm is not None:
                 # source was a provenance tag, not an endpoint — the real
                 # endpoint comes from 'from'
-                data["source"] = str(frm)
+                data["source"] = _canonical_identifier(frm, field_name="edge source")
             else:
                 # Provenance-only 'source' with no endpoint: leaving it as the
                 # endpoint would point the edge at a literal "ast" node.
@@ -401,6 +396,13 @@ class GraphEdge(SourceLineage):
                     "edge 'source' is a provenance tag but no endpoint was "
                     "given (use 'from'/'to' or an explicit source id)"
                 )
+
+        raw_confidence = data.get("confidence")
+        if isinstance(raw_confidence, str) and not isinstance(raw_confidence, ConfidenceLevel):
+            try:
+                data["confidence"] = ConfidenceLevel(raw_confidence)
+            except ValueError:
+                pass  # Pydantic reports invalid enum values.
 
         return data
 
@@ -411,7 +413,7 @@ class GraphEdge(SourceLineage):
 class GraphMeta(BaseModel):
     """Metadata attached to a graph projection."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True, validate_assignment=True)
 
     view_mode: str = "overview"
     semantic_threshold: float = 0.82
@@ -434,10 +436,10 @@ class Graph(BaseModel):
     """A complete knowledge graph with nodes, edges, and metadata.
 
     This is the canonical container passed between all kgraph modules.
-    Legacy ``_meta`` keys are mapped to ``meta`` during deserialization.
+    Projected payload ``_meta`` keys are mapped to canonical ``meta`` during validation.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True, validate_assignment=True)
 
     nodes: list[GraphNode] = Field(default_factory=list)
     edges: list[GraphEdge] = Field(default_factory=list)
@@ -445,7 +447,7 @@ class Graph(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _map_legacy_meta(cls, data: Any) -> Any:
+    def _map_projected_meta(cls, data: Any) -> Any:
         if isinstance(data, dict) and "_meta" in data:
             data["meta"] = data.pop("_meta")
         return data
@@ -553,7 +555,7 @@ class Graph(BaseModel):
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Graph:
-        """Deserialize from a plain dict, tolerating legacy keys."""
+        """Validate a graph dictionary, including explicitly mapped producer keys."""
         return cls.model_validate(data)
 
 

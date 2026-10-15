@@ -16,6 +16,7 @@ from kgraph.models import (
     Graph,
     GraphBuilder,
     GraphEdge,
+    GraphMeta,
     GraphNode,
     collapse_semantic_duplicates,
     estimate_tokens,
@@ -49,6 +50,28 @@ class TestGraphNode:
         node = GraphNode.model_validate({"id": 42, "label": "Numeric"})
         assert node.id == "42"
         assert isinstance(node.id, str)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("line", "8"), ("degree", True), ("inferred_type", 1)],
+    )
+    def test_scalar_coercion_is_rejected(self, field: str, value: object) -> None:
+        with pytest.raises(ValidationError):
+            GraphNode.model_validate({"id": "n1", field: value})
+
+    def test_boolean_id_is_rejected(self):
+        with pytest.raises(ValidationError):
+            GraphNode.model_validate({"id": True})
+
+    def test_assignment_is_validated(self):
+        node = GraphNode(id="n1")
+        with pytest.raises(ValidationError):
+            setattr(node, "line", "8")
+        assert node.line is None
+
+    def test_renamed_async_field_is_not_accepted_as_an_alias(self):
+        with pytest.raises(ValidationError):
+            GraphNode.model_validate({"id": "n1", "async": True})
 
     def test_full_node_accepts_all_optional_fields(self):
         node = GraphNode(
@@ -106,7 +129,7 @@ class TestGraphEdge:
         assert edge.target == "n2"
         assert edge.label == "related"
 
-    def test_from_to_legacy_mapping(self):
+    def test_producer_from_to_mapping(self):
         edge = GraphEdge.model_validate({"from": "a", "to": "b", "label": "links"})
         assert edge.source == "a"
         assert edge.target == "b"
@@ -124,6 +147,11 @@ class TestGraphEdge:
         edge = GraphEdge.model_validate({"from": 1, "to": 2})
         assert edge.source == "1"
         assert edge.target == "2"
+
+    @pytest.mark.parametrize("value", [True, 1.5])
+    def test_non_identifier_endpoint_types_are_rejected(self, value: object) -> None:
+        with pytest.raises(ValidationError):
+            GraphEdge.model_validate({"from": value, "to": "n2"})
 
     def test_provenance_source_moved_to_origin(self):
         edge = GraphEdge.model_validate({
@@ -152,13 +180,10 @@ class TestGraphEdge:
         edge = GraphEdge(source="a", target="b", semantic_score=0.85)
         assert edge.semantic_score == 0.85
 
-    def test_internal_strength_key_is_dropped_not_rejected(self):
-        # _strength is projection's INTERNAL sort key, never part of the wire
-        # format; the validator pops it (like the removed `weight`) so an older
-        # dict that still carries it does not reject the edge (card d25d3b8b).
-        edge = GraphEdge.model_validate({"source": "a", "target": "b", "_strength": 0.9})
-        assert (edge.model_extra or {}) == {}
-        assert not hasattr(edge, "_strength")
+    @pytest.mark.parametrize("field", ["_strength", "weight"])
+    def test_removed_internal_or_obsolete_fields_are_rejected(self, field):
+        with pytest.raises(ValidationError):
+            GraphEdge.model_validate({"source": "a", "target": "b", field: 0.9})
 
     def test_unknown_field_raises(self):
         with pytest.raises(ValidationError):
@@ -182,7 +207,7 @@ class TestGraph:
         assert g.nodes == []
         assert g.edges == []
 
-    def test_graph_from_dict_legacy(self):
+    def test_graph_from_dict_normalizes_sqlite_identifiers_and_producer_edges(self):
         data = {
             "nodes": [
                 {"id": 1, "label": "Node 1"},
@@ -233,6 +258,9 @@ class TestGraph:
         assert g.meta.view_mode == "overview"
         assert g.meta.semantic_threshold == 0.82
 
+    def test_metadata_count_coercion_is_rejected(self):
+        with pytest.raises(ValidationError):
+            GraphMeta.model_validate({"nodeCount": "2"})
 
 # ── GraphBuilder ───────────────────────────────────────────────────────
 

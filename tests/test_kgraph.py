@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from pydantic import ValidationError
+
 from _paths import SCRIPT_DIR
 
 # Import the kgraph package directly; the backward-compatibility shim
@@ -449,21 +451,13 @@ class EdgeStrengthTests(unittest.TestCase):
         # An edge with no score is an asserted tie, read as strength 1.0.
         self.assertEqual(nx_graph['c']['d']['weight'], 1.0)
 
-    def test_a_serialized_weight_is_tolerated_and_ignored(self):
-        # Catches: a legacy `weight` read back as strength.  s→t carries a
-        # near-zero `weight` and no score: ignored, it reads as strength 1.0 and
-        # the direct edge wins on cost; honoured, it would cost -log(0.05) = 3.0
-        # and lose to the two-hop strong chain (cost 0.21).
-        graph = {
-            'nodes': [{'id': 's'}, {'id': 'x'}, {'id': 't'}],
-            'edges': [
-                {'from': 's', 'to': 't', 'label': 'legacy', 'weight': 0.05},
-                {'from': 's', 'to': 'x', 'label': 'strong', 'semantic_score': 0.9},
-                {'from': 'x', 'to': 't', 'label': 'strong', 'semantic_score': 0.9},
-            ],
-        }
-        result = kgraph.find_path_result(graph, 's', 't', mode='strongest')
-        self.assertEqual([(e['source'], e['target']) for e in result['edges']], [('s', 't')])
+    def test_a_serialized_obsolete_weight_is_rejected(self):
+        # A removed field must not be silently discarded at the strict model boundary.
+        with self.assertRaises(ValidationError):
+            kgraph.Graph.from_dict({
+                'nodes': [{'id': 's'}, {'id': 't'}],
+                'edges': [{'from': 's', 'to': 't', 'weight': 0.05}],
+            })
 
 
 class PathModeCliTests(unittest.TestCase):
