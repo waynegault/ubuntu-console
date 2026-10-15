@@ -22,6 +22,7 @@ technical debt has been removed.
 | AUD-012 | `commit_auto` suppressed curl and jq errors, then returned success when no commit message was produced. It also staged the real index before confirmation and reset it on cancellation/failure, discarding pre-existing staged state. | Use curl's fail/show-error flags, keep jq diagnostics visible, and return non-zero for transport or malformed/empty responses. Build the proposed diff and commit with a temporary index seeded from the current index; leave the real index untouched until acceptance, and refuse to overwrite it if it changed during confirmation. Synchronize it to the new `HEAD` after commit. Hermetic tests cover preserved staged state on failures/cancellation and a confirmed local-bare commit/push. |
 | AUD-013 | `_MemoryStoreIngest.ingest_chunks` mixed chunk setup, file/actor references, topic/theme extraction, semantic summaries, and embedding collection in one orchestration loop; it also scanned headings twice. | Extract file/actor/reference links, concepts, and semantic-summary construction into focused helpers. Keep `ingest_chunks` as the row/embedding orchestrator and evaluate each chunk's headings once. Existing end-to-end graph and phase tests characterize node, edge, lineage, and embedding output. |
 | AUD-014 | README test totals drifted from the test tree after four BATS cases were added: the unit count was 717 instead of 721, which also made the overall and CI-unit counts stale. `tools/docs-sync-check.sh` correctly failed the bridged regression. | Recomputed every README unit/total/CI-unit figure from the checker: 721 unit BATS tests, 2,017 total tests, and 614 unit tests in CI. The docs-sync checker and its BATS bridge case now pass. |
+| AUD-015 | The repository had autotune and TSV re-benchmark flows but no standalone, versioned performance artifact binding request samples to model/runtime/hardware/workload identity; prompt data could not be safely shared in reports, and cross-run comparisons had no compatibility gate. | Added opt-in `tools/llm_benchmark.py` with strict JSONL input, loopback-only streaming requests, warmups/repeats/concurrency, per-request and group metrics, SHA-256 model/prompt provenance, environment/device manifest, atomic no-overwrite output, explicit failed samples, and manifest-gated baseline comparison. Added fake-loopback tests and a usage/metric-contract guide in `docs/llm.md`. Error artifacts omit server-provided body text to prevent echoed prompt leakage. No live hardware benchmark or baseline was run. |
 
 ## Confirmed debt / follow-up
 
@@ -32,7 +33,7 @@ technical debt has been removed.
 | P2 | Salus scheduler orchestration is large. | `nas/butler/openclaw/salus-it500/salus.py::_run` is 266 lines. The NAS skill copy has deployment/mirror constraints; no refactor was attempted without a verified source-of-truth and deploy path. |
 | P2 | CPAP fetch is deliberately unimplemented. | `nas/butler/scripts/nas-cpap-unified.py::_fetch_cpap_data` raises `NotImplementedError` rather than returning fake success; its consumer is not enabled as a cron collector. Implementing it requires the real API contract, not a placeholder. |
 | P2 | Some nested graph payloads remain intentionally broad. | `metadata`, `typed_summary`, `communities`, and cluster suggestions contain `Any`/generic dictionaries, so strict scalar validation cannot define their internal schemas. `value_score`, `source_strength`, and line-range annotations explicitly allow strings because persisted registry rows can carry them. Constraining these further needs persisted-data and producer-shape evidence. |
-| P3 | LLM measurement logic is well tested synthetically, but live performance was not measured in this audit. | Existing coverage includes 33 autotune-workload tests, 29 bench/autotune integration tests, and prompt-cache argv parity cases; the tests exercise sample medians, workload selection, TTFT/profile-2 values, contention and drift. They use controlled fixtures and do not certify current hardware performance. No missing code-path benchmark was confirmed from this pass. |
+| P3 | A representative live-hardware LLM performance baseline has not yet been measured. | Synthetic autotune coverage remains; AUD-015 adds a reproducible opt-in local runner and compatible artifact comparison, but this audit did not spend GPU cycles or establish a reviewed baseline. Baseline collection must use the intended model/runtime/hardware after the operator selects representative prompts and a quiet GPU window. |
 
 ## Audit checks recorded
 
@@ -87,6 +88,10 @@ technical debt has been removed.
 - `tools/docs-sync-check.sh`: passed after updating README test counts.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
   "16_docs_sync"`: 1 passed after correcting the documented counts.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_llm_benchmark.py`: 8 passed using a fake loopback SSE server; no real model or GPU request was made.
+- `.venv/bin/python -m ruff check tools/llm_benchmark.py tests/test_llm_benchmark.py`: passed.
+- `.venv/bin/python -m mypy tools/llm_benchmark.py`: passed.
+- `tools/docs-sync-check.sh`: passed with the new Python test count and updated README.
 - `bash -n` and ShellCheck (`-x -P bin`) passed for the seven modified shell scripts.
 - `.venv/bin/python -m ruff check scripts tools tests nas/butler` and
   `.venv/bin/python -m mypy`: passed after strict model validation.

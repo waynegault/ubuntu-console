@@ -23,7 +23,9 @@ system exposes an OpenAI-compatible API at
 > not stand a lane up there without moving `AUTOTUNE_PORT` first. The benchmark
 > itself uses `LLM_PORT` (8081).
 
-All LLM functions are **pure bash + curl + jq** — no Python dependency.
+The interactive console and autotune paths are **bash + curl + jq**. The
+reproducible performance benchmark below is a separate Python CLI; run it through
+this checkout's `.venv` and only when deliberately benchmarking a local server.
 
 ## Model Registry
 
@@ -163,6 +165,90 @@ one, runs the burn prompt, collects TPS, and writes a TSV file to
 `$HOME/.llm/bench_YYYYMMDD_HHMMSS.tsv` — beside the registry, not on the model
 drive — for historical comparison. Results are
 displayed in a box-drawn summary table.
+
+## Reproducible Performance Benchmark
+
+`tools/llm_benchmark.py` is the explicit, opt-in runner for controlled
+performance comparisons. It does not start or stop a model, touch the model
+registry, or run as part of default CI. Start the desired local model with the
+normal `model use` path, then invoke the tool through this checkout's `.venv`.
+The runner rejects non-loopback URLs so workload prompts cannot be sent to a
+remote service. If the local endpoint requires authentication, provide
+`LLM_BENCH_API_KEY` in the environment rather than putting the token in shell
+history; the token is not stored in the artifact.
+
+Create a JSONL workload file outside tracked fixtures when its prompts are
+private. Each non-empty line is a JSON object with required `id` and `prompt`,
+and optional `system`, `max_tokens`, and `temperature`. IDs must be unique;
+unknown fields, invalid types, empty prompts, and duplicate IDs fail before
+requests are sent. The raw prompt and system text are never written to the
+artifact—only their SHA-256 digests are recorded.
+
+Example:
+
+```json
+{"id":"short-reasoning","system":"Answer concisely.","prompt":"Explain why a cache can improve repeated reads.","max_tokens":128,"temperature":0}
+{"id":"code-edit","prompt":"Describe a safe way to atomically replace a file.","max_tokens":128,"temperature":0}
+```
+
+Run at least three measured repetitions per prompt; the default is five
+measurements after one warm-up per workload:
+
+```bash
+.venv/bin/python tools/llm_benchmark.py run \
+  --endpoint http://127.0.0.1:8081 \
+  --workloads /path/to/workloads.jsonl \
+  --output /path/to/run.json \
+  --model-id 'model-file-or-registry-identity' \
+  --model-file /path/to/model.gguf \
+  --quantization Q4_K_M \
+  --runtime-version 'llama.cpp version' \
+  --runtime-build 'build hash or package build id' \
+  --context-size 8192 \
+  --gpu-index 0 \
+  --max-tokens 256 \
+  --repetitions 5 \
+  --warmups 1 \
+  --concurrency 1
+```
+
+Supply the actual loaded model, quantization, runtime version/build and context;
+the tool fingerprints the provided model file and records the repository commit,
+dirty state, Python/runtime environment, CPU/platform, GPU/driver when available,
+workload digests, sample settings and timestamp. `--gpu-index` selects the NVIDIA
+device monitored (default `0`). If `nvidia-smi` is unavailable, GPU metadata is
+explicitly `null`. Comparison refuses runs whose model checksum,
+quantization, runtime/build, platform/CPU, GPU/driver, context, token budget,
+concurrency or workload set differ.
+
+Each artifact is versioned JSON containing raw per-request samples, status,
+TTFT, end-to-end time, decode tokens/sec, observed prompt tokens/sec, and
+median/p90/min/max/spread summaries. The prompt-rate metric is an observed
+prompt-token count divided by TTFT; it is an end-to-end estimate, not llama.cpp's
+isolated prefill timer. Concurrent runs also report aggregate group throughput.
+Host memory/CPU and NVIDIA memory/utilization are system-wide peak samples while
+each request group runs, not process-attributed measurements. Failed requests,
+missing usage counts, malformed streaming responses and timeouts remain explicit
+failed samples and make the run exit nonzero. Output is written atomically and
+existing artifacts are not overwritten without `--force`.
+
+Compare a current run to a reviewed baseline only when both artifacts are
+complete and compatible:
+
+```bash
+.venv/bin/python tools/llm_benchmark.py compare \
+  /path/to/reviewed-baseline.json /path/to/current.json \
+  --max-regression-pct 10
+```
+
+The default threshold is a 10% drop in median decode throughput; concurrent
+runs also compare group throughput. Establish a baseline from repeated, quiet,
+representative runs on target hardware. Cold model startup is intentionally
+outside this tool's measurement; use the existing lifecycle/benchmark tooling
+for load time and the autotune workflow for parameter search. Synthetic fake
+server tests cover request streaming, metrics, artifact redaction, failure
+visibility, manifest compatibility and regression exit status without GPU or
+network access beyond a loopback fixture.
 
 ## Autotune Optimizer
 
