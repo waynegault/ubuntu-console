@@ -47,7 +47,7 @@ def test_ratchet_counters_are_pure_functions_of_a_files_text():
     assert ratchet.c_adhoc_stderr(text) == 1  # the hand-written >&2 on a code line
 
 
-def test_contract_swallow_scanner_sees_code_lines_and_ignores_comments():
+def test_contract_checker_helpers_and_repeated_runs_are_isolated():
     """States the wrong outcome: a scanner that counted comment lines would read a
     `# swallow-ok:` marker (or a comment merely mentioning a pattern) as a live
     swallow site, and the gate would report drift that does not exist."""
@@ -58,3 +58,25 @@ def test_contract_swallow_scanner_sees_code_lines_and_ignores_comments():
         "quiet 2>/dev/null",
     ])
     assert checker.swallow_sites(text) == [(2, "|| true"), (3, "2>/dev/null")]
+
+    code, selected, _, _ = checker.parse_args(["--print-baseline", "modules"])
+    assert code is None
+    assert selected == ["modules"]
+    assert checker.OPTIONS["print_baseline"] is True
+    assert checker.OPTIONS["dump_sites"] is False
+
+    code, selected, _, _ = checker.parse_args(["--dump-sites"])
+    assert code is None
+    assert selected == ["swallows"]
+    assert checker.OPTIONS["print_baseline"] is False
+    assert checker.OPTIONS["dump_sites"] is True
+
+    code, selected, _, positionals = checker.parse_args(["continuity", "model", "use"])
+    assert code is None
+    assert selected == ["continuity"]
+    assert positionals == ["model", "use"]
+    assert checker.OPTIONS == {"print_baseline": False, "dump_sites": False}
+
+    checker.ENTITY_LINES["stale-entry"] = 99
+    assert checker.run_state(os.path.join(REPO, "missing-fixture")) == checker.EXIT_CANNOT_RUN
+    assert checker.ENTITY_LINES == {}

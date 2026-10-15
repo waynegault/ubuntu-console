@@ -481,6 +481,7 @@ def index_contract_lines(text, kind_entries):
 
 def run_state(repo):
     """Enforce the state contract; return the process exit code."""
+    ENTITY_LINES.clear()
     contract_rel = "docs/contracts/state-contracts.yaml"
     contract_path = os.path.join(repo, contract_rel)
     if not os.path.isfile(contract_path):
@@ -2340,6 +2341,8 @@ def parse_args(argv):
     to this command?").  It is only accepted with that subcommand selected, so a
     typo'd subcommand cannot be mistaken for a command name and slip through.
     """
+    OPTIONS["print_baseline"] = False
+    OPTIONS["dump_sites"] = False
     selected = []
     positionals = []
     repo = REPO_ROOT
