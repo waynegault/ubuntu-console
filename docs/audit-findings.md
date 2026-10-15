@@ -21,6 +21,7 @@ technical debt has been removed.
 | AUD-011 | The main `tests/tactical-console.bats` profile loader suppressed all source output and used `|| true`, then marked the profile as loaded. A failed/partial source could therefore leave many tests operating on incomplete functions; one cooldown case only searched output for `1`, which could match command-not-found status `127`. | Propagate profile-source failure with stderr visible, set the loaded flag only after success, and make subprocess profile/env loads exit with a sentinel on source failure. Focused regressions cover cooldown, model recommendation, restore, and env bootstrap/module loading. |
 | AUD-012 | `commit_auto` suppressed curl and jq errors, then returned success when no commit message was produced. It also staged the real index before confirmation and reset it on cancellation/failure, discarding pre-existing staged state. | Use curl's fail/show-error flags, keep jq diagnostics visible, and return non-zero for transport or malformed/empty responses. Build the proposed diff and commit with a temporary index seeded from the current index; leave the real index untouched until acceptance, and refuse to overwrite it if it changed during confirmation. Synchronize it to the new `HEAD` after commit. Hermetic tests cover preserved staged state on failures/cancellation and a confirmed local-bare commit/push. |
 | AUD-013 | `_MemoryStoreIngest.ingest_chunks` mixed chunk setup, file/actor references, topic/theme extraction, semantic summaries, and embedding collection in one orchestration loop; it also scanned headings twice. | Extract file/actor/reference links, concepts, and semantic-summary construction into focused helpers. Keep `ingest_chunks` as the row/embedding orchestrator and evaluate each chunk's headings once. Existing end-to-end graph and phase tests characterize node, edge, lineage, and embedding output. |
+| AUD-014 | README test totals drifted from the test tree after four BATS cases were added: the unit count was 717 instead of 721, which also made the overall and CI-unit counts stale. `tools/docs-sync-check.sh` correctly failed the bridged regression. | Recomputed every README unit/total/CI-unit figure from the checker: 721 unit BATS tests, 2,017 total tests, and 614 unit tests in CI. The docs-sync checker and its BATS bridge case now pass. |
 
 ## Confirmed debt / follow-up
 
@@ -83,6 +84,9 @@ technical debt has been removed.
   tests/test_kgraph.py`: 188 passed after extracting the memory-store chunk phases.
 - `.venv/bin/python -m ruff check scripts/kgraph/memory_import.py
   tests/test_memory_import.py`: passed.
+- `tools/docs-sync-check.sh`: passed after updating README test counts.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
+  "16_docs_sync"`: 1 passed after correcting the documented counts.
 - `bash -n` and ShellCheck (`-x -P bin`) passed for the seven modified shell scripts.
 - `.venv/bin/python -m ruff check scripts tools tests nas/butler` and
   `.venv/bin/python -m mypy`: passed after strict model validation.
