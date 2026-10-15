@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from enum import Enum
-from typing import Any
+from typing import Any, Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -45,6 +45,13 @@ from .constants import CONCEPT_ALIASES, STOPWORDS
 # a file would add a second key instead of replacing the first — the array-growth
 # problem the article warns about in the same section).
 SOURCE_KEY_KINDS = ("memory", "chunk", "file", "life")
+
+
+class SourceMetadata(TypedDict):
+    sources_overflow: NotRequired[int]
+    confidence: NotRequired[float | None]
+    source_memory_ids: NotRequired[str | None]
+
 
 # The article warns that "storing source_chunk_ids as node property may result in
 # a very large array ... not recommended".  The same array is unavoidable when a
@@ -137,7 +144,7 @@ class SourceLineage(BaseModel):
     sources: list[str] = Field(default_factory=list)
     # Declared here because merge_sources records the array bound in it; both
     # subclasses used to declare their own identical copy.
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: SourceMetadata = Field(default_factory=SourceMetadata)
 
     def merge_sources(self, incoming: Iterable[str]) -> None:
         """Union *incoming* source keys into this element (sorted, bounded).
@@ -410,6 +417,36 @@ class GraphEdge(SourceLineage):
 # ── Graph ──────────────────────────────────────────────────────────────
 
 
+class CommunityCentralNode(TypedDict):
+    id: str
+    label: str
+    composite_score: float
+
+
+class CommunityGodNode(TypedDict):
+    id: str
+    label: str
+
+
+class CommunityBoundaryEdge(TypedDict):
+    source: str
+    target: str
+    label: str
+    direction: Literal["in", "out"]
+
+
+class CommunityRecord(TypedDict):
+    id: str
+    label: str
+    members: list[str]
+    size: int
+    central_nodes: NotRequired[list[CommunityCentralNode]]
+    god_nodes: NotRequired[list[CommunityGodNode]]
+    boundary_edges: NotRequired[list[CommunityBoundaryEdge]]
+    boundary_edge_count: NotRequired[int]
+    digest_version: NotRequired[str]
+
+
 class ClusterSuggestion(BaseModel):
     """A semantic cluster suggestion emitted by the graph projection."""
 
@@ -436,7 +473,7 @@ class GraphMeta(BaseModel):
     semantic_threshold: float = 0.82
     data_source: str = ""
     community_method: str = ""
-    communities: list[dict[str, Any]] = Field(default_factory=list)
+    communities: list[CommunityRecord] = Field(default_factory=list)
     # Projection counters set by projection.project_graph (were extra="allow"):
     # kgraph.html reads payload._meta.typeCounts / .nodeCount / .edgeCount.
     typeCounts: dict[str, int] = Field(default_factory=dict)

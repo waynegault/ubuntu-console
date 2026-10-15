@@ -166,8 +166,10 @@ def _merge_sources(target: dict, source: dict) -> None:
     incoming = source.get("sources") or []
     if not incoming:
         return
-    lineage = SourceLineage(sources=list(target.get("sources") or []),
-                            metadata=dict(target.get("metadata") or {}))
+    lineage = SourceLineage.model_validate({
+        "sources": list(target.get("sources") or []),
+        "metadata": target.get("metadata") or {},
+    })
     lineage.merge_sources(incoming)
     target["sources"] = lineage.sources
     if "sources_overflow" in lineage.metadata:

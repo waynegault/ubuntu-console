@@ -31,7 +31,7 @@ import warnings
 from typing import Any
 
 from .constants import COMMUNITY_DIGEST_VERSION
-from .models import Graph
+from .models import CommunityBoundaryEdge, CommunityRecord, Graph
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ def detect_communities(graph: Graph | dict, method: str = "leiden_like", **kwarg
     )
 
     graph.meta.community_method = effective_method
-    community_list = []
+    community_list: list[CommunityRecord] = []
     for idx, members in enumerate(comms):
         if len(members) < min_community_size:
             continue
@@ -356,7 +356,7 @@ def digest_communities(graph: Graph | dict,
             for r in picks if r["id"] in god_ids
         ]
 
-        boundary = []
+        boundary: list[CommunityBoundaryEdge] = []
         for e in graph.edges:
             src_in = e.source in member_set
             dst_in = e.target in member_set
@@ -376,7 +376,7 @@ def digest_communities(graph: Graph | dict,
     return graph
 
 
-def community_for_node(graph: Graph | dict, node_id: str) -> dict | None:
+def community_for_node(graph: Graph | dict, node_id: str) -> CommunityRecord | None:
     """The community record containing *node_id*, or None when it is unclustered."""
     if isinstance(graph, dict):
         graph = Graph.from_dict(graph)

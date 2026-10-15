@@ -265,9 +265,25 @@ class TestGraph:
         assert g.meta.view_mode == "overview"
         assert g.meta.semantic_threshold == 0.82
 
-    def test_meta_counts_and_cluster_suggestions_validate_strictly(self):
+    def test_meta_and_lineage_payloads_validate_strictly(self):
         with pytest.raises(ValidationError):
             GraphMeta.model_validate({"nodeCount": "2"})
+
+        GraphNode.model_validate({
+            "id": "n1",
+            "metadata": {
+                "sources_overflow": 3,
+                "confidence": 0.8,
+                "source_memory_ids": '["memory:m1"]',
+            },
+        })
+        for invalid_metadata in (
+            {"sources_overflow": "3"},
+            {"confidence": "0.8"},
+            {"unexpected": 3},
+        ):
+            with pytest.raises(ValidationError):
+                GraphNode.model_validate({"id": "n1", "metadata": invalid_metadata})
 
         payload = {
             "id": "semantic_cluster_1",
@@ -288,6 +304,26 @@ class TestGraph:
         ):
             with pytest.raises(ValidationError):
                 GraphMeta.model_validate({"clusterSuggestions": [invalid]})
+
+        community = {
+            "id": "community_0",
+            "label": "Alpha · Beta",
+            "members": ["a", "b"],
+            "size": 2,
+        }
+        assert GraphMeta.model_validate({"communities": [community]}).model_dump()[
+            "communities"
+        ] == [community]
+        for invalid in (
+            {**community, "size": "2"},
+            {**community, "unexpected": True},
+            {**community, "central_nodes": [{"id": "a", "label": "Alpha",
+                                               "composite_score": 0.5, "unexpected": 1}]},
+            {**community, "boundary_edges": [{"source": "a", "target": "x",
+                                                "label": "links", "direction": "sideways"}]},
+        ):
+            with pytest.raises(ValidationError):
+                GraphMeta.model_validate({"communities": [invalid]})
 
 # ── GraphBuilder ───────────────────────────────────────────────────────
 

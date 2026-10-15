@@ -2325,8 +2325,8 @@ class SourceLineagePersistenceTests(unittest.TestCase):
                 ],
                 'edges': [],
                 'meta': {'community_method': 'leiden_like',
-                         'communities': [{'id': 'c0', 'members': ['a', 'b'],
-                                          'size': 2, 'central': 'a'}]},
+                         'communities': [{'id': 'c0', 'label': 'A and B',
+                                          'members': ['a', 'b'], 'size': 2}]},
             })
             graph = load_from_graph_db(db)
             self.assertEqual(len(graph.meta.communities), 1)
