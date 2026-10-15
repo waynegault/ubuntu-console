@@ -1703,27 +1703,53 @@ def decision_commands(fields):
     return [token.strip() for token in raw.strip("[]").split(",") if token.strip()]
 
 
-def run_continuity(repo, names):
-    """Validate per-entry versioning/scope, and surface what still applies."""
-    rel = "docs/contracts/command-contracts.yaml"
-    print(f"=== Command-contract continuity ({rel} + {DECISION_DIR}/) ===")
-    data, text, error = command_contracts_file(repo)
-    if error:
-        sys.stderr.write(f"check-contracts: {error}\n")
-        return EXIT_CANNOT_RUN
-    entries = data.get("commands")
-    if not isinstance(entries, list) or not entries:
-        sys.stderr.write("check-contracts: command-contracts.yaml declares no commands — "
-                         "refusing to pass on an empty contract set.\n")
-        return EXIT_CANNOT_RUN
+def check_superseded_chains(by_name, rel, problems):
+    """Require each superseded-by chain to resolve unambiguously to an active entry."""
+    for name, group in sorted(by_name.items()):
+        for entry in group:
+            target = entry.get("superseded_by")
+            if not target:
+                continue
+            # A same-name replacement is valid (v1 to v2); only a later revisit
+            # to an earlier name is a cycle.
+            chain = [name]
+            cursor = name
+            for _step in range(len(by_name) + 1):
+                targets = sorted({str(other.get("superseded_by")).strip()
+                                  for other in by_name.get(cursor, [])
+                                  if other.get("superseded_by")})
+                if not targets:
+                    break
+                if len(targets) > 1:
+                    problems.append(f"  FAIL  {rel}:{name}: two entries for '{cursor}' name "
+                                    f"different replacements ({', '.join(targets)}) — which one "
+                                    f"supersedes the other is not decidable from the file")
+                    break
+                nxt = targets[0]
+                if nxt not in by_name:
+                    problems.append(f"  FAIL  {rel}:{name}: superseded_by names '{nxt}', which "
+                                    f"is not an entry in this file")
+                    break
+                active = [other for other in by_name[nxt] if other.get("status") == "active"]
+                if not active:
+                    problems.append(f"  FAIL  {rel}:{name}: the superseded_by chain ends at "
+                                    f"'{nxt}', which is not active ({' -> '.join(chain + [nxt])})")
+                    break
+                if nxt == cursor:
+                    break
+                if nxt in chain:
+                    problems.append(f"  FAIL  {rel}:{name}: the superseded_by chain loops back "
+                                    f"to '{nxt}' ({' -> '.join(chain + [nxt])})")
+                    break
+                chain.append(nxt)
+                cursor = nxt
 
+
+def validate_contract_entries(entries, rel, test_nodes):
+    """Validate each command row and collect names and traceability report lines."""
     problems = []
     by_name: dict[str, list[dict]] = {}
-    active_pairs = {}
-    # The traceability oracle (card SPEC-VV-CONSOLE-003): the @test names the pytest
-    # bridge would collect, plus how many files they were read from — the second
-    # figure is printed so an empty index is visible rather than reading as "clean".
-    test_nodes, n_bats = bats_test_nodes(repo)
+    active_pairs = set()
     trace_lines: list[str] = []
     for entry in entries:
         if not isinstance(entry, dict):
@@ -1773,61 +1799,22 @@ def run_continuity(repo, names):
             if key in active_pairs:
                 problems.append(f"  FAIL  {where}: two ACTIVE contracts for '{name}' in the "
                                 f"same scope '{scope}' — different scopes may coexist, the "
-                                f"same scope may not")
-            active_pairs[key] = True
+                                "same scope may not")
+            active_pairs.add(key)
         check_verified_by(entry, where, status, name, test_nodes, problems, trace_lines)
         check_disposition(entry, where, status, name, problems, trace_lines)
+    return by_name, trace_lines, problems
 
-    for name, group in sorted(by_name.items()):
-        for entry in group:
-            target = entry.get("superseded_by")
-            if not target:
-                continue
-            # The chain is walked by NAME, and a replacement may legitimately carry
-            # the superseded entry's own name (v1 superseded by v2 of the same
-            # command, which is the shape this file uses) — so a repeated name is a
-            # loop only when it is not the same-name replacement being resolved.
-            chain = [name]
-            cursor = name
-            for _step in range(len(by_name) + 1):
-                targets = sorted({str(other.get("superseded_by")).strip()
-                                  for other in by_name.get(cursor, [])
-                                  if other.get("superseded_by")})
-                if not targets:
-                    break
-                if len(targets) > 1:
-                    problems.append(f"  FAIL  {rel}:{name}: two entries for '{cursor}' name "
-                                    f"different replacements ({', '.join(targets)}) — which one "
-                                    f"supersedes the other is not decidable from the file")
-                    break
-                nxt = targets[0]
-                if nxt not in by_name:
-                    problems.append(f"  FAIL  {rel}:{name}: superseded_by names '{nxt}', which "
-                                    f"is not an entry in this file")
-                    break
-                active = [other for other in by_name[nxt] if other.get("status") == "active"]
-                if not active:
-                    problems.append(f"  FAIL  {rel}:{name}: the superseded_by chain ends at "
-                                    f"'{nxt}', which is not active ({' -> '.join(chain + [nxt])})")
-                    break
-                if nxt == cursor:
-                    break
-                if nxt in chain:
-                    problems.append(f"  FAIL  {rel}:{name}: the superseded_by chain loops back "
-                                    f"to '{nxt}' ({' -> '.join(chain + [nxt])})")
-                    break
-                chain.append(nxt)
-                cursor = nxt
 
-    records, register_problems = decision_records(repo)
-    problems.extend(register_problems)
-
-    positions = {}
+def validate_decision_records(repo, records, problems):
+    """Validate decision command references against the loaded module surface."""
     surface = {}
     if os.path.isfile(os.path.join(repo, "scripts/_module-list.sh")):
         order = module_list_names(repo) or []
-        positions, group_of, _f, _g = module_graph(repo, order)
-        surface = command_surface(repo, sorted(positions, key=lambda name: positions[name]), positions, group_of)
+        positions, group_of, _files, _groups = module_graph(repo, order)
+        surface = command_surface(
+            repo, sorted(positions, key=lambda name: positions[name]), positions, group_of,
+        )
     else:
         print("  NOT CHECKED  the decisions' `commands:` values resolve against the @exports "
               "surface only\n               when scripts/_module-list.sh is present")
@@ -1844,54 +1831,56 @@ def run_continuity(repo, names):
         problems.append("        check surfaces is empty, so nothing persists an agent's")
         problems.append("        decision across sessions")
 
-    if names:
-        wanted = [" ".join(names)]
-        print(f"  --- continuity for: {', '.join(wanted)} ---")
-        for query in wanted:
-            command = query.split()[0]
-            matches = [entry for entry in entries
-                       if isinstance(entry, dict)
-                       and (entry.get("name") or "").strip() == query]
-            if not matches:
-                matches = [entry for entry in entries
-                           if isinstance(entry, dict)
-                           and contract_command_name(entry) == command]
-            if not matches:
-                print(f"  NONE     '{query}' has no contract entry — a new command with no "
-                      f"recorded rule is not continuity-checked at all")
-            for entry in matches:
-                print(f"  ENTRY    {entry.get('name')} v{entry.get('version')} "
-                      f"status={entry.get('status')} scope={entry.get('scope')} "
-                      f"updated={entry.get('updated')} family={entry.get('family')}")
-                if entry.get("superseded_by"):
-                    print(f"           superseded {entry.get('superseded')} by "
-                          f"'{entry.get('superseded_by')}'")
-                if entry.get("verified_by"):
-                    print("           verified_by: "
-                          f"{', '.join(str(node) for node in entry['verified_by'])}")
-                if entry.get("disposition"):
-                    print(f"           disposition: {entry.get('disposition')}"
-                          + (f" — bound: {str(entry.get('bound')).strip()}"
-                             if entry.get("bound") else ""))
-            family = {entry.get("family") for entry in matches if isinstance(entry, dict)}
-            siblings = sorted(str(name) for name in {
-                entry.get("name") for entry in entries
-                if isinstance(entry, dict)
-                and entry.get("family") in family
-                and entry.get("name") not in {m.get("name") for m in matches}})
-            if siblings:
-                print(f"  FAMILY   still applies from the same family: {', '.join(siblings)}")
-            related = [name for name, fields, _where in records
-                       if command in decision_commands(fields)]
-            if related:
-                print(f"  DECISION {', '.join(related)}")
 
-    changed_note = print_changed_entries(repo, rel)
+def print_continuity_lookup(entries, names, records):
+    """Print the named contract, its family siblings, and governing decisions."""
+    if not names:
+        return
+    query = " ".join(names)
+    command = query.split()[0]
+    print(f"  --- continuity for: {query} ---")
+    matches = [entry for entry in entries
+               if isinstance(entry, dict)
+               and (entry.get("name") or "").strip() == query]
+    if not matches:
+        matches = [entry for entry in entries
+                   if isinstance(entry, dict)
+                   and contract_command_name(entry) == command]
+    if not matches:
+        print(f"  NONE     '{query}' has no contract entry — a new command with no "
+              f"recorded rule is not continuity-checked at all")
+    for entry in matches:
+        print(f"  ENTRY    {entry.get('name')} v{entry.get('version')} "
+              f"status={entry.get('status')} scope={entry.get('scope')} "
+              f"updated={entry.get('updated')} family={entry.get('family')}")
+        if entry.get("superseded_by"):
+            print(f"           superseded {entry.get('superseded')} by "
+                  f"'{entry.get('superseded_by')}'")
+        if entry.get("verified_by"):
+            print("           verified_by: "
+                  f"{', '.join(str(node) for node in entry['verified_by'])}")
+        if entry.get("disposition"):
+            print(f"           disposition: {entry.get('disposition')}"
+                  + (f" — bound: {str(entry.get('bound')).strip()}"
+                     if entry.get("bound") else ""))
+    family = {entry.get("family") for entry in matches if isinstance(entry, dict)}
+    matched_names = {entry.get("name") for entry in matches}
+    siblings = sorted(str(name) for name in {
+        entry.get("name") for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("family") in family
+        and entry.get("name") not in matched_names})
+    if siblings:
+        print(f"  FAMILY   still applies from the same family: {', '.join(siblings)}")
+    related = [name for name, fields, _where in records
+               if command in decision_commands(fields)]
+    if related:
+        print(f"  DECISION {', '.join(related)}")
 
-    # The traceability report, printed before the findings like `state` prints its
-    # NOT ENFORCED / NOT WITNESSED lines: an unverified entry is a stated gap, not a
-    # verdict, and the count in the summary says "(printed above)" so it cannot read
-    # as a number with nothing behind it.
+
+def print_continuity_result(entries, records, test_nodes, n_bats, trace_lines, problems,
+                            changed_note):
+    """Print traceability/finding counts and the final continuity verdict."""
     verified_lines = [line for line in trace_lines if line.startswith("VERIFIED")]
     unverified_lines = [line for line in trace_lines if line.startswith("NOT VERIFIED")]
     classified_lines = [line for line in trace_lines if line.startswith("DISPOSITION")]
@@ -1946,6 +1935,39 @@ def run_continuity(repo, names):
     print("  printed as UNCLASSIFIED, never a failure — the triage of a borderline line is the")
     print("  owner's call, and the check refuses an incoherent pair rather than guessing one.")
     return EXIT_CLEAN
+
+
+def run_continuity(repo, names):
+    """Validate per-entry versioning/scope, and surface what still applies."""
+    rel = "docs/contracts/command-contracts.yaml"
+    print(f"=== Command-contract continuity ({rel} + {DECISION_DIR}/) ===")
+    data, text, error = command_contracts_file(repo)
+    if error:
+        sys.stderr.write(f"check-contracts: {error}\n")
+        return EXIT_CANNOT_RUN
+    entries = data.get("commands")
+    if not isinstance(entries, list) or not entries:
+        sys.stderr.write("check-contracts: command-contracts.yaml declares no commands — "
+                         "refusing to pass on an empty contract set.\n")
+        return EXIT_CANNOT_RUN
+
+    # The traceability oracle (card SPEC-VV-CONSOLE-003): the @test names the pytest
+    # bridge would collect, plus how many files they were read from — the second
+    # figure is printed so an empty index is visible rather than reading as "clean".
+    test_nodes, n_bats = bats_test_nodes(repo)
+    by_name, trace_lines, problems = validate_contract_entries(entries, rel, test_nodes)
+
+    check_superseded_chains(by_name, rel, problems)
+
+    records, register_problems = decision_records(repo)
+    problems.extend(register_problems)
+    validate_decision_records(repo, records, problems)
+    print_continuity_lookup(entries, names, records)
+
+    changed_note = print_changed_entries(repo, rel)
+    return print_continuity_result(
+        entries, records, test_nodes, n_bats, trace_lines, problems, changed_note,
+    )
 
 
 def print_changed_entries(repo, rel):
