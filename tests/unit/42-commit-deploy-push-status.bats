@@ -50,6 +50,9 @@ setup() {
     # reaches the remote (and its hook) instead of failing on "no upstream".
     git -C "$WORK" config push.autoSetupRemote true
     git -C "$WORK" remote add origin "$ORIGIN"
+    printf 'baseline\n' > "$WORK/baseline.txt"
+    git -C "$WORK" add baseline.txt
+    git -C "$WORK" commit --quiet -m baseline
     printf 'hello world\n' > "$WORK/note.txt"
 
     cd "$WORK"
@@ -68,6 +71,26 @@ echo "push rejected by the test fixture" >&2
 exit 1
 HOOK
     chmod +x "$ORIGIN/hooks/pre-receive"
+}
+
+_stub_commit_auto_dependencies() {
+    __test_port() { return 0; }
+    __llm_proc_is_server() { return 0; }
+    ss() { printf 'LISTEN users:(("llama-server",pid=4242,fd=1))\n'; }
+    curl() {
+        case "${COMMIT_AUTO_CURL_MODE:-success}" in
+            transport-failure)
+                printf '%s\n' "curl: simulated local inference failure" >&2
+                return 22
+                ;;
+            malformed-response)
+                printf '%s\n' '{"choices":'
+                ;;
+            success)
+                printf '%s\n' '{"choices":[{"message":{"content":"generated test message"}}]}'
+                ;;
+        esac
+    }
 }
 
 @test "commit_deploy: a rejected push returns non-zero and never claims SUCCESS" {
@@ -94,6 +117,51 @@ HOOK
     [[ "$output" == *"[SUCCESS]"* ]]
     [[ "$output" != *"[REMOTE PUSH FAILED]"* ]]
     # The commit reached the remote: HEAD and its tracked upstream are one commit.
+    run bash -c '[[ "$(git rev-parse HEAD)" == "$(git rev-parse "@{u}")" ]]'
+    [ "$status" -eq 0 ]
+}
+
+@test "commit_auto: local inference transport failure is non-zero and leaves files uncommitted" {
+    _stub_commit_auto_dependencies
+    export COMMIT_AUTO_CURL_MODE=transport-failure
+
+    run commit_auto
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"simulated local inference failure"* ]]
+    [[ "$output" == *"[REQUEST FAILED]"* ]]
+    [ -f "$WORK/note.txt" ]
+    [ "$(git log -1 --format=%s)" = "baseline" ]
+    run git diff --cached --quiet
+    [ "$status" -eq 0 ]
+    [ -z "$(git --git-dir="$ORIGIN" for-each-ref --format='%(refname)' refs/heads)" ]
+}
+
+@test "commit_auto: malformed model response is non-zero and reports parse failure" {
+    _stub_commit_auto_dependencies
+    export COMMIT_AUTO_CURL_MODE=malformed-response
+
+    run commit_auto
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"parse error"* ]]
+    [[ "$output" == *"[FAILED TO GENERATE MESSAGE]"* ]]
+    [ -f "$WORK/note.txt" ]
+    [ "$(git log -1 --format=%s)" = "baseline" ]
+    run git diff --cached --quiet
+    [ "$status" -eq 0 ]
+}
+
+@test "commit_auto: generated message is committed and pushed only after acceptance" {
+    _stub_commit_auto_dependencies
+    export COMMIT_AUTO_CURL_MODE=success
+
+    run commit_auto <<< "y"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"generated test message"* ]]
+    [[ "$output" == *"[SUCCESS]"* ]]
+    [ "$(git log -1 --format=%s)" = "generated test message" ]
     run bash -c '[[ "$(git rev-parse HEAD)" == "$(git rev-parse "@{u}")" ]]'
     [ "$status" -eq 0 ]
 }

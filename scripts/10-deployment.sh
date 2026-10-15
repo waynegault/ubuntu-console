@@ -2,7 +2,10 @@
 # ─── Module: 10-deployment ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-10-15): commit_auto returns failure for transport/invalid LLM responses,
+#   reports curl/jq diagnostics, and checks index cleanup instead of treating generation
+#   failures as successful cancellation.
 #   v7 (2026-10-02): commit_deploy returns the PUSH's status (card cf05ce24) — a
 #   failed push printed "[REMOTE PUSH FAILED]" and then returned the footer's 0, so
 #   a caller checking the exit code read a failed sync as success.
@@ -298,7 +301,7 @@ function commit_deploy() {
     diff_body=$(git diff --cached 2>/dev/null)
     if ! __scan_diff_for_secrets "$diff_body"
     then
-        git reset HEAD >/dev/null 2>&1
+        __commit_unstage || return 1
         __tac_footer
         return 1
     fi
@@ -330,7 +333,7 @@ function commit_deploy() {
 }
 
 # ---------------------------------------------------------------------------
-# commit_auto — Stage, generate commit message via local LLM, push, deploy.
+# commit_auto — Stage, generate a commit message via local LLM, then commit and push after approval.
 # Uses curl + jq (not Python) for the non-streaming LLM request.
 #
 # SECURITY WARNING: The git diff is sent to $LOCAL_LLM_URL. If this URL is
@@ -338,6 +341,15 @@ function commit_deploy() {
 # keys, passwords) will be leaked. Ensure LOCAL_LLM_URL always points to a
 # local-only inference server (127.0.0.1).
 # ---------------------------------------------------------------------------
+# __commit_unstage — undo command staging on abort without changing worktree files.
+function __commit_unstage() {
+    if ! git reset HEAD >/dev/null
+    then
+        __tac_info "Staging" "[FAILED TO UNSTAGE CHANGES]" "$C_Error"
+        return 1
+    fi
+}
+
 function commit_auto() {
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1
     then
@@ -384,7 +396,7 @@ function commit_auto() {
     #   2. Send diff to local LLM for commit message generation
     #   3. Show proposed message to user
     #   4. Accept (Y/Enter), reject (n), or edit (e) interactively
-    #   5. On accept: commit, push, deploy. On reject: git reset HEAD.
+    #   5. On accept: commit and push. On reject: git reset HEAD.
 
     git add .
     # Capture both stat (file-level summary) and body (line-level diff)
@@ -405,7 +417,7 @@ ${diff_body}"
     # line cap above applies only to the LLM prompt context.
     if ! __scan_diff_for_secrets "$diff_body_full"
     then
-        git reset HEAD >/dev/null 2>&1
+        __commit_unstage || return 1
         return 1
     fi
 
@@ -430,22 +442,27 @@ ${diff_body}"
           max_tokens:$max_tokens,temperature:$temperature}')
 
     local raw_response
-    raw_response=$(curl -s --max-time 30 "$LOCAL_LLM_URL" \
+    if ! raw_response=$(curl --fail --silent --show-error --max-time 30 "$LOCAL_LLM_URL" \
         -H "Content-Type: application/json" \
-        -d "$payload" 2>/dev/null)
+        -d "$payload")
+    then
+        __tac_info "LLM" "[REQUEST FAILED]" "$C_Error"
+        __commit_unstage || return 1
+        return 1
+    fi
     local msg
     # Normalise the model's reply: drop markdown fences/backticks and stray
     # quotes, skip leading blank lines, keep the first line, trim surrounding
     # whitespace, then cap at 72 chars.
-    msg=$(printf '%s' "$raw_response" | jq -r '.choices[0].message.content // empty' 2>/dev/null | \
+    msg=$(printf '%s' "$raw_response" | jq -r '.choices[0].message.content // empty' | \
         tr -d '`"' | sed '/^[[:space:]]*$/d' | head -1 | \
         sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | cut -c1-72)
 
     if [[ -z "$msg" || "$msg" == "null" ]]
     then
         __tac_info "LLM" "[FAILED TO GENERATE MESSAGE]" "$C_Error"
-        git reset HEAD >/dev/null 2>&1
-        return 0  # No changes made (same as user cancellation)
+        __commit_unstage || return 1
+        return 1
     fi
 
     printf '%s\n' "${C_Highlight}Proposed:${C_Reset} $msg"
@@ -456,7 +473,7 @@ ${diff_body}"
             y|yes|"") break ;;
             n|no)
                 __tac_info "Commit" "[CANCELLED]" "$C_Dim"
-                git reset HEAD >/dev/null 2>&1
+                __commit_unstage || return 1
                 return 0
                 ;;
             e|edit)
@@ -464,7 +481,7 @@ ${diff_body}"
                 if [[ -z "$msg" ]]
                 then
                     __tac_info "Commit" "[CANCELLED]" "$C_Dim"
-                    git reset HEAD >/dev/null 2>&1
+                    __commit_unstage || return 1
                     return 0
                 fi
                 break
