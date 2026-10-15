@@ -99,13 +99,16 @@ def read_blob(db: Path) -> bytes | None:
     if row is None:
         return None
     value = row[0]
-    return value if isinstance(value, (bytes, bytearray)) else str(value).encode()
+    # `bytes(value)` rather than returning the value: sqlite3 can hand back a
+    # `bytearray`, which is deliberately NOT part of this function's `bytes` contract.
+    return bytes(value) if isinstance(value, (bytes, bytearray)) else str(value).encode()
 
 
-def split(state: dict, keep_days: int, now_ms: float) -> tuple[list, list]:
+def split(state: dict, keep_days: int, now_ms: float) -> tuple[list[dict], list[dict]]:
     """(keep, drop) under the stated rule.  Pure — the selftest drives this."""
     cutoff = now_ms - keep_days * 86_400_000
-    keep, drop = [], []
+    keep: list[dict] = []
+    drop: list[dict] = []
     for conv in state.get("conversations", []) or []:
         has_messages = bool(conv.get("messages"))
         recent = float(conv.get("updatedAt") or 0) >= cutoff
