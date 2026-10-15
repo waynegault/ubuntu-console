@@ -78,8 +78,12 @@ These differ from the NAS here while the NAS still carries the old content (depl
 see the one-writer note).  One list, so the deploy pass has a single source:
 
 **The CPAP pair was DEPLOYED to the NAS on 2026-10-03 (conflict C6)** — verified by md5 in both
-directions; the two shell files below remain pending.
+directions; the new response-validation delta and two shell-file changes below remain pending.
 
+- `scripts/cpap-myair-fetch.py` — repo-only strict response validation added 2026-10-15 after
+  synthetic tests showed an HTTP 200 response missing `getPatientWrapper` could be normalized
+  into success-shaped empty data. The NAS copy still has the earlier behavior; deployment and
+  verification remain pending with the NAS owner.
 - `scripts/internet-quality-monitor.sh` — `TX`, `RX` and `MIN` were parsed and never used
   (SC2034); removed.
 - `nas-hardening/nas-health-check.sh` — the size test used unquoted `$LOG` and `$(…)`

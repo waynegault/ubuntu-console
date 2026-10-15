@@ -417,6 +417,40 @@ def test_cpap_myair_fetch_surfaces_graphql_errors_without_network(
         mod._fetch_eu("test-user", "test-password")
 
 
+@pytest.mark.parametrize(
+    ("response_payload", "error"),
+    [
+        ({"data": {}}, "missing getPatientWrapper"),
+        (
+            {
+                "data": {
+                    "getPatientWrapper": {
+                        "patient": {"id": "device-1"},
+                        "fgDevices": [],
+                        "sleepRecords": {"items": [None]},
+                    },
+                },
+            },
+            "sleepRecords.items must be a list of objects",
+        ),
+    ],
+    ids=("missing-wrapper", "invalid-record"),
+)
+def test_cpap_myair_fetch_rejects_malformed_success_payloads_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+    response_payload: dict[str, Any],
+    error: str,
+) -> None:
+    mod = _load("nas_cpap_myair_fetch_invalid", "cpap-myair-fetch.py")
+    monkeypatch.setenv("CPAP_MYAIR_BEARER_TOKEN", "test-only-bearer")
+    monkeypatch.setenv("CPAP_MYAIR_API_KEY", "test-only-api-key")
+    opener = _FakeHttpOpener(_FakeHttpResponse(response_payload))
+    monkeypatch.setattr(mod.urllib.request, "build_opener", lambda *_handlers: opener)
+
+    with pytest.raises(mod.MyAirFetchError, match=error):
+        mod._fetch_eu("test-user", "test-password")
+
+
 # ── smoke: every migrated importer still loads (lib.butler_common resolves) ───
 
 _IMPORT_SAFE = [

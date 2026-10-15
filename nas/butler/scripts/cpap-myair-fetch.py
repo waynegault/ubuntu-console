@@ -352,14 +352,44 @@ def _fetch_eu(username: str, password: str) -> dict[str, Any]:
     if status != 200:
         raise MyAirFetchError(f"EU GraphQL request failed ({status}): {body[:300]}")
     data = json.loads(body)
+    if not isinstance(data, dict):
+        raise MyAirFetchError("EU GraphQL response must be a JSON object")
     if data.get("errors"):
         raise MyAirFetchError(f"EU GraphQL returned errors: {data['errors']}")
 
-    wrapper = ((data.get("data") or {}).get("getPatientWrapper") or {})
-    patient = wrapper.get("patient") or {}
-    devices = wrapper.get("fgDevices") or []
+    response_data = data.get("data")
+    if not isinstance(response_data, dict):
+        raise MyAirFetchError("EU GraphQL response is missing the data object")
+    wrapper = response_data.get("getPatientWrapper")
+    if not isinstance(wrapper, dict):
+        raise MyAirFetchError("EU GraphQL response is missing getPatientWrapper")
+    patient = wrapper.get("patient")
+    if not isinstance(patient, dict):
+        raise MyAirFetchError("EU GraphQL response is missing the patient object")
+
+    devices_value = wrapper.get("fgDevices")
+    if devices_value is None:
+        devices: list[dict[str, Any]] = []
+    elif isinstance(devices_value, list) and all(isinstance(item, dict) for item in devices_value):
+        devices = devices_value
+    else:
+        raise MyAirFetchError("EU GraphQL fgDevices must be a list of objects or null")
+
+    sleep_records = wrapper.get("sleepRecords")
+    if sleep_records is None:
+        records: list[dict[str, Any]] = []
+    elif not isinstance(sleep_records, dict) or "items" not in sleep_records:
+        raise MyAirFetchError("EU GraphQL sleepRecords must contain an items list")
+    elif sleep_records["items"] is None:
+        records = []
+    elif isinstance(sleep_records["items"], list) and all(
+        isinstance(item, dict) for item in sleep_records["items"]
+    ):
+        records = sleep_records["items"]
+    else:
+        raise MyAirFetchError("EU GraphQL sleepRecords.items must be a list of objects or null")
+
     device = devices[0] if devices else {}
-    records = (((wrapper.get("sleepRecords") or {}).get("items")) or [])
     normalized_device = {
         "serialNumber": patient.get("id") or username,
         "localizedName": patient.get("firstName") or "ResMed MyAir EU",
