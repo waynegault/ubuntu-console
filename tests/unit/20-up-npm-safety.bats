@@ -100,6 +100,10 @@ SYSTEMCTL_STUB
 
     # shellcheck source=env.sh
     source "$REPO_ROOT/env.sh"
+
+    # 01-constants.sh prepends host tool paths while sourcing; keep the npm and
+    # systemctl stubs ahead of them so these safety cases never reach real tools.
+    export PATH="$NPM_STUB_DIR:$PATH"
 }
 
 teardown() {
