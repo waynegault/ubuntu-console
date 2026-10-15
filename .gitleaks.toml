@@ -11,6 +11,22 @@
 [extend]
 useDefault = true
 
+# A TRACKED settings file must never carry a credential.  The companion writes
+# `qwen-code.apiKey` into whichever settings file is live, and this repo TRACKS
+# `.vscode/settings.json`, so the key reached two commits on 2026-10-15 (`5bdff9f4`
+# introduced it by sweeping the staged file; every commit after carried it until
+# `5b06daef` removed it).  It was one push from the public remote.
+#
+# The default ruleset has NO rule for this shape: a full `gitleaks git` over 1375
+# commits and 110 MB read "no leaks found" WITH the key present, which is exactly why
+# it got through.  Measured 2026-10-15 - this rule is the re-runnable check that would
+# have caught it at commit time.
+[[rules]]
+id = "qwen-code-api-key"
+description = "qwen-code companion API key in a tracked settings file"
+regex = '''"qwen-code\.apiKey"\s*:\s*"[A-Za-z0-9._\-]{8,}"'''
+tags = ["key", "qwen-code"]
+
 [allowlist]
 description = "Measured non-secrets (2026-10-02): generated, gitignored graph cache."
 paths = [
