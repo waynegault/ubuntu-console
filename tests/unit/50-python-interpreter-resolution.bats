@@ -6,12 +6,12 @@
 # different interpreter from the repo's .venv — which on this box is the only one
 # carrying the project's dependencies (the venv is 3.14; system python3.12 lacks
 # them).  tools/count-ratchet.sh already prefers $REPO_ROOT/.venv/bin/python3;
-# this file covers the two remaining sites:
+# this file covers the shared resolver and every remaining inline-Python caller:
 #
-#   * tools/import-windows-env.sh — _tac_python_path() must print the venv python
-#     when one exists and PATH python3 when none does.  The Windows bridge itself
-#     cannot run under CI (no pwsh.exe), so the script's source guard lets these
-#     cases exercise the resolver directly.
+#   * tools/python-runtime.sh — _tac_python_path() must prefer the repository venv,
+#     then an explicit TAC_PYTHON, then PATH python3.
+#   * tools/import-windows-env.sh and standalone bin/scripts callers must use that
+#     resolver rather than bypassing it with a bare python3.
 #   * scripts/09d-oc-agents.sh — its embedded JSON helpers must invoke the
 #     profile's $TAC_PYTHON resolver, not a bare python3.
 #
@@ -19,7 +19,7 @@
 # ==============================================================================
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
-IMPORT_SCRIPT="$REPO_ROOT/tools/import-windows-env.sh"
+PYTHON_RUNTIME="$REPO_ROOT/tools/python-runtime.sh"
 MODULE="$REPO_ROOT/scripts/09d-oc-agents.sh"
 
 setup() {
@@ -31,56 +31,98 @@ teardown() {
     rm -rf "$TAC_TEST_TMPDIR"
 }
 
-@test "import-windows-env prefers the venv python3 when bin/python also exists" {
-    # Failure caught: the resolver reverts to the removed `.venv/bin/python`
-    # preference, so a venv carrying BOTH binaries resolves to the wrong one.
-    #
-    # HERMETIC by construction. This case used to source the repo's own
-    # $REPO_ROOT/tools/import-windows-env.sh and assert the result was
-    # "$REPO_ROOT/.venv/bin/python3" — but the resolver keys off the SCRIPT's own
-    # directory, and `.venv/` is gitignored, so in CI's checkout (no .venv) it
-    # correctly fell back to PATH `python3` and the case failed everywhere except
-    # a dev box.  A test for a host could not pass on the host.
+@test "python runtime prefers venv python3 when both venv binaries exist" {
     local sandbox="$TAC_TEST_TMPDIR/venv-both"
-    mkdir -p "$sandbox/tools" "$sandbox/.venv/bin"
-    cp "$IMPORT_SCRIPT" "$sandbox/tools/import-windows-env.sh"
+    mkdir -p "$sandbox/.venv/bin"
     printf '#!/bin/sh\nexit 0\n' > "$sandbox/.venv/bin/python"
     printf '#!/bin/sh\nexit 0\n' > "$sandbox/.venv/bin/python3"
     chmod +x "$sandbox/.venv/bin/python" "$sandbox/.venv/bin/python3"
 
-    run bash -c 'source "$1" >/dev/null 2>&1; _tac_python_path' _ \
-        "$sandbox/tools/import-windows-env.sh"
+    unset TAC_PYTHON
+    source "$PYTHON_RUNTIME"
+    run _tac_python_path "$sandbox"
     [ "$status" -eq 0 ]
     [ "$output" = "$sandbox/.venv/bin/python3" ]
     [ -x "$output" ]
 }
 
-@test "import-windows-env resolves a venv that ships only bin/python3" {
-    # Failure caught: a resolver keyed on `.venv/bin/python` (no 3) misses a venv
-    # that ships only the python3-suffixed binary and falls back to PATH python3.
+@test "python runtime resolves a venv that ships only bin/python3" {
     local sandbox="$TAC_TEST_TMPDIR/venv-only-python3"
-    mkdir -p "$sandbox/tools" "$sandbox/.venv/bin"
-    cp "$IMPORT_SCRIPT" "$sandbox/tools/import-windows-env.sh"
+    mkdir -p "$sandbox/.venv/bin"
     printf '#!/bin/sh\nexit 0\n' > "$sandbox/.venv/bin/python3"
     chmod +x "$sandbox/.venv/bin/python3"
 
-    run bash -c 'source "$1" >/dev/null 2>&1; _tac_python_path' _ \
-        "$sandbox/tools/import-windows-env.sh"
+    unset TAC_PYTHON
+    source "$PYTHON_RUNTIME"
+    run _tac_python_path "$sandbox"
     [ "$status" -eq 0 ]
     [ "$output" = "$sandbox/.venv/bin/python3" ]
 }
 
-@test "import-windows-env falls back to PATH python3 when no venv exists" {
-    # Failure caught: the fallback path stops working, so the tool becomes
-    # unusable wherever the repo has no venv.
-    local sandbox="$TAC_TEST_TMPDIR/no-venv"
-    mkdir -p "$sandbox/tools"
-    cp "$IMPORT_SCRIPT" "$sandbox/tools/import-windows-env.sh"
+@test "python runtime resolves a venv that ships only bin/python" {
+    local sandbox="$TAC_TEST_TMPDIR/venv-only-python"
+    mkdir -p "$sandbox/.venv/bin"
+    printf '#!/bin/sh\nexit 0\n' > "$sandbox/.venv/bin/python"
+    chmod +x "$sandbox/.venv/bin/python"
 
-    run bash -c 'source "$1" >/dev/null 2>&1; _tac_python_path' _ \
-        "$sandbox/tools/import-windows-env.sh"
+    unset TAC_PYTHON
+    source "$PYTHON_RUNTIME"
+    run _tac_python_path "$sandbox"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$sandbox/.venv/bin/python" ]
+}
+
+@test "python runtime uses TAC_PYTHON when no repository venv exists" {
+    local sandbox="$TAC_TEST_TMPDIR/no-venv"
+    mkdir -p "$sandbox"
+    local shim="$TAC_TEST_TMPDIR/python-override"
+    printf '#!/bin/sh\nexit 0\n' > "$shim"
+    chmod +x "$shim"
+
+    export TAC_PYTHON="$shim"
+    source "$PYTHON_RUNTIME"
+    run _tac_python_path "$sandbox"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$shim" ]
+}
+
+@test "python runtime rejects an unavailable TAC_PYTHON override" {
+    local sandbox="$TAC_TEST_TMPDIR/no-venv-invalid-override"
+    mkdir -p "$sandbox" "$TAC_TEST_TMPDIR/empty-path"
+
+    local saved_path="$PATH"
+    export TAC_PYTHON="$TAC_TEST_TMPDIR/missing-python"
+    export PATH="$TAC_TEST_TMPDIR/empty-path"
+    source "$PYTHON_RUNTIME"
+    run _tac_python_path "$sandbox"
+    export PATH="$saved_path"
+    [ "$status" -eq 127 ]
+    [[ "$output" == *"TAC_PYTHON is not executable or on PATH"* ]]
+}
+
+@test "python runtime falls back to PATH python3 when no venv or override exists" {
+    local sandbox="$TAC_TEST_TMPDIR/no-venv"
+    mkdir -p "$sandbox"
+
+    unset TAC_PYTHON
+    source "$PYTHON_RUNTIME"
+    run _tac_python_path "$sandbox"
     [ "$status" -eq 0 ]
     [ "$output" = "python3" ]
+}
+
+@test "inline Python callers use the shared interpreter resolver" {
+    for script in \
+        "$REPO_ROOT/tools/import-windows-env.sh" \
+        "$REPO_ROOT/bin/qwen-memory-index-patch.sh" \
+        "$REPO_ROOT/bin/qwen-guard-patch.sh" \
+        "$REPO_ROOT/bin/qwen-memory-style-patch.sh" \
+        "$REPO_ROOT/bin/llama-watchdog-guard.sh" \
+        "$REPO_ROOT/scripts/qwen-transcript-retention.sh"
+    do
+        grep -qF 'tools/python-runtime.sh' "$script"
+        grep -qF '_tac_python_path' "$script"
+    done
 }
 
 @test "09d's JSON helper invokes TAC_PYTHON instead of a bare python3" {

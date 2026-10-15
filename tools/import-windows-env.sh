@@ -3,12 +3,9 @@
 # import-windows-env.sh — Windows environment variable importer
 # ==============================================================================
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 10
-#   v10 (2026-10-03): the interpreter is chosen by the named resolver _tac_python_path
-#   (.venv/bin/python3 when present, else PATH python3), replacing `command -v python3`
-#   plus a `.venv/bin/python` preference — a bare python3 missing from PATH could abort
-#   the script under set -e before the venv was checked (card 117e3303). The source guard
-#   lets tests exercise the resolver without running the Windows bridge.
+# Module Version: 11
+#   v11 (2026-10-15): interpreter selection moved to tools/python-runtime.sh so standalone
+#   scripts and tools use the same repo-venv-first policy.
 # @modular-section: import-windows-user-env
 # @depends: none (standalone; calls pwsh.exe / tasklist.exe)
 # @exports: (none — standalone script, writes to output-file)
@@ -23,23 +20,12 @@
 
 set -euo pipefail
 
-# _tac_python_path — print the interpreter the embedded Python runs under: the
-# project's .venv/bin/python3 when it exists, else PATH python3. This is the same
-# prefer-venv-then-fall-back shape tools/count-ratchet.sh uses; resolving with
-# `command -v python3` first meant a bare python3 absent from PATH aborted the
-# script under set -e before the venv was ever consulted (card 117e3303).
-_tac_python_path() {
-    local _repo_root
-    _repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    if [[ -x "$_repo_root/.venv/bin/python3" ]]; then
-        printf '%s\n' "$_repo_root/.venv/bin/python3"
-    else
-        printf '%s\n' python3
-    fi
-}
+_REPO_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+# shellcheck source=tools/python-runtime.sh
+source "$_REPO_ROOT/tools/python-runtime.sh"
 
 # Sourced by tests/unit/50-python-interpreter-resolution.bats to exercise
-# _tac_python_path — the Windows env bridge cannot run under CI (no pwsh.exe), so a
+# the shared resolver — the Windows env bridge cannot run under CI (no pwsh.exe), so a
 # source stops here after defining the resolver. Executed normally otherwise.
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
     return 0
@@ -50,7 +36,7 @@ fi
 # failed midway.)
 umask 077
 
-_TAC_PY="$(_tac_python_path)"
+_TAC_PY="$(_tac_python_path "$_REPO_ROOT")"
 
 OUT="${1:-$HOME/.openclaw/.env.bridge}"
 shift || true

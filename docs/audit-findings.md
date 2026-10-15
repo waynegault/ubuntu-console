@@ -15,6 +15,7 @@ technical debt has been removed.
 | AUD-005 | Chunk concept links repeated the same node-collection and chunk/file edge construction for actors, topics, and themes, making lineage and file-link behavior prone to drift. | Consolidated the shared operation in `_link_chunk_concept`; kept the existing no-file-link behavior for semantic entities. Existing mixed fixture tests assert the produced nodes, edges, and lineage. |
 | AUD-006 | Graph models used Pydantic's lax default coercion (`line="8"`, `degree=True`, and string counts were accepted), and model validators silently discarded removed `weight`, internal `_strength`, and renamed `async` fields. Assignment could also bypass field validation. | Enabled strict validation and assignment validation. Kept only evidenced integer-ID normalization and the confidence enum's explicit producer-string conversion; reject booleans/other ID types and obsolete/unknown fields. Added regression coverage for construction, assignment, metadata, and removed fields. |
 | AUD-007 | `tests/unit/20-up-npm-safety.bats` installed `npm`/`systemctl` stubs before sourcing `env.sh`, whose constants module prepended host paths; two failure-recovery cases reached host commands and failed. | Reasserted stub precedence after sourcing. All three BATS cases pass through the `.venv` pytest bridge. Commit `729776bb`. |
+| AUD-008 | Five repository shell entrypoints launched inline Python through bare `python3`, bypassing the repository venv and risking missing or mismatched dependencies; interpreter selection was duplicated in the Windows environment importer. | Added `tools/python-runtime.sh` as the shared venv-first resolver (then validated `TAC_PYTHON`, then PATH `python3`) and routed all five callers plus the importer through it. Regression cases cover both venv executable names, explicit override, invalid override, PATH fallback, and caller wiring. The deployment script's system-Python venv bootstrap remains an intentional exception. |
 
 ## Confirmed debt / follow-up
 
@@ -46,6 +47,9 @@ technical debt has been removed.
   749 passed, 15 subtests passed after strict model validation.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_models.py tests/test_kgraph.py`:
   236 passed after strict model validation.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_bats_bridge.py -k
+  "50_python_interpreter_resolution"`: 8 passed for the shared interpreter resolver and caller wiring.
+- `bash -n` and ShellCheck (`-x -P bin`) passed for the seven modified shell scripts.
 - `.venv/bin/python -m ruff check scripts tools tests nas/butler` and
   `.venv/bin/python -m mypy`: passed after strict model validation.
 - The full suite before the latest fixes reported 2,056 passed, 15 subtests passed, and

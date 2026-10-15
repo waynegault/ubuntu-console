@@ -34,16 +34,23 @@
 #   deliberate, non-bench stop.  `rm` the file to resume.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-15): the alert writer uses the shared repository-venv-first resolver.
 
 set -euo pipefail
+
+_BIN_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
+REPO_ROOT="$(cd "$(dirname "$_BIN_PATH")/.." && pwd)"
+# shellcheck source=tools/python-runtime.sh
+source "$REPO_ROOT/tools/python-runtime.sh"
+PYTHON_BIN="$(_tac_python_path "$REPO_ROOT")"
 
 # log lives in the shared bin library (one definition, every bin/ caller).
 # Sourced by realpath so the ~/.local/bin symlink and the repo path both resolve.
 TAC_LOG_TAG="watchdog-guard"
 export TAC_LOG_TAG
 # shellcheck source=_tac-bin-lib.sh
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_tac-bin-lib.sh"
+source "$(dirname "$_BIN_PATH")/_tac-bin-lib.sh"
 
 TIMER="llama-watchdog.timer"
 # The investigator GPU lock path comes from the shared helper (same precedence
@@ -105,7 +112,7 @@ fi
 
 ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 mkdir -p "$(dirname "$ALERT")"
-python3 - "$ALERT" "$ts" "$n" <<'PY'
+"$PYTHON_BIN" - "$ALERT" "$ts" "$n" <<'PY'
 import json, os, sys
 path, ts, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
 rows = []

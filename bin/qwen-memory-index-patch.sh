@@ -102,7 +102,8 @@
 # reviewable (and re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-10-15): embedded Python uses the shared repository-venv-first resolver.
 #   v5 (2026-10-14): recognise CLI 0.25.1, which RENAMED the byte cap `MAX_INDEX_BYTES` ->
 #   `MAX_INDEX_CHARS` and SPLIT assembleIndex: the kept-Set budget moved into trimIndexToBudget
 #   and upstream now appends its OWN INDEX_TRUNCATION_NOTICE whenever it sheds (that notice
@@ -152,6 +153,12 @@
 #   matching replacement are still to be derived -- --check says `bytecap: stock` for exactly
 #   that copy rather than MISMATCH.
 set -euo pipefail
+
+_BIN_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
+REPO_ROOT="$(cd "$(dirname "$_BIN_PATH")/.." && pwd)"
+# shellcheck source=tools/python-runtime.sh
+source "$REPO_ROOT/tools/python-runtime.sh"
+PYTHON_BIN="$(_tac_python_path "$REPO_ROOT")"
 
 MARKER_TRUNC="LOCAL PATCH 2026-10-01 (qwen-memory-index-patch)"
 MARKER_BYTES="LOCAL PATCH 2026-10-01 (qwen-memory-index-bytecap)"
@@ -278,7 +285,7 @@ for f in "${files[@]}"; do
     # Exact-match, per-copy all-or-nothing: every hunk this copy still needs must find its
     # anchor exactly once, or nothing is written.  Post-conditions then re-check the promises.
     if ! PATCH_FILE="$f" PATCH_MARKER_TRUNC="$MARKER_TRUNC" PATCH_MARKER_BYTES="$MARKER_BYTES" \
-         PATCH_MARKER_TITLE="$MARKER_TITLE" PATCH_MARKER_LINES="$MARKER_LINES" python3 - <<'PY'
+         PATCH_MARKER_TITLE="$MARKER_TITLE" PATCH_MARKER_LINES="$MARKER_LINES" "$PYTHON_BIN" - <<'PY'
 import os, pathlib, re
 
 p = pathlib.Path(os.environ["PATCH_FILE"])

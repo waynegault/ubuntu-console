@@ -75,7 +75,8 @@
 # patcher is re-runnable by anyone) here.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 3
+# Module Version: 4
+#   v4 (2026-10-15): embedded Python uses the shared repository-venv-first resolver.
 #   v2 (2026-10-05, card 59f47689): the rule element extended to the five measured classes
 #   (MD049 + MD032 as before, plus MD041 / MD022 / MD046+MD040), and the patch made
 #   UPGRADE-AWARE — state is decided by the payload's own phrase, so a copy already carrying
@@ -93,6 +94,12 @@
 #   only "never asterisks" invites the mirror error this store ALSO flags (MD050, measured
 #   2026-10-01 with two underscore strong runs).
 set -euo pipefail
+
+_BIN_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
+REPO_ROOT="$(cd "$(dirname "$_BIN_PATH")/.." && pwd)"
+# shellcheck source=tools/python-runtime.sh
+source "$REPO_ROOT/tools/python-runtime.sh"
+PYTHON_BIN="$(_tac_python_path "$REPO_ROOT")"
 
 MARKER="LOCAL PATCH 2026-10-02 (qwen-memory-extractor-style)"
 EXTRACTOR_NAME="You are now acting as the managed memory extraction subagent"
@@ -172,7 +179,7 @@ for f in "${files[@]}"; do
 
     # Exact-match, per-copy all-or-nothing: the anchor must occur exactly once, or nothing
     # is written.  Post-conditions then re-check the promises before the file is replaced.
-    if ! PATCH_FILE="$f" PATCH_MARKER="$MARKER" python3 - <<'PY'
+    if ! PATCH_FILE="$f" PATCH_MARKER="$MARKER" "$PYTHON_BIN" - <<'PY'
 import os
 import pathlib
 

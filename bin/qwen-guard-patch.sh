@@ -112,8 +112,15 @@
 # this file.  The companion to it, qwen-guard-selfheal.sh, is tracked beside it.
 #
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 1
+# Module Version: 2
+#   v2 (2026-10-15): embedded Python uses the shared repository-venv-first resolver.
 set -euo pipefail
+
+_BIN_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
+REPO_ROOT="$(cd "$(dirname "$_BIN_PATH")/.." && pwd)"
+# shellcheck source=tools/python-runtime.sh
+source "$REPO_ROOT/tools/python-runtime.sh"
+PYTHON_BIN="$(_tac_python_path "$REPO_ROOT")"
 
 MARKER_RO="LOCAL PATCH 2026-09-16"
 MARKER_TOKEN="LOCAL PATCH 2026-10-01 (git token must name git)"
@@ -147,7 +154,7 @@ fi
 
 # The allowlisted roots as a JavaScript array-literal body, via python's json encoder, so a
 # path containing a quote or a backslash cannot break the emitted source.
-roots_as_json="$(python3 -c 'import json,sys; print(",".join(json.dumps(a) for a in sys.argv[1:]))' \
+roots_as_json="$("$PYTHON_BIN" -c 'import json,sys; print(",".join(json.dumps(a) for a in sys.argv[1:]))' \
     "${ALLOWED_MUTATING_REPOSITORY_ROOTS[@]}")"
 
 rc=0
@@ -226,7 +233,7 @@ do
     # finds its anchor, so the states are applied atomically per chunk.  Post-conditions then
     # re-check the promises (stock verbs, allowlisted roots, the inserted symbols) before the
     # new text is written.
-    if ! PATCH_FILE="$f" PATCH_STYLE="$style" PATCH_ROOTS="$roots_as_json" python3 - <<'PY'
+    if ! PATCH_FILE="$f" PATCH_STYLE="$style" PATCH_ROOTS="$roots_as_json" "$PYTHON_BIN" - <<'PY'
 import json, os, pathlib
 
 p = pathlib.Path(os.environ["PATCH_FILE"])

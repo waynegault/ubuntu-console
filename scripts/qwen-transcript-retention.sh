@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-10-15): embedded Python uses the shared repository-venv-first resolver.
 # ==============================================================================
 # qwen-transcript-retention.sh — age out chat transcripts that nothing else owns.
 #
@@ -80,11 +81,17 @@
 #   qwen-transcript-retention.sh --qwen-dir DIR --registry-dir DIR     # tests
 #
 # WHERE THE WORK SITS: this file owns the command line (flag -> setting) and the report's
-# shape; the registry identity test, the scan and the removal are python3 in the heredoc
+# shape; the registry identity test, the scan and the removal are in the Python heredoc
 # below, because they need JSON, /proc and age arithmetic.  That split is the one
 # bin/qwen-memory-index-patch.sh already uses for logic of the same kind.
 # ==============================================================================
 set -euo pipefail
+
+_SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
+REPO_ROOT="$(cd "$(dirname "$_SCRIPT_PATH")/.." && pwd)"
+# shellcheck source=tools/python-runtime.sh
+source "$REPO_ROOT/tools/python-runtime.sh"
+PYTHON_BIN="$(_tac_python_path "$REPO_ROOT")"
 
 # Translated and validated by python, which owns the usage text and the error wording.
 # qr_max_age_days starts EMPTY and QR_MAX_AGE_GIVEN records whether the flag was seen, so
@@ -172,7 +179,7 @@ export QR_REGISTRY_DIR="$qr_registry_dir"
 export QR_HELP="$qr_help"
 export QR_USAGE_ERROR="$qr_usage_error"
 
-python3 - <<'PY'
+"$PYTHON_BIN" - <<'PY'
 """qwen-transcript-retention -- see the shell header for the policy this encodes.
 
 The shell wrapper has already translated the command line into QR_* settings.  This
