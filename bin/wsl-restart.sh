@@ -50,7 +50,9 @@
 #     bounded, then forced
 #   - `wsl.exe --shutdown`
 #   - waits, bounded, for the distro to answer again
-#   - relaunches the client on a fresh relay: code.cmd --remote wsl+ubuntu-24.04 <folder>
+#   - relaunches EVERY window the restart closed, each on a fresh relay, from the URIs step 0c
+#     captured (vscode-remote://...); the configured folder is the fallback:
+#     code.cmd --remote wsl+ubuntu-24.04 <folder>
 #   - deletes its own task registration, but ONLY in one-shot mode - a daily
 #     schedule has to survive its own run
 #
@@ -92,7 +94,15 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-10-15): EVERY window the restart closes is reopened, not just the configured
+#   folder (Wayne: "restart all instances of vs code that were closed, not just the
+#   ubuntu-console instance").  Step 0c captures VS Code's own windowsState.openedWindows as
+#   one vscode-remote:// URI per open window - measured 3 open, each on wsl+ubuntu-24.04 -
+#   and step 4 loops that list with --folder-uri, which reopens a window on its OWN authority
+#   and folder.  The configured folder stays as the FALLBACK, so an unreadable capture behaves
+#   exactly as v8 did.  The capture runs on the DISTRO side through the wrapper's existing
+#   `wsl.exe -d ... -- <cmd>` hop, so no PowerShell is quoted inside the .cmd.
 #   v8 (2026-10-15): step 3b's block moved OUT of render_wrapper into
 #   render_compaction_step().  Inlining it had pushed that function past the §18.3 10.4
 #   hundred-line bound, which the pre-push ratchet caught and refused - the same
@@ -135,7 +145,7 @@
 #   v2 (2026-10-15): record the measured Logon Mode ("Interactive only") - it is
 #   both what lets the wrapper's relaunch reach the desktop and what bounds the
 #   task to a logged-on user.
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 set -uo pipefail
 
@@ -191,6 +201,44 @@ GATE_CMD_UNIX="${TAC_WSL_RESTART_GATE_CMD:-$HOME/.local/bin/wsl-restart.sh}"
 # returns the pages a deleted value freed, and this restart is the one window where nothing
 # holds the state DBs open.  Same stable path convention as the gate.
 COMPACT_CMD_UNIX="${TAC_WSL_RESTART_COMPACT_CMD:-$HOME/.local/bin/vscode-state-compact.sh}"
+
+# The window list the CAPTURE step writes and step 4 reads back: every VS Code window OPEN at
+# restart time, one vscode-remote:// URI per line.
+# Wayne, 2026-10-15: the wrapper closed EVERY Code.exe instance and then relaunched ONE window
+# (`--remote wsl+<distro> <folder>`), so every other window the restart had closed stayed closed.
+# The source is VS Code's OWN windowsState (measured the same day: 3 open windows, each a
+# `vscode-remote://wsl%2B<distro>/<path>` URI), so the list is exactly what the client would
+# have restored.  Windows-visible on purpose: the generated .cmd reads it with `for /f`, and the
+# capture itself runs on the DISTRO side through the wrapper's existing `wsl.exe -d ... -- <cmd>`
+# hop - which is also why it needs no PowerShell quoting inside a batch file.
+STORAGE_UNIX_DEFAULT='/mnt/c/Users/wayne/AppData/Roaming/Code/User/globalStorage/storage.json'
+WINDOWS_TXT_WIN_DEFAULT='C:\Users\wayne\wsl-restart-windows.txt'
+STORAGE_UNIX="${TAC_WSL_RESTART_STORAGE_UNIX:-$STORAGE_UNIX_DEFAULT}"
+WINDOWS_TXT_WIN="${TAC_WSL_RESTART_WINDOWS_TXT_WIN:-$WINDOWS_TXT_WIN_DEFAULT}"
+WINDOWS_TXT_UNIX="${TAC_WSL_RESTART_WINDOWS_TXT_UNIX:-/mnt/c/Users/wayne/wsl-restart-windows.txt}"
+
+# capture_windows — write the OPEN windows' URIs to the list step 4 relaunches from.  Runs on
+# the distro side, BEFORE the client is closed, because the client owns this state file while it
+# is up.  It never fails the restart: an unreadable file or no windows leaves an EMPTY list, and
+# step 4 then falls back to the single configured folder - the behaviour that existed before.
+capture_windows() {
+    local _n=0
+    : > "$WINDOWS_TXT_UNIX"
+    if [[ ! -r "$STORAGE_UNIX" ]]; then
+        _say "capture: no window state at $STORAGE_UNIX - step 4 falls back to the configured folder"
+        return 0
+    fi
+    # `"folder":"<uri>"` appears once per open window in windowsState.openedWindows; JSON does
+    # not escape `/`, so the value is taken verbatim.  sorted -u so a window listed twice in the
+    # file is relaunched once, never twice.
+    # swallow-ok: the client can be mid-write here, and an EMPTY list IS the answer - step 4 falls back
+    grep -o '"folder":"[^"]*"' "$STORAGE_UNIX" 2>/dev/null |
+        sed 's/^"folder":"//; s/"$//' | sort -u > "$WINDOWS_TXT_UNIX"
+    # swallow-ok: grep -c exits 1 on zero matches, and zero IS the count this line reports
+    _n=$(grep -c . "$WINDOWS_TXT_UNIX" 2>/dev/null) || _n=0
+    _say "capture: $_n open window(s) -> $WINDOWS_TXT_UNIX"
+    return 0
+}
 
 # Deliberately NOT named `log`: bin/_tac-bin-lib.sh owns that name (a gate asserts
 # it is defined exactly once, there).  This script wants the caller to READ its
@@ -387,6 +435,50 @@ render_compaction_step() {
         ''
 }
 
+# The wrapper's CAPTURE step (0c), printed by its own function so render_wrapper stays a
+# readable list of STEPS.  It runs AFTER the operator gate (a cancel must not capture) and
+# BEFORE step 1, because the client owns the state file while it is up.  The capture runs on
+# the DISTRO side through the same `wsl.exe -d ... -- <cmd>` hop the gate and the compaction
+# use, so no PowerShell has to be quoted inside a batch file.  It never gates the restart: a
+# failure leaves an EMPTY list and step 4 falls back to the configured folder.
+render_capture_step() {
+    printf '%s\r\n' \
+        'REM 0c. CAPTURE the open windows BEFORE step 1 closes them.  Every window this' \
+        'REM     restart is about to close is recorded as its own vscode-remote:// URI, so' \
+        'REM     step 4 can reopen ALL of them instead of only the configured folder.' \
+        "wsl.exe -d ${DISTRO} -u wayne -- ${GATE_CMD_UNIX} --capture-windows >> \"%LOG%\" 2>&1" \
+        ''
+}
+
+# The wrapper's RELAUNCH step (4), printed by its own function so render_wrapper stays a
+# readable list of STEPS - the SAME extraction the operator gate and the compaction step
+# needed (v8), because inlining this block pushed render_wrapper past the §18.3 10.4
+# hundred-line bound and the pre-push ratchet refused it.  It reopens EVERY window step 0c
+# captured, each on its OWN authority and folder; the configured folder is the FALLBACK, so
+# an unreadable capture behaves exactly as it did before v9.
+render_relaunch_step() {
+    local _folder="$1"
+    printf '%s\r\n' \
+        'REM 4. Relaunch EVERY window that was open, on a fresh relay. Absolute, because' \
+        'REM    the wrapper gets no shell profile. Step 0c captured the URIs, and' \
+        'REM    --folder-uri reopens a window on its OWN authority and folder. The' \
+        'REM    configured folder is the FALLBACK (Wayne, 2026-10-15: this step used to' \
+        'REM    relaunch one window and leave every other window the restart closed shut).' \
+        "set \"CODE_CMD=${CODE_CMD_WIN}\"" \
+        "set \"WINDOWS_TXT=${WINDOWS_TXT_WIN}\"" \
+        'set RELAUNCHED=0' \
+        'if exist "%WINDOWS_TXT%" for /f "usebackq delims=" %%F in ("%WINDOWS_TXT%") do (' \
+        '    echo [%DATE% %TIME%] relaunching window: %%F >> "%LOG%"' \
+        '    "%CODE_CMD%" --folder-uri "%%F" >> "%LOG%" 2>&1' \
+        '    set RELAUNCHED=1' \
+        ')' \
+        'if "%RELAUNCHED%"=="0" (' \
+        "    echo [%DATE% %TIME%] no captured windows - relaunching the configured folder >> \"%LOG%\"" \
+        "    echo [%DATE% %TIME%] relaunching: %CODE_CMD% --remote wsl+${DISTRO} ${_folder} >> \"%LOG%\"" \
+        "    \"%CODE_CMD%\" --remote wsl+${DISTRO} \"${_folder}\" >> \"%LOG%\" 2>&1" \
+        ')'
+}
+
 # The wrapper that runs on the Windows side.  CRLF is deliberate: cmd.exe parses a
 # LF-only .cmd unreliably around labels and goto, and this file is full of both.
 # `_mode` is `oneshot` (fired once, deletes its own registration) or `scheduled`
@@ -436,6 +528,7 @@ render_wrapper() {
     # this function past the §18.3 10.4 hundred-line bound, and the STEP LIST is what a
     # reader comes here for.
     render_operator_gate
+    render_capture_step
     printf '%s\r\n' \
         '' \
         'REM 1. Close the VS Code client. WM_CLOSE first so hot-exit writes its' \
@@ -471,12 +564,8 @@ render_wrapper() {
     # function past the §18.3 10.4 hundred-line bound, and the STEP LIST is what a reader
     # comes here for.
     render_compaction_step
+    render_relaunch_step "$_folder"
     printf '%s\r\n' \
-        'REM 4. Relaunch the client on a fresh relay. Absolute, because the' \
-        'REM    wrapper gets no shell profile.' \
-        "set \"CODE_CMD=${CODE_CMD_WIN}\"" \
-        "echo [%DATE% %TIME%] relaunching: %CODE_CMD% --remote wsl+${DISTRO} ${_folder} >> \"%LOG%\"" \
-        "\"%CODE_CMD%\" --remote wsl+${DISTRO} \"${_folder}\" >> \"%LOG%\" 2>&1" \
         'ping -n 11 127.0.0.1 >nul' \
         'tasklist /fi "IMAGENAME eq Code.exe" >> "%LOG%" 2>&1' \
         'goto final' \
@@ -708,6 +797,9 @@ main() {
             --restart)    _mode="restart" ;;
             --status)     _mode="status" ;;
             --precheck)   _mode="precheck" ;;
+            # Handled during parsing, like --version: the capture is a pure read of VS Code's
+            # own window state and must not need the preconditions a restart does.
+            --capture-windows) capture_windows; return 0 ;;
             --unschedule) _mode="unschedule" ;;
             --dry-run)    _mode="dry-run" ;;
             --schedule)   _mode="schedule"; shift; _want="${1:-}"

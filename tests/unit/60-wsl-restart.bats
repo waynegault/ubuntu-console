@@ -111,6 +111,33 @@ teardown() {
     [[ -n "${SANDBOX:-}" ]] && rm -rf "$SANDBOX"
 }
 
+# Falsification: fails before v9, which captured nothing and relaunched ONLY the configured
+# folder - so every other window the restart had closed stayed closed (Wayne, 2026-10-15).
+@test "wsl-restart: the capture records every open window, and step 4 loops them" {
+    local _storage="$SANDBOX/storage.json" _out="$SANDBOX/windows.txt"
+    cat > "$_storage" <<'JSON'
+{"windowsState":{"openedWindows":[
+ {"folder":"vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"},
+ {"folder":"vscode-remote://wsl%2Bubuntu-24.04/home/wayne/investigator"},
+ {"folder":"vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"}]}}
+JSON
+
+    run env TAC_WSL_RESTART_STORAGE_UNIX="$_storage" \
+            TAC_WSL_RESTART_WINDOWS_TXT_UNIX="$_out" \
+            "$SCRIPT" --capture-windows
+    [ "$status" -eq 0 ]
+    # THREE entries, TWO distinct URIs: a window listed twice is reopened once, not twice.
+    [ "$(wc -l < "$_out")" -eq 2 ]
+    grep -q 'investigator' "$_out"
+
+    # Step 4 loops that list, and the configured folder stays as the FALLBACK.
+    run "$SCRIPT" --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'--folder-uri'* ]]
+    [[ "$output" == *'for /f'* ]]
+    [[ "$output" == *'--remote wsl+Ubuntu-24.04'* ]]
+}
+
 # The line number of the FIRST line matching a pattern, or 0 when there is none.
 # awk rather than grep: it always exits 0, so a miss cannot abort the case under
 # bats' errexit and be misread as a pass.
