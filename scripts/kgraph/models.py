@@ -255,7 +255,7 @@ class GraphNode(SourceLineage):
     line_start: int | str | None = None
     line_end: int | str | None = None
     summary_labels: list[str] = Field(default_factory=list)
-    typed_summary: dict[str, Any] = Field(default_factory=dict)
+    typed_summary: dict[str, str] = Field(default_factory=dict)
     # Synthesis/belief-node fields set by memory_import's registry/synthesis phases.
     evidence_count: int = 0
     generated_at: str = ""

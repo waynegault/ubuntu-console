@@ -82,11 +82,18 @@ class TestGraphNode:
             content_preview="Actor: Wayne",
             inferred_type=True,
             type_confidence=0.96,
+            typed_summary={"project": "Launcher reliability"},
         )
         assert node.type == "actor"
         assert node.role == "CEO"
         assert node.inferred_type is True
         assert node.type_confidence == 0.96
+        assert node.typed_summary == {"project": "Launcher reliability"}
+        with pytest.raises(ValidationError):
+            GraphNode.model_validate({
+                "id": "n1",
+                "typed_summary": {"project": 7},
+            })
 
     def test_projection_fields_are_declared(self):
         # degree/importance are DECLARED GraphNode fields (set by
