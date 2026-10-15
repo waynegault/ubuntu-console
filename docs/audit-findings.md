@@ -119,6 +119,7 @@ technical debt has been removed.
 - `.venv/bin/python -m mypy`: passed across 102 configured source files after the checker split.
 - `.venv/bin/python -m pyright`: 0 errors and 5 known NAS missing-module-source warnings; no warnings were suppressed.
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_nas_collector_failures.py`: 44 passed, including synthetic-transport coverage for the active EU MyAir GraphQL adapter.
+- `.venv/bin/python -m pytest -q -p no:cacheprovider --ignore=tests/test_bats_bridge.py`: 759 passed, 15 subtests passed after adding the CPAP adapter coverage. The full BATS bridge remains intentionally unclaimed.
 - `.venv/bin/python -m ruff check tests/test_nas_collector_failures.py` and `.venv/bin/python -m mypy`: passed. Pyright remains at 0 errors and 5 visible NAS dependency-source warnings.
 - `tools/docs-sync-check.sh`: passed after updating the README to 2,030 tests (1,324 BATS + 706 Python).
 - `.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_models.py tests/test_kgraph.py tests/test_report.py`: 250 passed after narrowing optional TypedDict reads.
