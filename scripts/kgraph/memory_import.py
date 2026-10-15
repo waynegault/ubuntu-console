@@ -356,6 +356,29 @@ class _MemoryStoreIngest:
     def add_edge(self, edge: dict) -> None:
         self.builder.add_edge(_bind_edge_sources(edge, self.chunk_source, self.file_source))
 
+    def _link_chunk_concept(
+        self,
+        chunk_key: str,
+        path: str,
+        concept_id: str,
+        label: str,
+        chunk_concepts: list[str],
+        link_file: bool = True,
+    ) -> None:
+        """Record one chunk concept and link it consistently from its file."""
+        chunk_concepts.append(concept_id)
+        self.add_edge({
+            'from': f'chunk:{chunk_key}',
+            'to': concept_id,
+            'label': label,
+        })
+        if path and link_file:
+            self.add_edge({
+                'from': f'file:{path}',
+                'to': concept_id,
+                'label': label,
+            })
+
     # ── node typing ────────────────────────────────────────────────────
     def add_actor_node(self, name: str, role: str = '') -> str:
         actor_id = f"actor:{slugify(name)}"
@@ -716,7 +739,7 @@ class _MemoryStoreIngest:
                 'sources': [chunk_source],
             })
 
-            chunk_concepts = []
+            chunk_concepts: list[str] = []
 
             if path:
                 if path not in self.file_paths:
@@ -739,18 +762,9 @@ class _MemoryStoreIngest:
 
             for name, role in iter_actor_mentions(chunk_text or ''):
                 actor_id = self.add_actor_node(name, role)
-                chunk_concepts.append(actor_id)
-                self.add_edge({
-                    'from': f'chunk:{chunk_key}',
-                    'to': actor_id,
-                    'label': 'mentions actor',
-                })
-                if path:
-                    self.add_edge({
-                        'from': f'file:{path}',
-                        'to': actor_id,
-                        'label': 'mentions actor',
-                    })
+                self._link_chunk_concept(
+                    chunk_key, path or '', actor_id, 'mentions actor', chunk_concepts,
+                )
 
             for ref_a, ref_b in _FILE_REF_PATTERN.findall(chunk_text or ''):
                 ref = ref_a or ref_b
@@ -797,18 +811,9 @@ class _MemoryStoreIngest:
             for hm in _HEADING_PATTERN.finditer(chunk_text or ''):
                 topic_id = self.add_topic_node(hm.group(1))
                 if topic_id:
-                    chunk_concepts.append(topic_id)
-                    self.add_edge({
-                        'from': f'chunk:{chunk_key}',
-                        'to': topic_id,
-                        'label': 'covers topic',
-                    })
-                    if path:
-                        self.add_edge({
-                            'from': f'file:{path}',
-                            'to': topic_id,
-                            'label': 'covers topic',
-                        })
+                    self._link_chunk_concept(
+                        chunk_key, path or '', topic_id, 'covers topic', chunk_concepts,
+                    )
 
             # Lift higher-level semantic themes from headings and explicit summary lines
             for hm in _HEADING_PATTERN.finditer(chunk_text or ''):
@@ -822,36 +827,18 @@ class _MemoryStoreIngest:
                         continue
                     theme_id = self.add_theme_node(kind, derived, preview=heading_text)
                     if theme_id:
-                        chunk_concepts.append(theme_id)
-                        self.add_edge({
-                            'from': f'chunk:{chunk_key}',
-                            'to': theme_id,
-                            'label': f'has {kind}',
-                        })
-                        if path:
-                            self.add_edge({
-                                'from': f'file:{path}',
-                                'to': theme_id,
-                                'label': f'has {kind}',
-                            })
+                        self._link_chunk_concept(
+                            chunk_key, path or '', theme_id, f'has {kind}', chunk_concepts,
+                        )
 
             for kind, pat in _THEMATIC_PATTERNS:
                 for match in pat.finditer(chunk_text or ''):
                     derived = (match.group(1) or '').strip()
                     theme_id = self.add_theme_node(kind, derived, preview=derived)
                     if theme_id:
-                        chunk_concepts.append(theme_id)
-                        self.add_edge({
-                            'from': f'chunk:{chunk_key}',
-                            'to': theme_id,
-                            'label': f'has {kind}',
-                        })
-                        if path:
-                            self.add_edge({
-                                'from': f'file:{path}',
-                                'to': theme_id,
-                                'label': f'has {kind}',
-                            })
+                        self._link_chunk_concept(
+                            chunk_key, path or '', theme_id, f'has {kind}', chunk_concepts,
+                        )
 
             for raw_line in (chunk_text or '').splitlines():
                 line = raw_line.strip()
@@ -864,18 +851,9 @@ class _MemoryStoreIngest:
                     derived = (m.group(1) or '').strip(' .:-')
                     theme_id = self.add_theme_node(kind, derived, preview=line)
                     if theme_id:
-                        chunk_concepts.append(theme_id)
-                        self.add_edge({
-                            'from': f'chunk:{chunk_key}',
-                            'to': theme_id,
-                            'label': f'has {kind}',
-                        })
-                        if path:
-                            self.add_edge({
-                                'from': f'file:{path}',
-                                'to': theme_id,
-                                'label': f'has {kind}',
-                            })
+                        self._link_chunk_concept(
+                            chunk_key, path or '', theme_id, f'has {kind}', chunk_concepts,
+                        )
                         break
 
             # Detect activation-report authorship from H1 title
@@ -883,28 +861,17 @@ class _MemoryStoreIngest:
                 agent_name = am.group(1)
                 role = AGENT_ROLES.get(agent_name, 'Agent')
                 actor_id = self.add_actor_node(agent_name, role)
-                chunk_concepts.append(actor_id)
-                self.add_edge({
-                    'from': f'chunk:{chunk_key}',
-                    'to': actor_id,
-                    'label': 'authored by',
-                })
-                if path:
-                    self.add_edge({
-                        'from': f'file:{path}',
-                        'to': actor_id,
-                        'label': 'authored by',
-                    })
+                self._link_chunk_concept(
+                    chunk_key, path or '', actor_id, 'authored by', chunk_concepts,
+                )
 
             for entity_kind, entity_label in self.extract_semantic_entities(chunk_text or ''):
                 entity_id = self.add_theme_node(entity_kind, entity_label, preview=entity_label)
                 if entity_id:
-                    chunk_concepts.append(entity_id)
-                    self.add_edge({
-                        'from': f'chunk:{chunk_key}',
-                        'to': entity_id,
-                        'label': f'has {entity_kind}',
-                    })
+                    self._link_chunk_concept(
+                        chunk_key, path or '', entity_id, f'has {entity_kind}',
+                        chunk_concepts, link_file=False,
+                    )
 
             semantic_summary, summary_labels, typed_summary = _build_chunk_semantic_summary(self.builder, chunk_concepts)
             if semantic_summary:

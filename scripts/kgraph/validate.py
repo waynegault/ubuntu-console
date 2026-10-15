@@ -221,6 +221,7 @@ def validate_graph(graph: object) -> list[dict]:
             "severity": "error",
             "message": f"Excessive nesting depth ({depth}, max {MAX_JSON_DEPTH})",
         })
+        return errors
 
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
@@ -268,6 +269,8 @@ def validate_graph_file(filepath: str) -> list[dict]:
             graph = json.load(f)
     except json.JSONDecodeError as e:
         return [{"severity": "error", "message": f"JSON parse error in {filepath} at line {e.lineno}, col {e.colno}: {e.msg}"}]
+    except RecursionError:
+        return [{"severity": "error", "message": f"JSON nesting exceeds parser limit in {filepath}"}]
     except OSError as e:
         return [{"severity": "error", "message": f"Error reading {filepath}: {e}"}]
 
@@ -291,6 +294,8 @@ def validate_graph_payload(payload: Any) -> tuple[bool, str]:
             data = json.loads(payload)
         except json.JSONDecodeError as e:
             return False, f"Invalid JSON: {e}"
+        except RecursionError:
+            return False, "JSON nesting exceeds parser limit"
     elif isinstance(payload, dict):
         data = payload
     else:

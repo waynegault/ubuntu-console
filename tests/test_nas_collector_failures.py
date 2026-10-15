@@ -375,6 +375,53 @@ def test_migrated_modules_with_paths_sandboxed(
     assert _load("nas_smoke_cpap", "cpap-myair-collector.py") is not None
 
 
+def test_graph_oauth_token_cache_rejects_corruption(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mod = _load("nas_oauth_corrupt", "read-myair-otp-graph-oauth.py")
+    token_file = tmp_path / "token.json"
+    monkeypatch.setenv("CPAP_MYAIR_GRAPH_TOKEN_FILE", str(token_file))
+
+    token_file.write_text("{", encoding="utf-8")
+    with pytest.raises(ValueError, match="not valid JSON"):
+        mod._token_state()
+
+    token_file.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="JSON object"):
+        mod._token_state()
+
+
+def test_graph_oauth_token_cache_is_atomic_and_private(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mod = _load("nas_oauth_save", "read-myair-otp-graph-oauth.py")
+    token_file = tmp_path / "nested" / "token.json"
+    monkeypatch.setenv("CPAP_MYAIR_GRAPH_TOKEN_FILE", str(token_file))
+
+    mod._save_token_state({"access_token": "test"})
+
+    assert mod._token_state() == {"access_token": "test"}
+    assert token_file.stat().st_mode & 0o777 == 0o600
+    assert list(token_file.parent.iterdir()) == [token_file]
+
+
+def test_graph_oauth_token_cache_refuses_to_write_without_private_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mod = _load("nas_oauth_mode_failure", "read-myair-otp-graph-oauth.py")
+    token_file = tmp_path / "token.json"
+    monkeypatch.setenv("CPAP_MYAIR_GRAPH_TOKEN_FILE", str(token_file))
+
+    def deny_private_mode(_fd: int, _mode: int) -> None:
+        raise PermissionError("chmod denied")
+
+    monkeypatch.setattr(mod.os, "fchmod", deny_private_mode)
+    with pytest.raises(PermissionError, match="chmod denied"):
+        mod._save_token_state({"access_token": "test"})
+    assert not token_file.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
 # ── acceptance: no bare `except: pass` in the five card-2 files ───────────────
 
 _FIXED = [

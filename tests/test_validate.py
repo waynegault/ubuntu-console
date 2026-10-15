@@ -47,6 +47,16 @@ class TestValidateLimits(unittest.TestCase):
         errors = self.validate.validate_graph(root)
         self.assertTrue(any("Excessive nesting" in e["message"] for e in errors))
 
+    def test_excessive_node_nesting_stops_before_recursive_validators(self):
+        nested: object = "leaf"
+        for _ in range(500):
+            nested = {"nested": nested}
+        errors = self.validate.validate_graph({
+            "nodes": [{"id": "n", "label": "N", "payload": nested}],
+            "edges": [],
+        })
+        self.assertTrue(any("Excessive nesting" in e["message"] for e in errors))
+
     def test_non_list_nodes_and_edges_are_reported(self):
         errors = self.validate.validate_graph({"nodes": "x", "edges": "y"})
         messages = " ".join(e["message"] for e in errors)
@@ -129,6 +139,27 @@ class TestValidateFileAndPayload(unittest.TestCase):
         self.assertIn("JSON parse error", errors[0]["message"])
         self.assertIn("line", errors[0]["message"])
 
+    def test_deep_json_file_reports_excessive_nesting(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "deep.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{"nodes":[{"id":"n","label":"N","payload":')
+                f.write("[" * 1500 + "0" + "]" * 1500)
+                f.write('}],"edges":[]}')
+            errors = self.validate.validate_graph_file(path)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Excessive nesting", errors[0]["message"])
+
+    def test_json_file_reports_decoder_recursion(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "deep.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{}")
+            with mock.patch.object(self.validate.json, "load", side_effect=RecursionError):
+                errors = self.validate.validate_graph_file(path)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("nesting exceeds parser limit", errors[0]["message"])
+
     def test_valid_file_is_clean_and_errors_carry_the_filename(self):
         with tempfile.TemporaryDirectory() as td:
             ok = os.path.join(td, "ok.json")
@@ -178,6 +209,22 @@ class TestValidateFileAndPayload(unittest.TestCase):
         ok, reason = self.validate.validate_graph_payload(42)
         self.assertFalse(ok)
         self.assertIn("JSON string or dict", reason)
+
+    def test_payload_rejects_deep_json_with_depth_error(self):
+        raw = (
+            '{"nodes":[{"id":"n","label":"N","payload":'
+            + "[" * 1500 + "0" + "]" * 1500
+            + '}],"edges":[]}'
+        )
+        ok, reason = self.validate.validate_graph_payload(raw)
+        self.assertFalse(ok)
+        self.assertIn("Excessive nesting", reason)
+
+    def test_payload_reports_decoder_recursion(self):
+        with mock.patch.object(self.validate.json, "loads", side_effect=RecursionError):
+            ok, reason = self.validate.validate_graph_payload("{}")
+        self.assertFalse(ok)
+        self.assertIn("nesting exceeds parser limit", reason)
 
     def test_payload_surfaces_the_first_error_message(self):
         ok, reason = self.validate.validate_graph_payload({

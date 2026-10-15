@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.1.0
+# Version: 1.2.0
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
 
 """Microsoft Graph OAuth OTP reader for ResMed myAir MFA emails.
@@ -18,6 +18,7 @@ import os
 import re
 import ssl
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -61,22 +62,40 @@ def _token_file() -> Path:
 
 def _token_state() -> dict:
     p = _token_file()
-    if not p.exists():
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+        state = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"OAuth token cache is not valid JSON: {p}") from exc
+    if not isinstance(state, dict):
+        raise ValueError(f"OAuth token cache must contain a JSON object: {p}")
+    return state
 
 
 def _save_token_state(state: dict) -> None:
     p = _token_file()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{p.name}.", dir=p.parent)
     try:
-        os.chmod(p, 0o600)
-    except Exception:
-        pass
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            fd = -1
+            json.dump(state, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, p)
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def _post_form(url: str, form: dict[str, str]) -> dict:
