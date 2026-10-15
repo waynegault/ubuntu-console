@@ -19,8 +19,14 @@ WHY THIS EXISTS
 
 CONTRACT
     no arguments    DRY RUN: print exactly what would be removed, change NOTHING.
-    --apply         the ONLY path that writes.  Takes a timestamped backup FIRST, then
-                    rewrites the value; re-reads and re-reports afterwards.
+    --apply         the only path that writes the VALUE.  Takes a timestamped backup
+                    FIRST, then rewrites the value; re-reads and re-reports afterwards.
+    --vacuum        compact each state DB instead of trimming.  Deleting a value frees
+                    PAGES, and only a VACUUM returns them (measured 2026-10-15: the key
+                    fell 75,342,349 -> 297 bytes while the file stayed at 153,202,688
+                    with 152,252,416 free).  Reports alone; --vacuum --apply gzips the
+                    DB to the backup home first, then VACUUMs and re-reports from disk.
+                    It writes the DB FILE; --apply writes the value.
     --keep-days N   keep conversations that HAVE MESSAGES and were updated within N days
                     (default 90).  Conversations with no messages are always dropped —
                     measured 2026-10-15: 641 of 1006 held nothing at all.
@@ -29,10 +35,11 @@ CONTRACT
     -h / --help     this text.
 
 PRECONDITION — READ IT
-    VS Code must be CLOSED.  The running app caches extension state in memory and
-    flushes it, so a write made under a live window can be silently overwritten.  This
-    tool cannot see the Windows-side app from inside WSL, so it states the precondition
-    and requires --apply rather than pretending it can check.
+    VS Code must be CLOSED.  The running app caches extension state in memory and flushes
+    it, so a write made under a live window can be silently overwritten (a trim) or refused
+    with "database is locked" (a VACUUM — the refusal is reported, not a crash).  This tool
+    cannot see the Windows-side app from inside WSL, so it states the precondition and
+    requires --apply rather than pretending it can check.
 """
 
 from __future__ import annotations
