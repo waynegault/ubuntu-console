@@ -52,12 +52,24 @@ setup() {
     # A stub schtasks: records every argv, and answers /query in one of three modes.
     #   registered -> a registration exists   absent -> "cannot find the file"
     #   broken     -> a failure that is NOT absence (must never read as "absent")
+    # A /delete is REMEMBERED, so the read-back guard can be tested: a stub that keeps
+    # answering "registered" after a delete can only make the product look broken.
+    DELETED_MARKER="$SANDBOX/deleted"
+    export DELETED_MARKER
     STUB="$SANDBOX/schtasks"
     cat > "$STUB" <<'STUB_EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$ARGV_LOG"
 case "$*" in
+    *"/delete"*)
+        : > "$DELETED_MARKER"
+        exit 0
+        ;;
     *"/query"*)
+        if [[ -f "$DELETED_MARKER" ]]; then
+            printf 'ERROR: The system cannot find the file specified.\n' >&2
+            exit 1
+        fi
         case "${QUERY_MODE:-absent}" in
             registered)
                 printf 'TaskName:                             \\tac-wsl-restart\n'
@@ -228,6 +240,94 @@ _line_of() {
     run "$SCRIPT" --status 2>&1
     [ "$status" -eq 2 ]
     [[ "$output" == *"state unknown"* ]]
+}
+
+@test "wsl-restart: the chunk gate runs BEFORE anything destructive" {
+    # A restart must not cut a running row in half, so the gate has to come first -
+    # and a skipped restart must leave the distro AND the client untouched.
+    run "$SCRIPT" --dry-run
+    [ "$status" -eq 0 ]
+
+    gate_n=$(_line_of "$output" '--precheck')
+    skip_n=$(_line_of "$output" 'restart SKIPPED')
+    close_n=$(_line_of "$output" 'taskkill /im Code.exe')
+    shutdown_n=$(_line_of "$output" 'wsl.exe --shutdown')
+
+    [ "$gate_n" -gt 0 ]
+    [ "$skip_n" -gt 0 ]
+    [ "$gate_n" -lt "$close_n" ]
+    [ "$skip_n" -lt "$close_n" ]
+    [ "$gate_n" -lt "$shutdown_n" ]
+    # The gate must not fall through to a shutdown on its own: the skip jumps past
+    # every destructive step.
+    [ "$skip_n" -lt "$shutdown_n" ]
+}
+
+@test "wsl-restart: --precheck is 0 clear, 1 when a chunk matches, 2 when the check fails" {
+    # Clear: a pattern that matches nothing is the safe answer.
+    run env TAC_WSL_RESTART_CHUNK_PATTERN='zzz[-]no-such-process' "$SCRIPT" --precheck 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"CLEAR"* ]]
+
+    # Busy: a real process this harness owns, matched by the same pgrep the product uses.
+    sleep 30 &
+    local _sleeper=$!
+    run env TAC_WSL_RESTART_CHUNK_PATTERN='slee[p] 30' "$SCRIPT" --precheck 2>&1
+    kill "$_sleeper" 2>/dev/null
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"BUSY"* ]]
+    [[ "$output" == *"$_sleeper"* ]]
+
+    # Unreadable: pgrep fails on a malformed pattern, and an unreadable process
+    # table must NEVER read as "clear".
+    run env TAC_WSL_RESTART_CHUNK_PATTERN='[unclosed' "$SCRIPT" --precheck 2>&1
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+}
+
+@test "wsl-restart: --schedule registers a DAILY task whose wrapper keeps its own registration" {
+    export QUERY_MODE=registered
+    export TAC_WSL_RESTART_DAILY_WRAPPER_UNIX="$SANDBOX/daily.cmd"
+    run "$SCRIPT" --schedule 03:30 2>&1
+    [ "$status" -eq 0 ]
+
+    [ "$(awk '/\/create/ { n++ } END { print n+0 }' "$ARGV_LOG")" -eq 1 ]
+    grep -q '/sc daily' "$ARGV_LOG"
+    grep -q '/st 03:30' "$ARGV_LOG"
+    grep -qF '/tr C:\Users\wayne\wsl-restart-daily.cmd' "$ARGV_LOG"
+
+    # The whole point of a schedule: it must not delete itself on the first run.
+    [ -f "$TAC_WSL_RESTART_DAILY_WRAPPER_UNIX" ]
+    ! grep -q 'schtasks.exe /delete' "$TAC_WSL_RESTART_DAILY_WRAPPER_UNIX"
+    grep -q 'registration KEPT' "$TAC_WSL_RESTART_DAILY_WRAPPER_UNIX"
+
+    # ...while the one-shot wrapper still does delete itself.
+    run "$SCRIPT" --dry-run
+    [[ "$output" == *'schtasks.exe /delete /f /tn tac-wsl-restart'* ]]
+}
+
+@test "wsl-restart: --schedule refuses a time that is not 24h HH:MM, and arms nothing" {
+    run "$SCRIPT" --schedule 25:00 2>&1
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--schedule needs a 24h HH:MM"* ]]
+    [ ! -e "$ARGV_LOG" ]
+
+    run "$SCRIPT" --schedule lunchtime 2>&1
+    [ "$status" -eq 2 ]
+}
+
+@test "wsl-restart: --unschedule removes the registration, and says so when there is none" {
+    export QUERY_MODE=registered
+    run "$SCRIPT" --unschedule 2>&1
+    [ "$status" -eq 0 ]
+    grep -q '/delete' "$ARGV_LOG"
+    [[ "$output" == *"removed"* ]]
+
+    # And with nothing registered it is a no-op, not an error.
+    export QUERY_MODE=absent
+    run "$SCRIPT" --unschedule 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing to remove"* ]]
 }
 
 # end of file
