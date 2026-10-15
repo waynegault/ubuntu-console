@@ -70,6 +70,11 @@ setup() {
     # reported "gateway phase unknown" instead of "running").
     __so_gateway_phase() { printf 'running\n'; }
 
+    # 01-constants.sh / _startup-env.sh prepend linuxbrew, pnpm and npm-global to PATH
+    # unless already present, which shadows every mock above with the REAL openclaw.
+    # Re-assert the mock dir so no command reaches a real binary.
+    export PATH="$MOCK_BIN_DIR:$PATH"
+
     # Isolate OC_ROOT so tests never touch the real ~/.openclaw.
     export OC_ROOT="$TAC_TEST_TMPDIR/.openclaw"
     mkdir -p "$OC_ROOT"

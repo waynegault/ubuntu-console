@@ -44,6 +44,9 @@ MOCK
     source "$REPO_ROOT/scripts/05-ui-engine.sh"
     # shellcheck source=scripts/09e-oc-health.sh
     source "$REPO_ROOT/scripts/09e-oc-health.sh"
+    # Sourcing prepends linuxbrew/pnpm/npm-global to PATH, shadowing the mocks with
+    # real binaries; re-assert the mock dir first.
+    export PATH="$MOCK_BIN_DIR:$PATH"
 }
 
 @test "keyring watch: a gh activation in the journal is named, with the count and the time" {

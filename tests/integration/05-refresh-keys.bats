@@ -77,6 +77,10 @@ setup() {
     # shellcheck source=scripts/09-openclaw.sh
     source "$REPO_ROOT/scripts/09-openclaw.sh"
 
+    # Sourcing prepends linuxbrew/pnpm/npm-global to PATH, shadowing the mocks with
+    # real binaries; re-assert the mock dir first.
+    export PATH="$MOCK_BIN_DIR:$PATH"
+
     # Isolate OC_ROOT so tests never touch the real ~/.openclaw.
     export OC_ROOT="$TAC_TEST_TMPDIR/.openclaw"
     mkdir -p "$OC_ROOT"
