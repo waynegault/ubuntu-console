@@ -194,7 +194,6 @@ def main() -> int:
     try:
         otp = _get_fresh_otp()
         bearer = _get_bearer_token(otp)
-        print(f"Bearer token: {bearer[:50]}...", file=sys.stderr)
 
         # An unimplemented fetch raises, so this never reports ok:true on mock data.
         data = _fetch_cpap_data(bearer)
