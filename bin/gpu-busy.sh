@@ -25,7 +25,13 @@
 #          on the EXECUTING artefact, never on a word like "grpo" or "unsloth": the
 #          false-BUSY regressions recorded below are exactly that mistake, and a false
 #          BUSY stops a serving lane.)
-# Module Version: 7
+# Module Version: 8
+# Version: 1.7.0 (2026-10-16: `_process_executes` requires the named artefact to be the
+#          SCRIPT the interpreter was GIVEN — the argv element immediately after an
+#          interpreter — not any element that merely names it.  A CI lint job's file list
+#          (`bash tools/lint.sh --files … bin/train-timeout-runner.sh …`) arrives as
+#          separate argv elements and was read as a training TENANT, halting an autotune
+#          after 9 s on a card reading 0 MiB.  Same rule as 11d-llm-gpu.sh.)
 # AI INSTRUCTION: After any code change, increment the Version value in this file.
 #
 # CARD DISCIPLINE: this script is about the CUDA card only.  The Xe card is a
@@ -251,7 +257,7 @@ _is_interpreter() {
 # exactly the incident this exists for.
 _process_executes() {
     local _pid="$1"; shift
-    local _name _exe_base _elem
+    local _name _exe_base _elem _i
     local -a _argv=()
     _exe_base=$(readlink -f "/proc/$_pid/exe" 2>/dev/null || true)
     _exe_base="${_exe_base##*/}"
@@ -263,8 +269,17 @@ _process_executes() {
     done
     _is_interpreter "$_exe_base" || return 1
     mapfile -d '' -t _argv < "/proc/$_pid/cmdline" 2>/dev/null || true
-    for _elem in "${_argv[@]}"; do
+    # The named artefact must be the SCRIPT the interpreter was GIVEN — the argv
+    # element that immediately FOLLOWS an interpreter — not any slot that merely
+    # NAMES it.  Measured 2026-10-16: a CI lint job's own file list
+    # (`bash tools/lint.sh --files … bin/train-timeout-runner.sh …`) arrives as
+    # separate argv elements, so it names the runner without executing it, and the
+    # any-element scan below read it as a tenant.  scripts/11d-llm-gpu.sh's
+    # __llm_train_lane_holder carries the same rule.
+    for (( _i = 1; _i < ${#_argv[@]}; _i++ )); do
+        _elem="${_argv[_i]}"
         [[ "$_elem" == *[[:space:]]* ]] && continue
+        _is_interpreter "${_argv[_i-1]##*/}" || continue
         for _name in "$@"; do
             [[ "${_elem##*/}" == "$_name" ]] && return 0
         done

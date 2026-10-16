@@ -407,11 +407,15 @@ EOS
     local tok="tac-chain-probe-$RANDOM$RANDOM"
 
     # A carrier that is genuinely foreign (spawned by this test, outside the
-    # probe's ancestry) must be seen.  It is a shell LOOP, not `bash -c 'sleep 30'
-    # "$tok"`: bash execs a single-command -c body, so the token — which was only
-    # the shell's $0 — would vanish from the cmdline and the pattern would match
-    # nothing.  A loop keeps the shell alive with its argv intact.
-    bash -c 'while :; do sleep 1; done' "$tok" &
+    # probe's ancestry) must be seen.  It carries the token as the SCRIPT the
+    # interpreter was given, i.e. the element straight after `bash` — the real
+    # shape of "a process executing the artefact".  It used to be
+    # `bash -c 'while :; do sleep 1; done' "$tok"`, which puts the token at $0:
+    # only the old any-argv-element scan could see that, and dropping that scan
+    # (2026-10-16, after a CI lint job's file list was read as a training tenant)
+    # is the point — a name merely NAMED inside a command line is not a run.
+    printf 'while :; do sleep 1; done\n' > "$TAC_TEST_TMPDIR/$tok"
+    bash "$TAC_TEST_TMPDIR/$tok" &
     local _carrier=$!
     sleep 0.3
     run bash "$TAC_TEST_TMPDIR/chain-probe.sh" "$TAC_TEST_TMPDIR/decl.sh" "$tok" "$tok"

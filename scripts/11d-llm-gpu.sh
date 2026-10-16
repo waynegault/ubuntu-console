@@ -1,7 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 11d-llm-gpu ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 25
+# Module Version: 26
+#   v26 (2026-10-16): __llm_train_lane_holder requires the runner to be the SCRIPT the
+#   interpreter was GIVEN — the argv element immediately after an interpreter — instead of
+#   any element that merely names the path.  Measured 2026-10-16: a CI lint job's file list
+#   (`bash tools/lint.sh --files … bin/train-timeout-runner.sh …`) arrives as SEPARATE argv
+#   elements, so the any-element scan read that job as a training tenant and halted a
+#   10-row autotune after 9 s, on a card reading 0 MiB.  bin/gpu-busy.sh's
+#   _process_executes carries the same rule.
 #   v25 (2026-10-02): adds __llm_train_lane_holder / __llm_train_lane_busy — the
 #   console-side read of a supervised GPU TRAINING run (card UBC-GRPO-002). The
 #   runner claims the card exactly as a bench does, but the lock file cannot say
@@ -350,7 +357,7 @@ function __llm_gpu_foreign_owner() {
 # tree (the duplication is deliberate, as the investigator-lock path already is).
 # ---------------------------------------------------------------------------
 function __llm_train_lane_holder() {
-    local _pid _exe_base _elem _is_interp
+    local _pid _exe_base _elem _prev _is_interp _i
     local -a _argv=()
     # pgrep only SELECTS candidates by command line; each is then proved to be
     # EXECUTING the runner.  A bash child of a runner still matches, and that is
@@ -379,12 +386,30 @@ function __llm_train_lane_holder() {
         (( _is_interp )) || continue
         # swallow-ok: a vanished process has no cmdline, and its absence is the answer checked
         mapfile -d '' -t _argv < "/proc/$_pid/cmdline" 2>/dev/null || true
-        for _elem in "${_argv[@]}"; do
+        # The runner must be the SCRIPT the interpreter was GIVEN — the argv element
+        # that immediately FOLLOWS an interpreter — not any slot that merely NAMES the
+        # path.  Measured 2026-10-16: a CI lint job runs
+        # `bash tools/lint.sh --files … bin/autotune-rows.sh … bin/train-timeout-runner.sh …`,
+        # and its file list arrives as SEPARATE argv elements, so it names the runner
+        # without executing it — yet the any-element scan below read that job as a
+        # training tenant and halted a 10-row autotune after 9 s on a card reading
+        # 0 MiB.  Requiring the element after an interpreter keeps the real invocation
+        # (`bash bin/train-timeout-runner.sh …`, and through `sudo`/`env` wrappers,
+        # where the element after the wrapper IS the script) and drops the reader.
+        for (( _i = 1; _i < ${#_argv[@]}; _i++ )); do
+            _elem="${_argv[_i]}"
             [[ "$_elem" == *[[:space:]]* ]] && continue
-            if [[ "${_elem##*/}" == "train-timeout-runner.sh" ]]; then
-                printf '%s\n' "$_pid"
-                return 0
-            fi
+            [[ "${_elem##*/}" == "train-timeout-runner.sh" ]] || continue
+            _prev="${_argv[_i-1]}"
+            # The interpreter list is the whole of what can EXECUTE a script, so the
+            # match arm is the only one carrying an action; anything else is not a tenant.
+            case "${_prev##*/}" in
+                bash|sh|dash|zsh|ksh|ash|busybox|python|python[0-9]*|perl|perl5*|ruby|\
+                sudo|doas|su|env|runuser|systemd-run)
+                    printf '%s\n' "$_pid"
+                    return 0 ;;
+                *) ;;
+            esac
         done
     # swallow-ok: pgrep's non-zero exit means no candidate matched — the "no tenant" answer
     done < <(pgrep -f '/train-timeout-runner\.sh' 2>/dev/null)
