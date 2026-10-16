@@ -57,7 +57,18 @@
 #   exit 4 = the campaign PAUSED: a budget halt that will not resume by itself
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-10-16): a durable SCOPE, and a certified NEW QUANT stops being pinned.  Two measured
+#   defects, one fix each.  (a) A hand-written plan lasted exactly ONE boot: every registry row reads
+#   `autotuned=yes`, so `derive_rows` selects nothing and `continue_after` -> `write_plan` re-derived
+#   the plan down to the two ruled NEW QUANTs, dropping the EMPTY `meas_state` rows one boot after they
+#   were added by hand (measured 2026-10-16: the 09:08 and 10:31 boots each claimed a 15-row hand-written
+#   plan; the 09:42 and 11:52 boots claimed 2).  `SCOPE` (autotune-resume.scope.rows) is an owner-written
+#   list that `plan_rows()` unions into the remainder and that survives every re-derivation - a row the
+#   registry now reports as `certified` drops out of it, so the plan still SHRINKS and the loop still arms.
+#   (b) The NEW_QUANTS branch pinned `law-chat-Q2_K` and `Spark-X2.5-4B` into EVERY derivation by name, so
+#   each boot re-measured two rows that were already certified (~40 of a boot's 60 cycles); the branch now
+#   also requires the row's `meas_state` (field 44) to be other than `certified`.  VERSION 4.0.0 -> 4.1.0.
 #   v5 (2026-10-15): CHUNK_PATTERN is overridable (TAC_RESUME_CHUNK_PATTERN).  The full unit
 #   run caught the defect this closes: `pgrep -f` matches any process whose argv CONTAINS the
 #   pattern, so a foreign waiter carrying the word `run-autotune-batch` made --status report a
@@ -75,7 +86,7 @@
 #   still unretired re-derives the remainder and continues; --status surfaces it.
 #   v2 (2026-10-15): the chunk runs as a CHILD so its exit code can be read; a budget halt
 #   that shrank the remainder re-derives the plan and arms the restart (four stops, cap 8).
-VERSION="4.0.0"
+VERSION="4.1.0"
 
 set -uo pipefail
 
@@ -92,6 +103,13 @@ STATE_DIR="${TAC_RESUME_STATE_DIR:-${TAC_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.loc
 LOGDIR="${TAC_RESUME_LOGDIR:-$HOME/.llm/autotune-logs}"
 ENTRY="${TAC_RESUME_ENTRY:-$REPO/bin/autotune-rows.sh}"
 PLAN="${TAC_RESUME_PLAN:-$STATE_DIR/autotune-resume.rows}"
+# The owner-written SCOPE, if present (v6): rows that must be measured every boot REGARDLESS of what
+# the derivation says, because the derivation answers "what is the REGISTRY owed?" and - with every
+# registry row reading `autotuned=yes` - answers it with nothing.  One model file name per line, in
+# the order it should be measured; PARKED_ROWS still wins, and a row the registry now reports as
+# `certified` is dropped so the plan keeps shrinking.  This is what carries a hand-written plan past
+# the first boot.
+SCOPE="${TAC_RESUME_SCOPE:-$STATE_DIR/autotune-resume.scope.rows}"
 RESTART_TOOL="${TAC_RESUME_RESTART_TOOL:-$REPO/bin/wsl-restart.sh}"
 
 # The loop's knobs, all overridable so a test drives them without touching Windows.
@@ -158,8 +176,32 @@ derive_rows() {
         $1 ~ /^[0-9]+$/ && NF > 1 {
             if (parked != "" && $3 ~ ("^(" parked ")$")) next
             t = $17 + 0; p = $25 + 0
-            if ($18 != "yes" || (p > t && t > 0) || $3 ~ ("^(" nq ")$")) print $3
+            # A ruled NEW QUANT stays in BY NAME - but only while it is not certified (v6).  Pinning it
+            # unconditionally re-measured law-chat-Q2_K and Spark-X2.5-4B on EVERY boot after both had
+            # certified, about 40 of the 60-cycle boot budget (measured 2026-10-16).
+            if ($18 != "yes" || (p > t && t > 0) || ($3 ~ ("^(" nq ")$") && $44 != "certified")) print $3
         }' "$REGISTRY" | sort -u
+}
+
+# The owner's SCOPE rows, in file order: PARKED still wins, and a row the registry now reports as
+# `certified` drops out - that is what lets the plan SHRINK as rows land, so `continue_after` keeps
+# arming.  A row measured but still `indicative` STAYS (it is owed a quiet-box re-measure).  With no
+# scope file this prints nothing, so a box without one behaves exactly as it did before v6.
+scope_rows() {
+    [[ -r "$SCOPE" ]] || return 0
+    awk -F'|' -v parked="$PARKED_ROWS" '
+        NR == FNR { if ($1 ~ /^[0-9]+$/ && NF > 1 && $44 == "certified") done[$3] = 1; next }
+        $0 == "" { next }
+        parked != "" && $0 ~ ("^(" parked ")$") { next }
+        done[$0] { next }
+        { print $0 }
+    ' "$REGISTRY" "$SCOPE" | awk '!seen[$0]++'
+}
+
+# What the loop should carry: the SCOPE first (the owner's explicit choice, so it is measured while the
+# boot's budget lasts), then the derived remainder, de-duplicated.
+plan_rows() {
+    { scope_rows; derive_rows; } | awk '!seen[$0]++'
 }
 
 # Derive the remainder and write it as the plan, printing it so the scope that is
@@ -170,7 +212,7 @@ write_plan() {
         printf 'ERROR: registry not readable: %s\n' "$REGISTRY"
         return "$EXIT_FAILED"
     fi
-    _rows=$(derive_rows)
+    _rows=$(plan_rows)
     if [[ -z "$_rows" ]]; then
         printf 'nothing to plan: every row is certified and unflagged (%s)\n' "$REGISTRY"
         report_parked
@@ -328,7 +370,7 @@ continue_after() {
             "$_rc" "$EXIT_BUDGET"
         return "$_rc"
     fi
-    _after=$(derive_rows | awk 'END { print NR }')
+    _after=$(plan_rows | awk 'END { print NR }')
     if (( _after == 0 )); then
         printf 'the remainder is EMPTY - the campaign is complete; no restart armed\n'
         return 0
