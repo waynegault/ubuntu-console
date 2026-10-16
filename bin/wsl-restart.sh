@@ -95,7 +95,18 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 13
+# Module Version: 14
+#   v14 (2026-10-17): ONLY a WSL folder may be reopened as a WSL REMOTE WINDOW.  Wayne's ruling,
+#   2026-10-17, verbatim: "ensure that only wsl repos are opened in wsl remote in vs code. eg quicken
+#   prices should not be opened in wsl mode."  The client serialises a WINDOWS folder that was opened
+#   from the distro side as `vscode-remote://wsl+<distro>/<drive>:/...` - a WSL authority wrapping a
+#   Windows drive path - so step 4 relaunched it as a WSL remote window pointing at a path that cannot
+#   exist in the distro (measured 2026-10-17: the capture carried `.../wsl+ubuntu-24.04/c:/Users/wayne/
+#   GitHub/Python/Projects/quicken_prices`).  capture_windows now rewrites that shape to its LOCAL
+#   `file:///<drive>:/...` form, which step 4 reopens with `--folder-uri` as an ordinary Windows window.
+#   The tell is the single-letter drive segment, which cannot be an absolute Linux path, so the rule
+#   cannot touch a real WSL folder.  A unit case pins both directions: the Windows path becomes local,
+#   and a genuine `/home/...` path is left as a WSL remote.
 #   v13 (2026-10-17): v12's `call` ADDS A SECOND PERCENT-EXPANSION PASS, and that pass ate the `%2`
 #   of `wsl%2B<distro>` and the `%3` of `file:///c%3A`, so every window the restart resurrected came
 #   up corrupt and disconnected.  Measured in a scratch .cmd reproducing this file's OWN `for /f` +
@@ -289,6 +300,10 @@ capture_windows() {
     # broken window comes back on every restart.  The repair matches the LOWERCASED distro because
     # that is what a URI authority carries (`wsl+ubuntu-24.04`), while $DISTRO is WSL's own casing
     # (`Ubuntu-24.04`); matching $DISTRO here would have matched nothing and repaired nothing.
+    # v14: the authority repair runs BEFORE the drive-path rewrite, because a corrupt authority
+    # (`wslbubuntu-24.04`) does not match the rewrite's `wsl+` prefix and would never be rewritten.
+    # The order is decode -> repair -> drive-path -> double, and the doubling is LAST so that a `%`
+    # introduced by an earlier rule cannot slip through to the `call` unescaped.
     # swallow-ok: the client can be mid-write here, and an EMPTY list IS the answer - step 4 falls back
     grep -oE '"(folder|configPath)":[[:space:]]*"[^"]*"' "$STORAGE_UNIX" 2>/dev/null |
         sed -E -e 's/^"folder":[[:space:]]*"/folder-uri|/' \
@@ -296,8 +311,9 @@ capture_windows() {
                -e 's/"$//' \
                -e 's/%2B/+/g' \
                -e 's/%3A/:/g' \
-               -e 's/%/%%/g' \
-               -e "s#(vscode-remote://)wsl[^+/]*${DISTRO,,}/#\1wsl+${DISTRO,,}/#" |
+               -e "s#(vscode-remote://)wsl[^+/]*${DISTRO,,}/#\1wsl+${DISTRO,,}/#" \
+               -e 's#^([a-z]+-uri[|])vscode-remote://wsl[+][^/]+/([A-Za-z]):/#\1file:///\2:/#' \
+               -e 's/%/%%/g' |
         sort -u > "$WINDOWS_TXT_UNIX"
     # swallow-ok: grep -c exits 1 on zero matches, and zero IS the count this line reports
     _n=$(grep -c . "$WINDOWS_TXT_UNIX" 2>/dev/null) || _n=0

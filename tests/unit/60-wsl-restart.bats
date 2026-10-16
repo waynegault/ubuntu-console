@@ -133,6 +133,7 @@ teardown() {
  {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"},
  {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/investigator"},
  {"folder": "vscode-remote://wslbubuntu-24.04/home/wayne/investigator"},
+ {"folder": "vscode-remote://wsl%2Bubuntu-24.04/c%3A/Users/wayne/GitHub/Python/Projects/quicken_prices"},
  {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"}]}}
 JSON
 
@@ -140,10 +141,11 @@ JSON
             TAC_WSL_RESTART_WINDOWS_TXT_UNIX="$_out" \
             "$SCRIPT" --capture-windows
     [ "$status" -eq 0 ]
-    # FOUR entries, TWO distinct URIs: a window listed twice is reopened once, not twice - and the
+    # FIVE entries, THREE distinct URIs: a window listed twice is reopened once, not twice; the
     # third entry is an authority a PREVIOUS corrupt fire wrote back, which must REPAIR to the same
-    # URI as the second, not add a third line.
-    [ "$(wc -l < "$_out")" -eq 2 ]
+    # URI as the second rather than add a line; and the fourth is a WINDOWS folder the client
+    # serialised as a WSL remote, which must come back as a LOCAL window.
+    [ "$(wc -l < "$_out")" -eq 3 ]
     grep -q 'investigator' "$_out"
 
     # v13: the list step 4 hands to the client through `call` must carry the DECODED authority.
@@ -158,6 +160,16 @@ JSON
     grep -q '^folder-uri|vscode-remote://wsl+ubuntu-24.04/home/wayne/investigator$' "$_out"
     ! grep -q '%' "$_out"
     ! grep -q 'wslbubuntu' "$_out"
+
+    # v14: ONLY a WSL folder is reopened as a WSL REMOTE window.  Wayne's ruling, 2026-10-17,
+    # verbatim: "ensure that only wsl repos are opened in wsl remote in vs code. eg quicken prices
+    # should not be opened in wsl mode."  The client serialises a Windows folder opened from the
+    # distro side as `vscode-remote://wsl+<distro>/<drive>:/...` - a WSL authority wrapping a Windows
+    # drive path - and step 4 then relaunched it as a WSL remote window pointing at a path that
+    # cannot exist in the distro.  Pre-v14 the fixture's `c%3A` line came back as a WSL remote URI,
+    # which is what this pair now rejects.
+    grep -q '^folder-uri|file:///c:/Users/wayne/GitHub/Python/Projects/quicken_prices$' "$_out"
+    ! grep -qE '^folder-uri\|vscode-remote://[^/]*/c:/' "$_out"
 
     # Step 4 loops that list, and the configured folder stays as the FALLBACK.
     run "$SCRIPT" --dry-run
