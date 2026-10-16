@@ -340,6 +340,17 @@ EOS
     [ "$status" -eq 4 ]
     [[ "$output" == *"a CI job is executing on this box"* ]]
     [ ! -e "$RESTART_ARGV" ]
+
+    # v8 criterion change (Wayne's ruling "1a", 2026-10-17): the gate now sits at the MEASUREMENT,
+    # not only at the arming.  `wait_for_ci_clear` used to guard `arm_restart` alone, so the chunk
+    # ran regardless and its rows were measured under a live CI job - measured 2026-10-17, while
+    # `/home/wayne/actions-runner-console/bin/Runner.Worker spawnclient` was executing and
+    # `--status` read `CI jobs on this box: 1` in the same minute.  Falsification against the
+    # pre-v8 code: the entry point IS invoked there and the plan IS claimed.
+    [ ! -e "$ARGV_LOG" ]
+    [ -f "$TAC_RESUME_PLAN" ]
+    grep -q '^uncertified.gguf$' "$TAC_RESUME_PLAN"
+    [ -z "$(ls "$TAC_RESUME_PLAN".claimed-* 2>/dev/null)" ]
 }
 
 @test "autotune-resume: the automatic-restart cap stops the loop and names the reset" {

@@ -59,7 +59,16 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-10-17): THE MEASUREMENT OPENS THE CI GATE ITSELF.  `wait_for_ci_clear` guarded only
+#   `arm_restart`, so the chunk ran regardless of a CI job and the rows it measured were taken under
+#   load - the outcome Wayne's rule forbids ("do not re-arm any measurement while a CI worker is
+#   alive"), and the reason a re-certification needs a quiet box.  Measured 2026-10-17: a resumed
+#   chunk was measuring while `/home/wayne/actions-runner-console/bin/Runner.Worker spawnclient` was
+#   live, AND `--status` reported `CI jobs on this box: 1` in the same minute - the gate's own probe
+#   already knew, and only the ARMING path consulted it.  The chunk now waits on the same bounded
+#   helper (same `CI_WAIT_S`, same seam) before CLAIMING the plan, and an exhausted wait PAUSES
+#   (exit 4) with the plan left in place, so a later boot or start resumes it unchanged.
 #   v7 (2026-10-16): THE LOOP KEEPS GOING WHILE ROWS ARE OWED - it no longer stalls on a boot that
 #   did not shrink the remainder, and a stop no longer CONSUMES the plan.  Wayne, verbatim: "i want
 #   autotune to be much smoother than this!"  Two defects, both measured.  (a) `continue_after`
@@ -457,6 +466,19 @@ run_plan() {
         printf 'ERROR: nothing runnable in %s (%s row(s) dropped, model dir %s)\n' \
             "$PLAN" "$_missing" "$MODEL_DIR"
         return "$EXIT_FAILED"
+    fi
+
+    # v8: the MEASUREMENT opens the CI gate itself.  `wait_for_ci_clear` used to guard only
+    # `arm_restart`, so the chunk ran regardless and a CI job executing on this box contaminated
+    # the rows it measured - the outcome Wayne's rule forbids ("do not re-arm any measurement
+    # while a CI worker is alive"), and the reason a re-certification needs a quiet box.  The wait
+    # is the SAME helper with the SAME bound, and an exhausted wait PAUSES - and it pauses BEFORE
+    # the claim below, so the plan stays in place and a later boot or start resumes it unchanged.
+    if ! wait_for_ci_clear; then
+        printf 'a CI job is executing on this box - PAUSING rather than measuring under load\n'
+        printf '  waited %ss; nothing was claimed, and %s is left in place for a later run\n' \
+            "$CI_WAIT_S" "$PLAN"
+        return "$EXIT_PAUSED"
     fi
 
     # Claim it BEFORE the run: a boot loop must not re-tune rows it already has.  The claim
