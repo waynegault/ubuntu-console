@@ -545,10 +545,17 @@ boot-scoped ledger in `/dev/shm` and halt with a resume hint when:
 - `CUDA_DEGRADE_CONSECUTIVE_STALLS` launches in a row come up alive but never report
   healthy — the signature of an already-degraded adapter. The batch exits **3**,
   because the ledger is NOT the explanation: a restart would buy nothing, and a
-  person has to look at the adapter.
+  person has to look at the adapter; or
+- the card belongs to another TENANT — a supervised training run
+  (`bin/train-timeout-runner.sh`) or a foreign owner through the investigator GPU
+  lock. The batch exits **5**. Not 4, because another tenant's presence is not
+  something a restart of this box fixes, so the re-arm must not read it as "carry
+  on"; and not 0, which is what these two gates fell through to until 2026-10-16 —
+  a batch that measured NOTHING read as a completed chunk.
 
-Both were exit 3 until 2026-10-15, which is why an unattended resume could not tell
-"carry on" from "stop and look" and read the designed halt as a failure.
+The first two were both exit 3 until 2026-10-15, which is why an unattended resume
+could not tell "carry on" from "stop and look" and read the designed halt as a
+failure.
 
 The ledger lives in `/dev/shm`, not `/tmp`: `/tmp` is cleaned aggressively on
 this box, and a mid-boot clean would reset the budget while the condition it
