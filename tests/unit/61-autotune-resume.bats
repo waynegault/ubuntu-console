@@ -45,6 +45,11 @@ setup() {
     export TAC_RESUME_LOGDIR="$SANDBOX/logs"
     export TAC_RESUME_ENTRY="$SANDBOX/entry.sh"
     export TAC_RESUME_PLAN="$SANDBOX/state/autotune-resume.rows"
+    # PIN what counts as a chunk.  The probe is `pgrep -f`, so ANY process whose argv merely
+    # CONTAINS the pattern reads as a live chunk — measured 2026-10-15 01:17, a harness waiter
+    # running `while pgrep -f 'run-autotune-batch'` made two cases fail both in the full unit
+    # run and standalone.  Inert here, so no chunk is live unless a case says so.
+    export TAC_RESUME_CHUNK_PATTERN='tac-resume-no-such-chunk-9f3a'
     ARGV_LOG="$SANDBOX/entry.argv"
     export ARGV_LOG
 
@@ -376,6 +381,9 @@ EOS
 # second run beside the live one.
 @test "autotune-resume: a claim whose chunk is STILL RUNNING is not called cut off" {
     printf 'uncertified.gguf\n' > "$TAC_RESUME_PLAN.claimed-20261015-134149"
+    # The ONE case that wants a live chunk, so it pins the probe to its own fixture rather than
+    # the inert default — a real `run-autotune-batch` elsewhere on the box cannot decide it.
+    export TAC_RESUME_CHUNK_PATTERN='autotune-rows-fake'
     # A live process whose cmdline matches the chunk probe, as the real wrapper's does.
     ( exec -a autotune-rows-fake sleep 30 ) &
     local _fake=$!

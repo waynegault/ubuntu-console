@@ -57,7 +57,12 @@
 #   exit 4 = the campaign PAUSED: a budget halt that will not resume by itself
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 4
+# Module Version: 5
+#   v5 (2026-10-15): CHUNK_PATTERN is overridable (TAC_RESUME_CHUNK_PATTERN).  The full unit
+#   run caught the defect this closes: `pgrep -f` matches any process whose argv CONTAINS the
+#   pattern, so a foreign waiter carrying the word `run-autotune-batch` made --status report a
+#   live chunk and turned three cases' expectations into someone else's state.  The suite now
+#   pins what counts as a chunk, so no foreign process can decide a case.
 #   v4 (2026-10-15): a claim is "cut off" only when NO chunk is running.  Measured 23:37 on the
 #   boot that certified law-chat: --status printed "UNREPORTED previous run ... its chunk was
 #   cut off" on the SAME screen as "a chunk IS live", because a claim stays unretired for the
@@ -111,8 +116,13 @@ NEW_QUANTS='law-chat-Q2_K.gguf|Spark-X2.5-4B-Q4_K_M.gguf'
 # every derivation.  Parked is not deleted: the row and its columns are untouched.
 PARKED_ROWS='MemSFT-Qwen3-Law-Memory-8B.Q2_K.gguf'
 
-# The bracket class keeps a chunk probe from matching its own command line.
-CHUNK_PATTERN='autotune[-]rows|run-autotune[-]batch|autotune[-]model|bench[-]rows'
+# The bracket class keeps a chunk probe from matching its OWN command line.  Overridable
+# since v5: the pattern is a pgrep pattern, so ANY process whose argv merely CONTAINS one of
+# these words reads as a live chunk - measured 2026-10-15 01:17, a harness waiter running
+# `while pgrep -f 'run-autotune-batch'` made two cases take the "a chunk is already running"
+# branch, i.e. a foreign process decided them.  The seam lets a suite PIN what counts as a
+# chunk (the same override the restart wrapper carries as TAC_WSL_RESTART_CHUNK_PATTERN).
+CHUNK_PATTERN="${TAC_RESUME_CHUNK_PATTERN:-autotune[-]rows|run-autotune[-]batch|autotune[-]model|bench[-]rows}"
 
 # Print the usage block out of this file's own header, so the two cannot drift.
 usage() {
