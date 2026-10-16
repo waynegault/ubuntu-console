@@ -145,6 +145,45 @@ teardown() {
     ! grep -qE '^[0-9]+$' "$TAC_RESUME_PLAN"
 }
 
+@test "autotune-resume: a SCOPE row survives the derivation, and a CERTIFIED new quant is not re-run" {
+    # v6.  The derivation answers "what is the REGISTRY owed?", and because every registry row reads
+    # autotuned=yes it answers "nothing" - so a hand-written plan was re-derived away one boot after it
+    # was added (measured 2026-10-16: a 15-row hand plan claimed by the 09:08 and 10:31 boots, 2 rows by
+    # the 09:42 and 11:52 boots).  SCOPE is the durable half, and a row the registry now reports as
+    # certified leaves it, so the plan still SHRINKS and `continue_after` still arms.
+    local scope="$SANDBOX/state/autotune-resume.scope.rows"
+    printf 'scope-owed.gguf\nscope-done.gguf\n' > "$scope"
+    : > "$TAC_RESUME_MODEL_DIR/scope-owed.gguf"
+    : > "$TAC_RESUME_MODEL_DIR/scope-done.gguf"
+
+    # A 44-column row, so the meas_state axis the v6 rule reads actually exists.  The shared `_row`
+    # helper builds 25 fields, which is why the older fixture could not exercise that branch.
+    _row44() { # <n> <file> <cert> <meas_state>
+        local n="$1" f="$2" c="$3" m="$4" i out=""
+        out="$n|m|$f"
+        for i in 4 5 6 7 8 9 10 11 12 13 14 15 16; do out+="|0"; done
+        out+="|4.00|$c"
+        for i in 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43; do out+="|0"; done
+        out+="|$m"
+        printf '%s\n' "$out"
+    }
+    {
+        _row44 5 scope-owed.gguf yes ""
+        _row44 6 scope-done.gguf yes certified
+        _row44 7 law-chat-Q2_K.gguf yes certified
+    } > "$TAC_RESUME_REGISTRY"
+
+    run env TAC_RESUME_SCOPE="$scope" "$SCRIPT" --plan 2>&1
+    [ "$status" -eq 0 ]
+    # A scope row the registry has NOT certified is carried, though the derivation drops it.
+    grep -q '^scope-owed.gguf$' "$TAC_RESUME_PLAN"
+    # One it HAS certified drops out, so the plan shrinks and the loop keeps arming.
+    ! grep -q '^scope-done.gguf$' "$TAC_RESUME_PLAN"
+    # ...and a CERTIFIED ruled new quant is no longer pinned into every derivation (~40 of a boot's
+    # 60 cycles, measured 2026-10-16).
+    ! grep -q '^law-chat-Q2_K.gguf$' "$TAC_RESUME_PLAN"
+}
+
 @test "autotune-resume: a plan is executed through the entry point and CLAIMED once" {
     printf 'uncertified.gguf\nflagged.gguf\n' > "$TAC_RESUME_PLAN"
     run "$SCRIPT" 2>&1
