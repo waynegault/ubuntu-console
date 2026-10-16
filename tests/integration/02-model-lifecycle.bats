@@ -49,13 +49,25 @@ setup() {
     [[ "$fn_src" == *"list"* ]] || [[ "$fn_src" == *"List"* ]]
 }
 
-@test "integration: __model_list exposes quant rating" {
+@test "integration: __model_list exposes quant rating AND the provenance columns" {
     local fn_src
     fn_src=$(declare -f __model_list 2>/dev/null)
 
     [[ "$fn_src" == *"RATING"* ]]
     [[ "$fn_src" == *"__llm_quant_rating"* ]]
     [[ "$fn_src" == *'"quant_rating"'* ]]
+
+    # v64: the registry's provenance columns (40-44) must reach the TABLE.  Until v64 it printed
+    # ATUNE - `autotuned`, `yes` for every row - so a CERTIFIED row and an INDICATIVE one were
+    # indistinguishable (measured 2026-10-16: grounded-ai indicative, law-chat certified, and both
+    # printed `ATUNE yes`).  Remove either column, or let either read-list stop at the old column
+    # 26, and this case fails.
+    [[ "$fn_src" == *'"STATE"'* ]]
+    [[ "$fn_src" == *'"DRIFT"'* ]]
+    [[ "$fn_src" == *"meas_state"* ]]
+    [[ "$fn_src" == *"meas_drift"* ]]
+    [[ "$fn_src" == *'"meas_state"'* ]]
+    echo "$fn_src" | grep -q '_p2_prefill _spec_type'
 }
 
 @test "integration: model has scan subcommand" {

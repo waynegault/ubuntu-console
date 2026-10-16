@@ -1,7 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 63
+# Module Version: 64
+#   v64 (2026-10-16): `model list` SHOWS the provenance columns.  The registry stores cols 40-44
+#   (meas_load, meas_n, meas_spread_pct, meas_drift_pct, meas_state - added by 01-constants v29) and
+#   `model scan` has emitted them since, but NO reader surfaced them: the table printed ATUNE, the
+#   `autotuned` column, which reads `yes` for all 28 rows - so a CERTIFIED row and an INDICATIVE one
+#   looked identical (measured 2026-10-16: grounded-ai reads indicative and law-chat certified, and
+#   both printed `ATUNE yes`).  The human table gains STATE + DRIFT, --json gains meas_state and
+#   meas_drift_pct, and --plain APPENDS both at the END so positional consumers of the first 19 keep
+#   working.  Read-lists now run to column 44; the unused 27-39 tail stays prefixed `_` (SC2034).
 #   v63 (2026-10-15): `model scan` SEEDS the sampler columns (38, 39) for a model it has no
 #   predecessor for, from LLAMA_REPEAT_PENALTY/LLAMA_REPEAT_LAST_N (default 1.1 / 256) —
 #   the same shape as batch/ubatch/parallel/fit.  The two columns were only CARRIED before,
@@ -490,7 +498,7 @@ function __model_list() {
     then
         printf '{\n  "models": [\n'
         local first=1
-        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local quant_rating="unknown"
@@ -501,10 +509,10 @@ function __model_list() {
             [[ "${is_default:-no}" == "yes" ]] && is_default_json="true"
             (( first )) || printf ',\n'
             printf '    {"num":%s,"name":"%s","file":"%s","size":"%s","quant_cache":"%s","arch":"%s",\
-"gpu_layers":%s,"ctx":%s,"threads":%s,"batch":%s,"ubatch":%s,"parallel":%s,"fit":%s,"backend":"%s","mmap_mode":"%s","flash_attn":"%s","tps":"%s","autotuned":"%s","quant_rating":"%s","active":%s,"default":%s}' \
+"gpu_layers":%s,"ctx":%s,"threads":%s,"batch":%s,"ubatch":%s,"parallel":%s,"fit":%s,"backend":"%s","mmap_mode":"%s","flash_attn":"%s","tps":"%s","autotuned":"%s","quant_rating":"%s","active":%s,"default":%s,"meas_state":"%s","meas_drift_pct":"%s"}' \
                 "$num" "$(__llm_json_escape "$name")" "$(__llm_json_escape "$file")" "$size" "$(__llm_json_escape "$quant_cache")" \
                 "$(__llm_json_escape "$arch")" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" \
-                "$(__llm_json_escape "$backend")" "$(__llm_json_escape "${mmap_mode:-auto}")" "$(__llm_json_escape "${flash_attn:-on}")" "$(__llm_json_escape "${tps:--}")" "$(__llm_json_escape "${autotuned:-no}")" "$(__llm_json_escape "$quant_rating")" "$is_active" "$is_default_json"
+                "$(__llm_json_escape "$backend")" "$(__llm_json_escape "${mmap_mode:-auto}")" "$(__llm_json_escape "${flash_attn:-on}")" "$(__llm_json_escape "${tps:--}")" "$(__llm_json_escape "${autotuned:-no}")" "$(__llm_json_escape "$quant_rating")" "$is_active" "$is_default_json" "$(__llm_json_escape "${meas_state:--}")" "$(__llm_json_escape "${meas_drift:--}")"
             first=0
         done < "$LLM_REGISTRY"
         printf '\n  ],\n'
@@ -523,30 +531,30 @@ function __model_list() {
 
     if [[ "$output_mode" == "plain" ]]
     then
-        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local status="idle"
             [[ "${in_vram:-no}" == "yes" ]] && status="active"
             [[ "${is_default:-no}" == "yes" ]] && status="default"
-            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
-                "$num" "$name" "$file" "$size" "$quant_cache" "$arch" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "$backend" "${mmap_mode:-auto}" "${flash_attn:-on}" "${tps:--}" "${autotuned:-no}" "$status"
+            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+                "$num" "$name" "$file" "$size" "$quant_cache" "$arch" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "$backend" "${mmap_mode:-auto}" "${flash_attn:-on}" "${tps:--}" "${autotuned:-no}" "$status" "${meas_state:--}" "${meas_drift:--}"
         done < "$LLM_REGISTRY"
         return 0
     fi
 
     # Human-readable output — compute column widths dynamically
-    local _col_spec="%4s %28s %5s %9s %7s %4s %7s %4s %4s %4s %4s %4s %7s %4s %5s %5s %5s %4s %4s %11s"
+    local _col_spec="%4s %28s %5s %9s %7s %4s %7s %4s %4s %4s %4s %4s %7s %4s %5s %5s %5s %4s %4s %11s %-10s %6s"
     printf '\n%s  '"${_col_spec}"'%s\n' "$C_Dim" \
-        "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "FA" "MMAP" "TPS" "ATUNE" "DEF" "VRAM" "RATING" "$C_Reset"
+        "#" "MODEL" "SIZE" "Q/CACHE" "ARCH" "GPU" "CTX" "THR" "B" "UB" "PAR" "FIT" "BACK" "FA" "MMAP" "TPS" "ATUNE" "DEF" "VRAM" "RATING" "STATE" "DRIFT" "$C_Reset"
     local _list_rule
-    printf -v _list_rule '%*s' 149 ''
+    printf -v _list_rule '%*s' 167 ''
     _list_rule="${_list_rule// /${BOX_SL}}"
     printf "${C_Dim}  %s${C_Reset}\n" "$_list_rule"
 
-    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state
     # Trailing fields bound for position only, marked unread (SC2034).
-    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         local quant_rating="unknown"
@@ -562,8 +570,11 @@ function __model_list() {
             marker="* "
             color="$C_Highlight"
         fi
+        local _state_disp="${meas_state:--}"
+        local _drift_disp="-"
+        [[ -n "$meas_drift" ]] && _drift_disp="${meas_drift}%"
         printf '%s%s'"${_col_spec}"'%s\n' "$color" "$marker" \
-            "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${flash_attn:-on}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}" "$C_Reset"
+            "$num" "${name:0:28}" "$size" "${quant_cache:0:9}" "${arch:0:7}" "$gpu_layers" "$ctx" "$threads" "$batch" "$ubatch" "$parallel" "$fit_target_mb" "${backend:0:7}" "${flash_attn:-on}" "${mmap_mode:-auto}" "${tps:--}" "${autotuned:-no}" "${is_default:-no}" "${in_vram:-no}" "${quant_rating:0:11}" "${_state_disp:0:10}" "${_drift_disp:0:6}" "$C_Reset"
     done < "$LLM_REGISTRY"
 
     local d_used_bytes d_total_bytes d_avail_bytes d_pct_n
