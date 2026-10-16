@@ -94,7 +94,13 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-10-16): v9 CAPTURED NOTHING in production.  It matched `"folder":"` exactly while
+#   VS Code writes `"folder": "` - a space - so the window list was always empty and step 4 fell
+#   back to the one configured folder, which is the very defect v9 exists to fix.  Measured in
+#   wsl-restart-action.log at 05:39: "capture: 0 open window(s)" then "no captured windows".
+#   The pattern is whitespace-tolerant now, and the case's fixture uses the REAL spacing, which
+#   is why the case could not disagree before.
 #   v9 (2026-10-15): EVERY window the restart closes is reopened, not just the configured
 #   folder (Wayne: "restart all instances of vs code that were closed, not just the
 #   ubuntu-console instance").  Step 0c captures VS Code's own windowsState.openedWindows as
@@ -228,12 +234,17 @@ capture_windows() {
         _say "capture: no window state at $STORAGE_UNIX - step 4 falls back to the configured folder"
         return 0
     fi
-    # `"folder":"<uri>"` appears once per open window in windowsState.openedWindows; JSON does
+    # `"folder": "<uri>"` appears once per open window in windowsState.openedWindows; JSON does
     # not escape `/`, so the value is taken verbatim.  sorted -u so a window listed twice in the
     # file is relaunched once, never twice.
+    # THE SPACE AFTER THE COLON IS REAL, and it cost a production no-op: v9 matched `"folder":"`
+    # exactly while the file writes `"folder": "`, so 0 windows were captured and step 4 fell
+    # back to one folder - measured 2026-10-16 05:39 in wsl-restart-action.log ("capture: 0 open
+    # window(s)" then "no captured windows").  The case's fixture omitted the space too, so it
+    # could not disagree.  [[:space:]]* accepts either serialisation.
     # swallow-ok: the client can be mid-write here, and an EMPTY list IS the answer - step 4 falls back
-    grep -o '"folder":"[^"]*"' "$STORAGE_UNIX" 2>/dev/null |
-        sed 's/^"folder":"//; s/"$//' | sort -u > "$WINDOWS_TXT_UNIX"
+    grep -o '"folder":[[:space:]]*"[^"]*"' "$STORAGE_UNIX" 2>/dev/null |
+        sed 's/^"folder":[[:space:]]*"//; s/"$//' | sort -u > "$WINDOWS_TXT_UNIX"
     # swallow-ok: grep -c exits 1 on zero matches, and zero IS the count this line reports
     _n=$(grep -c . "$WINDOWS_TXT_UNIX" 2>/dev/null) || _n=0
     _say "capture: $_n open window(s) -> $WINDOWS_TXT_UNIX"

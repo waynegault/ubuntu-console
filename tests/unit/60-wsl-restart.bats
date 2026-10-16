@@ -115,11 +115,14 @@ teardown() {
 # folder - so every other window the restart had closed stayed closed (Wayne, 2026-10-15).
 @test "wsl-restart: the capture records every open window, and step 4 loops them" {
     local _storage="$SANDBOX/storage.json" _out="$SANDBOX/windows.txt"
+    # The spacing is the REAL file's (`"folder": "…"`, a space after the colon).  My first
+    # fixture omitted it, so this case validated a pattern that captured NOTHING in production -
+    # measured 2026-10-16 05:39: "capture: 0 open window(s)" then the fallback to one folder.
     cat > "$_storage" <<'JSON'
 {"windowsState":{"openedWindows":[
- {"folder":"vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"},
- {"folder":"vscode-remote://wsl%2Bubuntu-24.04/home/wayne/investigator"},
- {"folder":"vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"}]}}
+ {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"},
+ {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/investigator"},
+ {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"}]}}
 JSON
 
     run env TAC_WSL_RESTART_STORAGE_UNIX="$_storage" \
