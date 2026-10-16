@@ -195,10 +195,11 @@ teardown() {
     grep -q '^uncertified.gguf$' "$ARGV_LOG"
     grep -q '^flagged.gguf$' "$ARGV_LOG"
 
-    # Claimed: no plan left at the path a boot looks at, a copy in the log home, and the
-    # claim kept aside rather than destroyed.  v3 also writes a RETIREMENT marker beside
-    # it, so the claim is counted EXCLUDING that marker - the marker matches the same glob.
-    [ ! -e "$TAC_RESUME_PLAN" ]
+    # Claimed: a copy in the log home, the claim kept aside rather than destroyed, and (v7) the
+    # REMAINDER re-written at the path a boot looks at - so the next boot RESUMES instead of
+    # finding nothing.  v3 also writes a RETIREMENT marker beside the claim, so the claim is
+    # counted EXCLUDING that marker - the marker matches the same glob.
+    [ -f "$TAC_RESUME_PLAN" ]
     [ "$(ls -1 "$TAC_RESUME_LOGDIR" | grep -c '\.rows$')" -eq 1 ]
     local _claim_n _marker_n
     _claim_n=$(ls -1 "$TAC_RESUME_STATE_DIR"/autotune-resume.rows.claimed-* 2>/dev/null \
@@ -208,10 +209,12 @@ teardown() {
     [ "$_claim_n" -eq 1 ]
     [ "$_marker_n" -eq 1 ]
 
-    # And a second boot finds nothing and says so, rather than re-tuning the rows.
+    # v7: a second boot RESUMES the re-written remainder rather than finding nothing, because the
+    # campaign continues by design now - those rows are still OWED, they simply did not certify.
+    # "CLAIMED ONCE" is what this case proves, and the claim/marker assertions above are its proof.
     run "$SCRIPT" 2>&1
-    [[ "$output" == *"no plan at"* ]]
-    [ "$(wc -l < "$ARGV_LOG")" -eq 2 ]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"resuming"* ]]
 }
 
 @test "autotune-resume: a row whose model file is gone is dropped and the rest still run" {
@@ -265,7 +268,8 @@ EOS
 
     run "$SCRIPT" 2>&1
     [ "$status" -eq 0 ]
-    [[ "$output" == *"the remainder shrank 2 -> 1"* ]]
+    # v7 wording: the loop reports what is still OWED rather than the shrink it used to require.
+    [[ "$output" == *"still owed: 1 row(s)"* ]]
     [[ "$output" == *"armed restart 1/8"* ]]
 
     # Armed through the TRACKED tool, which owns the Windows side and the chunk gate.
@@ -281,14 +285,24 @@ EOS
     [ "$(cat "$TAC_RESUME_STATE_DIR/autotune-resume.auto-restarts")" = "1" ]
 }
 
-@test "autotune-resume: a budget halt that did NOT shrink the remainder does not arm" {
+@test "autotune-resume: a budget halt that did NOT shrink the remainder STILL arms (v7 criterion)" {
+    # CRITERION CHANGE (Wayne, 2026-10-16): the INDICATIVE rows stay in the SCOPE and are RETRIED,
+    # and he asked for a "much smoother" campaign - so a boot that retried them and certified
+    # nothing is PROGRESS, not a reason to stop.  This case previously asserted the OPPOSITE
+    # ("does not arm"), and that stop contradicted the ruling: it stalled the campaign after ONE
+    # boot (measured 18:45 - a full 64-cycle boot, then ActiveState=failed, plan none, 11 owed).
+    # The guards that bound the retries now are the 8-restart cap and arm_restart's CI-drain wait.
     printf 'uncertified.gguf\nflagged.gguf\n' > "$TAC_RESUME_PLAN"
     printf '4\n' > "$ENTRY_RC_FILE"
     # The registry is untouched, so the same rows (and more) are still owed.
     run "$SCRIPT" 2>&1
-    [ "$status" -eq 4 ]
-    [[ "$output" == *"did not shrink the remainder"* ]]
-    [ ! -e "$RESTART_ARGV" ]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"still owed"* ]]
+    grep -q '^--restart$' "$RESTART_ARGV"
+
+    # ...and the plan SURVIVES the decision, so a later boot can resume with no hand re-plan.
+    [ -f "$TAC_RESUME_PLAN" ]
+    [ "$(grep -c . "$TAC_RESUME_PLAN")" -ge 1 ]
 }
 
 @test "autotune-resume: an adapter STALL is not resumed — the budget was not the reason" {
@@ -381,14 +395,13 @@ EOS
     grep -q '^uncertified.gguf$' "$ARGV_LOG"
     grep -q '^law-chat-Q2_K.gguf$' "$ARGV_LOG"
 
-    # BOTH claims are retired - the recovered one and this boot's own - so a second boot
-    # finds nothing to recover and calls nothing.
+    # BOTH claims are retired - the recovered one and this boot's own - so a second boot cannot
+    # RE-RECOVER anything.  v7: it also finds the REMAINDER this boot wrote and resumes it, which
+    # is the point; what this asserts is that it does NOT take the recovery path a second time.
     [ -e "$TAC_RESUME_PLAN.claimed-20261015-134149.retired" ]
-    local _calls
-    _calls=$(wc -l < "$ARGV_LOG")
     run "$SCRIPT" 2>&1
-    [[ "$output" == *"no plan at"* ]]
-    [ "$(wc -l < "$ARGV_LOG")" -eq "$_calls" ]
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"the previous run was never reported on"* ]]
 }
 
 # Falsification: fails against a scan that does not skip the ".retired" NAME - the marker

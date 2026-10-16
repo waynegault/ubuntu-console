@@ -54,10 +54,25 @@
 #   exit 1 = a plan exists but nothing in it is runnable, or the entry point is missing
 #   exit 2 = a bad argument
 #   exit 3 = the chunk stopped for the ADAPTER with the budget unspent (propagated)
-#   exit 4 = the campaign PAUSED: a budget halt that will not resume by itself
+#   exit 4 = the campaign PAUSED: it will not resume by itself (the auto-restart cap, a CI job
+#            that will not drain, or a plan that cannot be written).  v7: a spent cycle budget is
+#            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 6
+# Module Version: 7
+#   v7 (2026-10-16): THE LOOP KEEPS GOING WHILE ROWS ARE OWED - it no longer stalls on a boot that
+#   did not shrink the remainder, and a stop no longer CONSUMES the plan.  Wayne, verbatim: "i want
+#   autotune to be much smoother than this!"  Two defects, both measured.  (a) `continue_after`
+#   advanced only on the exit-4 budget halt AND only when the re-derived remainder SHRANK - which
+#   contradicted his own ruling that the INDICATIVE rows stay in the SCOPE and are RETRIED: a boot
+#   that retried them and certified nothing shrank nothing, so the loop PAUSED (measured 18:45: a
+#   full 64-cycle boot, then ActiveState=failed with nothing armed, plan none, 11 rows still owed).
+#   The stop is now the EMPTY remainder; the remaining guards are the 8-restart cap and
+#   arm_restart's bounded wait for a CI job to drain, both of which still bound the retries.  (b) The
+#   non-continuing paths returned BEFORE `write_plan`, so a pause left `plan: none` - a later boot
+#   then read "nothing to resume" and the campaign could not restart without a HAND re-plan.  Every
+#   stop now writes the remainder back first.  The ADAPTER stall (exit 3) is still a stop - the
+#   budget was not the reason, so a person looks - but it too leaves a resumable plan.
 #   v6 (2026-10-16): a durable SCOPE, and a certified NEW QUANT stops being pinned.  Two measured
 #   defects, one fix each.  (a) A hand-written plan lasted exactly ONE boot: every registry row reads
 #   `autotuned=yes`, so `derive_rows` selects nothing and `continue_after` -> `write_plan` re-derived
@@ -93,8 +108,11 @@ set -uo pipefail
 EXIT_FAILED=1  # a plan exists but cannot be run, or its entry point is missing
 EXIT_USAGE=2   # the caller asked for something this script cannot do
 EXIT_ADAPTER=3 # the chunk stalled with the cycle budget UNSPENT: a person looks
-EXIT_BUDGET=4  # the chunk spent the cycle budget: resumable, and the designed halt
-EXIT_PAUSED=4  # ...but only when it made progress; otherwise the campaign pauses
+# v7: EXIT_BUDGET is GONE.  The loop no longer branches on the chunk's exit 4 (the spent cycle
+# budget) - it continues while rows are owed - so the constant had no reader and shellcheck said
+# so (SC2034).  The VALUE still matters: it is what the chunk returns, and the Module Version note
+# above records it.  EXIT_PAUSED keeps that value for the paths that genuinely stop.
+EXIT_PAUSED=4  # the campaign PAUSED: the cap, a CI job that will not drain, or an unwritable plan
 
 REPO="${REPO:-/home/wayne/ubuntu-console}"
 REGISTRY="${TAC_RESUME_REGISTRY:-$HOME/.llm/models.conf}"
@@ -363,25 +381,26 @@ continue_after() {
     if (( _rc == EXIT_ADAPTER )); then
         printf 'not continuing: the chunk stopped for the ADAPTER with the budget UNSPENT\n'
         printf '  the ledger is not the explanation, so a restart would not help - a person looks\n'
+        # ...but the remainder is still OWED, so it is written back: a stop must never consume the
+        # plan, or the campaign cannot resume without a hand re-plan (v7).
+        write_plan || return "$EXIT_PAUSED"
         return "$EXIT_ADAPTER"
     fi
-    if (( _rc != EXIT_BUDGET )); then
-        printf 'not continuing: the chunk exited %s (only %s, the spent cycle budget, resumes)\n' \
-            "$_rc" "$EXIT_BUDGET"
-        return "$_rc"
-    fi
+    # v7: KEEP GOING while rows are owed.  This used to advance only on the exit-4 budget halt, and
+    # only when the remainder SHRANK - which contradicted Wayne's own ruling that the INDICATIVE rows
+    # stay in the SCOPE and are RETRIED (2026-10-16): a boot that retried them and certified nothing
+    # shrank nothing, so the loop PAUSED and the campaign stalled after ONE boot (measured 18:45 - a
+    # full 64-cycle boot, then ActiveState=failed, nothing armed, plan none, 11 rows still owed).
+    # Wayne, 2026-10-16: "i want autotune to be much smoother than this!"  The stop is now the EMPTY
+    # remainder; the guards that bound the retries are the 8-restart cap and arm_restart's bounded
+    # wait for a CI job to drain, and an adapter stall (handled above) still stops for a person.
     _after=$(plan_rows | awk 'END { print NR }')
     if (( _after == 0 )); then
         printf 'the remainder is EMPTY - the campaign is complete; no restart armed\n'
         return 0
     fi
-    if (( _after >= _before )); then
-        printf 'NOT arming a restart: this boot did not shrink the remainder (%s -> %s)\n' \
-            "$_before" "$_after"
-        printf '  the rows it would re-run are the ones that just ran; a person decides\n'
-        return "$EXIT_PAUSED"
-    fi
-    printf 'the remainder shrank %s -> %s in this boot\n' "$_before" "$_after"
+    printf 'still owed: %s row(s) (this boot was handed %s and exited %s): re-planning and arming\n' \
+        "$_after" "$_before" "$_rc"
     write_plan || return "$EXIT_PAUSED"
     arm_restart
 }
