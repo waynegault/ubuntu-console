@@ -77,6 +77,12 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 10
+#   v10 (2026-10-16): the store-witness REPORT is keyed on the witness's own rc.  It had
+#   claimed "a patch re-apply cannot fix this (retire pre-patch daemons / reboot)" for ANY
+#   non-zero witness exit, but only rc=1 (a broken/chopped index link) is a daemon case:
+#   rc=3 is an over-cap line with bad=0, whose remedy is editing that store line -- no daemon
+#   retires a long line.  Measured 2026-10-16: a 249-character line was reported as a reboot.
 # Module Version: 9
 #   v9 (2026-10-16): an EIGHTH tool is announced -- the Workboard proof-cap patcher
 #   (~/.openclaw/scripts/workboard-proofcap-patch.sh).  It had NO caller anywhere, so the
@@ -317,8 +323,20 @@ fi
 # and make the tick exit non-zero.  Silent and rc-neutral when every store reads clean.
 if [[ "$witness_rc" -ne 0 ]]; then
   {
-    echo "=== $(date -Is) - memory-index stores reported broken entries; a patch"
-    echo "    re-apply cannot fix this (retire pre-patch daemons / reboot)"
+    echo "=== $(date -Is) - the memory-index store witness reported a problem"
+    # Key the remedy on the witness's OWN exit code.  Only a broken link is a daemon case:
+    # an over-cap line (rc=3, bad=0, link resolves) is an edit to the store, and a blanket
+    # "reboot" line sent a reader chasing a harmless 249-char line (measured 2026-10-16).
+    case "$witness_rc" in
+      1) echo "    rc=1 - a broken/chopped index link.  A patch re-apply cannot restore it;" \
+              "the remedy is retiring pre-patch daemons (a reboot), which a cron tick cannot do." ;;
+      3) echo "    rc=3 - an over-cap index line (bad=0; the link still resolves).  Remedy: edit" \
+              "that store line - no daemon retires a long line.  It recurs only if the patched" \
+              "writer re-emits one (bin/qwen-memory-index-patch.sh hunk 4)." ;;
+      2) echo "    rc=2 - the witness could not run (no index found).  An empty scan is not a" \
+              "clean tree; fix the store path before reading this as a daemon/patch failure." ;;
+      *) echo "    rc=$witness_rc - unexpected witness exit; read the store lines below." ;;
+    esac
     printf '%s\n' "$witness_out"
   } >>"$LOG" 2>&1
   rc=1
