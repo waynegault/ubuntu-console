@@ -77,6 +77,16 @@
 # this file.  Nothing about the schedule or the command has to move.
 #
 # AI INSTRUCTION: Increment version on significant changes.
+# Module Version: 9
+#   v9 (2026-10-16): an EIGHTH tool is announced -- the Workboard proof-cap patcher
+#   (~/.openclaw/scripts/workboard-proofcap-patch.sh).  It had NO caller anywhere, so the
+#   proof-cap fix (legacy over-cap proof notes preserved on read, the new-input cap
+#   inlined, the per-card refresh fail-soft) would be reverted by the next OpenClaw
+#   upgrade and stay reverted: the same foreign-bundle reversion the comment-cap arm
+#   exists to catch, one layer along.  Probed rc-aware like the test-log and agentmail
+#   tools -- only rc 1 (a reverted copy) triggers a re-apply; rc 3 (no Workboard bundle),
+#   4 (unusable cap) and 5 (no node) stay quiet, because the comment-cap arm is boolean
+#   and already pages on those states from the SAME bundle, so no class is left silent.
 # Module Version: 8
 #   v8 (2026-10-13): a SEVENTH tool is announced -- the agentmail dist patch
 #   (~/.openclaw/scripts/agentmail-dist-patch.sh), probed rc-aware like the test-log tool
@@ -145,6 +155,9 @@ STYLE="/home/wayne/.local/bin/qwen-memory-style-patch.sh"
 # path here rather than linked into ~/.local/bin, because this watchdog is the only thing
 # that invokes it (card 75b9cfcc).
 COMMENTCAP="/home/wayne/.openclaw/scripts/workboard-commentcap-patch.sh"
+# The Workboard proof-cap + diagnostics-refresh patcher (2026-10-16).  Same foreign
+# bundle as the comment-cap patcher and the same repo, so named the same way.
+PROOFCAP="/home/wayne/.openclaw/scripts/workboard-proofcap-patch.sh"
 # The VS Code Testing results-logger patcher (2026-10-07).  Named by path like its
 # siblings; its --check is rc-aware, so it is probed separately below rather than by
 # the boolean `! … --check` test the four above use.
@@ -175,6 +188,18 @@ if [[ -x "$STYLE" ]] && ! "$STYLE" --check >/dev/null 2>&1; then
 fi
 if [[ -x "$COMMENTCAP" ]] && ! "$COMMENTCAP" --check >/dev/null 2>&1; then
   needed+=(commentcap)
+fi
+
+# The proof-cap patcher shares the comment-cap patcher's exit codes (0 applied, 1 a
+# reverted copy, 3 no Workboard bundle, 4 unusable cap, 5 no node), so it cannot use
+# the boolean form either: only rc 1 is a reversion worth re-applying.  Measured
+# 2026-10-16: nothing executable called it, so the proof-cap fix would rot silently.
+PROOFCAP_rc=0
+if [[ -x "$PROOFCAP" ]]; then
+  "$PROOFCAP" --check >/dev/null 2>&1 || PROOFCAP_rc=$?
+  if [[ "$PROOFCAP_rc" -eq 1 ]]; then
+    needed+=(proofcap)
+  fi
 fi
 if [[ -x "$DENLINK" ]] && ! "$DENLINK" --check >/dev/null 2>&1; then
   needed+=(denlink)
@@ -255,6 +280,7 @@ for tool in "${needed[@]}"; do
     memory-index) patch="$IDX"; label="memory-index patch"; apply_args=() ;;
     memory-style) patch="$STYLE"; label="memory-style patch"; apply_args=() ;;
     commentcap) patch="$COMMENTCAP"; label="workboard-commentcap patch"; apply_args=() ;;
+    proofcap) patch="$PROOFCAP"; label="workboard-proofcap patch"; apply_args=() ;;
     denlink) patch="$DENLINK"; label="plugin-skill hardlink"; apply_args=(--apply) ;;
     testlog) patch="$TESTLOG"; label="test-log patch"; apply_args=(--apply) ;;
     agentmail) patch="$AGENTMAIL"; label="agentmail dist patch"; apply_args=(--apply) ;;
