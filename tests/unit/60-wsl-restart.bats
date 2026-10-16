@@ -317,10 +317,10 @@ _line_of() {
     [[ "$output" == *"UNKNOWN"* ]]
 }
 
-@test "wsl-restart: --schedule registers a DAILY task whose wrapper keeps its own registration" {
+@test "wsl-restart: --schedule daily registers a DAILY task whose wrapper keeps its own registration" {
     export QUERY_MODE=registered
     export TAC_WSL_RESTART_DAILY_WRAPPER_UNIX="$SANDBOX/daily.cmd"
-    run "$SCRIPT" --schedule 03:30 2>&1
+    run "$SCRIPT" --schedule daily 03:30 2>&1
     [ "$status" -eq 0 ]
 
     [ "$(awk '/\/create/ { n++ } END { print n+0 }' "$ARGV_LOG")" -eq 1 ]
@@ -338,6 +338,34 @@ _line_of() {
     [[ "$output" == *'schtasks.exe /delete /f /tn tac-wsl-restart'* ]]
 }
 
+@test "wsl-restart: a bare --schedule HH:MM arms a ONE-SHOT at that clock time" {
+    export QUERY_MODE=registered
+    run "$SCRIPT" --schedule 23:45 2>&1
+    [ "$status" -eq 0 ]
+
+    [ "$(awk '/\/create/ { n++ } END { print n+0 }' "$ARGV_LOG")" -eq 1 ]
+    grep -q '/sc once' "$ARGV_LOG"
+    grep -q '/st 23:45' "$ARGV_LOG"
+    # A bare time must NOT take the daily form: substituting a DAILY task for the
+    # one-shot is the production miss this case exists to catch (2026-10-16 - the
+    # evening campaign never fired because `--schedule 22:57` armed `/sc daily`).
+    ! grep -q '/sc daily' "$ARGV_LOG"
+    grep -qF '/tr C:\Users\wayne\wsl-restart-action.cmd' "$ARGV_LOG"
+
+    # /sd is TODAY when the clock time is still ahead, else TOMORROW - computed here from
+    # the requirement, not read off the script's own output.
+    local sd want
+    sd=$(awk '{ for (i = 1; i < NF; i++) if ($i == "/sd") print $(i+1) }' "$ARGV_LOG")
+    if [[ "$(date +%H:%M)" < "23:45" ]]; then want=$(date +%d/%m/%Y); else want=$(date -d '+1 day' +%d/%m/%Y); fi
+    [ "$sd" = "$want" ]
+
+    # The ONE-SHOT wrapper is written and deletes its own registration; the recurring
+    # form keeps it.  Both halves, so the two modes cannot be confused for each other.
+    [ -f "$TAC_WSL_RESTART_WRAPPER_UNIX" ]
+    grep -q 'schtasks.exe /delete /f /tn tac-wsl-restart' "$TAC_WSL_RESTART_WRAPPER_UNIX"
+    ! grep -q 'registration KEPT' "$TAC_WSL_RESTART_WRAPPER_UNIX"
+}
+
 @test "wsl-restart: --schedule refuses a time that is not 24h HH:MM, and arms nothing" {
     run "$SCRIPT" --schedule 25:00 2>&1
     [ "$status" -eq 2 ]
@@ -346,6 +374,11 @@ _line_of() {
 
     run "$SCRIPT" --schedule lunchtime 2>&1
     [ "$status" -eq 2 ]
+
+    # Daily is only a MODE: with no time it is still an error, not a silent no-op.
+    run "$SCRIPT" --schedule daily 2>&1
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--schedule needs a 24h HH:MM"* ]]
 }
 
 @test "wsl-restart: --unschedule removes the registration, and says so when there is none" {

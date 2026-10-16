@@ -72,8 +72,9 @@
 # separate unit because its arming is an owner decision, not a side effect here.
 #
 # USAGE
-#   wsl-restart.sh --restart [--folder PATH] [--delay MINUTES]   one-shot restart
-#   wsl-restart.sh --schedule [daily] HH:MM                      recurring restart
+#   wsl-restart.sh --restart [--folder PATH] [--delay MINUTES]   one-shot restart in N min
+#   wsl-restart.sh --schedule HH:MM                              one-shot restart at HH:MM
+#   wsl-restart.sh --schedule daily HH:MM                        recurring (daily) restart
 #   wsl-restart.sh --unschedule                                  remove the task
 #   wsl-restart.sh --status                                      is one armed?
 #   wsl-restart.sh --precheck                                    safe to restart now?
@@ -94,7 +95,15 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-10-16): a BARE `--schedule HH:MM` is now ONE-SHOT.  Wayne's `--schedule 22:57`
+#   was expected to arm a single restart but registered a DAILY task instead, and the next
+#   one-shot arm (`--restart --delay`) OVERWROTE it - so NOTHING was armed and the evening
+#   campaign never started (measured 2026-10-16: the bare time produced `/sc daily`, and a
+#   later `--status`-less sweep read nothing scheduled).  A bare time now arms a ONE-SHOT at
+#   that clock time - today when it is still ahead, else tomorrow - and its wrapper deletes
+#   its own registration.  `daily HH:MM` (and the explicit `once HH:MM` synonym) select the
+#   form, so the recurring meaning has to be asked for.
 #   v10 (2026-10-16): v9 CAPTURED NOTHING in production.  It matched `"folder":"` exactly while
 #   VS Code writes `"folder": "` - a space - so the window list was always empty and step 4 fell
 #   back to the one configured folder, which is the very defect v9 exists to fix.  Measured in
@@ -242,9 +251,12 @@ capture_windows() {
     # back to one folder - measured 2026-10-16 05:39 in wsl-restart-action.log ("capture: 0 open
     # window(s)" then "no captured windows").  The case's fixture omitted the space too, so it
     # could not disagree.  [[:space:]]* accepts either serialisation.
+    # Each line is `<kind>|<uri>`: a folder window reopens with --folder-uri, a multi-root
+    # workspace window (`"configPath"`) with --file-uri, so workspace windows are not dropped.
     # swallow-ok: the client can be mid-write here, and an EMPTY list IS the answer - step 4 falls back
-    grep -o '"folder":[[:space:]]*"[^"]*"' "$STORAGE_UNIX" 2>/dev/null |
-        sed 's/^"folder":[[:space:]]*"//; s/"$//' | sort -u > "$WINDOWS_TXT_UNIX"
+    grep -oE '"(folder|configPath)":[[:space:]]*"[^"]*"' "$STORAGE_UNIX" 2>/dev/null |
+        sed -E 's/^"folder":[[:space:]]*"/folder-uri|/; s/^"configPath":[[:space:]]*"/file-uri|/; s/"$//' |
+        sort -u > "$WINDOWS_TXT_UNIX"
     # swallow-ok: grep -c exits 1 on zero matches, and zero IS the count this line reports
     _n=$(grep -c . "$WINDOWS_TXT_UNIX" 2>/dev/null) || _n=0
     _say "capture: $_n open window(s) -> $WINDOWS_TXT_UNIX"
@@ -478,9 +490,9 @@ render_relaunch_step() {
         "set \"CODE_CMD=${CODE_CMD_WIN}\"" \
         "set \"WINDOWS_TXT=${WINDOWS_TXT_WIN}\"" \
         'set RELAUNCHED=0' \
-        'if exist "%WINDOWS_TXT%" for /f "usebackq delims=" %%F in ("%WINDOWS_TXT%") do (' \
-        '    echo [%DATE% %TIME%] relaunching window: %%F >> "%LOG%"' \
-        '    "%CODE_CMD%" --folder-uri "%%F" >> "%LOG%" 2>&1' \
+        'if exist "%WINDOWS_TXT%" for /f "usebackq tokens=1,2 delims=|" %%K in ("%WINDOWS_TXT%") do (' \
+        '    echo [%DATE% %TIME%] relaunching window: %%K %%L >> "%LOG%"' \
+        '    "%CODE_CMD%" --%%K "%%L" >> "%LOG%" 2>&1' \
         '    set RELAUNCHED=1' \
         ')' \
         'if "%RELAUNCHED%"=="0" (' \
@@ -729,10 +741,13 @@ arm_restart() {
     return 0
 }
 
-# Register the DAILY task.  Its wrapper keeps its own registration, because a
-# schedule that deletes itself on the first run is a one-shot with extra steps.
+# Register a restart at a NAMED clock time.  `_recur` picks the form: `daily` is the
+# recurring task whose wrapper keeps its own registration, `once` is the DEFAULT - a
+# single fire whose wrapper deletes itseIf, so a bare time resumes a campaign without
+# becoming a nightly habit (v11; see the Module Version note for the production miss
+# this closes).
 schedule_restart() {
-    local _folder="$1" _time="$2"
+    local _folder="$1" _time="$2" _recur="${3:-once}" _st _sd
     if [[ ! "$_time" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
         _say "ERROR: --schedule needs a 24h HH:MM time, got: $_time"
         return "$EXIT_USAGE"
@@ -741,17 +756,39 @@ schedule_restart() {
         return 1
     fi
     warn_if_registered
-    if ! write_wrapper "$_folder" scheduled; then
+    if [[ "$_recur" == "daily" ]]; then
+        if ! write_wrapper "$_folder" scheduled; then
+            return 1
+        fi
+        if ! _win 60 "$SCHTASKS_BIN" /create /f /tn "$TASK_NAME" \
+                /tr "$DAILY_WRAPPER_WIN" /sc daily /st "$_time" >/dev/null 2>&1; then
+            _say "ERROR: schtasks /create (daily) failed (bounded at 60 s) - NOT scheduled"
+            return 1
+        fi
+        confirm_armed "$TASK_NAME runs daily at $_time (Windows local time)" || return 1
+        _say "each fire is gated on the chunk check, so a busy box skips that night and"
+        _say "tries again the next; the log records which happened: $LOG_WIN"
+        return 0
+    fi
+    # ONE-SHOT at a named clock time.  The date is TODAY when the time is still ahead,
+    # otherwise TOMORROW, so a time that has already passed means the next occurrence
+    # rather than a past trigger schtasks refuses.
+    if [[ "$(date +%H:%M)" < "$_time" ]]; then
+        _sd=$(date +%d/%m/%Y)
+    else
+        _sd=$(date -d '+1 day' +%d/%m/%Y)
+    fi
+    _st="$_time"
+    if ! write_wrapper "$_folder" oneshot; then
         return 1
     fi
     if ! _win 60 "$SCHTASKS_BIN" /create /f /tn "$TASK_NAME" \
-            /tr "$DAILY_WRAPPER_WIN" /sc daily /st "$_time" >/dev/null 2>&1; then
-        _say "ERROR: schtasks /create (daily) failed (bounded at 60 s) - NOT scheduled"
+            /tr "$WRAPPER_WIN" /sc once /sd "$_sd" /st "$_st" >/dev/null 2>&1; then
+        _say "ERROR: schtasks /create (once) failed (bounded at 60 s) - NOT armed"
         return 1
     fi
-    confirm_armed "$TASK_NAME runs daily at $_time (Windows local time)" || return 1
-    _say "each fire is gated on the chunk check, so a busy box skips that night and"
-    _say "tries again the next; the log records which happened: $LOG_WIN"
+    confirm_armed "$TASK_NAME fires once at $_st on $_sd (Windows local time)" || return 1
+    _say "the wrapper logs to $LOG_WIN; a boot resumes the campaign (autotune-resume)."
     return 0
 }
 
@@ -803,6 +840,7 @@ show_status() {
 # Argument parsing only; --restart is never reached by accident.
 main() {
     local _mode="" _folder="$FOLDER_DEFAULT" _delay="$DELAY_MINUTES_DEFAULT" _time="" _want=""
+    local _recur="once"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --restart)    _mode="restart" ;;
@@ -813,8 +851,11 @@ main() {
             --capture-windows) capture_windows; return 0 ;;
             --unschedule) _mode="unschedule" ;;
             --dry-run)    _mode="dry-run" ;;
-            --schedule)   _mode="schedule"; shift; _want="${1:-}"
-                          if [[ "$_want" == "daily" ]]; then shift; _want="${1:-}"; fi
+            # A BARE HH:MM is one-shot (the default); `daily` and the explicit `once`
+            # select the recurring and one-shot forms.  See the Module Version note.
+            --schedule)   _mode="schedule"; shift; _want="${1:-}"; _recur="once"
+                          if [[ "$_want" == "daily" ]]; then _recur="daily"; shift; _want="${1:-}"
+                          elif [[ "$_want" == "once" ]]; then shift; _want="${1:-}"; fi
                           _time="$_want" ;;
             --folder)     _folder="${2:?--folder needs a path}"; shift ;;
             --delay)      _delay="${2:?--delay needs minutes}"; shift ;;
@@ -833,7 +874,7 @@ main() {
                 { _say "ERROR: --delay must be a whole number of minutes, at least 1"; return "$EXIT_USAGE"; }
             arm_restart "$_folder" "$_delay"
             ;;
-        schedule)   schedule_restart "$_folder" "$_time" ;;
+        schedule)   schedule_restart "$_folder" "$_time" "$_recur" ;;
         unschedule) unschedule ;;
         status)     show_status ;;
         precheck)   precheck ;;
