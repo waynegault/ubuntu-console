@@ -462,13 +462,40 @@ def gh_binary() -> str:
     return "gh"
 
 
+def _gh_environment(executable: str) -> dict[str, str] | None:
+    """Make the real CLI visible to the repo shim without bypassing its token bridge."""
+    repo_shim = (REPO_DIR / "bin" / "gh").resolve()
+    if Path(executable).resolve() != repo_shim:
+        return None
+    real_cli = next(
+        (
+            candidate
+            for candidate in GH_FALLBACKS
+            if os.access(candidate, os.X_OK) and Path(candidate).resolve() != repo_shim
+        ),
+        None,
+    )
+    if real_cli is None:
+        return None
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join(
+        (str(Path(real_cli).parent), env.get("PATH", ""))
+    )
+    return env
+
+
 def _gh_json(args: list[str], *, timeout: int) -> object:
     """Call ``gh`` and return its parsed JSON, raising CiStatusUnknown."""
     cmd = [gh_binary(), *args]
     logger.debug("running: %s", " ".join(cmd))
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, check=False
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=_gh_environment(cmd[0]),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.debug("gh invocation failed", exc_info=True)

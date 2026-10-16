@@ -558,6 +558,31 @@ class TestGhResolutionOrder:
         monkeypatch.setattr(mod, "GH_FALLBACKS", (str(fallback),))
         assert mod._gh_json([], timeout=30) == {"used": "which"}
 
+    def test_repo_shim_gets_real_cli_on_path(self, tmp_path, monkeypatch) -> None:
+        repo = tmp_path / "repo"
+        repo_shim = repo / "bin" / "gh"
+        repo_shim.parent.mkdir(parents=True)
+        linuxbrew_dir = tmp_path / "linuxbrew"
+        linuxbrew_dir.mkdir()
+        real = self._script(linuxbrew_dir / "gh", "fallback")
+        repo_shim.write_text(
+            "#!/bin/sh\n"
+            f'case "$PATH" in "{real.parent}":*) printf \'{{"used": "shim"}}\\n\' ;; '
+            "*) exit 91 ;; esac\n",
+            encoding="utf-8",
+        )
+        repo_shim.chmod(0o755)
+        path_dir = tmp_path / "path"
+        path_dir.mkdir()
+        path_shim = path_dir / "gh"
+        path_shim.symlink_to(repo_shim)
+        monkeypatch.setattr(mod, "REPO_DIR", repo)
+        monkeypatch.setattr(mod, "shutil", SimpleNamespace(which=lambda name: str(path_shim)))
+        monkeypatch.setattr(
+            mod, "GH_FALLBACKS", (str(path_shim), str(real))
+        )
+        assert mod._gh_json([], timeout=30) == {"used": "shim"}
+
     def test_a_fallback_is_used_when_which_finds_nothing(self, tmp_path, monkeypatch) -> None:
         fallback = self._script(tmp_path / "gh-fallback", "fallback")
         self._which_finds_nothing(monkeypatch)
