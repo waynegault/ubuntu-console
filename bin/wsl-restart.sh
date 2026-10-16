@@ -95,7 +95,19 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 11
+# Module Version: 12
+#   v12 (2026-10-16): THE WRAPPER'S TAIL NEVER RAN, so the one-shot never self-deleted.  Measured:
+#   `grep -c 'wsl-restart-action: done'` = 0 against 16 `start` lines, and the 16:37 fire's log ends
+#   at the three `relaunching window:` echoes with nothing after them.  The tail holds the ONE-SHOT's
+#   self-delete, so every fire left a SPENT registration (`Next Run Time: N/A`, `Status: Ready`) whose
+#   trigger can never fire again - and `--status` reported that stale token as ARMED, which is what
+#   stood a watcher down mid-task.  Two fixes, one per half.  (a) The relaunch now invokes the client
+#   through `call`: a .cmd invoked from a .cmd WITHOUT `call` does not return to its caller, a standard
+#   cmd.exe rule, and the relaunch is the ONE place here that hands control to another batch file.
+#   (b) `--status` no longer calls a registration ARMED when it has no trigger left: a one-shot whose
+#   `Next Run Time` is `N/A`/empty is reported as SPENT, so the report matches the mechanism whatever
+#   killed the tail.  A unit case cannot prove the RUNTIME here (it is cmd.exe behaviour, not rendered
+#   text) - it pins the mechanism, the same shape as the operator gate's stdout case.
 #   v11 (2026-10-16): a BARE `--schedule HH:MM` is now ONE-SHOT.  Wayne's `--schedule 22:57`
 #   was expected to arm a single restart but registered a DAILY task instead, and the next
 #   one-shot arm (`--restart --delay`) OVERWROTE it - so NOTHING was armed and the evening
@@ -492,13 +504,16 @@ render_relaunch_step() {
         'set RELAUNCHED=0' \
         'if exist "%WINDOWS_TXT%" for /f "usebackq tokens=1,2 delims=|" %%K in ("%WINDOWS_TXT%") do (' \
         '    echo [%DATE% %TIME%] relaunching window: %%K %%L >> "%LOG%"' \
-        '    "%CODE_CMD%" --%%K "%%L" >> "%LOG%" 2>&1' \
+        '    REM `call` is load-bearing - a .cmd invoked from a .cmd WITHOUT it does not return,' \
+        '    REM so this step would never hand control back and the self-delete below never ran.' \
+        '    REM Measured 2026-10-16 - the wrapper logged ZERO done lines across 16 fires.' \
+        '    call "%CODE_CMD%" --%%K "%%L" >> "%LOG%" 2>&1' \
         '    set RELAUNCHED=1' \
         ')' \
         'if "%RELAUNCHED%"=="0" (' \
         "    echo [%DATE% %TIME%] no captured windows - relaunching the configured folder >> \"%LOG%\"" \
         "    echo [%DATE% %TIME%] relaunching: %CODE_CMD% --remote wsl+${DISTRO} ${_folder} >> \"%LOG%\"" \
-        "    \"%CODE_CMD%\" --remote wsl+${DISTRO} \"${_folder}\" >> \"%LOG%\" 2>&1" \
+        "    call \"%CODE_CMD%\" --remote wsl+${DISTRO} \"${_folder}\" >> \"%LOG%\" 2>&1" \
         ')'
 }
 
@@ -816,9 +831,19 @@ show_status() {
     _state=$(task_state) || _rc=$?
     case "$_rc" in
         0)
-            _say "ARMED - a restart is pending:"
-            _say "$_state"
-            _verdict="$EXIT_STATUS_ARMED"
+            # REGISTERED is not the same as ARMED.  A one-shot whose trigger has FIRED reads
+            # `Next Run Time: N/A` and can never fire again - measured 2026-10-16, when the wrapper
+            # failed to reach its self-delete and this branch called the spent token ARMED, which
+            # stood a watcher down mid-task.  Report a triggerless registration as SPENT.
+            if printf '%s\n' "$_state" | grep -qiE '^Next Run Time:[[:space:]]*(N/A|<None>)?[[:space:]]*$'; then
+                _say "registered but SPENT - no trigger left, so no restart is pending:"
+                _say "$_state"
+                _verdict=0
+            else
+                _say "ARMED - a restart is pending:"
+                _say "$_state"
+                _verdict="$EXIT_STATUS_ARMED"
+            fi
             ;;
         1)
             _say "not registered (no $TASK_NAME task) - no restart is pending"

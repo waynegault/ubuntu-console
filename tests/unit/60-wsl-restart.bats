@@ -49,9 +49,10 @@ setup() {
     ARGV_LOG="$SANDBOX/schtasks.argv"
     export ARGV_LOG
 
-    # A stub schtasks: records every argv, and answers /query in one of three modes.
+    # A stub schtasks: records every argv, and answers /query in one of four modes.
     #   registered -> a registration exists   absent -> "cannot find the file"
     #   broken     -> a failure that is NOT absence (must never read as "absent")
+    #   spent      -> registered, Ready, and NO trigger left (a one-shot that already fired)
     # A /delete is REMEMBERED, so the read-back guard can be tested: a stub that keeps
     # answering "registered" after a delete can only make the product look broken.
     DELETED_MARKER="$SANDBOX/deleted"
@@ -74,6 +75,15 @@ case "$*" in
             registered)
                 printf 'TaskName:                             \\tac-wsl-restart\n'
                 printf 'Next Run Time:                        15/10/2026 23:59:00\n'
+                exit 0
+                ;;
+            # A ONE-SHOT whose trigger has already FIRED: registered and Ready, but with NO
+            # trigger left.  Measured 2026-10-16 after the wrapper failed to reach its own
+            # self-delete - `--status` called this spent token ARMED and a watcher stood down.
+            spent)
+                printf 'TaskName:                             \\tac-wsl-restart\n'
+                printf 'Next Run Time:                        N/A\n'
+                printf 'Status:                               Ready\n'
                 exit 0
                 ;;
             broken)
@@ -139,6 +149,14 @@ JSON
     [[ "$output" == *'--folder-uri'* ]]
     [[ "$output" == *'for /f'* ]]
     [[ "$output" == *'--remote wsl+Ubuntu-24.04'* ]]
+
+    # v12: BOTH relaunch invocations go through `call`.  A .cmd invoked from a .cmd WITHOUT
+    # `call` does not return to its caller, so the wrapper would never reach its tail - and the
+    # tail is where the one-shot's self-delete lives.  Measured 2026-10-16: ZERO `done` lines
+    # across 16 fires, the log ending at the relaunch echoes.  A unit case cannot prove cmd.exe
+    # behaviour, so this pins the MECHANISM, as the operator gate's stdout case does.
+    [ "$(printf '%s\n' "$output" | grep -c 'call "%CODE_CMD%"')" -eq 2 ]
+    ! printf '%s\n' "$output" | grep -qE '^[[:space:]]*"%CODE_CMD%"'
 }
 
 # The line number of the FIRST line matching a pattern, or 0 when there is none.
@@ -266,6 +284,16 @@ _line_of() {
     run "$SCRIPT" --status 2>&1
     [ "$status" -eq 1 ]
     [[ "$output" == *"ARMED"* ]]
+
+    # v12: REGISTERED is not the same as ARMED.  A one-shot whose trigger has already FIRED keeps
+    # its registration - `Next Run Time: N/A`, `Status: Ready` - but can never fire again.  Measured
+    # 2026-10-16: the wrapper failed to reach its self-delete, the token sat there, and this command
+    # called it ARMED, which stood a watcher down mid-task.  It must read as NOT armed.
+    export QUERY_MODE=spent
+    run "$SCRIPT" --status 2>&1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"SPENT"* ]]
+    [[ "$output" != *"ARMED - a restart is pending"* ]]
 
     # Unreadable is NOT absence: it must not read as the safe state.
     export QUERY_MODE=broken
