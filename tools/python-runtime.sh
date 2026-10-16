@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-10-16): added the repo's `# end of file` sentinel, which this file never carried -
+#   the nightly's hygiene case ("tools/*.sh scripts end with # end of file marker") only runs
+#   nightly, so push CI stayed green while the tip was red there.
 #   v2 (2026-10-15): reject a configured TAC_PYTHON that cannot be executed.
 
 # _tac_python_path <repo-root> — prefer the repository venv, then an explicit
@@ -39,3 +42,5 @@ _tac_python_path() {
     printf '%s\n' "python-runtime: no repository venv, TAC_PYTHON, or PATH python3" >&2
     return 127
 }
+
+# end of file

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: Increment version on significant changes.
-# Module Version: 2
+# Module Version: 3
+#   v3 (2026-10-16): added the repo's `# end of file` sentinel, which this file never carried -
+#   the nightly's hygiene case ("tools/*.sh scripts end with # end of file marker") only runs
+#   nightly, so push CI stayed green while the tip was red there.
 #   v2 (2026-10-15): §18.3 shapes fixed at source — named exit codes, one stderr writer
 #   (`_say`), a comment above every function, and no non-comment line over 120 chars.
 
@@ -228,3 +231,5 @@ main() {
 }
 
 main "$@"
+
+# end of file
