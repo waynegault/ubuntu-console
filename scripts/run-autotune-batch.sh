@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 21
+# Module Version: 22
+#   v22 (2026-10-16): the two card-tenancy halts (a supervised TRAINING run, or a foreign
+#   owner) now exit 5 instead of falling through with HALT_EXIT unset.  Measured
+#   2026-10-16: a 10-row batch halted on the training-tenant gate 9 s in and exited 0, so
+#   bin/autotune-resume.sh — which resumes only on 4 — read a chunk that measured NOTHING
+#   as a completed run.  5 is deliberately not 4: the tenant's presence is not something a
+#   restart of this box fixes, so the re-arm must not treat it as "carry on".
 #   v21 (2026-10-15): the adapter stops got DISTINCT exit codes, so the boot re-arm can
 #   tell "carry on" from "stop and look".  A spent cycle budget is now 4 (the designed
 #   end of one boot's measuring, and the only halt a restart resumes) and a stall with
@@ -125,11 +131,17 @@ MAX_CONSECUTIVE_FAILURES="${MAX_CONSECUTIVE_FAILURES:-2}"
 _GPU_HEALTH_WARNED=0
 # The batch's exit code is a contract (docs/llm.md, and autotune-model.sh's own
 # exit 3): 0 = clean, 1 = rows failed, 3 = stopped for the ADAPTER with the budget
-# unspent, 4 = the cycle budget is spent.  A budget halt outranks a failed row
-# because it is the condition a WSL restart fixes and it explains any failures
-# alongside it.
-EXIT_ADAPTER=3  # the adapter stalled, refused, or launched-unhealthy
-EXIT_BUDGET=4   # this boot's measuring is done: restart, then resume
+# unspent, 4 = the cycle budget is spent, 5 = the card belongs to another TENANT.
+# A budget halt outranks a failed row because it is the condition a WSL restart
+# fixes and it explains any failures alongside it.  5 exists so a card-tenancy halt
+# is not read as a FINISHED run: until 2026-10-16 the two tenancy gates fell through
+# with HALT_EXIT unset, so a batch that measured NOTHING exited 0 and the boot re-arm
+# (bin/autotune-resume.sh, which resumes only on 4) took the refusal for a completed
+# chunk.  5 is deliberately not 4 — the tenant is not something this box's restart
+# fixes, so the re-arm must not call it "carry on".
+EXIT_ADAPTER=3   # the adapter stalled, refused, or launched-unhealthy
+EXIT_BUDGET=4    # this boot's measuring is done: restart, then resume
+EXIT_TENANT=5    # the card is another tenant's: not ours to take, and not a restart's to fix
 HALT_EXIT=0
 
 # --- WSL2 dxgkrnl cycle-budget knobs ---
@@ -290,10 +302,12 @@ for ((i = 0; i < TOTAL; i++)); do
     _train_lane_pid="$(train_lane_holder)"
     if [[ -n "$_train_lane_pid" ]]; then
         HALT_REASON="GPU held by a TRAINING run (pid $_train_lane_pid, bin/train-timeout-runner.sh)"
+        HALT_EXIT="$EXIT_TENANT"
         break
     fi
     if declare -f __llm_gpu_foreign_owner &>/dev/null && __llm_gpu_foreign_owner; then
         HALT_REASON="GPU owned by another agent's run (investigator GPU lock, pid $(__llm_gpu_lock_holder 2>/dev/null || true))"
+        HALT_EXIT="$EXIT_TENANT"
         break
     fi
 
