@@ -2,7 +2,14 @@
 # ─── Module: 15-model-recommender ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-10-16): the TPS bonus requires a CERTIFIED reading.  This scorer read the registry only
+#   to column 26, so `meas_state` never bound, and it awarded +1 for `tps > 30` on ANY row - including
+#   the INDICATIVE ones (a reading that drifted past the 25 % position bound) and rows with no
+#   provenance at all.  Wayne's call from the menu, 2026-10-16: "drop the tps bonus for non-certified
+#   rows" - so the bonus now needs `meas_state == certified` and the read-list runs to column 44.  He
+#   did NOT take "drop it entirely", so a certified row keeps the signal; a contended one cannot buy a
+#   rank with it.  (This is a behaviour change to a scorer, which is why it was put to him first.)
 # ==============================================================================
 # 15. MODEL RECOMMENDER
 # ==============================================================================
@@ -66,9 +73,9 @@ function model-recommend() {
     # Scoring:
     #   +3 for use case match (coding → coder models, etc.)
     #   +2 for architecture match (qwen/llama for reasoning)
-    #   +1 for high TPS (>30)
+    #   +1 for high TPS (>30) on a CERTIFIED row (v6)
     # Only show models that fit within 80% of VRAM
-    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread _meas_drift meas_state
     do
         # Skip comments and empty lines
         [[ -z "$num" || "$num" == "#"* ]] && continue
@@ -142,9 +149,12 @@ function model-recommend() {
             *) ;;
         esac
 
-        # TPS bonus for performance
+        # TPS bonus for performance - CERTIFIED readings only (v6).  An indicative row drifted past
+        # the 25 % position bound and a row with no provenance has no defensible figure at all, so
+        # neither may buy rank here (Wayne, 2026-10-16: "drop the tps bonus for non-certified rows").
         local tps_num="${tps% tps}"
-        if [[ "$tps_num" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v v="$tps_num" 'BEGIN { exit !(v > 30) }'
+        if [[ "${meas_state:-}" == "certified" ]] \
+           && [[ "$tps_num" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v v="$tps_num" 'BEGIN { exit !(v > 30) }'
         then
             ((score+=1))
             reason="${reason}${reason:+, }high-tps"

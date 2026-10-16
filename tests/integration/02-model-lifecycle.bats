@@ -91,8 +91,22 @@ setup() {
     [[ "$fn_src" == *"doctor"* ]] || [[ "$fn_src" == *"Doctor"* ]] || [[ "$fn_src" == *"validate"* ]]
 }
 
-@test "integration: model-recommend function exists" {
-    declare -f model-recommend >/dev/null 2>&1
+@test "integration: model-recommend exists, and its TPS bonus needs a CERTIFIED reading" {
+    local fn_src
+    fn_src=$(declare -f model-recommend 2>/dev/null)
+    [[ -n "$fn_src" ]]
+
+    # v6: this scorer read the registry only to column 26, so `meas_state` never bound, and its +1
+    # went to ANY row with tps > 30 - including INDICATIVE rows (drifted past the 25 % position
+    # bound) and rows with no provenance at all.  Wayne, 2026-10-16: "drop the tps bonus for
+    # non-certified rows".  Remove the guard, or let a read-list stop at column 26 again, and this
+    # case fails.
+    [[ "$fn_src" == *'meas_state'* ]]
+    [[ "$fn_src" == *'"certified"'* ]]
+    # The read-list must run past column 26, or `meas_state` never binds.  This module names that
+    # field `p2_prefill` (11e prefixes it `_p2_prefill`; copying 11e's spelling here was MY error,
+    # and this case caught it before the commit was made).
+    echo "$fn_src" | grep -q 'p2_prefill _spec_type'
 }
 
 @test "integration: model has info subcommand" {
