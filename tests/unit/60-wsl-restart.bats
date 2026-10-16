@@ -132,6 +132,7 @@ teardown() {
 {"windowsState":{"openedWindows":[
  {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"},
  {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/investigator"},
+ {"folder": "vscode-remote://wslbubuntu-24.04/home/wayne/investigator"},
  {"folder": "vscode-remote://wsl%2Bubuntu-24.04/home/wayne/ubuntu-console"}]}}
 JSON
 
@@ -139,9 +140,24 @@ JSON
             TAC_WSL_RESTART_WINDOWS_TXT_UNIX="$_out" \
             "$SCRIPT" --capture-windows
     [ "$status" -eq 0 ]
-    # THREE entries, TWO distinct URIs: a window listed twice is reopened once, not twice.
+    # FOUR entries, TWO distinct URIs: a window listed twice is reopened once, not twice - and the
+    # third entry is an authority a PREVIOUS corrupt fire wrote back, which must REPAIR to the same
+    # URI as the second, not add a third line.
     [ "$(wc -l < "$_out")" -eq 2 ]
     grep -q 'investigator' "$_out"
+
+    # v13: the list step 4 hands to the client through `call` must carry the DECODED authority.
+    # `call` adds a second percent pass that turns `%2B` into `B` (measured 2026-10-17 in a scratch
+    # .cmd: the fixture's own `wsl%2Bubuntu-24.04` reached the callee as `wslBubuntu-24.04`, which is
+    # the client's refusal verbatim - "Invalid remote authority: wslBubuntu-24.04" - and every
+    # resurrected window came up disconnected).  A bare `%` surviving into this file is the defect,
+    # so this asserts the decoded form AND the absence of any `%` at all; the pre-v13 code emitted
+    # `%2B` and the old assertions here (a line count and `grep investigator`) PASSED on it, which is
+    # exactly why they could not disagree.  The stored `wslbubuntu` entry must be repaired too.
+    grep -q '^folder-uri|vscode-remote://wsl+ubuntu-24.04/home/wayne/ubuntu-console$' "$_out"
+    grep -q '^folder-uri|vscode-remote://wsl+ubuntu-24.04/home/wayne/investigator$' "$_out"
+    ! grep -q '%' "$_out"
+    ! grep -q 'wslbubuntu' "$_out"
 
     # Step 4 loops that list, and the configured folder stays as the FALLBACK.
     run "$SCRIPT" --dry-run

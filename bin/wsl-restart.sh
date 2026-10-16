@@ -95,7 +95,23 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 12
+# Module Version: 13
+#   v13 (2026-10-17): v12's `call` ADDS A SECOND PERCENT-EXPANSION PASS, and that pass ate the `%2`
+#   of `wsl%2B<distro>` and the `%3` of `file:///c%3A`, so every window the restart resurrected came
+#   up corrupt and disconnected.  Measured in a scratch .cmd reproducing this file's OWN `for /f` +
+#   `call` construct under `cmd /c`: the file's `vscode-remote://wsl%2Bubuntu-24.04/p` reaches the
+#   callee as `vscode-remote://wslBubuntu-24.04/p` - the `%2` expands to the (empty) second argument
+#   and the `B` survives - which is exactly the client's refusal, "Invalid remote authority:
+#   wslBubuntu-24.04", and `file:///c%3A/Users/wayne/x` arrived as `file:///cA/Users/wayne/x`.
+#   Measured the two forms that DO survive: a DOUBLED `%` (`wsl%%2B...` -> `wsl%2B...`, `c%%3A/x` ->
+#   `c%3A/x`) and the DECODED character (`wsl+ubuntu-24.04` passed through untouched).  capture_windows
+#   now takes the second: it decodes `%2B`->`+` and `%3A`->`:` so the list carries the authority the
+#   client stores anyway, doubles any remaining `%` so no other escape can be eaten, and REPAIRS an
+#   authority that an earlier corrupt fire already wrote back into the client's own storage
+#   (`vscode-remote://wsl<not-plus>...<distro>/` -> `wsl+<distro>/`) - storage is this capture's own
+#   input, so without that repair the broken window is resurrected on every subsequent restart.
+#   The configured-folder FALLBACK gets the same `%`-doubling.  A unit case cannot prove cmd.exe
+#   behaviour, so the case pins the RENDERED mechanism (no bare `%` survives to the `call`).
 #   v12 (2026-10-16): THE WRAPPER'S TAIL NEVER RAN, so the one-shot never self-deleted.  Measured:
 #   `grep -c 'wsl-restart-action: done'` = 0 against 16 `start` lines, and the 16:37 fire's log ends
 #   at the three `relaunching window:` echoes with nothing after them.  The tail holds the ONE-SHOT's
@@ -265,9 +281,23 @@ capture_windows() {
     # could not disagree.  [[:space:]]* accepts either serialisation.
     # Each line is `<kind>|<uri>`: a folder window reopens with --folder-uri, a multi-root
     # workspace window (`"configPath"`) with --file-uri, so workspace windows are not dropped.
+    # v13: the wrapper hands each value to the client through `call`, whose SECOND percent pass ate
+    # the `%2` of `%2B` and the `%3` of `%3A` (measured; see the Module Version note).  So decode the
+    # two escapes these URIs actually carry, double whatever `%` is left so no other escape can be
+    # eaten, and repair an authority an earlier corrupt fire wrote back into this capture's own
+    # INPUT - without the repair, a stored `wslbubuntu-24.04` is re-emitted, re-launched, and the
+    # broken window comes back on every restart.  The repair matches the LOWERCASED distro because
+    # that is what a URI authority carries (`wsl+ubuntu-24.04`), while $DISTRO is WSL's own casing
+    # (`Ubuntu-24.04`); matching $DISTRO here would have matched nothing and repaired nothing.
     # swallow-ok: the client can be mid-write here, and an EMPTY list IS the answer - step 4 falls back
     grep -oE '"(folder|configPath)":[[:space:]]*"[^"]*"' "$STORAGE_UNIX" 2>/dev/null |
-        sed -E 's/^"folder":[[:space:]]*"/folder-uri|/; s/^"configPath":[[:space:]]*"/file-uri|/; s/"$//' |
+        sed -E -e 's/^"folder":[[:space:]]*"/folder-uri|/' \
+               -e 's/^"configPath":[[:space:]]*"/file-uri|/' \
+               -e 's/"$//' \
+               -e 's/%2B/+/g' \
+               -e 's/%3A/:/g' \
+               -e 's/%/%%/g' \
+               -e "s#(vscode-remote://)wsl[^+/]*${DISTRO,,}/#\1wsl+${DISTRO,,}/#" |
         sort -u > "$WINDOWS_TXT_UNIX"
     # swallow-ok: grep -c exits 1 on zero matches, and zero IS the count this line reports
     _n=$(grep -c . "$WINDOWS_TXT_UNIX" 2>/dev/null) || _n=0
@@ -513,7 +543,7 @@ render_relaunch_step() {
         'if "%RELAUNCHED%"=="0" (' \
         "    echo [%DATE% %TIME%] no captured windows - relaunching the configured folder >> \"%LOG%\"" \
         "    echo [%DATE% %TIME%] relaunching: %CODE_CMD% --remote wsl+${DISTRO} ${_folder} >> \"%LOG%\"" \
-        "    call \"%CODE_CMD%\" --remote wsl+${DISTRO} \"${_folder}\" >> \"%LOG%\" 2>&1" \
+        "    call \"%CODE_CMD%\" --remote wsl+${DISTRO} \"${_folder//%/%%}\" >> \"%LOG%\" 2>&1" \
         ')'
 }
 
