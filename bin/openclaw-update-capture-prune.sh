@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 5
+# Module Version: 6
+#   v6 (2026-10-17): add pass C, the update-STAGING sweep. An interrupted package update
+#   leaves its staging area behind and nothing on this host owned it:
+#     <node_modules>/.openclaw.package-activation-<hash>.superseded-<uuid>/   (16 KB, 2026-10-16)
+#     /tmp/.openclaw.update-stage-*
+#   The capture store and the staging area are two halves of the same retention gap, so one
+#   unit bounds both. Same discipline (stage to Trash, reclaim after STAGING_D) and the same
+#   refusal to guess: only the `.superseded-` form matches, so an update IN FLIGHT — whose
+#   activation dir carries no such suffix — can never be swept. Runs independently of the
+#   capture store and of the status fail-safe; it changes nothing when there is nothing to do.
 #   v5 (2026-10-14): rename this file's logging helper to `_cap_log` so `log` is defined ONCE
 #   in the tree, in bin/_tac-bin-lib.sh (tests/tactical-console-fast.bats pins it, card
 #   a1076d6f).  It cannot adopt the shared `log`: that one either prints OR appends, never
@@ -76,6 +85,61 @@ export PATH="$HOME/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr
 mkdir -p "$(dirname "$LOGF")"
 _cap_log() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOGF"; }
 quiet() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOGF"; }
+
+# ── pass C: update-staging leftovers (added v6, 2026-10-17) ───────────────────
+# Independent of the capture store and of the status fail-safe below: those guard the
+# recovery BUNDLES, this bounds the staging WEEDS the updater leaves when a run is
+# interrupted. Self-contained on purpose — it must still run when the store is absent,
+# so it cannot depend on `age_seconds` (defined further down, past an early exit).
+STAGE_NM_ROOT="${OPENCLAW_NODE_MODULES_ROOT:-/home/linuxbrew/.linuxbrew/lib/node_modules}"
+STAGE_TMP_DIR="${OPENCLAW_UPDATE_STAGE_TMP_DIR:-/tmp}"
+
+stage_age_seconds() {  # $1 = dir; echoes age in seconds; negative = suspicious
+  local d="$1" now birth mtime ts
+  now=$(date +%s)
+  # swallow-ok: a stat failure maps to 0 — the documented "no birth time" value; the %Y fallback is the next line
+  birth=$(stat -c %W "$d" 2>/dev/null || echo 0); [ -n "$birth" ] || birth=0
+  # swallow-ok: guards the arithmetic from a non-numeric %W on a filesystem without birth time; the else is the mtime fallback
+  if [ "$birth" -gt 0 ] 2>/dev/null; then ts=$birth; else
+    # swallow-ok: as above — a %Y failure maps to 0, and a vanished dir then fails at the staging step, which reports it
+    mtime=$(stat -c %Y "$d" 2>/dev/null || echo 0); [ -n "$mtime" ] || mtime=0; ts=$mtime
+  fi
+  echo $(( now - ts ))
+}
+
+stage_sweep() {
+  local d base age
+  local -a matches=()
+  shopt -s nullglob
+  matches=( "$STAGE_NM_ROOT"/.openclaw.package-activation-*.superseded-* )
+  local -a tmp_matches=( "$STAGE_TMP_DIR"/.openclaw.update-stage-* )
+  matches+=( "${tmp_matches[@]}" )
+  shopt -u nullglob
+  [ "${#matches[@]}" -gt 0 ] || return 0
+  for d in "${matches[@]}"; do
+    [ -d "$d" ] || continue
+    base="$(basename "$d")"
+    age="$(stage_age_seconds "$d")"
+    # swallow-ok: the clock-step guard; age is always an integer and the negative case is logged on the next line
+    if [ "$age" -lt 0 ] 2>/dev/null; then
+      _cap_log "WARN   $base  age=${age}s (negative — clock step?); keeping, not deleting"; continue; fi
+    if [ "$age" -gt $(( STAGING_D * 86400 )) ]; then
+      if [ "$DRY" -eq 1 ]; then
+        _cap_log "DRY    would trash $base  (stale update staging, age $(( age/86400 ))d)"
+      # swallow-ok: handled — the else branch logs "ERROR failed to trash … — keeping"; the redirect hides only trash's message
+      elif trash "$d" 2>/dev/null; then
+        _cap_log "trash  $base  (stale update staging, age $(( age/86400 ))d)"
+      else
+        _cap_log "ERROR  failed to trash $base — keeping"
+      fi
+    else
+      quiet "keep   $base  (update staging, age $(( age/3600 ))h <= ${STAGING_D}d)"
+    fi
+  done
+  return 0
+}
+
+stage_sweep
 
 [ -d "$STORE" ] || { _cap_log "store absent: $STORE — nothing to do"; exit 0; }
 
