@@ -95,7 +95,17 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 14
+# Module Version: 15
+#   v15 (2026-10-17): THE ARM SURFACES ITS OWN CAUSE, AND CLEARS A SPENT LEFTOVER FIRST.  Measured the
+#   same day at 03:04 BST: the loop could not arm and the journal carried only "schtasks /create failed
+#   (bounded at 60 s) - task NOT armed", because the call discarded its own output - reconstructing the
+#   cause then took several probes and still did not converge.  A SPENT registration WAS present at that
+#   moment (`--status`: "registered but SPENT", Next Run Time N/A), so the arm now deletes a leftover
+#   registration before creating (bounded 30 s, and a refusal is REPORTED rather than assumed), and a
+#   failed /create prints the tool's own first lines.  `/create` itself measured healthy (rc 0 in 1 s on
+#   a fresh name), so a name-independent failure is unlikely and the leftover is the prime suspect;
+#   clearing it removes the class whether or not it was this instance's cause.  The bound still ABORTS -
+#   nothing here waits unbounded.
 #   v14 (2026-10-17): ONLY a WSL folder may be reopened as a WSL REMOTE WINDOW.  Wayne's ruling,
 #   2026-10-17, verbatim: "ensure that only wsl repos are opened in wsl remote in vs code. eg quicken
 #   prices should not be opened in wsl mode."  The client serialises a WINDOWS folder that was opened
@@ -776,11 +786,19 @@ confirm_armed() {
 
 # Render the wrapper and register the one-shot task that runs it on the Windows side.
 arm_restart() {
-    local _folder="$1" _delay="$2" _st _sd
+    local _folder="$1" _delay="$2" _st _sd _create_out
     if ! check_preconditions; then
         return 1
     fi
     warn_if_registered
+    # v15: CLEAR a leftover registration before creating.  At the 03:04 failure a spent one was
+    # present; `/create /f` should overwrite it, but a second registration state that /f cannot
+    # replace is exactly what an unexplained create failure looks like, and this costs ~1 s.
+    if task_state >/dev/null 2>&1; then
+        if ! _win 30 "$SCHTASKS_BIN" /delete /f /tn "$TASK_NAME" >/dev/null 2>&1; then
+            _say "WARN: a $TASK_NAME registration exists and could not be cleared; /f must overwrite it"
+        fi
+    fi
     if ! write_wrapper "$_folder" oneshot; then
         return 1
     fi
@@ -792,9 +810,16 @@ arm_restart() {
     _st=$(date -d "+${_delay} minutes" +%H:%M)
     _sd=$(date -d "+${_delay} minutes" +%d/%m/%Y)
 
-    if ! _win 60 "$SCHTASKS_BIN" /create /f /tn "$TASK_NAME" \
-            /tr "$WRAPPER_WIN" /sc once /sd "$_sd" /st "$_st" >/dev/null 2>&1; then
+    # v15: the tool's OWN message is printed on failure.  It used to go to /dev/null, so the
+    # journal could only say "failed" - which is the expectation, not the cause.
+    if ! _create_out=$(_win 60 "$SCHTASKS_BIN" /create /f /tn "$TASK_NAME" \
+            /tr "$WRAPPER_WIN" /sc once /sd "$_sd" /st "$_st" 2>&1); then
         _say "ERROR: schtasks /create failed (bounded at 60 s) - task NOT armed"
+        if [[ -n "$_create_out" ]]; then
+            _say "  schtasks says: $(printf '%s\n' "$_create_out" | head -3 | tr '\n' ' ')"
+        else
+            _say "  schtasks printed nothing: it either timed out at the bound or was refused"
+        fi
         return 1
     fi
     confirm_armed "$TASK_NAME fires at $_st on $_sd (Windows local time)" || return 1

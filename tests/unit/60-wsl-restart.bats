@@ -62,6 +62,13 @@ setup() {
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$ARGV_LOG"
 case "$*" in
+    # A /create REGISTERS.  The arm now clears a leftover before creating (v15), so the stub
+    # must model the REAL tool here: without this branch, delete-then-create left it answering
+    # "cannot find the file" to the read-back and made a working arm look broken.
+    *"/create"*)
+        rm -f "$DELETED_MARKER"
+        exit 0
+        ;;
     *"/delete"*)
         : > "$DELETED_MARKER"
         exit 0
