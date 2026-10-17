@@ -43,12 +43,15 @@ _DIRECT_MEMORY_LABELS = frozenset({
 # state is "un-calibrated", written down, rather than a plausible-looking number.
 #
 # MEASURED 2026-10-17 — and the reason is stronger than "no labelled set yet".
-# The population these two numbers govern is effectively EMPTY on this machine:
-#   * `~/.openclaw/kgraph.sqlite` (16,281,600 B, rebuilt 18:13 that day) holds
-#     11,566 edges and NOT ONE carries `semantic_score` or `cooccurrence_count`.
-#     Its labels are calls 8189 / defines 2620 / imports 720 / resolves_to 31 /
-#     mentions 4 / claims 2, and its node mix is function 2284, call 2016,
-#     file 235, class 181, module 104, memory 18, synthesis 6, entity 3, claim 2
+# The population these two numbers govern is effectively EMPTY on this machine.
+# The `post-commit` hook re-runs the AST update on every commit, so the edge
+# count MOVES with the tree; the invariant is what matters, not the number:
+#   * `~/.openclaw/kgraph.sqlite` has NOT ONE edge carrying `semantic_score` or
+#     `cooccurrence_count` — measured twice on 2026-10-17, at 11,566 edges
+#     (18:13, node mix function 2284 / call 2016 / file 235 / class 181 /
+#     module 104 / memory 18 / synthesis 6 / entity 3 / claim 2) and at 12,049
+#     edges after a commit rebuilt it (18:49).  Both runs: zero scored edges.
+#     The labels are calls / defines / imports / resolves_to / mentions / claims
 #     — an AST-only graph.  The ingest that emits scored edges never ran against
 #     live data.
 #   * The only database on the box carrying the files/chunks schema those
