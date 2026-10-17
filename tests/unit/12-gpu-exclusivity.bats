@@ -668,8 +668,22 @@ EOS
     # The discrimination is the ledger read, never a guess from the row's message.
     grep -q '_cyc_now=$(cuda_cycles)' "$f"
     grep -q '_cyc_now >= CUDA_CYCLE_BUDGET' "$f"
-    # The boot re-arm keys its loop on the BUDGET code alone.
-    grep -q 'EXIT_BUDGET=4' "$r"
+    # CRITERION CHANGE (v7, 2026-10-16 — this is what went red at 2026-10-17 05:11 BST in the
+    # pytest bridge, run 20261017T041120Z): the LOOP no longer keys its continuation on the batch's
+    # budget code.  Wayne ruled the campaign keeps going while rows are OWED, so what decides is the
+    # RE-DERIVED REMAINDER being non-empty, and exit 3 (the adapter stall) is the one code that still
+    # stops for a person.  v7 therefore removed `EXIT_BUDGET` from the loop — the constant had no
+    # reader left and shellcheck flagged it (SC2034) — keeping its VALUE on `EXIT_PAUSED=4` for the
+    # paths that genuinely stop.  The line below used to assert `EXIT_BUDGET=4` against the LOOP,
+    # i.e. a constant that is intentionally gone; the BATCH above still owns it, and that half is
+    # unchanged.  A case that pins a removed constant cannot disagree with the code it describes —
+    # it just goes stale, which is exactly what happened.
+    grep -q 'EXIT_ADAPTER=3' "$r"
+    grep -q 'EXIT_PAUSED=4' "$r"
+    ! grep -q 'EXIT_BUDGET=' "$r"
+    grep -q '_rc == EXIT_ADAPTER' "$r"
+    grep -q '_after=$(plan_rows' "$r"
+    grep -q 'still owed' "$r"
     # And the printed resume line names the WRAPPER: a bare batch launch refuses on
     # VRAM, because nothing suspended the lane (measured 2026-10-13).
     ! grep -q 'run-autotune-batch.sh ${REMAINING' "$f"
