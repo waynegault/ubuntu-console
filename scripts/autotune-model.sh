@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 81
+# Module Version: 82
 #   v81 (2026-10-15): legal/agentic profiles run one deterministic task-contract probe at
 #   the final winner before persistence; malformed legal labels or agentic tool-call JSON
 #   refuse the save. Probe calls are separate from the throughput samples and use no judge.
@@ -1163,7 +1163,7 @@ __autotune_task_quality_check() {
         return 1
     fi
 
-    local _qworkload _qprompt _qpayload _quality_failed=0
+    local _qworkload _qprompt _qpayload _quality_failed=0 _qresp="" _qout=""
     for _qworkload in "${probe_workloads[@]}"; do
         case "$_qworkload" in
             legal) _qprompt="${PROMPTS_LEGAL[1]}" ;;
@@ -1179,14 +1179,36 @@ print(json.dumps({
 }))
 PYEOF
         ) || { __autotune_quality_error "could not build $_qworkload task-quality request"; _quality_failed=1; break; }
-        if ! curl -fsS --max-time "$BENCH_TIMEOUT" \
+        # The checker's exit status is the verdict; its output carries a TYPED
+        # code — [fenced-json], [fenced-json-prose], [raw-syntax], [wrong-shape],
+        # [empty], [unsupported-tool], [bad-arguments] — plus the policy it was
+        # measured under.  Capture it so the log says WHICH contract clause broke:
+        # a winner rejected for wrapping a valid answer in ```json must not read
+        # the same as a model that cannot follow the tool contract at all.
+        # REF: "Jev Your Engines: Seven Open Decision Models vs. a Generative LLM"
+        # (Lambert Leong, TDS, 2026-10-15) —
+        # https://towardsdatascience.com/jev-your-engines-seven-open-decision-models-vs-a-generative-llm/
+        # Its 9.0% contract-failure rate was 100% fenced-valid-JSON, which is why
+        # the code is recorded rather than only a pass/fail verdict.
+        _qresp=$(curl -fsS --max-time "$BENCH_TIMEOUT" \
             "$_BENCH_HEALTH_URL/v1/chat/completions" \
-            -H "Content-Type: application/json" -d "$_qpayload" \
-            | "$TAC_PYTHON" "$_quality_checker" --workload "$_qworkload"; then
-            __autotune_quality_error "$_qworkload task-contract probe failed; refusing to save this profile"
+            -H "Content-Type: application/json" -d "$_qpayload") || _qresp=""
+        if [[ -z "$_qresp" ]]; then
+            __autotune_quality_error \
+                "$_qworkload task-contract probe returned no response; refusing to save this profile"
             _quality_failed=1
             break
         fi
+        if ! _qout=$(printf '%s' "$_qresp" \
+            | "$TAC_PYTHON" "$_quality_checker" --workload "$_qworkload" 2>&1); then
+            __autotune_quality_error \
+                "$_qworkload task-contract probe failed: ${_qout:-no diagnostic}"
+            __autotune_quality_error \
+                "$_qworkload refuses to save (ONE probe per workload: a smoke test, not a rate)"
+            _quality_failed=1
+            break
+        fi
+        echo "  $_qout"
     done
 
     _bench_stop "$_BENCH_PID"

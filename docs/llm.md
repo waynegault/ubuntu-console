@@ -606,6 +606,38 @@ is not included — earlier versions sent `min_tokens` equal to `max_tokens`, bu
 this llama-server build does not support that field. Omitting it avoids
 unnecessary API errors.
 
+### Task-quality contract gate (typed failures, and what it does NOT measure)
+
+After a legal/agentic autotune winner is chosen on throughput, `scripts/autotune-model.sh`
+(`__autotune_task_quality_check`) sends **one deterministic probe per workload** through
+`tools/llm_task_quality.py` and refuses to save the profile if the response breaks its contract.
+That verdict is a **format** check with no judge and **no correctness claim**.
+
+Every violation carries a **typed code**, not just prose, so a rejection is diagnosable and countable:
+`unsupported-workload`, `wrong-shape`, `empty`, `raw-syntax`, `fenced-json`, `fenced-json-prose`,
+`unsupported-tool`, `bad-arguments` (plus `ok`). "The model cannot follow the tool contract" and
+"the model wrapped a correct answer in a markdown fence" are different findings and must not read
+alike in the log.
+
+**The fence policy is explicit and measured as a separate configuration.** The default is `strict`:
+a fence is a failure, coded `fenced-json`. The tolerant variant is opt-in
+(`--tolerate-fence`, policy `fence-tolerated`) and passes a valid JSON payload wrapped in ONE
+surrounding fence; it still reports `code=fenced-json` with `tolerated=true`, so the two policies
+are separately countable and are never pooled into one pass rate. A fence with surrounding prose is
+its own code (`fenced-json-prose`) and is **not** accepted by the tolerant policy either — doing so
+would be a third, unmeasured policy.
+
+**Scope (read this before quoting a result):** one probe per workload is a **smoke test, not a
+failure rate**. A rate needs repeated samples — `--repeat N` reads one response per line (or a JSON
+array of responses) and prints per-code counts plus `--json` for machine use. The gate also says
+nothing about factual or legal correctness, by design.
+
+> REF: "Jev Your Engines: Seven Open Decision Models vs. a Generative LLM" (Lambert Leong, TDS,
+> 2026-10-15) — <https://towardsdatascience.com/jev-your-engines-seven-open-decision-models-vs-a-generative-llm/>.
+> Its JSON-generation baseline failed its contract on 9.0% of changing-candidate requests and every
+> one of those failures was valid JSON wrapped in markdown fences — the reason the codes and the
+> separate fence policy exist here.
+
 ## OpenClaw ↔ LLM Bridge
 
 - `oc-local-llm` configures OpenClaw to route agent requests through your
