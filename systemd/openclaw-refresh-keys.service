@@ -37,10 +37,24 @@
 [Unit]
 Description=Re-bridge the Windows credentials into the systemd user manager (once per boot)
 Documentation=file:%h/ubuntu-console/README.md
-# No ordering against the OpenClaw gateway unit: OpenClaw owns that unit, not this
-# repo, so naming it here would be an ordering against something this tree cannot
-# keep valid. network.target is all the refresh needs.
+# ORDERING (2026-10-17): Before=openclaw-gateway.service.  This file used to argue the
+# opposite - "OpenClaw owns that unit, not this repo, so naming it here would be an
+# ordering against something this tree cannot keep valid" - and that argument cost a real
+# outage.  Measured after the 10:48:51 WSL restart: systemd started the gateway at
+# 10:48:56, and THIS unit issued a gateway restart at 10:49:01, five seconds in.  The
+# restart stacked because the guard in scripts/09d-oc-agents.sh reads `is-active`, which
+# reports `active` the moment a Type=simple process spawns - so a gateway still minutes
+# from serving looked settled.  The stacked stop left two MainThread processes behind,
+# they held /home/wayne/.openclaw/state/openclaw.sqlite in "offline maintenance", and the
+# next two starts were REFUSED: three attempts and ~13 minutes to serve.
+#
+# Bridging the env BEFORE the gateway starts removes the restart entirely - the manager
+# env the gateway inherits is already the refreshed one, so nothing needs re-reading.  The
+# old objection still holds in one direction: if OpenClaw renames its unit, this ordering
+# silently goes inert.  That is why the script-side guard still has to be hardened; an
+# inert ordering is the PREVIOUS behaviour, not a new failure mode.
 After=network.target
+Before=openclaw-gateway.service
 
 [Service]
 Type=oneshot
