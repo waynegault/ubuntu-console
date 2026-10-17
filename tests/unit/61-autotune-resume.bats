@@ -364,6 +364,17 @@ EOS
     _tmo=$(grep -oE '^TimeoutStartSec=[0-9]+' "$REPO_ROOT/systemd/autotune-resume.service" | grep -oE '[0-9]+')
     [ -n "$_wait" ] && [ -n "$_tmo" ]
     [ "$_wait" -lt "$_tmo" ]
+
+    # v10 criterion (2026-10-17): the ARM waits on its OWN short bound and a signal SAYS what
+    # happened.  Measured: the unit was SIGTERMed at 14:07:50, seventeen minutes into an arm wait
+    # that could legally last five HOURS; nothing was armed, nothing re-armed it, and the campaign
+    # sat idle for three hours with the plan intact.  Removing ARM_CI_WAIT_S, pointing the arm
+    # back at the chunk's long bound, or dropping the traps fails here.
+    grep -q 'ARM_CI_WAIT_S="${TAC_RESUME_ARM_CI_WAIT_S:-900}"' "$SCRIPT"
+    grep -q 'wait_for_ci_clear "$ARM_CI_WAIT_S"' "$SCRIPT"
+    grep -q "trap '_on_signal TERM' TERM" "$SCRIPT"
+    # ... while the CHUNK's own gate keeps the long bound (no argument means CI_WAIT_S).
+    grep -q 'local _bound="${1:-$CI_WAIT_S}"' "$SCRIPT"
 }
 
 @test "autotune-resume: the automatic-restart cap stops the loop and names the reset" {

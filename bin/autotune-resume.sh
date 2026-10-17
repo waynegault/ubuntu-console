@@ -59,7 +59,19 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 9
+# Module Version: 10
+#   v10 (2026-10-17): A SIGNAL MUST NOT LOSE THE ARM SILENTLY, AND THE ARM GETS ITS OWN BOUND.
+#   Measured the same day: the unit was SIGTERMed (`code=killed, status=15/TERM`) at 14:07:50,
+#   seventeen minutes into `arm_restart`'s CI wait, and the campaign then sat IDLE for three
+#   hours — the plan was intact, nothing was armed, and nothing re-armed it.  Two changes.
+#   (a) `ARM_CI_WAIT_S` (900 s) bounds the ARM's CI wait separately from the CHUNK's
+#   `CI_WAIT_S` (18000 s, raised in v9 because a chunk gate must outlast a CI RUN): the arm is
+#   the last step of a oneshot in the boot transaction, so a five-hour sleep there is exposure,
+#   not patience — it now lands promptly or declines loudly.  (b) `run_plan` installs TERM/INT
+#   traps that name the signal, state that the plan is left in place and NO restart was armed,
+#   and print the exact `--restart --delay` command to re-arm by hand; the next boot resumes
+#   either way.  The trap cannot identify the SENDER, so the next occurrence still needs a look —
+#   it will no longer be a bare `status=15/TERM` found three hours later.
 #   v9 (2026-10-17): THE CI-DRAIN BOUND MUST OUTLAST A CI RUN.  Wayne's ruling the same day, choosing
 #   (a): raise the bound rather than add a watcher.  `CI_WAIT_S` was 900 s, so a single
 #   `systemctl start` could never outlive a drain - the unit paused on the wait's expiry (measured
@@ -158,6 +170,13 @@ ARM_DELAY_MIN="${TAC_RESUME_ARM_DELAY:-3}"     # minutes after the halt to resta
 # step.  It must also sit UNDER the unit's TimeoutStartSec (21600) or systemd kills the wait.
 CI_WAIT_S="${TAC_RESUME_CI_WAIT_S:-18000}"      # 5 h: outlasts a CI run, under TimeoutStartSec 21600
 CI_POLL_S="${TAC_RESUME_CI_POLL_S:-30}"
+# The ARM's wait is a DIFFERENT question from the chunk's, and conflating them cost three idle
+# hours on 2026-10-17.  The chunk needs a bound longer than a CI run (5 h); the arm is the LAST
+# step of a oneshot that sits in the boot transaction, and it was SIGTERMed at 14:07:50 —
+# seventeen minutes into a CI wait that could legally last five HOURS — after which nothing was
+# armed and nothing re-armed it.  A short bound makes the arm either land promptly or decline
+# loudly, so a signal has a narrow window instead of a whole afternoon.
+ARM_CI_WAIT_S="${TAC_RESUME_ARM_CI_WAIT_S:-900}"   # 15 min: arm promptly, or say so
 RESTARTS_FILE="$STATE_DIR/autotune-resume.auto-restarts"
 
 # The scope Wayne ruled on 2026-10-13, by MODEL FILE NAME and never by row number (a
@@ -349,7 +368,8 @@ ci_workers() {
 # rather than falling through to the restart it guards (a bounded wait whose only
 # failure path is the action it guards is the shape that has bitten this repo).
 wait_for_ci_clear() {
-    local _deadline=$(( SECONDS + CI_WAIT_S )) _n
+    local _bound="${1:-$CI_WAIT_S}" _n _deadline
+    _deadline=$(( SECONDS + _bound ))
     while :; do
         _n=$(ci_workers)
         if [[ "$_n" =~ ^[0-9]+$ ]] && (( _n == 0 )); then
@@ -373,7 +393,7 @@ arm_restart() {
         printf '  the cap is a stop, not a fault - re-run --plan to start a fresh campaign\n'
         return "$EXIT_PAUSED"
     fi
-    if ! wait_for_ci_clear; then
+    if ! wait_for_ci_clear "$ARM_CI_WAIT_S"; then
         printf 'NOT arming a restart: a CI job is executing on this box\n'
         printf '  a restart cancels it, and a cancelled run leaves main red here\n'
         printf '  re-arm by hand when the queue is empty: %s --restart --delay %s\n' \
@@ -428,9 +448,23 @@ continue_after() {
     arm_restart
 }
 
+# A signal here used to be a SILENT loss.  Measured 2026-10-17: the unit was SIGTERMed
+# (`code=killed, status=15/TERM`) at 14:07:50 inside the arm's CI wait, the journal carried only
+# "Failed with result 'signal'", and the campaign then sat IDLE for three hours — the plan was
+# intact, but nothing was armed and nothing re-armed it.  Naming the signal, saying the plan
+# survives, and printing the re-arm command is what turns the next occurrence into one line.
+_on_signal() {
+    printf '\n=== signal %s at %s — plan left in place; NO restart armed\n' "$1" "$(date '+%F %T %Z')"
+    printf '=== the next boot resumes it. To re-arm now:\n'
+    printf '===   %s --restart --delay %s\n' "$RESTART_TOOL" "$ARM_DELAY_MIN"
+    exit "$EXIT_PAUSED"
+}
+
 # Run the plan: drop a row whose model file is gone (an unloadable row still burns
 # CUDA cycles walking ctx - see the load-failure note), claim the plan, hand over.
 run_plan() {
+    trap '_on_signal TERM' TERM
+    trap '_on_signal INT' INT
     local _row _kept=() _missing=0 _rc=0 _recover=""
     if [[ ! -f "$PLAN" ]]; then
         # No plan, but a claim that was never retired means the last chunk was CUT OFF
