@@ -59,7 +59,17 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 8
+# Module Version: 9
+#   v9 (2026-10-17): THE CI-DRAIN BOUND MUST OUTLAST A CI RUN.  Wayne's ruling the same day, choosing
+#   (a): raise the bound rather than add a watcher.  `CI_WAIT_S` was 900 s, so a single
+#   `systemctl start` could never outlive a drain - the unit paused on the wait's expiry (measured
+#   01:07 BST: a CI run outlasted it and the loop paused with the plan intact), which is what made
+#   "resume when the runner drains" a manual step needing a hand-written watcher.  It is now
+#   18000 s (5 h): it outlasts a CI run and still sits under the unit's `TimeoutStartSec=21600`,
+#   so systemd cannot kill the wait.  A versioned watcher was considered and REJECTED for now
+#   (he keeps it in reserve, verbatim: "if drains routinely outlast a 5-hour bound, a timer is the
+#   tracked artifact I'd want, not a script") - a watcher is NOT self-starting, so closing the gap
+#   with one would have needed a systemd timer to launch it, which is more machinery than the bound.
 #   v8 (2026-10-17): THE MEASUREMENT OPENS THE CI GATE ITSELF.  `wait_for_ci_clear` guarded only
 #   `arm_restart`, so the chunk ran regardless of a CI job and the rows it measured were taken under
 #   load - the outcome Wayne's rule forbids ("do not re-arm any measurement while a CI worker is
@@ -142,7 +152,11 @@ RESTART_TOOL="${TAC_RESUME_RESTART_TOOL:-$REPO/bin/wsl-restart.sh}"
 # The loop's knobs, all overridable so a test drives them without touching Windows.
 ARM_MAX="${TAC_RESUME_ARM_MAX:-8}"             # consecutive automatic restarts allowed
 ARM_DELAY_MIN="${TAC_RESUME_ARM_DELAY:-3}"     # minutes after the halt to restart
-CI_WAIT_S="${TAC_RESUME_CI_WAIT_S:-900}"       # bounded wait for a CI job to drain
+# The bound must outlast a CI RUN, not a CI poll.  A single `systemctl start` can never outlive
+# a drain if the wait expires first - and it did: measured 2026-10-17, a CI run outlasted the old
+# 900 s, the loop PAUSED on the wait's expiry, and "resume when the runner drains" became a manual
+# step.  It must also sit UNDER the unit's TimeoutStartSec (21600) or systemd kills the wait.
+CI_WAIT_S="${TAC_RESUME_CI_WAIT_S:-18000}"      # 5 h: outlasts a CI run, under TimeoutStartSec 21600
 CI_POLL_S="${TAC_RESUME_CI_POLL_S:-30}"
 RESTARTS_FILE="$STATE_DIR/autotune-resume.auto-restarts"
 

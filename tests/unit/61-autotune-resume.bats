@@ -351,6 +351,19 @@ EOS
     [ -f "$TAC_RESUME_PLAN" ]
     grep -q '^uncertified.gguf$' "$TAC_RESUME_PLAN"
     [ -z "$(ls "$TAC_RESUME_PLAN".claimed-* 2>/dev/null)" ]
+
+    # v9 criterion (Wayne's ruling "1a" -> (a), 2026-10-17): the shipped CI bound must OUTLAST a CI
+    # RUN and still sit UNDER the unit's TimeoutStartSec.  Too short and a single `systemctl start`
+    # can never outlive a drain - measured 2026-10-17, the old 900 s expired first and the loop
+    # PAUSED, which is what made "resume when the runner drains" a manual step.  Too long and
+    # systemd kills the wait mid-flight.  Both values are read from the SOURCE, deliberately: this
+    # case runs with TAC_RESUME_CI_WAIT_S=0, so the env says nothing about the shipped default.
+    # Removing the bound, or raising it past the unit's timeout, fails here.
+    local _wait _tmo
+    _wait=$(grep -oE '\$\{TAC_RESUME_CI_WAIT_S:-[0-9]+\}' "$SCRIPT" | grep -oE '[0-9]+')
+    _tmo=$(grep -oE '^TimeoutStartSec=[0-9]+' "$REPO_ROOT/systemd/autotune-resume.service" | grep -oE '[0-9]+')
+    [ -n "$_wait" ] && [ -n "$_tmo" ]
+    [ "$_wait" -lt "$_tmo" ]
 }
 
 @test "autotune-resume: the automatic-restart cap stops the loop and names the reset" {
