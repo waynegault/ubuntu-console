@@ -95,7 +95,20 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 15
+# Module Version: 16
+#   v16 (2026-10-17): STEP 1b QUIESCES THE GATEWAY BEFORE THE VM IS TORN DOWN.  `wsl.exe
+#   --shutdown` kills every process in the distro, and a gateway killed that way is killed
+#   MID-DRAIN.  Measured at the 12:41 restart: `[admission] closed: stop (SIGTERM)` at 12:41:21,
+#   `draining active work before stop … sessionAdmissions=1` at 12:41:22, the VM down at 12:41:48
+#   — and the NEXT start REFUSED at 12:42:53: "OpenClaw state at …/openclaw.sqlite is undergoing
+#   offline maintenance; retry when it finishes", costing a second attempt and ~8 minutes before
+#   /health answered 200.  The 10:48 restart cost three attempts and ~13 minutes the same way.
+#   The wrapper now runs bin/gateway-quiesce.sh through the same `wsl.exe -d … -- <cmd>` hop the
+#   gate and the compaction step use: it stops the unit and waits, bounded, for systemd to report
+#   it inactive.  It NEVER gates the restart — a WARN in its excerpt means the stop did not land
+#   and the restart proceeds anyway, because a restart that does not happen is worse than a
+#   gateway that starts uncleanly.  This is the third mechanism measured in this area and the
+#   first that acts on the SHUTDOWN rather than on stacking (e35754dc) or the guard (9abb008c).
 #   v15 (2026-10-17): THE ARM SURFACES ITS OWN CAUSE, AND CLEARS A SPENT LEFTOVER FIRST.  Measured the
 #   same day at 03:04 BST: the loop could not arm and the journal carried only "schtasks /create failed
 #   (bounded at 60 s) - task NOT armed", because the call discarded its own output - reconstructing the
@@ -265,6 +278,10 @@ GATE_CMD_UNIX="${TAC_WSL_RESTART_GATE_CMD:-$HOME/.local/bin/wsl-restart.sh}"
 # returns the pages a deleted value freed, and this restart is the one window where nothing
 # holds the state DBs open.  Same stable path convention as the gate.
 COMPACT_CMD_UNIX="${TAC_WSL_RESTART_COMPACT_CMD:-$HOME/.local/bin/vscode-state-compact.sh}"
+# The QUIESCE step (1b) the wrapper runs BEFORE `wsl.exe --shutdown`: it stops the OpenClaw
+# gateway and waits for it to go inactive, so the next boot's start is not refused by the state
+# DB's "offline maintenance" marker (see the Module Version note).  Same stable path convention.
+QUIESCE_CMD_UNIX="${TAC_WSL_RESTART_QUIESCE_CMD:-$HOME/.local/bin/gateway-quiesce.sh}"
 
 # The window list the CAPTURE step writes and step 4 reads back: every VS Code window OPEN at
 # restart time, one vscode-remote:// URI per line.
@@ -573,6 +590,25 @@ render_relaunch_step() {
         ')'
 }
 
+# The wrapper's QUIESCE step (1b), printed by its own function for the same §18.3 reason as the
+# gate and the compaction step: render_wrapper stays a readable list of STEPS.
+# MEASURED 2026-10-17 — the VM killed the gateway mid-drain at 12:41:48 and the NEXT start was
+# refused with "state … is undergoing offline maintenance", costing a retry and ~8 minutes; the
+# 10:48 restart cost three attempts and ~13 minutes the same way.
+render_quiesce_step() {
+    printf '%s\r\n' \
+        '' \
+        'REM 1b. QUIESCE the OpenClaw gateway BEFORE the VM is torn down. A gateway killed by' \
+        'REM     --shutdown leaves its state DB marked "undergoing offline maintenance", and the' \
+        'REM     NEXT start is then REFUSED (measured 2026-10-17: refused at 12:42:53 after a' \
+        'REM     mid-drain kill at 12:41:48 — a retry and ~8 minutes; the 10:48 restart cost' \
+        'REM     three attempts and ~13). The helper stops the unit and waits, BOUNDED, for' \
+        'REM     systemd to report it inactive. It NEVER gates the restart: a WARN in its' \
+        'REM     excerpt means the stop did not land, and the restart proceeds anyway.' \
+        "wsl.exe -d ${DISTRO} -u wayne -- ${QUIESCE_CMD_UNIX} >> \"%LOG%\" 2>&1" \
+        ''
+}
+
 # The wrapper that runs on the Windows side.  CRLF is deliberate: cmd.exe parses a
 # LF-only .cmd unreliably around labels and goto, and this file is full of both.
 # `_mode` is `oneshot` (fired once, deletes its own registration) or `scheduled`
@@ -631,7 +667,10 @@ render_wrapper() {
         'taskkill /im Code.exe >> "%LOG%" 2>&1' \
         "ping -n $(( CLOSE_GRACE_SECONDS + 1 )) 127.0.0.1 >nul" \
         'taskkill /f /im Code.exe >> "%LOG%" 2>&1' \
-        '' \
+        ''
+    # STEP 1b — the gateway is stopped and waited for BEFORE the VM goes down (v16).
+    render_quiesce_step
+    printf '%s\r\n' \
         'REM 2. Restart the distro. Must run here, never inside the distro.' \
         'wsl.exe --shutdown >> "%LOG%" 2>&1' \
         'ping -n 11 127.0.0.1 >nul' \

@@ -206,6 +206,12 @@ _line_of() {
     [ "$status" -eq 0 ]
 
     close_n=$(_line_of "$output" 'taskkill /im Code.exe')
+    # v16: the gateway is QUIESCED between closing the client and tearing the VM down.  A
+    # gateway killed by --shutdown is killed MID-DRAIN, and the next start is then REFUSED
+    # ("state … is undergoing offline maintenance") — measured 2026-10-17 at 12:41, where the
+    # retry cost ~8 minutes, and at 10:48, where it cost three attempts and ~13.  Removing
+    # the step, or moving it after the shutdown, fails here.
+    quiesce_n=$(_line_of "$output" 'gateway-quiesce.sh')
     shutdown_n=$(_line_of "$output" 'wsl.exe --shutdown')
     wait_n=$(_line_of "$output" ':wait_distro')
     relaunch_n=$(_line_of "$output" '--remote wsl+Ubuntu-24.04')
@@ -213,12 +219,14 @@ _line_of() {
 
     # Every step present, so a later comparison cannot pass on a missing step.
     [ "$close_n" -gt 0 ]
+    [ "$quiesce_n" -gt 0 ]
     [ "$shutdown_n" -gt 0 ]
     [ "$wait_n" -gt 0 ]
     [ "$relaunch_n" -gt 0 ]
     [ "$delete_n" -gt 0 ]
 
-    [ "$close_n" -lt "$shutdown_n" ]
+    [ "$close_n" -lt "$quiesce_n" ]
+    [ "$quiesce_n" -lt "$shutdown_n" ]
     [ "$shutdown_n" -lt "$wait_n" ]
     [ "$wait_n" -lt "$relaunch_n" ]
     [ "$relaunch_n" -lt "$delete_n" ]
