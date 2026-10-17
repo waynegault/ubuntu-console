@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -63,15 +64,27 @@ _CONCEPT_CONFIG_PATH = os.path.join(
 
 def load_concept_config() -> dict:
     """Load concept aliases and classification data from config/concept-aliases.json."""
-    path = os.path.normpath(_CONCEPT_CONFIG_PATH)
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
-        # Without this config all concept filtering (scaffolding labels, aliases,
-        # low-value concepts, agent roles) is silently disabled.
-        logger.warning("concept config unavailable at %s: %s — filtering disabled", path, exc)
-        return {}
+    # TWO layouts: a repo checkout keeps it at <repo>/config/, while an INSTALLED tool receives
+    # it as a data file at <prefix>/config/.  Restored 2026-10-18 from git blob 208b62ef after
+    # the file went missing and concept filtering was silently disabled — the warning below was
+    # the only trace of it, and a warning nobody reads is the same as no warning.
+    candidates = (
+        os.path.join(os.path.dirname(__file__), "config", "concept-aliases.json"),
+        os.path.normpath(_CONCEPT_CONFIG_PATH),
+        os.path.join(sys.prefix, "config", "concept-aliases.json"),
+    )
+    last_exc: Exception | None = None
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            last_exc = exc
+    # Without this config all concept filtering (scaffolding labels, aliases,
+    # low-value concepts, agent roles) is silently disabled.
+    logger.warning("concept config unavailable at %s: %s — filtering disabled",
+                   " or ".join(candidates), last_exc)
+    return {}
 
 
 _concept_config = load_concept_config()

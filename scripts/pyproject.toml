@@ -42,5 +42,7 @@ include = ["kgraph*"]
 
 [tool.setuptools.package-data]
 # templates/kgraph.html is loaded at import time by html.py; without it the
-# installed tool silently serves a "Template not found" viewer.
-kgraph = ["templates/*.html", "*.md"]
+# installed tool silently serves a "Template not found" viewer.  config/*.json is the concept
+# taxonomy, and it lives INSIDE the package on purpose: a data-files path is relative to THIS
+# file's directory (scripts/), so `config/…` resolved to scripts/config/ and failed the build.
+kgraph = ["templates/*.html", "*.md", "config/*.json"]
