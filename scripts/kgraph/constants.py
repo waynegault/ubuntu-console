@@ -14,9 +14,14 @@ def normalize_canonical_name(text: str) -> str:
     return norm
 
 
+# The registries that ACTUALLY exist on this box (measured 2026-10-17, KG-SOURCE-001).  Two
+# legacy candidates were removed because neither path has ever existed here —
+# `~/.openclaw/memory-system/data/memory.db` and `~/.openclaw/memory/main.sqlite` — and a
+# candidate that is never present is worse than a missing one: it makes "no memory DB found"
+# read as a path bug instead of what it was (a starved store).  The two that remain both hold
+# the real `memory_*` schema; `resolve_all_memory_db_paths()` returns whichever exist and
+# `update.py` merges every one of them.
 MEMORY_DB_CANDIDATES = [
-    '~/.openclaw/memory-system/data/memory.db',
-    '~/.openclaw/memory/main.sqlite',
     '~/memory/registry.sqlite',
     '~/.openclaw/workspace-rook/memory/registry.sqlite',
 ]

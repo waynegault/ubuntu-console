@@ -69,6 +69,25 @@ def incremental_update(graph_db_path: str, mem_db_path: str | None = None,
     for mdb in memory_dbs:
         try:
             mem_graph = load_from_memory_db(mdb, include_all=kwargs.get("include_all", False))
+            # KG-SOURCE-001 (2026-10-17): SAY what the memory half imported.  "The memory phase
+            # imports nothing" was read as a broken path; measured, the two live registries hold
+            # ONE memory and ZERO entities between them, so the phase was working and the STORE
+            # was starved.  A count per registry — and a named line when none is found — makes
+            # that difference visible instead of leaving a silent zero to be re-diagnosed.
+            # The return shape is not uniform: the modern path yields the pydantic `Graph`, the
+            # legacy path a plain dict, so probe as `object` rather than trusting the annotation.
+            _mg: object = mem_graph
+            if isinstance(_mg, dict):
+                _mn, _me = len(_mg.get("nodes", [])), len(_mg.get("edges", []))
+            else:
+                _mn, _me = len(getattr(_mg, "nodes", [])), len(getattr(_mg, "edges", []))
+            # The CLI logs at WARNING, so an INFO line never reaches the post-commit output — and
+            # a ZERO is precisely what must not stay invisible (it is what was mistaken for a
+            # dead path).  A starved or absent import is a warning; a healthy count is INFO.
+            if _mn or _me:
+                logger.info("memory: %d nodes, %d edges from %s", _mn, _me, mdb)
+            else:
+                logger.warning("memory: NOTHING imported from %s (0 nodes, 0 edges)", mdb)
             builder.merge(mem_graph)
         except (OSError, ValueError, KeyError) as exc:
             logger.warning("Memory DB import failed (%s): %s", mdb, exc)
