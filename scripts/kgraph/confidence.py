@@ -42,11 +42,40 @@ _DIRECT_MEMORY_LABELS = frozenset({
 # fixture set and reporting it as calibration is forbidden here, so the honest
 # state is "un-calibrated", written down, rather than a plausible-looking number.
 #
-# What a calibration would need, concretely:
+# MEASURED 2026-10-17 — and the reason is stronger than "no labelled set yet".
+# The population these two numbers govern is effectively EMPTY on this machine:
+#   * `~/.openclaw/kgraph.sqlite` (16,281,600 B, rebuilt 18:13 that day) holds
+#     11,566 edges and NOT ONE carries `semantic_score` or `cooccurrence_count`.
+#     Its labels are calls 8189 / defines 2620 / imports 720 / resolves_to 31 /
+#     mentions 4 / claims 2, and its node mix is function 2284, call 2016,
+#     file 235, class 181, module 104, memory 18, synthesis 6, entity 3, claim 2
+#     — an AST-only graph.  The ingest that emits scored edges never ran against
+#     live data.
+#   * The only database on the box carrying the files/chunks schema those
+#     emitters read is an archived 2026-02-19 backup with THREE files and SEVEN
+#     chunks; it yields 45 edges, 12 of them scored (0.751–0.796, all embedding
+#     `related (…)`) and none with a co-occurrence count.  Twelve edges cannot
+#     place a threshold: the curve's tail — where the INFERRED boundary lives —
+#     would be one edge wide.
+#   * `constants.MEMORY_DB_CANDIDATES` names two paths that no longer exist
+#     (`~/.openclaw/memory-system/data/memory.db`, `~/.openclaw/memory/main.sqlite`);
+#     the two that do exist carry the `memories` schema and no files/chunks, so
+#     the semantic and co-occurrence phases emit nothing at all.
+# Reproduce the first bullet with `python -m kgraph.calibrate --export /tmp/x`,
+# which prints the counts and declines to write a sample (exit 2).
+#
+# The harness for the missing half now exists: `kgraph/calibrate.py` draws a
+# stratified sample with the score WITHHELD from the labelling file (so the
+# judgement cannot be the formula's own output) and turns the filled-in labels
+# into one precision-recall curve per signal, naming an operating point and
+# refusing to name one below `MIN_SAMPLE` labelled edges.  Once a graph is built
+# from a real memory store, calibration is two commands; until then these two
+# constants stay defaults, and a change to either is an unmeasured change.
+#
+# What a calibration needs, concretely:
 #   * a labelled sample of edges (label = real / not-real), drawn from the same
-#     emitters that produce `semantic_score` and `cooccurrence_count` — for
-#     instance a JSON/CSV of (source, target, label, semantic_score,
-#     cooccurrence_count, real) exported from a built graph and hand-reviewed;
+#     emitters that produce `semantic_score` and `cooccurrence_count` — the CSV
+#     `calibrate.py --export` writes, with its `real` column filled in;
 #   * one PRECISION-RECALL curve per signal: precision and recall as the
 #     threshold sweeps `semantic_score` (and, separately, `cooccurrence_count`).
 #     The metric is precision-at-threshold with its recall, not accuracy: the two

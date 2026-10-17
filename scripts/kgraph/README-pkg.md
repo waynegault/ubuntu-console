@@ -74,6 +74,29 @@ Graph JSON validation is a module entry point, not a CLI flag:
 python -m kgraph.validate graph.json
 ```
 
+## Calibrating the INFERRED/AMBIGUOUS thresholds
+
+`confidence.SEMANTIC_INFERRED_MIN` and `COOCCURRENCE_INFERRED_MIN` are hand-picked
+defaults, and the population they govern is currently empty: the built graph has no
+scored edges at all, so no threshold can be measured yet. `kgraph.calibrate` is the
+harness for the day that changes — it is also the fastest way to check the state.
+
+```bash
+# 1. Draw a sample. Writes sample.csv (blank `real` column), signals.json and
+#    provenance.json. The score is deliberately NOT in the CSV you label.
+python -m kgraph.calibrate --export /tmp/kg-sample --limit 200 --seed 0
+
+# 2. Fill the `real` column with true/false, then score it. Prints one
+#    precision/recall curve per signal and names the operating point.
+python -m kgraph.calibrate --score /tmp/kg-sample --min-precision 0.90 \
+    --report /tmp/kg-sample/report.md
+```
+
+Exit 2 means "no number can be named": either nothing scored to sample, or fewer than
+`MIN_SAMPLE` (50) labelled edges, or a one-class sample. The harness never writes a
+constant into the source — a re-run cannot change behaviour by accident, and the
+report is the review evidence for a hand edit.
+
 ## CLI Entry Points
 
 | Command  | Function |

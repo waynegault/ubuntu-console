@@ -612,6 +612,13 @@ class _MemoryStoreIngest:
             # cost of asserting a wrong edge; see scripts/kgraph/confidence.py
             # for the same note on the classification thresholds.
             #
+            # The harness for that curve is `kgraph/calibrate.py`
+            # (`python -m kgraph.calibrate --export DIR`, fill the `real` column,
+            # then `--score DIR`).  Note what a run reports TODAY: no database on
+            # this machine carries the files/chunks schema these phases read, so
+            # this emitter produces nothing against live data and the built graph
+            # has zero scored edges.  See the measurement in confidence.py.
+            #
             # REF: "GraphRAG with TypeSafe Jev: A System One Approach to
             # Scalable Knowledge Graphs" (Partha Sarkar, TDS, 2026-09-27) —
             # https://towardsdatascience.com/graphrag-with-typesafe-jev-a-system-one-approach-to-scalable-knowledge-graphs/

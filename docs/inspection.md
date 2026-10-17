@@ -42,6 +42,11 @@ The following file classes are in-scope for every audit pass:
 - `tests/conftest.py` — Pytest fixtures (BATS serialization via flock)
 - `pytest.ini` — Pytest configuration (markers, testpaths)
 - `scripts/kgraph/models.py` — Pydantic models (GraphNode, GraphEdge, Graph, GraphBuilder, ConfidenceLevel)
+- `scripts/kgraph/calibrate.py` — calibration harness for the two INFERRED/AMBIGUOUS
+  thresholds (GRAPHRAG-JEV-005-CALIB): `--export` draws a sample with the score withheld
+  from the labelling file, `--score` turns filled-in labels into per-signal
+  precision/recall curves. Tests: `tests/test_kgraph_calibration.py` — that file pins the
+  harness's honesty, not a calibration
 - `scripts/kgraph/templates/kgraph.html` — Cytoscape.js viewer template
 - `config/concept-aliases.json` — kgraph concept classification data
 - `tools/hooks/pre-commit` — pre-commit hook: runs `tools/lint.sh --staged`
