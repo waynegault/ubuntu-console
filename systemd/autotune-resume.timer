@@ -1,0 +1,22 @@
+[Unit]
+Description=Autotune resume — re-arm the remaining rows after a boot (timer)
+Documentation=file:%h/ubuntu-console/systemd/autotune-resume.README.md
+
+[Timer]
+# Fires ONCE per boot, two minutes in. That is the whole contract: `autotune-resume.sh`
+# is itself the campaign engine (v2, 2026-10-15) — when a chunk halts on the cycle
+# budget it re-derives the remainder and arms the next restart through bin/wsl-restart.sh,
+# so there is nothing for a recurring timer to do.
+#
+# 2026-10-17: replaced `WantedBy=default.target` on the service. A Type=oneshot with
+# TimeoutStartSec=21600 inside the boot transaction kept default.target unreached for up
+# to six hours, starving every unit ordered `After=default.target` (the graphify reload
+# timer queued its start job for a whole hour; the stray-root-entry net never started).
+# A timer keeps the same "once per boot" behaviour without holding the boot open — and
+# `default.target` no longer depends on how long the campaign runs.
+OnBootSec=2min
+AccuracySec=30s
+Unit=autotune-resume.service
+
+[Install]
+WantedBy=timers.target

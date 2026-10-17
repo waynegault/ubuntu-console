@@ -1,6 +1,12 @@
 [Unit]
 Description=Autotune resume — re-arm the remaining rows after a boot
 Documentation=file:%h/ubuntu-console/systemd/autotune-resume.README.md
+# Started by autotune-resume.timer (OnBootSec=2min), NOT by default.target.
+# 2026-10-17: this unit used to be `WantedBy=default.target`. It is a Type=oneshot with a
+# 6-hour start budget, so while a campaign ran the whole default.target transaction stayed
+# open — and every unit ordered `After=default.target` was starved for hours (measured that
+# morning: the graphify reload timer fired and its job sat `waiting`; the stray-root-entry
+# net never started at all). Boot-time work that can run for hours belongs on a timer.
 
 [Service]
 Type=oneshot
@@ -19,5 +25,6 @@ Type=oneshot
 TimeoutStartSec=21600
 ExecStart=%h/.local/bin/autotune-resume.sh
 
-[Install]
-WantedBy=default.target
+# No [Install] section on purpose: `WantedBy=default.target` is what put a 6-hour oneshot
+# inside the boot transaction. The timer is the entry point; `systemctl --user enable
+# autotune-resume.timer`, never the service.

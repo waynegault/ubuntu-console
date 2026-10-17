@@ -8,11 +8,21 @@ re-armed it.
 
 **Why a user unit and not the session.** The re-arm has to survive the thing it exists
 for. A job launched from a chat session is a descendant of that window, so it cannot.
-`WantedBy=default.target` puts this one under the user manager instead.
+A user unit runs under the user manager instead — and since 2026-10-17 it is started by
+`autotune-resume.timer` (`OnBootSec=2min`), not by `default.target`.
+
+**Why a timer and not `WantedBy=default.target` (2026-10-17).** The service is a
+`Type=oneshot` with `TimeoutStartSec=21600`, and a boot-time oneshot keeps the
+`default.target` transaction open until it finishes. On 2026-10-17 that starved every
+unit ordered `After=default.target`: `graphify-mcp-reload.timer` fired and its start job
+sat `waiting` for over an hour (the investigator graph was served stale), and
+`stray-root-entry-net.service` never started at all. "Once per boot" is now the timer's
+job; the boot no longer waits for a six-hour campaign.
 
 **Nothing happens until BOTH gates are opened, and both are deliberate:**
 
-1. **Enable it** — `systemctl --user enable --now autotune-resume.service`.
+1. **Enable it** — `systemctl --user enable autotune-resume.timer` (the TIMER, never the
+   service: the service is static, so enabling it is a no-op that reads like success).
    `install.sh` LINKS `systemd/*` into `~/.config/systemd/user/` and reloads; it does
    **not** enable user units (the `enable`+`start` loop in it is the `sudo` system set
    under `systemd/system/`). So shipping this file starts nothing.
