@@ -638,6 +638,121 @@ nothing about factual or legal correctness, by design.
 > one of those failures was valid JSON wrapped in markdown fences — the reason the codes and the
 > separate fence policy exist here.
 
+### Correctness axis — held-out right answers, and the one report that joins the dimensions
+
+Throughput is measured by `tools/llm_benchmark.py`; the response *contract* by
+`tools/llm_task_quality.py`, which says outright that it does not measure correctness. Neither
+answers "was the answer right", so a selection reading only those two has no quality axis: the
+fastest model that did not break the tool-call shape wins, and a faster model with worse answers
+cannot lose.
+
+`tools/llm_outcome_cases.py` is that axis. It ships 13 held-out cases (chat, legal, agentic, mix),
+each with a right answer derivable from its own prompt, and scores every response into exactly one
+of four outcomes:
+
+| Outcome | Meaning | Never confused with |
+|---|---|---|
+| `correct` | the expected answer | — |
+| `incorrect` | well-formed answer, wrong content | a shape failure — the model answered, it was wrong |
+| `abstain` | the model declined (its own abstention) | a parse failure |
+| `invalid` | nothing scorable: empty text, no `ANSWER:` line, or a failed contract (carrying that contract's typed code) | a wrong answer — a prompt or policy bug looks like this |
+
+`incorrect` and `invalid` are kept apart on purpose: they have different fixes (a better model vs a
+prompt or fence policy), so a report that pools them cannot guide a choice. `accuracy` is
+`correct / all cases` — invalid and abstain count against it, because dropping them flatters the
+figure. The agentic cases ask for the JSON tool-call array the agentic contract already requires, so
+the shape gate and the correctness check score the *same* response; the three agentic expectations
+are tool choice, second-step routing, and argument construction.
+
+```bash
+# score responses recorded earlier (no server, no GPU)
+python3 tools/llm_outcome_cases.py --responses responses.jsonl --json
+
+# ask a loopback llama-server (a remote URL is refused — case prompts stay local)
+python3 tools/llm_outcome_cases.py --run --write "$HOME/.llm/outcomes/$(hostname).json"
+```
+
+**Scope.** Thirteen cases is a smoke-sized correctness signal, not a benchmark: enough to catch a
+model that is fast and confidently wrong, not enough to rank two good models apart. Abstention
+detection is lexical (a short marker list), not a judge. No factual or legal-correctness claim is
+made beyond these closed questions.
+
+`tools/llm_selection_report.py` is the artefact the recipe actually asks for: it joins the registry
+to whatever outcomes exist and prints **throughput, `meas_state`, format codes and
+correct/incorrect/abstain/invalid on one page**. It cannot invent a dimension — a model with no
+observation says `no observation` and is listed again under coverage, an absent dimension is printed
+**ABSENT** rather than zero, and with no outcomes at all the report opens with **QUALITY-BLIND** and
+names the risk (a faster, worse model cannot lose under that evidence).
+
+```bash
+python3 tools/llm_selection_report.py --outcomes "$HOME/.llm/outcomes" --recommended 12
+```
+
+A model is joined by display name **or** by artifact filename (`Nexus Legal` and
+`Nexus-Legal-Q4_K_M.gguf` are the same row; a server reports whichever it was told to), because a
+join that matches only one of them drops a measured model silently — which reads exactly like "no
+observation".
+
+`--recommended N` turns the recommender into something measurable: it reports the model with the
+best measured outcome for that workload and whether the recommendation agreed. Ranking there is on
+**correct first**, then fewest invalid, then fewest incorrect, then certified TPS; a model with no
+observation is never "best", because absent evidence cannot win an ordering.
+
+> REF: "Jev Your Engines: Seven Open Decision Models vs. a Generative LLM" (Lambert Leong, TDS,
+> 2026-10-15) — <https://towardsdatascience.com/jev-your-engines-seven-open-decision-models-vs-a-generative-llm/>.
+> Its recipe is "Give them the same requests and menus. Measure correct routes, invalid outputs,
+> latency and abstentions together" — the load-bearing words are *together* and *correct*.
+
+### Model recommender — a MEASURED workload, never the model's name
+
+`model-recommend [general|coding|reasoning|creative]` (`scripts/15-model-recommender.sh`, module v7)
+ranks models that fit 80 % of VRAM. Until v7 its "use case match" was a substring test on the model's
+**name** (`coder`/`code`, `qwen`/`llama`, `mistral`/`phi`) worth +3/+2, so a model certified on `chat`
+could win a `coding` request, and `qwen` in a name was credited as "strong-reasoning" with no reading
+behind it. The registry row already carries the workload its reading was taken on (col 33) and how
+that reading stands (col 44) — the reader bound `_workload` and never used it.
+
+v7 rules, in order:
+
+1. **Eligibility requires a CERTIFIED reading of a workload in the use case's affinity set.** An
+   indicative reading drifted past the 25 % position bound, and a row with no workload recorded has
+   no evidence of fit; neither can rank.
+2. **Throughput only refines an eligible row.** `high-tps` (+1, certified only) and `vram-efficient`
+   (+1, under 3 GB) are tie-breakers, never a route to the ranked list — otherwise "the fastest model
+   wins" returns through the side door.
+3. **The name is a visible conflict note, never a point.** When the name suggests the requested use
+   case and the measurement disagrees, the measurement wins and the disagreement is printed:
+   `#21 Qwen2.5 Coder 3B Instruct — measured chat, which is not a coding reading (the name suggests
+   coding; the measurement wins)`.
+4. **What cannot rank is listed, not hidden.** A capped `Unranked` section names each fitting row with
+   its reason (`no workload reading recorded` / `reading is 'indicative', not certified` / `measured
+   <x>, which is not a <use_case> reading`) plus the command that would create the missing reading.
+   An empty screen reads as "nothing fits", which is a different finding.
+5. The 80 % VRAM refusal is unchanged, and the affinity policy is printed on every run
+   (`Policy [certified reading of: agentic mix]`) so it can be argued with.
+
+| Use case | Affinity set (measured workloads that count) | Why |
+|---|---|---|
+| `general` | `chat`, `mix` | general conversation and mixed work |
+| `coding` | `agentic`, `mix` | the agentic workload is the tool-use/step work coding requests resemble |
+| `reasoning` | `legal`, `agentic`, `mix` | careful reading and multi-step routing are the closest measured proxies |
+| `creative` | `chat`, `mix` | free-form generation; `chat` is the only free-form workload recorded |
+
+The autotune vocabulary is `chat|legal|agentic|mix` — there is no `reasoning` or `creative` workload
+on this box, so those two use cases can only be served by a measured proxy. **A proxy that was
+measured is evidence; a name is not.** If autotune grows those workloads this table shrinks to a
+one-to-one match, which is the goal.
+
+As of 2026-10-17 every certified row on this box records `chat`, so `model-recommend coding` returns
+**no ranked rows** and about 27 unranked ones. That is the honest state, not a regression: it says
+plainly that no model here holds a coding certification, and it names the command that would create
+one (`model autotune N --workload agentic`).
+
+> REF: "Jev Your Engines: Seven Open Decision Models vs. a Generative LLM" (Lambert Leong, TDS,
+> 2026-10-15) — <https://towardsdatascience.com/jev-your-engines-seven-open-decision-models-vs-a-generative-llm/>.
+> "Accepting a new candidate list and choosing well from it are separate abilities": a candidate's FIT
+> is a measured property, not a property of its interface or its name.
+
 ## OpenClaw ↔ LLM Bridge
 
 - `oc-local-llm` configures OpenClaw to route agent requests through your

@@ -475,3 +475,78 @@ test_integration_model_bench_autoruns_autotune_when_row_autotuned_no() {
 }
 
 # end of file
+
+# ─────────────────────────────────────────────────────────────────────────────
+# model-recommend v7 — the use case is a MEASURED workload, never the model's name
+# ─────────────────────────────────────────────────────────────────────────────
+# v6 scored a use case with a substring test on the model's NAME, so a coder-named
+# model certified on `chat` won a `coding` request with no reading behind it, and an
+# INDICATIVE row still collected the use-case points.  v7 requires a certified
+# reading of a workload in the use case's affinity set, keeps the name only as a
+# visible conflict note, and lists what it cannot rank instead of hiding it.
+# REF: "Jev Your Engines: Seven Open Decision Models vs. a Generative LLM"
+#      (Lambert Leong, TDS, 2026-10-15) —
+#      https://towardsdatascience.com/jev-your-engines-seven-open-decision-models-vs-a-generative-llm/
+
+# _mk_row <num> <name> <file> <size> <tps> <workload> <meas_state>
+_mk_row() {
+    local -a f=()
+    f[0]="$1"; f[1]="$2"; f[2]="$3"; f[3]="$4"
+    f[4]='Q4_K_M'; f[5]='phi3'; f[6]='999'; f[7]='8192'; f[8]='6'; f[9]='512'
+    f[10]='128'; f[11]='1'; f[12]='256'; f[13]='native'; f[14]='auto'; f[15]='on'
+    f[16]="$5"; f[17]='yes'; f[18]='no'; f[19]='no'
+    f[20]='100.0'; f[21]='8192'; f[22]='512'; f[23]='128'; f[24]="$5"; f[25]='100.0'
+    f[26]='ngram'; f[27]=''; f[28]='4'; f[29]=''; f[30]=''; f[31]='0'
+    f[32]="$6"; f[33]='1000'; f[34]='8192'; f[35]='4'; f[36]='700'
+    f[37]='1.1'; f[38]='256'; f[39]='1.0'; f[40]='3'; f[41]='0.1'; f[42]='0.0'
+    f[43]="$7"
+    local IFS='|'
+    printf '%s\n' "${f[*]}"
+}
+
+@test "integration: model-recommend ranks the MEASURED workload and refuses the name" {
+    local reg="$LLM_REGISTRY"
+    {
+        # The header row is the schema itself: 44 named columns, read positionally by
+        # model-recommend.  Split so the line stays under the 120-character house rule.
+        echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|\
+fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|\
+p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|\
+spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|\
+bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|\
+meas_spread|meas_drift|meas_state"
+        _mk_row 1 "Qwen Coder Small" "coder.gguf" "2.0G" "50.0" "chat" "certified"
+        _mk_row 2 "Plain Model" "plain.gguf" "2.0G" "12.0" "agentic" "certified"
+        _mk_row 3 "Indicative Model" "ind.gguf" "2.0G" "25.0" "agentic" "indicative"
+        _mk_row 4 "Too Large" "huge.gguf" "9.0G" "40.0" "agentic" "certified"
+    } > "$reg"
+
+    export VRAM_TOTAL_BYTES=$(( 4 * 1024 * 1024 * 1024 ))
+    run model-recommend coding
+    [ "$status" -eq 0 ]
+
+    # The certified agentic reading is the ONLY thing that may rank for `coding`.
+    [[ "$output" == *"#2 Plain Model"*"measured-agentic"* ]]
+
+    # A name is not a reading: the coder-named model certified on `chat` must not rank,
+    # and the disagreement must be visible rather than silent.
+    [[ "$output" != *"#1 Qwen Coder Small"*"measured-"* ]]
+    [[ "$output" == *"#1 Qwen Coder Small"*"the name suggests coding"* ]]
+
+    # An indicative reading buys no rank either, and says why.
+    [[ "$output" == *"#3 Indicative Model"*"not certified"* ]]
+
+    # The 80 % VRAM rule is untouched: a row that does not fit is not mentioned at all.
+    [[ "$output" != *"Too Large"* ]]
+}
+
+@test "integration: model-recommend prints the affinity policy it scored with" {
+    local reg="$LLM_REGISTRY"
+    _mk_row 1 "Plain Model" "plain.gguf" "2.0G" "12.0" "agentic" "certified" > "$reg"
+    export VRAM_TOTAL_BYTES=$(( 4 * 1024 * 1024 * 1024 ))
+
+    run model-recommend coding
+    [ "$status" -eq 0 ]
+    # The mapping is a POLICY, so it is stated where a reader can argue with it.
+    [[ "$output" == *"certified reading of: agentic mix"* ]]
+}

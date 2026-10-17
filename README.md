@@ -513,7 +513,7 @@ Each network/package step has a cooldown in `~/.openclaw/maintenance_cooldowns.t
 
 ## Testing
 
-The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (2053 total tests: 1331 BATS + 722 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
+The project uses two test frameworks: **BATS** (bash automated testing) for shell functions, and **pytest** for Python code. A bridge module (`tests/test_bats_bridge.py`) exposes each individual BATS `@test` block as a separate pytest test, giving a **unified test view** in VS Code's Python Test Explorer (2106 total tests: 1333 BATS + 773 Python). A second bridge (`tests/test_bats_unittest.py`) runs the same suites under the standard library's `unittest` — one case per suite file — for an interpreter that has `bats` but no `pytest`. Both read the suite list from `tests/bats-suites.tsv`.
 
 ### Running Tests
 
@@ -566,9 +566,9 @@ Counts are enforced by `tools/docs-sync-check.sh`; the suite list and its per-ca
 | Fast static analysis | `tactical-console-fast.bats` | 67 | 300s | 900s |
 | Function availability | `tactical-console-function-availability.bats` | 2 | 60s | 300s |
 | Unit | `tests/unit/*.bats` | 730 | 300s | 600s |
-| Integration | `tests/integration/*.bats` | 145 | 300s | 1200s |
-| Python | `tests/test_*.py` | 722 | 1000s (`pytest.ini`) | — |
-| **Total** | | **2053** | | |
+| Integration | `tests/integration/*.bats` | 147 | 300s | 1200s |
+| Python | `tests/test_*.py` | 773 | 1000s (`pytest.ini`) | — |
+| **Total** | | **2106** | | |
 
 **Run pytest from the virtualenv:** `.venv/bin/python3 -m pytest …`. Every pytest on this box is **9.1.1** (checked 2026-09-23, `pytest-timeout` 2.4.0 throughout) and CI pins those two versions. A bare `pytest` is safe here too: `~/.local/bin/pytest` is a **wrapper** that execs the *enclosing project's* `.venv/bin/pytest` (nearest ancestor wins, falling back to the investigator venv outside any project). It used to always exec the investigator venv, so a bare run in this directory used python 3.12.3 with the investigator's site-packages instead of this venv's python 3.14.3 — fixed 2026-09-23, though naming the interpreter remains the unambiguous form. The apt `python3-pytest` (7.4.4) was removed the same day, so the **system python3.12 has no pytest** (and PEP 668 blocks a pip replacement) — nothing here needs it, since CI, VS Code (`python.testing.pytestPath`) and these docs all resolve a virtualenv. `pytest.ini` carries `--strict-markers --strict-config` so a misspelled marker or ini key fails loudly instead of silently filtering nothing, and every marker the BATS bridge applies dynamically (`bats`, `bats_unit`, `bats_fast`, `bats_full`, `bats_integration`, `slow`) is registered there. There is deliberately no `bats_default`: each suite's marker now comes by name from `tests/bats-suites.tsv`, so a name the table gets wrong fails collection instead of quietly filing the suite under a marker no `-m` selection asks for. **Do not add `-n`/`pytest-xdist`**: `tests/conftest.py` serialises each BATS file with an `flock` so two suites never run one file at once, and parallelism fights that. Note also that the full run is ~30 min because it bridges all 387 BATS cases, and one of them restarts the **live gateway** — prefer targeted files.
 
@@ -636,6 +636,8 @@ line counts because they drift.
 | `tools/docs-sync-check.sh` | Docs drift guard: module count, loader version, test totals, per-directory breakdowns — in README and `pytest.ini` (CI) |
 | `tools/import-windows-env.sh` | Import Windows user environment variables |
 | `tools/lint.sh` | Static analysis: `bash -n` + shellcheck + Unicode safety, then the whole-repo guards above — including the CI verdict gate (`scripts/check_ci_status.py --fail`) |
+| `tools/llm_outcome_cases.py` | Held-out correctness cases: scores a model `correct`/`incorrect`/`abstain`/`invalid` on right answers (the axis throughput and the format gate both lack) |
+| `tools/llm_selection_report.py` | One comparison artefact: throughput + format codes + correctness TOGETHER, with the recommendation's own agreement score and an explicit quality-blind warning when nothing was measured |
 | `tools/mirror-vault.sh` | Sync Obsidian vault to Windows |
 | `tools/normalize-fixture.sh` | Normalise captured golden fixtures |
 | `tools/run-tests.sh` | Pretty-printed BATS test runner |
@@ -1151,7 +1153,7 @@ where it was last present.)
 │   ├── grpo-vram-probe.py             #   Measures the GRPO/QLoRA training VRAM budget (card UBC-GRPO-003)
 │   ├── qwen-memory-index-check.py     #   Re-runnable witness: every ~/.qwen memory index, entries + broken links
 │   ├── qwen-transcript-retention.sh   #   Age out unregistered chat + subagent transcripts (dry run by default)
-│   └── kgraph/                        #   Knowledge graph Python package (23 modules)
+│   └── kgraph/                        #   Knowledge graph Python package (24 modules)
 │       ├── models.py                  #     GraphNode, GraphEdge, Graph, GraphBuilder
 │       └── templates/kgraph.html      #     Cytoscape.js viewer template
 ├── tools/                             # Standalone utility scripts (not sourced)
@@ -1203,6 +1205,8 @@ where it was last present.)
 │   ├── test_nas_bt_bridge.py          # NAS BLE bridge exception-narrowing tests (card 887c1d65)
 │   ├── test_nas_collector_failures.py # NAS collector failure visibility (card b296c75c)
 │   ├── test_llm_task_quality.py       # Deterministic legal/agentic autotune response-contract checks
+│   ├── test_llm_outcome_cases.py      # Correctness-axis outcomes: correct / incorrect / abstain / invalid
+│   ├── test_llm_selection_report.py   # Joined selection artefact: absent evidence never wins
 │   ├── test_shell_command_scan.py     # shell-command-scan hook classifier tests (card 07a1516a)
 │   ├── test_ast_extractor.py          # Tests for kgraph.ast_extractor
 │   ├── test_benchmark.py              # Tests for kgraph.benchmark
@@ -1219,7 +1223,7 @@ where it was last present.)
 │   ├── test_update.py                 # Tests for kgraph.update
 │   ├── test_validate.py               # Tests for kgraph.validate
 │   ├── unit/                          # BATS unit tests (730 tests: 30+29+7+5+5+6+41+4+8+7+42+19+16+6+1+5+4+2+3+3+20+24+41+30+6+8+8+3+15+6+13+24+29+16+9+17+9+6+4+4+6+3+3+4+5+4+13+2+8+10+1+8+5+4+28+31+4+7+21+17+11)
-│   └── integration/                   # BATS integration tests (145 tests: 14+44+10+45+3+29)
+│   └── integration/                   # BATS integration tests (147 tests: 14+46+10+45+3+29)
 ├── systemd/
     ├── system/                        #   SYSTEM scope: copied to /etc/systemd/system (root)
     │   └── tac-loopback0.service      #     WSL mirrored-networking 127.0.0.2, at boot
@@ -1521,7 +1525,7 @@ runs once per hour. If `pwsh.exe` is unreachable, the timeout prevents a hang.
 - **Fast tests:** `bats tests/tactical-console-fast.bats` (67 tests)
 - **Full tests:** `bats tests/tactical-console.bats` (387 BATS unit tests)
 - **Unit suites (622 tests in CI):** the exact set is the literal path list under "Run unit tests" in `.github/workflows/ci.yml`; nightly adds `05`–`08`, `12` and `38`. `04-llama-cpp-inventory` is excluded from both — it performs live downloads and mutates the host — and `12-gpu-exclusivity` is excluded from the CI job because it takes the CUDA card lock this box also lends to investigator's GPU pipelines.
-- **Integration suites (145 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
+- **Integration suites (147 tests overall):** both run `tests/integration/01`–`05` plus `e2e-bench-autotune` (the e2e suite re-runs its own regression subset, so it is the slow part of the gate).
 - **Lint:** `tools/lint.sh` (bash -n + shellcheck + Unicode safety) with three modes — whole repo (default), `--staged` (staged `.sh`, used by the pre-commit hook) and `--files F...` (an explicit list, used by the BATS suites) — so the shellcheck flags live in exactly one place, and shellcheck runs `-x --source-path`, which lets the module-graph pass follow the modules by name so the SC1090/SC1091 class needs no suppression *there* — the loaders' own computed paths, the optional files they source, and the tests' run-time generated copies still carry one narrow directive each (item 17.1 of `docs/inspection.md` counts 20 such lines across 13 files as of 2026-09-18, down from 68; re-measure with that item's own command, and note a looser grep over-counts, because several module headers *document* a removed file-wide disable without carrying one). shellcheck itself is pinned to 0.11.0 via `tools/install-shellcheck.sh`, which CI runs so local and CI diagnostics cannot drift (0.9.0 reported SC2317 where 0.11.0 reports SC2329 for the same code). bats is pinned the same way: `tools/install-bats.sh` installs bats-core 1.11.1, and `tools/lint.sh` resolves it by version — because the `.bats` branch asks `bats --count` whether a suite parses, and apt's 1.10.0 accepts a malformed suite that 1.11.1 rejects, so without the pin the same tree lints clean or blocks on PATH order alone. The Python side is pinned the same way: CI installs `ruff==0.15.20`, because an unpinned `ruff` took a newer release whose rule set flagged code the venv's 0.15.20 passes — pinning the version, rather than disabling a rule, is what makes local and CI agree. There is no `[tool.ruff]` config in the repo, so ruff's default rule set is what runs.
 - **Git hooks:** tracked in `tools/hooks/` (`pre-commit`, `post-commit`, `post-merge`) and activated by `git config core.hooksPath <repo>/tools/hooks`, which `install.sh` sets. They are tracked because `.git/hooks/` is not version-controlled — an inlined copy of the shellcheck loop there drifted from `tools/lint.sh` on 2026-09-15, when only one of the two copies of the flags was updated.
 - **Docs sync:** `tools/docs-sync-check.sh` (docs drift guard — fails CI on stale module counts, versions, or test totals, wherever they are stated)
