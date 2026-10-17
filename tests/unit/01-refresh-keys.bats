@@ -677,6 +677,29 @@ CFG
     [[ "$output" != *"restarted and serving"* ]]
 }
 
+@test "oc-refresh-keys does NOT restart a gateway that is ACTIVE but still starting" {
+    # v55 criterion (Wayne's order, 2026-10-17): `is-active` reports active the instant a
+    # Type=simple process spawns, so a gateway five seconds into a 2-8 minute cold start looked
+    # SETTLED and was restarted.  Measured after the 10:48:51 WSL restart: the stacked stop left
+    # two MainThread processes holding openclaw.sqlite in "offline maintenance", and the next two
+    # starts were REFUSED — three attempts and ~13 minutes to serve.
+    __mock_command_local pwsh.exe "printf '%s\\n' 'WIN_API_KEY=winsecret'"
+    # The phase never reaches `running`, and `is-active` answers ACTIVE for the whole call, which
+    # is exactly the state that fooled the old guard.
+    __so_gateway_phase() { printf 'starting\n'; }
+    sleep() { :; }
+    __mock_command_local systemctl "echo \"SYSTEMCTL_CALL: \$*\" >> \"$SYSTEMCTL_LOG\"; case \"\$*\" in *is-active*) echo active;; esac; exit 0"
+    : > "$SYSTEMCTL_LOG"
+
+    run oc-refresh-keys
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"still starting"* ]]
+    [[ "$output" == *"not stacking a restart"* ]]
+    # The assertion that matters: no restart was issued on top of a start that has not finished.
+    run grep -c 'restart' "$SYSTEMCTL_LOG"
+    [ "$output" -eq 0 ]
+}
+
 # --- the GitHub CLI credential surface (2026-09-23) -------------------------
 # gh prefers GH_TOKEN/GITHUB_TOKEN over any stored credential; with no token in
 # its environment it asks the system credential store, and that ask is what

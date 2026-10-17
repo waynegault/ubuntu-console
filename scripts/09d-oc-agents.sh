@@ -121,7 +121,21 @@
 #   [SUPERSEDED 2026-10-10 -- see v54: the ollama half of this paragraph no longer applies.
 #   ollama is retired; its config env-ref row and its auth_map tuple are both gone. The
 #   deepseek half still holds.]
-# Module Version: 54
+# Module Version: 55
+#   v55 (2026-10-17): THE STACKING GUARD REQUIRES A CONVERGED PRE-STATE, NOT `is-active`.  Wayne's
+#   order was to harden the guard once the autotune chunk halted.  `oc-refresh-keys` refused to
+#   stack only when `is-active` read activating/deactivating — and the gateway unit is Type=simple,
+#   so `is-active` reports `active` the instant the process spawns.  Measured after the 10:48:51
+#   WSL restart: systemd Started the gateway at 10:48:56, this function issued a restart at
+#   10:49:01 — five seconds in — the stacked stop left two MainThread processes behind, they held
+#   openclaw.sqlite in "offline maintenance", and the next TWO starts were REFUSED: three attempts
+#   and ~13 minutes to serve.  An `active` pre-state is now CONVERGED first: the gateway's own log
+#   must report `running` (__so_gateway_phase), bounded by the SAME deadline the post-restart wait
+#   uses, so the unit's TimeoutStartSec=180 is never exceeded.  A start that never converges is
+#   LEFT ALONE rather than restarted on top of — the env is already in the manager, so the next
+#   restart picks it up.  The unit-side half landed first (`e35754dc`: refresh-keys orders
+#   `Before=openclaw-gateway.service`); this is the belt for the case where a renamed OpenClaw
+#   unit makes that ordering inert.
 #   v43 (2026-10-01): the auth-profile keyRef COMMENTS are corrected, not the code.  Wayne ruled
 #   that the "<provider>:default" twin KEEPS provider=<real id>: measured 2026-10-01, both values
 #   give the same `secret reference was not found` for every agent, so neither is provably better
@@ -2420,17 +2434,43 @@ function oc-refresh-keys() {
         # unit is active adds to that, so the wall time is 120s plus at most the
         # probes. A start that still exceeds it is reported honestly by the `*)` row.
         local _gw_wait=120
+        # ONE deadline shared by the pre-state wait and the post-restart wait, so a cold start that
+        # is waited for on both sides still fits the unit's TimeoutStartSec=180.
+        local _gw_deadline=$(( SECONDS + _gw_wait )) _pre_phase=""
         # swallow-ok: no user manager in an agent/CI shell; the pre-state is then empty and no restart is stacked
         _pre_state=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)
+        # v55: an `active` pre-state is NOT a settled one.  Type=simple reports active the instant
+        # the process spawns, while the gateway is still opening every agent database — and a
+        # restart issued there STACKS a stop onto the start.  Measured 2026-10-17: that stack left
+        # two MainThread processes holding openclaw.sqlite in offline maintenance, and the next two
+        # starts were refused.  Converge FIRST, on the same log authority the post-restart wait
+        # uses.
+        if [[ "$_pre_state" == "active" ]]
+        then
+            for (( _i = 0; _i < _gw_wait && SECONDS < _gw_deadline; _i++ ))
+            do
+                # swallow-ok: the phase reader is a log parser; an empty read means "phase unknown", which the non-converged row below reports
+                _pre_phase=$(__so_gateway_phase openclaw-gateway.service 2>/dev/null)
+                [[ "$_pre_phase" == "running" ]] && break
+                sleep 1
+            done
+        fi
         if [[ "$_pre_state" == "activating" || "$_pre_state" == "deactivating" ]]
         then
             __tac_info "Gateway" "[already $_pre_state — not stacking a restart; env is applied]" "$C_Warning"
+        elif [[ "$_pre_state" == "active" && "$_pre_phase" != "running" ]]
+        then
+            # NEVER STACK, whatever the phase: a start that has not converged inside the bound is
+            # left alone rather than restarted on top of.  The env is already in the manager, so the
+            # next restart applies it — strictly safer than the collision this replaces.
+            local _pre_note="[active and still starting (${_pre_phase:-unknown}) — not stacking; env is applied]"
+            __tac_info "Gateway" "$_pre_note" "$C_Warning"
         elif systemctl --user restart --no-block openclaw-gateway.service 2>/dev/null
         then
             # Announce the wait before taking it: it can last two minutes now, and a
             # silent two-minute pause after the env has been applied reads as a hang.
             __tac_info "Gateway" "[restart issued — waiting up to ${_gw_wait}s for it to serve]" "$C_Dim"
-            for (( _i = 0; _i < _gw_wait; _i++ ))
+            for (( _i = 0; _i < _gw_wait && SECONDS < _gw_deadline; _i++ ))
             do
                 _gw_state=$(systemctl --user is-active openclaw-gateway.service 2>/dev/null)
                 [[ "$_gw_state" == "failed" ]] && break
