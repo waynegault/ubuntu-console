@@ -59,7 +59,12 @@
 #            NO LONGER a pause on its own - the loop keeps going while rows are owed.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 10
+# Module Version: 11
+#   v11 (2026-10-17): the ARM's refusal NAMES its bound ("arm bound 900s").  The proof that the
+#   arm and the chunk consult different bounds could not distinguish them while both refusals
+#   read identically; with the value in the message, a live run (chunk bound 0, arm bound 5, CI
+#   busy only at the arm) printed "arm bound 5s" and settled which constant is used.  No
+#   behaviour change — this is the probe's own hook made permanent.
 #   v10 (2026-10-17): A SIGNAL MUST NOT LOSE THE ARM SILENTLY, AND THE ARM GETS ITS OWN BOUND.
 #   Measured the same day: the unit was SIGTERMed (`code=killed, status=15/TERM`) at 14:07:50,
 #   seventeen minutes into `arm_restart`'s CI wait, and the campaign then sat IDLE for three
@@ -394,7 +399,7 @@ arm_restart() {
         return "$EXIT_PAUSED"
     fi
     if ! wait_for_ci_clear "$ARM_CI_WAIT_S"; then
-        printf 'NOT arming a restart: a CI job is executing on this box\n'
+        printf 'NOT arming a restart: a CI job is executing on this box (arm bound %ss)\n' "$ARM_CI_WAIT_S"
         printf '  a restart cancels it, and a cancelled run leaves main red here\n'
         printf '  re-arm by hand when the queue is empty: %s --restart --delay %s\n' \
             "$RESTART_TOOL" "$ARM_DELAY_MIN"
