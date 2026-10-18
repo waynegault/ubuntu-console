@@ -710,3 +710,32 @@ EOS
     [ "$status" -eq 0 ]
     [ "$output" -ge 1 ]
 }
+
+@test "wsl-restart: an arm records WHO asked, with the ancestor chain (v1.4.0)" {
+    # WHY.  Measured 2026-10-18: a task was registered at 14:14:57 and fired at 14:17:00, and
+    # nothing could say which process asked - the Task Scheduler log (id=106) names the USER,
+    # and 4688 has CommandLine empty because the include-command-line policy is off on this box.
+    # The tool being asked can always answer, so it does.
+    export TAC_WSL_RESTART_ARM_LOG="$SANDBOX/arms.log"
+    export QUERY_MODE=registered     # the read-back must succeed, or the arm fails for that reason
+    run bash -c "cd '$SANDBOX' && '$SCRIPT' --restart --delay 5"
+    [ "$status" -eq 0 ]
+    [ -f "$TAC_WSL_RESTART_ARM_LOG" ]
+    # The depth marker names the MODE, so an arm and a schedule are distinguishable later.
+    grep -q 'restart --delay 5' "$TAC_WSL_RESTART_ARM_LOG"
+    # Depth 0 is this script's own process; its argv must be the arm we just asked for.
+    grep -q '\[0\] pid=' "$TAC_WSL_RESTART_ARM_LOG"
+    grep -q "wsl-restart.sh --restart --delay 5" "$TAC_WSL_RESTART_ARM_LOG"
+    # ...and at least one ancestor, which is the whole point: the caller is not this script.
+    grep -q '\[1\] pid=' "$TAC_WSL_RESTART_ARM_LOG"
+}
+
+@test "wsl-restart: the arm log is written even when the arm then FAILS" {
+    # The question the log answers is "who asked", not "did it land": a failed arm is exactly
+    # when someone will want the caller named.
+    export TAC_WSL_RESTART_ARM_LOG="$SANDBOX/arms-fail.log"
+    export QUERY_MODE=broken         # a failure that is NOT absence: the arm stops there
+    run bash -c "cd '$SANDBOX' && '$SCRIPT' --restart --delay 5"
+    [ -f "$TAC_WSL_RESTART_ARM_LOG" ]
+    grep -q 'restart --delay 5' "$TAC_WSL_RESTART_ARM_LOG"
+}

@@ -99,7 +99,7 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 19
+# Module Version: 20
 #   v18 (2026-10-18): same change, one line shortened to stay under the 120-column bound (8.1.8).
 #   v17 (2026-10-18): STEP 3a STARTS THE GATEWAY AGAIN, EVEN IF IT WAS DOWN BEFORE THE RESTART.
 #   v16 stopped it before the teardown, which cured the mid-drain kill — but stopping is half the
@@ -236,7 +236,7 @@
 #   v2 (2026-10-15): record the measured Logon Mode ("Interactive only") - it is
 #   both what lets the wrapper's relaunch reach the desktop and what bounds the
 #   task to a logged-on user.
-VERSION="1.3.0"
+VERSION="1.4.0"
 
 set -uo pipefail
 
@@ -246,6 +246,15 @@ FOLDER_DEFAULT="/home/wayne/ubuntu-console"
 DELAY_MINUTES_DEFAULT=2
 WAIT_TRIES=20          # wrapper: bounded distro wait, 5 s apart (100 s)
 CLOSE_GRACE_SECONDS=15 # wrapper: bounded graceful-close wait before the forced kill
+
+# THE ARM LOG (v1.4.0).  Every arm writes WHO asked for it, before it asks Windows
+# anything: timestamp, uid, and the ancestor chain with each process's argv.  Measured need
+# (2026-10-18): a task was registered at 14:14:57 and fired at 14:17:00, and neither the
+# Task Scheduler log (id=106 names the USER, not the process) nor 4688 (CommandLine is not
+# recorded on this box - the include-command-line policy is off) could name the process that
+# asked.  The one place that can always answer is the tool being asked, so it answers here.
+# Written even when the arm later fails: the question is "who asked", not "did it land".
+ARM_LOG="${TAC_WSL_RESTART_ARM_LOG:-$HOME/.local/state/tactical-console/restart-arms.log}"
 
 # Processes whose presence means a restart would cut a row in half.  Bracket-classed
 # so the pattern cannot match a probe's own command line, and it covers the batch, the
@@ -907,8 +916,34 @@ confirm_armed() {
 }
 
 # Render the wrapper and register the one-shot task that runs it on the Windows side.
+# Who asked for this arm: the process's own uid, its argv from /proc, and up to six
+# ancestors.  `ps` would be a second dependency and can truncate argv; /proc is exact and
+# always present.  A parent that has already exited leaves a gap rather than a wrong name.
+log_caller() {
+    local _pid=$$ _depth=0 _line=""
+    # swallow-ok: the append below reports its own failure, so a mkdir problem surfaces there
+    mkdir -p "$(dirname "$ARM_LOG")" 2>/dev/null || true
+    {
+        printf '%s uid=%s pid=%s deep=%s\n' \
+            "$(date -Iseconds)" "$(id -u)" "$$" "$1"
+        while [[ -n "$_pid" && "$_pid" != "0" && "$_depth" -lt 6 ]]; do
+            local _cmd _ppid
+            # swallow-ok: an ancestor that already exited has no cmdline/status; the chain prints a named gap instead
+            _cmd=$(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null)
+            # swallow-ok: same gap as the line above - a missing PPid ends the chain, never a wrong name
+            _ppid=$(awk '/^PPid:/{print $2}' "/proc/$_pid/status" 2>/dev/null)
+            printf '  [%s] pid=%s ppid=%s %s\n' "$_depth" "$_pid" "${_ppid:-?}" \
+                "${_cmd:-<exited, argv unavailable>}"
+            _pid="${_ppid:-}"
+            _depth=$(( _depth + 1 ))
+        done
+    } >> "$ARM_LOG" || _say "WARN: could not write the arm log at $ARM_LOG"
+}
+
+# Arm the next restart through the TRACKED tool, and read its registration back.
 arm_restart() {
     local _folder="$1" _delay="$2" _st _sd _create_out
+    log_caller "restart --delay $_delay"
     if ! check_preconditions; then
         return 1
     fi
