@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 2
+# Module Version: 3
 #   v1 (2026-10-18): the FLEET GATE — a distro reset must not cut live agent turns.
 # ─────────────────────────────────────────────────────────────────────────────
 # fleet-quiesce.sh — is the FLEET quiet enough to reset this distro?
@@ -39,7 +39,7 @@
 #   TAC_FLEET_STATUS_CMD       command printing the status JSON  (default: openclaw status --json)
 #   TAC_FLEET_BOUND_S          drain bound in seconds            (default: 330 = the gateway's own 325 s shutdown budget + 5)
 #   TAC_FLEET_POLL_S           seconds between readings          (default: 20)
-#   TAC_FLEET_PROBE_TIMEOUT_S  per-reading timeout               (default: 25)
+#   TAC_FLEET_PROBE_TIMEOUT_S  per-reading timeout               (default: 90)
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
@@ -59,7 +59,13 @@ export PATH="$HOME/.local/bin:/home/linuxbrew/.linuxbrew/bin:$PATH"
 # wrapper dropped, so "skip" costs a retry instead of parking the campaign.
 BOUND="${TAC_FLEET_BOUND_S:-330}"
 POLL="${TAC_FLEET_POLL_S:-20}"
-PROBE_TIMEOUT="${TAC_FLEET_PROBE_TIMEOUT_S:-25}"
+# 90 s, measured rather than guessed (2026-10-18 17:44).  `openclaw status --json` is a node
+# process that reads live gateway state; it took 15.5 s at load 7 and was still running at 25 s
+# under a spike, which the old bound KILLED - so the gate answered UNKNOWN and the wrapper
+# skipped, correctly but for a reason that would have repeated: a routinely unanswerable gate
+# turns into skip/churn now that the keeper re-arms a dropped fire.  UNKNOWN still fails closed;
+# it just has to mean "the probe is broken", not "the box was busy".
+PROBE_TIMEOUT="${TAC_FLEET_PROBE_TIMEOUT_S:-90}"
 STATUS_CMD="${TAC_FLEET_STATUS_CMD:-openclaw status --json}"
 
 QUIET=0
