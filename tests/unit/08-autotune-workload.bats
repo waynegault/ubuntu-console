@@ -68,7 +68,54 @@ EOF
     local header
     header=$(head -1 "$LLM_REGISTRY")
     # The header is the schema: pin its TAIL BY NAME, not its field count.
-    [[ "$header" == *"|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state" ]]
+    [[ "$header" == *"|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy" ]]
+}
+
+@test "ctxbudget-003: window policy classifies the observed profile (pure, no GPU)" {
+    # 1000 observed + the default 4096 reserve = 5096 -> 5120 (rounded UP).
+    [[ "$(__autotune_window_policy 4096 "")" == "profile-missing" ]]
+    [[ "$(__autotune_window_policy 4096 0)" == "profile-missing" ]]
+    [[ "$(__autotune_window_policy 4096 "n/a")" == "profile-missing" ]]
+    [[ "$(__autotune_window_policy 4096 1000)" == "profile-under:5120" ]]
+    [[ "$(__autotune_window_policy 5120 1000)" == "profile-fits:5120" ]]
+    [[ "$(__autotune_window_policy 8192 1000)" == "profile-over:5120" ]]
+    # The reserve is an argument, so an explicit value must be honoured — and a
+    # 1024-token observed prompt fits exactly in a 1024 window with reserve 0.
+    [[ "$(__autotune_window_policy 2048 1000 1024)" == "profile-fits:2048" ]]
+    [[ "$(__autotune_window_policy 1024 1000 0)" == "profile-fits:1024" ]]
+}
+
+@test "ctxbudget-003: profile-save records and verifies ctx_policy (col 45)" {
+    mkdir -p "$(dirname "$LLM_REGISTRY")"
+    {
+        printf '%s\n' "$LLM_REGISTRY_HEADER"
+        printf '%s\n' "1|Model One|model-one.gguf|1.0G|Q4_K_M/q8_0|qwen2|24|4096|6|1024|256|1|1024|llama_server|auto|on|0|no|no|no"
+    } > "$LLM_REGISTRY"
+    __llm_autotune_profile_save "1" "native" "4608" "1024" "256" "1" "256" "12.3" \
+        "" "" "" "" "" "" "" "Q4_K_M/q8_0/q8_0" "24" \
+        "" "" "" "" "" "" "legal" "" "" "" "" "" "" "profile-over:5120"
+    [[ "$(grep "^1|" "$LLM_REGISTRY" | cut -d'|' -f45)" == "profile-over:5120" ]]
+    # A verdict outside the helper's grammar is dropped, never written unchecked:
+    # the column keeps its previous value rather than taking the bad label.
+    __llm_autotune_profile_save "1" "native" "4608" "1024" "256" "1" "256" "12.3" \
+        "" "" "" "" "" "" "" "Q4_K_M/q8_0/q8_0" "24" \
+        "" "" "" "" "" "" "legal" "" "" "" "" "" "" "not-a-verdict"
+    [[ "$(grep "^1|" "$LLM_REGISTRY" | cut -d'|' -f45)" == "profile-over:5120" ]]
+    # The read-back must FAIL when col 45 is not what was requested.  Tamper with
+    # the row between the writer's mv and its verification: a save that reports
+    # success here has no ctx_policy verification at all.
+    mv() {
+        command mv "$@"
+        awk -F'|' -v OFS='|' '$1 == "1" { $45 = "tampered" } { print }' \
+            "$LLM_REGISTRY" > "${LLM_REGISTRY}.tamper"
+        command mv "${LLM_REGISTRY}.tamper" "$LLM_REGISTRY"
+    }
+    if __llm_autotune_profile_save "1" "native" "4608" "1024" "256" "1" "256" "12.3" \
+        "" "" "" "" "" "" "" "Q4_K_M/q8_0/q8_0" "24" \
+        "" "" "" "" "" "" "legal" "" "" "" "" "" "" "profile-over:5120"; then
+        echo "a tampered ctx_policy must fail the write verification" >&2
+        return 1
+    fi
 }
 
 @test "autotune-001: autotune-model.sh accepts --workload and env default chat" {

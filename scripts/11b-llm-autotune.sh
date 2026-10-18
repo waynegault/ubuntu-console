@@ -1,7 +1,12 @@
 # shellcheck shell=bash
 # ─── Module: 11b-llm-autotune ───────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 27
+# Module Version: 28
+#   v28 (2026-10-18): __autotune_window_policy — a pure verdict comparing a certified MAX-ctx
+#   window against the investigator-observed input profile (bench_avg_prompt_tokens, col 37).
+#   __llm_autotune_profile_save takes an optional 31st arg and writes ctx_policy (col 45),
+#   verifying the re-read value when one was requested.  No scoring or saved-ctx behaviour
+#   changes: certification remains the highest window that holds LLM_MIN_TPS (CTXBUDGET-003).
 #   v27 (2026-10-12): __llm_autotune_profile_save takes five optional MEASUREMENT args
 #   (26-30) and writes registry columns 40-44 when provided: how a certified tps was
 #   measured (load, sample count, spread, position drift, certified|indicative).  Empty
@@ -23,7 +28,7 @@
 # @exports: __llm_autotune_done_for_model,
 #   __llm_autotune_profile_save,
 #   __llm_autotune_estimate_ctx_start, __llm_autotune_profiles_remap_by_registry,
-#   __autotune_ctx_bounds
+#   __autotune_ctx_bounds, __autotune_window_policy
 # Idempotent include guard: sub-modules are sourced both by their thin
 # loader and directly by the profile/env loaders, so run the body once.
 [[ -n "${__TAC_MOD_11B_LLM_AUTOTUNE_LOADED:-}" ]] && return 0
@@ -100,6 +105,58 @@ function __autotune_ctx_bounds() {
     (( min_ctx > max )) && min_ctx=$max
 
     printf '%s %s %s\n' "$start" "$max" "$min_ctx"
+}
+
+# ---------------------------------------------------------------------------
+# __autotune_window_policy — compare a certified window against the observed input
+# profile, as a pure function.
+#   args: ctx avg_prompt_tokens [reserve]
+#   stdout: profile-missing | profile-(fits|over|under):<recommended>
+#
+# CERTIFICATION STAYS MAX-CTX.  autotune-model.sh certifies the HIGHEST ctx that holds
+# LLM_MIN_TPS at a filled cache (v6 semantics; D1(a)/D2(b), and the 28 rows at HEAD were
+# certified that way).  Re-defining certification as "smallest sufficient window" would
+# invalidate those rows, so this function only REPORTS the relationship between the
+# certified window and the measured prompt profile; it changes no score and no saved ctx.
+#
+# The observed profile is bench_avg_prompt_tokens (registry col 37), written by the
+# investigator's bench companion.  A recommended window leaves room for the observed
+# prompt plus LLM_CTX_OUTPUT_RESERVE (default 4096) of generation, rounded UP to a
+# 1024-token boundary.  An empty/0/non-numeric profile is profile-missing — never a
+# silent pass; at HEAD every row has cols 35-37 empty, so "no data" is the common case.
+#
+# REF: "Your local LLM is quietly wasting RAM on context you never use, and one setting
+# gives it back" (Anurag Singh, XDA, 2026-10-05) —
+# https://www.xda-developers.com/local-llm-wasting-ram-context-never-use-one-setting-gives-back/
+# Insight ids: TDS-ollama-context-window-ram#2, TDS-ollama-context-window-ram#5.
+# Pure: no file, no GPU — unit-tested in tests/unit/08-autotune-workload.bats.
+# ---------------------------------------------------------------------------
+function __autotune_window_policy() {
+    local ctx="${1:-}" avg="${2:-}" reserve="${3:-${LLM_CTX_OUTPUT_RESERVE:-4096}}"
+    local rec
+
+    if ! [[ "$reserve" =~ ^[0-9]+$ ]]; then
+        echo "WARN: output reserve '$reserve' is not a non-negative integer — using 4096" >&2
+        reserve=4096
+    fi
+    if ! [[ "$ctx" =~ ^[0-9]+$ ]]; then
+        echo "WARN: ctx '$ctx' is not an integer — profile-missing" >&2
+        printf 'profile-missing\n'
+        return 0
+    fi
+    if ! [[ "$avg" =~ ^[0-9]+$ ]] || (( avg == 0 )); then
+        printf 'profile-missing\n'
+        return 0
+    fi
+
+    rec=$(( ((avg + reserve + 1023) / 1024) * 1024 ))
+    if (( ctx < rec )); then
+        printf 'profile-under:%s\n' "$rec"
+    elif (( ctx > rec )); then
+        printf 'profile-over:%s\n' "$rec"
+    else
+        printf 'profile-fits:%s\n' "$rec"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -248,12 +305,16 @@ function __llm_autotune_done_for_model() {
 #                    spec_draft_ngl(30), spec_draft_device(31),
 #                    spec_accept_len(32)
 #   v6 (37 cols)   — AUTOTUNE workload(33) + ttft_ms(34) + bench_*(35-37)
+#   v7 (45 cols)   — the 2b measurement columns 40-44 and ctx_policy(45), a recorded
+#                    relationship between the certified MAX-ctx window and the observed
+#                    input profile; empty means no verdict was requested.
 # Signature:
 #   __llm_autotune_profile_save <model> <backend> <ctx> <batch> <ubatch>
 #       <parallel> <fit> <tps> [stamp] [prefill_tps] [p2_ctx] [p2_batch]
 #       [p2_ubatch] [p2_tps] [p2_prefill] [kv_quant] [ngl]
 #       [spec_type] [spec_draft_model] [spec_n_max] [spec_ngl] [spec_device]
-#       [spec_accept_len] [workload] [ttft_ms]
+#       [spec_accept_len] [workload] [ttft_ms] [meas_load] [meas_n]
+#       [meas_spread_pct] [meas_drift_pct] [meas_state] [ctx_policy]
 #   Profile 1 (existing columns) = max-ctx config; prefill_tps (col 21) is its
 #   prompt-eval throughput. Profile 2 (cols 22-26) = max-decode-TPS config for
 #   interactive flows. kv_quant (col 5, "QUANT/type-k/type-v"), ngl (col 7)
@@ -263,7 +324,10 @@ function __llm_autotune_done_for_model() {
 #   (chat|legal|agentic|mix, AUTOTUNE-001); ttft_ms (col 34) is the measured
 #   time-to-first-token at the winning ctx (AUTOTUNE-003).  The bench_*
 #   columns (35-37) are written by the investigator's bench companion
-#   (AUTOTUNE-005), never by this function.
+#   (AUTOTUNE-005), never by this function.  ctx_policy (col 45) is the verdict of
+#   __autotune_window_policy over the observed bench_avg_prompt_tokens: it records
+#   that a certified MAX-ctx window over/under/fits what the investigator actually
+#   sends, or profile-missing when no profile was measured.
 # @returns 0 on success, 1 on validation/write failure.
 # ---------------------------------------------------------------------------
 function __llm_autotune_profile_save() {
@@ -293,6 +357,7 @@ function __llm_autotune_profile_save() {
     local workload="${24:-}"
     local ttft_ms="${25:-}"
     local meas_load="${26:-}" meas_n="${27:-}" meas_spread_pct="${28:-}" meas_drift_pct="${29:-}" meas_state="${30:-}"
+    local ctx_policy="${31:-}"
     local profile_file="$LLM_REGISTRY"
 
     # $1 is a row NUMBER or a model FILE name; both are accepted so existing callers
@@ -345,6 +410,12 @@ function __llm_autotune_profile_save() {
     [[ "$meas_spread_pct" =~ ^[0-9]+(\.[0-9]+)?$ ]] || meas_spread_pct=""
     [[ "$meas_drift_pct" =~ ^[0-9]+(\.[0-9]+)?$ ]] || meas_drift_pct=""
     [[ "$meas_state" == "certified" || "$meas_state" == "indicative" ]] || meas_state=""
+    # ctx_policy (col 45): only the verdict grammar __autotune_window_policy emits is
+    # accepted; anything else is dropped rather than written as an unchecked label.
+    if ! [[ "$ctx_policy" == "profile-missing" \
+        || "$ctx_policy" =~ ^profile-(fits|over|under):[0-9]+$ ]]; then
+        ctx_policy=""
+    fi
 
     # Registry hygiene: persist measured floats at a maximum of 2 decimal
     # places. The server timings carry full float64 precision (e.g. prefill
@@ -407,6 +478,7 @@ function __llm_autotune_profile_save() {
         -v meas_spread_val="$meas_spread_pct" \
         -v meas_drift_val="$meas_drift_pct" \
         -v meas_state_val="$meas_state" \
+        -v ctx_policy_val="$ctx_policy" \
         -v header="$LLM_REGISTRY_HEADER" \
         'BEGIN {
             OFS="|"
@@ -449,6 +521,9 @@ function __llm_autotune_profile_save() {
                     $40 = meas_load_val; $41 = meas_n_val; $42 = meas_spread_val
                     $43 = meas_drift_val; $44 = meas_state_val
                 }
+                # ctx_policy (45) is written only when a verdict was requested, so a
+                # caller that does not evaluate the observed profile leaves it alone.
+                if (ctx_policy_val != "") $45 = ctx_policy_val
             }
             # SPEC-DEC-002: clamp the stored thread count to the i9-12900HK
             # P-core ceiling (6) on every registry write — a pre-cap row must
@@ -469,14 +544,22 @@ function __llm_autotune_profile_save() {
     # Write verification (2026-10-12).  A registry write has silently VANISHED before
     # (2026-09-22: the row-21 retune's saved tps never persisted), and an awk whose $3
     # matched no row changed nothing and still returned 0.  Read the row BACK after the
-    # mv and fail closed unless field 17 is the requested tps and field 18 is 'yes'.
+    # mv and fail closed unless field 17 is the requested tps and field 18 is 'yes' —
+    # and, when a ctx_policy was requested, unless field 45 is exactly that verdict too.
     # No message here: the CALLER must treat a non-zero return as fatal, not a warning.
-    local _verified=""
+    local _verified="" _v_tps="" _v_autotuned="" _v_policy="" _v_rest=""
     if ! _verified="$(awk -F'|' -v f="$model_file" \
-            '$3 == f {print $17 "|" $18; exit}' "$profile_file")"; then
+            '$3 == f {print $17 "|" $18 "|" $45; exit}' "$profile_file")"; then
         _verified=""
     fi
-    if [[ "$_verified" != "$tps|yes" ]]; then
+    _v_tps="${_verified%%|*}"
+    _v_rest="${_verified#*|}"
+    _v_autotuned="${_v_rest%%|*}"
+    _v_policy="${_v_rest#*|}"
+    if [[ "$_v_tps" != "$tps" || "$_v_autotuned" != "yes" ]]; then
+        return 1
+    fi
+    if [[ -n "$ctx_policy" && "$_v_policy" != "$ctx_policy" ]]; then
         return 1
     fi
 }

@@ -2,7 +2,12 @@
 # ─── Module: 01-constants ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 31
+# Module Version: 32
+#   v32 (2026-10-18): LLM_REGISTRY_HEADER gains ctx_policy (45) — the recorded verdict of the
+#   observed-input-profile check (scripts/check-ctx-profile.sh, CTXBUDGET-003).  Certification
+#   stays MAX-CTX (the highest window that holds LLM_MIN_TPS; v6 semantics, D1(a)/D2(b)); the
+#   column records only whether that window over/under/fits the investigator's observed prompt
+#   profile, and profile-missing means no profile was measured — never a silent pass.
 #   v31 (2026-10-15): LLAMA_REPEAT_PENALTY / LLAMA_REPEAT_LAST_N declare the anti-repetition
 #   sampler a NEW registry row is seeded with (`model scan`, columns 38/39); as with
 #   LLAMA_BATCH_SIZE and its neighbours, the fallback value lives at the use site.
@@ -191,7 +196,10 @@ fi
 # writer drifts the first time a column is added — which is exactly what happened
 # when the remap kept emitting its 32-column copy after the schema reached 39
 # (card e0579318).  The field descriptions below cover the first 20 columns.
-export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state'
+# ctx_policy (45) records the MAX-CTX certification against the observed input profile
+# (bench_avg_prompt_tokens, col 37); profile-missing means col 37 was never measured — it is
+# a missing measurement, not a pass.
+export LLM_REGISTRY_HEADER='#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy'
 export LLM_REGISTRY="$HOME/.llm/models.conf"
 export LLM_DEFAULT_FILE="${LLM_DEFAULT_FILE:-$HOME/.llm/default_model.conf}"
 export ACTIVE_LLM_FILE="/dev/shm/active_llm"

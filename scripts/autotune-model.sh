@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 83
+# Module Version: 84
+#   v84 (2026-10-18): before the save, the row's observed input profile (col 37) is run
+#   through __autotune_window_policy and the verdict is printed AND recorded in ctx_policy
+#   (col 45).  This is the card's check/flag route: certification remains the HIGHEST ctx
+#   that holds LLM_MIN_TPS (v6 semantics, D1(a)/D2(b)); no score or saved ctx changes, and
+#   an empty profile prints profile-missing rather than passing silently (CTXBUDGET-003).
 #   v81 (2026-10-15): legal/agentic profiles run one deterministic task-contract probe at
 #   the final winner before persistence; malformed legal labels or agentic tool-call JSON
 #   refuse the save. Probe calls are separate from the throughput samples and use no judge.
@@ -2811,11 +2816,30 @@ if [[ $ANY_OK == true && -n $BEST_COMBO ]]; then
             __autotune_quality_error "task-quality contract was not verified — the winner was NOT saved"
             exit 1
         fi
+        # CTXBUDGET-003: report how the certified window relates to the observed input
+        # profile (col 37).  The winner above stays the HIGHEST ctx that holds LLM_MIN_TPS
+        # (v6 semantics; D1(a)/D2(b)) — this verdict changes no score and no saved ctx.
+        # It is recorded in col 45 so an over/under-reserved row is visible rather than
+        # silently assumed to fit; profile-missing is a missing measurement, not a pass.
+        _row_avg_prompt=$(awk -F'|' -v f="$MODEL_FILE" '$3 == f {print $37; exit}' "$LLM_REGISTRY")
+        _ctx_policy=$(__autotune_window_policy "$BEST_CTX" "$_row_avg_prompt")
+        case "$_ctx_policy" in
+            profile-missing)
+                echo "  profile-missing (no observed profile; max-ctx certification unchanged)" ;;
+            profile-fits:*)
+                echo "  ${_ctx_policy}" ;;
+            profile-over:*)
+                echo "  ${_ctx_policy} (a smaller window would cover the observed profile)" ;;
+            profile-under:*)
+                echo "  WARNING: ${_ctx_policy} — the observed prompt does not fit this window" ;;
+            *)
+                echo "  WARNING: window policy returned an unexpected verdict '${_ctx_policy}'" ;;
+        esac
         __llm_autotune_profile_save "$MODEL_FILE" "native" "$BEST_CTX" "$BEST_B" "$BEST_U" "$WIN_PARALLEL" "256" "$BEST_TPS" \
             "" "$BEST_PREFILL" "${_P2ARGS[@]}" "$KV_QUANT_SAVE" "$WIN_NGL" \
             "$WIN_SPEC_TYPE" "" "$WIN_SPEC_N_MAX" "" "" "$WIN_SPEC_ACCEPT_LEN" \
             "$WORKLOAD" "$TTFT_MS" \
-            "$_row_load" "5" "" "$_meas_drift_pct" "$_meas_state" \
+            "$_row_load" "5" "" "$_meas_drift_pct" "$_meas_state" "$_ctx_policy" \
             || { echo "  ERROR: registry write not verified - the winner was NOT saved"; exit 1; }
     else
         # A missing helper used to take NEITHER branch and then still print the

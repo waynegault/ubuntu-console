@@ -499,7 +499,7 @@ _mk_row() {
     f[26]='ngram'; f[27]=''; f[28]='4'; f[29]=''; f[30]=''; f[31]='0'
     f[32]="$6"; f[33]='1000'; f[34]='8192'; f[35]='4'; f[36]='700'
     f[37]='1.1'; f[38]='256'; f[39]='1.0'; f[40]='3'; f[41]='0.1'; f[42]='0.0'
-    f[43]="$7"
+    f[43]="$7"; f[44]=''
     local IFS='|'
     printf '%s\n' "${f[*]}"
 }
@@ -507,14 +507,14 @@ _mk_row() {
 @test "integration: model-recommend ranks the MEASURED workload and refuses the name" {
     local reg="$LLM_REGISTRY"
     {
-        # The header row is the schema itself: 44 named columns, read positionally by
+        # The header row is the schema itself: 45 named columns, read positionally by
         # model-recommend.  Split so the line stays under the 120-character house rule.
         echo "#|name|file|size_gb|quant_cache|arch|gpu_layers|ctx|threads|batch|ubatch|parallel|\
 fit_target_mb|backend|mmap_mode|flash_attn|tps|autotuned|is_default|in_vram|prefill_tps|\
 p2_ctx|p2_batch|p2_ubatch|p2_tps|p2_prefill|spec_type|spec_draft_model|spec_draft_n_max|\
 spec_draft_ngl|spec_draft_device|spec_accept_len|workload|ttft_ms|bench_ctx|\
 bench_max_chunks|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|\
-meas_spread|meas_drift|meas_state"
+meas_spread|meas_drift|meas_state|ctx_policy"
         _mk_row 1 "Qwen Coder Small" "coder.gguf" "2.0G" "50.0" "chat" "certified"
         _mk_row 2 "Plain Model" "plain.gguf" "2.0G" "12.0" "agentic" "certified"
         _mk_row 3 "Indicative Model" "ind.gguf" "2.0G" "25.0" "agentic" "indicative"

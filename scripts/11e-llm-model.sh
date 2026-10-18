@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # --- Module: 11e-llm-model ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 64
+# Module Version: 65
+#   v65 (2026-10-18): the three fixed `read -r` row lists bind ctx_policy (col 45) as a
+#   trailing, unread position holder, so the new 45th field cannot be glued onto meas_state
+#   by bash's last-variable-gets-the-rest rule (CTXBUDGET-003; no output change).
 #   v64 (2026-10-16): `model list` SHOWS the provenance columns.  The registry stores cols 40-44
 #   (meas_load, meas_n, meas_spread_pct, meas_drift_pct, meas_state - added by 01-constants v29) and
 #   `model scan` has emitted them since, but NO reader surfaced them: the table printed ATUNE, the
@@ -498,7 +501,7 @@ function __model_list() {
     then
         printf '{\n  "models": [\n'
         local first=1
-        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local quant_rating="unknown"
@@ -531,7 +534,7 @@ function __model_list() {
 
     if [[ "$output_mode" == "plain" ]]
     then
-        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state
+        while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy
         do
             [[ "$num" == "#" || -z "$num" ]] && continue
             local status="idle"
@@ -552,9 +555,9 @@ function __model_list() {
     _list_rule="${_list_rule// /${BOX_SL}}"
     printf "${C_Dim}  %s${C_Reset}\n" "$_list_rule"
 
-    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state
+    local num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy
     # Trailing fields bound for position only, marked unread (SC2034).
-    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram _prefill_tps _p2_ctx _p2_batch _p2_ubatch _p2_tps _p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread meas_drift meas_state _ctx_policy
     do
         [[ "$num" == "#" || -z "$num" ]] && continue
         local quant_rating="unknown"

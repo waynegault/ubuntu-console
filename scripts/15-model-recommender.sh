@@ -2,7 +2,10 @@
 # ─── Module: 15-model-recommender ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
-# Module Version: 7
+# Module Version: 8
+#   v8 (2026-10-18): the fixed `read -r` row list binds ctx_policy (col 45) as a trailing,
+#   unread position holder so the new 45th field cannot be glued onto meas_state by bash's
+#   last-variable-gets-the-rest rule (CTXBUDGET-003; no scoring or output change).
 #   v7 (2026-10-17): the use-case score reads the MEASURED workload, not the model's NAME.
 #   v6 left "use case match" as a substring test on the name ("coder"/"code", "qwen"/"llama",
 #   "mistral"/"phi"), so a model certified on `chat` could win a `coding` request and a name was
@@ -120,7 +123,7 @@ function model-recommend() {
     #   +2 for architecture match (qwen/llama for reasoning)
     #   +1 for high TPS (>30) on a CERTIFIED row (v6)
     # Only show models that fit within 80% of VRAM
-    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread _meas_drift meas_state
+    while IFS='|' read -r num name file size quant_cache arch gpu_layers ctx threads batch ubatch parallel fit_target_mb backend mmap_mode flash_attn tps autotuned is_default in_vram prefill_tps p2_ctx p2_batch p2_ubatch p2_tps p2_prefill _spec_type _spec_draft_model _spec_draft_n_max _spec_draft_ngl _spec_draft_device _spec_accept_len _workload _ttft_ms _bench_ctx _bench_max_chunks _bench_avg_prompt_tokens _repeat_penalty _repeat_last_n _meas_load _meas_n _meas_spread _meas_drift meas_state _ctx_policy
     do
         # Skip comments and empty lines
         [[ -z "$num" || "$num" == "#"* ]] && continue

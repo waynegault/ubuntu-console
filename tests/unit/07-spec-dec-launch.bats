@@ -98,7 +98,7 @@ EOF
     # are the spec, the count is arithmetic that a schema change moves.
     local header
     header=$(head -1 "$LLM_REGISTRY")
-    [[ "$header" == *"|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state" ]]
+    [[ "$header" == *"|bench_avg_prompt_tokens|repeat_penalty|repeat_last_n|meas_load|meas_n|meas_spread_pct|meas_drift_pct|meas_state|ctx_policy" ]]
 }
 
 @test "spec-dec-004: remap carries the spec fields across a renumber" {
