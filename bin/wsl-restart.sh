@@ -95,7 +95,17 @@
 # wrapper's log is the other tell.
 #
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
-# Module Version: 16
+# Module Version: 18
+#   v18 (2026-10-18): same change, one line shortened to stay under the 120-column bound (8.1.8).
+#   v17 (2026-10-18): STEP 3a STARTS THE GATEWAY AGAIN, EVEN IF IT WAS DOWN BEFORE THE RESTART.
+#   v16 stopped it before the teardown, which cured the mid-drain kill — but stopping is half the
+#   job: `enabled` is not `running`, so a gateway that was ALREADY down (a failed start, an update
+#   window, a hand stop) stayed down across the reboot, because the only thing that normally starts
+#   it is the boot itself.  Ordered by Wayne: "update the restart code to restart gateway even if
+#   the gatway was down before restart".  Step 3a runs `gateway-quiesce.sh --ensure-running` through
+#   the same hop, which issues `systemctl --user start` — idempotent, so it is a no-op when the boot
+#   already brought the unit up, and never a `restart` that would stack a second stop on a gateway
+#   still cold-starting.  Bounded and non-gating: a refusal is logged and the relaunch proceeds.
 #   v16 (2026-10-17): STEP 1b QUIESCES THE GATEWAY BEFORE THE VM IS TORN DOWN.  `wsl.exe
 #   --shutdown` kills every process in the distro, and a gateway killed that way is killed
 #   MID-DRAIN.  Measured at the 12:41 restart: `[admission] closed: stop (SIGTERM)` at 12:41:21,
@@ -609,6 +619,27 @@ render_quiesce_step() {
         ''
 }
 
+# STEP 3a — the gateway is STARTED again once the VM answers (v17).  Step 1b stops it before
+# the teardown, but stopping is only half the job: `enabled` is not `running`, so a gateway
+# that was ALREADY down before the restart (a failed start, an update window, a hand stop)
+# stayed down, because the only thing that normally starts it is the boot itself.  The
+# helper's `--ensure-running` uses `systemctl --user start` — idempotent, so it is a no-op
+# when the boot already brought the unit up, and never a `restart` that would stack a second
+# stop on a gateway still cold-starting.  Bounded, and it never gates the relaunch.
+render_gateway_start_step() {
+    printf '%s\r\n' \
+        '' \
+        'REM 3a. START the OpenClaw gateway again - even if it was down BEFORE the restart.' \
+        'REM     Step 1b stopped it; an enabled unit normally returns at boot, but a gateway' \
+        'REM     that was already down (failed start, update window, hand stop) would stay' \
+        'REM     down. `systemctl --user start` is a no-op when it is already running, so this' \
+        'REM     never stacks a restart. Bounded; a refusal is logged and the relaunch' \
+        'REM     proceeds - the exit code is reported, never trusted to be zero.' \
+        "wsl.exe -d ${DISTRO} -u wayne -- ${QUIESCE_CMD_UNIX} --ensure-running >> \"%LOG%\" 2>&1" \
+        "if errorlevel 1 echo [%DATE% %TIME%] WARN: gateway start unconfirmed - see ensure: >> \"%LOG%\"" \
+        ''
+}
+
 # The wrapper that runs on the Windows side.  CRLF is deliberate: cmd.exe parses a
 # LF-only .cmd unreliably around labels and goto, and this file is full of both.
 # `_mode` is `oneshot` (fired once, deletes its own registration) or `scheduled`
@@ -693,6 +724,8 @@ render_wrapper() {
         "echo [%DATE% %TIME%] WARN: distro did not answer after ${WAIT_TRIES} tries >> \"%LOG%\"" \
         ':relaunch' \
         ''
+    # STEP 3a — the gateway is STARTED again once the distro answers (v17).
+    render_gateway_start_step
     # The compression step prints itself (render_compaction_step): inlining it pushed this
     # function past the §18.3 10.4 hundred-line bound, and the STEP LIST is what a reader
     # comes here for.

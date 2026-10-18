@@ -201,7 +201,7 @@ _line_of() {
     printf '%s\n' "$1" | awk -v pat="$2" 'index($0, pat) { print NR; exit }'
 }
 
-@test "wsl-restart: the wrapper runs the five steps in order" {
+@test "wsl-restart: the wrapper runs its steps in order" {
     run "$SCRIPT" --dry-run
     [ "$status" -eq 0 ]
 
@@ -214,6 +214,11 @@ _line_of() {
     quiesce_n=$(_line_of "$output" 'gateway-quiesce.sh')
     shutdown_n=$(_line_of "$output" 'wsl.exe --shutdown')
     wait_n=$(_line_of "$output" ':wait_distro')
+    # v17: and it is STARTED again once the VM answers.  Stopping alone leaves a gateway that
+    # was already down (failed start, update window, hand stop) down — `enabled` is not
+    # `running`.  Before the relaunch, so the client comes back to a serving gateway; after
+    # the shutdown, because a start aimed at a torn-down distro starts nothing.
+    gw_start_n=$(_line_of "$output" 'gateway-quiesce.sh --ensure-running')
     relaunch_n=$(_line_of "$output" '--remote wsl+Ubuntu-24.04')
     delete_n=$(_line_of "$output" 'schtasks.exe /delete /f /tn tac-wsl-restart')
 
@@ -222,14 +227,69 @@ _line_of() {
     [ "$quiesce_n" -gt 0 ]
     [ "$shutdown_n" -gt 0 ]
     [ "$wait_n" -gt 0 ]
+    [ "$gw_start_n" -gt 0 ]
     [ "$relaunch_n" -gt 0 ]
     [ "$delete_n" -gt 0 ]
 
     [ "$close_n" -lt "$quiesce_n" ]
     [ "$quiesce_n" -lt "$shutdown_n" ]
     [ "$shutdown_n" -lt "$wait_n" ]
-    [ "$wait_n" -lt "$relaunch_n" ]
+    [ "$wait_n" -lt "$gw_start_n" ]
+    [ "$gw_start_n" -lt "$relaunch_n" ]
     [ "$relaunch_n" -lt "$delete_n" ]
+}
+
+@test "gateway-quiesce --ensure-running STARTS a gateway that was down, and no-ops when it is up" {
+    # Catches the helper the restart shipped with before v2: it could only STOP, so a gateway
+    # that was already down before the restart (failed start, update window, hand stop) stayed
+    # down, because nothing but the boot ever started it.  Also catches `restart` used instead
+    # of `start` (it would stack a second stop on a unit still cold-starting) and a single
+    # attempt that gives up before the user manager answers.
+    local stub="$BATS_TEST_TMPDIR/bin" helper="$REPO_ROOT/bin/gateway-quiesce.sh"
+    mkdir -p "$stub"
+    cat > "$stub/systemctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_LOG"
+case "$*" in
+    *is-active*)
+        if [ "${STUB_ACTIVE:-0}" = "1" ]; then exit 0; fi
+        exit 3 ;;
+    *start*)
+        if [ "${STUB_START_FAIL:-0}" = "1" ]; then exit 1; fi
+        exit 0 ;;
+esac
+exit 0
+STUB
+    chmod +x "$stub/systemctl"
+    export PATH="$stub:$PATH"
+    export STUB_LOG="$BATS_TEST_TMPDIR/systemctl.log"
+    export TAC_QUIESCE_BOUND_S=2
+
+    # (1) DOWN before the restart: it must be STARTED — never restarted, never stopped.
+    export STUB_ACTIVE=0
+    : > "$STUB_LOG"
+    run bash "$helper" --ensure-running
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"is NOT running"* ]] || { echo "a stopped gateway must be reported as started (got '$output')"; return 1; }
+    grep -q '^--user start openclaw-gateway.service$' "$STUB_LOG" \
+        || { echo "the helper must call systemctl start (log: $(tr '\n' ';' < "$STUB_LOG"))"; return 1; }
+    ! grep -q 'restart' "$STUB_LOG" || { echo "start, never restart — a restart stacks a second stop"; return 1; }
+    ! grep -q 'stop' "$STUB_LOG" || { echo "the up half must never stop the unit"; return 1; }
+
+    # (2) UP already: a no-op, so it cannot bounce a healthy or still-starting gateway.
+    export STUB_ACTIVE=1
+    : > "$STUB_LOG"
+    run bash "$helper" --ensure-running
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"already running"* ]] || { echo "a running gateway must be a no-op (got '$output')"; return 1; }
+    ! grep -qE '^--user (start|restart|stop)' "$STUB_LOG" || { echo "no start/stop against a running gateway"; return 1; }
+
+    # (3) The start is REFUSED: bounded, and reported rather than claimed as success.
+    export STUB_ACTIVE=0 STUB_START_FAIL=1
+    : > "$STUB_LOG"
+    run bash "$helper" --ensure-running
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"could not start"* ]] || { echo "a refused start must be reported (got '$output')"; return 1; }
 }
 
 @test "wsl-restart: the wrapper is CRLF throughout (cmd.exe parses LF-only .cmd badly)" {
