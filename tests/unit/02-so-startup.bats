@@ -704,4 +704,57 @@ __so_healthy_prelude() {
     [[ "$output" != *"Daemon guard patch"* ]]
 }
 
+@test "so: a start refused by the state-DB guard is named at once, not spun out" {
+    # Measured 2026-10-18 (20:52-22:13 BST): openclaw.sqlite was sealed in offline
+    # maintenance by an interrupted drain, and seven starts were refused over 31
+    # minutes.  `so` discarded the CLI's own refusal text (> /dev/null 2>&1) — the only
+    # place the cause is named — then waited its full 300 s budget and printed FAILED.
+    # Catches: spending the budget on a refusal, and reporting it without the cause.
+    openclaw() {
+        local _refusal="OpenClaw state at /tmp/openclaw.sqlite is undergoing"
+        _refusal+=" offline maintenance; retry when it finishes."
+        printf '%s\n' "$_refusal" >&2
+        return 1
+    }
+    __test_port() { return 1; }
+
+    local _t0 _elapsed _status=0
+    _t0=$(date +%s)
+    __so_start_gateway openclaw-gateway.service > "$TAC_TEST_TMPDIR/refusal.out" 2>&1 \
+        || _status=$?
+    _elapsed=$(( $(date +%s) - _t0 ))
+
+    [ "$_status" -eq 1 ] || { echo "a refused start must fail"; return 1; }
+    (( _elapsed < 10 )) || { echo "waited ${_elapsed}s through a refusal"; return 1; }
+    grep -q "REFUSED" "$TAC_TEST_TMPDIR/refusal.out"
+    grep -q "Do not re-run 'so'" "$TAC_TEST_TMPDIR/refusal.out"
+}
+
+@test "so: a unit refused in the journal stops the wait even when the CLI returned 0" {
+    # The other half: `openclaw gateway start` succeeds (or says nothing) and the UNIT
+    # refuses at admission.  The watch must read THIS attempt's window, so a marker
+    # left by an earlier boot cannot decide a healthy start.
+    openclaw() { return 0; }
+    journalctl() {
+        case " $* " in
+            *" --since @"*)
+                local _refusal="[openclaw] Reason: OpenClaw state is undergoing"
+                _refusal+=" offline maintenance; retry when it finishes."
+                printf '%s\n' "$_refusal" ;;
+        esac
+        return 0
+    }
+    __test_port() { return 1; }
+
+    local _t0 _elapsed _status=0
+    _t0=$(date +%s)
+    __so_start_gateway openclaw-gateway.service > "$TAC_TEST_TMPDIR/journal.out" 2>&1 \
+        || _status=$?
+    _elapsed=$(( $(date +%s) - _t0 ))
+
+    [ "$_status" -eq 1 ] || { echo "a journal refusal must fail the start"; return 1; }
+    (( _elapsed < 30 )) || { echo "waited ${_elapsed}s past a journal refusal"; return 1; }
+    grep -q "REFUSED" "$TAC_TEST_TMPDIR/journal.out"
+}
+
 # end of file

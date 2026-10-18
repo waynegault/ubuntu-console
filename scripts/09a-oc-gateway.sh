@@ -1,8 +1,16 @@
 # shellcheck shell=bash
 # --- Module: 09a-oc-gateway ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 31
+#   v31 (2026-10-18): a start the state-DB guard REFUSES is reported at once, by name.
+#   Measured 2026-10-18 (20:52-22:13 BST): a WSL shutdown cut the gateway's drain, which
+#   left openclaw.sqlite sealed in "offline maintenance", and seven starts were refused
+#   over 31 minutes.  `so` discarded the CLI's own stderr (> /dev/null 2>&1) — the one
+#   place the reason is named — then spun its full 300 s budget and printed a bare FAILED.
+#   The CLI refusal is now read, the unit's refusal is watched in the journal from this
+#   attempt's own start, and the row names the guard instead of inviting a re-run.
 # Module Version: 30
-#   v29 (2026-10-14): `__so_health_gate` asserts that the MANAGED UNIT serves the port.
+#   v30 (2026-10-14): `__so_health_gate` asserts that the MANAGED UNIT serves the port.
 #   A Gateway started as `openclaw gateway run` binds 18789 from a console while
 #   openclaw-gateway.service reads inactive, and every probe `so` ran still passed, so
 #   `so` printed "[RUNNING on PORT 18789]" and returned 0 (measured 2026-10-14).  A
@@ -459,12 +467,38 @@ function __so_ensure_llm_running() {
 }
 
 # ---------------------------------------------------------------------------
+# __so_report_refusal — name OpenClaw's state-DB guard instead of a bare failure.
+#
+# Measured 2026-10-18 (20:52-22:13 BST): a WSL shutdown cut the gateway's drain, which
+# left openclaw.sqlite sealed in "offline maintenance", and seven starts were refused
+# over 31 minutes.  `so` spent its full 300 s budget and then printed FAILED with no
+# cause.  The refusal is not a fault to fix and not a start to retry by hand: systemd
+# is already retrying, and a second start stacked on a boot is what writes the marker.
+# ---------------------------------------------------------------------------
+function __so_report_refusal() {
+    __tac_info "Gateway" "[REFUSED — state DB held in offline maintenance]" "$C_Warning"
+    printf '%s\n' "  ${C_Dim}OpenClaw's own guard owns openclaw.sqlite;" \
+        "systemd retries by itself.${C_Reset}"
+    printf '%s\n' "  ${C_Dim}Do not re-run 'so' now — that stacks a start on the retry.${C_Reset}"
+}
+
+# ---------------------------------------------------------------------------
 # __so_start_gateway — Start gateway and wait for ready state.
 # Returns 0 if gateway is ready, 1 on failure.
 # ---------------------------------------------------------------------------
 function __so_start_gateway() {
-    local _svc="$1"
-    openclaw gateway start >/dev/null 2>&1
+    local _svc="$1" _start_out="" _since
+    _since=$(date +%s)
+    # The guard names the state DB only in the CLI's own refusal text, and this call
+    # used to discard it (`>/dev/null 2>&1`) — then wait out the whole budget.
+    if ! _start_out=$(openclaw gateway start 2>&1)
+    then
+        if [[ "$_start_out" == *"is undergoing offline maintenance"* ]]
+        then
+            __so_report_refusal
+            return 1
+        fi
+    fi
 
     # 2026-09-15 (Hal): 20s was far too short. Measured cold start on this host is
     # 3.5-4 min (12:03:42 unit start -> 12:06:16 config load -> 12:07:52 ready),
@@ -486,6 +520,17 @@ function __so_start_gateway() {
 
         if (( elapsed > 0 && elapsed % 5 == 0 ))
         then
+            # The unit refuses after the CLI has returned, so watch THIS attempt's own
+            # window rather than the classifier's 15 minutes: a marker from an earlier
+            # boot must never decide a healthy start.
+            if journalctl --user -u "$_svc" --since "@${_since}" --no-pager --output=cat \
+                | grep -qF 'is undergoing offline maintenance'
+            then
+                printf '\r%s\n' "$(printf '%*s' 40 '')"
+                __so_report_refusal
+                return 1
+            fi
+
             local _restarts_now _sub_state
             _restarts_now=$(systemctl --user show -p NRestarts --value "$_svc" 2>/dev/null || echo 0)
             _sub_state=$(systemctl --user show -p SubState --value "$_svc" 2>/dev/null)
