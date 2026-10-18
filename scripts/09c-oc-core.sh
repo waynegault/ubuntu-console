@@ -1,6 +1,15 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 19
+#   v19 (2026-10-18): a sessions dir with NO cold/ is still removed whole.  The cold/
+#   guard must not leave an empty sessions/ behind, which would make the directory purge
+#   a no-op on every agent that has no cold archive.
+# Module Version: 18
+#   v18 (2026-10-18): the session-dir purge KEEPS `cold/`, because the store holds a row
+#   per cold archive.  Measured: 110 rows pointed at files already removed by earlier
+#   purges, and the usage-cost refresh failed on every one.  Rows are deleted through
+#   the CLI; the files they name must outlive the pass that clears the directories.
 # Module Version: 17
 #   v17 (2026-10-18): `oc purge` never sends a MAIN session to `sessions delete`.
 #   Measured live: the CLI refuses it ("Cannot delete the main session"), and one
@@ -471,14 +480,28 @@ function oc-purge() {
                 local _session_dir="${_agent_dir%/}/sessions"
                 if [[ -d "$_session_dir" ]]
                 then
-                    if rm -rf "$_session_dir"
+                    # Keep cold/ : the store holds a session_transcript_cold_archives row
+                    # per file, so removing the FILE while the row survives is exactly the
+                    # orphan that breaks the usage-cost refresh (measured 2026-10-18: 110
+                    # rows pointing at absent files).  The rows are deleted through the
+                    # CLI; the files they name must outlive this pass.  With no cold/ there
+                    # is nothing to preserve, so the directory itself goes.
+                    local _kept=""
+                    if [[ -d "$_session_dir/cold" ]]
+                    then
+                        _kept=" (cold/ kept)"
+                        find "$_session_dir" -mindepth 1 -maxdepth 1 ! -name cold \
+                            -exec rm -rf {} + || _failed=$(( _failed + 1 ))
+                    else
+                        rm -rf "$_session_dir" || _failed=$(( _failed + 1 ))
+                    fi
+                    if (( _failed == 0 ))
                     then
                         _purge_count=$(( _purge_count + 1 ))
-                        __tac_info "Session" "[PURGED] $_session_dir" "$C_Dim"
+                        __tac_info "Session" "[PURGED] $_session_dir${_kept}" "$C_Dim"
                     else
                         # A delete that did not land is NOT a purge: reported, and not
                         # counted, so the summary cannot claim a directory that is there.
-                        _failed=$(( _failed + 1 ))
                         __tac_info "Session" "[FAILED to purge] $_session_dir" "$C_Error"
                     fi
                 fi
