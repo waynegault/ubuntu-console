@@ -443,9 +443,9 @@ commands:
 
   - name: oc purge
     family: openclaw
-    summary: Stop the gateway and clear every agent's session directory
-    version: 2
-    updated: 2026-10-08
+    summary: Reset every agent — delete every stored session (main included), clear the session directories and restart the gateway
+    version: 3
+    updated: 2026-10-18
     status: active
     scope: both
     effect: mutate
@@ -463,9 +463,17 @@ commands:
     # rather than believed from the summary.  The read_back witness below remains the runtime
     # guard: it proves the gateway is gone BEFORE any deletion, and that a failed `rm` is
     # reported and not counted.
+    #
+    # v3 (2026-10-18) — the SCOPE changed: the directories were never the store.  The roster
+    # read 47 sessions across 14 agents from agent/openclaw-agent.sqlite while the deleted
+    # dirs held two archives.  A third node pins the half the live failures needed: a
+    # tombstoned session carrying status 'failed' in session_windows appears in NO roster row,
+    # and the command still passes its key to `sessions delete` (read back from the DELETE
+    # ARGV, so a helper that enumerates but is never wired in is caught).
     verified_by:
       - "tests/unit/02-so-startup.bats::oc purge: a gateway that is not gone is a REFUSAL, and nothing is deleted"
       - "tests/unit/02-so-startup.bats::oc purge: --dry-run names what it would delete and deletes nothing, and the real run removes exactly those session dirs"
+      - "tests/unit/02-so-startup.bats::oc purge: a tombstoned session absent from the roster is still deleted"
     read_back:
       - witness: __oc_purge_wait_gone
         file: scripts/09c-oc-core.sh
@@ -475,15 +483,24 @@ commands:
           does not land within the bound is a REFUSAL and nothing is deleted.  Scoped on
           purpose: the deletion itself is checked per directory, so a failed `rm` is
           reported and NOT counted and the summary cannot claim a directory still there.
+      - witness: __oc_purge_delete_sessions
+        file: scripts/09c-oc-core.sh
+        asserts: >-
+          every key from `sessions --all-agents` AND from each store's session_windows is
+          passed to `openclaw sessions delete`; a non-zero delete is reported rather than
+          claimed, and the roster is re-read afterwards so the summary cannot say "reset"
+          over a store that still holds rows.
     contract:
       args:
         - --dry-run
       side_effects:
         - stops the gateway
         - deletes ~/.openclaw/agents/*/sessions
+        - deletes every stored session through `openclaw sessions delete` (main included)
+        - starts the gateway again
       output_shape:
-        - per-session rows and a summary line
-      exit_code: non-zero when the gateway will not stop, or when a purge failed
+        - per-session rows, a deleted-key count and a summary line
+      exit_code: non-zero when the gateway will not stop, will not restart, or a delete failed
 fixture_priority:
   - m
   - h

@@ -2,6 +2,9 @@
 # ─── Module: 12-dashboard-help ───────────────────────────────────────────────────────
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
 # TACTICAL_PROFILE_VERSION auto-computes from the sum of all module versions.
+# Module Version: 27
+#   v27 (2026-10-18): the `oc purge` help row names the new scope — reset every agent,
+#   delete all sessions (main included) and restart — rather than "stop and clear".
 # Module Version: 26
 #   v26 (2026-10-09): __dashboard_oc_active_agents reads its cache path from
 #   OC_AGENT_USE_FILE (default /dev/shm/oc_agent_use.txt, i.e. current behaviour
@@ -641,7 +644,7 @@ function tactical_help() {
         __hRow "oc stop" "Delete agent by ID"
         __hRow "oc mem-index" "Rebuild vector memory index"
         __hRow "oc memory-search" "Semantic memory search"
-        __hRow "oc purge" "Stop gateway and clear all agent sessions"
+        __hRow "oc purge" "Reset every agent: delete all sessions and restart"
 
         __hSection "OPENCLAW — CONFIG & LOGS"
         __hRow "oc conf" "Open openclaw.json in VS Code"

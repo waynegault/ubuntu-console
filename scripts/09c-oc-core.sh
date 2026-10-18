@@ -1,6 +1,14 @@
 # shellcheck shell=bash
 # --- Module: 09c-oc-core ---
 # AI INSTRUCTION: On ANY change to this file, increment the Module Version below.
+# Module Version: 16
+#   v16 (2026-10-18): `oc purge` resets the session STORES, not just the directories.
+#   Measured: 47 sessions across 14 agents lived in agent/openclaw-agent.sqlite while the
+#   deleted dirs held two archives; a tombstoned WhatsApp session ('failed', absent from
+#   the roster) kept a poison retry loop, and a missing cold archive broke the usage-cost
+#   refresh on every pass.  It now deletes every stored session (main included) through
+#   `sessions delete`, restarts the gateway, and reads the roster back; --dry-run no
+#   longer stops the gateway.
 # Module Version: 15
 # ==============================================================================
 # 09c-oc-core
@@ -56,7 +64,9 @@ function xo() {
     # embedder.
     if __llm_server_running; then
         printf '%s\n' "${C_Dim}Stopping LLM server ...${C_Reset}"
-        halt 2>/dev/null || true
+        if ! halt 2>/dev/null; then
+            printf '%s\n' "${C_Dim}LLM stop did not land; it may still hold VRAM${C_Reset}"
+        fi
     fi
 
     if (( _was_running ))
@@ -125,7 +135,7 @@ function oc() {
         printf '  %-20s %s\n' "agent-turn"   "Alias for start"
         printf '  %-20s %s\n' "mem-index"    "Rebuild OpenClaw vector memory index"
         printf '  %-20s %s\n' "memory-search" "Semantic search over stored memories"
-        printf '  %-20s %s\n' "purge"        "Stop gateway and clear all agent sessions"
+        printf '  %-20s %s\n' "purge"        "Reset every agent: delete all sessions and restart"
         printf '%s\n' ""
         printf '%s\n' "${C_Highlight}Config & Logs${C_Reset}"
         printf '  %-20s %s\n' "conf"         "Open openclaw.json in VS Code"
@@ -310,20 +320,27 @@ function ocstop() {
 }
 
 # ---------------------------------------------------------------------------
-# oc-purge — Stop gateway and clear all agent sessions.
+# oc-purge — Reset every agent: delete every stored session (including each agent's
+# `main`), clear the session directories, and restart the gateway.
 # Usage: oc purge [--dry-run]
-# This command:
-#   1. Stops the OpenClaw gateway and WAITS for it to be gone (see below)
-#   2. Clears all agent session directories (~/.openclaw/agents/*/sessions)
-#   3. Clears session state cache in /dev/shm
 #
-# WHY THE WAIT EXISTS (measured 2026-09-30).  The stop's own report is not enough:
-# `__oc_safe_gateway_shutdown` is fire-and-forget — its last statement is an `rm`, so its
-# return status says nothing — and the unit's stop budget is 330s (drain ~315s).  Purging
-# 0.5s after asking it to stop therefore deletes the session dirs of a gateway that is
-# still RUNNING.  The gate reuses `__oc_gateway_gone`, the witness `xo` already trusts,
-# which also refuses while a start/restart job is queued.  A stop that outlasts the bound
-# is a REFUSAL, not a purge: the operator waits and re-runs.
+# WHY THIS IS NOT "DELETE FILES" (measured 2026-10-18).  The gateway's sessions live in
+# each agent's agent/openclaw-agent.sqlite, not in sessions/: the roster read 47 sessions
+# across 14 agents on this box while the directories held two archives.  Deleting
+# directories alone leaves every session, every tombstone and every cold-archive
+# reference in place.  Two live failures proved it the same day: Hal's WhatsApp session
+# was in a SessionRestartRecoveryTombstoneError retry loop (status 'failed' in
+# session_windows, absent from the roster), and a cold archive missing under
+# sessions/cold/ failed the usage-cost refresh on every pass.  The reset therefore goes
+# through the CLI's own `sessions delete`, which removes the store rows and their live
+# artifacts, and the roster is read back afterwards.
+#
+# ORDER, and why.  The stop comes FIRST and a stop that does not land is a REFUSAL with
+# nothing deleted (the property the original command had): everything after it deletes
+# state.  The delete itself must run while the gateway serves, so the unit is started
+# again after the directories are cleared, and the command ends on that serving gateway.
+# A start the state-DB guard refuses is named by __so_start_gateway (09a v31), never
+# retried here.
 # ---------------------------------------------------------------------------
 # __oc_purge_wait_gone — 0 when the gateway is GONE within the bound, 1 otherwise.
 # Bounded on purpose: `oc purge` is destructive, so a gateway that will not stop is a
@@ -339,7 +356,48 @@ function __oc_purge_wait_gone() {
     __oc_gateway_gone
 }
 
-# oc-purge — see the header above for the gateway-gone wait and what is NOT purged.
+# __oc_purge_session_keys — every session key the stores hold, one per line.
+# The roster omits FAILED sessions, so each agent's store is read as well (measured
+# 2026-10-18: Hal's tombstoned WhatsApp session was in session_windows with status
+# 'failed' and in no `sessions --all-agents` row).  Reads only; the delete goes through
+# the CLI so the gateway, not this script, owns the mutation.
+function __oc_purge_session_keys() {
+    local _db
+    {
+        timeout 60 openclaw sessions --all-agents --json \
+            | jq -r '.sessions[].key'
+        for _db in "$OC_AGENTS"/*/agent/openclaw-agent.sqlite
+        do
+            [[ -f "$_db" ]] || continue
+            timeout 30 sqlite3 "file:$_db?mode=ro" \
+                "select distinct session_key from session_windows;"
+        done
+    } | sed '/^[[:space:]]*$/d' | sort -u
+}
+
+# __oc_purge_delete_sessions — delete every stored session through the serving gateway.
+# Prints the number of keys it asked to delete.  Returns 1 when the delete did not land,
+# with the CLI's own output on stderr rather than discarded.
+function __oc_purge_delete_sessions() {
+    local -a _keys=()
+    local _key _out=""
+    while IFS= read -r _key
+    do
+        [[ -n "$_key" ]] && _keys+=("$_key")
+    done < <(__oc_purge_session_keys)
+
+    printf '%s\n' "${#_keys[@]}"
+    (( ${#_keys[@]} > 0 )) || return 0
+
+    if ! _out=$(timeout 300 openclaw sessions delete "${_keys[@]}" --yes --json 2>&1)
+    then
+        printf '%s\n' "$_out" >&2
+        return 1
+    fi
+    return 0
+}
+
+# oc-purge — see the header above for the order and what is no longer out of scope.
 function oc-purge() {
     if [[ "$__TAC_OPENCLAW_OK" != "1" ]]; then
         __tac_info "OpenClaw" "[NOT INSTALLED - cannot purge sessions]" "$C_Error"
@@ -355,7 +413,24 @@ function oc-purge() {
     local _dry_run=0
     [[ "${1:-}" == "--dry-run" ]] && _dry_run=1
 
-    local _purge_count=0 _failed=0
+    # --dry-run reads only: it names the session KEYS and the directories, and it does
+    # not touch the gateway.  The old code stopped the gateway before deciding it was a
+    # dry run, which is a side effect the name denies.
+    if (( _dry_run == 1 ))
+    then
+        __tac_info "Sessions" "[WOULD DELETE every stored session, main included]" "$C_Dim"
+        __oc_purge_session_keys | sed 's/^/    /'
+        local _agent_dir
+        for _agent_dir in "$OC_AGENTS"/*/
+        do
+            [[ -d "${_agent_dir%/}/sessions" ]] \
+                && __tac_info "Session" "[WOULD PURGE] ${_agent_dir%/}/sessions" "$C_Dim"
+        done
+        __tac_info "Purge Complete" "[DRY RUN - nothing deleted, gateway untouched]" "$C_Dim"
+        return 0
+    fi
+
+    local _purge_count=0 _failed=0 _deleted=0 _purge_left=""
 
     # 1. Stop the gateway with DB-safe sequencing, then WAIT for it to be gone.  A stop
     #    that does not land is a refusal: everything below deletes state.
@@ -380,10 +455,7 @@ function oc-purge() {
                 local _session_dir="${_agent_dir%/}/sessions"
                 if [[ -d "$_session_dir" ]]
                 then
-                    if (( _dry_run == 1 ))
-                    then
-                        __tac_info "Session" "[WOULD PURGE] $_session_dir" "$C_Dim"
-                    elif rm -rf "$_session_dir"
+                    if rm -rf "$_session_dir"
                     then
                         _purge_count=$(( _purge_count + 1 ))
                         __tac_info "Session" "[PURGED] $_session_dir" "$C_Dim"
@@ -404,27 +476,46 @@ function oc-purge() {
     rm -f "$TAC_CACHE_DIR/oc_agent_use.txt" 2>/dev/null
     rm -f "$TAC_CACHE_DIR/oc_agent_stats.tsv" 2>/dev/null
 
-    # 4. NOT PURGED — stated, never silent (measured 2026-09-30).  The session
-    #    DIRECTORIES are not the whole record: ~/.openclaw/state/openclaw.sqlite holds
-    #    session-shaped rows — acp_sessions, acp_replay_sessions, capture_sessions,
-    #    session_groups, session_state_events, session_state_heads — and this command
-    #    leaves every one of them.  That is a scope statement, not an oversight: whether
-    #    "purge" should clear the gateway's own bookkeeping too is a decision about the
-    #    gateway, so it is named here and in the summary line rather than taken.
-    __tac_info "Sessions" "[dirs cleared; DB session rows NOT purged]" "$C_Dim"
+    # 4. Start the gateway: `sessions delete` runs through it, and the command must end
+    #    on a serving gateway (the reset is not a stop).
+    if ! __so_start_gateway "openclaw-gateway.service"
+    then
+        __tac_info "Purge" "[sessions dirs cleared; the gateway did NOT start - store rows remain]" "$C_Error"
+        return 1
+    fi
+
+    # 5. Delete every stored session, main included.  This is the half the directories
+    #    could never reach: the store rows, the tombstones and the cold-archive refs.
+    if ! _deleted=$(__oc_purge_delete_sessions)
+    then
+        __tac_info "Sessions" "[FAILED to delete store rows - reported, not claimed]" "$C_Error"
+        _failed=$(( _failed + 1 ))
+    else
+        __tac_info "Sessions" "[$_deleted session key(s) deleted, main included]" "$C_Dim"
+    fi
+
+    # 6. Read the roster back.  "Purge complete" is a claim about the store, so it is
+    #    made from a fresh read, never from the delete's own return code.
+    if ! _purge_left=$(timeout 60 openclaw sessions --all-agents --json \
+        | jq -r '.count // empty')
+    then
+        _failed=$(( _failed + 1 ))
+        __tac_info "Sessions" "[could not read the roster back after delete]" "$C_Error"
+    elif [[ -n "$_purge_left" && "$_purge_left" != "0" ]]
+    then
+        _failed=$(( _failed + 1 ))
+        __tac_info "Sessions" "[$_purge_left session(s) STILL STORED after delete]" "$C_Error"
+    fi
 
     # Report result
-    if (( _dry_run == 1 ))
-    then
-        __tac_info "Purge Complete" "[DRY RUN - nothing was deleted]" "$C_Dim"
-    elif (( _failed > 0 ))
+    if (( _failed > 0 ))
     then
         __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared, $_failed FAILED]" "$C_Error"
     elif (( _purge_count > 0 ))
     then
-        __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared]" "$C_Success"
+        __tac_info "Purge Complete" "[$_purge_count agent dir(s) cleared, store reset]" "$C_Success"
     else
-        __tac_info "Purge Complete" "[No sessions found]" "$C_Dim"
+        __tac_info "Purge Complete" "[No session dirs found, store reset]" "$C_Dim"
     fi
 }
 

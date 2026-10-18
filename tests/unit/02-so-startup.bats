@@ -602,32 +602,85 @@ __so_test_prelude() {
     mkdir -p "$OC_AGENTS/alpha/sessions" "$OC_AGENTS/beta/sessions"
     : > "$OC_AGENTS/alpha/sessions/a.json"
     : > "$OC_AGENTS/beta/sessions/b.json"
-    __oc_safe_gateway_shutdown() { return 0; }
+    __oc_safe_gateway_shutdown() { : > "$TAC_TEST_TMPDIR/stopped"; }
     __oc_gateway_gone() { return 0; }        # gone, so the purge is allowed through
+    __so_start_gateway() { return 0; }       # the reset ends on a serving gateway
+    # A PATH stub, not a shell function: the command calls it as `timeout 60 openclaw`,
+    # and `timeout` execs a binary, so a function stub would be invisible and the REAL
+    # CLI would answer (measured: that is what made this case hang on first run).
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<'MOCK'
+#!/usr/bin/env bash
+case "$1 ${2:-}" in
+    "sessions --all-agents") printf '%s\n' '{"count":0,"sessions":[{"key":"agent:alpha:main"}]}' ;;
+    "sessions delete") printf '%s\n' '{"ok":true}' ;;
+esac
+MOCK
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
 
-    # 1. --dry-run names both session dirs and deletes NEITHER.
+    # 1. --dry-run names both session dirs and the keys it would delete, deletes NEITHER,
+    #    and does not stop the gateway: the old code stopped it before deciding it was a
+    #    dry run, a side effect the name denies.
     run oc-purge --dry-run
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"[WOULD PURGE] $OC_AGENTS/alpha/sessions"* ]]
     [[ "$output" == *"[WOULD PURGE] $OC_AGENTS/beta/sessions"* ]]
-    [[ "$output" == *"[DRY RUN - nothing was deleted]"* ]]
+    [[ "$output" == *"agent:alpha:main"* ]]
+    [[ "$output" == *"[DRY RUN - nothing deleted, gateway untouched]"* ]]
     [ -f "$OC_AGENTS/alpha/sessions/a.json" ]
     [ -f "$OC_AGENTS/beta/sessions/b.json" ]
+    [ ! -e "$TAC_TEST_TMPDIR/stopped" ]
 
-    # 2. The real run: both session dirs are gone, and the count is the number that went.
+    # 2. The real run: both session dirs are gone, the store delete is issued, and the
+    #    command ends on a start (not a stop).
     run oc-purge
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"[PURGED] $OC_AGENTS/alpha/sessions"* ]]
     [[ "$output" == *"[PURGED] $OC_AGENTS/beta/sessions"* ]]
-    [[ "$output" == *"[2 agent dir(s) cleared]"* ]]
+    [[ "$output" == *"[1 session key(s) deleted, main included]"* ]]
+    [[ "$output" == *"[2 agent dir(s) cleared, store reset]"* ]]
+    [ -e "$TAC_TEST_TMPDIR/stopped" ]
     [ ! -d "$OC_AGENTS/alpha/sessions" ]
     [ ! -d "$OC_AGENTS/beta/sessions" ]
     # ...and it did not reach past what it named: the agent dirs themselves stay, so "purge"
     # clears sessions rather than the agents that own them.
     [ -d "$OC_AGENTS/alpha" ]
     [ -d "$OC_AGENTS/beta" ]
+}
+
+@test "oc purge: a tombstoned session absent from the roster is still deleted" {
+    # Measured 2026-10-18: Hal's WhatsApp session was 'failed' in session_windows and
+    # appeared in NO `sessions --all-agents` row, so a roster-only purge would leave its
+    # poison retry loop running.  This drives the real command and reads the DELETE ARGV
+    # back, so it catches a helper that enumerates correctly but is never wired in.
+    export __TAC_OPENCLAW_OK=1
+    export OC_PURGE_WAIT_S=0
+    export OC_AGENTS="$TAC_TEST_TMPDIR/agents"
+    mkdir -p "$OC_AGENTS/hal/agent" "$OC_AGENTS/hal/sessions"
+    sqlite3 "$OC_AGENTS/hal/agent/openclaw-agent.sqlite" \
+        "create table session_windows(session_key text);" \
+        "insert into session_windows values('agent:hal:whatsapp:direct:+447720061019');"
+    __oc_safe_gateway_shutdown() { return 0; }
+    __oc_gateway_gone() { return 0; }
+    __so_start_gateway() { return 0; }
+    mkdir -p "$TAC_TEST_TMPDIR/bin"
+    cat > "$TAC_TEST_TMPDIR/bin/openclaw" <<MOCK
+#!/usr/bin/env bash
+case "\$1 \${2:-}" in
+    "sessions --all-agents") printf '%s\n' '{"count":0,"sessions":[]}' ;;
+    "sessions delete") printf '%s\n' "\$*" >> "$TAC_TEST_TMPDIR/delete-argv" ;;
+esac
+MOCK
+    chmod +x "$TAC_TEST_TMPDIR/bin/openclaw"
+    export PATH="$TAC_TEST_TMPDIR/bin:$PATH"
+
+    run oc-purge
+
+    [ "$status" -eq 0 ]
+    grep -qF 'agent:hal:whatsapp:direct:+447720061019' "$TAC_TEST_TMPDIR/delete-argv"
 }
 
 # ---------------------------------------------------------------------------
