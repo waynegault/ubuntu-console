@@ -263,7 +263,7 @@ class TestMCPServerTools(_MCPHarness):
 class TestUntrustedGraphEnvelope(_MCPHarness):
     """UNTRUSTED-CONSOLE-001: graph text reaching a model is marked untrusted."""
 
-    DATA_TOOLS = (
+    DATA_TOOLS: tuple[tuple[str, dict[str, object]], ...] = (
         ("kgraph_query", {"pattern": "Alpha"}),
         ("kgraph_path", {"source": "a", "target": "c"}),
         ("kgraph_explain", {"node_id": "a"}),
